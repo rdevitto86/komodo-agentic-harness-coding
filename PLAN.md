@@ -2,7 +2,7 @@
 
 ## Status
 
-**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. The 2026-10-08 design pass (8 batches, one commit each on `feat/1.0.0-beta.6`) filled the remaining architecture across every card, settled every open Vet line but 3, and added a **Pass 2 (performance)** and **Pass 3 (caching)** line per card for later enhancement rounds; it awaits your review, and any batch can be reverted alone. See **Review changes (2026-10-06, 2026-10-07, 2026-10-08)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27) becomes one or more task groups; S28 waits for a later minor.
+**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. The 2026-10-08 design pass (11 batches, one commit each on `feat/1.0.0-beta.6`) filled the remaining architecture across every card, settled every open Vet line (the last 3 by your decisions on 2026-10-09, G-01, G-05, G-15), and added a **Pass 2 (performance)** and **Pass 3 (caching)** line per card for later enhancement rounds; it awaits your review, and any batch can be reverted alone. See **Review changes (2026-10-06, 2026-10-07, 2026-10-08)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27) becomes one or more task groups; S28 waits for a later minor.
 
 ## How to read this plan
 
@@ -521,7 +521,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 - **Check points:** only at session start, run start and `fresh --check`, at most hourly; a machine with neither for days stays on its version, and the repo pin catches it on the next verb.
 - **`--restart-runs`:** a 2-minute checkpoint window; one in-flight model turn may repeat, inside S18's loss bound.
 - **GitHub prerelease flag:** betas publish as normal releases with "beta" in the version, since `releases/latest` skips prereleases.
-- **Signing key:** default `~/.komodo/release.key` (mode 0600), releases cut only from your machine. Your decision, gap G-01, needed by phase 8.
+- **Signing key:** decided 2026-10-09 (G-01): `~/.komodo/release.key` (mode 0600) on your machine, with one backup copy in your password manager; releases are cut only there, and the `next` public key is set at the first release so a leak is survivable by rotation. Enterprise target, later minor (G-21): the private key moves to a KMS or keyless signing, and `fresh` refuses a manifest older than the last one it accepted.
 
 **Proof:**
 - **Hot swap:** a fresh during a fixture run makes the next `komodo version` report the new version, and the run finishes on the old one.
@@ -758,6 +758,7 @@ Everything else is a `komodo config` key, such as `komodo config mode=economy li
 - **Pinned to latest, prior as backup:** each weight runs the newest model in its line, by exact ID, never an alias. The prior version is the backup link, tried before the open-source backstop. An agent's `model` (S04) always beats `mode`, which sets review depth only (S21); an agent set to `-prev` falls back to the backstop, never forward to the latest.
 - **Where the IDs come from:** the Models API's `line` field when an Anthropic key resolves, else `embed/models.json`. The probe refreshes them on `install`, `doctor` and `fresh`, and writes the exact IDs to `providers.json`, so a run never changes model mid-way.
 - **A line with no current model:** its weight moves to the next line up, so light becomes `sonnet` if Haiku retires with no successor. `doctor` warns.
+- **A model retired mid-run:** decided 2026-10-09 (G-05): `providers.json` is the only registry. A run keeps its probed IDs; a 404 on one fails that session start and the task's next session takes the prior link, then the backstop, through the normal chain. Cost: one failed start per retirement. Enterprise target, later minor (G-22): a central model gateway owns the IDs and `retired_on` dates, and `doctor` warns 30 days ahead.
 - **Any Claude limit** (5-hour window, weekly cap, model cap): the task's next session starts on the backstop.
 - **The backstop is mandatory:** every chain must end in at least one free `http:` endpoint. `doctor` and `gate` refuse a chain without one, and `install` warns when no endpoint answers.
 - **Back to Claude:** after the ledger timer's reset time, new sessions start on `claude-cli` again. A task already running on the backstop finishes there.
@@ -1460,7 +1461,7 @@ Three mechanical checks enforce it:
 **Does (0 tokens):**
 - **Reruns** every `done_when` in the sandbox.
 - **Scope:** every changed file is in the group's `files` or is a test sibling (B1).
-- **Scope requests (end and resume):** a builder that needs another file stops, and its final result has status `needs_scope`, the paths and a reason. The engine makes a WIP commit, and the group goes Blocked: `needs_scope`. `status --wait` wakes the orchestrator, and `scope approve|deny` answers; approve adds the paths to the group's `files`, logged in the ledger. The engine then resumes the same session with the answer.
+- **Scope requests (end and resume):** a builder that needs another file stops, and its final result has status `needs_scope`, the paths and a reason. The engine makes a WIP commit, and the group goes Blocked: `needs_scope`. `status --wait` wakes the orchestrator, and `scope approve|deny` answers; approve adds the paths to the group's `files`, logged in the ledger. The engine then resumes the same session with the answer. Decided 2026-10-09 (G-15): the orchestrator answers, with 2 denials the engine makes before anyone is asked: a protected path (S12 rows G3, G4) and a path in another live group's `files`. Enterprise target, later minor (G-23): path ownership rows in `policy.json`, with a named human for paths another team owns and a widening digest in `status --metrics`.
 - **The session is never lost:** the resume handle is in `state.json` before the session ends. The lease and worktree stay held while Blocked: `needs_scope`, so the sweep skips them. API links persist every turn to `sessions/<id>/messages.jsonl`. If `--resume` fails or the link changed, a fresh session gets the brief, the WIP diff and the last `summary`, and the ledger logs `resume_lost`.
 - **Secrets:** scans the diff for secret patterns.
 - **Coverage:** measures changed-line coverage against `check.patch_coverage` (80): blocks for Go, warns for other languages (S04).
@@ -2163,21 +2164,24 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | Design pass batch 7: test baseline and impact set in Check, the flake rule for any test, 10 scoped lenses as rule catalogs with a precision ledger, the tester's per-task confirmation and 4 gates, the two-pass planner with a Go-derived DAG, `repo_map`, sizing lint and EARS items, skill hardening (frontmatter, 6,000-token bound, hashes, steering scan), the template filling pipeline with golden fixtures and `events.schema.json`, the 4 cache breakpoints with Anthropic's limits, 3 new slots (20), the install state machine | S02, S09, S10, S11, S19, S20, S21, S25 |
 | Design pass batch 9: test sandboxes (blind by profile, private loopback on Linux and Docker, a per-repo test lock on macOS, service-backed tests warn through the baseline, `needs:` on items), copy mechanics per platform (APFS clone proven, reflink, NTFS byte copy, Docker bind mounts), symlinks kept, Rust shares a per-group target dir, case-collision lint | S04, S13, S25 |
 | Design pass batch 8: the precedents table, Codex as the sandbox precedent and `doctor --sandbox`, 3 cache kinds, fenced feature-branch landings, 6 generated-artifact gates and timing gates, 3 security rows, `queue.go` and `repomap.go`, runtime state paths, end-to-end race and regression checks | Context, S13, S22, S26, S27, security, §4, §7 |
+| Design pass batch 10: the gap register G-01..G-20 with a closing phase per row, the 4 S03 Vet lines decided, the S27 "no silent gaps" gate rule, the rule that no card says "later" or carries `[NOT CHECKED]` without a register row | S03, S27, Open items |
+| Design pass batch 11 (your decisions, 2026-10-09): G-01 local signing key plus a backup copy, G-05 `providers.json` as the only model registry with 404 failover, G-15 the orchestrator answers `scope approve` after 2 engine denials; enterprise targets G-21..G-23 with triggers | S03, S05, S19, Open items |
 
 ## Open items
 
-- **Review the 2026-10-08 design pass:** 10 commits on `feat/1.0.0-beta.6`, one per batch, each revertible alone. Every card changed; S01–S14's earlier approval covers the text before this pass, not after it.
+- **Review the 2026-10-08 design pass:** 11 commits on `feat/1.0.0-beta.6`, one per batch, each revertible alone. Every card changed; S01–S14's earlier approval covers the text before this pass, not after it.
 - **Decisions this pass made for you (walk back any):** `fable` as opt-in only; Haiku 5.5 as light; `check.patch_coverage` 80 blocking for Go only; group wall hard limit 720; `install` flag trim to 8; B2 to lint; 10 lenses; EARS items; the two-pass planner; `--permission-prompts none` in the launch line; the 4 S03 Vet lines; the Rust shared target dir.
+- **Decisions you made on 2026-10-09:** G-01 local signing key with a backup copy; G-05 `providers.json` as the only model registry; G-15 the orchestrator answers `scope approve` after 2 engine denials. Each has an enterprise target row (G-21..G-23) with a trigger.
 
 **Gap register.** Every unverified claim, open decision and spike in this plan has one row here. Nothing else in the plan is partial. Phase 1 copies this table into `docs/lld.md` with each row under its S-ID, and the S27 gate fails a row with no backlog task until it closes.
 
 | ID | S-ID | Gap | Closes by |
 |---|---|---|---|
-| G-01 | S03 | signing key location and custody | your decision, before phase 8 |
+| G-01 | S03 | signing key location and custody | decided 2026-10-09: local key file plus a backup copy, see S03 Vet |
 | G-02 | S05 | capturing the `system/init` line at probe time without spending a model turn | spike, phase 4 |
 | G-03 | S05 | a 24 GB machine running Qwen3.6-27B at 262,144 context | spike, phase 4 |
 | G-04 | S04, S05 | `OLLAMA_NUM_PARALLEL` above 1 on the same machine, which decides whether `limits.link_sessions.local` can exceed 1 | spike, phase 4 |
-| G-05 | S05 | a model registry keeping past exact IDs, for a model that retires mid-run | decision, phase 4; default: `providers.json` is the registry |
+| G-05 | S05 | a model registry keeping past exact IDs, for a model that retires mid-run | decided 2026-10-09: `providers.json` is the registry, a 404 fails over, see S05 |
 | G-06 | S07 | whether a Max login exposes `claude-fable-5-1` to `claude -p` | the install probe records it, phase 4 |
 | G-07 | S04, S21 | the real Max 5-hour window against `limits.link_sessions.claude-cli` 3 | ledger measurement over the first 20 groups, phase 7 |
 | G-08 | S13 | `bwrap --unshare-net` gives each session a private loopback | spike, phase 2 |
@@ -2187,11 +2191,14 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | G-12 | S13 | whether a copied Rust `target/` is reused or rebuilt, which justifies the shared target dir | spike, phase 2 |
 | G-13 | S12, S09 | the steering-phrase list is 6 entries by judgment | tune from `doctor` warnings, phase 3 |
 | G-14 | S16 | a mid-turn nudge reaching a turn stuck in a tool call | best effort decided; the proof accepts a late nudge, phase 5 |
-| G-15 | S19 | whether `scope approve` needs a human, since it lets one model widen another's write access | your decision, before phase 6; default: the orchestrator answers |
+| G-15 | S19 | whether `scope approve` needs a human, since it lets one model widen another's write access | decided 2026-10-09: the orchestrator answers, 2 engine denials first, see S19 |
 | G-16 | S20 | the lens rule catalogs' content, seeded from Google's review guide and SWE-bench Verified failure classes | authoring task, phase 7, security lens reviewed by you |
 | G-17 | S21 | the 50% cache-hit fixture needs real API sessions | measured in phase 7 |
 | G-18 | S25 | `repo_map` definition patterns for TypeScript, Python and Rust against 3 real repos | spike, phase 7 |
 | G-19 | S14 | the 10,000-event replay under 1 s and the 50 ms short-verb budget are targets, not measurements | gate timing, phase 6 |
 | G-20 | S02, S05 | the `codex-cli` link, `openai-api` chain and `.codex/` install | later minor, by design |
+| G-21 | S03 | enterprise signing: private key in a KMS or keyless signing, `fresh` rollback refusal | later minor; trigger: the first machine you do not own runs `fresh` |
+| G-22 | S05 | enterprise model registry: a central gateway owning IDs, `retired_on` dates, quotas | later minor; trigger: 3 or more machines, or 2 people sharing one cap |
+| G-23 | S19 | enterprise scope: path ownership rows in `policy.json`, a human for other teams' paths, a widening digest | later minor; trigger: the first repo with 2 teams or customer data |
 
 Rule for new gaps: a card may not say "later", "TBD" or carry a `[NOT CHECKED]` tag without a `G-NN` row here. The gate enforces the same in `docs/lld.md` from phase 1.
