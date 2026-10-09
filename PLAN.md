@@ -865,6 +865,21 @@ Three mechanical checks enforce it:
 
 **Does:**
 - **`agent.json` (Go reads it):** weight, default provider chain, tools, run classes, guard rows, limits, pinned skills, required and optional slots (S11) and an inline result schema; fields a person reads are codes and facts (S10).
+
+| Field | Type | Rule |
+|---|---|---|
+| `v` | int | schema version, 1; an older file fails the gate |
+| `weight` | `heavy\|standard\|light` | picks the model per link (S05) and the API `effort`: `high`, `medium`, `low` |
+| `chain` | `[]string` | links in order; must end in a free `http:` endpoint |
+| `tools`, `run_classes` | `[]string` | the only tools advertised (G1) and the only `run` classes (R1) |
+| `guard` | `[]string` | row IDs from `policy.json` beyond the inherited ones (S12) |
+| `limits` | `{wall_min, idle_min, retries}` | time and retries only |
+| `skills` | `{allow, always}` | S09 allowlist and preinjects |
+| `slots` | `{required, optional}` | S11 brief slots |
+| `result` | JSON Schema | the final call's schema; `code` fields are enums from S10's list |
+| `pool_slot` | bool | whether a session takes a pool slot (S14): true for builder, reviewer, tester |
+
+- **Registry at start:** the 7 agents decode once per process into one map; a verb or the engine asks the registry for an agent by name and never re-reads `embed/`. The registry also checks that no two agents share a `result` schema `$id`, that every `guard` row exists in `policy.json`, and that every tool in `tools` is registered in S08.
 - **Limits are time and retries only:** wall, idle and retries. No turn or token caps; context size is not managed per agent.
 - **Strict decode:** `DisallowUnknownFields`, one Go struct, checked by `doctor` and `gate`.
 - **`prompt.md` (the model reads it):** `# Role` text, never a rule (S10), then a `# Brief` template with `{{slots}}`. Slots fill in one pass, so a filled value is never expanded again. `gate` fails on an unfilled or unknown slot.
@@ -887,9 +902,12 @@ Three mechanical checks enforce it:
 
 - **Weight** is the model size: heavy, standard, light map to the latest `opus`, `sonnet` and `haiku` on `claude-cli`, each with its prior version as backup (S05). It is not the verb tier of S01.
 
-**Vet:** none open. Decided: no repo-defined agents in beta 6; 3 weights are enough.
+**Vet:** none open. Decided: no repo-defined agents in beta 6; 3 weights are enough; `fable` is an opt-in model name for `komodo config agent <name> model=fable` on heavy agents, at $10 per M input against Opus 5.5's $4, and only when the probe lists it for the login [web: platform.claude.com/docs/en/models/overview].
 
-**Proof:** an unknown field, an unfilled slot or an unknown slot fails `gate`. A slot value containing `{{task}}` stays literal. An agent override above a hard limit is refused by `komodo config`. An `agent.json` chain without a free endpoint fails `gate`.
+**Pass 2 (performance):** the registry's decode and cross-checks run once and are part of `komodo gate`, so a bad agent file fails the build, not a run.
+**Pass 3 (caching):** tool definitions and role text are the first 2 prefix parts (S11), identical for every session of an agent, so they are the 1-hour cache block on the Anthropic API (S21).
+
+**Proof:** an unknown field, an unfilled slot or an unknown slot fails `gate`. A slot value containing `{{task}}` stays literal. An agent override above a hard limit is refused by `komodo config`. An `agent.json` chain without a free endpoint fails `gate`. A `guard` row ID absent from `policy.json`, or a tool absent from S08's registry, fails `gate`.
 
 ### S08 · Tool runtime
 
@@ -1157,8 +1175,9 @@ Three mechanical checks enforce it:
 **Does:**
 - **Detached worktree per group** under `~/.komodo/wt/<repo-id>/`, shared by every clone, so no path contains `.git`. Verify adds a throwaway one for the tester (S20), with dependencies copied per S04, removed when Verify ends.
 - **Group lease:** the engine holds each group's lease from Intake until the group lands or is abandoned, renewing it every 5 min. A queued, checking, verifying, paused or blocked group keeps it. It expires 2 h after the last renewal.
-- **Lease file:** one create-only file per group, `~/.komodo/leases/<repo-id>/<group>.json`, shared by every clone on the machine; the OS lets exactly one run create it. It holds the run ID, pid, host, clone path, and taken and renewed times. A stale or dead-holder lease is renamed aside before takeover, so only one run wins. Before every push or landing, the run rereads its lease; if it no longer holds it, it emits `lease.lost`, and `Next()` stops the group.
-- **Saved work:** the engine moves a hidden ref, `refs/komodo/groups/<group>`, to every group commit. Git keeps it, `git branch` hides it, and it is never pushed. It is deleted when the group lands or is abandoned.
+- **Lease file:** one create-only file per group, `~/.komodo/leases/<repo-id>/<group>.json`, shared by every clone on the machine; the OS lets exactly one run create it. It holds the run ID, pid, host, clone path, `fence`, and taken and renewed times. A stale or dead-holder lease is renamed aside before takeover, so only one run wins.
+- **Fence (the lease is not enough):** a paused or stalled holder can wake believing it still owns the group, and a reread before a push leaves a window between the read and the write. So every take or takeover increments `fence`, a monotonic int kept beside the lease in `<group>.fence`, and every side effect carries it: the hidden-ref update, the push, the landing and a scope change (S18 keys). The resource enforces it, not the client: `git update-ref <ref> <new> <old>` is a compare-and-swap that refuses when the ref moved, and the reflog message records `fence=<n>`. A holder whose update is refused emits `lease.lost`, and `Next()` stops the group. This is the fencing-token rule from distributed leases, applied to git. [web: hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens] [cmd: git update-ref with a stale old value exits 128, "cannot lock ref", proven 2026-10-08]
+- **Saved work:** the engine moves a hidden ref, `refs/komodo/groups/<group>`, to every group commit by compare-and-swap with the fence in its reflog. Git keeps it, `git branch` hides it, and it is never pushed. It is deleted when the group lands or is abandoned.
 - **Lease release:** on landing or abandon; on clean shutdown after work is saved, from a signal or `stop <run>` (`resume` retakes it, or refuses and names the new holder); by the parent guard after a crash; by the startup sweep when both died. A lease is never freed while its agents live or their work is unsaved.
 - **Shutdown:** every goroutine starts through one panic-catching helper, and every stop signal routes to one sequence: stop agents (30 s each), WIP-commit each worktree, free leases, write `state.json`, exit. After 60 s the rest is force-killed. Shutdown is direct code, outside the bus, and writes `run.stopped` when it can.
 - **Parent guard:** `komodo run` starts a small parent that starts the engine. If the engine dies past its handler (`kill -9`, out-of-memory kill, Go fatal error) or writes no heartbeat for 10 min, the parent kills its agents by pid file and runs the same save and release. Power loss is left to the startup sweep.
@@ -1166,9 +1185,12 @@ Three mechanical checks enforce it:
 - **Sweep:** at start, cleans the workstation: kills orphans, frees dead leases, deletes `.stale-*` lease files and leases whose clone path is gone, and removes dead runs' tester worktrees, Docker containers and images, session temp, and worktree folders whose clone is gone. Worktrees with no live lease and no unsaved work are removed. A worktree unused for 3 days is WIP-committed to its hidden ref, then removed; `resume` rebuilds it from the ref.
 - **Windows paths:** worktree names are short hashes to stay under `MAX_PATH`, and each worktree sets `core.longpaths`. `doctor` warns when the Windows long-path switch is off and names the fix.
 
-**Vet:** none open. Decided: a lease expires 2 h after its last renewal; work left after expiry or a crash is WIP-committed and kept for `resume`.
+**Vet:** none open. Decided: a lease expires 2 h after its last renewal; work left after expiry or a crash is WIP-committed and kept for `resume`; the fence is enforced by git's compare-and-swap, never by a reread.
 
-**Proof:** a second `run` on a leased group refuses with the holder named. 2 runs racing for one lease yield exactly 1 holder. A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits. Sweep never deletes a worktree with unsaved work.
+**Pass 2 (performance):** a worktree is cut with `git worktree add --detach` from the epic tip, about 1 s on this repo; the tester's throwaway worktree reuses the builder's object store, so its cost is the dependency copy (S04), not git.
+**Pass 3 (caching):** language caches per repo (S13) and the setup result cache (S22) make the second worktree of an epic tip a copy, not a download.
+
+**Proof:** a second `run` on a leased group refuses with the holder named. 2 runs racing for one lease yield exactly 1 holder. 2 engines racing to land one group make exactly 1 landing, and the loser's journal ends in `lease.lost`. A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits. Sweep never deletes a worktree with unsaved work.
 
 ### S16 · Session supervisor (subagent control)
 
@@ -1409,17 +1431,30 @@ Three mechanical checks enforce it:
 **Owns:** `ops/ledger.go`, `status`/`wait` in `cli/work.go`, `sessions/<id>/stream.jsonl`.
 
 **Does:**
-- **Session ledger (`sessions.jsonl`):** one row per session, holding id, agent, task, link, model, tokens in/out/cached, USD, wall time and exit reason. A paused session adds `wait_until` and `wait_link` (S05).
+- **Session ledger (`sessions.jsonl`):** one row per session, holding id, agent, task, link, model, measured context, capacity profile, tokens in/out/cached, USD, wall time, skill tokens and exit reason. A paused session adds `wait_until` and `wait_link` (S05).
 - **Event log (`ledger/events.jsonl`):** a read-only subscriber copies every group journal's events here, plus fallbacks, skips and Claude Code subagent events. The group journal stays the source of truth (§1 Event model).
+- **Workflow ledger (the lock table, `ledger/tasks.json` and `ledger/groups.json`):** read-only views that S23's subscriber rebuilds from the journals. They answer "who holds what" for `status`, the orchestrator and the sweep; nothing writes them directly.
+
+| Row | Fields | Moves on |
+|---|---|---|
+| Group | `group, run, stage, epoch, fence, lock{card_hash, taken_at}, lease{pid, renewed_at}` | `lock.taken`, `stage.enter`, `lease.lost`, `lock.released` |
+| Task | `task, group, state, session, attempts, claimed_at` | `task.claimed`, `task.released`, `task.done`, `task.retry` |
+
+- **Task list lock:** Intake hashes the group's backlog files (`TG.md`, `tsk-*.md`) into `card_hash` and emits `lock.taken`. While locked, `add backlog --to <group>`, `plan --epic` on that group, and a hand edit (hash mismatch at the next verb) refuse with `locked` and the run ID. Landing or abandon emits `lock.released`. The builder and reviewer always read the list at the base commit (S11), so the lock protects the next run, not the current brief.
+- **Task claims:** a task is `queued → claimed → done | returned | blocked`. `task.claimed` fires at `session.start` with the session UUID; `task.released` at `session.end`. A claimed task whose session is dead at the sweep is released with `crash`.
+- **Scorecard (`status --metrics`):** per agent and model over `ledger.retention_days`: first-pass rate (tasks `done` on attempt 1), repairs per group, finding precision (S20), tester false-fail rate, tokens and USD per accepted group, cache hit rate. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups.
 - **Live views:** `status [--watch]` shows the pool, stages, budgets and blocks, and draws the group graph: dependencies, each group's stage, and which groups touch which files; `wait <run>` blocks until the next wake event.
 - **Session detail:** `status --session <id>` prints the stream tail and result.
 - **Redaction:** keys and secret matches are masked before anything is written.
 
 **Vet:**
-- **Retention:** 30 days or 100 MB per repo, oldest first? A journal of a group that is open, paused or blocked is never trimmed.
-- **Export:** is an OpenTelemetry export needed later? Default: no; JSONL only.
+- **Retention:** decided: `ledger.retention_days` (30) or 100 MB per repo, oldest first; a journal of a group that is open, paused or blocked is never trimmed.
+- **Export:** decided: no OpenTelemetry in beta 6; JSONL plus `events.schema.json` is the export.
 
-**Proof:** the fixture run has one ledger row per session, and `status --wait` returns on `group.blocked`.
+**Pass 2 (performance):** the views are rebuilt incrementally from the last applied `seq`, never from the whole log; `status` on a repo with 1,000 ledger rows must render under 100 ms.
+**Pass 3 (caching):** `status --metrics` aggregates are cached by the ledger file's size and mtime.
+
+**Proof:** the fixture run has one ledger row per session, and `status --wait` returns on `group.blocked`. `ledger/tasks.json` after the fixture lists every task once as `done`. `add backlog --to <locked group>` exits 1 with `locked` and the run ID. A dead session's task shows `released: crash` after the sweep.
 
 ### S24 · Event bus
 
