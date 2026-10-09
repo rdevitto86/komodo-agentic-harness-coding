@@ -716,7 +716,7 @@ Everything else is a `komodo config` key, such as `komodo config mode=economy li
 - **Ollama is detected** at the probe: its server answers `GET /api/version` at the endpoint's host.
 - **`ctx` on an Ollama endpoint:** optional, and only lowers the measured number, never raises it.
 - **Model catalog (`embed/models.json`):** the one list of models Komodo uses by default, about 10 entries:
-  - **Claude:** per weight, the latest and prior IDs, each with its window from Anthropic's docs; Haiku 4.5 is listed at 200K.
+  - **Claude:** per weight, the latest and prior IDs, each with its window and price from Anthropic's docs: Opus 5.5 $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50 per M input/output, all 1M; Haiku 4.5 is listed at 200K; `fable` (Fable 5.1, $10/$50, 1M) is an opt-in heavy model (S07).
   - **Local:** the recommended `http:` models per weight (Qwen3.6-27B, Gemma 4 31B, Nemotron 3 Nano), with no window, since theirs is measured.
 - **Default window (262,144):** used for any model that is neither measured nor in the catalog, such as a new Claude model on a login with no API key. A smaller window than the real one only makes briefs smaller; a larger one would let a server cut the prompt, so the catalog must list every pinned model whose window is under the default.
 - **Documented in one place:** `doctor` prints the catalog as a table: weight, link, model ID, window, and whether the window was measured or came from the catalog or the default. The ledger records each session's model ID and window, and `status` shows the model each running task is on.
@@ -727,7 +727,7 @@ Everything else is a `komodo config` key, such as `komodo config mode=economy li
 
 | Step | Link | Model per weight |
 |---|---|---|
-| 1 | `claude-cli` | each weight's latest model, then the prior version: heavy `claude-opus-5-5` → `claude-opus-5`, standard `claude-sonnet-5-5` → `claude-sonnet-5`, light `claude-haiku-4-5` (no prior) |
+| 1 | `claude-cli` | each weight's latest model, then the prior version: heavy `claude-opus-5-5` → `claude-opus-5`, standard `claude-sonnet-5-5` → `claude-sonnet-5`, light `claude-haiku-5-5` → `claude-haiku-4-5`. Every current ID is a 1M-token window with 128K max output; Haiku 4.5 is 200K. Dateless IDs from the 4.6 generation on are pinned snapshots, so "exact ID, never an alias" costs nothing [web: platform.claude.com/docs/en/models/overview] |
 | 2 (backstop) | each free `http:<name>` endpoint, in config order | the endpoint's `heavy`, `standard`, `light`; a missing weight uses the nearest one |
 | 3 | `anthropic-api` | only under `providers.paid: fallback` or `allowed` |
 
@@ -793,6 +793,7 @@ Three mechanical checks enforce it:
   --tools ""                                # native tools off
   --mcp-config <session>/mcp.json --strict-mcp-config
   --permission-mode dontAsk                 # a call nothing allows is denied
+  --permission-prompts none                 # and the model is told not to retry it (2.1.259+)
   --allowedTools mcp__komodo                # the private tool server, nothing else
   --setting-sources ""                      # load no Claude settings or CLAUDE.md
   --json-schema <agent result schema>
@@ -801,10 +802,15 @@ Three mechanical checks enforce it:
 
 - **Resume:** `--resume <uuid>`, with the repair input on stdin.
 - **Why `dontAsk` and `--allowedTools`:** in `-p` mode a call nothing allows is denied, and `--setting-sources ""` loads no allow rules. The prototype passed both.
-- **No `--bare`:** it reads only `ANTHROPIC_API_KEY` and never the Max login.
+- **No `--bare`:** it reads only `ANTHROPIC_API_KEY` and never the Max login; the docs say bare mode "doesn't use your subscription login" and will become the `-p` default, so the launch line pins the flags it needs instead of relying on either default [web: code.claude.com/docs/en/headless].
+- **Stream facts the engine relies on:** the first line is `system/init` (billing check 3); `system/api_retry` lines carry `error` categories (`rate_limit`, `overloaded`, `billing_error`, `max_output_tokens`, …) that S05 maps to limit or failure classes without parsing prose; piped stdin is capped at 10 MB, and a 500K-token brief is about 2 MB; MCP servers get `MCP_TIMEOUT` (30 s) to start; SIGINT ends a turn with its result, SIGTERM leaves it unfinished with exit 143 (S18) [web: code.claude.com/docs/en/headless].
+- **Effort per weight (API links):** heavy `high`, standard `medium`, light `low`, fixed per agent, because changing `effort` or thinking settings invalidates the prompt cache from the messages level up [web: platform.claude.com/docs/en/build-with-claude/prompt-caching].
 - **Why `--setting-sources ""`:** by default `claude` loads `~/.claude/settings.json`, the repo's `.claude/settings*.json` and `CLAUDE.md`. Workers need none of it: Komodo supplies rules (S10), the `AGENTS.md` addendum (S11) and skills (S09) itself. Tested on 2.1.291: `""` fired 0 hooks and ignored a planted `CLAUDE.md`; `user` fired 2 hooks, and `project` obeyed the `CLAUDE.md`.
 
 **Vet:** none open. Decided: Max quota blocks paid fallback; `resume` restarts now and re-waits; open-source `http:` models are the mandatory backstop for every agent, builders included; `--setting-sources ""` is proven.
+
+**Pass 2 (performance):** the billing check's `claude auth status --json` result is cached for 60 s per process, so a group of 4 tasks pays it once. `keep_alive` on Ollama is set to the run's remaining wall time so the model is never reloaded between sessions (Ollama unloads after 5 min by default) [web: docs.ollama.com/faq].
+**Pass 3 (caching):** on the Anthropic API, `cache_control` breakpoints follow S11's prefix order with 1-hour entries first, as the API requires; on `claude -p` caching is automatic for a byte-identical prefix; the ledger's `cache_read` column is the proof that the prefix held.
 
 **Changed by the 2026-10-06 review (re-vet):** the launch flags, the Claude API final call, endpoint `ctx`, the context floor, measured context, latest-plus-prior model pinning, the machine-wide quota file and the pause cap. **Spike:** can the probe capture an init line without spending a model turn?
 
@@ -846,18 +852,23 @@ Three mechanical checks enforce it:
 | Value | Setting |
 |---|---|
 | Connect / first byte | 10 s / 60 s; loopback endpoints 300 s; per endpoint `first_byte_s` |
-| Stream idle | 90 s, then the stream retry below |
+| Stream idle | 90 s on hosted links; 300 s on loopback and `self_hosted` endpoints, the same ceiling Codex uses for its model streams [web: learn.chatgpt.com/docs/config-file/config-reference] |
 | Stream drop mid-answer | 1 retry from the start, partial answer discarded; a second failure fails the session |
-| Retry classes | connection reset, 408, 429 (`Retry-After` ≤ 60 s), 500, 502, 503, 504 |
-| Retries | 3, backoff 1 s, 4 s, 16 s ±20%; `Retry-After` up to 60 s |
+| Retry classes | connection reset, 408, 429 with `retry-after` ≤ 60 s, 500, 502, 503, 504, and Anthropic's 529 `overloaded` |
+| Not retried, returned as a limit | a 429 with no `retry-after` and `error.details.error_code: enforced_spend_limit_reached` (the monthly cap; retrying fails until the month resets), a 429 with `retry-after` over 60 s, or a quota error in the body [web: platform.claude.com/docs/en/api/rate-limits] |
+| Retries | 4 attempts, full jitter: sleep = random(0, min(30 s, 1 s × 2^attempt)); `retry-after` replaces the formula when present. Full jitter is AWS's recommendation for remote clients and Codex's `request_max_retries` default is 4 [web: aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter] |
+| Headroom | `anthropic-ratelimit-*-remaining` and `-reset` headers are read on every response; below `100 − warn.quota_pct` % remaining, S05 gets a `limit.warn` before any 429 happens |
 | Plain `http://` | loopback, or an endpoint with `self_hosted`, with a ⚠️ warning; anything else needs HTTPS |
 | Custom CA | `http.ca_bundle`: a PEM file added to the system roots; a missing or bad file fails `doctor` |
 | Body cap (non-stream) | 8 MB |
 | Redirects | same host only |
 
-**Vet:** none open. Decided: `http.ca_bundle` ships in beta 6; a dropped stream retries once, then fails the session.
+**Vet:** none open. Decided: `http.ca_bundle` ships in beta 6; a dropped stream retries once, then fails the session; 4 attempts with full jitter.
 
-**Proof:** a fake server answering 429 then 200 succeeds on attempt 2. A 429 with `Retry-After: 3600` returns a limit after 1 attempt. A stream cut mid-answer succeeds on the retry; cut twice, the session fails. A planted key and an `env:` endpoint key never appear in any log. A server signed by a test CA fails without `http.ca_bundle` and passes with it. Plain `http://` to a non-loopback host without `self_hosted` is refused. Redirects to a new host are refused.
+**Pass 2 (performance):** one `http.Transport` per process with keep-alive and HTTP/2 to hosted links, so a 4-task group reuses one TLS session; SSE lines are parsed without buffering the whole body.
+**Pass 3 (caching):** none at this layer; response caching is S22's job and never applies to model calls.
+
+**Proof:** a fake server answering 429 then 200 succeeds on attempt 2. A 429 carrying `enforced_spend_limit_reached` and no `retry-after` returns a limit after 1 attempt. A 529 is retried. Retry sleeps over 100 runs stay within [0, 30 s] and are not identical. A 429 with `Retry-After: 3600` returns a limit after 1 attempt. A stream cut mid-answer succeeds on the retry; cut twice, the session fails. A planted key and an `env:` endpoint key never appear in any log. A server signed by a test CA fails without `http.ca_bundle` and passes with it. Plain `http://` to a non-loopback host without `self_hosted` is refused. Redirects to a new host are refused.
 
 ### S07 · Agent registry
 
@@ -937,11 +948,17 @@ Three mechanical checks enforce it:
 | `write` | new files only; an existing file is refused with "use `edit`" |
 | External MCPs | opt-in allowlist per agent, no credentials (final phase) |
 
+- **MCP facts the server is built against (Claude Code 2.1.295):** a stdio server has no per-request timer, and `MCP_TOOL_TIMEOUT` defaults to about 28 hours, so S13's 10-minute `run` timeout is the only one that fires; `MAX_MCP_OUTPUT_TOKENS` defaults to 25,000 and the host warns past 10,000, so the 4 KB cap stays far below both; the server must answer `initialize` inside `MCP_TIMEOUT` (30 s), and it does so before loading anything, since the registry is already in memory [web: code.claude.com/docs/en/env-vars].
+- **Claude Code's own retries stay off:** the worker env never sets `CLAUDE_CODE_RETRY_WATCHDOG`, which would retry 429 and 529 for hours inside the session and hold a pool slot while the backstop sits idle. Instead S16 reads `system/api_retry` lines; on `rate_limit` or `billing_error` the engine ends the session with reason `provider`, keeps its resume handle, and S05 fails over or pauses [web: code.claude.com/docs/en/env-vars].
+
 **Vet:**
 - **Tool count:** 6 builder tools (Part C). Decided: `edit` and `write` stay separate; `check_task` and `submit_result` drop out, since the engine gates the final result.
 - **`run` streaming:** decided: return only the capped result; the full log stays at the named path.
 
-**Proof:** a builder calling `submit_finding` is refused because it isn't listed. A reviewer calling `edit` is refused. The MCP server exits within 2 s of its session. `write` on an existing file is refused. A 40 KB `run` output leaves its full log at the named path. On each API link, a fixture model that stops with text gets 1 final call and a schema-valid result; a builder whose `done_when` fails continues in the same session. A fixture session that passes 80% of `ctx` stubs old outputs and never sends past `ctx`. A `run` arg of `&&` reaches the command as a literal string.
+**Pass 2 (performance):** `search` is a Go walker with the repo's `.gitignore` applied and a 1 MB per-file cap, so it never scans `node_modules` or `target/`; `read` returns line ranges, so a 2,000-line cap costs one `ReadAt`. The MCP server starts in under 100 ms because it reads nothing from disk at startup.
+**Pass 3 (caching):** repeat-read dedupe (above) is the in-session cache; across sessions, file slices and signature trims come from S22 keyed by blob SHA, so a re-review of an unchanged file costs 0 tokens of new context.
+
+**Proof:** a builder calling `submit_finding` is refused because it isn't listed. A faked `api_retry` line with `error: rate_limit` ends the session with reason `provider` and the next session starts on the backstop. A reviewer calling `edit` is refused. The MCP server exits within 2 s of its session. `write` on an existing file is refused. A 40 KB `run` output leaves its full log at the named path. On each API link, a fixture model that stops with text gets 1 final call and a schema-valid result; a builder whose `done_when` fails continues in the same session. A fixture session that passes 80% of `ctx` stubs old outputs and never sends past `ctx`. A `run` arg of `&&` reaches the command as a literal string.
 
 ## Context layer
 
