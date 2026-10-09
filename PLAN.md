@@ -1064,9 +1064,30 @@ Three mechanical checks enforce it:
 
 - **The boundary is S13:** builders write tests and `run` them, so any code runs inside the sandbox. R1 limits command names only.
 
-**Vet:** none open. Decided in the 2026-10-06 guard audit: G3 protects `bin/komodo` and `.git`, not `bin/**`; G4 names real key files and allows env templates; G6 counts by rule; read-only agents' `run` may write (S13); native Windows needs WSL or Docker (S13).
+**Rules are data (`embed/policy.json`), one source for three readers:**
 
-**Proof:** the guard table test covers every row; malformed input is refused. Verbs given a critical ref or a leased worktree refuse.
+| Field | Values | Meaning |
+|---|---|---|
+| `id` | `G1`…`G6`, `R1`, `B1`, `O1`…`O10` | the row named in a refusal |
+| `scope` | agent names, or `writers`, `runners`, `all`, `orchestrator` | who it binds to; `writers` is any agent with `edit` or `write`, `runners` any with `run` |
+| `kind` | `tool`, `path`, `run`, `text` | what the check reads: the tool name, a path argument, a `run` class, or text an agent writes |
+| `pattern` | glob or list | what matches; `~/.komodo/**` style globs expand at load |
+| `action` | `refuse`, `warn` | `warn` only for `text` rows on the orchestrator, which no hook can refuse |
+| `message`, `alternative` | template IDs | the refusal's rule line and the allowed alternative (S10) |
+
+- **`safety/rows.go` only loads it:** no row is Go code. The Part C roster tables are rendered from `policy.json` into `docs/lld.md` by `gate`, which fails on drift; this plan's tables are the fixture.
+- **Scoped, so no dead rows:** write rows (`G3` writes, `G4` written content, `G5`) bind to `writers`; `R1` to `runners`; `G1`, `G2`, `G4` reads and `G6` to `all`. The scout's table has 4 rows, the builder's 8.
+- **Security rows are never config:** the only tunable is `guard.refusal_limit` (S04), G6's count. The steering-phrase list S09 scans skills against lives here too, as a `text` row with action `warn` for the repo addendum and `refuse` for a skill at the gate.
+- **B2 is a lint fact, not a guard:** `doctor backlog` refuses a group whose `files` list `docs/backlog/**` (S25), so the builder can never be given its own cards. Part C drops B2.
+- **Hooks are exactly 3, all inline Go:** `tool.pre` (this guard), `tool.post` (S08's format after `edit`), `session.end` (S18's WIP commit). No model, repo or host hook runs inside a worker. The Claude host keeps only install's `SessionStart` for the orchestrator (S02). Repo hooks wait for a later minor (S24).
+- **One human path:** `needs_scope` (B1) is the only refusal a person or the orchestrator can turn into an allow; every other refusal is final for that session.
+
+**Vet:** none open. Decided in the 2026-10-06 guard audit: G3 protects `bin/komodo` and `.git`, not `bin/**`; G4 names real key files and allows env templates; G6 counts by rule; read-only agents' `run` may write (S13); native Windows needs WSL or Docker (S13). Decided in the 2026-10-08 design pass: rows are `policy.json` data with scopes; B2 moves to lint; 3 hooks.
+
+**Pass 2 (performance):** the guard compiles each agent's rows to a matcher once per session; a check is a map lookup plus at most 8 glob tests, under 50 µs, so it never shows against a tool call.
+**Pass 3 (caching):** path containment results (realpath, symlink resolution) are cached per session by path until the worktree changes.
+
+**Proof:** the guard table test covers every row for every agent; malformed input is refused. Verbs given a critical ref or a leased worktree refuse. The scout's rendered table has 0 write rows. A `policy.json` row edited without regenerating `lld.md` fails `gate`. A group whose `files` list `docs/backlog/**` fails `doctor backlog`.
 
 ### S13 · Sandbox and process control
 
@@ -1470,12 +1491,16 @@ Three mechanical checks enforce it:
 - **Providers:** `provider.skip` and `limit.warn` (S05).
 
 **Does:**
-- **Wakes:** `group.blocked` and `run.done` wake `komodo status --wait`.
-- **Repo hooks:** none in beta 6; they wait for a later minor.
+- **Wakes:** `group.blocked`, `group.paused`, `run.done` and `run.stopped` wake `komodo status --wait`; `--wait any` also wakes on `stage.enter`. A wake is a file touch under `state/wake/<run>`; the waiter watches the file and then reads the journal tail, so an event between subscribe and watch is never missed (§1 guarantees).
+- **Subscribers, exactly 3:** the ledger (S23), the wake file, and the `status --watch` renderer. Each is a read-only function `(event) → error` called in `seq` order after `Next()` returned; an error or panic is logged and the subscriber is dropped for the run.
+- **Hooks:** the 3 inline hook points live in S12; the bus runs none. Repo hooks wait for a later minor and will be subscribers, never gates.
 
 **Vet:** none open.
 
-**Proof:** a fixture `group.blocked` wakes `status --wait`. A subscriber that panics leaves group state unchanged. An emitted type missing from the catalog fails the gate.
+**Pass 2 (performance):** delivery is synchronous and in-process, so a subscriber must return under 5 ms; the ledger subscriber batches its appends per event tick.
+**Pass 3 (caching):** none; the bus holds no state.
+
+**Proof:** a fixture `group.blocked` wakes `status --wait`. An event emitted between a waiter's subscribe and its first watch still wakes it. A subscriber that panics leaves group state unchanged and the other 2 keep running. An emitted type missing from the catalog fails the gate.
 
 ## Delivery layer
 
@@ -1485,7 +1510,7 @@ Three mechanical checks enforce it:
 
 **Does:**
 - **Grammar:** `docs/backlog/epic-N/tg-N.M/{TG.md, tsk-*.md}`, ported from the prototype.
-- **Backlog check:** `komodo doctor backlog` checks the grammar, `files`, `done_when` and dependencies, and that groups in one wave share no `files`. A group whose `files` include a G3 path fails.
+- **Backlog check:** `komodo doctor backlog` checks the grammar, `files`, `done_when` and dependencies, and that groups in one wave share no `files`. A group whose `files` include a G3 path or any `docs/backlog/**` path fails (the former B2 guard, now a lint fact).
 - **Planner output:** tasks sized for an LLM, a human-facing doc per group, acceptance items for the tester, and each group's dependencies.
 - **Mechanical planner:** templates, per-task size caps and lint fix the structure; the planner fills in the blanks.
 - **Dependency graph:** Go builds a DAG from the groups' dependencies, refuses cycles, and computes the waves and the longest chain (S14). `priority: high` in `TG.md`, set by the planner or a person, puts a group first.
@@ -1549,16 +1574,18 @@ Three mechanical checks enforce it:
 
 ## 3. Agent roster: tools, guards and hooks
 
+These tables are the fixture for `gate`, which renders them from `embed/policy.json` (S12). Each row carries a scope; "every agent" below means scope `all`, and write rows bind to `writers` only.
+
 ### Rows every agent inherits
 
 | ID | Refuse |
 |---|---|
 | G1 | A tool that isn't in the agent's set. The server doesn't list it either. |
 | G2 | Reads or writes outside the session worktree, including `..` paths and symlink escapes. |
-| G3 | Writes to protected paths: `.git` (file or folder), `.git/config`, `.git/hooks`, `bin/komodo`, `~/.komodo/**`, `~/.claude/settings*.json`, `.claude/settings*.json`, `embed/policy.json`, `docs/prd.md`. Memory (`~/.claude/projects/*/memory/`) and plans (`~/.claude/plans/`) are never blocked. |
-| G4 | Reads of secret files (`.env*` except `.env.example`, `.env.sample` and `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`), or written content that matches a secret pattern. |
-| G5 | Attribution trailers or session links in any text the agent writes. |
-| G6 | The 3rd refusal under the same rule, whatever the target; it ends the session. |
+| G3 | Writes to protected paths: `.git` (file or folder), `.git/config`, `.git/hooks`, `bin/komodo`, `~/.komodo/**`, `~/.claude/settings*.json`, `.claude/settings*.json`, `embed/policy.json`, `docs/prd.md`. Memory (`~/.claude/projects/*/memory/`) and plans (`~/.claude/plans/`) are never blocked. Scope: `writers`. |
+| G4 | Reads of secret files (`.env*` except `.env.example`, `.env.sample` and `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`), or written content that matches a secret pattern. Scope: reads `all`, written content `writers`. |
+| G5 | Attribution trailers or session links in any text the agent writes. Scope: `writers`. |
+| G6 | The `guard.refusal_limit` (3rd) refusal under the same rule, whatever the target; it ends the session. |
 
 **Run rows** (any agent with `run`):
 - **R1:** only the declared command classes; `run` takes `{class, args[]}`.
@@ -1589,7 +1616,7 @@ Any host: Claude Code now, Codex or a local model later. It uses its host's nati
 
 | Agent | Tools | Guard beyond G and R | Notes |
 |---|---|---|---|
-| Builder | `read`, `search`, `edit`, `write`, `run`, `skill` | B1: writes only to the group's `files` and test siblings; else the refusal says to stop with result status `needs_scope` (S19). B2: never writes its own group's backlog files, even when listed | `tool.post` formats the edited file |
+| Builder | `read`, `search`, `edit`, `write`, `run`, `skill` | B1: writes only to the group's `files` and test siblings; else the refusal says to stop with result status `needs_scope` (S19). Its own backlog files can never be in `files`: `doctor backlog` refuses them (S25) | `tool.post` formats the edited file |
 | Reviewer | `read`, `search`, `skill`, `diff`, `git_read`, `run` (build, test, lint), `submit_finding` | no write tools; `run` may write, and the engine resets it (S13) | `finding.submit` verifies evidence; one verdict per task (S20) |
 | Planner | `read`, `search`, `skill`, `lint_backlog` | every write refused | the harness writes files only if lint passes |
 | Tester | `read`, `search`, `run` (build and test only) | no write tools; other run classes refused; `run` may write, and the engine resets it (S13) | pass or fail per acceptance item, with evidence; runs beside the reviewer in Verify, in its own worktree (S20) |
