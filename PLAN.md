@@ -2,7 +2,7 @@
 
 ## Status
 
-**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. Design reviews the same day changed S01, S02, S03, S04, S05, S07, S08 and S10 after approval, so those need a second look; see **Review changes (2026-10-06, 2026-10-07)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27) becomes one or more task groups; S28 waits for a later minor.
+**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. Design reviews the same day changed S01, S02, S03, S04, S05, S07, S08 and S10 after approval, so those need a second look; see **Review changes (2026-10-06, 2026-10-07, 2026-10-08)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27) becomes one or more task groups; S28 waits for a later minor.
 
 ## How to read this plan
 
@@ -35,8 +35,8 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 - **Repo and bridge:** rewrite in place. Claude Code talks to the harness through CLI subcommands with `--json`; there is no server process.
 - **Isolation and tools:** worktree plus guard plus OS sandbox; Docker is needed only on native Windows without WSL. Each session gets a private MCP tool server, and native tools are off.
 - **Execution:** one fresh session per task; a failed Check or Verify resumes it. Providers use a declared fallback chain per agent, and the pipeline has 5 stages.
-- **Platforms and config:** macOS, Linux, WSL2 (preferred on Windows) and native Windows `.exe`, which needs Docker. There is no repo config folder; repo settings live in a per-repo section of `~/.komodo/config.json`, and runtime state lives outside the tree.
-- **Carry-over:** the backlog tree and lint, release, worktree protections, the subagent ledger, the economy flag and all 34 `standards-*` skills are kept. Eval, recall, plugins and standalone facets are deleted.
+- **Platforms and config:** macOS, Linux, WSL2 (preferred on Windows) and native Windows `.exe`, which needs Docker. There is no repo config folder or repo layer; every setting lives in `~/.komodo/config.json` and changes only through `komodo config` (S04), and runtime state lives outside the tree.
+- **Carry-over:** the backlog tree and lint, release, worktree protections, the subagent ledger, economy mode (now the `mode` key) and all 34 `standards-*` skills are kept. Eval, recall, plugins and standalone facets are deleted.
 - **Docs:** `AGENTS.md` is the source of truth, and `CLAUDE.md` imports it. Specs start from zero: the PRD is rewritten, and prior specs sit in `backups/` and at tag `prototype-final`.
 - **OpenAI:** scoped now, implemented in a later minor version. Beta 6 ships the interfaces, the `install` probe, Codex detection and `AGENTS.md` compatibility. `codex-cli` and `openai-api` refuse with `not yet`, and `.codex/` install reports `not yet`. `openai.go` still ships for `http:` endpoints, local or on a server.
 
@@ -64,6 +64,89 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 - **The engine orchestrates.** The orchestrator is only the control plane: it refines intent, calls `plan`/`run`/`status`/`wait`, and reports back.
 - **One tool registry, two transports.** The API loop calls the Go tools directly. CLI providers reach them through `komodo internal tools --agent <a> --session <id>`.
 - **Every result is schema-checked twice.** The provider enforces the schema first, then Go re-validates it. A failure gets one re-prompt; a second failure fails the task.
+- **Events carry facts; `Next()` decides.** Every stage move, error and retry travels as an event through one pure function (Event model, below).
+
+### Event model (core tenet)
+
+**Facts flow as events; one pure function decides.** The mechanical parts publish what happened. `Next(state, event)` returns the new state, the actions to take and any follow-on events. Nothing else changes group state.
+
+- **The engine emits, never a model:** a killed or crashed session can't report, and a model can forget or invent. A session's typed JSON (its result, `submit_finding`) becomes an event only after Go validates it.
+- **Journal first:** each event is appended and synced to `runs/<group>/events.jsonl` before it is applied. `state.json` is a snapshot holding the last `seq`; resume replays the events after it (S18).
+- **Subscribers are read-only:** the ledger, `status --wait` wakes and notifications react to events but never change state (S24).
+- **Coarse grain:** events fire per run, group, stage, session and task, never per model turn or token. S08's in-session loop stays direct code.
+- **In-process and ordered:** one bus per engine, delivered synchronously in `seq` order, with no broker. Machine-wide state (pool, quota) stays in files (S05, S14); each engine turns a change there into a local event.
+- **Outside the bus:** inline gates (S12's guard, S08's formatting after `edit`) and shutdown (S15) are direct code. They log an event afterward when they can.
+- **A new type is a plan change:** the catalog is a Go enum. S27's gate fails on an emitted type missing from it, or a listed type nothing emits.
+
+**Envelope:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `v` | int | envelope version, 1 |
+| `seq` | int | order within the group journal, no gaps |
+| `ts` | RFC 3339 | when the engine saw the fact |
+| `run`, `group`, `session` | string | where it happened; `session` only on session and task events |
+| `type`, `reason`, `data` | string, string, object | what happened; `reason` comes from S10's code list; `data` is typed per event |
+
+**Catalog:**
+
+| Family | Types | Emitted by |
+|---|---|---|
+| Run | `run.start`, `run.done`, `run.stopped` | S14; `run.stopped` by S15's shutdown |
+| Group | `group.paused`, `group.blocked`, `group.cancelled`, `group.shipped`, `lease.lost` | S14, S15, S26 |
+| Stage | `stage.enter`, `stage.exit` | S14 |
+| Session | `session.start`, `session.idle`, `session.timewarn`, `session.end` with its exit reason | S16; S05 supplies provider-limit reasons |
+| Work | `task.done`, `task.retry`, `check.done`, `finding.submit`, `finding.verified`, `tool.denied`, `timer.due`, `job.due`, `job.fail` | S08, S12, S17, S18, S19, S20 |
+| Provider | `provider.skip` with its reason (such as `ctx_below_floor`), `limit.warn` | S05 |
+
+**The loop:**
+
+```mermaid
+flowchart LR
+  P["Producers: S15, S16, S19, S20, S26, timers"] -->|fact| J[("group journal: events.jsonl")]
+  J --> N["Next(state, event)"]
+  N -->|new state| S[("state.json snapshot")]
+  N -->|follow-on events| J
+  N -->|actions| A["Engine actions: spawn, kill, commit, land"]
+  A --> P
+  J --> R["Read-only subscribers: ledger, status, status --wait"]
+```
+
+**A group's lifecycle:** sessions run in Build and Verify, so `Paused` and `Blocked` can follow either.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Intake: run.start
+  Intake --> Build: stage.exit
+  Build --> Check: task.done (last task)
+  Check --> Verify: check.done pass
+  Check --> Build: check.done fail
+  Verify --> Build: finding.verified
+  Verify --> Ship: stage.exit
+  Ship --> [*]: group.shipped
+  Build --> Paused: session.end provider_limit
+  Paused --> Build: timer.due
+  Paused --> Blocked: pause_timeout
+  Build --> Blocked: a bound is hit
+  Verify --> Blocked: a bound is hit
+  Blocked --> Build: resume
+```
+
+**Example, a session timeout:**
+
+```mermaid
+sequenceDiagram
+  participant Sup as S16 supervisor
+  participant Jr as Journal
+  participant Nx as Next()
+  participant Sub as Ledger, status, wait
+  Sup->>Jr: session.timewarn (80% of wall)
+  Sup->>Jr: session.end, reason timeout
+  Jr->>Nx: deliver in seq order
+  Nx->>Jr: task.retry (attempt 2)
+  Nx->>Sup: action: start a fresh session
+  Jr->>Sub: append ledger row, refresh views
+```
 
 ## 2. Subsystem map
 
@@ -92,7 +175,7 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 | S21 | Token and resource management | Economy and ops | `ops`, `agent` | S23 |
 | S22 | Cache store | Economy and ops | `core` | — |
 | S23 | Runtime observability | Economy and ops | `ops`, `cli` | — |
-| S24 | Event bus and hooks | Economy and ops | `ops` | S13 |
+| S24 | Event bus | Economy and ops | `ops` | S13 |
 | S25 | Backlog and planning | Delivery | `repo` | S07, S10 |
 | S26 | Ship: git, PR, release | Delivery | `repo` | S10, S12 |
 | S27 | Gate and self-checks | Delivery | `repo`, `safety` | all |
@@ -104,7 +187,7 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 | **Agents** | S07: `agent.json` for mechanics, `prompt.md` for what the model reads |
 | **Skills** | S09: an indexed loader, preinjected or pulled on demand, usable by external sessions |
 | **Rules** | S10: embedded in the binary and first in every prompt; the output style is config (S04) |
-| **Hooks** | S24: Go lifecycle events, plus an optional repo `hooks.json` |
+| **Hooks** | S24: Go lifecycle events; repo hooks wait for a later minor |
 | **Guards** | S12: checked in-process on every tool call, fail-closed |
 | **Commands** | S04 detects the command classes; S08 runs them; only S26 runs git writes |
 | **Plugins** | Deleted. External MCPs become an opt-in allowlist per agent in S08 |
@@ -120,19 +203,19 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 **Owns:** `cmd/komodo/main.go`, `internal/cli/*`.
 
 **Does:**
-- **One ingress, three tiers:** every caller uses the same binary. Verbs are tagged human, orchestrator or internal, and the terminal check enforces the tag.
-- **Self-describing:** `komodo help --json` returns every verb, flag, type, default and result schema. `help orch` lists the orchestrator tier.
+- **One ingress, one verb set:** you and the orchestrator call the same verbs. A few need a terminal, and `internal` verbs are the engine's.
+- **Self-describing:** `komodo help --json` returns every verb, flag, type, default and result schema. Each verb says whether it needs a terminal.
 - **One envelope:** `{ok, verdict, report, data, error{code, reason, fix}}` with `--json`. `report` is the human text, already formatted to `output.profile`, so a caller can relay it verbatim.
 - **Exit codes:** 0 ok, 1 refused, 2 usage, 3 blocked, 4 internal.
 - **Pin check first:** a repo pinned above this binary refuses every verb except `help`, `version`, `fresh`, `install` and `doctor` (S03).
 
 **Tiers:**
 
-| Tier | Prefix | Who calls it | Shown in `help` | Output |
-|---|---|---|---|---|
-| Human | `komodo <verb>` | you; the orchestrator only for verbs marked "shared" | yes | text, or `--json` |
-| Orchestrator | `komodo orch <verb>` | Claude Code (later Codex); rarely you | only in `help orch` | always the JSON envelope, never interactive |
-| Internal | `komodo internal <verb>` | the engine; never typed | only in `help --all` | protocol-specific |
+| Class | Who calls it | Shown in `help` | Output |
+|---|---|---|---|
+| Shared | you and the orchestrator (Claude Code, later Codex) | yes | text on a terminal; the JSON envelope without one |
+| Terminal-only | you; refused without a controlling terminal | yes, marked | the same |
+| Internal | the engine; never typed | only in `help --all` | protocol-specific |
 
 **Tier enforcement (a guardrail, not a wall):**
 - **Terminal check (every host):** a human-only verb refuses with exit 1 unless it has a controlling terminal. Agent shells have none: Claude Code's Bash tool can't open `/dev/tty` (tested 2026-10-06).
@@ -142,8 +225,8 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 
 | Flag | Meaning | Default |
 |---|---|---|
-| `--json` | print only the envelope | off (always on under `orch`) |
-| `-C, --repo <path>` | act on that repo | cwd |
+| `--json` | print only the envelope | on when there is no terminal |
+| `-C <path>` | act on that repo | cwd |
 | `--input <file\|->` | take the verb's arguments as one JSON object | — |
 | `-q, --quiet` / `-v, --verbose` | less or more human text | — |
 | `--no-color` | plain text; `NO_COLOR` also works | auto |
@@ -151,7 +234,7 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 
 Every verb that writes also takes `--dry-run`, which prints each write and makes none.
 
-**Human tier (approve or deny each row):**
+**Verbs (approve or deny each row):**
 
 | Verb | Does | Flags | Shared |
 |---|---|---|---|
@@ -160,31 +243,23 @@ Every verb that writes also takes `--dry-run`, which prints each write and makes
 | `install` | binary, provider probe and repo files (S02) | `--repo-only`, `--machine-only`, `--claude`, `--no-claude`, `--codex`, `--no-codex`, `--no-path`, `--from <file>`, `--offline`, `--project`, `--schedule`, `--force` | no |
 | `uninstall` | remove every file the manifest owns | `--repo-only`, `--machine-only` | no |
 | `fresh` | get the newest binary now (S03) | `--check`, `--to <version>`, `--restart-runs` | no |
-| `doctor [install\|config\|backlog]` | health of the install, the config, or the backlog; all 3 by default | `--fix` (refused for the orchestrator) | yes |
-| `config show\|get\|set\|unset` | effective settings and where each came from (S04) | `--repo` (this repo's section), `--explain` | `show`, `get` only |
+| `doctor [install\|backlog]` | health of the install or the backlog; both by default | `--fix` (refused for the orchestrator) | yes |
+| `config [agent\|endpoint <name>] <key>[=<value>]…` | read keys, or set several at once, all or none (S04) | `--all` (JSON, or a key's options), `--default` (reset) | reads only |
 | `sync` | after a merge: fetch, prune worktrees, refresh repo files | `--no-fetch` | yes |
 | `add backlog` | add a task, group or epic (S25) | `--task <text>`, `--group <title>`, `--epic <title>`, `--to <id>`, `--files <globs>`, `--done-when <text>` | yes |
 | `add changelog` | add an `Unreleased` entry | `--entry <text>`, `--kind added\|changed\|fixed\|removed` | yes |
-| `run [group]` | drive groups through the stages in the foreground; refuses a group whose dependency hasn't landed (S14) | `--mode economy\|thorough`, `--stage <stage>`, `--set <key>=<value>` | no (orch uses `start`) |
-| `status [run]` | pool, group graph, stages, budgets, blocks | `--watch`, `--session <id>`, `--backlog`, `--metrics`, `--all` | yes |
-| `resume <run>` | continue a crashed, blocked, paused or restarted run; paused agents restart now | `--from <stage>`, `--reload-config` | yes |
+| `plan <goal>` | planner drafts groups; writes only if the backlog check passes | `--from <spec>`, `--epic <N>` | yes |
+| `run [group]` | start groups detached and return the run id at once; refuses a group whose dependency hasn't landed (S14) | `--stage <stage>` | yes |
+| `status [run]` | pool, group graph, stages, budgets, blocks; `--wait` blocks until the next wake event, so the orchestrator runs it in the background (Claude Code's Bash tool stops at 2 min by default, 10 at most) | `--watch`, `--wait blocked\|done\|any`, `--timeout <dur>` (9m), `--session <id>`, `--backlog`, `--metrics`, `--all` | yes |
+| `skill list\|get` | skill index and bodies (S09) | `list --agent <name>`, `get <name> --section <heading>` | yes |
+| `scope approve\|deny <group>` | answer a builder's `needs_scope`; approve adds the paths to the group's `files` (S19) | `--paths <list>`, `--reason <text>` | yes |
+| `resume <run>` | continue a crashed, blocked, paused or restarted run; paused agents restart now | `--from <stage>` | yes |
+| `stop <run>` | save work and release leases, the same clean shutdown as a signal (S15); `resume` continues | — | yes |
 | `abandon <run>` | stop, free leases, keep evidence; dependents block with `dependency` (S14) | `--reason <text>`, `--keep-worktree` | yes |
 | `jobs list\|show\|run\|pause\|resume\|tick` | job templates and the tick (S17) | `<id>`; `run --ignore-window` | `list`, `show`, `tick` only |
 | `cache stats\|clear` | size, hit rate, purge (S22) | `--kind skills\|context\|checks\|review` | `stats` only |
 | `gate` | full self-check; Komodo repo only (S27) | `--only <check>`, `--fast`, `--install` (dev build), `--install-hooks` | yes, except `--install` and `--install-hooks` |
 | `release <version>` | tag, cross-build, checksum, sign; Komodo repo only (S26) | `--notes-file <path>` | no |
-
-**Orchestrator tier (`komodo orch <verb>`):**
-
-| Verb | Does | Flags |
-|---|---|---|
-| `orch plan <goal>` | planner drafts groups; writes only if the backlog check passes | `--from <spec>`, `--epic <N>` |
-| `orch start [group]` | start a run detached; return its id at once | `--mode`, `--stage`, `--set <key>=<value>` |
-| `orch wait <run>` | block until the next wake event; run it in the background, since Claude Code's Bash tool stops at 2 min by default and 10 at most | `--timeout <dur>` (9m), `--for blocked\|done\|any` |
-| `orch agent <name>` | one agent on one task, under harness limits | `--task <file>` (required), `--provider <link>`, `--model <id>` |
-| `orch skill list\|get` | skill index and bodies (S09) | `list --agent <name>`, `get <name> --section <heading>` |
-| `orch pr open\|threads` | open the epic PR into its base; list open review threads | `open --base <ref> --title <text> --body-file <path> --ready`; `threads <pr> --unresolved` |
-| `orch scope approve\|deny <group>` | answer a builder's `needs_scope`; approve adds the paths to the group's `files` (S19) | `--paths <list>`, `--reason <text>` |
 
 **Internal tier (`komodo internal <verb>`):**
 
@@ -193,38 +268,33 @@ Every verb that writes also takes `--dry-run`, which prints each write and makes
 | `internal tools` | the engine, for `claude -p` | private MCP server for one session (S08); `--agent`, `--session` |
 | `internal fresh-bg` | any verb, only when a newer version is known | the detached updater: download, verify, swap (S03) |
 
-**Run flags, trimmed from 6 to 3:**
-- **Kept:**
-  - `--mode`: the economy flag.
-  - `--stage`: runs one stage, replacing `/build`, `/review` and `/ship`.
-  - `--set`: overrides any config key for this run, within hard limits. From the orch tier it refuses `providers.*`, `sandbox.*` and `http.*`, and any value that raises a limit. From every tier it refuses machine-only keys (S04).
+**Run flags, trimmed from 6 to 1:**
+- **Kept:** `--stage` runs one stage, replacing `/build`, `/review` and `/ship`.
+- **Dropped:** `--mode` and `--set`. A setting changes only through `komodo config`, never per run (S04).
 - **Moved to config:** `--max-parallel` becomes `limits.pool_max`, and `--budget-tokens` becomes `limits.group_tokens`.
-- **Moved elsewhere:** `--detach` became `orch start`, and `--until` was dropped.
-
-**`orch agent` purpose:** ad hoc delegation outside the pipeline. For example, a scout on a local model answers "where is X used?" for free. It replaces Claude Code's native `Agent` tool for that job, with harness limits and a ledger row instead.
+- **Moved elsewhere:** `--detach` is now how `run` always works, and `--until` was dropped.
+- **Orchestrator tier removed:** `orch start` became `run`, `orch wait` became `status --wait`, and `orch plan`, `orch skill` and `orch scope` lost the prefix. The engine opens the epic PR (S26), and `orch agent` waits for a later minor.
 
 **Prototype verbs not carried:**
 - **Renamed or folded in, part 1:**
   - `init` and `setup` → `install`
   - `update` → `fresh`
   - `lint` → `doctor backlog`
-  - `detect` → `config show`
+  - `detect` → `config --all`
   - `check` and `ship` → `run --stage`
 - **Renamed or folded in, part 2:**
   - `list`, `backlog` and `metrics` → `status` flags
-  - `pr`, `threads` → `orch pr`
+  - `pr` → the engine opens the epic PR (S26); `threads` → `gh api` in the `respond` skill
   - `git-hook` → `gate --install-hooks`
   - `worktree` → engine-internal
 - **Deleted:** `migrate`, `ingest`, `comments`, `diff`, `tag`, `rephase`, `recall`, `eval`.
 
 **Vet:**
-- **Tier split:** approve human, orchestrator and internal, with the terminal check enforcing it?
-- **`orch agent`:** keep it for ad hoc delegation? Default: yes.
-- **`--set` on runs:** may it override any key, within hard limits? Default: yes.
+- **Verb classes:** approve one shared verb set, terminal-only verbs and internal, with the terminal check enforcing it?
 - **`--input` JSON:** does every verb accept its arguments as one JSON object? Default: yes.
 - **Exit codes:** are the 5 codes enough for a caller to branch on?
 
-**Proof:** each verb has a golden `--json` test. An unknown flag exits 2 and names the closest match. The gate fails if `help --json` and these tables disagree. With no controlling terminal, `komodo install` exits 1. `orch start --set providers.paid=allowed` is refused.
+**Proof:** each verb has a golden `--json` test. An unknown flag exits 2 and names the closest match. The gate fails if `help --json` and these tables disagree. With no controlling terminal, `komodo install` and `komodo config providers.paid=allowed` exit 1.
 
 ### S02 · Installer (`komodo install`)
 
@@ -245,20 +315,20 @@ Every verb that writes also takes `--dry-run`, which prints each write and makes
 | 7 | Manifest | `<git-common-dir>/komodo/install.json`, one hash per owned file or entry | inside a git repo |
 | 8 | OS schedule | a launchd, cron or Task Scheduler entry that runs `komodo jobs tick` (S17) | `--schedule` only |
 
-No config file is written. `~/.komodo/config.json` appears only on your first `config set` (S04).
+No config file is written. `~/.komodo/config.json` appears only on your first `komodo config` write (S04).
 
-**The Komodo block in `AGENTS.md` (step 4).** Install owns this text, so every session in the repo reads it before any skill loads. It is how a session finds `orch`:
+**The Komodo block in `AGENTS.md` (step 4).** Install owns this text, so every session in the repo reads it before any skill loads. It is how a session finds its verbs:
 
 ```markdown
 <!-- komodo:begin min=1.0.0-beta.6 -->
 ## Komodo harness
 
-- **You are the orchestrator.** Drive Komodo only through `komodo orch <verb>`; every reply is the JSON envelope.
-- **Find your verbs:** run `komodo help orch --json` first. It lists every orch verb, flag and result schema.
-- **Your verbs:** `orch plan`, `orch start`, `orch wait`, `orch agent`, `orch skill`, `orch pr open|threads`, `orch scope`, plus the shared `status`, `add`, `resume`, `abandon`, `sync`, `doctor`, `gate` and `jobs tick`. Run `orch wait` in the background.
-- **Not yours:** `install`, `fresh`, `config set`, `run`, `gate --install` and `release` belong to the person. They refuse without a terminal. Hand the person the command.
+- **You are the orchestrator.** Drive Komodo only through `komodo <verb>`; with no terminal, every reply is the JSON envelope.
+- **Find your verbs:** run `komodo help --json` first. It lists every verb, flag and result schema, and marks the terminal-only ones.
+- **Your verbs:** `plan`, `run`, `status`, `skill`, `scope`, `add`, `stop`, `resume`, `abandon`, `sync`, `doctor`, `gate`, `jobs tick` and config reads. Run `status --wait` in the background.
+- **Not yours:** `install`, `fresh`, `config` writes, `gate --install` and `release` belong to the person. They refuse without a terminal. Hand the person the command.
 - **Start:** run `komodo status` first: version, live runs, blocked groups.
-- **Skills:** `komodo orch skill get run|plan|respond|komodo` returns the workflow for each job.
+- **Skills:** `komodo skill get run|plan|respond|komodo` returns the workflow for each job.
 - **Rules:** <O1–O7, O9 and O10, from `embed/rules/orchestrator.md` (S10)>
 - **Report:** relay the envelope's `report` field verbatim; it is already in the output contract.
 
@@ -266,9 +336,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 <!-- komodo:end -->
 ```
 
-**Two more pointers to `orch`:**
-- **`help`:** plain `komodo help` ends with `Orchestrator verbs: komodo help orch`.
-- **`status`:** its report ends with `Orchestrator verbs: komodo help orch`.
+**One more pointer:** `status` ends its report with `Verbs: komodo help`.
 - **`SessionStart` (Claude only):** the step 6 hook runs `komodo status`, so a new session sees it on line one. A failing hook prints an error and blocks nothing.
 
 **Provider probe (step 3):**
@@ -309,7 +377,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 - **Bootstrap check:** the scripts verify only SHA-256 over HTTPS, and the binary verifies ed25519 on every later fresh. OK?
 
 **Proof:**
-- **Fresh repos on macOS and Windows:** a new `claude` session reads the `AGENTS.md` block, `orch skill list` shows the 4 orchestrator skills, and `komodo` resolves in a new shell. `.claude/settings.json` holds only the allow rule and the `SessionStart` hook, and a pre-existing key survives.
+- **Fresh repos on macOS and Windows:** a new `claude` session reads the `AGENTS.md` block, `komodo skill list` shows the 4 orchestrator skills, and `komodo` resolves in a new shell. `.claude/settings.json` holds only the allow rule and the `SessionStart` hook, and a pre-existing key survives.
 - **Rerun:** 0 repo changes, and a hand-edited `CLAUDE.md` survives.
 - **Probe:** with `claude` removed from PATH, `providers.json` marks `claude-cli` unavailable with the reason.
 
@@ -339,7 +407,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 | 2 | **Spawn only if newer:** any verb compares `latest` in `state/fresh.json` with its own version. Only if `latest` is newer does it spawn `internal fresh-bg` detached, and then it carries on. | a local file read, no network |
 | 2b | `fresh-bg` downloads to `versions/<v>/komodo.part`, verifies SHA-256 and ed25519, and renames it into place. | seconds, in the background |
 | 3 | It atomically replaces `bin/komodo` with the new version. Windows renames the running `.exe` to `.old` first. | immediately; it never waits for runs |
-| 4 | Every new call now gets the new binary, including the orchestrator's next `komodo orch …` call. | the hot swap |
+| 4 | Every new call now gets the new binary, including the orchestrator's next `komodo …` call. | the hot swap |
 | 5 | Live runs keep their own version. The engine starts every child from `versions/<its v>/komodo`, never from `bin/`. | until each run ends |
 | 6 | Cleanup deletes versions that are neither current, previous, nor used by a live run in `state/active/`. | on every fresh |
 
@@ -362,7 +430,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 | One updater | `state/fresh.lock`, created exclusively, stale after 10 min. |
 | Direction | background fresh never downgrades. `fresh --to <v>` and `install` may. A dev build (`+dev.<commit>`) is replaced only by a strictly newer release. |
 | Failure | silent and logged to `state/fresh.log`. After 3 failures in a row, `status` and `doctor` say so. |
-| Off switch | `fresh.auto: false`, `KOMODO_FRESH=off`, or `CI=true`. |
+| Off switch | `fresh.auto: false`, or `CI=true`. |
 
 **Repo pin stays:** `<!-- komodo:begin min=1.0.0-beta.6 -->` in `AGENTS.md` covers offline machines and `fresh.auto: false`. Below it, verbs refuse with `run komodo fresh`.
 
@@ -385,7 +453,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 
 **Answers one question:** for any setting, what is the value now, and which layer set it?
 
-**No repo config folder.** Each repo has a section in your machine config, plus `--set` on a run for one-off values. The only Komodo file in a repo is the block in `AGENTS.md`.
+**One machine file, one write path.** Every setting lives in `~/.komodo/config.json` and changes only through `komodo config`. There is no repo layer and no per-run override. The only Komodo file in a repo is the block in `AGENTS.md`.
 
 **Layers, lowest first:**
 
@@ -393,19 +461,18 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 |---|---|---|---|
 | 1 | Built-in | `embed/defaults.json`, `embed/policy.json`, inside the signed binary | defaults and hard limits |
 | 2 | Machine | `~/.komodo/config.json`, top level | any value within the hard limits |
-| 3 | Repo section | `~/.komodo/config.json` under `repos.<repo-id>` | the same |
-| 4 | Run | `--mode` and `--set` | the same, for one run; the orch tier can't loosen `providers.*`, `sandbox.*`, `http.*` or any limit (S01) |
 
-- **Merge:** a higher layer wins, within the built-in hard limits. Deny lists are the exception: they only add (the union of all layers).
-- **Machine-only keys:** `limits.pool_min`, `limits.pool_max` and `limits.link_sessions.<link>` are set only at the machine layer. A repo section or `--set` naming one is refused, naming the key.
-- **Repo id:** the normalized origin URL, such as `github.com/rdevitto86/komodo-agentic-factory-coding`. With no remote, the path of the git common dir. Every worktree of a repo shares one id.
-- **Agents can't touch it:** `~/.komodo/**` is protected by G3, and the orch tier's `--set` can't loosen a limit, so no session can change its own limits.
-- **Snapshot per run:** the effective config's hash goes into `runs/<group>/state.json`. Edits mid-run do nothing; `resume --reload-config` re-reads.
+- **Merge:** the machine value wins, within the built-in hard limits. Every key exists out of the box, so nothing is ever removed; `--default` resets.
+- **Repo id** (names worktrees, leases and caches, never config): the normalized origin URL, such as `github.com/rdevitto86/komodo-agentic-factory-coding`. With no remote, the path of the git common dir. Every worktree of a repo shares one id.
+- **Agents can't touch it:** `~/.komodo/**` is protected by G3, and every write needs a terminal (S01), so no session can change its own settings.
+- **Snapshot per run:** the effective config's hash goes into `runs/<group>/state.json`. Edits mid-run do nothing; the next run reads them, and `resume` keeps the snapshot.
+- **File shape:** flat keys at the top level; groups as `agents.<name>` and `endpoints.<name>` sections.
+- **Audit:** each write appends one row per changed key to `~/.komodo/state/config.log`: time, batch id, key, old and new value.
 - **Strict decode:** an unknown key is an error naming the closest match. A value over a hard limit is refused, naming the key, the value and the limit.
 
-**Multi-repo on one binary:** each call resolves its repo from cwd or `-C`. It then uses that repo's section and that repo's state under `<git-common-dir>/komodo/`. Shared across repos: the binary, the top-level config, the Max quota and the session pool.
+**Multi-repo on one binary:** each call resolves its repo from cwd or `-C` and uses that repo's state under `<git-common-dir>/komodo/`. Shared across repos: the binary, the config, the Max quota and the session pool.
 
-**All config keys (36):**
+**Flat keys (31):**
 
 | Key | Default | Hard limit | Meaning |
 |---|---|---|---|
@@ -415,24 +482,21 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 | `mode` | `thorough` | — | `economy` or `thorough` |
 | `fresh.auto` | `true` | — | background fresh |
 | `fresh.interval` | `1h` | ≥ 10m | how often to check |
-| `providers.chains.<agent>` | per agent (S05) | — | the fallback order |
 | `providers.paid` | `never` | — | `never`, `fallback` or `allowed`: when a paid link may run (S05) |
 | `warn.usd_per_run` | 5 | — | warn when a run's metered USD passes this; never stops work |
 | `warn.quota_pct` | 90 | — | warn when a provider window (Max 5-hour, weekly) passes this % |
 | `providers.keys.anthropic` | `env:ANTHROPIC_API_KEY` | `env:` only | the key reference, never the value |
 | `providers.keys.openai` | `env:OPENAI_API_KEY` | `env:` only | the same |
-| `providers.endpoints.<name>` | `local` at `http://localhost:11434/v1` | — | OpenAI-compatible servers: `url`, `models` per weight, `ctx` (context tokens: required for non-Ollama servers, an optional lower cap for Ollama, S05), optional `key` (`env:` only), `self_hosted`, `first_byte_s` |
-| `providers.models.<link>.<weight>` | per S05 | — | the model a link uses for a weight; default: latest in the line, then the prior version |
 | `providers.ctx_floor` | 262144 | — | smallest endpoint context allowed (S05) |
 | `http.ca_bundle` | none | PEM file path | extra trusted certificates, added to the system roots (S06) |
-| `limits.pool_min` | 1 | `limits.pool_max` | session slots kept open even while throttled (S14); machine only |
-| `limits.pool_max` | 6 | 16 | most looping sessions at once, across all repos (S14); machine only |
-| `limits.link_sessions.<link>` | 3; loopback endpoints 1 | 8 | concurrent sessions per link, across all repos; machine only |
+| `limits.pool_min` | 1 | `limits.pool_max` | session slots kept open even while throttled (S14) |
+| `limits.pool_max` | 6 | 16 | most looping sessions at once, across all repos (S14) |
+| `limits.link_sessions.<link>` | 3; loopback endpoints 1 | 8 | concurrent sessions per link, across all repos |
 | `limits.group_wall_min` | 30 per task, plus 30 | 240 | wall time per group; paused time doesn't count |
 | `limits.group_tokens` | 2,000,000 | 10,000,000 | tokens per group: input, output and cache writes; cache reads are reported, not counted |
 | `limits.task_attempts` | 6 | 10 | model attempts per task: fresh sessions, re-prompts, gate feedback and "continue" (S18) |
 | `limits.pause_max_min` | 360 | 1,440 | longest a session stays paused on a provider limit before it is cancelled (S18) |
-| `limits.session_wall_min` | per agent (S07) | 120 | wall time per session |
+| `limits.session_wall_min` | 60 | 120 | wall time per session |
 | `limits.session_idle_min` | 10 | 30 | silence before a nudge |
 | `limits.repairs` | 3 | 5 | returns to Build before Blocked |
 | `sandbox.network` | `deny` | — | network for run-class commands |
@@ -443,8 +507,27 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
 | `cache.max_mb` | 256 | 4096 | cache size per repo |
 | `ledger.retention_days` | 30 | 365 | ledger retention |
 | `ship.mode` | `group` | — | `group`: a PR per group into the epic branch, merged by the engine; `epic`: groups merge straight into the epic branch (S26) |
-| `repos.<id>.agents.<name>` | — | S07 hard limits | per-agent `limits` (wall, idle, retries) and `notes` |
-| `repos.<id>.*` | — | — | any key above, plus `commands.{setup,build,test,lint,format}`, `protected_paths`, `critical_refs` and `hooks` |
+
+**Agent group (`komodo config agent <name> …`, 4 keys per agent):**
+
+| Key | Default | Hard limit | Meaning |
+|---|---|---|---|
+| `model` | the agent's weight: `opus`, `sonnet` or `haiku` | a probed model | `opus` is the latest in the line, `opus-prev` the version before; `<endpoint>:<model>` names an open-source model |
+| `session_wall_min` | `limits.session_wall_min` | 120 | beats the flat key for this agent |
+| `session_idle_min` | `limits.session_idle_min` | 30 | the same |
+| `retries` | 2 | 3 | retries per session (S07) |
+
+**Endpoint group (`komodo config endpoint <name> …`):** OpenAI-compatible servers. The default is one endpoint, `local`, at `http://localhost:11434/v1`.
+
+| Key | Meaning |
+|---|---|
+| `url` | the server's `/v1` base |
+| `models` | a model per weight |
+| `ctx` | context tokens: required for non-Ollama servers, an optional lower cap for Ollama (S05) |
+| `key` | `env:` reference only, optional |
+| `self_hosted`, `first_byte_s` | a non-loopback server counted as free; first-byte timeout |
+
+**Not config:** `commands.*` come from detection, `protected_paths` and `critical_refs` are built in, repo hooks wait for a later minor, and repo context comes from the `AGENTS.md` addendum (S11).
 
 **Output profile (accessibility):**
 - **Where it applies:**
@@ -453,17 +536,16 @@ No config file is written. `~/.komodo/config.json` appears only on your first `c
   - the rules block install writes into `AGENTS.md`;
   - the PR body template (S26).
 - **Source:** the `adhd` templates follow `backups/komodo/rules/accessibility.md`; that text, ported as `embed/output/adhd.md`, also goes into the `AGENTS.md` block for the orchestrator's own chat.
-- **Change:** `komodo config set output.profile standard`, then `komodo sync` rewrites the `AGENTS.md` block.
+- **Change:** `komodo config output.profile=standard`, then `komodo sync` rewrites the `AGENTS.md` block.
 
-**Env (3 only):**
+**Env (2 only):**
 
 | Variable | Use | Example |
 |---|---|---|
 | `KOMODO_HOME` | use another home dir (tests, CI) | `KOMODO_HOME=/tmp/k komodo doctor` |
-| `KOMODO_FRESH` | `off` disables the background fresh | `KOMODO_FRESH=off komodo run tg-1.2` |
 | `NO_COLOR` | plain text | `NO_COLOR=1 komodo status` |
 
-Everything else uses a flag, such as `komodo run tg-1.2 --mode economy --set limits.group_tokens=500000`.
+Everything else is a `komodo config` key, such as `komodo config mode=economy limits.group_tokens=500000`.
 
 **Command detection (`core/detect.go`), cached by the hash of the marker files:**
 
@@ -479,25 +561,28 @@ Everything else uses a flag, such as `komodo run tg-1.2 --mode economy --set lim
 - **Tester copy (Verify, S14):** the tester's worktree gets the group's installed dependencies without a download. Go needs nothing, since its caches sit outside the repo. Node and Rust get a 1:1 copy of `node_modules` or `target/`: a copy-on-write clone where the filesystem has one, else a plain copy. Python reruns `uv sync` from the language caches, since a `.venv` hard-codes its path, and a Makefile-only repo reruns `make setup`. If the builder changed a lockfile, setup reruns instead of copying.
 - **setup is the engine's:** Intake runs it once per worktree, in the sandbox with network on; no agent can run it. A fresh worktree has no `node_modules`, `.venv` or `target/`.
 - **git-read is always on:** `git status`, `diff`, `log` and `show`.
-- **Override:** `komodo config set --repo commands.test "make check"`, or `--set commands.test=…` for one run. Commands run without a shell, so shell syntax fails `doctor config`. Every command runs in the S13 sandbox, except `git-read` under Docker (S13).
+- **Override:** none in config. A Makefile target wins over the detected command when the Makefile defines it, so a team wanting `make check` adds `test: check`. Commands run without a shell, so shell syntax fails `doctor`. Every command runs in the S13 sandbox, except `git-read` under Docker (S13).
 
 **`komodo config`:**
-- **`show [--explain]`:** every effective value; `--explain` adds the layer that set it and any limit it hit.
-- **`get <key>`, `set <key> <value>`, `unset <key>`:** writes go to `~/.komodo/config.json`; `--repo` targets this repo's section.
-- **Validate:** `komodo doctor config` decodes and merges without a run.
+- **Read:** bare keys, such as `komodo config mode limits.repairs`, print value and source; a group or agent name alone lists its keys.
+- **Write:** `komodo config mode=economy limits.repairs=4` sets every pair or none; a bad type, an unknown key or a value over its limit writes nothing and names the pair.
+- **Groups:** `komodo config agent reviewer model=sonnet retries=3`; `komodo config endpoint gpu-box url=https://…`.
+- **`--all`:** alone, JSON of every key with value, default, limit and source; after a key, that key's valid values, such as `agent builder model --all`.
+- **`--default`:** resets its scope: a key, an agent, a group or the whole file. Endpoint and whole-file resets list each change and need a typed `y`.
+- **`--help`** at any level lists the keys below it, from the one schema in `embed/defaults.json`.
+- **Mixing:** one call reads or writes, never both. Writes need a terminal (S01).
 
 **Vet:**
 - **Hard limits:** are the numbers in the table right?
-- **Repo id:** origin URL first, so 2 clones of one repo share settings? Default: yes.
 - **Output profile:** default `adhd` on every machine? Default: yes.
 - **Unknown repo types:** with no detected commands, refuse `run` and allow read-only agents? Default: yes.
 - **Keys:** `env:` references only in beta 6, with keychain support later? Default: yes.
 
 **Proof:**
-- **Limits:** a value over a hard limit fails `doctor config`, naming the key and the limit.
+- **Limits:** `komodo config limits.repairs=9` is refused, naming the key and the limit, and the file is unchanged.
 - **Detection:** the fixture repo yields 6 classes.
-- **Explain:** `config show --explain` names a source for every key.
-- **Separation:** 2 repos with different `repos.<id>.mode` values run in parallel, each with its own mode.
+- **All or none:** a call with 1 bad pair of 3 writes nothing; a good call logs 1 audit row per changed key.
+- **Discovery:** `config --all` names a default, limit and source for every key; `agent builder model --all` lists only probed models above the context floor.
 
 ## Model I/O layer
 
@@ -515,7 +600,7 @@ Everything else uses a flag, such as `komodo run tg-1.2 --mode economy --set lim
   - **Claude API (`anthropic-api`):** the final call uses structured outputs (`output_config.format`), with thinking left on. Opus 5.5 and Sonnet 5.5 refuse a forced `tool_choice` with a 400, and toggling thinking voids the message cache.
   - **OpenAI API (`openai-api`):** the final call sends no tools and `response_format: json_schema` with `strict: true`.
   - **Ollama and other `http:` endpoints:** the final call sends no tools and the schema as `response_format`; Ollama has no `tool_choice`.
-- **Fallback rule:** a model or link is skipped only when it is unavailable, unauthorized or over its limit, never because a task failed. Each skip is a ledger event `provider_skip {from, to, reason}`.
+- **Fallback rule:** a model or link is skipped only when it is unavailable, unauthorized or over its limit, never because a task failed. Each skip is a `provider.skip` event `{from, to, reason}` (§1).
 
 **Links:**
 
@@ -527,10 +612,10 @@ Everything else uses a flag, such as `komodo run tg-1.2 --mode economy --set lim
 | `codex-cli` | `codex exec` | the CLI's own login | private MCP server | `not yet` |
 | `openai-api` | HTTPS through S06 | `providers.keys.openai` | Go tool loop | `not yet` |
 
-**HTTP endpoints (`providers.endpoints`):** one adapter (`openai.go`) serves any number of OpenAI-compatible servers.
+**HTTP endpoints (`komodo config endpoint <name>`):** one adapter (`openai.go`) serves any number of OpenAI-compatible servers.
 
 ```json
-"providers": {"endpoints": {
+"endpoints": {
   "local":   {"url": "http://localhost:11434/v1", "models": {"heavy": "qwen3.6:27b", "light": "qwen3.6:27b"}},
   "gpu-box": {"url": "https://llm.example.internal/v1", "models": {"heavy": "qwen3-coder:480b"},
               "ctx": 262144, "key": "env:GPU_BOX_KEY", "self_hosted": true}
@@ -549,7 +634,7 @@ Everything else uses a flag, such as `komodo run tg-1.2 --mode economy --set lim
 | Ollama | `/api/ps` `context_length` for the loaded model; a model not yet loaded is loaded first with an empty request, then read |
 | Other `http:` servers | the endpoint's `ctx`, required for them |
 
-- **Logged:** each session's measured context goes to the ledger as `ctx_measured`, with its source.
+- **Logged:** each session's measured context and its source travel in the `session.start` event's data.
 - **Ollama is detected** at the probe: its server answers `GET /api/version` at the endpoint's host.
 - **`ctx` on an Ollama endpoint:** optional, and only lowers the measured number, never raises it.
 - **Model catalog (`embed/models.json`):** the one list of models Komodo uses by default, about 10 entries:
@@ -557,7 +642,7 @@ Everything else uses a flag, such as `komodo run tg-1.2 --mode economy --set lim
   - **Local:** the recommended `http:` models per weight (Qwen3.6-27B, Gemma 4 31B, Nemotron 3 Nano), with no window, since theirs is measured.
 - **Default window (262,144):** used for any model that is neither measured nor in the catalog, such as a new Claude model on a login with no API key. A smaller window than the real one only makes briefs smaller; a larger one would let a server cut the prompt, so the catalog must list every pinned model whose window is under the default.
 - **Documented in one place:** `doctor` prints the catalog as a table: weight, link, model ID, window, and whether the window was measured or came from the catalog or the default. The ledger records each session's model ID and window, and `status` shows the model each running task is on.
-- **Context floor (`providers.ctx_floor`, 262,144):** applies to `http:` endpoints only; Claude links use their catalog window. It is the native context of the ~27B open models Komodo targets, such as Qwen3.6-27B, and of Kimi K2.6. An endpoint whose measured context is below the floor fails `doctor`, and the engine skips it with `ctx_below_floor` in the ledger. Briefs are never shrunk to fit a smaller window.
+- **Context floor (`providers.ctx_floor`, 262,144):** applies to `http:` endpoints only; Claude links use their catalog window. It is the native context of the ~27B open models Komodo targets, such as Qwen3.6-27B, and of Kimi K2.6. An endpoint whose measured context is below the floor fails `doctor`, and the engine skips it with a `provider.skip` event, reason `ctx_below_floor`. Briefs are never shrunk to fit a smaller window.
 - **Ollama's default:** a server left at its 4,096 default measures below the floor, so `doctor` names the fix: `OLLAMA_CONTEXT_LENGTH=262144` on the server.
 
 **Model failover: open source is always the backstop.** When Claude hits a limit, work moves to an open-source model, never to a paid link first.
@@ -568,15 +653,15 @@ Everything else uses a flag, such as `komodo run tg-1.2 --mode economy --set lim
 | 2 (backstop) | each free `http:<name>` endpoint, in config order | the endpoint's `heavy`, `standard`, `light`; a missing weight uses the nearest one |
 | 3 | `anthropic-api` | only under `providers.paid: fallback` or `allowed` |
 
-- **Pinned to latest, prior as backup:** each weight runs the newest model in its line, by exact ID, never an alias. The prior version is the economy and backup link, tried before the open-source backstop.
+- **Pinned to latest, prior as backup:** each weight runs the newest model in its line, by exact ID, never an alias. The prior version is the backup link, tried before the open-source backstop. An agent's `model` (S04) always beats `mode`, which sets review depth only (S21); an agent set to `-prev` falls back to the backstop, never forward to the latest.
 - **Where the IDs come from:** the Models API's `line` field when an Anthropic key resolves, else `embed/models.json`. The probe refreshes them on `install`, `doctor` and `fresh`, and writes the exact IDs to `providers.json`, so a run never changes model mid-way.
 - **A line with no current model:** its weight moves to the next line up, so light becomes `sonnet` if Haiku retires with no successor. `doctor` warns.
 - **Any Claude limit** (5-hour window, weekly cap, model cap): the task's next session starts on the backstop.
 - **The backstop is mandatory:** every chain must end in at least one free `http:` endpoint. `doctor` and `gate` refuse a chain without one, and `install` warns when no endpoint answers.
 - **Back to Claude:** after the ledger timer's reset time, new sessions start on `claude-cli` again. A task already running on the backstop finishes there.
 - **Nothing left** (the backstop is down too): pause with the ledger timer below.
-- **Every failover is visible:** a `provider_skip` row plus a ⚠️ warning naming the model the task actually ran on.
-- **Override:** `providers.chains.<agent>` reorders links, and `providers.models.<link>.<weight>` changes the model; neither can remove the backstop.
+- **Every failover is visible:** a `provider.skip` event plus a ⚠️ warning naming the model the task actually ran on.
+- **Override:** `komodo config agent <name> model=…` picks the model the agent starts on (S04). The chain is fixed in `agent.json`: the chosen model's link first, then the default order, always ending in the free backstop. No config key reorders it.
 
 **Finding `claude`** (macOS, Linux, Windows, WSL):
 - **PATH first:** `exec.LookPath("claude")`, which also finds `claude.exe` on Windows.
@@ -616,7 +701,7 @@ Three mechanical checks enforce it:
   - a provider window passes `warn.quota_pct` (default 90%);
   - `rate_limit_event` reports `isUsingOverage: true`, so Max is drawing paid credits;
   - a run's metered USD passes `warn.usd_per_run` (default $5).
-- **Where warnings show:** the `⚠️ Warnings` heading of the run report, `status`, `orch wait`, and a `limit.warn` event (S24).
+- **Where warnings show:** the `⚠️ Warnings` heading of the run report, `status` and `status --wait`, and a `limit.warn` event (S24).
 - **Visible:** `status`, `doctor` and the run report name the cost class of each link in use, for example `claude-cli: subscription (max)`.
 - **USD as a metric:** metered links ledger `usd`; subscription sessions ledger `total_cost_usd` as notional `usd_equiv`.
 
@@ -664,7 +749,7 @@ Three mechanical checks enforce it:
 - A chain with no free `http:` endpoint fails `gate`.
 - A non-loopback endpoint without `self_hosted` is refused as `paid` under `providers.paid: never`.
 - A planted user hook and a planted `CLAUDE.md` have 0 effect on a worker session, with tools on.
-- A missing link refuses with its reason; a forced quota error on link 1 records a `provider_skip` and finishes on link 2 when it is not paid.
+- A missing link refuses with its reason; a forced quota error on link 1 records a `provider.skip` and finishes on link 2 when it is not paid.
 
 ### S06 · HTTP stack
 
@@ -705,12 +790,12 @@ Three mechanical checks enforce it:
 - **Limits are time and retries only:** wall, idle and retries. No turn or token caps; context size is not managed per agent.
 - **Strict decode:** `DisallowUnknownFields`, one Go struct, checked by `doctor` and `gate`.
 - **`prompt.md` (the model reads it):** `# Role` text, never a rule (S10), then a `# Brief` template with `{{slots}}`. Slots fill in one pass, so a filled value is never expanded again. `gate` fails on an unfilled or unknown slot.
-- **Chain:** `agent.json` holds the default. Only `providers.chains.<agent>` overrides it, and S05's backstop check covers both.
-- **Repo overrides:** `repos.<id>.agents.<name>` may change limits and add `notes` (2,000 characters max). The notes become a "Repo notes" section in the prompt. An agent-level limit beats `limits.session_*`.
+- **Chain:** fixed in `agent.json`, never in config, so fallback order can't drift between runs. S05's backstop check covers it.
+- **Overrides:** `komodo config agent <name>` may change the model and limits (S04). An agent-level limit beats `limits.session_*`. Repo context comes from the `AGENTS.md` addendum (S11), not config.
 
 | Limit | Default | Hard limit |
 |---|---|---|
-| Wall | builder 30 min, others 10 min | 120 min |
+| Wall | 60 min, every agent | 120 min |
 | Idle | 10 min | 30 min |
 | Retries | 2 per session | 3 |
 
@@ -726,7 +811,7 @@ Three mechanical checks enforce it:
 
 **Vet:** none open. Decided: no repo-defined agents in beta 6; 3 weights are enough.
 
-**Proof:** an unknown field, an unfilled slot or an unknown slot fails `gate`. A slot value containing `{{task}}` stays literal. A repo override above a hard limit fails `doctor`. A chain set in `repos.<id>.agents.<name>` is an unknown field.
+**Proof:** an unknown field, an unfilled slot or an unknown slot fails `gate`. A slot value containing `{{task}}` stays literal. An agent override above a hard limit is refused by `komodo config`. An `agent.json` chain without a free endpoint fails `gate`.
 
 ### S08 · Tool runtime
 
@@ -744,6 +829,7 @@ Three mechanical checks enforce it:
 - **Context limit (API links):** Go counts tokens every turn against the link's measured context (S05). At 80%, old tool outputs shrink to one-line stubs; their full text stays in `<session>/out/`. Still over, the session ends with `no_result`; nothing past the context is sent, so a server never truncates silently.
 - **No result tool mid-session:** the result always comes from the final call, on every link. `prompt.md` says: when finished, stop and summarize.
 - **Shared behavior:** every call passes S12 first. `run` executes inside S13, and output is sanitized and capped.
+- **Direct code, not events:** the turn loop and formatting after `edit` (`tool.post`) run inline. The session reaches the bus only through S16 and its validated result (§1 Event model).
 - **Repeat reads:** an unchanged file or search returns "unchanged since your last read (N lines)". A second read in a row returns the full content, since compaction may have dropped it.
 
 | Value | Setting |
@@ -772,8 +858,8 @@ Three mechanical checks enforce it:
 - **Harness only:** skills come from `embed/skills/` alone. The repo's `.claude/` is never read.
 - **Allowlist:** an agent's `agent.json` `skills` list is the only set it can be given or pull. `always` names the ones preinjected on every brief (builder and reviewer: `standards-comments`).
 - **Preinject every relevant skill:** a skill loads when its globs match a file in scope and its markers, if any, exist in the repo. No count or token cap.
-- **Pull on demand:** the `skill` tool and `komodo orch skill get` return any allowlisted skill, or one section with `<name>#<section>`. No pull limit; bodies come from the S22 cache.
-- **External sessions:** any Claude Code session can call `komodo orch skill list|get`.
+- **Pull on demand:** the `skill` tool and `komodo skill get` return any allowlisted skill, or one section with `<name>#<section>`. No pull limit; bodies come from the S22 cache.
+- **External sessions:** any Claude Code session can call `komodo skill list|get`.
 
 | Value | Setting |
 |---|---|
@@ -807,6 +893,7 @@ Three mechanical checks enforce it:
 - **Escaping:** fact strings render as literal code spans, so a fact holding a newline or `## ` cannot change the layout. G4 redaction and G5 run on rendered text.
 - **Unlisted cases:** code `other` renders one fixed line, "Needs a decision; details in `<path>`", with the model's own text in that file.
 - **Code list:** starts from beta 5's real blocks and escalations, PR #335's `branch_missing` among them. A new code is a plan change: schema enum, template and fixture together. Beta 6 adds `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky` and `tester`, plus the tester's `pass`, `fail`, `env`, `wrong_command` and `real_failure`.
+- **Event reasons:** every event's `reason` is a code from this list, and the event types are a catalog under the same rule (§1 Event model).
 
 **Output mapping (`embed/output/`):**
 
@@ -824,7 +911,7 @@ Three mechanical checks enforce it:
 - **`output.profile`:** picks the template set, `embed/output/{adhd,standard}/`. The facts and codes are the same under both; only the layout differs.
 - **`adhd`:** verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, turn-end headings in order (`output.turn_end_summary`).
 - **`output.color`:** applied at render time only.
-- **Fixed per machine:** no repo, flag or `--set` value changes a template.
+- **Fixed per machine:** no repo or flag changes a template.
 
 **Rules:**
 - **The result schema:** asks for codes and facts only, never sentences for a person. The final call (S08) sends it with `code` as an `enum`, so a link can't invent a code (S05 constrained decoding, then Go's check).
@@ -876,13 +963,14 @@ Three mechanical checks enforce it:
 - **Fails closed:** input it can't parse, an unknown tool or a guard error is a refusal.
 - **Refusals teach:** each refusal names the rule and the allowed alternative.
 - **Refusal limit:** the 3rd refusal under the same rule ends the session (G6).
-- **Orchestrator, any host:** no hook. Rules O1–O7, O9 and O10 are text in the `AGENTS.md` block, rendered from S10's `embed/rules/orchestrator.md`. The harness enforces them on its own side: `orch` verbs refuse leased worktrees and critical refs, and human-only verbs need a terminal.
+- **Inline gate, not an event:** the check runs before the call as direct code (`tool.pre`). A refusal is logged afterward as `tool.denied`.
+- **Orchestrator, any host:** no hook. Rules O1–O7, O9 and O10 are text in the `AGENTS.md` block, rendered from S10's `embed/rules/orchestrator.md`. The harness enforces them on its own side: verbs refuse leased worktrees and critical refs, and human-only verbs need a terminal.
 
 - **The boundary is S13:** builders write tests and `run` them, so any code runs inside the sandbox. R1 limits command names only.
 
 **Vet:** none open. Decided in the 2026-10-06 guard audit: G3 protects `bin/komodo` and `.git`, not `bin/**`; G4 names real key files and allows env templates; G6 counts by rule; read-only agents' `run` may write (S13); native Windows needs WSL or Docker (S13).
 
-**Proof:** the guard table test covers every row; malformed input is refused. `orch` verbs given a critical ref or a leased worktree refuse.
+**Proof:** the guard table test covers every row; malformed input is refused. Verbs given a critical ref or a leased worktree refuse.
 
 ### S13 · Sandbox and process control
 
@@ -935,7 +1023,7 @@ Three mechanical checks enforce it:
 - **Paused (S05, S18):** a group waiting on a provider limit gives back its pool slot, keeps its lease and worktree, and resumes on its own when its timer fires.
 - **Verify:** the reviewer and the tester (S20) run at once on the same commit. The first confirmed failure cancels the other: a verified blocking finding, a `not_met` task or a failed acceptance item. A failed item counts only after Go reruns its command twice and both fail. If both pass, the tester restarts once with Go's output and the reviewer keeps going; if they split, the group blocks with `flaky`. An item with no command never cancels.
 - **Back to Build:** a failed Check or Verify resumes the task's own builder session with only the verified findings, including those submitted before a cancel. There is no Repair stage.
-- **Pure core:** `Next(state) → action` has no I/O; `Drive` loops over it and journals each transition.
+- **Pure core:** `Next(state, event) → (state, actions, events)` has no I/O. `Drive` journals each event, then applies the result (§1 Event model).
 
 **Run order:**
 - **A graph, not a tree or a list:** groups and their dependencies form a DAG (directed acyclic graph) that Go builds from the backlog (S25). A tree can't express a group needing 2 others; a list runs everything in sequence.
@@ -943,7 +1031,7 @@ Three mechanical checks enforce it:
 - **Stuck dependency:** dependents of a Blocked group show `waiting on <group>`, while unrelated groups keep running.
 - **One queue:** ready work waits in one machine-wide queue.
 - **Picking the next group:** `priority: high` in `TG.md` first, then the longest remaining chain weighted by task count, then the most groups unblocked, then backlog ID order.
-- **Named runs:** `run <group>` and `orch start <group>` refuse when a dependency outside the run hasn't landed, naming it.
+- **Named runs:** `run <group>` refuses when a dependency outside the run hasn't landed, naming it.
 - **Abandoned dependency:** its dependents block with `dependency`, naming it.
 
 **Convergence:**
@@ -954,7 +1042,7 @@ Three mechanical checks enforce it:
 
 **Session pool:**
 - **One machine-wide pool of session slots:** only the looping sessions take a slot: builder, reviewer and tester, in runs and jobs alike. Each returns its slot when it ends, and groups hold none.
-- **Every session still has its link limit:** planner, `orch agent` and job sessions take no pool slot, but every harness session counts against `limits.link_sessions.<link>`, which keeps Claude and Ollama under their own limits.
+- **Every session still has its link limit:** planner and job sessions take no pool slot, but every harness session counts against `limits.link_sessions.<link>`, which keeps Claude and Ollama under their own limits.
 - **Floor and ceiling:** `limits.pool_min` (1) slots stay open even while throttled; `limits.pool_max` (6) is the most at once.
 - **Adapts:** the pool grows by 1 after each clean session end, while free memory covers one more session's `sandbox.max_mem_gb`. It halves, never below the floor, on a rate-limit error or quota over `warn.quota_pct`.
 - **Per LLM max:** a session needs a pool slot and a link slot (`limits.link_sessions.<link>`; loopback endpoints 1). Both are lock files in `~/.komodo/state/`, freed when their pid dies.
@@ -968,24 +1056,27 @@ Three mechanical checks enforce it:
 - **Pool size:** decided in the 2026-10-07 review: floor 1, ceiling 6, hard limit 16.
 - **Tasks in sequence:** decided in the 2026-10-07 review: 1 builder per group; tasks run one after another, and independent tasks go in separate groups.
 
-**Proof:** the fixture group runs all 5 stages and ships; `Next()` has table tests for every stage pair, `Paused` and `Blocked`. A seeded bug fails Verify, cancels the tester and resumes the builder. With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue. A rate-limit error halves the pool, never below the floor. A group whose dependency is Blocked waits while an unrelated group runs. A landing that breaks Check on the epic tip sends the last-landed group back to Build. `run` on a group with an unlanded dependency refuses and names it. With 2 slots and 3 ready groups, the `priority: high` group starts first.
+**Proof:** the fixture group runs all 5 stages and ships; `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`; replaying a group's journal rebuilds its `state.json` exactly. A seeded bug fails Verify, cancels the tester and resumes the builder. With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue. A rate-limit error halves the pool, never below the floor. A group whose dependency is Blocked waits while an unrelated group runs. A landing that breaks Check on the epic tip sends the last-landed group back to Build. `run` on a group with an unlanded dependency refuses and names it. With 2 slots and 3 ready groups, the `priority: high` group starts first.
 
 ### S15 · Workspace and leases
 
-**Owns:** `engine/worktree.go`, `<git-common-dir>/komodo/{wt,leases}/`.
+**Owns:** `engine/worktree.go`, `engine/shutdown.go`, `~/.komodo/wt/<repo-id>/`, `~/.komodo/leases/<repo-id>/`, `refs/komodo/groups/`.
 
 **Does:**
-- **Detached worktree per group** under the git common dir, shared by every checkout. Verify adds a throwaway one for the tester (S20), with dependencies copied per S04, removed when Verify ends.
-- **Group lease:** the engine holds each group's lease from Intake until the group lands or is abandoned, renewing it every 5 min. A queued, checking, verifying, paused or blocked group keeps it. It expires 2 h after the last renewal, which happens only when the engine is gone.
-- **Protection (O4):** `orch` verbs refuse a leased worktree, and the `AGENTS.md` rules forbid touching one by hand.
-- **Sweep:** at start, worktrees with no live lease and no unpushed work are removed. Anything unpushed is kept and reported.
-- **Windows paths:** worktree names are short hashes to stay under `MAX_PATH`.
+- **Detached worktree per group** under `~/.komodo/wt/<repo-id>/`, shared by every clone, so no path contains `.git`. Verify adds a throwaway one for the tester (S20), with dependencies copied per S04, removed when Verify ends.
+- **Group lease:** the engine holds each group's lease from Intake until the group lands or is abandoned, renewing it every 5 min. A queued, checking, verifying, paused or blocked group keeps it. It expires 2 h after the last renewal.
+- **Lease file:** one create-only file per group, `~/.komodo/leases/<repo-id>/<group>.json`, shared by every clone on the machine; the OS lets exactly one run create it. It holds the run ID, pid, host, clone path, and taken and renewed times. A stale or dead-holder lease is renamed aside before takeover, so only one run wins. Before every push or landing, the run rereads its lease; if it no longer holds it, it emits `lease.lost`, and `Next()` stops the group.
+- **Saved work:** the engine moves a hidden ref, `refs/komodo/groups/<group>`, to every group commit. Git keeps it, `git branch` hides it, and it is never pushed. It is deleted when the group lands or is abandoned.
+- **Lease release:** on landing or abandon; on clean shutdown after work is saved, from a signal or `stop <run>` (`resume` retakes it, or refuses and names the new holder); by the parent guard after a crash; by the startup sweep when both died. A lease is never freed while its agents live or their work is unsaved.
+- **Shutdown:** every goroutine starts through one panic-catching helper, and every stop signal routes to one sequence: stop agents (30 s each), WIP-commit each worktree, free leases, write `state.json`, exit. After 60 s the rest is force-killed. Shutdown is direct code, outside the bus, and writes `run.stopped` when it can.
+- **Parent guard:** `komodo run` starts a small parent that starts the engine. If the engine dies past its handler (`kill -9`, out-of-memory kill, Go fatal error) or writes no heartbeat for 10 min, the parent kills its agents by pid file and runs the same save and release. Power loss is left to the startup sweep.
+- **Protection (O4):** verbs refuse a leased worktree, and the `AGENTS.md` rules forbid touching one by hand.
+- **Sweep:** at start, cleans the workstation: kills orphans, frees dead leases, deletes `.stale-*` lease files and leases whose clone path is gone, and removes dead runs' tester worktrees, Docker containers and images, session temp, and worktree folders whose clone is gone. Worktrees with no live lease and no unsaved work are removed. A worktree unused for 3 days is WIP-committed to its hidden ref, then removed; `resume` rebuilds it from the ref.
+- **Windows paths:** worktree names are short hashes to stay under `MAX_PATH`, and each worktree sets `core.longpaths`. `doctor` warns when the Windows long-path switch is off and names the fix.
 
-**Vet:**
-- **Lease expiry:** 2 h hard, or 2 h since the last heartbeat? Default: since the last heartbeat.
-- **Unpushed work:** after expiry, does the engine auto-commit it as WIP? Default: yes, on a `wip/` ref.
+**Vet:** none open. Decided: a lease expires 2 h after its last renewal; work left after expiry or a crash is WIP-committed and kept for `resume`.
 
-**Proof:** a second `run` on a leased group refuses with the holder named. Sweep never deletes a worktree with unpushed commits.
+**Proof:** a second `run` on a leased group refuses with the holder named. 2 runs racing for one lease yield exactly 1 holder. A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits. Sweep never deletes a worktree with unsaved work.
 
 ### S16 · Session supervisor (subagent control)
 
@@ -994,13 +1085,14 @@ Three mechanical checks enforce it:
 **Does:**
 - **Spawn:** starts a provider session with its brief, tool server and sandbox profile, then records `request.json`.
 - **Heartbeat:** any stream event or tool call counts. Silence starts the idle clock.
+- **Events:** emits `session.start`, `session.idle`, `session.timewarn` and `session.end` with its exit reason. What happens next is `Next()`'s decision (§1 Event model).
 - **Time warning and nudge:** injected through `claude -p --input-format stream-json` (stdin stays open) or the next API turn.
 - **Kill:** a whole-tree kill (S13), then `result.json` gets the exit reason.
 - **Exit reasons:** `done`, `needs_scope`, `check_fail`, `no_result`, `schema_fail`, `timeout`, `idle`, `refusals`, `budget`, `provider`, `billing`, `pause_timeout`, `cancelled`, `crash`.
 
 | Control | Value |
 |---|---|
-| Wall clock | per agent from `agent.json` (builder 30 min, others 10 min); warning at 80%; stopped while paused |
+| Wall clock | `limits.session_wall_min` (S04): 60 min default, 120 max; warning at 80%; stopped while paused |
 | Idle | 10 min, one nudge, 5-min grace, then kill |
 | Retries | per agent from `agent.json` (S07) |
 | Orphans | process groups on Unix, Job Objects on Windows |
@@ -1025,21 +1117,19 @@ Three mechanical checks enforce it:
 **Why:** today everything starts from `komodo run`. Recurring subsets of agents need a clock, saved counters and an overlap rule.
 
 **Does:**
-- **Job template:** names an agent subset, its brief slots, an interval and limits. It is decoded strictly like `agent.json`.
-- **No daemon:** `komodo jobs tick` is idempotent and runs only jobs that are due. Each due job starts a run with id `job-<name>-<n>`, with its own ledger rows and report; `orch wait` takes that id.
+- **Job template:** names an agent subset, its brief slots and an interval, never limits: a job run uses `komodo config` limits like any run (S04). It is decoded strictly like `agent.json`.
+- **No daemon:** `komodo jobs tick` is idempotent and runs only jobs that are due. Each due job starts a run with id `job-<name>-<n>`, with its own ledger rows and report; `status --wait` takes that id.
 - **Callers:** a launchd, cron or Task Scheduler entry from `install --schedule`. Claude Code `/loop` also works, but spends a model turn on every tick.
 - **Saved counters:** `jobs/state.json` holds `attempt`, `next_at`, `last_fail_hash` and `running`.
 - **Overlap:** a running job holds a lease, so the next tick skips it and logs the skip.
+- **Events:** a due job emits `job.due`, and a failed one `job.fail`. The counters stay in `jobs/state.json`.
 
 ```json
 {
   "name": "nightly-review",
   "agents": ["scout", "reviewer"],
   "slots": {"target": "main..HEAD"},
-  "every": "24h",
-  "retries": 3,
-  "backoff": ["30s", "2m", "8m"],
-  "timeout": "20m"
+  "every": "24h"
 }
 ```
 
@@ -1047,7 +1137,7 @@ Three mechanical checks enforce it:
 |---|---|
 | Minimum interval | 5 min |
 | Retries | 3, backoff 30 s, 2 m, 8 m ±20% |
-| After the last retry | Blocked; wakes `komodo orch wait` |
+| After the last retry | Blocked; wakes `komodo status --wait` |
 
 **Vet:**
 - **OS schedulers:** decided in the 2026-10-06 review: yes, opt-in `install --schedule` in beta 6; `/loop` is the fallback.
@@ -1059,7 +1149,7 @@ Three mechanical checks enforce it:
 
 **Owns:** `engine/limits.go`, `engine/recover.go` (new).
 
-**Principle:** every failure has a detector, an action, a bound and a final state. Nothing loops without a counter.
+**Principle:** every failure has a detector, an action, a bound and a final state. Nothing loops without a counter. Each row is one `Next()` case: the detector emits an event, and `Next()` takes the action (§1 Event model).
 
 | Failure | Detector | Action | Bound | Then |
 |---|---|---|---|---|
@@ -1086,11 +1176,11 @@ Three mechanical checks enforce it:
 | Brief over half the link's measured context | S11 | the next link in the chain that fits (S09) | 1 | Blocked: `context` |
 | Landing conflicts with the epic branch | S26 | merge the epic branch into the group branch, rerun Check | 1 | Blocked: `merge_conflict` |
 | Budget spent | S21 | stop | — | Blocked: `budget` |
-| Harness crash or reboot | S18 | resume from `state.json` | — | continues |
+| Harness crash or reboot | S18 | replay the journal after the `state.json` snapshot | — | continues |
 | Scheduled job fails | S17 | backoff | 3 | Blocked |
 
-- **Crash safety:** `state.json` is written atomically on each transition, and every stage is idempotent.
-- **Startup sweep:** kills orphans by pid file, frees expired leases, and marks dead sessions `crash`.
+- **Crash safety:** each event is appended and synced to `runs/<group>/events.jsonl` before it is applied. `state.json` is a snapshot holding the last `seq`, written atomically, and every stage is idempotent.
+- **Startup sweep:** kills orphans by pid file, frees expired leases, and emits `session.end` with reason `crash` for dead sessions.
 - **Block reasons:** a fixed enum, named in `status` and the `group.blocked` event.
 - **Paused is not Blocked:** `paused` waits on a ledger timer and resumes itself; `blocked` needs a person or the orchestrator. Paused time stops the group and session wall clocks, and `limits.pause_max_min` bounds it.
 
@@ -1109,7 +1199,7 @@ Three mechanical checks enforce it:
 **Does (0 tokens):**
 - **Reruns** every `done_when` in the sandbox.
 - **Scope:** every changed file is in the group's `files` or is a test sibling (B1).
-- **Scope requests (end and resume):** a builder that needs another file stops, and its final result has status `needs_scope`, the paths and a reason. The engine makes a WIP commit, and the group goes Blocked: `needs_scope`. `orch wait` wakes the orchestrator, and `orch scope approve|deny` answers; approve adds the paths to the group's `files`, logged in the ledger. The engine then resumes the same session with the answer.
+- **Scope requests (end and resume):** a builder that needs another file stops, and its final result has status `needs_scope`, the paths and a reason. The engine makes a WIP commit, and the group goes Blocked: `needs_scope`. `status --wait` wakes the orchestrator, and `scope approve|deny` answers; approve adds the paths to the group's `files`, logged in the ledger. The engine then resumes the same session with the answer.
 - **The session is never lost:** the resume handle is in `state.json` before the session ends. The lease and worktree stay held while Blocked: `needs_scope`, so the sweep skips them. API links persist every turn to `sessions/<id>/messages.jsonl`. If `--resume` fails or the link changed, a fresh session gets the brief, the WIP diff and the last `summary`, and the ledger logs `resume_lost`.
 - **Secrets:** scans the diff for secret patterns.
 - **Coverage:** measures changed-line coverage.
@@ -1170,7 +1260,7 @@ Three mechanical checks enforce it:
 
 **Vet:**
 - **Token caps:** keep `limits.group_tokens` as a runaway-loop bound, separate from cost? Default: yes; USD only warns (S05). It counts input, output and cache writes; cache reads are reported only, since each turn re-reads the whole context.
-- **Economy default:** economy or thorough for a new repo? Default: thorough.
+- **Economy default:** economy or thorough as the built-in `mode`? Default: thorough.
 
 **Proof:** a token cap forced low ends Blocked with `budget`; `status` shows the hit rate per agent.
 
@@ -1205,34 +1295,37 @@ Three mechanical checks enforce it:
 
 **Does:**
 - **Session ledger (`sessions.jsonl`):** one row per session, holding id, agent, task, link, model, tokens in/out/cached, USD, wall time and exit reason. A paused session adds `wait_until` and `wait_link` (S05).
-- **Event log (`events.jsonl`):** stage moves, fallbacks, refusals, retries, skips, and Claude Code subagent events.
+- **Event log (`ledger/events.jsonl`):** a read-only subscriber copies every group journal's events here, plus fallbacks, skips and Claude Code subagent events. The group journal stays the source of truth (§1 Event model).
 - **Live views:** `status [--watch]` shows the pool, stages, budgets and blocks, and draws the group graph: dependencies, each group's stage, and which groups touch which files; `wait <run>` blocks until the next wake event.
 - **Session detail:** `status --session <id>` prints the stream tail and result.
 - **Redaction:** keys and secret matches are masked before anything is written.
 
 **Vet:**
-- **Retention:** 30 days or 100 MB per repo, oldest first?
+- **Retention:** 30 days or 100 MB per repo, oldest first? A journal of a group that is open, paused or blocked is never trimmed.
 - **Export:** is an OpenTelemetry export needed later? Default: no; JSONL only.
 
-**Proof:** the fixture run has one ledger row per session, and `wait` returns on `group.blocked`.
+**Proof:** the fixture run has one ledger row per session, and `status --wait` returns on `group.blocked`.
 
-### S24 · Event bus and hooks
+### S24 · Event bus
 
-**Owns:** `ops/hooks.go`, `repos.<id>.hooks` in `~/.komodo/config.json`.
+**Owns:** `ops/bus.go` (new), `ops/wake.go`.
+
+**Bus:** the envelope, catalog, journal and in-order delivery of §1's Event model.
 
 **Events:**
 - **Stages and sessions:** `stage.enter`, `stage.exit`, `session.start`, `session.idle` and `session.timewarn`.
-- **Tools and tasks:** `tool.pre` (guard), `tool.post` (sanitize), `task.done` and `finding.submit`.
+- **Tools and tasks:** `tool.denied`, `task.done`, `task.retry` and `finding.submit`. `tool.pre` and `tool.post` are inline steps of S12 and S08, not events.
+- **Full catalog:** §1 Event model.
 - **Outcomes:** `group.blocked`, `group.shipped` and `run.done`.
+- **Providers:** `provider.skip` and `limit.warn` (S05).
 
 **Does:**
-- **Repo hooks:** only on `stage.exit`, `group.shipped` and `run.done`, with allowlisted commands run in the sandbox.
-- **Wakes:** `group.blocked` and `run.done` wake `komodo orch wait`.
-- **Bounded:** each hook gets 60 s, and its output is capped and logged.
+- **Wakes:** `group.blocked` and `run.done` wake `komodo status --wait`.
+- **Repo hooks:** none in beta 6; they wait for a later minor.
 
-**Vet:** **Blocking hooks:** may a repo `stage.exit` hook block a stage? Default: yes, only with exit 1 and a reason line.
+**Vet:** none open.
 
-**Proof:** a fixture `stage.exit` hook that exits 1 blocks with its reason; a 61-second hook is killed.
+**Proof:** a fixture `group.blocked` wakes `status --wait`. A subscriber that panics leaves group state unchanged. An emitted type missing from the catalog fails the gate.
 
 ## Delivery layer
 
@@ -1265,6 +1358,7 @@ Three mechanical checks enforce it:
 - **Ship (0 tokens):** builds the PR body from the template, which S10's template tests cover. It merges the epic branch into the group branch (no rebase; pushed history is fixed), reruns Check, then lands the group. One group lands at a time, then Check runs on the epic tip (S14).
 - **`ship.mode`:** `group` opens a PR into the epic branch, and the engine merges it at once. `epic` merges the group straight into the epic branch with `--no-ff`. GitHub won't merge a draft, so group PRs open ready.
 - **Release:** version, tag, cross-built binaries, checksums, ed25519 signature and a changelog that starts fresh at `1.0.0-beta.6`.
+- **Epic PR:** the engine opens it into its base, ready for review, once the epic gate passes, with the S26 body template.
 - **Landing:** a person merges only the epic PR into its base; `komodo sync` follows.
 
 **Vet:** **Ship mode default:** `group` or `epic`? Default: `group`, which keeps one PR per group as the record.
@@ -1279,6 +1373,7 @@ Three mechanical checks enforce it:
 - **Build and test:** `go vet`, tests, and cross-builds for windows, linux and darwin.
 - **Structure:** import direction, comment lint, and strict decode of every `agent.json` and job template.
 - **Safety:** the guard table and the prefix-hash pin.
+- **Events:** every emitted type is in the catalog, and every catalog type has an emitter (§1 Event model).
 - **Docs drift:** a verb missing from `README.md` or the `komodo` skill, a broken decision link, or an `lld.md` package that doesn't exist.
 - **Maps:** every task group names an S-ID, and every S-ID has an `lld.md` section.
 
@@ -1325,7 +1420,7 @@ Three mechanical checks enforce it:
 
 ### Orchestrator (the interactive Claude Code session)
 
-Any host: Claude Code now, Codex or a local model later. It uses its host's native tools with no Komodo hook. These rules are text in the `AGENTS.md` block, the same on every host. It may call the `orch` tier and the human verbs marked shared in S01 (O9).
+Any host: Claude Code now, Codex or a local model later. It uses its host's native tools with no Komodo hook. These rules are text in the `AGENTS.md` block, the same on every host. It may call every verb S01 marks shared (O9).
 
 | ID | Refuse |
 |---|---|
@@ -1334,9 +1429,9 @@ Any host: Claude Code now, Codex or a local model later. It uses its host's nati
 | O3 | Merging into the epic branch by hand; the engine lands groups (S26) |
 | O4 | Editing, resetting or removing a worktree the harness has leased |
 | O5 | `git stash`; use a WIP commit instead |
-| O6 | `gh pr create` and `gh pr merge`; use `komodo orch pr open` |
+| O6 | `gh pr create` and `gh pr merge`; the engine opens the epic PR (S26) |
 | O7 | Faking a terminal (`script`, `expect`, `unbuffer`) to run a human-only verb (S01) |
-| O9 | A human-only verb (`install`, `uninstall`, `fresh`, `config set`, `run`, `gate --install`, `release`, `doctor --fix`, …) or any `internal` verb |
+| O9 | A human-only verb (`install`, `uninstall`, `fresh`, `config` writes, `gate --install`, `release`, `doctor --fix`, …) or any `internal` verb |
 | O10 | `--no-verify` on any git command |
 | plus | G3, G4, G5 |
 
@@ -1355,7 +1450,7 @@ Any host: Claude Code now, Codex or a local model later. It uses its host's nati
 ### Engine (no model)
 
 - **Only it runs:** worktree add and remove, the lease, `commands.setup`, `git commit`/`push`/`branch`, Check, the group PR, landing into the epic branch, and release.
-- **It fires:** every event in S24.
+- **It fires:** every event in the §1 Event model catalog; no model emits one.
 
 ## 4. Folder structure
 
@@ -1393,8 +1488,8 @@ komodo-agentic-factory-coding/
 │   ├── cli/                       # [S01]
 │   │   ├── cli.go                 # verb table, dispatch, envelope, exit codes, pin check
 │   │   ├── help.go                # help + komodo skill generation
-│   │   ├── work.go                # run, status, resume, abandon [S23]
-│   │   ├── orch.go                # orch plan|start|wait|agent|skill|pr
+│   │   ├── work.go                # run, status, stop, resume, abandon [S23]
+│   │   ├── plan.go                # plan, skill, scope
 │   │   ├── jobs.go                # jobs [S17]
 │   │   ├── setup.go               # install, uninstall, fresh, doctor, sync, version
 │   │   ├── config.go              # config [S04]
@@ -1410,6 +1505,7 @@ komodo-agentic-factory-coding/
 │   │   ├── pool.go                # [S14] session pool, floor, ceiling, queue
 │   │   ├── state.go               # [S14] state.json
 │   │   ├── worktree.go            # [S15] detached cut, sweep, lease
+│   │   ├── shutdown.go            # [S15] catch-all shutdown, parent guard
 │   │   ├── session.go             # [S16] spawn, heartbeat, warn, nudge, kill
 │   │   ├── schedule.go            # [S17] tick, counters, overlap
 │   │   ├── limits.go              # [S18] retries, repairs, flap, block reasons
@@ -1461,7 +1557,8 @@ komodo-agentic-factory-coding/
 │   ├── ops/                       # Economy and ops
 │   │   ├── budget.go              # [S21] group wall, tokens, mode
 │   │   ├── ledger.go              # [S23] sessions, events, redaction
-│   │   └── hooks.go               # [S24] events, repo hooks, wake
+│   │   ├── bus.go                 # [S24] envelope, catalog, journal, in-order delivery
+│   │   └── wake.go                # [S24] status --wait wakes
 │   │
 │   ├── agent/                     # Model I/O (S07) and Context (S09–S11)
 │   │   ├── agent.go               # [S07][S17] agent.json and job template structs, strict load, tighten merge
@@ -1486,7 +1583,7 @@ komodo-agentic-factory-coding/
 │   │   └── sandbox_docker.go      # [S13] Docker, native Windows
 │   │
 │   └── core/                      # plumbing, no domain logic
-│       ├── config.go              # [S04] config.json, repo sections, hard limits, merge
+│       ├── config.go              # [S04] config.json, groups, hard limits, audit log
 │       ├── detect.go              # [S04] repo profile + command classes
 │       ├── http.go                # [S06] client, SSE, retry, allowlist, redaction
 │       ├── cache.go               # [S22] content-addressed store, LRU
@@ -1527,19 +1624,20 @@ komodo-agentic-factory-coding/
 ```
 <git-common-dir>/komodo/
 ├── install.json                   # [S02]
-├── runs/<group>/state.json        # [S14][S18]
+├── runs/<group>/{events.jsonl, state.json}  # [S14][S18][S24] journal, snapshot
 ├── jobs/state.json                # [S17]
-├── wt/<group>/  leases/           # [S15]
 ├── sessions/<id>/{brief.md, request.json, stream.jsonl, messages.jsonl, result.json}  # [S16]
 ├── ledger/{sessions.jsonl, events.jsonl}   # [S23]
 └── cache/{skills,context,checks,review}/   # [S22] 256 MB LRU
 
 ~/.komodo/                         # (%LOCALAPPDATA%\komodo on Windows)
-├── config.json                    # [S04] only after the first config set
+├── config.json                    # [S04] only after the first `komodo config` write
 ├── bin/komodo                     # [S03] current version; PATH and hooks point here
 ├── versions/<v>/komodo            # [S03] every installed version
 ├── jobs/*.json                    # [S17] your job templates
-└── state/{providers.json, quota.json, pool/, links/, fresh.json, fresh.lock, fresh.log, active/}  # [S02][S03][S05][S14]
+├── leases/<repo-id>/<group>.json  # [S15] one lock table per machine
+├── wt/<repo-id>/<group>/          # [S15]
+└── state/{providers.json, quota.json, pool/, links/, fresh.json, fresh.lock, fresh.log, active/, config.log}  # [S02][S03][S04][S05][S14]
 ```
 
 ### What `komodo install` puts in any repo
@@ -1614,11 +1712,11 @@ komodo-agentic-factory-coding/
 
 | Skill | Stale | Replaced in phase 8 by |
 |---|---|---|
-| `komodo` | the beta 5 verb list (`init`, `migrate`, `next`, `brief`, `ingest`, `close`, …) | embedded; `orch skill get komodo` |
-| `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | embedded; `orch skill get plan` |
-| `run` | `komodo run <group>` in the background, `komodo resume <group>` | embedded; `orch skill get run` |
-| `respond` | `komodo threads`, `komodo gate` | embedded; `orch skill get respond` |
-| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | none; `orch start --stage` in the `run` skill |
+| `komodo` | the beta 5 verb list (`init`, `migrate`, `next`, `brief`, `ingest`, `close`, …) | embedded; `skill get komodo` |
+| `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | embedded; `skill get plan` |
+| `run` | `komodo run <group>` in the background, `komodo resume <group>` | embedded; `skill get run` |
+| `respond` | `komodo threads`, `komodo gate` | embedded; `skill get respond` |
+| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | none; `run --stage` in the `run` skill |
 
 **`~/.claude/AGENTS.md`:**
 
@@ -1626,15 +1724,15 @@ komodo-agentic-factory-coding/
 |---|---|---|---|
 | 10 | `komodo add` task | a task in `docs/backlog/` | `komodo add backlog --task` |
 | 18 | a `komodo/policy.json` ref | dropped | a critical ref in `embed/policy.json` |
-| 21 | open a PR with `komodo pr create` | `gh pr create` | `komodo orch pr open` |
+| 21 | open a PR with `komodo pr create` | `gh pr create` | the engine (S26) |
 | 22 | after a merge, run `komodo sync` | dropped | restored |
-| 24 | `/run <group>` in session, `komodo run <group>` headless | removed | `komodo orch start <group>` |
+| 24 | `/run <group>` in session, `komodo run <group>` headless | removed | `komodo run <group>` |
 
 **Inside this repo (phase 9):**
 
 | File | Stale | Becomes |
 |---|---|---|
-| `.github/PULL_REQUEST_TEMPLATE.md` | `komodo pr create --title … --body-file …` | `komodo orch pr open --title … --body-file …` |
+| `.github/PULL_REQUEST_TEMPLATE.md` | `komodo pr create --title … --body-file …` | the engine's S26 body template |
 | `backups/` | every beta 5 verb | unchanged; it is the archive |
 
 **Order:**
@@ -1650,18 +1748,19 @@ komodo-agentic-factory-coding/
 
 Each card carries its own proof. These checks cross subsystems:
 - **Every phase:** `go run ./cmd/komodo gate` passes, and `GOOS=windows|linux|darwin go build ./...` cross-builds.
-- **Full run:** `komodo install`, then `komodo run tg-fixture` on a local model, ends with the group landed on its epic branch per `ship.mode` and one ledger row per session.
-- **Crash:** `kill -9` mid-run, then `resume`, finishes with 0 repeated paid sessions.
+- **Full run:** `komodo install`, then `komodo run tg-fixture` on a local model and `komodo status --wait done`, ends with the group landed on its epic branch per `ship.mode` and one ledger row per session.
+- **Crash:** `kill -9` mid-run, then `resume`, replays the journal and finishes with 0 repeated paid sessions.
 - **Fresh repo:** following `README.md` on macOS and Windows reaches a shipped fixture group.
 - **Scheduled:** a `tick` from an `install --schedule` entry runs a fixture job, and 3 forced failures end Blocked and wake `wait`.
 
 ## Later minor version
 
 - **OpenAI path:** the `codex-cli` provider, the `openai-api` chain link and `.codex/` install.
-- **`komodo chat` (S28):** Komodo's own front end, with an `orchestrator` agent whose only tools are the `orch` verbs. Any chain link, Ollama included, can then orchestrate under the in-process guard. It reuses the S08 loop and its compaction.
+- **`komodo chat` (S28):** Komodo's own front end, with an `orchestrator` agent whose only tools are the shared verbs. Any chain link, Ollama included, can then orchestrate under the in-process guard. It reuses the S08 loop and its compaction.
+- **`orch agent`:** ad hoc delegation outside the pipeline, such as a free scout on a local model; deferred from beta 6, since hosts have their own subagents.
 - **Possible:** Docker on macOS and Linux, `--global` install, OS-scheduled updates (S03 option D), keychain secrets, and OpenTelemetry export.
 
-## Review changes (2026-10-06, 2026-10-07)
+## Review changes (2026-10-06, 2026-10-07, 2026-10-08)
 
 Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthropic's API docs and this machine.
 
@@ -1672,7 +1771,7 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | Endpoints declare `ctx`; the harness loop stubs old tool output and never sends past `ctx` | S05, S08, S11 |
 | `run` takes a class and args, with no shell | S08, Part C |
 | Human-only verbs need a terminal; O7 now refuses faked terminals; `gate` is shared except `--install*` | S01, S02, Part C |
-| `orch start --set` can't touch `providers.*`, `sandbox.*` or `http.*`, or raise a limit | S01, S04 |
+| `orch start --set` can't touch `providers.*`, `sandbox.*` or `http.*`, or raise a limit (superseded: `--set` and `orch` removed) | S01, S04 |
 | Language caches writable, `commands.setup` at Intake, process caps only via cgroups or Job Objects | S04, S13, S14 |
 | Pauses stop the wall clocks and end at `limits.pause_max_min`; quota and lane slots are machine-wide | S05, S14, S15, S16, S18 |
 | Group wall scales with tasks; `limits.task_attempts`; cache reads don't count as tokens | S04, S18, S21 |
@@ -1698,12 +1797,22 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | Continuity review: pool and link limits are machine only; one brief ceiling, no slot caps; the epic gate routes findings to the group that last changed the file; a tester failure cancels only after Go's rerun; the tester gets blind engine facts; only builder, reviewer and tester take pool slots; 6 new codes; key count 36 | S01, S03, S04, S10, S11, S14, S18, S20, S21, S25 |
 | Tester copy per language (copy `node_modules` and `target/`, rerun setup for Python and Make, Docker image saved at Intake); Go reruns a failed item twice, the tester restarts once, and splits block as `flaky`; groups start after landing plus epic-tip Check, pick by priority then longest chain; named runs refuse unlanded dependencies | S01, S04, S10, S11, S13, S14, S15, S18, S20, S25 |
 | Text fixes: hourly release check, no `KOMODO_*` layer, `bin/komodo` is a copy, 4 skills, `respond` in the index, 4 KB cap scope, file count | S02, S04, S08, S09, S22, §4 |
+| S15 review: one create-only lease file per group in a machine-wide table, with an ownership check before push or landing; a catch-all shutdown plus a parent guard; the sweep cleans the workstation; worktrees unused for 3 days are saved and removed; lease expiry is 2 h after the last renewal | S15, S18, §4 |
+| S15 held items: saved work lives on a hidden `refs/komodo/groups/<group>` ref; worktrees move to `~/.komodo/wt/<repo-id>/`; Windows sets `core.longpaths` and `doctor` checks the long-path switch | S15, §4 |
+| Every agent session defaults to a 60-min wall clock, replacing builder 30 min and others 10 min; set by `limits.session_wall_min` at the machine, repo, run or agent layer (superseded: machine and agent only); the built-in hard limit stays 120 | S04, S07, S16 |
+| Alignment pass: job templates carry no limits; `stop <run>` gives detached runs a clean stop; `provider.skip` and `limit.warn` join the catalog; an agent's `model` beats `mode`, and `-prev` falls back to the backstop; config groups are `agents.<name>` and `endpoints.<name>` sections; the global flag is `-C` only | §1, S01, S02, S04, S05, S15, S17, S24, §4 |
+| One verb set for you and the orchestrator: the `orch` tier is removed; `run` always detaches, `status --wait` replaces `orch wait`, `plan`, `skill` and `scope` lose the prefix, JSON is the default without a terminal, the engine opens the epic PR, and `orch agent` moves to a later minor | §1, S01, S02, S03, S05, S09, S12, S14, S15, S17, S18, S19, S24, S26, Part C, §4, cutover, later minor |
+| Config has one write path: `komodo config [agent\|endpoint <name>] key=value…`, all or none, with `--all` and `--default` per scope and an audit log; no repo layer, `--set`, `--mode`, `--repo`, `get`/`show`/`unset`, `doctor config`, `--reload-config` or `KOMODO_FRESH`; agent models are `opus` or `opus-prev`, and chains are fixed in `agent.json`; repo hooks wait for a later minor | §1, S01, S02, S03, S04, S05, S07, S24, Part C, §4 |
+| Hybrid event model as a core tenet: the engine emits typed events into a per-group journal, one pure `Next(state, event)` decides, subscribers and repo hooks are read-only, and inline gates and shutdown stay outside the bus | §1, S08, S10, S12, S14, S15, S16, S17, S18, S23, S24, S27, §3, §4, §7 |
 
 ## Open items
 
-- **Vet lines:** S01–S14 were approved, but later reviews changed S01, S02, S03, S04, S05, S07, S08 and S10; re-vet those. S15–S27 carry 19 open Vet items, each with a default.
-- **Recovery (deferred, S18):** a WIP commit at every session end, a crash contained to its group, worktrees kept until a group lands or is abandoned, and `resume` continuing unfinished sessions. S18's current design holds until these are decided.
+- **Vet lines:** S01–S14 were approved, but later reviews changed S01, S02, S03, S04, S05, S07, S08, S09, S10, S12 and S14; re-vet those. S15–S19, S23, S24 and S26 changed in the event and config reviews. S16–S27 carry 17 open Vet items, each with a default.
+- **Recovery (deferred, S18):** a WIP commit at every session end, a crash contained to its group, and `resume` continuing unfinished sessions. S15 now decides shutdown, crash capture and worktree removal. S18's current design holds until these are decided.
 - **S01–S04 Vet wording:** 19 Vet lines still read as questions, 9 with no answer; settle them in the re-vet.
 - **Spikes:** the S05 init-line capture, the S16 mid-turn message, and whether a 24 GB machine runs Qwen3.6-27B at 262,144 context, all before phase 4.
 - **Follow-ups:** S16 carries 5 heartbeat and retry items from the S07 review, applied when S16 is vetted.
+- **S16 review on hold:** 5 open issues (retries per task, folding the follow-ups, idle on API links, the mid-turn spike as best-effort, a `paused` exit reason), plus the group clock: 30 min per task plus 30 no longer fits one 60-min session.
+- **Scope answers:** should `scope approve` need a human, since it lets one model widen another model's write access? Default: no, the orchestrator answers.
+- **Config held:** a model registry that keeps past exact IDs (S05); a hash check that refuses runs after a hand edit of `config.json`.
 - **Signing key location (S03):** your decision, needed by phase 8.
