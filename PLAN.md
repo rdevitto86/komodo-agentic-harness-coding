@@ -516,12 +516,12 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 **Pass 2 (performance):** the hourly check is one 1 KB fetch with a 1 s timeout on the 3 verbs that already touch the network; short verbs read `fresh.json` only.
 **Pass 3 (caching):** `latest.json` is cached in `fresh.json` for `fresh.interval`; a download is verified once and kept whole under `versions/`, never re-fetched.
 
-**Vet:**
-- **Hot swap:** approve versioned directories with runs pinned to their own version?
-- **Check points:** check only at session start, run start and `fresh --check`, at most hourly? A machine with neither for days stays on its version until one happens.
-- **`--restart-runs`:** approve a 2-minute checkpoint window, accepting that one in-flight model turn may repeat?
-- **GitHub prerelease flag:** `releases/latest` skips prereleases, so betas publish as normal releases with "beta" in the version. OK?
-- **Signing key:** default is `~/.komodo/release.key` (mode 0600), with releases cut only from your machine. Needed by phase 8.
+**Vet:** decided in the 2026-10-08 design pass, except the last:
+- **Hot swap:** versioned directories with runs pinned to their own version.
+- **Check points:** only at session start, run start and `fresh --check`, at most hourly; a machine with neither for days stays on its version, and the repo pin catches it on the next verb.
+- **`--restart-runs`:** a 2-minute checkpoint window; one in-flight model turn may repeat, inside S18's loss bound.
+- **GitHub prerelease flag:** betas publish as normal releases with "beta" in the version, since `releases/latest` skips prereleases.
+- **Signing key:** default `~/.komodo/release.key` (mode 0600), releases cut only from your machine. Your decision, gap G-01, needed by phase 8.
 
 **Proof:**
 - **Hot swap:** a fresh during a fixture run makes the next `komodo version` report the new version, and the run finishes on the old one.
@@ -1707,6 +1707,7 @@ Three mechanical checks enforce it:
 - **Events:** every emitted type is in the catalog, and every catalog type has an emitter (§1 Event model).
 - **Docs drift:** a verb missing from `README.md` or the `komodo` skill, a broken decision link, or an `lld.md` package that doesn't exist.
 - **Maps:** every task group names an S-ID, and every S-ID has an `lld.md` section.
+- **No silent gaps:** every `[NOT CHECKED]` or `G-NN` tag in `docs/lld.md` names a backlog task that closes it, and every gap row in `docs/lld.md`'s register has a phase; a tag with no task fails the gate. This is how the plan's gap register survives `PLAN.md`'s removal after phase 1.
 - **Generated artifacts match their source:** the Part C roster tables from `policy.json` (S12), `events.schema.json` from the event enum (§1), `skills/index.json` hashes (S09), the standards rule IDs (S20), the template golden fixtures under both profiles (S10), and the S18 action table against the action kinds `Next()` emits.
 - **Timing:** short verbs under 50 ms (S01), the gate itself under 3 minutes locally, a 10,000-event replay under 1 s (S14).
 
@@ -2165,9 +2166,32 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 
 ## Open items
 
-- **Review the 2026-10-08 design pass:** 8 commits on `feat/1.0.0-beta.6`, one per batch, each revertible alone. Every card changed; S01–S14's earlier approval covers the text before this pass, not after it.
-- **Open Vet lines, 3:** S03 signing key location (your decision, needed by phase 8); S19 scope answers (should `scope approve` need a human, since it lets one model widen another model's write access? default: no, the orchestrator answers); S05 model registry keeping past exact IDs (held; the probe's `providers.json` is the registry until a model retires mid-run, which has not happened).
-- **Spikes before phase 4:** the S05 init-line capture without a model turn; whether a 24 GB machine runs Qwen3.6-27B at 262,144 context; and whether `OLLAMA_NUM_PARALLEL` above 1 fits the same machine, which decides if `limits.link_sessions.local` can ever exceed 1.
-- **Spike before phase 7:** the `repo_map` definition patterns for TypeScript, Python and Rust (`embed/langs/`) against 3 real repos; Go's `go/ast` path needs none.
-- **Spikes before phase 8 (platform copy):** `bwrap --unshare-net` gives a private loopback; `cp --reflink=auto` on ext4 and btrfs; Windows symlink and junction handling in the byte copy; the Docker Desktop bind-mount copy time for a 1 GB `node_modules`; whether a copied Rust `target/` is reused or rebuilt. Each is marked [NOT CHECKED] in S13 until run.
-- **Decisions this pass made for you (walk back any):** `fable` as opt-in only; Haiku 5.5 as light; `check.patch_coverage` 80 blocking for Go only; group wall hard limit 720; `install` flag trim to 8; B2 to lint; 10 lenses; EARS items; the two-pass planner; `--permission-prompts none` in the launch line.
+- **Review the 2026-10-08 design pass:** 10 commits on `feat/1.0.0-beta.6`, one per batch, each revertible alone. Every card changed; S01–S14's earlier approval covers the text before this pass, not after it.
+- **Decisions this pass made for you (walk back any):** `fable` as opt-in only; Haiku 5.5 as light; `check.patch_coverage` 80 blocking for Go only; group wall hard limit 720; `install` flag trim to 8; B2 to lint; 10 lenses; EARS items; the two-pass planner; `--permission-prompts none` in the launch line; the 4 S03 Vet lines; the Rust shared target dir.
+
+**Gap register.** Every unverified claim, open decision and spike in this plan has one row here. Nothing else in the plan is partial. Phase 1 copies this table into `docs/lld.md` with each row under its S-ID, and the S27 gate fails a row with no backlog task until it closes.
+
+| ID | S-ID | Gap | Closes by |
+|---|---|---|---|
+| G-01 | S03 | signing key location and custody | your decision, before phase 8 |
+| G-02 | S05 | capturing the `system/init` line at probe time without spending a model turn | spike, phase 4 |
+| G-03 | S05 | a 24 GB machine running Qwen3.6-27B at 262,144 context | spike, phase 4 |
+| G-04 | S04, S05 | `OLLAMA_NUM_PARALLEL` above 1 on the same machine, which decides whether `limits.link_sessions.local` can exceed 1 | spike, phase 4 |
+| G-05 | S05 | a model registry keeping past exact IDs, for a model that retires mid-run | decision, phase 4; default: `providers.json` is the registry |
+| G-06 | S07 | whether a Max login exposes `claude-fable-5-1` to `claude -p` | the install probe records it, phase 4 |
+| G-07 | S04, S21 | the real Max 5-hour window against `limits.link_sessions.claude-cli` 3 | ledger measurement over the first 20 groups, phase 7 |
+| G-08 | S13 | `bwrap --unshare-net` gives each session a private loopback | spike, phase 2 |
+| G-09 | S13 | `cp --reflink=auto` behavior on ext4 and btrfs, symlinks kept | spike, phase 2 |
+| G-10 | S13 | Windows symlink and junction handling in the byte copy, `core.symlinks` | spike, phase 2 |
+| G-11 | S13 | Docker Desktop bind-mount copy time for a 1 GB `node_modules` | spike, phase 2 |
+| G-12 | S13 | whether a copied Rust `target/` is reused or rebuilt, which justifies the shared target dir | spike, phase 2 |
+| G-13 | S12, S09 | the steering-phrase list is 6 entries by judgment | tune from `doctor` warnings, phase 3 |
+| G-14 | S16 | a mid-turn nudge reaching a turn stuck in a tool call | best effort decided; the proof accepts a late nudge, phase 5 |
+| G-15 | S19 | whether `scope approve` needs a human, since it lets one model widen another's write access | your decision, before phase 6; default: the orchestrator answers |
+| G-16 | S20 | the lens rule catalogs' content, seeded from Google's review guide and SWE-bench Verified failure classes | authoring task, phase 7, security lens reviewed by you |
+| G-17 | S21 | the 50% cache-hit fixture needs real API sessions | measured in phase 7 |
+| G-18 | S25 | `repo_map` definition patterns for TypeScript, Python and Rust against 3 real repos | spike, phase 7 |
+| G-19 | S14 | the 10,000-event replay under 1 s and the 50 ms short-verb budget are targets, not measurements | gate timing, phase 6 |
+| G-20 | S02, S05 | the `codex-cli` link, `openai-api` chain and `.codex/` install | later minor, by design |
+
+Rule for new gaps: a card may not say "later", "TBD" or carry a `[NOT CHECKED]` tag without a `G-NN` row here. The gate enforces the same in `docs/lld.md` from phase 1.
