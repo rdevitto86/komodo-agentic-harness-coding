@@ -76,6 +76,9 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 - **Coarse grain:** events fire per run, group, stage, session and task, never per model turn or token. S08's in-session loop stays direct code.
 - **In-process and ordered:** one bus per engine, delivered synchronously in `seq` order, with no broker. Machine-wide state (pool, quota) stays in files (S05, S14); each engine turns a change there into a local event.
 - **Outside the bus:** inline gates (S12's guard, S08's formatting after `edit`) and shutdown (S15) are direct code. They log an event afterward when they can.
+- **Actions are journaled too (the outbox):** `Next()` returns actions; `Drive` appends `action.start {id, kind}` before running one and `action.done` after. `id = sha256(seq, kind, args)`. On replay a done action is skipped, a started one reruns, and every action is idempotent by a declared key (S18). This is Temporal's workflow-and-activity split: the pure function never does I/O, and every side effect can run twice safely. [web: docs.temporal.io/workflows]
+- **One journal per group, one per run:** group events go to `runs/<group>/events.jsonl`; `run.*` events go to `runs/<run>.jsonl`. Groups never read each other's journals; they meet only in the queue and the pool (S14).
+- **Epochs fence late events:** every spawn carries the stage's `epoch` (an int that rises on each stage entry). A session event whose epoch is older than the current stage's is journaled with `stale: true` and `Next()` ignores it. This is how Verify cancels one session without the loser's last event moving the stage twice.
 - **A new type is a plan change:** the catalog is a Go enum. S27's gate fails on an emitted type missing from it, or a listed type nothing emits.
 
 **Envelope:**
@@ -86,7 +89,9 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 | `seq` | int | order within the group journal, no gaps |
 | `ts` | RFC 3339 | when the engine saw the fact |
 | `run`, `group`, `session` | string | where it happened; `session` only on session and task events |
+| `epoch`, `stale` | int, bool | the stage epoch the producer was spawned under; `stale` is set by `Drive` when it is older than the current one |
 | `type`, `reason`, `data` | string, string, object | what happened; `reason` comes from S10's code list; `data` is typed per event |
+| `crc` | uint32 | CRC-32 of the line before it; replay drops a torn last line and emits `journal.truncated` once |
 
 **Catalog:**
 
@@ -96,8 +101,11 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 | Group | `group.paused`, `group.blocked`, `group.cancelled`, `group.shipped`, `lease.lost` | S14, S15, S26 |
 | Stage | `stage.enter`, `stage.exit` | S14 |
 | Session | `session.start`, `session.idle`, `session.timewarn`, `session.end` with its exit reason | S16; S05 supplies provider-limit reasons |
-| Work | `task.done`, `task.retry`, `check.done`, `finding.submit`, `finding.verified`, `tool.denied`, `timer.due`, `job.due`, `job.fail` | S08, S12, S17, S18, S19, S20 |
+| Work | `task.claimed`, `task.released`, `task.done`, `task.retry`, `check.done`, `finding.submit`, `finding.verified`, `tool.denied`, `timer.due`, `job.due`, `job.fail` | S08, S12, S16, S17, S18, S19, S20 |
+| Ledger | `lock.taken`, `lock.released` (the group's task list, S23), `action.start`, `action.done`, `journal.truncated` | S14 `Drive`, S18 |
 | Provider | `provider.skip` with its reason (such as `ctx_below_floor`), `limit.warn` | S05 |
+
+32 types. Each type's `data` is a Go struct; the build generates `embed/events.schema.json` from the enum, `help --json` serves it as `events`, and the gate fails when the two disagree (S10, S27).
 
 **The loop:**
 
@@ -146,6 +154,40 @@ sequenceDiagram
   Nx->>Jr: task.retry (attempt 2)
   Nx->>Sup: action: start a fresh session
   Jr->>Sub: append ledger row, refresh views
+```
+
+**Guarantees (what the tests pin):**
+
+| Guarantee | How |
+|---|---|
+| Ordered, gap-free | one writer per journal; `seq` is checked on append and on replay |
+| Durable before applied | append, `fsync`, then `Next()`; a crash after the sync replays the event |
+| Exactly-once state moves | a stage moves only in `Next()`, keyed by `seq`; stale-epoch events never move it |
+| At-least-once actions, safe to repeat | every action has an idempotency key (S18 table) |
+| No lost wake | `status --wait` reads the journal tail after subscribing, so an event between the two is still seen |
+| Subscriber faults are contained | a panicking subscriber is logged and dropped; state is untouched (S24) |
+
+**Gates are events with evidence.** A stage exits only when `Next()` has seen the events its gate names. No model says "done"; the engine's own checks do.
+
+| Gate | Exit needs | Evidence (0 tokens unless noted) |
+|---|---|---|
+| Intake | `stage.exit` | lint pass, lease and fence taken, `commands.setup` exit 0, task list locked |
+| Build | `task.done` for every task | each task's `done_when` exit 0 and a commit on the hidden ref |
+| Check | `check.done pass` | `done_when` rerun, scope, secrets, impact tests, baseline diff, coverage (S19) |
+| Verify | `stage.exit` | reviewer `met` for every task and 0 blocking findings; tester `confirmed` for every task and item; 0 regressions (S20; model tokens) |
+| Ship | `group.shipped` | merge clean, Check on the epic tip, landing with the fence (S26) |
+
+**The Verify race:** the reviewer and tester start under one epoch. The first verified failure makes `Next()` emit `cancel` for the other and enter Build under a new epoch. Whatever the cancelled session sends afterward carries the old epoch and is stale. Both passing needs both `session.end done` events; both failing in one tick is handled in `seq` order, so the second is already stale.
+
+```mermaid
+sequenceDiagram
+  participant R as Reviewer (epoch 4)
+  participant T as Tester (epoch 4)
+  participant N as Next()
+  T->>N: finding: item 3 failed, Go reran x2, still fails
+  N->>N: Build, epoch 5; action cancel(R)
+  R->>N: session.end done (epoch 4)
+  N-->>R: journaled stale=true, ignored
 ```
 
 ## 2. Subsystem map
@@ -1022,15 +1064,25 @@ Three mechanical checks enforce it:
 - **Check and Ship:** S19 and S26.
 - **Paused (S05, S18):** a group waiting on a provider limit gives back its pool slot, keeps its lease and worktree, and resumes on its own when its timer fires.
 - **Verify:** the reviewer and the tester (S20) run at once on the same commit. The first confirmed failure cancels the other: a verified blocking finding, a `not_met` task or a failed acceptance item. A failed item counts only after Go reruns its command twice and both fail. If both pass, the tester restarts once with Go's output and the reviewer keeps going; if they split, the group blocks with `flaky`. An item with no command never cancels.
-- **Back to Build:** a failed Check or Verify resumes the task's own builder session with only the verified findings, including those submitted before a cancel. There is no Repair stage.
+- **Back to Build:** a failed Check or Verify resumes the task's own builder session with only the verified findings, including those submitted before a cancel. There is no Repair stage. Each return raises the task's attempt count (S18) and the stage epoch (§1).
 - **Pure core:** `Next(state, event) → (state, actions, events)` has no I/O. `Drive` journals each event, then applies the result (§1 Event model).
+- **Gates:** the table in §1. Every stage exit is a `Next()` case that names the events it needs; a table test enumerates every (stage, event) pair, including stale ones.
+
+**Concurrency model (goroutines and locks):**
+- **One `Drive` goroutine per group:** it owns the group's journal and state; nothing else writes them. A mutex is never needed inside a group.
+- **One goroutine per session** (S16) that only produces events into its group's `Drive` channel, which is buffered to 256 and never dropped: a full channel blocks the producer, never loses the event.
+- **Cross-group state is files with OS atomicity:** the queue, the pool and link slots, leases and `quota.json` are create-only or renamed-into-place files under `~/.komodo/state/` (S15, `core/lock.go`). Two engines on one machine coordinate only through them.
+- **The run goroutine** builds the DAG, enqueues ready groups, and reaps finished `Drive`s. It holds no group state.
+- **Every goroutine starts through S15's panic-catching helper;** a panic in one group's `Drive` emits `group.blocked crash` for that group alone.
+
+**Work queue:** `~/.komodo/state/queue/<repo-id>.<kind>.<id>.json`, one create-only file per ready group or due job `{kind: group|job, repo, id, priority, enqueued_at}`. `run` enqueues groups as their dependencies land; `jobs tick` enqueues due jobs (S17). Taking a pool slot deletes the file and writes the lease, in that order, so a crash between the two leaves an item that the sweep re-enqueues rather than a lost one.
 
 **Run order:**
 - **A graph, not a tree or a list:** groups and their dependencies form a DAG (directed acyclic graph) that Go builds from the backlog (S25). A tree can't express a group needing 2 others; a list runs everything in sequence.
 - **Start rule:** a group starts only after every group it depends on has landed and Check has passed on the epic tip.
 - **Stuck dependency:** dependents of a Blocked group show `waiting on <group>`, while unrelated groups keep running.
-- **One queue:** ready work waits in one machine-wide queue.
-- **Picking the next group:** `priority: high` in `TG.md` first, then the longest remaining chain weighted by task count, then the most groups unblocked, then backlog ID order.
+- **One queue:** ready work waits in one machine-wide queue (the work queue above), shared by every repo and by jobs.
+- **Picking the next item:** `priority: high` in `TG.md` first, then fair share across repos (round-robin when 2 or more repos have ready items), then the longest remaining chain weighted by task count, then the most groups unblocked, then backlog ID order.
 - **Named runs:** `run <group>` refuses when a dependency outside the run hasn't landed, naming it.
 - **Abandoned dependency:** its dependents block with `dependency`, naming it.
 
@@ -1055,8 +1107,12 @@ Three mechanical checks enforce it:
 **Vet:**
 - **Pool size:** decided in the 2026-10-07 review: floor 1, ceiling 6, hard limit 16.
 - **Tasks in sequence:** decided in the 2026-10-07 review: 1 builder per group; tasks run one after another, and independent tasks go in separate groups.
+- **Verify race:** decided in the 2026-10-08 design pass: epochs fence late events; the first verified failure cancels the other session (§1).
 
-**Proof:** the fixture group runs all 5 stages and ships; `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`; replaying a group's journal rebuilds its `state.json` exactly. A seeded bug fails Verify, cancels the tester and resumes the builder. With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue. A rate-limit error halves the pool, never below the floor. A group whose dependency is Blocked waits while an unrelated group runs. A landing that breaks Check on the epic tip sends the last-landed group back to Build. `run` on a group with an unlanded dependency refuses and names it. With 2 slots and 3 ready groups, the `priority: high` group starts first.
+**Pass 2 (performance):** `Next()` table tests double as a replay benchmark; a 10,000-event journal must replay under 1 s. The run goroutine starts Intake for the next ready group while the current one's first session is still loading, so a slot is never idle longer than one setup.
+**Pass 3 (caching):** Intake's `commands.setup` result is cached by lockfile hash (S22), so a second worktree of the same epic tip copies dependencies instead of downloading.
+
+**Proof:** the fixture group runs all 5 stages and ships; `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`, and the 4 Verify orderings (reviewer fails first, tester fails first, both pass, both fail in one tick) each move the stage exactly once; replaying a group's journal rebuilds its `state.json` exactly. A crash between taking a queue item and writing its lease leaves an item the sweep re-enqueues. With 2 repos and `pool_max` 2, 4 ready groups start in alternating repo order. A seeded bug fails Verify, cancels the tester and resumes the builder. With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue. A rate-limit error halves the pool, never below the floor. A group whose dependency is Blocked waits while an unrelated group runs. A landing that breaks Check on the epic tip sends the last-landed group back to Build. `run` on a group with an unlanded dependency refuses and names it. With 2 slots and 3 ready groups, the `priority: high` group starts first.
 
 ### S15 · Workspace and leases
 
@@ -1179,16 +1235,39 @@ Three mechanical checks enforce it:
 | Harness crash or reboot | S18 | replay the journal after the `state.json` snapshot | — | continues |
 | Scheduled job fails | S17 | backoff | 3 | Blocked |
 
-- **Crash safety:** each event is appended and synced to `runs/<group>/events.jsonl` before it is applied. `state.json` is a snapshot holding the last `seq`, written atomically, and every stage is idempotent.
-- **Startup sweep:** kills orphans by pid file, frees expired leases, and emits `session.end` with reason `crash` for dead sessions.
+- **Crash safety:** each event is appended and synced to `runs/<group>/events.jsonl` before it is applied. `state.json` is a snapshot holding the last `seq`, written atomically every 50 events or on a stage change, and every stage is idempotent.
+- **Loss bound, stated:** any single failure (crash, kill, power loss, provider halt) loses at most one model turn and no committed edit. Every row above and every action below is designed to that sentence.
+- **Startup sweep:** kills orphans by pid file, frees expired leases, re-enqueues queue items with no lease, and emits `session.end` with reason `crash` for dead sessions.
+
+**Actions and their idempotency keys (the outbox, §1):** `Drive` journals each action before and after it runs. The gate fails an action kind missing from this table.
+
+| Action | Key | Safe to repeat because |
+|---|---|---|
+| `spawn` session | session UUID, chosen by Komodo | a second spawn with a live UUID is a no-op; a dead one restarts the session |
+| `wip_commit`, `commit` | `(group, fence, tree hash)` | the hidden ref moves by compare-and-swap on the old value (S15); an identical tree writes nothing |
+| `cancel` session | session UUID | killing a dead process is a no-op |
+| `setup` worktree | `(group, lockfile hash)` | reruns are cached (S22) and the sandbox makes them pure |
+| `check` | `(tree hash, command)` | results are cached by that key (S19) |
+| `land` group | `(group, fence, merge base)` | a landed group's merge commit already exists; the fence refuses a stale lander |
+| `open_pr` | `(epic, head SHA)` | `gh` finds the existing PR for that head first |
+| `scope_change` | `(group, sorted paths)` | adding a path twice is one path |
+| `notify` wake | event `seq` | a wake is a file touch |
+
+**Decided (closes the 3 deferred items):**
+- **WIP commit at every session end:** `session.end` of any writing agent triggers `wip_commit`; an empty diff writes nothing.
+- **A crash is contained to its group:** one `Drive` per group under the panic helper (S14); other groups continue; the run reports the crashed group as `Blocked: crash`.
+- **`resume` continues sessions:** it tries the provider's resume handle first (S05: `--resume <uuid>` with `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1`, or the saved `messages.jsonl` on API links); a failed resume gets a fresh session with the brief, the WIP diff and the last `summary`, and the ledger logs `resume_lost`. Claude Code leaves a SIGTERM-interrupted turn unfinished and exits 143, so the engine stops a worker with SIGINT first (ends the turn, keeps its result), then SIGTERM after 30 s. [web: code.claude.com/docs/en/headless]
 - **Block reasons:** a fixed enum, named in `status` and the `group.blocked` event.
 - **Paused is not Blocked:** `paused` waits on a ledger timer and resumes itself; `blocked` needs a person or the orchestrator. Paused time stops the group and session wall clocks, and `limits.pause_max_min` bounds it.
 
 **Vet:**
-- **Auto-retry Blocked:** should a Blocked group retry itself after a cooldown? Default: no; a person or the orchestrator runs `resume`.
-- **Retry provider:** does a task retry move to the next chain link? Default: no, same link.
+- **Auto-retry Blocked:** decided: no; a person or the orchestrator runs `resume`. A group blocked 3 times for one reason is flagged `needs redesign` in `status`.
+- **Retry provider:** decided: a task retry stays on its link; only a provider failure moves it (S05).
 
-**Proof:** forcing a timeout, a flap, 4 repairs or 7 attempts each ends Blocked with the reason named. `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions. A 2-hour pause leaves the group wall clock where it was.
+**Pass 2 (performance):** the startup sweep runs its 4 scans in parallel and must finish under 2 s on a workstation with 20 dead runs. Snapshot writes are off the `Drive` goroutine's critical path.
+**Pass 3 (caching):** replay from the snapshot, never from `seq` 0, so resume cost is bounded by 50 events.
+
+**Proof:** forcing a timeout, a flap, 4 repairs or 7 attempts each ends Blocked with the reason named. `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions. `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit. A torn last journal line replays with one `journal.truncated`. A panic injected in one group's `Drive` blocks that group while a second group lands. A 2-hour pause leaves the group wall clock where it was.
 
 ## Quality layer
 
