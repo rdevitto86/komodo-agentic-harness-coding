@@ -360,6 +360,8 @@ Every verb that writes also takes `--dry-run`, which prints each write and makes
 
 **Does:** one verb puts Komodo on the machine and into the current repo. It replaces the prototype's `setup`; rerunning it is how you re-probe. It works offline and gives the same result on all 3 OSes.
 
+**One state machine, three verbs over it:** `install` computes the desired manifest, diffs it against `install.json`, applies only the differences, then runs `doctor install` and fails if any check errors. `uninstall` is the manifest in reverse. `sync` is `install --repo-only` plus fetch and prune. `--dry-run` prints the diff as a table: file, action (`write | keep | prune`), reason. The manifest is `v: 1`, one row per owned file or settings entry with its hash and owner step. The scripts `install.sh` and `install.ps1` only download, verify SHA-256 and exec `komodo install --machine-only`.
+
 **Steps, in order:**
 
 | # | Target | Writes | When |
@@ -428,16 +430,20 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 - **Windows:** `irm <repo>/install.ps1 | iex`.
 - **Both:** download the latest binary, check its SHA-256 against `latest.json`, then run `komodo install --machine-only`.
 
-**Vet:**
-- **Downgrade on install:** an offline install from an older binary points `bin/` at the older version, per your rule. S03 moves it forward on the next online check. OK?
-- **PATH edit:** Windows sets the user PATH. macOS and Linux symlink into `~/.local/bin` if it is on PATH, else append one line to `~/.zshrc` or `~/.bashrc`. Default: yes.
-- **Detection by machine:** does `claude` or `codex` on PATH alone count as detected? Default: yes.
-- **Bootstrap check:** the scripts verify only SHA-256 over HTTPS, and the binary verifies ed25519 on every later fresh. OK?
+**Vet:** decided in the 2026-10-08 design pass:
+- **Downgrade on install:** an offline install from an older binary points `bin/` at the older version; S03 moves it forward on the next online check.
+- **PATH edit:** Windows sets the user PATH. macOS and Linux symlink into `~/.local/bin` if it is on PATH, else append one line to `~/.zshrc` or `~/.bashrc`.
+- **Detection by machine:** `claude` or `codex` on PATH alone counts as detected; `--hosts` overrides.
+- **Bootstrap check:** the scripts verify only SHA-256 over HTTPS, and the binary verifies ed25519 on every later fresh.
+
+**Pass 2 (performance):** the probe's 5 checks run in parallel under the 2 s budget; a rerun with no diff makes 0 writes and finishes under 1 s.
+**Pass 3 (caching):** the probe result is the capacity profile's source (S04) and is reused until `install`, `doctor` or `fresh` refreshes it.
 
 **Proof:**
 - **Fresh repos on macOS and Windows:** a new `claude` session reads the `AGENTS.md` block, `komodo skill list` shows the 4 orchestrator skills, and `komodo` resolves in a new shell. `.claude/settings.json` holds only the allow rule and the `SessionStart` hook, and a pre-existing key survives.
-- **Rerun:** 0 repo changes, and a hand-edited `CLAUDE.md` survives.
+- **Rerun:** 0 repo changes, and a hand-edited `CLAUDE.md` survives; `--dry-run` on a fresh repo lists 4 writes and on a rerun 0.
 - **Probe:** with `claude` removed from PATH, `providers.json` marks `claude-cli` unavailable with the reason.
+- **Uninstall:** leaves 0 manifest files and the user's other `settings.json` keys intact.
 
 ### S03 · Binary lifecycle (`komodo fresh`)
 
@@ -981,11 +987,21 @@ Three mechanical checks enforce it:
 | Order | `always` first, then name order, so the prefix is byte-identical across runs |
 | Too big for the link | the brief over S11's limit never drops a skill; the task goes to the next link in its chain, else blocks with `context` |
 
+**Hardening (skills and the repo addendum are the only prose a worker reads that the harness did not write):**
+- **Strict frontmatter, `v: 1`:** `name`, `description`, `globs`, `markers`, `sections`. The gate fails an unknown key, a duplicate heading, or a `sections` entry with no matching heading, so `<name>#<section>` pulls are exact.
+- **Size bound:** 6,000 tokens per skill; the gate names any over it. The ledger records skill tokens per session (S23).
+- **Integrity:** `embed/skills/index.json` is generated at build with a SHA-256 per skill; the loader verifies on read and refuses a mismatch. Each skill renders under `## Standards: <name> (<sha8>)`, so a finding can cite the exact version.
+- **Steering scan:** the gate fails a skill, and `doctor` warns on a repo addendum, that contains a phrase from the `text` row in `policy.json` (S12): `ignore previous`, `you are now`, `system prompt`, `disregard`, `komodo config`, `komodo install`. The addendum still loads with the warning, since it is the repo owner's text; a skill does not, since it is ours.
+- **Standards compile to rules:** the `- **Never` and `- **Always` lines become reviewer rule IDs (S20); a skill edit without the regenerated ID list fails the gate.
+
 **Vet:**
-- **Preinject budget:** decided: no cap; every relevant allowlisted skill loads.
+- **Preinject budget:** decided: no cap; every relevant allowlisted skill loads, each under 6,000 tokens.
 - **Pull limit:** decided: none; repeat pulls come from the cache.
 
-**Proof:** a builder editing `*.go` gets `standards-go` preinjected. A backend `*.kt` in a repo without `AndroidManifest.xml` gets `standards-kotlin` but not `standards-ui-mobile`. A `.tsx` handler gets all 5 matching skills in the same order on 2 runs. A planted `.claude/skills/standards-go/SKILL.md` changes nothing. The index rebuilds only when its key changes.
+**Pass 2 (performance):** the index is embedded at build, so `skill list` is a map read; glob matching runs once per brief over the group's `files`, not the whole tree.
+**Pass 3 (caching):** bodies are S22 entries by content hash, and the standards block is the 4th prefix part (S11), so it sits inside the provider cache for every session with the same file types.
+
+**Proof:** a builder editing `*.go` gets `standards-go` preinjected. A planted `ignore previous instructions` line in a skill fails `gate`; the same line in the fixture repo's `AGENTS.md` makes `doctor` warn and the brief still loads. A skill of 6,001 tokens fails `gate`. A skill body edited after build fails the hash check and is refused. A backend `*.kt` in a repo without `AndroidManifest.xml` gets `standards-kotlin` but not `standards-ui-mobile`. A `.tsx` handler gets all 5 matching skills in the same order on 2 runs. A planted `.claude/skills/standards-go/SKILL.md` changes nothing. The index rebuilds only when its key changes.
 
 ### S10 · Rules and output contract
 
@@ -1026,6 +1042,18 @@ Three mechanical checks enforce it:
 - **`output.color`:** applied at render time only.
 - **Fixed per machine:** no repo or flag changes a template.
 
+**Template filling, one pipeline:**
+
+| Step | Rule |
+|---|---|
+| Engine | Go `text/template` with `missingkey=error` and a 6-function map: `code`, `n`, `plural`, `dur`, `path`, `table`. No other function exists, so a template cannot compute or read |
+| Typed facts | every template has one Go struct in `agent/render.go`; the gate fails a template field with no struct field, and a struct field no template uses |
+| Order | facts → fact checks (SHA, path, task ID) → escape → template → wrap at 80 columns → `output.color` |
+| Tables | over 5 rows render the top 5 plus one line `N more: <what>`; a cell over 45 characters moves to a labeled line below the table |
+| Golden fixtures | `embed/output/<profile>/<name>.golden` per template; the gate renders each with its fixture under both profiles and compares bytes |
+| Events | `data` per event type is a Go struct; the build generates `embed/events.schema.json`, served by `help --json` as `events`; `status --wait` renders the waking event through `event.<type>` into one `report` line |
+| Codes | `config_tampered`, `locked`, `regression`, `lint`, `disputed` and `crash` join the list |
+
 **Rules:**
 - **The result schema:** asks for codes and facts only, never sentences for a person. The final call (S08) sends it with `code` as an `enum`, so a link can't invent a code (S05 constrained decoding, then Go's check).
 - **`gate` checks the mapping:** every `code` in every agent schema has a template in both profiles, and every template field exists in its schema. An unmapped code fails `gate`.
@@ -1042,9 +1070,12 @@ Three mechanical checks enforce it:
 
 **Vet:** none open. Decided: no rule text in any worker prompt; role text and the orchestrator rules stay embedded Markdown; output is codes and facts rendered by Go templates, picked by `output.profile` (S04).
 
-**Changed after approval (re-vet):** rules leave worker prompts; `core.md` and `agent.json` `rules` are dropped (S11 review).
+**Changed after approval (re-vet):** rules leave worker prompts; `core.md` and `agent.json` `rules` are dropped (S11 review). The 2026-10-08 design pass adds the filling pipeline, golden fixtures and the event schema.
 
-**Proof:** a fixture `status` with 10 runs renders a table and passes its template test. A builder brief holds 0 lines from `embed/rules/`. A planted `AGENTS.md` line outside the block reaches the brief under Repo rules; the same line inside a block with a missing end marker reaches no brief. A builder whose `files` list `AGENTS.md` edits it, and its next brief in the same run still carries the base-commit text. A fixture escalation returning `{code: branch_missing, sha: ffcf41e9}` renders the same bytes on 2 runs under `adhd`. A schema code with no template fails `gate`. A fact path containing a newline and `## x` renders as one literal code span. A fact SHA absent from the repo gets 1 re-prompt.
+**Pass 2 (performance):** templates parse once at process start from the embedded set; rendering `status` for 50 runs is under 10 ms.
+**Pass 3 (caching):** none; rendering is pure and cheap.
+
+**Proof:** a fixture `status` with 10 runs renders a table and passes its template test. A template referencing an unknown fact fails `gate` at build, not at run time. A 7-row table renders 5 rows and one overflow line. `events.schema.json` lists 32 types, and the gate fails when the enum gains one. A builder brief holds 0 lines from `embed/rules/`. A planted `AGENTS.md` line outside the block reaches the brief under Repo rules; the same line inside a block with a missing end marker reaches no brief. A builder whose `files` list `AGENTS.md` edits it, and its next brief in the same run still carries the base-commit text. A fixture escalation returning `{code: branch_missing, sha: ffcf41e9}` renders the same bytes on 2 runs under `adhd`. A schema code with no template fails `gate`. A fact path containing a newline and `## x` renders as one literal code span. A fact SHA absent from the repo gets 1 re-prompt.
 
 ### S11 · Context and brief builder
 
@@ -1060,8 +1091,12 @@ Three mechanical checks enforce it:
 - **Reviewer context, from the engine only:** the task list from the backlog at the base commit, `done_when`, spec anchors, the diff, Check results (S19) and prior findings. Never builder prose: the builder's `summary` and status reach no reviewer.
 - **Tester context, from the engine only:** the group's task list and acceptance items from the backlog at the base commit, the diff, Check results and its allowed commands. It tests blind against that list; no builder prose reaches it. A restart adds Go's rerun of the disputed item (S20).
 - **Callers:** Go callers of changed symbols come from `go/packages`. Other languages get none preloaded; the reviewer finds callers with its `search` tool.
+- **New slots (2026-10-08):** `repo_map` (S25; required for planner and architect, optional for the reviewer), `baseline` (S19; tester, optional) and `lens_rules` (S20; reviewer, required), taking the list to 20.
 
-**Vet:** none open. Decided: one ceiling per link, half its measured context, replacing the 4 per-slot caps; the 17-slot list in `drafts/README.md`.
+**Vet:** none open. Decided: one ceiling per link, half its measured context, replacing the 4 per-slot caps; the 20-slot list in `drafts/README.md`.
+
+**Pass 2 (performance):** the brief is assembled from S22 slices, never by re-reading files; a 4-task group's 4 briefs share every byte before the task part.
+**Pass 3 (caching):** the 4 breakpoints of S21 are placed at the part boundaries, so parts 1 and 2 are 1-hour cache blocks and parts 3 and 4 are 5-minute ones.
 
 **Proof:** the fixture prefix hashes the same across 2 runs (gate test). An empty required slot fails with the slot named; a reviewer's first pass renders `findings` as `none`. A reviewer brief holds 0 bytes of the builder's `summary`. A Go task and a TS task in one repo share every prefix byte up to the standards.
 
@@ -1384,25 +1419,49 @@ Three mechanical checks enforce it:
 - **Scope requests (end and resume):** a builder that needs another file stops, and its final result has status `needs_scope`, the paths and a reason. The engine makes a WIP commit, and the group goes Blocked: `needs_scope`. `status --wait` wakes the orchestrator, and `scope approve|deny` answers; approve adds the paths to the group's `files`, logged in the ledger. The engine then resumes the same session with the answer.
 - **The session is never lost:** the resume handle is in `state.json` before the session ends. The lease and worktree stay held while Blocked: `needs_scope`, so the sweep skips them. API links persist every turn to `sessions/<id>/messages.jsonl`. If `--resume` fails or the link changed, a fresh session gets the brief, the WIP diff and the last `summary`, and the ledger logs `resume_lost`.
 - **Secrets:** scans the diff for secret patterns.
-- **Coverage:** measures changed-line coverage.
+- **Coverage:** measures changed-line coverage against `check.patch_coverage` (80): blocks for Go, warns for other languages (S04).
+- **Baseline (regression ground truth):** Intake records the `test` class result at the group's base commit, cached by tree hash. Check diffs head against it: a test that passed at base and fails at head is a regression and blocks with `regression`, naming the test; a test failing at both is pre-existing and goes under ⚠️, never blocking. Without a baseline, a pre-existing failure would block every group that touches the repo.
+- **Impact set:** for Go repos, Check runs the tests of every package that imports a changed package (`go list -deps` reversed; on the prototype module, one package's change reached 13 of 40 [cmd: go list -f '{{.ImportPath}} {{join .Deps " "}}' ./... | awk]). Other languages run the full `test` class, which they already do. The full suite always runs at the epic gate (S14).
+- **Flake rule:** any failing test, not only an acceptance item, is rerun twice alone; two more failures confirm it, a split reports `flaky` without blocking, and the ledger counts flaky tests per repo.
 - **Cache:** results are keyed by tree hash plus command, so an unchanged tree skips the rerun (S22).
 
 **Vet:**
-- **Coverage bar:** 80% of changed lines? Default: 80% for Go, report-only for other languages.
+- **Coverage bar:** decided: `check.patch_coverage` 80 on changed lines; Go blocks, other languages warn until their coverage tools are detected.
 - **Scope requests:** decided in the S08 review: end and resume, approved by the orchestrator (or you), logged.
 
-**Proof:** a seeded out-of-scope write fails Check; a planted fake key fails the secret scan. A `needs_scope` then `approve` resumes the same session uuid; with its Claude session file deleted, the fresh session gets the WIP diff and the ledger logs `resume_lost`.
+**Pass 2 (performance):** the impact set and `done_when` run in parallel inside the sandbox's process cap; Check on a one-package change must finish under the full suite's time.
+**Pass 3 (caching):** the baseline is one cache entry per epic tip, shared by every group cut from it; a `done_when` rerun on an unchanged tree is a cache hit.
+
+**Proof:** a seeded out-of-scope write fails Check; a planted fake key fails the secret scan. A fixture with one pre-existing failing test lands; the same fixture with a seeded regression blocks with `regression` and names the test. A one-package change runs only that package's dependents. A test that fails once and passes twice is reported `flaky` and the group lands. A `needs_scope` then `approve` resumes the same session uuid; with its Claude session file deleted, the fresh session gets the WIP diff and the ledger logs `resume_lost`.
 
 ### S20 · Review and evidence
 
 **Owns:** `quality/{review,qa,evidence}.go`, `embed/lenses/*.md`.
 
 **Does:**
-- **Profiles:** thorough runs N lenses in parallel plus a cold pass. Economy runs one merged lens.
-- **Lenses are data:** correctness, security, readiness, quality and economy, as markdown.
+- **Profiles:** thorough runs every applicable lens in parallel plus a cold pass. Economy runs one merged lens.
+- **Lenses are rule catalogs, applied by scope:** `embed/lenses/<lens>.json` lists rules `{id, severity, applies: {globs, markers}, check, evidence}`, with the lens body in `<lens>.md`. A lens runs only when a changed file matches its `applies`, so N is the diff's, not a constant. `submit_finding` refuses an unknown rule ID.
+
+| Lens | Applies when | Checks |
+|---|---|---|
+| `correctness` | always | logic, error paths, nil and bounds, resource release |
+| `security` | always for S02, S03, S06, S08, S12, S13, S26; else on auth, crypto, exec, net, path or env code | injection, secrets, path escape, unsafe exec, TLS |
+| `spec` | the task cites a `docs/lld.md#S<nn>` anchor | the diff matches the section, which is in the brief; a mismatch is a `not_met`, not a finding |
+| `contract` | an exported symbol changed (Go-computed via `go/ast`; other languages by export-line diff) | every caller still compiles and the change is intended by a task |
+| `concurrency` | the diff adds `go`, `chan`, `sync`, `atomic`, threads or async | data races, lock order, context cancellation, goroutine leaks |
+| `platform` | `_windows.go`, `_darwin.go`, `_linux.go`, path or shell handling | separators, case, line endings, signals |
+| `config` | `embed/*.json`, `defaults.json`, `policy.json` | hard limits kept, schema version bumped, gate fixture updated |
+| `readiness` | always | tests exist for changed behavior, docs and changelog touched when the task says so |
+| `quality` | always | naming, duplication, comment rules from `standards-comments` |
+| `economy` | always in economy mode only | the merged checklist of the rows above, at reduced depth |
+
+- **Standards are rules too:** at build, each `standards-*` skill's lines beginning `- **Never` or `- **Always` compile to rule IDs `std.<skill>.<n>`; the reviewer cites them like lens rules, and the gate fails when a skill line changes without its ID list.
+- **Enterprise benchmark, stated:** the catalog's rule set is seeded from Google's code review guide (design, functionality, complexity, tests, naming, comments, style, consistency, documentation) and from the SWE-bench Verified failure classes the prototype's reviews missed; each rule names its source in `source`.
+- **Precision ledger:** S23 records per rule and model: submitted, evidence-verified, fixed by the builder, and `disputed` (a builder result code naming the file and line). `doctor` lists rules under 50% verified over the retention window; a rule under 30% for 60 days is a plan change.
 - **Per-task verdicts:** the reviewer returns `met`, `not_met` or `brief_incomplete` for every task ID in the group, each exactly once; Go rejects a result that skips or repeats one.
 - **Added checks:** the reviewer runs the build, tests and lint itself with `run`, beyond `done_when`. The engine reruns any check a verdict depends on.
-- **Tester (QA):** runs beside the reviewer in Verify (S14), in its own throwaway worktree at the same commit. It proves the group's acceptance items from `TG.md` with `run`, returning pass or fail per item with evidence. It doesn't redo `done_when` or the reviewer's checks.
+- **Tester (QA):** runs beside the reviewer in Verify (S14), in its own throwaway worktree at the same commit. It proves the group's acceptance items from `TG.md` with `run`, returning pass or fail per item with evidence, and `confirmed | not_confirmed` per task ID, each exactly once, from the task's `done_when` and its EARS item (S25). It doesn't redo the reviewer's lenses. Go cross-checks the tester's per-task result with the reviewer's: a split goes through the rerun-and-restart rule below, so a tester false fail never blocks alone.
+- **Four gates, three of them Go's:** lint and coverage (Check, 0 tokens), success (`done_when` rerun, 0 tokens), regression (baseline diff and impact set, 0 tokens), and the tester's blind pass (model tokens). The tester's brief says which three Go already proved, so it spends its turns on behavior, not on rerunning the suite.
 - **Tester restart:** when Go's 2 reruns pass an item the tester failed, the tester restarts once. Its brief adds one slot with the item, its evidence, and Go's command and output, and its result gives the item a reason code: `env`, `wrong_command`, `flaky` or `real_failure`. A second dispute blocks the group with `tester`, a harness fault that doesn't count against the builder. The ledger records each tester model's false-fail rate.
 - **Back to the builder:** a `not_met` task, a failing check, a blocking finding or a failed acceptance item sends the group back to Build (S14) with the findings.
 - **No bypass:** the reviewer's task list comes from the backlog at the base commit, never from the builder. The builder never writes its own group's backlog files (B2). A builder result that skips a task ID fails the S08 schema check.
@@ -1413,10 +1472,13 @@ Three mechanical checks enforce it:
 - **Re-review:** after a return to Build, only the delta is reviewed, and cached findings cost 0 tokens. The tester reruns every item.
 
 **Vet:**
-- **Lens set:** which "more nuanced" lenses to add (API contracts, concurrency, platform parity)?
-- **Severity:** does a `minor` finding ever block? Default: no; only `blocker` and `major` block.
+- **Lens set:** decided in the 2026-10-08 design pass: the 10 scoped lenses above; `spec`, `contract`, `concurrency`, `platform` and `config` are new.
+- **Severity:** decided: `blocker` and `major` block; `minor` is reported and counted.
 
-**Proof:** a seeded bug in the fixture is found and verified. A finding with a fake quote is dropped. A seeded failing acceptance item fails Verify and cancels the reviewer.
+**Pass 2 (performance):** applicable lenses run in parallel under one pool slot each only when `pool_max` allows; otherwise they queue behind the group's own slot. A diff touching only `*.md` runs 3 lenses.
+**Pass 3 (caching):** findings are cached by `(lens, rule set hash, diff, model)`; a re-review after a return to Build reviews the delta and reuses cached findings for unchanged hunks at 0 tokens.
+
+**Proof:** a seeded bug in the fixture is found and verified. A finding with a fake quote is dropped. A finding with rule ID `x.99` is refused. A seeded failing acceptance item fails Verify and cancels the reviewer. A diff touching only `*.md` runs `correctness`, `readiness` and `quality`. A seeded exported-signature change triggers `contract` and the finding names the caller.
 
 ## Economy and ops layer
 
@@ -1437,14 +1499,18 @@ Three mechanical checks enforce it:
 **Token savings:**
 - **Ported:** clipping, signature trimming, glob-picked standards, delta diffs, session resume for repair, briefs that fit the link's `ctx`, 4 KB check output.
 - **New:** a stable prefix, a sanitizer, per-task sessions, and light-weight work on local models.
-- **Provider prompt caching:** `cache_control` breakpoints on the Anthropic API (rules and agent 1 h, skills and repo 5 min). `claude -p` and OpenAI caching are automatic with a byte-identical prefix. Local models keep `keep_alive` for the run.
-- **Headline metric:** tokens and USD per accepted group, plus the cache hit rate per agent.
+- **Provider prompt caching (Anthropic API facts):** at most 4 `cache_control` breakpoints per request, 1-hour entries before 5-minute ones, a 512-token minimum on the 5.5 line, writes at 1.25× (5 min) or 2× (1 h) and reads at 0.05× base on Opus 5.5 and Sonnet 5.5; a change at the tools level invalidates everything after it, and a thinking or effort change invalidates from the messages level [web: platform.claude.com/docs/en/build-with-claude/prompt-caching]. So the 4 breakpoints follow S11's prefix order: (1) tools plus role, 1 h; (2) repo context, 1 h; (3) standards, 5 min; (4) the task, 5 min. `effort` and thinking are fixed per agent (S05). `claude -p` caches automatically on a byte-identical prefix. OpenAI caching is automatic. Local models keep `keep_alive` for the run.
+- **Rate-limit arithmetic:** cached reads do not count toward Anthropic's input-tokens-per-minute limit, so a high hit rate raises effective throughput without a tier change [web: platform.claude.com/docs/en/api/rate-limits].
+- **Headline metric:** tokens and USD per accepted group, plus the cache hit rate per agent, in `status --metrics` (S23).
 
 **Vet:**
-- **Token caps:** keep `limits.group_tokens` as a runaway-loop bound, separate from cost? Default: yes; USD only warns (S05). It counts input, output and cache writes; cache reads are reported only, since each turn re-reads the whole context.
-- **Economy default:** economy or thorough as the built-in `mode`? Default: thorough.
+- **Token caps:** decided: `limits.group_tokens` is a runaway-loop bound, separate from cost; USD only warns (S05). It counts input, output and cache writes; cache reads are reported only, since each turn re-reads the whole context.
+- **Economy default:** decided: thorough.
 
-**Proof:** a token cap forced low ends Blocked with `budget`; `status` shows the hit rate per agent.
+**Pass 2 (performance):** the context-limit compaction at 80% (S08) and the 4 KB tool cap are what keep a 60-minute session inside one window on a 262,144 link; the ledger's `ctx_peak` column per session is the proof.
+**Pass 3 (caching):** the headline is the cache hit rate per agent; a hit rate under 50% on the API link over 20 sessions fails a gate fixture, since it means the prefix drifted.
+
+**Proof:** a token cap forced low ends Blocked with `budget`; `status` shows the hit rate per agent. Two sessions of one agent on the API link share the first 3 breakpoints byte for byte, and the second's ledger row shows `cache_read` over 0.
 
 ### S22 · Cache store
 
@@ -1537,16 +1603,26 @@ Three mechanical checks enforce it:
 - **Backlog check:** `komodo doctor backlog` checks the grammar, `files`, `done_when` and dependencies, and that groups in one wave share no `files`. A group whose `files` include a G3 path or any `docs/backlog/**` path fails (the former B2 guard, now a lint fact).
 - **Planner output:** tasks sized for an LLM, a human-facing doc per group, acceptance items for the tester, and each group's dependencies.
 - **Mechanical planner:** templates, per-task size caps and lint fix the structure; the planner fills in the blanks.
+- **Input is docs and context, output is a graph:** `plan --from <spec>` takes any document set (a PRD, an RFC, a ticket export, an existing `docs/` tree) plus the repo. What makes the harness general across software types is that nothing below depends on the language: the map, the sizing lint and the DAG derivation read markers and symbols, not frameworks.
+- **`repo_map` slot (new; required for planner and architect, optional for the reviewer):** Go builds a symbol graph: Go via `go/ast`, other languages via per-language definition patterns in `embed/langs/<lang>.json` (functions, types, classes, exports). Rank is inbound references, ×3 for files the goal names, fitted to 10% of the brief ceiling by dropping the lowest rank. This is Aider's repo-map idea without tree-sitter, which the stdlib-only rule excludes [web: github.com/pdavis68/RepoMapper]. Cached by tree hash (S22).
+- **Two passes, each gated by Go:** pass 1 (heavy) returns the epic outline: groups, goals, `touches` (file globs per group) and dependencies; Go lints it. Pass 2 runs one session per group in parallel (standard weight), each returning that group's tasks and items; Go lints each. A pass that fails lint goes back into its own session with the failure (S08), 2 times, then the plan blocks with `lint`.
+- **Go derives the DAG from `touches`:** two groups whose globs overlap must be ordered; the planner's stated dependency is kept when it agrees, else lint fails naming both groups and the shared file. Groups with no overlap and no dependency start in wave 1. The planner proposes order; Go proves it.
+- **Sizing lint:** a task names at most 5 files and an estimated 300 changed lines; a group holds at most 8 tasks; a chain is at most 4 groups long. After Build, the real line count is recorded, and a task over 2× its estimate warns in `doctor backlog` so the next plan sizes better.
+- **Acceptance items use EARS:** `WHEN <event> THE SYSTEM SHALL <response>` (or `IF`, `WHILE` forms) plus an optional `cmd:` line the tester runs; lint checks the shape. Kiro's spec-driven flow uses the same notation for its requirements file, and it is what lets Go check an item's shape without reading its meaning [web: verdent.ai/guides/agents/kiro-spec-driven-development].
+- **Plan deltas, never rewrites:** `plan --epic N` on an existing epic adds or amends only unlocked groups (S23 lock); landed and locked groups are read-only inputs.
 - **Dependency graph:** Go builds a DAG from the groups' dependencies, refuses cycles, and computes the waves and the longest chain (S14). `priority: high` in `TG.md`, set by the planner or a person, puts a group first.
 - **Graph shape:** lint warns on a chain longer than 4 groups, a single group every other group waits on, and a group with more than 5 dependencies.
 - **`plan <goal>`:** the planner drafts in memory and checks it with `lint_backlog`. Its final result is the plan; the engine lints it again and writes files only if lint passes, else the failure goes back into the session (S08).
 - **`add backlog`:** adds a task, group or epic; out-of-scope work lands here. `add changelog` uses the same verb.
 
 **Vet:**
-- **Grammar changes:** does the backlog grammar need a `subsystem:` field so groups map to S-IDs? Default: yes.
-- **Task size caps:** what bounds a task? Default: at most 5 files, and its brief fits S11's ceiling.
+- **Grammar changes:** decided: `TG.md` gains `subsystem:` (an S-ID or `none`), `touches:` (globs) and `priority:`; `tsk-*.md` gains `estimate_lines:`.
+- **Task size caps:** decided: 5 files, 300 estimated lines, 8 tasks per group, and the brief fits S11's ceiling.
 
-**Proof:** epic-1 passes `komodo doctor backlog`; a planner draft that fails lint writes 0 files; two groups in one wave sharing a file fail lint; a dependency cycle fails lint; a 5-group chain warns.
+**Pass 2 (performance):** pass 2 sessions run in parallel under the pool, so a 6-group epic plans in about 2 session wall times, not 7. The repo map for this repo (about 83 files) builds under 1 s.
+**Pass 3 (caching):** the repo map and the outline lint result are S22 entries keyed by tree hash and goal hash; replanning the same goal on an unchanged tree costs 0 map builds.
+
+**Proof:** epic-1 passes `komodo doctor backlog`; a planner draft that fails lint writes 0 files; two groups in one wave sharing a file fail lint; a dependency cycle fails lint; a 5-group chain warns. A fixture goal touching 2 overlapping areas yields 2 groups with a derived dependency, and a draft that omits it fails lint naming the shared file. A `repo_map` for the fixture repo is byte-identical on 2 runs. An item without `SHALL` fails lint. `plan --epic 1` after `tg-1.2` is locked leaves `tg-1.2` unchanged.
 
 ### S26 · Ship: git, PR, release
 
