@@ -247,9 +247,21 @@ sequenceDiagram
 **Does:**
 - **One ingress, one verb set:** you and the orchestrator call the same verbs. A few need a terminal, and `internal` verbs are the engine's.
 - **Self-describing:** `komodo help --json` returns every verb, flag, type, default and result schema. Each verb says whether it needs a terminal.
-- **One envelope:** `{ok, verdict, report, data, error{code, reason, fix}}` with `--json`. `report` is the human text, already formatted to `output.profile`, so a caller can relay it verbatim.
+- **One envelope:** `{v, ok, verdict, report, data, error{code, reason, fix}}` with `--json`; `v` is the envelope version, 1. `report` is the human text, already formatted to `output.profile`, so a caller can relay it verbatim.
 - **Exit codes:** 0 ok, 1 refused, 2 usage, 3 blocked, 4 internal.
 - **Pin check first:** a repo pinned above this binary refuses every verb except `help`, `version`, `fresh`, `install` and `doctor` (S03).
+
+**Processing, the same 5 steps for every verb:**
+
+| # | Step | Rule |
+|---|---|---|
+| 1 | Parse | one verb table, stdlib `flag` per verb; `--input` JSON merges under explicit flags, which win |
+| 2 | Validate | types, enums, closest-match for unknown flags, the terminal check, the pin and the config hash guard; nothing has run yet |
+| 3 | Resolve | repo id from cwd or `-C`, the effective config, the capacity profile when a verb needs a link |
+| 4 | Dispatch | one thin call into the domain package; the verb never reads state files itself |
+| 5 | Render | the result's codes and facts through S10's templates into `report`, then the envelope or text |
+
+A verb that fails in steps 1–3 has made 0 writes, so `--dry-run` is only meaningful from step 4 on. Every writing verb is idempotent: a repeat with the same arguments reports `0 changes`.
 
 **Tiers:**
 
@@ -282,17 +294,17 @@ Every verb that writes also takes `--dry-run`, which prints each write and makes
 |---|---|---|---|
 | `help [verb]` | list verbs, or one verb's flags and examples | `--all` | yes |
 | `version` | version, binary path, latest known, repo pin | `--check` | yes |
-| `install` | binary, provider probe and repo files (S02) | `--repo-only`, `--machine-only`, `--claude`, `--no-claude`, `--codex`, `--no-codex`, `--no-path`, `--from <file>`, `--offline`, `--project`, `--schedule`, `--force` | no |
+| `install` | binary, provider probe and repo files (S02) | `--repo-only`, `--machine-only`, `--hosts claude,codex` (default: detected), `--no-path`, `--from <file>`, `--project`, `--schedule`, `--force` | no |
 | `uninstall` | remove every file the manifest owns | `--repo-only`, `--machine-only` | no |
 | `fresh` | get the newest binary now (S03) | `--check`, `--to <version>`, `--restart-runs` | no |
 | `doctor [install\|backlog]` | health of the install or the backlog; both by default | `--fix` (refused for the orchestrator) | yes |
-| `config [agent\|endpoint <name>] <key>[=<value>]…` | read keys, or set several at once, all or none (S04) | `--all` (JSON, or a key's options), `--default` (reset) | reads only |
+| `config [agent\|endpoint <name>] <key>[=<value>]…` | read keys, or set several at once, all or none (S04) | `--all` (JSON, or a key's options), `--default` (reset), `--accept` (re-hash after a hand edit) | reads only |
 | `sync` | after a merge: fetch, prune worktrees, refresh repo files | `--no-fetch` | yes |
 | `add backlog` | add a task, group or epic (S25) | `--task <text>`, `--group <title>`, `--epic <title>`, `--to <id>`, `--files <globs>`, `--done-when <text>` | yes |
 | `add changelog` | add an `Unreleased` entry | `--entry <text>`, `--kind added\|changed\|fixed\|removed` | yes |
 | `plan <goal>` | planner drafts groups; writes only if the backlog check passes | `--from <spec>`, `--epic <N>` | yes |
 | `run [group]` | start groups detached and return the run id at once; refuses a group whose dependency hasn't landed (S14) | `--stage <stage>` | yes |
-| `status [run]` | pool, group graph, stages, budgets, blocks; `--wait` blocks until the next wake event, so the orchestrator runs it in the background (Claude Code's Bash tool stops at 2 min by default, 10 at most) | `--watch`, `--wait blocked\|done\|any`, `--timeout <dur>` (9m), `--session <id>`, `--backlog`, `--metrics`, `--all` | yes |
+| `status [run]` | pool, group graph, stages, budgets, blocks; `--wait` blocks until the next wake event, so the orchestrator runs it in the background (Claude Code's Bash tool stops at 2 min by default, 10 at most) | `--watch`, `--wait blocked\|done\|any`, `--timeout <dur>` (9m), `--session <id>`, `--explain` (the last 10 events with reasons), `--backlog`, `--metrics`, `--all` | yes |
 | `skill list\|get` | skill index and bodies (S09) | `list --agent <name>`, `get <name> --section <heading>` | yes |
 | `scope approve\|deny <group>` | answer a builder's `needs_scope`; approve adds the paths to the group's `files` (S19) | `--paths <list>`, `--reason <text>` | yes |
 | `resume <run>` | continue a crashed, blocked, paused or restarted run; paused agents restart now | `--from <stage>` | yes |
@@ -332,11 +344,15 @@ Every verb that writes also takes `--dry-run`, which prints each write and makes
 - **Deleted:** `migrate`, `ingest`, `comments`, `diff`, `tag`, `rephase`, `recall`, `eval`.
 
 **Vet:**
-- **Verb classes:** approve one shared verb set, terminal-only verbs and internal, with the terminal check enforcing it?
-- **`--input` JSON:** does every verb accept its arguments as one JSON object? Default: yes.
-- **Exit codes:** are the 5 codes enough for a caller to branch on?
+- **Verb classes:** decided in the 2026-10-08 design pass: one shared verb set, terminal-only verbs and internal, with the terminal check enforcing it.
+- **`--input` JSON:** decided: every verb accepts its arguments as one JSON object; explicit flags win.
+- **Exit codes:** decided: 5 codes; `error.code` carries the detail a caller branches on.
+- **Install flags:** decided: 8, down from 13; `--hosts` replaces 4 flags and `--offline` is implied when `latest.json` is unreachable.
 
-**Proof:** each verb has a golden `--json` test. An unknown flag exits 2 and names the closest match. The gate fails if `help --json` and these tables disagree. With no controlling terminal, `komodo install` and `komodo config providers.paid=allowed` exit 1.
+**Pass 2 (performance):** a short verb (`help`, `version`, `config` reads, `skill`) must answer under 50 ms with no network and no repo scan beyond the marker `stat`s; the gate times them.
+**Pass 3 (caching):** `help --json` and the `komodo` skill are generated at build and embedded, never computed at run time.
+
+**Proof:** each verb has a golden `--json` test. An unknown flag exits 2 and names the closest match. The gate fails if `help --json` and these tables disagree. With no controlling terminal, `komodo install` and `komodo config providers.paid=allowed` exit 1. `--input` with a flag that disagrees uses the flag. A repeated `add backlog` with the same task reports `0 changes`. `help`, `version` and `skill list` each answer under 50 ms in the gate.
 
 ### S02 · Installer (`komodo install`)
 
@@ -511,10 +527,12 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 - **File shape:** flat keys at the top level; groups as `agents.<name>` and `endpoints.<name>` sections.
 - **Audit:** each write appends one row per changed key to `~/.komodo/state/config.log`: time, batch id, key, old and new value.
 - **Strict decode:** an unknown key is an error naming the closest match. A value over a hard limit is refused, naming the key, the value and the limit.
+- **Hash guard (decided):** `komodo config` writes `config.json` and its SHA-256 to `state/config.sha`. A hand edit makes every verb refuse with `config_tampered` and the fix line `komodo config --accept`, which rewrites the hash and logs one audit row. The orchestrator can't run it (terminal only).
+- **Capacity profile per link (what dynamic config means here):** before each session the engine derives `{ctx, slots, cost_class, effort}` for the link it is about to use: `ctx` measured (S05), `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight. S11 sizes the brief from `ctx`, S14 takes a slot from `slots`, and S21 caches by the whole profile. Swapping Claude for a local or OpenAI link changes the profile, never the engine.
 
 **Multi-repo on one binary:** each call resolves its repo from cwd or `-C` and uses that repo's state under `<git-common-dir>/komodo/`. Shared across repos: the binary, the config, the Max quota and the session pool.
 
-**Flat keys (31):**
+**Flat keys (33):**
 
 | Key | Default | Hard limit | Meaning |
 |---|---|---|---|
@@ -533,14 +551,16 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 | `http.ca_bundle` | none | PEM file path | extra trusted certificates, added to the system roots (S06) |
 | `limits.pool_min` | 1 | `limits.pool_max` | session slots kept open even while throttled (S14) |
 | `limits.pool_max` | 6 | 16 | most looping sessions at once, across all repos (S14) |
-| `limits.link_sessions.<link>` | 3; loopback endpoints 1 | 8 | concurrent sessions per link, across all repos |
-| `limits.group_wall_min` | 30 per task, plus 30 | 240 | wall time per group; paused time doesn't count |
+| `limits.link_sessions.<link>` | 3; loopback endpoints 1 | 8 | concurrent sessions per link, across all repos; Ollama serves 1 request per model unless `OLLAMA_NUM_PARALLEL` is raised, so `doctor` reads it and names the fix [web: docs.ollama.com/faq] |
+| `limits.group_wall_min` | tasks × `limits.session_wall_min`, plus 2 × `limits.session_wall_min` for Verify | 720 | wall time per group; paused time doesn't count; a 4-task group gets 360 |
 | `limits.group_tokens` | 2,000,000 | 10,000,000 | tokens per group: input, output and cache writes; cache reads are reported, not counted |
 | `limits.task_attempts` | 6 | 10 | model attempts per task: fresh sessions, re-prompts, gate feedback and "continue" (S18) |
 | `limits.pause_max_min` | 360 | 1,440 | longest a session stays paused on a provider limit before it is cancelled (S18) |
 | `limits.session_wall_min` | 60 | 120 | wall time per session |
 | `limits.session_idle_min` | 10 | 30 | silence before a nudge |
 | `limits.repairs` | 3 | 5 | returns to Build before Blocked |
+| `guard.refusal_limit` | 3 | 5 | refusals under one rule before the session ends (S12 G6) |
+| `check.patch_coverage` | 80 | 100 | % of changed lines a test must cover; blocks for Go, warns for other languages (S19). Google's guide calls 75% "commendable" and 90% "exemplary"; Codecov recommends 100% on the patch, which punishes glue code, so 80 on changed lines is the middle [web: testing.googleblog.com, about.codecov.io] |
 | `sandbox.network` | `deny` | — | network for run-class commands |
 | `sandbox.max_procs` | 512 | 2048 | processes per session |
 | `sandbox.max_mem_gb` | 8 | 32 | memory per session |
@@ -549,6 +569,20 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 | `cache.max_mb` | 256 | 4096 | cache size per repo |
 | `ledger.retention_days` | 30 | 365 | ledger retention |
 | `ship.mode` | `group` | — | `group`: a PR per group into the epic branch, merged by the engine; `epic`: groups merge straight into the epic branch (S26) |
+
+**Why these defaults (the ones with outside evidence):**
+
+| Key | Default | Evidence |
+|---|---|---|
+| `limits.pool_max` 6, `link_sessions` 3 | 6 sessions, 3 per link | Anthropic's lowest API tier allows 1,000 requests and 2M input tokens a minute on Opus 5.5; a session makes well under 1 request a second, so the bound is the Max plan's 5-hour window, not the API, and 3 keeps one window from draining in an hour [web: platform.claude.com/docs/en/api/rate-limits] |
+| `providers.ctx_floor` 262,144 | local endpoints | the native window of the ~27B open models targeted; Ollama ships at 4,096, so the floor is what makes `doctor` catch an unconfigured server [web: docs.ollama.com/faq] |
+| `limits.session_wall_min` 60 | per session | Claude Code's own headless runs stop background work after 10 min idle; 60 min bounds one task with 6 attempts inside a 6-hour group |
+| `limits.task_attempts` 6, `limits.repairs` 3 | per task, per group | Temporal's default retry is unlimited with 2× backoff, which the plan rejects: every loop here has a counter, and 6 covers 2 fresh sessions with 2 re-prompts each [web: docs.temporal.io/encyclopedia/retry-policies] |
+| `warn.usd_per_run` 5 | metered links | Opus 5.5 costs $4 per M input and $20 per M output; a 4-task group that uses 200K uncached input and 50K output per session costs about $7, so $5 warns before the second group [web: platform.claude.com/docs/en/models/overview] |
+| `limits.group_tokens` 2,000,000 | per group | 4 tasks × 6 attempts × 50K uncached tokens is 1.2M; the cap is a runaway bound, 1.7× the expected worst case, and cache reads are excluded because they are 0.05× the price on Opus 5.5 and Sonnet 5.5 [web: platform.claude.com/docs/en/build-with-claude/prompt-caching] |
+
+**Pass 2 (performance):** the effective config is parsed once per process and handed down; no verb re-reads it. Detection is cached by the marker-file hash, so `komodo status` on a cold repo costs one `stat` per marker.
+**Pass 3 (caching):** the per-run snapshot hash (above) is also the S22 cache key prefix, so a config change never serves a stale brief or check.
 
 **Agent group (`komodo config agent <name> …`, 4 keys per agent):**
 
@@ -615,13 +649,15 @@ Everything else is a `komodo config` key, such as `komodo config mode=economy li
 - **Mixing:** one call reads or writes, never both. Writes need a terminal (S01).
 
 **Vet:**
-- **Hard limits:** are the numbers in the table right?
-- **Output profile:** default `adhd` on every machine? Default: yes.
-- **Unknown repo types:** with no detected commands, refuse `run` and allow read-only agents? Default: yes.
-- **Keys:** `env:` references only in beta 6, with keychain support later? Default: yes.
+- **Hard limits:** decided in the 2026-10-08 design pass: the table above, with the evidence rows for the 6 that have outside data; the rest are bounds against runaway loops, not tuned values.
+- **Output profile:** decided: `adhd` on every machine.
+- **Unknown repo types:** decided: with no detected commands, `run` refuses and names the marker files it looked for; read-only agents still run.
+- **Keys:** decided: `env:` references only in beta 6; keychain support is a later minor.
 
 **Proof:**
 - **Limits:** `komodo config limits.repairs=9` is refused, naming the key and the limit, and the file is unchanged.
+- **Hash guard:** a hand edit to `config.json` makes `komodo status` exit 1 with `config_tampered`; `config --accept` restores it and logs 1 audit row.
+- **Capacity profile:** a session on a 262,144 endpoint and one on Opus 5.5 get different brief ceilings and the same engine path; the ledger records both profiles.
 - **Detection:** the fixture repo yields 6 classes.
 - **All or none:** a call with 1 bad pair of 3 writes nothing; a good call logs 1 audit row per changed key.
 - **Discovery:** `config --all` names a default, limit and source for every key; `agent builder model --all` lists only probed models above the context floor.
