@@ -2,7 +2,7 @@
 
 ## Status
 
-**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. Design reviews the same day changed S01, S02, S03, S04, S05, S07, S08 and S10 after approval, so those need a second look; see **Review changes (2026-10-06, 2026-10-07, 2026-10-08)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27) becomes one or more task groups; S28 waits for a later minor.
+**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. The 2026-10-08 design pass (8 batches, one commit each on `feat/1.0.0-beta.6`) filled the remaining architecture across every card, settled every open Vet line but 3, and added a **Pass 2 (performance)** and **Pass 3 (caching)** line per card for later enhancement rounds; it awaits your review, and any batch can be reverted alone. See **Review changes (2026-10-06, 2026-10-07, 2026-10-08)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27) becomes one or more task groups; S28 waits for a later minor.
 
 ## How to read this plan
 
@@ -39,6 +39,21 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 - **Carry-over:** the backlog tree and lint, release, worktree protections, the subagent ledger, economy mode (now the `mode` key) and all 34 `standards-*` skills are kept. Eval, recall, plugins and standalone facets are deleted.
 - **Docs:** `AGENTS.md` is the source of truth, and `CLAUDE.md` imports it. Specs start from zero: the PRD is rewritten, and prior specs sit in `backups/` and at tag `prototype-final`.
 - **OpenAI:** scoped now, implemented in a later minor version. Beta 6 ships the interfaces, the `install` probe, Codex detection and `AGENTS.md` compatibility. `codex-cli` and `openai-api` refuse with `not yet`, and `.codex/` install reports `not yet`. `openai.go` still ships for `http:` endpoints, local or on a server.
+
+**Precedents (what each core idea is borrowed from, checked 2026-10-08):**
+
+| Idea | Precedent | Where |
+|---|---|---|
+| Pure decider, journaled side effects, replay | Temporal's workflow and activity split [web: docs.temporal.io/workflows] | §1, S14, S18 |
+| Fencing tokens on leases, enforced by the resource | distributed-lease practice [web: hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens] | S15 |
+| Event stream as the agent's spine | OpenHands [web: arxiv.org/pdf/2407.16741] | §1 |
+| Minimal tool surface, no shell | SWE-agent's agent-computer interface; Codex's sandbox, network off and workspace-only writes by default [web: developers.openai.com/codex/security] | S08, S13 |
+| Seatbelt on macOS, Landlock or bwrap on Linux | Codex CLI [web: developers.openai.com/codex/security] | S13 |
+| Full-jitter retries | AWS Architecture Blog [web: aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter] | S06 |
+| Ranked repo map for planning | Aider [web: github.com/pdavis68/RepoMapper] | S25 |
+| EARS acceptance items | Kiro specs [web: verdent.ai/guides/agents/kiro-spec-driven-development] | S25 |
+| Coverage bands 60/75/90 | Google Testing Blog [web: testing.googleblog.com/2020/08/code-coverage-best-practices.html] | S04, S19 |
+| Headless sessions, resume, structured output | Claude Code 2.1.295 [web: code.claude.com/docs/en/headless] | S05, S16, S18 |
 
 ## 1. Foundation
 
@@ -1168,6 +1183,10 @@ Three mechanical checks enforce it:
 - **Toolchain folders are read-only:** `~/.rustup` and the folders holding each detected command's binary; `doctor` runs each command's `--version` in the sandbox to prove it.
 - **Never the per-user process limit:** it counts every process you run. This Mac runs 607, so a limit of 512 made `fork` fail (tested).
 - **Dependencies come first:** Intake runs `commands.setup` in the sandbox with network on (S04); `run` keeps network off.
+- **Precedent:** Codex CLI ships the same shape, Seatbelt on macOS and seccomp plus Landlock on Linux, with network off and writes limited to the workspace by default, and it exposes `codex sandbox macos|linux <cmd>` to test a command under the policy. `komodo doctor --sandbox <cmd>` does the same here [web: developers.openai.com/codex/security].
+
+**Pass 2 (performance):** the seatbelt or bwrap profile is rendered once per worktree and reused for every `run`; the per-call cost is the process spawn. Docker on Windows keeps one container per worktree alive for the same reason.
+**Pass 3 (caching):** Komodo's language caches per repo (above) are the cache; they are what makes `go build` in a fresh worktree a cache hit after Intake.
 
 **Vet:**
 - **Linux default:** decided in the 2026-10-06 S13 audit: `required` on every OS.
@@ -1533,9 +1552,16 @@ Three mechanical checks enforce it:
 | Check result | tree hash + command |
 | Review findings | lens + diff + prompt hash + model |
 
-**Vet:** **Cap:** 256 MB per repo, or per machine?
+| Setup result | lockfile hash + language (S14, S15) |
+| Test baseline | epic tip tree hash + `test` command (S19) |
+| Repo map, outline lint | tree hash; tree hash + goal hash (S25) |
 
-**Proof:** a second Check on an unchanged tree skips every rerun; a corrupted entry is deleted, not used.
+**Vet:** **Cap:** decided: `cache.max_mb` (256) per repo; the machine total is the sum, and `cache stats --all` shows it.
+
+**Pass 2 (performance):** entries are files named by their key under a 2-level fan-out, so a lookup is one `stat`; the LRU index is in memory per process and rebuilt lazily.
+**Pass 3 (caching):** this is the cache. Its hit rate per kind is in `status --metrics`.
+
+**Proof:** a second Check on an unchanged tree skips every rerun; a corrupted entry is deleted, not used. A second worktree of the same epic tip copies dependencies from the setup entry.
 
 ### S23 · Runtime observability
 
@@ -1636,9 +1662,14 @@ Three mechanical checks enforce it:
 - **Epic PR:** the engine opens it into its base, ready for review, once the epic gate passes, with the S26 body template.
 - **Landing:** a person merges only the epic PR into its base; `komodo sync` follows.
 
-**Vet:** **Ship mode default:** `group` or `epic`? Default: `group`, which keeps one PR per group as the record.
+- **Mechanical, fenced, feature-branch:** every landing is a `land` action with key `(group, fence, merge base)` (S18); the group branch is `komodo/<epic>/<group>`, the epic branch `komodo/<epic>`, and only the epic PR targets the base branch. A stale fence refuses the landing before any push.
 
-**Proof:** a shipped fixture branch has 0 trailers, and its PR body passes the S10 template test. Two groups landing at once merge one after the other. A seeded conflict blocks with `merge_conflict`.
+**Vet:** **Ship mode default:** decided: `group`, which keeps one PR per group as the record.
+
+**Pass 2 (performance):** push and PR creation run off the group's `Drive` goroutine; the epic-tip Check after a landing is the only serial step, and it is a cache hit when the tree is unchanged.
+**Pass 3 (caching):** the PR body's Check summary comes from S22's check entries, never a rerun.
+
+**Proof:** a shipped fixture branch has 0 trailers, and its PR body passes the S10 template test. A landing attempted with a stale fence makes 0 pushes and emits `lease.lost`. Two groups landing at once merge one after the other. A seeded conflict blocks with `merge_conflict`.
 
 ### S27 · Gate and self-checks
 
@@ -1651,8 +1682,13 @@ Three mechanical checks enforce it:
 - **Events:** every emitted type is in the catalog, and every catalog type has an emitter (§1 Event model).
 - **Docs drift:** a verb missing from `README.md` or the `komodo` skill, a broken decision link, or an `lld.md` package that doesn't exist.
 - **Maps:** every task group names an S-ID, and every S-ID has an `lld.md` section.
+- **Generated artifacts match their source:** the Part C roster tables from `policy.json` (S12), `events.schema.json` from the event enum (§1), `skills/index.json` hashes (S09), the standards rule IDs (S20), the template golden fixtures under both profiles (S10), and the S18 action table against the action kinds `Next()` emits.
+- **Timing:** short verbs under 50 ms (S01), the gate itself under 3 minutes locally, a 10,000-event replay under 1 s (S14).
 
-**Vet:** **Gate time:** keep the gate under 3 minutes locally?
+**Vet:** **Gate time:** decided: under 3 minutes locally; `--fast` skips cross-builds and timing.
+
+**Pass 2 (performance):** checks run in parallel by package; cross-builds are the long pole and run last so a structural failure reports first.
+**Pass 3 (caching):** none; the gate must observe, never remember.
 
 **Proof:** each failing case above has a fixture that makes the gate fail.
 
@@ -1667,6 +1703,9 @@ Three mechanical checks enforce it:
 | Runaway cost or loops | S16, S18, S21 |
 | Poisoned cache | S22 (outside worktrees, verified on read); S13 (Komodo's own language caches per repo) |
 | Malicious external MCP | S08 allowlist, off by default, no credentials |
+| Stale engine lands over newer work | S15 fence enforced by git compare-and-swap; S18 action keys |
+| Prompt steering through a skill or repo text | S09 steering scan at the gate and in `doctor`; S10 keeps rules out of prompts; S12 `text` row |
+| Tampered config or binary at run time | S04 hash guard; S03 signatures; G3 covers both files |
 
 ---
 
@@ -1734,7 +1773,7 @@ Any host: Claude Code now, Codex or a local model later. It uses its host's nati
 `_test.go` files sit next to their sources and are omitted. Each file is tagged with its subsystem.
 
 **Layout rules (for human maintainers):**
-- **Similar code sits together.** Each package holds the subsystems of one layer of §2, never one package per subsystem. That is 11 packages and about 83 files.
+- **Similar code sits together.** Each package holds the subsystems of one layer of §2, never one package per subsystem. That is 11 packages and about 85 files.
 - **Layers to packages:** Interface is `cli` and `host`. Model I/O is `provider`, `tools` and `agent`, and `agent` also holds Context. Orchestration is `engine`, Quality is `quality`, Economy and ops is `ops`, Safety is `safety` and Delivery is `repo`.
 - **`core` is plumbing with no domain logic:** config, HTTP, cache, locks, version and files.
 - **Files split before packages do.** A file splits at about 600 lines; a new package needs a new layer.
@@ -1779,8 +1818,9 @@ komodo-agentic-factory-coding/
 │   │   ├── intake.go              # [S14] lint, hash card, lease, cut worktree from the epic tip
 │   │   ├── build.go               # [S14] one session per task; resume it with findings
 │   │   ├── verify.go              # [S14] reviewer and tester at once, cancel on first failure
-│   │   ├── pool.go                # [S14] session pool, floor, ceiling, queue
-│   │   ├── state.go               # [S14] state.json
+│   │   ├── pool.go                # [S14] session pool, floor, ceiling
+│   │   ├── queue.go               # [S14] work queue files, pick order, fair share
+│   │   ├── state.go               # [S14] state.json, epochs
 │   │   ├── worktree.go            # [S15] detached cut, sweep, lease
 │   │   ├── shutdown.go            # [S15] catch-all shutdown, parent guard
 │   │   ├── session.go             # [S16] spawn, heartbeat, warn, nudge, kill
@@ -1805,8 +1845,9 @@ komodo-agentic-factory-coding/
 │   │
 │   ├── repo/                      # Delivery
 │   │   ├── backlog.go             # [S25] grammar, parse, edit
-│   │   ├── lint.go                # [S25] backlog check (doctor backlog)
-│   │   ├── graph.go               # [S25] dependency DAG, waves, longest chain
+│   │   ├── lint.go                # [S25] backlog check (doctor backlog), sizing, EARS shape
+│   │   ├── graph.go               # [S25] dependency DAG from touches, waves, longest chain
+│   │   ├── repomap.go             # [S25] symbol graph, rank, fit to budget
 │   │   ├── ship.go                # [S26] PR body, push, group PR, land per ship.mode
 │   │   ├── git.go                 # [S26] git wrapper
 │   │   ├── pr.go                  # [S26] gh wrapper
@@ -1874,14 +1915,17 @@ komodo-agentic-factory-coding/
 │   │   └── {builder,reviewer,planner,tester,architect,researcher,scout}/{agent.json, prompt.md}
 │   ├── jobs/                      # [S17] job templates (none shipped by default)
 │   ├── rules/                     # [S10] orchestrator.md; [S25] backlog.md
-│   ├── output/                    # [S10] {adhd,standard}/*.tmpl, adhd.md for the AGENTS.md block
-│   ├── lenses/                    # [S20] correctness, security, readiness, quality, economy
+│   ├── output/                    # [S10] {adhd,standard}/*.tmpl and *.golden, adhd.md for the AGENTS.md block
+│   ├── lenses/                    # [S20] <lens>.json rule catalog + <lens>.md body, 10 lenses
+│   ├── langs/                     # [S25] per-language definition patterns for the repo map
 │   ├── skills/                    # [S09]
+│   │   ├── index.json             # generated at build: name, globs, markers, sections, sha256
 │   │   ├── {komodo,plan,run,respond,release}/SKILL.md
 │   │   └── standards-<name>/SKILL.md            # all 34
 │   ├── defaults.json              # [S04] built-in defaults + hard limits
+│   ├── events.schema.json         # [S24] generated at build from the event enum
 │   ├── models.json                # [S05] default models per weight and link, Claude windows
-│   └── policy.json                # [S04][S12]
+│   └── policy.json                # [S04][S12] guard rows with scopes, steering phrases
 │
 ├── templates/                     # [S02]
 │   ├── project/{AGENTS.md, CHANGELOG.md, PULL_REQUEST_TEMPLATE.md, docs/{prd,hld,lld}.md}.tmpl
@@ -1900,21 +1944,22 @@ komodo-agentic-factory-coding/
 
 ```
 <git-common-dir>/komodo/
-├── install.json                   # [S02]
-├── runs/<group>/{events.jsonl, state.json}  # [S14][S18][S24] journal, snapshot
+├── install.json                   # [S02] manifest v1
+├── runs/<run>.jsonl               # [S14][S24] run journal
+├── runs/<group>/{events.jsonl, state.json}  # [S14][S18][S24] group journal, snapshot
 ├── jobs/state.json                # [S17]
 ├── sessions/<id>/{brief.md, request.json, stream.jsonl, messages.jsonl, result.json}  # [S16]
-├── ledger/{sessions.jsonl, events.jsonl}   # [S23]
-└── cache/{skills,context,checks,review}/   # [S22] 256 MB LRU
+├── ledger/{sessions.jsonl, events.jsonl, tasks.json, groups.json}   # [S23] rows and the lock-table views
+└── cache/{skills,context,checks,review,setup,map}/   # [S22] 256 MB LRU
 
 ~/.komodo/                         # (%LOCALAPPDATA%\komodo on Windows)
 ├── config.json                    # [S04] only after the first `komodo config` write
 ├── bin/komodo                     # [S03] current version; PATH and hooks point here
 ├── versions/<v>/komodo            # [S03] every installed version
 ├── jobs/*.json                    # [S17] your job templates
-├── leases/<repo-id>/<group>.json  # [S15] one lock table per machine
+├── leases/<repo-id>/<group>.{json,fence}  # [S15] one lock table per machine, with fences
 ├── wt/<repo-id>/<group>/          # [S15]
-└── state/{providers.json, quota.json, pool/, links/, fresh.json, fresh.lock, fresh.log, active/, config.log}  # [S02][S03][S04][S05][S14]
+└── state/{providers.json, quota.json, pool/, links/, queue/, wake/, fresh.json, fresh.lock, fresh.log, active/, config.log, config.sha}  # [S02][S03][S04][S05][S14][S24]
 ```
 
 ### What `komodo install` puts in any repo
@@ -2027,6 +2072,8 @@ Each card carries its own proof. These checks cross subsystems:
 - **Every phase:** `go run ./cmd/komodo gate` passes, and `GOOS=windows|linux|darwin go build ./...` cross-builds.
 - **Full run:** `komodo install`, then `komodo run tg-fixture` on a local model and `komodo status --wait done`, ends with the group landed on its epic branch per `ship.mode` and one ledger row per session.
 - **Crash:** `kill -9` mid-run, then `resume`, replays the journal and finishes with 0 repeated paid sessions.
+- **Race:** 2 engines started on one group make exactly 1 landing; the loser ends in `lease.lost` and the hidden ref holds the winner's commit.
+- **Regression:** the fixture with a pre-existing failing test lands, and the fixture with a seeded regression blocks with `regression`.
 - **Fresh repo:** following `README.md` on macOS and Windows reaches a shipped fixture group.
 - **Scheduled:** a `tick` from an `install --schedule` entry runs a fixture job, and 3 forced failures end Blocked and wake `wait`.
 
@@ -2081,15 +2128,19 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | One verb set for you and the orchestrator: the `orch` tier is removed; `run` always detaches, `status --wait` replaces `orch wait`, `plan`, `skill` and `scope` lose the prefix, JSON is the default without a terminal, the engine opens the epic PR, and `orch agent` moves to a later minor | §1, S01, S02, S03, S05, S09, S12, S14, S15, S17, S18, S19, S24, S26, Part C, §4, cutover, later minor |
 | Config has one write path: `komodo config [agent\|endpoint <name>] key=value…`, all or none, with `--all` and `--default` per scope and an audit log; no repo layer, `--set`, `--mode`, `--repo`, `get`/`show`/`unset`, `doctor config`, `--reload-config` or `KOMODO_FRESH`; agent models are `opus` or `opus-prev`, and chains are fixed in `agent.json`; repo hooks wait for a later minor | §1, S01, S02, S03, S04, S05, S07, S24, Part C, §4 |
 | Hybrid event model as a core tenet: the engine emits typed events into a per-group journal, one pure `Next(state, event)` decides, subscribers and repo hooks are read-only, and inline gates and shutdown stay outside the bus | §1, S08, S10, S12, S14, S15, S16, S17, S18, S23, S24, S27, §3, §4, §7 |
+| Design pass batch 1: journaled actions with idempotency keys (the outbox), stage epochs that fence late events, the Verify race rule, a gates table, 6 delivery guarantees, a CRC per journal line, a run journal, 7 new event types (32), the S14 concurrency model and work queue, S18's 3 deferred items decided | §1, S14, S18 |
+| Design pass batch 2: config hash guard, the capacity profile per link, `guard.refusal_limit` and `check.patch_coverage` (33 keys), the group clock formula with hard limit 720, evidence rows for 6 defaults, the 5-step CLI pipeline, install flags 13 to 8, `status --explain`, `config --accept`, envelope `v` | S01, S04 |
+| Design pass batch 3: the `agent.json` field table with `v` and `pool_slot`, a registry with cross-checks, the lease fence enforced by `git update-ref` compare-and-swap (proven), the workflow ledger views `tasks.json` and `groups.json`, the task list lock, task claims, the scorecard | S07, S15, S23 |
+| Design pass batch 4: guard rows are `policy.json` data with scopes, Part C tables rendered by the gate, B2 becomes a lint fact, exactly 3 inline hooks, the steering-phrase row, bus wakes and subscribers defined | S12, S24, S25, Part C |
+| Design pass batch 5: the 5.5 model line with Haiku 5.5 as light and `fable` opt-in, `--permission-prompts none`, stream facts (`api_retry`, 10 MB stdin, SIGINT vs SIGTERM), effort per weight, HTTP retry and limit classes with 529 and the spend-cap 429, full-jitter retries, headroom headers, MCP timeout facts, Claude Code's own retries kept off | S05, S06, S08 |
+| Design pass batch 6: liveness from events only, the stop ladder, a `paused` exit reason, retries per task from `agent.json`, the 5 S16 held items decided, `jobs tick` as one engine step, job overlap through the lease | S16, S17 |
+| Design pass batch 7: test baseline and impact set in Check, the flake rule for any test, 10 scoped lenses as rule catalogs with a precision ledger, the tester's per-task confirmation and 4 gates, the two-pass planner with a Go-derived DAG, `repo_map`, sizing lint and EARS items, skill hardening (frontmatter, 6,000-token bound, hashes, steering scan), the template filling pipeline with golden fixtures and `events.schema.json`, the 4 cache breakpoints with Anthropic's limits, 3 new slots (20), the install state machine | S02, S09, S10, S11, S19, S20, S21, S25 |
+| Design pass batch 8: the precedents table, Codex as the sandbox precedent and `doctor --sandbox`, 3 cache kinds, fenced feature-branch landings, 6 generated-artifact gates and timing gates, 3 security rows, `queue.go` and `repomap.go`, runtime state paths, end-to-end race and regression checks | Context, S13, S22, S26, S27, security, §4, §7 |
 
 ## Open items
 
-- **Vet lines:** S01–S14 were approved, but later reviews changed S01, S02, S03, S04, S05, S07, S08, S09, S10, S12 and S14; re-vet those. S15–S19, S23, S24 and S26 changed in the event and config reviews. S16–S27 carry 17 open Vet items, each with a default.
-- **Recovery (deferred, S18):** a WIP commit at every session end, a crash contained to its group, and `resume` continuing unfinished sessions. S15 now decides shutdown, crash capture and worktree removal. S18's current design holds until these are decided.
-- **S01–S04 Vet wording:** 19 Vet lines still read as questions, 9 with no answer; settle them in the re-vet.
-- **Spikes:** the S05 init-line capture, the S16 mid-turn message, and whether a 24 GB machine runs Qwen3.6-27B at 262,144 context, all before phase 4.
-- **Follow-ups:** S16 carries 5 heartbeat and retry items from the S07 review, applied when S16 is vetted.
-- **S16 review on hold:** 5 open issues (retries per task, folding the follow-ups, idle on API links, the mid-turn spike as best-effort, a `paused` exit reason), plus the group clock: 30 min per task plus 30 no longer fits one 60-min session.
-- **Scope answers:** should `scope approve` need a human, since it lets one model widen another model's write access? Default: no, the orchestrator answers.
-- **Config held:** a model registry that keeps past exact IDs (S05); a hash check that refuses runs after a hand edit of `config.json`.
-- **Signing key location (S03):** your decision, needed by phase 8.
+- **Review the 2026-10-08 design pass:** 8 commits on `feat/1.0.0-beta.6`, one per batch, each revertible alone. Every card changed; S01–S14's earlier approval covers the text before this pass, not after it.
+- **Open Vet lines, 3:** S03 signing key location (your decision, needed by phase 8); S19 scope answers (should `scope approve` need a human, since it lets one model widen another model's write access? default: no, the orchestrator answers); S05 model registry keeping past exact IDs (held; the probe's `providers.json` is the registry until a model retires mid-run, which has not happened).
+- **Spikes before phase 4:** the S05 init-line capture without a model turn; whether a 24 GB machine runs Qwen3.6-27B at 262,144 context; and whether `OLLAMA_NUM_PARALLEL` above 1 fits the same machine, which decides if `limits.link_sessions.local` can ever exceed 1.
+- **Spike before phase 7:** the `repo_map` definition patterns for TypeScript, Python and Rust (`embed/langs/`) against 3 real repos; Go's `go/ast` path needs none.
+- **Decisions this pass made for you (walk back any):** `fable` as opt-in only; Haiku 5.5 as light; `check.patch_coverage` 80 blocking for Go only; group wall hard limit 720; `install` flag trim to 8; B2 to lint; 10 lenses; EARS items; the two-pass planner; `--permission-prompts none` in the launch line.

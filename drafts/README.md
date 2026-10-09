@@ -47,6 +47,11 @@ No harness rules appear in any part. The guard (S12), the result schema (S08) an
 | `goal` | the request | — | — | — | R | R | R |
 | `layout` | repo tree, paths only | — | — | — | R | R | R |
 | `backlog` | existing epics and groups | — | — | — | O | — | — |
+| `repo_map` | S25: ranked symbol graph, fitted to 10% of the ceiling | — | O | — | R | R | — |
+| `baseline` | S19: tests failing at the base commit | — | — | O | — | — | — |
+| `lens_rules` | S20: the applicable lenses' rule catalogs | — | R | — | — | — | — |
+
+20 slots. The last 3 were added in the 2026-10-08 design pass.
 
 Merged from beta 5's 19 slot names: `task_id`, `title`, `task_block` and `done_when` become `tasks`; `failure` becomes `checks`; `repo_rules` becomes `repo_context`; `context` and `repo_context` (vague) become `specs` and `callers`; `base` moves into `group`; `existing` becomes `backlog`.
 
