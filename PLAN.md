@@ -513,6 +513,9 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 
 **Repo pin stays:** `<!-- komodo:begin min=1.0.0-beta.6 -->` in `AGENTS.md` covers offline machines and `fresh.auto: false`. Below it, verbs refuse with `run komodo fresh`.
 
+**Pass 2 (performance):** the hourly check is one 1 KB fetch with a 1 s timeout on the 3 verbs that already touch the network; short verbs read `fresh.json` only.
+**Pass 3 (caching):** `latest.json` is cached in `fresh.json` for `fresh.interval`; a download is verified once and kept whole under `versions/`, never re-fetched.
+
 **Vet:**
 - **Hot swap:** approve versioned directories with runs pinned to their own version?
 - **Check points:** check only at session start, run start and `fresh --check`, at most hourly? A machine with neither for days stays on its version until one happens.
@@ -1125,7 +1128,7 @@ Three mechanical checks enforce it:
 - **Every tool call:** checked in-process before it runs, with a table per agent (rows in Part C).
 - **Fails closed:** input it can't parse, an unknown tool or a guard error is a refusal.
 - **Refusals teach:** each refusal names the rule and the allowed alternative.
-- **Refusal limit:** the 3rd refusal under the same rule ends the session (G6).
+- **Refusal limit:** the `guard.refusal_limit` (3rd) refusal under the same rule ends the session (G6).
 - **Inline gate, not an event:** the check runs before the call as direct code (`tool.pre`). A refusal is logged afterward as `tool.denied`.
 - **Orchestrator, any host:** no hook. Rules O1–O7, O9 and O10 are text in the `AGENTS.md` block, rendered from S10's `embed/rules/orchestrator.md`. The harness enforces them on its own side: verbs refuse leased worktrees and critical refs, and human-only verbs need a terminal.
 
@@ -1374,9 +1377,10 @@ Three mechanical checks enforce it:
 | Schema-invalid result | S08 | one re-prompt | 1 | task retry |
 | Result fails the agent's gate (`done_when`, `lint_backlog`) | S08 | the failure goes back into the same session | 2 | `check_fail`, task retry |
 | Reply cut off at the output limit | S08 | "continue" | 1 | `no_result`, task retry |
-| Timeout or idle | S16 | kill, then a fresh session | 3 per task | Blocked |
+| Timeout or idle | S16 | stop, then a fresh session | the agent's `retries` (2) per task | Blocked |
 | 3 refusals under one rule | S12 | end the session | 3 | task retry |
-| `done_when` fails | S19 | task retry | 3 per task | Blocked |
+| `done_when` fails | S19 | task retry | the agent's `retries` (2) per task | Blocked |
+| Regression against the baseline | S19 | back to Build with the failing test's output | `limits.repairs` (3) per group | Blocked: `regression` |
 | Findings or a failed acceptance item | S19, S20 | back to Build, in the task's own session | `limits.repairs` (3) per group | Blocked |
 | Epic gate fails | S20 | the group that last changed each finding's file goes back to Build; a finding with no file blocks the epic | `limits.repairs` (3) per group | Blocked: `epic_gate` |
 | Tester fails an item that Go's 2 reruns pass | S20 | restart the tester once with Go's output | 1 | Blocked: `tester` |
@@ -1483,7 +1487,7 @@ Three mechanical checks enforce it:
 - **Four gates, three of them Go's:** lint and coverage (Check, 0 tokens), success (`done_when` rerun, 0 tokens), regression (baseline diff and impact set, 0 tokens), and the tester's blind pass (model tokens). The tester's brief says which three Go already proved, so it spends its turns on behavior, not on rerunning the suite.
 - **Tester restart:** when Go's 2 reruns pass an item the tester failed, the tester restarts once. Its brief adds one slot with the item, its evidence, and Go's command and output, and its result gives the item a reason code: `env`, `wrong_command`, `flaky` or `real_failure`. A second dispute blocks the group with `tester`, a harness fault that doesn't count against the builder. The ledger records each tester model's false-fail rate.
 - **Back to the builder:** a `not_met` task, a failing check, a blocking finding or a failed acceptance item sends the group back to Build (S14) with the findings.
-- **No bypass:** the reviewer's task list comes from the backlog at the base commit, never from the builder. The builder never writes its own group's backlog files (B2). A builder result that skips a task ID fails the S08 schema check.
+- **No bypass:** the reviewer's task list comes from the backlog at the base commit, never from the builder. The builder can never be given its own group's backlog files, since `doctor backlog` refuses them in `files` (S25). A builder result that skips a task ID fails the S08 schema check.
 - **Epic mode:** at the epic gate (S14), the reviewer returns one verdict per group over the whole epic diff.
 - **Incomplete brief:** `brief_incomplete` blocks the group with `brief`. It is a harness fault and doesn't count against the builder.
 - **Findings:** `submit_finding` takes a rule ID, `file:line` and quoted evidence.
@@ -1509,7 +1513,7 @@ Three mechanical checks enforce it:
 
 | Budget | Value |
 |---|---|
-| Group wall time | 30 min per task plus 30, paused time excluded |
+| Group wall time | tasks × session wall plus 2 × session wall, paused time excluded (S04) |
 | Per agent | wall, idle and retries from `agent.json` (S07) |
 | Per task | `limits.task_attempts` model attempts (S18) |
 | Sessions | a machine-wide pool from `limits.pool_min` (1) to `limits.pool_max` (6), plus `limits.link_sessions.<link>` per link (S14) |
