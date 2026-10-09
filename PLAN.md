@@ -1239,28 +1239,31 @@ Three mechanical checks enforce it:
 - **Heartbeat:** any stream event or tool call counts. Silence starts the idle clock.
 - **Events:** emits `session.start`, `session.idle`, `session.timewarn` and `session.end` with its exit reason. What happens next is `Next()`'s decision (§1 Event model).
 - **Time warning and nudge:** injected through `claude -p --input-format stream-json` (stdin stays open) or the next API turn.
-- **Kill:** a whole-tree kill (S13), then `result.json` gets the exit reason.
-- **Exit reasons:** `done`, `needs_scope`, `check_fail`, `no_result`, `schema_fail`, `timeout`, `idle`, `refusals`, `budget`, `provider`, `billing`, `pause_timeout`, `cancelled`, `crash`.
+- **Stop, then kill:** a stop is SIGINT, which ends the turn and keeps its result; after 30 s, SIGTERM; after 60 s, a whole-tree kill (S13). `result.json` then gets the exit reason. On API links the stop is a context cancel after the current tool call returns.
+- **Exit reasons:** `done`, `needs_scope`, `check_fail`, `no_result`, `schema_fail`, `timeout`, `idle`, `refusals`, `budget`, `provider`, `billing`, `paused`, `pause_timeout`, `cancelled`, `crash`.
+- **Liveness is events, never pings:** the session is alive while its stream produces lines, a tool call is running, or an `api_retry` line arrived within its `retry_delay_ms`. One 15 s timer per session checks wall, idle and the 80% warning; a nudge or kill lands at most 15 s late. On API links the S06 stream-idle timer is the heartbeat.
+- **Windowed timer per task:** a builder's session wall clock is the task's window; the 80% `session.timewarn` is injected as one fixed line, "Finish the current task and stop; 12 minutes remain", and the clock stops while the group is paused.
 
 | Control | Value |
 |---|---|
 | Wall clock | `limits.session_wall_min` (S04): 60 min default, 120 max; warning at 80%; stopped while paused |
-| Idle | 10 min, one nudge, 5-min grace, then kill |
-| Retries | per agent from `agent.json` (S07) |
+| Idle | 10 min with no stream line and no running tool; one nudge, 5-min grace, then stop |
+| Retries | per agent from `agent.json` (S07): timeout or idle restarts the task's session up to `retries` times, inside `limits.task_attempts` |
 | Orphans | process groups on Unix, Job Objects on Windows |
+| Stop ladder | SIGINT, 30 s, SIGTERM, 60 s, tree kill |
 
-**Vet:**
-- **Nudge text:** a fixed line ("Report status or submit now")?
-- **Stream-json mode:** decided in the 2026-10-06 review: yes, stdin stays open (S05 launch). **Spike:** does a message sent mid-turn reach a turn stuck in a tool call, or wait until the turn ends? The docs don't say.
+**Vet:** none open. Decided in the 2026-10-08 design pass:
+- **Nudge text:** one fixed line, "Report status or stop now; the harness will ask for your result".
+- **Stream-json mode:** yes, stdin stays open (S05 launch). The mid-turn delivery question is closed as best effort: the nudge is sent and the 5-min grace covers a turn that only reads it at its end; the proof accepts a late nudge.
+- **Retries per task:** read from `agent.json`, replacing S18's fixed 3.
+- **Idle on API links:** S06's stream-idle timer; a running tool call pauses it.
+- **`paused` exit reason:** added; a session halted by a provider limit with a resume handle exits `paused`, not `provider`.
+- **Lease renewal every 5 min,** by the group's `Drive`, not on every event (S15).
 
-**Follow-up (from the S07 review, apply when S16 is vetted):**
-- **Never ping the model:** liveness comes only from events the engine already receives.
-- **One 15 s timer per session:** it checks wall, idle and the 80% warning, so a nudge or kill lands at most 15 s late.
-- **A running tool counts as alive:** the idle clock pauses during a tool call; S13's 10-min `run` timeout still applies.
-- **Lease renewal every 5 min:** not on every event.
-- **Retries:** S18's "3 per task" for timeout or idle should read the agent's `retries` from `agent.json` (S07).
+**Pass 2 (performance):** one timer goroutine per session, not per check; stream parsing is line-based and allocates nothing per token. With `pool_max` 6, supervision costs under 1% of one core.
+**Pass 3 (caching):** the brief is written once to `<session>/brief.md` and piped from that file, so a resume or retry never rebuilds it unless a slot changed.
 
-**Proof:** a forced hang ends with `idle` after the nudge and grace. A forced long task ends with `timeout`, leaving 0 orphan processes.
+**Proof:** a forced hang ends with `idle` after the nudge and grace. A forced long task ends with `timeout`, leaving 0 orphan processes. A SIGINT stop during a tool call yields a `result.json` with the turn's partial result and no orphan. A faked provider halt exits `paused` with a resume handle in `state.json`.
 
 ### S17 · Scheduler and job templates (new)
 
@@ -1270,10 +1273,11 @@ Three mechanical checks enforce it:
 
 **Does:**
 - **Job template:** names an agent subset, its brief slots and an interval, never limits: a job run uses `komodo config` limits like any run (S04). It is decoded strictly like `agent.json`.
-- **No daemon:** `komodo jobs tick` is idempotent and runs only jobs that are due. Each due job starts a run with id `job-<name>-<n>`, with its own ledger rows and report; `status --wait` takes that id.
-- **Callers:** a launchd, cron or Task Scheduler entry from `install --schedule`. Claude Code `/loop` also works, but spends a model turn on every tick.
+- **No daemon:** `komodo jobs tick` is idempotent and is one engine step: it enqueues due jobs into the S14 work queue, fires due `wait_until` timers (S05), and drives the pool once. Each due job starts a run with id `job-<name>-<n>`, with its own ledger rows and report; `status --wait` takes that id. A machine with no live engine still makes progress on timers through a tick.
+- **Callers:** a launchd, cron or Task Scheduler entry from `install --schedule`, every 5 minutes. Claude Code `/loop` also works, but spends a model turn on every tick.
 - **Saved counters:** `jobs/state.json` holds `attempt`, `next_at`, `last_fail_hash` and `running`.
-- **Overlap:** a running job holds a lease, so the next tick skips it and logs the skip.
+- **Overlap through the ledger:** a running job holds lease `job-<name>` with a fence like any group (S15), so the next tick's queue item is refused as a duplicate and the skip is logged. There is no second overlap rule.
+- **Queue position:** jobs enter the same queue as groups with `priority: normal`; a job never preempts a group, and the fair-share rule treats each job as its own repo so a busy repo can't starve it (S14).
 - **Events:** a due job emits `job.due`, and a failed one `job.fail`. The counters stay in `jobs/state.json`.
 
 ```json
@@ -1293,9 +1297,12 @@ Three mechanical checks enforce it:
 
 **Vet:**
 - **OS schedulers:** decided in the 2026-10-06 review: yes, opt-in `install --schedule` in beta 6; `/loop` is the fallback.
-- **Shipped jobs:** ship any default jobs? Default: none; one example under `templates/`.
+- **Shipped jobs:** decided: none shipped; one example, `templates/jobs/nightly-review.json`.
 
-**Proof:** 2 ticks in one window run the job once. 3 failures end in Blocked and wake `wait`.
+**Pass 2 (performance):** a tick with nothing due exits under 50 ms and makes no network call; it reads `jobs/state.json`, the queue directory and the timers file only.
+**Pass 3 (caching):** none; a tick holds no state beyond the counters.
+
+**Proof:** 2 ticks in one window run the job once. 3 failures end in Blocked and wake `wait`. A tick with no live engine fires a due `wait_until` and resumes the run. A job due while its previous run holds `job-<name>` is skipped and logged once.
 
 ### S18 · Error recovery
 
