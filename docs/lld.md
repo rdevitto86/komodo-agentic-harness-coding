@@ -1,29 +1,309 @@
 # Komodo 1.0.0-beta.6 — Low-Level Design
 
-## 0. Document control
+## 1. Table of contents
 
-| Field | Value |
+- [2. Glossary](#2-glossary)
+- [3. Document metadata](#3-document-metadata)
+  - [3.1 Owners](#31-owners)
+  - [3.2 Current controls](#32-current-controls)
+  - [3.3 Revision history](#33-revision-history)
+  - [3.4 Related documents](#34-related-documents)
+- [4. Introduction](#4-introduction)
+  - [4.1 Purpose](#41-purpose)
+  - [4.2 Scope](#42-scope)
+  - [4.3 How to read this document](#43-how-to-read-this-document)
+  - [4.4 Relationship to the HLD](#44-relationship-to-the-hld)
+- [5. Design constraints and conventions](#5-design-constraints-and-conventions)
+  - [5.1 Constraints](#51-constraints)
+  - [5.2 Naming and identifiers](#52-naming-and-identifiers)
+  - [5.3 Document conventions](#53-document-conventions)
+- [6. Code structure](#6-code-structure)
+  - [6.1 Packages](#61-packages)
+  - [6.2 Import order](#62-import-order)
+  - [6.3 Embedded assets (`embed/`, compiled into the binary)](#63-embedded-assets-embed-compiled-into-the-binary)
+  - [6.4 Runtime state](#64-runtime-state)
+- [7. Command-line interface](#7-command-line-interface)
+  - [7.1 Processing pipeline](#71-processing-pipeline)
+  - [7.2 Envelope and exit codes](#72-envelope-and-exit-codes)
+  - [7.3 Global flags](#73-global-flags)
+  - [7.4 Verbs](#74-verbs)
+  - [7.5 Tier enforcement](#75-tier-enforcement)
+  - [7.6 Performance](#76-performance)
+- [8. Configuration](#8-configuration)
+  - [8.1 Layers and write path](#81-layers-and-write-path)
+  - [8.2 Flat keys (33)](#82-flat-keys-33)
+  - [8.3 Agent group (`komodo config agent <name> …`)](#83-agent-group-komodo-config-agent-name-)
+  - [8.4 Endpoint group (`komodo config endpoint <name> …`)](#84-endpoint-group-komodo-config-endpoint-name-)
+  - [8.5 Environment variables](#85-environment-variables)
+  - [8.6 Command detection](#86-command-detection)
+  - [8.7 Capacity profile per link](#87-capacity-profile-per-link)
+- [9. Event model](#9-event-model)
+  - [9.1 Envelope](#91-envelope)
+  - [9.2 Catalog (32 types)](#92-catalog-32-types)
+  - [9.3 Journals and snapshots](#93-journals-and-snapshots)
+  - [9.4 The outbox](#94-the-outbox)
+  - [9.5 Epochs](#95-epochs)
+- [10. Group state machine](#10-group-state-machine)
+  - [10.1 Transitions](#101-transitions)
+  - [10.2 Paused versus Blocked](#102-paused-versus-blocked)
+  - [10.3 Block reasons](#103-block-reasons)
+- [11. Orchestration engine internals](#11-orchestration-engine-internals)
+  - [11.1 Concurrency model](#111-concurrency-model)
+  - [11.2 Work queue](#112-work-queue)
+  - [11.3 Session pool](#113-session-pool)
+  - [11.4 Run order and convergence](#114-run-order-and-convergence)
+  - [11.5 Run flags](#115-run-flags)
+- [12. Workspace and leases](#12-workspace-and-leases)
+  - [12.1 Worktrees](#121-worktrees)
+  - [12.2 Lease](#122-lease)
+  - [12.3 Fence](#123-fence)
+  - [12.4 Saved work](#124-saved-work)
+  - [12.5 Shutdown and the parent guard](#125-shutdown-and-the-parent-guard)
+  - [12.6 Startup sweep](#126-startup-sweep)
+- [13. Session supervisor](#13-session-supervisor)
+  - [13.1 Lifecycle](#131-lifecycle)
+  - [13.2 Controls](#132-controls)
+  - [13.3 Exit reasons](#133-exit-reasons)
+  - [13.4 Resume](#134-resume)
+- [14. Agent registry](#14-agent-registry)
+  - [14.1 `agent.json` (what Go reads)](#141-agentjson-what-go-reads)
+  - [14.2 `prompt.md` (what the model reads)](#142-promptmd-what-the-model-reads)
+  - [14.3 Roster and limits](#143-roster-and-limits)
+- [15. Tool runtime](#15-tool-runtime)
+  - [15.1 Registry and transports](#151-registry-and-transports)
+  - [15.2 Harness tool loop (API links)](#152-harness-tool-loop-api-links)
+  - [15.3 Tools and caps](#153-tools-and-caps)
+  - [15.4 Per-agent tool matrix](#154-per-agent-tool-matrix)
+  - [15.5 Host facts the server is built against (Claude Code 2.1.295)](#155-host-facts-the-server-is-built-against-claude-code-21295)
+- [16. Provider adapters](#16-provider-adapters)
+  - [16.1 Interface](#161-interface)
+  - [16.2 Links](#162-links)
+  - [16.3 Schema enforcement per link](#163-schema-enforcement-per-link)
+  - [16.4 Measured context](#164-measured-context)
+  - [16.5 Model catalog (`embed/models.json`, about 10 entries)](#165-model-catalog-embedmodelsjson-about-10-entries)
+  - [16.6 Failover chain](#166-failover-chain)
+  - [16.7 Billing check (fails closed)](#167-billing-check-fails-closed)
+  - [16.8 Limits, pauses and warnings](#168-limits-pauses-and-warnings)
+  - [16.9 `claude-cli` launch line](#169-claude-cli-launch-line)
+- [17. HTTP stack](#17-http-stack)
+- [18. Skill loader](#18-skill-loader)
+- [19. Rules and output contract](#19-rules-and-output-contract)
+  - [19.1 Where rules are enforced](#191-where-rules-are-enforced)
+  - [19.2 Output mapping (`embed/output/`)](#192-output-mapping-embedoutput)
+  - [19.3 Template pipeline](#193-template-pipeline)
+  - [19.4 Code list](#194-code-list)
+  - [19.5 No leaks](#195-no-leaks)
+- [20. Brief builder](#20-brief-builder)
+  - [20.1 Assembly order (most stable first)](#201-assembly-order-most-stable-first)
+  - [20.2 Slots (20)](#202-slots-20)
+  - [20.3 Ceiling per link](#203-ceiling-per-link)
+  - [20.4 Context rules](#204-context-rules)
+- [21. Guardrails](#21-guardrails)
+  - [21.1 Policy row schema (`embed/policy.json`)](#211-policy-row-schema-embedpolicyjson)
+  - [21.2 Rows every agent inherits](#212-rows-every-agent-inherits)
+  - [21.3 Run and builder rows](#213-run-and-builder-rows)
+  - [21.4 Orchestrator rows (text in `AGENTS.md`, any host)](#214-orchestrator-rows-text-in-agentsmd-any-host)
+  - [21.5 Mechanics](#215-mechanics)
+- [22. Sandbox and process control](#22-sandbox-and-process-control)
+  - [22.1 Three layers](#221-three-layers)
+  - [22.2 Per OS](#222-per-os)
+  - [22.3 Caches and toolchains](#223-caches-and-toolchains)
+  - [22.4 Read-only agents' `run`](#224-read-only-agents-run)
+  - [22.5 Test sandboxes and copies](#225-test-sandboxes-and-copies)
+  - [22.6 Docker backend (native Windows)](#226-docker-backend-native-windows)
+- [23. Scheduler and job templates](#23-scheduler-and-job-templates)
+- [24. Check](#24-check)
+  - [24.1 Scope requests](#241-scope-requests)
+- [25. Review and the tester](#25-review-and-the-tester)
+  - [25.1 Lenses](#251-lenses)
+  - [25.2 Mechanics](#252-mechanics)
+  - [25.3 The tester](#253-the-tester)
+- [26. Error recovery](#26-error-recovery)
+  - [26.1 Failure table](#261-failure-table)
+  - [26.2 Rules](#262-rules)
+- [27. Token and resource management](#27-token-and-resource-management)
+- [28. Cache store](#28-cache-store)
+- [29. Runtime observability](#29-runtime-observability)
+  - [29.1 Ledger views](#291-ledger-views)
+  - [29.2 Scorecard (`status --metrics`)](#292-scorecard-status---metrics)
+  - [29.3 Live views](#293-live-views)
+- [30. Event bus](#30-event-bus)
+- [31. Backlog and planning](#31-backlog-and-planning)
+  - [31.1 Grammar](#311-grammar)
+  - [31.2 Lint (`komodo doctor backlog`)](#312-lint-komodo-doctor-backlog)
+  - [31.3 Planner](#313-planner)
+- [32. Ship and release](#32-ship-and-release)
+- [33. Installer](#33-installer)
+  - [33.1 Steps](#331-steps)
+  - [33.2 Provider probe](#332-provider-probe)
+  - [33.3 The Komodo block in `AGENTS.md`](#333-the-komodo-block-in-agentsmd)
+  - [33.4 Bootstrap](#334-bootstrap)
+- [34. Binary lifecycle](#34-binary-lifecycle)
+- [35. Gate and self-checks (`komodo gate`, Komodo repo only)](#35-gate-and-self-checks-komodo-gate-komodo-repo-only)
+- [36. Edge cases](#36-edge-cases)
+- [37. Verification plan](#37-verification-plan)
+- [38. Cutover from beta 5](#38-cutover-from-beta-5)
+- [39. Gap register](#39-gap-register)
+- [Appendix A. Traceability to the plan](#appendix-a-traceability-to-the-plan)
+- [Appendix B. References](#appendix-b-references)
+
+---
+
+## 2. Glossary
+
+| Term | Meaning |
+|---|---|
+| Harness | The `komodo` binary: the engine that plans, builds, checks, reviews and ships code using AI model sessions as workers. |
+| Orchestrator | The interactive AI session that drives the harness through CLI verbs. Claude Code in beta 6. It never edits code itself. |
+| Worker, agent | A stateless model session with a private toolset. Seven agents exist: planner, architect, reviewer, builder, researcher, tester, scout. |
+| Session | One fresh model conversation for one task. It has a brief, a tool server, a sandbox profile and a 60-minute wall clock. |
+| Epic, group, task | The backlog hierarchy: an epic holds task groups; a group holds up to 8 tasks; a task names at most 5 files. |
+| Stage | One of five pipeline steps a group moves through: Intake, Build, Check, Verify, Ship. Paused and Blocked are holding states. |
+| Event | A typed fact the engine records, such as `task.done`. Thirty-two types exist. |
+| Journal | The append-only event file per group. State is a replayable product of it. |
+| `Next()` | The one pure function that turns (state, event) into (new state, actions, follow-on events). Nothing else changes group state. |
+| Outbox | The journal entries `action.start` and `action.done` that bracket every side effect so a crash can replay it safely. |
+| Epoch | An integer that rises on every stage entry. A session event carrying an older epoch is stale and ignored. |
+| Lease | A per-group lock file on the machine, held from Intake to landing, renewed every 5 minutes, expiring 2 hours after the last renewal. |
+| Fence | A monotonic integer beside the lease. Every git write carries it, and git's compare-and-swap refuses a stale holder. |
+| Worktree | A detached git checkout per group under `~/.komodo/wt/`, where the builder works. |
+| Hidden ref | `refs/komodo/groups/<group>`, where the engine saves every group commit. Never pushed, hidden from `git branch`. |
+| Link | A way to reach a model: `claude-cli`, `anthropic-api`, `http:<name>`, and later `codex-cli`, `openai-api`. |
+| Weight | An agent's model size: heavy, standard or light. Maps to Opus, Sonnet or Haiku on Claude links. |
+| Chain | An agent's ordered list of links. Fixed in the agent's file, always ending in a free `http:` endpoint. |
+| Backstop | The free open-source `http:` endpoint every chain ends in. Mandatory. |
+| Cost class | `subscription`, `free` or `paid`, decided mechanically per link before each session. |
+| Capacity profile | `{ctx, slots, cost_class, effort}` derived per link before each session; it sizes the brief and the pool take. |
+| Brief | The prompt a worker receives: tools, role, repo context, standards, task. Assembled from 20 typed slots. |
+| Slot | One named input to a brief, required or optional per agent. |
+| Skill | A Markdown standards document embedded in the binary, preinjected by file globs or pulled on demand. |
+| Lens | A reviewer rule catalog applied by file scope. Ten exist. |
+| Finding | A reviewer claim with a rule ID, `file:line` and a quoted evidence line that Go verifies. |
+| EARS | The acceptance-item grammar: `WHEN <event> THE SYSTEM SHALL <response>`, with `IF` and `WHILE` forms. |
+| Check | The zero-token stage that reruns `done_when`, scope, secrets, impact tests, baseline diff and coverage. |
+| Verify | The stage where the reviewer and the tester run at once on the same commit. |
+| Pool slot | One of 1 to 6 machine-wide session slots that only builder, reviewer and tester sessions take. |
+| Repo id | The normalized origin URL, or the git common dir path when there is no remote. Names worktrees, leases and caches. |
+| Envelope | The JSON reply of every verb: `{v, ok, verdict, report, data, error}`. |
+| Guard | The in-process, fail-closed check every tool call passes before it runs. |
+| Sandbox | The OS-level confinement every `run` command executes in: seatbelt, bwrap or Docker. |
+| Gap | A fact the plan has not verified or a decision not yet confirmed, tracked as `G-NN` in the gap register. |
+| arc42 | The 12-section architecture documentation template this document's section set follows. |
+
+---
+
+## 3. Document metadata
+
+### 3.1 Owners
+
+| Role | Who | Responsibility |
+|---|---|---|
+| Document owner | Komodo domain architect (CEO) | Approves the architecture; decides every open gap |
+| Author | Technical lead | Keeps the document true to the plan and the code |
+| Reviewers | Domain architect, per component | Signs off component by component before phase 1 ends |
+
+### 3.2 Current controls
+
+| Control | Value |
 |---|---|
 | Document | Low-Level Design (LLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
 | Version | 0.1, draft |
-| Status | Awaiting architecture sign-off by the domain architect |
+| Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | `PLAN.md` at commit `ba4ff823` on `feat/1.0.0-beta.6`; `drafts/README.md` for brief slots |
-| Companion | `docs/hld.md` (High-Level Design) |
-| Owner | Komodo domain architect (CEO) |
-| Author | Technical lead |
+| Change control | Patches only, smallest span; a moved design decision adds a Review changes row in `PLAN.md` until phase 1 removes it |
+| Approval control | No phase 2 code starts until the owner has signed off every component |
+| Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (`docs/lld.md` §39); the gate fails a tag with no closing task |
 
-**Conventions.**
-- `[PENDING G-NN]` marks a fact not yet verified or a decision not yet confirmed. §34 lists every gap with its closing phase.
-- Verbs, keys, files and codes are written as code. Defaults are stated once, in the table that owns them.
-- "Writers" means any agent with `edit` or `write`; "runners" means any agent with `run`.
+### 3.3 Revision history
+
+| Version | Date | Author | Change |
+|---|---|---|---|
+| 0.1 | 2026-10-09 | Technical lead | First draft from `PLAN.md`; enterprise section set; placeholders for open gaps |
+
+### 3.4 Related documents
+
+| Document | Relationship |
+|---|---|
+| `docs/hld.md` | The High-Level Design this document details |
+| `PLAN.md` | Interim source of truth; removed once phase 1 lands |
+| `docs/prd.md` | Product requirements, phase 1 deliverable |
+| `docs/decisions/0001-standalone-harness.md` | First architecture decision record, phase 1 deliverable |
+| Appendix B | External references |
+
+**Placeholder convention.** Text in the form `[PENDING G-NN]` marks a fact the plan has not yet verified or a decision the owner has not yet confirmed. No placeholder hides a proposal; each stands in for content that is decided but not yet proven.
+
 
 ---
 
-## 1. Code structure
+## 4. Introduction
 
-### 1.1 Packages
+### 4.1 Purpose
+
+This document specifies how each component of Komodo beta 6 is built: its files, schemas, algorithms, limits, failure handling and edge cases. It is the implementation contract for phases 2 to 9 and the source the reviewer's `spec` lens checks a diff against.
+
+### 4.2 Scope
+
+Every component in the HLD's building block view, at the level of file paths, field tables, state transitions, command lines and numeric limits. Items deferred to a later minor version appear only where a beta 6 interface must already account for them (the OpenAI links, enterprise custody targets).
+
+### 4.3 How to read this document
+
+| Reader | Start at |
+|---|---|
+| Owner reviewing a component | The component's section (Appendix A maps plan IDs to sections), then §36 edge cases |
+| Builder of a task group | The component's section, §9 code structure, §35 gate checks |
+| Reviewer applying the `spec` lens | The section a task cites, plus §26 error recovery for the row it touches |
+| Operator diagnosing a run | §10 state machine, §26 error recovery, §29 observability, §36 edge cases |
+
+### 4.4 Relationship to the HLD
+
+The HLD states what each component is for and how the components cooperate. This document states how each one works inside. Where both describe the same mechanism, this document carries the numbers and the HLD carries the rationale; a conflict between them is a defect to fix in both.
+
+---
+
+## 5. Design constraints and conventions
+
+### 5.1 Constraints
+
+| Constraint | Statement |
+|---|---|
+| Dependencies | Standard library only; `go.mod` lists no modules |
+| Packages | One package per layer, 11 in all; a new package needs a new layer |
+| Files | A file splits at about 600 lines; `_test.go` sits beside its source; about 85 files |
+| Imports | One downward order, enforced by the gate; higher needs enter as parameters |
+| Embedded assets | Everything a model reads compiles into the binary with `//go:embed`; nothing is parsed from disk at run time |
+| Strict decoding | Every JSON the binary reads from its own assets uses `DisallowUnknownFields` and a schema version `v` |
+| Side effects | Every engine action is journaled and idempotent by a declared key; nothing else changes group state |
+| Security rows | Never configuration; the only tunable is the refusal count |
+
+### 5.2 Naming and identifiers
+
+| Item | Convention |
+|---|---|
+| Config keys | Dotted, lower case: `limits.pool_max`; groups as `agents.<name>` and `endpoints.<name>` |
+| Event types | `family.name`: `session.end`, `lease.lost` |
+| Result and reason codes | Snake case from one enum: `needs_scope`, `pause_timeout` |
+| Guard rows | `G1`…`G6`, `R1`, `B1`, `O1`…`O10` |
+| Rule IDs | `<lens>.<n>` for lens rules; `std.<skill>.<n>` for standards rules |
+| Branches | `komodo/<epic>` and `komodo/<epic>/<group>` |
+| Hidden refs | `refs/komodo/groups/<group>` |
+| Runs | A run id from `run`; `job-<name>-<n>` for scheduled jobs |
+| Sessions | A UUID chosen by Komodo |
+| Gaps | `G-NN`, one row each in the gap register |
+
+### 5.3 Document conventions
+
+- `[PENDING G-NN]` marks a fact not yet verified or a decision not yet confirmed; the gap register (§39) lists every one with its closing phase.
+- Defaults are stated once, in the table that owns them; other sections refer to the key.
+- "Writers" means any agent with `edit` or `write`; "runners" means any agent with `run`.
+- Numbers are the design's targets; a number marked `[PENDING G-19]` is unmeasured.
+
+---
+
+## 6. Code structure
+
+### 6.1 Packages
 
 | Package | Layer | Holds |
 |---|---|---|
@@ -42,11 +322,11 @@
 
 Rules: a file splits at about 600 lines; a new package needs a new layer; `_test.go` files sit next to their sources. About 85 files in 11 packages.
 
-### 1.2 Import order
+### 6.2 Import order
 
 `cli` → `engine` → `quality` → `host` → `repo` → `provider` → `tools` → `ops` → `agent` → `safety` → `core`. A package may skip levels. Higher needs come in as parameters. The gate refuses any import that points up.
 
-### 1.3 Embedded assets (`embed/`, compiled into the binary)
+### 6.3 Embedded assets (`embed/`, compiled into the binary)
 
 | Path | Contents |
 |---|---|
@@ -62,7 +342,7 @@ Rules: a file splits at about 600 lines; a new package needs a new layer; `_test
 | `models.json` | Default models per weight and link, Claude windows and prices |
 | `policy.json` | Guard rows with scopes, steering phrases |
 
-### 1.4 Runtime state
+### 6.4 Runtime state
 
 ```
 <git-common-dir>/komodo/
@@ -88,9 +368,9 @@ Rules: a file splits at about 600 lines; a new package needs a new layer; `_test
 
 ---
 
-## 2. Command-line interface
+## 7. Command-line interface
 
-### 2.1 Processing pipeline
+### 7.1 Processing pipeline
 
 | # | Step | Rule |
 |---|---|---|
@@ -102,7 +382,7 @@ Rules: a file splits at about 600 lines; a new package needs a new layer; `_test
 
 A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from step 4. Every writing verb is idempotent: a repeat with the same arguments reports `0 changes`.
 
-### 2.2 Envelope and exit codes
+### 7.2 Envelope and exit codes
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -121,7 +401,7 @@ A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from st
 | 3 | blocked |
 | 4 | internal |
 
-### 2.3 Global flags
+### 7.3 Global flags
 
 | Flag | Meaning | Default |
 |---|---|---|
@@ -133,7 +413,7 @@ A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from st
 | `-h`, `--help` | Same as `help <verb>` | — |
 | `--dry-run` | Every writing verb: print each write, make none | — |
 
-### 2.4 Verbs
+### 7.4 Verbs
 
 | Verb | Does | Flags | Shared |
 |---|---|---|---|
@@ -167,21 +447,21 @@ Internal tier (`komodo internal <verb>`, listed only in `help --all`):
 | `internal tools --agent <a> --session <id>` | The engine, for `claude -p` | The private MCP server for one session, over stdio |
 | `internal fresh-bg` | Any verb, only when a newer version is known | The detached updater: download, verify, swap |
 
-### 2.5 Tier enforcement
+### 7.5 Tier enforcement
 
 - A terminal-only verb refuses with exit 1 unless it has a controlling terminal. Agent shells have none: Claude Code's Bash tool cannot open `/dev/tty`.
 - No host hooks enforce tiers. Every host gets the same `AGENTS.md` rules and the same verbs. Rule O7 forbids faking a terminal; nothing enforces it.
 - Pin check first: a repo whose `AGENTS.md` pin (`min=`) is above this binary refuses every verb except `help`, `version`, `fresh`, `install` and `doctor`, with the fix line `run komodo fresh`.
 
-### 2.6 Performance
+### 7.6 Performance
 
 Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with no network and no repo scan beyond marker stats. `help --json` and the `komodo` skill are generated at build and embedded. `[PENDING G-19]` the budget is a target until gate timing measures it in phase 6.
 
 ---
 
-## 3. Configuration
+## 8. Configuration
 
-### 3.1 Layers and write path
+### 8.1 Layers and write path
 
 | # | Layer | Where | Power |
 |---|---|---|---|
@@ -197,7 +477,7 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 - Agents cannot touch it: `~/.komodo/**` is protected by G3 and every write needs a terminal.
 - Repo id (names worktrees, leases and caches, never config): the normalized origin URL such as `github.com/rdevitto86/komodo-agentic-factory-coding`; with no remote, the git common dir path. Every worktree of a repo shares one id.
 
-### 3.2 Flat keys (33)
+### 8.2 Flat keys (33)
 
 | Key | Default | Hard limit | Meaning |
 |---|---|---|---|
@@ -237,7 +517,7 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 
 Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded by the Max 5-hour window, not the API; `providers.ctx_floor` 262,144 is the native window of the ~27B open models targeted and catches Ollama's 4,096 default; `limits.session_wall_min` 60 bounds one task with 6 attempts inside a 6-hour group; `limits.task_attempts` 6 covers 2 fresh sessions with 2 re-prompts each; `warn.usd_per_run` 5 warns before a second ~$7 group on Opus 5.5; `limits.group_tokens` 2,000,000 is 1.7× the expected worst case of 1.2M. `[PENDING G-07]` the real Max 5-hour window against `link_sessions.claude-cli` 3, measured over the first 20 groups.
 
-### 3.3 Agent group (`komodo config agent <name> …`)
+### 8.3 Agent group (`komodo config agent <name> …`)
 
 | Key | Default | Hard limit | Meaning |
 |---|---|---|---|
@@ -246,7 +526,7 @@ Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded 
 | `session_idle_min` | `limits.session_idle_min` | 30 | Same |
 | `retries` | 2 | 3 | Retries per session |
 
-### 3.4 Endpoint group (`komodo config endpoint <name> …`)
+### 8.4 Endpoint group (`komodo config endpoint <name> …`)
 
 | Key | Meaning |
 |---|---|
@@ -259,7 +539,7 @@ Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded 
 
 Default: one endpoint, `local`, at `http://localhost:11434/v1`, used only when it answers the probe.
 
-### 3.5 Environment variables
+### 8.5 Environment variables
 
 | Variable | Use |
 |---|---|
@@ -268,7 +548,7 @@ Default: one endpoint, `local`, at `http://localhost:11434/v1`, used only when i
 
 No other environment variable configures Komodo. `CI=true` disables background fresh.
 
-### 3.6 Command detection
+### 8.6 Command detection
 
 Cached by the hash of the marker files.
 
@@ -287,15 +567,15 @@ Cached by the hash of the marker files.
 - `setup` is the engine's: Intake runs it once per worktree with network on; no agent can run it.
 - With no detected commands, `run` refuses and names the marker files it looked for; read-only agents still run.
 
-### 3.7 Capacity profile per link
+### 8.7 Capacity profile per link
 
-Before each session the engine derives `{ctx, slots, cost_class, effort}` for the link it is about to use: `ctx` measured (§11.4), `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight. The brief builder sizes from `ctx`, the engine takes a slot from `slots`, and budgets cache by the whole profile. Swapping Claude for a local or OpenAI link changes the profile, never the engine.
+Before each session the engine derives `{ctx, slots, cost_class, effort}` for the link it is about to use: `ctx` measured (§16.4), `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight. The brief builder sizes from `ctx`, the engine takes a slot from `slots`, and budgets cache by the whole profile. Swapping Claude for a local or OpenAI link changes the profile, never the engine.
 
 ---
 
-## 4. Event model
+## 9. Event model
 
-### 4.1 Envelope
+### 9.1 Envelope
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -307,7 +587,7 @@ Before each session the engine derives `{ctx, slots, cost_class, effort}` for th
 | `type`, `reason`, `data` | string, string, object | What happened; `reason` from the code list; `data` typed per event |
 | `crc` | uint32 | CRC-32 of the line before it; replay drops a torn last line and emits `journal.truncated` once |
 
-### 4.2 Catalog (32 types)
+### 9.2 Catalog (32 types)
 
 | Family | Types | Emitted by |
 |---|---|---|
@@ -321,7 +601,7 @@ Before each session the engine derives `{ctx, slots, cost_class, effort}` for th
 
 Each type's `data` is a Go struct. The build generates `embed/events.schema.json` from the enum; `help --json` serves it as `events`; the gate fails when the two disagree.
 
-### 4.3 Journals and snapshots
+### 9.3 Journals and snapshots
 
 | Item | Rule |
 |---|---|
@@ -331,7 +611,7 @@ Each type's `data` is a Go struct. The build generates `embed/events.schema.json
 | Replay | From the snapshot, never from `seq` 0; cost bounded by 50 events; a 10,000-event replay must finish under 1 s `[PENDING G-19]` |
 | Torn line | CRC mismatch on the last line drops it and emits `journal.truncated` once |
 
-### 4.4 The outbox
+### 9.4 The outbox
 
 `Next()` returns actions; `Drive` appends `action.start {id, kind}` before running one and `action.done` after. `id = sha256(seq, kind, args)`. On replay a done action is skipped and a started one reruns. The gate fails an action kind missing from this table.
 
@@ -347,15 +627,15 @@ Each type's `data` is a Go struct. The build generates `embed/events.schema.json
 | `scope_change` | `(group, sorted paths)` | Adding a path twice is one path |
 | `notify` | Event `seq` | A wake is a file touch |
 
-### 4.5 Epochs
+### 9.5 Epochs
 
 Every spawn carries the stage's `epoch`, an integer that rises on each stage entry. A session event whose epoch is older than the current stage's is journaled with `stale: true` and `Next()` ignores it. Returns to Build raise the epoch, so a cancelled Verify session's late result cannot move the stage twice.
 
 ---
 
-## 5. Group state machine
+## 10. Group state machine
 
-### 5.1 Transitions
+### 10.1 Transitions
 
 | From | Event | To | Condition |
 |---|---|---|---|
@@ -370,27 +650,27 @@ Every spawn carries the stage's `epoch`, an integer that rises on each stage ent
 | Build or Verify | `session.end` reason `paused` | Paused | No allowed link left |
 | Paused | `timer.due` | Build or Verify | The provider's reset time passed |
 | Paused | `pause_timeout` | Blocked | `limits.pause_max_min` reached; WIP commit kept |
-| Build or Verify | A bound is hit | Blocked | See §21 |
+| Build or Verify | A bound is hit | Blocked | See §26 |
 | Blocked | `resume` | Build | A person or the orchestrator |
 
 A table test enumerates every (stage, event) pair, including stale ones; the four Verify orderings each move the stage exactly once.
 
-### 5.2 Paused versus Blocked
+### 10.2 Paused versus Blocked
 
 | State | Waits on | Pool slot | Lease and worktree | Wall clocks | Ends by |
 |---|---|---|---|---|---|
 | Paused | A ledger timer (`wait_until`) | Returned | Kept | Stopped | The timer, `resume`, or `pause_max_min` |
 | Blocked | A person or the orchestrator | Returned | Kept (sweep skips `needs_scope`) | Stopped | `resume`, `scope approve|deny`, `abandon` |
 
-### 5.3 Block reasons
+### 10.3 Block reasons
 
 A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `pause_timeout`, `paid_refused`, `regression`, `epic_gate`, `tester`, `flaky`, `dependency`, `integration`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `crash`, `lint`, `brief`, plus the unnamed Blocked of exhausted retries, repairs, flaps and job backoff. A group blocked 3 times for one reason is flagged `needs redesign` in `status`.
 
 ---
 
-## 6. Orchestration engine internals
+## 11. Orchestration engine internals
 
-### 6.1 Concurrency model
+### 11.1 Concurrency model
 
 | Element | Rule |
 |---|---|
@@ -400,7 +680,7 @@ A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `p
 | Run goroutine | Builds the DAG, enqueues ready groups, reaps finished `Drive`s; holds no group state |
 | Panic containment | Every goroutine starts through one panic-catching helper; a panic in one `Drive` emits `group.blocked crash` for that group alone |
 
-### 6.2 Work queue
+### 11.2 Work queue
 
 - Path: `~/.komodo/state/queue/<repo-id>.<kind>.<id>.json`, one create-only file per ready group or due job.
 - Shape: `{kind: group|job, repo, id, priority, enqueued_at}`.
@@ -408,7 +688,7 @@ A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `p
 - Taking a pool slot deletes the file and writes the lease, in that order. A crash between the two leaves an item the sweep re-enqueues, never a lost one.
 - Pick order: `priority: high` first; fair share across repos (round-robin when 2 or more repos have ready items; each job counts as its own repo); longest remaining chain weighted by task count; most groups unblocked; backlog ID order.
 
-### 6.3 Session pool
+### 11.3 Session pool
 
 | Rule | Detail |
 |---|---|
@@ -420,7 +700,7 @@ A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `p
 | Files | Pool and link slots are lock files freed when their pid dies |
 | No idle worktrees | Intake runs just before a group's first session takes a slot; the next ready group's Intake starts while the current one's first session loads |
 
-### 6.4 Run order and convergence
+### 11.4 Run order and convergence
 
 | Rule | Detail |
 |---|---|
@@ -435,25 +715,25 @@ A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `p
 | Epic gate | After the last landing: reviewer and tester once over the whole epic diff; a finding goes to the group that last changed its file; a finding with no file blocks the epic with `epic_gate` |
 | Inside a group | Tasks run one after another in the group worktree; one builder per group; independent tasks belong in separate groups |
 
-### 6.5 Run flags
+### 11.5 Run flags
 
 `--stage <stage>` runs one stage. There is no `--mode`, `--set`, `--max-parallel`, `--budget-tokens`, `--detach` or `--until`; `run` always detaches, and limits come only from `komodo config`.
 
 ---
 
-## 7. Workspace and leases
+## 12. Workspace and leases
 
-### 7.1 Worktrees
+### 12.1 Worktrees
 
 | Item | Rule |
 |---|---|
 | Location | `~/.komodo/wt/<repo-id>/<group>/`, detached, shared by every clone; no path contains `.git` |
 | Cut | `git worktree add --detach` from the epic branch tip, about 1 s |
-| Tester worktree | A throwaway one per Verify at the same commit, dependencies copied per §19.5, removed when Verify ends; reuses the builder's object store |
+| Tester worktree | A throwaway one per Verify at the same commit, dependencies copied per §22.5, removed when Verify ends; reuses the builder's object store |
 | Windows | Names are short hashes to stay under `MAX_PATH`; each worktree sets `core.longpaths`, `core.filemode false`, `core.autocrlf false`; `doctor` warns when the long-path switch is off |
 | Idle | A worktree unused for 3 days is WIP-committed to its hidden ref and removed; `resume` rebuilds it |
 
-### 7.2 Lease
+### 12.2 Lease
 
 | Field or rule | Value |
 |---|---|
@@ -466,18 +746,18 @@ A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `p
 | Release | On landing or abandon; on clean shutdown after work is saved; by the parent guard after a crash; by the startup sweep when both died. Never while agents live or work is unsaved |
 | Protection | Verbs refuse a leased worktree; rule O4 forbids touching one by hand |
 
-### 7.3 Fence
+### 12.3 Fence
 
 - `<group>.fence` holds a monotonic integer incremented on every take or takeover.
 - Every side effect carries it: the hidden-ref update, the push, the landing, a scope change.
 - The resource enforces it: `git update-ref <ref> <new> <old>` is a compare-and-swap that exits 128 (`cannot lock ref`) when the ref moved; the reflog message records `fence=<n>`.
 - A holder whose update is refused emits `lease.lost`, and `Next()` stops the group.
 
-### 7.4 Saved work
+### 12.4 Saved work
 
 The hidden ref `refs/komodo/groups/<group>` moves to every group commit by compare-and-swap with the fence in its reflog. Git keeps it, `git branch` hides it, it is never pushed, and it is deleted when the group lands or is abandoned.
 
-### 7.5 Shutdown and the parent guard
+### 12.5 Shutdown and the parent guard
 
 | Step | Rule |
 |---|---|
@@ -486,15 +766,15 @@ The hidden ref `refs/komodo/groups/<group>` moves to every group commit by compa
 | Bus | Shutdown is direct code outside the bus; it writes `run.stopped` when it can |
 | Parent guard | `komodo run` starts a small parent that starts the engine. If the engine dies past its handler (`kill -9`, OOM, Go fatal) or writes no heartbeat for 10 min, the parent kills its agents by pid file and runs the same save and release. Power loss is left to the sweep |
 
-### 7.6 Startup sweep
+### 12.6 Startup sweep
 
 Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and leases whose clone path is gone; removes dead runs' tester worktrees, Docker containers and images, session temp, and worktree folders whose clone is gone; removes worktrees with no live lease and no unsaved work; re-enqueues queue items with no lease; emits `session.end crash` for dead sessions; deletes a repo's language cache when over `sandbox.lang_cache_gb` or unused 30 days, never while the repo holds a lease. Four scans run in parallel and must finish under 2 s with 20 dead runs.
 
 ---
 
-## 8. Session supervisor
+## 13. Session supervisor
 
-### 8.1 Lifecycle
+### 13.1 Lifecycle
 
 | Phase | Rule |
 |---|---|
@@ -508,7 +788,7 @@ Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and
 | Orphans | Process groups on Unix, Job Objects on Windows |
 | Paused clock | Wall clocks stop while the group is paused |
 
-### 8.2 Controls
+### 13.2 Controls
 
 | Control | Value |
 |---|---|
@@ -516,19 +796,19 @@ Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and
 | Idle | 10 min; one nudge, 5-min grace, then stop |
 | Retries | Per agent from `agent.json` (2, max 3): timeout or idle restarts the task's session, inside `limits.task_attempts` |
 
-### 8.3 Exit reasons
+### 13.3 Exit reasons
 
 `done`, `needs_scope`, `check_fail`, `no_result`, `schema_fail`, `timeout`, `idle`, `refusals`, `budget`, `provider`, `billing`, `paused`, `pause_timeout`, `cancelled`, `crash`. `result.json` records the reason. A session halted by a provider limit with a resume handle exits `paused`, not `provider`.
 
-### 8.4 Resume
+### 13.4 Resume
 
 `resume` tries the provider's handle first: `--resume <uuid>` with `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` on `claude-cli`, or the saved `messages.jsonl` on API links. A failed resume gets a fresh session with the brief, the WIP diff and the last builder `summary`, and the ledger logs `resume_lost`.
 
 ---
 
-## 9. Agent registry
+## 14. Agent registry
 
-### 9.1 `agent.json` (what Go reads)
+### 14.1 `agent.json` (what Go reads)
 
 | Field | Type | Rule |
 |---|---|---|
@@ -545,11 +825,11 @@ Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and
 
 Strict decode (`DisallowUnknownFields`). The registry decodes the 7 agents once per process and checks: no two agents share a `result` `$id`; every `guard` row exists in `policy.json`; every tool in `tools` is registered. A verb or the engine asks the registry by name and never re-reads `embed/`.
 
-### 9.2 `prompt.md` (what the model reads)
+### 14.2 `prompt.md` (what the model reads)
 
 `# Role` text, never a rule, then a `# Brief` template with `{{slots}}`. Slots fill in one pass, so a filled value is never expanded again. The gate fails an unfilled or unknown slot.
 
-### 9.3 Roster and limits
+### 14.3 Roster and limits
 
 | Agent | Weight |
 |---|---|
@@ -567,25 +847,25 @@ The chain is fixed in `agent.json`, never in config; `komodo config agent <name>
 
 ---
 
-## 10. Tool runtime
+## 15. Tool runtime
 
-### 10.1 Registry and transports
+### 15.1 Registry and transports
 
 - The registry binds the tools in `agent.json` to one session; unlisted tools are not advertised (G1).
 - `claude-cli`: a private MCP server, `komodo internal tools --agent --session`, over stdio, started with `--strict-mcp-config`; it dies with its session and starts in under 100 ms because it reads nothing from disk.
 - API links: Go runs the harness tool loop, calling the same tool functions.
 
-### 10.2 Harness tool loop (API links)
+### 15.2 Harness tool loop (API links)
 
 1. Tools stay on `auto`; the model reasons and calls tools freely; thinking stays on.
 2. A text-only reply ends the work. No nudge.
-3. One final call returns only the agent's result schema (per link, §11.3).
+3. One final call returns only the agent's result schema (per link, §16.3).
 4. The engine checks the result: schema first (1 re-prompt), then the agent's own gate (`done_when` for a builder, `lint_backlog` for a planner). A failure goes back into the same session with its output; 2 rejected results end it with `check_fail`.
 5. A reply cut off at the output limit gets "continue" once, then ends with `no_result`.
 
 Context limit: Go counts tokens every turn against the link's measured context. At 80%, old tool outputs shrink to one-line stubs; their full text stays in `<session>/out/`. Still over, the session ends with `no_result`; nothing past the context is sent.
 
-### 10.3 Tools and caps
+### 15.3 Tools and caps
 
 | Tool | Rule |
 |---|---|
@@ -603,7 +883,7 @@ Context limit: Go counts tokens every turn against the link's measured context. 
 
 Output cap: 4 KB for every tool except `read`, head and tail kept; the full output goes to `<session>/out/<call>.log` and the capped reply names the path.
 
-### 10.4 Per-agent tool matrix
+### 15.4 Per-agent tool matrix
 
 | Agent | Tools | Run classes |
 |---|---|---|
@@ -615,19 +895,19 @@ Output cap: 4 KB for every tool except `read`, head and tail kept; the full outp
 | Researcher | `read`, `search`, `skill`, `web` | — |
 | Scout | `read`, `search` (paths only) | — |
 
-### 10.5 Host facts the server is built against (Claude Code 2.1.295)
+### 15.5 Host facts the server is built against (Claude Code 2.1.295)
 
 A stdio MCP server has no per-request timer and `MCP_TOOL_TIMEOUT` defaults to about 28 hours, so the sandbox's 10-minute `run` timeout is the only one that fires. `MAX_MCP_OUTPUT_TOKENS` defaults to 25,000 and the host warns past 10,000, so the 4 KB cap stays far below both. The server must answer `initialize` inside `MCP_TIMEOUT` (30 s). The worker env never sets `CLAUDE_CODE_RETRY_WATCHDOG`; instead the supervisor reads `system/api_retry` lines, and on `rate_limit` or `billing_error` the engine ends the session with reason `provider`, keeps its resume handle, and the provider layer fails over or pauses.
 
 ---
 
-## 11. Provider adapters
+## 16. Provider adapters
 
-### 11.1 Interface
+### 16.1 Interface
 
 `Probe`, `Start(session) → stream`, `Resume(session, input)`. The stream ends in a `Result`: the output, usage (tokens in, out, cache read and write, plus USD) and the resume handle.
 
-### 11.2 Links
+### 16.2 Links
 
 | Link | Runs as | Auth | Tools via | Beta 6 |
 |---|---|---|---|---|
@@ -637,7 +917,7 @@ A stdio MCP server has no per-request timer and `MCP_TOOL_TIMEOUT` defaults to a
 | `codex-cli` | `codex exec` | The CLI's login | Private MCP server | `not yet` `[PENDING G-20]` |
 | `openai-api` | HTTPS | `providers.keys.openai` | Go tool loop | `not yet` `[PENDING G-20]` |
 
-### 11.3 Schema enforcement per link
+### 16.3 Schema enforcement per link
 
 | Link | Final call |
 |---|---|
@@ -649,7 +929,7 @@ A stdio MCP server has no per-request timer and `MCP_TOOL_TIMEOUT` defaults to a
 
 Every link ends the same way: tools on `auto`, a text-only reply ends the work, one final call returns the result schema, Go re-validates.
 
-### 11.4 Measured context
+### 16.4 Measured context
 
 | Link | Source |
 |---|---|
@@ -659,7 +939,7 @@ Every link ends the same way: tools on `auto`, a text-only reply ends the work, 
 
 Each session's measured context and its source travel in `session.start`. Ollama is detected at the probe by `GET /api/version`. An endpoint below `providers.ctx_floor` fails `doctor` and is skipped with `provider.skip` reason `ctx_below_floor`; `doctor` names the fix `OLLAMA_CONTEXT_LENGTH=262144`. `[PENDING G-03]` a 24 GB machine running Qwen3.6-27B at 262,144 context.
 
-### 11.5 Model catalog (`embed/models.json`, about 10 entries)
+### 16.5 Model catalog (`embed/models.json`, about 10 entries)
 
 | Weight | Latest | Prior | Window | Price per M in/out |
 |---|---|---|---|---|
@@ -671,7 +951,7 @@ Each session's measured context and its source travel in `session.start`. Ollama
 
 IDs come from the Models API `line` field when an Anthropic key resolves, else the catalog. The probe refreshes them on `install`, `doctor` and `fresh` and writes exact IDs to `providers.json`, so a run never changes model mid-way. A line with no current model moves its weight up one line and `doctor` warns. `doctor` prints the catalog with each window's source. `[PENDING G-06]` whether a Max login exposes `claude-fable-5-1` to `claude -p`.
 
-### 11.6 Failover chain
+### 16.6 Failover chain
 
 | Step | Link | Model per weight |
 |---|---|---|
@@ -685,7 +965,7 @@ IDs come from the Models API `line` field when an Anthropic key resolves, else t
 - The backstop is mandatory; `doctor` and `gate` refuse a chain without one; `install` warns when no endpoint answers.
 - An agent set to a `-prev` model falls back to the backstop, never forward to the latest.
 
-### 11.7 Billing check (fails closed)
+### 16.7 Billing check (fails closed)
 
 | Cost class | When | Runs |
 |---|---|---|
@@ -703,7 +983,7 @@ IDs come from the Models API `line` field when an Anthropic key resolves, else t
 2. Env scrub: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_*` removed; `CLAUDE_CODE_OAUTH_TOKEN` stays.
 3. First stream line: `system/init` must say `apiKeySource: "none"`, else the session is killed before turn 1 with exit `billing`. The probe records one init line per CLI version; a version without the field fails the link at probe time. `[PENDING G-02]` capturing it without a model turn.
 
-### 11.8 Limits, pauses and warnings
+### 16.8 Limits, pauses and warnings
 
 | Rule | Detail |
 |---|---|
@@ -716,7 +996,7 @@ IDs come from the Models API `line` field when an Anthropic key resolves, else t
 | Warnings, never stops | Window past `warn.quota_pct`; `rate_limit_event` with `isUsingOverage: true`; run USD past `warn.usd_per_run`. Shown under ⚠️ Warnings in the run report, `status`, `status --wait`, and as `limit.warn` |
 | USD | Metered links ledger `usd`; subscription sessions ledger `total_cost_usd` as notional `usd_equiv` |
 
-### 11.9 `claude-cli` launch line
+### 16.9 `claude-cli` launch line
 
 ```
 <probed path> -p --output-format stream-json --input-format stream-json --verbose
@@ -741,7 +1021,7 @@ Effort per weight on API links: heavy `high`, standard `medium`, light `low`, fi
 
 ---
 
-## 12. HTTP stack
+## 17. HTTP stack
 
 | Value | Setting |
 |---|---|
@@ -764,7 +1044,7 @@ Users: `anthropic.go`, `openai.go`, the `web` tool, `internal fresh-bg`. `claude
 
 ---
 
-## 13. Skill loader
+## 18. Skill loader
 
 | Rule | Detail |
 |---|---|
@@ -784,9 +1064,9 @@ Users: `anthropic.go`, `openai.go`, the `web` tool, `internal fresh-bg`. `claude
 
 ---
 
-## 14. Rules and output contract
+## 19. Rules and output contract
 
-### 14.1 Where rules are enforced
+### 19.1 Where rules are enforced
 
 | Rule target | Enforcer |
 |---|---|
@@ -798,7 +1078,7 @@ Users: `anthropic.go`, `openai.go`, the `web` tool, `internal fresh-bg`. `claude
 
 No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
 
-### 14.2 Output mapping (`embed/output/`)
+### 19.2 Output mapping (`embed/output/`)
 
 | What a person reads | Facts from | Template |
 |---|---|---|
@@ -811,7 +1091,7 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
 | Commit message | `<type>: <task title>` from the backlog | `commit` |
 | Waking event in `status --wait` | The event | `event.<type>` |
 
-### 14.3 Template pipeline
+### 19.3 Template pipeline
 
 | Step | Rule |
 |---|---|
@@ -823,11 +1103,11 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
 | Unlisted cases | Code `other` renders one fixed line, "Needs a decision; details in `<path>`" |
 | Model prose | Prose fields such as the builder `summary` feed briefs, the ledger and `<session>/out/`; no template renders them |
 
-### 14.4 Code list
+### 19.4 Code list
 
 Starts from beta 5's real blocks and escalations (`branch_missing` among them). Beta 6 adds `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky`, `tester`, the tester's `pass`, `fail`, `env`, `wrong_command`, `real_failure`, and `config_tampered`, `locked`, `regression`, `lint`, `disputed`, `crash`. A new code is a plan change: schema enum, template and fixture together. Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
 
-### 14.5 No leaks
+### 19.5 No leaks
 
 | Path | Guard |
 |---|---|
@@ -838,9 +1118,9 @@ Starts from beta 5's real blocks and escalations (`branch_missing` among them). 
 
 ---
 
-## 15. Brief builder
+## 20. Brief builder
 
-### 15.1 Assembly order (most stable first)
+### 20.1 Assembly order (most stable first)
 
 | # | Part | Changes when | Source | Cache |
 |---|---|---|---|---|
@@ -852,7 +1132,7 @@ Starts from beta 5's real blocks and escalations (`branch_missing` among them). 
 
 No timestamps, IDs or unsorted maps go before the task. No harness rules appear in any part.
 
-### 15.2 Slots (20)
+### 20.2 Slots (20)
 
 `R` required (empty fails the brief); `O` optional (empty renders `none`).
 
@@ -879,7 +1159,7 @@ No timestamps, IDs or unsorted maps go before the task. No harness rules appear 
 | `baseline` | Tests failing at the base commit | — | — | O | — | — | — |
 | `lens_rules` | The applicable lenses' rule catalogs | — | R | — | — | — | — |
 
-### 15.3 Ceiling per link
+### 20.3 Ceiling per link
 
 A brief has no per-slot cap. Its only ceiling is half the link's measured context, read before each session.
 
@@ -893,7 +1173,7 @@ A brief has no per-slot cap. Its only ceiling is half the link's measured contex
 
 Over the ceiling, the brief goes to the next link in the chain that fits; none left, Blocked `context`. Nothing is cut to fit.
 
-### 15.4 Context rules
+### 20.4 Context rules
 
 - Trimming: Go signature trimming, delta-only diffs on re-review, ANSI and build noise stripped; assembled from cache slices, never by re-reading files.
 - Reviewer context comes from the engine only: the task list at the base commit, `done_when`, spec anchors, the diff, Check results, prior findings. Never builder prose.
@@ -902,9 +1182,9 @@ Over the ceiling, the brief goes to the next link in the chain that fits; none l
 
 ---
 
-## 16. Guardrails
+## 21. Guardrails
 
-### 16.1 Policy row schema (`embed/policy.json`)
+### 21.1 Policy row schema (`embed/policy.json`)
 
 | Field | Values | Meaning |
 |---|---|---|
@@ -917,7 +1197,7 @@ Over the ceiling, the brief goes to the next link in the chain that fits; none l
 
 `safety/rows.go` only loads it; no row is Go code. The gate renders the roster tables from it and fails on drift. The scout's compiled table has 4 rows, the builder's 8.
 
-### 16.2 Rows every agent inherits
+### 21.2 Rows every agent inherits
 
 | ID | Refuse | Scope |
 |---|---|---|
@@ -928,7 +1208,7 @@ Over the ceiling, the brief goes to the next link in the chain that fits; none l
 | G5 | Attribution trailers or session links in any text the agent writes | writers |
 | G6 | The `guard.refusal_limit` (3rd) refusal under the same rule; ends the session | all |
 
-### 16.3 Run and builder rows
+### 21.3 Run and builder rows
 
 | ID | Refuse | Scope |
 |---|---|---|
@@ -937,7 +1217,7 @@ Over the ceiling, the brief goes to the next link in the chain that fits; none l
 
 Facts of `run` that keep their own tests, not guard rows: no shell (pipes, chains and `sh -c` cannot happen); no network (sandbox); no git writes (no class runs git). B2 (a builder's own backlog files) is a lint fact: `doctor backlog` refuses a group whose `files` list `docs/backlog/**`.
 
-### 16.4 Orchestrator rows (text in `AGENTS.md`, any host)
+### 21.4 Orchestrator rows (text in `AGENTS.md`, any host)
 
 | ID | Refuse |
 |---|---|
@@ -954,7 +1234,7 @@ Facts of `run` that keep their own tests, not guard rows: no shell (pipes, chain
 
 The harness enforces these on its own side: verbs refuse leased worktrees and critical refs, and human-only verbs need a terminal.
 
-### 16.5 Mechanics
+### 21.5 Mechanics
 
 - Every tool call is checked in-process before it runs (`tool.pre`); input it cannot parse, an unknown tool or a guard error is a refusal. A refusal is logged afterward as `tool.denied`.
 - Exactly 3 inline hooks exist, all Go: `tool.pre` (guard), `tool.post` (format after `edit`), `session.end` (WIP commit). No model, repo or host hook runs inside a worker.
@@ -963,15 +1243,15 @@ The harness enforces these on its own side: verbs refuse leased worktrees and cr
 
 ---
 
-## 17. Sandbox and process control
+## 22. Sandbox and process control
 
-### 17.1 Three layers
+### 22.1 Three layers
 
 1. Tool surface: no native Bash or Edit.
 2. Process limits: worktree working directory; environment of only `PATH`, `HOME` (session temp), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables; timeout; output cap; process and memory caps; whole-tree kill.
 3. OS sandbox: wraps every `run` command from the tool server, never the model client.
 
-### 17.2 Per OS
+### 22.2 Per OS
 
 | OS | Sandbox | Profile |
 |---|---|---|
@@ -987,7 +1267,7 @@ The harness enforces these on its own side: verbs refuse leased worktrees and cr
 | Loopback | Always allowed |
 | Profile reuse | Rendered once per worktree; Docker keeps one container per worktree alive |
 
-### 17.3 Caches and toolchains
+### 22.3 Caches and toolchains
 
 - Language caches are Komodo's own: `~/.komodo/cache/lang/<repo-id>/`; `GOCACHE`, `GOMODCACHE`, `npm_config_cache`, `CARGO_HOME`, `PIP_CACHE_DIR` point there and are writable. Never the user's `~/.npm`, `~/.cargo/registry`, Go or pip caches.
 - Toolchain folders are read-only: `~/.rustup` and the folders holding each detected command's binary; `doctor` runs each command's `--version` in the sandbox.
@@ -995,11 +1275,11 @@ The harness enforces these on its own side: verbs refuse leased worktrees and cr
 - Never the per-user process limit: it counts every process the user runs.
 - Intake runs `commands.setup` with network on; every `run` keeps it off.
 
-### 17.4 Read-only agents' `run`
+### 22.4 Read-only agents' `run`
 
 Reviewer and tester have no write tools, but their `run` may write the worktree so tests work. After the last read-only session in a worktree ends, the engine resets changed tracked files and fails that review, removes new untracked files that are not gitignored, and keeps ignored build output.
 
-### 17.5 Test sandboxes and copies
+### 22.5 Test sandboxes and copies
 
 | Rule | Detail |
 |---|---|
@@ -1019,7 +1299,7 @@ Reviewer and tester have no write tools, but their `run` may write the worktree 
 
 Symlinks are copied as links, never followed; a link resolving outside the worktree is dropped and logged. A `.venv` is never copied. Check adds a case-collision lint on every OS.
 
-### 17.6 Docker backend (native Windows)
+### 22.6 Docker backend (native Windows)
 
 | Rule | Detail |
 |---|---|
@@ -1031,7 +1311,7 @@ Symlinks are copied as links, never followed; a link resolving outside the workt
 
 ---
 
-## 18. Scheduler and job templates
+## 23. Scheduler and job templates
 
 | Item | Rule |
 |---|---|
@@ -1055,7 +1335,7 @@ Example template:
 
 ---
 
-## 19. Check
+## 24. Check
 
 | Step | Rule |
 |---|---|
@@ -1070,7 +1350,7 @@ Example template:
 | Cache | Keyed by tree hash plus command; an unchanged tree skips the rerun |
 | Parallelism | The impact set and `done_when` run in parallel inside the sandbox's process cap |
 
-### 19.1 Scope requests
+### 24.1 Scope requests
 
 1. A builder that needs a file outside `files` stops; its final result has status `needs_scope`, the paths and a reason.
 2. The engine makes a WIP commit; the resume handle is already in `state.json`; the group goes Blocked `needs_scope`; the lease and worktree stay held and the sweep skips them.
@@ -1080,9 +1360,9 @@ Example template:
 
 ---
 
-## 20. Review and the tester
+## 25. Review and the tester
 
-### 20.1 Lenses
+### 25.1 Lenses
 
 | Lens | Applies when | Checks |
 |---|---|---|
@@ -1099,7 +1379,7 @@ Example template:
 
 Rule schema in `embed/lenses/<lens>.json`: `{id, severity, applies: {globs, markers}, check, evidence, source}`. `[PENDING G-16]` the catalogs' content, seeded from Google's code review guide and SWE-bench Verified failure classes, authored in phase 7 with the security lens reviewed by the owner.
 
-### 20.2 Mechanics
+### 25.2 Mechanics
 
 | Rule | Detail |
 |---|---|
@@ -1114,7 +1394,7 @@ Rule schema in `embed/lenses/<lens>.json`: `{id, severity, applies: {globs, mark
 | Epic mode | One verdict per group over the whole epic diff |
 | Pool | Lenses run in parallel under one slot each only when `pool_max` allows; else they queue behind the group's slot |
 
-### 20.3 The tester
+### 25.3 The tester
 
 - Runs beside the reviewer in Verify, in its own throwaway worktree at the same commit, blind to the builder.
 - Proves the group's acceptance items from `TG.md` with `run`: pass or fail per item with evidence, and `confirmed | not_confirmed` per task ID exactly once, from `done_when` and the EARS item.
@@ -1124,9 +1404,9 @@ Rule schema in `embed/lenses/<lens>.json`: `{id, severity, applies: {globs, mark
 
 ---
 
-## 21. Error recovery
+## 26. Error recovery
 
-### 21.1 Failure table
+### 26.1 Failure table
 
 | Failure | Detector | Action | Bound | Then |
 |---|---|---|---|---|
@@ -1157,7 +1437,7 @@ Rule schema in `embed/lenses/<lens>.json`: `{id, severity, applies: {globs, mark
 | Harness crash or reboot | Recovery | Replay the journal after the snapshot | — | Continues |
 | Scheduled job fails | Scheduler | Backoff | 3 | Blocked |
 
-### 21.2 Rules
+### 26.2 Rules
 
 - Loss bound: any single failure loses at most one model turn and no committed edit.
 - WIP commit at every session end of a writing agent; an empty diff writes nothing.
@@ -1168,7 +1448,7 @@ Rule schema in `embed/lenses/<lens>.json`: `{id, severity, applies: {globs, mark
 
 ---
 
-## 22. Token and resource management
+## 27. Token and resource management
 
 | Budget | Value |
 |---|---|
@@ -1187,7 +1467,7 @@ Headline metric: tokens and USD per accepted group, plus cache hit rate per agen
 
 ---
 
-## 23. Cache store
+## 28. Cache store
 
 | Item | Key |
 |---|---|
@@ -1206,9 +1486,9 @@ Every key is `sha256(inputs + binary version)` with the per-run config hash as p
 
 ---
 
-## 24. Runtime observability
+## 29. Runtime observability
 
-### 24.1 Ledger views
+### 29.1 Ledger views
 
 | Row | Fields | Moves on |
 |---|---|---|
@@ -1219,17 +1499,17 @@ Every key is `sha256(inputs + binary version)` with the per-run config hash as p
 - Task claims: `queued → claimed → done | returned | blocked`; `task.claimed` at `session.start`, `task.released` at `session.end`; a claimed task whose session is dead at the sweep is released with `crash`.
 - Views are rebuilt incrementally from the last applied `seq`; `status` on 1,000 rows renders under 100 ms.
 
-### 24.2 Scorecard (`status --metrics`)
+### 29.2 Scorecard (`status --metrics`)
 
 Per agent and model over `ledger.retention_days`: first-pass rate, repairs per group, finding precision, tester false-fail rate, tokens and USD per accepted group, cache hit rate per kind. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups. Aggregates are cached by the ledger file's size and mtime.
 
-### 24.3 Live views
+### 29.3 Live views
 
 `status [--watch]`: pool, stages, budgets, blocks, the group graph (dependencies, each group's stage, which groups touch which files). `status --wait` blocks until the next wake event. `status --explain`: the last 10 events with reasons. `status --session <id>`: the stream tail and result. `status` ends with `Verbs: komodo help`.
 
 ---
 
-## 25. Event bus
+## 30. Event bus
 
 | Rule | Detail |
 |---|---|
@@ -1241,13 +1521,13 @@ Per agent and model over `ledger.retention_days`: first-pass rate, repairs per g
 
 ---
 
-## 26. Backlog and planning
+## 31. Backlog and planning
 
-### 26.1 Grammar
+### 31.1 Grammar
 
 `docs/backlog/epic-N/tg-N.M/{TG.md, tsk-*.md}`. `TG.md` carries `subsystem:` (a plan ID or `none`), `touches:` (globs), `priority:` (`high` or normal), `files`, dependencies and acceptance items. `tsk-*.md` carries the card, `done_when` and `estimate_lines:`.
 
-### 26.2 Lint (`komodo doctor backlog`)
+### 31.2 Lint (`komodo doctor backlog`)
 
 | Check | Rule |
 |---|---|
@@ -1260,7 +1540,7 @@ Per agent and model over `ledger.retention_days`: first-pass rate, repairs per g
 | EARS | `WHEN <event> THE SYSTEM SHALL <response>` (or `IF`, `WHILE`), optional `cmd:` and `needs:` lines; an item without `SHALL` fails |
 | Case collision | Two paths differing only by case fail |
 
-### 26.3 Planner
+### 31.3 Planner
 
 | Pass | Weight | Output | Gate |
 |---|---|---|---|
@@ -1275,7 +1555,7 @@ Per agent and model over `ledger.retention_days`: first-pass rate, repairs per g
 
 ---
 
-## 27. Ship and release
+## 32. Ship and release
 
 | Item | Rule |
 |---|---|
@@ -1290,9 +1570,9 @@ Per agent and model over `ledger.retention_days`: first-pass rate, repairs per g
 
 ---
 
-## 28. Installer
+## 33. Installer
 
-### 28.1 Steps
+### 33.1 Steps
 
 | # | Target | Writes | When |
 |---|---|---|---|
@@ -1311,7 +1591,7 @@ Per agent and model over `ledger.retention_days`: first-pass rate, repairs per g
 - Repo rules: hand edits survive and are reported (`--force` overwrites); a rerun makes 0 changes and prunes stale owned files; the pin only rises; `--project` adds `docs/{prd,hld,lld}.md`, `CHANGELOG.md` and a PR template. Never created: a repo config folder, git hooks, `.codex/`, `~/.claude`, `~/.codex`, or any `.claude/` skill, rule or guard hook.
 - No config file is written; `~/.komodo/config.json` appears on the first `komodo config` write.
 
-### 28.2 Provider probe
+### 33.2 Provider probe
 
 | Link | Check |
 |---|---|
@@ -1323,7 +1603,7 @@ Per agent and model over `ledger.retention_days`: first-pass rate, repairs per g
 
 The probe result is the capacity profile's source, reused until `install`, `doctor` or `fresh` refreshes it.
 
-### 28.3 The Komodo block in `AGENTS.md`
+### 33.3 The Komodo block in `AGENTS.md`
 
 ```markdown
 <!-- komodo:begin min=1.0.0-beta.6 -->
@@ -1342,13 +1622,13 @@ The probe result is the capacity profile's source, reused until `install`, `doct
 <!-- komodo:end -->
 ```
 
-### 28.4 Bootstrap
+### 33.4 Bootstrap
 
 macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/install.ps1 | iex`. Both download the latest binary, check SHA-256 against `latest.json`, and run `komodo install --machine-only`. The scripts verify SHA-256 over HTTPS only; the binary verifies ed25519 on every later fresh.
 
 ---
 
-## 29. Binary lifecycle
+## 34. Binary lifecycle
 
 | Step | What | When |
 |---|---|---|
@@ -1374,7 +1654,7 @@ macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/ins
 
 ---
 
-## 30. Gate and self-checks (`komodo gate`, Komodo repo only)
+## 35. Gate and self-checks (`komodo gate`, Komodo repo only)
 
 | Check | Rule |
 |---|---|
@@ -1392,7 +1672,7 @@ Checks run in parallel by package; cross-builds run last. `--fast` skips cross-b
 
 ---
 
-## 31. Edge cases
+## 36. Edge cases
 
 | Situation | Behaviour |
 |---|---|
@@ -1443,7 +1723,7 @@ Checks run in parallel by package; cross-builds run last. `--fast` skips cross-b
 
 ---
 
-## 32. Verification plan
+## 37. Verification plan
 
 | Check | Expected |
 |---|---|
@@ -1459,23 +1739,23 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 
 ---
 
-## 33. Cutover from beta 5
+## 38. Cutover from beta 5
 
 Beta 5's global hooks call `~/.komodo/bin/komodo`, the path beta 6 installs to; beta 6 would answer `komodo guard` with exit 2, which Claude Code treats as a block. Before phase 2, by hand: remove the `Bash(python -m komodo:*)` allow rule, the `komodo guard` PreToolUse hook, the `komodo hook status` and `komodo hook prune` hooks, and the 36 `skillOverrides` from `~/.claude/settings.json`; delete the 5 Komodo skills under `~/.claude/skills/` (leave `synced/`); update the 5 stale lines in `~/.claude/AGENTS.md`. Phase 7: `komodo gate --install`. Phase 8: `komodo install` in this repo. Phase 9: the cutover column and the repo table; `doctor install` confirms 0 shadowing binaries and 0 Komodo hooks.
 
 ---
 
-## 34. Gap register
+## 39. Gap register
 
 Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase 1 the gate fails a row with no backlog task until it closes.
 
 | ID | Area | Gap | Closes by |
 |---|---|---|---|
-| G-01 | Release signing | Key location and custody | Decided 2026-10-09: local key file plus a backup copy (§27) |
+| G-01 | Release signing | Key location and custody | Decided 2026-10-09: local key file plus a backup copy (§32) |
 | G-02 | Provider probe | Capturing the `system/init` line at probe time without a model turn | Spike, phase 4 |
 | G-03 | Local models | A 24 GB machine running Qwen3.6-27B at 262,144 context | Spike, phase 4 |
 | G-04 | Pool | `OLLAMA_NUM_PARALLEL` above 1 on one machine, deciding whether `limits.link_sessions.local` can exceed 1 | Spike, phase 4 |
-| G-05 | Model registry | Past exact IDs for a model that retires mid-run | Decided 2026-10-09: `providers.json` is the registry; a 404 fails over (§11.6) |
+| G-05 | Model registry | Past exact IDs for a model that retires mid-run | Decided 2026-10-09: `providers.json` is the registry; a 404 fails over (§16.6) |
 | G-06 | Models | Whether a Max login exposes `claude-fable-5-1` to `claude -p` | The install probe records it, phase 4 |
 | G-07 | Limits | The real Max 5-hour window against `limits.link_sessions.claude-cli` 3 | Ledger measurement over the first 20 groups, phase 7 |
 | G-08 | Sandbox | `bwrap --unshare-net` gives each session a private loopback | Spike, phase 2 |
@@ -1485,7 +1765,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-12 | Sandbox | Whether a copied Rust `target/` is reused or rebuilt | Spike, phase 2 |
 | G-13 | Guard, skills | The steering-phrase list is 6 entries by judgment | Tune from `doctor` warnings, phase 3 |
 | G-14 | Supervisor | A mid-turn nudge reaching a turn stuck in a tool call | Best effort decided; the proof accepts a late nudge, phase 5 |
-| G-15 | Scope | Whether `scope approve` needs a human | Decided 2026-10-09: the orchestrator answers after 2 engine denials (§19.1) |
+| G-15 | Scope | Whether `scope approve` needs a human | Decided 2026-10-09: the orchestrator answers after 2 engine denials (§24.1) |
 | G-16 | Review | The lens rule catalogs' content | Authoring task, phase 7; security lens reviewed by the owner |
 | G-17 | Budgets | The 50% cache-hit fixture needs real API sessions | Measured in phase 7 |
 | G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 |
@@ -1503,30 +1783,53 @@ Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag 
 
 | Plan ID | Component | LLD sections |
 |---|---|---|
-| S01 | CLI processor | §2 |
-| S02 | Installer | §28 |
-| S03 | Binary lifecycle | §29 |
-| S04 | Configuration | §3 |
-| S05 | Provider adapters | §11 |
-| S06 | HTTP stack | §12 |
-| S07 | Agent registry | §9 |
-| S08 | Tool runtime | §10 |
-| S09 | Skill loader | §13 |
-| S10 | Rules and output contract | §14 |
-| S11 | Brief builder | §15 |
-| S12 | Guardrails | §16 |
-| S13 | Sandbox and process control | §17 |
-| S14 | Orchestration engine | §5, §6 |
-| S15 | Workspace and leases | §7 |
-| S16 | Session supervisor | §8 |
-| S17 | Scheduler and job templates | §18 |
-| S18 | Error recovery | §4.4, §21 |
-| S19 | Check | §19 |
-| S20 | Review and evidence | §20 |
-| S21 | Token and resource management | §22 |
-| S22 | Cache store | §23 |
-| S23 | Runtime observability | §24 |
-| S24 | Event bus | §4, §25 |
-| S25 | Backlog and planning | §26 |
-| S26 | Ship | §27 |
-| S27 | Gate and self-checks | §30 |
+| S01 | CLI processor | §7 |
+| S02 | Installer | §33 |
+| S03 | Binary lifecycle | §34 |
+| S04 | Configuration | §8 |
+| S05 | Provider adapters | §16 |
+| S06 | HTTP stack | §17 |
+| S07 | Agent registry | §14 |
+| S08 | Tool runtime | §15 |
+| S09 | Skill loader | §18 |
+| S10 | Rules and output contract | §19 |
+| S11 | Brief builder | §20 |
+| S12 | Guardrails | §21 |
+| S13 | Sandbox and process control | §22 |
+| S14 | Orchestration engine | §10, §11 |
+| S15 | Workspace and leases | §12 |
+| S16 | Session supervisor | §13 |
+| S17 | Scheduler and job templates | §23 |
+| S18 | Error recovery | §9.4, §26 |
+| S19 | Check | §24 |
+| S20 | Review and evidence | §25 |
+| S21 | Token and resource management | §27 |
+| S22 | Cache store | §28 |
+| S23 | Runtime observability | §29 |
+| S24 | Event bus | §9, §30 |
+| S25 | Backlog and planning | §31 |
+| S26 | Ship | §32 |
+| S27 | Gate and self-checks | §35 |
+
+## Appendix B. References
+
+| Reference | Use in this document |
+|---|---|
+| `docs/hld.md` | Rationale, views and quality goals for every mechanism specified here |
+| `PLAN.md` at commit `ba4ff823` | Source of every fact until phase 1 removes it |
+| `drafts/README.md` | The 20 brief slots and the ceiling per link |
+| IEEE software design description practice (ISO/IEC/IEEE 42010 views; SDS module specifications) | Section shape: per-component files, interfaces, data, algorithms, limits, failure handling |
+| Claude Code headless docs, https://code.claude.com/docs/en/headless | Launch line, stream facts, resume, signals |
+| Claude Code environment variables, https://code.claude.com/docs/en/env-vars | MCP timeouts, output caps, retry watchdog |
+| Anthropic prompt caching, https://platform.claude.com/docs/en/build-with-claude/prompt-caching | Breakpoints, minimums, pricing multipliers |
+| Anthropic rate limits, https://platform.claude.com/docs/en/api/rate-limits | Retry and limit classes, headroom headers |
+| Anthropic models overview, https://platform.claude.com/docs/en/models/overview | Model IDs, windows, prices |
+| Ollama FAQ, https://docs.ollama.com/faq | Context length, parallelism, keep-alive defaults |
+| Codex CLI security, https://developers.openai.com/codex/security | Sandbox profiles per OS |
+| Codex config reference, https://learn.chatgpt.com/docs/config-file/config-reference | Stream idle ceiling, retry default |
+| AWS exponential backoff and jitter, https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter | Full-jitter formula |
+| Distributed leases with fencing tokens, https://hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens | Fence semantics |
+| Temporal retry policies, https://docs.temporal.io/encyclopedia/retry-policies | The rejected unlimited-retry default |
+| Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% changed-line bar |
+| Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | EARS item grammar |
+| Aider repo map, https://github.com/pdavis68/RepoMapper | Repo map ranking |
