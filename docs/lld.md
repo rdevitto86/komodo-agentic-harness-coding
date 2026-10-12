@@ -2673,7 +2673,7 @@ Events add `seq` and `crc` from their own envelope (§9.1); the manager computes
 9. 2 processes claiming one lease yield exactly 1 holder.
 10. Replaying a group's state through group state's `Load` rebuilds its `state.json` byte for byte.
 11. `Load` on a group 49 events past its snapshot replays exactly 49.
-12. A second `Open` on a group already open in this process is refused.
+12. A second `Open` on a group already open in this process is refused, and so is an `Open` from a process that does not hold the group's lease.
 
 #### 40.9 Group state
 
