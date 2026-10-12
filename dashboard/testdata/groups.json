@@ -1,0 +1,4 @@
+[
+  {"repo": "komodo-auth-api", "run": "r-7f2", "group": "tg-1.2", "stage": "Build", "agent": "builder", "model": "claude-sonnet-5-5", "tokens": 48210, "usd": 0.41, "block": "", "brief": "# Role\nYou are the builder.\n# Brief\nTask tsk-3: add lease renewal."},
+  {"repo": "komodo-auth-api", "run": "r-7f2", "group": "tg-1.3", "stage": "Blocked", "agent": "reviewer", "model": "claude-opus-5-5", "tokens": 120400, "usd": 1.92, "block": "regression", "brief": "# Role\nYou are the reviewer.\n# Brief\nReview tg-1.3 against its acceptance items."}
+]
