@@ -201,77 +201,47 @@ The engine writes each event through group state, the state manager's module tha
 
 Three subscribers watch the group state after `Next()`: the ledger, the wake file under `state/wake/<run>`, and the `status --watch` renderer. They never change group state; each writes only its own derived kind through the state manager. No hooks run on the bus; the 3 inline hooks live in the guard, tools and recovery.
 
-**📐 Event spine and group state machine**
+**📐 Which events fire in which stage**
 ```mermaid
-flowchart TB
-  %% Legend: solid arrow = the event path; dotted arrow = replay or a side path
-  subgraph PROD["Producers"]
-    direction TB
-    P1["Engine, workspace, ship: run.*, group.*, stage.*, lease.lost"]
-    P2["Supervisor: session.start, session.idle, session.timewarn, session.end"]
-    P3["Tools, guard, scheduler, recovery, Check, review: task.*, check.done"]
-    P4["Provider adapters: provider.skip, limit.warn"]
-  end
-  PROD --> ENV1["envelope: v, seq, ts, run, group, session"]
-  ENV1 --- ENV2["epoch, stale, type, reason, data, crc"]
-  ENV1 --> CH["the group's Drive channel, buffered to 256, never dropped"]
-  CH --> EPOCH{"epoch older than the current stage's?"}
-  EPOCH -->|"yes"| STALE["recorded with stale: true; Next() ignores it"]
-  EPOCH -->|"no"| J
-  STALE --> J
-  J[("runs/#lt;group#gt;/events.jsonl: group state Append; append, fsync, then apply")]
-  J --> N["Next(state, event): new state, actions, follow-on events"]
-  N -->|"follow-on events"| J
-  N -->|"new state"| SNAP[("runs/#lt;group#gt;/state.json: group state Snapshot; the last seq")]
-  SNAP --- SNAPR["written atomically every 50 events or on a stage change"]
-  N -->|"actions"| OUT
-  subgraph OUT["The outbox"]
-    direction TB
-    AS["action.start {id, kind}; id = sha256(seq, kind, args)"]
-    AS --> RUN["run the action"]
-    RUN --- K1["spawn, wip_commit, commit, cancel, setup"]
-    RUN --- K2["check, land, open_pr, scope_change, notify"]
-    RUN --> AD["action.done"]
-  end
-  AS --> J
-  AD --> J
-  J --> SUBS["Subscribers, exactly 3: ledger, wake file, status --watch"]
-  SUBS --> WAKE["state/wake/#lt;run#gt;: a touch, then the state tail"]
-  SNAP -.->|"Load: replay from the snapshot, never from seq 0"| J
-  J -.-> TORN["CRC mismatch on the last line: dropped, state.truncated once"]
-  OUT -.- REPLAY["on replay a done action is skipped, a started one reruns"]
+flowchart LR
+  %% One question: which event types fire in which stage. Spine arrows are the events that move a group.
+  RS["RUN STARTS<br><small>run.start</small>"]
+  IN["INTAKE<br><small>lock.taken<br>stage.exit</small>"]
+  BU["BUILD<br><small>task.claimed<br>task.retry<br>task.released<br>task.done</small>"]
+  CH["CHECK<br><small>check.done</small>"]
+  VE["VERIFY<br><small>finding.submit<br>finding.verified<br>stage.exit</small>"]
+  SH["SHIP<br><small>lock.released<br>group.shipped</small>"]
+  RE["RUN ENDS<br><small>run.done<br>run.stopped</small>"]
+  SE["SESSIONS IN BUILD AND VERIFY<br><small>session.start<br>session.idle<br>session.timewarn<br>tool.denied<br>session.end</small>"]
+  PA["PAUSED, ON A TIMER<br><small>group.paused<br>timer.due</small>"]
+  BL["BLOCKED, ON A PERSON<br><small>group.blocked</small>"]
+  AN["ANY STAGE<br><small>stage.enter<br>action.start<br>action.done<br>lease.lost<br>group.cancelled<br>state.truncated<br>provider.skip<br>limit.warn</small>"]
+  JO["SCHEDULER, NO GROUP<br><small>job.due<br>job.fail</small>"]
+  RS -->|"① run.start"| IN
+  IN -->|"② stage.exit"| BU
+  BU -->|"③ task.done"| CH
+  CH -->|"④ check.done pass"| VE
+  VE -->|"⑤ stage.exit"| SH
+  SH -->|"⑥ group.shipped"| RE
+  IN ~~~ SE
+  SE ~~~ PA
+  PA ~~~ BL
+  BL ~~~ AN
+  AN ~~~ JO
+  class RS,IN,BU,CH,VE,SH,RE core
+  class PA warn
+  class BL bad
+  class SE,AN,JO muted
 ```
-```mermaid
-stateDiagram-v2
-  [*] --> Intake: run.start
-  Intake --> Build: stage.exit, lint pass, lease and fence taken, setup exit 0
-  Build --> Check: task.done, last task done_when exit 0, commit on hidden ref
-  Check --> Verify: check.done pass
-  Check --> Build: check.done fail, returns under limits.returns
-  Verify --> Build: finding.verified, a verified blocking finding or not_met
-  Verify --> Ship: stage.exit, reviewer met, tester confirmed, 0 regressions
-  Ship --> [*]: group.shipped, merge clean, Check on the epic tip, fence
-  Build --> Paused: session.end reason paused, no allowed link left
-  Verify --> Paused: session.end reason paused, no allowed link left
-  Paused --> Build: timer.due, the provider's reset time passed
-  Paused --> Verify: timer.due, the provider's reset time passed
-  Paused --> Blocked: pause_timeout, limits.pause_max_min reached
-  Build --> Blocked: a bound is hit
-  Verify --> Blocked: a bound is hit
-  Blocked --> Build: resume, a person or the orchestrator
-  note left of Build
-    Returns to Build raise the epoch
-  end note
-  note right of Paused
-    Waits on a timer record wait_until; pool slot returned;
-    lease and worktree kept; wall clocks stopped
-  end note
-  note right of Blocked
-    Waits on a person or the orchestrator; pool slot returned;
-    ends by resume, scope approve or deny, abandon
-  end note
-```
-**Reading the diagram.** Events enter the group's `Drive` channel, pass the epoch filter and reach `events.jsonl` through group state's `Append` before `Next()` applies them. `Next()` feeds the snapshot through `Snapshot`, the outbox's `action.start` and `action.done`, and the three subscribers. The state diagram draws every row of the 13-row transition table, with Paused and Blocked.
+**Reading the diagram.** The spine runs left to right, and each box lists the event types that fire in that stage.
+1. ① `run.start` puts a group into Intake.
+2. ② `stage.exit` moves it to Build once Intake's gate is met.
+3. ③ The last task's `task.done` moves it to Check.
+4. ④ `check.done` with pass moves it to Verify.
+5. ⑤ `stage.exit` moves it to Ship once both Verify sessions pass.
+6. ⑥ `group.shipped` ends the group; the run ends after its last group.
+
+The lower row is off the spine: model sessions in Build and Verify, the two holding states, events that fire in any stage, and scheduler jobs. Returns to Build and the moves through Paused and Blocked are drawn in §10.1.
 
 **What matters**
 - The catalog has 32 event types in 7 families, registered with the state manager as the `event` kind; the build generates `embed/state.schema.json`, and the gate fails if they disagree.
@@ -2586,6 +2556,39 @@ Every spawn carries the stage's `epoch`, an integer that rises on each stage ent
 - **Blocked → Build on `resume`:** A person or the orchestrator ran `komodo resume`, or answered a scope request. The lease was kept throughout. The engine restarts the task's session from its resume handle, else a fresh session gets the brief, the WIP diff and the last `summary`.
 
 A table test enumerates every (stage, event) pair, including stale ones; the four Verify orderings each move the stage exactly once.
+
+**📐 Group state machine**
+```mermaid
+stateDiagram-v2
+  [*] --> Intake: run.start
+  Intake --> Build: stage.exit, lint pass, lease and fence taken, setup exit 0
+  Build --> Check: task.done, last task done_when exit 0, commit on hidden ref
+  Check --> Verify: check.done pass
+  Check --> Build: check.done fail, returns under limits.returns
+  Verify --> Build: finding.verified, a verified blocking finding or not_met
+  Verify --> Ship: stage.exit, reviewer met, tester confirmed, 0 regressions
+  Ship --> [*]: group.shipped, merge clean, Check on the epic tip, fence
+  Build --> Paused: session.end reason paused, no allowed link left
+  Verify --> Paused: session.end reason paused, no allowed link left
+  Paused --> Build: timer.due, the provider's reset time passed
+  Paused --> Verify: timer.due, the provider's reset time passed
+  Paused --> Blocked: pause_timeout, limits.pause_max_min reached
+  Build --> Blocked: a bound is hit
+  Verify --> Blocked: a bound is hit
+  Blocked --> Build: resume, a person or the orchestrator
+  note left of Build
+    Returns to Build raise the epoch
+  end note
+  note right of Paused
+    Waits on a timer record wait_until; pool slot returned;
+    lease and worktree kept; wall clocks stopped
+  end note
+  note right of Blocked
+    Waits on a person or the orchestrator; pool slot returned;
+    ends by resume, scope approve or deny, abandon
+  end note
+```
+**Reading the diagram.** Each arrow is one row of the 13-row transition table above, labelled with the event and its condition. Paused waits on a timer and Blocked waits on a person or the orchestrator.
 
 #### 10.2 Paused versus Blocked
 
