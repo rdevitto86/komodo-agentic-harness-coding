@@ -1718,6 +1718,12 @@ komodo-agentic-harness-coding/
 │   ├── claude/{CLAUDE.md, settings.json}.tmpl
 │   └── jobs/nightly-review.json   # [S17] example
 │
+├── dashboard/                     # proof of concept, design open (G-27)
+│   ├── dashboard.go               # loopback server, htmx fragments, event stream, model picker
+│   ├── assets/{htmx.min.js, diagram.js}   # embedded htmx 2.0.11; pipeline pointers
+│   ├── testdata/groups.json       # mock groups view
+│   └── poc/main.go                # go run ./dashboard/poc, moves mock groups every 2 s
+│
 ├── docs/
 │   ├── prd.md  hld.md  lld.md     # lld has one section per S-ID
 │   ├── decisions/{README.md, 0001-standalone-harness.md}
@@ -1731,6 +1737,7 @@ komodo-agentic-harness-coding/
 - **`cmd/komodo/` and `internal/`:** All Go code, one folder per package from the table above.
 - **`embed/`:** Everything a model reads: agent definitions, job templates, rules, output templates, review lenses, per-language repo-map patterns, skills, and the JSON files for defaults, state schema, models and policy (§6.3).
 - **`templates/`:** Files that `install` copies into a user's repo: the project docs and PR template, the `CLAUDE.md` and `.claude/settings.json` pair, and one example job.
+- **`dashboard/`:** A proof of concept for an opt-in browser dashboard, built on mock data. It shows each group's stage on a moving pipeline diagram and offers resume and per-agent model controls that are only recorded, not applied. Its design is open under G-27, so nothing else imports it.
 - **`docs/`:** The PRD, HLD and LLD (the LLD has one section per S-ID), the decision records, and `docs/backlog/epic-1/`, the task groups that build each component.
 - **`testdata/fixture-repo/`:** The small repo that end-to-end runs build against.
 Rules: a file splits at about 600 lines; a new package needs a new layer; `_test.go` files sit next to their sources. About 90 files in 12 packages.
@@ -5738,6 +5745,8 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-24 | State manager | The `data` struct of each of the 32 event types, listed in `state.schema.json` | LLD authoring, phase 1 |
 | G-25 | Sandbox | Whether a Docker volume per worktree beats the bind mount on copy time | Spike with G-11, phase 2 |
 | G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 |
+| G-27 | Dashboard | An opt-in browser dashboard that stands in for the orchestrator: stack, `komodo ui` verb, live model changes, the "no server process" exception | Owner decision; proof of concept in `dashboard/` |
+| G-28 | Install | A `komodo init` verb that puts Komodo's orchestrator skills and commands into the global Claude Code setup | Owner decision |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy (§32).
@@ -5766,6 +5775,8 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 - **G-24:** The fields each of the 32 event types carries in its `data` part are not yet listed. It matters because the state manager validates every event against the one schema, so an unlisted field cannot be checked. Listing them is an LLD authoring task in phase 1.
 - **G-25:** Whether a Docker volume per worktree copies a large `node_modules` faster than the bind mount. It matters for Docker sandbox start time, but a volume puts files where the host sweep cannot reach them. A spike in phase 2 measures it alongside G-11.
 - **G-26:** Whether usage metrics should be split by provider family: Claude, GPT and local models. Deferred by owner decision on 2026-10-12; today `track.usage` records one set of tokens and USD per session. Nothing is designed yet.
+- **G-27:** Whether Komodo gets a browser dashboard a person can use instead of the orchestrator's verbs. It would show every stage, subsystem, agent and group on a live diagram, change an agent's model mid-run, and act on groups. Open: the front-end stack, a `komodo ui` verb run only from a terminal, whether model changes reach a running run (§8.1 pins config at run start), and the exception to "no server process"; a proof of concept is in `dashboard/`.
+- **G-28:** Whether a `komodo init` verb installs Komodo's orchestrator skills and commands into the global Claude Code folder, while `install` keeps placing the binary. It matters because install today writes nothing under `~/.claude` (§33) and the 7 worker agents stay inside the binary. Open: a Claude Code plugin or plain files with a machine manifest, and the reuse of the retired name `init`.
 
 Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag without a row here.
 
