@@ -1065,7 +1065,7 @@ Three mechanical checks enforce it:
 - **Fact checks:** Go checks each fact before rendering: a SHA matches the repo, a path is in the diff or worktree, a task ID exists. A failed fact gets the S08 schema re-prompt.
 - **Escaping:** fact strings render as literal code spans, so a fact holding a newline or `## ` cannot change the layout. G4 redaction and G5 run on rendered text.
 - **Unlisted cases:** code `other` renders one fixed line, "Needs a decision; details in `<path>`", with the model's own text in that file.
-- **Code list:** starts from beta 5's real blocks and escalations, PR #335's `branch_missing` among them. A new code is a plan change: schema enum, template and fixture together. Beta 6 adds `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky` and `tester`, plus the tester's `pass`, `fail`, `env`, `wrong_command` and `real_failure`.
+- **Code list:** starts from the previous binary's real blocks and escalations, PR #335's `branch_missing` among them. A new code is a plan change: schema enum, template and fixture together. Beta 6 adds `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky` and `tester`, plus the tester's `pass`, `fail`, `env`, `wrong_command` and `real_failure`.
 - **Event reasons:** every event's `reason` is a code from this list, and the event types are a catalog under the same rule (§1 Event model).
 
 **Output mapping (`embed/output/`):**
@@ -2141,11 +2141,11 @@ komodo-agentic-factory-coding/
 - **Security lens required for:** S02, S03, S06, S08, S12, S13 and S26, even in economy mode. Before phase 7, you review those groups by hand.
 - **Architect:** only for the Vet lines still open when a group starts.
 
-## Bootstrap and cutover: retiring beta 5
+## Bootstrap and cutover: retiring the installed binary
 
-**Why beta 5 retires first:** `~/.local/bin/komodo` is a symlink to `~/.komodo/bin/komodo`, the path beta 6 installs to. The global hooks call that path with beta 5 verbs. Beta 6 would answer `komodo guard` with exit 2 (usage), and Claude Code treats exit 2 as a block. Every `Agent`, `Bash`, `Edit` and `Write` call in every repo would be refused.
+**Why the installed binary retires first:** `~/.local/bin/komodo` is a symlink to `~/.komodo/bin/komodo`, the path beta 6 installs to. The global hooks call that path with the old verbs. Beta 6 would answer `komodo guard` with exit 2 (usage), and Claude Code treats exit 2 as a block. Every `Agent`, `Bash`, `Edit` and `Write` call in every repo would be refused.
 
-**Before phase 2:** retire beta 5 with the edits below. Its binary stays on disk, unused, until `gate --install` replaces it in phase 7. Beta 6 never writes `~/.claude`, so these are one-time hand edits.
+**Before phase 2:** retire the installed binary with the edits below. Its binary stays on disk, unused, until `gate --install` replaces it in phase 7. Beta 6 never writes `~/.claude`, so these are one-time hand edits.
 
 **`~/.claude/settings.json`:**
 
@@ -2161,7 +2161,7 @@ komodo-agentic-factory-coding/
 
 | Skill | Stale | Replaced in phase 8 by |
 |---|---|---|
-| `komodo` | the beta 5 verb list (`init`, `migrate`, `next`, `brief`, `ingest`, `close`, …) | embedded; `skill get komodo` |
+| `komodo` | the old verb list (`init`, `migrate`, `next`, `brief`, `ingest`, `close`, …) | embedded; `skill get komodo` |
 | `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | embedded; `skill get plan` |
 | `run` | `komodo run <group>` in the background, `komodo resume <group>` | embedded; `skill get run` |
 | `respond` | `komodo threads`, `komodo gate` | embedded; `skill get respond` |
@@ -2182,7 +2182,7 @@ komodo-agentic-factory-coding/
 | File | Stale | Becomes |
 |---|---|---|
 | `.github/PULL_REQUEST_TEMPLATE.md` | `komodo pr create --title … --body-file …` | the engine's S26 body template |
-| `backups/` | every beta 5 verb | removed in `7b407710`; the archive is commit `fdf4f61f` |
+| `backups/` | every old verb | removed in `7b407710`; the archive is commit `fdf4f61f` |
 
 **Order:**
 1. **Before phase 2:** apply the "Before phase 2" edits above; phases 2–6 then run in plain Claude Code (§6).
@@ -2230,7 +2230,7 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | G3 protects settings files only; memory and plans are never blocked | Part C |
 | Config moves to `core`; imports follow one order, with higher needs passed in | §2, S04, §4 |
 | S25 lint and a `claude -p` spike move to phase 2, `claude -p` to phase 4; beta 6 self-hosts from phase 7 | §6 |
-| Beta 5 retires before phase 2; cutover line numbers corrected | Bootstrap and cutover |
+| The installed binary retires before phase 2; cutover line numbers corrected | Bootstrap and cutover |
 | `install --schedule` writes OS scheduler entries; `orch wait` defaults to 9m, in the background | S01, S02, S17 |
 | Install writes only `.claude/settings.json` (allow rule, `SessionStart` → `status`) and no `.codex/`; the orchestrator gets `AGENTS.md` rules on every host; O8, `internal guard` and `internal session-start` dropped | S01, S02, S03, S12, Part C, cutover |
 | The orchestrator rules are embedded `orchestrator.md`; models return codes and facts, and Go templates per `output.profile` write every word a person reads; `gate` checks the code-to-template mapping; the repo addendum is read from the base commit | S04, S07, S10, S11, S12, S25, S26, Part C, §4 |

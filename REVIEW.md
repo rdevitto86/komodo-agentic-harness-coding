@@ -294,7 +294,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 - **Template pipeline:** `text/template` with `missingkey=error` and 6 functions only; one Go struct per template; facts → fact checks (SHA, path, task ID) → escape → template → 80-column wrap → color.
 - **Golden fixtures:** every template renders its fixture under both profiles at the gate and compares bytes.
 - **Tables:** over 5 rows → top 5 plus `N more`; a cell over 45 characters moves to a labeled line.
-- **Code list:** beta 5's blocks plus `cancelled, paused, integration, epic_gate, dependency, flaky, tester, config_tampered, locked, regression, lint, disputed, crash` and the tester's item codes.
+- **Code list:** the previous binary's blocks plus `cancelled, paused, integration, epic_gate, dependency, flaky, tester, config_tampered, locked, regression, lint, disputed, crash` and the tester's item codes.
 - **No leaks:** the addendum strips the Komodo block; a worker `agent.json` listing an orchestrator skill fails the gate; `--setting-sources ""` on CLI links.
 
 **Commands owned:** none.
