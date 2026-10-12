@@ -1,1 +1,0 @@
-{"role":"orchestrator","skills":[],"rules":[],"hooks":["prune","status"],"guards":"orchestrator","commands":["conductor","cut","epic","lease","ledger","plan","release","run","ship","status"]}

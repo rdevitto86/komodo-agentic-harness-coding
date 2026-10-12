@@ -1,7 +1,0 @@
-- [x] **TSK-15.4.8** komodo release notes renders an epic's changelog section from EPIC.md and its landed groups
-  - files: `cmd/komodo/release.go`, `internal/changelog/changelog.go`, `internal/changelog/changelog_test.go`, `cmd/komodo/release_test.go`
-  - accept: `komodo release notes EPIC-NN` prints a `## <version> — <date>` section: the goal's first sentence, then one bullet per landed group's title
-  - accept: the last group's ship inserts it above the previous section when CHANGELOG.md lacks it
-  - done_when: `go test ./cmd/komodo/... ./internal/changelog/...`
-  - context: `today: CHANGELOG.md is written by hand in the release skill from git log; #280 wrote alpha.6 to beta.4 in one PR after the fact`, `the section shape is `## <version> — <date>` then bullets, as CHANGELOG.md's top sections show; Keep a Changelog style`, `the last group's land is the point where the epic's groups are all known; insert only when the heading is absent`
-  - priority: M

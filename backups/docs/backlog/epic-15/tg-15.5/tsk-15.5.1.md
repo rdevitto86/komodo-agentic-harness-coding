@@ -1,7 +1,0 @@
-- [ ] **TSK-15.5.1** Ship merges a reviewed group into the epic branch and opens no group pull request
-  - files: `internal/line/ship.go`, `internal/line/merge.go`, `internal/line/ship_test.go`, `internal/line/merge_test.go`
-  - accept: after the review gate passes, Ship fetches the epic branch, merges the group's tip with `--no-ff` and a message `land(<group>): <title>` carrying the ticked task list, pushes the epic branch, and creates no PR
-  - accept: a merge conflict stops the group with a blocker note
-  - done_when: `go test ./internal/line/...`
-  - context: `docs/decisions/0006-people-merge-to-main-and-agents-work-only-on-their-own-branches.md`, `docs/lld.md#prepare-and-ship`, `today: ShipGroupContext (internal/line/ship.go:143) pushes the group branch, opens a draft PR with openDraftPull (:290) and MergeGroup later merges it through gh; the decision's 2026-10-04 amendment removes the group PR`, `the merge commit message: `land(TG-15.3): Nothing stale loads into a session` then the ticked task list as the body; use git merge --no-ff on a detached worktree of the epic branch, never in the root checkout`, `a conflict is a repair round as Prepare already does for rebases (ship.go:1008 area); if it persists the group stops with a blocker note`
-  - priority: C

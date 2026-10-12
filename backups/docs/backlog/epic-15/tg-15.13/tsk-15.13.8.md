@@ -1,6 +1,0 @@
-- [ ] **TSK-15.13.8** The out-of-box test times every hook on the calls it actually judges
-  - files: `internal/gate/outofbox_test.go`
-  - accept: the 100 ms test times the status hook, the prune hook's launch, and the guard on a Bash and an Edit call, not on a file read
-  - done_when: `go test ./internal/gate/...`
-  - context: `today: internal/gate/outofbox_test.go:174 holds session start under 100 ms but never times the prune hook and times the guard only on a file read, which the guard never judges`
-  - priority: L

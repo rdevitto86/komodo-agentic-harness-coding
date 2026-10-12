@@ -1,7 +1,0 @@
-- [ ] **TSK-15.8.5** The context pack adds exported Go signatures from each declared file
-  - files: `internal/line/brief_slots.go`, `internal/line/signatures.go`, `internal/line/signatures_test.go`
-  - accept: for each declared .go file, a `signatures` slot lists its exported funcs, types and methods as one line each through go/ast, under its own cap
-  - accept: non-Go files add nothing
-  - done_when: `go test ./internal/line/...`
-  - context: `docs/lld.md#token-efficiency`, `today: the LLD says context packs give signatures and callers; the pack gives file bodies only; go/ast is stdlib and parses a file in milliseconds`, `cap the slot at 4,000 chars per file; a parse error adds nothing`
-  - priority: M

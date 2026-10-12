@@ -1,7 +1,0 @@
-- [ ] **TSK-15.5.6** Prepare's cross-group test-merge keys on the same epic, not an identical run id
-  - files: `internal/conductor/integrate.go`, `internal/conductor/integrate_test.go`
-  - accept: integrate test-merges every other group of the same epic that is Preparing or Shipping, whatever its run id
-  - accept: a test proves two groups with distinct run ids are merged together
-  - done_when: `go test ./internal/conductor/...`
-  - context: `today: integrate (internal/conductor/integrate.go:30) skips any state whose Run differs from the group's own, but run ids are `<group>-<unix>` per group (internal/line/cut.go:121), so no other group ever matches in production; only tests sharing Run r1 exercise it`, `docs/lld.md#prepare-and-ship`
-  - priority: H

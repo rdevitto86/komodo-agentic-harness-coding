@@ -1,7 +1,0 @@
-- [ ] **TSK-15.16.1** The README and the LLD claim only what the code does
-  - files: `README.md`, `docs/lld.md`
-  - accept: every `komodo <sub>` and `/<skill>` named in both files exists
-  - accept: the hooks, skills and budget claims match the code after this epic
-  - done_when: `go run ./cmd/komodo doctor`
-  - context: `today: README.md:91 shows /review, which no skill provides; README.md:115 lists run, review, backlog, respond; docs/lld.md:174, 205, 310-318, 325, 405-406, 425-426 and 489-500 claim things the code does not do, listed in the review's stale-fragments table`
-  - priority: M

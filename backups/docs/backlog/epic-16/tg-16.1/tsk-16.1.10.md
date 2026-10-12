@@ -1,6 +1,0 @@
-- [ ] **TSK-16.1.10** Codex line sessions deny the policy, the PRD and the golden suite through their own role rules
-  - files: `internal/mount/codex/codex.go`, `internal/mount/codex/codex_test.go`
-  - done_when: `go test ./internal/mount/codex/...`
-  - context: `was TSK-11.30.1`, `deferred by the owner until a Codex account exists; nothing runs Codex today`, `today: Claude line sessions deny komodo/policy.json, docs/prd.md and eval/** through --disallowedTools (internal/mount/claude/permissions.go:88); the Codex mount is Deferred (internal/mount/codex/codex.go:194) and nothing runs it; its hooks file calls the raw binary path instead of the published one (codex.go:163-172)`, `was TSK-11.17.11`, `was TSK-08.9.1`
-  - priority: H
-  - status: BLOCKED

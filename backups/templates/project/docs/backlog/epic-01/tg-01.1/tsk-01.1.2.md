@@ -1,3 +1,0 @@
-- [ ] **TSK-01.1.2** A task that waits on the first one
-  - files: `path/to/other`
-  - depends_on: TSK-01.1.1

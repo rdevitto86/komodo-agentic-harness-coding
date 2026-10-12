@@ -1,7 +1,0 @@
-- [x] **TSK-15.4.4** An epic pull request turns ready only when its diff adds no backlog file and the changelog names its version
-  - files: `internal/line/epic.go`, `internal/pr/pr.go`, `internal/line/epic_test.go`
-  - accept: marking the epic PR ready is refused, naming the files, while `git diff main...feat/<version> -- docs/backlog` adds any file
-  - accept: it is refused while CHANGELOG.md has no heading for the version
-  - done_when: `go test ./internal/line/... ./internal/pr/...`
-  - context: `docs/prd.md#requirements`, `REQ-46 and the rule that no backlog file reaches main: the ship commit of the last group deletes the epic folder, so an epic PR whose diff still adds docs/backlog files is unfinished`, `markReady (internal/line/ship.go:355-365) is the place; refuse with the file list and the missing changelog heading in one message`
-  - priority: C

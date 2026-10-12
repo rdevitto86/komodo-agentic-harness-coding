@@ -1,7 +1,0 @@
-- [ ] **TSK-15.13.6** Doctor lists unknown entries in .komodo as leftovers
-  - files: `internal/doctor/leftovers.go`, `internal/doctor/leftovers_test.go`
-  - accept: any entry under .komodo the binary does not create is a note naming its size
-  - accept: the known set is one list in the doctor package
-  - done_when: `go test ./internal/doctor/...`
-  - context: `today: .komodo holds kg (an 11 MB arm64 executable nothing references), smoke-auth-api, archive, stash-archive, wave5.json, review-input.md, pr-body.md, labels.tsv, label-plan.txt, proofs.tsv, ship.out and two run-*.log files that no code creates`, `the known set: wt, runs, briefs, results, attempts, bin, queue, sessions, line.jsonl, line.<run>.jsonl, adhoc.jsonl, events.jsonl, coverage.json, profile.json, comments-sweep.json, prune.log, prune.lock, run.lock, cut.lock, stash-archive, context, standards, skills, commands.json, policy.json, labels.json`
-  - priority: M

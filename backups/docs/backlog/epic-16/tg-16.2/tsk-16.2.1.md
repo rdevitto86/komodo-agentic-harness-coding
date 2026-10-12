@@ -1,4 +1,0 @@
-- [ ] **TSK-16.2.1** Integration tests cover local-LLM and OpenAI cross-communication
-  - owner: human
-  - context: `docs/decisions/0015-per-agent-suites.md`, `docs/prd.md#product-scope`, `not ready: local models and OpenAI are out of scope for 1.0.0; once either lands, add the integration tier this plan reserves for it, real cross-communication between a local model and a hosted one, never mocked, alongside the unit and component suite each package already carries`
-  - priority: M

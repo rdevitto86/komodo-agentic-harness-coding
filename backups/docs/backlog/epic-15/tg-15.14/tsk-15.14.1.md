@@ -1,9 +1,0 @@
-- [ ] **TSK-15.14.1** The critical set is one policy: refs gain stg and staging, and critical paths are named
-  - files: `komodo/policy.json`, `internal/guard/policy.go`, `internal/guard/git.go`, `internal/guard/table.go`, `internal/guard/guard_test.go`
-  - accept: critical_refs holds main, master, trunk, stg, staging, prod, production, release/*, hotfix/*
-  - accept: critical_paths defaults to komodo/policy.json, docs/prd.md, eval/**, .github/**, install.sh, install.ps1
-  - accept: a session's rm, git rm or mv of a critical path is refused with the path named, while an edit on a branch stays allowed
-  - accept: a table row proves each
-  - done_when: `go test ./internal/guard/...`
-  - context: `docs/decisions/0015-per-agent-suites.md`, `today: komodo/policy.json critical_refs are main, master, trunk, prod, production, release/*, hotfix/*; the SDLC's environments are DEV/local, CI, STG, PROD, so stg and staging are critical refs and CI is a stage, not a ref`, `today: LineRefusedPaths (internal/guard/policy.go:211) refuses edits by line sessions only; nothing refuses a session deleting those files`, `the guard's rm handling lands in TSK-15.12.4; this task adds the critical-path check on top of it`
-  - priority: C

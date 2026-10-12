@@ -1,9 +1,0 @@
-- [ ] **TSK-15.15.4** The ledger is never truncated to one run
-  - files: `internal/line/cut.go`, `internal/ledger/ledger.go`, `internal/line/report.go`, `internal/ledger/ledger_test.go`, `internal/line/report_test.go`
-  - accept: line.jsonl is only appended
-  - accept: TruncateRun is removed
-  - accept: `komodo status` and `komodo metrics` take `--run <id>` and default to the newest run
-  - accept: a test proves two runs coexist
-  - done_when: `go test ./internal/line/... ./internal/ledger/...`
-  - context: `today: TruncateRun (internal/ledger/ledger.go:113-131) moves line.jsonl to line.<run>.jsonl at the next cut and pruneSpentState deletes those files once the group is gone; this machine's ledger holds one run, so the line's history before Oct 4 is gone`, `komodo status and komodo metrics read internal/ledger; both take the run id as a filter`
-  - priority: H

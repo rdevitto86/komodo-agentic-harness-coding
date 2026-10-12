@@ -1,5 +1,0 @@
-- [ ] **TSK-16.1.8** The owner settles the PRD's open questions
-  - files: `docs/prd.md`
-  - owner: human
-  - context: `was TSK-08.8.3`, `docs/prd.md#open-questions`, `Q1: whether 90 percent pass and 90 percent consistency are the right bars; Q2: the dollar budget per run once eval shows what a group costs; the defaults hold until the owner answers`
-  - priority: M

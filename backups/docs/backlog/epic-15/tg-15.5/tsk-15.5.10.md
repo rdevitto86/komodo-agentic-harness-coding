@@ -1,7 +1,0 @@
-- [x] **TSK-15.5.10** A --no-ship run that blocks keeps its blocker note local
-  - files: `internal/line/ship.go`, `internal/line/ship_blocked_test.go`, `internal/conductor/stop.go`, `internal/conductor/drive.go`, `internal/run/drive.go`
-  - accept: with --no-ship a blocked group makes its WIP and note commits on its branch and pushes nothing, so no status/blocked pull request opens
-  - accept: without --no-ship ShipBlocked is unchanged
-  - done_when: `go test ./internal/line/... ./internal/conductor/... ./internal/run/...`
-  - context: `today: noShipStations refuses only Ship; Block still ran ShipBlocked, which pushes and opens a draft pull request against the epic branch`
-  - priority: H

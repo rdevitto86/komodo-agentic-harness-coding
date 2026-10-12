@@ -1,7 +1,0 @@
-- [ ] **TSK-15.17.2** komodo status counts refusals per run so REQ-38 is measured
-  - files: `internal/line/report.go`, `internal/guard/hook.go`, `internal/line/report_test.go`
-  - accept: the report lists each refusal file for the run with its role, rule and would-allow class
-  - accept: the eval report fails a golden run with any refusal of an allow-listed command
-  - done_when: `go test ./internal/line/... ./internal/guard/...`
-  - context: `docs/prd.md#requirements`, `REQ-38's proof is that golden runs record no refusal of an allow-listed command; today refusals are counted per message only (internal/guard/hook.go:123) and no report reads them`
-  - priority: H

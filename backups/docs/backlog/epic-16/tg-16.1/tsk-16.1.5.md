@@ -1,5 +1,0 @@
-- [ ] **TSK-16.1.5** Run the out-of-box proof on a native Windows machine and record it
-  - accept: the run's output is pasted into the epic pull request
-  - owner: human
-  - context: `was TSK-11.19.5`, `the out-of-box proof is internal/gate/outofbox_test.go on a native Windows machine: install, doctor exit 0, session start under 100 ms; its output is pasted into the epic PR`
-  - priority: H

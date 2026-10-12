@@ -1,6 +1,0 @@
-- [ ] **TSK-15.15.3** A test proves the dry run leaves a vanished worktree registered
-  - files: `internal/doctor/prune.go`, `internal/doctor/prune_test.go`
-  - accept: a prune_test case registers a worktree, deletes its folder, calls Prune(root, base, false), and asserts `git worktree list` still names it and the report says it would remove it
-  - done_when: `go test ./internal/doctor/...`
-  - context: `was TSK-11.29.4`, `today: Prune(root, base, false) skips git worktree remove --force and git worktree prune but no test calls it on a repo holding a vanished worktree`
-  - priority: M

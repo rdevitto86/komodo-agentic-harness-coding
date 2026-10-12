@@ -1,6 +1,0 @@
-- [ ] **TSK-15.8.4** Caps.Standard from the profile and the overlay is honored
-  - files: `internal/line/brief_slots.go`, `internal/line/brief_test.go`
-  - accept: the standards slot uses profile.Caps.Standard, and an overlay value below the default clips a standard at that size
-  - done_when: `go test ./internal/line/...`
-  - context: `today: brief_slots.go:260 uses the constant CapStandard and ignores profile.Caps.Standard and the overlay's caps.standard`
-  - priority: M

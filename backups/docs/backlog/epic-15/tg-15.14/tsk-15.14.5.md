@@ -1,8 +1,0 @@
-- [ ] **TSK-15.14.5** Leases bind sessions only
-  - files: `internal/lease/lease.go`, `internal/gate/gate.go`, `internal/guard/git.go`, `internal/lease/lease_test.go`, `internal/gate/gate_test.go`
-  - accept: a person's push to a leased branch drops the lease and goes through
-  - accept: a session's push to another holder's lease is refused naming the group and lapse time
-  - accept: decision 0012's amendment states it
-  - done_when: `go test ./internal/lease/... ./internal/gate/... ./internal/guard/...`
-  - context: `today: the pre-push hook refuses a person's push to a leased branch for up to 2 hours (gate.go:406, lease TTL lease.go:20); decision 0012's consequences say a person can always push their own branch`, `docs/decisions/0012-agent-worktrees-are-detached-and-only-a-live-builder-holds-a-branch.md`
-  - priority: H

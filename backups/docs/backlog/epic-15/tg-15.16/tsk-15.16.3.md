@@ -1,6 +1,0 @@
-- [ ] **TSK-15.16.3** Dead evidence plumbing and its comment are gone
-  - files: `internal/hooks/evidence.go`, `internal/review/evidence.go`, `internal/hooks/evidence_test.go`
-  - accept: review.Tree.Report is removed with its plumbing, citesMeasurement takes the validator report it needs, and lensTree's comment reads `lensTree is the worktree and its diff against the group's base.`
-  - done_when: `go test ./internal/hooks/... ./internal/review/...`
-  - context: `was TSK-11.29.5`, `was TSK-11.29.6`, `today: lensTree was the only production code filling review.Tree.Report; citesMeasurement always gets an empty Report, so the field and its plumbing in internal/review/evidence.go:34 and :93 are dead`
-  - priority: L

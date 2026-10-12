@@ -1,7 +1,0 @@
-- [ ] **TSK-15.10.2** Retired skills remove their folders
-  - files: `internal/mount/claude/claude.go`, `internal/mount/claude/claude_test.go`
-  - accept: the retired list removes the whole skill folder in the repo and the global layer, not only SKILL.md
-  - accept: .claude/skills holds no empty folder after Render
-  - done_when: `go test ./internal/mount/claude/...`
-  - context: `today: the retired list (claude.go:37-46) removes only SKILL.md, leaving .claude/skills/adhoc, backlog and review as empty folders`
-  - priority: M

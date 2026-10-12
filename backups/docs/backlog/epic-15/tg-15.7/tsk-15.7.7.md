@@ -1,6 +1,0 @@
-- [ ] **TSK-15.7.7** Cost on a resumed session is stamped as the delta
-  - files: `internal/conductor/drive.go`, `internal/conductor/drive_test.go`
-  - accept: a repair that resumes a session records cost and tokens minus the session's previous totals, so the ledger's sum equals the host's total
-  - done_when: `go test ./internal/conductor/...`
-  - context: `today: the TG-11.27 ledger shows build $4.85 then repair $5.40 for 10 turns and 26k tokens, which is the cumulative total_cost_usd stamped again (internal/conductor/drive.go:690-705)`, `keep the last stamped total per session id in State and stamp the difference`
-  - priority: H

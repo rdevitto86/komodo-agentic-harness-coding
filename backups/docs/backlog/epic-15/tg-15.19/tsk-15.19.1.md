@@ -1,7 +1,0 @@
-- [ ] **TSK-15.19.1** The REQ-3 canary always runs
-  - files: `internal/eval/cases.go`, `internal/eval/cases_test.go`
-  - accept: the canary case plants its own instruction, allow rule and MCP server in a throwaway home, starts a line session against it, and fails if any of the three appears in the session's effective config or output
-  - accept: it never reports skipped
-  - done_when: `go test ./internal/eval/...`
-  - context: `docs/prd.md#requirements`, `REQ-3's proof is a canary; today the eval case prints `case canary (REQ-3): skipped: no personal host instructions file to plant it in` on a clean machine (internal/eval/cases.go), so the one proof that global config cannot leak never runs`
-  - priority: H

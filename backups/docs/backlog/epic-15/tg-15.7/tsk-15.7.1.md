@@ -1,8 +1,0 @@
-- [ ] **TSK-15.7.1** A session with no stream event for ten minutes is marked stalled, pushed once, then killed after a 5-minute grace
-  - files: `internal/conductor/drive.go`, `internal/conductor/drive_test.go`
-  - accept: drain waits on an idle timer reset by every event
-  - accept: on expiry the registry entry moves to `stalled` and the orchestrator pushes the session once
-  - accept: 5 minutes after the push with still no event, drain stops the session's process group, sets the registry entry `spunDown`, and hands the group to the orchestrator with reason `idle` and the last event's time
-  - done_when: `go test ./internal/conductor/...`
-  - context: `today: drain (internal/conductor/drive.go:691-706) selects on ctx.Done and the next event only; a silent session holds until the group's own window runs out`, `docs/lld.md#pacing-limits-and-loop-detection`, `docs/decisions/0015-per-agent-suites.md`, `stop through Host.Stop so the whole process group dies, as a normal end does (internal/mount/claude/contract.go)`
-  - priority: C

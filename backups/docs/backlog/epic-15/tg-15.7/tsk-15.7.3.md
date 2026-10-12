@@ -1,7 +1,0 @@
-- [ ] **TSK-15.7.3** komodo resume continues the drive instead of printing state
-  - files: `cmd/komodo/line.go`, `cmd/komodo/line_test.go`
-  - accept: `komodo resume <group>` clears a blocker, then runs the same drive `komodo run <group>` would, under the remaining budget
-  - accept: `--print` keeps the old report
-  - done_when: `go test ./cmd/komodo/...`
-  - context: `today: cmd/komodo/line.go:72-106 prints state.json and clears a Blocked note; it starts nothing; the run skill tells the person to run it expecting a continuation`, `docs/lld.md#recovery`
-  - priority: C

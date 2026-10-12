@@ -1,7 +1,0 @@
-- [ ] **TSK-15.15.1** The prune log keeps the last 20 sweeps and the status hook prints the last one
-  - files: `internal/hooks/prune.go`, `internal/hooks/status.go`, `internal/hooks/prune_test.go`, `internal/hooks/status_test.go`
-  - accept: prune.log is appended with one block per sweep and trimmed to 20
-  - accept: the status hook prints `last sweep <time>: <summary>` from it
-  - done_when: `go test ./internal/hooks/...`
-  - context: `today: Sweep overwrites .komodo/prune.log on every run (internal/hooks/prune.go:105) and the status hook never reads it`, `docs/lld.md#hooks`
-  - priority: M

@@ -1,8 +1,0 @@
-- [ ] **TSK-15.10.6** Profile entries nothing reads are removed or wired, and each lens runs at its tier and effort
-  - files: `komodo/profiles/full.json`, `komodo/profiles/economy.json`, `internal/profile/profile.go`, `internal/run/requests.go`, `internal/profile/profile_test.go`, `internal/run/requests_test.go`
-  - accept: `readiness` is gone
-  - accept: correctness, security and quality each pick their own tier and effort from the profile
-  - accept: a test proves the quality lens runs on the standard tier in full mode
-  - done_when: `go test ./internal/profile/... ./internal/run/...`
-  - context: `today: komodo/profiles/full.json names builder, correctness, security, readiness, quality, planner, scout, escalation; only builder and escalation are read through Profile.Machine; every lens runs on Tiers.Reviewer with no effort; readiness is not a lens (internal/review/lenses.go); the LLD's profile table promises Opus high for two lenses and Sonnet medium for quality`, `docs/lld.md#profiles-and-economy-mode`
-  - priority: M

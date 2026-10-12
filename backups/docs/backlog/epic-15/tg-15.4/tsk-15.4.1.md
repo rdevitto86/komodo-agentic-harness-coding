@@ -1,7 +1,0 @@
-- [x] **TSK-15.4.1** The group file cap and the epic group cap read one constant each
-  - files: `internal/backlog/lint.go`, `internal/profile/profile.go`, `internal/profile/profile_test.go`, `internal/line/ship.go`, `internal/line/ship_test.go`
-  - accept: profile.PRFiles and PRLinesMax are gone, and checkPRSize with its call in ship.go goes with them
-  - accept: backlog.MaxGroupFiles and DefaultGroupsMax are the only caps and the overlay cannot raise them
-  - done_when: `go test ./internal/backlog/... ./internal/profile/... ./internal/line/...`
-  - context: `today: profile.go:105-107 holds PRFiles 20, PRLinesMax 2000, PRLinesPreferred 1000 for the ship-time check; backlog.MaxGroupFiles 20 and DefaultGroupsMax 6 hold the lint-time caps; two sources for one number`, `docs/decisions/0006-people-merge-to-main-and-agents-work-only-on-their-own-branches.md`
-  - priority: H

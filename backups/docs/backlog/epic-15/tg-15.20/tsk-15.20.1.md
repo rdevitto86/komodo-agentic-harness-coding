@@ -1,7 +1,0 @@
-- [x] **TSK-15.20.1** A builder's test runs git init without writing hooks
-  - files: `internal/mount/claude/session.go`, `internal/mount/claude/session_test.go`, `internal/mount/claude/contract.go`
-  - accept: the env points git at a template holding only an empty hooks dir, so git init writes an empty .git/hooks and no sample hook
-  - accept: a test proves the env and that git init with it creates an empty hooks directory
-  - done_when: `go test ./internal/mount/claude/...`
-  - context: `was TSK-15.7.11, moved here because TG-15.4's builder could not run go test ./cmd/komodo/...: git init in a test wrote .git/hooks and the sandbox refused it`, `git's init.templateDir or GIT_TEMPLATE_DIR pointed at an empty directory writes no hooks`, `docs/lld.md#security`
-  - priority: H

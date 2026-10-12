@@ -1,7 +1,0 @@
-- [ ] **TSK-15.10.1** One protected-skill list
-  - files: `internal/repo/skills.go`, `internal/mount/claude/claude.go`, `internal/repo/skills_test.go`
-  - accept: repo.Protected and the mount's orchestratorSkills read one list: komodo, plan, respond, run
-  - accept: `review` and `backlog` are gone from both
-  - done_when: `go test ./internal/repo/... ./internal/mount/claude/...`
-  - context: `today: internal/repo/skills.go:14 protects run, review, backlog, respond; claude.go:133 makes komodo, plan, respond, run global; docs/lld.md#skills-and-scoping now lists only komodo, run and plan; review, backlog, respond and escalate were all retired`
-  - priority: M

@@ -1,7 +1,0 @@
-- [x] **TSK-15.4.6** Doctor fails when origin's default branch holds a backlog file
-  - files: `internal/doctor/doctor.go`, `internal/doctor/doctor_test.go`
-  - accept: with --remote, doctor lists every docs/backlog path on origin's default branch as a problem and names `komodo sync` as the fix
-  - accept: `komodo sync` opens the cleanup PR
-  - done_when: `go test ./internal/doctor/...`
-  - context: `today: origin/main held 35 backlog files from #282 and nothing reported it; syncCleanup (internal/run/sync.go:216-255) opens the cleanup PR only for a fully ticked epic`, `docs/lld.md#health-checks`, `git ls-tree -r --name-only origin/<default> docs/backlog is the check; it needs the fetch doctor --remote already does`
-  - priority: H

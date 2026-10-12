@@ -1,7 +1,0 @@
-- [ ] **TSK-15.8.1** The role frame, rules, standards and schema appear once per session prompt
-  - files: `internal/run/requests.go`, `internal/line/brief.go`, `internal/line/brief_slots.go`, `internal/run/requests_test.go`, `internal/line/brief_test.go`
-  - accept: BuilderRequest renders the frame, AGENTS.md, standards and the result schema once, then one block per task holding only its title, yaml, files, context and done_when
-  - accept: a 12-task group's prompt holds each stable slot exactly once
-  - done_when: `go test ./internal/run/... ./internal/line/...`
-  - context: `docs/lld.md#briefs`, `today: BuilderRequest (internal/run/requests.go:17-41) joins one BuildBrief per task with ---, and each brief (internal/line/brief.go:124-182) repeats the 4.3 KB role frame, AGENTS.md, every matching standard and the 2.2 KB schema, about 15 KB per task before any file; a 12-task group carries about 45k tokens of repeats`, `slot order and names are in internal/line/brief_slots.go and komodo/roles/builder.md`
-  - priority: H

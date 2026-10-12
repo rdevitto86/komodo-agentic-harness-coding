@@ -1,7 +1,0 @@
-- [x] **TSK-15.4.3** OpenEpic opens the epic pull request for a branch that already exists on origin
-  - files: `internal/line/epic.go`, `internal/line/epic_test.go`
-  - accept: when feat/<version> exists on origin and no open PR targets main from it, OpenEpic opens the draft with EPIC.md's title as the PR title and its goal as the body
-  - accept: an existing PR is left alone
-  - done_when: `go test ./internal/line/...`
-  - context: `today: openEpic (internal/line/epic.go:42-71) returns nil when onEpicOrigin is true, so a branch a person pushed never gets its PR; feat/1.0.0-beta.5 ran 145 commits with none until #332 was opened by hand`, `the PR title is EPIC.md's heading title; the body is its goal paragraph; the forge client comes from the plan (see TSK-15.5.9)`
-  - priority: C

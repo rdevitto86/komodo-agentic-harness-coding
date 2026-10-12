@@ -1,8 +1,0 @@
-- [x] **TSK-15.3.5** komodo owns the global AGENTS.md and doctor reports its drift
-  - files: `internal/mount/claude/claude.go`, `internal/doctor/render.go`, `internal/mount/claude/claude_test.go`, `internal/doctor/render_test.go`
-  - accept: RenderGlobal writes ~/.claude/AGENTS.md from komodo/AGENTS.md and lists it in the marker
-  - accept: doctor names it as drift when the bytes differ
-  - accept: a CLAUDE.md that imports it is left alone
-  - done_when: `go test ./internal/mount/claude/... ./internal/doctor/...`
-  - context: `today: nothing writes ~/.claude/AGENTS.md; the one on this machine was hand-written on Oct 2 and drifts from komodo/AGENTS.md (it still says BACKLOG.md); doctor checks only the repo's AGENTS.md (internal/doctor/doctor.go:150-155)`, `~/.claude/CLAUDE.md imports it with @AGENTS.md; leave that file and CLAUDE.local.md alone`, `render the same way RenderGlobal renders a skill: write, list in the marker, report drift`
-  - priority: H

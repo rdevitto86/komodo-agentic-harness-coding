@@ -1,7 +1,0 @@
-- [ ] **TSK-15.7.9** Retries on the headless path are capped by `LimitsFor`, one call for every window and count
-  - files: `internal/conductor/drive.go`, `internal/conductor/drive_test.go`
-  - accept: a builder whose retries reach `LimitsFor(RoleBuilder).Retries` after reviewer pushback hands the group to the orchestrator with reason `retries`
-  - accept: `LimitsFor` is the one place drive reads a role's window, idle timeout, grace and retry or strike cap, so no limit is a second literal in drive.go
-  - done_when: `go test ./internal/conductor/...`
-  - context: `today: Profile.Repairs 1 and ReviewRepairs 2 are read only by the line's step function (internal/line/snapshot.go:190, step.go:195); the headless drive stops only on the stall rule (errNoProgress), so repairs that keep changing files never stop`, `docs/lld.md#builder-and-reviewer-limits`, `docs/decisions/0015-per-agent-suites.md`
-  - priority: H

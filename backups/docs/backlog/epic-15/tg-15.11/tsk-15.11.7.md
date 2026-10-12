@@ -1,7 +1,0 @@
-- [ ] **TSK-15.11.7** A test's temp repo outlives no background git process, so TempDir cleanup never races .git/objects
-  - files: `internal/conductor/stop_test.go`, `internal/backlog/backlogtest/backlogtest.go`
-  - accept: every test repo is created with gc.auto 0 and maintenance off, through one shared helper, so no git child writes .git/objects after the test returns
-  - accept: go test -race -count=1 -shuffle=on ./internal/conductor/... passes 5 runs
-  - done_when: `go test -race -count=1 -shuffle=on ./internal/conductor/...`
-  - context: `today: TG-15.4's check failed once on TestLineBlockFailsWhenAScrubbedNoteNeverPublishes with "TempDir RemoveAll cleanup: unlinkat .../.git/objects: directory not empty"; git commit spawns gc --auto in the background and it was still writing`
-  - priority: M

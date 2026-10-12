@@ -1,7 +1,0 @@
-- [ ] **TSK-15.11.1** The pre-push gate runs at background priority on macOS
-  - files: `internal/gate/githook.go`, `cmd/komodo/githook.go`, `internal/gate/githook_test.go`
-  - accept: on darwin, when /usr/sbin/taskpolicy exists, every pre-push gate step runs under `taskpolicy -b`
-  - accept: elsewhere the argv is unchanged
-  - done_when: `go test ./internal/gate/... ./cmd/komodo/...`
-  - context: `today: the pre-push gate pins all 12 cores of the M4 Pro: the race run is 289 CPU-seconds in 113 s wall; /usr/sbin/taskpolicy exists on this machine and -b schedules a process on the efficiency cores`, `docs/lld.md#testing`
-  - priority: M

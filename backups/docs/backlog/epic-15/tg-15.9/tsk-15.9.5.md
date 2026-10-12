@@ -1,7 +1,0 @@
-- [ ] **TSK-15.9.5** abandon runs Close and the prune help text matches what it deletes
-  - files: `internal/conductor/abandon.go`, `cmd/komodo/host.go`, `internal/conductor/abandon_test.go`, `cmd/komodo/host_test.go`
-  - accept: abandon's message names what Close removed
-  - accept: `--prune` help says it lists finished worktrees, tips, runs, stashes and branches that meet the rule, and `--confirm` deletes them
-  - done_when: `go test ./internal/conductor/... ./cmd/komodo/...`
-  - context: `today: abandon prints `worktree and branch are removed` though only the refs/komodo tip goes; host.go:311-312 says --prune lists merged branches and --confirm deletes them, which it never does`
-  - priority: M

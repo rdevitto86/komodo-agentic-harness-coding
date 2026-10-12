@@ -1,8 +1,0 @@
-- [x] **TSK-15.2.2** Check, escalation and abandon read the tree
-  - files: `internal/check/check.go`, `internal/conductor/escalate.go`, `internal/conductor/abandon.go`, `internal/check/check_test.go`, `internal/conductor/escalate_test.go`, `internal/conductor/abandon_test.go`
-  - accept: a tick-only diff under docs/backlog/ is in scope
-  - accept: an escalation may edit its own group folder or create a sibling group folder under the same epic and nothing else
-  - accept: abandon writes its note into TG.md
-  - done_when: `go test ./internal/check/... ./internal/conductor/...`
-  - context: `before: onlyTicks required path.Dir == docs/backlog (check.go:174); outsideGroupFile used the prefix docs/backlog/<TG>- (escalate.go:164); abandonNote read a flat file`, `landed in cc0583e2: onlyTicks takes any .md under docs/backlog/; outsideGroupFile allows the group's folder and a folder a diff creates under a tg-* sibling of the same epic; Abandon writes through GroupDir.WriteNote and restores TG.md on failure`
-  - priority: C

@@ -1,5 +1,0 @@
-- [ ] **TSK-16.1.7** komodo eval --runs 3 meets the success criteria on all three platforms
-  - done_when: `go run ./cmd/komodo eval --runs 3`
-  - owner: human
-  - context: `was TSK-08.8.2`, `docs/prd.md#success-criteria`, `criteria 2 and 3: at least 90 percent of golden groups pass on each platform, and at least 90 percent get identical outcomes across platforms from identical starting states; criterion 5: median group under 40 minutes, none over 60`
-  - priority: C

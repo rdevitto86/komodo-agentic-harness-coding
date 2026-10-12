@@ -1,9 +1,0 @@
-- [x] **TSK-15.1.4** komodo add creates epics, groups and task files; komodo migrate moves a flat backlog into the tree
-  - files: `cmd/komodo/backlog.go`, `cmd/komodo/migrate.go`, `cmd/komodo/backlog_test.go`, `cmd/komodo/migrate_test.go`
-  - accept: komodo add EPIC-NN writes EPIC.md with --version
-  - accept: komodo add TG-NN.M writes TG.md under its epic and refuses when the epic is missing
-  - accept: a task flag set appends tsk-NN.M.K.md
-  - accept: migrate writes the tree from flat files, BACKLOG.md or TODO.md and leaves the source
-  - done_when: `go test ./cmd/komodo/...`
-  - context: `before: komodo add wrote docs/backlog/<TG>-<slug>.md with --version and --epic per group; migrate converted only BACKLOG.md or TODO.md`, `landed in cc0583e2: add EPIC-NN --version writes EPIC.md; add TG-NN.M writes TG.md under its epic and refuses when the epic is missing; task flags write tsk-NN.M.K.md; migrate reads flat docs/backlog/*.md first and skips a group whose version differs from its epic's`
-  - priority: H

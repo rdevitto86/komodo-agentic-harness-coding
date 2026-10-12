@@ -1,8 +1,0 @@
-- [ ] **TSK-15.7.2** Each session's process group is recorded and a live one is killed before another starts
-  - files: `internal/conductor/state.go`, `internal/mount/claude/contract.go`, `internal/conductor/resume.go`, `internal/conductor/state_test.go`, `internal/conductor/resume_test.go`
-  - accept: State holds the pgid per session
-  - accept: Resume and a fresh start kill a recorded pgid whose process still runs before spawning
-  - accept: a test proves an orphan is reaped
-  - done_when: `go test ./internal/conductor/... ./internal/mount/claude/...`
-  - context: `today: sessions run in their own process group (internal/proc/process_unix.go:11-13); under SIGKILL of komodo run they live on; the next run's Resume forks a second session in the same worktree (internal/conductor/resume.go:113-122)`, `ps is already used by the watcher (internal/proc/watch.go); a dead pgid is simply not found`
-  - priority: C

@@ -1,7 +1,0 @@
-- [ ] **TSK-15.8.3** Slot order is stable to volatile, matching the LLD
-  - files: `komodo/roles/builder.md`, `internal/line/brief.go`, `internal/line/brief_test.go`, `docs/lld.md`
-  - accept: the rendered order is frame, rules, standards, schema, then per task
-  - accept: the LLD's briefs table lists the same order
-  - done_when: `go test ./internal/line/...`, `go run ./cmd/komodo lint`
-  - context: `docs/lld.md#briefs`, `today: the LLD claims stable slots first for prompt caching, but the rendered order puts task-specific text before the repo rules and the standards after the files; one of the two must change and the code is cheaper`
-  - priority: M

@@ -1,8 +1,0 @@
-- [ ] **TSK-15.7.6** A dollar cap per role and per group stops a session that overspends
-  - files: `internal/mount/claude/claude.go`, `internal/mount/claude/session.go`, `internal/profile/profile.go`, `internal/conductor/drive.go`, `internal/conductor/drive_test.go`
-  - accept: `--max-budget-usd` comes from the profile's `budget_usd` per role
-  - accept: the group's running total from the ledger stops the group with reason `budget` at the profile's `group_budget_usd`
-  - accept: both default to unlimited on a subscription plan
-  - done_when: `go test ./internal/mount/claude/... ./internal/conductor/...`
-  - context: `today: session.go:83 passes --max-budget-usd but claude.go:496 calls NewMount(root, worktree, profileTurnCap, 0), so the cap is always 0; the LLD promises a spend budget on API billing; the TG-11.27 run cost $12.65 without shipping`, `the ledger already sums cost per run (internal/ledger); the group total is that sum`
-  - priority: H

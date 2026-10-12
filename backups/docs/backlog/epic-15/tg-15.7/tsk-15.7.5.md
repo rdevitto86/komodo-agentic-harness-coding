@@ -1,9 +1,0 @@
-- [ ] **TSK-15.7.5** The turn cap is passed per role as a flag from the profile
-  - files: `internal/mount/claude/session.go`, `internal/mount/claude/claude.go`, `internal/profile/profile.go`, `internal/mount/claude/session_test.go`
-  - accept: each role's profile entry carries `turns`
-  - accept: the session gets `--max-turns <n>` and the env var
-  - accept: the orchestrator keeps 150
-  - accept: a test proves the argv per role
-  - done_when: `go test ./internal/mount/claude/... ./internal/profile/...`
-  - context: `today: claude.go:476 holds profileTurnCap = 150 for every role and session.go:90 passes it only as CLAUDE_CODE_MAX_TURNS; the CLI documents --max-turns and the env var's effect is unverified; the LLD claims per-role caps`, `docs/lld.md#how-the-conductor-runs-a-claude-code-session`, `starting values: builder 150, lens 60, orchestrator 150`
-  - priority: C

@@ -1,7 +1,0 @@
-- [ ] **TSK-15.10.3** The release skill renders only in the toolkit checkout
-  - files: `internal/mount/claude/claude.go`, `internal/mount/claude/claude_test.go`
-  - accept: a product repo's .claude/skills has no release skill
-  - accept: the toolkit's does
-  - done_when: `go test ./internal/mount/claude/...`
-  - context: `today: komodo/skills/release/SKILL.md renders into every repo's .claude/skills and carries toolkit history such as `V1's beta starts at 1.0.0-beta.2`; the LLD says this repo only`, `docs/lld.md#skills-and-scoping`, `gate.IsToolkit(root) is the existing test for the toolkit checkout`
-  - priority: M

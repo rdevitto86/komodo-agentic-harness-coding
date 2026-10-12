@@ -1,7 +1,0 @@
-- [ ] **TSK-15.12.2** A bundled short flag ending in o on format-patch is read as -o
-  - files: `internal/guard/tokenize.go`, `internal/guard/table.go`, `internal/guard/guard_test.go`
-  - accept: `git format-patch -1 -ko ../patches` is refused for a line session
-  - accept: a table row proves it
-  - done_when: `go test ./internal/guard/...`
-  - context: `was TSK-11.29.2`, `today: gitOutputTargets reads -o only when the word starts with -o; git bundles short flags, so `git format-patch -1 -ko ../patches` writes through -k plus -o unseen`
-  - priority: M

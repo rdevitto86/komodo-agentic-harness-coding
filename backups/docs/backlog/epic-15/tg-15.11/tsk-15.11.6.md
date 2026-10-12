@@ -1,7 +1,0 @@
-- [ ] **TSK-15.11.6** The drain tests take an injected clock
-  - files: `internal/run/run.go`, `internal/run/pace.go`, `internal/run/run_test.go`
-  - accept: the six drain tests finish in under one second each with a fake clock and sleeper
-  - accept: the production path keeps time.Now and time.Sleep
-  - done_when: `go test ./internal/run/...`
-  - context: `today: six drain tests take 4 to 9 s each (TestDrainRunsTwoLanesSharingAFileInTurn 9.4 s) while the rest of the suite is sub-second; pace.go:66 sleeps and run.go reads time.Now with no injection point`
-  - priority: M

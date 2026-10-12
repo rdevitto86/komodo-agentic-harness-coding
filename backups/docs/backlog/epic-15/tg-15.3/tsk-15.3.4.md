@@ -1,7 +1,0 @@
-- [x] **TSK-15.3.4** RenderGlobal removes every file under the V1 marker and the old standards folder
-  - files: `internal/mount/claude/claude.go`, `internal/mount/claude/claude_test.go`
-  - accept: a ~/.claude/skills/.komodo-rendered marker from the first line, every skill folder it rendered, ~/.claude/standards and every agent the repo no longer renders are removed before the new marker is written
-  - accept: a person's own skill with no marker survives
-  - done_when: `go test ./internal/mount/claude/...`
-  - context: `today: RenderGlobal (claude.go:145-183) removes only the skills named in ~/.claude/.komodo-rendered; the Sep 21 render left adhoc, backlog, review, 36 standards-* folders, ~/.claude/standards and 7 agents under the old marker ~/.claude/skills/.komodo-rendered, and this session loaded them`, `the old marker's text is `rendered by komodo install; safe to replace`; treat its presence as the signal, never guess by folder name`, `a folder with no marker line naming it belongs to the person and stays`
-  - priority: C

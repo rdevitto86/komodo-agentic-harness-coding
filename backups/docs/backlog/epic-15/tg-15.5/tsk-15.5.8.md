@@ -1,7 +1,0 @@
-- [ ] **TSK-15.5.8** A cut uses the run's forge client and --no-ship opens no epic pull request
-  - files: `internal/line/cut.go`, `internal/line/epic.go`, `internal/run/drive.go`, `internal/line/cut_test.go`, `internal/line/epic_test.go`
-  - accept: line.Start takes the plan's pr client instead of pr.New(root), so a test or a dry run never reaches the real forge
-  - accept: with --no-ship the epic branch is cut but no epic pull request opens until the first landing
-  - done_when: `go test ./internal/line/... ./internal/run/...`
-  - context: `today: komodo/skills/run/SKILL.md says `Exit 0: the group shipped. Report its pull request link`; komodo/skills/standards-sdlc/SKILL.md lines 47-52 still describe a group PR merged by the conductor`, `docs/decisions/0006-people-merge-to-main-and-agents-work-only-on-their-own-branches.md`
-  - priority: H

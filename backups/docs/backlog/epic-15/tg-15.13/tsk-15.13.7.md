@@ -1,7 +1,0 @@
-- [ ] **TSK-15.13.7** Doctor checks that every command the docs name exists
-  - files: `internal/doctor/docs.go`, `internal/doctor/docs_test.go`
-  - accept: every `komodo <sub>` in README.md, docs/lld.md and the skills is a subcommand `komodo help` lists
-  - accept: every `/<skill>` names a rendered skill
-  - done_when: `go test ./internal/doctor/...`
-  - context: `today: README.md:91 names /review and the LLD names komodo line ship (docs/backlog/TG-11.8 did); the subcommand list is cmd/komodo/main.go; the skill list is Render's output`, `komodo help --skill already parses the help text; reuse its table`
-  - priority: M

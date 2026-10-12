@@ -1,7 +1,0 @@
-- [x] **TSK-15.20.5** Sweep captures its refresh and prune hooks before its goroutine starts, so the hooks tests pass under the race detector
-  - files: `internal/hooks/prune.go`, `internal/hooks/prune_test.go`
-  - accept: Sweep reads the Refresh and prune package variables on the calling goroutine and hands the copies to its goroutine
-  - accept: go test -race -count=1 -shuffle=on ./internal/hooks/... passes 5 runs in a row
-  - done_when: `go test -race -count=1 -shuffle=on ./internal/hooks/...`
-  - context: `today: TG-15.20 failed the pre-push gate on a data race: TestAFailedRefreshFailsTheSweepAndSkipsThePrune writes Refresh (prune_test.go:295) while the goroutine an earlier test's Sweep started still reads it (prune.go:111); the tests poll the lock file, so nothing orders the read before the write`, `the gate runs go test with -race -count=1 -shuffle=on (internal/gate/gate.go:604), so any order must pass`
-  - priority: H

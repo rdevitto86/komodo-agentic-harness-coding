@@ -1,7 +1,0 @@
-- [ ] **TSK-15.15.2** Doctor lists Blocked runs older than seven days
-  - files: `internal/doctor/leftovers.go`, `internal/doctor/leftovers_test.go`
-  - accept: each such run is a note naming the group, its state, its age and `komodo resume` or `komodo abandon`
-  - accept: doctor never deletes it
-  - done_when: `go test ./internal/doctor/...`
-  - context: `today: a Blocked run counts as open forever (internal/line/next.go:119-139), so its worktree and tip are never swept and nothing names it; TG-11.27 sat that way`
-  - priority: M

@@ -1,7 +1,0 @@
-- [x] **TSK-15.1.2** Writers target the right file: a tick to the task file, a note to TG.md, a new task to a new file
-  - files: `internal/backlog/tree.go`, `internal/backlog/note.go`, `internal/backlog/tree_test.go`, `internal/backlog/note_test.go`
-  - accept: GroupDir.WriteTaskStatus, WriteNote, RemoveNote, SetStatus and AppendTask each touch one file
-  - accept: Locate and LocateTask replace every ad hoc finder
-  - done_when: `go test ./internal/backlog/...`
-  - context: `before: three finders read the flat directory: backlog.FindGroupFile (note.go:116), cmd findGroupFile (backlog.go:224), line.findTaskGroupFile (status.go:204); SetGroupFileTaskStatus rewrote the whole group file`, `landed in cc0583e2: GroupDir.WriteTaskStatus writes the task file, WriteNote and RemoveNote write TG.md, AppendTask writes tsk-<id>.md; FindGroupFile now returns TG.md`
-  - priority: C

@@ -1,7 +1,0 @@
-- [ ] **TSK-15.18.8** The guard refuses a write into a host plan directory
-  - files: `internal/guard/paths.go`, `internal/guard/table.go`, `internal/guard/paths_test.go`
-  - accept: a write under a host's own plan directory is refused the same way as a write outside the worktree, naming the terminal as the alternative
-  - accept: a table row proves a plan write refused and a plan printed to stdout unaffected
-  - done_when: `go test ./internal/guard/...`
-  - context: `docs/decisions/0015-per-agent-suites.md`, `docs/prd.md#requirements`, `REQ-48: every plan prints to the session's own terminal; no role writes one into a host plan directory`, `the deny lives beside the existing config-path rule in internal/guard/paths.go; internal/mount/claude owns which paths count as that host's plan directory`
-  - priority: H

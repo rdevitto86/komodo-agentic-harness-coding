@@ -1,8 +1,0 @@
-- [ ] **TSK-15.11.5** A task close tests the touched packages and their dependents; the full suite runs once at Prepare
-  - files: `internal/line/close.go`, `internal/line/close_test.go`
-  - accept: close runs `go test` on the packages of the task's files plus every package `go list -deps` shows importing them
-  - accept: Prepare runs the full gate
-  - accept: a test proves the package set
-  - done_when: `go test ./internal/line/...`
-  - context: `today: CloseTask runs `go run ./cmd/komodo gate` on every task close (internal/line/close.go:408), so a 9-task group runs the whole race suite about 11 times with Prepare's run`, `go list -deps -f '{{.ImportPath}}' ./... filtered by importers of the touched packages is the set; CloseTask already knows the task's files`
-  - priority: H

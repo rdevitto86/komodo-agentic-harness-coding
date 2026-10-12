@@ -1,6 +1,0 @@
-- [ ] **TSK-15.13.2** Doctor fails on a stale global layer
-  - files: `internal/doctor/render.go`, `internal/doctor/render_test.go`
-  - accept: a V1 marker, a folder under ~/.claude/skills not in the current marker, ~/.claude/standards, or an agent the repo no longer renders is a problem naming `komodo sync`
-  - done_when: `go test ./internal/doctor/...`
-  - context: `today: checkStaleSkills (internal/doctor/doctor.go:130-145) covers only git-tracked SKILL.md files; the global check runs only when the plan reports Installed and only for the 4 current names; the Sep 21 folders were invisible`, `after TSK-15.3.4 the render removes them; this check is what catches the next drift`
-  - priority: H

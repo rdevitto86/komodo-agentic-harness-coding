@@ -1,9 +1,0 @@
-- [x] **TSK-15.2.3** Sync, drive, doctor and eval read the tree
-  - files: `internal/run/sync.go`, `internal/run/drive.go`, `internal/doctor/leftovers.go`, `internal/doctor/backlog.go`, `internal/eval/run.go`, `internal/run/sync_test.go`, `internal/doctor/leftovers_test.go`, `internal/doctor/backlog_test.go`, `internal/eval/run_test.go`
-  - accept: sync's cleanup PR removes a finished epic's whole folder
-  - accept: a resumed builder gets TG.md and every task file
-  - accept: doctor warns on a flat file left under docs/backlog
-  - accept: the eval writes its suite groups as a tree
-  - done_when: `go test ./internal/run/... ./internal/doctor/... ./internal/eval/...`
-  - context: `before: endedEpics ran ls-tree without -r (sync.go:259) so nested files were invisible; editedGroup passed one flat file; doctor's leftovers and stall checks globbed *.md; eval's appendGroup wrote a flat file`, `landed in cc0583e2 by the run worker: endedEpics groups by epic folder and maps an ended epic to all its paths; editedGroup joins TG.md and the task files; doctor warns on a flat file and walks the tree; appendGroup writes an epic and a group`
-  - priority: C

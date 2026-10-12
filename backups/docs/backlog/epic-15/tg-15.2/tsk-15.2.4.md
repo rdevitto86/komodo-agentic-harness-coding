@@ -1,6 +1,0 @@
-- [x] **TSK-15.2.4** The rule, the plan skill, the planner and escalation roles, and the templates describe the tree
-  - files: `komodo/rules/backlog.md`, `komodo/skills/plan/SKILL.md`, `komodo/roles/planner.md`, `komodo/roles/escalation.md`, `komodo/skills/run/SKILL.md`, `templates/project/AGENTS.md.tmpl`
-  - accept: every model-facing file names the tree, the inheritance and the two caps, and none names a flat group file
-  - done_when: `go run ./cmd/komodo lint`
-  - context: `before: komodo/rules/backlog.md:3 said one file per group named <group-id>-<slug>.md; the plan skill wrote that path; the planner returned a group file; escalation edited the group's file; the template pointed at komodo/rules/backlog.md, which product repos do not have`, `landed in cc0583e2 by the docs worker: the rule's Shape, Placement and Adding work sections; a 7-step plan skill through komodo add; the planner returns an epic and group folders; escalation may create a sibling folder; the template says the grammar komodo lint enforces`
-  - priority: H

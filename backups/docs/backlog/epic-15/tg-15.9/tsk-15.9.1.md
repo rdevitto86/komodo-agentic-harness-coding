@@ -1,7 +1,0 @@
-- [ ] **TSK-15.9.1** One Close path removes everything a group created
-  - files: `internal/line/close_group.go`, `internal/line/ship.go`, `internal/conductor/abandon.go`, `internal/run/sync.go`, `internal/line/close_group_test.go`
-  - accept: line.Close(root, group) removes the worktree, the refs/komodo tip, the lease, the run folder, briefs, results, attempts, task worktrees and the session temp root
-  - accept: ship after a landing, abandon and sync's merged-group path all call it and nothing else deletes those
-  - done_when: `go test ./internal/line/... ./internal/conductor/... ./internal/run/...`
-  - context: `docs/prd.md#requirements`, `REQ-46; today three paths delete different subsets: Abandon (internal/conductor/abandon.go:21-82) removes worktree, tip and run dir but leaves the lease, briefs, results, attempts, task worktrees and the session temp root; ship's removal (internal/line/ship.go) and sync's differ again`, `the full artifact list is the review's cleanup table: worktree under .komodo/wt, refs/komodo tip, lease under <git-common>/komodo/leases, .komodo/runs/<group>, .komodo/briefs, .komodo/results, .komodo/attempts, .komodo/wt/TSK-*, $TMPDIR/komodo-<hash>`
-  - priority: H

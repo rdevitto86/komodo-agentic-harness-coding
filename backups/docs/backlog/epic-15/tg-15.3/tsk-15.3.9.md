@@ -1,6 +1,0 @@
-- [ ] **TSK-15.3.9** docs/backlog/epic-15/tg-15.3/tsk-15.3.6.md:1 TSK-15.3.6 is checked off but komodo status never shows a run's binary
-  - files: `docs/backlog/epic-15/tg-15.3/tsk-15.3.6.md`
-  - done_when: `go test ./...`
-  - context: `The repair marks TSK-15.3.6 [x], and its accept line says komodo status shows the binary per run. runStatus in cmd/komodo/line.go prints hooks.StatusText(RunStatus(root)). GroupStatus in internal/hooks/status.go has no binary field. RunStatus never reads run.Binary, and StatusText prints only group, state and time used. With a run cut by 1.0.0-beta.6 (0123456789ab), komodo status prints no version or commit, so this accept line fails while the task reads done. Carry run.Binary into GroupStatus in RunStatus, print it on each StatusText line, and add a test; or reopen TSK-15.3.6.`
-  - priority: M
-  - status: READY

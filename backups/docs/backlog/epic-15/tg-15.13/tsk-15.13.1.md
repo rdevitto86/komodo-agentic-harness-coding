@@ -1,7 +1,0 @@
-- [ ] **TSK-15.13.1** Doctor fails on backlog files on origin's default branch and on untagged changelog versions
-  - files: `internal/doctor/doctor.go`, `internal/doctor/doctor_test.go`
-  - accept: with --remote, each docs/backlog path on origin's default branch is a problem
-  - accept: locally, each CHANGELOG.md heading newer than the newest tag is a problem naming `komodo tag`
-  - done_when: `go test ./internal/doctor/...`
-  - context: `today: doctor never looks at the default branch's backlog or at tags; the review found 35 files on main and no tag past alpha.4 by hand`, `docs/lld.md#health-checks`
-  - priority: H

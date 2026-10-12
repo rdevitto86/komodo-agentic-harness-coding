@@ -1,8 +1,0 @@
-- [ ] **TSK-15.18.1** Command classes live in one package the mount, the guard and lint share
-  - files: `internal/allow/allow.go`, `internal/allow/allow_test.go`, `internal/mount/claude/permissions.go`, `internal/mount/claude/permissions_test.go`
-  - accept: allow.Classes holds files, git-read, build, test, lint, format and komodo-check with their fixed prefixes and per-language additions
-  - accept: git-read holds the whole read set: status, diff, log, show, blame, rev-parse, ls-files, ls-tree, cat-file, describe, reflog, shortlog, stash list, worktree list, for-each-ref, merge-base, grep, config --get, remote -v, tag -l, branch --list
-  - accept: the Claude mount renders from it and nothing else lists a prefix
-  - done_when: `go test ./internal/allow/... ./internal/mount/claude/...`
-  - context: `today: commandClasses, languageCommands and gitWrites live in internal/mount/claude/permissions.go, so lint cannot read them (nothing outside internal/mount may name a host); git-read holds only status, diff, log, show, blame`, `docs/lld.md#permissions`
-  - priority: C

@@ -1,8 +1,0 @@
-{
-  "roles": {
-    "builder": { "tier": "standard", "effort": "medium" },
-    "economy-review": { "tier": "standard", "effort": "high" },
-    "planner": { "tier": "standard", "effort": "high" },
-    "scout": { "tier": "light", "effort": "low" }
-  }
-}

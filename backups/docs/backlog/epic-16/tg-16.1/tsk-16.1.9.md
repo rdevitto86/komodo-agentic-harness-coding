@@ -1,5 +1,0 @@
-- [ ] **TSK-16.1.9** The owner cuts 1.0.0
-  - done_when: `git rev-parse -q --verify refs/tags/v1.0.0`
-  - owner: human
-  - context: `was TSK-08.8.4`, `through the release skill, once the proofs above are done`, `docs/decisions/0010-versions-follow-semver-with-alpha-beta-optional-rc-and-stable-phases.md`, `the release skill cuts the tag through komodo release publish once TSK-16.1.1 to TSK-16.1.8 are done; komodo tag must have tagged every earlier changelog version first (TSK-15.4.7)`
-  - priority: C

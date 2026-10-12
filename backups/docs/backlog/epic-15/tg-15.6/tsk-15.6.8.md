@@ -1,7 +1,0 @@
-- [x] **TSK-15.6.8** An edited restart settles the blocker's escalation and a resumed Ready group takes its slot
-  - files: `internal/run/drive.go`, `internal/run/drive_test.go`
-  - accept: `komodo run` after `komodo resume` clears Escalate, Answered, Stop and Needs before it drives from Ready, so the orchestrator is never asked the question the edit answered
-  - accept: a run resumed from a saved Ready state takes its slot instead of exiting "stopped at Ready"
-  - done_when: `go test ./internal/run/...`
-  - context: `today: TG-15.4's resume re-raised its first run's escalation (ship.go scope), paid an escalation session, then moved to Ready without a slot and exited`, `driveState (internal/run/drive.go) set Current, SlotFree and Edited only; enter clears the flags on every other move`
-  - priority: H

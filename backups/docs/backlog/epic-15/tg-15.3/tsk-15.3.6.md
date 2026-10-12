@@ -1,8 +1,0 @@
-- [x] **TSK-15.3.6** A run records the binary's version and commit in run.json and in every ledger entry
-  - files: `internal/line/worktree.go`, `internal/ledger/ledger.go`, `internal/line/cut.go`, `internal/line/worktree_test.go`, `internal/ledger/ledger_test.go`
-  - accept: RunState and ledger.Entry carry `binary` as `<version> (<commit>)`
-  - accept: `komodo status` shows it per run
-  - accept: a stale build marker during a run changes nothing until the run ends
-  - done_when: `go test ./internal/line/... ./internal/ledger/...`
-  - context: `docs/prd.md#requirements`, `REQ-15 and the review's finding: RunState (internal/line/worktree.go:26-34) and ledger.Entry (internal/ledger/ledger.go:30-53) carry no binary field, so a run cannot say which build drove it`, `komodo version prints `<version> (<commit>)`; store that string once in run.json at cut and copy it into each Stamp`
-  - priority: H

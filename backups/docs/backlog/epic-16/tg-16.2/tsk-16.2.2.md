@@ -1,4 +1,0 @@
-- [ ] **TSK-16.2.2** A Codex suite degrades instead of borrowing Claude's
-  - owner: human
-  - context: `docs/decisions/0015-per-agent-suites.md`, `docs/prd.md#product-scope`, `not ready: Codex is out of scope for 1.0.0; when a second host lands, each of the nine suites needs its own Codex rendering, and this task names how an unmounted suite fails closed instead of silently running under another host's permissions`
-  - priority: L

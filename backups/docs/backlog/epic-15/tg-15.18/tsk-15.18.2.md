@@ -1,9 +1,0 @@
-- [ ] **TSK-15.18.2** The builder's classes cover the text tools and module commands a task needs
-  - files: `internal/allow/allow.go`, `internal/allow/allow_test.go`, `internal/guard/table.go`, `internal/guard/guard_test.go`
-  - accept: files gains grep, sed -n, awk, sort, uniq, diff, jq, wc, head, tail, find without -exec or -delete
-  - accept: build gains go mod tidy, go mod download and go generate
-  - accept: komodo-check gains komodo lint and komodo list
-  - accept: a table row allows each for a builder and refuses find -exec
-  - done_when: `go test ./internal/allow/... ./internal/guard/...`
-  - context: `today: the files class is ls, cat, head, tail, wc, mkdir, touch, cp, mv, rm (permissions.go:22); a builder's grep or sed under --permission-mode dontAsk is refused silently and ends as a stop handed to the orchestrator; the review's permissions assessment lists the gaps`
-  - priority: C

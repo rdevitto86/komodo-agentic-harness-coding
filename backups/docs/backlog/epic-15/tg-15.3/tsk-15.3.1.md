@@ -1,9 +1,0 @@
-- [x] **TSK-15.3.1** Publish refuses to overwrite a newer installed binary
-  - files: `internal/mount/hookbin.go`, `internal/mount/hookbin_test.go`
-  - accept: Publish reads the installed binary's version through its own `version` output and the candidate's build stamp
-  - accept: a candidate older by changelog order is refused with one line naming both versions
-  - accept: byte-equal still skips
-  - accept: a dev build with no stamp never overwrites a stamped release
-  - done_when: `go test ./internal/mount/...`
-  - context: `docs/lld.md#binaries-and-releases`, `today: Publish compares bytes only (internal/mount/hookbin.go:37) and replaceHook copies whatever differs, so komodo doctor run from an older checkout overwrote a newer installed binary`, `the build stamp is bin/.built-from and the changelog version is linked through ldflags main.version (internal/gate/gate.go:130); a dev build prints `komodo dev (unknown)``
-  - priority: C

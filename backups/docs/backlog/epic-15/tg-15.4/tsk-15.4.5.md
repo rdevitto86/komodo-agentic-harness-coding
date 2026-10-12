@@ -1,6 +1,0 @@
-- [x] **TSK-15.4.5** The pre-push gate refuses a push that adds a backlog file to a critical ref
-  - files: `internal/gate/gate.go`, `internal/gate/gate_test.go`
-  - accept: PushProblem names each docs/backlog path the pushed commits add to main or another critical ref, and allows the same push to an epic branch
-  - done_when: `go test ./internal/gate/...`
-  - context: `today: PushProblem (internal/gate/gate.go:406) refuses only a critical ref or a leased branch; after TSK-15.14.4 it refuses a session only, never a person`, `list the pushed commits' added paths with git diff --name-only --diff-filter=A <remote-sha>..<local-sha> -- docs/backlog`
-  - priority: C

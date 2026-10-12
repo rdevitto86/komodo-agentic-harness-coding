@@ -1,7 +1,0 @@
-- [x] **TSK-15.4.2** komodo pr create defaults its base to the open epic branch
-  - files: `cmd/komodo/pr.go`, `internal/line/epic.go`, `cmd/komodo/pr_test.go`
-  - accept: with no --base, the base is the epic branch of the newest open epic on origin (`feat/<version>`), else the default branch
-  - accept: `--base main` stays explicit
-  - done_when: `go test ./cmd/komodo/...`
-  - context: `today: cmd/komodo/pr.go:75-78 uses line.DefaultBase(root), origin/HEAD, when --base is empty; 14 hand PRs went straight to main that way (#262 to #282)`, `an open epic is one whose EPIC.md sits in docs/backlog and whose feat/<version> branch exists on origin; with several, the newest version wins`, `docs/lld.md#prepare-and-ship`
-  - priority: C

@@ -1,8 +1,0 @@
-- [ ] **TSK-15.9.4** Prune deletes a local branch only when all four conditions hold
-  - files: `internal/doctor/prune.go`, `internal/doctor/prune_test.go`, `internal/hooks/status.go`
-  - accept: a local branch is deleted when its remote branch is gone or the forge shows its PR merged, its tip equals the last pushed tip, no worktree has it checked out, and it is not critical
-  - accept: the status line reports `pruned N branch(es)`
-  - accept: a test proves an unpushed commit keeps the branch
-  - done_when: `go test ./internal/doctor/... ./internal/hooks/...`
-  - context: `docs/decisions/0012-agent-worktrees-are-detached-and-only-a-live-builder-holds-a-branch.md`, `the 2026-10-04 amendment names the four conditions; today prune.go:65-71 only lists merged branches with `komodo never deletes it``, `merged: origin lacks the branch or the forge shows its PR merged (mergedOnForge, originLacks already exist in prune.go:364-398); pushed: the local tip equals komodo.pushed or is on origin; checked out: git worktree list --porcelain; critical: policy.CriticalRefs`
-  - priority: H

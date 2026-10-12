@@ -1,9 +1,0 @@
-- [ ] **TSK-15.5.9** The run skill, the LLD and decision 0006 describe landing without a group pull request
-  - files: `komodo/skills/run/SKILL.md`, `komodo/skills/standards-sdlc/SKILL.md`, `docs/decisions/0006-people-merge-to-main-and-agents-work-only-on-their-own-branches.md`
-  - accept: the run skill reports the epic branch's new merge commit instead of a PR link on exit 0
-  - accept: the SDLC standard's Branches section and decision 0006 match ship.go
-  - accept: the run skill names `komodo run <group>` as the command that continues a stopped run, after `komodo resume <group>` clears a blocker
-  - accept: the run skill says a group's task files change only while its run is stopped: stop, edit, resume; an edit pushed to the epic branch mid-run conflicts at prepare
-  - done_when: `go run ./cmd/komodo lint`
-  - context: `today: line.Start (internal/line/cut.go:103) calls OpenEpic with pr.New(root), the real gh, ignoring the driver's Options.PR; 14 run tests needed a fake gh on PATH because every tree group has an epic`, `with --no-ship the branch is cut but the PR waits for the first landing, so a dry run never touches the forge`
-  - priority: M

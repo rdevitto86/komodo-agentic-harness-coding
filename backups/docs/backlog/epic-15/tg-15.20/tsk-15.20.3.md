@@ -1,6 +1,0 @@
-- [x] **TSK-15.20.3** internal/mount/claude/session.go:104 Empty GIT_TEMPLATE_DIR may not let the repo's non-bare git init tests pass in the sandbox
-  - files: `internal/mount/claude/session.go`
-  - accept: GOTMPDIR is the session's temp root outside the worktree, and the sandbox's allowWrite names it, so go builds there and a test's non-bare git init writes .git/config
-  - done_when: `go test ./internal/mount/claude/...`
-  - context: `TSK-15.20.1 should let a builder's tests run git init. The repo's tests in internal/lease, internal/git and cmd/komodo run a non-bare `git init`. In this sandbox they fail today with `.git/hooks/: Operation not permitted` (I ran go test ./internal/lease ./internal/git). GIT_TEMPLATE_DIR= stops the hooks copy, but a non-bare init still writes .git/config. The new test's own comment says the sandbox refuses that write too, which is why it uses --bare. If so, those tests still fail and the task is not delivered. I could not run the reproducer because this session denied the env-prefixed command. Run a non-bare git init with GIT_TEMPLATE_DIR= inside the sandbox; if .git/config is refused, allow that write or change the tests to a layout the sandbox can write.`
-  - priority: M

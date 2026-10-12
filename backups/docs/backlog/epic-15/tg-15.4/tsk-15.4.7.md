@@ -1,8 +1,0 @@
-- [x] **TSK-15.4.7** komodo tag tags every untagged changelog version and release check runs inside doctor
-  - files: `cmd/komodo/release.go`, `internal/release/release.go`, `internal/doctor/doctor.go`, `cmd/komodo/release_test.go`, `internal/release/release_test.go`
-  - accept: `komodo tag` creates `v<version>` for each changelog heading with no tag, oldest first, at the commit whose changelog introduced the heading
-  - accept: a heading `## Unreleased — <version>` names the version to changelog.Heading, so Latest and release.Check see the version in progress
-  - accept: doctor runs release.Check with the shipped groups' versions and reports a version the changelog does not name
-  - done_when: `go test ./cmd/komodo/... ./internal/release/... ./internal/doctor/...`
-  - context: `today: changelog.Heading (internal/changelog/changelog.go:28) wants the version right after ##, so CHANGELOG.md's `## Unreleased — 1.0.0-beta.6` goes unseen and the new check failed the gate on the repo's own changelog`, `today: no tag exists past v1.0.0-alpha.4 while the changelog names alpha.5 through beta.5, so LintVersions measures every group against alpha.4; komodo tag tags only the newest untagged version on the default branch`, `release.Check (internal/release) compares changelog, tags and shipped versions; doctor runs it with no group versions today`, `docs/lld.md#binaries-and-releases`
-  - priority: H

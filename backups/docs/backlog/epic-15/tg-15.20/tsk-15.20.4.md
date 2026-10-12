@@ -1,6 +1,0 @@
-- [x] **TSK-15.20.4** internal/mount/claude/session_test.go:412 The git init test checks a bare repo, not the path the task names
-  - files: `internal/mount/claude/session_test.go`
-  - accept: the test runs a non-bare git init with the session env, proves GOTMPDIR lies outside the worktree, and finds .git/config but no .git/hooks
-  - done_when: `go test ./internal/mount/claude/...`
-  - context: `TestSessionEnvMakesGitInitWriteNoHooks runs `git init --bare`, and runs it outside any sandbox. That proves git skips the templates. It does not prove a builder's non-bare `git init` works in the sandbox, which is the form the repo's tests use. The test would still pass if non-bare init kept failing there. Add a non-bare git init with the session env and assert it succeeds and creates no .git/hooks directory.`
-  - priority: M

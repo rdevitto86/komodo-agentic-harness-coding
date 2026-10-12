@@ -1,7 +1,0 @@
-- [ ] **TSK-15.12.7** The output check names only a ref the session could have moved
-  - files: `internal/check/output.go`, `internal/check/output_test.go`, `internal/conductor/drive.go`
-  - accept: Compare reports a moved refs/heads ref only for the group's own branch, HEAD and refs/komodo tips; a shared ref a person moved in the root checkout is not a fix
-  - accept: Check takes its before snapshot at the start of each session it follows, not once at Building, so a repair is compared to its own start
-  - done_when: `go test ./internal/check/... ./internal/conductor/...`
-  - context: `today: TG-15.4 blocked twice on "ref refs/heads/feat/1.0.0-beta.6 changed" after a person committed on the epic branch in the root checkout mid-run; the worktree shares .git, Snapshot (internal/check/output.go:39) lists every ref, and Check compares the Building-time snapshot after every repair, so the repair cannot clear it`
-  - priority: H

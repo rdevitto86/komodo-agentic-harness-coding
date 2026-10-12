@@ -1,1 +1,0 @@
-{"role":"builder","skills":[],"rules":[],"hooks":["format","taskchecks"],"guards":"builder","commands":["brief","check","close","drive","test"]}

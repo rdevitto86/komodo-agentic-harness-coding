@@ -1,8 +1,0 @@
-- [ ] **TSK-15.14.4** Git hooks never refuse a person; a session is still refused at the tool call
-  - files: `internal/gate/gate.go`, `internal/gate/githook.go`, `internal/gate/gate_test.go`, `cmd/komodo/githook.go`
-  - accept: with no session marker in the environment, the pre-commit and pre-push hooks print the rule they would have applied and exit 0
-  - accept: with KOMODO_ROLE or KOMODO_SESSION set they refuse as before
-  - accept: a test proves both
-  - done_when: `go test ./internal/gate/... ./cmd/komodo/...`
-  - context: `today: BranchProblem (internal/gate/gate.go:388) and PushProblem (:406) refuse everyone; the person tier in decision 0015 is unbound; KOMODO_ROLE marks a line session and the conductor sets it; an orchestrator session needs a marker too, set by the SessionStart hook`, `docs/decisions/0015-per-agent-suites.md`
-  - priority: C

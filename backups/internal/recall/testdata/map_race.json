@@ -1,5 +1,0 @@
-{
-  "file": "internal/probe/status.go",
-  "line": 24,
-  "class": "map-race"
-}

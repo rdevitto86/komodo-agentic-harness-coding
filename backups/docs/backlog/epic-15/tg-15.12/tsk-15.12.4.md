@@ -1,8 +1,0 @@
-- [ ] **TSK-15.12.4** The guard inspects rm for paths outside the worktree in a line session
-  - files: `internal/guard/tokenize.go`, `internal/guard/table.go`, `internal/guard/guard_test.go`
-  - accept: commandWrites reads rm's targets
-  - accept: a line session's `rm -rf ../x` or `rm -rf ~/x` is refused naming the worktree
-  - accept: `rm -rf node_modules` stays allowed
-  - done_when: `go test ./internal/guard/...`
-  - context: `today: commandWrites (internal/guard/tokenize.go:105-124) handles git, tee, cp, mv and sed only; the table asserts rm -rf node_modules is allowed (table.go:172); rm is on the builder's allow list; only the sandbox limits it on macOS and Linux and nothing does on native Windows`, `docs/lld.md#security`
-  - priority: H

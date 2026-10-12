@@ -1,7 +1,0 @@
-- [ ] **TSK-15.5.2** The epic pull request body gains one section per landed group
-  - files: `internal/line/report.go`, `internal/pr/pr.go`, `internal/line/ship.go`, `internal/line/report_test.go`
-  - accept: each landing appends `### <group> <title>`: the tasks, the proofs that ran, the findings closed, and the run's cost and minutes
-  - accept: the section is idempotent per group
-  - done_when: `go test ./internal/line/... ./internal/pr/...`
-  - context: `today: ReportBody (internal/line/report.go) writes a group PR body with tasks, proofs and unproven lines; the epic PR body is EPIC.md's goal`, `append or replace a `### TG-15.3 <title>` section under a `## Landed` heading; idempotent by group id; use pr.Client's edit path`
-  - priority: C

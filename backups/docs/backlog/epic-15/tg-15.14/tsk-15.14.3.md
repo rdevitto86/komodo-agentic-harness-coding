@@ -1,8 +1,0 @@
-- [ ] **TSK-15.14.3** The orchestrator may destroy its own branches, worktrees, files and stashes without a prompt
-  - files: `internal/mount/claude/claude.go`, `internal/mount/claude/permissions.go`, `internal/guard/git.go`, `internal/guard/table.go`, `internal/mount/claude/claude_test.go`
-  - accept: komodo renders an allow list into the repo settings for the reversible and local-destructive git operations: rm, branch -d and -D, worktree add and remove, reset, clean, stash drop, checkout and switch, so the host's own classifier never prompts
-  - accept: the guard refuses only the critical set
-  - accept: table rows prove branch -D of a feature branch is allowed and of main refused
-  - done_when: `go test ./internal/mount/claude/... ./internal/guard/...`
-  - context: `today: the host's auto-mode classifier refused `git rm docs/backlog/*.md` as irreversible local destruction and the person had to run it; branch -d, worktree remove and reset --hard prompt the same way; an explicit permissions.allow rule pre-empts the classifier`, `the allow list is a prompt rule, never a safety rule; the guard's five refusals stay the boundary`, `docs/decisions/0015-per-agent-suites.md`
-  - priority: C

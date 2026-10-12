@@ -1,7 +1,0 @@
-- [ ] **TSK-15.12.1** git -C resolves --output against its directory
-  - files: `internal/guard/tokenize.go`, `internal/guard/table.go`, `internal/guard/guard_test.go`
-  - accept: each git --output target is resolved against the -C directory before pathFindings
-  - accept: a table row refuses `git -C .. log -p --output=x` for a line reviewer
-  - done_when: `go test ./internal/guard/...`
-  - context: `was TSK-11.29.1`, `today: gitOutputTargets drops global flags through skipGlobalFlags and returns the raw --output value, so `git -C .. log -p --output=notes.txt` writes ../notes.txt while the guard judges <root>/notes.txt`
-  - priority: M

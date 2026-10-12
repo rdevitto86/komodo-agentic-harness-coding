@@ -1,6 +1,0 @@
-- [ ] **TSK-16.1.3** S6: the line runs natively on Windows 10 and 11 with Git for Windows, and in WSL2
-  - files: `docs/decisions/`
-  - done_when: `grep -rq 'Spike S6 result' docs/decisions`
-  - owner: human
-  - context: `was TSK-11.19.3`, `docs/lld.md#cross-platform-macos-linux-windows`, `native Windows has no OS sandbox, so the output checks, the guard and the absent credential carry the load there; the spike records whether the line completes one group on Windows 10 and 11 with Git for Windows, and in WSL2 on the Linux filesystem`
-  - priority: C

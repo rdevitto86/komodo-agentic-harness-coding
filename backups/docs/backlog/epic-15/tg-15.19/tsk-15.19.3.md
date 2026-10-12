@@ -1,7 +1,0 @@
-- [ ] **TSK-15.19.3** A missing or redirected guard hook is found before a commit
-  - files: `internal/mount/claude/claude.go`, `cmd/komodo/main.go`, `internal/doctor/render.go`, `internal/mount/claude/claude_test.go`, `internal/doctor/render_test.go`
-  - accept: every komodo command run inside a mounted repo checks that the global PreToolUse hook names ~/.komodo/bin/komodo guard and prints one line when it does not
-  - accept: doctor fails on it, so the gate fails
-  - done_when: `go test ./internal/mount/claude/... ./internal/doctor/...`
-  - context: `today: the guard is registered in ~/.claude/settings.json by globalSettings (claude.go:194-232); a hand edit removes the orchestrator's whole boundary and only the next commit's doctor run notices; checkHookBinary (render.go:204-236) checks only that the file exists`
-  - priority: H

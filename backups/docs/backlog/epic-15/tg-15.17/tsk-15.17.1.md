@@ -1,7 +1,0 @@
-- [ ] **TSK-15.17.1** Lint refuses a READY task whose done_when the builder could not run
-  - files: `internal/backlog/lint.go`, `cmd/komodo/backlog.go`, `internal/backlog/lint_test.go`, `cmd/komodo/backlog_test.go`
-  - accept: each done_when command's prefix must match a builder class for the repo's detected languages
-  - accept: a mismatch fails lint naming the class to add, so a dontAsk refusal never happens mid-build
-  - done_when: `go test ./internal/backlog/... ./cmd/komodo/...`
-  - context: `today: a done_when such as `jq ...` or `go mod tidy` passes lint and is refused silently under dontAsk in the builder; the review's assessment found 187 historical refusals; after TSK-15.18.1 the classes are readable from internal/allow`, `docs/prd.md#requirements`
-  - priority: C

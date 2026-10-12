@@ -1,8 +1,0 @@
-- [ ] **TSK-15.14.2** The rendered deny list leaves the settings file; the guard is the orchestrator's whole boundary
-  - files: `internal/mount/claude/claude.go`, `internal/mount/claude/claude_test.go`, `internal/guard/paths.go`, `internal/guard/paths_test.go`
-  - accept: the repo's .claude/settings.json carries only the hook registration and attribution off
-  - accept: the guard's config-path rule names the files komodo renders under ~/.claude plus git's hook and config paths, so ~/.claude/plans, projects, todos and CLAUDE.local.md are writable
-  - accept: a test proves a Write to ~/.claude/plans/x.md passes
-  - done_when: `go test ./internal/mount/claude/... ./internal/guard/...`
-  - context: `today: settingsFile (claude.go:353) renders 32 deny entries into .claude/settings.json including Edit(~/.claude/*), which blocked this session's plan file at ~/.claude/plans; the guard already refuses every push the list names`, `the files komodo renders under ~/.claude: settings.json, .komodo-rendered, AGENTS.md after TSK-15.3.5, and the skill and agent folders the marker lists; paths.go:68 holds the config paths the guard refuses`, `docs/decisions/0015-per-agent-suites.md`
-  - priority: C

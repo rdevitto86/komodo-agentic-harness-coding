@@ -1,7 +1,0 @@
-- [ ] **TSK-15.18.3** The line tier allows the device files and the session's temp root
-  - files: `internal/guard/paths.go`, `internal/guard/table.go`, `internal/guard/paths_test.go`
-  - accept: /dev/null, /dev/stdout, /dev/stderr and paths under the session's TMPDIR and GOTMPDIR pass the outside-the-worktree rule
-  - accept: a table row proves each
-  - done_when: `go test ./internal/guard/...`
-  - context: `today: this machine's guard-refusals show a line session refused for /dev/stdout and for /tmp/../$TMPDIR/open.txt as outside the worktree root (internal/guard/paths.go:78); GOTMPDIR already points inside the worktree (env.go)`
-  - priority: C

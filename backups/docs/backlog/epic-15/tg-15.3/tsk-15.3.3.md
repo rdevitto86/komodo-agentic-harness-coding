@@ -1,9 +1,0 @@
-- [x] **TSK-15.3.3** The session-start status hook prints one line when the binary, a global skill or the global rules are stale
-  - files: `internal/hooks/status.go`, `internal/hooks/status_test.go`, `internal/mount/claude/claude.go`
-  - accept: the hook compares the installed binary's version with the toolkit's bin/.built-from and each rendered global file's bytes with its source
-  - accept: on any difference it prints `stale: <what>
-  - accept: run komodo sync`
-  - accept: when fresh it prints nothing extra
-  - done_when: `go test ./internal/hooks/... ./internal/mount/claude/...`
-  - context: `docs/lld.md#hooks`, `today: internal/hooks/status.go:68-94 prints only the run's groups and blockers; nothing ever prints the word stale`, `the rendered global files are ~/.claude/settings.json hooks, ~/.claude/.komodo-rendered, the skills komodo, plan, respond, run, and after TSK-15.3.5 ~/.claude/AGENTS.md`, `the hook must stay under the 100 ms budget internal/gate/outofbox_test.go:174 enforces; compare file bytes, never run go`
-  - priority: C

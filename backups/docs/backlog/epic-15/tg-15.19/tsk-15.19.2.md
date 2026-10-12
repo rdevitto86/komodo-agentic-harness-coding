@@ -1,9 +1,0 @@
-- [ ] **TSK-15.19.2** Doctor renders each tier's effective permissions the way the host loads them
-  - files: `internal/doctor/tiers.go`, `internal/doctor/tiers_test.go`, `internal/doctor/doctor.go`
-  - accept: for the line tier doctor reads the role settings and plugin and fails when a global allow, deny or MCP server would be loaded
-  - accept: for the orchestrator it prints the five refusals and the rendered allow list
-  - accept: for the local model it prints the no-tools row
-  - accept: the three rows match docs/lld.md#permissions
-  - done_when: `go test ./internal/doctor/...`
-  - context: `today: checkHermetic confirms the role config directory is clean but never renders what a session would load; line sessions use --setting-sources local, --strict-mcp-config, --settings <role> and --permission-mode dontAsk (session.go:37-84)`, `docs/lld.md#permissions`, `docs/lld.md#sessions-pinned-and-hermetic`
-  - priority: H

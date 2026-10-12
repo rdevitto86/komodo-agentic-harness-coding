@@ -1,7 +1,0 @@
-- [ ] **TSK-15.5.5** Stacked groups rebase onto the epic branch after their parent lands
-  - files: `internal/conductor/integrate.go`, `internal/conductor/integrate_test.go`
-  - accept: StackBase is the epic branch unless a declared parent has not landed
-  - accept: Restack rebases a waiting child onto the epic branch once its parent's merge commit is on origin
-  - done_when: `go test ./internal/conductor/...`
-  - context: `today: StackBase (internal/conductor/integrate.go:89) is the first unmerged same-epic parent's branch, else the epic branch; Restack (:118) retargets the PR after the parent merges; with no group PR the child rebases onto the epic branch once the parent's merge commit is on origin`, `docs/lld.md#parallelism`
-  - priority: H
