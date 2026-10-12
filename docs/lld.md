@@ -5567,6 +5567,266 @@ Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag 
 
 Each component's proof cases are the fixtures behind its gate checks; the security lens is required for the installer, binary lifecycle, HTTP stack, tool runtime, guardrails, sandbox and ship, even in economy mode.
 
+#### 37.1 Proof cases per component
+
+**In plain terms.** A proof case is one fixture, a small made-up repo, fake server or forced failure, plus the exact result that counts as a pass. Each component below lists its own proof cases, and a builder finishing that component's task group is done only when every case passes. The gate (§35) runs these as tests, so a lost case would mean a component with no exit test. The end-to-end checks above cover the whole system; these cover each part on its own.
+
+**CLI processor (S01, §7)**
+- Each verb has a golden `--json` test that compares its output with a stored copy.
+- An unknown flag exits 2 and names the closest matching flag.
+- The gate fails when `help --json` and the verb tables disagree.
+- With no controlling terminal, `komodo install` and `komodo config providers.paid=allowed` exit 1.
+- `--input` with a flag that disagrees uses the flag.
+- A repeated `add backlog` with the same task reports `0 changes`.
+- `help`, `version` and `skill list` each answer under 50 ms in the gate.
+
+**Installer (S02, §33)**
+- Fresh repos on macOS and Windows: a new `claude` session reads the `AGENTS.md` block, `komodo skill list` shows the 4 orchestrator skills, and `komodo` resolves in a new shell.
+- On those same repos, `.claude/settings.json` holds only the allow rule and the `SessionStart` hook, and a pre-existing key survives.
+- Rerun: the second `install` makes 0 repo changes, and a hand-edited `CLAUDE.md` survives.
+- `--dry-run` on a fresh repo lists 4 writes, and on a rerun lists 0.
+- Probe: with `claude` removed from `PATH`, `providers.json` marks `claude-cli` unavailable and gives the reason.
+- Uninstall leaves 0 manifest files and keeps the user's other `settings.json` keys intact.
+
+**Binary lifecycle (S03, §34)**
+- Hot swap: a `fresh` during a fixture run makes the next `komodo version` report the new version, and the run finishes on the old one.
+- Restart: `--restart-runs` resumes the fixture run on the new version with 0 repeated tool calls.
+- Refusals: a bad checksum or signature keeps the old binary.
+- A pinned repo refuses verbs.
+- Latency: a short verb never makes a network call, and the updater never spawns when `latest` is not newer.
+- Locking: 2 concurrent verbs spawn 1 updater.
+
+**Configuration (S04, §8)**
+- Limits: `komodo config limits.returns=9` is refused, naming the key and the limit, and the file is unchanged.
+- Hash guard: a hand edit to `config.json` makes `komodo status` exit 1 with `config_tampered`.
+- `config --accept` restores a hand-edited `config.json` and logs 1 audit row.
+- Capacity profile: a session on a 262,144 endpoint and one on Opus 5.5 get different brief ceilings and the same engine path, and the ledger records both profiles.
+- Detection: the fixture repo yields 6 classes.
+- All or none: a call with 1 bad pair out of 3 writes nothing, and a good call logs 1 audit row per changed key.
+- Discovery: `config --all` names a default, limit and source for every key.
+- `agent builder model --all` lists only probed models above the context floor.
+
+**Provider adapters (S05, §16)**
+- With `ANTHROPIC_API_KEY` set and a Max login, a `claude-cli` session runs on `apiKeySource: none`, and 0 `anthropic-api` calls are made.
+- With `providers.paid: never` and a faked Max 100% stop, the group pauses, writes its `timer` record (the ledger row keeps a copy), makes 0 paid calls, and resumes when the timer fires.
+- `resume` before the reset attempts every paused agent, is refused, and re-pauses with the new reset time and 0 model turns.
+- `kill -9` on a paused engine, then `jobs tick` after `wait_until`, resumes the run.
+- On the Claude API, a session with thinking on gets a schema-valid final call through structured outputs, with thinking still on.
+- A worker launched with the documented flags completes an MCP tool call, and with `--allowedTools` removed the same call is denied.
+- A planted auto-memory file has 0 effect on a worker session.
+- A faked Max stop past `limits.pause_max_min` cancels the session, keeps its WIP commit, and blocks with `pause_timeout`.
+- A faked init line with `apiKeySource: "ANTHROPIC_API_KEY"` is killed before turn 1 and exits `billing`.
+- A faked `isUsingOverage: true` event raises one warning and the session finishes.
+- A fixture Ollama whose `/api/ps` reports `context_length: 4096` is skipped with `ctx_below_floor`.
+- A fixture Ollama reporting 262,144 takes a brief of 131,072 tokens and refuses 131,073.
+- An Ollama endpoint with `ctx: 65536` set and 262,144 measured sizes briefs to 32,768 tokens and logs both numbers.
+- With no API key, Haiku 4.5 on `claude-cli` sizes to its 200K catalog window and is not skipped by the floor.
+- A Claude ID missing from the catalog sizes to 262,144.
+- `doctor` prints one catalog row per weight and link, each naming its window's source.
+- A faked Max 5-hour limit moves the next session to the backstop endpoint, and 0 `anthropic-api` calls are made.
+- A chain with no free `http:` endpoint fails `gate`.
+- A non-loopback endpoint without `self_hosted` is refused as `paid` under `providers.paid: never`.
+- A planted user hook and a planted `CLAUDE.md` have 0 effect on a worker session, with tools on.
+- A missing link refuses with its reason.
+- A forced quota error on link 1 records a `provider.skip` and finishes on link 2 when link 2 is not paid.
+
+**HTTP stack (S06, §17)**
+- A fake server answering 429 then 200 succeeds on attempt 2.
+- A 429 carrying `enforced_spend_limit_reached` and no `retry-after` returns a limit after 1 attempt.
+- A 529 is retried.
+- Retry sleeps over 100 runs stay within [0, 30 s] and are not identical.
+- A 429 with `Retry-After: 3600` returns a limit after 1 attempt.
+- A stream cut mid-answer succeeds on the retry, and a stream cut twice fails the session.
+- A planted key and an `env:` endpoint key never appear in any log.
+- A server signed by a test CA fails without `http.ca_bundle` and passes with it.
+- Plain `http://` to a non-loopback host without `self_hosted` is refused.
+- Redirects to a new host are refused.
+
+**Agent registry (S07, §14)**
+- An unknown field, an unfilled slot or an unknown slot fails `gate`.
+- A slot value containing `{{task}}` stays literal.
+- An agent override above a hard limit is refused by `komodo config`.
+- An `agent.json` chain without a free endpoint fails `gate`.
+- A `guard` row ID absent from `policy.json` fails `gate`.
+- A `guard` tool absent from S08's registry fails `gate`.
+
+**Tool runtime (S08, §15)**
+- A builder calling `submit_finding` is refused because the tool isn't listed for it.
+- A faked `api_retry` line with `error: rate_limit` ends the session with reason `provider`, and the next session starts on the backstop.
+- A reviewer calling `edit` is refused.
+- The MCP server exits within 2 s of its session.
+- `write` on an existing file is refused.
+- A 40 KB `run` output leaves its full log at the named path.
+- On each API link, a fixture model that stops with text gets 1 final call and a schema-valid result.
+- On each API link, a builder whose `done_when` fails continues in the same session.
+- A fixture session that passes 80% of `ctx` stubs old outputs and never sends past `ctx`.
+- A `run` arg of `&&` reaches the command as a literal string.
+
+**Skill loader (S09, §18)**
+- A builder editing `*.go` gets `standards-go` preinjected.
+- A planted `ignore previous instructions` line in a skill fails `gate`.
+- The same line in the fixture repo's `AGENTS.md` makes `doctor` warn, and the brief still loads.
+- A skill of 6,001 tokens fails `gate`.
+- A skill body edited after build fails the hash check and is refused.
+- A backend `*.kt` in a repo without `AndroidManifest.xml` gets `standards-kotlin` but not `standards-ui-mobile`.
+- A `.tsx` handler gets all 5 matching skills in the same order on 2 runs.
+- A planted `.claude/skills/standards-go/SKILL.md` changes nothing.
+- The index rebuilds only when its key changes.
+
+**Rules and output contract (S10, §19)**
+- A fixture `status` with 10 runs renders a table and passes its template test.
+- A template referencing an unknown fact fails `gate` at build, not at run time.
+- A 7-row table renders 5 rows and one overflow line.
+- `state.schema.json` lists 32 event types, and the gate fails when the enum gains one.
+- A builder brief holds 0 lines from `embed/rules/`.
+- A planted `AGENTS.md` line outside the block reaches the brief under Repo rules.
+- The same line inside a block with a missing end marker reaches no brief.
+- A builder whose `files` list `AGENTS.md` edits it, and its next brief in the same run still carries the base-commit text.
+- A fixture escalation returning `{code: branch_missing, sha: ffcf41e9}` renders the same bytes on 2 runs under `adhd`.
+- A schema code with no template fails `gate`.
+- A fact path containing a newline and `## x` renders as one literal code span.
+- A fact SHA absent from the repo gets 1 re-prompt.
+
+**Brief builder (S11, §20)**
+- The fixture prefix hashes the same across 2 runs (gate test).
+- An empty required slot fails with the slot named.
+- A reviewer's first pass renders `findings` as `none`.
+- A reviewer brief holds 0 bytes of the builder's `summary`.
+- A Go task and a TS task in one repo share every prefix byte up to the standards.
+
+**Guardrails (S12, §21)**
+- The guard table test covers every row for every agent, and malformed input is refused.
+- Verbs given a critical ref or a leased worktree refuse.
+- The scout's rendered table has 0 write rows.
+- A `policy.json` row edited without regenerating `lld.md` fails `gate`.
+- A group whose `files` list `docs/backlog/**` fails `doctor backlog`.
+
+**Sandbox and process control (S13, §22)**
+- On macOS and Linux, a `run` that writes outside the worktree fails.
+- On macOS and Linux, the tester's `read` of the builder's worktree path is refused by the sandbox, not the guard.
+- A `node_modules` tree with a pnpm symlink copies with the link intact on all 3 OSes, and a link pointing outside the worktree is dropped.
+- Two Verify sessions binding one fixed port both pass on Linux and run one after the other on macOS.
+- A test that needs a database fails at base and head, and the group lands with a warning.
+- Two files differing only by case fail Check on macOS.
+- `go test` binding `127.0.0.1` passes.
+- `go build` in a fresh worktree passes after Intake's setup.
+- On native Windows, a `run` that writes outside the worktree fails under Docker.
+- On native Windows with neither WSL nor Docker, a work verb refuses and names both.
+- On every OS, a `run` that connects to a public address fails.
+- On every OS, `env` in a `run` shows only the allowed variables.
+- On every OS, a `run` that sleeps past 10 min dies with its whole tree, under Docker too.
+- On every OS, a reviewer's test that edits a tracked file is reset and the review fails.
+- On every OS, a `run` that reads `~/.ssh` or writes your `~/.cargo/registry` fails.
+
+**Orchestration engine (S14, §10 and §11)**
+- The fixture group runs all 5 stages and ships.
+- `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`.
+- The 4 Verify orderings (reviewer fails first, tester fails first, both pass, both fail in one tick) each move the stage exactly once.
+- Replaying a group's state rebuilds its `state.json` exactly.
+- A crash between taking a queue item and writing its lease leaves an item the sweep re-enqueues.
+- With 2 repos and `pool_max` 2, 4 ready groups start in alternating repo order.
+- A seeded bug fails Verify, cancels the tester and resumes the builder.
+- With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue.
+- A rate-limit error halves the pool, never below the floor.
+- A group whose dependency is Blocked waits while an unrelated group runs.
+- A landing that breaks Check on the epic tip sends the last-landed group back to Build.
+- `run` on a group with an unlanded dependency refuses and names it.
+- With 2 slots and 3 ready groups, the `priority: high` group starts first.
+
+**Workspace and leases (S15, §12)**
+- A second `run` on a leased group refuses with the holder named.
+- 2 runs racing for one lease yield exactly 1 holder.
+- 2 engines racing to land one group make exactly 1 landing, and the loser's state ends in `lease.lost`.
+- A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits.
+- Sweep never deletes a worktree with unsaved work.
+
+**Session supervisor (S16, §13)**
+- A forced hang ends with `idle` after the nudge and grace.
+- A forced long task ends with `timeout`, leaving 0 orphan processes.
+- A SIGINT stop during a tool call yields a `result.json` with the turn's partial result and no orphan.
+- A faked provider halt exits `paused` with a resume handle in `state.json`.
+
+**Scheduler and job templates (S17, §23)**
+- 2 ticks in one window run the job once.
+- 3 failures end in Blocked and wake `wait`.
+- A tick with no live engine fires a due `wait_until` and resumes the run.
+- A job due while its previous run holds `job-<name>` is skipped and logged once.
+
+**Error recovery (S18, §9.4 and §26)**
+- Forcing a timeout, a flap, 4 returns or 7 attempts each ends Blocked with the reason named.
+- `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions.
+- `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit.
+- A torn last event line replays with one `state.truncated`.
+- A panic injected in one group's `Drive` blocks that group while a second group lands.
+- A 2-hour pause leaves the group wall clock where it was.
+
+**Check (S19, §24)**
+- A seeded out-of-scope write fails Check.
+- A planted fake key fails the secret scan.
+- A fixture with one pre-existing failing test lands.
+- The same fixture with a seeded regression blocks with `regression` and names the test.
+- A one-package change runs only that package's dependents.
+- A test that fails once and passes twice is reported `flaky`, and the group lands.
+- A `needs_scope` then `approve` resumes the same session uuid.
+- With its Claude session file deleted, the fresh session gets the WIP diff and the ledger logs `resume_lost`.
+
+**Review and evidence (S20, §25)**
+- A seeded bug in the fixture is found and verified.
+- A finding with a fake quote is dropped.
+- A finding with rule ID `x.99` is refused.
+- A seeded failing acceptance item fails Verify and cancels the reviewer.
+- A diff touching only `*.md` runs `correctness`, `readiness` and `quality`.
+- A seeded exported-signature change triggers `contract`, and the finding names the caller.
+
+**Token and resource management (S21, §27)**
+- A token cap forced low ends Blocked with `budget`.
+- `status` shows the hit rate per agent.
+- Two sessions of one agent on the API link share the first 3 breakpoints byte for byte.
+- The second session's ledger row shows `cache_read` over 0.
+
+**Cache store (S22, §28)**
+- A second Check on an unchanged tree skips every rerun.
+- A corrupted entry is deleted, not used.
+- A second worktree of the same epic tip copies dependencies from the setup entry.
+
+**Runtime observability (S23, §29)**
+- The fixture run has one ledger row per session.
+- `status --wait` returns on `group.blocked`.
+- `ledger/tasks.json` after the fixture lists every task once as `done`.
+- `add backlog --to <locked group>` exits 1 with `locked` and the run ID.
+- A dead session's task shows `released: crash` after the sweep.
+
+**Event bus (S24, §9 and §30)**
+- A fixture `group.blocked` wakes `status --wait`.
+- An event emitted between a waiter's subscribe and its first watch still wakes it.
+- A subscriber that panics leaves group state unchanged, and the other 2 keep running.
+- An emitted type missing from the catalog fails the gate.
+
+**Backlog and planning (S25, §31)**
+- Epic-1 passes `komodo doctor backlog`.
+- A planner draft that fails lint writes 0 files.
+- Two groups in one wave sharing a file fail lint.
+- A dependency cycle fails lint.
+- A 5-group chain warns.
+- A fixture goal touching 2 overlapping areas yields 2 groups with a derived dependency.
+- A draft that omits that dependency fails lint naming the shared file.
+- A `repo_map` for the fixture repo is byte-identical on 2 runs.
+- An item without `SHALL` fails lint.
+- `plan --epic 1` after `tg-1.2` is locked leaves `tg-1.2` unchanged.
+
+**Ship (S26, §32)**
+- A shipped fixture branch has 0 trailers, and its PR body passes the S10 template test.
+- A landing attempted with a stale fence makes 0 pushes and emits `lease.lost`.
+- Two groups landing at once merge one after the other.
+- A seeded conflict blocks with `merge_conflict`.
+
+**Gate and self-checks (S27, §35)**
+- Each check the gate runs has a fixture that makes the gate fail.
+- The fixtures cover build and test, structure, safety, events, state, docs drift, maps, no silent gaps, generated artifacts matching their source, and timing.
+
+**State manager (S29, §40.8)**
+- The 12 proof cases are listed under §40.8, Defaults, performance and proof, and are not repeated here.
+
 #### 38. Host cleanup before phase 2
 
 
