@@ -34,6 +34,7 @@
 | 0.7 | 2026-10-12 | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
 | 0.8 | 2026-10-12 | Token and USD tracking is opt-in: the `track.usage` setting is on in `economy` mode and off in `thorough` mode |
 | 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
+| 0.10 | 2026-10-12 | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
@@ -253,7 +254,7 @@ This chapter shows the parts at work, in three walkthroughs. The event spine is 
 
 **The event spine.** An event is a typed fact the engine records, such as `task.done`; 32 types exist, and producers (workspace, supervisor, Check, review, ship, timers) publish them. One pure function, `Next(state, event)`, turns each event into the new state, actions and follow-on events, and nothing else changes group state.
 
-**Group state.** A group's events, its snapshots and replay are one unit inside the state manager, called group state. Every event is checked, appended and fsynced to `runs/<group>/events.jsonl`, the group's state events, before it is applied; `state.json` is a snapshot of the state at a `seq`, and `Load` replays the events after it. The engine's `Drive` loop uses 5 calls: `Open`, `Append`, `Snapshot`, `Load` and `Tail`, and `Next()` stays in the engine, passed to `Load` when it replays.
+**Group state.** A group's events, its snapshots and replay are one unit inside the state manager, called group state. Every event is checked, appended and fsynced to `runs/<group>/events.jsonl`, the group's state events, before it is applied; `state.json` is a snapshot of the state at a `sequence`, and `Load` replays the events after it. The engine's `Drive` loop uses 5 calls: `Open`, `Append`, `Snapshot`, `Load` and `Tail`, and `Next()` stays in the engine, passed to `Load` when it replays.
 
 **Epochs and actions.** Every spawn carries the stage's epoch, an integer that rises on every stage entry, and a session event with an older epoch is kept as `stale: true` and ignored. Actions go through group state too: `action.start` before and `action.done` after, so a crash replays safely.
 
@@ -312,7 +313,7 @@ flowchart LR
 1. **A group's `Drive` loop** appends each event, saves snapshots and, after a restart, loads its state, all through group state, the part of the manager that keeps them together. `Next()` still decides every change; the manager only stores and checks.
 2. **The other writers** write their own kinds: the workspace its leases, the engine the queue and pool slots, the provider adapters the pause timers, the scheduler its job counters and the ledger its rows.
 3. **Readers** such as `status`, `status --wait` and the startup sweep read through the same service, never the files directly.
-4. **The manager fills in the header** (version, revision, time, writer) and checks types, required fields, allowed values and rules such as "no gaps in `seq`".
+4. **The manager fills in the header** (version, revision, time, writer) and checks types, required fields, allowed values and rules such as "no gaps in `sequence`".
 5. **A valid write is atomic:** a event line is appended and fsynced, a snapshot is written to a temp file and renamed, and a claim file is created only if it does not exist.
 6. **An invalid write is refused** with `state_invalid` and the field that failed, and the file on disk is unchanged. A record that fails its check on read is moved aside as `.bad-*`, and its group blocks. A torn last event line, left by a crash mid-write, is only dropped, and the group continues.
 
@@ -715,7 +716,7 @@ Eighteen newcomer terms; the LLD links here.
 | Event | A typed fact the engine records, such as `task.done`. Thirty-two types exist. |
 | State events | The append-only event file per group, `events.jsonl`. With the snapshot, it makes up group state, and replaying it rebuilds the state. |
 | Group state | The part of the state manager that keeps a group's events, snapshots and replay as one unit. Its 5 calls are `Open`, `Append`, `Snapshot`, `Load` and `Tail`. |
-| Snapshot | `state.json`: a group's state at one `seq`, written every 50 events or on a stage change, so a restart replays at most 50 events. |
+| Snapshot | `state.json`: a group's state at one `sequence`, written every 50 events or on a stage change, so a restart replays at most 50 events. |
 | `Next()` | The one pure function that turns (state, event) into (new state, actions, follow-on events). Nothing else changes group state. |
 | State manager | The in-process service that is the only code reading or writing runtime state. It fills in each record's header and refuses a write that breaks the state schema. |
 | State schema | `embed/state.schema.json`: one schema for every state record and every event type, generated from Go structs at build. |
@@ -772,7 +773,7 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.9, draft |
+| Version | 0.10, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
@@ -793,6 +794,7 @@ Eighteen newcomer terms; the LLD links here.
 | 0.7 | 2026-10-12 | Technical lead | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
 | 0.8 | 2026-10-12 | Technical lead | Token and USD tracking is opt-in: the `track.usage` setting (`auto`, `on`, `off`) is on in `economy` mode and off in `thorough` mode; flat keys 33 to 34; per-provider-family usage metrics deferred (G-26) |
 | 0.9 | 2026-10-12 | Technical lead | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
+| 0.10 | 2026-10-12 | Technical lead | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
 
 #### 3.4 Related documents
 

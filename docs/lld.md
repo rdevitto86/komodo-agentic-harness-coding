@@ -37,7 +37,7 @@
 | 0.7 | 2026-10-12 | The plan file's remaining facts moved in: per-component proof cases, file map, component dependencies, archive sources, cutover detail; this LLD and the HLD are now the source of truth |
 | 0.8 | 2026-10-12 | Token and USD tracking is opt-in: key `track.usage` (§8.2) gates the ledger's token and USD fields, the scorecard's cost metrics, `warn.usd_per_run` and `limits.group_tokens`; flat keys 33 to 34; gap G-26 |
 | 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
-| 0.10 | 2026-10-12 | Event envelope fields renamed for plain reading: `v` to `version`, `ts` to `timestamp`, `crc` to `checksum`; event lines carry no record header (`kind`, `key`, `rev`, `writer`) |
+| 0.10 | 2026-10-12 | Event envelope fields renamed for plain reading: `v` to `version`, `ts` to `timestamp`, `crc` to `checksum`, `seq` to `sequence`; event lines carry no record header (`kind`, `key`, `rev`, `writer`) |
 
 **Related documents:** [docs/hld.md](hld.md) (the High-Level Design), [docs/prd.md](prd.md), [docs/decisions/0001-standalone-harness.md](decisions/0001-standalone-harness.md), [Appendix Q](#appendix-q-component-id-traceability). Terms: the HLD Glossary.
 
@@ -198,7 +198,7 @@ flowchart LR
 
 The event spine is how the engine remembers what happened and decides what to do next. An event is a typed fact such as `task.done`, appended to a state file, the per-group file `runs/<group>/events.jsonl` (see Glossary in the HLD). One pure function, `Next()`, turns the current state and one event into a new state, actions and follow-on events. Nothing else changes group state. The state machine is the fixed set of stages a group moves through: Intake, Build, Check, Verify, Ship. Paused and Blocked are holding states. Without this spine a crash would lose the group's position, and two code paths could move a stage at once.
 
-The engine writes each event through group state, the state manager's module that keeps a group's events, snapshots and replay together (§13): `Append` syncs the event, then `Next()` applies it. `Snapshot` saves `runs/<group>/state.json` every 50 events or on a stage change, so `Load` never replays from zero. A CRC-32 on every line lets replay drop a torn last line and emit `state.truncated` once. Side effects go through the outbox: `Drive` appends `action.start` before an action and `action.done` after, with `id = sha256(seq, kind, args)`. On replay a done action is skipped and a started one reruns. Every spawn carries the stage's epoch, an integer that rises on each stage entry. A late result from a cancelled session carries an old epoch, is recorded `stale: true` and ignored.
+The engine writes each event through group state, the state manager's module that keeps a group's events, snapshots and replay together (§13): `Append` syncs the event, then `Next()` applies it. `Snapshot` saves `runs/<group>/state.json` every 50 events or on a stage change, so `Load` never replays from zero. A CRC-32 on every line lets replay drop a torn last line and emit `state.truncated` once. Side effects go through the outbox: `Drive` appends `action.start` before an action and `action.done` after, with `id = sha256(sequence, kind, args)`. On replay a done action is skipped and a started one reruns. Every spawn carries the stage's epoch, an integer that rises on each stage entry. A late result from a cancelled session carries an old epoch, is recorded `stale: true` and ignored.
 
 Three subscribers watch the group state after `Next()`: the ledger, the wake file under `state/wake/<run>`, and the `status --watch` renderer. They never change group state; each writes only its own derived kind through the state manager. No hooks run on the bus; the 3 inline hooks live in the guard, tools and recovery.
 
@@ -1293,7 +1293,7 @@ flowchart LR
   DR -->|"① Append"| GS
   DR -->|"② Snapshot after Next()"| GS
   RS -->|"③ Load(Next)"| GS
-  RD -->|"④ Tail(seq)"| GS
+  RD -->|"④ Tail(sequence)"| GS
   GS -->|"⑤ fsync, then return"| EV
   GS -->|"⑥ every 50 events or a stage change"| SN
   GS -.->|"⑦ replay the events after the snapshot"| NX
@@ -1304,8 +1304,8 @@ flowchart LR
 2. After every `Next()`, `Drive` hands the new state to `Snapshot`.
 3. On a crash or a `komodo resume`, recovery calls `Load` and passes in `Next()`.
 4. `status --wait` and the subscribers read new events with `Tail`, from a sequence number onward.
-5. `Append` stamps `seq`, `timestamp`, `checksum` and `stale`, checks the event, appends it to `events.jsonl` and syncs it before returning.
-6. `Snapshot` writes `state.json` only every 50 events or on a stage change, and refuses a state whose `seq` is not the last appended.
+5. `Append` stamps `sequence`, `timestamp`, `checksum` and `stale`, checks the event, appends it to `events.jsonl` and syncs it before returning.
+6. `Snapshot` writes `state.json` only every 50 events or on a stage change, and refuses a state whose `sequence` is not the last appended.
 7. `Load` reads the snapshot, replays the events after it through `Next()`, drops a torn last line with one `state.truncated`, and returns the state and its open actions.
 
 **What matters**
@@ -2396,7 +2396,7 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 | Field | Type | Meaning |
 |---|---|---|
 | `version` | int | Envelope version, 1 |
-| `seq` | int | Order within the group state, no gaps |
+| `sequence` | int | Order within the group state, no gaps |
 | `timestamp` | RFC 3339 | When the engine saw the fact |
 | `run`, `group`, `session` | string | Where it happened; `session` only on session and task events |
 | `epoch`, `stale` | int, bool | The stage epoch the producer was spawned under; `stale` set by `Drive` when older than the current |
@@ -2405,7 +2405,7 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 
 **What each one does**
 - **`version`:** The envelope format version, always 1. Every line carries the same value.
-- **`seq`:** The event's position in its group's state, counting up with no gaps. The engine checks it on every append and every replay, so a missing line is detected.
+- **`sequence`:** The event's position in its group's state, counting up with no gaps. The engine checks it on every append and every replay, so a missing line is detected.
 - **`timestamp`:** The time the engine saw the fact, in RFC 3339 form (such as `2026-10-11T15:31:00Z`). It is the engine's clock, never a model's claim.
 - **`run`, `group`, `session`:** Which run, group and session the event belongs to. `session` is filled only on session and task events.
 - **`epoch`, `stale`:** `epoch` is the stage epoch (an integer that rises on every stage entry, see Glossary) the producer was started under. `Drive` sets `stale` to true when that epoch is older than the current one, and `Next()` then ignores the event.
@@ -2470,22 +2470,22 @@ Each type's `data` is a Go struct registered with the state manager as part of t
 |---|---|
 | Group state | `runs/<group>/events.jsonl`; one writer; group state's `Append`: append, fsync, then apply |
 | Run state | `runs/<run>.jsonl` for `run.*` events; group state's `Append` and `Tail`, no snapshot |
-| Snapshot | `runs/<group>/state.json` holds the last `seq`; group state's `Snapshot`, every 50 events or on a stage change; refused unless its `seq` is the group state's last |
-| Replay | Group state's `Load`, from the snapshot, never from `seq` 0; cost bounded by 50 events; a 10,000-event replay must finish under 1 s `[PENDING G-19]` |
+| Snapshot | `runs/<group>/state.json` holds the last `sequence`; group state's `Snapshot`, every 50 events or on a stage change; refused unless its `sequence` is the group state's last |
+| Replay | Group state's `Load`, from the snapshot, never from `sequence` 0; cost bounded by 50 events; a 10,000-event replay must finish under 1 s `[PENDING G-19]` |
 | Torn line | CRC mismatch on the last line drops it and emits `state.truncated` once |
 
 **What each one does**
 - **Group state:** The file `runs/<group>/events.jsonl` holding every event for one group. The group's `Drive` alone appends each line through group state's `Append`, which syncs it to disk before `Next()` applies it. A crash after the sync replays the event instead of losing it.
 - **Run state:** The file `runs/<run>.jsonl` holding only the `run.*` events for one run, written through the same group state calls without a snapshot. Groups never read each other's state files; they meet only in the queue and the pool.
-- **Snapshot:** The file `runs/<group>/state.json`, holding the group's current state and the last `seq` applied (fields in §40.7). Group state's `Snapshot` writes it atomically every 50 events or on a stage change, off the critical path, and refuses one whose `seq` is not the group state's last.
-- **Replay:** On resume, group state's `Load` reads the snapshot and replays only the events after its `seq` through `Next()`, so recovery costs at most 50 events. A 10,000-event replay must still finish under 1 second.
+- **Snapshot:** The file `runs/<group>/state.json`, holding the group's current state and the last `sequence` applied (fields in §40.7). Group state's `Snapshot` writes it atomically every 50 events or on a stage change, off the critical path, and refuses one whose `sequence` is not the group state's last.
+- **Replay:** On resume, group state's `Load` reads the snapshot and replays only the events after its `sequence` through `Next()`, so recovery costs at most 50 events. A 10,000-event replay must still finish under 1 second.
 - **Torn line:** A crash mid-write can leave a half-written last line. Its CRC fails, the line is dropped, and one `state.truncated` event records the loss.
 
 #### 9.4 The outbox
 
 **In plain terms.** An action is a side effect the engine performs, such as starting a session or committing code. The outbox is the pair of event lines, `action.start` and `action.done`, written around every action (see Glossary). It exists so that after a crash the engine knows which actions finished and which must run again. Every action is designed to be safe to repeat. `Next()` decides the actions; `Drive` records them through group state's `Append` and runs them; nothing else performs side effects.
 
-`Next()` returns actions; `Drive` appends `action.start {id, kind}` before running one and `action.done` after, both through group state's `Append`. `id = sha256(seq, kind, args)`. On replay, group state's `Load` skips a done action and returns a started one to rerun. The gate fails an action kind missing from this table.
+`Next()` returns actions; `Drive` appends `action.start {id, kind}` before running one and `action.done` after, both through group state's `Append`. `id = sha256(sequence, kind, args)`. On replay, group state's `Load` skips a done action and returns a started one to rerun. The gate fails an action kind missing from this table.
 
 | Action | Idempotency key | Safe to repeat because |
 |---|---|---|
@@ -2497,7 +2497,7 @@ Each type's `data` is a Go struct registered with the state manager as part of t
 | `land` | `(group, fence, merge base)` | A landed merge commit already exists; the fence refuses a stale lander |
 | `open_pr` | `(epic, head SHA)` | `gh` finds the existing PR for that head first |
 | `scope_change` | `(group, sorted paths)` | Adding a path twice is one path |
-| `notify` | Event `seq` | A wake is a file touch |
+| `notify` | Event `sequence` | A wake is a file touch |
 
 **What each one does**
 - **`spawn`:** Starts a model session with its brief, tool server and sandbox profile. Komodo picks the session UUID first, so a repeat with a live UUID does nothing and a repeat with a dead one restarts the session.
@@ -2641,14 +2641,14 @@ A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `p
 | Wakes | `group.blocked`, `group.paused`, `run.done`, `run.stopped` wake `status --wait`; `--wait any` also wakes on `stage.enter` |
 | Wake file | A touch under `state/wake/<run>`; the waiter watches the file then reads the state tail through group state's `Tail` |
 | Writing events | Not the bus: group state appends and replays them (§40.9); the bus only delivers each event after `Next()` |
-| Subscribers, exactly 3 | The ledger, the wake file, the `status --watch` renderer; each an `(event) → error` in `seq` order after `Next()` that writes only its own derived kind through the state manager, never group state; an error or panic drops that subscriber for the run |
+| Subscribers, exactly 3 | The ledger, the wake file, the `status --watch` renderer; each an `(event) → error` in `sequence` order after `Next()` that writes only its own derived kind through the state manager, never group state; an error or panic drops that subscriber for the run |
 | Hooks | None on the bus; the 3 inline hooks live in the guard, tools and recovery; repo hooks wait for a later minor and will be subscribers, never gates |
 | Performance | Synchronous, in-process; a subscriber must return under 5 ms; the ledger batches appends per tick |
 
 **What each one does**
 - **Wakes:** Four event types wake the orchestrator's background `komodo status --wait` call: a group blocked, a group paused on a provider limit, a run finished, a run stopped. With `--wait any`, every stage entry (Intake, Build, Check, Verify, Ship) also wakes it. The orchestrator then reads the reason in `status` and acts.
 - **Wake file:** The wake is delivered by touching one file per run under `~/.komodo/state/wake/`. The waiting command watches that file and then reads the end of the group's state (the append-only event file, see Glossary), so an event that fires between subscribing and watching is never missed.
-- **Subscribers, exactly 3:** The three subscribers are the ledger (the per-repo record of sessions and events), the wake file, and the renderer that draws the live `status --watch` screen. Each is called once per event, in event order (`seq`), after `Next()` has already changed state. Each writes only its own derived kind through the state manager (ledger rows, the wake file) and never a group's state events or snapshot. If one fails or crashes, it is dropped for the rest of the run; group state is unchanged and the other two keep running.
+- **Subscribers, exactly 3:** The three subscribers are the ledger (the per-repo record of sessions and events), the wake file, and the renderer that draws the live `status --watch` screen. Each is called once per event, in event order (`sequence`), after `Next()` has already changed state. Each writes only its own derived kind through the state manager (ledger rows, the wake file) and never a group's state events or snapshot. If one fails or crashes, it is dropped for the rest of the run; group state is unchanged and the other two keep running.
 - **Writing events:** The bus never writes or replays events. Group state appends each event before `Next()` runs and replays them on resume (§40.9); the bus only hands each applied event to the three subscribers.
 - **Hooks:** No user-written script runs on the bus. The only three hook points in Komodo are inline: the guard before every tool call, the tool runtime, and error recovery. Repo-owned hooks arrive in a later minor version and will only listen; they will never be able to stop an event.
 - **Performance:** Delivery is immediate and in the same process, so each subscriber must finish within 5 ms or it slows the engine. The ledger does not write one line per event; it batches its appends once per engine tick.
@@ -2705,7 +2705,7 @@ sequenceDiagram
 - **`ts`:** The time the manager wrote the record. Events carry their own `timestamp`, the time the engine saw the fact (§9.1).
 - **`writer`:** The run id and process id of the writer, so `doctor` and a person can see who last changed a record.
 
-Event lines do not carry this header. Every line in an event file is an event, so `kind`, `key`, `rev` and `writer` would repeat what the file already says; events carry the §9.1 envelope instead, and the manager computes its `seq`, `timestamp` and `checksum`, so a producer never does.
+Event lines do not carry this header. Every line in an event file is an event, so `kind`, `key`, `rev` and `writer` would repeat what the file already says; events carry the §9.1 envelope instead, and the manager computes its `sequence`, `timestamp` and `checksum`, so a producer never does.
 
 #### 40.2 Write primitives
 
@@ -2745,7 +2745,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 
 **What each one does**
 - **`event`:** Every event, in the group state or the run state. Only the group's `Drive` writes group events, and only the run goroutine writes `run.*` events (§9.3).
-- **`group`:** The group snapshot, the state its events add up to; its fields are in §40.7. Only `Drive` writes it, and only when its `seq` is the group state's last.
+- **`group`:** The group snapshot, the state its events add up to; its fields are in §40.7. Only `Drive` writes it, and only when its `sequence` is the group state's last.
 - **`session`:** One folder per model session: the brief it got, how it was launched, its result, its raw output stream and, on API links, every turn for resume. The supervisor writes the brief, request and result; observability appends `stream.jsonl`; the tool runtime's API loop appends `messages.jsonl`.
 - **`ledger`, `view`:** The session ledger and event log, appended by the observability subscriber, and the two lock-table views it rebuilds from group state (§29).
 - **`job`:** The scheduler's counters per job: attempt, next run time, last failure hash and whether it is running (§23).
@@ -2763,9 +2763,9 @@ Event lines do not carry this header. Every line in an event file is an event, s
 
 | Check | Rule |
 |---|---|
-| Populate | The envelope, schema defaults, and an event's `seq`, `timestamp` and `checksum` |
+| Populate | The envelope, schema defaults, and an event's `sequence`, `timestamp` and `checksum` |
 | Schema | Types, required fields and enums: stage, block reason, exit reason, event type |
-| Invariants | `seq` has no gaps; `epoch` and `fence` never fall |
+| Invariants | `sequence` has no gaps; `epoch` and `fence` never fall |
 | Compare-and-swap | The caller's `rev` must match the record's current `rev` |
 | Writers | The caller must be one of the kind's listed writers for that key |
 | On read | CRC or hash first, then the version; an older `v` is migrated in memory |
@@ -2773,9 +2773,9 @@ Event lines do not carry this header. Every line in an event file is an event, s
 | Bad record | A bad line before the last one, or any other failed record: moved aside as `.bad-*`; the owning group blocks `state_invalid` |
 
 **What each one does**
-- **Populate:** The manager writes the six envelope fields and any schema defaults itself. An event carries the §9.1 envelope instead, so the manager assigns its next `seq` and computes its `timestamp` and `checksum`.
+- **Populate:** The manager writes the six envelope fields and any schema defaults itself. An event carries the §9.1 envelope instead, so the manager assigns its next `sequence` and computes its `timestamp` and `checksum`.
 - **Schema:** Every field must have the right type, every required field must be present, and every enum must hold a known value. An unknown stage or block reason is refused.
-- **Invariants:** Rules a kind must always keep. State `seq` numbers have no gaps, and a stage `epoch` or a lease `fence` never goes down.
+- **Invariants:** Rules a kind must always keep. State `sequence` numbers have no gaps, and a stage `epoch` or a lease `fence` never goes down.
 - **Compare-and-swap:** The write names the `rev` the caller last read. If another write landed in between, this one is refused, so no update is lost silently.
 - **Writers:** Each kind lists its writers, and the manager refuses any other. A group's records accept writes only from that group's `Drive`.
 - **On read:** The manager checks the record's CRC or hash, then its version. A record written under an older schema version is upgraded in memory by a registered step, so a new binary reads the previous schema (§34).
@@ -2790,7 +2790,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 |---|---|
 | `Get` | One record by kind and key |
 | `List` | Every record of one kind |
-| `Tail` | A state file's events from a given `seq` |
+| `Tail` | A state file's events from a given `sequence` |
 | `Watch` | A wake when a record of one kind changes |
 
 **What each one does**
@@ -2828,7 +2828,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 |---|---|
 | `run`, `group` | Which run and group it belongs to |
 | `stage`, `epoch`, `fence` | Where the group is and the counters that fence late writers |
-| `seq` | The last state event applied |
+| `sequence` | The last state event applied |
 | `config_hash` | The effective config pinned for this run |
 | `tasks[]` | `{id, state, attempts, session}` per task |
 | `actions_open[]` | Actions started and not yet done |
@@ -2837,7 +2837,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 **What each one does**
 - **`run`, `group`:** The run that owns the group and the group's id.
 - **`stage`, `epoch`, `fence`:** The current stage, the epoch that rises on every stage entry (§9.5) and the lease fence (§12). The manager refuses a snapshot where either counter falls.
-- **`seq`:** The sequence number of the last event applied. The manager refuses the snapshot unless this is the last event's `seq`, and replay starts after it.
+- **`sequence`:** The sequence number of the last event applied. The manager refuses the snapshot unless this is the last event's `sequence`, and replay starts after it.
 - **`config_hash`:** The hash of the effective config at run start; mid-run config edits never reach this run (§8.1).
 - **`tasks[]`:** One entry per task: its id, its claim state (`queued`, `claimed`, `done`, `returned`, `blocked`), its attempt count and the session that holds it.
 - **`actions_open[]`:** Outbox actions with an `action.start` but no `action.done` yet; replay reruns them under their idempotency keys (§9.4).
@@ -2868,7 +2868,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 1. The gate fails a fixture package that writes a state path outside `state`.
 2. A record missing a required field is refused with its field path, and the file is byte-identical afterward.
 3. A write with a stale `rev` is refused.
-4. A group snapshot whose `seq` is not the last event's is refused.
+4. A group snapshot whose `sequence` is not the last event's is refused.
 5. A `v: 0` fixture reads as `v: 1`.
 6. A corrupted record is moved aside and blocks its group with `state_invalid`.
 7. A torn last event line is dropped with one `state.truncated`, and the group continues.
@@ -2885,17 +2885,17 @@ Event lines do not carry this header. Every line in an event file is an event, s
 | Call | What it does |
 |---|---|
 | `Open(group)` | Binds the caller as the group's only writer, its `Drive` |
-| `Append(event)` | Stamps `seq`, `timestamp`, `checksum` and `stale`, checks, appends, fsyncs; returns before `Next()` runs |
+| `Append(event)` | Stamps `sequence`, `timestamp`, `checksum` and `stale`, checks, appends, fsyncs; returns before `Next()` runs |
 | `Snapshot(state)` | Called after every `Next()`; writes `state.json` every 50 events or on a stage change |
 | `Load(next)` | Reads the snapshot, replays later events through `next`, returns the state and open actions |
-| `Tail(seq)` | Returns the events after a sequence number |
+| `Tail(sequence)` | Returns the events after a sequence number |
 
 **What each one does**
 - **`Open(group)`:** Called once by a group's `Drive` when the group starts or resumes. It makes `Drive` the group's only writer; a second `Open` in the same process is refused, and the lease and fence keep other processes out (§12).
 - **`Append(event)`:** Writes one event. It stamps the sequence number, the time, the checksum and the `stale` flag (set when the event's epoch is below the current one), checks the event against the schema, appends it and syncs it to disk. It returns before `Next()` runs, which is what "state first" means. The outbox's `action.start` and `action.done` lines go through it too (§9.4).
-- **`Snapshot(state)`:** `Drive` calls it after every `Next()`. Group state decides when to write: every 50 events or on a stage change. It refuses a state whose `seq` is not the last one appended, so a snapshot never runs ahead of or behind its events.
+- **`Snapshot(state)`:** `Drive` calls it after every `Next()`. Group state decides when to write: every 50 events or on a stage change. It refuses a state whose `sequence` is not the last one appended, so a snapshot never runs ahead of or behind its events.
 - **`Load(next)`:** Rebuilds a group after a crash or on `komodo resume`. It reads the snapshot, replays only the events after it through `next`, drops a torn last line with one `state.truncated`, and returns the state plus the actions that started but never finished. The engine passes its own `Next()` in as `next`, so the `state` package never imports `engine` and the import order holds.
-- **`Tail(seq)`:** Lets `status --wait` and the subscribers read the events after a sequence number, without touching the file directly.
+- **`Tail(sequence)`:** Lets `status --wait` and the subscribers read the events after a sequence number, without touching the file directly.
 - **Run events:** A run's `run.*` events in `runs/<run>.jsonl` use the same `Append` and `Tail`, with no snapshot, so runs and groups share one set of rules.
 
 #### HLD 9.1 Scenario: the event spine
@@ -2920,10 +2920,10 @@ flowchart LR
 | Principle | Rule |
 |---|---|
 | The engine emits, never a model | A session's typed JSON becomes an event only after Go validates it. A killed session cannot report; a model can forget or invent. |
-| State first | Each event is appended and fsynced to `runs/<group>/events.jsonl`, through group state, before it is applied. `state.json` is a snapshot with the last `seq`; `Load` replays after it. |
+| State first | Each event is appended and fsynced to `runs/<group>/events.jsonl`, through group state, before it is applied. `state.json` is a snapshot with the last `sequence`; `Load` replays after it. |
 | Subscribers never change group state | The ledger, `status --wait` wakes and `status --watch` react to events; each writes only its own derived kind through the state manager, never a group's state events or snapshot. |
 | Coarse grain | Events fire per run, group, stage, session and task, never per model turn or token. |
-| In-process and ordered | One bus per engine, synchronous, in `seq` order, no broker. Machine-wide state stays in files; each engine turns a change there into a local event. |
+| In-process and ordered | One bus per engine, synchronous, in `sequence` order, no broker. Machine-wide state stays in files; each engine turns a change there into a local event. |
 | Outside the bus | The guard, formatting after `edit`, and shutdown are direct code. They log an event afterward when they can. |
 | Actions are recorded (the outbox) | `Drive` appends `action.start {id, kind}` before an action and `action.done` after. On replay a done action is skipped, a started one reruns, and every action is idempotent by a declared key. |
 | One state per group, one per run | Groups never read each other's state files; they meet only in the queue and the pool. |
@@ -2946,9 +2946,9 @@ Guarantees the tests pin:
 
 | Guarantee | How |
 |---|---|
-| Ordered, gap-free | One writer per group state; `seq` checked on append and replay |
+| Ordered, gap-free | One writer per group state; `sequence` checked on append and replay |
 | Durable before applied | Append, fsync, then `Next()`; a crash after the sync replays the event |
-| Exactly-once state moves | A stage moves only in `Next()`, keyed by `seq`; stale-epoch events never move it |
+| Exactly-once state moves | A stage moves only in `Next()`, keyed by `sequence`; stale-epoch events never move it |
 | At-least-once actions, safe to repeat | Every action has an idempotency key |
 | No lost wake | `status --wait` reads the state tail after subscribing |
 | Subscriber faults contained | A panicking subscriber is logged and dropped; state is untouched |
@@ -4879,7 +4879,7 @@ sequenceDiagram
 | Tester fails an item but Go's two reruns pass | Tester restarts once with Go's output; reviewer keeps going |
 | Go's two reruns split | Group blocks with `flaky` |
 | Both pass | Both `session.end done` events needed; then `stage.exit` to Ship |
-| Both fail in one tick | Handled in `seq` order; the second is already stale |
+| Both fail in one tick | Handled in `sequence` order; the second is already stale |
 | An item has no command | It never cancels the reviewer |
 
 **What each one does**
@@ -5138,7 +5138,7 @@ Every key is `sha256(inputs + binary version)` with the per-run config hash as p
 - Task list lock: Intake hashes the group's `TG.md` and `tsk-*.md` into `card_hash` and emits `lock.taken`. While locked, `add backlog --to <group>`, `plan --epic` on that group, and a hand edit refuse with `locked` and the run ID. Landing or abandon emits `lock.released`.
 - A hand edit of the backlog files is detected by a hash mismatch at the next verb. The lock protects the next run, not the current brief, because the builder and reviewer read the task list at the base commit.
 - Task claims: `queued → claimed → done | returned | blocked`; `task.claimed` at `session.start`, `task.released` at `session.end`; a claimed task whose session is dead at the sweep is released with `crash`.
-- Views are rebuilt incrementally from the last applied `seq`; `status` on 1,000 rows renders under 100 ms.
+- Views are rebuilt incrementally from the last applied `sequence`; `status` on 1,000 rows renders under 100 ms.
 
 **What each one does**
 - **Task list lock:** At Intake the engine hashes the group's backlog cards (`TG.md` and `tsk-*.md`) into `card_hash` and records `lock.taken`. While locked, adding a task to the group, replanning the epic over it, or editing the cards by hand is refused with `locked` and the run ID. Landing or abandoning the group records `lock.released`.
@@ -5626,7 +5626,7 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Torn last event line | CRC mismatch drops it; `state.truncated` emitted once |
 | Two engines on one group | Create-only lease: exactly one holder; the loser's landing is refused by git with exit 128 and ends in `lease.lost` |
 | A cancelled Verify session reports late | Its epoch is older; recorded `stale: true`; ignored |
-| Both Verify sessions fail in one tick | Handled in `seq` order; the second is stale |
+| Both Verify sessions fail in one tick | Handled in `sequence` order; the second is stale |
 | Model ID returns 404 mid-run | That session start fails; the next session takes the prior ID, then the backstop |
 | Ollama left at 4,096 context | Below the floor; `doctor` fails it and names `OLLAMA_CONTEXT_LENGTH=262144`; the engine skips it |
 | Brief exceeds half the measured context | Next link that fits; none left, Blocked `context`; nothing is trimmed |
