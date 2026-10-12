@@ -198,8 +198,8 @@ func hostAllowed(hosts []string, u *url.URL) bool {
 	full, name := canonicalHost(u), strings.ToLower(u.Hostname())
 	for _, e := range hosts {
 		e = strings.ToLower(strings.TrimSpace(e))
-		if _, _, err := net.SplitHostPort(e); err == nil {
-			if e == full || e == strings.ToLower(u.Host) {
+		if host, port, err := net.SplitHostPort(e); err == nil {
+			if canonicalEntry(host, port, u.Scheme) == full || e == strings.ToLower(u.Host) {
 				return true
 			}
 			continue
@@ -211,12 +211,28 @@ func hostAllowed(hosts []string, u *url.URL) bool {
 	return false
 }
 
+// canonicalEntry joins an allowlist host and port the way canonicalHost prints a URL host.
+func canonicalEntry(host, port, scheme string) string {
+	if scheme == "http" && port == "80" || scheme == "https" && port == "443" {
+		return bracketV6(host)
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// bracketV6 wraps an IPv6 literal in brackets and leaves other hosts alone.
+func bracketV6(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
 // canonicalHost lowercases the host and drops the scheme's default port.
 func canonicalHost(u *url.URL) string {
 	host := strings.ToLower(u.Host)
 	switch {
 	case u.Scheme == "http" && u.Port() == "80", u.Scheme == "https" && u.Port() == "443":
-		return strings.ToLower(u.Hostname())
+		return bracketV6(strings.ToLower(u.Hostname()))
 	}
 	return host
 }

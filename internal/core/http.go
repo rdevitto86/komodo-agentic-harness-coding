@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -45,6 +46,7 @@ type Options struct {
 	Sleep        func(context.Context, time.Duration) error // retry sleep; nil waits on a timer
 	Now          func() time.Time                           // clock; nil uses time.Now
 	Int64N       func(int64) int64                          // jitter source in [0,n); nil uses math/rand/v2
+	StreamIdle   time.Duration                              // body idle limit; 0 uses the endpoint default
 }
 
 // Endpoint describes what one caller may reach.
@@ -67,6 +69,9 @@ type Response struct {
 // ErrRefused marks a call refused by policy before or during the request.
 var ErrRefused = errors.New("refused")
 
+// ErrStreamIdle marks a response body that went silent for longer than the idle limit.
+var ErrStreamIdle = errors.New("stream idle timeout")
+
 // errFirstByte marks a response that never started in time.
 var errFirstByte = errors.New("first byte timeout")
 
@@ -78,6 +83,8 @@ type Client struct {
 	opts Options
 	hc   *http.Client
 	red  *redactor
+
+	afterDo func() // test hook run once a response arrives, before the first-byte timer stops
 }
 
 // sent is one successful response plus what the retry loop learned.
@@ -224,32 +231,95 @@ func (c *Client) once(ctx context.Context, ep Endpoint, req *http.Request) (*htt
 		r.Body = body
 	}
 	var timedOut atomic.Bool
+	fired := make(chan struct{})
 	fb := ep.FirstByteTimeout(req.URL)
 	timer := time.AfterFunc(fb, func() {
 		timedOut.Store(true)
 		cancel()
+		close(fired)
 	})
 	resp, err := c.hc.Do(r)
-	timer.Stop()
+	if c.afterDo != nil {
+		c.afterDo()
+	}
+	if !timer.Stop() {
+		<-fired
+		cancel()
+		if err == nil {
+			resp.Body.Close()
+		}
+		return nil, fmt.Errorf("first byte not received within %s: %w", fb, errFirstByte)
+	}
 	if err != nil {
 		cancel()
-		if timedOut.Load() {
-			return nil, fmt.Errorf("first byte not received within %s: %w", fb, errFirstByte)
-		}
-		return nil, err
+		return nil, scrubURLError(err)
 	}
-	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
+	idle := c.opts.StreamIdle
+	if idle <= 0 {
+		idle = ep.StreamIdle(req.URL)
+	}
+	resp.Body = newIdleBody(resp.Body, idle, cancel)
 	return resp, nil
 }
 
-// cancelBody releases the attempt context when the body closes.
-type cancelBody struct {
-	io.ReadCloser
-	cancel context.CancelFunc
+// scrubURLError rebuilds a *url.Error so its URL keeps scheme, host and path only.
+func scrubURLError(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	return &url.Error{Op: ue.Op, URL: scrubURL(ue.URL), Err: ue.Err}
 }
 
-// Close closes the body and cancels its attempt context.
-func (b *cancelBody) Close() error {
+// scrubURL drops the query, fragment and userinfo from a URL string.
+func scrubURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		raw, _, _ = strings.Cut(raw, "?")
+		raw, _, _ = strings.Cut(raw, "#")
+		return raw
+	}
+	u.User, u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = nil, "", false, "", ""
+	return u.String()
+}
+
+// idleBody cancels the attempt when a read waits longer than the idle limit.
+type idleBody struct {
+	io.ReadCloser
+	timer   *time.Timer
+	idle    time.Duration
+	cancel  context.CancelFunc
+	stalled atomic.Bool
+}
+
+// newIdleBody wraps rc so a silent body is cancelled after idle.
+func newIdleBody(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc) *idleBody {
+	b := &idleBody{ReadCloser: rc, idle: idle, cancel: cancel}
+	b.timer = time.AfterFunc(idle, b.expire)
+	b.timer.Stop()
+	return b
+}
+
+// expire marks the body stalled and cancels the attempt.
+func (b *idleBody) expire() {
+	b.stalled.Store(true)
+	b.cancel()
+}
+
+// Read times each wait for bytes and reports a stall as ErrStreamIdle.
+func (b *idleBody) Read(p []byte) (int, error) {
+	b.timer.Reset(b.idle)
+	n, err := b.ReadCloser.Read(p)
+	b.timer.Stop()
+	if err != nil && err != io.EOF && b.stalled.Load() {
+		return n, fmt.Errorf("no bytes for %s: %w", b.idle, ErrStreamIdle)
+	}
+	return n, err
+}
+
+// Close stops the idle timer, closes the body and cancels its attempt context.
+func (b *idleBody) Close() error {
+	b.timer.Stop()
 	err := b.ReadCloser.Close()
 	b.cancel()
 	return err
