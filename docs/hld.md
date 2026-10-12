@@ -19,7 +19,7 @@
 
 **Owners and controls**
 - **Owners:** domain architect (CEO) decides every gap and signs off per component; technical lead authors.
-- **Controls:** 0.7, draft, awaiting sign-off; source of truth: the HLD and LLD together; patches only; no phase 2 code before sign-off.
+- **Controls:** 0.8, draft, awaiting sign-off; source of truth: the HLD and LLD together; patches only; no phase 2 code before sign-off.
 
 **Revisions**
 
@@ -32,6 +32,7 @@
 | 0.5 | 2026-10-11 | Group state: a group's events, snapshots and replay become one unit inside the state manager |
 | 0.6 | 2026-10-11 | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
 | 0.7 | 2026-10-12 | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
+| 0.8 | 2026-10-12 | Token and USD tracking is opt-in: the `track.usage` setting is on in `economy` mode and off in `thorough` mode |
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
@@ -76,7 +77,7 @@ A group can also wait. Paused waits for a provider limit to reset; Blocked waits
 
 **Scope.** This design covers the binary's 28 components and two callers: the orchestrator (see Glossary) and a person at a shell. It reaches three model links (see Glossary) on four platforms: macOS, Linux, WSL2 and native Windows. The OpenAI path and `komodo chat` wait for a later minor release.
 
-**Business drivers.** Three drivers shape the design. Every loop carries a numeric bound, so no retry or fix cycle runs without limit. The guard fails closed, refusing input it cannot parse, and spend is tracked per run with a warning at $5.
+**Business drivers.** Three drivers shape the design. Every loop carries a numeric bound, so no retry or fix cycle runs without limit. The guard fails closed, refusing input it cannot parse, and optional usage tracking of tokens and US dollars (`track.usage`) warns at $5 a run.
 
 **Quality goals, in priority order**
 
@@ -218,7 +219,7 @@ flowchart LR
 | Orchestration layer | The `engine` package inside the `komodo` binary, one of the eight layers. It moves each task group through its five stages, spawns and watches model sessions, holds worktrees and leases, and runs git. Every state change goes through its pure `Next()` function. |
 | Where they meet | Only at the Interface layer. The orchestrator calls verbs such as `plan`, `run` and `status --wait`. Each verb returns one JSON envelope, and `status` reports what the Orchestration layer has done. |
 
-**The eight layers.** Interface (`cli`, `host`, `core`) holds the CLI processor with one verb set and envelope. It also holds the installer, the binary lifecycle (`fresh`) and configuration with 33 flat keys. Model I/O (`provider`, `tools`, `agent`, `core`): provider adapters over every link, the HTTP stack, agent registry and tool runtime with its private MCP server. Context (`agent`), what a model reads: skill loader, rules and output contract, brief builder filling 20 slots. Safety (`safety`), what a model may do: guardrails on every tool call and the sandbox around every `run`. Orchestration layer (`engine`), not the orchestrator: the engine with its pure `Next()`, workspace and leases, the session supervisor, the scheduler and error recovery. Quality (`quality`): Check, and review with the tester. Economy and ops (`ops`, `core`): budgets, the cache store, observability and the event bus. Delivery (`repo`, `safety`): backlog and planning, Ship, and the gate.
+**The eight layers.** Interface (`cli`, `host`, `core`) holds the CLI processor with one verb set and envelope. It also holds the installer, the binary lifecycle (`fresh`) and configuration with 34 flat keys. Model I/O (`provider`, `tools`, `agent`, `core`): provider adapters over every link, the HTTP stack, agent registry and tool runtime with its private MCP server. Context (`agent`), what a model reads: skill loader, rules and output contract, brief builder filling 20 slots. Safety (`safety`), what a model may do: guardrails on every tool call and the sandbox around every `run`. Orchestration layer (`engine`), not the orchestrator: the engine with its pure `Next()`, workspace and leases, the session supervisor, the scheduler and error recovery. Quality (`quality`): Check, and review with the tester. Economy and ops (`ops`, `core`): budgets, the cache store, observability and the event bus. Delivery (`repo`, `safety`): backlog and planning, Ship, and the gate.
 
 **The state manager, a core pillar.** The `state` package is the only code that reads or writes runtime state: state events, snapshots, leases, the queue, timers, the ledger and session files. Every record and event has one schema, and the manager fills in each record's standard fields and refuses any write that breaks the schema. It runs inside every `komodo` process, never as a separate server.
 
@@ -451,7 +452,7 @@ Three levels of files. Machine: the binary at `~/.komodo/versions/<v>/` and `bin
 
 A crosscutting concept is a rule spanning many components rather than living in one. Six shape the design: data, models and cost, security, quality gates, operations and interfaces; the LLD holds every table. Without them, each component would store and spend its own way. The engine enforces all six; a person meets them as files, refusals and `status` output.
 
-**Data.** Files are of two kinds. Committed files live in the repository. They are `AGENTS.md` with the Komodo block, `CLAUDE.md` with its import line, `.claude/settings.json` with two entries, and `docs/backlog/`. Machine files never ship: `~/.komodo/config.json`, state, leases, worktrees and language caches under `~/.komodo/`; per-repo state, sessions, ledger and cache under `<git-common-dir>/komodo/`. Configuration has two layers: built-in defaults with hard limits, and the machine file. Only `komodo config` writes its 33 flat keys; a hand edit makes every verb refuse until `config --accept`. The cache is keyed by `sha256(inputs + binary version)`, verified on read, bounded by `cache.max_mb` (256), outside every worktree.
+**Data.** Files are of two kinds. Committed files live in the repository. They are `AGENTS.md` with the Komodo block, `CLAUDE.md` with its import line, `.claude/settings.json` with two entries, and `docs/backlog/`. Machine files never ship: `~/.komodo/config.json`, state, leases, worktrees and language caches under `~/.komodo/`; per-repo state, sessions, ledger and cache under `<git-common-dir>/komodo/`. Configuration has two layers: built-in defaults with hard limits, and the machine file. Only `komodo config` writes its 34 flat keys; a hand edit makes every verb refuse until `config --accept`. The cache is keyed by `sha256(inputs + binary version)`, verified on read, bounded by `cache.max_mb` (256), outside every worktree.
 
 **One state schema.** Every runtime file is a kind in one schema, `embed/state.schema.json`, which also holds the 32 event types, and the state manager is the only code that reads or writes those files. Six things stay outside it, each with its own single owner:
 
@@ -486,9 +487,11 @@ flowchart LR
   BB -.->|"⑨ reuse"| CA
   CHK -.->|"⑨ reuse"| CA
 ```
-**Reading the diagram.** The backlog, `AGENTS.md` and skill bodies fill the brief's slots. The effective config and the measured context window cap the brief's size. The brief builder writes `brief.md` for the model session. The session returns a typed `Result` with output and token usage. The engine sends the work to Check. The engine appends every event to the group state, through the state manager, before applying it. A subscriber copies events into the ledger, through the state manager. `status` and `status --metrics` read the ledger. The brief builder and Check reuse cached results keyed by a hash of their inputs.
+**Reading the diagram.** The backlog, `AGENTS.md` and skill bodies fill the brief's slots. The effective config and the measured context window cap the brief's size. The brief builder writes `brief.md` for the model session. The session returns a typed `Result` with output and, when `track.usage` is on, token usage. The engine sends the work to Check. The engine appends every event to the group state, through the state manager, before applying it. A subscriber copies events into the ledger, through the state manager. `status` and `status --metrics` read the ledger. The brief builder and Check reuse cached results keyed by a hash of their inputs.
 
-**Models and cost.** A link is one way to reach a model; three ship: `claude-cli`, `anthropic-api` and `http:<name>`. Each agent has a weight and a fixed chain: `claude-cli` latest, then prior, each free `http:` backstop, then `anthropic-api` if `providers.paid` allows. A link is skipped only on provider failure, never because a task failed. Before every session, three mechanical checks that fail closed set the cost class: `subscription`, `free` or `paid`. With no link left, the session pauses on a timer record until the provider's reset time. At `limits.pause_max_min` (360) the group blocks with `pause_timeout`. Komodo adds no cost cap; USD is a beta metric that only warns.
+**Models and cost.** A link is one way to reach a model; three ship: `claude-cli`, `anthropic-api` and `http:<name>`. Each agent has a weight and a fixed chain: `claude-cli` latest, then prior, each free `http:` backstop, then `anthropic-api` if `providers.paid` allows. A link is skipped only on provider failure, never because a task failed. Before every session, three mechanical checks that fail closed set the cost class: `subscription`, `free` or `paid`. With no link left, the session pauses on a timer record until the provider's reset time. At `limits.pause_max_min` (360) the group blocks with `pause_timeout`. Komodo adds no cost cap; USD is a beta metric that only warns, and only when `track.usage` is on.
+
+**Usage tracking.** `track.usage` records the tokens and US dollars (USD) of each session. It takes `auto`, `on` or `off`; `auto`, the default, is on in `economy` mode and off in `thorough` mode. When it is off, the engine collects, writes and prints no token or USD data, and groups stay bounded by returns, attempts, retries and wall time.
 
 **📐 Which model link a session gets**
 ```mermaid
@@ -525,7 +528,7 @@ The agent's weight picks the model on Claude links.
 
 **Quality gates.** Four gates stand between build and landing; three cost 0 tokens. Lint and coverage: `check.patch_coverage` (80) on changed lines, blocking for Go. Success: every `done_when` rerun. Regression: a baseline recorded at the base commit plus the impact set; a failing test is rerun twice alone, and a split reports `flaky`. Behaviour: the tester's blind pass over EARS acceptance items (`WHEN <event> THE SYSTEM SHALL <response>`). The reviewer applies ten lenses, rule catalogs chosen by file scope; a finding blocks only if Go finds its quoted line at `file:line`. Each task gets one verdict from each. `komodo gate`, the self-check for Komodo's own repository, must finish under 3 minutes.
 
-**Operations.** No daemon runs. `komodo jobs tick` is one idempotent engine step, fired every 5 minutes by launchd, cron or Task Scheduler when installed with `--schedule`. Every failure has a detector, an action, a bound and a final state. The startup sweep kills orphans, frees expired leases and re-enqueues lost queue items. A crash stays in its group and loses at most one model turn. `status` shows the pool, stages, budgets and blocks. `status --wait` blocks until the next wake event, as the orchestrator's background loop; `status --metrics` is the scorecard. The ledger keeps `ledger.retention_days` (30) or 100 MB per repo and never trims an open group's state.
+**Operations.** No daemon runs. `komodo jobs tick` is one idempotent engine step, fired every 5 minutes by launchd, cron or Task Scheduler when installed with `--schedule`. Every failure has a detector, an action, a bound and a final state. The startup sweep kills orphans, frees expired leases and re-enqueues lost queue items. A crash stays in its group and loses at most one model turn. `status` shows the pool, stages, budgets and blocks. `status --wait` blocks until the next wake event, as the orchestrator's background loop; `status --metrics` is the scorecard, with tokens and USD only when `track.usage` is on. The ledger keeps `ledger.retention_days` (30) or 100 MB per repo and never trims an open group's state.
 
 **Interfaces.** Every verb runs five steps: parse, validate, resolve, dispatch, render; a failure before dispatch has made 0 writes. Verbs sit in three tiers: shared (person and orchestrator), terminal-only (`install`, `fresh`, config writes, `release`; refused without a controlling terminal) and internal (the engine). Every verb returns one envelope, `{v, ok, verdict, report, data, error}`, with exit codes 0 ok, 1 refused, 2 usage, 3 blocked, 4 internal. `report` arrives formatted; the orchestrator relays it verbatim. Install writes a Komodo block into `AGENTS.md` telling any host session its verbs and rules; a `SessionStart` hook runs `komodo status`.
 
@@ -571,7 +574,7 @@ A quality requirement is a scenario with a number a test can prove or fail. With
 - Durability: two engines racing to land one group make exactly 1 landing; the loser ends `lease.lost`.
 - Consistency: a write missing a required field is refused and the file is unchanged; replaying a state file through the state manager rebuilds `state.json` byte for byte.
 - Safety: a `run` writing outside the worktree, reading `~/.ssh` or reaching a public address is refused.
-- Capacity: 6 sessions machine-wide, 3 per link, 1 per loopback endpoint `[PENDING G-04]`, `[PENDING G-07]`; cache hits ≥50% `[PENDING G-17]`.
+- Capacity: 6 sessions machine-wide, 3 per link, 1 per loopback endpoint `[PENDING G-04]`, `[PENDING G-07]`; cache hits ≥50% with `track.usage` on `[PENDING G-17]`.
 
 ## 11. Risks, debt and roadmap
 
@@ -767,7 +770,7 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.7, draft |
+| Version | 0.8, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
@@ -786,6 +789,7 @@ Eighteen newcomer terms; the LLD links here.
 | 0.5 | 2026-10-11 | Technical lead | Group state: a group's events, snapshots and replay become one unit inside the state manager |
 | 0.6 | 2026-10-11 | Technical lead | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
 | 0.7 | 2026-10-12 | Technical lead | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
+| 0.8 | 2026-10-12 | Technical lead | Token and USD tracking is opt-in: the `track.usage` setting (`auto`, `on`, `off`) is on in `economy` mode and off in `thorough` mode; flat keys 33 to 34; per-provider-family usage metrics deferred (G-26) |
 
 #### 3.4 Related documents
 

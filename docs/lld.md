@@ -35,6 +35,7 @@
 | 0.5 | 2026-10-11 | Group state: a group's events, snapshots and replay become one module of the state manager, with `Open`, `Append`, `Snapshot`, `Load` and `Tail`; §13 and §40.9 |
 | 0.6 | 2026-10-11 | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
 | 0.7 | 2026-10-12 | The plan file's remaining facts moved in: per-component proof cases, file map, component dependencies, archive sources, cutover detail; this LLD and the HLD are now the source of truth |
+| 0.8 | 2026-10-12 | Token and USD tracking is opt-in: key `track.usage` (§8.2) gates the ledger's token and USD fields, the scorecard's cost metrics, `warn.usd_per_run` and `limits.group_tokens`; flat keys 33 to 34; gap G-26 |
 
 **Related documents:** [docs/hld.md](hld.md) (the High-Level Design), [docs/prd.md](prd.md), [docs/decisions/0001-standalone-harness.md](decisions/0001-standalone-harness.md), [Appendix Q](#appendix-q-component-id-traceability). Terms: the HLD Glossary.
 
@@ -162,7 +163,7 @@ flowchart LR
   end
   L1 --> MERGE["Merge, strict decode: an unknown key names the closest match"]
   L2 --> MERGE
-  MERGE --> EFF["effective config: 33 flat keys, agent and endpoint groups"]
+  MERGE --> EFF["effective config: 34 flat keys, agent and endpoint groups"]
   EFF --> SNAP["runs/#lt;group#gt;/state.json: the effective config hash"]
   SNAP --> KEY["the hash is also the cache key prefix"]
   WRITE["komodo config k=v k2=v2: every pair or none; needs a terminal"]
@@ -189,7 +190,7 @@ flowchart LR
 - Only `KOMODO_HOME` and `NO_COLOR` configure Komodo through the environment; `CI=true` disables background fresh.
 - Before each session the engine derives the link's capacity profile `{ctx, slots, cost_class, effort}`.
 
-**Lookup:** [Appendix B](#appendix-b-command-line-interface-and-configuration) holds the verb, global flag, envelope, exit code, tier, 33-key, agent group, endpoint group, environment, command detection and capacity profile tables.
+**Lookup:** [Appendix B](#appendix-b-command-line-interface-and-configuration) holds the verb, global flag, envelope, exit code, tier, 34-key, agent group, endpoint group, environment, command detection and capacity profile tables.
 
 ## 2. Event spine and state machine
 
@@ -1060,7 +1061,7 @@ classDiagram
     returns per group
     finding precision
     tester false-fail rate
-    tokens and USD per accepted group
+    tokens and USD per accepted group, if tracked
     cache hit rate per kind
   }
   GroupRow "1" --> "*" TaskRow : group
@@ -1068,7 +1069,7 @@ classDiagram
   GroupRow --> Scorecard : ledger.retention_days
   TaskRow --> Scorecard : ledger.retention_days
 ```
-**Reading the diagram.** The first runs scheduler or `/loop` through `jobs tick` to a `job-<name>-<n>` run. Ledger rows feed four `status` views; three failures block; keys are `sha256(inputs + binary version)`. The second maps group and task rows, jobs state, template and scorecard.
+**Reading the diagram.** The first runs scheduler or `/loop` through `jobs tick` to a `job-<name>-<n>` run. Ledger rows feed four `status` views; three failures block; keys are `sha256(inputs + binary version)`. The second maps group and task rows, jobs state, template and scorecard, whose token and USD line needs the `track.usage` setting (§8.2).
 
 `jobs tick` is one idempotent step: enqueue due jobs, fire due timer records (`wait_until`), drive the pool once. Nothing due: under 50 ms; it reads only `jobs/state.json`, the queue and the timer records, all through the state manager. Each job run is `job-<name>-<n>` and never preempts a group. Every cache key is `sha256(inputs + binary version)`; a lookup is one `stat`. The group row names lock and lease holders; the task row tracks `queued → claimed → done | returned | blocked`. `status --metrics` scores agents and models by first-pass rate, finding precision and USD per accepted group.
 
@@ -1550,7 +1551,7 @@ The HLD states what each component is for and how the components cooperate. This
 - **`internal/repo`:** Everything that touches the repository: the backlog files, backlog lint, the dependency graph, the repo map (a ranked symbol list for planning), shipping, git and PR wrappers, release, and the gate.
 - **`internal/provider`:** Talks to models. One interface covers every link (a way to reach a model), plus the billing check, the tool loop for API links, the Claude CLI adapter, a Codex stub that refuses until a later minor, the Anthropic API and OpenAI-compatible servers.
 - **`internal/tools`:** The tools a model session can call: the registry that binds tools to one session, the private MCP server (the tool server each session talks to), file read/search/edit/write, `run`, git read, the submit tools, `skill` and `web`.
-- **`internal/ops`:** Economy and operations: budgets (tokens, wall time), the ledger (one row per session and a copy of every event), the event bus, and the wake files that `status --wait` watches.
+- **`internal/ops`:** Economy and operations: budgets (wall time, and tokens when `track.usage` is on), the ledger (one row per session and a copy of every event), the event bus, and the wake files that `status --wait` watches.
 - **`internal/agent`:** The agent definitions (`agent.json`, `prompt.md`) and job templates, the skill loader, the orchestrator rules text, the output templates, the brief builder (assembling a worker's prompt from 20 slots) and trimming.
 - **`internal/safety`:** The guard that every tool call passes, its rule rows from `policy.json`, path containment, shell tokenizing, the guard table the gate checks, process control (timeouts, kills) and the three sandboxes (seatbelt, bwrap, Docker).
 - **`internal/state`:** The state manager, the only code that reads or writes runtime state. It holds the API every other package calls, group state (a group's events, snapshots and replay as one unit), the registry of record kinds with their one schema, the checks run on every read and write, and the steps that read older schema versions (§13).
@@ -1811,7 +1812,7 @@ Rules: a file splits at about 600 lines; a new package needs a new layer; `_test
 - **`runs/<group>/{events.jsonl, state.json}`:** The group state and its snapshot, kept together by group state. Every event is appended and synced to `events.jsonl` before it is applied. `state.json` holds the last sequence number, the config hash and the resume handle; `Snapshot` rewrites it every 50 events or on a stage change, and `resume` replays from it through `Load`.
 - **`jobs/state.json`:** Counters for scheduled jobs: `attempt`, `next_at`, `last_fail_hash` and `running`.
 - **`sessions/<id>/{brief.md, request.json, stream.jsonl, messages.jsonl, result.json, out/}`:** One folder per model session. `brief.md` is the prompt it received; `request.json` records the spawn; `stream.jsonl` is the model's output stream; `messages.jsonl` saves API-link turns for resume; `result.json` holds the exit reason and result; `out/` keeps full tool outputs that were cut to 4 KB in the reply.
-- **`ledger/{sessions.jsonl, events.jsonl, tasks.json, groups.json}`:** Read-only records for `status`. `sessions.jsonl` has one row per session (agent, model, tokens, USD, exit reason). `events.jsonl` copies every group's events. `tasks.json` and `groups.json` are the lock-table views that answer "who holds what".
+- **`ledger/{sessions.jsonl, events.jsonl, tasks.json, groups.json}`:** Read-only records for `status`. `sessions.jsonl` has one row per session (agent, model, exit reason, and tokens and USD only when `track.usage` is on). `events.jsonl` copies every group's events. `tasks.json` and `groups.json` are the lock-table views that answer "who holds what".
 - **`cache/{skills,context,checks,review,setup,map}/`:** The per-repo cache store, 256 MB, least recently used out first. Each kind is named by what it caches: skill bodies, repo context, Check results, review findings, dependency setup results, the repo map.
 - **`~/.komodo/`:** The machine-wide folder, shared by every repo on the machine. On Windows it is `%LOCALAPPDATA%\komodo`.
 - **`config.json`:** The one settings file. It does not exist until the first `komodo config` write; before that, built-in defaults apply.
@@ -2031,7 +2032,7 @@ A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from st
 - **`add changelog`:** Anyone runs it. It adds one line to the `Unreleased` section of `CHANGELOG.md`. `--entry <text>` is the line; `--kind` files it under added, changed, fixed or removed.
 - **`plan <goal>`:** Anyone runs it, usually the orchestrator; it costs model tokens. It starts the planner worker: a heavy pass drafts the epic outline (groups, goals, file globs, dependencies), then one standard pass per group drafts that group's tasks and acceptance items, in parallel. Go lints every draft; a failing draft goes back into its session twice, then the plan blocks with `lint`. Backlog files are written only when lint passes, so a bad plan writes 0 files. `--from <spec>` feeds any document set (a PRD, an RFC, a ticket export) as input; `--epic <N>` adds or amends only unlocked groups in an existing epic.
 - **`run [group]`:** Anyone runs it, usually the orchestrator. It builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once, and leaves the engine running detached under a small parent guard. From then on the engine cuts worktrees, starts builder sessions, commits to hidden refs, runs Check and Verify, opens group PRs and lands groups; see §10 for the stages. `run <group>` refuses, naming the dependency, when a group it depends on outside this run has not landed; it also refuses a group another run holds, naming the holder, and a repo with no detected commands, naming the marker files it looked for. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background.
-- **`status [run]`:** Anyone runs it; a Claude `SessionStart` hook runs it so a new session sees state on line one. It reads `state.json` and the ledgers and prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings. It ends with `Verbs: komodo help`. It is one of three places that may fetch `latest.json`, at most hourly, and it also fires due pause timers. `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`), so the orchestrator runs it in the background. `--timeout <dur>` caps that wait, 9 minutes by default because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard: first-pass rate, returns, finding precision, tokens and USD per accepted group, cache hit rate. `--backlog` is the installed binary's `backlog` verb folded in; what it lists is `[UNKNOWN: not yet designed]`. `--all` is `[UNKNOWN: not yet designed]`.
+- **`status [run]`:** Anyone runs it; a Claude `SessionStart` hook runs it so a new session sees state on line one. It reads `state.json` and the ledgers and prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings. It ends with `Verbs: komodo help`. It is one of three places that may fetch `latest.json`, at most hourly, and it also fires due pause timers. `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`), so the orchestrator runs it in the background. `--timeout <dur>` caps that wait, 9 minutes by default because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard: first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and USD per accepted group. `--backlog` is the installed binary's `backlog` verb folded in; what it lists is `[UNKNOWN: not yet designed]`. `--all` is `[UNKNOWN: not yet designed]`.
 - **`skill list|get`:** Anyone runs it, including any Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms. `get <name>` prints a skill's body; `--section <heading>` prints one section. `komodo skill get run|plan|respond|komodo` returns the workflow for each of those jobs. `list --agent <name>` narrows the list to one agent; the exact filter is `[UNKNOWN: not yet designed]`. It changes nothing.
 - **`scope approve|deny <group>`:** The orchestrator usually answers; a person can. A builder that needs a file outside its group's `files` stops with status `needs_scope`, the group blocks, and `status --wait` wakes the orchestrator. `approve` adds the paths to the group's `files` (action `scope_change`, logged in the ledger) and the engine resumes the same session with the answer; `deny` resumes it with the refusal. `--paths <list>` names the paths; `--reason <text>` the reason. The engine denies by itself, without asking, when a path is protected or belongs to another live group. One request per task.
 - **`resume <run>`:** Anyone runs it; Blocked never retries by itself, so a person or the orchestrator fixes the cause and runs this. It replays the state events after the snapshot through group state's `Load`, retakes the lease (or refuses, naming the new holder), rebuilds a removed worktree from the hidden ref, and continues each session from the provider's resume handle; if that fails it starts a fresh session with the brief, the uncommitted diff and the last summary, logging `resume_lost`. Paused agents attempt now; a refused attempt costs no turn and re-pauses. What `--from <stage>` does beyond its name is `[UNKNOWN: not yet designed]`.
@@ -2107,20 +2108,21 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 - Agents cannot touch it: `~/.komodo/**` is protected by G3 and every write needs a terminal.
 - Repo id (names worktrees, leases and caches, never config): the normalized origin URL such as `github.com/rdevitto86/komodo-agentic-harness-coding`; with no remote, the git common dir path. Every worktree of a repo shares one id.
 
-#### 8.2 Flat keys (33)
+#### 8.2 Flat keys (34)
 
-**In plain terms.** These are the 33 single-value settings a person can change with `komodo config key=value`. They cover output layout, self-update, providers, warnings, session counts, time and token limits, the sandbox, caches and merging. Each has a default, and most have a hard limit the binary refuses to exceed. Without them, runaway loops, surprise spend and an overloaded machine would have no bound. A person changes them; the engine reads them when a run starts and keeps that snapshot until the run ends.
+**In plain terms.** These are the 34 single-value settings a person can change with `komodo config key=value`. They cover output layout, self-update, providers, warnings, usage tracking, session counts, time and token limits, the sandbox, caches and merging. Each has a default, and most have a hard limit the binary refuses to exceed. Without them, runaway loops, surprise spend and an overloaded machine would have no bound. A person changes them; the engine reads them when a run starts and keeps that snapshot until the run ends.
 
 | Key | Default | Hard limit | Meaning |
 |---|---|---|---|
 | `output.profile` | `adhd` | — | Template set: `adhd` or `standard`; facts and codes are the same under both |
 | `output.turn_end_summary` | `true` | — | The 4 headings at the end of reports |
 | `output.color` | `auto` | — | `auto`, `on`, `off` |
-| `mode` | `thorough` | — | `economy` or `thorough`; sets review depth only |
+| `mode` | `thorough` | — | `economy` or `thorough`; sets review depth and the `track.usage` default |
+| `track.usage` | `auto` | — | `auto`, `on` or `off`; `auto` is on in `economy` mode and off in `thorough` mode |
 | `fresh.auto` | `true` | — | Background update |
 | `fresh.interval` | `1h` | ≥ 10m | How often to check |
 | `providers.paid` | `never` | — | `never`, `fallback`, `allowed` |
-| `warn.usd_per_run` | 5 | — | Warn when a run's metered USD passes this; never stops work |
+| `warn.usd_per_run` | 5 | — | Warn when a run's metered USD passes this; never stops work; used only when `track.usage` is on |
 | `warn.quota_pct` | 90 | — | Warn when a provider window passes this percent |
 | `providers.keys.anthropic` | `env:ANTHROPIC_API_KEY` | `env:` only | Key reference, never the value |
 | `providers.keys.openai` | `env:OPENAI_API_KEY` | `env:` only | Same |
@@ -2130,7 +2132,7 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 | `limits.pool_max` | 6 | 16 | Most looping sessions at once, across all repos |
 | `limits.link_sessions.<link>` | 3; loopback endpoints 1 | 8 | Concurrent sessions per link, across all repos |
 | `limits.group_wall_min` | tasks × `limits.session_wall_min` + 2 × `limits.session_wall_min` | 720 | Wall time per group; paused time excluded; a 4-task group gets 360 |
-| `limits.group_tokens` | 2,000,000 | 10,000,000 | Tokens per group: input, output, cache writes; cache reads reported only |
+| `limits.group_tokens` | 2,000,000 | 10,000,000 | Tokens per group: input, output, cache writes; cache reads reported only; used only when `track.usage` is on |
 | `limits.task_attempts` | 6 | 10 | Model attempts per task: fresh sessions, re-prompts, gate feedback, "continue" |
 | `limits.pause_max_min` | 360 | 1,440 | Longest a session stays paused on a provider limit |
 | `limits.session_wall_min` | 60 | 120 | Wall time per session |
@@ -2152,11 +2154,15 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 - **`adhd` layout:** Verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`). The profile is fixed per machine: no repo setting or flag changes a template.
 - **`output.turn_end_summary`:** Turns the 4 fixed headings at the end of every report on or off. A person turns it off to get shorter reports. [UNKNOWN: not yet designed] which 4 headings they are.
 - **`output.color`:** Controls terminal colour: `auto` decides from the terminal, `on` forces it, `off` removes it. It is applied only when text is rendered, so it never changes the facts. A person sets `off` for logs or plain terminals.
-- **`mode`:** Sets how deep the reviewer looks: `thorough` runs every lens (a reviewer rule catalog, see Glossary) that applies, plus a cold pass; `economy` runs one merged lens at reduced depth. It changes review depth only, never which model runs. A person picks `economy` to save tokens on low-risk work.
+- **`mode`:** Sets how deep the reviewer looks: `thorough` runs every lens (a reviewer rule catalog, see Glossary) that applies, plus a cold pass; `economy` runs one merged lens at reduced depth. It changes review depth and the `auto` default of `track.usage`, never which model runs. A person picks `economy` to save tokens on low-risk work.
+- **`track.usage`:** Turns the recording and reporting of model tokens and US dollars (USD) on or off. `auto`, the default, is on under `economy` mode and off under `thorough` mode; `on` and `off` override it. A person sets `on` to watch usage under `thorough`.
+  - **On:** The ledger records tokens and USD, `status --metrics` reports them, `warn.usd_per_run` can warn and `limits.group_tokens` caps each group.
+  - **Off:** The engine does not collect, write or print any token or USD data. Groups stay bounded by returns, attempts, retries, and session and group wall time.
+  - **Purpose:** The data exists only to debug costs and track metrics. The token cap is the one decision that reads it, and it applies only when tracking is on.
 - **`fresh.auto`:** Turns the background self-update of the `komodo` binary on or off. When on, a verb that sees a newer release spawns a detached updater and carries on; live runs keep their own version. A person sets `false` on a machine that must stay pinned.
 - **`fresh.interval`:** How often the harness checks for a newer release, by caching the release manifest for this long. The check is one 1 KB fetch on the few verbs that already touch the network. It cannot go below 10 minutes; a person raises it to check less often.
 - **`providers.paid`:** Says when a paid model link (a way to reach a model, see Glossary) may run. `never` removes paid links from every chain and blocks with `paid_refused` if nothing else is left; `fallback` lets a paid link run only after every subscription and free link is skipped; `allowed` runs paid links in chain order. A person changes it when they accept per-token billing.
-- **`warn.usd_per_run`:** Prints a warning when a run's metered spend in US dollars passes this number. It never stops work; the provider's own limits do that. A person raises it when runs on paid links are expected to cost more.
+- **`warn.usd_per_run`:** Prints a warning when a run's metered spend in US dollars passes this number. It never stops work; the provider's own limits do that. It applies only when `track.usage` is on. A person raises it when runs on paid links are expected to cost more.
 - **`warn.quota_pct`:** Prints a warning when a provider usage window (the Max 5-hour or weekly window) passes this percent used. It also shrinks the session pool by half so the window is not drained. A person lowers it to get warned earlier.
 - **`providers.keys.anthropic`:** Names the environment variable that holds the Anthropic API key, as `env:NAME`. The key value itself is never stored in config or logs. A person changes it when their key lives under another variable name.
 - **`providers.keys.openai`:** The same rule for the OpenAI API key reference. Only `env:` references are accepted. The OpenAI link itself is recorded as `not yet` until a later minor.
@@ -2166,7 +2172,7 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 - **`limits.pool_max`:** The most builder, reviewer and tester sessions that may run at once across every repo on the machine. More ready groups queue until a slot frees. A person lowers it on a small machine or raises it, up to 16, on a large one with plenty of memory.
 - **`limits.link_sessions.<link>`:** The most sessions that may use one link at once, across all repos. The default is 3, or 1 for a loopback endpoint such as local Ollama. Ollama serves 1 request per model unless `OLLAMA_NUM_PARALLEL` is raised, so `doctor` reads it and names the fix.
 - **`limits.group_wall_min`:** The most wall-clock minutes a group (a bundle of up to 8 tasks, see Glossary) may spend before it stops. It scales with the task count and excludes paused time; a 4-task group gets 360. A person raises it, up to 720, for groups with slow test suites.
-- **`limits.group_tokens`:** The most model tokens one group may consume: input, output and cache writes. It is a runaway-loop bound, not a cost cap; cache reads are reported but not counted. Hitting it blocks the group with `budget`; a person lowers it to catch loops sooner.
+- **`limits.group_tokens`:** The most model tokens one group may consume: input, output and cache writes. It is a runaway-loop bound, not a cost cap; cache reads are reported but not counted. It applies only when `track.usage` is on; otherwise returns, attempts, retries and wall time bound the group. Hitting it blocks the group with `budget`; a person lowers it to catch loops sooner.
 - **`limits.task_attempts`:** The most model attempts one task gets, counting fresh sessions, re-prompts, gate feedback and "continue". The default covers 2 fresh sessions with 2 re-prompts each. Hitting it blocks the group with `attempts`; a person raises it, up to 10, for hard tasks.
 - **`limits.pause_max_min`:** The longest a session may stay paused waiting for a provider limit to reset. At the cap the session is cancelled, its work-in-progress commit is kept, and the group blocks with `pause_timeout`. A person raises it, up to 24 hours, to ride out long provider outages.
 - **`limits.session_wall_min`:** The most minutes one model session may run; 60 by default, 120 at most. The session gets a warning at 80% and is stopped at the cap, with the clock stopped while paused. A person raises it for agents that need longer single tasks.
@@ -2183,7 +2189,7 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 - **`ledger.retention_days`:** How many days of session and event ledger rows are kept before the oldest are trimmed; 100 MB per repo is the other bound. A state file of a group that is still open, paused or blocked is never trimmed. A person raises it to keep metrics over a longer window.
 - **`ship.mode`:** How a finished group lands: `group` opens a pull request into the epic branch and the engine merges it at once; `epic` merges the group straight into the epic branch with `--no-ff`. A person picks `epic` when per-group PRs add no value.
 
-Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded by the Max 5-hour window, not the API; `providers.ctx_floor` 262,144 is the native window of the ~27B open models targeted and catches Ollama's 4,096 default; `limits.session_wall_min` 60 bounds one task with 6 attempts inside a 6-hour group; `limits.task_attempts` 6 covers 2 fresh sessions with 2 re-prompts each; `warn.usd_per_run` 5 warns before a second ~$7 group on Opus 5.5; `limits.group_tokens` 2,000,000 is 1.7× the expected worst case of 1.2M. `[PENDING G-07]` the real Max 5-hour window against `link_sessions.claude-cli` 3, measured over the first 20 groups.
+Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded by the Max 5-hour window, not the API; `providers.ctx_floor` 262,144 is the native window of the ~27B open models targeted and catches Ollama's 4,096 default; `limits.session_wall_min` 60 bounds one task with 6 attempts inside a 6-hour group; `limits.task_attempts` 6 covers 2 fresh sessions with 2 re-prompts each; `warn.usd_per_run` 5 warns before a second ~$7 group on Opus 5.5; `limits.group_tokens` 2,000,000 is 1.7× the expected worst case of 1.2M. Both keys apply only when `track.usage` is on. `[PENDING G-07]` the real Max 5-hour window against `link_sessions.claude-cli` 3, measured over the first 20 groups.
 
 Where the numbers come from:
 - Anthropic's lowest API tier allows 1,000 requests and 2M input tokens a minute on Opus 5.5. A session makes well under 1 request a second, so the Max plan's 5-hour window is the real bound.
@@ -2471,7 +2477,7 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 - **`action.done`:** `Drive` writes it after the side effect completes. On replay a done action is skipped, so a crash never repeats a commit or a landing.
 - **`state.truncated`:** Emitted once during replay when the last event line fails its CRC check and is dropped. It records that at most one event was lost to a torn write.
 - **`provider.skip`:** A provider adapter emits it, with `{from, to, reason}`, whenever a link is skipped. The reasons are unavailable, unauthorized, over its limit or below the context floor (`ctx_below_floor`). The report also shows a warning naming the model the task actually ran on.
-- **`limit.warn`:** A provider adapter emits it when a usage window passes `warn.quota_pct`, when Max starts drawing paid overage credits, or when a run's spend passes `warn.usd_per_run`. It appears under the report's warnings heading and never stops work.
+- **`limit.warn`:** A provider adapter emits it when a usage window passes `warn.quota_pct`, when Max starts drawing paid overage credits, or, with `track.usage` on, when a run's spend passes `warn.usd_per_run`. It appears under the report's warnings heading and never stops work.
 
 Each type's `data` is a Go struct registered with the state manager as part of the `event` kind. The build generates `embed/state.schema.json` from the registry; `help --json` serves its event part as `events`; the gate fails when the two disagree. Listing each type's `data` fields is open `[PENDING G-24]`.
 
@@ -2604,7 +2610,7 @@ A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `p
 - **`attempts`:** One task used all `limits.task_attempts` model attempts, across fresh sessions, re-prompts, gate feedback and "continue". A person looks at why the task keeps failing, then `resume`.
 - **`context`:** The brief for a task is larger than half the context window of every link in the chain. A person shrinks the task or adds a larger-context endpoint, then `resume`.
 - **`merge_conflict`:** Landing conflicted with the epic branch, and the one automatic merge of the epic branch into the group branch did not resolve it. A person resolves the conflict, then `resume`.
-- **`budget`:** The group used its `limits.group_tokens` tokens. A person raises the cap or splits the group, then `resume`.
+- **`budget`:** With `track.usage` on, the group used its `limits.group_tokens` tokens; with tracking off this reason never occurs. A person raises the cap or splits the group, then `resume`.
 - **`crash`:** The group's `Drive` goroutine panicked; other groups kept running and the run report names the group. `resume` replays the group state through group state's `Load` and continues.
 - **`lint`:** The planner's epic outline failed Go's backlog lint, went back into the session 2 times, and failed again. A person fixes the backlog with `doctor backlog`, then `resume`. [UNKNOWN: not yet designed] whether a lint failure at Intake uses this reason.
 - **`brief`:** The reviewer reported `brief_incomplete`: the brief it received lacked what it needed. It is a harness fault that does not count against the builder; a person fixes the brief inputs, then `resume`.
@@ -2793,7 +2799,7 @@ Events add `seq` and `crc` from their own envelope (§9.1); the manager computes
 | Session temp | Sandbox and workspace; each session's own HOME and TMPDIR, removed by the sweep |
 
 **What each one does**
-- **`config.json`:** The settings file. It has its own schema of 33 keys with hard limits, a hash guard and an audit log, and only `komodo config` writes it (§8). Its audit log and hash are a state kind (`config_audit`).
+- **`config.json`:** The settings file. It has its own schema of 34 keys with hard limits, a hash guard and an audit log, and only `komodo config` writes it (§8). Its audit log and hash are a state kind (`config_audit`).
 - **`cache/`:** Derived data keyed by the hash of its inputs. A wrong entry is deleted on read and recomputed, so it needs no schema check (§28).
 - **Git refs and worktrees under `wt/`:** The hidden ref per group, the branches and the checkouts the builder edits. Git's own `update-ref` compare-and-swap, carrying the fence, already refuses a stale writer (§12).
 - **Job templates, `~/.komodo/jobs/*.json`:** The person's own job definitions. They are input, decoded as strictly as `agent.json`, not state the harness writes (§23).
@@ -3264,7 +3270,7 @@ Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and
 - **`timeout`:** The session hit its wall-clock limit and was stopped by the stop ladder. The engine starts a fresh session for the task, up to the agent's `retries`.
 - **`idle`:** The session stayed silent past the idle limit, got its nudge and 5 minutes of grace, and was stopped. The engine starts a fresh session for the task, up to the agent's `retries`.
 - **`refusals`:** The guard refused the same rule 3 times in one session (rule G6, §21.2), so the session was ended. The engine retries the task.
-- **`budget`:** A group budget such as the token cap `limits.group_tokens` was spent. The engine stops and blocks the group with `budget`.
+- **`budget`:** The token cap `limits.group_tokens` was spent; it applies only when `track.usage` is on. The engine stops and blocks the group with `budget`.
 - **`provider`:** The provider reported a rate limit or billing error on its retry line, so the engine ended the session but kept its resume handle. The task's next session starts on the next allowed link in the chain, usually the free backstop.
 - **`billing`:** The first stream line showed the session would have used a paid API key instead of the subscription login (§16.7). The engine killed it before its first turn and blocks the group with `paid_refused`.
 - **`paused`:** A provider limit halted the session, no other link was left, and the session has a resume handle. The group waits on a disk timer until the provider's reset time, then resumes on its own.
@@ -3913,7 +3919,7 @@ Symlinks are copied as links, never followed; a link resolving outside the workt
 - **Agent leaks or reads secrets:** G4 refuses reads of secret files such as `.env` or `*.pem`, and writes that look like a secret. The sandbox hides the home folder and passes only a short list of environment variables. Check scans the diff for secret patterns. API keys never reach logs, the ledger (the run record) or error text.
 - **Agent pushes, merges or force-pushes:** Workers have no tool that writes git. R1 means no declared command class runs git. Rules O1 to O3 forbid the orchestrator from doing it. Only the Ship stage inside the engine writes git.
 - **Tampered or stale binary:** `fresh` is the self-update verb. Every update checks the download's SHA-256 hash and its ed25519 signature before swapping the binary in. The repo pin in `AGENTS.md` makes a too-old binary refuse most verbs until `komodo fresh` runs.
-- **Runaway cost or loops:** The session supervisor stops a session at its wall clock or after idle time. Every retry in error recovery has a counter, and budgets cap tokens and time per group. A run that hits a bound goes Blocked instead of looping.
+- **Runaway cost or loops:** The session supervisor stops a session at its wall clock or after idle time. Every retry in error recovery has a counter, and budgets cap time per group, plus tokens when `track.usage` is on. A run that hits a bound goes Blocked instead of looping.
 - **Poisoned cache:** Cached results live outside every worktree, so a worker cannot reach them. Each entry is verified on read and deleted on mismatch. Language caches (npm, Go, Cargo, pip) are Komodo's own per repo, never the user's, so planted files cannot reach the user's builds.
 - **Malicious external MCP:** An MCP server is an outside tool server a model could call. They are off by default, allowed only by a per-agent allowlist, and receive no credentials.
 - **Stale engine lands over newer work:** A fence is a counter beside a group's lease (its lock, see Glossary). Every git write carries the fence, and git's compare-and-swap refuses a stale holder. Every side effect also has an idempotency key, so a replay after a crash never lands the same work twice.
@@ -3992,13 +3998,13 @@ Releases are signed with ed25519 by a key at `~/.komodo/release.key` (mode 0600)
 
 **In plain terms.** The interface is the three functions every provider adapter must offer, so the engine can treat every provider the same way. It also fixes what a finished session hands back. Without one interface, adding a provider would mean changing the engine. Only the engine calls these; nothing else does.
 
-`Probe`, `Start(session) → stream`, `Resume(session, input)`. The stream ends in a `Result`: the output, usage (tokens in, out, cache read and write, plus USD) and the resume handle.
+`Probe`, `Start(session) → stream`, `Resume(session, input)`. The stream ends in a `Result`: the output, usage (tokens in, out, cache read and write, plus USD; collected only when `track.usage` is on) and the resume handle.
 
 **What each one does**
 - **`Probe`:** Checks that the provider is reachable and records its path, version and login. It runs at `install`, `doctor` and `fresh`.
 - **`Start(session) → stream`:** Starts one model session and returns its output stream, which the supervisor reads line by line.
 - **`Resume(session, input)`:** Continues a saved session from its resume handle, sending the new input (for example a scope approval). Used by `resume` and after a `needs_scope` answer.
-- **`Result`:** What the stream ends with: the model's output, its usage (tokens in, tokens out, cache reads and writes, and a USD figure) and the resume handle for later continuation.
+- **`Result`:** What the stream ends with: the model's output, its usage, collected only when `track.usage` is on (tokens in, tokens out, cache reads and writes, and a USD figure), and the resume handle for later continuation.
 
 #### 16.2 Links
 
@@ -4174,8 +4180,8 @@ The `apiKeySource` field is present in the Claude Code binary but not in its hea
 | `resume` | Attempts every paused agent now from its handle; a refused attempt costs no turn and re-pauses with the new reset, or backs off 15, 30, then 60 min |
 | Cap | `limits.pause_max_min` 360: the session is cancelled, WIP commit kept, group Blocked `pause_timeout` |
 | Visible | `status` shows `paused: provider_limit · claude-cli · resumes 15:31 (in 2h 14m)`; `abandon` clears the timer |
-| Warnings, never stops | Window past `warn.quota_pct`; `rate_limit_event` with `isUsingOverage: true`; run USD past `warn.usd_per_run`. Shown under ⚠️ Warnings in the run report, `status`, `status --wait`, and as `limit.warn` |
-| USD | Metered links ledger `usd`; subscription sessions ledger `total_cost_usd` as notional `usd_equiv` |
+| Warnings, never stops | Window past `warn.quota_pct`; `rate_limit_event` with `isUsingOverage: true`; with `track.usage` on, run USD past `warn.usd_per_run`. Shown under ⚠️ Warnings in the run report, `status`, `status --wait`, and as `limit.warn` |
+| USD | With `track.usage` on, metered links ledger `usd`; subscription sessions ledger `total_cost_usd` as notional `usd_equiv` |
 
 **What each one does**
 - **Provider halt:** When a provider stops a session for a quota or spend limit, the task's next session starts on the next allowed link in the chain. Only when no link is left does the session pause, keeping its resume handle.
@@ -4184,8 +4190,8 @@ The `apiKeySource` field is present in the Claude Code binary but not in its hea
 - **`resume`:** A person or the orchestrator can run `resume` early; it tries every paused agent now from its resume handle. If the provider still refuses, no model turn is spent and the session re-pauses on the new reset time, or backs off 15, 30, then 60 minutes when no reset time is given.
 - **Cap:** A session may stay paused for at most `limits.pause_max_min`, 360 minutes. Past that it is cancelled, its WIP commit is kept, and the group blocks with `pause_timeout` so a person decides.
 - **Visible:** `status` shows a paused group as, for example, `paused: provider_limit · claude-cli · resumes 15:31 (in 2h 14m)`. `abandon` clears the timer and ends the group.
-- **Warnings, never stops:** Three things warn without stopping work: a provider window past `warn.quota_pct` (90% by default), a `rate_limit_event` with `isUsingOverage: true` (Max is drawing paid overage credits), and a run's metered spend past `warn.usd_per_run` ($5 by default). They appear under ⚠️ Warnings in the run report, in `status` and `status --wait`, and as a `limit.warn` event.
-- **USD:** For metered links the ledger records real `usd`. For subscription sessions it records Claude Code's `total_cost_usd` as `usd_equiv`, a notional figure, since the plan covers the cost.
+- **Warnings, never stops:** Three things warn without stopping work: a provider window past `warn.quota_pct` (90% by default), a `rate_limit_event` with `isUsingOverage: true` (Max is drawing paid overage credits), and, only with `track.usage` on, a run's metered spend past `warn.usd_per_run` ($5 by default). They appear under ⚠️ Warnings in the run report, in `status` and `status --wait`, and as a `limit.warn` event.
+- **USD:** With `track.usage` on, the ledger records real `usd` for metered links. For subscription sessions it records Claude Code's `total_cost_usd` as `usd_equiv`, a notional figure, since the plan covers the cost. With tracking off, no USD figure is recorded.
 
 #### 16.9 `claude-cli` launch line
 
@@ -4392,7 +4398,7 @@ Three mechanical checks, failing closed: the login is read before every `claude-
 
 **In plain terms.** Providers cap how much you can use in a window, such as Claude's 5-hour window. This section says what Komodo does when a cap is hit. It moves to the next link, or pauses the session on a disk timer until the reset time. Without it, a quota stop would look like a failure and lose work. The engine pauses and resumes on its own; a person or the orchestrator can run `komodo resume` to try sooner.
 
-Komodo adds no cost cap of its own; provider windows and spend limits are the provider's. USD is a beta metric. On a quota stop the next session starts on the next allowed link; only with no link left does the session pause with `wait_until` (reset time plus 1 minute) on disk and the link's reset time in machine-wide `quota.json`. `komodo resume` attempts every paused agent now; a refused attempt costs no model turn and re-pauses with the new reset time, or backs off 15, 30, then 60 minutes when none is given. Paused time stops the wall clocks; at `limits.pause_max_min` (360) the session is cancelled, its WIP commit kept, and the group blocks with `pause_timeout`. Three warnings never stop work: a window past `warn.quota_pct` (90), Max drawing overage credits, and a run past `warn.usd_per_run` (5).
+Komodo adds no cost cap of its own; provider windows and spend limits are the provider's. USD is a beta metric, recorded only when `track.usage` is on. On a quota stop the next session starts on the next allowed link; only with no link left does the session pause with `wait_until` (reset time plus 1 minute) on disk and the link's reset time in machine-wide `quota.json`. `komodo resume` attempts every paused agent now; a refused attempt costs no model turn and re-pauses with the new reset time, or backs off 15, 30, then 60 minutes when none is given. Paused time stops the wall clocks; at `limits.pause_max_min` (360) the session is cancelled, its WIP commit kept, and the group blocks with `pause_timeout`. Three warnings never stop work: a window past `warn.quota_pct` (90), Max drawing overage credits, and, with `track.usage` on, a run past `warn.usd_per_run` (5).
 
 ---
 
@@ -4414,7 +4420,7 @@ Komodo adds no cost cap of its own; provider windows and spend limits are the pr
 | Order | `always` first, then name order, so the prefix is byte-identical across runs |
 | Too big | A brief over the ceiling never drops a skill; the task goes to the next link, else Blocked `context` |
 | Frontmatter | Strict, `v: 1`: `name`, `description`, `globs`, `markers`, `sections`; the gate fails an unknown key, duplicate heading, or a `sections` entry with no heading |
-| Size | 6,000 tokens per skill; the gate names any over it; skill tokens per session go to the ledger |
+| Size | 6,000 tokens per skill; the gate names any over it; with `track.usage` on, skill tokens per session go to the ledger |
 | Integrity | `embed/skills/index.json` has a SHA-256 per skill; verified on read; each renders under `## Standards: <name> (<sha8>)` |
 | Steering scan | The gate fails a skill, and `doctor` warns on a repo addendum, containing a `text`-row phrase: `ignore previous`, `you are now`, `system prompt`, `disregard`, `komodo config`, `komodo install`. The addendum still loads with the warning. `[PENDING G-13]` the list is 6 entries by judgment |
 | Standards to rules | `- **Never` and `- **Always` lines compile to reviewer rule IDs `std.<skill>.<n>`; an edit without the regenerated list fails the gate |
@@ -4429,7 +4435,7 @@ Komodo adds no cost cap of its own; provider windows and spend limits are the pr
 - **Order:** Skills render `always` first, then alphabetically, so the brief prefix is identical across runs and the provider cache hits.
 - **Too big:** When a brief exceeds the link's ceiling, no skill is dropped. The task moves to the next link in the chain, or blocks with `context`.
 - **Frontmatter:** Each skill opens with a strict header of five fields. The gate (the build-time self-check) rejects unknown keys, duplicate headings or a section name with no heading.
-- **Size:** A skill holds at most 6,000 tokens; the gate names any larger. The ledger records skill tokens per session.
+- **Size:** A skill holds at most 6,000 tokens; the gate names any larger. With `track.usage` on, the ledger records skill tokens per session.
 - **Integrity:** An index file stores a SHA-256 hash per skill, checked on every read. Each skill renders under a heading with its short hash, so a finding cites the exact version.
 - **Steering scan:** Skills and the repo's `AGENTS.md` addendum are scanned for prompt-injection phrases. A skill with one fails the gate; an addendum only warns and still loads. The 6-phrase list is a judgment call, pending G-13.
 - **Standards to rules:** Each `- **Never` and `- **Always` line becomes a reviewer rule ID. Editing a skill without regenerating that list fails the gate.
@@ -4759,7 +4765,7 @@ Google's code review guide covers 9 dimensions: design, functionality, complexit
 - **Any model attempt on a task:** Every fresh session, re-prompt, gate feedback or "continue" counts as one attempt. Recovery counts them; the rows above are inner limits. At `limits.task_attempts` (6) the group ends Blocked `attempts`.
 - **Brief over half the measured context:** The assembled prompt is larger than half the model's context window. The brief builder moves the task to the next link in the chain that fits, once. With none left, Blocked `context`.
 - **Landing conflicts with the epic branch:** Merging the group's branch into the epic branch hits a git conflict. Ship merges the epic branch into the group branch and reruns Check, once. If it still conflicts, Blocked `merge_conflict`.
-- **Budget spent:** The group hit a budget from §27, such as its token cap. The engine stops; the group ends Blocked `budget`.
+- **Budget spent:** The group hit its token cap from §27, which applies only when `track.usage` is on. The engine stops; the group ends Blocked `budget`.
 - **Harness crash or reboot:** The `komodo` process died or the machine restarted. On restart, Recovery calls group state's `Load`, which replays the group's state events from the last snapshot, and the run continues. It has no retry count; the state is rebuilt, not retried.
 - **Scheduled job fails:** A job run from §23 failed. The scheduler waits with backoff and retries, 3 times. Then the job ends Blocked.
 - **State write refused, or a record fails its check on read:** The state manager (§40) refused a write that broke the schema or an invariant, or a record on disk failed its checksum, hash or version check. A refused write leaves the disk untouched; a bad record is moved aside as `.bad-*`. There is no retry: the owning group ends Blocked `state_invalid`, with the kind, key and field named.
@@ -4786,14 +4792,14 @@ Google's code review guide covers 9 dimensions: design, functionality, complexit
 #### 27. Token and resource management
 
 
-**In plain terms.** This section sets the limits on how much time, how many tokens (the units a model's input and output are billed in) and how many parallel sessions a run may use, plus the tricks that keep token use low. Budgets are bounds against runaway loops, not cost targets; dollars only produce a warning. Without them, a looping worker could run for hours and empty a spend limit. A person sets them with `komodo config`; the engine enforces them; `status --metrics` reports the result.
+**In plain terms.** This section sets the limits on how much time, how many tokens (the units a model's input and output are billed in) and how many parallel sessions a run may use, plus the tricks that keep token use low. Budgets are bounds against runaway loops, not cost targets; dollars only produce a warning. Without them, a looping worker could run for hours and empty a spend limit. Token and dollar tracking, with the token cap, runs only when `track.usage` is on (§8.2). A person sets them with `komodo config`; the engine enforces them; `status --metrics` reports the result.
 
 | Budget | Value |
 |---|---|
 | Group wall | tasks × session wall + 2 × session wall; paused time excluded; hard limit 720 min |
 | Per agent | Wall, idle, retries from `agent.json` |
 | Per task | `limits.task_attempts` model attempts |
-| Per group | `limits.group_tokens`: input, output, cache writes; cache reads reported only |
+| Per group | `limits.group_tokens`: input, output, cache writes; cache reads reported only; only when `track.usage` is on |
 | Sessions | Pool 1 to 6 machine-wide plus per-link slots |
 | Mode | economy (1 merged lens) or thorough (N lenses plus a cold pass) |
 
@@ -4801,9 +4807,9 @@ Google's code review guide covers 9 dimensions: design, functionality, complexit
 - **Group wall:** The total clock time a group may spend: the number of tasks times the session wall (60 min by default), plus two more session walls for Verify. Time spent Paused does not count. The hard ceiling is 720 minutes.
 - **Per agent:** Each agent's `agent.json` sets its session wall clock, its idle limit (silence before a nudge), and how many retries a task gets on timeout or idle.
 - **Per task:** `limits.task_attempts` (6) caps every model attempt on one task, as counted in §26.1.
-- **Per group:** `limits.group_tokens` caps input tokens, output tokens and cache writes per group. Cache reads are reported but not counted, because every turn re-reads the whole context.
+- **Per group:** `limits.group_tokens` caps input tokens, output tokens and cache writes per group. Cache reads are reported but not counted, because every turn re-reads the whole context. With `track.usage` off, no token data is collected and no token cap applies.
 - **Sessions:** The machine runs between 1 and 6 looping sessions at once across all repos (`limits.pool_min` to `limits.pool_max`), plus a per-link cap on concurrent sessions.
-- **Mode:** `economy` runs one merged review lens; `thorough`, the default, runs every applicable lens plus a cold pass (§25.2).
+- **Mode:** `economy` runs one merged review lens; `thorough`, the default, runs every applicable lens plus a cold pass (§25.2). With `track.usage` at `auto`, `economy` turns tracking on and `thorough` turns it off.
 
 Savings: clipping, signature trimming, glob-picked standards, delta diffs, session resume on return, briefs that fit the link, 4 KB check output, a stable prefix, a sanitizer, per-task sessions, light-weight work on local models, context compaction at 80%.
 
@@ -4821,7 +4827,7 @@ Savings: clipping, signature trimming, glob-picked standards, delta diffs, sessi
 - **Light-weight work on local models:** Runs lighter work on local, free models instead of hosted ones. Which work qualifies: [UNKNOWN: not yet designed].
 - **Context compaction at 80%:** When a session's context reaches 80% of the window, old tool outputs shrink to one-line stubs; their full text stays on disk in `<session>/out/`.
 
-Prompt caching on the Anthropic API: at most 4 `cache_control` breakpoints per request, 1-hour entries before 5-minute ones, a 512-token minimum on the 5.5 line, writes at 1.25× (5 min) or 2× (1 h) and reads at 0.05× base. Breakpoints follow the prefix order: tools plus role (1 h), repo context (1 h), standards (5 min), task (5 min). `claude -p` caches automatically on a byte-identical prefix. Cached reads do not count toward Anthropic's input-tokens-per-minute limit. The ledger's `cache_read` and `ctx_peak` columns are the proof. `[PENDING G-17]` the 50% hit-rate fixture needs real API sessions, measured in phase 7.
+Prompt caching on the Anthropic API: at most 4 `cache_control` breakpoints per request, 1-hour entries before 5-minute ones, a 512-token minimum on the 5.5 line, writes at 1.25× (5 min) or 2× (1 h) and reads at 0.05× base. Breakpoints follow the prefix order: tools plus role (1 h), repo context (1 h), standards (5 min), task (5 min). `claude -p` caches automatically on a byte-identical prefix. Cached reads do not count toward Anthropic's input-tokens-per-minute limit. The ledger's `cache_read` column, written only when `track.usage` is on, and its `ctx_peak` column are the proof. `[PENDING G-17]` the 50% hit-rate fixture needs real API sessions, measured in phase 7.
 
 A change at the tools level invalidates every cache entry after it, and a change to thinking or effort invalidates from the messages level on. `effort` and thinking are therefore fixed per agent.
 
@@ -4831,7 +4837,7 @@ A change at the tools level invalidates every cache entry after it, and a change
 - **Standards (5 min):** The third block: the standards skills picked by file globs. Cached for 5 minutes.
 - **Task (5 min):** The last block: the task itself. Cached for 5 minutes.
 
-Headline metric: tokens and USD per accepted group, plus cache hit rate per agent, in `status --metrics`.
+Headline metric: tokens and USD per accepted group, plus cache hit rate per agent, in `status --metrics`, only when `track.usage` is on.
 
 #### HLD 9.3 Scenario: the Verify race
 
@@ -4993,7 +4999,7 @@ Every failure has a detector, an action, a bound and a final state; nothing loop
 - **`status [--watch]`:** Prints the session pool, each group's stage, budgets, blocks and the group graph; `--watch` keeps refreshing.
 - **`status --wait`:** Blocks until the next wake event, such as a group going Blocked or finishing. This is the orchestrator's background loop, so it reacts without polling.
 - **`status --explain`:** Prints the last 10 events with the reason for each, for understanding why a group moved.
-- **`status --metrics`:** The scorecard: first-pass rate, returns per group, finding precision, tester false-fail rate, tokens and USD per accepted group, and cache hit rate.
+- **`status --metrics`:** The scorecard: first-pass rate, returns per group, finding precision, tester false-fail rate, and cache hit rate, plus tokens and USD per accepted group when `track.usage` is on.
 - **The ledger:** Every session's model, measured context window and cost class (`subscription`, `free` or `paid`) are recorded there and shown in `status`.
 
 `status [--watch]` shows the pool, stages, budgets, blocks and the group graph. `status --wait` blocks until the next wake event and is the orchestrator's background loop. `status --explain` prints the last 10 events with reasons. `status --metrics` is the scorecard. Every session's model, measured context and cost class are in the ledger and in `status`.
@@ -5129,14 +5135,14 @@ Every key is `sha256(inputs + binary version)` with the per-run config hash as p
 
 **In plain terms.** The scorecard is the report of how well each worker role and model has performed over the retention window (`ledger.retention_days`, 30 days by default). It is how a person decides whether a cheaper model is good enough, and whether a review rule earns its keep. Without it, model choices would rest on impressions. `status --metrics` prints it; `doctor` reads it to suggest changes.
 
-Per agent and model over `ledger.retention_days`: first-pass rate, returns per group, finding precision, tester false-fail rate, tokens and USD per accepted group, cache hit rate per kind. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups. Aggregates are cached by the ledger file's size and mtime.
+Per agent and model over `ledger.retention_days`: first-pass rate, returns per group, finding precision, tester false-fail rate, cache hit rate per kind, and tokens and USD per accepted group when `track.usage` is on. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups. Aggregates are cached by the ledger file's size and mtime.
 
 **What each one does**
 - **First-pass rate:** The share of tasks marked `done` on their first attempt. Higher means the model gets it right without retries.
 - **Returns per group:** How many times a group was sent back to Build from Check or Verify.
 - **Finding precision:** How many of a reviewer's findings the engine verified against the code, per rule (§25.2 Precision ledger).
 - **Tester false-fail rate:** How often a tester failed an item that the engine's reruns passed.
-- **Tokens and USD per accepted group:** What a group that landed cost in tokens and dollars. This is the headline metric (§27).
+- **Tokens and USD per accepted group:** What a group that landed cost in tokens and dollars. This is the headline metric (§27). It exists only when `track.usage` is on; with it off, nothing is collected.
 - **Cache hit rate per kind:** For each cache entry kind (§28), how often a lookup found an entry instead of recomputing.
 - **`doctor` weight suggestion:** `doctor` suggests moving an agent to a lighter model when the light model's first-pass rate beats the standard one over 20 groups.
 - **Aggregate cache:** The scorecard's totals are cached by the ledger file's size and modification time, so a repeat call is cheap.
@@ -5177,22 +5183,22 @@ Per agent and model over `ledger.retention_days`: first-pass rate, returns per g
 
 #### HLD 10.5 Observability data
 
-**In plain terms.** Observability data is the record of what Komodo did: every session, every event, who holds which task, and what it cost. It exists so a person can answer "what happened, what runs now, and what did it cost" from files, without a dashboard. Without it, a crash or a bad run would leave no trail. The engine writes these files; `komodo status` reads them for people and for the orchestrator.
+**In plain terms.** Observability data is the record of what Komodo did: every session, every event, who holds which task, and, when `track.usage` is on, what it cost. It exists so a person can answer "what happened, what runs now, and, with tracking on, what did it cost" from files, without a dashboard. Without it, a crash or a bad run would leave no trail. The engine writes these files; `komodo status` reads them for people and for the orchestrator.
 
 | Store | Contents |
 |---|---|
-| `ledger/sessions.jsonl` | One row per session: id, agent, task, link, model, measured context, capacity profile, tokens in/out/cached, USD, wall time, skill tokens, exit reason; a copy of `wait_until` and `wait_link` when paused (the timer record is the source) |
+| `ledger/sessions.jsonl` | One row per session: id, agent, task, link, model, measured context, capacity profile, wall time, exit reason; tokens in/out/cached, USD and skill tokens only when `track.usage` is on; a copy of `wait_until` and `wait_link` when paused (the timer record is the source) |
 | `ledger/events.jsonl` | A read-only copy of every group state's events, plus fallbacks, skips and host subagent events |
 | `ledger/tasks.json`, `ledger/groups.json` | Lock-table views rebuilt from group state: who holds what |
 | `sessions/<id>/` | `brief.md`, `request.json`, `stream.jsonl`, `messages.jsonl`, `result.json`, `out/` |
-| `status --metrics` | Per agent and model over the retention window: first-pass rate, returns per group, finding precision, tester false-fail rate, tokens and USD per accepted group, cache hit rate |
+| `status --metrics` | Per agent and model over the retention window: first-pass rate, returns per group, finding precision, tester false-fail rate, cache hit rate; tokens and USD per accepted group only when `track.usage` is on |
 
 **What each one does**
-- **`ledger/sessions.jsonl`:** One line per model session. It records which agent and task, which link and model, the measured context window and the capacity profile (see Glossary). It also records tokens, dollars, wall time, skill tokens and why the session ended. A paused session also records when it may resume and on which link.
+- **`ledger/sessions.jsonl`:** One line per model session. It records which agent and task, which link and model, the measured context window and the capacity profile (see Glossary). It also records wall time and why the session ended; with `track.usage` on it adds tokens, dollars and skill tokens, and with it off those fields are not written. A paused session also records when it may resume and on which link.
 - **`ledger/events.jsonl`:** A read-only copy of every event from every group state, in one place, plus provider fallbacks, skips and events from host subagents. This file and `state.schema.json` are the export format.
 - **`ledger/tasks.json`, `ledger/groups.json`:** Two tables rebuilt from group state. One says which group is in which stage, with its lease and fence. The other says which task is claimed by which session. `status` renders 1,000 rows in under 100 ms.
 - **`sessions/<id>/`:** One folder per session. `brief.md` is the prompt the model got, `request.json` is how it was launched, and `stream.jsonl` is the raw model output. `messages.jsonl` keeps every turn so API links can resume, and `result.json` is the final answer. `out/` holds full tool outputs that were trimmed in the conversation.
-- **`status --metrics`:** The scorecard. It is split per agent and model over the retention window. It shows how often a task passed on the first attempt and how often groups went back to Build. It shows how many reviewer findings were right and how often the tester failed a passing item. It also shows tokens and dollars per accepted group, and the cache hit rate. `doctor` uses it to suggest a cheaper model when one performs as well.
+- **`status --metrics`:** The scorecard. It is split per agent and model over the retention window. It shows how often a task passed on the first attempt and how often groups went back to Build. It shows how many reviewer findings were right and how often the tester failed a passing item. It also shows the cache hit rate and, with `track.usage` on, tokens and dollars per accepted group. `doctor` uses it to suggest a cheaper model when one performs as well.
 
 Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a state file of an open, paused or blocked group is never trimmed. Keys and secret matches are masked before anything is written. There is no OpenTelemetry export; JSONL plus `state.schema.json` is the export.
 
@@ -5722,7 +5728,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-14 | Supervisor | A mid-turn nudge reaching a turn stuck in a tool call | Best effort decided; the proof accepts a late nudge, phase 5 |
 | G-15 | Scope | Whether `scope approve` needs a human | Decided 2026-10-09: the orchestrator answers after 2 engine denials (§24.1) |
 | G-16 | Review | The lens rule catalogs' content | Authoring task, phase 7; security lens reviewed by the owner |
-| G-17 | Budgets | The 50% cache-hit fixture needs real API sessions | Measured in phase 7 |
+| G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with `track.usage` on | Measured in phase 7 |
 | G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 |
 | G-19 | Timing | The 10,000-event replay under 1 s and the 50 ms short-verb budget | Gate timing, phase 6 |
 | G-20 | OpenAI | The `codex-cli` link, `openai-api` chain and `.codex/` install | Later minor, by design |
@@ -5731,6 +5737,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-23 | Scope, enterprise | Path ownership rows in `policy.json`; a named human for other teams' paths; a widening digest in `status --metrics` | Later minor; trigger: the first repo with 2 teams or customer data |
 | G-24 | State manager | The `data` struct of each of the 32 event types, listed in `state.schema.json` | LLD authoring, phase 1 |
 | G-25 | Sandbox | Whether a Docker volume per worktree beats the bind mount on copy time | Spike with G-11, phase 2 |
+| G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy (§32).
@@ -5749,7 +5756,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 - **G-14:** Whether a nudge (the one-line prompt sent to an idle session) can reach a model turn that is stuck inside a tool call. Decided as best effort; the proof in phase 5 accepts a nudge that lands late.
 - **G-15:** Whether a human must answer every `scope approve` request, since it lets one model widen another's write access. Decided on 2026-10-09: the orchestrator answers, after the engine has already denied the two protected cases (§24.1).
 - **G-16:** The actual content of the 10 reviewer lens catalogs (the rule lists a reviewer applies, see Glossary). It matters because a reviewer finding must cite a rule ID. An authoring task in phase 7; the owner reviews the security lens.
-- **G-17:** The fixture that proves a 50% prompt-cache hit rate needs real paid API sessions, not local ones. It matters for the token budget claims. Measured in phase 7.
+- **G-17:** The fixture that proves a 50% prompt-cache hit rate needs real paid API sessions, not local ones, run with `track.usage` on. It matters for the token budget claims. Measured in phase 7.
 - **G-18:** The `repo_map` symbol patterns for TypeScript, Python and Rust have not been run against real repos. It matters because the planner and architect rely on the map for any non-Go repo. A spike in phase 7 against 3 real repos settles it.
 - **G-19:** The 10,000-event replay under 1 second and the 50 ms short-verb budget are targets, not measurements. The gate's timing check in phase 6 turns them into measured facts.
 - **G-20:** The OpenAI path: the `codex-cli` link, the `openai-api` chain link and the `.codex/` install step. Deliberately left to a later minor version; the probe records the links but no session uses them.
@@ -5758,6 +5765,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 - **G-23:** Enterprise scope: rows in `policy.json` saying which team owns which paths, a named human who must approve writes to another team's paths, and a digest of scope widenings in `status --metrics`. Later minor; triggered by the first repo with 2 teams or customer data.
 - **G-24:** The fields each of the 32 event types carries in its `data` part are not yet listed. It matters because the state manager validates every event against the one schema, so an unlisted field cannot be checked. Listing them is an LLD authoring task in phase 1.
 - **G-25:** Whether a Docker volume per worktree copies a large `node_modules` faster than the bind mount. It matters for Docker sandbox start time, but a volume puts files where the host sweep cannot reach them. A spike in phase 2 measures it alongside G-11.
+- **G-26:** Whether usage metrics should be split by provider family: Claude, GPT and local models. Deferred by owner decision on 2026-10-12; today `track.usage` records one set of tokens and USD per session. Nothing is designed yet.
 
 Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag without a row here.
 
@@ -5828,6 +5836,7 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - Detection: the fixture repo yields 6 classes.
 - All or none: a call with 1 bad pair out of 3 writes nothing, and a good call logs 1 audit row per changed key.
 - Discovery: `config --all` names a default, limit and source for every key.
+- Tracking: `track.usage=auto` resolves on under `economy` and off under `thorough`; `on` and `off` override the mode.
 - `agent builder model --all` lists only probed models above the context floor.
 
 **Provider adapters (S05, §16)**
@@ -6003,10 +6012,11 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A seeded exported-signature change triggers `contract`, and the finding names the caller.
 
 **Token and resource management (S21, §27)**
-- A token cap forced low ends Blocked with `budget`.
-- `status` shows the hit rate per agent.
+- With `track.usage: on`, a token cap forced low ends Blocked with `budget`.
+- With `track.usage: on`, `status` shows the hit rate per agent.
 - Two sessions of one agent on the API link share the first 3 breakpoints byte for byte.
-- The second session's ledger row shows `cache_read` over 0.
+- With `track.usage: on`, the second session's ledger row shows `cache_read` over 0.
+- With `track.usage: off` and the same low cap, no `budget` block occurs and no ledger row holds a token or USD field.
 
 **Cache store (S22, §28)**
 - A second Check on an unchanged tree skips every rerun.
@@ -6369,20 +6379,20 @@ Goals:
   - **Retries:** 4 HTTP attempts with random spacing.
   - **Refusals:** A builder may ask for a file outside its scope once per task.
   - **Pauses:** `limits.pause_max_min`, 360 minutes paused before the session is cancelled.
-  - **Budgets:** `limits.group_tokens` bounds tokens per group; dollars only warn.
+  - **Budgets:** Wall time bounds each session and group. With `track.usage` on, `limits.group_tokens` also bounds tokens per group and dollars only warn.
 - **Deterministic output:** Models return short codes and facts as JSON. Go templates turn them into every sentence a person reads, so the same facts always give the same text.
 
 Non-goals:
 
 | Non-goal | Reason |
 |---|---|
-| A cost cap of Komodo's own | Provider windows and spend limits are the provider's; USD is a beta metric that only warns |
+| A cost cap of Komodo's own | Provider windows and spend limits are the provider's; USD is a beta metric that only warns, with `track.usage` on |
 | Per-run or per-repo configuration | One machine file keeps settings auditable and out of any agent's reach |
 | Repo-defined agents, hooks or plugins | Deferred; the embedded roster and three inline hooks are enough |
 | Third-party Go dependencies | Standard library only, by locked decision |
 | A long-running service | Every verb is a short process; the engine runs detached per `run` and a tick replaces a daemon |
 **What each one does**
-- **A cost cap of Komodo's own:** Anthropic and OpenAI enforce their own usage windows and spend limits. Komodo only warns when a run passes `warn.usd_per_run`, $5 by default.
+- **A cost cap of Komodo's own:** Anthropic and OpenAI enforce their own usage windows and spend limits. With `track.usage` on, Komodo only warns when a run passes `warn.usd_per_run`, $5 by default.
 - **Per-run or per-repo configuration:** All settings live in `~/.komodo/config.json`. No repo folder or command flag can override them, so a worker cannot change them.
 - **Repo-defined agents, hooks or plugins:** The seven agents are built into the binary. Exactly three hooks exist, all in Go: before a tool call, after `edit`, and at session end.
 - **Third-party Go dependencies:** `go.mod` lists no external packages. This is a locked decision.
@@ -6607,9 +6617,9 @@ flowchart LR
   - **The envelope's `report`:** The human-readable part of every verb's reply.
   - **`status`:** Pool, group graph, stages, budgets and blocks.
   - **The run report:** A four-heading summary of a run.
-  - **`status --metrics`:** Tokens and dollars per accepted group and the cache hit rate per agent.
+  - **`status --metrics`:** With `track.usage` on, tokens and dollars per accepted group and the cache hit rate per agent.
 - **Ledgers:** Files under `~/.komodo/ledger/`.
-  - **`sessions.jsonl`:** One row per session: agent, task, link, model, tokens, dollars, wall time and exit reason.
+  - **`sessions.jsonl`:** One row per session: agent, task, link, model, wall time and exit reason, plus tokens and dollars when `track.usage` is on.
   - **`events.jsonl`:** A read-only copy of every group state's events, plus fallbacks and skips.
   - **`tasks.json`:** A read-only view of which task is held by whom, rebuilt from group state.
   - **`groups.json`:** The same view at group level.
@@ -6716,7 +6726,7 @@ Eight layers plus the state pillar, 28 components, 12 Go packages. Each package 
 - **Safety:** What a model is allowed to do. The guard checks every tool call before it runs, and the sandbox confines every command the model runs.
 - **Orchestration:** The engine that moves each group of tasks through its stages. It also holds each group's worktree and lease, watches its sessions, runs scheduled jobs and recovers from failures.
 - **Quality:** Proof that the work is right. Check reruns commands with zero model tokens; the reviewer and the tester are model sessions that judge the result.
-- **Economy and ops:** The bookkeeping: token budgets, the cache, the ledger that records every session, and the event bus that carries facts between parts.
+- **Economy and ops:** The bookkeeping: token budgets (when `track.usage` is on), the cache, the ledger that records every session, and the event bus that carries facts between parts.
 - **Delivery:** Getting work in and out. The backlog lists the work, the planner drafts it, Ship lands it in git, and the gate self-checks the Komodo repo.
 - **State (core pillar):** Not a layer but a pillar under all of them. Every layer that keeps state reads and writes it only through the state manager, which holds the one schema.
 
@@ -6729,7 +6739,7 @@ Eight layers plus the state pillar, 28 components, 12 Go packages. Each package 
 | Interface | CLI processor | One verb set, one envelope, five exit codes, pin check, five-step pipeline |
 | Interface | Installer | Puts the binary on the machine and the Komodo block into a repo, idempotently, from a manifest |
 | Interface | Binary lifecycle | Hourly release check, background download, verified hot swap, runs pinned to their version |
-| Interface | Configuration | 33 flat keys plus agent and endpoint groups, hard limits, hash guard, audit log, command detection |
+| Interface | Configuration | 34 flat keys plus agent and endpoint groups, hard limits, hash guard, audit log, command detection |
 | Model I/O | Provider adapters | One interface over every link; chain and failover; billing check; measured context; model catalog |
 | Model I/O | HTTP stack | One client: TLS roots, proxy, SSE streaming, jittered retries, limit classes, host allowlists, redaction |
 | Model I/O | Agent registry | Seven agents decoded once from `agent.json` and `prompt.md`; cross-checked at the gate |
@@ -6746,7 +6756,7 @@ Eight layers plus the state pillar, 28 components, 12 Go packages. Each package 
 | Orchestration | Error recovery | One row per failure: detector, action, bound, final state; outbox keys; startup sweep |
 | Quality | Check | Zero-token ground truth: `done_when`, scope, secrets, baseline, impact set, flake rule, coverage |
 | Quality | Review and evidence | Ten scoped lenses, verified findings, per-task verdicts, blind tester, precision ledger |
-| Economy and ops | Token and resource management | Budgets, prompt-cache breakpoints, headline cost metrics |
+| Economy and ops | Token and resource management | Budgets, prompt-cache breakpoints, headline cost metrics (when `track.usage` is on) |
 | Economy and ops | Cache store | Content-addressed, verified-on-read, LRU-bounded store outside every worktree |
 | Economy and ops | Runtime observability | Session ledger, event log, lock-table views, scorecard, live `status` |
 | Economy and ops | Event bus | Envelope, catalog, in-order delivery, three subscribers that never change group state, wakes |
@@ -6759,7 +6769,7 @@ Eight layers plus the state pillar, 28 components, 12 Go packages. Each package 
 - **CLI processor:** The command-line front door: each command a person or the orchestrator types, such as `komodo run`, is one verb handled in five fixed steps. It answers as terminal text, or as one JSON envelope (see Glossary) without a terminal, with one of five exit codes. Before any verb runs, the pin check refuses most of them in a repo that demands a newer binary.
 - **Installer:** The `komodo install` verb puts the binary on the machine and the Komodo block into a repo's `AGENTS.md`. It works from a manifest, a hashed list of every file it owns, so a rerun changes nothing and hand edits survive. It ends by running `komodo doctor install`, the health check for the install, and fails if any check errors.
 - **Binary lifecycle:** The `komodo fresh` verb and a background updater that checks for a newer release at most hourly. If one exists, a detached process downloads it, verifies its checksum and signature, and swaps it into place. Runs in progress keep the version they started on, so a swap never interrupts work.
-- **Configuration:** The one settings file, `~/.komodo/config.json`, changed only through `komodo config`; it holds 33 flat keys plus per-agent and per-endpoint groups. Every key has a hard limit, a hash guard refuses all verbs after a hand edit, and each write is logged. It also detects a repo's commands (setup, build, test, lint, format) from marker files such as `go.mod`.
+- **Configuration:** The one settings file, `~/.komodo/config.json`, changed only through `komodo config`; it holds 34 flat keys plus per-agent and per-endpoint groups. Every key has a hard limit, a hash guard refuses all verbs after a hand edit, and each write is logged. It also detects a repo's commands (setup, build, test, lint, format) from marker files such as `go.mod`.
 - **Provider adapters:** The code that reaches an AI model through a link, such as `claude-cli` or an `http:` endpoint (see Glossary), with one interface over every link. Each agent has a chain of links, and work fails down the chain when a link is unavailable or over its limit. Before each session it checks billing, so no paid link runs by accident, and measures the model's real context size.
 - **HTTP stack:** The one HTTP client for API links, the `web` tool and the updater. It handles TLS roots, proxies, streaming replies, jittered retries, a per-caller host allowlist, and redaction so API keys never reach logs. A rate limit is not retried; it goes to the provider adapters, which fail over or pause.
 - **Agent registry:** The loader for the seven worker agents: planner, architect, reviewer, builder, researcher, tester and scout. Each has an `agent.json` the Go code reads (weight, link chain, tools, limits) and a `prompt.md` the model reads. They decode once per process, and `komodo gate` cross-checks them against the guard rows and the tool registry.
@@ -6776,9 +6786,9 @@ Eight layers plus the state pillar, 28 components, 12 Go packages. Each package 
 - **Error recovery:** One table where every failure has a detector, an action, a bound and a final state, so nothing loops without a counter. It also owns the outbox keys that make actions safe to repeat, and the startup sweep that kills orphans and frees dead leases. It resumes a group through group state's `Load`. The stated loss bound: any single failure loses at most one model turn and no committed edit.
 - **Check:** The zero-token stage that proves the builder's work mechanically (see Glossary). It reruns each task's `done_when`, checks scope, scans for secrets, tests every package that imports a change, diffs against the baseline, and measures coverage. A test failing before and after the change only warns; one that newly fails is a regression and blocks.
 - **Review and evidence:** The reviewer and the tester, the two model sessions of Verify. The reviewer applies ten lenses (rule catalogs chosen by file scope); a finding counts only if Go finds its quoted evidence at the cited line. The tester runs blind in its own worktree, proving each acceptance item with `run`; a precision ledger tracks how often each rule's findings are verified.
-- **Token and resource management:** The budgets: wall time per group, attempts per task, tokens per group, and sessions in the pool. It places the four prompt-cache breakpoints at the brief's part boundaries so a repeated prefix costs 0.05 times the base price on the Anthropic API. Its headline metrics are tokens and USD per accepted group and the cache hit rate per agent.
+- **Token and resource management:** The budgets: wall time per group, attempts per task, tokens per group, and sessions in the pool; the token cap applies only when `track.usage` is on. It places the four prompt-cache breakpoints at the brief's part boundaries so a repeated prefix costs 0.05 times the base price on the Anthropic API. When `track.usage` is on, its headline metrics are tokens and USD per accepted group and the cache hit rate per agent.
 - **Cache store:** A store keyed by content hash under the repo's git common dir, outside every worktree so an agent cannot reach it. It keeps skill bodies, file slices, diffs, briefs, Check results, review findings, setup results and the test baseline. Entries are verified on read, and the store is bounded at 256 MB with the least recently used entry evicted first.
-- **Runtime observability:** The records of what happened: a session ledger (agent, model, tokens, USD, exit reason), an event log, and lock-table views of who holds what. `komodo status` reads them to show the pool, stages, budgets and blocks live; `status --metrics` shows a scorecard per agent and model.
+- **Runtime observability:** The records of what happened: a session ledger (agent, model, exit reason, and tokens and USD when `track.usage` is on), an event log, and lock-table views of who holds what. `komodo status` reads them to show the pool, stages, budgets and blocks live; `status --metrics` shows a scorecard per agent and model.
 - **Event bus:** The in-process carrier of events, typed facts the engine records (see Glossary). It owns the event envelope, the catalog of 32 types and in-order delivery; group state writes and replays the events. Exactly three subscribers listen, each writing only its own derived kind through the state manager: the ledger, the wake file for `status --wait`, and the `status --watch` renderer.
 - **Backlog and planning:** The backlog, the file tree under `docs/backlog/` that lists epics, groups and tasks (see Glossary), plus its lint and the planner. `komodo plan <goal>` runs the planner in two passes, an outline then tasks per group, and Go lints each before any file is written. Go also derives the dependency DAG from each group's `touches` globs and checks that acceptance items follow the EARS grammar.
 - **Ship:** The only part of the harness that writes git: commits, branches, pushes and merges. It lands each group into the epic branch with the fence, opens group and epic pull requests, and cuts signed releases. No model session ever holds git or forge credentials.
@@ -7018,7 +7028,7 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 | Durability | Two engines race to land one group | Exactly 1 landing; the loser ends in `lease.lost` |
 | Safety | A `run` writes outside the worktree, reads `~/.ssh`, or connects to a public address on any OS | Refused by the sandbox |
 | Safety | `ANTHROPIC_API_KEY` is set beside a Max login | The session runs on `apiKeySource: none`; 0 paid calls |
-| Cost | 20 API sessions of one agent | Cache hit rate at or above 50%, else a fixture fails `[PENDING G-17]` |
+| Cost | 20 API sessions of one agent with `track.usage` on | Cache hit rate at or above 50%, else a fixture fails `[PENDING G-17]` |
 | Capacity | Default limits | 6 sessions machine-wide, 3 per link, 1 per loopback endpoint; hard limits 16 and 8 `[PENDING G-04]`, `[PENDING G-07]` |
 | Portability | Every gate run | Cross-builds for windows, linux and darwin succeed; the fixture group ships on macOS and Windows |
 
@@ -7038,7 +7048,7 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 - **Durability, two engines race:** When two engines try to land the same group, exactly one lands; the fence makes the loser end in `lease.lost`.
 - **Safety, sandbox:** On every OS, a `run` that writes outside the worktree, reads `~/.ssh` or connects to a public address is refused by the sandbox.
 - **Safety, billing:** An API key is set in the environment beside a Max subscription login. The key is scrubbed and the session runs on `apiKeySource: none`, so 0 paid calls happen.
-- **Cost, cache hit rate:** Over 20 API sessions of one agent, at least 50% of prompt tokens are served from the provider's cache. Otherwise a test fixture fails. This needs real API sessions, measured in phase 7 (G-17).
+- **Cost, cache hit rate:** Over 20 API sessions of one agent, at least 50% of prompt tokens are served from the provider's cache. Otherwise a test fixture fails. This needs real API sessions with `track.usage` on, measured in phase 7 (G-17).
 - **Capacity, default limits:** At most 6 worker sessions machine-wide, 3 per model link and 1 per loopback endpoint, with hard limits of 16 and 8. Whether Ollama allows more than 1 is G-04; the real Max window is G-07.
 - **Portability, every gate run:** Cross-builds for Windows, Linux and macOS succeed. The fixture group (a small test repo run end to end) ships on macOS and Windows.
 
