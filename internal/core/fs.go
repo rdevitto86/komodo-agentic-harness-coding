@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,24 @@ import (
 	"runtime"
 	"syscall"
 )
+
+// renameFile moves the temp file into place; tests replace it to simulate rename failures.
+var renameFile = os.Rename
+
+// syncDirHandle flushes an open directory; tests replace it to simulate sync failures.
+var syncDirHandle = func(d *os.File) error { return d.Sync() }
+
+// renameError marks a WriteAtomic failure at the final rename, after the temp file was written and synced.
+type renameError struct {
+	path string
+	err  error
+}
+
+// Error describes the failed rename.
+func (e *renameError) Error() string { return fmt.Sprintf("rename onto %s: %v", e.path, e.err) }
+
+// Unwrap returns the underlying rename error.
+func (e *renameError) Unwrap() error { return e.err }
 
 // WriteFileAtomic replaces path with data so a reader sees the old file or the new one, never a partial one.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
@@ -45,8 +64,9 @@ func WriteAtomic(path string, perm os.FileMode, fill func(w io.Writer) error) (e
 	if err = tmp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
 	}
-	if err = os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename onto %s: %w", path, err)
+	if err = renameFile(tmpName, path); err != nil {
+		err = &renameError{path: path, err: err}
+		return err
 	}
 	if err = syncDir(dir); err != nil {
 		return fmt.Errorf("sync directory of %s: %w", path, err)
@@ -64,7 +84,7 @@ func syncDir(dir string) error {
 		return err
 	}
 	defer d.Close()
-	if err := d.Sync(); err != nil && err != syscall.EINVAL {
+	if err := syncDirHandle(d); err != nil && !errors.Is(err, syscall.EINVAL) {
 		return err
 	}
 	return nil

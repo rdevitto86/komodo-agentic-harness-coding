@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -91,5 +93,44 @@ func TestWriteFileAtomicRenameFailureCleansTemp(t *testing.T) {
 	}
 	if names := dirNames(t, dir); len(names) != 1 || names[0] != "target" {
 		t.Fatalf("dir holds %v; want only target", names)
+	}
+}
+
+// TestSyncDirIgnoresWrappedEINVAL covers filesystems that cannot sync a directory and report EINVAL inside a PathError.
+func TestSyncDirIgnoresWrappedEINVAL(t *testing.T) {
+	dir := t.TempDir()
+	orig := syncDirHandle
+	t.Cleanup(func() { syncDirHandle = orig })
+	syncDirHandle = func(*os.File) error {
+		return &fs.PathError{Op: "sync", Path: dir, Err: syscall.EINVAL}
+	}
+	if err := syncDir(dir); err != nil {
+		t.Fatalf("syncDir = %v; want nil for a wrapped EINVAL", err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := WriteFileAtomic(target, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic = %v; want nil after the rename landed", err)
+	}
+	boom := errors.New("disk on fire")
+	syncDirHandle = func(*os.File) error { return &fs.PathError{Op: "sync", Path: dir, Err: boom} }
+	if err := syncDir(dir); !errors.Is(err, boom) {
+		t.Fatalf("syncDir = %v; want the other error returned", err)
+	}
+}
+
+// TestWriteAtomicRenameFailureIsTyped checks a failed rename is reported as a renameError and leaves no temp file.
+func TestWriteAtomicRenameFailureIsTyped(t *testing.T) {
+	dir := t.TempDir()
+	orig := renameFile
+	t.Cleanup(func() { renameFile = orig })
+	denied := errors.New("access is denied")
+	renameFile = func(string, string) error { return denied }
+	err := WriteFileAtomic(filepath.Join(dir, "target"), []byte("x"), 0o644)
+	var re *renameError
+	if !errors.As(err, &re) || !errors.Is(err, denied) {
+		t.Fatalf("err = %v; want a renameError wrapping the rename failure", err)
+	}
+	if names := dirNames(t, dir); len(names) != 0 {
+		t.Fatalf("dir holds %v; want it empty", names)
 	}
 }

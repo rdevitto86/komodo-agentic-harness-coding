@@ -41,6 +41,9 @@ const entryHeaderLen = 2*sha256.Size + 1
 // staleTempAge is how old a leftover temp file must be before a scan deletes it.
 const staleTempAge = time.Hour
 
+// cacheRescanInterval bounds how stale a Put's view of other processes' writes can be, so overshoot stays small without a walk per Put.
+const cacheRescanInterval = 30 * time.Second
+
 // ErrCacheEntryTooLarge reports a Put whose entry alone exceeds the cache cap.
 var ErrCacheEntryTooLarge = errors.New("cache entry larger than the cache cap")
 
@@ -75,6 +78,7 @@ type Cache struct {
 	mu       sync.Mutex
 	index    map[string]cacheEntry // path -> entry; nil until first needed
 	total    int64                 // sum of sizes in index
+	scanned  time.Time             // when index last came from a disk scan
 }
 
 // NewCache opens a cache at root for the given binary version, creating the root if needed.
@@ -143,8 +147,17 @@ func (c *Cache) Put(ns Namespace, key string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create cache directory: %w", err)
 	}
+	var renameErr *renameError
 	if err := WriteFileAtomic(path, encodeEntry(data), 0o644); err != nil {
-		return fmt.Errorf("store cache entry: %w", err)
+		// A key names its inputs, so a valid entry already at path is as good as ours.
+		if !errors.As(err, &renameErr) {
+			return fmt.Errorf("store cache entry: %w", err)
+		}
+		existing, ok := validEntrySize(path)
+		if !ok {
+			return fmt.Errorf("store cache entry: %w", err)
+		}
+		size = existing
 	}
 	now := c.now()
 	if err := os.Chtimes(path, now, now); err != nil {
@@ -152,6 +165,18 @@ func (c *Cache) Put(ns Namespace, key string, data []byte) error {
 	}
 	c.track(cacheEntry{ns: ns, path: path, size: size, used: now}, true)
 	return c.evict(path)
+}
+
+// validEntrySize returns the on-disk size of the entry file at path, or false when it is missing or fails its hash check.
+func validEntrySize(path string) (int64, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	if _, ok := decodeEntry(raw); !ok {
+		return 0, false
+	}
+	return int64(len(raw)), true
 }
 
 // Stats counts the entries on disk under this cache's root.
@@ -221,7 +246,9 @@ func (c *Cache) track(e cacheEntry, write bool) {
 		if !write {
 			return
 		}
-		c.loadLocked()
+		if c.loadLocked() != nil {
+			return // evict retries the load and reports the failure
+		}
 	}
 	if old, ok := c.index[e.path]; ok {
 		c.total -= old.size
@@ -241,24 +268,33 @@ func (c *Cache) forget(path string) {
 }
 
 // loadLocked rebuilds the index from disk; the caller holds c.mu.
-func (c *Cache) loadLocked() {
+// On a scan error the index stays nil so the next call retries.
+func (c *Cache) loadLocked() error {
+	entries, err := scanCache(c.root)
+	if err != nil {
+		c.index, c.total = nil, 0
+		return err
+	}
 	c.index, c.total = map[string]cacheEntry{}, 0
-	entries, _ := scanCache(c.root)
 	for _, e := range entries {
 		c.index[e.path] = e
 		c.total += e.size
 	}
+	c.scanned = c.now()
+	return nil
 }
 
 // evict deletes least recently read entries, never keep, until the total fits the cap.
-// It rescans the disk first so entries other processes wrote or read count.
+// It rescans the disk first, when over the cap or when the last scan is old, so other processes' entries count.
 func (c *Cache) evict(keep string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.total <= c.maxBytes {
+	if c.index != nil && c.total <= c.maxBytes && c.now().Sub(c.scanned) < cacheRescanInterval {
 		return nil
 	}
-	c.loadLocked()
+	if err := c.loadLocked(); err != nil {
+		return err
+	}
 	var victims []cacheEntry
 	for _, e := range c.index {
 		if e.path != keep {

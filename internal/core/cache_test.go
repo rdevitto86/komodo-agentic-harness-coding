@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -282,4 +283,137 @@ func TestCacheConcurrentWritersLeaveValidEntry(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// testClock is a settable clock that also ticks one second per read.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+// now returns the clock time and ticks it one second.
+func (k *testClock) now() time.Time {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.t = k.t.Add(time.Second)
+	return k.t
+}
+
+// advance moves the clock forward by d.
+func (k *testClock) advance(d time.Duration) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.t = k.t.Add(d)
+}
+
+func TestCacheRescansDiskAfterInterval(t *testing.T) {
+	root := t.TempDir()
+	payload := bytes.Repeat([]byte("p"), 100)
+	entry := int64(len(payload)) + entryHeaderLen
+	capBytes := entry * 4
+	clock := &testClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	a := newTestCache(t, root, "v1", capBytes)
+	b := newTestCache(t, root, "v1", capBytes)
+	a.now, b.now = clock.now, clock.now
+	put := func(c *Cache, name string) {
+		t.Helper()
+		if err := c.Put(NSReview, c.Key(name), payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(a, "a1")
+	for _, n := range []string{"b1", "b2", "b3"} {
+		put(b, n)
+	}
+	// Each process stays under the cap on its own count while the disk grows past it.
+	put(a, "a2")
+	put(a, "a3")
+	if st, _ := a.Stats(); st.Bytes <= capBytes {
+		t.Fatalf("setup: disk holds %d bytes; want it over cap %d", st.Bytes, capBytes)
+	}
+	clock.advance(cacheRescanInterval + time.Second)
+	put(a, "a4")
+	st, err := a.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Bytes > capBytes {
+		t.Fatalf("bytes = %d after the rescan interval; want <= cap %d", st.Bytes, capBytes)
+	}
+	if _, ok := a.Get(NSReview, a.Key("a4")); !ok {
+		t.Fatal("the entry just written must survive eviction")
+	}
+}
+
+func TestCacheScanFailureSurfacesAndRetries(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the current user cannot read")
+	}
+	root := t.TempDir()
+	c := newTestCache(t, root, "v1", 0)
+	bad := filepath.Join(root, string(NSReview))
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bad, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(bad, 0o755) })
+	payload := []byte("payload")
+	size := int64(len(payload)) + entryHeaderLen
+	if err := c.Put(NSContext, c.Key("one"), payload); err == nil {
+		t.Fatal("Put = nil; want the scan error")
+	}
+	c.mu.Lock()
+	unloaded := c.index == nil
+	c.mu.Unlock()
+	if !unloaded {
+		t.Fatal("index must stay unloaded after a failed scan so the next call retries")
+	}
+	if err := os.Chmod(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Put(NSContext, c.Key("two"), payload); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.index == nil || c.total != 2*size {
+		t.Fatalf("index total = %d; want %d from both entries", c.total, 2*size)
+	}
+}
+
+func TestCachePutKeepsExistingEntryWhenRenameFails(t *testing.T) {
+	root := t.TempDir()
+	c := newTestCache(t, root, "v1", 0)
+	key := c.Key("same inputs")
+	if err := c.Put(NSChecks, key, []byte("result")); err != nil {
+		t.Fatal(err)
+	}
+	orig := renameFile
+	t.Cleanup(func() { renameFile = orig })
+	renameFile = func(string, string) error { return errors.New("access is denied") }
+
+	if err := c.Put(NSChecks, key, []byte("result")); err != nil {
+		t.Fatalf("Put = %v; want nil because a valid entry already exists", err)
+	}
+	if got, ok := c.Get(NSChecks, key); !ok || string(got) != "result" {
+		t.Fatalf("Get = %q, %v; want the existing entry", got, ok)
+	}
+	path, _ := c.entryPath(NSChecks, key)
+	for _, n := range dirNames(t, filepath.Dir(path)) {
+		if strings.Contains(n, ".tmp-") {
+			t.Fatalf("temp file %s left behind", n)
+		}
+	}
+
+	if err := c.Put(NSChecks, c.Key("new"), []byte("x")); err == nil {
+		t.Fatal("Put = nil; want the rename error when no entry exists")
+	}
+	if err := os.WriteFile(path, []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Put(NSChecks, key, []byte("result")); err == nil {
+		t.Fatal("Put = nil; want the rename error when the existing entry is corrupt")
+	}
 }
