@@ -244,6 +244,48 @@ flowchart LR
 
 The lower row is off the spine: model sessions in Build and Verify, the two holding states, events that fire in any stage, and scheduler jobs. Returns to Build and the moves through Paused and Blocked are drawn in §10.1.
 
+**📐 What happens to one event: the engine and the state manager**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Producer (supervisor, Check, guard)
+  participant D as Drive (one loop per group)
+  participant M as State manager (group state)
+  participant N as Next() (pure, in the engine)
+  participant S as Subscribers (ledger, wake, watch)
+  rect rgba(99,102,241,0.08)
+    Note over D,N: On start, resume or after a crash
+    D->>M: Load(Next)
+    M->>N: replay the events after the snapshot
+    M-->>D: state and unfinished actions
+  end
+  P->>D: event, stamped with its session's epoch
+  D->>M: Append(event)
+  M-->>D: sequence, synced to disk
+  D->>N: Next(state, event)
+  N-->>D: new state, actions, follow-on events
+  D->>M: Append(follow-on events, action.start)
+  Note right of D: run each action, such as a spawn or a commit
+  D->>M: Append(action.done)
+  D->>M: Snapshot(state)
+  D->>S: the applied event, in sequence order
+  S->>M: write own records: ledger rows, wake file
+```
+**Reading the diagram.**
+1. When a group starts, resumes or recovers from a crash, `Drive` asks the state manager's group state to `Load` it, passing in `Next()`.
+2. Group state reads `state.json` and replays only the events after it through `Next()`.
+3. It returns the rebuilt state plus any action that has `action.start` but no `action.done`, which `Drive` reruns.
+4. A producer hands `Drive` a fact, stamped with the epoch its session started under.
+5. `Drive` calls `Append`; the manager stamps `sequence`, `timestamp`, `checksum` and `stale`, validates the event against the schema and syncs it.
+6. Only after the event is on disk does `Append` return.
+7. `Drive` calls `Next()`, which changes nothing on disk.
+8. `Next()` returns the new state, the actions to run and any follow-on events; a stale event changes nothing.
+9. `Drive` appends the follow-on events and an `action.start` line for each action, then runs each action, such as a spawn or a commit.
+10. `Drive` appends `action.done`, so replay will skip it.
+11. `Drive` hands the new state to `Snapshot`, which writes `state.json` every 50 events or on a stage change.
+12. The bus gives the applied event to the 3 subscribers, in sequence order.
+13. Each subscriber writes only its own records through the state manager, never the group's events.
+
 **What matters**
 - The catalog has 32 event types in 7 families, registered with the state manager as the `event` kind; the build generates `embed/state.schema.json`, and the gate fails if they disagree.
 - 9 action rows cover 10 kinds (`wip_commit` and `commit` share one key), each with a declared idempotency key, such as `commit` on `(group, fence, tree hash)`. The gate fails a kind missing from the table.
