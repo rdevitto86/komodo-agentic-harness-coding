@@ -37,6 +37,7 @@
 | 0.7 | 2026-10-12 | The plan file's remaining facts moved in: per-component proof cases, file map, component dependencies, archive sources, cutover detail; this LLD and the HLD are now the source of truth |
 | 0.8 | 2026-10-12 | Token and USD tracking is opt-in: key `track.usage` (§8.2) gates the ledger's token and USD fields, the scorecard's cost metrics, `warn.usd_per_run` and `limits.group_tokens`; flat keys 33 to 34; gap G-26 |
 | 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
+| 0.10 | 2026-10-12 | Event envelope fields renamed for plain reading: `v` to `version`, `ts` to `timestamp`, `crc` to `checksum`; event lines carry no record header (`kind`, `key`, `rev`, `writer`) |
 
 **Related documents:** [docs/hld.md](hld.md) (the High-Level Design), [docs/prd.md](prd.md), [docs/decisions/0001-standalone-harness.md](decisions/0001-standalone-harness.md), [Appendix Q](#appendix-q-component-id-traceability). Terms: the HLD Glossary.
 
@@ -1303,7 +1304,7 @@ flowchart LR
 2. After every `Next()`, `Drive` hands the new state to `Snapshot`.
 3. On a crash or a `komodo resume`, recovery calls `Load` and passes in `Next()`.
 4. `status --wait` and the subscribers read new events with `Tail`, from a sequence number onward.
-5. `Append` stamps `seq`, `ts`, `crc` and `stale`, checks the event, appends it to `events.jsonl` and syncs it before returning.
+5. `Append` stamps `seq`, `timestamp`, `checksum` and `stale`, checks the event, appends it to `events.jsonl` and syncs it before returning.
 6. `Snapshot` writes `state.json` only every 50 events or on a stage change, and refuses a state whose `seq` is not the last appended.
 7. `Load` reads the snapshot, replays the events after it through `Next()`, drops a torn last line with one `state.truncated`, and returns the state and its open actions.
 
@@ -2394,22 +2395,22 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `v` | int | Envelope version, 1 |
+| `version` | int | Envelope version, 1 |
 | `seq` | int | Order within the group state, no gaps |
-| `ts` | RFC 3339 | When the engine saw the fact |
+| `timestamp` | RFC 3339 | When the engine saw the fact |
 | `run`, `group`, `session` | string | Where it happened; `session` only on session and task events |
 | `epoch`, `stale` | int, bool | The stage epoch the producer was spawned under; `stale` set by `Drive` when older than the current |
 | `type`, `reason`, `data` | string, string, object | What happened; `reason` from the code list; `data` typed per event |
-| `crc` | uint32 | CRC-32 of the line before it; replay drops a torn last line and emits `state.truncated` once |
+| `checksum` | uint32 | CRC-32 of the line before it; replay drops a torn last line and emits `state.truncated` once |
 
 **What each one does**
-- **`v`:** The envelope format version, always 1. Every line carries the same value.
+- **`version`:** The envelope format version, always 1. Every line carries the same value.
 - **`seq`:** The event's position in its group's state, counting up with no gaps. The engine checks it on every append and every replay, so a missing line is detected.
-- **`ts`:** The time the engine saw the fact, in RFC 3339 form (such as `2026-10-11T15:31:00Z`). It is the engine's clock, never a model's claim.
+- **`timestamp`:** The time the engine saw the fact, in RFC 3339 form (such as `2026-10-11T15:31:00Z`). It is the engine's clock, never a model's claim.
 - **`run`, `group`, `session`:** Which run, group and session the event belongs to. `session` is filled only on session and task events.
 - **`epoch`, `stale`:** `epoch` is the stage epoch (an integer that rises on every stage entry, see Glossary) the producer was started under. `Drive` sets `stale` to true when that epoch is older than the current one, and `Next()` then ignores the event.
 - **`type`, `reason`, `data`:** `type` names the event from the 32-entry catalog; `reason` is a code from the shared code list, such as an exit reason; `data` is the event's typed payload, a Go struct per type.
-- **`crc`:** A CRC-32 checksum of the line, used to spot a line cut short by a crash. On replay a torn last line is dropped and one `state.truncated` event is emitted.
+- **`checksum`:** A CRC-32 checksum of the line, used to spot a line cut short by a crash. On replay a torn last line is dropped and one `state.truncated` event is emitted.
 
 #### 9.2 Catalog (32 types)
 
@@ -2701,10 +2702,10 @@ sequenceDiagram
 - **`kind`:** The record's type, one of the kinds in §40.3. The kind decides the schema, the write primitive and the one allowed writer.
 - **`key`:** Picks one record out of its kind, such as a group id for a snapshot or a session id for a session file.
 - **`rev`:** A counter that rises by 1 on every write. A caller passes the `rev` it last read; if the record moved since, the write is refused, so two writers can never silently overwrite each other.
-- **`ts`:** The time the manager wrote the record. Events also carry their own `ts`, the time the engine saw the fact (§9.1).
+- **`ts`:** The time the manager wrote the record. Events carry their own `timestamp`, the time the engine saw the fact (§9.1).
 - **`writer`:** The run id and process id of the writer, so `doctor` and a person can see who last changed a record.
 
-Events add `seq` and `crc` from their own envelope (§9.1); the manager computes both, so a producer never does.
+Event lines do not carry this header. Every line in an event file is an event, so `kind`, `key`, `rev` and `writer` would repeat what the file already says; events carry the §9.1 envelope instead, and the manager computes its `seq`, `timestamp` and `checksum`, so a producer never does.
 
 #### 40.2 Write primitives
 
@@ -2762,7 +2763,7 @@ Events add `seq` and `crc` from their own envelope (§9.1); the manager computes
 
 | Check | Rule |
 |---|---|
-| Populate | The envelope, schema defaults, and an event's `seq`, `ts` and `crc` |
+| Populate | The envelope, schema defaults, and an event's `seq`, `timestamp` and `checksum` |
 | Schema | Types, required fields and enums: stage, block reason, exit reason, event type |
 | Invariants | `seq` has no gaps; `epoch` and `fence` never fall |
 | Compare-and-swap | The caller's `rev` must match the record's current `rev` |
@@ -2772,7 +2773,7 @@ Events add `seq` and `crc` from their own envelope (§9.1); the manager computes
 | Bad record | A bad line before the last one, or any other failed record: moved aside as `.bad-*`; the owning group blocks `state_invalid` |
 
 **What each one does**
-- **Populate:** The manager writes the six envelope fields and any schema defaults itself. For an event it also assigns the next `seq` and computes `ts` and the CRC.
+- **Populate:** The manager writes the six envelope fields and any schema defaults itself. An event carries the §9.1 envelope instead, so the manager assigns its next `seq` and computes its `timestamp` and `checksum`.
 - **Schema:** Every field must have the right type, every required field must be present, and every enum must hold a known value. An unknown stage or block reason is refused.
 - **Invariants:** Rules a kind must always keep. State `seq` numbers have no gaps, and a stage `epoch` or a lease `fence` never goes down.
 - **Compare-and-swap:** The write names the `rev` the caller last read. If another write landed in between, this one is refused, so no update is lost silently.
@@ -2884,7 +2885,7 @@ Events add `seq` and `crc` from their own envelope (§9.1); the manager computes
 | Call | What it does |
 |---|---|
 | `Open(group)` | Binds the caller as the group's only writer, its `Drive` |
-| `Append(event)` | Stamps `seq`, `ts`, `crc` and `stale`, checks, appends, fsyncs; returns before `Next()` runs |
+| `Append(event)` | Stamps `seq`, `timestamp`, `checksum` and `stale`, checks, appends, fsyncs; returns before `Next()` runs |
 | `Snapshot(state)` | Called after every `Next()`; writes `state.json` every 50 events or on a stage change |
 | `Load(next)` | Reads the snapshot, replays later events through `next`, returns the state and open actions |
 | `Tail(seq)` | Returns the events after a sequence number |
