@@ -112,7 +112,7 @@ A constraint is a locked rule the design cannot trade away. Owner-set; `komodo g
 
 **What matters**
 - Phases 2 to 6 are hand-built; the harness builds its own groups from phase 7.
-- New event types or result codes are plan changes: enum, schema, template, fixture.
+- New event types or result codes are design changes: enum, schema, template, fixture.
 
 ## 3. Context and scope
 

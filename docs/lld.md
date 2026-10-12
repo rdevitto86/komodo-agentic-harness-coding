@@ -805,7 +805,7 @@ The index holds 34 `standards-*` skills plus `komodo`, `plan`, `run`, `respond` 
 - Skills load `always` first, then by name; a brief over the ceiling never drops a skill.
 - The gate fails a skill over 6,000 tokens, with an unknown frontmatter key, or with one of 6 steering phrases like `ignore previous`.
 - Templates use Go `text/template` with `missingkey=error` and 6 functions; facts are checked, then escaped.
-- Every code in every agent schema needs a template and a golden fixture under both profiles; a new code is a plan change.
+- Every code in every agent schema needs a template and a golden fixture under both profiles; a new code is a design change.
 - `claude-cli` workers start with `--setting-sources ""`; a worker `agent.json` listing `run`, `plan`, `respond` or `komodo` fails the gate.
 
 **Lookup:** [Appendix I](#appendix-i-skill-loader-rules-and-output-contract) holds the skill, rule, output and no-leak tables.
@@ -1726,7 +1726,7 @@ komodo-agentic-harness-coding/
 ```
 
 **What each one does**
-- **Root files:** `AGENTS.md` is the source of truth for repo rules, and `CLAUDE.md` only imports it. `go.mod` lists no modules, and `komodo.go` embeds the `embed/` and `templates/` folders into the binary. `install.sh` and `install.ps1` are the installers for macOS, Linux and WSL, and for native Windows.
+- **Root files:** `AGENTS.md` is the source of truth for repo rules, and `CLAUDE.md` only imports it. `go.mod` uses the Go standard library only, and `komodo.go` embeds the `embed/` and `templates/` folders into the binary. `install.sh` and `install.ps1` are the installers for macOS, Linux and WSL, and for native Windows.
 - **`cmd/komodo/` and `internal/`:** All Go code, one folder per package from the table above.
 - **`embed/`:** Everything a model reads: agent definitions, job templates, rules, output templates, review lenses, per-language repo-map patterns, skills, and the JSON files for defaults, state schema, models and policy (§6.3).
 - **`templates/`:** Files that `install` copies into a user's repo: the project docs and PR template, the `CLAUDE.md` and `.claude/settings.json` pair, and one example job.
@@ -2908,7 +2908,7 @@ flowchart LR
 | Actions are recorded (the outbox) | `Drive` appends `action.start {id, kind}` before an action and `action.done` after. On replay a done action is skipped, a started one reruns, and every action is idempotent by a declared key. |
 | One state per group, one per run | Groups never read each other's state files; they meet only in the queue and the pool. |
 | Epochs fence late events | Every spawn carries the stage's epoch. A session event with an older epoch is recorded `stale: true` and ignored. |
-| A new type is a plan change | The catalog is a Go enum; the gate fails on an emitted type missing from it, or a listed type nothing emits. |
+| A new type is a design change | The catalog is a Go enum; the gate fails on an emitted type missing from it, or a listed type nothing emits. |
 
 **What each one does**
 - **The engine emits, never a model:** Only Go code records events. A model's typed JSON result becomes an event only after Go checks it against the schema. A killed session cannot report, and a model can forget or invent.
@@ -2920,7 +2920,7 @@ flowchart LR
 - **Actions are recorded (the outbox):** Before `Drive` runs an action it writes `action.start`, and after it writes `action.done`. On replay a finished action is skipped and a started one reruns; every action has an idempotency key, a value that makes a repeat harmless.
 - **One state per group, one per run:** Each group has its own event file and never reads another group's. Groups meet only in the work queue and the session pool.
 - **Epochs fence late events:** The epoch is a counter that rises each time a group enters a stage (see Glossary). Every session is spawned with the current epoch. A late event from an older epoch is written with `stale: true` and ignored, so a cancelled session cannot move the stage.
-- **A new type is a plan change:** The 32 event types are a fixed Go enum. `komodo gate` fails on an emitted type missing from the list, or a listed type nothing emits. So the catalog and the code never drift apart.
+- **A new type is a design change:** The 32 event types are a fixed Go enum. `komodo gate` fails on an emitted type missing from the list, or a listed type nothing emits. So the catalog and the code never drift apart.
 
 Guarantees the tests pin:
 
@@ -4518,12 +4518,12 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
 
 #### 19.4 Code list
 
-**In plain terms.** The code list is the closed set of short identifiers a model or the engine may return to say what happened. A code is one word like `regression`, never a sentence. Each code has a schema enum entry, a template and a fixture, so adding one is a plan change. Without the list a model could invent an outcome nobody can render or route.
+**In plain terms.** The code list is the closed set of short identifiers a model or the engine may return to say what happened. A code is one word like `regression`, never a sentence. Each code has a schema enum entry, a template and a fixture, so adding one is a design change. Without the list a model could invent an outcome nobody can render or route.
 
-The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky`, `tester`, the tester's `pass`, `fail`, `env`, `wrong_command`, `real_failure`, and `config_tampered`, `locked`, `regression`, `lint`, `disputed`, `crash`. The list starts from the real blocks and escalations met in use, `branch_missing` among them. A new code is a plan change: schema enum, template and fixture together. Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
+The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky`, `tester`, the tester's `pass`, `fail`, `env`, `wrong_command`, `real_failure`, and `config_tampered`, `locked`, `regression`, `lint`, `disputed`, `crash`. The list starts from the previous binary's real blocks and escalations, PR #335's `branch_missing` among them. A new code is a design change: schema enum, template and fixture together. Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
 
 **What each one does**
-- **`branch_missing`:** A code from the real blocks and escalations the harness has met in use; the list starts from those. Its exact trigger is [UNKNOWN: not yet designed].
+- **`branch_missing`:** A code from the previous binary's real blocks and escalations (PR #335). Its exact trigger is [UNKNOWN: not yet designed].
 - **`cancelled`:** A session or run stopped on purpose; also a session exit reason.
 - **`paused`:** A session halted by a provider limit with a resume handle; it resumes on a ledger timer, not by a person.
 - **`integration`:** Check failed on the epic tip after a landing; landings pause and the last-landed group returns to Build.
@@ -4661,7 +4661,7 @@ Google's code review guide covers 9 dimensions: design, functionality, complexit
 | Verdicts | `met`, `not_met`, `brief_incomplete` per task ID, each exactly once; Go rejects a result that skips or repeats one |
 | Added checks | The reviewer runs build, tests and lint itself with `run`; the engine reruns any check a verdict depends on |
 | Findings | `submit_finding` takes a rule ID, `file:line` and quoted evidence; blocks only if Go finds the quote at that line in the head or diff; failing findings dropped and logged |
-| Precision ledger | Per rule and model: submitted, verified, fixed, `disputed` (a builder code naming file and line); `doctor` lists rules under 50% verified; under 30% for 60 days is a plan change |
+| Precision ledger | Per rule and model: submitted, verified, fixed, `disputed` (a builder code naming file and line); `doctor` lists rules under 50% verified; under 30% for 60 days is a design change |
 | `brief_incomplete` | Blocks with `brief`; a harness fault, not counted against the builder |
 | Re-review | Delta only; cached findings by `(lens, diff, prompt hash, model)` cost 0 tokens; the prompt hash covers the lens rule set |
 | Epic mode | One verdict per group over the whole epic diff |
@@ -4673,7 +4673,7 @@ Google's code review guide covers 9 dimensions: design, functionality, complexit
 - **Verdicts:** The reviewer must answer `met`, `not_met` or `brief_incomplete` for every task ID in the group, each exactly once. The engine, written in Go, rejects a result that skips or repeats a task.
 - **Added checks:** The reviewer runs the build, tests and lint itself with its `run` tool, on top of `done_when`. The engine reruns any check a verdict relies on, so the verdict rests on the engine's result, not the model's.
 - **Findings:** A finding is submitted with the `submit_finding` tool and must carry a rule ID, a `file:line` location and a quoted line of evidence. It blocks only if the engine finds that exact quote at that line in the new code or the diff. Findings that fail this check are dropped and logged.
-- **Precision ledger:** For every rule and model, the ledger counts findings submitted, verified by evidence, fixed by the builder, and disputed (a builder result code naming the file and line). `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days triggers a plan change.
+- **Precision ledger:** For every rule and model, the ledger counts findings submitted, verified by evidence, fixed by the builder, and disputed (a builder result code naming the file and line). `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days triggers a design change.
 - **`brief_incomplete`:** The reviewer's way of saying its brief (its prompt, see Glossary) lacked what it needed. The group blocks with reason `brief`. It counts as a harness fault, not against the builder.
 - **Re-review:** After a group returns to Build and comes back, only the changed part is reviewed. Findings on unchanged code are reused from the cache, keyed by lens, rule set, diff and model, at 0 tokens.
 - **Epic mode:** At the epic gate the reviewer gives one verdict per group over the whole epic's diff.
@@ -4924,7 +4924,7 @@ sequenceDiagram
 - **Findings carry evidence:** A finding is a reviewer claim with a rule ID, a `file:line` and a quoted line. Go code looks for that quote at that line in the head commit or the diff. If it is not there, the finding is dropped and logged, and it cannot block.
 - **One verdict per task:** The reviewer must answer `met`, `not_met` or `brief_incomplete` for every task ID exactly once; Go rejects a result that skips or repeats one. The tester answers `confirmed` or `not_confirmed` per task and pass or fail per acceptance item.
 - **The tester is blind by construction:** The tester's sandbox profile lists only its own worktree, so it cannot read the builder's folder even if asked. Its brief holds only engine facts from the backlog at the base commit, never the builder's summary.
-- **Precision ledger:** For each rule and model, the ledger counts findings submitted, verified by Go, fixed by the builder and disputed. `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days triggers a plan change. The lens catalogs themselves are not yet written; that is gap G-16.
+- **Precision ledger:** For each rule and model, the ledger counts findings submitted, verified by Go, fixed by the builder and disputed. `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days triggers a design change. The lens catalogs themselves are not yet written; that is gap G-16.
 - **Re-review:** When a group returns to Verify, only the changed part of the diff is reviewed, and earlier findings come from the cache at 0 tokens. The tester reruns every acceptance item.
 
 - **Lenses are rule catalogs applied by scope.** Ten lenses; a lens runs only when a changed file matches its `applies`. Thorough mode runs every applicable lens in parallel plus a cold pass; economy runs one merged lens. `blocker` and `major` block; `minor` is reported and counted.
@@ -4932,7 +4932,7 @@ sequenceDiagram
 - **Findings carry evidence.** A finding blocks only if Go finds its quoted line at `file:line` in the head or the diff. Failing findings are dropped and logged.
 - **One verdict per task.** The reviewer returns `met`, `not_met` or `brief_incomplete` for every task ID exactly once; the tester returns `confirmed` or `not_confirmed` per task and pass or fail per item.
 - **The tester is blind by construction.** Its sandbox profile cannot see the builder's worktree; its brief holds only engine facts from the backlog at the base commit.
-- **Precision ledger.** Per rule and model: submitted, verified, fixed, disputed. `doctor` lists rules under 50% verified; a rule under 30% for 60 days is a plan change. `[PENDING G-16]` the catalogs' content, authored in phase 7.
+- **Precision ledger.** Per rule and model: submitted, verified, fixed, disputed. `doctor` lists rules under 50% verified; a rule under 30% for 60 days is a design change. `[PENDING G-16]` the catalogs' content, authored in phase 7.
 - **Re-review** covers only the delta; cached findings cost 0 tokens. The tester reruns every item.
 
 #### HLD 15.4 Gate and self-checks (Komodo's own repo)
@@ -5510,7 +5510,7 @@ macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/ins
 **What each one does**
 - **Build and test:** Runs `go vet` (Go's static checker), the Go test suite, and a build of the binary for Windows, Linux and macOS. A compile error on any OS fails the gate.
 - **Structure:** Checks that packages only import in the allowed direction, that function comments follow the comment rules, and that every agent definition file (`agent.json`) and job template decodes strictly, with no unknown or missing field.
-- **Safety:** Checks the guard table (the rows in `policy.json` that say what each agent may and may not do, §17) renders as expected, and the prefix-hash pin. The pin renders the fixture brief twice and hashes its stable prefix each time; the two hashes must match, because provider prompt caching only hits on a byte-identical prefix.
+- **Safety:** Checks the guard table (the rows in `policy.json` that say what each agent may and may not do, §17) renders as expected, and the prefix-hash pin: the fixture brief's prefix hashes the same across 2 runs.
 - **Events:** Every event type the code emits must be in the event catalog (the 32 types, see Glossary), and every catalog type must have at least one place in the code that emits it.
 - **State:** Fails when any package other than `state` writes a runtime state path, so the state manager stays the only door. It also fails a record kind with no named writer, no schema version or no test fixture.
 - **Docs drift:** Fails when a verb exists but is missing from `README.md` or from the embedded `komodo` skill, when a link to a decision record is broken, or when `lld.md` names a Go package that does not exist.
@@ -5836,7 +5836,7 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - `resume` before the reset attempts every paused agent, is refused, and re-pauses with the new reset time and 0 model turns.
 - `kill -9` on a paused engine, then `jobs tick` after `wait_until`, resumes the run.
 - On the Claude API, a session with thinking on gets a schema-valid final call through structured outputs, with thinking still on.
-- A worker launched with the documented flags completes an MCP tool call, and with `--allowedTools` removed the same call is denied.
+- A worker launched with the `claude-cli` launch line flags (§16.9) completes an MCP tool call, and with `--allowedTools` removed the same call is denied.
 - A planted auto-memory file has 0 effect on a worker session.
 - A faked Max stop past `limits.pause_max_min` cancels the session, keeps its WIP commit, and blocks with `pause_timeout`.
 - A faked init line with `apiKeySource: "ANTHROPIC_API_KEY"` is killed before turn 1 and exits `billing`.
@@ -6046,7 +6046,7 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 
 **Gate and self-checks (S27, §35)**
 - Each check the gate runs has a fixture that makes the gate fail.
-- The fixtures cover build and test, structure, safety, events, state, docs drift, maps, no silent gaps, generated artifacts matching their source, and timing.
+- The checks are the ones listed in §35.
 
 **State manager (S29, §40.8)**
 - The 12 proof cases are listed under §40.8, Defaults, performance and proof, and are not repeated here.
@@ -6255,12 +6255,9 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 | `internal/harness/report.go` | the 4-heading run report templates under `embed/output/` (S10) | **Port** |
 
 **What each one does**
-- **Port:** Copy the working code and adapt it to this design's layout and rules.
-- **Rewrite:** Write new code behind the new interface; the archive is read for behaviour only.
-- **Delete:** Drop the code once anything worth keeping has moved. Its history stays in git.
 - **The last two rows:** They are the sources of the output profile. The `adhd` templates follow the accessibility rules text, and the run report keeps the 4-heading shape of `report.go`.
 
-**New, with no archive source:** the HTTP stack (S06), the scheduler (S17), `recover.go` (S18), the cache store (S22) and `fresh` (S03). These are written from the LLD alone.
+**New, with no archive source:** the HTTP stack (S06), the scheduler (S17), `recover.go` (S18), the cache store (S22) and `fresh` (S03).
 
 **Restart from zero:** the CHANGELOG, the PRD, HLD and LLD, and `docs/backlog/epic-*`. Their history stays in git; nothing is ported.
 
@@ -6314,7 +6311,7 @@ Out of scope, deferred to a later minor version:
 **Possible in a later minor version**
 - **Docker on macOS and Linux:** The sandbox choice above; native Windows already uses Docker.
 - **`--global` install:** An `install` mode that would set up the orchestrator hooks once for every repo on the machine, instead of per repo.
-- **OS-scheduled updates:** A launchd, cron or Task Scheduler entry that would run the self-update on a timer, instead of checking at session start.
+- **OS-scheduled updates:** Named as a possible later item; its design is `[UNKNOWN: not yet designed]`.
 - **Keychain secrets:** The OS keychain holding API keys, as described above.
 - **OpenTelemetry export:** Metrics sent to an external monitoring system, as described above.
 
@@ -6474,7 +6471,7 @@ The five quality goals that shape the architecture, in priority order.
 | Security review | The security lens is required for the installer, binary lifecycle, HTTP stack, tool runtime, guardrails, sandbox and ship; before phase 7 the owner reviews those groups by hand |
 **What each one does**
 - **Ownership:** One person approves the design and holds the key that signs releases, kept at `~/.komodo/release.key` with one backup copy.
-- **Approval gate:** No phase 2 code is written until the owner has signed off every component in `REVIEW.md`.
+- **Approval gate:** No phase 2 code is written until the owner has signed off every component.
 - **Build model:** Phases 2 to 6 are built by the owner in ordinary Claude Code sessions with no Komodo hooks. From phase 7, a dev build of the harness runs its own task groups.
 - **Security review:** The security lens is a reviewer rule catalog (see Glossary). It must run on the installer, binary lifecycle, HTTP stack, tool runtime, guardrails, sandbox and ship. Until phase 7, the owner reviews those groups by hand.
 
@@ -6486,7 +6483,7 @@ The five quality goals that shape the architecture, in priority order.
 |---|---|
 | Documentation | `AGENTS.md` is the source of truth in every repo; `CLAUDE.md` imports it |
 | Output | Every word a person reads comes from a Go template selected by `output.profile` (`adhd` by default) |
-| Events | A new event type or result code is a plan change: enum, schema, template and fixture together |
+| Events | A new event type or result code is a design change: enum, schema, template and fixture together |
 | Gaps | A design section may not say "later" or "TBD" without a `G-NN` register row |
 **What each one does**
 - **Documentation:** `AGENTS.md` holds the repo rules and `CLAUDE.md` only imports it.
@@ -7126,7 +7123,7 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 
 **What each one does**
 - **Phase 1, Design docs:** Writes the product requirements (`prd`), this HLD, the LLD and the first architecture decision record (ADR 0001). It also writes `epic-1`, the backlog that lists every subsystem as a task group. Done when the owner approves the docs; the backlog is linted in phase 2.
-- **Phase 2, Foundations:** Builds the CLI skeleton, the state manager, configuration, HTTP stack, sandbox, cache, version check, backlog lint and the gate core. A spike proves `claude -p` can call one tool through the MCP tool server. Done when core tests pass on 3 operating systems, `doctor backlog` passes on epic-1 and the spike makes one tool call under the provider launch flags (the options the Claude CLI adapter starts `claude -p` with).
+- **Phase 2, Foundations:** Builds the CLI skeleton, the state manager, configuration, HTTP stack, sandbox, cache, version check, backlog lint and the gate core. A spike proves `claude -p` can call one tool through the MCP tool server. Done when core tests pass on 3 operating systems, `doctor backlog` passes on epic-1 and the spike makes one tool call under the `claude-cli` launch line flags (§16.9).
 - **Phase 3, Model surface:** Builds the agent registry (the seven agent definitions), skills, rules and output formatting, and the guardrails. Done when the guard table renders from `policy.json` and every agent file decodes strictly.
 - **Phase 4, Model I/O:** Builds the provider adapters (`claude -p`, local models, the Anthropic API). Also the tool runtime workers call, and the brief builder that assembles prompts. Done when a fixture task finishes through both `claude -p` and a local model.
 - **Phase 5, Runtime:** Builds the workspace (worktrees, leases, fences), the session supervisor, observability and the event bus. Done when timeout, idle and kill tests pass with 0 orphan processes.
@@ -7140,7 +7137,7 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 | Phase | Wave | Scope | Exit proof |
 |---|---|---|---|
 | 1 | Design docs | `prd`, `hld`, `lld`, ADR 0001, epic-1 | Owner approves the docs; epic-1 lints in phase 2 |
-| 2 | Foundations | CLI skeleton, state manager, configuration, HTTP stack, sandbox, cache, version, backlog lint, gate core; a `claude -p` plus MCP spike | Core tests pass on 3 OSes; `doctor backlog` passes on epic-1; the spike makes one MCP tool call under the provider launch flags |
+| 2 | Foundations | CLI skeleton, state manager, configuration, HTTP stack, sandbox, cache, version, backlog lint, gate core; a `claude -p` plus MCP spike | Core tests pass on 3 OSes; `doctor backlog` passes on epic-1; the spike makes one MCP tool call under the `claude-cli` launch line flags (§16.9) |
 | 3 | Model surface | Agent registry, skills, rules and output, guardrails | Guard table and strict decode pass |
 | 4 | Model I/O | Provider adapters (`claude -p`, local, Anthropic API), tool runtime, brief builder | A fixture task finishes through `claude -p` and a local model |
 | 5 | Runtime | Workspace, supervisor, observability, event bus | Timeout, idle and kill proofs pass with 0 orphans |
