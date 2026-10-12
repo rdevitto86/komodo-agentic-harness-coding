@@ -1973,6 +1973,7 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 
 **What each one does**
 - **`output.profile`:** Picks the text layout for everything a person reads: `adhd` (verdict first, bold labels, tables, short lists) or the plainer `standard`. The facts and codes are the same under both. A person changes it when they prefer the standard layout, then runs `komodo sync` so the rules block in `AGENTS.md` is rewritten.
+- **`adhd` layout:** Verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`). The profile is fixed per machine: no repo setting or flag changes a template.
 - **`output.turn_end_summary`:** Turns the 4 fixed headings at the end of every report on or off. A person turns it off to get shorter reports. [UNKNOWN: not stated in PLAN.md] which 4 headings they are.
 - **`output.color`:** Controls terminal colour: `auto` decides from the terminal, `on` forces it, `off` removes it. It is applied only when text is rendered, so it never changes the facts. A person sets `off` for logs or plain terminals.
 - **`mode`:** Sets how deep the reviewer looks: `thorough` runs every lens (a reviewer rule catalog, see Glossary) that applies, plus a cold pass; `economy` runs one merged lens at reduced depth. It changes review depth only, never which model runs. A person picks `economy` to save tokens on low-risk work.
@@ -2007,6 +2008,12 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 - **`ship.mode`:** How a finished group lands: `group` opens a pull request into the epic branch and the engine merges it at once; `epic` merges the group straight into the epic branch with `--no-ff`. A person picks `epic` when per-group PRs add no value.
 
 Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded by the Max 5-hour window, not the API; `providers.ctx_floor` 262,144 is the native window of the ~27B open models targeted and catches Ollama's 4,096 default; `limits.session_wall_min` 60 bounds one task with 6 attempts inside a 6-hour group; `limits.task_attempts` 6 covers 2 fresh sessions with 2 re-prompts each; `warn.usd_per_run` 5 warns before a second ~$7 group on Opus 5.5; `limits.group_tokens` 2,000,000 is 1.7× the expected worst case of 1.2M. `[PENDING G-07]` the real Max 5-hour window against `link_sessions.claude-cli` 3, measured over the first 20 groups.
+
+Where the numbers come from:
+- Anthropic's lowest API tier allows 1,000 requests and 2M input tokens a minute on Opus 5.5. A session makes well under 1 request a second, so the Max plan's 5-hour window is the real bound.
+- Claude Code's own headless runs stop background work after 10 minutes idle; that is the basis of `limits.session_wall_min`.
+- The ~$7 estimate for a 4-task group assumes 200K uncached input tokens plus 50K output tokens per session.
+- Codecov recommends 100% coverage on the patch, which punishes glue code; `check.patch_coverage` stays at 80 on changed lines.
 
 #### 8.3 Agent group (`komodo config agent <name> …`)
 
@@ -2377,7 +2384,7 @@ Every spawn carries the stage's `epoch`, an integer that rises on each stage ent
 - **Build → Check on `task.done`:** The builder finished the last task. Its `done_when` command exited 0 and the result is committed to the hidden ref. The engine now runs Check's zero-token verification.
 - **Check → Verify on `check.done` pass:** Every Check item passed: `done_when` reruns, scope, secrets, impact tests, baseline diff and coverage. The engine now starts the reviewer and the tester at once on the same commit.
 - **Check → Build on `check.done` fail:** Some Check item failed. If the group's return count is under `limits.returns`, the task's builder session resumes with the failure; otherwise the group blocks.
-- **Verify → Build on `finding.verified`:** The reviewer or tester found a real problem: a verified blocking finding, a task marked `not_met`, or an acceptance item that failed Go's two reruns. The other Verify session is cancelled, the epoch rises, and the builder resumes with only the verified findings.
+- **Verify → Build on `finding.verified`:** The reviewer or tester found a real problem: a verified blocking finding, a task marked `not_met`, or an acceptance item that failed Go's two reruns. The other Verify session is cancelled, the epoch rises, and the builder resumes with only the verified findings, including any submitted before the cancel.
 - **Verify → Ship on `stage.exit`:** Both Verify sessions passed. The reviewer marked every task `met` with no blocking finding; the tester marked every task and item `confirmed` with no regression. The engine now merges and lands the group.
 - **Ship → end on `group.shipped`:** The merge with the epic branch was clean, Check passed on the epic tip and the landing with the fence succeeded. The group is finished; its lease and hidden ref are released.
 - **Build or Verify → Paused on `session.end` reason `paused`:** A provider limit stopped the session and no allowed link was left, not even the free backstop. The group returns its pool slot, keeps its lease and worktree, and waits on a disk timer; its clocks stop.
@@ -3137,6 +3144,8 @@ Strict decode (`DisallowUnknownFields`). The registry decodes the 7 agents once 
 
 `# Role` text, never a rule, then a `# Brief` template with `{{slots}}`. Slots fill in one pass, so a filled value is never expanded again. The gate fails an unfilled or unknown slot.
 
+Role text says how to do the job, for example: read neighbours, make the smallest change, test what you change. It is Markdown in the agent's own folder, and `agent.json` holds only what Go reads.
+
 #### 14.3 Roster and limits
 
 **In plain terms.** The roster is the fixed set of 7 agents and the model size each one uses. The limits table shows the defaults and the ceilings for every agent's time and retry controls. Without fixed weights, an expensive model could be used for cheap work or a weak model for planning. A person may override an agent's model and limits with `komodo config agent <name>`, within the hard limits; the engine applies them.
@@ -3151,6 +3160,8 @@ Strict decode (`DisallowUnknownFields`). The registry decodes the 7 agents once 
 - **Planner, architect, reviewer:** These three run on a heavy model (Opus on Claude links). The planner drafts epics and tasks, the architect proposes options, and the reviewer judges the diff with verified findings.
 - **Builder, researcher:** These two run on a standard model (Sonnet on Claude links). The builder writes code for one task per session; the researcher returns findings with `file:line` references.
 - **Tester, scout:** These two run on a light model (Haiku on Claude links). The tester gives a blind pass or fail per acceptance item; the scout reads and searches paths and can run on a local model.
+
+Three weights are enough for all 7 agents.
 
 | Limit | Default | Hard limit |
 |---|---|---|
@@ -3273,6 +3284,7 @@ Over the ceiling, the brief goes to the next link in the chain that fits; none l
 - Reviewer context comes from the engine only: the task list at the base commit, `done_when`, spec anchors, the diff, Check results, prior findings. Never builder prose.
 - Tester context comes from the engine only: the task list and acceptance items at the base commit, the diff, Check results, allowed commands. A restart adds Go's rerun of the disputed item.
 - Callers: Go via `go/packages`; other languages find callers with `search`.
+- Repo context: the repo's `AGENTS.md` without the Komodo block, read from the group's base commit. It extends the harness per repo and is never a harness rule; the harness enforces its own limits regardless.
 
 #### HLD 9.6 Scenario: one session, end to end
 
@@ -3387,6 +3399,8 @@ No agent has git write tools, forge credentials or a shell. Only the engine runs
 
 Context limit: Go counts tokens every turn against the link's measured context. At 80%, old tool outputs shrink to one-line stubs; their full text stays in `<session>/out/`. Still over, the session ends with `no_result`; nothing past the context is sent.
 
+No result tool exists mid-session: the result always comes from the final call, on every link. `prompt.md` tells the model to stop and summarize when it is finished.
+
 **What each one does**
 - **Context limit:** The context is the maximum text a model can hold in one conversation. Go counts tokens every turn against the link's measured context (§16.4). At 80% it replaces old tool outputs with one-line stubs, keeping the full text on disk under `<session>/out/`. If the conversation is still too big the session ends with `no_result`; Go never sends more than the model can hold, so a server cannot silently cut the prompt.
 
@@ -3410,6 +3424,7 @@ Context limit: Go counts tokens every turn against the link's measured context. 
 
 **What each one does**
 - **`read`:** The model reads a file, up to 2,000 lines per call, by line range. Reading an unchanged file again returns a one-line "unchanged since your last read" note to save tokens; asking a second time in a row returns the full text again, in case the earlier copy was compacted away.
+  - Because `read` takes line ranges, the 2,000-line cap costs one `ReadAt` (Go's read of a slice of a file), not a read of the whole file.
 - **`search`:** The model searches the repository for text. Go walks the files itself, honours `.gitignore`, skips any file over 1 MB, and never scans `node_modules` or `target/`.
 - **`edit`:** The model changes a file by giving an exact, unique piece of text and its replacement. If the text is not found, the reply shows the closest matching lines. After the edit, the `tool.post` hook formats the file and the reply shows the edited lines.
 - **`write`:** The model creates a new file. Writing to a file that already exists is refused with the message "use `edit`", so content is never overwritten by accident.
@@ -3425,6 +3440,12 @@ Output cap: 4 KB for every tool except `read`, head and tail kept; the full outp
 
 **What each one does**
 - **Output cap:** Every tool except `read` returns at most 4 KB to the model, keeping the start and the end of the output. The full output is saved to `<session>/out/<call>.log`, and the capped reply tells the model that path so it can `read` more if needed.
+
+Tool set facts:
+- A builder has 6 tools (§15.4).
+- `edit` and `write` stay separate tools: `edit` changes an existing file and `write` creates a new one.
+- There is no `check_task` or `submit_result` tool, because the engine gates the final result itself.
+- `run` returns only the capped result to the model; the full log stays at the named path.
 
 #### 15.4 Per-agent tool matrix
 
@@ -3477,7 +3498,7 @@ A stdio MCP server has no per-request timer and `MCP_TOOL_TIMEOUT` defaults to a
 | `scope` | Agent names, or `writers`, `runners`, `all`, `orchestrator` | Who it binds to |
 | `kind` | `tool`, `path`, `run`, `text` | What the check reads |
 | `pattern` | Glob or list | What matches; `~/.komodo/**` style globs expand at load |
-| `action` | `refuse`, `warn` | `warn` only for `text` rows on the orchestrator |
+| `action` | `refuse`, `warn` | `warn` only for `text` rows: on the orchestrator, and in the steering-phrase list for a repo addendum (a skill gets `refuse`) |
 | `message`, `alternative` | Template IDs | The refusal line and the allowed alternative |
 
 **What each one does**
@@ -3525,6 +3546,8 @@ A stdio MCP server has no per-request timer and `MCP_TOOL_TIMEOUT` defaults to a
 - **B1:** Blocks builder writes outside the group's `files` and their test siblings. The refusal says to stop with status `needs_scope`, which the orchestrator can approve.
 
 Facts of `run` that keep their own tests, not guard rows: no shell (pipes, chains and `sh -c` cannot happen); no network (sandbox); no git writes (no class runs git). B2 (a builder's own backlog files) is a lint fact: `doctor backlog` refuses a group whose `files` list `docs/backlog/**`.
+
+The boundary is the sandbox: builders write tests and `run` them, so any code can run, and it runs inside the sandbox. R1 limits command names only.
 
 #### 21.4 Orchestrator rows (text in `AGENTS.md`, any host)
 
@@ -3663,6 +3686,7 @@ Reviewer and tester have no write tools, but their `run` may write the worktree 
 - **Linux:** `cp -R --reflink=auto` clones on btrfs, XFS and ZFS and byte-copies on ext4; per-filesystem behavior is pending spike G-09.
 - **Windows NTFS:** Go copies bytes and recreates junctions and symlinks; git checks symlinks out as text (`core.symlinks false`). Pending spike G-10.
 - **Windows Docker:** The host makes the copy and the tester's container mounts it at `/work`; copy time for 1 GB is pending spike G-11.
+- **Docker bind mount:** The worktree is a bind mount, so the image saved after setup never holds `node_modules`. A volume per worktree would be faster but puts the files where the host sweep cannot reach them. `[NOT CHECKED]`
 
 Symlinks are copied as links, never followed; a link resolving outside the worktree is dropped and logged. A `.venv` is never copied. Check adds a case-collision lint on every OS.
 
@@ -3706,6 +3730,7 @@ Symlinks are copied as links, never followed; a link resolving outside the workt
 | Stale engine lands over newer work | Fence enforced by git compare-and-swap; action idempotency keys |
 | Prompt steering through a skill or repo text | Steering-phrase scan at the gate and in `doctor`; no rule text in prompts; the `text` policy row |
 | Tampered config or binary at run time | Config hash guard; signatures; G3 protects both files |
+| Tampered or half-written state | State manager: checked on every read, bad records moved aside, atomic writes |
 
 **What each one does**
 - **Agent escapes its worktree:** A worktree is the private git checkout folder a worker may touch (see Glossary). Guard row G2 refuses reads and writes outside it, including `..` paths and symbolic links that point out. The sandbox (OS-level confinement, see Glossary) refuses the same at the operating-system level, and the worker sees a refusal naming G2.
@@ -3718,6 +3743,7 @@ Symlinks are copied as links, never followed; a link resolving outside the workt
 - **Stale engine lands over newer work:** A fence is a counter beside a group's lease (its lock, see Glossary). Every git write carries the fence, and git's compare-and-swap refuses a stale holder. Every side effect also has an idempotency key, so a replay after a crash never lands the same work twice.
 - **Prompt steering through a skill or repo text:** Steering is text that tries to redirect a model, such as "ignore previous". The gate fails a skill containing a steering phrase, and `doctor` warns on repo text. No rule text enters worker prompts. The `text` policy row holds the phrase list.
 - **Tampered config or binary at run time:** `komodo config` stores a hash of the config file. A hand edit makes every verb refuse until `komodo config --accept`. Signatures cover the binary. Guard row G3 blocks workers from writing either file.
+- **Tampered or half-written state:** The state manager (§40) is the only writer of runtime state. It checks every record when it is read, moves a bad record aside instead of using it, and writes atomically so a crash never leaves a half-written file.
 
 #### HLD 14.2 Guard summary
 
@@ -3858,6 +3884,8 @@ Every link ends the same way: tools on `auto`, a text-only reply ends the work, 
 
 Each session's measured context and its source travel in `session.start`. Ollama is detected at the probe by `GET /api/version`. An endpoint below `providers.ctx_floor` fails `doctor` and is skipped with `provider.skip` reason `ctx_below_floor`; `doctor` names the fix `OLLAMA_CONTEXT_LENGTH=262144`. `[PENDING G-03]` a 24 GB machine running Qwen3.6-27B at 262,144 context.
 
+The default window of 262,144 applies to any model that is neither measured nor in the catalog, such as a new Claude model on a login with no API key. A window smaller than the real one only makes briefs smaller, while a larger one would let a server cut the prompt. So the catalog must list every pinned model whose window is under the default.
+
 **What each one does**
 - **Travels in `session.start`:** The measured number and its source are recorded on every session's start event, so the ledger shows what each session really had.
 - **Ollama is detected at the probe:** Go sends `GET /api/version` to the endpoint's host; an answer means it is Ollama and `/api/ps` can be used.
@@ -3911,6 +3939,8 @@ IDs come from the Models API `line` field when an Anthropic key resolves, else t
 - Any Claude limit (5-hour window, weekly cap, model cap): the next session starts on the backstop. After the recorded reset time, new sessions return to `claude-cli`; a task already on the backstop finishes there.
 - The backstop is mandatory; `doctor` and `gate` refuse a chain without one; `install` warns when no endpoint answers.
 - An agent set to a `-prev` model falls back to the backstop, never forward to the latest.
+- An agent `model` override (`komodo config agent <name> model=…`) puts that model's link first, then the default order follows, always ending in the free backstop. No config key reorders the chain.
+- Dateless model IDs from the 4.6 generation on are pinned snapshots, so using the exact ID and never an alias costs nothing.
 
 **What each one does**
 - **Skip only when unavailable, unauthorized or over a limit:** A link is skipped for provider reasons only, never because a task failed on it. Each skip writes a `provider.skip` event with the from-link, to-link and reason, plus a warning that names the model the task actually ran on.
@@ -3948,6 +3978,8 @@ IDs come from the Models API `line` field when an Anthropic key resolves, else t
 1. Before each `claude-cli` session: `claude auth status --json` (0.1 s, cached 60 s per process) sets the cost class; a logged-out or unknown login is `paid`.
 2. Env scrub: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_*` removed; `CLAUDE_CODE_OAUTH_TOKEN` stays.
 3. First stream line: `system/init` must say `apiKeySource: "none"`, else the session is killed before turn 1 with exit `billing`. The probe records one init line per CLI version; a version without the field fails the link at probe time. `[PENDING G-02]` capturing it without a model turn.
+
+The `apiKeySource` field is present in the Claude Code binary but not in its headless documentation. That is why the probe records one `system/init` line per CLI version and fails a link whose version lacks the field, instead of killing every session.
 
 **What each one does**
 - **1. Before each `claude-cli` session:** Go runs `claude auth status --json` (0.1 seconds, cached for 60 seconds per process) and sets the cost class from the answer. A logged-out or unrecognised login counts as `paid`, so it is refused under `never`.
@@ -4078,6 +4110,8 @@ Effort per weight on API links: heavy `high`, standard `medium`, light `low`, fi
 - **Redaction:** API keys and any value loaded from an `env:` reference are scrubbed from logs, ledger rows and error text.
 
 Users: `anthropic.go`, `openai.go`, the `web` tool, `internal fresh-bg`. `claude -p` and `codex` own their own networking.
+
+Streamed replies arrive as server-sent events (SSE), one line at a time; the client parses each line as it arrives and never buffers the whole body. Response caching never applies to model calls.
 
 **What each one does**
 - **`anthropic.go`:** The Claude API adapter; every Claude API call goes through this client.
@@ -4280,6 +4314,7 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
 - **Envelope `report` and errors:** Every verb's JSON envelope carries a `report` line and errors keyed by code, each with its own template.
 - **Commit message:** Built as `<type>: <task title>` from the backlog card; no model writes commit text.
 - **Waking event in `status --wait`:** When the orchestrator waits on an event, that event renders through `event.<type>` into one line.
+- **Layout by profile:** `embed/output/{adhd,standard}/` hold one template set each, with the same facts and codes. Under `adhd` a report has the verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`). `output.color` is applied at render time only.
 
 #### 19.3 Template pipeline
 
@@ -4299,6 +4334,7 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
 - **Engine:** Go's standard `text/template`, a missing field is an error, and only six helper functions exist. A template cannot call anything else.
 - **Typed facts:** Each template has one Go struct; the gate fails a template using a field the struct lacks, or a struct field no template uses.
 - **Order:** Facts are checked against the repo first, then escaped as code spans, rendered, wrapped at 80 columns and colored. A bad fact re-prompts the model.
+- **Redaction and attribution checks:** Secret redaction (G4) and the attribution-trailer check (G5) run on the rendered text, after the template has filled in the facts.
 - **Tables:** A rendered table shows at most 5 rows plus one overflow line; a cell over 45 characters moves to a line below the table.
 - **Golden fixtures:** Each template has a stored expected output per profile; the gate renders and compares bytes, so any output change is a visible diff.
 - **Unlisted cases:** Code `other` renders one fixed sentence pointing to a file; the model's own text goes in that file.
@@ -4308,10 +4344,10 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
 
 **In plain terms.** The code list is the closed set of short identifiers a model or the engine may return to say what happened. A code is one word like `regression`, never a sentence. Each code has a schema enum entry, a template and a fixture, so adding one is a plan change. Without the list a model could invent an outcome nobody can render or route.
 
-The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky`, `tester`, the tester's `pass`, `fail`, `env`, `wrong_command`, `real_failure`, and `config_tampered`, `locked`, `regression`, `lint`, `disputed`, `crash`. A new code is a plan change: schema enum, template and fixture together. Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
+The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky`, `tester`, the tester's `pass`, `fail`, `env`, `wrong_command`, `real_failure`, and `config_tampered`, `locked`, `regression`, `lint`, `disputed`, `crash`. The list starts from the real blocks and escalations met in use, `branch_missing` among them. A new code is a plan change: schema enum, template and fixture together. Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
 
 **What each one does**
-- **`branch_missing`:** A code PLAN.md names. Its exact trigger is [UNKNOWN: not stated in PLAN.md].
+- **`branch_missing`:** A code from the real blocks and escalations the harness has met in use; the list starts from those. Its exact trigger is [UNKNOWN: not stated in PLAN.md].
 - **`cancelled`:** A session or run stopped on purpose; also a session exit reason.
 - **`paused`:** A session halted by a provider limit with a resume handle; it resumes on a ledger timer, not by a person.
 - **`integration`:** Check failed on the epic tip after a landing; landings pause and the last-landed group returns to Build.
@@ -4346,6 +4382,7 @@ The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate
 - **Orchestrator rules into a worker:** A brief has four kinds of content and none is a rule. The repo's `AGENTS.md` loses its Komodo block; broken markers drop the whole addendum and `doctor` says so.
 - **Orchestrator skills into a worker:** The gate refuses any worker `agent.json` that allowlists `run`, `plan`, `respond` or `komodo`.
 - **Host auto-load:** Claude CLI workers start with settings sources disabled, so host-level memory and hooks never load; API links get only the brief.
+- **`codex-cli` workers:** When the `codex-cli` link ships in a later minor, its workers must also load no `AGENTS.md`.
 - **A run changing its own guidance:** The addendum is read from the base commit, so a worktree edit waits for the next run; config and policy files are protected by G3.
 
 ---
@@ -4434,6 +4471,8 @@ The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate
 - **`economy`:** Runs only in economy mode, the cheaper review setting. It is one merged checklist of all the lenses above, applied at reduced depth.
 
 Rule schema in `embed/lenses/<lens>.json`: `{id, severity, applies: {globs, markers}, check, evidence, source}`. `[PENDING G-16]` the catalogs' content, seeded from Google's code review guide and SWE-bench Verified failure classes, authored in phase 7 with the security lens reviewed by the owner.
+
+Google's code review guide covers 9 dimensions: design, functionality, complexity, tests, naming, comments, style, consistency and documentation. Each rule names its source in `source`.
 
 #### 25.2 Mechanics
 
@@ -4607,6 +4646,8 @@ Savings: clipping, signature trimming, glob-picked standards, delta diffs, sessi
 - **Context compaction at 80%:** When a session's context reaches 80% of the window, old tool outputs shrink to one-line stubs; their full text stays on disk in `<session>/out/`.
 
 Prompt caching on the Anthropic API: at most 4 `cache_control` breakpoints per request, 1-hour entries before 5-minute ones, a 512-token minimum on the 5.5 line, writes at 1.25× (5 min) or 2× (1 h) and reads at 0.05× base. Breakpoints follow the prefix order: tools plus role (1 h), repo context (1 h), standards (5 min), task (5 min). `claude -p` caches automatically on a byte-identical prefix. Cached reads do not count toward Anthropic's input-tokens-per-minute limit. The ledger's `cache_read` and `ctx_peak` columns are the proof. `[PENDING G-17]` the 50% hit-rate fixture needs real API sessions, measured in phase 7.
+
+A change at the tools level invalidates every cache entry after it, and a change to thinking or effort invalidates from the messages level on. `effort` and thinking are therefore fixed per agent.
 
 **What each one does**
 - **Tools plus role (1 h):** The first cache block: the tool definitions and the agent's role text. They are cached for an hour.
@@ -4899,6 +4940,7 @@ Every key is `sha256(inputs + binary version)` with the per-run config hash as p
 - **Task:** One row per task: its group, state, the session working on it, how many attempts it has used, and when it was claimed. It updates when a task is claimed, released, done or retried.
 
 - Task list lock: Intake hashes the group's `TG.md` and `tsk-*.md` into `card_hash` and emits `lock.taken`. While locked, `add backlog --to <group>`, `plan --epic` on that group, and a hand edit refuse with `locked` and the run ID. Landing or abandon emits `lock.released`.
+- A hand edit of the backlog files is detected by a hash mismatch at the next verb. The lock protects the next run, not the current brief, because the builder and reviewer read the task list at the base commit.
 - Task claims: `queued → claimed → done | returned | blocked`; `task.claimed` at `session.start`, `task.released` at `session.end`; a claimed task whose session is dead at the sweep is released with `crash`.
 - Views are rebuilt incrementally from the last applied `seq`; `status` on 1,000 rows renders under 100 ms.
 
@@ -5048,6 +5090,7 @@ Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a st
 - Go derives the DAG from `touches`: two groups whose globs overlap must be ordered; the planner's stated dependency is kept when it agrees, else lint fails naming both groups and the shared file. Groups with no overlap and no dependency start in wave 1.
 - `plan <goal>` drafts in memory and checks with `lint_backlog`; the engine lints again and writes files only if lint passes.
 - `plan --from <spec>` takes any document set plus the repo. `plan --epic N` adds or amends only unlocked groups; landed and locked groups are read-only inputs.
+- The planner is mechanical: templates, per-task size caps and lint fix the structure, and the planner fills in the blanks. Nothing in planning depends on the language, because the map, the sizing lint and the DAG derivation read markers and symbols, not frameworks.
 - `repo_map`: Go builds a symbol graph (Go via `go/ast`; other languages via `embed/langs/<lang>.json` patterns), ranks by inbound references ×3 for files the goal names, and fits to 10% of the brief ceiling by dropping the lowest rank. Cached by tree hash; this repo's map (about 83 files) builds under 1 s. `[PENDING G-18]` patterns for TypeScript, Python and Rust against 3 real repos.
 - A 6-group epic plans in about 2 session wall times.
 
@@ -5084,6 +5127,7 @@ Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a st
 - **Release:** A person's command that sets the version, tags it, cross-builds the binary for Windows, Linux and macOS, writes checksums, signs the manifest with the ed25519 key, and renders the changelog, which starts fresh at `1.0.0-beta.6`. Betas are published as normal GitHub releases with "beta" in the version, because the updater reads `releases/latest`, which skips prereleases.
 - **Signing custody:** The private signing key lives in `~/.komodo/release.key` on the owner's machine, readable only by the owner (mode 0600), with one backup in a password manager. Releases are cut only on that machine. A `next` public key is embedded from the first release so a leaked key can be rotated. Moving the key to a cloud KMS or keyless signing, and refusing a manifest older than the last accepted one, is the enterprise target G-21 in a later minor.
 - **Performance:** `Drive` is the engine's per-group loop. Pushing and opening the PR run beside it, not inside it, so a slow network does not hold the group's loop.
+- **Caching:** The PR body's Check summary comes from the cache's check entries (§28), never from a rerun.
 
 #### HLD 9.7 Scenario: from goal to merged epic PR
 
@@ -5136,6 +5180,7 @@ Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a st
 - Detection: Claude by `CLAUDE.md`, `.claude/`, `claude` on PATH, or `~/.claude/`; Codex by `.codex/`, `codex` on PATH, or `~/.codex/`; `--hosts` overrides. Codex reads `AGENTS.md`, so step 4 serves it.
 - Repo rules: hand edits survive and are reported (`--force` overwrites); a rerun makes 0 changes and prunes stale owned files; the pin only rises; `--project` adds `docs/{prd,hld,lld}.md`, `CHANGELOG.md` and a PR template. Never created: a repo config folder, git hooks, `.codex/`, `~/.claude`, `~/.codex`, or any `.claude/` skill, rule or guard hook.
 - No config file is written; `~/.komodo/config.json` appears on the first `komodo config` write.
+- A rerun with no diff makes 0 writes and finishes under 1 s.
 
 **What each one does**
 - **`install`:** Computes the full set of files it should own, compares with `install.json`, writes only the differences, then runs `doctor install` and fails if any check errors.
@@ -5266,6 +5311,7 @@ macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/ins
 - **`--restart-runs`:** A person's way to move live runs onto the new binary. Each run gets a stop signal and saves a checkpoint at its next safe point, between tool calls; it exits with reason `restart`, and `fresh` resumes it on the new version. A run that cannot checkpoint within 2 minutes stays on its old version and is named in the report; it is never killed mid-write. The cost is at most one repeated model turn per run.
 - **Version skew:** A new binary can read run state written by the previous state-schema version. For state older than that, `status` tells the person to let the run finish or use `fresh --restart-runs`.
 - **Repo pin:** The `min=<v>` in the `AGENTS.md` block covers offline machines and machines with auto-update off. A binary older than the pin refuses every work verb with the message `run komodo fresh`; only `help`, `version`, `fresh`, `install` and `doctor` still run.
+- **Offline staleness:** Version checks run only at session start, run start and `fresh --check`, and at most hourly. A machine that has none of these for days stays on its version, and the repo pin catches it on the next verb.
 
 #### 35. Gate and self-checks (`komodo gate`, Komodo repo only)
 
@@ -5276,7 +5322,7 @@ macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/ins
 |---|---|
 | Build and test | `go vet`, tests, cross-builds for windows, linux, darwin |
 | Structure | Import direction, comment lint, strict decode of every `agent.json` and job template |
-| Safety | The guard table and the prefix-hash pin |
+| Safety | The guard table and the prefix-hash pin: the fixture brief's prefix hashes identically across 2 runs |
 | Events | Every emitted type is in the catalog; every catalog type has an emitter |
 | State | No package outside `state` writes a runtime state path; every kind has a writer, a schema version and a fixture |
 | Docs drift | A verb missing from `README.md` or the `komodo` skill, a broken decision link, an `lld.md` package that does not exist |
@@ -5288,7 +5334,7 @@ macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/ins
 **What each one does**
 - **Build and test:** Runs `go vet` (Go's static checker), the Go test suite, and a build of the binary for Windows, Linux and macOS. A compile error on any OS fails the gate.
 - **Structure:** Checks that packages only import in the allowed direction, that function comments follow the comment rules, and that every agent definition file (`agent.json`) and job template decodes strictly, with no unknown or missing field.
-- **Safety:** Checks the guard table (the rows in `policy.json` that say what each agent may and may not do, §17) renders as expected, and the prefix-hash pin. `[UNKNOWN: not stated in PLAN.md]` what the prefix-hash pin checks.
+- **Safety:** Checks the guard table (the rows in `policy.json` that say what each agent may and may not do, §17) renders as expected, and the prefix-hash pin. The pin renders the fixture brief twice and hashes its stable prefix each time; the two hashes must match, because provider prompt caching only hits on a byte-identical prefix.
 - **Events:** Every event type the code emits must be in the event catalog (the 32 types, see Glossary), and every catalog type must have at least one place in the code that emits it.
 - **State:** Fails when any package other than `state` writes a runtime state path, so the state manager stays the only door. It also fails a record kind with no named writer, no schema version or no test fixture.
 - **Docs drift:** Fails when a verb exists but is missing from `README.md` or from the embedded `komodo` skill, when a link to a decision record is broken, or when `lld.md` names a Go package that does not exist.
@@ -6292,7 +6338,7 @@ stateDiagram-v2
 - **Paused:** A holding state for a provider limit, such as a Claude quota, when no other link is left. The group gives back its pool slot, keeps its lease and worktree, and waits on a timer stored on disk; wall clocks stop. The timer resumes it, or the pause cap (`limits.pause_max_min`, 360 minutes by default) turns it into Blocked.
 - **Blocked:** A holding state when a bound was hit (too many returns, say) or a decision is needed, such as a scope request. Nothing moves until a person or the orchestrator runs `resume`, `scope approve|deny` or `abandon`; `status --wait` wakes the orchestrator when a group blocks.
 
-Back to Build: a failed Check or Verify resumes the task's own builder session with only the verified findings. Each return raises the task's attempt count and the stage epoch. `limits.returns` (3) returns per group, then Blocked.
+Back to Build: a failed Check or Verify resumes the task's own builder session with only the verified findings, including those submitted before a cancel. Each return raises the task's attempt count and the stage epoch. `limits.returns` (3) returns per group, then Blocked.
 
 #### HLD 18. Architecture decisions
 
@@ -6392,6 +6438,12 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 | Performance | `status` renders a repo with 1,000 ledger rows or 50 runs | Under 100 ms; under 10 ms |
 | Performance | The engine replays 10,000 state events | Under 1 s; resume bounded by 50 events from the snapshot `[PENDING G-19]` |
 | Performance | `komodo gate` runs locally | Under 3 minutes |
+| Performance | A brief is assembled for a group's task | Skill glob matching runs once per brief over the group's `files` |
+| Performance | The binary starts and renders output | Templates parse once at process start from the embedded set |
+| Performance | A 4-task group builds its 4 briefs | All 4 share every byte before the task part |
+| Performance | A session is supervised at `pool_max` 6 | One timer goroutine per session; no per-token allocation; under 1% of one core |
+| Performance | Check runs on a one-package change | Finishes under the full suite's time |
+| Performance | The cache index is consulted | LRU index in memory per process, rebuilt lazily |
 | Durability | The engine is killed with `kill -9` mid-run and resumed | 0 repeated paid sessions; at most one model turn and no committed edit lost |
 | Durability | Two engines race to land one group | Exactly 1 landing; the loser ends in `lease.lost` |
 | Safety | A `run` writes outside the worktree, reads `~/.ssh`, or connects to a public address on any OS | Refused by the sandbox |
@@ -6406,6 +6458,12 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 - **Performance, `status`:** `status` renders a repo with 1,000 ledger rows in under 100 ms and a repo with 50 runs in under 10 ms.
 - **Performance, state replay:** The group state is the append-only event file per group (see Glossary). After a crash the engine rebuilds state from a snapshot plus at most 50 events; replaying 10,000 events must finish under 1 second (G-19).
 - **Performance, `komodo gate`:** The self-check on the Komodo repo finishes locally in under 3 minutes.
+- **Performance, skill matching:** Skill glob matching runs once per brief over the group's `files`, not over the whole tree. The skill index is embedded at build, so listing skills is a map read.
+- **Performance, templates:** Output templates parse once at process start from the embedded set, so no verb parses a template twice.
+- **Performance, shared brief prefix:** The 4 briefs of a 4-task group share every byte before the task part, so the provider's prompt cache can serve the shared prefix to all four.
+- **Performance, supervision:** The supervisor uses one timer goroutine per session, not one per check, and stream parsing allocates nothing per token. At `pool_max` 6 it costs under 1% of one core.
+- **Performance, Check:** On a one-package change, Check finishes in less time than the full test suite, because the impact set and `done_when` run in parallel inside the sandbox's process cap.
+- **Performance, cache index:** The cache's LRU index (least recently used order) lives in memory per process and is rebuilt lazily, so a lookup costs one `stat` of the entry file.
 - **Durability, `kill -9`:** The engine is killed without warning mid-run and then resumed. No paid session is repeated, at most one model turn is lost, and no committed edit is lost.
 - **Durability, two engines race:** When two engines try to land the same group, exactly one lands; the fence makes the loser end in `lease.lost`.
 - **Safety, sandbox:** On every OS, a `run` that writes outside the worktree, reads `~/.ssh` or connects to a public address is refused by the sandbox.
