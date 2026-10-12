@@ -25,6 +25,7 @@ type StreamHooks struct {
 	Activity func()               // called whenever bytes arrive, keep-alives included
 	Event    func(SSEEvent) error // called per event; an error aborts the stream
 	Restart  func()               // called before a retry so the consumer drops partial output
+	Final    func(SSEEvent) bool  // true for the event that ends the answer; providers must set it, nil accepts any clean end
 }
 
 // dropError marks a stream that broke mid-answer.
@@ -53,6 +54,10 @@ func (c *Client) Stream(ctx context.Context, ep Endpoint, req *http.Request, hoo
 		if !errors.As(err, &drop) {
 			return nil, c.wrapErr(err)
 		}
+		if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
+			c.logf("stream from %s dropped mid-answer: %v; request body cannot be resent", c.target(req), err)
+			return nil, c.wrapErr(err)
+		}
 		if drops == 1 {
 			return nil, c.wrapErr(fmt.Errorf("stream dropped twice: %w", err))
 		}
@@ -78,18 +83,21 @@ func (a *activityReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// readSSE parses events line by line until the body ends; a broken read is a dropError.
+// readSSE parses events until the body ends; a broken read, or a clean end before the final event, is a dropError.
 func readSSE(ctx context.Context, body io.Reader, hooks StreamHooks) error {
 	sc := bufio.NewScanner(&activityReader{r: body, fn: hooks.Activity})
 	sc.Buffer(make([]byte, 0, 64<<10), sseLineMax)
 	var ev SSEEvent
 	var data []string
-	pending := false
+	pending, final := false, false
 	for sc.Scan() {
 		line := sc.Text()
 		if line == "" {
 			if pending {
 				ev.Data = strings.Join(data, "\n")
+				if hooks.Final != nil && hooks.Final(ev) {
+					final = true
+				}
 				if hooks.Event != nil {
 					if err := hooks.Event(ev); err != nil {
 						return err
@@ -115,6 +123,8 @@ func readSSE(ctx context.Context, body io.Reader, hooks StreamHooks) error {
 	}
 	err := sc.Err()
 	switch {
+	case err == nil && hooks.Final != nil && !final:
+		return &dropError{err: io.ErrUnexpectedEOF}
 	case err == nil:
 		return nil
 	case ctx.Err() != nil:
