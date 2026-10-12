@@ -1454,8 +1454,8 @@ The HLD states what each component is for and how the components cooperate. This
 | Constraint | Statement |
 |---|---|
 | Dependencies | Standard library only; `go.mod` lists no modules |
-| Packages | One package per layer, 11 in all; a new package needs a new layer |
-| Files | A file splits at about 600 lines; `_test.go` sits beside its source; about 85 files |
+| Packages | One package per layer, 12 in all; a new package needs a new layer |
+| Files | A file splits at about 600 lines; `_test.go` sits beside its source; about 90 files |
 | Imports | One downward order, enforced by the gate; higher needs enter as parameters |
 | Embedded assets | Everything a model reads compiles into the binary with `//go:embed`; nothing is parsed from disk at run time |
 | Strict decoding | Every JSON the binary reads from its own assets uses `DisallowUnknownFields` and a schema version `v` |
@@ -1556,6 +1556,182 @@ The HLD states what each component is for and how the components cooperate. This
 - **`internal/state`:** The state manager, the only code that reads or writes runtime state. It holds the API every other package calls, group state (a group's events, snapshots and replay as one unit), the registry of record kinds with their one schema, the checks run on every read and write, and the steps that read older schema versions (§13).
 - **`internal/core`:** Plumbing with no domain logic: the config file, command detection, the HTTP client, the cache store, the create-only and rename-aside file helpers that only the state manager calls, the embedded version, atomic file writes, and an isolated home folder for tests.
 
+**File map**
+
+**In plain terms.** This is the repo's folder tree, one line per file, each tagged with the component that owns it (S01 to S29). A builder opens it to find where a component's code goes, and a reviewer uses it to spot a file in the wrong place. `_test.go` files sit next to their sources and are left out. The runtime state trees (the `komodo/` folder under the repo's git directory, and `~/.komodo/`) are in §6.4, and the files `install` writes into a repo are in §33.
+
+```
+komodo-agentic-harness-coding/
+├── AGENTS.md                      # source of truth: repo rules + Komodo block
+├── CLAUDE.md                      # @AGENTS.md import only
+├── README.md
+├── CONTRIBUTING.md
+├── CHANGELOG.md                   # release history, started fresh
+├── LICENSE
+├── go.mod                         # stdlib only
+├── komodo.go                      # //go:embed embed templates
+├── install.sh                     # [S02] macOS/Linux/WSL
+├── install.ps1                    # [S02] native Windows
+├── .github/
+│   └── PULL_REQUEST_TEMPLATE.md
+│
+├── cmd/komodo/
+│   └── main.go                    # [S01] calls cli.Run(os.Args)
+│
+├── internal/
+│   ├── cli/                       # [S01]
+│   │   ├── cli.go                 # verb table, dispatch, envelope, exit codes, pin check
+│   │   ├── help.go                # help + komodo skill generation
+│   │   ├── work.go                # run, status, stop, resume, abandon [S23]
+│   │   ├── plan.go                # plan, skill, scope
+│   │   ├── jobs.go                # jobs [S17]
+│   │   ├── setup.go               # install, uninstall, fresh, doctor, sync, version
+│   │   ├── config.go              # config [S04]
+│   │   ├── repo.go                # add, gate, release, cache
+│   │   └── internal.go            # internal tools|fresh-bg
+│   │
+│   ├── engine/                    # Orchestration
+│   │   ├── engine.go              # [S14] Drive: loop over Next()
+│   │   ├── stage.go               # [S14] 5 stages + Paused, Blocked; epochs; pure Next()
+│   │   ├── intake.go              # [S14] lint, hash card, lease, cut worktree from the epic tip
+│   │   ├── build.go               # [S14] one session per task; resume it with findings
+│   │   ├── verify.go              # [S14] reviewer and tester at once, cancel on first failure
+│   │   ├── pool.go                # [S14] session pool, floor, ceiling
+│   │   ├── queue.go               # [S14] work queue files, pick order, fair share
+│   │   ├── worktree.go            # [S15] detached cut, sweep, lease
+│   │   ├── shutdown.go            # [S15] catch-all shutdown, parent guard
+│   │   ├── session.go             # [S16] spawn, heartbeat, warn, nudge, kill
+│   │   ├── schedule.go            # [S17] tick, counters, overlap
+│   │   ├── limits.go              # [S18] retries, returns, flap, block reasons
+│   │   └── recover.go             # [S18] startup sweep; crash resume through group state's Load
+│   │
+│   ├── quality/                   # Quality; sessions come in from the engine
+│   │   ├── check.go               # [S19] done_when, scope, secrets, coverage
+│   │   ├── review.go              # [S20] lenses, profiles, re-review delta
+│   │   ├── qa.go                  # [S20] tester: acceptance items, own worktree
+│   │   └── evidence.go            # [S20] verify a finding against the diff
+│   │
+│   ├── host/                      # Interface: this machine
+│   │   ├── probe.go               # [S02][S05] probe claude, codex, endpoints, keys, sandbox
+│   │   ├── install.go             # [S02] binary, AGENTS.md block, CLAUDE.md, manifest
+│   │   ├── claude.go              # [S02] .claude/settings.json: allow rule, SessionStart hook
+│   │   ├── codex.go               # [S02] Codex detection
+│   │   ├── fresh.go               # [S03] background check, fetch, verify, versioned swap, cleanup
+│   │   ├── schedule.go            # [S17] install --schedule: launchd, cron, Task Scheduler
+│   │   └── doctor.go              # [S03][S04] drift, hook self-test, sandbox, PATH
+│   │
+│   ├── repo/                      # Delivery
+│   │   ├── backlog.go             # [S25] grammar, parse, edit
+│   │   ├── lint.go                # [S25] backlog check (doctor backlog), sizing, EARS shape
+│   │   ├── graph.go               # [S25] dependency DAG from touches, waves, longest chain
+│   │   ├── repomap.go             # [S25] symbol graph, rank, fit to budget
+│   │   ├── ship.go                # [S26] PR body, push, group PR, land per ship.mode
+│   │   ├── git.go                 # [S26] git wrapper
+│   │   ├── pr.go                  # [S26] gh wrapper
+│   │   ├── release.go             # [S26] version, tag, binaries, checksums, signature
+│   │   └── gate.go                # [S27] gate, docs drift, comment lint, S-ID map
+│   │
+│   ├── provider/                  # Model I/O
+│   │   ├── provider.go            # [S05] interface, chain, usage
+│   │   ├── billing.go             # [S05] cost class per link, fail closed
+│   │   ├── loop.go                # [S08] harness tool loop + schema revalidation
+│   │   ├── claude.go              # [S05] claude -p, stream-json
+│   │   ├── codex.go               # [S05] stub refusal until a later minor
+│   │   ├── anthropic.go           # [S05] Messages API, cache_control
+│   │   └── openai.go              # [S05] OpenAI API + http: endpoints (local or server)
+│   │
+│   ├── tools/                     # [S08] Model I/O
+│   │   ├── tools.go               # registry, bind tools to a session
+│   │   ├── mcp.go                 # stdio MCP server
+│   │   ├── files.go               # read, search, edit, write, repeat-read dedupe
+│   │   ├── run.go                 # run
+│   │   ├── git.go                 # diff, git_read
+│   │   ├── submit.go              # submit_finding, lint_backlog, the final result call
+│   │   └── extra.go               # skill, web
+│   │
+│   ├── ops/                       # Economy and ops
+│   │   ├── budget.go              # [S21] group wall, tokens, mode
+│   │   ├── ledger.go              # [S23] sessions, events, redaction
+│   │   ├── bus.go                 # [S24] envelope, catalog, in-order delivery
+│   │   └── wake.go                # [S24] status --wait wakes
+│   │
+│   ├── agent/                     # Model I/O (S07) and Context (S09–S11)
+│   │   ├── agent.go               # [S07][S17] agent.json and job template structs, strict load, tighten merge
+│   │   ├── skills.go              # [S09] index, select, get, sections
+│   │   ├── rules.go               # [S10] orchestrator rules into the AGENTS.md block
+│   │   ├── render.go              # [S10] codes and facts to text, per output.profile
+│   │   ├── brief.go               # [S11][S21] slots, stable prefix, caps
+│   │   └── trim.go                # [S11] clip, signatures, diff trim, sanitize
+│   │
+│   ├── safety/                    # Safety
+│   │   ├── guard.go               # [S12] Check → allow | refuse, fail-closed, refusal limit
+│   │   ├── rows.go                # [S12] G, R, B, O rows + policy.json
+│   │   ├── paths.go               # [S12] containment, symlinks, secret files
+│   │   ├── shell.go               # [S12] tokenize, chains, git classifier
+│   │   ├── table.go               # [S27] guard table for the gate
+│   │   ├── proc.go                # [S13] run, timeout, output cap, heartbeat
+│   │   ├── proc_unix.go           # [S13] process groups
+│   │   ├── proc_windows.go        # [S13] Job Objects
+│   │   ├── sandbox.go             # [S13] interface, profile from agent.json
+│   │   ├── sandbox_darwin.go      # [S13] seatbelt
+│   │   ├── sandbox_linux.go       # [S13] bwrap
+│   │   └── sandbox_docker.go      # [S13] Docker, native Windows
+│   │
+│   ├── state/                     # [S29] the state manager: the only door to runtime state
+│   │   ├── manager.go             # [S29] Get, List, Tail, Watch, Append, Replace, Claim, Remove
+│   │   ├── groupstate.go          # [S29] group state: events, snapshots, replay; Open, Append, Snapshot, Load, Tail
+│   │   ├── schema.go              # [S29] kind registry and record envelope; generates state.schema.json
+│   │   ├── kinds.go               # [S29] one struct per kind, the event catalog included
+│   │   ├── validate.go            # [S29] types, enums, invariants, owner and rev checks
+│   │   └── migrate.go             # [S29] read older schema versions, move bad records aside
+│   │
+│   └── core/                      # plumbing, no domain logic
+│       ├── config.go              # [S04] config.json, groups, hard limits, audit log
+│       ├── detect.go              # [S04] repo profile + command classes
+│       ├── http.go                # [S06] client, SSE, retry, allowlist, redaction
+│       ├── cache.go               # [S22] content-addressed store, LRU
+│       ├── lock.go                # [S29] create-only and rename-aside file helpers; only `state` calls them
+│       ├── version.go             # [S03] embedded version, semver
+│       ├── fs.go                  # atomic writes, glob
+│       └── testhome.go            # isolated HOME for tests
+│
+├── embed/                         # compiled into the binary; everything a model reads
+│   ├── agents/                    # [S07]
+│   │   └── {builder,reviewer,planner,tester,architect,researcher,scout}/{agent.json, prompt.md}
+│   ├── jobs/                      # [S17] job templates (none shipped by default)
+│   ├── rules/                     # [S10] orchestrator.md; [S25] backlog.md
+│   ├── output/                    # [S10] {adhd,standard}/*.tmpl and *.golden, adhd.md for the AGENTS.md block
+│   ├── lenses/                    # [S20] <lens>.json rule catalog + <lens>.md body, 10 lenses
+│   ├── langs/                     # [S25] per-language definition patterns for the repo map
+│   ├── skills/                    # [S09]
+│   │   ├── index.json             # generated at build: name, globs, markers, sections, sha256
+│   │   ├── {komodo,plan,run,respond,release}/SKILL.md
+│   │   └── standards-<name>/SKILL.md            # all 34
+│   ├── defaults.json              # [S04] built-in defaults + hard limits
+│   ├── state.schema.json          # [S29] generated at build from the kind registry and event enum
+│   ├── models.json                # [S05] default models per weight and link, Claude windows
+│   └── policy.json                # [S04][S12] guard rows with scopes, steering phrases
+│
+├── templates/                     # [S02]
+│   ├── project/{AGENTS.md, CHANGELOG.md, PULL_REQUEST_TEMPLATE.md, docs/{prd,hld,lld}.md}.tmpl
+│   ├── claude/{CLAUDE.md, settings.json}.tmpl
+│   └── jobs/nightly-review.json   # [S17] example
+│
+├── docs/
+│   ├── prd.md  hld.md  lld.md     # lld has one section per S-ID
+│   ├── decisions/{README.md, 0001-standalone-harness.md}
+│   └── backlog/epic-1/{EPIC.md, tg-1.N/{TG.md, tsk-*.md}}
+│
+└── testdata/fixture-repo/         # end-to-end run target
+```
+
+**What each one does**
+- **Root files:** `AGENTS.md` is the source of truth for repo rules, and `CLAUDE.md` only imports it. `go.mod` lists no modules, and `komodo.go` embeds the `embed/` and `templates/` folders into the binary. `install.sh` and `install.ps1` are the installers for macOS, Linux and WSL, and for native Windows.
+- **`cmd/komodo/` and `internal/`:** All Go code, one folder per package from the table above.
+- **`embed/`:** Everything a model reads: agent definitions, job templates, rules, output templates, review lenses, per-language repo-map patterns, skills, and the JSON files for defaults, state schema, models and policy (§6.3).
+- **`templates/`:** Files that `install` copies into a user's repo: the project docs and PR template, the `CLAUDE.md` and `.claude/settings.json` pair, and one example job.
+- **`docs/`:** The PRD, HLD and LLD (the LLD has one section per S-ID), the decision records, and `docs/backlog/epic-1/`, the task groups that build each component.
+- **`testdata/fixture-repo/`:** The small repo that end-to-end runs build against.
 Rules: a file splits at about 600 lines; a new package needs a new layer; `_test.go` files sit next to their sources. About 90 files in 12 packages.
 
 #### 6.2 Import order
@@ -1929,7 +2105,7 @@ Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with n
 - Hash guard: `komodo config` writes the file and its SHA-256 to `state/config.sha`. A hand edit makes every verb refuse with `config_tampered` and the fix line `komodo config --accept`, which rewrites the hash and logs one audit row.
 - Snapshot per run: the effective config hash goes into `runs/<group>/state.json`; the hash is also the cache key prefix, so a config change never serves a stale brief or check.
 - Agents cannot touch it: `~/.komodo/**` is protected by G3 and every write needs a terminal.
-- Repo id (names worktrees, leases and caches, never config): the normalized origin URL such as `github.com/rdevitto86/komodo-agentic-factory-coding`; with no remote, the git common dir path. Every worktree of a repo shares one id.
+- Repo id (names worktrees, leases and caches, never config): the normalized origin URL such as `github.com/rdevitto86/komodo-agentic-harness-coding`; with no remote, the git common dir path. Every worktree of a repo shares one id.
 
 #### 8.2 Flat keys (33)
 
@@ -5246,7 +5422,7 @@ macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/ins
 
 | Concern | Design |
 |---|---|
-| Source | `github.com/rdevitto86/komodo-agentic-factory-coding/releases/latest/download/latest.json`; a release download is not a REST call, so the 60-per-hour limit does not apply |
+| Source | `github.com/rdevitto86/komodo-agentic-harness-coding/releases/latest/download/latest.json`; a release download is not a REST call, so the 60-per-hour limit does not apply |
 | Manifest | Version, URL and SHA-256 per OS and arch, ed25519 signature; current and next public keys embedded |
 | One updater | `state/fresh.lock`, created exclusively, stale after 10 min |
 | Direction | Background fresh never downgrades; `fresh --to <v>` and `install` may; a dev build (`+dev.<commit>`) is replaced only by a strictly newer release |
@@ -5586,6 +5762,66 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 - **Phase 9, the cutover column and the repo table:** Applies the "At cutover" rewrites to `~/.claude/AGENTS.md` and replaces the repo's PR template line that called `komodo pr create` with the engine's own PR body template.
 - **`doctor install` confirms 0 shadowing binaries and 0 Komodo hooks:** The final check: no other `komodo` binary earlier on PATH, and no Komodo hook left in `~/.claude`. It also flags any `~/.claude` file that names a verb `help --json` no longer lists.
 
+**Where the stale entries sit.** `~/.local/bin/komodo` is a symlink to `~/.komodo/bin/komodo`, so every global hook reaches whichever binary sits at that path. The installed binary stays there, unused, until `komodo gate --install` replaces it in phase 7. The tables below name each entry to edit, by line.
+
+**`~/.claude/settings.json`**
+
+| Line | Stale entry | Before phase 2 |
+|---|---|---|
+| 26 | `Bash(python -m komodo:*)` | Removed; nothing runs Python |
+| 114 | `komodo guard` (`PreToolUse`) | Removed; nothing replaces it |
+| 124 | `komodo hook status --host claude` | Removed; from phase 8 the repo `SessionStart` hook runs `komodo status` |
+| 128 | `komodo hook prune --host claude` | Removed; the engine's startup sweep prunes |
+| `skillOverrides` | 36 entries: `backlog`, `komodo`, `review` and 33 `standards-*` | Removed |
+
+**`~/.claude/skills/`** (the 5 skills to delete; `synced/` stays because it holds Anthropic's skills)
+
+| Skill | Stale verbs it names | Replaced in phase 8 by |
+|---|---|---|
+| `komodo` | The old verb list: `init`, `migrate`, `next`, `brief`, `ingest`, `close` and more | Embedded; `skill get komodo` |
+| `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | Embedded; `skill get plan` |
+| `run` | `komodo run <group>` in the background, `komodo resume <group>` | Embedded; `skill get run` |
+| `respond` | `komodo threads`, `komodo gate` | Embedded; `skill get respond` |
+| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | None; `run --stage` in the `run` skill |
+
+**`~/.claude/AGENTS.md`** (the person's global instructions file)
+
+| Stale line | Before phase 2 | At cutover (phase 9) |
+|---|---|---|
+| 10: `komodo add` a task | A task in `docs/backlog/` | `komodo add backlog --task` |
+| 18: a `komodo/policy.json` reference | Dropped | A critical ref in `embed/policy.json` |
+| 21: open a PR with `komodo pr create` | `gh pr create` | The engine opens it (S26) |
+| 22: after a merge, run `komodo sync` | Dropped | Restored |
+| 24: `/run <group>` in session, `komodo run <group>` headless | Removed | `komodo run <group>` |
+
+**The installed binary's verbs and their replacements.** A verb is a `komodo` subcommand. The installed binary has verbs this binary does not, so any hook, skill or doc that names one fails. `doctor install` flags any `~/.claude` file that names a verb missing from `help --json`.
+
+| Old verb | Now | What changed |
+|---|---|---|
+| `init`, `setup` | `install` | One verb sets up a repo and the machine |
+| `update` | `fresh` | The self-update has its own verb |
+| `lint` | `doctor backlog` | Backlog lint became a doctor check |
+| `detect` | `config --all` | Detected commands show with the config |
+| `check`, `ship` | `run --stage` | One flag runs a single stage |
+| `list`, `backlog`, `metrics` | `status` flags | Read-only views of the same state |
+| `pr` | The engine (S26) | The engine opens the epic PR |
+| `threads` | `gh api` | Used from the `respond` skill |
+| `git-hook` | `gate --install-hooks` | The gate installs the git hooks |
+| `worktree` | Engine-internal | No verb; the engine cuts worktrees |
+| `migrate`, `ingest`, `comments`, `diff`, `tag`, `rephase`, `recall`, `eval` | Deleted | Nothing replaces them |
+
+**Run flags and `orch` verbs.** The run flags shrank from 6 to 1.
+
+| Old | Now | What changed |
+|---|---|---|
+| `--max-parallel` | `limits.pool_max` | A config key, never a per-run flag |
+| `--budget-tokens` | `limits.group_tokens` | A config key, never a per-run flag |
+| `--mode`, `--set` | Dropped | A setting changes only through `komodo config` |
+| `--detach`, `--until` | `--detach` is how `run` always works; `--until` dropped | No flag needed |
+| `orch start`, `orch wait` | `run`, `status --wait` | The orchestrator tier lost its prefix |
+| `orch plan`, `orch skill`, `orch scope` | `plan`, `skill`, `scope` | The prefix was dropped |
+| `orch agent` | A later minor version | Hosts have their own subagents |
+
 ---
 
 ## Appendix Q. Traceability to the plan
@@ -5624,6 +5860,43 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 | S27 | Gate and self-checks | §35 |
 | S29 | State manager, group state | §13, §40, §40.9 |
 
+#### Component dependencies
+
+**In plain terms.** A dependency means one component calls code in another, so the second must exist first. This table lists, for every component, the ones it needs. The planning rule in the delivery roadmap (Appendix S, HLD 21) uses it: components built in one wave must not depend on each other.
+
+| Plan ID | Component | Depends on |
+|---|---|---|
+| S01 | CLI processor | every component (thin calls) |
+| S02 | Installer | S04, S03, S29 |
+| S03 | Binary lifecycle | S06, S29 |
+| S04 | Configuration | S29, from the `config` verb only |
+| S05 | Provider adapters | S06, S07, S08, S29 |
+| S06 | HTTP stack | — |
+| S07 | Agent registry | S04 |
+| S08 | Tool runtime | S12, S13, S22, S29 |
+| S09 | Skill loader | S22 |
+| S10 | Rules and output contract | — |
+| S11 | Brief builder | S07, S09, S10, S22 |
+| S12 | Guardrails | S04 |
+| S13 | Sandbox and process control | — |
+| S14 | Orchestration engine | S05, S11, S15, S16, S29 |
+| S15 | Workspace and leases | S13, S29 |
+| S16 | Session supervisor | S05, S13, S23, S29 |
+| S17 | Scheduler and job templates | S14, S18, S29 |
+| S18 | Error recovery | S16, S23, S29 |
+| S19 | Check | S13, S22 |
+| S20 | Review and evidence | S11, S16, S22 |
+| S21 | Token and resource management | S23 |
+| S22 | Cache store | — |
+| S23 | Runtime observability | S29 |
+| S24 | Event bus | S13, S29 |
+| S25 | Backlog and planning | S07, S10 |
+| S26 | Ship | S10, S12 |
+| S27 | Gate and self-checks | every component |
+| S29 | State manager, group state | — |
+
+**Every component that writes state depends on S29:** the 12 rows above that name it, one per writer in the Kinds table (§40.3). S04's `core` code never imports `state`; its audit rows are written by the `config` verb in `cli`.
+
 ---
 
 ## Appendix R. References
@@ -5651,6 +5924,38 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 | Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% changed-line bar |
 | Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | EARS item grammar |
 | Aider repo map, https://github.com/pdavis68/RepoMapper | Repo map ranking |
+
+#### Archive sources at commit `fdf4f61f`
+
+**In plain terms.** Commit `fdf4f61f` holds an earlier, working tree of Komodo's code. It is reference material, not a rulebook: a builder reads it so working code is reused instead of reinvented. This table says, for each archived piece, where its code lives in this design and what happens to it.
+
+| Archive source (`backups/`) | New home | Action |
+|---|---|---|
+| `cmd/komodo/*.go` (about 20 files) | `cmd/komodo/main.go` and `cli/` (S01) | **Rewrite** as a thin verb table |
+| `conductor`, `lease`, `harness/worktree*` | `engine/` (S14, S15) | **Port**; keep the pure `Next()` |
+| `check`, `review` | `quality/` (S19, S20) | **Port**; lenses become data |
+| `ledger` | `ops/ledger.go` (S23) | **Port**; add events and redaction |
+| `harness/brief*`, `clip`, `diff`, `toolkit` | `agent/` (S11) | **Rewrite** with the stable prefix |
+| standards, rules | `agent/` and `embed/` (S09, S10) | **Rewrite**: the loader; rules stay embedded Markdown |
+| `mount/{claude,codex,ollama}` | `provider/` and `tools/` (S05, S08) | **Rewrite** behind one interface |
+| `guard` suites and table, `proc` | `safety/` (S12, S13) | **Port** the table; fail closed; add Job Objects |
+| `install`, `profile`, `preflight`, `doctor` | `host/` (S02, S03, S04) | **Rewrite**, thin |
+| `backlog`, `gate`, `git`, `pr`, `release`, `changelog`, `comments` | `repo/` (S25, S26, S27) | **Port** into one package |
+| `detect`, `fsx`, `glob`, `testhome` | `core/` (S04) | **Port** |
+| 7 roles | `embed/agents/*` (S07) | **Port** to `agent.json` and `prompt.md` |
+| `eval`, `recall`, `plugin`, `facet`, `ingest`, `run`, `harness`, `mount`, `hooks`, `_idea`, `migrate`, `machine` | none | **Delete** once the surviving code has moved |
+| `komodo/rules/accessibility.md` | `embed/output/adhd.md` and the `adhd` templates under `embed/output/` (S10) | **Port**; the same text also goes into the `AGENTS.md` block |
+| `internal/harness/report.go` | the 4-heading run report templates under `embed/output/` (S10) | **Port** |
+
+**What each one does**
+- **Port:** Copy the working code and adapt it to this design's layout and rules.
+- **Rewrite:** Write new code behind the new interface; the archive is read for behaviour only.
+- **Delete:** Drop the code once anything worth keeping has moved. Its history stays in git.
+- **The last two rows:** They are the sources of the output profile. The `adhd` templates follow the accessibility rules text, and the run report keeps the 4-heading shape of `report.go`.
+
+**New, with no archive source:** the HTTP stack (S06), the scheduler (S17), `recover.go` (S18), the cache store (S22) and `fresh` (S03). These are written from the LLD alone.
+
+**Restart from zero:** the CHANGELOG, the PRD, HLD and LLD, and `docs/backlog/epic-*`. Their history stays in git; nothing is ported.
 
 ---
 
@@ -5691,13 +5996,20 @@ Out of scope, deferred to a later minor version:
 - **`codex-cli` link:** Would run OpenAI's Codex command-line tool as a worker. Install detects it but refuses to use it with `not yet`.
 - **`openai-api` chain link:** Would call OpenAI's web API as a worker. Same `not yet` refusal.
 - **`.codex/` install:** Would write Codex's repo files at install time. Reports `not yet`.
-- **`komodo chat`:** Komodo's own chat front end, an orchestrator built into the binary, so any model could drive the pipeline.
+- **`komodo chat`:** Komodo's own chat front end, an orchestrator built into the binary. It would be an `orchestrator` agent whose only tools are the shared verbs, so any link in the chain, Ollama included, could drive the pipeline under the in-process guard. It would reuse the tool-runtime loop and its context compaction. Component S28 is reserved for it, which is why the numbering jumps from S27 to S29.
 - **`orch agent`:** A one-off delegation to a model outside the pipeline, such as a free scout on a local model. Deferred because hosts have their own subagents.
 - **Repo-defined hooks and agents:** Letting a repository add its own hooks or agent definitions. The harness uses only the embedded agents and three built-in hooks.
 - **Keychain-backed secrets:** Storing API keys in the OS keychain. The harness reads keys only from environment-variable references.
 - **OpenTelemetry export:** Sending metrics to an external monitoring system. The harness writes JSONL files plus a schema instead.
 - **Docker on macOS and Linux:** Using Docker as the sandbox there. The harness uses Docker only on native Windows.
 - **Service-backed test runs:** Running tests that need a database, Docker or a public host. Such tests warn instead of blocking.
+
+**Possible in a later minor version**
+- **Docker on macOS and Linux:** The sandbox choice above; native Windows already uses Docker.
+- **`--global` install:** An `install` mode that would set up the orchestrator hooks once for every repo on the machine, instead of per repo.
+- **OS-scheduled updates:** A launchd, cron or Task Scheduler entry that would run the self-update on a timer, instead of checking at session start.
+- **Keychain secrets:** The OS keychain holding API keys, as described above.
+- **OpenTelemetry export:** Metrics sent to an external monitoring system, as described above.
 
 #### HLD 4.4 Requirements overview
 
@@ -6046,18 +6358,18 @@ flowchart LR
 
 **In plain terms.** A precedent is an existing, published system that already uses one of Komodo's core ideas. The table shows each idea was not invented here, so a reviewer can check how it behaved elsewhere. The owner uses it to judge risk; nothing in the running system depends on it.
 
-| Idea | Precedent |
-|---|---|
-| Pure decider, recorded side effects, replay | Temporal's workflow and activity split |
-| Fencing tokens on leases, enforced by the resource | Distributed-lease practice |
-| Event stream as the agent's spine | OpenHands |
-| Minimal tool surface, no shell; sandbox with network off | SWE-agent's agent-computer interface; Codex CLI |
-| Seatbelt on macOS, bwrap on Linux | Codex CLI |
-| Full-jitter retries | AWS Architecture Blog |
-| Ranked repo map for planning | Aider |
-| EARS acceptance items | Kiro specs |
-| Coverage bands 60/75/90 | Google Testing Blog |
-| Headless sessions, resume, structured output | Claude Code 2.1.295 |
+| Idea | Precedent | Used in |
+|---|---|---|
+| Pure decider, recorded side effects, replay | Temporal's workflow and activity split | Orchestration engine; state manager (group state) |
+| Fencing tokens on leases, enforced by the resource | Distributed-lease practice | Workspace and leases |
+| Event stream as the agent's spine | OpenHands | The event model every component shares |
+| Minimal tool surface, no shell; sandbox with network off | SWE-agent's agent-computer interface; Codex CLI | Tool runtime; sandbox and process control |
+| Seatbelt on macOS, bwrap on Linux | Codex CLI | Sandbox and process control |
+| Full-jitter retries | AWS Architecture Blog | HTTP stack |
+| Ranked repo map for planning | Aider | Backlog and planning |
+| EARS acceptance items | Kiro specs | Backlog and planning |
+| Coverage bands 60/75/90 | Google Testing Blog | Configuration; Check |
+| Headless sessions, resume, structured output | Claude Code 2.1.295 | Provider adapters; session supervisor; error recovery |
 **What each one does**
 - **Pure decider, recorded side effects, replay:** Temporal, a workflow engine, separates pure decision code from side-effect activities. Komodo copies this: `Next()` never does I/O, and every action is recorded and replayable.
 - **Fencing tokens on leases, enforced by the resource:** Distributed-systems practice: a lock holder carries a rising number, and the resource rejects an older one. Komodo's fence is checked by git itself.
@@ -6497,27 +6809,34 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 
 **What each one does**
 - **Phase 1, Design docs:** Writes the product requirements (`prd`), this HLD, the LLD and the first architecture decision record (ADR 0001). It also writes `epic-1`, the backlog that lists every subsystem as a task group. Done when the owner approves the docs; the backlog is linted in phase 2.
-- **Phase 2, Foundations:** Builds the CLI skeleton, configuration, HTTP stack, sandbox, cache, version check, backlog lint and the gate core. A spike proves `claude -p` can call one tool through the MCP tool server. Done when core tests pass on 3 operating systems, `doctor backlog` passes on epic-1 and the spike makes one tool call.
+- **Phase 2, Foundations:** Builds the CLI skeleton, the state manager, configuration, HTTP stack, sandbox, cache, version check, backlog lint and the gate core. A spike proves `claude -p` can call one tool through the MCP tool server. Done when core tests pass on 3 operating systems, `doctor backlog` passes on epic-1 and the spike makes one tool call under the provider launch flags (the options the Claude CLI adapter starts `claude -p` with).
 - **Phase 3, Model surface:** Builds the agent registry (the seven agent definitions), skills, rules and output formatting, and the guardrails. Done when the guard table renders from `policy.json` and every agent file decodes strictly.
 - **Phase 4, Model I/O:** Builds the provider adapters (`claude -p`, local models, the Anthropic API). Also the tool runtime workers call, and the brief builder that assembles prompts. Done when a fixture task finishes through both `claude -p` and a local model.
 - **Phase 5, Runtime:** Builds the workspace (worktrees, leases, fences), the session supervisor, observability and the event bus. Done when timeout, idle and kill tests pass with 0 orphan processes.
 - **Phase 6, Engine:** Builds the orchestration engine (`Next()` and the stage machine), error recovery, Check, budgets and Ship. Done when the fixture group lands on its epic branch.
 - **Phase 7, Quality and scale:** Builds review and the tester, the scheduler and the planner. Done when review catches a deliberately seeded bug and a scheduled job ticks once per window.
-- **Phase 8, Edges:** Builds the installer, `fresh` (self-update), `release` and the docs-drift check. Done when a fresh repo on macOS and Windows passes a smoke test.
+- **Phase 8, Edges:** Builds the installer, `fresh` (self-update), `release` and the docs-drift check. Done when a fresh repo on macOS and Windows passes a smoke test and `komodo install` in this repo turns on the orchestrator hooks (the `AGENTS.md` block and the `SessionStart` hook).
 - **Phase 9, User docs and cutover:** Writes the README, CONTRIBUTING, AGENTS and CLAUDE files, the CHANGELOG and templates, and clears Komodo entries from the owner's global Claude settings. Done when the docs-drift gate passes and `doctor install` finds 0 stale references.
+
+**Planning rule.** Each component is one task group in `epic-1`, or two if it exceeds about 8 tasks. Groups in one wave have no dependencies on each other, so they can run in parallel.
 
 | Phase | Wave | Scope | Exit proof |
 |---|---|---|---|
 | 1 | Design docs | `prd`, `hld`, `lld`, ADR 0001, epic-1 | Owner approves the docs; epic-1 lints in phase 2 |
-| 2 | Foundations | CLI skeleton, configuration, HTTP stack, sandbox, cache, version, backlog lint, gate core; a `claude -p` plus MCP spike | Core tests pass on 3 OSes; `doctor backlog` passes on epic-1; the spike makes one MCP tool call |
+| 2 | Foundations | CLI skeleton, state manager, configuration, HTTP stack, sandbox, cache, version, backlog lint, gate core; a `claude -p` plus MCP spike | Core tests pass on 3 OSes; `doctor backlog` passes on epic-1; the spike makes one MCP tool call under the provider launch flags |
 | 3 | Model surface | Agent registry, skills, rules and output, guardrails | Guard table and strict decode pass |
 | 4 | Model I/O | Provider adapters (`claude -p`, local, Anthropic API), tool runtime, brief builder | A fixture task finishes through `claude -p` and a local model |
 | 5 | Runtime | Workspace, supervisor, observability, event bus | Timeout, idle and kill proofs pass with 0 orphans |
 | 6 | Engine | Orchestration engine, error recovery, Check, budgets, ship | The fixture group lands on its epic branch |
 | 7 | Quality and scale | Review and tester, scheduler, planner | Review catches the seeded bug; a job ticks once per window |
-| 8 | Edges | Installer, fresh, release, docs drift | Fresh-repo smoke test on macOS and Windows |
+| 8 | Edges | Installer, fresh, release, docs drift | Fresh-repo smoke test on macOS and Windows; `komodo install` in this repo turns on the orchestrator hooks |
 | 9 | User docs and cutover | README, CONTRIBUTING, AGENTS/CLAUDE, CHANGELOG, templates, cutover | Docs-drift gate passes; `doctor install` finds 0 stale references |
 
 Phases 2 to 6 are built by hand in plain Claude Code sessions. From phase 7, `komodo gate --install` places a dev build and the harness runs its own groups. Before phase 2, the owner removes Komodo hooks, skill overrides and skills from `~/.claude`.
+
+**Build process**
+- **Builders and testers:** From phase 7, a builder takes each task in one fresh session, and a tester takes each exit proof.
+- **Architect:** An architect session runs only for the Vet lines (design questions the plan leaves open) still open when a group starts.
+- **Phases 2 to 6:** No Komodo hooks run yet, so `go vet`, `go test` and the gate core are the check.
 
 ---

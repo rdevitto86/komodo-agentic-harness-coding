@@ -593,6 +593,8 @@ A risk is an unproved assumption; debt is a known shortcut to repay later. A bui
 - Phases 5-6, runtime and engine: workspace, supervisor, events, engine, Check, ship.
 - Phase 7, quality and scale: review, tester, scheduler, planner; the harness builds itself.
 - Phases 8-9, edges and cutover: installer, fresh, release, docs.
+- Build process: from phase 7 a builder takes each task in one fresh session and a tester takes each exit proof; an architect joins only for design questions still open when a group starts. Phases 2-6 are checked by `go vet`, `go test` and the gate core.
+- Later minor version: the OpenAI path and `komodo chat` (Komodo's own chat front end, where an `orchestrator` agent drives the pipeline). Possible after that: Docker on macOS and Linux, `--global` install, OS-scheduled updates, keychain secrets and OpenTelemetry export.
 
 **Lookup:** [LLD Appendix S](lld.md#appendix-s-hld-detail-tables-goals-building-blocks-decisions-quality-risks-roadmap) holds the risk, debt and roadmap tables.
 
