@@ -1310,7 +1310,7 @@ flowchart LR
 
 **What matters**
 - One schema: every record kind and all 32 event types are Go structs; the build generates `embed/state.schema.json`, and `help --json` serves it as `state`.
-- Every record carries `v`, `kind`, `key`, `rev`, `ts` and `writer`, all set by the manager; a caller supplies only the body.
+- Every record carries `v`, `kind`, `key`, `rev`, `ts` and `writer`, all set by the manager; a caller supplies only the body. Event lines carry the event envelope instead (§9.1).
 - Each kind lists its writers; the manager refuses any other. A group's records accept writes only from that group's `Drive`.
 - Six things stay outside under their own owners' rules: `config.json`, the cache, git refs and worktrees, job templates, the binaries and session temp.
 - The gate fails any package other than `state` that writes a runtime state path.
@@ -2678,7 +2678,7 @@ sequenceDiagram
 **Reading the diagram.**
 
 1. A caller, here a group's `Drive`, asks for a `Replace` with the record's kind, key, body and the `rev` it last read.
-2. The manager fills in the envelope (`v`, `kind`, `key`, `rev`, `ts`, `writer`) and any schema defaults.
+2. The manager fills in the envelope (`v`, `kind`, `key`, `rev`, `ts`, `writer`; for an event, `sequence`, `timestamp` and `checksum`) and any schema defaults.
 3. It checks every field's type, every required field and every enum value, such as the stage or the block reason.
 4. It checks the kind's invariants, that the caller owns the key, and that the caller's `rev` is still current.
 5. If any check fails, the caller gets `state_invalid` with the field path, and nothing on disk changes.

@@ -721,7 +721,7 @@ Eighteen newcomer terms; the LLD links here.
 | State manager | The in-process service that is the only code reading or writing runtime state. It fills in each record's header and refuses a write that breaks the state schema. |
 | State schema | `embed/state.schema.json`: one schema for every state record and every event type, generated from Go structs at build. |
 | Kind | One type of state record in the schema, such as `group`, `lease`, `timer` or `event`; each kind lists its writers, and the manager refuses any other. |
-| Record header | The fields every record carries, set by the state manager: `v`, `kind`, `key`, `rev`, `ts`, `writer`. |
+| Record header | The fields every record carries, set by the state manager: `v`, `kind`, `key`, `rev`, `ts`, `writer`. Event lines carry their own envelope instead. |
 | Append, Replace, Claim, Remove | The state manager's 4 ways to write: add a event line, swap a snapshot by rename, create a file only if it does not exist, or delete a record after checking its owner and revision. |
 | Quarantine | A record that fails its check on read is moved aside as `.bad-*`, and its group blocks with `state_invalid`. A torn last event line is dropped instead. |
 | Outbox | The group state entries `action.start` and `action.done` that bracket every side effect so a crash can replay it safely. |
