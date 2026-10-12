@@ -19,7 +19,7 @@
 
 **Owners and controls**
 - **Owners:** domain architect (CEO) decides every gap and signs off per component; technical lead authors.
-- **Controls:** 0.6, draft, awaiting sign-off; source `PLAN.md` at commit `ba4ff823` on `feat/1.0.0-beta.6`; patches only; no phase 2 code before sign-off.
+- **Controls:** 0.7, draft, awaiting sign-off; source of truth: the HLD and LLD together; patches only; no phase 2 code before sign-off.
 
 **Revisions**
 
@@ -31,8 +31,9 @@
 | 0.4 | 2026-10-11 | State manager added as a core pillar: one state schema, the only door to runtime state |
 | 0.5 | 2026-10-11 | Group state: a group's events, snapshots and replay become one unit inside the state manager |
 | 0.6 | 2026-10-11 | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
+| 0.7 | 2026-10-12 | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
 
-**Related:** [docs/lld.md](lld.md), [PLAN.md](../PLAN.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
+**Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
 ## 1. Introduction and goals
 
@@ -539,11 +540,11 @@ The agent's weight picks the model on Claude links.
 
 ## 9. Architecture decisions
 
-Index of the choices that shaped the design; DR-n numbers exist only here, `PLAN.md` records them without IDs. The owner's three decisions of 2026-10-09 closed gaps G-01, G-05 and G-15 (a gap: an unverified fact or unconfirmed decision). Eleven rejected an alternative, kept with its reason in `PLAN.md`; DR-10 and DR-11 are the owner's own. Twelve design-pass defaults and four state-manager defaults await the owner's confirmation.
+Index of the choices that shaped the design; DR-n numbers exist only here. The owner's three decisions of 2026-10-09 closed gaps G-01, G-05 and G-15 (a gap: an unverified fact or unconfirmed decision). Eleven rejected an alternative, kept with its reason in the LLD; DR-10 and DR-11 are the owner's own. Twelve design-pass defaults and four state-manager defaults await the owner's confirmation.
 
-| ID | Decision | PLAN.md |
+| ID | Decision | Component |
 |---|---|---|
-| G-01 | Local signing key plus one backup; `next` key at first release | S03 Vet |
+| G-01 | Local signing key plus one backup; `next` key at first release | S03 |
 | G-05 | Sole model registry `providers.json`; 404 fails over through the chain | S05 |
 | G-15 | Orchestrator answers `scope approve` after two engine denials | S19 |
 | DR-1 | Every loop has a counter | S04, S18 |
@@ -557,8 +558,8 @@ Index of the choices that shaped the design; DR-n numbers exist only here, `PLAN
 | DR-9 | No rule text in worker prompts | S10 |
 | DR-10 | One state schema; the state manager is the only door to state | §1, S29 |
 | DR-11 | Group state: events, snapshots and replay as one unit | §1, S29 |
-| Defaults | 12 design-pass defaults: `fable` opt-in, Haiku 5.5 light, coverage 80, 10 lenses, EARS items, two-pass planner, 6 more | Open items |
-| State defaults | In-process, no daemon; 6 exclusions; quarantine, never repair; snapshot fields | S29 Vet |
+| Defaults | 12 design-pass defaults: `fable` opt-in, Haiku 5.5 light, coverage 80, 10 lenses, EARS items, two-pass planner, 6 more | LLD Appendix S |
+| State defaults | In-process, no daemon; 6 exclusions; quarantine, never repair; snapshot fields | S29 |
 
 ## 10. Quality requirements
 
@@ -574,7 +575,7 @@ A quality requirement is a scenario with a number a test can prove or fail. With
 
 ## 11. Risks, debt and roadmap
 
-A risk is an unproved assumption; debt is a known shortcut to repay later. A builder closes each risk with a spike, a small experiment answering one question; per-risk owners are `[UNKNOWN: not stated in PLAN.md]`.
+A risk is an unproved assumption; debt is a known shortcut to repay later. A builder closes each risk with a spike, a small experiment answering one question; per-risk owners are `[UNKNOWN: not yet designed]`.
 
 **Top risks**
 - The probe cannot capture `system/init` without a model turn, so billing check 3 costs one. G-02, phase 4.
@@ -634,7 +635,7 @@ Eighteen newcomer terms; the LLD links here.
 #### Appendix A. Traceability
 
 
-| Component | Plan ID | Package | Phase |
+| Component | Component ID | Package | Phase |
 |---|---|---|---|
 | CLI processor | S01 | `cli` | 2 |
 | Installer | S02 | `host` | 8 |
@@ -742,7 +743,7 @@ Eighteen newcomer terms; the LLD links here.
 | Envelope | The JSON reply of every verb: `{v, ok, verdict, report, data, error}`. |
 | Guard | The in-process, fail-closed check every tool call passes before it runs. |
 | Sandbox | The OS-level confinement every `run` command executes in: seatbelt, bwrap or Docker. |
-| Gap | A fact the plan has not verified or a decision not yet confirmed, tracked as `G-NN` in the gap register. |
+| Gap | A fact the design has not verified or a decision not yet confirmed, tracked as `G-NN` in the gap register. |
 | arc42 | The 12-section architecture documentation template this document's section set follows. |
 
 ---
@@ -757,7 +758,7 @@ Eighteen newcomer terms; the LLD links here.
 | Role | Who | Responsibility |
 |---|---|---|
 | Document owner | Komodo domain architect (CEO) | Approves the architecture; decides every open gap |
-| Author | Technical lead | Keeps the document true to the plan and the code |
+| Author | Technical lead | Keeps the document true to the design and the code |
 | Reviewers | Domain architect, per component | Signs off component by component before phase 1 ends |
 
 #### 3.2 Current controls
@@ -766,11 +767,11 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.6, draft |
+| Version | 0.7, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
-| Source of truth | `PLAN.md` at commit `ba4ff823` on `feat/1.0.0-beta.6` |
-| Change control | Patches only, smallest span; a moved design decision adds a Review changes row in `PLAN.md` until phase 1 removes it |
+| Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
+| Change control | Patches only, smallest span; a moved design decision adds a revision history row |
 | Approval control | No phase 2 code starts until the owner has signed off every component |
 | Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (`docs/lld.md` §39); the gate fails a tag with no closing task |
 
@@ -784,17 +785,17 @@ Eighteen newcomer terms; the LLD links here.
 | 0.4 | 2026-10-11 | Technical lead | State manager added as a core pillar: one state schema, the only door to runtime state |
 | 0.5 | 2026-10-11 | Technical lead | Group state: a group's events, snapshots and replay become one unit inside the state manager |
 | 0.6 | 2026-10-11 | Technical lead | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
+| 0.7 | 2026-10-12 | Technical lead | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
 
 #### 3.4 Related documents
 
 | Document | Relationship |
 |---|---|
 | `docs/lld.md` | The Low-Level Design that details every component here |
-| `PLAN.md` | Interim source of truth; removed once phase 1 lands |
 | `docs/prd.md` | Product requirements, phase 1 deliverable |
 | `docs/decisions/0001-standalone-harness.md` | First architecture decision record, phase 1 deliverable |
 | Appendix B | External references |
 
-**Placeholder convention.** Text in the form `[PENDING G-NN]` marks a fact the plan has not yet verified or a decision the owner has not yet confirmed. No placeholder hides a proposal; each stands in for content that is decided but not yet proven.
+**Placeholder convention.** Text in the form `[PENDING G-NN]` marks a fact the design has not yet verified or a decision the owner has not yet confirmed. No placeholder hides a proposal; each stands in for content that is decided but not yet proven.
 
 ---
