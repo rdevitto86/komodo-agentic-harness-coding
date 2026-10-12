@@ -8,7 +8,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 **What it is:** one Go binary, standard library only, that turns a backlog of task groups into landed feature branches using stateless model sessions. The orchestrator (Claude Code, a person at a shell, later Codex or `komodo chat`) only calls verbs; the engine does the work.
 
-**The spine:** facts become typed events in a per-group journal; one pure function `Next(state, event)` decides the next state and actions; nothing else moves a group. [PLAN.md:84-123]
+**The spine:** facts become typed events in a per-group state; one pure function `Next(state, event)` decides the next state and actions; nothing else moves a group. [PLAN.md:84-123]
 
 **The flow per group:** `Intake -> Build -> Check -> Verify -> Ship` (plus `Paused`, `Blocked`). [PLAN.md:138-156]
 
@@ -27,26 +27,27 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 | Quality | S19 S20 | `quality` |
 | Economy and ops | S21 S22 S23 S24 | `ops`, `core` |
 | Delivery | S25 S26 S27 | `repo` |
+| Core pillar | S29 | `state` |
 
 **Recommended order:** §1, S14, S04, S01, S07, S15, S12, S06, S08 (the critical path), then S18, S16, S17, S19, S20, S21, then the rest. A walk-back on the critical path ripples into the other cards, so it goes first.
 
-**"Decided for you" tags:** 15 defaults the design pass chose without you. Each card lists its own under `Decided for you`. Walk back any.
+**"Decided for you" tags:** 20 defaults the design pass chose without you. Each card lists its own under `Decided for you`. Walk back any.
 
 ---
 
 ## §1 · Event model and gates (foundation, not a card)
 
-**High level:** every stage move, error and retry is an event appended to `runs/<group>/events.jsonl` before it is applied; `Next()` is pure and journaled actions (the outbox) make every side effect safe to run twice. This is Temporal's workflow-and-activity split applied to one process.
+**High level:** every stage move, error and retry is an event appended to `runs/<group>/events.jsonl` before it is applied; `Next()` is pure and recorded actions (the outbox) make every side effect safe to run twice. This is Temporal's workflow-and-activity split applied to one process.
 
 **Internals:**
 - **Envelope:** `v, seq, ts, run, group, session, epoch, stale, type, reason, data, crc`; 32 event types in 7 families.
-- **Epochs:** each stage entry raises `epoch`; a late event from a cancelled session is journaled `stale: true` and ignored. This is how Verify cancels one of two sessions safely.
+- **Epochs:** each stage entry raises `epoch`; a late event from a cancelled session is recorded `stale: true` and ignored. This is how Verify cancels one of two sessions safely.
 - **Outbox:** `action.start` before, `action.done` after; `id = sha256(seq, kind, args)`; on replay a done action is skipped, a started one reruns under its idempotency key (S18 table).
 - **Gates as events:** Intake, Build, Check, Verify, Ship each exit only when named events have been seen; the engine's checks decide, never a model's "done".
 - **Verify race:** first verified failure cancels the other session and re-enters Build under a new epoch.
 - **Guarantees:** ordered gap-free, durable before applied, exactly-once state moves, at-least-once actions, no lost wake, contained subscriber faults.
 
-**Fits with:** S14 implements `Next()` and `Drive`; S24 owns the envelope and delivery; S18 owns the action key table; S23 reads the journal as a subscriber.
+**Fits with:** S14 implements `Next()` and `Drive`; S24 owns the envelope and delivery; S18 owns the action key table; S23 reads the group state as a subscriber.
 
 **Source:** [PLAN.md:84-206]
 
@@ -146,7 +147,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 **Commands owned:** `config [agent|endpoint <name>] <key>[=<value>]…` (`--all, --default, --accept`).
 
-**Config keys owned (the notable ones):** `mode`, `output.*`, `providers.paid`, `providers.ctx_floor`, `limits.pool_max` 6, `limits.link_sessions.<link>` 3, `limits.group_wall_min` (tasks × session wall + 2 × session wall, hard 720), `limits.task_attempts` 6, `limits.repairs` 3, `guard.refusal_limit` 3, `check.patch_coverage` 80, `sandbox.*`, `cache.max_mb` 256, `ship.mode` group.
+**Config keys owned (the notable ones):** `mode`, `output.*`, `providers.paid`, `providers.ctx_floor`, `limits.pool_max` 6, `limits.link_sessions.<link>` 3, `limits.group_wall_min` (tasks × session wall + 2 × session wall, hard 720), `limits.task_attempts` 6, `limits.returns` 3, `guard.refusal_limit` 3, `check.patch_coverage` 80, `sandbox.*`, `cache.max_mb` 256, `ship.mode` group.
 
 **Decided for you:** group wall hard limit 720; `check.patch_coverage` 80 blocks Go only; `adhd` output profile on every machine; `env:` key references only.
 
@@ -300,7 +301,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 **Config keys:** `output.profile` (adhd), `output.turn_end_summary`, `output.color`.
 
-**Files owned:** `agent/{rules,render}.go`, `embed/rules/orchestrator.md`, `embed/output/**`, `embed/events.schema.json`.
+**Files owned:** `agent/{rules,render}.go`, `embed/rules/orchestrator.md`, `embed/output/**`; the event part of `embed/state.schema.json` (owned by S29).
 
 **Decided for you:** none new; the pipeline and fixtures are additions.
 
@@ -395,8 +396,8 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 **Fits with:** §1 is its contract; S15 leases and worktrees; S16 sessions; S17 enqueues jobs; S18 bounds every loop; S19, S20, S26 are its stages.
 
 **Internals:**
-- **Stages:** Intake (0 tokens: lint, hash the card, lease, cut worktree, setup) → Build → Check → Verify → Ship, plus Paused and Blocked; no Repair stage, a return resumes the task's own session.
-- **Concurrency:** one `Drive` per group owns its journal; one goroutine per session feeds a 256-buffered channel that blocks rather than drops; cross-group state is create-only or renamed files; every goroutine runs under a panic helper.
+- **Stages:** Intake (0 tokens: lint, hash the card, lease, cut worktree, setup) → Build → Check → Verify → Ship, plus Paused and Blocked; a failed Check or Verify returns to the task's own builder session.
+- **Concurrency:** one `Drive` per group owns its state; one goroutine per session feeds a 256-buffered channel that blocks rather than drops; cross-group state is create-only or renamed files; every goroutine runs under a panic helper.
 - **Work queue:** `state/queue/<repo-id>.<kind>.<id>.json`; taking a slot deletes the file then writes the lease, so a crash between leaves a re-enqueueable item.
 - **Pick order:** `priority: high`, then repo fair share, then longest chain by task count, then most groups unblocked, then ID.
 - **Pool:** floor 1, ceiling 6 (hard 16); grows by 1 after a clean end while memory allows; halves on a rate limit; builder, reviewer and tester take slots; every session also takes a link slot.
@@ -406,7 +407,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 **Config keys consumed:** `limits.pool_min/max`, `limits.link_sessions.<link>`, `limits.group_*`.
 
-**Files owned:** `engine/{engine,stage,intake,build,verify,pool,queue,state}.go`, `runs/<group>/{events.jsonl, state.json}`, `runs/<run>.jsonl`.
+**Files owned:** `engine/{engine,stage,intake,build,verify,pool,queue}.go`. The group's events and snapshot moved to S29's group state.
 
 **Decided for you:** none new; the Verify race rule and the queue are additions to approved S14.
 
@@ -499,15 +500,15 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 **Fits with:** every row is one `Next()` case (S14); detectors are S05, S06, S08, S12, S16, S19, S20, S26; the action table is the §1 outbox.
 
 **Internals:**
-- **27 failure rows** from transient HTTP to budget spent, each with a bound (chain length, `retries` 2, `limits.repairs` 3, `limits.task_attempts` 6) and a block reason from a fixed enum.
-- **Crash safety:** journal synced before apply; `state.json` every 50 events or on a stage change; replay from the snapshot.
+- **27 failure rows** from transient HTTP to budget spent, each with a bound (chain length, `retries` 2, `limits.returns` 3, `limits.task_attempts` 6) and a block reason from a fixed enum.
+- **Crash safety:** resumes a group through S29's group state `Load`, which owns the state sync, the 50-event snapshot rate and replay.
 - **9 action kinds with idempotency keys:** `spawn` (UUID), `wip_commit`/`commit` (group, fence, tree), `cancel`, `setup` (lockfile hash), `check` (tree, command), `land` (group, fence, merge base), `open_pr` (epic, head), `scope_change` (sorted paths), `notify` (seq).
 - **Resume:** provider handle first (`--resume <uuid>` with `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1`, or `messages.jsonl`), else a fresh session with the WIP diff and last `summary`, logged `resume_lost`.
 - **Paused is not Blocked:** paused resumes itself on a timer; blocked needs a person or the orchestrator; a group blocked 3 times for one reason is flagged `needs redesign`.
 
 **Commands owned:** `resume <run> --from <stage>` behavior; the startup sweep.
 
-**Config keys consumed:** `limits.task_attempts`, `limits.repairs`, `limits.pause_max_min`.
+**Config keys consumed:** `limits.task_attempts`, `limits.returns`, `limits.pause_max_min`.
 
 **Files owned:** `engine/{limits,recover}.go`.
 
@@ -631,7 +632,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 **Internals:**
 - **Task list lock:** Intake hashes `TG.md` and `tsk-*.md` into `card_hash` and emits `lock.taken`; `add backlog --to`, `plan --epic` and hand edits refuse with `locked` and the run ID until `lock.released`.
 - **Task claims:** `queued → claimed → done | returned | blocked`; `task.claimed` at `session.start`, `task.released` at `session.end`; a dead session's task is released with `crash` at the sweep.
-- **Scorecard:** first-pass rate, repairs per group, finding precision, tester false-fail rate, tokens and USD per accepted group, cache hit rate; `doctor` suggests a weight change when a light model beats the standard one over 20 groups.
+- **Scorecard:** first-pass rate, returns per group, finding precision, tester false-fail rate, tokens and USD per accepted group, cache hit rate; `doctor` suggests a weight change when a light model beats the standard one over 20 groups.
 - **Redaction:** keys and secret matches masked before any write.
 - **Retention:** 30 days or 100 MB, oldest first; open, paused or blocked groups are never trimmed.
 
@@ -649,12 +650,12 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 ## S24 · Event bus
 
-**High level:** the envelope, catalog, journal and in-order delivery of §1, in-process with no broker. Exactly 3 read-only subscribers: the ledger, the wake file, the `status --watch` renderer.
+**High level:** the envelope, catalog and in-order delivery of §1, in-process with no broker; S29's group state writes and replays the events. Exactly 3 subscribers that never change group state, each writing only its own derived kind through S29: the ledger, the wake file, the `status --watch` renderer.
 
 **Fits with:** S14 `Drive` is the only emitter path; S23 subscribes; S01 `status --wait` watches the wake file.
 
 **Internals:**
-- **Wakes:** `group.blocked`, `group.paused`, `run.done`, `run.stopped` touch `state/wake/<run>`; `--wait any` adds `stage.enter`; the waiter reads the journal tail after subscribing so no event is missed.
+- **Wakes:** `group.blocked`, `group.paused`, `run.done`, `run.stopped` touch `state/wake/<run>`; `--wait any` adds `stage.enter`; the waiter reads the state tail after subscribing so no event is missed.
 - **Delivery:** synchronous, `seq` order, after `Next()` returns; a subscriber over 5 ms or panicking is logged and dropped for the run.
 - **No hooks on the bus:** the 3 inline hooks are S12's; repo hooks wait for a later minor and will be subscribers, never gates.
 
@@ -727,7 +728,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 **High level:** `komodo gate` is the build's conscience: vet, tests, cross-builds, import direction, strict decodes, guard table, event catalog, docs drift, S-ID maps, generated artifacts, timing, and the no-silent-gaps rule.
 
-**Fits with:** every subsystem's generated artifact: `policy.json` tables (S12), `events.schema.json` (§1), skill hashes (S09), standards rule IDs (S20), golden fixtures (S10), the action table (S18).
+**Fits with:** every subsystem's generated artifact: `policy.json` tables (S12), `state.schema.json` (§1, S29), skill hashes (S09), standards rule IDs (S20), golden fixtures (S10), the action table (S18).
 
 **Internals:**
 - **No silent gaps:** every `[NOT CHECKED]` or `G-NN` tag in `docs/lld.md` must name a backlog task; this is how the gap register survives `PLAN.md`'s removal.
@@ -748,6 +749,36 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 ---
 
+## S29 · State manager (core pillar)
+
+**High level:** one schema for every state record and event, and one door to it. An in-process service, started once per `komodo` process, is the only code that reads or writes runtime state; it fills in each record's envelope and defaults and refuses any write that breaks the schema or an invariant.
+
+**Fits with:** S14 `Drive` writes events and the group snapshot through it, and `Next()` still decides every change; S15, S05, S17 and S23 write their own kinds through it; S24 `status --wait` uses its `Watch`; S27 fails any other package that writes a state path; S03 relies on its migrations to read older state.
+
+**Internals:**
+- **Envelope:** `v, kind, key, rev, ts, writer`, all set by the manager; an event adds `seq` and `crc`.
+- **Write checks:** types, required fields and enums; `seq` has no gaps, `epoch` and `fence` never fall, `rev` must match (compare-and-swap), and the caller must own the key.
+- **Group state (`state/groupstate.go`):** a group's events, snapshots and replay as one unit: `Open`, `Append`, `Snapshot`, `Load(next)`, `Tail`. `Next()` stays in the engine and is passed in.
+- **Primitives:** `Append` (state files), `Replace` (snapshots and timers, by temp file and rename), `Claim` (create-only: queue, leases, slots) and `Remove` (after the owner and `rev` check).
+- **Torn last event line:** dropped with one `state.truncated`, never quarantined, so a crash mid-append doesn't block a group.
+- **Writers:** each kind lists its writers (S14, S15, S17 and S18's sweep for the queue and leases, for example); the manager refuses any other.
+- **Bad record:** moved aside as `.bad-*`; its group blocks with `state_invalid`.
+- **Out of scope, 6:** `config.json` (S04), `cache/` (S22), git refs and worktrees (S15), job templates (S17), binaries and `release.key` (S03, S26) and session temp (S13).
+
+**Commands owned:** none; `help --json` serves `state`.
+
+**Config keys:** none.
+
+**Files owned:** `state/{manager,groupstate,schema,kinds,validate,migrate}.go`, `embed/state.schema.json`, `runs/`.
+
+**Decided for you:** in-process with no daemon; the 6 exclusions; quarantine rather than repair; the group snapshot field list; the pause timer moved from the ledger to a `timer` record.
+
+**Gaps:** G-24.
+
+**Source:** [PLAN.md:1750-1805], working tree; the other cards cite commit `ba4ff823`
+
+---
+
 ## Approval sheet
 
 | Card | Status |
@@ -759,5 +790,6 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 | S14–S18 | pending |
 | S19–S24 | pending |
 | S25–S27 | pending |
+| S29 | pending |
 
 Update this sheet as you approve; each approval is also a Review changes row in `PLAN.md`.

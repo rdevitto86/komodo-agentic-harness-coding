@@ -2,7 +2,7 @@
 
 ## Status
 
-**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. The 2026-10-08 design pass (11 batches, one commit each on `feat/1.0.0-beta.6`) filled the remaining architecture across every card, settled every open Vet line (the last 3 by your decisions on 2026-10-09, G-01, G-05, G-15), and added a **Pass 2 (performance)** and **Pass 3 (caching)** line per card for later enhancement rounds; it awaits your review, and any batch can be reverted alone. See **Review changes (2026-10-06, 2026-10-07, 2026-10-08)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27) becomes one or more task groups; S28 waits for a later minor.
+**Design approved for drafting, organized by subsystem.** S01–S13 were approved, with their Vet items settled on 2026-10-06; S14 was approved on 2026-10-07. The 2026-10-08 design pass (11 batches, one commit each on `feat/1.0.0-beta.6`) filled the remaining architecture across every card, settled every open Vet line (the last 3 by your decisions on 2026-10-09, G-01, G-05, G-15), and added a **Pass 2 (performance)** and **Pass 3 (caching)** line per card for later enhancement rounds; it awaits your review, and any batch can be reverted alone. See **Review changes (2026-10-06, 2026-10-07, 2026-10-08)**. Phase 1 turns this plan into prd, hld, lld, ADR 0001 and epic-1. Each subsystem (S01–S27, S29) becomes one or more task groups; S28 waits for a later minor. S29, the state manager, was added on 2026-10-11 as a core pillar and awaits your review.
 
 ## How to read this plan
 
@@ -44,7 +44,7 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 
 | Idea | Precedent | Where |
 |---|---|---|
-| Pure decider, journaled side effects, replay | Temporal's workflow and activity split [web: docs.temporal.io/workflows] | §1, S14, S18 |
+| Pure decider, recorded side effects, replay | Temporal's workflow and activity split [web: docs.temporal.io/workflows] | §1, S14, S29 group state |
 | Fencing tokens on leases, enforced by the resource | distributed-lease practice [web: hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens] | S15 |
 | Event stream as the agent's spine | OpenHands [web: arxiv.org/pdf/2407.16741] | §1 |
 | Minimal tool surface, no shell | SWE-agent's agent-computer interface; Codex's sandbox, network off and workspace-only writes by default [web: developers.openai.com/codex/security] | S08, S13 |
@@ -69,6 +69,7 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
   │ S11 brief ◄─ S09 skills · S10 rules · S07 agents         │
   │ S08 tools ─► S12 guard ─► S13 sandbox                    │
   │ S21 resources · S22 cache · S23 ledger · S24 events      │
+  │ S29 state manager: one schema, the only door to state    │
   └───────┬──────────────────┬───────────────────┬───────────┘
    S05 claude -p (Max)  codex exec (later)  S06 HTTP: Anthropic API,
    + private MCP        + private MCP       OpenAI-compatible, local
@@ -80,20 +81,21 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 - **One tool registry, two transports.** The API loop calls the Go tools directly. CLI providers reach them through `komodo internal tools --agent <a> --session <id>`.
 - **Every result is schema-checked twice.** The provider enforces the schema first, then Go re-validates it. A failure gets one re-prompt; a second failure fails the task.
 - **Events carry facts; `Next()` decides.** Every stage move, error and retry travels as an event through one pure function (Event model, below).
+- **One state schema, one door.** Every state record and event has one schema, and the state manager (S29) is the only code that reads or writes runtime state (State model, below).
 
 ### Event model (core tenet)
 
 **Facts flow as events; one pure function decides.** The mechanical parts publish what happened. `Next(state, event)` returns the new state, the actions to take and any follow-on events. Nothing else changes group state.
 
 - **The engine emits, never a model:** a killed or crashed session can't report, and a model can forget or invent. A session's typed JSON (its result, `submit_finding`) becomes an event only after Go validates it.
-- **Journal first:** each event is appended and synced to `runs/<group>/events.jsonl` before it is applied. `state.json` is a snapshot holding the last `seq`; resume replays the events after it (S18).
-- **Subscribers are read-only:** the ledger, `status --wait` wakes and notifications react to events but never change state (S24).
+- **State first:** S29's group state appends and syncs each event to `runs/<group>/events.jsonl` before it is applied. `state.json` is a snapshot holding the last `seq`; `Load` replays the events after it (S29, S18).
+- **Subscribers never change group state:** the ledger, `status --wait` wakes and notifications react to events; each writes only its own derived kinds through S29, never a group's state or snapshot (S24).
 - **Coarse grain:** events fire per run, group, stage, session and task, never per model turn or token. S08's in-session loop stays direct code.
 - **In-process and ordered:** one bus per engine, delivered synchronously in `seq` order, with no broker. Machine-wide state (pool, quota) stays in files (S05, S14); each engine turns a change there into a local event.
 - **Outside the bus:** inline gates (S12's guard, S08's formatting after `edit`) and shutdown (S15) are direct code. They log an event afterward when they can.
-- **Actions are journaled too (the outbox):** `Next()` returns actions; `Drive` appends `action.start {id, kind}` before running one and `action.done` after. `id = sha256(seq, kind, args)`. On replay a done action is skipped, a started one reruns, and every action is idempotent by a declared key (S18). This is Temporal's workflow-and-activity split: the pure function never does I/O, and every side effect can run twice safely. [web: docs.temporal.io/workflows]
-- **One journal per group, one per run:** group events go to `runs/<group>/events.jsonl`; `run.*` events go to `runs/<run>.jsonl`. Groups never read each other's journals; they meet only in the queue and the pool (S14).
-- **Epochs fence late events:** every spawn carries the stage's `epoch` (an int that rises on each stage entry). A session event whose epoch is older than the current stage's is journaled with `stale: true` and `Next()` ignores it. This is how Verify cancels one session without the loser's last event moving the stage twice.
+- **Actions are recorded too (the outbox):** `Next()` returns actions; `Drive` appends `action.start {id, kind}` before running one and `action.done` after. `id = sha256(seq, kind, args)`. On replay a done action is skipped, a started one reruns, and every action is idempotent by a declared key (S18). This is Temporal's workflow-and-activity split: the pure function never does I/O, and every side effect can run twice safely. [web: docs.temporal.io/workflows]
+- **One state per group, one per run:** group events go to `runs/<group>/events.jsonl`; `run.*` events go to `runs/<run>.jsonl`. Groups never read each other's state files; they meet only in the queue and the pool (S14).
+- **Epochs fence late events:** every spawn carries the stage's `epoch` (an int that rises on each stage entry). A session event whose epoch is older than the current stage's is recorded with `stale: true` and `Next()` ignores it. This is how Verify cancels one session without the loser's last event moving the stage twice.
 - **A new type is a plan change:** the catalog is a Go enum. S27's gate fails on an emitted type missing from it, or a listed type nothing emits.
 
 **Envelope:**
@@ -101,12 +103,12 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 | Field | Type | Meaning |
 |---|---|---|
 | `v` | int | envelope version, 1 |
-| `seq` | int | order within the group journal, no gaps |
+| `seq` | int | order within the group state, no gaps |
 | `ts` | RFC 3339 | when the engine saw the fact |
 | `run`, `group`, `session` | string | where it happened; `session` only on session and task events |
 | `epoch`, `stale` | int, bool | the stage epoch the producer was spawned under; `stale` is set by `Drive` when it is older than the current one |
 | `type`, `reason`, `data` | string, string, object | what happened; `reason` comes from S10's code list; `data` is typed per event |
-| `crc` | uint32 | CRC-32 of the line before it; replay drops a torn last line and emits `journal.truncated` once |
+| `crc` | uint32 | CRC-32 of the line before it; replay drops a torn last line and emits `state.truncated` once |
 
 **Catalog:**
 
@@ -117,22 +119,22 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 | Stage | `stage.enter`, `stage.exit` | S14 |
 | Session | `session.start`, `session.idle`, `session.timewarn`, `session.end` with its exit reason | S16; S05 supplies provider-limit reasons |
 | Work | `task.claimed`, `task.released`, `task.done`, `task.retry`, `check.done`, `finding.submit`, `finding.verified`, `tool.denied`, `timer.due`, `job.due`, `job.fail` | S08, S12, S16, S17, S18, S19, S20 |
-| Ledger | `lock.taken`, `lock.released` (the group's task list, S23), `action.start`, `action.done`, `journal.truncated` | S14 `Drive`, S18 |
+| Ledger | `lock.taken`, `lock.released` (the group's task list, S23), `action.start`, `action.done`, `state.truncated` | S14 `Drive`, S18 |
 | Provider | `provider.skip` with its reason (such as `ctx_below_floor`), `limit.warn` | S05 |
 
-32 types. Each type's `data` is a Go struct; the build generates `embed/events.schema.json` from the enum, `help --json` serves it as `events`, and the gate fails when the two disagree (S10, S27).
+32 types. Each type's `data` is a Go struct registered with the state manager as part of the `event` kind; the build generates `embed/state.schema.json` from the registry, `help --json` serves its event part as `events`, and the gate fails when the two disagree (S10, S27, S29).
 
 **The loop:**
 
 ```mermaid
 flowchart LR
-  P["Producers: S15, S16, S19, S20, S26, timers"] -->|fact| J[("group journal: events.jsonl")]
+  P["Producers: S15, S16, S19, S20, S26, timers"] -->|fact| J[("group state: events.jsonl")]
   J --> N["Next(state, event)"]
   N -->|new state| S[("state.json snapshot")]
   N -->|follow-on events| J
   N -->|actions| A["Engine actions: spawn, kill, commit, land"]
   A --> P
-  J --> R["Read-only subscribers: ledger, status, status --wait"]
+  J --> R["Subscribers, never group state: ledger, status, status --wait"]
 ```
 
 **A group's lifecycle:** sessions run in Build and Verify, so `Paused` and `Blocked` can follow either.
@@ -160,7 +162,7 @@ stateDiagram-v2
 ```mermaid
 sequenceDiagram
   participant Sup as S16 supervisor
-  participant Jr as Journal
+  participant Jr as State
   participant Nx as Next()
   participant Sub as Ledger, status, wait
   Sup->>Jr: session.timewarn (80% of wall)
@@ -175,11 +177,11 @@ sequenceDiagram
 
 | Guarantee | How |
 |---|---|
-| Ordered, gap-free | one writer per journal; `seq` is checked on append and on replay |
+| Ordered, gap-free | one writer per group state; `seq` is checked on append and on replay |
 | Durable before applied | append, `fsync`, then `Next()`; a crash after the sync replays the event |
 | Exactly-once state moves | a stage moves only in `Next()`, keyed by `seq`; stale-epoch events never move it |
 | At-least-once actions, safe to repeat | every action has an idempotency key (S18 table) |
-| No lost wake | `status --wait` reads the journal tail after subscribing, so an event between the two is still seen |
+| No lost wake | `status --wait` reads the state tail after subscribing, so an event between the two is still seen |
 | Subscriber faults are contained | a panicking subscriber is logged and dropped; state is untouched (S24) |
 
 **Gates are events with evidence.** A stage exits only when `Next()` has seen the events its gate names. No model says "done"; the engine's own checks do.
@@ -202,7 +204,27 @@ sequenceDiagram
   T->>N: finding: item 3 failed, Go reran x2, still fails
   N->>N: Build, epoch 5; action cancel(R)
   R->>N: session.end done (epoch 4)
-  N-->>R: journaled stale=true, ignored
+  N-->>R: recorded stale=true, ignored
+```
+
+### State model (core pillar)
+
+**One schema, one door.** Events say what happened, `Next()` decides what changes, and the state manager (S29) writes, validates and serves every record. No other code opens a state file.
+
+- **One schema:** every state record and every event is a Go struct registered as a `kind`. The build generates `embed/state.schema.json` from that registry; the event catalog above is the `event` kind's type list.
+- **The only access path:** subsystems call the manager's API (`Get`, `List`, `Tail`, `Watch`, `Append`, `Replace`, `Claim`, `Remove`); the S27 gate fails any other package that writes a state path.
+- **Populated and validated:** the manager fills each record's envelope and defaults, and refuses a write that breaks the schema or an invariant, before anything reaches disk.
+- **Inside the harness:** an in-process service started once per `komodo` process, never a daemon; two engines on one machine stay consistent through the manager's atomic disk primitives.
+- **Group state, one unit:** a group's events, its snapshots and replay live together in S29's group state module (`state/groupstate.go`), with one API: `Open`, `Append`, `Snapshot`, `Load` and `Tail`. `Next()` stays pure and in the engine; `Load` receives it as a parameter.
+
+```mermaid
+flowchart LR
+  P["Producers: S15, S16, S19, S20, S26, timers"] -->|1 fact| D["Drive and Next()"]
+  D -->|2 Append event| M["S29 state manager and group state: schema, validate, populate"]
+  D -->|3 Snapshot| M
+  O["Other writers: S02, S03, S04, S05, S08, S14, S15, S16, S17, S18, S23, S24"] -->|4 Append, Replace, Claim, Remove| M
+  M -->|5 atomic write| F[("runtime state on disk")]
+  R["Readers: status, wait, sweep, views"] -->|6 Get, Tail, Watch| M
 ```
 
 ## 2. Subsystem map
@@ -210,32 +232,35 @@ sequenceDiagram
 | ID | Subsystem | Layer | Package | Depends on |
 |---|---|---|---|---|
 | S01 | CLI processor | Interface | `cli` | every subsystem (thin calls) |
-| S02 | Installer | Interface | `host` | S04, S03 |
-| S03 | Binary lifecycle (`fresh`) | Interface | `host`, `core` | S06 |
-| S04 | Configuration | Interface | `core` | — |
-| S05 | Provider adapters | Model I/O | `provider` | S06, S07, S08 |
+| S02 | Installer | Interface | `host` | S04, S03, S29 |
+| S03 | Binary lifecycle (`fresh`) | Interface | `host`, `core` | S06, S29 |
+| S04 | Configuration | Interface | `core` | S29, from the `config` verb only |
+| S05 | Provider adapters | Model I/O | `provider` | S06, S07, S08, S29 |
 | S06 | HTTP stack | Model I/O | `core` | — |
 | S07 | Agent registry | Model I/O | `agent` | S04 |
-| S08 | Tool runtime | Model I/O | `tools`, `provider` | S12, S13, S22 |
+| S08 | Tool runtime | Model I/O | `tools`, `provider` | S12, S13, S22, S29 |
 | S09 | Skill loader | Context | `agent` | S22 |
 | S10 | Rules and output contract | Context | `agent` | — |
 | S11 | Context and brief builder | Context | `agent` | S07, S09, S10, S22 |
 | S12 | Guardrails | Safety | `safety` | S04 |
 | S13 | Sandbox and process control | Safety | `safety` | — |
-| S14 | Orchestration engine | Orchestration | `engine` | S05, S11, S15, S16 |
-| S15 | Workspace and leases | Orchestration | `engine` | S13 |
-| S16 | Session supervisor | Orchestration | `engine` | S05, S13, S23 |
-| S17 | Scheduler and job templates | Orchestration | `engine` | S14, S18 |
-| S18 | Error recovery | Orchestration | `engine` | S16, S23 |
+| S14 | Orchestration engine | Orchestration | `engine` | S05, S11, S15, S16, S29 |
+| S15 | Workspace and leases | Orchestration | `engine` | S13, S29 |
+| S16 | Session supervisor | Orchestration | `engine` | S05, S13, S23, S29 |
+| S17 | Scheduler and job templates | Orchestration | `engine` | S14, S18, S29 |
+| S18 | Error recovery | Orchestration | `engine` | S16, S23, S29 |
 | S19 | Check (ground truth) | Quality | `quality` | S13, S22 |
 | S20 | Review and evidence | Quality | `quality` | S11, S16, S22 |
 | S21 | Token and resource management | Economy and ops | `ops`, `agent` | S23 |
 | S22 | Cache store | Economy and ops | `core` | — |
-| S23 | Runtime observability | Economy and ops | `ops`, `cli` | — |
-| S24 | Event bus | Economy and ops | `ops` | S13 |
+| S23 | Runtime observability | Economy and ops | `ops`, `cli` | S29 |
+| S24 | Event bus | Economy and ops | `ops` | S13, S29 |
 | S25 | Backlog and planning | Delivery | `repo` | S07, S10 |
 | S26 | Ship: git, PR, release | Delivery | `repo` | S10, S12 |
 | S27 | Gate and self-checks | Delivery | `repo`, `safety` | all |
+| S29 | State manager (core pillar) | Core | `state` | — |
+
+**Every subsystem that writes state depends on S29:** the 12 rows above that name it, one per writer in the S29 Kinds table. S04's `core` code never imports `state`; its audit rows are written by the `config` verb in `cli`.
 
 **Concepts → subsystems:**
 
@@ -582,7 +607,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 | `limits.pause_max_min` | 360 | 1,440 | longest a session stays paused on a provider limit before it is cancelled (S18) |
 | `limits.session_wall_min` | 60 | 120 | wall time per session |
 | `limits.session_idle_min` | 10 | 30 | silence before a nudge |
-| `limits.repairs` | 3 | 5 | returns to Build before Blocked |
+| `limits.returns` | 3 | 5 | returns to Build before Blocked |
 | `guard.refusal_limit` | 3 | 5 | refusals under one rule before the session ends (S12 G6) |
 | `check.patch_coverage` | 80 | 100 | % of changed lines a test must cover; blocks for Go, warns for other languages (S19). Google's guide calls 75% "commendable" and 90% "exemplary"; Codecov recommends 100% on the patch, which punishes glue code, so 80 on changed lines is the middle [web: testing.googleblog.com, about.codecov.io] |
 | `sandbox.network` | `deny` | — | network for run-class commands |
@@ -601,7 +626,7 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 | `limits.pool_max` 6, `link_sessions` 3 | 6 sessions, 3 per link | Anthropic's lowest API tier allows 1,000 requests and 2M input tokens a minute on Opus 5.5; a session makes well under 1 request a second, so the bound is the Max plan's 5-hour window, not the API, and 3 keeps one window from draining in an hour [web: platform.claude.com/docs/en/api/rate-limits] |
 | `providers.ctx_floor` 262,144 | local endpoints | the native window of the ~27B open models targeted; Ollama ships at 4,096, so the floor is what makes `doctor` catch an unconfigured server [web: docs.ollama.com/faq] |
 | `limits.session_wall_min` 60 | per session | Claude Code's own headless runs stop background work after 10 min idle; 60 min bounds one task with 6 attempts inside a 6-hour group |
-| `limits.task_attempts` 6, `limits.repairs` 3 | per task, per group | Temporal's default retry is unlimited with 2× backoff, which the plan rejects: every loop here has a counter, and 6 covers 2 fresh sessions with 2 re-prompts each [web: docs.temporal.io/encyclopedia/retry-policies] |
+| `limits.task_attempts` 6, `limits.returns` 3 | per task, per group | Temporal's default retry is unlimited with 2× backoff, which the plan rejects: every loop here has a counter, and 6 covers 2 fresh sessions with 2 re-prompts each [web: docs.temporal.io/encyclopedia/retry-policies] |
 | `warn.usd_per_run` 5 | metered links | Opus 5.5 costs $4 per M input and $20 per M output; a 4-task group that uses 200K uncached input and 50K output per session costs about $7, so $5 warns before the second group [web: platform.claude.com/docs/en/models/overview] |
 | `limits.group_tokens` 2,000,000 | per group | 4 tasks × 6 attempts × 50K uncached tokens is 1.2M; the cap is a runaway bound, 1.7× the expected worst case, and cache reads are excluded because they are 0.05× the price on Opus 5.5 and Sonnet 5.5 [web: platform.claude.com/docs/en/build-with-claude/prompt-caching] |
 
@@ -664,8 +689,8 @@ Everything else is a `komodo config` key, such as `komodo config mode=economy li
 - **Override:** none in config. A Makefile target wins over the detected command when the Makefile defines it, so a team wanting `make check` adds `test: check`. Commands run without a shell, so shell syntax fails `doctor`. Every command runs in the S13 sandbox, except `git-read` under Docker (S13).
 
 **`komodo config`:**
-- **Read:** bare keys, such as `komodo config mode limits.repairs`, print value and source; a group or agent name alone lists its keys.
-- **Write:** `komodo config mode=economy limits.repairs=4` sets every pair or none; a bad type, an unknown key or a value over its limit writes nothing and names the pair.
+- **Read:** bare keys, such as `komodo config mode limits.returns`, print value and source; a group or agent name alone lists its keys.
+- **Write:** `komodo config mode=economy limits.returns=4` sets every pair or none; a bad type, an unknown key or a value over its limit writes nothing and names the pair.
 - **Groups:** `komodo config agent reviewer model=sonnet retries=3`; `komodo config endpoint gpu-box url=https://…`.
 - **`--all`:** alone, JSON of every key with value, default, limit and source; after a key, that key's valid values, such as `agent builder model --all`.
 - **`--default`:** resets its scope: a key, an agent, a group or the whole file. Endpoint and whole-file resets list each change and need a typed `y`.
@@ -679,7 +704,7 @@ Everything else is a `komodo config` key, such as `komodo config mode=economy li
 - **Keys:** decided: `env:` references only in beta 6; keychain support is a later minor.
 
 **Proof:**
-- **Limits:** `komodo config limits.repairs=9` is refused, naming the key and the limit, and the file is unchanged.
+- **Limits:** `komodo config limits.returns=9` is refused, naming the key and the limit, and the file is unchanged.
 - **Hash guard:** a hand edit to `config.json` makes `komodo status` exit 1 with `config_tampered`; `config --accept` restores it and logs 1 audit row.
 - **Capacity profile:** a session on a 262,144 endpoint and one on Opus 5.5 get different brief ceilings and the same engine path; the ledger records both profiles.
 - **Detection:** the fixture repo yields 6 classes.
@@ -794,7 +819,7 @@ Three mechanical checks enforce it:
 
 **Limits belong to the provider; Komodo pauses and warns.** Max windows, API spend limits and overage credits are enforced by Anthropic and OpenAI. Komodo adds no cost cap of its own; USD is a beta metric.
 - **Provider halts → backstop, then pause:** on a quota or spend-limit stop, the task's next session starts on the next allowed link (S18). Only with no link left does the halted session pause: it keeps its resume handle, waits for the reset time the provider reported, and the group goes `paused: provider_limit`.
-- **Wait timer on disk:** each halted session's ledger row gets `wait_until` (the reset time plus 1 min) and `wait_link`. The link's reset time also goes to `~/.komodo/state/quota.json`, so every repo on the machine skips that link until then. Both survive a crash or reboot.
+- **Wait timer on disk:** a paused group holds one `timer` record through S29, `~/.komodo/state/timers/<repo-id>.<group>.json`, holding `wait_until` (the latest reset time among its halted sessions, plus 1 min) and `wait_link`; each halted session's ledger row keeps a copy for `status`. The link's reset time also goes to `~/.komodo/state/quota.json`, so every repo on the machine skips that link until then. Both survive a crash or reboot.
 - **Who fires it:** the live engine sleeps until the earliest `wait_until`. If the engine is gone, the startup sweep, `jobs tick` or `status` finds the due timer and resumes the run.
 - **`komodo resume` restarts now:** it attempts every paused agent at once, from its session handle, so no work is lost.
 - **Still limited → wait again:** a refused attempt costs no model turn. The session re-pauses with the provider's new reset time, or backs off 15, 30, then 60 min when none is given.
@@ -825,7 +850,7 @@ Three mechanical checks enforce it:
   < brief as one stream-json user message; stdin stays open for S16, closed after the result
 ```
 
-- **Resume:** `--resume <uuid>`, with the repair input on stdin.
+- **Resume:** `--resume <uuid>`, with the return input on stdin.
 - **Why `dontAsk` and `--allowedTools`:** in `-p` mode a call nothing allows is denied, and `--setting-sources ""` loads no allow rules. The prototype passed both.
 - **No `--bare`:** it reads only `ANTHROPIC_API_KEY` and never the Max login; the docs say bare mode "doesn't use your subscription login" and will become the `-p` default, so the launch line pins the flags it needs instead of relying on either default [web: code.claude.com/docs/en/headless].
 - **Stream facts the engine relies on:** the first line is `system/init` (billing check 3); `system/api_retry` lines carry `error` categories (`rate_limit`, `overloaded`, `billing_error`, `max_output_tokens`, …) that S05 maps to limit or failure classes without parsing prose; piped stdin is capped at 10 MB, and a 500K-token brief is about 2 MB; MCP servers get `MCP_TIMEOUT` (30 s) to start; SIGINT ends a turn with its result, SIGTERM leaves it unfinished with exit 143 (S18) [web: code.claude.com/docs/en/headless].
@@ -841,7 +866,7 @@ Three mechanical checks enforce it:
 
 **Proof:**
 - With `ANTHROPIC_API_KEY` set and a Max login, a `claude-cli` session runs on `apiKeySource: none`, and 0 `anthropic-api` calls are made.
-- With `providers.paid: never` and a faked Max 100% stop, the group pauses, writes `wait_until` to the ledger, makes 0 paid calls, and resumes when the timer fires.
+- With `providers.paid: never` and a faked Max 100% stop, the group pauses, writes its `timer` record (the ledger row keeps a copy), makes 0 paid calls, and resumes when the timer fires.
 - `resume` before the reset attempts every paused agent, gets refused, and re-pauses with the new reset time and 0 model turns.
 - `kill -9` on a paused engine, then `jobs tick` after `wait_until`, resumes the run.
 - On the Claude API, a session with thinking on gets a schema-valid final call through structured outputs, with thinking still on.
@@ -1070,7 +1095,7 @@ Three mechanical checks enforce it:
 | Order | facts → fact checks (SHA, path, task ID) → escape → template → wrap at 80 columns → `output.color` |
 | Tables | over 5 rows render the top 5 plus one line `N more: <what>`; a cell over 45 characters moves to a labeled line below the table |
 | Golden fixtures | `embed/output/<profile>/<name>.golden` per template; the gate renders each with its fixture under both profiles and compares bytes |
-| Events | `data` per event type is a Go struct; the build generates `embed/events.schema.json`, served by `help --json` as `events`; `status --wait` renders the waking event through `event.<type>` into one `report` line |
+| Events | `data` per event type is a Go struct in the S29 registry; the build generates `embed/state.schema.json`, whose event part `help --json` serves as `events`; `status --wait` renders the waking event through `event.<type>` into one `report` line |
 | Codes | `config_tampered`, `locked`, `regression`, `lint`, `disputed` and `crash` join the list |
 
 **Rules:**
@@ -1094,7 +1119,7 @@ Three mechanical checks enforce it:
 **Pass 2 (performance):** templates parse once at process start from the embedded set; rendering `status` for 50 runs is under 10 ms.
 **Pass 3 (caching):** none; rendering is pure and cheap.
 
-**Proof:** a fixture `status` with 10 runs renders a table and passes its template test. A template referencing an unknown fact fails `gate` at build, not at run time. A 7-row table renders 5 rows and one overflow line. `events.schema.json` lists 32 types, and the gate fails when the enum gains one. A builder brief holds 0 lines from `embed/rules/`. A planted `AGENTS.md` line outside the block reaches the brief under Repo rules; the same line inside a block with a missing end marker reaches no brief. A builder whose `files` list `AGENTS.md` edits it, and its next brief in the same run still carries the base-commit text. A fixture escalation returning `{code: branch_missing, sha: ffcf41e9}` renders the same bytes on 2 runs under `adhd`. A schema code with no template fails `gate`. A fact path containing a newline and `## x` renders as one literal code span. A fact SHA absent from the repo gets 1 re-prompt.
+**Proof:** a fixture `status` with 10 runs renders a table and passes its template test. A template referencing an unknown fact fails `gate` at build, not at run time. A 7-row table renders 5 rows and one overflow line. `state.schema.json` lists 32 event types, and the gate fails when the enum gains one. A builder brief holds 0 lines from `embed/rules/`. A planted `AGENTS.md` line outside the block reaches the brief under Repo rules; the same line inside a block with a missing end marker reaches no brief. A builder whose `files` list `AGENTS.md` edits it, and its next brief in the same run still carries the base-commit text. A fixture escalation returning `{code: branch_missing, sha: ffcf41e9}` renders the same bytes on 2 runs under `adhd`. A schema code with no template fails `gate`. A fact path containing a newline and `## x` renders as one literal code span. A fact SHA absent from the repo gets 1 re-prompt.
 
 ### S11 · Context and brief builder
 
@@ -1227,7 +1252,7 @@ Three mechanical checks enforce it:
 
 ### S14 · Orchestration engine
 
-**Owns:** `engine/{engine,stage,intake,build,verify,pool,state}.go`.
+**Owns:** `engine/{engine,stage,intake,build,verify,pool}.go`.
 
 **Stages:** `Intake → Build → Check → Verify → Ship`, plus `Paused` and `Blocked`.
 - **Intake (0 tokens):** lint the group, hash its card, take the lease, cut the worktree from the epic branch tip and run `commands.setup` (S04).
@@ -1235,14 +1260,14 @@ Three mechanical checks enforce it:
 - **Check and Ship:** S19 and S26.
 - **Paused (S05, S18):** a group waiting on a provider limit gives back its pool slot, keeps its lease and worktree, and resumes on its own when its timer fires.
 - **Verify:** the reviewer and the tester (S20) run at once on the same commit. The first confirmed failure cancels the other: a verified blocking finding, a `not_met` task or a failed acceptance item. A failed item counts only after Go reruns its command twice and both fail. If both pass, the tester restarts once with Go's output and the reviewer keeps going; if they split, the group blocks with `flaky`. An item with no command never cancels.
-- **Back to Build:** a failed Check or Verify resumes the task's own builder session with only the verified findings, including those submitted before a cancel. There is no Repair stage. Each return raises the task's attempt count (S18) and the stage epoch (§1).
-- **Pure core:** `Next(state, event) → (state, actions, events)` has no I/O. `Drive` journals each event, then applies the result (§1 Event model).
+- **Back to Build:** a failed Check or Verify resumes the task's own builder session with only the verified findings, including those submitted before a cancel. Each return raises the task's attempt count (S18) and the stage epoch (§1).
+- **Pure core:** `Next(state, event) → (state, actions, events)` has no I/O. `Drive` appends each event through S29's group state, applies the result, then hands the new state to `Snapshot` (§1 Event model).
 - **Gates:** the table in §1. Every stage exit is a `Next()` case that names the events it needs; a table test enumerates every (stage, event) pair, including stale ones.
 
 **Concurrency model (goroutines and locks):**
-- **One `Drive` goroutine per group:** it owns the group's journal and state; nothing else writes them. A mutex is never needed inside a group.
+- **One `Drive` goroutine per group:** it owns the group's state; nothing else writes them. A mutex is never needed inside a group.
 - **One goroutine per session** (S16) that only produces events into its group's `Drive` channel, which is buffered to 256 and never dropped: a full channel blocks the producer, never loses the event.
-- **Cross-group state is files with OS atomicity:** the queue, the pool and link slots, leases and `quota.json` are create-only or renamed-into-place files under `~/.komodo/state/` (S15, `core/lock.go`). Two engines on one machine coordinate only through them.
+- **Cross-group state is files with OS atomicity:** the queue, the pool and link slots, leases and `quota.json` are create-only or renamed-into-place files under `~/.komodo/state/`, written only through S29's `Claim` and `Replace` (S15, `core/lock.go`). Two engines on one machine coordinate only through them.
 - **The run goroutine** builds the DAG, enqueues ready groups, and reaps finished `Drive`s. It holds no group state.
 - **Every goroutine starts through S15's panic-catching helper;** a panic in one group's `Drive` emits `group.blocked crash` for that group alone.
 
@@ -1280,10 +1305,10 @@ Three mechanical checks enforce it:
 - **Tasks in sequence:** decided in the 2026-10-07 review: 1 builder per group; tasks run one after another, and independent tasks go in separate groups.
 - **Verify race:** decided in the 2026-10-08 design pass: epochs fence late events; the first verified failure cancels the other session (§1).
 
-**Pass 2 (performance):** `Next()` table tests double as a replay benchmark; a 10,000-event journal must replay under 1 s. The run goroutine starts Intake for the next ready group while the current one's first session is still loading, so a slot is never idle longer than one setup.
+**Pass 2 (performance):** `Next()` table tests double as a replay benchmark; 10,000 state events must replay under 1 s. The run goroutine starts Intake for the next ready group while the current one's first session is still loading, so a slot is never idle longer than one setup.
 **Pass 3 (caching):** Intake's `commands.setup` result is cached by lockfile hash (S22), so a second worktree of the same epic tip copies dependencies instead of downloading.
 
-**Proof:** the fixture group runs all 5 stages and ships; `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`, and the 4 Verify orderings (reviewer fails first, tester fails first, both pass, both fail in one tick) each move the stage exactly once; replaying a group's journal rebuilds its `state.json` exactly. A crash between taking a queue item and writing its lease leaves an item the sweep re-enqueues. With 2 repos and `pool_max` 2, 4 ready groups start in alternating repo order. A seeded bug fails Verify, cancels the tester and resumes the builder. With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue. A rate-limit error halves the pool, never below the floor. A group whose dependency is Blocked waits while an unrelated group runs. A landing that breaks Check on the epic tip sends the last-landed group back to Build. `run` on a group with an unlanded dependency refuses and names it. With 2 slots and 3 ready groups, the `priority: high` group starts first.
+**Proof:** the fixture group runs all 5 stages and ships; `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`, and the 4 Verify orderings (reviewer fails first, tester fails first, both pass, both fail in one tick) each move the stage exactly once; replaying a group's state rebuilds its `state.json` exactly. A crash between taking a queue item and writing its lease leaves an item the sweep re-enqueues. With 2 repos and `pool_max` 2, 4 ready groups start in alternating repo order. A seeded bug fails Verify, cancels the tester and resumes the builder. With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue. A rate-limit error halves the pool, never below the floor. A group whose dependency is Blocked waits while an unrelated group runs. A landing that breaks Check on the epic tip sends the last-landed group back to Build. `run` on a group with an unlanded dependency refuses and names it. With 2 slots and 3 ready groups, the `priority: high` group starts first.
 
 ### S15 · Workspace and leases
 
@@ -1307,7 +1332,7 @@ Three mechanical checks enforce it:
 **Pass 2 (performance):** a worktree is cut with `git worktree add --detach` from the epic tip, about 1 s on this repo; the tester's throwaway worktree reuses the builder's object store, so its cost is the dependency copy (S04), not git.
 **Pass 3 (caching):** language caches per repo (S13) and the setup result cache (S22) make the second worktree of an epic tip a copy, not a download.
 
-**Proof:** a second `run` on a leased group refuses with the holder named. 2 runs racing for one lease yield exactly 1 holder. 2 engines racing to land one group make exactly 1 landing, and the loser's journal ends in `lease.lost`. A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits. Sweep never deletes a worktree with unsaved work.
+**Proof:** a second `run` on a leased group refuses with the holder named. 2 runs racing for one lease yield exactly 1 holder. 2 engines racing to land one group make exactly 1 landing, and the loser's state ends in `lease.lost`. A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits. Sweep never deletes a worktree with unsaved work.
 
 ### S16 · Session supervisor (subagent control)
 
@@ -1378,7 +1403,7 @@ Three mechanical checks enforce it:
 - **OS schedulers:** decided in the 2026-10-06 review: yes, opt-in `install --schedule` in beta 6; `/loop` is the fallback.
 - **Shipped jobs:** decided: none shipped; one example, `templates/jobs/nightly-review.json`.
 
-**Pass 2 (performance):** a tick with nothing due exits under 50 ms and makes no network call; it reads `jobs/state.json`, the queue directory and the timers file only.
+**Pass 2 (performance):** a tick with nothing due exits under 50 ms and makes no network call; it reads `jobs/state.json`, the queue directory and the `timer` records only, all through S29.
 **Pass 3 (caching):** none; a tick holds no state beyond the counters.
 
 **Proof:** 2 ticks in one window run the job once. 3 failures end in Blocked and wake `wait`. A tick with no live engine fires a due `wait_until` and resumes the run. A job due while its previous run holds `job-<name>` is skipped and logged once.
@@ -1402,27 +1427,28 @@ Three mechanical checks enforce it:
 | Timeout or idle | S16 | stop, then a fresh session | the agent's `retries` (2) per task | Blocked |
 | 3 refusals under one rule | S12 | end the session | 3 | task retry |
 | `done_when` fails | S19 | task retry | the agent's `retries` (2) per task | Blocked |
-| Regression against the baseline | S19 | back to Build with the failing test's output | `limits.repairs` (3) per group | Blocked: `regression` |
-| Findings or a failed acceptance item | S19, S20 | back to Build, in the task's own session | `limits.repairs` (3) per group | Blocked |
-| Epic gate fails | S20 | the group that last changed each finding's file goes back to Build; a finding with no file blocks the epic | `limits.repairs` (3) per group | Blocked: `epic_gate` |
+| Regression against the baseline | S19 | back to Build with the failing test's output | `limits.returns` (3) per group | Blocked: `regression` |
+| Findings or a failed acceptance item | S19, S20 | back to Build, in the task's own session | `limits.returns` (3) per group | Blocked |
+| Epic gate fails | S20 | the group that last changed each finding's file goes back to Build; a finding with no file blocks the epic | `limits.returns` (3) per group | Blocked: `epic_gate` |
 | Tester fails an item that Go's 2 reruns pass | S20 | restart the tester once with Go's output | 1 | Blocked: `tester` |
 | Go's 2 reruns of an item split | S20 | stop | 0 | Blocked: `flaky` |
 | A dependency is abandoned | S14 | stop its dependents | 0 | Blocked: `dependency` |
-| Check fails on the epic tip after a landing | S14 | pause landings; the last-landed group goes back to Build | `limits.repairs` (3) per group | Blocked: `integration` |
+| Check fails on the epic tip after a landing | S14 | pause landings; the last-landed group goes back to Build | `limits.returns` (3) per group | Blocked: `integration` |
 | Builder needs a file outside scope | S12 B1 refusal | WIP commit, end the session, keep the lease | 1 request per task | Blocked: `needs_scope`, resumes on approve or deny |
-| Flap: same failure hash or zero-diff repair | S18 | stop | 1 | Blocked |
+| Flap: same failure hash or zero-diff return | S18 | stop | 1 | Blocked |
 | Any model attempt on a task: fresh session, re-prompt, gate feedback, "continue" | S18 | count it; the rows above stay inner bounds | `limits.task_attempts` (6) | Blocked: `attempts` |
 | Brief over half the link's measured context | S11 | the next link in the chain that fits (S09) | 1 | Blocked: `context` |
 | Landing conflicts with the epic branch | S26 | merge the epic branch into the group branch, rerun Check | 1 | Blocked: `merge_conflict` |
 | Budget spent | S21 | stop | — | Blocked: `budget` |
-| Harness crash or reboot | S18 | replay the journal after the `state.json` snapshot | — | continues |
+| Harness crash or reboot | S18 | `Load` from S29's group state: the snapshot plus the events after it | — | continues |
 | Scheduled job fails | S17 | backoff | 3 | Blocked |
+| State write refused, or a record fails its check on read | S29 | refuse the write, or move the bad record aside as `.bad-*` | 0 | Blocked: `state_invalid`, naming the kind, key and field |
 
-- **Crash safety:** each event is appended and synced to `runs/<group>/events.jsonl` before it is applied. `state.json` is a snapshot holding the last `seq`, written atomically every 50 events or on a stage change, and every stage is idempotent.
+- **Crash safety:** S29's group state appends and syncs each event to `runs/<group>/events.jsonl` before it is applied, and writes the `state.json` snapshot, holding the last `seq`, every 50 events or on a stage change. Every stage is idempotent; S18 resumes a group by calling `Load`.
 - **Loss bound, stated:** any single failure (crash, kill, power loss, provider halt) loses at most one model turn and no committed edit. Every row above and every action below is designed to that sentence.
 - **Startup sweep:** kills orphans by pid file, frees expired leases, re-enqueues queue items with no lease, and emits `session.end` with reason `crash` for dead sessions.
 
-**Actions and their idempotency keys (the outbox, §1):** `Drive` journals each action before and after it runs. The gate fails an action kind missing from this table.
+**Actions and their idempotency keys (the outbox, §1):** `Drive` records each action before and after it runs. The gate fails an action kind missing from this table.
 
 | Action | Key | Safe to repeat because |
 |---|---|---|
@@ -1448,9 +1474,9 @@ Three mechanical checks enforce it:
 - **Retry provider:** decided: a task retry stays on its link; only a provider failure moves it (S05).
 
 **Pass 2 (performance):** the startup sweep runs its 4 scans in parallel and must finish under 2 s on a workstation with 20 dead runs. Snapshot writes are off the `Drive` goroutine's critical path.
-**Pass 3 (caching):** replay from the snapshot, never from `seq` 0, so resume cost is bounded by 50 events.
+**Pass 3 (caching):** `Load` replays from the snapshot, never from `seq` 0, so resume cost is bounded by 50 events.
 
-**Proof:** forcing a timeout, a flap, 4 repairs or 7 attempts each ends Blocked with the reason named. `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions. `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit. A torn last journal line replays with one `journal.truncated`. A panic injected in one group's `Drive` blocks that group while a second group lands. A 2-hour pause leaves the group wall clock where it was.
+**Proof:** forcing a timeout, a flap, 4 returns or 7 attempts each ends Blocked with the reason named. `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions. `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit. A torn last event line replays with one `state.truncated`. A panic injected in one group's `Drive` blocks that group while a second group lands. A 2-hour pause leaves the group wall clock where it was.
 
 ## Quality layer
 
@@ -1542,7 +1568,7 @@ Three mechanical checks enforce it:
 | Mode | economy (1 merged lens) or thorough (N lenses plus a cold pass) |
 
 **Token savings:**
-- **Ported:** clipping, signature trimming, glob-picked standards, delta diffs, session resume for repair, briefs that fit the link's `ctx`, 4 KB check output.
+- **Ported:** clipping, signature trimming, glob-picked standards, delta diffs, session resume on return, briefs that fit the link's `ctx`, 4 KB check output.
 - **New:** a stable prefix, a sanitizer, per-task sessions, and light-weight work on local models.
 - **Provider prompt caching (Anthropic API facts):** at most 4 `cache_control` breakpoints per request, 1-hour entries before 5-minute ones, a 512-token minimum on the 5.5 line, writes at 1.25× (5 min) or 2× (1 h) and reads at 0.05× base on Opus 5.5 and Sonnet 5.5; a change at the tools level invalidates everything after it, and a thinking or effort change invalidates from the messages level [web: platform.claude.com/docs/en/build-with-claude/prompt-caching]. So the 4 breakpoints follow S11's prefix order: (1) tools plus role, 1 h; (2) repo context, 1 h; (3) standards, 5 min; (4) the task, 5 min. `effort` and thinking are fixed per agent (S05). `claude -p` caches automatically on a byte-identical prefix. OpenAI caching is automatic. Local models keep `keep_alive` for the run.
 - **Rate-limit arithmetic:** cached reads do not count toward Anthropic's input-tokens-per-minute limit, so a high hit rate raises effective throughput without a tier change [web: platform.claude.com/docs/en/api/rate-limits].
@@ -1595,8 +1621,8 @@ Three mechanical checks enforce it:
 
 **Does:**
 - **Session ledger (`sessions.jsonl`):** one row per session, holding id, agent, task, link, model, measured context, capacity profile, tokens in/out/cached, USD, wall time, skill tokens and exit reason. A paused session adds `wait_until` and `wait_link` (S05).
-- **Event log (`ledger/events.jsonl`):** a read-only subscriber copies every group journal's events here, plus fallbacks, skips and Claude Code subagent events. The group journal stays the source of truth (§1 Event model).
-- **Workflow ledger (the lock table, `ledger/tasks.json` and `ledger/groups.json`):** read-only views that S23's subscriber rebuilds from the journals. They answer "who holds what" for `status`, the orchestrator and the sweep; nothing writes them directly.
+- **Event log (`ledger/events.jsonl`):** a subscriber copies every group state's events here through S29, plus fallbacks, skips and Claude Code subagent events. The group state stays the source of truth (§1 Event model).
+- **Workflow ledger (the lock table, `ledger/tasks.json` and `ledger/groups.json`):** read-only views that S23's subscriber rebuilds from group state. They answer "who holds what" for `status`, the orchestrator and the sweep; nothing writes them directly.
 
 | Row | Fields | Moves on |
 |---|---|---|
@@ -1605,14 +1631,14 @@ Three mechanical checks enforce it:
 
 - **Task list lock:** Intake hashes the group's backlog files (`TG.md`, `tsk-*.md`) into `card_hash` and emits `lock.taken`. While locked, `add backlog --to <group>`, `plan --epic` on that group, and a hand edit (hash mismatch at the next verb) refuse with `locked` and the run ID. Landing or abandon emits `lock.released`. The builder and reviewer always read the list at the base commit (S11), so the lock protects the next run, not the current brief.
 - **Task claims:** a task is `queued → claimed → done | returned | blocked`. `task.claimed` fires at `session.start` with the session UUID; `task.released` at `session.end`. A claimed task whose session is dead at the sweep is released with `crash`.
-- **Scorecard (`status --metrics`):** per agent and model over `ledger.retention_days`: first-pass rate (tasks `done` on attempt 1), repairs per group, finding precision (S20), tester false-fail rate, tokens and USD per accepted group, cache hit rate. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups.
+- **Scorecard (`status --metrics`):** per agent and model over `ledger.retention_days`: first-pass rate (tasks `done` on attempt 1), returns per group, finding precision (S20), tester false-fail rate, tokens and USD per accepted group, cache hit rate. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups.
 - **Live views:** `status [--watch]` shows the pool, stages, budgets and blocks, and draws the group graph: dependencies, each group's stage, and which groups touch which files; `wait <run>` blocks until the next wake event.
 - **Session detail:** `status --session <id>` prints the stream tail and result.
 - **Redaction:** keys and secret matches are masked before anything is written.
 
 **Vet:**
-- **Retention:** decided: `ledger.retention_days` (30) or 100 MB per repo, oldest first; a journal of a group that is open, paused or blocked is never trimmed.
-- **Export:** decided: no OpenTelemetry in beta 6; JSONL plus `events.schema.json` is the export.
+- **Retention:** decided: `ledger.retention_days` (30) or 100 MB per repo, oldest first; a state file of a group that is open, paused or blocked is never trimmed.
+- **Export:** decided: no OpenTelemetry in beta 6; JSONL plus `state.schema.json` is the export.
 
 **Pass 2 (performance):** the views are rebuilt incrementally from the last applied `seq`, never from the whole log; `status` on a repo with 1,000 ledger rows must render under 100 ms.
 **Pass 3 (caching):** `status --metrics` aggregates are cached by the ledger file's size and mtime.
@@ -1623,7 +1649,7 @@ Three mechanical checks enforce it:
 
 **Owns:** `ops/bus.go` (new), `ops/wake.go`.
 
-**Bus:** the envelope, catalog, journal and in-order delivery of §1's Event model.
+**Bus:** the envelope, catalog and in-order delivery of §1's Event model. Writing and replaying the events is S29's group state.
 
 **Events:**
 - **Stages and sessions:** `stage.enter`, `stage.exit`, `session.start`, `session.idle` and `session.timewarn`.
@@ -1633,8 +1659,8 @@ Three mechanical checks enforce it:
 - **Providers:** `provider.skip` and `limit.warn` (S05).
 
 **Does:**
-- **Wakes:** `group.blocked`, `group.paused`, `run.done` and `run.stopped` wake `komodo status --wait`; `--wait any` also wakes on `stage.enter`. A wake is a file touch under `state/wake/<run>`; the waiter watches the file and then reads the journal tail, so an event between subscribe and watch is never missed (§1 guarantees).
-- **Subscribers, exactly 3:** the ledger (S23), the wake file, and the `status --watch` renderer. Each is a read-only function `(event) → error` called in `seq` order after `Next()` returned; an error or panic is logged and the subscriber is dropped for the run.
+- **Wakes:** `group.blocked`, `group.paused`, `run.done` and `run.stopped` wake `komodo status --wait`; `--wait any` also wakes on `stage.enter`. A wake is a file touch under `state/wake/<run>`; the waiter watches the file and then reads the state tail, so an event between subscribe and watch is never missed (§1 guarantees).
+- **Subscribers, exactly 3:** the ledger (S23), the wake file, and the `status --watch` renderer. Each is a function `(event) → error` called in `seq` order after `Next()` returned, which writes only its own derived kind through S29 (ledger rows, the wake file) and never group state; an error or panic is logged and the subscriber is dropped for the run.
 - **Hooks:** the 3 inline hook points live in S12; the bus runs none. Repo hooks wait for a later minor and will be subscribers, never gates.
 
 **Vet:** none open.
@@ -1706,10 +1732,11 @@ Three mechanical checks enforce it:
 - **Structure:** import direction, comment lint, and strict decode of every `agent.json` and job template.
 - **Safety:** the guard table and the prefix-hash pin.
 - **Events:** every emitted type is in the catalog, and every catalog type has an emitter (§1 Event model).
+- **State (S29):** no package outside `state` writes a runtime state path, and every kind has a writer, a schema version and a fixture.
 - **Docs drift:** a verb missing from `README.md` or the `komodo` skill, a broken decision link, or an `lld.md` package that doesn't exist.
 - **Maps:** every task group names an S-ID, and every S-ID has an `lld.md` section.
 - **No silent gaps:** every `[NOT CHECKED]` or `G-NN` tag in `docs/lld.md` names a backlog task that closes it, and every gap row in `docs/lld.md`'s register has a phase; a tag with no task fails the gate. This is how the plan's gap register survives `PLAN.md`'s removal after phase 1.
-- **Generated artifacts match their source:** the Part C roster tables from `policy.json` (S12), `events.schema.json` from the event enum (§1), `skills/index.json` hashes (S09), the standards rule IDs (S20), the template golden fixtures under both profiles (S10), and the S18 action table against the action kinds `Next()` emits.
+- **Generated artifacts match their source:** the Part C roster tables from `policy.json` (S12), `state.schema.json` from the kind registry and the event enum (§1, S29), `skills/index.json` hashes (S09), the standards rule IDs (S20), the template golden fixtures under both profiles (S10), and the S18 action table against the action kinds `Next()` emits.
 - **Timing:** short verbs under 50 ms (S01), the gate itself under 3 minutes locally, a 10,000-event replay under 1 s (S14).
 
 **Vet:** **Gate time:** decided: under 3 minutes locally; `--fast` skips cross-builds and timing.
@@ -1718,6 +1745,71 @@ Three mechanical checks enforce it:
 **Pass 3 (caching):** none; the gate must observe, never remember.
 
 **Proof:** each failing case above has a fixture that makes the gate fail.
+
+## Cross-cutting: state
+
+### S29 · State manager (core pillar)
+
+**Owns:** `state/{manager,groupstate,schema,kinds,validate,migrate}.go` (new), `embed/state.schema.json`, and every path in §4 Runtime state except those under **Outside the manager** below.
+
+**Rule:** one schema and one door. Every read and write of runtime state in the harness goes through the state manager, and no other package opens a state path.
+
+**Does:**
+- **One schema:** every record and every event is a Go struct registered as a `kind`. The build generates `embed/state.schema.json` from the registry, and `help --json` serves it as `state`.
+- **Record envelope:** every record carries `v` (schema version), `kind`, `key`, `rev` (rises by 1 per write), `ts` and `writer` (run and pid). The manager sets all 6; a caller supplies only the body.
+- **Populates:** the envelope, schema defaults, and an event's `seq`, `ts` and `crc` (§1 envelope). A caller never computes them.
+- **Validates on write:** types, required fields and enums (stage, block reason, exit reason, event type), then each kind's invariants. `seq` has no gaps, `epoch` and `fence` never fall, `rev` must match the caller's (compare-and-swap), and the caller must own the key. A refused write leaves the disk untouched and returns `state_invalid` with the field path.
+- **Validates on read:** the CRC or hash first, then the version. An older `v` is migrated in memory by a registered step, so a new binary reads the previous schema (S03). A record that still fails is moved aside as `.bad-*`, and the owning group blocks with `state_invalid` (S18).
+- **A torn last event line is not a bad record:** a crash mid-`Append` can leave one. The manager drops it, emits `state.truncated` once and replay continues (§1, S18); only a bad line before the last one is quarantined.
+- **Four write primitives:** `Append` for state files (append, fsync, return), `Replace` for snapshots (temp file, fsync, rename), `Claim` for create-only records (queue items, leases, pool and link slots; a takeover renames the old one aside) and `Remove` (delete after the owner and `rev` check: a queue item taken by a pool slot, a released lease, a landed group's records). Every write is atomic on its own.
+- **Writers:** each kind names its writers, and the manager refuses a write from any other. A group's records accept writes only from that group's `Drive` (S14), and a group snapshot is refused unless its `seq` is the last event's; `Next()` still decides every change.
+- **Reads:** `Get`, `List`, `Tail` (a state file from a `seq`) and `Watch` (wakes on a change to a kind, used by `status --wait`). Subscribers and views read through it like every other caller.
+- **Group state (`state/groupstate.go`):** a group's events, its snapshots and replay as one unit, so their rules never drift apart.
+  - **`Open(group)`:** binds the caller as the group's only writer, its `Drive` (S14), and refuses unless this process holds the group's lease and current fence (S15), so no second process can open it.
+  - **`Append(event)`:** stamps `seq`, `ts`, `crc` and `stale` (an epoch below the current one), checks the event, appends and fsyncs it, and returns before `Next()` runs. `action.start` and `action.done` go through it too (the outbox, §1).
+  - **`Snapshot(state)`:** called after every `Next()`; it writes `state.json` only every 50 events or on a stage change, and refuses a state whose `seq` is not the last appended.
+  - **`Load(next)`:** reads the snapshot, replays the events after it through `next` (S14's `Next()`, passed as a parameter so `state` never imports `engine`), drops a torn last line with one `state.truncated`, and returns the state and its open actions.
+  - **`Tail(seq)`:** the events after a `seq`, for `status --wait` and the subscribers.
+  - **Run events:** `runs/<run>.jsonl` uses the same `Append` and `Tail`, with no snapshot.
+- **Inside the harness:** an in-process service, started once per `komodo` process; there is no server process (Locked decisions). Two engines on one machine stay consistent through the disk primitives, never a shared process. Locks are per key, so groups never queue behind each other.
+
+**Kinds:**
+
+| Kind | Path | Primitive | Writers |
+|---|---|---|---|
+| `event` (group, run) | `runs/<group>/events.jsonl`, `runs/<run>.jsonl` | Append, through group state | S14 `Drive`; the run goroutine |
+| `group` | `runs/<group>/state.json` | Replace, through group state's `Snapshot` | S14 `Drive` |
+| `session` | `sessions/<id>/{brief.md, request.json, result.json, stream.jsonl, messages.jsonl}` | Replace; Append for the 2 streams | S16; S23 for `stream.jsonl`; S08's API loop for `messages.jsonl` |
+| `ledger`, `view` | `ledger/{sessions,events}.jsonl`; `ledger/{tasks,groups}.json` | Append; Replace | S23's subscriber |
+| `job` | `jobs/state.json` | Replace | S17 |
+| `queue`, `pool`, `link` | `~/.komodo/state/{queue,pool,links}/` | Claim; Remove | S14; S17 enqueues jobs; S18's sweep re-enqueues; S05 for links |
+| `lease`, `fence` | `~/.komodo/leases/<repo-id>/<group>.{json,fence}` | Claim; Replace; Remove | S15; S18's sweep frees dead leases |
+| `timer`, `quota` | `~/.komodo/state/timers/`, `quota.json` | Replace; Remove when fired | S05; S17 fires timers |
+| `providers`, `install` | `state/providers.json`, `install.json` | Replace | S02, S05 probe |
+| `fresh` | `state/{fresh.json, fresh.lock, fresh.log, active/}` | Replace; Claim; Append | S03 |
+| `config_audit` | `state/{config.log, config.sha}` | Append; Replace | S04, from the `config` verb |
+| `wake` | `state/wake/<run>` | Replace (a touch) | S24 |
+
+**Group snapshot (`group` kind):** `run, group, stage, epoch, fence, seq, config_hash, tasks[{id, state, attempts, session}], actions_open[], resume{session, handle, link}, pause{until, link}, block{reason, at}`.
+
+**Outside the manager:** these 6 keep their owners' rules.
+- **`config.json`:** S04 owns it and its schema; `komodo config` is its only writer.
+- **`cache/`:** content-addressed derived data, verified on read (S22).
+- **Git refs and worktrees under `wt/`:** git's own compare-and-swap and checkouts (S15).
+- **Job templates, `~/.komodo/jobs/*.json`:** your input files, decoded strictly (S17).
+- **Binaries and the signing key:** `bin/`, `versions/` (S03) and `release.key`, a secret file only `release` reads (S26).
+- **Session temp:** each session's own HOME and TMPDIR, removed by the sweep (S13, S15).
+
+**Vet:**
+- **Service shape:** default: in-process, one per `komodo` process, no daemon, because the locked decisions rule out a server process.
+- **Scope:** default: the 6 exclusions above keep their owners' rules; every other runtime file is a kind.
+- **Bad records:** default: quarantine and block the owning group with `state_invalid`; never repair one automatically.
+- **Group snapshot fields:** default: the list above; G-24 tracks each event type's `data` struct.
+
+**Pass 2 (performance):** validation is generated code, with no reflection; an `Append` costs one fsync and a `Replace` one fsync plus a rename. Short verbs load only the kinds they touch, inside the 50 ms budget (S01).
+**Pass 3 (caching):** decoded records are kept in memory per process, keyed by path and `rev`; nothing is cached across processes.
+
+**Proof:** the gate fails a fixture package that writes a state path outside `state`. A record missing a required field is refused with its field path, and the file is byte-identical afterward. A write with a stale `rev` is refused. A group snapshot whose `seq` is not the last event's is refused. A `v: 0` fixture reads as `v: 1`. A corrupted record is moved aside and blocks its group with `state_invalid`; a torn last event line is dropped with one `state.truncated` and the group continues. A `Remove` with a stale `rev` is refused. 2 processes claiming one lease yield exactly 1 holder. Replaying a group's state through `Load` rebuilds its `state.json` byte for byte. `Load` on a group 49 events past its snapshot replays exactly 49. A second `Open` on a group already open in this process is refused, and so is an `Open` from a process that does not hold the group's lease.
 
 ## Cross-cutting: security
 
@@ -1732,6 +1824,7 @@ Three mechanical checks enforce it:
 | Malicious external MCP | S08 allowlist, off by default, no credentials |
 | Stale engine lands over newer work | S15 fence enforced by git compare-and-swap; S18 action keys |
 | Prompt steering through a skill or repo text | S09 steering scan at the gate and in `doctor`; S10 keeps rules out of prompts; S12 `text` row |
+| Tampered or half-written state | S29 (checked on every read, bad records moved aside, atomic writes) |
 | Tampered config or binary at run time | S04 hash guard; S03 signatures; G3 covers both files |
 
 ---
@@ -1841,19 +1934,18 @@ komodo-agentic-factory-coding/
 │   │
 │   ├── engine/                    # Orchestration
 │   │   ├── engine.go              # [S14] Drive: loop over Next()
-│   │   ├── stage.go               # [S14] 5 stages + Paused, Blocked; pure Next()
+│   │   ├── stage.go               # [S14] 5 stages + Paused, Blocked; epochs; pure Next()
 │   │   ├── intake.go              # [S14] lint, hash card, lease, cut worktree from the epic tip
 │   │   ├── build.go               # [S14] one session per task; resume it with findings
 │   │   ├── verify.go              # [S14] reviewer and tester at once, cancel on first failure
 │   │   ├── pool.go                # [S14] session pool, floor, ceiling
 │   │   ├── queue.go               # [S14] work queue files, pick order, fair share
-│   │   ├── state.go               # [S14] state.json, epochs
 │   │   ├── worktree.go            # [S15] detached cut, sweep, lease
 │   │   ├── shutdown.go            # [S15] catch-all shutdown, parent guard
 │   │   ├── session.go             # [S16] spawn, heartbeat, warn, nudge, kill
 │   │   ├── schedule.go            # [S17] tick, counters, overlap
-│   │   ├── limits.go              # [S18] retries, repairs, flap, block reasons
-│   │   └── recover.go             # [S18] startup sweep, crash resume
+│   │   ├── limits.go              # [S18] retries, returns, flap, block reasons
+│   │   └── recover.go             # [S18] startup sweep; crash resume through group state's Load
 │   │
 │   ├── quality/                   # Quality; sessions come in from the engine
 │   │   ├── check.go               # [S19] done_when, scope, secrets, coverage
@@ -1902,7 +1994,7 @@ komodo-agentic-factory-coding/
 │   ├── ops/                       # Economy and ops
 │   │   ├── budget.go              # [S21] group wall, tokens, mode
 │   │   ├── ledger.go              # [S23] sessions, events, redaction
-│   │   ├── bus.go                 # [S24] envelope, catalog, journal, in-order delivery
+│   │   ├── bus.go                 # [S24] envelope, catalog, in-order delivery
 │   │   └── wake.go                # [S24] status --wait wakes
 │   │
 │   ├── agent/                     # Model I/O (S07) and Context (S09–S11)
@@ -1927,12 +2019,20 @@ komodo-agentic-factory-coding/
 │   │   ├── sandbox_linux.go       # [S13] bwrap
 │   │   └── sandbox_docker.go      # [S13] Docker, native Windows
 │   │
+│   ├── state/                     # [S29] the state manager: the only door to runtime state
+│   │   ├── manager.go             # [S29] Get, List, Tail, Watch, Append, Replace, Claim, Remove
+│   │   ├── groupstate.go          # [S29] group state: events, snapshots, replay; Open, Append, Snapshot, Load, Tail
+│   │   ├── schema.go              # [S29] kind registry and record envelope; generates state.schema.json
+│   │   ├── kinds.go               # [S29] one struct per kind, the event catalog included
+│   │   ├── validate.go            # [S29] types, enums, invariants, owner and rev checks
+│   │   └── migrate.go             # [S29] read older schema versions, move bad records aside
+│   │
 │   └── core/                      # plumbing, no domain logic
 │       ├── config.go              # [S04] config.json, groups, hard limits, audit log
 │       ├── detect.go              # [S04] repo profile + command classes
 │       ├── http.go                # [S06] client, SSE, retry, allowlist, redaction
 │       ├── cache.go               # [S22] content-addressed store, LRU
-│       ├── lock.go                # [S05][S14] machine-wide pool and link slots, quota.json
+│       ├── lock.go                # [S29] create-only and rename-aside file helpers; only `state` calls them
 │       ├── version.go             # [S03] embedded version, semver
 │       ├── fs.go                  # atomic writes, glob
 │       └── testhome.go            # isolated HOME for tests
@@ -1950,7 +2050,7 @@ komodo-agentic-factory-coding/
 │   │   ├── {komodo,plan,run,respond,release}/SKILL.md
 │   │   └── standards-<name>/SKILL.md            # all 34
 │   ├── defaults.json              # [S04] built-in defaults + hard limits
-│   ├── events.schema.json         # [S24] generated at build from the event enum
+│   ├── state.schema.json          # [S29] generated at build from the kind registry and event enum
 │   ├── models.json                # [S05] default models per weight and link, Claude windows
 │   └── policy.json                # [S04][S12] guard rows with scopes, steering phrases
 │
@@ -1972,8 +2072,8 @@ komodo-agentic-factory-coding/
 ```
 <git-common-dir>/komodo/
 ├── install.json                   # [S02] manifest v1
-├── runs/<run>.jsonl               # [S14][S24] run journal
-├── runs/<group>/{events.jsonl, state.json}  # [S14][S18][S24] group journal, snapshot
+├── runs/<run>.jsonl               # [S29] run events, through group state
+├── runs/<group>/{events.jsonl, state.json}  # [S29] group state: events and snapshot
 ├── jobs/state.json                # [S17]
 ├── sessions/<id>/{brief.md, request.json, stream.jsonl, messages.jsonl, result.json}  # [S16]
 ├── ledger/{sessions.jsonl, events.jsonl, tasks.json, groups.json}   # [S23] rows and the lock-table views
@@ -1986,7 +2086,7 @@ komodo-agentic-factory-coding/
 ├── jobs/*.json                    # [S17] your job templates
 ├── leases/<repo-id>/<group>.{json,fence}  # [S15] one lock table per machine, with fences
 ├── wt/<repo-id>/<group>/          # [S15]
-└── state/{providers.json, quota.json, pool/, links/, queue/, wake/, fresh.json, fresh.lock, fresh.log, active/, config.log, config.sha}  # [S02][S03][S04][S05][S14][S24]
+└── state/{providers.json, quota.json, pool/, links/, queue/, wake/, fresh.json, fresh.lock, fresh.log, active/, config.log, config.sha, timers/}  # [S02][S03][S04][S05][S14][S24]; every file through [S29]
 ```
 
 ### What `komodo install` puts in any repo
@@ -2026,7 +2126,7 @@ komodo-agentic-factory-coding/
 | Phase | Wave | Subsystems | Exit proof |
 |---|---|---|---|
 | 1 | Design docs | prd, hld, lld (one section per S-ID), ADR 0001, epic-1 | you approve the docs; epic-1 is linted in phase 2 |
-| 2 | Foundations | S01 skeleton, S04, S06, S13, S22, S03 version, S25 lint, S27 gate core; a `claude -p` + MCP tool server spike | core tests pass on 3 OSes; `komodo doctor backlog` passes on epic-1; the spike's worker makes one MCP tool call under the S05 launch flags |
+| 2 | Foundations | S01 skeleton, S29, S04, S06, S13, S22, S03 version, S25 lint, S27 gate core; a `claude -p` + MCP tool server spike | core tests pass on 3 OSes; `komodo doctor backlog` passes on epic-1; the spike's worker makes one MCP tool call under the S05 launch flags |
 | 3 | Model surface | S07, S09, S10, S12 | guard table and strict decode pass |
 | 4 | Model I/O | S05 (`claude -p`, local, Anthropic API), S08, S11 | a fixture task finishes through `claude -p` and through a local model |
 | 5 | Runtime | S15, S16, S23, S24 | timeout, idle and kill proofs pass with 0 orphans |
@@ -2098,7 +2198,7 @@ komodo-agentic-factory-coding/
 Each card carries its own proof. These checks cross subsystems:
 - **Every phase:** `go run ./cmd/komodo gate` passes, and `GOOS=windows|linux|darwin go build ./...` cross-builds.
 - **Full run:** `komodo install`, then `komodo run tg-fixture` on a local model and `komodo status --wait done`, ends with the group landed on its epic branch per `ship.mode` and one ledger row per session.
-- **Crash:** `kill -9` mid-run, then `resume`, replays the journal and finishes with 0 repeated paid sessions.
+- **Crash:** `kill -9` mid-run, then `resume`, replays the group state and finishes with 0 repeated paid sessions.
 - **Race:** 2 engines started on one group make exactly 1 landing; the loser ends in `lease.lost` and the hidden ref holds the winner's commit.
 - **Regression:** the fixture with a pre-existing failing test lands, and the fixture with a seeded regression blocks with `regression`.
 - **Fresh repo:** following `README.md` on macOS and Windows reaches a shipped fixture group.
@@ -2143,7 +2243,7 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | Docker backend: full official image per detected language, else `sandbox.image`; Rust and Python setup add missing tools; one container per worktree, restarted on kill; `git-read` on the host; LF worktrees; `doctor` checks Linux containers | S04, S13 |
 | Packages group similar code by layer: 11 packages; new `quality` (S19, S20), `ops` (S21, S23, S24) and `safety` (guard and sandbox); ship moves to `repo`, detect to `core` | §2, §4, §5, S04, S12, S13, S19–S21, S23, S24, S26, S27 |
 | Agents are not batched: a group goes from Build to Verify without waiting on other groups | S14 |
-| A machine-wide session pool (floor 1, ceiling 6) replaces lanes; Repair folds into Build; Verify runs the reviewer and tester at once, and the first failure cancels the other; groups form a dependency DAG with a join rule, one landing at a time, a Check on the epic tip and an epic gate; the planner writes LLM-sized tasks, human docs and acceptance items | Context, S01, S04, S14, S15, S16, S18, S20, S21, S23, S25, S26, Part C, §4, §6 |
+| A machine-wide session pool (floor 1, ceiling 6) replaces lanes; a failed Check or Verify returns to Build; Verify runs the reviewer and tester at once, and the first failure cancels the other; groups form a dependency DAG with a join rule, one landing at a time, a Check on the epic tip and an epic gate; the planner writes LLM-sized tasks, human docs and acceptance items | Context, S01, S04, S14, S15, S16, S18, S20, S21, S23, S25, S26, Part C, §4, §6 |
 | Continuity review: S14 adds `Paused`; the engine holds a group's lease from Intake to landing, renewed every 5 min | S14, S15, §4 |
 | Continuity review: pool and link limits are machine only; one brief ceiling, no slot caps; the epic gate routes findings to the group that last changed the file; a tester failure cancels only after Go's rerun; the tester gets blind engine facts; only builder, reviewer and tester take pool slots; 6 new codes; key count 36 | S01, S03, S04, S10, S11, S14, S18, S20, S21, S25 |
 | Tester copy per language (copy `node_modules` and `target/`, rerun setup for Python and Make, Docker image saved at Intake); Go reruns a failed item twice, the tester restarts once, and splits block as `flaky`; groups start after landing plus epic-tip Check, pick by priority then longest chain; named runs refuse unlanded dependencies | S01, S04, S10, S11, S13, S14, S15, S18, S20, S25 |
@@ -2154,8 +2254,8 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | Alignment pass: job templates carry no limits; `stop <run>` gives detached runs a clean stop; `provider.skip` and `limit.warn` join the catalog; an agent's `model` beats `mode`, and `-prev` falls back to the backstop; config groups are `agents.<name>` and `endpoints.<name>` sections; the global flag is `-C` only | §1, S01, S02, S04, S05, S15, S17, S24, §4 |
 | One verb set for you and the orchestrator: the `orch` tier is removed; `run` always detaches, `status --wait` replaces `orch wait`, `plan`, `skill` and `scope` lose the prefix, JSON is the default without a terminal, the engine opens the epic PR, and `orch agent` moves to a later minor | §1, S01, S02, S03, S05, S09, S12, S14, S15, S17, S18, S19, S24, S26, Part C, §4, cutover, later minor |
 | Config has one write path: `komodo config [agent\|endpoint <name>] key=value…`, all or none, with `--all` and `--default` per scope and an audit log; no repo layer, `--set`, `--mode`, `--repo`, `get`/`show`/`unset`, `doctor config`, `--reload-config` or `KOMODO_FRESH`; agent models are `opus` or `opus-prev`, and chains are fixed in `agent.json`; repo hooks wait for a later minor | §1, S01, S02, S03, S04, S05, S07, S24, Part C, §4 |
-| Hybrid event model as a core tenet: the engine emits typed events into a per-group journal, one pure `Next(state, event)` decides, subscribers and repo hooks are read-only, and inline gates and shutdown stay outside the bus | §1, S08, S10, S12, S14, S15, S16, S17, S18, S23, S24, S27, §3, §4, §7 |
-| Design pass batch 1: journaled actions with idempotency keys (the outbox), stage epochs that fence late events, the Verify race rule, a gates table, 6 delivery guarantees, a CRC per journal line, a run journal, 7 new event types (32), the S14 concurrency model and work queue, S18's 3 deferred items decided | §1, S14, S18 |
+| Hybrid event model as a core tenet: the engine emits typed events into a per-group state, one pure `Next(state, event)` decides, subscribers and repo hooks are read-only, and inline gates and shutdown stay outside the bus | §1, S08, S10, S12, S14, S15, S16, S17, S18, S23, S24, S27, §3, §4, §7 |
+| Design pass batch 1: recorded actions with idempotency keys (the outbox), stage epochs that fence late events, the Verify race rule, a gates table, 6 delivery guarantees, a CRC per event line, a run state, 7 new event types (32), the S14 concurrency model and work queue, S18's 3 deferred items decided | §1, S14, S18 |
 | Design pass batch 2: config hash guard, the capacity profile per link, `guard.refusal_limit` and `check.patch_coverage` (33 keys), the group clock formula with hard limit 720, evidence rows for 6 defaults, the 5-step CLI pipeline, install flags 13 to 8, `status --explain`, `config --accept`, envelope `v` | S01, S04 |
 | Design pass batch 3: the `agent.json` field table with `v` and `pool_slot`, a registry with cross-checks, the lease fence enforced by `git update-ref` compare-and-swap (proven), the workflow ledger views `tasks.json` and `groups.json`, the task list lock, task claims, the scorecard | S07, S15, S23 |
 | Design pass batch 4: guard rows are `policy.json` data with scopes, Part C tables rendered by the gate, B2 becomes a lint fact, exactly 3 inline hooks, the steering-phrase row, bus wakes and subscribers defined | S12, S24, S25, Part C |
@@ -2165,6 +2265,9 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | Design pass batch 9: test sandboxes (blind by profile, private loopback on Linux and Docker, a per-repo test lock on macOS, service-backed tests warn through the baseline, `needs:` on items), copy mechanics per platform (APFS clone proven, reflink, NTFS byte copy, Docker bind mounts), symlinks kept, Rust shares a per-group target dir, case-collision lint | S04, S13, S25 |
 | Design pass batch 8: the precedents table, Codex as the sandbox precedent and `doctor --sandbox`, 3 cache kinds, fenced feature-branch landings, 6 generated-artifact gates and timing gates, 3 security rows, `queue.go` and `repomap.go`, runtime state paths, end-to-end race and regression checks | Context, S13, S22, S26, S27, security, §4, §7 |
 | Design pass batch 10: the gap register G-01..G-20 with a closing phase per row, the 4 S03 Vet lines decided, the S27 "no silent gaps" gate rule, the rule that no card says "later" or carries `[NOT CHECKED]` without a register row | S03, S27, Open items |
+| Naming (your decision, 2026-10-11): "journal" is renamed to state everywhere; a group's state is its state events (`events.jsonl`) plus snapshots (`state.json`); the event `journal.truncated` is now `state.truncated` | §1, S14, S15, S18, S23, S24, S29, §4 |
+| Group state (your decision, 2026-10-11): a group's events, snapshots and replay become one unit, S29's group state module, with `Open`, `Append`, `Snapshot`, `Load` and `Tail`; `state.go` leaves S14, event writing leaves S24's bus, and S18 resumes through `Load` | §1, S14, S18, S24, S29, §4 |
+| State pillar (your decision, 2026-10-11): one state schema for every record and event, served by S29, an in-process state manager that is the only way to read or write runtime state; it populates and validates every record; `events.schema.json` folds into `state.schema.json`; the pause timer moves from the ledger row to a `timer` record | §1, §2, S05, S10, S14, S17, S18, S23, S27, S29, §4, §6, security |
 | Design pass batch 11 (your decisions, 2026-10-09): G-01 local signing key plus a backup copy, G-05 `providers.json` as the only model registry with 404 failover, G-15 the orchestrator answers `scope approve` after 2 engine denials; enterprise targets G-21..G-23 with triggers | S03, S05, S19, Open items |
 
 ## Open items
@@ -2200,5 +2303,7 @@ Facts were checked against Claude Code 2.1.291, its docs, Ollama v0.35.1, Anthro
 | G-21 | S03 | enterprise signing: private key in a KMS or keyless signing, `fresh` rollback refusal | later minor; trigger: the first machine you do not own runs `fresh` |
 | G-22 | S05 | enterprise model registry: a central gateway owning IDs, `retired_on` dates, quotas | later minor; trigger: 3 or more machines, or 2 people sharing one cap |
 | G-23 | S19 | enterprise scope: path ownership rows in `policy.json`, a human for other teams' paths, a widening digest | later minor; trigger: the first repo with 2 teams or customer data |
+| G-24 | S29 | the `data` struct of each of the 32 event types, listed in `state.schema.json` | lld authoring, phase 1 |
+| No Repair stage or repair vocabulary: a failed Check or Verify returns to the task's own builder session; `limits.repairs` renamed `limits.returns`; everything after Verify is approved code | S14, S18, S19, S20, S21, S23, docs/hld.md, docs/lld.md | 2026-10-11 | you: "Everything after Reviewer + Tester is approved code; never a Repair stage" |
 
 Rule for new gaps: a card may not say "later", "TBD" or carry a `[NOT CHECKED]` tag without a `G-NN` row here. The gate enforces the same in `docs/lld.md` from phase 1.
