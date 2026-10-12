@@ -14,8 +14,8 @@ Output that has to be re-read has failed, however correct.
 
 ## Planning rules
 
-- **`PLAN.md` wins.** Read the section before answering; never rely on memory or on `backups/`.
-- **`backups/` is the prototype.** It is reference only, not a source of rules.
+- **`PLAN.md` wins.** Read the section before answering; never rely on memory or on the prototype.
+- **The prototype lives in git history.** `backups/` and `drafts/` were removed from the tree; read them at commit `fdf4f61f` (`git show fdf4f61f:backups/<path>`). They are reference only, not a source of rules.
 - **Vet lines have defaults.** State the default you assume, keep going, and ask only when the answer is the user's alone.
 - **Plan edits are patches.** Change the smallest span, and add a row to "Review changes" when a design decision moves.
 - **Keep counts and cross-references true.** Update the S-ID, phase and section references you touch.

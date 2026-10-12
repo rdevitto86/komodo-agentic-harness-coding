@@ -316,7 +316,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 **Fits with:** S07 slots, S09 standards, S05 measured `ctx`, S22 slices, S21 cache breakpoints at the part boundaries, S25 `repo_map`, S19 `baseline`, S20 `lens_rules`.
 
 **Internals:**
-- **20 slots**, required or optional per agent (`drafts/README.md`); an empty required slot fails the brief.
+- **20 slots**, required or optional per agent (`drafts/README.md` at `fdf4f61f`); an empty required slot fails the brief.
 - **Blind reviewer and tester:** both get engine facts only (task list at the base commit, diff, Check results); never builder prose.
 - **Repo context:** `AGENTS.md` minus the Komodo block, read from the base commit.
 - **Trimming:** Go signature trimming, delta-only diffs on re-review, ANSI and build noise stripped.
@@ -330,7 +330,7 @@ One card per subsystem, for sign-off one at a time. Every fact here comes from `
 
 **Decided for you:** one ceiling per link replaces 4 per-slot caps.
 
-**Source:** [PLAN.md:1099-1120] and `drafts/README.md`
+**Source:** [PLAN.md:1099-1120] and `drafts/README.md` at `fdf4f61f`
 
 ---
 

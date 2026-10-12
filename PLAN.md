@@ -24,7 +24,7 @@
 - **Retries:** effectively unbounded.
 - **The USD cap:** always $0.
 
-Every prior alpha and beta, including the first beta 6 attempt, is a failed prototype. The concepts carry forward; the code starts fresh in place, with the prototype parked in `backups/`.
+Every prior alpha and beta, including the first beta 6 attempt, is a failed prototype. The concepts carry forward; the code starts fresh in place, with the prototype archived under `backups/` at commit `fdf4f61f` (removed from the tree in `7b407710`).
 
 **What.**
 - **The engine:** one Go binary, standard library only.
@@ -37,7 +37,7 @@ Every prior alpha and beta, including the first beta 6 attempt, is a failed prot
 - **Execution:** one fresh session per task; a failed Check or Verify resumes it. Providers use a declared fallback chain per agent, and the pipeline has 5 stages.
 - **Platforms and config:** macOS, Linux, WSL2 (preferred on Windows) and native Windows `.exe`, which needs Docker. There is no repo config folder or repo layer; every setting lives in `~/.komodo/config.json` and changes only through `komodo config` (S04), and runtime state lives outside the tree.
 - **Carry-over:** the backlog tree and lint, release, worktree protections, the subagent ledger, economy mode (now the `mode` key) and all 34 `standards-*` skills are kept. Eval, recall, plugins and standalone facets are deleted.
-- **Docs:** `AGENTS.md` is the source of truth, and `CLAUDE.md` imports it. Specs start from zero: the PRD is rewritten, and prior specs sit in `backups/` and at tag `prototype-final`.
+- **Docs:** `AGENTS.md` is the source of truth, and `CLAUDE.md` imports it. Specs start from zero: the PRD is rewritten, and prior specs sit under `backups/` at commit `fdf4f61f`, and the earlier V1.x tree at tag `prototype-final`.
 - **OpenAI:** scoped now, implemented in a later minor version. Beta 6 ships the interfaces, the `install` probe, Codex detection and `AGENTS.md` compatibility. `codex-cli` and `openai-api` refuse with `not yet`, and `.codex/` install reports `not yet`. `openai.go` still ships for `http:` endpoints, local or on a server.
 
 **Precedents (what each core idea is borrowed from, checked 2026-10-08):**
@@ -657,10 +657,10 @@ No config file is written. `~/.komodo/config.json` appears only on your first `k
 **Output profile (accessibility):**
 - **Where it applies:**
   - Komodo's own human text, and the `report` field;
-  - the 4-heading run report ported from `backups/internal/harness/report.go`;
+  - the 4-heading run report ported from `backups/internal/harness/report.go` at `fdf4f61f`;
   - the rules block install writes into `AGENTS.md`;
   - the PR body template (S26).
-- **Source:** the `adhd` templates follow `backups/komodo/rules/accessibility.md`; that text, ported as `embed/output/adhd.md`, also goes into the `AGENTS.md` block for the orchestrator's own chat.
+- **Source:** the `adhd` templates follow `backups/komodo/rules/accessibility.md` at `fdf4f61f`; that text, ported as `embed/output/adhd.md`, also goes into the `AGENTS.md` block for the orchestrator's own chat.
 - **Change:** `komodo config output.profile=standard`, then `komodo sync` rewrites the `AGENTS.md` block.
 
 **Env (2 only):**
@@ -1137,7 +1137,7 @@ Three mechanical checks enforce it:
 - **Callers:** Go callers of changed symbols come from `go/packages`. Other languages get none preloaded; the reviewer finds callers with its `search` tool.
 - **New slots (2026-10-08):** `repo_map` (S25; required for planner and architect, optional for the reviewer), `baseline` (S19; tester, optional) and `lens_rules` (S20; reviewer, required), taking the list to 20.
 
-**Vet:** none open. Decided: one ceiling per link, half its measured context, replacing the 4 per-slot caps; the 20-slot list in `drafts/README.md`.
+**Vet:** none open. Decided: one ceiling per link, half its measured context, replacing the 4 per-slot caps; the 20-slot list in `drafts/README.md` at `fdf4f61f`.
 
 **Pass 2 (performance):** the brief is assembled from S22 slices, never by re-reading files; a 4-task group's 4 briefs share every byte before the task part.
 **Pass 3 (caching):** the 4 breakpoints of S21 are placed at the part boundaries, so parts 1 and 2 are 1-hour cache blocks and parts 3 and 4 are 5-minute ones.
@@ -2098,7 +2098,7 @@ komodo-agentic-factory-coding/
 └── .claude/settings.json          # komodo allow rule + SessionStart → komodo status
 ```
 
-## 5. Port map (from the prototype in `backups/`)
+## 5. Port map (from the prototype, `backups/` at `fdf4f61f`)
 
 | Prototype | New home | Subsystems | Action |
 |---|---|---|---|
@@ -2182,7 +2182,7 @@ komodo-agentic-factory-coding/
 | File | Stale | Becomes |
 |---|---|---|
 | `.github/PULL_REQUEST_TEMPLATE.md` | `komodo pr create --title … --body-file …` | the engine's S26 body template |
-| `backups/` | every beta 5 verb | unchanged; it is the archive |
+| `backups/` | every beta 5 verb | removed in `7b407710`; the archive is commit `fdf4f61f` |
 
 **Order:**
 1. **Before phase 2:** apply the "Before phase 2" edits above; phases 2–6 then run in plain Claude Code (§6).

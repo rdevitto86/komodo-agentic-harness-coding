@@ -1378,7 +1378,7 @@ Host cleanup matters: global Claude Code hooks call `~/.komodo/bin/komodo`, the 
 | Version | 0.1, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
-| Source of truth | `PLAN.md` at commit `ba4ff823` on `feat/1.0.0-beta.6`; `drafts/README.md` for brief slots |
+| Source of truth | `PLAN.md` at commit `ba4ff823` on `feat/1.0.0-beta.6`; `drafts/README.md` at commit `fdf4f61f` for brief slots |
 | Change control | Patches only, smallest span; a moved design decision adds a Review changes row in `PLAN.md` until phase 1 removes it |
 | Approval control | No phase 2 code starts until the owner has signed off every component |
 | Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (`docs/lld.md` §39); the gate fails a tag with no closing task |
@@ -5635,7 +5635,7 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 |---|---|
 | `docs/hld.md` | Rationale, views and quality goals for every mechanism specified here |
 | `PLAN.md` at commit `ba4ff823` | Source of every fact until phase 1 removes it |
-| `drafts/README.md` | The 20 brief slots and the ceiling per link |
+| `drafts/README.md` at commit `fdf4f61f` | The 20 brief slots and the ceiling per link |
 | IEEE software design description practice (ISO/IEC/IEEE 42010 views; SDS module specifications) | Section shape: per-component files, interfaces, data, algorithms, limits, failure handling |
 | Claude Code headless docs, https://code.claude.com/docs/en/headless | Launch line, stream facts, resume, signals |
 | Claude Code environment variables, https://code.claude.com/docs/en/env-vars | MCP timeouts, output caps, retry watchdog |
