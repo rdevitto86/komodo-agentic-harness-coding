@@ -19,7 +19,7 @@
 
 **Owners and controls**
 - **Owners:** domain architect (CEO) decides every gap and signs off per component; technical lead authors.
-- **Controls:** 0.8, draft, awaiting sign-off; source of truth: the HLD and LLD together; patches only; no phase 2 code before sign-off.
+- **Controls:** 0.9, draft, awaiting sign-off; source of truth: the HLD and LLD together; patches only; no phase 2 code before sign-off.
 
 **Revisions**
 
@@ -33,6 +33,7 @@
 | 0.6 | 2026-10-11 | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
 | 0.7 | 2026-10-12 | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
 | 0.8 | 2026-10-12 | Token and USD tracking is opt-in: the `track.usage` setting is on in `economy` mode and off in `thorough` mode |
+| 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
@@ -446,6 +447,7 @@ Three levels of files. Machine: the binary at `~/.komodo/versions/<v>/` and `bin
 - One binary cross-built for windows, linux and darwin at every gate.
 - Binary, config, Max quota and session pool are shared across repos.
 - Install is an eight-step manifest diff; rerunning makes 0 changes.
+- `init`, run by a person, puts Komodo's orchestrator skills and commands into the global Claude Code setup; how it writes there is open (LLD G-28).
 - Self-update fetches the 1 KB `latest.json` at most hourly; live runs keep their version.
 
 ## 8. Crosscutting concepts
@@ -530,7 +532,7 @@ The agent's weight picks the model on Claude links.
 
 **Operations.** No daemon runs. `komodo jobs tick` is one idempotent engine step, fired every 5 minutes by launchd, cron or Task Scheduler when installed with `--schedule`. Every failure has a detector, an action, a bound and a final state. The startup sweep kills orphans, frees expired leases and re-enqueues lost queue items. A crash stays in its group and loses at most one model turn. `status` shows the pool, stages, budgets and blocks. `status --wait` blocks until the next wake event, as the orchestrator's background loop; `status --metrics` is the scorecard, with tokens and USD only when `track.usage` is on. The ledger keeps `ledger.retention_days` (30) or 100 MB per repo and never trims an open group's state.
 
-**Interfaces.** Every verb runs five steps: parse, validate, resolve, dispatch, render; a failure before dispatch has made 0 writes. Verbs sit in three tiers: shared (person and orchestrator), terminal-only (`install`, `fresh`, config writes, `release`; refused without a controlling terminal) and internal (the engine). Every verb returns one envelope, `{v, ok, verdict, report, data, error}`, with exit codes 0 ok, 1 refused, 2 usage, 3 blocked, 4 internal. `report` arrives formatted; the orchestrator relays it verbatim. Install writes a Komodo block into `AGENTS.md` telling any host session its verbs and rules; a `SessionStart` hook runs `komodo status`.
+**Interfaces.** Every verb runs five steps: parse, validate, resolve, dispatch, render; a failure before dispatch has made 0 writes. Verbs sit in three tiers: shared (person and orchestrator), terminal-only (`install`, `init`, `fresh`, config writes, `release`; refused without a controlling terminal) and internal (the engine). Every verb returns one envelope, `{v, ok, verdict, report, data, error}`, with exit codes 0 ok, 1 refused, 2 usage, 3 blocked, 4 internal. `report` arrives formatted; the orchestrator relays it verbatim. Install writes a Komodo block into `AGENTS.md` telling any host session its verbs and rules; a `SessionStart` hook runs `komodo status`.
 
 **What matters**
 - Two environment variables exist, `KOMODO_HOME` and `NO_COLOR`; secrets are `env:` references only.
@@ -770,7 +772,7 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.8, draft |
+| Version | 0.9, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
@@ -790,6 +792,7 @@ Eighteen newcomer terms; the LLD links here.
 | 0.6 | 2026-10-11 | Technical lead | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
 | 0.7 | 2026-10-12 | Technical lead | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
 | 0.8 | 2026-10-12 | Technical lead | Token and USD tracking is opt-in: the `track.usage` setting (`auto`, `on`, `off`) is on in `economy` mode and off in `thorough` mode; flat keys 33 to 34; per-provider-family usage metrics deferred (G-26) |
+| 0.9 | 2026-10-12 | Technical lead | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
 
 #### 3.4 Related documents
 

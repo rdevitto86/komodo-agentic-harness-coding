@@ -36,6 +36,7 @@
 | 0.6 | 2026-10-11 | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
 | 0.7 | 2026-10-12 | The plan file's remaining facts moved in: per-component proof cases, file map, component dependencies, archive sources, cutover detail; this LLD and the HLD are now the source of truth |
 | 0.8 | 2026-10-12 | Token and USD tracking is opt-in: key `track.usage` (§8.2) gates the ledger's token and USD fields, the scorecard's cost metrics, `warn.usd_per_run` and `limits.group_tokens`; flat keys 33 to 34; gap G-26 |
+| 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
 
 **Related documents:** [docs/hld.md](hld.md) (the High-Level Design), [docs/prd.md](prd.md), [docs/decisions/0001-standalone-harness.md](decisions/0001-standalone-harness.md), [Appendix Q](#appendix-q-component-id-traceability). Terms: the HLD Glossary.
 
@@ -1184,7 +1185,7 @@ classDiagram
 ```mermaid
 flowchart TD
   %% Legend: solid = step order; dashed = conditional or on rerun
-  BS["Bootstrap: install.sh or install.ps1; SHA-256 against latest.json"]
+  BS["Install script: install.sh or install.ps1; SHA-256 against latest.json"]
   MO["komodo install --machine-only"]
   SRC["Binary source: --from, else the latest release if newer, verified"]
   S1["1 Binary: ~/.komodo/versions/#lt;v#gt;/komodo, then ~/.komodo/bin/komodo"]
@@ -1255,7 +1256,7 @@ flowchart LR
   end
   C4 -. "--install" .-> G8
 ```
-**Reading the diagram.** The first runs bootstrap into `komodo install --machine-only`, diffs `install.json` and applies eight steps to `doctor install`. The second, one fresh: check `latest.json`, spawn under `fresh.lock`, download, verify, swap, pin, cleanup. Gate checks sit beside; `--install` places a dev build.
+**Reading the diagram.** The first runs an install script into `komodo install --machine-only`, diffs `install.json` and applies eight steps to `doctor install`. The second, one fresh: check `latest.json`, spawn under `fresh.lock`, download, verify, swap, pin, cleanup. Gate checks sit beside; `--install` places a dev build.
 
 Install runs 8 steps: binary, PATH, provider probe, `AGENTS.md` block, `CLAUDE.md` import line, `.claude/settings.json` rules, manifest and, with `--schedule`, an OS timer. It diffs against the manifest `<git-common-dir>/komodo/install.json`, so a rerun makes 0 changes. The `AGENTS.md` block, between `komodo:begin` and `komodo:end` markers, tells the session it is the orchestrator and names its verbs. It says run `komodo status` first and relay the envelope's `report` verbatim; its `min=` value is the repo pin. The lifecycle fetches a 1 KB `latest.json`, downloads a newer binary in the background, verifies SHA-256 and ed25519, and swaps `bin/komodo` atomically. Live runs keep their version. The gate builds, tests and cross-builds, then checks events, state writes, docs drift and silent gaps.
 
@@ -2007,6 +2008,7 @@ A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from st
 | `version` | Version, binary path, latest known, repo pin | `--check` | yes |
 | `install` | Binary, provider probe, repo files | `--repo-only`, `--machine-only`, `--hosts claude,codex`, `--no-path`, `--from <file>`, `--project`, `--schedule`, `--force` | no |
 | `uninstall` | Remove every file the manifest owns | `--repo-only`, `--machine-only` | no |
+| `init` | Komodo's orchestrator skills and commands in the global Claude Code setup | [UNKNOWN: not yet designed] | no |
 | `fresh` | Get the newest binary now | `--check`, `--to <version>`, `--restart-runs` | no |
 | `doctor [install\|backlog]` | Health of the install or the backlog; both by default | `--fix` (terminal-only), `--sandbox <cmd>` | yes |
 | `config [agent\|endpoint <name>] <key>[=<value>]…` | Read keys, or set several at once, all or none | `--all`, `--default`, `--accept` | reads only |
@@ -2030,6 +2032,7 @@ A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from st
 - **`help [verb]`:** Anyone runs it. It prints the verb list, or one verb's flags and examples, from help text generated at build and embedded, so it answers under 50 ms. `help --json` lists every verb, flag, type, default and result schema and marks the terminal-only ones; the `AGENTS.md` block tells the orchestrator to run it first. `--all` also shows the internal tier. It changes nothing.
 - **`version`:** Anyone runs it. It prints the running version, the binary's path, the latest release Komodo knows of (from `state/fresh.json`) and the repo's pin from `AGENTS.md`. It changes nothing and makes no network call. What `--check` adds is `[UNKNOWN: not yet designed]`.
 - **`install`:** A person at a terminal runs it; the orchestrator is refused. It puts Komodo on the machine and into the current repo in 8 steps: the binary under `~/.komodo/versions/` and `bin/`, the PATH entry, the provider probe, the Komodo block in `AGENTS.md`, the `@AGENTS.md` line in `CLAUDE.md`, two entries in `.claude/settings.json`, the manifest, and an optional OS schedule. It computes the wanted file list, diffs it against `install.json`, applies only the differences, then runs `doctor install` and fails if any check errors. A rerun makes 0 changes; a hand-edited owned file survives and is reported. `--repo-only` writes only the files inside the repo; `--machine-only` writes only the machine parts (what `install.sh` runs); `--hosts claude,codex` overrides host detection; `--no-path` skips the PATH step; `--from <file>` installs that binary file; `--project` also adds `docs/{prd,hld,lld}.md`, `CHANGELOG.md` and a PR template; `--schedule` adds a launchd, cron or Task Scheduler entry that runs `komodo jobs tick` every 5 minutes; `--force` overwrites hand-edited owned files. It never writes a config file.
+- **`init`:** A person at a terminal runs it; the orchestrator is refused. It puts Komodo's orchestrator skills and commands (`run`, `plan`, `respond`, `komodo`) into the global Claude Code setup, so every Claude Code session has them without a per-repo step. The 7 worker agents stay inside the binary, because worker sessions load no user settings. How it writes there, as a Claude Code plugin or as plain files with a machine manifest, is [PENDING G-28]. Typical use: `komodo init` once after `install`.
 - **`uninstall`:** A person runs it. It reads the manifest and removes every file or settings entry `install` owns, the manifest in reverse, plus the repo's language cache. `--repo-only` removes only the repo files; `--machine-only` only the machine files.
 - **`fresh`:** A person runs it. It fetches the newest release now, downloads it to `versions/<v>/`, verifies the SHA-256 and the ed25519 signature, and atomically replaces `bin/komodo`. Live runs keep their own version. `--check` fetches the 1 KB `latest.json` now (one of only three places that do); `--to <version>` installs a named version and may downgrade; `--restart-runs` signals each live run to checkpoint within 2 minutes and resumes it on the new binary, at the cost of at most one repeated model turn. A pinned repo tells you to run it with the fix line `run komodo fresh`. Background updates happen without it unless `fresh.auto` is false or `CI=true`.
 - **`doctor [install|backlog]`:** Anyone runs it, including the orchestrator; it still runs when the repo is pinned above the binary. It is the health check: it reads the machine, the install and the backlog, prints each check's result with a fix line, and changes nothing except refreshing the provider probe in `state/providers.json`. `doctor install` checks the installed files against the manifest, PATH, the sandbox (it runs each detected command's `--version` inside the sandbox to prove the toolchain folders work), the provider catalog as a table of weight, link, model ID, window and where that window came from, each `http:` endpoint's context against the floor (an Ollama server left at 4,096 fails and the fix `OLLAMA_CONTEXT_LENGTH=262144` is named), `OLLAMA_NUM_PARALLEL`, that every agent's chain ends in a free backstop, a missing or bad custom CA file, shell syntax in detected commands, missing Docker tools and that the Docker daemon runs Linux containers, Windows long paths, the copy mechanism for tester worktrees, that macOS has no process or memory cap, steering phrases or broken block markers in the repo's `AGENTS.md`, stale `~/.claude` files naming verbs missing from `help --json`, old Komodo hooks and shadowing binaries, 3 background update failures in a row, the cost class of each link, reviewer rules under 50% verified, and whether a lighter model's first-pass rate beats the standard one. `doctor backlog` checks the backlog files under `docs/backlog/` (the §31.2 table): file shape, `files`, `done_when` and dependencies, that groups in one wave share no files, no protected or `docs/backlog/**` path in `files`, sizing (5 files and 300 lines per task, 8 tasks per group, chains of 4), graph shape and cycles, the EARS form of acceptance items, and case-colliding paths. With no argument it runs both. Typical uses: `install` runs it at the end; phase 2 requires `doctor backlog` to pass on epic-1; cutover requires `doctor install` to find 0 stale references. `--fix` is terminal-only; what it fixes is `[UNKNOWN: not yet designed]`. `--sandbox <cmd>` runs one command under the sandbox policy so you can test what a worker's `run` would see.
@@ -2324,7 +2327,7 @@ Before each session the engine derives `{ctx, slots, cost_class, effort}` for th
 | Tier | Who calls it | Verbs |
 |---|---|---|
 | Shared | Human and orchestrator | `help`, `version`, `doctor`, `sync`, `add backlog`, `add changelog`, `plan`, `run`, `status`, `skill`, `scope`, `resume`, `stop`, `abandon`, `jobs list|show|tick`, `cache stats`, `gate` (except `--install*`), `config` reads |
-| Terminal-only | Human; refused without a controlling terminal | `install`, `uninstall`, `fresh`, `config` writes, `doctor --fix`, `jobs run|pause|resume`, `cache clear`, `gate --install`, `gate --install-hooks`, `release` |
+| Terminal-only | Human; refused without a controlling terminal | `install`, `init`, `uninstall`, `fresh`, `config` writes, `doctor --fix`, `jobs run|pause|resume`, `cache clear`, `gate --install`, `gate --install-hooks`, `release` |
 | Internal | The engine | `internal tools`, `internal fresh-bg` |
 
 **What each one does**
@@ -3990,7 +3993,7 @@ The sandbox is `required` on every OS. Every `run` gets a 10-minute timeout, a 4
 
 **In plain terms.** A release is a published build of the `komodo` binary. Signing proves a download really came from the owner and was not altered. The owner's machine holds the private key; the public keys are inside every binary, so each update can check the next one. Without signing, a tampered download could run with full access to every repo. The person running `fresh` sees only a pass or a refusal.
 
-Releases are signed with ed25519 by a key at `~/.komodo/release.key` (mode 0600) on the owner's machine, with one backup in a password manager. The current and next public keys are embedded in the binary; the `next` key is set at the first release so a leak is survivable by rotation. The bootstrap scripts verify SHA-256 over HTTPS; every later `fresh` verifies the ed25519 signature. Enterprise signing (KMS or keyless, rollback refusal) is a later minor, G-21.
+Releases are signed with ed25519 by a key at `~/.komodo/release.key` (mode 0600) on the owner's machine, with one backup in a password manager. The current and next public keys are embedded in the binary; the `next` key is set at the first release so a leak is survivable by rotation. The install scripts verify SHA-256 over HTTPS; every later `fresh` verifies the ed25519 signature. Enterprise signing (KMS or keyless, rollback refusal) is a later minor, G-21.
 
 ---
 
@@ -5442,9 +5445,9 @@ The probe result is the capacity profile's source, reused until `install`, `doct
 - **output style:** Below the rules, install pastes the output style for the configured `output.profile` (from `embed/output/adhd.md` by default), so the session's own replies follow the same contract.
 - **`<!-- komodo:end -->`:** The closing marker. Broken or missing markers drop the whole block from every brief, and `doctor` reports it (§36).
 
-#### 33.4 Bootstrap
+#### 33.4 Install scripts
 
-**In plain terms.** Bootstrap is how a machine with no Komodo at all gets its first binary: one shell line downloads a script that fetches the latest release, checks its hash and runs `komodo install --machine-only`. The scripts do the minimum, and the binary takes over every later check. Without them, a person would download and verify the binary by hand. A person runs the line once per machine.
+**In plain terms.** The install scripts are how a machine with no Komodo at all gets its first binary: one shell line downloads a script that fetches the latest release, checks its hash and runs `komodo install --machine-only`. The scripts do the minimum, and the binary takes over every later check. Without them, a person would download and verify the binary by hand. A person runs the line once per machine.
 
 macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/install.ps1 | iex`. Both download the latest binary, check SHA-256 against `latest.json`, and run `komodo install --machine-only`. The scripts verify SHA-256 over HTTPS only; the binary verifies ed25519 on every later fresh.
 
@@ -5599,7 +5602,7 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 
 **In plain terms.** This section covers the three commands a person runs on the binary itself. `install` puts Komodo on the machine and into a repo, and `fresh` updates it. `doctor` checks that everything works and names the fix when it does not. Install is a diff against a manifest (a list of every file install owns, each with a hash), so running it twice changes nothing. Updates download in the background and swap the binary without stopping live runs. `doctor` is what you run when something looks wrong.
 
-- **Bootstrap:** `curl -fsSL <repo>/install.sh | sh` on macOS, Linux and WSL; `irm <repo>/install.ps1 | iex` on Windows. The scripts download, verify SHA-256 and run `komodo install --machine-only`.
+- **Install scripts:** `curl -fsSL <repo>/install.sh | sh` on macOS, Linux and WSL; `irm <repo>/install.ps1 | iex` on Windows. The scripts download, verify SHA-256 and run `komodo install --machine-only`.
 - **Install is a manifest diff.** It computes the desired manifest, diffs it against `install.json`, applies only the differences, then runs `doctor install`. Rerunning makes 0 changes. Hand-edited owned files survive and are reported; `--force` overwrites. Eight steps: binary; PATH; provider probe (under 2 s, local checks only); `AGENTS.md` block; `CLAUDE.md` import; `.claude/settings.json` (two entries); manifest; optional OS schedule. Never created: a repo config folder, git hooks, `.codex/`, `~/.claude`, `~/.codex`, or any `.claude/` skill, rule or guard hook.
 - **Self-update:** only `status`, the engine at run start and `fresh --check` fetch the 1 KB `latest.json`, at most hourly with a 1 s timeout. Any verb that sees a newer `latest` spawns one detached updater, which downloads to `versions/<v>/`, verifies SHA-256 and ed25519, and atomically replaces `bin/komodo`. Live runs keep their own version because the engine starts every child from `versions/<its v>/`. `fresh --restart-runs` checkpoints each run within 2 minutes and resumes it on the new binary at the cost of at most one repeated model turn. Background fresh never downgrades. Off switch: `fresh.auto: false` or `CI=true`. A repo pinned above the binary refuses every verb except `help`, `version`, `fresh`, `install` and `doctor`.
 - **Health:** `komodo doctor` checks the install, the sandbox, PATH, the provider catalog with each window's source, endpoint context against the floor, missing toolchain tools, hook drift, long-path settings on Windows, the Docker daemon, and the backlog grammar. `doctor --sandbox <cmd>` runs a command under the policy.
@@ -5746,7 +5749,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-25 | Sandbox | Whether a Docker volume per worktree beats the bind mount on copy time | Spike with G-11, phase 2 |
 | G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 |
 | G-27 | Dashboard | An opt-in browser dashboard that stands in for the orchestrator: stack, `komodo ui` verb, live model changes, the "no server process" exception | Owner decision; proof of concept in `dashboard/` |
-| G-28 | Install | A `komodo init` verb that puts Komodo's orchestrator skills and commands into the global Claude Code setup | Owner decision |
+| G-28 | Install | How `komodo init` writes Komodo's orchestrator skills and commands into the global Claude Code setup: a Claude Code plugin, or plain files with a machine manifest | Owner decision |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy (§32).
@@ -5776,7 +5779,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 - **G-25:** Whether a Docker volume per worktree copies a large `node_modules` faster than the bind mount. It matters for Docker sandbox start time, but a volume puts files where the host sweep cannot reach them. A spike in phase 2 measures it alongside G-11.
 - **G-26:** Whether usage metrics should be split by provider family: Claude, GPT and local models. Deferred by owner decision on 2026-10-12; today `track.usage` records one set of tokens and USD per session. Nothing is designed yet.
 - **G-27:** Whether Komodo gets a browser dashboard a person can use instead of the orchestrator's verbs. It would show every stage, subsystem, agent and group on a live diagram, change an agent's model mid-run, and act on groups. Open: the front-end stack, a `komodo ui` verb run only from a terminal, whether model changes reach a running run (§8.1 pins config at run start), and the exception to "no server process"; a proof of concept is in `dashboard/`.
-- **G-28:** Whether a `komodo init` verb installs Komodo's orchestrator skills and commands into the global Claude Code folder, while `install` keeps placing the binary. It matters because install today writes nothing under `~/.claude` (§33) and the 7 worker agents stay inside the binary. Open: a Claude Code plugin or plain files with a machine manifest, and the reuse of the retired name `init`.
+- **G-28:** How `komodo init` (§7.4) puts Komodo's orchestrator skills and commands into the global Claude Code folder, while `install` places the binary and sets up the repo. It matters because `install` writes nothing under `~/.claude` (§33), so `init` is the only verb that does. Open: a Claude Code plugin, which Claude Code installs, names and removes itself, or plain files tracked by a new machine manifest. Its flags wait on the same answer.
 
 Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag without a row here.
 
@@ -6075,7 +6078,7 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 #### 38. Host cleanup before phase 2
 
 
-**In plain terms.** The person's global Claude Code settings hold Komodo hooks, skill overrides and skills that call `~/.komodo/bin/komodo`. That is the path this binary installs to, and it has no `komodo guard` verb; it would answer with exit code 2, which Claude Code reads as "block this tool call", and every edit in every repo would be refused. So those entries are removed by hand before phase 2 code is written, and the harness is wired in during phases 7 to 9. Only the person touches `~/.claude`; the harness never writes there.
+**In plain terms.** The person's global Claude Code settings hold Komodo hooks, skill overrides and skills that call `~/.komodo/bin/komodo`. That is the path this binary installs to, and it has no `komodo guard` verb; it would answer with exit code 2, which Claude Code reads as "block this tool call", and every edit in every repo would be refused. So those entries are removed by hand before phase 2 code is written, and the harness is wired in during phases 7 to 9. Only the person touches `~/.claude`; the harness writes there only through `komodo init`, which the person runs (G-28).
 
 Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary installs to; it would answer `komodo guard` with exit 2, which Claude Code treats as a block. Before phase 2, by hand: remove the `Bash(python -m komodo:*)` allow rule, the `komodo guard` PreToolUse hook, the `komodo hook status` and `komodo hook prune` hooks, and the 36 `skillOverrides` from `~/.claude/settings.json`; delete the 5 Komodo skills under `~/.claude/skills/` (leave `synced/`); update the 5 stale lines in `~/.claude/AGENTS.md`. Phase 7: `komodo gate --install`. Phase 8: `komodo install` in this repo. Phase 9: the cutover column and the repo table; `doctor install` confirms 0 shadowing binaries and 0 Komodo hooks.
 
@@ -6127,7 +6130,8 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 
 | Old verb | Now | What changed |
 |---|---|---|
-| `init`, `setup` | `install` | One verb sets up a repo and the machine |
+| `setup` | `install` | One verb places the binary and sets up a repo |
+| `init` | `init` | Same name, new job: it installs orchestrator skills and commands into the global Claude Code setup; repo setup moved to `install` |
 | `update` | `fresh` | The self-update has its own verb |
 | `lint` | `doctor backlog` | Backlog lint became a doctor check |
 | `detect` | `config --all` | Detected commands show with the config |
