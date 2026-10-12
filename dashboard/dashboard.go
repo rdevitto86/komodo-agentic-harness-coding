@@ -32,16 +32,16 @@ var Models = []string{"opus", "sonnet", "haiku", "opus-prev"}
 
 // Group is one row of the groups view: where a group is and who works on it.
 type Group struct {
-	Repo   string  `json:"repo"`   // repo name
-	Run    string  `json:"run"`    // run id
-	Group  string  `json:"group"`  // group id
-	Stage  string  `json:"stage"`  // current stage
-	Agent  string  `json:"agent"`  // agent of the live session
-	Model  string  `json:"model"`  // model of the live session
-	Tokens int     `json:"tokens"` // tokens used so far
-	USD    float64 `json:"usd"`    // cost so far
-	Block  string  `json:"block"`  // block reason, empty when not blocked
-	Brief  string  `json:"brief"`  // prompt the live session got
+	Repo   string  `json:"repo"`             // repo name
+	Run    string  `json:"run"`              // run id
+	Group  string  `json:"group"`            // group id
+	Stage  string  `json:"stage"`            // current stage
+	Agent  string  `json:"agent"`            // agent of the live session
+	Model  string  `json:"model"`            // model of the live session
+	Tokens int     `json:"tokens,omitempty"` // tokens used so far; zero when tracking is off
+	USD    float64 `json:"usd,omitempty"`    // cost so far; zero when tracking is off
+	Block  string  `json:"block"`            // block reason, empty when not blocked
+	Brief  string  `json:"brief"`            // prompt the live session got
 }
 
 // pageTmpl is the shell page; its one div polls the groups fragment every 2 seconds.
@@ -69,8 +69,8 @@ body{font:14px system-ui;margin:16px}td,th{padding:4px 8px;text-align:left;verti
 
 // rowsTmpl renders the groups table; a resume button appears only on blocked groups.
 var rowsTmpl = template.Must(template.New("rows").Parse(`<table>
-<tr><th>Repo<th>Group<th>Stage<th>Agent<th>Model<th>Tokens<th>USD<th>Block<th></tr>
-{{range .Groups}}<tr><td>{{.Repo}}<td>{{.Group}}<td class="{{.Stage}}">{{.Stage}}<td>{{.Agent}}<td>{{.Model}}<td>{{.Tokens}}<td>{{printf "%.2f" .USD}}<td>{{.Block}}
+<tr><th>Repo<th>Group<th>Stage<th>Agent<th>Model{{if .Usage}}<th>Tokens<th>USD{{end}}<th>Block<th></tr>
+{{range .Groups}}<tr><td>{{.Repo}}<td>{{.Group}}<td class="{{.Stage}}">{{.Stage}}<td>{{.Agent}}<td>{{.Model}}{{if $.Usage}}<td>{{.Tokens}}<td>{{printf "%.2f" .USD}}{{end}}<td>{{.Block}}
 <td>{{if .Block}}<button hx-post="/groups/{{.Group}}/resume?t={{$.Token}}" hx-target="#log">resume</button>{{end}}
 <details><summary>brief</summary><pre>{{.Brief}}</pre></details></tr>
 {{end}}</table>
@@ -79,6 +79,7 @@ var rowsTmpl = template.Must(template.New("rows").Parse(`<table>
 // Server serves the dashboard from one groups view file and records requested actions.
 type Server struct {
 	token   string         // per-start secret every request must carry
+	usage   bool           // show tokens and cost; mirrors the usage tracking setting
 	views   string         // path of the groups view JSON
 	mux     *http.ServeMux // routes
 	mu      sync.Mutex     // guards actions
@@ -86,8 +87,9 @@ type Server struct {
 }
 
 // New builds a server that reads groups from viewsPath and requires token on every request.
-func New(token, viewsPath string) *Server {
-	s := &Server{token: token, views: viewsPath, mux: http.NewServeMux()}
+// usage shows tokens and cost; when false they are dropped before rendering or streaming.
+func New(token, viewsPath string, usage bool) *Server {
+	s := &Server{token: token, views: viewsPath, usage: usage, mux: http.NewServeMux()}
 	s.mux.Handle("GET /assets/", http.FileServerFS(assets))
 	s.mux.HandleFunc("GET /{$}", s.guard(s.page))
 	s.mux.HandleFunc("GET /groups", s.guard(s.groups))
@@ -156,6 +158,11 @@ func (s *Server) readGroups() ([]Group, error) {
 	if err := json.Unmarshal(data, &gs); err != nil {
 		return nil, fmt.Errorf("decode groups view: %w", err)
 	}
+	if !s.usage {
+		for i := range gs {
+			gs[i].Tokens, gs[i].USD = 0, 0
+		}
+	}
 	return gs, nil
 }
 
@@ -166,7 +173,7 @@ func (s *Server) groups(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := rowsTmpl.Execute(w, map[string]any{"Groups": gs, "Token": s.token, "Actions": s.Actions()}); err != nil {
+	if err := rowsTmpl.Execute(w, map[string]any{"Groups": gs, "Token": s.token, "Usage": s.usage, "Actions": s.Actions()}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

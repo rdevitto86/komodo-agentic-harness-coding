@@ -13,7 +13,7 @@ const testToken = "t0k"
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	return New(testToken, "testdata/groups.json")
+	return New(testToken, "testdata/groups.json", false)
 }
 
 func do(s *Server, method, target, host string) *httptest.ResponseRecorder {
@@ -119,5 +119,32 @@ func TestSetModelsRecordsOnlyKnownModels(t *testing.T) {
 	s.ServeHTTP(httptest.NewRecorder(), req)
 	if got := s.Actions(); len(got) != 1 || got[0] != "model builder=haiku" {
 		t.Fatalf("actions = %v", got)
+	}
+}
+
+func TestUsageHiddenWhenTrackingOff(t *testing.T) {
+	s := newTestServer(t)
+	body := do(s, http.MethodGet, "/groups?t="+testToken, "127.0.0.1:9000").Body.String()
+	if strings.Contains(body, "Tokens") || strings.Contains(body, "48210") || strings.Contains(body, "1.92") {
+		t.Fatalf("usage shown with tracking off: %q", body)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/events?t="+testToken, nil).WithContext(ctx)
+	req.Host = "127.0.0.1:9000"
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), `"tokens"`) || strings.Contains(rec.Body.String(), `"usd"`) {
+		t.Fatalf("usage streamed with tracking off: %q", rec.Body.String())
+	}
+}
+
+func TestUsageShownWhenTrackingOn(t *testing.T) {
+	s := New(testToken, "testdata/groups.json", true)
+	body := do(s, http.MethodGet, "/groups?t="+testToken, "127.0.0.1:9000").Body.String()
+	for _, want := range []string{"Tokens", "USD", "48210", "1.92"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
 	}
 }

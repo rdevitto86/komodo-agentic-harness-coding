@@ -21,7 +21,7 @@ func main() {
 	}
 }
 
-// run starts the stage simulator and the server on a random loopback port with a fresh token.
+// run starts the stage simulator and the server; KOMODO_POC_USAGE=on shows tokens and cost.
 func run() error {
 	data, err := os.ReadFile("dashboard/testdata/groups.json")
 	if err != nil {
@@ -40,7 +40,8 @@ func run() error {
 	if _, err := rand.Read(b); err != nil {
 		return fmt.Errorf("make token: %w", err)
 	}
-	return dashboard.Serve(dashboard.New(hex.EncodeToString(b), views))
+	usage := os.Getenv("KOMODO_POC_USAGE") == "on"
+	return dashboard.Serve(dashboard.New(hex.EncodeToString(b), views, usage))
 }
 
 // simulate moves every group one stage forward every 2 seconds, wrapping after Ship.
