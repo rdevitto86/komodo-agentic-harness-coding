@@ -6714,458 +6714,911 @@ Gap rows live in the [gap register](#appendix-o-gap-register); numbers marked G-
 
 ## 9. Check, Review, Tester and Recovery
 
-Once a builder (the model session that edits code) finishes, the harness proves the work in two stages. Check costs zero tokens: ordinary tools rerun each task's `done_when` command, confirm the builder stayed inside its files and scan for secrets. They also measure coverage and compare tests with the base commit. Verify runs two model sessions side by side. The reviewer reads the diff against lenses, catalogs of review rules; the tester tries the acceptance items blind. Error recovery is the table of every failure with its detector, action and bound. Without these, a model's own word would be the only proof and a loop could run forever.
+After a builder (the model session that edits code) finishes a task group, this subsystem proves the work in two stages and bounds every failure. Check reruns ordinary tools at zero tokens; Verify runs a reviewer and a tester, whose claims Go code rechecks before they can block. Recovery is the table in which every failure has a detector, an action, a bound and a final state; design and reasons are in [HLD 5.10](hld.md#510-check-review-tester-and-recovery).
 
-**📐 Check, review, tester and recovery: four gates, the Verify race and failure routing**
-```mermaid
-flowchart TD
-  %% Legend: solid = the pass path; dashed = return to Build or a block
-  B["Build"]
-  C1["done_when rerun in the sandbox"]
-  C2["Scope: every changed file in files or a test sibling"]
-  C3["Secrets"]
-  C4["Coverage: check.patch_coverage 80"]
-  C5["Baseline: passed at base, fails at head is regression"]
-  C6["Impact set"]
-  C7["Flake rule: rerun twice alone"]
-  C8["Case collision"]
-  R["Reviewer: lenses in parallel plus a cold pass; submit_finding"]
-  GV["Go finds the quote at file:line; failing findings dropped"]
-  T["Tester: acceptance items from TG.md with run"]
-  GR["Go reruns its command twice"]
-  CAN["Next() emits cancel for the other; Build under a new epoch"]
-  FL["Blocked flaky"]
-  TB["Blocked tester: a second dispute"]
-  SH["Ship: land, then Check on the epic tip"]
-  IN["Blocked integration"]
-  EG["Epic gate: reviewer and tester once over the whole epic diff"]
-  EGB["Blocked epic_gate"]
-  PR["Epic PR"]
-  NS["Blocked needs_scope: scope approve or deny"]
-  B --> CK
-  subgraph CK["Check"]
-    C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> C7 --> C8
-  end
-  B -. "status needs_scope, 1 request per task" .-> NS
-  NS -. "scope_answer slot" .-> B
-  CK -. "done_when fails: Agent retries (2)" .-> B
-  CK -. "Regression: limits.returns (3)" .-> B
-  CK --> V
-  subgraph V["Verify: one epoch"]
-    R --> GV
-    T --> GR
-  end
-  GV -. "blocker and major block" .-> CAN
-  GR -. "both fail" .-> CAN
-  CAN -. "limits.returns (3)" .-> B
-  GR -. "A split" .-> FL
-  GR -. "reruns pass: restart the tester once" .-> T
-  T -. "env, wrong_command, flaky or real_failure" .-> TB
-  V -- "Both pass" --> SH
-  SH -. "Check fails on the epic tip" .-> IN
-  SH --> EG
-  EG -. "the group that last changed each file" .-> B
-  EG -. "a finding with no file" .-> EGB
-  EG --> PR
-```
+**Guarantees the tests pin**
+
+| Guarantee | How |
+|---|---|
+| Check spends no tokens | Check runs commands and scans in Go; no model session starts |
+| Evidence before blocking | A finding blocks only when Go finds its quoted line at the stated `file:line` |
+| A model's failure is rechecked | A failed tester item counts only after Go's two reruns of its command also fail |
+| One verdict per task | The reviewer answers every task ID exactly once and the tester confirms every task ID exactly once; Go rejects a result that skips or repeats one |
+| Nothing loops without a counter | Every failure has a bound; any failure loses at most one model turn and no committed edit |
+
+### 9.1 Scope and Concepts
+
+**Owns:**
+- Check: the rerun of each task's `done_when`, the scope check, the secret scan, changed-line coverage, the baseline comparison, the impact set, the flake rule and the case-collision test.
+- The reviewer's lenses, the review profiles, the evidence check that decides whether a finding blocks, and the precision ledger.
+- The tester's acceptance items, its blind pass and Go's reruns of a failed item.
+- The scope request: a builder that needs a file outside its `files`.
+- The failure table, the six recovery rules, the loss bound and the resume of a halted session.
+- The budgets: group wall time, the token cap, the review mode and the prompt-caching rules.
+
+**Does not own:**
+- `Next()`, the transition table, `State`, `Limits` and the block reasons ([Event Spine and State Machine](#2-event-spine-and-state-machine)).
+- The `Drive` loop, run order, the epic gate sessions, shutdown and the panic-catching helper ([Engine Internals](#3-engine-internals)).
+- Worktrees, leases, the hidden reference and the scans of the startup sweep ([Workspace and Leases](#4-workspace-and-leases)).
+- Starting, watching and stopping a session, exit reasons, `agent.json` and the brief ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)).
+- The guard rows that refuse a write outside `files`, the sandbox, the tester's dependency copy and the reset after read-only sessions ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)).
+- Link failover, retries of the network client, the billing check and provider pauses ([Providers and HTTP](#7-providers-and-http)).
+- Scheduling, `komodo jobs tick`, job retries, the check cache, the ledger and `status` ([Scheduler, Cache and Observability](#10-scheduler-cache-and-observability)).
+- Backlog grammar, landing, merge conflicts and the epic pull request ([Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release)).
+- Group state files and the refusal of invalid records ([State Manager](#13-state-manager)).
+- `komodo gate`, the self-check of Komodo's own repository ([Install, Binary Lifecycle and Gate](#125-behaviour)).
+
+The purpose of the subsystem, and who it talks to, is in the HLD: [Check, Review, Tester and Recovery](hld.md#510-check-review-tester-and-recovery).
+
+The owner of the startup sweep is undecided: the design lists it under both `worktree.go` and `recover.go`. The scans are specified in [Workspace and Leases](#4-workspace-and-leases). `[TODO: which package owns the startup sweep (G-NEW-12)]`
+
+**Concepts**
+
+| Term | Meaning |
+|---|---|
+| Check | The pipeline stage after Build that proves the work with ordinary tools |
+| Verify | The stage where the reviewer and the tester run at once on the same commit |
+| `done_when` | The command a task names as its success test |
+| Baseline | The `test` command class result at the base commit, recorded at Intake |
+| Regression | A test that passed at the base commit and fails at the head commit |
+| Impact set | The tests Check runs for a change |
+| Lens | A catalog of review rules for one kind of problem, with a condition that says when it applies |
+| Finding | A reviewer claim: a rule ID, a `file:line` and a quoted line of evidence |
+| Cold pass | A reviewer pass in thorough mode in addition to the lenses `[TODO: what a cold pass is (G-NEW-5)]` |
+| Acceptance item | A line of a group's `TG.md` in the form `WHEN <event> THE SYSTEM SHALL <response>`, with an optional `cmd:` line |
+| Return | A trip from Check or Verify back to Build, counted against `limits.returns` |
+| Attempt | One model attempt on a task: a fresh session, a re-prompt, gate feedback or a "continue" |
+| Flap | A retry that repeats the same failure, or a return to Build that changes nothing |
+| Loss bound | Any single failure loses at most one model turn and never a committed edit |
+
+Group, epic, epoch, lease and hidden reference are defined in the [glossary](hld.md#12-glossary).
+
+**The four gates.** Three cost zero tokens; the fourth is a model session.
+
+| Gate | Evidence | Tokens |
+|---|---|---|
+| Lint and coverage | Check; `check.patch_coverage` on changed lines, blocking for Go, warning for other languages | 0 |
+| Success | `done_when` rerun per task | 0 |
+| Regression | Baseline difference at the base commit plus the impact set | 0 |
+| Behaviour | The tester's blind pass over the acceptance items | Model |
+
+**📐 Where do Check, Verify and recovery sit between Build and Ship?**
 ```mermaid
 flowchart LR
-  %% Legend: edge label = Bound; target = Then. Loss bound: one model turn
-  subgraph HS["HTTP stack"]
-    F1["Transient HTTP"]
-    F2["Stream dropped mid-answer"]
+  B["Build"]
+  C["Check"]
+  subgraph V["Verify"]
+    R["Reviewer"]
+    T["Tester"]
   end
-  subgraph PV["Provider"]
-    F3["Provider unavailable or unauthorized"]
-    F4["Provider quota or spend limit"]
-  end
-  subgraph BC["Billing check"]
-    F5["Paid link not allowed"]
-  end
-  subgraph TR["Tool runtime"]
-    F6["Schema-invalid result"]
-    F7["Result fails the agent's gate"]
-    F8["Reply cut off at the output limit"]
-  end
-  subgraph SV["Supervisor"]
-    F9["Timeout or idle"]
-  end
-  subgraph GD["Guard"]
-    F10["3 refusals under one rule"]
-  end
-  subgraph CK["Check"]
-    F11["done_when fails"]
-    F12["Regression against the baseline"]
-  end
-  subgraph RV["Review"]
-    F13["Epic gate fails"]
-    F14["Go's reruns split"]
-  end
-  subgraph EN["Engine"]
-    F15["A dependency is abandoned"]
-    F16["Check fails on the epic tip after a landing"]
-  end
-  subgraph RC["Recovery"]
-    F17["Flap: same failure hash or zero-diff return"]
-    F18["Any model attempt on a task"]
-  end
-  subgraph BB["Brief builder"]
-    F19["Brief over half the measured context"]
-  end
-  subgraph SP["Ship"]
-    F20["Landing conflicts with the epic branch"]
-  end
-  subgraph BU["Budgets"]
-    F21["Budget spent"]
-  end
-  SF["Session fails"]
-  TRY["Task retry"]
-  BL["Blocked"]
-  NP["Blocked no_provider"]
-  PT["Paused; at the cap Blocked pause_timeout"]
-  PR["Blocked paid_refused"]
-  RG["Blocked regression"]
-  EG["Blocked epic_gate"]
-  FK["Blocked flaky"]
-  DP["Blocked dependency"]
-  IG["Blocked integration"]
-  AT["Blocked attempts"]
-  CX["Blocked context"]
-  MC["Blocked merge_conflict"]
-  BG["Blocked budget"]
-  F1 -- "3" --> SF
-  F2 -- "1" --> SF
-  F3 -- "Chain length" --> NP
-  F4 -- "limits.pause_max_min" --> PT
-  F5 -- "1" --> PR
-  F6 -- "1" --> TRY
-  F7 -- "2" --> TRY
-  F8 -- "1" --> TRY
-  F9 -- "Agent retries (2) per task" --> BL
-  F10 -- "3" --> TRY
-  F11 -- "Agent retries (2) per task" --> BL
-  F12 -- "limits.returns (3) per group" --> RG
-  F13 -- "limits.returns (3)" --> EG
-  F14 -- "0" --> FK
-  F15 -- "0" --> DP
-  F16 -- "limits.returns (3)" --> IG
-  F17 -- "1" --> BL
-  F18 -- "limits.task_attempts (6)" --> AT
-  F19 -- "1" --> CX
-  F20 -- "1" --> MC
-  F21 --> BG
+  S["Ship"]
+  B -->|1 last task.done| C
+  C -->|2 check.done pass| V
+  V -->|3 stage.exit| S
+  C -.->|4 fail: return| B
+  V -.->|5 blocking finding: return| B
+  S -.->|6 epic tip broke: return| B
 ```
-**Reading the diagram.** The first runs Build through Check's eight steps, Verify, landing Check and epic gate to the PR. A verified finding cancels the tester; Build reopens under a new epoch when the reviewer ends. The second routes failures from detector, by bound, to Blocked reason.
 
-A test that passed at base and fails at head is a regression and blocks naming the test; one failing at both only warns. For Go, Check tests every package importing a changed package; other languages run the full `test` class, and the epic gate runs everything. A builder needing a file outside its `files` stops with `needs_scope`, and the engine makes a WIP commit. The engine denies protected paths and paths another live group owns; otherwise the orchestrator answers `scope approve|deny`.
+**Reading the diagram.** Solid lines are the pass path; dotted lines return the group to Build under a new epoch. Returns 4, 5 and 6 each add 1 to the group's return count.
 
-The reviewer runs 10 lenses; `correctness`, `readiness` and `quality` always apply, the rest when the diff triggers them. Thorough mode runs every applicable lens in parallel plus a cold pass; economy runs one merged lens. Each verdict is `met`, `not_met` or `brief_incomplete` per task ID, exactly once. The tester works in its own throwaway worktree at the same commit, blind to the builder. It reports pass or fail per acceptance item and `confirmed | not_confirmed` per task.
+### 9.2 Package Layout
 
-Both Verify sessions start under one epoch. The first verified blocking finding cancels the tester; the group returns to Build under a new epoch when the reviewer's session ends, with every verified finding. Later output from the cancelled session carries the old epoch and is recorded `stale=true`. Both passing needs both `session.end done` events, then `stage.exit` to Ship. Recovery's 26 failure rows share one loss bound: any failure loses at most one model turn and no committed edit. A crash stays in its group, and Blocked never auto-retries.
+| File | Holds |
+|---|---|
+| `internal/quality/check.go` | Rerun of each `done_when`, the scope check, the secret scan and changed-line coverage |
+| `internal/quality/review.go` | Lenses, profiles, lens selection and the re-review delta |
+| `internal/quality/qa.go` | The tester: acceptance items, its own worktree and Go's reruns of a failed item |
+| `internal/quality/evidence.go` | The check that a finding's quote is at its `file:line` |
+| `internal/engine/limits.go` | Retries, returns, flap detection and block reasons |
+| `internal/engine/recover.go` | Crash resume through group state's `Load`; the startup sweep `[TODO: the sweep's owner (G-NEW-12)]` |
+| `internal/ops/budget.go` | Group wall time, the token count and the review mode |
+| `embed/lenses/<lens>.json`, `embed/lenses/<lens>.md` | The 10 lens catalogs: rule IDs, severities and file scopes in the JSON file, rule bodies in the Markdown file |
 
-**What matters**
-- Check blocks on a regression, coverage under `check.patch_coverage` 80 for Go, a secret, or a file outside `files`. A failing test reruns twice alone; a split reports `flaky` without blocking.
-- `blocker` and `major` findings block, `minor` are counted; a finding counts only when Go finds its quoted evidence at the stated `file:line`.
-- A tester failure counts only after Go's two reruns also fail. Passing reruns restart the tester once; a second dispute blocks `tester`, a split blocks `flaky`.
-- Bounds: `limits.returns` 3 per group, `limits.task_attempts` 6 per task, agent `retries` 2, and a group wall hard limit of 720 min.
-- Prompt caching uses at most 4 `cache_control` breakpoints in prefix order: tools plus role, repo context, standards, task.
+The design gives no file to the baseline comparison, the impact set, the flake rule or the case-collision test; the table above holds only the steps the design places. `[TODO: the files for the baseline comparison, impact set, flake rule and case-collision test (G-NEW-1)]`
 
-**Lookup:** [Appendix J](#appendix-j-check-review-tester-error-recovery-and-budgets) holds the Check, scope, lens, review, tester, failure, recovery, budget and caching tables.
+`internal/quality` starts no session. The engine passes in each session, and the functions of this package validate what the session returns. Other files that take part:
 
+| File | Part in this subsystem |
+|---|---|
+| `internal/engine/verify.go` | Starts the reviewer and the tester under one epoch and cancels the tester on the first verified blocking finding ([Engine Internals](#3-engine-internals)) |
+| `internal/engine/stage.go` | `Next()` and the transition rows that route `check.done`, `finding.verified` and `session.end` ([Event Spine and State Machine](#26-state-and-transitions)) |
+| `internal/tools/submit.go` | The `submit_finding` tool that turns a reviewer claim into `finding.submit` ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)) |
+
+**Entry points**
+
+| Flow | Starts at |
+|---|---|
+| Check one group's head commit | `Checker.Check`, called by `Drive` for the `check` actions of a Check stage |
+| Choose the lenses for a diff | `SelectLenses`, called by `Drive` before it spawns the reviewer |
+| Judge a finding | `Reviewer.AcceptFinding`, called on each `finding.submit` |
+| Judge the reviewer's result | `Reviewer.AcceptResult`, called on the reviewer's `session.end` |
+| Rerun a failed tester item | `Tester.Rerun`, called on the tester's result |
+| Answer a scope request | `AutoDeny`, called on a builder's `session.end` with status `needs_scope`; any other path waits for `scope approve|deny --paths --reason` |
+| Decide how a halted session continues | `PlanResume`, called while the `resume` verb continues each session |
+
+### 9.3 Data Model
+
+The exported names below are the working shape; the design fixes behaviour, not identifiers. `[TODO: confirm the exported names and signatures of this subsystem (G-NEW-1)]`
+
+#### Verdicts and enumerations
+
+```go
+// Verdict is the reviewer's answer for one task ID.
+type Verdict string
+
+const (
+	VerdictMet             Verdict = "met"
+	VerdictNotMet          Verdict = "not_met"
+	VerdictBriefIncomplete Verdict = "brief_incomplete"
+)
+
+// Confirmation is the tester's answer for one task ID.
+type Confirmation string
+
+const (
+	Confirmed    Confirmation = "confirmed"
+	NotConfirmed Confirmation = "not_confirmed"
+)
+
+// Severity ranks a finding; blocker and major stop the group, minor is counted.
+type Severity string
+
+const (
+	SeverityBlocker Severity = "blocker"
+	SeverityMajor   Severity = "major"
+	SeverityMinor   Severity = "minor"
+)
+
+// DisputeReason is why the tester failed an item that Go's reruns passed.
+type DisputeReason string
+
+const (
+	ReasonEnv          DisputeReason = "env"
+	ReasonWrongCommand DisputeReason = "wrong_command"
+	ReasonFlaky        DisputeReason = "flaky"
+	ReasonRealFailure  DisputeReason = "real_failure"
+)
+```
+
+| Enumeration | Values | Meaning |
+|---|---|---|
+| `Verdict` | `met`, `not_met`, `brief_incomplete` | `brief_incomplete` blocks with reason `brief`; it is a harness fault, not counted against the builder |
+| `Confirmation` | `confirmed`, `not_confirmed` | Judged from the task's `done_when` and its acceptance item |
+| `Severity` | `blocker`, `major`, `minor` | `blocker` and `major` block; `minor` is reported and counted |
+| `DisputeReason` | `env`, `wrong_command`, `flaky`, `real_failure` | The tester's reason when its failed item passes Go's reruns |
 
 #### Check
 
+```go
+// Step names one of the eight Check steps.
+type Step string
 
-**In plain terms.** Check is the pipeline stage that proves a builder's work with ordinary tools, not with an AI model, so it costs zero tokens. It reruns each task's `done_when` (the command a task names as its success test), confirms the builder stayed inside its allowed files, scans for leaked secrets, measures test coverage, and compares test results with the state before the change. Without it, a model could claim success and nothing would verify it. The engine runs Check by itself after the Build stage; a person only sees its verdict in `status`.
+const (
+	StepDoneWhen      Step = "done_when"
+	StepScope         Step = "scope"
+	StepSecrets       Step = "secrets"
+	StepCoverage      Step = "coverage"
+	StepBaseline      Step = "baseline"
+	StepImpactSet     Step = "impact_set"
+	StepFlake         Step = "flake"
+	StepCaseCollision Step = "case_collision"
+)
 
-| Step | Rule |
+// Level is the weight of one step's result.
+type Level string
+
+const (
+	LevelPass Level = "pass"
+	LevelWarn Level = "warn" // reported; does not block
+	LevelFail Level = "fail" // blocks; the group returns to Build
+)
+
+// StepResult is what one Check step found.
+type StepResult struct {
+	Step   Step
+	Level  Level
+	Detail []string // failing test, file path or secret location
+}
+
+// CheckResult is the outcome of one Check run.
+type CheckResult struct {
+	Steps []StepResult
+	Flaky []string // tests reported flaky, counted per repository
+}
+
+// CheckInput is everything one Check run reads.
+type CheckInput struct {
+	Group    string
+	Worktree string
+	Base     string            // base commit
+	Head     string            // head commit
+	Files    []string          // the group's files
+	Changed  []string          // paths changed between Base and Head
+	DoneWhen map[string]string // task ID to its done_when command
+	Language string            // decides the impact set and whether coverage blocks
+}
+```
+
+| `StepResult` field | Meaning |
 |---|---|
-| `done_when` | Every task's `done_when` rerun in the sandbox |
-| Scope | Every changed file is in the group's `files` or is a test sibling |
-| Secrets | The diff scanned for secret patterns |
-| Coverage | Changed-line coverage against `check.patch_coverage` 80; blocks for Go, warns for other languages |
-| Baseline | Intake records the `test` class result at the base commit, cached by tree hash (one entry per epic tip, shared by every group cut from it). Passed at base and fails at head: regression, blocks naming the test. Fails at both: pre-existing, warns |
-| Impact set | Go: tests of every package importing a changed package (`go list -deps` reversed). Other languages: the full `test` class. The full suite always runs at the epic gate |
-| Flake rule | Any failing test is rerun twice alone; two more failures confirm; a split reports `flaky` without blocking and is counted per repo |
-| Case collision | Two files differing only by case fail Check on every OS |
-| Cache | Keyed by tree hash plus command; an unchanged tree skips the rerun |
-| Parallelism | The impact set and `done_when` run in parallel inside the sandbox's process cap |
+| `Step` | The step that produced the result |
+| `Level` | `fail` blocks, `warn` is reported, `pass` is silent |
+| `Detail` | The failing test, file or secret location, so a return to Build names it |
 
-**What each one does**
-- **`done_when`:** Every task in the group names a command that must pass when the task is done. Check reruns each one inside the sandbox (the OS-level confinement every command runs in, see Glossary). A failure sends the task back for a retry.
-- **Scope:** Each group lists the files its builder may change, in `files`. Check confirms every changed file is on that list or is a test file beside one. A file outside that list fails Check.
-- **Secrets:** Check scans the diff (the set of changed lines) for patterns that look like keys or passwords. A planted key fails Check.
-- **Coverage:** Check measures what share of the changed lines are covered by tests, against the `check.patch_coverage` setting of 80%. Under 80% blocks for Go code and only warns for other languages.
-- **Baseline:** At Intake (the first stage of a group, when the engine prepares its workspace) the engine runs the test suite at the starting commit and saves the result, keyed by the tree hash (a fingerprint of the file contents). One saved result serves every group cut from the same epic tip. Check compares: a test that passed before and fails now is a regression and blocks, naming the test; a test that failed before and still fails is pre-existing and only warns.
-- **Impact set:** The tests Check actually runs. In a Go repo, it runs the tests of every package that imports a changed package, found with `go list -deps` read backwards. In other languages it runs the whole `test` command. At the epic gate (the final review after every group has landed, see [Failure table (Appendix J)](#failure-table)) the whole suite always runs.
-- **Flake rule:** A test that fails is rerun twice on its own. Two more failures confirm a real failure. A mix of pass and fail marks it `flaky`, which is reported and counted per repo but does not block.
-- **Case collision:** Two files whose names differ only in letter case fail Check, on every operating system.
-- **Cache:** A Check result is saved under the tree hash plus the command. If the files have not changed since the last run, Check skips the rerun and reuses the result.
-- **Parallelism:** The impact-set tests and the `done_when` commands run at the same time, within the sandbox's limit on processes, so Check finishes sooner.
+The `check.done` event carries pass or fail; its data fields are `[TODO: the data of check.done (G-24)]`.
 
-#### Scope requests
+```go
+// TestStatus classifies one test against the baseline.
+type TestStatus string
 
-**In plain terms.** A scope request is how a builder (the AI worker that edits code, see Glossary) asks for permission to touch a file outside its allowed list. The builder cannot simply edit the file; a guard (the check every tool call passes, see Glossary) refuses the write. Instead it stops, its work is saved, and the group waits until the orchestrator approves or denies the paths. Without this, a builder would either be stuck or would edit files nobody signed off on. The builder raises it, the engine parks the group, and the orchestrator or a person answers with `komodo scope approve|deny`.
+const (
+	StatusOK          TestStatus = "ok"
+	StatusRegression  TestStatus = "regression"   // passed at base, fails at head: blocks
+	StatusPreExisting TestStatus = "pre_existing" // fails at both: warns
+)
 
-1. A builder that needs a file outside `files` stops; its final result has status `needs_scope`, the paths and a reason.
-2. The engine makes a WIP commit; the resume handle is already in `state.json`; the group goes Blocked `needs_scope`; the lease and worktree stay held and the sweep skips them.
-3. The engine denies without asking anyone when a path is protected (G3, G4) or is in another live group's `files`.
-4. Otherwise `status --wait` wakes the orchestrator, which answers `scope approve|deny --paths --reason`. Approve adds the paths to the group's `files` (action `scope_change`), logged in the ledger.
-5. The engine resumes the same session with the answer in the `scope_answer` slot. One request per task.
+// Baseline is the test-class result at one base commit, keyed by tree hash.
+type Baseline struct {
+	TreeHash string
+	Passed   map[string]bool // test name to whether it passed at base
+}
+```
 
-**What each one does**
-- **Step 1, the builder stops:** When the builder needs a file not in the group's `files`, it ends its session with result status `needs_scope`, listing the paths and why it needs them.
-- **Step 2, the engine parks the group:** The engine commits the builder's unfinished work as a WIP (work-in-progress) commit. The resume handle, which lets the same model conversation continue later, is already saved in `state.json`. The group enters Blocked with reason `needs_scope`; it keeps its lease and worktree (its private checkout, see Glossary), and the cleanup sweep leaves them alone.
-- **Step 3, automatic denials:** The engine says no on its own, without asking anyone, in two cases: the path is protected by guard rows G3 or G4 (Komodo's own settings, `.git`, and secret files), or the path belongs to another group that is still running.
-- **Step 4, the orchestrator answers:** Otherwise `status --wait` wakes the orchestrator, which runs `scope approve|deny --paths --reason`. An approval adds the paths to the group's `files` as a `scope_change` action, and the ledger records it.
-- **Step 5, the same session resumes:** The engine restarts the builder's original session with the answer in the `scope_answer` slot (a named input to the prompt). A task may make only one such request.
+The baseline is cached by tree hash, one entry per epic tip, and every group cut from that tip shares it. A check result is cached by tree hash plus command. The cache layout is in [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability).
 
-#### Review and the tester
+#### Review
 
+The lens catalog rule shape is fixed by the design. The catalogs' content is open `[TODO: the lens rule catalogs (G-16)]`, and so are the rule ID format and the contents of `check` and `evidence`.
 
-**In plain terms.** Review is the AI-driven half of quality control. Two workers run side by side in the Verify stage: the reviewer reads the diff against rule catalogs called lenses and reports findings, and the tester tries the group's acceptance items as a blind user would. Check ([Check (Appendix J)](#check)) proves the code runs; this section proves it is correct, safe and does what the task asked. The engine starts both workers; a person sees their verdicts and findings in `status`.
+```go
+// Rule is one review rule in embed/lenses/<lens>.json.
+type Rule struct {
+	ID       string   `json:"id"`
+	Severity Severity `json:"severity"`
+	Applies  Applies  `json:"applies"`
+	Check    string   `json:"check"`
+	Evidence string   `json:"evidence"`
+	Source   string   `json:"source"` // where the rule comes from
+}
 
-#### Lenses
+// Applies is the file scope of a rule.
+type Applies struct {
+	Globs   []string `json:"globs"`
+	Markers []string `json:"markers"`
+}
+```
 
-**In plain terms.** A lens is a catalog of review rules that focuses the reviewer on one kind of problem, such as security or concurrency. Each lens has an `applies` condition: it runs only when a changed file matches, so a diff that touches no Windows code never pays for the platform lens. Without lenses, every review would re-read the whole rulebook and miss the specialised checks. The reviewer worker applies them; the engine decides which ones apply.
+An example of the shape; the values are illustrative:
 
-| Lens | Applies when | Checks |
+```json
+{
+  "id": "correctness.1",
+  "severity": "major",
+  "applies": {"globs": ["**/*.go"], "markers": []},
+  "check": "an error return is not ignored",
+  "evidence": "the line that drops the error",
+  "source": "Google code review guide: functionality"
+}
+```
+
+| Field | Type | Meaning |
 |---|---|---|
-| `correctness` | always | Logic, error paths, nil and bounds, resource release |
-| `security` | always for installer, binary lifecycle, HTTP, tools, guard, sandbox, ship; else on auth, crypto, exec, net, path or env code | Injection, secrets, path escape, unsafe exec, TLS |
-| `spec` | The task cites a `docs/lld.md` anchor | The diff matches the cited section, which is in the brief; a mismatch is a `not_met`, not a finding |
-| `contract` | An exported symbol changed (Go via `go/ast`; others by export-line diff) | Every caller still compiles and the change is intended by a task |
-| `concurrency` | The diff adds `go`, `chan`, `sync`, `atomic`, threads or async | Data races, lock order, cancellation, goroutine (a lightweight Go thread) leaks |
-| `platform` | `_windows.go`, `_darwin.go`, `_linux.go`, path or shell handling | Separators, case, line endings, signals |
-| `config` | `embed/*.json`, `defaults.json`, `policy.json` | Hard limits kept, schema version bumped, gate fixture updated |
-| `readiness` | always | Tests for changed behaviour; docs and changelog touched when the task says so |
-| `quality` | always | Naming, duplication, comment rules from `standards-comments` |
-| `economy` | economy mode only | The merged checklist of the rows above at reduced depth |
+| `id` | string | The rule ID a finding cites; an unknown ID is refused |
+| `severity` | string | `blocker`, `major` or `minor` |
+| `applies.globs` | string array | Changed-file patterns that make the rule apply |
+| `applies.markers` | string array | Text markers in the diff that make the rule apply |
+| `check` | string | The question the rule asks `[TODO: what check and evidence hold (G-16)]` |
+| `evidence` | string | What a finding must quote |
+| `source` | string | The origin of the rule |
 
-**What each one does**
-- **`correctness`:** Looks for plain bugs: wrong logic, unhandled error paths, nil values, out-of-range indexes, and resources left open. Runs on every diff.
-- **`security`:** Looks for injection, leaked secrets, paths that escape their folder, unsafe command execution, and TLS mistakes. Always runs on code for the installer, binary lifecycle, HTTP stack, tool runtime, guard, sandbox and ship; elsewhere only when the diff touches auth, crypto, exec, network, path or environment code.
-- **`spec`:** Runs when the task cites a section of `docs/lld.md`. Checks that the diff matches that section, which is included in the brief. A mismatch means the task is `not_met` rather than a finding.
-- **`contract`:** Runs when an exported symbol (a function or type other code can call) changed. For Go the engine finds this with `go/ast`; for other languages by diffing export lines. Checks that every caller still compiles and that a task asked for the change.
-- **`concurrency`:** Runs when the diff adds goroutines, channels, `sync`, `atomic`, threads or async code. Looks for data races, lock ordering mistakes, missing cancellation, and goroutine leaks.
-- **`platform`:** Runs on `_windows.go`, `_darwin.go` and `_linux.go` files, or on path and shell handling. Looks for path separator, letter case, line ending and signal mistakes.
-- **`config`:** Runs when `embed/*.json`, `defaults.json` or `policy.json` change. Checks that hard limits are kept, the schema version is bumped, and the gate fixture is updated.
-- **`readiness`:** Always runs. Checks that changed behaviour has tests, and that docs and the changelog were updated when the task said so.
-- **`quality`:** Always runs. Checks naming, duplication, and the comment rules from the `standards-comments` skill (a standards document embedded in the binary, see Glossary).
-- **`economy`:** Runs only in economy mode, the cheaper review setting. It is one merged checklist of all the lenses above, applied at reduced depth.
+Each `- **Never` and `- **Always` line of a standards skill compiles into a rule ID the reviewer cites ([Skills, Rules and Output](#8-skills-rules-and-output)). The catalogs are compiled into the binary, so a reader never sees an older or newer catalog.
 
-Rule schema in `embed/lenses/<lens>.json`: `{id, severity, applies: {globs, markers}, check, evidence, source}`. `[PENDING G-16]` the catalogs' content, seeded from Google's code review guide and SWE-bench Verified failure classes, authored in phase 7 with the security lens reviewed by the owner.
+```go
+// Finding is one reviewer claim, submitted with submit_finding.
+type Finding struct {
+	Rule  string // a rule ID from a lens catalog
+	File  string
+	Line  int
+	Quote string // the quoted line of evidence
+}
 
-Google's code review guide covers 9 dimensions: design, functionality, complexity, tests, naming, comments, style, consistency and documentation. Each rule names its source in `source`.
+// TaskVerdict is the reviewer's verdict on one task.
+type TaskVerdict struct {
+	Task    string
+	Verdict Verdict
+}
 
-#### Review mechanics
+// Precision counts one rule's findings for one model.
+type Precision struct {
+	Rule      string
+	Model     string
+	Submitted int
+	Verified  int // Go found the quote
+	Fixed     int // the builder fixed the finding
+	Disputed  int // the builder answered with a code naming the file and line
+}
+```
 
-**In plain terms.** Mechanics are the rules for how a review runs and how much its output is trusted. They decide how many lenses run, which severities stop the group, how the reviewer must answer per task, and how the engine checks each finding against the real code before it counts. Without them, a reviewer could block a group on a claim nobody can verify. The engine enforces every row; the reviewer worker obeys them; `doctor` (the verb that checks the health of the install and the backlog) reports rules that keep failing verification.
-
-| Rule | Detail |
+| `Precision` counter | Counts |
 |---|---|
-| Profiles | Thorough: every applicable lens in parallel plus a cold pass. Economy: one merged lens. A diff touching only `*.md` runs 3 lenses |
-| Severity | `blocker` and `major` block; `minor` reported and counted |
-| Verdicts | `met`, `not_met`, `brief_incomplete` per task ID, each exactly once; Go rejects a result that skips or repeats one |
-| Added checks | The reviewer runs build, tests and lint (an automatic rule check) itself with `run`; the engine reruns any check a verdict depends on |
-| Findings | `submit_finding` takes a rule ID, `file:line` and quoted evidence; blocks only if Go finds the quote at that line in the head or diff; failing findings dropped and logged |
-| Precision ledger | Per rule and model: submitted, verified, fixed, `disputed` (a builder code naming file and line); `doctor` lists rules under 50% verified; under 30% for 60 days is a design change |
-| `brief_incomplete` | Blocks with `brief`; a harness fault, not counted against the builder |
-| Re-review | Delta only; cached findings by `(lens, diff, prompt hash, model)` cost 0 tokens; the prompt hash covers the lens rule set |
-| Epic mode | One verdict per group over the whole epic diff |
-| Pool | Lenses run in parallel under one slot each only when `pool_max` allows; else they queue behind the group's slot |
+| `Submitted` | Findings that passed `submit_finding` validation |
+| `Verified` | Findings whose quote Go found at `file:line` |
+| `Fixed` | Verified findings the builder fixed |
+| `Disputed` | Findings the builder rejected with a result code naming the file and line `[TODO: the format of that result code (G-NEW-7)]` |
 
-**What each one does**
-- **Profiles:** Thorough mode runs every applicable lens at the same time, plus a cold pass. What a cold pass is: [UNKNOWN: not yet designed]. Economy mode runs one merged lens. A diff touching only Markdown files runs 3 lenses.
-- **Severity:** Each finding has a severity. `blocker` and `major` stop the group; `minor` is reported and counted but does not stop it.
-- **Verdicts:** The reviewer must answer `met`, `not_met` or `brief_incomplete` for every task ID in the group, each exactly once. The engine, written in Go, rejects a result that skips or repeats a task.
-- **Added checks:** The reviewer runs the build, tests and lint itself with its `run` tool, on top of `done_when`. The engine reruns any check a verdict relies on, so the verdict rests on the engine's result, not the model's.
-- **Findings:** A finding is submitted with the `submit_finding` tool and must carry a rule ID, a `file:line` location and a quoted line of evidence. It blocks only if the engine finds that exact quote at that line in the new code or the diff. Findings that fail this check are dropped and logged.
-- **Precision ledger:** For every rule and model, the ledger counts findings submitted, verified by evidence, fixed by the builder, and disputed (a builder result code naming the file and line). `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days triggers a design change.
-- **`brief_incomplete`:** The reviewer's way of saying its brief (its prompt, see Glossary) lacked what it needed. The group blocks with reason `brief`. It counts as a harness fault, not against the builder.
-- **Re-review:** After a group returns to Build and comes back, only the changed part is reviewed. Findings on unchanged code are reused from the cache, keyed by lens, rule set, diff and model, at 0 tokens.
-- **Epic mode:** At the epic gate the reviewer gives one verdict per group over the whole epic's diff.
-- **Pool:** Lenses run in parallel, one pool slot each (a slot is one of the 1 to 6 machine-wide session places, see Glossary), only when `pool_max` has room. Otherwise they wait in line behind the group's own slot.
+The wire shape of a finding and of the reviewer's result is `[TODO: result and finding field names (G-NEW-7)]`. The ledger keeps the precision counters; their layout is in [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability).
 
-#### The tester
+#### Tester
 
-**In plain terms.** The tester is the AI worker that checks whether the finished group behaves as its acceptance items say, by actually running things. It works blind: it never sees the builder's notes or workspace, only the engine's facts from the backlog. Without it, the only behaviour check would be the builder's own word. The engine starts it beside the reviewer in Verify, in a throwaway copy of the code at the same commit.
+```go
+// Item is one acceptance item of a group's TG.md.
+type Item struct {
+	ID    string
+	Text  string   // WHEN <event> THE SYSTEM SHALL <response>
+	Cmd   string   // the command Go can rerun; empty when the item has none
+	Needs []string // network, docker or service:<name>
+}
 
-- Runs beside the reviewer in Verify, in its own throwaway worktree at the same commit, blind to the builder.
-- Proves the group's acceptance items from `TG.md` with `run`: pass or fail per item with evidence, and `confirmed | not_confirmed` per task ID exactly once, from `done_when` and the EARS item.
-- Its brief says which three gates Go already proved (lint and coverage, success, regression), so it spends its turns on behaviour.
-- A failed item counts only after Go reruns its command twice and both fail. If Go's reruns pass, the tester restarts once with the item, its evidence, and Go's command and output, and returns a reason code: `env`, `wrong_command`, `flaky` or `real_failure`. A second dispute blocks with `tester`, a harness fault. A split in Go's reruns blocks with `flaky`.
-- Go cross-checks the tester's per-task result with the reviewer's. The tester reruns every item on re-review. The ledger records each tester model's false-fail rate.
+// ItemResult is the tester's pass or fail for one item.
+type ItemResult struct {
+	Item     string
+	Pass     bool
+	Evidence string
+}
 
-**What each one does**
-- **Runs blind beside the reviewer:** The tester starts in the Verify stage at the same time as the reviewer, in its own temporary worktree at the same commit. It cannot see the builder's worktree or prose.
-- **Proves acceptance items:** It takes the group's acceptance items from `TG.md` (the group's backlog card), runs them with its `run` tool, and reports pass or fail per item with evidence. It also reports `confirmed` or `not_confirmed` once per task ID, judged from the task's `done_when` and its EARS item (a `WHEN ... THE SYSTEM SHALL ...` sentence, see Glossary).
-- **Skips what the engine proved:** Its brief says that lint and coverage, success (`done_when`) and regression are already proven by the engine, so it spends its turns on behaviour, not on rerunning the suite.
-- **Disputes are rerun by the engine:** A failed item counts only after the engine reruns its command twice and both fail. If the engine's reruns pass, the tester restarts once with the item, its evidence and the engine's output, and answers with a reason: `env`, `wrong_command`, `flaky` or `real_failure`. A second disagreement blocks the group with `tester`, a harness fault. If the engine's two reruns disagree with each other, the group blocks with `flaky`.
-- **Cross-checked and measured:** The engine compares the tester's per-task result with the reviewer's. On re-review the tester reruns every item. The ledger records each tester model's false-fail rate, how often it failed an item the engine's reruns passed.
+// TaskConfirmation is the tester's answer for one task ID.
+type TaskConfirmation struct {
+	Task         string
+	Confirmation Confirmation
+}
 
-#### Error recovery
+// TesterResult is everything the tester returns.
+type TesterResult struct {
+	Items []ItemResult
+	Tasks []TaskConfirmation
+}
 
+// RerunOutcome is Go's judgement of a failed item after two reruns.
+type RerunOutcome string
 
-**In plain terms.** Error recovery is the complete list of ways a run can go wrong and what the engine does about each. The principle is that nothing loops forever: every failure has a detector, an action, a maximum number of tries, and a final state. Without it, a stuck model or a dead network could burn tokens or lose work with no end. The engine does all of it by itself; a person steps in only when a group ends Blocked.
+const (
+	RerunConfirmed RerunOutcome = "confirmed" // both reruns failed
+	RerunDisputed  RerunOutcome = "disputed"  // both reruns passed
+	RerunSplit     RerunOutcome = "split"     // one passed, one failed
+)
+```
 
-#### Failure table
+An acceptance item in `TG.md`, with the `cmd:` line Go reruns ([Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release) owns the grammar):
 
-**In plain terms.** This table has one row per failure. The Detector column is the part of the system that notices; the Action is what the engine does; the Bound is how many times it tries; Then is where the group ends up. Blocked means the group stops and waits for a person or the orchestrator, with the reason shown in `status`. Paused means the group waits on a timer and resumes itself.
+```markdown
+- WHEN a Check run finds a changed file outside `files`
+  THE SYSTEM SHALL fail Check and name the file
+  cmd: go test ./internal/quality/ -run TestScope
+  needs: service:postgres
+```
 
-| Failure | Detector | Action | Bound | Then |
-|---|---|---|---|---|
-| Transient HTTP | HTTP stack | Retry with backoff (waiting longer between retries) | 3 | Session fails |
-| Stream dropped mid-answer | HTTP stack | Resend from the start | 1 | Session fails |
-| Provider unavailable or unauthorized | Provider | Next allowed link at the session boundary | Chain length | Blocked `no_provider` |
-| Provider quota or spend limit | Provider, HTTP | Next session on the backstop; pause with `wait_until` only when no link is left | Reported reset, at most `limits.pause_max_min` | Paused; at the cap Blocked `pause_timeout`, WIP kept |
-| Paid link not allowed, or wrong auth on a subscription link | Billing check | Kill before turn 1; drop the link for the run | 1 | Blocked `paid_refused` |
-| Schema-invalid result | Tool runtime | One re-prompt | 1 | Task retry |
-| Result fails the agent's gate | Tool runtime | The failure goes back into the same session | 2 | `check_fail`, task retry |
-| Reply cut off at the output limit | Tool runtime | "continue" | 1 | `no_result`, task retry |
-| Timeout or idle | Supervisor | Stop, then a fresh session | Agent `retries` (2) per task | Blocked |
-| 3 refusals under one rule | Guard | End the session | 3 | Task retry |
-| `done_when` fails | Check | Task retry | Agent `retries` (2) per task | Blocked |
-| Regression against the baseline | Check | Back to Build with the failing test's output | `limits.returns` (3) per group | Blocked `regression` |
-| Findings or a failed acceptance item | Check, review | Back to Build in the task's own session | `limits.returns` (3) | Blocked |
-| Epic gate fails | Review | The group that last changed each file returns to Build; a finding with no file blocks the epic | `limits.returns` (3) | Blocked `epic_gate` |
-| Tester fails an item Go's reruns pass | Review | Restart the tester once with Go's output | 1 | Blocked `tester` |
-| Go's reruns split | Review | Stop | 0 | Blocked `flaky` |
-| A dependency is abandoned | Engine | Stop its dependents | 0 | Blocked `dependency` |
-| Check fails on the epic tip after a landing | Engine | Pause landings; the last-landed group returns to Build | `limits.returns` (3) | Blocked `integration` |
-| Builder needs a file outside scope | B1 refusal | WIP commit, end the session, keep the lease | 1 request per task | Blocked `needs_scope`; resumes on approve or deny |
-| Flap: same failure hash or zero-diff return | Recovery | Stop | 1 | Blocked |
-| Any model attempt on a task | Recovery | Count it | `limits.task_attempts` (6) | Blocked `attempts` |
-| Brief over half the measured context | Brief builder | Next link that fits | 1 | Blocked `context` |
-| Landing conflicts with the epic branch | Ship | Merge the epic branch into the group branch, rerun Check | 1 | Blocked `merge_conflict` |
-| Budget spent | Budgets | Stop | — | Blocked `budget` |
-| Harness crash or reboot | Recovery | `Load` from group state: the snapshot plus the events after it | — | Continues |
-| Scheduled job fails | Scheduler | Backoff | 3 | Blocked |
-| State write refused, or a record fails its check on read | State manager | Refuse the write, or move the bad record aside as `.bad-*` | 0 | Blocked `state_invalid`, naming the kind, key and field |
+The tester's wire result is `[TODO: result field names (G-NEW-7)]`.
 
-**What each one does**
-- **Transient HTTP:** A network request to a model provider fails in a passing way, such as a reset connection or a 503. The HTTP stack notices and retries with a growing wait, 3 times. If all fail, the session fails and the task gets a fresh session later.
-- **Stream dropped mid-answer:** The model's streamed reply stops before it finishes. The HTTP stack discards the partial answer and sends the request again from the start, once. A second drop fails the session.
-- **Provider unavailable or unauthorized:** The provider is down or rejects the login. At the next session boundary the engine moves to the next allowed link in the agent's chain (its ordered list of ways to reach a model, see Glossary). When the chain is exhausted, the group ends Blocked `no_provider`.
-- **Provider quota or spend limit:** The provider says the usage window or spend cap is used up. The next session moves to the backstop (the free local endpoint every chain ends in, see Glossary). Only when no link is left does the session pause with a `wait_until` timer until the provider's reported reset time, at most `limits.pause_max_min`. The group shows as Paused; at the cap it ends Blocked `pause_timeout` with its WIP commit kept.
-- **Paid link not allowed, or wrong auth on a subscription link:** The billing check finds the session would spend money against the `providers.paid` setting, or a subscription login is not in effect. The engine kills the session before its first model turn and drops that link for the run. The group ends Blocked `paid_refused`.
-- **Schema-invalid result:** The worker's final answer does not match its required JSON shape. The tool runtime re-prompts once. If it is still wrong, the task retries.
-- **Result fails the agent's gate:** The result parses but fails the agent's own test, such as a builder's `done_when`. The failure output goes back into the same session, up to 2 times, then the session ends with `check_fail` and the task retries.
-- **Reply cut off at the output limit:** The model hit its maximum reply length mid-answer. The tool runtime says "continue" once. If still cut, the session ends `no_result` and the task retries.
-- **Timeout or idle:** The session ran past its wall clock (60 min by default) or went silent for 10 minutes. The supervisor stops it and starts a fresh session for the task, up to the agent's `retries` value (2) per task. Then the group ends Blocked.
-- **3 refusals under one rule:** The guard refused the worker 3 times for the same rule. The session ends and the task retries.
-- **`done_when` fails:** Check's rerun of a task's success command fails. The task retries, up to the agent's `retries` (2). Then the group ends Blocked.
-- **Regression against the baseline:** A test that passed before the change now fails. Check sends the group back to Build with the failing test's output. Up to `limits.returns` (3) returns per group, then Blocked `regression`.
-- **Findings or a failed acceptance item:** The reviewer found a blocking problem or the tester failed an item. The group returns to Build in the same session the task used, so the builder keeps its context. Up to 3 returns, then Blocked.
-- **Epic gate fails:** The final review over the whole epic found problems. Each finding goes to the group that last changed its file, which returns to Build. A finding with no file blocks the whole epic. Up to 3 returns, then Blocked `epic_gate`.
-- **Tester fails an item Go's reruns pass:** The tester failed an item but the engine's two reruns passed. The engine restarts the tester once with its own output. A second disagreement ends Blocked `tester`.
-- **Go's reruns split:** The engine reran a failed item twice and got one pass and one fail. It stops at once; the group ends Blocked `flaky`.
-- **A dependency is abandoned:** A group this group depends on was dropped with `komodo abandon`. The engine stops every dependent group at once; they end Blocked `dependency`.
-- **Check fails on the epic tip after a landing:** A group landed on the epic branch and Check now fails on the combined code. The engine pauses further landings and sends the last-landed group back to Build. Up to 3 returns, then Blocked `integration`.
-- **Builder needs a file outside scope:** Guard rule B1 refused a write outside the group's `files`. The engine commits the WIP, ends the session and keeps the lease. One request per task. The group ends Blocked `needs_scope` and resumes when the orchestrator approves or denies ([Scope requests (Appendix J)](#scope-requests)).
-- **Flap: same failure hash or zero-diff return:** A retry produced the exact same failure as before, or a return to Build changed nothing. Recovery stops after one such repeat; the group ends Blocked.
-- **Any model attempt on a task:** Every fresh session, re-prompt, gate feedback or "continue" counts as one attempt. Recovery counts them; the rows above are inner limits. At `limits.task_attempts` (6) the group ends Blocked `attempts`.
-- **Brief over half the measured context:** The assembled prompt is larger than half the model's context window. The brief builder moves the task to the next link in the chain that fits, once. With none left, Blocked `context`.
-- **Landing conflicts with the epic branch:** Merging the group's branch into the epic branch hits a git conflict. Ship merges the epic branch into the group branch and reruns Check, once. If it still conflicts, Blocked `merge_conflict`.
-- **Budget spent:** The group hit its token cap from [Token and resource management (Appendix J)](#token-and-resource-management), which applies only when `track.usage` is on. The engine stops; the group ends Blocked `budget`.
-- **Harness crash or reboot:** The `komodo` process died or the machine restarted. On restart, Recovery calls group state's `Load`, which replays the group's state events from the last snapshot, and the run continues. It has no retry count; the state is rebuilt, not retried.
-- **Scheduled job fails:** A job run from [Scheduler and job templates (chapter 10)](#10-scheduler-cache-and-observability) failed. The scheduler waits with backoff and retries, 3 times. Then the job ends Blocked.
-- **State write refused, or a record fails its check on read:** The state manager ([State manager (Appendix C)](#state-manager)) refused a write that broke the schema or an invariant, or a record on disk failed its checksum, hash or version check. A refused write leaves the disk untouched; a bad record is moved aside as `.bad-*`. There is no retry: the owning group ends Blocked `state_invalid`, with the kind, key and field named.
+#### Scope request
 
-#### Rules
+```go
+// ScopeRequest is a builder's request for paths outside its files.
+type ScopeRequest struct {
+	Group  string
+	Task   string
+	Paths  []string
+	Reason string
+}
 
-**In plain terms.** These six rules sit above the table and hold for every failure. They promise how much work can be lost, keep a crash from spreading, and set how a worker is stopped. Without them, the table would be a list of cases with no guarantee behind it. The engine enforces them; a person sees their effect as `Blocked: crash` or `needs redesign` in `status`.
+// ScopeAnswer is the orchestrator's answer to a scope request.
+type ScopeAnswer struct {
+	Approve bool
+	Paths   []string
+	Reason  string
+}
+```
 
-- Loss bound: any single failure loses at most one model turn and no committed edit.
-- WIP commit at every session end of a writing agent; an empty diff writes nothing.
-- A crash is contained to its group; the run reports it as `Blocked: crash`.
-- A task retry stays on its link; only a provider failure moves it.
-- Blocked never auto-retries. A group blocked 3 times for one reason is flagged `needs redesign`.
-- Stop a worker with SIGINT first (ends the turn, keeps its result), then SIGTERM after 30 s.
+The orchestrator answers with the verb `komodo scope approve|deny`:
 
-**What each one does**
-- **Loss bound:** Any one failure, including a crash, kill, power loss or provider halt, loses at most one model turn and never a committed edit.
-- **WIP commit at session end:** Every time a writing worker's session ends, the engine commits its unfinished work. If nothing changed, nothing is written.
-- **A crash stays in its group:** A crash in one group blocks only that group; other groups keep running. The run reports it as `Blocked: crash`.
-- **A retry keeps its link:** A task retry runs on the same model link as before. Only a provider failure moves it to the next link.
-- **Blocked is manual:** A Blocked group never restarts on its own; a person or the orchestrator runs `komodo resume`. A group blocked 3 times for the same reason is flagged `needs redesign` in `status`.
-- **Stop gently first:** To stop a worker, the engine sends SIGINT, which ends the current turn and keeps its result. If the worker is still alive after 30 seconds, it sends SIGTERM.
+```sh
+komodo scope approve tg-1.2 --paths internal/quality/check.go --reason "Check must read the baseline"
+komodo scope deny tg-1.2 --paths docs/lld.md --reason "Out of this group's scope"
+```
 
-#### Token and resource management
+The `scope_answer` brief slot carries the answer to the resumed builder ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)). The command's transport into `Drive` is open `[TODO: how scope commands reach Drive (G-29)]`.
 
+#### Counters
 
-**In plain terms.** This section sets the limits on how much time, how many tokens (the units a model's input and output are billed in) and how many parallel sessions a run may use, plus the tricks that keep token use low. Budgets are bounds against runaway loops, not cost targets; dollars only produce a warning. Without them, a looping worker could run for hours and empty a spend limit. Token and dollar tracking, with the token cap, runs only when `track.usage` is on ([Flat keys (34) (chapter 1)](#1-cli-and-configuration)). A person sets them with `komodo config`; the engine enforces them; `status --metrics` reports the result.
+`State` holds the counters `Next()` reads ([Event Spine and State Machine](#23-data-model)). Which package owns which counter is open `[TODO: counter ownership (G-32)]`.
 
-| Budget | Value |
+| Counter | Where the design puts it | Bound |
+|---|---|---|
+| Returns | `State.Returns`, per group | `limits.returns` (3, hard limit 5) |
+| Attempts | `TaskState.Attempts`, per task | `limits.task_attempts` (6, hard limit 10) |
+| Retries | `TaskState.Retries`, counted for timeouts and idle stops | The agent's `retries` (2, hard limit 3) |
+| Failure hash | `State.FailureHash`, the last failure's fingerprint | A repeat is a flap: 1 |
+| Blocks per reason | `State.Blocks` | 3 for one reason flags `needs redesign` |
+| Group wall used | `State.WallUsedS`, seconds worked excluding Paused and Blocked | `limits.group_wall_min` |
+| Tokens used | `State.TokensUsed`, only when `track.usage` is on | `limits.group_tokens` |
+| Scope requests | One per task | 1 |
+
+### 9.4 Interfaces
+
+```go
+// Checker runs the zero-token checks on one group's head commit.
+type Checker interface {
+	Check(ctx context.Context, in CheckInput) (CheckResult, error)
+}
+
+// ClassifyFailure judges a failing test from its two solo reruns; true means the rerun passed.
+func ClassifyFailure(reruns [2]bool) FlakeOutcome
+
+// Classify judges one test against the baseline.
+func (b Baseline) Classify(test string, passedAtHead bool) TestStatus
+
+// ImpactSet returns the Go packages that import a changed package, directly or through others.
+func ImpactSet(deps map[string][]string, changed []string) []string
+
+// OutOfScope returns the changed paths that are neither in files nor a test sibling.
+func OutOfScope(changed, files []string, sibling func(path string) bool, match func(glob, path string) bool) []string
+
+// CaseCollisions returns the groups of paths that differ only by letter case.
+func CaseCollisions(paths []string) [][]string
+```
+
+```go
+// FlakeOutcome is the verdict on a failing test after two solo reruns.
+type FlakeOutcome string
+
+const (
+	FlakeConfirmed FlakeOutcome = "confirmed" // both reruns failed
+	FlakeFlaky     FlakeOutcome = "flaky"     // any rerun passed: reported, does not block
+)
+```
+
+**Failure behaviour of each function**
+
+| Function | On failure |
 |---|---|
-| Group wall | tasks × session wall + 2 × session wall; paused time excluded; hard limit 720 min |
-| Per agent | Wall, idle, retries from `agent.json` |
-| Per task | `limits.task_attempts` model attempts |
-| Per group | `limits.group_tokens`: input, output, cache writes; cache reads reported only; only when `track.usage` is on |
-| Sessions | Pool 1 to 6 machine-wide plus per-link slots |
-| Mode | economy (1 merged lens) or thorough (N lenses plus a cold pass) |
+| `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass Check and `Drive` records the error `[TODO: how a Check error is routed (G-NEW-2)]` |
+| `ClassifyFailure` | Cannot fail |
+| `Baseline.Classify` | Cannot fail; a test absent from the baseline is `[TODO: a test with no base result (G-NEW-4)]` |
+| `ImpactSet` | Cannot fail; an empty `changed` returns an empty set |
+| `OutOfScope`, `CaseCollisions` | Cannot fail |
 
-**What each one does**
-- **Group wall:** The total clock time a group may spend: the number of tasks times the session wall (60 min by default), plus two more session walls for Verify. Time spent Paused does not count. The hard ceiling is 720 minutes.
-- **Per agent:** Each agent's `agent.json` sets its session wall clock, its idle limit (silence before a nudge), and how many retries a task gets on timeout or idle.
-- **Per task:** `limits.task_attempts` (6) caps every model attempt on one task, as counted in [Failure table (Appendix J)](#failure-table).
-- **Per group:** `limits.group_tokens` caps input tokens, output tokens and cache writes per group. Cache reads are reported but not counted, because every turn re-reads the whole context. With `track.usage` off, no token data is collected and no token cap applies.
-- **Sessions:** The machine runs between 1 and 6 looping sessions at once across all repos (`limits.pool_min` to `limits.pool_max`), plus a per-link cap on concurrent sessions.
-- **Mode:** `economy` runs one merged review lens; `thorough`, the default, runs every applicable lens plus a cold pass ([Review mechanics (Appendix J)](#review-mechanics)). With `track.usage` at `auto`, `economy` turns tracking on and `thorough` turns it off.
+```go
+// Reviewer is the quality-side half of a reviewer session.
+type Reviewer interface {
+	// Lenses returns the lens names to run for a diff under a profile.
+	Lenses(d Diff, p Profile) []string
+	// AcceptFinding reports whether a submitted finding is verified and its severity.
+	AcceptFinding(f Finding, head, diff LineSource) (Severity, bool, error)
+	// AcceptResult rejects a result that skips or repeats a task ID.
+	AcceptResult(tasks []string, r []TaskVerdict) error
+}
 
-Savings: clipping, signature trimming, glob-picked standards, delta diffs, session resume on return, briefs that fit the link, 4 KB check output, a stable prefix, a sanitizer, per-task sessions, light-weight work on local models, context compaction at 80%.
+// Diff is what lens selection reads.
+type Diff struct {
+	Paths []string
+	Text  string
+}
 
-**What each one does**
-- **Clipping:** Shortens text before it enters a prompt. Which text and to what length: [UNKNOWN: not yet designed].
-- **Signature trimming:** Reduces Go source to its signatures before it enters a brief. The trimmed slices are cached per file version ([Cache store (Appendix K)](#cache-store)).
-- **Glob-picked standards:** Only the standards skills whose file patterns match the group's files are added to the brief, so a Go task never carries TypeScript rules.
-- **Delta diffs:** On re-review, the reviewer sees only the lines that changed since the last review, not the whole diff again.
-- **Session resume on return:** When a group returns to Build, the builder's existing session continues instead of a new one re-reading everything.
-- **Briefs that fit the link:** A brief must fit in half the model's measured context window; otherwise the task moves to a link with a larger window.
-- **4 KB check output:** Every tool's output except `read` is capped at 4 KB in the reply; the full output goes to a log file the reply names.
-- **A stable prefix:** The brief is assembled with the least-changing parts first (tools, role, repo context, standards) and the task last, so the provider's cache can reuse the start.
-- **A sanitizer:** Strips terminal colour codes and build noise from command output before it enters the context.
-- **Per-task sessions:** Each task gets its own fresh model conversation, so context from one task never bloats the next.
-- **Light-weight work on local models:** Runs lighter work on local, free models instead of hosted ones. Which work qualifies: [UNKNOWN: not yet designed].
-- **Context compaction at 80%:** When a session's context reaches 80% of the window, old tool outputs shrink to one-line stubs; their full text stays on disk in `<session>/out/`.
+// Profile is the review depth.
+type Profile string
 
-Prompt caching on the Anthropic API: at most 4 `cache_control` breakpoints per request, 1-hour entries before 5-minute ones, a 512-token minimum on the 5.5 line, writes at 1.25× (5 min) or 2× (1 h) and reads at 0.05× base. Breakpoints follow the prefix order: tools plus role (1 h), repo context (1 h), standards (5 min), task (5 min). `claude -p` caches automatically on a byte-identical prefix. Cached reads do not count toward Anthropic's input-tokens-per-minute limit. The ledger's `cache_read` column, written only when `track.usage` is on, and its `ctx_peak` column are the proof. `[PENDING G-17]` the 50% hit-rate fixture needs real API sessions, measured in phase 7.
+const (
+	ProfileThorough Profile = "thorough"
+	ProfileEconomy  Profile = "economy"
+)
 
-A change at the tools level invalidates every cache entry after it, and a change to thinking or effort invalidates from the messages level on. `effort` and thinking are therefore fixed per agent.
+// LineSource returns line n of a file.
+type LineSource interface {
+	Line(file string, n int) (string, bool)
+}
 
-**What each one does**
-- **Tools plus role (1 h):** The first cache block: the tool definitions and the agent's role text. They are cached for an hour.
-- **Repo context (1 h):** The second block: the repo's `AGENTS.md` minus the Komodo block, read at the base commit. Also cached for an hour.
-- **Standards (5 min):** The third block: the standards skills picked by file globs. Cached for 5 minutes.
-- **Task (5 min):** The last block: the task itself. Cached for 5 minutes.
+// VerifyFinding reports whether the quoted line is at File:Line in the head tree or in the diff.
+func VerifyFinding(f Finding, head, diff LineSource) bool
 
-Headline metric: tokens and USD per accepted group, plus cache hit rate per agent, in `status --metrics`, only when `track.usage` is on.
+// ExactlyOnce rejects a list that skips or repeats a task ID.
+func ExactlyOnce(want, got []string) error
+```
 
-#### Scenario: the Verify race
+| Method | On failure |
+|---|---|
+| `Lenses` | Cannot fail |
+| `AcceptFinding` | An unknown rule ID returns an error and the finding is refused; a quote not found returns `false`, and the finding is dropped and logged |
+| `AcceptResult` | A skipped or repeated task ID returns an error; the engine rejects the result and the session counts an attempt `[TODO: how a rejected result is retried (G-NEW-7)]` |
 
-**In plain terms.** In Verify two model sessions run side by side, the reviewer and the tester, and either can fail the group. The race is what happens when one fails first: the engine cancels the tester, lets the reviewer finish, and then sends the group back to Build with every finding. The cancelled session may still send a last event. The epoch, a counter that rose when the group left Verify, marks that event stale so it cannot move the stage again. Without this, a late result could move a group twice; only the engine acts here, and a person sees the outcome in `status`.
+```go
+// Tester is the quality-side half of a tester session.
+type Tester interface {
+	// Rerun runs an item's command twice and returns the outcome and the last output.
+	Rerun(ctx context.Context, it Item) (RerunOutcome, string, error)
+	// AcceptResult rejects a result that skips or repeats a task ID.
+	AcceptResult(tasks []string, r TesterResult) error
+}
 
-The reviewer and tester start under one epoch. The first verified blocking finding makes `Next()` emit `cancel` for the tester. When the reviewer's session ends, the group enters Build under a new epoch with every verified finding. The tester's own `session.end cancelled` arrives while the group is still in Verify, so it is applied normally; only output that arrives after the return to Build carries an old epoch and is stale.
+// AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
+func AdjudicateItem(reruns [2]bool) RerunOutcome
+```
 
+| Method | On failure |
+|---|---|
+| `Rerun` | An item with no `Cmd` is never rerun, so its failure is never confirmed; a command that cannot start returns the error `[TODO: where Go reruns the command and what a start failure means (G-NEW-15)]` |
+| `AcceptResult` | Same as the reviewer's |
+| `AdjudicateItem` | Cannot fail |
+
+```go
+// AutoDeny returns the first requested path the engine denies without asking, and why.
+func AutoDeny(paths []string, protected func(string) bool, ownedByOther func(string) (group string, ok bool)) (path, why string, denied bool)
+
+// PlanResume says how a halted group's sessions continue.
+func PlanResume(handleWorks bool) ResumeMode
+
+// ResumeMode is how a session continues.
+type ResumeMode string
+
+const (
+	ResumeHandle ResumeMode = "handle" // the provider's resume handle
+	ResumeFresh  ResumeMode = "fresh"  // a fresh session with the brief, the work-in-progress diff and the last summary
+)
+
+// GroupWallMin returns the wall budget of a group in minutes.
+func GroupWallMin(tasks, sessionWallMin, hardMin int) int
+
+// TrackUsage reports whether token and dollar tracking is on for a setting and a mode.
+func TrackUsage(setting string, m Profile) bool
+
+// NeedsRedesign reports whether a reason has blocked a group the flag count of times.
+func NeedsRedesign(blocks map[string]int, reason string) bool
+```
+
+| Function | On failure |
+|---|---|
+| `AutoDeny` | Cannot fail; `denied` is `false` when every path may go to the orchestrator |
+| `PlanResume` | Cannot fail; a `false` argument returns `ResumeFresh` and the ledger logs `resume_lost` |
+| `GroupWallMin`, `TrackUsage`, `NeedsRedesign` | Cannot fail |
+
+**Who calls each function**
+
+| Caller | Call | When |
+|---|---|---|
+| `Drive` | `Checker.Check` | A `check` action of the Check stage or of the epic tip after a landing |
+| `Drive` | `Reviewer.Lenses` | Before the reviewer's `spawn` |
+| `Drive` | `Reviewer.AcceptFinding` | A `finding.submit` event arrives |
+| `Drive` | `Reviewer.AcceptResult`, `Tester.AcceptResult` | A reviewer or tester `session.end done` arrives |
+| `Drive` | `Tester.Rerun` | The tester reports a failed item that has a command |
+| `Drive` | `AutoDeny` | A builder's `session.end` with status `needs_scope` |
+| `resume` verb | `PlanResume` | A person or the orchestrator resumes a group |
+| `Next()` | `NeedsRedesign` | `group.blocked` applies |
+| Group-wall check | `GroupWallMin` | A group's stage starts and when the wall is compared `[TODO: where the wall is compared and what a spent wall blocks as (G-NEW-10)]` |
+
+### 9.5 Behaviour
+
+#### Walkthrough
+
+One group, `tg-1.2` with 2 tasks, goes from the end of Build to Ship. The reviewer files one verified blocking finding, so the group returns to Build once.
+
+**📐 What happens between the last task and the return to Build?**
 ```mermaid
 sequenceDiagram
-  participant R as Reviewer (epoch 4)
-  participant T as Tester (epoch 4)
+  autonumber
+  participant D as Drive
+  participant K as Check
   participant N as Next()
-  R->>N: finding.verified: blocking (epoch 4)
-  N->>N: action cancel(T); stay in Verify
-  T->>N: session.end cancelled (epoch 4)
-  R->>N: finding.verified: second blocking finding (epoch 4)
-  R->>N: session.end done (epoch 4)
-  N->>N: Build, epoch 5, both findings in one return
+  participant R as Reviewer
+  participant T as Tester
+  D->>K: check actions
+  K-->>D: results
+  D->>N: check.done pass
+  N-->>D: Verify, epoch 4
+  D->>R: spawn
+  D->>T: spawn
+  R->>D: submit_finding
+  D->>D: quote at file:line?
+  D->>N: finding.verified
+  N-->>D: cancel Tester
+  T->>D: session.end cancelled
+  R->>D: session.end done
+  D->>N: session.end
+  N-->>D: Build, epoch 5
 ```
 
 **Reading the diagram.**
-1. The reviewer and the tester both start under epoch 4.
-2. The reviewer's first blocking finding is verified, so `Next()` cancels the tester and the group stays in Verify.
-3. The tester ends as `cancelled`; its pool slot is free.
-4. The reviewer keeps going and files a second verified blocking finding.
-5. The reviewer's `session.end done` moves the group to Build under epoch 5, carrying both findings in one return.
+1. The last task's `commit` action reruns its `done_when`; exit 0 emits `task.done` and `Next()` moves the group to Check.
+2. `Drive` runs one `check` action per command. Check reports pass or fail per step, and the last result emits one `check.done`.
+3. A pass moves the group to Verify. Entering Verify raises the epoch to 4 and orders a `spawn` for the reviewer and one for the tester.
+4. The reviewer submits a finding. `Drive` runs the evidence check; when Go finds the quoted line at the stated `file:line`, `finding.verified` is appended.
+5. The first verified blocking finding makes `Next()` order `cancel` for the tester, and the group stays in Verify.
+6. The tester's `session.end cancelled` arrives at epoch 4 while the group is still in Verify, so it is applied normally.
+7. The reviewer's `session.end done` moves the group to Build under epoch 5 with every verified finding in one return, and `Returns` rises by 1.
+8. The same builder session resumes with the findings. When the next Check and Verify pass, `stage.exit` moves the group to Ship.
+
+#### Algorithms
+
+##### Check
+
+Check runs these steps. The order and which steps are `check` actions (a command) and which run inline in Go are open. `[TODO: the order of the steps, whether the first failure stops the rest, which steps are check actions, and who emits check.done (G-NEW-2)]`
+
+| Step | Rule |
+|---|---|
+| `done_when` | Every task's `done_when` is rerun in the sandbox |
+| Scope | Every changed file is in the group's `files` or is a test sibling `[TODO: the test-sibling rule and the glob grammar (G-NEW-3)]` |
+| Secrets | The diff is scanned for secret patterns `[TODO: the secret patterns (G-NEW-3)]` |
+| Coverage | Changed-line coverage against `check.patch_coverage` (80); blocks for Go, warns for other languages `[TODO: how changed-line coverage is measured (G-NEW-4)]` |
+| Baseline | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns |
+| Impact set | Go: the tests of every package that imports a changed package. Other languages: the full `test` class. The epic gate always runs the full suite |
+| Flake rule | Any failing test is rerun twice alone; see the flake rule below |
+| Case collision | Two files that differ only by letter case fail Check on every operating system |
+| Cache | A result is keyed by tree hash plus command; an unchanged tree skips the rerun |
+| Parallelism | The impact set and `done_when` run in parallel inside the sandbox's process cap |
+
+**📐 Which Check step feeds which?**
+```mermaid
+flowchart LR
+  subgraph RUN["Run in the sandbox"]
+    DW["done_when"]
+    IM["impact set"]
+  end
+  subgraph DIFF["Compare the diff"]
+    SC["scope"]
+    SE["secrets"]
+    CO["case collision"]
+    CV["coverage"]
+  end
+  BL["baseline"]
+  FL["flake rule"]
+  OUT["check.done"]
+  IM -->|1 results| BL
+  BL -->|2 failures| FL
+  DW -->|3 result| OUT
+  FL -->|4 verdict| OUT
+  SC -->|5 files| OUT
+  SE -->|6 matches| OUT
+  CO -->|7 paths| OUT
+  CV -->|8 percent| OUT
+```
+
+**Reading the diagram.** Edge numbers name the data that moves; they are not an execution order. The order is open (G-NEW-2).
+
+##### Baseline
+
+1. At Intake the engine runs the `test` command class at the base commit and stores the result by tree hash. One entry serves every group cut from the same epic tip.
+2. At Check, `Baseline.Classify` compares each test: passed at base and fails at head is `regression`; failing at both is `pre_existing`.
+3. A regression fails Check and the group returns to Build with the failing test's output, up to `limits.returns` per group; then it blocks with `regression`.
+4. A pre-existing failure only warns, and the group lands with the warning.
+5. Tests that need a database or a public host fail at both commits, so the baseline marks them pre-existing.
+
+##### Impact set
+
+For Go, the impact set is the changed packages plus every package that imports one of them, directly or through others. `go list -deps` prints each package's transitive dependencies; reading that relation backwards gives the importers.
+
+```sh
+go list -f '{{.ImportPath}} {{join .Deps " "}}' ./...
+```
+
+```go
+// ImpactSet returns the changed packages and every package that depends on one of them.
+func ImpactSet(deps map[string][]string, changed []string) []string {
+	want := map[string]bool{}
+	for _, c := range changed {
+		want[c] = true
+	}
+	var out []string
+	for pkg, ds := range deps {
+		hit := want[pkg]
+		for _, d := range ds {
+			if want[d] {
+				hit = true
+			}
+		}
+		if hit {
+			out = append(out, pkg)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+```
+
+`go list` omits the packages a test file imports from `.Deps`; a scratch module showed a package whose test imports `a` and nothing else does, with `deps=[]` and `testimports=[poc/a testing]`. `[TODO: whether imports in test files count toward the impact set (G-NEW-4)]`
+
+##### Flake rule
+
+1. A failing test is rerun twice, alone.
+2. Both reruns fail: the failure is confirmed. Whether it blocks follows the baseline rule: a regression blocks and a pre-existing failure warns.
+3. Any rerun passes: the test is reported `flaky` without blocking, the group lands, and the flake is counted per repository in the ledger.
+
+```go
+// ClassifyFailure judges a failing test from its two solo reruns; true means the rerun passed.
+func ClassifyFailure(reruns [2]bool) FlakeOutcome {
+	if !reruns[0] && !reruns[1] {
+		return FlakeConfirmed
+	}
+	return FlakeFlaky
+}
+```
+
+The tester's rerun rule below differs: a split blocks there.
+
+##### Case collision
+
+```go
+// CaseCollisions returns the groups of paths that differ only by letter case.
+func CaseCollisions(paths []string) [][]string {
+	by := map[string][]string{}
+	for _, p := range paths {
+		k := strings.ToLower(p)
+		by[k] = append(by[k], p)
+	}
+	var out [][]string
+	for _, g := range by {
+		if len(g) > 1 {
+			sort.Strings(g)
+			out = append(out, g)
+		}
+	}
+	return out
+}
+```
+
+##### Lens selection and profiles
+
+The reviewer runs 10 lenses. `correctness`, `readiness` and `quality` always apply; each other lens applies when the diff meets the condition in its `applies` filter.
+
+**Review mechanics**
+
+| Rule | Detail |
+|---|---|
+| Profiles | Thorough: every applicable lens in parallel plus a cold pass `[TODO: what a cold pass is (G-NEW-5)]`. Economy: one merged lens. A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality` |
+| Severity | `blocker` and `major` block; `minor` is reported and counted |
+| Verdicts | `met`, `not_met` or `brief_incomplete` per task ID, each exactly once; Go rejects a result that skips or repeats one |
+| Added checks | The reviewer runs build, tests and lint itself with `run`; the engine reruns any check a verdict depends on, so the verdict rests on the engine's result |
+| Findings | `submit_finding` takes a rule ID, `file:line` and quoted evidence; a finding blocks only if Go finds the quote at that line in the head or the diff; failing findings are dropped and logged |
+| Precision ledger | Per rule and model: submitted, verified, fixed, `disputed` (a builder result code naming file and line); `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days is a design change |
+| `brief_incomplete` | Blocks with `brief`; a harness fault, not counted against the builder |
+| Re-review | The delta only; cached findings keyed by `(lens, diff, prompt hash, model)` cost 0 tokens, and the prompt hash covers the lens rule set `[TODO: what the delta is and how the key is encoded (G-NEW-16)]` |
+| Epic mode | One verdict per group over the whole epic diff |
+| Pool | Lenses run in parallel under one slot each only when `pool_max` allows; else they queue behind the group's slot |
+
+Whether each lens is its own model session or one session applies them all, how the per-lens results merge into one verdict per task, and how economy keeps the `security` lens that some components require are open. `[TODO: lens sessions, merging and the economy security lens (G-NEW-6)]`
+
+| Lens | Applies when | Checks |
+|---|---|---|
+| `correctness` | Always | Logic, error paths, nil and bounds, resource release |
+| `security` | Always for the installer, binary lifecycle, HTTP stack, tools, guard, sandbox and ship; else on auth, crypto, exec, net, path or environment code | Injection, secrets, path escape, unsafe exec, TLS |
+| `spec` | The task cites a `docs/lld.md` anchor | The diff matches the cited section, which is in the brief; a mismatch is `not_met`, not a finding |
+| `contract` | An exported symbol changed (Go through `go/ast`; other languages by export-line diff) | Every caller still compiles and a task intends the change |
+| `concurrency` | The diff adds `go`, `chan`, `sync`, `atomic`, threads or async | Data races, lock order, cancellation, goroutine leaks |
+| `platform` | `_windows.go`, `_darwin.go`, `_linux.go`, path or shell handling | Separators, case, line endings, signals |
+| `config` | `embed/*.json`, `defaults.json`, `policy.json` | Hard limits kept, schema version bumped, gate fixture updated |
+| `readiness` | Always | Tests for changed behaviour; docs and changelog touched when the task says so |
+| `quality` | Always | Naming, duplication, comment rules from `standards-comments` |
+| `economy` | Economy mode only | The merged checklist of the rows above at reduced depth |
+
+The security lens is required for the installer, binary lifecycle, HTTP stack, tool runtime, guard, sandbox and ship, even in economy mode.
+
+##### Evidence check
+
+A finding blocks only when Go finds its quote. `submit_finding` takes a rule ID, a `file:line` and quoted evidence.
+
+**📐 When does a finding block?**
+```mermaid
+flowchart TD
+  F["submit_finding"]
+  K{"Known rule ID?"}
+  Q{"Quote at file:line?"}
+  S{"Severity"}
+  REF["Refused"]
+  DROP["Dropped and logged"]
+  BLOCK["Blocks the group"]
+  COUNT["Reported and counted"]
+  F -->|1| K
+  K -->|2 no| REF
+  K -->|3 yes| Q
+  Q -->|4 no| DROP
+  Q -->|5 yes| S
+  S -->|6 blocker or major| BLOCK
+  S -->|7 minor| COUNT
+```
+
+1. The tool refuses a rule ID that is in no lens catalog.
+2. `VerifyFinding` looks for the quote at `File:Line` in the head tree and in the diff. How exactly the line is matched is open. `[TODO: the match rule for a quote: exact line, whitespace, and the head tree versus the diff (G-NEW-7)]`
+3. A quote that is not found drops the finding and logs it; the finding cannot block. The precision ledger counts it as submitted, not verified.
+4. A verified finding is appended as `finding.verified`; its rule's severity decides whether the group is blocked.
+5. The precision ledger counts the finding as submitted, and as verified or not.
+
+##### Verdicts
+
+1. `ExactlyOnce` checks the reviewer's verdict list against the group's task IDs and rejects a result that skips or repeats one.
+2. A `not_met` task, or a verified blocking finding, returns the group to Build when the reviewer's session ends.
+3. A `brief_incomplete` verdict blocks the group with reason `brief`.
+4. At the epic gate the reviewer gives one verdict per group over the whole epic diff ([Engine Internals](#3-engine-internals)).
+
+```go
+// ExactlyOnce rejects a list that skips or repeats a task ID.
+func ExactlyOnce(want, got []string) error {
+	seen := map[string]int{}
+	for _, g := range got {
+		seen[g]++
+	}
+	for _, w := range want {
+		switch seen[w] {
+		case 0:
+			return fmt.Errorf("task %s has no entry", w)
+		case 1:
+		default:
+			return fmt.Errorf("task %s has %d entries", w, seen[w])
+		}
+	}
+	return nil
+}
+```
+
+##### The tester
+
+1. The tester runs beside the reviewer in Verify, in its own throwaway worktree at the same commit, blind to the builder. The worktree and the dependency copy are in [Tools, Guard and Sandbox](#tester-copy).
+2. Its brief says which three gates Go already proved: lint and coverage, success, and regression. It spends its turns on behaviour.
+3. It proves the group's acceptance items from `TG.md` with `run` and reports pass or fail per item with evidence. It reports `confirmed` or `not_confirmed` per task ID exactly once, judged from `done_when` and the acceptance item.
+4. An item marked `needs: network`, `docker` or `service:<name>` is skipped with reason `env` and a warning line.
+5. A failed item counts only after Go reruns its command twice (below).
+6. Go cross-checks the tester's per-task result with the reviewer's. On re-review the tester reruns every item. The ledger records each tester model's false-fail rate: how often it failed an item that Go's reruns passed.
+
+**📐 What happens when the tester fails an item?**
+```mermaid
+flowchart TD
+  F["Tester fails an item"]
+  C{"Has a cmd line?"}
+  R{"Go reruns twice"}
+  U["Failure never confirmed"]
+  OK["Failure counts"]
+  RS["Restart tester once"]
+  TB["Blocked tester"]
+  FL["Blocked flaky"]
+  F -->|1| C
+  C -->|2 no| U
+  C -->|3 yes| R
+  R -->|4 both fail| OK
+  R -->|5 both pass| RS
+  R -->|6 one each| FL
+  RS -->|7 second dispute| TB
+```
+
+**Reading the diagram.** Edge 5 restarts the tester once with the item, its evidence and Go's command and output; the tester returns a reason code (`env`, `wrong_command`, `flaky` or `real_failure`). Edge 7 is a harness fault, not the builder's.
+
+```go
+// AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
+func AdjudicateItem(reruns [2]bool) RerunOutcome {
+	switch {
+	case !reruns[0] && !reruns[1]:
+		return RerunConfirmed
+	case reruns[0] && reruns[1]:
+		return RerunDisputed
+	default:
+		return RerunSplit
+	}
+}
+```
+
+##### The Verify race
+
+The reviewer and the tester start under one epoch. The first verified blocking finding makes `Next()` order `cancel` for the tester, and the group enters Build under a new epoch with every verified finding when the reviewer's session ends. Output that arrives after that return carries an older epoch and is recorded `stale: true`.
+
+**📐 In what order do events arrive when both Verify sessions fail?**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant R as Reviewer (epoch 4)
+  participant T as Tester (epoch 4)
+  participant N as Next()
+  R->>N: finding.verified blocking
+  N->>N: cancel Tester, stay in Verify
+  T->>N: session.end cancelled
+  R->>N: second finding.verified
+  R->>N: session.end done
+  N->>N: Build, epoch 5, both findings
+```
 
 | Case | Outcome |
 |---|---|
@@ -7173,180 +7626,420 @@ sequenceDiagram
 | Tester fails an item and Go's two reruns also fail | Reviewer finishes; back to Build with the item and the reviewer's findings |
 | Tester fails an item but Go's two reruns pass | Tester restarts once with Go's output; reviewer keeps going |
 | Go's two reruns split | Group blocks with `flaky` |
-| Both pass | Both `session.end done` events needed; then `stage.exit` to Ship |
+| Both pass | Both `session.end done` events are needed; then `stage.exit` to Ship |
 | Both fail in one tick | Handled in `sequence` order; both reach the builder in the one return |
 | An item has no command | Its failure is never confirmed by Go |
 
-**What each one does**
-- **Reviewer fails first:** A verified blocking finding or a `not_met` task arrives from the reviewer before the tester finishes. The tester is cancelled so its slot frees early; the reviewer finishes, and the group returns to Build with all of the reviewer's verified findings.
-- **Tester fails an item and Go's two reruns also fail:** The tester reports a failed acceptance item; Go reruns the item's command twice and both runs fail, which confirms it. The reviewer is not cancelled: Verify returns to Build only when the reviewer's session ends, so the item and the reviewer's findings reach the builder together.
-- **Tester fails an item but Go's two reruns pass:** Go's reruns disagree with the tester, so the tester restarts once with Go's command output added to its brief. The reviewer keeps running meanwhile; a second dispute blocks the group with `tester`.
-- **Go's two reruns split:** One rerun passed and one failed, so the test itself is unreliable. The group blocks with reason `flaky` for a person to look at.
-- **Both pass:** The group waits for both `session.end done` events. Only then does `stage.exit` move it to Ship.
-- **Both fail in one tick:** Two failures arrive in the same engine step. They are applied in sequence order, and both are carried into the single return when the reviewer's session ends.
-- **An item has no command:** An acceptance item without a `cmd:` line cannot be rerun by Go, so its failure is never confirmed and never cancels the reviewer.
+The reviewer is never cancelled by a tester failure; Verify returns to Build only when the reviewer's session ends. `[TODO: what happens to a failed tester item that has no command, since the transition table also lists a recorded tester failure as a reason to return (G-NEW-15)]`
 
-#### Quality assurance view
+##### Scope requests
 
+A builder that needs a file outside `files` cannot write it: the guard refuses the write (row B1). The builder stops instead and the group waits for an answer. One request is allowed per task.
 
-**In plain terms.** This section explains how the harness decides that code a worker wrote is good enough to land. Most checks are mechanical and cost no model tokens: rerun the tests, compare against the starting point, scan for secrets. Model-based review runs only after those pass. Without this layer, a worker's own claim of "done" would be the only evidence. The engine runs every step; a person reads the results in `status`.
+**📐 How is a scope request answered?**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Builder
+  participant E as Engine
+  participant O as Orchestrator
+  B->>E: session.end needs_scope, paths, reason
+  E->>E: work-in-progress commit
+  E->>E: group Blocked needs_scope
+  alt protected path or another group's file
+    E->>E: deny, no one asked
+  else any other path
+    E->>O: wake status --wait
+    O->>E: scope approve or deny
+  end
+  E->>B: resume same session, scope_answer
+```
 
-#### Four gates, three of them free
+**Reading the diagram.** The first branch needs no answer from anyone; the second waits for the orchestrator. Both end with the same session resuming.
 
-**In plain terms.** A gate here is a pass-or-fail check a group must clear before it ships. Three of the four are run by Go code and cost 0 tokens; only the fourth uses a model session. Without the free gates, model reviews would spend tokens finding what a test run finds for free. The engine runs all four; a person sees the result as a Blocked reason or a landed group.
+1. The builder's final result has status `needs_scope`, the paths and a reason.
+2. The engine makes a work-in-progress commit. The resume handle is already in `state.json`. The group goes Blocked with reason `needs_scope`.
+3. The lease and the worktree stay held, and the startup sweep skips them.
+4. The engine denies without asking anyone when a path is protected (guard rows G3 and G4: Komodo's own settings, `.git` and secret files) or is in another live group's `files`.
+5. Otherwise `status --wait` wakes the orchestrator, which runs `komodo scope approve|deny --paths --reason`.
+6. Approval adds the paths to the group's `files` as action `scope_change` (key: group plus sorted paths), logged in the ledger. Denial leaves `files` unchanged.
+7. The engine resumes the same session with the answer in the `scope_answer` slot and the group returns to Build.
 
-| Gate | Evidence | Tokens |
-|---|---|---|
-| Lint and coverage | Check; `check.patch_coverage` (80) on changed lines, blocking for Go, warning for other languages | 0 |
-| Success | `done_when` rerun per task | 0 |
-| Regression | Baseline diff at the base commit plus the impact set | 0 |
-| Behaviour | The tester's blind pass over EARS acceptance items | Model |
+Where the widened `files` list is stored while the task list is locked at Intake, what the builder does after a denial, and what a second request in one task does are open. `[TODO: storage of the widened files, behaviour after a denial and after a second request (G-NEW-11)]`
 
-**What each one does**
-- **Lint and coverage:** Check (the zero-token stage, see Glossary) runs lint and measures test coverage of changed lines against `check.patch_coverage` (80%). Below the bar it blocks for Go code and warns for other languages.
-- **Success:** Each task has a `done_when` command written in the backlog. Check reruns it in the sandbox; a failure sends the task back for a retry.
-- **Regression:** Intake recorded the test results at the base commit (the baseline). Check runs the impact set (the tests affected by the change) and blocks on any test that passed at base and fails now.
-- **Behaviour:** The tester is a model session that cannot see the builder's work. An EARS acceptance item is a sentence of the form `WHEN <event> THE SYSTEM SHALL <response>` (see Glossary). The tester proves each one by running commands and reports pass or fail per item.
+##### Failure routing
 
-#### Check (ground truth)
+Every failure row ends in one of three places: the session fails and the task retries, the group returns to Build, or the group is Blocked. The table is in [9.7](#97-invariants-and-failures).
 
-**In plain terms.** Check is the pipeline stage that runs after Build and before model review (see Glossary). It is called ground truth because every result comes from running real commands, never from a model's opinion. Without it, regressions and out-of-scope edits would reach the reviewer or land. The engine runs Check inside the sandbox and caches results, so an unchanged tree is never rerun.
+**📐 Which failures end a session and retry the task?**
+```mermaid
+flowchart LR
+  A["Transient network error"] -->|3 retries| SF["Session fails"]
+  B["Stream dropped"] -->|1 resend| SF
+  C["Invalid result shape"] -->|1 re-prompt| TR["Task retry"]
+  D["Gate rejects result"] -->|2 feedbacks| TR
+  E["Reply cut off"] -->|1 continue| TR
+  F["3 guard refusals"] -->|3| TR
+```
 
-| Check | Rule |
+**📐 Which failures block the group, and as what?**
+```mermaid
+flowchart LR
+  A["No provider link left"] -->|chain length| B1["no_provider"]
+  B["Paid link refused"] -->|1| B2["paid_refused"]
+  C["Regression"] -->|returns 3| B3["regression"]
+  D["Epic gate fails"] -->|returns 3| B4["epic_gate"]
+  E["Tester disputes twice"] -->|1 restart| B5["tester"]
+  F["Reruns split"] -->|0| B6["flaky"]
+  G["Dependency abandoned"] -->|0| B7["dependency"]
+  H["Epic tip broke"] -->|returns 3| B8["integration"]
+  I["Attempts spent"] -->|6| B9["attempts"]
+  J["Brief too large"] -->|1| B10["context"]
+  K["Merge conflict"] -->|1| B11["merge_conflict"]
+  L["Token cap spent"] -->|cap| B12["budget"]
+```
+
+Both diagrams read as: failure, then its bound on the edge, then where it ends. The reason names are the block reasons of [Event Spine and State Machine](#block-reasons).
+
+##### Resume and crash recovery
+
+**📐 How does a halted group continue?**
+```mermaid
+flowchart TD
+  S["resume or restart after a crash"]
+  L["Load: snapshot plus later events"]
+  A["Run actions still open"]
+  H{"Resume handle works?"}
+  P["Continue the same conversation"]
+  F["Fresh session: brief, work-in-progress diff, last summary"]
+  G["Ledger logs resume_lost"]
+  S -->|1| L
+  L -->|2| A
+  A -->|3| H
+  H -->|4 yes| P
+  H -->|5 no| F
+  F -->|6| G
+```
+
+1. A restart replays the group's state events after the last snapshot through group state's `Load`; the run continues and nothing is retried, because the state is rebuilt. Which code calls `Load` is open. `[TODO: whether Drive or recover.go calls Load on a restart (G-NEW-13)]`
+2. `Drive` runs every action still open under its idempotency key.
+3. The `resume` verb retakes the lease, or refuses naming the new holder, and rebuilds a removed worktree from the hidden reference.
+4. Each session continues from the provider's resume handle.
+5. When the handle fails, a fresh session gets the brief, the uncommitted diff and the last summary, and the ledger logs `resume_lost`.
+6. Paused agents attempt now. A refused attempt costs no turn and re-pauses with the provider's new reset time.
+
+What the startup sweep contributes to recovery:
+
+| Sweep action | Effect on recovery |
 |---|---|
-| Baseline | Intake records the `test` class result at the base commit, cached by tree hash. A test that passed at base and fails at head is a regression and blocks; one failing at both is pre-existing and warns. |
-| Impact set | Go repos run the tests of every package that imports a changed package; other languages run the full suite. The full suite always runs at the epic gate. |
-| Flake rule | Any failing test is rerun twice alone; two more failures confirm it; a split reports `flaky` without blocking and is counted per repo. |
-| Scope | Every changed file is in the group's `files` or is a test sibling. |
-| Secrets | The diff is scanned for secret patterns. |
-| Cache | Results are keyed by tree hash plus command; an unchanged tree skips the rerun. |
+| Emits `session.end crash` for a dead session | The task is released with reason `crash` and can run again |
+| Re-enqueues a queue item with no lease | A group taken from the queue before it got its lease is not lost |
+| Fires a due timer record | A Paused group resumes with no live engine |
 
-**What each one does**
-- **Baseline:** At Intake (the first stage of a group), the engine runs the repo's `test` command on the base commit. It stores the result by tree hash. A test that passed at base and fails now is a regression and blocks, naming the test. A test failing at both is pre-existing and only warns.
-- **Impact set:** The set of tests that a change could affect. In Go repos it is every package that imports a changed package; other languages run the full suite. The full suite always runs at the epic gate (the final review across the whole epic).
-- **Flake rule:** A flaky test fails sometimes without any code change. Any failing test is rerun twice alone; two more failures confirm a real failure, and a split result reports `flaky` without blocking and is counted per repo.
-- **Scope:** Every changed file must be in the group's `files` list or be a test sibling (the matching test file). A change outside that fails Check.
-- **Secrets:** The diff is scanned for patterns that look like keys or passwords; a match fails Check.
-- **Cache:** Results are stored by tree hash plus command. If nothing changed, Check skips the rerun and costs no time.
+The full list of scans, their parallelism and their time target are in [Workspace and Leases](#4-workspace-and-leases).
 
-#### Review and the tester: overview
+##### Budgets
 
-**In plain terms.** Review is the stage, called Verify, where two model sessions judge the group's commit at once (see Glossary). The reviewer reads the diff against rule catalogs called lenses and files findings; the tester runs the acceptance items without seeing the builder's work. Both return one verdict per task, and Go code checks every claim before it can block. Without this stage, bugs that tests miss would land. The engine runs both; a person sees verdicts and findings in `status`.
+| Budget | Value |
+|---|---|
+| Group wall | tasks × session wall + 2 × session wall; paused time excluded; hard limit 720 min. A 4-task group with a 60 min session wall gets 360 |
+| Per agent | Wall (60 min by default), idle (10 minutes of silence) and retries, from `agent.json` |
+| Per task | `limits.task_attempts` (6) model attempts: fresh sessions, re-prompts, gate feedback and "continue"; the inner limits of the failure table count inside this one |
+| Per group | `limits.group_tokens`: input, output and cache writes; cache reads are reported only; only when `track.usage` is on |
+| Sessions | Pool of 1 to 6 machine-wide (`limits.pool_min` to `limits.pool_max`) plus per-link slots |
+| Mode | `economy` (1 merged lens) or `thorough` (every applicable lens plus a cold pass) |
 
-**What each one does**
-- **Lenses are rule catalogs applied by scope:** A lens is a list of review rules for one concern, such as security or concurrency (see Glossary). Ten exist; each runs only when a changed file matches its `applies` filter. Thorough mode runs every matching lens in parallel plus a cold pass; economy mode runs one merged lens. What a cold pass is: [UNKNOWN: not yet designed]. `blocker` and `major` findings block the group; `minor` ones are only reported and counted.
-- **Standards compile to rules:** A standards skill is a Markdown document of coding rules embedded in the binary. Every `- **Never` and `- **Always` line in it becomes a rule ID, so the reviewer cites a rule rather than an opinion.
-- **Findings carry evidence:** A finding is a reviewer claim with a rule ID, a `file:line` and a quoted line. Go code looks for that quote at that line in the head commit or the diff. If it is not there, the finding is dropped and logged, and it cannot block.
-- **One verdict per task:** The reviewer must answer `met`, `not_met` or `brief_incomplete` for every task ID exactly once; Go rejects a result that skips or repeats one. The tester answers `confirmed` or `not_confirmed` per task and pass or fail per acceptance item.
-- **The tester is blind by construction:** The tester's sandbox profile lists only its own worktree, so it cannot read the builder's folder even if asked. Its brief holds only engine facts from the backlog at the base commit, never the builder's summary.
-- **Precision ledger:** For each rule and model, the ledger counts findings submitted, verified by Go, fixed by the builder and disputed. `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days triggers a design change. The lens catalogs themselves are not yet written; that is gap G-16.
-- **Re-review:** When a group returns to Verify, only the changed part of the diff is reviewed, and earlier findings come from the cache at 0 tokens. The tester reruns every acceptance item.
+`track.usage` set to `auto` is on under `economy` mode and off under `thorough` mode; `on` and `off` override it. With tracking off, no token data is collected and no token cap applies; returns, attempts, retries and wall time still bound the group.
 
-- **Lenses are rule catalogs applied by scope.** Ten lenses; a lens runs only when a changed file matches its `applies`. Thorough mode runs every applicable lens in parallel plus a cold pass; economy runs one merged lens. `blocker` and `major` block; `minor` is reported and counted.
-- **Standards compile to rules.** Each `- **Never` and `- **Always` line in a standards skill becomes a rule ID the reviewer cites.
-- **Findings carry evidence.** A finding blocks only if Go finds its quoted line at `file:line` in the head or the diff. Failing findings are dropped and logged.
-- **One verdict per task.** The reviewer returns `met`, `not_met` or `brief_incomplete` for every task ID exactly once; the tester returns `confirmed` or `not_confirmed` per task and pass or fail per item.
-- **The tester is blind by construction.** Its sandbox profile cannot see the builder's worktree; its brief holds only engine facts from the backlog at the base commit.
-- **Precision ledger.** Per rule and model: submitted, verified, fixed, disputed. `doctor` lists rules under 50% verified; a rule under 30% for 60 days is a design change. `[PENDING G-16]` the catalogs' content, authored in phase 7.
-- **Re-review** covers only the delta; cached findings cost 0 tokens. The tester reruns every item.
+```go
+// GroupWallMin returns the wall budget of a group in minutes.
+func GroupWallMin(tasks, sessionWallMin, hardMin int) int {
+	w := tasks*sessionWallMin + 2*sessionWallMin
+	if w > hardMin {
+		return hardMin
+	}
+	return w
+}
 
-#### Gate and self-checks (Komodo's own repo)
+// TrackUsage reports whether token and dollar tracking is on for a setting and a mode.
+func TrackUsage(setting string, m Profile) bool {
+	switch setting {
+	case "on":
+		return true
+	case "off":
+		return false
+	}
+	return m == ProfileEconomy
+}
+```
 
-**In plain terms.** `komodo gate` is the self-check the Komodo repository runs on its own source code; it does not run on user repos. It builds, tests and verifies that generated tables, docs and event lists still match their sources. Without it, a drift between the policy file and the docs, or an event with no emitter, would reach a release. A developer or the orchestrator runs it before shipping Komodo itself.
+What a spent group wall blocks as is not in the block-reason list. `[TODO: the block reason and detector for a spent group wall (G-NEW-10)]`
 
-**What each one does**
-- **Build, tests and cross-builds:** Runs `go vet`, the test suite and builds for Windows, Linux and macOS, so a change that breaks one OS fails here.
-- **Import direction and strict decode:** Checks that Go packages import only in the allowed direction. Every `agent.json` and job template must decode with no unknown fields.
-- **Guard table and prefix-hash pin:** Renders the guard roster from `policy.json` and fails on drift. The prefix hash check confirms the stable front part of a brief hashes identically across two runs, which keeps prompt caching working.
-- **Event catalog completeness:** Every event type the code emits is in the catalog, and every catalog entry has an emitter.
-- **One door to state:** No package other than the state manager writes a runtime state file, and every record kind has a writer, a schema version and a fixture.
-- **Docs drift:** Fails the gate on a verb missing from `README.md` or the `komodo` skill. Also on a broken decision link, or an `lld.md` package that does not exist.
-- **The component map:** Every task group names a component, and every component has an `lld.md` entry ([Component traceability (Appendix Q)](#component-traceability)). The backlog and the design stay linked.
-- **The "no silent gaps" rule:** Every `[PENDING G-NN]` tag in the LLD must name a backlog task that closes it. Every gap row must have a phase. A tag with no task fails the gate.
-- **Every generated artifact against its source:** Roster tables, the state schema, skill hashes, standards rule IDs, template fixtures and the action table are regenerated and compared. A stale copy fails.
-- **Timing targets:** Short verbs under 50 ms, the gate under 3 minutes, a 10,000-event replay under 1 second. These are targets until phase 6 measures them (G-19).
-- **`--fast`:** Skips cross-builds and timing for a quicker local run.
+##### Token savings
 
-`komodo gate` runs build, tests and cross-builds; import direction and strict decode of every agent file and job template; the guard table and prefix-hash pin; event catalog completeness; docs drift; the component map; the "no silent gaps" rule; every generated artifact against its source; and timing targets. It must finish under 3 minutes locally; `--fast` skips cross-builds and timing. `[PENDING G-19]` the 10,000-event replay under 1 s and the 50 ms short-verb budget are targets, measured in phase 6.
+The design lists 12 savings. Where each is built is in the chapter that owns the code.
 
-#### Scheduling
+| Saving | Effect |
+|---|---|
+| Clipping | Shortens text before it enters a prompt `[TODO: which text and what length (G-NEW-14)]` |
+| Signature trimming | Reduces Go source to its signatures in a brief; trimmed slices are cached per file version |
+| Glob-picked standards | Only standards skills whose file patterns match the group's files enter the brief |
+| Delta diffs | On re-review the reviewer sees only the lines changed since the last review |
+| Session resume on return | A group returning to Build continues the builder's session |
+| Briefs that fit the link | A brief must fit in half the measured context; otherwise the task moves to a larger link |
+| 4 KB check output | Every tool reply except `read` is capped at 4 KB; the full output is in a log file |
+| A stable prefix | Tools, role, repo context and standards come first and the task last |
+| A sanitizer | Strips terminal colour codes and build noise from command output |
+| Per-task sessions | Each task gets a fresh conversation |
+| Light-weight work on local models | Runs lighter work on local, free models `[TODO: which work qualifies (G-NEW-14)]` |
+| Context compaction at 80% | At 80% of the window, old tool outputs shrink to one-line stubs; their text stays in `<session>/out/` |
 
-**In plain terms.** Scheduling means running agent work on a timer, such as a nightly review, with nobody typing a command. There is no daemon (a program that stays running); instead the operating system's own scheduler calls `komodo jobs tick` every 5 minutes. A job template is a small file naming which agents to run and how often. Without a lease per job, two ticks could start the same job twice. A person turns this on with `install --schedule`; nothing is scheduled by default.
+The brief layout is in [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs); the reply cap and compaction are in [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox).
 
-**What each one does**
-- **`komodo jobs tick`:** One idempotent (safe to repeat with the same result) engine step, meaning running it twice does no extra work. It enqueues jobs that are due, fires pause timers that have expired, and drives the session pool once. A tick with nothing due exits under 50 ms with no network.
-- **`install --schedule`:** Writes a launchd (macOS), cron (Linux) or Task Scheduler (Windows) entry that runs the tick every 5 minutes.
-- **Job template:** A file with `{name, agents[], slots{}, every}`. It names an agent subset, brief inputs and an interval; it can never raise limits.
-- **The job's lease:** A running job holds a lock named `job-<name>`; the next tick's copy is refused as a duplicate and logged.
-- **The example template:** `templates/jobs/nightly-review.json` runs the scout and reviewer every 24 hours. It ships as an example only; no job is active by default.
+##### Prompt caching on the Anthropic interface
 
-There is no daemon. `komodo jobs tick` is idempotent and is one engine step: it enqueues due jobs, fires due pause timers and drives the pool once. `install --schedule` writes a launchd, cron or Task Scheduler entry every 5 minutes. A job template names an agent subset, brief slots and an interval, never limits. Overlap is prevented by the job's lease. No jobs ship by default; one example template exists.
+1. A request carries at most 4 `cache_control` breakpoints, placed in prefix order: tools plus role (1 hour), repo context (1 h; the repo's `AGENTS.md` minus the Komodo block, read at the base commit), standards (5 min), task (5 min). Entries with the 1 h lifetime come before those with the 5 min lifetime.
+2. The minimum cacheable prefix is 512 tokens on the 5.5 line.
+3. A cache write costs 1.25 times the base price for 5 min, or 2 times for 1 h; a read costs 0.05 times the base price.
+4. `claude -p` caches automatically on a byte-identical prefix. Cached reads do not count toward Anthropic's input-tokens-per-minute limit.
+5. A change at the tools level invalidates every entry after it. A change to thinking or effort invalidates from the messages level on, so `effort` and thinking are fixed per agent.
+6. The ledger's `cache_read` column, written only when `track.usage` is on, and its `ctx_peak` column are the proof. `status --metrics` reports tokens and dollars per accepted group and the cache hit rate per agent, only when `track.usage` is on. The 50% hit-rate fixture needs real API sessions. `[TODO: the 50% cache hit-rate fixture (G-17)]`
 
-#### Error recovery and the loss bound
+### 9.6 State
 
-**In plain terms.** Error recovery is the rulebook for what the engine does when something fails. Failures include a dropped connection, a crashed session, a failing test or a provider quota. The loss bound is the promise that any single failure costs at most one model turn and never a committed edit. Without counters, a failure could retry forever and burn money. The engine applies these rules itself; a person only sees a Blocked reason when a bound is reached.
+This subsystem owns three small state machines. The group's own stages are in [Event Spine and State Machine](#26-state-and-transitions).
 
-**What each one does**
-- **Detector, action, bound, final state:** Every failure row in the LLD names who notices it, what the engine does, how many times, and where the group ends up. Nothing retries without a counter.
-- **The startup sweep:** Runs when the engine starts. It kills orphan processes by their pid (process id) files and frees leases whose holder died. It puts back queue items with no lease and records `session.end crash` for sessions that died.
-- **A crash is contained to its group:** One group's crash never stops other groups; the run reports it as `Blocked: crash`.
-- **`resume`:** First tries the model provider's own resume handle, which continues the same conversation. If that fails, a fresh session gets the brief, the work-in-progress diff and the last summary, and the ledger logs `resume_lost`.
-- **Blocked never auto-retries:** A Blocked group waits for a person or the orchestrator. A group blocked 3 times for the same reason is flagged `needs redesign`, meaning the task itself needs rethinking.
+#### Verify progress
 
-Every failure has a detector, an action, a bound and a final state; nothing loops without a counter. The startup sweep kills orphans by pid file, frees expired leases, re-enqueues queue items with no lease and emits `session.end crash` for dead sessions. A crash is contained to its group. `resume` tries the provider's resume handle first; if that fails, a fresh session gets the brief, the WIP diff and the last summary, and the ledger logs `resume_lost`. Blocked never auto-retries; a group blocked 3 times for one reason is flagged `needs redesign`.
+| Situation | Event | True after |
+|---|---|---|
+| Reviewer and tester running | First verified blocking finding | Tester cancel ordered; group still in Verify |
+| Tester cancelled | `session.end cancelled`, epoch current | Tester recorded ended; its pool slot is free |
+| Reviewer finished, any failure recorded | Reviewer `session.end done` | Group in Build, new epoch, one return added |
+| Both `session.end done`, no failure | The second `session.end done` | `stage.exit` to Ship |
+| Cancelled session reports after the return | Event with an older epoch | Recorded `stale: true`; ignored |
+| Tester fails, Go's reruns pass | Tester result | Tester restarted once; reviewer unaffected |
+| Tester disputes a second time | Tester result | Group Blocked `tester` |
+| Go's reruns split | Rerun outcome | Group Blocked `flaky` |
 
-#### Observability
+The fields of `VerifyProgress` are open `[TODO: VerifyProgress fields (G-30)]`.
 
-**In plain terms.** Observability means being able to see what the harness is doing and why. The `status` verb is the one window: live sessions, each group's stage, budgets, blocks and the dependency graph. The ledger is the record every session writes its model, context size and cost class to. Without it, the orchestrator could not know when to act. The orchestrator runs `status --wait` in the background and reads `report`; a person runs `status` directly.
+#### A tester item
 
-**What each one does**
-- **`status [--watch]`:** Prints the session pool, each group's stage, budgets, blocks and the group graph; `--watch` keeps refreshing.
-- **`status --wait`:** Blocks until the next wake event, such as a group going Blocked or finishing. This is the orchestrator's background loop, so it reacts without polling.
-- **`status --explain`:** Prints the last 10 events with the reason for each, for understanding why a group moved.
-- **`status --metrics`:** The scorecard: first-pass rate, returns per group, finding precision, tester false-fail rate, and cache hit rate, plus tokens and USD per accepted group when `track.usage` is on.
-- **The ledger:** Every session's model, measured context window and cost class (`subscription`, `free` or `paid`) are recorded there and shown in `status`.
+**📐 Which states can a tester item reach?**
+```mermaid
+stateDiagram-v2
+  [*] --> Passed: 1 tester passes
+  [*] --> Failed: 2 tester fails
+  Passed --> [*]: 11 nothing to do
+  Failed --> Unconfirmed: 3 no cmd line
+  Failed --> Confirmed: 4 both reruns fail
+  Failed --> Disputed: 5 both reruns pass
+  Failed --> Split: 6 one each
+  Disputed --> Failed: 7 tester restarted once
+  Disputed --> Blocked: 8 second dispute
+  Split --> Blocked: 9 flaky
+  Confirmed --> [*]: 10 returns to Build
+```
 
-`status [--watch]` shows the pool, stages, budgets, blocks and the group graph. `status --wait` blocks until the next wake event and is the orchestrator's background loop. `status --explain` prints the last 10 events with reasons. `status --metrics` is the scorecard. Every session's model, measured context and cost class are in the ledger and in `status`.
+**Reading the diagram.** After 4 the item reaches the builder with the reviewer's findings. After 8 the group blocks with `tester`; after 9 with `flaky`.
 
-| A cancelled tester reports after the return to Build | Its epoch is older; recorded `stale: true`; ignored |
+#### A scope request
+
+**📐 Which states does a scope request pass through?**
+```mermaid
+stateDiagram-v2
+  [*] --> Building: 1 task starts
+  Building --> Parked: 2 needs_scope
+  Parked --> Building: 3 engine denies
+  Parked --> Waiting: 4 orchestrator woken
+  Waiting --> Building: 5 approve or deny
+  Building --> [*]: 6 task done
+```
+
+**Reading the diagram.** `Parked` is a Blocked group with reason `needs_scope`: it keeps its lease and worktree, and its pool slot is returned. Edge 3 happens for a protected path or another live group's file.
+
+### 9.7 Invariants and Failures
+
+**Invariants**
+1. Check starts no model session.
+2. A finding blocks only when Go found its quote at `file:line` in the head tree or the diff.
+3. The reviewer's verdict list and the tester's confirmation list each hold every task ID exactly once.
+4. A tester failure counts only after Go's two reruns of its command also fail.
+5. An event from an older epoch never moves a stage.
+6. Both Verify sessions must end `done` before `stage.exit` moves the group to Ship.
+7. Any single failure loses at most one model turn and no committed edit.
+8. The engine makes a work-in-progress commit at every session end of a writing agent; an empty diff writes nothing.
+9. A crash stays in its group: it blocks that group as `Blocked: crash` and other groups keep running.
+10. A task retry stays on its link; only a provider failure moves it.
+11. Blocked never auto-retries; a person or the orchestrator runs `komodo resume`. A group blocked 3 times for one reason is flagged `needs redesign`.
+12. Every loop has a counter.
+13. A worker is stopped with SIGINT first, which ends the turn and keeps its result, then SIGTERM after 30 s.
+
+**Failure table**
+
+| Failure | Detected by | Action; bound | Then |
+|---|---|---|---|
+| Transient HTTP | HTTP stack | Retry with growing waits; 3 | Session fails |
+| Stream dropped mid-answer | HTTP stack | Resend from the start; 1 | Session fails |
+| Provider unavailable or unauthorized | Provider | Next allowed link at the session boundary; chain length | Blocked `no_provider` |
+| Provider quota or spend limit | Provider, HTTP stack | Next session on the backstop; pause with `wait_until` only when no link is left; the reported reset, at most `limits.pause_max_min` | Paused; at the cap Blocked `pause_timeout`, work-in-progress kept |
+| Paid link not allowed, or wrong auth on a subscription link | Billing check (`providers.paid`) | Kill before turn 1; drop the link for the run; 1 | Blocked `paid_refused` |
+| Schema-invalid result | Tool runtime | One re-prompt; 1 | Task retry |
+| Result fails the agent's gate | Tool runtime | The failure goes back into the same session; 2 | `check_fail`, task retry |
+| Reply cut off at the output limit | Tool runtime | "continue"; 1 | `no_result`, task retry |
+| Timeout or idle | Supervisor | Stop, then a fresh session; the agent's `retries` (2) per task | Blocked |
+| 3 refusals under one rule | Guard | End the session; 3 | Task retry |
+| `done_when` fails | Check | Task retry; the agent's `retries` (2) per task `[TODO: this bound against chapter 2's 3 returns (G-NEW-8)]` | Blocked |
+| Regression against the baseline | Check | Back to Build with the failing test's output; `limits.returns` (3) per group | Blocked `regression` |
+| Findings or a failed acceptance item | Check, review | Back to Build in the task's own session; `limits.returns` (3) | Blocked |
+| Epic gate fails | Review | The group that last changed each file returns to Build; a finding with no file blocks the epic; `limits.returns` (3) | Blocked `epic_gate` |
+| Tester fails an item Go's reruns pass | Review | Restart the tester once with Go's output; 1 | Blocked `tester` |
+| Go's reruns split | Review | Stop; 0 | Blocked `flaky` |
+| A dependency is abandoned | Engine, after `komodo abandon` on a group others depend on | Stop its dependents; 0 | Blocked `dependency` |
+| Check fails on the epic tip after a landing | Engine | Pause landings; the last-landed group returns to Build; `limits.returns` (3) | Blocked `integration` |
+| Builder needs a file outside scope | Guard row B1 | Work-in-progress commit, end the session, keep the lease; 1 request per task | Blocked `needs_scope`; resumes on approve or deny |
+| Flap: same failure hash or zero-diff return | Recovery | Stop; 1 `[TODO: how a flap is detected (G-NEW-9)]` | Blocked |
+| Any model attempt on a task | Recovery | Count it; `limits.task_attempts` (6) | Blocked `attempts` |
+| Brief over half the measured context | Brief builder | Next link that fits; 1 | Blocked `context` |
+| Landing conflicts with the epic branch | Ship | Merge the epic branch into the group branch and rerun Check; 1 | Blocked `merge_conflict` |
+| Budget spent | Budgets | Stop | Blocked `budget` |
+| Harness crash or reboot | Recovery, when the `komodo` process dies or the machine restarts | `Load` from group state: the snapshot plus the events after it; no retry count, because the state is rebuilt | Continues |
+| Scheduled job fails | Scheduler | Backoff; 3 | Blocked |
+| State write refused, or a record fails its check on read | State manager | Refuse the write, or move the bad record aside as `.bad-*`; 0 | Blocked `state_invalid`, naming the kind, key and field |
+
+The failure table has 27 rows. Block reasons are defined in [Event Spine and State Machine](#block-reasons); the detectors outside this chapter are specified in their chapters ([Providers and HTTP](#7-providers-and-http), [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox), [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs), [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability), [State Manager](#13-state-manager)).
+
+The bounds in the table use three different counters, and the design is not consistent about their scope:
+- A failing `done_when` is bounded at 2 by the failure table and at 3 by the transition table, where a failing `check.done` returns to Build while `Returns` is under `limits.returns` (3).
+- The builder's own gate inside the session, which reruns `done_when` before the commit, allows 2 rejected results.
+- The agent's `retries` is a count per session in the configuration chapter and a count per task in the failure table.
+
+`[TODO: reconcile the done_when bound (2 against 3) and the scope of retries (per session against per task) (G-NEW-8)]` Which counter belongs to which package is `[TODO: counter ownership (G-32)]`.
+
+The group wall has no row: `[TODO: the failure row for a spent group wall (G-NEW-10)]`.
+
+**Edge cases**
+
+| Situation | Behaviour |
+|---|---|
 | Both Verify sessions fail in one tick | Handled in `sequence` order; both reach the builder in the one return |
-| A pre-existing failing test | Baseline marks it; the group lands with a warning |
-| A test fails once and passes twice | Reported `flaky`; the group lands; counted per repo |
-| The tester fails an item Go passes twice | Tester restarts once with Go's output; a second dispute blocks `tester` |
-| Two files differ only by case | Check fails on every OS |
+| A cancelled tester reports after the return to Build | Its epoch is older; recorded `stale: true`; ignored |
+| A pre-existing failing test | The baseline marks it; the group lands with a warning |
+| A test fails once and passes twice | Reported `flaky`; the group lands; counted per repository |
+| The tester fails an item Go passes twice | The tester restarts once with Go's output; a second dispute blocks `tester` |
+| Two files differ only by case | Check fails on every operating system |
 | A finding's quote is not at the line | Dropped and logged; does not block |
 | `needs_scope` on a protected path or another group's file | Denied by the engine without asking |
-**Error recovery ([Actions](#actions) and [Error recovery (Appendix J)](#error-recovery))**
+| A group blocked 3 times for one reason | Flagged `needs redesign` in `status` |
+
+### 9.8 Config
+
+Keys this subsystem owns or reads. The full key table, the hard limits and the `komodo config` verb are in [CLI and Configuration](#1-cli-and-configuration).
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `check.patch_coverage` | integer | 80 | Percent of changed lines a test must cover; hard limit 100; blocks for Go, warns for other languages |
+| `limits.returns` | integer | 3 | Returns to Build before Blocked; hard limit 5 |
+| `limits.task_attempts` | integer | 6 | Model attempts per task; hard limit 10 |
+| `limits.group_wall_min` | integer | tasks × `limits.session_wall_min` + 2 × `limits.session_wall_min` | Wall time per group, paused time excluded; hard limit 720 |
+| `limits.group_tokens` | integer | 2,000,000 | Tokens per group: input, output and cache writes; hard limit 10,000,000; used only when `track.usage` is on |
+| `mode` | string | `thorough` | `economy` runs one merged lens; `thorough` runs every applicable lens plus a cold pass; sets the `track.usage` default |
+| `track.usage` | string | `auto` | `auto` is on under `economy` and off under `thorough`; `on` and `off` override it |
+| `retries` (per agent) | integer | 2 | Restarts of a timed-out or idle session for the same task; hard limit 3; counts inside `limits.task_attempts` |
+| `limits.pause_max_min` | integer | 360 | Read here: longest a session stays paused; hard limit 1,440; owned by [Providers and HTTP](#7-providers-and-http) |
+| `limits.session_wall_min` | integer | 60 | Read here: wall time per session; hard limit 120; owned by [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs) |
+
+**Constants**
+
+```go
+const (
+	FlakeReruns          = 2   // solo reruns of a failing test or a failed tester item
+	TesterRestarts       = 1   // restarts of the tester after a dispute
+	ScopeRequestsPerTask = 1   // scope requests one task may make
+	BlocksBeforeRedesign = 3   // blocks for one reason before needs redesign
+	StopGraceSeconds     = 30  // SIGINT, then SIGTERM after this many seconds
+	PrecisionDoctorPct   = 50  // doctor lists rules verified under this percent
+	PrecisionDesignPct   = 30  // a rule under this percent for 60 days is a design change
+	PrecisionDesignDays  = 60
+	MarkdownOnlyLenses   = 3   // lenses a diff of only *.md files runs
+	CacheBreakpointsMax  = 4   // cache_control breakpoints per request
+	GroupWallHardMin     = 720 // hard limit of limits.group_wall_min
+)
+```
+
+### 9.9 Proof Cases
+
+**Unit level** (pure functions, no files)
+- A diff touching only `*.md` runs `correctness`, `readiness` and `quality`.
+- A finding with a fake quote is dropped.
+- A finding with rule ID `x.99` is refused.
+- A one-package change runs only that package's dependents.
+- A test that fails once and passes twice is reported `flaky`, and the group lands.
+
+**Component level** (the engine with mocks that match documented provider behaviour; no live provider tests)
+
+*Check*
+- A seeded out-of-scope write fails Check.
+- A planted fake key fails the secret scan.
+- A fixture with one pre-existing failing test lands.
+- The same fixture with a seeded regression blocks with `regression` and names the test.
+- A `needs_scope` then `approve` resumes the same session ID.
+- With its Claude session file deleted, the fresh session gets the work-in-progress diff and the ledger logs `resume_lost`.
+
+*Review and evidence*
+- A seeded bug in the fixture is found and verified.
+- A seeded failing acceptance item fails Verify and cancels the reviewer.
+- A seeded exported-signature change triggers `contract`, and the finding names the caller.
+
+*Error recovery*
 - Forcing a timeout, a flap, 4 returns or 7 attempts each ends Blocked with the reason named.
 - `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions.
 - A panic injected in one group's `Drive` blocks that group while a second group lands.
 - A 2-hour pause leaves the group wall clock where it was.
 
-**Check ([Check (Appendix J)](#check))**
-- A seeded out-of-scope write fails Check.
-- A planted fake key fails the secret scan.
-- A fixture with one pre-existing failing test lands.
-- The same fixture with a seeded regression blocks with `regression` and names the test.
-- A one-package change runs only that package's dependents.
-- A test that fails once and passes twice is reported `flaky`, and the group lands.
-- A `needs_scope` then `approve` resumes the same session uuid.
-- With its Claude session file deleted, the fresh session gets the WIP diff and the ledger logs `resume_lost`.
-
-**Review and evidence ([Review and the tester (Appendix J)](#review-and-the-tester))**
-- A seeded bug in the fixture is found and verified.
-- A finding with a fake quote is dropped.
-- A finding with rule ID `x.99` is refused.
-- A seeded failing acceptance item fails Verify and cancels the reviewer.
-- A diff touching only `*.md` runs `correctness`, `readiness` and `quality`.
-- A seeded exported-signature change triggers `contract`, and the finding names the caller.
-
-**Token and resource management ([Token and resource management (Appendix J)](#token-and-resource-management))**
+*Token and resource management*
+- With `track.usage: off` and the same low cap, no `budget` block occurs and no ledger row holds a token or dollar field.
 - With `track.usage: on`, a token cap forced low ends Blocked with `budget`.
 - With `track.usage: on`, `status` shows the hit rate per agent.
 - Two sessions of one agent on the API link share the first 3 breakpoints byte for byte.
-- With `track.usage: on`, the second session's ledger row shows `cache_read` over 0.
-- With `track.usage: off` and the same low cap, no `budget` block occurs and no ledger row holds a token or USD field.
+- With `track.usage: on`, the second session's ledger row shows `cache_read` over 0. `[TODO: a mock shows no provider cache hit; the fixture needs real API sessions (G-17)]`
 
+### 9.10 Open Gaps
+
+**Blocks building**
+
+| Gap | Open here |
+|---|---|
+| [G-16](#appendix-o-gap-register) | The content of the 10 lens rule catalogs; the rule ID format |
+| [G-24](#appendix-o-gap-register) | The data of `check.done`, `finding.submit` and `finding.verified` |
+| [G-29](#appendix-o-gap-register) | How `scope approve|deny` and `resume` reach `Drive` |
+| [G-31](#appendix-o-gap-register) | Stage moves the table lacks that Recovery relies on |
+| [G-32](#appendix-o-gap-register) | Which package owns each counter and which the snapshot holds |
+| G-NEW-1 | Exported names; files for the baseline, impact set, flake rule and case-collision steps |
+| G-NEW-2 | Check step order, which steps are actions, who emits `check.done`, how a Check error is routed |
+| G-NEW-3 | The test-sibling rule, secret patterns and glob grammar |
+| G-NEW-4 | Changed-line coverage; a test with no base result; test-file imports in the impact set |
+| G-NEW-5 | What a cold pass is |
+| G-NEW-6 | Lens sessions, merging, the economy security lens |
+| G-NEW-7 | Reviewer and tester result and finding field names; the quote match rule; the builder's dispute code |
+| G-NEW-8 | The `done_when` bound (2 against 3); `retries` per session against per task |
+| G-NEW-9 | How a flap is detected |
+| G-NEW-10 | The failure row for a spent group wall |
+| G-NEW-11 | Scope request: storage of widened `files`, behaviour after a denial and a second request |
+| G-NEW-12 | The owner of the startup sweep (same item as chapter 4 G-NEW-11) |
+| G-NEW-13 | Whether `Drive` or `recover.go` calls `Load` on a restart |
+| G-NEW-15 | A failed tester item with no command; where Go reruns |
+
+**Can wait**
+
+| Gap | Open here |
+|---|---|
+| [G-08](#appendix-o-gap-register) | Whether each Linux session gets a private loopback, for two Verify suites on one port |
+| [G-17](#appendix-o-gap-register) | The 50% cache hit-rate fixture needs real API sessions |
+| [G-30](#appendix-o-gap-register) | `VerifyProgress` fields and other formats the design leaves open |
+| G-NEW-14 | Which text clipping shortens; which work runs on local models |
+| G-NEW-16 | The re-review delta and the encoding of the review cache key |
 
 ## 10. Scheduler, Cache and Observability
 
@@ -10429,14 +11122,14 @@ Every component in the HLD's building block view, at the level of file paths, fi
 |---|---|
 | Owner reviewing a component | The component's section ([Component traceability (Appendix Q)](#component-traceability) maps components to sections), then [Edge cases (Appendix N)](#edge-cases) |
 | Builder of a task group | The component's section, [Code structure (Appendix A)](#code-structure), [Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate) gate checks |
-| Reviewer applying the `spec` lens | The section a task cites, plus [Error recovery (Appendix J)](#error-recovery) error recovery for the row it touches |
-| Operator diagnosing a run | [Group state machine (Appendix C)](#26-state-and-transitions), [Error recovery (Appendix J)](#error-recovery), [Runtime observability (chapter 10)](#10-scheduler-cache-and-observability), [Edge cases (Appendix N)](#edge-cases) |
+| Reviewer applying the `spec` lens | The section a task cites, plus [Error recovery (chapter 9)](#9-check-review-tester-and-recovery) error recovery for the row it touches |
+| Operator diagnosing a run | [Group state machine (Appendix C)](#26-state-and-transitions), [Error recovery (chapter 9)](#9-check-review-tester-and-recovery), [Runtime observability (chapter 10)](#10-scheduler-cache-and-observability), [Edge cases (Appendix N)](#edge-cases) |
 
 **What each one does**
 - **Owner reviewing a component:** The person who owns Komodo and signs off on a design. They read the section for that component, then [Edge cases (Appendix N)](#edge-cases), the list of odd situations and what happens in each. [Component traceability (Appendix Q)](#component-traceability) gives each component's section number.
 - **Builder of a task group:** The builder model session that edits code for one group of tasks. It reads the component's section, the code layout in [Code structure (Appendix A)](#code-structure), and the self-check list in [Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate) that its change must pass.
-- **Reviewer applying the `spec` lens:** The reviewer model session checking a change against this document. It reads the section the task names, plus the row in [Error recovery (Appendix J)](#error-recovery) that says how the failure it touches is detected and bounded.
-- **Operator diagnosing a run:** A person or the orchestrator working out why a run stopped. They read [Group state machine (Appendix C)](#26-state-and-transitions) (the stages a group moves through), [Error recovery (Appendix J)](#error-recovery) (every failure and its outcome), [Runtime observability (chapter 10)](#10-scheduler-cache-and-observability) (what `status` and the ledgers show) and [Edge cases (Appendix N)](#edge-cases).
+- **Reviewer applying the `spec` lens:** The reviewer model session checking a change against this document. It reads the section the task names, plus the row in [Error recovery (chapter 9)](#9-check-review-tester-and-recovery) that says how the failure it touches is detected and bounded.
+- **Operator diagnosing a run:** A person or the orchestrator working out why a run stopped. They read [Group state machine (Appendix C)](#26-state-and-transitions) (the stages a group moves through), [Error recovery (chapter 9)](#9-check-review-tester-and-recovery) (every failure and its outcome), [Runtime observability (chapter 10)](#10-scheduler-cache-and-observability) (what `status` and the ledgers show) and [Edge cases (Appendix N)](#edge-cases).
 
 #### Relationship to the HLD
 
@@ -11120,7 +11813,7 @@ type Writer interface {
 - **Writers:** Each kind lists its writers, and the manager refuses any other. A group's records accept writes only from that group's `Drive`.
 - **On read:** The manager checks the record's checksum or hash (both are fingerprints of its contents that change if it was damaged), then its version. A record written under an older schema version is upgraded in memory by a registered step, so a new binary reads the previous schema ([Binary lifecycle (chapter 12)](#12-install-binary-lifecycle-and-gate)).
 - **Last line cut short by a crash:** A crash mid-`Append` can leave a half-written last line. It is not a bad record: the manager drops it, emits `state.truncated` once, and replay continues.
-- **Bad record:** A record that still fails, including a bad event line before the last one, is moved aside as `.bad-*`, never repaired automatically. `doctor` reports it, and its group blocks with `state_invalid` ([Failure table (Appendix J)](#failure-table)).
+- **Bad record:** A record that still fails, including a bad event line before the last one, is moved aside as `.bad-*`, never repaired automatically. `doctor` reports it, and its group blocks with `state_invalid` ([Failure table (chapter 9)](#9-check-review-tester-and-recovery)).
 
 #### Reads
 
@@ -11383,7 +12076,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-12 | Sandbox | Whether a copied Rust `target/` is reused or rebuilt | Spike, phase 2 |
 | G-13 | Guard, skills | The steering-phrase list is 6 entries by judgment | Tune from `doctor` warnings, phase 3 |
 | G-14 | Supervisor | A mid-turn nudge reaching a turn stuck in a tool call | Best effort decided; the proof accepts a late nudge, phase 5 |
-| G-15 | Scope | Whether `scope approve` needs a human | Decided 2026-10-09: the orchestrator answers after 2 engine denials ([Scope requests (Appendix J)](#scope-requests)) |
+| G-15 | Scope | Whether `scope approve` needs a human | Decided 2026-10-09: the orchestrator answers after 2 engine denials ([Scope requests (chapter 9)](#9-check-review-tester-and-recovery)) |
 | G-16 | Review | The lens rule catalogs' content | Authoring task, phase 7; security lens reviewed by the owner |
 | G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with `track.usage` on | Measured in phase 7 |
 | G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 |
@@ -11550,7 +12243,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 - **G-12:** Whether a copied Rust `target/` folder is reused by the compiler or rebuilt from scratch. The answer justifies, or removes, the shared Rust target directory per group. A spike in phase 2 settles it.
 - **G-13:** The 6 steering phrases the gate and `doctor` scan for were chosen by judgment, not data. It matters because too few phrases miss attacks and too many cause false warnings. Tuned from real `doctor` warnings in phase 3.
 - **G-14:** Whether a nudge (the one-line prompt sent to an idle session) can reach a model turn that is stuck inside a tool call. Decided as best effort; the proof in phase 5 accepts a nudge that lands late.
-- **G-15:** Whether a human must answer every `scope approve` request, since it lets one model widen another's write access. Decided on 2026-10-09: the orchestrator answers, after the engine has already denied the two protected cases ([Scope requests (Appendix J)](#scope-requests)).
+- **G-15:** Whether a human must answer every `scope approve` request, since it lets one model widen another's write access. Decided on 2026-10-09: the orchestrator answers, after the engine has already denied the two protected cases ([Scope requests (chapter 9)](#9-check-review-tester-and-recovery)).
 - **G-16:** The actual content of the 10 reviewer lens catalogs (the rule lists a reviewer applies, see Glossary). It matters because a reviewer finding must cite a rule ID. An authoring task in phase 7; the owner reviews the security lens.
 - **G-17:** The fixture that proves a 50% prompt-cache hit rate needs real paid API sessions, not local ones, run with `track.usage` on. It matters for the token budget claims. Measured in phase 7.
 - **G-18:** The `repo_map` symbol patterns for TypeScript, Python and Rust have not been run against real repos. It matters because the planner and architect rely on the map for any non-Go repo. A spike in phase 7 against 3 real repos settles it.
@@ -11710,10 +12403,10 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 | Workspace and leases | [Workspace and leases (chapter 4)](#4-workspace-and-leases) |
 | Session supervisor | [Session supervisor (Appendix F)](#session-supervisor) |
 | Scheduler and job templates | [Scheduler and job templates (chapter 10)](#10-scheduler-cache-and-observability) |
-| Error recovery | [The outbox (Appendix C)](#actions), [Error recovery (Appendix J)](#error-recovery) |
+| Error recovery | [The outbox (Appendix C)](#actions), [Error recovery (chapter 9)](#9-check-review-tester-and-recovery) |
 | Check | [Check (Appendix J)](#check) |
-| Review and evidence | [Review and the tester (Appendix J)](#review-and-the-tester) |
-| Token and resource management | [Token and resource management (Appendix J)](#token-and-resource-management) |
+| Review and evidence | [Review and the tester (chapter 9)](#9-check-review-tester-and-recovery) |
+| Token and resource management | [Token and resource management (chapter 9)](#9-check-review-tester-and-recovery) |
 | Cache store | [Cache store (Appendix K)](#cache-store) |
 | Runtime observability | [Runtime observability (chapter 10)](#10-scheduler-cache-and-observability) |
 | Event bus | [Event model (Appendix C)](#23-data-model), [Event bus (Appendix C)](#25-behaviour) |
