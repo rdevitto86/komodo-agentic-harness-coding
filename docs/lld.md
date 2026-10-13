@@ -201,7 +201,7 @@ flowchart LR
 
 The event spine is how the engine remembers what happened and decides what to do next. An event is a typed fact such as `task.done`, appended to a state file, the per-group file `runs/<group>/events.jsonl` (see Glossary in the HLD). One pure function, `Next()`, turns the current state and one event into a new state, actions and follow-on events. Nothing else changes group state. The state machine is the fixed set of stages a group moves through: Intake, Build, Check, Verify, Ship. Paused and Blocked are holding states. Without this spine a crash would lose the group's position, and two code paths could move a stage at once.
 
-The engine writes each event through group state, the state manager's module that keeps a group's events, snapshots and replay together ([Group state (Appendix C)](appendix-c.md#group-state)): `Append` syncs the event, then `Next()` applies it. `Snapshot` saves `runs/<group>/state.json` every 50 events or on a stage change, so `Load` never replays from zero. A CRC-32 on every line lets replay drop a torn last line and emit `state.truncated` once. Side effects go through the outbox: `Drive` appends `action.start` before an action and `action.done` after, with `id = sha256(sequence, kind, args)`. On replay a done action is skipped and a started one reruns. Every spawn carries the stage's epoch, an integer that rises on each stage entry. A late result from a cancelled session carries an old epoch, is recorded `stale: true` and ignored.
+The engine writes each event through group state, the state manager's module that keeps a group's events, snapshots and replay together ([Group state (Appendix C)](appendix-c.md#group-state)): `Append` syncs the event, then `Next()` applies it. `Snapshot` saves `runs/<group>/state.json` every 50 events or on a stage change, so `Load` never replays from zero. Every line ends with a checksum, a short number computed from the line's text. After a crash, replay (re-reading the saved events to rebuild the group) finds a last line that no longer matches its checksum because the crash cut it short, drops it, and emits `state.truncated` once. Side effects go through the outbox: `Drive` appends `action.start` before an action and `action.done` after, with `id = sha256(sequence, kind, args)`. On replay a done action is skipped and a started one reruns. Every spawn carries the stage's epoch, an integer that rises on each stage entry. A late result from a cancelled session carries an old epoch, is recorded `stale: true` and ignored.
 
 Three subscribers watch the group state after `Next()`: the ledger, the wake file under `state/wake/<run>`, and the `status --watch` renderer. They never change group state; each writes only its own derived kind through the state manager. No hooks run on the bus; the 3 inline hooks live in the guard, tools and recovery.
 
@@ -1321,7 +1321,7 @@ flowchart LR
 3. Readers such as `status`, `status --wait` and the startup sweep read through the same manager.
 4. The manager fills in each record's envelope, checks it against the one schema and its invariants, then picks one of four write primitives by kind.
 5. Each primitive writes atomically: an append is synced before it returns, a snapshot is renamed into place, a create-only record exists whole or not at all, and a removal deletes only after the writer and `rev` check.
-6. A write that fails a check never reaches disk and returns `state_invalid`; a record that fails its check on read is moved aside as `.bad-*`, and its group blocks. A torn last event line is the exception: it is dropped with one `state.truncated`, and replay continues.
+6. A write that fails a check never reaches disk and returns `state_invalid`; a record that fails its check on read is moved aside as `.bad-*`, and its group blocks. A last event line cut short by a crash is the exception: it is dropped with one `state.truncated`, and replay continues.
 
 **Group state.** A group's events, its snapshots and replay belong together, so they live in one module of the state manager, `state/groupstate.go`, called group state. The snapshot is only valid with the events behind it, and replay needs both, so one owner keeps their rules from drifting apart. `Next()` stays in the engine and pure; group state stores and replays, and never decides.
 
@@ -1351,7 +1351,7 @@ flowchart LR
 4. `status --wait` and the subscribers read new events with `Tail`, from a sequence number onward.
 5. `Append` stamps `sequence`, `timestamp`, `checksum` and `stale`, checks the event, appends it to `events.jsonl` and syncs it before returning.
 6. `Snapshot` writes `state.json` only every 50 events or on a stage change, and refuses a state whose `sequence` is not the last appended.
-7. `Load` reads the snapshot, replays the events after it through `Next()`, drops a torn last line with one `state.truncated`, and returns the state and its open actions.
+7. `Load` reads the snapshot, replays the events after it through `Next()`, drops a last line cut short by a crash with one `state.truncated`, and returns the state and its open actions.
 
 **What matters**
 - One schema: every record kind and all 32 event types are Go structs; the build generates `embed/state.schema.json`, and `help --json` serves it as `state`.
@@ -2446,7 +2446,7 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 | `run`, `group`, `session` | string | Where it happened; `session` only on session and task events |
 | `epoch`, `stale` | int, bool | The stage epoch the producer was spawned under; `stale` set by `Drive` when older than the current |
 | `type`, `reason`, `data` | string, string, object | What happened; `reason` from the code list; `data` typed per event |
-| `checksum` | uint32 | CRC-32 of the line before it; replay drops a torn last line and emits `state.truncated` once |
+| `checksum` | uint32 | A number computed from the line before it, so a line cut short by a crash no longer matches; replay drops that last line and emits `state.truncated` once |
 
 **What each one does**
 - **`version`:** The envelope format version, always 1. Every line carries the same value.
@@ -2455,7 +2455,7 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 - **`run`, `group`, `session`:** Which run, group and session the event belongs to. `session` is filled only on session and task events.
 - **`epoch`, `stale`:** `epoch` is the stage epoch (an integer that rises on every stage entry, see Glossary) the producer was started under. `Drive` sets `stale` to true when that epoch is older than the current one, and `Next()` then ignores the event.
 - **`type`, `reason`, `data`:** `type` names the event from the 32-entry catalog; `reason` is a code from the shared code list, such as an exit reason; `data` is the event's typed payload, a Go struct per type.
-- **`checksum`:** A CRC-32 checksum of the line, used to spot a line cut short by a crash. On replay a torn last line is dropped and one `state.truncated` event is emitted.
+- **`checksum`:** A short number computed from the line's text with CRC-32, a standard checksum method. If a crash cuts the line short, the number no longer matches. On replay that last line is dropped and one `state.truncated` event is emitted.
 
 #### Catalog (32 types)
 
@@ -2501,7 +2501,7 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 - **`lock.released`:** Emitted on landing or abandon, freeing the group's task list for edits again.
 - **`action.start`:** `Drive` writes it, with the action's id and kind, before running any side effect such as a commit. On replay a started but unfinished action is rerun.
 - **`action.done`:** `Drive` writes it after the side effect completes. On replay a done action is skipped, so a crash never repeats a commit or a landing.
-- **`state.truncated`:** Emitted once during replay when the last event line fails its CRC check and is dropped. It records that at most one event was lost to a torn write.
+- **`state.truncated`:** Emitted once during replay when the last event line no longer matches its checksum and is dropped. It records that at most one event was lost to a crash mid-write.
 - **`provider.skip`:** A provider adapter emits it, with `{from, to, reason}`, whenever a link is skipped. The reasons are unavailable, unauthorized, over its limit or below the context floor (`ctx_below_floor`). The report also shows a warning naming the model the task actually ran on.
 - **`limit.warn`:** A provider adapter emits it when a usage window passes `warn.quota_pct`, when Max starts drawing paid overage credits, or, with `track.usage` on, when a run's spend passes `warn.usd_per_run`. It appears under the report's warnings heading and never stops work.
 
@@ -2517,14 +2517,14 @@ Each type's `data` is a Go struct registered with the state manager as part of t
 | Run state | `runs/<run>.jsonl` for `run.*` events; group state's `Append` and `Tail`, no snapshot |
 | Snapshot | `runs/<group>/state.json` holds the last `sequence`; group state's `Snapshot`, every 50 events or on a stage change; refused unless its `sequence` is the group state's last |
 | Replay | Group state's `Load`, from the snapshot, never from `sequence` 0; cost bounded by 50 events; a 10,000-event replay must finish under 1 s `[PENDING G-19]` |
-| Torn line | CRC mismatch on the last line drops it and emits `state.truncated` once |
+| Line cut short by a crash | A last line that no longer matches its checksum is dropped, and `state.truncated` is emitted once |
 
 **What each one does**
 - **Group state:** The file `runs/<group>/events.jsonl` holding every event for one group. The group's `Drive` alone appends each line through group state's `Append`, which syncs it to disk before `Next()` applies it. A crash after the sync replays the event instead of losing it.
 - **Run state:** The file `runs/<run>.jsonl` holding only the `run.*` events for one run, written through the same group state calls without a snapshot. Groups never read each other's state files; they meet only in the queue and the pool.
 - **Snapshot:** The file `runs/<group>/state.json`, holding the group's current state and the last `sequence` applied (fields in [Group snapshot (Appendix C)](appendix-c.md#group-snapshot)). Group state's `Snapshot` writes it atomically every 50 events or on a stage change, off the critical path, and refuses one whose `sequence` is not the group state's last.
 - **Replay:** On resume, group state's `Load` reads the snapshot and replays only the events after its `sequence` through `Next()`, so recovery costs at most 50 events. A 10,000-event replay must still finish under 1 second.
-- **Torn line:** A crash mid-write can leave a half-written last line. Its CRC fails, the line is dropped, and one `state.truncated` event records the loss.
+- **Line cut short by a crash:** A crash mid-write can leave a half-written last line. It no longer matches its checksum, so the line is dropped, and one `state.truncated` event records the loss.
 
 #### The outbox
 
@@ -2764,7 +2764,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 | `Remove` | Delete after the writer and `rev` check | A taken queue item, a released lease, a landed group's records, a fired timer |
 
 **What each one does**
-- **`Append`:** Adds one line to the end of a file and syncs it to disk before returning. A crash can at worst leave a torn last line, which replay drops by its CRC ([State files and snapshots (Appendix C)](appendix-c.md#state-files-and-snapshots)).
+- **`Append`:** Adds one line to the end of a file and syncs it to disk before returning. A crash can at worst leave a half-written last line, which replay drops because it no longer matches its checksum ([State files and snapshots (Appendix C)](appendix-c.md#state-files-and-snapshots)).
 - **`Replace`:** Writes the whole record to a temporary file, syncs it, then renames it over the old one. The rename is atomic, so a reader sees either the old record or the new one, never a mix.
 - **`Claim`:** Creates a file that must not already exist; the operating system lets exactly one process win. A takeover of a stale record first renames the old one aside, so again only one process wins.
 - **`Remove`:** Deletes a record only after checking that the caller is a listed writer and its `rev` is current. It covers a queue item taken by a pool slot, a released lease, a landed group's records and a fired timer.
@@ -2813,8 +2813,8 @@ Event lines do not carry this header. Every line in an event file is an event, s
 | Invariants | `sequence` has no gaps; `epoch` and `fence` never fall |
 | Compare-and-swap | The caller's `rev` must match the record's current `rev` |
 | Writers | The caller must be one of the kind's listed writers for that key |
-| On read | CRC or hash first, then the version; an older `v` is migrated in memory |
-| Torn last line | Dropped with one `state.truncated`; replay continues; never quarantined |
+| On read | Checksum or hash first, then the version; an older `v` is migrated in memory |
+| Last line cut short by a crash | Dropped with one `state.truncated`; replay continues; never quarantined |
 | Bad record | A bad line before the last one, or any other failed record: moved aside as `.bad-*`; the owning group blocks `state_invalid` |
 
 **What each one does**
@@ -2823,8 +2823,8 @@ Event lines do not carry this header. Every line in an event file is an event, s
 - **Invariants:** Rules a kind must always keep. State `sequence` numbers have no gaps, and a stage `epoch` or a lease `fence` never goes down.
 - **Compare-and-swap:** The write names the `rev` the caller last read. If another write landed in between, this one is refused, so no update is lost silently.
 - **Writers:** Each kind lists its writers, and the manager refuses any other. A group's records accept writes only from that group's `Drive`.
-- **On read:** The manager checks the record's CRC or hash, then its version. A record written under an older schema version is upgraded in memory by a registered step, so a new binary reads the previous schema ([Binary lifecycle (Appendix M)](appendix-m.md#binary-lifecycle)).
-- **Torn last line:** A crash mid-`Append` can leave a half-written last line. It is not a bad record: the manager drops it, emits `state.truncated` once, and replay continues.
+- **On read:** The manager checks the record's checksum or hash (both are fingerprints of its contents that change if it was damaged), then its version. A record written under an older schema version is upgraded in memory by a registered step, so a new binary reads the previous schema ([Binary lifecycle (Appendix M)](appendix-m.md#binary-lifecycle)).
+- **Last line cut short by a crash:** A crash mid-`Append` can leave a half-written last line. It is not a bad record: the manager drops it, emits `state.truncated` once, and replay continues.
 - **Bad record:** A record that still fails, including a bad event line before the last one, is moved aside as `.bad-*`, never repaired automatically. `doctor` reports it, and its group blocks with `state_invalid` ([Failure table (Appendix J)](appendix-j.md#failure-table)).
 
 #### Reads
@@ -2916,7 +2916,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 4. A group snapshot whose `sequence` is not the last event's is refused.
 5. A `v: 0` fixture reads as `v: 1`.
 6. A corrupted record is moved aside and blocks its group with `state_invalid`.
-7. A torn last event line is dropped with one `state.truncated`, and the group continues.
+7. A last event line cut short by a crash is dropped with one `state.truncated`, and the group continues.
 8. A `Remove` with a stale `rev` is refused.
 9. 2 processes claiming one lease yield exactly 1 holder.
 10. Replaying a group's state through group state's `Load` rebuilds its `state.json` byte for byte.
@@ -2939,7 +2939,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 - **`Open(group)`:** Called once by a group's `Drive` when the group starts or resumes. It makes `Drive` the group's only writer; a second `Open` in the same process is refused, and the lease and fence keep other processes out ([Workspace and leases (Appendix E)](appendix-e.md#workspace-and-leases)).
 - **`Append(event)`:** Writes one event. It stamps the sequence number, the time, the checksum and the `stale` flag (set when the event's epoch is below the current one), checks the event against the schema, appends it and syncs it to disk. It returns before `Next()` runs, which is what "state first" means. The outbox's `action.start` and `action.done` lines go through it too ([The outbox (Appendix C)](appendix-c.md#the-outbox)).
 - **`Snapshot(state)`:** `Drive` calls it after every `Next()`. Group state decides when to write: every 50 events or on a stage change. It refuses a state whose `sequence` is not the last one appended, so a snapshot never runs ahead of or behind its events.
-- **`Load(next)`:** Rebuilds a group after a crash or on `komodo resume`. It reads the snapshot, replays only the events after it through `next`, drops a torn last line with one `state.truncated`, and returns the state plus the actions that started but never finished. The engine passes its own `Next()` in as `next`, so the `state` package never imports `engine` and the import order holds.
+- **`Load(next)`:** Rebuilds a group after a crash or on `komodo resume`. It reads the snapshot, replays only the events after it through `next`, drops a last line cut short by a crash with one `state.truncated`, and returns the state plus the actions that started but never finished. The engine passes its own `Next()` in as `next`, so the `state` package never imports `engine` and the import order holds.
 - **`Tail(sequence)`:** Lets `status --wait` and the subscribers read the events after a sequence number, without touching the file directly.
 - **Run events:** A run's `run.*` events in `runs/<run>.jsonl` use the same `Append` and `Tail`, with no snapshot, so runs and groups share one set of rules.
 
@@ -5712,7 +5712,7 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Situation | Behaviour |
 |---|---|
 | Crash between `action.start commit` and `action.done` | Replay reruns the commit; compare-and-swap on the hidden ref makes it one commit |
-| Torn last event line | CRC mismatch drops it; `state.truncated` emitted once |
+| Last event line cut short | It no longer matches its checksum, so it is dropped; `state.truncated` emitted once |
 | Two engines on one group | Create-only lease: exactly one holder; the loser's landing is refused by git with exit 128 and ends in `lease.lost` |
 | A cancelled Verify session reports late | Its epoch is older; recorded `stale: true`; ignored |
 | Both Verify sessions fail in one tick | Handled in `sequence` order; the second is stale |
@@ -5758,7 +5758,7 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 
 **What each one does**
 - **Crash between `action.start commit` and `action.done`:** The engine wrote "I am about to commit" to the group state, then died before writing "done". On `resume`, replay reruns the commit. The hidden ref (the per-group git ref where commits are saved, see Glossary) is updated with a compare-and-swap, so if the first commit did land there is still exactly one commit, never two.
-- **Torn last event line:** The engine died while writing the last event line, leaving it half-written. Every line carries a CRC-32 checksum of the line before it; a mismatch on the last line drops it, and the engine emits one `state.truncated` event so the loss is on record.
+- **Last event line cut short:** The engine died while writing the last event line, leaving it half-written. Every line carries a checksum (a number computed with CRC-32) of the line before it; a mismatch on the last line drops it, and the engine emits one `state.truncated` event so the loss is on record.
 - **Two engines on one group:** Two `komodo run` calls start on the same group. The lease file is create-only, so the operating system lets exactly one of them create it and the other refuses with the holder named. If an old holder tries to land anyway, git refuses the push (exit code 128) because its fence is stale, and its state ends in `lease.lost`.
 - **A cancelled Verify session reports late:** The reviewer or tester was cancelled, but its last message arrives after the stage moved on. Its event carries an older epoch (the stage counter, see Glossary), so it is recorded with `stale: true` and `Next()` ignores it. The stage cannot move twice.
 - **Both Verify sessions fail in one tick:** The reviewer and the tester both report failure in the same engine step. They are handled in event order; the first one moves the group back to Build under a new epoch, which makes the second one stale and ignored.
@@ -6100,7 +6100,7 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - Forcing a timeout, a flap, 4 returns or 7 attempts each ends Blocked with the reason named.
 - `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions.
 - `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit.
-- A torn last event line replays with one `state.truncated`.
+- A last event line cut short by a crash replays with one `state.truncated`.
 - A panic injected in one group's `Drive` blocks that group while a second group lands.
 - A 2-hour pause leaves the group wall clock where it was.
 
