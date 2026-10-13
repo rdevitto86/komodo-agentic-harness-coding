@@ -5872,7 +5872,222 @@ The index holds 34 `standards-*` skills plus `komodo`, `plan`, `run`, `respond` 
 - Every code in every agent schema needs a template and a golden fixture (stored expected output that a test compares against) under both profiles; a new code is a design change.
 - `claude-cli` workers start with `--setting-sources ""`; a worker `agent.json` listing `run`, `plan`, `respond` or `komodo` fails the gate.
 
-**Lookup:** [Appendix I](#appendix-i-skill-loader-rules-and-output-contract) holds the skill, rule, output and no-leak tables.
+**Lookup:** [Appendix I](#8-skills-rules-and-output) holds the skill, rule, output and no-leak tables.
+
+
+
+#### Skill loader
+
+
+**In plain terms.** A skill is a Markdown file of coding standards, such as `standards-go`, compiled into the Komodo binary. The loader decides which skills each session receives and verifies none was tampered with. It exists so a builder editing Go sees the Go standards without anyone listing them by hand. Without it briefs would carry no standards, or carry text a repo planted. The brief builder calls it before every session; agents pull more with the `skill` tool.
+
+| Rule | Detail |
+|---|---|
+| Index | Keyed on name, file globs and repo markers; covers 34 `standards-*` plus `komodo`, `plan`, `run`, `respond`, `release`; embedded at build |
+| Source | `embed/skills/` only; the repo's `.claude/` is never read |
+| Allowlist | An agent's `skills.allow` is the only set it can be given or pull; `always` names preinjects (builder and reviewer: `standards-comments`) |
+| Preinject | A skill loads when its globs match a file in the group's `files` and its markers exist; no count or token cap |
+| Pull | The `skill` tool and `komodo skill get` return any allowlisted skill or `<name>#<section>`; bodies from the cache; no pull limit |
+| Markers | `standards-ui-mobile` needs `AndroidManifest.xml` or `*.xcodeproj`; `standards-aws` needs `cdk.json`, `samconfig.toml` or an AWS provider in `*.tf`; `standards-cicd` drops `**/Makefile` |
+| Order | `always` first, then name order, so the prefix is byte-identical across runs |
+| Too big | A brief over the ceiling never drops a skill; the task goes to the next link, else Blocked `context` |
+| Frontmatter | Strict, `v: 1`: `name`, `description`, `globs`, `markers`, `sections`; the gate fails an unknown key, duplicate heading, or a `sections` entry with no heading |
+| Size | 6,000 tokens per skill; the gate names any over it; with `track.usage` on, skill tokens per session go to the ledger |
+| Integrity | `embed/skills/index.json` has a SHA-256 (a standard content fingerprint) per skill; verified on read; each renders under `## Standards: <name> (<sha8>)` |
+| Steering scan | The gate fails a skill, and `doctor` warns on a repo addendum, containing a `text`-row phrase: `ignore previous`, `you are now`, `system prompt`, `disregard`, `komodo config`, `komodo install`. The addendum still loads with the warning. `[PENDING G-13]` the list is 6 entries by judgment |
+| Standards to rules | `- **Never` and `- **Always` lines compile to reviewer rule IDs `std.<skill>.<n>`; an edit without the regenerated list fails the gate |
+
+**What each one does**
+- **Index:** A lookup of every skill by name, the file patterns it applies to and the repo files it requires. It is built into the binary, so listing skills is a map read.
+- **Source:** Skills come only from the binary's `embed/skills/`. A repo's `.claude/` folder is ignored, so a repo cannot plant one.
+- **Allowlist:** `skills.allow` in `agent.json` lists the skills an agent may ever receive. `always` names those injected into every brief; builder and reviewer always get `standards-comments`.
+- **Preinject:** A skill joins the brief when its globs match a file in the group's `files` and its markers exist in the repo. Every match loads; nothing is capped.
+- **Pull:** During a session an agent asks for a skill, or one section of it, by name. Bodies come from the cache store; pulls are unlimited.
+- **Markers:** Some skills need proof the repo uses the technology: mobile standards need an Android manifest or Xcode project, AWS standards an AWS config file. `standards-cicd` no longer matches every Makefile.
+- **Order:** Skills render `always` first, then alphabetically, so the brief prefix is identical across runs and the provider cache hits.
+- **Too big:** When a brief exceeds the link's ceiling, no skill is dropped. The task moves to the next link in the chain, or blocks with `context`.
+- **Frontmatter:** Each skill opens with a strict header of five fields. The gate (the build-time self-check) rejects unknown keys, duplicate headings or a section name with no heading.
+- **Size:** A skill holds at most 6,000 tokens; the gate names any larger. With `track.usage` on, the ledger records skill tokens per session.
+- **Integrity:** An index file stores a SHA-256 hash (a content fingerprint) per skill, checked on every read. Each skill renders under a heading with its short hash, so a finding cites the exact version.
+- **Steering scan:** Skills and the repo's `AGENTS.md` addendum are scanned for prompt-injection phrases. A skill with one fails the gate; an addendum only warns and still loads. The 6-phrase list is a judgment call, pending G-13.
+- **Standards to rules:** Each `- **Never` and `- **Always` line becomes a reviewer rule ID. Editing a skill without regenerating that list fails the gate.
+- **`standards-*` (34):** One skill per language, framework or concern, such as `standards-go` and `standards-comments`; preinjected by file type.
+- **`komodo`:** The orchestrator's guide to the verb list, generated at build and embedded; never given to a worker.
+- **`plan`:** The orchestrator's skill for planning epics and backlog work; never given to a worker.
+- **`run`:** The orchestrator's skill for running groups, including `run --stage`; never given to a worker.
+- **`respond`:** The orchestrator's skill for answering PR threads with `komodo threads` and `komodo gate`; never given to a worker.
+- **`release`:** The orchestrator's skill around the human-only `release` verb. Its contents are [UNKNOWN: not yet designed].
+
+**Example**
+
+One entry in `embed/skills/index.json`, generated at build, for the mobile UI standards skill. The key names are illustrative; the index format is open (G-30).
+
+```json
+{
+  "name": "standards-ui-mobile",
+  "globs": [
+    "[UNKNOWN: not yet designed]"
+  ],
+  "markers": [
+    "AndroidManifest.xml",
+    "*.xcodeproj"
+  ],
+  "sections": [
+    "[UNKNOWN: not yet designed]"
+  ],
+  "sha256": "[UNKNOWN: not yet designed]"
+}
+```
+
+#### Rules and output contract
+
+
+**In plain terms.** This section says where each harness rule is enforced and how every line a person reads is produced. Rules live in code paths, never in prompts: the guard, the result schema, Check and review. Output is rendered by Go templates from codes and facts the models return, so the same facts give the same bytes. Without it, prompts would carry rules a model can ignore and reports would differ per run. The engine owns it; the orchestrator relays the rendered report.
+
+#### Where rules are enforced
+
+**In plain terms.** Each kind of rule has exactly one enforcer, and none of them is a prompt. This table maps a rule target to the code that enforces it. It exists so a worker cannot talk its way past a rule it never saw. A designer adding a rule picks its row here first.
+
+| Rule target | Enforcer |
+|---|---|
+| Tool calls | The guard; a refusal names the rule and the allowed alternative |
+| Results | The result schema; each field's description states the allowed outcomes |
+| Work | Check and review |
+| Comments | The `standards-comments` skill, preinjected for builder and reviewer |
+| The orchestrator | O1 to O7, O9, O10 as text in the `AGENTS.md` block, rendered from `embed/rules/orchestrator.md` |
+
+**What each one does**
+- **Tool calls:** The guard checks every tool call before it runs. A refusal tells the model which rule applied and what it may do instead.
+- **Results:** The final result schema lists the allowed outcomes per field, so a model picks a code instead of writing prose.
+- **Work:** Check, the engine's build, test and lint run (lint is an automatic rule check), and the reviewer judge the diff after the fact.
+- **Comments:** Comment style is a skill the builder and reviewer always receive, not a guard row.
+- **The orchestrator:** The interactive session has no hook; its rules are text in the `AGENTS.md` block rendered from `embed/rules/orchestrator.md`.
+
+No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
+
+#### Output mapping (`embed/output/`)
+
+**In plain terms.** Every human-readable output is a Go template fed by typed facts, picked from `embed/output/`. A template is fixed text with holes; a fact is a value the engine checked, such as a SHA. This table maps each thing a person reads to its facts and template name. Without it each code path would format its own text and reports would drift.
+
+| What a person reads | Facts from | Template |
+|---|---|---|
+| Block or escalation | The agent's `code` plus facts (SHA, ref, task ID) | `needs.<code>` |
+| PR body | The engine: diff stat, tasks closed, Check results, finding codes | `pr_body` |
+| Reviewer finding on a PR | `{severity, lens, rule, file, line}` | `finding.<lens>` |
+| Architect or researcher result | `{recommend, options[{id, name}]}`; detail in `<session>/out/` | `options` |
+| `status` and run report | `state.json` and the ledger | `status`, `run_report` |
+| Envelope `report` and errors | The verb's `data`; `{code}` | `report.<verb>`, `error.<code>` |
+| Commit message | `<type>: <task title>` from the backlog | `commit` |
+| Waking event in `status --wait` | The event | `event.<type>` |
+
+**What each one does**
+- **Block or escalation:** When a group blocks or a model escalates, the agent returns a code and facts; the `needs.<code>` template renders the line a person reads.
+- **PR body:** The engine, not a model, fills the epic PR body with the diff stat, closed tasks, Check results and finding codes.
+- **Reviewer finding on a PR:** A finding is five facts rendered by a template per lens; a lens is one review perspective (see Glossary).
+- **Architect or researcher result:** These agents return a recommendation and option IDs; the long text stays in the session's `out/` folder.
+- **`status` and run report:** Rendered from `state.json`, the engine's snapshot, and the ledger; never from model text.
+- **Envelope `report` and errors:** Every verb's JSON envelope carries a `report` line and errors keyed by code, each with its own template.
+- **Commit message:** Built as `<type>: <task title>` from the backlog card; no model writes commit text.
+- **Waking event in `status --wait`:** When the orchestrator waits on an event, that event renders through `event.<type>` into one line.
+- **Layout by profile:** `embed/output/{adhd,standard}/` hold one template set each, with the same facts and codes. Under `adhd` a report has the verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`). `output.color` is applied at render time only.
+
+#### Template pipeline
+
+**In plain terms.** The pipeline is the fixed sequence that turns facts into text, the same for every template. It exists so a template cannot compute, read files or be reshaped by a fact containing Markdown. Without it a path holding a newline could break a report's layout. The gate verifies every step at build time.
+
+| Step | Rule |
+|---|---|
+| Engine | Go `text/template`, `missingkey=error`, a 6-function map: `code`, `n`, `plural`, `dur`, `path`, `table`; nothing else |
+| Typed facts | One Go struct per template in `agent/render.go`; the gate fails a template field with no struct field and a struct field no template uses |
+| Order | Facts → fact checks (SHA in repo, path in diff or worktree, task ID exists; a failed fact gets the schema re-prompt) → escape (fact strings as literal code spans) → template → wrap at 80 columns → `output.color` |
+| Tables | Over 5 rows: top 5 plus one line `N more: <what>`; a cell over 45 characters moves to a labeled line below |
+| Golden fixtures | `embed/output/<profile>/<name>.golden` per template; the gate renders each under both profiles and compares bytes |
+| Unlisted cases | Code `other` renders one fixed line, "Needs a decision; details in `<path>`" |
+| Model prose | Prose fields such as the builder `summary` feed briefs, the ledger and `<session>/out/`; no template renders them |
+
+**What each one does**
+- **Engine:** Go's standard `text/template`, a missing field is an error, and only six helper functions exist. A template cannot call anything else.
+- **Typed facts:** Each template has one Go struct; the gate fails a template using a field the struct lacks, or a struct field no template uses.
+- **Order:** Facts are checked against the repo first, then escaped as code spans, rendered, wrapped at 80 columns and colored. A bad fact re-prompts the model.
+- **Redaction and attribution checks:** Secret redaction (G4) and the attribution-trailer check (G5) run on the rendered text, after the template has filled in the facts.
+- **Tables:** A rendered table shows at most 5 rows plus one overflow line; a cell over 45 characters moves to a line below the table.
+- **Golden fixtures:** Each template has a stored expected output per profile; the gate renders and compares bytes, so any output change is a visible diff.
+- **Unlisted cases:** Code `other` renders one fixed sentence pointing to a file; the model's own text goes in that file.
+- **Model prose:** Prose a model writes, like the builder `summary`, feeds later briefs and the ledger only; no person-facing template prints it.
+
+#### Code list
+
+**In plain terms.** The code list is the closed set of short identifiers a model or the engine may return to say what happened. A code is one word like `regression`, never a sentence. Each code has a schema enum (a fixed list of allowed values) entry, a template and a fixture, so adding one is a design change. Without the list a model could invent an outcome nobody can render or route.
+
+The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky`, `tester`, the tester's `pass`, `fail`, `env`, `wrong_command`, `real_failure`, and `config_tampered`, `locked`, `regression`, `lint`, `disputed`, `crash`. The list starts from the previous binary's real blocks and escalations, PR #335's `branch_missing` among them. A new code is a design change: schema enum, template and fixture together. Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
+
+**What each one does**
+- **`branch_missing`:** A code from the previous binary's real blocks and escalations (PR #335). Its exact trigger is [UNKNOWN: not yet designed].
+- **`cancelled`:** A session or run stopped on purpose; also a session exit reason.
+- **`paused`:** A session halted by a provider limit with a resume handle; it resumes on a ledger timer, not by a person.
+- **`integration`:** Check failed on the epic tip after a landing; landings pause and the last-landed group returns to Build.
+- **`epic_gate`:** The epic-wide review produced a finding with no file to blame, so the epic blocks.
+- **`dependency`:** A group's dependency was abandoned, so the group stops and names it.
+- **`flaky`:** Go's two reruns of a test split, one pass and one fail. A split acceptance item blocks the group; a plain flaky test only reports.
+- **`tester`:** The tester disputed an item twice against Go's reruns; a harness fault that does not count against the builder.
+- **`pass`:** Tester, per acceptance item: the item's command passed, with evidence.
+- **`fail`:** Tester, per acceptance item: the command failed, with evidence.
+- **`env`:** Tester, per item: skipped because it needs a network, Docker or service the sandbox lacks.
+- **`wrong_command`:** Tester restart reason: the first run used the wrong command.
+- **`real_failure`:** Tester restart reason: the tester holds the failure is genuine despite Go's reruns.
+- **`config_tampered`:** `config.json` was hand-edited; every verb refuses until `komodo config --accept`.
+- **`locked`:** A write to a group's task list while a run holds it; the refusal names the run ID.
+- **`regression`:** A test that passed at the base commit fails at head; the group returns to Build naming the test.
+- **`lint`:** A planner draft failed backlog lint twice, so the plan blocks.
+- **`disputed`:** A builder result code rejecting a finding by file and line; it feeds the precision ledger.
+- **`crash`:** The startup sweep found a dead session or claimed task; emitted as its exit reason.
+
+#### No leaks
+
+**In plain terms.** No leaks means the harness's own rules and skills never reach a worker, and a run cannot rewrite its own guidance. A worker is any model agent other than the orchestrator. This table lists each leak path and its guard. Without it a builder could read orchestrator rules, or edit `AGENTS.md` and change its next brief.
+
+| Path | Guard |
+|---|---|
+| Orchestrator rules into a worker | A brief holds only role text, repo context, skills and the task; the addendum strips the Komodo block; broken block markers drop the whole addendum and `doctor` reports it |
+| Orchestrator skills into a worker | The gate fails a worker `agent.json` listing `run`, `plan`, `respond` or `komodo` |
+| Host auto-load | `claude-cli` workers start with `--setting-sources ""`; API links send only the brief |
+| A run changing its own guidance | The addendum is read from the base commit; config, settings files and `policy.json` are G3 |
+
+**What each one does**
+- **Orchestrator rules into a worker:** A brief has four kinds of content and none is a rule. The repo's `AGENTS.md` loses its Komodo block; broken markers drop the whole addendum and `doctor` says so.
+- **Orchestrator skills into a worker:** The gate refuses any worker `agent.json` that allowlists `run`, `plan`, `respond` or `komodo` (lists any of them as permitted).
+- **Host auto-load:** Claude CLI workers start with settings sources disabled, so host-level memory and hooks never load; API links get only the brief.
+- **`codex-cli` workers:** When the `codex-cli` link ships in a later minor, its workers must also load no `AGENTS.md`.
+- **A run changing its own guidance:** The addendum is read from the base commit, so a worktree edit waits for the next run; config and policy files are protected by G3.
+
+---
+
+| A steering phrase in a skill | Fails the gate |
+**Skill loader ([Skill loader (Appendix I)](#skill-loader))**
+- A builder editing `*.go` gets `standards-go` preinjected.
+- A planted `ignore previous instructions` line in a skill fails `gate`.
+- The same line in the fixture repo's `AGENTS.md` makes `doctor` warn, and the brief still loads.
+- A skill of 6,001 tokens fails `gate`.
+- A skill body edited after build fails the hash (a content fingerprint) check and is refused.
+- A backend `*.kt` in a repo without `AndroidManifest.xml` gets `standards-kotlin` but not `standards-ui-mobile`.
+- A `.tsx` handler gets all 5 matching skills in the same order on 2 runs.
+- A planted `.claude/skills/standards-go/SKILL.md` changes nothing.
+- The index rebuilds only when its key changes.
+
+**Rules and output contract ([Rules and output contract (Appendix I)](#rules-and-output-contract))**
+- A fixture `status` with 10 runs renders a table and passes its template test.
+- A template referencing an unknown fact fails `gate` at build, not at run time.
+- A 7-row table renders 5 rows and one overflow line.
+- `state.schema.json` lists 35 event types, and the gate fails when the enum (a fixed list of allowed values) gains one.
+- A builder brief holds 0 lines from `embed/rules/`.
+- A planted `AGENTS.md` line outside the block reaches the brief under Repo rules.
+- The same line inside a block with a missing end marker reaches no brief.
+- A builder whose `files` list `AGENTS.md` edits it, and its next brief in the same run still carries the base-commit text.
+- A fixture escalation returning `{code: branch_missing, sha: ffcf41e9}` renders the same bytes on 2 runs under `adhd`.
+- A schema code with no template fails `gate`.
+- A fact path containing a newline and `## x` renders as one literal code span.
+- A fact SHA absent from the repo gets 1 re-prompt.
+
 
 ## 9. Check, Review, Tester and Recovery
 
@@ -7326,194 +7541,6 @@ Releases are signed with ed25519 by a key at `~/.komodo/release.key` (mode 0600)
 
 ---
 
-## Appendix I. Skill Loader, Rules and Output Contract
-
-#### Skill loader
-
-
-**In plain terms.** A skill is a Markdown file of coding standards, such as `standards-go`, compiled into the Komodo binary. The loader decides which skills each session receives and verifies none was tampered with. It exists so a builder editing Go sees the Go standards without anyone listing them by hand. Without it briefs would carry no standards, or carry text a repo planted. The brief builder calls it before every session; agents pull more with the `skill` tool.
-
-| Rule | Detail |
-|---|---|
-| Index | Keyed on name, file globs and repo markers; covers 34 `standards-*` plus `komodo`, `plan`, `run`, `respond`, `release`; embedded at build |
-| Source | `embed/skills/` only; the repo's `.claude/` is never read |
-| Allowlist | An agent's `skills.allow` is the only set it can be given or pull; `always` names preinjects (builder and reviewer: `standards-comments`) |
-| Preinject | A skill loads when its globs match a file in the group's `files` and its markers exist; no count or token cap |
-| Pull | The `skill` tool and `komodo skill get` return any allowlisted skill or `<name>#<section>`; bodies from the cache; no pull limit |
-| Markers | `standards-ui-mobile` needs `AndroidManifest.xml` or `*.xcodeproj`; `standards-aws` needs `cdk.json`, `samconfig.toml` or an AWS provider in `*.tf`; `standards-cicd` drops `**/Makefile` |
-| Order | `always` first, then name order, so the prefix is byte-identical across runs |
-| Too big | A brief over the ceiling never drops a skill; the task goes to the next link, else Blocked `context` |
-| Frontmatter | Strict, `v: 1`: `name`, `description`, `globs`, `markers`, `sections`; the gate fails an unknown key, duplicate heading, or a `sections` entry with no heading |
-| Size | 6,000 tokens per skill; the gate names any over it; with `track.usage` on, skill tokens per session go to the ledger |
-| Integrity | `embed/skills/index.json` has a SHA-256 (a standard content fingerprint) per skill; verified on read; each renders under `## Standards: <name> (<sha8>)` |
-| Steering scan | The gate fails a skill, and `doctor` warns on a repo addendum, containing a `text`-row phrase: `ignore previous`, `you are now`, `system prompt`, `disregard`, `komodo config`, `komodo install`. The addendum still loads with the warning. `[PENDING G-13]` the list is 6 entries by judgment |
-| Standards to rules | `- **Never` and `- **Always` lines compile to reviewer rule IDs `std.<skill>.<n>`; an edit without the regenerated list fails the gate |
-
-**What each one does**
-- **Index:** A lookup of every skill by name, the file patterns it applies to and the repo files it requires. It is built into the binary, so listing skills is a map read.
-- **Source:** Skills come only from the binary's `embed/skills/`. A repo's `.claude/` folder is ignored, so a repo cannot plant one.
-- **Allowlist:** `skills.allow` in `agent.json` lists the skills an agent may ever receive. `always` names those injected into every brief; builder and reviewer always get `standards-comments`.
-- **Preinject:** A skill joins the brief when its globs match a file in the group's `files` and its markers exist in the repo. Every match loads; nothing is capped.
-- **Pull:** During a session an agent asks for a skill, or one section of it, by name. Bodies come from the cache store; pulls are unlimited.
-- **Markers:** Some skills need proof the repo uses the technology: mobile standards need an Android manifest or Xcode project, AWS standards an AWS config file. `standards-cicd` no longer matches every Makefile.
-- **Order:** Skills render `always` first, then alphabetically, so the brief prefix is identical across runs and the provider cache hits.
-- **Too big:** When a brief exceeds the link's ceiling, no skill is dropped. The task moves to the next link in the chain, or blocks with `context`.
-- **Frontmatter:** Each skill opens with a strict header of five fields. The gate (the build-time self-check) rejects unknown keys, duplicate headings or a section name with no heading.
-- **Size:** A skill holds at most 6,000 tokens; the gate names any larger. With `track.usage` on, the ledger records skill tokens per session.
-- **Integrity:** An index file stores a SHA-256 hash (a content fingerprint) per skill, checked on every read. Each skill renders under a heading with its short hash, so a finding cites the exact version.
-- **Steering scan:** Skills and the repo's `AGENTS.md` addendum are scanned for prompt-injection phrases. A skill with one fails the gate; an addendum only warns and still loads. The 6-phrase list is a judgment call, pending G-13.
-- **Standards to rules:** Each `- **Never` and `- **Always` line becomes a reviewer rule ID. Editing a skill without regenerating that list fails the gate.
-- **`standards-*` (34):** One skill per language, framework or concern, such as `standards-go` and `standards-comments`; preinjected by file type.
-- **`komodo`:** The orchestrator's guide to the verb list, generated at build and embedded; never given to a worker.
-- **`plan`:** The orchestrator's skill for planning epics and backlog work; never given to a worker.
-- **`run`:** The orchestrator's skill for running groups, including `run --stage`; never given to a worker.
-- **`respond`:** The orchestrator's skill for answering PR threads with `komodo threads` and `komodo gate`; never given to a worker.
-- **`release`:** The orchestrator's skill around the human-only `release` verb. Its contents are [UNKNOWN: not yet designed].
-
-**Example**
-
-One entry in `embed/skills/index.json`, generated at build, for the mobile UI standards skill. The key names are illustrative; the index format is open (G-30).
-
-```json
-{
-  "name": "standards-ui-mobile",
-  "globs": [
-    "[UNKNOWN: not yet designed]"
-  ],
-  "markers": [
-    "AndroidManifest.xml",
-    "*.xcodeproj"
-  ],
-  "sections": [
-    "[UNKNOWN: not yet designed]"
-  ],
-  "sha256": "[UNKNOWN: not yet designed]"
-}
-```
-
-#### Rules and output contract
-
-
-**In plain terms.** This section says where each harness rule is enforced and how every line a person reads is produced. Rules live in code paths, never in prompts: the guard, the result schema, Check and review. Output is rendered by Go templates from codes and facts the models return, so the same facts give the same bytes. Without it, prompts would carry rules a model can ignore and reports would differ per run. The engine owns it; the orchestrator relays the rendered report.
-
-#### Where rules are enforced
-
-**In plain terms.** Each kind of rule has exactly one enforcer, and none of them is a prompt. This table maps a rule target to the code that enforces it. It exists so a worker cannot talk its way past a rule it never saw. A designer adding a rule picks its row here first.
-
-| Rule target | Enforcer |
-|---|---|
-| Tool calls | The guard; a refusal names the rule and the allowed alternative |
-| Results | The result schema; each field's description states the allowed outcomes |
-| Work | Check and review |
-| Comments | The `standards-comments` skill, preinjected for builder and reviewer |
-| The orchestrator | O1 to O7, O9, O10 as text in the `AGENTS.md` block, rendered from `embed/rules/orchestrator.md` |
-
-**What each one does**
-- **Tool calls:** The guard checks every tool call before it runs. A refusal tells the model which rule applied and what it may do instead.
-- **Results:** The final result schema lists the allowed outcomes per field, so a model picks a code instead of writing prose.
-- **Work:** Check, the engine's build, test and lint run (lint is an automatic rule check), and the reviewer judge the diff after the fact.
-- **Comments:** Comment style is a skill the builder and reviewer always receive, not a guard row.
-- **The orchestrator:** The interactive session has no hook; its rules are text in the `AGENTS.md` block rendered from `embed/rules/orchestrator.md`.
-
-No rule text enters any worker brief. Role text in `prompt.md` is not a rule.
-
-#### Output mapping (`embed/output/`)
-
-**In plain terms.** Every human-readable output is a Go template fed by typed facts, picked from `embed/output/`. A template is fixed text with holes; a fact is a value the engine checked, such as a SHA. This table maps each thing a person reads to its facts and template name. Without it each code path would format its own text and reports would drift.
-
-| What a person reads | Facts from | Template |
-|---|---|---|
-| Block or escalation | The agent's `code` plus facts (SHA, ref, task ID) | `needs.<code>` |
-| PR body | The engine: diff stat, tasks closed, Check results, finding codes | `pr_body` |
-| Reviewer finding on a PR | `{severity, lens, rule, file, line}` | `finding.<lens>` |
-| Architect or researcher result | `{recommend, options[{id, name}]}`; detail in `<session>/out/` | `options` |
-| `status` and run report | `state.json` and the ledger | `status`, `run_report` |
-| Envelope `report` and errors | The verb's `data`; `{code}` | `report.<verb>`, `error.<code>` |
-| Commit message | `<type>: <task title>` from the backlog | `commit` |
-| Waking event in `status --wait` | The event | `event.<type>` |
-
-**What each one does**
-- **Block or escalation:** When a group blocks or a model escalates, the agent returns a code and facts; the `needs.<code>` template renders the line a person reads.
-- **PR body:** The engine, not a model, fills the epic PR body with the diff stat, closed tasks, Check results and finding codes.
-- **Reviewer finding on a PR:** A finding is five facts rendered by a template per lens; a lens is one review perspective (see Glossary).
-- **Architect or researcher result:** These agents return a recommendation and option IDs; the long text stays in the session's `out/` folder.
-- **`status` and run report:** Rendered from `state.json`, the engine's snapshot, and the ledger; never from model text.
-- **Envelope `report` and errors:** Every verb's JSON envelope carries a `report` line and errors keyed by code, each with its own template.
-- **Commit message:** Built as `<type>: <task title>` from the backlog card; no model writes commit text.
-- **Waking event in `status --wait`:** When the orchestrator waits on an event, that event renders through `event.<type>` into one line.
-- **Layout by profile:** `embed/output/{adhd,standard}/` hold one template set each, with the same facts and codes. Under `adhd` a report has the verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`). `output.color` is applied at render time only.
-
-#### Template pipeline
-
-**In plain terms.** The pipeline is the fixed sequence that turns facts into text, the same for every template. It exists so a template cannot compute, read files or be reshaped by a fact containing Markdown. Without it a path holding a newline could break a report's layout. The gate verifies every step at build time.
-
-| Step | Rule |
-|---|---|
-| Engine | Go `text/template`, `missingkey=error`, a 6-function map: `code`, `n`, `plural`, `dur`, `path`, `table`; nothing else |
-| Typed facts | One Go struct per template in `agent/render.go`; the gate fails a template field with no struct field and a struct field no template uses |
-| Order | Facts → fact checks (SHA in repo, path in diff or worktree, task ID exists; a failed fact gets the schema re-prompt) → escape (fact strings as literal code spans) → template → wrap at 80 columns → `output.color` |
-| Tables | Over 5 rows: top 5 plus one line `N more: <what>`; a cell over 45 characters moves to a labeled line below |
-| Golden fixtures | `embed/output/<profile>/<name>.golden` per template; the gate renders each under both profiles and compares bytes |
-| Unlisted cases | Code `other` renders one fixed line, "Needs a decision; details in `<path>`" |
-| Model prose | Prose fields such as the builder `summary` feed briefs, the ledger and `<session>/out/`; no template renders them |
-
-**What each one does**
-- **Engine:** Go's standard `text/template`, a missing field is an error, and only six helper functions exist. A template cannot call anything else.
-- **Typed facts:** Each template has one Go struct; the gate fails a template using a field the struct lacks, or a struct field no template uses.
-- **Order:** Facts are checked against the repo first, then escaped as code spans, rendered, wrapped at 80 columns and colored. A bad fact re-prompts the model.
-- **Redaction and attribution checks:** Secret redaction (G4) and the attribution-trailer check (G5) run on the rendered text, after the template has filled in the facts.
-- **Tables:** A rendered table shows at most 5 rows plus one overflow line; a cell over 45 characters moves to a line below the table.
-- **Golden fixtures:** Each template has a stored expected output per profile; the gate renders and compares bytes, so any output change is a visible diff.
-- **Unlisted cases:** Code `other` renders one fixed sentence pointing to a file; the model's own text goes in that file.
-- **Model prose:** Prose a model writes, like the builder `summary`, feeds later briefs and the ledger only; no person-facing template prints it.
-
-#### Code list
-
-**In plain terms.** The code list is the closed set of short identifiers a model or the engine may return to say what happened. A code is one word like `regression`, never a sentence. Each code has a schema enum (a fixed list of allowed values) entry, a template and a fixture, so adding one is a design change. Without the list a model could invent an outcome nobody can render or route.
-
-The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate`, `dependency`, `flaky`, `tester`, the tester's `pass`, `fail`, `env`, `wrong_command`, `real_failure`, and `config_tampered`, `locked`, `regression`, `lint`, `disputed`, `crash`. The list starts from the previous binary's real blocks and escalations, PR #335's `branch_missing` among them. A new code is a design change: schema enum, template and fixture together. Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
-
-**What each one does**
-- **`branch_missing`:** A code from the previous binary's real blocks and escalations (PR #335). Its exact trigger is [UNKNOWN: not yet designed].
-- **`cancelled`:** A session or run stopped on purpose; also a session exit reason.
-- **`paused`:** A session halted by a provider limit with a resume handle; it resumes on a ledger timer, not by a person.
-- **`integration`:** Check failed on the epic tip after a landing; landings pause and the last-landed group returns to Build.
-- **`epic_gate`:** The epic-wide review produced a finding with no file to blame, so the epic blocks.
-- **`dependency`:** A group's dependency was abandoned, so the group stops and names it.
-- **`flaky`:** Go's two reruns of a test split, one pass and one fail. A split acceptance item blocks the group; a plain flaky test only reports.
-- **`tester`:** The tester disputed an item twice against Go's reruns; a harness fault that does not count against the builder.
-- **`pass`:** Tester, per acceptance item: the item's command passed, with evidence.
-- **`fail`:** Tester, per acceptance item: the command failed, with evidence.
-- **`env`:** Tester, per item: skipped because it needs a network, Docker or service the sandbox lacks.
-- **`wrong_command`:** Tester restart reason: the first run used the wrong command.
-- **`real_failure`:** Tester restart reason: the tester holds the failure is genuine despite Go's reruns.
-- **`config_tampered`:** `config.json` was hand-edited; every verb refuses until `komodo config --accept`.
-- **`locked`:** A write to a group's task list while a run holds it; the refusal names the run ID.
-- **`regression`:** A test that passed at the base commit fails at head; the group returns to Build naming the test.
-- **`lint`:** A planner draft failed backlog lint twice, so the plan blocks.
-- **`disputed`:** A builder result code rejecting a finding by file and line; it feeds the precision ledger.
-- **`crash`:** The startup sweep found a dead session or claimed task; emitted as its exit reason.
-
-#### No leaks
-
-**In plain terms.** No leaks means the harness's own rules and skills never reach a worker, and a run cannot rewrite its own guidance. A worker is any model agent other than the orchestrator. This table lists each leak path and its guard. Without it a builder could read orchestrator rules, or edit `AGENTS.md` and change its next brief.
-
-| Path | Guard |
-|---|---|
-| Orchestrator rules into a worker | A brief holds only role text, repo context, skills and the task; the addendum strips the Komodo block; broken block markers drop the whole addendum and `doctor` reports it |
-| Orchestrator skills into a worker | The gate fails a worker `agent.json` listing `run`, `plan`, `respond` or `komodo` |
-| Host auto-load | `claude-cli` workers start with `--setting-sources ""`; API links send only the brief |
-| A run changing its own guidance | The addendum is read from the base commit; config, settings files and `policy.json` are G3 |
-
-**What each one does**
-- **Orchestrator rules into a worker:** A brief has four kinds of content and none is a rule. The repo's `AGENTS.md` loses its Komodo block; broken markers drop the whole addendum and `doctor` says so.
-- **Orchestrator skills into a worker:** The gate refuses any worker `agent.json` that allowlists `run`, `plan`, `respond` or `komodo` (lists any of them as permitted).
-- **Host auto-load:** Claude CLI workers start with settings sources disabled, so host-level memory and hooks never load; API links get only the brief.
-- **`codex-cli` workers:** When the `codex-cli` link ships in a later minor, its workers must also load no `AGENTS.md`.
-- **A run changing its own guidance:** The addendum is read from the base commit, so a worktree edit waits for the next run; config and policy files are protected by G3.
-
----
-
 ## Appendix J. Check, Review, Tester, Error Recovery and Budgets
 
 #### Check
@@ -8632,7 +8659,6 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Two files differ only by case | Check fails on every OS |
 | A finding's quote is not at the line | Dropped and logged; does not block |
 | `needs_scope` on a protected path or another group's file | Denied by the engine without asking |
-| A steering phrase in a skill | Fails the gate |
 | Fresh during a live run | The next `komodo version` is new; the run finishes on its old version |
 | Bad checksum or signature on fresh | The old binary stays |
 | Two concurrent verbs see a newer release | One updater, via `fresh.lock` |
@@ -8901,31 +8927,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A pinned repo refuses verbs.
 - Latency: a short verb never makes a network call, and the updater never spawns when `latest` is not newer.
 - Locking: 2 concurrent verbs spawn 1 updater.
-
-**Skill loader ([Skill loader (Appendix I)](#skill-loader))**
-- A builder editing `*.go` gets `standards-go` preinjected.
-- A planted `ignore previous instructions` line in a skill fails `gate`.
-- The same line in the fixture repo's `AGENTS.md` makes `doctor` warn, and the brief still loads.
-- A skill of 6,001 tokens fails `gate`.
-- A skill body edited after build fails the hash (a content fingerprint) check and is refused.
-- A backend `*.kt` in a repo without `AndroidManifest.xml` gets `standards-kotlin` but not `standards-ui-mobile`.
-- A `.tsx` handler gets all 5 matching skills in the same order on 2 runs.
-- A planted `.claude/skills/standards-go/SKILL.md` changes nothing.
-- The index rebuilds only when its key changes.
-
-**Rules and output contract ([Rules and output contract (Appendix I)](#rules-and-output-contract))**
-- A fixture `status` with 10 runs renders a table and passes its template test.
-- A template referencing an unknown fact fails `gate` at build, not at run time.
-- A 7-row table renders 5 rows and one overflow line.
-- `state.schema.json` lists 35 event types, and the gate fails when the enum (a fixed list of allowed values) gains one.
-- A builder brief holds 0 lines from `embed/rules/`.
-- A planted `AGENTS.md` line outside the block reaches the brief under Repo rules.
-- The same line inside a block with a missing end marker reaches no brief.
-- A builder whose `files` list `AGENTS.md` edits it, and its next brief in the same run still carries the base-commit text.
-- A fixture escalation returning `{code: branch_missing, sha: ffcf41e9}` renders the same bytes on 2 runs under `adhd`.
-- A schema code with no template fails `gate`.
-- A fact path containing a newline and `## x` renders as one literal code span.
-- A fact SHA absent from the repo gets 1 re-prompt.
 
 **Scheduler and job templates ([Scheduler and job templates (Appendix K)](#scheduler-and-job-templates))**
 - 2 ticks in one window run the job once.
