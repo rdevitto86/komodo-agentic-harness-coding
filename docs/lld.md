@@ -1,691 +1,208 @@
 ## 0. Front Matter and Code Structure
 
-**Contents**
+This chapter holds what every reader needs first: how the document is organised, how names are spelled, which Go package does what, which way imports may point and which files are compiled into the binary. The purpose, goals and reasons behind the design are in the [High-Level Design](hld.md); its glossary defines the Komodo terms used here ([HLD Glossary](hld.md#12-glossary)).
 
-- [0. Front matter and code structure](#0-front-matter-and-code-structure)
-- [1. CLI and configuration](#1-cli-and-configuration)
-- [2. Event spine and state machine](#2-event-spine-and-state-machine)
-- [3. Engine internals](#3-engine-internals)
-- [4. Workspace and leases](#4-workspace-and-leases)
-- [5. Sessions, agents and briefs](#5-sessions-agents-and-briefs)
-- [6. Tools, guard and sandbox](#6-tools-guard-and-sandbox)
-- [7. Providers and HTTP](#7-providers-and-http)
-- [8. Skills, rules and output](#8-skills-rules-and-output)
-- [9. Check, review, tester and recovery](#9-check-review-tester-and-recovery)
-- [10. Scheduler, cache and observability](#10-scheduler-cache-and-observability)
-- [11. Backlog, planning, ship and release](#11-backlog-planning-ship-and-release)
-- [12. Install, binary lifecycle and gate](#12-install-binary-lifecycle-and-gate)
-- [13. State manager](#13-state-manager)
-- [15. Verification, operations and cutover](#15-verification-operations-and-cutover)
-- [Appendices A to S (lookup tables)](#0-front-matter-and-code-structure)
+- **Owners:** the Komodo domain architect (CEO) decides every open gap; the technical lead is the author.
+- **Status:** draft, for Komodo 1.0.0-beta.6. The design is stated in this document and the [High-Level Design](hld.md) together.
 
-**Owners and controls**
-- Owner: the Komodo domain architect (CEO), who decides every open gap; author: the technical lead; reviewers: per component.
-- Komodo 1.0.0-beta.6; awaiting sign-off; source of truth: this LLD and `docs/hld.md` together.
-- Patches only; no phase 2 code before sign-off; every `[PENDING G-NN]` tag has one row in [Appendix O](#appendix-o-gap-register).
+### 0.1 How to Read This Document
 
-**Related documents:** [docs/hld.md](hld.md) (the High-Level Design), `docs/prd.md` and `docs/decisions/0001-standalone-harness.md` (phase 1 deliverables, not yet written), [Appendix Q](#appendix-q-component-traceability). Terms: the HLD Glossary.
+This document is the implementation contract for phases 2 to 9: each component's files, schemas, algorithms, limits, failure handling and edge cases. The reviewer's `spec` lens checks a diff against it. The [HLD](hld.md) states what each component is for and why; where both describe one mechanism, this document carries the numbers, and a conflict between them is a defect to fix in both.
 
-**Code structure.** Komodo is one Go program, the `komodo` binary: 12 packages, about 90 files. A package is a folder of Go code that owns one layer, such as the engine or the guard. Imports run one way, so there are no cycles. Everything a model reads is compiled in, so a planted file cannot change what a worker sees. The gate (`komodo gate`, the self-check) refuses an import that points up.
+The document has 16 chapters, numbered 0 to 15. Chapters 1 to 13 each describe one subsystem. Chapter 0 and chapter 14 are the cross-cutting pages: read chapter 0 first and chapter 14 last. Chapter 15 holds what no single subsystem owns: end-to-end verification, the operations runbook and the cutover.
 
-**📐 Package dependency map**
-```mermaid
-flowchart TB
-  %% Legend: solid arrow = allowed import direction, downward only
-  %% dotted arrow = reads at runtime; the gate refuses an import pointing up
-  MAIN["cmd/komodo: main.go, calling cli.Run(os.Args)"]
-  subgraph ORDER["Import order, top to bottom; a package may skip levels"]
-    direction TB
-    CLI["internal/cli, Interface"]
-    ENG["internal/engine, Orchestration"]
-    QUAL["internal/quality, Quality"]
-    HOST["internal/host, Interface"]
-    REPO["internal/repo, Delivery"]
-    PROV["internal/provider, Model I/O"]
-    TOOLS["internal/tools, Model I/O"]
-    OPS["internal/ops, Economy and ops"]
-    AGENT["internal/agent, Model I/O and Context"]
-    SAFETY["internal/safety, Safety"]
-    STATEPKG["internal/state, State manager (core pillar)"]
-    CORE["internal/core, Plumbing"]
-    CLI --> ENG --> QUAL --> HOST --> REPO --> PROV
-    PROV --> TOOLS --> OPS --> AGENT --> SAFETY --> STATEPKG --> CORE
-  end
-  MAIN --> CLI
-  subgraph EMBED["embed/, compiled into the binary"]
-    direction TB
-    E1["agents/#lt;name#gt;/{agent.json, prompt.md}"]
-    E2["skills/index.json, skills/#lt;name#gt;/SKILL.md"]
-    E3["rules/orchestrator.md, rules/backlog.md"]
-    E4["output/{adhd,standard}/*.tmpl, *.golden, output/adhd.md"]
-    E5["jobs/"]
-    E6["lenses/#lt;lens#gt;.json, #lt;lens#gt;.md"]
-    E7["langs/#lt;lang#gt;.json"]
-    E8["models.json"]
-    E9["defaults.json"]
-    E10["policy.json"]
-    E11["state.schema.json"]
-  end
-  AGENT -.-> E1
-  AGENT -.-> E2
-  AGENT -.-> E3
-  AGENT -.-> E4
-  AGENT -.-> E5
-  QUAL -.-> E6
-  REPO -.-> E7
-  PROV -.-> E8
-  CORE -.-> E9
-  SAFETY -.-> E10
-  STATEPKG -.-> E11
-  subgraph STATE["Runtime state"]
-    direction TB
-    GCD["#lt;git-common-dir#gt;/komodo/"]
-    GCD1["install.json, runs/, jobs/state.json, sessions/, ledger/: through the state manager"]
-    GCD2["cache/{skills,context,checks,review,setup,map}/, 256 MB LRU"]
-    HOME["~/.komodo/"]
-    HOME1["config.json, release.key, bin/komodo, versions/, jobs/*.json"]
-    HOME2["leases/, state/ through the state manager; wt/, cache/lang/"]
-    GCD --- GCD1
-    GCD --- GCD2
-    HOME --- HOME1
-    HOME --- HOME2
-  end
-```
-**Reading the diagram.** `cmd/komodo` calls `cli.Run(os.Args)`; the 12 `internal` packages below import only downward and may skip levels. Dotted arrows show which package reads which `embed/` asset, all compiled into the binary. Runtime state splits between `<git-common-dir>/komodo/` and `~/.komodo/`; only `internal/state` reads or writes it, so its boxes say "through the state manager" instead of drawing an arrow.
+#### What each chapter holds
 
-**What matters**
-- `cmd/komodo` is one file, `main.go`, calling `cli.Run(os.Args)`; `go.mod` lists no modules.
-- Import order, top down: `cli`, `engine`, `quality`, `host`, `repo`, `provider`, `tools`, `ops`, `agent`, `safety`, `state`, `core`; a file splits at about 600 lines.
-- `embed/` holds the 7 agents, 5 workflow skills plus 34 `standards-*`, 10 lenses, `defaults.json`, `policy.json`, `models.json` and the generated `state.schema.json`.
-- Per-repo state lives under `<git-common-dir>/komodo/` (state files, sessions, ledger, 256 MB cache); machine state under `~/.komodo/` (config, leases, worktrees).
-- Every runtime state file except the 6 exclusions in [Outside the manager (chapter 13)](#13-state-manager) is read and written only through the state manager ([State manager (chapter 13)](#13-state-manager)).
-
-**Lookup:** [Appendix A](#0-front-matter-and-code-structure) holds the package, embedded asset, runtime state and conventions tables.
-
-
-
-#### Document metadata
-
-
-#### Owners
-
-| Role | Who | Responsibility |
-|---|---|---|
-| Document owner | Komodo domain architect (CEO) | Approves the architecture; decides every open gap |
-| Author | Technical lead | Keeps the document true to the design and the code |
-| Reviewers | Domain architect, per component | Signs off component by component before phase 1 ends |
-
-#### Current controls
-
-| Control | Value |
+| Chapter | Holds |
 |---|---|
-| Document | Low-Level Design (LLD) |
-| System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Status | Awaiting architecture sign-off by the document owner |
-| Date | 2026-10-09 |
-| Source of truth | This LLD and `docs/hld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326`; `drafts/README.md` at commit `fdf4f61f` for brief slots |
-| Change control | Patches only, smallest span |
-| Approval control | No phase 2 code starts until the owner has signed off every component |
-| Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (`docs/lld.md` [Gap register (Appendix O)](#gap-register)); the gate fails a tag with no closing task |
+| [0. Front Matter and Code Structure](#0-front-matter-and-code-structure) | Conventions, naming, package map, import order, embedded assets |
+| [1. CLI and Configuration](#1-cli-and-configuration) | Verbs, the reply envelope, exit codes, `config.json` and its audit log |
+| [2. Event Spine and State Machine](#2-event-spine-and-state-machine) | Events, group stages and transitions, the event bus |
+| [3. Engine Internals](#3-engine-internals) | `Drive`, the work queue, the session pool, intake, shutdown, the parent guard |
+| [4. Workspace and Leases](#4-workspace-and-leases) | Worktrees, leases, fences, the hidden reference, saved work |
+| [5. Sessions, Agents and Briefs](#5-sessions-agents-and-briefs) | The session supervisor, the 7 agents, the brief builder |
+| [6. Tools, Guard and Sandbox](#6-tools-guard-and-sandbox) | Tool runtime, guard rows, sandboxes, process control |
+| [7. Providers and HTTP](#7-providers-and-http) | Provider links, failover, limits and timers, the HTTP client |
+| [8. Skills, Rules and Output](#8-skills-rules-and-output) | Skill loader, orchestrator rules, output templates |
+| [9. Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery) | Check stage, lenses, tester, evidence, crash recovery |
+| [10. Scheduler, Cache and Observability](#10-scheduler-cache-and-observability) | Job scheduler, cache store, ledger, `status` data |
+| [11. Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release) | Backlog grammar and lint, planning, ship, release |
+| [12. Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate) | Install, update, probe, doctor, the gate |
+| [13. State Manager](#13-state-manager) | The only reader and writer of runtime state |
+| [14. Data Locations and Data Flow](#14-data-locations-and-data-flow) | Every runtime file, where it lives, how data moves between subsystems |
+| [15. Verification, Operations and Cutover](#15-verification-operations-and-cutover) | End-to-end verification plan, operations runbook, host cleanup, cutover |
 
-#### Related documents
-
-| Document | Relationship |
-|---|---|
-| `docs/hld.md` | The High-Level Design this document details |
-| `docs/prd.md` | Product requirements, phase 1 deliverable |
-| `docs/decisions/0001-standalone-harness.md` | First architecture decision record, phase 1 deliverable |
-| Appendix B | External references |
-
-**Placeholder convention.** Text in the form `[PENDING G-NN]` marks a fact the design has not yet verified or a decision the owner has not yet confirmed. No placeholder hides a proposal; each stands in for content that is decided but not yet proven.
-
-#### Introduction
-
-
-**In plain terms.** This section says what this document is for and how to find your way in it. Komodo is one program, the `komodo` binary, also called the harness (see Glossary). It uses AI model sessions as workers to plan, build, check, review and ship code. A person or an orchestrator (an interactive AI session, Claude Code, that types `komodo` commands) drives it. Without this section a reader would not know which parts of the document apply to them.
-
-#### Purpose
-
-**In plain terms.** This document is the build contract: it fixes the exact files, data shapes, rules, limits and failure handling that the code must follow. The HLD (high-level design) says what each part is for; this LLD (low-level design) says how each part works inside. The reviewer is one of the seven model workers; its `spec` lens is a rule set that compares a code change against the section it cites. Without this document, builders and reviewers would have nothing precise to check against.
-
-This document specifies how each component of Komodo is built: its files, schemas, algorithms, limits, failure handling and edge cases. It is the implementation contract for phases 2 to 9 and the source the reviewer's `spec` lens checks a diff against.
-
-#### Scope
-
-**In plain terms.** This section says what the document covers and what it leaves out. It covers every building block the HLD names, down to file paths, field tables, state changes, command lines and numbers. Work planned for a later minor version is mentioned only when a current interface must already leave room for it. Those two cases are the OpenAI links (ways to reach OpenAI models) and enterprise key custody (where the release signing key lives).
-
-Every component in the HLD's building block view, at the level of file paths, field tables, state transitions, command lines and numeric limits. Items deferred to a later minor version appear only where a current interface must already account for them (the OpenAI links, enterprise custody targets).
-
-#### How to read this document
-
-**In plain terms.** Different people need different parts of this document. The table below maps four kinds of reader to the sections they should open first. A component is one building block of Komodo, such as the installer or the cache. A task group is a set of up to 8 backlog tasks that one builder session works through. Without this map a reader would have to read all 39 sections to find the one that matters.
+#### Where each reader starts
 
 | Reader | Start at |
 |---|---|
-| Owner reviewing a component | The component's section ([Component traceability (Appendix Q)](#component-traceability) maps components to sections), then [Edge cases (Appendix N)](#edge-cases) |
-| Builder of a task group | The component's section, [Code structure (Appendix A)](#code-structure), [Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate) gate checks |
-| Reviewer applying the `spec` lens | The section a task cites, plus [Error recovery (chapter 9)](#9-check-review-tester-and-recovery) error recovery for the row it touches |
-| Operator diagnosing a run | [Group state machine (Appendix C)](#26-state-and-transitions), [Error recovery (chapter 9)](#9-check-review-tester-and-recovery), [Runtime observability (chapter 10)](#10-scheduler-cache-and-observability), [Edge cases (Appendix N)](#edge-cases) |
+| Owner reviewing a component | The component's chapter, then its `N.7` page, which lists the odd situations and what happens in each |
+| Builder of a task group | The component's chapter, then [0.3 Package Map](#03-package-map) and [Gate checks in chapter 12](#12-install-binary-lifecycle-and-gate) |
+| Reviewer applying the `spec` lens | The chapter a task cites, then its `N.7` page for the row the change touches |
+| Operator diagnosing a run | [2.6 State and Transitions](#26-state-and-transitions), the `N.7` pages, [10 Scheduler, Cache and Observability](#10-scheduler-cache-and-observability) and [14.1 Runtime State](#141-runtime-state) |
 
-**What each one does**
-- **Owner reviewing a component:** The person who owns Komodo and signs off on a design. They read the section for that component, then [Edge cases (Appendix N)](#edge-cases), the list of odd situations and what happens in each. [Component traceability (Appendix Q)](#component-traceability) gives each component's section number.
-- **Builder of a task group:** The builder model session that edits code for one group of tasks. It reads the component's section, the code layout in [Code structure (Appendix A)](#code-structure), and the self-check list in [Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate) that its change must pass.
-- **Reviewer applying the `spec` lens:** The reviewer model session checking a change against this document. It reads the section the task names, plus the row in [Error recovery (chapter 9)](#9-check-review-tester-and-recovery) that says how the failure it touches is detected and bounded.
-- **Operator diagnosing a run:** A person or the orchestrator working out why a run stopped. They read [Group state machine (Appendix C)](#26-state-and-transitions) (the stages a group moves through), [Error recovery (chapter 9)](#9-check-review-tester-and-recovery) (every failure and its outcome), [Runtime observability (chapter 10)](#10-scheduler-cache-and-observability) (what `status` and the ledgers show) and [Edge cases (Appendix N)](#edge-cases).
+#### Subsystem chapter template
 
-#### Relationship to the HLD
+Every subsystem chapter has the same child pages, numbered `N.1` to `N.10`. A page that does not apply is skipped and the numbering stays contiguous.
 
-**In plain terms.** Two documents describe Komodo. The HLD explains the purpose of each part and how the parts work together; this one explains the inside of each part. When both describe the same mechanism, this document holds the numbers and the HLD holds the reasons. If the two disagree, that is a bug in the documents, and both get fixed.
-
-The HLD states what each component is for and how the components cooperate. This document states how each one works inside. Where both describe the same mechanism, this document carries the numbers and the HLD carries the rationale; a conflict between them is a defect to fix in both.
-
-#### Design constraints and conventions
-
-
-**In plain terms.** This section lists the rules the code must obey and the naming habits the document uses. A constraint is a rule the design may not break, such as "no outside libraries". A convention is a shared way of writing names and IDs so every part of the system agrees. The builder follows them, and the gate (Komodo's own self-check command, `komodo gate`) refuses code that breaks the checkable ones.
-
-#### Constraints
-
-**In plain terms.** These eight rules bound how Komodo is built. They keep the binary self-contained, keep the code layout predictable, and make every state change replayable after a crash. The builder sessions obey them while writing code, and the gate checks the ones a program can check. Without them the code would sprawl, depend on outside packages, and lose state on a crash.
-
-| Constraint | Statement |
+| Page | Holds |
 |---|---|
-| Dependencies | Standard library only; `go.mod` lists no modules |
-| Packages | One package per layer, 12 in all; a new package needs a new layer |
-| Files | A file splits at about 600 lines; `_test.go` sits beside its source; about 90 files |
-| Imports | One downward order, enforced by the gate; higher needs enter as parameters |
-| Embedded assets | Everything a model reads compiles into the binary with `//go:embed`; nothing is parsed from disk at run time |
-| Strict decoding | Every JSON the binary reads from its own assets uses `DisallowUnknownFields` and a schema version `v` |
-| Side effects | Every engine action is recorded and idempotent (safe to repeat with the same result) by a declared key; nothing else changes group state |
-| Security rows | Never configuration; the only tunable is the refusal count |
+| `N.1` Scope and Concepts | What the package does and does not do; the chapter's own terms |
+| `N.2` Package Layout | The files under the package, one line each; entry points |
+| `N.3` Data Model | Go structs, one real example per file or wire shape, field tables, versioning |
+| `N.4` Interfaces | Go signatures, error values, who calls each |
+| `N.5` Behaviour | A walkthrough and the algorithms as numbered steps, with sequence diagrams |
+| `N.6` State | State and event table plus a state diagram, for subsystems with state |
+| `N.7` Invariants and Failures | Ordering rules that always hold, then the failure rows the subsystem owns |
+| `N.8` Config | The configuration keys the subsystem owns: key, type, default, effect |
+| `N.9` Proof Cases | Fixture input and expected result, one bullet each |
+| `N.10` Open Gaps | The open decisions of the chapter, linking to the [Gap Register (Appendix B)](#appendix-o-gap-register) |
 
-**What each one does**
-- **Dependencies:** Komodo is written in Go and uses only Go's built-in standard library. `go.mod`, the file that would list outside packages, lists none. This keeps the binary small and leaves nothing for an outside package to break.
-- **Packages:** A Go package is a folder of related code. Komodo has 11, one per architectural layer (interface, orchestration, quality, and so on). Adding a package means adding a layer, which is a design decision, not a convenience.
-- **Files:** A source file is split once it reaches about 600 lines. Each test file (`_test.go`) sits next to the code it tests. The whole binary is about 85 files.
-- **Imports:** Code may only depend on packages below it in one fixed order ([Import order (Appendix A)](#import-order)). When a lower package needs something from a higher one, the higher one passes it in as a function argument. The gate refuses an import that points upward.
-- **Embedded assets:** Every text a model reads, such as agent prompts, skills and lenses, is compiled into the binary with Go's `//go:embed`. Nothing is read from disk at run time, so a planted file on the machine cannot change what a model sees.
-- **Strict decoding:** When the binary reads its own JSON files, an unknown field is an error (`DisallowUnknownFields`), and each file carries a schema version `v`. A typo or an old file shape fails loudly instead of being ignored.
-- **Side effects:** Every action the engine takes, such as a commit or a session spawn, is written to the state first and has a key that makes a repeat harmless. Only the engine's one decision function changes a group's state (see Glossary, `Next()`).
-- **Security rows:** The guard rules (the checks every tool call passes) are data in `policy.json`, never settings a user can change. The one adjustable number is `guard.refusal_limit`, how many refusals under one rule end a session.
+#### Conventions
 
-#### Naming and identifiers
+- **Code formatting:** Go identifiers, file names, commands, configuration keys and JSON field names appear in code font. Every Go snippet compiles under `go vet`; every JSON example parses.
+- **Diagrams:** each diagram has a bold question above it, starting with the pencil-and-ruler symbol. Edge labels are numbered or are real command names.
+- **Open decisions:** an undecided fact appears as `[TODO: <the open decision> (G-NN)]`. Each tag points to one row in the [Gap Register (Appendix B)](#appendix-o-gap-register).
+- **Defaults are stated once:** a default value appears in the `N.8` page of the chapter that owns the key, and the built-in value is in `defaults.json`. Other pages name the key, such as `limits.returns`, and not its number.
+- **Roles:** "writers" means any agent with `edit` or `write`; "runners" means any agent with `run`.
+- **Numbers are design targets:** a number the design has not measured, such as the 50 ms short-verb budget, carries a `[TODO: ... (G-NN)]` tag; G-19 holds that one.
 
-**In plain terms.** This table fixes how names and IDs are spelled across config, events, git and documents. Consistent spelling lets a person grep for an ID, lets the gate check tables against code, and lets `status` print names a reader recognises. Every part of Komodo, from the config file to git branch names, uses these forms. Without them the same thing would be spelled three ways.
+### 0.2 Naming and Identifiers
 
-| Item | Convention |
-|---|---|
-| Config keys | Dotted, lower case: `limits.pool_max`; groups as `agents.<name>` and `endpoints.<name>` |
-| Event types | `family.name`: `session.end`, `lease.lost` |
-| Result and reason codes | Snake case from one enum (a fixed list of allowed values): `needs_scope`, `pause_timeout` |
-| Guard rows | `G1`…`G6`, `R1`, `B1`, `O1`…`O10` |
-| Rule IDs | `<lens>.<n>` for lens rules; `std.<skill>.<n>` for standards rules |
-| Branches | `komodo/<epic>` and `komodo/<epic>/<group>` |
-| Hidden refs | `refs/komodo/groups/<group-id>` |
-| Runs | A UUID version 7 made by the binary; `job-<name>-<n>` is a scheduled job's readable name |
-| Groups | A UUID version 7, written into the group's `TG.md` when the group is created; the readable name stays the label |
-| Sessions | A UUID chosen by Komodo |
-| Gaps | `G-NN`, one row each in the gap register |
+One spelling for each kind of name lets a person search for an identifier, lets the gate compare tables with code, and lets `status` print names a reader recognises.
 
-**What each one does**
-- **Config keys:** A setting is named in lower case with dots, such as `limits.pool_max`. Settings for one agent sit under `agents.<name>`, and settings for one model server under `endpoints.<name>`. These are the names you type in `komodo config`.
-- **Event types:** An event is a fact the engine records (see Glossary). Its type is a family and a name joined by a dot, such as `session.end`. The family groups related facts.
-- **Result and reason codes:** A code is a short word in snake case, such as `needs_scope`, drawn from one fixed list. A session's result, an event's reason and a `status` line all use the same list, so one word means one thing everywhere.
-- **Guard rows:** Guard rules have short IDs. `G` rows apply to every agent, `R1` to any agent that can run commands, `B1` to the builder, and `O` rows to the orchestrator. [Guardrails (chapter 6)](#6-tools-guard-and-sandbox) lists them.
-- **Rule IDs:** A reviewer finding cites a rule. Rules from a lens (a reviewer rule catalog) are `<lens>.<n>`; rules compiled from a standards skill are `std.<skill>.<n>`.
-- **Branches:** The engine works on git branches named `komodo/<epic>` for a whole epic and `komodo/<epic>/<group>` for one group. Only the epic branch gets a pull request into the base branch.
-- **Hidden refs:** `refs/komodo/groups/<group-id>`, named by the group's UUID, is where the engine saves every commit a group makes. It is kept by git but hidden from `git branch` and never pushed.
-- **Runs:** Every run gets a UUID version 7, a 36-character unique id whose first part is the creation time, so ids sort by age. The binary makes it with Go's own library and no outside package. A scheduled job's run also has the readable name `job-<name>-<n>`, where `<n>` counts up.
-- **Groups:** Every group gets a UUID version 7 when it is created, written into its `TG.md` as `id:`. Events, the `runs/<group-id>/` folder, the lease and the hidden ref use the UUID. People and git keep the readable name, such as `tg-1.2`: `komodo run tg-1.2` looks the name up, and branches and `status` show it.
-- **Sessions:** Every model session gets a UUID (a random unique id) that Komodo picks before the session starts. The id names the session folder and makes a repeated spawn a no-op.
-- **Gaps:** A gap is a fact not yet verified or a decision not yet confirmed (see Glossary). Each is `G-NN` and has one row in the gap register in [Gap register (Appendix O)](#gap-register).
-
-#### Document conventions
-
-**In plain terms.** These four habits apply to the text of this document itself. They say how an unverified fact is marked, where a default value is written, what two shorthand words mean, and which numbers are still estimates. A reader who knows them can tell a settled fact from a pending one at a glance.
-
-- `[PENDING G-NN]` marks a fact not yet verified or a decision not yet confirmed; the gap register ([Gap register (Appendix O)](#gap-register)) lists every one with its closing phase.
-- Defaults are stated once, in the table that owns them; other sections refer to the key.
-- "Writers" means any agent with `edit` or `write`; "runners" means any agent with `run`.
-- Numbers are the design's targets; a number marked `[PENDING G-19]` is unmeasured.
-
-**What each one does**
-- **`[PENDING G-NN]`:** A tag on a sentence that is not yet proven. The gap register in [Gap register (Appendix O)](#gap-register) lists every tag with the phase that will close it. The gate fails a tag with no backlog task to close it.
-- **Defaults stated once:** Each setting's default value appears in exactly one table, the one that owns it ([Configuration (chapter 1)](#1-cli-and-configuration)). Other sections name the key, such as `limits.returns`, instead of repeating the number.
-- **"Writers" and "runners":** Shorthand for agent roles. A writer is any agent with the `edit` or `write` tool; a runner is any agent with the `run` tool. Many rules apply to one role only.
-- **Numbers are targets:** A number such as "under 50 ms" is what the design aims for. One marked `[PENDING G-19]` has not been measured yet; phase 6 measures it.
-
-#### Code structure
-
-
-**In plain terms.** This section shows where the code lives: the Go packages, the order they may depend on each other, the text files compiled into the binary, and the folders Komodo writes to while it runs. A builder uses it to find the right file; the gate uses it to check the import order and that documented packages exist. Without it a change could land in the wrong package or read state from the wrong folder.
-
-#### Packages
-
-**In plain terms.** A package is a folder of Go code. Komodo has 12, each owning one layer of the design or the state pillar; the layer names come from the HLD's building block view. The table tells a builder which package owns which job. The engine, the CLI and every model-facing piece are listed, so nothing is homeless.
-
-| Package | Layer | Holds |
+| Item | Convention | Notes |
 |---|---|---|
-| `cmd/komodo` | Entry | One file, `main.go`, calling `cli.Run(os.Args)` |
-| `internal/cli` | Interface | Verb table, dispatch, envelope, exit codes, pin check, help generation, every verb as a thin call |
-| `internal/host` | Interface | Probe, install, Claude and Codex detection, fresh, OS schedule entries, doctor |
-| `internal/engine` | Orchestration | `Drive` and `Next()`, stages and epochs, intake, build, verify, pool, queue, worktree, shutdown, session, schedule, limits, recover |
-| `internal/quality` | Quality | Check, review, tester, evidence |
-| `internal/repo` | Delivery | Backlog, lint (an automatic rule check), graph, repo map, ship, git, PR, release, gate |
-| `internal/provider` | Model I/O | Provider interface, billing, harness tool loop, Claude CLI, Codex stub, Anthropic API, OpenAI-compatible |
-| `internal/tools` | Model I/O | Tool registry, MCP (Model Context Protocol, how a model calls tools) server, file tools, run, git read, submit tools, skill and web |
-| `internal/ops` | Economy and ops | Budget, ledger, bus, wake |
-| `internal/agent` | Model I/O and Context | Agent and job template structs, skills, rules, render, brief, trim |
-| `internal/safety` | Safety | Guard, rows, paths, shell, guard table, process control, sandboxes |
-| `internal/state` | State manager (core pillar) | Manager API, group state, kind registry and envelope, kinds, validation, migrations |
-| `internal/core` | Plumbing | Config, detect, HTTP, cache, create-only and rename-aside file helpers (only `state` calls them), version, fs, test home |
+| Config keys | Dotted, lower case: `limits.pool_max`; groups as `agents.<name>` and `endpoints.<name>` | The names typed in `komodo config` |
+| Event types | `family.name`: `session.end`, `lease.lost` | An event is a fact the engine records; the family groups related facts |
+| Result and reason codes | Snake case from one enum (a fixed list of allowed values): `needs_scope`, `pause_timeout` | A session result, an event reason and a `status` line share the one list |
+| Guard rows | `G1`…`G6`, `R1`, `B1`, `O1`…`O10` | `G` rows apply to every agent, `R1` to any agent with `run`, `B1` to the builder, `O` rows to the orchestrator ([6. Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)) |
+| Rule IDs | `<lens>.<n>` for lens rules; `std.<skill>.<n>` for standards rules | A reviewer finding cites one of them; rules from a lens come from a reviewer rule catalog |
+| Branches | `komodo/<epic>` and `komodo/<epic>/<group>` | Only the epic branch gets a pull request into the base branch |
+| Hidden refs | `refs/komodo/groups/<group-id>` | Named by the group's universally unique identifier (UUID); git keeps it, `git branch` hides it, and it is never pushed |
+| Runs | A UUID version 7 made by the binary; `job-<name>-<n>` is a scheduled job's readable name | A UUID version 7 has 36 characters and starts with its creation time, so ids sort by age; the binary makes it with Go's own library; `<n>` counts up |
+| Groups | A UUID version 7, written into the group's `TG.md` as `id:` when the group is created; the readable name stays the label | Events, `runs/<group-id>/`, the lease and the hidden ref use the UUID; `komodo run tg-1.2` looks the readable name up, such as `tg-1.2`, and branches and `status` show it |
+| Sessions | A UUID chosen by Komodo before the session starts | It names the session folder and makes a repeated spawn a no-op |
+| Gaps | `G-NN`, one row each in the gap register | A gap is a fact not yet verified or a decision not yet confirmed |
 
-**What each one does**
-- **`cmd/komodo`:** The program's front door. Its one file, `main.go`, hands the command line to `cli.Run`. Nothing else lives here.
-- **`internal/cli`:** Turns a typed command such as `komodo run tg-1.2` into one call into the right package. It owns the verb table, the JSON envelope every verb prints, the exit codes, the repo pin check and `help`. Each verb here is a thin wrapper, never the logic.
-- **`internal/host`:** Everything about this machine: probing which model providers are installed, `install`, detecting Claude Code and Codex, `fresh` (self-update), OS schedule entries, and `doctor` (the health check).
-- **`internal/engine`:** The orchestration core. `Drive` runs one loop per group; `Next()` is the pure decision function. It also owns the five stages and their epochs, intake, build, verify, the session pool, the work queue, worktrees, shutdown, session supervision, the job scheduler, limits and crash recovery.
-- **`internal/quality`:** The zero-token Check stage, the reviewer's lens mechanics, the tester, and evidence verification (checking that a reviewer's quoted line really is at that `file:line`).
-- **`internal/repo`:** Everything that touches the repository: the backlog files, backlog lint, the dependency graph, the repo map (a ranked symbol list for planning), shipping, git and PR wrappers, release, and the gate.
-- **`internal/provider`:** Talks to models. One interface covers every link (a way to reach a model), plus the billing check, the tool loop for API links, the Claude CLI adapter, a Codex stub that refuses until a later minor, the Anthropic API and OpenAI-compatible servers.
-- **`internal/tools`:** The tools a model session can call: the registry that binds tools to one session, the private MCP server (the tool server each session talks to), file read/search/edit/write, `run`, git read, the submit tools, `skill` and `web`.
-- **`internal/ops`:** Economy and operations: budgets (wall time, and tokens when `track.usage` is on), the ledger (one row per session and a copy of every event), the event bus, and the wake files that `status --wait` watches.
-- **`internal/agent`:** The agent definitions (`agent.json`, `prompt.md`) and job templates, the skill loader, the orchestrator rules text, the output templates, the brief builder (assembling a worker's prompt from 20 slots) and trimming.
-- **`internal/safety`:** The guard that every tool call passes, its rule rows from `policy.json`, path containment, shell tokenizing, the guard table the gate checks, process control (timeouts, kills) and the three sandboxes (seatbelt, bwrap, Docker).
-- **`internal/state`:** The state manager, the only code that reads or writes runtime state. It holds the API every other package calls, group state (a group's events, snapshots and replay as one unit), the registry of record kinds with their one schema, the checks run on every read and write, and the steps that read older schema versions ([State manager (chapter 13)](#13-state-manager)).
-- **`internal/core`:** Plumbing with no domain logic: the config file, command detection, the HTTP client, the cache store, the create-only and rename-aside file helpers that only the state manager calls, the embedded version, atomic file writes, and an isolated home folder for tests.
+### 0.3 Package Map
 
-**File map**
+Komodo is one Go program, the `komodo` binary. Its 12 `internal` packages each own one layer; a package is a folder of Go code.
 
-**In plain terms.** This is the repo's folder tree, one line per file. A builder opens it to find where a component's code goes, and a reviewer uses it to spot a file in the wrong place. `_test.go` files sit next to their sources and are left out. The runtime state trees (the `komodo/` folder under the repo's git directory, and `~/.komodo/`) are in [Runtime state ([Component traceability (Appendix Q)](#component-traceability))](#runtime-state), and the files `install` writes into a repo are in [Installer (Appendix M)](#installer).
-
-```
-komodo-agentic-harness-coding/
-├── AGENTS.md                      # source of truth: repo rules + Komodo block
-├── CLAUDE.md                      # @AGENTS.md import only
-├── README.md
-├── CONTRIBUTING.md
-├── CHANGELOG.md                   # release history, started fresh
-├── LICENSE
-├── go.mod                         # stdlib only
-├── komodo.go                      # //go:embed embed templates
-├── install.sh                     # macOS/Linux/WSL
-├── install.ps1                    # native Windows
-├── .github/
-│   └── PULL_REQUEST_TEMPLATE.md
-│
-├── cmd/komodo/
-│   └── main.go                    # calls cli.Run(os.Args)
-│
-├── internal/
-│   ├── cli/
-│   │   ├── cli.go                 # verb table, dispatch, envelope, exit codes, pin check
-│   │   ├── help.go                # help + komodo skill generation
-│   │   ├── work.go                # run, status, stop, resume, abandon
-│   │   ├── plan.go                # plan, skill, scope
-│   │   ├── jobs.go                # jobs
-│   │   ├── setup.go               # install, uninstall, fresh, doctor, sync, version
-│   │   ├── config.go              # config
-│   │   ├── repo.go                # add, gate, release, cache
-│   │   └── internal.go            # internal tools|fresh-bg
-│   │
-│   ├── engine/                    # Orchestration
-│   │   ├── engine.go              # Drive: loop over Next()
-│   │   ├── stage.go               # 5 stages + Paused, Blocked; epochs; pure Next()
-│   │   ├── intake.go              # lint, hash card, lease, cut worktree from the epic tip
-│   │   ├── build.go               # one session per task; resume it with findings
-│   │   ├── verify.go              # reviewer and tester at once; cancel the tester on the first verified finding
-│   │   ├── pool.go                # session pool, floor, ceiling
-│   │   ├── queue.go               # work queue files, pick order, fair share
-│   │   ├── worktree.go            # detached cut, sweep, lease
-│   │   ├── shutdown.go            # catch-all shutdown, parent guard
-│   │   ├── session.go             # spawn, heartbeat, warn, nudge, kill
-│   │   ├── schedule.go            # tick, counters, overlap
-│   │   ├── limits.go              # retries, returns, flap, block reasons
-│   │   └── recover.go             # startup sweep; crash resume through group state's Load
-│   │
-│   ├── quality/                   # Quality; sessions come in from the engine
-│   │   ├── check.go               # done_when, scope, secrets, coverage
-│   │   ├── review.go              # lenses, profiles, re-review delta
-│   │   ├── qa.go                  # tester: acceptance items, own worktree
-│   │   └── evidence.go            # verify a finding against the diff
-│   │
-│   ├── host/                      # Interface: this machine
-│   │   ├── probe.go               # probe claude, codex, endpoints, keys, sandbox
-│   │   ├── install.go             # binary, AGENTS.md block, CLAUDE.md, manifest
-│   │   ├── claude.go              # .claude/settings.json: allow rule, SessionStart hook
-│   │   ├── codex.go               # Codex detection
-│   │   ├── fresh.go               # background check, fetch, verify, versioned swap, cleanup
-│   │   ├── schedule.go            # install --schedule: launchd, cron, Task Scheduler
-│   │   └── doctor.go              # drift, hook self-test, sandbox, PATH
-│   │
-│   ├── repo/                      # Delivery
-│   │   ├── backlog.go             # grammar, parse, edit
-│   │   ├── lint.go                # backlog check (doctor backlog), sizing, EARS shape
-│   │   ├── graph.go               # dependency DAG from touches, waves, longest chain
-│   │   ├── repomap.go             # symbol graph, rank, fit to budget
-│   │   ├── ship.go                # PR body, push, group PR, land per ship.mode
-│   │   ├── git.go                 # git wrapper
-│   │   ├── pr.go                  # gh wrapper
-│   │   ├── release.go             # version, tag, binaries, checksums, signature
-│   │   └── gate.go                # gate, docs drift, comment lint, component map
-│   │
-│   ├── provider/                  # Model I/O
-│   │   ├── provider.go            # interface, chain, usage
-│   │   ├── billing.go             # cost class per link, fail closed
-│   │   ├── loop.go                # harness tool loop + schema revalidation
-│   │   ├── claude.go              # claude -p, stream-json
-│   │   ├── codex.go               # stub refusal until a later minor
-│   │   ├── anthropic.go           # Messages API, cache_control
-│   │   └── openai.go              # OpenAI API + http: endpoints (local or server)
-│   │
-│   ├── tools/                     # Model I/O
-│   │   ├── tools.go               # registry, bind tools to a session
-│   │   ├── mcp.go                 # stdio MCP server
-│   │   ├── files.go               # read, search, edit, write, repeat-read dedupe
-│   │   ├── run.go                 # run
-│   │   ├── git.go                 # diff, git_read
-│   │   ├── submit.go              # submit_finding, lint_backlog, the final result call
-│   │   └── extra.go               # skill, web
-│   │
-│   ├── ops/                       # Economy and ops
-│   │   ├── budget.go              # group wall, tokens, mode
-│   │   ├── ledger.go              # sessions, events, redaction
-│   │   ├── bus.go                 # in-order delivery to the 3 subscribers
-│   │   └── wake.go                # status --wait wakes
-│   │
-│   ├── agent/                     # Model I/O and Context
-│   │   ├── agent.go               # agent.json and job template structs, strict load, tighten merge
-│   │   ├── skills.go              # index, select, get, sections
-│   │   ├── rules.go               # orchestrator rules into the AGENTS.md block
-│   │   ├── render.go              # codes and facts to text, per output.profile
-│   │   ├── brief.go               # slots, stable prefix, caps
-│   │   └── trim.go                # clip, signatures, diff trim, sanitize
-│   │
-│   ├── safety/                    # Safety
-│   │   ├── guard.go               # Check → allow | refuse, fail-closed, refusal limit
-│   │   ├── rows.go                # G, R, B, O rows + policy.json
-│   │   ├── paths.go               # containment, symlinks, secret files
-│   │   ├── shell.go               # tokenize, chains, git classifier
-│   │   ├── table.go               # guard table for the gate
-│   │   ├── proc.go                # run, timeout, output cap, heartbeat
-│   │   ├── proc_unix.go           # process groups
-│   │   ├── proc_windows.go        # Job Objects
-│   │   ├── sandbox.go             # interface, profile from agent.json
-│   │   ├── sandbox_darwin.go      # seatbelt
-│   │   ├── sandbox_linux.go       # bwrap
-│   │   └── sandbox_docker.go      # Docker, native Windows
-│   │
-│   ├── state/                     # the state manager: the only door to runtime state
-│   │   ├── manager.go             # Get, List, Tail, Watch, Append, Replace, Claim, Remove
-│   │   ├── groupstate.go          # group state: events, snapshots, replay; Open, Append, Snapshot, Load, Tail
-│   │   ├── schema.go              # kind registry and record envelope; generates state.schema.json
-│   │   ├── kinds.go               # one struct per kind, the event catalog included
-│   │   ├── validate.go            # types, enums, invariants, owner and rev checks
-│   │   └── migrate.go             # read older schema versions, move bad records aside
-│   │
-│   └── core/                      # plumbing, no domain logic
-│       ├── config.go              # config.json, groups, hard limits, audit log
-│       ├── detect.go              # repo profile + command classes
-│       ├── http.go                # client, SSE, retry, allowlist, redaction
-│       ├── cache.go               # content-addressed store, LRU
-│       ├── lock.go                # create-only and rename-aside file helpers; only `state` calls them
-│       ├── version.go             # embedded version, semver
-│       ├── fs.go                  # atomic writes, glob
-│       └── testhome.go            # isolated HOME for tests
-│
-├── embed/                         # compiled into the binary; everything a model reads
-│   ├── agents/
-│   │   └── {builder,reviewer,planner,tester,architect,researcher,scout}/{agent.json, prompt.md}
-│   ├── jobs/                      # job templates (none shipped by default)
-│   ├── rules/                     # orchestrator.md; backlog.md
-│   ├── output/                    # {adhd,standard}/*.tmpl and *.golden, adhd.md for the AGENTS.md block
-│   ├── lenses/                    # <lens>.json rule catalog + <lens>.md body, 10 lenses
-│   ├── langs/                     # per-language definition patterns for the repo map
-│   ├── skills/
-│   │   ├── index.json             # generated at build: name, globs, markers, sections, sha256
-│   │   ├── {komodo,plan,run,respond,release}/SKILL.md
-│   │   └── standards-<name>/SKILL.md            # all 34
-│   ├── defaults.json              # built-in defaults + hard limits
-│   ├── state.schema.json          # generated at build from the kind registry and event enum
-│   ├── models.json                # default models per weight and link, Claude windows
-│   └── policy.json                # guard rows with scopes, steering phrases
-│
-├── templates/
-│   ├── project/{AGENTS.md, CHANGELOG.md, PULL_REQUEST_TEMPLATE.md, docs/{prd,hld,lld}.md}.tmpl
-│   ├── claude/{CLAUDE.md, settings.json}.tmpl
-│   └── jobs/nightly-review.json   # example
-│
-├── dashboard/                     # proof of concept, design open (G-27)
-│   ├── dashboard.go               # loopback server, htmx fragments, event stream, model picker
-│   ├── assets/{htmx.min.js, diagram.js}   # embedded htmx 2.0.11; pipeline pointers
-│   ├── testdata/groups.json       # mock groups view
-│   └── poc/main.go                # go run ./dashboard/poc, moves mock groups every 2 s
-│
-├── docs/
-│   ├── prd.md  hld.md  lld.md     # lld has one section per component
-│   ├── decisions/{README.md, 0001-standalone-harness.md}
-│   └── backlog/epic-1/{EPIC.md, tg-1.N/{TG.md, tsk-*.md}}
-│
-└── testdata/fixture-repo/         # end-to-end run target
-```
-
-**What each one does**
-- **Root files:** `AGENTS.md` is the source of truth for repo rules, and `CLAUDE.md` only imports it. `go.mod` uses the Go standard library only, and `komodo.go` embeds the `embed/` and `templates/` folders into the binary. `install.sh` and `install.ps1` are the installers for macOS, Linux and WSL, and for native Windows.
-- **`cmd/komodo/` and `internal/`:** All Go code, one folder per package from the table above.
-- **`embed/`:** Everything a model reads: agent definitions, job templates, rules, output templates, review lenses, per-language repo-map patterns, skills, and the JSON files for defaults, state schema, models and policy ([Embedded assets (`embed/`, compiled into the binary) (Appendix A)](#embedded-assets-embed-compiled-into-the-binary)).
-- **`templates/`:** Files that `install` copies into a user's repo: the project docs and PR template, the `CLAUDE.md` and `.claude/settings.json` pair, and one example job.
-- **`dashboard/`:** A proof of concept for an opt-in browser dashboard, built on mock data. It shows each group's stage on a moving pipeline diagram and offers resume and per-agent model controls that are only recorded, not applied. Its design is open under G-27, so nothing else imports it.
-- **`docs/`:** The PRD, HLD and LLD (the LLD has one section per component), the decision records, and `docs/backlog/epic-1/`, the task groups that build each component.
-- **`testdata/fixture-repo/`:** The small repo that end-to-end runs build against.
-Rules: a file splits at about 600 lines; a new package needs a new layer; `_test.go` files sit next to their sources. About 90 files in 12 packages.
-
-#### Import order
-
-**In plain terms.** An import is one package using another. Komodo allows imports in one direction only, from the list's left to its right, so there are no cycles and the plumbing never depends on the interface. When a low package needs something from a higher one, the higher one passes it in as a function argument. The gate, Komodo's self-check, refuses any import that points the wrong way.
-
-`cli` → `engine` → `quality` → `host` → `repo` → `provider` → `tools` → `ops` → `agent` → `safety` → `state` → `core`. A package may skip levels. Higher needs come in as parameters. The gate refuses any import that points up.
-
-**What each one does**
-- **The order:** `cli` sits at the top and `core` at the bottom. A package may import anything to its right in the list and nothing to its left.
-- **Skipping levels:** `cli` may import `core` directly; it need not go through every package between.
-- **`state` just above `core`:** Every package that keeps state calls the state manager, and the manager needs only `core`'s atomic file writes. So it sits second from the bottom, below every caller. Configuration code in `core` never imports `state`; the `config` verb in `cli` writes the config audit rows.
-- **Higher needs as parameters:** When `quality` needs to start a model session (an `engine` job), the engine hands it a session runner function. The same applies to Check in `repo`, backlog lint in `tools` and filled slots in `agent`.
-- **The gate check:** `komodo gate` reads every import and fails the build when one points up the list.
-
-#### Embedded assets (`embed/`, compiled into the binary)
-
-**In plain terms.** The `embed/` folder holds every text and data file that a model or the engine reads: agent prompts, skills, lenses, templates, defaults and policy. All of it is compiled into the `komodo` binary, so the running program never reads these from disk. That means a file planted on a machine cannot change what a worker sees. A builder edits these files in the repo; the gate checks the generated ones match their sources.
-
-| Path | Contents |
-|---|---|
-| `agents/<name>/{agent.json, prompt.md}` | Seven agents: builder, reviewer, planner, tester, architect, researcher, scout |
-| `jobs/` | Job templates (none shipped by default) |
-| `rules/orchestrator.md`, `rules/backlog.md` | Orchestrator rules; backlog grammar rules |
-| `output/{adhd,standard}/*.tmpl, *.golden`, `output/adhd.md` | Templates and golden fixtures (stored expected output that a test compares against) per profile; the style text for the `AGENTS.md` block |
-| `lenses/<lens>.json, <lens>.md` | Ten rule catalogs and bodies |
-| `langs/<lang>.json` | Per-language definition patterns for the repo map |
-| `skills/index.json`, `skills/<name>/SKILL.md` | Generated index with SHA-256 (a standard content fingerprint) per skill; 5 workflow skills plus 34 `standards-*` |
-| `defaults.json` | Built-in defaults and hard limits |
-| `state.schema.json` | Generated at build from the state manager's kind registry, the event enum included |
-| `models.json` | Default models per weight and link, Claude windows and prices |
-| `policy.json` | Guard rows with scopes, steering phrases |
-
-**What each one does**
-- **`agents/<name>/{agent.json, prompt.md}`:** One folder per model worker. `agent.json` is what Go reads: tools, skills, weight, retries. `prompt.md` is the role text the model reads. Seven exist: builder, reviewer, planner, tester, architect, researcher, scout.
-- **`jobs/`:** Templates for scheduled jobs, each naming an agent subset, brief slots and an interval. None ship yet; one example lives under `templates/jobs/`.
-- **`rules/orchestrator.md`, `rules/backlog.md`:** The orchestrator rules (O1 to O7, O9, O10) that `install` writes into the `AGENTS.md` block, and the grammar of the backlog files that `doctor backlog` enforces.
-- **`output/{adhd,standard}/*.tmpl, *.golden`, `output/adhd.md`:** The Go templates that turn codes and facts into the text a person reads, one set per output profile (`adhd` or `standard`). The `.golden` files are expected outputs the gate compares byte for byte. `adhd.md` is the style text placed in the `AGENTS.md` block.
-- **`lenses/<lens>.json, <lens>.md`:** The reviewer's ten rule catalogs. The `.json` holds rule IDs, severities and file scopes; the `.md` holds the rule bodies the reviewer reads.
-- **`langs/<lang>.json`:** Patterns that find functions, types and classes in each language, so the repo map can rank symbols for the planner without a parser library.
-- **`skills/index.json`, `skills/<name>/SKILL.md`:** The standards documents a worker gets. The index is generated at build with a SHA-256 hash (a content fingerprint) per skill, and the loader refuses a body whose hash changed. There are 5 workflow skills (`komodo`, `plan`, `run`, `respond`, `release`) and 34 `standards-*` skills.
-- **`defaults.json`:** Every config key's built-in default and hard limit. `komodo config --help` lists keys from this one schema.
-- **`state.schema.json`:** The one state schema: every record kind and every event type, generated at build from the state manager's Go structs. `help --json` serves it as `state`, and it is also the export format for the ledger.
-- **`models.json`:** The default model for each weight (heavy, standard, light) on each link, with Claude context windows and prices. Used when the Anthropic Models API cannot be reached.
-- **`policy.json`:** The guard rows (G, R, B, O) with the agents each applies to, plus the steering phrases that `gate` and `doctor` scan for.
-
-#### Runtime state
-
-**In plain terms.** Komodo writes its working files in two places, never inside the repo's tree. Per-repo state goes under the repo's git folder in `komodo/`; machine-wide state goes under `~/.komodo/`. Both are left out of git. Every file below except the 6 exclusions in [Outside the manager (chapter 13)](#13-state-manager) is read and written only through the state manager ([State manager (chapter 13)](#13-state-manager)), on behalf of its listed writers. Knowing these paths lets an operator find a state file, a lease or a session's output when a run goes wrong.
-
-```
-<git-common-dir>/komodo/
-├── install.json                               # manifest v1
-├── runs/<run>.jsonl                           # run events, through group state
-├── runs/<group-id>/{events.jsonl, state.json}    # group state: events and snapshot
-├── jobs/state.json                            # job counters
-├── sessions/<id>/{brief.md, request.json, stream.jsonl, messages.jsonl, result.json, out/}
-├── ledger/{sessions.jsonl, events.jsonl, tasks.json, groups.json}
-└── cache/{skills,context,checks,review,setup,map}/   # 256 MB LRU per repo
-
-~/.komodo/                                     # %LOCALAPPDATA%\komodo on Windows
-├── config.json                                # after the first `komodo config` write
-├── release.key                                # ed25519 private key, mode 0600, owner's machine only
-├── bin/komodo                                 # current version copy
-├── versions/<v>/komodo                        # every installed version
-├── jobs/*.json                                # job templates
-├── leases/<repo-id>/<group-id>.{json,fence}      # lease table with fences
-├── wt/<repo-id>/<group>/                      # worktrees
-├── cache/lang/<repo-id>/                      # language caches per repo
-└── state/{providers.json, quota.json, pool/, links/, queue/, timers/, wake/, events/, fresh.json, fresh.lock, fresh.log, active/, config.log, config.sha}
-```
-
-**What each one does**
-- **`<git-common-dir>/komodo/`:** The repo's own state folder, inside the git directory that every worktree of the repo shares. Nothing here is committed.
-- **`install.json`:** The install manifest, version 1: one row per file or settings entry that `install` owns, with its hash and the step that wrote it. `install` diffs against it and `uninstall` reads it in reverse.
-- **`runs/<run>.jsonl`:** The run state: the `run.*` events for one `komodo run` launch, one JSON line each. Group state writes it with the same `Append` and `Tail`, with no snapshot.
-- **`runs/<group-id>/{events.jsonl, state.json}`:** The group state and its snapshot, kept together by group state. Every event is appended and synced to `events.jsonl` before it is applied. `state.json` holds the last sequence number, the config hash and the resume handle; `Snapshot` rewrites it every 50 events or on a stage change, and `resume` replays from it through `Load`.
-- **`jobs/state.json`:** Counters for scheduled jobs: `attempt`, `next_at`, `last_fail_hash` and `running`.
-- **`sessions/<id>/{brief.md, request.json, stream.jsonl, messages.jsonl, result.json, out/}`:** One folder per model session. `brief.md` is the prompt it received; `request.json` records the spawn; `stream.jsonl` is the model's output stream; `messages.jsonl` saves API-link turns for resume; `result.json` holds the exit reason and result; `out/` keeps full tool outputs that were cut to 4 KB in the reply.
-- **`ledger/{sessions.jsonl, events.jsonl, tasks.json, groups.json}`:** Read-only records for `status`. `sessions.jsonl` has one row per session (agent, model, exit reason, and tokens and USD only when `track.usage` is on). `events.jsonl` copies every group's events. `tasks.json` and `groups.json` are the lock-table views that answer "who holds what".
-- **`cache/{skills,context,checks,review,setup,map}/`:** The per-repo cache store, 256 MB, least recently used out first. Each kind is named by what it caches: skill bodies, repo context, Check results, review findings, dependency setup results, the repo map.
-- **`~/.komodo/`:** The machine-wide folder, shared by every repo on the machine. On Windows it is `%LOCALAPPDATA%\komodo`.
-- **`config.json`:** The one settings file. It does not exist until the first `komodo config` write; before that, built-in defaults apply.
-- **`release.key`:** The private ed25519 key that signs releases. It exists only on the owner's machine, readable by the owner alone (mode 0600).
-- **`bin/komodo`:** A copy of the current version. The PATH entry and the Claude hook point here, and `fresh` swaps it atomically.
-- **`versions/<v>/komodo`:** Every installed version, kept whole. A live run starts all its child processes from its own version folder, so an update never changes a run mid-way.
-- **`jobs/*.json`:** The person's own job templates, decoded the same strict way as `agent.json`.
-- **`leases/<repo-id>/<group-id>.{json,fence}`:** One lock file per group saying which run owns it, plus the fence (a counter that rises on every takeover and that every git write carries). The OS lets exactly one run create the `.json`.
-- **`wt/<repo-id>/<group>/`:** The detached git worktrees, one per group, where the builder edits files. Kept outside every clone so no path contains `.git`.
-- **`cache/lang/<repo-id>/`:** Komodo's own language caches (Go, npm, cargo, pip) per repo, never the person's. Capped by `sandbox.lang_cache_gb`; `cache clear --kind lang` removes it.
-- **`state/providers.json`:** The provider probe result: which links work, their exact model IDs and measured context. Refreshed by `install`, `doctor` and `fresh`.
-- **`state/quota.json`:** Reset timers from provider limits, so every repo on the machine skips a paused link until it resets.
-- **`state/timers/`:** One timer record per paused group, `<repo-id>.<group>.json`, holding `wait_until` (the latest reset time among its halted sessions, plus 1 min) and `wait_link`, written with `Replace` and removed when fired. The live engine, the startup sweep, `jobs tick` or `status` fires it when it is due; the ledger row keeps a copy for display.
-- **`state/pool/`, `state/links/`:** Lock files for the machine-wide session pool slots and the per-link slots. A slot is freed when its process dies.
-- **`state/queue/`:** The work queue: one create-only file per ready group or due job. Taking a slot deletes the file and writes the lease, in that order.
-- **`state/wake/`:** Wake files. The engine touches `wake/<run>` on a waking event, and `status --wait` watches that file.
-- **`state/fresh.json`, `fresh.lock`, `fresh.log`:** The self-updater's records: the latest known release, the lock that allows one updater at a time (stale after 10 min), and the silent failure log.
-- **`state/active/`:** Which versions live runs are using, so cleanup never deletes one in use.
-- **`state/config.log`, `config.sha`:** The config audit log (one row per changed key: time, batch, key, old and new value) and the SHA-256 of `config.json`. A hand edit breaks the hash and every verb refuses until `config --accept`.
-
-**Examples**
-
-A queue item as it sits in state/queue: a ready group waiting for a free session slot, under the six-field record header. The header-and-body layout shown is illustrative; G-30 keeps it open.
-
-```json
-{
-  "v": 1,
-  "kind": "queue",
-  "key": "<repo-id>.group.0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-  "rev": 1,
-  "ts": "[UNKNOWN: not yet designed]",
-  "writer": "[UNKNOWN: not yet designed]",
-  "body": {
-    "kind": "group",
-    "repo": "github.com/rdevitto86/komodo-agentic-harness-coding",
-    "id": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-    "priority": "normal",
-    "enqueued_at": "[UNKNOWN: not yet designed]"
-  }
-}
-```
-
-The self-updater's fresh.json: the newest release Komodo has seen, under the six-field record header. The header-and-body layout shown is illustrative; G-30 keeps it open.
-
-```json
-{
-  "v": 1,
-  "kind": "fresh",
-  "key": "[UNKNOWN: not yet designed]",
-  "rev": 2,
-  "ts": "[UNKNOWN: not yet designed]",
-  "writer": "[UNKNOWN: not yet designed]",
-  "body": {
-    "latest": "1.0.0-beta.6"
-  }
-}
-```
-
-#### Where data lives
-
-**In plain terms.** This table is the map of every location Komodo uses. "Committed" means the file is stored in the repository's git history and shared with the team; "No" means it stays on one machine. The split matters: committed files are rules and the backlog, while machine files hold state, timers and caches that must never ship. A person sees the committed files in the repo; the engine writes the rest.
-
-| Location | Contents | Committed |
-|---|---|---|
-| `<repo>/AGENTS.md` | Repo rules plus the Komodo block (`komodo:begin min=<version>` … `komodo:end`) | Yes |
-| `<repo>/CLAUDE.md` | `@AGENTS.md` import line | Yes |
-| `<repo>/.claude/settings.json` | Two entries only: the `Bash(komodo *)` allow rule and a `SessionStart` hook running `komodo status` | Yes |
-| `<repo>/docs/backlog/epic-N/tg-N.M/` | `TG.md` and `tsk-*.md`, the backlog grammar | Yes |
-| `<git-common-dir>/komodo/` | Install manifest, run and group states, snapshots, job state, session files, ledgers, cache | No |
-| `~/.komodo/config.json` | The one config file, created on the first `komodo config` write | No |
-| `~/.komodo/bin/`, `versions/` | Current binary copy and every installed version | No |
-| `~/.komodo/jobs/` | Job templates | No |
-| `~/.komodo/leases/<repo-id>/` | One lease and fence file per group, machine-wide | No |
-| `~/.komodo/wt/<repo-id>/` | Detached worktrees per group | No |
-| `~/.komodo/state/` | Provider probe, quota timers, pause timers, pool and link slots, queue, wake files, fresh state, config hash and audit log | No |
-| `~/.komodo/cache/lang/<repo-id>/` | Komodo's own language caches per repo, never the user's | No |
-
-**What each one does**
-- **`<repo>/AGENTS.md`:** The rules file every AI session in this repo reads. Komodo adds its own block between `komodo:begin` and `komodo:end` markers. The block tells the orchestrator (the Claude Code session that drives Komodo, see Glossary) which verbs to run. It also pins the lowest Komodo version allowed. `komodo install` writes it when run inside a git repo.
-- **`<repo>/CLAUDE.md`:** Claude Code reads this file when it starts. Komodo writes one line, `@AGENTS.md`, so Claude Code loads the rules file above. Written only when Claude is detected on the machine.
-- **`<repo>/.claude/settings.json`:** Claude Code's settings for this repo. Komodo adds two entries. One lets the orchestrator run `komodo` commands without a prompt. The other is a hook that runs `komodo status` whenever a Claude Code session starts. Every other key in the file is left alone.
-- **`<repo>/docs/backlog/epic-N/tg-N.M/`:** The backlog: the planned work, as Markdown files. An epic holds task groups; each group folder holds `TG.md` (the group's goal) and one `tsk-*.md` per task (see Glossary). The planner drafts them and the builder works from them.
-- **`<git-common-dir>/komodo/`:** Komodo's working state for this repository, kept inside the repo's `.git` folder so git never commits it. It holds the install manifest (what install wrote), state files (the append-only event log per group) and snapshots (saved state). It also holds job state, each session's files, the ledgers and the cache. Every file except the cache goes through the state manager; `komodo status` reads it the same way.
-- **`~/.komodo/config.json`:** The only settings file. It does not exist until a person runs `komodo config key=value` for the first time. A hand edit makes every command refuse until `komodo config --accept`.
-- **`~/.komodo/bin/`, `versions/`:** `versions/<v>/` keeps every Komodo version ever installed; `bin/komodo` is a copy of the current one, and PATH points there. A live run keeps using its own version from `versions/` even after an update.
-- **`~/.komodo/jobs/`:** Your scheduled job templates, small JSON files. A job template names which agents run, what they are given and how often. `komodo jobs tick` reads them; none ship by default.
-- **`~/.komodo/leases/<repo-id>/`:** One lock file per task group plus its fence (see Glossary). The lease says "this group is being worked on now"; the fence number stops a stale worker from pushing. One table per machine, so two checkouts of the same repo cannot collide.
-- **`~/.komodo/wt/<repo-id>/`:** The worktrees: a separate checkout of the repo per group where the builder edits files (see Glossary). Kept outside the repo so one session cannot see another's work.
-- **`~/.komodo/state/`:** Machine-wide runtime files shared by every repo, read and written only through the state manager. They include the provider probe result (which model links work), quota timers (when a paused provider resets) and pause timers (when a paused group resumes). They also include pool and link slot locks (how many sessions may run), the work queue, and wake files (what wakes `status --wait`). The rest is update-check state, the config hash and the config audit log.
-- **`~/.komodo/cache/lang/<repo-id>/`:** Build caches for Go, npm, Cargo and pip that Komodo owns, one set per repo. They are separate from your own caches so AI-written code cannot plant files that your own builds would run.
-
-On Windows, `~/.komodo` is `%LOCALAPPDATA%\komodo`.
-
-#### Data flow
-
-**In plain terms.** This diagram shows how a goal becomes merged code and what gets written along the way. Read it top to bottom. The planner turns a goal into backlog files. Then each task group passes through five stages: Intake, Build, Check, Verify and Ship (see Glossary). Every stage records events in a state file, the ledger summarises them, and `komodo status` shows them. Without this picture it is hard to see which step produces which file. The orchestrator starts it with `komodo plan` and `komodo run`; the engine does the rest.
-
+**📐 Which package does what, and which chapters own it**
 ```mermaid
 flowchart TB
-  GOAL["Goal or spec docs"] --> PLANNER["Planner (2 passes) + Go lint"]
-  REPO["Repo: markers, AGENTS.md, symbols"] --> DETECT["Detection: command classes, repo profile"]
-  REPO --> MAP["Repo map (ranked symbol graph)"]
-  MAP --> PLANNER
-  PLANNER --> BACKLOG["docs/backlog/*"]
-  BACKLOG --> INTAKE["Intake: lock the task list (card hash), lease, worktree, setup"]
-  DETECT --> INTAKE
-  CONFIG["~/.komodo/config.json (snapshot hash per run)"] --> INTAKE
-  INTAKE --> BUILD["Build: brief per task; commits on the hidden ref"]
-  SKILLS["Embedded skills, lenses, rules, templates"] --> BUILD
-  BUILD --> CHECK["Check: done_when, scope, secrets, baseline, impact, coverage"]
-  CHECK --> VERIFY["Verify: reviewer findings, tester evidence"]
-  VERIFY --> SHIP["Ship: group branch, group PR, fenced landing"]
-  SHIP --> EPIC["Epic branch, epic PR"]
-  BUILD --> STATEEV[("events.jsonl + state.json, through the state manager")]
-  CHECK --> STATEEV
-  VERIFY --> STATEEV
-  SHIP --> STATEEV
-  STATEEV --> LEDGER[("ledger: sessions, events, tasks, groups")]
-  LEDGER --> STATUS["status, status --wait, status --metrics, run report"]
-  CACHE[("cache: skills, context, checks, review, setup, map")] <--> BUILD
-  CACHE <--> CHECK
-  CACHE <--> VERIFY
+  MAIN["cmd/komodo<br><small>entry · chapter 1</small>"]
+  CLI["internal/cli<br><small>Interface · chapter 1</small>"]
+  ENG["internal/engine<br><small>Orchestration · chapters 2 to 5, 9, 10</small>"]
+  QUAL["internal/quality<br><small>Quality · chapter 9</small>"]
+  HOST["internal/host<br><small>Interface · chapter 12</small>"]
+  REPO["internal/repo<br><small>Delivery · chapters 11, 12</small>"]
+  PROV["internal/provider<br><small>Model I/O · chapter 7</small>"]
+  TOOLS["internal/tools<br><small>Model I/O · chapter 6</small>"]
+  OPS["internal/ops<br><small>Economy and ops · chapters 2, 9, 10</small>"]
+  AGENT["internal/agent<br><small>Model I/O and Context · chapters 5, 8, 10</small>"]
+  SAFETY["internal/safety<br><small>Safety · chapter 6</small>"]
+  STATEPKG["internal/state<br><small>State manager · chapter 13</small>"]
+  CORE["internal/core<br><small>Plumbing · chapters 1, 7, 10, 13</small>"]
+  MAIN -->|"1 cli.Run"| CLI
+  CLI -->|"2 imports"| ENG
+  ENG -->|"3 imports"| QUAL
+  QUAL -->|"4 imports"| HOST
+  HOST -->|"5 imports"| REPO
+  REPO -->|"6 imports"| PROV
+  PROV -->|"7 imports"| TOOLS
+  TOOLS -->|"8 imports"| OPS
+  OPS -->|"9 imports"| AGENT
+  AGENT -->|"10 imports"| SAFETY
+  SAFETY -->|"11 imports"| STATEPKG
+  STATEPKG -->|"12 imports"| CORE
 ```
+**Reading the diagram.** `cmd/komodo` calls `cli.Run`. Each package imports the ones below it; which imports are allowed is in [0.4 Import Order](#04-import-order).
 
-**Reading the diagram.** "Goal or spec docs" is what a person or the orchestrator gives `komodo plan`. Its arrow goes to "Planner (2 passes) + Go lint". The planner agent makes two passes: an epic outline, then one session per group. Go code checks each pass. "Repo: markers, AGENTS.md, symbols" is the repository itself. It feeds "Detection", where Go finds marker files such as `go.mod` and works out which build, test and lint commands exist (the repo profile). It also feeds "Repo map", a ranked list of the code's functions and types, which goes to the planner so it knows the codebase. The planner's output is "docs/backlog/*", the backlog files. Those enter "Intake", which locks the task list by hashing its cards, takes the lease, creates the worktree and runs setup. Detection results and a hash of the config file also enter Intake, so the whole run is pinned to one set of commands and settings. Intake leads to "Build", where a builder session gets one brief per task. The engine commits each result to the hidden ref (a git ref that is never pushed, see Glossary). "Embedded skills, lenses, rules, templates" are documents compiled into the binary: standards, reviewer rule catalogs, orchestrator rules and output templates. They feed every brief. Build goes to "Check" (mechanical checks that cost no tokens), then "Verify" (the reviewer and tester sessions). Verify goes to "Ship" (a group branch and group PR, landed with the fence). Ship goes to "Epic branch, epic PR", the final PR that a person merges. Build, Check, Verify and Ship all write to "events.jsonl + state.json", the group's state events and its snapshot, through the state manager, which checks every record against the one schema. The group state feeds the "ledger" (sessions, events, tasks, groups), which feeds the `status` commands and the run report. The two-way arrows between "cache" and Build, Check and Verify mean those stages both read and write the cache. It holds skills, context, check results, review findings, setup results and the repo map.
+| Package | Holds | Chapters |
+|---|---|---|
+| `cmd/komodo` | One file, `main.go`, calling `cli.Run(os.Args)` | [1](#1-cli-and-configuration) |
+| `internal/cli` | Verb table, dispatch, envelope, exit codes, pin check, help generation, every verb as a thin call | [1](#1-cli-and-configuration) |
+| `internal/host` | Probe, install, Claude and Codex detection, fresh (self-update), operating-system schedule entries, doctor (the health check) | [12](#12-install-binary-lifecycle-and-gate) |
+| `internal/engine` | `Drive` and `Next()`, stages and epochs, intake, build, verify, pool, queue, worktree, shutdown, session, schedule, limits, recover | [2](#2-event-spine-and-state-machine), [3](#3-engine-internals), [4](#4-workspace-and-leases), [5](#5-sessions-agents-and-briefs), [9](#9-check-review-tester-and-recovery), [10](#10-scheduler-cache-and-observability) |
+| `internal/quality` | Check, review, tester, evidence | [9](#9-check-review-tester-and-recovery) |
+| `internal/repo` | Backlog, lint (an automatic rule check), graph, repo map, ship, git, pull request, release, gate | [11](#11-backlog-planning-ship-and-release), [12](#12-install-binary-lifecycle-and-gate) |
+| `internal/provider` | Provider interface, billing, harness tool loop, Claude CLI, Codex stub, Anthropic API, OpenAI-compatible servers | [7](#7-providers-and-http) |
+| `internal/tools` | Tool registry, Model Context Protocol server, file tools, run, git read, submit tools, skill and web | [6](#6-tools-guard-and-sandbox) |
+| `internal/ops` | Budget, ledger, bus, wake | [2](#2-event-spine-and-state-machine), [9](#9-check-review-tester-and-recovery), [10](#10-scheduler-cache-and-observability) |
+| `internal/agent` | Agent and job template structs, skills, rules, render, brief (a worker's prompt from 20 slots), trim | [5](#5-sessions-agents-and-briefs), [8](#8-skills-rules-and-output), [10](#10-scheduler-cache-and-observability) |
+| `internal/safety` | Guard, rows, paths, shell, guard table, process control, sandboxes | [6](#6-tools-guard-and-sandbox) |
+| `internal/state` | Manager API, group state, kind registry and envelope, kinds, validation, migrations | [13](#13-state-manager) |
+| `internal/core` | Config, detect, HTTP, cache, create-only and rename-aside file helpers (only `state` calls them), version, fs, test home | [1](#1-cli-and-configuration), [7](#7-providers-and-http), [10](#10-scheduler-cache-and-observability), [13](#13-state-manager) |
 
----
+#### Code rules
 
+- **Standard library only:** `go.mod` lists no modules.
+- **One package per layer:** a new package needs a new layer.
+- **File size:** a file splits at about 600 lines. About 90 files in 12 packages.
+- **Tests:** `_test.go` files sit next to their sources.
+
+#### Top-level layout
+
+| Path | Holds | Chapter |
+|---|---|---|
+| `AGENTS.md`, `CLAUDE.md` | `AGENTS.md` is the source of truth for repository rules; `CLAUDE.md` holds only the `@AGENTS.md` import | [12](#12-install-binary-lifecycle-and-gate) |
+| `go.mod`, `komodo.go` | `go.mod` uses the standard library only; `komodo.go` embeds `embed/` and `templates/` with `//go:embed` | [0.5](#05-embedded-assets) |
+| `install.sh`, `install.ps1` | The first-install scripts: `install.sh` for macOS, Linux and Windows Subsystem for Linux, `install.ps1` for native Windows | [12](#12-install-binary-lifecycle-and-gate) |
+| `cmd/komodo/`, `internal/` | All Go code, one folder per package in the table above | [0.3](#03-package-map) |
+| `embed/` | Everything a model reads, compiled into the binary | [0.5](#05-embedded-assets) |
+| `templates/` | Files `install` copies into a user's repository: project documents and the pull request template, the `CLAUDE.md` and `.claude/settings.json` pair, one example job under `templates/jobs/` | [12](#12-install-binary-lifecycle-and-gate) |
+| `dashboard/` | A proof of concept of an opt-in browser dashboard on mock data: `dashboard.go` (loopback server), `assets/` (embedded htmx 2.0.11, pipeline pointers), `testdata/groups.json`, `poc/main.go` (`go run ./dashboard/poc`, moves mock groups every 2 s). Nothing imports it. [TODO: the dashboard design: stack, the `komodo ui` verb, live model changes and the "no server process" exception (G-27)] | none |
+| `docs/` | `docs/prd.md` and `docs/decisions/0001-standalone-harness.md` (not yet written), `docs/hld.md`, `docs/lld.md`, and `docs/backlog/epic-1/`, the task groups that build each component | [11](#11-backlog-planning-ship-and-release) |
+| `testdata/fixture-repo/` | The small repository that end-to-end runs build against | [15](#15-verification-operations-and-cutover) |
+
+### 0.4 Import Order
+
+An import is one package using another. Packages import in one direction only, so no import cycle exists and the plumbing never depends on the interface. The reasons for the layering are in [HLD 5.1](hld.md#51-layers-and-import-order).
+
+`cli` → `engine` → `quality` → `host` → `repo` → `provider` → `tools` → `ops` → `agent` → `safety` → `state` → `core`
+
+- **The rule:** a package may import any package to its right in the line above and none to its left. A package may skip levels: `cli` may import `core` directly.
+- **Higher needs as parameters:** when a lower package needs something from a higher one, the higher one passes it in as a function argument. When `quality` needs to start a model session (an `engine` job), the engine hands it a session runner function. The same applies to Check in `repo`, backlog lint in `tools` and filled slots in `agent`.
+- **Why `state` sits just above `core`:** every package that keeps state calls the state manager, and the manager needs only the atomic file writes of `core`. `core` never imports `state`; the `config` verb in `cli` writes the configuration audit rows.
+- **Enforcement:** `komodo gate` reads every import and fails the build when one points up the line.
+
+**📐 Which imports are allowed**
+```mermaid
+flowchart TB
+  ENG["engine"]
+  QUAL["quality"]
+  STATEPKG["state"]
+  CORE["core"]
+  ENG -->|"1 allowed"| QUAL
+  QUAL -->|"2 allowed"| STATEPKG
+  STATEPKG -->|"3 allowed"| CORE
+  ENG -.->|"4 skip, allowed"| CORE
+  QUAL -.->|"5 upward, refused"| ENG
+```
+**Reading the diagram.** Arrows 1 to 3 import the next package down. Arrow 4 skips levels, which is allowed. Arrow 5 points up the line, so `komodo gate` fails the build.
+
+### 0.5 Embedded Assets
+
+The `embed/` folder holds every text and data file a model or the engine reads. All of it is compiled into the binary with `//go:embed`, and nothing is parsed from disk at run time, so a file planted on a machine cannot change what a worker sees.
+
+- **Strict decoding:** every JSON file the binary reads from its own assets uses `DisallowUnknownFields` and carries a schema version `v`. An unknown field or an old shape fails loudly.
+- **Generated files:** `skills/index.json` and `state.schema.json` are generated at build; the gate checks that generated files match their sources, and compares each `.golden` file byte for byte with the rendered template.
+
+| Path | Contents | Chapter |
+|---|---|---|
+| `agents/<name>/{agent.json, prompt.md}` | Seven agents: builder, reviewer, planner, tester, architect, researcher, scout. `agent.json` is what Go reads; `prompt.md` is the role text the model reads | [5](#5-sessions-agents-and-briefs) |
+| `jobs/` | Job templates (none shipped by default) | [10](#10-scheduler-cache-and-observability) |
+| `rules/orchestrator.md`, `rules/backlog.md` | Orchestrator rules; backlog grammar rules | [8](#8-skills-rules-and-output), [11](#11-backlog-planning-ship-and-release) |
+| `output/{adhd,standard}/*.tmpl, *.golden`, `output/adhd.md` | Templates and golden fixtures (stored expected output that a test compares against) per profile; the style text `adhd.md` for the `AGENTS.md` block | [8](#8-skills-rules-and-output) |
+| `lenses/<lens>.json, <lens>.md` | Ten rule catalogs and bodies | [9](#9-check-review-tester-and-recovery) |
+| `langs/<lang>.json` | Per-language definition patterns for the repo map | [11](#11-backlog-planning-ship-and-release) |
+| `skills/index.json`, `skills/<name>/SKILL.md` | Generated index with SHA-256 (a standard content fingerprint) per skill; 5 workflow skills plus 34 `standards-*` | [8](#8-skills-rules-and-output) |
+| `defaults.json` | Built-in defaults and hard limits; `komodo config --help` lists keys from this one schema | [1](#1-cli-and-configuration) |
+| `state.schema.json` | Generated at build from the state manager's kind registry, the event enum included | [13](#13-state-manager) |
+| `models.json` | Default models per weight and link, Claude windows and prices | [7](#7-providers-and-http) |
+| `policy.json` | Guard rows with scopes, steering phrases | [6](#6-tools-guard-and-sandbox) |
 
 ## 1. CLI and Configuration
 
@@ -1803,7 +1320,7 @@ type Payload interface{ EventType() Type }
 | `version` | Envelope version, 1 |
 | `sequence` | Checked on every append and every replay, so a missing line is detected |
 | `timestamp` | When the engine saw the fact, written in the format `2026-10-11T15:31:00Z`; never a model's claim |
-| `run`, `group`, `session` | Universally unique identifiers ([Naming and identifiers (Appendix A)](#naming-and-identifiers)) |
+| `run`, `group`, `session` | Universally unique identifiers ([Naming and identifiers (Appendix A)](#02-naming-and-identifiers)) |
 | `stage` | `intake`, `build`, `check`, `verify`, `ship`, `paused`, `blocked` or `done`; required on group events, forbidden on `run.*` and `job.*`; lets `status` and the ledger group events by stage without replaying |
 | `epoch`, `stale` | `Drive` alone sets `stale`, because `Drive` holds the current epoch; a stale event is written and ignored by `Next()` ([Behaviour](#25-behaviour)) |
 | `type`, `reason`, `data` | `type` picks the one `data` struct allowed, so a `session.end` line can only carry a `session.end` body |
@@ -5433,7 +4950,7 @@ Runtime files this chapter reads or writes:
 | Checking a link at `install`, `doctor` and `fresh` | `Provider.Probe` |
 | Any network request | `Client.Do`, `Client.Stream` in `internal/core/http.go` |
 
-The import order lets `provider` import `tools`, `ops`, `agent`, `safety`, `state` and `core`, and nothing above. `internal/core` therefore cannot import `provider` types: the HTTP client returns its own `LimitSignal` and `provider` converts it ([Import order](#import-order)).
+The import order lets `provider` import `tools`, `ops`, `agent`, `safety`, `state` and `core`, and nothing above. `internal/core` therefore cannot import `provider` types: the HTTP client returns its own `LimitSignal` and `provider` converts it ([Import order](#04-import-order)).
 
 ### 7.3 Data Model
 
@@ -12378,6 +11895,201 @@ Fixtures use a temporary directory per test; no case needs a live provider.
 | G-151 | Shapes of `ledger/groups.json` and `tasks.json`; locking of machine-shared ledger files |
 | G-190 | The `Watch` method and its result type name |
 | G-197 | Owner confirmation of the four defaults, performance and caching |
+
+## 14. Data Locations and Data Flow
+
+Every file Komodo writes while it runs, where each lives, and how data moves between subsystems. Each file's layout is owned by one subsystem chapter and linked here, not repeated. The reasons for the layout are in [HLD 7](hld.md#7-deployment) and [HLD 6](hld.md#6-runtime).
+
+### 14.1 Runtime State
+
+Komodo writes its working files in two places and never inside the repository's tree. Per-repository state goes in a `komodo/` folder under `<git-common-dir>/komodo/`, in the git directory that every worktree of the repository shares. Machine-wide state goes under `~/.komodo`, which is `%LOCALAPPDATA%\komodo` on Windows.
+
+Every file below is read and written only through the state manager ([13. State Manager](#13-state-manager)), on behalf of its listed writers, except six items that keep their own owners' rules:
+
+- `config.json`, the settings file, written only by `komodo config` ([1. CLI and Configuration](#1-cli-and-configuration)).
+- `cache/`, derived data keyed by the hash of its inputs ([10. Scheduler, Cache and Observability](#10-scheduler-cache-and-observability)).
+- Git refs and the worktrees under `wt/` ([4. Workspace and Leases](#4-workspace-and-leases)).
+- Job templates, `~/.komodo/jobs/*.json`, which a person writes ([10. Scheduler, Cache and Observability](#10-scheduler-cache-and-observability)).
+- `bin/`, `versions/` and `release.key` ([12. Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)).
+- Session temp, each session's private `HOME` and `TMPDIR` inside the sandbox ([6. Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)).
+
+#### Repository state: `<git-common-dir>/komodo/`
+
+Nothing here is committed.
+
+| Path | Holds | Format and owner |
+|---|---|---|
+| `install.json` | The install manifest, version 1: one row per file or settings entry `install` owns, with its hash and the step that wrote it | [12.3](#123-data-model) |
+| `runs/<run>.jsonl` | The `run.*` events of one `komodo run` launch, one JSON line each; group state writes it with the same `Append` and `Tail`, with no snapshot | [2.3](#23-data-model) |
+| `runs/<group-id>/{events.jsonl, state.json}` | A group's events and its snapshot. `state.json` holds the last sequence number, the config hash and the resume handle; `Snapshot` rewrites it every 50 events or on a stage change, and `resume` replays from it through `Load` | [2.3](#23-data-model) |
+| `jobs/state.json` | Counters per scheduled job: `attempt`, `next_at`, `last_fail_hash`, `running` | [10.3](#103-data-model) |
+| `sessions/<id>/{brief.md, request.json, stream.jsonl, messages.jsonl, result.json, out/}` | One folder per model session: `brief.md` is the prompt it received, `request.json` records the spawn, `stream.jsonl` is the model's output stream, `messages.jsonl` saves API-link turns for resume, `result.json` holds the exit reason and result, and `out/` keeps full tool outputs that were cut to 4 KB in the reply | [5.3](#53-data-model) |
+| `ledger/{sessions.jsonl, events.jsonl, tasks.json, groups.json}` | Read-only records for `status`: `sessions.jsonl` has one row per session, `events.jsonl` copies every group's events, and `tasks.json` and `groups.json` are the lock-table views that answer "who holds what" | [10.3](#103-data-model) |
+| `cache/{skills,context,checks,review,setup,map}/` | The cache store, 256 MB per repository, least recently used out first | [10.3](#103-data-model) |
+
+#### Machine state: `~/.komodo/`
+
+Nothing here is committed. Every repository on the machine shares these files.
+
+| Path | Holds | Format and owner |
+|---|---|---|
+| `config.json` | The one settings file; absent until the first `komodo config` write, so built-in defaults apply before it | [1.3](#13-data-model) |
+| `release.key` | The ed25519 private key that signs releases, mode 0600, on the owner's machine only | [11](#11-backlog-planning-ship-and-release) |
+| `bin/komodo` | A copy of the current version; the `PATH` entry and the Claude hook point here, and `fresh` swaps it atomically | [12.1](#121-scope-and-concepts) |
+| `versions/<v>/komodo` | Every installed version, kept whole in `versions/<v>/`; a live run starts its child processes from its own version folder | [12.1](#121-scope-and-concepts) |
+| `jobs/*.json` | The person's own job templates, decoded as strictly as `agent.json` | [10.3](#103-data-model) |
+| `leases/<repo-id>/<group-id>.{json,fence}` | One lock file per group naming the run that owns it, and the fence: a counter that rises on every takeover and that every git write carries | [4.3](#43-data-model) |
+| `wt/<repo-id>/<group>/` | The detached git worktrees, one per group, outside every clone so no path contains `.git` | [4.3](#43-data-model) |
+| `cache/lang/<repo-id>/` | Komodo's own language caches (Go, npm, cargo, pip) per repository, never the person's; capped by `sandbox.lang_cache_gb`; `cache clear --kind lang` removes it | [6](#6-tools-guard-and-sandbox) |
+| `state/providers.json` | The provider probe result: which links work, their model identifiers and measured context | [7.3](#73-data-model) |
+| `state/quota.json` | Reset times from provider limits, shared by every repository on the machine | [7.3](#73-data-model) |
+| `state/timers/` | One record per paused group, `<repo-id>.<group>.json`, written with `Replace` and removed when fired, holding `wait_until` (the latest reset time among its halted sessions, plus 1 min) and `wait_link` | [7.3](#73-data-model) |
+| `state/pool/`, `state/links/` | Lock files for the machine-wide session pool slots and the per-link slots; a slot is free again when its holder's process dies | [3.3](#33-data-model) |
+| `state/queue/` | The work queue: one create-only file per ready group or due job | [3.3](#33-data-model) |
+| `state/wake/` | Wake files: the engine touches `wake/<run>` on a waking event, and `status --wait` watches it | [2.5](#25-behaviour) |
+| `state/events/` | The machine log: one file per `komodo` process; [TODO: the file name pattern of the machine log and how a record's header and body sit in one file (G-30)] | [2.3](#23-data-model) |
+| `state/fresh.json`, `fresh.lock`, `fresh.log` | The self-updater's records: the latest known release, the one-updater lock (stale after 10 min), the silent failure log | [12.3](#123-data-model) |
+| `state/active/` | Which versions live runs use, so cleanup never deletes one in use | [12.3](#123-data-model) |
+| `state/config.log`, `config.sha` | The configuration audit log and the checksum of `config.json`; a hand edit breaks the checksum and every verb refuses until `komodo config --accept` | [1.3](#13-data-model) |
+
+### 14.2 Where Data Lives
+
+Committed means the file is stored in the repository's git history and shared with the team; No means it stays on one machine. Committed files are rules and the backlog. Machine files hold state, timers and caches that never ship.
+
+| Location | Contents | Committed |
+|---|---|---|
+| `<repo>/AGENTS.md` | Repo rules plus the Komodo block (`komodo:begin min=<version>` … `komodo:end`) | Yes |
+| `<repo>/CLAUDE.md` | `@AGENTS.md` import line | Yes |
+| `<repo>/.claude/settings.json` | Two entries only: the `Bash(komodo *)` allow rule and a `SessionStart` hook running `komodo status` | Yes |
+| `<repo>/docs/backlog/epic-N/tg-N.M/` | `TG.md` and `tsk-*.md`, the backlog grammar | Yes |
+| `<git-common-dir>/komodo/` | Install manifest, run and group states, snapshots, job state, session files, ledgers, cache | No |
+| `~/.komodo/config.json` | The one config file, created on the first `komodo config key=value` write | No |
+| `~/.komodo/bin/`, `versions/` | Current binary copy and every installed version | No |
+| `~/.komodo/jobs/` | Job templates | No |
+| `~/.komodo/leases/<repo-id>/` | One lease and fence file per group, machine-wide | No |
+| `~/.komodo/wt/<repo-id>/` | Detached worktrees per group | No |
+| `~/.komodo/state/` | Provider probe, quota timers, pause timers, pool and link slots, queue, wake files, fresh state, config hash and audit log | No |
+| `~/.komodo/cache/lang/<repo-id>/` | Komodo's own language caches per repo, never the user's | No |
+
+The `AGENTS.md` block, between its `komodo:begin` and `komodo:end` markers, `CLAUDE.md` and `.claude/settings.json` are written by `komodo install` ([12.3](#123-data-model)); the backlog files are written by the planner and read by the builder ([11.3](#113-data-model)).
+
+### 14.3 Data Flow
+
+The main flows run from a goal to merged code. The orchestrator, or a person at a shell, starts them with `komodo plan` and `komodo run`; the engine does the rest. The stages are Intake, Build, Check, Verify and Ship ([HLD Glossary](hld.md#12-glossary)).
+
+#### Plan a goal into a backlog
+
+**📐 How a goal becomes backlog files**
+```mermaid
+sequenceDiagram
+  participant O as Orchestrator
+  participant P as Planner
+  participant G as Go lint
+  participant R as Repo
+  participant B as docs/backlog
+  O->>R: 1 komodo plan, goal or spec docs
+  R->>P: 2 command classes and repo profile
+  R->>P: 3 repo map, ranked symbols
+  P->>G: 4 pass one, epic outline
+  G-->>P: 5 lint result
+  P->>G: 6 pass two, one session per group
+  G-->>P: 7 lint result
+  P->>B: 8 write backlog files
+```
+**Reading the diagram.**
+
+1. A person or the orchestrator gives `komodo plan` a goal or spec documents.
+2. Detection finds marker files such as `go.mod` in the repository and works out which build, test and lint commands exist; that result is the repo profile.
+3. The repo map is a ranked list of the repository's functions and types, so the planner knows the codebase.
+4. Pass one is an epic outline.
+5. Go code lints the outline.
+6. Pass two is one planner session per group.
+7. Go code lints each group's result.
+8. The planner writes the result as `docs/backlog/*`.
+
+#### Run a group to merged code
+
+**📐 Which file or record each stage writes**
+```mermaid
+sequenceDiagram
+  participant B as docs/backlog
+  participant I as Intake
+  participant BU as Build
+  participant C as Check
+  participant V as Verify
+  participant S as Ship
+  participant E as Epic branch
+  B->>I: 1 komodo run, task list
+  Note over I: 2 lock the task list by card hash, take the lease, create the worktree, run setup
+  I->>BU: 3 worktree ready
+  Note over BU: 4 one brief per task, commits on the hidden ref
+  BU->>C: 5 tasks done
+  Note over C: 6 done_when, scope, secrets, baseline, impact, coverage
+  C->>V: 7 pass
+  Note over V: 8 reviewer findings, tester evidence
+  V->>S: 9 approved
+  S->>E: 10 group branch, group pull request, fenced landing
+```
+**Reading the diagram.**
+
+1. `komodo run` hands the backlog's task list to Intake.
+2. Intake locks the task list by hashing its cards, takes the lease, creates the worktree and runs setup. The detection result and a hash of `config.json` also enter Intake, so the whole run is pinned to one set of commands and settings.
+3. Build starts once the worktree is ready.
+4. Build gives a builder session one brief per task, filled from the embedded skills, lenses, rules and templates ([0.5 Embedded Assets](#05-embedded-assets)). The engine commits each result to the hidden ref, a git ref that is never pushed.
+5. Check starts when the tasks are done.
+6. Check runs mechanical checks that cost no tokens.
+7. A pass moves the group to Verify.
+8. Verify runs the reviewer and tester sessions.
+9. An approval moves the group to Ship.
+10. Ship lands the group on a group branch with a group pull request, using the fence, and the work reaches the epic branch. The epic pull request is the final one, and a person merges it.
+
+#### Record and observe
+
+**📐 How an event reaches `status`**
+```mermaid
+sequenceDiagram
+  participant ST as Build, Check, Verify, Ship
+  participant M as State manager
+  participant F as events.jsonl and state.json
+  participant L as Ledger
+  participant S as status
+  ST->>M: 1 event
+  M->>M: 2 check against the one schema
+  M->>F: 3 append and snapshot
+  F->>L: 4 events feed the ledger
+  L->>S: 5 sessions, events, tasks, groups
+```
+**Reading the diagram.**
+
+1. Build, Check, Verify and Ship each record events.
+2. The state manager checks every record against the one schema.
+3. It writes the group's events to `events.jsonl` and its snapshot to `state.json`.
+4. The ledger holds sessions, events, tasks and groups, built from the group state.
+5. `status`, `status --wait`, `status --metrics` and the run report read the ledger.
+
+#### Cache use
+
+**📐 Which stages read and write the cache**
+```mermaid
+flowchart LR
+  CACHE[("cache: skills, context, checks, review, setup, map")]
+  BUILD["Build"]
+  CHECK["Check"]
+  VERIFY["Verify"]
+  CACHE <-->|"1 read and write"| BUILD
+  CACHE <-->|"2 read and write"| CHECK
+  CACHE <-->|"3 read and write"| VERIFY
+```
+**Reading the diagram.** Build, Check and Verify both read and write the cache. It holds skill bodies, repository context, Check results, review findings, dependency setup results and the repo map.
+
+#### Flows inside one chapter
+
+Flows that stay inside one subsystem are walked through in that chapter's `N.5` page.
+
+- **Event append, subscribers and wake:** [2.5 Behaviour](#25-behaviour).
+- **A group's workspace from lease to landing:** [4.5 Behaviour](#45-behaviour).
+- **One session end to end:** [5.5 Behaviour](#55-behaviour) and [7.5 Behaviour](#75-behaviour).
+- **First install, repository install and the next update:** [12.5 Behaviour](#125-behaviour).
 
 ## 15. Verification, Operations and Cutover
 
