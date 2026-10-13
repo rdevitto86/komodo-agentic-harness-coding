@@ -7895,7 +7895,7 @@ Pieces of this subsystem that live in other packages:
 | `embed/rules/backlog.md` | The grammar of the backlog files that `doctor backlog` enforces |
 | `embed/langs/<lang>.json` | Per-language symbol patterns for the repo map |
 
-`[TODO: the file that runs the two planner passes and their lint retries; the file map names none, and the package cannot import the engine's session code (G-NEW-4)]`
+`[TODO: the file that runs the two planner passes and their lint retries; the file map names none, and the package cannot import the engine's session code (G-158)]`
 
 **Entry points**
 
@@ -7909,7 +7909,7 @@ Pieces of this subsystem that live in other packages:
 | Shipping one group | `Shipper` in `ship.go` |
 | Cutting a release | `Release` in `release.go` |
 
-The names are working names. `[TODO: confirm the exported names; the design fixes behaviour, not names (G-NEW-4)]`
+The names are working names. `[TODO: confirm the exported names; the design fixes behaviour, not names (G-158)]`
 
 ### 11.3 Data Model
 
@@ -7989,12 +7989,12 @@ An acceptance item has these parts:
 | `cmd:` | Optional command the tester runs; without it Go cannot rerun the item |
 | `needs:` | Optional; `network`, `docker` or `service:<name>`. The tester skips the item with reason `env` in a sandbox that cannot satisfy it |
 
-`[TODO: the syntax of the field block (YAML frontmatter fences or bare lines), where the group's goal text sits, the list syntax for several globs or dependencies, the exact IF and WHILE shapes, how the next epic and group numbers are chosen, and how a reader treats a file written under a newer or older grammar (G-NEW-1)]`
+`[TODO: the syntax of the field block (YAML frontmatter fences or bare lines), where the group's goal text sits, the list syntax for several globs or dependencies, the exact IF and WHILE shapes, how the next epic and group numbers are chosen, and how a reader treats a file written under a newer or older grammar (G-155)]`
 
 #### Task file: `tsk-*.md`
 
 ```markdown
-<!-- card: [TODO: the card's fields (G-NEW-1)] -->
+<!-- card: [TODO: the card's fields (G-155)] -->
 done_when: go test ./internal/engine/...
 estimate_lines: 120
 ```
@@ -8005,7 +8005,7 @@ estimate_lines: 120
 | `done_when:` | command | The task's pass condition; the builder's result is checked against it in its own session and Check reruns it with 0 model tokens |
 | `estimate_lines:` | integer | The planner's estimate of changed lines, at most 300 |
 
-A task names at most 5 files. `[TODO: where a task names its files; the card's fields beyond these two named lines; the task identifier format (G-NEW-1, G-30)]`
+A task names at most 5 files. `[TODO: where a task names its files; the card's fields beyond these two named lines; the task identifier format (G-155, G-30)]`
 
 #### Go types
 
@@ -8133,7 +8133,7 @@ type Symbol struct {
 }
 ```
 
-`[TODO: the layout of embed/langs/<lang>.json, how inbound references are counted from patterns, how the files a goal names are found, the order that breaks equal ranks, and the text form the map renders to (G-NEW-6)]`
+`[TODO: the layout of embed/langs/<lang>.json, how inbound references are counted from patterns, how the files a goal names are found, the order that breaks equal ranks, and the text form the map renders to (G-160)]`
 
 #### Branches and action keys
 
@@ -8146,7 +8146,7 @@ type Symbol struct {
 | `land` key | `(group, fence, merge base)` | A landed merge commit already exists; the fence refuses a stale lander |
 | `open_pr` key | `(epic, head SHA)` | `gh` finds the existing pull request for that head first |
 
-`[TODO: whether <epic> and <group> are the folder names such as epic-1 and tg-1.2 (G-NEW-7)]` `[TODO: the argument struct of the land and open_pr actions (G-30)]`
+`[TODO: whether <epic> and <group> are the folder names such as epic-1 and tg-1.2 (G-161)]` `[TODO: the argument struct of the land and open_pr actions (G-30)]`
 
 ```go
 // LandKey is the idempotency key of the land action.
@@ -8187,7 +8187,7 @@ type PRFacts struct {
 }
 ```
 
-`CheckResult` is the Check result of [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery). `[TODO: the pull request title and labels (G-NEW-7)]`
+`CheckResult` is the Check result of [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery). `[TODO: the pull request title and labels (G-161)]`
 
 #### Release manifest
 
@@ -8216,11 +8216,11 @@ type Manifest struct {
 | Per operating system and architecture | A download URL and a SHA-256 checksum |
 | Signature | ed25519; the current and the next public key are embedded in the binary that verifies it |
 
-`[TODO: the key names and layout of latest.json, the operating system and architecture pairs built, and how a reader treats a manifest written by a newer or older release (G-NEW-10)]`
+`[TODO: the key names and layout of latest.json, the operating system and architecture pairs built, and how a reader treats a manifest written by a newer or older release (G-164)]`
 
 ### 11.4 Interfaces
 
-The design fixes the behaviour of these calls, not their names. `[TODO: confirm the exported names and signatures; the design fixes behaviour, not names (G-NEW-4)]`
+The design fixes the behaviour of these calls, not their names. `[TODO: confirm the exported names and signatures; the design fixes behaviour, not names (G-158)]`
 
 #### Backlog files
 
@@ -8259,7 +8259,7 @@ func Lint(epics []Epic, protected []string) []Finding
 func OverEstimate(t Task, actualLines int) (Finding, bool)
 ```
 
-`Lint` cannot fail; a problem in the backlog is a finding. `protected` is the list of paths guard row G3 refuses to every writer. `[TODO: where lint gets that list (G-NEW-2)]`
+`Lint` cannot fail; a problem in the backlog is a finding. `protected` is the list of paths guard row G3 refuses to every writer. `[TODO: where lint gets that list (G-156)]`
 
 #### Graph
 
@@ -8298,7 +8298,7 @@ func Plan(ctx context.Context, r PlanRequest) (PlanResult, error)
 
 | Function | On failure |
 |---|---|
-| `Plan` | A draft that fails lint goes back into the same session twice. A third failure ends the plan Blocked with reason `lint` and 0 files written. `[TODO: how a blocked plan is recorded and shown, since no group exists (G-NEW-4)]` |
+| `Plan` | A draft that fails lint goes back into the same session twice. A third failure ends the plan Blocked with reason `lint` and 0 files written. `[TODO: how a blocked plan is recorded and shown, since no group exists (G-158)]` |
 
 #### Repo map
 
@@ -8310,7 +8310,7 @@ func BuildMap(ctx context.Context, root, goal string, budget int) (RepoMap, erro
 func (m RepoMap) Render() string
 ```
 
-`budget` is 10% of the brief ceiling. `BuildMap` reads the cache by tree hash first. An unreadable file is skipped; `[TODO: what BuildMap does for a language with no pattern file (G-NEW-6)]`.
+`budget` is 10% of the brief ceiling. `BuildMap` reads the cache by tree hash first. An unreadable file is skipped; `[TODO: what BuildMap does for a language with no pattern file (G-160)]`.
 
 #### Git and forge
 
@@ -8337,9 +8337,9 @@ type Forge interface {
 | Method | Error means | Caller does |
 |---|---|---|
 | `Git.Merge` with `ErrConflict` | The merge conflicts | The ship step stops; the group blocks with `merge_conflict` |
-| `Git.Push` | git refused the push | `[TODO: push failure handling (G-NEW-9)]` |
-| `Forge.FindPR` | `gh` could not answer | `[TODO: forge failure handling (G-NEW-9)]` |
-| `Forge.OpenPR`, `Forge.MergePR` | `gh` refused or the network failed | `[TODO: forge failure handling (G-NEW-9)]` |
+| `Git.Push` | git refused the push | `[TODO: push failure handling (G-163)]` |
+| `Forge.FindPR` | `gh` could not answer | `[TODO: forge failure handling (G-163)]` |
+| `Forge.OpenPR`, `Forge.MergePR` | `gh` refused or the network failed | `[TODO: forge failure handling (G-163)]` |
 
 ```go
 // ErrConflict is returned by Merge when git reports a merge conflict.
@@ -8366,8 +8366,8 @@ type Shipper interface {
 |---|---|---|
 | `SyncGroupBranch` with `ErrConflict` | The merge of the epic branch conflicts | The group blocks with `merge_conflict` |
 | `Land` with a stale fence | Another engine took the group | The engine emits `lease.lost`; 0 pushes were made |
-| `Land`, other errors | git or `gh` failed | `[TODO: landing failure handling (G-NEW-9)]` |
-| `OpenEpicPR` | `gh` failed | `[TODO: forge failure handling (G-NEW-9)]` |
+| `Land`, other errors | git or `gh` failed | `[TODO: landing failure handling (G-163)]` |
+| `OpenEpicPR` | `gh` failed | `[TODO: forge failure handling (G-163)]` |
 
 #### Release
 
@@ -8385,7 +8385,7 @@ func Release(ctx context.Context, o ReleaseOptions) error
 func Sign(manifest []byte, keyPath string) (signature []byte, err error)
 ```
 
-`Release` runs on the owner's machine, in the Komodo repository only, and the verb refuses without a terminal. `Sign` returns an error when the key file is missing or unreadable, and the release stops before it publishes. `[TODO: the key file's format and what Release does when the key's mode is wider than 0600 (G-NEW-10)]`
+`Release` runs on the owner's machine, in the Komodo repository only, and the verb refuses without a terminal. `Sign` returns an error when the key file is missing or unreadable, and the release stops before it publishes. `[TODO: the key file's format and what Release does when the key's mode is wider than 0600 (G-164)]`
 
 #### Callers
 
@@ -8403,7 +8403,7 @@ func Sign(manifest []byte, keyPath string) (signature []byte, err error)
 | `Drive`, Ship stage | `Shipper` | The group reaches Ship |
 | `komodo release` | `Release` | The owner cuts a version |
 
-`[TODO: how the planner's lint_backlog tool in internal/tools reaches Lint in internal/repo, since an import may point only downward (G-NEW-5)]`
+`[TODO: how the planner's lint_backlog tool in internal/tools reaches Lint in internal/repo, since an import may point only downward (G-159)]`
 
 ### 11.5 Behaviour
 
@@ -8447,7 +8447,7 @@ sequenceDiagram
 
 1. `Load` walks `docs/backlog/epic-N/tg-N.M/` in folder-name order and reads `TG.md` and every `tsk-*.md`.
 2. A file with a missing or unknown field yields a `grammar` finding that names the file; loading goes on.
-3. `Add` refuses with `LockedError` while the target group is in a run. `[TODO: how Add reads the locked state; the design names a task-list lock without a file (G-NEW-11)]`
+3. `Add` refuses with `LockedError` while the target group is in a run. `[TODO: how Add reads the locked state; the design names a task-list lock without a file (G-165)]`
 4. `Add` writes the file only when its content would change, so a repeat returns `changed == false`.
 
 **Lint**
@@ -8474,7 +8474,7 @@ Which of these fail and which warn:
 
 - **Guard row G3:** the paths no agent may write: `.git`, `bin/komodo`, `~/.komodo/**`, the Claude settings files, `embed/policy.json` and `docs/prd.md` ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)).
 - **Case collision:** the same check runs in Check on every operating system.
-- **Open inputs:** `[TODO: the set of paths the case check compares, how lint learns the guard row G3 list, and whether lint stops at the first finding (G-NEW-2)]`
+- **Open inputs:** `[TODO: the set of paths the case check compares, how lint learns the guard row G3 list, and whether lint stops at the first finding (G-156)]`
 
 **Building the dependency graph**
 
@@ -8497,7 +8497,7 @@ flowchart TB
 5. If an overlapping pair has no order, lint fails and names both groups and the shared file.
 6. Place groups with no dependency in wave 1, count the longest chain in groups, and warn when it is over 4.
 
-Groups with no overlap and no dependency start in wave 1. `[TODO: how two globs are tested for overlap and the shared file found, and whether an order through a third group counts (G-NEW-2)]` `[TODO: how a group is placed in a wave after wave 1 (G-NEW-3)]`
+Groups with no overlap and no dependency start in wave 1. `[TODO: how two globs are tested for overlap and the shared file found, and whether an order through a third group counts (G-156)]` `[TODO: how a group is placed in a wave after wave 1 (G-157)]`
 
 **Planning**
 
@@ -8529,7 +8529,7 @@ flowchart TB
 - **Cost:** pass 2 sessions run in parallel, so a 6-group epic plans in about 2 session wall times. A planner session takes no pool slot but counts against its link's limit.
 - **Cache:** the outline's lint result is cached by tree hash plus a hash of the goal, so replanning the same goal on an unchanged tree rebuilds neither the map nor the lint result.
 
-`[TODO: how the planner's own gate (two rejected results end the session with check_fail) combines with the 2 lint retries, whether one group's failure in pass 2 blocks the whole plan, and how the set of files is written so a crash leaves none or all (G-NEW-4)]`
+`[TODO: how the planner's own gate (two rejected results end the session with check_fail) combines with the 2 lint retries, whether one group's failure in pass 2 blocks the whole plan, and how the set of files is written so a crash leaves none or all (G-158)]`
 
 **Building the repo map**
 
@@ -8540,7 +8540,7 @@ flowchart TB
 5. Drop the lowest-ranked entries until the map fits 10% of the brief ceiling.
 6. Store the map in the cache under the tree hash.
 
-This repository's map, about 83 files, builds in under 1 s. `[TODO: patterns for TypeScript, Python and Rust against 3 real repositories (G-18)]` `[TODO: how tokens are counted for the 10% fit (G-NEW-6)]`
+This repository's map, about 83 files, builds in under 1 s. `[TODO: patterns for TypeScript, Python and Rust against 3 real repositories (G-18)]` `[TODO: how tokens are counted for the 10% fit (G-160)]`
 
 **Shipping one group**
 
@@ -8582,7 +8582,7 @@ git push <remote> komodo/epic-1/tg-1.2        # plain push, never --force and ne
 git merge --no-ff komodo/epic-1/tg-1.2        # ship.mode epic, run on the epic branch
 ```
 
-`[TODO: how and when the group branch is created from the hidden reference and the epic branch from the base, the remote name, where the epic-branch merge runs, and the merge method of a group pull request (G-NEW-7)]` `[TODO: the order of land and open_pr under ship.mode group; the Ship stage's transition row orders open_pr after the landing and the tip Check (G-NEW-8)]` `[TODO: what refuses a stale fence before the push, since git compares only the commit id (G-NEW-9)]`
+`[TODO: how and when the group branch is created from the hidden reference and the epic branch from the base, the remote name, where the epic-branch merge runs, and the merge method of a group pull request (G-161)]` `[TODO: the order of land and open_pr under ship.mode group; the Ship stage's transition row orders open_pr after the landing and the tip Check (G-162)]` `[TODO: what refuses a stale fence before the push, since git compares only the commit id (G-163)]`
 
 **The epic pull request**
 
@@ -8613,7 +8613,7 @@ flowchart TB
 6. It renders the changelog, which starts fresh at `1.0.0-beta.6`.
 7. It publishes a release whose `latest.json` every `fresh` reads. A beta publishes as a normal release with "beta" in the version, because the updater reads `releases/latest`, which skips prereleases.
 
-The steps follow the order the design lists them. `[TODO: the operating system and architecture pairs built, how the release is published to GitHub, how the changelog is rendered from the entries that add changelog records, and what --notes-file supplies (G-NEW-10)]`
+The steps follow the order the design lists them. `[TODO: the operating system and architecture pairs built, how the release is published to GitHub, how the changelog is rendered from the entries that add changelog records, and what --notes-file supplies (G-164)]`
 
 **Signing custody**
 
@@ -8626,7 +8626,7 @@ The steps follow the order the design lists them. `[TODO: the operating system a
 | `next` key | Set at the first release |
 | Enterprise | `[TODO: signing with a cloud key-management service or keyless, and refusing a manifest older than the last accepted (G-21)]` |
 
-`[TODO: where the embedded public keys live in the source and how the next key is produced at the first release (G-NEW-10)]`
+`[TODO: where the embedded public keys live in the source and how the next key is produced at the first release (G-164)]`
 
 ### 11.6 State
 
@@ -8694,7 +8694,7 @@ A lint failure under 3 returns the draft to the same session and leaves the plan
 | Two groups finish at once | The landing gate | Landings run one after the other |
 | Check fails on the epic tip | Check after the landing | Handled in [Engine Internals](#37-invariants-and-failures) |
 | A release on another machine or without a terminal | The verb | The verb refuses; the person is handed the command |
-| A push or forge call fails | `Git.Push`, `Forge` | `[TODO: failure handling (G-NEW-9)]` |
+| A push or forge call fails | `Git.Push`, `Forge` | `[TODO: failure handling (G-163)]` |
 
 ### 11.8 Config
 
@@ -8756,15 +8756,15 @@ Components use a local bare repository as the remote and a mock `gh` that return
 
 | Gap | Open point |
 |---|---|
-| G-NEW-1 | Backlog file grammar: field block syntax, goal text, list syntax, card fields, identifiers, versioning |
-| G-NEW-2 | Lint inputs: glob overlap test, the protected path list, the case-check path set, stop at first finding |
-| G-NEW-3 | Wave assignment after wave 1 |
-| G-NEW-4 | Planner orchestration: file, result schema, blocked-plan record, retry counts, atomic write; exported names |
-| G-NEW-5 | How `lint_backlog` in `internal/tools` reaches lint in `internal/repo` |
-| G-NEW-6 | Repo map: pattern file layout, reference counting, tie-break order, rendered form, token counting |
-| G-NEW-7 | Ship branches, remote, epic-branch merge location, group pull request merge method, title and labels |
-| G-NEW-8 | Order of `land` and `open_pr` under `ship.mode: group` |
-| G-NEW-9 | Push and forge failure handling; what refuses a stale fence before the push |
+| G-155 | Backlog file grammar: field block syntax, goal text, list syntax, card fields, identifiers, versioning |
+| G-156 | Lint inputs: glob overlap test, the protected path list, the case-check path set, stop at first finding |
+| G-157 | Wave assignment after wave 1 |
+| G-158 | Planner orchestration: file, result schema, blocked-plan record, retry counts, atomic write; exported names |
+| G-159 | How `lint_backlog` in `internal/tools` reaches lint in `internal/repo` |
+| G-160 | Repo map: pattern file layout, reference counting, tie-break order, rendered form, token counting |
+| G-161 | Ship branches, remote, epic-branch merge location, group pull request merge method, title and labels |
+| G-162 | Order of `land` and `open_pr` under `ship.mode: group` |
+| G-163 | Push and forge failure handling; what refuses a stale fence before the push |
 | [G-31](#appendix-o-gap-register) | Whether a lint failure at Intake blocks with reason `lint` |
 | [G-30](#appendix-o-gap-register) | The argument structs of `land` and `open_pr` |
 
@@ -8772,8 +8772,8 @@ Components use a local bare repository as the remote and a mock `gh` that return
 
 | Gap | Open point |
 |---|---|
-| G-NEW-10 | Release: key file format, embedded keys, manifest layout, target pairs, publishing, changelog input |
-| G-NEW-11 | How `add backlog` reads the locked state; who records a task's real line count |
+| G-164 | Release: key file format, embedded keys, manifest layout, target pairs, publishing, changelog input |
+| G-165 | How `add backlog` reads the locked state; who records a task's real line count |
 | [G-18](#appendix-o-gap-register) | Repo map patterns for TypeScript, Python and Rust against 3 real repositories |
 | [G-21](#appendix-o-gap-register) | Enterprise signing: cloud key management or keyless, and refusing an older manifest |
 
@@ -11490,6 +11490,17 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-152 | Scorecard | Cache hit rate is "per kind" in the scorecard and "per agent" in the token section; how group counts such as returns attribute to an agent and model; where the precision ledger counts and the cache counters are stored; where the cached totals live | Owner decision |
 | G-153 | Scheduler, cache, ledger | Exported names and signatures of the scheduler, cache store and ledger are derived from behaviour in 10.4; the design fixes behaviour only | Owner confirms the shapes in 10.4 |
 | G-154 | Task-list lock | Which files the card hash covers and in what order, its algorithm and encoding; which record the refusing verbs read (group row or group state); what a verb does on a hash mismatch | Owner decision with G-24 |
+| G-155 | Backlog, file grammar | Whether the field block of `TG.md` and `tsk-*.md` sits in YAML frontmatter fences or as bare lines; where a group's goal text and its acceptance items sit; the list syntax for several globs or dependencies; the exact `IF` and `WHILE` shapes of an acceptance item; the card's fields and where a task names its files; how the next epic and group numbers are chosen; how a reader treats a file written under a newer or older grammar | Owner decision with a grammar; then 11.3 and `embed/rules/backlog.md` |
+| G-156 | Backlog, lint inputs | How two `touches` globs are tested for overlap and the shared file named; whether an order through a third group counts as ordered; which paths the case-collision check compares; where lint gets the guard row G3 path list (`embed/policy.json` or its own copy); what "a group every other group waits on" counts; whether lint stops at the first finding | Owner decision; then 11.5 Lint and the glob grammar of chapter 6 |
+| G-157 | Backlog, graph | How a group is placed in a wave after wave 1, since the design defines only wave 1 and starts dependents as their dependencies land | Owner decision with chapter 3's pick order (chapter 3 G-163); then 11.5 |
+| G-158 | Planning, orchestration | Which file runs the two planner passes and their lint retries (the package cannot import the engine's session code); the exported names of this chapter's functions; the planner's result schema; how a blocked plan is recorded and shown when no group exists; how the planner's own gate (two rejected results end a session with `check_fail`) combines with the two lint returns; whether one group's failure in pass 2 blocks the whole plan; how the set of files is written so a crash leaves none or all | Owner decision; then 11.2, 11.4 and 11.5 |
+| G-159 | Planning, import direction | The planner's `lint_backlog` tool is in `internal/tools`, which sits below `internal/repo` in the import order, so it cannot import lint; how lint reaches it | Owner decision (inject the function, or move the tool); then 11.4 and chapter 6 |
+| G-160 | Planning, repo map | The layout of `embed/langs/<lang>.json`; how inbound references are counted from patterns; how the files a goal names are found; the order that breaks equal ranks (the proof needs byte-identical output); the text form the map renders to; how tokens are counted for the 10% fit; what happens for a language with no pattern file | Owner decision; then 11.3 and 11.5 |
+| G-161 | Ship, branches and merges | How and when the group branch is created from the hidden reference and the epic branch from the base; whether `<epic>` and `<group>` are the folder names; the remote name; where the epic-branch merge runs; the merge method of a group pull request; the pull request title and labels; which references count as critical | Owner decision; then 11.4 and 11.5 |
+| G-162 | Ship, order of actions | The Ship stage's transition row orders `open_pr` after the landing and the tip Check, while `ship.mode: group` merges a pull request as the landing; where `land` and `open_pr` sit relative to each other under each mode | Owner decision on the architecture page; then a design patch to chapter 2's transition table and 11.5 |
+| G-163 | Ship, failures | What the engine does when a push, a `gh` call or a merge fails for a reason other than a conflict or a stale fence; what refuses a stale fence before the push, given git compares only the commit id (chapter 4 G-158); how the push and pull request creation, which run beside `Drive`, return their result | Owner decision; then 11.4, 11.5 and 11.7 |
+| G-164 | Release | The key file's format and what `release` does when its mode is wider than 0600; where the current and `next` public keys live in the source and how the `next` key is produced at the first release; the key names of `latest.json`; the operating system and architecture pairs built; how the release is published; how the changelog is rendered from the entries `add changelog` records; what `--notes-file` supplies | Owner decision; then 11.3 and 11.5 |
+| G-165 | Backlog, edit and sizing feedback | How `add backlog` reads the "in a run" state (the design names a task-list lock without a file); who records a task's real changed line count after Build and where, so `OverEstimate` can compare it | Owner decision; then 11.4 and chapter 3 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (chapter 11)](#11-backlog-planning-ship-and-release)).
