@@ -226,13 +226,13 @@ What this subsystem is for, and who it talks to, is in the HLD: [Event Spine and
 
 | File | Holds |
 |---|---|
-| `internal/state/kinds.go` | `Event`, `Type`, `Reason`, `Stage`, `ID` and one data struct per event type; the `event` kind registration the schema is generated from |
-| `internal/engine/stage.go` | `State`, `Next()`, the `transitions` table, `Spec` registrations, epochs |
+| `internal/state/kinds.go` | `Event`, `Type`, `Reason`, `Stage`, `ID`, `Action`, `ActionKind`, `Spec`, `Register`, `SpecOf` and one data struct per event type; the `event` kind registration the schema is generated from |
+| `internal/engine/stage.go` | `State`, `Limits`, `Next()`, the `transitions` slice, the `Spec` values registered from it, epochs |
 | `internal/engine/engine.go` | `Drive`, the caller of `Next()` ([Engine Internals](#3-engine-internals)) |
 | `internal/ops/bus.go` | `Subscriber`, in-order delivery to the ledger, the wake file and the `status --watch` renderer |
 | `embed/state.schema.json` | Generated at build from the kind registry; the gate fails when it disagrees with the Go types |
 
-The envelope and data structs sit in `internal/state` because the state manager validates every `Append` against them, and `state` may not import a package above it. `bus.go` delivers events and holds no type definitions.
+The envelope, data structs, actions and contracts sit in `internal/state` because the state manager validates every `Append` against them, and `state` may not import a package above it. `bus.go` delivers events and holds no type definitions.
 
 ### 2.3 Data Model
 
@@ -294,7 +294,7 @@ type Payload interface{ EventType() Type }
 | `stage` | `intake`, `build`, `check`, `verify`, `ship`, `paused` or `blocked`; required on group events, forbidden on `run.*` and `job.*`; lets `status` and the ledger group events by stage without replaying |
 | `epoch`, `stale` | `Drive` alone sets `stale`, because it holds the current epoch; a stale event is written and ignored by `Next()` ([Behaviour](#25-behaviour)) |
 | `type`, `reason`, `data` | `type` picks the one `data` struct allowed, so a `session.end` line can only carry a `session.end` body |
-| `checksum` | CRC-32 (IEEE polynomial, Go's `crc32.ChecksumIEEE`) over the compact JSON line serialized without the `checksum` field; the field is then added last, as a decimal number |
+| `checksum` | `Append` marshals a copy of the envelope that has no `Checksum` field, takes CRC-32 (IEEE polynomial, Go's `crc32.ChecksumIEEE`) of those bytes, and replaces the closing `}` with `,"checksum":N}`, N in decimal |
 
 The build generates one JSON Schema from the envelope and the registry, with one branch per type, no extra fields allowed, and an enum for every `reason`. The state manager checks every `Append` against it and `komodo help --json` serves its event part as `events`. The fields of each type's data struct are open `[PENDING G-24]`, and the envelope's `id`, `class`, `cause` and `corr` fields wait on the requests and single-write decisions `[PENDING G-29]`.
 
@@ -307,14 +307,14 @@ The build generates one JSON Schema from the envelope and the registry, with one
   "timestamp": "2026-10-12T15:31:12Z",
   "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
   "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-  "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35",
+  "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47",
   "stage": "build",
   "epoch": 2,
   "stale": false,
   "type": "session.end",
   "reason": "schema_fail",
   "data": {},
-  "checksum": 1533376713
+  "checksum": 1957802145
 }
 ```
 
@@ -337,17 +337,17 @@ The catalog is a fixed Go enum in 8 families, registered with the state manager 
 | `group.paused` | Engine | A provider limit left no allowed link; `status` shows the link and the resume time |
 | `group.blocked` | Engine | A bound ran out or a decision is needed, with a [block reason](#block-reasons) |
 | `group.cancelled` | Engine, workspace, ship | Trigger `[UNKNOWN: not yet designed]` `[PENDING G-31]` |
-| `group.shipped` | Ship | Merge clean, Check passed on the epic tip, landing succeeded; ends the group |
+| `group.shipped` | Engine (`Next()` follow-on) | Merge clean, Check passed on the epic tip, landing succeeded; ends the group |
 | `lease.lost` | Workspace | A git write with a stale fence was refused: another run took the group; `Next()` stops it |
 | `stage.enter` | Engine | A group enters a stage; the epoch rises; a snapshot is written; wakes `status --wait any` |
-| `stage.exit` | Engine | Intake's or Verify's gate is met |
+| `stage.exit` | Engine (`Next()` follow-on) | Intake's or Verify's gate is met ([State and Transitions](#26-state-and-transitions)) |
 | `session.start` | Supervisor | A session is spawned with its brief; fires with `task.claimed` |
 | `session.idle` | Supervisor | No stream line and no running tool for `limits.session_idle_min`; the supervisor nudges, then stops the session ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)) |
 | `session.timewarn` | Supervisor | The session neared its wall clock; the supervisor injects a finish-now line |
 | `session.end` | Supervisor | The session ended with an exit reason ([Exit reasons (Appendix F)](#exit-reasons)); `Next()` orders a commit, a retry, a pause or a block; a writing session's end orders a WIP commit |
 | `task.claimed` | Supervisor | With `session.start`; the task moves from queued to claimed in the lock table |
 | `task.released` | Supervisor, recovery | With `session.end`, or reason `crash` when the startup sweep finds the session dead |
-| `task.done` | Engine | The builder ended, `done_when` exited 0 and the result is on the hidden ref |
+| `task.done` | Engine (`Next()` follow-on) | The `commit` action ran `done_when` with exit 0 and the result is on the hidden ref |
 | `task.retry` | Engine | Another attempt after a schema-invalid result, a failed gate, a cut-off reply, 3 refusals under one rule or a failed `done_when`; counts toward `limits.task_attempts` |
 | `check.done` | Check | Pass or fail after the zero-token checks |
 | `finding.submit` | Tools | A reviewer's `submit_finding` passed validation: a known rule ID, a `file:line` and a quoted evidence line |
@@ -412,7 +412,7 @@ type State struct {
 	Sequence    uint64         `json:"sequence"`     // the last line appended, and applied
 	ConfigHash  string         `json:"config_hash"`  // pins the Limits for this run
 	Tasks       []TaskState    `json:"tasks"`
-	ActionsOpen []Action       `json:"actions_open"` // started, not done; Drive reruns them after Load
+	ActionsOpen []OpenAction   `json:"actions_open"` // ordered by Next, not yet done; Drive runs them after Load
 	Resume      ResumeRef      `json:"resume"`
 	Pause       PauseState     `json:"pause"`
 	Block       BlockState     `json:"block"`
@@ -421,6 +421,7 @@ type State struct {
 	FailureHash string         `json:"failure_hash"` // the last failure's fingerprint, for flap detection
 	Blocks      map[Reason]int `json:"blocks"`       // blocks per reason
 	WallUsedS   int64          `json:"wall_used_s"`  // seconds worked, excluding Paused and Blocked
+	TokensUsed  int64          `json:"tokens_used"`  // with track.usage on, against limits.group_tokens
 }
 
 // TaskState is one task's claim and attempt count.
@@ -428,6 +429,7 @@ type TaskState struct {
 	ID       string `json:"id"`
 	State    string `json:"state"`    // queued, claimed, done, returned or blocked
 	Attempts int    `json:"attempts"`
+	Retries  int    `json:"retries"`  // session timeouts and idle stops, against the agent's retries
 	Session  ID     `json:"session,omitempty"`
 }
 
@@ -456,10 +458,11 @@ type Limits struct {
 	TaskAttempts int // limits.task_attempts
 	PauseMaxMin  int // limits.pause_max_min
 	GroupTokens  int // limits.group_tokens; 0 when track.usage is off
+	Retries      int // the task's agent's retries, from its agent.json
 }
 ```
 
-`Returns`, `Verify`, `FailureHash`, `Blocks` and `WallUsedS` keep a crash from resetting a loop limit; with `Prior`, they are the default pending the owner `[PENDING G-32]`. The fields of `VerifyProgress`, the task id format and the `config_hash` format are `[UNKNOWN: not yet designed]` `[PENDING G-30]`.
+Slices and maps in `State` are never nil: the constructor and `Load` set them empty, so they marshal as `[]` and `{}`. `Returns`, `Verify`, `FailureHash`, `Blocks`, `WallUsedS`, `TokensUsed` and each task's `Retries` keep a crash from resetting a loop limit; with `Prior`, they are the default pending the owner `[PENDING G-32]`. The fields of `VerifyProgress`, the task id format and the `config_hash` format are `[UNKNOWN: not yet designed]` `[PENDING G-30]`.
 
 **Example.** The body of `runs/<group-id>/state.json` at sequence 50, group tg-1.2.
 
@@ -474,27 +477,34 @@ type Limits struct {
   "sequence": 50,
   "config_hash": "[UNKNOWN: not yet designed] [PENDING G-30]",
   "tasks": [
-    {"id": "[UNKNOWN: not yet designed] [PENDING G-30]", "state": "claimed", "attempts": 1, "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35"}
+    {"id": "[UNKNOWN: not yet designed] [PENDING G-30]", "state": "claimed", "attempts": 1, "retries": 0, "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47"}
   ],
   "actions_open": [],
-  "resume": {"session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35", "handle": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35", "link": "claude-cli"},
+  "resume": {"session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "handle": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "link": "claude-cli"},
   "pause": {},
   "block": {},
   "returns": 1,
   "verify": {},
   "failure_hash": "",
   "blocks": {},
-  "wall_used_s": 2460
+  "wall_used_s": 2460,
+  "tokens_used": 0
 }
 ```
 
 #### Actions
 
-`Next()` returns actions; it never performs one. Each kind declares an idempotency key, and the gate fails a kind missing from this table.
+`Next()` orders actions; it never performs one. Each ordered action also enters `State.ActionsOpen` in the same `Next()` call, so a crash before its `action.start` still reruns it. Each kind declares an idempotency key, and the gate fails a kind missing from this table.
 
 ```go
 // ActionKind names one side effect Drive may perform.
 type ActionKind string
+
+// OpenAction is an action Next ordered that has no action.done yet.
+type OpenAction struct {
+	Action
+	Started bool `json:"started"` // an action.start line exists
+}
 
 // Action is one side effect Next orders, recorded by action.start and action.done.
 type Action struct {
@@ -525,8 +535,8 @@ type Action struct {
 The two lines `Drive` writes around one spawn:
 
 ```json
-{"version":1,"sequence":13,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"9f2c4e1ab7d05e36c18f4a2b9e7d6c0538a1f4e2d9b7c6a5e4f3d2c1b0a99887","action":"spawn"},"checksum":1178815030}
-{"version":1,"sequence":14,"timestamp":"2026-10-12T15:31:15Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"9f2c4e1ab7d05e36c18f4a2b9e7d6c0538a1f4e2d9b7c6a5e4f3d2c1b0a99887","action":"spawn"},"checksum":4183302497}
+{"version":1,"sequence":13,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"9f2c4e1ab7d05e36c18f4a2b9e7d6c0538a1f4e2d9b7c6a5e4f3d2c1b0a99887","action":"spawn","args":{}},"checksum":328441067}
+{"version":1,"sequence":14,"timestamp":"2026-10-12T15:31:15Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"9f2c4e1ab7d05e36c18f4a2b9e7d6c0538a1f4e2d9b7c6a5e4f3d2c1b0a99887","action":"spawn","args":{}},"checksum":1635847319}
 ```
 
 ### 2.4 Interfaces
@@ -543,22 +553,15 @@ type Result struct {
 // Next applies one event to one group's state; it reads nothing, writes nothing and never fails.
 func Next(s State, e Event, l Limits) Result
 
-// Transition is one row of the stage rulebook.
+// Transition is one row of the stage and in-stage tables in State and Transitions.
 type Transition struct {
-	From   Stage
+	From   []Stage                          // nil means any stage
 	On     Type
-	When   func(State, Event, Limits) bool // the condition column; nil means always
-	To     Stage
+	When   func(State, Event, Limits) bool  // the condition column; nil means always
+	To     Stage                            // "" keeps the stage
+	Apply  func(State, Event, Limits) State // the Sets column
+	Orders []ActionKind
 	Emits  []Type
-	Orders []ActionKind
-}
-
-// Handler is one row of the in-stage table: an event that changes State without moving the stage.
-type Handler struct {
-	On     Type
-	Stages []Stage
-	Apply  func(State, Event) State
-	Orders []ActionKind
 }
 
 // Subscriber receives each applied event in sequence order and writes only its own records.
@@ -606,13 +609,13 @@ sequenceDiagram
 **Reading the diagram.**
 1. On start, resume or after a crash, `Drive` calls group state's `Load` with an `apply` function that wraps `Next()`.
 2. `Load` reads `state.json` and passes every line after its `sequence` through `apply`, in order.
-3. Replay discards each result's `Emit` and `Actions`, because follow-on events and action lines are already on disk; it returns the rebuilt `State`.
-4. `Drive` reruns every action in `State.ActionsOpen` under its idempotency key, before it applies any new event.
+3. Replay discards each result's `Emit` and `Actions`, because follow-on events and action lines are already on disk, except at the end of the file: follow-ons of the last lines that never reached disk are appended then. It returns the rebuilt `State`.
+4. `Drive` runs every action in `State.ActionsOpen`, started or not, under its idempotency key, before it applies any new event.
 5. A producer hands `Drive` a fact stamped with the epoch its session started under.
 6. `Drive` sets `stage` and `stale`, then calls `Append`, which stamps `sequence`, `timestamp` and `checksum`, validates the line against the schema and syncs it; it returns only once the line is on disk.
 7. `Drive` calls `Next()`, which touches nothing on disk; a stale event changes nothing.
 8. `Drive` appends each follow-on event and applies it through `Next()` the same way, in order, before any action runs.
-9. For each action, `Drive` appends `action.start`, applies it (which adds the action to `ActionsOpen`), runs the action, then appends and applies `action.done` (which removes it).
+9. For each action, which `Next()` already put in `ActionsOpen`, `Drive` appends and applies `action.start`, runs the action, then appends and applies `action.done`, which removes it.
 10. Because every appended line is applied, `State.Sequence` is always the last line on disk, and `Snapshot` can write it on [its interval](#28-configuration-and-constants).
 11. The bus hands each applied event to the 3 subscribers, in `sequence` order.
 
@@ -648,59 +651,73 @@ stateDiagram-v2
   Verify --> Build: 6 reviewer session.end
   Verify --> Ship: 7 stage.exit
   Ship --> Build: 8 epic tip broke
-  Ship --> [*]: 9 group.shipped
+  Ship --> [*]: 9 tip check passed
   Build --> Paused: 10 paused
   Verify --> Paused: 10 paused
   Paused --> Build: 11 timer.due
   Paused --> Verify: 11 timer.due
   Paused --> Blocked: 12 pause timeout
-  Blocked --> Build: 13 resume, to prior stage
+  note right of Blocked
+    13 resume returns to the prior stage
+  end note
 ```
 
-**Reading the diagram.** Numbers match the rows below. Every stage can also enter Blocked when a bound runs out (row 14), and abandon, lost lease and cancel end a group from any stage (rows 17-19); they are left off the drawing.
+**Reading the diagram.** Numbers match the rows below. Every stage can also enter Blocked when a bound runs out (row 14), and abandon, a lost lease and cancel end a group from any stage (rows 17-19); they are left off the drawing.
 
-| # | From | Event | Condition | To |
-|---|---|---|---|---|
-| 1 | — | `run.start` | | Intake |
-| 2 | Intake | `stage.exit` | Lint pass, lease and fence taken, `commands.setup` exit 0, task list locked | Build |
-| 3 | Build | `task.done` | The last task's `done_when` exit 0 and a commit on the hidden ref | Check |
-| 4 | Check | `check.done` pass | | Verify |
-| 5 | Check | `check.done` fail | Returns under `limits.returns` | Build |
-| 6 | Verify | Reviewer `session.end` | 1 or more verified blocking findings, a `not_met` task, or an item that failed Go's two reruns; returns under the limit | Build |
-| 7 | Verify | `stage.exit` | Reviewer `met` for every task and 0 blocking findings; tester `confirmed` for every task and item; 0 regressions | Ship |
-| 8 | Ship | `check.done` fail on the epic tip | Returns under the limit; a fresh worktree is cut from the tip `[PENDING G-31]` | Build |
-| 9 | Ship | `group.shipped` | Merge clean, Check on the epic tip, landing with the fence | end |
-| 10 | Build or Verify | `session.end` reason `paused` | No allowed link left | Paused |
-| 11 | Paused | `timer.due` | Reason is not `pause_timeout`; the provider's reset time passed; the epoch is kept | `Prior` |
-| 12 | Paused | `timer.due` reason `pause_timeout` | `limits.pause_max_min` reached; WIP commit kept; `Prior` keeps the stage before Paused | Blocked |
-| 13 | Blocked | `resume` | A person or the orchestrator `[PENDING G-29]` | `Prior` `[PENDING G-31]` |
-| 14 | Any stage | The event that spends a bound's last unit | See the [block reasons](#block-reasons) | Blocked |
-| 15 | Blocked | `scope approve` or `scope deny` | The builder resumes with the answer | Build |
-| 16 | Paused | `resume` | Sooner than the timer | `Prior` |
-| 17 | Any stage | `abandon` | Lease freed, evidence kept, `lock.released`; dependents block `dependency` `[PENDING G-31]` | end |
-| 18 | Any stage | `lease.lost` | Another run took the group; no landing `[PENDING G-31]` | end |
-| 19 | Any stage | `group.cancelled` | Trigger `[UNKNOWN: not yet designed]` `[PENDING G-31]` | end |
+**The table is code.** Both tables below are one Go slice of `Transition`. `Next()` tries the rows in order, stage moves first, and applies the first whose `From`, `On` and condition match; an event no row matches is refused and logged, never dropped. The build draws the diagram from the slice and the gate checks every registered `Spec` against it.
 
-- **Returns to Build** raise the epoch and spend 1 of `limits.returns`; the builder gets every verified finding in one return. On a Verify return the tester is cancelled at the first verified blocking finding, and the reviewer finishes.
-- **The table is code.** One Go table of from-stage, event type, condition, to-stage and emitted events; `Next()` dispatches through it and the build draws the diagram from it. An event with no row is refused and logged, never dropped.
-- **Rows 8 and 12-19** are the default for rows the stage rulebook did not have, pending the owner `[PENDING G-31]`.
+**Stage moves.** A row that changes the stage emits `stage.enter` for the new stage, or `group.paused`, `group.blocked` or `group.shipped` when the target is Paused, Blocked or the end; the in-stage rows then apply those follow-ons.
+
+| # | From | Event | Condition | To | Sets; orders; emits |
+|---|---|---|---|---|---|
+| 1 | — | `run.start` | | Intake | emits `stage.enter` |
+| 2 | Intake | `stage.exit` | | Build | emits `stage.enter` |
+| 3 | Build | `task.done` | The last task's `done_when` exit 0 and a commit on the hidden ref | Check | emits `stage.enter` |
+| 4 | Check | `check.done` pass | | Verify | emits `stage.enter` |
+| 5 | Check | `check.done` fail | `Returns` under `limits.returns` | Build | `Returns` + 1; emits `stage.enter` |
+| 6 | Verify | Reviewer `session.end` | A verified blocking finding, a `not_met` task, an item that failed Go's two reruns, or a recorded tester failure; `Returns` under the limit | Build | `Returns` + 1; orders `cancel` for a live tester; emits `stage.enter` |
+| 7 | Verify | `stage.exit` | | Ship | emits `stage.enter` |
+| 8 | Ship | `check.done` fail on the epic tip | `Returns` under the limit; a fresh worktree is cut from the tip `[PENDING G-31]` | Build | `Returns` + 1; emits `stage.enter` |
+| 9 | Ship | `check.done` pass on the epic tip | Landed with the fence | end | orders `open_pr` under `ship.mode: group`; emits `group.shipped`, `lock.released` |
+| 10 | Build, Verify | `session.end` reason `paused` | No allowed link left | Paused | `Prior` = stage; emits `group.paused` |
+| 11 | Paused | `timer.due` | Reason is not `pause_timeout`; the reset time passed | `Prior` | orders `spawn` from the resume handle; the epoch is kept |
+| 12 | Paused | `timer.due` reason `pause_timeout` | `limits.pause_max_min` reached | Blocked | orders `cancel`; WIP commit kept; emits `group.blocked` |
+| 13 | Blocked | `resume` command `[PENDING G-29]` | | `Prior` `[PENDING G-31]` | orders `spawn` from the resume handle; emits `stage.enter` |
+| 14 | Any stage | The event that spends a bound's last unit | See the [block reasons](#block-reasons) | Blocked | `Prior` = stage; orders `wip_commit` when a writer was live; emits `group.blocked` |
+| 15 | Blocked | `scope approve` or `scope deny` command `[PENDING G-29]` | | Build | orders `scope_change` on approve, then `spawn`; emits `stage.enter` |
+| 16 | Paused | `resume` command `[PENDING G-29]` | Sooner than the timer | `Prior` | orders `spawn` from the resume handle |
+| 17 | Any stage | `abandon` command `[PENDING G-29]` | Lease freed, evidence kept; dependents block `dependency` `[PENDING G-31]` | end | orders `cancel`; emits `lock.released` |
+| 18 | Any stage | `lease.lost` | Another run took the group; no landing `[PENDING G-31]` | end | orders `cancel` |
+| 19 | Any stage | `group.cancelled` | Trigger `[UNKNOWN: not yet designed]` `[PENDING G-31]` | end | orders `cancel` |
+
+- **Row 14 is a shape, not one row.** Each bound has a twin of the row that spends it, with the limit reached and `To` = Blocked: rows 5, 6 and 8 at `limits.returns`, `task.retry` at `limits.task_attempts`, and so on through the [block reasons](#block-reasons).
+- **Returns** raise the epoch through `stage.enter` and give the builder every verified finding in one return. On a Verify return the tester is cancelled at the first verified blocking finding, and the reviewer finishes.
+- **Rows 8 and 12-19** are the default for moves the rulebook did not have, pending the owner `[PENDING G-31]`.
 - **Commands are not catalog types yet.** `resume`, `scope approve|deny` and `abandon` arrive as events whose type names, and route into `Drive`, wait on the commands decision `[PENDING G-29]`; they are outside the 35.
-- **One row wins.** Rows are tried in table order and the first whose condition holds applies.
 
-**In-stage events.** These change `State` or order actions without moving the stage. Any type in neither table is refused.
+**In-stage rows.** These change `State`, order actions or emit follow-ons without moving the stage.
 
-| Event | Stages | State change | Orders |
-|---|---|---|---|
-| `task.done`, not the last task | Build | Task `done`; next task `claimed` | `commit`, then `spawn` for the next task |
-| `task.retry` | Build | Task `attempts` + 1; at `limits.task_attempts` row 14 applies instead | `spawn` |
-| `session.start`, `task.claimed` | Build, Verify | Task `claimed` with its session | None |
-| `session.end` of a writing session | Build | `Resume` set from the session | `wip_commit` |
-| `task.released` | Build, Verify | Task back to `queued`, or `blocked` with reason `crash` | None |
-| `finding.submit` | Verify | Claim recorded in `Verify` | None |
-| `finding.verified` | Verify | Verified finding recorded; the first blocking one | `cancel` for the tester |
-| `session.idle`, `session.timewarn`, `tool.denied`, `provider.skip`, `limit.warn`, `lock.taken`, `state.truncated` | Any | None; recorded for the ledger | None |
-| `action.start`, `action.done` | Any | Action added to or removed from `ActionsOpen` | None |
-
+| Event | Stages | Sets; orders; emits |
+|---|---|---|
+| `stage.enter` | Any | `Epoch` + 1; entering Verify clears `Verify`; orders by stage: Intake `setup`; Build `spawn` for the first open task, with the findings on a return; Check one `check` per command; Verify `spawn` for the reviewer and the tester; Ship `land` |
+| `lock.taken` | Intake | Lock recorded |
+| `action.done` for `setup` | Intake | Exit 0 with the lock taken emits `stage.exit`; a non-zero exit is `[UNKNOWN: not yet designed]` `[PENDING G-31]` |
+| `session.start`, `task.claimed` | Build, Verify | Task `claimed` with its session |
+| `session.end` of a writing session | Build | `Resume` set; `TokensUsed` grows by the session's usage when `track.usage` is on; exit `done` orders `commit`, any other exit `wip_commit`; a timeout or idle stop adds 1 to the task's `Retries` |
+| `action.done` for `commit` | Build | The commit action ran `done_when` first; exit 0 emits `task.done`, a failure emits `task.retry` (fields `[PENDING G-24]`) |
+| `task.done`, not the last task | Build | Task `done`; orders `spawn` for the next task |
+| `task.retry` | Build | Task `Attempts` + 1; orders `spawn` |
+| `task.released` | Build, Verify | Task back to `queued`, or `blocked` with reason `crash` |
+| `finding.submit` | Verify | Claim recorded in `Verify` |
+| `finding.verified` | Verify | Verified finding recorded; the first blocking one orders `cancel` for the tester |
+| Reviewer or tester `session.end` that passes | Verify | Result recorded; with both passed and 0 regressions, emits `stage.exit` |
+| Tester `session.end` that fails | Verify | Failure recorded; it returns with the reviewer's end (row 6) |
+| `land` `action.done` | Ship | Orders `check` on the epic tip |
+| `group.paused` | Paused | `Pause` set |
+| `group.blocked` | Blocked | `Block` set; `Blocks[reason]` + 1 |
+| `group.shipped`, `lock.released` | end | None |
+| `action.start`, `action.done` | Any | The open action is marked started, then removed |
+| `session.idle`, `session.timewarn`, `tool.denied`, `provider.skip`, `limit.warn`, `state.truncated` | Any | None; recorded for the ledger |
 
 | State | Waits on | Pool slot | Lease and worktree | Wall clocks | Ends by |
 |---|---|---|---|---|---|
@@ -753,7 +770,7 @@ Every row ends with `resume` unless the last column says otherwise.
 
 ### 2.8 Configuration and Constants
 
-**Keys read by `Next()`:** `limits.returns`, `limits.task_attempts`, `limits.pause_max_min`, `limits.session_idle_min`, `limits.group_tokens`, `track.usage` ([Flat keys (34) (Appendix B)](#flat-keys-34)).
+**Keys read into `Limits`:** `limits.returns`, `limits.task_attempts`, `limits.pause_max_min`, `limits.group_tokens`, `track.usage` ([Flat keys (34) (Appendix B)](#flat-keys-34)), plus each agent's `retries` from its `agent.json`.
 
 | Constant | Value |
 |---|---|
@@ -767,8 +784,8 @@ Every row ends with `resume` unless the last column says otherwise.
 - `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`.
 - The 4 Verify orderings (reviewer fails first, tester fails first, both pass, both fail in one tick) each move the stage exactly once.
 - Replaying a group's state rebuilds its `state.json` exactly.
-- Killing the engine after an `action.start` and before its `action.done` makes the restarted Drive run that side effect again, once.
-- `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit.
+- `kill -9` between `action.start commit` and `action.done`, then `resume`, runs the commit again exactly once and yields 1 commit.
+- `kill -9` after an event is appended and before its first `action.start`, then `resume`, still runs the ordered action once.
 - A last event line cut short by a crash replays with one `state.truncated`.
 - A fixture `group.blocked` wakes `status --wait`.
 - An event emitted between a waiter's subscribe and its first watch still wakes it.
@@ -781,7 +798,7 @@ Every row ends with `resume` unless the last column says otherwise.
 |---|---|
 | G-19 | The 10,000-event replay target is unmeasured |
 | G-24 | The fields of each event type's data struct |
-| G-29 | Envelope `id`, `class`, `cause`, `corr`; how commands reach `Drive`; bus delivery timing |
+| G-29 | Envelope `id`, `class`, `cause`, `corr`; command type names and how they reach `Drive`; whether an event and its follow-ons are one disk write (the tail append in Behaviour is the default); bus delivery timing |
 | G-30 | Machine log file names; `Action.Args`; the `State` sub-structs; `config_hash` and task id formats |
 | G-31 | Transition rows 8 and 12-19, the `run.done` condition, the `group.cancelled` trigger, `lint` at Intake |
 | G-32 | The crash-safe counters in `State` |
@@ -1841,7 +1858,7 @@ flowchart LR
 4. `status --wait` and the subscribers read new events with `Tail`, from a sequence number onward.
 5. `Append` stamps `sequence`, `timestamp` and `checksum` (`Drive` has already set `stage` and `stale`), checks the event, appends it to `events.jsonl` and syncs it before returning.
 6. `Snapshot` writes `state.json` only every 50 events or on a stage change, and refuses a state whose `sequence` is not the last appended.
-7. `Load` reads the snapshot and returns its open actions, which `Drive` reruns first; it then replays the events after the snapshot through `Next()`, drops a last line cut short by a crash with one `state.truncated`, and returns the state.
+7. `Load` reads the snapshot, replays every later line through the `apply` function `Drive` passes, drops a last line cut short by a crash with one `state.truncated`, and returns the state; `Drive` then runs its `ActionsOpen` before any new event ([Behaviour](#25-behaviour)).
 
 **What matters**
 - One schema: every record kind and all 35 event types are Go structs; the build generates `embed/state.schema.json`, and `help --json` serves it as `state`.
