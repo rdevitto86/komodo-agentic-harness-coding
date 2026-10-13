@@ -20,7 +20,8 @@ Output that has to be re-read has failed, however correct.
 - **Doc style:** descriptive and concise; no walls of text and no vague short labels; no acronyms in prose; no implied context.
 - **Doc edits are patches.** Change the smallest span. The HLD and LLD carry no revision history or version numbers; git history records changes. Exception: the approved subsystem-first restructure moves whole sections, as a pure-move commit followed by a rewrite commit.
 - **The HLD and LLD never share content.** The HLD holds purpose, ownership, interactions and decisions; the LLD holds types, interfaces, algorithms and limits. Link across, never copy.
-- **Each subsystem has one LLD chapter with numbered child pages** (`### 2.1`, `### 2.2`), mirroring one HLD subsystem page.
+- **Each subsystem has one LLD chapter with numbered child pages** (`### 2.1`, `### 2.2`), mirroring one short HLD subsystem section.
+- **The HLD is a 20-minute read, a hard cap,** with no child pages: everything before its end-of-read marker, at 238 words a minute plus 30 seconds per diagram. Detail goes to the LLD, not to more HLD pages.
 - **Keep counts and cross-references true.** Update the component, phase and section references you touch.
 - **Open items live in the LLD gap register** (the "Gap register" appendix). Add a new `G-NN` row there; do not hold it in chat.
 - **Pursued features update the docs in the same branch.** A proof of concept gets a file-map line and a gap row. Once a feature is adopted (dashboard, `init`, …), the HLD and LLD gain its component, verbs, config keys, file map and proof cases.
