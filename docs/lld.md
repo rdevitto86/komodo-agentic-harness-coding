@@ -806,304 +806,638 @@ Every row ends with `resume` unless the last column says otherwise.
 
 ## 3. Engine Internals
 
-The engine runs groups: it starts sessions, moves stages and lands work. One `Drive` goroutine (a lightweight Go thread) per group owns its state. Cross-group facts are files under `~/.komodo/state/`, written only through the state manager's `Claim`, `Replace` and `Remove`, the only way two engines coordinate. The session pool is the machine-wide 1 to 6 slots that builder, reviewer and tester sessions take. Without these rules two groups could write one state file.
+The engine runs task groups: it starts model sessions, moves each group through its stages, orders groups against each other and lands finished work on the epic branch. It is the package that calls the decision function of [chapter 2](#2-event-spine-and-state-machine) and performs the side effects that function orders. Design and reasons are in [HLD 5.4](hld.md#54-engine-internals).
 
-Ready work waits as create-only files under `~/.komodo/state/queue/`, one per group or job. Taking a slot deletes the file, then writes the lease; a crash between leaves an item for the sweep. Groups form a DAG (a graph of dependencies with no loops), built from the backlog. A group starts only after every dependency has landed and Check passed on the epic tip. Landings happen one at a time, each followed by a 0-token Check on the tip. If it fails, the last-landed group returns to Build in a new worktree cut from the tip.
+**Guarantees the tests pin**
 
-**📐 Engine internals**
-```mermaid
-flowchart TB
-  %% Legend: solid arrow = control or data flow; dotted arrow = file or signal
-  %% Cross-group state is files under ~/.komodo/state/, written only through the state manager
-  BL["Backlog"] --> RUNG
-  RUNG["Run goroutine: builds the DAG, enqueues, reaps Drives"]
-  RUNG --> DAG["DAG: cycles refused; waves and longest chain computed"]
-  DAG -->|"every dependency landed, Check passed on the epic tip"| QF
-  QF[("state/queue/#lt;repo-id#gt;.#lt;kind#gt;.#lt;id#gt;.json, create-only")]
-  QF --- QS["{kind: group or job, repo, id, priority, enqueued_at}"]
-  TICK["jobs tick enqueues due jobs"] --> QF
-  QF --> PICK
-  subgraph PICK["Pick order"]
-    direction TB
-    PK1["1 priority: high first"]
-    PK2["2 fair share across repos, round-robin"]
-    PK3["3 longest remaining chain weighted by task count"]
-    PK4["4 most groups unblocked"]
-    PK5["5 backlog ID order"]
-  end
-  PICK --> TAKE["Take a pool slot: delete the file, then write the lease"]
-  TAKE -.-> POOL
-  subgraph POOL["Pool and link slots: lock files freed when their pid dies"]
-    direction TB
-    PMIN["limits.pool_min 1, limits.pool_max 6, hard limit 16"]
-    GROW["Grow by 1 after each clean session end"]
-    GROWC["while free memory covers one more sandbox.max_mem_gb"]
-    SHRINK["Shrink: halve, never below the floor"]
-    SHRINKC["on a rate-limit error or quota past warn.quota_pct"]
-    LINK["limits.link_sessions.#lt;link#gt;: 3; loopback 1; hard limit 8"]
-    GROW --- GROWC
-    SHRINK --- SHRINKC
-  end
-  TAKE --> INTAKE["Intake, just before a group's first session takes a slot"]
-  INTAKE --> DRIVE
-  subgraph DRIVE["Drive per group: one goroutine owns the group state"]
-    direction LR
-    SG["Session goroutine, one per session"]
-    SG -->|"events, buffered to 256, a full channel blocks"| D["Drive"]
-  end
-  D -.-> J[("runs/#lt;group#gt;/events.jsonl and state.json")]
-  D -->|"Ship"| LAND["Landing: one at a time; then Check on the epic tip"]
-  LAND -->|"Check fails on the tip"| IB["Integration break: landings pause"]
-  IB --> IB2["the last-landed group returns to Build in a new worktree"]
-  IB2 --> IB3["bound limits.returns; then Blocked integration"]
-  LAND -->|"after the last landing"| EG["Epic gate: reviewer and tester once"]
-  EG --> EG2["over the whole epic diff; a finding with no file: epic_gate"]
-  DRIVE -.->|"panic"| PANIC["group.blocked crash for that group alone"]
-```
-**Reading the diagram.** The run goroutine builds the DAG; ready groups become queue files, picked by five rules. A taken slot deletes the file, writes the lease and hands the group to `Drive`. Landings go singly, then tip Check, then the epic gate.
-
-**What matters**
-- A session goroutine feeds its group's `Drive` channel, buffered to 256, never dropped; a `Drive` panic blocks that group alone.
-- Pick order: `priority: high`, fair share across repos, longest remaining chain by task count, most groups unblocked, backlog ID order.
-- Pool floor `limits.pool_min` 1, ceiling `limits.pool_max` 6, hard limit 16; it grows by 1 per clean end and halves on a rate limit.
-- Per-link slots are `limits.link_sessions.<link>` 3, loopback 1, hard limit 8; slots are lock files freed when their pid (process id) dies.
-- After the last landing the reviewer and tester run once over the whole epic diff; a finding with no file blocks with `epic_gate`.
-- One builder per group runs tasks in order; `run` takes only `--stage <stage>`.
-
-**Lookup:** [Orchestration engine internals](#orchestration-engine-internals) and the sections after it hold the concurrency model, queue and pick order, pool rules, run order and run flags.
-
-
-
-#### Orchestration engine internals
-
-
-**In plain terms.** The orchestration engine is the part of the binary that runs many groups at once without letting them corrupt each other. It owns the state files, the work queue, the session pool and the run order. This section explains those internals. They exist so two repos, or two runs, can share one machine and one model quota safely. Only the engine touches them; a person sees their effect in `status`, and the orchestrator drives them through `run`, `resume` and `stop`.
-
-#### Concurrency model
-
-**In plain terms.** The concurrency model says which pieces of the engine run in parallel (as goroutines, Go's lightweight threads) and how they avoid stepping on each other. The rule is one owner per piece of state. One goroutine owns each group, one each session, and shared machine state lives only in files the OS writes atomically. It exists so there are no locks to get wrong inside a group and a crash in one group cannot take down the others. Only the engine's code is involved.
-
-| Element | Rule |
+| Guarantee | How |
 |---|---|
-| `Drive` per group | One goroutine owns the group's state; nothing else writes them; no mutex (an in-memory lock) inside a group |
-| Session goroutine | One per session, producing events into its group's `Drive` channel, buffered to 256, never dropped: a full channel blocks the producer |
-| Cross-group state | Files with OS atomicity under `~/.komodo/state/`: queue, pool and link slots, leases, `quota.json`; create-only or renamed into place |
-| Run goroutine | Builds the DAG (a graph of dependencies with no loops), enqueues ready groups, reaps finished `Drive`s; holds no group state |
-| Panic containment | Every goroutine starts through one panic-catching helper; a panic in one `Drive` emits `group.blocked crash` for that group alone |
+| One writer per group | A single `Drive` goroutine writes a group's state; no mutex exists inside a group |
+| No lost event | A session's event channel holds 256 events; a full channel blocks the session, it never drops an event |
+| Faults stay inside one group | Every goroutine starts through one panic-catching helper; a panic in one `Drive` blocks that group only |
+| Machine-wide limits hold | Queue items, pool slots, link slots and leases are files created exclusively or renamed into place |
+| Landings are serial | One landing at a time, each followed by a zero-token Check on the epic tip |
 
-**What each one does**
-- **`Drive` per group:** One goroutine owns everything about a group: it reads events, writes the group state, calls `Next()` and runs the actions. Because nothing else writes those files, the group needs no mutex, and two groups never contend. [Drive: the per-group loop (Appendix D)](#drive-the-per-group-loop) explains it step by step.
-- **Session goroutine:** Each running model session has one goroutine that turns its stream into events. It sends them to its group's `Drive` over a channel with room for 256 events. Events are never dropped; if the channel fills, the session's goroutine waits.
-- **Cross-group state:** Everything groups share (the queue, pool and link slots, leases, the quota file) lives as files under `~/.komodo/state/`. Files are created exclusively or renamed into place, so the OS guarantees one winner without any in-memory lock.
-- **Run goroutine:** One goroutine per run builds the dependency graph, puts ready groups in the queue and collects finished `Drive`s. It holds no group state, so it can never corrupt a group.
-- **Panic containment:** Every goroutine starts through one helper that catches a panic (a Go runtime failure). A panic inside one group's `Drive` blocks only that group with reason `crash`; the run and the other groups continue.
+### 3.1 Scope and Concepts
 
-#### Drive: the per-group loop
+**Owns:**
+- The `Drive` loop that runs one group from its first event to its end.
+- The run goroutine and run order: the dependency graph as the engine consumes it, group readiness, serial landing, the integration break and the epic gate.
+- The machine-wide work queue and its pick order.
+- The machine-wide session pool and the per-link session slots.
+- The shutdown sequence and the parent guard.
+- The stage drivers `intake.go`, `build.go` and `verify.go`.
 
-**In plain terms.** Drive is the loop inside the engine that runs one group of work from its start to its end. There is exactly one Drive per active group, and it is the only code allowed to change that group's records, the way one clerk alone writes in a case file while everyone else hands the clerk notes. Each time something happens to the group, Drive saves it, asks `Next()` (the engine's decision step, which works out what should happen and never writes anything) what to do, and carries that out. Without it, two pieces of code could change one group at once and leave its records contradicting each other. Only the engine runs it; a person sees its effect in `status`.
+**Does not own:**
+- `Next()`, `State`, `Limits`, the transition table and the 35 event types ([Event Spine and State Machine](#2-event-spine-and-state-machine)).
+- Group state files, `Claim`, `Replace` and `Remove` ([State Manager](#13-state-manager)).
+- Worktrees, leases, fences and the hidden reference ([Workspace and Leases](#4-workspace-and-leases)).
+- Starting, watching and stopping one model session ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)).
+- The startup sweep and the Check, review and tester logic ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)).
+- Job templates and the `jobs tick` verb ([Scheduler, Cache and Observability](#10-scheduler-cache-and-observability)).
+- Building the dependency graph from the backlog, and the git landing operations ([Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release)).
 
-```mermaid
-flowchart TB
-  START["① Start<br><small>pool slot and lease taken</small>"] --> LOAD["② Open and Load<br><small>last snapshot plus later events</small>"]
-  LOAD --> LOOP["③ Loop<br><small>one event per turn, 8 steps</small>"]
-  LOOP --> END["④ End<br><small>landed, abandoned, stopped or crashed</small>"]
+The purpose of the subsystem, and who it talks to, is in the HLD: [Engine Internals](hld.md#54-engine-internals).
+
+**Concepts**
+- **Drive:** the goroutine, a lightweight Go thread, that runs one group. It is the only code that changes that group's records.
+- **Run goroutine:** the goroutine of one `komodo run` launch. It builds the dependency graph, enqueues ready groups and collects finished `Drive`s.
+- **Queue item:** a create-only file naming one ready group or one due job.
+- **Pool slot:** one of the machine-wide places for builder, reviewer and tester sessions. A link slot is a separate per-link limit.
+- **Wave:** a set of groups that can run together.
+- **Landing:** merging a finished group into the epic branch. The epic tip is the newest commit of that branch.
+- **Integration break:** a failed Check on the epic tip after a landing.
+- **Epic gate:** one reviewer and tester pass over the whole epic diff after the last landing.
+- **Parent guard:** the small process that starts the engine and repeats the shutdown save if the engine dies.
+
+Group, epic and lease are defined in the [glossary](hld.md#12-glossary).
+
+### 3.2 Package Layout
+
+| File | Holds |
+|---|---|
+| `internal/engine/engine.go` | `Drive`: the per-group loop that appends events, calls `Next()` and runs the ordered actions |
+| `internal/engine/queue.go` | Work queue files under `~/.komodo/state/queue/`, the pick order, fair share across repositories |
+| `internal/engine/pool.go` | Session pool and per-link slots, the floor, the ceiling, growth and shrinkage |
+| `internal/engine/intake.go` | Intake: lint the group's backlog cards, hash them, take the lease, cut the worktree from the epic tip |
+| `internal/engine/build.go` | Build: one session per task, resumed with the findings on a return |
+| `internal/engine/verify.go` | Verify: reviewer and tester at once; cancels the tester on the first verified finding |
+| `internal/engine/shutdown.go` | The catch-all shutdown sequence and the parent guard |
+
+Files of the same package that other chapters own:
+
+| File | Chapter |
+|---|---|
+| `stage.go`, `limits.go` | [Event Spine and State Machine](#2-event-spine-and-state-machine) |
+| `worktree.go` | [Workspace and Leases](#4-workspace-and-leases) |
+| `session.go` | [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs) |
+| `schedule.go` | [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability) |
+| `recover.go` | [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery) |
+
+**Entry points**
+
+| Flow | Starts at |
+|---|---|
+| One group's life | `Drive.RunGroup` in `engine.go` |
+| Choosing the next queue item | `Pick` in `queue.go` |
+| Pool growth and shrinkage | `GrowPool` and `HalvePool` in `pool.go` |
+| Start rule | `Startable` in the run goroutine's file |
+| Stopping a run | The shutdown sequence in `shutdown.go` |
+
+The names are working names. `[TODO: confirm the exported names of the engine's functions; the design fixes behaviour, not names (G-NEW-3)]`
+
+The dependency graph is built in `internal/repo/graph.go` (waves and longest chain, [chapter 11](#11-backlog-planning-ship-and-release)); the engine imports it, as the import order allows. `[TODO: the file that holds the run goroutine, run-order readiness, the landing gate, the epic gate and the panic-catching helper; the design's file map names none (G-NEW-3)]`
+
+### 3.3 Data Model
+
+#### Constants fixed by the design
+
+```go
+const (
+	EventBuffer      = 256              // capacity of a group's event channel
+	LeaseRenewEvery  = 5 * time.Minute  // how often a group's Drive renews its lease
+	AgentStopGrace   = 30 * time.Second // time shutdown allows each session to stop
+	ShutdownDeadline = 60 * time.Second // after this, sessions still alive are killed
+	GuardSilenceMax  = 10 * time.Minute // heartbeat silence after which the parent guard acts
+)
 ```
 
-**Reading the diagram.**
-1. ① A ready group gets a free session slot; the engine writes the group's lease and hands the group to a new Drive.
-2. ② Drive opens the group, which makes it the only writer, and loads the last snapshot plus the events saved after it.
-3. ③ Drive takes one event at a time and runs one turn for it, in the 8 steps listed below.
-4. ④ Drive stops when its group finishes or the run stops; a crash stops only its own group.
+#### Queue item
 
-| Part | What happens |
+Ready work waits as one create-only file per group or job at `~/.komodo/state/queue/<repo-id>.<kind>.<id>.json`. How a repository identifier becomes a file name is `[TODO: repository identifier to file name mapping (G-30)]`.
+
+```go
+// ItemKind says whether a queue item is a task group or a scheduled job.
+type ItemKind string
+
+const (
+	KindGroup ItemKind = "group"
+	KindJob   ItemKind = "job"
+)
+
+// Priority orders queue items; a group's TG.md may set high, everything else is normal.
+type Priority string
+
+const (
+	PriorityHigh   Priority = "high"
+	PriorityNormal Priority = "normal"
+)
+
+// QueueItem is the body of one queue file.
+type QueueItem struct {
+	Kind       ItemKind  `json:"kind"`
+	Repo       string    `json:"repo"`
+	ID         string    `json:"id"`
+	Priority   Priority  `json:"priority"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
+}
+```
+
+| Field | Type | Rule |
+|---|---|---|
+| `kind` | string | `group` for a ready group, `job` for a due scheduled job |
+| `repo` | string | The repository the item belongs to; fair share counts each job as its own repository |
+| `id` | string | The group identifier, or the job name |
+| `priority` | string | `high` is set by `priority: high` in the group's `TG.md`; jobs are `normal` |
+| `enqueued_at` | time | When the item was queued `[TODO: timestamp format (G-30)]` |
+
+**Versioning.** Each record carries the schema version `v` in its header. A newer binary reads an older version by running a registered migration step in memory. How a reader treats a record written by a newer binary is `[TODO: forward-version handling in the state manager (G-30)]`.
+
+The state manager wraps the body in its six-field record header (`v`, `kind`, `key`, `rev`, `ts`, `writer`); the layout of header and body is `[TODO: how a record's header and body share one file (G-30)]`. The body alone:
+
+```json
+{
+  "kind": "group",
+  "repo": "github.com/rdevitto86/komodo-agentic-harness-coding",
+  "id": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
+  "priority": "normal",
+  "enqueued_at": "[TODO: timestamp format (G-30)]"
+}
+```
+
+#### Slot files
+
+Pool slots live under `~/.komodo/state/pool/` and link slots under `~/.komodo/state/links/`. Each slot is a lock file tagged with the process identifier of its holder; the slot is free again when that process dies.
+
+```go
+// SlotFile is the body of a pool or link slot lock file.
+type SlotFile struct {
+	Pid int `json:"pid"` // process identifier of the holder
+}
+```
+
+| Field | Type | Rule |
+|---|---|---|
+| `pid` | integer | The holder's process identifier; the slot is free when that process is dead |
+
+Versioning follows the same record header as the queue item.
+
+`[TODO: slot file names, the rest of the body, and where the pool's current ceiling is stored (G-NEW-1)]`
+
+#### Drive
+
+```go
+// Drive owns one group: it is the only writer of that group's events and snapshot.
+type Drive struct {
+	Group  state.ID                // the group this Drive runs
+	State  state.GroupState[State] // group state: Open, Append, Snapshot, Load, Tail
+	Limits Limits                  // the bounds Next enforces, pinned by the config hash
+	Events chan state.Event        // fed by session goroutines, capacity EventBuffer
+}
+```
+
+| Field | Rule |
 |---|---|
-| Starts | A ready group gets a pool slot and its lease; the engine hands it to a new Drive, which calls `Open` and `Load` |
-| Waits on | Events from the group's sessions (a queue of 256, never dropped), the group's pause timer, and its lease renewal every 5 minutes |
-| One turn | Save the event, decide, record and run each side effect, mark it done, snapshot, notify the listeners |
-| Paused or Blocked | The group gives back its pool slot and keeps its lease; whether Drive keeps running or exits while it waits is `[UNKNOWN: not yet designed]` `[PENDING G-29]` |
-| Ends | The group lands or is abandoned, the run stops, or Drive crashes, which blocks only its own group |
+| `Group` | Identifier of the one group; a second `Open` of the same group in one process is refused |
+| `State` | The calls of [Group state](#13-state-manager); `Next()` is passed into `Load` as the replay function |
+| `Limits` | Read once from the effective configuration that `State.ConfigHash` pins |
+| `Events` | A session goroutine sends the facts of its session; a full channel blocks the sender |
 
-**What each one does**
-- **Starts:** The engine picks a ready group from the work queue, deletes its queue file, writes its lease and hands it to a new Drive ([Run order and convergence (Appendix D)](#run-order-and-convergence)). Drive calls `Open` on the group's state, which makes it the group's only writer ([Group state (Appendix C)](#group-state)). It then calls `Load`, which reads the last snapshot, replays the events saved after it, and returns the state, whose open actions Drive runs again ([The outbox (Appendix C)](#actions)).
-- **Waits on:** Each model session sends its events to the group's Drive over a queue with room for 256; an event is never dropped, and a full queue makes the session wait ([Concurrency model (Appendix D)](#concurrency-model)). Drive also renews the group's lease every 5 minutes, and a live engine sleeps until a paused group's `wait_until` time ([Lease (Appendix E)](#lease), [Paused versus Blocked (Appendix C)](#26-state-and-transitions)). How a typed command such as `resume` reaches Drive is `[UNKNOWN: not yet designed]` `[PENDING G-29]`.
-- **One turn:** The 8 steps below. Chapter 2 draws the same path as a sequence diagram, from the producer through the state manager, `Next()` and the listeners ([Event spine and state machine](#2-event-spine-and-state-machine)).
-- **Paused or Blocked:** Both give back the group's pool slot so other groups can run, and both keep its lease and worktree ([Paused versus Blocked (Appendix C)](#26-state-and-transitions)). The design does not yet say whether the Drive loop stays alive during the wait or exits and is started again on `resume`.
-- **Ends:** When the group lands or is abandoned, the run's goroutine collects the finished Drive. On `komodo stop`, the shutdown sequence stops sessions, saves work, frees leases and writes the snapshot ([Shutdown and the parent guard (Appendix E)](#shutdown-and-the-parent-guard)). A crash inside one Drive blocks only that group with reason `crash`; the run and the other groups continue.
+`Drive` is in memory only. Its durable form is the group state of [chapter 2](#2-event-spine-and-state-machine), whose snapshot body is `State`.
 
-**One turn, step by step**
-1. Drive takes the next event from its queue.
-2. It calls `Append`: the state manager stamps the event's sequence, timestamp, checksum and stale flag, checks it against the schema and syncs it to disk.
-3. It calls `Next()`, which returns the new state, the side effects to run and any follow-on events; a stale event changes nothing.
-4. It appends the follow-on events and an `action.start` line for each side effect.
-5. It runs each side effect, such as starting a session or making a commit. Pushing and opening a PR run beside the loop, so a slow network never holds it.
-6. It appends `action.done` for each finished side effect, so a restart skips it.
-7. It hands the new state to `Snapshot`, which writes `state.json` every 50 events or on a stage change.
-8. The event bus hands the event to the 3 listeners: the ledger, the wake file and the `status --watch` screen.
+How a typed command such as `resume` reaches `Drive` is `[TODO: command transport into Drive (G-29)]`.
 
-Whether steps 2 to 4 become a single disk write, and whether step 8 waits for each listener, are `[UNKNOWN: not yet designed]` `[PENDING G-29]`.
+#### Dependency graph, as consumed
 
-#### Work queue
+The run goroutine reads, per group: its dependencies, its `touches` globs, its task count and its backlog position. The graph also yields waves (sets of groups that can run together) and the longest chain. The types are defined by `internal/repo/graph.go` ([chapter 11](#11-backlog-planning-ship-and-release)).
 
-**In plain terms.** The work queue is the machine-wide waiting line of groups and scheduled jobs that are ready to run but have no session slot yet. Each item is one small file, so every repo and every `komodo` process on the machine sees the same line. It exists so a shared machine divides its sessions fairly and never loses an item in a crash. `run` and `jobs tick` add items, and the engine takes them when a pool slot frees. A person affects order only through `priority: high` in a group's `TG.md`.
+```go
+// Candidate is one queue item with the three facts the tie-break rules read.
+type Candidate struct {
+	Item        QueueItem
+	ChainWeight int // longest remaining chain, weighted by task count
+	Unblocks    int // groups unblocked by landing this one
+	Order       int // position in backlog ID order; lower is earlier
+}
+```
 
-- Path: `~/.komodo/state/queue/<repo-id>.<kind>.<id>.json`, one create-only file per ready group or due job.
-- Shape: `{kind: group|job, repo, id, priority, enqueued_at}`.
-- `run` enqueues groups as their dependencies land; `jobs tick` enqueues due jobs.
-- Taking a pool slot deletes the file and writes the lease, in that order. A crash between the two leaves an item the sweep re-enqueues, never a lost one.
-- Pick order: `priority: high` first; fair share across repos (round-robin when 2 or more repos have ready items; each job counts as its own repo); longest remaining chain weighted by task count; most groups unblocked; backlog ID order.
-
-#### Session pool
-
-**In plain terms.** The session pool is the machine-wide count of how many heavy model sessions may run at once, from 1 to 6 by default. A pool slot (see Glossary) is one of those places; a link slot is a second, per-provider limit so Claude or Ollama is never overloaded. The pool exists because sessions cost memory and provider quota, and a crash of one `komodo` process must not leave phantom sessions counted. The engine takes and frees slots; a person sizes the pool through `limits.pool_min`, `limits.pool_max` and `limits.link_sessions.<link>`.
-
-| Rule | Detail |
-|---|---|
-| Slot takers | Builder, reviewer, tester (`pool_slot: true`); planner and job sessions take none but count against link limits |
-| Floor, ceiling | `limits.pool_min` 1, `limits.pool_max` 6, hard limit 16 |
-| Grow | By 1 after each clean session end, while free memory covers one more `sandbox.max_mem_gb` |
-| Shrink | Halve, never below the floor, on a rate-limit error or quota past `warn.quota_pct` |
-| Link slot | `limits.link_sessions.<link>` (3; loopback 1; hard limit 8). `[PENDING G-04]` whether `OLLAMA_NUM_PARALLEL` above 1 lets `local` exceed 1 |
-| Files | Pool and link slots are lock files freed when their pid (process id) dies |
-| No idle worktrees | Intake runs just before a group's first session takes a slot; the next ready group's Intake starts while the current one's first session loads |
-
-**What each one does**
-- **Slot takers:** Only the looping sessions, builder, reviewer and tester, take a pool slot. Planner and job sessions take none, but every session still counts against its link's limit, so Claude and Ollama stay under their own caps.
-- **Floor, ceiling:** The pool never shrinks below `limits.pool_min` (1), so work always continues, and never grows past `limits.pool_max` (6); the binary refuses more than 16. A person sets both.
-- **Grow:** After each session ends cleanly, the pool grows by 1, as long as free memory still covers one more session's `sandbox.max_mem_gb`. A healthy machine ramps up on its own.
-- **Shrink:** On a rate-limit error from a provider, or when a usage window passes `warn.quota_pct`, the pool halves at once, never below the floor. This stops a quota window from draining in an hour.
-- **Link slot:** Each link allows `limits.link_sessions.<link>` sessions at once (3; 1 for a loopback endpoint such as local Ollama; 8 at most). Whether Ollama's `OLLAMA_NUM_PARALLEL` setting lets `local` go above 1 is still an open gap (G-04).
-- **Files:** Pool and link slots are lock files under `~/.komodo/state/`, each tagged with the holding process id. When that process dies, the slot is free again, so a crash never leaks a slot.
-- **No idle worktrees:** Intake (cutting the worktree and running `setup`) happens only just before the group's first session takes a slot. The next ready group's Intake starts while the current one's session is still loading, so a slot never sits idle longer than one setup.
-
-#### Run order and convergence
-
-**In plain terms.** Run order is how the engine decides which groups run when. Convergence is how their finished work comes together on the epic branch without breaking it. Groups form a DAG (a directed acyclic graph: a dependency map with no loops) built from the backlog. The rules exist so a group never builds on code that has not landed, and so one bad landing cannot poison the groups after it. The engine applies them; a person sees them as `waiting on <group>` and block reasons in `status`.
-
-| Rule | Detail |
-|---|---|
-| DAG | Built from the backlog; cycles refused; waves and longest chain computed |
-| Start | After every dependency has landed and Check passed on the epic tip |
-| Join | Two or more dependencies: start after all land |
-| Named run | `run <group>` refuses when a dependency outside the run has not landed, naming it |
-| Stuck dependency | Dependents show `waiting on <group>`; unrelated groups keep running |
-| Abandoned dependency | Dependents block with `dependency` |
-| Landing | One at a time; then Check on the epic tip (0 tokens) |
-| Integration break | Check fails on the tip: landings pause; the last-landed group returns to Build in a new worktree cut from the tip; bound `limits.returns`; then Blocked `integration` |
-| Epic gate | After the last landing: reviewer and tester once over the whole epic diff; a finding goes to the group that last changed its file; a finding with no file blocks the epic with `epic_gate` |
-| Inside a group | Tasks run one after another in the group worktree; one builder per group; independent tasks belong in separate groups |
-
-**What each one does**
-- **DAG:** The engine reads every group's dependencies and `touches` globs from the backlog and builds the graph. A cycle is refused outright. It computes waves (groups that can run together) and the longest chain, which also drives queue priority.
-- **Start:** A group starts only after every group it depends on has landed and Check has passed on the epic branch's newest commit. Nothing builds on unverified code.
-- **Join:** A group with two or more dependencies waits for all of them to land, not just the first.
-- **Named run:** `komodo run <group>` refuses when a dependency outside this run has not landed yet, and names that dependency. A person lands or includes it first.
-- **Stuck dependency:** When a dependency is blocked, its dependents show `waiting on <group>` in `status` and keep waiting. Groups that do not depend on it keep running.
-- **Abandoned dependency:** When a dependency is abandoned, every group that needs it blocks with reason `dependency`, naming it.
-- **Landing:** Finished groups land one at a time. After each landing, Check runs on the epic tip at zero model tokens to prove the combined code still passes.
-- **Integration break:** If that Check fails, landings pause and the last-landed group goes back to Build in a fresh worktree cut from the epic tip. It gets `limits.returns` tries; after that it blocks with `integration`.
-- **Epic gate:** After the last group lands, the reviewer and tester run once over the entire epic diff. Each finding goes to the group that last changed its file; a finding with no file blocks the whole epic with `epic_gate`. A person then merges only the epic PR.
-- **Inside a group:** Tasks run one after another in the group's single worktree, with one builder at a time. Work that could run in parallel belongs in separate groups.
+`[TODO: exact definition of ChainWeight (whether the group's own tasks count) and Unblocks, and the key that gives Order (G-NEW-9)]`
 
 #### Run flags
 
-**In plain terms.** Run flags are the options a person or the orchestrator can pass to `komodo run`. There is exactly one: `--stage`. Every other knob lives in `komodo config`, so a run cannot be given a one-off limit that nobody audited. The orchestrator passes the flag; the engine honours it.
+`komodo run` takes one flag, `--stage <stage>`, which runs a single stage. The flags `--mode`, `--set`, `--max-parallel`, `--budget-tokens`, `--detach` and `--until` do not exist. The run always detaches, and limits come only from `komodo config`.
 
-`--stage <stage>` runs one stage. There is no `--mode`, `--set`, `--max-parallel`, `--budget-tokens`, `--detach` or `--until`; `run` always detaches, and limits come only from `komodo config`.
+### 3.4 Interfaces
 
-#### Scenario: run order across groups
+The design names `Drive`, `Next()`, the group state calls and the pick order. The exported names and signatures below are the working shape of those parts. `[TODO: confirm the exported names and signatures of the engine's functions; the design fixes behaviour, not names (G-NEW-3)]`
 
-**In plain terms.** An epic holds several groups, some depending on others; this scenario shows how the engine decides which group runs when. It builds a DAG (a directed graph with no cycles) from the backlog, queues ready groups, and hands them slots from a machine-wide pool. Groups land one at a time into the epic branch, and after the last one an epic gate reviews the whole diff. Without this ordering, two groups could change the same file at once, or a dependent could build on code that never landed. The orchestrator starts it with `komodo run`; a person merges only the final epic PR.
+```go
+// RunGroup opens a group, replays it, reruns open actions, then loops until the group ends or ctx is cancelled.
+func (d *Drive) RunGroup(ctx context.Context) error
 
-```mermaid
-flowchart LR
-  BL["Backlog: groups with touches and dependencies"] --> DAG["Go builds the DAG, refuses cycles, computes waves"]
-  DAG --> Q["Machine-wide work queue (files)"]
-  Q --> POOL["Session pool: 1 to 6 slots, plus per-link slots"]
-  POOL --> G1["Group A: Intake to Ship"]
-  POOL --> G2["Group B: Intake to Ship"]
-  G1 --> LAND["One landing at a time, then Check on the epic tip"]
-  G2 --> LAND
-  LAND --> EG["Epic gate: reviewer and tester over the whole epic diff"]
-  EG --> PR["Epic PR, ready for a person"]
+// Pick returns the queue item to take next, applying the five pick rules.
+func Pick(ready []Candidate, lastRepo string) (Candidate, bool)
+
+// GrowPool returns the pool size after one clean session end.
+func GrowPool(size, ceiling int, freeMemGB, sessionMemGB float64) int
+
+// HalvePool returns the pool size after a rate-limit error or quota warning, never below the floor.
+func HalvePool(size, floor int) int
+
+// Startable reports whether a group may start: every dependency landed and Check passed on the epic tip.
+func Startable(dependencies []string, landed map[string]bool, tipChecked bool) bool
 ```
 
-**Reading the diagram.** It starts at the backlog, which lists groups with their `touches` globs and dependencies. Go builds the DAG, refuses cycles and computes waves, the sets of groups that can run together. Ready groups enter the machine-wide work queue, which is a folder of files. The session pool, 1 to 6 slots plus per-link slots, hands slots to groups A and B, each running Intake through Ship. Both feed the landing box: one landing at a time, then Check on the epic tip. After the last landing, the epic gate runs the reviewer and tester over the whole epic diff. The result is an epic PR, ready for a person.
+`lastRepo` is the repository served by the previous pick; where that value is stored is `[TODO: round-robin cursor storage (G-NEW-2)]`.
+
+**Failure behaviour of each function**
+
+| Function | On failure |
+|---|---|
+| `RunGroup` | `Open` refused (the group is already open in this process, or the process does not hold the lease): the `Drive` does not start. A refused `Append` is `state_invalid` and the group blocks; a bad line before the last during `Load` is moved aside as `.bad-*` and the group blocks `state_invalid`. An action that fails is `[TODO: action failure policy (G-NEW-8)]` |
+| `Pick` | Returns `false` when no item is ready; nothing is taken |
+| `GrowPool` | Cannot fail; returns the size unchanged when memory does not cover one more session or the ceiling is reached |
+| `HalvePool` | Cannot fail; returns the floor when halving would go below it |
+| `Startable` | Cannot fail; returns `false` while any dependency is unlanded or the tip's Check has not passed |
+
+| Caller | Call | When |
+|---|---|---|
+| Run goroutine | `Startable`, then `Claim` on a queue file | A dependency lands, or the epic tip's Check passes |
+| `komodo jobs tick` | `Claim` on a queue file | A job is due |
+| Engine, when a pool slot frees | `Pick`, `Remove` on the queue file, `Claim` on the lease | The pool has a free slot and a queue item is ready |
+| Session goroutine | Send on `Drive.Events` | Each fact a session produces |
+| `Drive` | `Open`, `Load`, `Append`, `Snapshot` (group state); `Next()`; `SpecOf` | Every event |
+| `Drive` | `Replace` on the lease | Every `LeaseRenewEvery` |
+| `Drive` | `GrowPool` after a clean session end; `HalvePool` after a rate-limit error or a quota warning | The session's end or the warning is applied |
+| `komodo stop <run>`, signal, `fresh --restart-runs` | The shutdown sequence | Operator or operating system asks the run to stop |
+
+#### Refusals
+
+`komodo run <group>` refuses, with the reason named, when a dependency outside the run has not landed (the message names that dependency). A dependency cycle in the backlog is refused outright when the graph is built. The other two refusals of the verb (a group another run holds; a repository with no detected commands) belong to [CLI and Configuration](#1-cli-and-configuration).
+
+### 3.5 Behaviour
+
+#### Walkthrough
+
+An epic holds group A, which has no dependency, and group B, which depends on A.
+
+**📐 Two groups through the engine**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant V as komodo run
+  participant R as Run goroutine
+  participant Q as Queue files
+  participant A as Drive A
+  participant B as Drive B
+  V->>R: build graph, return run id
+  R->>Q: queue A
+  Q->>A: take, lease, start
+  A->>R: A landed, tip Check passed
+  R->>Q: queue B
+  Q->>B: take, lease, start
+  B->>R: B landed, tip Check passed
+  R->>R: epic gate, then epic pull request
+```
+
+1. `komodo run` builds the dependency graph from the backlog, enqueues the groups whose dependencies have landed (group A), prints the run identifier at once and leaves the engine running detached under the parent guard.
+2. The run goroutine creates the queue file for A. B stays out of the queue because its dependency has not landed.
+3. When a pool slot frees, the engine picks A, deletes its queue file, writes its lease and starts `Drive` A.
+4. `Drive` A moves A through Intake, Build, Check, Verify and Ship, appending events and running the actions that `Next()` orders.
+5. A lands, alone, and Check runs on the epic tip with zero model tokens. The tip passes.
+6. The run goroutine sees that B's dependency has landed and the tip's Check passed, and creates the queue file for B. The engine takes it the same way as A's.
+7. B lands and the tip's Check passes.
+8. After the last landing the reviewer and the tester run once over the whole epic diff. `[TODO: epic gate events and the epic pull request step (G-NEW-5)]`
+9. A person merges only the epic pull request.
+
+#### Algorithms
+
+**Ownership and concurrency**
+
+**📐 Who owns which state**
+```mermaid
+flowchart LR
+  SG["Session goroutine<br>one per session"]
+  DR["Drive<br>one per group"]
+  RG["Run goroutine<br>no group state"]
+  FS[("Files under<br>~/.komodo/state")]
+  SG -->|"1 events, 256 slots"| DR
+  DR -->|"2 finished Drive"| RG
+  RG -->|"3 queue files"| FS
+  DR -->|"4 lease renewal"| FS
+  DR -.->|"panic"| BL["group.blocked crash<br>that group only"]
+```
+
+Rules:
+1. The `Drive` goroutine is the only writer of its group's events and snapshot. No mutex exists inside a group, and two groups never contend.
+2. A session goroutine turns its session's stream into events and sends them on `Drive.Events`. When the channel is full the sender waits; no event is dropped.
+3. Facts that groups share (queue, pool slots, link slots, leases, `quota.json`) are files under `~/.komodo/state/`, created exclusively or renamed into place, written through `Claim`, `Replace` and `Remove`. Two engines on one machine coordinate only through these files.
+4. The run goroutine builds the dependency graph, enqueues ready groups and collects finished `Drive`s. It holds no group state.
+5. Every goroutine starts through one panic-catching helper. A panic in one `Drive` emits `group.blocked crash` (the event `group.blocked` with reason `crash`) for that group alone; the run and the other groups continue. `[TODO: the transition that moves a group to Blocked on a crash (G-31)]`
+
+**The Drive loop**
+
+**📐 Drive from start to end**
+```mermaid
+flowchart TB
+  A["1 Start<br>slot and lease taken"] --> B["2 Open and Load<br>snapshot plus later events"]
+  B --> C["3 Loop<br>one event per turn"]
+  C --> D["4 End<br>landed, abandoned,<br>stopped or crashed"]
+```
+
+1. A ready group takes a free pool slot and its lease; the engine hands the group to a new `Drive`.
+2. `Drive` calls `Open`, which makes it the group's only writer, then `Load`, which reads the last snapshot, replays the events saved after it and returns the state. `Drive` reruns the state's open actions.
+3. `Drive` waits on three sources: events from the group's sessions, the group's pause timer (which fires at the timer record's `wait_until` time), and its lease renewal every `LeaseRenewEvery`. It takes one event at a time and runs one turn for it.
+4. `Drive` ends when the group lands or is abandoned, when the run stops, or when it crashes. The run goroutine collects a finished `Drive`.
+
+One turn:
+1. `Drive` takes the next event from its channel.
+2. `Drive` calls `Append`: the state manager stamps `sequence`, `timestamp` and `checksum`, validates the line against the schema and syncs it to disk. `Drive` has already set `stage` and `stale`.
+3. `Drive` calls `Next()`. It returns the new state, the actions to run and any follow-on events; a stale event changes nothing.
+4. `Drive` appends the follow-on events, then an `action.start` line for each action.
+5. `Drive` runs each action, such as starting a session or making a commit. Pushing and opening a pull request run beside the loop, so a slow network never holds it.
+6. `Drive` appends `action.done` for each finished action, so a restart skips it.
+7. `Drive` hands the new state to `Snapshot`, which writes `state.json` every 50 events or on a stage change.
+8. The event bus hands the event to its 3 listeners: the ledger, the wake file and the `status --watch` screen.
+
+Chapter 2 draws the same path as a sequence diagram ([One event, from producer to subscribers](#25-behaviour)).
+
+Open parts of the loop:
+- `[TODO: whether Drive keeps running or exits while its group is Paused or Blocked (G-29)]`
+- `[TODO: whether steps 2 to 4 become a single disk write (G-29)]`
+- `[TODO: whether step 8 waits for each listener (G-29)]`
+- `[TODO: what Drive does when an action fails, or when a lease renewal is refused (G-NEW-8)]`
+- `[TODO: how a paused group's time since pause is kept, for the pause cap (G-NEW-8)]`
+
+**Taking work from the queue**
+
+**📐 From a ready group to a running Drive**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant R as Run goroutine
+  participant Q as Queue files
+  participant S as State manager
+  participant D as Drive
+  R->>Q: Claim queue file
+  R->>Q: list, apply pick order
+  R->>S: Remove queue file
+  R->>S: Claim lease
+  R->>D: start, with pool slot
+  D->>S: Open, Load
+  Note over R,D: Intake placement is open (G-NEW-6)
+```
+
+1. When a dependency lands and Check passes on the epic tip, the run goroutine creates one queue file for each newly ready group. `komodo jobs tick` creates one for each due job.
+2. When a pool slot frees, the engine lists the queue and applies the pick order below.
+3. The engine takes the chosen item: it deletes the queue file, then writes the lease. A crash between the two steps leaves an item for the startup sweep to re-enqueue. `[TODO: the sweep cannot see an item whose file is already deleted and whose lease is not yet written (G-NEW-2)]`
+4. The engine starts the group's `Drive`. Intake runs just before the group's first session takes a slot, and the next ready group's Intake starts while the current group's first session loads, so a slot never sits idle longer than one `setup` run. `[TODO: where Intake sits between the slot, the lease and the first Drive event (G-NEW-6)]`
+
+`[TODO: which process takes an item when queue items from several repositories are ready, and what happens when the winner belongs to another repository (G-NEW-2)]`
+
+**Pick order**
+
+When a slot frees, the engine applies these rules in order:
+
+1. Items with `priority: high` go first.
+2. Fair share across repositories: when 2 or more repositories have ready items, take them round-robin. Each job counts as its own repository.
+3. The longest remaining chain, weighted by task count.
+4. The most groups unblocked.
+5. Backlog ID order.
+
+Rules 3 to 5 break ties among items of the repository chosen by rule 2.
+
+**The session pool**
+
+**📐 How the pool size changes**
+```mermaid
+flowchart TB
+  SE["Session ends cleanly"] --> G["Grow by 1"]
+  G --> GC["only while free memory covers one more<br>sandbox.max_mem_gb, up to limits.pool_max"]
+  RL["Rate-limit error<br>or quota past warn.quota_pct"] --> H["Halve"]
+  H --> HC["never below limits.pool_min"]
+```
 
 | Rule | Detail |
 |---|---|
-| A graph, not a list | Groups form a DAG from the backlog. A group with two dependencies joins after both land. |
-| Start rule | A group starts only after every dependency has landed and Check has passed on the epic tip. |
-| One queue | Ready work from every repo and every job waits in one machine-wide queue of create-only files. |
-| Pick order | `priority: high` first, then fair share across repos, then the longest remaining chain weighted by task count, then most groups unblocked, then backlog ID order. |
-| No waiting on siblings | A group goes from Build to Verify as soon as its own builder finishes. |
-| Integration break | If Check fails on the epic tip after a landing, landings pause and the last-landed group goes back to Build in a new worktree cut from the tip. |
-| Epic gate | After the last group lands, the reviewer and tester run once across the whole epic diff. A finding goes to the group that last changed its file; a finding with no file blocks the epic with `epic_gate`. |
-| Abandoned dependency | Its dependents block with `dependency`, naming it. |
+| Slot takers | Builder, reviewer and tester sessions (`pool_slot: true`). Planner and job sessions take no pool slot, but count against the link limit |
+| Floor and ceiling | The pool holds 1 to 6 slots by default: `limits.pool_min` stays open while throttled; `limits.pool_max` is the most sessions at once; the hard limit is 16 |
+| Link slot | `limits.link_sessions.<link>` sessions per link (for example `claude-cli`) across all repositories; loopback endpoints get 1; the hard limit is 8 |
+| Files | Pool and link slots are lock files; the operating system frees one when its holding process dies |
+| Taking | A session takes a pool slot before it starts and returns it when it ends; a Paused or Blocked group holds none |
 
-**What each one does**
-- **A graph, not a list:** Groups and their dependencies form a DAG built from the backlog. A group that depends on two others joins the run only after both have landed, which a list or a tree cannot express.
-- **Start rule:** A group starts only after every group it depends on has landed and Check has passed on the epic tip. So it always builds on code that works.
-- **One queue:** Ready groups from every repo on the machine, and due scheduled jobs, wait in one queue under `~/.komodo/state/queue/`, one create-only file per item.
-- **Pick order:** When a slot frees, `priority: high` groups go first, then fair share across repos. Ties break by the longest remaining chain weighted by task count, then most groups unblocked, then lowest backlog ID.
-- **No waiting on siblings:** A group moves from Build to Verify as soon as its own builder finishes, whatever other groups are doing.
-- **Integration break:** After a landing, Check runs on the epic tip; if it fails, landings pause and the last-landed group goes back to Build in a fresh worktree cut from the tip. After `limits.returns` such returns it blocks with `integration`.
-- **Epic gate:** After the last group lands, the reviewer and tester run once over the whole epic diff. Each finding goes to the group that last changed that file, which returns to Build. A finding with no file blocks the whole epic with `epic_gate`.
-- **Abandoned dependency:** When `komodo abandon` ends a group, every group that depended on it blocks with reason `dependency` and the name of the abandoned group.
+Open parts of the pool:
+- `[TODO: whether `OLLAMA_NUM_PARALLEL` above 1 lets the local link exceed 1 (G-04)]`
+- `[TODO: slot file names, the order in which a session takes its pool slot and its link slot, and whether a session waits or fails when none is free (G-NEW-1)]`
+- `[TODO: where the adapted pool size lives when two engines share a machine (G-NEW-1)]`
+- `[TODO: what counts as a clean session end, and how free memory is measured on each operating system (G-NEW-1)]`
 
-#### Scenario: the session pool
+**Run order and convergence**
 
-**In plain terms.** The session pool is the machine-wide limit on how many model sessions run at once. A pool slot is one of 1 to 6 places (see Glossary). A session must take one before it starts and gives it back when it ends. The pool protects the machine's memory and the provider's rate limits, growing after clean runs and halving on a rate-limit error. Only the engine takes and frees slots; a person sets the bounds with `komodo config` and sees the pool in `komodo status`.
+**📐 When a group may start**
+```mermaid
+flowchart LR
+  BL["Backlog"] --> DG["Dependency graph<br>cycles refused"]
+  DG --> Q1{"Every dependency<br>landed?"}
+  Q1 -->|"yes"| Q2{"Check passed<br>on epic tip?"}
+  Q2 -->|"yes"| QF["Queue file"]
+```
 
-| Rule | Detail |
+Rules:
+1. The graph is built from every group's dependencies and `touches` globs. A cycle is refused. Waves and the longest chain are computed; the longest chain also feeds the pick order.
+2. A group starts only after every dependency has landed and Check has passed on the epic tip.
+3. A group with 2 or more dependencies starts after all of them land.
+4. `run <group>` refuses when a dependency outside the run has not landed, and names it. `[TODO: how the engine learns that a dependency outside the run has landed (G-NEW-3)]`
+5. When a dependency is blocked, its dependents show `waiting on <group>` in `komodo status`; groups that do not depend on it keep running.
+6. When a dependency is abandoned, its dependents block with reason `dependency`, naming the abandoned group. `[TODO: confirm the abandon transition and the dependents' block (G-31)]`
+7. Inside a group, tasks run one after another in the group's worktree, with one builder at a time. Independent tasks belong in separate groups.
+8. A group moves on from Build as soon as its own builder finishes, whatever the other groups do.
+
+**Landing and the integration break**
+
+**📐 One landing, then the tip check**
+```mermaid
+flowchart TB
+  A["1 Group reaches Ship"] --> B["2 Land<br>one group at a time"]
+  B --> C["3 Check on epic tip<br>zero tokens"]
+  C -->|"pass"| D["4 Dependents may start"]
+  C -->|"fail"| E["4 Landings pause"]
+  E --> F["5 Last-landed group returns to Build<br>new worktree cut from the tip"]
+  F --> G["6 After limits.returns returns:<br>Blocked integration"]
+```
+
+1. Finished groups land one at a time. Each landing is followed by Check on the epic tip, which costs 0 tokens.
+2. When that Check fails, landings pause and the last-landed group returns to Build in a new worktree cut from the tip. It has `limits.returns` returns; after that it blocks with reason `integration`. `[TODO: confirm the return from Ship to Build and the new worktree (G-31)]`
+3. `[TODO: how one-at-a-time landing is enforced between engine processes, and what holds the gate from the landing until the tip's Check finishes (G-NEW-4)]`
+4. `[TODO: when paused landings resume, in particular after a group blocks with reason integration (G-NEW-4)]`
+
+**The epic gate**
+
+**📐 After the last landing**
+```mermaid
+flowchart TB
+  A["Last group landed<br>tip Check passed"] --> B["Reviewer and tester run once<br>over the whole epic diff"]
+  B --> C{"Finding names<br>a file?"}
+  C -->|"yes"| D["Group that last changed the file<br>returns to Build"]
+  C -->|"no"| E["Epic blocks: epic_gate"]
+  B -->|"all pass"| F["Epic pull request opened"]
+```
+
+1. After the last landing, the reviewer and the tester each run once over the whole epic diff.
+2. A finding goes to the group that last changed its file; that group returns to Build.
+3. A finding with no file blocks the whole epic with reason `epic_gate`. A person then merges only the epic pull request.
+4. `[TODO: how epic gate sessions and findings are recorded as events, how a landed group re-enters Build, which counter bounds the returns, how the group that last changed a file is found, and when the epic pull request is opened and run.done is written (G-NEW-5)]`
+
+**Shutdown and the parent guard**
+
+**📐 Stopping a run, and the guard's repeat of it**
+```mermaid
+sequenceDiagram
+  participant P as Parent guard
+  participant E as Engine
+  participant A as Sessions
+  participant W as Worktrees and leases
+  Note over P,E: komodo run starts the parent, the parent starts the engine
+  Note over E: signal, stop run, or fresh --restart-runs
+  E->>A: 1 stop each, 30 s allowed
+  E->>W: 2 work-in-progress commit per worktree
+  E->>W: 3 free leases
+  E->>E: 4 write state.json, exit
+  Note over E: after 60 s the rest are killed
+  Note over P: engine dies past its handler, or 10 min without heartbeat
+  P->>A: 5 kill by process identifier files
+  P->>W: 6 same save and release
+```
+
+1. The sequence starts on any operating-system signal, on `stop <run>` or on `fresh --restart-runs`, which updates the binary and moves live runs to it.
+2. The engine stops each session (30 seconds each), makes a work-in-progress commit of every worktree, frees the leases, writes `state.json` and exits. After 60 seconds, anything still alive is killed.
+3. Shutdown is direct code outside the event bus. It writes `run.stopped` when it can.
+4. `komodo run` first starts a small parent process, the parent guard, which then starts the engine.
+5. If the engine dies past its own handler (`kill -9`, an out-of-memory kill, a Go fatal error) or writes no heartbeat for 10 minutes, the parent kills the sessions by their process identifier files and runs the same save and release.
+6. Power loss is left to the startup sweep ([chapter 9](#9-check-review-tester-and-recovery)).
+
+`[TODO: the parent guard's entry point, how the engine writes its heartbeat, and where the process identifier files live (G-NEW-7)]`
+
+### 3.6 State
+
+The engine keeps no state of its own beyond files and the group state of [chapter 2](#2-event-spine-and-state-machine). The three machine-visible states are the group's `Drive`, the pool size and landing.
+
+**📐 Drive lifecycle**
+```mermaid
+stateDiagram-v2
+  [*] --> Starting: 1 slot and lease taken
+  Starting --> Looping: 2 Open and Load done
+  Looping --> Looping: 3 one turn per event
+  Looping --> Ended: 4 landed or abandoned
+  Looping --> Ended: 5 run stops
+  Looping --> Ended: 6 panic
+```
+
+| State | Waits on | Pool slot | Lease and worktree | Ends by | True after the move |
+|---|---|---|---|---|---|
+| Starting | `Open`, `Load`, open actions | Held for the first session | Lease written, worktree cut | `Load` returns the state | This `Drive` is the group's only writer; the open actions have run |
+| Looping | Session events, the pause timer, the lease renewal | Held while a session runs | Kept; lease renewed every 5 minutes | Landing, abandon, run stop, panic | Every applied event is on disk before its effects run |
+| Paused or Blocked | `[TODO: whether Drive loops or exits while the group waits (G-29)]` | Returned | Kept | The timer, `resume`, `scope approve` or `scope deny`, or `abandon` | The group holds no pool slot and keeps its lease and worktree |
+| Ended | Nothing | Returned | Released on landing or abandon | The run goroutine collects the `Drive` | The group's records are final for this run |
+
+| Pool event | Effect |
 |---|---|
-| Who takes a slot | Builder, reviewer and tester sessions only, in runs and jobs alike. Planner and job sessions take none but still count against their link's limit. |
-| Floor and ceiling | `limits.pool_min` (1) stays open while throttled; `limits.pool_max` (6) is the most at once; hard limit 16. |
-| Per link | `limits.link_sessions.<link>` (3; loopback endpoints 1) across all repos. |
-| Adapts | Grows by 1 after each clean session end while free memory covers one more `sandbox.max_mem_gb`; halves, never below the floor, on a rate-limit error or quota past `warn.quota_pct`. |
-| Machine-wide | Pool and link slots are lock files under `~/.komodo/state/`, freed when their pid dies. Two engines coordinate only through files. |
+| Session ends cleanly | Size grows by 1 while free memory covers one more `sandbox.max_mem_gb`, up to `limits.pool_max` |
+| Rate-limit error from a provider | Size halves, never below `limits.pool_min` |
+| Quota past `warn.quota_pct` | Size halves, never below `limits.pool_min` |
 
-**What each one does**
-- **Who takes a slot:** Only builder, reviewer and tester sessions take a pool slot, in normal runs and in scheduled jobs alike. Planner and job sessions take none, but every session still counts against its link's own limit.
-- **Floor and ceiling:** `limits.pool_min` (1) slots stay open even while the pool is throttled; `limits.pool_max` (6) is the most sessions at once, and 16 is the hard limit no config can exceed.
-- **Per link:** Each link, such as `claude-cli` or an Ollama endpoint, has its own session limit, `limits.link_sessions.<link>`. The default is 3, or 1 for a loopback endpoint, counted across every repo on the machine.
-- **Adapts:** After each session that ends cleanly the pool grows by one, as long as free memory covers another session's `sandbox.max_mem_gb`. On a rate-limit error, or quota past `warn.quota_pct`, it halves, never below the floor.
-- **Machine-wide:** Pool and link slots are lock files under `~/.komodo/state/`, freed automatically when the owning process dies. Two engines running on one machine coordinate only through these files.
+**📐 Landings**
+```mermaid
+stateDiagram-v2
+  [*] --> Open
+  Open --> Open: 1 landing, tip Check passes
+  Open --> Paused: 2 landing, tip Check fails
+  Paused --> Open: 3 resume rule open
+```
 
----
+| Landing state | Event | Next | True after the move |
+|---|---|---|---|
+| Open | A group lands and the tip's Check passes | Open | Dependents of that group may start |
+| Open | A group lands and the tip's Check fails | Paused | No group lands; the last-landed group is back in Build |
+| Paused | `[TODO: resume conditions (G-NEW-4)]` | `[TODO: next state (G-NEW-4)]` | `[TODO: (G-NEW-4)]` |
 
-#### Shutdown and the parent guard
+### 3.7 Invariants and Failures
 
-**In plain terms.** Shutdown is the fixed order in which the engine stops its model sessions and saves work when it is told to stop. The parent guard is a small wrapper process that starts the engine and watches it, so a sudden engine death still ends in a clean save. Without them, a stopped run would leave model sessions running, edits unsaved and leases held. A person or the orchestrator triggers shutdown with `stop <run>` or a signal; the guard acts on its own.
+**Invariants**
+1. A group has exactly one writer inside a process, its `Drive`; other processes are kept out by the lease and its fence.
+2. An event is appended and synced to disk before `Next()` runs on it.
+3. An action's `action.start` line is on disk before the action runs, and its `action.done` line follows.
+4. A queue file is deleted before the lease is written.
+5. A group starts only after every dependency has landed and Check has passed on the epic tip.
+6. Landings happen one at a time, each followed by Check on the epic tip.
+7. Shutdown stops sessions, then commits work in progress, then frees leases, then writes `state.json`; a lease is never freed while a session is alive or work is unsaved.
+8. The pool never shrinks below `limits.pool_min` and never exceeds `limits.pool_max`.
+9. Intake runs just before the group's first session takes a slot.
 
-| Step | Rule |
-|---|---|
-| Sequence | Stop agents (30 s each), WIP-commit each worktree, free leases, write `state.json`, exit; after 60 s the rest is force-killed |
-| Trigger | Any signal, `stop <run>`, or `fresh --restart-runs` |
-| Bus | Shutdown is direct code outside the bus; it writes `run.stopped` when it can |
-| Parent guard | `komodo run` starts a small parent that starts the engine. If the engine dies past its handler (`kill -9`, OOM (out of memory), Go fatal) or writes no heartbeat (a regular I'm-alive signal) for 10 min, the parent kills its agents by pid file and runs the same save and release. Power loss is left to the sweep |
+**Failures**
 
-**What each one does**
-- **Sequence:** The engine stops each model session (30 seconds allowed each), makes a WIP commit of every worktree, frees the leases, writes `state.json` (the group's snapshot) and exits. Anything still alive after 60 seconds is force-killed.
-- **Trigger:** The sequence starts on any operating-system signal, on the `stop <run>` verb, or on `fresh --restart-runs`, which updates the binary and moves live runs to it.
-- **Bus:** Shutdown runs as direct code, not through the event bus (the in-process channel that carries typed events, see Glossary). It records a `run.stopped` event when it still can.
-- **Parent guard:** `komodo run` first starts a small parent process, which then starts the engine. If the engine dies past its own handler (`kill -9`, an out-of-memory kill, a Go fatal error) or writes no heartbeat for 10 minutes, the parent kills the model sessions by their pid files and runs the same save and release. Power loss is left to the startup sweep.
+| Situation | Detected by | Behaviour |
+|---|---|---|
+| Crash between the queue file's deletion and the lease write | The startup sweep | The sweep re-enqueues an item that has no lease `[TODO: the sweep's view of a deleted item (G-NEW-2)]` |
+| Session event channel full | The sending session goroutine | The sender waits; no event is dropped |
+| Panic inside one `Drive` | The panic-catching helper | `group.blocked` with reason `crash` for that group alone; the run and other groups continue |
+| Rate-limit error or quota past `warn.quota_pct` | The provider adapters report it | The pool halves, never below `limits.pool_min` |
+| A dependency is blocked | The run goroutine | Dependents show `waiting on <group>`; unrelated groups keep running |
+| A dependency is abandoned | `komodo abandon` on a group other groups depend on | Dependents block with reason `dependency`, naming it `[TODO: (G-31)]` |
+| `run <group>` with an unlanded dependency outside the run | The graph | The verb refuses and names the dependency |
+| Check fails on the epic tip after a landing | The Check on the tip | Landings pause; the last-landed group returns to Build; after `limits.returns`, Blocked `integration` `[TODO: (G-31)]` |
+| A finding with no file at the epic gate | The epic gate | There is no group to send it to, so the whole epic blocks with `epic_gate` |
+| Engine dies past its handler (`kill -9`, out-of-memory kill, Go fatal error) | The parent guard | The parent kills the sessions by process identifier files, saves and releases |
+| No heartbeat for 10 minutes | The parent guard | Same as above |
+| Sessions alive 60 seconds into shutdown | The shutdown sequence | The remaining sessions are killed |
+| Power loss | The next engine start | Left to the startup sweep |
 
-| A finding with no file at the epic gate | The epic blocks with `epic_gate` |
-| A dependency is abandoned | Dependents block with `dependency` |
-**Orchestration engine ([Event Spine and State Machine](#2-event-spine-and-state-machine) and [Orchestration engine internals (Appendix D)](#orchestration-engine-internals))**
+### 3.8 Config
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `limits.pool_min` | integer | 1 | Pool slots kept open while throttled; cannot exceed `limits.pool_max` |
+| `limits.pool_max` | integer | 6 | Most builder, reviewer and tester sessions at once across all repositories; hard limit 16 |
+| `limits.link_sessions.<link>` | integer | 3; loopback endpoints 1 | Most concurrent sessions on one link across all repositories; hard limit 8 |
+| `sandbox.max_mem_gb` | integer | 8 | Read here: the pool grows only while free memory covers one more of it |
+| `warn.quota_pct` | integer | 90 | Read here: a provider window past this percent halves the pool |
+| `limits.returns` | integer | 3 | Read here: returns to Build after an integration break; counter ownership is `[TODO: (G-32)]` |
+
+`--stage` is the only flag of `komodo run`; its form is `--stage <stage>`.
+
+### 3.9 Proof Cases
+
+**Unit level** (pure functions, no files)
+- With 2 slots and 3 ready groups, the `priority: high` group starts first.
+- With 2 repositories and `limits.pool_max` 2, 4 ready groups start in alternating repository order.
+- A rate-limit error halves the pool, never below the floor.
+- `run` on a group with an unlanded dependency refuses and names it.
+
+**Component level** (the engine with mocks that match documented provider behaviour; no live provider tests)
 - The fixture group runs all 5 stages and ships.
 - A crash between taking a queue item and writing its lease leaves an item the sweep re-enqueues.
-- With 2 repos and `pool_max` 2, 4 ready groups start in alternating repo order.
 - A seeded bug fails Verify, cancels the tester and resumes the builder.
 - With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue.
-- A rate-limit error halves the pool, never below the floor.
 - A group whose dependency is Blocked waits while an unrelated group runs.
-- A crash inside one group's Drive blocks only that group with reason `crash`; a second group keeps running.
-- While a Drive runs, its group's lease renewal time moves forward every 5 minutes.
+- A crash inside one group's `Drive` blocks only that group with reason `crash`; a second group keeps running.
+- While a `Drive` runs, its group's lease renewal time moves forward every 5 minutes.
 - A landing that breaks Check on the epic tip sends the last-landed group back to Build.
-- `run` on a group with an unlanded dependency refuses and names it.
-- With 2 slots and 3 ready groups, the `priority: high` group starts first.
 
+### 3.10 Open Gaps
+
+**Blocks building**
+
+| Gap | Open here |
+|---|---|
+| [G-29](#appendix-o-gap-register) | Whether `Drive` stays alive while Paused or Blocked; command transport; single disk write; listener waiting |
+| [G-31](#appendix-o-gap-register) | Return from Ship to Build, abandon, dependents' block, crash block, and the other stage moves the table lacks |
+| G-NEW-1 | Pool and link slot files, ceiling storage, acquisition order, clean end, free memory |
+| G-NEW-2 | Queue take crash window, multi-repository pick, round-robin cursor |
+| G-NEW-3 | Run goroutine file, exported function names, outside-run dependency status |
+| G-NEW-4 | Serial landing across processes, landing gate span, landing resume |
+| G-NEW-5 | Epic gate events, returns, file-to-group lookup, epic pull request, `run.done` |
+| G-NEW-6 | Intake placement relative to slot, lease and first event |
+| G-NEW-7 | Parent guard entry point, heartbeat, process identifier file location |
+| G-NEW-8 | Drive action failure, lease renewal refusal, pause start time |
+| G-NEW-9 | Chain weight, unblocked count and backlog order key |
+
+**Can wait**
+
+| Gap | Open here |
+|---|---|
+| [G-04](#appendix-o-gap-register) | Whether `OLLAMA_NUM_PARALLEL` above 1 lets `local` exceed 1 session |
+| [G-30](#appendix-o-gap-register) | Queue and slot file layout, timestamp format, repository identifier to file name, forward-version handling |
+| [G-32](#appendix-o-gap-register) | Which counters the snapshot holds, including `Returns` |
 
 ## 4. Workspace and Leases
 
@@ -3426,7 +3760,7 @@ type Writer interface {
 - **`session`:** One folder per model session: the brief it got, how it was launched, its result, its raw output stream and, on API links, every turn for resume. The supervisor writes the brief, request and result; observability appends `stream.jsonl`; the tool runtime's API loop appends `messages.jsonl`.
 - **`ledger`, `view`:** The session ledger and event log, appended by the observability subscriber, and the two lock-table views it rebuilds from group state ([Runtime observability (Appendix K)](#runtime-observability)).
 - **`job`:** The scheduler's counters per job: attempt, next run time, last failure hash and whether it is running ([Scheduler and job templates (Appendix K)](#scheduler-and-job-templates)).
-- **`queue`, `pool`, `link`:** The machine-wide work queue and the session slots. Each is a create-only file, so two engines can never take the same item or slot ([Orchestration engine internals (Appendix D)](#orchestration-engine-internals)). The engine claims and removes them; the scheduler enqueues due jobs, the startup sweep re-enqueues items that lost their lease, and the provider adapters claim link slots.
+- **`queue`, `pool`, `link`:** The machine-wide work queue and the session slots. Each is a create-only file, so two engines can never take the same item or slot ([Engine Internals (chapter 3)](#3-engine-internals)). The engine claims and removes them; the scheduler enqueues due jobs, the startup sweep re-enqueues items that lost their lease, and the provider adapters claim link slots.
 - **`machine_event`:** The machine log: one file per `komodo` process holding its `lease.taken`, `pool.slot.taken`, `queue.enqueued` and `job.due` events. Only that process writes its file; `status` merges the files by `timestamp`. The file name pattern is `[UNKNOWN: not yet designed]` `[PENDING G-30]`.
 - **`lease`, `fence`:** One lease per group and the fence counter beside it ([Workspace and leases (Appendix E)](#workspace-and-leases)). The lease is claimed and removed on release; the fence is replaced on every take or takeover and never falls. The startup sweep also removes dead leases.
 - **`timer`, `quota`:** One timer record per paused group, keyed `<repo-id>.<group>.json`, holding the latest reset time among its halted sessions plus 1 minute, and `wait_link`; plus the machine-wide reset times per link ([Limits, pauses and warnings (Appendix H)](#limits-pauses-and-warnings)). The provider adapters write them with `Replace`; the scheduler, the live engine, the sweep or `status` fires a due timer, which is then removed.
@@ -3646,7 +3980,7 @@ type GroupState[S any] interface {
 - **Renewal:** Every 5 minutes the group's `Drive`, the engine routine that advances one group, rewrites the renewed time. A lease that keeps being renewed proves its holder is alive.
 - **Expiry:** A lease whose last renewal is more than 2 hours old counts as dead. Another run may then take the group over.
 - **Takeover:** Before taking an expired lease, or one whose holder process is dead, the engine renames the old file aside with a `.stale-` prefix. Only one run can rename it, so only one run wins the takeover.
-- **Release:** The engine frees the lease when the group lands or is abandoned, on a clean shutdown once work is saved, by the parent guard after a crash ([Shutdown and the parent guard (Appendix E)](#shutdown-and-the-parent-guard)), or by the startup sweep when both engine and guard died ([Startup sweep (Appendix E)](#startup-sweep)). It is never freed while a model session is still running or edits are unsaved.
+- **Release:** The engine frees the lease when the group lands or is abandoned, on a clean shutdown once work is saved, by the parent guard after a crash ([shutdown and the parent guard (Engine behaviour, 3.5)](#35-behaviour)), or by the startup sweep when both engine and guard died ([Startup sweep (Appendix E)](#startup-sweep)). It is never freed while a model session is still running or edits are unsaved.
 - **Protection:** Every verb refuses to act on a worktree that holds a live lease. Rule O4 ([Orchestrator rows (text in `AGENTS.md`, any host) (Appendix G)](#orchestrator-rows-text-in-agentsmd-any-host)) tells the orchestrator session never to edit, reset or remove such a worktree by hand.
 
 #### Fence
@@ -5964,7 +6298,7 @@ Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a st
 - **`TG.md`:** The group's own file. It holds every field below except the task-level ones, and is the human-facing document for the group.
 - **`subsystem:`:** The component the group belongs to, named as in [Component traceability (Appendix Q)](#component-traceability) (such as `Orchestration engine`), or `none`. The gate's Maps check requires every group to name one ([Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](#gate-and-self-checks-komodo-gate-komodo-repo-only)).
 - **`touches:`:** File glob patterns the group expects to change. Go uses overlaps between two groups' globs to decide which must run first ([Planner (Appendix L)](#planner)).
-- **`priority:`:** `high` puts the group first in the machine-wide work queue ([Work queue (Appendix D)](#work-queue)); anything else is normal. The planner or a person sets it.
+- **`priority:`:** `high` puts the group first in the machine-wide work queue ([Queue item (Engine data model, 3.3)](#queue-item)); anything else is normal. The planner or a person sets it.
 - **`files`:** The exact files the group's builder may write. A builder needing a file outside this list must stop and ask for scope ([Scope requests (Appendix J)](#scope-requests)). Two groups in one wave may not share a file ([Lint (`komodo doctor backlog`) (Appendix L)](#lint-komodo-doctor-backlog)).
 - **dependencies:** The other groups that must land before this one starts. Go builds a graph from them and refuses a cycle.
 - **acceptance items:** The checks the tester runs against the finished group, written in the EARS grammar (`WHEN … THE SYSTEM SHALL …`, see Glossary).
@@ -6073,7 +6407,7 @@ estimate_lines: 120
 - **Only the harness writes git:** The engine alone commits, branches, pushes and merges. It never force-pushes, never uses a `+refspec` (a git push form that overwrites history), never adds commit trailers or session links, and never writes a critical ref such as `main`. No model session has credentials for GitHub or any other forge.
 - **Ship (0 tokens):** The engine fills the PR body from a template, merges the epic branch into the group branch (a merge, never a rebase, so pushed history is not rewritten), reruns Check, then lands. Landing is an `action` with the key `(group, fence, merge base)`, so a crash replay cannot land twice (see Glossary, Outbox). A stale fence means another engine took over the group, and the landing is refused before anything is pushed. Groups land one at a time, then Check runs once on the epic tip.
 - **`ship.mode`:** A config choice. `group` (the default) opens one PR per group into the epic branch, opened ready rather than draft because GitHub refuses to merge a draft, and the engine merges it at once; that PR is the record. `epic` skips the PR and merges the group branch straight into the epic branch with `--no-ff`, which keeps a merge commit.
-- **Epic PR:** When every group has landed and the epic gate (reviewer and tester over the whole epic diff, [Run order and convergence (Appendix D)](#run-order-and-convergence)) passes, the engine opens one PR from the epic branch into the base. Its key `(epic, head SHA)` stops a duplicate. A person reviews and merges it, then runs `komodo sync` to refresh the local clone.
+- **Epic PR:** When every group has landed and the epic gate (reviewer and tester over the whole epic diff, [run order (Engine behaviour, 3.5)](#35-behaviour)) passes, the engine opens one PR from the epic branch into the base. Its key `(epic, head SHA)` stops a duplicate. A person reviews and merges it, then runs `komodo sync` to refresh the local clone.
 - **Release:** A person's command that sets the version, tags it, cross-builds the binary for Windows, Linux and macOS, writes checksums, signs the manifest with the ed25519 key, and renders the changelog, which starts fresh at `1.0.0-beta.6`. Betas are published as normal GitHub releases with "beta" in the version, because the updater reads `releases/latest`, which skips prereleases.
 - **Signing custody:** The private signing key lives in `~/.komodo/release.key` on the owner's machine, readable only by the owner (mode 0600), with one backup in a password manager. Releases are cut only on that machine. A `next` public key is embedded from the first release so a leaked key can be rotated. Moving the key to a cloud KMS or keyless signing, and refusing a manifest older than the last accepted one, is the enterprise target G-21 in a later minor.
 - **Performance:** `Drive` is the engine's per-group loop. Pushing and opening the PR run beside it, not inside it, so a slow network does not hold the group's loop.
@@ -6506,7 +6840,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 |
 | G-27 | Dashboard | An opt-in browser dashboard that stands in for the orchestrator: stack, `komodo ui` verb, live model changes, the "no server process" exception | Owner decision; proof of concept in `dashboard/` |
 | G-28 | Install | How `komodo init` writes Komodo's orchestrator skills and commands into the global Claude Code setup: a Claude Code plugin, or plain files with a machine manifest | Owner decision |
-| G-29 | Engine | Drive's open behaviour: whether it stays alive while its group is Paused or Blocked; how typed commands such as `resume` reach it; whether an event and its follow-ons are one disk write; whether it waits for each listener; whether each event type's contract names its class (fact, request or outcome) | Owner decisions on the event spine page; then a design patch to [Drive: the per-group loop (Appendix D)](#drive-the-per-group-loop) |
+| G-29 | Engine | Drive's open behaviour: whether it stays alive while its group is Paused or Blocked; how typed commands such as `resume` reach it; whether an event and its follow-ons are one disk write; whether it waits for each listener; whether each event type's contract names its class (fact, request or outcome) | Owner decisions on the event spine page; then a design patch to [Drive (Engine data model, 3.3)](#drive) |
 | G-30 | State and file formats | Exact field names and layout the design leaves open, shown as `[UNKNOWN: not yet designed]` in the examples: how a record's header and body sit in one file; the machine log's file names; per-type event `data` (also G-24); the fields of `install.json`, `state/providers.json`, `state/quota.json`, `jobs/state.json`, the lease file and `ledger/sessions.jsonl`; JSON key names in `embed/models.json`; how a repo id becomes a file name; `Action.Args`, `VerifyProgress`, and the `config_hash` and task id formats | A design patch naming each field, then the examples updated to match |
 | G-31 | Engine | Stage moves the transition table lacked: Ship back to Build when the epic tip breaks, the pause timeout, `resume` to the prior stage, scope answers, abandon, a lost lease and cancel; the `run.done` condition; the `group.cancelled` trigger; whether a lint failure at Intake blocks `lint` | Owner decision on the architecture page; then the transition table in [Event Spine and State Machine](#26-state-and-transitions) |
 | G-32 | Engine | The crash-safe counters in `State`: returns, Verify progress, failure hash, blocks per reason, wall time used, tokens used, each task's retries and the prior stage | Owner decision on the architecture page; then [Event Spine and State Machine](#23-data-model) |
@@ -6914,7 +7248,7 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 | Brief builder | [Brief builder (Appendix F)](#brief-builder) |
 | Guardrails | [Guardrails (Appendix G)](#guardrails) |
 | Sandbox and process control | [Sandbox and process control (Appendix G)](#sandbox-and-process-control) |
-| Orchestration engine | [Group state machine (Appendix C)](#26-state-and-transitions), [Orchestration engine internals (Appendix D)](#orchestration-engine-internals) |
+| Orchestration engine | [Group state machine (Appendix C)](#26-state-and-transitions), [Engine Internals (chapter 3)](#3-engine-internals) |
 | Workspace and leases | [Workspace and leases (Appendix E)](#workspace-and-leases) |
 | Session supervisor | [Session supervisor (Appendix F)](#session-supervisor) |
 | Scheduler and job templates | [Scheduler and job templates (Appendix K)](#scheduler-and-job-templates) |
