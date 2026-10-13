@@ -192,7 +192,7 @@ A tool is a named action that a model may request. The subsystem owns a few type
 
 #### 5.8 Providers and HTTP
 
-A link is one way to reach a model provider, and an adapter starts, streams and resumes a session over it. The subsystem owns one adapter interface, each agent's chain of links with failover only when a provider is unavailable, unauthorized or over a limit (an endpoint below the context floor is skipped), the billing check, and the network client. [TODO: whether the brief builder or the provider router walks the chain (G-114)] Detail: [LLD chapter 7](lld.md#7-providers-and-http).
+A link is one way to reach a model provider, and an adapter starts, streams and resumes a session over it. The subsystem owns one adapter interface, each agent's chain of links with failover only when a provider is unavailable, unauthorized or over a limit (an endpoint below the context floor is skipped), the billing check, and the network client. [TODO: whether the brief builder or the provider router walks the chain (G-69)] Detail: [LLD chapter 7](lld.md#7-providers-and-http).
 
 #### 5.9 Skills, Rules and Output
 
@@ -360,13 +360,13 @@ The tick is one repeatable engine step, so no daemon runs. Every failure has a d
 
 ## 9. Architecture Decisions
 
-Each row names a decision, the alternative rejected, and the reason. The first three rows are owner decisions that close gaps G-01, G-05 and G-15.
+Each row names a decision, the alternative rejected, and the reason. The first three rows are owner decisions of 2026-10-09.
 
 | Decision | Chosen over | Because |
 |---|---|---|
-| Local signing key, one backup, a second public key (G-01) | A cloud key service | One machine needs nothing bigger; a machine the owner does not own triggers it (G-21) |
-| The install probe's model registry (G-05) | A central model gateway | Needed at 3 or more machines, or 2 people sharing one cap (G-22) |
-| The orchestrator answers scope requests (G-15) | A named human per path | Needed at the first repository with 2 teams or customer data (G-23) |
+| Local signing key, one backup, a second public key | A cloud key service | One machine needs nothing bigger; a machine the owner does not own triggers it (G-21) |
+| The install probe's model registry | A central model gateway | Needed at 3 or more machines, or 2 people sharing one cap (G-22) |
+| The orchestrator answers scope requests | A named human per path | Needed at the first repository with 2 teams or customer data (G-23) |
 | Events reach disk before they apply | Applying first | A group's place survives any crash |
 | Only the engine emits events | Sessions reporting progress | A stage moves only on evidence the engine produced |
 | Epochs stamped on events | Applying every event | A cancelled session's late result could move a stage twice |
@@ -426,9 +426,9 @@ These 10 open items shape the architecture most; the Low-Level Design gap regist
 - [TODO: the shape of an agent's provider chain (G-69)]
 - [TODO: how machine-shared files such as the quota file are locked (G-74)]
 - [TODO: how tool server events reach the engine (G-42)]
-- [TODO: which component owns the startup sweep, the outbox of recorded actions and the session pool (G-217, G-218, G-219)]
+- [TODO: which component owns the startup sweep, the outbox of recorded actions and the session pool (G-217, G-217)]
 - [TODO: the payload fields of each event type and the layout of a record (G-198, G-211)]
-- [TODO: which component owns each loop counter (G-81)]
+- [TODO: which component owns each loop counter (G-32)]
 - [TODO: whether a group's snapshot is written before its lease is freed (G-230)]
 - [TODO: where the settings pinned at a run's start are stored, and what resume does when they changed (G-231)]
 
