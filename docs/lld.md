@@ -2977,637 +2977,1120 @@ Gap rows live in the [gap register](#appendix-o-gap-register); numbers marked G-
 
 ## 7. Providers and HTTP
 
-A provider is a service that runs an AI model: Anthropic's Claude, OpenAI, or a local server such as Ollama. A link is one way to reach a provider, such as the `claude` command-line tool or an HTTPS API. Adapters are the Go code that starts, streams and resumes a session on a link. The HTTP stack is the one client under every network call. Without them each engine part would carry provider quirks, and a stray API key could bill the wrong account. The engine calls adapters; a person sees them only through `doctor` and `status`.
+The provider package starts, streams and resumes one model session on one link, and the shared HyperText Transfer Protocol (HTTP) client carries every network call. A link is one way to reach a model, such as the `claude` command-line program or an HTTP endpoint. This chapter specifies the adapter interface, the stream-event shape, link selection and failover, the billing check, measured context, provider limits with pause and resume, and the HTTP client. What each part is for, and who it talks to, is in the High-Level Design: [High-Level Design 5.8](hld.md#58-providers-and-http).
 
-**📐 Providers and HTTP: from agent weight to a session, then failover and pause**
-```mermaid
-flowchart TD
-  %% Legend: solid = the session start path; dashed = skip, refusal or fallback
-  W["agent weight: heavy, standard, light"]
-  CAT["embed/models.json: Latest ID, then the prior ID"]
-  L1["1: claude-cli"]
-  L2["2 (backstop): each free http:#lt;name#gt; in config order"]
-  L3["3: anthropic-api, only under providers.paid: fallback or allowed"]
-  B1["claude auth status --json, cached 60 s per process"]
-  B2["Env scrub: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN"]
-  B3["First stream line: system/init apiKeySource: none"]
-  BK["killed before turn 1 with exit billing"]
-  M1["Models API max_input_tokens, else embed/models.json, else 262,144"]
-  M2["Ollama /api/ps context_length; a typed ctx only lowers it"]
-  M3["Other http: servers: the endpoint's ctx, required"]
-  FLOOR["below providers.ctx_floor: provider.skip ctx_below_floor"]
-  CP["Capacity profile {ctx, slots, cost_class, effort}"]
-  SL["slots from limits.link_sessions.#lt;link#gt;"]
-  EF["effort per weight: heavy high, standard medium, light low"]
-  SS["session.start: measured context and its source"]
-  SE["Schema enforcement per link; one final call; Go re-validates"]
-  RS["Result: the output, usage and the resume handle"]
-  W --> CAT --> L1
-  L1 -. "provider.skip {from, to, reason}" .-> L2
-  L2 -. "provider.skip {from, to, reason}" .-> L3
-  L1 --> BC
-  subgraph BC["Billing check (fails closed)"]
-    B1 --> B2 --> B3
-  end
-  B3 -. "else" .-> BK
-  BC --> CP
-  L2 --> CP
-  L3 --> CP
-  M1 --> CP
-  M2 --> CP
-  M3 --> CP
-  M2 -.-> FLOOR
-  SL --> CP
-  EF --> CP
-  CP --> SS --> SE --> RS
-```
-```mermaid
-flowchart LR
-  %% Legend: solid = engine action; dashed = timer, retry or return
-  H["HTTP stack: 4 attempts, full jitter; retry-after replaces the formula"]
-  HD["Stream drop mid-answer: 1 retry from the start, partial discarded"]
-  SF["a second failure fails the session"]
-  HL["Returned as a limit, not retried: enforced_spend_limit_reached"]
-  HR["Headroom: anthropic-ratelimit-*-remaining; limit.warn before any 429"]
-  LIM["Any Claude limit: 5-hour window, weekly cap, model cap"]
-  NB["The next session starts on the backstop"]
-  PA["Paused: a timer record with wait_until (reset plus 1 min) and wait_link"]
-  QJ["~/.komodo/state/quota.json, so every repo skips it"]
-  FIRE["the live engine sleeps; else the startup sweep, jobs tick or status"]
-  RES["resume: a refused attempt backs off 15, 30, then 60 min"]
-  PT["Blocked pause_timeout; the session is cancelled, WIP commit kept"]
-  BACK["new sessions return to claude-cli"]
-  LC["claude-cli launch line: -p, --session-id, --model, --json-schema"]
-  H --> HD
-  HD -. "second failure" .-> SF
-  H --> HR
-  H --> HL --> LIM --> NB
-  NB -. "only with no link left" .-> PA
-  PA --> QJ
-  PA --> FIRE
-  PA -. "limits.pause_max_min 360" .-> PT
-  RES -.-> PA
-  LIM -. "After the recorded reset time" .-> BACK
-  BACK --> LC
-```
-**Reading the diagram.** The first block runs agent weight through chain and billing check into the capacity profile. It rides `session.start` to `Result`; the second bounds HTTP retries, then a Claude limit moves work to the backstop. No link left pauses it under `limits.pause_max_min`.
+**Guarantees the tests pin**
 
-Every adapter offers `Probe`, `Start` and `Resume`; the stream ends in a `Result` with output, usage and the resume handle. Five links exist: `claude-cli`, `anthropic-api` and `http:<name>` are built; `codex-cli` and `openai-api` wait on G-20. Each link forces the final answer into the agent's result schema; Go re-validates it. Before each session the engine measures the real context window, recording its source in `session.start`. `embed/models.json` maps three weights (heavy, standard, light) to exact model IDs, written to `providers.json` so a run never changes model mid-way.
+| Guarantee | How |
+|---|---|
+| No unintended spend | The billing check runs before every session and fails closed; an unknown login counts as `paid` |
+| Failover only on provider failure | A link is skipped when unavailable, unauthorized, over a limit or below the context floor, never because a task failed |
+| No silently cut prompt | The window is measured, not typed; a brief is never shrunk to fit |
+| One final answer shape | Every link forces the final answer into the agent's result schema; Go validates it again |
+| No secret in any output | The HTTP client redacts keys and every `env:` value from logs, ledger rows and error text |
 
-Failover moves work only when a provider is unavailable, unauthorized or over a limit, never because a task failed. The chain is `claude-cli`, every free `http:<name>` endpoint as the backstop, then `anthropic-api` only when `providers.paid` allows. Before every session the billing check gives each link a cost class: `subscription`, `free` or `paid`. It fails closed: an unknown login counts as paid.
+### 7.1 Scope
 
-**What matters**
-- The backstop is mandatory: `doctor` and `gate` refuse a chain without a free `http:` endpoint. A `-prev` model falls back to it, never forward.
-- Every skip emits `provider.skip {from, to, reason}` plus a warning naming the model used.
-- Before each `claude-cli` session Go runs `claude auth status --json` and scrubs `ANTHROPIC_API_KEY`. A `system/init` line without `apiKeySource: "none"` kills the session with exit `billing`.
-- Measured context is the Models API `max_input_tokens`, else the catalog, else 262,144; an endpoint below `providers.ctx_floor` is skipped with `ctx_below_floor`.
-- A pause writes a timer record, `~/.komodo/state/timers/<repo-id>.<group>.json`, with `wait_until` (the ledger row keeps a copy), and the reset time to `~/.komodo/state/quota.json`; past `limits.pause_max_min` 360 the group blocks with `pause_timeout`.
-- HTTP: connect 10 s, first byte 60 s, 4 jittered attempts, 1 resend on a dropped stream, 8 MB body cap. No key reaches any log.
+**Owns:** the `Provider` interface and its adapters (`claude-cli`, `anthropic-api`, `http:<name>`, and the refusing stubs `codex-cli` and `openai-api`), the stream-event shape, link selection and failover, the billing check, the model catalog and measured context, provider limits with the pause timer and `quota.json`, and the shared HTTP client in `internal/core/http.go`.
 
-**Lookup:** [Appendix H](#7-providers-and-http) holds the provider and HTTP tables.
+**Does not own:** the session supervisor that reads the stream, injects lines and runs the stop ladder ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)); the tool registry, the private Model Context Protocol (Model Context Protocol) tool server and the rules of the tool loop ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)); the install-time probe run and `doctor` output ([Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)); the capacity-profile record and the configuration file ([command-line interface and Configuration](#1-cli-and-configuration)); and the file primitives behind timers and `quota.json` ([State Manager](#13-state-manager)).
 
+**Concepts**
 
+- **Link:** one way to reach a model: the `claude` command-line program, the Anthropic endpoint, or a named OpenAI-compatible endpoint.
+- **Chain:** the ordered list of links one agent may use, fixed in its `agent.json`.
+- **Backstop:** a free `http:` endpoint, local or self-hosted, that every chain must contain; work moves there when Claude is unavailable or limited.
+- **Weight:** an agent's size class, `heavy`, `standard` or `light`, which selects the model on each link.
+- **API link (application programming interface link):** a link where Go sends requests to the model over HTTP and runs the tool loop itself: `anthropic-api` and `http:<name>`.
+- **Cost class:** `subscription`, `free` or `paid`, assigned to a link by the billing check before each session.
+- **Measured context:** the window in tokens a link really runs with, read from the provider ([Measured context](#7-providers-and-http)).
+- **Resume handle:** the provider's identifier of a saved conversation, kept so a halted session can continue.
+- **Skip:** the decision to pass over a link, recorded as a `provider.skip` event with a reason.
 
-#### Provider adapters
+### 7.2 Package Layout
 
+| File | Holds |
+|---|---|
+| `internal/provider/provider.go` | `Provider`, `Link`, `Session`, `Stream`, `Event`, `Result`, `Usage`, the error values, `Router` (selection and failover), the model catalog loader, limit recording and timer writing |
+| `internal/provider/billing.go` | Cost class per link, the environment scrub, the first-line check; fails closed |
+| `internal/provider/loop.go` | The tool loop for API links and the schema re-validation ([Harness tool loop (API links)](#65-behaviour) holds its rules) |
+| `internal/provider/claude.go` | `claude-cli`: launch line, stream-json parsing, resume, `claude` path search |
+| `internal/provider/codex.go` | `codex-cli`: refuses with `not yet` |
+| `internal/provider/anthropic.go` | `anthropic-api`: Messages requests with `cache_control`, structured outputs, effort |
+| `internal/provider/openai.go` | `http:<name>` endpoints, local or hosted; `openai-api` refuses with `not yet` |
+| `internal/core/http.go` | HTTP client, server-sent events (SSE) reader, retry, host allowlist, redaction |
+| `embed/models.json` | Default model per weight and link, Claude windows and prices |
 
-**In plain terms.** A provider is a service that runs an AI model: Anthropic's Claude, OpenAI, or a local server such as Ollama. A provider adapter is the Go code that knows how to start a session on one provider, read its output stream and resume it. Without adapters every part of the engine would need to know each provider's quirks. The engine calls the adapters; a person only sees them through `doctor` and `status`, and chooses between them in config.
+Runtime files this chapter reads or writes:
 
-#### Interface
+| Path | Written by | Holds |
+|---|---|---|
+| `~/.komodo/state/providers.json` | The probe | Per link: availability, path, version, login, exact model identifiers, measured context |
+| `~/.komodo/state/quota.json` | `Router.RecordLimit` | Reset time per limited link, shared by every repository on the machine |
+| `~/.komodo/state/timers/<repo-id>.<group>.json` | `Router.WriteTimer` | One timer per paused group |
+| `~/.komodo/state/links/` | Session start | One slot claim per running session on a link |
+| `sessions/<id>/` | Supervisor and adapters | `brief.md`, `system.md`, `mcp.json`, `request.json`, `stream.jsonl`, `messages.jsonl`, `result.json`, `out/` |
 
-**In plain terms.** The interface is the three functions every provider adapter must offer, so the engine can treat every provider the same way. It also fixes what a finished session hands back. Without one interface, adding a provider would mean changing the engine. Only the engine calls these; nothing else does.
+**Entry points**
 
-`Probe`, `Start(session) → stream`, `Resume(session, input)`. The stream ends in a `Result`: the output, usage (tokens in, out, cache read and write, plus USD; collected only when `track.usage` is on) and the resume handle.
+| Flow | Starts at |
+|---|---|
+| Choosing a link before a session | `Router.Select` |
+| Starting or resuming a session | `Provider.Start`, `Provider.Resume` (`claude.go`, `anthropic.go`, `openai.go`) |
+| Recording a provider limit and pausing | `Router.RecordLimit`, `Router.WriteTimer` |
+| Checking a link at `install`, `doctor` and `fresh` | `Provider.Probe` |
+| Any network request | `Client.Do`, `Client.Stream` in `internal/core/http.go` |
 
-**What each one does**
-- **`Probe`:** Checks that the provider is reachable and records its path, version and login. It runs at `install`, `doctor` and `fresh`.
-- **`Start(session) → stream`:** Starts one model session and returns its output stream, which the supervisor reads line by line.
-- **`Resume(session, input)`:** Continues a saved session from its resume handle, sending the new input (for example a scope approval). Used by `resume` and after a `needs_scope` answer.
-- **`Result`:** What the stream ends with: the model's output, its usage, collected only when `track.usage` is on (tokens in, tokens out, cache reads and writes, and a USD figure), and the resume handle for later continuation.
+The import order lets `provider` import `tools`, `ops`, `agent`, `safety`, `state` and `core`, and nothing above. `internal/core` therefore cannot import `provider` types: the HTTP client returns its own `LimitSignal` and `provider` converts it ([Import order](#import-order)).
 
-**Example**
+### 7.3 Data Model
 
-The three functions every provider adapter offers, and the `Result` a finished session hands back.
+#### Links and the chain
+
+A link is named by a string: `claude-cli`, `anthropic-api`, `codex-cli`, `openai-api`, or `http:<name>` for the endpoint `<name>` in configuration. Three links run; `codex-cli` and `openai-api` refuse with `not yet` [TODO: the OpenAI path, deliberately left to a later minor version (G-20)].
 
 ```go
-// Session is the session the engine asks a provider to run.
-type Session struct{} // [UNKNOWN: not yet designed]
+// Link names one way to reach a model: "claude-cli", "anthropic-api", "http:<name>".
+type Link string
 
-// Stream is the output stream the supervisor reads line by line.
-type Stream struct{} // [UNKNOWN: not yet designed]
+const (
+	ClaudeCLI    Link = "claude-cli"
+	AnthropicAPI Link = "anthropic-api"
+	CodexCLI     Link = "codex-cli"  // refuses: not yet
+	OpenAIAPI    Link = "openai-api" // refuses: not yet
+)
 
-// Input is the new input sent when a saved session resumes, such as a scope approval.
-type Input struct{} // [UNKNOWN: not yet designed]
+// HTTPLink returns the link name of the configured endpoint, "http:<name>".
+func HTTPLink(endpoint string) Link { return Link("http:" + endpoint) }
 
-// ResumeHandle identifies a saved session so it can continue later.
-type ResumeHandle struct{} // [UNKNOWN: not yet designed]
+// IsHTTP reports whether the link is an `http:<name>` endpoint.
+func (l Link) IsHTTP() bool { return strings.HasPrefix(string(l), "http:") }
 
-// Usage counts tokens and cost for one session; collected only when track.usage is on.
+// Weight is the agent's size class; agent.json decodes it (Sessions, Agents and Briefs).
+type Weight = agent.Weight
+```
+
+| Link | Runs as | Authentication | Tools through | Status |
+|---|---|---|---|---|
+| `claude-cli` | `claude -p` at the probed absolute path | The program's own login | Private Model Context Protocol server | runs |
+| `anthropic-api` | encrypted HTTP through the HTTP client | `providers.keys.anthropic` | Go tool loop | runs |
+| `http:<name>` | OpenAI-compatible HTTP: Ollama, vLLM, llama.cpp, LM Studio | Optional `key` per endpoint | Go tool loop | runs |
+| `codex-cli` | `codex exec` | The program's own login | Private Model Context Protocol server | `not yet` |
+| `openai-api` | encrypted HTTP | `providers.keys.openai` | Go tool loop | `not yet` |
+
+**Chain.** Each agent has an ordered chain of links, fixed in `agent.json` and never reordered by a configuration key. Two descriptions of the chain's shape exist in the design and the owner has not chosen between them.
+
+[TODO: the shape of an agent's provider chain. Option 1 (failover description and High-Level Design): the order is claude-cli with the latest model identifier then the prior identifier, every free http: endpoint in configuration order as the backstop, then anthropic-api only when providers.paid allows. Option 2 (agent.json field table): the chain is a list of links that must end in a free http: endpoint, as in the example ["claude-cli", "http:local"]. (G-NEW-1)]
+
+An agent `model` override (`komodo config agent <name> model=…`) puts that model's link first, and the chain's remaining links follow in their usual order. The values are `opus`, `sonnet` or `haiku` (latest of the line), `opus-prev` (prior), `<endpoint>:<model>` and the opt-in `fable`.
+
+#### Session and Input
+
+`Session` is everything an adapter needs to run one session; the supervisor builds it after link selection. `Input` is the one new user message sent when a session resumes.
+
+```go
+// Session is one model session an adapter runs.
+type Session struct {
+	ID      string          // session UUID chosen by Komodo, passed as --session-id
+	Dir     string          // sessions/<id>/: brief.md, system.md, mcp.json, out/
+	Agent   string          // agent name, such as "builder"
+	Link    Link            // the selected link
+	Model   string          // exact pinned model ID for the weight on this link
+	Profile CapacityProfile // ctx, slots, cost_class and effort measured for this session
+	Schema  json.RawMessage // the agent's result schema for the final call
+	Tools   ToolHost        // bound tool functions; used by API links only
+}
+
+// Input is the new user message sent on resume, such as a scope answer.
+type Input struct {
+	Text string // written to standard input (claude-cli) or appended as the next turn (API links)
+}
+```
+
+| Field | Source of the value |
+|---|---|
+| `ID` | The supervisor picks the unique identifier before spawn, so the resume handle is known before the session ends |
+| `Dir` | `<session>/brief.md` is written once and piped from there; `system.md` and `mcp.json` sit beside it |
+| `Model` | Catalog or `providers.json` identifier for the agent's weight; an agent `model` override beats it |
+| `Profile` | `{ctx, slots, cost_class, effort}`, defined in [Capacity profile per link](#capacity-profile-per-link) |
+| `Schema` | The `result` field of `agent.json` |
+| `Tools` | The registry's functions bound to this session ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)) |
+
+[TODO: the working directory and base environment of the claude process, and the signature of ToolHost (G-NEW-3)] [TODO: the owner confirms these Go shapes, which this chapter derives from the cited facts (G-NEW-2)]
+
+#### Stream and Event
+
+`Stream` yields the session's events in order. Every event is a liveness signal for the supervisor: any stream line or tool call restarts the idle clock.
+
+```go
+// StopLevel is one rung of the stop ladder the supervisor climbs.
+type StopLevel int
+
+const (
+	Interrupt StopLevel = iota // ends the turn, keeps its result (SIGINT; API links: cancel after the current tool call)
+	Terminate                  // SIGTERM after 30 s
+	Kill                       // whole process tree after 60 s
+)
+
+// Stream delivers one session's events and accepts injected lines.
+type Stream interface {
+	// Next blocks for the next event and returns io.EOF after the Result event.
+	Next(ctx context.Context) (Event, error)
+	// Inject sends one line to the live session: the time warning or the nudge.
+	Inject(line string) error
+	// Stop applies one rung of the stop ladder.
+	Stop(level StopLevel) error
+	// Close releases the process or connection; it is safe to call twice.
+	Close() error
+}
+```
+
+```go
+// EventKind classifies a stream event.
+type EventKind string
+
+const (
+	EventInit      EventKind = "init"       // first line: claude-cli system/init
+	EventOutput    EventKind = "output"     // any other model output line or API chunk
+	EventRetry     EventKind = "retry"      // claude-cli system/api_retry
+	EventRateLimit EventKind = "rate_limit" // claude-cli rate_limit_event
+	EventHeadroom  EventKind = "headroom"   // API rate-limit headers read on a response
+	EventResult    EventKind = "result"     // the final event
+)
+
+// Event is one parsed stream line; exactly one payload field is set by Kind.
+type Event struct {
+	Kind      EventKind
+	Raw       json.RawMessage // the line as received, appended to stream.jsonl
+	Init      *Init
+	Retry     *Retry
+	RateLimit *RateLimit
+	Headroom  *Headroom
+	Result    *Result
+}
+
+// Init carries the fields the billing check reads from the first line.
+type Init struct {
+	APIKeySource string // "none" on a subscription login
+}
+
+// Retry is a system/api_retry line.
+type Retry struct {
+	Category     string // rate_limit, overloaded, billing_error or max_output_tokens
+	RetryDelayMS int    // the supervisor treats the session alive until this delay passes
+}
+
+// RateLimit is a rate_limit_event line.
+type RateLimit struct {
+	IsUsingOverage bool // true when Max draws paid overage credits
+}
+
+// Headroom is the remaining share of one rate-limit window after a response.
+type Headroom struct {
+	Name        string    // the * in anthropic-ratelimit-*-remaining
+	Remaining   int64     // value of the -remaining header
+	ResetAt     time.Time // value of the -reset header
+	PercentLeft float64   // remaining as a percent of the window
+}
+```
+
+| Event kind | Produced by | Consumer reads |
+|---|---|---|
+| `init` | `claude-cli` first line | `Init.APIKeySource` must be `none` ([Billing check](#7-providers-and-http)) |
+| `retry` | `claude-cli` | Categories `rate_limit` and `billing_error` end the session with reason `provider`; the delay extends liveness |
+| `rate_limit` | `claude-cli` | `IsUsingOverage` raises one `limit.warn` |
+| `headroom` | `anthropic-api` | `PercentLeft` below `100 − warn.quota_pct` raises `limit.warn` before any 429 |
+| `output` | Both | Liveness only; on API links each chunk is the heartbeat |
+| `result` | Both | The session's end |
+
+[TODO: which claude-cli stream lines map to output, which field of the result line carries the structured answer, which field of rate_limit_event carries the reset time, and what --verbose switches on (G-NEW-3)] [TODO: which rate-limit headers carry the window total that PercentLeft needs, since only -remaining and -reset are named (G-NEW-4)]
+
+#### Result, Usage and ResumeHandle
+
+```go
+// Usage counts tokens and cost; it is nil in Result unless track.usage is on.
 type Usage struct {
 	TokensIn   int     // tokens sent to the model
 	TokensOut  int     // tokens the model returned
 	CacheRead  int     // tokens served from the provider cache
 	CacheWrite int     // tokens written to the provider cache
-	USD        float64 // cost of the session in US dollars
+	USD        float64 // metered cost; zero on a subscription link
+	USDEquiv   float64 // notional cost: claude-cli total_cost_usd on a subscription
+}
+
+// ResumeHandle names a saved session so a later Resume can continue it.
+type ResumeHandle struct {
+	Link  Link   // the link that made the handle
+	Kind  string // "session_id" (claude-cli) or "messages_file" (API links)
+	Value string // the session UUID, or the path of sessions/<id>/messages.jsonl
 }
 
 // Result is what a session stream ends with.
 type Result struct {
-	Output string // [UNKNOWN: not yet designed] type of the model's output
-	Usage  Usage
+	Output json.RawMessage // the final answer, shaped by the agent's result schema
+	Usage  *Usage
 	Handle ResumeHandle
-}
-
-// Provider is implemented once per link so the engine treats every provider the same.
-type Provider interface {
-	// Probe checks the provider is reachable and records its path, version and login.
-	Probe() error // [UNKNOWN: not yet designed] return values
-	// Start begins one model session and returns the stream of its output.
-	Start(session Session) (Stream, error) // [UNKNOWN: not yet designed] return values
-	// Resume continues a saved session, sending it the new input.
-	Resume(session Session, input Input) (Stream, error) // [UNKNOWN: not yet designed] return values
 }
 ```
 
-#### Links
+| Field | Rule |
+|---|---|
+| `Output` | Produced by the final call ([Schema enforcement per link](#7-providers-and-http)); Go validates it again against `Session.Schema` |
+| `Usage` | Collected only when `track.usage` is on; metered links ledger `USD`, subscription sessions ledger `USDEquiv` |
+| `Handle` | `claude-cli`: the `--session-id` unique identifier; API links: the saved `messages.jsonl` |
 
-**In plain terms.** A link is one way of reaching a model (see Glossary). Each link differs in what process or protocol it uses, how it logs in, and whether tools run through the private MCP (Model Context Protocol, how a model calls tools) server or Go's own loop. Two of the five are not built yet. The engine picks a link from the agent's chain; a person enables links through `install` and config.
+#### Limits and errors
 
-| Link | Runs as | Auth | Tools via | Status |
-|---|---|---|---|---|
-| `claude-cli` | `claude -p` at the probed absolute path | The CLI's login | Private MCP server | ships |
-| `anthropic-api` | HTTPS | `providers.keys.anthropic` | Go tool loop | ships |
-| `http:<name>` | OpenAI-compatible HTTP | Optional `key` | Go tool loop | ships |
-| `codex-cli` | `codex exec` | The CLI's login | Private MCP server | `not yet` `[PENDING G-20]` |
-| `openai-api` | HTTPS | `providers.keys.openai` | Go tool loop | `not yet` `[PENDING G-20]` |
+An adapter reports a provider limit as a typed error so the engine can fail over or pause.
 
-**What each one does**
-- **`claude-cli`:** Runs the `claude` command-line program in print mode (`claude -p`) at the exact path the probe found. It uses whatever login the person already has in Claude Code, and its tools come from Komodo's private MCP server. This is the first link in every default chain.
-- **`anthropic-api`:** Calls Anthropic's HTTP API directly, paying per token with the key stored at `providers.keys.anthropic`. Go runs the tool loop. It is built but only runs when `providers.paid` allows it.
-- **`http:<name>`:** Calls any server that speaks the OpenAI-compatible HTTP format, such as Ollama, vLLM, llama.cpp or LM Studio, named per endpoint in config. A key is optional and Go runs the tool loop. A local one is the free backstop every chain needs.
-- **`codex-cli`:** Would run OpenAI's `codex exec` program with its own login and the private MCP server. Marked `not yet`: it is designed but not built yet, tracked as gap G-20.
-- **`openai-api`:** Would call OpenAI's HTTP API with the key at `providers.keys.openai`, with Go running the tool loop. Marked `not yet` and tracked as gap G-20.
+```go
+// Sentinel errors an adapter returns; the engine maps them to skips, blocks or exit reasons.
+var (
+	ErrUnavailable  = errors.New("link unavailable")
+	ErrUnauthorized = errors.New("link not logged in")
+	ErrModelGone    = errors.New("model not found (HTTP 404)")
+	ErrBilling      = errors.New("first line shows a paid API key")
+	ErrNotYet       = errors.New("link not built")
+)
 
-#### Schema enforcement per link
+// LimitKind names which provider cap was hit.
+type LimitKind string
 
-**In plain terms.** Schema enforcement means making the model's final answer match a fixed JSON shape, the agent's result schema, so Go can read it without parsing prose. Each provider has a different switch for this, listed per link below. Without it the engine could not reliably tell a task's status or its code. The engine sends the switch; the model session produces the structured answer.
+const (
+	LimitWindow LimitKind = "window" // the 5-hour window
+	LimitWeekly LimitKind = "weekly" // the weekly cap
+	LimitModel  LimitKind = "model"  // a per-model cap
+	LimitSpend  LimitKind = "spend"  // enforced_spend_limit_reached
+	LimitQuota  LimitKind = "quota"  // a quota error in a response body
+)
+
+// LimitError reports a halted session or a refused start; ResetAt is zero when the provider gave none.
+type LimitError struct {
+	Link    Link
+	Kind    LimitKind
+	ResetAt time.Time
+	Handle  *ResumeHandle // set when a running session was halted
+}
+
+// Error implements the error interface.
+func (e *LimitError) Error() string { return "provider limit on " + string(e.Link) }
+```
+
+#### Probe result and the model catalog
+
+The probe records one `ProbeResult` per link in `providers.json`; the exact model identifiers written there are the only model registry.
+
+```go
+// ProbeResult is what Probe records for one link.
+type ProbeResult struct {
+	Link      Link
+	OK        bool
+	Reason    string            // why the link is unusable, when OK is false
+	Path      string            // claude-cli: absolute path of the claude program
+	Version   string            // claude-cli: program version
+	Auth      AuthStatus        // claude-cli: parsed `claude auth status --json`
+	InitLine  json.RawMessage   // claude-cli: one system/init line per program version
+	Models    map[Weight]string // exact IDs per weight
+	Ctx       int               // measured context in tokens
+	CtxSource string            // "models_api", "catalog", "default", "ollama_ps" or "endpoint"
+	Ollama    bool              // true when GET /api/version answered
+}
+
+// AuthStatus holds the two login fields the billing check reads.
+type AuthStatus struct {
+	AuthMethod       string `json:"authMethod"`       // "claude.ai" on a subscription login
+	SubscriptionType string `json:"subscriptionType"` // pro, max, team or enterprise
+}
+```
+
+[TODO: the key names of providers.json and quota.json, and the layout of a record's header and body (G-30)] [TODO: the CtxSource strings, since the design says only that the source travels in session.start (G-NEW-2)]
+
+`embed/models.json` holds about 10 entries.
+
+```go
+// CatalogEntry is one model in embed/models.json.
+type CatalogEntry struct {
+	ID       string  `json:"id"`
+	Weight   string  `json:"weight"`           // heavy, standard or light
+	Tier     string  `json:"tier"`             // latest, prior or local
+	Window   int     `json:"window,omitempty"` // context tokens; absent for local models, which are measured
+	MaxOut   int     `json:"max_out,omitempty"`
+	PriceIn  float64 `json:"price_in_usd_per_m"`
+	PriceOut float64 `json:"price_out_usd_per_m"`
+}
+```
+
+| `CatalogEntry` field | Meaning |
+|---|---|
+| `id` | Exact pinned model identifier |
+| `weight` | `heavy`, `standard` or `light` |
+| `tier` | `latest`, `prior` or `local` |
+| `window`, `max_out` | Context and maximum output tokens; absent for local models, whose window is measured |
+| `price_in_usd_per_m`, `price_out_usd_per_m` | United States dollars per million tokens |
+
+```json
+[
+  {"id": "claude-opus-5-5", "weight": "heavy", "tier": "latest", "window": 1000000, "max_out": 128000, "price_in_usd_per_m": 4, "price_out_usd_per_m": 20},
+  {"id": "claude-opus-5", "weight": "heavy", "tier": "prior", "window": 1000000, "max_out": 128000, "price_in_usd_per_m": 4, "price_out_usd_per_m": 20},
+  {"id": "claude-haiku-4-5", "weight": "light", "tier": "prior", "window": 200000, "price_in_usd_per_m": 0.1, "price_out_usd_per_m": 0.5}
+]
+```
+
+[TODO: the JavaScript Object Notation (JSON) key names of models.json (G-30)]
+
+| Weight | Agents | Latest | Prior | Window | Price per million tokens, in / out |
+|---|---|---|---|---|---|
+| Heavy | Planner, architect, reviewer | `claude-opus-5-5` | `claude-opus-5` | 1M, 128K out | $4 / $20 |
+| Standard | Builder, researcher | `claude-sonnet-5-5` | `claude-sonnet-5` | 1M, 128K out | $2 / $10 |
+| Light | Tester, scout | `claude-haiku-5-5` | `claude-haiku-4-5` | 1M; Haiku 4.5 200K | $0.10 / $0.50 |
+| Heavy, opt-in | `fable` (Fable 5.1) | none | none | 1M | $10 / $50 |
+| Local | Qwen3.6-27B, Gemma 4 31B, Nemotron 3 Nano | none | none | measured | free |
+
+Every current Claude identifier is a pinned snapshot with a 1M-token window and 128K maximum output, except Haiku 4.5 at 200K; Komodo uses the exact identifier and never an alias. A person opts into `fable` per agent with `komodo config agent <name> model=fable`, and it applies only when the probe lists it for the login. [TODO: whether a Max login exposes claude-fable-5-1 to claude -p (G-06)] [TODO: which weight each local model serves (G-NEW-7)]
+
+#### Timer and quota records
+
+A paused group has one timer record, written with `Replace` and removed when it fires.
+
+```json
+{
+  "wait_until": "2026-10-12T21:31:00Z",
+  "wait_link": "claude-cli"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `wait_until` | The latest provider reset time among the group's halted sessions, plus 1 min; each halted session's ledger row keeps a copy |
+| `wait_link` | The link whose reset the group waits for |
+
+`quota.json` stores one reset time per limited link, so every repository on the machine skips that link until the time passes. [TODO: locking for machine-shared files such as quota.json (G-NEW-6)]
+
+```go
+// Timer is the body of a timers/<repo-id>.<group>.json record.
+type Timer struct {
+	WaitUntil time.Time `json:"wait_until"`
+	WaitLink  Link      `json:"wait_link"`
+}
+
+// NewTimer returns the timer for halted sessions whose links reset at the given times.
+func NewTimer(link Link, resets []time.Time) Timer {
+	var latest time.Time
+	for _, r := range resets {
+		if r.After(latest) {
+			latest = r
+		}
+	}
+	return Timer{WaitUntil: latest.Add(time.Minute), WaitLink: link}
+}
+```
+
+#### On-disk formats and versioning
+
+| File | Layout | Reader and versions |
+|---|---|---|
+| `timers/<repo-id>.<group>.json` | A state-manager record: header fields `v`, `kind`, `key`, `rev`, `ts`, `writer`, then the body `wait_until`, `wait_link` | A newer binary reads an older `v` by running a registered migration step in memory ([State Manager](#13-state-manager)). [TODO: how the header and body sit in one file (G-30)] |
+| `quota.json`, `providers.json` | State-manager records written with `Replace` | Same rule. [TODO: the key names of both files (G-30)] |
+| `embed/models.json` | A JSON array of `CatalogEntry` objects, compiled into the binary | Read only by the binary that embeds it, so no version mismatch arises. [TODO: the key names (G-30)] |
+| `sessions/<id>/stream.jsonl` | The stream lines exactly as received, appended in order | Appended by observability |
+| `sessions/<id>/messages.jsonl` | One saved turn per line on API links | [TODO: the line layout (G-NEW-4)] |
+
+#### HTTP client types
+
+```go
+// Caller identifies who is making a request, and so which hosts it may reach.
+type Caller string
+
+const (
+	CallerProvider Caller = "provider" // its own endpoint only
+	CallerWeb      Caller = "web"      // the allowlist, GET only
+	CallerUpdater  Caller = "updater"  // the release host only
+)
+
+// Options tunes one client for one caller.
+type Options struct {
+	Caller     Caller
+	Hosts      []string      // hosts the caller may reach
+	SelfHosted bool          // allows plain http:// to a non-loopback host, with a warning
+	FirstByte  time.Duration // overrides the 60 s default (300 s on loopback); from first_byte_s
+}
+
+// LimitSignal is returned instead of a retry when the response says the cap is reached.
+type LimitSignal struct {
+	Status     int           // HTTP status, normally 429
+	Code       string        // error.details.error_code, such as enforced_spend_limit_reached
+	RetryAfter time.Duration // zero when the header is absent
+}
+
+// Error implements the error interface.
+func (s *LimitSignal) Error() string { return "provider limit reached" }
+```
+
+### 7.4 Interfaces
+
+```go
+// Provider is implemented once per link; the engine treats every link the same way.
+type Provider interface {
+	// Link returns the link this adapter serves.
+	Link() Link
+	// Probe checks the link is reachable and records its path, version and login; no model turn.
+	Probe(ctx context.Context) (ProbeResult, error)
+	// Profile measures the link's capacity profile for a weight.
+	Profile(ctx context.Context, w Weight) (CapacityProfile, error)
+	// Start begins one model session and returns the stream of its events.
+	Start(ctx context.Context, s Session) (Stream, error)
+	// Resume continues a saved session from its handle, sending the new input.
+	Resume(ctx context.Context, s Session, in Input) (Stream, error)
+}
+```
+
+| Method | Error | Meaning and what the caller does |
+|---|---|---|
+| `Probe` | `ErrUnavailable`, `ErrUnauthorized` | Program missing, endpoint silent or logged out; the probe records the link as unusable with the reason, and `doctor` names the fix |
+| `Profile` | `ErrUnavailable`, `ErrUnauthorized` | `Router.Select` skips the link |
+| `Start` | `ErrUnavailable`, `ErrUnauthorized` | `Router.Select` skips the link at the next boundary |
+| `Start` | `ErrModelGone` | HTTP 404: this session start fails once; the task's next session takes the prior model identifier, then the backstop |
+| `Start`, `Stream.Next` | `ErrBilling` | The first line shows a paid key: the supervisor kills the session before turn 1, exit reason `billing`, group Blocked `paid_refused` |
+| `Start`, `Stream.Next` | `*LimitError` | A provider cap: the router records the reset; the next session takes the next allowed link, or pauses when none is left |
+| `Start`, `Resume` | `ErrNotYet` | `codex-cli` and `openai-api` refuse with `not yet` |
+| `Resume` | any other error | A failed resume gets a fresh session with the brief, the work-in-progress diff and the last builder `summary`; the ledger logs `resume_lost` |
+| `Stream.Next` | `io.EOF` | Normal end, after the `result` event |
+| `Stream.Inject`, `Stop`, `Close` | [TODO: error values and whether a closed stream accepts a call (G-NEW-2)] | |
+
+```go
+// Quota is the machine-wide record of limited links.
+type Quota interface {
+	ResetAt(l Link) (time.Time, bool) // when the link's limit lifts; false when not limited
+	Record(l Link, reset time.Time) error
+}
+
+// Store is the state manager subset the router writes timers and slot claims through.
+type Store interface {
+	Replace(kind, key string, body any, rev int) (int, error)
+	Claim(kind, key string, body any) error
+	Remove(kind, key string, rev int) error
+}
+
+// SelectRequest is what the engine asks for before each session.
+type SelectRequest struct {
+	Chain       []Link // the agent's links in order
+	Weight      Weight
+	Model       string // agent model override, empty for none
+	BriefTokens int    // size of the assembled brief
+}
+
+// Skip records one link passed over, emitted as provider.skip {from, to, reason}.
+type Skip struct {
+	From, To Link
+	Reason   string // ctx_below_floor, or the provider reason
+}
+
+// Selection is the chosen link and every skip on the way to it.
+type Selection struct {
+	Link    Link
+	Model   string
+	Profile CapacityProfile
+	Skips   []Skip
+}
+
+// Router chooses links and records limits.
+type Router struct {
+	Providers map[Link]Provider
+	Quota     Quota
+	Store     Store
+	Paid      PaidMode
+}
+
+// Select returns the first link in the chain that can serve the session now.
+func (r *Router) Select(ctx context.Context, req SelectRequest) (Selection, error)
+
+// RecordLimit stores the link's reset time in quota.json so every repository skips it.
+func (r *Router) RecordLimit(ctx context.Context, e *LimitError) error
+
+// WriteTimer writes the paused group's timer record.
+func (r *Router) WriteTimer(ctx context.Context, repoID, group string, t Timer) error
+```
+
+```go
+// PaidMode is the providers.paid setting.
+type PaidMode string
+
+const (
+	PaidNever    PaidMode = "never"
+	PaidFallback PaidMode = "fallback"
+	PaidAllowed  PaidMode = "allowed"
+)
+
+// Cost classes assigned by the billing check.
+const (
+	CostSubscription = "subscription"
+	CostFree         = "free"
+	CostPaid         = "paid"
+)
+
+// Classify returns the cost class of a link from its login or endpoint; unknown means paid.
+func Classify(l Link, auth AuthStatus, ep Endpoint) string
+
+// Scrub returns env without the variables that would make claude prefer an API key.
+func Scrub(env []string) []string
+
+// CheckInit fails with ErrBilling unless the first stream line reports apiKeySource "none".
+func CheckInit(i Init) error
+
+// Errors Select returns when no link can serve the session.
+var (
+	ErrNoProvider  = errors.New("every link unavailable or unauthorized")
+	ErrPaidRefused = errors.New("only a paid link remains and providers.paid forbids it")
+	ErrContext     = errors.New("the brief exceeds half the context of every link")
+	ErrPaused      = errors.New("every remaining link is over its limit")
+)
+```
+
+`ErrPaused` wraps the `LimitError` values that emptied the chain, so the caller can write the timer.
+
+| `Router` method | Error | Caller does |
+|---|---|---|
+| `Select` | `ErrNoProvider` | Group Blocked `no_provider`; a person fixes the provider or login |
+| `Select` | `ErrPaidRefused` | Group Blocked `paid_refused`, naming the config key to change |
+| `Select` | `ErrContext` | Group Blocked `context`; a person shrinks the task or adds a larger endpoint |
+| `Select` | `ErrPaused` | Session pauses ([Limits, pauses and warnings](#7-providers-and-http)) |
+| `RecordLimit`, `WriteTimer` | state manager error | [TODO: what the engine does when quota.json or a timer cannot be written (G-NEW-6)] |
+| `Client.Do` | `*LimitSignal` | The adapter converts it to a `*LimitError` |
+| `Client.Do` | other error after 4 attempts | The adapter fails the request; a second dropped stream fails the session |
+
+The endpoint type is the configuration record described in [Endpoint group](#endpoint-group-komodo-config-endpoint-name):
+
+```go
+// Endpoint is one configured `http:` server.
+type Endpoint struct {
+	Name       string
+	URL        string            // the server's /v1 base
+	Models     map[Weight]string // a model per weight
+	Ctx        int               // context tokens; required for non-Ollama servers
+	Key        string            // env:NAME reference, optional
+	SelfHosted bool
+	FirstByteS int
+}
+```
+
+HTTP client calls:
+
+```go
+// Client is the one HTTP client under every network call of a process.
+type Client struct { /* one http.Transport per process */
+}
+
+// NewClient builds a client for one caller.
+func NewClient(opt Options) *Client
+
+// Do sends a request with the retry rules and returns the response, or a *LimitSignal.
+func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error)
+
+// Stream sends a request and returns a reader over its server-sent events.
+func (c *Client) Stream(ctx context.Context, req *http.Request) (*SSEReader, error)
+
+// SSEReader yields one server-sent event at a time without buffering the body.
+type SSEReader struct { /* body and line scanner */
+}
+
+// Next returns the next event's data, or io.EOF at the end of the stream.
+func (r *SSEReader) Next() (data []byte, err error)
+```
+
+| Caller | Call | When |
+|---|---|---|
+| Engine (`Drive` through the supervisor) | `Router.Select` | Before every session and at every session boundary |
+| Supervisor | `Provider.Start`, `Resume`, then `Stream.Next`, `Inject`, `Stop` | Spawn, `resume`, `needs_scope` answers, time warning, nudge, stop ladder |
+| Engine | `Router.RecordLimit`, `Router.WriteTimer` | A session halted by a provider limit with no link left |
+| Installer, `doctor`, `fresh` | `Provider.Probe` | `install`, `doctor`, `fresh` |
+| Engine | `Provider.Profile` | Before each session, to fill `Session.Profile` |
+| Anthropic and OpenAI-compatible adapters | `Client.Do`, `Client.Stream` | Every model request |
+| `web` tool and the background updater | `NewClient` with their `Caller` | Fetches within their host allowlist |
+
+### 7.5 Behaviour
+
+#### Walkthrough
+
+One builder session at the standard weight, whose `claude-cli` link reaches its 5-hour window and whose group then pauses.
+
+**📐 What happens between selection and the first turn**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as Supervisor
+  participant R as Router
+  participant P as Provider
+  participant M as Model
+  S->>R: Select(chain, weight, brief tokens)
+  R->>P: Profile(weight)
+  P-->>R: ctx, slots, cost class, effort
+  R-->>S: Selection with skips
+  S->>P: Start(Session)
+  P->>M: launch line or request
+  M-->>P: first stream line
+  P-->>S: init event, then output events
+  P-->>S: result event
+```
+
+1. The supervisor calls `Select` with the builder's chain, weight `standard` and a 120,000-token brief. `quota.json` has no entry for `claude-cli`, the probe record is usable, `claude auth status --json` reports `claude.ai` on a `max` plan, so the cost class is `subscription`.
+2. `Profile` returns `{ctx: 1,000,000 from the catalog, slots: 3, cost_class: subscription, effort: medium}`. The brief fits within half the context, so `Select` returns `claude-cli` with `claude-sonnet-5-5`.
+3. The session claims a slot under `~/.komodo/state/links/`, and `session.start` records the context and its source.
+4. `Start` scrubs the environment, spawns `claude` with the launch line and pipes the brief as one stream-json user message. The first line, `system/init`, says `apiKeySource: "none"`, so the session continues.
+5. Later a `system/api_retry` line with category `rate_limit` arrives. The session ends with reason `provider`, keeping its resume handle, and `Router.RecordLimit` stores the reset time in `quota.json`.
+6. The task's next `Select` skips `claude-cli` because `quota.json` holds a future reset time, emits `provider.skip`, and starts the session on the backstop `http:local` if its measured context is at or above `providers.ctx_floor`.
+7. With no link left, the session instead exits `paused`, `Router.WriteTimer` writes `wait_until` (reset plus 1 min) and `wait_link: claude-cli`, and `status` shows `paused: provider_limit · claude-cli · resumes 15:31 (in 2h 14m)`.
+8. When the timer fires, `Provider.Resume` continues from the saved handle, or is refused at 0 model turns and re-pauses.
+
+#### Algorithms
+
+##### Link selection and failover
+
+`Router.Select` walks the chain in order and returns the first link that can serve the session. It never skips a link because a task failed.
+
+**📐 Which link serves the next session**
+```mermaid
+flowchart TD
+  A["1 next link in the chain"] --> B{"2 limited in quota.json?"}
+  B -->|"yes: skip"| A
+  B -->|"no"| C{"3 probe says usable?"}
+  C -->|"no: skip"| A
+  C -->|"yes"| D{"4 cost class allowed?"}
+  D -->|"no: skip"| A
+  D -->|"yes"| E{"5 context at or above floor?"}
+  E -->|"no: skip"| A
+  E -->|"yes"| F{"6 brief within half context?"}
+  F -->|"no: next that fits"| A
+  F -->|"yes"| G["7 start the session"]
+```
+
+1. Take the next link from `SelectRequest.Chain`. With an agent `model` override the model's link comes first.
+2. If `quota.json` holds a reset time still in the future for the link, skip it as over its limit.
+3. If the probe record in `providers.json` marks the link unavailable or unauthorized, skip it.
+4. Compute the cost class ([Billing check](#7-providers-and-http)). Under `providers.paid: never` a `paid` link is removed from the chain. Under `fallback` a `paid` link runs only after every `subscription` and `free` link has been skipped. Under `allowed` a `paid` link runs in its chain position.
+5. For an `http:` link, skip it with `ctx_below_floor` when its measured context is below `providers.ctx_floor`. The floor applies to `http:` endpoints only.
+6. If the brief exceeds half the measured context, take the next link that fits ([Brief builder](#5-sessions-agents-and-briefs)). Nothing is cut to fit.
+7. Return the link, the model identifier and the profile, plus one `Skip` per skipped link.
+
+Each `Skip` becomes a `provider.skip {from, to, reason}` event, handed to `Drive` as a fact by the supervisor ([Event Spine and State Machine](#2-event-spine-and-state-machine)), and a warning naming the model the task actually ran on.
+
+When no link remains, `Select` returns one of the errors in [Interfaces](#74-interfaces). Pause is chosen when every remaining link is over a limit.
+
+[TODO: which error wins when some links are over a limit and others unavailable (G-NEW-5)]
+
+Rules that hold on every walk:
+
+- A model retired mid-run returns HTTP 404. That session start fails with `ErrModelGone`; the task's next session takes the prior model identifier, then the backstop. The cost is one failed start per retirement. `providers.json` is the only model registry.
+- Any Claude limit (5-hour window, weekly cap or per-model cap) moves the next session to the backstop. After the recorded reset time, new sessions return to `claude-cli`; a task already on the backstop finishes there.
+- An agent set to a `-prev` model falls back to the backstop, never forward to the latest model.
+- An endpoint's `models` map gives a model per weight; a missing weight uses the nearest weight's model. [TODO: which weight is nearest when two are equally near (G-NEW-7)]
+- The backstop is mandatory: `doctor` and `gate` refuse a chain without a free `http:` endpoint, and `install` warns when no endpoint answers.
+- Dateless model identifiers from the 4.6 generation on are pinned snapshots, so an exact identifier is as stable as an alias.
+
+##### Session start
+
+1. The router measures the context ([Measured context](#7-providers-and-http)) and derives `{ctx, slots, cost_class, effort}`: `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight.
+2. The session claims one slot on the link under `~/.komodo/state/links/`.
+3. `session.start` records the measured context and its source.
+4. `Start` launches the process or sends the first request. On `claude-cli` the brief is piped as one stream-json user message; on API links it is the first user turn.
+5. Events flow until `EventResult`; `Next` then returns `io.EOF`.
+
+##### The `claude-cli` adapter
+
+Launch line, one flag per line:
+
+```sh
+<probed path> -p --output-format stream-json --input-format stream-json --verbose \
+  --session-id <uuid> \
+  --model <weight → model> \
+  --system-prompt-file <session>/system.md \
+  --tools "" \
+  --mcp-config <session>/mcp.json --strict-mcp-config \
+  --permission-mode dontAsk \
+  --permission-prompts none \
+  --allowedTools mcp__komodo \
+  --setting-sources "" \
+  --json-schema <agent result schema>
+# brief: one stream-json user message on standard input; stdin stays open, closed after the result
+```
+
+| Flag | Effect |
+|---|---|
+| `-p` | Print mode: takes a prompt and exits instead of opening an interactive chat |
+| `--output-format stream-json` | One JSON line per event, so the supervisor reads heartbeats, retry lines and the result without parsing prose |
+| `--input-format stream-json` | Lets the engine write JSON messages to standard input during the session; the time warning and the nudge use it |
+| `--verbose` | [TODO: what this flag switches on; the launch line always passes it (G-NEW-3)] |
+| `--session-id <uuid>` | Komodo picks the identifier, so the resume handle exists before the session ends |
+| `--model` | The exact pinned model identifier for the agent's weight |
+| `--system-prompt-file` | Replaces Claude Code's default system prompt with Komodo's file |
+| `--tools ""` | Switches off every native tool, so only Komodo's tools exist |
+| `--mcp-config … --strict-mcp-config` | Points to this session's private tool server and forbids every other Model Context Protocol server from the person's settings |
+| `--permission-mode dontAsk` | A tool call nothing allows is denied outright, since nobody is watching |
+| `--permission-prompts none` | Tells the model a denied call will not be retried by asking (Claude Code 2.1.259 or later) |
+| `--allowedTools mcp__komodo` | Allows calls to Komodo's tool server and nothing else; without it the same call is denied |
+| `--setting-sources ""` | Loads no settings, hooks or `CLAUDE.md` from the person or the repository; tested on 2.1.291: 0 hooks fired and a planted `CLAUDE.md` was ignored |
+| `--json-schema` | Forces the final answer into the agent's result schema |
+
+`--bare` is never used: it reads only an API key and never the Max login. The adapter pins each needed flag instead of relying on a default.
+
+**Resume.** The same line with `--resume <uuid>` and `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` continues a saved session, with the new input on standard input.
+
+**Stream facts.**
+
+- The first line is `system/init`.
+- `system/api_retry` lines carry the category `rate_limit`, `overloaded`, `billing_error` or `max_output_tokens`. `rate_limit` and `billing_error` end the session with reason `provider`, keeping its resume handle; `max_output_tokens` means the reply hit its output limit.
+- Piped standard input is capped at `10 MB` (10 megabytes); a 500K-token brief is about `2 MB` (2 megabytes).
+- Model Context Protocol servers get `MCP_TIMEOUT` 30 s to answer `initialize`.
+- `SIGINT` ends a turn and keeps its result; `SIGTERM` leaves it unfinished with exit code 143, so the stop ladder sends `SIGINT` first.
+
+**Finding `claude`.**
+
+1. `exec.LookPath("claude")`, which finds `claude.exe` on Windows.
+2. Then `~/.local/bin/claude`, `%USERPROFILE%\.local\bin\claude.exe`, `/opt/homebrew/bin/claude`, `/usr/local/bin/claude`, in that order.
+3. Never a file under `~/.local/share/claude/versions/`: Claude's updater deletes those copies.
+4. Never read credentials: the login state comes only from `claude auth status --json`.
+5. Windows `komodo.exe` and Windows Subsystem for Linux `komodo` each probe their own side.
+
+##### API links
+
+On `anthropic-api` and `http:<name>`, `Start` runs the tool loop in `loop.go` over the HTTP client and emits the same events as `claude-cli`. The loop's rules are in [Harness tool loop (API links)](#65-behaviour). The adapter owns the final call, which differs per link:
 
 | Link | Final call |
 |---|---|
-| `claude-cli` | `--json-schema` |
-| `codex-cli` | `--output-schema` |
-| `anthropic-api` | Structured outputs (`output_config.format`) with thinking left on; Opus 5.5 and Sonnet 5.5 refuse a forced `tool_choice` with a 400 |
-| `openai-api` | No tools, `response_format: json_schema` with `strict: true` |
+| `claude-cli` | `--json-schema` on the launch line |
+| `codex-cli` | `--output-schema`; not built |
+| `anthropic-api` | Structured outputs (`output_config.format`) with thinking left on; Opus 5.5 and Sonnet 5.5 refuse a forced `tool_choice` with HTTP 400, so none is sent |
+| `openai-api` | No tools, `response_format: json_schema` with `strict: true`; not built |
 | Ollama and other `http:` | No tools, the schema as `response_format`; Ollama has no `tool_choice` |
 
-**What each one does**
-- **`claude-cli`:** Passes the schema with the `--json-schema` flag on the launch line ([`claude-cli` launch line (Appendix H)](#claude-cli-launch-line)). Claude Code then makes the final answer match it.
-- **`codex-cli`:** Would pass the schema with the `--output-schema` flag. Not built yet.
-- **`anthropic-api`:** Uses the API's structured outputs feature (`output_config.format`) on the final call, with extended thinking left on. Opus 5.5 and Sonnet 5.5 reject a forced `tool_choice` with an HTTP 400 error, so that older trick is not used.
-- **`openai-api`:** The final call sends no tools and sets `response_format` to the JSON schema with `strict: true`. Not built yet.
-- **Ollama and other `http:`:** The final call sends no tools and passes the schema as `response_format`. Ollama has no `tool_choice` option, which is why tools are removed for that call.
+- Every link ends the same way: tools on `auto`, a text-only reply ends the work, one final call returns the result schema, and Go validates it again.
+- Effort per weight on API links is fixed per agent: heavy `high`, standard `medium`, light `low`. A change of effort or thinking invalidates the prompt cache.
+- Ollama `keep_alive` is set to the run's remaining wall time, so the server keeps the model loaded instead of unloading it after its 5-minute default.
+- The `anthropic-api` adapter marks the brief with `cache_control` breakpoints. [TODO: how the brief builder passes its breakpoints to the adapter, and the request and response mapping of the Messages and OpenAI-compatible interfaces: paths, authentication headers, tool-call encoding and event names (G-NEW-4)]
+- Response caching never applies to model calls.
 
-Every link ends the same way: tools on `auto`, a text-only reply ends the work, one final call returns the result schema, Go re-validates.
+##### Billing check
 
-**What each one does**
-- **Every link ends the same way:** Whatever the link, the model works with tools on `auto`, a text-only reply means it is done, one final call produces the schema-shaped result, and Go validates that result again itself.
+The check gives each link a cost class before every session and fails closed: any doubt counts as `paid`.
 
-#### Measured context
+| Cost class | When | Runs |
+|---|---|---|
+| `subscription` | `claude-cli` with `authMethod: claude.ai` and `subscriptionType` in `pro`, `max`, `team`, `enterprise` | Always |
+| `free` | `http:` on loopback, or `self_hosted: true` | Always |
+| `paid` | `anthropic-api`, `openai-api`, `claude-cli` on any other login, any other `http:` | Per `providers.paid` |
 
-**In plain terms.** Measured context is the real size of the conversation window a model is running with right now, in tokens, read from the provider rather than typed in by a person. The engine uses this number to size every brief and to count tokens each turn. Without measuring, a local server set to a tiny window would silently cut the prompt and the model would work from half a brief. The engine measures before each session; `doctor` shows a person the number and where it came from.
+| `providers.paid` | Effect |
+|---|---|
+| `never` (default) | Paid links are removed from every chain; the run blocks with `paid_refused`, naming the key |
+| `fallback` | A paid link runs only after every subscription and free link is skipped; `anthropic-api` is in the chain only under `providers.paid: fallback` or `allowed` |
+| `allowed` | Paid links run in chain order |
+
+**📐 How a claude-cli session proves it is not on an API key**
+```mermaid
+flowchart LR
+  A["1 auth status"] --> B["2 scrub env"] --> C["3 spawn claude"] --> D{"4 apiKeySource none?"}
+  D -->|"yes"| E["session runs"]
+  D -->|"no"| F["kill before turn 1, exit billing"]
+```
+
+1. Before each `claude-cli` session run `claude auth status --json` (0.1 s, cached 60 s per process). It sets the cost class; a logged-out or unknown login is `paid`.
+2. Remove `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and every `CLAUDE_CODE_USE_*` from the worker environment. `CLAUDE_CODE_OAUTH_TOKEN` stays: it is a subscription token. Claude Code in `-p` mode would prefer a present key over the login.
+3. Read the first stream line. `system/init` must say `apiKeySource: "none"`, else the session is killed before turn 1 and exits with reason `billing`, which blocks the group `paid_refused`.
+
+The `apiKeySource` field is present in the Claude Code binary but absent from its headless documentation. The probe records one `system/init` line per program version and fails the link at probe time when a version lacks the field, rather than killing every session. [TODO: capturing the init line at probe time without spending a model turn (G-02)]
+
+##### Measured context
+
+The engine measures the window each session really runs with, in tokens, and never uses a typed number except to lower it.
 
 | Link | Source |
 |---|---|
 | `claude-cli`, `anthropic-api` | Models API `max_input_tokens`, else the `embed/models.json` entry, else the default window 262,144 |
-| Ollama | `/api/ps` `context_length` for the loaded model; an unloaded model is loaded with an empty request first; a typed `ctx` only lowers it |
+| Ollama | `/api/ps` `context_length` for the loaded model; an unloaded model is first loaded with an empty request; a typed `ctx` only lowers it |
 | Other `http:` servers | The endpoint's `ctx`, required |
 
-**What each one does**
-- **`claude-cli`, `anthropic-api`:** Go asks Anthropic's Models API for `max_input_tokens` when an API key is available. Otherwise it uses the entry in the embedded model catalog ([Model catalog (`embed/models.json`, about 10 entries) (Appendix H)](#model-catalog-embedmodelsjson-about-10-entries)), and otherwise the default window of 262,144 tokens.
-- **Ollama:** Go reads `context_length` from Ollama's `/api/ps` endpoint for the model that is loaded. If the model is not loaded yet, Go loads it with an empty request first. A `ctx` value typed in config can only lower this number, never raise it.
-- **Other `http:` servers:** There is no way to ask, so the endpoint's `ctx` value in config is required.
+- Ollama is detected at the probe by `GET /api/version` on the endpoint's host; an answer means `/api/ps` is usable.
+- An endpoint below `providers.ctx_floor` fails `doctor`, which names the fix `OLLAMA_CONTEXT_LENGTH=262144`, and is skipped at run time with `provider.skip` reason `ctx_below_floor`.
+- The default 262,144 applies to any model neither measured nor in the catalog. A window smaller than the real one only shrinks briefs; a larger one would let a server cut the prompt. The catalog therefore lists every pinned model whose window is under the default.
+- Model IDs come from the Models API `line` field when an Anthropic key resolves, else the catalog. The probe refreshes them on `install`, `doctor` and `fresh` and writes the exact identifiers to `providers.json`, so a run never changes model mid-way.
+- A line with no current model moves its weight up one line, and `doctor` warns. `doctor` prints the catalog with each window's source.
+- [TODO: whether a `24 GB` (24 gigabyte) machine runs Qwen3.6-27B at a 262,144-token context (G-03)]
 
-Each session's measured context and its source travel in `session.start`. Ollama is detected at the probe by `GET /api/version`. An endpoint below `providers.ctx_floor` fails `doctor` and is skipped with `provider.skip` reason `ctx_below_floor`; `doctor` names the fix `OLLAMA_CONTEXT_LENGTH=262144`. `[PENDING G-03]` a 24 GB machine running Qwen3.6-27B at 262,144 context.
+##### Limits, pauses and warnings
 
-The default window of 262,144 applies to any model that is neither measured nor in the catalog, such as a new Claude model on a login with no API key. A window smaller than the real one only makes briefs smaller, while a larger one would let a server cut the prompt. So the catalog must list every pinned model whose window is under the default.
+Komodo adds no cost cap of its own: the provider's windows and spend limits are the only caps. A provider halt moves the next session to the next allowed link, and only with no link left does the session pause.
 
-**What each one does**
-- **Travels in `session.start`:** The measured number and its source are recorded on every session's start event, so the ledger shows what each session really had.
-- **Ollama is detected at the probe:** Go sends `GET /api/version` to the endpoint's host; an answer means it is Ollama and `/api/ps` can be used.
-- **Below `providers.ctx_floor`:** An endpoint whose measured window is under the floor (262,144) fails `doctor` and is skipped at run time with a `provider.skip` event, reason `ctx_below_floor`. Briefs are never shrunk to fit a small window.
-- **`doctor` names the fix:** Ollama's own default is 4,096, far below the floor, so `doctor` tells the person to set `OLLAMA_CONTEXT_LENGTH=262144` on the server. Whether a 24 GB machine can run Qwen3.6-27B at that size is open, tracked as G-03.
-
-#### Model catalog (`embed/models.json`, about 10 entries)
-
-**In plain terms.** The model catalog is a small list, compiled into the binary, of the exact model names Komodo uses by default, with each one's window size and price. It exists so the engine never guesses a model ID or a window. Without it a new install would have no idea which Claude model is current or how big its context is. The engine reads it; `doctor` prints it for a person.
-
-| Weight | Latest | Prior | Window | Price per M in/out |
-|---|---|---|---|---|
-| Heavy | `claude-opus-5-5` | `claude-opus-5` | 1M, 128K out | $4 / $20 |
-| Standard | `claude-sonnet-5-5` | `claude-sonnet-5` | 1M, 128K out | $2 / $10 |
-| Light | `claude-haiku-5-5` | `claude-haiku-4-5` | 1M; Haiku 4.5 200K | $0.10 / $0.50 |
-| Heavy, opt-in | `fable` (Fable 5.1) | — | 1M | $10 / $50 |
-| Local | Qwen3.6-27B, Gemma 4 31B, Nemotron 3 Nano per weight | — | measured | free |
-
-**What each one does**
-- **Heavy:** The large Claude model for planner, architect and reviewer: `claude-opus-5-5` first, `claude-opus-5` as backup. Both have a 1 million token window and 128K maximum output, priced at $4 per million input tokens and $20 per million output tokens.
-- **Standard:** The mid-size Claude model for builder and researcher: `claude-sonnet-5-5` first, `claude-sonnet-5` as backup. Same 1M window and 128K output, priced at $2 in and $10 out per million tokens.
-- **Light:** The small Claude model for tester and scout: `claude-haiku-5-5` first, `claude-haiku-4-5` as backup. The newer one has a 1M window; Haiku 4.5 has only 200K, which is why the catalog must list it. Priced at $0.10 in and $0.50 out per million tokens.
-- **Heavy, opt-in:** `fable` (Fable 5.1) is a heavy model a person can choose per agent with `komodo config agent <name> model=fable`, only when the probe lists it for the login. It has a 1M window and costs $10 in and $50 out per million tokens, against Opus 5.5's $4 and $20.
-- **Local:** The recommended open-source models per weight for `http:` endpoints: Qwen3.6-27B, Gemma 4 31B and Nemotron 3 Nano. They have no window in the catalog because it is measured from the server ([Measured context (Appendix H)](#measured-context)), and they cost nothing.
-
-IDs come from the Models API `line` field when an Anthropic key resolves, else the catalog. The probe refreshes them on `install`, `doctor` and `fresh` and writes exact IDs to `providers.json`, so a run never changes model mid-way. A line with no current model moves its weight up one line and `doctor` warns. `doctor` prints the catalog with each window's source. `[PENDING G-06]` whether a Max login exposes `claude-fable-5-1` to `claude -p`.
-
-**What each one does**
-- **Where the IDs come from:** When an Anthropic API key resolves, the probe reads each model line's current ID from the Models API; otherwise it uses the catalog. It refreshes on `install`, `doctor` and `fresh` and writes the exact IDs to `providers.json`, so a run that is already going never switches model halfway.
-- **A line with no current model:** If, say, Haiku is retired with no successor, the light weight moves up to the standard line and `doctor` warns the person.
-- **`doctor` prints the catalog:** One row per weight and link, naming the model ID, its window, and whether that window was measured, taken from the catalog, or defaulted.
-- **G-06:** Whether a Max subscription login lets `claude -p` use `claude-fable-5-1` is not yet verified.
-
-**Example**
-
-Three of the 10 catalog entries: two Claude models with window and price, and one local model whose window is measured. Key names follow the catalog table's columns; the real JSON keys are open (G-30).
-
-```json
-[
-  {
-    "id": "claude-opus-5-5",
-    "weight": "heavy",
-    "tier": "latest",
-    "window": "1M",
-    "max_out": "128K",
-    "price_per_m_usd": {
-      "in": 4,
-      "out": 20
-    }
-  },
-  {
-    "id": "claude-opus-5",
-    "weight": "heavy",
-    "tier": "prior",
-    "window": "1M",
-    "max_out": "128K",
-    "price_per_m_usd": {
-      "in": 4,
-      "out": 20
-    }
-  },
-  {
-    "id": "Qwen3.6-27B",
-    "weight": "[UNKNOWN: not yet designed]",
-    "tier": "local",
-    "window": "measured",
-    "price_per_m_usd": "free"
-  }
-]
+**📐 From a provider limit to a resumed session**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Provider
+  participant R as Router
+  participant F as State files
+  participant E as Engine
+  P-->>R: LimitError with reset time
+  R->>F: quota.json: link reset time
+  R->>F: timer: wait_until, wait_link
+  E->>E: sleep until earliest wait_until
+  E->>P: Resume(handle, input)
+  P-->>E: stream, or refused at 0 turns
 ```
 
-#### Failover chain
+1. The adapter returns a `LimitError` when a stream line or an HTTP response reports a cap.
+2. The router records the link's reset time in `quota.json` (`RecordLimit`).
+3. With no link left, the session exits `paused`, keeping its resume handle, and the router writes the group's timer with `NewTimer` (`WriteTimer`). The ledger row keeps a copy of `wait_until`.
+4. The live engine sleeps until the earliest `wait_until`. With no live engine, the startup sweep, `jobs tick` or `status` finds the due timer.
+5. `Resume` runs from the handle. If the provider still refuses, no model turn is spent and the session re-pauses on the new reset time, or backs off 15, 30, then 60 min when none is given. [TODO: the wait after the third refused attempt (G-NEW-5)]
+6. A session paused longer than `limits.pause_max_min` (360) is cancelled, its work-in-progress commit is kept, and the group blocks `pause_timeout`. Paused time stops the wall clocks.
 
-**In plain terms.** The failover chain is the order in which the engine tries links when one cannot serve a session. Failover means moving to the next link only because the provider is down, refuses the login, or has hit a usage limit, never because the model did badly. The rule that matters most: when Claude is unavailable, work goes to a free open-source model (the backstop), not to a paid API. The engine follows the chain; a person sees each skip as a warning naming the model used.
+`resume` from a person attempts every paused agent at once. `abandon` clears the timer. `status` shows `paused: provider_limit · claude-cli · resumes 15:31 (in 2h 14m)`.
 
-| Step | Link | Model per weight |
-|---|---|---|
-| 1 | `claude-cli` | Latest ID, then the prior ID |
-| 2 (backstop) | Each free `http:<name>` in config order | The endpoint's `heavy`, `standard`, `light`; a missing weight uses the nearest |
-| 3 | `anthropic-api` | Only under `providers.paid: fallback` or `allowed` |
+Warnings never stop work. They appear under ⚠️ Warnings in the run report, in `status` and `status --wait`, and as `limit.warn`:
 
-**What each one does**
-- **1:** The first link is `claude-cli`, using the person's Claude Code login. For each weight it tries the latest pinned model ID, and if that is unavailable, the prior ID of the same line.
-- **2 (backstop):** Next come the free `http:` endpoints, in the order they appear in config. Each endpoint names its own model per weight; if an endpoint has no model for a weight, the nearest weight's model is used.
-- **3:** Last is `anthropic-api`, the paid per-token API. It is tried only when `providers.paid` is set to `fallback` or `allowed`; under the default `never` it is removed from the chain entirely.
+- A window past `warn.quota_pct` (90 percent).
+- A `rate_limit_event` with `isUsingOverage: true`: Max is drawing paid overage credits.
+- With `track.usage` on, a run's metered spend past `warn.usd_per_run` (5 United States dollars).
 
-- Skip only when unavailable, unauthorized or over a limit; never because a task failed. Each skip: `provider.skip {from, to, reason}` plus a warning naming the model used.
-- A model retired mid-run: a 404 fails that session start; the task's next session takes the prior link, then the backstop (G-05, decided).
-- Any Claude limit (5-hour window, weekly cap, model cap): the next session starts on the backstop. After the recorded reset time, new sessions return to `claude-cli`; a task already on the backstop finishes there.
-- The backstop is mandatory; `doctor` and `gate` refuse a chain without one; `install` warns when no endpoint answers.
-- An agent set to a `-prev` model falls back to the backstop, never forward to the latest.
-- An agent `model` override (`komodo config agent <name> model=…`) puts that model's link first, then the default order follows, always ending in the free backstop. No config key reorders the chain.
-- Dateless model IDs from the 4.6 generation on are pinned snapshots, so using the exact ID and never an alias costs nothing.
+With `track.usage` on, metered links ledger `usd`; subscription sessions ledger Claude Code's `total_cost_usd` as the notional `usd_equiv`. With it off, no dollar figure is recorded.
 
-**What each one does**
-- **Skip only when unavailable, unauthorized or over a limit:** A link is skipped for provider reasons only, never because a task failed on it. Each skip writes a `provider.skip` event with the from-link, to-link and reason, plus a warning that names the model the task actually ran on.
-- **A model retired mid-run:** A run keeps the model IDs it was probed with. If one now returns HTTP 404, that session start fails; the task's next session moves to the prior ID, then to the backstop. Decided under gap G-05; the cost is one failed start per retirement.
-- **Any Claude limit:** When Claude's 5-hour window, weekly cap or per-model cap is hit, the task's next session starts on the backstop. After the reset time the provider reported, new sessions go back to `claude-cli`; a task already on the backstop finishes there.
-- **The backstop is mandatory:** Every chain must end in at least one free `http:` endpoint. `doctor` and `gate` refuse a chain without one, and `install` warns when no endpoint answers the probe.
-- **An agent set to a `-prev` model:** If a person pins an agent to the prior model, failover from it goes down to the backstop, never up to the latest model, so the person's choice is respected.
+##### HTTP client behaviour
 
-#### Billing check (fails closed)
+The client sends every request through one `http.Transport` per process, with keep-alive and HTTP/2 to hosted links.
 
-**In plain terms.** The billing check makes sure a session never costs money the person did not agree to. Each link gets a cost class, `subscription`, `free` or `paid`, worked out by code before every session, and paid links run only as the `providers.paid` setting allows. "Fails closed" means any doubt counts as paid and is refused. Without it, a stray `ANTHROPIC_API_KEY` in the environment could make Claude Code bill the API instead of using the Max subscription. The engine runs the check; a person sets `providers.paid`.
-
-| Cost class | When | Runs |
-|---|---|---|
-| `subscription` | `claude-cli` with `authMethod: claude.ai` and `subscriptionType` in `pro`, `max`, `team`, `enterprise` | always |
-| `free` | `http:` on loopback, or `self_hosted: true` | always |
-| `paid` | `anthropic-api`, `openai-api`, `claude-cli` on any other login, any other `http:` | per `providers.paid` |
-
-**What each one does**
-- **`subscription`:** A `claude-cli` link whose `claude auth status` reports a `claude.ai` login on a Pro, Max, Team or Enterprise plan. Sessions on it are covered by the plan, so it always runs.
-- **`free`:** An `http:` endpoint on the machine's own loopback address, or one the person marked `self_hosted: true` in config. It costs nothing per token, so it always runs.
-- **`paid`:** `anthropic-api`, `openai-api`, a `claude-cli` link on any other kind of login, or any `http:` endpoint that is neither loopback nor self-hosted (a hosted service like OpenRouter). It runs only as far as `providers.paid` permits.
-
-| `providers.paid` | Effect |
-|---|---|
-| `never` | Paid links removed from every chain; the run blocks with `paid_refused` naming the key |
-| `fallback` | A paid link runs only after every subscription and free link is skipped |
-| `allowed` | Paid links run in chain order |
-
-**What each one does**
-- **`never`:** The default. Every paid link is removed from every chain. If a run reaches a point where only a paid link could serve it, the group blocks with `paid_refused` and the message names the config key to change.
-- **`fallback`:** A paid link may run, but only after every subscription and free link has been skipped for a provider reason.
-- **`allowed`:** Paid links run in their normal place in the chain, like any other link.
-
-1. Before each `claude-cli` session: `claude auth status --json` (0.1 s, cached 60 s per process) sets the cost class; a logged-out or unknown login is `paid`.
-2. Env scrub: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_*` removed; `CLAUDE_CODE_OAUTH_TOKEN` stays.
-3. First stream line: `system/init` must say `apiKeySource: "none"`, else the session is killed before turn 1 with exit `billing`. The probe records one init line per CLI version; a version without the field fails the link at probe time. `[PENDING G-02]` capturing it without a model turn.
-
-The `apiKeySource` field is present in the Claude Code binary but not in its headless documentation. That is why the probe records one `system/init` line per CLI version and fails a link whose version lacks the field, instead of killing every session.
-
-**What each one does**
-- **1. Before each `claude-cli` session:** Go runs `claude auth status --json` (0.1 seconds, cached for 60 seconds per process) and sets the cost class from the answer. A logged-out or unrecognised login counts as `paid`, so it is refused under `never`.
-- **2. Env scrub:** Go removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and every `CLAUDE_CODE_USE_*` variable from the worker's environment, because Claude Code in `-p` mode would prefer a present key over the subscription login. `CLAUDE_CODE_OAUTH_TOKEN` is kept because it is a subscription token.
-- **3. First stream line:** The first line Claude Code prints is `system/init`, and it must say `apiKeySource: "none"`. Anything else means a key is in play, and the session is killed before its first model turn with exit `billing`. The probe records one such line per CLI version, and a version without the field fails at probe time rather than killing every session. How to capture that line without spending a model turn is open, tracked as G-02.
-
-#### Limits, pauses and warnings
-
-**In plain terms.** Limits are the usage caps the providers themselves enforce, such as a Max plan's 5-hour window or an API spend limit; Komodo adds no cap of its own. When a provider halts a session, the engine first moves to another link and only pauses when nothing is left. A pause is a timer on disk that survives a crash, and warnings tell the person when they are close to a limit. The engine does all of this; a person sees it in `status` and can cut it short with `resume` or `abandon`.
-
-| Rule | Detail |
-|---|---|
-| Provider halt | Next session on the next allowed link; only with no link left does the session pause with its resume handle |
-| Timer on disk | One timer record per paused group, `~/.komodo/state/timers/<repo-id>.<group>.json`, gets `wait_until` (the latest reset among its halted sessions, plus 1 min) and `wait_link` through the state manager's `Replace`; the ledger row keeps a copy; the link's reset time goes to `~/.komodo/state/quota.json` so every repo skips it |
-| Who fires it | The live engine sleeps until the earliest `wait_until`; else the startup sweep, `jobs tick` or `status` finds it |
-| `resume` | Attempts every paused agent now from its handle; a refused attempt costs no turn and re-pauses with the new reset, or backs off 15, 30, then 60 min |
-| Cap | `limits.pause_max_min` 360: the session is cancelled, WIP commit kept, group Blocked `pause_timeout` |
-| Visible | `status` shows `paused: provider_limit · claude-cli · resumes 15:31 (in 2h 14m)`; `abandon` clears the timer |
-| Warnings, never stops | Window past `warn.quota_pct`; `rate_limit_event` with `isUsingOverage: true`; with `track.usage` on, run USD past `warn.usd_per_run`. Shown under ⚠️ Warnings in the run report, `status`, `status --wait`, and as `limit.warn` |
-| USD | With `track.usage` on, metered links ledger `usd`; subscription sessions ledger `total_cost_usd` as notional `usd_equiv` |
-
-**What each one does**
-- **Provider halt:** When a provider stops a session for a quota or spend limit, the task's next session starts on the next allowed link in the chain. Only when no link is left does the session pause, keeping its resume handle.
-- **Timer on disk:** The state manager writes a timer record for the paused group, `~/.komodo/state/timers/<repo-id>.<group>.json`, holding `wait_until` (the latest provider reset time among the group's halted sessions, plus 1 minute) and `wait_link`, written with `Replace` and removed when fired. Each halted session's ledger row keeps a copy so `status` can show it. The reset time is also written to the machine-wide `~/.komodo/state/quota.json`, so every repository on the machine skips that link until then. Both survive a crash or reboot.
-- **Who fires it:** A running engine sleeps until the earliest `wait_until` and then resumes. If the engine is gone, the next startup sweep, a `jobs tick` from the OS scheduler, or a `status` call finds the due timer and resumes the run.
-- **`resume`:** A person or the orchestrator can run `resume` early; it tries every paused agent now from its resume handle. If the provider still refuses, no model turn is spent and the session re-pauses on the new reset time, or backs off 15, 30, then 60 minutes when no reset time is given.
-- **Cap:** A session may stay paused for at most `limits.pause_max_min`, 360 minutes. Past that it is cancelled, its WIP commit is kept, and the group blocks with `pause_timeout` so a person decides.
-- **Visible:** `status` shows a paused group as, for example, `paused: provider_limit · claude-cli · resumes 15:31 (in 2h 14m)`. `abandon` clears the timer and ends the group.
-- **Warnings, never stops:** Three things warn without stopping work: a provider window past `warn.quota_pct` (90% by default), a `rate_limit_event` with `isUsingOverage: true` (Max is drawing paid overage credits), and, only with `track.usage` on, a run's metered spend past `warn.usd_per_run` ($5 by default). They appear under ⚠️ Warnings in the run report, in `status` and `status --wait`, and as a `limit.warn` event.
-- **USD:** With `track.usage` on, the ledger records real `usd` for metered links. For subscription sessions it records Claude Code's `total_cost_usd` as `usd_equiv`, a notional figure, since the plan covers the cost. With tracking off, no USD figure is recorded.
-
-#### `claude-cli` launch line
-
-**In plain terms.** The launch line is the exact command the engine runs to start a Claude Code session as a worker. Every flag either turns off something Claude Code would do by default (its own tools, settings, hooks, permission prompts) or points it at Komodo's own inputs (the system prompt, the private tool server, the result schema). Without these flags a worker could read the person's `CLAUDE.md`, fire their hooks, or use native tools outside the guard. The engine builds the line; a person never runs it.
-
-```
-<probed path> -p --output-format stream-json --input-format stream-json --verbose
-  --session-id <uuid>
-  --model <weight → model>
-  --system-prompt-file <session>/system.md
-  --tools ""
-  --mcp-config <session>/mcp.json --strict-mcp-config
-  --permission-mode dontAsk
-  --permission-prompts none
-  --allowedTools mcp__komodo
-  --setting-sources ""
-  --json-schema <agent result schema>
-  < brief as one stream-json user message; stdin stays open, closed after the result
-```
-
-**What each one does**
-- **`<probed path> -p`:** Runs the `claude` binary found by the probe (see "Finding `claude`" below) in print mode, which takes a prompt and exits instead of opening an interactive chat.
-- **`--output-format stream-json`:** Makes Claude Code print its progress as one JSON line per event, so the supervisor can read heartbeats (a regular I'm-alive signal), retry lines and the result without parsing prose.
-- **`--input-format stream-json`:** Lets the engine send JSON messages on standard input while the session runs, which is how the time warning and nudge are injected.
-- **`--verbose`:** `[UNKNOWN: not yet designed]` what this flag switches on; the launch line always passes it.
-- **`--session-id <uuid>`:** Komodo picks the session's identifier itself, so it already knows the resume handle before the session ends.
-- **`--model <weight → model>`:** Names the exact pinned model ID for the agent's weight, as resolved in [Model catalog (`embed/models.json`, about 10 entries) (Appendix H)](#model-catalog-embedmodelsjson-about-10-entries).
-- **`--system-prompt-file <session>/system.md`:** Replaces Claude Code's default system prompt with Komodo's file holding the rules and the agent's role text.
-- **`--tools ""`:** Switches off every native Claude Code tool, so the only tools are Komodo's.
-- **`--mcp-config <session>/mcp.json --strict-mcp-config`:** Points Claude Code at the private tool server for this session and forbids any other MCP server from the person's settings.
-- **`--permission-mode dontAsk`:** Any tool call nothing allows is denied outright instead of asking a person, since no person is watching.
-- **`--permission-prompts none`:** Tells the model a denied call will not be retried by asking, so it does not loop on it (Claude Code 2.1.259 or later).
-- **`--allowedTools mcp__komodo`:** Allows calls to Komodo's private tool server and nothing else; without this flag the same tool call is denied.
-- **`--setting-sources ""`:** Loads none of the person's or the repository's Claude settings, hooks or `CLAUDE.md`. Tested on 2.1.291: 0 hooks fired and a planted `CLAUDE.md` was ignored.
-- **`--json-schema <agent result schema>`:** Makes the final answer match the agent's result schema ([Schema enforcement per link (Appendix H)](#schema-enforcement-per-link)).
-- **`< brief as one stream-json user message`:** The brief is piped in as the first user message. Standard input stays open so the supervisor can inject lines, and is closed after the result arrives.
-
-Resume: `--resume <uuid>` with the return input on stdin. No `--bare`: it never uses the Max login. `--setting-sources ""` loads no settings, hooks or `CLAUDE.md` (tested on 2.1.291: 0 hooks fired, a planted `CLAUDE.md` ignored). Stream facts: the first line is `system/init`; `system/api_retry` lines carry error categories (`rate_limit`, `overloaded`, `billing_error`, `max_output_tokens`); piped stdin is capped at 10 MB and a 500K-token brief is about 2 MB; MCP servers get `MCP_TIMEOUT` 30 s; SIGINT ends a turn with its result, SIGTERM leaves it unfinished with exit 143.
-
-**What each one does**
-- **Resume:** The same line with `--resume <uuid>` continues a saved session, with the new input sent on standard input.
-- **No `--bare`:** Bare mode reads only an API key and never the subscription login, so Komodo never uses it and pins the flags it needs instead of relying on a default.
-- **`system/init`:** The first stream line; the billing check ([Billing check (fails closed) (Appendix H)](#billing-check-fails-closed)) reads `apiKeySource` from it.
-- **`system/api_retry` categories:** `rate_limit` and `billing_error` end the session with reason `provider` ([Host facts the server is built against (Claude Code 2.1.295) (chapter 6)](#6-tools-guard-and-sandbox)); `max_output_tokens` means the reply hit its output limit; `overloaded` is a further category. The engine maps each to a limit or failure class without reading prose.
-- **Stdin cap, `MCP_TIMEOUT`, signals:** Piped input is capped at 10 MB, and a 500K-token brief is about 2 MB, so it fits. Tool servers get 30 seconds to start. SIGINT ends a turn and keeps its result; SIGTERM leaves the turn unfinished with exit code 143, which is why the stop ladder sends SIGINT first.
-
-Finding `claude`: `exec.LookPath("claude")` first (finds `claude.exe` on Windows), then `~/.local/bin/claude`, `%USERPROFILE%\.local\bin\claude.exe`, `/opt/homebrew/bin/claude`, `/usr/local/bin/claude`. Never a file under `~/.local/share/claude/versions/`. Never read credentials: login state comes only from `claude auth status --json`. WSL and Windows probe their own side.
-
-**What each one does**
-- **`exec.LookPath("claude")`:** First the engine looks for `claude` on the system PATH, which on Windows also finds `claude.exe`.
-- **Known paths:** If PATH has nothing, it tries `~/.local/bin/claude`, `%USERPROFILE%\.local\bin\claude.exe`, `/opt/homebrew/bin/claude` and `/usr/local/bin/claude`, in that order.
-- **Never under `~/.local/share/claude/versions/`:** Those are versioned copies that Claude's updater deletes, so a path there would break after an update.
-- **Never read credentials:** The engine never opens the Keychain or a credentials file. Whether the person is logged in comes only from `claude auth status --json`.
-- **WSL and Windows:** Windows `komodo.exe` and WSL `komodo` each probe their own side, because each is its own machine with its own `claude` install.
-
-Effort per weight on API links: heavy `high`, standard `medium`, light `low`, fixed per agent, because an effort or thinking change invalidates the prompt cache. Ollama `keep_alive` is set to the run's remaining wall time.
-
-**What each one does**
-- **Heavy `high`, standard `medium`, light `low`:** On API links each weight sends a fixed `effort` level with every request. It never changes within an agent, because changing effort or thinking settings would invalidate the prompt cache.
-- **Ollama `keep_alive`:** Set to the run's remaining wall time, so the local server keeps the model loaded between sessions instead of unloading it after its 5 minute default.
-
-#### HTTP stack
-
-
-**In plain terms.** The HTTP stack is the one network client every Komodo caller shares: the provider adapters, the `web` tool and the background updater. It exists so timeouts, retries, proxies and secret redaction (blanking secrets out) are handled in one place, not per caller. Without it each caller would retry differently, leak keys into logs or hang on a silent stream. The engine uses it on every API call; `claude -p` and `codex` keep their own networking. A link is one provider endpoint in an agent's chain (see Glossary).
-
-| Value | Setting |
-|---|---|
-| Client | One `http.Transport` per process, keep-alive, HTTP/2 to hosted links; system TLS roots plus `http.ca_bundle`; `HTTPS_PROXY`/`NO_PROXY`; no cookies; loopback never proxied |
-| Connect / first byte | 10 s / 60 s; loopback 300 s; per endpoint `first_byte_s` |
-| Stream idle | 90 s hosted; 300 s loopback and `self_hosted` |
-| Stream drop mid-answer | 1 retry from the start, partial discarded; a second failure fails the session |
-| Retry classes | Connection reset, 408, 429 with `retry-after` ≤ 60 s, 500, 502, 503, 504, Anthropic 529 `overloaded` |
-| Returned as a limit, not retried | 429 with `error.details.error_code: enforced_spend_limit_reached` and no `retry-after`; 429 with `retry-after` over 60 s; a quota error in the body |
-| Retries | 4 attempts, full jitter: sleep = random(0, min(30 s, 1 s × 2^attempt)); `retry-after` replaces the formula |
-| Headroom | `anthropic-ratelimit-*-remaining` and `-reset` read on every response; below `100 − warn.quota_pct` percent remaining, a `limit.warn` fires before any 429 |
-| Plain `http://` | Loopback, or `self_hosted` with a ⚠️ warning; anything else needs HTTPS |
-| Custom CA | A PEM file added to the system roots; missing or bad fails `doctor` |
-| Body cap (non-stream) | 8 MB |
-| Redirects | Same host only |
-| Host allowlist (the list of what is permitted) per caller | Providers reach their endpoint; `web` only the allowlist and GET; the updater only the release host |
-| Redaction | API keys and every `env:` value never reach logs, ledger rows or error text |
-
-**What each one does**
-- **Client:** One connection pool per process, reused across calls, so a 4-task group shares one TLS session. It trusts the system roots plus a custom CA, honors proxy variables, keeps no cookies and never proxies loopback (the local machine).
-- **Connect / first byte:** Opening a connection may take 10 s and the first byte 60 s. Local endpoints get 300 s; an endpoint can set its own `first_byte_s`.
-- **Stream idle:** A streaming answer silent for 90 s on a hosted link counts as dead; local and self-hosted links get 300 s. The session supervisor's idle timer reads this.
-- **Stream drop mid-answer:** If the stream breaks part-way, the partial text is discarded and the call restarts once. A second break fails the session.
-- **Retry classes:** Transient failures the client retries by itself. They are connection resets, 408 timeouts, 500 to 504, Anthropic's 529 overload, and a 429 asking to wait 60 s or less.
-- **Returned as a limit, not retried:** A monthly spend cap, a rate limit asking for over 60 s, or a quota error means retrying is pointless. The provider layer receives a limit signal and fails over or pauses.
-- **Retries:** At most 4 attempts, each sleeping a random time between 0 and the smaller of 30 s and 1 s doubled per attempt. A `retry-after` header sets the sleep instead.
-- **Headroom:** Anthropic's rate-limit headers are read on every response. When remaining capacity drops below the warning threshold, a `limit.warn` event fires so a pause can happen before any 429.
-- **Plain `http://`:** Unencrypted HTTP is allowed only to the local machine, or to a `self_hosted` endpoint with a warning. Everything else must be HTTPS.
-- **Custom CA:** `http.ca_bundle` names a PEM file of extra certificate authorities, for corporate proxies. A missing or malformed file fails `doctor`.
-- **Body cap (non-stream):** A non-streamed response body over 8 MB is refused, so a bad endpoint cannot exhaust memory.
-- **Redirects:** A redirect is followed only to the same host, so an endpoint cannot send traffic to a third party.
-- **Host allowlist per caller:** Each caller may reach only its own hosts: providers their endpoint, `web` its allowlist with GET only, the updater the release host.
-- **Redaction:** API keys and any value loaded from an `env:` reference are scrubbed from logs, ledger rows and error text.
-
-Users: `anthropic.go`, `openai.go`, the `web` tool, `internal fresh-bg`. `claude -p` and `codex` own their own networking.
-
-Streamed replies arrive as server-sent events (SSE), one line at a time; the client parses each line as it arrives and never buffers the whole body. Response caching never applies to model calls.
-
-**What each one does**
-- **`anthropic.go`:** The Claude API adapter; every Claude API call goes through this client.
-- **`openai.go`:** The adapter for OpenAI-compatible `http:` endpoints, hosted or local.
-- **`web` tool:** The architect's and researcher's opt-in fetch tool, GET only, against the allowlist.
-- **`internal fresh-bg`:** The detached updater that downloads, verifies and swaps a newer binary; it may reach only the release host.
-- **`claude -p` and `codex`:** The CLI hosts run as their own processes with their own networking; this stack never sees their traffic.
-
-#### Model and provider view
-
-
-**In plain terms.** This section explains how Komodo reaches AI models and which model each agent uses. A link is one way to reach a model, such as the Claude command-line tool or a local server (see Glossary). A provider is the company or program behind the link. Without this view, nobody could predict which model a task runs on, what it costs, or what happens when a provider is down. A person sets the model per agent; the engine picks the link before each session.
-
-#### Links: overview
-
-**In plain terms.** This table lists the five ways Komodo can talk to a model. Three are built; two wait for a later release. "Auth" says how the link proves who you are. "Tools via" says how the model calls Komodo's tools. One way is a private MCP server: a small local tool server that one session talks to, with the model's native tools switched off. The other is a loop in Go code that runs each tool call itself. The engine chooses the link; a person configures keys and endpoints.
-
-| Link | Runs as | Auth | Tools via | Status |
-|---|---|---|---|---|
-| `claude-cli` | `claude -p` at the probed absolute path | The CLI's own login | Private MCP server | Ships |
-| `anthropic-api` | HTTPS through the HTTP stack | `providers.keys.anthropic` | Go tool loop | Ships |
-| `http:<name>` | OpenAI-compatible HTTP: Ollama, vLLM, llama.cpp, LM Studio | Optional `key` per endpoint | Go tool loop | Ships |
-| `codex-cli` | `codex exec` | The CLI's own login | Private MCP server | `not yet` |
-| `openai-api` | HTTPS | `providers.keys.openai` | Go tool loop | `not yet` |
-
-**What each one does**
-- **`claude-cli`:** Runs the Claude Code command-line program in non-interactive mode (`claude -p`), at the absolute path the probe recorded. It uses the login the CLI already has, so a Pro or Max subscription covers it. Tools come from a private MCP server per session.
-- **`anthropic-api`:** Calls Anthropic's HTTP API directly through Komodo's HTTP stack. It needs an API key named by `providers.keys.anthropic`, which holds an environment variable name, never the key itself. Go runs the tool loop. It counts as paid.
-- **`http:<name>`:** Any server that speaks the OpenAI-compatible HTTP format, such as Ollama, vLLM, llama.cpp or LM Studio running open-source models on your machine. Each endpoint is named in config and a key is optional. It is the mandatory backstop (see Glossary).
-- **`codex-cli`:** Would run OpenAI's Codex command-line tool with its own login, the way `claude-cli` does. Not available yet.
-- **`openai-api`:** Would call OpenAI's HTTP API with `providers.keys.openai`. Not available yet.
-
-#### Weights and models
-
-**In plain terms.** A weight is a size class for an agent's model (see Glossary). Heavy is for hard reasoning, standard for everyday work, light for cheap checks. Each weight maps to a Claude model, with the prior version as fallback. It also maps to an effort level on API links: how much thinking the model is asked to do. This lets a person say "use a bigger model for the reviewer" without naming model IDs. The engine picks the model per session from the weight and the link.
-
-| Weight | Agents | Claude latest → prior | Effort (API links) |
-|---|---|---|---|
-| Heavy | Planner, architect, reviewer | `claude-opus-5-5` → `claude-opus-5` | `high` |
-| Standard | Builder, researcher | `claude-sonnet-5-5` → `claude-sonnet-5` | `medium` |
-| Light | Tester, scout | `claude-haiku-5-5` → `claude-haiku-4-5` | `low` |
-
-**What each one does**
-- **Heavy:** The planner, architect and reviewer, whose jobs need the most reasoning. On Claude they run `claude-opus-5-5`, falling back to `claude-opus-5`. API links ask for `high` effort.
-- **Standard:** The builder and researcher. On Claude they run `claude-sonnet-5-5`, falling back to `claude-sonnet-5`, at `medium` effort.
-- **Light:** The tester and scout, whose work is cheap and mechanical. On Claude they run `claude-haiku-5-5`, falling back to `claude-haiku-4-5`, at `low` effort.
-
-- Every current Claude ID is a 1M-token window with 128K max output; Haiku 4.5 is 200K. IDs are exact and pinned, never aliases.
-- `fable` (Fable 5.1) is an opt-in heavy model by `komodo config agent <name> model=fable`, only when the probe lists it for the login. `[PENDING G-06]` whether a Max login exposes it to `claude -p`.
-- Local recommended models per weight: Qwen3.6-27B, Gemma 4 31B, Nemotron 3 Nano. Their windows are measured, never typed.
-- The default window for an unmeasured, uncatalogued model is 262,144.
-
-#### The chain and failover
-
-**In plain terms.** A chain is the ordered list of links an agent tries (see Glossary). Failover is moving to the next link when a provider is down, logged out or out of quota. Komodo always tries your Claude subscription first, then a free local model, and a paid API only if you allowed it. Without a chain, one quota limit would stop all work. The chain is fixed inside each agent's file; a person picks only the starting model.
-
+**📐 How one request is retried**
 ```mermaid
 flowchart LR
-  A["1. claude-cli: latest ID"] -->|unavailable, unauthorized or over limit| B["1b. claude-cli: prior ID"]
-  B --> C["2. Backstop: each free http: endpoint in config order"]
-  C -->|only if providers.paid allows| D["3. anthropic-api"]
-  C -->|nothing left| P["Pause on a disk timer until the provider's reset time"]
+  A["1 send"] --> B{"2 outcome"}
+  B -->|"success"| C["return"]
+  B -->|"retry class"| D["3 sleep, then send again"]
+  D --> A
+  B -->|"limit"| E["4 return LimitSignal"]
+  B -->|"4 attempts used"| F["fail"]
 ```
 
-**Reading the diagram.** Box 1 is `claude-cli` with the latest model ID for the agent's weight. If that link is unavailable, unauthorized or over its limit, the arrow goes to box 1b: the same link with the prior model ID. From 1b the arrow goes to box 2, the backstop: every free `http:` endpoint, in the order you configured them. From the backstop one arrow goes to box 3, `anthropic-api`, taken only when `providers.paid` allows paid links. The other arrow, "nothing left", goes to the Pause box: the session waits on a timer stored on disk until the provider's recorded reset time.
+1. Send the request. Connect times out at 10 s and the first byte at 60 s; loopback endpoints get 300 s, and an endpoint may set its own `first_byte_s`.
+2. Classify the outcome. Retry classes: connection reset, 408, 429 with `retry-after` of at most 60 s, 500, 502, 503, 504 and Anthropic 529 `overloaded`.
+3. Sleep `random(0, min(30 s, 1 s × 2^attempt))` (full jitter), or the `retry-after` value when present, then send again. At most 4 attempts.
+4. Return a `LimitSignal`, without retrying, for a 429 with `error.details.error_code: enforced_spend_limit_reached` and no `retry-after`, a 429 with `retry-after` over 60 s, or a quota error in the body. The provider layer fails over or pauses.
 
-| Rule | Detail |
-|---|---|
-| Skip only on provider failure | A link is skipped only when unavailable, unauthorized or over its limit, never because a task failed. Each skip is a `provider.skip` event and a warning naming the model the task ran on. |
-| The backstop is mandatory | Every chain must end in at least one free `http:` endpoint. `doctor` and `gate` refuse a chain without one. |
-| Chains are fixed | In `agent.json`, never in config. `komodo config agent <name> model=…` picks the starting model; the rest of the chain follows in default order. An agent set to `-prev` falls back to the backstop, never forward. |
-| Back to Claude | After the recorded reset time, new sessions start on `claude-cli` again; a task already on the backstop finishes there. |
-| A model retired mid-run | `providers.json` is the only registry. A 404 fails that session start; the task's next session takes the prior link, then the backstop. |
-| Context floor | `providers.ctx_floor` (262,144) applies to `http:` endpoints only. An endpoint below it fails `doctor` and is skipped with `ctx_below_floor`. Briefs are never shrunk to fit. |
+Streaming rules:
 
-**What each one does**
-- **Skip only on provider failure:** Komodo moves to the next link only when the provider itself is unavailable, logged out or over its limit. A task that fails stays on the same link. Each move writes a `provider.skip` event and a warning naming the model that was actually used.
-- **The backstop is mandatory:** Every chain must end in at least one free local endpoint, so work can always continue. `doctor` and `gate` refuse a chain without one; `install` warns when no endpoint answers.
-- **Chains are fixed:** The link order lives in `agent.json` inside the binary, not in config. `komodo config agent <name> model=…` picks only where the chain starts. An agent pinned to a `-prev` model falls back only to the backstop, never forward to a newer model.
-- **Back to Claude:** When the provider's reset time passes, new sessions go back to `claude-cli`. A task already running on the backstop finishes there.
-- **A model retired mid-run:** `providers.json`, written by the probe, is the only list of valid model IDs. If a model is gone (HTTP 404), that session start fails; the task's next session uses the prior ID, then the backstop.
-- **Context floor:** `providers.ctx_floor` (262,144 tokens) is the smallest context window a local endpoint may offer. A smaller endpoint fails `doctor` and is skipped with reason `ctx_below_floor`; Komodo never shrinks a brief to fit.
+- A streamed reply is read as server-sent events, one line at a time, never buffering the whole body.
+- A stream idle for 90 s on a hosted link, or 300 s on loopback and `self_hosted` links, counts as dead. The supervisor's idle timer reads this value.
+- A stream that drops mid-answer gets 1 retry from the start with the partial text discarded; a second failure fails the session.
+- On every response the client reads `anthropic-ratelimit-*-remaining` and `-reset`; below `100 − warn.quota_pct` percent remaining it raises `limit.warn` before any 429.
 
-#### Cost classes and the billing check
+Connection and safety rules:
 
-**In plain terms.** A cost class says whether a session is covered by your subscription, free, or billed per token (see Glossary). Komodo decides it mechanically before every session, from facts it reads, not from a setting a person could get wrong. The point is that no run spends API money unless `providers.paid` says it may. The engine runs the three checks; a person sets `providers.paid`.
+- The client trusts the system roots plus the certificate file (Privacy-Enhanced Mail format) named by `http.ca_bundle`, honours `HTTPS_PROXY` and `NO_PROXY`, keeps no cookies and never proxies loopback.
+- Plain `http://` is allowed to loopback, or to a `self_hosted` endpoint with a ⚠️ warning; everything else needs encrypted HTTP.
+- A redirect is followed only to the same host. A non-streamed body over `8 MB` (8 megabytes) is refused.
+- Host allowlist per caller: providers reach their endpoint, `web` reaches only its allowlist with `GET`, the updater reaches only the release host.
+- Redaction: API keys and every `env:` value never reach logs, ledger rows or error text.
+- Users of the client: `anthropic.go`, `openai.go`, the `web` tool and `internal fresh-bg`. `claude -p` and `codex` keep their own networking.
 
-| Cost class | When | Runs? |
+##### Concurrency and locking
+
+- One `http.Transport` serves the whole process, so a 4-task group shares one encrypted connection pool.
+- The result of `claude auth status --json` is cached for 60 s per process.
+- Link slots are claim files under `~/.komodo/state/links/`, so `limits.link_sessions.<link>` holds across every repository on the machine.
+- `quota.json` is shared by every repository; its write path uses `Replace`. [TODO: locking for machine-shared files such as quota.json (G-NEW-6)]
+- A timer record has one writer, the engine of its group, and is removed by whoever fires it.
+
+### 7.6 State
+
+**Link state** is derived from three records and holds no memory of its own: the probe record in `providers.json`, the reset time in `quota.json`, and the run's billing result.
+
+| State | Held by | Enters on | Leaves on |
+|---|---|---|---|
+| Usable | `providers.json` probe `OK` | Probe succeeds | Probe fails; limit; billing refusal |
+| Limited | `quota.json` reset time | `LimitError` recorded | The reset time passes |
+| Refused for the run | The run's billing result | The billing check finds a paid or wrong-login link | The run ends |
+| Unusable | `providers.json` probe not `OK` | Probe fails (missing program, no login, no answer) | The next successful probe |
+
+**Session pause state:**
+
+**📐 States of a session across a provider limit**
+```mermaid
+stateDiagram-v2
+  [*] --> Running
+  Running --> Paused: LimitError, no link left
+  Running --> Running: LimitError, next link allowed
+  Paused --> Running: timer fires, Resume accepted
+  Paused --> Paused: Resume refused at 0 turns
+  Paused --> Cancelled: limits.pause_max_min
+  Cancelled --> [*]: Blocked pause_timeout
+```
+
+| State | `LimitError` | Timer fires | `resume` | `limits.pause_max_min` passes | `abandon` |
+|---|---|---|---|---|---|
+| Running | Next allowed link, else Paused | Not applicable | Not applicable | Not applicable | Cancelled |
+| Paused | Timer rewritten with the new reset | Resume from the handle | Resume now | Cancelled, Blocked `pause_timeout` | Timer cleared |
+| Cancelled | Not applicable | Not applicable | Not applicable | Not applicable | Not applicable |
+
+### 7.7 Invariants and Failures
+
+**Invariants.** These ordering and ownership rules always hold:
+
+- The billing check completes before the first model turn: the cost class is set before `Start`, the environment is scrubbed before `claude` spawns, and the init line is checked before turn 1.
+- `claude auth status --json` is the only source of login state; no code opens the keychain or a credentials file.
+- A run keeps the model identifiers written to `providers.json` by the probe; no identifier changes mid-run, and `providers.json` is the only model registry.
+- A link is skipped only because it is unavailable, unauthorized, over a limit or below the context floor, never because a task failed on it.
+- A brief is never shrunk to fit a window: it goes to the next link that fits, or the group blocks `context`.
+- The resume handle exists before the session ends, because Komodo picks the session unique identifier before spawn.
+- Pause state is on disk (timer record and `quota.json`), so a killed engine loses no wait.
+- No API key and no `env:` value reaches a log, a ledger row or an error text.
+
+**Failures**
+
+| Situation | Detection | Behaviour |
 |---|---|---|
-| `subscription` | `claude-cli` whose `auth status` says `authMethod: claude.ai` and a `pro`, `max`, `team` or `enterprise` plan | Always |
-| `free` | An `http:` endpoint on loopback, or one marked `self_hosted: true` | Always |
-| `paid` | `anthropic-api`, `openai-api`, `claude-cli` on any other login, or any other `http:` endpoint | Only as `providers.paid` allows: `never` (default), `fallback`, `allowed` |
+| Model ID returns 404 mid-run | HTTP status 404 at session start | That start fails once; the task's next session takes the prior identifier, then the backstop |
+| Ollama left at 4,096 context | Measured context below `providers.ctx_floor` | `doctor` fails it and names `OLLAMA_CONTEXT_LENGTH=262144`; the engine skips the link with `provider.skip` |
+| Paid link under `providers.paid: never` | Billing check | Link removed from the chain; if nothing is left, Blocked `paid_refused` naming the key |
+| `ANTHROPIC_API_KEY` set with a Max login | Environment scrub, then the init line | Variables removed; the init line must say `apiKeySource: none` or the session dies before turn 1 |
+| Max draws overage credits | `rate_limit_event` with `isUsingOverage: true` | One warning; the session finishes |
+| Pause exceeds `limits.pause_max_min` | Timer age against the cap | Session cancelled, work-in-progress commit kept, Blocked `pause_timeout` |
+| `resume` before the provider reset | Provider refuses the resumed turn | Every paused agent attempts, is refused at 0 turns and re-pauses with the new reset |
+| `kill -9` on a paused engine | `wait_until` on disk | `jobs tick` or `status` after `wait_until` resumes the run |
+| A planted `CLAUDE.md`, user hook or auto-memory file | `--setting-sources ""` | 0 effect on a worker |
+| `claude` not found or logged out | Probe | Link marked unusable with a reason; `doctor` names the fix |
+| Init line lacks `apiKeySource` for a program version | Probe | The link fails at probe time |
+| Stream drops mid-answer | Connection closes before the final event | 1 retry from the start; a second drop fails the session |
+| 429 with `enforced_spend_limit_reached` or `retry-after` over 60 s | Response status and header | `LimitSignal`; failover or pause, no retry |
+| Non-loopback `http://` endpoint without `self_hosted` | Client scheme check | Refused; classed `paid` under `providers.paid: never` |
+| Redirect to another host, or body over `8 MB` (8 megabytes) | Client | Refused |
+| `http.ca_bundle` missing or malformed | `doctor` | `doctor` fails |
 
-**What each one does**
-- **`subscription`:** The Claude CLI logged in with a claude.ai account on a Pro, Max, Team or Enterprise plan. Komodo reads `claude auth status --json` before each session to confirm it. Always allowed to run.
-- **`free`:** A local endpoint on loopback (your own machine), or a remote one you marked `self_hosted: true` in config. Always allowed to run.
-- **`paid`:** Anything billed per token: the Anthropic or OpenAI APIs, the Claude CLI on any other login, or any other remote endpoint. It runs only as `providers.paid` allows. `never` is the default: the run blocks with `paid_refused`. `fallback` runs it only after every subscription and free link is skipped. `allowed` runs it in chain order.
+### 7.8 Configuration and Constants
 
-Three mechanical checks, failing closed: the login is read before every `claude-cli` session; the worker environment is scrubbed of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and `CLAUDE_CODE_USE_*`; and the first stream line must report `apiKeySource: "none"` or the session dies before its first turn with exit `billing`. `[PENDING G-02]` capturing that init line at probe time without spending a model turn.
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `providers.paid` | `never`, `fallback`, `allowed` | `never` | When a paid link may run |
+| `providers.keys.anthropic` | `env:NAME` | `env:ANTHROPIC_API_KEY` | Names the variable holding the Anthropic key; the value is never stored |
+| `providers.keys.openai` | `env:NAME` | `env:OPENAI_API_KEY` | Same for the OpenAI key; the link is `not yet` |
+| `providers.ctx_floor` | int | 262144 | Smallest `http:` endpoint context allowed; hard limit none |
+| `http.ca_bundle` | path | none | Path of a certificate file in Privacy-Enhanced Mail format, holding extra trusted certificate authorities |
+| `limits.link_sessions.<link>` | int | 3; loopback endpoints 1 | Concurrent sessions per link across all repositories; hard limit 8 |
+| `limits.pause_max_min` | int | 360 | Longest a session stays paused; hard limit 1,440 |
+| `warn.quota_pct` | int | 90 | Window percent that raises `limit.warn` |
+| `warn.usd_per_run` | number | 5 | Metered dollars per run that raise `limit.warn`; used only when `track.usage` is on |
 
-#### Limits, pauses and warnings: overview
+Per-endpoint keys, set with `komodo config endpoint <name> …`:
 
-**In plain terms.** Providers cap how much you can use in a window, such as Claude's 5-hour window. This section says what Komodo does when a cap is hit. It moves to the next link, or pauses the session on a disk timer until the reset time. Without it, a quota stop would look like a failure and lose work. The engine pauses and resumes on its own; a person or the orchestrator can run `komodo resume` to try sooner.
+| Key | Meaning |
+|---|---|
+| `url` | The server's `/v1` base |
+| `models` | A model per weight: `heavy`, `standard`, `light` |
+| `ctx` | Context tokens; required for non-Ollama servers, an optional lower cap for Ollama |
+| `key` | `env:` reference only, optional |
+| `self_hosted` | A non-loopback server counted as free |
+| `first_byte_s` | First-byte timeout override |
 
-Komodo adds no cost cap of its own; provider windows and spend limits are the provider's. USD is a beta metric, recorded only when `track.usage` is on. On a quota stop the next session starts on the next allowed link; only with no link left does the session pause with `wait_until` (reset time plus 1 minute) on disk and the link's reset time in machine-wide `quota.json`. `komodo resume` attempts every paused agent now; a refused attempt costs no model turn and re-pauses with the new reset time, or backs off 15, 30, then 60 minutes when none is given. Paused time stops the wall clocks; at `limits.pause_max_min` (360) the session is cancelled, its WIP commit kept, and the group blocks with `pause_timeout`. Three warnings never stop work: a window past `warn.quota_pct` (90), Max drawing overage credits, and, with `track.usage` on, a run past `warn.usd_per_run` (5).
+The default configuration has one endpoint, `local`, at `http://localhost:11434/v1`, used only when it answers the probe.
 
----
+```json
+{
+  "endpoints": {
+    "local": {
+      "url": "http://localhost:11434/v1",
+      "models": { "standard": "Qwen3.6-27B" }
+    }
+  }
+}
+```
 
-| Model ID returns 404 mid-run | That session start fails; the next session takes the prior ID, then the backstop |
-| Ollama left at 4,096 context | Below the floor; `doctor` fails it and names `OLLAMA_CONTEXT_LENGTH=262144`; the engine skips it |
-| Paid link under `providers.paid: never` | Removed from the chain; Blocked `paid_refused` naming the key |
-| `ANTHROPIC_API_KEY` set with a Max login | Env scrubbed; the init line must say `apiKeySource: none` or the session dies before turn 1 |
-| Max draws overage credits | One warning; the session finishes |
-| Pause exceeds `limits.pause_max_min` | Session cancelled, WIP kept, Blocked `pause_timeout` |
-| `resume` before the provider reset | Every paused agent attempts, is refused at 0 turns, re-pauses with the new reset |
-| `kill -9` on a paused engine | `jobs tick` or `status` after the timer record's `wait_until` resumes the run |
-| A planted `CLAUDE.md`, user hook or auto-memory file | 0 effect on a worker (`--setting-sources ""`) |
-**Provider adapters ([Provider adapters (Appendix H)](#provider-adapters))**
+`limits.link_sessions.local` above 1 depends on Ollama's `OLLAMA_NUM_PARALLEL` (Ollama serves 1 request per model unless it is raised); `doctor` reads it and names the fix. [TODO: whether raising OLLAMA_NUM_PARALLEL lets the local link run more than one session (G-04)] [TODO: the real Max 5-hour window against link_sessions.claude-cli 3 (G-07)]
+
+**Constants**
+
+| Constant | Value |
+|---|---|
+| Connect / first byte | 10 s / 60 s; loopback 300 s |
+| Stream idle | 90 s hosted; 300 s loopback and `self_hosted` |
+| Retry attempts | 4 |
+| Backoff | `random(0, min(30 s, 1 s × 2^attempt))`; `retry-after` replaces it |
+| `retry-after` limit | 60 s; over it the response is a limit |
+| Stream drop | 1 retry from the start |
+| Body cap (non-stream) | `8 MB` (8 megabytes) |
+| Default window | 262,144 tokens |
+| `claude auth status --json` | 0.1 s, cached 60 s per process |
+| Resume backoff | 15, 30, then 60 min |
+| `wait_until` | Latest reset plus 1 min |
+| Piped standard input cap | `10 MB` (10 megabytes) |
+| `MCP_TIMEOUT` | 30 s |
+
+### 7.9 Proof Cases
+
+Component tests use mocks that match documented provider behaviour: a fake `claude` program, a fixture Ollama and a fake HTTP server. No test calls a live provider.
+
+#### Unit
+
+- Retry sleeps over 100 runs stay within [0, 30 s] and are not identical.
+- A fixture Ollama reporting 262,144 takes a brief of 131,072 tokens and refuses 131,073.
+- An Ollama endpoint with `ctx: 65536` set and 262,144 measured sizes briefs to 32,768 tokens and logs both numbers.
+- With no API key, Haiku 4.5 on `claude-cli` sizes to its 200K catalog window and is not skipped by the floor.
+- A Claude identifier missing from the catalog sizes to 262,144.
+- A non-loopback endpoint without `self_hosted` is refused as `paid` under `providers.paid: never`.
+- A chain with no free `http:` endpoint fails `gate`.
+- A missing link refuses with its reason.
+- Plain `http://` to a non-loopback host without `self_hosted` is refused.
+- Redirects to a new host are refused.
+
+#### Component: provider adapters
+
 - With `ANTHROPIC_API_KEY` set and a Max login, a `claude-cli` session runs on `apiKeySource: none`, and 0 `anthropic-api` calls are made.
 - With `providers.paid: never` and a faked Max 100% stop, the group pauses, writes its `timer` record (the ledger row keeps a copy), makes 0 paid calls, and resumes when the timer fires.
 - `resume` before the reset attempts every paused agent, is refused, and re-pauses with the new reset time and 0 model turns.
 - `kill -9` on a paused engine, then `jobs tick` after `wait_until`, resumes the run.
 - On the Claude API, a session with thinking on gets a schema-valid final call through structured outputs, with thinking still on.
-- A worker launched with the `claude-cli` launch line flags ([`claude-cli` launch line (Appendix H)](#claude-cli-launch-line)) completes an MCP (Model Context Protocol, how a model calls tools) tool call, and with `--allowedTools` removed the same call is denied.
+- A worker launched with the `claude-cli` launch line completes a Model Context Protocol tool call, and with `--allowedTools` removed the same call is denied.
 - A planted auto-memory file has 0 effect on a worker session.
-- A faked Max stop past `limits.pause_max_min` cancels the session, keeps its WIP commit, and blocks with `pause_timeout`.
+- A planted user hook and a planted `CLAUDE.md` have 0 effect on a worker session, with tools on.
+- A faked Max stop past `limits.pause_max_min` cancels the session, keeps its work-in-progress commit, and blocks with `pause_timeout`.
 - A faked init line with `apiKeySource: "ANTHROPIC_API_KEY"` is killed before turn 1 and exits `billing`.
 - A faked `isUsingOverage: true` event raises one warning and the session finishes.
 - A fixture Ollama whose `/api/ps` reports `context_length: 4096` is skipped with `ctx_below_floor`.
-- A fixture Ollama reporting 262,144 takes a brief of 131,072 tokens and refuses 131,073.
-- An Ollama endpoint with `ctx: 65536` set and 262,144 measured sizes briefs to 32,768 tokens and logs both numbers.
-- With no API key, Haiku 4.5 on `claude-cli` sizes to its 200K catalog window and is not skipped by the floor.
-- A Claude ID missing from the catalog sizes to 262,144.
 - `doctor` prints one catalog row per weight and link, each naming its window's source.
 - A faked Max 5-hour limit moves the next session to the backstop endpoint, and 0 `anthropic-api` calls are made.
-- A chain with no free `http:` endpoint fails `gate`.
-- A non-loopback endpoint without `self_hosted` is refused as `paid` under `providers.paid: never`.
-- A planted user hook and a planted `CLAUDE.md` have 0 effect on a worker session, with tools on.
-- A missing link refuses with its reason.
 - A forced quota error on link 1 records a `provider.skip` and finishes on link 2 when link 2 is not paid.
 
-**HTTP stack ([HTTP stack (Appendix H)](#http-stack))**
+#### Component: HTTP client
+
 - A fake server answering 429 then 200 succeeds on attempt 2.
 - A 429 carrying `enforced_spend_limit_reached` and no `retry-after` returns a limit after 1 attempt.
 - A 529 is retried.
-- Retry sleeps over 100 runs stay within [0, 30 s] and are not identical.
 - A 429 with `Retry-After: 3600` returns a limit after 1 attempt.
 - A stream cut mid-answer succeeds on the retry, and a stream cut twice fails the session.
 - A planted key and an `env:` endpoint key never appear in any log.
-- A server signed by a test CA fails without `http.ca_bundle` and passes with it.
-- Plain `http://` to a non-loopback host without `self_hosted` is refused.
-- Redirects to a new host are refused.
+- A server signed by a test certificate authority fails without `http.ca_bundle` and passes with it.
 
+### 7.10 Open Gaps
+
+**Blocks building**
+
+| Gap | Open here |
+|---|---|
+| G-NEW-1 | The shape of an agent's provider chain: two conflicting descriptions |
+| G-NEW-2 | Owner confirmation of the derived Go shapes of `Session`, `Stream`, `Event`, `Input`, `ResumeHandle` and `LimitError`, and the error values of `Inject`, `Stop` and `Close` |
+| G-NEW-3 | `claude-cli` details: process working directory, result line field, reset-time field, `--verbose`, the tool host signature |
+| G-NEW-4 | Request and response mapping of the Messages and OpenAI-compatible interfaces, the `messages.jsonl` line layout, rate-limit totals, the cache breakpoint hand-off |
+| G-NEW-5 | Which error `Select` returns in a mixed chain, and the wait after the third refused resume |
+| G-NEW-6 | Locking for `quota.json` across repositories, and the reaction to a failed write of `quota.json` or a timer |
+| [G-02](#appendix-o-gap-register) | Capturing the `system/init` line at probe time without a model turn |
+| [G-30](#appendix-o-gap-register) | Key names of `providers.json`, `quota.json` and `models.json` |
+
+**Can wait**
+
+| Gap | Open here |
+|---|---|
+| G-NEW-7 | Nearest-weight tie for an endpoint with a missing weight; which weight each local model serves |
+| [G-03](#appendix-o-gap-register) | A `24 GB` (24 gigabyte) machine running Qwen3.6-27B at 262,144 context |
+| [G-04](#appendix-o-gap-register) | `OLLAMA_NUM_PARALLEL` above 1 and `limits.link_sessions.local` |
+| [G-06](#appendix-o-gap-register) | Whether a Max login exposes `claude-fable-5-1` to `claude -p` |
+| [G-07](#appendix-o-gap-register) | The real Max 5-hour window against `link_sessions.claude-cli` 3 |
+| [G-20](#appendix-o-gap-register) | The `codex-cli` link, `openai-api` chain and `.codex/` install |
+
+Decided: [G-05](#appendix-o-gap-register), `providers.json` is the registry and a 404 fails over.
 
 ## 8. Skills, Rules and Output
 
@@ -5284,7 +5767,7 @@ Cached by the hash of the marker files.
 
 **In plain terms.** A capacity profile is a small record the engine builds just before each session. It says how big a prompt the link takes, how many sessions it allows, its cost class and the effort level. It exists so swapping Claude for a local or OpenAI model changes only this record, never the engine's logic. Without it, a brief could exceed a small model's window or a paid link could run unnoticed. The engine builds it; the brief builder and the pool read it; nobody sets it directly.
 
-Before each session the engine derives `{ctx, slots, cost_class, effort}` for the link it is about to use: `ctx` measured ([Measured context (Appendix H)](#measured-context)), `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight. The brief builder sizes from `ctx`, the engine takes a slot from `slots`, and budgets cache by the whole profile. Swapping Claude for a local or OpenAI link changes the profile, never the engine.
+Before each session the engine derives `{ctx, slots, cost_class, effort}` for the link it is about to use: `ctx` measured ([Measured context (chapter 7)](#7-providers-and-http)), `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight. The brief builder sizes from `ctx`, the engine takes a slot from `slots`, and budgets cache by the whole profile. Swapping Claude for a local or OpenAI link changes the profile, never the engine.
 
 **Example**
 
@@ -5555,7 +6038,7 @@ type Writer interface {
 - **`queue`, `pool`, `link`:** The machine-wide work queue and the session slots. Each is a create-only file, so two engines can never take the same item or slot ([Engine Internals (chapter 3)](#3-engine-internals)). The engine claims and removes them; the scheduler enqueues due jobs, the startup sweep re-enqueues items that lost their lease, and the provider adapters claim link slots.
 - **`machine_event`:** The machine log: one file per `komodo` process holding its `lease.taken`, `pool.slot.taken`, `queue.enqueued` and `job.due` events. Only that process writes its file; `status` merges the files by `timestamp`. The file name pattern is `[UNKNOWN: not yet designed]` `[PENDING G-30]`.
 - **`lease`, `fence`:** One lease per group and the fence counter beside it ([Workspace and leases (chapter 4)](#4-workspace-and-leases)). The lease is claimed and removed on release; the fence is replaced on every take or takeover and never falls. The startup sweep also removes dead leases.
-- **`timer`, `quota`:** One timer record per paused group, keyed `<repo-id>.<group>.json`, holding the latest reset time among its halted sessions plus 1 minute, and `wait_link`; plus the machine-wide reset times per link ([Limits, pauses and warnings (Appendix H)](#limits-pauses-and-warnings)). The provider adapters write them with `Replace`; the scheduler, the live engine, the sweep or `status` fires a due timer, which is then removed.
+- **`timer`, `quota`:** One timer record per paused group, keyed `<repo-id>.<group>.json`, holding the latest reset time among its halted sessions plus 1 minute, and `wait_link`; plus the machine-wide reset times per link ([Limits, pauses and warnings (chapter 7)](#7-providers-and-http)). The provider adapters write them with `Replace`; the scheduler, the live engine, the sweep or `status` fires a due timer, which is then removed.
 - **`providers`, `install`:** The provider probe result and the install manifest ([Installer (Appendix M)](#installer)).
 - **`fresh`:** The self-updater's records: the latest release seen, the one-updater lock, the failure log and the versions live runs use ([Binary lifecycle (Appendix M)](#binary-lifecycle)).
 - **`config_audit`:** The config audit log and the hash of `config.json`, written by the `config` verb in `cli`; `config.json` itself stays outside ([Outside the manager (Appendix C)](#outside-the-manager)).
@@ -5792,7 +6275,7 @@ type GroupState[S any] interface {
 - **`refusals`:** The guard refused the same rule 3 times in one session (rule G6, [Rows every agent inherits (chapter 6)](#6-tools-guard-and-sandbox)), so the session was ended. The engine retries the task.
 - **`budget`:** The token cap `limits.group_tokens` was spent; it applies only when `track.usage` is on. The engine stops and blocks the group with `budget`.
 - **`provider`:** The provider reported a rate limit or billing error on its retry line, so the engine ended the session but kept its resume handle. The task's next session starts on the next allowed link in the chain, usually the free backstop.
-- **`billing`:** The first stream line showed the session would have used a paid API key instead of the subscription login ([Billing check (fails closed) (Appendix H)](#billing-check-fails-closed)). The engine killed it before its first turn and blocks the group with `paid_refused`.
+- **`billing`:** The first stream line showed the session would have used a paid API key instead of the subscription login ([Billing check (fails closed) (chapter 7)](#7-providers-and-http)). The engine killed it before its first turn and blocks the group with `paid_refused`.
 - **`paused`:** A provider limit halted the session, no other link was left, and the session has a resume handle. The group waits on a disk timer until the provider's reset time, then resumes on its own.
 - **`pause_timeout`:** The session stayed paused longer than `limits.pause_max_min` (360 minutes). The engine cancels it, keeps its WIP commit, and blocks the group with `pause_timeout`.
 - **`cancelled`:** The engine deliberately killed the session, for example the tester after the first verified Verify finding, or on `abandon`. What happens next comes from the cause: Build restarts after a Verify failure, or the group blocks with `pause_timeout`.
@@ -7103,7 +7586,7 @@ estimate_lines: 120
 - **Grammar:** Every `TG.md` and `tsk-*.md` must match the layout and field set in [Grammar (Appendix L)](#grammar). A file with a missing or unknown field fails and is named.
 - **`files`, `done_when`, dependencies:** Each group must list its files and dependencies, and each task its `done_when`; each must be well-formed. A missing one fails.
 - **Wave isolation:** A wave is the set of groups that run at the same time. Two groups in one wave listing the same file would write over each other, so that fails.
-- **Protected:** G3 is the guard rule that lists paths no agent may write: `.git`, `bin/komodo`, `~/.komodo/**`, the Claude settings files, `embed/policy.json`, `docs/prd.md` ([HTTP stack (Appendix H)](#http-stack)). A group whose `files` include one of those, or anything under `docs/backlog/**`, fails before it can run.
+- **Protected:** G3 is the guard rule that lists paths no agent may write: `.git`, `bin/komodo`, `~/.komodo/**`, the Claude settings files, `embed/policy.json`, `docs/prd.md` ([HTTP stack (chapter 7)](#7-providers-and-http)). A group whose `files` include one of those, or anything under `docs/backlog/**`, fails before it can run.
 - **Sizing:** The hard caps that keep one task inside one model session: 5 files and 300 estimated lines per task, 8 tasks per group. After Build, a task whose real line count is over twice its estimate warns, so the next plan estimates better. A dependency chain over 4 groups is not refused; lint only warns.
 - **Graph:** Go builds a dependency graph (a DAG, a graph with no loops: groups as nodes, "must land first" as arrows). A cycle (A waits on B, B waits on A) is refused. It warns on a chain longer than 4, a single group every other group waits on, and a group with more than 5 dependencies.
 - **EARS:** Every acceptance item must read `WHEN <event> THE SYSTEM SHALL <response>`, or the `IF` or `WHILE` form. It may add a `cmd:` line the tester runs and a `needs:` line (`network`, `docker` or `service:<name>`) for a check the sandbox cannot satisfy. An item with no `SHALL` fails; Go checks the shape without reading the meaning.
@@ -7244,7 +7727,7 @@ estimate_lines: 120
 | `http:<name>` | `GET <url>/models` answers within 1 s and lists its models; `GET /api/version` detects Ollama |
 
 **What each one does**
-- **`claude-cli`:** Finds the `claude` program's absolute path and version, and runs `claude auth status --json` to learn how the person is logged in and on which plan. It also records one `system/init` line per CLI version: the first line Claude prints in headless mode, which every session must later match (`apiKeySource: none`, [Provider adapters (Appendix H)](#provider-adapters)). Capturing that line without spending a model turn is open gap G-02. With `claude` missing from PATH, `providers.json` marks the link unavailable with the reason.
+- **`claude-cli`:** Finds the `claude` program's absolute path and version, and runs `claude auth status --json` to learn how the person is logged in and on which plan. It also records one `system/init` line per CLI version: the first line Claude prints in headless mode, which every session must later match (`apiKeySource: none`, [Provider adapters (chapter 7)](#7-providers-and-http)). Capturing that line without spending a model turn is open gap G-02. With `claude` missing from PATH, `providers.json` marks the link unavailable with the reason.
 - **`anthropic-api`:** Checks that the configured key reference (`providers.keys.anthropic`) resolves to a real key. No request is sent to the API.
 - **`codex-cli`:** Checks that `codex` is on PATH and reads its version. The link is recorded but not usable until a later minor (G-20).
 - **`openai-api`:** Checks that the key reference `providers.keys.openai` resolves. Also recorded only, for a later minor (G-20).
@@ -7369,7 +7852,7 @@ macOS, Linux, WSL: `curl -fsSL <repo>/install.sh | sh`. Windows: `irm <repo>/ins
 **What each one does**
 - **Build and test:** Runs `go vet` (Go's static checker), the Go test suite, and a build of the binary for Windows, Linux and macOS. A compile error on any OS fails the gate.
 - **Structure:** Checks that packages only import in the allowed direction, that function comments follow the comment rules, and that every agent definition file (`agent.json`) and job template decodes strictly, with no unknown or missing field.
-- **Safety:** Checks the guard table (the rows in `policy.json` that say what each agent may and may not do, [HTTP stack (Appendix H)](#http-stack)) renders as expected, and the prefix-hash pin: the fixture brief's prefix hashes the same across 2 runs.
+- **Safety:** Checks the guard table (the rows in `policy.json` that say what each agent may and may not do, [HTTP stack (chapter 7)](#7-providers-and-http)) renders as expected, and the prefix-hash pin: the fixture brief's prefix hashes the same across 2 runs.
 - **Events:** Every event type the code emits must be in the event catalog (the 35 types, see Glossary), and every catalog type must have at least one place in the code that emits it.
 - **State:** Fails when any package other than `state` writes a runtime state path, so the state manager stays the only door. It also fails a record kind with no named writer, no schema version or no test fixture.
 - **Docs drift:** Fails when a verb exists but is missing from `README.md` or from the embedded `komodo` skill, when a link to a decision record is broken, or when `lld.md` names a Go package that does not exist.
@@ -7547,7 +8030,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-02 | Provider probe | Capturing the `system/init` line at probe time without a model turn | Spike, phase 4 |
 | G-03 | Local models | A 24 GB machine running Qwen3.6-27B at 262,144 context | Spike, phase 4 |
 | G-04 | Pool | `OLLAMA_NUM_PARALLEL` above 1 on one machine, deciding whether `limits.link_sessions.local` can exceed 1 | Spike, phase 4 |
-| G-05 | Model registry | Past exact IDs for a model that retires mid-run | Decided 2026-10-09: `providers.json` is the registry; a 404 fails over ([Failover chain (Appendix H)](#failover-chain)) |
+| G-05 | Model registry | Past exact IDs for a model that retires mid-run | Decided 2026-10-09: `providers.json` is the registry; a 404 fails over ([Failover chain (chapter 7)](#7-providers-and-http)) |
 | G-06 | Models | Whether a Max login exposes `claude-fable-5-1` to `claude -p` | The install probe records it, phase 4 |
 | G-07 | Limits | The real Max 5-hour window against `limits.link_sessions.claude-cli` 3 | Ledger measurement over the first 20 groups, phase 7 |
 | G-08 | Sandbox | `bwrap --unshare-net` gives each session a private loopback | Spike, phase 2 |
@@ -7617,7 +8100,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 - **G-02:** Whether the probe can capture Claude's first `system/init` line without starting a paid model turn. It matters because every session is killed unless that line says `apiKeySource: none`, and the probe needs a reference line per CLI version. A spike in phase 4 settles it.
 - **G-03:** Whether a 24 GB machine can run the Qwen3.6-27B local model at a 262,144-token context. It matters because every chain must end in a free local backstop, and the context floor is what a brief needs. A spike in phase 4 settles it.
 - **G-04:** Whether raising Ollama's `OLLAMA_NUM_PARALLEL` above 1 lets the local link run more than one session at a time. It decides whether `limits.link_sessions.local` can exceed 1 and therefore how many workers a local machine can serve. A spike in phase 4 settles it.
-- **G-05:** How to keep a model's exact ID when the provider retires it mid-run. Decided on 2026-10-09: `providers.json` is the only registry, and a 404 fails the session start over to the next link ([Failover chain (Appendix H)](#failover-chain)).
+- **G-05:** How to keep a model's exact ID when the provider retires it mid-run. Decided on 2026-10-09: `providers.json` is the only registry, and a 404 fails the session start over to the next link ([Failover chain (chapter 7)](#7-providers-and-http)).
 - **G-06:** Whether a Claude Max subscription login lets `claude -p` use the `claude-fable-5-1` model. It matters for which model the heavy weight can map to. The install probe records the answer in phase 4.
 - **G-07:** How the real Claude Max 5-hour usage window behaves against the default of 3 concurrent `claude-cli` sessions. It matters for how often runs pause on the provider limit. The ledger measures it over the first 20 groups in phase 7.
 - **G-08:** Whether `bwrap --unshare-net` really gives each Linux session its own private loopback network. It matters because two Verify sessions may bind the same test port ([Edge cases (Appendix N)](#edge-cases)). A spike in phase 2 settles it.
@@ -7927,8 +8410,8 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 | Installer | [Installer (Appendix M)](#installer) |
 | Binary lifecycle | [Binary lifecycle (Appendix M)](#binary-lifecycle) |
 | Configuration | [Configuration (Appendix B)](#configuration) |
-| Provider adapters | [Provider adapters (Appendix H)](#provider-adapters) |
-| HTTP stack | [HTTP stack (Appendix H)](#http-stack) |
+| Provider adapters | [Provider adapters (chapter 7)](#7-providers-and-http) |
+| HTTP stack | [HTTP stack (chapter 7)](#7-providers-and-http) |
 | Agent registry | [Agent registry (Appendix F)](#agent-registry) |
 | Tool runtime | [Tool runtime (chapter 6)](#6-tools-guard-and-sandbox) |
 | Skill loader | [Skill loader (Appendix I)](#skill-loader) |
@@ -8907,7 +9390,7 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 
 **What each one does**
 - **Phase 1, Design docs:** Writes the product requirements (`prd`), this HLD, the LLD and the first architecture decision record (ADR 0001). It also writes `epic-1`, the backlog that lists every subsystem as a task group. Done when the owner approves the docs; the backlog is linted in phase 2.
-- **Phase 2, Foundations:** Builds the CLI skeleton, the state manager, configuration, HTTP stack, sandbox, cache, version check, backlog lint and the gate core. A spike proves `claude -p` can call one tool through the MCP tool server. Done when core tests pass on 3 operating systems, `doctor backlog` passes on epic-1 and the spike makes one tool call under the `claude-cli` launch line flags ([`claude-cli` launch line (Appendix H)](#claude-cli-launch-line)).
+- **Phase 2, Foundations:** Builds the CLI skeleton, the state manager, configuration, HTTP stack, sandbox, cache, version check, backlog lint and the gate core. A spike proves `claude -p` can call one tool through the MCP tool server. Done when core tests pass on 3 operating systems, `doctor backlog` passes on epic-1 and the spike makes one tool call under the `claude-cli` launch line flags ([`claude-cli` launch line (chapter 7)](#7-providers-and-http)).
 - **Phase 3, Model surface:** Builds the agent registry (the seven agent definitions), skills, rules and output formatting, and the guardrails. Done when the guard table renders from `policy.json` and every agent file decodes strictly.
 - **Phase 4, Model I/O:** Builds the provider adapters (`claude -p`, local models, the Anthropic API). Also the tool runtime workers call, and the brief builder that assembles prompts. Done when a fixture task finishes through both `claude -p` and a local model.
 - **Phase 5, Runtime:** Builds the workspace (worktrees, leases, fences), the session supervisor, observability and the event bus. Done when timeout, idle and kill tests pass with 0 orphan processes.
@@ -8921,7 +9404,7 @@ Back to Build: a failed Check or Verify resumes the task's own builder session w
 | Phase | Wave | Scope | Exit proof |
 |---|---|---|---|
 | 1 | Design docs | `prd`, `hld`, `lld`, ADR 0001, epic-1 | Owner approves the docs; epic-1 lints in phase 2 |
-| 2 | Foundations | CLI skeleton, state manager, configuration, HTTP stack, sandbox, cache, version, backlog lint, gate core; a `claude -p` plus MCP spike | Core tests pass on 3 OSes; `doctor backlog` passes on epic-1; the spike makes one MCP tool call under the `claude-cli` launch line flags ([`claude-cli` launch line (Appendix H)](#claude-cli-launch-line)) |
+| 2 | Foundations | CLI skeleton, state manager, configuration, HTTP stack, sandbox, cache, version, backlog lint, gate core; a `claude -p` plus MCP spike | Core tests pass on 3 OSes; `doctor backlog` passes on epic-1; the spike makes one MCP tool call under the `claude-cli` launch line flags ([`claude-cli` launch line (chapter 7)](#7-providers-and-http)) |
 | 3 | Model surface | Agent registry, skills, rules and output, guardrails | Guard table and strict decode pass |
 | 4 | Model I/O | Provider adapters (`claude -p`, local, Anthropic API), tool runtime, brief builder | A fixture task finishes through `claude -p` and a local model |
 | 5 | Runtime | Workspace, supervisor, observability, event bus | Timeout, idle and kill proofs pass with 0 orphans |
