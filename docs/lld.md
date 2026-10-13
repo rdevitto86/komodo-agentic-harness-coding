@@ -304,7 +304,7 @@ sequenceDiagram
 
 The engine runs groups: it starts sessions, moves stages and lands work. One `Drive` goroutine (a lightweight Go thread) per group owns its state. Cross-group facts are files under `~/.komodo/state/`, written only through the state manager's `Claim`, `Replace` and `Remove`, the only way two engines coordinate. The session pool is the machine-wide 1 to 6 slots that builder, reviewer and tester sessions take. Without these rules two groups could write one state file.
 
-Ready work waits as create-only files under `~/.komodo/state/queue/`, one per group or job. Taking a slot deletes the file, then writes the lease; a crash between leaves an item for the sweep. Groups form a DAG (a graph of dependencies with no loops), a graph with no cycles, built from the backlog. A group starts only after every dependency has landed and Check passed on the epic tip. Landings happen one at a time, each followed by a 0-token Check on the tip. If it fails, the last-landed group returns to Build in a new worktree cut from the tip.
+Ready work waits as create-only files under `~/.komodo/state/queue/`, one per group or job. Taking a slot deletes the file, then writes the lease; a crash between leaves an item for the sweep. Groups form a DAG (a graph of dependencies with no loops), built from the backlog. A group starts only after every dependency has landed and Check passed on the epic tip. Landings happen one at a time, each followed by a 0-token Check on the tip. If it fails, the last-landed group returns to Build in a new worktree cut from the tip.
 
 **📐 Engine internals**
 ```mermaid
@@ -1102,7 +1102,7 @@ classDiagram
 
 ## 11. Backlog, Planning, Ship and Release
 
-The backlog is the Markdown files under `docs/backlog/`. An epic holds task groups, and a group holds tasks that name files. The planner, a model session, drafts those files from a goal; Go lints (an automatic rule check) every draft before saving. Ship is the last stage: the engine commits, merges and opens pull requests with 0 model tokens. Release is a person-only act that cuts a signed version. Without these, builders would get oversized or colliding work and a model could push to a shared branch.
+The backlog is the Markdown files under `docs/backlog/`. An epic holds task groups, and a group holds tasks that name files. The planner, a model session, drafts those files from a goal; Go lints every draft (checks it automatically against the rules) before saving. Ship is the last stage: the engine commits, merges and opens pull requests with 0 model tokens. Release is a person-only act that cuts a signed version. Without these, builders would get oversized or colliding work and a model could push to a shared branch.
 
 **📐 Backlog, planning, ship and release: from goal to merged epic PR**
 ```mermaid
@@ -1860,13 +1860,13 @@ Rules: a file splits at about 600 lines; a new package needs a new layer; `_test
 
 **Examples**
 
-A queue item as it sits in state/queue: a ready group waiting for a free session slot, under the six-field record header.
+A queue item as it sits in state/queue: a ready group waiting for a free session slot, under the six-field record header. The header-and-body layout shown is illustrative; G-30 keeps it open.
 
 ```json
 {
   "v": 1,
   "kind": "queue",
-  "key": "github.com/rdevitto86/komodo-agentic-harness-coding.group.tg-1.2",
+  "key": "<repo-id>.group.tg-1.2",
   "rev": 1,
   "ts": "[UNKNOWN: not yet designed]",
   "writer": "[UNKNOWN: not yet designed]",
@@ -1880,7 +1880,7 @@ A queue item as it sits in state/queue: a ready group waiting for a free session
 }
 ```
 
-The self-updater's fresh.json: the newest release Komodo has seen, under the six-field record header.
+The self-updater's fresh.json: the newest release Komodo has seen, under the six-field record header. The header-and-body layout shown is illustrative; G-30 keeps it open.
 
 ```json
 {
@@ -2042,8 +2042,7 @@ A verb that succeeded: `komodo run tg-1.2 --json` prints this envelope and exits
   "report": "[UNKNOWN: not yet designed]",
   "data": {
     "[UNKNOWN: not yet designed]": "the run id"
-  },
-  "error": null
+  }
 }
 ```
 
@@ -2374,7 +2373,7 @@ The default `local` endpoint as a config section: its `/v1` base URL and one mod
     "local": {
       "url": "http://localhost:11434/v1",
       "models": {
-        "standard": "Qwen3.6-27B"
+        "[UNKNOWN: weight not yet designed]": "Qwen3.6-27B"
       }
     }
   }
@@ -2688,33 +2687,41 @@ Each type's `data` is a Go struct registered with the state manager as part of t
 
 **Example**
 
-The runs/tg-1.2/state.json snapshot, written at sequence 50, using the fields the group snapshot lists.
+The runs/tg-1.2/state.json snapshot, written at sequence 50, using the fields the group snapshot lists. The header-and-body layout shown is illustrative; G-30 keeps it open.
 
 ```json
 {
-  "run": "[UNKNOWN: not yet designed]",
-  "group": "tg-1.2",
-  "stage": "Build",
-  "epoch": 2,
-  "fence": 3,
-  "sequence": 50,
-  "config_hash": "[UNKNOWN: not yet designed]",
-  "tasks": [
-    {
-      "id": "[UNKNOWN: not yet designed]",
-      "state": "claimed",
-      "attempts": 1,
-      "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35"
-    }
-  ],
-  "actions_open": [],
-  "resume": {
-    "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35",
-    "handle": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35",
-    "link": "claude-cli"
-  },
-  "pause": {},
-  "block": {}
+  "v": 1,
+  "kind": "group",
+  "key": "tg-1.2",
+  "rev": "[UNKNOWN: not yet designed]",
+  "ts": "[UNKNOWN: not yet designed]",
+  "writer": "[UNKNOWN: not yet designed]",
+  "body": {
+    "run": "[UNKNOWN: not yet designed]",
+    "group": "tg-1.2",
+    "stage": "Build",
+    "epoch": 2,
+    "fence": 3,
+    "sequence": 50,
+    "config_hash": "[UNKNOWN: not yet designed]",
+    "tasks": [
+      {
+        "id": "[UNKNOWN: not yet designed]",
+        "state": "claimed",
+        "attempts": 1,
+        "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35"
+      }
+    ],
+    "actions_open": [],
+    "resume": {
+      "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35",
+      "handle": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35",
+      "link": "claude-cli"
+    },
+    "pause": {},
+    "block": {}
+  }
 }
 ```
 
@@ -2788,7 +2795,7 @@ Every spawn carries the stage's `epoch`, an integer that rises on each stage ent
 | Blocked | `resume` | Build | A person or the orchestrator |
 
 **What each one does**
-- **— → Intake on `run.start`:** The group was waiting in the backlog. `komodo run` started a run that includes it. It enters Intake, where the engine lints (an automatic rule check) the group, takes its lease and fence, cuts its worktree and runs `setup`; no model tokens are spent.
+- **— → Intake on `run.start`:** The group was waiting in the backlog. `komodo run` started a run that includes it. It enters Intake, where the engine lints the group (checks it automatically against the rules), takes its lease and fence, cuts its worktree and runs `setup`; no model tokens are spent.
 - **Intake → Build on `stage.exit`:** Intake finished. Lint passed, the lease and fence are held, `setup` exited 0 and the task list is locked. The engine now starts one fresh builder session for the first task.
 - **Build → Check on `task.done`:** The builder finished the last task. Its `done_when` command exited 0 and the result is committed to the hidden ref. The engine now runs Check's zero-token verification.
 - **Check → Verify on `check.done` pass:** Every Check item passed: `done_when` reruns, scope, secrets, impact tests, baseline diff and coverage. The engine now starts the reviewer and the tester at once on the same commit.
@@ -2966,7 +2973,7 @@ Event lines do not carry this header. Every line in an event file is an event, s
 
 **Example**
 
-One stored timer record: the six header fields the manager sets, then the timer's own two fields.
+One stored timer record: the six header fields the manager sets, then the timer's own two fields. The header-and-body layout shown is illustrative; G-30 keeps it open.
 
 ```json
 {
@@ -2976,8 +2983,10 @@ One stored timer record: the six header fields the manager sets, then the timer'
   "rev": 1,
   "ts": "[UNKNOWN: not yet designed]",
   "writer": "[UNKNOWN: not yet designed]",
-  "wait_until": "[UNKNOWN: not yet designed]",
-  "wait_link": "claude-cli"
+  "body": {
+    "wait_until": "[UNKNOWN: not yet designed]",
+    "wait_link": "claude-cli"
+  }
 }
 ```
 
@@ -3320,7 +3329,7 @@ Guarantees the tests pin:
 
 #### Concurrency model
 
-**In plain terms.** The concurrency model says which pieces of the engine run in parallel (as goroutines (a lightweight Go thread), Go's lightweight threads) and how they avoid stepping on each other. The rule is one owner per piece of state. One goroutine owns each group, one each session, and shared machine state lives only in files the OS writes atomically. It exists so there are no locks to get wrong inside a group and a crash in one group cannot take down the others. Only the engine's code is involved.
+**In plain terms.** The concurrency model says which pieces of the engine run in parallel (as goroutines, Go's lightweight threads) and how they avoid stepping on each other. The rule is one owner per piece of state. One goroutine owns each group, one each session, and shared machine state lives only in files the OS writes atomically. It exists so there are no locks to get wrong inside a group and a crash in one group cannot take down the others. Only the engine's code is involved.
 
 | Element | Rule |
 |---|---|
@@ -4051,7 +4060,7 @@ No agent has git write tools, forge credentials or a shell. Only the engine runs
 
 #### Registry and transports
 
-**In plain terms.** The registry is the table of all tools Go knows; a transport is the channel a tool request travels over. There are two transports: a private MCP (Model Context Protocol, how a model calls tools) server for `claude-cli`, and a Go loop for API links. An MCP server is a tool server Claude Code talks to over the MCP protocol; stdio (the program's standard input and output) means the two processes talk over standard input and output. Without the registry a session could be offered a tool that does not exist. The engine sets both up; the model session only sees its tool list.
+**In plain terms.** The registry is the table of all tools Go knows; a transport is the channel a tool request travels over. There are two transports: a private MCP (Model Context Protocol, how a model calls tools) server for `claude-cli`, and a Go loop for API links. An MCP server is a tool server Claude Code talks to over the MCP protocol; stdio means the two processes talk over standard input and output. Without the registry a session could be offered a tool that does not exist. The engine sets both up; the model session only sees its tool list.
 
 - The registry binds the tools in `agent.json` to one session; unlisted tools are not advertised (G1).
 - `claude-cli`: a private MCP server, `komodo internal tools --agent --session`, over stdio, started with `--strict-mcp-config`; it dies with its session and starts in under 100 ms because it reads nothing from disk.
@@ -4114,7 +4123,7 @@ No result tool exists mid-session: the result always comes from the final call, 
 - **`diff`, `git_read`:** The reviewer, and only the reviewer, reads the diff under review and read-only git data. No agent has any git write tool.
 - **`skill`:** The model pulls a standards document (a skill, see Glossary) by name, or one section of it as `<name>#<section>`. Only skills on the agent's allowlist can be pulled.
 - **`submit_finding`:** The reviewer reports one problem with a rule ID, a `file:line` location and a quoted line of evidence. Go checks that the quote really is at that line; a finding with an unknown rule ID is refused, and a finding whose quote is not found is dropped and logged.
-- **`lint_backlog`:** The planner, and only the planner, checks its draft plan against the backlog grammar before returning it. The engine lints (an automatic rule check) the plan again and writes files only if lint passes.
+- **`lint_backlog`:** The planner, and only the planner, checks its draft plan against the backlog grammar before returning it. The engine lints the plan again (checks it automatically against the rules) and writes files only if lint passes.
 - **`web`:** The architect and researcher may fetch a web page, but only when the tool is switched on for them, only with GET requests, and only from hosts on the allowlist.
 - **External MCPs:** In a final phase, an agent may be allowed extra third-party MCP tool servers from an explicit allowlist, with no credentials passed through. Planned for the final phase.
 
@@ -4673,7 +4682,7 @@ IDs come from the Models API `line` field when an Anthropic key resolves, else t
 
 **Example**
 
-Three of the 10 catalog entries: two Claude models with window and price, and one local model whose window is measured.
+Three of the 10 catalog entries: two Claude models with window and price, and one local model whose window is measured. Key names follow the catalog table's columns; the real JSON keys are open (G-30).
 
 ```json
 [
@@ -4901,7 +4910,7 @@ Effort per weight on API links: heavy `high`, standard `medium`, light `low`, fi
 
 Users: `anthropic.go`, `openai.go`, the `web` tool, `internal fresh-bg`. `claude -p` and `codex` own their own networking.
 
-Streamed replies arrive as server-sent events (SSE (server-sent events, a streaming web reply)), one line at a time; the client parses each line as it arrives and never buffers the whole body. Response caching never applies to model calls.
+Streamed replies arrive as server-sent events (SSE), one line at a time; the client parses each line as it arrives and never buffers the whole body. Response caching never applies to model calls.
 
 **What each one does**
 - **`anthropic.go`:** The Claude API adapter; every Claude API call goes through this client.
@@ -5056,7 +5065,7 @@ Komodo adds no cost cap of its own; provider windows and spend limits are the pr
 
 **Example**
 
-One entry in `embed/skills/index.json`, generated at build, for the mobile UI standards skill.
+One entry in `embed/skills/index.json`, generated at build, for the mobile UI standards skill. The key names are illustrative; the index format is open (G-30).
 
 ```json
 {
@@ -5095,7 +5104,7 @@ One entry in `embed/skills/index.json`, generated at build, for the mobile UI st
 **What each one does**
 - **Tool calls:** The guard checks every tool call before it runs. A refusal tells the model which rule applied and what it may do instead.
 - **Results:** The final result schema lists the allowed outcomes per field, so a model picks a code instead of writing prose.
-- **Work:** Check, the engine's build, test and lint (an automatic rule check) run, and the reviewer judge the diff after the fact.
+- **Work:** Check, the engine's build, test and lint run (lint is an automatic rule check), and the reviewer judge the diff after the fact.
 - **Comments:** Comment style is a skill the builder and reviewer always receive, not a guard row.
 - **The orchestrator:** The interactive session has no hook; its rules are text in the `AGENTS.md` block rendered from `embed/rules/orchestrator.md`.
 
@@ -5191,7 +5200,7 @@ The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate
 
 **What each one does**
 - **Orchestrator rules into a worker:** A brief has four kinds of content and none is a rule. The repo's `AGENTS.md` loses its Komodo block; broken markers drop the whole addendum and `doctor` says so.
-- **Orchestrator skills into a worker:** The gate refuses any worker `agent.json` that allowlists (the list of what is permitted) `run`, `plan`, `respond` or `komodo`.
+- **Orchestrator skills into a worker:** The gate refuses any worker `agent.json` that allowlists `run`, `plan`, `respond` or `komodo` (lists any of them as permitted).
 - **Host auto-load:** Claude CLI workers start with settings sources disabled, so host-level memory and hooks never load; API links get only the brief.
 - **`codex-cli` workers:** When the `codex-cli` link ships in a later minor, its workers must also load no `AGENTS.md`.
 - **A run changing its own guidance:** The addendum is read from the base commit, so a worktree edit waits for the next run; config and policy files are protected by G3.
@@ -5703,7 +5712,7 @@ Example template:
 #### Cache store
 
 
-**In plain terms.** The cache store is a folder on disk where the engine saves results it may need again, so it does not recompute or re-read them. Each entry is addressed by a fingerprint (a SHA-256 (a standard content fingerprint) hash) of its inputs, so a changed input never returns a stale result. Without it, every session would rebuild the same briefs, rerun the same checks and re-download the same dependencies. The engine fills and reads it; a person only runs `cache stats` or `cache clear`.
+**In plain terms.** The cache store is a folder on disk where the engine saves results it may need again, so it does not recompute or re-read them. Each entry is addressed by a fingerprint (a SHA-256 hash) of its inputs, so a changed input never returns a stale result. Without it, every session would rebuild the same briefs, rerun the same checks and re-download the same dependencies. The engine fills and reads it; a person only runs `cache stats` or `cache clear`.
 
 | Item | Key |
 |---|---|
@@ -5910,7 +5919,6 @@ dependencies: tg-1.1
 
 - WHEN a stale event reaches Drive THE SYSTEM SHALL ignore it
   cmd: go test ./internal/engine/...
-  needs: none
 ```
 
 A `tsk-*.md` file in the same folder: the card, the task's pass command and the estimated changed lines (at most 300).
@@ -5942,7 +5950,7 @@ estimate_lines: 120
 - **Wave isolation:** A wave is the set of groups that run at the same time. Two groups in one wave listing the same file would write over each other, so that fails.
 - **Protected:** G3 is the guard rule that lists paths no agent may write: `.git`, `bin/komodo`, `~/.komodo/**`, the Claude settings files, `embed/policy.json`, `docs/prd.md` ([HTTP stack (Appendix H)](appendix-h.md#http-stack)). A group whose `files` include one of those, or anything under `docs/backlog/**`, fails before it can run.
 - **Sizing:** The hard caps that keep one task inside one model session: 5 files and 300 estimated lines per task, 8 tasks per group. After Build, a task whose real line count is over twice its estimate warns, so the next plan estimates better. A dependency chain over 4 groups is not refused; lint only warns.
-- **Graph:** Go builds a dependency graph (a DAG (a graph of dependencies with no loops): groups as nodes, "must land first" as arrows). A cycle (A waits on B, B waits on A) is refused. It warns on a chain longer than 4, a single group every other group waits on, and a group with more than 5 dependencies.
+- **Graph:** Go builds a dependency graph (a DAG, a graph with no loops: groups as nodes, "must land first" as arrows). A cycle (A waits on B, B waits on A) is refused. It warns on a chain longer than 4, a single group every other group waits on, and a group with more than 5 dependencies.
 - **EARS:** Every acceptance item must read `WHEN <event> THE SYSTEM SHALL <response>`, or the `IF` or `WHILE` form. It may add a `cmd:` line the tester runs and a `needs:` line (`network`, `docker` or `service:<name>`) for a check the sandbox cannot satisfy. An item with no `SHALL` fails; Go checks the shape without reading the meaning.
 - **Case collision:** Two paths that differ only by letter case (`Readme.md` and `README.md`) fail. The same check runs in Check on every operating system ([Guardrails (Appendix G)](appendix-g.md#guardrails)).
 
@@ -6500,7 +6508,7 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 **In plain terms.** A proof case is one fixture, a small made-up repo, fake server or forced failure, plus the exact result that counts as a pass. Each component below lists its own proof cases, and a builder finishing that component's task group is done only when every case passes. The gate ([Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](appendix-m.md#gate-and-self-checks-komodo-gate-komodo-repo-only)) runs these as tests, so a lost case would mean a component with no exit test. The end-to-end checks above cover the whole system; these cover each part on its own.
 
 **CLI processor ([Command-line interface (Appendix B)](appendix-b.md#command-line-interface))**
-- Each verb has a golden (stored expected output that a test compares against) `--json` test that compares its output with a stored copy.
+- Each verb has a golden `--json` test that compares its output with a stored copy.
 - An unknown flag exits 2 and names the closest matching flag.
 - The gate fails when `help --json` and the verb tables disagree.
 - With no controlling terminal, `komodo install` and `komodo config providers.paid=allowed` exit 1.
