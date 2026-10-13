@@ -3080,7 +3080,7 @@ type Weight = agent.Weight
 
 **Chain.** Each agent has an ordered chain of links, fixed in `agent.json` and never reordered by a configuration key. Two descriptions of the chain's shape exist in the design and the owner has not chosen between them.
 
-[TODO: the shape of an agent's provider chain. Option 1 (failover description and High-Level Design): the order is claude-cli with the latest model identifier then the prior identifier, every free http: endpoint in configuration order as the backstop, then anthropic-api only when providers.paid allows. Option 2 (agent.json field table): the chain is a list of links that must end in a free http: endpoint, as in the example ["claude-cli", "http:local"]. (G-NEW-1)]
+[TODO: the shape of an agent's provider chain. Option 1 (failover description and High-Level Design): the order is claude-cli with the latest model identifier then the prior identifier, every free http: endpoint in configuration order as the backstop, then anthropic-api only when providers.paid allows. Option 2 (agent.json field table): the chain is a list of links that must end in a free http: endpoint, as in the example ["claude-cli", "http:local"]. (G-69)]
 
 An agent `model` override (`komodo config agent <name> model=…`) puts that model's link first, and the chain's remaining links follow in their usual order. The values are `opus`, `sonnet` or `haiku` (latest of the line), `opus-prev` (prior), `<endpoint>:<model>` and the opt-in `fable`.
 
@@ -3116,7 +3116,7 @@ type Input struct {
 | `Schema` | The `result` field of `agent.json` |
 | `Tools` | The registry's functions bound to this session ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)) |
 
-[TODO: the working directory and base environment of the claude process, and the signature of ToolHost (G-NEW-3)] [TODO: the owner confirms these Go shapes, which this chapter derives from the cited facts (G-NEW-2)]
+[TODO: the working directory and base environment of the claude process, and the signature of ToolHost (G-71)] [TODO: the owner confirms these Go shapes, which this chapter derives from the cited facts (G-70)]
 
 #### Stream and Event
 
@@ -3203,7 +3203,7 @@ type Headroom struct {
 | `output` | Both | Liveness only; on API links each chunk is the heartbeat |
 | `result` | Both | The session's end |
 
-[TODO: which claude-cli stream lines map to output, which field of the result line carries the structured answer, which field of rate_limit_event carries the reset time, and what --verbose switches on (G-NEW-3)] [TODO: which rate-limit headers carry the window total that PercentLeft needs, since only -remaining and -reset are named (G-NEW-4)]
+[TODO: which claude-cli stream lines map to output, which field of the result line carries the structured answer, which field of rate_limit_event carries the reset time, and what --verbose switches on (G-71)] [TODO: which rate-limit headers carry the window total that PercentLeft needs, since only -remaining and -reset are named (G-72)]
 
 #### Result, Usage and ResumeHandle
 
@@ -3303,7 +3303,7 @@ type AuthStatus struct {
 }
 ```
 
-[TODO: the key names of providers.json and quota.json, and the layout of a record's header and body (G-30)] [TODO: the CtxSource strings, since the design says only that the source travels in session.start (G-NEW-2)]
+[TODO: the key names of providers.json and quota.json, and the layout of a record's header and body (G-30)] [TODO: the CtxSource strings, since the design says only that the source travels in session.start (G-70)]
 
 `embed/models.json` holds about 10 entries.
 
@@ -3346,7 +3346,7 @@ type CatalogEntry struct {
 | Heavy, opt-in | `fable` (Fable 5.1) | none | none | 1M | $10 / $50 |
 | Local | Qwen3.6-27B, Gemma 4 31B, Nemotron 3 Nano | none | none | measured | free |
 
-Every current Claude identifier is a pinned snapshot with a 1M-token window and 128K maximum output, except Haiku 4.5 at 200K; Komodo uses the exact identifier and never an alias. A person opts into `fable` per agent with `komodo config agent <name> model=fable`, and it applies only when the probe lists it for the login. [TODO: whether a Max login exposes claude-fable-5-1 to claude -p (G-06)] [TODO: which weight each local model serves (G-NEW-7)]
+Every current Claude identifier is a pinned snapshot with a 1M-token window and 128K maximum output, except Haiku 4.5 at 200K; Komodo uses the exact identifier and never an alias. A person opts into `fable` per agent with `komodo config agent <name> model=fable`, and it applies only when the probe lists it for the login. [TODO: whether a Max login exposes claude-fable-5-1 to claude -p (G-06)] [TODO: which weight each local model serves (G-75)]
 
 #### Timer and quota records
 
@@ -3364,7 +3364,7 @@ A paused group has one timer record, written with `Replace` and removed when it 
 | `wait_until` | The latest provider reset time among the group's halted sessions, plus 1 min; each halted session's ledger row keeps a copy |
 | `wait_link` | The link whose reset the group waits for |
 
-`quota.json` stores one reset time per limited link, so every repository on the machine skips that link until the time passes. [TODO: locking for machine-shared files such as quota.json (G-NEW-6)]
+`quota.json` stores one reset time per limited link, so every repository on the machine skips that link until the time passes. [TODO: locking for machine-shared files such as quota.json (G-74)]
 
 ```go
 // Timer is the body of a timers/<repo-id>.<group>.json record.
@@ -3393,7 +3393,7 @@ func NewTimer(link Link, resets []time.Time) Timer {
 | `quota.json`, `providers.json` | State-manager records written with `Replace` | Same rule. [TODO: the key names of both files (G-30)] |
 | `embed/models.json` | A JSON array of `CatalogEntry` objects, compiled into the binary | Read only by the binary that embeds it, so no version mismatch arises. [TODO: the key names (G-30)] |
 | `sessions/<id>/stream.jsonl` | The stream lines exactly as received, appended in order | Appended by observability |
-| `sessions/<id>/messages.jsonl` | One saved turn per line on API links | [TODO: the line layout (G-NEW-4)] |
+| `sessions/<id>/messages.jsonl` | One saved turn per line on API links | [TODO: the line layout (G-72)] |
 
 #### HTTP client types
 
@@ -3455,7 +3455,7 @@ type Provider interface {
 | `Start`, `Resume` | `ErrNotYet` | `codex-cli` and `openai-api` refuse with `not yet` |
 | `Resume` | any other error | A failed resume gets a fresh session with the brief, the work-in-progress diff and the last builder `summary`; the ledger logs `resume_lost` |
 | `Stream.Next` | `io.EOF` | Normal end, after the `result` event |
-| `Stream.Inject`, `Stop`, `Close` | [TODO: error values and whether a closed stream accepts a call (G-NEW-2)] | |
+| `Stream.Inject`, `Stop`, `Close` | [TODO: error values and whether a closed stream accepts a call (G-70)] | |
 
 ```go
 // Quota is the machine-wide record of limited links.
@@ -3554,7 +3554,7 @@ var (
 | `Select` | `ErrPaidRefused` | Group Blocked `paid_refused`, naming the config key to change |
 | `Select` | `ErrContext` | Group Blocked `context`; a person shrinks the task or adds a larger endpoint |
 | `Select` | `ErrPaused` | Session pauses ([Limits, pauses and warnings](#7-providers-and-http)) |
-| `RecordLimit`, `WriteTimer` | state manager error | [TODO: what the engine does when quota.json or a timer cannot be written (G-NEW-6)] |
+| `RecordLimit`, `WriteTimer` | state manager error | [TODO: what the engine does when quota.json or a timer cannot be written (G-74)] |
 | `Client.Do` | `*LimitSignal` | The adapter converts it to a `*LimitError` |
 | `Client.Do` | other error after 4 attempts | The adapter fails the request; a second dropped stream fails the session |
 
@@ -3675,14 +3675,14 @@ Each `Skip` becomes a `provider.skip {from, to, reason}` event, handed to `Drive
 
 When no link remains, `Select` returns one of the errors in [Interfaces](#74-interfaces). Pause is chosen when every remaining link is over a limit.
 
-[TODO: which error wins when some links are over a limit and others unavailable (G-NEW-5)]
+[TODO: which error wins when some links are over a limit and others unavailable (G-73)]
 
 Rules that hold on every walk:
 
 - A model retired mid-run returns HTTP 404. That session start fails with `ErrModelGone`; the task's next session takes the prior model identifier, then the backstop. The cost is one failed start per retirement. `providers.json` is the only model registry.
 - Any Claude limit (5-hour window, weekly cap or per-model cap) moves the next session to the backstop. After the recorded reset time, new sessions return to `claude-cli`; a task already on the backstop finishes there.
 - An agent set to a `-prev` model falls back to the backstop, never forward to the latest model.
-- An endpoint's `models` map gives a model per weight; a missing weight uses the nearest weight's model. [TODO: which weight is nearest when two are equally near (G-NEW-7)]
+- An endpoint's `models` map gives a model per weight; a missing weight uses the nearest weight's model. [TODO: which weight is nearest when two are equally near (G-75)]
 - The backstop is mandatory: `doctor` and `gate` refuse a chain without a free `http:` endpoint, and `install` warns when no endpoint answers.
 - Dateless model identifiers from the 4.6 generation on are pinned snapshots, so an exact identifier is as stable as an alias.
 
@@ -3718,7 +3718,7 @@ Launch line, one flag per line:
 | `-p` | Print mode: takes a prompt and exits instead of opening an interactive chat |
 | `--output-format stream-json` | One JSON line per event, so the supervisor reads heartbeats, retry lines and the result without parsing prose |
 | `--input-format stream-json` | Lets the engine write JSON messages to standard input during the session; the time warning and the nudge use it |
-| `--verbose` | [TODO: what this flag switches on; the launch line always passes it (G-NEW-3)] |
+| `--verbose` | [TODO: what this flag switches on; the launch line always passes it (G-71)] |
 | `--session-id <uuid>` | Komodo picks the identifier, so the resume handle exists before the session ends |
 | `--model` | The exact pinned model identifier for the agent's weight |
 | `--system-prompt-file` | Replaces Claude Code's default system prompt with Komodo's file |
@@ -3765,7 +3765,7 @@ On `anthropic-api` and `http:<name>`, `Start` runs the tool loop in `loop.go` ov
 - Every link ends the same way: tools on `auto`, a text-only reply ends the work, one final call returns the result schema, and Go validates it again.
 - Effort per weight on API links is fixed per agent: heavy `high`, standard `medium`, light `low`. A change of effort or thinking invalidates the prompt cache.
 - Ollama `keep_alive` is set to the run's remaining wall time, so the server keeps the model loaded instead of unloading it after its 5-minute default.
-- The `anthropic-api` adapter marks the brief with `cache_control` breakpoints. [TODO: how the brief builder passes its breakpoints to the adapter, and the request and response mapping of the Messages and OpenAI-compatible interfaces: paths, authentication headers, tool-call encoding and event names (G-NEW-4)]
+- The `anthropic-api` adapter marks the brief with `cache_control` breakpoints. [TODO: how the brief builder passes its breakpoints to the adapter, and the request and response mapping of the Messages and OpenAI-compatible interfaces: paths, authentication headers, tool-call encoding and event names (G-72)]
 - Response caching never applies to model calls.
 
 ##### Billing check
@@ -3839,7 +3839,7 @@ sequenceDiagram
 2. The router records the link's reset time in `quota.json` (`RecordLimit`).
 3. With no link left, the session exits `paused`, keeping its resume handle, and the router writes the group's timer with `NewTimer` (`WriteTimer`). The ledger row keeps a copy of `wait_until`.
 4. The live engine sleeps until the earliest `wait_until`. With no live engine, the startup sweep, `jobs tick` or `status` finds the due timer.
-5. `Resume` runs from the handle. If the provider still refuses, no model turn is spent and the session re-pauses on the new reset time, or backs off 15, 30, then 60 min when none is given. [TODO: the wait after the third refused attempt (G-NEW-5)]
+5. `Resume` runs from the handle. If the provider still refuses, no model turn is spent and the session re-pauses on the new reset time, or backs off 15, 30, then 60 min when none is given. [TODO: the wait after the third refused attempt (G-73)]
 6. A session paused longer than `limits.pause_max_min` (360) is cancelled, its work-in-progress commit is kept, and the group blocks `pause_timeout`. Paused time stops the wall clocks.
 
 `resume` from a person attempts every paused agent at once. `abandon` clears the timer. `status` shows `paused: provider_limit · claude-cli · resumes 15:31 (in 2h 14m)`.
@@ -3893,7 +3893,7 @@ Connection and safety rules:
 - One `http.Transport` serves the whole process, so a 4-task group shares one encrypted connection pool.
 - The result of `claude auth status --json` is cached for 60 s per process.
 - Link slots are claim files under `~/.komodo/state/links/`, so `limits.link_sessions.<link>` holds across every repository on the machine.
-- `quota.json` is shared by every repository; its write path uses `Replace`. [TODO: locking for machine-shared files such as quota.json (G-NEW-6)]
+- `quota.json` is shared by every repository; its write path uses `Replace`. [TODO: locking for machine-shared files such as quota.json (G-74)]
 - A timer record has one writer, the engine of its group, and is removed by whoever fires it.
 
 ### 7.6 State
@@ -4070,12 +4070,12 @@ Component tests use mocks that match documented provider behaviour: a fake `clau
 
 | Gap | Open here |
 |---|---|
-| G-NEW-1 | The shape of an agent's provider chain: two conflicting descriptions |
-| G-NEW-2 | Owner confirmation of the derived Go shapes of `Session`, `Stream`, `Event`, `Input`, `ResumeHandle` and `LimitError`, and the error values of `Inject`, `Stop` and `Close` |
-| G-NEW-3 | `claude-cli` details: process working directory, result line field, reset-time field, `--verbose`, the tool host signature |
-| G-NEW-4 | Request and response mapping of the Messages and OpenAI-compatible interfaces, the `messages.jsonl` line layout, rate-limit totals, the cache breakpoint hand-off |
-| G-NEW-5 | Which error `Select` returns in a mixed chain, and the wait after the third refused resume |
-| G-NEW-6 | Locking for `quota.json` across repositories, and the reaction to a failed write of `quota.json` or a timer |
+| G-69 | The shape of an agent's provider chain: two conflicting descriptions |
+| G-70 | Owner confirmation of the derived Go shapes of `Session`, `Stream`, `Event`, `Input`, `ResumeHandle` and `LimitError`, and the error values of `Inject`, `Stop` and `Close` |
+| G-71 | `claude-cli` details: process working directory, result line field, reset-time field, `--verbose`, the tool host signature |
+| G-72 | Request and response mapping of the Messages and OpenAI-compatible interfaces, the `messages.jsonl` line layout, rate-limit totals, the cache breakpoint hand-off |
+| G-73 | Which error `Select` returns in a mixed chain, and the wait after the third refused resume |
+| G-74 | Locking for `quota.json` across repositories, and the reaction to a failed write of `quota.json` or a timer |
 | [G-02](#appendix-o-gap-register) | Capturing the `system/init` line at probe time without a model turn |
 | [G-30](#appendix-o-gap-register) | Key names of `providers.json`, `quota.json` and `models.json` |
 
@@ -4083,7 +4083,7 @@ Component tests use mocks that match documented provider behaviour: a fake `clau
 
 | Gap | Open here |
 |---|---|
-| G-NEW-7 | Nearest-weight tie for an endpoint with a missing weight; which weight each local model serves |
+| G-75 | Nearest-weight tie for an endpoint with a missing weight; which weight each local model serves |
 | [G-03](#appendix-o-gap-register) | A `24 GB` (24 gigabyte) machine running Qwen3.6-27B at 262,144 context |
 | [G-04](#appendix-o-gap-register) | `OLLAMA_NUM_PARALLEL` above 1 and `limits.link_sessions.local` |
 | [G-06](#appendix-o-gap-register) | Whether a Max login exposes `claude-fable-5-1` to `claude -p` |
@@ -8094,6 +8094,13 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-66 | Workspace | What "unused for 3 days" measures, which actor removes an idle worktree, whether a still-leased worktree may be removed, and behaviour of `Rebuild` when the hidden reference is gone | Owner decision |
 | G-67 | Workspace | Contents of a work-in-progress commit: what is staged, untracked and ignored files, message, and which actor writes the one at every session end | Design patch to 4.5 |
 | G-68 | Recovery, Workspace | Owner file of the startup sweep (`worktree.go` or `recover.go`), which of the 4 scans runs each unplaced action, pid file location | Owner decision on the sweep owner |
+| G-69 | Providers | The shape of an agent's provider chain. Option 1 (Appendix H failover chain, HLD models and cost): order `claude-cli` (latest then prior ID), every free `http:` endpoint in config order, then `anthropic-api` only when `providers.paid` allows. Option 2 (Appendix F `agent.json` `chain` field): a list of links that must end in a free `http:` endpoint, example `["claude-cli", "http:local"]`. Also decides whether `doctor` and `gate` check the endpoint kind or a configured free endpoint. | Owner decision, then 7.3 Links and the chain and Agent registry `chain` row |
+| G-70 | Providers | The Go shapes of `Session`, `Stream`, `Event`, `Input`, `ResumeHandle`, `LimitError`, `Provider.Profile` and the `CtxSource` strings. This chapter derives them from facts in the supervisor, billing and stream sections; the source marked all of them not yet designed. Error values of `Stream.Inject`, `Stop` and `Close` are open. | Owner review of 7.3 and 7.4, phase 4 |
+| G-71 | Providers | `claude-cli` wire details the design does not state: working directory of the `claude` process, which stream line type is `output`, which field of the result line carries the structured answer, which field of `rate_limit_event` carries the reset time, what `--verbose` switches on, how `claude auth status --json` reports a logged-out user, and the signature of the tool host the API-link loop calls. | Spike against Claude Code 2.1.295, phase 4 |
+| G-72 | Providers | `anthropic.go` and `openai.go` wire details the design does not state: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and which rate-limit headers give the window total that a percent needs (only `-remaining` and `-reset` are named). | Spike against both interfaces, phase 4 |
+| G-73 | Providers | Which error `Router.Select` returns when some links are over a limit and others unavailable, and the wait after the third refused `resume` (the design lists 15, 30, then 60 min). | Owner decision, phase 4 |
+| G-74 | State | Locking for machine-shared files such as `quota.json` when two repositories record a limit at once, and the engine's reaction to a failed write of `quota.json` or a timer record. | Owner decision with G-30 |
+| G-75 | Providers | The nearest weight for an endpoint missing a weight when two are equally near, and which weight each local model (Qwen3.6-27B, Gemma 4 31B, Nemotron 3 Nano) serves. | Owner decision |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
