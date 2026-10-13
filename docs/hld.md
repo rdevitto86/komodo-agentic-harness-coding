@@ -36,6 +36,7 @@
 | 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
 | 0.10 | 2026-10-12 | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
 | 0.11 | 2026-10-12 | Component IDs removed; components are named in the traceability and decision tables |
+| 0.12 | 2026-10-12 | References to LLD sections name the section and its appendix |
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
@@ -563,8 +564,8 @@ Index of the choices that shaped the design; DR-n numbers exist only here. The o
 | DR-7 | Session caps via cgroups or Docker only | Sandbox and process control |
 | DR-8 | Machine-wide session pool, not per-repo lanes | Orchestration engine |
 | DR-9 | No rule text in worker prompts | Rules and output contract |
-| DR-10 | One state schema; the state manager is the only door to state | §1, State manager |
-| DR-11 | Group state: events, snapshots and replay as one unit | §1, State manager |
+| DR-10 | One state schema; the state manager is the only door to state | State manager |
+| DR-11 | Group state: events, snapshots and replay as one unit | State manager |
 | Defaults | 12 design-pass defaults: `fable` opt-in, Haiku 5.5 light, coverage 80, 10 lenses, EARS items, two-pass planner, 6 more | LLD Appendix S |
 | State defaults | In-process, no daemon; 6 exclusions; quarantine, never repair; snapshot fields | State manager |
 
@@ -683,7 +684,7 @@ Eighteen newcomer terms; the LLD links here.
 | Reference | Use in this document |
 |---|---|
 | arc42 template, https://arc42.org/overview | Section structure: introduction and goals, constraints, context, solution strategy, building blocks, runtime, deployment, cross-cutting views, decisions, quality requirements, risks |
-| ISO/IEC/IEEE 42010:2022 | Stakeholders, concerns and views framing (§4.7 and the view sections) |
+| ISO/IEC/IEEE 42010:2022 | Stakeholders, concerns and views framing ([Stakeholders and concerns (LLD Appendix S)](lld.md#appendix-s-hld-detail-tables-goals-building-blocks-decisions-quality-risks-roadmap) and the view sections) |
 | Design Docs at Google, https://www.industrialempathy.com/posts/design-docs-at-google/ | Goals and non-goals, decisions with rejected alternatives |
 | Temporal workflows, https://docs.temporal.io/workflows | Pure decider and recorded activities |
 | Distributed leases with fencing tokens, https://hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens | Fence enforced by the resource |
@@ -774,13 +775,13 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.11, draft |
+| Version | 0.12, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
 | Change control | Patches only, smallest span; a moved design decision adds a revision history row |
 | Approval control | No phase 2 code starts until the owner has signed off every component |
-| Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (`docs/lld.md` §39); the gate fails a tag with no closing task |
+| Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (the LLD's gap register (Appendix O)); the gate fails a tag with no closing task |
 
 #### 3.3 Revision history
 
@@ -797,6 +798,7 @@ Eighteen newcomer terms; the LLD links here.
 | 0.9 | 2026-10-12 | Technical lead | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
 | 0.10 | 2026-10-12 | Technical lead | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
 | 0.11 | 2026-10-12 | Technical lead | Component IDs removed; components are named in the traceability and decision tables |
+| 0.12 | 2026-10-12 | Technical lead | References to LLD sections name the section and its appendix |
 
 #### 3.4 Related documents
 
