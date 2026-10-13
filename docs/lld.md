@@ -7178,7 +7178,7 @@ Files of other chapters that this chapter calls:
 | Provider probe | `ProbeAll` in `host/probe.go` |
 | `komodo gate` | `Gate.Run` in `repo/gate.go` |
 
-The names are working names. `[TODO: confirm the exported names of the install, update, probe and gate functions; the design fixes behaviour, not names (G-NEW-6)]`
+The names are working names. `[TODO: confirm the exported names of the install, update, probe and gate functions; the design fixes behaviour, not names (G-144)]`
 
 #### Where the files live on one machine
 
@@ -7297,7 +7297,7 @@ Hash values are shortened. `[TODO: the field names of install.json, the hash alg
 
 **Versioning.** The record header carries the schema version, `v: 1` today. A newer binary reads an older version through a registered migration step in memory. How a reader treats a manifest written by a newer binary is `[TODO: forward-version handling in the state manager (G-30)]`.
 
-**Which steps the manifest covers.** The manifest sits in the git directory of one repository, yet steps 1 to 3 and step 8 write machine-wide files. `[TODO: where ownership of the binary, the PATH entry, providers.json and the operating system schedule entry is recorded, so uninstall --machine-only can remove them (G-NEW-2)]`
+**Which steps the manifest covers.** The manifest sits in the git directory of one repository, yet steps 1 to 3 and step 8 write machine-wide files. `[TODO: where ownership of the binary, the PATH entry, providers.json and the operating system schedule entry is recorded, so uninstall --machine-only can remove them (G-140)]`
 
 #### Release manifest (`latest.json`)
 
@@ -7348,9 +7348,9 @@ type KeySet struct {
 }
 ```
 
-`[TODO: the key names of latest.json, the architectures built, the asset file names, what the signature covers and how it is encoded (G-NEW-1)]`
+`[TODO: the key names of latest.json, the architectures built, the asset file names, what the signature covers and how it is encoded (G-139)]`
 
-**Versioning.** A binary reads the manifest versions it knows. `[TODO: how a binary treats a latest.json whose layout it does not know (G-NEW-1)]`
+**Versioning.** A binary reads the manifest versions it knows. `[TODO: how a binary treats a latest.json whose layout it does not know (G-139)]`
 
 #### Update state (`state/fresh.json`)
 
@@ -7361,7 +7361,7 @@ The updater's records live under `~/.komodo/state/`, all written through the sta
 | `fresh.json` | The newest release seen | `Replace` |
 | `fresh.lock` | The lock that allows one updater at a time | `Claim` |
 | `fresh.log` | One line per silent failure | `Append` |
-| `active/` | Which versions live runs use | `[TODO: file layout (G-NEW-3)]` |
+| `active/` | Which versions live runs use | `[TODO: file layout (G-141)]` |
 
 The body of `fresh.json`:
 
@@ -7371,7 +7371,7 @@ The body of `fresh.json`:
 }
 ```
 
-`[TODO: where the time of the last check is kept, so a check runs at most once per fresh.interval (G-NEW-3)]` `[TODO: where the count of consecutive failures is kept, and the line format of fresh.log (G-NEW-3)]`
+`[TODO: where the time of the last check is kept, so a check runs at most once per fresh.interval (G-141)]` `[TODO: where the count of consecutive failures is kept, and the line format of fresh.log (G-141)]`
 
 #### The Komodo block in `AGENTS.md`
 
@@ -7428,7 +7428,7 @@ The begin marker of this release reads `<!-- komodo:begin min=1.0.0-beta.6 -->`.
 | Output style | `embed/output/adhd.md` | Pasted below the rules for the configured `output.profile` |
 | End marker | The template | A missing or damaged marker drops the whole block from every brief and `doctor` reports it |
 
-`[TODO: which output style text is pasted when output.profile is standard, since the file map names only embed/output/adhd.md for the block (G-NEW-2)]`
+`[TODO: which output style text is pasted when output.profile is standard, since the file map names only embed/output/adhd.md for the block (G-140)]`
 
 The pin is read by the verb dispatcher: a binary below `min=` refuses every verb except `help`, `version`, `fresh`, `install` and `doctor`, with the fix line `run komodo fresh` ([CLI and Configuration](#1-cli-and-configuration)).
 
@@ -7449,7 +7449,7 @@ Step 6 adds exactly two entries to the repository's `.claude/settings.json` and 
 }
 ```
 
-`[TODO: the exact hook entry install writes, such as a matcher or a timeout; the text lives in templates/claude/settings.json.tmpl (G-NEW-2)]`
+`[TODO: the exact hook entry install writes, such as a matcher or a timeout; the text lives in templates/claude/settings.json.tmpl (G-140)]`
 
 #### Probe result
 
@@ -7503,11 +7503,11 @@ A failing gate in the envelope that every verb returns ([CLI and Configuration](
 }
 ```
 
-`[TODO: the data layout of the gate result, the verdict wording and the error code; the design fixes only the envelope fields (G-NEW-4)]`
+`[TODO: the data layout of the gate result, the verdict wording and the error code; the design fixes only the envelope fields (G-142)]`
 
 ### 12.4 Interfaces
 
-The names in this page are working names (G-NEW-6). The failure behaviour of each method is beside it.
+The names in this page are working names (G-144). The failure behaviour of each method is beside it.
 
 #### Installer
 
@@ -7564,7 +7564,7 @@ type Change struct {
 | Method | Error | Meaning and caller behaviour |
 |---|---|---|
 | `Plan` | Manifest unreadable | The state manager reports a record it cannot decode; the verb stops and writes nothing |
-| `Apply` | A write fails | The verb stops at that step and reports it. Step 7 writes the manifest after steps 4 to 6, so a rerun recomputes the diff. `[TODO: what a rerun does with files written before the manifest (G-NEW-2)]` |
+| `Apply` | A write fails | The verb stops at that step and reports it. Step 7 writes the manifest after steps 4 to 6, so a rerun recomputes the diff. `[TODO: what a rerun does with files written before the manifest (G-140)]` |
 | `Apply` | `doctor install` reports an error | The install fails and names each failing check with its fix line |
 | `Uninstall` | Entry already gone | The entry is skipped; the other `settings.json` keys stay intact |
 
@@ -7663,7 +7663,7 @@ type Gate interface {
 |---|---|---|
 | `Check.Run` | A finding | The check fails; the gate runs the other checks and reports all findings |
 | `Check.Run` | An error | The check fails with the error as its finding; the gate does not stop |
-| `Gate.Run` | Not the Komodo repository | The verb refuses. `[TODO: how the gate recognises the Komodo repository and the refusal code (G-NEW-4)]` |
+| `Gate.Run` | Not the Komodo repository | The verb refuses. `[TODO: how the gate recognises the Komodo repository and the refusal code (G-142)]` |
 | `Gate.Run` | `--install` or `--install-hooks` without a terminal | The verb refuses; these flags need a person |
 
 #### Callers
@@ -7743,7 +7743,7 @@ flowchart TD
 ```
 
 1. Resolve the hosts: `--hosts` if given, else detect. Claude Code is present when any of `CLAUDE.md`, `.claude/`, `claude` on `PATH` or `~/.claude/` exists. Codex is present when any of `.codex/`, `codex` on `PATH` or `~/.codex/` exists. Codex reads `AGENTS.md`, so step 4 serves it with no extra file.
-2. Resolve the scope. `--machine-only` keeps steps 1 to 3; `--repo-only` keeps steps 4 to 7; steps 4 to 7 need a git repository; step 8 needs `--schedule`. `[TODO: what --repo-only does outside a git repository (G-NEW-2)]`
+2. Resolve the scope. `--machine-only` keeps steps 1 to 3; `--repo-only` keeps steps 4 to 7; steps 4 to 7 need a git repository; step 8 needs `--schedule`. `[TODO: what --repo-only does outside a git repository (G-140)]`
 3. Build the desired set: each step's targets with the content install would write.
 4. Read `install.json`; an absent manifest is empty.
 5. Classify each target as in the diagram. A target in the manifest but no longer desired is pruned.
@@ -7768,11 +7768,11 @@ The pin rises only: the begin marker's `min=` becomes the higher of the existing
 
 Rules per step:
 - **Step 1, binary source.** `--from <file>` uses that file with no network. Otherwise the latest release is used if it is newer than the running binary and verified. Otherwise install copies the running binary. An offline install from an older binary leaves `bin/` on that older version, and the next online check by `status`, a run start or `fresh --check` moves it forward.
-- **Step 2.** `[TODO: how install chooses between ~/.zshrc and ~/.bashrc, the text of the line, and how the Windows user PATH is changed (G-NEW-2)]`
-- **Step 4.** With no `AGENTS.md`, the full template of `templates/project/AGENTS.md.tmpl` is written. With one, only the block between the markers is written or replaced; text outside the markers is never touched. `[TODO: where the block goes in an existing AGENTS.md that has no markers, and what install does with damaged markers (G-NEW-2)]`
+- **Step 2.** `[TODO: how install chooses between ~/.zshrc and ~/.bashrc, the text of the line, and how the Windows user PATH is changed (G-140)]`
+- **Step 4.** With no `AGENTS.md`, the full template of `templates/project/AGENTS.md.tmpl` is written. With one, only the block between the markers is written or replaced; text outside the markers is never touched. `[TODO: where the block goes in an existing AGENTS.md that has no markers, and what install does with damaged markers (G-140)]`
 - **Step 5.** The line imports the block into Claude Code at session start. A hand-edited `CLAUDE.md` survives.
 - **Step 6.** Install merges the two entries into the parsed JSON and leaves every other key as it was. A hook that fails prints an error and blocks nothing.
-- **Step 8.** `[TODO: the launchd label, the cron line and the Task Scheduler task name (G-NEW-2)]`
+- **Step 8.** `[TODO: the launchd label, the cron line and the Task Scheduler task name (G-140)]`
 
 `doctor install` checks the installed files against the manifest and `PATH`, among others; the full check list is in [CLI and Configuration](#1-cli-and-configuration).
 
@@ -7820,14 +7820,14 @@ sequenceDiagram
 ```
 
 1. **Check.** Only `status`, the engine at run start and `fresh --check` fetch the release manifest, and only when `fresh.interval` has passed since the last check. A failed fetch is logged and the verb carries on. A successful fetch replaces `state/fresh.json` with the newest version.
-2. **Spawn.** Any verb reads `fresh.json` and compares `latest` with its own version using semantic version order. Only if `latest` is newer, `fresh.auto` is not `false` and `CI` is not `true`, the verb starts `komodo internal fresh-bg` detached and carries on. `[TODO: whether fresh.auto false and CI=true also stop the hourly fetch of latest.json (G-NEW-3)]`
+2. **Spawn.** Any verb reads `fresh.json` and compares `latest` with its own version using semantic version order. Only if `latest` is newer, `fresh.auto` is not `false` and `CI` is not `true`, the verb starts `komodo internal fresh-bg` detached and carries on. `[TODO: whether fresh.auto false and CI=true also stop the hourly fetch of latest.json (G-141)]`
 3. **Claim.** The updater claims `state/fresh.lock`, created exclusively. If the file exists and is younger than `FreshLockStale`, another updater is running and this one exits. An older lock is stale, so a crashed updater cannot block updates.
-4. **Download.** The updater downloads the asset for this operating system and architecture to `versions/<v>/komodo.part`. `[TODO: whether the updater fetches latest.json again or reads the asset entry from fresh.json (G-NEW-1)]`
+4. **Download.** The updater downloads the asset for this operating system and architecture to `versions/<v>/komodo.part`. `[TODO: whether the updater fetches latest.json again or reads the asset entry from fresh.json (G-139)]`
 5. **Verify.** The updater compares the download's SHA-256 checksum with the asset's `sha256` and verifies the ed25519 signature against the embedded keys ([Release signing](#12-install-binary-lifecycle-and-gate)). On a mismatch it deletes the `.part` file, logs the failure and exits; the old binary stays.
 6. **Rename.** The updater renames `komodo.part` to `versions/<v>/komodo`.
-7. **Swap.** The updater replaces `bin/komodo` atomically, never waiting for runs. On Windows a running `.exe` cannot be overwritten, so it is renamed to `.old` first. From this moment every new call, including the orchestrator's next one, runs the new binary. `[TODO: when komodo.exe.old is deleted (G-NEW-3)]`
-8. **Pin.** Runs already in progress keep their version. The engine starts every child process from `VersionBinary(home, its own version)`, never from `bin/`, so a run finishes on the binary it started with, and the version is listed in `state/active/` for as long as the run lives. `[TODO: which code adds and removes the run's entry in state/active/ (G-NEW-3)]`
-9. **Clean up.** The updater deletes version folders that are not the current version, not the previous version and not listed in `state/active/`. `[TODO: how the previous version is recorded (G-NEW-3)]`
+7. **Swap.** The updater replaces `bin/komodo` atomically, never waiting for runs. On Windows a running `.exe` cannot be overwritten, so it is renamed to `.old` first. From this moment every new call, including the orchestrator's next one, runs the new binary. `[TODO: when komodo.exe.old is deleted (G-141)]`
+8. **Pin.** Runs already in progress keep their version. The engine starts every child process from `VersionBinary(home, its own version)`, never from `bin/`, so a run finishes on the binary it started with, and the version is listed in `state/active/` for as long as the run lives. `[TODO: which code adds and removes the run's entry in state/active/ (G-141)]`
+9. **Clean up.** The updater deletes version folders that are not the current version, not the previous version and not listed in `state/active/`. `[TODO: how the previous version is recorded (G-141)]`
 
 The fresh verb runs the same steps in the foreground. Its failures are printed, because a person asked for the update.
 
@@ -7850,7 +7850,7 @@ The fresh verb runs the same steps in the foreground. Its failures are printed, 
 5. A run that has not checkpointed after `RestartWait` stays on its version and is named in the report. It is never killed mid-write.
 6. The cost is at most one repeated model turn per run, the turn that was in flight.
 
-`[TODO: how the 2 minute checkpoint wait fits the shutdown sequence's 30 second stop per agent and 60 second force-kill, and the stop reason restart that the run.stopped event does not list (G-NEW-3)]`
+`[TODO: how the 2 minute checkpoint wait fits the shutdown sequence's 30 second stop per agent and 60 second force-kill, and the stop reason restart that the run.stopped event does not list (G-141)]`
 
 **Version skew.** A new binary reads run state written by the previous state schema version. For state older than that, `status` tells the person to let the run finish or to use `fresh --restart-runs`.
 
@@ -7873,7 +7873,7 @@ flowchart LR
 1. The install scripts check the SHA-256 checksum over HTTPS only.
 2. From the first update on, the binary verifies the signature of the manifest against the public keys embedded in it, so a tampered release is refused.
 3. The embedded set holds the current key and a `next` key. The `next` key is set at the first release, so a leaked key can be rotated without breaking updates in the field.
-4. A signature verifies when it matches a key of the set. `[TODO: confirm that either key may sign, how a release rotates the next key into the current slot, and what the signature covers (G-NEW-1)]`
+4. A signature verifies when it matches a key of the set. `[TODO: confirm that either key may sign, how a release rotates the next key into the current slot, and what the signature covers (G-139)]`
 
 Enterprise signing is not built: moving the private key into a key management service or keyless signing, and refusing a manifest older than the last one accepted, wait for the first machine the owner does not own that runs `fresh` (G-21).
 
@@ -7915,15 +7915,15 @@ flowchart TD
 
 Generated artifacts compared by the last-but-one check: the agent roster tables from `policy.json`; `state.schema.json` from the kind registry and the event enum (a fixed list of allowed values); the `skills/index.json` hashes; the standards rule identifiers; every output template's golden fixture (stored expected output that a test compares against) under both output profiles; and the error-recovery action table against the action kinds that `Next()` can emit.
 
-`[TODO: the comment lint rules, how docs drift finds package names in lld.md, what the component map names now that each LLD chapter is a subsystem, and the gap tag syntax the no-silent-gaps check scans together with how a backlog task names the gap it closes (G-NEW-4)]`
+`[TODO: the comment lint rules, how docs drift finds package names in lld.md, what the component map names now that each LLD chapter is a subsystem, and the gap tag syntax the no-silent-gaps check scans together with how a backlog task names the gap it closes (G-142)]`
 
 Flags:
 - **`--fast`.** Skips the cross-builds and the timing checks for a quicker local run.
-- **`--install`.** A person-only flag. It builds the current source as a development build and places it at `~/.komodo/bin/komodo`. Komodo runs its own groups from that build. `[TODO: whether it also writes the version folder that children start from (G-NEW-5)]`
-- **`--install-hooks`.** A person-only flag that installs git hooks in the Komodo repository. `[TODO: which hooks and what they run (G-NEW-5)]`
-- **`--only <check>`.** `[TODO: what --only selects beyond a check's name (G-NEW-5)]`
+- **`--install`.** A person-only flag. It builds the current source as a development build and places it at `~/.komodo/bin/komodo`. Komodo runs its own groups from that build. `[TODO: whether it also writes the version folder that children start from (G-143)]`
+- **`--install-hooks`.** A person-only flag that installs git hooks in the Komodo repository. `[TODO: which hooks and what they run (G-143)]`
+- **`--only <check>`.** `[TODO: what --only selects beyond a check's name (G-143)]`
 
-**Fixtures.** For every check there is a deliberately broken fixture that makes the gate fail, which proves the check works. `[TODO: where the fixtures live and how the gate loads them (G-NEW-4)]`
+**Fixtures.** For every check there is a deliberately broken fixture that makes the gate fail, which proves the check works. `[TODO: where the fixtures live and how the gate loads them (G-142)]`
 
 ### 12.6 State
 
@@ -8010,7 +8010,7 @@ stateDiagram-v2
 | A live run does not checkpoint in 2 minutes | `RestartRuns` | The run stays on its version and is named in the report |
 | Broken Komodo block markers | `doctor` and the brief builder | The whole block is dropped from briefs and `doctor` reports it ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)) |
 | A gate check finds a drift | The check | The gate fails and names the check, the path and the fix |
-| `gate` outside the Komodo repository | The gate | The verb refuses `[TODO: refusal code (G-NEW-4)]` |
+| `gate` outside the Komodo repository | The gate | The verb refuses `[TODO: refusal code (G-142)]` |
 
 ### 12.8 Config
 
@@ -8081,18 +8081,18 @@ The 34 flat keys and the hard limits are in [CLI and Configuration](#1-cli-and-c
 
 | Gap | Open here |
 |---|---|
-| G-NEW-1 | `latest.json` key names, architectures, asset names, what the signature covers and its encoding; which key may sign and how the next key rotates in; whether the updater refetches the manifest; unknown-layout handling |
-| G-NEW-2 | Install write details: zsh or bash, the `PATH` line, the Windows `PATH` change, schedule entries, the exact hook entry, existing `AGENTS.md` without markers, a crash before the manifest, machine-wide ownership, flag combinations outside a repository, the `standard` output style |
-| G-NEW-3 | Update records: last-check time, failure count and `fresh.log` format, `state/active/` layout, the previous version, `.old` cleanup, the off switch and the hourly fetch, the restart wait against the shutdown sequence and the `restart` stop reason |
-| G-NEW-4 | Gate inputs: Komodo repository detection and refusal code, fixture location, result data layout, comment lint rules, package discovery in docs drift, the component map, the gap tag syntax |
+| G-139 | `latest.json` key names, architectures, asset names, what the signature covers and its encoding; which key may sign and how the next key rotates in; whether the updater refetches the manifest; unknown-layout handling |
+| G-140 | Install write details: zsh or bash, the `PATH` line, the Windows `PATH` change, schedule entries, the exact hook entry, existing `AGENTS.md` without markers, a crash before the manifest, machine-wide ownership, flag combinations outside a repository, the `standard` output style |
+| G-141 | Update records: last-check time, failure count and `fresh.log` format, `state/active/` layout, the previous version, `.old` cleanup, the off switch and the hourly fetch, the restart wait against the shutdown sequence and the `restart` stop reason |
+| G-142 | Gate inputs: Komodo repository detection and refusal code, fixture location, result data layout, comment lint rules, package discovery in docs drift, the component map, the gap tag syntax |
 | [G-30](#appendix-o-gap-register) | `install.json` field names, hash algorithm, settings entry naming, header and body layout, forward-version handling |
 
 **Can wait**
 
 | Gap | Open here |
 |---|---|
-| G-NEW-5 | `gate --install` and the version folder, `--install-hooks`, `--only` |
-| G-NEW-6 | Exported names of the install, update, probe and gate functions |
+| G-143 | `gate --install` and the version folder, `--install-hooks`, `--only` |
+| G-144 | Exported names of the install, update, probe and gate functions |
 | [G-02](#appendix-o-gap-register) | Capturing the `system/init` line at probe time without a model turn |
 | [G-19](#appendix-o-gap-register) | Measured values for the gate's timing targets |
 | [G-20](#appendix-o-gap-register) | The `codex-cli` and `openai-api` links are recorded, not usable, until a later minor release |
@@ -10130,6 +10130,12 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-136 | Rules, orchestrator | How `embed/rules/orchestrator.md` relates to the O rows in `embed/policy.json` (generated from them or written beside them); its file format; whether the gate compares the two | Owner decision; then 8.5 Rule enforcement map |
 | G-137 | Skills, output | Every exported name and signature in 8.3 and 8.4 is derived from stated behaviour; each caller's reaction to a loader error or a render error is not designed | Owner confirms the shapes |
 | G-138 | Skills, tools | A `skill` pull may return up to 6,000 tokens, while every tool except `read` returns at most 4 KB; whether the cap applies to `skill` | Owner decision; then 8.5 Pulling a skill and the tools chapter |
+| G-139 | Release manifest and verification | The key names of `latest.json`, the architectures built, the asset file names, what the ed25519 signature covers and how it is encoded; whether either embedded key may sign and how the next key rotates in; whether the updater refetches `latest.json` or reads the asset from `fresh.json`; how a binary treats a manifest layout it does not know; where the install script saves the download before it runs it | Owner decision on the architecture page; then 12.3 and 12.5 |
+| G-140 | Installer write details | How install chooses `~/.zshrc` or `~/.bashrc` and the text of the line; how the Windows user `PATH` is changed; the launchd label, cron line and Task Scheduler task name; the exact `SessionStart` hook entry; where the block goes in an `AGENTS.md` without markers and what happens with damaged markers; what a rerun does with files written before the manifest after a crash; where ownership of the binary, `PATH` line, `providers.json` and schedule entry is recorded; what `--repo-only` and `--machine-only` do outside a git repository; the output style pasted for the `standard` profile | Owner decision; then 12.3 and 12.5 |
+| G-141 | Binary lifecycle records | Where the time of the last check and the count of consecutive failures are kept; the line format of `state/fresh.log`; the layout of `state/active/` and which code writes and removes its entries; how the previous version is recorded; when `komodo.exe.old` is deleted; whether `fresh.auto: false` and `CI=true` also stop the hourly fetch of `latest.json`; how the 2 minute checkpoint wait of `--restart-runs` fits the shutdown sequence's 30 second stop per agent and 60 second force-kill; the `restart` stop reason that the `run.stopped` event does not list | Owner decision; then 12.3, 12.5 and chapter 2 |
+| G-142 | Gate inputs and result | How the gate recognises the Komodo repository and its refusal code; where the check fixtures live and how they load; the layout of the gate result data, the verdict wording and the error code; the comment lint rules; how docs drift finds package names in `lld.md`; what the component map names now that each LLD chapter is a subsystem; the gap tag syntax the no-silent-gaps check scans now that open items are written as TODO with a gap identifier, and how a backlog task names the gap it closes | Owner decision; then 12.3 and 12.5 |
+| G-143 | Gate flags | Whether `gate --install` also writes the version folder children start from; which git hooks `--install-hooks` installs and what they run; what `--only <check>` selects beyond a check's name | Owner decision; then 12.5 |
+| G-144 | Install, update, probe and gate names | Exported names of the functions and types in `internal/host/` and `internal/repo/gate.go`; the design fixes behaviour, not names | Owner decision; then 12.2 and 12.4 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
