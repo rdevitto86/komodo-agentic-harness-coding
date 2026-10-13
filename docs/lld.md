@@ -6750,7 +6750,7 @@ After a builder (the model session that edits code) finishes a task group, this 
 
 The purpose of the subsystem, and who it talks to, is in the HLD: [Check, Review, Tester and Recovery](hld.md#510-check-review-tester-and-recovery).
 
-The owner of the startup sweep is undecided: the design lists it under both `worktree.go` and `recover.go`. The scans are specified in [Workspace and Leases](#4-workspace-and-leases). `[TODO: which package owns the startup sweep (G-NEW-12)]`
+The owner of the startup sweep is undecided: the design lists it under both `worktree.go` and `recover.go`. The scans are specified in [Workspace and Leases](#4-workspace-and-leases). `[TODO: which package owns the startup sweep (G-177)]`
 
 **Concepts**
 
@@ -6764,7 +6764,7 @@ The owner of the startup sweep is undecided: the design lists it under both `wor
 | Impact set | The tests Check runs for a change |
 | Lens | A catalog of review rules for one kind of problem, with a condition that says when it applies |
 | Finding | A reviewer claim: a rule ID, a `file:line` and a quoted line of evidence |
-| Cold pass | A reviewer pass in thorough mode in addition to the lenses `[TODO: what a cold pass is (G-NEW-5)]` |
+| Cold pass | A reviewer pass in thorough mode in addition to the lenses `[TODO: what a cold pass is (G-170)]` |
 | Acceptance item | A line of a group's `TG.md` in the form `WHEN <event> THE SYSTEM SHALL <response>`, with an optional `cmd:` line |
 | Return | A trip from Check or Verify back to Build, counted against `limits.returns` |
 | Attempt | One model attempt on a task: a fresh session, a re-prompt, gate feedback or a "continue" |
@@ -6811,11 +6811,11 @@ flowchart LR
 | `internal/quality/qa.go` | The tester: acceptance items, its own worktree and Go's reruns of a failed item |
 | `internal/quality/evidence.go` | The check that a finding's quote is at its `file:line` |
 | `internal/engine/limits.go` | Retries, returns, flap detection and block reasons |
-| `internal/engine/recover.go` | Crash resume through group state's `Load`; the startup sweep `[TODO: the sweep's owner (G-NEW-12)]` |
+| `internal/engine/recover.go` | Crash resume through group state's `Load`; the startup sweep `[TODO: the sweep's owner (G-177)]` |
 | `internal/ops/budget.go` | Group wall time, the token count and the review mode |
 | `embed/lenses/<lens>.json`, `embed/lenses/<lens>.md` | The 10 lens catalogs: rule IDs, severities and file scopes in the JSON file, rule bodies in the Markdown file |
 
-The design gives no file to the baseline comparison, the impact set, the flake rule or the case-collision test; the table above holds only the steps the design places. `[TODO: the files for the baseline comparison, impact set, flake rule and case-collision test (G-NEW-1)]`
+The design gives no file to the baseline comparison, the impact set, the flake rule or the case-collision test; the table above holds only the steps the design places. `[TODO: the files for the baseline comparison, impact set, flake rule and case-collision test (G-166)]`
 
 `internal/quality` starts no session. The engine passes in each session, and the functions of this package validate what the session returns. Other files that take part:
 
@@ -6839,7 +6839,7 @@ The design gives no file to the baseline comparison, the impact set, the flake r
 
 ### 9.3 Data Model
 
-The exported names below are the working shape; the design fixes behaviour, not identifiers. `[TODO: confirm the exported names and signatures of this subsystem (G-NEW-1)]`
+The exported names below are the working shape; the design fixes behaviour, not identifiers. `[TODO: confirm the exported names and signatures of this subsystem (G-166)]`
 
 #### Verdicts and enumerations
 
@@ -7045,9 +7045,9 @@ type Precision struct {
 | `Submitted` | Findings that passed `submit_finding` validation |
 | `Verified` | Findings whose quote Go found at `file:line` |
 | `Fixed` | Verified findings the builder fixed |
-| `Disputed` | Findings the builder rejected with a result code naming the file and line `[TODO: the format of that result code (G-NEW-7)]` |
+| `Disputed` | Findings the builder rejected with a result code naming the file and line `[TODO: the format of that result code (G-172)]` |
 
-The wire shape of a finding and of the reviewer's result is `[TODO: result and finding field names (G-NEW-7)]`. The ledger keeps the precision counters; their layout is in [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability).
+The wire shape of a finding and of the reviewer's result is `[TODO: result and finding field names (G-172)]`. The ledger keeps the precision counters; their layout is in [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability).
 
 #### Tester
 
@@ -7098,7 +7098,7 @@ An acceptance item in `TG.md`, with the `cmd:` line Go reruns ([Backlog, Plannin
   needs: service:postgres
 ```
 
-The tester's wire result is `[TODO: result field names (G-NEW-7)]`.
+The tester's wire result is `[TODO: result field names (G-172)]`.
 
 #### Scope request
 
@@ -7181,9 +7181,9 @@ const (
 
 | Function | On failure |
 |---|---|
-| `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass Check and `Drive` records the error `[TODO: how a Check error is routed (G-NEW-2)]` |
+| `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass Check and `Drive` records the error `[TODO: how a Check error is routed (G-167)]` |
 | `ClassifyFailure` | Cannot fail |
-| `Baseline.Classify` | Cannot fail; a test absent from the baseline is `[TODO: a test with no base result (G-NEW-4)]` |
+| `Baseline.Classify` | Cannot fail; a test absent from the baseline is `[TODO: a test with no base result (G-169)]` |
 | `ImpactSet` | Cannot fail; an empty `changed` returns an empty set |
 | `OutOfScope`, `CaseCollisions` | Cannot fail |
 
@@ -7228,7 +7228,7 @@ func ExactlyOnce(want, got []string) error
 |---|---|
 | `Lenses` | Cannot fail |
 | `AcceptFinding` | An unknown rule ID returns an error and the finding is refused; a quote not found returns `false`, and the finding is dropped and logged |
-| `AcceptResult` | A skipped or repeated task ID returns an error; the engine rejects the result and the session counts an attempt `[TODO: how a rejected result is retried (G-NEW-7)]` |
+| `AcceptResult` | A skipped or repeated task ID returns an error; the engine rejects the result and the session counts an attempt `[TODO: how a rejected result is retried (G-172)]` |
 
 ```go
 // Tester is the quality-side half of a tester session.
@@ -7245,7 +7245,7 @@ func AdjudicateItem(reruns [2]bool) RerunOutcome
 
 | Method | On failure |
 |---|---|
-| `Rerun` | An item with no `Cmd` is never rerun, so its failure is never confirmed; a command that cannot start returns the error `[TODO: where Go reruns the command and what a start failure means (G-NEW-15)]` |
+| `Rerun` | An item with no `Cmd` is never rerun, so its failure is never confirmed; a command that cannot start returns the error `[TODO: where Go reruns the command and what a start failure means (G-180)]` |
 | `AcceptResult` | Same as the reviewer's |
 | `AdjudicateItem` | Cannot fail |
 
@@ -7292,7 +7292,7 @@ func NeedsRedesign(blocks map[string]int, reason string) bool
 | `Drive` | `AutoDeny` | A builder's `session.end` with status `needs_scope` |
 | `resume` verb | `PlanResume` | A person or the orchestrator resumes a group |
 | `Next()` | `NeedsRedesign` | `group.blocked` applies |
-| Group-wall check | `GroupWallMin` | A group's stage starts and when the wall is compared `[TODO: where the wall is compared and what a spent wall blocks as (G-NEW-10)]` |
+| Group-wall check | `GroupWallMin` | A group's stage starts and when the wall is compared `[TODO: where the wall is compared and what a spent wall blocks as (G-175)]` |
 
 ### 9.5 Behaviour
 
@@ -7339,14 +7339,14 @@ sequenceDiagram
 
 ##### Check
 
-Check runs these steps. The order and which steps are `check` actions (a command) and which run inline in Go are open. `[TODO: the order of the steps, whether the first failure stops the rest, which steps are check actions, and who emits check.done (G-NEW-2)]`
+Check runs these steps. The order and which steps are `check` actions (a command) and which run inline in Go are open. `[TODO: the order of the steps, whether the first failure stops the rest, which steps are check actions, and who emits check.done (G-167)]`
 
 | Step | Rule |
 |---|---|
 | `done_when` | Every task's `done_when` is rerun in the sandbox |
-| Scope | Every changed file is in the group's `files` or is a test sibling `[TODO: the test-sibling rule and the glob grammar (G-NEW-3)]` |
-| Secrets | The diff is scanned for secret patterns `[TODO: the secret patterns (G-NEW-3)]` |
-| Coverage | Changed-line coverage against `check.patch_coverage` (80); blocks for Go, warns for other languages `[TODO: how changed-line coverage is measured (G-NEW-4)]` |
+| Scope | Every changed file is in the group's `files` or is a test sibling `[TODO: the test-sibling rule and the glob grammar (G-168)]` |
+| Secrets | The diff is scanned for secret patterns `[TODO: the secret patterns (G-168)]` |
+| Coverage | Changed-line coverage against `check.patch_coverage` (80); blocks for Go, warns for other languages `[TODO: how changed-line coverage is measured (G-169)]` |
 | Baseline | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns |
 | Impact set | Go: the tests of every package that imports a changed package. Other languages: the full `test` class. The epic gate always runs the full suite |
 | Flake rule | Any failing test is rerun twice alone; see the flake rule below |
@@ -7380,7 +7380,7 @@ flowchart LR
   CV -->|8 percent| OUT
 ```
 
-**Reading the diagram.** Edge numbers name the data that moves; they are not an execution order. The order is open (G-NEW-2).
+**Reading the diagram.** Edge numbers name the data that moves; they are not an execution order. The order is open (G-167).
 
 ##### Baseline
 
@@ -7422,7 +7422,7 @@ func ImpactSet(deps map[string][]string, changed []string) []string {
 }
 ```
 
-`go list` omits the packages a test file imports from `.Deps`; a scratch module showed a package whose test imports `a` and nothing else does, with `deps=[]` and `testimports=[poc/a testing]`. `[TODO: whether imports in test files count toward the impact set (G-NEW-4)]`
+`go list` omits the packages a test file imports from `.Deps`; a scratch module showed a package whose test imports `a` and nothing else does, with `deps=[]` and `testimports=[poc/a testing]`. `[TODO: whether imports in test files count toward the impact set (G-169)]`
 
 ##### Flake rule
 
@@ -7471,18 +7471,18 @@ The reviewer runs 10 lenses. `correctness`, `readiness` and `quality` always app
 
 | Rule | Detail |
 |---|---|
-| Profiles | Thorough: every applicable lens in parallel plus a cold pass `[TODO: what a cold pass is (G-NEW-5)]`. Economy: one merged lens. A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality` |
+| Profiles | Thorough: every applicable lens in parallel plus a cold pass `[TODO: what a cold pass is (G-170)]`. Economy: one merged lens. A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality` |
 | Severity | `blocker` and `major` block; `minor` is reported and counted |
 | Verdicts | `met`, `not_met` or `brief_incomplete` per task ID, each exactly once; Go rejects a result that skips or repeats one |
 | Added checks | The reviewer runs build, tests and lint itself with `run`; the engine reruns any check a verdict depends on, so the verdict rests on the engine's result |
 | Findings | `submit_finding` takes a rule ID, `file:line` and quoted evidence; a finding blocks only if Go finds the quote at that line in the head or the diff; failing findings are dropped and logged |
 | Precision ledger | Per rule and model: submitted, verified, fixed, `disputed` (a builder result code naming file and line); `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days is a design change |
 | `brief_incomplete` | Blocks with `brief`; a harness fault, not counted against the builder |
-| Re-review | The delta only; cached findings keyed by `(lens, diff, prompt hash, model)` cost 0 tokens, and the prompt hash covers the lens rule set `[TODO: what the delta is and how the key is encoded (G-NEW-16)]` |
+| Re-review | The delta only; cached findings keyed by `(lens, diff, prompt hash, model)` cost 0 tokens, and the prompt hash covers the lens rule set `[TODO: what the delta is and how the key is encoded (G-181)]` |
 | Epic mode | One verdict per group over the whole epic diff |
 | Pool | Lenses run in parallel under one slot each only when `pool_max` allows; else they queue behind the group's slot |
 
-Whether each lens is its own model session or one session applies them all, how the per-lens results merge into one verdict per task, and how economy keeps the `security` lens that some components require are open. `[TODO: lens sessions, merging and the economy security lens (G-NEW-6)]`
+Whether each lens is its own model session or one session applies them all, how the per-lens results merge into one verdict per task, and how economy keeps the `security` lens that some components require are open. `[TODO: lens sessions, merging and the economy security lens (G-171)]`
 
 | Lens | Applies when | Checks |
 |---|---|---|
@@ -7524,7 +7524,7 @@ flowchart TD
 ```
 
 1. The tool refuses a rule ID that is in no lens catalog.
-2. `VerifyFinding` looks for the quote at `File:Line` in the head tree and in the diff. How exactly the line is matched is open. `[TODO: the match rule for a quote: exact line, whitespace, and the head tree versus the diff (G-NEW-7)]`
+2. `VerifyFinding` looks for the quote at `File:Line` in the head tree and in the diff. How exactly the line is matched is open. `[TODO: the match rule for a quote: exact line, whitespace, and the head tree versus the diff (G-172)]`
 3. A quote that is not found drops the finding and logs it; the finding cannot block. The precision ledger counts it as submitted, not verified.
 4. A verified finding is appended as `finding.verified`; its rule's severity decides whether the group is blocked.
 5. The precision ledger counts the finding as submitted, and as verified or not.
@@ -7630,7 +7630,7 @@ sequenceDiagram
 | Both fail in one tick | Handled in `sequence` order; both reach the builder in the one return |
 | An item has no command | Its failure is never confirmed by Go |
 
-The reviewer is never cancelled by a tester failure; Verify returns to Build only when the reviewer's session ends. `[TODO: what happens to a failed tester item that has no command, since the transition table also lists a recorded tester failure as a reason to return (G-NEW-15)]`
+The reviewer is never cancelled by a tester failure; Verify returns to Build only when the reviewer's session ends. `[TODO: what happens to a failed tester item that has no command, since the transition table also lists a recorded tester failure as a reason to return (G-180)]`
 
 ##### Scope requests
 
@@ -7665,7 +7665,7 @@ sequenceDiagram
 6. Approval adds the paths to the group's `files` as action `scope_change` (key: group plus sorted paths), logged in the ledger. Denial leaves `files` unchanged.
 7. The engine resumes the same session with the answer in the `scope_answer` slot and the group returns to Build.
 
-Where the widened `files` list is stored while the task list is locked at Intake, what the builder does after a denial, and what a second request in one task does are open. `[TODO: storage of the widened files, behaviour after a denial and after a second request (G-NEW-11)]`
+Where the widened `files` list is stored while the task list is locked at Intake, what the builder does after a denial, and what a second request in one task does are open. `[TODO: storage of the widened files, behaviour after a denial and after a second request (G-176)]`
 
 ##### Failure routing
 
@@ -7721,7 +7721,7 @@ flowchart TD
   F -->|6| G
 ```
 
-1. A restart replays the group's state events after the last snapshot through group state's `Load`; the run continues and nothing is retried, because the state is rebuilt. Which code calls `Load` is open. `[TODO: whether Drive or recover.go calls Load on a restart (G-NEW-13)]`
+1. A restart replays the group's state events after the last snapshot through group state's `Load`; the run continues and nothing is retried, because the state is rebuilt. Which code calls `Load` is open. `[TODO: whether Drive or recover.go calls Load on a restart (G-178)]`
 2. `Drive` runs every action still open under its idempotency key.
 3. The `resume` verb retakes the lease, or refuses naming the new holder, and rebuilds a removed worktree from the hidden reference.
 4. Each session continues from the provider's resume handle.
@@ -7773,7 +7773,7 @@ func TrackUsage(setting string, m Profile) bool {
 }
 ```
 
-What a spent group wall blocks as is not in the block-reason list. `[TODO: the block reason and detector for a spent group wall (G-NEW-10)]`
+What a spent group wall blocks as is not in the block-reason list. `[TODO: the block reason and detector for a spent group wall (G-175)]`
 
 ##### Token savings
 
@@ -7781,7 +7781,7 @@ The design lists 12 savings. Where each is built is in the chapter that owns the
 
 | Saving | Effect |
 |---|---|
-| Clipping | Shortens text before it enters a prompt `[TODO: which text and what length (G-NEW-14)]` |
+| Clipping | Shortens text before it enters a prompt `[TODO: which text and what length (G-179)]` |
 | Signature trimming | Reduces Go source to its signatures in a brief; trimmed slices are cached per file version |
 | Glob-picked standards | Only standards skills whose file patterns match the group's files enter the brief |
 | Delta diffs | On re-review the reviewer sees only the lines changed since the last review |
@@ -7791,7 +7791,7 @@ The design lists 12 savings. Where each is built is in the chapter that owns the
 | A stable prefix | Tools, role, repo context and standards come first and the task last |
 | A sanitizer | Strips terminal colour codes and build noise from command output |
 | Per-task sessions | Each task gets a fresh conversation |
-| Light-weight work on local models | Runs lighter work on local, free models `[TODO: which work qualifies (G-NEW-14)]` |
+| Light-weight work on local models | Runs lighter work on local, free models `[TODO: which work qualifies (G-179)]` |
 | Context compaction at 80% | At 80% of the window, old tool outputs shrink to one-line stubs; their text stays in `<session>/out/` |
 
 The brief layout is in [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs); the reply cap and compaction are in [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox).
@@ -7890,7 +7890,7 @@ stateDiagram-v2
 | Reply cut off at the output limit | Tool runtime | "continue"; 1 | `no_result`, task retry |
 | Timeout or idle | Supervisor | Stop, then a fresh session; the agent's `retries` (2) per task | Blocked |
 | 3 refusals under one rule | Guard | End the session; 3 | Task retry |
-| `done_when` fails | Check | Task retry; the agent's `retries` (2) per task `[TODO: this bound against chapter 2's 3 returns (G-NEW-8)]` | Blocked |
+| `done_when` fails | Check | Task retry; the agent's `retries` (2) per task `[TODO: this bound against chapter 2's 3 returns (G-173)]` | Blocked |
 | Regression against the baseline | Check | Back to Build with the failing test's output; `limits.returns` (3) per group | Blocked `regression` |
 | Findings or a failed acceptance item | Check, review | Back to Build in the task's own session; `limits.returns` (3) | Blocked |
 | Epic gate fails | Review | The group that last changed each file returns to Build; a finding with no file blocks the epic; `limits.returns` (3) | Blocked `epic_gate` |
@@ -7899,7 +7899,7 @@ stateDiagram-v2
 | A dependency is abandoned | Engine, after `komodo abandon` on a group others depend on | Stop its dependents; 0 | Blocked `dependency` |
 | Check fails on the epic tip after a landing | Engine | Pause landings; the last-landed group returns to Build; `limits.returns` (3) | Blocked `integration` |
 | Builder needs a file outside scope | Guard row B1 | Work-in-progress commit, end the session, keep the lease; 1 request per task | Blocked `needs_scope`; resumes on approve or deny |
-| Flap: same failure hash or zero-diff return | Recovery | Stop; 1 `[TODO: how a flap is detected (G-NEW-9)]` | Blocked |
+| Flap: same failure hash or zero-diff return | Recovery | Stop; 1 `[TODO: how a flap is detected (G-174)]` | Blocked |
 | Any model attempt on a task | Recovery | Count it; `limits.task_attempts` (6) | Blocked `attempts` |
 | Brief over half the measured context | Brief builder | Next link that fits; 1 | Blocked `context` |
 | Landing conflicts with the epic branch | Ship | Merge the epic branch into the group branch and rerun Check; 1 | Blocked `merge_conflict` |
@@ -7915,9 +7915,9 @@ The bounds in the table use three different counters, and the design is not cons
 - The builder's own gate inside the session, which reruns `done_when` before the commit, allows 2 rejected results.
 - The agent's `retries` is a count per session in the configuration chapter and a count per task in the failure table.
 
-`[TODO: reconcile the done_when bound (2 against 3) and the scope of retries (per session against per task) (G-NEW-8)]` Which counter belongs to which package is `[TODO: counter ownership (G-32)]`.
+`[TODO: reconcile the done_when bound (2 against 3) and the scope of retries (per session against per task) (G-173)]` Which counter belongs to which package is `[TODO: counter ownership (G-32)]`.
 
-The group wall has no row: `[TODO: the failure row for a spent group wall (G-NEW-10)]`.
+The group wall has no row: `[TODO: the failure row for a spent group wall (G-175)]`.
 
 **Edge cases**
 
@@ -8016,20 +8016,20 @@ const (
 | [G-29](#appendix-o-gap-register) | How `scope approve|deny` and `resume` reach `Drive` |
 | [G-31](#appendix-o-gap-register) | Stage moves the table lacks that Recovery relies on |
 | [G-32](#appendix-o-gap-register) | Which package owns each counter and which the snapshot holds |
-| G-NEW-1 | Exported names; files for the baseline, impact set, flake rule and case-collision steps |
-| G-NEW-2 | Check step order, which steps are actions, who emits `check.done`, how a Check error is routed |
-| G-NEW-3 | The test-sibling rule, secret patterns and glob grammar |
-| G-NEW-4 | Changed-line coverage; a test with no base result; test-file imports in the impact set |
-| G-NEW-5 | What a cold pass is |
-| G-NEW-6 | Lens sessions, merging, the economy security lens |
-| G-NEW-7 | Reviewer and tester result and finding field names; the quote match rule; the builder's dispute code |
-| G-NEW-8 | The `done_when` bound (2 against 3); `retries` per session against per task |
-| G-NEW-9 | How a flap is detected |
-| G-NEW-10 | The failure row for a spent group wall |
-| G-NEW-11 | Scope request: storage of widened `files`, behaviour after a denial and a second request |
-| G-NEW-12 | The owner of the startup sweep (same item as chapter 4 G-NEW-11) |
-| G-NEW-13 | Whether `Drive` or `recover.go` calls `Load` on a restart |
-| G-NEW-15 | A failed tester item with no command; where Go reruns |
+| G-166 | Exported names; files for the baseline, impact set, flake rule and case-collision steps |
+| G-167 | Check step order, which steps are actions, who emits `check.done`, how a Check error is routed |
+| G-168 | The test-sibling rule, secret patterns and glob grammar |
+| G-169 | Changed-line coverage; a test with no base result; test-file imports in the impact set |
+| G-170 | What a cold pass is |
+| G-171 | Lens sessions, merging, the economy security lens |
+| G-172 | Reviewer and tester result and finding field names; the quote match rule; the builder's dispute code |
+| G-173 | The `done_when` bound (2 against 3); `retries` per session against per task |
+| G-174 | How a flap is detected |
+| G-175 | The failure row for a spent group wall |
+| G-176 | Scope request: storage of widened `files`, behaviour after a denial and a second request |
+| G-177 | The owner of the startup sweep (same item as chapter 4 G-176) |
+| G-178 | Whether `Drive` or `recover.go` calls `Load` on a restart |
+| G-180 | A failed tester item with no command; where Go reruns |
 
 **Can wait**
 
@@ -8038,8 +8038,8 @@ const (
 | [G-08](#appendix-o-gap-register) | Whether each Linux session gets a private loopback, for two Verify suites on one port |
 | [G-17](#appendix-o-gap-register) | The 50% cache hit-rate fixture needs real API sessions |
 | [G-30](#appendix-o-gap-register) | `VerifyProgress` fields and other formats the design leaves open |
-| G-NEW-14 | Which text clipping shortens; which work runs on local models |
-| G-NEW-16 | The re-review delta and the encoding of the review cache key |
+| G-179 | Which text clipping shortens; which work runs on local models |
+| G-181 | The re-review delta and the encoding of the review cache key |
 
 ## 10. Scheduler, Cache and Observability
 
@@ -12227,6 +12227,22 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-163 | Ship, failures | What the engine does when a push, a `gh` call or a merge fails for a reason other than a conflict or a stale fence; what refuses a stale fence before the push, given git compares only the commit id (chapter 4 G-158); how the push and pull request creation, which run beside `Drive`, return their result | Owner decision; then 11.4, 11.5 and 11.7 |
 | G-164 | Release | The key file's format and what `release` does when its mode is wider than 0600; where the current and `next` public keys live in the source and how the `next` key is produced at the first release; the key names of `latest.json`; the operating system and architecture pairs built; how the release is published; how the changelog is rendered from the entries `add changelog` records; what `--notes-file` supplies | Owner decision; then 11.3 and 11.5 |
 | G-165 | Backlog, edit and sizing feedback | How `add backlog` reads the "in a run" state (the design names a task-list lock without a file); who records a task's real changed line count after Build and where, so `OverEstimate` can compare it | Owner decision; then 11.4 and chapter 3 |
+| G-166 | Quality | Exported names and signatures of `internal/quality`, `limits.go`, `recover.go` and `budget.go`; the design gives no file to the baseline comparison, the impact set, the flake rule or the case-collision test | Owner confirms the shapes in 9.3 and 9.4; design patch to the file map |
+| G-167 | Quality, Engine | Order of the 8 Check steps, whether the first failure stops the rest, which steps are `check` actions (a command, keyed by tree hash plus command) and which run inline in Go, who emits `check.done`, and how an error from Check (a sandbox refusal) is routed | Owner decision; then 9.5 Check and a patch to chapter 2 `check` |
+| G-168 | Quality | Inputs the design never lists: the test-sibling rule, the secret patterns and the glob grammar of a group's `files` | Owner decision; then 9.5 Check |
+| G-169 | Quality | How changed-line coverage is measured per language and when a language counts as detected; what Check does with a test that has no base result; whether imports in test files join the impact set (`go list` `.Deps` omits them, shown in a scratch module) | Spike, then a design patch to 9.5 |
+| G-170 | Review | What a cold pass is: the design says "every applicable lens in parallel plus a cold pass" and defines the pass nowhere | Owner decision; then 9.5 Lens selection |
+| G-171 | Review, Engine | Whether each lens is its own model session or one reviewer session applies every lens; how per-lens output merges into one verdict per task; whether a lens takes a pool slot although only builder, reviewer and tester sessions do; how the one merged economy lens keeps the `security` lens that some components require | Owner decision on the architecture page; then 9.5 and chapter 3 `verify.go` |
+| G-172 | Review, Tester | Field names of the reviewer's and the tester's results and of `submit_finding`; how a quote is matched at `file:line` (exact line, whitespace, head tree against diff); the builder result code that counts as `disputed`; how a rejected result is retried | Design patch to 9.3; with G-24 for the event data |
+| G-173 | Recovery | Bounds that disagree: a failing `done_when` is bounded at 2 by the failure table and at 3 by the transition table (`limits.returns`); `retries` is a count per session in the configuration chapter and per task in the failure table | Owner decision; then 9.7 and chapters 1, 2 and 5 |
+| G-174 | Recovery | How a flap is detected: how a failure hash is computed and how a return to Build that "changed nothing" is measured | Owner decision; then 9.5 Failure routing |
+| G-175 | Recovery, Budgets | A spent group wall (`limits.group_wall_min`) has no failure row, no detector and no block reason; the block reasons name only `budget` for tokens | Owner decision; then 9.7 and the block reasons in chapter 2 |
+| G-176 | Scope request | Where the widened `files` list is stored while the task list is locked at Intake by its card hash; what the builder does after a denial; what a second request in one task does; the content of the `scope_answer` slot | Owner decision; then 9.5 Scope requests |
+| G-177 | Recovery, Workspace | Owner of the startup sweep: the file map lists it under both `worktree.go` and `recover.go` (same item as chapter 4 G-176) | Owner decision on the sweep owner |
+| G-178 | Recovery, Engine | Whether `Drive` (chapter 2 walkthrough) or `recover.go` (Error recovery table, file map) calls `Load` on a restart | Owner decision; then 9.5 Resume |
+| G-179 | Budgets | Which text clipping shortens and to what length; which work counts as light-weight and runs on local models | Owner decision; then 9.5 Token savings |
+| G-180 | Tester | What happens to a failed acceptance item that has no `cmd:` line, since Go never confirms it yet the transition table lists a recorded tester failure as a reason to return; in which worktree Go reruns an item's command; what a command that cannot start means | Owner decision; then 9.5 The tester |
+| G-181 | Review | What "delta only" means on re-review (the lines changed since the last review, by which comparison) and how the review cache key `(lens, diff, prompt hash, model)` is encoded | Design patch; with the cache store in chapter 10 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (chapter 11)](#11-backlog-planning-ship-and-release)).
