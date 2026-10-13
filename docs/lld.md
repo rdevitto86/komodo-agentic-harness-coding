@@ -5874,7 +5874,7 @@ The guard rows that hold the steering phrases live in `embed/policy.json`, which
 
 ### 8.3 Data Model
 
-All Go names in this chapter are derived from the stated behaviour; the design fixes the behaviour and not the names. [TODO: confirm every exported name and signature in 8.3 and 8.4 (G-NEW-15)]
+All Go names in this chapter are derived from the stated behaviour; the design fixes the behaviour and not the names. [TODO: confirm every exported name and signature in 8.3 and 8.4 (G-137)]
 
 #### Skill file
 
@@ -5884,12 +5884,12 @@ Every `SKILL.md` opens with frontmatter, then Markdown sections. A line starting
 ---
 v: 1
 name: standards-go
-description: "[TODO: the description text of each skill (G-NEW-1)]"
+description: "[TODO: the description text of each skill (G-123)]"
 globs:
   - "*.go"
 markers: []
 sections:
-  - "[TODO: the section names of each skill (G-NEW-1)]"
+  - "[TODO: the section names of each skill (G-123)]"
 ---
 <a Markdown heading line>
 - **Never ... (the rest of the line is the rule text)
@@ -5916,11 +5916,11 @@ type Frontmatter struct {
 | `v` | int | Schema version, 1 |
 | `name` | string | The skill name, the same as its folder name |
 | `description` | string | One line |
-| `globs` | list | File patterns; a match with any file in the group's `files` selects the skill. [TODO: the glob grammar (G-NEW-2)] |
+| `globs` | list | File patterns; a match with any file in the group's `files` selects the skill. [TODO: the glob grammar (G-124)] |
 | `markers` | list | Repo files; `standards-ui-mobile` lists `AndroidManifest.xml` and `*.xcodeproj`; `standards-aws` lists `cdk.json`, `samconfig.toml` and an Amazon Web Services provider in `*.tf` |
 | `sections` | list | Headings an agent may pull; the gate fails an entry with no heading and a duplicate heading |
 
-The frontmatter syntax, the parser and the meaning of an empty `markers` list are open. [TODO: the frontmatter syntax and how it is parsed with the standard library only (G-NEW-1)] [TODO: whether an empty `markers` list means no marker is required (G-NEW-2)]
+The frontmatter syntax, the parser and the meaning of an empty `markers` list are open. [TODO: the frontmatter syntax and how it is parsed with the standard library only (G-123)] [TODO: whether an empty `markers` list means no marker is required (G-124)]
 
 **Versioning.** Skill files are compiled into the binary that reads them, so a reader never meets another version at run time. The gate accepts only `v: 1`.
 
@@ -5942,9 +5942,9 @@ type IndexEntry struct {
 ```json
 {
   "name": "standards-ui-mobile",
-  "globs": ["[TODO: the globs of each skill (G-NEW-1)]"],
+  "globs": ["[TODO: the globs of each skill (G-123)]"],
   "markers": ["AndroidManifest.xml", "*.xcodeproj"],
-  "sections": ["[TODO: the section names of each skill (G-NEW-1)]"],
+  "sections": ["[TODO: the section names of each skill (G-123)]"],
   "sha256": "[TODO: the fingerprint, generated at build (G-30)]"
 }
 ```
@@ -5983,7 +5983,7 @@ type Rule struct {
 | `Rule.ID` | string | `std.<skill>.<n>`, the identifier a reviewer finding cites |
 | `Rule.Skill`, `Line` | string | The skill and the source line |
 
-[TODO: how `n` is numbered, how the rule text is cut from the line, and the name and location of the regenerated rule list the gate compares (G-NEW-4)]
+[TODO: how `n` is numbered, how the rule text is cut from the line, and the name and location of the regenerated rule list the gate compares (G-126)]
 
 #### Code list
 
@@ -6018,7 +6018,7 @@ const (
 
 | Code | Used by | Meaning |
 |---|---|---|
-| `branch_missing` | Engine | [TODO: the exact trigger (G-NEW-11)] |
+| `branch_missing` | Engine | [TODO: the exact trigger (G-133)] |
 | `cancelled` | Session, run | Stopped on purpose; also a session exit reason |
 | `paused` | Session | Halted by a provider limit with a resume handle; resumes on a ledger timer, not by a person |
 | `integration` | Engine | Check failed on the epic tip after a landing; landings pause and the last-landed group returns to Build |
@@ -6040,7 +6040,7 @@ const (
 
 Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
 
-[TODO: the trigger of `branch_missing`, the template name of codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`), and why the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `brief`, `contract` and `state_invalid` of chapter 2 are absent from this list (G-NEW-11)]
+[TODO: the trigger of `branch_missing`, the template name of codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`), and why the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `brief`, `contract` and `state_invalid` of chapter 2 are absent from this list (G-133)]
 
 **Versioning.** The list is compiled into the binary and into `embed/state.schema.json`; a code outside it fails schema validation.
 
@@ -6112,7 +6112,7 @@ type OtherFacts struct {
 | Path | The path is in the diff or the worktree |
 | Task identifier | The task exists |
 
-[TODO: which fact fields are checked as which kind, which of `SHA`, `Ref` and `TaskID` each code carries, the field names and types of `pr_body`, `status`, `run_report`, `report.<verb>`, `error.<code>` and `event.<type>`, and how a struct field declares which check applies (G-NEW-8)]
+[TODO: which fact fields are checked as which kind, which of `SHA`, `Ref` and `TaskID` each code carries, the field names and types of `pr_body`, `status`, `run_report`, `report.<verb>`, `error.<code>` and `event.<type>`, and how a struct field declares which check applies (G-130)]
 
 **What a person reads, the facts behind it, and the template**
 
@@ -6138,14 +6138,14 @@ var funcs template.FuncMap // keys: code, n, plural, dur, path, table
 
 | Function | Meaning |
 |---|---|
-| `code`, `n`, `plural`, `dur`, `path`, `table` | [TODO: the argument and result types and the meaning of each function (G-NEW-7)] |
+| `code`, `n`, `plural`, `dur`, `path`, `table` | [TODO: the argument and result types and the meaning of each function (G-129)] |
 
 **Files per profile.** `embed/output/{adhd,standard}/` each hold `<name>.tmpl` and `<name>.golden` for every template name; a golden file is `embed/output/<profile>/<name>.golden`. The profile is fixed per machine; no repo setting or flag changes a template.
 
 | Profile | Layout |
 |---|---|
 | `adhd` | The verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`) |
-| `standard` | [TODO: how the layout differs from `adhd`, and whether `embed/output/standard.md` exists beside `embed/output/adhd.md` (G-NEW-12)] |
+| `standard` | [TODO: how the layout differs from `adhd`, and whether `embed/output/standard.md` exists beside `embed/output/adhd.md` (G-134)] |
 
 The one template whose text the design fixes is the line for the code `other`, which covers every unlisted case:
 
@@ -6153,13 +6153,13 @@ The one template whose text the design fixes is the line for the code `other`, w
 Needs a decision; details in {{.Path}}
 ```
 
-[TODO: the text of every other template and the inputs of each golden fixture (G-NEW-13)]
+[TODO: the text of every other template and the inputs of each golden fixture (G-135)]
 
 **Versioning.** Templates and golden files are compiled into the binary. A change to any template is a change to its golden file in the same commit; the gate fails a mismatch.
 
 ### 8.4 Interfaces
 
-Derived signatures; the behaviour on each error is stated beside the method. [TODO: the reaction of each caller to a loader or render error (G-NEW-15)]
+Derived signatures; the behaviour on each error is stated beside the method. [TODO: the reaction of each caller to a loader or render error (G-137)]
 
 #### Skill loader
 
@@ -6199,11 +6199,11 @@ var (
 | `Select` | `ErrSkillUnknown` | A name in `always` is absent from the index |
 | `Get` | `ErrSkillNotAllowed` | The skill is not on `skills.allow`; the pull is refused |
 | `Get` | `ErrSkillUnknown` | No skill has that name |
-| `Get` | `ErrSectionUnknown` | [TODO: the behaviour for a section not in `sections` (G-NEW-1)] |
+| `Get` | `ErrSectionUnknown` | [TODO: the behaviour for a section not in `sections` (G-123)] |
 | `Get` | `ErrSkillHash` | Same as `Select`: the body is refused |
 | `List` | none | A map read of the embedded index |
 
-[TODO: which allowlist `komodo skill get` applies when typed outside a session, and the exact filter of `komodo skill list --agent <name>` (G-NEW-2)]
+[TODO: which allowlist `komodo skill get` applies when typed outside a session, and the exact filter of `komodo skill list --agent <name>` (G-124)]
 
 #### Renderer
 
@@ -6343,7 +6343,7 @@ sequenceDiagram
   Note over R,F: invalid at step 3 returns ErrFactInvalid
 ```
 
-[TODO: where redaction and the attribution check sit relative to wrapping and colour, and what a hit does to the line (G-NEW-9)]
+[TODO: where redaction and the attribution check sit relative to wrapping and colour, and what a hit does to the line (G-131)]
 
 #### Algorithms
 
@@ -6373,7 +6373,7 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule. Ro
 
 `OrchestratorRules` returns the text of `embed/rules/orchestrator.md`. Install and `sync` write it into the Komodo block of `AGENTS.md` beside the style text from `OutputStyle`; the block layout and the markers are in [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate). The engine enforces the same prohibitions on its side, so a rule the orchestrator ignores is still refused ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)).
 
-[TODO: how `embed/rules/orchestrator.md` relates to the O rows in `embed/policy.json`, its file format, and whether the gate compares the two (G-NEW-14)]
+[TODO: how `embed/rules/orchestrator.md` relates to the O rows in `embed/policy.json`, its file format, and whether the gate compares the two (G-136)]
 
 ##### Selecting skills
 
@@ -6393,9 +6393,9 @@ Select(policy, files, markers):
 ```
 
 - Every match loads. There is no count cap and no token cap.
-- [TODO: whether a skill in both `always` and `allow` is listed once, and the order inside `always` when it names several skills (G-NEW-2)]
+- [TODO: whether a skill in both `always` and `allow` is listed once, and the order inside `always` when it names several skills (G-124)]
 - The markers `standards-ui-mobile` needs are alternatives: `AndroidManifest.xml` or `*.xcodeproj`. `standards-aws` needs one of `cdk.json`, `samconfig.toml` or an Amazon Web Services provider in a `*.tf` file. `standards-cicd` no longer matches `**/Makefile`.
-- [TODO: where markers are looked up (worktree, base commit or repo root), how a provider inside `*.tf` is written as a marker, and the meaning of an empty list (G-NEW-2)]
+- [TODO: where markers are looked up (worktree, base commit or repo root), how a provider inside `*.tf` is written as a marker, and the meaning of an empty list (G-124)]
 
 **📐 When is a skill selected?**
 ```mermaid
@@ -6418,7 +6418,7 @@ flowchart TD
 5. Without a section, return the whole body. With a section, return that section.
 6. There is no pull limit.
 
-[TODO: where a section ends, how the heading text is matched, and whether the 4 KB reply cap of the tools in chapter 6 applies to a pulled skill, since one skill may hold 6,000 tokens (G-NEW-16)]
+[TODO: where a section ends, how the heading text is matched, and whether the 4 KB reply cap of the tools in chapter 6 applies to a pulled skill, since one skill may hold 6,000 tokens (G-138)]
 
 ##### Verifying a body
 
@@ -6426,7 +6426,7 @@ flowchart TD
 2. Compare it with the `sha256` of the skill's index row.
 3. On a mismatch return `ErrSkillHash`. The skill is refused.
 
-The cache stores skill bodies by content hash and the index by binary version, so the index is rebuilt only when the binary changes. [TODO: whether a body read from the cache is verified again or only a body read from the embedded files (G-NEW-1)]
+The cache stores skill bodies by content hash and the index by binary version, so the index is rebuilt only when the binary changes. [TODO: whether a body read from the cache is verified again or only a body read from the embedded files (G-123)]
 
 ##### Compiling standards lines into rule identifiers
 
@@ -6442,7 +6442,7 @@ A reviewer finding must cite a rule identifier, so a finding cites a rule and no
 2. Search each skill body for each phrase. A hit makes the gate fail, naming the skill.
 3. `doctor` runs the same scan on the repo addendum. A hit is a warning, and the addendum still loads.
 
-The list has 6 entries: `ignore previous`, `you are now`, `system prompt`, `disregard`, `komodo config`, `komodo install`. A skill is Komodo's own text, so it is refused; the addendum is the repo owner's text, so it is kept. [TODO: whether these 6 phrases are final; they are chosen by judgment and tuned from `doctor` warnings (G-13)] [TODO: how a phrase matches: letter case, whole words, and whether frontmatter is scanned (G-NEW-6)]
+The list has 6 entries: `ignore previous`, `you are now`, `system prompt`, `disregard`, `komodo config`, `komodo install`. A skill is Komodo's own text, so it is refused; the addendum is the repo owner's text, so it is kept. [TODO: whether these 6 phrases are final; they are chosen by judgment and tuned from `doctor` warnings (G-13)] [TODO: how a phrase matches: letter case, whole words, and whether frontmatter is scanned (G-128)]
 
 ##### Rendering a line
 
@@ -6465,7 +6465,7 @@ func parse(name, text string) (*template.Template, error) {
 
 Secret redaction (G4) and the attribution-trailer check (G5) run on the rendered text, after step 4.
 
-[TODO: the escape rule for a backtick or a newline inside a fact, and how wrapping treats code spans and tables (G-NEW-9)]
+[TODO: the escape rule for a backtick or a newline inside a fact, and how wrapping treats code spans and tables (G-131)]
 
 ##### Limiting tables and unlisted cases
 
@@ -6474,7 +6474,7 @@ Secret redaction (G4) and the attribution-trailer check (G5) run on the rendered
 - A code that has no template of its own is `other`. It renders one fixed line, "Needs a decision; details in `<path>`", and the model's own text goes into that file.
 - Prose fields such as the builder `summary` are never rendered by a template.
 
-[TODO: the exact text of the `N more` line and the label of the moved cell (G-NEW-9)]
+[TODO: the exact text of the `N more` line and the label of the moved cell (G-131)]
 
 ##### Build-time checks
 
@@ -6515,7 +6515,7 @@ flowchart TD
 | Goldens | A template rendered under either profile differs by one byte from its golden file |
 | Worker files | A worker `agent.json` lists `run`, `plan`, `respond` or `komodo` in its allowlist |
 
-[TODO: how tokens are counted for the 6,000-token limit and whether frontmatter counts (G-NEW-3)] [TODO: whether the worker check also names `release`, which is an orchestrator skill (G-NEW-5)]
+[TODO: how tokens are counted for the 6,000-token limit and whether frontmatter counts (G-125)] [TODO: whether the worker check also names `release`, which is an orchestrator skill (G-127)]
 
 ##### No leaks
 
@@ -6540,7 +6540,7 @@ The five orchestrator skills are Markdown files under `embed/skills/`, served by
 | `plan` | Planning epics and backlog work |
 | `run` | Running groups, including `run --stage` |
 | `respond` | Answering pull request threads with `komodo threads` and `komodo gate` |
-| `release` | The workflow around the human-only `release` verb. [TODO: its contents (G-NEW-5)] |
+| `release` | The workflow around the human-only `release` verb. [TODO: its contents (G-127)] |
 
 ### 8.6 State
 
@@ -6564,7 +6564,7 @@ stateDiagram-v2
 | Checking | Every fact passes | Rendered | The line is escaped, filled, wrapped and coloured |
 | Checking | A fact fails, first time | Reprompted | The engine sent the schema re-prompt; 1 re-prompt is spent |
 | Reprompted | The model returns facts | Checking | The new facts are checked from the start |
-| Checking | A fact fails after the re-prompt | Unresolved | [TODO: what the engine does (G-NEW-10)] |
+| Checking | A fact fails after the re-prompt | Unresolved | [TODO: what the engine does (G-132)] |
 
 The schema re-prompt is the one the session supervisor sends for a result that breaks its schema ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)).
 
@@ -6592,7 +6592,7 @@ The schema re-prompt is the one the session supervisor sends for a result that b
 | A steering phrase in the repo's `AGENTS.md` | `doctor` | Warns; the addendum still loads into briefs |
 | A skill body differs from its index fingerprint | `Select`, `Get` | `ErrSkillHash`; the skill is refused |
 | A pull of a skill not on `skills.allow` | `Get` | `ErrSkillNotAllowed`; the pull is refused |
-| A pull of a section not in `sections` | `Get` | [TODO: the behaviour (G-NEW-1)] |
+| A pull of a section not in `sections` | `Get` | [TODO: the behaviour (G-123)] |
 | A standards skill edited without the regenerated rule list | The gate | Fails |
 | A worker `agent.json` lists `run`, `plan`, `respond` or `komodo` | The gate | Fails |
 | A brief is over the link's ceiling | Brief builder | No skill is dropped; next link, else Blocked `context` ([chapter 5](#5-sessions-agents-and-briefs)) |
@@ -6602,7 +6602,7 @@ The schema re-prompt is the one the session supervisor sends for a result that b
 | A golden file differs from the rendered bytes | The gate | Fails |
 | A template names a fact the struct lacks at run time | `missingkey=error` | `Render` returns an error; the gate prevents it at build |
 | A commit, path or task identifier fails its check | `Render` | `ErrFactInvalid`; the engine sends the schema re-prompt, 1 time |
-| A fact still fails after the re-prompt | `Render` | [TODO: what the engine does (G-NEW-10)] |
+| A fact still fails after the re-prompt | `Render` | [TODO: what the engine does (G-132)] |
 | A code with no template of its own | `Render` | Code `other`: the fixed line pointing to a file |
 | A table over 5 rows, or a cell over 45 characters | `Render` | Top 5 rows plus `N more: <what>`; the cell moves below |
 | Broken Komodo block markers in `AGENTS.md` | Brief builder, `doctor` | The whole addendum is dropped from briefs; `doctor` reports it ([chapter 5](#5-sessions-agents-and-briefs)) |
@@ -6615,7 +6615,7 @@ The engine reads these keys when a run starts and keeps that snapshot until the 
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `output.profile` | `adhd` or `standard` | `adhd` | Picks the template set; facts and codes are the same under both. After a change, `komodo sync` rewrites the block in `AGENTS.md` |
-| `output.turn_end_summary` | boolean | `true` | Turns the 4 fixed headings at the end of reports on or off. [TODO: which 4 headings they are (G-NEW-12)] |
+| `output.turn_end_summary` | boolean | `true` | Turns the 4 fixed headings at the end of reports on or off. [TODO: which 4 headings they are (G-134)] |
 | `output.color` | `auto`, `on` or `off` | `auto` | `auto` decides from the terminal, `on` forces colour, `off` removes it; applied only at render time |
 
 The environment variable `NO_COLOR` and the flag `--no-color` also switch colour off. No repo setting and no flag changes a template.
@@ -6668,7 +6668,7 @@ Unit cases use fixtures and mocks; component cases run the gate, `doctor` and th
 **Skill loader**
 - A planted `ignore previous instructions` line in a skill fails `gate`.
 - The same line in the fixture repo's `AGENTS.md` makes `doctor` warn, and the brief still loads.
-- A skill of 6,001 tokens fails `gate`. [TODO: how the tokens are counted (G-NEW-3)]
+- A skill of 6,001 tokens fails `gate`. [TODO: how the tokens are counted (G-125)]
 
 **Rules and output contract**
 - A template referencing an unknown fact fails `gate` at build, not at run time.
@@ -6688,27 +6688,27 @@ Gap rows live in the [gap register](#appendix-o-gap-register); numbers marked G-
 
 #### Blocks building
 
-- G-NEW-1: the frontmatter syntax and parser, the section rules, the behaviour for an unknown section, and whether a cache read is verified.
+- G-123: the frontmatter syntax and parser, the section rules, the behaviour for an unknown section, and whether a cache read is verified.
 - [G-30](#appendix-o-gap-register): the index file layout, its key names and the bytes the fingerprint covers.
-- G-NEW-2: skill selection edge rules, the allowlist for `skill get` outside a session, and the glob grammar.
-- G-NEW-3: how tokens are counted for the 6,000-token skill limit.
-- G-NEW-4: rule identifier numbering and the regenerated rule list.
-- G-NEW-6: how a steering phrase matches.
-- G-NEW-7: the 6 template functions.
-- G-NEW-8: the facts of every template and how a field declares its check.
-- G-NEW-9: escaping, wrapping, table overflow text, and redaction placement.
-- G-NEW-10: a fact that fails after the re-prompt.
-- G-NEW-11: the code list against the block reasons, and the trigger of `branch_missing`.
-- G-NEW-14: the relation of `embed/rules/orchestrator.md` to the O rows in `embed/policy.json`.
-- G-NEW-15: confirmation of the derived names, and each caller's reaction to a loader or render error.
-- G-NEW-16: the reply cap of the `skill` tool against 6,000-token skills.
+- G-124: skill selection edge rules, the allowlist for `skill get` outside a session, and the glob grammar.
+- G-125: how tokens are counted for the 6,000-token skill limit.
+- G-126: rule identifier numbering and the regenerated rule list.
+- G-128: how a steering phrase matches.
+- G-129: the 6 template functions.
+- G-130: the facts of every template and how a field declares its check.
+- G-131: escaping, wrapping, table overflow text, and redaction placement.
+- G-132: a fact that fails after the re-prompt.
+- G-133: the code list against the block reasons, and the trigger of `branch_missing`.
+- G-136: the relation of `embed/rules/orchestrator.md` to the O rows in `embed/policy.json`.
+- G-137: confirmation of the derived names, and each caller's reaction to a loader or render error.
+- G-138: the reply cap of the `skill` tool against 6,000-token skills.
 
 #### Can wait
 
 - [G-13](#appendix-o-gap-register): tuning the steering-phrase list.
-- G-NEW-5: contents of the five orchestrator skills and whether the worker ban names `release`.
-- G-NEW-12: the `standard` profile layout and the 4 turn-end headings.
-- G-NEW-13: the text of every template and the golden fixture inputs.
+- G-127: contents of the five orchestrator skills and whether the worker ban names `release`.
+- G-134: the `standard` profile layout and the 4 turn-end headings.
+- G-135: the text of every template and the golden fixture inputs.
 - [G-20](#appendix-o-gap-register): the `codex-cli` link and its `AGENTS.md` rule.
 - [G-28](#appendix-o-gap-register): how `komodo init` places the orchestrator skills in the global Claude Code setup.
 
@@ -9468,6 +9468,22 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-120 | Locking | Locking when two processes write `config.json`, `config.sha` and `config.log`, or one reads while another writes | Owner decision |
 | G-121 | CLI validate | The closest-match distance and cutoff, whether an unknown agent name is refused, pin check and repo resolution outside a git repository, which verbs the hash guard exempts, and the controlling-terminal check on native Windows | Owner decision; the Windows check proven when a Windows machine exists |
 | G-122 | Configuration values | The 4 turn-end headings of `output.turn_end_summary`; the values of `sandbox.network` besides `deny`; the package that defines `CapacityProfile` and the mapping from agent weight to `effort`; command combination for a repo with 2 markers; the derived `limits.group_wall_min` when above 720 | Owner decision |
+| G-123 | Skills, files | The frontmatter syntax and how it is parsed with the standard library only; the description and section names of each skill; where a section ends and how a heading is matched; the behaviour for a pull of a section not in `sections`; whether a body read from the cache is verified again | Owner decision with the skill file format; then 8.3 and 8.5 |
+| G-124 | Skills, selection | The meaning of an empty `markers` list; where markers are looked up (worktree, base commit or repo root); how an Amazon Web Services provider inside a `*.tf` file is written as a marker; whether a skill in both `always` and `allow` is listed once; the order inside `always`; which allowlist `komodo skill get` applies outside a session; the exact filter of `skill list --agent <name>`; the glob grammar | Owner decision, with the grammar from the tools chapter; then 8.5 Selecting skills |
+| G-125 | Skills, gate | How tokens are counted for the 6,000-token limit per skill, and whether frontmatter counts. The proof case with 6,001 tokens needs the rule | Owner decision with the token-counting rule shared with the brief gate |
+| G-126 | Skills, rules | How `n` in `std.<skill>.<n>` is numbered; how the rule text is cut from a `- **Never` or `- **Always` line; the name and location of the regenerated rule list the gate compares | Design patch to 8.3 and 8.5 |
+| G-127 | Skills, orchestrator | The contents of the `release` skill; the bodies of `komodo`, `plan`, `run` and `respond`, of which only the roles are designed; whether the worker ban in `agent.json` also names `release` | Authoring task and owner decision |
+| G-128 | Skills, steering | How a steering phrase matches: letter case, whole words, and whether frontmatter is scanned. The list itself is G-13 | Owner decision; then 8.5 Scanning for steering phrases |
+| G-129 | Output, functions | The argument and result types and the meaning of the 6 template functions `code`, `n`, `plural`, `dur`, `path`, `table` | Design patch to 8.3 |
+| G-130 | Output, facts | Which of commit hash, reference and task identifier each `needs.<code>` carries; the field names and types of the facts of `pr_body`, `status`, `run_report`, `report.<verb>`, `error.<code>` and `event.<type>`; the check for a reference; how a struct field declares which check applies | Owner decision with a per-template fact table |
+| G-131 | Output, rendering | The escape rule for a backtick or newline in a fact; how wrapping at 80 columns treats code spans and tables; the text of the `N more` line and the label of a moved cell; where secret redaction and the attribution check sit relative to wrapping and colour, and what a hit does | Owner decision; then 8.5 Rendering a line |
+| G-132 | Output, re-prompt | What the engine does when a fact still fails after the 1 schema re-prompt | Owner decision; then 8.6 |
+| G-133 | Output, codes | The trigger of `branch_missing`; the template name of the codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`); the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `brief`, `contract` and `state_invalid` are event reasons yet absent from the code list, while the design says every event reason is a code from the list; whether `Code` and the state package's `Reason` are one type | Owner decision; then 8.3 Code list and the block reasons table of chapter 2 |
+| G-134 | Output, profiles | How the `standard` layout differs from `adhd`; whether `embed/output/standard.md` exists beside `embed/output/adhd.md`; which 4 headings `output.turn_end_summary` controls | Owner decision |
+| G-135 | Output, templates | The text of every template and the inputs of each golden fixture; only the line for the code `other` is fixed | Authoring task |
+| G-136 | Rules, orchestrator | How `embed/rules/orchestrator.md` relates to the O rows in `embed/policy.json` (generated from them or written beside them); its file format; whether the gate compares the two | Owner decision; then 8.5 Rule enforcement map |
+| G-137 | Skills, output | Every exported name and signature in 8.3 and 8.4 is derived from stated behaviour; each caller's reaction to a loader error or a render error is not designed | Owner confirms the shapes |
+| G-138 | Skills, tools | A `skill` pull may return up to 6,000 tokens, while every tool except `read` returns at most 4 KB; whether the cap applies to `skill` | Owner decision; then 8.5 Pulling a skill and the tools chapter |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
