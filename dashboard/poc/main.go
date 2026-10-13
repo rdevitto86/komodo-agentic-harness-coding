@@ -27,19 +27,24 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("read mock groups: %w", err)
 	}
+
 	var gs []dashboard.Group
 	if err := json.Unmarshal(data, &gs); err != nil {
 		return fmt.Errorf("decode mock groups: %w", err)
 	}
+
 	views := filepath.Join(os.TempDir(), "komodo-dashboard-groups.json")
 	if err := write(views, gs); err != nil {
 		return err
 	}
+
 	go simulate(views, gs)
+
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return fmt.Errorf("make token: %w", err)
 	}
+
 	usage := os.Getenv("KOMODO_POC_USAGE") == "on"
 	return dashboard.Serve(dashboard.New(hex.EncodeToString(b), views, usage))
 }

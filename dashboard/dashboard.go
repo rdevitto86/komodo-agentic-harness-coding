@@ -16,19 +16,21 @@ import (
 	"time"
 )
 
-// assets holds htmx 2.0.11 and the pipeline diagram script, the only client-side code.
-//
-//go:embed assets/htmx.min.js assets/diagram.js
-var assets embed.FS
+var (
+	// assets holds htmx 2.0.11 and the pipeline diagram script, the only client-side code.
+	//
+	//go:embed assets/htmx.min.js assets/diagram.js
+	assets embed.FS
 
-// Stages are the pipeline stages in order, as the diagram draws them.
-var Stages = []string{"Intake", "Build", "Check", "Verify", "Ship", "Blocked"}
+	// Stages are the pipeline stages in order, as the diagram draws them.
+	Stages = []string{"Intake", "Build", "Check", "Verify", "Ship", "Blocked"}
 
-// Agents are the seven agents whose model the page offers to change.
-var Agents = []string{"builder", "reviewer", "planner", "tester", "architect", "researcher", "scout"}
+	// Agents are the seven agents whose model the page offers to change.
+	Agents = []string{"builder", "reviewer", "planner", "tester", "architect", "researcher", "scout"}
 
-// Models are the agent `model` values the page offers, as the config agent group names them.
-var Models = []string{"opus", "sonnet", "haiku", "opus-prev"}
+	// Models are the agent `model` values the page offers, as the config agent group names them.
+	Models = []string{"opus", "sonnet", "haiku", "opus-prev"}
+)
 
 // Group is one row of the groups view: where a group is and who works on it.
 type Group struct {
@@ -141,8 +143,18 @@ func (s *Server) page(w http.ResponseWriter, _ *http.Request) {
 			flowX, flowEnd = append(flowX, 140+i*150), append(flowEnd, 170+i*150)
 		}
 	}
-	data := map[string]any{"Token": s.token, "Stages": Stages, "StageX": x, "StageMid": mid,
-		"FlowX": flowX, "FlowEnd": flowEnd, "Agents": Agents, "Models": Models}
+
+	data := map[string]any{
+		"Token":    s.token,
+		"Stages":   Stages,
+		"StageX":   x,
+		"StageMid": mid,
+		"FlowX":    flowX,
+		"FlowEnd":  flowEnd,
+		"Agents":   Agents,
+		"Models":   Models,
+	}
+
 	if err := pageTmpl.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -154,10 +166,12 @@ func (s *Server) readGroups() ([]Group, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read groups view: %w", err)
 	}
+
 	var gs []Group
 	if err := json.Unmarshal(data, &gs); err != nil {
 		return nil, fmt.Errorf("decode groups view: %w", err)
 	}
+
 	if !s.usage {
 		for i := range gs {
 			gs[i].Tokens, gs[i].USD = 0, 0
@@ -173,7 +187,9 @@ func (s *Server) groups(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := rowsTmpl.Execute(w, map[string]any{"Groups": gs, "Token": s.token, "Usage": s.usage, "Actions": s.Actions()}); err != nil {
+	if err := rowsTmpl.Execute(w, map[string]any{
+		"Groups": gs, "Token": s.token, "Usage": s.usage, "Actions": s.Actions()},
+	); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -195,6 +211,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+
 	var last []byte
 	for {
 		if gs, err := s.readGroups(); err == nil {
@@ -207,6 +224,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				last = frame
 			}
 		}
+
 		select {
 		case <-r.Context().Done():
 			return
@@ -221,12 +239,14 @@ func (s *Server) setModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("parse form: %v", err), http.StatusBadRequest)
 		return
 	}
+
 	s.mu.Lock()
 	for _, a := range Agents {
 		if m := r.PostForm.Get(a); slices.Contains(Models, m) {
 			s.actions = append(s.actions, "model "+a+"="+m)
 		}
 	}
+
 	n := len(s.actions)
 	s.mu.Unlock()
 	fmt.Fprintf(w, "%d actions recorded", n)
