@@ -6981,7 +6981,235 @@ classDiagram
 - Intake locks the task list by `card_hash`; edits to a locked group refuse `locked` until landing or abandon.
 - `status` on 1,000 rows renders under 100 ms.
 
-**Lookup:** [Appendix K](#appendix-k-scheduler-cache-store-and-observability) holds the scheduler, cache and ledger tables.
+**Lookup:** [Appendix K](#10-scheduler-cache-and-observability) holds the scheduler, cache and ledger tables.
+
+
+
+#### Scheduler and job templates
+
+
+**In plain terms.** The scheduler lets Komodo run a chosen set of AI workers on a timer, such as a nightly code review, without anyone typing a command. A job template is a small JSON file that names which workers run, which inputs they get, and how often. Without it, every run would have to start from a person or the orchestrator (the Claude Code session that drives Komodo, see Glossary) typing `komodo run`. A person writes the template; the operating system's scheduler calls `komodo jobs tick` every 5 minutes; the engine (the `komodo` binary, see Glossary) does the rest.
+
+| Item | Rule |
+|---|---|
+| Template | `{name, agents[], slots{}, every}`; names an agent subset, brief slots and an interval, never limits; decoded strictly; lives in `embed/jobs/` or `~/.komodo/jobs/` |
+| `jobs tick` | Idempotent, one engine step: enqueue due jobs, fire due timer records (`wait_until`), drive the pool once; a tick with nothing due exits under 50 ms with no network and reads only `jobs/state.json`, the queue and the timer records, through the state manager |
+| Callers | A launchd, cron or Task Scheduler entry from `install --schedule`, every 5 minutes; Claude Code `/loop` also works at the cost of a model turn per tick |
+| Run id | `job-<name>-<n>`, with its own ledger rows and report; `status --wait` takes it |
+| Counters | `jobs/state.json`: `attempt`, `next_at`, `last_fail_hash`, `running` |
+| Overlap | A running job holds lease `job-<name>` with a fence; the next tick's queue item is refused as a duplicate and logged |
+| Queue | Same queue as groups, `priority: normal`; never preempts a group; fair share treats each job as its own repo |
+| Events | `job.due`, `job.fail` |
+| Minimum interval | 5 min |
+| Retries | 3, backoff (waiting longer between retries) 30 s, 2 m, 8 m ±20%; then Blocked, which wakes `status --wait` |
+| Shipped | None; one example at `templates/jobs/nightly-review.json` |
+
+**What each one does**
+- **Template:** A JSON file with four fields: a name, the agents (worker roles, see Glossary) to run, the brief slots (named inputs to a worker's prompt) to fill, and how often to run. It never sets limits; a job run uses the normal `komodo config` limits. The engine reads it strictly, so an unknown field is an error; it lives in the binary's `embed/jobs/` folder or in your `~/.komodo/jobs/` folder.
+- **`jobs tick`:** The verb the operating system calls on a timer. One call puts jobs whose time has come into the work queue, fires any due pause timers (timer records holding `wait_until`, the time a session paused on a provider limit may resume), and moves the session pool forward one step. Running it twice changes nothing extra, and a tick with nothing to do exits in under 50 ms without touching the network.
+- **Callers:** Who runs `jobs tick`. `komodo install --schedule` writes an entry for launchd (macOS), cron (Linux) or Task Scheduler (Windows) that calls it every 5 minutes. Claude Code's `/loop` command can call it instead, but each call then costs a model turn.
+- **Run id:** Each job run is named `job-<name>-<n>`, with its own rows in the ledger (Komodo's record of sessions and events, see [Runtime observability (Appendix K)](#runtime-observability)) and its own report. `status --wait` accepts that id, so the orchestrator can wait for the job to finish.
+- **Counters:** The file `jobs/state.json` keeps, per job, the attempt count, when the next run is due, the hash (a content fingerprint) of the last failure, and whether the job is running now. The engine reads it on every tick.
+- **Overlap:** While a job runs it holds a lease named `job-<name>` (a lease is a lock file on the machine, see Glossary) with a fence (a counter that rejects stale holders, see Glossary). If the next tick finds the job still running, it refuses the duplicate and writes one log line. The user sees one skip entry, never two copies of the job.
+- **Queue:** Jobs wait in the same work queue as task groups, at normal priority. A job never interrupts a running group. The fair-share rule, which rotates between repos so none hogs the pool, counts each job as its own repo, so a busy repo cannot starve it.
+- **Events:** The engine records `job.due` when a job's time comes and `job.fail` when a run fails. Both appear in the event log.
+- **Minimum interval:** A template cannot ask to run more often than every 5 minutes.
+- **Retries:** A failed job is retried 3 times, waiting 30 seconds, then 2 minutes, then 8 minutes, each wait varied by up to 20%. After the third failure the job is Blocked (a holding state that needs a person or the orchestrator, see Glossary), and `status --wait` wakes to report it.
+- **Shipped:** Komodo ships no job that runs by default. One example template, `templates/jobs/nightly-review.json`, shows the shape.
+
+Example template:
+
+```json
+{"name": "nightly-review", "agents": ["scout", "reviewer"], "slots": {"target": "main..HEAD"}, "every": "24h"}
+```
+
+#### Cache store
+
+
+**In plain terms.** The cache store is a folder on disk where the engine saves results it may need again, so it does not recompute or re-read them. Each entry is addressed by a fingerprint (a SHA-256 hash) of its inputs, so a changed input never returns a stale result. Without it, every session would rebuild the same briefs, rerun the same checks and re-download the same dependencies. The engine fills and reads it; a person only runs `cache stats` or `cache clear`.
+
+| Item | Key |
+|---|---|
+| Skill index / bodies | Binary version / content hash |
+| Repo profile | Hash of marker files |
+| File slices, signature trims | Git blob SHA + trim settings |
+| Diff | (base, head) |
+| Brief | Hash of every slot input |
+| Check result | Tree hash + command |
+| Review findings | Lens + diff + prompt hash + model |
+| Setup result | Lockfile hash + language |
+| Test baseline | Epic tip tree hash + `test` command |
+| Repo map, outline lint (an automatic rule check) | Tree hash; tree hash + goal hash |
+
+**What each one does**
+- **Skill index / bodies:** The list of standards skills and their text. The index is keyed by binary version; each body by the hash of its content. A new binary rebuilds the index; a skill body is reused as long as its text is unchanged.
+- **Repo profile:** The detected build, test, lint and format commands for the repo. Keyed by a hash of the marker files (`go.mod`, `package.json` and the like), so detection reruns only when those change.
+- **File slices, signature trims:** Pieces of files and trimmed Go signatures that go into briefs. Keyed by the git blob SHA (the fingerprint of one file version) plus the trim settings, so an unchanged file costs no new work.
+- **Diff:** The set of changed lines between two commits, keyed by that (base, head) pair.
+- **Brief:** An assembled worker prompt, keyed by a hash of every slot input, so a resume or retry reuses it unless an input changed.
+- **Check result:** The outcome of a Check run, keyed by tree hash plus command. An unchanged tree skips the rerun.
+- **Review findings:** The reviewer's findings, keyed by lens, diff, prompt hash and model. A re-review reuses them for unchanged code at 0 tokens.
+- **Setup result:** The installed dependencies from the repo's setup command, keyed by lockfile hash and language. A second worktree of the same epic tip copies them instead of downloading.
+- **Test baseline:** The test results at the epic tip before any change ([Check (Appendix J)](#check) Baseline), keyed by that tree hash plus the `test` command.
+- **Repo map, outline lint:** The ranked symbol graph the planner reads, keyed by tree hash; and the planner's outline lint result, keyed by tree hash plus a hash of the goal. Replanning the same goal on an unchanged tree rebuilds neither.
+
+Every key is `sha256(inputs + binary version)` with the per-run config hash as prefix. Entries are files under a 2-level fan-out; a lookup is one `stat`. Verified on read; LRU (least recently used goes first) under `cache.max_mb` 256 per repo; `cache stats --all` shows the machine total. Build responses are never cached.
+
+#### Runtime observability
+
+
+**In plain terms.** Runtime observability is how a person or the orchestrator sees what the harness is doing and did: which group is in which stage, who holds which lock, what every session cost, and why something stopped. All of it is derived from the state events, the append-only record each group writes (see Glossary). Without it, a run would be a black box until it finished. The engine writes the ledger; people and the orchestrator read it through `status`.
+
+#### Ledger views
+
+**In plain terms.** The ledger views are two tables, one row per group and one per task, that the engine rebuilds from the events as they happen. They answer "who holds what right now" for `status`, the orchestrator and the startup sweep. Nothing writes them directly; they are read-only products of the group state, so they can never disagree with it. The engine maintains them; `status` shows them.
+
+| Row | Fields | Moves on |
+|---|---|---|
+| Group | `group, run, stage, epoch, fence, lock{card_hash, taken_at}, lease{pid, renewed_at}` | `lock.taken`, `stage.enter`, `lease.lost`, `lock.released` |
+| Task | `task, group, state, session, attempts, claimed_at` | `task.claimed`, `task.released`, `task.done`, `task.retry` |
+
+**What each one does**
+- **Group:** One row per group: its run, current stage, epoch (a counter that rises on each stage entry, see Glossary), fence, the task-list lock with the hash of its backlog cards and when it was taken, and the lease with the holding process ID and last renewal. It updates when the lock is taken, a stage is entered, the lease is lost, or the lock is released.
+- **Task:** One row per task: its group, state, the session working on it, how many attempts it has used, and when it was claimed. It updates when a task is claimed, released, done or retried.
+
+- Task list lock: Intake hashes the group's `TG.md` and `tsk-*.md` into `card_hash` and emits `lock.taken`. While locked, `add backlog --to <group>`, `plan --epic` on that group, and a hand edit refuse with `locked` and the run ID. Landing or abandon emits `lock.released`.
+- A hand edit of the backlog files is detected by a hash mismatch at the next verb. The lock protects the next run, not the current brief, because the builder and reviewer read the task list at the base commit.
+- Task claims: `queued → claimed → done | returned | blocked`; `task.claimed` at `session.start`, `task.released` at `session.end`; a claimed task whose session is dead at the sweep is released with `crash`.
+- Views are rebuilt incrementally from the last applied `sequence`; `status` on 1,000 rows renders under 100 ms.
+
+**What each one does**
+- **Task list lock:** At Intake the engine hashes the group's backlog cards (`TG.md` and `tsk-*.md`) into `card_hash` and records `lock.taken`. While locked, adding a task to the group, replanning the epic over it, or editing the cards by hand is refused with `locked` and the run ID. Landing or abandoning the group records `lock.released`.
+- **Task claims:** A task moves `queued → claimed → done | returned | blocked`. The engine records `task.claimed` when a session starts and `task.released` when it ends. If the startup sweep finds a claimed task whose session is dead, it releases the task with reason `crash`.
+- **Views:** The tables are updated from the last event sequence number applied, never rebuilt from the whole log. `status` on a repo with 1,000 ledger rows renders in under 100 ms.
+
+**Examples**
+
+One row of ledger/groups.json: who holds a group right now, with its stage, fence, task-list lock and lease.
+
+```json
+{
+  "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
+  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
+  "stage": "build",
+  "epoch": 3,
+  "fence": 2,
+  "lock": {
+    "card_hash": "[UNKNOWN: not yet designed]",
+    "taken_at": "[UNKNOWN: not yet designed]"
+  },
+  "lease": {
+    "pid": 48213,
+    "renewed_at": "[UNKNOWN: not yet designed]"
+  }
+}
+```
+
+One row of ledger/tasks.json: which session has claimed a task and how many attempts it has used.
+
+```json
+{
+  "task": "[UNKNOWN: not yet designed]",
+  "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
+  "state": "claimed",
+  "session": "[UNKNOWN: not yet designed]",
+  "attempts": 1,
+  "claimed_at": "[UNKNOWN: not yet designed]"
+}
+```
+
+#### Scorecard (`status --metrics`)
+
+**In plain terms.** The scorecard is the report of how well each worker role and model has performed over the retention window (`ledger.retention_days`, 30 days by default). It is how a person decides whether a cheaper model is good enough, and whether a review rule earns its keep. Without it, model choices would rest on impressions. `status --metrics` prints it; `doctor` reads it to suggest changes.
+
+Per agent and model over `ledger.retention_days`: first-pass rate, returns per group, finding precision, tester false-fail rate, cache hit rate per kind, and tokens and USD per accepted group when `track.usage` is on. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups. Aggregates are cached by the ledger file's size and mtime.
+
+**What each one does**
+- **First-pass rate:** The share of tasks marked `done` on their first attempt. Higher means the model gets it right without retries.
+- **Returns per group:** How many times a group was sent back to Build from Check or Verify.
+- **Finding precision:** How many of a reviewer's findings the engine verified against the code, per rule ([Review mechanics (Appendix J)](#review-mechanics) Precision ledger).
+- **Tester false-fail rate:** How often a tester failed an item that the engine's reruns passed.
+- **Tokens and USD per accepted group:** What a group that landed cost in tokens and dollars. This is the headline metric ([Token and resource management (Appendix J)](#token-and-resource-management)). It exists only when `track.usage` is on; with it off, nothing is collected.
+- **Cache hit rate per kind:** For each cache entry kind ([Cache store (Appendix K)](#cache-store)), how often a lookup found an entry instead of recomputing.
+- **`doctor` weight suggestion:** `doctor` suggests moving an agent to a lighter model when the light model's first-pass rate beats the standard one over 20 groups.
+- **Aggregate cache:** The scorecard's totals are cached by the ledger file's size and modification time, so a repeat call is cheap.
+
+#### Live views
+
+**In plain terms.** Live views are the `status` verb and its flags: the screens a person or the orchestrator uses while a run is going. One shows the whole picture, one blocks until something happens, one explains the last events, and one tails a single session. Without them, the only way to watch a run would be reading raw JSON files. People and the orchestrator run them; the engine answers from the ledger.
+
+`status [--watch]`: pool, stages, budgets, blocks, the group graph (dependencies, each group's stage, which groups touch which files). `status --wait` blocks until the next wake event. `status --explain`: the last 10 events with reasons. `status --session <id>`: the stream tail and result. `status` ends with `Verbs: komodo help`.
+
+**What each one does**
+- **`status [--watch]`:** Prints the session pool, each group's stage, budgets used, current blocks, and the group graph: which groups depend on which, each group's stage, and which groups touch which files. `--watch` is its live form.
+- **`status --wait`:** Blocks until the next wake event: a group blocked or paused, a run done or stopped. The orchestrator runs it in the background as its main loop, so it learns the moment something needs a decision.
+- **`status --explain`:** Prints the last 10 events with the reason for each, so a person can see why a group moved or stopped.
+- **`status --session <id>`:** Prints the tail of one session's stream and its final result.
+- **Verbs footer:** Every `status` output ends with `Verbs: komodo help`, pointing to the full verb list.
+
+#### Cache
+
+**In plain terms.** The cache stores results Komodo has already computed, such as a rendered brief or a review's findings. The same input is never paid for twice. Every entry is named by a fingerprint (a SHA-256 hash) of its inputs plus the binary version, so a changed input gives a new entry. It sits outside every worktree so an AI session cannot tamper with it. The engine reads and writes it; a person only sees it through `cache stats`.
+
+| Property | Rule |
+|---|---|
+| Keys | `sha256(inputs + binary version)`; only the hourly release check uses time |
+| Location | `<git-common-dir>/komodo/cache/`, outside every worktree, so an agent cannot reach or poison it |
+| Integrity | Verified on read; a mismatch deletes the entry |
+| Bound | `cache.max_mb` (256) per repo, least recently used out first |
+| Never cached | Build responses, because they are nondeterministic and have side effects |
+| Kinds | skills, context (file slices, trims, diffs, briefs), checks, review findings, setup results, repo map and outline lint, test baseline |
+
+**What each one does**
+- **Keys:** The name of each entry is a hash of its inputs and the Komodo version, prefixed with the run's config hash. Same inputs give the same name, so a lookup is one file check. Only the hourly release check looks at the clock.
+- **Location:** Under the repo's `.git` folder, never inside a worktree. A session's sandbox cannot reach it, so a model cannot plant a fake cached result.
+- **Integrity:** Every read re-checks the entry's hash. Content that does not match is deleted and computed again.
+- **Bound:** The cache may use `cache.max_mb` (256 MB by default) per repo. When it is full, the entry used longest ago goes first.
+- **Never cached:** What a builder session produces is never cached, because the same brief can give different code and the session changes files.
+- **Kinds:** Skill documents and context pieces (file slices, trimmed signatures, diffs, briefs). Also Check results, review findings, setup results, the repo map with its outline lint, and the test baseline. Each kind has its own key recipe in the LLD.
+
+#### Observability data
+
+**In plain terms.** Observability data is the record of what Komodo did: every session, every event, who holds which task, and, when `track.usage` is on, what it cost. It exists so a person can answer "what happened, what runs now, and, with tracking on, what did it cost" from files, without a dashboard. Without it, a crash or a bad run would leave no trail. The engine writes these files; `komodo status` reads them for people and for the orchestrator.
+
+| Store | Contents |
+|---|---|
+| `ledger/sessions.jsonl` | One row per session: id, agent, task, link, model, measured context, capacity profile, wall time, exit reason; tokens in/out/cached, USD and skill tokens only when `track.usage` is on; a copy of `wait_until` and `wait_link` when paused (the timer record is the source) |
+| `ledger/events.jsonl` | A read-only copy of every group state's events, plus fallbacks, skips and host subagent events |
+| `ledger/tasks.json`, `ledger/groups.json` | Lock-table views rebuilt from group state: who holds what |
+| `sessions/<id>/` | `brief.md`, `request.json`, `stream.jsonl`, `messages.jsonl`, `result.json`, `out/` |
+| `status --metrics` | Per agent and model over the retention window: first-pass rate, returns per group, finding precision, tester false-fail rate, cache hit rate; tokens and USD per accepted group only when `track.usage` is on |
+
+**What each one does**
+- **`ledger/sessions.jsonl`:** One line per model session. It records which agent and task, which link and model, the measured context window and the capacity profile (see Glossary). It also records wall time and why the session ended; with `track.usage` on it adds tokens, dollars and skill tokens, and with it off those fields are not written. A paused session also records when it may resume and on which link.
+- **`ledger/events.jsonl`:** A read-only copy of every event from every group state, in one place, plus provider fallbacks, skips and events from host subagents. This file and `state.schema.json` are the export format.
+- **`ledger/tasks.json`, `ledger/groups.json`:** Two tables rebuilt from group state. One says which group is in which stage, with its lease and fence. The other says which task is claimed by which session. `status` renders 1,000 rows in under 100 ms.
+- **`sessions/<id>/`:** One folder per session. `brief.md` is the prompt the model got, `request.json` is how it was launched, and `stream.jsonl` is the raw model output. `messages.jsonl` keeps every turn so API links can resume, and `result.json` is the final answer. `out/` holds full tool outputs that were trimmed in the conversation.
+- **`status --metrics`:** The scorecard. It is split per agent and model over the retention window. It shows how often a task passed on the first attempt and how often groups went back to Build. It shows how many reviewer findings were right and how often the tester failed a passing item. It also shows the cache hit rate and, with `track.usage` on, tokens and dollars per accepted group. `doctor` uses it to suggest a cheaper model when one performs as well.
+
+Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a state file of an open, paused or blocked group is never trimmed. Keys and secret matches are masked before anything is written. There is no OpenTelemetry export; JSONL plus `state.schema.json` is the export.
+
+---
+
+| A group blocked 3 times for one reason | Flagged `needs redesign` in `status` |
+**Scheduler and job templates ([Scheduler and job templates (Appendix K)](#scheduler-and-job-templates))**
+- 2 ticks in one window run the job once.
+- 3 failures end in Blocked and wake `wait`.
+- A tick with no live engine fires a due `wait_until` and resumes the run.
+- A job due while its previous run holds `job-<name>` is skipped and logged once.
+
+**Cache store ([Cache store (Appendix K)](#cache-store))**
+- A second Check on an unchanged tree skips every rerun.
+- A corrupted entry is deleted, not used.
+- A second worktree of the same epic tip copies dependencies from the setup entry.
+
+**Runtime observability ([Runtime observability (Appendix K)](#runtime-observability))**
+- The fixture run has one ledger row per session.
+- `status --wait` returns on `group.blocked`.
+- `ledger/tasks.json` after the fixture lists every task once as `done`.
+- `add backlog --to <locked group>` exits 1 with `locked` and the run ID.
+- A dead session's task shows `released: crash` after the sweep.
+
 
 ## 11. Backlog, Planning, Ship and Release
 
@@ -9557,214 +9785,6 @@ Every failure has a detector, an action, a bound and a final state; nothing loop
 
 ---
 
-## Appendix K. Scheduler, Cache Store and Observability
-
-#### Scheduler and job templates
-
-
-**In plain terms.** The scheduler lets Komodo run a chosen set of AI workers on a timer, such as a nightly code review, without anyone typing a command. A job template is a small JSON file that names which workers run, which inputs they get, and how often. Without it, every run would have to start from a person or the orchestrator (the Claude Code session that drives Komodo, see Glossary) typing `komodo run`. A person writes the template; the operating system's scheduler calls `komodo jobs tick` every 5 minutes; the engine (the `komodo` binary, see Glossary) does the rest.
-
-| Item | Rule |
-|---|---|
-| Template | `{name, agents[], slots{}, every}`; names an agent subset, brief slots and an interval, never limits; decoded strictly; lives in `embed/jobs/` or `~/.komodo/jobs/` |
-| `jobs tick` | Idempotent, one engine step: enqueue due jobs, fire due timer records (`wait_until`), drive the pool once; a tick with nothing due exits under 50 ms with no network and reads only `jobs/state.json`, the queue and the timer records, through the state manager |
-| Callers | A launchd, cron or Task Scheduler entry from `install --schedule`, every 5 minutes; Claude Code `/loop` also works at the cost of a model turn per tick |
-| Run id | `job-<name>-<n>`, with its own ledger rows and report; `status --wait` takes it |
-| Counters | `jobs/state.json`: `attempt`, `next_at`, `last_fail_hash`, `running` |
-| Overlap | A running job holds lease `job-<name>` with a fence; the next tick's queue item is refused as a duplicate and logged |
-| Queue | Same queue as groups, `priority: normal`; never preempts a group; fair share treats each job as its own repo |
-| Events | `job.due`, `job.fail` |
-| Minimum interval | 5 min |
-| Retries | 3, backoff (waiting longer between retries) 30 s, 2 m, 8 m ±20%; then Blocked, which wakes `status --wait` |
-| Shipped | None; one example at `templates/jobs/nightly-review.json` |
-
-**What each one does**
-- **Template:** A JSON file with four fields: a name, the agents (worker roles, see Glossary) to run, the brief slots (named inputs to a worker's prompt) to fill, and how often to run. It never sets limits; a job run uses the normal `komodo config` limits. The engine reads it strictly, so an unknown field is an error; it lives in the binary's `embed/jobs/` folder or in your `~/.komodo/jobs/` folder.
-- **`jobs tick`:** The verb the operating system calls on a timer. One call puts jobs whose time has come into the work queue, fires any due pause timers (timer records holding `wait_until`, the time a session paused on a provider limit may resume), and moves the session pool forward one step. Running it twice changes nothing extra, and a tick with nothing to do exits in under 50 ms without touching the network.
-- **Callers:** Who runs `jobs tick`. `komodo install --schedule` writes an entry for launchd (macOS), cron (Linux) or Task Scheduler (Windows) that calls it every 5 minutes. Claude Code's `/loop` command can call it instead, but each call then costs a model turn.
-- **Run id:** Each job run is named `job-<name>-<n>`, with its own rows in the ledger (Komodo's record of sessions and events, see [Runtime observability (Appendix K)](#runtime-observability)) and its own report. `status --wait` accepts that id, so the orchestrator can wait for the job to finish.
-- **Counters:** The file `jobs/state.json` keeps, per job, the attempt count, when the next run is due, the hash (a content fingerprint) of the last failure, and whether the job is running now. The engine reads it on every tick.
-- **Overlap:** While a job runs it holds a lease named `job-<name>` (a lease is a lock file on the machine, see Glossary) with a fence (a counter that rejects stale holders, see Glossary). If the next tick finds the job still running, it refuses the duplicate and writes one log line. The user sees one skip entry, never two copies of the job.
-- **Queue:** Jobs wait in the same work queue as task groups, at normal priority. A job never interrupts a running group. The fair-share rule, which rotates between repos so none hogs the pool, counts each job as its own repo, so a busy repo cannot starve it.
-- **Events:** The engine records `job.due` when a job's time comes and `job.fail` when a run fails. Both appear in the event log.
-- **Minimum interval:** A template cannot ask to run more often than every 5 minutes.
-- **Retries:** A failed job is retried 3 times, waiting 30 seconds, then 2 minutes, then 8 minutes, each wait varied by up to 20%. After the third failure the job is Blocked (a holding state that needs a person or the orchestrator, see Glossary), and `status --wait` wakes to report it.
-- **Shipped:** Komodo ships no job that runs by default. One example template, `templates/jobs/nightly-review.json`, shows the shape.
-
-Example template:
-
-```json
-{"name": "nightly-review", "agents": ["scout", "reviewer"], "slots": {"target": "main..HEAD"}, "every": "24h"}
-```
-
-#### Cache store
-
-
-**In plain terms.** The cache store is a folder on disk where the engine saves results it may need again, so it does not recompute or re-read them. Each entry is addressed by a fingerprint (a SHA-256 hash) of its inputs, so a changed input never returns a stale result. Without it, every session would rebuild the same briefs, rerun the same checks and re-download the same dependencies. The engine fills and reads it; a person only runs `cache stats` or `cache clear`.
-
-| Item | Key |
-|---|---|
-| Skill index / bodies | Binary version / content hash |
-| Repo profile | Hash of marker files |
-| File slices, signature trims | Git blob SHA + trim settings |
-| Diff | (base, head) |
-| Brief | Hash of every slot input |
-| Check result | Tree hash + command |
-| Review findings | Lens + diff + prompt hash + model |
-| Setup result | Lockfile hash + language |
-| Test baseline | Epic tip tree hash + `test` command |
-| Repo map, outline lint (an automatic rule check) | Tree hash; tree hash + goal hash |
-
-**What each one does**
-- **Skill index / bodies:** The list of standards skills and their text. The index is keyed by binary version; each body by the hash of its content. A new binary rebuilds the index; a skill body is reused as long as its text is unchanged.
-- **Repo profile:** The detected build, test, lint and format commands for the repo. Keyed by a hash of the marker files (`go.mod`, `package.json` and the like), so detection reruns only when those change.
-- **File slices, signature trims:** Pieces of files and trimmed Go signatures that go into briefs. Keyed by the git blob SHA (the fingerprint of one file version) plus the trim settings, so an unchanged file costs no new work.
-- **Diff:** The set of changed lines between two commits, keyed by that (base, head) pair.
-- **Brief:** An assembled worker prompt, keyed by a hash of every slot input, so a resume or retry reuses it unless an input changed.
-- **Check result:** The outcome of a Check run, keyed by tree hash plus command. An unchanged tree skips the rerun.
-- **Review findings:** The reviewer's findings, keyed by lens, diff, prompt hash and model. A re-review reuses them for unchanged code at 0 tokens.
-- **Setup result:** The installed dependencies from the repo's setup command, keyed by lockfile hash and language. A second worktree of the same epic tip copies them instead of downloading.
-- **Test baseline:** The test results at the epic tip before any change ([Check (Appendix J)](#check) Baseline), keyed by that tree hash plus the `test` command.
-- **Repo map, outline lint:** The ranked symbol graph the planner reads, keyed by tree hash; and the planner's outline lint result, keyed by tree hash plus a hash of the goal. Replanning the same goal on an unchanged tree rebuilds neither.
-
-Every key is `sha256(inputs + binary version)` with the per-run config hash as prefix. Entries are files under a 2-level fan-out; a lookup is one `stat`. Verified on read; LRU (least recently used goes first) under `cache.max_mb` 256 per repo; `cache stats --all` shows the machine total. Build responses are never cached.
-
-#### Runtime observability
-
-
-**In plain terms.** Runtime observability is how a person or the orchestrator sees what the harness is doing and did: which group is in which stage, who holds which lock, what every session cost, and why something stopped. All of it is derived from the state events, the append-only record each group writes (see Glossary). Without it, a run would be a black box until it finished. The engine writes the ledger; people and the orchestrator read it through `status`.
-
-#### Ledger views
-
-**In plain terms.** The ledger views are two tables, one row per group and one per task, that the engine rebuilds from the events as they happen. They answer "who holds what right now" for `status`, the orchestrator and the startup sweep. Nothing writes them directly; they are read-only products of the group state, so they can never disagree with it. The engine maintains them; `status` shows them.
-
-| Row | Fields | Moves on |
-|---|---|---|
-| Group | `group, run, stage, epoch, fence, lock{card_hash, taken_at}, lease{pid, renewed_at}` | `lock.taken`, `stage.enter`, `lease.lost`, `lock.released` |
-| Task | `task, group, state, session, attempts, claimed_at` | `task.claimed`, `task.released`, `task.done`, `task.retry` |
-
-**What each one does**
-- **Group:** One row per group: its run, current stage, epoch (a counter that rises on each stage entry, see Glossary), fence, the task-list lock with the hash of its backlog cards and when it was taken, and the lease with the holding process ID and last renewal. It updates when the lock is taken, a stage is entered, the lease is lost, or the lock is released.
-- **Task:** One row per task: its group, state, the session working on it, how many attempts it has used, and when it was claimed. It updates when a task is claimed, released, done or retried.
-
-- Task list lock: Intake hashes the group's `TG.md` and `tsk-*.md` into `card_hash` and emits `lock.taken`. While locked, `add backlog --to <group>`, `plan --epic` on that group, and a hand edit refuse with `locked` and the run ID. Landing or abandon emits `lock.released`.
-- A hand edit of the backlog files is detected by a hash mismatch at the next verb. The lock protects the next run, not the current brief, because the builder and reviewer read the task list at the base commit.
-- Task claims: `queued → claimed → done | returned | blocked`; `task.claimed` at `session.start`, `task.released` at `session.end`; a claimed task whose session is dead at the sweep is released with `crash`.
-- Views are rebuilt incrementally from the last applied `sequence`; `status` on 1,000 rows renders under 100 ms.
-
-**What each one does**
-- **Task list lock:** At Intake the engine hashes the group's backlog cards (`TG.md` and `tsk-*.md`) into `card_hash` and records `lock.taken`. While locked, adding a task to the group, replanning the epic over it, or editing the cards by hand is refused with `locked` and the run ID. Landing or abandoning the group records `lock.released`.
-- **Task claims:** A task moves `queued → claimed → done | returned | blocked`. The engine records `task.claimed` when a session starts and `task.released` when it ends. If the startup sweep finds a claimed task whose session is dead, it releases the task with reason `crash`.
-- **Views:** The tables are updated from the last event sequence number applied, never rebuilt from the whole log. `status` on a repo with 1,000 ledger rows renders in under 100 ms.
-
-**Examples**
-
-One row of ledger/groups.json: who holds a group right now, with its stage, fence, task-list lock and lease.
-
-```json
-{
-  "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
-  "stage": "build",
-  "epoch": 3,
-  "fence": 2,
-  "lock": {
-    "card_hash": "[UNKNOWN: not yet designed]",
-    "taken_at": "[UNKNOWN: not yet designed]"
-  },
-  "lease": {
-    "pid": 48213,
-    "renewed_at": "[UNKNOWN: not yet designed]"
-  }
-}
-```
-
-One row of ledger/tasks.json: which session has claimed a task and how many attempts it has used.
-
-```json
-{
-  "task": "[UNKNOWN: not yet designed]",
-  "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-  "state": "claimed",
-  "session": "[UNKNOWN: not yet designed]",
-  "attempts": 1,
-  "claimed_at": "[UNKNOWN: not yet designed]"
-}
-```
-
-#### Scorecard (`status --metrics`)
-
-**In plain terms.** The scorecard is the report of how well each worker role and model has performed over the retention window (`ledger.retention_days`, 30 days by default). It is how a person decides whether a cheaper model is good enough, and whether a review rule earns its keep. Without it, model choices would rest on impressions. `status --metrics` prints it; `doctor` reads it to suggest changes.
-
-Per agent and model over `ledger.retention_days`: first-pass rate, returns per group, finding precision, tester false-fail rate, cache hit rate per kind, and tokens and USD per accepted group when `track.usage` is on. `doctor` suggests a weight change when a light model's first-pass rate beats the standard one over 20 groups. Aggregates are cached by the ledger file's size and mtime.
-
-**What each one does**
-- **First-pass rate:** The share of tasks marked `done` on their first attempt. Higher means the model gets it right without retries.
-- **Returns per group:** How many times a group was sent back to Build from Check or Verify.
-- **Finding precision:** How many of a reviewer's findings the engine verified against the code, per rule ([Review mechanics (Appendix J)](#review-mechanics) Precision ledger).
-- **Tester false-fail rate:** How often a tester failed an item that the engine's reruns passed.
-- **Tokens and USD per accepted group:** What a group that landed cost in tokens and dollars. This is the headline metric ([Token and resource management (Appendix J)](#token-and-resource-management)). It exists only when `track.usage` is on; with it off, nothing is collected.
-- **Cache hit rate per kind:** For each cache entry kind ([Cache store (Appendix K)](#cache-store)), how often a lookup found an entry instead of recomputing.
-- **`doctor` weight suggestion:** `doctor` suggests moving an agent to a lighter model when the light model's first-pass rate beats the standard one over 20 groups.
-- **Aggregate cache:** The scorecard's totals are cached by the ledger file's size and modification time, so a repeat call is cheap.
-
-#### Live views
-
-**In plain terms.** Live views are the `status` verb and its flags: the screens a person or the orchestrator uses while a run is going. One shows the whole picture, one blocks until something happens, one explains the last events, and one tails a single session. Without them, the only way to watch a run would be reading raw JSON files. People and the orchestrator run them; the engine answers from the ledger.
-
-`status [--watch]`: pool, stages, budgets, blocks, the group graph (dependencies, each group's stage, which groups touch which files). `status --wait` blocks until the next wake event. `status --explain`: the last 10 events with reasons. `status --session <id>`: the stream tail and result. `status` ends with `Verbs: komodo help`.
-
-**What each one does**
-- **`status [--watch]`:** Prints the session pool, each group's stage, budgets used, current blocks, and the group graph: which groups depend on which, each group's stage, and which groups touch which files. `--watch` is its live form.
-- **`status --wait`:** Blocks until the next wake event: a group blocked or paused, a run done or stopped. The orchestrator runs it in the background as its main loop, so it learns the moment something needs a decision.
-- **`status --explain`:** Prints the last 10 events with the reason for each, so a person can see why a group moved or stopped.
-- **`status --session <id>`:** Prints the tail of one session's stream and its final result.
-- **Verbs footer:** Every `status` output ends with `Verbs: komodo help`, pointing to the full verb list.
-
-#### Cache
-
-**In plain terms.** The cache stores results Komodo has already computed, such as a rendered brief or a review's findings. The same input is never paid for twice. Every entry is named by a fingerprint (a SHA-256 hash) of its inputs plus the binary version, so a changed input gives a new entry. It sits outside every worktree so an AI session cannot tamper with it. The engine reads and writes it; a person only sees it through `cache stats`.
-
-| Property | Rule |
-|---|---|
-| Keys | `sha256(inputs + binary version)`; only the hourly release check uses time |
-| Location | `<git-common-dir>/komodo/cache/`, outside every worktree, so an agent cannot reach or poison it |
-| Integrity | Verified on read; a mismatch deletes the entry |
-| Bound | `cache.max_mb` (256) per repo, least recently used out first |
-| Never cached | Build responses, because they are nondeterministic and have side effects |
-| Kinds | skills, context (file slices, trims, diffs, briefs), checks, review findings, setup results, repo map and outline lint, test baseline |
-
-**What each one does**
-- **Keys:** The name of each entry is a hash of its inputs and the Komodo version, prefixed with the run's config hash. Same inputs give the same name, so a lookup is one file check. Only the hourly release check looks at the clock.
-- **Location:** Under the repo's `.git` folder, never inside a worktree. A session's sandbox cannot reach it, so a model cannot plant a fake cached result.
-- **Integrity:** Every read re-checks the entry's hash. Content that does not match is deleted and computed again.
-- **Bound:** The cache may use `cache.max_mb` (256 MB by default) per repo. When it is full, the entry used longest ago goes first.
-- **Never cached:** What a builder session produces is never cached, because the same brief can give different code and the session changes files.
-- **Kinds:** Skill documents and context pieces (file slices, trimmed signatures, diffs, briefs). Also Check results, review findings, setup results, the repo map with its outline lint, and the test baseline. Each kind has its own key recipe in the LLD.
-
-#### Observability data
-
-**In plain terms.** Observability data is the record of what Komodo did: every session, every event, who holds which task, and, when `track.usage` is on, what it cost. It exists so a person can answer "what happened, what runs now, and, with tracking on, what did it cost" from files, without a dashboard. Without it, a crash or a bad run would leave no trail. The engine writes these files; `komodo status` reads them for people and for the orchestrator.
-
-| Store | Contents |
-|---|---|
-| `ledger/sessions.jsonl` | One row per session: id, agent, task, link, model, measured context, capacity profile, wall time, exit reason; tokens in/out/cached, USD and skill tokens only when `track.usage` is on; a copy of `wait_until` and `wait_link` when paused (the timer record is the source) |
-| `ledger/events.jsonl` | A read-only copy of every group state's events, plus fallbacks, skips and host subagent events |
-| `ledger/tasks.json`, `ledger/groups.json` | Lock-table views rebuilt from group state: who holds what |
-| `sessions/<id>/` | `brief.md`, `request.json`, `stream.jsonl`, `messages.jsonl`, `result.json`, `out/` |
-| `status --metrics` | Per agent and model over the retention window: first-pass rate, returns per group, finding precision, tester false-fail rate, cache hit rate; tokens and USD per accepted group only when `track.usage` is on |
-
-**What each one does**
-- **`ledger/sessions.jsonl`:** One line per model session. It records which agent and task, which link and model, the measured context window and the capacity profile (see Glossary). It also records wall time and why the session ended; with `track.usage` on it adds tokens, dollars and skill tokens, and with it off those fields are not written. A paused session also records when it may resume and on which link.
-- **`ledger/events.jsonl`:** A read-only copy of every event from every group state, in one place, plus provider fallbacks, skips and events from host subagents. This file and `state.schema.json` are the export format.
-- **`ledger/tasks.json`, `ledger/groups.json`:** Two tables rebuilt from group state. One says which group is in which stage, with its lease and fence. The other says which task is claimed by which session. `status` renders 1,000 rows in under 100 ms.
-- **`sessions/<id>/`:** One folder per session. `brief.md` is the prompt the model got, `request.json` is how it was launched, and `stream.jsonl` is the raw model output. `messages.jsonl` keeps every turn so API links can resume, and `result.json` is the final answer. `out/` holds full tool outputs that were trimmed in the conversation.
-- **`status --metrics`:** The scorecard. It is split per agent and model over the retention window. It shows how often a task passed on the first attempt and how often groups went back to Build. It shows how many reviewer findings were right and how often the tester failed a passing item. It also shows the cache hit rate and, with `track.usage` on, tokens and dollars per accepted group. `doctor` uses it to suggest a cheaper model when one performs as well.
-
-Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a state file of an open, paused or blocked group is never trimmed. Keys and secret matches are masked before anything is written. There is no OpenTelemetry export; JSONL plus `state.schema.json` is the export.
-
----
-
 ## Appendix L. Backlog, Planning, Ship and Release
 
 #### Backlog and planning
@@ -9931,7 +9951,6 @@ estimate_lines: 120
 | Two files differ only by case | Check fails on every OS |
 | A finding's quote is not at the line | Dropped and logged; does not block |
 | `needs_scope` on a protected path or another group's file | Denied by the engine without asking |
-| A group blocked 3 times for one reason | Flagged `needs redesign` in `status` |
 
 **What each one does**
 - **Crash between `action.start commit` and `action.done`:** The engine wrote "I am about to commit" to the group state, then died before writing "done". On `resume`, replay reruns the commit. The hidden ref (the per-group git ref where commits are saved, see Glossary) is updated with a compare-and-swap, so if the first commit did land there is still exactly one commit, never two.
@@ -10203,12 +10222,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 
 **In plain terms.** A proof case is one fixture, a small made-up repo, fake server or forced failure, plus the exact result that counts as a pass. Each component below lists its own proof cases, and a builder finishing that component's task group is done only when every case passes. The gate ([Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate)) runs these as tests, so a lost case would mean a component with no exit test. The end-to-end checks above cover the whole system; these cover each part on its own.
 
-**Scheduler and job templates ([Scheduler and job templates (Appendix K)](#scheduler-and-job-templates))**
-- 2 ticks in one window run the job once.
-- 3 failures end in Blocked and wake `wait`.
-- A tick with no live engine fires a due `wait_until` and resumes the run.
-- A job due while its previous run holds `job-<name>` is skipped and logged once.
-
 **Error recovery ([Actions](#actions) and [Error recovery (Appendix J)](#error-recovery))**
 - Forcing a timeout, a flap, 4 returns or 7 attempts each ends Blocked with the reason named.
 - `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions.
@@ -10239,18 +10252,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - Two sessions of one agent on the API link share the first 3 breakpoints byte for byte.
 - With `track.usage: on`, the second session's ledger row shows `cache_read` over 0.
 - With `track.usage: off` and the same low cap, no `budget` block occurs and no ledger row holds a token or USD field.
-
-**Cache store ([Cache store (Appendix K)](#cache-store))**
-- A second Check on an unchanged tree skips every rerun.
-- A corrupted entry is deleted, not used.
-- A second worktree of the same epic tip copies dependencies from the setup entry.
-
-**Runtime observability ([Runtime observability (Appendix K)](#runtime-observability))**
-- The fixture run has one ledger row per session.
-- `status --wait` returns on `group.blocked`.
-- `ledger/tasks.json` after the fixture lists every task once as `done`.
-- `add backlog --to <locked group>` exits 1 with `locked` and the run ID.
-- A dead session's task shows `released: crash` after the sweep.
 
 **Backlog and planning ([Backlog and planning (Appendix L)](#backlog-and-planning))**
 - Epic-1 passes `komodo doctor backlog`.
