@@ -204,11 +204,11 @@ def cells(row):
 
 
 def glossary():
-    """Build hover definitions from each doc's glossary appendix table, one per listed term."""
+    """Build hover definitions from each doc's glossary chapter or appendix tables, one per listed term."""
     out = []
     for doc in TITLES:
         text = (DOCS / f"{doc}.md").read_text()
-        m = re.search(r"^## Appendix [A-Z]\. [^\n]*Glossary[^\n]*$", text, re.M | re.I)
+        m = re.search(r"^## (?:Appendix [A-Z]|\d+)\. [^\n]*Glossary[^\n]*$", text, re.M | re.I)
         if not m:
             continue
         for row in (l for l in text[m.end():].split("\n## ", 1)[0].split("\n") if l.startswith("|")):
@@ -218,7 +218,7 @@ def glossary():
             meaning = c[1].replace("`", "").replace("]", ")")
             out += [f"*[{t}]: {meaning}" for t in (x.strip().strip("`") for x in c[0].split(",")) if t]
     if not out:
-        sys.exit("no '## Appendix X. ... Glossary' table in docs/hld.md or docs/lld.md")
+        sys.exit("no '## Appendix X. ... Glossary' or '## N. Glossary' table in docs/hld.md or docs/lld.md")
     return out
 
 
