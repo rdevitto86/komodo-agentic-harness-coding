@@ -1666,9 +1666,9 @@ The tool runtime hands each session its tools, the guard checks every tool call 
 | `internal/safety/guard.go` | `Check`: allow or refuse; fail closed; the refusal limit |
 | `internal/safety/rows.go` | Loads the G, R, B and O rows from `embed/policy.json` |
 | `internal/safety/paths.go` | Path containment, symlinks, secret files |
-| `internal/safety/shell.go` | Tokenizing, chains and a git classifier. [TODO: what this file does when `run` starts no shell (G-NEW-12)] |
+| `internal/safety/shell.go` | Tokenizing, chains and a git classifier. [TODO: what this file does when `run` starts no shell (G-53)] |
 | `internal/safety/table.go` | Renders the guard table for the gate |
-| `internal/safety/proc.go` | `run`, the timeout, the output cap, the heartbeat. [TODO: what the heartbeat reports and to whom (G-NEW-12)] |
+| `internal/safety/proc.go` | `run`, the timeout, the output cap, the heartbeat. [TODO: what the heartbeat reports and to whom (G-53)] |
 | `internal/safety/proc_unix.go` | Process groups for the whole-tree kill |
 | `internal/safety/proc_windows.go` | Job Objects for the whole-tree kill |
 | `internal/safety/sandbox.go` | The backend interface; the profile built from `agent.json` |
@@ -1726,7 +1726,7 @@ type Row struct {
 | `id` | `G1`…`G6`, `R1`, `B1`, `O1`…`O10` | The row named in a refusal |
 | `scope` | Agent names, or `writers`, `runners`, `all`, `orchestrator` | Who the row binds: `writers` have `edit` or `write`, `runners` have `run` |
 | `kind` | `tool`, `path`, `run`, `text` | What the check reads: a tool name, a path argument, a `run` class, or text the agent writes |
-| `pattern` | Glob or list | What matches; `~/.komodo/**` style globs expand at load. [TODO: the glob grammar, including what `**` matches (G-NEW-4)] |
+| `pattern` | Glob or list | What matches; `~/.komodo/**` style globs expand at load. [TODO: the glob grammar, including what `**` matches (G-45)] |
 | `action` | `refuse`, `warn` | `warn` only for `text` rows: on the orchestrator, and in the steering-phrase list for a repo addendum (a skill gets `refuse`) |
 | `message`, `alternative` | Template IDs | The refusal line and the allowed alternative. [TODO: the template IDs and their text (G-30)] |
 
@@ -1763,7 +1763,7 @@ type Row struct {
 | Rows | The `G`, `R`, `B` and `O` rows, one object each, in the shape above |
 | Steering phrases | The phrases the gate and `doctor` scan for; a `text` row holds the list |
 
-Versioning: [TODO: the exact top-level layout of `embed/policy.json`, whether it carries a version number, and how a reader treats an older or newer file (G-NEW-16)]. The call logs under `<session>/out/` hold the full output of one call; [TODO: the log layout and its versioning (G-NEW-16)].
+Versioning: [TODO: the exact top-level layout of `embed/policy.json`, whether it carries a version number, and how a reader treats an older or newer file (G-57)]. The call logs under `<session>/out/` hold the full output of one call; [TODO: the log layout and its versioning (G-57)].
 
 #### Rows
 
@@ -1774,11 +1774,11 @@ The rows every agent inherits (guard rows G1 to G6), the run row and the builder
 | G1 | A tool not in the agent's set; the server does not list it either | all |
 | G2 | Reads or writes outside the session worktree, including `..` paths and symlink escapes | all |
 | G3 | Writes to protected paths: `.git` (file or folder), `.git/config`, `.git/hooks`, `bin/komodo`, `~/.komodo/**`, `~/.claude/settings*.json`, `.claude/settings*.json`, `embed/policy.json`, `docs/prd.md`. Memory (`~/.claude/projects/*/memory/`) and plans (`~/.claude/plans/`) are never blocked | writers |
-| G4 | Reads of secret files (`.env*` except `.env.example`, `.env.sample`, `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`), or written content matching a secret pattern. [TODO: the secret content patterns (G-NEW-3)] | reads all; writes writers |
-| G5 | Attribution trailers or session links in any text the agent writes. [TODO: the patterns that identify a trailer or a session link (G-NEW-3)] | writers |
+| G4 | Reads of secret files (`.env*` except `.env.example`, `.env.sample`, `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`), or written content matching a secret pattern. [TODO: the secret content patterns (G-44)] | reads all; writes writers |
+| G5 | Attribution trailers or session links in any text the agent writes. [TODO: the patterns that identify a trailer or a session link (G-44)] | writers |
 | G6 | The `guard.refusal_limit` (3rd) refusal under the same rule; ends the session | all |
 | R1 | Any command class not declared; `run` takes `{class, args[]}` | runners |
-| B1 | Writes outside the group's `files` and test siblings; the refusal says to stop with result status `needs_scope`. [TODO: the test-sibling rules per language (G-NEW-2)] | builder |
+| B1 | Writes outside the group's `files` and test siblings; the refusal says to stop with result status `needs_scope`. [TODO: the test-sibling rules per language (G-43)] | builder |
 
 The orchestrator rows are text in `AGENTS.md`, valid on any host. The harness backs them on its own side: its verbs refuse leased worktrees and critical refs, and human-only verbs need a terminal. Row O8 was removed, so the numbering skips it.
 
@@ -1835,10 +1835,10 @@ A `run` request and a capped reply:
 |---|---|
 | `class` | One of the agent's `run_classes`; any other class is refused by row R1 |
 | `args` | Reach the command as literal strings; an argument of `&&` chains nothing |
-| `Text` | The head and the tail of the output are kept when it exceeds 4 KB. [TODO: how many bytes the head and the tail each keep (G-NEW-6)] |
+| `Text` | The head and the tail of the output are kept when it exceeds 4 KB. [TODO: how many bytes the head and the tail each keep (G-47)] |
 | `LogPath` | The capped reply names this path; the model can `read` the full output there |
 
-[TODO: the argument names and result shape of every tool except `run` (G-NEW-6)]
+[TODO: the argument names and result shape of every tool except `run` (G-47)]
 
 #### Sandbox profile
 
@@ -1868,7 +1868,7 @@ type Profile struct {
 | `MaxProcs`, `MaxMemGB` | 512 processes and 8 GB per session by default; enforced where the platform allows |
 | `Network` | Off for every `run`; on only for `commands.setup` at Intake. Loopback is always allowed |
 
-[TODO: the rendered profile text for seatbelt and `bwrap`, and the value of `PATH` in the command environment (G-NEW-8)]
+[TODO: the rendered profile text for seatbelt and `bwrap`, and the value of `PATH` in the command environment (G-49)]
 
 The command environment holds only `PATH`, `HOME` (the session's temporary directory), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables.
 
@@ -1946,7 +1946,7 @@ A changed lockfile reruns setup instead of copying. Symlinks are copied as links
 | `submit_finding` | Rule ID, `file:line`, quoted evidence; unknown rule ID refused |
 | `lint_backlog` | Planner only |
 | `web` | Architect and researcher, opt-in, GET only, allowlist |
-| External MCPs | Opt-in allowlist per agent, no credentials. [TODO: where the allowlist lives and how a server is mounted beside the Komodo server (G-NEW-13)] |
+| External MCPs | Opt-in allowlist per agent, no credentials. [TODO: where the allowlist lives and how a server is mounted beside the Komodo server (G-54)] |
 
 - `read` takes line ranges, so the 2,000-line cap costs one `ReadAt`, not a read of the whole file.
 - `edit` and `write` stay separate tools: `edit` changes an existing file and `write` creates a new one.
@@ -1954,7 +1954,7 @@ A changed lockfile reruns setup instead of copying. Symlinks are copied as links
 - `run` returns only the capped result to the model; the full log stays at the named path.
 - `submit_finding`: Go checks that the quote is at that `file:line`; a finding whose quote is not found is dropped and logged.
 - `lint_backlog`: the engine lints the plan again and writes files only if lint passes.
-- Every tool except `read` caps its reply at 4 KB, head and tail kept. [TODO: the unchanged-file test for `read`, the output shape of `search` and the number of closest lines `edit` returns (G-NEW-6)]
+- Every tool except `read` caps its reply at 4 KB, head and tail kept. [TODO: the unchanged-file test for `read`, the output shape of `search` and the number of closest lines `edit` returns (G-47)]
 
 #### Tools per agent
 
@@ -2063,12 +2063,12 @@ type Backend interface {
 |---|---|---|
 | `Registry.Bind` | A listed tool is not registered, so the agent definition is broken | The gate fails the build; the registry check of `agent.json` catches it before any run |
 | `Bound.Advertised` | Cannot fail | Sends the list to the model |
-| `Bound.Dispatch` | Cannot fail: a refusal or a tool failure comes back as reply text. [TODO: the reply shape of a tool failure (G-NEW-6)] | Returns the reply to the model; a refusal counts toward `guard.refusal_limit` |
-| `NewGuard` | The rows cannot be compiled for this agent | The session does not start. [TODO: how a failed session start is reported (G-NEW-15)] |
-| `Guard.Check` | Cannot fail: a parse failure or internal error is a refusal | Refuses the call; when `EndSession` is true the session ends with exit reason `refusals`. [TODO: how that reaches the supervisor (G-NEW-1)] |
+| `Bound.Dispatch` | Cannot fail: a refusal or a tool failure comes back as reply text. [TODO: the reply shape of a tool failure (G-47)] | Returns the reply to the model; a refusal counts toward `guard.refusal_limit` |
+| `NewGuard` | The rows cannot be compiled for this agent | The session does not start. [TODO: how a failed session start is reported (G-56)] |
+| `Guard.Check` | Cannot fail: a parse failure or internal error is a refusal | Refuses the call; when `EndSession` is true the session ends with exit reason `refusals`. [TODO: how that reaches the supervisor (G-42)] |
 | `Backend.Check` | The sandbox cannot run on this machine | Every work verb refuses and names the fix |
-| `Backend.Prepare` | The profile cannot be rendered or the container cannot be created | [TODO: whether the work verb refuses or the session fails (G-NEW-15)] |
-| `Backend.Command` | The command cannot be wrapped | [TODO: the reply shape of a failed `run` (G-NEW-6)] |
+| `Backend.Prepare` | The profile cannot be rendered or the container cannot be created | [TODO: whether the work verb refuses or the session fails (G-56)] |
+| `Backend.Command` | The command cannot be wrapped | [TODO: the reply shape of a failed `run` (G-47)] |
 | `Backend.Release` | The profile or container could not be removed | Nothing; the startup sweep removes the Docker containers and images of dead runs |
 
 | Caller | Call | When |
@@ -2092,11 +2092,11 @@ A builder session on a `claude-cli` link edits a file in its group's `files`, ru
 
 1. The supervisor starts `komodo internal tools --agent --session` with `--strict-mcp-config`. The registry binds the builder's six tools: `read`, `search`, `edit`, `write`, `run`, `skill`.
 2. The model requests `edit` on a file inside the group's `files`. The `tool.pre` hook runs the guard; no row refuses, so the edit runs.
-3. After the edit, the `tool.post` hook formats the file, and the reply shows the edited lines. [TODO: which command formats the file and what happens when formatting fails (G-NEW-9)]
+3. After the edit, the `tool.post` hook formats the file, and the reply shows the edited lines. [TODO: which command formats the file and what happens when formatting fails (G-50)]
 4. The model requests `run` with `{"class": "test", "args": ["./internal/safety/..."]}`. Row R1 finds `test` among the builder's `run_classes`.
 5. The sandbox backend wraps the command. It runs in the worktree with the allowlisted environment, and prints 40 KB. The reply keeps 4 KB and names `<session>/out/<call>.log`, which holds the full output.
 6. The model requests `edit` on a file that is neither in `files` nor a test sibling. Row B1 refuses and tells the builder to stop with result status `needs_scope`. The refusal counts once toward `guard.refusal_limit`.
-7. The refusal is logged afterwards as `tool.denied`. [TODO: how the tool server's events reach the engine (G-NEW-1)]
+7. The refusal is logged afterwards as `tool.denied`. [TODO: how the tool server's events reach the engine (G-42)]
 8. The builder ends with `needs_scope`. The `session.end` hook makes the work-in-progress commit.
 
 **📐 How does one tool call travel?**
@@ -2123,12 +2123,12 @@ sequenceDiagram
 ##### Tool call and binding
 
 1. At session start the registry binds the tools listed in `agent.json` to the session. A tool not in the list is neither advertised nor callable (row G1).
-2. On `claude-cli`, the tool server talks to Claude Code over standard input and output. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. [TODO: how the server learns its worktree, the group's `files`, the command classes and the Model Context Protocol revision without reading disk (G-NEW-15)]
+2. On `claude-cli`, the tool server talks to Claude Code over standard input and output. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. [TODO: how the server learns its worktree, the group's `files`, the command classes and the Model Context Protocol revision without reading disk (G-56)]
 3. On an API link, the harness tool loop calls the same tool functions in the engine process.
 4. The `tool.pre` hook runs the guard in-process before the tool runs.
 5. A refusal returns a reply naming the row and the allowed alternative. An allow runs the tool function.
 6. The reply is capped; the full output goes to `<session>/out/<call>.log`, and the capped reply names the path.
-7. A validated `submit_finding` becomes `finding.submit`. [TODO: how the tool server's events reach the engine (G-NEW-1)]
+7. A validated `submit_finding` becomes `finding.submit`. [TODO: how the tool server's events reach the engine (G-42)]
 8. The hook `session.end` makes the work-in-progress commit. No model, repository or host hook runs inside a worker.
 
 ##### Guard check
@@ -2156,11 +2156,11 @@ flowchart LR
 - Input the guard cannot parse, an unknown tool, or an error inside the guard is a refusal.
 - Each refusal counts against its row for the session. The refusal that reaches `guard.refusal_limit` ends the session with exit reason `refusals`, and the task retries in a fresh session (row G6).
 - `needs_scope` (row B1) is the only refusal a person or the orchestrator can turn into an allow. The builder stops with result status `needs_scope`, naming the paths; scope requests are handled in [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery).
-- [TODO: the order in which rows are tested when one call breaks several, and so which row a refusal names (G-NEW-10)]
-- [TODO: how a pattern in a home-anchored row such as `~/.komodo/**` is matched against a path inside the session worktree, which sits under `~/.komodo/wt/` (G-NEW-10)]
-- [TODO: when the path containment cache is invalidated after a `run` creates a symlink (G-NEW-10)]
-- [TODO: whether `search`, `diff` and `git_read` hide the contents of secret files (G-NEW-11)]
-- [TODO: the content of `system.md`, which must not hold rule text (G-NEW-5)]
+- [TODO: the order in which rows are tested when one call breaks several, and so which row a refusal names (G-51)]
+- [TODO: how a pattern in a home-anchored row such as `~/.komodo/**` is matched against a path inside the session worktree, which sits under `~/.komodo/wt/` (G-51)]
+- [TODO: when the path containment cache is invalidated after a `run` creates a symlink (G-51)]
+- [TODO: whether `search`, `diff` and `git_read` hide the contents of secret files (G-52)]
+- [TODO: the content of `system.md`, which must not hold rule text (G-46)]
 
 ##### Harness tool loop
 
@@ -2174,7 +2174,7 @@ The loop runs on API links. It is the harness's copy of what Claude Code does in
 
 No result tool exists mid-session: the result always comes from the final call, on every link. `prompt.md` tells the model to stop and summarize when it is finished.
 
-**Context limit.** The loop counts tokens every turn against the link's measured context. At 80%, old tool outputs shrink to one-line stubs, and their full text stays in `<session>/out/`. If the conversation is still over the context, the session ends with `no_result`, and nothing past the context is sent. [TODO: how tokens are counted each turn, and the stub text and order (G-NEW-7)]
+**Context limit.** The loop counts tokens every turn against the link's measured context. At 80%, old tool outputs shrink to one-line stubs, and their full text stays in `<session>/out/`. If the conversation is still over the context, the session ends with `no_result`, and nothing past the context is sent. [TODO: how tokens are counted each turn, and the stub text and order (G-48)]
 
 **📐 How does the loop reach a result?**
 ```mermaid
@@ -2199,7 +2199,7 @@ The tool server is built against Claude Code 2.1.295.
 |---|---|---|
 | `MCP_TOOL_TIMEOUT` | about 28 hours by default | A standard-input server has no per-request timer, so the sandbox's 10-minute `run` timeout is the only one that fires |
 | `MAX_MCP_OUTPUT_TOKENS` | 25,000 by default; warns past 10,000 | The 4 KB cap stays far below both |
-| `MCP_TIMEOUT` | 30 s | The server must answer `initialize` inside 30 s; it answers in under 100 ms. [TODO: what the engine does when the server does not answer in time (G-NEW-15)] |
+| `MCP_TIMEOUT` | 30 s | The server must answer `initialize` inside 30 s; it answers in under 100 ms. [TODO: what the engine does when the server does not answer in time (G-56)] |
 | `CLAUDE_CODE_RETRY_WATCHDOG` | never set in the worker environment | The supervisor reads `system/api_retry` lines instead |
 | `system/api_retry` | `rate_limit` or `billing_error` | The engine ends the session with reason `provider`, keeps its resume handle, and the provider layer fails over or pauses |
 
@@ -2248,7 +2248,7 @@ The reviewer and the tester have no write tools, but their `run` may write the w
 
 1. The tester's profile lists only its own worktree, the git directory, caches and toolchains. The builder's worktree under `~/.komodo/wt/` is outside that list, so even an exact path is unreadable by the sandbox, not by the guard.
 2. Reviewer and tester run tests on one commit at the same time. Linux `bwrap --unshare-net` and Windows Docker `--network none` give each session a private loopback. [TODO: whether `bwrap --unshare-net` gives each session a private loopback (G-08)]
-3. macOS has no network namespace, so the `test`-class runs of the two Verify sessions serialize through one per-repo lock file. [TODO: the lock file path and the waiting rule (G-NEW-14)]
+3. macOS has no network namespace, so the `test`-class runs of the two Verify sessions serialize through one per-repo lock file. [TODO: the lock file path and the waiting rule (G-55)]
 4. Each session has its own `TMPDIR` and `HOME`.
 5. Service-backed tests fail at the base commit too, so the baseline marks them pre-existing and they warn. An item may declare `needs: network | docker | service:<name>`; the tester skips it with reason `env` and a ⚠️ line.
 6. The copy time counts against Verify's wall time. Over 60 s warns, and `doctor` reports the mechanism.
@@ -2357,7 +2357,7 @@ The read-only worktree reset follows the four steps of [Read-only agents' run](#
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `guard.refusal_limit` | integer | 3 (hard limit 5) | Refusals under one rule before the session ends; the only guard tunable |
-| `sandbox.network` | string | `deny` | Network for run-class commands; loopback is always allowed. [TODO: the values other than `deny` (G-NEW-8)] |
+| `sandbox.network` | string | `deny` | Network for run-class commands; loopback is always allowed. [TODO: the values other than `deny` (G-49)] |
 | `sandbox.max_procs` | integer | 512 (hard limit 2048) | Processes per session; cgroups on Linux, Docker on Windows, no cap on macOS |
 | `sandbox.max_mem_gb` | integer | 8 (hard limit 32) | Memory per session; the pool also uses it to decide whether free memory covers one more session |
 | `sandbox.image` | string | detected | Docker image for native Windows; required for Makefile-only or 2-language repos |
@@ -2428,17 +2428,17 @@ Gap rows live in the [gap register](#appendix-o-gap-register); numbers marked G-
 
 #### Blocks building
 
-- G-NEW-1: how the tool server's events reach the engine.
-- G-NEW-2: the test-sibling rules per language.
-- G-NEW-3: the secret content patterns and the attribution patterns.
-- G-NEW-4: the glob grammar.
-- G-NEW-5: the content of `system.md`.
-- G-NEW-6: tool arguments, results and reply mechanics.
-- G-NEW-7: token counting and the context stub format.
-- G-NEW-8: sandbox profile text and environment values.
-- G-NEW-10: row order and home-anchored matching inside the worktree.
-- G-NEW-15: tool server start-up inputs and failures.
-- G-NEW-16: the layout and versioning of `embed/policy.json`.
+- G-42: how the tool server's events reach the engine.
+- G-43: the test-sibling rules per language.
+- G-44: the secret content patterns and the attribution patterns.
+- G-45: the glob grammar.
+- G-46: the content of `system.md`.
+- G-47: tool arguments, results and reply mechanics.
+- G-48: token counting and the context stub format.
+- G-49: sandbox profile text and environment values.
+- G-51: row order and home-anchored matching inside the worktree.
+- G-56: tool server start-up inputs and failures.
+- G-57: the layout and versioning of `embed/policy.json`.
 - [G-24](#appendix-o-gap-register): the data of `tool.denied` and `finding.submit`.
 - [G-30](#appendix-o-gap-register): refusal message and alternative templates.
 
@@ -2446,11 +2446,11 @@ Gap rows live in the [gap register](#appendix-o-gap-register); numbers marked G-
 
 - [G-08](#appendix-o-gap-register), [G-09](#appendix-o-gap-register), [G-10](#appendix-o-gap-register), [G-11](#appendix-o-gap-register), [G-12](#appendix-o-gap-register), [G-25](#appendix-o-gap-register): sandbox spikes.
 - [G-13](#appendix-o-gap-register): the steering-phrase list.
-- G-NEW-9: the `tool.post` formatting step.
-- G-NEW-11: secret files reachable through `search`, `diff`, `git_read`.
-- G-NEW-12: the role of `safety/shell.go` and the heartbeat in `safety/proc.go`.
-- G-NEW-13: external tool server allowlist.
-- G-NEW-14: the macOS test lock file.
+- G-50: the `tool.post` formatting step.
+- G-52: secret files reachable through `search`, `diff`, `git_read`.
+- G-53: the role of `safety/shell.go` and the heartbeat in `safety/proc.go`.
+- G-54: external tool server allowlist.
+- G-55: the macOS test lock file.
 
 ## 7. Providers and HTTP
 
@@ -7110,6 +7110,22 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-39 | Engine, parent guard | The parent guard's entry point; how the engine writes its heartbeat; where the session process identifier files live | Owner decision; then 3.5 and Appendix A data locations |
 | G-40 | Engine, Drive | What `Drive` does when an action fails or when a lease renewal is refused; where the time a group has been paused is kept, since `PauseState` holds only the reset time and the cap `limits.pause_max_min` counts from the pause | Owner decision on the architecture page; then 3.4 and chapter 2 `PauseState` |
 | G-41 | Engine, pick order | The definitions of the longest remaining chain weighted by task count (whether the group's own tasks count), of "most groups unblocked", and the key that gives backlog identifier order | Owner decision; then 3.3 |
+| G-42 | Tools | How the tool server's events (`tool.denied`, `finding.submit`, refusal-limit reached) reach the engine, and what carries them | Owner decision on the route between the tool server process and the engine |
+| G-43 | Guard | The test-sibling rules per language that row B1 and Check's scope check use | Owner decision, with a per-language rule table |
+| G-44 | Guard | The secret content patterns (row G4 writes) and the attribution patterns (row G5), and whether Check's secret scan shares the list | Owner decision, with the pattern list |
+| G-45 | Guard | The glob grammar for `pattern`, including what `**` matches and how a bare name matches | Owner decision, with the grammar |
+| G-46 | Sessions | The content of `system.md`; the launch line says it holds rules, the brief rules say no rule text reaches a worker | Owner decision on `system.md` content |
+| G-47 | Tools | Argument names and result shape of every tool except `run`; the head and tail split of a capped reply; the unchanged-file test for `read`; `search` output; lines `edit` returns on a miss; the reply for a failed tool | Authoring task: a tool schema table |
+| G-48 | Tools | How tokens are counted each turn in the harness tool loop; the stub text and order when old outputs shrink at 80% | Owner decision with the token-counting rule |
+| G-49 | Sandbox | The rendered seatbelt and `bwrap` profile text; the value of `PATH` in the command environment; the values `sandbox.network` accepts besides `deny` | Authoring task, checked by the per-operating-system proof cases |
+| G-50 | Tools | Which command the `tool.post` hook runs to format an edited file, and what happens when it fails | Owner decision |
+| G-51 | Guard | Which row a refusal names when a call breaks several; how home-anchored patterns such as `~/.komodo/**` match inside a worktree under `~/.komodo/wt/`; when the path containment cache is invalidated after a `run` creates a symlink | Owner decision with a matching rule |
+| G-52 | Guard | Whether `search`, `diff` and `git_read` hide the contents of secret files | Owner decision |
+| G-53 | Sandbox | What `safety/shell.go` (tokenize, chains, git classifier) does when `run` starts no shell, and what the `safety/proc.go` heartbeat reports and to whom | Owner decision or removal of the file |
+| G-54 | Tools | Where the external tool server allowlist lives and how a server mounts beside the Komodo server | Owner decision when external servers are designed |
+| G-55 | Sandbox | The path of the per-repo test lock file on macOS and how long the second session waits | Owner decision with the machine-shared file locking rule |
+| G-56 | Tools | How the tool server learns its worktree, the group's `files`, the command classes and the protocol revision without reading disk; what the engine does when the server misses the 30 s `initialize` limit or a sandbox cannot be prepared | Owner decision |
+| G-57 | Guard | The top-level layout of `embed/policy.json`, its version number, and how a reader handles an older or newer file; the layout and version of call logs under `<session>/out/` | Owner decision |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
