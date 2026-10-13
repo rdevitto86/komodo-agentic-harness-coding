@@ -19,27 +19,7 @@
 
 **Owners and controls**
 - **Owners:** domain architect (CEO) decides every gap and signs off per component; technical lead authors.
-- **Controls:** 0.9, draft, awaiting sign-off; source of truth: the HLD and LLD together; patches only; no phase 2 code before sign-off.
-
-**Revisions**
-
-| Version | Date | Change |
-|---|---|---|
-| 0.1 | 2026-10-09 | First draft from `PLAN.md`; enterprise sections; placeholders for open gaps |
-| 0.2 | 2026-10-11 | Repair stage references removed; `limits.repairs` renamed `limits.returns` |
-| 0.3 | 2026-10-11 | 12 chapters, diagrams, lookup appendices; every element explained plainly |
-| 0.4 | 2026-10-11 | State manager added as a core pillar: one state schema, the only door to runtime state |
-| 0.5 | 2026-10-11 | Group state: a group's events, snapshots and replay become one unit inside the state manager |
-| 0.6 | 2026-10-11 | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
-| 0.7 | 2026-10-12 | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
-| 0.8 | 2026-10-12 | Token and USD tracking is opt-in: the `track.usage` setting is on in `economy` mode and off in `thorough` mode |
-| 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
-| 0.10 | 2026-10-12 | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
-| 0.11 | 2026-10-12 | Component IDs removed; components are named in the traceability and decision tables |
-| 0.12 | 2026-10-12 | References to LLD sections name the section and its appendix |
-| 0.13 | 2026-10-12 | Glossary defines Drive, the engine's loop for one group |
-| 0.14 | 2026-10-12 | Full glossary gains 67 plain-language terms used in the LLD, such as checksum, fsync and goroutine |
-| 0.15 | 2026-10-12 | Owner decisions on the event spine and Verify written into the LLD; event count is 35 |
+- **Controls:** draft, awaiting sign-off; source of truth: the HLD and LLD together; patches only; no phase 2 code before sign-off.
 
 **Related:** [docs/lld.md](lld.md), `docs/prd.md` and ADR 0001 `docs/decisions/0001-standalone-harness.md` (phase 1 deliverables, not yet written), [Appendix B](#appendix-b-references) (references).
 
@@ -904,35 +884,14 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.15, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
-| Change control | Patches only, smallest span; a moved design decision adds a revision history row |
+| Change control | Patches only, smallest span |
 | Approval control | No phase 2 code starts until the owner has signed off every component |
 | Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (the LLD's gap register (Appendix O)); the gate fails a tag with no closing task |
 
-#### 3.3 Revision history
-
-| Version | Date | Author | Change |
-|---|---|---|---|
-| 0.1 | 2026-10-09 | Technical lead | First draft from `PLAN.md`; enterprise section set; placeholders for open gaps |
-| 0.2 | 2026-10-11 | Technical lead | Repair stage references removed; `limits.repairs` renamed `limits.returns`; the return to Build is the only loop after Check or Verify |
-| 0.3 | 2026-10-11 | Technical lead | 12 chapters, diagrams, lookup appendices; every element explained plainly |
-| 0.4 | 2026-10-11 | Technical lead | State manager added as a core pillar: one state schema, the only door to runtime state |
-| 0.5 | 2026-10-11 | Technical lead | Group state: a group's events, snapshots and replay become one unit inside the state manager |
-| 0.6 | 2026-10-11 | Technical lead | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
-| 0.7 | 2026-10-12 | Technical lead | The plan file's remaining facts moved into the HLD and LLD, which are now the source of truth |
-| 0.8 | 2026-10-12 | Technical lead | Token and USD tracking is opt-in: the `track.usage` setting (`auto`, `on`, `off`) is on in `economy` mode and off in `thorough` mode; flat keys 33 to 34; per-provider-family usage metrics deferred (G-26) |
-| 0.9 | 2026-10-12 | Technical lead | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
-| 0.10 | 2026-10-12 | Technical lead | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
-| 0.11 | 2026-10-12 | Technical lead | Component IDs removed; components are named in the traceability and decision tables |
-| 0.12 | 2026-10-12 | Technical lead | References to LLD sections name the section and its appendix |
-| 0.13 | 2026-10-12 | Technical lead | Glossary defines Drive, the engine's loop for one group |
-| 0.14 | 2026-10-12 | Technical lead | Full glossary gains 67 plain-language terms used in the LLD |
-| 0.15 | 2026-10-12 | Technical lead | Owner decisions on the event spine and Verify written into the LLD; event count is 35 |
-
-#### 3.4 Related documents
+#### 3.3 Related documents
 
 | Document | Relationship |
 |---|---|

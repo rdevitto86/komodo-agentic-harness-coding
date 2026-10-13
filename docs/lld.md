@@ -24,26 +24,6 @@
 - Komodo 1.0.0-beta.6; awaiting sign-off; source of truth: this LLD and `docs/hld.md` together.
 - Patches only; no phase 2 code before sign-off; every `[PENDING G-NN]` tag has one row in [Appendix O](#appendix-o-gap-register).
 
-**Revisions**
-
-| Version | Date | Change |
-|---|---|---|
-| 0.1 | 2026-10-09 | First draft from `PLAN.md` |
-| 0.2 | 2026-10-11 | Repair stage removed; `limits.repairs` renamed `limits.returns` |
-| 0.3 | 2026-10-11 | 12 subsystem chapters, internal diagrams, lookup appendices; every element explained in plain terms |
-| 0.4 | 2026-10-11 | State manager added as a core pillar: chapter 13 and [State manager (Appendix C)](#state-manager); one state schema replaces `events.schema.json`; pause timers become timer records |
-| 0.5 | 2026-10-11 | Group state: a group's events, snapshots and replay become one module of the state manager, with `Open`, `Append`, `Snapshot`, `Load` and `Tail`; [State manager (Appendix C)](#state-manager) and [Group state (Appendix C)](#group-state) |
-| 0.6 | 2026-10-11 | "Journal" renamed to state: state events plus snapshots make up group state; `journal.truncated` is now `state.truncated` |
-| 0.7 | 2026-10-12 | The plan file's remaining facts moved in: per-component proof cases, file map, component dependencies, archive sources, cutover detail; this LLD and the HLD are now the source of truth |
-| 0.8 | 2026-10-12 | Token and USD tracking is opt-in: key `track.usage` ([Flat keys (34) (Appendix B)](#flat-keys-34)) gates the ledger's token and USD fields, the scorecard's cost metrics, `warn.usd_per_run` and `limits.group_tokens`; flat keys 33 to 34; gap G-26 |
-| 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
-| 0.10 | 2026-10-12 | Event envelope fields renamed for plain reading: `v` to `version`, `ts` to `timestamp`, `crc` to `checksum`, `seq` to `sequence`; event lines carry no record header (`kind`, `key`, `rev`, `writer`) |
-| 0.11 | 2026-10-12 | Component IDs (S01 to S29) removed: components are named, [Component traceability (Appendix Q)](#component-traceability) maps names to sections, and a task group's `subsystem:` field and the gate's Maps check use the component name |
-| 0.12 | 2026-10-12 | Section numbers removed: headings carry names only, and every reference names its section and appendix as a link; 9 references that pointed at the wrong section now point at the right one |
-| 0.13 | 2026-10-12 | Drive gets its own section in Appendix D: what it is, when it starts and ends, what it waits on, one turn in 8 steps; 3 proof cases; gap G-29 for its open behaviour |
-| 0.14 | 2026-10-12 | Real examples: 28 JSON, Go and Markdown snippets beside 22 field tables; first use of each technical term on a page explained in place; gap G-30 lists the file formats the design leaves open |
-| 0.15 | 2026-10-12 | Owner decisions written: one event schema with typed data; `stage` on every group event; checksum over the line itself; UUID version 7 run and group ids with readable names; 3 machine-wide event types (35 in all) in a per-process machine log; event contracts with block reason `contract`; one decider on the bus; transitions as a Go table; snapshot reruns open actions first; Paused re-entry keeps the epoch; Verify returns to Build at the reviewer's end |
-
 **Related documents:** [docs/hld.md](hld.md) (the High-Level Design), `docs/prd.md` and `docs/decisions/0001-standalone-harness.md` (phase 1 deliverables, not yet written), [Appendix Q](#appendix-q-component-traceability). Terms: the HLD Glossary.
 
 **Code structure.** Komodo is one Go program, the `komodo` binary: 12 packages, about 90 files. A package is a folder of Go code that owns one layer, such as the engine or the guard. Imports run one way, so there are no cycles. Everything a model reads is compiled in, so a planted file cannot change what a worker sees. The gate (`komodo gate`, the self-check) refuses an import that points up.
@@ -1919,20 +1899,12 @@ Host cleanup matters: global Claude Code hooks call `~/.komodo/bin/komodo`, the 
 |---|---|
 | Document | Low-Level Design (LLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.1, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This LLD and `docs/hld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326`; `drafts/README.md` at commit `fdf4f61f` for brief slots |
-| Change control | Patches only, smallest span; a moved design decision adds a revision history row |
+| Change control | Patches only, smallest span |
 | Approval control | No phase 2 code starts until the owner has signed off every component |
 | Gap control | Every `[PENDING G-NN]` tag resolves to one row in the gap register (`docs/lld.md` [Gap register (Appendix O)](#gap-register)); the gate fails a tag with no closing task |
-
-#### Revision history
-
-| Version | Date | Author | Change |
-|---|---|---|---|
-| 0.1 | 2026-10-09 | Technical lead | First draft from `PLAN.md`; enterprise section set; placeholders for open gaps |
-| 0.2 | 2026-10-11 | Technical lead | Repair stage references removed; `limits.repairs` renamed `limits.returns`; the return to Build is the only loop after Check or Verify |
 
 #### Related documents
 
