@@ -201,143 +201,101 @@ flowchart LR
 
 ## 2. Event Spine and State Machine
 
-The event spine is how the engine remembers what happened and decides what to do next. An event is a typed fact such as `task.done`, appended to a state file, the per-group file `runs/<group-id>/events.jsonl` (see Glossary in the HLD). One pure function, `Next()`, turns the current state and one event into a new state, actions and follow-on events. Nothing else changes group state. The state machine is the fixed set of stages a group moves through: Intake, Build, Check, Verify, Ship. Paused and Blocked are holding states. Without this spine a crash would lose the group's position, and two code paths could move a stage at once.
+The event spine records every change to a task group as a typed event, and one pure function, `Next()`, decides what each event means. A group's position survives any crash because its events reach disk before they are applied, and no code path other than `Next()` can move a stage. This chapter specifies the event format, the decision function, the stage rulebook, the outbox that makes side effects safe to repeat, and the bus that tells readers what happened.
 
-The engine writes each event through group state, the state manager's module that keeps a group's events, snapshots and replay together ([Group state (Appendix C)](#group-state)): `Append` syncs the event, then `Next()` applies it. `Snapshot` saves `runs/<group-id>/state.json` every 50 events or on a stage change, so `Load` never replays from zero. Every line ends with a checksum, a short number computed from the line's text. After a crash, replay (re-reading the saved events to rebuild the group) finds a last line that no longer matches its checksum because the crash cut it short, drops it, and emits `state.truncated` once. Side effects go through the outbox: `Drive` appends `action.start` before an action and `action.done` after, with `id = sha256(sequence, action, args)`. On replay a done action is skipped and a started one reruns. Every spawn carries the stage's epoch, an integer that rises on each stage entry. A late result from a cancelled session carries an old epoch, is recorded `stale: true` and ignored.
+**Guarantees the tests pin**
 
-Three subscribers watch the group state after `Next()`: the ledger, the wake file under `state/wake/<run>`, and the `status --watch` renderer. They never change group state; each writes only its own derived kind through the state manager. No hooks run on the bus; the 3 inline hooks live in the guard, tools and recovery.
+| Guarantee | How |
+|---|---|
+| Ordered, gap-free | One writer per group state; `sequence` checked on append and replay |
+| Durable before applied | Append, fsync (forcing the write onto the disk), then `Next()`; a crash after the sync replays the event |
+| Exactly-once state moves | A stage moves only in `Next()`, keyed by `sequence`; stale-epoch events never move it |
+| At-least-once actions, safe to repeat | Every action has an idempotency key |
+| No lost wake | `status --wait` reads the state tail after subscribing |
+| Subscriber faults contained | A panicking subscriber is logged and dropped; state is untouched |
 
-**📐 Which events fire in which stage**
-```mermaid
-flowchart LR
-  %% One question: which event types fire in which stage. Spine arrows are the events that move a group.
-  RS["RUN STARTS<br><small>run.start</small>"]
-  IN["INTAKE<br><small>lock.taken<br>stage.exit</small>"]
-  BU["BUILD<br><small>task.claimed<br>task.retry<br>task.released<br>task.done</small>"]
-  CH["CHECK<br><small>check.done</small>"]
-  VE["VERIFY<br><small>finding.submit<br>finding.verified<br>stage.exit</small>"]
-  SH["SHIP<br><small>lock.released<br>group.shipped</small>"]
-  RE["RUN ENDS<br><small>run.done<br>run.stopped</small>"]
-  SE["SESSIONS IN BUILD AND VERIFY<br><small>session.start<br>session.idle<br>session.timewarn<br>tool.denied<br>session.end</small>"]
-  PA["PAUSED, ON A TIMER<br><small>group.paused<br>timer.due</small>"]
-  BL["BLOCKED, ON A PERSON<br><small>group.blocked</small>"]
-  AN["ANY STAGE<br><small>stage.enter<br>action.start<br>action.done<br>lease.lost<br>group.cancelled<br>state.truncated<br>provider.skip<br>limit.warn</small>"]
-  JO["MACHINE-WIDE, NO GROUP<br><small>job.due<br>job.fail<br>lease.taken<br>pool.slot.taken<br>queue.enqueued</small>"]
-  RS -->|"① run.start"| IN
-  IN -->|"② stage.exit"| BU
-  BU -->|"③ task.done"| CH
-  CH -->|"④ check.done pass"| VE
-  VE -->|"⑤ stage.exit"| SH
-  SH -->|"⑥ group.shipped"| RE
-  IN ~~~ SE
-  SE ~~~ PA
-  PA ~~~ BL
-  BL ~~~ AN
-  AN ~~~ JO
-  class RS,IN,BU,CH,VE,SH,RE core
-  class PA warn
-  class BL bad
-  class SE,AN,JO muted
+### 2.1 Scope
+
+**Owns:** the event envelope and the 35-type catalog, each type's data struct and contract (`Spec`), `Next()` and its transition table, the group `State` that `Next()` reads, the outbox's 10 action kinds, epochs, block reasons, and delivery to the 3 bus subscribers.
+
+**Does not own:** writing and replaying files, which is group state in the state manager ([State Manager](#13-state-manager)); the `Drive` loop that calls `Next()` ([Engine Internals](#3-engine-internals)); and the producers that report facts, such as the session supervisor, the guard and Check.
+
+What this subsystem is for, and who it talks to, is in the HLD: [Event Spine and State Machine](hld.md#event-spine-and-state-machine).
+
+### 2.2 Package Layout
+
+| File | Holds |
+|---|---|
+| `internal/state/kinds.go` | `Event`, `Type`, `Reason`, `Stage`, `ID` and one data struct per event type; the `event` kind registration the schema is generated from |
+| `internal/engine/stage.go` | `State`, `Next()`, the `transitions` table, `Spec` registrations, epochs |
+| `internal/engine/engine.go` | `Drive`, the caller of `Next()` ([Engine Internals](#3-engine-internals)) |
+| `internal/ops/bus.go` | `Subscriber`, in-order delivery to the ledger, the wake file and the `status --watch` renderer |
+| `embed/state.schema.json` | Generated at build from the kind registry; the gate fails when it disagrees with the Go types |
+
+The envelope and data structs sit in `internal/state` because the state manager validates every `Append` against them, and `state` may not import a package above it. `bus.go` delivers events and holds no type definitions.
+
+### 2.3 Data Model
+
+**Envelope.** Every event line, group or run, is one `Event`. `Drive` fills `stage` and `stale`; group state's `Append` fills `sequence`, `timestamp` and `checksum`; the producer fills the rest.
+
+```go
+// Type names one of the 35 catalog entries, such as "session.end".
+type Type string
+
+// Reason is one value of the closed reason list: block, exit and skip reasons.
+type Reason string
+
+// ID is a UUID version 7 in its text form; groups keep a readable name beside it.
+type ID string
+
+// Stage is where a group is; the last two are holding states.
+type Stage string
+
+const (
+	Intake  Stage = "intake"
+	Build   Stage = "build"
+	Check   Stage = "check"
+	Verify  Stage = "verify"
+	Ship    Stage = "ship"
+	Paused  Stage = "paused"
+	Blocked Stage = "blocked"
+)
+
+// Event is one line of runs/<group-id>/events.jsonl or runs/<run>.jsonl.
+type Event struct {
+	Version   int       `json:"version"`           // always 1
+	Sequence  uint64    `json:"sequence"`          // gap-free per file, stamped by Append
+	Timestamp time.Time `json:"timestamp"`         // the engine's clock, RFC 3339
+	Run       ID        `json:"run"`
+	Group     ID        `json:"group,omitempty"`   // on every group event
+	Session   ID        `json:"session,omitempty"` // on session and task events only
+	Stage     Stage     `json:"stage,omitempty"`   // on every group event; never on run.* or job.*
+	Epoch     uint32    `json:"epoch"`             // the stage epoch the producer was spawned under
+	Stale     bool      `json:"stale"`             // set by Drive when Epoch is older than the current
+	Type      Type      `json:"type"`
+	Reason    Reason    `json:"reason,omitempty"`  // one value of the closed reason list
+	Data      Payload   `json:"data"`              // the one struct registered for Type
+	Checksum  uint32    `json:"checksum"`          // CRC-32 of the line without this field, written last
+}
+
+// Payload is implemented by exactly one data struct per event type.
+type Payload interface{ EventType() Type }
 ```
-**Reading the diagram.** The spine runs left to right, and each box lists the event types that fire in that stage.
-1. ① `run.start` puts a group into Intake.
-2. ② `stage.exit` moves it to Build once Intake's gate is met.
-3. ③ The last task's `task.done` moves it to Check.
-4. ④ `check.done` with pass moves it to Verify.
-5. ⑤ `stage.exit` moves it to Ship once both Verify sessions pass.
-6. ⑥ `group.shipped` ends the group; the run ends after its last group.
 
-The lower row is off the spine: model sessions in Build and Verify, the two holding states, events that fire in any stage, and machine-wide events such as scheduler jobs and lease, pool and queue writes. Returns to Build and the moves through Paused and Blocked are drawn in [Transitions (Appendix C)](#transitions).
+| Field | Rule |
+|---|---|
+| `version` | Envelope version, 1 |
+| `sequence` | Checked on every append and every replay, so a missing line is detected |
+| `timestamp` | When the engine saw the fact, such as `2026-10-11T15:31:00Z`; never a model's claim |
+| `run`, `group`, `session` | UUIDs ([Naming and identifiers (Appendix A)](#naming-and-identifiers)) |
+| `stage` | `intake`, `build`, `check`, `verify`, `ship`, `paused` or `blocked`; required on group events, forbidden on `run.*` and `job.*`; lets `status` and the ledger group events by stage without replaying |
+| `epoch`, `stale` | A stale event is written and ignored by `Next()` ([Behaviour](#25-behaviour)) |
+| `type`, `reason`, `data` | `type` picks the one `data` struct allowed, so a `session.end` line can only carry a `session.end` body |
+| `checksum` | CRC-32 (IEEE polynomial, Go's `crc32.ChecksumIEEE`) over the compact line's bytes up to the `,"checksum":` key, written as a decimal number |
 
-**📐 What happens to one event: the engine and the state manager**
-```mermaid
-sequenceDiagram
-  autonumber
-  participant P as Producer (supervisor, Check, guard)
-  participant D as Drive (one loop per group)
-  participant M as State manager (group state)
-  participant N as Next() (pure, in the engine)
-  participant S as Subscribers (ledger, wake, watch)
-  rect rgba(99,102,241,0.08)
-    Note over D,N: On start, resume or after a crash
-    D->>M: Load(Next)
-    M->>N: replay the events after the snapshot
-    M-->>D: state and unfinished actions
-  end
-  P->>D: event, stamped with its session's epoch
-  D->>M: Append(event)
-  M-->>D: sequence, synced to disk
-  D->>N: Next(state, event)
-  N-->>D: new state, actions, follow-on events
-  D->>M: Append(follow-on events, action.start)
-  Note right of D: run each action, such as a spawn or a commit
-  D->>M: Append(action.done)
-  D->>M: Snapshot(state)
-  D->>S: the applied event, in sequence order
-  S->>M: write own records: ledger rows, wake file
-```
-**Reading the diagram.**
-1. When a group starts, resumes or recovers from a crash, `Drive` asks the state manager's group state to `Load` it, passing in `Next()`.
-2. Group state reads `state.json` and replays only the events after it through `Next()`.
-3. It returns the snapshot's open actions (an `action.start` with no `action.done`) first, and `Drive` reruns each before any later event is applied; then it returns the rebuilt state.
-4. A producer hands `Drive` a fact, stamped with the epoch its session started under.
-5. `Drive` calls `Append`; the manager stamps `sequence`, `timestamp`, `checksum` and `stale`, validates the event against the schema and syncs it.
-6. Only after the event is on disk does `Append` return.
-7. `Drive` calls `Next()`, which changes nothing on disk.
-8. `Next()` returns the new state, the actions to run and any follow-on events; a stale event changes nothing.
-9. `Drive` appends the follow-on events and an `action.start` line for each action, then runs each action, such as a spawn or a commit.
-10. `Drive` appends `action.done`, so replay will skip it.
-11. `Drive` hands the new state to `Snapshot`, which writes `state.json` every 50 events or on a stage change.
-12. The bus gives the applied event to the 3 subscribers, in sequence order.
-13. Each subscriber writes only its own records through the state manager, never the group's events.
+The build generates one JSON Schema from the envelope and the registry, with one branch per type, no extra fields allowed, and an enum for every `reason`. The state manager checks every `Append` against it and `komodo help --json` serves its event part as `events`. The fields of each type's data struct are open `[PENDING G-24]`, and the envelope's `id`, `class`, `cause` and `corr` fields wait on the requests and single-write decisions `[PENDING G-29]`.
 
-**What matters**
-- The catalog has 35 event types in 8 families, registered with the state manager as the `event` kind; the build generates `embed/state.schema.json`, and the gate fails if they disagree.
-- 9 action rows cover 10 kinds (`wip_commit` and `commit` share one key), each with a declared idempotency key, such as `commit` on `(group, fence, tree hash)`. The gate fails a kind missing from the table.
-- 13 transitions move a group; Check or Verify returns to Build only while returns stay under `limits.returns` (3, hard limit 5).
-- Paused waits on a provider timer and ends by `pause_max_min` (360). Blocked waits on a person and ends by `resume`, `scope` or `abandon`. Both return the pool slot and keep the lease.
-- A group blocked 3 times for one reason is flagged `needs redesign` in `status`.
-- A subscriber must return under 5 ms; an error or panic drops that subscriber for the run.
-
-**Lookup:** [Appendix C](#appendix-c-event-model-state-machine-event-bus-and-state-manager) holds the envelope, 35 event types, group state rules, 9 action rows, 13 transitions, Paused versus Blocked, block reasons and bus rules.
-
-### 2.1 Event Model
-
-#### Event model
-
-
-**In plain terms.** An event is a typed fact the engine records when something happens, such as a task finishing or a session going quiet (see Glossary). Every change to a group's state travels as an event through one pure function, `Next()`, which decides what to do next. This design exists so state can be rebuilt by replaying the record after a crash, and so no model can claim work is done. The engine and its mechanical parts emit events; model sessions never do; the orchestrator and `status` only read them.
-
-#### Envelope
-
-**In plain terms.** The envelope is the fixed set of fields every event line carries, like the header on a form. It says which event this is, where it happened, in what order, and whether it is still relevant. It exists so events can be ordered, replayed and checked for corruption without reading their contents. The engine writes every field; readers such as `status` and the ledger only parse them.
-
-| Field | Type | Meaning |
-|---|---|---|
-| `version` | int | Envelope version, 1 |
-| `sequence` | int | Order within the group state, no gaps |
-| `timestamp` | RFC 3339 | When the engine saw the fact |
-| `run`, `group`, `session` | UUID | Where it happened; `group` on every group event; `session` only on session and task events |
-| `stage` | string | The group's stage when the event was saved: `intake`, `build`, `check`, `verify`, `ship`, `paused` or `blocked`; on every group event, never on `run.*` or `job.*` |
-| `epoch`, `stale` | int, bool | The stage epoch the producer was spawned under; `stale` set by `Drive` when older than the current |
-| `type`, `reason`, `data` | string, string, object | What happened; `reason` from the code list; `data` is the one data shape registered for that `type` |
-| `checksum` | uint32 | A number computed from this line's own text, written last; a line cut short by a crash no longer matches, so replay drops it and emits `state.truncated` once |
-
-**What each one does**
-- **`version`:** The envelope format version, always 1. Every line carries the same value.
-- **`sequence`:** The event's position in its group's state, counting up with no gaps. The engine checks it on every append and every replay, so a missing line is detected.
-- **`timestamp`:** The time the engine saw the fact, in RFC 3339 form (such as `2026-10-11T15:31:00Z`). It is the engine's clock, never a model's claim.
-- **`run`, `group`, `session`:** Which run, group and session the event belongs to, each a UUID ([Naming and identifiers (Appendix A)](#naming-and-identifiers)). `group` is on every group event; `session` is filled only on session and task events.
-- **`stage`:** The stage the group was in when the event was saved. Group state's `Append` stamps it from `Drive`'s current state, as it stamps `sequence` and `timestamp`. It is required on every group event and forbidden on `run.*` and `job.*` lines, so `status` and the ledger can group events by stage without replaying anything.
-- **`epoch`, `stale`:** `epoch` is the stage epoch (an integer that rises on every stage entry, see Glossary) the producer was started under. `Drive` sets `stale` to true when that epoch is older than the current one, and `Next()` then ignores the event.
-- **`type`, `reason`, `data`:** `type` names the event from the 35-entry catalog; `reason` is a code from the shared code list, such as an exit reason; `data` is the event's payload. Each type registers exactly one Go data struct, and the type field picks which one is allowed, so a `session.end` line can only carry a `session.end` body. The fields of each struct are still open `[PENDING G-24]`.
-- **`checksum`:** A short number computed with CRC-32, a standard checksum method, over this line's own text with the `checksum` field left out; it is written last. Replay recomputes it on every line. If a crash cut the last line short, the number no longer matches, so that line is dropped and one `state.truncated` event is emitted.
-
-**One schema for every event.** Every event shares one Go envelope struct, the fields above. The build generates one JSON Schema from it, with one branch per event type, no extra fields allowed, and a fixed list of values for every `reason`. The state manager checks every `Append` against that schema, and `komodo help --json` serves it.
-
-**Examples**
-
-One session.end event, spread over lines here for reading; on disk it is one compact line, and its checksum covers that line. Its `data` is empty here because the per-type fields are still open (G-24).
+**Example.** A `session.end` line, spread over lines for reading; on disk it is one compact line.
 
 ```json
 {
@@ -357,7 +315,7 @@ One session.end event, spread over lines here for reading; on disk it is one com
 }
 ```
 
-Two more lines from the same events.jsonl, a stage.enter and a group.blocked, one JSON object per line.
+Two more lines from the same file, a `stage.enter` and a `group.blocked`:
 
 ```json
 {"version":1,"sequence":7,"timestamp":"2026-10-12T15:20:03Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"stage.enter","data":{},"checksum":526820511}
@@ -366,128 +324,145 @@ Two more lines from the same events.jsonl, a stage.enter and a group.blocked, on
 
 #### Catalog (35 types)
 
-**In plain terms.** The catalog is the complete list of the 35 event types the engine can record, grouped into 8 families by what they describe. It is a fixed Go enum (a fixed list of allowed values), registered with the state manager as the `event` kind: the build generates `embed/state.schema.json` from it, and the gate fails when the two disagree. The list exists so every reader, from `status` to the ledger, knows every fact that can occur. The engine, its supervisor, the guard, the scheduler and the provider adapters emit them; nothing else does.
+The catalog is a fixed Go enum in 8 families, registered with the state manager as the `event` kind. The gate fails on an emitted type missing from it, or a listed type nothing emits. Model sessions never emit events; a session's typed JSON becomes an event only after Go validates it.
 
-| Family | Types | Emitted by |
+| Type | Emitted by | When, and what `Next()` does with it |
 |---|---|---|
-| Run | `run.start`, `run.done`, `run.stopped` | Engine; `run.stopped` by shutdown |
-| Group | `group.paused`, `group.blocked`, `group.cancelled`, `group.shipped`, `lease.lost` | Engine, workspace, ship |
-| Stage | `stage.enter`, `stage.exit` | Engine |
-| Session | `session.start`, `session.idle`, `session.timewarn`, `session.end` (with exit reason) | Supervisor; provider supplies limit reasons |
-| Work | `task.claimed`, `task.released`, `task.done`, `task.retry`, `check.done`, `finding.submit`, `finding.verified`, `tool.denied`, `timer.due`, `job.due`, `job.fail` | Tools, guard, supervisor, scheduler, recovery, Check, review |
-| Ledger | `lock.taken`, `lock.released`, `action.start`, `action.done`, `state.truncated` | `Drive`, recovery |
-| Provider | `provider.skip` (with reason such as `ctx_below_floor`), `limit.warn` | Provider adapters |
-| Machine | `lease.taken`, `pool.slot.taken`, `queue.enqueued` | Workspace, session pool, work queue; written to the machine log |
+| `run.start` | Engine | `komodo run` starts a run; every ready group enters Intake |
+| `run.done` | Engine | The run finished; wakes `status --wait`. What counts as finished is `[UNKNOWN: not yet designed]` `[PENDING G-31]` |
+| `run.stopped` | Shutdown | A signal or `stop <run>`, after agents stop, work is WIP-committed and leases are freed; wakes `status --wait` |
+| `group.paused` | Engine | A provider limit left no allowed link; `status` shows the link and the resume time |
+| `group.blocked` | Engine | A bound ran out or a decision is needed, with a [block reason](#block-reasons) |
+| `group.cancelled` | Engine, workspace, ship | Trigger `[UNKNOWN: not yet designed]` `[PENDING G-31]` |
+| `group.shipped` | Ship | Merge clean, Check passed on the epic tip, landing succeeded; ends the group |
+| `lease.lost` | Workspace | A git write with a stale fence was refused: another run took the group; `Next()` stops it |
+| `stage.enter` | Engine | A group enters a stage; the epoch rises; a snapshot is written; wakes `status --wait any` |
+| `stage.exit` | Engine | Intake's or Verify's gate is met |
+| `session.start` | Supervisor | A session is spawned with its brief; fires with `task.claimed` |
+| `session.idle` | Supervisor | No stream line and no running tool for `limits.session_idle_min`; one nudge, then a stop after a 5-minute grace |
+| `session.timewarn` | Supervisor | 80% of the session's wall clock; a fixed finish-now line is injected |
+| `session.end` | Supervisor | The session ended with an exit reason ([Exit reasons (Appendix F)](#exit-reasons)); `Next()` orders a commit, a retry, a pause or a block; a writing session's end orders a WIP commit |
+| `task.claimed` | Supervisor | With `session.start`; the task moves from queued to claimed in the lock table |
+| `task.released` | Supervisor, recovery | With `session.end`, or reason `crash` when the startup sweep finds the session dead |
+| `task.done` | Engine | The builder ended, `done_when` exited 0 and the result is on the hidden ref |
+| `task.retry` | Engine | Another attempt after a schema-invalid result, a failed gate, a cut-off reply, 3 refusals under one rule or a failed `done_when`; counts toward `limits.task_attempts` |
+| `check.done` | Check | Pass or fail after the zero-token checks |
+| `finding.submit` | Tools | A reviewer's `submit_finding` passed validation: a known rule ID, a `file:line` and a quoted evidence line |
+| `finding.verified` | Review | Go found the quoted evidence at that line in the head or the diff; unverified findings are dropped and logged |
+| `tool.denied` | Guard | A tool call was refused inline; 3 refusals under one rule end the session |
+| `timer.due` | Scheduler, engine, sweep, `status` | A paused group's `wait_until` passed; the live engine sleeps until the earliest one |
+| `job.due` | Scheduler | A job's interval elapsed at a `jobs tick`; the job is enqueued as its own run |
+| `job.fail` | Scheduler | A job run failed; it backs off and is Blocked after 3 failures |
+| `lock.taken` | Intake | Backlog files hashed into `card_hash`; edits, re-plans and new tasks are refused with `locked` |
+| `lock.released` | Ship, abandon | The task list is editable again |
+| `action.start` | `Drive` | Before a side effect, with its `id` and `action` |
+| `action.done` | `Drive` | After the side effect completes |
+| `state.truncated` | Recovery | Replay dropped a last line whose checksum failed; at most one event lost |
+| `provider.skip` | Provider adapters | A link was skipped, with `{from, to, reason}`: unavailable, unauthorized, over its limit or `ctx_below_floor` |
+| `limit.warn` | Provider adapters | A window passed `warn.quota_pct`, Max began drawing paid overage, or spend passed `warn.usd_per_run` with `track.usage` on; never stops work |
+| `lease.taken` | Workspace | Machine log only: a `Claim` on a lease succeeded |
+| `pool.slot.taken` | Session pool | Machine log only: a session took a machine-wide slot |
+| `queue.enqueued` | Work queue | Machine log only: a ready group or due job was queued |
 
-**What each one does**
-- **`run.start`:** The engine emits it when `komodo run` starts a run. It is the first event, and it moves every ready group into Intake.
-- **`run.done`:** The engine emits it when a run has finished. It wakes `komodo status --wait`, so the orchestrator sees the run end. [UNKNOWN: not yet designed] the exact condition that counts as finished.
-- **`run.stopped`:** Shutdown writes it when a run is stopped by a signal or `stop <run>`, after agents are stopped, work is WIP-committed and leases are freed. It wakes `status --wait`.
-- **`group.paused`:** The engine emits it when a provider limit leaves no allowed link and the group goes to Paused. It wakes `status --wait`, and `status` shows the link and the resume time.
-- **`group.blocked`:** The engine emits it when a group hits a bound or needs a decision, carrying the block reason from [Block reasons (Appendix C)](#block-reasons). It wakes `status --wait`; a person or the orchestrator must act.
-- **`group.cancelled`:** A group-family event emitted by the engine, workspace or ship code. [UNKNOWN: not yet designed] what triggers it.
-- **`group.shipped`:** Ship emits it when the group's merge is clean, Check passed on the epic tip and the landing succeeded. It ends the group's lifecycle.
-- **`lease.lost`:** The workspace code emits it when a git write with a stale fence (see Glossary) is refused, meaning another run took over the group. `Next()` stops the group so two runs never both land it.
-- **`stage.enter`:** The engine emits it when a group enters a stage; the epoch rises with it. `status --wait any` wakes on it, and a snapshot is written on every stage change.
-- **`stage.exit`:** The engine emits it when a stage's gate is met, for Intake and Verify. It is the event that moves Intake to Build and Verify to Ship.
-- **`session.start`:** The supervisor emits it when a model session is spawned with its brief. `task.claimed` fires with it, and the session's ledger row begins.
-- **`session.idle`:** The supervisor emits it when a session has been silent for `limits.session_idle_min`, with no stream line and no running tool. The engine sends one nudge and, after a 5-minute grace, stops the session.
-- **`session.timewarn`:** The supervisor emits it at 80% of the session's wall clock. A fixed line telling the model to finish and stop is injected into the session.
-- **`session.end`:** The supervisor emits it when a session ends, with its exit reason (`done`, `timeout`, `paused`, `crash` and the rest listed in [Exit reasons (Appendix F)](#exit-reasons)). `Next()` decides what follows: a commit, a retry, a pause or a block. Any writing session's end triggers a WIP commit.
-- **`task.claimed`:** Fires with `session.start`, recording which session now owns the task. The task moves from queued to claimed in the ledger's lock table.
-- **`task.released`:** Fires with `session.end`, freeing the task. A task whose session is found dead by the startup sweep is released with reason `crash`.
-- **`task.done`:** The engine emits it after a builder session ends, the task's `done_when` command exits 0 and the result is committed to the hidden ref. The last task's `task.done` moves the group to Check.
-- **`task.retry`:** Emitted when a task gets another attempt: a schema-invalid result, a failed gate, a cut-off reply, 3 refusals under one rule, or a failed `done_when`. Each attempt counts toward `limits.task_attempts`.
-- **`check.done`:** Check emits it with pass or fail once the zero-token checks have run. Pass moves the group to Verify; fail sends it back to Build.
-- **`finding.submit`:** Emitted when a reviewer's `submit_finding` tool call passes Go's validation: a known rule ID, a `file:line` and a quoted evidence line. It is a claim, not yet a verdict.
-- **`finding.verified`:** Emitted when Go finds the quoted evidence at that line in the head or the diff. A verified blocking finding sends the group back to Build with the finding; unverified ones are dropped and logged.
-- **`tool.denied`:** The guard logs it after refusing a tool call, since the check itself runs inline before the call. Three refusals under one rule end the session.
-- **`timer.due`:** Fires when a paused group's `wait_until` time passes. The live engine sleeps until the earliest one; if no engine is live, the startup sweep, `jobs tick` or `status` fires it. It moves the group out of Paused.
-- **`job.due`:** The scheduler emits it when a scheduled job's interval has elapsed at a `jobs tick`. The job is enqueued into the work queue as its own run.
-- **`job.fail`:** The scheduler emits it when a job run fails. The job backs off; after 3 failures it is Blocked and wakes `status --wait`.
-- **`lock.taken`:** Intake emits it after hashing the group's backlog files into `card_hash`. While locked, adding tasks to the group, re-planning it, or hand-editing its files is refused with `locked`.
-- **`lock.released`:** Emitted on landing or abandon, freeing the group's task list for edits again.
-- **`action.start`:** `Drive` writes it, with the action's `id` and `action` (which side effect, such as `spawn`), before running any side effect such as a commit. On replay a started but unfinished action is rerun.
-- **`action.done`:** `Drive` writes it after the side effect completes. On replay a done action is skipped, so a crash never repeats a commit or a landing.
-- **`state.truncated`:** Emitted once during replay when the last event line no longer matches its checksum and is dropped. It records that at most one event was lost to a crash mid-write.
-- **`provider.skip`:** A provider adapter emits it, with `{from, to, reason}`, whenever a link is skipped. The reasons are unavailable, unauthorized, over its limit or below the context floor (`ctx_below_floor`). The report also shows a warning naming the model the task actually ran on.
-- **`limit.warn`:** A provider adapter emits it when a usage window passes `warn.quota_pct`, when Max starts drawing paid overage credits, or, with `track.usage` on, when a run's spend passes `warn.usd_per_run`. It appears under the report's warnings heading and never stops work.
-- **`lease.taken`:** Written to the machine log when a run's `Claim` on a group's lease succeeds. The lease file stays the thing that decides the owner; the event records that it happened.
-- **`pool.slot.taken`:** Written to the machine log when a session takes one of the machine-wide session slots.
-- **`queue.enqueued`:** Written to the machine log when a ready group or due job is added to the work queue.
+**Families:** Run (3), Group (5: the 4 `group.*` plus `lease.lost`), Stage (2), Session (4), Work (11), Ledger (5: `lock.*`, `action.*`, `state.truncated`), Provider (2), Machine (3).
 
-**Machine-wide records.** Leases, pool slots, the work queue and jobs are shared by every `komodo` process on the machine, so they keep the state manager's create-only `Claim`, `Replace` and `Remove`; those are what make two processes agree. Every successful write also adds a typed event (`lease.taken`, `pool.slot.taken`, `queue.enqueued`, `job.due`) to a machine log under `~/.komodo/state/events/`, one file per process so each file has one writer. File naming is `[UNKNOWN: not yet designed]` `[PENDING G-30]`. Anything that affects a group, such as a lost lease, also goes into that group's own events for `Next()`, and `status` merges the machine logs by `timestamp` for display.
+**Machine-wide records.** Leases, pool slots, the work queue and jobs keep the state manager's create-only `Claim`, `Replace` and `Remove`, which make two processes agree. Each successful write also appends a typed event to a machine log under `~/.komodo/state/events/`, one file per process so each file has one writer; file naming is `[UNKNOWN: not yet designed]` `[PENDING G-30]`. An event that affects a group, such as a lost lease, also goes into that group's own events for `Next()`, and `status` merges the machine logs by `timestamp`.
 
-**Event contracts.** Each type registers a Go `Spec` next to its data struct: which producers may emit it, the stages that accept it, the events it may emit next, the actions it may order and whether it wakes `status --wait`. `Drive` checks every `Next()` result against the triggering type's `Spec`; a violation blocks the group with reason `contract`. The gate feeds every type through `Next()` in tests, and the build writes the contract table into this document and `help --json`, so the docs cannot drift from the code. Whether a `Spec` also names the event's class (fact, request or outcome) waits on an open decision `[PENDING G-29]`.
+#### Contracts
 
-Each type's `data` is a Go struct registered with the state manager as part of the `event` kind. The build generates `embed/state.schema.json` from the registry; `help --json` serves its event part as `events`; the gate fails when the two disagree. Listing each type's `data` fields is open `[PENDING G-24]`.
+Each type registers a `Spec` beside its data struct. `Drive` checks every `Next()` result against the triggering type's `Spec`; a violation blocks the group with reason `contract`. The build writes the contract table into this document and `help --json`.
 
-### 2.2 State Files, Snapshots and the Outbox
+```go
+// Spec is the contract registered for one event type.
+type Spec struct {
+	Producers []string     // components allowed to emit it
+	Stages    []Stage      // stages that accept it; any other is refused
+	Emits     []Type       // events Next may emit in response
+	Orders    []ActionKind // actions Next may order in response
+	Wakes     bool         // wakes status --wait
+}
 
-#### State files and snapshots
+// SpecOf returns the contract registered for a type.
+func SpecOf(t Type) Spec
 
-**In plain terms.** A state file is the append-only file where a group's events are written, one JSON line each (see Glossary). A snapshot is a periodic save of the state those events add up to, so recovery does not start from the first line. Together they are what lets a crashed or killed engine resume with at most one model turn lost. Both live in group state, one module of the state manager ([Group state (Appendix C)](#group-state)); the group's `Drive` goroutine (a lightweight Go thread) is their only writer, and `status`, the ledger and `resume` read them through it too.
+// Register binds a type to its one data struct and its contract; called from init in kinds.go and stage.go.
+func Register(t Type, data func() Payload, spec Spec)
+```
 
-| Item | Rule |
-|---|---|
-| Group state | `runs/<group-id>/events.jsonl`; one writer; group state's `Append`: append, fsync (forcing the write onto the disk), then apply |
-| Run state | `runs/<run>.jsonl` for `run.*` events; group state's `Append` and `Tail`, no snapshot |
-| Snapshot | `runs/<group-id>/state.json` holds the last `sequence`; group state's `Snapshot`, every 50 events or on a stage change; refused unless its `sequence` is the group state's last |
-| Replay | Group state's `Load`, from the snapshot, never from `sequence` 0; cost bounded by 50 events; a 10,000-event replay must finish under 1 s `[PENDING G-19]` |
-| Line cut short by a crash | A last line that no longer matches its checksum is dropped, and `state.truncated` is emitted once |
+Whether a `Spec` also names the event's class (fact, request or outcome) is open `[PENDING G-29]`.
 
-**What each one does**
-- **Group state:** The file `runs/<group-id>/events.jsonl` holding every event for one group. The group's `Drive` alone appends each line through group state's `Append`, which syncs it to disk before `Next()` applies it. A crash after the sync replays the event instead of losing it.
-- **Run state:** The file `runs/<run>.jsonl` holding only the `run.*` events for one run, written through the same group state calls without a snapshot. Groups never read each other's state files; they meet only in the queue and the pool.
-- **Snapshot:** The file `runs/<group-id>/state.json`, holding the group's current state and the last `sequence` applied (fields in [Group snapshot (Appendix C)](#group-snapshot)). Group state's `Snapshot` writes it atomically every 50 events or on a stage change, off the critical path, and refuses one whose `sequence` is not the group state's last.
-- **Replay:** On resume, group state's `Load` reads the snapshot and returns its `actions_open` list first; `Drive` reruns each of those actions under its idempotency key before a single later event is applied. `Load` then replays only the events after the snapshot's `sequence` through `Next()`, so recovery costs at most 50 events. A 10,000-event replay must still finish under 1 second.
-- **Line cut short by a crash:** A crash mid-write can leave a half-written last line. It no longer matches its checksum, so the line is dropped, and one `state.truncated` event records the loss.
+#### The State Struct
 
-**Example**
+`State` is what `Next()` reads and returns, and what the snapshot stores. The record header around it on disk belongs to the state manager ([Group snapshot (Appendix C)](#group-snapshot)).
 
-The `runs/<group-id>/state.json` snapshot for group tg-1.2, written at sequence 50, using the fields the group snapshot lists. The header-and-body layout shown is illustrative; G-30 keeps it open.
-
-```json
-{
-  "v": 1,
-  "kind": "group",
-  "key": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-  "rev": "[UNKNOWN: not yet designed]",
-  "ts": "[UNKNOWN: not yet designed]",
-  "writer": "[UNKNOWN: not yet designed]",
-  "body": {
-    "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
-    "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-    "stage": "build",
-    "epoch": 2,
-    "fence": 3,
-    "sequence": 50,
-    "config_hash": "[UNKNOWN: not yet designed]",
-    "tasks": [
-      {
-        "id": "[UNKNOWN: not yet designed]",
-        "state": "claimed",
-        "attempts": 1,
-        "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35"
-      }
-    ],
-    "actions_open": [],
-    "resume": {
-      "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35",
-      "handle": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35",
-      "link": "claude-cli"
-    },
-    "pause": {},
-    "block": {}
-  }
+```go
+// State is one group's position and every counter Next reads.
+type State struct {
+	Run         ID
+	Group       ID
+	Stage       Stage
+	Prior       Stage            // the stage a Paused or Blocked group returns to
+	Epoch       uint32
+	Fence       uint64
+	Sequence    uint64           // the last event applied
+	ConfigHash  string
+	Tasks       []TaskState
+	ActionsOpen []Action         // started, not done; rerun first on Load
+	Resume      ResumeRef
+	Pause       PauseState
+	Block       BlockState
+	Returns     int              // returns to Build so far, against limits.returns
+	Verify      VerifyProgress   // reviewer and tester results in the current epoch
+	FailureHash string           // the last failure's fingerprint, for flap detection
+	Blocks      map[Reason]int   // blocks per reason; 3 flags needs redesign
+	WallUsed    time.Duration    // excludes Paused and Blocked time
 }
 ```
 
-#### The outbox
+`Returns`, `Verify`, `FailureHash`, `Blocks` and `WallUsed` keep a crash from resetting a loop limit; with `Prior`, they are the default pending the owner `[PENDING G-32]`. The fields of `TaskState`, `ResumeRef`, `PauseState`, `BlockState` and `VerifyProgress` are `[UNKNOWN: not yet designed]` `[PENDING G-30]`.
 
-**In plain terms.** An action is a side effect the engine performs, such as starting a session or committing code. The outbox is the pair of event lines, `action.start` and `action.done`, written around every action (see Glossary). It exists so that after a crash the engine knows which actions finished and which must run again. Every action is designed to be safe to repeat. `Next()` decides the actions; `Drive` records them through group state's `Append` and runs them; nothing else performs side effects.
+**Example.** The body of `runs/<group-id>/state.json` at sequence 50, group tg-1.2.
 
-`Next()` returns actions; `Drive` appends `action.start {id, action}` before running one and `action.done` after, both through group state's `Append`. `id = sha256(sequence, action, args)`. On replay, group state's `Load` returns the snapshot's started-but-unfinished actions first, `Drive` reruns them, and a done action is skipped. The gate fails an action kind missing from this table.
+```json
+{
+  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
+  "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
+  "stage": "build",
+  "prior": "",
+  "epoch": 2,
+  "fence": 3,
+  "sequence": 50,
+  "config_hash": "[UNKNOWN: not yet designed] [PENDING G-30]",
+  "tasks": [
+    {"id": "[UNKNOWN: not yet designed] [PENDING G-30]", "state": "claimed", "attempts": 1, "session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35"}
+  ],
+  "actions_open": [],
+  "resume": {"session": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35", "handle": "3f8c2d7e-5b1a-4c9e-9a64-0d2e7b1f8a35", "link": "claude-cli"},
+  "pause": {},
+  "block": {},
+  "returns": 1,
+  "verify": {},
+  "failure_hash": "",
+  "blocks": {},
+  "wall_used": "41m"
+}
+```
+
+#### Actions
+
+`Next()` returns actions; it never performs one. Each kind declares an idempotency key, and the gate fails a kind missing from this table.
+
+```go
+// ActionKind names one side effect Drive may perform.
+type ActionKind string
+
+// Action is one side effect Next orders, recorded by action.start and action.done.
+type Action struct {
+	ID   string          `json:"id"`     // hex of sha256(sequence, action, args)
+	Kind ActionKind      `json:"action"`
+	Args json.RawMessage `json:"args"`   // per-kind struct [UNKNOWN: not yet designed] [PENDING G-30]
+}
+```
 
 | Action | Idempotency key | Safe to repeat because |
 |---|---|---|
@@ -501,253 +476,252 @@ The `runs/<group-id>/state.json` snapshot for group tg-1.2, written at sequence 
 | `scope_change` | `(group, sorted paths)` | Adding a path twice is one path |
 | `notify` | Event `sequence` | A wake is a file touch |
 
-**What each one does**
-- **`spawn`:** Starts a model session with its brief, tool server and sandbox profile. Komodo picks the session UUID first, so a repeat with a live UUID does nothing and a repeat with a dead one restarts the session.
-- **`wip_commit`, `commit`:** Saves the worktree's current state to the hidden ref (a git ref the engine keeps per group, see Glossary). `wip_commit` runs at every writing session's end; `commit` runs when a task is done. The ref moves by compare-and-swap with the fence, and an identical tree writes nothing.
-- **`cancel`:** Stops a session: SIGINT, then SIGTERM after 30 s, then a whole-tree kill. It is used when the first verified Verify finding makes the tester pointless, and when a pause hits its cap. Killing a dead process is a no-op.
-- **`setup`:** Runs the detected `setup` command in a group's worktree, with network on, during Intake. The result is cached by lockfile hash (a content fingerprint), so a rerun on the same dependencies copies instead of downloading.
-- **`check`:** Runs one Check command against one tree. Results are cached by tree hash and command, so a replayed or repeated check costs nothing.
-- **`land`:** Merges the finished group into the epic branch. A landed merge commit already exists on repeat, and the fence refuses a lander that lost the lease.
-- **`open_pr`:** Opens the pull request for the epic, or for a group under `ship.mode: group`, with `gh`. On repeat, `gh` finds the PR already open for that head commit.
-- **`scope_change`:** Adds approved paths to a group's `files` list after `scope approve`. Adding the same path twice yields one path.
-- **`notify`:** Wakes a waiting `status --wait` by touching a file under `state/wake/<run>`. Touching it twice is harmless; the waiter reads the state tail afterward anyway.
+- **`spawn`:** starts a session with its brief, tool server and sandbox profile.
+- **`wip_commit`:** runs at every writing session's end; **`commit`** runs when a task is done. Both write the hidden ref.
+- **`cancel`:** SIGINT, then SIGTERM after 30 s, then a whole-tree kill. Used when the first verified Verify finding makes the tester pointless, and when a pause hits its cap.
+- **`setup`:** runs the detected `setup` command in Intake, network on, cached by lockfile hash.
+- **`open_pr`:** opens the epic's PR, or the group's under `ship.mode: group`, with `gh`.
 
-**Example**
-
-The two event lines Drive writes around one spawn action: action.start before it runs, action.done after.
+The two lines `Drive` writes around one spawn:
 
 ```json
 {"version":1,"sequence":13,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"9f2c4e1ab7d05e36c18f4a2b9e7d6c0538a1f4e2d9b7c6a5e4f3d2c1b0a99887","action":"spawn"},"checksum":1178815030}
 {"version":1,"sequence":14,"timestamp":"2026-10-12T15:31:15Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"9f2c4e1ab7d05e36c18f4a2b9e7d6c0538a1f4e2d9b7c6a5e4f3d2c1b0a99887","action":"spawn"},"checksum":4183302497}
 ```
 
-#### Epochs
+### 2.4 Interfaces
 
-**In plain terms.** An epoch is a counter that goes up by one every time a group enters a stage (see Glossary). Each session is stamped with the epoch it started under. A late message from a session the engine already cancelled is recognised and ignored. Without it, a cancelled reviewer's final result could arrive after the group moved on and move the stage a second time. The engine stamps and checks epochs; sessions never see them.
+```go
+// Result is everything one event decides.
+type Result struct {
+	State   State
+	Actions []Action // run by Drive, each wrapped in action.start and action.done
+	Emit    []Event  // follow-on events, appended before the actions run
+	Refused bool     // no transition row matched; Drive logs it and State is unchanged
+}
 
-Every spawn carries the stage's `epoch`, an integer that rises on each stage entry. A session event whose epoch is older than the current stage's is recorded with `stale: true` and `Next()` ignores it. Returns to Build raise the epoch, so a cancelled Verify session's late result cannot move the stage twice.
+// Next applies one event to one group's state; it reads nothing, writes nothing and never fails.
+func Next(s State, e Event) Result
 
-One exception: coming back from Paused does not raise the epoch. When the timer fires and the group re-enters Build or Verify, it resumes under the epoch that stage already had. Nothing is cancelled or restarted: a Verify sibling that kept running stays live, its `session.end done` counts toward Ship, and the paused session resumes from its handle.
+// Transition is one row of the stage rulebook.
+type Transition struct {
+	From  Stage
+	On    Type
+	When  func(State, Event) bool // the condition column; nil means always
+	To    Stage
+	Emits []Type
+}
 
-### 2.3 Group State Machine
+// Subscriber receives each applied event in sequence order and writes only its own records.
+type Subscriber func(e Event) error
+```
 
-#### Group state machine
+| Caller | Calls | Gets |
+|---|---|---|
+| `Drive` ([Engine Internals](#3-engine-internals)) | `Next(state, event)` per event, and per replayed event through group state's `Load` | `Result` |
+| Group state's `Load` ([State Manager](#13-state-manager)) | `Next` while replaying events after the snapshot | Rebuilt `State` and the open actions |
+| State manager | The `Register` registry, to build and enforce the schema | One data struct per `type` |
+| `Drive` | `SpecOf(type)` after every `Next()` | The contract the result must meet |
+| Event bus | Each of the 3 `Subscriber`s, after `Next()` | `error`; one error or panic drops that subscriber for the run |
+| `komodo gate` | Every type through `Next()`, every action kind against the table | Pass or fail |
 
+### 2.5 Behaviour
 
-**In plain terms.** A state machine is a fixed list of states a thing can be in and the exact events that move it between them. A group is always in one of 5 stages (Intake, Build, Check, Verify, Ship) or 2 holding states (Paused, Blocked; see Glossary). This section is the rulebook: which event moves a group where, and what must be true first. It exists so a group can never skip a check or be moved by a model's say-so. `Next()` applies the rules; a person or the orchestrator only ever triggers `resume`, `scope approve|deny` or `abandon`.
+**📐 One event, from producer to subscribers**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Producer
+  participant D as Drive
+  participant M as Group state
+  participant N as Next()
+  participant S as Subscribers
+  rect rgba(99,102,241,0.08)
+    Note over D,N: start, resume or crash recovery
+    D->>M: Load(Next)
+    M->>N: replay after snapshot
+    M-->>D: open actions, then state
+  end
+  P->>D: fact, with its epoch
+  D->>M: Append(event)
+  M-->>D: synced, sequence
+  D->>N: Next(state, event)
+  N-->>D: state, actions, follow-ons
+  D->>M: Append(follow-ons, action.start)
+  Note right of D: run each action
+  D->>M: Append(action.done)
+  D->>M: Snapshot(state)
+  D->>S: applied event
+```
 
-#### Transitions
+**Reading the diagram.**
+1. On start, resume or after a crash, `Drive` calls group state's `Load`, passing `Next`.
+2. `Load` reads `state.json` and replays only the events after its `sequence`.
+3. It returns the snapshot's open actions first; `Drive` reruns each under its idempotency key before any later event is applied, then takes the rebuilt state.
+4. A producer hands `Drive` a fact stamped with the epoch its session started under.
+5. `Drive` sets `stage` and `stale`, then calls `Append`, which stamps `sequence`, `timestamp` and `checksum`, validates against the schema and syncs.
+6. `Append` returns only once the line is on disk.
+7. `Drive` calls `Next()`, which touches nothing on disk.
+8. `Next()` returns the new state, the actions and any follow-on events; a stale event changes nothing.
+9. `Drive` appends the follow-on events and one `action.start` per action, then runs each action.
+10. `Drive` appends `action.done`, so replay skips it.
+11. `Drive` hands the state to `Snapshot`, which writes `state.json` every 50 events or on a stage change.
+12. The bus hands the applied event to the 3 subscribers, in `sequence` order.
 
-**In plain terms.** A transition is one row of the rulebook. It names the state a group is in, the event that arrives, the next state, and the condition that must hold. The 13 rows below cover the whole lifecycle, from the first `run.start` to `group.shipped`, plus the detours through Paused and Blocked. A table test checks every (stage, event) pair, including stale ones. The engine's `Next()` function is the only code that performs them.
+**Epochs.** Every stage entry raises the epoch, and every spawn carries the current one. `Drive` marks an event `stale: true` when its epoch is older than the current stage's, and `Next()` ignores it, so a cancelled Verify session's late result cannot move the stage twice. Coming back from Paused keeps the epoch: a Verify sibling that kept running stays live, its `session.end done` counts toward Ship, and the paused session resumes from its handle.
 
-| From | Event | To | Condition |
-|---|---|---|---|
-| — | `run.start` | Intake | |
-| Intake | `stage.exit` | Build | Lint pass, lease and fence taken, `commands.setup` exit 0, task list locked |
-| Build | `task.done` | Check | The last task's `done_when` exit 0 and a commit on the hidden ref |
-| Check | `check.done` pass | Verify | |
-| Check | `check.done` fail | Build | Returns under `limits.returns` |
-| Verify | Reviewer `session.end` | Build | 1 or more verified blocking findings, a `not_met` task, or an item that failed Go's two reruns |
-| Verify | `stage.exit` | Ship | Reviewer `met` for every task and 0 blocking findings; tester `confirmed` for every task and item; 0 regressions |
-| Ship | `group.shipped` | end | Merge clean, Check on the epic tip, landing with the fence |
-| Build or Verify | `session.end` reason `paused` | Paused | No allowed link left |
-| Paused | `timer.due` | Build or Verify | The provider's reset time passed; the epoch is kept |
-| Paused | `pause_timeout` | Blocked | `limits.pause_max_min` reached; WIP commit kept |
-| Build or Verify | A bound is hit | Blocked | See [Error recovery (Appendix J)](#error-recovery) |
-| Blocked | `resume` | Build | A person or the orchestrator |
+**Replay and the cut-short line.**
+1. `Load` reads `runs/<group-id>/state.json`; a snapshot is refused unless its `sequence` is the group state's last.
+2. It reruns `actions_open`, then replays events after that `sequence`; recovery costs at most 50 events, and a 10,000-event replay must finish under 1 s `[PENDING G-19]`.
+3. A last line whose checksum fails was cut short by a crash: it is dropped and one `state.truncated` is emitted.
+4. A failing line before the last is a bad record: it is moved aside and the group blocks `state_invalid` ([Checks: populate and validate (Appendix C)](#checks-populate-and-validate)).
 
-**What each one does**
-- **— → Intake on `run.start`:** The group was waiting in the backlog. `komodo run` started a run that includes it. It enters Intake, where the engine lints the group (checks it automatically against the rules), takes its lease and fence, cuts its worktree and runs `setup`; no model tokens are spent.
-- **Intake → Build on `stage.exit`:** Intake finished. Lint passed, the lease and fence are held, `setup` exited 0 and the task list is locked. The engine now starts one fresh builder session for the first task.
-- **Build → Check on `task.done`:** The builder finished the last task. Its `done_when` command exited 0 and the result is committed to the hidden ref. The engine now runs Check's zero-token verification.
-- **Check → Verify on `check.done` pass:** Every Check item passed: `done_when` reruns, scope, secrets, impact tests, baseline diff and coverage. The engine now starts the reviewer and the tester at once on the same commit.
-- **Check → Build on `check.done` fail:** Some Check item failed. If the group's return count is under `limits.returns`, the task's builder session resumes with the failure; otherwise the group blocks.
-- **Verify → Build on the reviewer's `session.end`:** The reviewer's session ended and Verify found a real problem: 1 or more verified blocking findings, a task marked `not_met`, or an acceptance item that failed Go's two reruns. The tester is cancelled on the first verified blocking finding so its pool slot frees early, but the reviewer finishes. The epoch rises and the builder gets every verified finding in one return, which spends 1 of `limits.returns`.
-- **Verify → Ship on `stage.exit`:** Both Verify sessions passed. The reviewer marked every task `met` with no blocking finding; the tester marked every task and item `confirmed` with no regression. The engine now merges and lands the group.
-- **Ship → end on `group.shipped`:** The merge with the epic branch was clean, Check passed on the epic tip and the landing with the fence succeeded. The group is finished; its lease and hidden ref are released.
-- **Build or Verify → Paused on `session.end` reason `paused`:** A provider limit stopped the session and no allowed link was left, not even the free backstop. The group returns its pool slot, keeps its lease and worktree, and waits on a disk timer; its clocks stop.
-- **Paused → Build or Verify on `timer.due`:** The provider's reported reset time has passed. The engine attempts the paused session again from its resume handle, back in the stage it left. If still refused, it re-pauses with the new reset time.
-- **Paused → Blocked on `pause_timeout`:** The group has been paused for `limits.pause_max_min` minutes. The session is cancelled, its WIP commit is kept, and the group now needs a person or the orchestrator.
-- **Build or Verify → Blocked on a bound:** Some counter in [Error recovery (Appendix J)](#error-recovery) ran out: attempts, returns, retries, budget, a crash, a scope request, or one of the other block reasons. Work stops with the reason named in `status`, and the WIP commit is kept.
-- **Blocked → Build on `resume`:** A person or the orchestrator ran `komodo resume`, or answered a scope request. The lease was kept throughout. The engine restarts the task's session from its resume handle, else a fresh session gets the brief, the WIP diff and the last `summary`.
+**Files.** `runs/<group-id>/events.jsonl` holds one group's events and `runs/<run>.jsonl` holds one run's `run.*` events, appended and read through the same group state calls with no snapshot. Groups never read each other's files; they meet only in the work queue and the session pool.
 
-The transitions live in one Go table of from-stage, event type, condition, to-stage and emitted events. `Next()` dispatches through it, the build draws the state diagram from it, and the gate checks that every row of [Error recovery (Appendix J)](#error-recovery) maps to at least one transition. An event with no matching row is refused and logged, never silently dropped. A table test enumerates every (stage, event) pair, including stale ones; the four Verify orderings each move the stage exactly once.
+**Concurrency.**
+- **One writer per file:** a group's `Drive` goroutine is the only writer of its events and snapshot; the run goroutine is the only writer of `run.*` events.
+- **`Next()` takes no locks:** it is pure, so table tests call it directly.
+- **Coarse grain:** events fire per run, group, stage, session and task, never per model turn or token; the in-session tool loop is plain code.
+- **Outside the bus:** the guard check before a tool call, formatting after `edit`, and shutdown are direct code, and log an event afterward when they can. They are the 3 inline hooks; repo-owned hooks arrive in a later minor and will be subscribers, never gates.
+- **Bus delivery:** one bus per engine process, no broker; `Next()` is the one decider, and subscribers write only their own derived records, never a group's events or snapshot. Delivery is synchronous in `Drive`, in `sequence` order, with a 5 ms limit per subscriber; the ledger batches its appends per tick. Whether `Drive` waits for subscribers is open `[PENDING G-29]`.
 
-**📐 Group state machine**
+**Wakes.** `group.blocked`, `group.paused`, `run.done` and `run.stopped` wake `status --wait`; `--wait any` also wakes on `stage.enter`. The wake subscriber touches `~/.komodo/state/wake/<run>`; the waiter watches that file, then reads the state tail through group state's `Tail`, so an event between subscribing and watching is still seen.
+
+### 2.6 State and Transitions
+
+**📐 Group stages**
 ```mermaid
 stateDiagram-v2
-  [*] --> Intake: run.start
-  Intake --> Build: stage.exit, lint pass, lease and fence taken, setup exit 0
-  Build --> Check: task.done, last task done_when exit 0, commit on hidden ref
-  Check --> Verify: check.done pass
-  Check --> Build: check.done fail, returns under limits.returns
-  Verify --> Build: finding.verified, a verified blocking finding or not_met
-  Verify --> Ship: stage.exit, reviewer met, tester confirmed, 0 regressions
-  Ship --> [*]: group.shipped, merge clean, Check on the epic tip, fence
-  Build --> Paused: session.end reason paused, no allowed link left
-  Verify --> Paused: session.end reason paused, no allowed link left
-  Paused --> Build: timer.due, the provider's reset time passed
-  Paused --> Verify: timer.due, the provider's reset time passed
-  Paused --> Blocked: pause_timeout, limits.pause_max_min reached
-  Build --> Blocked: a bound is hit
-  Verify --> Blocked: a bound is hit
-  Blocked --> Build: resume, a person or the orchestrator
-  note left of Build
-    Returns to Build raise the epoch
-  end note
-  note right of Paused
-    Waits on a timer record wait_until; pool slot returned;
-    lease and worktree kept; wall clocks stopped
-  end note
-  note right of Blocked
-    Waits on a person or the orchestrator; pool slot returned;
-    ends by resume, scope approve or deny, abandon
-  end note
+  [*] --> Intake: 1 run.start
+  Intake --> Build: 2 stage.exit
+  Build --> Check: 3 last task.done
+  Check --> Verify: 4 check.done pass
+  Check --> Build: 5 check.done fail
+  Verify --> Build: 6 reviewer session.end
+  Verify --> Ship: 7 stage.exit
+  Ship --> Build: 8 epic tip broke
+  Ship --> [*]: 9 group.shipped
+  Build --> Paused: 10 paused
+  Verify --> Paused: 10 paused
+  Paused --> Build: 11 timer.due
+  Paused --> Verify: 11 timer.due
+  Paused --> Blocked: 12 pause timeout
+  Blocked --> Build: 13 resume, to prior stage
 ```
-**Reading the diagram.** Each arrow is one row of the 13-row transition table above, labelled with the event and its condition. Paused waits on a timer and Blocked waits on a person or the orchestrator.
 
-#### Paused versus Blocked
+**Reading the diagram.** Numbers match the rows below. Every stage can also enter Blocked when a bound runs out (row 14), and abandon, lost lease and cancel end a group from any stage (rows 17-19); they are left off the drawing.
 
-**In plain terms.** Paused and Blocked both mean a group is not working, but they differ in who ends them. Paused is a self-clearing wait on a provider's reset timer; Blocked waits for a person or the orchestrator to decide. The split exists so a provider's 5-hour window never needs human attention, while a real failure never silently retries forever. The engine moves groups into both; only timers end Paused, and only people or the orchestrator end Blocked.
+| # | From | Event | Condition | To |
+|---|---|---|---|---|
+| 1 | — | `run.start` | | Intake |
+| 2 | Intake | `stage.exit` | Lint pass, lease and fence taken, `commands.setup` exit 0, task list locked | Build |
+| 3 | Build | `task.done` | The last task's `done_when` exit 0 and a commit on the hidden ref | Check |
+| 4 | Check | `check.done` pass | | Verify |
+| 5 | Check | `check.done` fail | Returns under `limits.returns` | Build |
+| 6 | Verify | Reviewer `session.end` | 1 or more verified blocking findings, a `not_met` task, or an item that failed Go's two reruns; returns under the limit | Build |
+| 7 | Verify | `stage.exit` | Reviewer `met` for every task and 0 blocking findings; tester `confirmed` for every task and item; 0 regressions | Ship |
+| 8 | Ship | `check.done` fail on the epic tip | Returns under the limit; a fresh worktree is cut from the tip `[PENDING G-31]` | Build |
+| 9 | Ship | `group.shipped` | Merge clean, Check on the epic tip, landing with the fence | end |
+| 10 | Build or Verify | `session.end` reason `paused` | No allowed link left | Paused |
+| 11 | Paused | `timer.due` | The provider's reset time passed; the epoch is kept | `Prior` |
+| 12 | Paused | `timer.due` reason `pause_timeout` | `limits.pause_max_min` reached; WIP commit kept | Blocked |
+| 13 | Blocked | `resume` | A person or the orchestrator `[PENDING G-29]` | `Prior` `[PENDING G-31]` |
+| 14 | Any stage | The event that spends a bound's last unit | See the [block reasons](#block-reasons) | Blocked |
+| 15 | Blocked | `scope approve` or `scope deny` | The builder resumes with the answer | Build |
+| 16 | Paused | `resume` | Sooner than the timer | `Prior` |
+| 17 | Any stage | `abandon` | Lease freed, evidence kept, `lock.released`; dependents block `dependency` `[PENDING G-31]` | end |
+| 18 | Any stage | `lease.lost` | Another run took the group; no landing `[PENDING G-31]` | end |
+| 19 | Any stage | `group.cancelled` | Trigger `[UNKNOWN: not yet designed]` `[PENDING G-31]` | end |
+
+- **Returns to Build** raise the epoch and spend 1 of `limits.returns`; the builder gets every verified finding in one return. On a Verify return the tester is cancelled at the first verified blocking finding, and the reviewer finishes.
+- **The table is code.** One Go table of from-stage, event type, condition, to-stage and emitted events; `Next()` dispatches through it and the build draws the diagram from it. An event with no row is refused and logged, never dropped.
+- **Rows 8 and 12-19** are the default for rows the stage rulebook did not have, pending the owner `[PENDING G-31]`. The commands behind `resume`, `scope` and `abandon` reach the engine by a route still open `[PENDING G-29]`.
 
 | State | Waits on | Pool slot | Lease and worktree | Wall clocks | Ends by |
 |---|---|---|---|---|---|
-| Paused | A timer record (`wait_until`) | Returned | Kept | Stopped | The timer, `resume`, or `pause_max_min` |
+| Paused | A timer record (`wait_until`) under `~/.komodo/state/timers/` | Returned | Kept | Stopped | The timer, `resume`, or `pause_max_min` |
 | Blocked | A person or the orchestrator | Returned | Kept (sweep skips `needs_scope`) | Stopped | `resume`, `scope approve|deny`, `abandon` |
 
-**What each one does**
-- **Paused:** The group is waiting for a model provider's usage window to reset, with the reset time stored as `wait_until` in a timer record under `~/.komodo/state/timers/`; the ledger row keeps a copy. It gives back its pool slot so other groups can run, keeps its lease and worktree, and its wall clocks stop. In Verify, a sibling session that was not paused keeps running. It ends by itself when the timer fires, sooner on `resume`, or turns into Blocked at `pause_max_min`.
-- **Blocked:** The group hit a bound or needs a decision and is waiting for a person or the orchestrator. It gives back its pool slot, keeps its lease and worktree, and its clocks stop; the cleanup sweep leaves a `needs_scope` worktree alone. It ends only on `resume`, `scope approve|deny`, or `abandon`, which frees the lease and keeps the evidence.
+In Verify, a sibling session that was not paused keeps running while the group is Paused.
 
 #### Block reasons
 
-**In plain terms.** A block reason is the one-word code that says why a group stopped, shown in `status` and carried on the `group.blocked` event. The list is a fixed enum, so every way a group can block has a name the orchestrator can act on. Without it, a stuck group would need a person to read logs to learn what went wrong. The engine sets the reason; a person or the orchestrator clears it with `resume`, `scope approve|deny` or `abandon`.
+A fixed enum on `group.blocked`, named in `status`. A group blocked 3 times for one reason is flagged `needs redesign`.
 
-A fixed enum, named in `status` and the `group.blocked` event: `no_provider`, `pause_timeout`, `paid_refused`, `regression`, `epic_gate`, `tester`, `flaky`, `dependency`, `integration`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `crash`, `lint`, `brief`, `state_invalid`, `contract`, plus the unnamed Blocked of exhausted retries, returns, flaps and job backoff (waiting longer between retries). A group blocked 3 times for one reason is flagged `needs redesign` in `status`.
+| Reason | Set when | A person then |
+|---|---|---|
+| `no_provider` | Every link in the chain was unavailable or unauthorized at a session boundary | Fixes the provider or login |
+| `pause_timeout` | Paused for `limits.pause_max_min`; the session was cancelled | Waits for the provider |
+| `paid_refused` | The billing check found only a paid link, or a subscription link with the wrong login, and `providers.paid` forbids it; killed before the first turn | Changes `providers.paid` or the login |
+| `regression` | A test that passed at the base fails, and returns are spent | Reviews the failing output |
+| `epic_gate` | The final pass over the whole epic found a problem with no file to send back | Decides |
+| `tester` | The tester failed an item twice that Go's reruns pass; a harness fault, not the builder's | Checks the item |
+| `flaky` | Go's two reruns of one item disagreed | Fixes the test |
+| `dependency` | A dependency was abandoned | Re-plans or reruns it |
+| `integration` | Check failed on the epic tip after landing, and returns are spent | Reviews the integration failure |
+| `needs_scope` | The builder needs a file outside `files`; WIP kept; the orchestrator answers after 2 engine denials (G-15) | Runs `scope approve|deny` |
+| `attempts` | A task used all `limits.task_attempts` | Looks at why it keeps failing |
+| `context` | The brief exceeds half the context of every link in the chain | Shrinks the task or adds a larger endpoint |
+| `merge_conflict` | Landing conflicted and the one automatic merge did not resolve it | Resolves the conflict |
+| `budget` | With `track.usage` on, the group used `limits.group_tokens`; never occurs with tracking off | Raises the cap or splits the group |
+| `crash` | The group's `Drive` panicked; other groups kept running | Runs `resume`, which replays through `Load` |
+| `lint` | The planner's outline failed backlog lint 3 times; whether an Intake lint failure uses it is `[UNKNOWN: not yet designed]` `[PENDING G-31]` | Fixes it with `doctor backlog` |
+| `brief` | The reviewer reported `brief_incomplete`; a harness fault | Fixes the brief inputs |
+| `contract` | A `Next()` result broke its type's `Spec` | Reads the named type and rule |
+| `state_invalid` | The state manager refused a write or moved a bad record aside as `.bad-*`; names kind, key and field | Inspects the record |
+| (unnamed) | A session's `retries` after timeouts or idle stops, `limits.returns` on findings, a flap (the same failure hash or a zero-diff return), or 3 job failures | Runs `resume` |
 
-**What each one does**
-- **`no_provider`:** Every link in the agent's chain was unavailable or unauthorized at a session boundary. Fix the provider or login, then `resume`.
-- **`pause_timeout`:** The group stayed Paused on a provider limit for `limits.pause_max_min` minutes; the session was cancelled and its WIP commit kept. `resume` restarts it once the provider is back.
-- **`paid_refused`:** The billing check found only a paid link, or a subscription link with the wrong login, and `providers.paid` forbids it. The session was killed before its first turn and the key is named. Change `providers.paid` or the login, then `resume`.
-- **`regression`:** A test that passed at the base commit now fails, and the group has used all `limits.returns` returns to Build. A person reviews the failing test output, then `resume`.
-- **`epic_gate`:** The final reviewer and tester pass over the whole epic found a problem with no file to send back to a group. A person decides, then `resume`.
-- **`tester`:** The tester failed an acceptance item twice that Go's own reruns pass. It is a harness fault that does not count against the builder; a person checks the item, then `resume`.
-- **`flaky`:** Go's two reruns of one acceptance item disagreed with each other. The test itself is unreliable; a person fixes it, then `resume`.
-- **`dependency`:** A group this one depends on was abandoned, so its base will never land. A person re-plans or re-runs the dependency, then `resume`.
-- **`integration`:** After this group landed, Check failed on the epic tip, and it has used all `limits.returns` returns to Build in a fresh worktree. A person reviews the integration failure, then `resume`.
-- **`needs_scope`:** The builder needs to edit a file outside its `files` list. It stopped with the paths and a reason, and the engine kept its WIP commit. The orchestrator answers `scope approve|deny`, after 2 engine denials (G-15).
-- **`attempts`:** One task used all `limits.task_attempts` model attempts, across fresh sessions, re-prompts, gate feedback and "continue". A person looks at why the task keeps failing, then `resume`.
-- **`context`:** The brief for a task is larger than half the context window of every link in the chain. A person shrinks the task or adds a larger-context endpoint, then `resume`.
-- **`merge_conflict`:** Landing conflicted with the epic branch, and the one automatic merge of the epic branch into the group branch did not resolve it. A person resolves the conflict, then `resume`.
-- **`budget`:** With `track.usage` on, the group used its `limits.group_tokens` tokens; with tracking off this reason never occurs. A person raises the cap or splits the group, then `resume`.
-- **`crash`:** The group's `Drive` goroutine panicked; other groups kept running and the run report names the group. `resume` replays the group state through group state's `Load` and continues.
-- **`lint`:** The planner's epic outline failed Go's backlog lint, went back into the session 2 times, and failed again. A person fixes the backlog with `doctor backlog`, then `resume`. [UNKNOWN: not yet designed] whether a lint failure at Intake uses this reason.
-- **`brief`:** The reviewer reported `brief_incomplete`: the brief it received lacked what it needed. It is a harness fault that does not count against the builder; a person fixes the brief inputs, then `resume`.
-- **`contract`:** A `Next()` result broke its event type's contract: it emitted an event, ordered an action or accepted a stage that the type's `Spec` does not allow. It is a harness fault; a person reads the named type and rule, then `resume`.
-- **`state_invalid`:** The state manager refused a write that broke the schema or an invariant, or found a record that failed its check on read and moved it aside as `.bad-*`. The reason names the kind, key and field. It is a harness fault; a person inspects the record, then `resume`.
-- **Unnamed Blocked:** The exhausted counter has no code: a session's `retries` after timeouts or idle stops, or the group's `limits.returns` on findings. A flap (the same failure hash or a zero-diff return) or 3 scheduled-job failures also lands here. The group ends Blocked with the reason named; a person or the orchestrator runs `resume`.
+Every row ends with `resume` unless the last column says otherwise.
 
-### 2.4 Event Bus
+### 2.7 Failures
 
-#### Event bus
+| Failure | Detected by | Action | Lost | Shown |
+|---|---|---|---|---|
+| Crash mid-`Append` | Checksum fails on the last line at `Load` | Drop the line, emit `state.truncated` | At most 1 event, never applied | The group resumes |
+| Bad line before the last | Checksum or schema at `Load` | Move aside as `.bad-*`, block `state_invalid` | Nothing; the record is kept | `doctor`, `status` |
+| Crash between `action.start` and `action.done` | Open action in the snapshot or after it | Rerun under its idempotency key | Nothing; a commit happens once | Nothing |
+| Late result from a cancelled session | Epoch older than the current | Write with `stale: true`; `Next()` ignores it | Nothing | Ledger only |
+| Event with no transition row | `Next()` returns `Refused` | Log it; state unchanged | Nothing | Ledger |
+| Result breaks its `Spec` | `Drive`'s contract check | Block `contract` | Nothing | `status` |
+| Subscriber error or panic | The bus | Drop that subscriber for the run | Its derived records stop | Run report |
+| `Drive` panics | The engine's recover | Block that group `crash`; others continue | Nothing on disk | `status`, run report |
 
+### 2.8 Configuration and Constants
 
-**In plain terms.** An event is a typed fact the engine writes down, such as "this group is blocked" (see Glossary). The event bus is the in-process path that hands each event, once `Next()` has applied it, to exactly 3 readers: the ledger, the wake file and the live `status --watch` screen. It exists so the orchestrator (the Claude Code session driving Komodo) can sleep in `komodo status --wait` and be woken the moment something needs it, instead of polling. Without it, nothing would wake the orchestrator and nothing would record what happened. Only the engine touches it; the orchestrator feels it through `status --wait` and `status --watch`.
+**Keys read by `Next()`:** `limits.returns`, `limits.task_attempts`, `limits.pause_max_min`, `limits.session_idle_min`, `limits.group_tokens`, `track.usage` ([Flat keys (34) (Appendix B)](#flat-keys-34)).
 
-| Rule | Detail |
+| Constant | Value |
 |---|---|
-| Wakes | `group.blocked`, `group.paused`, `run.done`, `run.stopped` wake `status --wait`; `--wait any` also wakes on `stage.enter` |
-| Wake file | A touch under `state/wake/<run>`; the waiter watches the file then reads the state tail through group state's `Tail` |
-| One decider | Each event goes to exactly one decider, the group's `Next()`, which alone changes state, emits follow-on events and orders actions |
-| Writing events | Not the bus: group state appends and replays them ([Group state (Appendix C)](#group-state)); the bus only delivers each event after `Next()` |
-| Subscribers, exactly 3 | The ledger, the wake file, the `status --watch` renderer; each an `(event) → error` in `sequence` order after `Next()` that writes only its own derived kind through the state manager, never group state; an error or panic drops that subscriber for the run |
-| Hooks | None on the bus; the 3 inline hooks live in the guard, tools and recovery; repo hooks wait for a later minor and will be subscribers, never gates |
-| Performance | Today synchronous with a 5 ms limit per subscriber, open `[PENDING G-29]`; the ledger batches appends per tick |
+| Snapshot interval | Every 50 events, and on every stage change |
+| Replay target | 10,000 events under 1 s `[PENDING G-19]` |
+| Subscriber limit | 5 ms each |
+| Blocks before `needs redesign` | 3 for one reason |
+| Idle grace after the nudge | 5 minutes |
+| Time warning | 80% of the session's wall clock |
 
-**What each one does**
-- **Wakes:** Four event types wake the orchestrator's background `komodo status --wait` call: a group blocked, a group paused on a provider limit, a run finished, a run stopped. With `--wait any`, every stage entry (Intake, Build, Check, Verify, Ship) also wakes it. The orchestrator then reads the reason in `status` and acts.
-- **Wake file:** The wake is delivered by touching one file per run under `~/.komodo/state/wake/`. The waiting command watches that file and then reads the end of the group's state (the append-only event file, see Glossary), so an event that fires between subscribing and watching is never missed.
-- **Subscribers, exactly 3:** The three subscribers are the ledger (the per-repo record of sessions and events), the wake file, and the renderer that draws the live `status --watch` screen. Each is called once per event, in event order (`sequence`), after `Next()` has already changed state. Each writes only its own derived kind through the state manager (ledger rows, the wake file) and never a group's state events or snapshot. If one fails or crashes, it is dropped for the rest of the run; group state is unchanged and the other two keep running.
-- **One decider:** Every event is decided by one place only, the group's `Next()`; nothing else changes group state. After the event is on disk, the bus hands it to the subscribers registered for its type. A subscriber writes only its own derived records and can never emit an event that changes group state, so replay always gives the same result and adding a new reader is one more subscription. When the bus delivers, and whether `Drive` waits for each subscriber, is open `[PENDING G-29]`.
-- **Writing events:** The bus never writes or replays events. Group state appends each event before `Next()` runs and replays them on resume ([Group state (Appendix C)](#group-state)); the bus only hands each applied event to the three subscribers.
-- **Hooks:** No user-written script runs on the bus. The only three hook points in Komodo are inline: the guard before every tool call, the tool runtime, and error recovery. Repo-owned hooks arrive in a later minor version and will only listen; they will never be able to stop an event.
-- **Performance:** Today's rule is immediate, in-process delivery with a 5 ms limit per subscriber; whether that stays is open `[PENDING G-29]`. The ledger does not write one line per event; it batches its appends once per engine tick.
+### 2.9 Proof Cases
 
-**Example**
+- `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`.
+- The 4 Verify orderings (reviewer fails first, tester fails first, both pass, both fail in one tick) each move the stage exactly once.
+- Replaying a group's state rebuilds its `state.json` exactly.
+- Killing the engine after an `action.start` and before its `action.done` makes the restarted Drive run that side effect again, once.
+- `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit.
+- A last event line cut short by a crash replays with one `state.truncated`.
+- A fixture `group.blocked` wakes `status --wait`.
+- An event emitted between a waiter's subscribe and its first watch still wakes it.
+- A subscriber that panics leaves group state unchanged, and the other 2 keep running.
+- An emitted type missing from the catalog fails the gate.
 
-The shape of one event bus subscriber: a function from an event to an error.
+### 2.10 Open Gaps
 
-```go
-type Event struct{} // [UNKNOWN: not yet designed]
-
-// Receives each applied event in sequence order, writes only its own records, and must return under 5 ms.
-type Subscriber func(event Event) error
-```
-
-### 2.5 Scenario: the Event Spine
-
-#### Scenario: the event spine
-
-**In plain terms.** An event is a typed fact the engine records, such as "task 3 is done" (see Glossary). The event spine is the rule that every change to a group's state travels as an event through one pure function, `Next()`. `Next()` has no side effects; it returns the new state plus the actions to take. Events are written to the group's state events file before they are applied, so a crash can replay them and lose nothing. Without this rule, state could be changed from many places and a crash could leave it half updated.
-
-Facts flow as events; one pure function decides. The mechanical parts publish what happened; `Next(state, event)` returns the new state, the actions to take and any follow-on events. Nothing else changes group state.
-
-```mermaid
-flowchart LR
-  P["Producers: workspace, supervisor, Check, review, ship, timers"] -->|fact| J[("group state: events.jsonl, via the state manager")]
-  J --> N["Next(state, event)"]
-  N -->|new state| S[("state.json snapshot, via group state")]
-  N -->|follow-on events| J
-  N -->|actions| A["Engine actions: spawn, kill, commit, land"]
-  A --> P
-  J --> R["Subscribers: ledger, status, status --wait; never group state"]
-```
-
-**Reading the diagram.** On the left, the producers (the workspace, the session supervisor, Check, review, Ship and timers) send facts. Each fact is appended to the group's state events file, `events.jsonl`, by group state, the state manager's module for a group's events and snapshots, which fills and checks the event first. The group state feeds `Next(state, event)`, the one function that decides. `Next()` hands the new state to group state's `Snapshot`, which writes the `state.json` snapshot, and sends any follow-on events back into the group state. It also lists actions for the engine to run, such as spawn a session, kill one, commit or land. Running those actions produces new facts from the producers, which closes the loop. Separately, the state events feed the subscribers: the ledger, `status` and `status --wait`. They never change group state; each writes only its own derived kind through the state manager.
-
-| Principle | Rule |
+| Gap | Open here |
 |---|---|
-| The engine emits, never a model | A session's typed JSON becomes an event only after Go validates it. A killed session cannot report; a model can forget or invent. |
-| State first | Each event is appended and fsynced to `runs/<group-id>/events.jsonl`, through group state, before it is applied. `state.json` is a snapshot with the last `sequence`; `Load` replays after it. |
-| Subscribers never change group state | The ledger, `status --wait` wakes and `status --watch` react to events; each writes only its own derived kind through the state manager, never a group's state events or snapshot. |
-| Coarse grain | Events fire per run, group, stage, session and task, never per model turn or token. |
-| In-process and ordered | One bus per engine, in `sequence` order, no broker; whether delivery is synchronous is open `[PENDING G-29]`. Machine-wide state stays in files; each engine turns a change there into a local event. |
-| Outside the bus | The guard, formatting after `edit`, and shutdown are direct code. They log an event afterward when they can. |
-| Actions are recorded (the outbox) | `Drive` appends `action.start {id, action}` before an action and `action.done` after. On replay a done action is skipped, a started one reruns, and every action is idempotent (safe to repeat with the same result) by a declared key. |
-| One state per group, one per run | Groups never read each other's state files; they meet only in the queue and the pool. |
-| Epochs fence late events | Every spawn carries the stage's epoch. A session event with an older epoch is recorded `stale: true` and ignored. |
-| A new type is a design change | The catalog is a Go enum; the gate fails on an emitted type missing from it, or a listed type nothing emits. |
-
-**What each one does**
-- **The engine emits, never a model:** Only Go code records events. A model's typed JSON result becomes an event only after Go checks it against the schema. A killed session cannot report, and a model can forget or invent.
-- **State first:** Every event is appended to `runs/<group-id>/events.jsonl` by group state and flushed to disk before `Next()` applies it. `state.json` is a snapshot with the last sequence number; after a crash, `resume` calls `Load`, which replays only the events after it.
-- **Subscribers never change group state:** The ledger, the wake for `status --wait` and the `status --watch` view react to events after `Next()` has returned. Each writes only its own derived kind through the state manager, such as ledger rows or the wake file, and never a group's state events or snapshot.
-- **Coarse grain:** Events mark a run, group, stage, session or task changing, never a single model turn or token. The in-session tool loop stays plain code.
-- **In-process and ordered:** Each engine has one bus inside its own process, delivering events one at a time in sequence order; there is no message broker. State shared across the machine, such as the pool, lives in files, and each engine turns a file change into its own local event.
-- **Outside the bus:** Three things run as direct code, not as events: the guard check before a tool call, formatting after an `edit`, and shutdown. Each logs an event afterward when it can.
-- **Actions are recorded (the outbox):** Before `Drive` runs an action it writes `action.start`, and after it writes `action.done`. On replay a finished action is skipped and a started one reruns; every action has an idempotency key, a value that makes a repeat harmless.
-- **One state per group, one per run:** Each group has its own event file and never reads another group's. Groups meet only in the work queue and the session pool.
-- **Epochs fence late events:** The epoch is a counter that rises each time a group enters a stage (see Glossary). Every session is spawned with the current epoch. A late event from an older epoch is written with `stale: true` and ignored, so a cancelled session cannot move the stage.
-- **A new type is a design change:** The 35 event types are a fixed Go enum. `komodo gate` fails on an emitted type missing from the list, or a listed type nothing emits. So the catalog and the code never drift apart.
-
-Guarantees the tests pin:
-
-| Guarantee | How |
-|---|---|
-| Ordered, gap-free | One writer per group state; `sequence` checked on append and replay |
-| Durable before applied | Append, fsync, then `Next()`; a crash after the sync replays the event |
-| Exactly-once state moves | A stage moves only in `Next()`, keyed by `sequence`; stale-epoch events never move it |
-| At-least-once actions, safe to repeat | Every action has an idempotency key |
-| No lost wake | `status --wait` reads the state tail after subscribing |
-| Subscriber faults contained | A panicking subscriber is logged and dropped; state is untouched |
-
-**What each one does**
-- **Ordered, gap-free:** One writer per group state, and the sequence number is checked on every append and replay. So events never arrive out of order or with holes.
-- **Durable before applied:** The order is append, flush to disk, then `Next()`. A crash after the flush replays the event; a crash before it loses only an event that was never applied.
-- **Exactly-once state moves:** A stage changes only inside `Next()`, keyed by the event's sequence number, and stale-epoch events never move it. The same event cannot move a stage twice.
-- **At-least-once actions, safe to repeat:** An action may run twice after a crash, and every action carries an idempotency key that makes the second run a no-op.
-- **No lost wake:** `status --wait` subscribes, then reads the state tail, so an event that arrived between the two is still seen.
-- **Subscriber faults contained:** A subscriber that panics is logged and dropped for the run; the group's state is unchanged and the other subscribers keep running.
+| G-19 | The 10,000-event replay target is unmeasured |
+| G-24 | The fields of each event type's data struct |
+| G-29 | Envelope `id`, `class`, `cause`, `corr`; how commands reach `Drive`; bus delivery timing |
+| G-30 | Machine log file names; `Action.Args`; the `State` sub-structs; `config_hash` and task id formats |
+| G-31 | Transition rows 8 and 12-19, the `run.done` condition, the `group.cancelled` trigger, `lint` at Intake |
+| G-32 | The crash-safe counters in `State` |
 
 ---
 
@@ -1808,7 +1782,7 @@ flowchart LR
 
 **What matters**
 - One schema: every record kind and all 35 event types are Go structs; the build generates `embed/state.schema.json`, and `help --json` serves it as `state`.
-- Every record carries `v`, `kind`, `key`, `rev`, `ts` and `writer`, all set by the manager; a caller supplies only the body. Event lines carry the event envelope instead ([Envelope (Appendix C)](#envelope)).
+- Every record carries `v`, `kind`, `key`, `rev`, `ts` and `writer`, all set by the manager; a caller supplies only the body. Event lines carry the event envelope instead ([Envelope (Appendix C)](#23-data-model)).
 - Each kind lists its writers; the manager refuses any other. A group's records accept writes only from that group's `Drive`.
 - Six things stay outside under their own owners' rules: `config.json`, the cache, git refs and worktrees, job templates, the binaries and session temp.
 - The gate fails any package other than `state` that writes a runtime state path.
@@ -1899,13 +1873,13 @@ Every component in the HLD's building block view, at the level of file paths, fi
 | Owner reviewing a component | The component's section ([Component traceability (Appendix Q)](#component-traceability) maps components to sections), then [Edge cases (Appendix N)](#edge-cases) |
 | Builder of a task group | The component's section, [Code structure (Appendix A)](#code-structure), [Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](#gate-and-self-checks-komodo-gate-komodo-repo-only) gate checks |
 | Reviewer applying the `spec` lens | The section a task cites, plus [Error recovery (Appendix J)](#error-recovery) error recovery for the row it touches |
-| Operator diagnosing a run | [Group state machine (Appendix C)](#group-state-machine), [Error recovery (Appendix J)](#error-recovery), [Runtime observability (Appendix K)](#runtime-observability), [Edge cases (Appendix N)](#edge-cases) |
+| Operator diagnosing a run | [Group state machine (Appendix C)](#26-state-and-transitions), [Error recovery (Appendix J)](#error-recovery), [Runtime observability (Appendix K)](#runtime-observability), [Edge cases (Appendix N)](#edge-cases) |
 
 **What each one does**
 - **Owner reviewing a component:** The person who owns Komodo and signs off on a design. They read the section for that component, then [Edge cases (Appendix N)](#edge-cases), the list of odd situations and what happens in each. [Component traceability (Appendix Q)](#component-traceability) gives each component's section number.
 - **Builder of a task group:** The builder model session that edits code for one group of tasks. It reads the component's section, the code layout in [Code structure (Appendix A)](#code-structure), and the self-check list in [Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](#gate-and-self-checks-komodo-gate-komodo-repo-only) that its change must pass.
 - **Reviewer applying the `spec` lens:** The reviewer model session checking a change against this document. It reads the section the task names, plus the row in [Error recovery (Appendix J)](#error-recovery) that says how the failure it touches is detected and bounded.
-- **Operator diagnosing a run:** A person or the orchestrator working out why a run stopped. They read [Group state machine (Appendix C)](#group-state-machine) (the stages a group moves through), [Error recovery (Appendix J)](#error-recovery) (every failure and its outcome), [Runtime observability (Appendix K)](#runtime-observability) (what `status` and the ledgers show) and [Edge cases (Appendix N)](#edge-cases).
+- **Operator diagnosing a run:** A person or the orchestrator working out why a run stopped. They read [Group state machine (Appendix C)](#26-state-and-transitions) (the stages a group moves through), [Error recovery (Appendix J)](#error-recovery) (every failure and its outcome), [Runtime observability (Appendix K)](#runtime-observability) (what `status` and the ledgers show) and [Edge cases (Appendix N)](#edge-cases).
 
 #### Relationship to the HLD
 
@@ -2125,7 +2099,7 @@ komodo-agentic-harness-coding/
 │   ├── ops/                       # Economy and ops
 │   │   ├── budget.go              # group wall, tokens, mode
 │   │   ├── ledger.go              # sessions, events, redaction
-│   │   ├── bus.go                 # envelope, catalog, in-order delivery
+│   │   ├── bus.go                 # in-order delivery to the 3 subscribers
 │   │   └── wake.go                # status --wait wakes
 │   │
 │   ├── agent/                     # Model I/O and Context
@@ -2583,7 +2557,7 @@ A verb that refused: a hand-edited config makes every verb print this envelope a
 - **`add backlog`:** Anyone runs it. It adds one task, group or epic file under `docs/backlog/`; this is where out-of-scope work gets parked. `--task <text>`, `--group <title>` or `--epic <title>` says what to add; `--to <id>` names the parent; `--files <globs>` lists the files the work may touch; `--done-when <text>` gives the check that proves a task done. It refuses with `locked` and the run id while that group is in a run. A repeat with the same task reports `0 changes`.
 - **`add changelog`:** Anyone runs it. It adds one line to the `Unreleased` section of `CHANGELOG.md`. `--entry <text>` is the line; `--kind` files it under added, changed, fixed or removed.
 - **`plan <goal>`:** Anyone runs it, usually the orchestrator; it costs model tokens. It starts the planner worker: a heavy pass drafts the epic outline (groups, goals, file globs, dependencies), then one standard pass per group drafts that group's tasks and acceptance items, in parallel. Go lints every draft; a failing draft goes back into its session twice, then the plan blocks with `lint`. Backlog files are written only when lint passes, so a bad plan writes 0 files. `--from <spec>` feeds any document set (a PRD, an RFC, a ticket export) as input; `--epic <N>` adds or amends only unlocked groups in an existing epic.
-- **`run [group]`:** Anyone runs it, usually the orchestrator. It builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once, and leaves the engine running detached under a small parent guard. From then on the engine cuts worktrees, starts builder sessions, commits to hidden refs, runs Check and Verify, opens group PRs and lands groups; see [Group state machine (Appendix C)](#group-state-machine) for the stages. `run <group>` refuses, naming the dependency, when a group it depends on outside this run has not landed; it also refuses a group another run holds, naming the holder, and a repo with no detected commands, naming the marker files it looked for. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background.
+- **`run [group]`:** Anyone runs it, usually the orchestrator. It builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once, and leaves the engine running detached under a small parent guard. From then on the engine cuts worktrees, starts builder sessions, commits to hidden refs, runs Check and Verify, opens group PRs and lands groups; see [Group state machine (Appendix C)](#26-state-and-transitions) for the stages. `run <group>` refuses, naming the dependency, when a group it depends on outside this run has not landed; it also refuses a group another run holds, naming the holder, and a repo with no detected commands, naming the marker files it looked for. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background.
 - **`status [run]`:** Anyone runs it; a Claude `SessionStart` hook runs it so a new session sees state on line one. It reads `state.json` and the ledgers and prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings. It ends with `Verbs: komodo help`. It is one of three places that may fetch `latest.json`, at most hourly, and it also fires due pause timers. `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`), so the orchestrator runs it in the background. `--timeout <dur>` caps that wait, 9 minutes by default because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard: first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and USD per accepted group. `--backlog` is the installed binary's `backlog` verb folded in; what it lists is `[UNKNOWN: not yet designed]`. `--all` is `[UNKNOWN: not yet designed]`.
 - **`skill list|get`:** Anyone runs it, including any Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms. `get <name>` prints a skill's body; `--section <heading>` prints one section. `komodo skill get run|plan|respond|komodo` returns the workflow for each of those jobs. `list --agent <name>` narrows the list to one agent; the exact filter is `[UNKNOWN: not yet designed]`. It changes nothing.
 - **`scope approve|deny <group>`:** The orchestrator usually answers; a person can. A builder that needs a file outside its group's `files` stops with status `needs_scope`, the group blocks, and `status --wait` wakes the orchestrator. `approve` adds the paths to the group's `files` (action `scope_change`, logged in the ledger) and the engine resumes the same session with the answer; `deny` resumes it with the refusal. `--paths <list>` names the paths; `--reason <text>` the reason. The engine denies by itself, without asking, when a path is protected or belongs to another live group. One request per task.
@@ -3063,10 +3037,10 @@ sequenceDiagram
 - **`kind`:** The record's type, one of the kinds in [Kinds (Appendix C)](#kinds). The kind decides the schema, the write primitive and the one allowed writer.
 - **`key`:** Picks one record out of its kind, such as a group id for a snapshot or a session id for a session file.
 - **`rev`:** A counter that rises by 1 on every write. A caller passes the `rev` it last read; if the record moved since, the write is refused, so two writers can never silently overwrite each other.
-- **`ts`:** The time the manager wrote the record. Events carry their own `timestamp`, the time the engine saw the fact ([Envelope (Appendix C)](#envelope)).
+- **`ts`:** The time the manager wrote the record. Events carry their own `timestamp`, the time the engine saw the fact ([Envelope (Appendix C)](#23-data-model)).
 - **`writer`:** The run id and process id of the writer, so `doctor` and a person can see who last changed a record.
 
-Event lines do not carry this header. Every line in an event file is an event, so `kind`, `key`, `rev` and `writer` would repeat what the file already says; events carry the [Envelope (Appendix C)](#envelope) envelope instead, and the manager computes its `sequence`, `timestamp` and `checksum`, so a producer never does.
+Event lines do not carry this header. Every line in an event file is an event, so `kind`, `key`, `rev` and `writer` would repeat what the file already says; events carry the [Envelope (Appendix C)](#23-data-model) envelope instead, and the manager computes its `sequence`, `timestamp` and `checksum`, so a producer never does.
 
 **Example**
 
@@ -3099,7 +3073,7 @@ One stored timer record: the six header fields the manager sets, then the timer'
 | `Remove` | Delete after the writer and `rev` check | A taken queue item, a released lease, a landed group's records, a fired timer |
 
 **What each one does**
-- **`Append`:** Adds one line to the end of a file and syncs it to disk before returning. A crash can at worst leave a half-written last line, which replay drops because it no longer matches its checksum ([State files and snapshots (Appendix C)](#state-files-and-snapshots)).
+- **`Append`:** Adds one line to the end of a file and syncs it to disk before returning. A crash can at worst leave a half-written last line, which replay drops because it no longer matches its checksum ([State files and snapshots (Appendix C)](#25-behaviour)).
 - **`Replace`:** Writes the whole record to a temporary file, syncs it, then renames it over the old one. The rename is atomic, so a reader sees either the old record or the new one, never a mix.
 - **`Claim`:** Creates a file that must not already exist; the operating system lets exactly one process win. A takeover of a stale record first renames the old one aside, so again only one process wins.
 - **`Remove`:** Deletes a record only after checking that the caller is a listed writer and its `rev` is current. It covers a queue item taken by a pool slot, a released lease, a landed group's records and a fired timer.
@@ -3144,7 +3118,7 @@ type Writer interface {
 | `wake` | `state/wake/<run>` | Replace (a touch) | Event bus |
 
 **What each one does**
-- **`event`:** Every event, in the group state or the run state. Only the group's `Drive` writes group events, and only the run goroutine writes `run.*` events ([State files and snapshots (Appendix C)](#state-files-and-snapshots)).
+- **`event`:** Every event, in the group state or the run state. Only the group's `Drive` writes group events, and only the run goroutine writes `run.*` events ([State files and snapshots (Appendix C)](#25-behaviour)).
 - **`group`:** The group snapshot, the state its events add up to; its fields are in [Group snapshot (Appendix C)](#group-snapshot). Only `Drive` writes it, and only when its `sequence` is the group state's last.
 - **`session`:** One folder per model session: the brief it got, how it was launched, its result, its raw output stream and, on API links, every turn for resume. The supervisor writes the brief, request and result; observability appends `stream.jsonl`; the tool runtime's API loop appends `messages.jsonl`.
 - **`ledger`, `view`:** The session ledger and event log, appended by the observability subscriber, and the two lock-table views it rebuilds from group state ([Runtime observability (Appendix K)](#runtime-observability)).
@@ -3156,7 +3130,7 @@ type Writer interface {
 - **`providers`, `install`:** The provider probe result and the install manifest ([Installer (Appendix M)](#installer)).
 - **`fresh`:** The self-updater's records: the latest release seen, the one-updater lock, the failure log and the versions live runs use ([Binary lifecycle (Appendix M)](#binary-lifecycle)).
 - **`config_audit`:** The config audit log and the hash of `config.json`, written by the `config` verb in `cli`; `config.json` itself stays outside ([Outside the manager (Appendix C)](#outside-the-manager)).
-- **`wake`:** The file `status --wait` watches; the event bus touches it on a waking event ([Event bus (Appendix C)](#event-bus)).
+- **`wake`:** The file `status --wait` watches; the event bus touches it on a waking event ([Event bus (Appendix C)](#25-behaviour)).
 
 #### Checks: populate and validate
 
@@ -3174,7 +3148,7 @@ type Writer interface {
 | Bad record | A bad line before the last one, or any other failed record: moved aside as `.bad-*`; the owning group blocks `state_invalid` |
 
 **What each one does**
-- **Populate:** The manager writes the six envelope fields and any schema defaults itself. An event carries the [Envelope (Appendix C)](#envelope) envelope instead, so the manager assigns its next `sequence` and computes its `timestamp` and `checksum`.
+- **Populate:** The manager writes the six envelope fields and any schema defaults itself. An event carries the [Envelope (Appendix C)](#23-data-model) envelope instead, so the manager assigns its next `sequence` and computes its `timestamp` and `checksum`.
 - **Schema:** Every field must have the right type, every required field must be present, and every enum must hold a known value. An unknown stage or block reason is refused.
 - **Invariants:** Rules a kind must always keep. State `sequence` numbers have no gaps, and a stage `epoch` or a lease `fence` never goes down.
 - **Compare-and-swap:** The write names the `rev` the caller last read. If another write landed in between, this one is refused, so no update is lost silently.
@@ -3198,7 +3172,7 @@ type Writer interface {
 - **`Get`:** Reads one record, checked and migrated, such as one group's snapshot.
 - **`List`:** Reads every record of a kind, such as every queue item or every lease on the machine.
 - **`Tail`:** Reads a state file from a sequence number onward. `resume` uses it to replay after the snapshot, and `status --wait` to read what woke it.
-- **`Watch`:** Blocks until a record of a kind changes. `status --wait` uses it on the wake kind, then reads the state tail, so no event is missed ([Event bus (Appendix C)](#event-bus)).
+- **`Watch`:** Blocks until a record of a kind changes. `status --wait` uses it on the wake kind, then reads the state tail, so no event is missed ([Event bus (Appendix C)](#25-behaviour)).
 
 **Example**
 
@@ -3258,11 +3232,11 @@ type Reader interface {
 
 **What each one does**
 - **`run`, `group`:** The run that owns the group and the group's id.
-- **`stage`, `epoch`, `fence`:** The current stage, the epoch that rises on every stage entry ([Epochs (Appendix C)](#epochs)) and the lease fence ([Workspace and leases (Appendix E)](#workspace-and-leases)). The manager refuses a snapshot where either counter falls.
+- **`stage`, `epoch`, `fence`:** The current stage, the epoch that rises on every stage entry ([Epochs (Appendix C)](#25-behaviour)) and the lease fence ([Workspace and leases (Appendix E)](#workspace-and-leases)). The manager refuses a snapshot where either counter falls.
 - **`sequence`:** The sequence number of the last event applied. The manager refuses the snapshot unless this is the last event's `sequence`, and replay starts after it.
 - **`config_hash`:** The hash of the effective config at run start; mid-run config edits never reach this run ([Layers and write path (Appendix B)](#layers-and-write-path)).
 - **`tasks[]`:** One entry per task: its id, its claim state (`queued`, `claimed`, `done`, `returned`, `blocked`), its attempt count and the session that holds it.
-- **`actions_open[]`:** Outbox actions with an `action.start` but no `action.done` yet; replay reruns them under their idempotency keys ([The outbox (Appendix C)](#the-outbox)).
+- **`actions_open[]`:** Outbox actions with an `action.start` but no `action.done` yet; replay reruns them under their idempotency keys ([The outbox (Appendix C)](#actions)).
 - **`resume`, `pause`, `block`:** The session's resume handle and link; the pause timer copy (`until`, `link`); and the block reason with its time. Each is empty when it does not apply.
 
 #### Defaults, performance and proof
@@ -3314,7 +3288,7 @@ type Reader interface {
 
 **What each one does**
 - **`Open(group)`:** Called once by a group's `Drive` when the group starts or resumes. It makes `Drive` the group's only writer; a second `Open` in the same process is refused, and the lease and fence keep other processes out ([Workspace and leases (Appendix E)](#workspace-and-leases)).
-- **`Append(event)`:** Writes one event. It stamps the sequence number, the time, the checksum and the `stale` flag (set when the event's epoch is below the current one), checks the event against the schema, appends it and syncs it to disk. It returns before `Next()` runs, which is what "state first" means. The outbox's `action.start` and `action.done` lines go through it too ([The outbox (Appendix C)](#the-outbox)).
+- **`Append(event)`:** Writes one event. It stamps the sequence number, the time, the checksum and the `stale` flag (set when the event's epoch is below the current one), checks the event against the schema, appends it and syncs it to disk. It returns before `Next()` runs, which is what "state first" means. The outbox's `action.start` and `action.done` lines go through it too ([The outbox (Appendix C)](#actions)).
 - **`Snapshot(state)`:** `Drive` calls it after every `Next()`. Group state decides when to write: every 50 events or on a stage change. It refuses a state whose `sequence` is not the last one appended, so a snapshot never runs ahead of or behind its events.
 - **`Load(next)`:** Rebuilds a group after a crash or on `komodo resume`. It reads the snapshot, replays only the events after it through `next`, drops a last line cut short by a crash with one `state.truncated`, and returns the state plus the actions that started but never finished. The engine passes its own `Next()` in as `next`, so the `state` package never imports `engine` and the import order holds.
 - **`Tail(sequence)`:** Lets `status --wait` and the subscribers read the events after a sequence number, without touching the file directly.
@@ -3406,10 +3380,10 @@ flowchart TB
 | Ends | The group lands or is abandoned, the run stops, or Drive crashes, which blocks only its own group |
 
 **What each one does**
-- **Starts:** The engine picks a ready group from the work queue, deletes its queue file, writes its lease and hands it to a new Drive ([Run order and convergence (Appendix D)](#run-order-and-convergence)). Drive calls `Open` on the group's state, which makes it the group's only writer ([Group state (Appendix C)](#group-state)). It then calls `Load`, which reads the last snapshot, replays the events saved after it, and returns any side effect that started but never finished, which Drive runs again ([The outbox (Appendix C)](#the-outbox)).
-- **Waits on:** Each model session sends its events to the group's Drive over a queue with room for 256; an event is never dropped, and a full queue makes the session wait ([Concurrency model (Appendix D)](#concurrency-model)). Drive also renews the group's lease every 5 minutes, and a live engine sleeps until a paused group's `wait_until` time ([Lease (Appendix E)](#lease), [Paused versus Blocked (Appendix C)](#paused-versus-blocked)). How a typed command such as `resume` reaches Drive is `[UNKNOWN: not yet designed]` `[PENDING G-29]`.
+- **Starts:** The engine picks a ready group from the work queue, deletes its queue file, writes its lease and hands it to a new Drive ([Run order and convergence (Appendix D)](#run-order-and-convergence)). Drive calls `Open` on the group's state, which makes it the group's only writer ([Group state (Appendix C)](#group-state)). It then calls `Load`, which reads the last snapshot, replays the events saved after it, and returns any side effect that started but never finished, which Drive runs again ([The outbox (Appendix C)](#actions)).
+- **Waits on:** Each model session sends its events to the group's Drive over a queue with room for 256; an event is never dropped, and a full queue makes the session wait ([Concurrency model (Appendix D)](#concurrency-model)). Drive also renews the group's lease every 5 minutes, and a live engine sleeps until a paused group's `wait_until` time ([Lease (Appendix E)](#lease), [Paused versus Blocked (Appendix C)](#26-state-and-transitions)). How a typed command such as `resume` reaches Drive is `[UNKNOWN: not yet designed]` `[PENDING G-29]`.
 - **One turn:** The 8 steps below. Chapter 2 draws the same path as a sequence diagram, from the producer through the state manager, `Next()` and the listeners ([Event spine and state machine](#2-event-spine-and-state-machine)).
-- **Paused or Blocked:** Both give back the group's pool slot so other groups can run, and both keep its lease and worktree ([Paused versus Blocked (Appendix C)](#paused-versus-blocked)). The design does not yet say whether the Drive loop stays alive during the wait or exits and is started again on `resume`.
+- **Paused or Blocked:** Both give back the group's pool slot so other groups can run, and both keep its lease and worktree ([Paused versus Blocked (Appendix C)](#26-state-and-transitions)). The design does not yet say whether the Drive loop stays alive during the wait or exits and is started again on `resume`.
 - **Ends:** When the group lands or is abandoned, the run's goroutine collects the finished Drive. On `komodo stop`, the shutdown sequence stops sessions, saves work, frees leases and writes the snapshot ([Shutdown and the parent guard (Appendix E)](#shutdown-and-the-parent-guard)). A crash inside one Drive blocks only that group with reason `crash`; the run and the other groups continue.
 
 **One turn, step by step**
@@ -6166,7 +6140,7 @@ The probe result is the capacity profile's source, reused until `install`, `doct
 - **`<!-- komodo:begin min=1.0.0-beta.6 -->`:** The opening marker. `min=` is the repo pin: the lowest Komodo version allowed to work in this repo. A binary below it refuses every verb except `help`, `version`, `fresh`, `install` and `doctor`, and says `run komodo fresh`.
 - **You are the orchestrator:** Tells the session its role: it drives Komodo only by running `komodo` commands and never edits code itself. When the session has no terminal, every verb answers with the JSON envelope `{v, ok, verdict, report, data, error}` (see Glossary).
 - **Find your verbs:** Points the session at `komodo help --json`, which lists every verb, flag and result shape and marks the verbs a person must run in a terminal.
-- **Your verbs:** The list the session may run: planning, running, status, skills, scope answers, adding backlog items, stopping, resuming, abandoning, syncing, doctor, the gate, the scheduler tick and reading config. `status --wait` is to run in the background so the session is woken by events ([Event bus (Appendix C)](#event-bus)).
+- **Your verbs:** The list the session may run: planning, running, status, skills, scope answers, adding backlog items, stopping, resuming, abandoning, syncing, doctor, the gate, the scheduler tick and reading config. `status --wait` is to run in the background so the session is woken by events ([Event bus (Appendix C)](#25-behaviour)).
 - **Not yours:** The verbs reserved for a person: installing, updating the binary, writing config, placing a dev build and cutting a release. They refuse when no terminal is attached, so the session hands the person the exact command instead.
 - **Start:** The first command of every session is `komodo status`, which shows the binary version, live runs and blocked groups. The `SessionStart` hook from install step 6 runs it automatically in Claude Code.
 - **Skills:** `komodo skill get <name>` returns the step-by-step workflow for each orchestrator job: `run`, `plan`, `respond` and `komodo`. The skills are embedded in the binary, not installed as files.
@@ -6482,6 +6456,8 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-28 | Install | How `komodo init` writes Komodo's orchestrator skills and commands into the global Claude Code setup: a Claude Code plugin, or plain files with a machine manifest | Owner decision |
 | G-29 | Engine | Drive's open behaviour: whether it stays alive while its group is Paused or Blocked; how typed commands such as `resume` reach it; whether an event and its follow-ons are one disk write; whether it waits for each listener; whether each event type's contract names its class (fact, request or outcome) | Owner decisions on the event spine page; then a design patch to [Drive: the per-group loop (Appendix D)](#drive-the-per-group-loop) |
 | G-30 | State and file formats | Exact field names and layout the design leaves open, shown as `[UNKNOWN: not yet designed]` in the examples: how a record's header and body sit in one file; the machine log's file names; per-type event `data` (also G-24); the fields of `install.json`, `state/providers.json`, `state/quota.json`, `jobs/state.json`, the lease file and `ledger/sessions.jsonl`; JSON key names in `embed/models.json`; how a repo id becomes a file name | A design patch naming each field, then the examples updated to match |
+| G-31 | Engine | Stage moves the transition table lacked: Ship back to Build when the epic tip breaks, the pause timeout, `resume` to the prior stage, scope answers, abandon, a lost lease and cancel; the `run.done` condition; the `group.cancelled` trigger; whether a lint failure at Intake blocks `lint` | Owner decision on the architecture page; then the transition table in [Event Spine and State Machine](#26-state-and-transitions) |
+| G-32 | Engine | The crash-safe counters in `State`: returns, Verify progress, failure hash, blocks per reason, wall time used and the prior stage | Owner decision on the architecture page; then [Event Spine and State Machine](#23-data-model) |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
@@ -6697,11 +6673,8 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - On every OS, a reviewer's test that edits a tracked file is reset and the review fails.
 - On every OS, a `run` that reads `~/.ssh` or writes your `~/.cargo/registry` fails.
 
-**Orchestration engine ([Group state machine (Appendix C)](#group-state-machine) and [Orchestration engine internals (Appendix D)](#orchestration-engine-internals))**
+**Orchestration engine ([Event Spine and State Machine](#2-event-spine-and-state-machine) and [Orchestration engine internals (Appendix D)](#orchestration-engine-internals))**
 - The fixture group runs all 5 stages and ships.
-- `Next()` has table tests for every stage and event pair, `Paused` and `Blocked`.
-- The 4 Verify orderings (reviewer fails first, tester fails first, both pass, both fail in one tick) each move the stage exactly once.
-- Replaying a group's state rebuilds its `state.json` exactly.
 - A crash between taking a queue item and writing its lease leaves an item the sweep re-enqueues.
 - With 2 repos and `pool_max` 2, 4 ready groups start in alternating repo order.
 - A seeded bug fails Verify, cancels the tester and resumes the builder.
@@ -6710,7 +6683,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A group whose dependency is Blocked waits while an unrelated group runs.
 - A crash inside one group's Drive blocks only that group with reason `crash`; a second group keeps running.
 - While a Drive runs, its group's lease renewal time moves forward every 5 minutes.
-- Killing the engine after an `action.start` and before its `action.done` makes the restarted Drive run that side effect again, once.
 - A landing that breaks Check on the epic tip sends the last-landed group back to Build.
 - `run` on a group with an unlanded dependency refuses and names it.
 - With 2 slots and 3 ready groups, the `priority: high` group starts first.
@@ -6734,11 +6706,9 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A tick with no live engine fires a due `wait_until` and resumes the run.
 - A job due while its previous run holds `job-<name>` is skipped and logged once.
 
-**Error recovery ([The outbox (Appendix C)](#the-outbox) and [Error recovery (Appendix J)](#error-recovery))**
+**Error recovery ([Actions](#actions) and [Error recovery (Appendix J)](#error-recovery))**
 - Forcing a timeout, a flap, 4 returns or 7 attempts each ends Blocked with the reason named.
 - `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions.
-- `kill -9` between `action.start commit` and `action.done`, then `resume`, yields 1 commit.
-- A last event line cut short by a crash replays with one `state.truncated`.
 - A panic injected in one group's `Drive` blocks that group while a second group lands.
 - A 2-hour pause leaves the group wall clock where it was.
 
@@ -6778,12 +6748,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - `ledger/tasks.json` after the fixture lists every task once as `done`.
 - `add backlog --to <locked group>` exits 1 with `locked` and the run ID.
 - A dead session's task shows `released: crash` after the sweep.
-
-**Event bus ([Event model (Appendix C)](#event-model) and [Event bus (Appendix C)](#event-bus))**
-- A fixture `group.blocked` wakes `status --wait`.
-- An event emitted between a waiter's subscribe and its first watch still wakes it.
-- A subscriber that panics leaves group state unchanged, and the other 2 keep running.
-- An emitted type missing from the catalog fails the gate.
 
 **Backlog and planning ([Backlog and planning (Appendix L)](#backlog-and-planning))**
 - Epic-1 passes `komodo doctor backlog`.
@@ -6912,17 +6876,17 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 | Brief builder | [Brief builder (Appendix F)](#brief-builder) |
 | Guardrails | [Guardrails (Appendix G)](#guardrails) |
 | Sandbox and process control | [Sandbox and process control (Appendix G)](#sandbox-and-process-control) |
-| Orchestration engine | [Group state machine (Appendix C)](#group-state-machine), [Orchestration engine internals (Appendix D)](#orchestration-engine-internals) |
+| Orchestration engine | [Group state machine (Appendix C)](#26-state-and-transitions), [Orchestration engine internals (Appendix D)](#orchestration-engine-internals) |
 | Workspace and leases | [Workspace and leases (Appendix E)](#workspace-and-leases) |
 | Session supervisor | [Session supervisor (Appendix F)](#session-supervisor) |
 | Scheduler and job templates | [Scheduler and job templates (Appendix K)](#scheduler-and-job-templates) |
-| Error recovery | [The outbox (Appendix C)](#the-outbox), [Error recovery (Appendix J)](#error-recovery) |
+| Error recovery | [The outbox (Appendix C)](#actions), [Error recovery (Appendix J)](#error-recovery) |
 | Check | [Check (Appendix J)](#check) |
 | Review and evidence | [Review and the tester (Appendix J)](#review-and-the-tester) |
 | Token and resource management | [Token and resource management (Appendix J)](#token-and-resource-management) |
 | Cache store | [Cache store (Appendix K)](#cache-store) |
 | Runtime observability | [Runtime observability (Appendix K)](#runtime-observability) |
-| Event bus | [Event model (Appendix C)](#event-model), [Event bus (Appendix C)](#event-bus) |
+| Event bus | [Event model (Appendix C)](#23-data-model), [Event bus (Appendix C)](#25-behaviour) |
 | Backlog and planning | [Backlog and planning (Appendix L)](#backlog-and-planning) |
 | Ship | [Ship and release (Appendix L)](#ship-and-release) |
 | Gate and self-checks | [Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](#gate-and-self-checks-komodo-gate-komodo-repo-only) |
