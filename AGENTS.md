@@ -18,6 +18,6 @@ Output that has to be re-read has failed, however correct.
 - **The archive lives in git history.** `backups/` and `drafts/` are at commit `fdf4f61f` (`git show fdf4f61f:backups/<path>`); the retired `PLAN.md` is at commit `dee89326`. They are reference only, not a source of rules.
 - **Open design questions have defaults.** State the default you assume, keep going, and ask only when the answer is the user's alone.
 - **Doc edits are patches.** Change the smallest span, and add a revision history row when a design decision moves.
-- **Keep counts and cross-references true.** Update the component ID (S01 to S29), phase and section references you touch.
+- **Keep counts and cross-references true.** Update the component, phase and section references you touch.
 - **Open items live in the LLD gap register** (Appendix O). Add a new `G-NN` row there; do not hold it in chat.
 - **Pursued features update the docs in the same branch.** A proof of concept gets a file-map line and a gap row. Once a feature is adopted (dashboard, `init`, …), the HLD and LLD gain its component, verbs, config keys, file map and proof cases.

@@ -35,6 +35,7 @@
 | 0.8 | 2026-10-12 | Token and USD tracking is opt-in: the `track.usage` setting is on in `economy` mode and off in `thorough` mode |
 | 0.9 | 2026-10-12 | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
 | 0.10 | 2026-10-12 | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
+| 0.11 | 2026-10-12 | Component IDs removed; components are named in the traceability and decision tables |
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
@@ -550,22 +551,22 @@ Index of the choices that shaped the design; DR-n numbers exist only here. The o
 
 | ID | Decision | Component |
 |---|---|---|
-| G-01 | Local signing key plus one backup; `next` key at first release | S03 |
-| G-05 | Sole model registry `providers.json`; 404 fails over through the chain | S05 |
-| G-15 | Orchestrator answers `scope approve` after two engine denials | S19 |
-| DR-1 | Every loop has a counter | S04, S18 |
-| DR-2 | `claude -p` with pinned flags, never `--bare` | S05 |
-| DR-3 | Fence enforced by git compare-and-swap | S15 |
-| DR-4 | Measured context per session, never typed | S05 |
-| DR-5 | Shared Rust target dir per group | S13 |
-| DR-6 | Language caches owned by Komodo | S13 |
-| DR-7 | Session caps via cgroups or Docker only | S13 |
-| DR-8 | Machine-wide session pool, not per-repo lanes | S14 |
-| DR-9 | No rule text in worker prompts | S10 |
-| DR-10 | One state schema; the state manager is the only door to state | §1, S29 |
-| DR-11 | Group state: events, snapshots and replay as one unit | §1, S29 |
+| G-01 | Local signing key plus one backup; `next` key at first release | Binary lifecycle |
+| G-05 | Sole model registry `providers.json`; 404 fails over through the chain | Provider adapters |
+| G-15 | Orchestrator answers `scope approve` after two engine denials | Check |
+| DR-1 | Every loop has a counter | Configuration, Error recovery |
+| DR-2 | `claude -p` with pinned flags, never `--bare` | Provider adapters |
+| DR-3 | Fence enforced by git compare-and-swap | Workspace and leases |
+| DR-4 | Measured context per session, never typed | Provider adapters |
+| DR-5 | Shared Rust target dir per group | Sandbox and process control |
+| DR-6 | Language caches owned by Komodo | Sandbox and process control |
+| DR-7 | Session caps via cgroups or Docker only | Sandbox and process control |
+| DR-8 | Machine-wide session pool, not per-repo lanes | Orchestration engine |
+| DR-9 | No rule text in worker prompts | Rules and output contract |
+| DR-10 | One state schema; the state manager is the only door to state | §1, State manager |
+| DR-11 | Group state: events, snapshots and replay as one unit | §1, State manager |
 | Defaults | 12 design-pass defaults: `fable` opt-in, Haiku 5.5 light, coverage 80, 10 lenses, EARS items, two-pass planner, 6 more | LLD Appendix S |
-| State defaults | In-process, no daemon; 6 exclusions; quarantine, never repair; snapshot fields | S29 |
+| State defaults | In-process, no daemon; 6 exclusions; quarantine, never repair; snapshot fields | State manager |
 
 ## 10. Quality requirements
 
@@ -641,36 +642,36 @@ Eighteen newcomer terms; the LLD links here.
 #### Appendix A. Traceability
 
 
-| Component | Component ID | Package | Phase |
-|---|---|---|---|
-| CLI processor | S01 | `cli` | 2 |
-| Installer | S02 | `host` | 8 |
-| Binary lifecycle | S03 | `host`, `core` | 2, 8 |
-| Configuration | S04 | `core` | 2 |
-| Provider adapters | S05 | `provider` | 4 |
-| HTTP stack | S06 | `core` | 2 |
-| Agent registry | S07 | `agent` | 3 |
-| Tool runtime | S08 | `tools`, `provider` | 4 |
-| Skill loader | S09 | `agent` | 3 |
-| Rules and output contract | S10 | `agent` | 3 |
-| Brief builder | S11 | `agent` | 4 |
-| Guardrails | S12 | `safety` | 3 |
-| Sandbox and process control | S13 | `safety` | 2 |
-| Orchestration engine | S14 | `engine` | 6 |
-| Workspace and leases | S15 | `engine` | 5 |
-| Session supervisor | S16 | `engine` | 5 |
-| Scheduler and job templates | S17 | `engine` | 7 |
-| Error recovery | S18 | `engine` | 6 |
-| Check | S19 | `quality` | 6 |
-| Review and evidence | S20 | `quality` | 7 |
-| Token and resource management | S21 | `ops`, `agent` | 6 |
-| Cache store | S22 | `core` | 2 |
-| Runtime observability | S23 | `ops`, `cli` | 5 |
-| Event bus | S24 | `ops` | 5 |
-| Backlog and planning | S25 | `repo` | 2, 7 |
-| Ship | S26 | `repo` | 6, 8 |
-| Gate and self-checks | S27 | `repo`, `safety` | 2, 8 |
-| State manager | S29 | `state` | 2 |
+| Component | Package | Phase |
+|---|---|---|
+| CLI processor | `cli` | 2 |
+| Installer | `host` | 8 |
+| Binary lifecycle | `host`, `core` | 2, 8 |
+| Configuration | `core` | 2 |
+| Provider adapters | `provider` | 4 |
+| HTTP stack | `core` | 2 |
+| Agent registry | `agent` | 3 |
+| Tool runtime | `tools`, `provider` | 4 |
+| Skill loader | `agent` | 3 |
+| Rules and output contract | `agent` | 3 |
+| Brief builder | `agent` | 4 |
+| Guardrails | `safety` | 3 |
+| Sandbox and process control | `safety` | 2 |
+| Orchestration engine | `engine` | 6 |
+| Workspace and leases | `engine` | 5 |
+| Session supervisor | `engine` | 5 |
+| Scheduler and job templates | `engine` | 7 |
+| Error recovery | `engine` | 6 |
+| Check | `quality` | 6 |
+| Review and evidence | `quality` | 7 |
+| Token and resource management | `ops`, `agent` | 6 |
+| Cache store | `core` | 2 |
+| Runtime observability | `ops`, `cli` | 5 |
+| Event bus | `ops` | 5 |
+| Backlog and planning | `repo` | 2, 7 |
+| Ship | `repo` | 6, 8 |
+| Gate and self-checks | `repo`, `safety` | 2, 8 |
+| State manager | `state` | 2 |
 
 ---
 
@@ -773,7 +774,7 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.10, draft |
+| Version | 0.11, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
@@ -795,6 +796,7 @@ Eighteen newcomer terms; the LLD links here.
 | 0.8 | 2026-10-12 | Technical lead | Token and USD tracking is opt-in: the `track.usage` setting (`auto`, `on`, `off`) is on in `economy` mode and off in `thorough` mode; flat keys 33 to 34; per-provider-family usage metrics deferred (G-26) |
 | 0.9 | 2026-10-12 | Technical lead | `komodo init` is a verb: `install` places the binary and sets up the repo, and `init` puts orchestrator skills and commands into the global Claude Code setup (G-28); the install scripts replace the name "bootstrap"; dashboard proof of concept tracked as G-27 |
 | 0.10 | 2026-10-12 | Technical lead | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
+| 0.11 | 2026-10-12 | Technical lead | Component IDs removed; components are named in the traceability and decision tables |
 
 #### 3.4 Related documents
 
