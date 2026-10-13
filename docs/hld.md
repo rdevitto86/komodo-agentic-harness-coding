@@ -426,7 +426,7 @@ These 10 open items shape the architecture most; the Low-Level Design gap regist
 - [TODO: the shape of an agent's provider chain (G-69)]
 - [TODO: how machine-shared files such as the quota file are locked (G-74)]
 - [TODO: how tool server events reach the engine (G-42)]
-- [TODO: which component owns the startup sweep, the outbox of recorded actions and the session pool (G-217, G-217)]
+- [TODO: which component owns the startup sweep, the outbox of recorded actions and the session pool (G-217)]
 - [TODO: the payload fields of each event type and the layout of a record (G-198, G-211)]
 - [TODO: which component owns each loop counter (G-32)]
 - [TODO: whether a group's snapshot is written before its lease is freed (G-230)]
