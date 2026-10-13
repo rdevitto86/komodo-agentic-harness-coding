@@ -98,7 +98,7 @@ flowchart TB
 - Import order, top down: `cli`, `engine`, `quality`, `host`, `repo`, `provider`, `tools`, `ops`, `agent`, `safety`, `state`, `core`; a file splits at about 600 lines.
 - `embed/` holds the 7 agents, 5 workflow skills plus 34 `standards-*`, 10 lenses, `defaults.json`, `policy.json`, `models.json` and the generated `state.schema.json`.
 - Per-repo state lives under `<git-common-dir>/komodo/` (state files, sessions, ledger, 256 MB cache); machine state under `~/.komodo/` (config, leases, worktrees).
-- Every runtime state file except the 6 exclusions in [Outside the manager (Appendix C)](#outside-the-manager) is read and written only through the state manager ([State manager (Appendix C)](#state-manager)).
+- Every runtime state file except the 6 exclusions in [Outside the manager (chapter 13)](#13-state-manager) is read and written only through the state manager ([State manager (chapter 13)](#13-state-manager)).
 
 **Lookup:** [Appendix A](#appendix-a-document-metadata-conventions-code-structure-and-data-locations) holds the package, embedded asset, runtime state and conventions tables.
 
@@ -1604,7 +1604,7 @@ sequenceDiagram
 1. `Load` reads `runs/<group-id>/state.json`; a snapshot is refused unless the snapshot's `sequence` is the group state's last.
 2. Replay costs at most one snapshot interval of lines. [TODO: measure the replay target of 10,000 events under 1 s (G-19)]
 3. A last line whose checksum fails was cut short by a crash: the line is dropped and one `state.truncated` is emitted.
-4. A failing line before the last is a bad record: the line is moved aside and the group blocks `state_invalid` ([Checks: populate and validate (Appendix C)](#checks-populate-and-validate)).
+4. A failing line before the last is a bad record: the line is moved aside and the group blocks `state_invalid` ([Checks: populate and validate (chapter 13)](#13-state-manager)).
 
 **After a crash.** The startup sweep releases each session that `State` shows claimed, that has no `session.end` on disk and whose process is dead, with one `task.released` reason `crash`. A session whose `spawn` is still in `ActionsOpen` is also restarted by that spawn's rerun. [TODO: whether the sweep skips a session whose spawn is still open, or the rerun skips it, so the session restarts once (G-184)]
 
@@ -11081,140 +11081,142 @@ Decided: [G-01](#appendix-o-gap-register), the signing key is a local file with 
 
 ## 13. State Manager
 
-The state manager is the one piece of code that reads and writes the harness's runtime state: state events, snapshots, leases, queue items, timers, session files and ledgers. Every record and every event has one schema, and the manager fills in and checks each record before it touches disk. Without it, 12 parts would each write their own files by their own rules, and a crash or an upgrade could leave those files disagreeing.
+The state manager is the only code that reads or writes the harness's runtime state: state events, snapshots, leases, queue items, timers, session files and ledgers. It gives every record and every event one schema, fills in the fields a caller must not compute, and refuses a write that breaks the schema before the write reaches disk. Design and reasons are in [HLD 5.14](hld.md#514-state-manager).
 
-It is a Go service inside the `komodo` process, started once per process; there is no separate server. Two `komodo` processes on one machine stay consistent through the manager's atomic file writes, never through a shared process. Locks are per record key, so groups never wait on each other.
+**Guarantees the tests pin**
 
-**📐 How every part reaches state through the state manager**
-```mermaid
-flowchart LR
-  DR["Drive and Next()<br><small>decides every group change</small>"]:::core
-  OW["Other writers<br><small>12 subsystems: workspace · providers · scheduler · sweep · ledger</small>"]
-  RD(["Readers<br><small>status · wait · sweep · views</small>"]):::actor
-  M["State manager<br><small>one schema · populate · validate</small>"]:::core
-  AP["Append<br><small>state files · streams · logs</small>"]
-  RP["Replace<br><small>snapshots · counters · views</small>"]
-  CL["Claim and Remove<br><small>queue · leases · slots · timers</small>"]
-  F[("Runtime state on disk<br><small>repo git folder · ~/.komodo</small>")]:::store
-  BAD["Refused or moved aside<br><small>state_invalid · .bad-*</small>"]:::bad
-  DR -->|"① Append · Snapshot, through group state"| M
-  OW -->|"② Append · Replace · Claim · Remove"| M
-  RD -->|"③ Get · List · Tail · Watch"| M
-  M -->|"④ state"| AP
-  M -->|"④ snapshot"| RP
-  M -->|"④ create-only or delete"| CL
-  AP -->|"⑤ fsync"| F
-  RP -->|"⑤ temp file, fsync, rename"| F
-  CL -->|"⑤ create, rename aside or delete"| F
-  M -.->|"⑥ a check fails"| BAD
-```
-**Reading the diagram.**
-
-1. `Drive`, the one loop per group, sends each event and each new snapshot to the manager through group state, its module for a group's events and snapshots; `Next()` has already decided the change.
-2. Every other writer sends its own records: leases from the workspace, timers and quota from the providers, counters from the scheduler, re-enqueued items and freed leases from the startup sweep, rows from the ledger.
-3. Readers such as `status`, `status --wait` and the startup sweep read through the same manager.
-4. The manager fills in each record's envelope, checks it against the one schema and its invariants, then picks one of four write primitives by kind.
-5. Each primitive writes atomically: an append is synced before it returns, a snapshot is renamed into place, a create-only record exists whole or not at all, and a removal deletes only after the writer and `rev` check.
-6. A write that fails a check never reaches disk and returns `state_invalid`; a record that fails its check on read is moved aside as `.bad-*`, and its group blocks. A last event line cut short by a crash is the exception: it is dropped with one `state.truncated`, and replay continues.
-
-**Group state.** A group's events, its snapshots and replay belong together, so they live in one module of the state manager, `state/groupstate.go`, called group state. The snapshot is only valid with the events behind it, and replay needs both, so one owner keeps their rules from drifting apart. `Next()` stays in the engine and pure; group state stores and replays, and never decides.
-
-**📐 How a group's events and snapshots stay together**
-```mermaid
-flowchart LR
-  DR["Drive<br><small>one per group</small>"]:::core
-  RS(["Resume<br><small>recovery · komodo resume</small>"]):::actor
-  RD(["Readers<br><small>status --wait · subscribers</small>"]):::actor
-  GS["Group state<br><small>Open · Append · Snapshot · Load · Tail</small>"]:::core
-  EV[("Events<br><small>events.jsonl</small>")]:::store
-  SN[("Snapshot<br><small>state.json</small>")]:::store
-  NX["Next()<br><small>passed in by the engine</small>"]
-  DR -->|"① Append"| GS
-  DR -->|"② Snapshot after Next()"| GS
-  RS -->|"③ Load(Next)"| GS
-  RD -->|"④ Tail(sequence)"| GS
-  GS -->|"⑤ fsync, then return"| EV
-  GS -->|"⑥ every 50 events or a stage change"| SN
-  GS -.->|"⑦ replay the events after the snapshot"| NX
-```
-**Reading the diagram.**
-
-1. `Drive` opens the group once with `Open`, which makes it the group's only writer, then appends each event with `Append`. `action.start` and `action.done` go through the same call.
-2. After every `Next()`, `Drive` hands the new state to `Snapshot`.
-3. On a crash or a `komodo resume`, recovery calls `Load` and passes in `Next()`.
-4. `status --wait` and the subscribers read new events with `Tail`, from a sequence number onward.
-5. `Append` stamps `sequence`, `timestamp` and `checksum` (`Drive` has already set `stage` and `stale`), checks the event, appends it to `events.jsonl` and syncs it before returning.
-6. `Snapshot` writes `state.json` only every 50 events or on a stage change, and refuses a state whose `sequence` is not the last appended.
-7. `Load` reads the snapshot, replays every later line through the `apply` function `Drive` passes, drops a last line cut short by a crash with one `state.truncated`, and returns the state; `Drive` then runs its `ActionsOpen` before any new event ([Behaviour](#25-behaviour)).
-
-**What matters**
-- One schema: every record kind and all 35 event types are Go structs; the build generates `embed/state.schema.json`, and `help --json` serves it as `state`.
-- Every record carries `v`, `kind`, `key`, `rev`, `ts` and `writer`, all set by the manager; a caller supplies only the body. Event lines carry the event envelope instead ([Envelope (Appendix C)](#23-data-model)).
-- Each kind lists its writers; the manager refuses any other. A group's records accept writes only from that group's `Drive`.
-- Six things stay outside under their own owners' rules: `config.json`, the cache, git refs and worktrees, job templates, the binaries and session temp.
-- The gate fails any package other than `state` that writes a runtime state path.
-- Group state is the only way to write or replay a group's events and snapshots; `Next()` is passed into `Load`, so `state` never imports `engine`.
-
-**Lookup:** [Appendix C](#appendix-c-event-model-state-machine-event-bus-and-state-manager) holds the envelope, primitives, kinds, checks, reads, exclusions, the group snapshot fields, group state's calls and the 12 proofs ([State manager (Appendix C)](#state-manager)).
-
-
-#### State manager
-
-**In plain terms.** The state manager is the only code in the harness that reads or writes runtime state, the files that record where every group, session, lease and timer stands. It holds one schema for every record and every event, fills in the fields a caller should never compute, and refuses any write that breaks the schema. It exists so 12 different parts cannot each invent their own file rules, and so a new binary can still read state an older one wrote.
-
-**📐 What happens when a part writes a record**
-```mermaid
-sequenceDiagram
-  autonumber
-  participant C as Caller (for example Drive)
-  participant M as State manager
-  participant D as Disk
-  C->>M: Replace(kind, key, body, rev)
-  M->>M: fill the envelope and schema defaults
-  M->>M: check types, required fields and enums
-  M->>M: check invariants, owner and rev
-  alt a check fails
-    M-->>C: state_invalid with the field path, disk untouched
-  else every check passes
-    M->>D: write a temp file, fsync, rename into place
-    M-->>C: the new rev
-  end
-```
-**Reading the diagram.**
-
-1. A caller, here a group's `Drive`, asks for a `Replace` with the record's kind, key, body and the `rev` it last read.
-2. The manager fills in the envelope (`v`, `kind`, `key`, `rev`, `ts`, `writer`; for an event, `sequence`, `timestamp` and `checksum`) and any schema defaults.
-3. It checks every field's type, every required field and every enum value, such as the stage or the block reason.
-4. It checks the kind's invariants, that the caller owns the key, and that the caller's `rev` is still current.
-5. If any check fails, the caller gets `state_invalid` with the field path, and nothing on disk changes.
-6. If every check passes, the record is written to a temp file, synced and renamed into place, and the caller gets the new `rev`.
-
-#### Record envelope
-
-**In plain terms.** The envelope is the set of fields every state record carries, whatever its kind. The manager sets all six, so no caller can forget one or set it wrong. Without them, the manager could not tell an old record from a new one, or one writer from another.
-
-| Field | Meaning |
+| Guarantee | How |
 |---|---|
-| `v` | Schema version of the record |
-| `kind` | Which of the registered record kinds it is |
-| `key` | Which record of that kind, such as a group or session id |
-| `rev` | Rises by 1 on every write; used for compare-and-swap |
-| `ts` | When the manager wrote it |
-| `writer` | The run and process id that wrote it |
+| One door | The gate fails any package other than `state` that writes a runtime state path |
+| Invalid never reaches disk | A refused write leaves the file byte-identical |
+| Each write is whole or absent | An append is synced before it returns, a replacement is renamed into place, a claim is create-only |
+| An old file stays readable | A newer binary migrates an older `v` in memory |
+| Damage is visible | A bad record is moved aside as `.bad-*` and its group blocks |
+| Replay rebuilds the snapshot | Replaying a group's events through `Load` reproduces `state.json` byte for byte |
 
-**What each one does**
-- **`v`:** The schema version the record was written under. A newer binary reads an older `v` by running a registered migration step in memory.
-- **`kind`:** The record's type, one of the kinds in [Kinds (Appendix C)](#kinds). The kind decides the schema, the write primitive and the one allowed writer.
-- **`key`:** Picks one record out of its kind, such as a group id for a snapshot or a session id for a session file.
-- **`rev`:** A counter that rises by 1 on every write. A caller passes the `rev` it last read; if the record moved since, the write is refused, so two writers can never silently overwrite each other.
-- **`ts`:** The time the manager wrote the record. Events carry their own `timestamp`, the time the engine saw the fact ([Envelope (Appendix C)](#23-data-model)).
-- **`writer`:** The run id and process id of the writer, so `doctor` and a person can see who last changed a record.
+### 13.1 Scope and Concepts
 
-Event lines do not carry this header. Every line in an event file is an event, so `kind`, `key`, `rev` and `writer` would repeat what the file already says; events carry the [Envelope (Appendix C)](#23-data-model) envelope instead, and the manager computes its `sequence`, `timestamp` and `checksum`, so a producer never does.
+**Owns:**
+- The record header, the registry of record kinds, and the populate and validate checks run on every write and read.
+- The four write primitives (`Append`, `Replace`, `Claim`, `Remove`) and the four read calls (`Get`, `List`, `Tail`, `Watch`).
+- Group state: one group's events, snapshots and replay, behind `Open`, `Append`, `Snapshot`, `Load` and `Tail`.
+- Moving a bad record aside, and reading an older schema version through a migration step.
+- The generated schema `embed/state.schema.json`.
 
-**Example**
+**Does not own:**
+- The event envelope, the 35-type catalog, `Next()`, `State` and the wake list ([Event Spine and State Machine](#2-event-spine-and-state-machine)).
+- The `Drive` loop, the work queue and the session pool as engine logic ([Engine Internals](#3-engine-internals)).
+- Lease and fence rules and the takeover steps ([Workspace and Leases](#4-workspace-and-leases)).
+- The body of each kind: each is defined by the chapter that writes it, listed in [Record kinds](#record-kinds).
+- Six items kept outside the manager, listed in [Items outside the manager](#items-outside-the-manager).
 
-One stored timer record: the six header fields the manager sets, then the timer's own two fields. The header-and-body layout shown is illustrative; G-30 keeps it open.
+The purpose of the subsystem, and who it talks to, is in the HLD: [State Manager](hld.md#514-state-manager).
+
+The design pass proposed four defaults that the owner has not confirmed: the manager runs inside each process with no daemon, six items stay outside it, a bad record is quarantined and never repaired, and the snapshot holds the field list given in [Group snapshot](#group-snapshot). This chapter writes them as designed. `[TODO: owner confirmation of the state manager defaults, and the performance and caching rules that went with them (G-NEW-9)]`
+
+**Concepts**
+
+| Term | Meaning |
+|---|---|
+| Record | One stored piece of state with a header and a body, such as a lease or a timer |
+| Kind | One type of record: its path pattern, write primitives, writers and schema |
+| Key | Picks one record out of its kind, such as a group id or a session id |
+| Header | The six fields `v`, `kind`, `key`, `rev`, `ts` and `writer`, set by the manager |
+| `rev` | A counter that rises by 1 on every write; a caller names the value it last read |
+| Primitive | One of four atomic ways to change a file: `Append`, `Replace`, `Claim`, `Remove` |
+| Writer | A component the kind's registration lists as allowed to write it |
+| State file | The append-only `events.jsonl` of one group, or `<run>.jsonl` of one run |
+| Snapshot | `state.json`: the group's `State` at a `sequence`, written by group state |
+| Group state | The part of the manager that keeps one group's state file, snapshot and replay together |
+| Moved aside | A record that failed a check is renamed to `.bad-*`; it is never repaired |
+
+**📐 How every part reaches state through the manager**
+```mermaid
+flowchart LR
+  D["Drive<br>one per group"]
+  W["Other writers<br>leases, queue, timers, ledger"]
+  R(["Readers<br>status, sweep, subscribers"])
+  M["State manager<br>internal/state"]
+  F[("Files on disk<br>repo folder, ~/.komodo")]
+  B["Moved aside<br>.bad-*"]
+  D -->|"1 Open, Append, Snapshot"| M
+  W -->|"2 Replace, Claim, Remove, Append"| M
+  R -->|"3 Get, List, Tail, Watch"| M
+  M -->|"4 atomic write"| F
+  M -.->|"5 failed read check"| B
+```
+**Reading the diagram.** Group state, the five-call module that `Drive` uses, is one part of the manager; every other writer calls the four primitives directly.
+
+### 13.2 Package Layout
+
+```
+internal/state/
+├── manager.go      Get, List, Tail, Watch, Append, Replace, Claim, Remove
+├── groupstate.go   group state: Open, Append, Snapshot, Load, Tail
+├── schema.go       kind registry and record header; generates embed/state.schema.json
+├── kinds.go        one struct per kind, the event catalog included
+├── validate.go     types, enums, invariants, writer and rev checks
+└── migrate.go      read older schema versions, move bad records aside
+internal/core/lock.go   create-only and rename-aside file helpers; only state calls them
+embed/state.schema.json generated at build; the gate fails when it disagrees with the Go types
+```
+
+Group state lives in `state/groupstate.go`. The package imports nothing above it: group state receives `Next()` as an `apply` function, so `state` never imports `engine` ([Event Spine and State Machine](#2-event-spine-and-state-machine)). The names in this layout are the design's; the exported Go names in this chapter are derived from stated behaviour. `[TODO: owner confirmation of the exported names and signatures, and how a package obtains the manager (G-NEW-1)]`
+
+**Entry points**
+
+| Flow | Starts in |
+|---|---|
+| A part writes a record | `Append`, `Replace`, `Claim` or `Remove` in `manager.go` |
+| A part reads a record | `Get`, `List`, `Tail` or `Watch` in `manager.go` |
+| A group starts or resumes | `Open`, then `Load`, in `groupstate.go` |
+| A group appends an event | `Append` in `groupstate.go` |
+| The build writes the schema | `schema.go` `[TODO: name of the generator entry point (G-NEW-1)]` |
+| A record of an older version is read | `migrate.go` `[TODO: name of the migration entry point (G-NEW-1)]` |
+
+### 13.3 Data Model
+
+#### State manager header
+
+Every record other than an event line starts with the six-field header; the manager sets all six, so a caller supplies only the body.
+
+```go
+// Header is the six fields every record carries; the manager fills in all of them.
+type Header struct {
+	V      int       `json:"v"`      // schema version the record was written under
+	Kind   string    `json:"kind"`   // one of the registered record kinds
+	Key    string    `json:"key"`    // which record of the kind, such as a group or session id
+	Rev    int       `json:"rev"`    // rises by 1 on every write; used for compare-and-swap
+	TS     time.Time `json:"ts"`     // when the manager wrote the record
+	Writer string    `json:"writer"` // run id and process id of the writer
+}
+
+// Body is the kind-specific part of a record; each kind has one struct in kinds.go.
+type Body struct {
+	// [TODO: whether Body is an interface that kind structs implement or a generic value (G-NEW-1)]
+}
+
+// Record is one stored record as a reader receives it.
+type Record struct {
+	Header Header
+	Body   Body
+}
+```
+
+| Field | Rule |
+|---|---|
+| `v` | The schema version of the record; a newer binary reads an older `v` through a registered migration step in memory |
+| `kind` | Decides the schema, the write primitives and the allowed writers |
+| `key` | Picks one record out of the kind |
+| `rev` | A write that names a `rev` other than the current one is refused, so two writers never overwrite each other silently |
+| `ts` | The time the manager wrote the record; an event's own `timestamp` is the time the engine saw the fact ([Data Model](#23-data-model)) |
+| `writer` | Lets `doctor` and a person see who last changed the record |
+
+- **Header encoding:** `[TODO: the timestamp format of ts and the encoding of writer (G-30)]`
+- **Record layout:** `[TODO: how the header and the body sit in one file (G-30)]`
+- **Event lines:** an event line carries the event envelope instead of this header, because every line in a state file is an event and `kind`, `key`, `rev` and `writer` would repeat what the file already says. The manager computes `sequence`, `timestamp` and `checksum`, so no producer does ([Data Model](#23-data-model)).
+
+**Example.** One stored timer record: the six header fields, then the timer's own two fields. The header-and-body layout shown is illustrative.
 
 ```json
 {
@@ -11222,232 +11224,202 @@ One stored timer record: the six header fields the manager sets, then the timer'
   "kind": "timer",
   "key": "<repo-id>.tg-1.2",
   "rev": 1,
-  "ts": "[UNKNOWN: not yet designed]",
-  "writer": "[UNKNOWN: not yet designed]",
+  "ts": "[TODO: timestamp format (G-30)]",
+  "writer": "[TODO: writer encoding (G-30)]",
   "body": {
-    "wait_until": "[UNKNOWN: not yet designed]",
+    "wait_until": "[TODO: timestamp format (G-30)]",
     "wait_link": "claude-cli"
   }
 }
 ```
 
-#### Write primitives
+**Versioning.**
+- **Older `v`:** `Get`, `List` and `Tail` run the registered migration steps in memory until the record reaches the kind's current version. A fixture with `v: 0` reads as `v: 1`.
+- **Newer `v`:** `[TODO: what a binary does with a record whose v is newer than the kinds it knows (G-NEW-4)]`
+- **Record checksum:** each read verifies the checksum or hash before the version. `[TODO: where a replaced record stores its checksum or hash, since the six header fields hold none, and which append kinds carry a checksum (G-NEW-4)]`
 
-**In plain terms.** A primitive is one of the four ways the manager changes bytes on disk. Each kind uses one or more of them, chosen for how that kind is used. Every primitive is atomic on its own: a record is either fully written, fully gone or untouched.
+#### Record kinds
 
-| Primitive | How it writes | Used for |
-|---|---|---|
-| `Append` | Append one line, fsync, then return | State files, session streams, logs |
-| `Replace` | Write a temp file, fsync, rename it into place | Snapshots, counters, views, probe results |
-| `Claim` | Create the file only if absent; a takeover renames the old one aside | Queue items, leases, pool and link slots |
-| `Remove` | Delete after the writer and `rev` check | A taken queue item, a released lease, a landed group's records, a fired timer |
-
-**What each one does**
-- **`Append`:** Adds one line to the end of a file and syncs it to disk before returning. A crash can at worst leave a half-written last line, which replay drops because it no longer matches its checksum ([State files and snapshots (Appendix C)](#25-behaviour)).
-- **`Replace`:** Writes the whole record to a temporary file, syncs it, then renames it over the old one. The rename is atomic, so a reader sees either the old record or the new one, never a mix.
-- **`Claim`:** Creates a file that must not already exist; the operating system lets exactly one process win. A takeover of a stale record first renames the old one aside, so again only one process wins.
-- **`Remove`:** Deletes a record only after checking that the caller is a listed writer and its `rev` is current. It covers a queue item taken by a pool slot, a released lease, a landed group's records and a fired timer.
-
-**Example**
-
-The four ways the state manager changes bytes on disk, as Go methods.
+Each kind is registered once; the registry is the source of `embed/state.schema.json`. A file that is neither a kind nor on the exclusion list in [Items outside the manager](#items-outside-the-manager) does not exist. The shapes below are derived from the attributes the design gives each kind (G-NEW-1).
 
 ```go
-type Body struct{} // [UNKNOWN: not yet designed]
+// Primitive names one of the four ways the manager changes bytes on disk.
+type Primitive uint8
 
+const (
+	PrimAppend  Primitive = iota + 1 // append one line, fsync, then return
+	PrimReplace                      // write a temp file, fsync, rename into place
+	PrimClaim                        // create the file only if absent
+	PrimRemove                       // delete after the writer and rev checks
+)
+
+// Migration upgrades the body of a record from version From to From+1, in memory.
+type Migration struct {
+	From int
+	Step func(old []byte) ([]byte, error)
+}
+
+// KindSpec is the registration of one record kind.
+type KindSpec struct {
+	Name       string      // the kind name, such as "lease"
+	Path       string      // path pattern, rooted at the repo folder or ~/.komodo
+	Primitives []Primitive // the primitives the kind allows
+	Writers    []string    // components allowed to write it; any other is refused
+	Version    int         // current schema version
+	New        func() any  // returns an empty body struct to decode into
+	Migrations []Migration // steps that read older versions
+}
+
+// RegisterKind adds a kind to the registry; called from init in kinds.go.
+func RegisterKind(k KindSpec)
+```
+
+| Field | Rule |
+|---|---|
+| `Name` | Unique; also the `kind` value in the header |
+| `Path` | The pattern of the file or folder; `<group-id>`, `<run>` and `<id>` stand for the key |
+| `Primitives` | A call with a primitive the kind does not list is refused |
+| `Writers` | A group's records accept writes only from that group's `Drive` |
+| `Version` | The gate fails a kind with no schema version, no named writer or no test fixture |
+| `New`, `Migrations` | The decoder target and the steps that upgrade an older `v` |
+
+Paths starting `runs/`, `sessions/`, `ledger/` and `jobs/`, and `install.json`, sit under `<git-common-dir>/komodo/`. Paths starting `~/.komodo` or `state/` sit under `~/.komodo/`.
+
+| Kind | Path | Primitive |
+|---|---|---|
+| `event` (group, run) | `runs/<group-id>/events.jsonl`, `runs/<run>.jsonl` | `Append` |
+| `group` | `runs/<group-id>/state.json` | `Replace` |
+| `session` | `sessions/<id>/{brief.md, request.json, result.json, stream.jsonl, messages.jsonl}` | `Replace`; `Append` for the 2 streams |
+| `ledger`, `view` | `ledger/{sessions,events}.jsonl`; `ledger/{tasks,groups}.json` | `Append`; `Replace` |
+| `job` | `jobs/state.json` | `Replace` |
+| `machine_event` | `~/.komodo/state/events/<process>.jsonl` | `Append` |
+| `queue`, `pool`, `link` | `~/.komodo/state/{queue,pool,links}/` | `Claim`; `Remove` |
+| `lease`, `fence` | `~/.komodo/leases/<repo-id>/<group-id>.{json,fence}` | `Claim`; `Replace`; `Remove` |
+| `timer`, `quota` | `~/.komodo/state/timers/`, `quota.json` | `Replace`; `Remove` when fired |
+| `providers`, `install` | `state/providers.json`, `install.json` | `Replace` |
+| `fresh` | `state/{fresh.json, fresh.lock, fresh.log, active/}` | `Replace`; `Claim`; `Append` |
+| `config_audit` | `state/{config.log, config.sha}` | `Append`; `Replace` |
+| `wake` | `state/wake/<run>` | `Replace` (a touch) |
+
+| Kind | Writers and rule | Body defined in |
+|---|---|---|
+| `event` | Engine `Drive` for group events; the run goroutine for `run.*` events | [Data Model](#23-data-model) |
+| `group` | Engine `Drive`, and only when the snapshot's `sequence` is the state file's last | [The State Struct](#the-state-struct) |
+| `session` | Session supervisor; observability for `stream.jsonl`; the tool runtime's model loop for `messages.jsonl` | [Data Model](#53-data-model) |
+| `ledger`, `view` | The observability subscriber, which rebuilds the 2 views from group state | [Data Model](#103-data-model) |
+| `job` | Scheduler: per job, the attempt, next run time, last failure hash and whether it is running | [Data Model](#103-data-model) |
+| `machine_event` | Workspace and leases, session pool, work queue, scheduler; one writing process per file | [Data Model](#23-data-model) |
+| `queue`, `pool`, `link` | Engine claims and removes; scheduler enqueues; the startup sweep re-enqueues; provider adapters claim links | [Data Model](#33-data-model) |
+| `lease`, `fence` | Workspace and leases; the startup sweep removes dead leases. The fence is replaced on every take or takeover and never falls | [Data Model](#43-data-model) |
+| `timer`, `quota` | Provider adapters write with `Replace`; the scheduler, the live engine, the sweep or `status` fires a due timer, which is then removed | [Data Model](#73-data-model) |
+| `providers`, `install` | The installer and the provider probe | [Data Model](#123-data-model) |
+| `fresh` | Binary lifecycle | [Data Model](#123-data-model) |
+| `config_audit` | The `config` verb in `cli`; `config.json` itself stays outside | [Data Model](#13-data-model) |
+| `wake` | The event bus touches the file on a waking event | [Behaviour](#25-behaviour) |
+
+- **`timer`:** one record per paused group, keyed `<repo-id>.<group>.json`, holding the latest reset time among the group's halted sessions plus 1 minute, and `wait_link`.
+- **`quota`:** the machine-wide reset time per link.
+- **`machine_event`:** one file per `komodo` process holding its `lease.taken`, `pool.slot.taken`, `queue.enqueued` and `job.due` events; `status` merges the files by `timestamp`. `[TODO: the machine log's file name pattern (G-30)]`
+- **`session`:** one folder per model session; on API links `messages.jsonl` holds every turn for resume.
+- **Several writers per group event file:** `timer.due` has four emitters and only `Drive` appends group events. `[TODO: how a timer.due from the scheduler, the sweep or status reaches the group's state file (G-147)]`
+
+#### Items outside the manager
+
+Six items are not state records. Each already has a stronger rule of its own, or is input or scratch space, so routing it through the manager adds nothing.
+
+| Item | Owner and rule |
+|---|---|
+| `config.json` | Configuration; its own schema of 34 keys with hard limits, a hash guard and an audit log; only `komodo config` writes it ([Config](#18-config)). The audit log and hash are the kind `config_audit` |
+| `cache/` | Cache store; content-addressed derived data keyed by the hash of its inputs; a wrong entry is deleted on read and recomputed ([Data Model](#103-data-model)) |
+| Git refs and worktrees under `wt/` | Workspace and leases; git's own `update-ref` compare-and-swap, carrying the fence, refuses a stale writer ([Workspace and Leases](#4-workspace-and-leases)) |
+| Job templates, `~/.komodo/jobs/*.json` | Scheduler; the person's input files, decoded as strictly as `agent.json` ([Data Model](#103-data-model)) |
+| `bin/`, `versions/`, `release.key` | Binary lifecycle and release; each download is verified by SHA-256 (a standard content fingerprint) and a signature and swapped in atomically; the key is a secret that only `release` reads ([Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)) |
+| Session temp | Sandbox and workspace; each session's own `HOME` and `TMPDIR`, scratch space removed by the startup sweep ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)) |
+
+#### Group snapshot
+
+The body of a `group` record is the engine's `State`, with every field defined once in [The State Struct](#the-state-struct). The manager wraps it in the header and refuses a snapshot whose `epoch` or `fence` falls, or whose `sequence` is not the last line appended; replay starts after the snapshot. `config_hash` pins the effective config at run start, so a config edit during the run never reaches this run ([Data Model](#13-data-model)).
+
+`[TODO: which of the loop counters the snapshot holds, so that a crash does not reset them (G-32)]`
+
+#### State file and quarantine layout
+
+| Item | Layout |
+|---|---|
+| `runs/<group-id>/events.jsonl` | One `Event` per line, in `sequence` order, gap-free; `Append` writes a line and syncs it |
+| `runs/<run>.jsonl` | The run's `run.*` events; same line format, no snapshot |
+| `runs/<group-id>/state.json` | One `group` record: header and `State` body |
+| `<path>.bad-*` | A record that failed a check, renamed in place of the original; never repaired automatically, reported by `doctor` |
+
+Event versioning: the envelope's `version` is 1. `[TODO: how an event line with an older version is migrated (G-NEW-4)]` `[TODO: the suffix after .bad- and the line terminator and length limit of a state file line (G-NEW-6)]`
+
+### 13.4 Interfaces
+
+#### State manager write calls
+
+```go
+// Writer is the four ways the state manager changes bytes on disk.
 type Writer interface {
 	// Adds one line to a state file and syncs it before returning.
-	Append(kind string, key string, body Body) error // [UNKNOWN: not yet designed] parameters
+	Append(kind string, key string, body Body) error
 	// Swaps in a whole new record atomically and returns its new rev.
 	Replace(kind string, key string, body Body, rev int) (int, error)
 	// Creates a record only if none exists, so exactly one caller wins.
-	Claim(kind string, key string, body Body) error // [UNKNOWN: not yet designed] parameters
+	Claim(kind string, key string, body Body) error
 	// Deletes a record after checking the writer and that rev is current.
-	Remove(kind string, key string, rev int) error // [UNKNOWN: not yet designed] parameters
+	Remove(kind string, key string, rev int) error
 }
 ```
 
-#### Kinds
+`[TODO: the parameters and results of Append, Claim and Remove, which the design gives only as a first draft (G-NEW-1)]`
 
-**In plain terms.** A kind is one type of state record, such as a group snapshot or a lease. Each kind has one path pattern, its write primitives and a named list of writers; the manager refuses any other. This table is the complete list; a file that is not a kind and not on the exclusion list in [Outside the manager (Appendix C)](#outside-the-manager) does not exist.
+| Method | An error means | The disk afterwards |
+|---|---|---|
+| `Append` | A check failed | No line was added |
+| `Replace` | A check failed, or `rev` is stale | The old record is unchanged |
+| `Claim` | The record exists, or a check failed | The existing record is unchanged |
+| `Remove` | A check failed, or `rev` is stale | The record stays |
 
-| Kind | Path | Primitive | Writers |
-|---|---|---|---|
-| `event` (group, run) | `runs/<group-id>/events.jsonl`, `runs/<run>.jsonl` | Append | Engine `Drive`; the run goroutine |
-| `group` | `runs/<group-id>/state.json` | Replace | Engine `Drive` |
-| `session` | `sessions/<id>/{brief.md, request.json, result.json, stream.jsonl, messages.jsonl}` | Replace; Append for the 2 streams | Session supervisor; observability for `stream.jsonl`; the tool runtime's API loop for `messages.jsonl` |
-| `ledger`, `view` | `ledger/{sessions,events}.jsonl`; `ledger/{tasks,groups}.json` | Append; Replace | The observability subscriber |
-| `job` | `jobs/state.json` | Replace | Scheduler |
-| `machine_event` | `~/.komodo/state/events/<process>.jsonl` | Append | Workspace and leases; session pool; work queue; scheduler; one writing process per file |
-| `queue`, `pool`, `link` | `~/.komodo/state/{queue,pool,links}/` | Claim; Remove | Engine; the scheduler enqueues jobs; recovery's sweep re-enqueues; provider adapters for links |
-| `lease`, `fence` | `~/.komodo/leases/<repo-id>/<group-id>.{json,fence}` | Claim; Replace; Remove | Workspace and leases; recovery's sweep frees dead leases |
-| `timer`, `quota` | `~/.komodo/state/timers/`, `quota.json` | Replace; Remove when fired | Provider adapters; the scheduler fires timers |
-| `providers`, `install` | `state/providers.json`, `install.json` | Replace | Installer and the provider probe |
-| `fresh` | `state/{fresh.json, fresh.lock, fresh.log, active/}` | Replace; Claim; Append | Binary lifecycle |
-| `config_audit` | `state/{config.log, config.sha}` | Append; Replace | Configuration, from the `config` verb |
-| `wake` | `state/wake/<run>` | Replace (a touch) | Event bus |
-
-**What each one does**
-- **`event`:** Every event, in the group state or the run state. Only the group's `Drive` writes group events, and only the run goroutine writes `run.*` events ([State files and snapshots (Appendix C)](#25-behaviour)).
-- **`group`:** The group snapshot, the state its events add up to; its fields are in [Group snapshot (Appendix C)](#group-snapshot). Only `Drive` writes it, and only when its `sequence` is the group state's last.
-- **`session`:** One folder per model session: the brief it got, how it was launched, its result, its raw output stream and, on API links, every turn for resume. The supervisor writes the brief, request and result; observability appends `stream.jsonl`; the tool runtime's API loop appends `messages.jsonl`.
-- **`ledger`, `view`:** The session ledger and event log, appended by the observability subscriber, and the two lock-table views it rebuilds from group state ([Runtime observability (chapter 10)](#10-scheduler-cache-and-observability)).
-- **`job`:** The scheduler's counters per job: attempt, next run time, last failure hash and whether it is running ([Scheduler and job templates (chapter 10)](#10-scheduler-cache-and-observability)).
-- **`queue`, `pool`, `link`:** The machine-wide work queue and the session slots. Each is a create-only file, so two engines can never take the same item or slot ([Engine Internals (chapter 3)](#3-engine-internals)). The engine claims and removes them; the scheduler enqueues due jobs, the startup sweep re-enqueues items that lost their lease, and the provider adapters claim link slots.
-- **`machine_event`:** The machine log: one file per `komodo` process holding its `lease.taken`, `pool.slot.taken`, `queue.enqueued` and `job.due` events. Only that process writes its file; `status` merges the files by `timestamp`. The file name pattern is `[UNKNOWN: not yet designed]` `[PENDING G-30]`.
-- **`lease`, `fence`:** One lease per group and the fence counter beside it ([Workspace and leases (chapter 4)](#4-workspace-and-leases)). The lease is claimed and removed on release; the fence is replaced on every take or takeover and never falls. The startup sweep also removes dead leases.
-- **`timer`, `quota`:** One timer record per paused group, keyed `<repo-id>.<group>.json`, holding the latest reset time among its halted sessions plus 1 minute, and `wait_link`; plus the machine-wide reset times per link ([Limits, pauses and warnings (chapter 7)](#7-providers-and-http)). The provider adapters write them with `Replace`; the scheduler, the live engine, the sweep or `status` fires a due timer, which is then removed.
-- **`providers`, `install`:** The provider probe result and the install manifest ([Installer (Appendix M)](#installer)).
-- **`fresh`:** The self-updater's records: the latest release seen, the one-updater lock, the failure log and the versions live runs use ([Binary lifecycle (chapter 12)](#12-install-binary-lifecycle-and-gate)).
-- **`config_audit`:** The config audit log and the hash of `config.json`, written by the `config` verb in `cli`; `config.json` itself stays outside ([Outside the manager (Appendix C)](#outside-the-manager)).
-- **`wake`:** The file `status --wait` watches; the event bus touches it on a waking event ([Event bus (Appendix C)](#25-behaviour)).
-
-#### Checks: populate and validate
-
-**In plain terms.** These are the checks the manager runs on every write and every read. On write it fills in what a caller should not compute, then refuses anything that breaks the schema. On read it confirms the record is intact and current before handing it back.
-
-| Check | Rule |
-|---|---|
-| Populate | The envelope, schema defaults, and an event's `sequence`, `timestamp` and `checksum` |
-| Schema | Types, required fields and enums: stage, block reason, exit reason, event type |
-| Invariants | `sequence` has no gaps; `epoch` and `fence` never fall |
-| Compare-and-swap | The caller's `rev` must match the record's current `rev` |
-| Writers | The caller must be one of the kind's listed writers for that key |
-| On read | Checksum or hash first, then the version; an older `v` is migrated in memory |
-| Last line cut short by a crash | Dropped with one `state.truncated`; replay continues; never quarantined |
-| Bad record | A bad line before the last one, or any other failed record: moved aside as `.bad-*`; the owning group blocks `state_invalid` |
-
-**What each one does**
-- **Populate:** The manager writes the six envelope fields and any schema defaults itself. An event carries the [Envelope (Appendix C)](#23-data-model) envelope instead, so the manager assigns its next `sequence` and computes its `timestamp` and `checksum`.
-- **Schema:** Every field must have the right type, every required field must be present, and every enum must hold a known value. An unknown stage or block reason is refused.
-- **Invariants:** Rules a kind must always keep. State `sequence` numbers have no gaps, and a stage `epoch` or a lease `fence` never goes down.
-- **Compare-and-swap:** The write names the `rev` the caller last read. If another write landed in between, this one is refused, so no update is lost silently.
-- **Writers:** Each kind lists its writers, and the manager refuses any other. A group's records accept writes only from that group's `Drive`.
-- **On read:** The manager checks the record's checksum or hash (both are fingerprints of its contents that change if it was damaged), then its version. A record written under an older schema version is upgraded in memory by a registered step, so a new binary reads the previous schema ([Binary lifecycle (chapter 12)](#12-install-binary-lifecycle-and-gate)).
-- **Last line cut short by a crash:** A crash mid-`Append` can leave a half-written last line. It is not a bad record: the manager drops it, emits `state.truncated` once, and replay continues.
-- **Bad record:** A record that still fails, including a bad event line before the last one, is moved aside as `.bad-*`, never repaired automatically. `doctor` reports it, and its group blocks with `state_invalid` ([Failure table (chapter 9)](#9-check-review-tester-and-recovery)).
-
-#### Reads
-
-**In plain terms.** Reads go through the manager too, so every reader sees a checked, current record. Subscribers, views, `status` and the sweep use the same calls as any other part.
-
-| Call | Returns |
-|---|---|
-| `Get` | One record by kind and key |
-| `List` | Every record of one kind |
-| `Tail` | A state file's events from a given `sequence` |
-| `Watch` | A wake when a record of one kind changes |
-
-**What each one does**
-- **`Get`:** Reads one record, checked and migrated, such as one group's snapshot.
-- **`List`:** Reads every record of a kind, such as every queue item or every lease on the machine.
-- **`Tail`:** Reads a state file from a sequence number onward. `resume` uses it to replay after the snapshot, and `status --wait` to read what woke it.
-- **`Watch`:** Blocks until a record of a kind changes. `status --wait` uses it on the wake kind, then reads the state tail, so no event is missed ([Event bus (Appendix C)](#25-behaviour)).
-
-**Example**
-
-The four calls every reader uses to get checked, current records from the state manager.
+The design says a refused write returns `state_invalid` with the field path. `[TODO: the error values of a stale rev, an unlisted writer, a taken claim and a failed disk write, and whether each is state_invalid (G-NEW-3)]` `[TODO: how the manager identifies the calling component for the writer check (G-NEW-3)]` `[TODO: which call performs the takeover of a stale record; Writer has no stale-claim call (G-NEW-6)]`
 
 ```go
-// Event is defined in Event Spine and State Machine, Data Model.
-type Record struct{} // [UNKNOWN: not yet designed] [PENDING G-30]
-type Wake struct{}   // [UNKNOWN: not yet designed] [PENDING G-30]
+// InvalidError is returned for a write that breaks the schema or an invariant; the disk is untouched.
+type InvalidError struct {
+	Kind  string // the record kind
+	Key   string // the record key
+	Field string // path of the failing field
+}
 
+// Error describes the refusal as state_invalid with the kind, key and field.
+func (e *InvalidError) Error() string
+```
+
+#### State manager read calls
+
+```go
+// Reader is the four calls every reader uses to get checked, current records.
 type Reader interface {
 	// Reads one checked record by its kind and key.
 	Get(kind string, key string) (Record, error)
 	// Reads every record of one kind.
 	List(kind string) ([]Record, error)
 	// Reads a state file's events from a sequence number onward.
-	Tail(sequence uint64) ([]Event, error) // [UNKNOWN: not yet designed] [PENDING G-30] how the file is chosen
-	// Blocks until a record of the kind changes, then returns a wake.
-	Watch(kind string) (Wake, error)
+	Tail(sequence uint64) ([]Event, error)
+	// [TODO: the Watch method and the name of its result type; Wake is taken by the event wake enumeration (G-NEW-2)]
 }
 ```
 
-#### Outside the manager
+`[TODO: how Tail chooses the state file (G-30)]` Watch blocks until a record of one kind changes; `status --wait` uses it on the `wake` kind and then reads the state tail, so no event is missed ([Behaviour](#25-behaviour)).
 
-**In plain terms.** Six things are not state records and keep their own owners' rules. Each already has a stronger rule of its own, or is input or scratch space rather than state, so routing it through the manager would add nothing.
+| Method | An error means | The disk afterwards |
+|---|---|---|
+| `Get` | The record failed a check | Moved aside as `.bad-*`; the owning group blocks `state_invalid` |
+| `List` | A record of the kind failed a check | Same for that record `[TODO: whether List also returns the good records (G-NEW-3)]` |
+| `Tail` | A line before the last failed its checksum | The record is moved aside and the group blocks `state_invalid` |
 
-| Item | Owner and rule |
-|---|---|
-| `config.json` | Configuration; its own schema; `komodo config` is its sole writer |
-| `cache/` | Cache store; content-addressed derived data, verified on read |
-| Git refs and worktrees under `wt/` | Workspace and leases; git's own compare-and-swap and checkouts |
-| Job templates, `~/.komodo/jobs/*.json` | Scheduler; the person's input files, decoded strictly |
-| `bin/`, `versions/`, `release.key` | Binary lifecycle and release; verified downloads swapped atomically; a secret only `release` reads |
-| Session temp | Sandbox and workspace; each session's own HOME and TMPDIR, removed by the sweep |
+`[TODO: what Get returns for a record that does not exist (G-NEW-3)]`
 
-**What each one does**
-- **`config.json`:** The settings file. It has its own schema of 34 keys with hard limits, a hash guard and an audit log, and only `komodo config` writes it ([Configuration (chapter 1)](#1-cli-and-configuration)). Its audit log and hash are a state kind (`config_audit`).
-- **`cache/`:** Derived data keyed by the hash of its inputs. A wrong entry is deleted on read and recomputed, so it needs no schema check ([Cache store (Appendix K)](#cache-store)).
-- **Git refs and worktrees under `wt/`:** The hidden ref per group, the branches and the checkouts the builder edits. Git's own `update-ref` compare-and-swap, carrying the fence, already refuses a stale writer ([Workspace and leases (chapter 4)](#4-workspace-and-leases)).
-- **Job templates, `~/.komodo/jobs/*.json`:** The person's own job definitions. They are input, decoded as strictly as `agent.json`, not state the harness writes ([Scheduler and job templates (chapter 10)](#10-scheduler-cache-and-observability)).
-- **`bin/`, `versions/`, `release.key`:** The binaries and the release signing key. Each download is verified by SHA-256 (a standard content fingerprint) and signature and swapped in atomically ([Binary lifecycle (chapter 12)](#12-install-binary-lifecycle-and-gate)); the key is a secret file that only `release` reads, never runtime state.
-- **Session temp:** Each session's private HOME and TMPDIR inside the sandbox. It is scratch space, removed by the startup sweep ([Sandbox and process control (chapter 6)](#6-tools-guard-and-sandbox), [Startup sweep (chapter 4)](#4-workspace-and-leases)).
-
-#### Group snapshot
-
-The group snapshot's body is the engine's `State`, with every field defined once in [The State Struct](#the-state-struct). The manager wraps it in the record header and refuses a snapshot whose `epoch` or `fence` falls, or whose `sequence` is not the last line appended; replay starts after it. `config_hash` pins the effective config at run start, so mid-run config edits never reach this run ([Layers and write path (chapter 1)](#1-cli-and-configuration)).
-
-#### Defaults, performance and proof
-
-**In plain terms.** These are the choices the design pass made for the owner to confirm, the performance targets, and the tests that prove the manager works.
-
-| Item | Rule |
-|---|---|
-| Service shape | In-process, one per `komodo` process, no daemon |
-| Scope | The 6 exclusions in [Outside the manager (Appendix C)](#outside-the-manager); every other runtime file is a kind |
-| Bad records | Quarantine and block; never repair automatically |
-| Snapshot fields | The list in [Group snapshot (Appendix C)](#group-snapshot); each event type's `data` is open `[PENDING G-24]` |
-| Performance | Generated validation, no reflection; one fsync per `Append`, one fsync and a rename per `Replace` |
-| Caching | Decoded records kept in memory per process, by path and `rev`; nothing across processes |
-
-**What each one does**
-- **Service shape:** The manager is a Go service inside each `komodo` process, never a separate daemon, because the harness runs no server process. Two processes stay consistent through the disk primitives.
-- **Scope:** Only the six items in [Outside the manager (Appendix C)](#outside-the-manager) sit outside; any other runtime file must be a registered kind.
-- **Bad records:** A record that fails its checks is set aside and its group blocks, so a person sees it. Automatic repair could hide corruption.
-- **Snapshot fields:** The group snapshot list is a default awaiting the owner. The `data` fields of each event type are still to be listed (G-24).
-- **Performance:** Validation is generated Go code, so a check costs no reflection. Short verbs load only the kinds they touch and stay inside the 50 ms budget ([Performance (chapter 1)](#1-cli-and-configuration)).
-- **Caching:** A process keeps records it has decoded, keyed by path and `rev`, and drops one as soon as its `rev` moves.
-
-**Proof:**
-1. The gate fails a fixture package that writes a state path outside `state`.
-2. A record missing a required field is refused with its field path, and the file is byte-identical afterward.
-3. A write with a stale `rev` is refused.
-4. A group snapshot whose `sequence` is not the last event's is refused.
-5. A `v: 0` fixture reads as `v: 1`.
-6. A corrupted record is moved aside and blocks its group with `state_invalid`.
-7. A last event line cut short by a crash is dropped with one `state.truncated`, and the group continues.
-8. A `Remove` with a stale `rev` is refused.
-9. 2 processes claiming one lease yield exactly 1 holder.
-10. Replaying a group's state through group state's `Load` rebuilds its `state.json` byte for byte.
-11. `Load` on a group 49 events past its snapshot replays exactly 49.
-12. A second `Open` on a group already open in this process is refused, and so is an `Open` from a process that does not hold the group's lease.
-
-#### Group state
-
-**In plain terms.** Group state is the part of the state manager that keeps one group's events, its snapshots and replay together, in `state/groupstate.go`. A snapshot only makes sense with the events behind it, and replay needs both, so one module owns all three. The engine's `Drive` is the only caller that writes, recovery calls it to resume, and readers call it to follow new events.
-
-| Call | What it does |
-|---|---|
-| `Open(group)` | Binds the caller as the group's only writer, its `Drive` |
-| `Append(event)` | Stamps `sequence`, `timestamp` and `checksum`, checks, appends, fsyncs; returns before `Next()` runs |
-| `Snapshot(state)` | Called after every `Next()`; writes `state.json` every 50 events or on a stage change |
-| `Load(apply)` | Reads the snapshot, replays every later line through `apply` and returns the state, whose `ActionsOpen` `Drive` reruns first |
-| `Tail(sequence)` | Returns the events after a sequence number |
-
-**What each one does**
-- **`Open(group)`:** Called once by a group's `Drive` when the group starts or resumes. It makes `Drive` the group's only writer; a second `Open` in the same process is refused, and the lease and fence keep other processes out ([Workspace and leases (chapter 4)](#4-workspace-and-leases)).
-- **`Append(event)`:** Writes one event. It stamps the sequence number, the time and the checksum (`Drive` sets the `stale` flag, since it holds the current epoch), checks the event against the schema, appends it and syncs it to disk. It returns before `Next()` runs, which is what "state first" means. The outbox's `action.start` and `action.done` lines go through it too ([The outbox (Appendix C)](#actions)).
-- **`Snapshot(state)`:** `Drive` calls it after every `Next()`. Group state decides when to write: every 50 events or on a stage change. It refuses a state whose `sequence` is not the last one appended, so a snapshot never runs ahead of or behind its events.
-- **`Load(apply)`:** Rebuilds a group after a crash or on `komodo resume`. It reads the snapshot, replays only the lines after it through `apply`, drops a last line cut short by a crash with one `state.truncated`, and returns the state and any follow-ons missing at the tail; the rules are in [Behaviour](#25-behaviour). The engine passes a function wrapping its own `Next()` as `apply`, so the `state` package never imports `engine` and the import order holds ([Behaviour](#25-behaviour)).
-- **`Tail(sequence)`:** Lets `status --wait` and the subscribers read the events after a sequence number, without touching the file directly.
-- **Run events:** A run's `run.*` events in `runs/<run>.jsonl` use the same `Append` and `Tail`, with no snapshot, so runs and groups share one set of rules.
-
-**Examples**
-
-The five calls group state offers for one group's events, snapshots and replay. It is generic over the snapshot body, so `state` never imports the engine's `State` ([The State Struct](#the-state-struct)); `Event` is defined in `state` ([Data Model](#23-data-model)).
+#### Group state calls
 
 ```go
 // GroupState keeps one group's events, snapshots and replay; S is the snapshot body.
@@ -11465,11 +11437,362 @@ type GroupState[S any] interface {
 }
 ```
 
-| Crash between `action.start commit` and `action.done` | Replay reruns the commit; compare-and-swap on the hidden ref makes it one commit |
-| Last event line cut short | It no longer matches its checksum, so it is dropped; `state.truncated` emitted once |
-**State manager ([Defaults, performance and proof (Appendix C)](#defaults-performance-and-proof))**
-- The 12 proof cases are listed under [Defaults, performance and proof (Appendix C)](#defaults-performance-and-proof), Defaults, performance and proof, and are not repeated here.
+The five calls are `Open(group)`, `Append(event)`, `Snapshot(state)`, `Load(apply)` and `Tail(sequence)`. `GroupState` is generic over the snapshot body, so `state` never imports the engine's `State`. `Event` is defined in `state` ([Data Model](#23-data-model)). A run's `run.*` events use the same `Append` and `Tail`, with no snapshot, so runs and groups share one set of rules.
 
+| Method | An error means | The disk afterwards |
+|---|---|---|
+| `Open` | This process already opened the group, or does not hold its lease | Nothing is written |
+| `Append` | A check failed | No line was added; the event was not recorded |
+| `Snapshot` | `sequence` is not the last line appended | The previous snapshot stays |
+| `Load` | The snapshot or a line before the last is bad | The record is moved aside and the group blocks `state_invalid` |
+| `Tail` | A line before the last failed its checksum | The record is moved aside and the group blocks `state_invalid` |
+
+`[TODO: what Drive does when Snapshot or Append refuses (G-NEW-3)]`
+
+**Who calls what**
+
+| Caller | Calls | When |
+|---|---|---|
+| `Drive` | `Open`, `Append`, `Snapshot` | A group starts or resumes; each event; after each `Next()` |
+| Recovery and `komodo resume` | `Load` with `Next()` wrapped as `apply` | After a crash, or on resume |
+| `status --wait`, subscribers | `Tail`, `Watch` | Following new events |
+| Workspace and leases | `Claim`, `Replace`, `Remove` on `lease`, `fence` | A take, a renewal, a release |
+| Engine, scheduler, provider adapters | `Claim`, `Remove`, `Replace` on `queue`, `pool`, `link`, `job`, `timer`, `quota` | Queueing, slot use, a pause, a fired timer |
+| Observability | `Append`, `Replace` on `ledger`, `view` | Each applied event, batched per tick |
+
+### 13.5 Behaviour
+
+#### Walkthrough
+
+A provider adapter records that a link is limited, the scheduler later fires the pause timer, and the timer record is removed. The flow uses `Replace`, `Get` and `Remove` on the `timer` kind.
+
+**📐 One timer record, written, read and removed**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Provider adapter
+  participant M as State manager
+  participant D as Disk
+  participant S as Scheduler
+  P->>M: Replace(timer, key, body, rev)
+  M->>M: fill header, run checks
+  M->>D: temp file, fsync, rename
+  M-->>P: new rev
+  S->>M: Get(timer, key)
+  M-->>S: checked record
+  S->>M: Remove(timer, key, rev)
+  M->>D: delete
+```
+
+1. The adapter calls `Replace` with the kind `timer`, the key, the body (`wait_until`, `wait_link`) and the `rev` it last read.
+2. The manager locks the key, fills in the header and the schema defaults, and runs the checks of [write checks](#13-state-manager).
+3. A failed check returns `state_invalid` with the field path, and the file is not touched.
+4. A passing write goes to a temp file, is synced and is renamed over the old record; the caller gets the new `rev`.
+5. When the time is due, the scheduler reads the record with `Get`; the manager checks the checksum or hash, then the version.
+6. The scheduler fires the timer and calls `Remove` with the `rev` it read; the manager checks the writer and the `rev`, then deletes the file.
+
+The read-modify-write cycle every `Replace` caller follows:
+
+```go
+// SaveTimer reads a record, changes its body and writes it back under the rev it read.
+func SaveTimer(r Reader, w Writer, key string, body Body) (int, error) {
+	rec, err := r.Get("timer", key)
+	if err != nil {
+		return 0, err
+	}
+	return w.Replace("timer", key, body, rec.Header.Rev)
+}
+```
+
+`[TODO: the rev a caller passes when the record does not exist yet, and whether Replace creates a record (G-NEW-5)]`
+
+#### Algorithms
+
+##### State manager write checks
+
+Every write runs the same checks in the same order. The caller owns no step.
+
+**📐 Which check runs next on a write**
+```mermaid
+flowchart TD
+  A["Write call"] --> B["1 lock the key"]
+  B --> C["2 fill header and defaults"]
+  C --> D{"3 types, required fields, enums hold?"}
+  D -- no --> X["state_invalid, disk untouched"]
+  D -- yes --> E{"4 invariants, writer, rev hold?"}
+  E -- no --> X
+  E -- yes --> F["5 run the primitive"]
+  F --> G["6 release the key, return rev"]
+```
+
+| Check | Rule |
+|---|---|
+| Populate | The header, schema defaults, and an event's `sequence`, `timestamp` and `checksum` |
+| Schema | Types, required fields and enums: stage, block reason, exit reason, event type |
+| Invariants | `sequence` has no gaps; `epoch` and `fence` never fall |
+| Compare-and-swap | The caller's `rev` must match the record's current `rev` |
+| Writers | The caller must be one of the kind's listed writers for that key |
+
+The lock is per record key, so two groups never wait on each other. Two `komodo` processes on one machine stay consistent through the atomic file operations of the primitives, never through a shared process. `[TODO: locking for files that several repositories write, such as quota.json and ledger/groups.json: the compare-and-swap check and the rename are two steps across processes (G-74, G-80)]`
+
+##### State manager primitive steps
+
+**`Append`.**
+1. Run the write checks. For an event, assign the next `sequence`, the `timestamp` and the `checksum`.
+2. Append one line to the file.
+3. Sync the file.
+4. Return. One sync is spent per call.
+
+**`Replace`.**
+1. Run the write checks, including the `rev` match.
+2. Write the whole record to a temp file and sync it.
+3. Rename the temp file over the old record. The rename is atomic, so a reader sees the old record or the new one, never a mix.
+4. Return the new `rev`. One sync and one rename are spent per call.
+
+**`Claim`.**
+1. Run the write checks.
+2. Create the file only if it is absent. The operating system lets exactly one process win.
+3. A takeover of a stale record first renames the old file aside, so again only one process wins; the lease steps are in [Behaviour](#45-behaviour).
+
+**`Remove`.**
+1. Check that the caller is a listed writer and that its `rev` is current.
+2. Delete the file. A queue item taken by a pool slot, a released lease, a landed group's records and a fired timer are removed this way.
+
+`[TODO: the temp file name and folder, whether the folder is synced after the rename, and the name a stale file gets when renamed aside (G-NEW-6)]`
+
+##### State manager read path
+
+Reads go through the manager so that every reader sees a checked, current record.
+
+**📐 What a read does with a record**
+```mermaid
+flowchart TD
+  A["Get, List or Tail"] --> B{"checksum or hash ok?"}
+  B -- no --> L{"last line of a state file?"}
+  L -- yes --> T["drop it, one state.truncated"]
+  L -- no --> Q["move aside .bad-*, group blocks"]
+  B -- yes --> V{"v older than current?"}
+  V -- yes --> M["migrate in memory"]
+  V -- no --> R["return the record"]
+  M --> R
+```
+
+| Check | Rule |
+|---|---|
+| On read | Checksum or hash first, then the version; an older `v` is migrated in memory |
+| Last line cut short by a crash | Dropped with one `state.truncated`; replay continues; never moved aside |
+| Bad record | A bad line before the last one, or any other failed record: moved aside as `.bad-*`; the owning group blocks `state_invalid` |
+
+1. Read the record or the lines.
+2. Verify the checksum or hash, then the version.
+3. An older `v` runs through the registered steps in memory; the read writes nothing.
+4. A failure on the last line of a state file is the cut-short case below. Any other failure moves the record aside as `.bad-*`, never repairs it, and blocks the owning group `state_invalid`; `doctor` reports it.
+
+`[TODO: whether a read that finds a bad record in a file other than a state file also blocks a group, and which code appends the group.blocked event when the bad record is the group's own state file (G-NEW-7)]`
+
+##### Group state append and snapshot
+
+**📐 What group state does for one group**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant D as Drive
+  participant G as Group state
+  participant E as events.jsonl
+  participant S as state.json
+  D->>G: Open(group)
+  D->>G: Append(event)
+  G->>E: line, fsync
+  G-->>D: sequence
+  D->>G: Snapshot(state, sequence)
+  alt 50 events or a stage change
+    G->>S: temp file, fsync, rename
+  else interval not reached
+    G-->>D: nothing written
+  end
+```
+
+1. `Open` binds the caller as the group's only writer. A second `Open` in the same process is refused, and an `Open` from a process that does not hold the group's lease is refused; the lease and fence keep other processes out ([Workspace and Leases](#4-workspace-and-leases)).
+2. `Append` stamps `sequence`, `timestamp` and `checksum`; `Drive` has already set `stage` and `stale`, since it holds the current epoch. It checks the event against the schema, appends and syncs it, and returns the sequence before `Next()` runs. The outbox's `action.start` and `action.done` lines go through the same call ([Actions](#actions)).
+3. `Snapshot` runs after every `Next()` and decides when to write: every 50 events (the interval is in [Configuration and Constants](#28-configuration-and-constants)) or on a stage change. It refuses a state whose `sequence` is not the last one appended, so a snapshot never runs ahead of or behind its events.
+
+`[TODO: how Open learns the state file's last sequence, how Open checks the lease, and how Snapshot detects a stage change when it receives only the generic state S (G-NEW-8)]`
+
+##### Group state replay with Load
+
+**📐 How Load rebuilds a group**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant D as Drive
+  participant G as Group state
+  participant S as state.json
+  participant E as events.jsonl
+  D->>G: Load(apply)
+  G->>S: read snapshot
+  loop each line after the snapshot
+    G->>E: read line, verify checksum
+    G->>D: apply(state, event)
+  end
+  G-->>D: state, follow-ons
+```
+
+1. Read `state.json` through the read path. A bad snapshot is moved aside and the group blocks.
+2. Read the state file. Lines up to the snapshot's `sequence` are not replayed.
+3. For each later line, verify the checksum and that `sequence` follows the previous line, then pass it to `apply`, which wraps `Next()`.
+4. A last line whose checksum fails was cut short by a crash. It is dropped and one `state.truncated` is emitted; replay continues. It is never moved aside.
+5. A failing line before the last is a bad record: the record is moved aside and the group blocks `state_invalid`.
+6. Return the rebuilt state and the follow-on events that `Next()` ordered but that never reached disk. `Drive` appends those first, then runs the group's `ActionsOpen` before any new event ([Behaviour](#25-behaviour)).
+
+Replay costs at most one snapshot interval of lines. `[TODO: measure the replay target (G-19)]` `[TODO: what Load returns for a group that has no snapshot yet, since the generic S has no initial value (G-NEW-8)]`
+
+`[TODO: whether the cut line is removed from the file, which writer appends state.truncated, and whether the dropped line's sequence number is reused (G-NEW-7)]`
+
+##### State manager performance and caching
+
+`[TODO: owner confirmation of the performance and caching rules the design pass proposed: validation as generated Go code without reflection, short verbs loading only the kinds they touch, and a per-process cache of decoded records keyed by path and rev (G-NEW-9)]`
+
+##### State manager generated schema
+
+The build generates `embed/state.schema.json` from the kind registry and the event registry: one record kind per entry, all 35 event types of the catalog as Go structs, an enumeration for every `reason`. `help --json` serves it as `state`. The gate fails when the file disagrees with the Go types ([Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)). [TODO: the fields of each event type's `data` struct, which the schema lists (G-24)]
+
+### 13.6 State
+
+#### Record file states
+
+**📐 The life of one record file**
+```mermaid
+stateDiagram-v2
+  [*] --> Absent
+  Absent --> Present: Claim or Replace
+  Present --> Present: Replace
+  Present --> Absent: Remove or takeover rename
+  Present --> MovedAside: failed read check
+  MovedAside --> [*]
+```
+
+| State | Event | Next state | True afterwards |
+|---|---|---|---|
+| Absent | `Claim` | Present | Exactly one process holds the file |
+| Absent | `Replace` | Present | The record is whole and has its first `rev` `[TODO: G-NEW-5]` |
+| Present | `Replace` with the current `rev` | Present | `rev` is one higher; readers see the old or the new record |
+| Present | `Replace` or `Remove` with a stale `rev` | Present | Refused; the file is unchanged |
+| Present | `Remove` | Absent | The file is deleted |
+| Present | Takeover rename | Absent | The old file is aside; one process may now `Claim` |
+| Present | Read finds the file bad | MovedAside | The file is named `.bad-*`; its group is blocked |
+
+#### Group state handle
+
+| State | Event | Next state | True afterwards |
+|---|---|---|---|
+| Closed | `Open`, lease held, not opened here | Open | The caller is the group's only writer |
+| Closed | `Open`, lease not held | Closed | Refused; nothing is written |
+| Open | `Open` again in the same process | Open | Refused |
+| Open | `Append` | Open | The line is synced; `sequence` is one higher |
+| Open | `Snapshot` at the last `sequence` | Open | `state.json` is rewritten only at the interval |
+| Open | `Snapshot` at another `sequence` | Open | Refused |
+| Open | Process exit | Closed | The state file and snapshot stay; `Load` rebuilds |
+
+### 13.7 Invariants and Failures
+
+#### State manager invariants
+
+1. **State first:** an event is on disk, synced, before `Append` returns, and before `Next()` runs on it. A crash after the sync replays the event.
+2. **Snapshot behind events:** `state.json` is written only for the `sequence` of the last appended line.
+3. **Whole or absent:** a replaced record is complete before the rename; an appended line is synced before the call returns; a claimed record exists whole or not at all.
+4. **Refusal changes nothing:** a refused write leaves the file byte-identical.
+5. **Monotonic counters:** `rev` rises by 1 per write, `sequence` has no gaps, and `epoch` and `fence` never fall.
+6. **One writer per group:** only the group's `Drive` writes its events and snapshot; the lease keeps other processes out.
+7. **One door:** no package other than `state` writes a runtime state path; the gate fails one that does.
+8. **Import order:** `state` never imports `engine`.
+
+#### State manager failures
+
+| Situation | Detection | Behaviour |
+|---|---|---|
+| A write breaks the schema or an invariant | The write checks | `state_invalid` with kind, key and field; disk untouched |
+| A write names a stale `rev` | The compare-and-swap check | Refused; disk untouched |
+| A write from a component the kind does not list | The writer check | Refused; disk untouched |
+| A record fails its checksum, hash or version on read | The read path | Moved aside as `.bad-*`; the group blocks `state_invalid` ([Invariants and Failures](#97-invariants-and-failures)) |
+| Last event line cut short | Checksum fails on the last line | Dropped; one `state.truncated`; replay continues; never moved aside |
+| Bad line before the last | Checksum or schema fails at `Load` | Record moved aside; the group blocks `state_invalid` |
+| Crash between `action.start commit` and `action.done` | `Load` leaves the action in `ActionsOpen` | Replay reruns the commit; compare-and-swap on the hidden ref makes it one commit |
+| Snapshot `sequence` is not the last line | The `Snapshot` check | Refused; the previous snapshot stays |
+| A second `Open`, or an `Open` without the lease | `Open` | Refused |
+| A failed disk write on a machine-shared record | `[TODO: the engine's reaction to a failed write of quota.json or a timer record (G-74)]` | `[TODO: G-74]` |
+
+- **Last event line cut short:** the engine died while writing the last event line, so the line no longer matches its checksum. `Load` drops it and the engine emits one `state.truncated` so the loss is on record. `[TODO: the checksum algorithm and the bytes it covers (G-182)]`
+- **Crash between `action.start commit` and `action.done`:** the engine wrote that it was about to commit, then died before writing done. On `resume`, replay reruns the commit; if the first commit did land, the hidden ref is updated with a compare-and-swap, so there is still exactly one commit ([Workspace and Leases](#4-workspace-and-leases)).
+
+### 13.8 Config
+
+The state manager owns no configuration key. It reads two values owned elsewhere:
+
+| Value | Owner |
+|---|---|
+| Snapshot interval: every 50 events and on a stage change | [Configuration and Constants](#28-configuration-and-constants) |
+| Short-verb budget of 50 ms, a target until the gate measures it (G-19) | [Behaviour](#15-behaviour) |
+
+`config_hash` in the snapshot pins the effective config for the run; `config.json` is outside the manager ([Items outside the manager](#items-outside-the-manager)).
+
+### 13.9 Proof Cases
+
+Fixtures use a temporary directory per test; no case needs a live provider.
+
+**Unit**
+
+| Fixture input | Expected result |
+|---|---|
+| A record missing a required field | Refused with its field path; the file is byte-identical afterward |
+| A write with a stale `rev` | Refused |
+| A `Remove` with a stale `rev` | Refused |
+| A group snapshot whose `sequence` is not the last event's | Refused |
+| A `v: 0` fixture | Reads as `v: 1` |
+| A corrupted record | Moved aside; the group blocks with `state_invalid` |
+| A second `Open` on a group already open in this process | Refused |
+
+**Component**
+
+| Fixture input | Expected result |
+|---|---|
+| A fixture package that writes a state path outside `state` | The gate fails |
+| A last event line cut short by a crash | Dropped with one `state.truncated`; the group continues |
+| 2 processes claiming one lease | Exactly 1 holder |
+| Replaying a group's state through `Load` | Rebuilds its `state.json` byte for byte |
+| `Load` on a group 49 events past its snapshot | Replays exactly 49 |
+| An `Open` from a process that does not hold the group's lease | Refused |
+| `kill -9` between `action.start commit` and `action.done`, then `resume` | The commit runs again and yields 1 commit |
+
+### 13.10 Open Gaps
+
+**Blocks building**
+
+| Gap | Open here |
+|---|---|
+| G-24 | Each event type's data struct, which the schema lists |
+| G-30 | The header and body layout in one file; timestamp and writer encoding; the machine log file names; `Tail`'s file choice |
+| G-74 | Locking for machine-shared files; the engine's reaction to a failed write of `quota.json` or a timer record |
+| G-80 | Locking for the group ledger and the quota file |
+| G-182 | The checksum algorithm, the bytes it covers and how it is written (G-99 records the same item) |
+| G-NEW-1 | Exported names and signatures derived here; how a package obtains the manager; entry points |
+| G-NEW-3 | The caller identity for the writer check; the error values of each refusal |
+| G-NEW-4 | Where a record stores its checksum or hash; a `v` newer than the binary knows |
+| G-NEW-5 | The `rev` of a first write |
+| G-NEW-6 | File-level details of the primitives and the takeover call |
+| G-NEW-7 | Cut-short and bad-line handling |
+| G-NEW-8 | Group state: `Open`, `Snapshot` stage detection and `Load` without a snapshot |
+
+**Can wait**
+
+| Gap | Open here |
+|---|---|
+| G-32 | Which counters the snapshot holds |
+| G-19 | The replay target of 10,000 events under 1 s |
+| G-120 | Locking for `config.json`, `config.sha` and `config.log` |
+| G-147 | How a `timer.due` from outside `Drive` reaches a group's state file |
+| G-151 | Shapes of `ledger/groups.json` and `tasks.json`; locking of machine-shared ledger files |
+| G-NEW-2 | The `Watch` method and its result type name |
+| G-NEW-9 | Owner confirmation of the four defaults, performance and caching |
 
 ## 15. Verification, Operations and Cutover
 
@@ -11896,7 +12219,7 @@ The HLD states what each component is for and how the components cooperate. This
 - **`internal/ops`:** Economy and operations: budgets (wall time, and tokens when `track.usage` is on), the ledger (one row per session and a copy of every event), the event bus, and the wake files that `status --wait` watches.
 - **`internal/agent`:** The agent definitions (`agent.json`, `prompt.md`) and job templates, the skill loader, the orchestrator rules text, the output templates, the brief builder (assembling a worker's prompt from 20 slots) and trimming.
 - **`internal/safety`:** The guard that every tool call passes, its rule rows from `policy.json`, path containment, shell tokenizing, the guard table the gate checks, process control (timeouts, kills) and the three sandboxes (seatbelt, bwrap, Docker).
-- **`internal/state`:** The state manager, the only code that reads or writes runtime state. It holds the API every other package calls, group state (a group's events, snapshots and replay as one unit), the registry of record kinds with their one schema, the checks run on every read and write, and the steps that read older schema versions ([State manager (Appendix C)](#state-manager)).
+- **`internal/state`:** The state manager, the only code that reads or writes runtime state. It holds the API every other package calls, group state (a group's events, snapshots and replay as one unit), the registry of record kinds with their one schema, the checks run on every read and write, and the steps that read older schema versions ([State manager (chapter 13)](#13-state-manager)).
 - **`internal/core`:** Plumbing with no domain logic: the config file, command detection, the HTTP client, the cache store, the create-only and rename-aside file helpers that only the state manager calls, the embedded version, atomic file writes, and an isolated home folder for tests.
 
 **File map**
@@ -12130,7 +12453,7 @@ Rules: a file splits at about 600 lines; a new package needs a new layer; `_test
 
 #### Runtime state
 
-**In plain terms.** Komodo writes its working files in two places, never inside the repo's tree. Per-repo state goes under the repo's git folder in `komodo/`; machine-wide state goes under `~/.komodo/`. Both are left out of git. Every file below except the 6 exclusions in [Outside the manager (Appendix C)](#outside-the-manager) is read and written only through the state manager ([State manager (Appendix C)](#state-manager)), on behalf of its listed writers. Knowing these paths lets an operator find a state file, a lease or a session's output when a run goes wrong.
+**In plain terms.** Komodo writes its working files in two places, never inside the repo's tree. Per-repo state goes under the repo's git folder in `komodo/`; machine-wide state goes under `~/.komodo/`. Both are left out of git. Every file below except the 6 exclusions in [Outside the manager (chapter 13)](#13-state-manager) is read and written only through the state manager ([State manager (chapter 13)](#13-state-manager)), on behalf of its listed writers. Knowing these paths lets an operator find a state file, a lease or a session's output when a run goes wrong.
 
 ```
 <git-common-dir>/komodo/
@@ -12630,7 +12953,7 @@ Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag 
 | Backlog and planning | [Backlog and planning (chapter 11)](#11-backlog-planning-ship-and-release) |
 | Ship | [Ship and release (chapter 11)](#11-backlog-planning-ship-and-release) |
 | Gate and self-checks | [Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate) |
-| State manager, group state | [State manager (Appendix C)](#state-manager), [Group state (Appendix C)](#group-state) |
+| State manager, group state | [State manager (chapter 13)](#13-state-manager), [Group state (chapter 13)](#13-state-manager) |
 
 #### Component dependencies
 
@@ -12667,7 +12990,7 @@ Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag 
 | Gate and self-checks | every component |
 | State manager, group state | — |
 
-**Every component that writes state depends on the state manager:** the 12 rows above that name it, one per writer in the Kinds table ([Kinds (Appendix C)](#kinds)). Configuration's `core` code never imports `state`; its audit rows are written by the `config` verb in `cli`.
+**Every component that writes state depends on the state manager:** the 12 rows above that name it, one per writer in the Kinds table ([Kinds (chapter 13)](#13-state-manager)). Configuration's `core` code never imports `state`; its audit rows are written by the `config` verb in `cli`.
 
 ---
 
