@@ -260,7 +260,7 @@ def chapters(doc):
         out.append((f"appendix-{letter}.md", head[3:], content.rstrip().rstrip("-"), None))
     ANCHORS[doc] = {}
     for name, title, content, _ in out:
-        found = heads(content)
+        found = heads(content) + re.findall(r'<a id="([^"]+)"></a>', content)
         for anchor in names(title) | set(found):
             if (name, title) not in ANCHORS[doc].setdefault(anchor, []):
                 ANCHORS[doc][anchor].append((name, title))
