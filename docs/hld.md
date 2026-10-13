@@ -39,6 +39,7 @@
 | 0.12 | 2026-10-12 | References to LLD sections name the section and its appendix |
 | 0.13 | 2026-10-12 | Glossary defines Drive, the engine's loop for one group |
 | 0.14 | 2026-10-12 | Full glossary gains 67 plain-language terms used in the LLD, such as checksum, fsync and goroutine |
+| 0.15 | 2026-10-12 | Owner decisions on the event spine and Verify written into the LLD; event count is 35 |
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
@@ -256,11 +257,11 @@ flowchart LR
 
 This chapter shows the parts at work, in three walkthroughs. The event spine is how every change to a group's state travels. The group lifecycle is the five stages a task group passes through. One session end to end follows a single model conversation from spawn to commit. All three take the engine's view; a person or the orchestrator appears only where named.
 
-**The event spine.** An event is a typed fact the engine records, such as `task.done`; 32 types exist, and producers (workspace, supervisor, Check, review, ship, timers) publish them. One pure function, `Next(state, event)`, turns each event into the new state, actions and follow-on events, and nothing else changes group state.
+**The event spine.** An event is a typed fact the engine records, such as `task.done`; 35 types exist, and producers (workspace, supervisor, Check, review, ship, timers) publish them. One pure function, `Next(state, event)`, turns each event into the new state, actions and follow-on events, and nothing else changes group state.
 
-**Group state.** A group's events, its snapshots and replay are one unit inside the state manager, called group state. Every event is checked, appended and fsynced to `runs/<group>/events.jsonl`, the group's state events, before it is applied; `state.json` is a snapshot of the state at a `sequence`, and `Load` replays the events after it. The engine's `Drive` loop uses 5 calls: `Open`, `Append`, `Snapshot`, `Load` and `Tail`, and `Next()` stays in the engine, passed to `Load` when it replays.
+**Group state.** A group's events, its snapshots and replay are one unit inside the state manager, called group state. Every event is checked, appended and fsynced to `runs/<group-id>/events.jsonl`, the group's state events, before it is applied; `state.json` is a snapshot of the state at a `sequence`, and `Load` replays the events after it. The engine's `Drive` loop uses 5 calls: `Open`, `Append`, `Snapshot`, `Load` and `Tail`, and `Next()` stays in the engine, passed to `Load` when it replays.
 
-**Epochs and actions.** Every spawn carries the stage's epoch, an integer that rises on every stage entry, and a session event with an older epoch is kept as `stale: true` and ignored. Actions go through group state too: `action.start` before and `action.done` after, so a crash replays safely.
+**Epochs and actions.** Every spawn carries the stage's epoch, an integer that rises on every stage entry except a return from Paused, and a session event with an older epoch is kept as `stale: true` and ignored. Actions go through group state too: `action.start` before and `action.done` after, so a crash replays safely.
 
 **📐 How one event changes a group's state**
 ```mermaid
@@ -461,7 +462,7 @@ A crosscutting concept is a rule spanning many components rather than living in 
 
 **Data.** Files are of two kinds. Committed files live in the repository. They are `AGENTS.md` with the Komodo block, `CLAUDE.md` with its import line, `.claude/settings.json` with two entries, and `docs/backlog/`. Machine files never ship: `~/.komodo/config.json`, state, leases, worktrees and language caches under `~/.komodo/`; per-repo state, sessions, ledger and cache under `<git-common-dir>/komodo/`. Configuration has two layers: built-in defaults with hard limits, and the machine file. Only `komodo config` writes its 34 flat keys; a hand edit makes every verb refuse until `config --accept`. The cache is keyed by `sha256(inputs + binary version)`, verified on read, bounded by `cache.max_mb` (256), outside every worktree.
 
-**One state schema.** Every runtime file is a kind in one schema, `embed/state.schema.json`, which also holds the 32 event types, and the state manager is the only code that reads or writes those files. Six things stay outside it, each with its own single owner:
+**One state schema.** Every runtime file is a kind in one schema, `embed/state.schema.json`, which also holds the 35 event types, and the state manager is the only code that reads or writes those files. Six things stay outside it, each with its own single owner:
 
 - **`config.json`:** its own schema and its own writer, `komodo config`.
 - **The cache:** derived data, checked by hash on every read.
@@ -622,12 +623,12 @@ Eighteen newcomer terms; the LLD links here.
 | Session | Fresh model conversation per task: brief, tool server, sandbox profile, 60-minute wall clock. |
 | Epic, group, task | Epic holds groups; group up to 8 tasks; task at most 5 files. |
 | Stage | Intake, Build, Check, Verify or Ship; Paused and Blocked hold. |
-| Event | Typed fact recorded before applying, like `task.done`; 32 types. |
+| Event | Typed fact recorded before applying, like `task.done`; 35 types. |
 | Drive | The engine's loop for one group: the only code that changes that group's records. |
 | `Next()` | Sole pure function: (state, event) to (new state, actions, follow-on events). |
 | State manager | Only code that reads or writes runtime state; one schema, checked before disk. |
 | Group state | A group's events, snapshots and replay as one unit inside the state manager. |
-| Epoch | Integer rising per stage entry; session events with an older one are stale. |
+| Epoch | Integer rising per stage entry, except a return from Paused; session events with an older one are stale. |
 | Lease, fence | Per-group lock file renewed every 5 minutes; rising integer every git write carries. |
 | Worktree | Detached git checkout per group under `~/.komodo/wt/`, where the builder works. |
 | Link | Way to reach a model: `claude-cli`, `anthropic-api`, `http:<name>`; later `codex-cli`, `openai-api`. |
@@ -718,7 +719,7 @@ Eighteen newcomer terms; the LLD links here.
 | Session | One fresh model conversation for one task. It has a brief, a tool server, a sandbox profile and a 60-minute wall clock. |
 | Epic, group, task | The backlog hierarchy: an epic holds task groups; a group holds up to 8 tasks; a task names at most 5 files. |
 | Stage | One of five pipeline steps a group moves through: Intake, Build, Check, Verify, Ship. Paused and Blocked are holding states. |
-| Event | A typed fact the engine records, such as `task.done`. Thirty-two types exist. |
+| Event | A typed fact the engine records, such as `task.done`. Thirty-five types exist. |
 | State events | The append-only event file per group, `events.jsonl`. With the snapshot, it makes up group state, and replaying it rebuilds the state. |
 | Group state | The part of the state manager that keeps a group's events, snapshots and replay as one unit. Its 5 calls are `Open`, `Append`, `Snapshot`, `Load` and `Tail`. |
 | Snapshot | `state.json`: a group's state at one `sequence`, written every 50 events or on a stage change, so a restart replays at most 50 events. |
@@ -731,11 +732,11 @@ Eighteen newcomer terms; the LLD links here.
 | Append, Replace, Claim, Remove | The state manager's 4 ways to write: add a event line, swap a snapshot by rename, create a file only if it does not exist, or delete a record after checking its owner and revision. |
 | Quarantine | A record that fails its check on read is moved aside as `.bad-*`, and its group blocks with `state_invalid`. A torn last event line is dropped instead. |
 | Outbox | The group state entries `action.start` and `action.done` that bracket every side effect so a crash can replay it safely. |
-| Epoch | An integer that rises on every stage entry. A session event carrying an older epoch is stale and ignored. |
+| Epoch | An integer that rises on every stage entry, except when a group comes back from Paused. A session event carrying an older epoch is stale and ignored. |
 | Lease | A per-group lock file on the machine, held from Intake to landing, renewed every 5 minutes, expiring 2 hours after the last renewal. |
 | Fence | A monotonic integer beside the lease. Every git write carries it, and git's compare-and-swap refuses a stale holder. |
 | Worktree | A detached git checkout per group under `~/.komodo/wt/`, where the builder works. |
-| Hidden ref | `refs/komodo/groups/<group>`, where the engine saves every group commit. Never pushed, hidden from `git branch`. |
+| Hidden ref | `refs/komodo/groups/<group-id>`, where the engine saves every group commit. Never pushed, hidden from `git branch`. |
 | Link | A way to reach a model: `claude-cli`, `anthropic-api`, `http:<name>`, and later `codex-cli`, `openai-api`. |
 | Weight | An agent's model size: heavy, standard or light. Maps to Opus, Sonnet or Haiku on Claude links. |
 | Chain | An agent's ordered list of links. Fixed in the agent's file, always ending in a free `http:` endpoint. |
@@ -760,13 +761,13 @@ Eighteen newcomer terms; the LLD links here.
 | `hash` | A short fingerprint worked out from some content; change one character and the fingerprint changes. Komodo hashes the config file, the task cards and every cache input to detect edits and name cached results. |
 | `SHA-256`, `sha256` | A standard way to make a 64-character fingerprint of content. Komodo uses it to catch hand edits to config.json and to name each cache entry from its inputs. |
 | `checksum` | A small number worked out from data to spot damage. Each event line in group state carries one, so a line cut short by a crash is detected and dropped on replay. |
-| `CRC-32` | The formula behind Komodo's checksum: a standard, fast way to turn a line of text into one number of up to ten digits. It only detects a cut-short last event line. |
+| `CRC-32` | The formula behind Komodo's checksum: a standard, fast way to turn a line of text into one number of up to ten digits. Each event line's checksum covers that line's own text, so a cut-short last line is detected. |
 | `lint` | An automatic check that reads files for rule breaks without running them. Komodo lints every planner draft of the backlog before writing any file, spending no model tokens. |
 | `MCP` | Model Context Protocol: a standard way for an AI model to call tools that a small program offers it. Each Claude Code worker session gets its own private MCP server over stdio. |
 | `WIP commit`, `WIP` | A work-in-progress save of unfinished files into git. Komodo makes one at the end of every writing session and on shutdown, so a stop or crash loses no edits. |
 | `goroutine` | A lightweight strand of work inside a Go program; thousands can run side by side. Komodo gives each task group one Drive goroutine that owns its state, and each session its own. |
 | `DAG` | Directed acyclic graph: steps joined by arrows meaning must finish first, with no loops, so a valid order always exists. Komodo builds one from group dependencies and refuses a plan with a loop. |
-| `enum` | A fixed list of allowed values. Komodo's 32 event types, stage names and block reasons are enums, so the state manager rejects any value not on the list. |
+| `enum` | A fixed list of allowed values. Komodo's 35 event types, stage names and block reasons are enums, so the state manager rejects any value not on the list. |
 | `atomic write`, `atomic` | Saving a file so it lands whole or not at all, never half-written. Komodo writes a temp file, syncs it to disk, then renames it into place. |
 | `allowlist` | A list of the only things permitted; everything else is refused. Komodo uses allowlists for the web hosts agents may reach, the shell settings a sandbox passes in, and the skills an agent may load. |
 | `idempotent`, `idempotency` | Safe to repeat: doing it twice has the same effect as once. Every Komodo side effect has an idempotency key, so replaying after a crash never commits or starts a session twice. |
@@ -846,7 +847,7 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.14, draft |
+| Version | 0.15, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
@@ -872,6 +873,7 @@ Eighteen newcomer terms; the LLD links here.
 | 0.12 | 2026-10-12 | Technical lead | References to LLD sections name the section and its appendix |
 | 0.13 | 2026-10-12 | Technical lead | Glossary defines Drive, the engine's loop for one group |
 | 0.14 | 2026-10-12 | Technical lead | Full glossary gains 67 plain-language terms used in the LLD |
+| 0.15 | 2026-10-12 | Technical lead | Owner decisions on the event spine and Verify written into the LLD; event count is 35 |
 
 #### 3.4 Related documents
 
