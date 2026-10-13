@@ -12669,7 +12669,7 @@ Rule for new gaps: no section may say "later" or "TBD", or carry a `[TODO]` tag,
 
 #### Component dependencies
 
-**In plain terms.** A dependency means one component calls code in another, so the second must exist first. This table lists, for every component, the ones it needs. The planning rule in the [delivery roadmap (HLD)](hld.md#delivery-roadmap) uses it: components built in one wave must not depend on each other.
+A dependency means one component calls code in another, so the second must exist first. This table lists, for every component, the ones it needs. The planning rule in the [delivery roadmap (HLD)](hld.md#delivery-roadmap) uses it: components built in one wave must not depend on each other.
 
 | Component | Depends on |
 |---|---|
@@ -12733,7 +12733,7 @@ Rule for new gaps: no section may say "later" or "TBD", or carry a `[TODO]` tag,
 
 #### Archive sources at commit `fdf4f61f`
 
-**In plain terms.** Commit `fdf4f61f` holds an earlier, working tree of Komodo's code. It is reference material, not a rulebook: a builder reads it so working code is reused instead of reinvented. This table says, for each archived piece, where its code lives in this design and what happens to it.
+Commit `fdf4f61f` holds an earlier, working tree of Komodo's code. It is reference material, not a rulebook: a builder reads it so working code is reused instead of reinvented. This table says, for each archived piece, where its code lives in this design and what happens to it.
 
 | Archive source (`backups/`) | New home | Action |
 |---|---|---|
@@ -12753,7 +12753,7 @@ Rule for new gaps: no section may say "later" or "TBD", or carry a `[TODO]` tag,
 | `komodo/rules/accessibility.md` | `embed/output/adhd.md` and the `adhd` templates under `embed/output/` (Rules and output contract) | **Port**; the same text also goes into the `AGENTS.md` block |
 | `internal/harness/report.go` | the 4-heading run report templates under `embed/output/` (Rules and output contract) | **Port** |
 
-**What each one does**
+**Output profile sources**
 - **The last two rows:** They are the sources of the output profile. The `adhd` templates follow the accessibility rules text, and the run report keeps the 4-heading shape of `report.go`.
 
 **New, with no archive source:** the HTTP stack (HTTP stack), the scheduler (Scheduler and job templates), `recover.go` (Error recovery), the cache store (Cache store) and `fresh` (Binary lifecycle).
