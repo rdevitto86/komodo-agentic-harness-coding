@@ -1518,6 +1518,101 @@ sequenceDiagram
 
 **Lookup:** [Appendix E](#appendix-e-workspace-and-leases) holds the worktree rules, lease fields, shutdown steps and sweep actions.
 
+
+#### Workspace and leases
+
+
+**In plain terms.** A workspace is the folder on disk where one group of tasks is built. A group is a bundle of up to 8 coding tasks (see Glossary). The harness, the `komodo` program that runs AI sessions to write code, gives each group its own folder and a lock on it. Without the lock, two runs could edit the same folder at once and destroy each other's work. Only the engine, the part of the harness that drives groups, creates, locks and removes these folders; people and the orchestrator session never touch them.
+
+#### Worktrees
+
+**In plain terms.** A worktree is a separate checkout of the git repository in its own folder, so a group can edit files without disturbing the main checkout. The engine cuts one worktree per group and gives it to the builder, the model session that writes code. Without it, every group would fight over one set of files. The tester, a second model session that checks the work, gets a throwaway copy so it cannot see the builder's scratch state.
+
+| Item | Rule |
+|---|---|
+| Location | `~/.komodo/wt/<repo-id>/<group>/`, detached, shared by every clone; no path contains `.git` |
+| Cut | `git worktree add --detach` from the epic branch tip, about 1 s |
+| Tester worktree | A throwaway one per Verify at the same commit, dependencies copied per [Test sandboxes and copies (chapter 6)](#6-tools-guard-and-sandbox), removed when Verify ends; reuses the builder's object store |
+| Windows | Names are short hashes to stay under `MAX_PATH`; each worktree sets `core.longpaths`, `core.filemode false`, `core.autocrlf false`; `doctor` warns when the long-path switch is off |
+| Idle | A worktree unused for 3 days is WIP-committed to its hidden ref and removed; `resume` rebuilds it |
+
+**What each one does**
+- **Location:** Every worktree lives under `~/.komodo/wt/`, named by the repository and the group. One place serves every clone of the repository, and no path contains `.git`.
+- **Cut:** The engine creates the worktree with `git worktree add --detach`, starting from the latest commit of the epic branch (an epic holds the group, see Glossary). It takes about 1 second.
+- **Tester worktree:** During Verify, the stage where the reviewer and tester check a commit, the tester gets its own throwaway worktree at the same commit. Dependencies are copied in per [Test sandboxes and copies (chapter 6)](#6-tools-guard-and-sandbox), the folder is removed when Verify ends, and it shares the builder's git object store so it costs no extra download.
+- **Windows:** Worktree names are short hashes so Windows paths stay under its `MAX_PATH` length limit. Each worktree turns on `core.longpaths` and turns off file-mode and line-ending conversion so git never reports every file as changed. `doctor`, the health-check verb a person or the orchestrator runs, warns when Windows long paths are switched off.
+- **Idle:** A worktree nobody has used for 3 days is saved as a WIP commit (a work-in-progress commit of unfinished edits) on its hidden ref and then deleted. `resume`, the verb that continues a run, rebuilds the folder from that saved commit.
+
+#### Lease
+
+**In plain terms.** A lease is a lock file that says one run owns one group right now (see Glossary). The engine takes it before working on a group and keeps renewing it. Without a lease, a second `komodo run` on the same machine could start the same group and the two would overwrite each other. Only the engine takes, renews and frees leases; verbs a person runs refuse to touch a leased worktree.
+
+| Field or rule | Value |
+|---|---|
+| File | `~/.komodo/leases/<repo-id>/<group-id>.json`, create-only; the OS lets exactly one run create it |
+| Contents | Run ID, pid (process id), host, clone path, `fence`, taken and renewed times |
+| Held | From Intake until landing or abandon, through queued, checking, verifying, paused and blocked |
+| Renewal | Every 5 min by the group's `Drive` |
+| Expiry | 2 h after the last renewal |
+| Takeover | A stale or dead-holder lease is renamed aside (`.stale-*`) before takeover, so only one run wins |
+| Release | On landing or abandon; on clean shutdown after work is saved; by the parent guard after a crash; by the startup sweep when both died. Never while agents live or work is unsaved |
+| Protection | Verbs refuse a leased worktree; rule O4 forbids touching one by hand |
+
+**What each one does**
+- **File:** The lease is one JSON file per group under `~/.komodo/leases/`. It is created with a create-only flag, so the operating system guarantees that exactly one run can create it. A second `run` on the group refuses and names the holder.
+- **Contents:** The file names the run that holds it, its process ID, the machine, the clone path, the fence number (see [Fence (Appendix E)](#fence)) and when it was taken and last renewed. Anyone reading it can tell who holds the group and whether that holder is still alive.
+- **Held:** The lease is taken at Intake, the first pipeline stage, and kept until the group lands (its work is merged) or is abandoned. A group keeps its lease while waiting in the queue, in Check, in Verify, paused, or blocked.
+- **Renewal:** Every 5 minutes the group's `Drive`, the engine routine that advances one group, rewrites the renewed time. A lease that keeps being renewed proves its holder is alive.
+- **Expiry:** A lease whose last renewal is more than 2 hours old counts as dead. Another run may then take the group over.
+- **Takeover:** Before taking an expired lease, or one whose holder process is dead, the engine renames the old file aside with a `.stale-` prefix. Only one run can rename it, so only one run wins the takeover.
+- **Release:** The engine frees the lease when the group lands or is abandoned, on a clean shutdown once work is saved, by the parent guard after a crash ([shutdown and the parent guard (Engine behaviour, 3.5)](#35-behaviour)), or by the startup sweep when both engine and guard died ([Startup sweep (Appendix E)](#startup-sweep)). It is never freed while a model session is still running or edits are unsaved.
+- **Protection:** Every verb refuses to act on a worktree that holds a live lease. Rule O4 ([Orchestrator rows (text in `AGENTS.md`, any host) (chapter 6)](#6-tools-guard-and-sandbox)) tells the orchestrator session never to edit, reset or remove such a worktree by hand.
+
+#### Fence
+
+**In plain terms.** The fence is a counter stored beside the lease (see Glossary). It exists because a lease alone is not enough: a holder that was paused or stalled can wake up believing it still owns the group after someone else took it over. Every git write carries the current fence number, and git itself refuses a write that carries an old one. Only the engine reads and bumps the fence; nobody else sees it.
+
+- `<group>.fence` holds a monotonic integer incremented on every take or takeover.
+- Every side effect carries it: the hidden-ref update, the push, the landing, a scope change.
+- The resource enforces it: `git update-ref <ref> <new> <old>` is a compare-and-swap that exits 128 (`cannot lock ref`) when the ref moved; the reflog message records `fence=<n>`.
+- A holder whose update is refused emits `lease.lost`, and `Next()` stops the group.
+
+#### Saved work
+
+**In plain terms.** Saved work is the group's progress stored inside git on a hidden ref, a named pointer to a commit that `git branch` does not show (see Glossary). The engine moves it to every group commit, so a crash never loses a finished edit. Without it, unfinished work would sit only in the worktree folder and vanish if the folder were deleted. Only the engine moves this ref; it is never pushed to the remote.
+
+The hidden ref `refs/komodo/groups/<group-id>` moves to every group commit by compare-and-swap with the fence in its reflog. Git keeps it, `git branch` hides it, it is never pushed, and it is deleted when the group lands or is abandoned.
+
+#### Startup sweep
+
+**In plain terms.** The startup sweep is the cleanup the engine runs every time it starts. It looks for leftovers from runs that died: stray processes, dead leases, old folders and queue items nobody owns. Without it, a crashed run would leave locked groups and orphaned processes until a person cleaned up by hand. Nobody calls it; the engine runs it on its own at start.
+
+Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and leases whose clone path is gone; removes dead runs' tester worktrees, Docker containers and images, session temp, and worktree folders whose clone is gone; removes worktrees with no live lease and no unsaved work; re-enqueues queue items with no lease; emits `session.end crash` for dead sessions; deletes a repo's language cache when over `sandbox.lang_cache_gb` or unused 30 days, never while the repo holds a lease. Four scans run in parallel and must finish under 2 s with 20 dead runs.
+
+**What each one does**
+- **Kills orphans by pid file:** Each model session leaves a file with its process ID. The sweep kills any such process whose run is gone, so no session keeps working for a dead engine.
+- **Frees dead leases:** A lease whose holder process is dead, or whose last renewal is over 2 hours old, is released so the group can run again.
+- **Deletes `.stale-*` lease files and leases whose clone path is gone:** Files renamed aside during a takeover, and leases pointing at a repository clone that no longer exists, are removed.
+- **Removes dead runs' tester worktrees, Docker containers and images, session temp, and worktree folders whose clone is gone:** Every throwaway resource a dead run created is deleted.
+- **Removes worktrees with no live lease and no unsaved work:** A worktree that nobody holds and that has nothing left to save is deleted. One with unsaved work is kept.
+- **Re-enqueues queue items with no lease:** A group that was taken from the work queue but never got its lease (a crash hit between the two steps) goes back into the queue instead of being lost.
+- **Emits `session.end crash` for dead sessions:** For every model session that died without reporting, the sweep records an end event with reason `crash`, so the engine can retry its task.
+- **Deletes a repo's language cache when over `sandbox.lang_cache_gb` or unused 30 days:** The per-repository cache of language toolchains is removed when it passes the configured size (10 GB default) or sits unused for 30 days. It is never removed while the repository holds a lease.
+- **Four scans run in parallel and must finish under 2 s with 20 dead runs:** The sweep is split into four parallel passes and has a 2 second target, so a dirty machine does not delay the run start.
+
+---
+
+| Two engines on one group | Create-only lease: exactly one holder; the loser's landing is refused by git with exit 128 and ends in `lease.lost` |
+| Windows long paths off | `doctor` warns and names the fix; worktree names are short hashes |
+| A worktree unused 3 days | WIP-committed to the hidden ref and removed; `resume` rebuilds it |
+**Workspace and leases ([Workspace and leases (Appendix E)](#workspace-and-leases))**
+- A second `run` on a leased group refuses with the holder named.
+- 2 runs racing for one lease yield exactly 1 holder.
+- 2 engines racing to land one group make exactly 1 landing, and the loser's state ends in `lease.lost`.
+- A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits.
+- Sweep never deletes a worktree with unsaved work.
+
+
 ## 5. Sessions, Agents and Briefs
 
 A session is one fresh model conversation that does one task. The supervisor is the engine code that starts, watches and stops it (see Glossary in the HLD). An agent is a role such as builder or reviewer, defined by two compiled-in files: `agent.json` for Go and `prompt.md` for the model. A brief is the prompt a session receives, assembled from 20 typed slots such as `tasks` and `diff`. Without the supervisor a stuck session would hold a slot forever. Without the registry a session could start with the wrong tools; without the builder each brief would be hand-made. The engine runs all three; a person changes only an agent's model and limits through `komodo config agent <name>`.
@@ -4660,89 +4755,6 @@ type GroupState[S any] interface {
 
 ## Appendix E. Workspace and Leases
 
-#### Workspace and leases
-
-
-**In plain terms.** A workspace is the folder on disk where one group of tasks is built. A group is a bundle of up to 8 coding tasks (see Glossary). The harness, the `komodo` program that runs AI sessions to write code, gives each group its own folder and a lock on it. Without the lock, two runs could edit the same folder at once and destroy each other's work. Only the engine, the part of the harness that drives groups, creates, locks and removes these folders; people and the orchestrator session never touch them.
-
-#### Worktrees
-
-**In plain terms.** A worktree is a separate checkout of the git repository in its own folder, so a group can edit files without disturbing the main checkout. The engine cuts one worktree per group and gives it to the builder, the model session that writes code. Without it, every group would fight over one set of files. The tester, a second model session that checks the work, gets a throwaway copy so it cannot see the builder's scratch state.
-
-| Item | Rule |
-|---|---|
-| Location | `~/.komodo/wt/<repo-id>/<group>/`, detached, shared by every clone; no path contains `.git` |
-| Cut | `git worktree add --detach` from the epic branch tip, about 1 s |
-| Tester worktree | A throwaway one per Verify at the same commit, dependencies copied per [Test sandboxes and copies (chapter 6)](#6-tools-guard-and-sandbox), removed when Verify ends; reuses the builder's object store |
-| Windows | Names are short hashes to stay under `MAX_PATH`; each worktree sets `core.longpaths`, `core.filemode false`, `core.autocrlf false`; `doctor` warns when the long-path switch is off |
-| Idle | A worktree unused for 3 days is WIP-committed to its hidden ref and removed; `resume` rebuilds it |
-
-**What each one does**
-- **Location:** Every worktree lives under `~/.komodo/wt/`, named by the repository and the group. One place serves every clone of the repository, and no path contains `.git`.
-- **Cut:** The engine creates the worktree with `git worktree add --detach`, starting from the latest commit of the epic branch (an epic holds the group, see Glossary). It takes about 1 second.
-- **Tester worktree:** During Verify, the stage where the reviewer and tester check a commit, the tester gets its own throwaway worktree at the same commit. Dependencies are copied in per [Test sandboxes and copies (chapter 6)](#6-tools-guard-and-sandbox), the folder is removed when Verify ends, and it shares the builder's git object store so it costs no extra download.
-- **Windows:** Worktree names are short hashes so Windows paths stay under its `MAX_PATH` length limit. Each worktree turns on `core.longpaths` and turns off file-mode and line-ending conversion so git never reports every file as changed. `doctor`, the health-check verb a person or the orchestrator runs, warns when Windows long paths are switched off.
-- **Idle:** A worktree nobody has used for 3 days is saved as a WIP commit (a work-in-progress commit of unfinished edits) on its hidden ref and then deleted. `resume`, the verb that continues a run, rebuilds the folder from that saved commit.
-
-#### Lease
-
-**In plain terms.** A lease is a lock file that says one run owns one group right now (see Glossary). The engine takes it before working on a group and keeps renewing it. Without a lease, a second `komodo run` on the same machine could start the same group and the two would overwrite each other. Only the engine takes, renews and frees leases; verbs a person runs refuse to touch a leased worktree.
-
-| Field or rule | Value |
-|---|---|
-| File | `~/.komodo/leases/<repo-id>/<group-id>.json`, create-only; the OS lets exactly one run create it |
-| Contents | Run ID, pid (process id), host, clone path, `fence`, taken and renewed times |
-| Held | From Intake until landing or abandon, through queued, checking, verifying, paused and blocked |
-| Renewal | Every 5 min by the group's `Drive` |
-| Expiry | 2 h after the last renewal |
-| Takeover | A stale or dead-holder lease is renamed aside (`.stale-*`) before takeover, so only one run wins |
-| Release | On landing or abandon; on clean shutdown after work is saved; by the parent guard after a crash; by the startup sweep when both died. Never while agents live or work is unsaved |
-| Protection | Verbs refuse a leased worktree; rule O4 forbids touching one by hand |
-
-**What each one does**
-- **File:** The lease is one JSON file per group under `~/.komodo/leases/`. It is created with a create-only flag, so the operating system guarantees that exactly one run can create it. A second `run` on the group refuses and names the holder.
-- **Contents:** The file names the run that holds it, its process ID, the machine, the clone path, the fence number (see [Fence (Appendix E)](#fence)) and when it was taken and last renewed. Anyone reading it can tell who holds the group and whether that holder is still alive.
-- **Held:** The lease is taken at Intake, the first pipeline stage, and kept until the group lands (its work is merged) or is abandoned. A group keeps its lease while waiting in the queue, in Check, in Verify, paused, or blocked.
-- **Renewal:** Every 5 minutes the group's `Drive`, the engine routine that advances one group, rewrites the renewed time. A lease that keeps being renewed proves its holder is alive.
-- **Expiry:** A lease whose last renewal is more than 2 hours old counts as dead. Another run may then take the group over.
-- **Takeover:** Before taking an expired lease, or one whose holder process is dead, the engine renames the old file aside with a `.stale-` prefix. Only one run can rename it, so only one run wins the takeover.
-- **Release:** The engine frees the lease when the group lands or is abandoned, on a clean shutdown once work is saved, by the parent guard after a crash ([shutdown and the parent guard (Engine behaviour, 3.5)](#35-behaviour)), or by the startup sweep when both engine and guard died ([Startup sweep (Appendix E)](#startup-sweep)). It is never freed while a model session is still running or edits are unsaved.
-- **Protection:** Every verb refuses to act on a worktree that holds a live lease. Rule O4 ([Orchestrator rows (text in `AGENTS.md`, any host) (chapter 6)](#6-tools-guard-and-sandbox)) tells the orchestrator session never to edit, reset or remove such a worktree by hand.
-
-#### Fence
-
-**In plain terms.** The fence is a counter stored beside the lease (see Glossary). It exists because a lease alone is not enough: a holder that was paused or stalled can wake up believing it still owns the group after someone else took it over. Every git write carries the current fence number, and git itself refuses a write that carries an old one. Only the engine reads and bumps the fence; nobody else sees it.
-
-- `<group>.fence` holds a monotonic integer incremented on every take or takeover.
-- Every side effect carries it: the hidden-ref update, the push, the landing, a scope change.
-- The resource enforces it: `git update-ref <ref> <new> <old>` is a compare-and-swap that exits 128 (`cannot lock ref`) when the ref moved; the reflog message records `fence=<n>`.
-- A holder whose update is refused emits `lease.lost`, and `Next()` stops the group.
-
-#### Saved work
-
-**In plain terms.** Saved work is the group's progress stored inside git on a hidden ref, a named pointer to a commit that `git branch` does not show (see Glossary). The engine moves it to every group commit, so a crash never loses a finished edit. Without it, unfinished work would sit only in the worktree folder and vanish if the folder were deleted. Only the engine moves this ref; it is never pushed to the remote.
-
-The hidden ref `refs/komodo/groups/<group-id>` moves to every group commit by compare-and-swap with the fence in its reflog. Git keeps it, `git branch` hides it, it is never pushed, and it is deleted when the group lands or is abandoned.
-
-#### Startup sweep
-
-**In plain terms.** The startup sweep is the cleanup the engine runs every time it starts. It looks for leftovers from runs that died: stray processes, dead leases, old folders and queue items nobody owns. Without it, a crashed run would leave locked groups and orphaned processes until a person cleaned up by hand. Nobody calls it; the engine runs it on its own at start.
-
-Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and leases whose clone path is gone; removes dead runs' tester worktrees, Docker containers and images, session temp, and worktree folders whose clone is gone; removes worktrees with no live lease and no unsaved work; re-enqueues queue items with no lease; emits `session.end crash` for dead sessions; deletes a repo's language cache when over `sandbox.lang_cache_gb` or unused 30 days, never while the repo holds a lease. Four scans run in parallel and must finish under 2 s with 20 dead runs.
-
-**What each one does**
-- **Kills orphans by pid file:** Each model session leaves a file with its process ID. The sweep kills any such process whose run is gone, so no session keeps working for a dead engine.
-- **Frees dead leases:** A lease whose holder process is dead, or whose last renewal is over 2 hours old, is released so the group can run again.
-- **Deletes `.stale-*` lease files and leases whose clone path is gone:** Files renamed aside during a takeover, and leases pointing at a repository clone that no longer exists, are removed.
-- **Removes dead runs' tester worktrees, Docker containers and images, session temp, and worktree folders whose clone is gone:** Every throwaway resource a dead run created is deleted.
-- **Removes worktrees with no live lease and no unsaved work:** A worktree that nobody holds and that has nothing left to save is deleted. One with unsaved work is kept.
-- **Re-enqueues queue items with no lease:** A group that was taken from the work queue but never got its lease (a crash hit between the two steps) goes back into the queue instead of being lost.
-- **Emits `session.end crash` for dead sessions:** For every model session that died without reporting, the sweep records an end event with reason `crash`, so the engine can retry its task.
-- **Deletes a repo's language cache when over `sandbox.lang_cache_gb` or unused 30 days:** The per-repository cache of language toolchains is removed when it passes the configured size (10 GB default) or sits unused for 30 days. It is never removed while the repository holds a lease.
-- **Four scans run in parallel and must finish under 2 s with 20 dead runs:** The sweep is split into four parallel passes and has a 2 second target, so a dirty machine does not delay the run start.
-
----
-
 ## Appendix F. Session Supervisor, Agent Registry and Brief Builder
 
 #### Session supervisor
@@ -6977,7 +6989,6 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 |---|---|
 | Crash between `action.start commit` and `action.done` | Replay reruns the commit; compare-and-swap on the hidden ref makes it one commit |
 | Last event line cut short | It no longer matches its checksum, so it is dropped; `state.truncated` emitted once |
-| Two engines on one group | Create-only lease: exactly one holder; the loser's landing is refused by git with exit 128 and ends in `lease.lost` |
 | A cancelled tester reports after the return to Build | Its epoch is older; recorded `stale: true`; ignored |
 | Both Verify sessions fail in one tick | Handled in `sequence` order; both reach the builder in the one return |
 | Model ID returns 404 mid-run | That session start fails; the next session takes the prior ID, then the backstop |
@@ -6998,13 +7009,11 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Pause exceeds `limits.pause_max_min` | Session cancelled, WIP kept, Blocked `pause_timeout` |
 | `resume` before the provider reset | Every paused agent attempts, is refused at 0 turns, re-pauses with the new reset |
 | `kill -9` on a paused engine | `jobs tick` or `status` after the timer record's `wait_until` resumes the run |
-| Windows long paths off | `doctor` warns and names the fix; worktree names are short hashes |
 | A planted `CLAUDE.md`, user hook or auto-memory file | 0 effect on a worker (`--setting-sources ""`) |
 | A steering phrase in a skill | Fails the gate |
 | A steering phrase in the repo's `AGENTS.md` | `doctor` warns; the brief still loads |
 | Broken Komodo block markers in `AGENTS.md` | The whole addendum is dropped from briefs; `doctor` reports it |
 | The builder edits `AGENTS.md` mid-run | Its next brief still carries the base-commit text |
-| A worktree unused 3 days | WIP-committed to the hidden ref and removed; `resume` rebuilds it |
 | Fresh during a live run | The next `komodo version` is new; the run finishes on its old version |
 | Bad checksum or signature on fresh | The old binary stays |
 | Two concurrent verbs see a newer release | One updater, via `fresh.lock` |
@@ -7304,13 +7313,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A reviewer's first pass renders `findings` as `none`.
 - A reviewer brief holds 0 bytes of the builder's `summary`.
 - A Go task and a TS task in one repo share every prefix byte up to the standards.
-
-**Workspace and leases ([Workspace and leases (Appendix E)](#workspace-and-leases))**
-- A second `run` on a leased group refuses with the holder named.
-- 2 runs racing for one lease yield exactly 1 holder.
-- 2 engines racing to land one group make exactly 1 landing, and the loser's state ends in `lease.lost`.
-- A `kill -9` of the engine mid-run leaves 0 orphan agents and 0 unsaved edits.
-- Sweep never deletes a worktree with unsaved work.
 
 **Session supervisor ([Session supervisor (Appendix F)](#session-supervisor))**
 - A forced hang ends with `idle` after the nudge and grace.
