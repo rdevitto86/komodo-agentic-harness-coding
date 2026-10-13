@@ -2043,294 +2043,172 @@ Component tests use a temporary directory and a temporary git repository; no net
 
 ## 5. Sessions, Agents and Briefs
 
-A session is one fresh model conversation that does one task. The supervisor is the engine code that starts, watches and stops it (see Glossary in the HLD). An agent is a role such as builder or reviewer, defined by two compiled-in files: `agent.json` for Go and `prompt.md` for the model. A brief is the prompt a session receives, assembled from 20 typed slots such as `tasks` and `diff`. Without the supervisor a stuck session would hold a slot forever. Without the registry a session could start with the wrong tools; without the builder each brief would be hand-made. The engine runs all three; a person changes only an agent's model and limits through `komodo config agent <name>`.
+This chapter specifies how the engine starts, watches and stops one model session, which 7 agents exist and how their files are read, and how the prompt for a session, the brief, is assembled and sized. The purpose and the interactions of the subsystem are in the HLD: [HLD 5.6](hld.md#56-sessions-agents-and-briefs).
 
-A session starts with its brief written once to `<session>/brief.md`, a tool server and a sandbox profile. Liveness is events, never pings: any stream line or tool call counts, and one 15 s timer checks wall, idle and the 80% warning. At 80% of wall one fixed line names the minutes left. After `limits.session_idle_min` (10) of silence come one nudge, a 5-min grace, then a stop. The stop ladder is SIGINT, SIGTERM after 30 s, then a whole-tree kill after 60 s. Every end records one of 15 exit reasons in `result.json`. `resume` tries the provider's handle first, else a fresh session with the WIP diff, logging `resume_lost`.
+### 5.1 Scope and Concepts
 
-The 7 agents have fixed weights: planner, architect and reviewer are heavy; builder and researcher standard; tester and scout light. The brief builder assembles 5 parts, most stable first: tool definitions, role, repo context, standards, task. Each slot is required or optional per agent; an empty required slot fails the brief, an empty optional one renders `none`.
+**Owns:**
+- The session supervisor: it starts a session, watches its liveness, injects two fixed lines, stops it, and records one exit reason.
+- The agent registry: the 7 compiled-in agents, each defined by an `agent.json` file for Go and a `prompt.md` file for the model.
+- The brief builder: the 5 parts and 20 slots of a brief, the fixed assembly order, and the size ceiling.
 
-**📐 Session lifecycle and brief assembly**
-```mermaid
-stateDiagram-v2
-  state "Alive" as LIVE
-  state "Idle clock" as IDLE
-  state "Nudge" as NU
-  state "Time warning" as TW
-  state "Paused clock" as PC
-  state "Stop ladder" as SL {
-    SIGINT --> SIGTERM: after 30 s
-    SIGTERM --> kill: after 60 s, whole-tree kill
-  }
-  state "session.end" as END
-  state "Resume" as RS
-  [*] --> Spawn: action spawn, session UUID chosen by Komodo
-  Spawn --> LIVE: brief.md written once and piped, request.json recorded
-  LIVE --> LIVE: heartbeat, any stream line or tool call
-  LIVE --> IDLE: silence starts the idle clock
-  IDLE --> LIVE: a stream line or a tool call
-  IDLE --> NU: session_idle_min 10, no stream line and no running tool
-  NU --> LIVE: a stream line
-  NU --> SL: 5-min grace passed
-  LIVE --> TW: 80% of wall, one fixed line injected
-  TW --> SL: limits.session_wall_min 60 reached
-  LIVE --> PC: group paused, wall clocks stop
-  PC --> LIVE: timer.due
-  SL --> END: timeout, idle, cancelled
-  LIVE --> END: done, needs_scope, check_fail, no_result, schema_fail
-  LIVE --> END: refusals, budget, provider, billing, paused, crash
-  END --> [*]: result.json records the reason
-  END --> RS: paused, the provider's handle first
-  END --> Spawn: timeout or idle, retries 2 per session, max 3
-  RS --> LIVE: resume uuid, or the saved messages.jsonl on API links
-  RS --> Spawn: a failed resume, fresh session, ledger logs resume_lost
-  note right of LIVE
-    One 15 s timer per session checks wall, idle and the 80% warning;
-    a nudge or kill lands at most 15 s late
-  end note
-  note right of END
-    15 exit reasons: done, needs_scope, check_fail, no_result,
-    schema_fail, timeout, idle, refusals, budget, provider,
-    billing, paused, pause_timeout, cancelled, crash
-  end note
-```
-```mermaid
-flowchart TB
-  %% Legend: solid arrow = assembly order, most stable first
-  %% dotted arrow = what feeds a part; R required, O optional renders none
-  AJ["agent.json: v, weight, chain, tools, run_classes, guard, limits"]
-  AJ2["skills {allow, always}, slots {required, optional}, result, pool_slot"]
-  AJ --- AJ2
-  PM["prompt.md: Role text, then a Brief template with slots"]
-  AJ -.->|"tools"| P1["1 Tool definitions, 1-hour breakpoint"]
-  PM -.->|"Role"| P2["2 Role, with part 1"]
-  P1 --> P2
-  P2 --> P3["3 Repo context: AGENTS.md minus the Komodo block, at base"]
-  P3 --> P4["4 Standards: skills, always first, then by name, 5-minute"]
-  P4 --> P5["5 Task: the slots, 5-minute breakpoint"]
-  subgraph SLOTS["Slots, 20"]
-    direction TB
-    S1["repo_context, repo_profile, standards, group, tasks"]
-    S2["files, file_contents, diff, checks, findings"]
-    S3["scope_answer, lens, callers, specs, goal"]
-    S4["layout, backlog, repo_map, baseline, lens_rules"]
-  end
-  SLOTS -.-> P5
-  RM["repo_map: ranked symbol graph fitted to 10% of the ceiling"] -.-> S4
-  P5 --> CEIL{"under half the link's measured context?"}
-  CEIL -->|"yes"| BRIEF["#lt;session#gt;/brief.md, written once, piped"]
-  CEIL -->|"no"| NEXT["the next link in the chain that fits"]
-  NEXT -->|"none left"| BLK["Blocked context; nothing is cut to fit"]
-  NEXT --> CEIL
-  CEIL --- CT["1M: 500K; 400K: 200K; 200K: 100K; 262,144: 131K"]
-  RULE["No timestamps, IDs or unsorted maps before the task"]
-  RULE2["No harness rules appear in any part"]
-  P5 --- RULE
-  P5 --- RULE2
-```
-**Reading the diagram.** A session runs from `spawn` through alive, idle, nudge and stop ladder to `session.end` and its 15 reasons. The brief stacks five parts, most stable first, the 20 slots last. Over half the measured context: next link, else Blocked `context`.
+**Does not own:**
+- Provider adapters, the capacity profile, the billing check, link failover and the launch line of `claude`: [Providers and HTTP](#7-providers-and-http).
+- The tool runtime, the private tool server, the guard and the sandbox: [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox).
+- Which skills match a task, the orchestrator rules and the output templates: [Skills, Rules and Output](#8-skills-rules-and-output).
+- The events a session produces, the `Next()` decision function and the `Drive` loop that calls this chapter: [Event Spine and State Machine](#2-event-spine-and-state-machine) and [Engine Internals](#3-engine-internals).
+- What Check, the reviewer and the tester do with a finished session: [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery).
 
-**What matters**
-- Wall is `limits.session_wall_min` 60, hard limit 120; retries per agent are 2, hard limit 3, inside `limits.task_attempts`.
-- A session halted by a provider limit with a resume handle exits `paused`, not `provider`.
-- The link chain is fixed in `agent.json`, never in config; the registry strict-decodes the 7 agents once per process.
-- A brief has no per-slot cap. Its only ceiling is half the link's measured context: 500K on the 1M Claude models, 131K at the local floor.
-- Over the ceiling the brief goes to the next link that fits, then Blocked `context`; nothing is cut to fit.
-- Reviewer and tester context comes from the engine only, never from builder prose.
+**Concepts**
 
-**Lookup:** [Appendix F](#5-sessions-agents-and-briefs) holds the lifecycle, controls, 15 exit reasons, resume, `agent.json` fields, `prompt.md`, roster, limits, assembly order, 20 slots, ceilings and context rules.
-
-
-
-#### Session supervisor
-
-
-**In plain terms.** The session supervisor is the part of the engine that starts, watches and stops one model session. A model session is one fresh conversation with an AI model that does one task (see Glossary). The supervisor gives it a time limit, notices when it goes silent, warns it before time runs out and stops it cleanly. Without it, a stuck or runaway model session would hold a pool slot forever and burn tokens. Only the engine runs it; the model session only sees its injected warning lines.
-
-#### Lifecycle
-
-**In plain terms.** The lifecycle is the list of things that happen to a model session from start to end. Each row names one mechanism: how it starts, how the engine knows it is alive, when it gets warned, and how it is stopped. Without these rules a session could run silently past its limit or leave child processes behind. The engine drives every row; the model session only receives the warning and nudge lines.
-
-| Phase | Rule |
+| Term | Meaning in this chapter |
 |---|---|
-| Spawn | Start the provider session with its brief, tool server and sandbox profile; record `request.json`; the brief is written once to `<session>/brief.md` and piped from there |
-| Heartbeat | Any stream line or tool call counts; silence starts the idle clock. Liveness is events, never pings: alive while the stream produces lines, a tool call runs, or an `api_retry` line arrived within its `retry_delay_ms`. On API links the HTTP stream-idle timer is the heartbeat (a regular I'm-alive signal) |
-| Timer | One 15 s timer per session checks wall, idle and the 80% warning; a nudge or kill lands at most 15 s late |
-| Time warning | At 80% of wall, one fixed line injected: "Finish the current task and stop; 12 minutes remain" (the number is computed) |
-| Nudge | After `session_idle_min` with no stream line and no running tool: one fixed line, "Report status or stop now; the harness will ask for your result"; 5-min grace; then stop. `[PENDING G-14]` a nudge reaching a turn stuck inside a tool call is best effort |
-| Injection | Through `claude -p --input-format stream-json` (stdin stays open) or the next API turn |
-| Stop ladder | SIGINT (ends the turn, keeps its result); after 30 s SIGTERM; after 60 s a whole-tree kill. API links: context cancel after the current tool call returns |
-| Orphans | Process groups on Unix, Job Objects on Windows |
-| Paused clock | Wall clocks stop while the group is paused |
+| Session | One fresh model conversation that does one task. Komodo picks its unique identifier before the start; its folder is `sessions/<id>/`. |
+| Agent | A role a session plays, such as builder or reviewer, with its own tools, weight and limits. 7 exist; none can be defined by a repository. |
+| Weight | An agent's model size: heavy, standard or light. It maps to Opus, Sonnet or Haiku on Claude links. |
+| Link, chain | One way to reach a model, and the ordered list of links an agent tries ([Providers and HTTP](#7-providers-and-http)). |
+| API link | A link where Go code calls the model over the network instead of running `claude`: `anthropic-api` and `http:<name>`. |
+| Brief | The prompt a session receives: 5 parts in a fixed order, the last part built from the slots. |
+| Slot | One named hole in the `# Brief` template of `prompt.md`; 20 exist. The engine fills each once. |
+| Ceiling | The largest brief a link accepts: half of the link's measured context window. |
+| Resume handle | The provider's identifier of a saved conversation: a session identifier on `claude-cli`, the saved `messages.jsonl` on API links. |
+| Exit reason | The one word recorded in `result.json` and on the `session.end` event when a session ends. 15 exist. |
+| Nudge | The one fixed line injected into a silent session, asking for a status report or a stop. |
+| Pool slot | One of the machine-wide places for builder, reviewer and tester sessions ([Engine Internals](#3-engine-internals)). |
 
-**What each one does**
-- **Spawn:** The engine starts the model session on its provider link with three inputs: the brief (its prompt, see Glossary), a private tool server, and a sandbox profile that limits what commands may touch. It records the request in `request.json`. The brief is written once to `<session>/brief.md` and sent from that file, so a retry never rebuilds it.
-- **Heartbeat:** The session counts as alive while its output stream produces lines, while a tool call is running, or while the provider has promised a retry within `retry_delay_ms`. The engine never sends pings; silence alone starts the idle clock. On API links (links where Go talks to the model over HTTP) the HTTP stream-idle timer is the heartbeat.
-- **Timer:** One 15 second timer per session checks the wall clock (total time), the idle clock and the 80% warning point. Because of this granularity a warning, nudge or kill can arrive up to 15 seconds late.
-- **Time warning:** When 80% of the wall time is used, the engine injects one fixed line into the conversation telling the model to finish and stop. The minute count in the line is computed from the real remaining time.
-- **Nudge:** After `session_idle_min` (10 minutes by default) with no output and no running tool, the engine injects one fixed line asking for a status report or a stop. The session then gets 5 more minutes of grace before it is stopped. Delivery to a model stuck inside a tool call is best effort, a known gap tracked as G-14.
-- **Injection:** On `claude-cli` the line is written to the session's open standard input in stream-json (one JSON object per output line) format. On API links it is added to the next turn the engine sends.
-- **Stop ladder:** The engine first sends SIGINT, which ends the current turn and keeps its result. If the session is still alive after 30 seconds it sends SIGTERM, and after 60 seconds kills the whole process tree. On API links the engine cancels the request context once the current tool call returns.
-- **Orphans:** Each session runs in its own process group on Unix or Job Object on Windows. Killing that group ends every child process the model started, so nothing survives its session.
-- **Paused clock:** When the group is paused (for example waiting on a provider limit), the session's wall clock stops. Waiting time is never charged against the session's limit.
+### 5.2 Package Layout
 
-#### Controls
-
-**In plain terms.** Controls are the three numeric limits every model session runs under: how long it may run, how long it may stay silent, and how many times a failed session is restarted. They come from configuration and the agent's own file. Without them a session has no bound on time or retries. A person may change them through `komodo config`; the engine enforces them.
-
-| Control | Value |
+| File | Holds |
 |---|---|
-| Wall | `limits.session_wall_min` 60, max 120; warning at 80% |
-| Idle | 10 min; one nudge, 5-min grace, then stop |
-| Retries | Per agent from `agent.json` (2, max 3): timeout or idle restarts the task's session, inside `limits.task_attempts` |
+| `internal/engine/session.go` | The session supervisor: spawn, heartbeat, time warning, nudge and kill |
+| `internal/agent/agent.go` | The `agent.json` struct, the strict load and the registry |
+| `internal/agent/brief.go` | Slots, the stable prefix and the size check |
+| `internal/agent/trim.go` | Clipping, signature trimming, diff trimming and sanitizing |
+| `embed/agents/<name>/agent.json` | What Go reads about one of the 7 agents |
+| `embed/agents/<name>/prompt.md` | What the model reads: role text and the `# Brief` template |
 
-**What each one does**
-- **Wall:** `limits.session_wall_min` is the total minutes a session may run, 60 by default and never more than 120. At 80% the session gets the time warning; at 100% it is stopped with exit `timeout`.
-- **Idle:** A session with no output line and no running tool for 10 minutes is idle. It gets one nudge, 5 minutes of grace, and is then stopped with exit `idle`.
-- **Retries:** Each agent's `agent.json` sets how many times a timed-out or idle session is restarted for the same task, 2 by default and never more than 3. Every restart also counts toward `limits.task_attempts`, the cap on all model attempts per task.
+Files this chapter reads or calls but does not own:
 
-#### Exit reasons
+| File | Used for |
+|---|---|
+| `embed/policy.json` | The guard row identifiers that `guard` entries must match |
+| `embed/models.json` | The Claude context windows behind the ceiling table |
+| `internal/agent/skills.go` | The skills that fill the `standards` slot |
+| `internal/core/detect.go` | The `repo_profile` slot: languages and command classes |
+| `internal/repo/repomap.go` | The `repo_map` slot: the ranked symbol graph |
+| `internal/safety/proc_unix.go`, `proc_windows.go` | Process groups on Unix, Job Objects on Windows |
 
-**In plain terms.** An exit reason is the one word the engine records when a model session ends, so it knows what to do next. It is written to `result.json` in the session folder and carried on the `session.end` event. Without it the engine could not tell a finished task from a crash or a provider outage. The engine sets it; `status` shows it to a person.
+`agent` sits below `repo`, `provider` and `tools` in the import order, so filled slot values, the measured context and the chain reach it as parameters ([Front Matter and Code Structure](#0-front-matter-and-code-structure)). The supervisor lives in `engine`, which may call all of them.
 
-`done`, `needs_scope`, `check_fail`, `no_result`, `schema_fail`, `timeout`, `idle`, `refusals`, `budget`, `provider`, `billing`, `paused`, `pause_timeout`, `cancelled`, `crash`. `result.json` records the reason. A session halted by a provider limit with a resume handle exits `paused`, not `provider`.
+**📐 Which parts take part in one session**
+```mermaid
+flowchart LR
+  EMB["embed/agents"] -->|"1 decode once"| REG["Agent registry"]
+  REG -->|"2 role, slot lists"| BB["Brief builder"]
+  BB -->|"3 brief"| SUP["Session supervisor"]
+  SUP -->|"4 Start, Resume"| PRV["Provider adapter"]
+  PRV -->|"5 stream lines"| SUP
+  SUP -->|"6 session events"| DRV["Drive"]
+```
 
-**What each one does**
-- **`done`:** The session finished its task and returned a valid result. The engine records the task as done and the group's stage continues.
-- **`needs_scope`:** A builder asked for a file outside its allowed list (rule B1, [Run and builder rows (chapter 6)](#6-tools-guard-and-sandbox)). The engine makes a WIP commit, keeps the lease and blocks the group with `needs_scope`; a person or the orchestrator answers with `scope approve` or `scope deny`, and the same session resumes.
-- **`check_fail`:** The result passed the schema but failed the agent's own gate twice: `done_when` (the task's acceptance check) for a builder, or `lint_backlog` for a planner. The engine counts a task attempt and retries the task.
-- **`no_result`:** The reply was cut off at the output limit and one "continue" did not finish it, or the conversation grew past the link's context window. The engine counts a task attempt and retries the task.
-- **`schema_fail`:** The final result did not match the agent's result schema even after the one allowed re-prompt. The engine counts a task attempt and retries the task.
-- **`timeout`:** The session hit its wall-clock limit and was stopped by the stop ladder. The engine starts a fresh session for the task, up to the agent's `retries`.
-- **`idle`:** The session stayed silent past the idle limit, got its nudge and 5 minutes of grace, and was stopped. The engine starts a fresh session for the task, up to the agent's `retries`.
-- **`refusals`:** The guard refused the same rule 3 times in one session (rule G6, [Rows every agent inherits (chapter 6)](#6-tools-guard-and-sandbox)), so the session was ended. The engine retries the task.
-- **`budget`:** The token cap `limits.group_tokens` was spent; it applies only when `track.usage` is on. The engine stops and blocks the group with `budget`.
-- **`provider`:** The provider reported a rate limit or billing error on its retry line, so the engine ended the session but kept its resume handle. The task's next session starts on the next allowed link in the chain, usually the free backstop.
-- **`billing`:** The first stream line showed the session would have used a paid API key instead of the subscription login ([Billing check (fails closed) (chapter 7)](#7-providers-and-http)). The engine killed it before its first turn and blocks the group with `paid_refused`.
-- **`paused`:** A provider limit halted the session, no other link was left, and the session has a resume handle. The group waits on a disk timer until the provider's reset time, then resumes on its own.
-- **`pause_timeout`:** The session stayed paused longer than `limits.pause_max_min` (360 minutes). The engine cancels it, keeps its WIP commit, and blocks the group with `pause_timeout`.
-- **`cancelled`:** The engine deliberately killed the session, for example the tester after the first verified Verify finding, or on `abandon`. What happens next comes from the cause: Build restarts after a Verify failure, or the group blocks with `pause_timeout`.
-- **`crash`:** The session died without reporting, and the startup sweep found it dead. The sweep records this reason and the task is released so it can run again.
+**Entry points**
 
-#### Resume
+| Flow | Starts in | Called by |
+|---|---|---|
+| Decode the 7 agents once per process | `internal/agent/agent.go` | A verb, the engine and `gate` ask for an agent by name |
+| Assemble and size a brief | `internal/agent/brief.go` | The engine, before each session |
+| Start, watch and stop a session | `internal/engine/session.go` | `Drive`, running the `spawn` and `cancel` actions |
+| Resume a session | `internal/engine/session.go` | `Drive`, running `spawn` from a resume handle |
 
-**In plain terms.** Resume is how a stopped, crashed or paused session carries on without redoing its work. A resume handle is the provider's identifier for a saved conversation (a session UUID on `claude-cli`, a saved message file on API links). Without it every interruption would restart the task from scratch and lose a whole session of progress. A person or the orchestrator runs `resume <run>`; the engine does the rest.
+### 5.3 Data Model
 
-`resume` tries the provider's handle first: `--resume <uuid>` with `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` on `claude-cli`, or the saved `messages.jsonl` on API links. A failed resume gets a fresh session with the brief, the WIP diff and the last builder `summary`, and the ledger logs `resume_lost`.
+Go type and function names in this chapter are working names; the field sets, limits and rules come from the design. [TODO: the owner confirms the Go shapes of the registry, the brief builder and the supervisor, which this chapter derives from the described behaviour (G-NEW-1)]
 
-#### Agent registry
+#### Agent files
 
+Each agent is two files under `embed/agents/<name>/`, compiled into the binary. The Go reader decodes `agent.json` once per process.
 
-**In plain terms.** The agent registry is the list of the 7 kinds of AI worker the harness can run, and the rules for each. An agent is a role such as builder or reviewer with its own tools, model size and limits (see Glossary). Each agent is two files compiled into the binary: `agent.json`, which the Go code reads, and `prompt.md`, which the model reads. Without the registry a session could be started with the wrong tools or no limits. The engine reads it; a person changes only an agent's model and limits through `komodo config agent`.
+```go
+// Weight is an agent's model size; it picks the model per link and the effort level on API links.
+type Weight string
 
-#### `agent.json` (what Go reads)
+const (
+	Heavy    Weight = "heavy"
+	Standard Weight = "standard"
+	Light    Weight = "light"
+)
 
-**In plain terms.** `agent.json` is the machine-readable half of an agent: the facts the engine needs before it can start a session of that agent. Every field below is checked when the binary is built, so a broken agent file fails `gate` (the Komodo self-check verb) and never reaches a run. Without it the engine would have to hard-code each agent in Go. Only the engine reads it; a person edits it only when developing Komodo itself.
+// Limits are one agent's session clocks in minutes and its restart count.
+type Limits struct {
+	WallMin int `json:"wall_min"` // most minutes a session may run
+	IdleMin int `json:"idle_min"` // minutes of silence before the nudge
+	Retries int `json:"retries"`  // fresh sessions after a timeout or idle stop
+}
+
+// Skills lists the skills an agent may pull and the ones injected into every brief.
+type Skills struct {
+	Allow  []string `json:"allow"`
+	Always []string `json:"always"`
+}
+
+// Slots lists the brief slots an agent must receive and those it may receive.
+type Slots struct {
+	Required []string `json:"required"`
+	Optional []string `json:"optional"`
+}
+
+// Agent is the decoded agent.json of one agent.
+type Agent struct {
+	V          int             `json:"v"`           // schema version, 1
+	Weight     Weight          `json:"weight"`      // heavy, standard or light
+	Chain      []string        `json:"chain"`       // links in order; ends in a free http: endpoint
+	Tools      []string        `json:"tools"`       // the only tools advertised to the session
+	RunClasses []string        `json:"run_classes"` // the only classes the run tool may execute
+	Guard      []string        `json:"guard"`       // policy.json row identifiers beyond the inherited ones
+	Limits     Limits          `json:"limits"`
+	Skills     Skills          `json:"skills"`
+	Slots      Slots           `json:"slots"`
+	Result     json.RawMessage `json:"result"`    // JSON Schema of the final call
+	PoolSlot   bool            `json:"pool_slot"` // takes a machine-wide session slot
+}
+```
 
 | Field | Type | Rule |
 |---|---|---|
-| `v` | int | Schema version, 1; an older file fails the gate |
+| `v` | int | Schema version, 1; an older file fails `gate` |
 | `weight` | `heavy\|standard\|light` | Picks the model per link and the API `effort`: `high`, `medium`, `low` |
 | `chain` | `[]string` | Links in order; must end in a free `http:` endpoint |
-| `tools`, `run_classes` | `[]string` | The only tools advertised (G1) and the only `run` classes (R1) |
+| `tools`, `run_classes` | `[]string` | The only tools advertised (rule G1) and the only `run` classes (rule R1) |
 | `guard` | `[]string` | Row IDs from `policy.json` beyond the inherited ones |
 | `limits` | `{wall_min, idle_min, retries}` | Time and retries only; no turn or token caps |
-| `skills` | `{allow, always}` | Skill allowlist (the list of what is permitted) and preinjects |
-| `slots` | `{required, optional}` | Brief slots |
-| `result` | JSON Schema | The final call's schema; `code` fields are enums (a fixed list of allowed values) from the code list |
-| `pool_slot` | bool | True for builder, reviewer, tester |
+| `skills` | `{allow, always}` | `allow` lists the skills the agent may pull; `always` lists the ones injected into every brief |
+| `slots` | `{required, optional}` | The brief slots the agent must and may receive |
+| `result` | JSON Schema | The final call's schema; `code` fields are enums drawn from the code list ([Skills, Rules and Output](#8-skills-rules-and-output)) |
+| `pool_slot` | bool | True for builder, reviewer and tester |
 
-**What each one does**
-- **`v`:** The schema version of the file, currently 1. An agent file written for an older schema fails `gate`, so the build stops before a run can misread it.
-- **`weight`:** The size of model this agent uses: heavy, standard or light. On Claude links it picks Opus, Sonnet or Haiku; on API links it also sets the `effort` level, `high`, `medium` or `low`.
-- **`chain`:** The ordered list of provider links the agent tries, such as `claude-cli` first. It must end in a free `http:` endpoint, the backstop, so the agent always has somewhere to run.
-- **`tools`, `run_classes`:** The only tools this agent's sessions are told about (guard rule G1 refuses any other), and the only named command classes its `run` tool may execute (rule R1 refuses any other).
-- **`guard`:** Extra guard rows, by ID from `policy.json`, that apply to this agent on top of the rows every agent inherits. The registry checks that every listed ID exists.
-- **`limits`:** The agent's wall minutes, idle minutes and retry count. These are the only per-agent limits; there is no cap on turns or tokens here.
-- **`skills`:** `allow` is the list of standards documents (skills, see Glossary) the agent may pull; `always` is the list injected into every brief up front.
-- **`slots`:** Which named brief inputs (slots, see Glossary) the agent must receive and which are optional. A missing required slot fails the brief build.
-- **`result`:** The JSON Schema the agent's final answer must match. Any `code` field is an enum drawn from the fixed code list ([Code list (Appendix I)](#code-list)), so a result can never invent a new status word.
-- **`pool_slot`:** Whether a session of this agent takes one of the 1 to 6 machine-wide session slots. True for builder, reviewer and tester; the other four agents run outside the pool.
-
-Strict decode (`DisallowUnknownFields`). The registry decodes the 7 agents once per process and checks: no two agents share a `result` `$id`; every `guard` row exists in `policy.json`; every tool in `tools` is registered. A verb or the engine asks the registry by name and never re-reads `embed/`.
-
-**Example**
-
-The builder's `agent.json`: its tools, limits, brief slots and pool slot, read by Go before a session starts.
+The builder's `agent.json`, read by Go before a session starts:
 
 ```json
 {
   "v": 1,
   "weight": "standard",
-  "chain": [
-    "claude-cli",
-    "http:local"
-  ],
-  "tools": [
-    "read",
-    "search",
-    "edit",
-    "write",
-    "run",
-    "skill"
-  ],
-  "run_classes": [
-    "build",
-    "test",
-    "lint",
-    "format"
-  ],
-  "guard": [
-    "R1",
-    "B1"
-  ],
-  "limits": {
-    "wall_min": 60,
-    "idle_min": 10,
-    "retries": 2
-  },
+  "chain": ["claude-cli", "http:local"],
+  "tools": ["read", "search", "edit", "write", "run", "skill"],
+  "run_classes": ["build", "test", "lint", "format"],
+  "guard": ["R1", "B1"],
+  "limits": {"wall_min": 60, "idle_min": 10, "retries": 2},
   "skills": {
-    "allow": [
-      "standards-comments",
-      "[UNKNOWN: not yet designed]"
-    ],
-    "always": [
-      "standards-comments"
-    ]
+    "allow": ["standards-comments", "[TODO: the other skills the builder may pull (G-NEW-8)]"],
+    "always": ["standards-comments"]
   },
   "slots": {
-    "required": [
-      "repo_profile",
-      "group",
-      "tasks",
-      "files",
-      "file_contents"
-    ],
-    "optional": [
-      "repo_context",
-      "standards",
-      "diff",
-      "checks",
-      "findings",
-      "scope_answer",
-      "specs"
-    ]
+    "required": ["repo_profile", "group", "tasks", "files", "file_contents"],
+    "optional": ["repo_context", "standards", "diff", "checks", "findings", "scope_answer", "specs"]
   },
-  "result": {
-    "$id": "[UNKNOWN: not yet designed]"
-  },
+  "result": {"$id": "[TODO: the builder's result schema (G-NEW-8)]"},
   "pool_slot": true
 }
 ```
-
-#### `prompt.md` (what the model reads)
-
-**In plain terms.** `prompt.md` is the human-readable half of an agent: the text the model actually reads at the start of its session. It holds the role description and a template for the brief with placeholders, called slots, that the engine fills in. Rules never appear in it; they live in the rules and output contract ([Rules and output contract (Appendix I)](#rules-and-output-contract)). The engine fills it; a person edits it only when developing Komodo.
-
-`# Role` text, never a rule, then a `# Brief` template with `{{slots}}`. Slots fill in one pass, so a filled value is never expanded again. The gate fails an unfilled or unknown slot.
-
-Role text says how to do the job, for example: read neighbours, make the smallest change, test what you change. It is Markdown in the agent's own folder, and `agent.json` holds only what Go reads.
-
-**Example**
 
 The builder's `prompt.md`: role text first, then a `# Brief` template whose `{{slots}}` the engine fills once.
 
@@ -2355,245 +2233,667 @@ You are the builder. Read neighbouring code, make the smallest change, test what
 {{specs}}
 ```
 
-#### Roster and limits
+`prompt.md` holds `# Role` text, never a rule, then a `# Brief` template with `{{slots}}`. Role text says how to do the job: read neighbours, make the smallest change, test what you change. The orchestrator rules and the output contract live in [Skills, Rules and Output](#8-skills-rules-and-output). The agent files and their reader ship in one binary, so a reader never meets a newer `v` than it was built for; an older `v` fails `gate`.
 
-**In plain terms.** The roster is the fixed set of 7 agents and the model size each one uses. The limits table shows the defaults and the ceilings for every agent's time and retry controls. Without fixed weights, an expensive model could be used for cheap work or a weak model for planning. A person may override an agent's model and limits with `komodo config agent <name>`, within the hard limits; the engine applies them.
+#### The 7 agents
 
-| Agent | Weight |
-|---|---|
-| Planner, architect, reviewer | heavy |
-| Builder, researcher | standard |
-| Tester, scout | light |
-
-**What each one does**
-- **Planner, architect, reviewer:** These three run on a heavy model (Opus on Claude links). The planner drafts epics and tasks, the architect proposes options, and the reviewer judges the diff with verified findings.
-- **Builder, researcher:** These two run on a standard model (Sonnet on Claude links). The builder writes code for one task per session; the researcher returns findings with `file:line` references.
-- **Tester, scout:** These two run on a light model (Haiku on Claude links). The tester gives a blind pass or fail per acceptance item; the scout reads and searches paths and can run on a local model.
-
-Three weights are enough for all 7 agents.
-
-| Limit | Default | Hard limit |
+| Agent | Weight | Pool slot |
 |---|---|---|
-| Wall | 60 min | 120 min |
-| Idle | 10 min | 30 min |
-| Retries | 2 per session | 3 |
+| Planner | heavy | No |
+| Architect | heavy | No |
+| Reviewer | heavy | Yes |
+| Builder | standard | Yes |
+| Researcher | standard | No |
+| Tester | light | Yes |
+| Scout | light | No |
 
-**What each one does**
-- **Wall:** The total minutes a session may run: 60 by default for every agent. A person can raise it per agent, but never above 120.
-- **Idle:** The minutes of silence before the nudge: 10 by default. A person can raise it per agent, but never above 30.
-- **Retries:** How many fresh sessions a task gets after a timeout or idle stop: 2 by default. A person can raise it, but never above 3.
+On Claude links heavy runs Opus, standard runs Sonnet and light runs Haiku; on API links the weight also sets `effort`. The exact model identifiers and the fallback to the prior version are in [Providers and HTTP](#7-providers-and-http). `pool_slot` is true for the 3 agents that take one of the 1 to 6 machine-wide session slots; the other 4 run outside the pool.
 
-The chain is fixed in `agent.json`, never in config; `komodo config agent <name>` may change the model and limits only. Tool definitions and role text are the first two prefix parts, identical for every session of an agent.
+| Agent | Tools | Writes |
+|---|---|---|
+| Builder | `read`, `search`, `edit`, `write`, `run`, `skill` | Only the group's `files` and test siblings (rule B1) |
+| Reviewer | `read`, `search`, `skill`, `diff`, `git_read`, `run` (build, test, lint), `submit_finding` | None; `run` may write and the engine resets it |
+| Tester | `read`, `search`, `run` (build and test only) | None; `run` may write and the engine resets it |
+| Planner | `read`, `search`, `skill`, `lint_backlog` | None; the harness writes files only if lint passes |
+| Architect | `read`, `search`, `skill`, `web` (opt-in, read-only GET request) | None |
+| Researcher | Same as architect | None |
+| Scout | `read`, `search` (paths only) | None |
 
-#### Brief builder
+| Agent | Purpose |
+|---|---|
+| Builder | Implements one task per session |
+| Reviewer | Applies lenses, produces verified findings, gives one verdict per task |
+| Tester | Gives a blind pass or fail per acceptance item, with evidence |
+| Planner | Writes the epic outline, then tasks and items per group; runs on `komodo plan` |
+| Architect | Proposes options plus a recommendation; detail goes to `<session>/out/` |
+| Researcher | Answers factual questions about the code, citing `file:line` |
+| Scout | Reads and searches paths; runs on a local model when its chain allows |
 
+No agent has git write tools, forge credentials or a shell. Only the engine runs worktree add and remove, the lease, `commands.setup`, git commit, push and branch, Check, the group pull request, landing and release. No repo-defined agents exist; they wait for a later minor version. [TODO: when the engine runs the architect and the researcher, and when it runs the scout outside job templates (G-NEW-9)]
 
-**In plain terms.** A brief is the full prompt a model session receives: tools, role, repo context, standards and the task. The builder assembles it from cached slices in a fixed order, so provider caches reuse the stable start. It exists so every session of an agent shares identical prefix bytes and only the task part changes. Without it briefs would be re-read from disk, differ per run and miss the cache. The engine builds one before each session.
+#### The brief
 
-#### Assembly order (most stable first)
+A brief has 5 parts, ordered so the parts that change least come first and provider caches reuse the prefix.
 
-**In plain terms.** The order puts what changes least first and the task last. A breakpoint is a provider cache marker; text before it is billed cheaply when reused inside its window. This table lists the five parts, when each changes and its cache window. Without the order, a timestamp early in the brief would invalidate the whole cache.
+| Part | Source | Changes when | Cache |
+|---|---|---|---|
+| 1 Tool definitions | `agent.json` `tools` | The agent changes | 1-hour breakpoint |
+| 2 Role | `prompt.md` `# Role` | The agent changes | With part 1 |
+| 3 Repo context | `AGENTS.md` minus the Komodo block, at the base commit | The repo's base commit changes | 1-hour breakpoint |
+| 4 Standards | Skills, `always` first, then by name | The task's file types change | 5-minute breakpoint |
+| 5 Task | The slots | Every task | 5-minute breakpoint |
 
-| # | Part | Changes when | Source | Cache |
-|---|---|---|---|---|
-| 1 | Tool definitions | The agent changes | `agent.json` `tools` | 1-hour breakpoint |
-| 2 | Role | The agent changes | `prompt.md` `# Role` | with part 1 |
-| 3 | Repo context | The repo's base commit changes | `AGENTS.md` minus the Komodo block, at the base commit | 1-hour breakpoint |
-| 4 | Standards | The task's file types change | Skills, `always` first, then by name | 5-minute breakpoint |
-| 5 | Task | Every task | The slots | 5-minute breakpoint |
+Prompt caching on the `anthropic-api` link uses at most 4 `cache_control` breakpoints in prefix order: tools plus role, repo context, standards, task ([Providers and HTTP](#7-providers-and-http)). No timestamps, identifiers or unsorted maps appear before part 5. No harness rules appear in any part.
 
-**What each one does**
-- **Tool definitions:** The tool list from `agent.json`, identical for every session of an agent, so it sits in the 1-hour cache block.
-- **Role:** The `# Role` text of `prompt.md`, how the agent should work; cached with part 1.
-- **Repo context:** The repo's `AGENTS.md` without the Komodo block, read at the group's base commit; changes only when that commit moves.
-- **Standards:** The preinjected skills, `always` first then by name; changes when the task's file types change, on a 5-minute cache.
-- **Task:** The filled slots for this task; the only part that differs between tasks in a group.
+```go
+// Slot names one hole in the # Brief template.
+type Slot string
 
-No timestamps, IDs or unsorted maps go before the task. No harness rules appear in any part.
+const (
+	RepoContext  Slot = "repo_context"
+	RepoProfile  Slot = "repo_profile"
+	Standards    Slot = "standards"
+	Group        Slot = "group"
+	Tasks        Slot = "tasks"
+	Files        Slot = "files"
+	FileContents Slot = "file_contents"
+	Diff         Slot = "diff"
+	Checks       Slot = "checks"
+	Findings     Slot = "findings"
+	ScopeAnswer  Slot = "scope_answer"
+	Lens         Slot = "lens"
+	Callers      Slot = "callers"
+	Specs        Slot = "specs"
+	Goal         Slot = "goal"
+	Layout       Slot = "layout"
+	Backlog      Slot = "backlog"
+	RepoMap      Slot = "repo_map"
+	Baseline     Slot = "baseline"
+	LensRules    Slot = "lens_rules"
+)
 
-#### Slots (20)
+// Values holds the filled text of each slot; a missing or empty entry is an empty slot.
+type Values map[Slot]string
 
-**In plain terms.** A slot is one named hole in the `# Brief` template of `prompt.md`, filled once by the engine. Each agent marks its slots required or optional in `agent.json`. An empty required slot fails the brief before any model runs; an empty optional slot renders `none`. The table shows the 20 slots and who gets each; a dash means that agent never receives it.
+// Part is one of the 5 brief parts, in assembly order.
+type Part int
 
-`R` required (empty fails the brief); `O` optional (empty renders `none`).
+const (
+	PartTools Part = iota + 1
+	PartRole
+	PartRepoContext
+	PartStandards
+	PartTask
+)
 
-| Slot | Source | Builder | Reviewer | Tester | Planner | Architect, researcher | Scout |
-|---|---|---|---|---|---|---|---|
-| `repo_context` | `AGENTS.md` at base, block stripped | O | O | O | O | O | — |
-| `repo_profile` | Detection: languages, command classes | R | R | R | R | O | — |
-| `standards` | Skills | O | O | O | — | O | — |
-| `group` | Backlog at base: id, title, goal | R | R | R | — | — | — |
-| `tasks` | Backlog at base: id, title, card, `done_when` per task | R | R | R | — | — | — |
-| `files` | The group's `files` list | R | R | — | — | — | — |
-| `file_contents` | Each file in `files` at base; `new file` if absent | R | — | — | — | — | — |
-| `diff` | Base → builder head | O (return) | R | O | — | — | — |
-| `checks` | Check results: command, exit code, failing blocks | O (return) | R | O | — | — | — |
-| `findings` | Open reviewer findings | O (return) | O (re-review) | — | — | — | — |
-| `scope_answer` | The `scope` answer | O (resume) | — | — | — | — | — |
-| `lens` | Lens text | — | R | — | — | — | — |
-| `callers` | Go callers of changed symbols (`go/packages`) | — | O | — | — | — | — |
-| `specs` | Spec anchors and decisions the tasks cite | O | O | — | O | O | — |
-| `goal` | The request | — | — | — | R | R | R |
-| `layout` | Repo tree, paths only | — | — | — | R | R | R |
-| `backlog` | Existing epics and groups | — | — | — | O | — | — |
-| `repo_map` | Ranked symbol graph fitted to 10% of the ceiling | — | O | — | R | R | — |
-| `baseline` | Tests failing at the base commit | — | — | O | — | — | — |
-| `lens_rules` | The applicable lenses' rule catalogs | — | R | — | — | — | — |
+// Brief is the assembled prompt, one text per part.
+type Brief struct {
+	Agent string
+	Parts [5]string
+}
+```
 
-**What each one does**
-- **`repo_context`:** The repo's own guidance from `AGENTS.md` at the base commit, Komodo block stripped. Optional for every agent except the scout, who never gets it.
-- **`repo_profile`:** The engine's detection of languages and command classes. Required for builder, reviewer, tester and planner; optional for architect and researcher.
-- **`standards`:** The skills the loader matched. Optional for all but planner and scout, who never get it.
-- **`group`:** The group's id, title and goal from the backlog at the base commit. Required for builder, reviewer and tester.
-- **`tasks`:** Each task's id, title, card and `done_when` at the base commit. Required for builder, reviewer and tester.
-- **`files`:** The group's declared write scope. Required for builder and reviewer.
-- **`file_contents`:** The text of each file in `files` at base, or `new file`. Required for the builder only.
-- **`diff`:** The change from base to the builder's head. Required for the reviewer; optional for the tester and for a builder on return.
-- **`checks`:** Check's commands, exit codes and failing blocks. Required for the reviewer; optional for the tester and a returned builder.
-- **`findings`:** Open reviewer findings. Optional for a returned builder and for a re-review.
-- **`scope_answer`:** The orchestrator's `scope approve|deny` answer. Optional, builder on resume only.
-- **`lens`:** The text of the review lens this session applies. Required for the reviewer only.
-- **`callers`:** Go callers of changed symbols from `go/packages`. Optional for the reviewer only.
-- **`specs`:** Spec anchors and decisions the tasks cite. Optional for builder, reviewer, planner, architect and researcher.
-- **`goal`:** The person's request. Required for planner, architect, researcher and scout.
-- **`layout`:** The repo tree as paths only. Required for planner, architect, researcher and scout.
-- **`backlog`:** Existing epics and groups. Optional for the planner only.
-- **`repo_map`:** A ranked symbol graph fitted to 10% of the ceiling. Required for planner and architect; optional for the reviewer.
-- **`baseline`:** Tests already failing at the base commit. Optional for the tester only.
-- **`lens_rules`:** The rule catalogs of the applicable lenses. Required for the reviewer only.
+An empty required slot fails the brief before any model runs. An empty optional slot renders `none`. Slots fill in one pass, so a filled value is never expanded again: a value containing `{{task}}` stays literal. The gate fails an unfilled or unknown slot in `prompt.md`.
 
-#### Ceiling per link
+| Slot | Filled from | Required for | Optional for |
+|---|---|---|---|
+| `repo_context` | `AGENTS.md` at base, Komodo block stripped | None | All except scout |
+| `repo_profile` | Detection: languages, command classes | Builder, reviewer, tester, planner | Architect, researcher |
+| `standards` | Skills | None | Builder, reviewer, tester, architect, researcher |
+| `group` | Backlog at base: id, title, goal | Builder, reviewer, tester | None |
+| `tasks` | Backlog at base: id, title, card, `done_when` per task | Builder, reviewer, tester | None |
+| `files` | The group's `files` list | Builder, reviewer | None |
+| `file_contents` | Each file in `files` at base; `new file` if absent | Builder | None |
+| `diff` | Base to the builder's head | Reviewer | Builder (on return), tester |
+| `checks` | Check results: command, exit code, failing blocks | Reviewer | Builder (on return), tester |
+| `findings` | Open reviewer findings | None | Builder (on return), reviewer (re-review) |
+| `scope_answer` | The `scope` answer | None | Builder (on resume) |
+| `lens` | Lens text | Reviewer | None |
+| `callers` | Go callers of changed symbols (`go/packages`) | None | Reviewer |
+| `specs` | Spec anchors and decisions the tasks cite | None | Builder, reviewer, planner, architect, researcher |
+| `goal` | The request | Planner, architect, researcher, scout | None |
+| `layout` | Repo tree, paths only | Planner, architect, researcher, scout | None |
+| `backlog` | Existing epics and groups | None | Planner |
+| `repo_map` | Ranked symbol graph fitted to 10% of the ceiling | Planner, architect, researcher | Reviewer |
+| `baseline` | Tests failing at the base commit | None | Tester |
+| `lens_rules` | The applicable lenses' rule catalogs | Reviewer | None |
 
-**In plain terms.** The ceiling is the largest brief a link accepts: half of the link's measured context window. Measured context is the window size the provider probe reported for that model (see Glossary). No slot has its own cap; the brief either fits or moves to another link. Without this rule a brief would be cut and the model would work from partial facts.
+An agent named in neither column never receives the slot; the scout receives only `goal` and `layout`. [TODO: whether `repo_context` and `standards` are two of the 20 slots rendered into parts 3 and 4, or slots in part 5 that repeat those parts; the slot list and the five-part table both name them, and the `# Brief` template places `repo_profile` between them (G-NEW-6)]
 
-A brief has no per-slot cap. Its only ceiling is half the link's measured context, read before each session.
+**Ceiling per link.** A brief has no per-slot cap. Its only ceiling is half the link's measured context, read before each session.
 
 | Link | Context | Brief ceiling |
 |---|---|---|
-| Claude Opus 5.5, Sonnet 5.5, Fable 5.1 | 1M | 500K |
-| Claude Haiku 4.5 | 200K | 100K |
+| Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1 | 1M | 500K |
+| Claude Haiku 4.5 (the light fallback) | 200K | 100K |
 | OpenAI GPT-5.5 API (later minor) | 1M | 500K |
 | OpenAI GPT-5.5 Codex (later minor) | 400K | 200K |
 | Local floor: Qwen3.6-27B, Kimi K2.6 class | 262,144 | 131K |
 
-**What each one does**
-- **Claude Opus 5.5, Sonnet 5.5, Fable 5.1:** 1M context, so briefs up to 500K tokens.
-- **Claude Haiku 4.5:** 200K context, briefs up to 100K; the light-weight link.
-- **OpenAI GPT-5.5 API (later minor):** 1M context, 500K ceiling.
-- **OpenAI GPT-5.5 Codex (later minor):** 400K context, 200K ceiling.
-- **Local floor: Qwen3.6-27B, Kimi K2.6 class:** The smallest supported local model class, 262,144 context and a 131K ceiling.
-
 Over the ceiling, the brief goes to the next link in the chain that fits; none left, Blocked `context`. Nothing is cut to fit.
 
-#### Context rules
+#### The session folder
 
-**In plain terms.** Context rules say what goes into a brief and where it comes from. Everything is engine-produced fact; no worker ever reads another worker's prose. Trimming shrinks size without dropping facts. Without these rules a reviewer could inherit a builder's claims and grade them instead of the code.
+One folder per session under `sessions/<id>/`. The supervisor writes the brief, the request and the result.
 
-- Trimming: Go signature trimming, delta-only diffs on re-review, ANSI and build noise stripped; assembled from cache slices, never by re-reading files.
-- Reviewer context comes from the engine only: the task list at the base commit, `done_when`, spec anchors, the diff, Check results, prior findings. Never builder prose.
-- Tester context comes from the engine only: the task list and acceptance items at the base commit, the diff, Check results, allowed commands. A restart adds Go's rerun of the disputed item.
-- Callers: Go via `go/packages`; other languages find callers with `search`.
-- Repo context: the repo's `AGENTS.md` without the Komodo block, read from the group's base commit. It extends the harness per repo and is never a harness rule; the harness enforces its own limits regardless.
+| File | Written by | Holds |
+|---|---|---|
+| `brief.md` | Supervisor, once | The prompt the model received |
+| `request.json` | Supervisor | How the session was launched |
+| `stream.jsonl` | Observability | The model's raw output stream |
+| `messages.jsonl` | The tool runtime's API loop | Every turn on API links, for resume |
+| `result.json` | Supervisor | The exit reason and the result |
+| `out/` | The tool runtime | Full tool outputs that were cut to 4 KB in the reply |
 
-#### Scenario: one session, end to end
+[TODO: the fields of `request.json` and `result.json`, and the arguments of the `spawn` action (G-30)] [TODO: which parts `brief.md` holds, and who writes and what `system.md` and `mcp.json` hold in the same folder (G-NEW-7)]
 
-**In plain terms.** A session is one fresh model conversation for one task (see Glossary). This scenario follows one from the moment the engine decides to start it to the commit it leaves behind. The engine first measures the model's capacity, builds the brief to fit it, checks billing, and then launches the model with a private tool server. The model works by calling tools, each checked by the guard and run in the sandbox, and ends with one structured result Go validates. Without this sequence a model could run unchecked tools, overflow its context, or bill a paid account by mistake.
+The resume handle of the group's last session is stored in `state.json` as `ResumeRef`, with the session, handle and link ([Event Spine and State Machine](#23-data-model)).
 
+**The two injected lines.** The engine computes the number of minutes in the first line.
+
+```text
+Finish the current task and stop; 12 minutes remain
+Report status or stop now; the harness will ask for your result
+```
+
+### 5.4 Interfaces
+
+#### Agent registry
+
+The registry decodes the 7 agents once per process and never rereads `embed/`. Cross-checks that need the guard rows and the tool registry receive them as parameters, because `agent` sits below `safety` and `tools` in the import order.
+
+```go
+// Known holds the names the registry checks agent files against.
+type Known struct {
+	GuardRows map[string]bool // row identifiers in policy.json
+	Tools     map[string]bool // tools registered in the tool runtime
+}
+
+// Registry holds the decoded agents.
+type Registry struct{ agents map[string]Agent }
+
+// Load decodes every embed/agents/<name>/agent.json strictly and cross-checks the 7 agents.
+func Load(fsys fs.FS, known Known) (*Registry, error)
+
+// Agent returns the named agent; false means the name is not one of the 7.
+func (r *Registry) Agent(name string) (Agent, bool)
+```
+
+| Call | Error | What it means and what the caller does |
+|---|---|---|
+| `Load` | Unknown field in an `agent.json` | `DisallowUnknownFields` rejects it; `gate` fails and the binary does not ship |
+| `Load` | Two agents share a `result` `$id` | `gate` fails |
+| `Load` | A `guard` row absent from `policy.json` | `gate` fails |
+| `Load` | A `tools` entry not registered in the tool runtime | `gate` fails |
+| `Load` | A `chain` with no free `http:` endpoint, or a `v` older than 1 | `gate` fails |
+| `Agent` | `false` | A verb refuses; no repo-defined agents exist |
+
+#### Brief builder
+
+The builder fills the template from values the caller produced, assembles the 5 parts and reports the size. The caller supplies the token counter.
+
+```go
+// Counter returns the token count of a text.
+type Counter func(text string) int
+
+// Builder assembles briefs from the registry's agents.
+type Builder struct{ reg *Registry }
+
+// Build fills the agent's template from v and assembles the 5 parts.
+func (b *Builder) Build(agent string, v Values) (Brief, error)
+
+// Tokens returns the size of all 5 parts, counted with count.
+func (br Brief) Tokens(count Counter) int
+
+// Ceiling returns the largest brief a link of this measured context accepts.
+func Ceiling(ctx int) int { return ctx / 2 }
+
+// Candidate is one link of the agent's chain with its measured context.
+type Candidate struct {
+	Link string
+	Ctx  int
+}
+
+// ErrContext means no link in the chain has a ceiling that holds the brief.
+var ErrContext = errors.New("brief exceeds half the measured context of every link in the chain")
+
+// Place returns the first candidate, in chain order, whose ceiling holds the brief.
+func (br Brief) Place(chain []Candidate, count Counter) (Candidate, error)
+
+// EmptySlotError names the required slot that had no value.
+type EmptySlotError struct{ Slot Slot }
+
+// Error returns the failure with the slot named.
+func (e EmptySlotError) Error() string { return "required slot " + string(e.Slot) + " is empty" }
+```
+
+| Call | Error | What it means and what the caller does |
+|---|---|---|
+| `Build` | `EmptySlotError` | A required slot is empty; no model runs and the task fails with the slot named |
+| `Build` | Unknown agent | The name is not in the registry; a programming error |
+| `Place` | `ErrContext` | No link holds the brief; the group is Blocked `context` and nothing is cut |
+
+[TODO: how tokens are counted for the ceiling check (G-NEW-4)] [TODO: whether the brief builder or the provider router walks the chain to the next link that fits; the design says the brief builder, while Providers and HTTP derives a router call that takes the brief's token count (G-NEW-14)]
+
+#### Session supervisor
+
+The supervisor reads a provider stream until its result and applies the clocks. The types `provider.Stream`, `provider.Event`, `provider.Result` and `provider.StopLevel` belong to [Providers and HTTP](#7-providers-and-http).
+
+```go
+// Timer and ladder constants of one session.
+const (
+	TickEvery   = 15 * time.Second // one timer per session checks wall, idle and the warning
+	WarnPercent = 80               // share of the wall limit that triggers the time warning
+	IdleGrace   = 5 * time.Minute  // time a nudged session has before the stop ladder
+	TermAfter   = 30 * time.Second // from SIGINT to SIGTERM
+	KillAfter   = 60 * time.Second // to the whole-tree kill
+)
+
+// SessionLimits are the resolved clocks of one session.
+type SessionLimits struct {
+	Wall time.Duration
+	Idle time.Duration
+}
+
+// Clocks is everything one timer tick reads about a session.
+type Clocks struct {
+	Started      time.Time     // when the session was spawned
+	PausedFor    time.Duration // time the group spent Paused, excluded from wall
+	LastLine     time.Time     // last stream line or tool call
+	RetryUntil   time.Time     // end of a retry delay announced by an api_retry line
+	ToolsRunning int           // tool calls in flight
+	Warned       bool          // the time-warning line was sent
+	NudgedAt     time.Time     // zero until the nudge was sent
+}
+
+// TickAction is what one timer tick decides.
+type TickAction int
+
+const (
+	TickNone        TickAction = iota
+	TickWarn                   // inject the time-warning line
+	TickNudge                  // inject the nudge and start the grace
+	TickStopTimeout            // climb the stop ladder, exit reason timeout
+	TickStopIdle               // climb the stop ladder, exit reason idle
+)
+
+// Tick decides what one timer tick does; it reads the clocks and touches nothing else.
+func (c *Clocks) Tick(now time.Time, lim SessionLimits) TickAction
+
+// Supervise reads one stream to its Result, injecting lines and stopping the session as the clocks decide.
+func Supervise(ctx context.Context, s provider.Stream, lim SessionLimits, c *Clocks) (provider.Result, state.Reason, error)
+```
+
+| Caller | Call | When |
+|---|---|---|
+| `Drive` | `spawn` action | Build and Verify order a session; the session identifier is recorded in `action.start` first |
+| `Drive` | `spawn` action from a resume handle | A pause ends, `resume` runs, or a `needs_scope` answer arrives |
+| `Drive` | `cancel` action | The first verified Verify finding, a pause past `limits.pause_max_min`, or `abandon` |
+| Supervisor | `Provider.Start`, `Provider.Resume` | Spawn and resume |
+| Supervisor | `Stream.Next`, `Stream.Inject`, `Stream.Stop` | Reading lines, the time warning and nudge, the stop ladder |
+| Supervisor | Events `session.start`, `task.claimed`, `session.idle`, `session.timewarn`, `session.end`, `task.released` | Each is a fact handed to `Drive` ([Event Spine and State Machine](#2-event-spine-and-state-machine)) |
+
+Failure behaviour: `Supervise` returns the exit reason it recorded and an error only when the stream or the stop ladder itself fails. [TODO: the signature and arguments of the `spawn` and `cancel` entry points (G-30)] [TODO: the data of each `session.*` event (G-24)] [TODO: how the tool server's events, such as a tool call starting and ending, reach the engine so `ToolsRunning` and the heartbeat are known (G-NEW-2)] [TODO: how `SessionLimits` is resolved from `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` (G-NEW-12)]
+
+### 5.5 Behaviour
+
+#### Walkthrough
+
+One builder session for one task, from the `spawn` action to the commit. The builder runs on `claude-cli` with Sonnet 5.5, whose 1M window gives a 500K ceiling.
+
+**📐 One session, end to end**
 ```mermaid
 sequenceDiagram
-  participant E as Engine (Drive)
+  autonumber
+  participant E as Engine
   participant B as Brief builder
   participant P as Provider adapter
   participant M as Model session
-  participant T as Tool runtime + guard + sandbox
-  participant C as Check
-  E->>P: capacity profile for the link (ctx, slots, cost_class, effort)
-  E->>B: fill 20 slots, fit under half of ctx
-  E->>P: billing check (fail closed), spawn with brief
-  P->>M: claude -p with private MCP, or Go tool loop
+  participant T as Tools and guard
+  participant K as Check
+  E->>P: capacity profile
+  E->>B: fill slots, size brief
+  B-->>E: brief within 500K
+  E->>P: billing check, Start
+  P->>M: claude -p, private tool server
   loop until a text-only reply
     M->>T: tool call
-    T->>T: guard (fail-closed), sandbox for run
     T-->>M: capped result
   end
-  M->>P: final call: result schema only
-  P->>E: Go re-validates the result (1 re-prompt)
-  E->>C: rerun done_when
-  E->>E: commit to hidden ref with fence, record task.done
+  M->>P: final call, result schema
+  P-->>E: Result, re-validated by Go
+  E->>K: rerun done_when
+  E->>E: commit to hidden ref, task.done
 ```
 
-**Reading the diagram.** Six participants: the engine's `Drive`, the brief builder, the provider adapter, the model session, the tool runtime with guard and sandbox, and Check. First the engine asks the provider adapter for the link's capacity profile: context size, slots, cost class and effort. It then asks the brief builder to fill the 20 slots and fit the brief under half that context. Next it asks the adapter to run the billing check, which fails closed, and to spawn the session with the brief. The adapter launches `claude -p` with a private MCP (Model Context Protocol, how a model calls tools) tool server, or runs Go's own tool loop for API links. In the loop, the model makes a tool call. The runtime applies the guard, runs any `run` command in the sandbox, and returns a capped result. This repeats until the model replies with text only. The model then makes one final call that returns only its result schema. The adapter hands it to the engine, which re-validates it and allows one re-prompt. The engine asks Check to rerun `done_when`, then commits to the hidden ref with the fence and records `task.done`.
+1. `Drive` runs the `spawn` action for the task. The session identifier was recorded in `action.start` before this step, so a repeated spawn with a live identifier does nothing ([Event Spine and State Machine](#2-event-spine-and-state-machine)).
+2. The engine asks the provider adapter for the link's capacity profile `{ctx, slots, cost_class, effort}`. Context is measured: the Models API `max_input_tokens`, Ollama's `/api/ps`, or the endpoint's declared `ctx`.
+3. The brief builder fills the builder's slots, assembles the 5 parts and sizes the brief against half the measured context. A brief of up to 500K tokens is accepted.
+4. The engine runs the billing check, which fails closed, and starts the session. The supervisor writes `brief.md` once, records `request.json`, and emits `session.start` together with `task.claimed`.
+5. The adapter runs `claude -p` with the private tool server; on an API link, Go runs the tool loop. Every call passes the guard first, and `run` executes in the sandbox with no shell and no network.
+6. The model works until it replies with text only. The supervisor meanwhile reads each stream line as a heartbeat.
+7. The model makes one final call that returns only the result schema. The provider enforces the schema, Go re-validates it, and one re-prompt is allowed before the task fails.
+8. The agent's own gate runs: `done_when` for a builder, `lint_backlog` for a planner. Two rejected results end the session with `check_fail`.
+9. A writing session ends with a work-in-progress commit to the hidden ref, by compare-and-swap with the fence. The supervisor writes `result.json` and emits `session.end` with the exit reason. [TODO: whether the session-end work-in-progress commit is the inline `session.end` hook or the `wip_commit` action that `Next()` orders when it handles `session.end` (G-NEW-13)]
+10. Check reruns `done_when`, the `commit` action writes the hidden ref and `Next()` records `task.done` ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)).
 
-| Step | Rule |
+#### Algorithms
+
+**Load the registry**
+1. Read `embed/agents/<name>/agent.json` for each of the 7 names.
+2. Decode with `DisallowUnknownFields`; an unknown field fails.
+3. Check that no two agents share a `result` `$id`, every `guard` row exists in `policy.json`, and every `tools` entry is registered.
+4. Check that each `chain` ends in a free `http:` endpoint and each `v` is current.
+5. Check that `prompt.md` has no unfilled or unknown slot.
+6. Keep the decoded agents for the process lifetime.
+
+**Assemble and size a brief**
+
+**📐 How a brief is assembled and placed**
+```mermaid
+flowchart TB
+  A["1 Tool definitions"] --> B["2 Role"]
+  B --> C["3 Repo context"]
+  C --> D["4 Standards"]
+  D --> E["5 Task slots"]
+  E --> F{"Within half the context?"}
+  F -->|"yes"| G["brief.md written once"]
+  F -->|"no"| H{"Another link fits?"}
+  H -->|"yes, next link"| F
+  H -->|"none left"| I["Blocked context"]
+```
+
+1. Take the agent from the registry and read its required and optional slot lists.
+2. For each required slot with no value, fail with the slot named. For each empty optional slot, render `none`.
+3. Fill the `# Brief` template in one pass. Never expand a filled value.
+4. Build part 3 from `AGENTS.md` at the group's base commit with the Komodo block removed. It extends the harness per repo and is never a harness rule; the harness enforces its own limits regardless.
+5. Build part 4 from the skills: `always` first, then by name, matched to the task's file types.
+6. Keep timestamps, identifiers and unsorted maps out of parts 1 to 4, so two sessions of one agent share every prefix byte; a Go task and a TypeScript task in one repo share every byte up to the standards.
+7. Size the brief and compare it with `Ceiling` of the link's measured context. Over it, move once to the next link in the chain that fits; none left, Blocked `context`. Nothing is cut to fit.
+8. Hand the brief to the supervisor, which writes it once to `<session>/brief.md` and pipes it from there, so a retry never rebuilds it.
+
+Trimming shrinks size without dropping facts: Go signature trimming, delta-only diffs on re-review, and stripped terminal color codes and build noise. Briefs are assembled from cache slices, never by rereading files. The `repo_map` slot is fitted to 10% of the ceiling by dropping the lowest-ranked symbols.
+
+**Context rules**
+- Reviewer context comes from the engine only: the task list at the base commit, `done_when`, spec anchors, the diff, Check results and prior findings. Never builder prose.
+- Tester context comes from the engine only: the task list and acceptance items at the base commit, the diff, Check results and allowed commands. A restart adds Go's rerun of the disputed item.
+- Callers: Go finds them with `go/packages`; other languages find callers with `search`.
+- Repo context is read from the base commit, so a builder that edits `AGENTS.md` in its worktree cannot change its own guidance.
+
+**Run the timer**
+
+**📐 What one timer tick decides**
+```mermaid
+flowchart TB
+  T["Every 15 s"] --> P{"Group paused?"}
+  P -->|"yes"| N0["Clocks stand still"]
+  P -->|"no"| W{"Wall limit reached?"}
+  W -->|"yes"| S1["Stop ladder: timeout"]
+  W -->|"no"| H{"80% of wall, not warned?"}
+  H -->|"yes"| W1["Inject time warning"]
+  H -->|"no"| I{"Silent past idle limit?"}
+  W1 --> I
+  I -->|"no"| E0["Wait for next tick"]
+  I -->|"yes, not nudged"| NG["Inject nudge, start grace"]
+  I -->|"yes, grace over"| S2["Stop ladder: idle"]
+```
+
+Liveness is events, never pings. A session is alive while its stream produces lines, while a tool call runs, or until the `retry_delay_ms` of an `api_retry` line has passed. On API links the network stream-idle timer is the heartbeat. The nudge is injected through the open standard input of `claude -p --input-format stream-json`, or added to the next API turn.
+
+1. One timer per session wakes every 15 s. A warning, nudge or kill therefore lands at most 15 s late.
+2. While the group is Paused, wall and idle clocks stop; skip the tick.
+3. If wall used has reached the wall limit, climb the stop ladder with reason `timeout`.
+4. If wall used has reached 80% and no warning was sent, inject the time-warning line once.
+5. If the session has been silent for the idle limit with no running tool, and was not nudged, inject the nudge and start the 5-minute grace.
+6. If it was nudged, the grace is over and no stream line arrived, climb the stop ladder with reason `idle`.
+7. A stream line or tool call at any point resets the idle clock.
+
+A nudge cannot reach a model turn that is stuck inside a tool call. Delivery in that case is best effort, decided in G-14, and the proof accepts a late nudge. [TODO: whether a session that speaks after the nudge and goes silent again gets a second nudge (G-NEW-10)]
+
+**Stop a session**
+
+**📐 How the stop ladder escalates**
+```mermaid
+flowchart LR
+  A["1 SIGINT: ends turn, keeps result"] -->|"after 30 s"| B["2 SIGTERM"]
+  B -->|"after 60 s"| C["3 Whole-tree kill"]
+```
+
+1. Send `SIGINT`, the interrupt signal. It ends the current turn and keeps its result.
+2. After 30 s, if the session is alive, send `SIGTERM`, the terminate signal.
+3. After 60 s, kill the whole process tree. [TODO: whether the 60 s counts from the `SIGINT` or from the `SIGTERM` (G-NEW-11)]
+4. On API links, cancel the request context once the current tool call returns.
+5. Each session runs in its own process group on Unix or Job Object on Windows, so killing the group ends every child process the model started.
+6. Write `result.json` with the exit reason, including the partial result of a turn that `SIGINT` ended, and emit `session.end`.
+
+**Resume a session**
+
+**📐 How resume continues or restarts**
+```mermaid
+flowchart TB
+  R["resume or scope answer"] --> H{"Provider handle works?"}
+  H -->|"yes"| C["Same conversation continues"]
+  H -->|"no"| F["Fresh session"]
+  F --> L["Ledger logs resume_lost"]
+```
+
+1. A person or the orchestrator runs `resume <run>`, or a paused group's timer fires. Read the resume handle from `state.json`.
+2. On `claude-cli`, run `--resume <uuid>` with `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` and the return input on standard input. On API links, replay the saved `messages.jsonl`.
+3. If the resume fails, start a fresh session with the brief, the work-in-progress diff and the last builder `summary`, and log `resume_lost` in the ledger.
+4. When a paused group's timer fires, the same steps run from the handle. A `resume` before the provider's reset time is refused at 0 turns and the session pauses again ([Providers and HTTP](#7-providers-and-http)).
+
+### 5.6 State
+
+A session moves through the states below. Its exit reason is fixed when it enters Stopping or Ended, and `status` shows it to a person.
+
+**📐 Session states**
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Alive: spawn
+  Alive --> Silent: no line, no tool
+  Silent --> Alive: line or tool call
+  Silent --> Nudged: idle limit
+  Nudged --> Alive: stream line
+  Nudged --> Stopping: grace over
+  Alive --> Stopping: wall limit, cancel
+  Alive --> Paused: group paused
+  Paused --> Alive: timer due
+  Alive --> Ended: result, halt, crash
+  Stopping --> Ended: ladder done
+  Ended --> [*]: result.json written
+```
+
+| State | Event | Next | True after |
+|---|---|---|---|
+| Alive | Stream line or tool call | Alive | The idle clock restarted |
+| Alive | 80% of wall used | Alive | One time-warning line injected, once |
+| Alive | No line and no running tool | Silent | The idle clock runs |
+| Silent | Idle limit reached | Nudged | One nudge injected; the 5-minute grace runs |
+| Nudged | Stream line | Alive | The session recovered |
+| Nudged | Grace over | Stopping | Reason `idle` |
+| Alive | Wall limit reached | Stopping | Reason `timeout` |
+| Alive | `cancel` action | Stopping | Reason `cancelled` or `pause_timeout` |
+| Alive | Group paused | Paused | Wall and idle clocks stopped |
+| Paused | `timer.due` | Alive | Clocks run again |
+| Alive | Valid result, refusal, budget, provider halt, billing, crash | Ended | The reason is fixed |
+| Stopping | `SIGINT`, `SIGTERM` or kill finished | Ended | No child process remains |
+| Ended | Reason `paused` | Alive (resumed) | The provider's handle is tried first |
+| Ended | Reason `timeout` or `idle` | Alive (fresh session) | A new session for the task, up to the agent's `retries` |
+
+After `Ended`, `Next()` decides the group's move from the exit reason ([Event Spine and State Machine](#26-state-and-transitions)). [TODO: which component counts a timeout or idle stop against the agent's `retries` (G-NEW-3)]
+
+#### Exit reasons
+
+| Reason | Set when | The engine then |
+|---|---|---|
+| `done` | The session finished and returned a valid result | Records the task done; the group's stage continues |
+| `needs_scope` | A builder asked for a file outside its list (rule B1) | Makes a work-in-progress commit, keeps the lease, blocks the group `needs_scope`; `scope approve` or `scope deny` answers and the same session resumes |
+| `check_fail` | The result failed the agent's gate twice: `done_when` for a builder, `lint_backlog` for a planner | Counts a task attempt and retries the task |
+| `no_result` | The reply was cut at the output limit and one "continue" did not finish it, or the conversation outgrew the link's context | Counts a task attempt and retries the task |
+| `schema_fail` | The final result broke the result schema after the one allowed re-prompt | Counts a task attempt and retries the task |
+| `timeout` | The wall limit was hit and the ladder stopped the session | Starts a fresh session, up to the agent's `retries` |
+| `idle` | The session stayed silent past the nudge and 5 minutes of grace | Starts a fresh session, up to the agent's `retries` |
+| `refusals` | The guard refused the same rule 3 times in one session (rule G6) | Retries the task |
+| `budget` | `limits.group_tokens` was spent; applies only when `track.usage` is on | Stops and blocks the group `budget` |
+| `provider` | The provider reported a rate limit or billing error on its retry line and the chain still has an allowed link | Keeps the resume handle; the next session starts on the next allowed link, usually the free backstop |
+| `billing` | The first stream line showed a paid API key instead of the subscription login | Kills the session before its first turn; blocks the group `paid_refused` |
+| `paused` | A provider limit halted the session, no other link is left, and a resume handle exists | Waits on a disk timer until the provider's reset time, then resumes on its own |
+| `pause_timeout` | The session stayed paused longer than `limits.pause_max_min` (360 minutes) | Cancels it, keeps its work-in-progress commit, blocks the group `pause_timeout` |
+| `cancelled` | The engine killed it on purpose: the tester after the first verified Verify finding, or `abandon` | Acts by cause; Build restarts after a Verify failure |
+| `crash` | The session died without reporting and the startup sweep found it dead | The sweep records the reason and releases the task so it can run again |
+
+### 5.7 Invariants and Failures
+
+**Invariants**
+1. The session identifier is chosen by Komodo and recorded before the spawn, so the resume handle is known before the session ends.
+2. The brief is written once to `<session>/brief.md` before the model starts; a retry never rebuilds it.
+3. Liveness is events, never pings: no heartbeat message is ever sent to a session.
+4. Every session ends with exactly one of the 15 exit reasons, in `result.json` and on the `session.end` event.
+5. Parts 1 to 4 of a brief hold no timestamps, identifiers or unsorted maps, and no part holds a harness rule.
+6. A brief over the ceiling is never cut; it moves to another link or blocks `context`.
+7. A reviewer's or tester's brief holds 0 bytes of the builder's prose.
+8. Wall and idle clocks do not run while the group is Paused.
+
+**Failures: session supervisor**
+
+| Situation | Detected by | Behaviour |
+|---|---|---|
+| Session silent past the idle limit | Timer tick | Nudge, 5-minute grace, ladder, reason `idle`; fresh session up to `retries` |
+| Wall limit reached | Timer tick | Ladder, reason `timeout`; fresh session up to `retries` |
+| Nudge to a turn stuck in a tool call | Best effort | May land late; the proof accepts it (G-14) |
+| Orphan child processes | Process group or Job Object kill | Killing the group ends every child; Windows Job Objects have no proof case and are unproven |
+| Provider limit with a link left | `api_retry` line | Reason `provider`; next session on the next allowed link |
+| Provider limit, no link left | Provider layer | Reason `paused`; disk timer until the reset time |
+| Resume handle fails | Resume error | Fresh session with the brief, the work-in-progress diff and the last `summary`; ledger logs `resume_lost` |
+| Session died without a report | Startup sweep ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)) | Reason `crash`; task released |
+
+[TODO: which component owns the session pool slots (G-NEW-5)]
+
+The pause cap, an early `resume` before the provider reset and a planted `CLAUDE.md` are owned by [Providers and HTTP](#7-providers-and-http).
+
+**Failures: registry and brief builder**
+
+| Situation | Detected by | Behaviour |
+|---|---|---|
+| Unknown field in `agent.json` | Strict decode | `gate` fails |
+| Unfilled or unknown slot in `prompt.md` | `gate` | `gate` fails |
+| Empty required slot | `Build` | Brief fails with the slot named |
+| Brief exceeds half the measured context | `Place` | Next link that fits; none left, Blocked `context`; nothing is trimmed |
+| A steering phrase in the repo's `AGENTS.md` | `doctor` | `doctor` warns; the brief still loads |
+| Broken Komodo block markers in `AGENTS.md` | `doctor` | The whole addendum is dropped from briefs; `doctor` reports it |
+| The builder edits `AGENTS.md` mid-run | Base commit read | Its next brief still carries the base-commit text |
+
+### 5.8 Configuration and Constants
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `limits.session_wall_min` | int | 60 min, hard limit 120 min | Most minutes one session runs; warning at 80% |
+| `limits.session_idle_min` | int | 10 minutes, hard limit 30 min | Minutes of silence before the nudge; a 5-minute grace follows |
+| `limits.task_attempts` | int | 6, hard limit 10 | Model attempts per task; every `retries` restart counts |
+| `limits.pause_max_min` | int | 360, hard limit 1,440 | Longest a session stays paused |
+| `limits.group_tokens` | int | 2,000,000, hard limit 10,000,000 | Token cap; applies only when `track.usage` is on |
+| `agents.<name>.model` | string | The weight's model | Where the agent's chain starts; the chain itself is fixed |
+| `agents.<name>.session_wall_min` | int | The flat key, hard limit 120 | Beats the flat key for this agent |
+| `agents.<name>.session_idle_min` | int | The flat key, hard limit 30 | Beats the flat key for this agent |
+| `agents.<name>.retries` | int | 2, hard limit 3 | Fresh sessions after a timeout or idle stop, inside `limits.task_attempts` |
+
+`komodo config` refuses a value above a hard limit. The chain is fixed in `agent.json`, never in config; `komodo config agent <name>` may change the model and the limits only. In the command, the per-agent keys are written `session_wall_min` and `session_idle_min`, without the `limits.` prefix. The keys are defined in [CLI and Configuration](#1-cli-and-configuration); `komodo config agent` is the verb group that sets the per-agent keys. This command stores the section below in `~/.komodo/config.json`:
+
+```sh
+komodo config agent reviewer model=sonnet session_wall_min=90 retries=3
+```
+
+```json
+{
+  "agents": {
+    "reviewer": {
+      "model": "sonnet",
+      "session_wall_min": 90,
+      "retries": 3
+    }
+  }
+}
+```
+
+| Constant | Value |
 |---|---|
-| Capacity profile | Context is measured, not typed: Models API `max_input_tokens`, Ollama `/api/ps`, or the endpoint's declared `ctx`. |
-| Brief | Order is tools, role, repo context, standards, task. The brief must fit in half the measured context; over that, the next link in the chain that fits; none left, Blocked `context`. |
-| Billing | `claude auth status --json` sets the cost class; the env is scrubbed of API keys; the first stream line must say `apiKeySource: "none"` or the session is killed before turn 1. |
-| Tools | Only the agent's listed tools are advertised. Every call passes the guard; `run` executes in the sandbox with no shell and no network. |
-| Result | The provider enforces the schema, then Go re-validates. One re-prompt, then the task fails. The agent's own gate (`done_when`, `lint_backlog`) runs next; two rejected results end the session with `check_fail`. |
-| Commit | Every writing session ends in a WIP commit to the hidden ref by compare-and-swap with the fence. |
+| Timer interval | 15 s per session |
+| Time warning | 80% of wall |
+| Nudge grace | 5 minutes |
+| Stop ladder | `SIGINT`, `SIGTERM` after 30 s, whole-tree kill after 60 s |
+| Brief ceiling | Half the link's measured context |
+| `repo_map` size | 10% of the ceiling |
+| Cache breakpoints | At most 4; 1 hour before 5 minutes |
+| Pool slots | 1 to 6 per machine |
+| Slots per brief | 20 |
+| Agents | 7 |
 
-**What each one does**
-- **Capacity profile:** Before each session the engine measures the context the link really runs, rather than trusting a typed number. The source is the Models API `max_input_tokens` for Claude, Ollama's `/api/ps` for a local model, or the endpoint's declared `ctx`. Every brief and token count uses that number.
-- **Brief:** The brief is assembled in a fixed order (tools, role, repo context, standards, task) so the stable parts come first. It must fit in half the measured context. If not, the task goes to the next link in the chain that fits; with none left the group blocks with `context`.
-- **Billing:** Go runs `claude auth status --json` to set the cost class and scrubs API keys from the session's environment. The first stream line must say `apiKeySource: "none"`; anything else kills the session before its first model turn. So a subscription session never bills an API key.
-- **Tools:** The model sees only the tools listed in its `agent.json`. Every call passes the guard first, and a `run` call executes the named command class in the sandbox with no shell and no network.
-- **Result:** The provider enforces the result schema, then Go re-validates it; one re-prompt is allowed before the task fails. Next the agent's own gate runs, `done_when` for a builder or `lint_backlog` for a planner; two rejected results end the session with `check_fail`.
-- **Commit:** Every session that writes ends with a WIP commit to the hidden ref, applied by compare-and-swap with the fence so git refuses a stale holder.
+### 5.9 Proof Cases
 
-#### Agent roster
-
-
-**In plain terms.** An agent is a role a model session plays, with its own tools and limits (see Glossary). Seven exist, and this table says what each may read, write and run. "Pool slot" means the agent takes one of the 1 to 6 machine-wide session slots (see Glossary); agents without one run outside the pool. No agent can touch git or the network on its own; the engine does all of that. The engine starts agents as stages need them; a person changes only their model and time limits.
-
-| Agent | Weight | Tools | Writes | Pool slot | Purpose |
-|---|---|---|---|---|---|
-| Builder | Standard | `read`, `search`, `edit`, `write`, `run`, `skill` | Only the group's `files` and test siblings (B1) | Yes | Implements one task per session |
-| Reviewer | Heavy | `read`, `search`, `skill`, `diff`, `git_read`, `run` (build, test, lint (an automatic rule check)), `submit_finding` | None; `run` may write and the engine resets it | Yes | Lenses, verified findings, one verdict per task |
-| Tester | Light | `read`, `search`, `run` (build and test only) | None; `run` may write and the engine resets it | Yes | Blind pass or fail per acceptance item, with evidence |
-| Planner | Heavy | `read`, `search`, `skill`, `lint_backlog` | None; the harness writes files only if lint passes | No | Epic outline, then tasks and items per group |
-| Architect | Heavy | `read`, `search`, `skill`, `web` (opt-in, GET) | None | No | Options plus a recommendation |
-| Researcher | Standard | Same as architect | None | No | Findings with `file:line` |
-| Scout | Light | `read`, `search` (paths only) | None | No | Runs on a local model when its chain allows |
-
-**What each one does**
-- **Builder:** Writes the code for one task per session, inside the group's worktree. It reads the brief: the task, rules, skills and repo context. It may edit only the files the task names plus their test files; needing another file stops it with `needs_scope`. It produces a code change that the engine commits to the hidden ref. The engine runs one builder per task, in order, during Build.
-- **Reviewer:** Reads the group's diff and applies ten lenses, rule catalogs scoped by file type (see Glossary). It produces findings, each with a rule ID, a `file:line` and a quoted evidence line that Go verifies, plus one verdict per task. It may run build, test and lint; any file it changes is reset by the engine. The engine runs it during Verify, after the builder's session has ended.
-- **Tester:** Checks each acceptance item (a requirement in EARS form, see Glossary) by running build and test commands. It reports pass or fail per item, with evidence. It is blind: it works in its own throwaway worktree and cannot read the builder's. The engine runs it during Verify, at the same time as the reviewer, on the same commit.
-- **Planner:** Turns a goal or spec into the backlog. A heavy pass drafts the epic outline (groups, goals, file globs and dependencies); a standard pass per group drafts tasks and acceptance items. It writes nothing itself: the engine writes the files only when Go's lint passes. It runs on `komodo plan`.
-- **Architect:** Reads the repo and the repo map, and may fetch allowed web pages (GET only, opt-in). It produces a set of options with one recommendation; the detail goes to `<session>/out/`. When the engine runs it: [UNKNOWN: not yet designed].
-- **Researcher:** Has the architect's tools and answers factual questions about the code, citing every finding as `file:line`. It writes nothing. When the engine runs it: [UNKNOWN: not yet designed].
-- **Scout:** The cheapest agent: it can only read files and search for paths, never write. It is meant to run on a free local model when its chain allows. The LLD's example job template `nightly-review` pairs it with the reviewer every 24 hours. Outside job templates, when the engine runs it is [UNKNOWN: not yet designed].
-
-No agent has git write tools, forge credentials or a shell. Only the engine runs worktree add and remove, the lease, `commands.setup`, git commit, push and branch, Check, the group PR, landing and release. No repo-defined agents exist; they wait for a later minor.
-
----
-
-| Brief exceeds half the measured context | Next link that fits; none left, Blocked `context`; nothing is trimmed |
-| A steering phrase in the repo's `AGENTS.md` | `doctor` warns; the brief still loads |
-| Broken Komodo block markers in `AGENTS.md` | The whole addendum is dropped from briefs; `doctor` reports it |
-| The builder edits `AGENTS.md` mid-run | Its next brief still carries the base-commit text |
-**Agent registry ([Agent registry (Appendix F)](#agent-registry))**
-- An unknown field, an unfilled slot or an unknown slot fails `gate`.
-- A slot value containing `{{task}}` stays literal.
-- An agent override above a hard limit is refused by `komodo config`.
-- An `agent.json` chain without a free endpoint fails `gate`.
-- A `guard` row ID absent from `policy.json` fails `gate`.
-- A `guard` tool absent from the tool runtime's registry fails `gate`.
-
-**Brief builder ([Brief builder (Appendix F)](#brief-builder))**
-- The fixture prefix hashes the same across 2 runs (gate test).
+**Unit**
+- `Tick` with a fixture session silent past the idle limit returns `TickNudge`, then `TickStopIdle` after the grace.
 - An empty required slot fails with the slot named.
-- A reviewer's first pass renders `findings` as `none`.
-- A reviewer brief holds 0 bytes of the builder's `summary`.
-- A Go task and a TS task in one repo share every prefix byte up to the standards.
+- A slot value containing `{{task}}` stays literal.
+- An `agent.json` with an unknown field fails to decode.
 
-**Session supervisor ([Session supervisor (Appendix F)](#session-supervisor))**
+**Component (mock provider)**
 - A forced hang ends with `idle` after the nudge and grace.
 - A forced long task ends with `timeout`, leaving 0 orphan processes.
-- A SIGINT stop during a tool call yields a `result.json` with the turn's partial result and no orphan.
+- A `SIGINT` stop during a tool call yields a `result.json` with the turn's partial result and no orphan.
 - A faked provider halt exits `paused` with a resume handle in `state.json`.
 
+**Gate**
+- An unknown field, an unfilled slot or an unknown slot fails `gate`.
+- An `agent.json` chain without a free endpoint fails `gate`.
+- A `guard` row ID absent from `policy.json` fails `gate`.
+- A `tools` entry absent from the tool runtime's registry fails `gate`.
+- The fixture prefix hashes the same across 2 runs.
+
+**Brief content**
+- A reviewer's first pass renders `findings` as `none`.
+- A reviewer brief holds 0 bytes of the builder's `summary`.
+- A Go task and a TypeScript task in one repo share every prefix byte up to the standards.
+- An agent override above a hard limit is refused by `komodo config`.
+- A fixture brief over half the measured context moves to the next link that fits; with none left the group blocks `context` and no text is cut.
+- A fixture `AGENTS.md` with broken Komodo block markers leaves the addendum out of every brief and `doctor` reports it.
+- A builder that edits `AGENTS.md` in its worktree gets its next brief with the base-commit text.
+- A steering phrase in the repo's `AGENTS.md` makes `doctor` warn and the brief still loads.
+
+### 5.10 Open Gaps
+
+**Blocks building**
+
+| Gap | Open here |
+|---|---|
+| G-30 | The fields of `request.json` and `result.json`, and the arguments of the `spawn` action |
+| G-NEW-1 | The Go shapes of the registry, the brief builder and the supervisor |
+| G-NEW-2 | How the tool server's events reach the engine |
+| G-NEW-4 | How tokens are counted for the ceiling check |
+| G-NEW-6 | Whether `repo_context` and `standards` are slots, parts or both |
+| G-NEW-8 | Each agent's result schema and the builder's second allowed skill |
+| G-NEW-12 | How `agent.json` `limits`, the flat keys and `agents.<name>` combine |
+| G-NEW-14 | Who walks the chain when a brief is over the ceiling |
+
+**Can wait**
+
+| Gap | Open here |
+|---|---|
+| G-14 | A nudge reaching a turn stuck in a tool call; decided as best effort, proof in phase 5 |
+| G-24 | The data of the `session.*` events |
+| G-32 | The crash-safe counters, the per-task retry count included |
+| G-NEW-3 | Which component counts a timeout or idle stop against `retries` |
+| G-NEW-5 | The owner of the session pool slots |
+| G-NEW-7 | What `brief.md`, `system.md` and `mcp.json` hold |
+| G-NEW-9 | When the engine runs the architect, the researcher and the scout |
+| G-NEW-10 | A second nudge after a recovery |
+| G-NEW-11 | The start point of the 60 s kill |
+| G-NEW-13 | Whether the session-end commit is a hook or an action |
+| G-17 | The 50% prompt-cache hit fixture needs real API sessions |
+| G-18 | `repo_map` patterns for TypeScript, Python and Rust |
+| G-20 | The OpenAI links in the ceiling table wait for a later minor version |
+
+See [Gap register](#appendix-o-gap-register) for the rows; the `G-NEW` rows are proposed in the chapter hand-off.
 
 ## 6. Tools, Guard and Sandbox
 
