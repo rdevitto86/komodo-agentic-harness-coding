@@ -94,7 +94,7 @@ The diagram shows the whole pipeline on one page. [Runtime](#6-runtime) zooms in
 
 **Deferred to a later minor version**
 - The OpenAI execution path. The interfaces and the install probe exist; the OpenAI links refuse with the message "not yet" (G-20).
-- Komodo's own chat front end, in which a built-in orchestrator agent drives the pipeline.
+- Komodo's own chat front end, in which a built-in orchestrator agent drives the pipeline. The agent's only tools are the shared verbs, so any link in a chain, a local model included, could drive the pipeline under the in-process guard. The front end would reuse the tool loop and its context compaction.
 - Ad hoc delegation outside the pipeline, repository-defined hooks and agents, and secrets stored in the operating-system keychain.
 - Metrics export to an external monitoring system, Docker as the sandbox on macOS and Linux, and test runs that need a database, Docker or a public host.
 - A global install mode that sets up the orchestrator once for every repository.
@@ -331,12 +331,12 @@ Every core idea has a published precedent, so a reviewer can check how the idea 
 | Full-jitter retries | AWS Architecture Blog | HTTP stack |
 | Ranked repository map for planning | Aider | Backlog and planning |
 | Structured acceptance items | Kiro specifications | Backlog and planning |
-| Coverage bands | Google Testing Blog | Configuration; Check |
+| Coverage bands | Google Testing Blog: 75% coverage is commendable and 90% is exemplary; the changed-line floor sits between the two | Configuration; Check |
 | Headless sessions, resume, structured output | Claude Code | Providers; supervisor; recovery |
 
 ## 5. Building Blocks
 
-The building blocks are the 13 subsystems of the harness, which is the `komodo` binary, and each subsystem has one job. Page 5.1 shows how the source code is layered, and pages 5.2 to 5.14 describe one subsystem each, in the order of the chapters of the low-level design. In this chapter "engine" always means the engine package that drives task groups, and "orchestrator" means the chat session, driven by a model, outside the binary that issues verbs.
+The building blocks are the 13 subsystems of the harness, which is the `komodo` binary, and each subsystem has one job. Page 5.1 shows how the source code is layered, and pages 5.2 to 5.14 describe one subsystem each, in the order of the chapters of the low-level design. In this chapter "engine" always means the engine package that drives task groups, and "orchestrator" means the chat session, driven by a model, outside the binary that issues verbs. The orchestrator meets the harness only at the Interface layer: it calls verbs such as plan, run and status wait, each verb returns one structured reply, and status reports what the Orchestration layer has done.
 
 **📐 Where the 13 subsystems sit, by layer**
 ```mermaid
