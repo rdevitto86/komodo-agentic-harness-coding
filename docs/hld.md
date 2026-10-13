@@ -161,7 +161,7 @@ A constraint is a locked rule that the design cannot trade away. The owner set e
 | Ownership | One owner approves the architecture and holds the release signing key |
 | Approval gate | No implementation code starts until every component is signed off |
 | Build model | The owner hand-builds the first phases in plain Claude Code sessions; the harness builds its own groups after review and the tester exist |
-| Security review | The security lens is required for the installer, binary lifecycle, HTTP stack, tool runtime, guardrails, sandbox and ship; the owner reviews those groups by hand until the harness can |
+| Security review | The security lens is required for the installer, binary lifecycle, network client, tool runtime, guardrails, sandbox and ship; the owner reviews those groups by hand until the harness can |
 
 ### 2.3 Conventions
 
@@ -328,7 +328,7 @@ Every core idea has a published precedent, so a reviewer can check how the idea 
 | Event stream as the agent's spine | OpenHands | The event model every component shares |
 | Minimal tool surface without a shell; sandbox with the network off | SWE-agent; Codex CLI | Tool runtime; sandbox |
 | Seatbelt on macOS, Bubblewrap on Linux | Codex CLI | Sandbox |
-| Full-jitter retries | AWS Architecture Blog | HTTP stack |
+| Full-jitter retries | AWS Architecture Blog | Network client |
 | Ranked repository map for planning | Aider | Backlog and planning |
 | Structured acceptance items | Kiro specifications | Backlog and planning |
 | Coverage bands | Google Testing Blog: 75% coverage is commendable and 90% is exemplary; the changed-line floor sits between the two | Configuration; Check |
@@ -336,7 +336,7 @@ Every core idea has a published precedent, so a reviewer can check how the idea 
 
 ## 5. Building Blocks
 
-The building blocks are the 13 subsystems of the harness, which is the `komodo` binary, and each subsystem has one job. Page 5.1 shows how the source code is layered, and pages 5.2 to 5.14 describe one subsystem each, in the order of the chapters of the low-level design. In this chapter "engine" always means the engine package that drives task groups, and "orchestrator" means the chat session, driven by a model, outside the binary that issues verbs. The orchestrator meets the harness only at the Interface layer: it calls verbs such as plan, run and status wait, each verb returns one structured reply, and status reports what the Orchestration layer has done.
+The building blocks are the 13 subsystems of the harness, which is the `komodo` binary, and each subsystem has one job. Page 5.1 shows how the source code is layered, and pages 5.2 to 5.14 describe one subsystem each, in the order of the chapters of the low-level design. In this chapter "engine" means the orchestration engine of page 5.4, the part that drives task groups; the Go package named `engine` is wider and also holds the workspace, the session supervisor, the scheduler and error recovery ([Appendix A](#appendix-a-traceability)). "Orchestrator" means the chat session, driven by a model, outside the binary that issues verbs. The orchestrator meets the harness only at the Interface layer: it calls verbs such as plan, run and status wait, each verb returns one structured reply, and status reports what the Orchestration layer has done.
 
 **📐 Where the 13 subsystems sit, by layer**
 ```mermaid
@@ -396,6 +396,7 @@ flowchart TB
 - The concept index, which says where agents, skills, rules, hooks, guards, commands and plugins live.
 
 **Out of scope**
+- Treating a page as a package: pages 5.2 to 5.14 describe subsystems, one source folder can hold several subsystems, and [Appendix A](#appendix-a-traceability) is the authority on which folder holds which component. For example, the `engine` folder holds the orchestration engine (5.4), the workspace (5.5), the session supervisor (5.6), error recovery (5.10) and the scheduler (5.11).
 - Running the import check on every change: the gate in [5.13](#513-install-binary-lifecycle-and-gate).
 - The contents of each layer: the subsystem pages 5.2 to 5.14.
 
@@ -426,19 +427,19 @@ The three inline hooks run before a tool call, after a file edit and at the end 
 **📐 Which source folder may import which**
 ```mermaid
 flowchart TB
-  F1["1 cli<br><small>Interface</small>"] --> F2["2 engine<br><small>Orchestration</small>"]
+  F1["1 cli<br><small>Interface, Economy and ops</small>"] --> F2["2 engine<br><small>Orchestration</small>"]
   F2 --> F3["3 quality<br><small>Quality</small>"]
   F3 --> F4["4 host<br><small>Interface</small>"]
   F4 --> F5["5 repo<br><small>Delivery</small>"]
   F5 --> F6["6 provider<br><small>Model I/O</small>"]
   F6 --> F7["7 tools<br><small>Model I/O</small>"]
   F7 --> F8["8 ops<br><small>Economy and ops</small>"]
-  F8 --> F9["9 agent<br><small>Model I/O, Context</small>"]
+  F8 --> F9["9 agent<br><small>Model I/O, Context, Economy and ops</small>"]
   F9 --> F10["10 safety<br><small>Safety, Delivery</small>"]
   F10 --> F11["11 state<br><small>State pillar</small>"]:::core
-  F11 --> F12["12 core<br><small>shared base</small>"]
+  F11 --> F12["12 core<br><small>Interface, Model I/O, Economy and ops</small>"]
 ```
-**Reading the diagram.** An arrow means "may import". A folder may skip levels but never import a folder ranked above it.
+**Reading the diagram.** An arrow means "may import". A folder may skip levels but never import a folder ranked above it. Under each folder name stand the layers that the folder serves, as [Appendix A](#appendix-a-traceability) lists them.
 
 **Interactions**
 
@@ -479,7 +480,7 @@ sequenceDiagram
 **Summary.** The command line is the only way to drive Komodo. A person or the orchestrator types a verb, and every verb passes through the same five steps and ends with one structured reply and one exit code. Configuration is the settings store, with built-in defaults and hard limits that every other subsystem reads.
 
 **Responsibilities**
-- The verb table, with parsing, validation, dispatch and rendering for every command, including init, which writes Komodo's orchestrator skills and commands into the global Claude Code setup.
+- The verb table, with parsing, validation, dispatch and rendering for every command. [TODO: whether the init verb, which would write Komodo's orchestrator skills and commands into the global Claude Code setup, ships in this release (G-222)]
 - The reply shape, called the envelope, and the five exit codes: ok, refused, usage error, blocked and internal error.
 - Three guards that run before a verb: the repo pin, the terminal check and the settings hash guard.
 - The settings: built-in defaults, the machine file, hard limits on every key, and the audit log of changes.
@@ -604,7 +605,7 @@ flowchart LR
 | [Check, review, tools, guard](#510-check-review-tester-and-recovery) | In | Check results, findings, refused tool calls |
 | [Providers](#58-providers-and-http) | In | Link skips and limit warnings |
 | [Workspace](#55-workspace-and-leases) and [Ship](#512-backlog-planning-ship-and-release) | In | Lease lost; task list locked and released |
-| [Scheduler and recovery](#511-scheduler-cache-and-observability) | In | Job and timer facts; the notice of a dropped cut-short line |
+| [Scheduler](#511-scheduler-cache-and-observability) and [recovery](#510-check-review-tester-and-recovery) | In | Job and timer facts; the notice of a dropped cut-short line |
 | [Observability](#511-scheduler-cache-and-observability) | Out | Ordered events for the ledger, the wake file and the live view |
 
 **Key scenario: one event from producer to subscribers**
@@ -649,7 +650,7 @@ sequenceDiagram
 
 **Responsibilities**
 - The per-group loop, which is the only writer of its group's events: the loop calls the decision function and runs the actions that the function orders.
-- The run: the dependency graph of groups, the work queue and the order in which ready groups are picked.
+- The run: the work queue and the order in which ready groups are picked, using the dependency graph that [Backlog and Planning](#512-backlog-planning-ship-and-release) derives.
 - Landing order and epic coordination: groups land one at a time, each followed by a check of the epic branch tip, and then the epic gate runs once over the whole epic.
 - Crash containment: a crash in one group blocks that group alone, and the parent guard (a small parent process) stops the agents and repeats the save if the engine itself dies.
 - The machine-wide pool of session slots. [TODO: which subsystem owns the session pool (G-219)]
@@ -688,7 +689,7 @@ flowchart LR
 | Neighbour | Direction | What flows |
 |---|---|---|
 | [Event spine](#53-event-spine-and-state-machine) | Both | Each event in; new state and ordered actions back |
-| [State manager](#514-state-manager) | Both | Group events and snapshots; queue and slot claims |
+| [State manager](#514-state-manager) | Both | Group events and snapshots; queue files |
 | [Workspace](#55-workspace-and-leases) | Out | A lease and a worktree for each group |
 | [Sessions](#56-sessions-agents-and-briefs) | Both | Spawn orders and filled brief slots; session facts back |
 | [Check and review](#510-check-review-tester-and-recovery) | Both | Finished work to prove; verdicts back |
@@ -713,7 +714,7 @@ sequenceDiagram
   D->>R: 6 group landed
 ```
 
-1. The run builds the dependency graph from the backlog, and each group whose dependencies have landed becomes a queue file.
+1. The run reads the dependency graph that Backlog and Planning derived from the backlog, and each group whose dependencies have landed becomes a queue file.
 2. The run picks the next group by priority, fair share across repositories, longest remaining chain, most groups unblocked and backlog order.
 3. Taking a slot from the session pool deletes the queue file and writes the group's lease. A crash between the two leaves an item that the startup sweep handles.
 4. The run starts a loop for the group. The loop opens the group's state, loads the last snapshot and replays the events after it, then reruns any open actions before it accepts a new event.
@@ -730,17 +731,17 @@ sequenceDiagram
 
 ### 5.5 Workspace and Leases
 
-**Summary.** A workspace is a private git checkout where one task group is built, and a lease is the lock that says which run owns the group. The lease and its fence number give each group its own folder and let only one run change the folder or the group's saved progress. Without the lease, two runs could edit one folder, and without the fence, a stalled holder could overwrite its successor.
+**Summary.** A workspace is a private git checkout where one task group is built, and a lease is the lock that says which run owns the group. The lease and its fence number give each group its own folder and let only one run change the folder or the group's saved progress. Without the lease, two runs could edit one folder, and the fence is meant to stop a stalled holder from overwriting its successor. [TODO: what checks the fence before every write (G-61)]
 
 **Responsibilities**
 - The worktree for each group, cut from the epic branch tip, and its removal after it goes unused.
 - The lease: a lock file that names the run owning the group and is renewed while held.
-- The fence: a number that rises on every take or takeover and rides on every git write.
+- The fence: a number that rises on every take or takeover and rides on every git write. [TODO: what checks the fence before every write, because git compares only the commit id (G-61)]
 - The hidden ref that saves a group's progress: git hides it from branch listings, and Komodo never pushes it.
-- Takeover of a stale lease, so that exactly one run wins, and clean shutdown: stop the agents, save work in progress and free the leases.
+- Takeover of a stale lease, so that exactly one run wins.
 
 **Out of scope**
-- The parent guard that repeats the shutdown when the engine dies: the engine ([5.4](#54-engine-internals)).
+- Clean shutdown (stop the agents, save work in progress, free the leases) and the parent guard that repeats it when the engine dies: the engine ([5.4](#54-engine-internals)).
 - The startup sweep after a power loss. [TODO: which subsystem owns the startup sweep (G-217)]
 - Writing lease files to disk: the state manager ([5.14](#514-state-manager)).
 
@@ -769,8 +770,8 @@ flowchart LR
 | [Engine](#54-engine-internals) | Both | Lease and worktree on group start; the parent guard triggers the same shutdown |
 | [Event spine](#53-event-spine-and-state-machine) | Out | The lease-lost fact |
 | [State manager](#514-state-manager) | Out | Lease files: claimed, renewed, removed |
-| Git (outside) | Out | Worktree cuts and fenced reference updates |
-| [Ship](#512-backlog-planning-ship-and-release) | In | The fence, checked on every landing |
+| Git (outside) | Out | Worktree cuts and hidden-reference updates |
+| [Ship](#512-backlog-planning-ship-and-release) | In | The fence that a landing carries |
 | [Sessions](#56-sessions-agents-and-briefs) | Out | The worktree where each session works |
 
 **Key scenario: a stalled holder is stopped**
@@ -784,19 +785,19 @@ sequenceDiagram
   A->>L: 1 take lease, fence rises
   B->>L: 2 rename stale lease, take it
   A->>G: 3 move the hidden ref
-  G-->>A: 4 refuse, ref moved
+  G-->>A: 4 refuse only if ref moved
   A->>A: 5 lease lost, group stops
 ```
 
 1. Run A takes the lease by creating the lock file, and the fence number rises.
 2. Run A stalls. Run B finds the lease stale or its holder dead, renames the old file with a stale suffix so that only one run wins, and takes the lease with a higher fence.
 3. Run A resumes and tries to move the hidden ref with git's update command, which names the value A expects the ref to hold.
-4. Git refuses the update with a failure exit when the ref no longer holds that value.
+4. Git refuses the update with a failure exit only when the ref no longer holds that value, for example after Run B has moved the ref. Git does not read the fence, so a write that arrives before Run B moves the ref succeeds. [TODO: what refuses the stalled holder's write before the new holder moves the ref (G-61)]
 5. Run A emits the lease-lost event, and the decision function stops the group.
 
 **Rationale and alternatives**
-- The fence enforced by git's own compare-and-swap, chosen over rereading the ref before each push, because a reread leaves a window between the read and the write.
 - A lease together with a fence, chosen over a lease alone, because a stalled holder could otherwise overwrite its successor.
+- [TODO: what checks the fence before every write (G-61)]
 
 **Detail.** [LLD chapter 4](lld.md#4-workspace-and-leases)
 
@@ -808,7 +809,7 @@ sequenceDiagram
 - The session supervisor: spawn, liveness watch, time warning, nudge, the stop ladder and one exit reason for every end.
 - Resume: continue the provider's conversation when possible, otherwise start a fresh session with the saved work.
 - The agent registry: seven roles (planner, architect, reviewer, builder, researcher, tester and scout), each with a weight, tools, limits and role text.
-- The brief builder: five parts, most stable first, filled from named slots, with a size check against half of the link's measured context.
+- The brief builder: five parts, most stable first, filled from named slots, with a size check against a fixed share of the link's measured context ([LLD 5.4](lld.md#54-interfaces)). [TODO: whether the brief builder or the provider router walks the chain to the next link that fits a large brief (G-114)]
 - Token counting for the brief gate. [TODO: how tokens are counted for the brief gate (G-48)]
 
 **Out of scope**
@@ -866,7 +867,7 @@ sequenceDiagram
 ```
 
 1. The engine hands the brief builder the filled slots for the session.
-2. The builder assembles five parts in order (tool definitions, role, repository context, standards, task) and writes the brief once to the session folder. A brief that exceeds half of the link's measured context goes to the next link that fits, and then to Blocked.
+2. The builder assembles five parts in order (tool definitions, role, repository context, standards, task) and writes the brief once to the session folder. A brief larger than the fixed share of the link's measured context is never trimmed, and when no link holds the brief the group is Blocked. [TODO: whether the brief builder or the provider router walks the chain to the next link that fits (G-114)]
 3. The supervisor starts the private tool server and the sandbox profile, then spawns the session on the chosen link.
 4. Any output line or tool call counts as a sign of life, and one timer checks the wall-clock allowance, the idle time and the time warning.
 5. Near the end of its allowance the session receives one fixed line that names the minutes left. After a period of silence the supervisor sends one nudge, allows a grace period, and then stops the session: first an interrupt signal, then a terminate signal, then a kill of the whole process tree.
@@ -947,7 +948,7 @@ sequenceDiagram
 
 1. The model requests a tool through the private tool server, or through Go's own loop on links that use a programming interface.
 2. The runtime confirms that the tool is on the agent's list, then passes the call to the guard.
-3. The guard refuses a call it cannot parse, a tool it does not know and any guard error, because it fails closed. A refusal names the rule and the allowed alternative, and the third refusal under one rule ends the session.
+3. The guard refuses a call it cannot parse, a tool it does not know and any guard error, because it fails closed. A refusal names the rule and the allowed alternative, and repeated refusals under one rule end the session ([LLD 1.8](lld.md#18-config)).
 4. For a run command, the sandbox wraps the command in the operating system's confinement: seatbelt on macOS, bwrap on Linux, Docker on native Windows. The command gets no network except loopback, and limits on processes, memory, time and output.
 5. The command finishes, or the sandbox kills the whole process tree on a timeout.
 6. Every tool except read returns a capped reply, and the full output goes to a log file in the session folder.
@@ -961,11 +962,11 @@ sequenceDiagram
 
 ### 5.8 Providers and HTTP
 
-**Summary.** A provider is a service that runs a model, a link is one way to reach a provider, and an adapter starts, streams and resumes a session over a link. One network client sits under every web call, and it handles retries, streaming, allowed hosts and secret redaction. Without them each subsystem would carry provider quirks, and a stray programming-interface key could bill the wrong account.
+**Summary.** A provider is a service that runs a model, a link is one way to reach a provider, an adapter starts, streams and resumes a session over a link, and a router picks the link for each session. One network client sits under every web call, and it handles retries, streaming, allowed hosts and secret redaction. Without them each subsystem would carry provider quirks, and a stray programming-interface key could bill the wrong account.
 
 **Responsibilities**
 - One adapter interface over every link: probe, start, resume, and a final typed result with usage and a resume handle.
-- Each agent's fixed chain of links and the failover along it, which happens only when a provider is unavailable, unauthorized or over a limit, never because a task failed.
+- The router: each agent's fixed chain of links and the failover along it, which happens only when a provider is unavailable, unauthorized or over a limit, never because a task failed. [TODO: whether the brief builder or the router walks the chain to the next link that fits a large brief (G-114)]
 - The billing check before each session, which sets a cost class (subscription, free or paid) and counts an unknown login as paid.
 - The measured context window for each session, and the model catalog that maps agent weights to exact models.
 - The pause when no link is left, and the network client with jittered retries, streaming, host allowlists and secret redaction.
@@ -1017,7 +1018,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant S as Sessions
-  participant P as Provider adapters
+  participant P as Router and adapters
   participant L1 as First link
   participant L2 as Next link
   participant T as Timer record
@@ -1029,12 +1030,12 @@ sequenceDiagram
   P->>T: 6 no link left, write a timer
 ```
 
-1. A session asks to start for an agent, and the adapter takes the agent's fixed chain of links.
-2. Before the session starts, the billing check gives the link a cost class and fails closed, and the adapter measures the link's real context window. A link below the context floor is skipped.
-3. The adapter starts the session and streams its output. The final answer is forced into the agent's result schema, and Go validates it again.
-4. When the link is unavailable, unauthorized or over a limit, the adapter reports a skip event with the reason.
-5. The adapter tries the next link in the chain.
-6. When no link is left, the group pauses. The adapter writes a timer record with the time to wait until, and the reset time goes to the quota record. A pause that outlasts its cap makes the group Blocked.
+1. A session asks to start for an agent, and the router takes the agent's fixed chain of links.
+2. Before the session starts, the billing check gives the link a cost class and fails closed, and the link's adapter measures the link's real context window. The router skips a link below the context floor.
+3. The adapter of the chosen link starts the session and streams its output. The final answer is forced into the agent's result schema, and Go validates it again.
+4. When the link is unavailable, unauthorized or over a limit, the router reports a skip event with the reason.
+5. The router tries the next link in the chain.
+6. When no link is left, the group pauses. The router writes a timer record with the time to wait until, and the reset time goes to the quota record. A pause that outlasts its cap makes the group Blocked.
 
 **Rationale and alternatives**
 - Claude launched with pinned flags, chosen over the bare mode, because bare mode reads only a programming-interface key and never the subscription login.
@@ -1184,18 +1185,20 @@ sequenceDiagram
   participant B as Builder
   E->>C: 1 run Check
   C-->>E: 2 pass
-  E->>R: 3 start Verify
-  E->>T: 3 start Verify
-  R-->>E: 4 verified finding
-  E->>B: 5 back to Build
+  E->>R: 3 start reviewer
+  E->>T: 4 start tester
+  R-->>E: 5 verified finding
+  E->>B: 6 back to Build
 ```
 
 1. Check reruns each task's completion command, confirms that every changed file is in the group's file list or is a test beside one, scans the diff for secrets, runs the impact tests, compares results with the baseline and measures coverage.
-2. A test that passed at the base commit and fails now is a regression and blocks. A test that fails in both only warns. A failure sends the group back to Build.
-3. After a pass, the reviewer and the tester start together on the same commit and under the same epoch.
-4. A finding counts only when Go finds the quoted evidence at the cited line. The first verified blocking finding cancels the tester.
-5. The group returns to Build under a new epoch when the reviewer's session ends, carrying every verified finding. Output from the cancelled session carries the old epoch and is recorded as stale.
-6. When both sessions end done, the group exits to Ship. Every other failure follows its row in the failure table to a bound and a final state, and Blocked never retries by itself.
+2. A test that passed at the base commit and fails now is a regression and blocks, and a test that fails in both only warns. A failure sends the group back to Build, and a pass sends the group to Verify.
+3. The reviewer starts on the group's commit under the current epoch.
+4. The tester starts at the same moment on the same commit and under the same epoch.
+5. A finding counts only when Go finds the quoted evidence at the cited line. The first verified blocking finding cancels the tester.
+6. The group returns to Build under a new epoch when the reviewer's session ends, carrying every verified finding. Output from the cancelled session carries the old epoch and is recorded as stale.
+
+When both sessions end done instead, the group exits to Ship. Every other failure follows its row in the failure table to a bound and a final state, and Blocked never retries by itself.
 
 **Rationale and alternatives**
 - A counter on every loop, chosen over unlimited retries with growing waits, because unbounded retries burn tokens until someone notices.
@@ -1329,7 +1332,7 @@ flowchart LR
 | [Command line](#52-cli-and-configuration) | In | Plan, run and release verbs |
 | [Sessions](#56-sessions-agents-and-briefs) | Both | Planner sessions, with a lint tool for the planner |
 | [Engine](#54-engine-internals) | Both | Ready groups and the graph out; landing orders in |
-| [Workspace](#55-workspace-and-leases) | In | The fence, checked on every landing |
+| [Workspace](#55-workspace-and-leases) | In | The fence that a landing carries |
 | [Check](#510-check-review-tester-and-recovery) | Out | Check rerun around each landing |
 | [Event spine](#53-event-spine-and-state-machine) | Out | Task list locked and released |
 | GitHub (outside) | Out | Pushes, pull requests and releases |
@@ -1354,8 +1357,8 @@ sequenceDiagram
 
 1. A planner session drafts the groups, their file patterns and dependencies, their tasks and their acceptance items.
 2. Go lints the draft and writes files only when lint passes. After repeated lint failures the plan blocks with a lint reason.
-3. The run verb builds the dependency graph from the file patterns and enqueues the first wave of groups.
-4. Ship lands groups on the epic branch one at a time, each keyed by group, fence and merge base. A stale fence refuses the push.
+3. Backlog derives the dependency graph from the file patterns, and the run verb hands the graph to the engine, which enqueues the first wave of groups.
+4. Ship lands groups on the epic branch one at a time, each keyed by group, fence and merge base. [TODO: what refuses a landing that carries a stale fence (G-61)]
 5. After the last group lands and the epic gate passes, the epic pull request is opened. It is the only pull request that targets the base branch.
 6. A person merges the epic pull request, and the sync verb follows.
 
@@ -1542,24 +1545,20 @@ sequenceDiagram
   P->>D: fact, stamped with stage epoch
   D->>G: append event
   G-->>D: checked and on disk
-  alt older epoch
-    D->>D: keep as stale, ignore
-  else current epoch
-    D->>N: state and event
-    N-->>D: new state, actions, follow-ons
-  end
-  D->>G: snapshot
+  D->>N: state and event
+  N-->>D: new state, actions, follow-ons
+  D->>G: append follow-ons
   D->>D: run each action
+  D->>G: snapshot on an interval
   D->>S: event, in order
 ```
 
 1. A producer reports a fact stamped with the epoch of the stage whose session produced the fact. The epoch is an integer that rises each time the group enters a stage.
-2. The group loop, the one goroutine that owns this group's state, asks group state to append the event. Group state checks the event against the schema and forces the line to disk before anything else happens.
-3. An event from an older epoch stays on disk marked stale and changes nothing, so a late result from a cancelled session cannot move the stage twice.
-4. A current event goes to the decision function, which has no side effects and returns the same answer for the same input.
-5. The group loop writes a snapshot, so that a restart replays only the events after the latest snapshot.
-6. Each action, such as starting a session or committing, is recorded as started before the action runs and as done after the action finishes. Every action has a key that makes a repeat harmless, so a crash between the two records replays safely.
-7. Three subscribers read the event in order: the ledger, the wake file that wakes the status-wait verb, and the live status view. Subscribers write only their own records and never change group state.
+2. The group loop, the one goroutine that owns this group's state, marks the event stale when its epoch is older than the group's current stage. The loop then asks group state to append the event, and group state checks the event against the schema and forces the line to disk before anything else happens.
+3. The decision function receives every event, stale ones included. The function has no side effects and returns the same answer for the same input, and it ignores a stale event, so a late result from a cancelled session cannot move the stage twice.
+4. The loop appends each follow-on event in order, then runs each action. An action, such as starting a session or committing, is recorded as started before the action runs and as done after the action finishes. Every action has a key that makes a repeat harmless, so a crash between the two records replays safely.
+5. The loop writes a snapshot on a fixed interval, so that a restart replays only the events after the latest snapshot and finishes any action recorded as started but not done.
+6. Three subscribers read the event in order: the ledger, the wake file that wakes the status-wait verb, and the live status view. Subscribers write only their own records and never change group state.
 
 Group state is a group's event file and its snapshots, with the replay of both, kept together as one unit inside the state manager. Producers are the workspace, the session supervisor, the tool runtime, the guard, Check, review, ship, the scheduler and the engine itself. Three details are open: [TODO: which counters the snapshot must hold (G-32)] [TODO: payload structure of each event type (G-198)] [TODO: layout of a record's header and body (G-211)].
 
@@ -1656,7 +1655,7 @@ Planning turns a goal into a linted backlog, and Go code lints the draft before 
 sequenceDiagram
   autonumber
   participant C as Caller
-  participant E as Engine
+  participant E as Backlog and Planning
   participant P as Planner
   participant L as Go lint
   participant F as Backlog files
@@ -1666,15 +1665,15 @@ sequenceDiagram
   E->>L: lint draft
   L-->>E: pass
   E->>F: write files
-  E->>E: check graph
+  E->>E: derive graph
 ```
 
 1. The caller runs the plan verb with goal text, or with specification documents such as a product requirements document or a ticket export.
-2. The engine builds the repository map, a ranked list of the code's functions and types, and gives the map to the planner.
+2. Backlog and Planning builds the repository map, a ranked list of the code's functions and types, and gives the map to the planner.
 3. The planner drafts the epic: the groups, each group's goal, the file patterns that the group touches, the dependencies between groups, and each group's tasks and acceptance items.
 4. Go code lints the draft. A failed lint goes back into the same planner session a bounded number of times, and then the plan blocks with the reason "lint".
-5. The engine writes the backlog files, one folder per group under the epic folder, only when lint passes.
-6. The backlog check confirms the grammar, the isolation of groups in the same wave, the size bounds and the acceptance items. The engine then derives the dependency graph from the file patterns, requires groups with overlapping patterns to be ordered, and refuses a cycle.
+5. Backlog and Planning writes the backlog files, one folder per group under the epic folder, only when lint passes.
+6. The backlog check confirms the grammar, the isolation of groups in the same wave, the size bounds and the acceptance items. Backlog and Planning then derives the dependency graph from the file patterns, requires groups with overlapping patterns to be ordered, and refuses a cycle.
 
 Two choices here await the owner: [TODO: whether planning runs in two passes with a lint between the passes (G-96)] [TODO: the grammar of acceptance items (G-155)].
 
@@ -1704,7 +1703,7 @@ sequenceDiagram
   G-->>O: wake event
 ```
 
-1. The run verb builds the dependency graph from the backlog, refuses cycles, computes the waves of groups that can run together, queues the groups whose dependencies have landed, and prints the run identifier at once.
+1. The run verb reads the dependency graph that Backlog and Planning derived from the backlog, which has refused cycles and computed the waves of groups that can run together. The run queues the groups whose dependencies have landed and prints the run identifier at once.
 2. Ready groups of every repository and due scheduled jobs wait in one machine-wide work queue made of files. When a session slot frees, the engine takes the next item in the pick order that [Engine Internals](#54-engine-internals) lists.
 3. Taking an item removes the queue file and writes the group's lease. Intake runs, and the group loop takes over.
 4. Groups progress independently. A group moves from Build to Verify as soon as its own builder finishes, whatever other groups are doing.
@@ -1786,7 +1785,7 @@ sequenceDiagram
 ```
 
 1. Ship merges the epic branch into the group branch and reruns Check.
-2. Landing moves the hidden reference with git's compare-and-swap, carrying the fence. A holder with a stale fence is refused, and the engine records a lost lease.
+2. Landing moves the hidden reference with git's compare-and-swap, carrying the fence. Git compares only the commit id. [TODO: what refuses a holder with a stale fence and how the engine records the lost lease (G-61)]
 3. With the ship mode setting `group`, the engine opens a pull request into the epic branch, marked ready because GitHub refuses to merge a draft, and merges the pull request at once; the pull request is the record of the group. With the setting `epic`, the engine merges the group branch directly into the epic branch and keeps a merge commit. After every landing, Check runs on the epic branch tip.
 4. After the last landing, the epic gate starts the reviewer and the tester once over the whole epic diff, and the full test suite runs.
 5. Each finding goes to the group that last changed the finding's file, and that group returns to Build. A finding that names no file blocks the whole epic with the reason "epic gate".
@@ -1826,12 +1825,12 @@ sequenceDiagram
 ```
 
 1. The engine measures the real context window of the chosen link. The window is measured, never typed ([Design Decisions](#92-design-decisions)).
-2. The brief builder assembles a brief from typed slots in a fixed order: tools, role, repository context, standards, task. The brief must fit within a fixed share of the measured window, or the engine uses the next link that fits.
+2. The brief builder assembles a brief from typed slots in a fixed order: tools, role, repository context, standards, task. The brief must fit within a fixed share of the measured window. [TODO: whether the brief builder, the engine or the provider router moves a brief that does not fit to the next link that fits (G-114)]
 3. The billing check runs and fails closed.
 4. The provider starts the model with a private tool server, or the engine runs a Go tool loop for links that use plain web requests.
-5. Every tool call passes the guard. Commands run in the sandbox with no shell and no network, and reply sizes are capped.
+5. Every tool call passes the guard. Commands run in the sandbox with no shell and no network except loopback, and reply sizes are capped.
 6. The model's final call returns only the result schema. Go code validates the result again and allows one re-prompt.
-7. The engine reruns the task's completion command in the sandbox. A failure goes back into the same session, and repeated rejection ends the session. A passing session ends with a work-in-progress commit to the hidden reference, guarded by the lease's fence.
+7. The engine reruns the task's completion command in the sandbox. A failure goes back into the same session, and repeated rejection ends the session. A passing session ends with a work-in-progress commit to the hidden reference, which carries the lease's fence.
 
 The engine, never a model, emits events: a session's typed result becomes an event only after Go code validates the result. Two points are open: [TODO: how events from the tool server reach the engine (G-42)] [TODO: how tokens are counted for the brief size check (G-48)].
 
@@ -1924,7 +1923,7 @@ sequenceDiagram
 ```
 
 1. The group loop writes group state: events, snapshots and loads. The decision function still decides every change; the state manager only stores and checks.
-2. Other writers write their own record kinds: the workspace writes leases, the engine writes the queue and pool slots, provider adapters write pause timers, the scheduler writes job counters, and the ledger writes its rows.
+2. Other writers write their own record kinds: the workspace writes leases, the engine writes the queue, provider adapters write pause timers, the scheduler writes job counters, and the ledger writes its rows. [TODO: which subsystem writes the session pool slots (G-219)]
 3. Readers such as the status verb and the startup sweep read through the same service.
 4. The steps of one write, the check, the atomic primitives, the refusal and the quarantine of a bad record are in the key scenario of [State Manager](#514-state-manager).
 
@@ -2032,7 +2031,7 @@ Every runtime file is a record kind in one schema, which also lists every event 
 
 - **The configuration file:** its own schema and its own writer, the config verb.
 - **The cache:** derived data, verified by fingerprint on every read.
-- **Git references and worktrees:** guarded by git's own compare-and-swap.
+- **Git references and worktrees:** moved by git's compare-and-swap on the commit id. [TODO: what checks the fence before every write (G-61)]
 - **Job templates:** files that a person writes, decoded strictly.
 - **The binaries and the signing key:** signed and verified by the update flow; the key is a secret that only the release verb reads.
 - **Session temporary folders:** each session's own scratch folders, removed by the startup sweep.
@@ -2061,9 +2060,9 @@ One choice awaits the owner: [TODO: whether the Fable model is available only by
 
 Three fences hold every worker.
 
-1. **The guard** checks every tool call inside the engine process before the call runs. The guard's rules are data, not configuration. A refusal names the rule and the allowed alternative, and the third refusal under one rule ends the session. The only guard setting a person may tune is the refusal limit, and a scope request is the only refusal that a person or the orchestrator can turn into an allow.
-2. **The sandbox** confines every command at the operating-system level with Seatbelt, Bubblewrap or Docker. The network is off except loopback, and time, reply size, process count and memory are bounded. The sandbox is required on every operating system. Intake's setup command runs with the network on, and every worker command runs with the network off.
-3. **The worktree, lease and fence** keep a session inside its own group.
+1. **The guard** checks every tool call inside the engine process before the call runs. The guard's rules are data, not configuration. A refusal names the rule and the allowed alternative, and repeated refusals under one rule end the session ([LLD 1.8](lld.md#18-config)). The only guard setting a person may tune is the refusal limit, and a scope request is the only refusal that a person or the orchestrator can turn into an allow.
+2. **The sandbox** confines every command at the operating-system level with Seatbelt, Bubblewrap or Docker. The network is off except loopback, and time, reply size, process count and memory are bounded. The sandbox is required on every operating system. Intake's setup command runs with the network on, and every worker command runs with the network off except loopback.
+3. **The worktree and lease** keep a session inside its own group, and the fence is meant to stop a stalled holder. [TODO: what checks the fence before every write (G-61)]
 
 Releases are signed, and the update flow verifies the checksum and the signature each time. No agent holds forge credentials, a git write tool or a shell.
 
@@ -2075,7 +2074,7 @@ Four gates stand between build and landing, and three of the four spend no model
 
 1. **Lint and coverage:** changed lines must meet a coverage floor. [TODO: whether the coverage floor blocks only Go groups (G-92)]
 2. **Success:** Check reruns every completion command.
-3. **Regression:** Check records a baseline at the base commit and runs the tests of every affected package. A failing test is rerun twice alone, and a split result is reported as flaky.
+3. **Regression:** Check records a baseline at the base commit and runs the tests of every affected package. A failing test is rerun alone a fixed number of times ([LLD chapter 9](lld.md#9-check-review-tester-and-recovery)), and a split result is reported as flaky.
 4. **Behaviour:** the tester judges acceptance items blind, and the reviewer applies rule catalogs called lenses, chosen by file scope. A finding blocks only if Go code finds its quoted line at the stated file and line number. Each task gets one verdict from each of the two.
 
 The gate command, Komodo's self-check for its own repository, runs the build, structure, safety, event, state-write and documentation checks. [TODO: the number of reviewer lenses (G-84)] [TODO: how backlog-card protection is enforced, by lint or by a guard row (G-94)]
@@ -2119,7 +2118,6 @@ The owner decided these on 2026-10-09 and 2026-10-11. Three of them close gaps G
 |---|---|---|---|
 | Every loop has a counter and a named end state | Temporal's default of unlimited retry with growing backoff | Unbounded retries burn tokens until someone notices | A blocked group never retries by itself; a person or the orchestrator must resume |
 | The Claude tool starts in print mode with every flag pinned | Bare mode | Bare mode reads only a paid key and never the subscription login, which would turn free work into paid calls | The probe must record each tool version, and a version without the needed field fails the link at probe time |
-| The fence is enforced by git's compare-and-swap | Rereading the reference before each push | A reread leaves a window between the read and the write in which another engine can land | Not recorded |
 | The engine measures each session's context window | A typed context size per model | A typed window larger than the real one lets a server cut the prompt silently | Not recorded |
 | Komodo owns the language caches under its home folder | The user's own npm, Cargo, Go and pip caches | Agent code could plant files that the user's own builds later run | Not recorded |
 | Session process and memory caps use Linux resource groups or Docker only | The per-user process limit | The per-user limit counts every process the user runs, and on a busy Mac the limit made process creation fail | macOS has no equivalent cap, and the doctor check says so |
@@ -2187,7 +2185,7 @@ A quality requirement is a scenario with a number that a test can pass or fail. 
 | Safety | A command writes outside the worktree, reads the secure-shell key folder or reaches a public address | The sandbox refuses it on every operating system |
 | Safety | A paid key is set in the environment beside a subscription login | The session runs on the subscription with no paid key; zero paid calls |
 | Cost | 20 sessions of one agent on the Anthropic programming interface with usage tracking on | At least 50% of prompt tokens come from the provider cache. [TODO: whether the cache share reaches 50% on real sessions (G-17)] |
-| Capacity | Default limits | 6 sessions machine-wide, 3 per link, 1 per loopback endpoint; hard limits 16 and 8. [TODO: whether the local model server allows more than 1 (G-04)] [TODO: what the real subscription window is (G-07)] |
+| Capacity | Default limits | The pool never runs more sessions than the machine-wide, per-link and per-loopback-endpoint limits ([LLD 1.8](lld.md#18-config)), and a value above a hard limit is refused. [TODO: whether the local model server allows more than 1 (G-04)] [TODO: what the real subscription window is (G-07)] |
 | Portability | Every gate run | Cross-builds for Windows, Linux and macOS succeed; the fixture group ships on macOS and Windows |
 
 ## 11. Risks, Debt and Roadmap
@@ -2199,9 +2197,9 @@ A risk is an assumption the design has not proved, and debt is a known shortcut 
 | Risk | If the risk happens, and the mitigation in the design | Closed by |
 |---|---|---|
 | The probe cannot read the first stream line of a Claude session without a model turn | Billing check 3 costs one turn per probe; the probe records one line per tool version, and a version without the field fails the link | [TODO: whether the probe can read the first stream line of a Claude session without a model turn (G-02)] |
-| A 24 GB machine cannot run Qwen3.6-27B at a 262,144-token window | The default free local model is unusable on small machines; the floor is a configuration value and the doctor check names the failing endpoint | [TODO: whether a 24 GB machine can run Qwen3.6-27B at a 262,144-token window (G-03)] |
+| A machine with 24 gigabytes of memory cannot run Qwen3.6-27B at a 262,144-token window | The default free local model is unusable on small machines; the floor is a configuration value and the doctor check names the failing endpoint | [TODO: whether a machine with 24 gigabytes of memory can run Qwen3.6-27B at a 262,144-token window (G-03)] |
 | The local model server answers 1 request per model | Local sessions stay at 1 per link and run one after another; the doctor check reads the parallelism setting and names the fix | [TODO: whether the local model server can answer more than 1 request per model (G-04)] |
-| The subscription's 5-hour window drains faster than 3 sessions per link assumes | More pauses than planned; the pool halves on a rate-limit error and the ledger measures the real window | [TODO: whether 3 sessions per link fit the real 5-hour window (G-07)] |
+| The subscription's usage window drains faster than the per-link session limit assumes | More pauses than planned; the pool halves on a rate-limit error and the ledger measures the real window | [TODO: whether the per-link session limit fits the real subscription window (G-07)] |
 | Bubblewrap gives no private loopback address per session | Two Verify test suites collide on a fixed port on Linux; macOS's per-repository test lock exists as the fallback | [TODO: whether Bubblewrap gives each session a private loopback address (G-08)] |
 | Copy mechanics differ per filesystem | Tester worktrees are slow or broken on ext4, NTFS or Docker; a copy over 60 seconds warns and the doctor check reports the mechanism | [TODO: whether the copy keeps symlinks on ext4 and btrfs (G-09)] [TODO: whether Windows junctions survive the copy (G-10)] [TODO: whether a large dependency folder copies quickly under Docker (G-11)] [TODO: whether a copied Rust build folder is reused or rebuilt (G-12)] |
 | The list of prompt-steering phrases is incomplete | A skill or addendum steers a worker; the list is data and doctor warnings tune the list | [TODO: whether the steering-phrase list is complete (G-13)] |
@@ -2249,7 +2247,7 @@ Architecture terms used across this document and the [Low-Level Design](lld.md).
 | Harness | The `komodo` binary; starts model sessions as workers that plan, build, check, review and ship code |
 | Orchestrator | A chat session in a host such as Claude Code; drives the harness by verbs and never edits code |
 | Orchestration layer | The architecture layer that holds the engine; not the orchestrator |
-| Engine | The Go package that moves groups through stages, spawns and watches sessions, and holds worktrees and leases; one engine process runs per run |
+| Engine | The orchestration engine, which moves groups through stages; the Go package `engine` also holds the workspace and leases, the session supervisor, the scheduler and error recovery ([Appendix A](#appendix-a-traceability)); one engine process runs per run |
 | Verb | One subcommand of the binary, such as run or status |
 | Envelope | The structured reply of every verb: version, success flag, verdict, report, data and error |
 | Agent | A model role with private tools; seven exist: planner, architect, reviewer, builder, researcher, tester, scout |
@@ -2286,7 +2284,7 @@ Architecture terms used across this document and the [Low-Level Design](lld.md).
 | Group state | A group's events, snapshots and replay as one unit inside the state manager |
 | Epoch | An integer that rises on each stage entry, except a return from Paused; events with an older epoch are stale |
 | Lease | A per-group lock file held from Intake until landing or abandon |
-| Fence | A rising integer beside the lease that every git write carries; git's compare-and-swap refuses a stale holder |
+| Fence | A rising integer beside the lease that every git write carries. [TODO: what checks the fence before every write (G-61)] |
 | Worktree | A detached git checkout per group, where the builder works |
 | Hidden reference | The git reference where the engine saves every group commit; never pushed |
 
@@ -2316,7 +2314,7 @@ Architecture terms used across this document and the [Low-Level Design](lld.md).
 | Binary lifecycle | `host`, `core` | 2, 8 |
 | Configuration | `core` | 2 |
 | Provider adapters | `provider` | 4 |
-| HTTP stack | `core` | 2 |
+| Network client | `core` | 2 |
 | Agent registry | `agent` | 3 |
 | Tool runtime | `tools`, `provider` | 4 |
 | Skill loader | `agent` | 3 |
@@ -2348,7 +2346,7 @@ Architecture terms used across this document and the [Low-Level Design](lld.md).
 | ISO/IEC/IEEE 42010:2022 | Stakeholders, concerns and views framing ([Stakeholders](#14-stakeholders)) |
 | Design Docs at Google, https://www.industrialempathy.com/posts/design-docs-at-google/ | Goals and non-goals, decisions with rejected alternatives |
 | Temporal workflows, https://docs.temporal.io/workflows | Pure decider and recorded activities |
-| Distributed leases with fencing tokens, https://hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens | Fence enforced by the resource |
+| Distributed leases with fencing tokens, https://hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens | Lease with a rising fence number |
 | OpenHands, https://arxiv.org/pdf/2407.16741 | Event stream as the agent's spine |
 | Codex CLI security, https://developers.openai.com/codex/security | Sandbox shape per operating system, network off by default |
 | AWS exponential backoff and jitter, https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter | Full-jitter retries |
