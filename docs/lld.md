@@ -2122,7 +2122,7 @@ flowchart LR
 
 ### 5.3 Data Model
 
-Go type and function names in this chapter are working names; the field sets, limits and rules come from the design. [TODO: the owner confirms the Go shapes of the registry, the brief builder and the supervisor, which this chapter derives from the described behaviour (G-NEW-1)]
+Go type and function names in this chapter are working names; the field sets, limits and rules come from the design. [TODO: the owner confirms the Go shapes of the registry, the brief builder and the supervisor, which this chapter derives from the described behaviour (G-101)]
 
 #### Agent files
 
@@ -2198,14 +2198,14 @@ The builder's `agent.json`, read by Go before a session starts:
   "guard": ["R1", "B1"],
   "limits": {"wall_min": 60, "idle_min": 10, "retries": 2},
   "skills": {
-    "allow": ["standards-comments", "[TODO: the other skills the builder may pull (G-NEW-8)]"],
+    "allow": ["standards-comments", "[TODO: the other skills the builder may pull (G-108)]"],
     "always": ["standards-comments"]
   },
   "slots": {
     "required": ["repo_profile", "group", "tasks", "files", "file_contents"],
     "optional": ["repo_context", "standards", "diff", "checks", "findings", "scope_answer", "specs"]
   },
-  "result": {"$id": "[TODO: the builder's result schema (G-NEW-8)]"},
+  "result": {"$id": "[TODO: the builder's result schema (G-108)]"},
   "pool_slot": true
 }
 ```
@@ -2269,7 +2269,7 @@ On Claude links heavy runs Opus, standard runs Sonnet and light runs Haiku; on A
 | Researcher | Answers factual questions about the code, citing `file:line` |
 | Scout | Reads and searches paths; runs on a local model when its chain allows |
 
-No agent has git write tools, forge credentials or a shell. Only the engine runs worktree add and remove, the lease, `commands.setup`, git commit, push and branch, Check, the group pull request, landing and release. No repo-defined agents exist; they wait for a later minor version. [TODO: when the engine runs the architect and the researcher, and when it runs the scout outside job templates (G-NEW-9)]
+No agent has git write tools, forge credentials or a shell. Only the engine runs worktree add and remove, the lease, `commands.setup`, git commit, push and branch, Check, the group pull request, landing and release. No repo-defined agents exist; they wait for a later minor version. [TODO: when the engine runs the architect and the researcher, and when it runs the scout outside job templates (G-109)]
 
 #### The brief
 
@@ -2358,7 +2358,7 @@ An empty required slot fails the brief before any model runs. An empty optional 
 | `baseline` | Tests failing at the base commit | None | Tester |
 | `lens_rules` | The applicable lenses' rule catalogs | Reviewer | None |
 
-An agent named in neither column never receives the slot; the scout receives only `goal` and `layout`. [TODO: whether `repo_context` and `standards` are two of the 20 slots rendered into parts 3 and 4, or slots in part 5 that repeat those parts; the slot list and the five-part table both name them, and the `# Brief` template places `repo_profile` between them (G-NEW-6)]
+An agent named in neither column never receives the slot; the scout receives only `goal` and `layout`. [TODO: whether `repo_context` and `standards` are two of the 20 slots rendered into parts 3 and 4, or slots in part 5 that repeat those parts; the slot list and the five-part table both name them, and the `# Brief` template places `repo_profile` between them (G-106)]
 
 **Ceiling per link.** A brief has no per-slot cap. Its only ceiling is half the link's measured context, read before each session.
 
@@ -2385,7 +2385,7 @@ One folder per session under `sessions/<id>/`. The supervisor writes the brief, 
 | `result.json` | Supervisor | The exit reason and the result |
 | `out/` | The tool runtime | Full tool outputs that were cut to 4 KB in the reply |
 
-[TODO: the fields of `request.json` and `result.json`, and the arguments of the `spawn` action (G-30)] [TODO: which parts `brief.md` holds, and who writes and what `system.md` and `mcp.json` hold in the same folder (G-NEW-7)]
+[TODO: the fields of `request.json` and `result.json`, and the arguments of the `spawn` action (G-30)] [TODO: which parts `brief.md` holds, and who writes and what `system.md` and `mcp.json` hold in the same folder (G-107)]
 
 The resume handle of the group's last session is stored in `state.json` as `ResumeRef`, with the session, handle and link ([Event Spine and State Machine](#23-data-model)).
 
@@ -2473,7 +2473,7 @@ func (e EmptySlotError) Error() string { return "required slot " + string(e.Slot
 | `Build` | Unknown agent | The name is not in the registry; a programming error |
 | `Place` | `ErrContext` | No link holds the brief; the group is Blocked `context` and nothing is cut |
 
-[TODO: how tokens are counted for the ceiling check (G-NEW-4)] [TODO: whether the brief builder or the provider router walks the chain to the next link that fits; the design says the brief builder, while Providers and HTTP derives a router call that takes the brief's token count (G-NEW-14)]
+[TODO: how tokens are counted for the ceiling check (G-104)] [TODO: whether the brief builder or the provider router walks the chain to the next link that fits; the design says the brief builder, while Providers and HTTP derives a router call that takes the brief's token count (G-114)]
 
 #### Session supervisor
 
@@ -2533,7 +2533,7 @@ func Supervise(ctx context.Context, s provider.Stream, lim SessionLimits, c *Clo
 | Supervisor | `Stream.Next`, `Stream.Inject`, `Stream.Stop` | Reading lines, the time warning and nudge, the stop ladder |
 | Supervisor | Events `session.start`, `task.claimed`, `session.idle`, `session.timewarn`, `session.end`, `task.released` | Each is a fact handed to `Drive` ([Event Spine and State Machine](#2-event-spine-and-state-machine)) |
 
-Failure behaviour: `Supervise` returns the exit reason it recorded and an error only when the stream or the stop ladder itself fails. [TODO: the signature and arguments of the `spawn` and `cancel` entry points (G-30)] [TODO: the data of each `session.*` event (G-24)] [TODO: how the tool server's events, such as a tool call starting and ending, reach the engine so `ToolsRunning` and the heartbeat are known (G-NEW-2)] [TODO: how `SessionLimits` is resolved from `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` (G-NEW-12)]
+Failure behaviour: `Supervise` returns the exit reason it recorded and an error only when the stream or the stop ladder itself fails. [TODO: the signature and arguments of the `spawn` and `cancel` entry points (G-30)] [TODO: the data of each `session.*` event (G-24)] [TODO: how the tool server's events, such as a tool call starting and ending, reach the engine so `ToolsRunning` and the heartbeat are known (G-102)] [TODO: how `SessionLimits` is resolved from `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` (G-112)]
 
 ### 5.5 Behaviour
 
@@ -2574,7 +2574,7 @@ sequenceDiagram
 6. The model works until it replies with text only. The supervisor meanwhile reads each stream line as a heartbeat.
 7. The model makes one final call that returns only the result schema. The provider enforces the schema, Go re-validates it, and one re-prompt is allowed before the task fails.
 8. The agent's own gate runs: `done_when` for a builder, `lint_backlog` for a planner. Two rejected results end the session with `check_fail`.
-9. A writing session ends with a work-in-progress commit to the hidden ref, by compare-and-swap with the fence. The supervisor writes `result.json` and emits `session.end` with the exit reason. [TODO: whether the session-end work-in-progress commit is the inline `session.end` hook or the `wip_commit` action that `Next()` orders when it handles `session.end` (G-NEW-13)]
+9. A writing session ends with a work-in-progress commit to the hidden ref, by compare-and-swap with the fence. The supervisor writes `result.json` and emits `session.end` with the exit reason. [TODO: whether the session-end work-in-progress commit is the inline `session.end` hook or the `wip_commit` action that `Next()` orders when it handles `session.end` (G-113)]
 10. Check reruns `done_when`, the `commit` action writes the hidden ref and `Next()` records `task.done` ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)).
 
 #### Algorithms
@@ -2648,7 +2648,7 @@ Liveness is events, never pings. A session is alive while its stream produces li
 6. If it was nudged, the grace is over and no stream line arrived, climb the stop ladder with reason `idle`.
 7. A stream line or tool call at any point resets the idle clock.
 
-A nudge cannot reach a model turn that is stuck inside a tool call. Delivery in that case is best effort, decided in G-14, and the proof accepts a late nudge. [TODO: whether a session that speaks after the nudge and goes silent again gets a second nudge (G-NEW-10)]
+A nudge cannot reach a model turn that is stuck inside a tool call. Delivery in that case is best effort, decided in G-14, and the proof accepts a late nudge. [TODO: whether a session that speaks after the nudge and goes silent again gets a second nudge (G-110)]
 
 **Stop a session**
 
@@ -2661,7 +2661,7 @@ flowchart LR
 
 1. Send `SIGINT`, the interrupt signal. It ends the current turn and keeps its result.
 2. After 30 s, if the session is alive, send `SIGTERM`, the terminate signal.
-3. After 60 s, kill the whole process tree. [TODO: whether the 60 s counts from the `SIGINT` or from the `SIGTERM` (G-NEW-11)]
+3. After 60 s, kill the whole process tree. [TODO: whether the 60 s counts from the `SIGINT` or from the `SIGTERM` (G-111)]
 4. On API links, cancel the request context once the current tool call returns.
 5. Each session runs in its own process group on Unix or Job Object on Windows, so killing the group ends every child process the model started.
 6. Write `result.json` with the exit reason, including the partial result of a turn that `SIGINT` ended, and emit `session.end`.
@@ -2721,7 +2721,7 @@ stateDiagram-v2
 | Ended | Reason `paused` | Alive (resumed) | The provider's handle is tried first |
 | Ended | Reason `timeout` or `idle` | Alive (fresh session) | A new session for the task, up to the agent's `retries` |
 
-After `Ended`, `Next()` decides the group's move from the exit reason ([Event Spine and State Machine](#26-state-and-transitions)). [TODO: which component counts a timeout or idle stop against the agent's `retries` (G-NEW-3)]
+After `Ended`, `Next()` decides the group's move from the exit reason ([Event Spine and State Machine](#26-state-and-transitions)). [TODO: which component counts a timeout or idle stop against the agent's `retries` (G-103)]
 
 #### Exit reasons
 
@@ -2768,7 +2768,7 @@ After `Ended`, `Next()` decides the group's move from the exit reason ([Event Sp
 | Resume handle fails | Resume error | Fresh session with the brief, the work-in-progress diff and the last `summary`; ledger logs `resume_lost` |
 | Session died without a report | Startup sweep ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)) | Reason `crash`; task released |
 
-[TODO: which component owns the session pool slots (G-NEW-5)]
+[TODO: which component owns the session pool slots (G-105)]
 
 The pause cap, an early `resume` before the provider reset and a planted `CLAUDE.md` are owned by [Providers and HTTP](#7-providers-and-http).
 
@@ -2867,13 +2867,13 @@ komodo config agent reviewer model=sonnet session_wall_min=90 retries=3
 | Gap | Open here |
 |---|---|
 | G-30 | The fields of `request.json` and `result.json`, and the arguments of the `spawn` action |
-| G-NEW-1 | The Go shapes of the registry, the brief builder and the supervisor |
-| G-NEW-2 | How the tool server's events reach the engine |
-| G-NEW-4 | How tokens are counted for the ceiling check |
-| G-NEW-6 | Whether `repo_context` and `standards` are slots, parts or both |
-| G-NEW-8 | Each agent's result schema and the builder's second allowed skill |
-| G-NEW-12 | How `agent.json` `limits`, the flat keys and `agents.<name>` combine |
-| G-NEW-14 | Who walks the chain when a brief is over the ceiling |
+| G-101 | The Go shapes of the registry, the brief builder and the supervisor |
+| G-102 | How the tool server's events reach the engine |
+| G-104 | How tokens are counted for the ceiling check |
+| G-106 | Whether `repo_context` and `standards` are slots, parts or both |
+| G-108 | Each agent's result schema and the builder's second allowed skill |
+| G-112 | How `agent.json` `limits`, the flat keys and `agents.<name>` combine |
+| G-114 | Who walks the chain when a brief is over the ceiling |
 
 **Can wait**
 
@@ -2882,13 +2882,13 @@ komodo config agent reviewer model=sonnet session_wall_min=90 retries=3
 | G-14 | A nudge reaching a turn stuck in a tool call; decided as best effort, proof in phase 5 |
 | G-24 | The data of the `session.*` events |
 | G-32 | The crash-safe counters, the per-task retry count included |
-| G-NEW-3 | Which component counts a timeout or idle stop against `retries` |
-| G-NEW-5 | The owner of the session pool slots |
-| G-NEW-7 | What `brief.md`, `system.md` and `mcp.json` hold |
-| G-NEW-9 | When the engine runs the architect, the researcher and the scout |
-| G-NEW-10 | A second nudge after a recovery |
-| G-NEW-11 | The start point of the 60 s kill |
-| G-NEW-13 | Whether the session-end commit is a hook or an action |
+| G-103 | Which component counts a timeout or idle stop against `retries` |
+| G-105 | The owner of the session pool slots |
+| G-107 | What `brief.md`, `system.md` and `mcp.json` hold |
+| G-109 | When the engine runs the architect, the researcher and the scout |
+| G-110 | A second nudge after a recovery |
+| G-111 | The start point of the 60 s kill |
+| G-113 | Whether the session-end commit is a hook or an action |
 | G-17 | The 50% prompt-cache hit fixture needs real API sessions |
 | G-18 | `repo_map` patterns for TypeScript, Python and Rust |
 | G-20 | The OpenAI links in the ceiling table wait for a later minor version |
@@ -8448,6 +8448,20 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-98 | Binary lifecycle | Hot swap, check points, restart window and prerelease flag | Owner confirmation |
 | G-99 | State | Checksum algorithm of event lines | Owner decision |
 | G-100 | Guard | Guard inputs: test-sibling rules, secret patterns, glob grammar, system prompt file content | Owner decision |
+| G-101 | Sessions | The Go shapes of the registry (`Load`, `Agent`), the brief builder (`Build`, `Place`, `Brief`) and the supervisor (`Clocks`, `Tick`, `Supervise`). The sources give behaviour and field tables but no signatures; this chapter derives them. | Owner review of 5.3 and 5.4, phase 3 |
+| G-102 | Sessions, tools | How the tool server's events, such as a tool call starting and ending, reach the engine. The supervisor needs them for "a tool call runs" in its heartbeat and idle rule. | Owner decision with the tool server design, phase 4 |
+| G-103 | Sessions, engine | Which component counts a timeout or idle stop against the agent's `retries`, and where the count lives between `TaskState.Retries` and the supervisor. | Owner decision with G-32 |
+| G-104 | Sessions | How tokens are counted for the brief ceiling check: a tokenizer, the provider's count endpoint or an estimate, and whether the count is the same for all links. | Spike, phase 4 |
+| G-105 | Engine | The owner of the session pool slots; the sources place the pool in the engine without naming a file owner. | Owner decision on the architecture page |
+| G-106 | Briefs | `repo_context` and `standards` are both brief parts 3 and 4 and two of the 20 slots filled into part 5, and the `prompt.md` template puts `repo_profile` between them. Decide whether they are parts, slots or both, and the slot count. | Owner decision |
+| G-107 | Briefs, providers | What `brief.md`, `system.md` and `mcp.json` each hold, who writes `system.md` and `mcp.json`, and whether role text goes to the system prompt, the brief or both. | Owner decision with chapter 7 |
+| G-108 | Agents | The result schema of each of the 7 agents (`$id` and fields), and the builder's `skills.allow` list beyond `standards-comments`. | Authoring task, phase 3 |
+| G-109 | Agents | When the engine runs the architect and the researcher, and when it runs the scout outside job templates. | Owner decision |
+| G-110 | Supervisor | Whether a session that speaks after the nudge and goes silent again gets a second nudge or goes straight to the stop ladder. | Owner decision |
+| G-111 | Supervisor | Whether the 60 s whole-tree kill counts from the SIGINT or from the SIGTERM. | Owner decision, proof in phase 5 |
+| G-112 | Config | How `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` keys combine into one session's clocks; only "the per-agent key beats the flat key" is stated. | Owner decision |
+| G-113 | Hooks | Whether the session-end work-in-progress commit is the inline `session.end` hook (Tools, Guard and Sandbox) or the `wip_commit` action `Next()` orders on `session.end` (Event Spine). | Owner decision |
+| G-114 | Briefs, providers | Whether the brief builder or the provider router walks the chain to the next link that fits; Appendix F and J say the brief builder, while Providers and HTTP derives a router call that takes the brief's token count. | Owner decision with chapter 7 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
