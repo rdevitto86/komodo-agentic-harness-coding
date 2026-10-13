@@ -1458,7 +1458,7 @@ The workspace gives each task group its own git checkout and a lock saying one r
 - The worktree of each group, under `~/.komodo/wt/`: cutting it, removing it when idle, rebuilding it, and the tester's throwaway worktree.
 - The lease and the fence beside it, under `~/.komodo/leases/`: taking, renewing, taking over and releasing.
 - The hidden reference `refs/komodo/groups/<group-id>`: moving it with `git update-ref` and the fence, and deleting it.
-- The startup sweep's actions on worktrees, leases and language caches. The sweep's owning file is `[TODO: whether the startup sweep lives in worktree.go or recover.go (G-NEW-11)]`.
+- The startup sweep's actions on worktrees, leases and language caches. The sweep's owning file is `[TODO: whether the startup sweep lives in worktree.go or recover.go (G-68)]`.
 
 **Does not own:**
 - The shutdown sequence and the parent guard that repeats it: [Shutdown and the parent guard](#35-behaviour).
@@ -1499,7 +1499,7 @@ internal/
     └── qa.go          # the tester session uses the tester worktree (chapter 9)
 ```
 
-The design lists the startup sweep under both `worktree.go` ("detached cut, sweep, lease") and `recover.go` ("startup sweep"). That conflict is `[TODO: which file owns the sweep (G-NEW-11)]`.
+The design lists the startup sweep under both `worktree.go` ("detached cut, sweep, lease") and `recover.go` ("startup sweep"). That conflict is `[TODO: which file owns the sweep (G-68)]`.
 
 On disk, this chapter writes under the machine folder `~/.komodo/` (on Windows `%LOCALAPPDATA%\komodo`):
 
@@ -1511,7 +1511,7 @@ On disk, this chapter writes under the machine folder `~/.komodo/` (on Windows `
 └── cache/lang/<repo-id>/                   # language caches the sweep deletes when over the cap or unused
 ```
 
-The hidden reference sits in the repository's own git directory, not under `~/.komodo/`. Where a lease file renamed aside is kept, and its full name, is `[TODO: stale file location and name (G-NEW-3)]`.
+The hidden reference sits in the repository's own git directory, not under `~/.komodo/`. Where a lease file renamed aside is kept, and its full name, is `[TODO: stale file location and name (G-60)]`.
 
 **Entry points**
 
@@ -1522,11 +1522,11 @@ The hidden reference sits in the repository's own git directory, not under `~/.k
 | Renew the lease | `Leases.Renew` | `Drive`, every five minutes |
 | Move the hidden reference | `HiddenRefs.Move` | `Drive`, after each group commit |
 | Save and release | `Worktrees.Save`, then `Leases.Release` | Shutdown, the parent guard, landing, `abandon` |
-| Remove an idle worktree | `Worktrees.Save`, then `Worktrees.Remove` | `[TODO: which actor runs the three-day idle removal (G-NEW-9)]` |
+| Remove an idle worktree | `Worktrees.Save`, then `Worktrees.Remove` | `[TODO: which actor runs the three-day idle removal (G-66)]` |
 | Rebuild a worktree | `Worktrees.Rebuild` | `resume` |
 | Startup sweep | `Sweeper.Sweep` | The engine at start |
 
-The function names in this chapter are a working shape: `[TODO: confirm the exported names and signatures of the workspace functions; the design fixes behaviour, not names (G-NEW-1)]`.
+The function names in this chapter are a working shape: `[TODO: confirm the exported names and signatures of the workspace functions; the design fixes behaviour, not names (G-58)]`.
 
 ### 4.3 Data Model
 
@@ -1549,7 +1549,7 @@ The renewal period, five minutes, is `LeaseRenewEvery` in [Engine Internals](#3-
 
 #### Lease
 
-The lease file `~/.komodo/leases/<repo-id>/<group-id>.json` holds the run, process id, host, clone path, fence, and the taken and renewed times. A scheduled job takes a lease named `job-<name>` with a fence the same way; its file path is `[TODO: the lease file path of a job (G-NEW-3)]`.
+The lease file `~/.komodo/leases/<repo-id>/<group-id>.json` holds the run, process id, host, clone path, fence, and the taken and renewed times. A scheduled job takes a lease named `job-<name>` with a fence the same way; its file path is `[TODO: the lease file path of a job (G-60)]`.
 
 ```go
 // Fence is the counter that rises on every take or takeover of a group's lease.
@@ -1574,7 +1574,7 @@ func (l Lease) Expired(now time.Time) bool { return now.Sub(l.RenewedAt) > Lease
 |---|---|---|
 | `run` | string | The run identifier; a second `run` on the group is refused and names it |
 | `pid` | integer | Process id; a dead process makes the lease dead before the expiry |
-| `host` | string | Machine name; how it is used when the holder runs elsewhere is `[TODO: whether liveness is checked only when host matches (G-NEW-6)]` |
+| `host` | string | Machine name; how it is used when the holder runs elsewhere is `[TODO: whether liveness is checked only when host matches (G-63)]` |
 | `clone_path` | string | The clone the run started from; the sweep removes a lease whose clone path is gone |
 | `fence` | integer | The fence value written at take or takeover |
 | `taken_at`, `renewed_at` | time | Rewritten at renewal: `renewed_at` only; `[TODO: timestamp format (G-30)]` |
@@ -1597,7 +1597,7 @@ The key names other than `pid`, `taken_at` and `renewed_at` are a working shape:
 
 #### Fence file
 
-`<group>.fence` (the file `<group-id>.fence` beside the lease) holds one monotonic integer, written with `Replace`. It is incremented on every take or takeover and never falls. The file's text format and its value on the first take are `[TODO: fence file body and first value (G-NEW-3)]`.
+`<group>.fence` (the file `<group-id>.fence` beside the lease) holds one monotonic integer, written with `Replace`. It is incremented on every take or takeover and never falls. The file's text format and its value on the first take are `[TODO: fence file body and first value (G-60)]`.
 
 #### Hidden reference
 
@@ -1619,7 +1619,7 @@ type Worktree struct {
 }
 ```
 
-Every worktree lives outside every clone, so no path contains `.git`, and one place serves every clone of the repository. On Windows the worktree folder names are short hashes, to stay under the 260-character path limit (`MAX_PATH`). What the hash covers, and whether other platforms use the group name, is `[TODO: worktree folder naming (G-NEW-7)]`.
+Every worktree lives outside every clone, so no path contains `.git`, and one place serves every clone of the repository. On Windows the worktree folder names are short hashes, to stay under the 260-character path limit (`MAX_PATH`). What the hash covers, and whether other platforms use the group name, is `[TODO: worktree folder naming (G-64)]`.
 
 #### Events and machine log lines
 
@@ -1647,7 +1647,7 @@ flowchart TB
 
 ### 4.4 Interfaces
 
-The design names behaviours, not signatures: `[TODO: confirm names and signatures (G-NEW-1)]`. The shapes below are the working form. Errors are shared by all three interfaces.
+The design names behaviours, not signatures: `[TODO: confirm names and signatures (G-58)]`. The shapes below are the working form. Errors are shared by all three interfaces.
 
 ```go
 var (
@@ -1684,8 +1684,8 @@ type Leases interface {
 | Method | Error means | Caller does |
 |---|---|---|
 | `Take` with `HeldError` | A live run holds the group | `run` refuses and names the holder; `resume` refuses and names the new holder |
-| `Take`, other error | The state manager could not write | `[TODO: what the engine does when the write fails (G-NEW-6)]` |
-| `Renew` with `ErrLeaseLost` | Another run took the group | `[TODO: what Drive does when a renewal is refused (G-NEW-6)]` |
+| `Take`, other error | The state manager could not write | `[TODO: what the engine does when the write fails (G-63)]` |
+| `Renew` with `ErrLeaseLost` | Another run took the group | `[TODO: what Drive does when a renewal is refused (G-63)]` |
 | `Release` with `ErrUnsaved` | Edits are not yet in the hidden reference | Save first, then release |
 | `Release` with `ErrAgentsLive` | A session is still running | Stop the sessions first |
 
@@ -1711,10 +1711,10 @@ type Worktrees interface {
 |---|---|---|
 | `Cut` | git refused, for example a path that is too long on Windows | `[TODO: Intake failure handling (G-31)]`; `doctor` names the long-path fix |
 | `Save` with `ErrRefMoved` | A newer fence moved the reference | The caller emits `lease.lost` |
-| `Rebuild` | The hidden reference is missing | `[TODO: behaviour when the reference is gone (G-NEW-9)]` |
+| `Rebuild` | The hidden reference is missing | `[TODO: behaviour when the reference is gone (G-66)]` |
 | `Remove` with `ErrUnsaved` | Unsaved work remains | Save first; the sweep keeps such a worktree |
 
-The steps inside `Save`, such as what is staged, are `[TODO: work-in-progress commit contents (G-NEW-10)]`.
+The steps inside `Save`, such as what is staged, are `[TODO: work-in-progress commit contents (G-67)]`.
 
 #### Hidden references
 
@@ -1744,7 +1744,7 @@ type Sweeper interface {
 
 | Caller | Call | When |
 |---|---|---|
-| Engine | `Leases.Take` | A queue item is taken `[TODO: order against the pool slot and Intake (G-NEW-2)]` |
+| Engine | `Leases.Take` | A queue item is taken `[TODO: order against the pool slot and Intake (G-59)]` |
 | Intake | `Worktrees.Cut` | The group's first stage |
 | `Drive` | `Leases.Renew` | Every five minutes |
 | `Drive` | `HiddenRefs.Move` | After each group commit |
@@ -1799,7 +1799,7 @@ The design states the order in four places, and they disagree.
 | Intake stage row | Intake takes the lease and fence, then cuts the worktree |
 | Lease, held | The lease is held from Intake until landing or abandon |
 
-`[TODO: the order of queue-file deletion, pool slot, lease, Intake and worktree cut, and which of the four statements holds (G-NEW-2)]`
+`[TODO: the order of queue-file deletion, pool slot, lease, Intake and worktree cut, and which of the four statements holds (G-59)]`
 
 ##### Take a lease
 
@@ -1809,7 +1809,7 @@ The design states the order in four places, and they disagree.
 4. If the lease is stale or its holder is dead, rename the old file aside with the `.stale-` prefix. Only one run can rename it, so only one run wins; the loser's rename fails and it re-reads.
 5. The winner claims a new file; the fence rises.
 
-When the fence is raised relative to the claim, the full stale file name, and how a dead holder is detected are `[TODO: take and takeover step order, stale file name, holder liveness check (G-NEW-3)]`.
+When the fence is raised relative to the claim, the full stale file name, and how a dead holder is detected are `[TODO: take and takeover step order, stale file name, holder liveness check (G-60)]`.
 
 **📐 Two runs race for one stale lease**
 ```mermaid
@@ -1831,7 +1831,7 @@ sequenceDiagram
 1. Every 5 minutes `Drive` rewrites the lease with a new `renewed_at` through `Replace`. Whether `Drive` keeps running, and so keeps renewing, while a group is Paused or Blocked is `[TODO: Drive during Paused and Blocked (G-29)]`.
 2. A lease whose last renewal is more than 2 hours old counts as dead.
 
-The `rev` check of `Replace` refuses a write over a changed record. What `Drive` does with the refusal is `[TODO: renewal refusal handling (G-NEW-6)]`.
+The `rev` check of `Replace` refuses a write over a changed record. What `Drive` does with the refusal is `[TODO: renewal refusal handling (G-63)]`.
 
 ##### Move the hidden reference
 
@@ -1840,7 +1840,7 @@ The `rev` check of `Replace` refuses a write over a changed record. What `Drive`
 3. Exit 0: the reference moved, and the reflog line records the fence.
 4. Exit 128, `cannot lock ref`: the reference no longer holds `old`. Emit `lease.lost`; `Next()` stops the group.
 
-Git compares only the old commit id; it does not read the fence. A scratch repository showed two further facts: a reflog line is written for a reference under `refs/komodo/` only when the update passes `--create-reflog` (or `core.logAllRefUpdates=always` is set), and `git branch` lists no such reference. Two design points follow, both open: `[TODO: how the reflog is enabled for hidden references (G-NEW-5)]` and `[TODO: what compares the fence number itself for the hidden reference, push, landing and scope change, given that git compares only the commit id (G-NEW-4)]`.
+Git compares only the old commit id; it does not read the fence. A scratch repository showed two further facts: a reflog line is written for a reference under `refs/komodo/` only when the update passes `--create-reflog` (or `core.logAllRefUpdates=always` is set), and `git branch` lists no such reference. Two design points follow, both open: `[TODO: how the reflog is enabled for hidden references (G-62)]` and `[TODO: what compares the fence number itself for the hidden reference, push, landing and scope change, given that git compares only the commit id (G-61)]`.
 
 **📐 Two engines race to move one reference**
 ```mermaid
@@ -1882,7 +1882,7 @@ flowchart TB
 1. `Save` makes a work-in-progress commit of the worktree's edits and moves the hidden reference to it with the fence.
 2. A worktree unused for three days is saved this way, then its folder is removed. `resume` rebuilds it from the hidden reference with `git worktree add --detach`.
 
-How "unused" is measured, whether a still-leased worktree may be removed, and which actor does it are `[TODO: idle removal trigger, measure and lease interaction (G-NEW-9)]`.
+How "unused" is measured, whether a still-leased worktree may be removed, and which actor does it are `[TODO: idle removal trigger, measure and lease interaction (G-66)]`.
 
 ##### Tester worktree
 
@@ -1890,11 +1890,11 @@ How "unused" is measured, whether a still-leased worktree may be removed, and wh
 2. Dependencies are copied into it by the sandbox chapter's copy rules ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)).
 3. The folder is removed when Verify ends.
 
-The tester worktree's path, and whether the cut is in `worktree.go` or `qa.go`, are `[TODO: tester worktree path and owning file (G-NEW-8)]`.
+The tester worktree's path, and whether the cut is in `worktree.go` or `qa.go`, are `[TODO: tester worktree path and owning file (G-65)]`.
 
 ##### Windows settings
 
-Each worktree sets `core.longpaths`, `core.filemode false` and `core.autocrlf false`, so git does not report every file as changed. `doctor` warns when the Windows long-path switch is off. How the settings are applied to one worktree only is `[TODO: per-worktree git settings mechanism (G-NEW-7)]`.
+Each worktree sets `core.longpaths`, `core.filemode false` and `core.autocrlf false`, so git does not report every file as changed. `doctor` warns when the Windows long-path switch is off. How the settings are applied to one worktree only is `[TODO: per-worktree git settings mechanism (G-64)]`.
 
 ##### Startup sweep
 
@@ -1916,7 +1916,7 @@ flowchart TB
 | 3 | Re-enqueues queue items with no lease; emits `session.end crash` for dead sessions |
 | 4 | Deletes a repo's language cache over `sandbox.lang_cache_gb` or unused 30 days |
 
-Further actions the design lists without naming a scan: deleting leases whose clone path is gone; removing Docker images and worktree folders whose clone is gone; removing worktrees with no live lease and no unsaved work. `[TODO: which scan runs each unplaced action, and where the pid files live (G-NEW-11)]`
+Further actions the design lists without naming a scan: deleting leases whose clone path is gone; removing Docker images and worktree folders whose clone is gone; removing worktrees with no live lease and no unsaved work. `[TODO: which scan runs each unplaced action, and where the pid files live (G-68)]`
 
 Rules the sweep keeps:
 - It never deletes a worktree with unsaved work.
@@ -1954,7 +1954,7 @@ stateDiagram-v2
 
 After each move: `Held` means exactly one run may write the group's worktree and hidden reference, with the current fence. `Stale` means any run may start a takeover, and the old holder's next reference move is refused.
 
-The lease is held from Intake until landing or abandon, through the states "queued, checking, verifying, paused and blocked". `[TODO: those names do not match the stage names Intake, Build, Check, Verify, Ship, Paused and Blocked (G-NEW-2)]` A Paused or Blocked group gives back its pool slot and keeps its lease and worktree; who renews the lease during a long pause is open with `[TODO: Drive during Paused and Blocked (G-29)]`.
+The lease is held from Intake until landing or abandon, through the states "queued, checking, verifying, paused and blocked". `[TODO: those names do not match the stage names Intake, Build, Check, Verify, Ship, Paused and Blocked (G-59)]` A Paused or Blocked group gives back its pool slot and keeps its lease and worktree; who renews the lease during a long pause is open with `[TODO: Drive during Paused and Blocked (G-29)]`.
 
 #### The worktree
 
@@ -1988,7 +1988,7 @@ The lease is held from Intake until landing or abandon, through the states "queu
 | Release requested with edits unsaved | `Release` returns `ErrUnsaved` | Save first |
 | Lease whose clone path is gone | The sweep | The lease is deleted |
 | Windows long paths off | `doctor` | `doctor` warns and names the fix; worktree folder names are short hashes |
-| Worktree unused three days | Idle measure `[TODO (G-NEW-9)]` | Saved to the hidden reference and removed; `resume` rebuilds it |
+| Worktree unused three days | Idle measure `[TODO (G-66)]` | Saved to the hidden reference and removed; `resume` rebuilds it |
 
 ### 4.8 Config
 
@@ -2020,11 +2020,11 @@ Component tests use a temporary directory and a temporary git repository; no net
 
 | Gap | Open here |
 |---|---|
-| G-NEW-1 | Exported names and signatures of the workspace functions |
-| G-NEW-2 | Order of queue-file deletion, pool slot, lease and Intake; the "queued, checking, verifying" names |
-| G-NEW-3 | Take and takeover step order, stale file name, fence file body, job lease path |
-| G-NEW-4 | What compares the fence number, given git compares only the commit id |
-| G-NEW-6 | Holder liveness across hosts; renewal refusal; failed `Take` |
+| G-58 | Exported names and signatures of the workspace functions |
+| G-59 | Order of queue-file deletion, pool slot, lease and Intake; the "queued, checking, verifying" names |
+| G-60 | Take and takeover step order, stale file name, fence file body, job lease path |
+| G-61 | What compares the fence number, given git compares only the commit id |
+| G-63 | Holder liveness across hosts; renewal refusal; failed `Take` |
 | [G-29](#appendix-o-gap-register) | Whether `Drive` runs, and renews, while a group is Paused or Blocked |
 | [G-31](#appendix-o-gap-register) | Intake failure handling and the stage move on a lost lease |
 | [G-30](#appendix-o-gap-register) | Lease file key names, record layout, machine log file name |
@@ -2033,12 +2033,12 @@ Component tests use a temporary directory and a temporary git repository; no net
 
 | Gap | Open here |
 |---|---|
-| G-NEW-5 | Reflog enabling for hidden references |
-| G-NEW-7 | Worktree folder naming; per-worktree git settings |
-| G-NEW-8 | Tester worktree path and owning file |
-| G-NEW-9 | Idle removal trigger and measure; missing hidden reference at `resume` |
-| G-NEW-10 | Work-in-progress commit contents |
-| G-NEW-11 | Sweep owner file, scan placement, pid file location |
+| G-62 | Reflog enabling for hidden references |
+| G-64 | Worktree folder naming; per-worktree git settings |
+| G-65 | Tester worktree path and owning file |
+| G-66 | Idle removal trigger and measure; missing hidden reference at `resume` |
+| G-67 | Work-in-progress commit contents |
+| G-68 | Sweep owner file, scan placement, pid file location |
 | [G-24](#appendix-o-gap-register) | `lease.lost` payload |
 
 ## 5. Sessions, Agents and Briefs
@@ -7563,6 +7563,17 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-55 | Sandbox | The path of the per-repo test lock file on macOS and how long the second session waits | Owner decision with the machine-shared file locking rule |
 | G-56 | Tools | How the tool server learns its worktree, the group's `files`, the command classes and the protocol revision without reading disk; what the engine does when the server misses the 30 s `initialize` limit or a sandbox cannot be prepared | Owner decision |
 | G-57 | Guard | The top-level layout of `embed/policy.json`, its version number, and how a reader handles an older or newer file; the layout and version of call logs under `<session>/out/` | Owner decision |
+| G-58 | Workspace | Exported names and signatures of the workspace functions; the design fixes behaviour only | Owner confirms the shapes in 4.4 |
+| G-59 | Engine, Workspace | Order of queue-file deletion, pool slot, lease and Intake; four statements disagree (same item as chapter 3 G-63); lease "held through queued, checking, verifying" names do not match stage names | Owner decision; one sequence in Engine Internals and 4.5 |
+| G-60 | Workspace | Take and takeover step order (claim versus fence raise), first fence value, fence file body, `.stale-` file full name and location, lease path of a job lease `job-<name>` | Design patch to 4.3 and 4.5 |
+| G-61 | Workspace | `git update-ref` compares only the old commit id; a stale holder that re-reads the reference passes. What checks the fence number for the hidden reference, push, landing and scope change is not designed (scratch-repo proof in this session) | Owner decision; then 4.5 "Move the hidden reference" |
+| G-62 | Workspace | A reflog line under `refs/komodo/` is written only with `--create-reflog` or `core.logAllRefUpdates=always`; the design says the reflog records `fence=<n>` without saying how it is enabled | Spike or owner decision |
+| G-63 | Workspace, Engine | How a dead holder is detected (pid check versus host), what `Drive` does when a renewal is refused (also chapter 3 G-65), and what happens when `Take` fails to write | Owner decision; then 4.4 |
+| G-64 | Workspace | Worktree folder name on each platform (short hash of what, and `<group>` versus `<group-id>`); how the three Windows git settings are applied to one worktree | Design patch to 4.3 |
+| G-65 | Workspace, Quality | Tester worktree path, which file cuts it (`worktree.go` or `qa.go`), and how the sweep finds a dead run's tester worktrees | Design patch to 4.5 |
+| G-66 | Workspace | What "unused for 3 days" measures, which actor removes an idle worktree, whether a still-leased worktree may be removed, and behaviour of `Rebuild` when the hidden reference is gone | Owner decision |
+| G-67 | Workspace | Contents of a work-in-progress commit: what is staged, untracked and ignored files, message, and which actor writes the one at every session end | Design patch to 4.5 |
+| G-68 | Recovery, Workspace | Owner file of the startup sweep (`worktree.go` or `recover.go`), which of the 4 scans runs each unplaced action, pid file location | Owner decision on the sweep owner |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
