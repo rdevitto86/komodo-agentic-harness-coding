@@ -40,6 +40,7 @@
 | 0.10 | 2026-10-12 | Event envelope fields renamed for plain reading: `v` to `version`, `ts` to `timestamp`, `crc` to `checksum`, `seq` to `sequence`; event lines carry no record header (`kind`, `key`, `rev`, `writer`) |
 | 0.11 | 2026-10-12 | Component IDs (S01 to S29) removed: components are named, [Component traceability (Appendix Q)](appendix-q.md#component-traceability) maps names to sections, and a task group's `subsystem:` field and the gate's Maps check use the component name |
 | 0.12 | 2026-10-12 | Section numbers removed: headings carry names only, and every reference names its section and appendix as a link; 9 references that pointed at the wrong section now point at the right one |
+| 0.13 | 2026-10-12 | Drive gets its own section in Appendix D: what it is, when it starts and ends, what it waits on, one turn in 8 steps; 3 proof cases; gap G-29 for its open behaviour |
 
 **Related documents:** [docs/hld.md](hld.md) (the High-Level Design), [docs/prd.md](prd.md), [docs/decisions/0001-standalone-harness.md](decisions/0001-standalone-harness.md), [Appendix Q](#appendix-q-component-traceability). Terms: the HLD Glossary.
 
@@ -3027,11 +3028,55 @@ Guarantees the tests pin:
 | Panic containment | Every goroutine starts through one panic-catching helper; a panic in one `Drive` emits `group.blocked crash` for that group alone |
 
 **What each one does**
-- **`Drive` per group:** One goroutine owns everything about a group: it reads events, writes the group state, calls `Next()` and runs the actions. Because nothing else writes those files, the group needs no mutex, and two groups never contend.
+- **`Drive` per group:** One goroutine owns everything about a group: it reads events, writes the group state, calls `Next()` and runs the actions. Because nothing else writes those files, the group needs no mutex, and two groups never contend. [Drive: the per-group loop (Appendix D)](appendix-d.md#drive-the-per-group-loop) explains it step by step.
 - **Session goroutine:** Each running model session has one goroutine that turns its stream into events. It sends them to its group's `Drive` over a channel with room for 256 events. Events are never dropped; if the channel fills, the session's goroutine waits.
 - **Cross-group state:** Everything groups share (the queue, pool and link slots, leases, the quota file) lives as files under `~/.komodo/state/`. Files are created exclusively or renamed into place, so the OS guarantees one winner without any in-memory lock.
 - **Run goroutine:** One goroutine per run builds the dependency graph, puts ready groups in the queue and collects finished `Drive`s. It holds no group state, so it can never corrupt a group.
 - **Panic containment:** Every goroutine starts through one helper that catches a panic (a Go runtime failure). A panic inside one group's `Drive` blocks only that group with reason `crash`; the run and the other groups continue.
+
+#### Drive: the per-group loop
+
+**In plain terms.** Drive is the loop inside the engine that runs one group of work from its start to its end. There is exactly one Drive per active group, and it is the only code allowed to change that group's records, the way one clerk alone writes in a case file while everyone else hands the clerk notes. Each time something happens to the group, Drive saves it, asks `Next()` (the engine's decision step, which works out what should happen and never writes anything) what to do, and carries that out. Without it, two pieces of code could change one group at once and leave its records contradicting each other. Only the engine runs it; a person sees its effect in `status`.
+
+```mermaid
+flowchart TB
+  START["① Start<br><small>pool slot and lease taken</small>"] --> LOAD["② Open and Load<br><small>last snapshot plus later events</small>"]
+  LOAD --> LOOP["③ Loop<br><small>one event per turn, 8 steps</small>"]
+  LOOP --> END["④ End<br><small>landed, abandoned, stopped or crashed</small>"]
+```
+
+**Reading the diagram.**
+1. ① A ready group gets a free session slot; the engine writes the group's lease and hands the group to a new Drive.
+2. ② Drive opens the group, which makes it the only writer, and loads the last snapshot plus the events saved after it.
+3. ③ Drive takes one event at a time and runs one turn for it, in the 8 steps listed below.
+4. ④ Drive stops when its group finishes or the run stops; a crash stops only its own group.
+
+| Part | What happens |
+|---|---|
+| Starts | A ready group gets a pool slot and its lease; the engine hands it to a new Drive, which calls `Open` and `Load` |
+| Waits on | Events from the group's sessions (a queue of 256, never dropped), the group's pause timer, and its lease renewal every 5 minutes |
+| One turn | Save the event, decide, record and run each side effect, mark it done, snapshot, notify the listeners |
+| Paused or Blocked | The group gives back its pool slot and keeps its lease; whether Drive keeps running or exits while it waits is `[UNKNOWN: not yet designed]` `[PENDING G-29]` |
+| Ends | The group lands or is abandoned, the run stops, or Drive crashes, which blocks only its own group |
+
+**What each one does**
+- **Starts:** The engine picks a ready group from the work queue, deletes its queue file, writes its lease and hands it to a new Drive ([Run order and convergence (Appendix D)](appendix-d.md#run-order-and-convergence)). Drive calls `Open` on the group's state, which makes it the group's only writer ([Group state (Appendix C)](appendix-c.md#group-state)). It then calls `Load`, which reads the last snapshot, replays the events saved after it, and returns any side effect that started but never finished, which Drive runs again ([The outbox (Appendix C)](appendix-c.md#the-outbox)).
+- **Waits on:** Each model session sends its events to the group's Drive over a queue with room for 256; an event is never dropped, and a full queue makes the session wait ([Concurrency model (Appendix D)](appendix-d.md#concurrency-model)). Drive also renews the group's lease every 5 minutes, and a live engine sleeps until a paused group's `wait_until` time ([Lease (Appendix E)](appendix-e.md#lease), [Paused versus Blocked (Appendix C)](appendix-c.md#paused-versus-blocked)). How a typed command such as `resume` reaches Drive is `[UNKNOWN: not yet designed]` `[PENDING G-29]`.
+- **One turn:** The 8 steps below. Chapter 2 draws the same path as a sequence diagram, from the producer through the state manager, `Next()` and the listeners ([Event spine and state machine](#2-event-spine-and-state-machine)).
+- **Paused or Blocked:** Both give back the group's pool slot so other groups can run, and both keep its lease and worktree ([Paused versus Blocked (Appendix C)](appendix-c.md#paused-versus-blocked)). The design does not yet say whether the Drive loop stays alive during the wait or exits and is started again on `resume`.
+- **Ends:** When the group lands or is abandoned, the run's goroutine collects the finished Drive. On `komodo stop`, the shutdown sequence stops sessions, saves work, frees leases and writes the snapshot ([Shutdown and the parent guard (Appendix E)](appendix-e.md#shutdown-and-the-parent-guard)). A crash inside one Drive blocks only that group with reason `crash`; the run and the other groups continue.
+
+**One turn, step by step**
+1. Drive takes the next event from its queue.
+2. It calls `Append`: the state manager stamps the event's sequence, timestamp, checksum and stale flag, checks it against the schema and syncs it to disk.
+3. It calls `Next()`, which returns the new state, the side effects to run and any follow-on events; a stale event changes nothing.
+4. It appends the follow-on events and an `action.start` line for each side effect.
+5. It runs each side effect, such as starting a session or making a commit. Pushing and opening a PR run beside the loop, so a slow network never holds it.
+6. It appends `action.done` for each finished side effect, so a restart skips it.
+7. It hands the new state to `Snapshot`, which writes `state.json` every 50 events or on a stage change.
+8. The event bus hands the event to the 3 listeners: the ledger, the wake file and the `status --watch` screen.
+
+Whether steps 2 to 4 become a single disk write, and whether step 8 waits for each listener, are `[UNKNOWN: not yet designed]` `[PENDING G-29]`.
 
 #### Work queue
 
@@ -5798,6 +5843,7 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 |
 | G-27 | Dashboard | An opt-in browser dashboard that stands in for the orchestrator: stack, `komodo ui` verb, live model changes, the "no server process" exception | Owner decision; proof of concept in `dashboard/` |
 | G-28 | Install | How `komodo init` writes Komodo's orchestrator skills and commands into the global Claude Code setup: a Claude Code plugin, or plain files with a machine manifest | Owner decision |
+| G-29 | Engine | Drive's open behaviour: whether it stays alive while its group is Paused or Blocked; how typed commands such as `resume` reach it; whether an event and its follow-ons are one disk write; whether it waits for each listener | Owner decisions on the event spine page; then a design patch to [Drive: the per-group loop (Appendix D)](appendix-d.md#drive-the-per-group-loop) |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](appendix-l.md#ship-and-release)).
@@ -6024,6 +6070,9 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - With `limits.pool_max` 2 and 4 ready groups, 2 sessions run and the rest queue.
 - A rate-limit error halves the pool, never below the floor.
 - A group whose dependency is Blocked waits while an unrelated group runs.
+- A crash inside one group's Drive blocks only that group with reason `crash`; a second group keeps running.
+- While a Drive runs, its group's lease renewal time moves forward every 5 minutes.
+- Killing the engine after an `action.start` and before its `action.done` makes the restarted Drive run that side effect again, once.
 - A landing that breaks Check on the epic tip sends the last-landed group back to Build.
 - `run` on a group with an unlanded dependency refuses and names it.
 - With 2 slots and 3 ready groups, the `priority: high` group starts first.

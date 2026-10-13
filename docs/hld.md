@@ -37,6 +37,7 @@
 | 0.10 | 2026-10-12 | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
 | 0.11 | 2026-10-12 | Component IDs removed; components are named in the traceability and decision tables |
 | 0.12 | 2026-10-12 | References to LLD sections name the section and its appendix |
+| 0.13 | 2026-10-12 | Glossary defines Drive, the engine's loop for one group |
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
@@ -621,6 +622,7 @@ Eighteen newcomer terms; the LLD links here.
 | Epic, group, task | Epic holds groups; group up to 8 tasks; task at most 5 files. |
 | Stage | Intake, Build, Check, Verify or Ship; Paused and Blocked hold. |
 | Event | Typed fact recorded before applying, like `task.done`; 32 types. |
+| Drive | The engine's loop for one group: the only code that changes that group's records. |
 | `Next()` | Sole pure function: (state, event) to (new state, actions, follow-on events). |
 | State manager | Only code that reads or writes runtime state; one schema, checked before disk. |
 | Group state | A group's events, snapshots and replay as one unit inside the state manager. |
@@ -719,6 +721,7 @@ Eighteen newcomer terms; the LLD links here.
 | State events | The append-only event file per group, `events.jsonl`. With the snapshot, it makes up group state, and replaying it rebuilds the state. |
 | Group state | The part of the state manager that keeps a group's events, snapshots and replay as one unit. Its 5 calls are `Open`, `Append`, `Snapshot`, `Load` and `Tail`. |
 | Snapshot | `state.json`: a group's state at one `sequence`, written every 50 events or on a stage change, so a restart replays at most 50 events. |
+| Drive | The engine's loop for one group, and the only code that changes that group's records. It saves each event, asks `Next()` what to do and carries it out (LLD Appendix D). |
 | `Next()` | The one pure function that turns (state, event) into (new state, actions, follow-on events). Nothing else changes group state. |
 | State manager | The in-process service that is the only code reading or writing runtime state. It fills in each record's header and refuses a write that breaks the state schema. |
 | State schema | `embed/state.schema.json`: one schema for every state record and every event type, generated from Go structs at build. |
@@ -775,7 +778,7 @@ Eighteen newcomer terms; the LLD links here.
 |---|---|
 | Document | High-Level Design (HLD) |
 | System | Komodo 1.0.0-beta.6, standalone model-agnostic Go harness |
-| Version | 0.12, draft |
+| Version | 0.13, draft |
 | Status | Awaiting architecture sign-off by the document owner |
 | Date | 2026-10-09 |
 | Source of truth | This HLD and `docs/lld.md` together; the retired `PLAN.md` stays readable in git at commit `dee89326` |
@@ -799,6 +802,7 @@ Eighteen newcomer terms; the LLD links here.
 | 0.10 | 2026-10-12 | Technical lead | Event fields use plain names: `sequence`, `timestamp`, `checksum`, `version` |
 | 0.11 | 2026-10-12 | Technical lead | Component IDs removed; components are named in the traceability and decision tables |
 | 0.12 | 2026-10-12 | Technical lead | References to LLD sections name the section and its appendix |
+| 0.13 | 2026-10-12 | Technical lead | Glossary defines Drive, the engine's loop for one group |
 
 #### 3.4 Related documents
 
