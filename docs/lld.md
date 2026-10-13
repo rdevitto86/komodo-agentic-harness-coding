@@ -884,9 +884,9 @@ Files of the same package that other chapters own:
 | Start rule | `Startable` in the run goroutine's file |
 | Stopping a run | The shutdown sequence in `shutdown.go` |
 
-The names are working names. `[TODO: confirm the exported names of the engine's functions; the design fixes behaviour, not names (G-NEW-3)]`
+The names are working names. `[TODO: confirm the exported names of the engine's functions; the design fixes behaviour, not names (G-35)]`
 
-The dependency graph is built in `internal/repo/graph.go` (waves and longest chain, [chapter 11](#11-backlog-planning-ship-and-release)); the engine imports it, as the import order allows. `[TODO: the file that holds the run goroutine, run-order readiness, the landing gate, the epic gate and the panic-catching helper; the design's file map names none (G-NEW-3)]`
+The dependency graph is built in `internal/repo/graph.go` (waves and longest chain, [chapter 11](#11-backlog-planning-ship-and-release)); the engine imports it, as the import order allows. `[TODO: the file that holds the run goroutine, run-order readiness, the landing gate, the epic gate and the panic-catching helper; the design's file map names none (G-35)]`
 
 ### 3.3 Data Model
 
@@ -972,7 +972,7 @@ type SlotFile struct {
 
 Versioning follows the same record header as the queue item.
 
-`[TODO: slot file names, the rest of the body, and where the pool's current ceiling is stored (G-NEW-1)]`
+`[TODO: slot file names, the rest of the body, and where the pool's current ceiling is stored (G-33)]`
 
 #### Drive
 
@@ -1011,7 +1011,7 @@ type Candidate struct {
 }
 ```
 
-`[TODO: exact definition of ChainWeight (whether the group's own tasks count) and Unblocks, and the key that gives Order (G-NEW-9)]`
+`[TODO: exact definition of ChainWeight (whether the group's own tasks count) and Unblocks, and the key that gives Order (G-41)]`
 
 #### Run flags
 
@@ -1019,7 +1019,7 @@ type Candidate struct {
 
 ### 3.4 Interfaces
 
-The design names `Drive`, `Next()`, the group state calls and the pick order. The exported names and signatures below are the working shape of those parts. `[TODO: confirm the exported names and signatures of the engine's functions; the design fixes behaviour, not names (G-NEW-3)]`
+The design names `Drive`, `Next()`, the group state calls and the pick order. The exported names and signatures below are the working shape of those parts. `[TODO: confirm the exported names and signatures of the engine's functions; the design fixes behaviour, not names (G-35)]`
 
 ```go
 // RunGroup opens a group, replays it, reruns open actions, then loops until the group ends or ctx is cancelled.
@@ -1038,13 +1038,13 @@ func HalvePool(size, floor int) int
 func Startable(dependencies []string, landed map[string]bool, tipChecked bool) bool
 ```
 
-`lastRepo` is the repository served by the previous pick; where that value is stored is `[TODO: round-robin cursor storage (G-NEW-2)]`.
+`lastRepo` is the repository served by the previous pick; where that value is stored is `[TODO: round-robin cursor storage (G-34)]`.
 
 **Failure behaviour of each function**
 
 | Function | On failure |
 |---|---|
-| `RunGroup` | `Open` refused (the group is already open in this process, or the process does not hold the lease): the `Drive` does not start. A refused `Append` is `state_invalid` and the group blocks; a bad line before the last during `Load` is moved aside as `.bad-*` and the group blocks `state_invalid`. An action that fails is `[TODO: action failure policy (G-NEW-8)]` |
+| `RunGroup` | `Open` refused (the group is already open in this process, or the process does not hold the lease): the `Drive` does not start. A refused `Append` is `state_invalid` and the group blocks; a bad line before the last during `Load` is moved aside as `.bad-*` and the group blocks `state_invalid`. An action that fails is `[TODO: action failure policy (G-40)]` |
 | `Pick` | Returns `false` when no item is ready; nothing is taken |
 | `GrowPool` | Cannot fail; returns the size unchanged when memory does not cover one more session or the ceiling is reached |
 | `HalvePool` | Cannot fail; returns the floor when halving would go below it |
@@ -1097,7 +1097,7 @@ sequenceDiagram
 5. A lands, alone, and Check runs on the epic tip with zero model tokens. The tip passes.
 6. The run goroutine sees that B's dependency has landed and the tip's Check passed, and creates the queue file for B. The engine takes it the same way as A's.
 7. B lands and the tip's Check passes.
-8. After the last landing the reviewer and the tester run once over the whole epic diff. `[TODO: epic gate events and the epic pull request step (G-NEW-5)]`
+8. After the last landing the reviewer and the tester run once over the whole epic diff. `[TODO: epic gate events and the epic pull request step (G-37)]`
 9. A person merges only the epic pull request.
 
 #### Algorithms
@@ -1156,8 +1156,8 @@ Open parts of the loop:
 - `[TODO: whether Drive keeps running or exits while its group is Paused or Blocked (G-29)]`
 - `[TODO: whether steps 2 to 4 become a single disk write (G-29)]`
 - `[TODO: whether step 8 waits for each listener (G-29)]`
-- `[TODO: what Drive does when an action fails, or when a lease renewal is refused (G-NEW-8)]`
-- `[TODO: how a paused group's time since pause is kept, for the pause cap (G-NEW-8)]`
+- `[TODO: what Drive does when an action fails, or when a lease renewal is refused (G-40)]`
+- `[TODO: how a paused group's time since pause is kept, for the pause cap (G-40)]`
 
 **Taking work from the queue**
 
@@ -1175,15 +1175,15 @@ sequenceDiagram
   R->>S: Claim lease
   R->>D: start, with pool slot
   D->>S: Open, Load
-  Note over R,D: Intake placement is open (G-NEW-6)
+  Note over R,D: Intake placement is open (G-38)
 ```
 
 1. When a dependency lands and Check passes on the epic tip, the run goroutine creates one queue file for each newly ready group. `komodo jobs tick` creates one for each due job.
 2. When a pool slot frees, the engine lists the queue and applies the pick order below.
-3. The engine takes the chosen item: it deletes the queue file, then writes the lease. A crash between the two steps leaves an item for the startup sweep to re-enqueue. `[TODO: the sweep cannot see an item whose file is already deleted and whose lease is not yet written (G-NEW-2)]`
-4. The engine starts the group's `Drive`. Intake runs just before the group's first session takes a slot, and the next ready group's Intake starts while the current group's first session loads, so a slot never sits idle longer than one `setup` run. `[TODO: where Intake sits between the slot, the lease and the first Drive event (G-NEW-6)]`
+3. The engine takes the chosen item: it deletes the queue file, then writes the lease. A crash between the two steps leaves an item for the startup sweep to re-enqueue. `[TODO: the sweep cannot see an item whose file is already deleted and whose lease is not yet written (G-34)]`
+4. The engine starts the group's `Drive`. Intake runs just before the group's first session takes a slot, and the next ready group's Intake starts while the current group's first session loads, so a slot never sits idle longer than one `setup` run. `[TODO: where Intake sits between the slot, the lease and the first Drive event (G-38)]`
 
-`[TODO: which process takes an item when queue items from several repositories are ready, and what happens when the winner belongs to another repository (G-NEW-2)]`
+`[TODO: which process takes an item when queue items from several repositories are ready, and what happens when the winner belongs to another repository (G-34)]`
 
 **Pick order**
 
@@ -1218,9 +1218,9 @@ flowchart TB
 
 Open parts of the pool:
 - `[TODO: whether `OLLAMA_NUM_PARALLEL` above 1 lets the local link exceed 1 (G-04)]`
-- `[TODO: slot file names, the order in which a session takes its pool slot and its link slot, and whether a session waits or fails when none is free (G-NEW-1)]`
-- `[TODO: where the adapted pool size lives when two engines share a machine (G-NEW-1)]`
-- `[TODO: what counts as a clean session end, and how free memory is measured on each operating system (G-NEW-1)]`
+- `[TODO: slot file names, the order in which a session takes its pool slot and its link slot, and whether a session waits or fails when none is free (G-33)]`
+- `[TODO: where the adapted pool size lives when two engines share a machine (G-33)]`
+- `[TODO: what counts as a clean session end, and how free memory is measured on each operating system (G-33)]`
 
 **Run order and convergence**
 
@@ -1237,7 +1237,7 @@ Rules:
 1. The graph is built from every group's dependencies and `touches` globs. A cycle is refused. Waves and the longest chain are computed; the longest chain also feeds the pick order.
 2. A group starts only after every dependency has landed and Check has passed on the epic tip.
 3. A group with 2 or more dependencies starts after all of them land.
-4. `run <group>` refuses when a dependency outside the run has not landed, and names it. `[TODO: how the engine learns that a dependency outside the run has landed (G-NEW-3)]`
+4. `run <group>` refuses when a dependency outside the run has not landed, and names it. `[TODO: how the engine learns that a dependency outside the run has landed (G-35)]`
 5. When a dependency is blocked, its dependents show `waiting on <group>` in `komodo status`; groups that do not depend on it keep running.
 6. When a dependency is abandoned, its dependents block with reason `dependency`, naming the abandoned group. `[TODO: confirm the abandon transition and the dependents' block (G-31)]`
 7. Inside a group, tasks run one after another in the group's worktree, with one builder at a time. Independent tasks belong in separate groups.
@@ -1258,8 +1258,8 @@ flowchart TB
 
 1. Finished groups land one at a time. Each landing is followed by Check on the epic tip, which costs 0 tokens.
 2. When that Check fails, landings pause and the last-landed group returns to Build in a new worktree cut from the tip. It has `limits.returns` returns; after that it blocks with reason `integration`. `[TODO: confirm the return from Ship to Build and the new worktree (G-31)]`
-3. `[TODO: how one-at-a-time landing is enforced between engine processes, and what holds the gate from the landing until the tip's Check finishes (G-NEW-4)]`
-4. `[TODO: when paused landings resume, in particular after a group blocks with reason integration (G-NEW-4)]`
+3. `[TODO: how one-at-a-time landing is enforced between engine processes, and what holds the gate from the landing until the tip's Check finishes (G-36)]`
+4. `[TODO: when paused landings resume, in particular after a group blocks with reason integration (G-36)]`
 
 **The epic gate**
 
@@ -1276,7 +1276,7 @@ flowchart TB
 1. After the last landing, the reviewer and the tester each run once over the whole epic diff.
 2. A finding goes to the group that last changed its file; that group returns to Build.
 3. A finding with no file blocks the whole epic with reason `epic_gate`. A person then merges only the epic pull request.
-4. `[TODO: how epic gate sessions and findings are recorded as events, how a landed group re-enters Build, which counter bounds the returns, how the group that last changed a file is found, and when the epic pull request is opened and run.done is written (G-NEW-5)]`
+4. `[TODO: how epic gate sessions and findings are recorded as events, how a landed group re-enters Build, which counter bounds the returns, how the group that last changed a file is found, and when the epic pull request is opened and run.done is written (G-37)]`
 
 **Shutdown and the parent guard**
 
@@ -1306,7 +1306,7 @@ sequenceDiagram
 5. If the engine dies past its own handler (`kill -9`, an out-of-memory kill, a Go fatal error) or writes no heartbeat for 10 minutes, the parent kills the sessions by their process identifier files and runs the same save and release.
 6. Power loss is left to the startup sweep ([chapter 9](#9-check-review-tester-and-recovery)).
 
-`[TODO: the parent guard's entry point, how the engine writes its heartbeat, and where the process identifier files live (G-NEW-7)]`
+`[TODO: the parent guard's entry point, how the engine writes its heartbeat, and where the process identifier files live (G-39)]`
 
 ### 3.6 State
 
@@ -1349,7 +1349,7 @@ stateDiagram-v2
 |---|---|---|---|
 | Open | A group lands and the tip's Check passes | Open | Dependents of that group may start |
 | Open | A group lands and the tip's Check fails | Paused | No group lands; the last-landed group is back in Build |
-| Paused | `[TODO: resume conditions (G-NEW-4)]` | `[TODO: next state (G-NEW-4)]` | `[TODO: (G-NEW-4)]` |
+| Paused | `[TODO: resume conditions (G-36)]` | `[TODO: next state (G-36)]` | `[TODO: (G-36)]` |
 
 ### 3.7 Invariants and Failures
 
@@ -1368,7 +1368,7 @@ stateDiagram-v2
 
 | Situation | Detected by | Behaviour |
 |---|---|---|
-| Crash between the queue file's deletion and the lease write | The startup sweep | The sweep re-enqueues an item that has no lease `[TODO: the sweep's view of a deleted item (G-NEW-2)]` |
+| Crash between the queue file's deletion and the lease write | The startup sweep | The sweep re-enqueues an item that has no lease `[TODO: the sweep's view of a deleted item (G-34)]` |
 | Session event channel full | The sending session goroutine | The sender waits; no event is dropped |
 | Panic inside one `Drive` | The panic-catching helper | `group.blocked` with reason `crash` for that group alone; the run and other groups continue |
 | Rate-limit error or quota past `warn.quota_pct` | The provider adapters report it | The pool halves, never below `limits.pool_min` |
@@ -1421,15 +1421,15 @@ stateDiagram-v2
 |---|---|
 | [G-29](#appendix-o-gap-register) | Whether `Drive` stays alive while Paused or Blocked; command transport; single disk write; listener waiting |
 | [G-31](#appendix-o-gap-register) | Return from Ship to Build, abandon, dependents' block, crash block, and the other stage moves the table lacks |
-| G-NEW-1 | Pool and link slot files, ceiling storage, acquisition order, clean end, free memory |
-| G-NEW-2 | Queue take crash window, multi-repository pick, round-robin cursor |
-| G-NEW-3 | Run goroutine file, exported function names, outside-run dependency status |
-| G-NEW-4 | Serial landing across processes, landing gate span, landing resume |
-| G-NEW-5 | Epic gate events, returns, file-to-group lookup, epic pull request, `run.done` |
-| G-NEW-6 | Intake placement relative to slot, lease and first event |
-| G-NEW-7 | Parent guard entry point, heartbeat, process identifier file location |
-| G-NEW-8 | Drive action failure, lease renewal refusal, pause start time |
-| G-NEW-9 | Chain weight, unblocked count and backlog order key |
+| G-33 | Pool and link slot files, ceiling storage, acquisition order, clean end, free memory |
+| G-34 | Queue take crash window, multi-repository pick, round-robin cursor |
+| G-35 | Run goroutine file, exported function names, outside-run dependency status |
+| G-36 | Serial landing across processes, landing gate span, landing resume |
+| G-37 | Epic gate events, returns, file-to-group lookup, epic pull request, `run.done` |
+| G-38 | Intake placement relative to slot, lease and first event |
+| G-39 | Parent guard entry point, heartbeat, process identifier file location |
+| G-40 | Drive action failure, lease renewal refusal, pause start time |
+| G-41 | Chain weight, unblocked count and backlog order key |
 
 **Can wait**
 
@@ -6844,6 +6844,15 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-30 | State and file formats | Exact field names and layout the design leaves open, shown as `[UNKNOWN: not yet designed]` in the examples: how a record's header and body sit in one file; the machine log's file names; per-type event `data` (also G-24); the fields of `install.json`, `state/providers.json`, `state/quota.json`, `jobs/state.json`, the lease file and `ledger/sessions.jsonl`; JSON key names in `embed/models.json`; how a repo id becomes a file name; `Action.Args`, `VerifyProgress`, and the `config_hash` and task id formats | A design patch naming each field, then the examples updated to match |
 | G-31 | Engine | Stage moves the transition table lacked: Ship back to Build when the epic tip breaks, the pause timeout, `resume` to the prior stage, scope answers, abandon, a lost lease and cancel; the `run.done` condition; the `group.cancelled` trigger; whether a lint failure at Intake blocks `lint` | Owner decision on the architecture page; then the transition table in [Event Spine and State Machine](#26-state-and-transitions) |
 | G-32 | Engine | The crash-safe counters in `State`: returns, Verify progress, failure hash, blocks per reason, wall time used, tokens used, each task's retries and the prior stage | Owner decision on the architecture page; then [Event Spine and State Machine](#23-data-model) |
+| G-33 | Engine, pool | Pool and link slot file names and bodies; where the adapted pool size lives when two engines share a machine; whether a session takes its pool slot or its link slot first, and whether it waits or fails when none is free; what counts as a clean session end; how free memory is measured on each operating system | Owner decision on the architecture page; then 3.3 and 3.5 |
+| G-34 | Engine, queue | A crash after the queue file is deleted and before the lease is written leaves nothing the startup sweep can see, yet the sweep re-enqueues "items with no lease"; which process takes an item when ready items from several repositories compete; where the round-robin cursor is stored | Owner decision on the architecture page; then 3.5 Taking work from the queue |
+| G-35 | Engine, run coordination | The design's file map has no file for the run goroutine, run-order readiness, the landing gate, the epic gate or the panic-catching helper; exported names of the engine's functions; how the engine learns that a dependency outside the run has landed | Owner decision; then 3.2 and Appendix A file map |
+| G-36 | Engine, landing | How one-at-a-time landing holds between engine processes; what holds the gate from the landing until the epic tip's Check finishes; when paused landings resume, in particular after a group blocks with `integration` | Owner decision on the architecture page; then 3.5 and 3.6 |
+| G-37 | Engine, epic gate | The event catalog has no type for the epic gate: how its sessions and findings are recorded, how a landed group re-enters Build, which counter bounds the returns, how the group that last changed a file is found, when the epic pull request is opened and when `run.done` is written | Owner decision on the architecture page; then a design patch to chapter 2 and 3.5 |
+| G-38 | Engine, Intake | The diagram places Intake between taking the slot and starting `Drive`, while the transition table places `setup` and `lock.taken` inside the Intake stage; where lint, the card hash and the worktree cut run relative to the first `Drive` event | Owner decision; then 3.5 |
+| G-39 | Engine, parent guard | The parent guard's entry point; how the engine writes its heartbeat; where the session process identifier files live | Owner decision; then 3.5 and Appendix A data locations |
+| G-40 | Engine, Drive | What `Drive` does when an action fails or when a lease renewal is refused; where the time a group has been paused is kept, since `PauseState` holds only the reset time and the cap `limits.pause_max_min` counts from the pause | Owner decision on the architecture page; then 3.4 and chapter 2 `PauseState` |
+| G-41 | Engine, pick order | The definitions of the longest remaining chain weighted by task count (whether the group's own tasks count), of "most groups unblocked", and the key that gives backlog identifier order | Owner decision; then 3.3 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
