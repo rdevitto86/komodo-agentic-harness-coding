@@ -564,7 +564,7 @@ sequenceDiagram
 - The event envelope and the fixed catalog of event types, each with its contract.
 - The decision function and the stage rulebook: five stages, the two waits (Paused and Blocked) and the reasons a group blocks.
 - The group state that the decision function reads, and the epochs that let a late event be ignored. [TODO: which counters the group state holds (G-81)]
-- The list of side-effect actions that the decision function can order, each with an idempotency key. [TODO: which subsystem owns the outbox of recorded actions (G-78)]
+- The list of side-effect actions that the decision function can order, each with an idempotency key. [TODO: which subsystem owns the outbox of recorded actions (G-68)]
 - Delivery of every applied event, in order, to three subscribers that never change group state.
 
 **Out of scope**
@@ -637,7 +637,7 @@ sequenceDiagram
 - Epochs, chosen over applying every event that arrives, because a cancelled Verify session's late result could otherwise move the stage twice.
 - Only the engine emits events, never a model, chosen over letting a session report its own progress, because a stage must move only on evidence that the engine produced.
 - Events written to disk before they are applied, chosen over applying first, because a group's place then survives any crash.
-- [TODO: the fields of each event type's payload (G-24)]
+- [TODO: the fields of each event type's payload (G-30)]
 - [TODO: the stage moves that the transition table lacks (G-31)]
 - [TODO: whether the engine loop keeps waiting for subscribers after delivering an event (G-29)]
 
@@ -652,7 +652,7 @@ sequenceDiagram
 - The run: the dependency graph of groups, the work queue and the order in which ready groups are picked.
 - Landing order and epic coordination: groups land one at a time, each followed by a check of the epic branch tip, and then the epic gate runs once over the whole epic.
 - Crash containment: a crash in one group blocks that group alone, and the parent guard (a small parent process) stops the agents and repeats the save if the engine itself dies.
-- The machine-wide pool of session slots. [TODO: which subsystem owns the session pool (G-78)]
+- The machine-wide pool of session slots. [TODO: which subsystem owns the session pool (G-68)]
 
 **Out of scope**
 - Deciding what an event means: the event spine ([5.3](#53-event-spine-and-state-machine)).
@@ -741,7 +741,7 @@ sequenceDiagram
 
 **Out of scope**
 - The parent guard that repeats the shutdown when the engine dies: the engine ([5.4](#54-engine-internals)).
-- The startup sweep after a power loss. [TODO: which subsystem owns the startup sweep (G-78)]
+- The startup sweep after a power loss. [TODO: which subsystem owns the startup sweep (G-68)]
 - Writing lease files to disk: the state manager ([5.14](#514-state-manager)).
 
 **📐 How a lease and a fence guard a group's work**
@@ -809,7 +809,7 @@ sequenceDiagram
 - Resume: continue the provider's conversation when possible, otherwise start a fresh session with the saved work.
 - The agent registry: seven roles (planner, architect, reviewer, builder, researcher, tester and scout), each with a weight, tools, limits and role text.
 - The brief builder: five parts, most stable first, filled from named slots, with a size check against half of the link's measured context.
-- Token counting for the brief gate. [TODO: how tokens are counted for the brief gate (G-82)]
+- Token counting for the brief gate. [TODO: how tokens are counted for the brief gate (G-48)]
 
 **Out of scope**
 - Choosing the link and talking to the model: providers ([5.8](#58-providers-and-http)).
@@ -1052,7 +1052,7 @@ sequenceDiagram
 - The orchestrator rules, built into the binary and written into the repository's orchestrator block by install.
 - The output contract: models return only codes and facts, and templates render the same bytes on every run.
 - The five places where rules are enforced: the guard, the result schema, Check and review, the comments standard and the orchestrator block.
-- The no-leak rule: no rule text ever enters a worker's brief. [TODO: how tokens are counted for the skill size bound (G-82)]
+- The no-leak rule: no rule text ever enters a worker's brief. [TODO: how tokens are counted for the skill size bound (G-48)]
 
 **Out of scope**
 - Placing a skill in a brief: the brief builder ([5.6](#56-sessions-agents-and-briefs)).
@@ -1134,7 +1134,7 @@ sequenceDiagram
 - Review: ten lenses of review rules, findings that count only when Go finds their quoted evidence, and one verdict for every task.
 - The tester: a blind pass over acceptance items in its own worktree, with reruns before a failure counts.
 - Scope requests: a builder asks for files outside its list, the engine denies protected paths, and the orchestrator answers the rest.
-- The failure table, with the final state of every failure. [TODO: who owns each limit counter: retries, returns and success-command failures (G-81)] [TODO: which subsystem owns the startup sweep (G-78)]
+- The failure table, with the final state of every failure. [TODO: who owns each limit counter: retries, returns and success-command failures (G-81)] [TODO: which subsystem owns the startup sweep (G-68)]
 
 **Out of scope**
 - Running the commands inside confinement: the sandbox ([5.7](#57-tools-guard-and-sandbox)).
@@ -1453,12 +1453,12 @@ sequenceDiagram
 - The four write primitives: append a line, replace a file whole, create a file exclusively, and remove with a revision check.
 - Group state: a group's events, snapshots and replay as one unit, and the only way to write or replay them.
 - Filling in each record's standard fields, refusing any write that breaks the schema or an invariant, and quarantining a bad record that fails its check on read.
-- Six exclusions that stay with their own owners: settings, the cache, git refs, job templates, binaries and session scratch folders. [TODO: how machine-shared files are locked (G-80)]
+- Six exclusions that stay with their own owners: settings, the cache, git refs, job templates, binaries and session scratch folders. [TODO: how machine-shared files are locked (G-74)]
 
 **Out of scope**
 - Deciding what an event means: the event spine ([5.3](#53-event-spine-and-state-machine)).
 - The loop that calls the manager for each group: the engine ([5.4](#54-engine-internals)).
-- The record of open actions. [TODO: which subsystem owns the outbox of recorded actions (G-78)]
+- The record of open actions. [TODO: which subsystem owns the outbox of recorded actions (G-68)]
 
 **📐 Who writes through the state manager**
 ```mermaid
@@ -1562,7 +1562,7 @@ sequenceDiagram
 6. Each action, such as starting a session or committing, is recorded as started before the action runs and as done after the action finishes. Every action has a key that makes a repeat harmless, so a crash between the two records replays safely.
 7. Three subscribers read the event in order: the ledger, the wake file that wakes the status-wait verb, and the live status view. Subscribers write only their own records and never change group state.
 
-Group state is a group's event file and its snapshots, with the replay of both, kept together as one unit inside the state manager. Producers are the workspace, the session supervisor, the tool runtime, the guard, Check, review, ship, the scheduler and the engine itself. Three details are open: [TODO: which counters the snapshot must hold (G-32)] [TODO: payload structure of each event type (G-24)] [TODO: layout of a record's header and body (G-30)].
+Group state is a group's event file and its snapshots, with the replay of both, kept together as one unit inside the state manager. Producers are the workspace, the session supervisor, the tool runtime, the guard, Check, review, ship, the scheduler and the engine itself. Three details are open: [TODO: which counters the snapshot must hold (G-32)] [TODO: payload structure of each event type (G-30)] [TODO: layout of a record's header and body (G-30)].
 
 ### 6.2 Group Lifecycle
 
@@ -1687,7 +1687,7 @@ sequenceDiagram
 6. The engine writes the backlog files, one folder per group under the epic folder, only when lint passes.
 7. The backlog check confirms the grammar, the isolation of groups in the same wave, the size bounds and the form of each acceptance item. The engine then derives the dependency graph from the file patterns, requires groups with overlapping patterns to be ordered, and refuses a cycle.
 
-Two choices here await the owner: [TODO: whether planning runs in two passes with a lint between the passes (G-96)] [TODO: the grammar of acceptance items (G-95)].
+Two choices here await the owner: [TODO: whether planning runs in two passes with a lint between the passes (G-96)] [TODO: the grammar of acceptance items (G-155)].
 
 ### 6.5 Run and Epic Coordination
 
@@ -1723,7 +1723,7 @@ sequenceDiagram
 6. When Check fails on the tip, landings pause and the last-landed group returns to Build in a new worktree cut from the tip; after the bound is spent, the group blocks with the reason "integration". When a group is abandoned, every group that depends on the abandoned group blocks with the reason "dependency" and names the abandoned group.
 7. After the last landing, the epic gate runs ([Landing, Ship Mode and Epic Gate](#67-landing-ship-mode-and-epic-gate)).
 
-The session pool is the machine-wide set of slots that builder, reviewer and tester sessions take. The pool grows after clean session endings and shrinks when a provider reports a rate limit, and a separate per-link limit also applies. Three points are open: [TODO: the stage move from Ship back to Build when the epic tip breaks (G-31)] [TODO: what counts as the end of a run (G-31)] [TODO: which component owns the session pool (G-78)].
+The session pool is the machine-wide set of slots that builder, reviewer and tester sessions take. The pool grows after clean session endings and shrinks when a provider reports a rate limit, and a separate per-link limit also applies. Three points are open: [TODO: the stage move from Ship back to Build when the epic tip breaks (G-31)] [TODO: what counts as the end of a run (G-31)] [TODO: which component owns the session pool (G-68)].
 
 ### 6.6 Crash Recovery
 
@@ -1765,7 +1765,7 @@ sequenceDiagram
 | Panic inside one group loop | Engine | Only that group blocks, with the reason "crash" |
 | A record that fails its check on read | State manager | The record is set aside and its group blocks |
 
-Three points are open: [TODO: which component owns the startup sweep (G-78)] [TODO: which component owns the action record, called the outbox (G-78)] [TODO: the checksum algorithm (G-99)].
+Three points are open: [TODO: which component owns the startup sweep (G-68)] [TODO: which component owns the action record, called the outbox (G-68)] [TODO: the checksum algorithm (G-182)].
 
 ### 6.7 Landing, Ship Mode and Epic Gate
 
@@ -1844,7 +1844,7 @@ sequenceDiagram
 6. The model's final call returns only the result schema. Go code validates the result again and allows one re-prompt.
 7. The engine reruns the task's completion command in the sandbox. A failure goes back into the same session, and repeated rejection ends the session. A passing session ends with a work-in-progress commit to the hidden reference, guarded by the lease's fence.
 
-The engine, never a model, emits events: a session's typed result becomes an event only after Go code validates the result. Two points are open: [TODO: how events from the tool server reach the engine (G-42)] [TODO: how tokens are counted for the brief size check (G-82)].
+The engine, never a model, emits events: a session's typed result becomes an event only after Go code validates the result. Two points are open: [TODO: how events from the tool server reach the engine (G-42)] [TODO: how tokens are counted for the brief size check (G-48)].
 
 ### 6.9 Supervising a Session
 
@@ -1980,7 +1980,7 @@ flowchart TB
 | Repository | Group state, session transcripts, the ledger and the cache, inside the git common directory | Every worktree of that repository |
 | Session | Sandboxed commands, a private tool server, a private home and temporary folder | One session |
 
-A lock is a file that the state manager creates exclusively, so two engines never take the same pool slot or the same group. [TODO: how machine-shared files such as the group ledger and the quota file are locked (G-80)]
+A lock is a file that the state manager creates exclusively, so two engines never take the same pool slot or the same group. [TODO: how machine-shared files such as the group ledger and the quota file are locked (G-74)]
 
 ### 7.3 Install and Update
 
@@ -2076,7 +2076,7 @@ Every runtime file is a record kind in one schema, which also lists every event 
 - **The binaries and the signing key:** signed and verified by the update flow; the key is a secret that only the release verb reads.
 - **Session temporary folders:** each session's own scratch folders, removed by the startup sweep.
 
-New event types and result codes are design changes (see [Conventions](#23-conventions)). [TODO: payload structure of each event type (G-24)]
+New event types and result codes are design changes (see [Conventions](#23-conventions)). [TODO: payload structure of each event type (G-30)]
 
 ### 8.3 Models and Cost
 
@@ -2106,7 +2106,7 @@ Three fences hold every worker.
 
 Releases are signed, and the update flow verifies the checksum and the signature each time. Only the engine runs git writes, and no agent holds forge credentials or a shell.
 
-[TODO: the guard's inputs: test-sibling rules per language, the secret patterns, the glob grammar and the content of the system prompt file (G-100)]
+[TODO: the guard's inputs: test-sibling rules per language, the secret patterns, the glob grammar and the content of the system prompt file (G-43)]
 
 ### 8.5 Quality Gates
 
@@ -2178,7 +2178,7 @@ The design pass chose each value below so the design could proceed. The owner ha
 | Install flags | [TODO: whether install has 8 flags (G-93)] | Keeping 13 flags: one host flag replaces 4, and offline mode follows from an unreachable manifest |
 | Backlog-card protection | [TODO: whether a builder is kept from its own backlog cards by lint instead of a guard row (G-94)] | A guard row would refuse at tool time instead of lint time |
 | Reviewer lens count | [TODO: the number of reviewer lenses (G-84)] | A different count would change which concerns get a dedicated pass |
-| Acceptance item grammar | [TODO: whether acceptance items use the form "when an event happens, the system shall respond" (G-95)] | Free-text items could be neither linted nor run by the tester |
+| Acceptance item grammar | [TODO: whether acceptance items use the form "when an event happens, the system shall respond" (G-155)] | Free-text items could be neither linted nor run by the tester |
 | Planner passes | [TODO: whether planning runs in two passes (G-96)] | One session writing the whole epic would have no lint between passes |
 | Launch permission flag | [TODO: whether the Claude launch line turns permission prompts off (G-97)] | Alternative not recorded |
 | Binary lifecycle | [TODO: the four update behaviours: hot swap, check points, restart window, prerelease flag (G-98)] | Without them, an update could change a running engine's binary, or a beta could be invisible to the updater |
@@ -2189,12 +2189,12 @@ The design pass chose each value below so the design could proceed. The owner ha
 | Topic | Open decision | Where it appears |
 |---|---|---|
 | Tool server events | [TODO: how events from the tool server reach the engine (G-42)] | [One Builder Session](#68-one-builder-session) |
-| Shared file locking | [TODO: how machine-shared files are locked (G-80)] | [One Machine, Many Repositories](#72-one-machine-many-repositories) |
+| Shared file locking | [TODO: how machine-shared files are locked (G-74)] | [One Machine, Many Repositories](#72-one-machine-many-repositories) |
 | Counter ownership | [TODO: which component owns each counter (G-81)] | [Pause, Block and Resume](#63-pause-block-and-resume) |
-| Token counting | [TODO: how tokens are counted for the brief size check (G-82)] | [One Builder Session](#68-one-builder-session) |
-| Sweep, outbox and pool owners | [TODO: which components own the startup sweep, the action record and the session pool (G-78)] | [Crash Recovery](#66-crash-recovery) |
+| Token counting | [TODO: how tokens are counted for the brief size check (G-48)] | [One Builder Session](#68-one-builder-session) |
+| Sweep, outbox and pool owners | [TODO: which components own the startup sweep, the action record and the session pool (G-68)] | [Crash Recovery](#66-crash-recovery) |
 | Stage moves | [TODO: which stages can block, where resume returns, and the stage move from Ship to Build (G-31)] | [Pause, Block and Resume](#63-pause-block-and-resume) |
-| Event and record shapes | [TODO: event payload structure (G-24) and record header and body layout (G-30)] | [Event Spine and Group State](#61-event-spine-and-group-state) |
+| Event and record shapes | [TODO: event payload structure (G-30) and record header and body layout (G-30)] | [Event Spine and Group State](#61-event-spine-and-group-state) |
 
 ## 10. Quality Requirements
 
