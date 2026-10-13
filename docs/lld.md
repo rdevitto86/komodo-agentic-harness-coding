@@ -6942,7 +6942,7 @@ Files that other chapters own and this chapter uses:
 | `internal/engine/worktree.go` | [Workspace and Leases](#4-workspace-and-leases) |
 | `internal/host/schedule.go` | [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate) |
 
-The design's file map has no file for the lock-table views, the scorecard, the rebuild of the views from the last applied event, or the data side of `status`. [TODO: files that hold the views, the scorecard and the status data (G-NEW-7)]
+The design's file map has no file for the lock-table views, the scorecard, the rebuild of the views from the last applied event, or the data side of `status`. [TODO: files that hold the views, the scorecard and the status data (G-151)]
 
 Runtime files this chapter reads or writes:
 
@@ -6963,7 +6963,7 @@ Runtime files this chapter reads or writes:
 | An event reaching the ledger | `Recorder.Handle` in `ledger.go`, called by the event bus |
 | `status`, `status --metrics` | `Observer` methods, called by `work.go` |
 
-The function and method names in this chapter are a working shape; the design fixes behaviour only. [TODO: exported names and signatures of the scheduler, cache store and ledger (G-NEW-9)]
+The function and method names in this chapter are a working shape; the design fixes behaviour only. [TODO: exported names and signatures of the scheduler, cache store and ledger (G-153)]
 
 ### 10.3 Data Model
 
@@ -6982,7 +6982,7 @@ const (
 var RetryBase = [MaxRetries]time.Duration{30 * time.Second, 2 * time.Minute, 8 * time.Minute}
 ```
 
-None of these values has a configuration key: the flat key list in [CLI and Configuration](#1-cli-and-configuration) has no `jobs.*` key. Whether `MaxRetries` counts retries or failed attempts is open: [TODO: retries versus failed attempts before Blocked (G-NEW-5)].
+None of these values has a configuration key: the flat key list in [CLI and Configuration](#1-cli-and-configuration) has no `jobs.*` key. Whether `MaxRetries` counts retries or failed attempts is open: [TODO: retries versus failed attempts before Blocked (G-149)].
 
 #### Job template
 
@@ -7016,7 +7016,7 @@ The example template:
 | `slots` | object | Named inputs to the agents' prompts; the example sets `target` |
 | `every` | string | The interval; the minimum is 5 min |
 
-The file is decoded strictly: an unknown field is an error. The file has no version field. The accepted forms of `every`, the value type of a slot, the characters a name may hold, whether the agents run in parallel or in turn, and what happens to a template that fails to decode are open: [TODO: template grammar, agent execution order and the decode-failure behaviour (G-NEW-1)].
+The file is decoded strictly: an unknown field is an error. The file has no version field. The accepted forms of `every`, the value type of a slot, the characters a name may hold, whether the agents run in parallel or in turn, and what happens to a template that fails to decode are open: [TODO: template grammar, agent execution order and the decode-failure behaviour (G-145)].
 
 The three places a template can live disagree between the sources.
 
@@ -7027,7 +7027,7 @@ The three places a template can live disagree between the sources.
 | `jobs` verb | `list` and `show <id>` read the templates under `embed/jobs/` and `~/.komodo/jobs/`, not `templates/jobs/` |
 | Embedded assets | `embed/jobs/` holds templates "none ship yet; one example lives under `templates/jobs/`" |
 
-[TODO: whether the example in `templates/jobs/` is read by `jobs list`, whether `embed/jobs/` stays empty, and which file wins when two templates share a name (G-NEW-1)]
+[TODO: whether the example in `templates/jobs/` is read by `jobs list`, whether `embed/jobs/` stays empty, and which file wins when two templates share a name (G-145)]
 
 #### Job counters
 
@@ -7047,7 +7047,7 @@ type JobState struct {
 |---|---|
 | `attempt` | Counts attempts of the current run; reaches `MaxRetries` before the job is Blocked |
 | `next_at` | The time the next run is due; the tick compares it with the clock |
-| `last_fail_hash` | The hash of the last failure; what reads it is `[TODO: use of last_fail_hash (G-NEW-5)]` |
+| `last_fail_hash` | The hash of the last failure; what reads it is `[TODO: use of last_fail_hash (G-149)]` |
 | `running` | True while a run holds the job's lease |
 
 A working shape of the file, one entry per job name:
@@ -7067,7 +7067,7 @@ A working shape of the file, one entry per job name:
 
 #### Job run id
 
-A job run is named `job-<name>-<n>`, where `<n>` counts up. Every other run id is a UUID version 7 made by the binary ([Front Matter and Code Structure](#0-front-matter-and-code-structure)). `status --wait` accepts the job run id. Where `<n>` is stored is open, because the four counters hold no run number: [TODO: where the job run number is kept and when it rises (G-NEW-4)].
+A job run is named `job-<name>-<n>`, where `<n>` counts up. Every other run id is a UUID version 7 made by the binary ([Front Matter and Code Structure](#0-front-matter-and-code-structure)). `status --wait` accepts the job run id. Where `<n>` is stored is open, because the four counters hold no run number: [TODO: where the job run number is kept and when it rises (G-148)].
 
 #### Cache entries
 
@@ -7094,14 +7094,14 @@ type Key string
 |---|---|---|
 | Skill index | `skills` | Binary version |
 | Skill body | `skills` | Content hash |
-| Repo profile | `[TODO: folder (G-NEW-6)]` | Hash of marker files |
+| Repo profile | `[TODO: folder (G-150)]` | Hash of marker files |
 | File slice, signature trim | `context` | Git blob SHA plus trim settings |
 | Diff | `context` | The pair (base, head) |
 | Brief | `context` | Hash of every slot input |
 | Check result | `checks` | Tree hash plus command |
 | Review findings | `review` | Lens, diff, prompt hash and model |
 | Setup result | `setup` | Lockfile hash plus language |
-| Test baseline | `[TODO: folder (G-NEW-6)]` | Epic tip tree hash plus the `test` command |
+| Test baseline | `[TODO: folder (G-150)]` | Epic tip tree hash plus the `test` command |
 | Repo map | `map` | Tree hash |
 | Outline lint | `map` | Tree hash plus goal hash |
 
@@ -7117,9 +7117,9 @@ What each entry holds:
 - **Repo map and outline lint:** the ranked symbol graph the planner reads, and the planner's outline lint. Replanning the same goal on an unchanged tree rebuilds neither.
 
 Open details of the key and the entry file:
-- Every key is `sha256(inputs + binary version)` "with the per-run config hash as prefix". [TODO: how the inputs are joined and what the config-hash prefix does to the file name (G-NEW-6)]
-- Entries sit under a two-level fan-out. [TODO: the width of each fan-out level and the entry file layout (G-NEW-6)]
-- A read verifies the entry. [TODO: what the stored hash covers and where it is stored (G-NEW-6)]
+- Every key is `sha256(inputs + binary version)` "with the per-run config hash as prefix". [TODO: how the inputs are joined and what the config-hash prefix does to the file name (G-150)]
+- Entries sit under a two-level fan-out. [TODO: the width of each fan-out level and the entry file layout (G-150)]
+- A read verifies the entry. [TODO: what the stored hash covers and where it is stored (G-150)]
 
 Build responses are never cached, because they are nondeterministic and have side effects. Only the hourly release check reads the clock; no key does.
 
@@ -7136,7 +7136,7 @@ Four files record what Komodo did. Two are appended, two are replaced. Secret ma
 
 `events.jsonl` and `state.schema.json` are the export format; there is no OpenTelemetry export.
 
-The session folder `sessions/<id>/` holds `brief.md`, `request.json`, `stream.jsonl`, `messages.jsonl`, `result.json` and `out/`. Chapter 5 describes the files ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)); observability appends `stream.jsonl`. What a host subagent event is and how it reaches the ledger is open: [TODO: host subagent events in `events.jsonl` (G-NEW-7)].
+The session folder `sessions/<id>/` holds `brief.md`, `request.json`, `stream.jsonl`, `messages.jsonl`, `result.json` and `out/`. Chapter 5 describes the files ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)); observability appends `stream.jsonl`. What a host subagent event is and how it reaches the ledger is open: [TODO: host subagent events in `events.jsonl` (G-151)].
 
 **Session row.** The fields are those the design lists. The key names are a working shape.
 
@@ -7245,7 +7245,7 @@ One row of `ledger/groups.json`, a group in Build:
   "stage": "build",
   "epoch": 3,
   "fence": 2,
-  "lock": {"card_hash": "[TODO: card hash recipe (G-NEW-10)]", "taken_at": "2026-10-12T15:20:03Z"},
+  "lock": {"card_hash": "[TODO: card hash recipe (G-154)]", "taken_at": "2026-10-12T15:20:03Z"},
   "lease": {"pid": 48213, "renewed_at": "2026-10-12T16:05:00Z"}
 }
 ```
@@ -7264,9 +7264,9 @@ One row of `ledger/tasks.json`, a task a session has claimed:
 ```
 
 Three details of these views conflict with other sources or are missing.
-- The group row's `fence` and the lease's `pid` and `renewed_at` move on no event in the list above: `lease.taken` is a machine log event, and a renewal rewrites the lease file. [TODO: which event or file updates the fence and the lease fields of the group row (G-NEW-7)]
-- The task row's `state` takes `queued`, `claimed`, `done`, `returned` or `blocked`; the proof case for a dead session expects `released: crash`. [TODO: the state value after `task.released`, and where the reason `crash` is shown (G-NEW-7)]
-- The files are views "rebuilt incrementally from the last applied `sequence`", but a sequence belongs to one group's state. [TODO: where the last applied sequence of each group is stored and whether a file holds an array or a map (G-NEW-7)]
+- The group row's `fence` and the lease's `pid` and `renewed_at` move on no event in the list above: `lease.taken` is a machine log event, and a renewal rewrites the lease file. [TODO: which event or file updates the fence and the lease fields of the group row (G-151)]
+- The task row's `state` takes `queued`, `claimed`, `done`, `returned` or `blocked`; the proof case for a dead session expects `released: crash`. [TODO: the state value after `task.released`, and where the reason `crash` is shown (G-151)]
+- The files are views "rebuilt incrementally from the last applied `sequence`", but a sequence belongs to one group's state. [TODO: where the last applied sequence of each group is stored and whether a file holds an array or a map (G-151)]
 
 #### Scorecard
 
@@ -7296,17 +7296,17 @@ type ScoreRow struct {
 | `cache_hit_rate` | Lookups that found an entry instead of recomputing |
 | `tokens_per_group`, `usd_per_group` | The headline metric; collected only when `track.usage` is on |
 
-How a group-level count such as returns is attributed to an agent and model, and where the cache hit and lookup counters are stored, are open: [TODO: attribution of group counts and storage of the cache counters (G-NEW-8)].
+How a group-level count such as returns is attributed to an agent and model, and where the cache hit and lookup counters are stored, are open: [TODO: attribution of group counts and storage of the cache counters (G-152)].
 
 #### Retention
 
-Ledger rows are kept for `ledger.retention_days` (30) or 100 MB per repository, oldest first. A state file of an open, paused or blocked group is never trimmed. What a trim removes first when the two bounds disagree, and when it runs, are open: [TODO: the trim algorithm and its trigger (G-NEW-7)].
+Ledger rows are kept for `ledger.retention_days` (30) or 100 MB per repository, oldest first. A state file of an open, paused or blocked group is never trimmed. What a trim removes first when the two bounds disagree, and when it runs, are open: [TODO: the trim algorithm and its trigger (G-151)].
 
 #### On-disk formats and versioning
 
 | File | Reader of an older or newer version |
 |---|---|
-| Job template | No version field; strict decoding refuses an unknown field. [TODO: handling of an older or newer template (G-NEW-1)] |
+| Job template | No version field; strict decoding refuses an unknown field. [TODO: handling of an older or newer template (G-145)] |
 | `jobs/state.json`, `ledger/groups.json`, `ledger/tasks.json` | The six-field record header carries `v`; a newer binary reads an older `v` through a migration step in memory ([State Manager](#13-state-manager)) |
 | `ledger/events.jsonl` | Each line is an event and carries the envelope `version` ([Event Spine and State Machine](#2-event-spine-and-state-machine)) |
 | `ledger/sessions.jsonl` | `[TODO: version field and reader rule of the session row (G-30)]` |
@@ -7352,8 +7352,8 @@ func RetryDelay(step int, rnd func() float64) time.Duration {
 
 | Function | On failure |
 |---|---|
-| `Tick` | A queue item that already exists is refused as a duplicate and logged once; the tick goes on with the next job. Any other error: `[TODO: tick failure behaviour (G-NEW-4)]` |
-| `List` | Returns the error of the first template that fails strict decoding. What the tick does with it: `[TODO: decode-failure behaviour (G-NEW-1)]` |
+| `Tick` | A queue item that already exists is refused as a duplicate and logged once; the tick goes on with the next job. Any other error: `[TODO: tick failure behaviour (G-148)]` |
+| `List` | Returns the error of the first template that fails strict decoding. What the tick does with it: `[TODO: decode-failure behaviour (G-145)]` |
 | `DecodeTemplate` | Returns an error that names the unknown field; no partial template |
 | `Due`, `RetryDelay` | Cannot fail; `RetryDelay` reads `RetryBase[step]`, so the caller keeps `step` below `MaxRetries` |
 
@@ -7362,7 +7362,7 @@ func RetryDelay(step int, rnd func() float64) time.Duration {
 | Operating system entry from `install --schedule` | `komodo jobs tick` | Every 5 minutes |
 | Claude Code `/loop` | `komodo jobs tick` | Each loop turn, which costs a model turn |
 | Person or orchestrator | `jobs list`, `jobs show <id>` | Any time; both are shared verbs |
-| Person | `jobs run`, `jobs pause`, `jobs resume` | Behaviour beyond the names is `[TODO: jobs run, pause and resume, and the --ignore-window flag (G-NEW-5)]` |
+| Person | `jobs run`, `jobs pause`, `jobs resume` | Behaviour beyond the names is `[TODO: jobs run, pause and resume, and the --ignore-window flag (G-149)]` |
 | Engine, when a pool slot frees | Queue `Pick` of a `job` item | A job item is ready ([Engine Internals](#3-engine-internals)) |
 
 #### Cache store
@@ -7393,10 +7393,10 @@ func NewKey(version string, inputs ...[]byte) Key
 
 | Function | On failure |
 |---|---|
-| `Get` | A missing entry or one whose verification fails returns `ok` false and no error; a failed entry is deleted, and the caller recomputes. A folder that cannot be read: `[TODO: behaviour when the cache folder cannot be read or written (G-NEW-6)]` |
-| `Put` | An error is returned to the caller. Whether the caller goes on without the entry: `[TODO: behaviour when the cache folder cannot be read or written (G-NEW-6)]` |
-| `Stats` | Returns the size and the lookup counts of this repository; `cache stats --all` adds the other repositories `[TODO: how --all finds other repositories (G-NEW-6)]` |
-| `Clear` | Removes the entries; `cache clear --kind` accepts `skills`, `context`, `checks`, `review` and `lang`. The kinds `setup` and `map` have no flag value `[TODO: --kind values for setup and map (G-NEW-6)]` |
+| `Get` | A missing entry or one whose verification fails returns `ok` false and no error; a failed entry is deleted, and the caller recomputes. A folder that cannot be read: `[TODO: behaviour when the cache folder cannot be read or written (G-150)]` |
+| `Put` | An error is returned to the caller. Whether the caller goes on without the entry: `[TODO: behaviour when the cache folder cannot be read or written (G-150)]` |
+| `Stats` | Returns the size and the lookup counts of this repository; `cache stats --all` adds the other repositories `[TODO: how --all finds other repositories (G-150)]` |
+| `Clear` | Removes the entries; `cache clear --kind` accepts `skills`, `context`, `checks`, `review` and `lang`. The kinds `setup` and `map` have no flag value `[TODO: --kind values for setup and map (G-150)]` |
 
 | Caller | Call | When |
 |---|---|---|
@@ -7437,19 +7437,19 @@ type Observer interface {
 
 | Method | On failure |
 |---|---|
-| `Handle` | An error or panic drops this subscriber for the run; group state is untouched and the derived records stop ([Failures](#27-failures) in chapter 2). How the views catch up afterwards: `[TODO: when the views are rebuilt (G-NEW-7)]` |
-| `RecordSession` | `[TODO: which event or call writes the session row, and the failure behaviour (G-NEW-7)]` |
-| `Groups`, `Tasks`, `Explain`, `Scorecard` | `[TODO: what status shows when a ledger file is missing or unreadable (G-NEW-7)]` |
+| `Handle` | An error or panic drops this subscriber for the run; group state is untouched and the derived records stop ([Failures](#27-failures) in chapter 2). How the views catch up afterwards: `[TODO: when the views are rebuilt (G-151)]` |
+| `RecordSession` | `[TODO: which event or call writes the session row, and the failure behaviour (G-151)]` |
+| `Groups`, `Tasks`, `Explain`, `Scorecard` | `[TODO: what status shows when a ledger file is missing or unreadable (G-151)]` |
 
 | Caller | Call | When |
 |---|---|---|
 | Event bus | `Handle` | After `Next()` on every applied event |
-| Session supervisor | `RecordSession` | `[TODO: when the supervisor records a session (G-NEW-7)]` |
+| Session supervisor | `RecordSession` | `[TODO: when the supervisor records a session (G-151)]` |
 | `status` | `Groups`, `Tasks`, `Explain` | Every `status` call |
 | `status --metrics` | `Scorecard` | A person or the orchestrator asks for the scorecard |
 | `doctor` | `Scorecard` | It looks for a lighter model that does as well |
 | Startup sweep | `Tasks` | It finds claimed tasks whose session is dead ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)) |
-| `add backlog`, `plan --epic` | `Groups` | They check the task-list lock `[TODO: which record the refusing verbs read (G-NEW-10)]` |
+| `add backlog`, `plan --epic` | `Groups` | They check the task-list lock `[TODO: which record the refusing verbs read (G-154)]` |
 
 ### 10.5 Behaviour
 
@@ -7488,10 +7488,10 @@ sequenceDiagram
 10. The next tick that finds the lease still held refuses its queue item as a duplicate and logs it once.
 
 Four steps rest on details the design does not give.
-- Step 3: the file that holds `job.due` and `job.fail`. [TODO: where job.due and job.fail are written (G-NEW-2)]
-- Step 4: the process that appends the `timer.due` event. [TODO: who writes group events when a tick or `status` fires a timer (G-NEW-3)]
-- Step 5: what "drive the pool once" does and which process runs the job. [TODO: what driving the pool once starts, and in which process (G-NEW-4)]
-- Step 9: the value of `next_at` after a success, the first run of a job with no counters, and the order of the agents. [TODO: next_at rules and the agents' order (G-NEW-4)]
+- Step 3: the file that holds `job.due` and `job.fail`. [TODO: where job.due and job.fail are written (G-146)]
+- Step 4: the process that appends the `timer.due` event. [TODO: who writes group events when a tick or `status` fires a timer (G-147)]
+- Step 5: what "drive the pool once" does and which process runs the job. [TODO: what driving the pool once starts, and in which process (G-148)]
+- Step 9: the value of `next_at` after a success, the first run of a job with no counters, and the order of the agents. [TODO: next_at rules and the agents' order (G-148)]
 
 #### Algorithms
 
@@ -7518,13 +7518,13 @@ flowchart TD
 4. For each timer record whose `wait_until` has passed, fire it, which resumes the paused run.
 5. Drive the pool once: pick queue items for free slots, as in [Engine Internals](#35-behaviour).
 
-[TODO: the queue item id of a job, so that two ticks produce the same file name (G-NEW-4)]
+[TODO: the queue item id of a job, so that two ticks produce the same file name (G-148)]
 
 ##### Overlap
 
 A running job holds the lease `job-<name>` with a fence, claimed the way a group lease is ([Workspace and Leases](#4-workspace-and-leases)). The next tick's queue item for the same job is refused as a duplicate and logged. The user sees one skip entry, never two copies of the job.
 
-Two guards are named for the same case. The lease says a run is in progress; the counters carry a `running` flag. [TODO: which of the lease and the `running` flag decides an overlap, and where the skip is logged (G-NEW-4)]
+Two guards are named for the same case. The lease says a run is in progress; the counters carry a `running` flag. [TODO: which of the lease and the `running` flag decides an overlap, and where the skip is logged (G-148)]
 
 A job queues like a group, at `priority: normal`, never preempting a group. Fair share counts each job as its own repository, so a busy repository cannot starve it.
 
@@ -7541,7 +7541,7 @@ A job queues like a group, at `priority: normal`, never preempting a group. Fair
 | 2 | 2 min | 96 s to 144 s |
 | 3 | 8 min | 384 s to 576 s |
 
-The design says both "a failed job is retried 3 times" with three delays and "after the third failure the job is Blocked", which allows two retries. The proof case uses 3 failures. [TODO: retries versus failed attempts before Blocked, what represents a Blocked job when `jobs/state.json` has no field for it, which event wakes `status --wait`, and how a Blocked job is resumed (G-NEW-5)]
+The design says both "a failed job is retried 3 times" with three delays and "after the third failure the job is Blocked", which allows two retries. The proof case uses 3 failures. [TODO: retries versus failed attempts before Blocked, what represents a Blocked job when `jobs/state.json` has no field for it, which event wakes `status --wait`, and how a Blocked job is resumed (G-149)]
 
 ##### Cache lookup
 
@@ -7564,11 +7564,11 @@ flowchart TD
 4. On a miss the caller computes the result and calls `Put`. A builder session's response is never put, because it is nondeterministic and changes files.
 5. The store keeps a repository under `cache.max_mb`: the least recently used entries go first.
 
-[TODO: how recency is tracked and when eviction runs (G-NEW-6)]
+[TODO: how recency is tracked and when eviction runs (G-150)]
 
 ##### Ledger update on an event
 
-The ledger subscriber is one of the 3 subscribers of the bus. It receives each applied event in `sequence` order and writes only its own records. The ledger batches its appends per tick ([Behaviour](#25-behaviour) in chapter 2); whether "tick" there means a `jobs tick` or one bus delivery step is `[TODO: meaning of tick in the ledger batching rule (G-NEW-7)]`.
+The ledger subscriber is one of the 3 subscribers of the bus. It receives each applied event in `sequence` order and writes only its own records. The ledger batches its appends per tick ([Behaviour](#25-behaviour) in chapter 2); whether "tick" there means a `jobs tick` or one bus delivery step is `[TODO: meaning of tick in the ledger batching rule (G-151)]`.
 
 **📐 How an event reaches the ledger and its views**
 ```mermaid
@@ -7590,7 +7590,7 @@ sequenceDiagram
 | `lock.taken` | The group row gets `lock{card_hash, taken_at}` |
 | `lock.released` | The group row has no lock |
 | `stage.enter` | The group row gets the new `stage` and `epoch` |
-| `lease.lost` | The group row changes `[TODO: effect on the lease fields (G-NEW-7)]` |
+| `lease.lost` | The group row changes `[TODO: effect on the lease fields (G-151)]` |
 | `task.claimed` | The task row is claimed, with its session and `claimed_at`; the engine records it at `session.start` |
 | `task.released` | The task row is released; the engine records it at `session.end`, or with reason `crash` when the startup sweep finds the session dead |
 | `task.done` | The task row is `done` |
@@ -7598,7 +7598,7 @@ sequenceDiagram
 
 The views are rebuilt incrementally from the last applied `sequence`, never from the whole log. `status` on 1,000 ledger rows renders in under 100 ms; that number is a target that the gate's timing check measures ([G-19](#appendix-o-gap-register)).
 
-Keys and secret matches are masked before any write. The list of patterns is the secret list of the guard. [TODO: the secret patterns the ledger masks (G-NEW-7)]
+Keys and secret matches are masked before any write. The list of patterns is the secret list of the guard. [TODO: the secret patterns the ledger masks (G-151)]
 
 ##### The task-list lock
 
@@ -7609,7 +7609,7 @@ Keys and secret matches are masked before any write. The list of patterns is the
 
 The lock protects the next run, not the current brief, because the builder and the reviewer read the task list at the base commit. Edits to a locked group refuse with `locked` until landing or abandon.
 
-[TODO: which files the card hash covers in what order, the hash algorithm, and the record the refusing verbs read (G-NEW-10)]
+[TODO: which files the card hash covers in what order, the hash algorithm, and the record the refusing verbs read (G-154)]
 
 ##### Task claims
 
@@ -7623,7 +7623,7 @@ A task moves `queued → claimed → done | returned | blocked`. The engine reco
 4. Cache the totals under the ledger file's size and modification time, so a repeat call with unchanged files is cheap.
 5. For `doctor`: when a light model's first-pass rate beats the standard model's over 20 groups, suggest moving the agent to the lighter model.
 
-With `track.usage` off, nothing in step 3's last clause is collected. The input of finding precision is the precision ledger of [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery). The design says the cache hit rate is "per kind" in one place and "per agent" in another. [TODO: cache hit rate per kind or per agent, attribution of group counts, the storage of the precision and cache counters, and the location of the cached totals (G-NEW-8)]
+With `track.usage` off, nothing in step 3's last clause is collected. The input of finding precision is the precision ledger of [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery). The design says the cache hit rate is "per kind" in one place and "per agent" in another. [TODO: cache hit rate per kind or per agent, attribution of group counts, the storage of the precision and cache counters, and the location of the cached totals (G-152)]
 
 ##### The live views
 
@@ -7643,10 +7643,10 @@ The wake mechanics of `status --wait` are in [Behaviour](#25-behaviour) of chapt
 
 #### Concurrency and locking
 
-- **Counters:** `jobs/state.json` is written with `Replace`, whose `rev` check refuses a stale writer ([State Manager](#13-state-manager)). What a tick does after a refusal: `[TODO: tick behaviour on a refused Replace (G-NEW-4)]`.
+- **Counters:** `jobs/state.json` is written with `Replace`, whose `rev` check refuses a stale writer ([State Manager](#13-state-manager)). What a tick does after a refusal: `[TODO: tick behaviour on a refused Replace (G-148)]`.
 - **Queue and lease:** the create-only queue item and the lease are the guards against a second copy of a job.
-- **Ledger:** the ledger subscriber of one engine process is the only writer of that process's appends. Several engine processes on one repository, and the locking of machine-shared files such as `ledger/groups.json`: `[TODO: locking of machine-shared files (G-NEW-7)]`.
-- **Cache:** all processes of one repository share the store. Writing the same key from two processes: `[TODO: concurrent writers of one key (G-NEW-6)]`.
+- **Ledger:** the ledger subscriber of one engine process is the only writer of that process's appends. Several engine processes on one repository, and the locking of machine-shared files such as `ledger/groups.json`: `[TODO: locking of machine-shared files (G-151)]`.
+- **Cache:** all processes of one repository share the store. Writing the same key from two processes: `[TODO: concurrent writers of one key (G-150)]`.
 
 ### 10.6 State
 
@@ -7667,13 +7667,13 @@ stateDiagram-v2
 | State | Event | Next | True after the move |
 |---|---|---|---|
 | Waiting | A tick finds `next_at` passed | Queued | `job.due` is recorded; one queue item of kind `job` exists |
-| Queued | A queue pick takes the item | Running | `running` is true; the lease `job-<name>` is held `[TODO: how a job item is taken, since job sessions take no pool slot (G-NEW-4)]` |
+| Queued | A queue pick takes the item | Running | `running` is true; the lease `job-<name>` is held `[TODO: how a job item is taken, since job sessions take no pool slot (G-148)]` |
 | Queued, Running | Another tick finds the job due | Unchanged | The new item is refused as a duplicate and logged once |
-| Running | The run ends without a failure | Waiting | `running` is false; `[TODO: next_at and attempt after a success (G-NEW-4)]` |
+| Running | The run ends without a failure | Waiting | `running` is false; `[TODO: next_at and attempt after a success (G-148)]` |
 | Running | The run fails below the retry limit | BackingOff | `job.fail` is recorded; `attempt` rose; `last_fail_hash` is set |
-| BackingOff | The retry delay passes | Queued | A retry item exists `[TODO: whether a retry records a new job.due (G-NEW-5)]` |
-| Running | The third failure | Blocked | `job.fail` is recorded; `status --wait` wakes `[TODO: the wake event of a Blocked job (G-NEW-5)]` |
-| Blocked | `[TODO: how a Blocked job resumes (G-NEW-5)]` | `[TODO: (G-NEW-5)]` | `[TODO: (G-NEW-5)]` |
+| BackingOff | The retry delay passes | Queued | A retry item exists `[TODO: whether a retry records a new job.due (G-149)]` |
+| Running | The third failure | Blocked | `job.fail` is recorded; `status --wait` wakes `[TODO: the wake event of a Blocked job (G-149)]` |
+| Blocked | `[TODO: how a Blocked job resumes (G-149)]` | `[TODO: (G-149)]` | `[TODO: (G-149)]` |
 
 The task row has its own states. The group row's `stage` follows the stage machine of [State and Transitions](#26-state-and-transitions) and has no states of its own.
 
@@ -7691,9 +7691,9 @@ stateDiagram-v2
 |---|---|---|---|
 | `queued` | `task.claimed`, at `session.start` | `claimed` | The row names the session and `claimed_at` |
 | `claimed` | `task.done` | `done` | The row stays; `ledger/tasks.json` lists the task once as `done` |
-| `claimed` | `task.released`, at `session.end` | `returned` or `blocked` | `[TODO: which release gives returned and which gives blocked (G-NEW-7)]` |
-| `claimed` | `task.released` with reason `crash`, from the startup sweep | `[TODO: state value (G-NEW-7)]` | The session is dead; the proof case expects `released: crash` |
-| `claimed` | `task.retry` | `claimed` | `attempts` rose `[TODO: whether a retry leaves the state claimed (G-NEW-7)]` |
+| `claimed` | `task.released`, at `session.end` | `returned` or `blocked` | `[TODO: which release gives returned and which gives blocked (G-151)]` |
+| `claimed` | `task.released` with reason `crash`, from the startup sweep | `[TODO: state value (G-151)]` | The session is dead; the proof case expects `released: crash` |
+| `claimed` | `task.retry` | `claimed` | `attempts` rose `[TODO: whether a retry leaves the state claimed (G-151)]` |
 
 ### 10.7 Invariants and Failures
 
@@ -7714,17 +7714,17 @@ stateDiagram-v2
 
 | Situation | Detected by | Behaviour |
 |---|---|---|
-| A job run fails | The scheduler | Retries after 30 s, 2 min and 8 min, each varied by up to 20%; then Blocked, which wakes `status --wait` `[TODO: (G-NEW-5)]` |
+| A job run fails | The scheduler | Retries after 30 s, 2 min and 8 min, each varied by up to 20%; then Blocked, which wakes `status --wait` `[TODO: (G-149)]` |
 | The previous run of a job still holds its lease | The next tick | The new queue item is refused as a duplicate and logged once |
 | A tick with nothing due | The tick | Exits in under 50 ms with no network call |
-| A template has an unknown field | Strict decoding | An error naming the field `[TODO: what the tick does with that template (G-NEW-1)]` |
-| A template asks for less than 5 minutes | `[TODO: the check that enforces the minimum interval (G-NEW-1)]` | `[TODO: refuse or raise to the minimum (G-NEW-1)]` |
-| A paused run with no live engine | A tick or `status` after `wait_until` | The timer fires and the run resumes `[TODO: who appends the group event (G-NEW-3)]` |
+| A template has an unknown field | Strict decoding | An error naming the field `[TODO: what the tick does with that template (G-145)]` |
+| A template asks for less than 5 minutes | `[TODO: the check that enforces the minimum interval (G-145)]` | `[TODO: refuse or raise to the minimum (G-145)]` |
+| A paused run with no live engine | A tick or `status` after `wait_until` | The timer fires and the run resumes `[TODO: who appends the group event (G-147)]` |
 | A cache entry fails verification | The read | The entry is deleted and the result recomputed |
 | The cache exceeds `cache.max_mb` | The store | The least recently used entries are removed first |
-| The ledger subscriber errors or panics | The event bus | Dropped for the run; group state is untouched; the derived records stop `[TODO: when the views catch up (G-NEW-7)]` |
+| The ledger subscriber errors or panics | The event bus | Dropped for the run; group state is untouched; the derived records stop `[TODO: when the views catch up (G-151)]` |
 | A claimed task whose session is dead | The startup sweep | Released with reason `crash` |
-| A hand edit of a locked group's backlog files | A hash mismatch at the next verb | Detected `[TODO: what the verb does on a mismatch (G-NEW-10)]` |
+| A hand edit of a locked group's backlog files | A hash mismatch at the next verb | Detected `[TODO: what the verb does on a mismatch (G-154)]` |
 | A group blocked 3 times for one reason | The engine's count of blocks per reason | `status` flags it `needs redesign`; blocked never retries by itself `[TODO: counter ownership (G-32)]` |
 | Ledger rows older than `ledger.retention_days` or past 100 MB per repository | The trim | Oldest rows go first; open, paused and blocked groups' state files stay |
 | `track.usage` is off | Configuration | No tokens, dollars or skill tokens are written; the scorecard omits them |
@@ -7790,14 +7790,14 @@ Constants without a key:
 | [G-30](#appendix-o-gap-register) | Fields and layout of `jobs/state.json`, `ledger/sessions.jsonl` and the machine log file names; the task id and timestamp formats |
 | [G-31](#appendix-o-gap-register) | Stage moves the table lacks, including the effect of `lease.lost` on the group row |
 | [G-32](#appendix-o-gap-register) | Which counters the snapshot holds, including blocks per reason |
-| G-NEW-1 | Template grammar, execution order, decode failure, minimum interval check, template paths and precedence |
-| G-NEW-2 | The file that holds `job.due` and `job.fail` |
-| G-NEW-3 | Who appends group events when a tick or `status` fires a due timer |
-| G-NEW-4 | What driving the pool once starts, job queue item identity and consumption, `next_at`, run number, overlap guard and log |
-| G-NEW-5 | Retries versus failed attempts, Blocked job representation, wake, resume, `last_fail_hash`, `jobs run\|pause\|resume` |
-| G-NEW-6 | Cache key joining and prefix, entry layout, verification basis, recency, eviction, kind folders, `cache clear` kinds, `--all`, counters, concurrent writers |
-| G-NEW-7 | Ledger files: file map, view shape and cursor, lease fields, task state values, session row trigger, host subagent events, trim, locking, secret patterns, missing-file behaviour |
-| G-NEW-10 | Card hash recipe and the record the `locked` refusal reads |
+| G-145 | Template grammar, execution order, decode failure, minimum interval check, template paths and precedence |
+| G-146 | The file that holds `job.due` and `job.fail` |
+| G-147 | Who appends group events when a tick or `status` fires a due timer |
+| G-148 | What driving the pool once starts, job queue item identity and consumption, `next_at`, run number, overlap guard and log |
+| G-149 | Retries versus failed attempts, Blocked job representation, wake, resume, `last_fail_hash`, `jobs run\|pause\|resume` |
+| G-150 | Cache key joining and prefix, entry layout, verification basis, recency, eviction, kind folders, `cache clear` kinds, `--all`, counters, concurrent writers |
+| G-151 | Ledger files: file map, view shape and cursor, lease fields, task state values, session row trigger, host subagent events, trim, locking, secret patterns, missing-file behaviour |
+| G-154 | Card hash recipe and the record the `locked` refusal reads |
 
 **Can wait**
 
@@ -7806,8 +7806,8 @@ Constants without a key:
 | [G-17](#appendix-o-gap-register) | The 50% prompt-cache hit fixture needs real paid sessions with `track.usage` on |
 | [G-19](#appendix-o-gap-register) | The 50 ms and 100 ms targets are not yet measured |
 | [G-26](#appendix-o-gap-register) | Splitting tokens and dollars by provider family |
-| G-NEW-8 | Scorecard attribution, cache hit rate per kind or per agent, counter storage |
-| G-NEW-9 | Exported names and signatures of the scheduler, cache store and ledger |
+| G-152 | Scorecard attribution, cache hit rate per kind or per agent, counter storage |
+| G-153 | Exported names and signatures of the scheduler, cache store and ledger |
 
 ## 11. Backlog, Planning, Ship and Release
 
@@ -10753,6 +10753,16 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-142 | Gate inputs and result | How the gate recognises the Komodo repository and its refusal code; where the check fixtures live and how they load; the layout of the gate result data, the verdict wording and the error code; the comment lint rules; how docs drift finds package names in `lld.md`; what the component map names now that each LLD chapter is a subsystem; the gap tag syntax the no-silent-gaps check scans now that open items are written as TODO with a gap identifier, and how a backlog task names the gap it closes | Owner decision; then 12.3 and 12.5 |
 | G-143 | Gate flags | Whether `gate --install` also writes the version folder children start from; which git hooks `--install-hooks` installs and what they run; what `--only <check>` selects beyond a check's name | Owner decision; then 12.5 |
 | G-144 | Install, update, probe and gate names | Exported names of the functions and types in `internal/host/` and `internal/repo/gate.go`; the design fixes behaviour, not names | Owner decision; then 12.2 and 12.4 |
+| G-145 | Scheduler, templates | Template grammar: accepted forms of `every`, the value type of a slot, characters allowed in `name`, whether the agents run in parallel or in turn, how the 5 min minimum is enforced (refuse or raise), what the tick does with a template that fails strict decoding, how an older or newer template is read. Paths disagree: the scheduler section says `embed/jobs/` or `~/.komodo/jobs/`, the file map and `jobs list` omit `templates/jobs/`; which file wins when two share a name | Owner decision, then 10.3 and 10.4 |
+| G-146 | Scheduler, events | The design has no file for `job.due` and `job.fail`. The catalog says the scheduler emits them and `stage` is forbidden on `job.*`; the machine log lists `job.due` but its family count has 3 types without it; a job run's own run state `runs/<run>.jsonl` has the run goroutine as its only writer | Owner decision with G-29 and G-30 |
+| G-147 | Scheduler, one writer | `timer.due` is emitted by the scheduler, the engine, the sweep and `status`, and `jobs tick` and `status` fire due timers, yet only a group's `Drive` appends group events and only the run goroutine appends `run.*` events | Owner decision with G-29 |
+| G-148 | Scheduler, tick | What "drive the pool once" starts and in which process; the queue item id of a job so two ticks collide; how a job item is taken when job sessions take no pool slot though taking a slot deletes the item; `next_at` after a success, after a failure and for a job with no counters; where the run number `<n>` is kept; which of the lease and the `running` flag decides an overlap and where the skip is logged; tick behaviour on a refused `Replace` or other errors | Owner decision; then 10.5 |
+| G-149 | Scheduler, retries | "Retried 3 times" with three delays versus "Blocked after the third failure"; how a Blocked job is stored when `jobs/state.json` has no field for it; which event wakes `status --wait` for it; how it resumes; what reads `last_fail_hash`; behaviour of `jobs run`, `pause`, `resume` and `--ignore-window`; whether a retry records a new `job.due` | Owner decision |
+| G-150 | Cache store | How inputs are joined into the hash and what the config-hash prefix does; the fan-out widths and entry file layout; what the verification hash covers and where it is stored; how recency is tracked and when eviction runs; the folders of the repo profile and the test baseline; `cache clear --kind` has no value for `setup` and `map`; how `--all` finds other repositories; where hit and lookup counters live; behaviour when the folder is unreadable; concurrent writers of one key | Owner decision, then 10.3 |
+| G-151 | Ledger | No file in the file map for the views, the scorecard or the status data; the shape of `groups.json` and `tasks.json` and where each group's last applied sequence is stored; which event or file updates the fence and lease fields of the group row and the effect of `lease.lost`; the task state after `task.released` and where `released: crash` shows; which call writes the session row; host subagent events; the trim algorithm and trigger; locking of machine-shared files such as `ledger/groups.json`; the secret patterns masked (same list as the guard's); when views catch up after a dropped subscriber; status behaviour when a ledger file is missing; meaning of "tick" in the ledger batching rule; the ledger location (`~/.komodo/ledger/` in Appendix S versus the repository folder) | Owner decision with G-30 |
+| G-152 | Scorecard | Cache hit rate is "per kind" in the scorecard and "per agent" in the token section; how group counts such as returns attribute to an agent and model; where the precision ledger counts and the cache counters are stored; where the cached totals live | Owner decision |
+| G-153 | Scheduler, cache, ledger | Exported names and signatures of the scheduler, cache store and ledger are derived from behaviour in 10.4; the design fixes behaviour only | Owner confirms the shapes in 10.4 |
+| G-154 | Task-list lock | Which files the card hash covers and in what order, its algorithm and encoding; which record the refusing verbs read (group row or group state); what a verb does on a hash mismatch | Owner decision with G-24 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (Appendix L)](#ship-and-release)).
