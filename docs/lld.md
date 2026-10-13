@@ -177,7 +177,622 @@ flowchart LR
 - Only `KOMODO_HOME` and `NO_COLOR` configure Komodo through the environment; `CI=true` disables background fresh.
 - Before each session the engine derives the link's capacity profile `{ctx, slots, cost_class, effort}`.
 
-**Lookup:** [Appendix B](#appendix-b-command-line-interface-and-configuration) holds the verb, global flag, envelope, exit code, tier, 34-key, agent group, endpoint group, environment, command detection and capacity profile tables.
+**Lookup:** [Appendix B](#1-cli-and-configuration) holds the verb, global flag, envelope, exit code, tier, 34-key, agent group, endpoint group, environment, command detection and capacity profile tables.
+
+
+
+#### Command-line interface
+
+
+**In plain terms.** The command-line interface (CLI) is the only way to drive Komodo: a person or the orchestrator types `komodo <verb>` in a shell. A verb is a subcommand such as `run` or `doctor`; a flag is an option such as `--json`. Every verb replies with the same JSON envelope when no terminal is present, so the orchestrator can parse it. This section lists the processing steps, the envelope, the flags, every verb, who may call each, and the speed targets.
+
+#### Processing pipeline
+
+**In plain terms.** Every verb goes through the same five steps: read the arguments, check them, work out which repo and config apply, call the code that does the work, and print the result. Nothing is written before step 4, so a bad argument never leaves half-done work. The orchestrator and a person get identical behaviour. Without one shared pipeline, each verb would validate differently and fail differently.
+
+| # | Step | Rule |
+|---|---|---|
+| 1 | Parse | One verb table, stdlib (Go's built-in library) `flag` per verb; `--input` JSON merges under explicit flags, which win |
+| 2 | Validate | Types, enums (a fixed list of allowed values), closest match for unknown flags, the terminal check, the repo pin, the config hash (a content fingerprint) guard; nothing has run |
+| 3 | Resolve | Repo id from cwd or `-C`, the effective config, the capacity profile when a verb needs a link |
+| 4 | Dispatch | One thin call into the domain package; the verb never reads state files itself |
+| 5 | Render | The result's codes and facts through templates into `report`, then the envelope or text |
+
+**What each one does**
+- **1 Parse:** Reads the verb and its flags from one table, using Go's standard `flag` package. If `--input` supplies arguments as a JSON object, a flag typed on the command line beats the same key in the JSON.
+- **2 Validate:** Checks types and allowed values, names the closest match for a misspelled flag (exit 2), refuses a terminal-only verb with no terminal, refuses a repo pinned above this binary, and refuses when `config.json` was hand-edited. Nothing has run yet.
+- **3 Resolve:** Works out the repo id from the current folder or `-C <path>`, loads the effective config once, and derives the capacity profile (context size, slots, cost class, effort) when the verb will talk to a model.
+- **4 Dispatch:** Makes one call into the package that owns the work, such as `engine` for `run`. The CLI code never opens state files itself. `--dry-run` applies from here.
+- **5 Render:** Turns the result's codes and facts into human text through the output templates, fills the `report` field, and prints the JSON envelope or plain text.
+
+A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from step 4. Every writing verb is idempotent (safe to repeat with the same result): a repeat with the same arguments reports `0 changes`.
+
+#### Envelope and exit codes
+
+**In plain terms.** The envelope is the JSON object every verb prints when `--json` is on, which is automatic without a terminal. The orchestrator reads it: `ok` says whether the verb succeeded, `report` is text it relays to the person word for word, and `error.code` is what it branches on. The exit code is the number the process returns to the shell; it lets a script or hook tell success from refusal without parsing JSON.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `v` | int | Envelope version, 1 |
+| `ok` | bool | Success |
+| `verdict` | string | One line |
+| `report` | string | Human text formatted to `output.profile`; relay verbatim |
+| `data` | object | The verb's typed result |
+| `error` | `{code, reason, fix}` | Set when `ok` is false; `code` is what a caller branches on |
+
+**What each one does**
+- **`v`:** The envelope's own format version, always 1. A later change to the shape raises it.
+- **`ok`:** `true` when the verb did what was asked, `false` when it refused or failed.
+- **`verdict`:** One line summing up the outcome, such as the first line a person would read.
+- **`report`:** The full human-readable text, already laid out by the output profile (`adhd` or `standard`, set by `output.profile`). The orchestrator pastes it to the person unchanged.
+- **`data`:** The verb's structured result, typed per verb; for example `run` returns the run id here. `help --json` documents each verb's shape.
+- **`error`:** Present only when `ok` is false. `code` is a short word from the fixed code list ([Code list (Appendix I)](#code-list)), `reason` explains it, and `fix` names the command or change that resolves it, such as `run komodo fresh`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | refused |
+| 2 | usage (an unknown flag names the closest match) |
+| 3 | blocked |
+| 4 | internal |
+
+**What each one does**
+- **0:** The verb succeeded.
+- **1:** Komodo refused on purpose: a terminal-only verb without a terminal, a pinned repo, a tampered config, a locked group, or a value over its limit. The `error.fix` line says what to do.
+- **2:** The command line was wrong: an unknown verb or flag, or a bad value. An unknown flag's message names the closest real flag.
+- **3:** The verb reports a blocked state. Which situations return 3 rather than 1 is `[UNKNOWN: not yet designed]`.
+- **4:** Komodo itself failed. Which failures map here is `[UNKNOWN: not yet designed]`.
+
+**Examples**
+
+A verb that succeeded: `komodo run tg-1.2 --json` prints this envelope and exits 0.
+
+```json
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Run started for tg-1.2",
+  "report": "[UNKNOWN: not yet designed]",
+  "data": {
+    "[UNKNOWN: not yet designed]": "the run id"
+  }
+}
+```
+
+A verb that refused: a hand-edited config makes every verb print this envelope and exit 1.
+
+```json
+{
+  "v": 1,
+  "ok": false,
+  "verdict": "Refused: config.json was hand-edited",
+  "report": "[UNKNOWN: not yet designed]",
+  "data": {},
+  "error": {
+    "code": "config_tampered",
+    "reason": "config.json was hand-edited",
+    "fix": "komodo config --accept"
+  }
+}
+```
+
+#### Global flags
+
+**In plain terms.** A global flag is an option every verb accepts. They control output shape (JSON or text, more or less, colour), which repo the verb acts on, how arguments are supplied, and whether writes really happen. The orchestrator relies on `--json` and `--input`; a person mostly uses `-C` and `--dry-run`. Without them each verb would need its own output and targeting options.
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `--json` | Print only the envelope | On when there is no terminal |
+| `-C <path>` | Act on that repo | cwd |
+| `--input <file\|->` | The verb's arguments as one JSON object | — |
+| `-q`, `-v` | Less or more human text | — |
+| `--no-color` | Plain text; `NO_COLOR` also works | auto |
+| `-h`, `--help` | Same as `help <verb>` | — |
+| `--dry-run` | Every writing verb: print each write, make none | — |
+
+**What each one does**
+- **`--json`:** Print only the JSON envelope ([Envelope and exit codes (Appendix B)](#envelope-and-exit-codes)), no plain text. It turns on by itself when no terminal is attached, which is the orchestrator's case.
+- **`-C <path>`:** Run the verb against the repo at that path instead of the current folder. Komodo resolves the repo id from it.
+- **`--input <file|->`:** Supply all the verb's arguments as one JSON object, from a file or from standard input (`-`). A flag typed on the command line wins over the same key in the JSON.
+- **`-q`, `-v`:** Quiet or verbose: less or more human text in `report`. Long forms are `--quiet` and `--verbose`.
+- **`--no-color`:** Print without colour codes. Setting the `NO_COLOR` environment variable does the same; otherwise colour follows `output.color`.
+- **`-h`, `--help`:** Print that verb's flags and examples, the same as `komodo help <verb>`. At any level of `config`, it lists the keys below.
+- **`--dry-run`:** For any verb that writes, print each write it would make and make none. `install --dry-run` prints a table of file, action (`write | keep | prune`) and reason.
+
+#### Verbs
+
+**In plain terms.** This is the full list of commands. "Shared" means both a person and the orchestrator may run it; "no" means a person at a real terminal only; "reads only" and the like mean part of the verb is shared. The engine is the part of Komodo that runs groups; most verbs either start it, ask it for state, or answer a question it is waiting on. Each verb below says who runs it, what it reads, what it changes and what it prints.
+
+| Verb | Does | Flags | Shared |
+|---|---|---|---|
+| `help [verb]` | List verbs, or one verb's flags and examples | `--all` | yes |
+| `version` | Version, binary path, latest known, repo pin | `--check` | yes |
+| `install` | Binary, provider probe, repo files | `--repo-only`, `--machine-only`, `--hosts claude,codex`, `--no-path`, `--from <file>`, `--project`, `--schedule`, `--force` | no |
+| `uninstall` | Remove every file the manifest owns | `--repo-only`, `--machine-only` | no |
+| `init` | Komodo's orchestrator skills and commands in the global Claude Code setup | [UNKNOWN: not yet designed] | no |
+| `fresh` | Get the newest binary now | `--check`, `--to <version>`, `--restart-runs` | no |
+| `doctor [install\|backlog]` | Health of the install or the backlog; both by default | `--fix` (terminal-only), `--sandbox <cmd>` | yes |
+| `config [agent\|endpoint <name>] <key>[=<value>]…` | Read keys, or set several at once, all or none | `--all`, `--default`, `--accept` | reads only |
+| `sync` | After a merge: fetch, prune worktrees, refresh repo files | `--no-fetch` | yes |
+| `add backlog` | Add a task, group or epic | `--task`, `--group`, `--epic`, `--to <id>`, `--files <globs>`, `--done-when <text>` | yes |
+| `add changelog` | Add an `Unreleased` entry | `--entry <text>`, `--kind added\|changed\|fixed\|removed` | yes |
+| `plan <goal>` | Planner drafts groups; writes only if lint (an automatic rule check) passes | `--from <spec>`, `--epic <N>` | yes |
+| `run [group]` | Start groups detached, return the run id at once; refuses a group whose dependency has not landed | `--stage <stage>` | yes |
+| `status [run]` | Pool, group graph, stages, budgets, blocks | `--watch`, `--wait blocked\|done\|any`, `--timeout <dur>` (9m), `--session <id>`, `--explain`, `--backlog`, `--metrics`, `--all` | yes |
+| `skill list\|get` | Skill index and bodies | `list --agent <name>`, `get <name> --section <heading>` | yes |
+| `scope approve\|deny <group>` | Answer a builder's `needs_scope`; approve adds the paths to `files` | `--paths <list>`, `--reason <text>` | yes |
+| `resume <run>` | Continue a crashed, blocked, paused or restarted run; paused agents restart now | `--from <stage>` | yes |
+| `stop <run>` | Save work and release leases; the same clean shutdown as a signal | — | yes |
+| `abandon <run>` | Stop, free leases, keep evidence; dependents block with `dependency` | `--reason <text>`, `--keep-worktree` | yes |
+| `jobs list\|show\|run\|pause\|resume\|tick` | Job templates and the tick | `<id>`; `run --ignore-window` | `list`, `show`, `tick` only |
+| `cache stats\|clear` | Size, hit rate, purge | `--kind skills\|context\|checks\|review\|lang`, `--all` | `stats` only |
+| `gate` | Full self-check; Komodo repo only | `--only <check>`, `--fast`, `--install`, `--install-hooks` | yes, except `--install*` |
+| `release <version>` | Tag, cross-build, checksum, sign; Komodo repo only | `--notes-file <path>` | no |
+
+**What each one does**
+- **`help [verb]`:** Anyone runs it. It prints the verb list, or one verb's flags and examples, from help text generated at build and embedded, so it answers under 50 ms. `help --json` lists every verb, flag, type, default and result schema and marks the terminal-only ones; the `AGENTS.md` block tells the orchestrator to run it first. `--all` also shows the internal tier. It changes nothing.
+- **`version`:** Anyone runs it. It prints the running version, the binary's path, the latest release Komodo knows of (from `state/fresh.json`) and the repo's pin from `AGENTS.md`. It changes nothing and makes no network call. What `--check` adds is `[UNKNOWN: not yet designed]`.
+- **`install`:** A person at a terminal runs it; the orchestrator is refused. It puts Komodo on the machine and into the current repo in 8 steps: the binary under `~/.komodo/versions/` and `bin/`, the PATH entry, the provider probe, the Komodo block in `AGENTS.md`, the `@AGENTS.md` line in `CLAUDE.md`, two entries in `.claude/settings.json`, the manifest, and an optional OS schedule. It computes the wanted file list, diffs it against `install.json`, applies only the differences, then runs `doctor install` and fails if any check errors. A rerun makes 0 changes; a hand-edited owned file survives and is reported. `--repo-only` writes only the files inside the repo; `--machine-only` writes only the machine parts (what `install.sh` runs); `--hosts claude,codex` overrides host detection; `--no-path` skips the PATH step; `--from <file>` installs that binary file; `--project` also adds `docs/{prd,hld,lld}.md`, `CHANGELOG.md` and a PR template; `--schedule` adds a launchd, cron or Task Scheduler entry that runs `komodo jobs tick` every 5 minutes; `--force` overwrites hand-edited owned files. It never writes a config file.
+- **`init`:** A person at a terminal runs it; the orchestrator is refused. It puts Komodo's orchestrator skills and commands (`run`, `plan`, `respond`, `komodo`) into the global Claude Code setup, so every Claude Code session has them without a per-repo step. The 7 worker agents stay inside the binary, because worker sessions load no user settings. How it writes there, as a Claude Code plugin or as plain files with a machine manifest, is [PENDING G-28]. Typical use: `komodo init` once after `install`.
+- **`uninstall`:** A person runs it. It reads the manifest and removes every file or settings entry `install` owns, the manifest in reverse, plus the repo's language cache. `--repo-only` removes only the repo files; `--machine-only` only the machine files.
+- **`fresh`:** A person runs it. It fetches the newest release now, downloads it to `versions/<v>/`, verifies the SHA-256 (a standard content fingerprint) and the ed25519 signature, and atomically replaces `bin/komodo`. Live runs keep their own version. `--check` fetches the 1 KB `latest.json` now (one of only three places that do); `--to <version>` installs a named version and may downgrade; `--restart-runs` signals each live run to checkpoint within 2 minutes and resumes it on the new binary, at the cost of at most one repeated model turn. A pinned repo tells you to run it with the fix line `run komodo fresh`. Background updates happen without it unless `fresh.auto` is false or `CI=true`.
+- **`doctor [install|backlog]`:** Anyone runs it, including the orchestrator; it still runs when the repo is pinned above the binary. It is the health check: it reads the machine, the install and the backlog, prints each check's result with a fix line, and changes nothing except refreshing the provider probe in `state/providers.json`. `doctor install` checks the installed files against the manifest, PATH, the sandbox (it runs each detected command's `--version` inside the sandbox to prove the toolchain folders work), the provider catalog as a table of weight, link, model ID, window and where that window came from, each `http:` endpoint's context against the floor (an Ollama server left at 4,096 fails and the fix `OLLAMA_CONTEXT_LENGTH=262144` is named), `OLLAMA_NUM_PARALLEL`, that every agent's chain ends in a free backstop, a missing or bad custom CA file, shell syntax in detected commands, missing Docker tools and that the Docker daemon runs Linux containers, Windows long paths, the copy mechanism for tester worktrees, that macOS has no process or memory cap, steering phrases or broken block markers in the repo's `AGENTS.md`, stale `~/.claude` files naming verbs missing from `help --json`, old Komodo hooks and shadowing binaries, 3 background update failures in a row, the cost class of each link, reviewer rules under 50% verified, and whether a lighter model's first-pass rate beats the standard one. `doctor backlog` checks the backlog files under `docs/backlog/` (the [Lint (`komodo doctor backlog`) (Appendix L)](#lint-komodo-doctor-backlog) table): file shape, `files`, `done_when` and dependencies, that groups in one wave share no files, no protected or `docs/backlog/**` path in `files`, sizing (5 files and 300 lines per task, 8 tasks per group, chains of 4), graph shape and cycles, the EARS form of acceptance items, and case-colliding paths. With no argument it runs both. Typical uses: `install` runs it at the end; phase 2 requires `doctor backlog` to pass on epic-1; cutover requires `doctor install` to find 0 stale references. `--fix` is terminal-only; what it fixes is `[UNKNOWN: not yet designed]`. `--sandbox <cmd>` runs one command under the sandbox policy so you can test what a worker's `run` would see.
+- **`config [agent|endpoint <name>] <key>[=<value>]…`:** Reads are shared; writes need a person at a terminal, so no session can change its own settings. A read such as `komodo config mode limits.returns` prints each value and which layer set it; a group or agent name alone lists its keys. A write such as `komodo config mode=economy limits.returns=4` sets every pair or none, refuses an unknown key (naming the closest match) or a value over its hard limit, appends one audit row per changed key to `state/config.log`, and rewrites `state/config.sha`. `agent <name>` and `endpoint <name>` address one agent's or one model server's keys. `--all` alone prints JSON of every key with value, default, limit and source; after a key it lists that key's valid values. `--default` resets a key, an agent, a group or the whole file; endpoint and whole-file resets list each change and need a typed `y`. `--accept` re-hashes `config.json` after a hand edit, which otherwise makes every verb refuse with `config_tampered`. One call reads or writes, never both.
+- **`sync`:** Anyone runs it, after the epic PR has been merged by a person. It fetches from the remote, prunes worktrees whose work has landed, and refreshes the repo files, which is `install --repo-only` plus fetch and prune. It also rewrites the `AGENTS.md` block after `config output.profile=standard`. `--no-fetch` skips the fetch.
+- **`add backlog`:** Anyone runs it. It adds one task, group or epic file under `docs/backlog/`; this is where out-of-scope work gets parked. `--task <text>`, `--group <title>` or `--epic <title>` says what to add; `--to <id>` names the parent; `--files <globs>` lists the files the work may touch; `--done-when <text>` gives the check that proves a task done. It refuses with `locked` and the run id while that group is in a run. A repeat with the same task reports `0 changes`.
+- **`add changelog`:** Anyone runs it. It adds one line to the `Unreleased` section of `CHANGELOG.md`. `--entry <text>` is the line; `--kind` files it under added, changed, fixed or removed.
+- **`plan <goal>`:** Anyone runs it, usually the orchestrator; it costs model tokens. It starts the planner worker: a heavy pass drafts the epic outline (groups, goals, file globs, dependencies), then one standard pass per group drafts that group's tasks and acceptance items, in parallel. Go lints every draft; a failing draft goes back into its session twice, then the plan blocks with `lint`. Backlog files are written only when lint passes, so a bad plan writes 0 files. `--from <spec>` feeds any document set (a PRD, an RFC, a ticket export) as input; `--epic <N>` adds or amends only unlocked groups in an existing epic.
+- **`run [group]`:** Anyone runs it, usually the orchestrator. It builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once, and leaves the engine running detached under a small parent guard. From then on the engine cuts worktrees, starts builder sessions, commits to hidden refs, runs Check and Verify, opens group PRs and lands groups; see [Group state machine (Appendix C)](#26-state-and-transitions) for the stages. `run <group>` refuses, naming the dependency, when a group it depends on outside this run has not landed; it also refuses a group another run holds, naming the holder, and a repo with no detected commands, naming the marker files it looked for. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background.
+- **`status [run]`:** Anyone runs it; a Claude `SessionStart` hook runs it so a new session sees state on line one. It reads `state.json` and the ledgers and prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings. It ends with `Verbs: komodo help`. It is one of three places that may fetch `latest.json`, at most hourly, and it also fires due pause timers. `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`), so the orchestrator runs it in the background. `--timeout <dur>` caps that wait, 9 minutes by default because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard: first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and USD per accepted group. `--backlog` is the installed binary's `backlog` verb folded in; what it lists is `[UNKNOWN: not yet designed]`. `--all` is `[UNKNOWN: not yet designed]`.
+- **`skill list|get`:** Anyone runs it, including any Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms. `get <name>` prints a skill's body; `--section <heading>` prints one section. `komodo skill get run|plan|respond|komodo` returns the workflow for each of those jobs. `list --agent <name>` narrows the list to one agent; the exact filter is `[UNKNOWN: not yet designed]`. It changes nothing.
+- **`scope approve|deny <group>`:** The orchestrator usually answers; a person can. A builder that needs a file outside its group's `files` stops with status `needs_scope`, the group blocks, and `status --wait` wakes the orchestrator. `approve` adds the paths to the group's `files` (action `scope_change`, logged in the ledger) and the engine resumes the same session with the answer; `deny` resumes it with the refusal. `--paths <list>` names the paths; `--reason <text>` the reason. The engine denies by itself, without asking, when a path is protected or belongs to another live group. One request per task.
+- **`resume <run>`:** Anyone runs it; Blocked never retries by itself, so a person or the orchestrator fixes the cause and runs this. It replays the state events after the snapshot through group state's `Load`, retakes the lease (or refuses, naming the new holder), rebuilds a removed worktree from the hidden ref, and continues each session from the provider's resume handle; if that fails it starts a fresh session with the brief, the uncommitted diff and the last summary, logging `resume_lost`. Paused agents attempt now; a refused attempt costs no turn and re-pauses. What `--from <stage>` does beyond its name is `[UNKNOWN: not yet designed]`.
+- **`stop <run>`:** Anyone runs it. It performs the same clean shutdown a signal does: stop each agent (30 s each), WIP-commit every worktree to its hidden ref, free the leases, write `state.json`, exit; after 60 s the rest is force-killed. It writes `run.stopped`. `resume <run>` continues later.
+- **`abandon <run>`:** Anyone runs it to drop a run for good. It stops the run, frees its leases and task-list lock, clears any pause timer, deletes the hidden ref, and keeps the evidence (state files, ledger rows, session folders). Groups that depended on it block with `dependency`, naming it. `--reason <text>` records why. What `--keep-worktree` keeps beyond its name is `[UNKNOWN: not yet designed]`; by default the sweep removes a worktree with no live lease and no unsaved work.
+- **`jobs list|show|run|pause|resume|tick`:** `list`, `show` and `tick` are shared; `run`, `pause` and `resume` need a person. A job template is a JSON file naming an agent subset, brief slots and an interval, such as a nightly review; none ship by default. `list` and `show <id>` read the templates under `embed/jobs/` and `~/.komodo/jobs/`. `tick` is one idempotent engine step with no daemon: it queues due jobs, fires due pause timers, and drives the pool once; with nothing due it exits under 50 ms with no network call. An OS schedule entry from `install --schedule` calls it every 5 minutes; Claude Code `/loop` also works but spends a model turn per tick. A due job starts a run named `job-<name>-<n>` that `status --wait` can take. `run <id> --ignore-window`, `pause <id>` and `resume <id>` are `[UNKNOWN: not yet designed]` beyond their names.
+- **`cache stats|clear`:** `stats` is shared; `clear` needs a person. The cache is the content-addressed store under `<git-common-dir>/komodo/cache/` plus the language caches under `~/.komodo/cache/lang/`. `stats` prints size and hit rate for this repo; `--all` prints the machine total across repos. `clear` purges entries; `--kind skills|context|checks|review|lang` limits it to one kind, where `lang` is the language caches.
+- **`gate`:** Anyone runs it, in the Komodo repo only; it is Komodo's own self-check before a change is accepted. It runs the [Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](#gate-and-self-checks-komodo-gate-komodo-repo-only) table: `go vet`, tests and cross-builds for Windows, Linux and macOS; import direction, comment lint and strict decode of every `agent.json` and job template; the guard table; event catalog completeness; docs drift (a verb missing from `README.md` or the `komodo` skill, a broken decision link, a package named in this document that does not exist); component maps; no silent gaps; generated artifacts matching their sources; and timing (short verbs under 50 ms, the gate under 3 minutes). Checks run in parallel by package, cross-builds last. `--fast` skips cross-builds and timing. `--install` places a dev build at `~/.komodo/bin/komodo` and `--install-hooks` installs git hooks in the Komodo repo; both need a person. What `--only <check>` selects beyond its name is `[UNKNOWN: not yet designed]`.
+- **`release <version>`:** A person runs it, on the owner's machine, in the Komodo repo only. It sets the version, tags, cross-builds the binaries, writes checksums, signs them with `~/.komodo/release.key` (ed25519), and publishes a release whose `latest.json` every `fresh` reads; betas publish as normal releases with "beta" in the version. The changelog starts fresh at `1.0.0-beta.6`. What `--notes-file <path>` supplies is `[UNKNOWN: not yet designed]`.
+
+Internal tier (`komodo internal <verb>`, listed only in `help --all`):
+
+| Verb | Called by | Does |
+|---|---|---|
+| `internal tools --agent <a> --session <id>` | The engine, for `claude -p` | The private MCP (Model Context Protocol, how a model calls tools) server for one session, over stdio (the program's standard input and output) |
+| `internal fresh-bg` | Any verb, only when a newer version is known | The detached updater: download, verify, swap |
+
+**What each one does**
+- **`internal tools --agent <a> --session <id>`:** The engine starts it for every `claude -p` worker session; a person never types it. It is the private MCP server (the tool server a model calls for `read`, `edit`, `run` and so on) for one session, speaking over stdin and stdout. It advertises only that agent's tools, passes every call through the guard, starts in under 100 ms, and dies with its session.
+- **`internal fresh-bg`:** Any verb spawns it, detached, when `state/fresh.json` shows a newer release than the running binary; a person never types it. It downloads to `versions/<v>/komodo.part`, verifies SHA-256 and the ed25519 signature, renames it into place, swaps `bin/komodo`, and deletes versions no run uses. It never downgrades, logs failures silently to `state/fresh.log`, and only one runs at a time through `state/fresh.lock`.
+
+#### Tier enforcement
+
+**In plain terms.** Verbs come in three tiers: shared, terminal-only and internal. A terminal-only verb is one only a person may run, such as `install`; Komodo enforces that by checking for a controlling terminal, the real shell window a person types into. An agent's shell has none, so the orchestrator is refused with exit 1. There are no host hooks; the orchestrator's rules are text in `AGENTS.md`, and a shell could fake a terminal, which rule O7 forbids but nothing stops. The pin check runs before everything else, so an old binary cannot act on a repo that needs a newer one.
+
+- A terminal-only verb refuses with exit 1 unless it has a controlling terminal. Agent shells have none: Claude Code's Bash tool cannot open `/dev/tty`.
+- No host hooks enforce tiers. Every host gets the same `AGENTS.md` rules and the same verbs. Rule O7 forbids faking a terminal; nothing enforces it.
+- Pin check first: a repo whose `AGENTS.md` pin (`min=`) is above this binary refuses every verb except `help`, `version`, `fresh`, `install` and `doctor`, with the fix line `run komodo fresh`.
+
+**What each one does**
+- **`help`:** Still runs when pinned, so a reader can see the verb list and the fix line.
+- **`version`:** Still runs, so the person can see which version is installed and which the repo pins.
+- **`fresh`:** Still runs, because it is the fix: it fetches the newer binary the pin demands.
+- **`install`:** Still runs, because it can also place a binary, including from a file with `--from`.
+- **`doctor`:** Still runs, so the install can be diagnosed before updating.
+
+#### Performance
+
+**In plain terms.** Some verbs are typed often and must feel instant: `help`, `version`, a `config` read and `skill`. They must answer in under 50 milliseconds, touch no network, and read nothing in the repo beyond checking that marker files such as `go.mod` exist. Help text and the `komodo` skill are built into the binary at build time, not computed when typed. The 50 ms figure is a target until the gate measures it in phase 6.
+
+Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with no network and no repo scan beyond marker stats. `help --json` and the `komodo` skill are generated at build and embedded. `[PENDING G-19]` the budget is a target until gate timing measures it in phase 6.
+
+**What each one does**
+- **`help`:** Reads embedded, build-time text; no disk or network.
+- **`version`:** Reads the embedded version and `state/fresh.json`; no network.
+- **Config reads:** Parse the config once per process; detection is cached by the marker-file hash, so a cold repo costs one `stat` per marker.
+- **`skill`:** The index is embedded at build, so `skill list` is a map read; bodies come from the cache.
+
+#### Configuration
+
+
+**In plain terms.** Configuration is the set of settings that tune how the harness (the `komodo` binary, see Glossary) behaves. It bounds how many AI model sessions run at once, how long each may take, and when a paid model may run. It exists so a person changes behaviour in one audited place, never by hand edits or per-run flags. Without it, a model session could loosen its own limits and every run would need the same choices retyped. A person writes it with `komodo config`; the engine (the run loop inside the binary) reads it once per run.
+
+#### Layers and write path
+
+**In plain terms.** This section says where settings live and what happens when a person changes one. There are two layers: defaults baked into the binary, and one machine-wide file that `komodo config` edits. The write path exists so every change is type-checked, logged and hash-guarded; a hand edit is caught and refused until a person accepts it. A person writes it; the engine reads it; model sessions cannot touch it, because `~/.komodo/**` is protected and every write needs a terminal.
+
+| # | Layer | Where | Power |
+|---|---|---|---|
+| 1 | Built-in | `embed/defaults.json`, `embed/policy.json` | Defaults and hard limits |
+| 2 | Machine | `~/.komodo/config.json`, flat keys at top level, `agents.<name>` and `endpoints.<name>` sections | Any value within the hard limits |
+
+**What each one does**
+- **1, Built-in:** The defaults and the hard limits shipped inside the signed binary. Every key has a value here, so nothing is ever missing. Nobody edits this layer; `--default` resets a key back to it.
+- **2, Machine:** The one file a person edits, `~/.komodo/config.json`, with flat keys at the top and `agents.<name>` and `endpoints.<name>` sections. It may set any value within the built-in hard limits; a higher value is refused. Every repo on the machine shares it.
+
+- Merge: the machine value wins within the hard limits. Every key exists out of the box; `--default` resets a key, an agent, a group or the whole file (endpoint and whole-file resets list each change and need a typed `y`).
+- Strict decode: an unknown key is an error naming the closest match; a value over a hard limit is refused naming the key, value and limit.
+- Write: `komodo config k=v k2=v2` sets every pair or none; one call reads or writes, never both; writes need a terminal.
+- Audit: each write appends one row per changed key to `~/.komodo/state/config.log`: time, batch id, key, old value, new value.
+- Hash guard: `komodo config` writes the file and its SHA-256 to `state/config.sha`. A hand edit makes every verb refuse with `config_tampered` and the fix line `komodo config --accept`, which rewrites the hash and logs one audit row.
+- Snapshot per run: the effective config hash goes into `runs/<group-id>/state.json`; the hash is also the cache key prefix, so a config change never serves a stale brief or check.
+- Agents cannot touch it: `~/.komodo/**` is protected by G3 and every write needs a terminal.
+- Repo id (names worktrees, leases and caches, never config): the normalized origin URL such as `github.com/rdevitto86/komodo-agentic-harness-coding`; with no remote, the git common dir path. Every worktree of a repo shares one id.
+
+**Example**
+
+A config.json in which a person has set three flat keys; the keys sit at the top level, each within its hard limit.
+
+```json
+{
+  "output.profile": "standard",
+  "limits.pool_max": 4,
+  "cache.max_mb": 512
+}
+```
+
+#### Flat keys (34)
+
+**In plain terms.** These are the 34 single-value settings a person can change with `komodo config key=value`. They cover output layout, self-update, providers, warnings, usage tracking, session counts, time and token limits, the sandbox, caches and merging. Each has a default, and most have a hard limit the binary refuses to exceed. Without them, runaway loops, surprise spend and an overloaded machine would have no bound. A person changes them; the engine reads them when a run starts and keeps that snapshot until the run ends.
+
+| Key | Default | Hard limit | Meaning |
+|---|---|---|---|
+| `output.profile` | `adhd` | — | Template set: `adhd` or `standard`; facts and codes are the same under both |
+| `output.turn_end_summary` | `true` | — | The 4 headings at the end of reports |
+| `output.color` | `auto` | — | `auto`, `on`, `off` |
+| `mode` | `thorough` | — | `economy` or `thorough`; sets review depth and the `track.usage` default |
+| `track.usage` | `auto` | — | `auto`, `on` or `off`; `auto` is on in `economy` mode and off in `thorough` mode |
+| `fresh.auto` | `true` | — | Background update |
+| `fresh.interval` | `1h` | ≥ 10m | How often to check |
+| `providers.paid` | `never` | — | `never`, `fallback`, `allowed` |
+| `warn.usd_per_run` | 5 | — | Warn when a run's metered USD passes this; never stops work; used only when `track.usage` is on |
+| `warn.quota_pct` | 90 | — | Warn when a provider window passes this percent |
+| `providers.keys.anthropic` | `env:ANTHROPIC_API_KEY` | `env:` only | Key reference, never the value |
+| `providers.keys.openai` | `env:OPENAI_API_KEY` | `env:` only | Same |
+| `providers.ctx_floor` | 262144 | — | Smallest `http:` endpoint context allowed |
+| `http.ca_bundle` | none | PEM file path | Extra trusted certificates added to the system roots |
+| `limits.pool_min` | 1 | `limits.pool_max` | Session slots kept open while throttled |
+| `limits.pool_max` | 6 | 16 | Most looping sessions at once, across all repos |
+| `limits.link_sessions.<link>` | 3; loopback endpoints 1 | 8 | Concurrent sessions per link, across all repos |
+| `limits.group_wall_min` | tasks × `limits.session_wall_min` + 2 × `limits.session_wall_min` | 720 | Wall time per group; paused time excluded; a 4-task group gets 360 |
+| `limits.group_tokens` | 2,000,000 | 10,000,000 | Tokens per group: input, output, cache writes; cache reads reported only; used only when `track.usage` is on |
+| `limits.task_attempts` | 6 | 10 | Model attempts per task: fresh sessions, re-prompts, gate feedback, "continue" |
+| `limits.pause_max_min` | 360 | 1,440 | Longest a session stays paused on a provider limit |
+| `limits.session_wall_min` | 60 | 120 | Wall time per session |
+| `limits.session_idle_min` | 10 | 30 | Silence before a nudge |
+| `limits.returns` | 3 | 5 | Returns to Build before Blocked |
+| `guard.refusal_limit` | 3 | 5 | Refusals under one rule before the session ends |
+| `check.patch_coverage` | 80 | 100 | Percent of changed lines a test must cover; blocks for Go, warns for other languages |
+| `sandbox.network` | `deny` | — | Network for run-class commands |
+| `sandbox.max_procs` | 512 | 2048 | Processes per session |
+| `sandbox.max_mem_gb` | 8 | 32 | Memory per session |
+| `sandbox.image` | detected | — | Docker image for native Windows; required for Makefile-only or 2-language repos |
+| `sandbox.lang_cache_gb` | 10 | 50 | Language caches per repo |
+| `cache.max_mb` | 256 | 4096 | Cache size per repo |
+| `ledger.retention_days` | 30 | 365 | Ledger retention |
+| `ship.mode` | `group` | — | `group`: a PR per group into the epic branch, merged by the engine; `epic`: groups merge straight into the epic branch |
+
+**What each one does**
+- **`output.profile`:** Picks the text layout for everything a person reads: `adhd` (verdict first, bold labels, tables, short lists) or the plainer `standard`. The facts and codes are the same under both. A person changes it when they prefer the standard layout, then runs `komodo sync` so the rules block in `AGENTS.md` is rewritten.
+- **`adhd` layout:** Verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`). The profile is fixed per machine: no repo setting or flag changes a template.
+- **`output.turn_end_summary`:** Turns the 4 fixed headings at the end of every report on or off. A person turns it off to get shorter reports. [UNKNOWN: not yet designed] which 4 headings they are.
+- **`output.color`:** Controls terminal colour: `auto` decides from the terminal, `on` forces it, `off` removes it. It is applied only when text is rendered, so it never changes the facts. A person sets `off` for logs or plain terminals.
+- **`mode`:** Sets how deep the reviewer looks: `thorough` runs every lens (a reviewer rule catalog, see Glossary) that applies, plus a cold pass; `economy` runs one merged lens at reduced depth. It changes review depth and the `auto` default of `track.usage`, never which model runs. A person picks `economy` to save tokens on low-risk work.
+- **`track.usage`:** Turns the recording and reporting of model tokens and US dollars (USD) on or off. `auto`, the default, is on under `economy` mode and off under `thorough` mode; `on` and `off` override it. A person sets `on` to watch usage under `thorough`.
+  - **On:** The ledger records tokens and USD, `status --metrics` reports them, `warn.usd_per_run` can warn and `limits.group_tokens` caps each group.
+  - **Off:** The engine does not collect, write or print any token or USD data. Groups stay bounded by returns, attempts, retries, and session and group wall time.
+  - **Purpose:** The data exists only to debug costs and track metrics. The token cap is the one decision that reads it, and it applies only when tracking is on.
+- **`fresh.auto`:** Turns the background self-update of the `komodo` binary on or off. When on, a verb that sees a newer release spawns a detached updater and carries on; live runs keep their own version. A person sets `false` on a machine that must stay pinned.
+- **`fresh.interval`:** How often the harness checks for a newer release, by caching the release manifest for this long. The check is one 1 KB fetch on the few verbs that already touch the network. It cannot go below 10 minutes; a person raises it to check less often.
+- **`providers.paid`:** Says when a paid model link (a way to reach a model, see Glossary) may run. `never` removes paid links from every chain and blocks with `paid_refused` if nothing else is left; `fallback` lets a paid link run only after every subscription and free link is skipped; `allowed` runs paid links in chain order. A person changes it when they accept per-token billing.
+- **`warn.usd_per_run`:** Prints a warning when a run's metered spend in US dollars passes this number. It never stops work; the provider's own limits do that. It applies only when `track.usage` is on. A person raises it when runs on paid links are expected to cost more.
+- **`warn.quota_pct`:** Prints a warning when a provider usage window (the Max 5-hour or weekly window) passes this percent used. It also shrinks the session pool by half so the window is not drained. A person lowers it to get warned earlier.
+- **`providers.keys.anthropic`:** Names the environment variable that holds the Anthropic API key, as `env:NAME`. The key value itself is never stored in config or logs. A person changes it when their key lives under another variable name.
+- **`providers.keys.openai`:** The same rule for the OpenAI API key reference. Only `env:` references are accepted. The OpenAI link itself is recorded as `not yet` until a later minor.
+- **`providers.ctx_floor`:** The smallest context window, in tokens, an `http:` (open-source, OpenAI-compatible) endpoint may have before the engine refuses to use it. A server below it fails `doctor` and is skipped with a `provider.skip` event, because briefs are never shrunk to fit a small window. The default catches Ollama's 4,096 default; a person lowers it only when running smaller models on purpose.
+- **`http.ca_bundle`:** A path to a PEM file of extra trusted certificates, added to the system roots for HTTPS calls to model servers. A missing or bad file fails `doctor`. A person sets it when their endpoint is signed by a private company CA.
+- **`limits.pool_min`:** The number of session slots the machine-wide pool keeps open even after a rate-limit error shrinks it. Work never stops entirely while a slot exists. It cannot exceed `limits.pool_max`; a person raises it to keep more sessions alive while throttled.
+- **`limits.pool_max`:** The most builder, reviewer and tester sessions that may run at once across every repo on the machine. More ready groups queue until a slot frees. A person lowers it on a small machine or raises it, up to 16, on a large one with plenty of memory.
+- **`limits.link_sessions.<link>`:** The most sessions that may use one link at once, across all repos. The default is 3, or 1 for a loopback endpoint such as local Ollama. Ollama serves 1 request per model unless `OLLAMA_NUM_PARALLEL` is raised, so `doctor` reads it and names the fix.
+- **`limits.group_wall_min`:** The most wall-clock minutes a group (a bundle of up to 8 tasks, see Glossary) may spend before it stops. It scales with the task count and excludes paused time; a 4-task group gets 360. A person raises it, up to 720, for groups with slow test suites.
+- **`limits.group_tokens`:** The most model tokens one group may consume: input, output and cache writes. It is a runaway-loop bound, not a cost cap; cache reads are reported but not counted. It applies only when `track.usage` is on; otherwise returns, attempts, retries and wall time bound the group. Hitting it blocks the group with `budget`; a person lowers it to catch loops sooner.
+- **`limits.task_attempts`:** The most model attempts one task gets, counting fresh sessions, re-prompts, gate feedback and "continue". The default covers 2 fresh sessions with 2 re-prompts each. Hitting it blocks the group with `attempts`; a person raises it, up to 10, for hard tasks.
+- **`limits.pause_max_min`:** The longest a session may stay paused waiting for a provider limit to reset. At the cap the session is cancelled, its work-in-progress commit is kept, and the group blocks with `pause_timeout`. A person raises it, up to 24 hours, to ride out long provider outages.
+- **`limits.session_wall_min`:** The most minutes one model session may run; 60 by default, 120 at most. The session gets a warning at 80% and is stopped at the cap, with the clock stopped while paused. A person raises it for agents that need longer single tasks.
+- **`limits.session_idle_min`:** How many minutes of silence from a session, with no stream line and no running tool, before the engine sends it a nudge. After the nudge and a 5-minute grace the session is stopped as `idle`. A person raises it for slow local models.
+- **`limits.returns`:** How many times a group may be sent back from Check or Verify to Build before it blocks. Each return is one more builder pass with the findings. A person raises it, up to 5, when groups legitimately need more review rounds.
+- **`guard.refusal_limit`:** How many times a session may be refused under the same guard rule before the session ends. The guard is the fail-closed check every tool call passes (see Glossary). It is the only tunable security value; a person raises it to tolerate a model that retries refused calls.
+- **`check.patch_coverage`:** The percent of changed lines that tests must cover for Check to pass. It blocks for Go and only warns for other languages until their coverage tools are detected. A person raises it toward 100 for stricter repos.
+- **`sandbox.network`:** Network access for commands of the `run` class (build, test, lint, format) inside the sandbox; `deny` keeps it off, with loopback always allowed. Intake's `setup` runs with network on regardless, since it must download dependencies. [UNKNOWN: not yet designed] which other values exist.
+- **`sandbox.max_procs`:** The most processes one session's commands may start. It is enforced through cgroups (Linux's per-process resource limits) on Linux or Docker on Windows; macOS has no such limit and `doctor` says so. A person raises it for test suites that fork heavily.
+- **`sandbox.max_mem_gb`:** The memory cap, in gigabytes, for one session's commands. The pool also uses it to decide whether free memory covers one more session. A person raises it for memory-hungry builds.
+- **`sandbox.image`:** The Docker image used when the sandbox runs through Docker on native Windows. It is detected from the language marker. A Makefile-only repo or one with 2 language markers has no obvious image, so a person must set it.
+- **`sandbox.lang_cache_gb`:** The size cap for a repo's language caches (Go, npm, cargo, pip caches Komodo keeps under `~/.komodo/cache/lang/`). Over the cap, or after 30 days unused, the startup sweep deletes the whole cache and the next Intake refills it. A person raises it for repos with large dependency sets.
+- **`cache.max_mb`:** The size cap for a repo's content cache: its skills, context, checks, review, setup and map entries. The least recently used entries go first. A person raises it for repos where cached checks save many reruns.
+- **`ledger.retention_days`:** How many days of session and event ledger rows are kept before the oldest are trimmed; 100 MB per repo is the other bound. A state file of a group that is still open, paused or blocked is never trimmed. A person raises it to keep metrics over a longer window.
+- **`ship.mode`:** How a finished group lands: `group` opens a pull request into the epic branch and the engine merges it at once; `epic` merges the group straight into the epic branch with `--no-ff`. A person picks `epic` when per-group PRs add no value.
+
+Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded by the Max 5-hour window, not the API; `providers.ctx_floor` 262,144 is the native window of the ~27B open models targeted and catches Ollama's 4,096 default; `limits.session_wall_min` 60 bounds one task with 6 attempts inside a 6-hour group; `limits.task_attempts` 6 covers 2 fresh sessions with 2 re-prompts each; `warn.usd_per_run` 5 warns before a second ~$7 group on Opus 5.5; `limits.group_tokens` 2,000,000 is 1.7× the expected worst case of 1.2M. Both keys apply only when `track.usage` is on. `[PENDING G-07]` the real Max 5-hour window against `link_sessions.claude-cli` 3, measured over the first 20 groups.
+
+Where the numbers come from:
+- Anthropic's lowest API tier allows 1,000 requests and 2M input tokens a minute on Opus 5.5. A session makes well under 1 request a second, so the Max plan's 5-hour window is the real bound.
+- Claude Code's own headless runs stop background work after 10 minutes idle; that is the basis of `limits.session_wall_min`.
+- The ~$7 estimate for a 4-task group assumes 200K uncached input tokens plus 50K output tokens per session.
+- Codecov recommends 100% coverage on the patch, which punishes glue code; `check.patch_coverage` stays at 80 on changed lines.
+
+#### Agent group (`komodo config agent <name> …`)
+
+**In plain terms.** An agent is one of the seven worker roles (planner, architect, reviewer, builder, researcher, tester, scout; see Glossary). This section lists the 4 settings a person can change per agent, such as `komodo config agent reviewer model=sonnet`. They exist so one role can run a different model or get a longer clock without changing the whole machine. Without them, every agent would share one model and one time limit. A person sets them; the engine reads them when it starts that agent's session.
+
+| Key | Default | Hard limit | Meaning |
+|---|---|---|---|
+| `model` | The agent's weight: `opus`, `sonnet`, `haiku` | A probed model | `opus` is the latest in the line, `opus-prev` the prior; `<endpoint>:<model>` names an open-source model; `fable` opt-in on heavy agents |
+| `session_wall_min` | `limits.session_wall_min` | 120 | Beats the flat key for this agent |
+| `session_idle_min` | `limits.session_idle_min` | 30 | Same |
+| `retries` | 2 | 3 | Retries per session |
+
+**What each one does**
+- **`model`:** The model this agent starts on, by default the latest `opus`, `sonnet` or `haiku` for its weight (heavy, standard or light, see Glossary). `opus-prev` means the prior version; `<endpoint>:<model>` names an open-source model on a configured endpoint; `fable` is an opt-in heavy model. It beats `mode`, and the chain still ends in the free backstop.
+- **`session_wall_min`:** The wall-clock limit for this agent's sessions, overriding the flat `limits.session_wall_min`. The hard limit stays 120. A person raises it for an agent that needs longer single tasks.
+- **`session_idle_min`:** The silence limit before a nudge for this agent, overriding the flat `limits.session_idle_min`. The hard limit stays 30. A person raises it for an agent running on a slow local model.
+- **`retries`:** How many times a session that timed out or went idle is restarted for the same task, within `limits.task_attempts`. The default is 2, the hard limit 3. A person raises it for an agent whose sessions often time out.
+
+**Example**
+
+`komodo config agent reviewer model=sonnet session_wall_min=90 retries=3` stores this section in `~/.komodo/config.json`.
+
+```json
+{
+  "agents": {
+    "reviewer": {
+      "model": "sonnet",
+      "session_wall_min": 90,
+      "retries": 3
+    }
+  }
+}
+```
+
+#### Endpoint group (`komodo config endpoint <name> …`)
+
+**In plain terms.** An endpoint is an OpenAI-compatible model server, such as a local Ollama, reached over HTTP. This section lists the settings that describe one, set with `komodo config endpoint <name> …`. Endpoints exist because every agent's fallback chain must end in a free open-source model, the backstop (see Glossary). Without one, `doctor` and `gate` refuse the chain. A person configures them; the engine probes them and uses them when Claude is limited or when an agent's `model` names one.
+
+| Key | Meaning |
+|---|---|
+| `url` | The server's `/v1` base |
+| `models` | A model per weight: `heavy`, `standard`, `light`; a missing weight uses the nearest |
+| `ctx` | Context tokens: required for non-Ollama servers; an optional lower cap for Ollama |
+| `key` | `env:` reference only, optional |
+| `self_hosted` | A non-loopback server counted as free |
+| `first_byte_s` | First-byte timeout override |
+
+**What each one does**
+- **`url`:** The server's base address ending in `/v1`, such as `http://localhost:11434/v1`. The engine probes it, and the endpoint is used only when the probe answers. A person sets it to point at their own model server.
+- **`models`:** The model name to use for each weight: `heavy`, `standard` and `light`. If a weight is missing, the nearest listed one is used. A person fills it with the models the server actually serves.
+- **`ctx`:** The server's context window in tokens. Non-Ollama servers must declare it, since the engine cannot measure it; on Ollama it is optional and can only lower the measured number. The brief builder sizes every prompt to half of it.
+- **`key`:** An `env:NAME` reference to an API key the server needs, optional. The value is never stored or logged. A person sets it for a hosted endpoint that requires a key.
+- **`self_hosted`:** Marks a server that is not on loopback as free rather than paid. Without it, a non-loopback endpoint is refused under `providers.paid: never`. A person sets it for a model server on another machine they own.
+- **`first_byte_s`:** How many seconds to wait for the first byte of a reply before giving up, overriding the default (60 s, or 300 s on loopback). A person raises it for a slow server that takes long to load a model.
+
+Default: one endpoint, `local`, at `http://localhost:11434/v1`, used only when it answers the probe.
+
+**Example**
+
+The default `local` endpoint as a config section: its `/v1` base URL and one model for the standard weight.
+
+```json
+{
+  "endpoints": {
+    "local": {
+      "url": "http://localhost:11434/v1",
+      "models": {
+        "[UNKNOWN: weight not yet designed]": "Qwen3.6-27B"
+      }
+    }
+  }
+}
+```
+
+#### Environment variables
+
+**In plain terms.** An environment variable is a named value set in the shell before a command runs. Komodo reads only 2 of them, both for where it lives and how it prints; everything else is a `komodo config` key. Keeping the list this short means behaviour cannot be changed by a stray shell variable. A person or a CI script sets them; the engine reads them at start.
+
+| Variable | Use |
+|---|---|
+| `KOMODO_HOME` | Another home dir (tests, CI) |
+| `NO_COLOR` | Plain text |
+
+**What each one does**
+- **`KOMODO_HOME`:** Points Komodo at a different home directory instead of `~/.komodo`, for example `KOMODO_HOME=/tmp/k komodo doctor`. Tests and CI use it to keep state separate from a person's real install.
+- **`NO_COLOR`:** Makes every verb print plain text without colour codes, for example `NO_COLOR=1 komodo status`. A person sets it for logs or terminals that cannot show colour.
+
+No other environment variable configures Komodo. `CI=true` disables background fresh.
+
+#### Command detection
+
+**In plain terms.** Command detection is how the engine learns a repo's setup, build, test, lint and format commands. It looks at which marker files exist, such as `go.mod`. It exists so no one writes these commands into config and so every repo type gets the same five classes. Without it, Check and the agents' `run` tool would not know what to execute. The engine detects them once and caches the result by the hash of the marker files; a person influences them only by adding Makefile targets.
+
+Cached by the hash of the marker files.
+
+| Marker | setup | build | test | lint | format |
+|---|---|---|---|---|---|
+| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...` | `gofmt -l .` |
+| `package.json` | `npm ci` | `npm run build` | `npm test` | `npm run lint` | `npm run format` |
+| `Cargo.toml` | `cargo fetch` | `cargo build` | `cargo test` | `cargo clippy` | `cargo fmt --check` |
+| `pyproject.toml` | — | — | `pytest` | `ruff check` | `ruff format --check` |
+| `Makefile` | `make setup` | `make build` | `make test` | `make lint` | `make fmt` |
+
+**What each one does**
+- **`go.mod`:** Marks a Go repo. The five standard Go commands are used: download modules, build, test, vet and check formatting. The engine runs them inside the sandbox.
+- **`package.json`:** Marks a Node repo. `npm ci` needs a lockfile, and `build`, `lint` and `format` are used only if the package defines those scripts. A missing script simply leaves that class empty.
+- **`Cargo.toml`:** Marks a Rust repo. Fetch, build, test, clippy and a formatting check are used.
+- **`pyproject.toml`:** Marks a Python repo. There is no setup or build class; `pytest` tests, and `ruff` lints and checks formatting.
+- **`Makefile`:** Marks a repo driven by make. Each target is used only if the Makefile defines it. A defined target wins over the detected command for that class.
+
+- Only what exists: npm scripts and make targets are used only if defined; `npm ci` needs a lockfile.
+- A Makefile target wins over the detected command when the Makefile defines it.
+- `git-read` is always on: `git status`, `diff`, `log`, `show`.
+- Commands run without a shell; shell syntax fails `doctor`. Every command runs in the sandbox, except `git-read` under Docker, which runs on the host.
+- `setup` is the engine's: Intake runs it once per worktree with network on; no agent can run it.
+- With no detected commands, `run` refuses and names the marker files it looked for; read-only agents still run.
+
+#### Capacity profile per link
+
+**In plain terms.** A capacity profile is a small record the engine builds just before each session. It says how big a prompt the link takes, how many sessions it allows, its cost class and the effort level. It exists so swapping Claude for a local or OpenAI model changes only this record, never the engine's logic. Without it, a brief could exceed a small model's window or a paid link could run unnoticed. The engine builds it; the brief builder and the pool read it; nobody sets it directly.
+
+Before each session the engine derives `{ctx, slots, cost_class, effort}` for the link it is about to use: `ctx` measured ([Measured context (chapter 7)](#7-providers-and-http)), `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight. The brief builder sizes from `ctx`, the engine takes a slot from `slots`, and budgets cache by the whole profile. Swapping Claude for a local or OpenAI link changes the profile, never the engine.
+
+**Example**
+
+The record the engine builds before each session, as a Go struct with the four fields the LLD lists.
+
+```go
+// CapacityProfile is what the engine knows about one link before a session starts.
+type CapacityProfile struct {
+	Ctx       int    // measured context window in tokens
+	Slots     int    // concurrent sessions allowed on the link (limits.link_sessions.<link>)
+	CostClass string // subscription, free or paid, from the billing check
+	Effort    string // high, medium or low, from the agent's weight
+}
+```
+
+#### Configuration model
+
+**In plain terms.** Configuration is the set of settings that change how Komodo behaves, such as how many sessions may run at once. There are only two layers: defaults baked into the program, and one file per machine. The design keeps settings from drifting: every change goes through one command that logs it, and a hand edit is detected and refused. A person changes settings with `komodo config`; the engine only reads them; an AI session can never touch them.
+
+| Layer | Where | Power |
+|---|---|---|
+| 1 Built-in | `embed/defaults.json`, `embed/policy.json` inside the signed binary | Defaults and hard limits |
+| 2 Machine | `~/.komodo/config.json`, top level | Any value within the hard limits |
+
+**What each one does**
+- **1 Built-in:** Two files compiled into the `komodo` binary. `defaults.json` holds the default value of every setting; `policy.json` holds the hard limits and the guard rules (see Glossary). They change only with a new release.
+- **2 Machine:** Your settings file, one per machine, shared by every repo. A value here wins over the default but can never pass a hard limit. A value over the limit is refused, naming the key, the value and the limit. Only `komodo config` writes it.
+
+- The machine value wins within the hard limits. Every key exists out of the box; `--default` resets.
+- One write path: `komodo config`, which needs a terminal, writes every pair or none, logs one audit row per changed key, and stores a SHA-256 of the file. A hand edit makes every verb refuse with `config_tampered` until `komodo config --accept`.
+- Each run snapshots the effective config's hash into its `state.json`; edits mid-run do nothing to that run.
+- Only two environment variables exist: `KOMODO_HOME` and `NO_COLOR`. Secrets are `env:` references only.
+- Security rows are never config. The only guard tunable is `guard.refusal_limit`.
+
+#### Interfaces
+
+
+**In plain terms.** An interface is how something outside the harness talks to it. Here that means the command line. It covers the verbs a person or the orchestrator types, the JSON reply every verb returns, and the `AGENTS.md` text that teaches a host session the rules. Without one fixed surface, each host would need its own integration. People and the orchestrator share most verbs; a few belong to people only.
+
+#### Command surface
+
+**In plain terms.** The command surface is the full list of `komodo` verbs, split into three tiers by who may call them. Shared verbs are for a person or the orchestrator. Terminal-only verbs refuse unless a real terminal is attached, which an AI session's shell never has. Internal verbs are called only by the engine. Without tiers, the orchestrator could update the binary or sign a release. Every verb goes through the same five steps so a failure before step 4 changes nothing.
+
+| Tier | Who calls it | Verbs |
+|---|---|---|
+| Shared | Human and orchestrator | `help`, `version`, `doctor`, `sync`, `add backlog`, `add changelog`, `plan`, `run`, `status`, `skill`, `scope`, `resume`, `stop`, `abandon`, `jobs list|show|tick`, `cache stats`, `gate` (except `--install*`), `config` reads |
+| Terminal-only | Human; refused without a controlling terminal | `install`, `init`, `uninstall`, `fresh`, `config` writes, `doctor --fix`, `jobs run|pause|resume`, `cache clear`, `gate --install`, `gate --install-hooks`, `release` |
+| Internal | The engine | `internal tools`, `internal fresh-bg` |
+
+**What each one does**
+- **Shared:** Verbs a person or the orchestrator may call. Each one in the row:
+  - **`help`:** Lists verbs, or one verb's flags and examples; `help --json` is what the orchestrator reads first.
+  - **`version`:** Prints the version, binary path, latest known release and the repo pin.
+  - **`doctor`:** Health check of the install, the sandbox, PATH and the model catalog. It also checks endpoint context sizes, missing tools, hook drift, Windows long paths, the Docker daemon and the backlog grammar. `doctor install` or `doctor backlog` runs one half; `doctor --sandbox <cmd>` runs a command under the sandbox policy.
+  - **`sync`:** After a merge: fetch, prune finished worktrees and refresh the repo's Komodo files.
+  - **`add backlog`:** Adds a task, group or epic to the backlog files.
+  - **`add changelog`:** Adds an `Unreleased` entry to the changelog.
+  - **`plan`:** The planner agent drafts groups and tasks for a goal; files are written only if lint passes.
+  - **`run`:** Starts groups detached and returns the run id at once; refuses a group whose dependency has not landed.
+  - **`status`:** The live view, with `--watch`, `--wait`, `--explain` and `--metrics` as in section 16.3.
+  - **`skill`:** Lists or prints the embedded skills (standards documents).
+  - **`scope`:** Answers a builder's `needs_scope` request with approve or deny.
+  - **`resume`:** Continues a crashed, blocked, paused or restarted run.
+  - **`stop`:** Saves work and releases leases; the same clean shutdown as a signal.
+  - **`abandon`:** Stops a run, frees leases, keeps evidence; dependents block with `dependency`.
+  - **`jobs list|show|tick`:** Lists job templates, shows one, or runs one scheduler step.
+  - **`cache stats`:** Shows cache size and hit rate.
+  - **`gate` (except `--install*`):** Komodo's own self-check, section 15.4.
+  - **`config` reads:** Prints config keys; writes are terminal-only.
+- **Terminal-only:** Verbs that refuse with exit 1 unless a controlling terminal exists. Claude Code's Bash tool cannot open one, so the orchestrator hands the command to the person.
+  - **`install`:** Places the binary, probes providers and writes the repo files.
+  - **`uninstall`:** Removes every file the install manifest owns.
+  - **`fresh`:** Fetches the newest binary now and verifies it.
+  - **`config` writes:** Sets one or more config keys, all or none.
+  - **`doctor --fix`:** Applies the fixes `doctor` found.
+  - **`jobs run|pause|resume`:** Runs a job now, or pauses and resumes a job template.
+  - **`cache clear`:** Purges a cache kind.
+  - **`gate --install`:** Places a dev build at `~/.komodo/bin/komodo`.
+  - **`gate --install-hooks`:** Installs git hooks in the Komodo repo.
+  - **`release`:** Tags, cross-builds, checksums and signs a release; Komodo repo only.
+- **Internal:** Verbs only the engine calls, listed only in `help --all`.
+  - **`internal tools`:** The private tool server (an MCP server over stdio) for one worker session.
+  - **`internal fresh-bg`:** The detached updater: download, verify, swap.
+
+**What each one does** (the five processing steps every verb takes)
+- **Parse:** Reads the verb and its flags; `--input` JSON merges under explicit flags, which win.
+- **Validate:** Checks types and enums, suggests the closest match for an unknown flag, runs the terminal check, the repo pin and the config hash guard. Nothing has run yet.
+- **Resolve:** Finds the repo id from the current folder or `-C`, the effective config, and the capacity profile when a verb needs a model link.
+- **Dispatch:** One thin call into the domain package; the verb never reads state files itself. `--dry-run` prints each write here and makes none.
+- **Render:** Turns the result's codes and facts into the human `report` through templates, then prints the envelope or plain text.
+
+Every verb: five processing steps (parse, validate, resolve, dispatch, render); a verb that fails before dispatch has made 0 writes; every writing verb is idempotent and takes `--dry-run`; every verb accepts `--input <file|->` as one JSON object with explicit flags winning.
+
+#### Envelope and exit codes: overview
+
+**In plain terms.** The envelope is the fixed JSON shape every verb returns (see Glossary), so the orchestrator can parse any reply the same way. The exit code is the number a program returns when it ends; a script branches on it. The `report` field is already formatted for a person, so the orchestrator passes it through unchanged. Without a fixed envelope, every verb would need its own parser.
+
+**What each one does**
+- **`v`:** The envelope version, 1, so a future shape can be told apart.
+- **`ok`:** True on success, false on any failure.
+- **`verdict`:** One line saying what happened.
+- **`report`:** Human text formatted to `output.profile`; the orchestrator relays it verbatim.
+- **`data`:** The verb's typed result for programs.
+- **`error{code, reason, fix}`:** Set when `ok` is false; `code` is what a caller branches on, `reason` says why, `fix` names the command that fixes it.
+- **Exit 0 ok:** The verb succeeded.
+- **Exit 1 refused:** The verb would not act, for example a terminal-only verb without a terminal or a leased worktree.
+- **Exit 2 usage:** The command line was wrong; an unknown flag names the closest match.
+- **Exit 3 blocked:** The work stopped at a bound and waits for a person or the orchestrator.
+- **Exit 4 internal:** A fault inside the harness.
+- **`--json`:** Prints only the envelope; it turns on by itself when no terminal is attached.
+
+`{v: 1, ok, verdict, report, data, error{code, reason, fix}}`. `report` is human text already formatted to `output.profile`, so the orchestrator relays it verbatim. Exit codes: 0 ok, 1 refused, 2 usage, 3 blocked, 4 internal. `--json` is on automatically without a terminal.
+
+#### The orchestrator contract
+
+**In plain terms.** The orchestrator contract is the block of text `install` writes into the repo's `AGENTS.md`, the file any AI host session reads on start. It tells the session which verbs it owns, which belong to the person, how to wait for events and to relay `report` unchanged. Without it, a host session would guess at commands and might run a human-only verb. A Claude `SessionStart` hook runs `komodo status`, so the first line a new session sees is the live state.
+
+**What each one does**
+- **`komodo help --json` first:** Lists every verb, flag and result schema, and marks the terminal-only ones. The session learns the surface from the binary, not from memory.
+- **Your verbs are the shared set:** `plan`, `run`, `status`, `skill`, `scope`, `add`, `stop`, `resume`, `abandon`, `sync`, `doctor`, `gate`, `jobs tick` and config reads.
+- **Belongs to the person:** `install`, `fresh`, config writes, `gate --install` and `release` refuse without a terminal; the session hands the command to the person.
+- **`status --wait` in the background:** Blocks until the next wake event, so the session reacts to a Blocked group without polling.
+- **Relay `report` verbatim:** The text is already in the output style; rewriting it only loses information.
+- **Rules O1 to O7, O9 and O10:** The orchestrator rules from section 14.2, rendered from `embed/rules/orchestrator.md`.
+- **The `SessionStart` hook:** Written to `.claude/settings.json` by install; it runs `komodo status` when a Claude session opens.
+
+Install writes a Komodo block into `AGENTS.md` that tells any host session: run `komodo help --json` first; your verbs are the shared set; `install`, `fresh`, config writes, `gate --install` and `release` belong to the person; run `status --wait` in the background; relay `report` verbatim. The rules O1 to O7, O9 and O10 and the output style follow in the same block. A Claude `SessionStart` hook runs `komodo status` so a new session sees state on line one.
+
+---
+
+| Hand-edited `config.json` | Every verb refuses `config_tampered` until `config --accept` |
+| Repo pinned above the binary | Only `help`, `version`, `fresh`, `install`, `doctor` run |
+**CLI processor ([Command-line interface (Appendix B)](#command-line-interface))**
+- Each verb has a golden `--json` test that compares its output with a stored copy.
+- An unknown flag exits 2 and names the closest matching flag.
+- The gate fails when `help --json` and the verb tables disagree.
+- With no controlling terminal, `komodo install` and `komodo config providers.paid=allowed` exit 1.
+- `--input` with a flag that disagrees uses the flag.
+- A repeated `add backlog` with the same task reports `0 changes`.
+- `help`, `version` and `skill list` each answer under 50 ms in the gate.
+
+**Configuration ([Configuration (Appendix B)](#configuration))**
+- Limits: `komodo config limits.returns=9` is refused, naming the key and the limit, and the file is unchanged.
+- Hash guard: a hand edit to `config.json` makes `komodo status` exit 1 with `config_tampered`.
+- `config --accept` restores a hand-edited `config.json` and logs 1 audit row.
+- Capacity profile: a session on a 262,144 endpoint and one on Opus 5.5 get different brief ceilings and the same engine path, and the ledger records both profiles.
+- Detection: the fixture repo yields 6 classes.
+- All or none: a call with 1 bad pair out of 3 writes nothing, and a good call logs 1 audit row per changed key.
+- Discovery: `config --all` names a default, limit and source for every key.
+- Tracking: `track.usage=auto` resolves on under `economy` and off under `thorough`; `on` and `off` override the mode.
+- `agent builder model --all` lists only probed models above the context floor.
+
 
 ## 2. Event Spine and State Machine
 
@@ -6062,598 +6677,6 @@ flowchart TB
 
 ---
 
-## Appendix B. Command-Line Interface and Configuration
-
-#### Command-line interface
-
-
-**In plain terms.** The command-line interface (CLI) is the only way to drive Komodo: a person or the orchestrator types `komodo <verb>` in a shell. A verb is a subcommand such as `run` or `doctor`; a flag is an option such as `--json`. Every verb replies with the same JSON envelope when no terminal is present, so the orchestrator can parse it. This section lists the processing steps, the envelope, the flags, every verb, who may call each, and the speed targets.
-
-#### Processing pipeline
-
-**In plain terms.** Every verb goes through the same five steps: read the arguments, check them, work out which repo and config apply, call the code that does the work, and print the result. Nothing is written before step 4, so a bad argument never leaves half-done work. The orchestrator and a person get identical behaviour. Without one shared pipeline, each verb would validate differently and fail differently.
-
-| # | Step | Rule |
-|---|---|---|
-| 1 | Parse | One verb table, stdlib (Go's built-in library) `flag` per verb; `--input` JSON merges under explicit flags, which win |
-| 2 | Validate | Types, enums (a fixed list of allowed values), closest match for unknown flags, the terminal check, the repo pin, the config hash (a content fingerprint) guard; nothing has run |
-| 3 | Resolve | Repo id from cwd or `-C`, the effective config, the capacity profile when a verb needs a link |
-| 4 | Dispatch | One thin call into the domain package; the verb never reads state files itself |
-| 5 | Render | The result's codes and facts through templates into `report`, then the envelope or text |
-
-**What each one does**
-- **1 Parse:** Reads the verb and its flags from one table, using Go's standard `flag` package. If `--input` supplies arguments as a JSON object, a flag typed on the command line beats the same key in the JSON.
-- **2 Validate:** Checks types and allowed values, names the closest match for a misspelled flag (exit 2), refuses a terminal-only verb with no terminal, refuses a repo pinned above this binary, and refuses when `config.json` was hand-edited. Nothing has run yet.
-- **3 Resolve:** Works out the repo id from the current folder or `-C <path>`, loads the effective config once, and derives the capacity profile (context size, slots, cost class, effort) when the verb will talk to a model.
-- **4 Dispatch:** Makes one call into the package that owns the work, such as `engine` for `run`. The CLI code never opens state files itself. `--dry-run` applies from here.
-- **5 Render:** Turns the result's codes and facts into human text through the output templates, fills the `report` field, and prints the JSON envelope or plain text.
-
-A verb that fails in steps 1 to 3 has made 0 writes; `--dry-run` applies from step 4. Every writing verb is idempotent (safe to repeat with the same result): a repeat with the same arguments reports `0 changes`.
-
-#### Envelope and exit codes
-
-**In plain terms.** The envelope is the JSON object every verb prints when `--json` is on, which is automatic without a terminal. The orchestrator reads it: `ok` says whether the verb succeeded, `report` is text it relays to the person word for word, and `error.code` is what it branches on. The exit code is the number the process returns to the shell; it lets a script or hook tell success from refusal without parsing JSON.
-
-| Field | Type | Meaning |
-|---|---|---|
-| `v` | int | Envelope version, 1 |
-| `ok` | bool | Success |
-| `verdict` | string | One line |
-| `report` | string | Human text formatted to `output.profile`; relay verbatim |
-| `data` | object | The verb's typed result |
-| `error` | `{code, reason, fix}` | Set when `ok` is false; `code` is what a caller branches on |
-
-**What each one does**
-- **`v`:** The envelope's own format version, always 1. A later change to the shape raises it.
-- **`ok`:** `true` when the verb did what was asked, `false` when it refused or failed.
-- **`verdict`:** One line summing up the outcome, such as the first line a person would read.
-- **`report`:** The full human-readable text, already laid out by the output profile (`adhd` or `standard`, set by `output.profile`). The orchestrator pastes it to the person unchanged.
-- **`data`:** The verb's structured result, typed per verb; for example `run` returns the run id here. `help --json` documents each verb's shape.
-- **`error`:** Present only when `ok` is false. `code` is a short word from the fixed code list ([Code list (Appendix I)](#code-list)), `reason` explains it, and `fix` names the command or change that resolves it, such as `run komodo fresh`.
-
-| Exit | Meaning |
-|---|---|
-| 0 | ok |
-| 1 | refused |
-| 2 | usage (an unknown flag names the closest match) |
-| 3 | blocked |
-| 4 | internal |
-
-**What each one does**
-- **0:** The verb succeeded.
-- **1:** Komodo refused on purpose: a terminal-only verb without a terminal, a pinned repo, a tampered config, a locked group, or a value over its limit. The `error.fix` line says what to do.
-- **2:** The command line was wrong: an unknown verb or flag, or a bad value. An unknown flag's message names the closest real flag.
-- **3:** The verb reports a blocked state. Which situations return 3 rather than 1 is `[UNKNOWN: not yet designed]`.
-- **4:** Komodo itself failed. Which failures map here is `[UNKNOWN: not yet designed]`.
-
-**Examples**
-
-A verb that succeeded: `komodo run tg-1.2 --json` prints this envelope and exits 0.
-
-```json
-{
-  "v": 1,
-  "ok": true,
-  "verdict": "Run started for tg-1.2",
-  "report": "[UNKNOWN: not yet designed]",
-  "data": {
-    "[UNKNOWN: not yet designed]": "the run id"
-  }
-}
-```
-
-A verb that refused: a hand-edited config makes every verb print this envelope and exit 1.
-
-```json
-{
-  "v": 1,
-  "ok": false,
-  "verdict": "Refused: config.json was hand-edited",
-  "report": "[UNKNOWN: not yet designed]",
-  "data": {},
-  "error": {
-    "code": "config_tampered",
-    "reason": "config.json was hand-edited",
-    "fix": "komodo config --accept"
-  }
-}
-```
-
-#### Global flags
-
-**In plain terms.** A global flag is an option every verb accepts. They control output shape (JSON or text, more or less, colour), which repo the verb acts on, how arguments are supplied, and whether writes really happen. The orchestrator relies on `--json` and `--input`; a person mostly uses `-C` and `--dry-run`. Without them each verb would need its own output and targeting options.
-
-| Flag | Meaning | Default |
-|---|---|---|
-| `--json` | Print only the envelope | On when there is no terminal |
-| `-C <path>` | Act on that repo | cwd |
-| `--input <file\|->` | The verb's arguments as one JSON object | — |
-| `-q`, `-v` | Less or more human text | — |
-| `--no-color` | Plain text; `NO_COLOR` also works | auto |
-| `-h`, `--help` | Same as `help <verb>` | — |
-| `--dry-run` | Every writing verb: print each write, make none | — |
-
-**What each one does**
-- **`--json`:** Print only the JSON envelope ([Envelope and exit codes (Appendix B)](#envelope-and-exit-codes)), no plain text. It turns on by itself when no terminal is attached, which is the orchestrator's case.
-- **`-C <path>`:** Run the verb against the repo at that path instead of the current folder. Komodo resolves the repo id from it.
-- **`--input <file|->`:** Supply all the verb's arguments as one JSON object, from a file or from standard input (`-`). A flag typed on the command line wins over the same key in the JSON.
-- **`-q`, `-v`:** Quiet or verbose: less or more human text in `report`. Long forms are `--quiet` and `--verbose`.
-- **`--no-color`:** Print without colour codes. Setting the `NO_COLOR` environment variable does the same; otherwise colour follows `output.color`.
-- **`-h`, `--help`:** Print that verb's flags and examples, the same as `komodo help <verb>`. At any level of `config`, it lists the keys below.
-- **`--dry-run`:** For any verb that writes, print each write it would make and make none. `install --dry-run` prints a table of file, action (`write | keep | prune`) and reason.
-
-#### Verbs
-
-**In plain terms.** This is the full list of commands. "Shared" means both a person and the orchestrator may run it; "no" means a person at a real terminal only; "reads only" and the like mean part of the verb is shared. The engine is the part of Komodo that runs groups; most verbs either start it, ask it for state, or answer a question it is waiting on. Each verb below says who runs it, what it reads, what it changes and what it prints.
-
-| Verb | Does | Flags | Shared |
-|---|---|---|---|
-| `help [verb]` | List verbs, or one verb's flags and examples | `--all` | yes |
-| `version` | Version, binary path, latest known, repo pin | `--check` | yes |
-| `install` | Binary, provider probe, repo files | `--repo-only`, `--machine-only`, `--hosts claude,codex`, `--no-path`, `--from <file>`, `--project`, `--schedule`, `--force` | no |
-| `uninstall` | Remove every file the manifest owns | `--repo-only`, `--machine-only` | no |
-| `init` | Komodo's orchestrator skills and commands in the global Claude Code setup | [UNKNOWN: not yet designed] | no |
-| `fresh` | Get the newest binary now | `--check`, `--to <version>`, `--restart-runs` | no |
-| `doctor [install\|backlog]` | Health of the install or the backlog; both by default | `--fix` (terminal-only), `--sandbox <cmd>` | yes |
-| `config [agent\|endpoint <name>] <key>[=<value>]…` | Read keys, or set several at once, all or none | `--all`, `--default`, `--accept` | reads only |
-| `sync` | After a merge: fetch, prune worktrees, refresh repo files | `--no-fetch` | yes |
-| `add backlog` | Add a task, group or epic | `--task`, `--group`, `--epic`, `--to <id>`, `--files <globs>`, `--done-when <text>` | yes |
-| `add changelog` | Add an `Unreleased` entry | `--entry <text>`, `--kind added\|changed\|fixed\|removed` | yes |
-| `plan <goal>` | Planner drafts groups; writes only if lint (an automatic rule check) passes | `--from <spec>`, `--epic <N>` | yes |
-| `run [group]` | Start groups detached, return the run id at once; refuses a group whose dependency has not landed | `--stage <stage>` | yes |
-| `status [run]` | Pool, group graph, stages, budgets, blocks | `--watch`, `--wait blocked\|done\|any`, `--timeout <dur>` (9m), `--session <id>`, `--explain`, `--backlog`, `--metrics`, `--all` | yes |
-| `skill list\|get` | Skill index and bodies | `list --agent <name>`, `get <name> --section <heading>` | yes |
-| `scope approve\|deny <group>` | Answer a builder's `needs_scope`; approve adds the paths to `files` | `--paths <list>`, `--reason <text>` | yes |
-| `resume <run>` | Continue a crashed, blocked, paused or restarted run; paused agents restart now | `--from <stage>` | yes |
-| `stop <run>` | Save work and release leases; the same clean shutdown as a signal | — | yes |
-| `abandon <run>` | Stop, free leases, keep evidence; dependents block with `dependency` | `--reason <text>`, `--keep-worktree` | yes |
-| `jobs list\|show\|run\|pause\|resume\|tick` | Job templates and the tick | `<id>`; `run --ignore-window` | `list`, `show`, `tick` only |
-| `cache stats\|clear` | Size, hit rate, purge | `--kind skills\|context\|checks\|review\|lang`, `--all` | `stats` only |
-| `gate` | Full self-check; Komodo repo only | `--only <check>`, `--fast`, `--install`, `--install-hooks` | yes, except `--install*` |
-| `release <version>` | Tag, cross-build, checksum, sign; Komodo repo only | `--notes-file <path>` | no |
-
-**What each one does**
-- **`help [verb]`:** Anyone runs it. It prints the verb list, or one verb's flags and examples, from help text generated at build and embedded, so it answers under 50 ms. `help --json` lists every verb, flag, type, default and result schema and marks the terminal-only ones; the `AGENTS.md` block tells the orchestrator to run it first. `--all` also shows the internal tier. It changes nothing.
-- **`version`:** Anyone runs it. It prints the running version, the binary's path, the latest release Komodo knows of (from `state/fresh.json`) and the repo's pin from `AGENTS.md`. It changes nothing and makes no network call. What `--check` adds is `[UNKNOWN: not yet designed]`.
-- **`install`:** A person at a terminal runs it; the orchestrator is refused. It puts Komodo on the machine and into the current repo in 8 steps: the binary under `~/.komodo/versions/` and `bin/`, the PATH entry, the provider probe, the Komodo block in `AGENTS.md`, the `@AGENTS.md` line in `CLAUDE.md`, two entries in `.claude/settings.json`, the manifest, and an optional OS schedule. It computes the wanted file list, diffs it against `install.json`, applies only the differences, then runs `doctor install` and fails if any check errors. A rerun makes 0 changes; a hand-edited owned file survives and is reported. `--repo-only` writes only the files inside the repo; `--machine-only` writes only the machine parts (what `install.sh` runs); `--hosts claude,codex` overrides host detection; `--no-path` skips the PATH step; `--from <file>` installs that binary file; `--project` also adds `docs/{prd,hld,lld}.md`, `CHANGELOG.md` and a PR template; `--schedule` adds a launchd, cron or Task Scheduler entry that runs `komodo jobs tick` every 5 minutes; `--force` overwrites hand-edited owned files. It never writes a config file.
-- **`init`:** A person at a terminal runs it; the orchestrator is refused. It puts Komodo's orchestrator skills and commands (`run`, `plan`, `respond`, `komodo`) into the global Claude Code setup, so every Claude Code session has them without a per-repo step. The 7 worker agents stay inside the binary, because worker sessions load no user settings. How it writes there, as a Claude Code plugin or as plain files with a machine manifest, is [PENDING G-28]. Typical use: `komodo init` once after `install`.
-- **`uninstall`:** A person runs it. It reads the manifest and removes every file or settings entry `install` owns, the manifest in reverse, plus the repo's language cache. `--repo-only` removes only the repo files; `--machine-only` only the machine files.
-- **`fresh`:** A person runs it. It fetches the newest release now, downloads it to `versions/<v>/`, verifies the SHA-256 (a standard content fingerprint) and the ed25519 signature, and atomically replaces `bin/komodo`. Live runs keep their own version. `--check` fetches the 1 KB `latest.json` now (one of only three places that do); `--to <version>` installs a named version and may downgrade; `--restart-runs` signals each live run to checkpoint within 2 minutes and resumes it on the new binary, at the cost of at most one repeated model turn. A pinned repo tells you to run it with the fix line `run komodo fresh`. Background updates happen without it unless `fresh.auto` is false or `CI=true`.
-- **`doctor [install|backlog]`:** Anyone runs it, including the orchestrator; it still runs when the repo is pinned above the binary. It is the health check: it reads the machine, the install and the backlog, prints each check's result with a fix line, and changes nothing except refreshing the provider probe in `state/providers.json`. `doctor install` checks the installed files against the manifest, PATH, the sandbox (it runs each detected command's `--version` inside the sandbox to prove the toolchain folders work), the provider catalog as a table of weight, link, model ID, window and where that window came from, each `http:` endpoint's context against the floor (an Ollama server left at 4,096 fails and the fix `OLLAMA_CONTEXT_LENGTH=262144` is named), `OLLAMA_NUM_PARALLEL`, that every agent's chain ends in a free backstop, a missing or bad custom CA file, shell syntax in detected commands, missing Docker tools and that the Docker daemon runs Linux containers, Windows long paths, the copy mechanism for tester worktrees, that macOS has no process or memory cap, steering phrases or broken block markers in the repo's `AGENTS.md`, stale `~/.claude` files naming verbs missing from `help --json`, old Komodo hooks and shadowing binaries, 3 background update failures in a row, the cost class of each link, reviewer rules under 50% verified, and whether a lighter model's first-pass rate beats the standard one. `doctor backlog` checks the backlog files under `docs/backlog/` (the [Lint (`komodo doctor backlog`) (Appendix L)](#lint-komodo-doctor-backlog) table): file shape, `files`, `done_when` and dependencies, that groups in one wave share no files, no protected or `docs/backlog/**` path in `files`, sizing (5 files and 300 lines per task, 8 tasks per group, chains of 4), graph shape and cycles, the EARS form of acceptance items, and case-colliding paths. With no argument it runs both. Typical uses: `install` runs it at the end; phase 2 requires `doctor backlog` to pass on epic-1; cutover requires `doctor install` to find 0 stale references. `--fix` is terminal-only; what it fixes is `[UNKNOWN: not yet designed]`. `--sandbox <cmd>` runs one command under the sandbox policy so you can test what a worker's `run` would see.
-- **`config [agent|endpoint <name>] <key>[=<value>]…`:** Reads are shared; writes need a person at a terminal, so no session can change its own settings. A read such as `komodo config mode limits.returns` prints each value and which layer set it; a group or agent name alone lists its keys. A write such as `komodo config mode=economy limits.returns=4` sets every pair or none, refuses an unknown key (naming the closest match) or a value over its hard limit, appends one audit row per changed key to `state/config.log`, and rewrites `state/config.sha`. `agent <name>` and `endpoint <name>` address one agent's or one model server's keys. `--all` alone prints JSON of every key with value, default, limit and source; after a key it lists that key's valid values. `--default` resets a key, an agent, a group or the whole file; endpoint and whole-file resets list each change and need a typed `y`. `--accept` re-hashes `config.json` after a hand edit, which otherwise makes every verb refuse with `config_tampered`. One call reads or writes, never both.
-- **`sync`:** Anyone runs it, after the epic PR has been merged by a person. It fetches from the remote, prunes worktrees whose work has landed, and refreshes the repo files, which is `install --repo-only` plus fetch and prune. It also rewrites the `AGENTS.md` block after `config output.profile=standard`. `--no-fetch` skips the fetch.
-- **`add backlog`:** Anyone runs it. It adds one task, group or epic file under `docs/backlog/`; this is where out-of-scope work gets parked. `--task <text>`, `--group <title>` or `--epic <title>` says what to add; `--to <id>` names the parent; `--files <globs>` lists the files the work may touch; `--done-when <text>` gives the check that proves a task done. It refuses with `locked` and the run id while that group is in a run. A repeat with the same task reports `0 changes`.
-- **`add changelog`:** Anyone runs it. It adds one line to the `Unreleased` section of `CHANGELOG.md`. `--entry <text>` is the line; `--kind` files it under added, changed, fixed or removed.
-- **`plan <goal>`:** Anyone runs it, usually the orchestrator; it costs model tokens. It starts the planner worker: a heavy pass drafts the epic outline (groups, goals, file globs, dependencies), then one standard pass per group drafts that group's tasks and acceptance items, in parallel. Go lints every draft; a failing draft goes back into its session twice, then the plan blocks with `lint`. Backlog files are written only when lint passes, so a bad plan writes 0 files. `--from <spec>` feeds any document set (a PRD, an RFC, a ticket export) as input; `--epic <N>` adds or amends only unlocked groups in an existing epic.
-- **`run [group]`:** Anyone runs it, usually the orchestrator. It builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once, and leaves the engine running detached under a small parent guard. From then on the engine cuts worktrees, starts builder sessions, commits to hidden refs, runs Check and Verify, opens group PRs and lands groups; see [Group state machine (Appendix C)](#26-state-and-transitions) for the stages. `run <group>` refuses, naming the dependency, when a group it depends on outside this run has not landed; it also refuses a group another run holds, naming the holder, and a repo with no detected commands, naming the marker files it looked for. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background.
-- **`status [run]`:** Anyone runs it; a Claude `SessionStart` hook runs it so a new session sees state on line one. It reads `state.json` and the ledgers and prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings. It ends with `Verbs: komodo help`. It is one of three places that may fetch `latest.json`, at most hourly, and it also fires due pause timers. `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`), so the orchestrator runs it in the background. `--timeout <dur>` caps that wait, 9 minutes by default because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard: first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and USD per accepted group. `--backlog` is the installed binary's `backlog` verb folded in; what it lists is `[UNKNOWN: not yet designed]`. `--all` is `[UNKNOWN: not yet designed]`.
-- **`skill list|get`:** Anyone runs it, including any Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms. `get <name>` prints a skill's body; `--section <heading>` prints one section. `komodo skill get run|plan|respond|komodo` returns the workflow for each of those jobs. `list --agent <name>` narrows the list to one agent; the exact filter is `[UNKNOWN: not yet designed]`. It changes nothing.
-- **`scope approve|deny <group>`:** The orchestrator usually answers; a person can. A builder that needs a file outside its group's `files` stops with status `needs_scope`, the group blocks, and `status --wait` wakes the orchestrator. `approve` adds the paths to the group's `files` (action `scope_change`, logged in the ledger) and the engine resumes the same session with the answer; `deny` resumes it with the refusal. `--paths <list>` names the paths; `--reason <text>` the reason. The engine denies by itself, without asking, when a path is protected or belongs to another live group. One request per task.
-- **`resume <run>`:** Anyone runs it; Blocked never retries by itself, so a person or the orchestrator fixes the cause and runs this. It replays the state events after the snapshot through group state's `Load`, retakes the lease (or refuses, naming the new holder), rebuilds a removed worktree from the hidden ref, and continues each session from the provider's resume handle; if that fails it starts a fresh session with the brief, the uncommitted diff and the last summary, logging `resume_lost`. Paused agents attempt now; a refused attempt costs no turn and re-pauses. What `--from <stage>` does beyond its name is `[UNKNOWN: not yet designed]`.
-- **`stop <run>`:** Anyone runs it. It performs the same clean shutdown a signal does: stop each agent (30 s each), WIP-commit every worktree to its hidden ref, free the leases, write `state.json`, exit; after 60 s the rest is force-killed. It writes `run.stopped`. `resume <run>` continues later.
-- **`abandon <run>`:** Anyone runs it to drop a run for good. It stops the run, frees its leases and task-list lock, clears any pause timer, deletes the hidden ref, and keeps the evidence (state files, ledger rows, session folders). Groups that depended on it block with `dependency`, naming it. `--reason <text>` records why. What `--keep-worktree` keeps beyond its name is `[UNKNOWN: not yet designed]`; by default the sweep removes a worktree with no live lease and no unsaved work.
-- **`jobs list|show|run|pause|resume|tick`:** `list`, `show` and `tick` are shared; `run`, `pause` and `resume` need a person. A job template is a JSON file naming an agent subset, brief slots and an interval, such as a nightly review; none ship by default. `list` and `show <id>` read the templates under `embed/jobs/` and `~/.komodo/jobs/`. `tick` is one idempotent engine step with no daemon: it queues due jobs, fires due pause timers, and drives the pool once; with nothing due it exits under 50 ms with no network call. An OS schedule entry from `install --schedule` calls it every 5 minutes; Claude Code `/loop` also works but spends a model turn per tick. A due job starts a run named `job-<name>-<n>` that `status --wait` can take. `run <id> --ignore-window`, `pause <id>` and `resume <id>` are `[UNKNOWN: not yet designed]` beyond their names.
-- **`cache stats|clear`:** `stats` is shared; `clear` needs a person. The cache is the content-addressed store under `<git-common-dir>/komodo/cache/` plus the language caches under `~/.komodo/cache/lang/`. `stats` prints size and hit rate for this repo; `--all` prints the machine total across repos. `clear` purges entries; `--kind skills|context|checks|review|lang` limits it to one kind, where `lang` is the language caches.
-- **`gate`:** Anyone runs it, in the Komodo repo only; it is Komodo's own self-check before a change is accepted. It runs the [Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](#gate-and-self-checks-komodo-gate-komodo-repo-only) table: `go vet`, tests and cross-builds for Windows, Linux and macOS; import direction, comment lint and strict decode of every `agent.json` and job template; the guard table; event catalog completeness; docs drift (a verb missing from `README.md` or the `komodo` skill, a broken decision link, a package named in this document that does not exist); component maps; no silent gaps; generated artifacts matching their sources; and timing (short verbs under 50 ms, the gate under 3 minutes). Checks run in parallel by package, cross-builds last. `--fast` skips cross-builds and timing. `--install` places a dev build at `~/.komodo/bin/komodo` and `--install-hooks` installs git hooks in the Komodo repo; both need a person. What `--only <check>` selects beyond its name is `[UNKNOWN: not yet designed]`.
-- **`release <version>`:** A person runs it, on the owner's machine, in the Komodo repo only. It sets the version, tags, cross-builds the binaries, writes checksums, signs them with `~/.komodo/release.key` (ed25519), and publishes a release whose `latest.json` every `fresh` reads; betas publish as normal releases with "beta" in the version. The changelog starts fresh at `1.0.0-beta.6`. What `--notes-file <path>` supplies is `[UNKNOWN: not yet designed]`.
-
-Internal tier (`komodo internal <verb>`, listed only in `help --all`):
-
-| Verb | Called by | Does |
-|---|---|---|
-| `internal tools --agent <a> --session <id>` | The engine, for `claude -p` | The private MCP (Model Context Protocol, how a model calls tools) server for one session, over stdio (the program's standard input and output) |
-| `internal fresh-bg` | Any verb, only when a newer version is known | The detached updater: download, verify, swap |
-
-**What each one does**
-- **`internal tools --agent <a> --session <id>`:** The engine starts it for every `claude -p` worker session; a person never types it. It is the private MCP server (the tool server a model calls for `read`, `edit`, `run` and so on) for one session, speaking over stdin and stdout. It advertises only that agent's tools, passes every call through the guard, starts in under 100 ms, and dies with its session.
-- **`internal fresh-bg`:** Any verb spawns it, detached, when `state/fresh.json` shows a newer release than the running binary; a person never types it. It downloads to `versions/<v>/komodo.part`, verifies SHA-256 and the ed25519 signature, renames it into place, swaps `bin/komodo`, and deletes versions no run uses. It never downgrades, logs failures silently to `state/fresh.log`, and only one runs at a time through `state/fresh.lock`.
-
-#### Tier enforcement
-
-**In plain terms.** Verbs come in three tiers: shared, terminal-only and internal. A terminal-only verb is one only a person may run, such as `install`; Komodo enforces that by checking for a controlling terminal, the real shell window a person types into. An agent's shell has none, so the orchestrator is refused with exit 1. There are no host hooks; the orchestrator's rules are text in `AGENTS.md`, and a shell could fake a terminal, which rule O7 forbids but nothing stops. The pin check runs before everything else, so an old binary cannot act on a repo that needs a newer one.
-
-- A terminal-only verb refuses with exit 1 unless it has a controlling terminal. Agent shells have none: Claude Code's Bash tool cannot open `/dev/tty`.
-- No host hooks enforce tiers. Every host gets the same `AGENTS.md` rules and the same verbs. Rule O7 forbids faking a terminal; nothing enforces it.
-- Pin check first: a repo whose `AGENTS.md` pin (`min=`) is above this binary refuses every verb except `help`, `version`, `fresh`, `install` and `doctor`, with the fix line `run komodo fresh`.
-
-**What each one does**
-- **`help`:** Still runs when pinned, so a reader can see the verb list and the fix line.
-- **`version`:** Still runs, so the person can see which version is installed and which the repo pins.
-- **`fresh`:** Still runs, because it is the fix: it fetches the newer binary the pin demands.
-- **`install`:** Still runs, because it can also place a binary, including from a file with `--from`.
-- **`doctor`:** Still runs, so the install can be diagnosed before updating.
-
-#### Performance
-
-**In plain terms.** Some verbs are typed often and must feel instant: `help`, `version`, a `config` read and `skill`. They must answer in under 50 milliseconds, touch no network, and read nothing in the repo beyond checking that marker files such as `go.mod` exist. Help text and the `komodo` skill are built into the binary at build time, not computed when typed. The 50 ms figure is a target until the gate measures it in phase 6.
-
-Short verbs (`help`, `version`, config reads, `skill`) answer under 50 ms with no network and no repo scan beyond marker stats. `help --json` and the `komodo` skill are generated at build and embedded. `[PENDING G-19]` the budget is a target until gate timing measures it in phase 6.
-
-**What each one does**
-- **`help`:** Reads embedded, build-time text; no disk or network.
-- **`version`:** Reads the embedded version and `state/fresh.json`; no network.
-- **Config reads:** Parse the config once per process; detection is cached by the marker-file hash, so a cold repo costs one `stat` per marker.
-- **`skill`:** The index is embedded at build, so `skill list` is a map read; bodies come from the cache.
-
-#### Configuration
-
-
-**In plain terms.** Configuration is the set of settings that tune how the harness (the `komodo` binary, see Glossary) behaves. It bounds how many AI model sessions run at once, how long each may take, and when a paid model may run. It exists so a person changes behaviour in one audited place, never by hand edits or per-run flags. Without it, a model session could loosen its own limits and every run would need the same choices retyped. A person writes it with `komodo config`; the engine (the run loop inside the binary) reads it once per run.
-
-#### Layers and write path
-
-**In plain terms.** This section says where settings live and what happens when a person changes one. There are two layers: defaults baked into the binary, and one machine-wide file that `komodo config` edits. The write path exists so every change is type-checked, logged and hash-guarded; a hand edit is caught and refused until a person accepts it. A person writes it; the engine reads it; model sessions cannot touch it, because `~/.komodo/**` is protected and every write needs a terminal.
-
-| # | Layer | Where | Power |
-|---|---|---|---|
-| 1 | Built-in | `embed/defaults.json`, `embed/policy.json` | Defaults and hard limits |
-| 2 | Machine | `~/.komodo/config.json`, flat keys at top level, `agents.<name>` and `endpoints.<name>` sections | Any value within the hard limits |
-
-**What each one does**
-- **1, Built-in:** The defaults and the hard limits shipped inside the signed binary. Every key has a value here, so nothing is ever missing. Nobody edits this layer; `--default` resets a key back to it.
-- **2, Machine:** The one file a person edits, `~/.komodo/config.json`, with flat keys at the top and `agents.<name>` and `endpoints.<name>` sections. It may set any value within the built-in hard limits; a higher value is refused. Every repo on the machine shares it.
-
-- Merge: the machine value wins within the hard limits. Every key exists out of the box; `--default` resets a key, an agent, a group or the whole file (endpoint and whole-file resets list each change and need a typed `y`).
-- Strict decode: an unknown key is an error naming the closest match; a value over a hard limit is refused naming the key, value and limit.
-- Write: `komodo config k=v k2=v2` sets every pair or none; one call reads or writes, never both; writes need a terminal.
-- Audit: each write appends one row per changed key to `~/.komodo/state/config.log`: time, batch id, key, old value, new value.
-- Hash guard: `komodo config` writes the file and its SHA-256 to `state/config.sha`. A hand edit makes every verb refuse with `config_tampered` and the fix line `komodo config --accept`, which rewrites the hash and logs one audit row.
-- Snapshot per run: the effective config hash goes into `runs/<group-id>/state.json`; the hash is also the cache key prefix, so a config change never serves a stale brief or check.
-- Agents cannot touch it: `~/.komodo/**` is protected by G3 and every write needs a terminal.
-- Repo id (names worktrees, leases and caches, never config): the normalized origin URL such as `github.com/rdevitto86/komodo-agentic-harness-coding`; with no remote, the git common dir path. Every worktree of a repo shares one id.
-
-**Example**
-
-A config.json in which a person has set three flat keys; the keys sit at the top level, each within its hard limit.
-
-```json
-{
-  "output.profile": "standard",
-  "limits.pool_max": 4,
-  "cache.max_mb": 512
-}
-```
-
-#### Flat keys (34)
-
-**In plain terms.** These are the 34 single-value settings a person can change with `komodo config key=value`. They cover output layout, self-update, providers, warnings, usage tracking, session counts, time and token limits, the sandbox, caches and merging. Each has a default, and most have a hard limit the binary refuses to exceed. Without them, runaway loops, surprise spend and an overloaded machine would have no bound. A person changes them; the engine reads them when a run starts and keeps that snapshot until the run ends.
-
-| Key | Default | Hard limit | Meaning |
-|---|---|---|---|
-| `output.profile` | `adhd` | — | Template set: `adhd` or `standard`; facts and codes are the same under both |
-| `output.turn_end_summary` | `true` | — | The 4 headings at the end of reports |
-| `output.color` | `auto` | — | `auto`, `on`, `off` |
-| `mode` | `thorough` | — | `economy` or `thorough`; sets review depth and the `track.usage` default |
-| `track.usage` | `auto` | — | `auto`, `on` or `off`; `auto` is on in `economy` mode and off in `thorough` mode |
-| `fresh.auto` | `true` | — | Background update |
-| `fresh.interval` | `1h` | ≥ 10m | How often to check |
-| `providers.paid` | `never` | — | `never`, `fallback`, `allowed` |
-| `warn.usd_per_run` | 5 | — | Warn when a run's metered USD passes this; never stops work; used only when `track.usage` is on |
-| `warn.quota_pct` | 90 | — | Warn when a provider window passes this percent |
-| `providers.keys.anthropic` | `env:ANTHROPIC_API_KEY` | `env:` only | Key reference, never the value |
-| `providers.keys.openai` | `env:OPENAI_API_KEY` | `env:` only | Same |
-| `providers.ctx_floor` | 262144 | — | Smallest `http:` endpoint context allowed |
-| `http.ca_bundle` | none | PEM file path | Extra trusted certificates added to the system roots |
-| `limits.pool_min` | 1 | `limits.pool_max` | Session slots kept open while throttled |
-| `limits.pool_max` | 6 | 16 | Most looping sessions at once, across all repos |
-| `limits.link_sessions.<link>` | 3; loopback endpoints 1 | 8 | Concurrent sessions per link, across all repos |
-| `limits.group_wall_min` | tasks × `limits.session_wall_min` + 2 × `limits.session_wall_min` | 720 | Wall time per group; paused time excluded; a 4-task group gets 360 |
-| `limits.group_tokens` | 2,000,000 | 10,000,000 | Tokens per group: input, output, cache writes; cache reads reported only; used only when `track.usage` is on |
-| `limits.task_attempts` | 6 | 10 | Model attempts per task: fresh sessions, re-prompts, gate feedback, "continue" |
-| `limits.pause_max_min` | 360 | 1,440 | Longest a session stays paused on a provider limit |
-| `limits.session_wall_min` | 60 | 120 | Wall time per session |
-| `limits.session_idle_min` | 10 | 30 | Silence before a nudge |
-| `limits.returns` | 3 | 5 | Returns to Build before Blocked |
-| `guard.refusal_limit` | 3 | 5 | Refusals under one rule before the session ends |
-| `check.patch_coverage` | 80 | 100 | Percent of changed lines a test must cover; blocks for Go, warns for other languages |
-| `sandbox.network` | `deny` | — | Network for run-class commands |
-| `sandbox.max_procs` | 512 | 2048 | Processes per session |
-| `sandbox.max_mem_gb` | 8 | 32 | Memory per session |
-| `sandbox.image` | detected | — | Docker image for native Windows; required for Makefile-only or 2-language repos |
-| `sandbox.lang_cache_gb` | 10 | 50 | Language caches per repo |
-| `cache.max_mb` | 256 | 4096 | Cache size per repo |
-| `ledger.retention_days` | 30 | 365 | Ledger retention |
-| `ship.mode` | `group` | — | `group`: a PR per group into the epic branch, merged by the engine; `epic`: groups merge straight into the epic branch |
-
-**What each one does**
-- **`output.profile`:** Picks the text layout for everything a person reads: `adhd` (verdict first, bold labels, tables, short lists) or the plainer `standard`. The facts and codes are the same under both. A person changes it when they prefer the standard layout, then runs `komodo sync` so the rules block in `AGENTS.md` is rewritten.
-- **`adhd` layout:** Verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`). The profile is fixed per machine: no repo setting or flag changes a template.
-- **`output.turn_end_summary`:** Turns the 4 fixed headings at the end of every report on or off. A person turns it off to get shorter reports. [UNKNOWN: not yet designed] which 4 headings they are.
-- **`output.color`:** Controls terminal colour: `auto` decides from the terminal, `on` forces it, `off` removes it. It is applied only when text is rendered, so it never changes the facts. A person sets `off` for logs or plain terminals.
-- **`mode`:** Sets how deep the reviewer looks: `thorough` runs every lens (a reviewer rule catalog, see Glossary) that applies, plus a cold pass; `economy` runs one merged lens at reduced depth. It changes review depth and the `auto` default of `track.usage`, never which model runs. A person picks `economy` to save tokens on low-risk work.
-- **`track.usage`:** Turns the recording and reporting of model tokens and US dollars (USD) on or off. `auto`, the default, is on under `economy` mode and off under `thorough` mode; `on` and `off` override it. A person sets `on` to watch usage under `thorough`.
-  - **On:** The ledger records tokens and USD, `status --metrics` reports them, `warn.usd_per_run` can warn and `limits.group_tokens` caps each group.
-  - **Off:** The engine does not collect, write or print any token or USD data. Groups stay bounded by returns, attempts, retries, and session and group wall time.
-  - **Purpose:** The data exists only to debug costs and track metrics. The token cap is the one decision that reads it, and it applies only when tracking is on.
-- **`fresh.auto`:** Turns the background self-update of the `komodo` binary on or off. When on, a verb that sees a newer release spawns a detached updater and carries on; live runs keep their own version. A person sets `false` on a machine that must stay pinned.
-- **`fresh.interval`:** How often the harness checks for a newer release, by caching the release manifest for this long. The check is one 1 KB fetch on the few verbs that already touch the network. It cannot go below 10 minutes; a person raises it to check less often.
-- **`providers.paid`:** Says when a paid model link (a way to reach a model, see Glossary) may run. `never` removes paid links from every chain and blocks with `paid_refused` if nothing else is left; `fallback` lets a paid link run only after every subscription and free link is skipped; `allowed` runs paid links in chain order. A person changes it when they accept per-token billing.
-- **`warn.usd_per_run`:** Prints a warning when a run's metered spend in US dollars passes this number. It never stops work; the provider's own limits do that. It applies only when `track.usage` is on. A person raises it when runs on paid links are expected to cost more.
-- **`warn.quota_pct`:** Prints a warning when a provider usage window (the Max 5-hour or weekly window) passes this percent used. It also shrinks the session pool by half so the window is not drained. A person lowers it to get warned earlier.
-- **`providers.keys.anthropic`:** Names the environment variable that holds the Anthropic API key, as `env:NAME`. The key value itself is never stored in config or logs. A person changes it when their key lives under another variable name.
-- **`providers.keys.openai`:** The same rule for the OpenAI API key reference. Only `env:` references are accepted. The OpenAI link itself is recorded as `not yet` until a later minor.
-- **`providers.ctx_floor`:** The smallest context window, in tokens, an `http:` (open-source, OpenAI-compatible) endpoint may have before the engine refuses to use it. A server below it fails `doctor` and is skipped with a `provider.skip` event, because briefs are never shrunk to fit a small window. The default catches Ollama's 4,096 default; a person lowers it only when running smaller models on purpose.
-- **`http.ca_bundle`:** A path to a PEM file of extra trusted certificates, added to the system roots for HTTPS calls to model servers. A missing or bad file fails `doctor`. A person sets it when their endpoint is signed by a private company CA.
-- **`limits.pool_min`:** The number of session slots the machine-wide pool keeps open even after a rate-limit error shrinks it. Work never stops entirely while a slot exists. It cannot exceed `limits.pool_max`; a person raises it to keep more sessions alive while throttled.
-- **`limits.pool_max`:** The most builder, reviewer and tester sessions that may run at once across every repo on the machine. More ready groups queue until a slot frees. A person lowers it on a small machine or raises it, up to 16, on a large one with plenty of memory.
-- **`limits.link_sessions.<link>`:** The most sessions that may use one link at once, across all repos. The default is 3, or 1 for a loopback endpoint such as local Ollama. Ollama serves 1 request per model unless `OLLAMA_NUM_PARALLEL` is raised, so `doctor` reads it and names the fix.
-- **`limits.group_wall_min`:** The most wall-clock minutes a group (a bundle of up to 8 tasks, see Glossary) may spend before it stops. It scales with the task count and excludes paused time; a 4-task group gets 360. A person raises it, up to 720, for groups with slow test suites.
-- **`limits.group_tokens`:** The most model tokens one group may consume: input, output and cache writes. It is a runaway-loop bound, not a cost cap; cache reads are reported but not counted. It applies only when `track.usage` is on; otherwise returns, attempts, retries and wall time bound the group. Hitting it blocks the group with `budget`; a person lowers it to catch loops sooner.
-- **`limits.task_attempts`:** The most model attempts one task gets, counting fresh sessions, re-prompts, gate feedback and "continue". The default covers 2 fresh sessions with 2 re-prompts each. Hitting it blocks the group with `attempts`; a person raises it, up to 10, for hard tasks.
-- **`limits.pause_max_min`:** The longest a session may stay paused waiting for a provider limit to reset. At the cap the session is cancelled, its work-in-progress commit is kept, and the group blocks with `pause_timeout`. A person raises it, up to 24 hours, to ride out long provider outages.
-- **`limits.session_wall_min`:** The most minutes one model session may run; 60 by default, 120 at most. The session gets a warning at 80% and is stopped at the cap, with the clock stopped while paused. A person raises it for agents that need longer single tasks.
-- **`limits.session_idle_min`:** How many minutes of silence from a session, with no stream line and no running tool, before the engine sends it a nudge. After the nudge and a 5-minute grace the session is stopped as `idle`. A person raises it for slow local models.
-- **`limits.returns`:** How many times a group may be sent back from Check or Verify to Build before it blocks. Each return is one more builder pass with the findings. A person raises it, up to 5, when groups legitimately need more review rounds.
-- **`guard.refusal_limit`:** How many times a session may be refused under the same guard rule before the session ends. The guard is the fail-closed check every tool call passes (see Glossary). It is the only tunable security value; a person raises it to tolerate a model that retries refused calls.
-- **`check.patch_coverage`:** The percent of changed lines that tests must cover for Check to pass. It blocks for Go and only warns for other languages until their coverage tools are detected. A person raises it toward 100 for stricter repos.
-- **`sandbox.network`:** Network access for commands of the `run` class (build, test, lint, format) inside the sandbox; `deny` keeps it off, with loopback always allowed. Intake's `setup` runs with network on regardless, since it must download dependencies. [UNKNOWN: not yet designed] which other values exist.
-- **`sandbox.max_procs`:** The most processes one session's commands may start. It is enforced through cgroups (Linux's per-process resource limits) on Linux or Docker on Windows; macOS has no such limit and `doctor` says so. A person raises it for test suites that fork heavily.
-- **`sandbox.max_mem_gb`:** The memory cap, in gigabytes, for one session's commands. The pool also uses it to decide whether free memory covers one more session. A person raises it for memory-hungry builds.
-- **`sandbox.image`:** The Docker image used when the sandbox runs through Docker on native Windows. It is detected from the language marker. A Makefile-only repo or one with 2 language markers has no obvious image, so a person must set it.
-- **`sandbox.lang_cache_gb`:** The size cap for a repo's language caches (Go, npm, cargo, pip caches Komodo keeps under `~/.komodo/cache/lang/`). Over the cap, or after 30 days unused, the startup sweep deletes the whole cache and the next Intake refills it. A person raises it for repos with large dependency sets.
-- **`cache.max_mb`:** The size cap for a repo's content cache: its skills, context, checks, review, setup and map entries. The least recently used entries go first. A person raises it for repos where cached checks save many reruns.
-- **`ledger.retention_days`:** How many days of session and event ledger rows are kept before the oldest are trimmed; 100 MB per repo is the other bound. A state file of a group that is still open, paused or blocked is never trimmed. A person raises it to keep metrics over a longer window.
-- **`ship.mode`:** How a finished group lands: `group` opens a pull request into the epic branch and the engine merges it at once; `epic` merges the group straight into the epic branch with `--no-ff`. A person picks `epic` when per-group PRs add no value.
-
-Evidence-backed defaults: `limits.pool_max` 6 and `link_sessions` 3 are bounded by the Max 5-hour window, not the API; `providers.ctx_floor` 262,144 is the native window of the ~27B open models targeted and catches Ollama's 4,096 default; `limits.session_wall_min` 60 bounds one task with 6 attempts inside a 6-hour group; `limits.task_attempts` 6 covers 2 fresh sessions with 2 re-prompts each; `warn.usd_per_run` 5 warns before a second ~$7 group on Opus 5.5; `limits.group_tokens` 2,000,000 is 1.7× the expected worst case of 1.2M. Both keys apply only when `track.usage` is on. `[PENDING G-07]` the real Max 5-hour window against `link_sessions.claude-cli` 3, measured over the first 20 groups.
-
-Where the numbers come from:
-- Anthropic's lowest API tier allows 1,000 requests and 2M input tokens a minute on Opus 5.5. A session makes well under 1 request a second, so the Max plan's 5-hour window is the real bound.
-- Claude Code's own headless runs stop background work after 10 minutes idle; that is the basis of `limits.session_wall_min`.
-- The ~$7 estimate for a 4-task group assumes 200K uncached input tokens plus 50K output tokens per session.
-- Codecov recommends 100% coverage on the patch, which punishes glue code; `check.patch_coverage` stays at 80 on changed lines.
-
-#### Agent group (`komodo config agent <name> …`)
-
-**In plain terms.** An agent is one of the seven worker roles (planner, architect, reviewer, builder, researcher, tester, scout; see Glossary). This section lists the 4 settings a person can change per agent, such as `komodo config agent reviewer model=sonnet`. They exist so one role can run a different model or get a longer clock without changing the whole machine. Without them, every agent would share one model and one time limit. A person sets them; the engine reads them when it starts that agent's session.
-
-| Key | Default | Hard limit | Meaning |
-|---|---|---|---|
-| `model` | The agent's weight: `opus`, `sonnet`, `haiku` | A probed model | `opus` is the latest in the line, `opus-prev` the prior; `<endpoint>:<model>` names an open-source model; `fable` opt-in on heavy agents |
-| `session_wall_min` | `limits.session_wall_min` | 120 | Beats the flat key for this agent |
-| `session_idle_min` | `limits.session_idle_min` | 30 | Same |
-| `retries` | 2 | 3 | Retries per session |
-
-**What each one does**
-- **`model`:** The model this agent starts on, by default the latest `opus`, `sonnet` or `haiku` for its weight (heavy, standard or light, see Glossary). `opus-prev` means the prior version; `<endpoint>:<model>` names an open-source model on a configured endpoint; `fable` is an opt-in heavy model. It beats `mode`, and the chain still ends in the free backstop.
-- **`session_wall_min`:** The wall-clock limit for this agent's sessions, overriding the flat `limits.session_wall_min`. The hard limit stays 120. A person raises it for an agent that needs longer single tasks.
-- **`session_idle_min`:** The silence limit before a nudge for this agent, overriding the flat `limits.session_idle_min`. The hard limit stays 30. A person raises it for an agent running on a slow local model.
-- **`retries`:** How many times a session that timed out or went idle is restarted for the same task, within `limits.task_attempts`. The default is 2, the hard limit 3. A person raises it for an agent whose sessions often time out.
-
-**Example**
-
-`komodo config agent reviewer model=sonnet session_wall_min=90 retries=3` stores this section in `~/.komodo/config.json`.
-
-```json
-{
-  "agents": {
-    "reviewer": {
-      "model": "sonnet",
-      "session_wall_min": 90,
-      "retries": 3
-    }
-  }
-}
-```
-
-#### Endpoint group (`komodo config endpoint <name> …`)
-
-**In plain terms.** An endpoint is an OpenAI-compatible model server, such as a local Ollama, reached over HTTP. This section lists the settings that describe one, set with `komodo config endpoint <name> …`. Endpoints exist because every agent's fallback chain must end in a free open-source model, the backstop (see Glossary). Without one, `doctor` and `gate` refuse the chain. A person configures them; the engine probes them and uses them when Claude is limited or when an agent's `model` names one.
-
-| Key | Meaning |
-|---|---|
-| `url` | The server's `/v1` base |
-| `models` | A model per weight: `heavy`, `standard`, `light`; a missing weight uses the nearest |
-| `ctx` | Context tokens: required for non-Ollama servers; an optional lower cap for Ollama |
-| `key` | `env:` reference only, optional |
-| `self_hosted` | A non-loopback server counted as free |
-| `first_byte_s` | First-byte timeout override |
-
-**What each one does**
-- **`url`:** The server's base address ending in `/v1`, such as `http://localhost:11434/v1`. The engine probes it, and the endpoint is used only when the probe answers. A person sets it to point at their own model server.
-- **`models`:** The model name to use for each weight: `heavy`, `standard` and `light`. If a weight is missing, the nearest listed one is used. A person fills it with the models the server actually serves.
-- **`ctx`:** The server's context window in tokens. Non-Ollama servers must declare it, since the engine cannot measure it; on Ollama it is optional and can only lower the measured number. The brief builder sizes every prompt to half of it.
-- **`key`:** An `env:NAME` reference to an API key the server needs, optional. The value is never stored or logged. A person sets it for a hosted endpoint that requires a key.
-- **`self_hosted`:** Marks a server that is not on loopback as free rather than paid. Without it, a non-loopback endpoint is refused under `providers.paid: never`. A person sets it for a model server on another machine they own.
-- **`first_byte_s`:** How many seconds to wait for the first byte of a reply before giving up, overriding the default (60 s, or 300 s on loopback). A person raises it for a slow server that takes long to load a model.
-
-Default: one endpoint, `local`, at `http://localhost:11434/v1`, used only when it answers the probe.
-
-**Example**
-
-The default `local` endpoint as a config section: its `/v1` base URL and one model for the standard weight.
-
-```json
-{
-  "endpoints": {
-    "local": {
-      "url": "http://localhost:11434/v1",
-      "models": {
-        "[UNKNOWN: weight not yet designed]": "Qwen3.6-27B"
-      }
-    }
-  }
-}
-```
-
-#### Environment variables
-
-**In plain terms.** An environment variable is a named value set in the shell before a command runs. Komodo reads only 2 of them, both for where it lives and how it prints; everything else is a `komodo config` key. Keeping the list this short means behaviour cannot be changed by a stray shell variable. A person or a CI script sets them; the engine reads them at start.
-
-| Variable | Use |
-|---|---|
-| `KOMODO_HOME` | Another home dir (tests, CI) |
-| `NO_COLOR` | Plain text |
-
-**What each one does**
-- **`KOMODO_HOME`:** Points Komodo at a different home directory instead of `~/.komodo`, for example `KOMODO_HOME=/tmp/k komodo doctor`. Tests and CI use it to keep state separate from a person's real install.
-- **`NO_COLOR`:** Makes every verb print plain text without colour codes, for example `NO_COLOR=1 komodo status`. A person sets it for logs or terminals that cannot show colour.
-
-No other environment variable configures Komodo. `CI=true` disables background fresh.
-
-#### Command detection
-
-**In plain terms.** Command detection is how the engine learns a repo's setup, build, test, lint and format commands. It looks at which marker files exist, such as `go.mod`. It exists so no one writes these commands into config and so every repo type gets the same five classes. Without it, Check and the agents' `run` tool would not know what to execute. The engine detects them once and caches the result by the hash of the marker files; a person influences them only by adding Makefile targets.
-
-Cached by the hash of the marker files.
-
-| Marker | setup | build | test | lint | format |
-|---|---|---|---|---|---|
-| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...` | `gofmt -l .` |
-| `package.json` | `npm ci` | `npm run build` | `npm test` | `npm run lint` | `npm run format` |
-| `Cargo.toml` | `cargo fetch` | `cargo build` | `cargo test` | `cargo clippy` | `cargo fmt --check` |
-| `pyproject.toml` | — | — | `pytest` | `ruff check` | `ruff format --check` |
-| `Makefile` | `make setup` | `make build` | `make test` | `make lint` | `make fmt` |
-
-**What each one does**
-- **`go.mod`:** Marks a Go repo. The five standard Go commands are used: download modules, build, test, vet and check formatting. The engine runs them inside the sandbox.
-- **`package.json`:** Marks a Node repo. `npm ci` needs a lockfile, and `build`, `lint` and `format` are used only if the package defines those scripts. A missing script simply leaves that class empty.
-- **`Cargo.toml`:** Marks a Rust repo. Fetch, build, test, clippy and a formatting check are used.
-- **`pyproject.toml`:** Marks a Python repo. There is no setup or build class; `pytest` tests, and `ruff` lints and checks formatting.
-- **`Makefile`:** Marks a repo driven by make. Each target is used only if the Makefile defines it. A defined target wins over the detected command for that class.
-
-- Only what exists: npm scripts and make targets are used only if defined; `npm ci` needs a lockfile.
-- A Makefile target wins over the detected command when the Makefile defines it.
-- `git-read` is always on: `git status`, `diff`, `log`, `show`.
-- Commands run without a shell; shell syntax fails `doctor`. Every command runs in the sandbox, except `git-read` under Docker, which runs on the host.
-- `setup` is the engine's: Intake runs it once per worktree with network on; no agent can run it.
-- With no detected commands, `run` refuses and names the marker files it looked for; read-only agents still run.
-
-#### Capacity profile per link
-
-**In plain terms.** A capacity profile is a small record the engine builds just before each session. It says how big a prompt the link takes, how many sessions it allows, its cost class and the effort level. It exists so swapping Claude for a local or OpenAI model changes only this record, never the engine's logic. Without it, a brief could exceed a small model's window or a paid link could run unnoticed. The engine builds it; the brief builder and the pool read it; nobody sets it directly.
-
-Before each session the engine derives `{ctx, slots, cost_class, effort}` for the link it is about to use: `ctx` measured ([Measured context (chapter 7)](#7-providers-and-http)), `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight. The brief builder sizes from `ctx`, the engine takes a slot from `slots`, and budgets cache by the whole profile. Swapping Claude for a local or OpenAI link changes the profile, never the engine.
-
-**Example**
-
-The record the engine builds before each session, as a Go struct with the four fields the LLD lists.
-
-```go
-// CapacityProfile is what the engine knows about one link before a session starts.
-type CapacityProfile struct {
-	Ctx       int    // measured context window in tokens
-	Slots     int    // concurrent sessions allowed on the link (limits.link_sessions.<link>)
-	CostClass string // subscription, free or paid, from the billing check
-	Effort    string // high, medium or low, from the agent's weight
-}
-```
-
-#### Configuration model
-
-**In plain terms.** Configuration is the set of settings that change how Komodo behaves, such as how many sessions may run at once. There are only two layers: defaults baked into the program, and one file per machine. The design keeps settings from drifting: every change goes through one command that logs it, and a hand edit is detected and refused. A person changes settings with `komodo config`; the engine only reads them; an AI session can never touch them.
-
-| Layer | Where | Power |
-|---|---|---|
-| 1 Built-in | `embed/defaults.json`, `embed/policy.json` inside the signed binary | Defaults and hard limits |
-| 2 Machine | `~/.komodo/config.json`, top level | Any value within the hard limits |
-
-**What each one does**
-- **1 Built-in:** Two files compiled into the `komodo` binary. `defaults.json` holds the default value of every setting; `policy.json` holds the hard limits and the guard rules (see Glossary). They change only with a new release.
-- **2 Machine:** Your settings file, one per machine, shared by every repo. A value here wins over the default but can never pass a hard limit. A value over the limit is refused, naming the key, the value and the limit. Only `komodo config` writes it.
-
-- The machine value wins within the hard limits. Every key exists out of the box; `--default` resets.
-- One write path: `komodo config`, which needs a terminal, writes every pair or none, logs one audit row per changed key, and stores a SHA-256 of the file. A hand edit makes every verb refuse with `config_tampered` until `komodo config --accept`.
-- Each run snapshots the effective config's hash into its `state.json`; edits mid-run do nothing to that run.
-- Only two environment variables exist: `KOMODO_HOME` and `NO_COLOR`. Secrets are `env:` references only.
-- Security rows are never config. The only guard tunable is `guard.refusal_limit`.
-
-#### Interfaces
-
-
-**In plain terms.** An interface is how something outside the harness talks to it. Here that means the command line. It covers the verbs a person or the orchestrator types, the JSON reply every verb returns, and the `AGENTS.md` text that teaches a host session the rules. Without one fixed surface, each host would need its own integration. People and the orchestrator share most verbs; a few belong to people only.
-
-#### Command surface
-
-**In plain terms.** The command surface is the full list of `komodo` verbs, split into three tiers by who may call them. Shared verbs are for a person or the orchestrator. Terminal-only verbs refuse unless a real terminal is attached, which an AI session's shell never has. Internal verbs are called only by the engine. Without tiers, the orchestrator could update the binary or sign a release. Every verb goes through the same five steps so a failure before step 4 changes nothing.
-
-| Tier | Who calls it | Verbs |
-|---|---|---|
-| Shared | Human and orchestrator | `help`, `version`, `doctor`, `sync`, `add backlog`, `add changelog`, `plan`, `run`, `status`, `skill`, `scope`, `resume`, `stop`, `abandon`, `jobs list|show|tick`, `cache stats`, `gate` (except `--install*`), `config` reads |
-| Terminal-only | Human; refused without a controlling terminal | `install`, `init`, `uninstall`, `fresh`, `config` writes, `doctor --fix`, `jobs run|pause|resume`, `cache clear`, `gate --install`, `gate --install-hooks`, `release` |
-| Internal | The engine | `internal tools`, `internal fresh-bg` |
-
-**What each one does**
-- **Shared:** Verbs a person or the orchestrator may call. Each one in the row:
-  - **`help`:** Lists verbs, or one verb's flags and examples; `help --json` is what the orchestrator reads first.
-  - **`version`:** Prints the version, binary path, latest known release and the repo pin.
-  - **`doctor`:** Health check of the install, the sandbox, PATH and the model catalog. It also checks endpoint context sizes, missing tools, hook drift, Windows long paths, the Docker daemon and the backlog grammar. `doctor install` or `doctor backlog` runs one half; `doctor --sandbox <cmd>` runs a command under the sandbox policy.
-  - **`sync`:** After a merge: fetch, prune finished worktrees and refresh the repo's Komodo files.
-  - **`add backlog`:** Adds a task, group or epic to the backlog files.
-  - **`add changelog`:** Adds an `Unreleased` entry to the changelog.
-  - **`plan`:** The planner agent drafts groups and tasks for a goal; files are written only if lint passes.
-  - **`run`:** Starts groups detached and returns the run id at once; refuses a group whose dependency has not landed.
-  - **`status`:** The live view, with `--watch`, `--wait`, `--explain` and `--metrics` as in section 16.3.
-  - **`skill`:** Lists or prints the embedded skills (standards documents).
-  - **`scope`:** Answers a builder's `needs_scope` request with approve or deny.
-  - **`resume`:** Continues a crashed, blocked, paused or restarted run.
-  - **`stop`:** Saves work and releases leases; the same clean shutdown as a signal.
-  - **`abandon`:** Stops a run, frees leases, keeps evidence; dependents block with `dependency`.
-  - **`jobs list|show|tick`:** Lists job templates, shows one, or runs one scheduler step.
-  - **`cache stats`:** Shows cache size and hit rate.
-  - **`gate` (except `--install*`):** Komodo's own self-check, section 15.4.
-  - **`config` reads:** Prints config keys; writes are terminal-only.
-- **Terminal-only:** Verbs that refuse with exit 1 unless a controlling terminal exists. Claude Code's Bash tool cannot open one, so the orchestrator hands the command to the person.
-  - **`install`:** Places the binary, probes providers and writes the repo files.
-  - **`uninstall`:** Removes every file the install manifest owns.
-  - **`fresh`:** Fetches the newest binary now and verifies it.
-  - **`config` writes:** Sets one or more config keys, all or none.
-  - **`doctor --fix`:** Applies the fixes `doctor` found.
-  - **`jobs run|pause|resume`:** Runs a job now, or pauses and resumes a job template.
-  - **`cache clear`:** Purges a cache kind.
-  - **`gate --install`:** Places a dev build at `~/.komodo/bin/komodo`.
-  - **`gate --install-hooks`:** Installs git hooks in the Komodo repo.
-  - **`release`:** Tags, cross-builds, checksums and signs a release; Komodo repo only.
-- **Internal:** Verbs only the engine calls, listed only in `help --all`.
-  - **`internal tools`:** The private tool server (an MCP server over stdio) for one worker session.
-  - **`internal fresh-bg`:** The detached updater: download, verify, swap.
-
-**What each one does** (the five processing steps every verb takes)
-- **Parse:** Reads the verb and its flags; `--input` JSON merges under explicit flags, which win.
-- **Validate:** Checks types and enums, suggests the closest match for an unknown flag, runs the terminal check, the repo pin and the config hash guard. Nothing has run yet.
-- **Resolve:** Finds the repo id from the current folder or `-C`, the effective config, and the capacity profile when a verb needs a model link.
-- **Dispatch:** One thin call into the domain package; the verb never reads state files itself. `--dry-run` prints each write here and makes none.
-- **Render:** Turns the result's codes and facts into the human `report` through templates, then prints the envelope or plain text.
-
-Every verb: five processing steps (parse, validate, resolve, dispatch, render); a verb that fails before dispatch has made 0 writes; every writing verb is idempotent and takes `--dry-run`; every verb accepts `--input <file|->` as one JSON object with explicit flags winning.
-
-#### Envelope and exit codes: overview
-
-**In plain terms.** The envelope is the fixed JSON shape every verb returns (see Glossary), so the orchestrator can parse any reply the same way. The exit code is the number a program returns when it ends; a script branches on it. The `report` field is already formatted for a person, so the orchestrator passes it through unchanged. Without a fixed envelope, every verb would need its own parser.
-
-**What each one does**
-- **`v`:** The envelope version, 1, so a future shape can be told apart.
-- **`ok`:** True on success, false on any failure.
-- **`verdict`:** One line saying what happened.
-- **`report`:** Human text formatted to `output.profile`; the orchestrator relays it verbatim.
-- **`data`:** The verb's typed result for programs.
-- **`error{code, reason, fix}`:** Set when `ok` is false; `code` is what a caller branches on, `reason` says why, `fix` names the command that fixes it.
-- **Exit 0 ok:** The verb succeeded.
-- **Exit 1 refused:** The verb would not act, for example a terminal-only verb without a terminal or a leased worktree.
-- **Exit 2 usage:** The command line was wrong; an unknown flag names the closest match.
-- **Exit 3 blocked:** The work stopped at a bound and waits for a person or the orchestrator.
-- **Exit 4 internal:** A fault inside the harness.
-- **`--json`:** Prints only the envelope; it turns on by itself when no terminal is attached.
-
-`{v: 1, ok, verdict, report, data, error{code, reason, fix}}`. `report` is human text already formatted to `output.profile`, so the orchestrator relays it verbatim. Exit codes: 0 ok, 1 refused, 2 usage, 3 blocked, 4 internal. `--json` is on automatically without a terminal.
-
-#### The orchestrator contract
-
-**In plain terms.** The orchestrator contract is the block of text `install` writes into the repo's `AGENTS.md`, the file any AI host session reads on start. It tells the session which verbs it owns, which belong to the person, how to wait for events and to relay `report` unchanged. Without it, a host session would guess at commands and might run a human-only verb. A Claude `SessionStart` hook runs `komodo status`, so the first line a new session sees is the live state.
-
-**What each one does**
-- **`komodo help --json` first:** Lists every verb, flag and result schema, and marks the terminal-only ones. The session learns the surface from the binary, not from memory.
-- **Your verbs are the shared set:** `plan`, `run`, `status`, `skill`, `scope`, `add`, `stop`, `resume`, `abandon`, `sync`, `doctor`, `gate`, `jobs tick` and config reads.
-- **Belongs to the person:** `install`, `fresh`, config writes, `gate --install` and `release` refuse without a terminal; the session hands the command to the person.
-- **`status --wait` in the background:** Blocks until the next wake event, so the session reacts to a Blocked group without polling.
-- **Relay `report` verbatim:** The text is already in the output style; rewriting it only loses information.
-- **Rules O1 to O7, O9 and O10:** The orchestrator rules from section 14.2, rendered from `embed/rules/orchestrator.md`.
-- **The `SessionStart` hook:** Written to `.claude/settings.json` by install; it runs `komodo status` when a Claude session opens.
-
-Install writes a Komodo block into `AGENTS.md` that tells any host session: run `komodo help --json` first; your verbs are the shared set; `install`, `fresh`, config writes, `gate --install` and `release` belong to the person; run `status --wait` in the background; relay `report` verbatim. The rules O1 to O7, O9 and O10 and the output style follow in the same block. A Claude `SessionStart` hook runs `komodo status` so a new session sees state on line one.
-
----
-
 ## Appendix C. Event Model, State Machine, Event Bus and State Manager
 
 #### State manager
@@ -8274,8 +8297,6 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Last event line cut short | It no longer matches its checksum, so it is dropped; `state.truncated` emitted once |
 | A cancelled tester reports after the return to Build | Its epoch is older; recorded `stale: true`; ignored |
 | Both Verify sessions fail in one tick | Handled in `sequence` order; both reach the builder in the one return |
-| Hand-edited `config.json` | Every verb refuses `config_tampered` until `config --accept` |
-| Repo pinned above the binary | Only `help`, `version`, `fresh`, `install`, `doctor` run |
 | Offline install from an older binary | `bin/` points at the older version; fresh moves forward on the next online check |
 | A pre-existing failing test | Baseline marks it; the group lands with a warning |
 | A test fails once and passes twice | Reported `flaky`; the group lands; counted per repo |
@@ -8529,15 +8550,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 
 **In plain terms.** A proof case is one fixture, a small made-up repo, fake server or forced failure, plus the exact result that counts as a pass. Each component below lists its own proof cases, and a builder finishing that component's task group is done only when every case passes. The gate ([Gate and self-checks (`komodo gate`, Komodo repo only) (Appendix M)](#gate-and-self-checks-komodo-gate-komodo-repo-only)) runs these as tests, so a lost case would mean a component with no exit test. The end-to-end checks above cover the whole system; these cover each part on its own.
 
-**CLI processor ([Command-line interface (Appendix B)](#command-line-interface))**
-- Each verb has a golden `--json` test that compares its output with a stored copy.
-- An unknown flag exits 2 and names the closest matching flag.
-- The gate fails when `help --json` and the verb tables disagree.
-- With no controlling terminal, `komodo install` and `komodo config providers.paid=allowed` exit 1.
-- `--input` with a flag that disagrees uses the flag.
-- A repeated `add backlog` with the same task reports `0 changes`.
-- `help`, `version` and `skill list` each answer under 50 ms in the gate.
-
 **Installer ([Installer (Appendix M)](#installer))**
 - Fresh repos on macOS and Windows: a new `claude` session reads the `AGENTS.md` block, `komodo skill list` shows the 4 orchestrator skills, and `komodo` resolves in a new shell.
 - On those same repos, `.claude/settings.json` holds only the allow rule and the `SessionStart` hook, and a pre-existing key survives.
@@ -8553,17 +8565,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A pinned repo refuses verbs.
 - Latency: a short verb never makes a network call, and the updater never spawns when `latest` is not newer.
 - Locking: 2 concurrent verbs spawn 1 updater.
-
-**Configuration ([Configuration (Appendix B)](#configuration))**
-- Limits: `komodo config limits.returns=9` is refused, naming the key and the limit, and the file is unchanged.
-- Hash guard: a hand edit to `config.json` makes `komodo status` exit 1 with `config_tampered`.
-- `config --accept` restores a hand-edited `config.json` and logs 1 audit row.
-- Capacity profile: a session on a 262,144 endpoint and one on Opus 5.5 get different brief ceilings and the same engine path, and the ledger records both profiles.
-- Detection: the fixture repo yields 6 classes.
-- All or none: a call with 1 bad pair out of 3 writes nothing, and a good call logs 1 audit row per changed key.
-- Discovery: `config --all` names a default, limit and source for every key.
-- Tracking: `track.usage=auto` resolves on under `economy` and off under `thorough`; `on` and `off` override the mode.
-- `agent builder model --all` lists only probed models above the context floor.
 
 **Skill loader ([Skill loader (Appendix I)](#skill-loader))**
 - A builder editing `*.go` gets `standards-go` preinjected.
