@@ -185,9 +185,9 @@ def cells(row):
 def glossary():
     """Build hover definitions from the HLD's full glossary table, one per listed term."""
     hld = (DOCS / "hld.md").read_text()
-    if "## Appendix C. Full glossary" not in hld:
-        sys.exit("docs/hld.md has no '## Appendix C. Full glossary' heading")
-    section = hld.split("## Appendix C. Full glossary", 1)[1].split("\n## ", 1)[0]
+    if "## Appendix C. Full Glossary" not in hld:
+        sys.exit("docs/hld.md has no '## Appendix C. Full Glossary' heading")
+    section = hld.split("## Appendix C. Full Glossary", 1)[1].split("\n## ", 1)[0]
     out = []
     for row in (l for l in section.split("\n") if l.startswith("|")):
         c = cells(row)
@@ -235,7 +235,7 @@ def split(doc, pages, ref):
 def config(nav):
     """Return mkdocs.yml text: Material theme, dark mode, tooltips, Mermaid, and the nav."""
     lines = [
-        "site_name: Komodo design docs", "docs_dir: docs", "site_dir: site",
+        "site_name: Komodo Design Docs", "docs_dir: docs", "site_dir: site",
         "extra_css: [assets/theme.css]",
         "extra_javascript:", "  - path: assets/diagrams.js", "    type: module",
         "theme:", "  name: material", "  font: false", "  palette:",

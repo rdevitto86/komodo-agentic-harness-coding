@@ -1,4 +1,4 @@
-## 0. Front matter and code structure
+## 0. Front Matter and Code Structure
 
 **Contents**
 
@@ -121,7 +121,7 @@ flowchart TB
 
 **Lookup:** [Appendix A](#appendix-a-document-metadata-conventions-code-structure-and-data-locations) holds the package, embedded asset, runtime state and conventions tables.
 
-## 1. CLI and configuration
+## 1. CLI and Configuration
 
 The command-line interface (CLI) is the only way to drive Komodo: a person or the orchestrator types `komodo <verb>`. A verb is a subcommand such as `run`. The orchestrator is the AI session that drives work but never edits code (see Glossary in the HLD). Without a terminal every verb answers with one JSON envelope, `{v, ok, verdict, report, data, error}`. It exits 0 ok, 1 refused, 2 usage, 3 blocked or 4 internal. Configuration is 33 dotted keys, such as `limits.pool_max`.
 
@@ -198,7 +198,7 @@ flowchart LR
 
 **Lookup:** [Appendix B](#appendix-b-command-line-interface-and-configuration) holds the verb, global flag, envelope, exit code, tier, 34-key, agent group, endpoint group, environment, command detection and capacity profile tables.
 
-## 2. Event spine and state machine
+## 2. Event Spine and State Machine
 
 The event spine is how the engine remembers what happened and decides what to do next. An event is a typed fact such as `task.done`, appended to a state file, the per-group file `runs/<group>/events.jsonl` (see Glossary in the HLD). One pure function, `Next()`, turns the current state and one event into a new state, actions and follow-on events. Nothing else changes group state. The state machine is the fixed set of stages a group moves through: Intake, Build, Check, Verify, Ship. Paused and Blocked are holding states. Without this spine a crash would lose the group's position, and two code paths could move a stage at once.
 
@@ -300,7 +300,7 @@ sequenceDiagram
 
 **Lookup:** [Appendix C](#appendix-c-event-model-state-machine-event-bus-and-state-manager) holds the envelope, 32 event types, group state rules, 9 action rows, 13 transitions, Paused versus Blocked, block reasons and bus rules.
 
-## 3. Engine internals
+## 3. Engine Internals
 
 The engine runs groups: it starts sessions, moves stages and lands work. One `Drive` goroutine (a lightweight Go thread) per group owns its state. Cross-group facts are files under `~/.komodo/state/`, written only through the state manager's `Claim`, `Replace` and `Remove`, the only way two engines coordinate. The session pool is the machine-wide 1 to 6 slots that builder, reviewer and tester sessions take. Without these rules two groups could write one state file.
 
@@ -368,7 +368,7 @@ flowchart TB
 
 **Lookup:** [Appendix D](#appendix-d-engine-internals-run-order-and-the-pool) holds the concurrency model, queue and pick order, pool rules, run order and run flags.
 
-## 4. Workspace and leases
+## 4. Workspace and Leases
 
 A workspace is where one group is built: a worktree, a separate git checkout under `~/.komodo/wt/<repo-id>/<group>/`. It is cut detached from the epic tip in about 1 s. A lease is a create-only lock file, `~/.komodo/leases/<repo-id>/<group>.json`, saying one run owns the group. Beside it sits the fence, a counter that rises on every take or takeover. Every git write carries it; git refuses an old number. Without the lease two runs could edit one folder; without the fence a stalled holder could overwrite its successor. Only the engine touches these folders; verbs refuse a leased worktree and rule O4 forbids hand edits.
 
@@ -447,7 +447,7 @@ sequenceDiagram
 
 **Lookup:** [Appendix E](#appendix-e-workspace-and-leases) holds the worktree rules, lease fields, shutdown steps and sweep actions.
 
-## 5. Sessions, agents and briefs
+## 5. Sessions, Agents and Briefs
 
 A session is one fresh model conversation that does one task. The supervisor is the engine code that starts, watches and stops it (see Glossary in the HLD). An agent is a role such as builder or reviewer, defined by two compiled-in files: `agent.json` for Go and `prompt.md` for the model. A brief is the prompt a session receives, assembled from 20 typed slots such as `tasks` and `diff`. Without the supervisor a stuck session would hold a slot forever. Without the registry a session could start with the wrong tools; without the builder each brief would be hand-made. The engine runs all three; a person changes only an agent's model and limits through `komodo config agent <name>`.
 
@@ -545,7 +545,7 @@ flowchart TB
 
 **Lookup:** [Appendix F](#appendix-f-session-supervisor-agent-registry-and-brief-builder) holds the lifecycle, controls, 15 exit reasons, resume, `agent.json` fields, `prompt.md`, roster, limits, assembly order, 20 slots, ceilings and context rules.
 
-## 6. Tools, guard and sandbox
+## 6. Tools, Guard and Sandbox
 
 A tool is a named action a model session may request, such as `read` or `run`. The tool runtime carries the request to Go, runs it and caps the reply. The guard is the in-process check every tool call passes first. It fails closed: unparsable input, an unknown tool or a guard error is a refusal. The sandbox is the operating-system confinement around every `run` command, so a test cannot reach the network or write outside the worktree. Without them a model could only talk, or could read secrets, escape the worktree and call home. The model calls tools; the engine checks and executes them; a person sees only `tool.denied` events and refusal lines.
 
@@ -746,7 +746,7 @@ Failover moves work only when a provider is unavailable, unauthorized or over a 
 
 **Lookup:** [Appendix H](#appendix-h-provider-adapters-and-http-stack) holds the provider and HTTP tables.
 
-## 8. Skills, rules and output
+## 8. Skills, Rules and Output
 
 A skill is a Markdown file of standards or workflow steps put before a model session. The loader picks each session's skills. The output contract fixes where rules are enforced and how every line a person reads is rendered. Without them, workers would get wrong standards, orchestrator rules would leak into briefs, and model prose would reach the person unchecked. The engine does all of it.
 
@@ -829,7 +829,7 @@ The index holds 34 `standards-*` skills plus `komodo`, `plan`, `run`, `respond` 
 
 **Lookup:** [Appendix I](#appendix-i-skill-loader-rules-and-output-contract) holds the skill, rule, output and no-leak tables.
 
-## 9. Check, review, tester and recovery
+## 9. Check, Review, Tester and Recovery
 
 Once a builder (the model session that edits code) finishes, the harness proves the work in two stages. Check costs zero tokens: ordinary tools rerun each task's `done_when` command, confirm the builder stayed inside its files and scan for secrets. They also measure coverage and compare tests with the base commit. Verify runs two model sessions side by side. The reviewer reads the diff against lenses, catalogs of review rules; the tester tries the acceptance items blind. Error recovery is the table of every failure with its detector, action and bound. Without these, a model's own word would be the only proof and a loop could run forever.
 
@@ -989,7 +989,7 @@ Both Verify sessions start under one epoch. The first verified failure makes `Ne
 
 **Lookup:** [Appendix J](#appendix-j-check-review-tester-error-recovery-and-budgets) holds the Check, scope, lens, review, tester, failure, recovery, budget and caching tables.
 
-## 10. Scheduler, cache and observability
+## 10. Scheduler, Cache and Observability
 
 The scheduler runs agents on a timer from a job template: a JSON file of agents, slots and interval. The cache store keys results by input hash (a content fingerprint), so nothing is computed twice. Observability is the ledger, two tables rebuilt from the group state, and `status` reading it. Without them, timed work needs a person, work repeats, and a run is a black box.
 
@@ -1100,7 +1100,7 @@ classDiagram
 
 **Lookup:** [Appendix K](#appendix-k-scheduler-cache-store-and-observability) holds the scheduler, cache and ledger tables.
 
-## 11. Backlog, planning, ship and release
+## 11. Backlog, Planning, Ship and Release
 
 The backlog is the Markdown files under `docs/backlog/`. An epic holds task groups, and a group holds tasks that name files. The planner, a model session, drafts those files from a goal; Go lints (an automatic rule check) every draft before saving. Ship is the last stage: the engine commits, merges and opens pull requests with 0 model tokens. Release is a person-only act that cuts a signed version. Without these, builders would get oversized or colliding work and a model could push to a shared branch.
 
@@ -1194,7 +1194,7 @@ classDiagram
 
 **Lookup:** [Appendix L](#appendix-l-backlog-planning-ship-and-release) holds the backlog, planner, ship and release tables.
 
-## 12. Install, binary lifecycle and gate
+## 12. Install, Binary Lifecycle and Gate
 
 `komodo install` places the binary and probes which providers answer. It also writes the repo files that tell an AI session it is the orchestrator. The binary lifecycle keeps `komodo` current with no daemon. The gate, `komodo gate`, is Komodo's own test suite, Komodo repo only. Without them each repo needs hand setup, machines drift across versions, and docs part from the binary. A person runs `install` and `fresh` in a terminal; the orchestrator may not.
 
@@ -1286,7 +1286,7 @@ Install runs 8 steps: binary, PATH, provider probe, `AGENTS.md` block, `CLAUDE.m
 
 **Lookup:** [Appendix M](#appendix-m-installer-binary-lifecycle-gate-and-deployment) holds the install, lifecycle and gate tables.
 
-## 13. State manager
+## 13. State Manager
 
 The state manager is the one piece of code that reads and writes the harness's runtime state: state events, snapshots, leases, queue items, timers, session files and ledgers. Every record and every event has one schema, and the manager fills in and checks each record before it touches disk. Without it, 12 parts would each write their own files by their own rules, and a crash or an upgrade could leave those files disagreeing.
 
@@ -1364,7 +1364,7 @@ flowchart LR
 
 **Lookup:** [Appendix C](#appendix-c-event-model-state-machine-event-bus-and-state-manager) holds the envelope, primitives, kinds, checks, reads, exclusions, the group snapshot fields, group state's calls and the 12 proofs ([State manager (Appendix C)](appendix-c.md#state-manager)).
 
-## T. Verification and cutover
+## T. Verification and Cutover
 
 Seven end-to-end checks prove the whole system. Every phase passes `go run ./cmd/komodo gate` and cross-builds for windows, linux and darwin. A full run is `komodo install`, `komodo run tg-fixture` on a local model and `komodo status --wait done`, with the group landed per `ship.mode`. A `kill -9` mid-run then `resume` replays the group state with 0 repeated paid sessions. Two engines on one group make exactly 1 landing; the loser ends in `lease.lost`. A pre-existing failing test lands; a seeded regression blocks with `regression`. `README.md` on macOS and Windows reaches a shipped fixture group; a scheduled `tick` with 3 forced failures ends Blocked. The security lens is required for the installer, binary lifecycle, HTTP, tools, guard, sandbox and ship, even in economy mode.
 
@@ -1376,7 +1376,7 @@ Host cleanup matters: global Claude Code hooks call `~/.komodo/bin/komodo`, the 
 
 ---
 
-## Appendix A. Document metadata, conventions, code structure and data locations
+## Appendix A. Document Metadata, Conventions, Code Structure and Data Locations
 
 #### Document metadata
 
@@ -1966,7 +1966,7 @@ flowchart TB
 
 ---
 
-## Appendix B. Command-line interface and configuration
+## Appendix B. Command-Line Interface and Configuration
 
 #### Command-line interface
 
@@ -2559,7 +2559,7 @@ Install writes a Komodo block into `AGENTS.md` that tells any host session: run 
 
 ---
 
-## Appendix C. Event model, state machine, event bus and state manager
+## Appendix C. Event Model, State Machine, Event Bus and State Manager
 
 #### Event model
 
@@ -3311,7 +3311,7 @@ Guarantees the tests pin:
 
 ---
 
-## Appendix D. Engine internals, run order and the pool
+## Appendix D. Engine Internals, Run Order and the Pool
 
 #### Orchestration engine internals
 
@@ -3510,7 +3510,7 @@ flowchart LR
 
 ---
 
-## Appendix E. Workspace and leases
+## Appendix E. Workspace and Leases
 
 #### Workspace and leases
 
@@ -3612,7 +3612,7 @@ Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files and
 
 ---
 
-## Appendix F. Session supervisor, agent registry and brief builder
+## Appendix F. Session Supervisor, Agent Registry and Brief Builder
 
 #### Session supervisor
 
@@ -4042,7 +4042,7 @@ No agent has git write tools, forge credentials or a shell. Only the engine runs
 
 ---
 
-## Appendix G. Tool runtime, guardrails and sandbox
+## Appendix G. Tool Runtime, Guardrails and Sandbox
 
 #### Tool runtime
 
@@ -4513,7 +4513,7 @@ Releases are signed with ed25519 by a key at `~/.komodo/release.key` (mode 0600)
 
 ---
 
-## Appendix H. Provider adapters and HTTP stack
+## Appendix H. Provider Adapters and HTTP Stack
 
 #### Provider adapters
 
@@ -5010,7 +5010,7 @@ Komodo adds no cost cap of its own; provider windows and spend limits are the pr
 
 ---
 
-## Appendix I. Skill loader, rules and output contract
+## Appendix I. Skill Loader, Rules and Output Contract
 
 #### Skill loader
 
@@ -5198,7 +5198,7 @@ The codes are `branch_missing`, `cancelled`, `paused`, `integration`, `epic_gate
 
 ---
 
-## Appendix J. Check, review, tester, error recovery and budgets
+## Appendix J. Check, Review, Tester, Error Recovery and Budgets
 
 #### Check
 
@@ -5660,7 +5660,7 @@ Every failure has a detector, an action, a bound and a final state; nothing loop
 
 ---
 
-## Appendix K. Scheduler, cache store and observability
+## Appendix K. Scheduler, Cache Store and Observability
 
 #### Scheduler and job templates
 
@@ -5868,7 +5868,7 @@ Retention is `ledger.retention_days` (30) or 100 MB per repo, oldest first; a st
 
 ---
 
-## Appendix L. Backlog, planning, ship and release
+## Appendix L. Backlog, Planning, Ship and Release
 
 #### Backlog and planning
 
@@ -6015,7 +6015,7 @@ estimate_lines: 120
 
 ---
 
-## Appendix M. Installer, binary lifecycle, gate and deployment
+## Appendix M. Installer, Binary Lifecycle, Gate and Deployment
 
 #### Installer
 
@@ -6289,7 +6289,7 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 
 ---
 
-## Appendix N. Edge cases
+## Appendix N. Edge Cases
 
 #### Edge cases
 
@@ -6391,7 +6391,7 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 
 ---
 
-## Appendix O. Gap register
+## Appendix O. Gap Register
 
 #### Gap register
 
@@ -6467,7 +6467,7 @@ Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag 
 
 ---
 
-## Appendix P. Verification plan and cutover
+## Appendix P. Verification Plan and Cutover
 
 #### Verification plan
 
@@ -6842,7 +6842,7 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 
 ---
 
-## Appendix Q. Component traceability
+## Appendix Q. Component Traceability
 
 #### Component traceability
 
@@ -6973,7 +6973,7 @@ Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary insta
 
 ---
 
-## Appendix S. HLD detail tables: goals, building blocks, decisions, quality, risks, roadmap
+## Appendix S. HLD Detail Tables: Goals, Building Blocks, Decisions, Quality, Risks, Roadmap
 
 #### Introduction and goals
 

@@ -1,6 +1,6 @@
 # Komodo 1.0.0-beta.6 — High-Level Design
 
-## 0. Front matter
+## 0. Front Matter
 
 **Contents**
 
@@ -42,7 +42,7 @@
 
 **Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
 
-## 1. Introduction and goals
+## 1. Introduction and Goals
 
 Komodo is one Go binary, `komodo`, that runs AI model sessions as workers to plan, build, check, review and ship code. It says what the harness is for, what drives its design, and its five ranked qualities. Without it, no decision can be judged. The owner reads it; the engine never does.
 
@@ -121,7 +121,7 @@ A constraint is a locked rule the design cannot trade away. Owner-set; `komodo g
 - Phases 2 to 6 are hand-built; the harness builds its own groups from phase 7.
 - New event types or result codes are design changes: enum, schema, template, fixture.
 
-## 3. Context and scope
+## 3. Context and Scope
 
 This chapter draws Komodo's boundary: who calls in, what it calls, and what flows across. Outside it lie Claude, GitHub and the operating system; without it, responsibilities blur. Callers: a person at a shell, the orchestrator (see Glossary), the OS scheduler. Callees: models, git, GitHub, the sandbox.
 
@@ -169,7 +169,7 @@ Every verb returns a JSON envelope (a fixed reply shape) and an exit code 0 to 4
 - The orchestrator calls `plan`, `run` and `status --wait`, answers `scope`, relays reports and never edits code.
 - A person merges only the epic PR; the engine merges group PRs under `ship.mode: group`.
 
-## 4. Solution strategy
+## 4. Solution Strategy
 
 The design on one page: six bets, five tied to the chapter 1 quality goal each serves. The engine implements every line; no model is trusted to.
 
@@ -183,7 +183,7 @@ The design on one page: six bets, five tied to the chapter 1 quality goal each s
 
 Every idea has a published precedent: Temporal's workflow and activity split, distributed-lease fencing tokens, OpenHands' event stream, Codex CLI's sandbox, Aider's repo map.
 
-## 5. Building blocks
+## 5. Building Blocks
 
 The parts list of the `komodo` binary; a building block is one piece with one job, and without this list nobody can say which piece does what. There are 28 components over 12 Go packages (source folders): 27 sit in 8 layers, one package per layer, and the 28th, the state manager, is a core pillar under all of them. A person reads it; the engine is itself one block.
 
@@ -455,7 +455,7 @@ Three levels of files. Machine: the binary at `~/.komodo/versions/<v>/` and `bin
 - `init`, run by a person, puts Komodo's orchestrator skills and commands into the global Claude Code setup; how it writes there is open (LLD G-28).
 - Self-update fetches the 1 KB `latest.json` at most hourly; live runs keep their version.
 
-## 8. Crosscutting concepts
+## 8. Crosscutting Concepts
 
 A crosscutting concept is a rule spanning many components rather than living in one. Six shape the design: data, models and cost, security, quality gates, operations and interfaces; the LLD holds every table. Without them, each component would store and spend its own way. The engine enforces all six; a person meets them as files, refusals and `status` output.
 
@@ -548,7 +548,7 @@ The agent's weight picks the model on Claude links.
 
 **Lookup:** [LLD Appendix S](lld.md#appendix-s-hld-detail-tables-goals-building-blocks-decisions-quality-risks-roadmap) and LLD appendices A to M hold the tables. They cover locations, config keys, links, models, threats, guard rows, sandbox shapes, gates, runbook, verbs and the envelope.
 
-## 9. Architecture decisions
+## 9. Architecture Decisions
 
 Index of the choices that shaped the design; DR-n numbers exist only here. The owner's three decisions of 2026-10-09 closed gaps G-01, G-05 and G-15 (a gap: an unverified fact or unconfirmed decision). Eleven rejected an alternative, kept with its reason in the LLD; DR-10 and DR-11 are the owner's own. Twelve design-pass defaults and four state-manager defaults await the owner's confirmation.
 
@@ -571,7 +571,7 @@ Index of the choices that shaped the design; DR-n numbers exist only here. The o
 | Defaults | 12 design-pass defaults: `fable` opt-in, Haiku 5.5 light, coverage 80, 10 lenses, EARS items, two-pass planner, 6 more | LLD Appendix S |
 | State defaults | In-process, no daemon; 6 exclusions; quarantine, never repair; snapshot fields | State manager |
 
-## 10. Quality requirements
+## 10. Quality Requirements
 
 A quality requirement is a scenario with a number a test can prove or fail. Without one, "fast" and "safe" are unverifiable; tests and `komodo gate` measure them.
 
@@ -583,7 +583,7 @@ A quality requirement is a scenario with a number a test can prove or fail. With
 - Safety: a `run` writing outside the worktree, reading `~/.ssh` or reaching a public address is refused.
 - Capacity: 6 sessions machine-wide, 3 per link, 1 per loopback endpoint `[PENDING G-04]`, `[PENDING G-07]`; cache hits ≥50% with `track.usage` on `[PENDING G-17]`.
 
-## 11. Risks, debt and roadmap
+## 11. Risks, Debt and Roadmap
 
 A risk is an unproved assumption; debt is a known shortcut to repay later. A builder closes each risk with a spike, a small experiment answering one question; per-risk owners are `[UNKNOWN: not yet designed]`.
 
@@ -704,7 +704,7 @@ Eighteen newcomer terms; the LLD links here.
 
 ---
 
-## Appendix C. Full glossary
+## Appendix C. Full Glossary
 
 #### 2. Glossary
 
@@ -827,7 +827,7 @@ Eighteen newcomer terms; the LLD links here.
 
 ---
 
-## Appendix D. Document metadata
+## Appendix D. Document Metadata
 
 #### 3. Document metadata
 
