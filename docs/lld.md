@@ -4314,7 +4314,7 @@ var (
 | `Client.Do` | `*LimitSignal` | The adapter converts it to a `*LimitError` |
 | `Client.Do` | other error after 4 attempts | The adapter fails the request; a second dropped stream fails the session |
 
-The endpoint type is the configuration record described in [Endpoint group](#endpoint-group-komodo-config-endpoint-name):
+The endpoint type is the configuration record described in [7.8 Configuration and Constants](#78-configuration-and-constants):
 
 ```go
 // Endpoint is one configured `http:` server.
@@ -4719,28 +4719,28 @@ stateDiagram-v2
 
 ### 7.8 Configuration and Constants
 
-| Key | Type | Default | Effect |
-|---|---|---|---|
-| `providers.paid` | `never`, `fallback`, `allowed` | `never` | When a paid link may run |
-| `providers.keys.anthropic` | `env:NAME` | `env:ANTHROPIC_API_KEY` | Names the variable holding the Anthropic key; the value is never stored |
-| `providers.keys.openai` | `env:NAME` | `env:OPENAI_API_KEY` | Same for the OpenAI key; the link is `not yet` |
-| `providers.ctx_floor` | int | 262144 | Smallest `http:` endpoint context allowed; hard limit none |
-| `http.ca_bundle` | path | none | Path of a certificate file in Privacy-Enhanced Mail format, holding extra trusted certificate authorities |
-| `limits.link_sessions.<link>` | int | 3; loopback endpoints 1 | Concurrent sessions per link across all repositories; hard limit 8 |
-| `limits.pause_max_min` | int | 360 | Longest a session stays paused; hard limit 1,440 |
-| `warn.quota_pct` | int | 90 | Window percent that raises `limit.warn` |
-| `warn.usd_per_run` | number | 5 | Metered dollars per run that raise `limit.warn`; used only when `track.usage` is on |
+| Key | Type | Default | Hard limit | Effect |
+|---|---|---|---|---|
+| `providers.paid` | enum | `never` | none | `never` removes paid links from every chain and blocks with `paid_refused` if nothing else is left; `fallback` runs a paid link only after every subscription and free link is skipped; `allowed` runs paid links in chain order. |
+| `warn.usd_per_run` | number | 5 | none | Prints a warning when a run's metered US dollars pass this value. `warn.usd_per_run` never stops work, and applies only when `track.usage` is on. |
+| `warn.quota_pct` | int | 90 | none | Warns when a provider window, such as the Max 5-hour or weekly window, passes this percent used. `warn.quota_pct` also halves the session pool so the window is not drained. |
+| `providers.keys.anthropic` | env ref | `env:ANTHROPIC_API_KEY` | `env:` only | Names the environment variable holding the Anthropic key. The key value is never stored in config or logs. |
+| `providers.keys.openai` | env ref | `env:OPENAI_API_KEY` | `env:` only | The same rule for the OpenAI key reference. The OpenAI link itself is recorded as `not yet` until a later minor. |
+| `providers.ctx_floor` | int | 262144 | none | The smallest context window, in tokens, an `http:` endpoint may have. A server below the floor fails `doctor` and is skipped with a `provider.skip` event, because briefs are never shrunk to fit. The default catches Ollama's 4,096. |
+| `http.ca_bundle` | path | none | A PEM file path | Extra trusted certificates added to the system roots for HTTPS calls to model servers. A missing or bad file fails `doctor`. |
+| `limits.link_sessions.<link>` | int | 3; loopback endpoints 1 | 8 | The most concurrent sessions per link across all repos. Ollama serves 1 request per model unless `OLLAMA_NUM_PARALLEL` is raised, so `doctor` reads the variable and names the fix. |
+| `limits.pause_max_min` | int | 360 | 1,440 | The longest a session stays paused on a provider limit. At the cap, up to 24 hours, the session is cancelled, its work-in-progress commit is kept and the group blocks with `pause_timeout`. |
 
 Per-endpoint keys, set with `komodo config endpoint <name> …`:
 
-| Key | Meaning |
+| Key | Effect |
 |---|---|
-| `url` | The server's `/v1` base |
-| `models` | A model per weight: `heavy`, `standard`, `light` |
-| `ctx` | Context tokens; required for non-Ollama servers, an optional lower cap for Ollama |
-| `key` | `env:` reference only, optional |
-| `self_hosted` | A non-loopback server counted as free |
-| `first_byte_s` | First-byte timeout override |
+| `url` | The server's `/v1` base address, such as `http://localhost:11434/v1`; the endpoint is used only when the probe answers |
+| `models` | A model name per weight, `heavy`, `standard` or `light`; a missing weight uses the nearest listed one |
+| `ctx` | Context window in tokens. Required for non-Ollama servers, since Komodo cannot measure the window; on Ollama the key is optional and can only lower the measured number. The brief builder sizes every prompt to half of that window. |
+| `key` | An `env:NAME` reference to an API key the server needs; optional, and the value is never stored or logged |
+| `self_hosted` | Marks a non-loopback server as free; without the key, a non-loopback endpoint is refused under `providers.paid: never` |
+| `first_byte_s` | Seconds to wait for the first byte of a reply, overriding the default of 60 s, or 300 s on loopback |
 
 The default configuration has one endpoint, `local`, at `http://localhost:11434/v1`, used only when it answers the probe.
 
@@ -4749,7 +4749,7 @@ The default configuration has one endpoint, `local`, at `http://localhost:11434/
   "endpoints": {
     "local": {
       "url": "http://localhost:11434/v1",
-      "models": { "standard": "Qwen3.6-27B" }
+      "models": { "[TODO: which weight the default local model serves (G-75)]": "Qwen3.6-27B" }
     }
   }
 }
