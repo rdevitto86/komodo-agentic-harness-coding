@@ -253,6 +253,63 @@ flowchart LR
 
 **Lookup:** [LLD Appendix S](lld.md#appendix-s-hld-detail-tables-goals-building-blocks-decisions-quality-risks-roadmap) holds the component responsibility table and the agent roster (tools, writes, pool slot).
 
+
+### 5.1 Layers and Import Order
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.2 CLI and Configuration
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.3 Event Spine and State Machine
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.4 Engine Internals
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.5 Workspace and Leases
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.6 Sessions, Agents and Briefs
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.7 Tools, Guard and Sandbox
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.8 Providers and HTTP
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.9 Skills, Rules and Output
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.10 Check, Review, Tester and Recovery
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.11 Scheduler, Cache and Observability
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.12 Backlog, Planning, Ship and Release
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.13 Install, Binary Lifecycle and Gate
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
+### 5.14 State Manager
+
+Written in the HLD rebuild. Until then, this subsystem is described in [Building Blocks](#5-building-blocks).
+
 ## 6. Runtime
 
 This chapter shows the parts at work, in three walkthroughs. The event spine is how every change to a group's state travels. The group lifecycle is the five stages a task group passes through. One session end to end follows a single model conversation from spawn to commit. All three take the engine's view; a person or the orchestrator appears only where named.
