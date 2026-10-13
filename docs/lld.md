@@ -11169,6 +11169,148 @@ Host cleanup matters: global Claude Code hooks call `~/.komodo/bin/komodo`, the 
 
 ---
 
+
+#### Operations view
+
+
+**In plain terms.** This section covers running the harness day to day. It covers scheduled jobs, what happens after a crash or a provider outage, how to watch a run, and what to do when something stops. The harness has no always-on background service; every step is a command that returns. Without these rules a stuck run would need a manual clean-up. The orchestrator drives the normal path; a person steps in only for the runbook actions below.
+
+#### Runbook summary
+
+**In plain terms.** A runbook is the list of situations an operator may meet and the one command that fixes each. The orchestrator handles most of these on its own; a person steps in for config, binary and shutdown decisions. Without it, each stuck state would need reading the design to find the right verb. Every entry here is a `komodo` verb from section 17.
+
+| Situation | Operator action |
+|---|---|
+| A group is Blocked | Read the reason in `status`; fix the cause; `komodo resume <run>` |
+| A builder asks for scope | `komodo scope approve|deny <group> --paths --reason` (the orchestrator usually answers) |
+| A provider limit | Nothing; the group pauses and resumes itself; `resume` retries sooner |
+| A run must stop | `komodo stop <run>`; later `resume` |
+| A run must be dropped | `komodo abandon <run> --reason` |
+| The config file was hand-edited | `komodo config --accept` |
+| The binary is stale or pinned | `komodo fresh`; `fresh --restart-runs` to move live runs |
+| After merging the epic PR | `komodo sync` |
+
+**What each one does**
+- **A group is Blocked:** The engine stopped a group and will not retry on its own. Read the reason in `status`, fix the cause (a failing test, a missing tool), then `komodo resume <run>` continues it.
+- **A builder asks for scope:** The builder needs a file outside its `files` list and stopped with `needs_scope`. `komodo scope approve|deny <group> --paths --reason` answers; approve adds the paths. The orchestrator usually answers unless the engine already denied.
+- **A provider limit:** The model provider's quota or 5-hour window ran out. Do nothing; the group pauses with a timer and resumes itself. `resume` retries sooner if the person prefers.
+- **A run must stop:** `komodo stop <run>` saves work, commits it as WIP and releases leases, the same clean shutdown as a signal. `resume` continues later.
+- **A run must be dropped:** `komodo abandon <run> --reason` stops it, frees its leases and keeps the evidence. Groups that depended on it block with `dependency`.
+- **The config file was hand-edited:** Every verb refuses with `config_tampered` because the stored hash no longer matches. `komodo config --accept` records the new hash and logs one audit row.
+- **The binary is stale or pinned:** The repo's `AGENTS.md` pin is above this binary, or a newer release exists. `komodo fresh` updates; `fresh --restart-runs` checkpoints live runs and moves them to the new binary.
+- **After merging the epic PR:** The person merged the pull request on GitHub. `komodo sync` fetches, prunes finished worktrees and refreshes the repo files.
+
+---
+
+#### Verification plan
+
+
+**In plain terms.** This is the list of end-to-end checks that prove the system works as a whole, across subsystems, on top of the per-component proofs behind each gate check. Each row names a scenario to run and the exact outcome that counts as a pass. Without it, every part could pass alone while the whole still failed on a real repo. A person or the orchestrator runs these; the fixture group `tg-fixture` is the test subject.
+
+| Check | Expected |
+|---|---|
+| Every phase | `go run ./cmd/komodo gate` passes; `GOOS=windows|linux|darwin go build ./...` cross-builds |
+| Full run | `komodo install`, then `komodo run tg-fixture` on a local model and `komodo status --wait done`, ends with the group landed per `ship.mode` and one ledger row per session |
+| Crash | `kill -9` mid-run, then `resume`, replays the group state and finishes with 0 repeated paid sessions |
+| Race | 2 engines on one group make exactly 1 landing; the loser ends in `lease.lost` and the hidden ref holds the winner's commit |
+| Regression | A fixture with a pre-existing failing test lands; a seeded regression blocks with `regression` |
+| Fresh repo | Following `README.md` on macOS and Windows reaches a shipped fixture group |
+| Scheduled | A `tick` from an `install --schedule` entry runs a fixture job; 3 forced failures end Blocked and wake `wait` |
+
+**What each one does**
+- **Every phase:** At the end of each delivery phase ([Host cleanup before phase 2 (Appendix P)](#host-cleanup-before-phase-2) and the HLD roadmap), the gate must pass from source, and the binary must compile for Windows, Linux and macOS.
+- **Full run:** Install Komodo, run the fixture task group on a local model, and wait with `status --wait done`. The group must land on its epic branch in the configured `ship.mode`, and the ledger must hold exactly one row per session that ran.
+- **Crash:** Force-kill the engine in the middle of a run, then `komodo resume`. The engine must replay the group state and finish without rerunning any session that costs money.
+- **Race:** Start two engines on the same group. Exactly one landing may happen; the other must end with `lease.lost`, and the hidden ref must hold the winner's commit.
+- **Regression:** Two fixtures: one whose repo already has a failing test must still land (with a warning); one where the builder's change breaks a passing test must block with reason `regression`.
+- **Fresh repo:** On a clean macOS and a clean Windows machine, following only `README.md` must get a fixture group all the way to shipped.
+- **Scheduled:** A scheduler tick fired by the OS entry that `install --schedule` wrote must run a fixture job. Forcing that job to fail 3 times must end it Blocked and wake a waiting `status --wait`.
+
+Each component's proof cases are the fixtures behind its gate checks; the security lens is required for the installer, binary lifecycle, HTTP stack, tool runtime, guardrails, sandbox and ship, even in economy mode.
+
+#### Host cleanup before phase 2
+
+
+**In plain terms.** The person's global Claude Code settings hold Komodo hooks, skill overrides and skills that call `~/.komodo/bin/komodo`. That is the path this binary installs to, and it has no `komodo guard` verb; it would answer with exit code 2, which Claude Code reads as "block this tool call", and every edit in every repo would be refused. So those entries are removed by hand before phase 2 code is written, and the harness is wired in during phases 7 to 9. Only the person touches `~/.claude`; the harness writes there only through `komodo init`, which the person runs (G-28).
+
+Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary installs to; it would answer `komodo guard` with exit 2, which Claude Code treats as a block. Before phase 2, by hand: remove the `Bash(python -m komodo:*)` allow rule, the `komodo guard` PreToolUse hook, the `komodo hook status` and `komodo hook prune` hooks, and the 36 `skillOverrides` from `~/.claude/settings.json`; delete the 5 Komodo skills under `~/.claude/skills/` (leave `synced/`); update the 5 stale lines in `~/.claude/AGENTS.md`. Phase 7: `komodo gate --install`. Phase 8: `komodo install` in this repo. Phase 9: the cutover column and the repo table; `doctor install` confirms 0 shadowing binaries and 0 Komodo hooks.
+
+**What each one does**
+- **Remove the `Bash(python -m komodo:*)` allow rule:** A global permission that lets Claude run a Python module named `komodo` without asking. Nothing in the harness runs Python, so the rule is deleted from `~/.claude/settings.json`.
+- **Remove the `komodo guard` PreToolUse hook:** This hook routes every tool call to a `komodo guard` verb. The harness guards inside the binary, in-process, so the hook is deleted and nothing replaces it.
+- **Remove the `komodo hook status` and `komodo hook prune` hooks:** Global hooks that print status and clean up. From phase 8 the repo's `SessionStart` hook runs `komodo status`, and the engine's startup sweep does the pruning.
+- **Remove the 36 `skillOverrides`:** Global entries that map `backlog`, `komodo`, `review` and 33 `standards-*` skills to files outside the binary. The harness embeds its skills in the binary, so all 36 are deleted.
+- **Delete the 5 Komodo skills under `~/.claude/skills/`:** `komodo`, `plan`, `run`, `respond` and `adhoc`, all written for verbs this binary does not have. From phase 8, `komodo skill get` serves the first four from the binary; `adhoc` has no replacement beyond `run --stage` in the `run` skill. The `synced/` folder holds Anthropic's skills and stays.
+- **Update the 5 stale lines in `~/.claude/AGENTS.md`:** Five lines name verbs this binary does not have (`komodo add`, `komodo pr create`, `komodo sync`, `/run <group>`, a `policy.json` reference). Before phase 2 they are dropped or pointed at plain git and `gh`; at phase 9 they are rewritten for the harness's verbs.
+- **Phase 7, `komodo gate --install`:** Places the development build at `~/.komodo/bin/komodo`, replacing the binary there. From here, the harness runs its own task groups.
+- **Phase 8, `komodo install` in this repo:** Writes the `AGENTS.md` block, the `CLAUDE.md` import line and the two `.claude/settings.json` entries into the Komodo repo itself.
+- **Phase 9, the cutover column and the repo table:** Applies the "At cutover" rewrites to `~/.claude/AGENTS.md` and replaces the repo's PR template line that called `komodo pr create` with the engine's own PR body template.
+- **`doctor install` confirms 0 shadowing binaries and 0 Komodo hooks:** The final check: no other `komodo` binary earlier on PATH, and no Komodo hook left in `~/.claude`. It also flags any `~/.claude` file that names a verb `help --json` no longer lists.
+
+**Where the stale entries sit.** `~/.local/bin/komodo` is a symlink to `~/.komodo/bin/komodo`, so every global hook reaches whichever binary sits at that path. The installed binary stays there, unused, until `komodo gate --install` replaces it in phase 7. The tables below name each entry to edit, by line.
+
+**`~/.claude/settings.json`**
+
+| Line | Stale entry | Before phase 2 |
+|---|---|---|
+| 26 | `Bash(python -m komodo:*)` | Removed; nothing runs Python |
+| 114 | `komodo guard` (`PreToolUse`) | Removed; nothing replaces it |
+| 124 | `komodo hook status --host claude` | Removed; from phase 8 the repo `SessionStart` hook runs `komodo status` |
+| 128 | `komodo hook prune --host claude` | Removed; the engine's startup sweep prunes |
+| `skillOverrides` | 36 entries: `backlog`, `komodo`, `review` and 33 `standards-*` | Removed |
+
+**`~/.claude/skills/`** (the 5 skills to delete; `synced/` stays because it holds Anthropic's skills)
+
+| Skill | Stale verbs it names | Replaced in phase 8 by |
+|---|---|---|
+| `komodo` | The old verb list: `init`, `migrate`, `next`, `brief`, `ingest`, `close` and more | Embedded; `skill get komodo` |
+| `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | Embedded; `skill get plan` |
+| `run` | `komodo run <group>` in the background, `komodo resume <group>` | Embedded; `skill get run` |
+| `respond` | `komodo threads`, `komodo gate` | Embedded; `skill get respond` |
+| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | None; `run --stage` in the `run` skill |
+
+**`~/.claude/AGENTS.md`** (the person's global instructions file)
+
+| Stale line | Before phase 2 | At cutover (phase 9) |
+|---|---|---|
+| 10: `komodo add` a task | A task in `docs/backlog/` | `komodo add backlog --task` |
+| 18: a `komodo/policy.json` reference | Dropped | A critical ref in `embed/policy.json` |
+| 21: open a PR with `komodo pr create` | `gh pr create` | The engine opens it (Ship) |
+| 22: after a merge, run `komodo sync` | Dropped | Restored |
+| 24: `/run <group>` in session, `komodo run <group>` headless | Removed | `komodo run <group>` |
+
+**The installed binary's verbs and their replacements.** A verb is a `komodo` subcommand. The installed binary has verbs this binary does not, so any hook, skill or doc that names one fails. `doctor install` flags any `~/.claude` file that names a verb missing from `help --json`.
+
+| Old verb | Now | What changed |
+|---|---|---|
+| `setup` | `install` | One verb places the binary and sets up a repo |
+| `init` | `init` | Same name, new job: it installs orchestrator skills and commands into the global Claude Code setup; repo setup moved to `install` |
+| `update` | `fresh` | The self-update has its own verb |
+| `lint` | `doctor backlog` | Backlog lint became a doctor check |
+| `detect` | `config --all` | Detected commands show with the config |
+| `check`, `ship` | `run --stage` | One flag runs a single stage |
+| `list`, `backlog`, `metrics` | `status` flags | Read-only views of the same state |
+| `pr` | The engine (Ship) | The engine opens the epic PR |
+| `threads` | `gh api` | Used from the `respond` skill |
+| `git-hook` | `gate --install-hooks` | The gate installs the git hooks |
+| `worktree` | Engine-internal | No verb; the engine cuts worktrees |
+| `migrate`, `ingest`, `comments`, `diff`, `tag`, `rephase`, `recall`, `eval` | Deleted | Nothing replaces them |
+
+**Run flags and `orch` verbs.** The run flags shrank from 6 to 1.
+
+| Old | Now | What changed |
+|---|---|---|
+| `--max-parallel` | `limits.pool_max` | A config key, never a per-run flag |
+| `--budget-tokens` | `limits.group_tokens` | A config key, never a per-run flag |
+| `--mode`, `--set` | Dropped | A setting changes only through `komodo config` |
+| `--detach`, `--until` | `--detach` is how `run` always works; `--until` dropped | No flag needed |
+| `orch start`, `orch wait` | `run`, `status --wait` | The orchestrator tier lost its prefix |
+| `orch plan`, `orch skill`, `orch scope` | `plan`, `skill`, `scope` | The prefix was dropped |
+| `orch agent` | A later minor version | Hosts have their own subagents |
+
+---
+
+
 ## Appendix A. Document Metadata, Conventions, Code Structure and Data Locations
 
 #### Document metadata
@@ -12068,38 +12210,6 @@ type GroupState[S any] interface {
 
 ## Appendix J. Check, Review, Tester, Error Recovery and Budgets
 
-#### Operations view
-
-
-**In plain terms.** This section covers running the harness day to day. It covers scheduled jobs, what happens after a crash or a provider outage, how to watch a run, and what to do when something stops. The harness has no always-on background service; every step is a command that returns. Without these rules a stuck run would need a manual clean-up. The orchestrator drives the normal path; a person steps in only for the runbook actions below.
-
-#### Runbook summary
-
-**In plain terms.** A runbook is the list of situations an operator may meet and the one command that fixes each. The orchestrator handles most of these on its own; a person steps in for config, binary and shutdown decisions. Without it, each stuck state would need reading the design to find the right verb. Every entry here is a `komodo` verb from section 17.
-
-| Situation | Operator action |
-|---|---|
-| A group is Blocked | Read the reason in `status`; fix the cause; `komodo resume <run>` |
-| A builder asks for scope | `komodo scope approve|deny <group> --paths --reason` (the orchestrator usually answers) |
-| A provider limit | Nothing; the group pauses and resumes itself; `resume` retries sooner |
-| A run must stop | `komodo stop <run>`; later `resume` |
-| A run must be dropped | `komodo abandon <run> --reason` |
-| The config file was hand-edited | `komodo config --accept` |
-| The binary is stale or pinned | `komodo fresh`; `fresh --restart-runs` to move live runs |
-| After merging the epic PR | `komodo sync` |
-
-**What each one does**
-- **A group is Blocked:** The engine stopped a group and will not retry on its own. Read the reason in `status`, fix the cause (a failing test, a missing tool), then `komodo resume <run>` continues it.
-- **A builder asks for scope:** The builder needs a file outside its `files` list and stopped with `needs_scope`. `komodo scope approve|deny <group> --paths --reason` answers; approve adds the paths. The orchestrator usually answers unless the engine already denied.
-- **A provider limit:** The model provider's quota or 5-hour window ran out. Do nothing; the group pauses with a timer and resumes itself. `resume` retries sooner if the person prefers.
-- **A run must stop:** `komodo stop <run>` saves work, commits it as WIP and releases leases, the same clean shutdown as a signal. `resume` continues later.
-- **A run must be dropped:** `komodo abandon <run> --reason` stops it, frees its leases and keeps the evidence. Groups that depended on it block with `dependency`.
-- **The config file was hand-edited:** Every verb refuses with `config_tampered` because the stored hash no longer matches. `komodo config --accept` records the new hash and logs one audit row.
-- **The binary is stale or pinned:** The repo's `AGENTS.md` pin is above this binary, or a newer release exists. `komodo fresh` updates; `fresh --restart-runs` checkpoints live runs and moves them to the new binary.
-- **After merging the epic PR:** The person merged the pull request on GitHub. `komodo sync` fetches, prunes finished worktrees and refreshes the repo files.
-
----
-
 ## Appendix N. Edge Cases
 
 #### Edge cases
@@ -12392,120 +12502,12 @@ Rule for new gaps: no section may say "later", "TBD" or carry a `[PENDING]` tag 
 
 ## Appendix P. Verification Plan and Cutover
 
-#### Verification plan
-
-
-**In plain terms.** This is the list of end-to-end checks that prove the system works as a whole, across subsystems, on top of the per-component proofs behind each gate check. Each row names a scenario to run and the exact outcome that counts as a pass. Without it, every part could pass alone while the whole still failed on a real repo. A person or the orchestrator runs these; the fixture group `tg-fixture` is the test subject.
-
-| Check | Expected |
-|---|---|
-| Every phase | `go run ./cmd/komodo gate` passes; `GOOS=windows|linux|darwin go build ./...` cross-builds |
-| Full run | `komodo install`, then `komodo run tg-fixture` on a local model and `komodo status --wait done`, ends with the group landed per `ship.mode` and one ledger row per session |
-| Crash | `kill -9` mid-run, then `resume`, replays the group state and finishes with 0 repeated paid sessions |
-| Race | 2 engines on one group make exactly 1 landing; the loser ends in `lease.lost` and the hidden ref holds the winner's commit |
-| Regression | A fixture with a pre-existing failing test lands; a seeded regression blocks with `regression` |
-| Fresh repo | Following `README.md` on macOS and Windows reaches a shipped fixture group |
-| Scheduled | A `tick` from an `install --schedule` entry runs a fixture job; 3 forced failures end Blocked and wake `wait` |
-
-**What each one does**
-- **Every phase:** At the end of each delivery phase ([Host cleanup before phase 2 (Appendix P)](#host-cleanup-before-phase-2) and the HLD roadmap), the gate must pass from source, and the binary must compile for Windows, Linux and macOS.
-- **Full run:** Install Komodo, run the fixture task group on a local model, and wait with `status --wait done`. The group must land on its epic branch in the configured `ship.mode`, and the ledger must hold exactly one row per session that ran.
-- **Crash:** Force-kill the engine in the middle of a run, then `komodo resume`. The engine must replay the group state and finish without rerunning any session that costs money.
-- **Race:** Start two engines on the same group. Exactly one landing may happen; the other must end with `lease.lost`, and the hidden ref must hold the winner's commit.
-- **Regression:** Two fixtures: one whose repo already has a failing test must still land (with a warning); one where the builder's change breaks a passing test must block with reason `regression`.
-- **Fresh repo:** On a clean macOS and a clean Windows machine, following only `README.md` must get a fixture group all the way to shipped.
-- **Scheduled:** A scheduler tick fired by the OS entry that `install --schedule` wrote must run a fixture job. Forcing that job to fail 3 times must end it Blocked and wake a waiting `status --wait`.
-
-Each component's proof cases are the fixtures behind its gate checks; the security lens is required for the installer, binary lifecycle, HTTP stack, tool runtime, guardrails, sandbox and ship, even in economy mode.
-
 #### Proof cases per component
 
 **In plain terms.** A proof case is one fixture, a small made-up repo, fake server or forced failure, plus the exact result that counts as a pass. Each component below lists its own proof cases, and a builder finishing that component's task group is done only when every case passes. The gate ([Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate)) runs these as tests, so a lost case would mean a component with no exit test. The end-to-end checks above cover the whole system; these cover each part on its own.
 
 **State manager ([Defaults, performance and proof (Appendix C)](#defaults-performance-and-proof))**
 - The 12 proof cases are listed under [Defaults, performance and proof (Appendix C)](#defaults-performance-and-proof), Defaults, performance and proof, and are not repeated here.
-
-#### Host cleanup before phase 2
-
-
-**In plain terms.** The person's global Claude Code settings hold Komodo hooks, skill overrides and skills that call `~/.komodo/bin/komodo`. That is the path this binary installs to, and it has no `komodo guard` verb; it would answer with exit code 2, which Claude Code reads as "block this tool call", and every edit in every repo would be refused. So those entries are removed by hand before phase 2 code is written, and the harness is wired in during phases 7 to 9. Only the person touches `~/.claude`; the harness writes there only through `komodo init`, which the person runs (G-28).
-
-Global Claude Code hooks call `~/.komodo/bin/komodo`, the path this binary installs to; it would answer `komodo guard` with exit 2, which Claude Code treats as a block. Before phase 2, by hand: remove the `Bash(python -m komodo:*)` allow rule, the `komodo guard` PreToolUse hook, the `komodo hook status` and `komodo hook prune` hooks, and the 36 `skillOverrides` from `~/.claude/settings.json`; delete the 5 Komodo skills under `~/.claude/skills/` (leave `synced/`); update the 5 stale lines in `~/.claude/AGENTS.md`. Phase 7: `komodo gate --install`. Phase 8: `komodo install` in this repo. Phase 9: the cutover column and the repo table; `doctor install` confirms 0 shadowing binaries and 0 Komodo hooks.
-
-**What each one does**
-- **Remove the `Bash(python -m komodo:*)` allow rule:** A global permission that lets Claude run a Python module named `komodo` without asking. Nothing in the harness runs Python, so the rule is deleted from `~/.claude/settings.json`.
-- **Remove the `komodo guard` PreToolUse hook:** This hook routes every tool call to a `komodo guard` verb. The harness guards inside the binary, in-process, so the hook is deleted and nothing replaces it.
-- **Remove the `komodo hook status` and `komodo hook prune` hooks:** Global hooks that print status and clean up. From phase 8 the repo's `SessionStart` hook runs `komodo status`, and the engine's startup sweep does the pruning.
-- **Remove the 36 `skillOverrides`:** Global entries that map `backlog`, `komodo`, `review` and 33 `standards-*` skills to files outside the binary. The harness embeds its skills in the binary, so all 36 are deleted.
-- **Delete the 5 Komodo skills under `~/.claude/skills/`:** `komodo`, `plan`, `run`, `respond` and `adhoc`, all written for verbs this binary does not have. From phase 8, `komodo skill get` serves the first four from the binary; `adhoc` has no replacement beyond `run --stage` in the `run` skill. The `synced/` folder holds Anthropic's skills and stays.
-- **Update the 5 stale lines in `~/.claude/AGENTS.md`:** Five lines name verbs this binary does not have (`komodo add`, `komodo pr create`, `komodo sync`, `/run <group>`, a `policy.json` reference). Before phase 2 they are dropped or pointed at plain git and `gh`; at phase 9 they are rewritten for the harness's verbs.
-- **Phase 7, `komodo gate --install`:** Places the development build at `~/.komodo/bin/komodo`, replacing the binary there. From here, the harness runs its own task groups.
-- **Phase 8, `komodo install` in this repo:** Writes the `AGENTS.md` block, the `CLAUDE.md` import line and the two `.claude/settings.json` entries into the Komodo repo itself.
-- **Phase 9, the cutover column and the repo table:** Applies the "At cutover" rewrites to `~/.claude/AGENTS.md` and replaces the repo's PR template line that called `komodo pr create` with the engine's own PR body template.
-- **`doctor install` confirms 0 shadowing binaries and 0 Komodo hooks:** The final check: no other `komodo` binary earlier on PATH, and no Komodo hook left in `~/.claude`. It also flags any `~/.claude` file that names a verb `help --json` no longer lists.
-
-**Where the stale entries sit.** `~/.local/bin/komodo` is a symlink to `~/.komodo/bin/komodo`, so every global hook reaches whichever binary sits at that path. The installed binary stays there, unused, until `komodo gate --install` replaces it in phase 7. The tables below name each entry to edit, by line.
-
-**`~/.claude/settings.json`**
-
-| Line | Stale entry | Before phase 2 |
-|---|---|---|
-| 26 | `Bash(python -m komodo:*)` | Removed; nothing runs Python |
-| 114 | `komodo guard` (`PreToolUse`) | Removed; nothing replaces it |
-| 124 | `komodo hook status --host claude` | Removed; from phase 8 the repo `SessionStart` hook runs `komodo status` |
-| 128 | `komodo hook prune --host claude` | Removed; the engine's startup sweep prunes |
-| `skillOverrides` | 36 entries: `backlog`, `komodo`, `review` and 33 `standards-*` | Removed |
-
-**`~/.claude/skills/`** (the 5 skills to delete; `synced/` stays because it holds Anthropic's skills)
-
-| Skill | Stale verbs it names | Replaced in phase 8 by |
-|---|---|---|
-| `komodo` | The old verb list: `init`, `migrate`, `next`, `brief`, `ingest`, `close` and more | Embedded; `skill get komodo` |
-| `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | Embedded; `skill get plan` |
-| `run` | `komodo run <group>` in the background, `komodo resume <group>` | Embedded; `skill get run` |
-| `respond` | `komodo threads`, `komodo gate` | Embedded; `skill get respond` |
-| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | None; `run --stage` in the `run` skill |
-
-**`~/.claude/AGENTS.md`** (the person's global instructions file)
-
-| Stale line | Before phase 2 | At cutover (phase 9) |
-|---|---|---|
-| 10: `komodo add` a task | A task in `docs/backlog/` | `komodo add backlog --task` |
-| 18: a `komodo/policy.json` reference | Dropped | A critical ref in `embed/policy.json` |
-| 21: open a PR with `komodo pr create` | `gh pr create` | The engine opens it (Ship) |
-| 22: after a merge, run `komodo sync` | Dropped | Restored |
-| 24: `/run <group>` in session, `komodo run <group>` headless | Removed | `komodo run <group>` |
-
-**The installed binary's verbs and their replacements.** A verb is a `komodo` subcommand. The installed binary has verbs this binary does not, so any hook, skill or doc that names one fails. `doctor install` flags any `~/.claude` file that names a verb missing from `help --json`.
-
-| Old verb | Now | What changed |
-|---|---|---|
-| `setup` | `install` | One verb places the binary and sets up a repo |
-| `init` | `init` | Same name, new job: it installs orchestrator skills and commands into the global Claude Code setup; repo setup moved to `install` |
-| `update` | `fresh` | The self-update has its own verb |
-| `lint` | `doctor backlog` | Backlog lint became a doctor check |
-| `detect` | `config --all` | Detected commands show with the config |
-| `check`, `ship` | `run --stage` | One flag runs a single stage |
-| `list`, `backlog`, `metrics` | `status` flags | Read-only views of the same state |
-| `pr` | The engine (Ship) | The engine opens the epic PR |
-| `threads` | `gh api` | Used from the `respond` skill |
-| `git-hook` | `gate --install-hooks` | The gate installs the git hooks |
-| `worktree` | Engine-internal | No verb; the engine cuts worktrees |
-| `migrate`, `ingest`, `comments`, `diff`, `tag`, `rephase`, `recall`, `eval` | Deleted | Nothing replaces them |
-
-**Run flags and `orch` verbs.** The run flags shrank from 6 to 1.
-
-| Old | Now | What changed |
-|---|---|---|
-| `--max-parallel` | `limits.pool_max` | A config key, never a per-run flag |
-| `--budget-tokens` | `limits.group_tokens` | A config key, never a per-run flag |
-| `--mode`, `--set` | Dropped | A setting changes only through `komodo config` |
-| `--detach`, `--until` | `--detach` is how `run` always works; `--until` dropped | No flag needed |
-| `orch start`, `orch wait` | `run`, `status --wait` | The orchestrator tier lost its prefix |
-| `orch plan`, `orch skill`, `orch scope` | `plan`, `skill`, `scope` | The prefix was dropped |
-| `orch agent` | A later minor version | Hosts have their own subagents |
-
----
 
 ## Appendix Q. Component Traceability
 
