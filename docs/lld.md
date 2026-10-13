@@ -5615,6 +5615,7 @@ The engine measures the window each session really runs with, in tokens, and nev
 | Ollama | `/api/ps` `context_length` for the loaded model; an unloaded model is first loaded with an empty request; a typed `ctx` only lowers it |
 | Other `http:` servers | The endpoint's `ctx`, required |
 
+- The install probe of an OpenAI-compatible endpoint sends `GET /models` to its `/v1` base and counts the server as reachable when it answers within 1 s.
 - Ollama is detected at the probe by `GET /api/version` on the endpoint's host; an answer means `/api/ps` is usable.
 - An endpoint below `providers.ctx_floor` fails `doctor`, which names the fix `OLLAMA_CONTEXT_LENGTH=262144`, and is skipped at run time with `provider.skip` reason `ctx_below_floor`.
 - The default 262,144 applies to any model neither measured nor in the catalog. A window smaller than the real one only shrinks briefs; a larger one would let a server cut the prompt. The catalog therefore lists every pinned model whose window is under the default.
