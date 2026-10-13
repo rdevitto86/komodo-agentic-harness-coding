@@ -186,7 +186,7 @@ def links(text, doc, ref):
     text = re.sub(r"\]\(#([^)]+)\)", same, text)
     text = re.sub(rf"\]\({other}\.md#([^)]+)\)", cross, text)
     text = re.sub(rf"\]\({other}\.md\)", f"](../{other}/index.md)", text)
-    text = re.sub(r"\]\(\.\./([^)#]+)\)", rf"]({REPO}/{ref}/\1)", text)
+    text = re.sub(r"\]\(\.\./(?!(?:hld|lld)/)([^)#]+)\)", rf"]({REPO}/{ref}/\1)", text)
     return re.sub(r"\]\((?!https?:|#|\.\./|appendix-|chapter-|index\.md)([^)]+\.md(?:#[^)]*)?)\)", r"](../\1)", text)
 
 
@@ -222,13 +222,22 @@ def glossary():
     return out
 
 
+def heads(content):
+    """Return the slugs of the headings outside code fences, repeated as often as they appear."""
+    return [slug(m.group(1)) for line, code in fenced(content.split("\n")) if not code for m in [HEAD.match(line)] if m]
+
+
 def children(number, title, content):
     """Cut one chapter into its opening page and one page per `### N.M` heading, each tagged with the chapter."""
     parts = SUB.split(content)
     out = [(f"chapter-{number}.md", title, parts[0], title)]
     for head, body in zip(parts[1::2], parts[2::2]):
-        sub = re.match(r"### (?:\d+|T)\.(\d+) ", head).group(1)
+        n, sub = re.match(r"### (\d+|T)\.(\d+) ", head).groups()
+        if n.lower() != number:
+            sys.exit(f"'{head}' sits under chapter {number}")
         out.append((f"chapter-{number}-{sub}.md", head[4:], body, title))
+    if len({name for name, *_ in out}) != len(out):
+        sys.exit(f"chapter {number} repeats a child page number")
     return out
 
 
@@ -251,8 +260,12 @@ def chapters(doc):
         out.append((f"appendix-{letter}.md", head[3:], content.rstrip().rstrip("-"), None))
     ANCHORS[doc] = {}
     for name, title, content, _ in out:
-        for anchor in names(title) | {slug(h) for h in HEAD.findall(content)}:
-            ANCHORS[doc].setdefault(anchor, []).append((name, title))
+        found = heads(content)
+        for anchor in names(title) | set(found):
+            if (name, title) not in ANCHORS[doc].setdefault(anchor, []):
+                ANCHORS[doc][anchor].append((name, title))
+            if found.count(anchor) > 1:
+                ANCHORS[doc][anchor].append((f"{name} (twice)", title))
     return out
 
 
@@ -273,7 +286,7 @@ def split(doc, pages, ref):
         else:
             groups[chapter].append({title: f"{doc}/{name}"})
     nav = [{t: g[0]["Overview"]} if isinstance(g, list) and len(g) == 1 else {t: g} for e in nav for t, g in e.items()]
-    return nav + [{"Appendices": apps}]
+    return nav + ([{"Appendices": apps}] if apps else [])
 
 
 def config(nav):
