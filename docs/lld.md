@@ -11112,7 +11112,7 @@ The state manager is the only code that reads or writes the harness's runtime st
 
 The purpose of the subsystem, and who it talks to, is in the HLD: [State Manager](hld.md#514-state-manager).
 
-The design pass proposed four defaults that the owner has not confirmed: the manager runs inside each process with no daemon, six items stay outside it, a bad record is quarantined and never repaired, and the snapshot holds the field list given in [Group snapshot](#group-snapshot). This chapter writes them as designed. `[TODO: owner confirmation of the state manager defaults, and the performance and caching rules that went with them (G-NEW-9)]`
+The design pass proposed four defaults that the owner has not confirmed: the manager runs inside each process with no daemon, six items stay outside it, a bad record is quarantined and never repaired, and the snapshot holds the field list given in [Group snapshot](#group-snapshot). This chapter writes them as designed. `[TODO: owner confirmation of the state manager defaults, and the performance and caching rules that went with them (G-197)]`
 
 **Concepts**
 
@@ -11161,7 +11161,7 @@ internal/core/lock.go   create-only and rename-aside file helpers; only state ca
 embed/state.schema.json generated at build; the gate fails when it disagrees with the Go types
 ```
 
-Group state lives in `state/groupstate.go`. The package imports nothing above it: group state receives `Next()` as an `apply` function, so `state` never imports `engine` ([Event Spine and State Machine](#2-event-spine-and-state-machine)). The names in this layout are the design's; the exported Go names in this chapter are derived from stated behaviour. `[TODO: owner confirmation of the exported names and signatures, and how a package obtains the manager (G-NEW-1)]`
+Group state lives in `state/groupstate.go`. The package imports nothing above it: group state receives `Next()` as an `apply` function, so `state` never imports `engine` ([Event Spine and State Machine](#2-event-spine-and-state-machine)). The names in this layout are the design's; the exported Go names in this chapter are derived from stated behaviour. `[TODO: owner confirmation of the exported names and signatures, and how a package obtains the manager (G-189)]`
 
 **Entry points**
 
@@ -11171,8 +11171,8 @@ Group state lives in `state/groupstate.go`. The package imports nothing above it
 | A part reads a record | `Get`, `List`, `Tail` or `Watch` in `manager.go` |
 | A group starts or resumes | `Open`, then `Load`, in `groupstate.go` |
 | A group appends an event | `Append` in `groupstate.go` |
-| The build writes the schema | `schema.go` `[TODO: name of the generator entry point (G-NEW-1)]` |
-| A record of an older version is read | `migrate.go` `[TODO: name of the migration entry point (G-NEW-1)]` |
+| The build writes the schema | `schema.go` `[TODO: name of the generator entry point (G-189)]` |
+| A record of an older version is read | `migrate.go` `[TODO: name of the migration entry point (G-189)]` |
 
 ### 13.3 Data Model
 
@@ -11193,7 +11193,7 @@ type Header struct {
 
 // Body is the kind-specific part of a record; each kind has one struct in kinds.go.
 type Body struct {
-	// [TODO: whether Body is an interface that kind structs implement or a generic value (G-NEW-1)]
+	// [TODO: whether Body is an interface that kind structs implement or a generic value (G-189)]
 }
 
 // Record is one stored record as a reader receives it.
@@ -11235,12 +11235,12 @@ type Record struct {
 
 **Versioning.**
 - **Older `v`:** `Get`, `List` and `Tail` run the registered migration steps in memory until the record reaches the kind's current version. A fixture with `v: 0` reads as `v: 1`.
-- **Newer `v`:** `[TODO: what a binary does with a record whose v is newer than the kinds it knows (G-NEW-4)]`
-- **Record checksum:** each read verifies the checksum or hash before the version. `[TODO: where a replaced record stores its checksum or hash, since the six header fields hold none, and which append kinds carry a checksum (G-NEW-4)]`
+- **Newer `v`:** `[TODO: what a binary does with a record whose v is newer than the kinds it knows (G-192)]`
+- **Record checksum:** each read verifies the checksum or hash before the version. `[TODO: where a replaced record stores its checksum or hash, since the six header fields hold none, and which append kinds carry a checksum (G-192)]`
 
 #### Record kinds
 
-Each kind is registered once; the registry is the source of `embed/state.schema.json`. A file that is neither a kind nor on the exclusion list in [Items outside the manager](#items-outside-the-manager) does not exist. The shapes below are derived from the attributes the design gives each kind (G-NEW-1).
+Each kind is registered once; the registry is the source of `embed/state.schema.json`. A file that is neither a kind nor on the exclusion list in [Items outside the manager](#items-outside-the-manager) does not exist. The shapes below are derived from the attributes the design gives each kind (G-189).
 
 ```go
 // Primitive names one of the four ways the manager changes bytes on disk.
@@ -11351,7 +11351,7 @@ The body of a `group` record is the engine's `State`, with every field defined o
 | `runs/<group-id>/state.json` | One `group` record: header and `State` body |
 | `<path>.bad-*` | A record that failed a check, renamed in place of the original; never repaired automatically, reported by `doctor` |
 
-Event versioning: the envelope's `version` is 1. `[TODO: how an event line with an older version is migrated (G-NEW-4)]` `[TODO: the suffix after .bad- and the line terminator and length limit of a state file line (G-NEW-6)]`
+Event versioning: the envelope's `version` is 1. `[TODO: how an event line with an older version is migrated (G-192)]` `[TODO: the suffix after .bad- and the line terminator and length limit of a state file line (G-194)]`
 
 ### 13.4 Interfaces
 
@@ -11371,7 +11371,7 @@ type Writer interface {
 }
 ```
 
-`[TODO: the parameters and results of Append, Claim and Remove, which the design gives only as a first draft (G-NEW-1)]`
+`[TODO: the parameters and results of Append, Claim and Remove, which the design gives only as a first draft (G-189)]`
 
 | Method | An error means | The disk afterwards |
 |---|---|---|
@@ -11380,7 +11380,7 @@ type Writer interface {
 | `Claim` | The record exists, or a check failed | The existing record is unchanged |
 | `Remove` | A check failed, or `rev` is stale | The record stays |
 
-The design says a refused write returns `state_invalid` with the field path. `[TODO: the error values of a stale rev, an unlisted writer, a taken claim and a failed disk write, and whether each is state_invalid (G-NEW-3)]` `[TODO: how the manager identifies the calling component for the writer check (G-NEW-3)]` `[TODO: which call performs the takeover of a stale record; Writer has no stale-claim call (G-NEW-6)]`
+The design says a refused write returns `state_invalid` with the field path. `[TODO: the error values of a stale rev, an unlisted writer, a taken claim and a failed disk write, and whether each is state_invalid (G-191)]` `[TODO: how the manager identifies the calling component for the writer check (G-191)]` `[TODO: which call performs the takeover of a stale record; Writer has no stale-claim call (G-194)]`
 
 ```go
 // InvalidError is returned for a write that breaks the schema or an invariant; the disk is untouched.
@@ -11405,7 +11405,7 @@ type Reader interface {
 	List(kind string) ([]Record, error)
 	// Reads a state file's events from a sequence number onward.
 	Tail(sequence uint64) ([]Event, error)
-	// [TODO: the Watch method and the name of its result type; Wake is taken by the event wake enumeration (G-NEW-2)]
+	// [TODO: the Watch method and the name of its result type; Wake is taken by the event wake enumeration (G-190)]
 }
 ```
 
@@ -11414,10 +11414,10 @@ type Reader interface {
 | Method | An error means | The disk afterwards |
 |---|---|---|
 | `Get` | The record failed a check | Moved aside as `.bad-*`; the owning group blocks `state_invalid` |
-| `List` | A record of the kind failed a check | Same for that record `[TODO: whether List also returns the good records (G-NEW-3)]` |
+| `List` | A record of the kind failed a check | Same for that record `[TODO: whether List also returns the good records (G-191)]` |
 | `Tail` | A line before the last failed its checksum | The record is moved aside and the group blocks `state_invalid` |
 
-`[TODO: what Get returns for a record that does not exist (G-NEW-3)]`
+`[TODO: what Get returns for a record that does not exist (G-191)]`
 
 #### Group state calls
 
@@ -11447,7 +11447,7 @@ The five calls are `Open(group)`, `Append(event)`, `Snapshot(state)`, `Load(appl
 | `Load` | The snapshot or a line before the last is bad | The record is moved aside and the group blocks `state_invalid` |
 | `Tail` | A line before the last failed its checksum | The record is moved aside and the group blocks `state_invalid` |
 
-`[TODO: what Drive does when Snapshot or Append refuses (G-NEW-3)]`
+`[TODO: what Drive does when Snapshot or Append refuses (G-191)]`
 
 **Who calls what**
 
@@ -11504,7 +11504,7 @@ func SaveTimer(r Reader, w Writer, key string, body Body) (int, error) {
 }
 ```
 
-`[TODO: the rev a caller passes when the record does not exist yet, and whether Replace creates a record (G-NEW-5)]`
+`[TODO: the rev a caller passes when the record does not exist yet, and whether Replace creates a record (G-193)]`
 
 #### Algorithms
 
@@ -11558,7 +11558,7 @@ The lock is per record key, so two groups never wait on each other. Two `komodo`
 1. Check that the caller is a listed writer and that its `rev` is current.
 2. Delete the file. A queue item taken by a pool slot, a released lease, a landed group's records and a fired timer are removed this way.
 
-`[TODO: the temp file name and folder, whether the folder is synced after the rename, and the name a stale file gets when renamed aside (G-NEW-6)]`
+`[TODO: the temp file name and folder, whether the folder is synced after the rename, and the name a stale file gets when renamed aside (G-194)]`
 
 ##### State manager read path
 
@@ -11588,7 +11588,7 @@ flowchart TD
 3. An older `v` runs through the registered steps in memory; the read writes nothing.
 4. A failure on the last line of a state file is the cut-short case below. Any other failure moves the record aside as `.bad-*`, never repairs it, and blocks the owning group `state_invalid`; `doctor` reports it.
 
-`[TODO: whether a read that finds a bad record in a file other than a state file also blocks a group, and which code appends the group.blocked event when the bad record is the group's own state file (G-NEW-7)]`
+`[TODO: whether a read that finds a bad record in a file other than a state file also blocks a group, and which code appends the group.blocked event when the bad record is the group's own state file (G-195)]`
 
 ##### Group state append and snapshot
 
@@ -11616,7 +11616,7 @@ sequenceDiagram
 2. `Append` stamps `sequence`, `timestamp` and `checksum`; `Drive` has already set `stage` and `stale`, since it holds the current epoch. It checks the event against the schema, appends and syncs it, and returns the sequence before `Next()` runs. The outbox's `action.start` and `action.done` lines go through the same call ([Actions](#actions)).
 3. `Snapshot` runs after every `Next()` and decides when to write: every 50 events (the interval is in [Configuration and Constants](#28-configuration-and-constants)) or on a stage change. It refuses a state whose `sequence` is not the last one appended, so a snapshot never runs ahead of or behind its events.
 
-`[TODO: how Open learns the state file's last sequence, how Open checks the lease, and how Snapshot detects a stage change when it receives only the generic state S (G-NEW-8)]`
+`[TODO: how Open learns the state file's last sequence, how Open checks the lease, and how Snapshot detects a stage change when it receives only the generic state S (G-196)]`
 
 ##### Group state replay with Load
 
@@ -11644,13 +11644,13 @@ sequenceDiagram
 5. A failing line before the last is a bad record: the record is moved aside and the group blocks `state_invalid`.
 6. Return the rebuilt state and the follow-on events that `Next()` ordered but that never reached disk. `Drive` appends those first, then runs the group's `ActionsOpen` before any new event ([Behaviour](#25-behaviour)).
 
-Replay costs at most one snapshot interval of lines. `[TODO: measure the replay target (G-19)]` `[TODO: what Load returns for a group that has no snapshot yet, since the generic S has no initial value (G-NEW-8)]`
+Replay costs at most one snapshot interval of lines. `[TODO: measure the replay target (G-19)]` `[TODO: what Load returns for a group that has no snapshot yet, since the generic S has no initial value (G-196)]`
 
-`[TODO: whether the cut line is removed from the file, which writer appends state.truncated, and whether the dropped line's sequence number is reused (G-NEW-7)]`
+`[TODO: whether the cut line is removed from the file, which writer appends state.truncated, and whether the dropped line's sequence number is reused (G-195)]`
 
 ##### State manager performance and caching
 
-`[TODO: owner confirmation of the performance and caching rules the design pass proposed: validation as generated Go code without reflection, short verbs loading only the kinds they touch, and a per-process cache of decoded records keyed by path and rev (G-NEW-9)]`
+`[TODO: owner confirmation of the performance and caching rules the design pass proposed: validation as generated Go code without reflection, short verbs loading only the kinds they touch, and a per-process cache of decoded records keyed by path and rev (G-197)]`
 
 ##### State manager generated schema
 
@@ -11674,7 +11674,7 @@ stateDiagram-v2
 | State | Event | Next state | True afterwards |
 |---|---|---|---|
 | Absent | `Claim` | Present | Exactly one process holds the file |
-| Absent | `Replace` | Present | The record is whole and has its first `rev` `[TODO: G-NEW-5]` |
+| Absent | `Replace` | Present | The record is whole and has its first `rev` `[TODO: G-193]` |
 | Present | `Replace` with the current `rev` | Present | `rev` is one higher; readers see the old or the new record |
 | Present | `Replace` or `Remove` with a stale `rev` | Present | Refused; the file is unchanged |
 | Present | `Remove` | Absent | The file is deleted |
@@ -11774,13 +11774,13 @@ Fixtures use a temporary directory per test; no case needs a live provider.
 | G-74 | Locking for machine-shared files; the engine's reaction to a failed write of `quota.json` or a timer record |
 | G-80 | Locking for the group ledger and the quota file |
 | G-182 | The checksum algorithm, the bytes it covers and how it is written (G-99 records the same item) |
-| G-NEW-1 | Exported names and signatures derived here; how a package obtains the manager; entry points |
-| G-NEW-3 | The caller identity for the writer check; the error values of each refusal |
-| G-NEW-4 | Where a record stores its checksum or hash; a `v` newer than the binary knows |
-| G-NEW-5 | The `rev` of a first write |
-| G-NEW-6 | File-level details of the primitives and the takeover call |
-| G-NEW-7 | Cut-short and bad-line handling |
-| G-NEW-8 | Group state: `Open`, `Snapshot` stage detection and `Load` without a snapshot |
+| G-189 | Exported names and signatures derived here; how a package obtains the manager; entry points |
+| G-191 | The caller identity for the writer check; the error values of each refusal |
+| G-192 | Where a record stores its checksum or hash; a `v` newer than the binary knows |
+| G-193 | The `rev` of a first write |
+| G-194 | File-level details of the primitives and the takeover call |
+| G-195 | Cut-short and bad-line handling |
+| G-196 | Group state: `Open`, `Snapshot` stage detection and `Load` without a snapshot |
 
 **Can wait**
 
@@ -11791,8 +11791,8 @@ Fixtures use a temporary directory per test; no case needs a live provider.
 | G-120 | Locking for `config.json`, `config.sha` and `config.log` |
 | G-147 | How a `timer.due` from outside `Drive` reaches a group's state file |
 | G-151 | Shapes of `ledger/groups.json` and `tasks.json`; locking of machine-shared ledger files |
-| G-NEW-2 | The `Watch` method and its result type name |
-| G-NEW-9 | Owner confirmation of the four defaults, performance and caching |
+| G-190 | The `Watch` method and its result type name |
+| G-197 | Owner confirmation of the four defaults, performance and caching |
 
 ## 15. Verification, Operations and Cutover
 
@@ -12878,6 +12878,15 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-186 | Race check | How two engines start on one group, since `run` refuses a group another run holds (chapter 1); which machine or clone the second engine runs on | Owner decision; then 15.1 and chapter 4 |
 | G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file before the cleanup; then 15.3 |
 | G-188 | Cutover | The repo table that phase 9 applies: which repository files name retired verbs and the rewrite for each; the sources name it and do not list it | Owner decision; then 15.4 |
+| G-189 | State manager, names | Exported names and signatures the design does not give: `KindSpec`, `RegisterKind`, `Primitive`, `Migration`, `InvalidError`, whether `Body` is an interface or a generic value, the parameters and results of `Append`, `Claim` and `Remove`, how a package obtains the manager, and the schema generator and migration entry points; chapter 7's `Store` uses `body any` | Owner confirms the shapes in 13.2 to 13.4, with chapter 7 |
+| G-190 | State manager, reads | The `Watch` method: the name of its result type (`Wake` is taken by chapter 2's wake enumeration), what it returns, and whether it uses operating-system notification or polling | Owner decision; then 13.4 |
+| G-191 | State manager, errors | How the manager identifies the calling component for the writer check; the error values of a stale `rev`, an unlisted writer, a taken claim, a failed disk write and a read of an absent record; whether `List` returns the good records beside an error; what `Drive` does when `Append` or `Snapshot` refuses | Owner decision; then 13.4 and chapter 3 |
+| G-192 | State manager, formats | Where a replaced record stores its checksum or hash (the six header fields hold none); whether the append kinds other than events carry a checksum; what a binary does with a `v` newer than it knows; how an event line with an older `version` is migrated | Owner decision with G-30 and G-182; then 13.3 |
+| G-193 | State manager, `rev` | The `rev` a caller passes when a record does not exist yet, whether `Replace` creates a record, and the `rev` of a first write | Owner decision; then 13.5 and 13.6 |
+| G-194 | State manager, primitives | The temp file name and folder of `Replace`, whether the folder is synced after the rename, the suffix after `.bad-`, the name of a stale file renamed aside, the line terminator and length limit of a state file line, and which call performs a takeover since `Writer` has no stale-claim call (shared with chapter 4) | Owner decision; then 13.3 to 13.5 and 4.5 |
+| G-195 | State manager, damage | Whether a dropped cut-short line is removed from the file, which writer appends `state.truncated`, whether the dropped line's `sequence` is reused, what `Tail` returns for a last line a live writer has not finished, what is moved aside for a bad line before the last (the line or the file), and which code appends `group.blocked` when the group's own state file is the bad record | Owner decision; then 13.5 and 13.7 |
+| G-196 | Group state | How `Open` learns the state file's last `sequence` and checks the lease; how `Snapshot` detects a stage change from the generic `S`; what `Load` returns for a group with no snapshot | Owner decision; then 13.5 |
+| G-197 | State manager, defaults | Owner confirmation of the four defaults the design pass proposed (in-process service with no daemon, the six exclusions, quarantine without automatic repair, the snapshot field list) and the performance and caching rules (generated validation without reflection, load only the touched kinds, per-process record cache by path and `rev`) | Owner confirmation |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (chapter 11)](#11-backlog-planning-ship-and-release)).
