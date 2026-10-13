@@ -7901,7 +7901,173 @@ classDiagram
 - Landings are keyed `(group, fence, merge base)`, one at a time; a stale fence refuses to push.
 - Releases are signed with `~/.komodo/release.key`, mode 0600, on the owner's machine.
 
-**Lookup:** [Appendix L](#appendix-l-backlog-planning-ship-and-release) holds the backlog, planner, ship and release tables.
+**Lookup:** [Appendix L](#11-backlog-planning-ship-and-release) holds the backlog, planner, ship and release tables.
+
+
+
+#### Backlog and planning
+
+
+**In plain terms.** The backlog is the set of Markdown files under `docs/backlog/` that describe the work: an epic holds task groups, a group holds up to 8 tasks, a task names at most 5 files (see Glossary). Planning is how those files get written: the planner, a model session, drafts them from a goal and Go code checks every draft before a file is saved. This section gives the file grammar, the lint (an automatic rule check) that checks it, and the planner's two passes. Without it, builders would receive oversized or conflicting work and groups would collide on the same files. A person or the orchestrator runs `komodo plan`; the planner writes; the engine lints; a person may edit the files by hand.
+
+#### Grammar
+
+**In plain terms.** The grammar is the fixed folder layout and the fixed set of fields each backlog file must carry. It lets Go code read a plan mechanically: which files a group may touch, what it depends on, and how big each task is. Without fixed fields, the lint in [Lint (`komodo doctor backlog`) (Appendix L)](#lint-komodo-doctor-backlog) and the dependency graph in [Planner (Appendix L)](#planner) could not be computed. The planner writes these fields; a person may edit them; `komodo doctor backlog` checks them.
+
+`docs/backlog/epic-N/tg-N.M/{TG.md, tsk-*.md}`. `TG.md` carries `id:` (the group's UUID version 7, written when the group is created), `subsystem:` (a component name or `none`), `touches:` (globs), `priority:` (`high` or normal), `files`, dependencies and acceptance items. `tsk-*.md` carries the card, `done_when` and `estimate_lines:`.
+
+**What each one does**
+- **`docs/backlog/epic-N/tg-N.M/`:** One folder per epic (`epic-N`) and, inside it, one folder per task group (`tg-N.M`). The folder name is the group's readable name, used by `komodo run <group>`; the group's UUID lives in its `TG.md`.
+- **`TG.md`:** The group's own file. It holds every field below except the task-level ones, and is the human-facing document for the group.
+- **`subsystem:`:** The component the group belongs to, named as in [Component traceability (Appendix Q)](#component-traceability) (such as `Orchestration engine`), or `none`. The gate's Maps check requires every group to name one ([Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate)).
+- **`touches:`:** File glob patterns the group expects to change. Go uses overlaps between two groups' globs to decide which must run first ([Planner (Appendix L)](#planner)).
+- **`priority:`:** `high` puts the group first in the machine-wide work queue ([Queue item (Engine data model, 3.3)](#queue-item)); anything else is normal. The planner or a person sets it.
+- **`files`:** The exact files the group's builder may write. A builder needing a file outside this list must stop and ask for scope ([Scope requests (Appendix J)](#scope-requests)). Two groups in one wave may not share a file ([Lint (`komodo doctor backlog`) (Appendix L)](#lint-komodo-doctor-backlog)).
+- **dependencies:** The other groups that must land before this one starts. Go builds a graph from them and refuses a cycle.
+- **acceptance items:** The checks the tester runs against the finished group, written in the EARS grammar (`WHEN … THE SYSTEM SHALL …`, see Glossary).
+- **`tsk-*.md`:** One file per task inside the group, read by the builder's brief.
+- **the card:** The task's own write-up inside `tsk-*.md`. `[UNKNOWN: not yet designed]` which fields the card holds beyond the two named next.
+- **`done_when`:** The task's pass condition. The builder's result is checked against it in its own session, and Check reruns it with 0 model tokens (see Glossary, Check).
+- **`estimate_lines:`:** The planner's estimate of changed lines, capped at 300 per task. After Build the real count is recorded, and a task over twice its estimate warns so the next plan sizes better.
+
+**Examples**
+
+A `TG.md` at `docs/backlog/epic-1/tg-1.2/TG.md`: the group's subsystem, globs, priority, files, dependency and one EARS item.
+
+```markdown
+id: 0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30
+subsystem: Orchestration engine
+touches: internal/engine/**
+priority: high
+files:
+- internal/engine/drive.go
+- internal/engine/drive_test.go
+dependencies: tg-1.1
+
+- WHEN a stale event reaches Drive THE SYSTEM SHALL ignore it
+  cmd: go test ./internal/engine/...
+```
+
+A `tsk-*.md` file in the same folder: the card, the task's pass command and the estimated changed lines (at most 300).
+
+```markdown
+<!-- card: [UNKNOWN: not yet designed] -->
+done_when: go test ./internal/engine/...
+estimate_lines: 120
+```
+
+#### Lint (`komodo doctor backlog`)
+
+**In plain terms.** Lint is an automatic check of the backlog files' shape and rules; it spends 0 model tokens. The same checks run in two places: when a person or the orchestrator runs `komodo doctor backlog`, and inside the engine on every planner draft before any file is written. Without it, a plan with a dependency loop, two groups editing the same file, or a task too big for one model session would reach the builders. A failing check prints the rule and the file it failed on.
+
+| Check | Rule |
+|---|---|
+| Grammar | Shape of every file |
+| `files`, `done_when`, dependencies | Present and well-formed |
+| Wave isolation | Groups in one wave share no `files` |
+| Protected | A group whose `files` include a G3 path or any `docs/backlog/**` path fails |
+| Sizing | A task names at most 5 files and 300 estimated lines; a group at most 8 tasks; a chain at most 4 groups; a task over 2× its estimate after Build warns |
+| Graph | Cycles refused; warns on a chain over 4, a group every other waits on, a group with over 5 dependencies |
+| EARS | `WHEN <event> THE SYSTEM SHALL <response>` (or `IF`, `WHILE`), optional `cmd:` and `needs:` lines; an item without `SHALL` fails |
+| Case collision | Two paths differing only by case fail |
+
+**What each one does**
+- **Grammar:** Every `TG.md` and `tsk-*.md` must match the layout and field set in [Grammar (Appendix L)](#grammar). A file with a missing or unknown field fails and is named.
+- **`files`, `done_when`, dependencies:** Each group must list its files and dependencies, and each task its `done_when`; each must be well-formed. A missing one fails.
+- **Wave isolation:** A wave is the set of groups that run at the same time. Two groups in one wave listing the same file would write over each other, so that fails.
+- **Protected:** G3 is the guard rule that lists paths no agent may write: `.git`, `bin/komodo`, `~/.komodo/**`, the Claude settings files, `embed/policy.json`, `docs/prd.md` ([HTTP stack (chapter 7)](#7-providers-and-http)). A group whose `files` include one of those, or anything under `docs/backlog/**`, fails before it can run.
+- **Sizing:** The hard caps that keep one task inside one model session: 5 files and 300 estimated lines per task, 8 tasks per group. After Build, a task whose real line count is over twice its estimate warns, so the next plan estimates better. A dependency chain over 4 groups is not refused; lint only warns.
+- **Graph:** Go builds a dependency graph (a DAG, a graph with no loops: groups as nodes, "must land first" as arrows). A cycle (A waits on B, B waits on A) is refused. It warns on a chain longer than 4, a single group every other group waits on, and a group with more than 5 dependencies.
+- **EARS:** Every acceptance item must read `WHEN <event> THE SYSTEM SHALL <response>`, or the `IF` or `WHILE` form. It may add a `cmd:` line the tester runs and a `needs:` line (`network`, `docker` or `service:<name>`) for a check the sandbox cannot satisfy. An item with no `SHALL` fails; Go checks the shape without reading the meaning.
+- **Case collision:** Two paths that differ only by letter case (`Readme.md` and `README.md`) fail. The same check runs in Check on every operating system ([Guardrails (chapter 6)](#6-tools-guard-and-sandbox)).
+
+#### Planner
+
+**In plain terms.** The planner is the model agent that turns a goal into backlog files. It runs in two passes: one heavy session writes the epic outline, then one standard session per group writes that group's tasks in parallel. Go lints every pass and sends a failing draft back into the same session, so the planner proposes and Go proves. Without this, the plan's structure would rest on the model's judgment alone. The orchestrator or a person starts it with `komodo plan`.
+
+| Pass | Weight | Output | Gate |
+|---|---|---|---|
+| 1 | heavy | Epic outline: groups, goals, `touches`, dependencies | Go lints; a failure goes back into the session, 2 times, then Blocked `lint` |
+| 2 | standard, one session per group in parallel | That group's tasks and EARS items | Go lints each the same way |
+
+**What each one does**
+- **Pass 1:** One session on a heavy model (Opus-class, see Glossary, Weight) reads the goal and the repo and returns the epic outline: the groups, each group's goal, its `touches` globs and its dependencies. Go lints the outline. A lint failure goes back into the same session with the failure text, up to 2 times; a third failure ends the plan Blocked with reason `lint`.
+- **Pass 2:** One session per group on a standard model, all in parallel under the pool, each returns that group's tasks and EARS acceptance items. Each result is linted the same way, with the same 2 retries.
+
+- Go derives the DAG from `touches`: two groups whose globs overlap must be ordered; the planner's stated dependency is kept when it agrees, else lint fails naming both groups and the shared file. Groups with no overlap and no dependency start in wave 1.
+- `plan <goal>` drafts in memory and checks with `lint_backlog`; the engine lints again and writes files only if lint passes.
+- `plan --from <spec>` takes any document set plus the repo. `plan --epic N` adds or amends only unlocked groups; landed and locked groups are read-only inputs.
+- The planner is mechanical: templates, per-task size caps and lint fix the structure, and the planner fills in the blanks. Nothing in planning depends on the language, because the map, the sizing lint and the DAG derivation read markers and symbols, not frameworks.
+- `repo_map`: Go builds a symbol graph (Go via `go/ast`; other languages via `embed/langs/<lang>.json` patterns), ranks by inbound references ×3 for files the goal names, and fits to 10% of the brief ceiling by dropping the lowest rank. Cached by tree hash (a content fingerprint); this repo's map (about 83 files) builds under 1 s. `[PENDING G-18]` patterns for TypeScript, Python and Rust against 3 real repos.
+- A 6-group epic plans in about 2 session wall times.
+
+**What each one does**
+- **DAG from `touches`:** Go compares every pair of groups' file globs. If two overlap, one must run before the other. If the planner already said so, that order is kept; if not, lint fails and names both groups and the shared file. Groups with no overlap and no dependency start in the first wave.
+- **`plan <goal>`:** The planner drafts the plan in memory and checks it with its own `lint_backlog` tool. Its final result is the plan; the engine lints it again and only then writes the files. A failure goes back into the session; no file is written from a failing draft.
+- **`plan --from <spec>`:** The same planner fed a document set (a PRD, an RFC, a ticket export, an existing `docs/` tree) plus the repo, instead of a one-line goal.
+- **`plan --epic N`:** Replans an existing epic as a delta. Only groups not yet landed and not locked may be added or changed; landed and locked groups are read-only inputs.
+- **`repo_map`:** A brief slot (see Glossary, Slot) that gives the planner and architect a ranked map of the repo's symbols (functions, types, classes, exports). Go builds it from source, boosts files the goal names by 3×, trims it to 10% of the brief ceiling, and caches it by tree hash so an unchanged repo costs 0 rebuilds. The patterns for TypeScript, Python and Rust are not yet proven against real repos (G-18).
+- **Timing:** Pass 2 sessions run in parallel, so a 6-group epic takes about 2 session wall times, not 7.
+
+#### Ship and release
+
+
+**In plain terms.** Ship is the last of the five stages: the engine commits, merges, pushes and opens pull requests with 0 model tokens, and no model session ever holds git or GitHub credentials. Release is a separate, person-only act: cutting a new Komodo version with signed binaries. Without this section's rules, a model could push to a shared branch or two engines could land the same group twice. The engine runs Ship; a person merges the epic PR and cuts releases.
+
+| Item | Rule |
+|---|---|
+| Branches | Group `komodo/<epic>/<group>`; epic `komodo/<epic>`; only the epic PR targets the base branch |
+| Only the harness writes git | Commit, branch, push, merge into the epic branch; never force push, `+refspec`, trailers, session links or critical-ref writes; no agent has forge credentials |
+| Ship (0 tokens) | Build the PR body from the template; merge the epic branch into the group branch (no rebase); rerun Check; land with action `land` keyed `(group, fence, merge base)`; a stale fence refuses before any push; one landing at a time; then Check on the epic tip |
+| `ship.mode` | `group`: a PR into the epic branch, opened ready (GitHub will not merge a draft), merged by the engine at once. `epic`: `--no-ff` merge straight into the epic branch |
+| Epic PR | Opened by the engine into the base once the epic gate passes, keyed `(epic, head SHA)`; a person merges it; `komodo sync` follows |
+| Release | Version, tag, cross-built binaries, checksums, ed25519 signature, a changelog fresh at `1.0.0-beta.6`; betas publish as normal releases with "beta" in the version |
+| Signing custody | `~/.komodo/release.key` mode 0600 on the owner's machine; one backup in a password manager; releases cut only there; the `next` public key set at the first release. Enterprise: `[PENDING G-21]` KMS or keyless signing and rollback refusal, later minor |
+| Performance | Push and PR creation run off the group's `Drive` goroutine (a lightweight Go thread) |
+
+**What each one does**
+- **Branches:** Each group works on its own branch `komodo/<epic>/<group>`; groups merge into the epic branch `komodo/<epic>`. Only the epic's pull request targets the repo's base branch (such as `main`), so the base changes once per epic, by a person.
+- **Only the harness writes git:** The engine alone commits, branches, pushes and merges. It never force-pushes, never uses a `+refspec` (a git push form that overwrites history), never adds commit trailers or session links, and never writes a critical ref such as `main`. No model session has credentials for GitHub or any other forge.
+- **Ship (0 tokens):** The engine fills the PR body from a template, merges the epic branch into the group branch (a merge, never a rebase, so pushed history is not rewritten), reruns Check, then lands. Landing is an `action` with the key `(group, fence, merge base)`, so a crash replay cannot land twice (see Glossary, Outbox). A stale fence means another engine took over the group, and the landing is refused before anything is pushed. Groups land one at a time, then Check runs once on the epic tip.
+- **`ship.mode`:** A config choice. `group` (the default) opens one PR per group into the epic branch, opened ready rather than draft because GitHub refuses to merge a draft, and the engine merges it at once; that PR is the record. `epic` skips the PR and merges the group branch straight into the epic branch with `--no-ff`, which keeps a merge commit.
+- **Epic PR:** When every group has landed and the epic gate (reviewer and tester over the whole epic diff, [run order (Engine behaviour, 3.5)](#35-behaviour)) passes, the engine opens one PR from the epic branch into the base. Its key `(epic, head SHA)` stops a duplicate. A person reviews and merges it, then runs `komodo sync` to refresh the local clone.
+- **Release:** A person's command that sets the version, tags it, cross-builds the binary for Windows, Linux and macOS, writes checksums, signs the manifest with the ed25519 key, and renders the changelog, which starts fresh at `1.0.0-beta.6`. Betas are published as normal GitHub releases with "beta" in the version, because the updater reads `releases/latest`, which skips prereleases.
+- **Signing custody:** The private signing key lives in `~/.komodo/release.key` on the owner's machine, readable only by the owner (mode 0600), with one backup in a password manager. Releases are cut only on that machine. A `next` public key is embedded from the first release so a leaked key can be rotated. Moving the key to a cloud KMS or keyless signing, and refusing a manifest older than the last accepted one, is the enterprise target G-21 in a later minor.
+- **Performance:** `Drive` is the engine's per-group loop. Pushing and opening the PR run beside it, not inside it, so a slow network does not hold the group's loop.
+- **Caching:** The PR body's Check summary comes from the cache's check entries ([Cache store (Appendix K)](#cache-store)), never from a rerun.
+
+#### Scenario: from goal to merged epic PR
+
+**In plain terms.** This is the whole journey in seven steps, from a one-line goal to a pull request a person merges. The orchestrator, the Claude Code session driving the harness, runs `komodo plan` and `komodo run`. It then waits in the background with `komodo status --wait` and answers only when a group blocks. The engine does everything in between: the planning passes, the stage pipeline per group, fenced landings and the epic gate. Without this flow each step would need a person to start it by hand; here a person only merges the final epic PR, and `komodo sync` then refreshes the repo.
+
+1. The human or orchestrator runs `komodo plan <goal>`. The planner's heavy pass drafts groups, goals, `touches` and dependencies; Go lints. A standard-weight pass per group drafts tasks and EARS items in parallel; Go lints each. Files are written only when lint passes.
+2. `komodo run` builds the DAG, enqueues wave-1 groups, returns the run id at once, and the engine continues detached.
+3. The orchestrator runs `komodo status --wait` in the background and is woken on `group.blocked`, `group.paused`, `run.done` or `run.stopped`.
+4. Each group moves Intake → Build → Check → Verify → Ship. A builder that needs a file outside its `files` list stops with `needs_scope`; the engine denies protected paths and paths another live group owns, and otherwise the orchestrator answers `scope approve|deny`.
+5. Each landing is fenced. After each, Check runs on the epic tip. Dependents start as their dependencies land.
+6. After the last group, the epic gate runs. The engine opens the epic PR into the base branch, ready for review.
+7. A person merges the epic PR; `komodo sync` fetches, prunes worktrees and refreshes repo files.
+
+---
+
+**Backlog and planning ([Backlog and planning (Appendix L)](#backlog-and-planning))**
+- Epic-1 passes `komodo doctor backlog`.
+- A planner draft that fails lint (an automatic rule check) writes 0 files.
+- Two groups in one wave sharing a file fail lint.
+- A dependency cycle fails lint.
+- A 5-group chain warns.
+- A fixture goal touching 2 overlapping areas yields 2 groups with a derived dependency.
+- A draft that omits that dependency fails lint naming the shared file.
+- A `repo_map` for the fixture repo is byte-identical on 2 runs.
+- An item without `SHALL` fails lint.
+- `plan --epic 1` after `tg-1.2` is locked leaves `tg-1.2` unchanged.
+
+**Ship ([Ship and release (Appendix L)](#ship-and-release))**
+- A shipped fixture branch has 0 trailers, and its PR body passes the [Rules and output contract (chapter 8)](#8-skills-rules-and-output) template test.
+- A landing attempted with a stale fence makes 0 pushes and emits `lease.lost`.
+- Two groups landing at once merge one after the other.
+- A seeded conflict blocks with `merge_conflict`.
+
 
 ## 12. Install, Binary Lifecycle and Gate
 
@@ -10383,153 +10549,6 @@ Every failure has a detector, an action, a bound and a final state; nothing loop
 
 ---
 
-## Appendix L. Backlog, Planning, Ship and Release
-
-#### Backlog and planning
-
-
-**In plain terms.** The backlog is the set of Markdown files under `docs/backlog/` that describe the work: an epic holds task groups, a group holds up to 8 tasks, a task names at most 5 files (see Glossary). Planning is how those files get written: the planner, a model session, drafts them from a goal and Go code checks every draft before a file is saved. This section gives the file grammar, the lint (an automatic rule check) that checks it, and the planner's two passes. Without it, builders would receive oversized or conflicting work and groups would collide on the same files. A person or the orchestrator runs `komodo plan`; the planner writes; the engine lints; a person may edit the files by hand.
-
-#### Grammar
-
-**In plain terms.** The grammar is the fixed folder layout and the fixed set of fields each backlog file must carry. It lets Go code read a plan mechanically: which files a group may touch, what it depends on, and how big each task is. Without fixed fields, the lint in [Lint (`komodo doctor backlog`) (Appendix L)](#lint-komodo-doctor-backlog) and the dependency graph in [Planner (Appendix L)](#planner) could not be computed. The planner writes these fields; a person may edit them; `komodo doctor backlog` checks them.
-
-`docs/backlog/epic-N/tg-N.M/{TG.md, tsk-*.md}`. `TG.md` carries `id:` (the group's UUID version 7, written when the group is created), `subsystem:` (a component name or `none`), `touches:` (globs), `priority:` (`high` or normal), `files`, dependencies and acceptance items. `tsk-*.md` carries the card, `done_when` and `estimate_lines:`.
-
-**What each one does**
-- **`docs/backlog/epic-N/tg-N.M/`:** One folder per epic (`epic-N`) and, inside it, one folder per task group (`tg-N.M`). The folder name is the group's readable name, used by `komodo run <group>`; the group's UUID lives in its `TG.md`.
-- **`TG.md`:** The group's own file. It holds every field below except the task-level ones, and is the human-facing document for the group.
-- **`subsystem:`:** The component the group belongs to, named as in [Component traceability (Appendix Q)](#component-traceability) (such as `Orchestration engine`), or `none`. The gate's Maps check requires every group to name one ([Gate and self-checks (`komodo gate`, Komodo repo only) (chapter 12)](#12-install-binary-lifecycle-and-gate)).
-- **`touches:`:** File glob patterns the group expects to change. Go uses overlaps between two groups' globs to decide which must run first ([Planner (Appendix L)](#planner)).
-- **`priority:`:** `high` puts the group first in the machine-wide work queue ([Queue item (Engine data model, 3.3)](#queue-item)); anything else is normal. The planner or a person sets it.
-- **`files`:** The exact files the group's builder may write. A builder needing a file outside this list must stop and ask for scope ([Scope requests (Appendix J)](#scope-requests)). Two groups in one wave may not share a file ([Lint (`komodo doctor backlog`) (Appendix L)](#lint-komodo-doctor-backlog)).
-- **dependencies:** The other groups that must land before this one starts. Go builds a graph from them and refuses a cycle.
-- **acceptance items:** The checks the tester runs against the finished group, written in the EARS grammar (`WHEN … THE SYSTEM SHALL …`, see Glossary).
-- **`tsk-*.md`:** One file per task inside the group, read by the builder's brief.
-- **the card:** The task's own write-up inside `tsk-*.md`. `[UNKNOWN: not yet designed]` which fields the card holds beyond the two named next.
-- **`done_when`:** The task's pass condition. The builder's result is checked against it in its own session, and Check reruns it with 0 model tokens (see Glossary, Check).
-- **`estimate_lines:`:** The planner's estimate of changed lines, capped at 300 per task. After Build the real count is recorded, and a task over twice its estimate warns so the next plan sizes better.
-
-**Examples**
-
-A `TG.md` at `docs/backlog/epic-1/tg-1.2/TG.md`: the group's subsystem, globs, priority, files, dependency and one EARS item.
-
-```markdown
-id: 0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30
-subsystem: Orchestration engine
-touches: internal/engine/**
-priority: high
-files:
-- internal/engine/drive.go
-- internal/engine/drive_test.go
-dependencies: tg-1.1
-
-- WHEN a stale event reaches Drive THE SYSTEM SHALL ignore it
-  cmd: go test ./internal/engine/...
-```
-
-A `tsk-*.md` file in the same folder: the card, the task's pass command and the estimated changed lines (at most 300).
-
-```markdown
-<!-- card: [UNKNOWN: not yet designed] -->
-done_when: go test ./internal/engine/...
-estimate_lines: 120
-```
-
-#### Lint (`komodo doctor backlog`)
-
-**In plain terms.** Lint is an automatic check of the backlog files' shape and rules; it spends 0 model tokens. The same checks run in two places: when a person or the orchestrator runs `komodo doctor backlog`, and inside the engine on every planner draft before any file is written. Without it, a plan with a dependency loop, two groups editing the same file, or a task too big for one model session would reach the builders. A failing check prints the rule and the file it failed on.
-
-| Check | Rule |
-|---|---|
-| Grammar | Shape of every file |
-| `files`, `done_when`, dependencies | Present and well-formed |
-| Wave isolation | Groups in one wave share no `files` |
-| Protected | A group whose `files` include a G3 path or any `docs/backlog/**` path fails |
-| Sizing | A task names at most 5 files and 300 estimated lines; a group at most 8 tasks; a chain at most 4 groups; a task over 2× its estimate after Build warns |
-| Graph | Cycles refused; warns on a chain over 4, a group every other waits on, a group with over 5 dependencies |
-| EARS | `WHEN <event> THE SYSTEM SHALL <response>` (or `IF`, `WHILE`), optional `cmd:` and `needs:` lines; an item without `SHALL` fails |
-| Case collision | Two paths differing only by case fail |
-
-**What each one does**
-- **Grammar:** Every `TG.md` and `tsk-*.md` must match the layout and field set in [Grammar (Appendix L)](#grammar). A file with a missing or unknown field fails and is named.
-- **`files`, `done_when`, dependencies:** Each group must list its files and dependencies, and each task its `done_when`; each must be well-formed. A missing one fails.
-- **Wave isolation:** A wave is the set of groups that run at the same time. Two groups in one wave listing the same file would write over each other, so that fails.
-- **Protected:** G3 is the guard rule that lists paths no agent may write: `.git`, `bin/komodo`, `~/.komodo/**`, the Claude settings files, `embed/policy.json`, `docs/prd.md` ([HTTP stack (chapter 7)](#7-providers-and-http)). A group whose `files` include one of those, or anything under `docs/backlog/**`, fails before it can run.
-- **Sizing:** The hard caps that keep one task inside one model session: 5 files and 300 estimated lines per task, 8 tasks per group. After Build, a task whose real line count is over twice its estimate warns, so the next plan estimates better. A dependency chain over 4 groups is not refused; lint only warns.
-- **Graph:** Go builds a dependency graph (a DAG, a graph with no loops: groups as nodes, "must land first" as arrows). A cycle (A waits on B, B waits on A) is refused. It warns on a chain longer than 4, a single group every other group waits on, and a group with more than 5 dependencies.
-- **EARS:** Every acceptance item must read `WHEN <event> THE SYSTEM SHALL <response>`, or the `IF` or `WHILE` form. It may add a `cmd:` line the tester runs and a `needs:` line (`network`, `docker` or `service:<name>`) for a check the sandbox cannot satisfy. An item with no `SHALL` fails; Go checks the shape without reading the meaning.
-- **Case collision:** Two paths that differ only by letter case (`Readme.md` and `README.md`) fail. The same check runs in Check on every operating system ([Guardrails (chapter 6)](#6-tools-guard-and-sandbox)).
-
-#### Planner
-
-**In plain terms.** The planner is the model agent that turns a goal into backlog files. It runs in two passes: one heavy session writes the epic outline, then one standard session per group writes that group's tasks in parallel. Go lints every pass and sends a failing draft back into the same session, so the planner proposes and Go proves. Without this, the plan's structure would rest on the model's judgment alone. The orchestrator or a person starts it with `komodo plan`.
-
-| Pass | Weight | Output | Gate |
-|---|---|---|---|
-| 1 | heavy | Epic outline: groups, goals, `touches`, dependencies | Go lints; a failure goes back into the session, 2 times, then Blocked `lint` |
-| 2 | standard, one session per group in parallel | That group's tasks and EARS items | Go lints each the same way |
-
-**What each one does**
-- **Pass 1:** One session on a heavy model (Opus-class, see Glossary, Weight) reads the goal and the repo and returns the epic outline: the groups, each group's goal, its `touches` globs and its dependencies. Go lints the outline. A lint failure goes back into the same session with the failure text, up to 2 times; a third failure ends the plan Blocked with reason `lint`.
-- **Pass 2:** One session per group on a standard model, all in parallel under the pool, each returns that group's tasks and EARS acceptance items. Each result is linted the same way, with the same 2 retries.
-
-- Go derives the DAG from `touches`: two groups whose globs overlap must be ordered; the planner's stated dependency is kept when it agrees, else lint fails naming both groups and the shared file. Groups with no overlap and no dependency start in wave 1.
-- `plan <goal>` drafts in memory and checks with `lint_backlog`; the engine lints again and writes files only if lint passes.
-- `plan --from <spec>` takes any document set plus the repo. `plan --epic N` adds or amends only unlocked groups; landed and locked groups are read-only inputs.
-- The planner is mechanical: templates, per-task size caps and lint fix the structure, and the planner fills in the blanks. Nothing in planning depends on the language, because the map, the sizing lint and the DAG derivation read markers and symbols, not frameworks.
-- `repo_map`: Go builds a symbol graph (Go via `go/ast`; other languages via `embed/langs/<lang>.json` patterns), ranks by inbound references ×3 for files the goal names, and fits to 10% of the brief ceiling by dropping the lowest rank. Cached by tree hash (a content fingerprint); this repo's map (about 83 files) builds under 1 s. `[PENDING G-18]` patterns for TypeScript, Python and Rust against 3 real repos.
-- A 6-group epic plans in about 2 session wall times.
-
-**What each one does**
-- **DAG from `touches`:** Go compares every pair of groups' file globs. If two overlap, one must run before the other. If the planner already said so, that order is kept; if not, lint fails and names both groups and the shared file. Groups with no overlap and no dependency start in the first wave.
-- **`plan <goal>`:** The planner drafts the plan in memory and checks it with its own `lint_backlog` tool. Its final result is the plan; the engine lints it again and only then writes the files. A failure goes back into the session; no file is written from a failing draft.
-- **`plan --from <spec>`:** The same planner fed a document set (a PRD, an RFC, a ticket export, an existing `docs/` tree) plus the repo, instead of a one-line goal.
-- **`plan --epic N`:** Replans an existing epic as a delta. Only groups not yet landed and not locked may be added or changed; landed and locked groups are read-only inputs.
-- **`repo_map`:** A brief slot (see Glossary, Slot) that gives the planner and architect a ranked map of the repo's symbols (functions, types, classes, exports). Go builds it from source, boosts files the goal names by 3×, trims it to 10% of the brief ceiling, and caches it by tree hash so an unchanged repo costs 0 rebuilds. The patterns for TypeScript, Python and Rust are not yet proven against real repos (G-18).
-- **Timing:** Pass 2 sessions run in parallel, so a 6-group epic takes about 2 session wall times, not 7.
-
-#### Ship and release
-
-
-**In plain terms.** Ship is the last of the five stages: the engine commits, merges, pushes and opens pull requests with 0 model tokens, and no model session ever holds git or GitHub credentials. Release is a separate, person-only act: cutting a new Komodo version with signed binaries. Without this section's rules, a model could push to a shared branch or two engines could land the same group twice. The engine runs Ship; a person merges the epic PR and cuts releases.
-
-| Item | Rule |
-|---|---|
-| Branches | Group `komodo/<epic>/<group>`; epic `komodo/<epic>`; only the epic PR targets the base branch |
-| Only the harness writes git | Commit, branch, push, merge into the epic branch; never force push, `+refspec`, trailers, session links or critical-ref writes; no agent has forge credentials |
-| Ship (0 tokens) | Build the PR body from the template; merge the epic branch into the group branch (no rebase); rerun Check; land with action `land` keyed `(group, fence, merge base)`; a stale fence refuses before any push; one landing at a time; then Check on the epic tip |
-| `ship.mode` | `group`: a PR into the epic branch, opened ready (GitHub will not merge a draft), merged by the engine at once. `epic`: `--no-ff` merge straight into the epic branch |
-| Epic PR | Opened by the engine into the base once the epic gate passes, keyed `(epic, head SHA)`; a person merges it; `komodo sync` follows |
-| Release | Version, tag, cross-built binaries, checksums, ed25519 signature, a changelog fresh at `1.0.0-beta.6`; betas publish as normal releases with "beta" in the version |
-| Signing custody | `~/.komodo/release.key` mode 0600 on the owner's machine; one backup in a password manager; releases cut only there; the `next` public key set at the first release. Enterprise: `[PENDING G-21]` KMS or keyless signing and rollback refusal, later minor |
-| Performance | Push and PR creation run off the group's `Drive` goroutine (a lightweight Go thread) |
-
-**What each one does**
-- **Branches:** Each group works on its own branch `komodo/<epic>/<group>`; groups merge into the epic branch `komodo/<epic>`. Only the epic's pull request targets the repo's base branch (such as `main`), so the base changes once per epic, by a person.
-- **Only the harness writes git:** The engine alone commits, branches, pushes and merges. It never force-pushes, never uses a `+refspec` (a git push form that overwrites history), never adds commit trailers or session links, and never writes a critical ref such as `main`. No model session has credentials for GitHub or any other forge.
-- **Ship (0 tokens):** The engine fills the PR body from a template, merges the epic branch into the group branch (a merge, never a rebase, so pushed history is not rewritten), reruns Check, then lands. Landing is an `action` with the key `(group, fence, merge base)`, so a crash replay cannot land twice (see Glossary, Outbox). A stale fence means another engine took over the group, and the landing is refused before anything is pushed. Groups land one at a time, then Check runs once on the epic tip.
-- **`ship.mode`:** A config choice. `group` (the default) opens one PR per group into the epic branch, opened ready rather than draft because GitHub refuses to merge a draft, and the engine merges it at once; that PR is the record. `epic` skips the PR and merges the group branch straight into the epic branch with `--no-ff`, which keeps a merge commit.
-- **Epic PR:** When every group has landed and the epic gate (reviewer and tester over the whole epic diff, [run order (Engine behaviour, 3.5)](#35-behaviour)) passes, the engine opens one PR from the epic branch into the base. Its key `(epic, head SHA)` stops a duplicate. A person reviews and merges it, then runs `komodo sync` to refresh the local clone.
-- **Release:** A person's command that sets the version, tags it, cross-builds the binary for Windows, Linux and macOS, writes checksums, signs the manifest with the ed25519 key, and renders the changelog, which starts fresh at `1.0.0-beta.6`. Betas are published as normal GitHub releases with "beta" in the version, because the updater reads `releases/latest`, which skips prereleases.
-- **Signing custody:** The private signing key lives in `~/.komodo/release.key` on the owner's machine, readable only by the owner (mode 0600), with one backup in a password manager. Releases are cut only on that machine. A `next` public key is embedded from the first release so a leaked key can be rotated. Moving the key to a cloud KMS or keyless signing, and refusing a manifest older than the last accepted one, is the enterprise target G-21 in a later minor.
-- **Performance:** `Drive` is the engine's per-group loop. Pushing and opening the PR run beside it, not inside it, so a slow network does not hold the group's loop.
-- **Caching:** The PR body's Check summary comes from the cache's check entries ([Cache store (Appendix K)](#cache-store)), never from a rerun.
-
-#### Scenario: from goal to merged epic PR
-
-**In plain terms.** This is the whole journey in seven steps, from a one-line goal to a pull request a person merges. The orchestrator, the Claude Code session driving the harness, runs `komodo plan` and `komodo run`. It then waits in the background with `komodo status --wait` and answers only when a group blocks. The engine does everything in between: the planning passes, the stage pipeline per group, fenced landings and the epic gate. Without this flow each step would need a person to start it by hand; here a person only merges the final epic PR, and `komodo sync` then refreshes the repo.
-
-1. The human or orchestrator runs `komodo plan <goal>`. The planner's heavy pass drafts groups, goals, `touches` and dependencies; Go lints. A standard-weight pass per group drafts tasks and EARS items in parallel; Go lints each. Files are written only when lint passes.
-2. `komodo run` builds the DAG, enqueues wave-1 groups, returns the run id at once, and the engine continues detached.
-3. The orchestrator runs `komodo status --wait` in the background and is woken on `group.blocked`, `group.paused`, `run.done` or `run.stopped`.
-4. Each group moves Intake → Build → Check → Verify → Ship. A builder that needs a file outside its `files` list stops with `needs_scope`; the engine denies protected paths and paths another live group owns, and otherwise the orchestrator answers `scope approve|deny`.
-5. Each landing is fenced. After each, Check runs on the epic tip. Dependents start as their dependencies land.
-6. After the last group, the epic gate runs. The engine opens the epic PR into the base branch, ready for review.
-7. A person merges the epic PR; `komodo sync` fetches, prunes worktrees and refreshes repo files.
-
----
-
 ## Appendix N. Edge Cases
 
 #### Edge cases
@@ -10860,24 +10879,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - Two sessions of one agent on the API link share the first 3 breakpoints byte for byte.
 - With `track.usage: on`, the second session's ledger row shows `cache_read` over 0.
 - With `track.usage: off` and the same low cap, no `budget` block occurs and no ledger row holds a token or USD field.
-
-**Backlog and planning ([Backlog and planning (Appendix L)](#backlog-and-planning))**
-- Epic-1 passes `komodo doctor backlog`.
-- A planner draft that fails lint (an automatic rule check) writes 0 files.
-- Two groups in one wave sharing a file fail lint.
-- A dependency cycle fails lint.
-- A 5-group chain warns.
-- A fixture goal touching 2 overlapping areas yields 2 groups with a derived dependency.
-- A draft that omits that dependency fails lint naming the shared file.
-- A `repo_map` for the fixture repo is byte-identical on 2 runs.
-- An item without `SHALL` fails lint.
-- `plan --epic 1` after `tg-1.2` is locked leaves `tg-1.2` unchanged.
-
-**Ship ([Ship and release (Appendix L)](#ship-and-release))**
-- A shipped fixture branch has 0 trailers, and its PR body passes the [Rules and output contract (chapter 8)](#8-skills-rules-and-output) template test.
-- A landing attempted with a stale fence makes 0 pushes and emits `lease.lost`.
-- Two groups landing at once merge one after the other.
-- A seeded conflict blocks with `merge_conflict`.
 
 **State manager ([Defaults, performance and proof (Appendix C)](#defaults-performance-and-proof))**
 - The 12 proof cases are listed under [Defaults, performance and proof (Appendix C)](#defaults-performance-and-proof), Defaults, performance and proof, and are not repeated here.
