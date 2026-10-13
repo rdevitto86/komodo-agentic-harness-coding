@@ -1726,6 +1726,513 @@ flowchart TB
 - Host facts for Claude Code 2.1.295: the server must answer `initialize` inside 30 s, and the 4 KB cap stays under `MAX_MCP_OUTPUT_TOKENS` 25,000.
 
 **Lookup:** [Appendix G](#appendix-g-tool-runtime-guardrails-and-sandbox) holds transports, tool loop, tool caps, agent matrix, host facts, guard rows G1-G6, R1, B1, O1-O7, O9, O10, per-OS sandbox, caches and Docker.
+
+#### Tool runtime
+
+
+**In plain terms.** The tool runtime is the code that gives a model session its tools and runs them. A tool is a named action the model can request, such as reading a file or running a test command. The runtime decides which tools each session sees, carries the request from the model to Go and the result back, and caps what comes back. Without it a model could only talk; it could never read, edit or run anything. The model session calls tools; the engine executes them.
+
+#### Registry and transports
+
+**In plain terms.** The registry is the table of all tools Go knows; a transport is the channel a tool request travels over. There are two transports: a private MCP (Model Context Protocol, how a model calls tools) server for `claude-cli`, and a Go loop for API links. An MCP server is a tool server Claude Code talks to over the MCP protocol; stdio means the two processes talk over standard input and output. Without the registry a session could be offered a tool that does not exist. The engine sets both up; the model session only sees its tool list.
+
+- The registry binds the tools in `agent.json` to one session; unlisted tools are not advertised (G1).
+- `claude-cli`: a private MCP server, `komodo internal tools --agent --session`, over stdio, started with `--strict-mcp-config`; it dies with its session and starts in under 100 ms because it reads nothing from disk.
+- API links: Go runs the harness tool loop, calling the same tool functions.
+
+**What each one does**
+- **The registry binds the tools in `agent.json` to one session:** At session start, Go takes the agent's tool list and attaches those tool functions to this one session. A tool not in the list is neither offered nor callable (guard rule G1).
+- **`claude-cli`: a private MCP server:** For a Claude Code session, Go starts `komodo internal tools --agent --session` as a small server over stdio that only this session can reach. `--strict-mcp-config` tells Claude Code to use no other tool servers. It exits when its session exits and starts in under 100 ms because everything it needs is already in memory.
+- **API links: Go runs the harness tool loop:** When Go talks to the model over HTTP, there is no Claude Code to run tools, so Go runs the loop itself ([Harness tool loop (API links) (Appendix G)](#harness-tool-loop-api-links)). It calls exactly the same tool functions, so behaviour matches across links.
+
+#### Harness tool loop (API links)
+
+**In plain terms.** The harness tool loop is Go's copy of what Claude Code does inside `claude -p`: send the prompt, run each tool the model asks for, send the result back, repeat until the model is done. It only runs on API links, where Go speaks HTTP to the model directly. Without it, API models could not use tools at all. The engine runs the loop; the model session drives it by asking for tools.
+
+1. Tools stay on `auto`; the model reasons and calls tools freely; thinking stays on.
+2. A text-only reply ends the work. No nudge.
+3. One final call returns only the agent's result schema (per link, [Schema enforcement per link (Appendix H)](#schema-enforcement-per-link)).
+4. The engine checks the result: schema first (1 re-prompt), then the agent's own gate (`done_when` for a builder, `lint_backlog` for a planner). A failure goes back into the same session with its output; 2 rejected results end it with `check_fail`.
+5. A reply cut off at the output limit gets "continue" once, then ends with `no_result`.
+
+**What each one does**
+- **1. Tools stay on `auto`:** The model decides for itself when to call a tool and when to reason; Go never forces a tool call. Extended thinking stays switched on throughout.
+- **2. A text-only reply ends the work:** When the model answers with plain text and no tool call, Go treats that as "I am finished". It does not prompt the model to keep going.
+- **3. One final call returns only the agent's result schema:** Go then sends one more request whose only allowed output is the agent's result schema, using each link's own mechanism ([Schema enforcement per link (Appendix H)](#schema-enforcement-per-link)). This produces the structured result.
+- **4. The engine checks the result:** Go validates the result against the schema and, on a miss, re-prompts once. It then runs the agent's own gate: `done_when` for a builder or `lint_backlog` for a planner. A failure is sent back into the same session with its output; a second rejected result ends the session with `check_fail`.
+- **5. A reply cut off at the output limit gets "continue" once:** If the model hits its maximum output length mid-answer, Go sends "continue" one time. If it is still cut off, the session ends with `no_result`.
+
+Context limit: Go counts tokens every turn against the link's measured context. At 80%, old tool outputs shrink to one-line stubs; their full text stays in `<session>/out/`. Still over, the session ends with `no_result`; nothing past the context is sent.
+
+No result tool exists mid-session: the result always comes from the final call, on every link. `prompt.md` tells the model to stop and summarize when it is finished.
+
+**What each one does**
+- **Context limit:** The context is the maximum text a model can hold in one conversation. Go counts tokens every turn against the link's measured context ([Measured context (Appendix H)](#measured-context)). At 80% it replaces old tool outputs with one-line stubs, keeping the full text on disk under `<session>/out/`. If the conversation is still too big the session ends with `no_result`; Go never sends more than the model can hold, so a server cannot silently cut the prompt.
+
+#### Tools and caps
+
+**In plain terms.** This is the list of every tool a model session can be given, and the cap each one enforces. Caps keep tool output small so the conversation does not fill up, and keep tools from doing more than their name says. Without them one `run` or `read` could flood the context or escape the worktree. The model session calls them; the guard checks each call first and Go runs it.
+
+| Tool | Rule |
+|---|---|
+| `read` | 2,000 lines per call, line ranges; repeat read of an unchanged file returns "unchanged since your last read (N lines)"; a second read in a row returns full content |
+| `search` | Go walker with `.gitignore` applied and a 1 MB per-file cap; never scans `node_modules` or `target/` |
+| `edit` | Exact, unique search-and-replace; a miss returns the closest lines; the reply shows the edited lines after `tool.post` formats them |
+| `write` | New files only; an existing file is refused with "use `edit`" |
+| `run` | `{class, args[]}`; Go runs the class's command plus args directly, no shell; inside the sandbox; 10-min timeout |
+| `diff`, `git_read` | Reviewer only; read-only git |
+| `skill` | Any allowlisted skill or `<name>#<section>` |
+| `submit_finding` | Rule ID, `file:line`, quoted evidence; unknown rule ID refused |
+| `lint_backlog` | Planner only |
+| `web` | Architect and researcher, opt-in, GET only, allowlist (the list of what is permitted) |
+| External MCPs | Opt-in allowlist per agent, no credentials (final phase) |
+
+**What each one does**
+- **`read`:** The model reads a file, up to 2,000 lines per call, by line range. Reading an unchanged file again returns a one-line "unchanged since your last read" note to save tokens; asking a second time in a row returns the full text again, in case the earlier copy was compacted away.
+  - Because `read` takes line ranges, the 2,000-line cap costs one `ReadAt` (Go's read of a slice of a file), not a read of the whole file.
+- **`search`:** The model searches the repository for text. Go walks the files itself, honours `.gitignore`, skips any file over 1 MB, and never scans `node_modules` or `target/`.
+- **`edit`:** The model changes a file by giving an exact, unique piece of text and its replacement. If the text is not found, the reply shows the closest matching lines. After the edit, the `tool.post` hook formats the file and the reply shows the edited lines.
+- **`write`:** The model creates a new file. Writing to a file that already exists is refused with the message "use `edit`", so content is never overwritten by accident.
+- **`run`:** The model runs a named command class (such as build or test) with arguments. Go starts the class's command directly, with no shell, inside the sandbox, with a 10 minute timeout. Only classes declared for the agent are allowed (rule R1).
+- **`diff`, `git_read`:** The reviewer, and only the reviewer, reads the diff under review and read-only git data. No agent has any git write tool.
+- **`skill`:** The model pulls a standards document (a skill, see Glossary) by name, or one section of it as `<name>#<section>`. Only skills on the agent's allowlist can be pulled.
+- **`submit_finding`:** The reviewer reports one problem with a rule ID, a `file:line` location and a quoted line of evidence. Go checks that the quote really is at that line; a finding with an unknown rule ID is refused, and a finding whose quote is not found is dropped and logged.
+- **`lint_backlog`:** The planner, and only the planner, checks its draft plan against the backlog grammar before returning it. The engine lints the plan again (checks it automatically against the rules) and writes files only if lint passes.
+- **`web`:** The architect and researcher may fetch a web page, but only when the tool is switched on for them, only with GET requests, and only from hosts on the allowlist.
+- **External MCPs:** In a final phase, an agent may be allowed extra third-party MCP tool servers from an explicit allowlist, with no credentials passed through. Planned for the final phase.
+
+Output cap: 4 KB for every tool except `read`, head and tail kept; the full output goes to `<session>/out/<call>.log` and the capped reply names the path.
+
+**What each one does**
+- **Output cap:** Every tool except `read` returns at most 4 KB to the model, keeping the start and the end of the output. The full output is saved to `<session>/out/<call>.log`, and the capped reply tells the model that path so it can `read` more if needed.
+
+Tool set facts:
+- A builder has 6 tools ([Per-agent tool matrix (Appendix G)](#per-agent-tool-matrix)).
+- `edit` and `write` stay separate tools: `edit` changes an existing file and `write` creates a new one.
+- There is no `check_task` or `submit_result` tool, because the engine gates the final result itself.
+- `run` returns only the capped result to the model; the full log stays at the named path.
+
+#### Per-agent tool matrix
+
+**In plain terms.** The tool matrix says which of the tools above each of the 7 agents gets, and which command classes its `run` may start. A command class is a named command such as build, test or lint declared for the repository. The matrix is the practical meaning of "least privilege": a reviewer cannot edit, a tester cannot search the web. The engine enforces it through guard rules G1 and R1; the model session sees only its own row.
+
+| Agent | Tools | Run classes |
+|---|---|---|
+| Builder | `read`, `search`, `edit`, `write`, `run`, `skill` | declared classes |
+| Reviewer | `read`, `search`, `skill`, `diff`, `git_read`, `run`, `submit_finding` | build, test, lint |
+| Tester | `read`, `search`, `run` | build, test |
+| Planner | `read`, `search`, `skill`, `lint_backlog` | — |
+| Architect | `read`, `search`, `skill`, `web` | — |
+| Researcher | `read`, `search`, `skill`, `web` | — |
+| Scout | `read`, `search` (paths only) | — |
+
+**What each one does**
+- **Builder:** Can read, search, edit and create files, run commands and pull skills. Its `run` may start any command class the repository declares. It is the only agent that writes code, and only inside its group's `files` (rule B1).
+- **Reviewer:** Can read, search and pull skills, read the diff and git history, run build, test and lint, and submit findings. It has no edit or write tool; if its `run` changes files the engine resets them afterwards.
+- **Tester:** Can read, search and run build and test commands only. It has no skill, diff or write tool, and gives a blind pass or fail per acceptance item, with evidence.
+- **Planner:** Can read, search, pull skills and lint its draft backlog. It never runs commands; the harness writes the plan files only after lint passes.
+- **Architect:** Can read, search, pull skills and, when enabled, fetch allowlisted web pages with GET. It never runs commands and never writes.
+- **Researcher:** The same four tools as the architect. It returns findings with `file:line` references and never writes.
+- **Scout:** Can read, and search for file paths only (no file contents). Every write is refused, and it runs on a local model when its chain allows.
+
+#### Host facts the server is built against (Claude Code 2.1.295)
+
+**In plain terms.** Host facts are behaviours of Claude Code itself, the program that `claude-cli` sessions run inside, that the tool server depends on. They were checked against Claude Code version 2.1.295. Without knowing them, Komodo's own timeouts and caps could be silently overridden by the host's defaults. A person never sets these; the engine either relies on them or deliberately leaves them unset.
+
+A stdio MCP server has no per-request timer and `MCP_TOOL_TIMEOUT` defaults to about 28 hours, so the sandbox's 10-minute `run` timeout is the only one that fires. `MAX_MCP_OUTPUT_TOKENS` defaults to 25,000 and the host warns past 10,000, so the 4 KB cap stays far below both. The server must answer `initialize` inside `MCP_TIMEOUT` (30 s). The worker env never sets `CLAUDE_CODE_RETRY_WATCHDOG`; instead the supervisor reads `system/api_retry` lines, and on `rate_limit` or `billing_error` the engine ends the session with reason `provider`, keeps its resume handle, and the provider layer fails over or pauses.
+
+**What each one does**
+- **`MCP_TOOL_TIMEOUT` (about 28 hours by default):** Claude Code's limit on one tool call to an MCP server. Because it is so long, Komodo's own 10 minute `run` timeout in the sandbox is the one that actually fires.
+- **`MAX_MCP_OUTPUT_TOKENS` (25,000 by default, warning past 10,000):** Claude Code's cap on how much a tool may return. Komodo's 4 KB cap is far below it, so the host never truncates or warns.
+- **`MCP_TIMEOUT` (30 s):** How long Claude Code waits for a tool server to answer its first `initialize` message. Komodo's server answers in under 100 ms because it reads nothing from disk.
+- **`CLAUDE_CODE_RETRY_WATCHDOG` (never set):** A Claude Code setting that would retry rate-limit errors for hours inside the session, holding a pool slot while the free backstop sits idle. Komodo leaves it unset and instead reads the `system/api_retry` lines itself.
+- **`system/api_retry` on `rate_limit` or `billing_error`:** When such a line appears, the engine ends the session with reason `provider`, keeps its resume handle, and the provider layer ([Failover chain (Appendix H)](#failover-chain)) moves the next session to another link or pauses.
+
+#### Guardrails
+
+
+**In plain terms.** The guard is the in-process check that runs before every tool call a worker makes. Its rules are data rows in `embed/policy.json`, each with an ID that refusals quote. It exists so a model cannot escape its worktree, read secrets or use a tool it was never given. Without it the sandbox would be the only barrier and refusals would teach nothing. The engine runs it; the gate renders its tables into this document.
+
+#### Policy row schema (`embed/policy.json`)
+
+**In plain terms.** Every guard rule is one JSON row with six fields; Go only loads them. This table defines those fields. One source feeds three readers: the guard, the gate's rendered tables and the refusal text. Without it rules would be scattered Go code that drifts from the documentation.
+
+| Field | Values | Meaning |
+|---|---|---|
+| `id` | `G1`…`G6`, `R1`, `B1`, `O1`…`O10` | The row named in a refusal |
+| `scope` | Agent names, or `writers`, `runners`, `all`, `orchestrator` | Who it binds to |
+| `kind` | `tool`, `path`, `run`, `text` | What the check reads |
+| `pattern` | Glob or list | What matches; `~/.komodo/**` style globs expand at load |
+| `action` | `refuse`, `warn` | `warn` only for `text` rows: on the orchestrator, and in the steering-phrase list for a repo addendum (a skill gets `refuse`) |
+| `message`, `alternative` | Template IDs | The refusal line and the allowed alternative |
+
+**What each one does**
+- **`id`:** The short name a refusal quotes, such as G2 or B1.
+- **`scope`:** Which agents the row binds: named agents, every writer (has `edit` or `write`), every runner (has `run`), all agents, or the orchestrator.
+- **`kind`:** What the check inspects: a tool name, a path argument, a `run` class, or text the agent writes.
+- **`pattern`:** The glob or list that must match; home-relative globs expand when loaded.
+- **`action`:** `refuse` blocks the call; `warn` exists only for text rows aimed at the orchestrator, which no hook can block.
+- **`message`, `alternative`:** Template IDs for the refusal line and the allowed alternative the model is told.
+
+`safety/rows.go` only loads it; no row is Go code. The gate renders the roster tables from it and fails on drift. The scout's compiled table has 4 rows, the builder's 8.
+
+**Example**
+
+One guard row: G3 refuses writes to protected paths for every writer. Template IDs for the refusal text are not yet designed.
+
+```json
+{
+  "id": "G3",
+  "scope": "writers",
+  "kind": "path",
+  "pattern": [
+    ".git",
+    ".git/config",
+    ".git/hooks",
+    "bin/komodo",
+    "~/.komodo/**",
+    "~/.claude/settings*.json",
+    ".claude/settings*.json",
+    "embed/policy.json",
+    "docs/prd.md"
+  ],
+  "action": "refuse",
+  "message": "[UNKNOWN: not yet designed]",
+  "alternative": "[UNKNOWN: not yet designed]"
+}
+```
+
+#### Rows every agent inherits
+
+**In plain terms.** These six rows bind to every agent or every writer; no agent file can lower them. Each refusal names the row and what the model may do instead. Without them a worker could read `.env`, write outside its worktree or add attribution trailers.
+
+| ID | Refuse | Scope |
+|---|---|---|
+| G1 | A tool not in the agent's set; the server does not list it either | all |
+| G2 | Reads or writes outside the session worktree, including `..` paths and symlink escapes | all |
+| G3 | Writes to protected paths: `.git` (file or folder), `.git/config`, `.git/hooks`, `bin/komodo`, `~/.komodo/**`, `~/.claude/settings*.json`, `.claude/settings*.json`, `embed/policy.json`, `docs/prd.md`. Memory (`~/.claude/projects/*/memory/`) and plans (`~/.claude/plans/`) are never blocked | writers |
+| G4 | Reads of secret files (`.env*` except `.env.example`, `.env.sample`, `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`), or written content matching a secret pattern | reads all; writes writers |
+| G5 | Attribution trailers or session links in any text the agent writes | writers |
+| G6 | The `guard.refusal_limit` (3rd) refusal under the same rule; ends the session | all |
+
+**What each one does**
+- **G1:** Blocks any tool not in the agent's set; the tool server does not even advertise it. The session sees a refusal naming G1 and its allowed tools.
+- **G2:** Blocks reads or writes outside the session worktree, including `..` and symlinks resolving elsewhere. The session is told the path is out of bounds.
+- **G3:** Blocks writes to git internals, the Komodo binary, Komodo state, Claude settings, the policy file and the PRD. Memory and plan folders stay writable. Writers only.
+- **G4:** Blocks reads of secret files such as `.env` and private keys, and any written content matching a secret pattern. Reads bind to all, writes to writers.
+- **G5:** Blocks attribution trailers or session links in any text a writer produces, so commits stay clean.
+- **G6:** The third refusal under one rule ends the session with exit reason `refusals`; `guard.refusal_limit` is the only tunable.
+
+#### Run and builder rows
+
+**In plain terms.** Runners are agents with the `run` tool; the builder is the only agent with `edit` and `write`. R1 limits which command classes `run` accepts; B1 limits where the builder writes. B1 is the only refusal a person or the orchestrator can turn into an allow. Without B1 a builder could silently widen its own scope.
+
+| ID | Refuse | Scope |
+|---|---|---|
+| R1 | Any command class not declared; `run` takes `{class, args[]}` | runners |
+| B1 | Writes outside the group's `files` and test siblings; the refusal says to stop with result status `needs_scope` | builder |
+
+**What each one does**
+- **R1:** Blocks a `run` call whose class is not in the agent's `run_classes`; `run` takes a class and args, never a shell. The session is told which classes exist.
+- **B1:** Blocks builder writes outside the group's `files` and their test siblings. The refusal says to stop with status `needs_scope`, which the orchestrator can approve.
+
+Facts of `run` that keep their own tests, not guard rows: no shell (pipes, chains and `sh -c` cannot happen); no network (sandbox); no git writes (no class runs git). B2 (a builder's own backlog files) is a lint fact: `doctor backlog` refuses a group whose `files` list `docs/backlog/**`.
+
+The boundary is the sandbox: builders write tests and `run` them, so any code can run, and it runs inside the sandbox. R1 limits command names only.
+
+#### Orchestrator rows (text in `AGENTS.md`, any host)
+
+**In plain terms.** The orchestrator is the interactive session a person works in, on any host. It has no Komodo hook, so these rows are plain text in the `AGENTS.md` block. The harness backs them on its own side: verbs refuse leased worktrees and critical refs. O8 was dropped with the `internal guard` hook, which is why the numbering skips it. Without these rows an orchestrator could force-push or hand-merge an epic branch.
+
+| ID | Refuse |
+|---|---|
+| O1 | Commit, push, merge, delete or force on `main`, `master`, `release/*`, or any critical ref |
+| O2 | Force push, `--force-with-lease`, `+refspec` |
+| O3 | Merging into the epic branch by hand |
+| O4 | Editing, resetting or removing a worktree the harness has leased |
+| O5 | `git stash`; use a WIP commit |
+| O6 | `gh pr create` and `gh pr merge`; the engine opens the epic PR |
+| O7 | Faking a terminal (`script`, `expect`, `unbuffer`) to run a human-only verb |
+| O9 | A human-only verb or any `internal` verb |
+| O10 | `--no-verify` on any git command |
+| plus | G3, G4, G5 |
+
+**What each one does**
+- **O1:** Never commit, push, merge, delete or force on `main`, `master`, `release/*` or any critical ref; verbs refuse these refs too.
+- **O2:** Never force push in any form; the engine never does it either.
+- **O3:** Never merge into the epic branch by hand; the engine lands groups.
+- **O4:** Never edit, reset or remove a worktree the harness has leased; verbs refuse leased worktrees.
+- **O5:** Never `git stash`; make a WIP commit instead.
+- **O6:** Never create or merge PRs with `gh`; the engine opens the epic PR and a person merges it.
+- **O7:** Never fake a terminal to run a human-only verb; the text is the only enforcement.
+- **O9:** Never run a human-only verb such as `install`, `fresh` or `release`, nor any `internal` verb; these refuse without a terminal.
+- **O10:** Never pass `--no-verify` to any git command.
+- **plus G3, G4, G5:** The orchestrator also keeps the protected-path, secret and attribution rules, as text in the same block.
+
+The harness enforces these on its own side: verbs refuse leased worktrees and critical refs, and human-only verbs need a terminal.
+
+#### Guard mechanics
+
+**In plain terms.** Mechanics are how the guard runs: inline Go before each call, three hooks in total, one human override and a cost under 50 µs. A hook is code the harness runs at a fixed point in a session. Without the fixed count, a repo or host hook could run inside a worker and change its behavior.
+
+- Every tool call is checked in-process before it runs (`tool.pre`); input it cannot parse, an unknown tool or a guard error is a refusal. A refusal is logged afterward as `tool.denied`.
+- Exactly 3 inline hooks exist, all Go: `tool.pre` (guard), `tool.post` (format after `edit`), `session.end` (WIP commit). No model, repo or host hook runs inside a worker.
+- `needs_scope` (B1) is the only refusal a person or the orchestrator can turn into an allow.
+- Performance: each agent's rows compile to a matcher once per session; a check is a map lookup plus at most 8 glob tests, under 50 µs. Path containment results are cached per session.
+
+#### Sandbox and process control
+
+
+**In plain terms.** The sandbox is the OS-level cage around every command a worker runs through the `run` tool. It is the third of three layers, after the tool surface and process limits. It exists so test code a builder wrote cannot reach the network, the user's caches or another session's worktree. Without it a `run` could exfiltrate secrets or plant files in the user's own build cache. The tool server wraps each command; the model client is never sandboxed.
+
+#### Three layers
+
+**In plain terms.** Three layers each stop a class of escape, from cheapest to strongest. The tool surface does most of the work by never offering a shell. Process limits bound time, memory and environment. The OS sandbox is the last line and is required on every OS.
+
+1. Tool surface: no native Bash or Edit.
+2. Process limits: worktree working directory; environment of only `PATH`, `HOME` (session temp), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables; timeout; output cap; process and memory caps; whole-tree kill.
+3. OS sandbox: wraps every `run` command from the tool server, never the model client.
+
+**What each one does**
+- **Tool surface:** Workers get Komodo's own tools, never native Bash or Edit, so there is no shell to abuse.
+- **Process limits:** Each `run` starts in the worktree with five named variables plus cache paths. It gets a timeout, an output cap, process and memory caps, and a kill that takes the whole tree.
+- **OS sandbox:** Every `run` command is wrapped by the OS mechanism in 22.2; the model process is not, since it only talks to the tool server.
+
+#### Per OS
+
+**In plain terms.** Each OS has one sandbox mechanism and one profile, the file listing what a command may read, write and reach. The profile is rendered once per worktree and reused. The second table gives the caps that apply everywhere. Without a per-OS profile Windows would have no sandbox at all.
+
+| OS | Sandbox | Profile |
+|---|---|---|
+| macOS | `sandbox-exec` (seatbelt) | Reads allowed outside home; inside home only the worktree, the repo's git dir, Komodo's caches and toolchain folders; writes only to the worktree, session temp and language caches; network denied except loopback; no process or memory cap, and `doctor` says so |
+| Linux, WSL | `bwrap` | `/` read-only; home an empty tmpfs with the worktree, git dir, caches and toolchains bound back; worktree, session temp and language caches writable; `/tmp` tmpfs; `--unshare-net`; `--die-with-parent`; cgroups (Linux's per-process resource limits) caps when delegated; when user namespaces are blocked every work verb refuses and names the fix |
+| Windows native | Docker when WSL is absent | `--network none`; only the worktree, session temp and language-cache volumes writable; `--pids-limit` and `--memory`; with neither WSL nor Docker every work verb refuses and names both |
+
+**What each one does**
+- **macOS:** Apple's `sandbox-exec` with a seatbelt profile. Reads outside home are free; inside home only the worktree, git dir, caches and toolchains. Writes go only to the worktree, session temp and language caches. No process or memory cap exists, and `doctor` reports that.
+- **Linux, WSL:** `bwrap` (bubblewrap) builds a private filesystem: root read-only, an empty home with the needed folders bound back, a private `/tmp`. Network is off and the sandbox dies with its parent. Caps come from cgroups when delegated. If user namespaces are disabled, work verbs refuse and name the fix.
+- **Windows native:** Without WSL, Docker runs each worktree in a Linux container with no network. Only the worktree, temp and cache volumes are writable, under pid (process id) and memory limits. With neither WSL nor Docker, work verbs refuse and name both.
+
+| Value | Setting |
+|---|---|
+| `run` timeout | 10 min per command |
+| Processes / memory | 512 / 8 GB per session |
+| Policy | `required` on every OS |
+| Loopback | Always allowed |
+| Profile reuse | Rendered once per worktree; Docker keeps one container per worktree alive |
+
+**What each one does**
+- **`run` timeout:** A command running past 10 minutes is killed with its whole process tree.
+- **Processes / memory:** A session may hold 512 processes and 8 GB, enforced by cgroups or Docker; macOS has no enforcement.
+- **Policy:** `required` on every OS means no `run` ever executes unsandboxed; a missing sandbox refuses the work verb.
+- **Loopback:** Connections to the local machine are always allowed, since blocking them broke the repo's own tests.
+- **Profile reuse:** The seatbelt or bwrap profile is rendered once per worktree; Docker keeps one container per worktree so each `run` is an `exec`.
+
+#### Caches and toolchains
+
+**In plain terms.** Caches are where build tools keep downloaded modules and compiled objects; toolchains are the compilers themselves. Komodo gives each repo its own cache folder so agent code never touches the user's caches. Toolchains are mounted read-only. Without this, `go build` would fail on a read-only cache, or a malicious test could poison the user's `~/.cargo/registry`.
+
+- Language caches are Komodo's own: `~/.komodo/cache/lang/<repo-id>/`; `GOCACHE`, `GOMODCACHE`, `npm_config_cache`, `CARGO_HOME`, `PIP_CACHE_DIR` point there and are writable. Never the user's `~/.npm`, `~/.cargo/registry`, Go or pip caches.
+- Toolchain folders are read-only: `~/.rustup` and the folders holding each detected command's binary; `doctor` runs each command's `--version` in the sandbox.
+- Cap `sandbox.lang_cache_gb` 10 (hard 50); the sweep deletes a repo's whole cache when over the cap or unused 30 days, never while the repo holds a lease. `cache clear --kind lang` and `uninstall` remove it.
+- Never the per-user process limit: it counts every process the user runs.
+- Intake runs `commands.setup` with network on; every `run` keeps it off.
+
+#### Read-only agents' `run`
+
+**In plain terms.** Reviewer and tester have no write tools, but running tests writes build output. So their `run` may write the worktree, and the engine cleans up afterward. A review that changed tracked files fails, since its evidence is suspect. Without this, test runs would fail, or leave edits a later session mistakes for the builder's.
+
+Reviewer and tester have no write tools, but their `run` may write the worktree so tests work. After the last read-only session in a worktree ends, the engine resets changed tracked files and fails that review, removes new untracked files that are not gitignored, and keeps ignored build output.
+
+#### Test sandboxes and copies
+
+**In plain terms.** The tester works in its own copy of the builder's worktree, so it cannot see the builder's files or reasoning. A copy means cloning the worktree with its installed dependencies, by the mechanism in the platform table. These rules cover blindness, parallel suites, service-backed tests and the copy budget. Without them the two Verify sessions would collide on ports and the tester could peek at the builder.
+
+| Rule | Detail |
+|---|---|
+| Blind by construction | The tester's profile lists only its own worktree, the git dir, caches and toolchains; the builder's worktree under `~/.komodo/wt/` is outside that list |
+| Two suites at once | Linux `bwrap --unshare-net` and Windows Docker `--network none` give each session a private loopback `[PENDING G-08]`; macOS has no network namespace, so `test`-class runs of the two Verify sessions serialize through one per-repo lock file |
+| Service-backed tests | They fail at base too, so the baseline marks them pre-existing and they warn. An item may declare `needs: network \| docker \| service:<name>`; the tester skips it with reason `env` and a ⚠️ line |
+| Per-session `TMPDIR` and `HOME` | Two sessions never share a temp dir |
+| Copy per language | Go: nothing. Node: copy `node_modules`, symlinks kept. Rust: one `CARGO_TARGET_DIR` per group under the language cache `[PENDING G-12]`. Python: rerun `uv sync`. Makefile-only: rerun `make setup`. A changed lockfile reruns setup instead of copying |
+| Copy budget | Counts against Verify's wall time; over 60 s warns; `doctor` reports the mechanism |
+
+**What each one does**
+- **Blind by construction:** The tester's sandbox profile simply omits the builder's worktree, so even an exact path is unreadable; no prompt rule is needed.
+- **Two suites at once:** Reviewer and tester both run tests on one commit. Linux and Docker give each a private loopback; macOS cannot, so their `test` runs take turns through a lock file.
+- **Service-backed tests:** Tests needing a database or public host fail at base too, so they warn rather than block. An item may declare `needs: ...` and the tester skips it with reason `env`.
+- **Per-session `TMPDIR` and `HOME`:** Each session gets its own temp and home, so tests writing there never see another session's files.
+- **Copy per language:** Go needs nothing copied. Node copies `node_modules` with links kept. Rust shares one target dir per group. Python and Makefile repos rerun setup. A changed lockfile always reruns setup.
+- **Copy budget:** Copy time counts against Verify's wall clock; over 60 s warns, and `doctor` names the mechanism in use.
+
+| Platform | Mechanism | Status |
+|---|---|---|
+| macOS APFS | `cp -cR` (clonefile); 1.2 GB with pnpm symlinks cloned in 0.00 s | proven 2026-10-08 |
+| Linux | `cp -R --reflink=auto`; reflink on btrfs, XFS, ZFS; byte copy on ext4 | `[PENDING G-09]` per filesystem |
+| Windows NTFS | Go byte copy, junctions and symlinks recreated; `core.symlinks false` | `[PENDING G-10]` |
+| Windows Docker | The host copies; the tester's container binds the copy at `/work` | `[PENDING G-11]` copy time for 1 GB |
+
+**What each one does**
+- **macOS APFS:** `cp -cR` uses APFS clonefile, a copy-on-write clone; 1.2 GB with pnpm symlinks took 0.00 s on 2026-10-08.
+- **Linux:** `cp -R --reflink=auto` clones on btrfs, XFS and ZFS and byte-copies on ext4; per-filesystem behavior is pending spike G-09.
+- **Windows NTFS:** Go copies bytes and recreates junctions and symlinks; git checks symlinks out as text (`core.symlinks false`). Pending spike G-10.
+- **Windows Docker:** The host makes the copy and the tester's container mounts it at `/work`; copy time for 1 GB is pending spike G-11.
+- **Docker bind mount:** The worktree is a bind mount, so the image saved after setup never holds `node_modules`. A volume per worktree would be faster `[PENDING G-25]` but puts the files where the host sweep cannot reach them.
+
+Symlinks are copied as links, never followed; a link resolving outside the worktree is dropped and logged. A `.venv` is never copied. Check adds a case-collision lint on every OS.
+
+#### Docker backend (native Windows)
+
+**In plain terms.** On Windows without WSL, Docker is the sandbox: one Linux container per worktree. The image is the official language image, chosen from the repo's own version files. Setup runs with network on, then the container is cut off. Without this, native Windows would have no safe way to run tests.
+
+| Rule | Detail |
+|---|---|
+| Image | The full official image per detected language: `golang:<go directive>`, `node:<.nvmrc, else lowest engines major, else current LTS>`, `rust:<rust-toolchain channel, else stable>`, `python:<.python-version, else lowest requires-python, else latest>`. Makefile-only or 2-language repos need `sandbox.image`. Intake pulls it and the ledger records its digest |
+| Tools | Rust setup adds `clippy` and `rustfmt` before `cargo fetch`; Python setup is `uv sync` with a `uv.lock`, else `pip install -e .[dev]` when a `dev` extra exists, else `doctor` names the missing tools |
+| Runtime | One container per worktree made at Intake with the caps, the worktree at `/work`, a named cache volume per repo; setup with network on, then disconnected; each `run` is a `docker exec`; after setup the container is saved as an image in the background and the tester's container starts from it |
+| Kill | A timeout or kill ends the command's process group inside the container; the container restarts only if that fails |
+| Host side | `git-read` runs on the host; worktrees cut with `core.autocrlf=false`; `doctor` checks the daemon runs Linux containers |
+
+**What each one does**
+- **Image:** The full official image per detected language, version taken from the repo's own pins. A repo with no language or two needs `sandbox.image`. Intake pulls it and records its digest.
+- **Tools:** Official images lack `clippy`, `rustfmt`, `pytest` and `ruff`, so setup installs them: Rust adds components before `cargo fetch`; Python uses `uv sync` or `pip install -e .[dev]`, else `doctor` names the gaps.
+- **Runtime:** One container per worktree, made at Intake with the caps, the worktree at `/work` and a cache volume per repo. After setup the network is disconnected, each `run` is `docker exec`, and the container is saved as an image for the tester.
+- **Kill:** A timeout kills the command's process group inside the container, because killing `docker exec` alone leaves it running. The container restarts only if that fails.
+- **Host side:** `git-read` runs on the host since the worktree's `.git` file holds a Windows path; worktrees use `core.autocrlf=false`; `doctor` checks the daemon runs Linux containers.
+
+#### Security view
+
+
+**In plain terms.** This section lists what could harm the code, the machine or the bill: an AI worker, a tampered file or an outside party. Beside each threat is what stops it. The harness (the `komodo` program, see Glossary) runs AI model sessions that read and write code, so each session needs hard limits. Without these limits a worker could leak a password, push to the main branch or run up a bill. The engine (the harness's core logic) enforces every limit. A person or the orchestrator (the Claude Code session that drives the harness, see Glossary) only sees refusals and warnings.
+
+#### Threats and controls
+
+**In plain terms.** A threat is something that could go wrong; a control is the mechanism that stops it. This table pairs every threat with its control, so nothing rests on the model behaving well. Every control is enforced inside the harness or the operating system, not by a prompt. A person reads this table to learn why a given refusal exists.
+
+| Threat | Stopped by |
+|---|---|
+| Agent escapes its worktree | Guard row G2 (containment, `..`, symlinks); the sandbox |
+| Agent leaks or reads secrets | G4 (secret files and patterns); sandbox environment allowlist and home-folder read block; Check's secret scan; HTTP and ledger redaction (blanking secrets out) |
+| Agent pushes, merges or force-pushes | No git write tools; R1 (no class runs git); orchestrator rules O1 to O3; only Ship writes git |
+| Tampered or stale binary | SHA-256 (a standard content fingerprint) and ed25519 verification on every fresh; repo pin |
+| Runaway cost or loops | Session supervisor, error recovery bounds, budgets |
+| Poisoned cache | Cache outside worktrees, verified on read; Komodo-owned language caches per repo |
+| Malicious external MCP | Opt-in allowlist per agent, off by default, no credentials |
+| Stale engine lands over newer work | Fence enforced by git compare-and-swap; action idempotency keys |
+| Prompt steering through a skill or repo text | Steering-phrase scan at the gate and in `doctor`; no rule text in prompts; the `text` policy row |
+| Tampered config or binary at run time | Config hash (a content fingerprint) guard; signatures; G3 protects both files |
+| Tampered or half-written state | State manager: checked on every read, bad records moved aside, atomic writes |
+
+**What each one does**
+- **Agent escapes its worktree:** A worktree is the private git checkout folder a worker may touch (see Glossary). Guard row G2 refuses reads and writes outside it, including `..` paths and symbolic links that point out. The sandbox (OS-level confinement, see Glossary) refuses the same at the operating-system level, and the worker sees a refusal naming G2.
+- **Agent leaks or reads secrets:** G4 refuses reads of secret files such as `.env` or `*.pem`, and writes that look like a secret. The sandbox hides the home folder and passes only a short list of environment variables. Check scans the diff for secret patterns. API keys never reach logs, the ledger (the run record) or error text.
+- **Agent pushes, merges or force-pushes:** Workers have no tool that writes git. R1 means no declared command class runs git. Rules O1 to O3 forbid the orchestrator from doing it. Only the Ship stage inside the engine writes git.
+- **Tampered or stale binary:** `fresh` is the self-update verb. Every update checks the download's SHA-256 hash and its ed25519 signature before swapping the binary in. The repo pin in `AGENTS.md` makes a too-old binary refuse most verbs until `komodo fresh` runs.
+- **Runaway cost or loops:** The session supervisor stops a session at its wall clock or after idle time. Every retry in error recovery has a counter, and budgets cap time per group, plus tokens when `track.usage` is on. A run that hits a bound goes Blocked instead of looping.
+- **Poisoned cache:** Cached results live outside every worktree, so a worker cannot reach them. Each entry is verified on read and deleted on mismatch. Language caches (npm, Go, Cargo, pip) are Komodo's own per repo, never the user's, so planted files cannot reach the user's builds.
+- **Malicious external MCP:** An MCP server is an outside tool server a model could call. They are off by default, allowed only by a per-agent allowlist, and receive no credentials.
+- **Stale engine lands over newer work:** A fence is a counter beside a group's lease (its lock, see Glossary). Every git write carries the fence, and git's compare-and-swap refuses a stale holder. Every side effect also has an idempotency key, so a replay after a crash never lands the same work twice.
+- **Prompt steering through a skill or repo text:** Steering is text that tries to redirect a model, such as "ignore previous". The gate fails a skill containing a steering phrase, and `doctor` warns on repo text. No rule text enters worker prompts. The `text` policy row holds the phrase list.
+- **Tampered config or binary at run time:** `komodo config` stores a hash of the config file. A hand edit makes every verb refuse until `komodo config --accept`. Signatures cover the binary. Guard row G3 blocks workers from writing either file.
+- **Tampered or half-written state:** The state manager ([State manager (Appendix C)](#state-manager)) is the only writer of runtime state. It checks every record when it is read, moves a bad record aside instead of using it, and writes atomically so a crash never leaves a half-written file.
+
+#### Guard summary
+
+**In plain terms.** The guard is a check inside the harness that every tool call from a worker passes before it runs (see Glossary). Its rules are data in one file, `embed/policy.json`, not Go code. The same file feeds the guard, the gate (Komodo's self-check) and the LLD tables. A worker that breaks a rule gets a one-line refusal naming the rule and what it may do instead. The third refusal under one rule ends its session. Without the guard a worker could call any tool on any file. `needs_scope` is the one refusal a person or the orchestrator can overturn.
+
+Rules are data in `embed/policy.json` with scopes, read by the guard, the gate and the LLD roster tables. Every tool call is checked in-process before it runs; a refusal names the rule and the allowed alternative; the third refusal under one rule ends the session. `needs_scope` is the only refusal a person or the orchestrator can turn into an allow.
+
+| Family | Rows | Binds to |
+|---|---|---|
+| G1 to G6 | Unlisted tool; worktree escape; protected paths; secret reads and secret-shaped writes; attribution trailers; the refusal limit | All agents (write rows bind to writers only) |
+| R1 | Only declared command classes, as `{class, args[]}`, no shell | Any agent with `run` |
+| B1 | Writes only to the group's `files` and test siblings; otherwise stop with `needs_scope` | Builder |
+| O1 to O10 | Critical-ref writes, force pushes, hand merges, leased worktrees, stash, `gh pr`, faked terminals, human-only verbs, `--no-verify` | The orchestrator, as text in `AGENTS.md`; enforced on the harness side by verb refusals and the terminal check |
+
+**What each one does**
+- **G1 to G6:** Six rules every worker inherits. Each fires in-process before the tool runs, and the worker sees a refusal naming the row.
+  - **G1:** Blocks a tool the agent was not given; the tool server does not list it either. Binds to all agents.
+  - **G2:** Blocks reads and writes outside the session worktree, including `..` paths and symlink escapes. Binds to all agents.
+  - **G3:** Blocks writes to protected paths: `.git`, `bin/komodo`, `~/.komodo/**`, Claude settings files, `embed/policy.json` and `docs/prd.md`. Binds to writers only; memory and plan folders are never blocked.
+  - **G4:** Blocks reads of secret files (`.env*` except templates, `*.pem`, SSH keys, `*.key`) and writes whose content matches a secret pattern. Reads bind to all agents, writes to writers.
+  - **G5:** Blocks attribution trailers or session links in any text a writer produces.
+  - **G6:** The third refusal under one rule (`guard.refusal_limit`) ends the session; the task retries in a fresh session.
+- **R1:** Any agent with the `run` tool may only run command classes the repo declares, passed as `{class, args[]}`. There is no shell, so pipes, chains and `sh -c` cannot happen. An undeclared class is refused.
+- **B1:** The builder may write only to the group's `files` list and their test siblings (the matching test files). Any other write is refused, and the refusal tells the builder to stop with result status `needs_scope` naming the paths; the orchestrator then approves or denies.
+- **O1 to O10:** Rules for the orchestrator, written as text in `AGENTS.md` on any host. The harness backs them by refusing verbs on leased worktrees and critical refs, and by needing a terminal for human-only verbs.
+  - **O1:** No commit, push, merge, delete or force on `main`, `master`, `release/*` or any critical ref.
+  - **O2:** No force push, `--force-with-lease` or `+refspec`.
+  - **O3:** No merging into the epic branch by hand; the engine merges.
+  - **O4:** No editing, resetting or removing a worktree the harness has leased; verbs refuse such worktrees.
+  - **O5:** No `git stash`; use a WIP (work-in-progress) commit instead.
+  - **O6:** No `gh pr create` or `gh pr merge`; the engine opens the epic PR.
+  - **O7:** No faking a terminal (`script`, `expect`, `unbuffer`) to run a human-only verb. Nothing enforces this one; it is text only.
+  - **O8:** Dropped in the design pass; the roster goes from O7 to O9.
+  - **O9:** No human-only verb (`install`, `uninstall`, `fresh`, config writes, `gate --install`, `release`, `doctor --fix`) and no `internal` verb. Human-only verbs refuse without a terminal.
+  - **O10:** No `--no-verify` on any git command.
+
+#### Sandbox summary
+
+**In plain terms.** The sandbox is the operating-system fence around every `run` command a worker issues (see Glossary). The guard checks what a worker asks for; the sandbox limits what the command can actually see, write or reach on the network. Without it, a test or build script could read the user's files or call the internet. Each operating system has its own sandbox tool, listed below. The engine wraps every command in it; nobody turns it off.
+
+| OS | Sandbox | Shape |
+|---|---|---|
+| macOS | `sandbox-exec` (seatbelt) | Reads outside home allowed; inside home only the worktree, repo git dir, Komodo caches and toolchains; writes only to worktree, session temp and language caches; network denied except loopback |
+| Linux, WSL | `bwrap` | `/` read-only; home an empty tmpfs with the same folders bound back; `--unshare-net`; `--die-with-parent`; refuses with the fix when user namespaces are blocked |
+| Windows native | Docker (when WSL is absent) | `--network none`; only the worktree, session temp and language-cache volumes writable; with neither WSL nor Docker every work verb refuses |
+
+**What each one does**
+- **macOS:** Uses Apple's built-in `sandbox-exec` (seatbelt). The command can read files outside the home folder, but inside home only the worktree, the repo's git folder, Komodo's caches and the toolchains. It can write only to the worktree, the session's temp folder and the language caches, and the network is off except loopback (the machine talking to itself). macOS has no process or memory cap, and `doctor` tells the user so.
+- **Linux, WSL:** Uses `bwrap` (bubblewrap). The whole filesystem is read-only, the home folder is an empty temporary folder with the same few folders bound back in, and `--unshare-net` removes the network. `--die-with-parent` kills the command if the harness dies. If the kernel blocks user namespaces, every work verb refuses and prints the fix.
+- **Windows native:** Uses Docker when WSL is absent, with `--network none` and only the worktree, session temp and language-cache volumes writable. With neither WSL nor Docker, every work verb refuses and names both options.
+
+The sandbox is `required` on every OS. Every `run` gets a 10-minute timeout, a 4 KB reply cap, 512 processes and 8 GB (cgroups or Docker; macOS has no cap and `doctor` says so), and a whole-tree kill. Intake runs `commands.setup` with network on; every `run` keeps it off. Loopback is always allowed.
+
+| Two Verify sessions bind one fixed port | Private loopback on Linux and Docker `[PENDING G-08]`; serialized `test` runs on macOS |
+| A test needs a database or public host | Fails at base and head; pre-existing; warns, never blocks; `needs:` items skip with `env` |
+| A symlink resolves outside the worktree | Dropped at copy time and logged |
+| The builder changed a lockfile | Setup reruns for the tester instead of copying |
+| Native Windows with neither WSL nor Docker | Every work verb refuses and names both |
+| Linux with user namespaces blocked | Every work verb refuses and names the fix |
+| A reviewer's test edits a tracked file | Reset by the engine; that review fails |
+| A `run` arg of `&&` | Reaches the command as a literal string |
+**Tool runtime ([Tool runtime (Appendix G)](#tool-runtime))**
+- A builder calling `submit_finding` is refused because the tool isn't listed for it.
+- A faked `api_retry` line with `error: rate_limit` ends the session with reason `provider`, and the next session starts on the backstop.
+- A reviewer calling `edit` is refused.
+- The MCP server exits within 2 s of its session.
+- `write` on an existing file is refused.
+- A 40 KB `run` output leaves its full log at the named path.
+- On each API link, a fixture model that stops with text gets 1 final call and a schema-valid result.
+- On each API link, a builder whose `done_when` fails continues in the same session.
+- A fixture session that passes 80% of `ctx` stubs old outputs and never sends past `ctx`.
+- A `run` arg of `&&` reaches the command as a literal string.
+
+**Guardrails ([Guardrails (Appendix G)](#guardrails))**
+- The guard table test covers every row for every agent, and malformed input is refused.
+- Verbs given a critical ref or a leased worktree refuse.
+- The scout's rendered table has 0 write rows.
+- A `policy.json` row edited without regenerating `lld.md` fails `gate`.
+- A group whose `files` list `docs/backlog/**` fails `doctor backlog`.
+
+**Sandbox and process control ([Sandbox and process control (Appendix G)](#sandbox-and-process-control))**
+- On macOS and Linux, a `run` that writes outside the worktree fails.
+- On macOS and Linux, the tester's `read` of the builder's worktree path is refused by the sandbox, not the guard.
+- A `node_modules` tree with a pnpm symlink copies with the link intact on all 3 OSes, and a link pointing outside the worktree is dropped.
+- Two Verify sessions binding one fixed port both pass on Linux and run one after the other on macOS.
+- A test that needs a database fails at base and head, and the group lands with a warning.
+- Two files differing only by case fail Check on macOS.
+- `go test` binding `127.0.0.1` passes.
+- `go build` in a fresh worktree passes after Intake's setup.
+- On native Windows, a `run` that writes outside the worktree fails under Docker.
+- On native Windows with neither WSL nor Docker, a work verb refuses and names both.
+- On every OS, a `run` that connects to a public address fails.
+- On every OS, `env` in a `run` shows only the allowed variables.
+- On every OS, a `run` that sleeps past 10 min dies with its whole tree, under Docker too.
+- On every OS, a reviewer's test that edits a tracked file is reset and the review fails.
+- On every OS, a `run` that reads `~/.ssh` or writes your `~/.cargo/registry` fails.
+
+
 ## 7. Providers and HTTP
 
 A provider is a service that runs an AI model: Anthropic's Claude, OpenAI, or a local server such as Ollama. A link is one way to reach a provider, such as the `claude` command-line tool or an HTTPS API. Adapters are the Go code that starts, streams and resumes a session on a link. The HTTP stack is the one client under every network call. Without them each engine part would carry provider quirks, and a stray API key could bill the wrong account. The engine calls adapters; a person sees them only through `doctor` and `status`.
@@ -4449,467 +4956,6 @@ No agent has git write tools, forge credentials or a shell. Only the engine runs
 
 ## Appendix G. Tool Runtime, Guardrails and Sandbox
 
-#### Tool runtime
-
-
-**In plain terms.** The tool runtime is the code that gives a model session its tools and runs them. A tool is a named action the model can request, such as reading a file or running a test command. The runtime decides which tools each session sees, carries the request from the model to Go and the result back, and caps what comes back. Without it a model could only talk; it could never read, edit or run anything. The model session calls tools; the engine executes them.
-
-#### Registry and transports
-
-**In plain terms.** The registry is the table of all tools Go knows; a transport is the channel a tool request travels over. There are two transports: a private MCP (Model Context Protocol, how a model calls tools) server for `claude-cli`, and a Go loop for API links. An MCP server is a tool server Claude Code talks to over the MCP protocol; stdio means the two processes talk over standard input and output. Without the registry a session could be offered a tool that does not exist. The engine sets both up; the model session only sees its tool list.
-
-- The registry binds the tools in `agent.json` to one session; unlisted tools are not advertised (G1).
-- `claude-cli`: a private MCP server, `komodo internal tools --agent --session`, over stdio, started with `--strict-mcp-config`; it dies with its session and starts in under 100 ms because it reads nothing from disk.
-- API links: Go runs the harness tool loop, calling the same tool functions.
-
-**What each one does**
-- **The registry binds the tools in `agent.json` to one session:** At session start, Go takes the agent's tool list and attaches those tool functions to this one session. A tool not in the list is neither offered nor callable (guard rule G1).
-- **`claude-cli`: a private MCP server:** For a Claude Code session, Go starts `komodo internal tools --agent --session` as a small server over stdio that only this session can reach. `--strict-mcp-config` tells Claude Code to use no other tool servers. It exits when its session exits and starts in under 100 ms because everything it needs is already in memory.
-- **API links: Go runs the harness tool loop:** When Go talks to the model over HTTP, there is no Claude Code to run tools, so Go runs the loop itself ([Harness tool loop (API links) (Appendix G)](#harness-tool-loop-api-links)). It calls exactly the same tool functions, so behaviour matches across links.
-
-#### Harness tool loop (API links)
-
-**In plain terms.** The harness tool loop is Go's copy of what Claude Code does inside `claude -p`: send the prompt, run each tool the model asks for, send the result back, repeat until the model is done. It only runs on API links, where Go speaks HTTP to the model directly. Without it, API models could not use tools at all. The engine runs the loop; the model session drives it by asking for tools.
-
-1. Tools stay on `auto`; the model reasons and calls tools freely; thinking stays on.
-2. A text-only reply ends the work. No nudge.
-3. One final call returns only the agent's result schema (per link, [Schema enforcement per link (Appendix H)](#schema-enforcement-per-link)).
-4. The engine checks the result: schema first (1 re-prompt), then the agent's own gate (`done_when` for a builder, `lint_backlog` for a planner). A failure goes back into the same session with its output; 2 rejected results end it with `check_fail`.
-5. A reply cut off at the output limit gets "continue" once, then ends with `no_result`.
-
-**What each one does**
-- **1. Tools stay on `auto`:** The model decides for itself when to call a tool and when to reason; Go never forces a tool call. Extended thinking stays switched on throughout.
-- **2. A text-only reply ends the work:** When the model answers with plain text and no tool call, Go treats that as "I am finished". It does not prompt the model to keep going.
-- **3. One final call returns only the agent's result schema:** Go then sends one more request whose only allowed output is the agent's result schema, using each link's own mechanism ([Schema enforcement per link (Appendix H)](#schema-enforcement-per-link)). This produces the structured result.
-- **4. The engine checks the result:** Go validates the result against the schema and, on a miss, re-prompts once. It then runs the agent's own gate: `done_when` for a builder or `lint_backlog` for a planner. A failure is sent back into the same session with its output; a second rejected result ends the session with `check_fail`.
-- **5. A reply cut off at the output limit gets "continue" once:** If the model hits its maximum output length mid-answer, Go sends "continue" one time. If it is still cut off, the session ends with `no_result`.
-
-Context limit: Go counts tokens every turn against the link's measured context. At 80%, old tool outputs shrink to one-line stubs; their full text stays in `<session>/out/`. Still over, the session ends with `no_result`; nothing past the context is sent.
-
-No result tool exists mid-session: the result always comes from the final call, on every link. `prompt.md` tells the model to stop and summarize when it is finished.
-
-**What each one does**
-- **Context limit:** The context is the maximum text a model can hold in one conversation. Go counts tokens every turn against the link's measured context ([Measured context (Appendix H)](#measured-context)). At 80% it replaces old tool outputs with one-line stubs, keeping the full text on disk under `<session>/out/`. If the conversation is still too big the session ends with `no_result`; Go never sends more than the model can hold, so a server cannot silently cut the prompt.
-
-#### Tools and caps
-
-**In plain terms.** This is the list of every tool a model session can be given, and the cap each one enforces. Caps keep tool output small so the conversation does not fill up, and keep tools from doing more than their name says. Without them one `run` or `read` could flood the context or escape the worktree. The model session calls them; the guard checks each call first and Go runs it.
-
-| Tool | Rule |
-|---|---|
-| `read` | 2,000 lines per call, line ranges; repeat read of an unchanged file returns "unchanged since your last read (N lines)"; a second read in a row returns full content |
-| `search` | Go walker with `.gitignore` applied and a 1 MB per-file cap; never scans `node_modules` or `target/` |
-| `edit` | Exact, unique search-and-replace; a miss returns the closest lines; the reply shows the edited lines after `tool.post` formats them |
-| `write` | New files only; an existing file is refused with "use `edit`" |
-| `run` | `{class, args[]}`; Go runs the class's command plus args directly, no shell; inside the sandbox; 10-min timeout |
-| `diff`, `git_read` | Reviewer only; read-only git |
-| `skill` | Any allowlisted skill or `<name>#<section>` |
-| `submit_finding` | Rule ID, `file:line`, quoted evidence; unknown rule ID refused |
-| `lint_backlog` | Planner only |
-| `web` | Architect and researcher, opt-in, GET only, allowlist (the list of what is permitted) |
-| External MCPs | Opt-in allowlist per agent, no credentials (final phase) |
-
-**What each one does**
-- **`read`:** The model reads a file, up to 2,000 lines per call, by line range. Reading an unchanged file again returns a one-line "unchanged since your last read" note to save tokens; asking a second time in a row returns the full text again, in case the earlier copy was compacted away.
-  - Because `read` takes line ranges, the 2,000-line cap costs one `ReadAt` (Go's read of a slice of a file), not a read of the whole file.
-- **`search`:** The model searches the repository for text. Go walks the files itself, honours `.gitignore`, skips any file over 1 MB, and never scans `node_modules` or `target/`.
-- **`edit`:** The model changes a file by giving an exact, unique piece of text and its replacement. If the text is not found, the reply shows the closest matching lines. After the edit, the `tool.post` hook formats the file and the reply shows the edited lines.
-- **`write`:** The model creates a new file. Writing to a file that already exists is refused with the message "use `edit`", so content is never overwritten by accident.
-- **`run`:** The model runs a named command class (such as build or test) with arguments. Go starts the class's command directly, with no shell, inside the sandbox, with a 10 minute timeout. Only classes declared for the agent are allowed (rule R1).
-- **`diff`, `git_read`:** The reviewer, and only the reviewer, reads the diff under review and read-only git data. No agent has any git write tool.
-- **`skill`:** The model pulls a standards document (a skill, see Glossary) by name, or one section of it as `<name>#<section>`. Only skills on the agent's allowlist can be pulled.
-- **`submit_finding`:** The reviewer reports one problem with a rule ID, a `file:line` location and a quoted line of evidence. Go checks that the quote really is at that line; a finding with an unknown rule ID is refused, and a finding whose quote is not found is dropped and logged.
-- **`lint_backlog`:** The planner, and only the planner, checks its draft plan against the backlog grammar before returning it. The engine lints the plan again (checks it automatically against the rules) and writes files only if lint passes.
-- **`web`:** The architect and researcher may fetch a web page, but only when the tool is switched on for them, only with GET requests, and only from hosts on the allowlist.
-- **External MCPs:** In a final phase, an agent may be allowed extra third-party MCP tool servers from an explicit allowlist, with no credentials passed through. Planned for the final phase.
-
-Output cap: 4 KB for every tool except `read`, head and tail kept; the full output goes to `<session>/out/<call>.log` and the capped reply names the path.
-
-**What each one does**
-- **Output cap:** Every tool except `read` returns at most 4 KB to the model, keeping the start and the end of the output. The full output is saved to `<session>/out/<call>.log`, and the capped reply tells the model that path so it can `read` more if needed.
-
-Tool set facts:
-- A builder has 6 tools ([Per-agent tool matrix (Appendix G)](#per-agent-tool-matrix)).
-- `edit` and `write` stay separate tools: `edit` changes an existing file and `write` creates a new one.
-- There is no `check_task` or `submit_result` tool, because the engine gates the final result itself.
-- `run` returns only the capped result to the model; the full log stays at the named path.
-
-#### Per-agent tool matrix
-
-**In plain terms.** The tool matrix says which of the tools above each of the 7 agents gets, and which command classes its `run` may start. A command class is a named command such as build, test or lint declared for the repository. The matrix is the practical meaning of "least privilege": a reviewer cannot edit, a tester cannot search the web. The engine enforces it through guard rules G1 and R1; the model session sees only its own row.
-
-| Agent | Tools | Run classes |
-|---|---|---|
-| Builder | `read`, `search`, `edit`, `write`, `run`, `skill` | declared classes |
-| Reviewer | `read`, `search`, `skill`, `diff`, `git_read`, `run`, `submit_finding` | build, test, lint |
-| Tester | `read`, `search`, `run` | build, test |
-| Planner | `read`, `search`, `skill`, `lint_backlog` | — |
-| Architect | `read`, `search`, `skill`, `web` | — |
-| Researcher | `read`, `search`, `skill`, `web` | — |
-| Scout | `read`, `search` (paths only) | — |
-
-**What each one does**
-- **Builder:** Can read, search, edit and create files, run commands and pull skills. Its `run` may start any command class the repository declares. It is the only agent that writes code, and only inside its group's `files` (rule B1).
-- **Reviewer:** Can read, search and pull skills, read the diff and git history, run build, test and lint, and submit findings. It has no edit or write tool; if its `run` changes files the engine resets them afterwards.
-- **Tester:** Can read, search and run build and test commands only. It has no skill, diff or write tool, and gives a blind pass or fail per acceptance item, with evidence.
-- **Planner:** Can read, search, pull skills and lint its draft backlog. It never runs commands; the harness writes the plan files only after lint passes.
-- **Architect:** Can read, search, pull skills and, when enabled, fetch allowlisted web pages with GET. It never runs commands and never writes.
-- **Researcher:** The same four tools as the architect. It returns findings with `file:line` references and never writes.
-- **Scout:** Can read, and search for file paths only (no file contents). Every write is refused, and it runs on a local model when its chain allows.
-
-#### Host facts the server is built against (Claude Code 2.1.295)
-
-**In plain terms.** Host facts are behaviours of Claude Code itself, the program that `claude-cli` sessions run inside, that the tool server depends on. They were checked against Claude Code version 2.1.295. Without knowing them, Komodo's own timeouts and caps could be silently overridden by the host's defaults. A person never sets these; the engine either relies on them or deliberately leaves them unset.
-
-A stdio MCP server has no per-request timer and `MCP_TOOL_TIMEOUT` defaults to about 28 hours, so the sandbox's 10-minute `run` timeout is the only one that fires. `MAX_MCP_OUTPUT_TOKENS` defaults to 25,000 and the host warns past 10,000, so the 4 KB cap stays far below both. The server must answer `initialize` inside `MCP_TIMEOUT` (30 s). The worker env never sets `CLAUDE_CODE_RETRY_WATCHDOG`; instead the supervisor reads `system/api_retry` lines, and on `rate_limit` or `billing_error` the engine ends the session with reason `provider`, keeps its resume handle, and the provider layer fails over or pauses.
-
-**What each one does**
-- **`MCP_TOOL_TIMEOUT` (about 28 hours by default):** Claude Code's limit on one tool call to an MCP server. Because it is so long, Komodo's own 10 minute `run` timeout in the sandbox is the one that actually fires.
-- **`MAX_MCP_OUTPUT_TOKENS` (25,000 by default, warning past 10,000):** Claude Code's cap on how much a tool may return. Komodo's 4 KB cap is far below it, so the host never truncates or warns.
-- **`MCP_TIMEOUT` (30 s):** How long Claude Code waits for a tool server to answer its first `initialize` message. Komodo's server answers in under 100 ms because it reads nothing from disk.
-- **`CLAUDE_CODE_RETRY_WATCHDOG` (never set):** A Claude Code setting that would retry rate-limit errors for hours inside the session, holding a pool slot while the free backstop sits idle. Komodo leaves it unset and instead reads the `system/api_retry` lines itself.
-- **`system/api_retry` on `rate_limit` or `billing_error`:** When such a line appears, the engine ends the session with reason `provider`, keeps its resume handle, and the provider layer ([Failover chain (Appendix H)](#failover-chain)) moves the next session to another link or pauses.
-
-#### Guardrails
-
-
-**In plain terms.** The guard is the in-process check that runs before every tool call a worker makes. Its rules are data rows in `embed/policy.json`, each with an ID that refusals quote. It exists so a model cannot escape its worktree, read secrets or use a tool it was never given. Without it the sandbox would be the only barrier and refusals would teach nothing. The engine runs it; the gate renders its tables into this document.
-
-#### Policy row schema (`embed/policy.json`)
-
-**In plain terms.** Every guard rule is one JSON row with six fields; Go only loads them. This table defines those fields. One source feeds three readers: the guard, the gate's rendered tables and the refusal text. Without it rules would be scattered Go code that drifts from the documentation.
-
-| Field | Values | Meaning |
-|---|---|---|
-| `id` | `G1`…`G6`, `R1`, `B1`, `O1`…`O10` | The row named in a refusal |
-| `scope` | Agent names, or `writers`, `runners`, `all`, `orchestrator` | Who it binds to |
-| `kind` | `tool`, `path`, `run`, `text` | What the check reads |
-| `pattern` | Glob or list | What matches; `~/.komodo/**` style globs expand at load |
-| `action` | `refuse`, `warn` | `warn` only for `text` rows: on the orchestrator, and in the steering-phrase list for a repo addendum (a skill gets `refuse`) |
-| `message`, `alternative` | Template IDs | The refusal line and the allowed alternative |
-
-**What each one does**
-- **`id`:** The short name a refusal quotes, such as G2 or B1.
-- **`scope`:** Which agents the row binds: named agents, every writer (has `edit` or `write`), every runner (has `run`), all agents, or the orchestrator.
-- **`kind`:** What the check inspects: a tool name, a path argument, a `run` class, or text the agent writes.
-- **`pattern`:** The glob or list that must match; home-relative globs expand when loaded.
-- **`action`:** `refuse` blocks the call; `warn` exists only for text rows aimed at the orchestrator, which no hook can block.
-- **`message`, `alternative`:** Template IDs for the refusal line and the allowed alternative the model is told.
-
-`safety/rows.go` only loads it; no row is Go code. The gate renders the roster tables from it and fails on drift. The scout's compiled table has 4 rows, the builder's 8.
-
-**Example**
-
-One guard row: G3 refuses writes to protected paths for every writer. Template IDs for the refusal text are not yet designed.
-
-```json
-{
-  "id": "G3",
-  "scope": "writers",
-  "kind": "path",
-  "pattern": [
-    ".git",
-    ".git/config",
-    ".git/hooks",
-    "bin/komodo",
-    "~/.komodo/**",
-    "~/.claude/settings*.json",
-    ".claude/settings*.json",
-    "embed/policy.json",
-    "docs/prd.md"
-  ],
-  "action": "refuse",
-  "message": "[UNKNOWN: not yet designed]",
-  "alternative": "[UNKNOWN: not yet designed]"
-}
-```
-
-#### Rows every agent inherits
-
-**In plain terms.** These six rows bind to every agent or every writer; no agent file can lower them. Each refusal names the row and what the model may do instead. Without them a worker could read `.env`, write outside its worktree or add attribution trailers.
-
-| ID | Refuse | Scope |
-|---|---|---|
-| G1 | A tool not in the agent's set; the server does not list it either | all |
-| G2 | Reads or writes outside the session worktree, including `..` paths and symlink escapes | all |
-| G3 | Writes to protected paths: `.git` (file or folder), `.git/config`, `.git/hooks`, `bin/komodo`, `~/.komodo/**`, `~/.claude/settings*.json`, `.claude/settings*.json`, `embed/policy.json`, `docs/prd.md`. Memory (`~/.claude/projects/*/memory/`) and plans (`~/.claude/plans/`) are never blocked | writers |
-| G4 | Reads of secret files (`.env*` except `.env.example`, `.env.sample`, `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`), or written content matching a secret pattern | reads all; writes writers |
-| G5 | Attribution trailers or session links in any text the agent writes | writers |
-| G6 | The `guard.refusal_limit` (3rd) refusal under the same rule; ends the session | all |
-
-**What each one does**
-- **G1:** Blocks any tool not in the agent's set; the tool server does not even advertise it. The session sees a refusal naming G1 and its allowed tools.
-- **G2:** Blocks reads or writes outside the session worktree, including `..` and symlinks resolving elsewhere. The session is told the path is out of bounds.
-- **G3:** Blocks writes to git internals, the Komodo binary, Komodo state, Claude settings, the policy file and the PRD. Memory and plan folders stay writable. Writers only.
-- **G4:** Blocks reads of secret files such as `.env` and private keys, and any written content matching a secret pattern. Reads bind to all, writes to writers.
-- **G5:** Blocks attribution trailers or session links in any text a writer produces, so commits stay clean.
-- **G6:** The third refusal under one rule ends the session with exit reason `refusals`; `guard.refusal_limit` is the only tunable.
-
-#### Run and builder rows
-
-**In plain terms.** Runners are agents with the `run` tool; the builder is the only agent with `edit` and `write`. R1 limits which command classes `run` accepts; B1 limits where the builder writes. B1 is the only refusal a person or the orchestrator can turn into an allow. Without B1 a builder could silently widen its own scope.
-
-| ID | Refuse | Scope |
-|---|---|---|
-| R1 | Any command class not declared; `run` takes `{class, args[]}` | runners |
-| B1 | Writes outside the group's `files` and test siblings; the refusal says to stop with result status `needs_scope` | builder |
-
-**What each one does**
-- **R1:** Blocks a `run` call whose class is not in the agent's `run_classes`; `run` takes a class and args, never a shell. The session is told which classes exist.
-- **B1:** Blocks builder writes outside the group's `files` and their test siblings. The refusal says to stop with status `needs_scope`, which the orchestrator can approve.
-
-Facts of `run` that keep their own tests, not guard rows: no shell (pipes, chains and `sh -c` cannot happen); no network (sandbox); no git writes (no class runs git). B2 (a builder's own backlog files) is a lint fact: `doctor backlog` refuses a group whose `files` list `docs/backlog/**`.
-
-The boundary is the sandbox: builders write tests and `run` them, so any code can run, and it runs inside the sandbox. R1 limits command names only.
-
-#### Orchestrator rows (text in `AGENTS.md`, any host)
-
-**In plain terms.** The orchestrator is the interactive session a person works in, on any host. It has no Komodo hook, so these rows are plain text in the `AGENTS.md` block. The harness backs them on its own side: verbs refuse leased worktrees and critical refs. O8 was dropped with the `internal guard` hook, which is why the numbering skips it. Without these rows an orchestrator could force-push or hand-merge an epic branch.
-
-| ID | Refuse |
-|---|---|
-| O1 | Commit, push, merge, delete or force on `main`, `master`, `release/*`, or any critical ref |
-| O2 | Force push, `--force-with-lease`, `+refspec` |
-| O3 | Merging into the epic branch by hand |
-| O4 | Editing, resetting or removing a worktree the harness has leased |
-| O5 | `git stash`; use a WIP commit |
-| O6 | `gh pr create` and `gh pr merge`; the engine opens the epic PR |
-| O7 | Faking a terminal (`script`, `expect`, `unbuffer`) to run a human-only verb |
-| O9 | A human-only verb or any `internal` verb |
-| O10 | `--no-verify` on any git command |
-| plus | G3, G4, G5 |
-
-**What each one does**
-- **O1:** Never commit, push, merge, delete or force on `main`, `master`, `release/*` or any critical ref; verbs refuse these refs too.
-- **O2:** Never force push in any form; the engine never does it either.
-- **O3:** Never merge into the epic branch by hand; the engine lands groups.
-- **O4:** Never edit, reset or remove a worktree the harness has leased; verbs refuse leased worktrees.
-- **O5:** Never `git stash`; make a WIP commit instead.
-- **O6:** Never create or merge PRs with `gh`; the engine opens the epic PR and a person merges it.
-- **O7:** Never fake a terminal to run a human-only verb; the text is the only enforcement.
-- **O9:** Never run a human-only verb such as `install`, `fresh` or `release`, nor any `internal` verb; these refuse without a terminal.
-- **O10:** Never pass `--no-verify` to any git command.
-- **plus G3, G4, G5:** The orchestrator also keeps the protected-path, secret and attribution rules, as text in the same block.
-
-The harness enforces these on its own side: verbs refuse leased worktrees and critical refs, and human-only verbs need a terminal.
-
-#### Guard mechanics
-
-**In plain terms.** Mechanics are how the guard runs: inline Go before each call, three hooks in total, one human override and a cost under 50 µs. A hook is code the harness runs at a fixed point in a session. Without the fixed count, a repo or host hook could run inside a worker and change its behavior.
-
-- Every tool call is checked in-process before it runs (`tool.pre`); input it cannot parse, an unknown tool or a guard error is a refusal. A refusal is logged afterward as `tool.denied`.
-- Exactly 3 inline hooks exist, all Go: `tool.pre` (guard), `tool.post` (format after `edit`), `session.end` (WIP commit). No model, repo or host hook runs inside a worker.
-- `needs_scope` (B1) is the only refusal a person or the orchestrator can turn into an allow.
-- Performance: each agent's rows compile to a matcher once per session; a check is a map lookup plus at most 8 glob tests, under 50 µs. Path containment results are cached per session.
-
-#### Sandbox and process control
-
-
-**In plain terms.** The sandbox is the OS-level cage around every command a worker runs through the `run` tool. It is the third of three layers, after the tool surface and process limits. It exists so test code a builder wrote cannot reach the network, the user's caches or another session's worktree. Without it a `run` could exfiltrate secrets or plant files in the user's own build cache. The tool server wraps each command; the model client is never sandboxed.
-
-#### Three layers
-
-**In plain terms.** Three layers each stop a class of escape, from cheapest to strongest. The tool surface does most of the work by never offering a shell. Process limits bound time, memory and environment. The OS sandbox is the last line and is required on every OS.
-
-1. Tool surface: no native Bash or Edit.
-2. Process limits: worktree working directory; environment of only `PATH`, `HOME` (session temp), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables; timeout; output cap; process and memory caps; whole-tree kill.
-3. OS sandbox: wraps every `run` command from the tool server, never the model client.
-
-**What each one does**
-- **Tool surface:** Workers get Komodo's own tools, never native Bash or Edit, so there is no shell to abuse.
-- **Process limits:** Each `run` starts in the worktree with five named variables plus cache paths. It gets a timeout, an output cap, process and memory caps, and a kill that takes the whole tree.
-- **OS sandbox:** Every `run` command is wrapped by the OS mechanism in 22.2; the model process is not, since it only talks to the tool server.
-
-#### Per OS
-
-**In plain terms.** Each OS has one sandbox mechanism and one profile, the file listing what a command may read, write and reach. The profile is rendered once per worktree and reused. The second table gives the caps that apply everywhere. Without a per-OS profile Windows would have no sandbox at all.
-
-| OS | Sandbox | Profile |
-|---|---|---|
-| macOS | `sandbox-exec` (seatbelt) | Reads allowed outside home; inside home only the worktree, the repo's git dir, Komodo's caches and toolchain folders; writes only to the worktree, session temp and language caches; network denied except loopback; no process or memory cap, and `doctor` says so |
-| Linux, WSL | `bwrap` | `/` read-only; home an empty tmpfs with the worktree, git dir, caches and toolchains bound back; worktree, session temp and language caches writable; `/tmp` tmpfs; `--unshare-net`; `--die-with-parent`; cgroups (Linux's per-process resource limits) caps when delegated; when user namespaces are blocked every work verb refuses and names the fix |
-| Windows native | Docker when WSL is absent | `--network none`; only the worktree, session temp and language-cache volumes writable; `--pids-limit` and `--memory`; with neither WSL nor Docker every work verb refuses and names both |
-
-**What each one does**
-- **macOS:** Apple's `sandbox-exec` with a seatbelt profile. Reads outside home are free; inside home only the worktree, git dir, caches and toolchains. Writes go only to the worktree, session temp and language caches. No process or memory cap exists, and `doctor` reports that.
-- **Linux, WSL:** `bwrap` (bubblewrap) builds a private filesystem: root read-only, an empty home with the needed folders bound back, a private `/tmp`. Network is off and the sandbox dies with its parent. Caps come from cgroups when delegated. If user namespaces are disabled, work verbs refuse and name the fix.
-- **Windows native:** Without WSL, Docker runs each worktree in a Linux container with no network. Only the worktree, temp and cache volumes are writable, under pid (process id) and memory limits. With neither WSL nor Docker, work verbs refuse and name both.
-
-| Value | Setting |
-|---|---|
-| `run` timeout | 10 min per command |
-| Processes / memory | 512 / 8 GB per session |
-| Policy | `required` on every OS |
-| Loopback | Always allowed |
-| Profile reuse | Rendered once per worktree; Docker keeps one container per worktree alive |
-
-**What each one does**
-- **`run` timeout:** A command running past 10 minutes is killed with its whole process tree.
-- **Processes / memory:** A session may hold 512 processes and 8 GB, enforced by cgroups or Docker; macOS has no enforcement.
-- **Policy:** `required` on every OS means no `run` ever executes unsandboxed; a missing sandbox refuses the work verb.
-- **Loopback:** Connections to the local machine are always allowed, since blocking them broke the repo's own tests.
-- **Profile reuse:** The seatbelt or bwrap profile is rendered once per worktree; Docker keeps one container per worktree so each `run` is an `exec`.
-
-#### Caches and toolchains
-
-**In plain terms.** Caches are where build tools keep downloaded modules and compiled objects; toolchains are the compilers themselves. Komodo gives each repo its own cache folder so agent code never touches the user's caches. Toolchains are mounted read-only. Without this, `go build` would fail on a read-only cache, or a malicious test could poison the user's `~/.cargo/registry`.
-
-- Language caches are Komodo's own: `~/.komodo/cache/lang/<repo-id>/`; `GOCACHE`, `GOMODCACHE`, `npm_config_cache`, `CARGO_HOME`, `PIP_CACHE_DIR` point there and are writable. Never the user's `~/.npm`, `~/.cargo/registry`, Go or pip caches.
-- Toolchain folders are read-only: `~/.rustup` and the folders holding each detected command's binary; `doctor` runs each command's `--version` in the sandbox.
-- Cap `sandbox.lang_cache_gb` 10 (hard 50); the sweep deletes a repo's whole cache when over the cap or unused 30 days, never while the repo holds a lease. `cache clear --kind lang` and `uninstall` remove it.
-- Never the per-user process limit: it counts every process the user runs.
-- Intake runs `commands.setup` with network on; every `run` keeps it off.
-
-#### Read-only agents' `run`
-
-**In plain terms.** Reviewer and tester have no write tools, but running tests writes build output. So their `run` may write the worktree, and the engine cleans up afterward. A review that changed tracked files fails, since its evidence is suspect. Without this, test runs would fail, or leave edits a later session mistakes for the builder's.
-
-Reviewer and tester have no write tools, but their `run` may write the worktree so tests work. After the last read-only session in a worktree ends, the engine resets changed tracked files and fails that review, removes new untracked files that are not gitignored, and keeps ignored build output.
-
-#### Test sandboxes and copies
-
-**In plain terms.** The tester works in its own copy of the builder's worktree, so it cannot see the builder's files or reasoning. A copy means cloning the worktree with its installed dependencies, by the mechanism in the platform table. These rules cover blindness, parallel suites, service-backed tests and the copy budget. Without them the two Verify sessions would collide on ports and the tester could peek at the builder.
-
-| Rule | Detail |
-|---|---|
-| Blind by construction | The tester's profile lists only its own worktree, the git dir, caches and toolchains; the builder's worktree under `~/.komodo/wt/` is outside that list |
-| Two suites at once | Linux `bwrap --unshare-net` and Windows Docker `--network none` give each session a private loopback `[PENDING G-08]`; macOS has no network namespace, so `test`-class runs of the two Verify sessions serialize through one per-repo lock file |
-| Service-backed tests | They fail at base too, so the baseline marks them pre-existing and they warn. An item may declare `needs: network \| docker \| service:<name>`; the tester skips it with reason `env` and a ⚠️ line |
-| Per-session `TMPDIR` and `HOME` | Two sessions never share a temp dir |
-| Copy per language | Go: nothing. Node: copy `node_modules`, symlinks kept. Rust: one `CARGO_TARGET_DIR` per group under the language cache `[PENDING G-12]`. Python: rerun `uv sync`. Makefile-only: rerun `make setup`. A changed lockfile reruns setup instead of copying |
-| Copy budget | Counts against Verify's wall time; over 60 s warns; `doctor` reports the mechanism |
-
-**What each one does**
-- **Blind by construction:** The tester's sandbox profile simply omits the builder's worktree, so even an exact path is unreadable; no prompt rule is needed.
-- **Two suites at once:** Reviewer and tester both run tests on one commit. Linux and Docker give each a private loopback; macOS cannot, so their `test` runs take turns through a lock file.
-- **Service-backed tests:** Tests needing a database or public host fail at base too, so they warn rather than block. An item may declare `needs: ...` and the tester skips it with reason `env`.
-- **Per-session `TMPDIR` and `HOME`:** Each session gets its own temp and home, so tests writing there never see another session's files.
-- **Copy per language:** Go needs nothing copied. Node copies `node_modules` with links kept. Rust shares one target dir per group. Python and Makefile repos rerun setup. A changed lockfile always reruns setup.
-- **Copy budget:** Copy time counts against Verify's wall clock; over 60 s warns, and `doctor` names the mechanism in use.
-
-| Platform | Mechanism | Status |
-|---|---|---|
-| macOS APFS | `cp -cR` (clonefile); 1.2 GB with pnpm symlinks cloned in 0.00 s | proven 2026-10-08 |
-| Linux | `cp -R --reflink=auto`; reflink on btrfs, XFS, ZFS; byte copy on ext4 | `[PENDING G-09]` per filesystem |
-| Windows NTFS | Go byte copy, junctions and symlinks recreated; `core.symlinks false` | `[PENDING G-10]` |
-| Windows Docker | The host copies; the tester's container binds the copy at `/work` | `[PENDING G-11]` copy time for 1 GB |
-
-**What each one does**
-- **macOS APFS:** `cp -cR` uses APFS clonefile, a copy-on-write clone; 1.2 GB with pnpm symlinks took 0.00 s on 2026-10-08.
-- **Linux:** `cp -R --reflink=auto` clones on btrfs, XFS and ZFS and byte-copies on ext4; per-filesystem behavior is pending spike G-09.
-- **Windows NTFS:** Go copies bytes and recreates junctions and symlinks; git checks symlinks out as text (`core.symlinks false`). Pending spike G-10.
-- **Windows Docker:** The host makes the copy and the tester's container mounts it at `/work`; copy time for 1 GB is pending spike G-11.
-- **Docker bind mount:** The worktree is a bind mount, so the image saved after setup never holds `node_modules`. A volume per worktree would be faster `[PENDING G-25]` but puts the files where the host sweep cannot reach them.
-
-Symlinks are copied as links, never followed; a link resolving outside the worktree is dropped and logged. A `.venv` is never copied. Check adds a case-collision lint on every OS.
-
-#### Docker backend (native Windows)
-
-**In plain terms.** On Windows without WSL, Docker is the sandbox: one Linux container per worktree. The image is the official language image, chosen from the repo's own version files. Setup runs with network on, then the container is cut off. Without this, native Windows would have no safe way to run tests.
-
-| Rule | Detail |
-|---|---|
-| Image | The full official image per detected language: `golang:<go directive>`, `node:<.nvmrc, else lowest engines major, else current LTS>`, `rust:<rust-toolchain channel, else stable>`, `python:<.python-version, else lowest requires-python, else latest>`. Makefile-only or 2-language repos need `sandbox.image`. Intake pulls it and the ledger records its digest |
-| Tools | Rust setup adds `clippy` and `rustfmt` before `cargo fetch`; Python setup is `uv sync` with a `uv.lock`, else `pip install -e .[dev]` when a `dev` extra exists, else `doctor` names the missing tools |
-| Runtime | One container per worktree made at Intake with the caps, the worktree at `/work`, a named cache volume per repo; setup with network on, then disconnected; each `run` is a `docker exec`; after setup the container is saved as an image in the background and the tester's container starts from it |
-| Kill | A timeout or kill ends the command's process group inside the container; the container restarts only if that fails |
-| Host side | `git-read` runs on the host; worktrees cut with `core.autocrlf=false`; `doctor` checks the daemon runs Linux containers |
-
-**What each one does**
-- **Image:** The full official image per detected language, version taken from the repo's own pins. A repo with no language or two needs `sandbox.image`. Intake pulls it and records its digest.
-- **Tools:** Official images lack `clippy`, `rustfmt`, `pytest` and `ruff`, so setup installs them: Rust adds components before `cargo fetch`; Python uses `uv sync` or `pip install -e .[dev]`, else `doctor` names the gaps.
-- **Runtime:** One container per worktree, made at Intake with the caps, the worktree at `/work` and a cache volume per repo. After setup the network is disconnected, each `run` is `docker exec`, and the container is saved as an image for the tester.
-- **Kill:** A timeout kills the command's process group inside the container, because killing `docker exec` alone leaves it running. The container restarts only if that fails.
-- **Host side:** `git-read` runs on the host since the worktree's `.git` file holds a Windows path; worktrees use `core.autocrlf=false`; `doctor` checks the daemon runs Linux containers.
-
-#### Security view
-
-
-**In plain terms.** This section lists what could harm the code, the machine or the bill: an AI worker, a tampered file or an outside party. Beside each threat is what stops it. The harness (the `komodo` program, see Glossary) runs AI model sessions that read and write code, so each session needs hard limits. Without these limits a worker could leak a password, push to the main branch or run up a bill. The engine (the harness's core logic) enforces every limit. A person or the orchestrator (the Claude Code session that drives the harness, see Glossary) only sees refusals and warnings.
-
-#### Threats and controls
-
-**In plain terms.** A threat is something that could go wrong; a control is the mechanism that stops it. This table pairs every threat with its control, so nothing rests on the model behaving well. Every control is enforced inside the harness or the operating system, not by a prompt. A person reads this table to learn why a given refusal exists.
-
-| Threat | Stopped by |
-|---|---|
-| Agent escapes its worktree | Guard row G2 (containment, `..`, symlinks); the sandbox |
-| Agent leaks or reads secrets | G4 (secret files and patterns); sandbox environment allowlist and home-folder read block; Check's secret scan; HTTP and ledger redaction (blanking secrets out) |
-| Agent pushes, merges or force-pushes | No git write tools; R1 (no class runs git); orchestrator rules O1 to O3; only Ship writes git |
-| Tampered or stale binary | SHA-256 (a standard content fingerprint) and ed25519 verification on every fresh; repo pin |
-| Runaway cost or loops | Session supervisor, error recovery bounds, budgets |
-| Poisoned cache | Cache outside worktrees, verified on read; Komodo-owned language caches per repo |
-| Malicious external MCP | Opt-in allowlist per agent, off by default, no credentials |
-| Stale engine lands over newer work | Fence enforced by git compare-and-swap; action idempotency keys |
-| Prompt steering through a skill or repo text | Steering-phrase scan at the gate and in `doctor`; no rule text in prompts; the `text` policy row |
-| Tampered config or binary at run time | Config hash (a content fingerprint) guard; signatures; G3 protects both files |
-| Tampered or half-written state | State manager: checked on every read, bad records moved aside, atomic writes |
-
-**What each one does**
-- **Agent escapes its worktree:** A worktree is the private git checkout folder a worker may touch (see Glossary). Guard row G2 refuses reads and writes outside it, including `..` paths and symbolic links that point out. The sandbox (OS-level confinement, see Glossary) refuses the same at the operating-system level, and the worker sees a refusal naming G2.
-- **Agent leaks or reads secrets:** G4 refuses reads of secret files such as `.env` or `*.pem`, and writes that look like a secret. The sandbox hides the home folder and passes only a short list of environment variables. Check scans the diff for secret patterns. API keys never reach logs, the ledger (the run record) or error text.
-- **Agent pushes, merges or force-pushes:** Workers have no tool that writes git. R1 means no declared command class runs git. Rules O1 to O3 forbid the orchestrator from doing it. Only the Ship stage inside the engine writes git.
-- **Tampered or stale binary:** `fresh` is the self-update verb. Every update checks the download's SHA-256 hash and its ed25519 signature before swapping the binary in. The repo pin in `AGENTS.md` makes a too-old binary refuse most verbs until `komodo fresh` runs.
-- **Runaway cost or loops:** The session supervisor stops a session at its wall clock or after idle time. Every retry in error recovery has a counter, and budgets cap time per group, plus tokens when `track.usage` is on. A run that hits a bound goes Blocked instead of looping.
-- **Poisoned cache:** Cached results live outside every worktree, so a worker cannot reach them. Each entry is verified on read and deleted on mismatch. Language caches (npm, Go, Cargo, pip) are Komodo's own per repo, never the user's, so planted files cannot reach the user's builds.
-- **Malicious external MCP:** An MCP server is an outside tool server a model could call. They are off by default, allowed only by a per-agent allowlist, and receive no credentials.
-- **Stale engine lands over newer work:** A fence is a counter beside a group's lease (its lock, see Glossary). Every git write carries the fence, and git's compare-and-swap refuses a stale holder. Every side effect also has an idempotency key, so a replay after a crash never lands the same work twice.
-- **Prompt steering through a skill or repo text:** Steering is text that tries to redirect a model, such as "ignore previous". The gate fails a skill containing a steering phrase, and `doctor` warns on repo text. No rule text enters worker prompts. The `text` policy row holds the phrase list.
-- **Tampered config or binary at run time:** `komodo config` stores a hash of the config file. A hand edit makes every verb refuse until `komodo config --accept`. Signatures cover the binary. Guard row G3 blocks workers from writing either file.
-- **Tampered or half-written state:** The state manager ([State manager (Appendix C)](#state-manager)) is the only writer of runtime state. It checks every record when it is read, moves a bad record aside instead of using it, and writes atomically so a crash never leaves a half-written file.
-
-#### Guard summary
-
-**In plain terms.** The guard is a check inside the harness that every tool call from a worker passes before it runs (see Glossary). Its rules are data in one file, `embed/policy.json`, not Go code. The same file feeds the guard, the gate (Komodo's self-check) and the LLD tables. A worker that breaks a rule gets a one-line refusal naming the rule and what it may do instead. The third refusal under one rule ends its session. Without the guard a worker could call any tool on any file. `needs_scope` is the one refusal a person or the orchestrator can overturn.
-
-Rules are data in `embed/policy.json` with scopes, read by the guard, the gate and the LLD roster tables. Every tool call is checked in-process before it runs; a refusal names the rule and the allowed alternative; the third refusal under one rule ends the session. `needs_scope` is the only refusal a person or the orchestrator can turn into an allow.
-
-| Family | Rows | Binds to |
-|---|---|---|
-| G1 to G6 | Unlisted tool; worktree escape; protected paths; secret reads and secret-shaped writes; attribution trailers; the refusal limit | All agents (write rows bind to writers only) |
-| R1 | Only declared command classes, as `{class, args[]}`, no shell | Any agent with `run` |
-| B1 | Writes only to the group's `files` and test siblings; otherwise stop with `needs_scope` | Builder |
-| O1 to O10 | Critical-ref writes, force pushes, hand merges, leased worktrees, stash, `gh pr`, faked terminals, human-only verbs, `--no-verify` | The orchestrator, as text in `AGENTS.md`; enforced on the harness side by verb refusals and the terminal check |
-
-**What each one does**
-- **G1 to G6:** Six rules every worker inherits. Each fires in-process before the tool runs, and the worker sees a refusal naming the row.
-  - **G1:** Blocks a tool the agent was not given; the tool server does not list it either. Binds to all agents.
-  - **G2:** Blocks reads and writes outside the session worktree, including `..` paths and symlink escapes. Binds to all agents.
-  - **G3:** Blocks writes to protected paths: `.git`, `bin/komodo`, `~/.komodo/**`, Claude settings files, `embed/policy.json` and `docs/prd.md`. Binds to writers only; memory and plan folders are never blocked.
-  - **G4:** Blocks reads of secret files (`.env*` except templates, `*.pem`, SSH keys, `*.key`) and writes whose content matches a secret pattern. Reads bind to all agents, writes to writers.
-  - **G5:** Blocks attribution trailers or session links in any text a writer produces.
-  - **G6:** The third refusal under one rule (`guard.refusal_limit`) ends the session; the task retries in a fresh session.
-- **R1:** Any agent with the `run` tool may only run command classes the repo declares, passed as `{class, args[]}`. There is no shell, so pipes, chains and `sh -c` cannot happen. An undeclared class is refused.
-- **B1:** The builder may write only to the group's `files` list and their test siblings (the matching test files). Any other write is refused, and the refusal tells the builder to stop with result status `needs_scope` naming the paths; the orchestrator then approves or denies.
-- **O1 to O10:** Rules for the orchestrator, written as text in `AGENTS.md` on any host. The harness backs them by refusing verbs on leased worktrees and critical refs, and by needing a terminal for human-only verbs.
-  - **O1:** No commit, push, merge, delete or force on `main`, `master`, `release/*` or any critical ref.
-  - **O2:** No force push, `--force-with-lease` or `+refspec`.
-  - **O3:** No merging into the epic branch by hand; the engine merges.
-  - **O4:** No editing, resetting or removing a worktree the harness has leased; verbs refuse such worktrees.
-  - **O5:** No `git stash`; use a WIP (work-in-progress) commit instead.
-  - **O6:** No `gh pr create` or `gh pr merge`; the engine opens the epic PR.
-  - **O7:** No faking a terminal (`script`, `expect`, `unbuffer`) to run a human-only verb. Nothing enforces this one; it is text only.
-  - **O8:** Dropped in the design pass; the roster goes from O7 to O9.
-  - **O9:** No human-only verb (`install`, `uninstall`, `fresh`, config writes, `gate --install`, `release`, `doctor --fix`) and no `internal` verb. Human-only verbs refuse without a terminal.
-  - **O10:** No `--no-verify` on any git command.
-
-#### Sandbox summary
-
-**In plain terms.** The sandbox is the operating-system fence around every `run` command a worker issues (see Glossary). The guard checks what a worker asks for; the sandbox limits what the command can actually see, write or reach on the network. Without it, a test or build script could read the user's files or call the internet. Each operating system has its own sandbox tool, listed below. The engine wraps every command in it; nobody turns it off.
-
-| OS | Sandbox | Shape |
-|---|---|---|
-| macOS | `sandbox-exec` (seatbelt) | Reads outside home allowed; inside home only the worktree, repo git dir, Komodo caches and toolchains; writes only to worktree, session temp and language caches; network denied except loopback |
-| Linux, WSL | `bwrap` | `/` read-only; home an empty tmpfs with the same folders bound back; `--unshare-net`; `--die-with-parent`; refuses with the fix when user namespaces are blocked |
-| Windows native | Docker (when WSL is absent) | `--network none`; only the worktree, session temp and language-cache volumes writable; with neither WSL nor Docker every work verb refuses |
-
-**What each one does**
-- **macOS:** Uses Apple's built-in `sandbox-exec` (seatbelt). The command can read files outside the home folder, but inside home only the worktree, the repo's git folder, Komodo's caches and the toolchains. It can write only to the worktree, the session's temp folder and the language caches, and the network is off except loopback (the machine talking to itself). macOS has no process or memory cap, and `doctor` tells the user so.
-- **Linux, WSL:** Uses `bwrap` (bubblewrap). The whole filesystem is read-only, the home folder is an empty temporary folder with the same few folders bound back in, and `--unshare-net` removes the network. `--die-with-parent` kills the command if the harness dies. If the kernel blocks user namespaces, every work verb refuses and prints the fix.
-- **Windows native:** Uses Docker when WSL is absent, with `--network none` and only the worktree, session temp and language-cache volumes writable. With neither WSL nor Docker, every work verb refuses and names both options.
-
-The sandbox is `required` on every OS. Every `run` gets a 10-minute timeout, a 4 KB reply cap, 512 processes and 8 GB (cgroups or Docker; macOS has no cap and `doctor` says so), and a whole-tree kill. Intake runs `commands.setup` with network on; every `run` keeps it off. Loopback is always allowed.
-
 #### Release integrity
 
 **In plain terms.** A release is a published build of the `komodo` binary. Signing proves a download really came from the owner and was not altered. The owner's machine holds the private key; the public keys are inside every binary, so each update can check the next one. Without signing, a tampered download could run with full access to every repo. The person running `fresh` sees only a pass or a refusal.
@@ -6721,14 +6767,10 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Hand-edited `config.json` | Every verb refuses `config_tampered` until `config --accept` |
 | Repo pinned above the binary | Only `help`, `version`, `fresh`, `install`, `doctor` run |
 | Offline install from an older binary | `bin/` points at the older version; fresh moves forward on the next online check |
-| Two Verify sessions bind one fixed port | Private loopback on Linux and Docker `[PENDING G-08]`; serialized `test` runs on macOS |
-| A test needs a database or public host | Fails at base and head; pre-existing; warns, never blocks; `needs:` items skip with `env` |
 | A pre-existing failing test | Baseline marks it; the group lands with a warning |
 | A test fails once and passes twice | Reported `flaky`; the group lands; counted per repo |
 | The tester fails an item Go passes twice | Tester restarts once with Go's output; a second dispute blocks `tester` |
 | Two files differ only by case | Check fails on every OS |
-| A symlink resolves outside the worktree | Dropped at copy time and logged |
-| The builder changed a lockfile | Setup reruns for the tester instead of copying |
 | A finding's quote is not at the line | Dropped and logged; does not block |
 | `needs_scope` on a protected path or another group's file | Denied by the engine without asking |
 | Paid link under `providers.paid: never` | Removed from the chain; Blocked `paid_refused` naming the key |
@@ -6737,8 +6779,6 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Pause exceeds `limits.pause_max_min` | Session cancelled, WIP kept, Blocked `pause_timeout` |
 | `resume` before the provider reset | Every paused agent attempts, is refused at 0 turns, re-pauses with the new reset |
 | `kill -9` on a paused engine | `jobs tick` or `status` after the timer record's `wait_until` resumes the run |
-| Native Windows with neither WSL nor Docker | Every work verb refuses and names both |
-| Linux with user namespaces blocked | Every work verb refuses and names the fix |
 | Windows long paths off | `doctor` warns and names the fix; worktree names are short hashes |
 | A planted `CLAUDE.md`, user hook or auto-memory file | 0 effect on a worker (`--setting-sources ""`) |
 | A steering phrase in a skill | Fails the gate |
@@ -6746,8 +6786,6 @@ One binary, standard library only, cross-built for windows, linux and darwin at 
 | Broken Komodo block markers in `AGENTS.md` | The whole addendum is dropped from briefs; `doctor` reports it |
 | The builder edits `AGENTS.md` mid-run | Its next brief still carries the base-commit text |
 | A worktree unused 3 days | WIP-committed to the hidden ref and removed; `resume` rebuilds it |
-| A reviewer's test edits a tracked file | Reset by the engine; that review fails |
-| A `run` arg of `&&` | Reaches the command as a literal string |
 | Fresh during a live run | The next `komodo version` is new; the run finishes on its old version |
 | Bad checksum or signature on fresh | The old binary stays |
 | Two concurrent verbs see a newer release | One updater, via `fresh.lock` |
@@ -7000,18 +7038,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A `guard` row ID absent from `policy.json` fails `gate`.
 - A `guard` tool absent from the tool runtime's registry fails `gate`.
 
-**Tool runtime ([Tool runtime (Appendix G)](#tool-runtime))**
-- A builder calling `submit_finding` is refused because the tool isn't listed for it.
-- A faked `api_retry` line with `error: rate_limit` ends the session with reason `provider`, and the next session starts on the backstop.
-- A reviewer calling `edit` is refused.
-- The MCP server exits within 2 s of its session.
-- `write` on an existing file is refused.
-- A 40 KB `run` output leaves its full log at the named path.
-- On each API link, a fixture model that stops with text gets 1 final call and a schema-valid result.
-- On each API link, a builder whose `done_when` fails continues in the same session.
-- A fixture session that passes 80% of `ctx` stubs old outputs and never sends past `ctx`.
-- A `run` arg of `&&` reaches the command as a literal string.
-
 **Skill loader ([Skill loader (Appendix I)](#skill-loader))**
 - A builder editing `*.go` gets `standards-go` preinjected.
 - A planted `ignore previous instructions` line in a skill fails `gate`.
@@ -7043,30 +7069,6 @@ Each component's proof cases are the fixtures behind its gate checks; the securi
 - A reviewer's first pass renders `findings` as `none`.
 - A reviewer brief holds 0 bytes of the builder's `summary`.
 - A Go task and a TS task in one repo share every prefix byte up to the standards.
-
-**Guardrails ([Guardrails (Appendix G)](#guardrails))**
-- The guard table test covers every row for every agent, and malformed input is refused.
-- Verbs given a critical ref or a leased worktree refuse.
-- The scout's rendered table has 0 write rows.
-- A `policy.json` row edited without regenerating `lld.md` fails `gate`.
-- A group whose `files` list `docs/backlog/**` fails `doctor backlog`.
-
-**Sandbox and process control ([Sandbox and process control (Appendix G)](#sandbox-and-process-control))**
-- On macOS and Linux, a `run` that writes outside the worktree fails.
-- On macOS and Linux, the tester's `read` of the builder's worktree path is refused by the sandbox, not the guard.
-- A `node_modules` tree with a pnpm symlink copies with the link intact on all 3 OSes, and a link pointing outside the worktree is dropped.
-- Two Verify sessions binding one fixed port both pass on Linux and run one after the other on macOS.
-- A test that needs a database fails at base and head, and the group lands with a warning.
-- Two files differing only by case fail Check on macOS.
-- `go test` binding `127.0.0.1` passes.
-- `go build` in a fresh worktree passes after Intake's setup.
-- On native Windows, a `run` that writes outside the worktree fails under Docker.
-- On native Windows with neither WSL nor Docker, a work verb refuses and names both.
-- On every OS, a `run` that connects to a public address fails.
-- On every OS, `env` in a `run` shows only the allowed variables.
-- On every OS, a `run` that sleeps past 10 min dies with its whole tree, under Docker too.
-- On every OS, a reviewer's test that edits a tracked file is reset and the review fails.
-- On every OS, a `run` that reads `~/.ssh` or writes your `~/.cargo/registry` fails.
 
 **Workspace and leases ([Workspace and leases (Appendix E)](#workspace-and-leases))**
 - A second `run` on a leased group refuses with the holder named.
