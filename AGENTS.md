@@ -17,7 +17,9 @@ Output that has to be re-read has failed, however correct.
 - **The HLD and LLD win.** Read the section before answering; never rely on memory or on the archive.
 - **The archive lives in git history.** `backups/` and `drafts/` are at commit `fdf4f61f` (`git show fdf4f61f:backups/<path>`); the retired `PLAN.md` is at commit `dee89326`. They are reference only, not a source of rules.
 - **Open design questions have defaults.** State the default you assume, keep going, and ask only when the answer is the user's alone.
-- **Doc edits are patches.** Change the smallest span, and add a revision history row when a design decision moves.
+- **Doc edits are patches.** Change the smallest span, and add a revision history row when a design decision moves. Exception: the approved subsystem-first restructure moves whole sections, as a pure-move commit followed by a rewrite commit.
+- **The HLD and LLD never share content.** The HLD holds purpose, ownership, interactions and decisions; the LLD holds types, interfaces, algorithms and limits. Link across, never copy.
+- **Each subsystem has one LLD chapter with numbered child pages** (`### 2.1`, `### 2.2`), mirroring one HLD subsystem page.
 - **Keep counts and cross-references true.** Update the component, phase and section references you touch.
-- **Open items live in the LLD gap register** (Appendix O). Add a new `G-NN` row there; do not hold it in chat.
+- **Open items live in the LLD gap register** (the "Gap register" appendix). Add a new `G-NN` row there; do not hold it in chat.
 - **Pursued features update the docs in the same branch.** A proof of concept gets a file-map line and a gap row. Once a feature is adopted (dashboard, `init`, …), the HLD and LLD gain its component, verbs, config keys, file map and proof cases.
