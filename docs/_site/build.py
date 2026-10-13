@@ -4,7 +4,7 @@
 Usage: python3 docs/_site/build.py build|serve [--engine mkdocs|zensical] [--ref BRANCH]
 
 The Markdown in docs/ stays plain. This script adds the depth at build time:
-one page per chapter and per appendix, glossary hover definitions, plain-terms
+one page per chapter, per `### N.M` child page and per appendix, glossary hover definitions, plain-terms
 callouts and collapsed row explanations. Output goes to .docs-build/site/.
 serve reads a snapshot of docs/; rerun it after editing the source.
 """
@@ -21,7 +21,10 @@ TITLES = {"hld": "High-Level Design", "lld": "Low-Level Design"}
 ADDR = "127.0.0.1:8765"
 LIST = re.compile(r"^(\s*)([-*+] |\d+\. )")
 CHAPTER = re.compile(r"^(## (?:\d+|T)\. .*)$", re.M)
-PAGES = {}
+SUB = re.compile(r"^(### (?:\d+|T)\.\d+ .*)$", re.M)
+HEAD = re.compile(r"^#{2,4} (.+?)\s*$", re.M)
+ANCHORS = {}
+BROKEN = []
 
 
 def fenced(lines):
@@ -156,14 +159,32 @@ def labels(text):
     return "\n".join(out)
 
 
+def target(doc, anchor, prefix=""):
+    """Return the page, or page#anchor, that holds this heading slug; record a miss or an ambiguous slug."""
+    files = ANCHORS[doc].get(anchor, [])
+    if len(files) != 1:
+        BROKEN.append(f"{doc}: #{anchor} " + ("not found" if not files else "is on " + ", ".join(f for f, _ in files)))
+        return None
+    name, title = files[0]
+    return prefix + (name if anchor in names(title) else f"{name}#{anchor}")
+
+
+def names(title):
+    """Return the slugs that name a page: its title, and for a child page its title without the `N.M` number."""
+    return {slug(title), slug(re.sub(r"^(?:\d+|T)\.\d+ ", "", title))}
+
+
 def links(text, doc, ref):
-    """Point chapter and appendix anchors, cross-document links and sibling files at the generated pages."""
+    """Point heading anchors, cross-document links and sibling files at the generated pages."""
     other = "lld" if doc == "hld" else "hld"
-    text = re.sub(r"\]\(#appendix-([a-z])-[^)]*\)", r"](appendix-\1.md)", text)
-    text = re.sub(rf"\]\({other}\.md#appendix-([a-z])-[^)]*\)", rf"](../{other}/appendix-\1.md)", text)
-    text = re.sub(r"\]\(#([^)]+)\)", lambda m: f"]({PAGES[doc][m.group(1)]})" if m.group(1) in PAGES[doc] else m.group(0), text)
-    text = re.sub(rf"\]\({other}\.md#([^)]+)\)",
-                  lambda m: f"](../{other}/{PAGES[other][m.group(1)]})" if m.group(1) in PAGES[other] else m.group(0), text)
+    def same(m):
+        t = target(doc, m.group(1))
+        return f"]({t})" if t else m.group(0)
+    def cross(m):
+        t = target(other, m.group(1), f"../{other}/")
+        return f"]({t})" if t else m.group(0)
+    text = re.sub(r"\]\(#([^)]+)\)", same, text)
+    text = re.sub(rf"\]\({other}\.md#([^)]+)\)", cross, text)
     text = re.sub(rf"\]\({other}\.md\)", f"](../{other}/index.md)", text)
     text = re.sub(r"\]\(\.\./([^)#]+)\)", rf"]({REPO}/{ref}/\1)", text)
     return re.sub(r"\]\((?!https?:|#|\.\./|appendix-|chapter-|index\.md)([^)]+\.md(?:#[^)]*)?)\)", r"](../\1)", text)
@@ -183,23 +204,36 @@ def cells(row):
 
 
 def glossary():
-    """Build hover definitions from the HLD's full glossary table, one per listed term."""
-    hld = (DOCS / "hld.md").read_text()
-    if "## Appendix C. Full Glossary" not in hld:
-        sys.exit("docs/hld.md has no '## Appendix C. Full Glossary' heading")
-    section = hld.split("## Appendix C. Full Glossary", 1)[1].split("\n## ", 1)[0]
+    """Build hover definitions from each doc's glossary appendix table, one per listed term."""
     out = []
-    for row in (l for l in section.split("\n") if l.startswith("|")):
-        c = cells(row)
-        if len(c) < 2 or c[0] == "Term" or set(c[0]) <= set("-: "):
+    for doc in TITLES:
+        text = (DOCS / f"{doc}.md").read_text()
+        m = re.search(r"^## Appendix [A-Z]\. [^\n]*Glossary[^\n]*$", text, re.M | re.I)
+        if not m:
             continue
-        meaning = c[1].replace("`", "").replace("]", ")")
-        out += [f"*[{t}]: {meaning}" for t in (x.strip().strip("`") for x in c[0].split(",")) if t]
+        for row in (l for l in text[m.end():].split("\n## ", 1)[0].split("\n") if l.startswith("|")):
+            c = cells(row)
+            if len(c) < 2 or c[0] == "Term" or set(c[0]) <= set("-: "):
+                continue
+            meaning = c[1].replace("`", "").replace("]", ")")
+            out += [f"*[{t}]: {meaning}" for t in (x.strip().strip("`") for x in c[0].split(",")) if t]
+    if not out:
+        sys.exit("no '## Appendix X. ... Glossary' table in docs/hld.md or docs/lld.md")
+    return out
+
+
+def children(number, title, content):
+    """Cut one chapter into its opening page and one page per `### N.M` heading, each tagged with the chapter."""
+    parts = SUB.split(content)
+    out = [(f"chapter-{number}.md", title, parts[0], title)]
+    for head, body in zip(parts[1::2], parts[2::2]):
+        sub = re.match(r"### (?:\d+|T)\.(\d+) ", head).group(1)
+        out.append((f"chapter-{number}-{sub}.md", head[4:], body, title))
     return out
 
 
 def chapters(doc):
-    """Cut the doc into (file, title, text) pages: the title page with chapter 0, each later chapter, each appendix."""
+    """Cut the doc into (file, title, text, chapter) pages: the title page with chapter 0, each chapter and its child pages, each appendix."""
     text = (DOCS / f"{doc}.md").read_text()
     if END not in text:
         sys.exit(f"docs/{doc}.md has no end-of-read marker")
@@ -208,27 +242,37 @@ def chapters(doc):
     if len(parts) < 3:
         sys.exit(f"docs/{doc}.md has no '## N. ' chapter headings")
     title = re.match(r"^# (.*)$", parts[0].strip())
-    out = [("index.md", title.group(1) if title else TITLES[doc], re.sub(r"^# .*$", "", parts[0], flags=re.M) + parts[1] + parts[2])]
+    out = [("index.md", title.group(1) if title else TITLES[doc], re.sub(r"^# .*$", "", parts[0], flags=re.M) + parts[1] + parts[2], None)]
     for head, content in zip(parts[3::2], parts[4::2]):
-        number = re.match(r"## (\d+|T)\.", head).group(1).lower()
-        out.append((f"chapter-{number}.md", head[3:], content))
+        out += children(re.match(r"## (\d+|T)\.", head).group(1).lower(), head[3:], content)
     parts = re.split(r"^(## Appendix [A-Z]\..*)$", apps, flags=re.M)
     for head, content in zip(parts[1::2], parts[2::2]):
         letter = re.match(r"## Appendix ([A-Z])", head).group(1).lower()
-        out.append((f"appendix-{letter}.md", head[3:], content.rstrip().rstrip("-")))
-    PAGES[doc] = {slug(t): f for f, t, _ in out[1:]} | {slug(CHAPTER.search(body).group(1)[3:]): "index.md"}
+        out.append((f"appendix-{letter}.md", head[3:], content.rstrip().rstrip("-"), None))
+    ANCHORS[doc] = {}
+    for name, title, content, _ in out:
+        for anchor in names(title) | {slug(h) for h in HEAD.findall(content)}:
+            ANCHORS[doc].setdefault(anchor, []).append((name, title))
     return out
 
 
 def split(doc, pages, ref):
-    """Write the doc's pages; return its nav: chapters first, then the appendices as one group."""
+    """Write the doc's pages; return its nav: chapters (a group when it has child pages), then the appendices as one group."""
     folder = WORK / "docs" / doc
     folder.mkdir(parents=True)
-    nav, apps = [], []
-    for name, title, text in pages:
+    nav, apps, groups = [], [], {}
+    for name, title, text, chapter in pages:
         (folder / name).write_text(page(title, text, doc, ref))
-        label = CHAPTER.search(text).group(1)[3:] if name == "index.md" else title
-        (apps if name.startswith("appendix-") else nav).append({label: f"{doc}/{name}"})
+        if name == "index.md":
+            nav.append({CHAPTER.search(text).group(1)[3:]: f"{doc}/{name}"})
+        elif name.startswith("appendix-"):
+            apps.append({title: f"{doc}/{name}"})
+        elif chapter not in groups:
+            groups[chapter] = [{"Overview": f"{doc}/{name}"}]
+            nav.append({chapter: groups[chapter]})
+        else:
+            groups[chapter].append({title: f"{doc}/{name}"})
+    nav = [{t: g[0]["Overview"]} if isinstance(g, list) and len(g) == 1 else {t: g} for e in nav for t, g in e.items()]
     return nav + [{"Appendices": apps}]
 
 
@@ -244,6 +288,7 @@ def config(nav):
         '    - media: "(prefers-color-scheme: dark)"', "      scheme: slate",
         "      toggle: {icon: material/brightness-4, name: Light mode}",
         "  features: [navigation.sections, navigation.footer, navigation.top, toc.follow, content.tooltips, search.highlight]",
+        "validation: {links: {anchors: warn}}",
         "markdown_extensions:",
         "  - abbr", "  - attr_list", "  - admonition", "  - tables",
         "  - toc: {permalink: true}", "  - pymdownx.details",
@@ -285,6 +330,8 @@ def prepare(ref):
     nav = {doc: split(doc, pages[doc], ref) for doc in TITLES}
     (WORK / "mkdocs.yml").write_text(config(nav))
     print(f"pages: {sum(len(v) for v in pages.values())}, glossary terms: {len(terms)}")
+    if BROKEN:
+        sys.exit("unresolved or ambiguous links:\n  " + "\n  ".join(sorted(set(BROKEN))))
 
 
 def branch():
@@ -303,7 +350,7 @@ def main():
     if shutil.which(args.engine) is None:
         sys.exit(f"{args.engine} not found; install with: pip install -r docs/_site/requirements.txt")
     prepare(args.ref or branch())
-    cmd = [args.engine, args.action] + (["-a", ADDR] if args.action == "serve" else [])
+    cmd = [args.engine, args.action] + (["-a", ADDR] if args.action == "serve" else ["--strict"] if args.engine == "mkdocs" else [])
     sys.exit(subprocess.run(cmd, cwd=WORK).returncode)
 
 

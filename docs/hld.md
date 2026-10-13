@@ -41,7 +41,7 @@
 | 0.14 | 2026-10-12 | Full glossary gains 67 plain-language terms used in the LLD, such as checksum, fsync and goroutine |
 | 0.15 | 2026-10-12 | Owner decisions on the event spine and Verify written into the LLD; event count is 35 |
 
-**Related:** [docs/lld.md](lld.md), [docs/prd.md](prd.md), [ADR 0001](decisions/0001-standalone-harness.md), [Appendix B](#appendix-b-references) (references).
+**Related:** [docs/lld.md](lld.md), `docs/prd.md` and ADR 0001 `docs/decisions/0001-standalone-harness.md` (phase 1 deliverables, not yet written), [Appendix B](#appendix-b-references) (references).
 
 ## 1. Introduction and Goals
 
