@@ -11170,7 +11170,7 @@ Seven checks run the whole harness against a fixture, because every subsystem ca
 - **`testdata/fixture-repo/`:** The small repository that end-to-end runs build against.
 - **`tg-fixture`:** The task group the full run, the crash check and the race check run.
 - **Broken fixtures:** One repository with a failing test that already fails at the base, and one builder change that breaks a passing test.
-- `[TODO: the files, tasks and acceptance items of tg-fixture, the local model the full run uses and the configuration that selects it, the process and the stage at which the crash check sends kill -9, and whether the gate runs these checks or a person starts them (G-NEW-1)]`
+- `[TODO: the files, tasks and acceptance items of tg-fixture, the local model the full run uses and the configuration that selects it, the process and the stage at which the crash check sends kill -9, and whether the gate runs these checks or a person starts them (G-185)]`
 
 #### The seven checks
 
@@ -11184,7 +11184,7 @@ Seven checks run the whole harness against a fixture, because every subsystem ca
 | Fresh repo | On a clean macOS machine and a clean Windows machine, follow only `README.md` | A fixture group reaches shipped on both |
 | Scheduled | A `tick` fired by the entry that `install --schedule` wrote runs a fixture job; the job is forced to fail 3 times | The job ends Blocked and wakes a waiting `status --wait` |
 
-`[TODO: how two engines start on one group, since run refuses a group another run holds (G-NEW-2)]`
+`[TODO: how two engines start on one group, since run refuses a group another run holds (G-186)]`
 
 The cross-build row expands to `GOOS=windows|linux|darwin go build ./...`, one build per operating system. The commands of the checks that have one:
 
@@ -11219,7 +11219,7 @@ flowchart TB
   F --> G["7 Scheduled<br>3 failures end Blocked"]
 ```
 
-The diagram follows the order of the table. The first check runs at the end of every delivery phase. `[TODO: whether any check depends on the result of an earlier one (G-NEW-1)]`
+The diagram follows the order of the table. The first check runs at the end of every delivery phase. `[TODO: whether any check depends on the result of an earlier one (G-185)]`
 
 ### 15.2 Operations Runbook
 
@@ -11285,7 +11285,7 @@ The allow rule and the guard hook have this shape in Claude Code's settings form
 }
 ```
 
-`[TODO: the hook event, matcher and timeout of the four hook entries as they sit in the file, and the shape of one skillOverrides entry (G-NEW-3)]`
+`[TODO: the hook event, matcher and timeout of the four hook entries as they sit in the file, and the shape of one skillOverrides entry (G-187)]`
 
 | Line | Stale entry | Before phase 2 |
 |---|---|---|
@@ -11324,7 +11324,7 @@ The person's global instructions file has 5 stale lines. Before phase 2 each is 
 | 22: after a merge, run `komodo sync` | Dropped | Restored |
 | 24: `/run <group>` in session, `komodo run <group>` headless | Removed | `komodo run <group>` |
 
-`[TODO: the exact text of the 5 stale lines (G-NEW-3)]`
+`[TODO: the exact text of the 5 stale lines (G-187)]`
 
 #### Retired verbs and their replacements
 
@@ -11375,7 +11375,7 @@ flowchart TB
 1. **Before phase 2, by hand.** Remove from `~/.claude/settings.json` the `Bash(python -m komodo:*)` allow rule, the `komodo guard` hook, the `komodo hook status` and `komodo hook prune` hooks and the 36 `skillOverrides`. Delete the 5 Komodo skills under `~/.claude/skills/` and fix the 5 stale lines in `~/.claude/AGENTS.md`. The exact entries and lines are on [15.3](#153-host-cleanup-before-phase-2).
 2. **Phase 7: `komodo gate --install`.** The command places the development build at `~/.komodo/bin/komodo`, replacing the binary there. From here the harness runs its own task groups.
 3. **Phase 8: `komodo install` in this repository.** The command writes the `AGENTS.md` block, the `CLAUDE.md` import line and the two `.claude/settings.json` entries into the Komodo repository itself. From here the repository `SessionStart` hook runs `komodo status`, and `komodo skill get` serves the skills `komodo`, `plan`, `run` and `respond` from the binary.
-4. **Phase 9: the cutover rewrites.** The "At cutover" column of the [AGENTS.md table](#153-host-cleanup-before-phase-2) is applied to `~/.claude/AGENTS.md`. The repository's pull request template line that called `komodo pr create` is replaced with the engine's own pull request body template. `[TODO: the repo table that phase 9 applies, which the sources name but do not list (G-NEW-4)]`
+4. **Phase 9: the cutover rewrites.** The "At cutover" column of the [AGENTS.md table](#153-host-cleanup-before-phase-2) is applied to `~/.claude/AGENTS.md`. The repository's pull request template line that called `komodo pr create` is replaced with the engine's own pull request body template. `[TODO: the repo table that phase 9 applies, which the sources name but do not list (G-188)]`
 5. **Confirm with `doctor install`.** The command finds 0 shadowing binaries, meaning no other `komodo` earlier on the search path, and 0 Komodo hooks left in `~/.claude`.
 
 ```sh
@@ -12546,6 +12546,10 @@ Every `[PENDING G-NN]` tag in this document resolves to one row here. From phase
 | G-182 | Event spine | The checksum on each event line: the algorithm, the exact bytes it covers, and how the value is written; the examples carry placeholders until then | Owner decision on the architecture page; then 2.3 envelope field table and examples |
 | G-183 | Engine, counters | Which counter each bound uses: whether `retries` counts per session or per task, which counter a failing `done_when` counts against, whether a crashed session counts against the task's retries and when repeated crashes block the group, and the block reason for a spent `limits.group_wall_min` | Owner decision on the architecture page; then 2.3 rules for the fields and 2.6 block rows |
 | G-184 | Event spine, recovery | After a crash, a session whose `spawn` is still open is restarted twice: once by the spawn's rerun and once by the startup sweep's `task.released` reason `crash`; which of the two skips it | Owner decision; then 2.5 After a crash |
+| G-185 | End-to-end fixtures | The files, tasks and acceptance items of `tg-fixture`; which local model the full run uses and the configuration that selects it; the process and the stage at which the crash check sends `kill -9`; the content of the two regression fixtures; whether the gate runs the seven checks or a person starts them; whether any check depends on an earlier one | Owner decision; then 15.1 and the contents of `testdata/fixture-repo/` |
+| G-186 | Race check | How two engines start on one group, since `run` refuses a group another run holds (chapter 1); which machine or clone the second engine runs on | Owner decision; then 15.1 and chapter 4 |
+| G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file before the cleanup; then 15.3 |
+| G-188 | Cutover | The repo table that phase 9 applies: which repository files name retired verbs and the rewrite for each; the sources name it and do not list it | Owner decision; then 15.4 |
 
 **What each one does**
 - **G-01:** Where the release signing key lives and who holds it. It matters because every update is verified against that key. Decided on 2026-10-09: a local key file on the owner's machine plus one backup copy ([Ship and release (chapter 11)](#11-backlog-planning-ship-and-release)).
