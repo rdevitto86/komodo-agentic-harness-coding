@@ -287,7 +287,7 @@ sequenceDiagram
   end
 ```
 
-1. Intake lints the group, takes a lease and a worktree cut from the epic branch tip, and runs the setup command. [TODO: the order of the pool slot, the lease and Intake ([G-38](lld.md#g-38))]
+1. The engine takes the group's lease as it picks the group from the queue; Intake then lints the group, cuts a worktree from the epic branch tip and runs the setup command, and the first session takes a pool slot after Intake.
 2. Build starts one fresh builder session for the whole group; it works through the tasks in order, and after each task Go code reruns its completion command and commits to the hidden reference.
 3. Check reruns every proof, such as completion commands, scope, secrets scan, affected tests and whole-repository coverage, at zero model cost.
 4. Verify runs the reviewer and the tester on the same commit; a failed Check or a verified blocking finding returns the task to its builder.
@@ -419,24 +419,19 @@ The owner builds phases 2 to 6 by hand in plain Claude Code sessions; from phase
 
 #### Open decisions
 
-These 8 open items shape the architecture most; the Low-Level Design gap register holds the rest.
+These 2 open items shape the architecture most; the Low-Level Design gap register holds the rest.
 
 - [TODO: the shape of an agent's provider chain ([G-69](lld.md#g-69))]
-- [TODO: how machine-shared files such as the quota file are locked ([G-74](lld.md#g-74))]
 - [TODO: how tool server events reach the engine ([G-42](lld.md#g-42))]
-- [TODO: which component owns the startup sweep, the outbox of recorded actions and the session pool ([G-217](lld.md#g-217))]
-- [TODO: the layout of a record ([G-211](lld.md#g-211))]
-- [TODO: whether a group's snapshot is written before its lease is freed ([G-230](lld.md#g-230))]
-- [TODO: where the settings pinned at a run's start are stored, and what resume does when they changed ([G-231](lld.md#g-231))]
 
 ## 12. Glossary
 
 | Term | Meaning |
 |---|---|
-| Harness | The `komodo` binary |
+| Harness | The whole Komodo program: the `komodo` binary and everything it runs |
 | Verb | One `komodo` command, such as plan, run or status |
 | Orchestrator | A model chat session that drives the harness by verbs and never edits code |
-| Engine | The orchestration engine, which moves groups through stages |
+| Engine | The package that runs groups through their stages (`internal/engine`); never the whole program |
 | Agent | A model role with private tools |
 | Session | One fresh model conversation for one task |
 | Brief | The prompt that a worker receives |

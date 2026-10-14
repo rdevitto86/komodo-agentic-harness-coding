@@ -866,7 +866,7 @@ Agent shells have no controlling terminal: Claude Code's Bash tool cannot open `
 
 **Runs**
 - **`run [group]`:** Anyone runs `run`, usually the orchestrator. `run <group>` starts one group. `run` builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once and leaves the engine running detached under a small parent guard; the stages are in [Event Spine and State Machine](#26-state-and-transitions). `run` refuses, naming the dependency, a group whose dependency outside this run has not landed; `run` refuses, naming the holder, a group another run holds; and `run` refuses, naming the marker files that `run` looked for, a repo with no detected commands. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background, where `--wait` returns on the next wake event.
-- **`status [run]`:** Anyone runs `status`; a Claude `SessionStart` hook runs `status` so a new session sees state on line one. `status` prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings, and ends with `Verbs: komodo help`. `status` is one of three places that may fetch `latest.json`, at most hourly, and `status` fires due pause timers [TODO: how a `timer.due` from outside `Drive` reaches a group's state file ([G-29](#g-29))].
+- **`status [run]`:** Anyone runs `status`; a Claude `SessionStart` hook runs `status` so a new session sees state on line one. `status` prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings, and ends with `Verbs: komodo help`. `status` is one of three places that may fetch `latest.json`, at most hourly, and `status` fires due pause timers by dropping a `request.timer` file in the group's inbox and, when no engine holds the group, starting a detached engine.
 - **`status` flags:** `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`). `--timeout <dur>` caps that wait at 9 minutes by default, because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard of first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and US dollars per accepted group. [TODO: what `--backlog` and `--all` print ([G-117](#g-117))]
 - **`skill list|get`:** Anyone runs `skill`, including a Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms; `get <name>` prints a skill's body and `--section <heading>` one section; `komodo skill get run|plan|respond|komodo|release` returns the workflow for each job. `skill` changes nothing. [TODO: the filter `list --agent <name>` applies ([G-117](#g-117))]
 - **`scope approve|deny <group>`:** The orchestrator usually answers; a person can. A builder that needs a file outside its group's `files` stops with status `needs_scope`, the group blocks and `status --wait` wakes the orchestrator. `approve` adds the paths to `files` (action `scope_change`, logged in the ledger) and the engine resumes the same session with the answer; `deny` resumes the session with the refusal. `--paths <list>` names the paths and `--reason <text>` the reason. The engine denies by itself, without asking, when a path is protected or belongs to another live group. One request per task.
@@ -1045,7 +1045,7 @@ The brief builder sizes every prompt from `Ctx`, the engine takes a slot from `S
 
 **Short verbs.** `help`, `version`, config reads and `skill` answer under 50 ms with no network and no repo scan beyond marker stats. `help` reads embedded, build-time text. `version` reads the embedded version and `state/fresh.json`. Config reads parse the file once per process. The `skill` index is embedded at build, so `skill list` is a map read, and bodies come from the cache. `help --json` and the `komodo` skill are generated at build and embedded. The 50 ms budget is a target until the gate measures it. [TODO: confirm the 50 ms budget by gate timing ([G-19](#g-19))]
 
-**Concurrency.** Each verb is one process. Config is parsed once per process and read-only after that, and a run reads the snapshot that run pinned at start [TODO: where the pinned run settings are stored and what resume does when the configuration hash differs ([G-231](#g-231))]. [TODO: locking when two processes write `config.json`, `config.sha` and `config.log` at once, or one reads while another writes ([G-74](#g-74))]
+**Concurrency.** Each verb is one process. Config is parsed once per process and read-only after that, and a run reads the snapshot that run pinned at start: the run's start writes the effective settings once to `runs/<run>.config.json`, named by `config_hash`, and every restart and `resume` reads them from that file; a changed `config.json` reaches only new runs, and `resume` prints the changed keys as a warning. `komodo config` holds `config.json.lock` while it writes `config.json`, `config.sha` and `config.log`; a reader that finds the checksum and the file disagree rereads once after 100 milliseconds before refusing ([State manager write checks](#state-manager-write-checks)).
 
 ### 1.6 State
 
@@ -1083,7 +1083,7 @@ stateDiagram-v2
 3. Every writing verb is idempotent: a repeat with the same arguments reports `0 changes`.
 4. `config.json` is written only by `komodo config`, which needs a terminal, so no model session changes its own settings.
 5. A `komodo config` call writes every pair or none, and writes one audit row per changed key.
-6. A run's effective config is the snapshot pinned at the run's start; later edits do not reach the run. [TODO: whether a model change can reach a running run ([G-27](#g-27))] [TODO: where the pinned run settings are stored and what resume does when the configuration hash differs ([G-231](#g-231))]
+6. A run's effective config is the snapshot pinned at the run's start; later edits do not reach the run. [TODO: whether a model change can reach a running run ([G-27](#g-27))] The pinned copy is `runs/<run>.config.json`, written once at the run's start.
 7. A secret is never in config or logs: key settings are `env:NAME` references.
 8. Security rows are never config. The only guard setting is `guard.refusal_limit`.
 9. Tiers are enforced by the terminal check alone; no host hook enforces them.
@@ -1209,18 +1209,15 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-115](#g-115) | Report text and data shape per verb, the run id key, the `help --json` result schema and the `--input` key names | Yes |
 | [G-116](#g-116) | The conditions for exit 3 and exit 4, and the `error.code` values for command-line refusals | Yes |
 | [G-119](#g-119) | Config file layouts, write order and crash behaviour, the writer of the checksum and the log, the probed-model check and the `--default` group target; The format of the effective-config hash and the other file formats left open | Yes |
-| [G-74](#g-74) | Locking for concurrent writers of the config files | Yes |
 | [G-121](#g-121) | Validate details: the closest-match rule, an unknown agent name, running outside a repo, guard exemptions and the Windows terminal check | Yes |
 | [G-122](#g-122) | Config values and placement: the turn-end headings, the `CapacityProfile` package and effort mapping and two-marker commands | Yes |
 | [G-69](#g-69) | The shape of an agent's provider chain | Yes |
-| [G-231](#g-231) | Where the pinned run settings are stored and what resume does on a hash mismatch | Yes |
 | [G-155](#g-155) | The grammar of backlog card files and acceptance items | Yes |
 | [G-49](#g-49) | The values `sandbox.network` accepts besides `deny` | No |
 | [G-28](#g-28) | How `komodo init` writes into the global Claude Code setup | No |
 | [G-117](#g-117) | Flag behaviour not yet designed for `version --check`, `doctor --fix`, `status --backlog` and `--all`, `skill list --agent`, `resume --from`, `abandon --keep-worktree`, `jobs run --ignore-window`, `jobs pause` and `resume`, `gate --only` and `release --notes-file` | No |
 | [G-19](#g-19) | The 50 ms short-verb budget is a target until the gate measures it | No |
 | [G-238](#g-238) | A group's wall time, the story-point scale and the one 100% extension | Yes |
-| [G-29](#g-29) | How a `timer.due` from outside `Drive` reaches a group's state file | No |
 | [G-159](#g-159) | How the gate receives the verb table of `cli` | No |
 | [G-224](#g-224) | Which signal halves the session pool | No |
 | [G-27](#g-27) | The dashboard, and whether a model change can reach a running run, since config is pinned at run start | No |
@@ -1242,7 +1239,7 @@ The event spine records every change to a task group as a typed event, and one p
 
 ### 2.1 Scope and Concepts
 
-**Owns:** the event envelope and the 34-type catalog, each type's data struct and contract (`Spec`), `Next()` and its transition table, the group `State` that `Next()` reads, the outbox's 9 action kinds [TODO: `which component owns the action record, the outbox` ([G-217](#g-217))], epochs, block reasons, and delivery to the 3 bus subscribers.
+**Owns:** the event envelope and the 34-type catalog, each type's data struct and contract (`Spec`), `Next()` and its transition table, the group `State` that `Next()` reads, the outbox's 9 action kinds (the record of open actions belongs to group state, [chapter 13](#13-state-manager)), epochs, block reasons, and delivery to the 3 bus subscribers.
 
 **Does not own:** writing and replaying files, which is group state in the state manager ([State Manager](#13-state-manager)); the `Drive` loop that calls `Next()` ([Engine Internals](#3-engine-internals)); and the producers that report facts, such as the session supervisor, the guard and Check.
 
@@ -1306,7 +1303,9 @@ type Event struct {
 	Type      Type      `json:"type"`
 	Reason    Reason    `json:"reason,omitempty"`  // one value of the closed reason list
 	Data      Payload   `json:"data"`              // the one struct registered for Type
-	Checksum  uint32    `json:"checksum"`          // fingerprint of the line, written last; the type is open (G-182)
+	Cause     uint64    `json:"cause,omitempty"`   // sequence of the event whose Next() result produced this line; 0 for an outside fact
+	Last      uint64    `json:"last"`              // sequence of the final line of the write this line belongs to
+	Checksum  string    `json:"checksum"`          // CRC-32C of the line's bytes before ,"checksum", as 8 lowercase hex digits
 }
 
 // UnmarshalJSON reads type first, then decodes data into the struct the registry returns for it.
@@ -1315,8 +1314,6 @@ func (e *Event) UnmarshalJSON(b []byte) error
 // Payload is implemented by exactly one data struct per event type.
 type Payload interface{ EventType() Type }
 ```
-
-Open decisions in this example: [G-182](#g-182).
 
 | Field | Rule |
 |---|---|
@@ -1327,12 +1324,14 @@ Open decisions in this example: [G-182](#g-182).
 | `stage` | `intake`, `build`, `check`, `verify`, `ship`, `paused`, `blocked` or `done`; required on group events, forbidden on `run.*` and `job.*`; lets `status` and the ledger group events by stage without replaying |
 | `epoch`, `stale` | `Drive` alone sets `stale`, because `Drive` holds the current epoch; a stale event is written and ignored by `Next()` ([Behaviour](#25-behaviour)) |
 | `type`, `reason`, `data` | `type` picks the one `data` struct allowed, so a `session.end` line can only carry a `session.end` body |
-| `checksum` | `Append` computes the `Checksum` field over the line's bytes and writes the field last. [TODO: the checksum algorithm and how the value is written ([G-182](#g-182))] |
+| `cause` | The `sequence` of the event whose `Next()` result emitted this follow-on or ordered this action line; omitted for a fact from outside `Drive` |
+| `last` | The `sequence` of the final line of the one write this line was saved in; replay drops a final write whose `last` line is missing |
+| `checksum` | `Append` computes CRC-32C (the Castagnoli polynomial, Go's `hash/crc32`) over the compact line's bytes up to and not including `,"checksum"`, and writes the value last as 8 lowercase hex digits; every line of a write carries its own checksum. Checksum values in the examples are illustrative |
 
 The build generates one JSON Schema from the envelope and the registry, with one branch per type, no extra fields allowed, and an enumeration for every `reason`. The state manager checks every `Append` against the schema, and `komodo help --json` serves its event part as `events`.
 
 - **Data structs:** one struct per event type, listed in [Data structs](#data-structs) below the catalog
-- **Envelope fields still open:** [TODO: whether the envelope carries `id`, `class`, `cause` and `corr` fields, and what each holds ([G-29](#g-29))]
+- **Envelope fields:** `sequence` is the event's identifier, so there is no `id`; the class comes from the type's `Spec`, so there is no `class`; `cause` names the event that produced a line; a request's identifier sits in `data.request` of the request and of its outcome, so there is no `corr`.
 
 **Example.** A `session.end` line, spread over lines for reading; on disk the line is one compact line.
 
@@ -1350,20 +1349,17 @@ The build generates one JSON Schema from the envelope and the registry, with one
   "type": "session.end",
   "reason": "schema_fail",
   "data": {"agent": "builder", "task": "tsk-add-lock", "link": "claude-cli", "tokens": 0, "wall_s": 1140},
-  "checksum": "[TODO: checksum value once the algorithm is chosen (G-182)]"
+  "last": 14,
+  "checksum": "5d0c9e3a"
 }
 ```
-
-Open decisions in this example: [G-182](#g-182).
 
 Two more lines from the same file, a `stage.enter` and a `group.blocked`:
 
 ```json
-{"version":1,"sequence":7,"timestamp":"2026-10-12T15:20:03Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"stage.enter","data":{"from":"intake","to":"build","epoch":2,"return":false},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":31,"timestamp":"2026-10-12T16:02:45Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"blocked","epoch":2,"stale":false,"type":"group.blocked","reason":"attempts","data":{"detail":"2 of 2 fresh builder sessions used"},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":7,"timestamp":"2026-10-12T15:20:03Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"stage.enter","data":{"from":"intake","to":"build","epoch":2,"return":false},"cause":6,"last":7,"checksum":"a41f07bc"}
+{"version":1,"sequence":31,"timestamp":"2026-10-12T16:02:45Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"blocked","epoch":2,"stale":false,"type":"group.blocked","reason":"attempts","data":{"detail":"2 of 2 fresh builder sessions used"},"cause":30,"last":31,"checksum":"0e93d5f2"}
 ```
-
-Open decisions in this example: [G-182](#g-182).
 
 #### Catalog (34 types)
 
@@ -1385,32 +1381,32 @@ The catalog is a fixed Go enumeration in 8 families, registered with the state m
 | `session.timewarn` | Supervisor | The session neared its wall clock; the supervisor injects a finish-now line |
 | `session.end` | Supervisor | The session ended with an [exit reason (chapter 5)](#exit-reasons); `Next()` applies the exit reason's row in [State and Transitions](#26-state-and-transitions) |
 | `task.claimed` | Supervisor | With `session.start`; the task moves from queued to claimed in the lock table |
-| `task.released` | Supervisor, recovery | With `session.end`. [TODO: which event the startup sweep records for a dead session, `task.released` or `session.end`, each with reason `crash` ([G-217](#g-217))] |
+| `task.released` | Supervisor, recovery | With `session.end`, including the `session.end` reason `crash` recorded for a session found dead after a crash |
 | `task.done` | Engine (`Next()` follow-on) | The `commit` action ran `done_when` with exit 0 and the result is on the hidden ref |
 | `task.retry` | Engine | Another attempt after a schema-invalid result, a failed gate, a cut-off reply, `guard.refusal_limit` refusals under one rule or a failed `done_when`; the fresh session it orders counts toward `limits.group_attempts` |
 | `check.done` | Engine (`Next()` follow-on of the last `check` action) | Pass or fail after the zero-token checks |
 | `finding.submit` | Tools | A reviewer's `submit_finding` passed validation: a known rule identifier (a lens rule or a standards rule `std.<skill>.<n>`), a `file:line` and a quoted evidence line |
 | `finding.verified` | Review | Go found the quoted evidence at that line in the head or the diff; unverified findings are dropped and logged [TODO: which component checks that the quote is at its line: the tool or the evidence check ([G-159](#g-159))] |
 | `tool.denied` | Guard | A tool call was refused inline; `guard.refusal_limit` refusals under one rule end the session |
-| `timer.due` | Scheduler, engine, sweep, `status` [TODO: how a `timer.due` from outside `Drive` reaches a group's state file ([G-29](#g-29))] | A paused group's `wait_until` passed; the live engine sleeps until the earliest one |
+| `timer.due` | `Drive` alone; a `jobs tick`, the startup sweep or `status` that finds a due timer drops a request file in the group's inbox ([Commands](#26-state-and-transitions)) | A paused group's `wait_until` passed; the live engine sleeps until the earliest one |
 | `job.due` | Scheduler | A job's interval elapsed at a `jobs tick`; the job is enqueued as its own run |
 | `job.fail` | Scheduler | A job run failed; the job backs off and is Blocked after 3 failures [TODO: when a failing job blocks ([G-149](#g-149))] |
 | `lock.taken` | Intake | Backlog files hashed into `card_hash`; edits, re-plans and new tasks are refused with `locked` |
 | `lock.released` | Ship, abandon | The task list is editable again |
 | `action.start` | `Drive` | Before a side effect, with the action's `id` and `action` kind |
 | `action.done` | `Drive` | After the side effect completes |
-| `state.truncated` | Recovery [TODO: which writer appends `state.truncated` ([G-211](#g-211))] | Replay dropped a last line whose checksum failed; at most one event lost |
+| `state.truncated` | `Drive`, first after `Load`, which returns it | Replay dropped a last line whose checksum failed; at most one event lost |
 | `provider.skip` | Router (`Select`), handed to `Drive` by the supervisor | A link was skipped, with `{from, to, reason}`: unavailable, unauthorized, over its limit or `ctx_below_floor` |
 | `limit.warn` | Provider adapters | A window passed `warn.quota_pct`, Max began drawing paid overage, or spend passed `warn.usd_per_run` with `track.usage` on; never stops work |
 | `lease.taken` | Workspace | Machine log only: a `Claim` on a lease succeeded |
 | `pool.slot.taken` | Session pool | Machine log only: a session took a machine-wide slot |
 | `queue.enqueued` | Work queue | Machine log only: a ready group or due job was queued |
 
-**Families:** Run (3), Group (4: the 3 `group.*` plus `lease.lost`), Stage (2), Session (4), Work (11), Ledger (5: `lock.*`, `action.*`, `state.truncated`), Provider (2), Machine (3).
+**Families:** Request (7, outside the 34 above), Run (3), Group (4: the 3 `group.*` plus `lease.lost`), Stage (2), Session (4), Work (11), Ledger (5: `lock.*`, `action.*`, `state.truncated`), Provider (2), Machine (3).
 
-**Machine-wide records.** Leases, pool slots, the work queue and jobs keep the state manager's create-only `Claim`, `Replace` and `Remove`, which make two processes agree [TODO: whether a slot is an operating-system file lock or a create-only file ([G-38](#g-38))]. Each successful write also appends a typed event to a machine log under `~/.komodo/state/events/`, one file per process, so each file has one writer. An event that affects a group, such as a lost lease, also goes into that group's own events for `Next()`, and `status` merges the machine logs by `timestamp`.
+**Machine-wide records.** Leases, pool slots, the work queue and jobs keep the state manager's create-only `Claim`, `Replace` and `Remove`, which make two processes agree; a slot is a create-only file, never an operating-system file lock. Each successful write also appends a typed event to a machine log under `~/.komodo/state/events/`, one file per process, so each file has one writer. An event that affects a group, such as a lost lease, also goes into that group's own events for `Next()`, and `status` merges the machine logs by `timestamp`.
 
-- **Machine log names:** [TODO: the machine log's file names ([G-211](#g-211))]
+- **Machine log names:** `~/.komodo/state/events/<start>-<pid>.jsonl`, `<start>` being the process's start time as `20261013T091405Z` ([Record kinds](#133-data-model)).
 - **Job events:** [TODO: which file holds `job.due` and `job.fail` lines, since they belong to no group and are not `run.*` lines ([G-146](#g-146))]
 
 #### Data structs
@@ -1703,7 +1699,7 @@ func SpecOf(t Type) Spec
 func Register(t Type, data func() Payload, spec Spec)
 ```
 
-- **Event class:** [TODO: whether a `Spec` also names the event's class: fact, request or outcome ([G-29](#g-29))]
+- **Event class:** each `Spec` names its class in a `Class` field: `fact` (something happened), `request` (a person or the orchestrator asks for a decision) or `outcome` (the answer to one request); the schema checks it, so the type alone tells a line's class. The 34 types above are facts; the request family adds 7 types: `request.resume`, `request.scope`, `request.abandon`, `request.timer`, `request.return`, `request.accepted` and `request.refused`, the last two outcomes.
 
 #### The State Struct
 
@@ -1719,7 +1715,7 @@ type State struct {
 	Epoch       uint32             `json:"epoch"`
 	Fence       uint64             `json:"fence"`
 	Sequence    uint64             `json:"sequence"`    // the last line appended, and applied
-	ConfigHash  string             `json:"config_hash"` // pins the Limits for this run [TODO: where the pinned run settings are stored (G-231)]
+	ConfigHash  string             `json:"config_hash"` // names the run's pinned settings file, runs/<run>.config.json
 	Tasks       []TaskState        `json:"tasks"`
 	ActionsOpen []state.OpenAction `json:"actions_open"` // ordered by Next, not yet done; Drive runs them after Load
 	Resume      []ResumeRef        `json:"resume"`       // one per paused session; a Verify pause can hold two
@@ -1755,6 +1751,7 @@ type ResumeRef struct {
 // PauseState copies the timer record of a Paused group.
 type PauseState struct {
 	Until time.Time `json:"until,omitzero"`
+	Since time.Time `json:"since,omitzero"` // when the group paused; limits.pause_max_min counts from it
 	Link  string    `json:"link,omitempty"`
 }
 
@@ -1783,7 +1780,7 @@ type VerifySession struct {
 	Disputes int      `json:"disputes"`          // tester only: results whose failed items Go's reruns passed; the second blocks tester
 }
 
-// Limits are the bounds Next enforces, read from the effective config pinned by ConfigHash. [TODO: where the pinned settings are stored (G-231)]
+// Limits are the bounds Next enforces, read from runs/<run>.config.json, pinned at run start.
 type Limits struct {
 	Returns       int // limits.returns
 	GroupAttempts int // limits.group_attempts
@@ -1794,7 +1791,7 @@ type Limits struct {
 }
 ```
 
-Open decisions in this example: [G-231](#g-231), [G-112](#g-112).
+Open decisions in this example: [G-112](#g-112).
 
 **Rules for the fields.**
 - **Never nil:** slices and maps in `State` are set empty by the constructor and by `Load`, so they marshal as `[]` and `{}`.
@@ -2016,14 +2013,12 @@ type ScopeChangeResult struct {
 **Example.** A builder session ends `schema_fail` at sequence 12. `Next()` orders a `wip_commit` and emits `task.retry`; `task.retry` orders the next `spawn`. `Drive` appends the follow-on first, then runs both actions in order:
 
 ```json
-{"version":1,"sequence":13,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","stage":"build","epoch":2,"stale":false,"type":"task.retry","reason":"schema_fail","data":{"task":"tsk-add-lock","attempt":2},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":14,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"dc32e30c73346bbf32cc0e5d2b03c390acd3e1546361765d010a8809a9012e4a","action":"wip_commit","args":{"session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","task":"tsk-add-lock","fence":3}},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":15,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"dc32e30c73346bbf32cc0e5d2b03c390acd3e1546361765d010a8809a9012e4a","action":"wip_commit","args":{"session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","task":"tsk-add-lock","fence":3},"outcome":"ok","result":{"commit":"4b1e9c27d0a3f58e6c2b7d914a0e3f6c58d2b9a1","tree":"e3a7c0d94b2f61e85a0c3d7b9f41e26c8d5a0b37"}},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":16,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"10bc121aa801a83e6d43012ce4dc8948572d92143175a47473d23fdcd5e56297","action":"spawn","args":{"agent":"builder","task":"tsk-add-lock"},"session":"0192e4c6-3a10-7c42-8e5d-1f2a3b4c5d6e"},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":17,"timestamp":"2026-10-12T15:31:15Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"10bc121aa801a83e6d43012ce4dc8948572d92143175a47473d23fdcd5e56297","action":"spawn","args":{"agent":"builder","task":"tsk-add-lock"},"outcome":"ok","result":{"link":"claude-cli"}},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":13,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","stage":"build","epoch":2,"stale":false,"type":"task.retry","reason":"schema_fail","data":{"task":"tsk-add-lock","attempt":2},"cause":12,"last":14,"checksum":"7b2e9a10"}
+{"version":1,"sequence":14,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"dc32e30c73346bbf32cc0e5d2b03c390acd3e1546361765d010a8809a9012e4a","action":"wip_commit","args":{"session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","task":"tsk-add-lock","fence":3}},"cause":12,"last":14,"checksum":"c3d81f46"}
+{"version":1,"sequence":15,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"dc32e30c73346bbf32cc0e5d2b03c390acd3e1546361765d010a8809a9012e4a","action":"wip_commit","args":{"session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","task":"tsk-add-lock","fence":3},"outcome":"ok","result":{"commit":"4b1e9c27d0a3f58e6c2b7d914a0e3f6c58d2b9a1","tree":"e3a7c0d94b2f61e85a0c3d7b9f41e26c8d5a0b37"}},"cause":14,"last":16,"checksum":"19fa6e02"}
+{"version":1,"sequence":16,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"10bc121aa801a83e6d43012ce4dc8948572d92143175a47473d23fdcd5e56297","action":"spawn","args":{"agent":"builder","task":"tsk-add-lock"},"session":"0192e4c6-3a10-7c42-8e5d-1f2a3b4c5d6e"},"cause":13,"last":16,"checksum":"e60b4c7d"}
+{"version":1,"sequence":17,"timestamp":"2026-10-12T15:31:15Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"10bc121aa801a83e6d43012ce4dc8948572d92143175a47473d23fdcd5e56297","action":"spawn","args":{"agent":"builder","task":"tsk-add-lock"},"outcome":"ok","result":{"link":"claude-cli"}},"cause":16,"last":17,"checksum":"4a7c3b91"}
 ```
-
-Open decisions in this example: [G-182](#g-182).
 
 Both action identifiers are computed from sequence 12 for the `wip_commit` and sequence 13 for the `spawn`, the events that ordered them, over the `args` bytes exactly as written.
 
@@ -2095,14 +2090,14 @@ sequenceDiagram
 ```
 
 **Reading the diagram.**
-1. On start, resume or after a crash, `Drive` calls group state's `Load` with an `apply` function that wraps `Next()` [TODO: whether `Drive` or `recover.go` calls `Load` ([G-217](#g-217))]. A new group's file is empty; `Drive` appends a copy of the run's `run.start`, with the group's identifier, as the group's first line, with `stage` set to `NoStage`, the value row 1 starts from.
+1. On start, resume or after a crash, `Drive` itself calls group state's `Load` with an `apply` function that wraps `Next()`. A new group's file is empty; `Drive` appends a copy of the run's `run.start`, with the group's identifier, as the group's first line, with `stage` set to `NoStage`, the value row 1 starts from.
 2. `Load` reads `state.json` and passes every line after the snapshot's `sequence` through `apply`, in order.
-3. Replay discards each result's `Actions`, which `ActionsOpen` already holds. Replay keeps a queue of each result's `Emit`, as `Drive` does live: every follow-on must be the next line on disk. Follow-ons still queued at the end of the file never reached disk; `Load` returns them and `Drive` appends them first.
+3. Replay discards each result's `Actions`, which `ActionsOpen` already holds, and checks that each result's `Emit` matches the next lines on disk, which the same write saved. `Load` returns the events `Drive` must append first: a `state.truncated` when a cut-short final write was dropped.
 4. `Drive` runs every action in `State.ActionsOpen`, started or not, under the action's idempotency key, before `Drive` applies any new event.
 5. A producer hands `Drive` a fact stamped with the epoch the producer's session started under.
-6. `Drive` sets `stage` and `stale`, then calls `Append`, which stamps `sequence`, `timestamp` and `checksum`, validates the line against the schema and syncs the line; `Append` returns only once the line is on disk.
+6. `Drive` sets `stage` and `stale`; `Next()` (step 7) and the follow-on queue (step 8) run in memory, then `Append` stamps `sequence`, `timestamp`, `cause`, `last` and `checksum` on every line of the write, validates each line against the schema and syncs the write once; `Append` returns only once the write is on disk.
 7. `Drive` calls `Next()`, which touches nothing on disk; a stale event changes nothing.
-8. `Drive` puts the follow-on events in a first-in, first-out queue and appends and applies each in turn, a follow-on's own follow-ons joining the back, before any action runs. Each follow-on carries the epoch current when the follow-on is appended. [TODO: whether an event and its follow-ons reach disk as one write; steps 3 and 8 describe one append per line ([G-29](#g-29))]
+8. `Drive` puts the follow-on events in a first-in, first-out queue and applies each in turn in memory, a follow-on's own follow-ons joining the back, then saves the fact, every follow-on and the first action's `action.start` as one write with one forced save; each line carries its own checksum, its `cause` and the write's `last`. Each later `action.start` goes out in one write with the previous action's `action.done`. Each follow-on carries the epoch current when it is applied. A replay that finds a final write without its `last` line drops the whole write, so a fact never reaches disk without its decision. If `Next()` panics, the panic-catching helper saves the fact alone, then `group.blocked` reason `crash`.
 9. For each action, which `Next()` already put in `ActionsOpen`, `Drive` appends and applies `action.start` (for a spawn, with the session identifier `Drive` picked), runs the action, then appends and applies `action.done`, which removes the action.
 10. Because every appended line is applied, `State.Sequence` is always the last line on disk, and `Snapshot` can write the state on [the snapshot interval](#28-config).
 11. The bus hands each applied event to the 3 subscribers, in `sequence` order.
@@ -2112,19 +2107,19 @@ sequenceDiagram
 **Replay and the cut-short line.**
 1. `Load` reads `runs/<group-id>/state.json`; then every later line is replayed; `Snapshot` refuses a state whose `sequence` is not the last line appended ([State Manager](#13-state-manager)).
 2. Replay costs at most one snapshot interval of lines. [TODO: measure the replay target of 10,000 events under 1 s ([G-19](#g-19))]
-3. A last line whose checksum fails was cut short by a crash: the line is dropped and one `state.truncated` is emitted.
+3. A final write that was cut short by a crash (a line whose checksum fails, or no line whose `sequence` equals its `last`) is dropped whole, the file is truncated to the previous write, the dropped sequences are reused, and one `state.truncated` is appended.
 4. A failing line before the last is a bad record: the line is moved aside and the group blocks `state_invalid` ([Checks: populate and validate (chapter 13)](#13-state-manager)).
 
-**After a crash.** The startup sweep releases each session that `State` shows claimed, with no `session.end` on disk and whose process is dead. [TODO: which event the startup sweep records for a dead session, `task.released` or `session.end`, each with reason `crash` ([G-217](#g-217))] A session whose `spawn` is still in `ActionsOpen` is also restarted by that spawn's rerun. [TODO: whether the sweep skips a session whose spawn is still open, or the rerun skips it, so the session restarts once ([G-217](#g-217))]
+**After a crash.** `Drive` calls `recover.DeadSessions` after `Load` and appends `session.end` reason `crash` for each session that `State` shows claimed, with no `session.end`, whose process is dead and whose `spawn` is no longer open; `task.released` follows as at every `session.end`. A session whose `spawn` is still in `ActionsOpen` is skipped, because that spawn's rerun restarts it, so the session restarts once.
 
-**Files.** `runs/<group-id>/events.jsonl` holds one group's events and `runs/<run>.jsonl` holds one run's `run.*` events, appended and read through the same group state calls with no snapshot. The epic gate has a record and event log of its own, shaped like a group's, that runs only the whole-epic review and the epic pull request; it reuses the `session.*`, `finding.*`, `group.paused` and `group.blocked` events, so a crash resumes the gate and a provider limit pauses it. [TODO: the epic gate's record identifier and file names ([G-37](#g-37))] Groups never read each other's files; groups meet only in the work queue and the session pool.
+**Files.** `runs/<group-id>/events.jsonl` holds one group's events and `runs/<run>.jsonl` holds one run's `run.*` events, appended and read through the same group state calls with no snapshot. The epic gate has a record and event log of its own, shaped like a group's, that runs only the whole-epic review and the epic pull request; it reuses the `session.*`, `finding.*`, `group.paused` and `group.blocked` events, so a crash resumes the gate and a provider limit pauses it. The gate's record identifier is `epic-<epic-id>`, and its files are `runs/epic-<epic-id>/events.jsonl` and `runs/epic-<epic-id>/state.json`. Groups never read each other's files; groups meet only in the work queue and the session pool.
 
 **Concurrency.**
 - **One writer per file:** a group's `Drive` goroutine is the only writer of the group's events and snapshot; the run goroutine is the only writer of `run.*` events.
 - **`Next()` takes no locks:** `Next()` is pure, so table tests call it directly.
 - **Coarse grain:** events fire per run, group, stage, session and task, never per model turn or token; the in-session tool loop is plain code.
 - **Outside the bus:** the guard check before a tool call, formatting after `edit`, and shutdown are direct code, and log an event afterward when they can. These are the 3 inline hooks [TODO: whether the third inline hook is session end or shutdown ([G-67](#g-67))]; repository-owned hooks arrive in a later minor release and will be subscribers, never gates.
-- **Bus delivery:** one bus per engine process, no broker; `Next()` is the one decider, and subscribers write only their own derived records, never a group's events or snapshot. `Drive` delivers in `sequence` order, within the [per-subscriber limit](#28-config), and logs an overrun in the run report; the ledger batches its appends per tick. [TODO: whether the engine loop waits for subscribers after delivering an event ([G-29](#g-29))]
+- **Bus delivery:** one bus per engine process, no broker; `Next()` is the one decider, and subscribers write only their own derived records, never a group's events or snapshot. The engine loop never waits for a subscriber: each subscriber runs beside it, reads new lines with `Tail` from its own bookmark (the last `sequence` it handled, kept in its derived file), in `sequence` order and within the [per-subscriber limit](#28-config), and writes its file without a forced save, because the file rebuilds from the events. On an error a subscriber waits 1 second and retries from its bookmark; `status` flags any subscriber more than 50 events behind. The `status --watch` screen is a separate reader of the event file in its own process; the ledger batches its appends per tick.
 
 **Wakes.** The wake subscriber is never dropped: a failed touch is retried on the next event, and `status --wait` also reads `Tail` on [a backstop interval](#28-config), so a failed touch delays a wake but never loses it.
 
@@ -2189,11 +2184,11 @@ stateDiagram-v2
 | 16 | Paused | `resume` command | Sooner than the timer | `ToPrior` | As row 11 |
 | 17 | Any working stage, Paused, Blocked | `abandon` command | | Done | orders `cancel` for every live session; frees the lease; emits `lock.released`; dependent groups block `dependency` |
 | 18 | Any working stage, Paused, Blocked | `lease.lost` | Another run took the group | Done | ended in this run; orders `cancel` for every live session; frees nothing and emits no `lock.released`, because the lease and the task-list lock belong to the other run |
-| 19 | Done | [TODO: the event that carries an epic gate finding into the group's log ([G-37](#g-37))] | The finding names a file this group changed last | Build | Cuts a fresh worktree from the epic branch tip with the findings in the brief and takes a new lease; emits `stage.enter`; the group lands again like any group |
+| 19 | Done | `request.return`, which the epic gate writes to the group's inbox with the findings in `data` | The finding names a file this group changed last | Build | Cuts a fresh worktree from the epic branch tip with the findings in the brief and takes a new lease; emits `stage.enter`; the group lands again like any group |
 
-- **Commands:** [TODO: the event type names of `resume`, `scope approve`, `scope deny` and `abandon`, and how each reaches `Drive`; they are outside the 34 ([G-29](#g-29))]
+- **Commands:** `resume` is `request.resume`, `scope approve` and `scope deny` are `request.scope` with `data.answer`, and `abandon` is `request.abandon`. A command writes its request as one file `runs/<group-id>/inbox/<request-id>.json`, written to a temp name and linked into place create-only, so it never overwrites another and is never read half written. A live `Drive` watches its inbox, appends each file as an event in arrival order, then deletes the file; a crash between the two leaves the file, and `Drive` drops a second request with a recorded `data.request`. `Drive` appends `request.accepted` or `request.refused` with the same `data.request`. With no live engine, a command that needs no session (`abandon`) takes the group's lease, handles the request in one step through group state and releases the lease, as `jobs tick` does; a command that needs sessions starts a detached engine, whose `Drive` drains the inbox on start.
 - **Returns** raise the epoch through `stage.enter` and give the builder every verified finding in one return. On a Verify return the tester is cancelled at the first verified blocking finding, and the reviewer finishes.
-- **Ship before landing:** entering Ship takes the epic's [landing gate](#35-behaviour), merges the epic branch into the group branch, reruns Check on the merged branch, then runs `land` ([Ship](#115-behaviour) steps 2 to 4). [TODO: what a failed Check on the merged group branch does in Ship ([G-31](#g-31))]
+- **Ship before landing:** entering Ship takes the epic's [landing gate](#35-behaviour), merges the epic branch into the group branch, reruns Check on the merged branch, then runs `land` ([Ship](#115-behaviour) steps 2 to 4). A failed Check on the merged group branch frees the landing gate and returns the group to Build with the failing output as findings, spending one of `limits.returns`, as row 5 does; at the limit the Check block row applies.
 - **A return with every task done:** rows 5, 6 and 8 send a group whose tasks are all done back to Build, and the returning builder session is pointed at the reopened task. A reviewer `not_met` verdict reopens that task by its identifier; a finding or failing test reopens the task whose `files` list covers the named file. When nothing maps, such as a broken epic tip with no file, the group's last task reopens with every finding. Only the task's state in `State` changes; the backlog files and the locked task list stay untouched.
 
 #### Block rows
@@ -2213,9 +2208,12 @@ Row 14 is one row per bound or blocking exit. Each row's event is the one that s
 | Builder `session.end` reason `needs_scope` | Build | | `needs_scope`; work-in-progress commit kept |
 | `action.done` for `land` | Ship | The merge conflicted and the one automatic merge did not resolve it | `merge_conflict` |
 | `action.done` for `setup` | Intake | Non-zero exit | `setup`, showing the command's output |
-| [TODO: the event that carries the result of Intake's lint and worktree cut ([G-31](#g-31))] | Intake | The group's backlog entry fails lint | `lint` |
+| `action.done` for `setup`, which runs lint, the card hash and the worktree cut before the command | Intake | The group's backlog entry fails lint | `lint` |
 | The same Intake event | Intake | git refused the worktree cut | `setup`, showing git's output |
 | `action.done` for `spawn` | Build, Verify | Link selection found every link in the chain unavailable or unauthorized | `no_provider` |
+| `action.done` for `spawn` | Build, Verify | The brief exceeds half the context of every link in the chain | `context` |
+| A `Next()` result that breaks its event type's `Spec`, found by `Drive` before the write | Any working stage, Paused | | `contract` |
+| `Append` or `Load` refused by the state manager (`*InvalidError`, `ErrNotWriter`, or a bad record moved aside) | Any working stage, Paused | | `state_invalid` |
 | Reviewer `session.end` reason `done` | Verify, and Paused with `Prior` = Verify | The verdict is `brief_incomplete` | `brief` |
 | Tester `session.end` reason `done` | Verify, and Paused with `Prior` = Verify | After its one restart with Go's output, the tester failed an item Go's reruns pass | `tester` |
 | Reviewer or tester `session.end` reason `done` | Verify, and Paused with `Prior` = Verify | Go's two reruns of one acceptance item disagreed | `flaky` |
@@ -2267,7 +2265,7 @@ Row 14 is one row per bound or blocking exit. Each row's event is the one that s
 | `needs_scope`, `budget`, `billing` | orders `wip_commit`; the [block rows](#block-rows) move the group |
 | `cancelled` | None; the cause already moved the group |
 | `pause_timeout` | None; row 12 already blocked the group and cancelled the session |
-| `crash` | [TODO: `the exit table lacks a row for crash` ([G-217](#g-217))] |
+| `crash` | None of its own; a builder found dead respawns its task under the Build rows, and the `attempts` block row applies at the cap |
 
 | State | Waits on | Pool slot | Lease and worktree | Wall clocks | Ends by |
 |---|---|---|---|---|---|
@@ -2293,7 +2291,7 @@ A fixed enumeration on `group.blocked`, named in `status`. A group that blocks [
 | `integration` | Check failed on the epic tip after landing and the group's returns are spent; landings stay shut until a Check on the tip passes | Reviews the integration failure |
 | `needs_scope` | The builder needs a file outside `files`; work in progress kept; the orchestrator answers after 2 engine denials (owner decision, 2026-10-09) | Runs `scope approve|deny` |
 | `attempts` | The group's builder used all `limits.group_attempts` fresh sessions | Looks at why it keeps failing |
-| `context` | The brief exceeds half the context of every link in the chain. [TODO: the block row that produces this reason ([G-31](#g-31))] | Shrinks the task or adds a larger endpoint |
+| `context` | The brief exceeds half the context of every link in the chain; the `spawn` block row produces it | Shrinks the task or adds a larger endpoint |
 | `merge_conflict` | Landing conflicted and the one automatic merge did not resolve it | Resolves the conflict |
 | `branch_missing` | Ship found the group's hidden reference gone, deleted outside Komodo; names the last head commit recorded | Restores the reference, or runs `abandon` |
 | `budget` | With `track.usage` on, the group used `limits.group_tokens`; never occurs with tracking off | Raises the cap or splits the group |
@@ -2302,8 +2300,8 @@ A fixed enumeration on `group.blocked`, named in `status`. A group that blocks [
 | `lint` | The planner's draft failed backlog lint 3 times, or the group's backlog entry failed lint at Intake | Fixes it with `doctor backlog` |
 | `setup` | The setup command or the worktree cut failed at Intake, before any model session; or a Check step could not run, such as a sandbox refusal; `status` shows the output | Fixes the command or the checkout |
 | `brief` | The reviewer reported `brief_incomplete`, or the brief builder could not load a skill; a harness fault | Fixes the brief inputs |
-| `contract` | A `Next()` result broke its type's `Spec`. [TODO: the block row that produces this reason ([G-31](#g-31))] | Reads the named type and rule |
-| `state_invalid` | The state manager refused a write or moved a bad record aside as `.bad-*`; names kind, key and field. [TODO: the block row that produces this reason ([G-31](#g-31))] | Inspects the record |
+| `contract` | A `Next()` result broke its type's `Spec`; `Drive` checks it before the write ([Block rows](#block-rows)) | Reads the named type and rule |
+| `state_invalid` | The state manager refused a write or moved a bad record aside as `.bad-*`; names kind, key and field; the state manager block row produces it | Inspects the record |
 | (unnamed) | A session's `retries` after timeouts or idle stops, `limits.returns` on findings, a flap (the same failure fingerprint or a zero-diff return), or the job failures [TODO: when a failing job blocks ([G-149](#g-149))]; `reason` is empty and `BlockState.Counter` names the counter. `group.blocked` carries that counter in its `counter` field. | Runs `resume` |
 
 Every row ends with `resume` unless the last column says otherwise.
@@ -2315,7 +2313,7 @@ Every row ends with `resume` unless the last column says otherwise.
 | Crash mid-`Append` | Checksum fails on the last line at `Load` | Drop the line, emit `state.truncated` | At most 1 event, never applied | The group resumes |
 | Bad line before the last | Checksum or schema at `Load` | Move aside as `.bad-*`, block `state_invalid` | Nothing; the record is kept | `doctor`, `status` |
 | Crash between `action.start` and `action.done` | Open action in the snapshot or after it | Rerun under its idempotency key | Nothing; a commit happens once | Nothing |
-| Crash with a session live | The startup sweep finds a claimed session dead with no `session.end` | [TODO: `the event the sweep records` ([G-217](#g-217))]; the builder's task respawns | At most the session's unsaved turn | `status` |
+| Crash with a session live | The startup sweep finds a claimed session dead with no `session.end` | `session.end` reason `crash`, appended by `Drive` after `Load`; the builder's task respawns | At most the session's unsaved turn | `status` |
 | Late result from a cancelled session | Epoch older than the current | Write with `stale: true`; `Next()` ignores it | Nothing | Ledger only |
 | Late result after Blocked or Done | The group's stage | Recorded only | Nothing | Ledger only |
 | Event with no transition row | `Next()` returns `Refused` | Log it; state unchanged | Nothing | Ledger |
@@ -2355,7 +2353,7 @@ Each case is a table test on `Next()` or a recovery test on `Load`. Fixture limi
 | The reviewer pauses, then the tester ends passed while Paused, then `timer.due` | The tester's result counts; one `spawn` for the reviewer |
 | `abandon` with a builder live, then the builder's `session.end` reason `cancelled` | Done, `lock.released`; the late `session.end` is recorded only |
 | A plain `task.released` after the task's `commit` emitted `task.done` | The task stays done |
-| `kill -9` with a builder live after its `spawn` finished, then `resume` | One new `spawn`; [TODO: `the event the sweep records` ([G-217](#g-217))] |
+| `kill -9` with a builder live after its `spawn` finished, then `resume` | One new `spawn`; no `session.end` reason `crash`, because the spawn was open |
 | `kill -9` between `action.start commit` and `action.done`, then `resume` | The commit runs again and yields 1 commit |
 | `kill -9` after an event is appended and before its first `action.start`, then `resume` | The ordered action runs once |
 | A last event line cut short by a crash | Replay drops the line and emits one `state.truncated` |
@@ -2372,18 +2370,10 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Blocks building? |
 |---|---|---|
 | [G-238](#g-238) | How the one builder session hands each finished task to the `commit` action without ending | Yes |
-| [G-211](#g-211) | The machine log file names; Which writer appends `state.truncated` | Yes |
 | [G-159](#g-159) | Which component checks that a finding's quote is at its line | Yes |
-| [G-29](#g-29) | Envelope `id`, `class`, `cause`, `corr`; command type names and how they reach `Drive`; one disk write per event and follow-ons; Whether the engine loop waits for subscribers after delivering an event; How a `timer.due` from outside `Drive` reaches a group's state file | Yes |
-| [G-31](#g-31) | Block rows for `context`, `contract` and `state_invalid`; the event carrying Intake's lint and worktree-cut results; a failed Check before landing in Ship | Yes |
-| [G-182](#g-182) | The checksum algorithm | Yes |
-| [G-37](#g-37) | The epic gate's record identifier and file names; the event that carries a gate finding into a Done group's log | Yes |
-| [G-217](#g-217) | The startup sweep against an open spawn's rerun; Which component owns the action record; Whether `Drive` or `recover.go` calls `Load` | Yes |
-| [G-38](#g-38) | How a slot is held and freed | Yes |
 | [G-112](#g-112) | How `agent.json` limits and `agents.<name>` keys combine | Yes |
 | [G-67](#g-67) | The session-end commit mechanism and the third inline hook | Yes |
 | [G-149](#g-149) | When a failing job blocks | Yes |
-| [G-231](#g-231) | Where the pinned run settings are stored | Yes |
 | [G-146](#g-146) | Which file holds `job.due` and `job.fail` | Yes |
 | [G-19](#g-19) | The replay target is unmeasured | No |
 
@@ -2400,7 +2390,7 @@ The engine runs task groups: it starts model sessions, moves each group through 
 | One writer per group | A single `Drive` goroutine writes a group's state; no mutex exists inside a group |
 | No lost event | A session's event channel holds 256 events; a full channel blocks the session, it never drops an event |
 | Faults stay inside one group | Every goroutine starts through one panic-catching helper; a panic in one `Drive` blocks that group only |
-| Machine-wide limits hold | Queue items, pool slots, link slots and leases are files created exclusively or renamed into place [TODO: whether a slot is an operating-system file lock or a create-only file ([G-38](#g-38))] |
+| Machine-wide limits hold | Queue items, pool slots, link slots and leases are files created exclusively or renamed into place; a slot is a create-only file removed with `Remove` |
 | Landings are serial | One landing at a time, each followed by a zero-token Check on the epic tip |
 
 ### 3.1 Scope and Concepts
@@ -2409,7 +2399,7 @@ The engine runs task groups: it starts model sessions, moves each group through 
 - The `Drive` loop that runs one group from its first event to its end.
 - The run goroutine and run order: the dependency graph as the engine consumes it, group readiness, serial landing, the integration break and the epic gate.
 - The machine-wide work queue and its pick order.
-- The machine-wide session pool and the per-link session slots. [TODO: `which component owns the session pool slots` ([G-217](#g-217))]
+- The machine-wide session pool and the per-link session slots: `pool.go` claims and frees both kinds.
 - The shutdown sequence and the parent guard.
 - The stage drivers `intake.go`, `build.go` and `verify.go`.
 
@@ -2418,7 +2408,7 @@ The engine runs task groups: it starts model sessions, moves each group through 
 - Group state files, `Claim`, `Replace` and `Remove` ([State Manager](#13-state-manager)).
 - Worktrees, leases, fences and the hidden reference ([Workspace and Leases](#4-workspace-and-leases)).
 - Starting, watching and stopping one model session ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)).
-- The startup sweep [TODO: `which component owns the startup sweep` ([G-217](#g-217))] and the Check, review and tester logic ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)).
+- The startup sweep, which error recovery owns in `recover.go`, and the Check, review and tester logic ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)).
 - Job templates and the `jobs tick` verb ([Scheduler, Cache and Observability](#10-scheduler-cache-and-observability)).
 - Building the dependency graph from the backlog, and the git landing operations ([Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release)).
 
@@ -2443,11 +2433,13 @@ Group, epic and lease are defined in the [glossary](hld.md#12-glossary).
 |---|---|
 | `internal/engine/engine.go` | `Drive`: the per-group loop that appends events, calls `Next()` and runs the ordered actions |
 | `internal/engine/queue.go` | Work queue files under `~/.komodo/state/queue/`, the pick order, fair share across repositories |
-| `internal/engine/pool.go` | Session pool, the floor, the ceiling, growth and shrinkage [TODO: `which package holds the per-link slots` ([G-217](#g-217))] |
-| `internal/engine/intake.go` | Intake: lint the group's backlog cards, hash them, cut the worktree from the epic tip [TODO: the order of queue-file deletion, pool slot, lease and Intake ([G-38](#g-38))] |
+| `internal/engine/pool.go` | Session pool, the floor, the ceiling, growth and shrinkage, and the per-link slots |
+| `internal/engine/intake.go` | Intake: lint the group's backlog cards, hash them, cut the worktree from the epic tip; Intake is the first stage `Drive` runs, after the lease is taken |
 | `internal/engine/build.go` | Build: one builder session per group, through every task in order, resumed with the findings on a return |
 | `internal/engine/verify.go` | Verify: reviewer and tester at once; cancels the tester on the first verified finding |
 | `internal/engine/shutdown.go` | The catch-all shutdown sequence and the parent guard |
+| `internal/engine/run.go` | The run goroutine, `Startable`, the landing gate and the panic-catching helper `Go` |
+| `internal/engine/epicgate.go` | The epic gate: the whole-epic review and the epic pull request |
 
 Files of the same package that other chapters own:
 
@@ -2470,9 +2462,9 @@ Files of the same package that other chapters own:
 | Start rule | `Startable` in the run goroutine's file |
 | Stopping a run | The shutdown sequence in `shutdown.go` |
 
-The names are working names. [TODO: `confirm the exported names of the engine's functions` ([G-201](#g-201))]
+These names are final for beta 6.
 
-The dependency graph is built in `internal/repo/graph.go` (waves and longest chain, [chapter 11](#11-backlog-planning-ship-and-release)); the engine imports it, as the import order allows. [TODO: `the file that holds the run goroutine, run-order readiness, the landing gate, the epic gate and the panic-catching helper; the design's file map names none` ([G-201](#g-201))]
+The dependency graph is built in `internal/repo/graph.go` (waves and longest chain, [chapter 11](#11-backlog-planning-ship-and-release)); the engine imports it, as the import order allows. `internal/engine/run.go` holds the run goroutine, `Startable`, the landing gate and the panic-catching helper `Go`; `internal/engine/epicgate.go` holds the epic gate.
 
 ### 3.3 Data Model
 
@@ -2490,7 +2482,7 @@ const (
 
 #### Queue item
 
-Ready work waits as one create-only file per group or job at `~/.komodo/state/queue/<repo-id>.<kind>.<id>.json`. How a repository identifier becomes a file name is [TODO: `repository identifier to file name mapping` ([G-201](#g-201))].
+Ready work waits as one create-only file per group or job at `~/.komodo/state/queue/<repo-id>.<kind>.<id>.json`. A repository identifier becomes `<repo-id>`: the repository's last path element in lower case, a hyphen, and the first 8 hexadecimal digits of the SHA-256 of the full identifier, such as `komodo-agentic-harness-coding-3f9a1c2e`; every `<repo-id>` path uses this form.
 
 ```go
 // ItemKind says whether a queue item is a task group or a scheduled job.
@@ -2525,11 +2517,11 @@ type QueueItem struct {
 | `repo` | string | The repository the item belongs to; fair share counts each job as its own repository |
 | `id` | string | The group identifier, or the job name [TODO: the queue item id of a job ([G-148](#g-148))] |
 | `priority` | string | `high` is set by `priority: high` in the group's `TG.md`; jobs are `normal` |
-| `enqueued_at` | time | When the item was queued [TODO: `timestamp format` ([G-201](#g-201))] |
+| `enqueued_at` | time | When the item was queued, in the format `2026-10-13T09:14:05Z`: Coordinated Universal Time, whole seconds |
 
-**Versioning.** Each record carries the schema version `v` in its header. A newer binary reads an older version by running a registered migration step in memory. How a reader treats a record written by a newer binary is [TODO: `forward-version handling in the state manager` ([G-201](#g-201))].
+**Versioning.** Each record carries the schema version `v` in its header. A newer binary reads an older version by running a registered migration step in memory. A record written by a newer binary is refused with `ErrNewerVersion` and left untouched ([State manager header](#133-data-model)).
 
-The state manager wraps the body in its six-field record header (`v`, `kind`, `key`, `rev`, `ts`, `writer`); the layout of header and body is [TODO: `how a record's header and body share one file` ([G-201](#g-201))]. The body alone:
+The state manager wraps the body in its six-field record header (`v`, `kind`, `key`, `rev`, `ts`, `writer`); the file is one JSON object: the six header fields, then the body under `body` ([State manager header](#133-data-model)). The body alone:
 
 ```json
 {
@@ -2537,30 +2529,40 @@ The state manager wraps the body in its six-field record header (`v`, `kind`, `k
   "repo": "github.com/rdevitto86/komodo-agentic-harness-coding",
   "id": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "priority": "normal",
-  "enqueued_at": "[TODO: timestamp format (G-201)]"
+  "enqueued_at": "2026-10-13T09:14:05Z"
 }
 ```
 
-Open decisions in this example: [G-201](#g-201).
-
 #### Slot files
 
-Pool slots live under `~/.komodo/state/pool/` and link slots under `~/.komodo/state/links/`. Each slot is a file tagged with the process identifier of its holder. [TODO: `whether an operating system file lock frees a slot when its holder dies, or a slot is a create-only file removed with Remove and found dead by a process-identifier check` ([G-38](#g-38))]
+Pool slots live under `~/.komodo/state/pool/` and link slots under `~/.komodo/state/links/`. Each slot is a create-only file written with `Claim` and removed with `Remove`, tagged with its holder's process identifier and start time; a slot whose holder process is dead (a signal-0 check on Unix, `OpenProcess` on Windows, with the start time guarding against a reused identifier) is free and is removed by the next taker or the startup sweep.
 
 ```go
 // SlotFile is the body of a pool or link slot lock file.
 type SlotFile struct {
-	Pid int `json:"pid"` // process identifier of the holder
+	Pid     int       `json:"pid"`     // process identifier of the holder
+	Started time.Time `json:"started"` // the holder process's start time, so a reused pid is not mistaken for it
+	Run     state.ID  `json:"run"`     // the run the session belongs to
+	Session state.ID  `json:"session"` // the session holding the slot
+}
+
+// PoolState is the body of ~/.komodo/state/pool/state.json, shared by every engine on the machine.
+type PoolState struct {
+	Size     int    `json:"size"`      // the adapted pool size, between limits.pool_min and limits.pool_max
+	LastRepo string `json:"last_repo"` // the repository served by the previous pick, for round-robin
 }
 ```
 
 | Field | Type | Rule |
 |---|---|---|
 | `pid` | integer | The holder's process identifier |
+| `started` | time | The holder's process start time |
+| `run`, `session` | string | The run and session holding the slot |
+| `size`, `last_repo` | integer, string | `PoolState`: the adapted size and the round-robin cursor, written with `Replace` under its lock file |
 
 Versioning follows the same record header as the queue item.
 
-[TODO: `slot file names, the rest of the body, and where the pool's current ceiling is stored` ([G-38](#g-38))]
+A pool slot is `~/.komodo/state/pool/<n>.json` with `<n>` from 1 to the current `size`; a link slot is `~/.komodo/state/links/<link>.<n>.json` with `<n>` from 1 to `limits.link_sessions.<link>`. A taker claims the lowest free number.
 
 #### Drive
 
@@ -2571,21 +2573,28 @@ type Drive struct {
 	State  state.GroupState[State] // group state: Open, Append, Snapshot, Load, Tail
 	Limits Limits                  // the bounds Next enforces, pinned by the config hash
 	Events chan state.Event        // fed by session goroutines, capacity EventBuffer
+	Leases Leases                  // takes, renews and releases the group's lease
+	Trees  Worktrees               // cuts, saves and removes the group's worktree
+	Refs   HiddenRefs              // moves the group's hidden reference under the fence
+	Router *Router                 // picks the link for each session (Providers and HTTP, chapter 7)
 }
+
+// NewDrive wires one group's Drive; Leases, Worktrees and HiddenRefs are interfaces, so tests pass fakes.
+func NewDrive(group state.ID, gs state.GroupState[State], lim Limits, l Leases, t Worktrees, r HiddenRefs, rt *Router) *Drive
 ```
 
 | Field | Rule |
 |---|---|
 | `Group` | Identifier of the one group; a second `Open` of the same group in one process is refused |
 | `State` | The calls of [Group state](#13-state-manager); an apply function that wraps `Next()` is passed into `Load` as the replay function |
-| `Limits` | Read once from the effective configuration that `State.ConfigHash` pins [TODO: where the pinned run settings are stored and what resume does when the configuration hash differs ([G-231](#g-231))] |
+| `Limits` | Read once from `runs/<run>.config.json`, the settings pinned at the run's start; `resume` keeps them and warns when `config.json` has changed |
 | `Events` | A session goroutine sends the facts of its session; a full channel blocks the sender |
+| `Leases`, `Trees`, `Refs`, `Router` | The collaborators, set once by `NewDrive`; `Drive` renews its lease with `Leases.Renew` |
 
-[TODO: `the collaborator fields or constructor of Drive (leases, worktrees, supervisor, router), and whether Drive renews a lease with Replace or with Leases.Renew` ([G-40](#g-40))]
 
 `Drive` is in memory only. Its durable form is the group state of [chapter 2](#2-event-spine-and-state-machine), whose snapshot body is `State`.
 
-How a typed command such as `resume` reaches `Drive` is [TODO: `command transport into Drive` ([G-29](#g-29))].
+A typed command such as `resume` reaches `Drive` as a request file in `runs/<group-id>/inbox/` ([Commands](#26-state-and-transitions)).
 
 #### Dependency graph, as consumed
 
@@ -2601,7 +2610,9 @@ type Candidate struct {
 }
 ```
 
-[TODO: `exact definition of ChainWeight (whether the group's own tasks count) and Unblocks, and the key that gives Order` ([G-41](#g-41))]
+- **`ChainWeight`:** the sum of task counts along the heaviest path of unlanded groups that starts at this group and follows its dependents, the group's own tasks included.
+- **`Unblocks`:** the number of groups whose only unlanded dependency is this group, so they become startable when it lands.
+- **`Order`:** the group's position when the backlog's group identifiers are sorted in natural order (`TG-2` before `TG-10`).
 
 #### Run flags
 
@@ -2609,7 +2620,7 @@ type Candidate struct {
 
 ### 3.4 Interfaces
 
-`Drive`, `Next()`, the group state calls and the pick order are named. The exported names and signatures below are the working shape of those parts. [TODO: `confirm the exported names and signatures of the engine's functions` ([G-201](#g-201))]
+`Drive`, `Next()`, the group state calls and the pick order are named. The exported names and signatures below are final for beta 6.
 
 ```go
 // RunGroup opens a group, replays it, reruns open actions, then loops until the group ends or ctx is cancelled.
@@ -2630,13 +2641,13 @@ func Startable(dependencies []string, landed map[string]bool, tipChecked bool) b
 
 Open decisions in this example: [G-224](#g-224).
 
-`lastRepo` is the repository served by the previous pick; where that value is stored is [TODO: `round-robin cursor storage` ([G-38](#g-38))].
+`lastRepo` is the repository served by the previous pick; it is stored as `last_repo` in `~/.komodo/state/pool/state.json`, so every engine on the machine shares one cursor.
 
 **Failure behaviour of each function**
 
 | Function | On failure |
 |---|---|
-| `RunGroup` | `Open` refused (the group is already open in this process, or the process does not hold the lease): the `Drive` does not start. A refused `Append` is `state_invalid` and the group blocks [TODO: what `Drive` does when `Append` refuses ([G-211](#g-211))]; a bad line before the last during `Load` is moved aside as `.bad-*` and the group blocks `state_invalid`. An action that fails is [TODO: `action failure policy` ([G-40](#g-40))] |
+| `RunGroup` | `Open` refused (the group is already open in this process, or the process does not hold the lease): the `Drive` does not start. A refused `Append` (`*InvalidError` or `ErrNotWriter`) blocks the group `state_invalid`; a failed disk write ends the `Drive` as a panic does, blocking the group `crash`; a bad line before the last during `Load` is moved aside as `.bad-*` and the group blocks `state_invalid`. An action that fails records its failure class in `action.done`, and `Next()` applies that kind's row; a failure class with no row blocks the group `contract` |
 | `Pick` | Returns `false` when no item is ready; nothing is taken |
 | `GrowPool` | Cannot fail; returns the size unchanged when memory does not cover one more session or the ceiling is reached |
 | `HalvePool` | Cannot fail; returns the floor when halving would go below it |
@@ -2649,7 +2660,7 @@ Open decisions in this example: [G-224](#g-224).
 | Engine, when a pool slot frees | `Pick`, `Remove` on the queue file, `Leases.Take` ([Workspace and Leases](#4-workspace-and-leases)) | The pool has a free slot and a queue item is ready |
 | Session goroutine | Send on `Drive.Events` | Each fact a session produces |
 | `Drive` | `Open`, `Load`, `Append`, `Snapshot` (group state); `Next()`; `SpecOf` | Every event |
-| `Drive` | [TODO: `Replace on the lease, or Leases.Renew` ([G-40](#g-40))] | Every `LeaseRenewEvery` |
+| `Drive` | `Leases.Renew` | Every `LeaseRenewEvery` |
 | `Drive` | `GrowPool` after a clean session end; `HalvePool` after a rate-limit error or a quota warning [TODO: which signal halves the session pool ([G-224](#g-224))] | The session's end or the warning is applied |
 | `komodo stop <run>`, signal, `fresh --restart-runs` | The shutdown sequence | Operator or operating system asks the run to stop |
 
@@ -2713,7 +2724,7 @@ flowchart LR
 Rules:
 1. The `Drive` goroutine is the only writer of its group's events and snapshot. No mutex exists inside a group, and two groups never contend.
 2. A session goroutine turns its session's stream into events and sends them on `Drive.Events`. When the channel is full the sender waits; no event is dropped.
-3. Facts that groups share (queue, leases, `quota.json`) are files under `~/.komodo/state/`, created exclusively or renamed into place, written through `Claim`, `Replace` and `Remove` [TODO: whether a slot is an operating-system file lock or a create-only file ([G-38](#g-38))]. Two engines on one machine coordinate only through these files.
+3. Facts that groups share (queue, leases, `quota.json`) are files under `~/.komodo/state/`, created exclusively or renamed into place, written through `Claim`, `Replace` and `Remove`; a slot is a create-only file. Two engines on one machine coordinate only through these files.
 4. The run goroutine builds the dependency graph, enqueues ready groups and collects finished `Drive`s. It holds no group state.
 5. Every goroutine starts through one panic-catching helper. A panic in one `Drive` emits `group.blocked crash` (the event `group.blocked` with reason `crash`) for that group alone; the run and the other groups continue. The [block row](#block-rows) for `crash` moves the group to Blocked from any working stage or Paused.
 
@@ -2728,7 +2739,7 @@ flowchart TB
 ```
 
 1. A ready group takes a free pool slot and its lease; the engine hands the group to a new `Drive`.
-2. `Drive` calls `Open`, which makes it the group's only writer, then `Load`, which reads the last snapshot, replays the events saved after it and returns the state [TODO: whether `Drive` or `recover.go` calls `Load` ([G-217](#g-217))]. `Drive` reruns the state's open actions.
+2. `Drive` calls `Open`, which makes it the group's only writer, then `Load`, which reads the last snapshot, replays the events saved after it and returns the state; `Drive` is always the caller. `Drive` reruns the state's open actions.
 3. `Drive` waits on three sources: events from the group's sessions, the group's pause timer (which fires at the timer record's `wait_until` time), and its lease renewal every `LeaseRenewEvery`. It takes one event at a time and runs one turn for it.
 4. `Drive` ends when the group lands or is abandoned, when the run stops, or when it crashes. The run goroutine collects a finished `Drive`.
 
@@ -2744,12 +2755,12 @@ One turn:
 
 Chapter 2 draws the same path as a sequence diagram ([One event, from producer to subscribers](#25-behaviour)).
 
-Open parts of the loop:
-- [TODO: `whether the group loop keeps running or exits while its group is Paused or Blocked` ([G-29](#g-29))]
-- [TODO: `whether steps 2 to 4 become a single disk write` ([G-29](#g-29))]
-- [TODO: `whether the engine loop waits for subscribers after delivering an event` ([G-29](#g-29))]
-- [TODO: `what Drive does when an action fails, or when a lease renewal is refused` ([G-40](#g-40))]
-- [TODO: `how a paused group's time since pause is kept, for the pause cap` ([G-40](#g-40))]
+Loop rules:
+- **Paused and Blocked:** the group loop keeps running while its group is Paused or Blocked: it holds no pool slot, renews the lease and waits on its timer and its inbox.
+- **One write:** steps 2 to 4 are one disk write: `Drive` runs `Next()` in memory first, then saves the event, its follow-ons and the first `action.start` with one forced save ([Behaviour](#25-behaviour)).
+- **Subscribers:** the loop never waits for them; each reads from its own bookmark ([Behaviour](#25-behaviour)).
+- **Action failure:** `Drive` never decides on a failure: it records the failure class in `action.done` and `Next()` applies that kind's row; a failure class with no row blocks the group `contract`. A refused renewal is `lease.lost` (row 18); a failed renewal write is retried at the next interval, inside the lease's 2-hour life.
+- **Pause cap:** `PauseState.Since` records when the group paused; `limits.pause_max_min` counts from it.
 
 **Taking work from the queue**
 
@@ -2763,19 +2774,19 @@ sequenceDiagram
   participant D as Drive
   R->>Q: Claim queue file
   R->>Q: list, apply pick order
-  R->>S: Remove queue file
   R->>S: Leases.Take
+  R->>S: Remove queue file
   R->>D: start, with pool slot
   D->>S: Open, Load
-  Note over R,D: Intake placement is open (G-38)
+  Note over D: Intake runs as the first stage
 ```
 
 1. When a dependency lands and Check passes on the epic tip, the run goroutine creates one queue file for each newly ready group. `komodo jobs tick` creates one for each due job.
 2. When a pool slot frees, the engine lists the queue and applies the pick order below.
-3. The engine takes the chosen item: it deletes the queue file, then writes the lease. A crash between the two steps leaves an item for the startup sweep to re-enqueue. [TODO: `the sweep cannot see an item whose file is already deleted and whose lease is not yet written` ([G-38](#g-38))]
-4. The engine starts the group's `Drive`. Intake runs just before the group's first session takes a slot, and the next ready group's Intake starts while the current group's first session loads, so a slot never sits idle longer than one `setup` run. [TODO: `where Intake sits between the slot, the lease and the first Drive event` ([G-38](#g-38))]
+3. The engine takes the chosen item: it writes the lease, then deletes the queue file. A crash between the two steps leaves both; the startup sweep frees the dead lease and the queue item is picked again.
+4. The engine starts the group's `Drive`. Intake runs just before the group's first session takes a slot, and the next ready group's Intake starts while the current group's first session loads, so a slot never sits idle longer than one `setup` run. Intake is the first stage inside `Drive`: after `Open` and `Load`, before the first session takes a pool slot.
 
-[TODO: `which process takes an item when queue items from several repositories are ready, and what happens when the winner belongs to another repository` ([G-38](#g-38))]
+The engine that freed a slot applies the pick order over every ready item on the machine. When the winner belongs to a repository with a live engine, it leaves the slot for that engine, which watches the queue; when no engine serves the winner's repository, such as a due job, the engine starts that item as its own run.
 
 **Pick order**
 
@@ -2805,15 +2816,13 @@ flowchart TB
 | Slot takers | Builder, reviewer and tester sessions (`pool_slot: true`). Planner and job sessions take no pool slot, but count against the link limit |
 | Floor and ceiling | The pool holds `limits.pool_min` to `limits.pool_max` slots ([1.8](#18-config)): `limits.pool_min` stays open while throttled; `limits.pool_max` is the most sessions at once |
 | Link slot | `limits.link_sessions.<link>` sessions per link (for example `claude-cli`) across all repositories; the default and the hard limit are in [7.8](#78-config) |
-| Files | Pool and link slots are files tagged with the holder's process identifier; how a slot is freed is in the open parts below |
-| Taking | A session takes a pool slot before it starts and returns it when it ends; a Paused or Blocked group holds none |
+| Files | Pool and link slots are create-only files ([Slot files](#33-data-model)), freed with `Remove`; a dead holder's slot is free; the adapted size lives in `pool/state.json`, shared by every engine |
+| Taking | A session takes its pool slot first, then a link slot; with none free it waits, retrying every 5 seconds, and never fails for lack of a slot; it returns both when it ends; a Paused or Blocked group holds none |
+| Clean end | A `session.end` with reason `done` |
+| Free memory | Linux `MemAvailable` in `/proc/meminfo`; macOS free plus inactive pages from `vm_stat`; Windows `ullAvailPhys` from `GlobalMemoryStatusEx` |
 
 Open parts of the pool:
 - [TODO: whether `OLLAMA_NUM_PARALLEL` above 1 lets the local link exceed 1 ([G-04](#g-04))]
-- [TODO: `slot file names, the order in which a session takes its pool slot and its link slot, and whether a session waits or fails when none is free` ([G-38](#g-38))]
-- [TODO: `how a slot is freed, by an operating system file lock or by a create-only file removed with Remove` ([G-38](#g-38))]
-- [TODO: `where the adapted pool size lives when two engines share a machine` ([G-38](#g-38))]
-- [TODO: `what counts as a clean session end, and how free memory is measured on each operating system` ([G-38](#g-38))]
 - [TODO: `which signal counts as the rate-limit error that halves the pool (a LimitError, a system/api_retry rate_limit line, or a limit.warn event) and the cool-down between halvings` ([G-224](#g-224))]
 
 **Run order and convergence**
@@ -2831,7 +2840,7 @@ Rules:
 1. The graph is built from every group's dependencies and `touches` globs. A cycle is refused. Waves and the longest chain are computed; the longest chain also feeds the pick order.
 2. A group starts only after every dependency has landed and Check has passed on the epic tip.
 3. A group with 2 or more dependencies starts after all of them land.
-4. `run <group>` refuses when a dependency outside the run has not landed, and names it. [TODO: `how the engine learns that a dependency outside the run has landed` ([G-201](#g-201))]
+4. `run <group>` refuses when a dependency outside the run has not landed, and names it. The engine reads the dependency's `runs/<group-id>/events.jsonl` with `Tail`; the dependency has landed when the file holds a `group.shipped` line.
 5. When a dependency is blocked, its dependents show `waiting on <group>` in `komodo status`; groups that do not depend on it keep running.
 6. When a dependency is abandoned, its dependents block with reason `dependency`, naming the abandoned group. 
 7. Inside a group, one builder session works through the tasks one after another in the group's worktree and commits after each. Independent tasks belong in separate groups.
@@ -2852,7 +2861,7 @@ flowchart TB
 
 1. Finished groups land one at a time. Each landing is followed by Check on the epic tip, which costs 0 tokens.
 2. When that Check fails, landings pause and the last-landed group returns to Build in a new worktree cut from the tip. The return spends the same `limits.returns` budget as Check and Verify returns, with the failing Check output as the findings; once it is spent the group blocks with reason `integration` ([row 8](#26-state-and-transitions)).
-3. Each epic has one landing gate: a file under `~/.komodo/state/`, created only if absent, so exactly one engine run holds it [TODO: the gate file's name and body ([G-36](#g-36))]. A group takes the gate before merging the epic branch into its group branch, and frees it once the Check on the epic tip has recorded pass or fail. Groups of other epics are untouched. [TODO: landing by runs on other machines ([G-186](#g-186))]
+3. Each epic has one landing gate: a file under `~/.komodo/state/`, created only if absent, so exactly one engine run holds it: `~/.komodo/state/landing/<repo-id>.<epic-id>.json`, kind `landing`, whose body names the holder's `run`, `group`, `pid`, process start time and `taken_at`; a gate whose holder is dead is taken over by the lease rule. A group takes the gate before merging the epic branch into its group branch, and frees it once the Check on the epic tip has recorded pass or fail. Groups of other epics are untouched. [TODO: landing by runs on other machines ([G-186](#g-186))]
 4. Paused landings reopen the moment a Check on the epic tip passes again, whatever made it pass. Normally that is the returned group's fix landing; when that group blocks with reason `integration`, landings stay shut until a person or the orchestrator fixes the tip and runs `resume`, and the next passing Check reopens them. Groups waiting to land keep their place and need no action of their own.
 
 **The epic gate**
@@ -2886,8 +2895,8 @@ sequenceDiagram
   Note over E: signal, stop run, or fresh --restart-runs
   E->>A: 1 stop each, 30 s allowed
   E->>W: 2 work-in-progress commit per worktree
-  E->>W: 3 free leases
-  E->>E: 4 write state.json, exit
+  E->>E: 3 write state.json
+  E->>W: 4 free leases, exit
   Note over E: after 60 s the rest are killed
   Note over P: engine dies past its handler, or 10 min without heartbeat
   P->>A: 5 kill by process identifier files
@@ -2895,13 +2904,13 @@ sequenceDiagram
 ```
 
 1. The sequence starts on any operating-system signal, on `stop <run>` or on `fresh --restart-runs`, which updates the binary and moves live runs to it.
-2. The engine stops each session (30 seconds each), makes a work-in-progress commit of every worktree, then writes `state.json` and frees the leases in an order that is open [TODO: whether the snapshot is written before the leases are freed at shutdown ([G-230](#g-230))], and exits. After 60 seconds, anything still alive is killed.
+2. The engine stops each session (30 seconds each), makes a work-in-progress commit of every worktree, then writes `state.json` and only then frees the leases, so no other engine can open the group while this one still writes, and exits. After 60 seconds, anything still alive is killed.
 3. Shutdown is direct code outside the event bus. It writes `run.stopped` when it can.
 4. `komodo run` first starts a small parent process, the parent guard, which then starts the engine.
 5. If the engine dies past its own handler (`kill -9`, an out-of-memory kill, a Go fatal error) or writes no heartbeat for 10 minutes, the parent kills the sessions by their process identifier files, commits work in progress and frees the leases; the group loop alone writes a group's snapshot.
-6. Power loss is left to the startup sweep [TODO: which component owns the startup sweep ([G-217](#g-217))].
+6. Power loss is left to the startup sweep in `recover.go`.
 
-[TODO: `the parent guard's entry point, how the engine writes its heartbeat, and where the process identifier files live` ([G-39](#g-39))]
+The parent guard is the hidden verb `komodo guard <run>`, whose code is `Guard` in `shutdown.go`; `komodo run` starts it, and it starts the engine as its child. The engine rewrites `~/.komodo/state/pids/<run>/heartbeat` with the current time every 60 seconds. The supervisor writes one file per session process at `~/.komodo/state/pids/<run>/<session>.pid`, holding the process identifier and start time, and removes it at `session.end`.
 
 ### 3.6 State
 
@@ -2922,7 +2931,7 @@ stateDiagram-v2
 |---|---|---|---|---|---|
 | Starting | `Open`, `Load`, open actions | Held for the first session | Lease written, worktree cut | `Load` returns the state | This `Drive` is the group's only writer; the open actions have run |
 | Looping | Session events, the pause timer, the lease renewal | Held while a session runs | Kept; lease renewed every 5 minutes | Landing, abandon, run stop, panic | Every applied event is on disk before its effects run |
-| Paused or Blocked | [TODO: `whether the group loop keeps running or exits while its group is Paused or Blocked` ([G-29](#g-29))] | Returned | Kept | The timer, `resume`, `scope approve` or `scope deny`, or `abandon` | The group holds no pool slot and keeps its lease and worktree |
+| Paused or Blocked | The timer, the inbox and the lease renewal; the loop keeps running | Returned | Kept | The timer, `resume`, `scope approve` or `scope deny`, or `abandon` | The group holds no pool slot and keeps its lease and worktree |
 | Ended | Nothing | Returned | Released on abandon, or when the Check on the epic tip passes after the landing | The run goroutine collects the `Drive` | The group's records are final for this run |
 
 | Pool event | Effect |
@@ -2950,20 +2959,20 @@ stateDiagram-v2
 
 **Invariants**
 1. A group has exactly one writer inside a process, its `Drive`; other processes are kept out by the lease and its fence, which every save checks in the same git transaction ([Workspace and Leases](#4-workspace-and-leases)).
-2. An event is appended and synced to disk before `Next()` runs on it.
+2. An event and the decision `Next()` made on it reach disk in one synced write before any of its effects run.
 3. An action's `action.start` line is on disk before the action runs, and its `action.done` line follows.
-4. A queue file is deleted before the lease is written.
+4. The lease is written before the queue file is deleted, so a crash between the two leaves the item queued.
 5. A group starts only after every dependency has landed and Check has passed on the epic tip.
 6. Landings happen one at a time, each followed by Check on the epic tip.
-7. Shutdown stops sessions, then commits work in progress, then writes `state.json` and frees the leases in an order that is open [TODO: whether the snapshot is written before the leases are freed at shutdown ([G-230](#g-230))]; a lease is never freed while a session is alive or work is unsaved.
+7. Shutdown stops sessions, then commits work in progress, then writes `state.json`, then frees the leases; a lease is never freed while a session is alive or work is unsaved.
 8. The pool never shrinks below `limits.pool_min` and never exceeds `limits.pool_max`.
-9. Intake runs just before the group's first session takes a slot. [TODO: the order of queue-file deletion, pool slot, lease and Intake ([G-38](#g-38))]
+9. Intake runs just before the group's first session takes a slot: the engine that picks an item takes the lease first (`Leases.Take`, raising the fence), then removes the queue file; `Drive` runs `Open` and `Load`, and Intake runs as the first stage inside `Drive` (lint, card hash, worktree cut, setup); the group's first session takes a pool slot after Intake, then a link slot.
 
 **Failures**
 
 | Situation | Detected by | Behaviour |
 |---|---|---|
-| Crash between the queue file's deletion and the lease write | The startup sweep | The sweep re-enqueues an item that has no lease [TODO: `the sweep's view of a deleted item` ([G-38](#g-38))] |
+| Crash between the lease write and the queue file's deletion | The startup sweep | The sweep frees the dead lease; the queue file is still there, so the item is picked again |
 | Session event channel full | The sending session goroutine | The sender waits; no event is dropped |
 | Panic inside one `Drive` | The panic-catching helper | `group.blocked` with reason `crash` for that group alone; the run and other groups continue |
 | Rate-limit error or quota past `warn.quota_pct` | The provider adapters report it | The pool halves, never below `limits.pool_min` [TODO: which signal halves the session pool ([G-224](#g-224))] |
@@ -2975,7 +2984,7 @@ stateDiagram-v2
 | Engine dies past its handler (`kill -9`, out-of-memory kill, Go fatal error) | The parent guard | The parent kills the sessions by process identifier files, saves and releases |
 | No heartbeat for 10 minutes | The parent guard | Same as above |
 | Sessions alive 60 seconds into shutdown | The shutdown sequence | The remaining sessions are killed |
-| Power loss | The next engine start | Left to the startup sweep [TODO: which component owns the startup sweep ([G-217](#g-217))] |
+| Power loss | The next engine start | Left to the startup sweep in `recover.go` |
 
 ### 3.8 Config
 
@@ -3014,21 +3023,10 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-29](#g-29) | Command transport; single disk write; Whether the group loop keeps running or exits while Paused or Blocked; Whether the engine loop waits for subscribers | Yes |
-| [G-38](#g-38) | Pool and link slot files, ceiling storage, acquisition order, clean end, free memory; Queue take crash window, multi-repository pick, round-robin cursor; Intake placement relative to slot, lease and first event | Yes |
-| [G-201](#g-201) | Run goroutine file, exported function names, outside-run dependency status; Queue and slot file layout, timestamp format, repository identifier to file name, forward-version handling | Yes |
-| [G-36](#g-36) | The landing gate file's name and body | Yes |
 | [G-186](#g-186) | Landing by runs on other machines | Yes |
-| [G-39](#g-39) | Parent guard entry point, heartbeat, process identifier file location | Yes |
-| [G-40](#g-40) | Drive action failure, lease renewal refusal, pause start time; The collaborators of `Drive`, and the lease renewal call | Yes |
-| [G-41](#g-41) | Chain weight, unblocked count and backlog order key | Yes |
 | [G-04](#g-04) | Whether `OLLAMA_NUM_PARALLEL` above 1 lets `local` exceed 1 session | No |
 | [G-148](#g-148) | The queue item id of a job | No |
 | [G-224](#g-224) | Which signal halves the session pool; Which signal halves the pool, and the cool-down | Yes |
-| [G-230](#g-230) | Whether the snapshot is written before the leases are freed | Yes |
-| [G-217](#g-217) | Whether `Drive` or `recover.go` calls `Load`; Which component owns the startup sweep; Which package claims link slots; Owners of the startup sweep and of the session pool slots | Yes |
-| [G-211](#g-211) | What `Drive` does when `Append` refuses | Yes |
-| [G-231](#g-231) | Where the pinned run settings are stored | Yes |
 
 ## 4. Workspace and Leases
 
@@ -3049,11 +3047,11 @@ The workspace gives each task group its own git checkout and a lock saying one r
 - The worktree of each group, under `~/.komodo/wt/`: cutting it, removing it when idle, rebuilding it, and the tester's throwaway worktree.
 - The lease and the fence beside it, under `~/.komodo/leases/`: taking, renewing, taking over and releasing.
 - The hidden reference `refs/komodo/groups/<group-id>`: moving it with `git update-ref` and the fence, and deleting it.
-- The startup sweep's actions on worktrees, leases and language caches. The sweep's owning file is [TODO: `whether the startup sweep lives in worktree.go or recover.go, and which component owns it` ([G-217](#g-217))].
+- The startup sweep's actions on worktrees, leases and language caches. The sweep lives in `recover.go`, owned by error recovery; `worktree.go` supplies the worktree and lease calls it uses.
 
 **Does not own:**
 - The shutdown sequence and the parent guard that repeats it: [Shutdown and the parent guard](#35-behaviour).
-- The work queue, `Drive` and the order in which a group takes its slot: [Engine Internals](#3-engine-internals). The session pool slots [TODO: which component owns the session pool slots ([G-217](#g-217))].
+- The work queue, `Drive` and the order in which a group takes its slot: [Engine Internals](#3-engine-internals). The session pool and link slots belong to the engine's `pool.go`.
 - `Claim`, `Replace` and `Remove`, and the record header: [State Manager](#13-state-manager).
 - Copying dependencies into the tester's worktree, and the sandbox around it: [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox).
 - Committing a task, pushing, opening pull requests and landing: [Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release).
@@ -3090,7 +3088,7 @@ internal/
     └── qa.go          # the tester session uses the tester worktree (chapter 9)
 ```
 
-[TODO: which file owns the startup sweep, `worktree.go` or `recover.go` ([G-217](#g-217))]
+The startup sweep is in `recover.go` ([chapter 9](#9-check-review-tester-and-recovery)).
 
 On disk, this chapter writes under the machine folder `~/.komodo/` (on Windows `%LOCALAPPDATA%\komodo`):
 
@@ -3110,7 +3108,7 @@ The hidden reference sits in the repository's own git directory, not under `~/.k
 |---|---|---|
 | Take the lease and fence | `Leases.Take` | The engine when it takes a queue item; `resume` |
 | Cut the worktree | `Worktrees.Cut` | Intake |
-| Renew the lease | [TODO: `Replace on the lease, or Leases.Renew` ([G-40](#g-40))] | `Drive`, every five minutes |
+| Renew the lease | `Leases.Renew`, which calls `Replace` on the lease | `Drive`, every five minutes |
 | Move the hidden reference | `HiddenRefs.Move` | `Drive`, after each group commit |
 | Save and release | `Worktrees.Save`, then `Leases.Release` | Shutdown, the parent guard, `abandon`, a passing Check on the epic tip after landing |
 | Remove an idle worktree | `Worktrees.Save`, then `Worktrees.Remove` | [TODO: `which actor runs the three-day idle removal` ([G-66](#g-66))] |
@@ -3167,7 +3165,7 @@ func (l Lease) Expired(now time.Time) bool { return now.Sub(l.RenewedAt) > Lease
 |---|---|---|
 | `run` | string | The run identifier; a second `run` on the group is refused and names it |
 | `pid` | integer | Process id; a dead process makes the lease dead before the expiry |
-| `host` | string | Machine name; how it is used when the holder runs elsewhere is [TODO: `whether liveness is checked only when host matches` ([G-40](#g-40))] |
+| `host` | string | Machine name; the process check runs only when `host` is this machine's name; a holder on another host counts as live until its renewal is 2 hours old |
 | `clone_path` | string | The clone the run started from; the sweep removes a lease whose clone path is gone |
 | `fence` | integer | The fence value written at take or takeover |
 | `taken_at`, `renewed_at` | time | Rewritten at renewal: `renewed_at` only; [TODO: `timestamp format` ([G-202](#g-202))] |
@@ -3220,7 +3218,7 @@ Every worktree lives outside every clone, so no path contains `.git`, and one pl
 |---|---|---|
 | `lease.lost` | Workspace, into the group's events | Another run took the group; `Next()` stops the group. A save refused by the fence check, or a higher number in the fence file before a push, shows that another run took the group ([4.5](#45-behaviour)). |
 | `lease.taken` | Workspace, machine log only | A `Claim` on a lease succeeded |
-| [TODO: `the event the sweep records for a dead session` ([G-217](#g-217))] | The startup sweep | A session died without reporting |
+| `session.end` reason `crash` | `Drive`, from `recover.DeadSessions` after `Load` | A session died without reporting |
 | `run.stopped` | Shutdown | After agents stop, work is saved and leases are freed |
 
 The payload of `lease.lost` is `LeaseLost` ([Data structs (chapter 2)](#data-structs)): the higher fence number, the run now holding the lease, and whether a save or a push found it. The machine log file name is [TODO: `machine log file naming` ([G-202](#g-202))].
@@ -3277,8 +3275,8 @@ type Leases interface {
 | Method | Error means | Caller does |
 |---|---|---|
 | `Take` with `HeldError` | A live run holds the group | `run` refuses and names the holder; `resume` refuses and names the new holder |
-| `Take`, other error | The state manager could not write | [TODO: `what the engine does when the write fails` ([G-40](#g-40))] |
-| `Renew` with `ErrLeaseLost` | Another run took the group | [TODO: `what Drive does when a renewal is refused` ([G-40](#g-40))] |
+| `Take`, other error | The state manager could not write | The engine leaves the queue file in place, warns in the run report and picks again at the next free slot |
+| `Renew` with `ErrLeaseLost` | Another run took the group | `Drive` appends `lease.lost` (row 18); another error is retried at the next renewal |
 | `Release` with `ErrUnsaved` | Edits are not yet in the hidden reference | Save first, then release |
 | `Release` with `ErrAgentsLive` | A session is still running | Stop the sessions first |
 
@@ -3303,7 +3301,7 @@ type Worktrees interface {
 | Method | Error means | Caller does |
 |---|---|---|
 | `Cut` | git refused, for example a path that is too long on Windows | The group blocks with reason `setup`, showing git's output; `doctor` names the long-path fix |
-| `Save` with `ErrRefMoved` | `git update-ref` exited 128: the reference moved, the object is bad or the folder is unwritable | [TODO: `how the caller tells a moved reference from another git failure, and the path for the other failures` ([G-40](#g-40))] |
+| `Save` with `ErrRefMoved`, `ErrFenced` or `ErrGit` | `git update-ref` exited 128; the wrapper's reread names which | `ErrRefMoved` and `ErrFenced`: `Drive` appends `lease.lost`; `ErrGit`: one retry, then the group blocks `crash` with git's output |
 | `Rebuild` | The hidden reference is missing | [TODO: `behaviour when the reference is gone` ([G-66](#g-66))] |
 | `Remove` with `ErrUnsaved` | Unsaved work remains | Save first; the sweep keeps such a worktree |
 
@@ -3321,7 +3319,7 @@ type HiddenRefs interface {
 }
 ```
 
-A refused `Move` returns `ErrRefMoved`. What the caller does with it is [TODO: `how a moved reference is told from another git failure, and the path for each` ([G-40](#g-40))].
+A refused `Move` returns `ErrRefMoved`, `ErrFenced` or `ErrGit`: after an exit 128 the git wrapper rereads both references with `git rev-parse`: a hidden reference no longer at `old` is `ErrRefMoved`, and a fence reference no longer at the writer's fence is `ErrFenced`; both mean another run holds the group, so `Drive` appends `lease.lost`. Any other failure is `ErrGit` with git's output: it is retried once after 1 second, then the action stays open and the group blocks `crash` with that output, so `resume` reruns the action under its key.
 
 #### The sweep
 
@@ -3337,9 +3335,9 @@ type Sweeper interface {
 
 | Caller | Call | When |
 |---|---|---|
-| Engine | `Leases.Take` | A queue item is taken [TODO: `order against the pool slot and Intake` ([G-38](#g-38))] |
+| Engine | `Leases.Take` | A queue item is picked, before its queue file is removed and before Intake |
 | Intake | `Worktrees.Cut` | The group's first stage |
-| `Drive` | [TODO: `Replace on the lease, or Leases.Renew` ([G-40](#g-40))] | Every five minutes |
+| `Drive` | `Leases.Renew` | Every five minutes |
 | `Drive` | `HiddenRefs.Move` | After each group commit |
 | Verify | `Worktrees.CutTester`, `Remove` | Start and end of Verify |
 | `resume` | `Leases.Take`, `Worktrees.Rebuild` | A person or the orchestrator resumes a run |
@@ -3373,7 +3371,7 @@ sequenceDiagram
 
 1. The group receives its lease and fence. The order against the pool slot and Intake is in [Order of pool slot, lease and Intake](#4-workspace-and-leases).
 2. Intake lints the group, hashes its cards to lock the task list, and cuts the worktree: `git worktree add --detach <path> <epic tip>`, about 1 s. It then runs `commands.setup` with network on.
-3. After each task the engine commits and moves the hidden reference by compare-and-swap on the old commit id, with the fence in the reflog message. What a refused move does is [TODO: `how a moved reference is told from another git failure, and the path for each` ([G-40](#g-40))].
+3. After each task the engine commits and moves the hidden reference by compare-and-swap on the old commit id, with the fence in the reflog message. A refused move is told apart by rereading both references ([Move the hidden reference](#45-behaviour)).
 4. `Drive` renews the lease every 5 minutes while the group is in any held state.
 5. During Verify the tester gets a throwaway worktree at the same commit; it is removed when Verify ends.
 6. On shutdown the worktree is saved and the lease freed: [Shutdown and the parent guard](#35-behaviour). `resume` retakes the lease and rebuilds a removed worktree from the hidden reference.
@@ -3383,8 +3381,10 @@ sequenceDiagram
 
 ##### Order of pool slot, lease and Intake
 
-
-[TODO: `the order of queue-file deletion, pool slot, lease, Intake and worktree cut, and the order they run in` ([G-38](#g-38))]
+1. The engine picks a queue item and takes its lease, which raises the fence.
+2. The engine removes the queue file.
+3. `Drive` runs `Open` and `Load`, then enters Intake: lint, card hash, worktree cut, setup.
+4. The group's first session takes a pool slot, then a link slot.
 
 ##### Take a lease
 
@@ -3394,7 +3394,7 @@ sequenceDiagram
 4. If the lease is stale or its holder is dead, rename the old file aside with the `.stale-` prefix [TODO: the full name and location of the renamed file ([G-60](#g-60))]. Only one run can rename it, so only one run wins; the loser's rename fails and it re-reads.
 5. The winner claims a new file; the fence rises.
 
-When the fence is raised relative to the claim, the full stale file name, and how a dead holder is detected are [TODO: `take and takeover step order, stale file name` ([G-60](#g-60))] and [TODO: `how a dead holder is detected` ([G-40](#g-40))].
+When the fence is raised relative to the claim, and the full stale file name are [TODO: `take and takeover step order, stale file name` ([G-60](#g-60))]. A holder is dead when its renewal is over 2 hours old, or, on the same `host`, when its process is gone (the slot liveness check).
 
 **📐 Two runs race for one stale lease**
 ```mermaid
@@ -3413,19 +3413,19 @@ sequenceDiagram
 
 ##### Renew a lease
 
-1. Every 5 minutes `Drive` rewrites the lease with a new `renewed_at` through `Replace`. Whether `Drive` keeps running, and so keeps renewing, while a group is Paused or Blocked is [TODO: `whether the group loop keeps running or exits while its group is Paused or Blocked` ([G-29](#g-29))].
+1. Every 5 minutes `Drive` rewrites the lease with a new `renewed_at` through `Replace`. `Drive` keeps running while a group is Paused or Blocked, so the lease stays renewed.
 2. A lease whose last renewal is more than 2 hours old counts as dead.
 
-The `rev` check of `Replace` refuses a write over a changed record. What `Drive` does with the refusal is [TODO: `renewal refusal handling` ([G-40](#g-40))].
+The `rev` check of `Replace` refuses a write over a changed record. `Leases.Renew` turns the refusal into `ErrLeaseLost`, and `Drive` appends `lease.lost`.
 
 ##### Move the hidden reference
 
 1. Read the reference's current commit as `old`. Git accepts the all-zero object id as `old` to mean the reference must not exist yet.
 2. Run `git update-ref -m "fence=<n>" --stdin` with one transaction: `verify <fence reference> <writer's fence>`, then `update refs/komodo/groups/<group-id> <new> <old>`, the compare-and-swap form. Git applies both or neither.
 3. Exit 0: the reference moved, and the reflog line records the fence.
-4. Exit 128, `cannot lock ref`: git exits 128 for a reference that no longer holds `old`, for a fence reference that no longer holds the writer's fence, for a bad object and for an unwritable folder alike, so the exit code does not show which. [TODO: `how the engine tells a moved reference from another git failure, and what it does for each` ([G-40](#g-40))]
+4. Exit 128, `cannot lock ref`: git exits 128 for a reference that no longer holds `old`, for a fence reference that no longer holds the writer's fence, for a bad object and for an unwritable folder alike, so the exit code does not show which. To tell them apart, after an exit 128 the git wrapper rereads both references with `git rev-parse`: a hidden reference no longer at `old` is `ErrRefMoved`, and a fence reference no longer at the writer's fence is `ErrFenced`; both mean another run holds the group, so `Drive` appends `lease.lost`. Any other failure is `ErrGit` with git's output: it is retried once after 1 second, then the action stays open and the group blocks `crash` with that output, so `resume` reruns the action under its key.
 
-A plain compare-and-swap compares only the old commit id and never reads the fence, so the fence number is also kept as a second hidden reference, which taking or taking over the lease moves to the new number. A scratch repository showed that a stale holder's transaction exits 128 and leaves the hidden reference unmoved even when its `old` still matches, while the current holder's transaction moves it. [TODO: `the fence reference's name and how the number is stored in it` ([G-61](#g-61))] Pushes and landings, which git cannot tie to a local reference, re-read the fence file just before the push and refuse on a number higher than the writer's. The same scratch repository showed two further facts: a reflog line is written for a reference under `refs/komodo/` only when the update passes `--create-reflog` (or `core.logAllRefUpdates=always` is set), and `git branch` lists no such reference. [TODO: `how the reflog is enabled for hidden references` ([G-61](#g-61))] [TODO: `the fence check before a scope change` ([G-61](#g-61))]
+A plain compare-and-swap compares only the old commit id and never reads the fence, so the fence number is also kept as a second hidden reference, which taking or taking over the lease moves to the new number. A scratch repository showed that a stale holder's transaction exits 128 and leaves the hidden reference unmoved even when its `old` still matches, while the current holder's transaction moves it. The fence reference is `refs/komodo/fences/<group-id>`; it points at a blob whose content is the fence number in decimal, so the writer's `verify` names the blob id of its own number, which `git hash-object --stdin` computes without writing. Pushes and landings, which git cannot tie to a local reference, re-read the fence file just before the push and refuse on a number higher than the writer's. The same scratch repository showed two further facts: a reflog line is written for a reference under `refs/komodo/` only when the update passes `--create-reflog` (or `core.logAllRefUpdates=always` is set), and `git branch` lists no such reference. Every `update-ref` the git wrapper runs passes `--create-reflog`, so each hidden reference keeps its reflog without changing the person's git settings. A `scope_change` action rereads the fence file first and refuses on a number higher than the writer's, as a push does.
 
 **📐 Two engines race to move one reference**
 ```mermaid
@@ -3498,10 +3498,10 @@ flowchart TB
 |---|---|
 | 1 | Kills orphans by pid file; frees dead leases; deletes `.stale-*` lease files |
 | 2 | Removes dead runs' tester worktrees, Docker containers, session temp |
-| 3 | Re-enqueues queue items with no lease; records a dead session's end ([TODO: `which event` ([G-217](#g-217))]) |
+| 3 | Re-enqueues queue items with no lease; hands dead sessions to `recover.DeadSessions`, which `Drive` reads after `Load` |
 | 4 | Deletes a repo's language cache over `sandbox.lang_cache_gb` or unused 30 days |
 
-Further actions with no named scan: deleting leases whose clone path is gone; removing Docker images and worktree folders whose clone is gone; removing worktrees with no live lease and no unsaved work. [TODO: `which scan runs each unplaced action, and where the pid files live` ([G-217](#g-217))]
+Further actions with no named scan: deleting leases whose clone path is gone; removing Docker images and worktree folders whose clone is gone; removing worktrees with no live lease and no unsaved work. Scan 1 deletes leases whose clone path is gone; scan 2 removes Docker images and worktree folders whose clone is gone, and worktrees with no live lease and no unsaved work. Session process identifier files live at `~/.komodo/state/pids/<run>/<session>.pid`.
 
 Rules the sweep keeps:
 - It never deletes a worktree with unsaved work.
@@ -3539,7 +3539,7 @@ stateDiagram-v2
 
 After each move: `Held` means exactly one run may write the group's worktree and hidden reference, with the current fence. `Stale` means any run may start a takeover.
 
-The lease is held from Intake until abandon, or until the Check on the epic tip passes after landing, through the states "queued, checking, verifying, paused and blocked". [TODO: `those names do not match the stage names Intake, Build, Check, Verify, Ship, Paused and Blocked` ([G-38](#g-38))] A Paused or Blocked group gives back its pool slot and keeps its lease and worktree; who renews the lease during a long pause is open with [TODO: `whether the group loop keeps running or exits while its group is Paused or Blocked` ([G-29](#g-29))].
+The lease is held from Intake until abandon, or until the Check on the epic tip passes after landing, through the stages Intake, Build, Check, Verify and Ship and the Paused and Blocked holding states. A Paused or Blocked group gives back its pool slot and keeps its lease and worktree; the group's `Drive` keeps running and renews the lease during a long pause.
 
 #### The worktree
 
@@ -3607,14 +3607,9 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Blocks building? |
 |---|---|---|
 | [G-202](#g-202) | Exported names and signatures of the workspace functions; lease file key names, record layout, machine log file name; Worktree folder naming; per-worktree git settings; Tester worktree path and owning file | Yes |
-| [G-38](#g-38) | Order of queue-file deletion, pool slot, lease and Intake; the "queued, checking, verifying" names | Yes |
 | [G-60](#g-60) | Take and takeover step order, stale file name, fence file body, job lease path | Yes |
-| [G-61](#g-61) | The fence reference's name and number format; the fence check before a scope change; reflog enabling for hidden references | Yes |
-| [G-40](#g-40) | Holder liveness across hosts; renewal refusal; failed `Take`; a failed `git update-ref` that is not a moved reference; The collaborators of `Drive` and the lease renewal call | Yes |
-| [G-29](#g-29) | Whether the group loop runs, and renews the lease, while a group is Paused or Blocked | Yes |
 | [G-66](#g-66) | Idle removal trigger and measure; missing hidden reference at `resume` | No |
 | [G-67](#g-67) | Work-in-progress commit contents | No |
-| [G-217](#g-217) | Scan placement, pid file location; Which component owns the startup sweep; Which component owns the session pool slots; Which event the sweep records for a dead session | Yes |
 
 ## 5. Sessions, Agents and Briefs
 
@@ -4324,7 +4319,7 @@ After `Ended`, `Next()` decides the group's move from the exit reason ([Event Sp
 | `paused` | A provider limit halted the session, no other link is left, and a resume handle exists | Waits on a disk timer until the provider's reset time, then resumes on its own |
 | `pause_timeout` | The session stayed paused longer than `limits.pause_max_min` | Cancels it, keeps its work-in-progress commit, blocks the group `pause_timeout` |
 | `cancelled` | The engine killed it on purpose: the tester after the first verified blocking Verify finding, or `abandon` | Acts by cause; Build restarts after a Verify failure |
-| `crash` | The session died without reporting and the startup sweep found it dead | [TODO: `the event the sweep records` ([G-217](#g-217))]; the task can run again |
+| `crash` | The session died without reporting and the startup sweep found it dead | `session.end` reason `crash`, appended by `Drive` after `Load`; the task can run again |
 
 ### 5.7 Invariants and Failures
 
@@ -4349,9 +4344,9 @@ After `Ended`, `Next()` decides the group's move from the exit reason ([Event Sp
 | Provider limit with a link left | `api_retry` line | Reason `provider`; next session on the next allowed link |
 | Provider limit, no link left | Provider layer | Reason `paused`; disk timer until the reset time |
 | Resume handle fails | Resume error | Fresh session with the brief, the work-in-progress diff and the last `summary`; ledger logs `resume_lost` |
-| Session died without a report | Startup sweep ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)) [TODO: which component owns the startup sweep ([G-217](#g-217))] | Reason `crash`; task released |
+| Session died without a report | Startup sweep in `recover.go` ([Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery)) | Reason `crash`; task released |
 
-[TODO: which component owns the session pool slots ([G-217](#g-217))]
+The engine's `pool.go` claims and frees pool and link slots for the supervisor ([Engine Internals](#3-engine-internals)).
 
 The pause cap, an early `resume` before the provider reset and a planted `CLAUDE.md` are owned by [Providers and HTTP](#7-providers-and-http).
 
@@ -4456,7 +4451,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-106](#g-106) | Whether `repo_context` and `standards` are slots, parts or both | Yes |
 | [G-112](#g-112) | How `agent.json` `limits`, the flat keys and `agents.<name>` combine | Yes |
 | [G-69](#g-69) | Who walks the chain when a brief is over the ceiling; The shape of an agent's provider chain | Yes |
-| [G-217](#g-217) | The owner of the session pool slots; Which event the sweep records for a dead session; Which component owns the startup sweep | Yes |
 | [G-107](#g-107) | What `brief.md`, `system.md` and `mcp.json` hold | Yes |
 | [G-109](#g-109) | When the engine runs the architect, the researcher and the scout | No |
 | [G-122](#g-122) | Which package defines `CapacityProfile` | Yes |
@@ -5353,7 +5347,7 @@ Runtime files this chapter reads or writes:
 | `~/.komodo/state/providers.json` | The probe | Per link: availability, path, version, login, exact model identifiers, measured context |
 | `~/.komodo/state/quota.json` | `Router.RecordLimit` | Reset time per limited link, shared by every repository on the machine |
 | `~/.komodo/state/timers/<repo-id>.<group>.json` | `Router.WriteTimer` [TODO: which component writes a timer record: the provider adapters, the router or the engine ([G-224](#g-224))] | One timer per paused group |
-| `~/.komodo/state/links/` | [TODO: `which package claims and frees link slots` ([G-217](#g-217))] | One slot per running session on a link |
+| `~/.komodo/state/links/` | The engine's `pool.go` claims and frees them | One slot per running session on a link |
 | `sessions/<id>/` | Supervisor and adapters | The files listed in [Sessions, Agents and Briefs](#53-data-model) |
 
 **Entry points**
@@ -5692,7 +5686,7 @@ A paused group has one timer record, written with `Replace` and removed when it 
 | `wait_until` | The latest provider reset time among the group's halted sessions, plus 1 min; each halted session's ledger row keeps a copy |
 | `wait_link` | The link whose reset the group waits for |
 
-`quota.json` stores one reset time per limited link, so every repository on the machine skips that link until the time passes. [TODO: locking for machine-shared files such as quota.json ([G-74](#g-74))] [TODO: `which reset time RecordLimit stores when LimitError.ResetAt is zero, since Select skips a link only while its stored reset time is in the future` ([G-224](#g-224))]
+`quota.json` stores one reset time per limited link, so every repository on the machine skips that link until the time passes. Writes to `quota.json` take its lock file ([State manager write checks](#state-manager-write-checks)). [TODO: `which reset time RecordLimit stores when LimitError.ResetAt is zero, since Select skips a link only while its stored reset time is in the future` ([G-224](#g-224))]
 
 ```go
 // Timer is the body of a timers/<repo-id>.<group>.json record.
@@ -5895,7 +5889,7 @@ func (e *PausedError) Unwrap() error { return ErrPaused }
 | `Select` | `ErrPaidRefused` | Group Blocked `paid_refused`, naming the config key to change |
 | `Select` | `ErrContext` | Group Blocked `context`; a person shrinks the task or adds a larger endpoint |
 | `Select` | `ErrPaused` | Session pauses ([Limits, pauses and warnings](#7-providers-and-http)) |
-| `RecordLimit`, `WriteTimer` | state manager error | [TODO: what the engine does when quota.json or a timer cannot be written ([G-74](#g-74))] |
+| `RecordLimit`, `WriteTimer` | state manager error | Retried once; on a second failure the skip or the pause holds in memory for this process, the run report warns, and `Drive` retries the write at each lease renewal until it succeeds |
 | `Client.Do` | `*LimitSignal` | The adapter converts it to a `*LimitError` |
 | `Client.Do` | other error after 4 attempts | The adapter fails the request; a second dropped stream fails the session |
 
@@ -5975,7 +5969,7 @@ sequenceDiagram
 
 1. The supervisor calls `Select` with the builder's chain, weight `standard` and a 120,000-token brief. `quota.json` has no entry for `claude-cli`, the probe record is usable, `claude auth status --json` reports `claude.ai` on a `max` plan, so the cost class is `subscription`.
 2. `Profile` returns `{ctx: 1,000,000 from the catalog, slots: 3, cost_class: subscription, effort: medium}`. The brief fits within half the context, so `Select` returns `claude-cli` with `claude-sonnet-5-5`.
-3. A slot is taken under `~/.komodo/state/links/` [TODO: `which package claims the link slot` ([G-217](#g-217))], and `session.start` records the context and its source.
+3. The engine's `pool.go` takes a slot under `~/.komodo/state/links/`, and `session.start` records the context and its source.
 4. `Start` scrubs the environment, spawns `claude` with the launch line and pipes the brief as one stream-json user message. The first line, `system/init`, says `apiKeySource: "none"`, so the session continues.
 5. Later a `system/api_retry` line with category `rate_limit` arrives. The session ends with reason `provider`, keeping its resume handle. [TODO: `on which halts the router records the reset time in quota.json` ([G-224](#g-224))]
 6. The task's next `Select` skips `claude-cli` because `quota.json` holds a future reset time, emits `provider.skip`, and starts the session on the backstop `http:local` if its measured context is at or above `providers.ctx_floor`.
@@ -6030,7 +6024,7 @@ Rules that hold on every walk:
 ##### Session start
 
 1. The router measures the context ([Measured context](#7-providers-and-http)) and derives `{ctx, slots, cost_class, effort}`: `slots` from `limits.link_sessions.<link>`, `cost_class` from the billing check, `effort` from the agent's weight.
-2. One slot on the link is taken under `~/.komodo/state/links/` [TODO: `which package claims the link slot` ([G-217](#g-217))].
+2. The engine's `pool.go` takes one slot on the link under `~/.komodo/state/links/`.
 3. `session.start` records the measured context and its source.
 4. `Start` launches the process or sends the first request. On `claude-cli` the brief is piped as one stream-json user message; on API links it is the first user turn.
 5. Events flow until `EventResult`; `Next` then returns `io.EOF`.
@@ -6234,8 +6228,8 @@ Connection and safety rules:
 
 - One `http.Transport` serves the whole process, so a 4-task group shares one encrypted connection pool.
 - The result of `claude auth status --json` is cached for 60 s per process.
-- Link slots are files under `~/.komodo/state/links/`, so `limits.link_sessions.<link>` holds across every repository on the machine. [TODO: `which package claims and frees a link slot` ([G-217](#g-217))]
-- `quota.json` is shared by every repository; its write path uses `Replace`. [TODO: locking for machine-shared files such as quota.json ([G-74](#g-74))]
+- Link slots are files under `~/.komodo/state/links/`, so `limits.link_sessions.<link>` holds across every repository on the machine. The engine's `pool.go` claims and frees them.
+- `quota.json` is shared by every repository; its write path uses `Replace` under its lock file `quota.json.lock`.
 - A timer record is removed by whoever fires it. [TODO: which component writes a timer record: the provider adapters, the router or the engine ([G-224](#g-224))]
 
 ### 7.6 State
@@ -6417,13 +6411,11 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-71](#g-71) | `claude-cli` details: process working directory, result line field, reset-time field, `--verbose`, the tool host signature | Yes |
 | [G-72](#g-72) | Request and response mapping of the Messages and OpenAI-compatible interfaces, the `messages.jsonl` line layout, rate-limit totals, the cache breakpoint hand-off | Yes |
 | [G-224](#g-224) | Which error `Select` returns in a mixed chain, and the wait after the third refused resume; On which halts `RecordLimit` runs; The reset time stored when a limit gives none; Which component writes a timer record; Which signal halves the session pool | Yes |
-| [G-74](#g-74) | Locking for `quota.json` across repositories, and the reaction to a failed write of `quota.json` or a timer | Yes |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | Yes |
 | [G-03](#g-03) | A `24 GB` (24 gigabyte) machine running Qwen3.6-27B at 262,144 context | No |
 | [G-04](#g-04) | `OLLAMA_NUM_PARALLEL` above 1 and `limits.link_sessions.local` | No |
 | [G-07](#g-07) | The real Max 5-hour window against `link_sessions.claude-cli` 3 | No |
 | [G-20](#g-20) | The `codex-cli` link, `openai-api` chain and `.codex/` install | No |
-| [G-217](#g-217) | Which package claims and frees a link slot | Yes |
 | [G-122](#g-122) | Which package defines `CapacityProfile` | Yes |
 | [G-107](#g-107) | What `brief.md`, `system.md` and `mcp.json` hold and who writes them | Yes |
 
@@ -7498,7 +7490,7 @@ After a builder (the model session that edits code) finishes a task group, this 
 
 The purpose of the subsystem, and who it talks to, is in the HLD: [Check, Review, Tester and Recovery](hld.md#510-check-review-tester-and-recovery).
 
-The scans are specified in [Workspace and Leases](#4-workspace-and-leases). [TODO: `which package owns the startup sweep` ([G-217](#g-217))]
+The scans are specified in [Workspace and Leases](#4-workspace-and-leases); the sweep's code is `recover.go`, owned by this chapter.
 
 **Concepts**
 
@@ -7558,7 +7550,7 @@ flowchart LR
 | `internal/quality/qa.go` | The tester: acceptance items, its own worktree and Go's reruns of a failed item |
 | `internal/quality/evidence.go` | The check that a finding's quote is at its `file:line` |
 | `internal/engine/limits.go` | Retries, returns, flap detection and block reasons |
-| `internal/engine/recover.go` | Crash resume through group state's `Load`; the startup sweep [TODO: `the sweep's owner` ([G-217](#g-217))] |
+| `internal/engine/recover.go` | Crash resume through group state's `Load`; the startup sweep, which this chapter owns; `DeadSessions` for `Drive` |
 | `embed/lenses/<lens>.json`, `embed/lenses/<lens>.md` | The lens catalogs: rule IDs, severities and file scopes in the JSON file, rule bodies in the Markdown file |
 
 The remaining steps sit beside them: the baseline comparison and the flake rule (`Baseline`, `Classify`, `ClassifyFailure`) in `internal/quality/baseline.go`, the impact set (`ImpactSet`) in `internal/quality/impact.go`, and the case-collision test (`CaseCollisions`) in `check.go` with the scope check.
@@ -7881,7 +7873,7 @@ komodo scope approve tg-1.2 --paths internal/quality/check.go --reason "Check mu
 komodo scope deny tg-1.2 --paths docs/lld.md --reason "Out of this group's scope"
 ```
 
-The `scope_answer` brief slot carries the answer to the resumed builder ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)). The command's transport into `Drive` is open [TODO: `how scope commands reach Drive` ([G-29](#g-29))].
+The `scope_answer` brief slot carries the answer to the resumed builder ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)). The command reaches `Drive` as a `request.scope` file in the group's inbox ([Commands](#26-state-and-transitions)).
 
 #### Counters
 
@@ -8494,7 +8486,7 @@ flowchart TD
   F -->|6| G
 ```
 
-1. A restart replays the group's state events after the last snapshot through group state's `Load`; the run continues and nothing is retried, because the state is rebuilt. Which code calls `Load` is open. [TODO: `whether Drive or recover.go calls Load on a restart` ([G-217](#g-217))]
+1. A restart replays the group's state events after the last snapshot through group state's `Load`; the run continues and nothing is retried, because the state is rebuilt. `Drive` calls `Load`; `recover.go` holds the startup sweep and `DeadSessions`.
 2. `Drive` runs every action still open under its idempotency key.
 3. The `resume` verb retakes the lease, or refuses naming the new holder, and rebuilds a removed worktree from the hidden reference.
 4. Each session continues from the provider's resume handle.
@@ -8505,7 +8497,7 @@ What the startup sweep contributes to recovery:
 
 | Sweep action | Effect on recovery |
 |---|---|
-| Records the end of a dead session ([TODO: `which event` ([G-217](#g-217))]) | The task can run again |
+| Finds a dead session; `Drive` records `session.end` reason `crash` | The task can run again |
 | Re-enqueues a queue item with no lease | A group taken from the queue before it got its lease is not lost |
 | Fires a due timer record | A Paused group resumes with no live engine |
 
@@ -8763,10 +8755,8 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Blocks building? |
 |---|---|---|
 | [G-16](#g-16) | The rule text of each lens catalog | No |
-| [G-29](#g-29) | How `scope approve | Yes |
 | [G-43](#g-43) | The test-sibling rule; The secret content patterns; The glob grammar | Yes |
 | [G-169](#g-169) | Confirming each default coverage tool yields a whole-repository line percent | No |
-| [G-217](#g-217) | Whether `Drive` or `recover.go` calls `Load` on a restart; The owner of the startup sweep; Which event the sweep records for a dead session | Yes |
 | [G-155](#g-155) | The sentence form of an acceptance item | Yes |
 | [G-159](#g-159) | Which component runs the evidence check | Yes |
 | [G-17](#g-17) | The 50% cache hit-rate fixture needs real API sessions | No |
@@ -9386,9 +9376,8 @@ sequenceDiagram
 9. When the run ends, the counters are updated; a failure records `job.fail`.
 10. The next tick that finds the lease still held refuses its queue item as a duplicate and logs it once.
 
-Four steps rest on details that are open.
+Three steps rest on details that are open. In step 4 the tick drops a `request.timer` file in the group's inbox and, when no engine holds the group, starts a detached engine; the group's `Drive` appends `timer.due`.
 - Step 3: the file that holds `job.due` and `job.fail`. [TODO: where job.due and job.fail are written ([G-146](#g-146))]
-- Step 4: the process that appends the `timer.due` event. [TODO: who writes group events when a tick or `status` fires a timer ([G-29](#g-29))] [TODO: whether the group loop stays alive while its group is Paused or Blocked ([G-29](#g-29))]
 - Step 5: what "drive the pool once" does and which process runs the job. [TODO: what driving the pool once starts, and in which process ([G-148](#g-148))]
 - Step 9: the value of `next_at` after a success, the first run of a job with no counters, and the order of the agents. [TODO: next_at rules and the agents' order ([G-148](#g-148))]
 
@@ -9491,7 +9480,7 @@ sequenceDiagram
 | `stage.enter` | The group row gets the new `stage` and `epoch` |
 | `lease.lost` | The group row changes [TODO: `effect on the lease fields` ([G-208](#g-208))] |
 | `task.claimed` | The task row is claimed, with its session and `claimed_at`; the engine records it at `session.start` |
-| `task.released` | The task row is released; the engine records it at `session.end`. [TODO: `the event the sweep records for a dead session` ([G-217](#g-217))] |
+| `task.released` | The task row is released; the engine records it at `session.end`, including a `session.end` reason `crash` for a session found dead |
 | `task.done` | The task row is `done` |
 | `task.retry` | The task row's `attempts` rises |
 
@@ -9512,7 +9501,7 @@ The lock protects the next run, not the current brief, because the builder and t
 
 ##### Task claims
 
-A task moves `queued → claimed → done | returned | blocked`. The engine records `task.claimed` at `session.start` and `task.released` at `session.end`. A claimed task whose session is dead at the startup sweep is handled as [TODO: `the event the sweep records for a dead session` ([G-217](#g-217))].
+A task moves `queued → claimed → done | returned | blocked`. The engine records `task.claimed` at `session.start` and `task.released` at `session.end`. A claimed task whose session is dead after a crash gets `session.end` reason `crash`, then `task.released`.
 
 ##### The scorecard
 
@@ -9544,7 +9533,7 @@ The wake mechanics of `status --wait` are in [Behaviour](#25-behaviour) of chapt
 
 - **Counters:** `jobs/state.json` is written with `Replace`, whose `rev` check refuses a stale writer ([State Manager](#13-state-manager)). What a tick does after a refusal: [TODO: `tick behaviour on a refused Replace` ([G-148](#g-148))].
 - **Queue and lease:** the create-only queue item and the lease are the guards against a second copy of a job.
-- **Ledger:** the ledger subscriber of one engine process is the only writer of that process's appends. Several engine processes on one repository, and the locking of machine-shared files: [TODO: locking of machine-shared files such as `quota.json` ([G-74](#g-74))] [TODO: `whether the group ledger is kept per repository or shared across the machine` ([G-74](#g-74))].
+- **Ledger:** the ledger subscriber of one engine process is the only writer of that process's appends. Several engine processes on one repository, and the locking of machine-shared files: each ledger file is kept per repository under `<git-common-dir>/komodo/ledger/`, as the High-Level Design says, and a `Replace` of `groups.json` or `tasks.json` takes the file's lock file, the rule for every file several processes write ([State manager write checks](#state-manager-write-checks)).
 - **Cache:** all processes of one repository share the store. Writing the same key from two processes: [TODO: `concurrent writers of one key` ([G-208](#g-208))].
 
 ### 10.6 State
@@ -9591,7 +9580,7 @@ stateDiagram-v2
 | `queued` | `task.claimed`, at `session.start` | `claimed` | The row names the session and `claimed_at` |
 | `claimed` | `task.done` | `done` | The row stays; `ledger/tasks.json` lists the task once as `done` |
 | `claimed` | `task.released`, at `session.end` | `returned` or `blocked` | [TODO: `which release gives returned and which gives blocked` ([G-208](#g-208))] |
-| `claimed` | [TODO: `the event the sweep records for a dead session` ([G-217](#g-217))] | [TODO: `state value` ([G-208](#g-208))] | The session is dead |
+| `claimed` | `session.end` reason `crash`, then `task.released` | [TODO: `state value` ([G-208](#g-208))] | The session is dead |
 | `claimed` | `task.retry` | `claimed` | `attempts` rose [TODO: `whether a retry leaves the state claimed` ([G-208](#g-208))] |
 
 ### 10.7 Invariants and Failures
@@ -9618,11 +9607,11 @@ stateDiagram-v2
 | A tick with nothing due | The tick | Exits in under 50 ms with no network call |
 | A template has an unknown field | Strict decoding | An error naming the field [TODO: `what the tick does with that template` ([G-145](#g-145))] |
 | A template asks for less than 5 minutes | [TODO: `the check that enforces the minimum interval` ([G-145](#g-145))] | [TODO: `refuse or raise to the minimum` ([G-145](#g-145))] |
-| A paused run with no live engine | A tick or `status` after `wait_until` | The timer fires and the run resumes [TODO: `who appends the group event` ([G-29](#g-29))] |
+| A paused run with no live engine | A tick or `status` after `wait_until` | The tick or `status` drops a `request.timer` file and starts a detached engine, whose `Drive` appends `timer.due`; the run resumes |
 | A cache entry fails verification | The read | The entry is deleted and the result recomputed |
 | The cache exceeds `cache.max_mb` | The store | The least recently used entries are removed first |
 | The ledger subscriber errors or panics | The event bus | Dropped for the run; group state is untouched; the derived records stop [TODO: `when the views catch up` ([G-208](#g-208))] |
-| A claimed task whose session is dead | The startup sweep | [TODO: `the event the sweep records` ([G-217](#g-217))] |
+| A claimed task whose session is dead | The startup sweep | `session.end` reason `crash`, appended by `Drive` after `Load` |
 | A hand edit of a locked group's backlog files | A hash mismatch at the next verb | Detected [TODO: `what the verb does on a mismatch` ([G-154](#g-154))] |
 | A group blocked 3 times for one reason | The engine's count of blocks per reason | `status` flags it `needs redesign`; blocked never retries by itself; `Next()` keeps the count in `State.Blocks`, which the snapshot holds |
 | Ledger rows older than `ledger.retention_days` or past 100 MB per repository | The trim | Oldest rows go first; open, paused and blocked groups' state files stay |
@@ -9687,12 +9676,9 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-208](#g-208) | Fields and layout of `jobs/state.json` and `ledger/sessions.jsonl`; the task id and timestamp formats; exported names and signatures of the scheduler, cache store and ledger; Cache key joining and prefix, entry layout, verification basis, recency, eviction, kind folders, `cache clear` kinds, `--all`, counters, concurrent writers; Ledger files: file map, view shape and cursor, lease fields, task state values, session row trigger, host subagent events, trim, locking, secret patterns, missing-file behaviour | Yes |
 | [G-145](#g-145) | Template grammar, execution order, decode failure, minimum interval check, template paths and precedence | Yes |
 | [G-146](#g-146) | The file that holds `job.due` and `job.fail` | Yes |
-| [G-29](#g-29) | Who appends group events when a tick or `status` fires a due timer; Whether the group loop stays alive while its group is Paused or Blocked; decides who fires a timer | Yes |
 | [G-148](#g-148) | What driving the pool once starts, job queue item identity and consumption, `next_at`, run number, overlap guard and log | Yes |
 | [G-149](#g-149) | Retries versus failed attempts, Blocked job representation, wake, resume, `last_fail_hash`, `jobs run\ | Yes |
 | [G-154](#g-154) | Card hash recipe and the record the `locked` refusal reads | Yes |
-| [G-217](#g-217) | Which event the sweep records for a dead session | Yes |
-| [G-74](#g-74) | Locking of machine-shared files; Whether the group ledger is kept per repository or shared across the machine | Yes |
 | [G-17](#g-17) | The 50% prompt-cache hit fixture needs real paid sessions with `track.usage` on | No |
 | [G-19](#g-19) | The 50 ms and 100 ms targets are not yet measured | No |
 | [G-26](#g-26) | Splitting tokens and dollars by provider family | No |
@@ -11726,7 +11712,7 @@ internal/core/lock.go   create-only and rename-aside file helpers; only state ca
 embed/state.schema.json generated at build; the gate fails when it disagrees with the Go types
 ```
 
-Group state lives in `state/groupstate.go`. The package imports nothing above it: group state receives `Next()` as an `apply` function, so `state` never imports `engine` ([Event Spine and State Machine](#2-event-spine-and-state-machine)). [TODO: `owner confirmation of the exported names and signatures, and how a package obtains the manager` ([G-211](#g-211))]
+Group state lives in `state/groupstate.go`. The package imports nothing above it: group state receives `Next()` as an `apply` function, so `state` never imports `engine` ([Event Spine and State Machine](#2-event-spine-and-state-machine)). The binary's `main` calls `state.New(home)` once; each component receives `m.For("<component>")`, a handle that implements `Writer` and `Reader` and carries the component's name for the writer check and the `writer` header field. The names and signatures in this chapter are final for beta 6.
 
 **Entry points**
 
@@ -11736,8 +11722,8 @@ Group state lives in `state/groupstate.go`. The package imports nothing above it
 | A part reads a record | `Get`, `List`, `Tail` or `Watch` in `manager.go` |
 | A group starts or resumes | `Open`, then `Load`, in `groupstate.go` |
 | A group appends an event | `Append` in `groupstate.go` |
-| The build writes the schema | `schema.go` [TODO: `name of the generator entry point` ([G-211](#g-211))] |
-| A record of an older version is read | `migrate.go` [TODO: `name of the migration entry point` ([G-211](#g-211))] |
+| The build writes the schema | `GenerateSchema` in `schema.go`, run by `go generate` |
+| A record of an older version is read | `Migrate` in `migrate.go` |
 
 ### 13.3 Data Model
 
@@ -11756,10 +11742,8 @@ type Header struct {
 	Writer string    `json:"writer"` // run id and process id of the writer
 }
 
-// Body is the kind-specific part of a record; each kind has one struct in kinds.go.
-type Body struct {
-	// [TODO: whether Body is an interface that kind structs implement or a generic value (G-211)]
-}
+// Body is the kind-specific part of a record; each kind's one struct in kinds.go implements it.
+type Body interface{ RecordKind() string }
 
 // Record is one stored record as a reader receives it.
 type Record struct {
@@ -11767,8 +11751,6 @@ type Record struct {
 	Body   Body
 }
 ```
-
-Open decisions in this example: [G-211](#g-211).
 
 | Field | Rule |
 |---|---|
@@ -11779,11 +11761,11 @@ Open decisions in this example: [G-211](#g-211).
 | `ts` | The time the manager wrote the record; an event's own `timestamp` is the time the engine saw the fact ([Data Model](#23-data-model)) |
 | `writer` | Lets `doctor` and a person see who last changed the record |
 
-- **Header encoding:** [TODO: `the timestamp format of ts and the encoding of writer` ([G-211](#g-211))]
-- **Record layout:** [TODO: `how the header and the body sit in one file` ([G-211](#g-211))]
+- **Header encoding:** `ts` uses the event timestamp format, `2026-10-13T09:14:05Z`; `writer` is `<component>/<run>/<pid>`, with `-` for the run of a verb outside any run.
+- **Record layout:** one compact JSON object per file: the six header fields, then `body`, then a newline.
 - **Event lines:** an event line carries the event envelope instead of this header, because every line in a state file is an event and `kind`, `key`, `rev` and `writer` would repeat what the file already says. The manager computes `sequence`, `timestamp` and `checksum`, so no producer does ([Data Model](#23-data-model)).
 
-**Example.** One stored timer record: the six header fields, then the timer's own two fields. The header-and-body layout shown is illustrative.
+**Example.** One stored timer record: the six header fields, then the timer's own two fields. Spread over lines for reading; on disk it is one compact line.
 
 ```json
 {
@@ -11791,25 +11773,23 @@ Open decisions in this example: [G-211](#g-211).
   "kind": "timer",
   "key": "<repo-id>.<group-id>",
   "rev": 1,
-  "ts": "[TODO: timestamp format (G-211)]",
-  "writer": "[TODO: writer encoding (G-211)]",
+  "ts": "2026-10-13T09:14:05Z",
+  "writer": "router/0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57/48213",
   "body": {
-    "wait_until": "[TODO: timestamp format (G-211)]",
+    "wait_until": "2026-10-13T14:01:00Z",
     "wait_link": "claude-cli"
   }
 }
 ```
 
-Open decisions in this example: [G-211](#g-211).
-
 **Versioning.**
 - **Older `v`:** `Get`, `List` and `Tail` run the registered migration steps in memory until the record reaches the kind's current version. A fixture with `v: 0` reads as `v: 1`.
-- **Newer `v`:** [TODO: `what a binary does with a record whose v is newer than the kinds it knows` ([G-211](#g-211))]
-- **Record checksum:** each read verifies the checksum or hash before the version. [TODO: `where a replaced record stores its checksum or hash, since the six header fields hold none, and which append kinds carry a checksum` ([G-211](#g-211))]
+- **Newer `v`:** the read returns `ErrNewerVersion`, leaves the record untouched and never moves it aside, and the verb tells the person to update Komodo.
+- **Record checksum:** a `Replace` or `Claim` record carries none, because a temp file renamed into place is seen whole or not at all; every append kind's line (events, ledger rows, machine log lines) ends with `checksum`, computed as for an event line, and each read verifies it before the version.
 
 #### Record kinds
 
-Each kind is registered once; the registry is the source of `embed/state.schema.json`. A file that is neither a kind nor on the exclusion list in [Items outside the manager](#items-outside-the-manager) does not exist. The shapes below are derived from the attributes of each kind. [TODO: owner confirmation of the exported names and signatures derived here ([G-211](#g-211))]
+Each kind is registered once; the registry is the source of `embed/state.schema.json`. A file that is neither a kind nor on the exclusion list in [Items outside the manager](#items-outside-the-manager) does not exist. The shapes below are derived from the attributes of each kind and are final for beta 6.
 
 ```go
 // Primitive names one of the four ways the manager changes bytes on disk.
@@ -11863,7 +11843,10 @@ Paths starting `runs/`, `sessions/`, `ledger/` and `jobs/`, and `install.json`, 
 | `job` | `jobs/state.json` | `Replace` |
 | `machine_event` | `~/.komodo/state/events/<process>.jsonl` | `Append` |
 | `queue` | `~/.komodo/state/queue/` | `Claim`; `Remove` |
-| `pool`, `link` | `~/.komodo/state/{pool,links}/` | [TODO: `Claim and Remove, or an operating system file lock` ([G-38](#g-38))] [TODO: which component claims pool slots ([G-217](#g-217))] [TODO: which package claims link slots ([G-217](#g-217))] |
+| `request` | `runs/<group-id>/inbox/<request-id>.json` | `Claim`; `Remove` |
+| `landing` | `~/.komodo/state/landing/<repo-id>.<epic-id>.json` | `Claim`; `Remove` |
+| `run_config` | `runs/<run>.config.json` | `Claim` |
+| `pool`, `link` | `~/.komodo/state/{pool,links}/` | `Claim`; `Remove`; `Replace` for `pool/state.json`; the engine's `pool.go` is the writer |
 | `lease`, `fence` | `~/.komodo/leases/<repo-id>/<group-id>.{json,fence}` | `Claim`; `Replace`; `Remove` |
 | `timer`, `quota` | `~/.komodo/state/timers/`, `quota.json` | `Replace`; `Remove` when fired |
 | `providers`, `install` | `state/providers.json`, `install.json` | `Replace` |
@@ -11879,7 +11862,7 @@ Paths starting `runs/`, `sessions/`, `ledger/` and `jobs/`, and `install.json`, 
 | `ledger`, `view` | The observability subscriber, which rebuilds the 2 views from group state | [Data Model](#103-data-model) |
 | `job` | Scheduler: per job, the attempt, next run time, last failure hash and whether it is running | [Data Model](#103-data-model) |
 | `machine_event` | Workspace and leases, session pool, work queue, scheduler; one writing process per file | [Data Model](#23-data-model) |
-| `queue`, `pool`, `link` | [TODO: which component claims pool slots ([G-217](#g-217))] [TODO: which package claims link slots ([G-217](#g-217))]; the scheduler enqueues; the startup sweep re-enqueues | [Data Model](#33-data-model) |
+| `queue`, `pool`, `link` | The engine's `pool.go` claims pool and link slots; the scheduler enqueues; the startup sweep re-enqueues | [Data Model](#33-data-model) |
 | `lease`, `fence` | Workspace and leases; the startup sweep removes dead leases. The fence is replaced on every take or takeover and never falls | [Data Model](#43-data-model) |
 | `timer`, `quota` | [TODO: which component writes a timer record: the provider adapters, the router or the engine ([G-224](#g-224))] (written with `Replace`); the scheduler, the live engine, the sweep or `status` fires a due timer, which is then removed | [Data Model](#73-data-model) |
 | `providers`, `install` | The installer and the provider probe | [Data Model](#123-data-model) |
@@ -11889,9 +11872,9 @@ Paths starting `runs/`, `sessions/`, `ledger/` and `jobs/`, and `install.json`, 
 
 - **`timer`:** one record per paused group, keyed `<repo-id>.<group>.json`, holding the latest reset time among the group's halted sessions plus 1 minute, and `wait_link`.
 - **`quota`:** the machine-wide reset time per link.
-- **`machine_event`:** one file per `komodo` process holding its `lease.taken`, `pool.slot.taken`, `queue.enqueued` and `job.due` events [TODO: which file holds `job.due` and `job.fail` ([G-146](#g-146))]; `status` merges the files by `timestamp`. [TODO: `the machine log's file name pattern` ([G-211](#g-211))]
+- **`machine_event`:** one file per `komodo` process holding its `lease.taken`, `pool.slot.taken`, `queue.enqueued` and `job.due` events [TODO: which file holds `job.due` and `job.fail` ([G-146](#g-146))]; `status` merges the files by `timestamp`. A file is named `<start>-<pid>.jsonl`, `<start>` being the process's start time as `20261013T091405Z`, so the files sort by start.
 - **`session`:** one folder per model session; on API links `messages.jsonl` holds every turn for resume.
-- **Several writers per group event file:** `timer.due` has four emitters and only `Drive` appends group events. [TODO: `how a timer.due from the scheduler, the sweep or status reaches the group's state file` ([G-29](#g-29))]
+- **Several writers per group event file:** `timer.due` is appended by `Drive` alone; the scheduler, the sweep and `status` reach it through the group's inbox.
 
 #### Items outside the manager
 
@@ -11921,36 +11904,56 @@ The snapshot holds every loop counter in `State`, so a crash resets none of them
 | `runs/<group-id>/state.json` | One `group` record: header and `State` body |
 | `<path>.bad-*` | A record that failed a check, renamed in place of the original; never repaired automatically, reported by `doctor` |
 
-Event versioning: the envelope's `version` is 1. [TODO: `how an event line with an older version is migrated` ([G-211](#g-211))] [TODO: `the suffix after .bad- and the line terminator and length limit of a state file line` ([G-211](#g-211))]
+Event versioning: the envelope's `version` is 1; an older `version` runs through registered steps keyed by `version`, in memory, as an older `v` does. A quarantined file is renamed `<path>.bad-<time>`, `<time>` being `20261013T091405Z`. A state file line ends with one newline (`\n`) and is at most 1 MiB; `Append` refuses a longer line with `*InvalidError`.
 
 ### 13.4 Interfaces
 
 #### State manager write calls
 
 ```go
-// Writer is the four ways the state manager changes bytes on disk.
+// Writer is the calls that change bytes on disk; TakeOver is the Claim primitive over a stale record.
 type Writer interface {
-	// Adds one line to a state file and syncs it before returning.
+	// Adds one line to an append kind's file and syncs it before returning.
 	Append(kind string, key string, body Body) error
-	// Swaps in a whole new record atomically and returns its new rev.
+	// Swaps in a whole new record atomically and returns its new rev; rev 0 creates an absent record.
 	Replace(kind string, key string, body Body, rev int) (int, error)
-	// Creates a record only if none exists, so exactly one caller wins.
+	// Creates a record only if none exists, so exactly one caller wins; its rev is 1.
 	Claim(kind string, key string, body Body) error
+	// Renames a stale record aside and claims the key; exactly one caller wins; the caller judges staleness.
+	TakeOver(kind string, key string, body Body, staleRev int) (int, error)
 	// Deletes a record after checking the writer and that rev is current.
 	Remove(kind string, key string, rev int) error
 }
 ```
 
-[TODO: `the parameters and results of Append, Claim and Remove,` ([G-211](#g-211))]
+`Append` returns only an error, because an event's `sequence` comes from group state's `Append`; `Claim` gives its record `rev` 1; `Remove` returns only an error.
 
 | Method | An error means | The disk afterwards |
 |---|---|---|
 | `Append` | A check failed | No line was added |
 | `Replace` | A check failed, or `rev` is stale | The old record is unchanged |
 | `Claim` | The record exists, or a check failed | The existing record is unchanged |
+| `TakeOver` | Another taker won (`ErrStaleRev`), or a check failed | The winner's record stands |
 | `Remove` | A check failed, or `rev` is stale | The record stays |
 
-A refused write returns `state_invalid` with the field path. [TODO: `the error values of a stale rev, an unlisted writer, a taken claim and a failed disk write, and whether each is state_invalid` ([G-211](#g-211))] [TODO: `how the manager identifies the calling component for the writer check` ([G-211](#g-211))] [TODO: `which call performs the takeover of a stale record; Writer has no stale-claim call` ([G-211](#g-211))]
+A refused write returns `state_invalid` with the field path. The handle from `For` names the calling component for the writer check, and `TakeOver` performs the takeover of a stale record.
+
+```go
+// Errors the manager returns; only *InvalidError and ErrNotWriter mean state_invalid.
+var (
+	ErrStaleRev     = errors.New("record changed since it was read")      // rev is not current; reread and retry
+	ErrClaimed      = errors.New("record already exists")                 // Claim lost to another writer
+	ErrNotWriter    = errors.New("component may not write this kind")     // the writer check refused
+	ErrNotFound     = errors.New("record does not exist")                 // Get of an absent key
+	ErrNewerVersion = errors.New("record written by a newer komodo")      // v above the kind's version
+)
+
+// DiskError wraps a failed open, write, sync or rename; the disk keeps the old record.
+type DiskError struct {
+	Path string // the file the call touched
+	Err  error  // the operating system error
+}
+```
 
 ```go
 // InvalidError is returned for a write that breaks the schema or an invariant; the disk is untouched.
@@ -11973,43 +11976,49 @@ type Reader interface {
 	Get(kind string, key string) (Record, error)
 	// Reads every record of one kind.
 	List(kind string) ([]Record, error)
-	// Reads a state file's events from a sequence number onward.
-	Tail(sequence uint64) ([]Event, error)
-	// [TODO: the Watch method and the name of its result type; Wake is taken by the event wake enumeration (G-211)]
+	// Reads the events of one group's or run's state file, named by key, from a sequence number onward.
+	Tail(key string, sequence uint64) ([]Event, error)
+	// Blocks until a record of the kind changes or ctx ends; polls file modification times every 200 milliseconds.
+	Watch(ctx context.Context, kind string) (Change, error)
+}
+
+// Change names the record a Watch saw change.
+type Change struct {
+	Kind string // the record kind
+	Key  string // which record changed
+	Rev  int    // its rev after the change; 0 when it was removed
 }
 ```
 
-Open decisions in this example: [G-211](#g-211).
-
-[TODO: `how Tail chooses the state file` ([G-211](#g-211))] Watch blocks until a record of one kind changes; `status --wait` uses it on the `wake` kind and then reads the state tail, so no event is missed ([Behaviour](#25-behaviour)).
+`Tail` reads `runs/<key>/events.jsonl` for a group identifier and `runs/<key>.jsonl` for a run identifier. Watch blocks until a record of one kind changes; `status --wait` uses it on the `wake` kind and then reads the state tail, so no event is missed ([Behaviour](#25-behaviour)).
 
 | Method | An error means | The disk afterwards |
 |---|---|---|
 | `Get` | The record failed a check | Moved aside as `.bad-*`; the owning group blocks `state_invalid` |
-| `List` | A record of the kind failed a check | Same for that record [TODO: `whether List also returns the good records` ([G-211](#g-211))] |
+| `List` | A record of the kind failed a check | Same for that record; `List` still returns every good record beside the error |
 | `Tail` | A line before the last failed its checksum | The record is moved aside and the group blocks `state_invalid` |
 
-[TODO: `what Get returns for a record that does not exist` ([G-211](#g-211))]
+`Get` of a record that does not exist returns an empty `Record` and `ErrNotFound`.
 
 #### Group state calls
 
 ```go
 // GroupState keeps one group's events, snapshots and replay; S is the snapshot body.
-type GroupState[S any] interface {
+type GroupState[S Marked] interface {
 	// Makes the caller the group's only writer.
 	Open(group ID) error
-	// Stamps, checks, writes and syncs one event, returning its sequence.
-	Append(e Event) (uint64, error)
+	// Stamps, checks and saves one write of events with one sync, returning the last sequence.
+	Append(events ...Event) (uint64, error)
 	// Saves the state to state.json on the snapshot interval or a stage change.
 	Snapshot(s S, sequence uint64) error
-	// Rebuilds a group from its snapshot by applying every later line; returns follow-ons missing at the tail.
+	// Rebuilds a group from its snapshot, or from S's zero value, by applying every later line; returns events Drive appends first.
 	Load(apply func(S, Event) (S, []Event)) (S, []Event, error)
 	// Returns the events after a sequence number.
 	Tail(sequence uint64) ([]Event, error)
 }
 ```
 
-The five calls are `Open(group)`, `Append(event)`, `Snapshot(state, sequence)`, `Load(apply)` and `Tail(sequence)`. `GroupState` is generic over the snapshot body, so `state` never imports the engine's `State`. `Event` is defined in `state` ([Data Model](#23-data-model)). A run's `run.*` events use the same `Append` and `Tail`, with no snapshot, so runs and groups share one set of rules.
+The five calls are `Open(group)`, `Append(events...)`, `Snapshot(state, sequence)`, `Load(apply)` and `Tail(sequence)`. `GroupState` is generic over the snapshot body, so `state` never imports the engine's `State`. `Event` is defined in `state` ([Data Model](#23-data-model)). A run's `run.*` events use the same `Append` and `Tail`, with no snapshot, so runs and groups share one set of rules.
 
 | Method | An error means | The disk afterwards |
 |---|---|---|
@@ -12019,17 +12028,24 @@ The five calls are `Open(group)`, `Append(event)`, `Snapshot(state, sequence)`, 
 | `Load` | The snapshot or a line before the last is bad | The record is moved aside and the group blocks `state_invalid` |
 | `Tail` | A line before the last failed its checksum | The record is moved aside and the group blocks `state_invalid` |
 
-[TODO: `what Drive does when Snapshot or Append refuses` ([G-211](#g-211))]
+```go
+// Marked is what group state reads from a snapshot body; the engine's State implements it.
+type Marked interface {
+	Marks() (epoch uint32, fence uint64, stage Stage)
+}
+```
+
+`Drive` handles a refusal by kind: an `Append` refused with `*InvalidError` or `ErrNotWriter` blocks the group `state_invalid`; a `*DiskError` from `Append` ends the `Drive` as a panic does, blocking the group `crash`. A refused `Snapshot` (a program fault) blocks `state_invalid`; a `Snapshot` `*DiskError` is logged and the next interval writes again, since replay covers the gap.
 
 **Who calls what**
 
 | Caller | Calls | When |
 |---|---|---|
 | `Drive` | `Open`, `Append`, `Snapshot` | A group starts or resumes; each event; after each `Next()` |
-| Recovery and `komodo resume` | `Load` with `Next()` wrapped as `apply` [TODO: whether Drive or recover.go calls Load ([G-217](#g-217))] | After a crash, or on resume |
+| `Drive`, on start, after a crash and on `komodo resume` | `Load` with `Next()` wrapped as `apply` | After a crash, or on resume |
 | `status --wait`, subscribers | `Tail`, `Watch` | Following new events |
 | Workspace and leases | `Claim`, `Replace`, `Remove` on `lease`, `fence` | A take, a renewal, a release |
-| Engine, scheduler, provider adapters | `Claim`, `Remove`, `Replace` on `queue`, `pool`, `link`, `job`, `timer`, `quota` [TODO: which component claims pool slots ([G-217](#g-217))] [TODO: which package claims link slots ([G-217](#g-217))] [TODO: which component writes a timer record: the provider adapters, the router or the engine ([G-224](#g-224))] | Queueing, slot use, a pause, a fired timer |
+| Engine, scheduler, provider adapters | `Claim`, `Remove`, `Replace` on `queue`, `pool`, `link`, `job`, `timer`, `quota` (the engine's `pool.go` claims pool and link slots) [TODO: which component writes a timer record: the provider adapters, the router or the engine ([G-224](#g-224))] | Queueing, slot use, a pause, a fired timer |
 | Observability | `Append`, `Replace` on `ledger`, `view` | Each applied event, batched per tick |
 
 ### 13.5 Behaviour
@@ -12076,7 +12092,7 @@ func SaveTimer(r Reader, w Writer, key string, body Body) (int, error) {
 }
 ```
 
-[TODO: `the rev a caller passes when the record does not exist yet, and whether Replace creates a record` ([G-211](#g-211))]
+A caller passes `rev` 0 for a record that does not exist yet; `Replace` then creates it, and refuses with `ErrClaimed` when it exists.
 
 #### Algorithms
 
@@ -12105,7 +12121,7 @@ flowchart TD
 | Compare-and-swap | The caller's `rev` must match the record's current `rev` |
 | Writers | The caller must be one of the kind's listed writers for that key |
 
-The lock is per record key, so two groups never wait on each other. Two `komodo` processes on one machine stay consistent through the atomic file operations of the primitives, never through a shared process. [TODO: `locking for files that several repositories write, such as quota.json: the compare-and-swap check and the rename are two steps across processes` ([G-74](#g-74))] [TODO: `whether the group ledger is kept per repository or shared across the machine` ([G-74](#g-74))]
+The lock is per record key, so two groups never wait on each other. Two `komodo` processes on one machine stay consistent through the atomic file operations of the primitives, never through a shared process. The `rev` check and the rename are two steps, so for a kind that several processes write (`quota`, `timer`, `pool`, the ledger's `groups.json` and `tasks.json`, `config_audit`) step 1 also takes a lock file: a writer of a machine-shared record creates the lock file `<path>.lock` (create-only, holding its process identifier and start time), rereads the record, writes it with `Replace` and deletes the lock; a lock whose holder is dead, or older than 30 seconds, is taken over by the lease takeover rule; readers take no lock, because `Replace` renames whole files into place. The ledger is kept per repository.
 
 ##### State manager primitive steps
 
@@ -12130,7 +12146,7 @@ The lock is per record key, so two groups never wait on each other. Two `komodo`
 1. Check that the caller is a listed writer and that its `rev` is current.
 2. Delete the file. A queue item taken by a pool slot, a released lease, a landed group's records and a fired timer are removed this way.
 
-[TODO: `the temp file name and folder, whether the folder is synced after the rename, and the name a stale file gets when renamed aside` ([G-211](#g-211))]
+The temp file is `<path>.tmp-<pid>` in the record's own folder, so the rename never crosses a file system; the folder is synced after the rename. `TakeOver` renames a stale record to `<path>.stale-<time>`, `<time>` being `20261013T091405Z`.
 
 ##### State manager read path
 
@@ -12152,7 +12168,7 @@ flowchart TD
 | Check | Rule |
 |---|---|
 | On read | Checksum or hash first, then the version; an older `v` is migrated in memory |
-| Last line cut short by a crash | Dropped with one `state.truncated`; replay continues; never moved aside [TODO: what a reader does with a last line that a live writer has not finished ([G-211](#g-211))] |
+| Last line cut short by a crash | Dropped with one `state.truncated`; replay continues; never moved aside; a reader such as `Tail` returns only lines up to the last newline, so it never sees a line a live writer has not finished |
 | Bad record | A bad line before the last one, or any other failed record: moved aside as `.bad-*`; the owning group blocks `state_invalid` |
 
 1. Read the record or the lines.
@@ -12160,9 +12176,9 @@ flowchart TD
 3. An older `v` runs through the registered steps in memory; the read writes nothing.
 4. A failure on the last line of a state file is the cut-short case below. Any other failure moves the record aside as `.bad-*`, never repairs it, and blocks the owning group `state_invalid`; `doctor` reports it.
 
-[TODO: `whether a read that finds a bad record in a file other than a state file also blocks a group, and which code appends the group.blocked event when the bad record is the group's own state file` ([G-211](#g-211))]
+A bad record outside a state file blocks a group only when the record belongs to one (its lease, timer or snapshot); otherwise the caller gets the error and `doctor` reports it. When the group's own state file is bad, `Drive` appends `group.blocked` reason `state_invalid` as the first line of a fresh `events.jsonl`, and `resume` refuses while the group's `.bad-*` file exists.
 
-[TODO: who handles a last line that fails its checksum, and what a reader running beside a live writer, such as `status --wait` calling `Tail`, does with a partly written last line, since dropping it or appending `state.truncated` would be a write by a read-only verb ([G-211](#g-211))]
+Only `Load`, run by the group's writer, drops a cut-short final write and returns `state.truncated`. A read-only caller such as `status --wait` never writes: `Tail` stops at the last complete write, and a final write that is not yet complete is left for the next read.
 
 ##### Group state append and snapshot
 
@@ -12187,10 +12203,10 @@ sequenceDiagram
 ```
 
 1. `Open` binds the caller as the group's only writer. A second `Open` in the same process is refused, and an `Open` from a process that does not hold the group's lease is refused; the lease and fence keep other processes out ([Workspace and Leases](#4-workspace-and-leases)), and every save checks the fence in the same git transaction; the lease stays held through landing until the group is Done.
-2. `Append` stamps `sequence`, `timestamp` and `checksum`; `Drive` has already set `stage` and `stale`, since it holds the current epoch. It checks the event against the schema, appends and syncs it, and returns the sequence before `Next()` runs. The outbox's `action.start` and `action.done` lines go through the same call ([Actions](#actions)).
+2. `Append` stamps `sequence`, `timestamp` and `checksum`; `Drive` has already set `stage` and `stale`, since it holds the current epoch. It checks each event against the schema, saves the events of one call as one write with one sync, and returns the last sequence; `Drive` has already run `Next()` in memory, so a fact and its decision reach disk together. The outbox's `action.start` and `action.done` lines go through the same call ([Actions](#actions)).
 3. `Snapshot` runs after every `Next()` and decides when to write: every 50 events (the interval is in [Configuration and Constants](#28-config)) or on a stage change. It refuses a state whose `sequence` is not the last one appended, so a snapshot never runs ahead of or behind its events.
 
-[TODO: `how Open learns the state file's last sequence, how Open checks the lease, and where the checks that refuse a falling epoch or fence and that detect a stage change live, since Snapshot receives only the generic state S, which exposes no epoch, fence or stage` ([G-211](#g-211))]
+`Open` reads the state file's last complete write for the last `sequence`, and checks the lease with `Get` on `lease`: the holder's run and process must be the caller's. `Snapshot` reads `Marks()` from `S` to refuse a falling epoch or fence and to see a stage change.
 
 ##### Group state replay with Load
 
@@ -12214,13 +12230,13 @@ sequenceDiagram
 1. Read `state.json` through the read path. A bad snapshot is moved aside and the group blocks.
 2. Read the state file. Lines up to the snapshot's `sequence` are not replayed.
 3. For each later line, verify the checksum and that `sequence` follows the previous line, then pass it to `apply`, which wraps `Next()`.
-4. A last line whose checksum fails was cut short by a crash. It is dropped and one `state.truncated` is emitted; replay continues. It is never moved aside.
+4. A final write that fails (a line's checksum fails, or the line whose `sequence` equals its `last` is missing) was cut short by a crash. It is dropped whole and one `state.truncated` is returned; replay continues. It is never moved aside.
 5. A failing line before the last is a bad record: the record is moved aside and the group blocks `state_invalid`.
 6. Return the rebuilt state and the follow-on events that `Next()` ordered but that never reached disk. `Drive` appends those first, then runs the group's `ActionsOpen` before any new event ([Behaviour](#25-behaviour)).
 
-Replay costs at most one snapshot interval of lines. [TODO: `measure the replay target` ([G-19](#g-19))] [TODO: `what Load returns for a group that has no snapshot yet, since the generic S has no initial value` ([G-211](#g-211))]
+Replay costs at most one snapshot interval of lines. [TODO: `measure the replay target` ([G-19](#g-19))] A group with no snapshot replays from `S`'s zero value; the engine's zero `State` has stage `NoStage`, which row 1 starts from.
 
-[TODO: `whether the cut line is removed from the file, which writer appends state.truncated, and whether the dropped line's sequence number is reused` ([G-211](#g-211))]
+The cut-short write is removed by truncating the file to the end of the previous write; `Drive` appends the `state.truncated` that `Load` returns; the dropped sequence numbers are reused, so the file stays gap-free.
 
 ##### State manager performance and caching
 
@@ -12250,7 +12266,7 @@ stateDiagram-v2
 | State | Event | Next state | True afterwards |
 |---|---|---|---|
 | Absent | `Claim` | Present | Exactly one process holds the file |
-| Absent | `Replace` | Present | The record is whole and has its first `rev` [TODO: `the rev of a first write` ([G-211](#g-211))] |
+| Absent | `Replace` | Present | The record is whole and has its first `rev`, 1 |
 | Present | `Replace` with the current `rev` | Present | `rev` is one higher; readers see the old or the new record |
 | Present | `Replace` or `Remove` with a stale `rev` | Present | Refused; the file is unchanged |
 | Present | `Remove` | Absent | The file is deleted |
@@ -12295,9 +12311,9 @@ stateDiagram-v2
 | Crash between `action.start commit` and `action.done` | `Load` leaves the action in `ActionsOpen` | Replay reruns the commit; compare-and-swap on the hidden ref makes it one commit |
 | Snapshot `sequence` is not the last line | The `Snapshot` check | Refused; the previous snapshot stays |
 | A second `Open`, or an `Open` without the lease | `Open` | Refused |
-| A failed disk write on a machine-shared record | [TODO: `the engine's reaction to a failed write of quota.json or a timer record` ([G-74](#g-74))] | [TODO: `the recovery after that failure` ([G-74](#g-74))] |
+| A failed disk write on a machine-shared record | One retry; then the value holds in memory for this process and the run report warns | `Drive` retries the write at each lease renewal; the next successful write restores the record |
 
-- **Last event line cut short:** the engine died while writing the last event line, so the line no longer matches its checksum. `Load` drops it and the engine emits one `state.truncated` so the loss is on record [TODO: which writer appends `state.truncated` ([G-211](#g-211))]. [TODO: `the checksum algorithm` ([G-182](#g-182))]
+- **Last event line cut short:** the engine died while writing the last event line, so the line no longer matches its checksum. `Load` truncates the file to the end of the last whole write and returns one `state.truncated`, which `Drive` appends first, so the loss is on record. Each line carries a CRC-32C checksum ([Data Model](#23-data-model)).
 - **Crash between `action.start commit` and `action.done`:** the engine wrote that it was about to commit, then died before writing done. On `resume`, replay reruns the commit; if the first commit did land, the hidden ref is updated with a compare-and-swap, so there is still exactly one commit ([Workspace and Leases](#4-workspace-and-leases)).
 
 ### 13.8 Config
@@ -12345,14 +12361,8 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-211](#g-211) | The header and body layout in one file; timestamp and writer encoding; the machine log file names; `Tail`'s file choice; exported names and signatures derived here; how a package obtains the manager; entry points; The caller identity for the writer check; the error values of each refusal; Where a record stores its checksum or hash; a `v` newer than the binary knows; The `rev` of a first write; File-level details of the primitives and the takeover call; Cut-short and bad-line handling; Group state: `Open`, `Snapshot` stage detection and `Load` without a snapshot; The `Watch` method and its result type name | Yes |
-| [G-74](#g-74) | Locking for machine-shared files; the engine's reaction to a failed write of `quota.json` or a timer record; locking for the group ledger and the quota file; locking for `config.json`, `config.sha` and `config.log`; Whether the group ledger is kept per repository or shared across the machine | Yes |
-| [G-182](#g-182) | The checksum algorithm and how it is written | Yes |
 | [G-19](#g-19) | The replay target of 10,000 events under 1 s | No |
-| [G-29](#g-29) | How a `timer.due` from outside `Drive` reaches a group's state file | No |
 | [G-208](#g-208) | Shapes of `ledger/groups.json` and `tasks.json` | Yes |
-| [G-38](#g-38) | How a slot is held and freed | Yes |
-| [G-217](#g-217) | Whether `Drive` or `recover.go` calls `Load`; Which component claims pool slots; Which package claims link slots | Yes |
 | [G-224](#g-224) | Which component writes a timer record | Yes |
 | [G-146](#g-146) | Which file holds `job.due` and `job.fail` | Yes |
 | [G-119](#g-119) | Which package writes the configuration checksum and audit rows | Yes |
@@ -12406,10 +12416,12 @@ Nothing here is committed. Every repository on the machine shares these files.
 | `state/quota.json` | Reset times from provider limits, shared by every repository on the machine | [7.3](#73-data-model) |
 | `state/scope/<repo-id>.json` | Paths approved by `scope approve`, each with its group; read by Intake and the engine's denial check, cleared by the sweep for landed or abandoned groups | [9.5](#95-behaviour) |
 | `state/timers/` | One record per paused group, `<repo-id>.<group>.json`, written with `Replace` and removed when fired, holding `wait_until` (the latest reset time among its halted sessions, plus 1 min) and `wait_link` | [7.3](#73-data-model) |
-| `state/pool/`, `state/links/` | Files for the machine-wide session pool slots and the per-link slots, each tagged with its holder's process identifier | [TODO: `which component owns the session pool slots` ([G-217](#g-217))] [TODO: `which package owns the link slots` ([G-217](#g-217))] |
+| `state/pool/`, `state/links/` | Files for the machine-wide session pool slots and the per-link slots, each tagged with its holder's process identifier | The engine's `pool.go` ([3.5](#35-behaviour)) |
 | `state/queue/` | The work queue: one create-only file per ready group or due job | [3.3](#33-data-model) |
+| `state/landing/` | One landing gate file per epic, `<repo-id>.<epic-id>.json` | [3.5](#35-behaviour) |
+| `state/pids/<run>/` | The engine's `heartbeat` and one `<session>.pid` file per session process | [3.5](#35-behaviour) |
 | `state/wake/` | Wake files: the event bus touches `wake/<run>` on a waking event, and `status --wait` watches it | [2.5](#25-behaviour) |
-| `state/events/` | The machine log: one file per `komodo` process; [TODO: the file name pattern of the machine log and how a record's header and body sit in one file ([G-211](#g-211))] | [2.3](#23-data-model) |
+| `state/events/` | The machine log: one file per `komodo` process, `<start>-<pid>.jsonl`; each line is a header, a body and a checksum | [2.3](#23-data-model) |
 | `state/fresh.json`, `fresh.lock`, `fresh.log` | The self-updater's records: the latest known release, the one-updater lock (stale after 10 min), the silent failure log | [12.3](#123-data-model) |
 | `state/active/` | Which versions live runs use, so cleanup never deletes one in use | [12.3](#123-data-model) |
 | `state/config.log`, `config.sha` | The configuration audit log and the checksum of `config.json`; a hand edit breaks the checksum and every verb refuses until `komodo config --accept` | [1.3](#13-data-model) |
@@ -12487,7 +12499,7 @@ sequenceDiagram
 The step-by-step walkthrough is [HLD 6.2 Group Lifecycle](hld.md#62-group-lifecycle). The files it touches:
 
 - **Intake reads:** the group's task list under `docs/backlog/`, the detection result and a hash of `config.json`, which pin the run to one set of commands and settings.
-- **Intake writes:** the worktree ([Workspace and Leases](#4-workspace-and-leases)). The group's lease under `~/.komodo/leases/` is also written before the group builds. [TODO: `the order of queue-file deletion, pool slot, lease and Intake` ([G-38](#g-38))]
+- **Intake writes:** the worktree ([Workspace and Leases](#4-workspace-and-leases)). The group's lease under `~/.komodo/leases/` is written before Intake, when the engine picks the group.
 - **Build reads:** briefs filled from the embedded skills, lenses, rules and templates ([0.5 Embedded Assets](#05-embedded-assets)); it commits each result to the hidden ref, which is never pushed.
 - **Ship writes:** the group branch, the group pull request and the epic branch ([Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release)). Under `ship.mode: group` the landing itself opens and merges the group pull request.
 
@@ -12621,7 +12633,7 @@ The harness has no always-on background service; every step is a command that re
 | The binary is stale or pinned | `komodo fresh`, or `fresh --restart-runs` to move live runs | The pin in the repository's `AGENTS.md` is above this binary, or a newer release exists; `--restart-runs` checkpoints live runs and moves them to the new binary. [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate) |
 | After merging the epic pull request | `komodo sync` | Fetches, prunes finished worktrees and refreshes the repository files. [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate) |
 
-Watching a run (`status`, `status --wait`, `status --explain`, `status --metrics`) is specified in [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability). Scheduled jobs are in the same chapter. The startup sweep [TODO: `which component owns the startup sweep` ([G-217](#g-217))] and the loss bound are in [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery).
+Watching a run (`status`, `status --wait`, `status --explain`, `status --metrics`) is specified in [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability). Scheduled jobs are in the same chapter. The startup sweep (`recover.go`) and the loss bound are in [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery).
 
 ### 15.3 Host Cleanup Before Phase 2
 
@@ -12896,14 +12908,6 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-26"></a>G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 | No text site |
 | <a id="g-27"></a>G-27 | Dashboard | An opt-in browser dashboard that stands in for the orchestrator: stack, `komodo ui` verb, live model changes, the "no server process" exception | Owner decision; proof of concept in `dashboard/` | [0.3](#03-package-map), [1.7](#17-invariants-and-failures) |
 | <a id="g-28"></a>G-28 | Install | How `komodo init` writes Komodo's orchestrator skills and commands into the global Claude Code setup: a Claude Code plugin, or plain files with a machine manifest | Owner decision | [1.2](#12-package-layout), [1.4](#14-interfaces), [12.1](#121-scope-and-concepts), [15.3](#153-host-cleanup-before-phase-2) |
-| <a id="g-29"></a>G-29 | Engine, Drive and event writers | Drive's open behaviour: how typed commands such as `resume` reach it; whether an event and its follow-ons are one disk write; whether each event type's contract names its class (fact, request or outcome); whether the engine loop waits for subscribers after delivering an event; whether the group loop keeps running or exits while its group is Paused or Blocked; who appends `timer.due`, which the scheduler, the engine, the sweep and `status` all emit, and how `jobs tick` and `status` fire due timers while only a group's `Drive` appends group events and only the run goroutine appends `run.*` events | Owner decisions on the event spine page; then a design patch to [Drive (Engine data model, 3.3)](#drive) | [1.4](#14-interfaces), [2.3](#23-data-model), [2.5](#25-behaviour), [2.6](#26-state-and-transitions), [3.3](#33-data-model), [3.5](#35-behaviour), [3.6](#36-state), [4.5](#45-behaviour), [4.6](#46-state), [9.3](#93-data-model), [10.5](#105-behaviour), [10.7](#107-invariants-and-failures), [13.3](#133-data-model) |
-| <a id="g-31"></a>G-31 | Engine, stage moves | Stage moves the transition table still lacks: the block row that produces each of the reasons `context`, `contract` and `state_invalid`; the event that carries the result of Intake's lint and worktree cut; what a failed Check on the merged group branch does in Ship, before landing | Design patch to the transition table in [Event Spine and State Machine](#26-state-and-transitions) | [2.6](#26-state-and-transitions) |
-| <a id="g-36"></a>G-36 | Engine, landing gate | The name and body of the per-epic landing gate file under `~/.komodo/state/` | Design patch to 3.5 | [3.5](#35-behaviour) |
-| <a id="g-37"></a>G-37 | Engine, epic gate | The epic gate's record identifier and file names; the event that carries a gate finding into a Done group's log | A naming patch to chapter 2 | [2.5](#25-behaviour), [2.6](#26-state-and-transitions) |
-| <a id="g-38"></a>G-38 | Engine, queue, slots and Intake order | The diagram places Intake between taking the slot and starting `Drive`, while the transition table places `setup` and `lock.taken` inside the Intake stage. The order of queue-file deletion, pool slot, link slot, lease and Intake: taking a pool slot deletes the queue file and then writes the lease (Engine Internals), Intake runs just before the group's first session takes a slot (Engine Internals), Intake takes the lease and fence and then cuts the worktree (Intake stage row), and the lease is held from Intake until landing or abandon (lease state); a crash after the queue file is deleted and before the lease is written leaves nothing the startup sweep can see, yet the sweep re-enqueues "items with no lease"; the pool and link slot file names and bodies; whether a session takes its pool slot or its link slot first, and whether it waits or fails when none is free; where lint, the card hash and the worktree cut run relative to the first `Drive` event; which process takes an item when ready items from several repositories compete, and where the round-robin cursor is stored; where the adapted pool size lives when two engines share a machine; whether a slot is freed by an operating system file lock when its holder dies or is a create-only file removed with `Remove`, with a process-identifier liveness sweep as the alternative; what counts as a clean session end; how free memory is measured on each operating system; the lease state names "queued, checking, verifying" do not match the stage names | Owner decision on the architecture page; then 3.3, 3.5 and 4.5 | [HLD 6.2](hld.md#62-group-lifecycle), [2.3](#23-data-model), [3](#3-engine-internals), [3.2](#32-package-layout), [3.3](#33-data-model), [3.4](#34-interfaces), [3.5](#35-behaviour), [3.7](#37-invariants-and-failures), [4.4](#44-interfaces), [4.5](#45-behaviour), [4.6](#46-state), [13.3](#133-data-model), [14.3](#143-data-flow) |
-| <a id="g-39"></a>G-39 | Engine, parent guard | The parent guard's entry point; how the engine writes its heartbeat; where the session process identifier files live | Owner decision; then 3.5 and chapter 14 data locations | [3.5](#35-behaviour) |
-| <a id="g-40"></a>G-40 | Engine, Drive failures | What `Drive` does when an action fails or when a lease renewal is refused, and which call renews a lease (3.4 says `Drive` uses `Replace` on the lease, Workspace and Leases 4.4 and 4.5 say `Leases.Renew`); the collaborators `Drive` holds (leases, worktrees, supervisor, router) as struct fields or a constructor; where the time a group has been paused is kept, since `PauseState` holds only the reset time and the cap `limits.pause_max_min` counts from the pause; how a dead lease holder is detected (pid check versus host); what happens when `Take` fails to write; and what happens when `git update-ref` fails: it exits 128 for a moved reference, a bad object and an unwritable folder alike, so how the engine tells a moved reference from another failure, and what each does, is open | Owner decision on the architecture page; then 3.4, 4.4, 4.5 and chapter 2 `PauseState` | [3.3](#33-data-model), [3.4](#34-interfaces), [3.5](#35-behaviour), [4.2](#42-package-layout), [4.3](#43-data-model), [4.4](#44-interfaces), [4.5](#45-behaviour) |
-| <a id="g-41"></a>G-41 | Engine, pick order | The definitions of the longest remaining chain weighted by task count (whether the group's own tasks count), of "most groups unblocked", and the key that gives backlog identifier order | Owner decision; then 3.3 | [3.3](#33-data-model) |
 | <a id="g-42"></a>G-42 | Tools | How the tool server's events (tool.denied, finding.submit, refusal-limit reached, tool call start and end) reach the engine and what carries them. | Owner decision on the route between the tool server process and the engine | [HLD Open decisions](hld.md#open-decisions), [5.4](#54-interfaces), [6.4](#64-interfaces), [6.5](#65-behaviour) |
 | <a id="g-43"></a>G-43 | Guard, matching inputs | The inputs the guard matches against: the test-sibling rules per language that row B1 and Check's scope check use; the secret content patterns (row G4) and attribution patterns (row G5), and whether Check's secret scan shares the list; the glob grammar for `pattern`, including what `**` matches and how a bare name matches; which row a refusal names when a call breaks several; how home-anchored patterns such as `~/.komodo/**` match inside a worktree under `~/.komodo/wt/`; when the path containment cache is invalidated after a `run` creates a symlink | Owner decision, with a per-language rule table, the pattern list and the grammar | [6.3](#63-data-model), [6.5](#65-behaviour), [6.8](#68-config), [8.3](#83-data-model), [8.5](#85-behaviour), [9.5](#95-behaviour) |
 | <a id="g-47"></a>G-47 | Tools, schemas and refusal text | Argument names and result shape of every tool except `run`; the head and tail split of a capped reply; the unchanged-file test for `read`; `search` output; lines `edit` returns on a miss; the reply for a failed tool; the identifiers and text of the refusal message and alternative templates | Authoring task: a tool schema table; then 6.3 | [6.3](#63-data-model), [6.4](#64-interfaces) |
@@ -12915,13 +12919,11 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-56"></a>G-56 | Tools | How the tool server learns its worktree, the group's `files`, the command classes and the protocol revision without reading disk; what the engine does when the server misses the 30 s `initialize` limit or a sandbox cannot be prepared | Owner decision | [6.4](#64-interfaces), [6.5](#65-behaviour) |
 | <a id="g-57"></a>G-57 | Guard | The top-level layout of `embed/policy.json`, its version number, and how a reader handles an older or newer file; the layout and version of call logs under `<session>/out/` | Owner decision | [6.3](#63-data-model) |
 | <a id="g-60"></a>G-60 | Workspace | Take and takeover step order (claim versus fence raise), first fence value, fence file body, `.stale-` file full name and location, lease path of a job lease `job-<name>` | Design patch to 4.3 and 4.5 | [4.2](#42-package-layout), [4.3](#43-data-model), [4.5](#45-behaviour) |
-| <a id="g-61"></a>G-61 | Workspace, fence | The fence is kept as a second hidden reference that every save verifies in the same git transaction (scratch-repo proof). Open: the fence reference's name and how the number is stored in it; the fence check before a scope change; how the reflog that records `fence=<n>` is enabled for hidden references, since a reflog line under `refs/komodo/` is written only with `--create-reflog` or `core.logAllRefUpdates=always` | Design patch to 4.5 "Move the hidden reference" | [4](#4-workspace-and-leases), [4.5](#45-behaviour) |
 | <a id="g-66"></a>G-66 | Workspace | What "unused for 3 days" measures, which actor removes an idle worktree, whether a still-leased worktree may be removed, and behaviour of `Rebuild` when the hidden reference is gone | Owner decision | [4.2](#42-package-layout), [4.4](#44-interfaces), [4.5](#45-behaviour), [4.7](#47-invariants-and-failures) |
 | <a id="g-67"></a>G-67 | Workspace | What a work-in-progress commit contains (staged, untracked and ignored files, message) and which mechanism writes it at every session end: the inline session.end hook or the wip_commit action Next() orders. | Design patch to 4.5 | [2.3](#23-data-model), [2.5](#25-behaviour), [4.4](#44-interfaces), [5.5](#55-behaviour), [6](#6-tools-guard-and-sandbox), [6.5](#65-behaviour), [6.7](#67-invariants-and-failures) |
 | <a id="g-69"></a>G-69 | Providers, chain | The shape of an agent's provider chain. Option 1 (chapter 7 failover chain, HLD models and cost): order `claude-cli` (latest then prior ID), every free `http:` endpoint in config order, then `anthropic-api` only when `providers.paid` allows. Option 2 (chapter 5 `agent.json` `chain` field): a list of links that must end in a free `http:` endpoint, example `["claude-cli", "http:local"]`. Also decides whether `doctor` and `gate` check the endpoint kind or a configured free endpoint; whether the brief builder or the provider router walks the chain to the next link that fits (chapters 5 and 9 say the brief builder, Providers and HTTP derives a router call that takes the brief's token count); and how `repo_map` is refitted when the brief moves to a link with another ceiling | Owner decision, then 7.3 Links and the chain and Agent registry `chain` row | [HLD 5.8](hld.md#58-providers-and-http), [HLD Open decisions](hld.md#open-decisions), [1.4](#14-interfaces), [1.8](#18-config), [5.3](#53-data-model), [5.4](#54-interfaces), [5.5](#55-behaviour), [7.3](#73-data-model), [7.4](#74-interfaces), [7.5](#75-behaviour) |
 | <a id="g-71"></a>G-71 | Providers | `claude-cli` wire details not yet stated: working directory of the `claude` process, which stream line type is `output`, which field of the result line carries the structured answer, which field of `rate_limit_event` carries the reset time, what `--verbose` switches on, how `claude auth status --json` reports a logged-out user, and the signature of the tool host the API-link loop calls. | Spike against Claude Code 2.1.295, phase 4 | [7.3](#73-data-model), [7.5](#75-behaviour) |
 | <a id="g-72"></a>G-72 | Providers | `anthropic.go` and `openai.go` wire details not yet stated: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and which rate-limit headers give the window total that a percent needs (only `-remaining` and `-reset` are named). | Spike against both interfaces, phase 4 | [7.3](#73-data-model), [7.5](#75-behaviour) |
-| <a id="g-74"></a>G-74 | State, machine-shared files | What locking rule protects machine-shared files (quota.json, the group ledger, config.json, config.sha, config.log) against concurrent writers and readers; whether the group ledger (`ledger/groups.json`) is kept per repository, as HLD 8.6 says, or is machine-shared; how the engine reacts to a failed write of quota.json or a timer record | Owner decision with G-211 | [HLD Open decisions](hld.md#open-decisions), [1.5](#15-behaviour), [7.3](#73-data-model), [7.4](#74-interfaces), [7.5](#75-behaviour), [10.5](#105-behaviour), [13.5](#135-behaviour), [13.7](#137-invariants-and-failures) |
 | <a id="g-79"></a>G-79 | Decision reasons | Reasons not recorded in [HLD chapter 9](hld.md#9-architecture-decisions): why groups land one at a time; why an oversized brief moves to the next link and is never trimmed; why job overlap is prevented through the job's lease. Reasons the HLD gives in [Constraints](hld.md#2-constraints) that the owner confirms: a hand edit of the settings file makes every verb refuse because settings stay out of agent reach; recurring work uses the operating-system timer and not a daemon because every verb is a short process | Owner states or confirms each reason | No text site |
 | <a id="g-88"></a>G-88 | Risks | Each risk in [HLD 11.1](hld.md#111-risks) has no named owner. | Owner assigns owners | No text site |
 | <a id="g-89"></a>G-89 | Update | Design of scheduled updates run by the operating system | Later minor version design | No text site |
@@ -12938,7 +12940,7 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-139"></a>G-139 | Release manifest, verification and release | The key names of `latest.json`, the architectures built, the asset file names, the exact bytes the ed25519 signature covers and how it is encoded; whether either embedded key may sign and how the next key rotates in; whether the updater refetches `latest.json` or reads the asset from `fresh.json`; how a binary treats a manifest layout it does not know; where the install script saves the download before it runs it; the key file's format and what `release` does when its mode is wider than 0600; where `add changelog` stores its recorded lines until the release; where the current and `next` public keys live in the source and how the `next` key is produced at the first release; the operating system and architecture pairs built; how the release is published; how the changelog is rendered from the entries `add changelog` records; what `--notes-file` supplies | Owner decision on the architecture page; then 11.3, 11.5, 12.3 and 12.5 | [1.4](#14-interfaces), [11.4](#114-interfaces), [11.5](#115-behaviour), [12.3](#123-data-model), [12.5](#125-behaviour) |
 | <a id="g-142"></a>G-142 | Gate inputs and result | How the gate recognises the Komodo repository and its refusal code; where the check fixtures live and how they load; the layout of the gate result data, the verdict wording and the error code; the comment lint rules; how docs drift finds package names in `lld.md`; what the component map names now that each LLD chapter is a subsystem; the gap tag syntax the no-silent-gaps check scans now that open items are written as TODO with a gap identifier, and how a backlog task names the gap it closes | Owner decision; then 12.3 and 12.5 | [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour), [12.7](#127-invariants-and-failures) |
 | <a id="g-145"></a>G-145 | Scheduler, templates | Where a template lives: the scheduler section says `embed/jobs/` or `~/.komodo/jobs/` with the example `templates/jobs/nightly-review.json`; the file map says `embed/jobs/` holds job templates and none ship while `templates/jobs/` holds the example; the `jobs` verb reads `embed/jobs/` and `~/.komodo/jobs/`, not `templates/jobs/`; template grammar: accepted forms of `every`, the value type of a slot, characters allowed in `name`, whether the agents run in parallel or in turn, how the 5 min minimum is enforced (refuse or raise), what the tick does with a template that fails strict decoding, how an older or newer template is read. Paths disagree: the scheduler section says `embed/jobs/` or `~/.komodo/jobs/`, the file map and `jobs list` omit `templates/jobs/`; which file wins when two share a name | Owner decision, then 10.3 and 10.4 | [0.3](#03-package-map), [0.5](#05-embedded-assets), [10.3](#103-data-model), [10.4](#104-interfaces), [10.7](#107-invariants-and-failures), [14.1](#141-runtime-state) |
-| <a id="g-146"></a>G-146 | Scheduler, events | No file is named for `job.due` and `job.fail`. The catalog says the scheduler emits them and `stage` is forbidden on `job.*`; the machine log lists `job.due` but its family count has 3 types without it; a job run's own run state `runs/<run>.jsonl` has the run goroutine as its only writer | Owner decision with G-29 and G-208 | [2.3](#23-data-model), [10.5](#105-behaviour), [13.3](#133-data-model) |
+| <a id="g-146"></a>G-146 | Scheduler, events | No file is named for `job.due` and `job.fail`. The catalog says the scheduler emits them and `stage` is forbidden on `job.*`; the machine log lists `job.due` but its family count has 3 types without it; a job run's own run state `runs/<run>.jsonl` has the run goroutine as its only writer | Owner decision with G-208 | [2.3](#23-data-model), [10.5](#105-behaviour), [13.3](#133-data-model) |
 | <a id="g-148"></a>G-148 | Scheduler, tick | What "drive the pool once" starts and in which process; the queue item id of a job so two ticks collide; how a job item is taken when job sessions take no pool slot though taking a slot deletes the item; `next_at` after a success, after a failure and for a job with no counters; where the run number `<n>` is kept; which of the lease and the `running` flag decides an overlap and where the skip is logged; tick behaviour on a refused `Replace` or other errors | Owner decision; then 10.5 | [3.3](#33-data-model), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state) |
 | <a id="g-149"></a>G-149 | Scheduler, retries | "Retried 3 times" with three delays versus "Blocked after the third failure"; how a Blocked job is stored when `jobs/state.json` has no field for it; which event wakes `status --wait` for it; how it resumes; what reads `last_fail_hash`; behaviour of `jobs run`, `pause`, `resume` and `--ignore-window`; whether a retry records a new `job.due` | Owner decision | [2.3](#23-data-model), [2.6](#26-state-and-transitions), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures) |
 | <a id="g-152"></a>G-152 | Scorecard | Cache hit rate is "per kind" in the scorecard and "per agent" in the token section; how group counts such as returns attribute to an agent and model; where the precision ledger counts and the cache counters are stored; where the cached totals live | Owner decision | [9.3](#93-data-model), [9.5](#95-behaviour), [9.9](#99-proof-cases), [10.3](#103-data-model), [10.5](#105-behaviour) |
@@ -12952,22 +12954,16 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-161"></a>G-161 | Ship, branches and merges | How and when the group branch is created from the hidden reference and the epic branch from the base; whether `<epic>` and `<group>` are the folder names; the remote name; where the epic-branch merge runs; the merge method of a group pull request; the pull request title and labels; which references count as critical | Owner decision; then 11.4 and 11.5 | [11.3](#113-data-model), [11.5](#115-behaviour) |
 | <a id="g-163"></a>G-163 | Ship, failures | What the engine does when a push, a `gh` call or a merge fails for a reason other than a conflict; how the push and pull request creation, which run beside `Drive`, return their result | Owner decision; then 11.4, 11.5 and 11.7 | [11.4](#114-interfaces), [11.7](#117-invariants-and-failures) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, then a design patch to 9.5 | [1.8](#18-config), [9.5](#95-behaviour) |
-| <a id="g-182"></a>G-182 | Event spine | The checksum on each event line: the algorithm and how the value is written. The owner decided on 2026-10-12 that it covers the line itself (commit cdd4bfa8, "checksum of the line"); the field is written last | Owner decision on the architecture page; then 2.3 envelope field table and examples | [2.3](#23-data-model), [13.7](#137-invariants-and-failures) |
 | <a id="g-185"></a>G-185 | End-to-end fixtures | The files, tasks and acceptance items of `tg-fixture`; which local model the full run uses and the configuration that selects it; the process and the stage at which the crash check sends `kill -9`; the content of the two regression fixtures; whether the gate runs the seven checks or a person starts them; whether any check depends on an earlier one | Owner decision; then 15.1 and the contents of `testdata/fixture-repo/` | [15.1](#151-end-to-end-verification-plan) |
 | <a id="g-186"></a>G-186 | Race check | How two engines start on one group, since `run` refuses a group another run holds (chapter 1); which machine or clone the second engine runs on | Owner decision; then 15.1 and chapter 4 | [3.5](#35-behaviour), [15.1](#151-end-to-end-verification-plan) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file before the cleanup; then 15.3 | [15.3](#153-host-cleanup-before-phase-2) |
 | <a id="g-188"></a>G-188 | Cutover | The repo table that phase 9 applies: which repository files name retired verbs and the rewrite for each; the sources name it and do not list it | Owner decision; then 15.4 | [15.4](#154-cutover) |
-| <a id="g-201"></a>G-201 | Engine, formats and names | The queue and slot file names, layouts and bodies; the timestamp format; how a repository identifier becomes a file name; how a record's header and body share one file; forward-version handling; the files for the run goroutine, run-order readiness, the landing gate, the epic gate and the panic-catching helper; the exported names of the engine's functions; how the engine learns that a dependency outside the run has landed | Owner decision on how the engine learns that an outside dependency landed; design patch to 3.2, 3.3 and the chapter 0 file map for the rest | [3.2](#32-package-layout), [3.3](#33-data-model), [3.4](#34-interfaces), [3.5](#35-behaviour) |
 | <a id="g-202"></a>G-202 | Workspace, formats and names | The lease file key names and record layout; the timestamp format; the exported names and signatures of the workspace functions; the worktree folder name on each platform (short hash of what, and `<group>` versus `<group-id>`); how the three Windows git settings are applied to one worktree; the tester worktree path, which file cuts it (`worktree.go` or `qa.go`), and how the sweep finds a dead run's tester worktrees | Design patch to 4.3 and 4.5; owner confirms the shapes in 4.4 | [4.2](#42-package-layout), [4.3](#43-data-model), [4.4](#44-interfaces), [4.5](#45-behaviour) |
 | <a id="g-203"></a>G-203 | Sessions and agents, formats and names | The fields of `request.json` and `result.json`; the signature and arguments of the `spawn` and `cancel` entry points; the Go shapes of the registry, the brief builder and the supervisor; the result schema of each of the 7 agents (`$id` and fields); the builder's `skills.allow` list beyond `standards-comments` | Design patch to 5.3; owner confirms the shapes in 5.4; agent schemas are an authoring task, phase 3 | [5.3](#53-data-model), [5.4](#54-interfaces) |
 | <a id="g-205"></a>G-205 | Providers, formats and names | The key names of `providers.json`, `quota.json` and `models.json`; how a record's header and body share one file; the `CtxSource` strings; the Go shapes of `Session`, `Stream`, `Event`, `Input`, `ResumeHandle` and `LimitError`; the error values of `Inject`, `Stop` and `Close`; the signature of `ToolHost` | Design patch to 7.3; owner confirms the shapes in 7.4 | [7.3](#73-data-model), [7.4](#74-interfaces) |
 | <a id="g-208"></a>G-208 | Scheduler, cache and ledger, formats and names | The file layout, timestamp format and fingerprint algorithm of `jobs/state.json`; the key names of the session row and of `ledger/sessions.jsonl`, the model identifier key and the capacity profile text; the exported names and signatures of the scheduler, cache store and ledger. Cache store: how inputs are joined into the hash and what the config-hash prefix does; the fan-out widths and entry file layout; what the verification hash covers and where it is stored; how recency is tracked and when eviction runs; the folders of the repo profile and the test baseline; `cache clear --kind` has no value for `setup` and `map`; how `--all` finds other repositories; where hit and lookup counters live; behaviour when the folder is unreadable; concurrent writers of one key. Ledger: the files for the views, the scorecard and the status data; the shape of `groups.json` and `tasks.json` and where each group's last applied sequence is stored; which event or file updates the fence and lease fields of the group row and the effect of `lease.lost`; the task state after `task.released` and where `released: crash` shows; which call writes the session row; host subagent events; the trim algorithm and trigger; the secret patterns masked (same list as the guard's); when views catch up after a dropped subscriber; status behaviour when a ledger file is missing; the meaning of "tick" in the ledger batching rule | Owner decision; then 10.3 and 10.4 | [10.2](#102-package-layout), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures), [13.3](#133-data-model), [14.3](#143-data-flow) |
 | <a id="g-210"></a>G-210 | Install and binary lifecycle, formats and names | The field names of `install.json`, its hash algorithm and how a settings entry is named; how a record's header and body share one file; forward-version handling; the exported names of the install, update, probe and gate functions. Install writes: how install chooses `~/.zshrc` or `~/.bashrc` and the text of the line; how the Windows user `PATH` is changed; the launchd label, cron line and Task Scheduler task name; the exact `SessionStart` hook entry; where the block goes in an `AGENTS.md` without markers and what happens with damaged markers; what a rerun does with files written before the manifest after a crash; where ownership of the binary, `PATH` line, `providers.json` and schedule entry is recorded; what `--repo-only` and `--machine-only` do outside a git repository. Lifecycle records: where the time of the last check and the count of consecutive failures are kept; the line format of `state/fresh.log`; the layout of `state/active/` and which code writes and removes its entries; how the previous version is recorded; when `komodo.exe.old` is deleted; whether `fresh.auto: false` and `CI=true` also stop the hourly fetch of `latest.json`; how the 2 minute checkpoint wait of `--restart-runs` fits the shutdown sequence's 30 second stop per agent and 60 second force-kill; the `restart` stop reason that `run.stopped` does not list | Owner decision; then 12.3 to 12.5 and chapter 2 | [12.2](#122-package-layout), [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour) |
-| <a id="g-211"></a>G-211 | State manager, interface and formats | The state manager's interface: the exported names and signatures, how a package obtains the manager, the generator and migration entry points, whether `Body` is an interface, and the parameters and results of `Append`, `Claim` and `Remove`; the `Watch` result type (`Wake` is taken), what it returns, and whether it uses operating-system notification or polling; how the manager identifies the calling component for the writer check; the error values of a stale `rev`, an unlisted writer, a taken claim, a failed disk write and a read of an absent record, whether `List` returns the good records beside an error, and what `Drive` does when `Append` or `Snapshot` refuses; the `rev` of a first write and whether `Replace` creates a record. Its formats: the timestamp format of `ts` and the encoding of `writer`; how a record's header and body share one file; where a replaced record stores its checksum or hash; whether append kinds other than events carry a checksum; what a binary does with a `v` newer than it knows and how an older event `version` is migrated; the machine log file name pattern; how `Tail` chooses the state file; the temp file name and folder of `Replace`, whether the folder is synced after the rename, the suffix after `.bad-`, the name of a stale file renamed aside, the line terminator and length limit, and which call performs a takeover. Damage: whether a dropped cut-short line is removed from the file, which writer appends `state.truncated`, whether the dropped line's `sequence` is reused, what `Tail` returns for a line a live writer has not finished, what is moved aside for a bad line before the last, which code appends `group.blocked` when the group's own state file is bad, and whether a read-only caller such as `status --wait` may drop a line. Group state: how `Open` learns the last `sequence` and checks the lease; where the checks that refuse a falling `epoch` or `fence` and detect a stage change live, given that `Snapshot` receives only the generic `S`; what `Load` returns for a group with no snapshot | Owner decision on `Watch` (notification or polling), on what `Drive` does when `Append` or `Snapshot` refuses, and on the damage rules; design patch to 13.3 to 13.7 and 4.5 for names and formats | [HLD Open decisions](hld.md#open-decisions), [2.3](#23-data-model), [3.4](#34-interfaces), [13.2](#132-package-layout), [13.3](#133-data-model), [13.4](#134-interfaces), [13.5](#135-behaviour), [13.6](#136-state), [13.7](#137-invariants-and-failures), [14.1](#141-runtime-state) |
-| <a id="g-217"></a>G-217 | Recovery ownership | Which component owns each recovery duty: the startup sweep (`worktree.go` or `recover.go`), the action record (the outbox), the session pool slots and the link slots under `~/.komodo/state/links/` (Engine Internals 3.2 gives link slots to `pool.go`, Providers and HTTP 7.4 and 7.5 give them to the session); which of the 4 startup scans runs each unplaced action; where the session process identifier (pid) files live; whether `Drive` or `recover.go` calls `Load` on a restart; after a crash, which of the spawn's rerun and the startup sweep skips a session whose `spawn` is still open, and whether the sweep records a dead session as `task.released` or `session.end` with reason `crash` | Owner decision on the architecture page; then 2.5, 3.5, 9.5 and 13.3 | [HLD Open decisions](hld.md#open-decisions), [2.1](#21-scope-and-concepts), [2.3](#23-data-model), [2.5](#25-behaviour), [2.6](#26-state-and-transitions), [2.7](#27-invariants-and-failures), [2.9](#29-proof-cases), [3.1](#31-scope-and-concepts), [3.2](#32-package-layout), [3.5](#35-behaviour), [3.7](#37-invariants-and-failures), [4.1](#41-scope-and-concepts), [4.2](#42-package-layout), [4.3](#43-data-model), [4.5](#45-behaviour), [5.6](#56-state), [5.7](#57-invariants-and-failures), [7.2](#72-package-layout), [7.5](#75-behaviour), [9.1](#91-scope-and-concepts), [9.2](#92-package-layout), [9.5](#95-behaviour), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures), [13.3](#133-data-model), [13.4](#134-interfaces), [14.1](#141-runtime-state), [15.2](#152-operations-runbook) |
 | <a id="g-224"></a>G-224 | Providers, limit handling | How provider limits are recorded and acted on: on which session halts `Router.RecordLimit` runs (7.4 says only when no link is left, 7.5 says on every halt so other repositories skip the link), and whether `WriteTimer` follows the same rule; which reset time `RecordLimit` stores in `quota.json` when `LimitError.ResetAt` is zero, since an `api_retry` line carries only a delay and `Select` skips a link only while its stored reset time is in the future; which component writes a timer record (the provider adapters in 13.3, the router through `Router.WriteTimer` in 7.2 and 7.4, or the group's engine in 7.5); which error `Router.Select` returns when some links are over a limit and others unavailable; the wait after the third refused `resume` (15, 30, then 60 minutes are listed); which signal is the rate-limit error that halves the session pool (a `LimitError`, a `system/api_retry` line with category `rate_limit`, or a repeated `limit.warn` event) and the cool-down that stops repeated signals halving it again. HTTP 429 retries never leave the client | Owner decision, phase 4; then 3.4, 3.5, 7.4, 7.5 and 13.3 | [1.8](#18-config), [3.4](#34-interfaces), [3.5](#35-behaviour), [3.6](#36-state), [3.7](#37-invariants-and-failures), [3.8](#38-config), [3.9](#39-proof-cases), [7.2](#72-package-layout), [7.3](#73-data-model), [7.4](#74-interfaces), [7.5](#75-behaviour), [7.8](#78-config), [13.3](#133-data-model), [13.4](#134-interfaces), [13.5](#135-behaviour) |
-| <a id="g-230"></a>G-230 | Engine, shutdown | Whether the group snapshot (`state.json`) is written before the group's leases are freed. Freeing the lease first lets another engine `Open` and `Load` the group while this process still writes its snapshot, so the group has two writers; the High-Level Design writes the snapshot first, and Engine Internals 3.5 frees the lease first. | Owner decision; then 3.5 | [HLD Open decisions](hld.md#open-decisions), [3.5](#35-behaviour), [3.7](#37-invariants-and-failures) |
-| <a id="g-231"></a>G-231 | CLI, Engine | Where a run's pinned settings are stored and what `resume` does when the hash of `config.json` differs from the hash pinned at the run's start. Only `config_hash` is stored and `Limits` are read from the configuration that hash pins, so no file holds the pinned values; after a crash restart or `resume`, a mid-run edit would be read back. | Owner decision; then 1.7, 2.3 and 3.3 | [HLD Open decisions](hld.md#open-decisions), [1.5](#15-behaviour), [1.7](#17-invariants-and-failures), [2.3](#23-data-model), [3.3](#33-data-model) |
 | <a id="g-237"></a>G-237 | Tools, Recovery | What a review does when a reviewer's or tester's `run` edits a tracked file: Tools, Guard and Sandbox 6.5 says the engine resets the file and fails that review, while Check, Review, Tester and Recovery has no failure row, verdict or bound for a review failed this way. | Owner decision; then 6.5 and 9.7 | [6.5](#65-behaviour), [6.7](#67-invariants-and-failures), [6.9](#69-proof-cases), [9.7](#97-invariants-and-failures) |
 | <a id="g-238"></a>G-238 | Limits, planning | A group's wall time, now that the planner sizes a group so a single builder can finish it within its own limits, 1 hour at most; the story-point scale and the most points one group may hold; how a group asks for its one 100% extension, who grants it and where the used extension is recorded; how the one builder session hands each finished task to the `commit` action without ending | Owner decision | [HLD 5.10](hld.md#510-check-review-tester-and-recovery), [1.8](#18-config), [2.6](#26-state-and-transitions), [9.5](#95-behaviour), [11.1](#111-scope-and-concepts) |
 | <a id="g-239"></a>G-239 | Backlog, Engine | The events a group raises when its task list is blocked or needs refinement, the backlog states they set, and the mechanical step in Verify or Ship that writes them to the backlog files | Owner decision | [11.5](#115-behaviour) |
@@ -13098,6 +13094,12 @@ A dependency means one component calls code in another, so the second must exist
 | AWS exponential backoff (waiting longer between retries) and jitter, https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter | Full-jitter formula |
 | Distributed leases with fencing tokens, https://hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens | Fence semantics |
 | Temporal retry policies, https://docs.temporal.io/encyclopedia/retry-policies | The rejected unlimited-retry default |
+| Temporal event history, https://docs.temporal.io/workflow-execution/event | A decision's commands saved in one write with the fact that caused them; replay rebuilds state; the event sequence is the identifier |
+| Temporal signals, https://docs.temporal.io/sending-messages | Commands reach a running group as durable messages recorded in its history, with accepted and refused outcomes |
+| Maildir delivery, https://cr.yp.to/proto/maildir.html | The inbox: a request written to a temp name and linked into place, never read half written |
+| LevelDB log format, https://github.com/google/leveldb/blob/main/doc/log_format.md | CRC-32C per record and dropping a torn tail on recovery |
+| Kafka consumer position, https://kafka.apache.org/documentation/#design_consumerposition | Each subscriber keeps its own bookmark and rereads from it after a failure |
+| Git lock files, https://github.com/git/git/blob/master/Documentation/technical/api-lockfile.txt | A create-only `<path>.lock` beside a shared file, then write and rename |
 | Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% coverage bar |
 | Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | EARS item grammar |
 | Aider repo map, https://github.com/pdavis68/RepoMapper | Repo map ranking |
