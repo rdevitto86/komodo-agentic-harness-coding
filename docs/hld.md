@@ -35,7 +35,7 @@ flowchart LR
 #### 1.2 Goals and Non-Goals
 
 Goals:
-- One Go binary that uses only the standard library and runs no server process.
+- One Go binary that uses only the standard library, plus one bundled tokenizer vocabulary, and runs no server process.
 - Stateless workers: one fresh model session per group for the builder, the reviewer and the tester, each with private tools inside a worktree, a guard and an operating-system sandbox.
 - One verb set for a person and for the orchestrator, a model chat session that receives one structured reply per verb.
 - Three model links (the Claude command-line tool, the Anthropic programming interface, OpenAI-compatible endpoints) on four platforms (macOS, Linux, Windows Subsystem for Linux 2, native Windows).
@@ -58,7 +58,7 @@ A constraint is a locked rule that the design cannot trade away. The owner set e
 
 | Constraint | Consequence |
 |---|---|
-| Go, standard library only | Nothing external to download or audit |
+| Go, standard library only; the one exception is the tokenizer vocabulary bundled for size checks | Nothing external to download at run time; the vocabulary is one audited data file |
 | No server process | Every verb is a short process; a periodic tick replaces a daemon |
 | One sandbox per operating system: Seatbelt, Bubblewrap, Docker | Docker is used on native Windows only |
 | Only the config verb writes configuration | Settings stay out of agent reach |
@@ -184,7 +184,7 @@ A workspace is a private git checkout where one group is built, and a lease is t
 
 #### 5.6 Sessions, Agents and Briefs
 
-A session is one fresh model conversation for one task, an agent is its role, and a brief is its prompt. The subsystem owns the supervisor (spawn, watch, nudge, stop, resume), the registry of seven agent roles and the brief builder. It talks to providers, tools, skills and the engine. [TODO: how tokens are counted for the brief size check ([G-48](lld.md#g-48))] Detail: [LLD chapter 5](lld.md#5-sessions-agents-and-briefs).
+A session is one fresh model conversation for one task, an agent is its role, and a brief is its prompt. The subsystem owns the supervisor (spawn, watch, nudge, stop, resume), the registry of seven agent roles and the brief builder. It talks to providers, tools, skills and the engine. Every size check before sending counts tokens with one tokenizer bundled in the binary; spending comes from the provider's reported usage. Detail: [LLD chapter 5](lld.md#5-sessions-agents-and-briefs).
 
 #### 5.7 Tools, Guard and Sandbox
 
@@ -192,7 +192,7 @@ A tool is a named action that a model may request. The subsystem owns a few type
 
 #### 5.8 Providers and HTTP
 
-A link is one way to reach a model provider, and an adapter starts, streams and resumes a session over it. The subsystem owns one adapter interface, each agent's chain of links with failover only when a provider is unavailable, unauthorized or over a limit (an endpoint below the context floor is skipped), the billing check, and the network client. [TODO: whether the brief builder or the provider router walks the chain ([G-69](lld.md#g-69))] Detail: [LLD chapter 7](lld.md#7-providers-and-http).
+A link is one way to reach a model provider, and an adapter starts, streams and resumes a session over it. The subsystem owns one adapter interface, each agent's chain of links with failover only when a provider is unavailable, unauthorized or over a limit (an endpoint below the context floor is skipped), the billing check, and the network client. The provider router walks the chain: the subscription link, then the paid programming interface when allowed, then the free backstop last. Detail: [LLD chapter 7](lld.md#7-providers-and-http).
 
 #### 5.9 Skills, Rules and Output
 
@@ -348,7 +348,7 @@ Each agent has a weight (heavy: planner, architect, reviewer; standard: builder,
 
 #### 8.3 Security
 
-Three fences hold every worker. The guard checks every tool call before it runs, names the allowed alternative in a refusal, and ends a session after repeated refusals. The sandbox confines every command, with the network off except loopback. The worktree and lease keep a session inside its own group. No agent holds forge credentials, a git write tool or a shell.
+Three fences hold every worker. The guard checks every tool call before it runs, names the allowed alternative in a refusal, and ends a session after repeated refusals. The sandbox confines every command, with the network off except loopback. The worktree and lease keep a session inside its own group. No agent holds forge credentials, a git write tool or a shell. On Claude Code, install also writes a hook that refuses the orchestrator's protected-branch and force-push commands, and deny rules for the human-only verbs.
 
 #### 8.4 Quality Gates
 
@@ -421,8 +421,6 @@ The owner builds phases 2 to 6 by hand in plain Claude Code sessions; from phase
 
 These 2 open items shape the architecture most; the Low-Level Design gap register holds the rest.
 
-- [TODO: the shape of an agent's provider chain ([G-69](lld.md#g-69))]
-- [TODO: how tool server events reach the engine ([G-42](lld.md#g-42))]
 
 ## 12. Glossary
 
