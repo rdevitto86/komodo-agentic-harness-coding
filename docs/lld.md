@@ -744,14 +744,14 @@ func (e *Effective) SessionWallMin(agent string) int
 // SessionIdleMin returns an agent's silence limit; the agent section beats the flat key.
 func (e *Effective) SessionIdleMin(agent string) int
 
-// Retries returns how many times a timed-out or idle session restarts. [TODO: whether retries count per session or per task (G-32)]
+// Retries returns how many fresh builder sessions a group gets after timeouts and idle stops.
 func (e *Effective) Retries(agent string) int
 
-// GroupWallMin returns the wall-time limit of a group. [TODO: which package owns the group wall and usage rules (G-32)] [TODO: the group's wall time (G-238)]
+// GroupWallMin returns the wall-time limit of a group; no other package works it out. [TODO: the group's wall time (G-238)]
 func (e *Effective) GroupWallMin() int
 ```
 
-Open decisions in this example: [G-32](#g-32), [G-238](#g-238).
+Open decisions in this example: [G-238](#g-238).
 
 ```go
 // internal/core/detect.go
@@ -1126,10 +1126,10 @@ The 34 flat keys: 25 here, and 9 provider keys in [Providers and HTTP](#78-confi
 | `limits.pool_max` | int | 6 | 16 | The most builder, reviewer and tester sessions at once across all repos; further ready groups queue. |
 | `limits.group_wall_min` | int | [TODO: the group's wall time ([G-238](#g-238))] | The default plus one 100% extension | Wall-clock minutes per group, excluding paused time. The planner sizes a group so a single builder can finish it within its own limits, 1 hour at most; the group may ask once for 100% more. |
 | `limits.group_tokens` | int | 2,000,000 | 10,000,000 | Tokens per group: input, output and cache writes; cache reads are reported only. A runaway-loop bound used only when `track.usage` is on; reaching the cap blocks the group with `budget`. |
-| `limits.task_attempts` | int | 6 | 10 | Attempts per task; reaching the cap blocks the group with `attempts`. [TODO: what one attempt counts: every model attempt, only `task.retry` lines, or every restart ([G-32](#g-32))] |
+| `limits.group_attempts` | int | 6 | 10 | Attempts per group; reaching the cap blocks the group with `attempts`. One attempt is one fresh builder session for the group, whatever ended it, including a timeout, an idle stop or a crash; re-prompts inside a session do not count. |
 | `limits.session_wall_min` | int | 60 | 120 | Wall time per session, with the clock stopped while paused. A warning comes at 80% and the session stops at the cap. A builder session builds the whole group, so its wall limit is the group's budget, `limits.group_wall_min`, with the group's one 100% extension on top. |
 | `limits.session_idle_min` | int | 10 | 30 | Minutes of silence, with no stream line and no running tool, before the engine nudges. After the nudge and a 5-minute grace the session stops as `idle`; a session gets one nudge, so a second silence stops it as `idle`. |
-| `limits.returns` | int | 3 | 5 | Returns from Check or Verify to Build before the group blocks; each return is one more builder pass with the findings. |
+| `limits.returns` | int | 3 | 5 | Returns from Check or Verify to Build before the group blocks; each return is one more builder pass with the findings. The epic gate counts its own rounds against the same limit. |
 | `guard.refusal_limit` | int | 3 | 5 | Refusals under one guard rule before the session ends. The only tunable security value. |
 | `check.coverage` | int | 80 | 100 | Percent of the repository's lines tests must cover, in every language. Check fails a group that leaves coverage under the floor. [TODO: how coverage is measured in each language, and what Check does when coverage is already under the floor at the base commit ([G-169](#g-169))] |
 | `sandbox.network` | enum | `deny` | none | Network access for commands of the run class (build, test, lint, format); loopback is always allowed. Intake's `setup` runs with network on regardless. [TODO: the values besides `deny` ([G-49](#g-49))] |
@@ -1154,7 +1154,7 @@ The 34 flat keys: 25 here, and 9 provider keys in [Providers and HTTP](#78-confi
 | `model` | The agent's weight: `opus`, `sonnet` or `haiku` | A probed model | The model the agent starts on. `opus` is the latest in the line and `opus-prev` the prior; `<endpoint>:<model>` names an open-source model on a configured endpoint; Komodo never runs a Fable model. `model` beats `mode`, and the chain still ends in the free backstop [TODO: the shape of an agent's provider chain ([G-69](#g-69))]. |
 | `session_wall_min` | `limits.session_wall_min` | 120 | Wall-clock limit for this agent's sessions; beats the flat key |
 | `session_idle_min` | `limits.session_idle_min` | 30 | Silence limit before a nudge for this agent; beats the flat key |
-| `retries` | 2 | 3 | Restarts of a session that timed out or went idle [TODO: whether retries count per session or per task ([G-32](#g-32))], within `limits.task_attempts` |
+| `retries` | 2 | 3 | Restarts after a timeout or idle stop, counted per group and never reset while the group is open, within `limits.group_attempts` |
 
 **Provider and endpoint keys.** The 9 flat keys that configure providers, link sessions, pauses and warnings, and the endpoint section `endpoints.<name>` with its keys `url`, `models`, `ctx`, `key`, `self_hosted` and `first_byte_s`, are owned by [Providers and HTTP](#78-config).
 
@@ -1214,7 +1214,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-74](#g-74) | Locking for concurrent writers of the config files | Yes |
 | [G-121](#g-121) | Validate details: the closest-match rule, an unknown agent name, running outside a repo, guard exemptions and the Windows terminal check | Yes |
 | [G-122](#g-122) | Config values and placement: the turn-end headings, the `CapacityProfile` package and effort mapping and two-marker commands | Yes |
-| [G-32](#g-32) | Whether retries count per session or per task; Which package owns the group wall and usage rules | Yes |
 | [G-69](#g-69) | The shape of an agent's provider chain | Yes |
 | [G-231](#g-231) | Where the pinned run settings are stored and what resume does on a hash mismatch | Yes |
 | [G-130](#g-130) | The one signature of the renderer | Yes |
@@ -1380,7 +1379,7 @@ The catalog is a fixed Go enumeration in 8 families, registered with the state m
 | `run.stopped` | Shutdown | A signal or `stop <run>`, after agents stop, work is committed as work in progress and leases are freed; wakes `status --wait` |
 | `group.paused` | Engine | A provider limit left no allowed link; `status` shows the link and the resume time |
 | `group.blocked` | Engine | A bound ran out or a decision is needed, with a [block reason](#block-reasons) |
-| `group.shipped` | Engine (`Next()` follow-on) | Merge clean, Check passed on the epic tip, landing succeeded; ends the group |
+| `group.shipped` | Engine (`Next()` follow-on) | Merge clean, Check passed on the epic tip, landing succeeded; records the files the landing changed; ends the group |
 | `lease.lost` | Workspace | Another run took the group; `Next()` stops the group in this run. A save refused by the fence check, or a higher number in the fence file before a push, shows that another run took the group ([4.5](#45-behaviour)). |
 | `stage.enter` | Engine | A group enters a stage; the epoch rises; a snapshot is written; wakes `status --wait any` |
 | `stage.exit` | Engine (`Next()` follow-on) | Intake's or Verify's gate is met ([State and Transitions](#26-state-and-transitions)) |
@@ -1391,7 +1390,7 @@ The catalog is a fixed Go enumeration in 8 families, registered with the state m
 | `task.claimed` | Supervisor | With `session.start`; the task moves from queued to claimed in the lock table |
 | `task.released` | Supervisor, recovery | With `session.end`. [TODO: which event the startup sweep records for a dead session, `task.released` or `session.end`, each with reason `crash` ([G-217](#g-217))] |
 | `task.done` | Engine (`Next()` follow-on) | The `commit` action ran `done_when` with exit 0 and the result is on the hidden ref |
-| `task.retry` | Engine | Another attempt after a schema-invalid result, a failed gate, a cut-off reply, `guard.refusal_limit` refusals under one rule or a failed `done_when`; counts toward `limits.task_attempts` |
+| `task.retry` | Engine | Another attempt after a schema-invalid result, a failed gate, a cut-off reply, `guard.refusal_limit` refusals under one rule or a failed `done_when`; the fresh session it orders counts toward `limits.group_attempts` |
 | `check.done` | Check [TODO: who emits `check.done` ([G-167](#g-167))] | Pass or fail after the zero-token checks |
 | `finding.submit` | Tools | A reviewer's `submit_finding` passed validation: a known rule identifier [TODO: whether a standards rule identifier is accepted ([G-126](#g-126))], a `file:line` and a quoted evidence line |
 | `finding.verified` | Review | Go found the quoted evidence at that line in the head or the diff; unverified findings are dropped and logged [TODO: which component checks that the quote is at its line: the tool or the evidence check ([G-159](#g-159))] |
@@ -1476,15 +1475,16 @@ type State struct {
 	FailureHash string             `json:"failure_hash"` // fingerprint of the failure behind the last return
 	Blocks      map[string]int     `json:"blocks"`       // blocks per reason, or per counter for an unnamed block
 	WallUsedS   int64              `json:"wall_used_s"`  // seconds worked, excluding Paused and Blocked
+	LastEventAt time.Time          `json:"last_event_at"` // timestamp of the previous applied event, for WallUsedS
+	Attempts    int                `json:"attempts"`     // fresh builder sessions for the group, against limits.group_attempts
+	Retries     int                `json:"retries"`      // builder restarts after a timeout or idle stop, against the agent's retries
 	TokensUsed  int64              `json:"tokens_used"`  // with track.usage on, against limits.group_tokens
 }
 
-// TaskState is one task's claim and attempt counts.
+// TaskState is one task's claim.
 type TaskState struct {
 	ID       string   `json:"id"`
 	State    string   `json:"state"`    // queued, claimed or done
-	Attempts int      `json:"attempts"` // counted against limits.task_attempts [TODO: what one attempt counts (G-32)]
-	Retries  int      `json:"retries"`  // timeouts and idle stops, against the agent's retries
 	Session  state.ID `json:"session,omitempty"`
 }
 
@@ -1515,24 +1515,24 @@ type VerifyProgress struct {
 
 // Limits are the bounds Next enforces, read from the effective config pinned by ConfigHash. [TODO: where the pinned settings are stored (G-231)]
 type Limits struct {
-	Returns      int // limits.returns
-	TaskAttempts int // limits.task_attempts
-	PauseMaxMin  int // limits.pause_max_min
-	GroupTokens  int // limits.group_tokens; 0 when track.usage is off
-	GroupWallMin int // limits.group_wall_min
-	Retries      int // the task's agent's retries [TODO: how agent.json limits and agents.<name> keys combine (G-112)]
+	Returns       int // limits.returns
+	GroupAttempts int // limits.group_attempts
+	PauseMaxMin   int // limits.pause_max_min
+	GroupTokens   int // limits.group_tokens; 0 when track.usage is off
+	GroupWallMin  int // limits.group_wall_min
+	Retries       int // the builder agent's retries [TODO: how agent.json limits and agents.<name> keys combine (G-112)]
 }
 ```
 
-Open decisions in this example: [G-231](#g-231), [G-32](#g-32), [G-207](#g-207), [G-112](#g-112).
+Open decisions in this example: [G-231](#g-231), [G-207](#g-207), [G-112](#g-112).
 
 **Rules for the fields.**
 - **Never nil:** slices and maps in `State` are set empty by the constructor and by `Load`, so they marshal as `[]` and `{}`.
 - **`Verify`:** records the reviewer's result, the tester's result (each pass, fail or cancelled) and the verified blocking findings of the current Verify epoch. Entering Verify clears it.
 - **`Blocks`:** keyed by the block reason, or by the counter an unnamed block names (`retries`, `returns`, `flap`, `job`), so two unnamed blocks of different kinds never share one count.
-- **`WallUsedS`:** grows by the gap between an event's `timestamp` and the previous applied event's while the group was in a working stage. [TODO: where `Next()` keeps the previous event's time, since `State` has no field for it ([G-32](#g-32))]
-- **Crash safety of the counters:** [TODO: whether the snapshot stores `Prior`, `Returns`, `Verify`, `FailureHash`, `Blocks`, `WallUsedS`, `TokensUsed` and each task's `Retries`, or a crash resets them ([G-32](#g-32))]
-- **Counter owners:** [TODO: whether `retries` counts per session or per task, and which counter a failing `done_when` counts against ([G-32](#g-32))]
+- **`WallUsedS`:** grows by the gap between an event's `timestamp` and `LastEventAt`, the previous applied event's, while the group was in a working stage.
+- **Crash safety of the counters:** the snapshot holds every field of `State`, so a crash resets no counter ([Group snapshot](#group-snapshot)).
+- **Counter owners:** only `Next()` changes a counter, using the rules in `internal/engine/limits.go`; `Attempts` counts fresh builder sessions for the group, and `Retries` counts that builder's timeouts and idle stops and never resets while the group is open. Which counter a failing `done_when` uses is in [Check, Review, Tester and Recovery](#97-invariants-and-failures).
 - **Failure fingerprint:** a hash of the sorted list of failing items: for Check, each failing step with the test, file or secret it names; for Verify, each verified blocking finding's rule and file, and each failed tester item. Line numbers, timings and message text are left out, so a rerun of the same failure gives the same fingerprint; a failure that changes any item, such as one test fixed and another broken, gives a new one and earns another return.
 - **Formats:** [TODO: the task identifier format, the `config_hash` format and the failure fingerprint's hash and encoding ([G-198](#g-198))]
 
@@ -1549,7 +1549,7 @@ Open decisions in this example: [G-231](#g-231), [G-32](#g-32), [G-207](#g-207),
   "sequence": 50,
   "config_hash": "[TODO: config_hash format (G-198)]",
   "tasks": [
-    {"id": "[TODO: task identifier format (G-198)]", "state": "claimed", "attempts": 1, "retries": 0, "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47"}
+    {"id": "[TODO: task identifier format (G-198)]", "state": "claimed", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47"}
   ],
   "actions_open": [],
   "resume": {"session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "handle": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "link": "claude-cli"},
@@ -1560,7 +1560,9 @@ Open decisions in this example: [G-231](#g-231), [G-32](#g-32), [G-207](#g-207),
   "failure_hash": "[TODO: failure fingerprint format (G-198)]",
   "blocks": {},
   "wall_used_s": 2460,
-  "tokens_used": 0
+  "tokens_used": 0,
+  "attempts": 1,
+  "retries": 0
 }
 ```
 
@@ -1728,7 +1730,7 @@ sequenceDiagram
 
 **After a crash.** The startup sweep releases each session that `State` shows claimed, with no `session.end` on disk and whose process is dead. [TODO: which event the startup sweep records for a dead session, `task.released` or `session.end`, each with reason `crash` ([G-217](#g-217))] A session whose `spawn` is still in `ActionsOpen` is also restarted by that spawn's rerun. [TODO: whether the sweep skips a session whose spawn is still open, or the rerun skips it, so the session restarts once ([G-217](#g-217))]
 
-**Files.** `runs/<group-id>/events.jsonl` holds one group's events and `runs/<run>.jsonl` holds one run's `run.*` events, appended and read through the same group state calls with no snapshot. Groups never read each other's files; groups meet only in the work queue and the session pool.
+**Files.** `runs/<group-id>/events.jsonl` holds one group's events and `runs/<run>.jsonl` holds one run's `run.*` events, appended and read through the same group state calls with no snapshot. The epic gate has a record and event log of its own, shaped like a group's, that runs only the whole-epic review and the epic pull request; it reuses the `session.*`, `finding.*`, `group.paused` and `group.blocked` events, so a crash resumes the gate and a provider limit pauses it. [TODO: the epic gate's record identifier and file names ([G-37](#g-37))] Groups never read each other's files; groups meet only in the work queue and the session pool.
 
 **Concurrency.**
 - **One writer per file:** a group's `Drive` goroutine is the only writer of the group's events and snapshot; the run goroutine is the only writer of `run.*` events.
@@ -1766,6 +1768,7 @@ stateDiagram-v2
   Paused --> Build: 11 timer.due
   Paused --> Verify: 11 timer.due
   Paused --> Blocked: 12 pause timeout
+  Done --> Build: 19 epic gate finding
   Done --> [*]
 ```
 
@@ -1774,7 +1777,7 @@ stateDiagram-v2
 **The table is code, except rows tagged TODO, which are open decisions.** Both tables below are one Go slice of `Transition`, whose `From`, `On` and `To` fields are the From, Event and To columns. For each event, `Next()` applies the first matching in-stage row, then the first matching stage-move row against the updated state; either may be absent. An event that matches neither is refused and logged, never dropped. The build draws the diagram from the slice and the gate checks every registered `Spec` against it.
 
 **What a stage move emits.**
-- **Into a working stage from a working stage or from Blocked:** `stage.enter` for the new stage, which raises the epoch.
+- **Into a working stage from a working stage, from Blocked or from Done (row 19):** `stage.enter` for the new stage, which raises the epoch.
 - **Out of Paused (rows 11 and 16):** no `stage.enter`; the group returns to `Prior` under the same epoch.
 - **Into Paused, Blocked or Done:** `group.paused`, `group.blocked`, or nothing extra; rows 9 and 17 list their own follow-ons.
 - **`Prior`:** set only when a group leaves a working stage, so a group that blocks from Paused keeps the stage it paused in.
@@ -1799,6 +1802,7 @@ stateDiagram-v2
 | 16 | Paused | `resume` command | Sooner than the timer | `ToPrior` | As row 11 |
 | 17 | Any working stage, Paused, Blocked | `abandon` command | | Done | orders `cancel` for every live session; frees the lease; emits `lock.released`; dependent groups block `dependency` |
 | 18 | Any working stage, Paused, Blocked | `lease.lost` | Another run took the group | Done | ended in this run; orders `cancel` for every live session; frees nothing and emits no `lock.released`, because the lease and the task-list lock belong to the other run |
+| 19 | Done | [TODO: the event that carries an epic gate finding into the group's log ([G-37](#g-37))] | The finding names a file this group changed last | Build | Cuts a fresh worktree from the epic branch tip with the findings in the brief and takes a new lease; emits `stage.enter`; the group lands again like any group |
 
 - **Commands:** [TODO: the event type names of `resume`, `scope approve`, `scope deny` and `abandon`, and how each reaches `Drive`; they are outside the 34 ([G-29](#g-29))]
 - **Returns** raise the epoch through `stage.enter` and give the builder every verified finding in one return. On a Verify return the tester is cancelled at the first verified blocking finding, and the reviewer finishes.
@@ -1814,8 +1818,8 @@ Row 14 is one row per bound or blocking exit. Each row's event is the one that s
 | `check.done` fail | Check | `Returns` at `limits.returns` | `regression` when a test that passed at the base fails; otherwise unnamed, counter `returns` |
 | `session.end` that would apply row 6 | Verify | `Returns` at `limits.returns` | `regression` when a test that passed at the base fails; otherwise unnamed, counter `returns` |
 | `check.done` fail, or a row 6 `session.end` | Check, Verify | Fingerprint equals `FailureHash` | Unnamed, counter `flap` |
-| `task.retry` | Build | The task's `Attempts` reaches `limits.task_attempts` | `attempts` |
-| Builder `session.end` reason `timeout` or `idle` | Build | The task's `Retries` passes the agent's `retries` | Unnamed, counter `retries` |
+| `task.retry`, a builder `session.end` reason `timeout` or `idle`, or a builder session found dead | Build | `Attempts` is at `limits.group_attempts`, so no fresh builder session may start | `attempts` |
+| Builder `session.end` reason `timeout` or `idle` | Build | `Retries` passes the agent's `retries` | Unnamed, counter `retries` |
 | Any builder `session.end` | Build | `TokensUsed` reaches `limits.group_tokens` with `track.usage` on; this row wins over the exit reason's row | `budget` |
 | Builder `session.end` reason `budget` | Build | | `budget` |
 | Builder `session.end` reason `billing` | Build | | `paid_refused` |
@@ -1831,7 +1835,7 @@ Row 14 is one row per bound or blocking exit. Each row's event is the one that s
 | Reviewer or tester `session.end` without a result, or found dead by the startup sweep | Verify, and Paused with `Prior` = Verify | The session's restarts passed the agent's `retries` | Unnamed, counter `retries` |
 | `check.done` fail on the epic tip | Ship | `Returns` at `limits.returns` | `integration` |
 | `group.blocked` reason `crash`, emitted by the panic-catching helper | Any working stage, Paused | The group's `Drive` panicked | `crash` |
-| Any event in a working stage | Any working stage | `WallUsedS` reaches `limits.group_wall_min` | [TODO: the block reason for a spent group wall clock ([G-32](#g-32))] |
+| Any event in a working stage | Any working stage | `WallUsedS` reaches `limits.group_wall_min` | `wall` |
 
 **In-stage rows.** These change `State`, order actions or emit follow-ons without moving the stage.
 
@@ -1840,14 +1844,14 @@ Row 14 is one row per bound or blocking exit. Each row's event is the one that s
 | `stage.enter` | Any working stage | `Epoch` + 1; entering Verify clears `Verify`; orders by stage: Intake `setup`; Build `spawn` for the first task that is not done and has no live session, from `Resume` when set, with the findings on a return; Check one `check` per command; Verify `spawn` for the reviewer and the tester; Ship the merge of the epic branch into the group branch, then Check on the merged branch, then `land` |
 | `lock.taken` | Intake | Lock recorded |
 | `action.done` for `setup` | Intake | Exit 0 with the lock taken emits `stage.exit` |
-| `session.start`, `task.claimed` | Build, Verify | Task `claimed` with its session; a Verify session recorded in `Verify` |
+| `session.start`, `task.claimed` | Build, Verify | Task `claimed` with its session; a fresh builder session, not one resumed from `Resume`, adds 1 to `Attempts`; a Verify session recorded in `Verify` |
 | Builder `session.end` | Build | Clears the task's session; `TokensUsed` grows by the session's usage when `track.usage` is on; then the exit reason's row below |
 | `task.released` | Any | Clears the task's session when the task is not done; a done task stays done |
-| A builder session found dead by the startup sweep | Build | Task `queued`; orders `wip_commit`, then `spawn` for the task. [TODO: whether a crash counts against the task's `Retries`, and whether repeated crashes block the group ([G-32](#g-32))] |
+| A builder session found dead by the startup sweep | Build | Task `queued`; orders `wip_commit`, then `spawn` for the task. The dead session used one of the group's attempts like any ended session; `Retries` is unchanged. |
 | A reviewer or tester session found dead by the startup sweep | Verify, Paused | As a session ending without a result, below |
 | `action.done` for `commit` | Build | The commit action ran `done_when` first; exit 0 emits `task.done`, a failure emits `task.retry` |
 | `task.done`, not the last task | Build | Task `done`; the same builder session goes on to the next task [TODO: how the builder session hands each finished task to the `commit` action without ending ([G-238](#g-238))] |
-| `task.retry` | Build | Task `Attempts` + 1; orders `spawn` while `Attempts` is under `limits.task_attempts` [TODO: what one attempt counts ([G-32](#g-32))] |
+| `task.retry` | Build | orders a fresh builder `spawn` while `Attempts` is under `limits.group_attempts`; that session adds the attempt |
 | `finding.submit` | Verify, and Paused with `Prior` = Verify | Claim recorded in `Verify` |
 | `finding.verified` | Verify, and Paused with `Prior` = Verify | Verified finding recorded; the first blocking one orders `cancel` for a live tester |
 | Reviewer or tester `session.end` reason `done` | Verify, and Paused with `Prior` = Verify | Result recorded as pass or fail; in Verify with both passed and 0 regressions, emits `stage.exit`; a failure moves the group by row 6 once the reviewer has ended |
@@ -1870,7 +1874,7 @@ Row 14 is one row per bound or blocking exit. Each row's event is the one that s
 |---|---|
 | `done` | orders `commit` |
 | `check_fail`, `no_result`, `schema_fail`, `refusals` | orders `wip_commit`; emits `task.retry` |
-| `timeout`, `idle` | orders `wip_commit`; task `Retries` + 1; orders `spawn` for a fresh session while `Retries` is within the agent's `retries` |
+| `timeout`, `idle` | orders `wip_commit`; `Retries` + 1; orders `spawn` for a fresh session while `Retries` is within the agent's `retries` |
 | `provider` | orders `wip_commit`; `Resume` set; orders `spawn` from `Resume` on the next allowed link |
 | `paused` | orders `wip_commit`; `Resume` set; row 10 moves the group |
 | `needs_scope`, `budget`, `billing` | orders `wip_commit`; the [block rows](#block-rows) move the group |
@@ -1895,16 +1899,17 @@ A fixed enumeration on `group.blocked`, named in `status`. A group that blocks [
 | `pause_timeout` | Paused for `limits.pause_max_min`; the session was cancelled | Waits for the provider |
 | `paid_refused` | The billing check found only a paid link, or a subscription link with the wrong login, and `providers.paid` forbids it; killed before the first turn | Changes `providers.paid` or the login |
 | `regression` | A test that passed at the base fails, and returns are spent | Reviews the failing output |
-| `epic_gate` | The final pass over the whole epic found a problem with no file to send back; set on the epic gate's own record, not by a group block row | Decides |
+| `epic_gate` | The final pass over the whole epic found a problem with no file to send back, or its rounds reached `limits.returns`; set on the epic gate's own record, not by a group block row | Decides |
 | `tester` | The tester failed an item twice that Go's reruns pass; a harness fault, not the builder's | Checks the item |
 | `flaky` | Go's two reruns of one item disagreed | Fixes the test |
 | `dependency` | A dependency was abandoned | Re-plans or reruns it |
 | `integration` | Check failed on the epic tip after landing and the group's returns are spent; landings stay shut until a Check on the tip passes | Reviews the integration failure |
 | `needs_scope` | The builder needs a file outside `files`; work in progress kept; the orchestrator answers after 2 engine denials (owner decision, 2026-10-09) | Runs `scope approve|deny` |
-| `attempts` | A task used all `limits.task_attempts` | Looks at why it keeps failing |
+| `attempts` | The group's builder used all `limits.group_attempts` fresh sessions | Looks at why it keeps failing |
 | `context` | The brief exceeds half the context of every link in the chain. [TODO: the block row that produces this reason ([G-31](#g-31))] | Shrinks the task or adds a larger endpoint |
 | `merge_conflict` | Landing conflicted and the one automatic merge did not resolve it | Resolves the conflict |
 | `budget` | With `track.usage` on, the group used `limits.group_tokens`; never occurs with tracking off | Raises the cap or splits the group |
+| `wall` | The group's working time reached `limits.group_wall_min`; paused and blocked time excluded | Splits the group or approves more time |
 | `crash` | The group's `Drive` panicked; other groups kept running | Runs `resume`, which replays through `Load` |
 | `lint` | The planner's draft failed backlog lint 3 times, or the group's backlog entry failed lint at Intake | Fixes it with `doctor backlog` |
 | `setup` | The setup command or the worktree cut failed at Intake; `status` shows the output; no model session started | Fixes the command or the checkout |
@@ -1932,7 +1937,7 @@ Every row ends with `resume` unless the last column says otherwise.
 
 ### 2.8 Config
 
-**Keys read into `Limits`:** `limits.returns`, `limits.task_attempts`, `limits.pause_max_min`, `limits.group_tokens`, `limits.group_wall_min`, `track.usage` ([Flat keys (1.8 Config)](#18-config)), plus each agent's `retries` from its `agent.json` [TODO: how `agent.json` limits and `agents.<name>` keys combine ([G-112](#g-112))].
+**Keys read into `Limits`:** `limits.returns`, `limits.group_attempts`, `limits.pause_max_min`, `limits.group_tokens`, `limits.group_wall_min`, `track.usage` ([Flat keys (1.8 Config)](#18-config)), plus each agent's `retries` from its `agent.json` [TODO: how `agent.json` limits and `agents.<name>` keys combine ([G-112](#g-112))].
 
 | Constant | Value |
 |---|---|
@@ -1944,7 +1949,7 @@ Every row ends with `resume` unless the last column says otherwise.
 
 ### 2.9 Proof Cases
 
-Each case is a table test on `Next()` or a recovery test on `Load`. Fixture limits are `limits.returns` 2, `limits.task_attempts` 2 and agent `retries` 1, so every bound is reached.
+Each case is a table test on `Next()` or a recovery test on `Load`. Fixture limits are `limits.returns` 2, `limits.group_attempts` 2 and agent `retries` 1, so every bound is reached.
 
 | Fixture input | Expected result |
 |---|---|
@@ -1985,7 +1990,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-29](#g-29) | Envelope `id`, `class`, `cause`, `corr`; command type names and how they reach `Drive`; one disk write per event and follow-ons; Whether the engine loop waits for subscribers after delivering an event; How a `timer.due` from outside `Drive` reaches a group's state file | Yes |
 | [G-31](#g-31) | Block rows for `context`, `contract` and `state_invalid`; the event carrying Intake's lint and worktree-cut results; a failed Check before landing in Ship | Yes |
 | [G-182](#g-182) | The checksum algorithm | Yes |
-| [G-32](#g-32) | Counter owners: `retries` per session or per task, `done_when` failures, crash counting; The block reason for a spent group wall clock; Whether the snapshot holds the loop counters; where the previous event time for `WallUsedS` lives | Yes |
+| [G-37](#g-37) | The epic gate's record identifier and file names; the event that carries a gate finding into a Done group's log | Yes |
 | [G-217](#g-217) | The startup sweep against an open spawn's rerun; Which component owns the action record; Whether `Drive` or `recover.go` calls `Load` | Yes |
 | [G-207](#g-207) | The `VerifyProgress` fields | Yes |
 | [G-38](#g-38) | How a slot is held and freed | Yes |
@@ -2300,7 +2305,7 @@ sequenceDiagram
 5. A lands, alone, and Check runs on the epic tip with zero model tokens. The tip passes.
 6. The run goroutine sees that B's dependency has landed and the tip's Check passed, and creates the queue file for B. The engine takes it the same way as A's.
 7. B lands and the tip's Check passes.
-8. After the last landing the reviewer and the tester run once over the whole epic diff. [TODO: `epic gate events and the epic pull request step` ([G-37](#g-37))]
+8. After the last landing the reviewer and the tester run once over the whole epic diff; the epic gate and the epic pull request are described under After the last landing below.
 9. A person merges only the epic pull request.
 
 #### Algorithms
@@ -2479,9 +2484,10 @@ flowchart TB
 ```
 
 1. After the last landing, the reviewer and the tester each run once over the whole epic diff.
-2. A finding goes to the group that last changed its file; that group returns to Build.
-3. A finding with no file blocks the whole epic with reason `epic_gate`. A person then merges only the epic pull request.
-4. [TODO: `how epic gate sessions and findings are recorded as events, how a landed group re-enters Build, which counter bounds the returns, how the group that last changed a file is found, and when the epic pull request is opened` ([G-37](#g-37))]
+2. A finding goes to the group that last changed its file: the gate reads the epic's `group.shipped` events newest first and picks the first whose changed files include it. That group returns from Done to Build in a fresh worktree cut from the epic branch tip, with the findings in its brief ([State and Transitions](#26-state-and-transitions), row 19), takes a new lease and lands again.
+3. A finding with no file blocks the whole epic with reason `epic_gate`, and a blocked epic opens no pull request. A person reads the finding in `status`, fixes it by hand and runs `resume`.
+4. The gate records its sessions and findings in its own record ([Event Spine and State Machine](#25-behaviour)) and counts its rounds there, bounded by `limits.returns`. One round may send several groups back; when one more round would start, the epic blocks `epic_gate`. Each returned group still spends its own returns on Check and Verify failures during the fix.
+5. The epic pull request opens once, after a gate round with no blocking finding. A person then merges only the epic pull request.
 
 **Shutdown and the parent guard**
 
@@ -2596,7 +2602,7 @@ stateDiagram-v2
 | `limits.link_sessions.<link>` | integer | set in [7.8](#78-config) | Most concurrent sessions on one link across all repositories |
 | `sandbox.max_mem_gb` | integer | set in [1.8](#18-config) | Read here: the pool grows only while free memory covers one more of it |
 | `warn.quota_pct` | integer | set in [7.8](#78-config) | Read here: a provider window past this percent halves the pool [TODO: which signal halves the session pool ([G-224](#g-224))] |
-| `limits.returns` | integer | set in [1.8](#18-config) | Read here: returns to Build after an integration break; counter ownership is [TODO: `which component owns the returns counter` ([G-32](#g-32))] |
+| `limits.returns` | integer | set in [1.8](#18-config) | Read here: returns to Build after an integration break, and the epic gate's rounds; `Next()` owns the counter |
 
 `--stage` is the only flag of `komodo run`; its form is `--stage <stage>`.
 
@@ -2629,13 +2635,11 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-201](#g-201) | Run goroutine file, exported function names, outside-run dependency status; Queue and slot file layout, timestamp format, repository identifier to file name, forward-version handling | Yes |
 | [G-36](#g-36) | The landing gate file's name and body | Yes |
 | [G-186](#g-186) | Landing by runs on other machines | Yes |
-| [G-37](#g-37) | Epic gate events, returns, file-to-group lookup, epic pull request | Yes |
 | [G-39](#g-39) | Parent guard entry point, heartbeat, process identifier file location | Yes |
 | [G-40](#g-40) | Drive action failure, lease renewal refusal, pause start time; The collaborators of `Drive`, and the lease renewal call | Yes |
 | [G-41](#g-41) | Chain weight, unblocked count and backlog order key | Yes |
 | [G-04](#g-04) | Whether `OLLAMA_NUM_PARALLEL` above 1 lets `local` exceed 1 session | No |
 | [G-148](#g-148) | The queue item id of a job | No |
-| [G-32](#g-32) | Which component owns the returns counter | Yes |
 | [G-224](#g-224) | Which signal halves the session pool; Which signal halves the pool, and the cool-down | Yes |
 | [G-230](#g-230) | Whether the snapshot is written before the leases are freed | Yes |
 | [G-217](#g-217) | Whether `Drive` or `recover.go` calls `Load`; Which component owns the startup sweep; Which package claims link slots; Owners of the startup sweep and of the session pool slots | Yes |
@@ -3917,7 +3921,7 @@ stateDiagram-v2
 | Ended | Reason `paused` | Alive (resumed) | The provider's handle is tried first |
 | Ended | Reason `timeout` or `idle` | Alive (fresh session) | A new session for the task, up to the agent's `retries` |
 
-After `Ended`, `Next()` decides the group's move from the exit reason ([Event Spine and State Machine](#26-state-and-transitions)). [TODO: which component counts a timeout or idle stop against the agent's `retries` ([G-32](#g-32))]
+After `Ended`, `Next()` decides the group's move from the exit reason ([Event Spine and State Machine](#26-state-and-transitions)). `Next()` counts a builder's timeout or idle stop against the group's `Retries`; the supervisor only reports the exit reason.
 
 #### Exit reasons
 
@@ -3986,13 +3990,13 @@ The pause cap, an early `resume` before the provider reset and a planted `CLAUDE
 |---|---|---|---|
 | `limits.session_wall_min` | int | set in [1.8](#18-config) | Most minutes one session runs; warning at 80% |
 | `limits.session_idle_min` | int | set in [1.8](#18-config) | Minutes of silence before the nudge; a 5-minute grace follows |
-| `limits.task_attempts` | int | set in [1.8](#18-config) | Attempts per task [TODO: what one attempt counts ([G-32](#g-32))] |
+| `limits.group_attempts` | int | set in [1.8](#18-config) | Attempts per group; one attempt is one fresh builder session for the group |
 | `limits.pause_max_min` | int | set in [7.8](#78-config) | Read here: longest a session stays paused |
 | `limits.group_tokens` | int | set in [1.8](#18-config) | Token cap; applies only when `track.usage` is on |
 | `agents.<name>.model` | string | The weight's model | Where the agent's chain starts; the chain itself is fixed |
 | `agents.<name>.session_wall_min` | int | set in [1.8](#18-config) | Beats the flat key for this agent |
 | `agents.<name>.session_idle_min` | int | set in [1.8](#18-config) | Beats the flat key for this agent |
-| `agents.<name>.retries` | int | set in [1.8](#18-config) | Fresh sessions after a timeout or idle stop, inside `limits.task_attempts` |
+| `agents.<name>.retries` | int | set in [1.8](#18-config) | Fresh sessions after a timeout or idle stop, inside `limits.group_attempts` |
 
 `komodo config` refuses a value above a hard limit. The chain is fixed in `agent.json`, never in config; `komodo config agent <name>` may change the model and the limits only. In the command, the per-agent keys are written `session_wall_min` and `session_idle_min`, without the `limits.` prefix. The keys are defined in [CLI and Configuration](#18-config), except `limits.pause_max_min`, which is defined in [Providers and HTTP](#78-config); `komodo config agent` is the verb group that sets the per-agent keys. This command stores the section below in `~/.komodo/config.json`:
 
@@ -4070,7 +4074,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-112](#g-112) | How `agent.json` `limits`, the flat keys and `agents.<name>` combine | Yes |
 | [G-69](#g-69) | Who walks the chain when a brief is over the ceiling; The shape of an agent's provider chain | Yes |
 | [G-198](#g-198) | The data of the `session.*` events | Yes |
-| [G-32](#g-32) | Which component counts a timeout or idle stop against `retries` | Yes |
 | [G-217](#g-217) | The owner of the session pool slots; Which event the sweep records for a dead session; Which component owns the startup sweep | Yes |
 | [G-107](#g-107) | What `brief.md`, `system.md` and `mcp.json` hold | Yes |
 | [G-109](#g-109) | When the engine runs the architect, the researcher and the scout | No |
@@ -6279,7 +6282,7 @@ const (
 | `cancelled` | Session, run | Stopped on purpose; also a session exit reason |
 | `paused` | Session | Halted by a provider limit with a resume handle; resumes on a ledger timer, not by a person |
 | `integration` | Engine | Check failed on the epic tip after a landing; landings pause and the last-landed group returns to Build; once its returns are spent it blocks |
-| `epic_gate` | Engine | The epic-wide review produced a finding with no file to blame, so the epic blocks |
+| `epic_gate` | Engine | The epic-wide review produced a finding with no file to blame, or its rounds ran out, so the epic blocks |
 | `dependency` | Engine | A group's dependency was abandoned; the group stops and names it |
 | `flaky` | Engine, tester | Go's two reruns of a test split, one pass and one fail; a split acceptance item blocks the group, a plain flaky test only reports; also a tester restart reason |
 | `tester` | Engine | The tester disputed an item twice against Go's reruns: a harness fault that does not count against the builder |
@@ -6297,7 +6300,7 @@ const (
 
 Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
 
-[TODO: whether `other` is a member of the code list, the trigger of `branch_missing`, the template name of codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`), and why the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `brief`, `contract` and `state_invalid` of chapter 2 are absent from this list ([G-133](#g-133))]
+[TODO: whether `other` is a member of the code list, the trigger of `branch_missing`, the template name of codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`), and why the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `wall`, `setup`, `brief`, `contract` and `state_invalid` of chapter 2 are absent from this list ([G-133](#g-133))]
 
 **Versioning.** The list is compiled into the binary and into `embed/state.schema.json`; a code outside it fails schema validation.
 
@@ -6825,7 +6828,7 @@ stateDiagram-v2
 | Checking | Every fact passes | Rendered | The line is escaped, filled, wrapped and coloured |
 | Checking | A fact fails, first time | Reprompted | The engine sent the schema re-prompt; 1 re-prompt is spent |
 | Reprompted | The model returns facts | Checking | The new facts are checked from the start |
-| Checking | A fact fails after the re-prompt | Unresolved | The session ends as a result in the wrong shape; one task attempt is counted and the task reruns in a fresh session |
+| Checking | A fact fails after the re-prompt | Unresolved | The session ends as a result in the wrong shape; one attempt is counted and the group's builder reruns in a fresh session |
 
 The schema re-prompt is the one that the session supervisor sends on a `claude-cli` link and the harness tool loop sends on an API link, for a result that breaks its schema ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs), [Providers and HTTP](#7-providers-and-http)).
 
@@ -6863,7 +6866,7 @@ The schema re-prompt is the one that the session supervisor sends on a `claude-c
 | A golden file differs from the rendered bytes | The gate | Fails |
 | A template names a fact the struct lacks at run time | `missingkey=error` | `Render` returns an error; the gate prevents it at build |
 | A commit, path or task identifier fails its check | `Render` | `ErrFactInvalid`; the engine sends the schema re-prompt, 1 time |
-| A fact still fails after the re-prompt | `Render` | Handled as a result in the wrong shape: the session ends, one task attempt is counted and the task reruns; `limits.task_attempts` bounds the reruns |
+| A fact still fails after the re-prompt | `Render` | Handled as a result in the wrong shape: the session ends, one attempt is counted and the group's builder reruns; `limits.group_attempts` bounds the reruns |
 | A code with no template of its own | `Render` | Code `other`: the fixed line pointing to a file |
 | A table over 5 rows, or a cell over 45 characters | `Render` | Top 5 rows plus `N more: <what>`; the cell moves below |
 | Broken Komodo block markers in `AGENTS.md` | Brief builder, `doctor` | The whole addendum is dropped from briefs; `doctor` reports it ([chapter 5](#5-sessions-agents-and-briefs)) |
@@ -7023,7 +7026,7 @@ The scans are specified in [Workspace and Leases](#4-workspace-and-leases). [TOD
 | Cold pass | A reviewer pass in thorough mode in addition to the lenses [TODO: `what a cold pass is` ([G-171](#g-171))] |
 | Acceptance item | A line of a group's `TG.md` in the form `WHEN <event> THE SYSTEM SHALL <response>`, with an optional `cmd:` line [TODO: `the sentence form of an acceptance item` ([G-155](#g-155))] |
 | Return | A trip from Check or Verify back to Build, counted against `limits.returns` |
-| Attempt | One counted try at a task [TODO: what one attempt counts: every model attempt, only `task.retry` lines, or every restart ([G-32](#g-32))] |
+| Attempt | One fresh builder session for a group, whatever ended it |
 | Flap | A retry that repeats the same failure, or a return to Build that changes nothing |
 | Loss bound | Any single failure loses at most one model turn and never a committed edit |
 
@@ -7068,7 +7071,6 @@ flowchart LR
 | `internal/quality/evidence.go` | The check that a finding's quote is at its `file:line` |
 | `internal/engine/limits.go` | Retries, returns, flap detection and block reasons |
 | `internal/engine/recover.go` | Crash resume through group state's `Load`; the startup sweep [TODO: `the sweep's owner` ([G-217](#g-217))] |
-| `internal/ops/budget.go` | Group wall time, the token count and the review mode [TODO: `which package owns the group wall and usage-tracking rules` ([G-32](#g-32))] |
 | `embed/lenses/<lens>.json`, `embed/lenses/<lens>.md` | The lens catalogs: rule IDs, severities and file scopes in the JSON file, rule bodies in the Markdown file |
 
 No file is named for the baseline comparison, the impact set, the flake rule or the case-collision test; the table above holds only the placed steps. [TODO: `the files for the baseline comparison, impact set, flake rule and case-collision test` ([G-207](#g-207))]
@@ -7388,13 +7390,13 @@ The `scope_answer` brief slot carries the answer to the resumed builder ([Sessio
 
 #### Counters
 
-`State` holds the counters `Next()` reads ([Event Spine and State Machine](#23-data-model)). Which package owns which counter is open [TODO: `which component owns each counter` ([G-32](#g-32))].
+Every counter lives in `State` ([Event Spine and State Machine](#23-data-model)), and only `Next()` changes it, using the rules in `internal/engine/limits.go`. The session supervisor and the check stage only report events, and configuration only supplies the limit values.
 
 | Counter | Where it lives | Bound |
 |---|---|---|
 | Returns | `State.Returns`, per group | `limits.returns` |
-| Attempts | `TaskState.Attempts`, per task | `limits.task_attempts` |
-| Retries | `TaskState.Retries`, counted for timeouts and idle stops | The agent's `retries` |
+| Attempts | `State.Attempts`, one per fresh builder session for the group | `limits.group_attempts` |
+| Retries | `State.Retries`, builder timeouts and idle stops, never reset while the group is open | The agent's `retries` |
 | Failure hash | `State.FailureHash`, the last failure's fingerprint | A repeat is a flap: 1 |
 | Blocks per reason | `State.Blocks` | 3 for one reason flags `needs redesign` |
 | Group wall used | `State.WallUsedS`, seconds worked excluding Paused and Blocked | `limits.group_wall_min` |
@@ -7522,12 +7524,6 @@ const (
 	ResumeFresh  ResumeMode = "fresh"  // a fresh session with the brief, the work-in-progress diff and the last summary
 )
 
-// GroupWallMin returns the wall budget of a group in minutes.
-func GroupWallMin(tasks, sessionWallMin, hardMin int) int
-
-// TrackUsage reports whether token and dollar tracking is on for a setting and a mode.
-func TrackUsage(setting string, m Profile) bool
-
 // NeedsRedesign reports whether a reason has blocked a group the flag count of times.
 func NeedsRedesign(blocks map[string]int, reason string) bool
 ```
@@ -7536,7 +7532,7 @@ func NeedsRedesign(blocks map[string]int, reason string) bool
 |---|---|
 | `AutoDeny` | Cannot fail; `denied` is `false` when every path may go to the orchestrator |
 | `PlanResume` | Cannot fail; a `false` argument returns `ResumeFresh` and the ledger logs `resume_lost` |
-| `GroupWallMin`, `TrackUsage`, `NeedsRedesign` | Cannot fail |
+| `NeedsRedesign` | Cannot fail |
 
 **Who calls each function**
 
@@ -7550,7 +7546,6 @@ func NeedsRedesign(blocks map[string]int, reason string) bool
 | `Drive` | `AutoDeny` | A builder's `session.end` with status `needs_scope` |
 | `resume` verb | `PlanResume` | A person or the orchestrator resumes a group |
 | `Next()` | `NeedsRedesign` | `group.blocked` applies |
-| Group-wall check | `GroupWallMin` | A group's stage starts and when the wall is compared [TODO: `where the wall is compared and what a spent wall blocks as` ([G-32](#g-32))] |
 
 ### 9.5 Behaviour
 
@@ -7951,10 +7946,11 @@ flowchart LR
   F["Reruns split"] -->|0| B6["flaky"]
   G["Dependency abandoned"] -->|0| B7["dependency"]
   H["Epic tip broke"] -->|limits.returns| B8["integration"]
-  I["Attempts spent"] -->|limits.task_attempts| B9["attempts"]
+  I["Attempts spent"] -->|limits.group_attempts| B9["attempts"]
   J["Brief too large"] -->|1| B10["context"]
   K["Merge conflict"] -->|1| B11["merge_conflict"]
   L["Token cap spent"] -->|cap| B12["budget"]
+  M["Group wall spent"] -->|limits.group_wall_min| B13["wall"]
 ```
 
 The edge into `integration` is a failed Check on the epic tip once the group's `limits.returns` returns are spent.
@@ -8004,36 +8000,14 @@ The full list of scans, their parallelism and their time target are in [Workspac
 |---|---|
 | Group wall | Sized so a single builder can finish the group within 1 hour; paused time excluded; one 100% extension at most [TODO: `the group's wall time and how the extension is asked for` ([G-238](#g-238))] |
 | Per agent | Wall (`limits.session_wall_min`), idle (`limits.session_idle_min`) and `retries`, from `agent.json` |
-| Per task | `limits.task_attempts` attempts [TODO: what one attempt counts, and whether the inner limits of the failure table count inside it ([G-32](#g-32))] |
+| Builder sessions | `limits.group_attempts` attempts, one per fresh builder session for the group; the in-session limits of the failure table (one re-prompt, one "continue", 2 gate results) are not attempts |
 | Per group | `limits.group_tokens`: input, output and cache writes; cache reads are reported only; only when `track.usage` is on |
 | Sessions | Pool of `limits.pool_min` to `limits.pool_max` machine-wide slots plus per-link slots |
 | Mode | `economy` (1 merged lens) or `thorough` (every applicable lens plus a cold pass) |
 
 `track.usage` set to `auto` is on under `economy` mode and off under `thorough` mode; `on` and `off` override it. With tracking off, no token data is collected and no token cap applies; returns, attempts, retries and wall time still bound the group.
 
-```go
-// GroupWallMin returns the wall budget of a group in minutes.
-func GroupWallMin(tasks, sessionWallMin, hardMin int) int {
-	w := tasks*sessionWallMin + 2*sessionWallMin
-	if w > hardMin {
-		return hardMin
-	}
-	return w
-}
-
-// TrackUsage reports whether token and dollar tracking is on for a setting and a mode.
-func TrackUsage(setting string, m Profile) bool {
-	switch setting {
-	case "on":
-		return true
-	case "off":
-		return false
-	}
-	return m == ProfileEconomy
-}
-```
-
-What a spent group wall blocks as is not in the block-reason list. [TODO: `the block reason and detector for a spent group wall` ([G-32](#g-32))] [TODO: which package owns the group wall and usage-tracking rules: this chapter's `GroupWallMin` and `TrackUsage`, `Effective.GroupWallMin` and `Effective.TrackUsage` in `core`, or `ops/budget.go` ([G-32](#g-32))]
+The pinned settings object answers both the group wall and whether tracking is on, through `Effective.GroupWallMin` and `Effective.TrackUsage` ([CLI and Configuration](#14-interfaces)); every other part asks it. A spent group wall blocks the group with `wall` ([block rows](#block-rows)).
 
 ##### Token savings
 
@@ -8148,36 +8122,35 @@ stateDiagram-v2
 | Schema-invalid result | Session supervisor (`claude-cli`) or harness tool loop (API links) | One re-prompt; 1 | Task retry |
 | Result fails the agent's gate | Tool runtime | The failure goes back into the same session; 2 | `check_fail`, task retry |
 | Reply cut off at the output limit | Tool runtime | "continue"; 1 | `no_result`, task retry |
-| Timeout or idle | Supervisor | Stop, then a fresh session; the agent's `retries` per task [TODO: `whether retries count per session or per task` ([G-32](#g-32))] | Blocked |
+| Timeout or idle | Supervisor | Stop, then a fresh session; the agent's `retries` per group, never reset while the group is open | Blocked |
 | Refusals under one rule reach `guard.refusal_limit` | Guard | End the session; `guard.refusal_limit` | Task retry |
-| `done_when` fails | Check | Task retry; the agent's `retries` per task [TODO: `this bound against chapter 2's 3 returns` ([G-32](#g-32))] | Blocked |
+| `done_when` fails in the Check stage | Check | Back to Build with the failure; `limits.returns` per group | Blocked |
 | Regression against the baseline | Check | Back to Build with the failing test's output; `limits.returns` per group | Blocked `regression` |
 | Findings or a failed acceptance item | Check, review | Back to Build in the task's own session; `limits.returns` | Blocked |
 | A reviewer's or tester's `run` edits a tracked file | Engine, after the last read-only session | Reset the file and fail that review [TODO: `what a review failed this way does` ([G-237](#g-237))]; 0 | [TODO: `final state` ([G-237](#g-237))] |
-| Epic gate fails | Review | The group that last changed each file returns to Build; a finding with no file blocks the epic; `limits.returns` | Blocked `epic_gate` |
+| Epic gate fails | Review | The group that last changed each file returns to Build; a finding with no file blocks the epic; `limits.returns` gate rounds per epic, each able to return several groups | Blocked `epic_gate` |
 | Tester fails an item Go's reruns pass | Review | Restart the tester once with Go's output; 1 | Blocked `tester` |
 | Go's reruns split | Review | Stop; 0 | Blocked `flaky` |
 | A dependency is abandoned | Engine, after `komodo abandon` on a group others depend on | Stop its dependents; 0 | Blocked `dependency` |
 | Check fails on the epic tip after a landing | Engine | Pause landings; the last-landed group returns to Build; `limits.returns` | Blocked `integration` |
 | Builder needs a file outside scope | Guard row B1 | Work-in-progress commit, end the session, keep the lease; 1 request per task | Blocked `needs_scope`; resumes on approve or deny |
-| Flap: same failure hash or zero-diff return | Recovery | Stop; 1 [TODO: `how a flap is detected` ([G-32](#g-32))] | Blocked |
-| Each attempt on a task | Recovery | Count it against `limits.task_attempts` [TODO: what one attempt counts ([G-32](#g-32))] | Blocked `attempts` |
+| Flap: same failure hash or zero-diff return | Recovery | Stop; 1. The fingerprint is the sorted list of failing items, without line numbers, timings or message text; a return changed nothing when the group's hidden reference has the same tree before and after it | Blocked |
+| Each fresh builder session for the group | Recovery | Count it against `limits.group_attempts` as one attempt, whatever ended it | Blocked `attempts` |
 | Brief over half the measured context | Brief builder | Next link that fits; 1 | Blocked `context` |
 | Landing conflicts with the epic branch | Ship | Merge the epic branch into the group branch and rerun Check; 1 | Blocked `merge_conflict` |
 | Budget spent | Budgets | Stop | Blocked `budget` |
-| Harness crash or reboot | Recovery, when the `komodo` process dies or the machine restarts | `Load` from group state: the snapshot plus the events after it; no retry count, because the state is rebuilt | Continues |
+| Group wall spent | `Next()` | Stop; 0 | Blocked `wall`; a person splits the group or approves more time |
+| Harness crash or reboot | Recovery, when the `komodo` process dies or the machine restarts | `Load` from group state: the snapshot plus the events after it; the crash itself counts nothing, because the state is rebuilt; a builder session found dead uses one of the group's attempts | Continues |
 | Scheduled job fails | Scheduler | Backoff; 3 | Blocked |
 | State write refused, or a record fails its check on read | State manager | Refuse the write, or move the bad record aside as `.bad-*`; 0 | Blocked `state_invalid`, naming the kind, key and field |
 
-The failure table has 28 rows. Block reasons are defined in [Event Spine and State Machine](#block-reasons); the detectors outside this chapter are specified in their chapters ([Providers and HTTP](#7-providers-and-http), [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox), [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs), [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability), [State Manager](#13-state-manager)).
+The failure table has 29 rows. Block reasons are defined in [Event Spine and State Machine](#block-reasons); the detectors outside this chapter are specified in their chapters ([Providers and HTTP](#7-providers-and-http), [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox), [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs), [Scheduler, Cache and Observability](#10-scheduler-cache-and-observability), [State Manager](#13-state-manager)).
 
-The bounds in the table use different counters, whose scope is open (G-32):
-- A failing `done_when` is bounded at 2 by the failure table and at 3 by the transition table, where a failing `check.done` returns to Build while `Returns` is under `limits.returns`.
-- The builder's own gate inside the session, which reruns `done_when` before the commit, allows 2 rejected results.
-
-[TODO: `reconcile the done_when bound (2 against 3) and the scope of retries (per session against per task)` ([G-32](#g-32))] Which counter belongs to which package is [TODO: `which component owns each counter` ([G-32](#g-32))].
-
-The group wall has no row: [TODO: `the failure row for a spent group wall` ([G-32](#g-32))].
+Counters and their bounds:
+- Every counter lives in `State`, and only `Next()` changes it, using the rules in `internal/engine/limits.go`; the detectors in the table only report events.
+- A failing `done_when` inside the session goes back once; the second failure ends the session as `check_fail` and uses one attempt.
+- A failing `done_when` in the Check stage returns the group to Build and uses one of `limits.returns`.
+- The agent's `retries` count only the builder's timeouts and idle stops, per group, and never reset while the group is open.
 
 **Edge cases**
 
@@ -8201,12 +8174,12 @@ Keys this subsystem owns or reads. The full key table, the defaults, the hard li
 |---|---|---|---|
 | `check.coverage` | integer | set in [1.8](#18-config) | Percent of the repository's lines tests must cover; blocks in every language |
 | `limits.returns` | integer | set in [1.8](#18-config) | Returns to Build before Blocked |
-| `limits.task_attempts` | integer | set in [1.8](#18-config) | Attempts per task [TODO: what one attempt counts ([G-32](#g-32))] |
+| `limits.group_attempts` | integer | set in [1.8](#18-config) | Attempts per group; one attempt is one fresh builder session for the group |
 | `limits.group_wall_min` | integer | set in [1.8](#18-config) | Wall time per group, paused time excluded; one 100% extension at most |
 | `limits.group_tokens` | integer | set in [1.8](#18-config) | Tokens per group: input, output and cache writes; used only when `track.usage` is on |
 | `mode` | string | set in [1.8](#18-config) | `economy` runs one merged lens; `thorough` runs every applicable lens plus a cold pass; sets the `track.usage` default |
 | `track.usage` | string | set in [1.8](#18-config) | `auto` is on under `economy` and off under `thorough`; `on` and `off` override it |
-| `retries` (per agent) | integer | set in [1.8](#18-config) | Restarts of a timed-out or idle session [TODO: `whether retries count per session or per task` ([G-32](#g-32))]; counts inside `limits.task_attempts` |
+| `retries` (per agent) | integer | set in [1.8](#18-config) | Restarts after a timeout or idle stop, per group and never reset while the group is open; counts inside `limits.group_attempts` |
 | `limits.pause_max_min` | integer | set in [7.8](#78-config) | Read here: longest a session stays paused; owned by [Providers and HTTP](#7-providers-and-http) |
 | `limits.session_wall_min` | integer | set in [1.8](#18-config) | Read here: wall time per session |
 
@@ -8254,7 +8227,7 @@ const (
 - A seeded exported-signature change triggers `contract`, and the finding names the caller.
 
 *Error recovery*
-- Forcing a timeout, a flap, 4 returns or 7 attempts each ends Blocked with the reason named.
+- Forcing a timeout, a flap, 4 returns, 7 attempts or a spent group wall each ends Blocked with the reason named.
 - `kill -9` on the engine and then `resume` finishes with 0 repeated paid sessions.
 - A panic injected in one group's `Drive` blocks that group while a second group lands.
 - A 2-hour pause leaves the group wall clock where it was.
@@ -8280,7 +8253,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-43](#g-43) | The test-sibling rule; The secret content patterns; The glob grammar | Yes |
 | [G-169](#g-169) | Whole-repository coverage per language; a test with no base result; test-file imports in the impact set | Yes |
 | [G-171](#g-171) | What a cold pass is; Lens sessions, merging, the economy security lens | Yes |
-| [G-32](#g-32) | The `done_when` bound (2 against 3); `retries` per session against per task; which component owns each counter; How a flap is detected; The failure row for a spent group wall; Which package owns the group wall and usage-tracking rules | Yes |
 | [G-176](#g-176) | Scope request: storage of widened `files`, behaviour after a denial and a second request | Yes |
 | [G-217](#g-217) | Whether `Drive` or `recover.go` calls `Load` on a restart; The owner of the startup sweep; Which event the sweep records for a dead session | Yes |
 | [G-180](#g-180) | A failed tester item with no command; where Go reruns | Yes |
@@ -9144,7 +9116,7 @@ stateDiagram-v2
 | The ledger subscriber errors or panics | The event bus | Dropped for the run; group state is untouched; the derived records stop [TODO: `when the views catch up` ([G-208](#g-208))] |
 | A claimed task whose session is dead | The startup sweep | [TODO: `the event the sweep records` ([G-217](#g-217))] |
 | A hand edit of a locked group's backlog files | A hash mismatch at the next verb | Detected [TODO: `what the verb does on a mismatch` ([G-154](#g-154))] |
-| A group blocked 3 times for one reason | The engine's count of blocks per reason | `status` flags it `needs redesign`; blocked never retries by itself [TODO: `which component owns each counter` ([G-32](#g-32))] [TODO: `whether the snapshot holds blocks per reason` ([G-32](#g-32))] |
+| A group blocked 3 times for one reason | The engine's count of blocks per reason | `status` flags it `needs redesign`; blocked never retries by itself; `Next()` keeps the count in `State.Blocks`, which the snapshot holds |
 | Ledger rows older than `ledger.retention_days` or past 100 MB per repository | The trim | Oldest rows go first; open, paused and blocked groups' state files stay |
 | `track.usage` is off | Configuration | No tokens, dollars or skill tokens are written; the scorecard omits them |
 
@@ -9214,7 +9186,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-154](#g-154) | Card hash recipe and the record the `locked` refusal reads | Yes |
 | [G-217](#g-217) | Which event the sweep records for a dead session | Yes |
 | [G-74](#g-74) | Locking of machine-shared files; Whether the group ledger is kept per repository or shared across the machine | Yes |
-| [G-32](#g-32) | Which component owns each counter; Which counters the snapshot holds, including blocks per reason | Yes |
 | [G-17](#g-17) | The 50% prompt-cache hit fixture needs real paid sessions with `track.usage` on | No |
 | [G-19](#g-19) | The 50 ms and 100 ms targets are not yet measured | No |
 | [G-26](#g-26) | Splitting tokens and dollars by provider family | No |
@@ -9983,7 +9954,7 @@ git merge --no-ff komodo/epic-1/tg-1.2        # ship.mode epic, run on the epic 
 2. When the gate passes, the engine runs `open_pr` keyed `(epic, head commit hash)`: `gh` finds an existing pull request for that head first, so a replay opens no duplicate.
 3. The engine opens one pull request from the epic branch into the base branch. A person reviews and merges it, then runs `komodo sync`.
 
-[TODO: `when the epic pull request is opened` ([G-37](#g-37))] A run is finished, and `run.done` fires, when every group of the run is Done or Blocked and none is queued, running or paused.
+A blocked epic opens no pull request; after a person fixes the finding by hand and runs `resume`, the next round with no blocking finding opens it. A run is finished, and `run.done` fires, when every group of the run is Done or Blocked and none is queued, running or paused.
 
 **Releasing**
 
@@ -10147,7 +10118,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-161](#g-161) | Ship branches, remote, epic-branch merge location, group pull request merge method, title and labels | Yes |
 | [G-163](#g-163) | Push, forge and merge failure handling | Yes |
 | [G-198](#g-198) | The argument structs of `land` and `open_pr` | Yes |
-| [G-37](#g-37) | When the epic pull request is opened | Yes |
 | [G-139](#g-139) | Release: key file format, embedded keys, manifest layout, target pairs, publishing, changelog input | Yes |
 | [G-154](#g-154) | How `add backlog` reads the locked state; who records a task's real line count | No |
 | [G-18](#g-18) | Repo map patterns for TypeScript, Python and Rust against 3 real repositories | No |
@@ -11205,7 +11175,7 @@ The state manager is the only code that reads or writes the harness's runtime st
 
 The purpose of the subsystem, and who it talks to, is in the HLD: [State Manager](hld.md#514-state-manager).
 
-The owner decided on 2026-10-11: one state schema for every record and event, served by an in-process state manager that is the only way to read or write runtime state, and that populates and validates every record. The owner confirmed on 2026-10-13 the six items outside the manager, quarantine of a bad record without automatic repair, and the snapshot as the engine's full position record, given in [Group snapshot](#group-snapshot). [TODO: `which counters the snapshot holds` ([G-32](#g-32))]
+The owner decided on 2026-10-11: one state schema for every record and event, served by an in-process state manager that is the only way to read or write runtime state, and that populates and validates every record. The owner confirmed on 2026-10-13 the six items outside the manager, quarantine of a bad record without automatic repair, and the snapshot as the engine's full position record, given in [Group snapshot](#group-snapshot). The snapshot holds every counter in `State`, so a crash resets none.
 
 **Concepts**
 
@@ -11438,7 +11408,7 @@ Six items are not state records. Each already has a stronger rule of its own, or
 
 The body of a `group` record is the engine's `State`, with every field defined once in [The State Struct](#the-state-struct). The manager wraps it in the header and refuses a snapshot whose `epoch` or `fence` falls, or whose `sequence` is not the last line appended; replay starts after the snapshot. `config_hash` pins the effective config at run start, so a config edit during the run never reaches this run ([Data Model](#13-data-model)).
 
-[TODO: `which of the loop counters the snapshot holds, so that a crash does not reset them` ([G-32](#g-32))]
+The snapshot holds every loop counter in `State`, so a crash resets none of them.
 
 #### State file and quarantine layout
 
@@ -11877,7 +11847,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-211](#g-211) | The header and body layout in one file; timestamp and writer encoding; the machine log file names; `Tail`'s file choice; exported names and signatures derived here; how a package obtains the manager; entry points; The caller identity for the writer check; the error values of each refusal; Where a record stores its checksum or hash; a `v` newer than the binary knows; The `rev` of a first write; File-level details of the primitives and the takeover call; Cut-short and bad-line handling; Group state: `Open`, `Snapshot` stage detection and `Load` without a snapshot; The `Watch` method and its result type name | Yes |
 | [G-74](#g-74) | Locking for machine-shared files; the engine's reaction to a failed write of `quota.json` or a timer record; locking for the group ledger and the quota file; locking for `config.json`, `config.sha` and `config.log`; Whether the group ledger is kept per repository or shared across the machine | Yes |
 | [G-182](#g-182) | The checksum algorithm and how it is written | Yes |
-| [G-32](#g-32) | Which counters the snapshot holds | No |
 | [G-19](#g-19) | The replay target of 10,000 events under 1 s | No |
 | [G-29](#g-29) | How a `timer.due` from outside `Drive` reaches a group's state file | No |
 | [G-208](#g-208) | Shapes of `ledger/groups.json` and `tasks.json` | Yes |
@@ -12427,9 +12396,8 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-28"></a>G-28 | Install | How `komodo init` writes Komodo's orchestrator skills and commands into the global Claude Code setup: a Claude Code plugin, or plain files with a machine manifest | Owner decision | [1.2](#12-package-layout), [1.4](#14-interfaces), [12.1](#121-scope-and-concepts), [15.3](#153-host-cleanup-before-phase-2) |
 | <a id="g-29"></a>G-29 | Engine, Drive and event writers | Drive's open behaviour: how typed commands such as `resume` reach it; whether an event and its follow-ons are one disk write; whether each event type's contract names its class (fact, request or outcome); whether the engine loop waits for subscribers after delivering an event; whether the group loop keeps running or exits while its group is Paused or Blocked; who appends `timer.due`, which the scheduler, the engine, the sweep and `status` all emit, and how `jobs tick` and `status` fire due timers while only a group's `Drive` appends group events and only the run goroutine appends `run.*` events | Owner decisions on the event spine page; then a design patch to [Drive (Engine data model, 3.3)](#drive) | [1.4](#14-interfaces), [2.3](#23-data-model), [2.5](#25-behaviour), [2.6](#26-state-and-transitions), [3.3](#33-data-model), [3.5](#35-behaviour), [3.6](#36-state), [4.5](#45-behaviour), [4.6](#46-state), [9.3](#93-data-model), [10.5](#105-behaviour), [10.7](#107-invariants-and-failures), [13.3](#133-data-model) |
 | <a id="g-31"></a>G-31 | Engine, stage moves | Stage moves the transition table still lacks: the block row that produces each of the reasons `context`, `contract` and `state_invalid`; the event that carries the result of Intake's lint and worktree cut; what a failed Check on the merged group branch does in Ship, before landing | Design patch to the transition table in [Event Spine and State Machine](#26-state-and-transitions) | [2.6](#26-state-and-transitions) |
-| <a id="g-32"></a>G-32 | Limits, counters | The crash-safe counters in `State` and their owners: returns, Verify progress, failure hash, blocks per reason, wall time used, tokens used, each task's retries and the prior stage, and where `Next()` keeps the previous event's time for `WallUsedS`. What one attempt counts: the CLI and Configuration chapter counts every model attempt (fresh sessions, re-prompts, gate feedback, "continue"), the Event Spine chapter counts only `task.retry` lines, the Sessions chapter counts every restart, and `Next()` never sees an in-session re-prompt, so the cap of 6 can mean about 24 model turns. Whether retries count per session or per task; which counter a failing done_when uses (2 or 3); whether a timeout, idle stop or crash counts; when repeated crashes block the group. Which component owns each counter (retries, returns, completion-command failures). Which package owns the group wall-clock and usage-tracking rules (`core`, `quality` and `ops/budget.go` all compute them); the failure row, detector and block reason for a spent group wall, since the block reasons name only `budget` for tokens. How a flap is detected: how the failure hash is computed and how a return to Build that "changed nothing" is measured | Owner decision on the architecture page; then [Event Spine and State Machine](#23-data-model), 1.5 and chapter 9 | [HLD Open decisions](hld.md#open-decisions), [1.4](#14-interfaces), [1.8](#18-config), [2.3](#23-data-model), [2.6](#26-state-and-transitions), [3.8](#38-config), [5.6](#56-state), [5.8](#58-config), [9.1](#91-scope-and-concepts), [9.2](#92-package-layout), [9.3](#93-data-model), [9.4](#94-interfaces), [9.5](#95-behaviour), [9.7](#97-invariants-and-failures), [9.8](#98-config), [10.7](#107-invariants-and-failures), [13.1](#131-scope-and-concepts), [13.3](#133-data-model) |
 | <a id="g-36"></a>G-36 | Engine, landing gate | The name and body of the per-epic landing gate file under `~/.komodo/state/` | Design patch to 3.5 | [3.5](#35-behaviour) |
-| <a id="g-37"></a>G-37 | Engine, epic gate | The event catalog has no type for the epic gate: how its sessions and findings are recorded, how a landed group re-enters Build, which counter bounds the returns, how the group that last changed a file is found and when the epic pull request is opened | Owner decision on the architecture page; then a design patch to chapter 2 and 3.5 | [3.5](#35-behaviour), [11.5](#115-behaviour) |
+| <a id="g-37"></a>G-37 | Engine, epic gate | The epic gate's record identifier and file names; the event that carries a gate finding into a Done group's log | A naming patch to chapter 2 | [2.5](#25-behaviour), [2.6](#26-state-and-transitions) |
 | <a id="g-38"></a>G-38 | Engine, queue, slots and Intake order | The diagram places Intake between taking the slot and starting `Drive`, while the transition table places `setup` and `lock.taken` inside the Intake stage. The order of queue-file deletion, pool slot, link slot, lease and Intake: taking a pool slot deletes the queue file and then writes the lease (Engine Internals), Intake runs just before the group's first session takes a slot (Engine Internals), Intake takes the lease and fence and then cuts the worktree (Intake stage row), and the lease is held from Intake until landing or abandon (lease state); a crash after the queue file is deleted and before the lease is written leaves nothing the startup sweep can see, yet the sweep re-enqueues "items with no lease"; the pool and link slot file names and bodies; whether a session takes its pool slot or its link slot first, and whether it waits or fails when none is free; where lint, the card hash and the worktree cut run relative to the first `Drive` event; which process takes an item when ready items from several repositories compete, and where the round-robin cursor is stored; where the adapted pool size lives when two engines share a machine; whether a slot is freed by an operating system file lock when its holder dies or is a create-only file removed with `Remove`, with a process-identifier liveness sweep as the alternative; what counts as a clean session end; how free memory is measured on each operating system; the lease state names "queued, checking, verifying" do not match the stage names | Owner decision on the architecture page; then 3.3, 3.5 and 4.5 | [HLD 6.2](hld.md#62-group-lifecycle), [2.3](#23-data-model), [3](#3-engine-internals), [3.2](#32-package-layout), [3.3](#33-data-model), [3.4](#34-interfaces), [3.5](#35-behaviour), [3.7](#37-invariants-and-failures), [4.4](#44-interfaces), [4.5](#45-behaviour), [4.6](#46-state), [13.3](#133-data-model), [14.3](#143-data-flow) |
 | <a id="g-39"></a>G-39 | Engine, parent guard | The parent guard's entry point; how the engine writes its heartbeat; where the session process identifier files live | Owner decision; then 3.5 and chapter 14 data locations | [3.5](#35-behaviour) |
 | <a id="g-40"></a>G-40 | Engine, Drive failures | What `Drive` does when an action fails or when a lease renewal is refused, and which call renews a lease (3.4 says `Drive` uses `Replace` on the lease, Workspace and Leases 4.4 and 4.5 say `Leases.Renew`); the collaborators `Drive` holds (leases, worktrees, supervisor, router) as struct fields or a constructor; where the time a group has been paused is kept, since `PauseState` holds only the reset time and the cap `limits.pause_max_min` counts from the pause; how a dead lease holder is detected (pid check versus host); what happens when `Take` fails to write; and what happens when `git update-ref` fails: it exits 128 for a moved reference, a bad object and an unwritable folder alike, so how the engine tells a moved reference from another failure, and what each does, is open | Owner decision on the architecture page; then 3.4, 4.4, 4.5 and chapter 2 `PauseState` | [3.3](#33-data-model), [3.4](#34-interfaces), [3.5](#35-behaviour), [4.2](#42-package-layout), [4.3](#43-data-model), [4.4](#44-interfaces), [4.5](#45-behaviour) |
@@ -12470,7 +12438,7 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-126"></a>G-126 | Skills, standards rule identifiers | Whether a reviewer may cite a standards rule identifier `std.<skill>.<n>`: Skills, Rules and Output 8.5 lets a finding cite one, while `submit_finding` in Check, Review, Tester and Recovery refuses a rule identifier that is in no lens catalog; how `n` is numbered; how the rule text is cut from a `- **Never` or `- **Always` line; the name and location of the regenerated rule list the gate compares | Owner decision; then 8.3, 8.5 and 9.5 | [2.3](#23-data-model), [6.4](#64-interfaces), [8.3](#83-data-model), [8.4](#84-interfaces), [8.5](#85-behaviour), [9.3](#93-data-model), [9.4](#94-interfaces), [9.5](#95-behaviour) |
 | <a id="g-127"></a>G-127 | Skills, orchestrator | The contents of the `release` skill; the bodies of `komodo`, `plan`, `run` and `respond`, of which only the roles are designed; whether the worker ban in `agent.json` also names `release`; whether a `release` skill ships beside the four that the `AGENTS.md` block lists | Authoring task and owner decision | [0.5](#05-embedded-assets), [8.5](#85-behaviour), [12.3](#123-data-model), [12.9](#129-proof-cases), [15.4](#154-cutover) |
 | <a id="g-130"></a>G-130 | Output, renderer contract | The renderer's one signature: CLI and Configuration declares `Report(profile string, code string, facts map[string]any) string`, Skills, Rules and Output declares `Render(name, facts any) (string, error)` with typed fact structs; the facts of each template: which of commit hash, reference and task identifier each `needs.<code>` carries, the field names and types of the facts of `pr_body`, `status`, `run_report`, `report.<verb>`, `error.<code>` and `event.<type>`, the check for a reference and how a struct field declares which check applies; the argument and result types and the meaning of the 6 template functions `code`, `n`, `plural`, `dur`, `path`, `table`; the escape rule for a backtick or newline in a fact; how wrapping at 80 columns treats code spans and tables; the text of the `N more` line and the label of a moved cell; where secret redaction and the attribution check sit relative to wrapping and colour, and what a hit does | Owner decision with a per-template fact table; then 1.4, 8.3 and 8.5 | [1.4](#14-interfaces), [8.3](#83-data-model), [8.4](#84-interfaces), [8.5](#85-behaviour) |
-| <a id="g-133"></a>G-133 | Output, codes | The trigger of `branch_missing`; the template name of the codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`); the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `brief`, `contract` and `state_invalid` are event reasons yet absent from the code list, while the design says every event reason is a code from the list; whether `Code` and the state package's `Reason` are one type; whether `other` is a member of the code list | Owner decision; then 8.3 Code list and the block reasons table of chapter 2 | [8.3](#83-data-model) |
+| <a id="g-133"></a>G-133 | Output, codes | The trigger of `branch_missing`; the template name of the codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`); the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `wall`, `setup`, `brief`, `contract` and `state_invalid` are event reasons yet absent from the code list, while the design says every event reason is a code from the list; whether `Code` and the state package's `Reason` are one type; whether `other` is a member of the code list | Owner decision; then 8.3 Code list and the block reasons table of chapter 2 | [8.3](#83-data-model) |
 | <a id="g-134"></a>G-134 | Output, profiles | How the `standard` layout differs from `adhd`; whether `embed/output/standard.md` exists beside `embed/output/adhd.md`; which output style text is pasted for the `standard` profile | Owner decision | [8.3](#83-data-model), [12.3](#123-data-model) |
 | <a id="g-135"></a>G-135 | Output, templates | The text of every template and the inputs of each golden fixture; only the line for the code `other` is fixed | Authoring task | [8.3](#83-data-model) |
 | <a id="g-136"></a>G-136 | Rules, orchestrator | How `embed/rules/orchestrator.md` relates to the O rows in `embed/policy.json` (generated from them or written beside them); its file format; whether the gate compares the two | Owner decision; then 8.5 Rule enforcement map | [8.5](#85-behaviour) |

@@ -426,7 +426,6 @@ These 8 open items shape the architecture most; the Low-Level Design gap registe
 - [TODO: how tool server events reach the engine ([G-42](lld.md#g-42))]
 - [TODO: which component owns the startup sweep, the outbox of recorded actions and the session pool ([G-217](lld.md#g-217))]
 - [TODO: the payload fields of each event type and the layout of a record ([G-198](lld.md#g-198), [G-211](lld.md#g-211))]
-- [TODO: which component owns each loop counter ([G-32](lld.md#g-32))]
 - [TODO: whether a group's snapshot is written before its lease is freed ([G-230](lld.md#g-230))]
 - [TODO: where the settings pinned at a run's start are stored, and what resume does when they changed ([G-231](lld.md#g-231))]
 
