@@ -200,7 +200,7 @@ A skill is a document of standards placed before a session, and rules instruct t
 
 #### 5.10 Check, Review, Tester and Recovery
 
-After a builder finishes, Check proves the work with ordinary tools at zero model cost, then Verify runs a reviewer and a blind tester side by side. The subsystem owns the proofs, scope requests, budgets and the failure table, which gives every failure a detector, action, bound and final state. A group's time fits one builder's limits, and the group may ask once for 100% more. [TODO: the group's wall time and how the extension is asked for ([G-238](lld.md#g-238))] Detail: [LLD chapter 9](lld.md#9-check-review-tester-and-recovery).
+After a builder finishes, Check proves the work with ordinary tools at zero model cost, then Verify runs a reviewer and a blind tester side by side. The subsystem owns the proofs, scope requests, budgets and the failure table, which gives every failure a detector, action, bound and final state. A group's time fits one builder's limits, and the group may ask once for 100% more. The wall is 60 minutes, and the engine grants the one extension itself the first time it runs out. Detail: [LLD chapter 9](lld.md#9-check-review-tester-and-recovery).
 
 #### 5.11 Scheduler, Cache and Observability
 
