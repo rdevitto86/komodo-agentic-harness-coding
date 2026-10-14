@@ -1045,7 +1045,7 @@ The brief builder sizes every prompt from `Ctx`, the engine takes a slot from `S
 
 **Short verbs.** `help`, `version`, config reads and `skill` answer under 50 ms with no network and no repo scan beyond marker stats. `help` reads embedded, build-time text. `version` reads the embedded version and `state/fresh.json`. Config reads parse the file once per process. The `skill` index is embedded at build, so `skill list` is a map read, and bodies come from the cache. `help --json` and the `komodo` skill are generated at build and embedded. The 50 ms budget is a target until the gate measures it. [TODO: confirm the 50 ms budget by gate timing ([G-19](#g-19))]
 
-**Concurrency.** Each verb is one process. Config is parsed once per process and read-only after that, and a run reads the snapshot that run pinned at start: the run's start writes the effective settings once to `runs/<run>.config.json`, named by `config_hash`, and every restart and `resume` reads them from that file; a changed `config.json` reaches only new runs, and `resume` prints the changed keys as a warning. `komodo config` holds `config.json.lock` while it writes `config.json`, `config.sha` and `config.log`; a reader that finds the checksum and the file disagree rereads once after 100 milliseconds before refusing ([State manager write checks](#state-manager-write-checks)).
+**Concurrency.** Each verb is one process. Config is parsed once per process and read-only after that, and a run reads the snapshot that run pinned at start: the run's start writes the effective settings once to `runs/<run>.config.json`, named by `config_hash`, and every restart and `resume` reads them from that file; a changed `config.json` reaches only new runs, and `resume` prints the changed keys as a warning. `komodo config` holds `config.json.lock` while it writes `config.json`, `config.sha` and `config.log`; a reader that finds the checksum and the file disagree rereads once after 100 milliseconds before refusing ([State manager write checks](#135-behaviour)).
 
 ### 1.6 State
 
@@ -5686,7 +5686,7 @@ A paused group has one timer record, written with `Replace` and removed when it 
 | `wait_until` | The latest provider reset time among the group's halted sessions, plus 1 min; each halted session's ledger row keeps a copy |
 | `wait_link` | The link whose reset the group waits for |
 
-`quota.json` stores one reset time per limited link, so every repository on the machine skips that link until the time passes. Writes to `quota.json` take its lock file ([State manager write checks](#state-manager-write-checks)). [TODO: `which reset time RecordLimit stores when LimitError.ResetAt is zero, since Select skips a link only while its stored reset time is in the future` ([G-224](#g-224))]
+`quota.json` stores one reset time per limited link, so every repository on the machine skips that link until the time passes. Writes to `quota.json` take its lock file ([State manager write checks](#135-behaviour)). [TODO: `which reset time RecordLimit stores when LimitError.ResetAt is zero, since Select skips a link only while its stored reset time is in the future` ([G-224](#g-224))]
 
 ```go
 // Timer is the body of a timers/<repo-id>.<group>.json record.
@@ -9533,7 +9533,7 @@ The wake mechanics of `status --wait` are in [Behaviour](#25-behaviour) of chapt
 
 - **Counters:** `jobs/state.json` is written with `Replace`, whose `rev` check refuses a stale writer ([State Manager](#13-state-manager)). What a tick does after a refusal: [TODO: `tick behaviour on a refused Replace` ([G-148](#g-148))].
 - **Queue and lease:** the create-only queue item and the lease are the guards against a second copy of a job.
-- **Ledger:** the ledger subscriber of one engine process is the only writer of that process's appends. Several engine processes on one repository, and the locking of machine-shared files: each ledger file is kept per repository under `<git-common-dir>/komodo/ledger/`, as the High-Level Design says, and a `Replace` of `groups.json` or `tasks.json` takes the file's lock file, the rule for every file several processes write ([State manager write checks](#state-manager-write-checks)).
+- **Ledger:** the ledger subscriber of one engine process is the only writer of that process's appends. Several engine processes on one repository, and the locking of machine-shared files: each ledger file is kept per repository under `<git-common-dir>/komodo/ledger/`, as the High-Level Design says, and a `Replace` of `groups.json` or `tasks.json` takes the file's lock file, the rule for every file several processes write ([State manager write checks](#135-behaviour)).
 - **Cache:** all processes of one repository share the store. Writing the same key from two processes: [TODO: `concurrent writers of one key` ([G-208](#g-208))].
 
 ### 10.6 State
