@@ -1334,7 +1334,7 @@ Open decisions in this example: [G-182](#g-182).
 
 The build generates one JSON Schema from the envelope and the registry, with one branch per type, no extra fields allowed, and an enumeration for every `reason`. The state manager checks every `Append` against the schema, and `komodo help --json` serves its event part as `events`.
 
-- **Data structs:** [TODO: the fields of each event type's data struct ([G-198](#g-198))]
+- **Data structs:** one struct per event type, listed in [Data structs](#data-structs) below the catalog
 - **Envelope fields still open:** [TODO: whether the envelope carries `id`, `class`, `cause` and `corr` fields, and what each holds ([G-29](#g-29))]
 
 **Example.** A `session.end` line, spread over lines for reading; on disk the line is one compact line.
@@ -1352,21 +1352,21 @@ The build generates one JSON Schema from the envelope and the registry, with one
   "stale": false,
   "type": "session.end",
   "reason": "schema_fail",
-  "data": "[TODO: session.end data fields (G-198)]",
+  "data": {"agent": "builder", "task": "tsk-add-lock", "link": "claude-cli", "tokens": 0, "wall_s": 1140},
   "checksum": "[TODO: checksum value once the algorithm is chosen (G-182)]"
 }
 ```
 
-Open decisions in this example: [G-198](#g-198), [G-182](#g-182).
+Open decisions in this example: [G-182](#g-182).
 
 Two more lines from the same file, a `stage.enter` and a `group.blocked`:
 
 ```json
-{"version":1,"sequence":7,"timestamp":"2026-10-12T15:20:03Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"stage.enter","data":"[TODO: stage.enter data fields (G-198)]","checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":31,"timestamp":"2026-10-12T16:02:45Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"blocked","epoch":2,"stale":false,"type":"group.blocked","reason":"attempts","data":"[TODO: group.blocked data fields (G-198)]","checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":7,"timestamp":"2026-10-12T15:20:03Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"stage.enter","data":{"from":"intake","to":"build","epoch":2,"return":false},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":31,"timestamp":"2026-10-12T16:02:45Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"blocked","epoch":2,"stale":false,"type":"group.blocked","reason":"attempts","data":{"detail":"2 of 2 fresh builder sessions used"},"checksum":"[TODO: checksum (G-182)]"}
 ```
 
-Open decisions in this example: [G-198](#g-198), [G-182](#g-182).
+Open decisions in this example: [G-182](#g-182).
 
 #### Catalog (34 types)
 
@@ -1409,12 +1409,270 @@ The catalog is a fixed Go enumeration in 8 families, registered with the state m
 | `pool.slot.taken` | Session pool | Machine log only: a session took a machine-wide slot |
 | `queue.enqueued` | Work queue | Machine log only: a ready group or due job was queued |
 
-**Families:** Run (3), Group (5: the 4 `group.*` plus `lease.lost`), Stage (2), Session (4), Work (11), Ledger (5: `lock.*`, `action.*`, `state.truncated`), Provider (2), Machine (3).
+**Families:** Run (3), Group (4: the 3 `group.*` plus `lease.lost`), Stage (2), Session (4), Work (11), Ledger (5: `lock.*`, `action.*`, `state.truncated`), Provider (2), Machine (3).
 
 **Machine-wide records.** Leases, pool slots, the work queue and jobs keep the state manager's create-only `Claim`, `Replace` and `Remove`, which make two processes agree [TODO: whether a slot is an operating-system file lock or a create-only file ([G-38](#g-38))]. Each successful write also appends a typed event to a machine log under `~/.komodo/state/events/`, one file per process, so each file has one writer. An event that affects a group, such as a lost lease, also goes into that group's own events for `Next()`, and `status` merges the machine logs by `timestamp`.
 
 - **Machine log names:** [TODO: the machine log's file names ([G-211](#g-211))]
 - **Job events:** [TODO: which file holds `job.due` and `job.fail` lines, since they belong to no group and are not `run.*` lines ([G-146](#g-146))]
+
+#### Data structs
+
+Each event type has one data struct in `internal/state/kinds.go`, bound to it by `Register`; its `EventType()` method returns the type. A field the envelope already carries, such as the session, the stage or the reason, is never repeated in `data`. The schema allows no field beyond these tags, and a field marked `omitempty` or `omitzero` is absent when empty. `ActionStart` and `ActionDone` are in [Actions](#actions).
+
+```go
+// --- Run: the envelope's group is empty, except on a group's copy of run.start
+
+// RunStart is the data of run.start; each group's first line is a copy with group set.
+type RunStart struct {
+	Groups     []ID   `json:"groups"`        // the groups the run queued, in queue order
+	ConfigHash string `json:"config_hash"`   // the effective configuration the run pinned; row 1 copies it into State
+	Job        string `json:"job,omitempty"` // the job's name when the run is a scheduled job
+}
+
+// RunDone is the data of run.done.
+type RunDone struct {
+	Done    []ID `json:"done"`    // groups that ended Done
+	Blocked []ID `json:"blocked"` // groups left Blocked
+}
+
+// RunStopped is the data of run.stopped.
+type RunStopped struct {
+	Signal string `json:"signal,omitempty"` // the signal received, such as SIGINT; empty for stop <run>
+	Saved  []ID   `json:"saved"`            // groups whose work was committed as work in progress
+}
+
+// --- Group
+
+// GroupPaused is the data of group.paused; Next copies it into State.Pause.
+type GroupPaused struct {
+	Until time.Time `json:"until"` // the provider's reset time, written as the timer's wait_until
+	Link  string    `json:"link"`  // the link whose limit paused the group
+}
+
+// GroupBlocked is the data of group.blocked; the envelope's reason is the block reason.
+type GroupBlocked struct {
+	Counter string `json:"counter,omitempty"` // unnamed block only: retries, returns, flap or job
+	Detail  string `json:"detail,omitempty"`  // what status shows, such as a setup command's output, at most 4 KB
+}
+
+// GroupShipped is the data of group.shipped, copied from the land result.
+type GroupShipped struct {
+	Merge string   `json:"merge"`        // the merge commit on the epic branch
+	PR    int      `json:"pr,omitempty"` // ship.mode group: the group pull request number
+	Files []string `json:"files"`        // paths the landing changed, which route epic gate findings
+}
+
+// LeaseLost is the data of lease.lost.
+type LeaseLost struct {
+	Fence  uint64 `json:"fence"`            // the higher fence number found
+	Holder ID     `json:"holder,omitempty"` // the run now holding the lease, when the lease file names it
+	Where  string `json:"where"`            // "save" for a refused fence check, "push" for the fence file before a push
+}
+
+// --- Stage
+
+// StageEnter is the data of stage.enter; Next fills it when it emits the event.
+type StageEnter struct {
+	From   Stage  `json:"from"`   // the stage left; none for the first entry
+	To     Stage  `json:"to"`     // the stage entered
+	Epoch  uint32 `json:"epoch"`  // the new epoch, State.Epoch + 1
+	Return bool   `json:"return"` // a Check, Verify or epic-tip failure sent the group back to Build
+}
+
+// StageExit is the data of stage.exit.
+type StageExit struct {
+	From Stage `json:"from"` // intake or verify, the stage whose gate was met
+}
+
+// --- Session: the envelope carries the session identifier
+
+// SessionStart is the data of session.start.
+type SessionStart struct {
+	Agent   string `json:"agent"`          // the agent name, such as builder, reviewer or tester
+	Task    string `json:"task,omitempty"` // builder only: the task claimed with it
+	Link    string `json:"link"`           // the link the session runs on, such as claude-cli
+	Model   string `json:"model"`          // the model identifier the link reported
+	Resumed bool   `json:"resumed"`        // continued from a Resume entry, so it adds no attempt
+}
+
+// SessionIdle is the data of session.idle.
+type SessionIdle struct {
+	IdleS  int64 `json:"idle_s"` // seconds with no stream line and no running tool
+	Nudged bool  `json:"nudged"` // true when the one nudge was sent; false when the stop ladder starts
+}
+
+// SessionTimewarn is the data of session.timewarn.
+type SessionTimewarn struct {
+	UsedS int64 `json:"used_s"` // wall seconds used
+	WallS int64 `json:"wall_s"` // the session's wall limit in seconds
+}
+
+// SessionEnd is the data of session.end; the envelope's reason is the exit reason.
+type SessionEnd struct {
+	Agent       string         `json:"agent"`
+	Task        string         `json:"task,omitempty"` // builder only: the task held at the end
+	Link        string         `json:"link"`
+	Handle      string         `json:"handle,omitempty"`       // the provider's resume handle, kept for paused and provider
+	ResetAt     time.Time      `json:"reset_at,omitzero"`      // paused only: the provider's reset time
+	Tokens      int64          `json:"tokens"`                 // input plus output tokens; 0 when track.usage is off
+	WallS       int64          `json:"wall_s"`                 // seconds the session ran
+	ScopePaths  []string       `json:"scope_paths,omitempty"`  // needs_scope only: the paths asked for
+	ScopeReason string         `json:"scope_reason,omitempty"` // needs_scope only: the builder's reason
+	Verify      *VerifyOutcome `json:"verify,omitempty"`       // reviewer or tester with reason done
+}
+
+// VerifyOutcome is a validated reviewer or tester result as Next reads it; Drive fills it before Append.
+type VerifyOutcome struct {
+	Pass            bool     `json:"pass"`                       // every task met or confirmed and every item passed
+	NotMet          []string `json:"not_met,omitempty"`          // task identifiers marked not_met or not_confirmed
+	BriefIncomplete bool     `json:"brief_incomplete,omitempty"` // the reviewer answered brief_incomplete
+	Failed          []string `json:"failed,omitempty"`           // tester items Go's two reruns confirmed failed
+	Disputed        []string `json:"disputed,omitempty"`         // tester items Go's two reruns passed
+	Split           []string `json:"split,omitempty"`            // tester items whose two reruns disagreed
+}
+
+// --- Work
+
+// TaskClaimed is the data of task.claimed.
+type TaskClaimed struct {
+	Task string `json:"task"` // the task identifier
+}
+
+// TaskReleased is the data of task.released.
+type TaskReleased struct {
+	Task string `json:"task"`
+}
+
+// TaskDone is the data of task.done.
+type TaskDone struct {
+	Task   string `json:"task"`
+	Commit string `json:"commit"` // the hidden-ref commit that holds the task
+}
+
+// TaskRetry is the data of task.retry; the envelope's reason is the cause, an exit reason or check_fail.
+type TaskRetry struct {
+	Task    string `json:"task"`
+	Attempt int    `json:"attempt"` // the attempt the fresh session will be, State.Attempts + 1
+}
+
+// CheckDone is the data of check.done.
+type CheckDone struct {
+	Pass       bool        `json:"pass"`       // every step passed or warned
+	Tip        bool        `json:"tip"`        // the Check ran on the epic tip after landing
+	Head       string      `json:"head"`       // the commit checked
+	Regression bool        `json:"regression"` // a test that passed at the base fails
+	Steps      []CheckStep `json:"steps"`
+}
+
+// CheckStep is one Check step's result as events and action results carry it.
+type CheckStep struct {
+	Step   string   `json:"step"`   // a Check step name, such as coverage
+	Level  string   `json:"level"`  // pass, warn or fail
+	Detail []string `json:"detail"` // the failing tests, files or secret locations
+}
+
+// FindingSubmit is the data of finding.submit and the arguments of submit_finding.
+type FindingSubmit struct {
+	Rule  string `json:"rule"`  // a rule identifier from a lens catalog
+	File  string `json:"file"`  // path from the worktree root
+	Line  int    `json:"line"`  // line number from 1 in the head tree
+	Quote string `json:"quote"` // the quoted evidence line
+}
+
+// FindingVerified is the data of finding.verified.
+type FindingVerified struct {
+	FindingSubmit
+	Severity string `json:"severity"` // blocker, major or minor, from the rule
+	In       string `json:"in"`       // "head" or "diff", where Go found the quote
+}
+
+// ToolDenied is the data of tool.denied.
+type ToolDenied struct {
+	Tool   string `json:"tool"`             // the tool refused, such as edit
+	Row    string `json:"row"`              // the guard row, such as B1
+	Target string `json:"target,omitempty"` // the path or command refused, secrets masked
+	Count  int    `json:"count"`            // refusals under this row in this session, against guard.refusal_limit
+}
+
+// TimerDue is the data of timer.due; reason pause_timeout marks the pause cap.
+type TimerDue struct {
+	Until time.Time `json:"until"` // the wait_until that passed
+}
+
+// JobDue is the data of job.due; the envelope's run is the job run being enqueued.
+type JobDue struct {
+	Job   string    `json:"job"`    // the job's name
+	DueAt time.Time `json:"due_at"` // the next_at that passed
+}
+
+// JobFail is the data of job.fail.
+type JobFail struct {
+	Job      string    `json:"job"`
+	Attempt  int       `json:"attempt"`           // failures in a row, from 1
+	FailHash string    `json:"fail_hash"`         // the failure fingerprint of the job run
+	RetryAt  time.Time `json:"retry_at,omitzero"` // when the backoff ends; zero when the job is Blocked
+}
+
+// --- Ledger
+
+// LockTaken is the data of lock.taken; Next fills State.Tasks from Tasks, each queued.
+type LockTaken struct {
+	CardHash string   `json:"card_hash"` // the hash of the group's TG.md and tsk-*.md files
+	Tasks    []string `json:"tasks"`     // the locked task identifiers, in file-name order
+}
+
+// LockReleased is the data of lock.released.
+type LockReleased struct {
+	By string `json:"by"` // "ship" or "abandon"
+}
+
+// StateTruncated is the data of state.truncated.
+type StateTruncated struct {
+	After uint64 `json:"after"` // the sequence of the last good line
+	Bytes int    `json:"bytes"` // length of the dropped partial line
+}
+
+// --- Provider
+
+// ProviderSkip is the data of provider.skip; the envelope's reason says why the link was skipped.
+type ProviderSkip struct {
+	From string `json:"from"` // the link skipped
+	To   string `json:"to"`   // the next link tried; empty when none is left
+}
+
+// LimitWarn is the data of limit.warn.
+type LimitWarn struct {
+	Link string  `json:"link"`
+	Kind string  `json:"kind"`          // quota, overage or spend
+	Pct  int     `json:"pct,omitempty"` // quota only: percent of the window used
+	USD  float64 `json:"usd,omitempty"` // spend only: dollars spent in the run
+}
+
+// --- Machine log only
+
+// LeaseTaken is the data of lease.taken; the envelope's group is the group leased.
+type LeaseTaken struct {
+	Fence uint64 `json:"fence"` // the fence number the claim wrote
+	PID   int    `json:"pid"`   // the holder's process identifier
+}
+
+// PoolSlotTaken is the data of pool.slot.taken.
+type PoolSlotTaken struct {
+	Slot int `json:"slot"` // slot number, from 1 to limits.pool_max
+	PID  int `json:"pid"`
+}
+
+// QueueEnqueued is the data of queue.enqueued.
+type QueueEnqueued struct {
+	Kind     string `json:"kind"`     // "group" or "job"
+	Item     string `json:"item"`     // the queued group's identifier or the job's name
+	Priority string `json:"priority"` // the group's priority from TG.md; empty for a job
+}
+```
+
+- **Where the facts come from:** each field is a fact its producer saw, never a model's claim; `VerifyOutcome` is filled by `Drive` from `AcceptResult` and `Tester.Rerun` ([Check, Review, Tester and Recovery](#94-interfaces)) before the `session.end` line is appended, so `Next()` reads the judged result without calling out.
+- **Counters `Next()` derives:** `Attempts`, `Retries`, `Returns` and `TokensUsed` grow from these fields (`resumed`, `tokens`) and never from a counter a producer sends.
 
 #### Contracts
 
@@ -1483,7 +1741,7 @@ type State struct {
 
 // TaskState is one task's claim.
 type TaskState struct {
-	ID       string   `json:"id"`
+	ID       string   `json:"id"`       // the task identifier, such as tsk-add-lock
 	State    string   `json:"state"`    // queued, claimed or done
 	Session  state.ID `json:"session,omitempty"`
 }
@@ -1510,7 +1768,20 @@ type BlockState struct {
 
 // VerifyProgress is the reviewer's and the tester's progress in the current Verify epoch.
 type VerifyProgress struct {
-	// [TODO: field names (G-207)]
+	Reviewer VerifySession           `json:"reviewer"`
+	Tester   VerifySession           `json:"tester"`
+	Claims   []state.FindingSubmit   `json:"claims"`   // findings submitted in this epoch
+	Findings []state.FindingVerified `json:"findings"` // findings Go verified, blocking and minor
+	NotMet   []string                `json:"not_met"`  // task identifiers marked not_met or not_confirmed
+	Failed   []string                `json:"failed"`   // tester items Go's reruns confirmed failed
+}
+
+// VerifySession is one Verify agent's progress in the current epoch.
+type VerifySession struct {
+	Session  state.ID `json:"session,omitempty"` // the live or last session of the agent
+	Result   string   `json:"result"`            // "" until it ends, then pass, fail or cancelled
+	Restarts int      `json:"restarts"`          // fresh sessions after an end without a result, against the agent's retries
+	Disputes int      `json:"disputes"`          // tester only: results whose failed items Go's reruns passed; the second blocks tester
 }
 
 // Limits are the bounds Next enforces, read from the effective config pinned by ConfigHash. [TODO: where the pinned settings are stored (G-231)]
@@ -1524,7 +1795,7 @@ type Limits struct {
 }
 ```
 
-Open decisions in this example: [G-231](#g-231), [G-207](#g-207), [G-112](#g-112).
+Open decisions in this example: [G-231](#g-231), [G-112](#g-112).
 
 **Rules for the fields.**
 - **Never nil:** slices and maps in `State` are set empty by the constructor and by `Load`, so they marshal as `[]` and `{}`.
@@ -1534,7 +1805,9 @@ Open decisions in this example: [G-231](#g-231), [G-207](#g-207), [G-112](#g-112
 - **Crash safety of the counters:** the snapshot holds every field of `State`, so a crash resets no counter ([Group snapshot](#group-snapshot)).
 - **Counter owners:** only `Next()` changes a counter, using the rules in `internal/engine/limits.go`; `Attempts` counts fresh builder sessions for the group, and `Retries` counts that builder's timeouts and idle stops and never resets while the group is open. Which counter a failing `done_when` uses is in [Check, Review, Tester and Recovery](#97-invariants-and-failures).
 - **Failure fingerprint:** a hash of the sorted list of failing items: for Check, each failing step with the test, file or secret it names; for Verify, each verified blocking finding's rule and file, and each failed tester item. Line numbers, timings and message text are left out, so a rerun of the same failure gives the same fingerprint; a failure that changes any item, such as one test fixed and another broken, gives a new one and earns another return.
-- **Formats:** [TODO: the task identifier format, the `config_hash` format and the failure fingerprint's hash and encoding ([G-198](#g-198))]
+- **Task identifier:** the task file's name without `.md`, such as `tsk-add-lock`: `tsk-` then lower-case letters, digits and hyphens, unique within its group because the files share one folder ([Task file (chapter 11)](#113-data-model)).
+- **`config_hash`:** the lower-case hexadecimal SHA-256, 64 characters, of the effective configuration at run start encoded by Go's `encoding/json` (fixed field order, sorted map keys, no spaces); `run.start` carries it and row 1 copies it into `State`.
+- **Fingerprint encoding:** each failing item is one text line: `check:<step>:<detail>` per failing Check detail (an empty detail for a step that names none), `finding:<rule>:<file>` per verified blocking finding, `not_met:<task>` per task marked `not_met` or `not_confirmed`, and `item:<item>` per tester item Go's reruns confirmed failed. The lines are sorted, joined with a newline and hashed with SHA-256, written as 64 lower-case hexadecimal characters. `Fingerprint(items []string) string` in `internal/engine/limits.go` computes it inside `Next()`; an empty `FailureHash` means no failure yet.
 
 **Example.** The body of `runs/<group-id>/state.json` at sequence 50, group tg-1.2.
 
@@ -1547,26 +1820,31 @@ Open decisions in this example: [G-231](#g-231), [G-207](#g-207), [G-112](#g-112
   "epoch": 2,
   "fence": 3,
   "sequence": 50,
-  "config_hash": "[TODO: config_hash format (G-198)]",
+  "config_hash": "023c648e364af6cf885bc15be12621607595a7ef64533179971d9e8d0603cb2c",
   "tasks": [
-    {"id": "[TODO: task identifier format (G-198)]", "state": "claimed", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47"}
+    {"id": "tsk-add-lock", "state": "claimed", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47"}
   ],
   "actions_open": [],
-  "resume": {"session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "handle": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "link": "claude-cli"},
+  "resume": [{"session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "handle": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "link": "claude-cli"}],
   "pause": {},
   "block": {},
   "returns": 1,
-  "verify": {},
-  "failure_hash": "[TODO: failure fingerprint format (G-198)]",
+  "verify": {
+    "reviewer": {"result": "", "restarts": 0, "disputes": 0},
+    "tester": {"result": "", "restarts": 0, "disputes": 0},
+    "claims": [], "findings": [], "not_met": [], "failed": []
+  },
+  "failure_hash": "1a9509c4c1d09512211b773b90b562dc6e5a2fbbb344ccd72c2a230a51a86353",
   "blocks": {},
   "wall_used_s": 2460,
+  "last_event_at": "2026-10-12T16:01:40Z",
   "tokens_used": 0,
   "attempts": 1,
   "retries": 0
 }
 ```
 
-Open decisions in this example: [G-198](#g-198).
+The `failure_hash` is the fingerprint of one Check line, `check:baseline:TestDriveStale`, from the return that sent the group back to Build.
 
 #### Actions
 
@@ -1606,8 +1884,118 @@ type OpenAction struct {
 
 - **One action per key:** `Next()` never orders an action whose kind and arguments match an action already in `ActionsOpen`, so a cancel ordered twice by one event, such as a Verify return that also spends the return bound, is one action.
 - **Distinct identifiers:** the reviewer's and the tester's spawns come from the same `stage.enter`, so their `Args` must differ for their `ID`s to differ.
-- **Arguments:** [TODO: the `Args` struct of each action kind ([G-198](#g-198))]
-- **Results:** every `action.done` carries an outcome, success or a failure class, and a short per-kind result: the new commit for `wip_commit` and `commit`, the merge commit for `land` and the pull request number for `open_pr`. `Next()` reads the result on replay, as it reads the session identifier from `action.start`. Events that already report outcomes, such as `task.done` and `check.done`, keep them. [TODO: the failure classes and the result of each action kind ([G-198](#g-198))]
+- **Arguments:** one struct per kind, below. `Args` and `Result` hold it encoded by `encoding/json`, and the schema checks each against the struct the `action` field names. Key parts known only when the action runs, such as a tree hash, a merge base or a head commit, are read by `Drive` then and recorded in the result.
+- **Results:** every `action.done` carries an outcome, success or a failure class, and a short per-kind result: the new commit for `wip_commit` and `commit`, the merge commit for `land` and the pull request number for `open_pr`. `Next()` reads the result on replay, as it reads the session identifier from `action.start`. Events that already report outcomes, such as `task.done` and `check.done`, keep them. Each outcome other than `ok` is one failure class from the table after the structs.
+
+```go
+// SpawnArgs are the arguments of spawn; Agent keeps the reviewer's and the tester's identifiers apart.
+type SpawnArgs struct {
+	Agent  string `json:"agent"`            // the agent to start, such as builder or tester
+	Task   string `json:"task,omitempty"`   // builder only: the task to claim
+	Resume ID     `json:"resume,omitempty"` // the State.Resume session to continue; empty for a fresh session
+}
+
+// SpawnResult is the result of spawn.
+type SpawnResult struct {
+	Link string `json:"link"` // the link the session started on
+}
+
+// CommitArgs are the arguments of wip_commit and commit.
+type CommitArgs struct {
+	Session ID     `json:"session,omitempty"` // the session whose work is saved
+	Task    string `json:"task"`              // the task the commit belongs to
+	Fence   uint64 `json:"fence"`             // State.Fence, checked by the fence transaction
+}
+
+// CommitResult is the result of wip_commit and commit.
+type CommitResult struct {
+	Commit   string `json:"commit"`              // the hidden-ref commit; the old one when the tree was identical
+	Tree     string `json:"tree"`                // the tree hash of the idempotency key
+	DoneWhen *int   `json:"done_when,omitempty"` // commit only: the exit code of done_when
+}
+
+// CancelArgs are the arguments of cancel.
+type CancelArgs struct {
+	Session ID     `json:"session"` // the session to stop
+	Cause   Reason `json:"cause"`   // the exit reason it ends with: cancelled or pause_timeout
+}
+
+// CancelResult is the result of cancel.
+type CancelResult struct {
+	Step string `json:"step"` // the last stop-ladder step used: none, SIGINT, SIGTERM or kill
+}
+
+// SetupArgs are the arguments of setup; Drive reads the detected command and the lockfile hash.
+type SetupArgs struct{}
+
+// SetupResult is the result of setup.
+type SetupResult struct {
+	Exit   int    `json:"exit"`   // the command's exit code
+	Cached bool   `json:"cached"` // an earlier run under the same lockfile hash was reused
+	Output string `json:"output"` // the last 4 KB of output, shown by status on a setup block
+}
+
+// CheckArgs are the arguments of check.
+type CheckArgs struct {
+	Step string `json:"step"` // the Check step the command runs
+	Tip  bool   `json:"tip"`  // the Check on the epic tip after landing
+}
+
+// CheckActionResult is the result of check.
+type CheckActionResult struct {
+	CheckStep
+	Regression bool `json:"regression"` // a failing test passed at the base
+	Cached     bool `json:"cached"`     // the result came from the cache by tree hash and command
+}
+
+// LandArgs are the arguments of land.
+type LandArgs struct {
+	Fence uint64 `json:"fence"` // State.Fence when the landing started
+	Mode  string `json:"mode"`  // ship.mode: group or epic
+}
+
+// LandResult is the result of land; group.shipped copies it.
+type LandResult struct {
+	Merge     string   `json:"merge"`        // the merge commit on the epic branch
+	MergeBase string   `json:"merge_base"`   // the merge base of the idempotency key
+	PR        int      `json:"pr,omitempty"` // ship.mode group: the group pull request number
+	Files     []string `json:"files"`        // paths the landing changed
+}
+
+// OpenPRArgs are the arguments of open_pr.
+type OpenPRArgs struct {
+	Epic string `json:"epic"` // the epic whose pull request opens
+}
+
+// OpenPRResult is the result of open_pr.
+type OpenPRResult struct {
+	PR      int    `json:"pr"`      // the pull request number
+	Head    string `json:"head"`    // the head commit of the idempotency key
+	Created bool   `json:"created"` // false when gh found an existing pull request for the head
+}
+
+// ScopeChangeArgs are the arguments of scope_change.
+type ScopeChangeArgs struct {
+	Task  string   `json:"task"`  // the task that asked
+	Paths []string `json:"paths"` // sorted paths added to the group's files
+}
+
+// ScopeChangeResult is the result of scope_change.
+type ScopeChangeResult struct {
+	Added []string `json:"added"` // paths that were not yet in files
+}
+```
+
+| Outcome | Kinds | What follows |
+|---|---|---|
+| `ok` | Every kind | The kind's in-stage row; a Check step's own failure is `ok` with `level` fail |
+| `no_provider` | `spawn` | The block row `no_provider` |
+| `done_when_failed` | `commit` | Emits `task.retry` with reason `check_fail` |
+| `fence_refused` | `wip_commit`, `commit`, `land` | `Drive` appends `lease.lost`; row 18 ends the group in this run |
+| `exit_nonzero` | `setup` | The block row `setup`, showing `output` |
+| `run_failed` | `check` | The step could not run. [TODO: how a Check error is routed ([G-167](#g-167))] |
+| `merge_conflict` | `land` | The block row `merge_conflict` |
+| `push_failed`, `forge_failed` | `land`, `open_pr` | [TODO: push and forge failure handling ([G-163](#g-163))] |
 
 | Action | Idempotency key | Safe to repeat because |
 |---|---|---|
@@ -1629,16 +2017,16 @@ type OpenAction struct {
 **Example.** A builder session ends `schema_fail` at sequence 12. `Next()` orders a `wip_commit` and emits `task.retry`; `task.retry` orders the next `spawn`. `Drive` appends the follow-on first, then runs both actions in order:
 
 ```json
-{"version":1,"sequence":13,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","stage":"build","epoch":2,"stale":false,"type":"task.retry","data":"[TODO: task.retry data fields (G-198)]","checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":14,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"[TODO: sha256 once wip_commit Args exist (G-198)]","action":"wip_commit","args":"[TODO: wip_commit Args (G-198)]"},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":15,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"[TODO: sha256 once wip_commit Args exist (G-198)]","action":"wip_commit","args":"[TODO: wip_commit Args (G-198)]","outcome":"ok","result":"[TODO: wip_commit result (G-198)]"},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":16,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"[TODO: sha256 once spawn Args exist (G-198)]","action":"spawn","args":"[TODO: spawn Args (G-198)]","session":"0192e4c6-3a10-7c42-8e5d-1f2a3b4c5d6e"},"checksum":"[TODO: checksum (G-182)]"}
-{"version":1,"sequence":17,"timestamp":"2026-10-12T15:31:15Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"[TODO: sha256 once spawn Args exist (G-198)]","action":"spawn","args":"[TODO: spawn Args (G-198)]","outcome":"ok","result":"[TODO: spawn result (G-198)]"},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":13,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","stage":"build","epoch":2,"stale":false,"type":"task.retry","reason":"schema_fail","data":{"task":"tsk-add-lock","attempt":2},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":14,"timestamp":"2026-10-12T15:31:12Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"dc32e30c73346bbf32cc0e5d2b03c390acd3e1546361765d010a8809a9012e4a","action":"wip_commit","args":{"session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","task":"tsk-add-lock","fence":3}},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":15,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"dc32e30c73346bbf32cc0e5d2b03c390acd3e1546361765d010a8809a9012e4a","action":"wip_commit","args":{"session":"0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47","task":"tsk-add-lock","fence":3},"outcome":"ok","result":{"commit":"4b1e9c27d0a3f58e6c2b7d914a0e3f6c58d2b9a1","tree":"e3a7c0d94b2f61e85a0c3d7b9f41e26c8d5a0b37"}},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":16,"timestamp":"2026-10-12T15:31:13Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.start","data":{"id":"10bc121aa801a83e6d43012ce4dc8948572d92143175a47473d23fdcd5e56297","action":"spawn","args":{"agent":"builder","task":"tsk-add-lock"},"session":"0192e4c6-3a10-7c42-8e5d-1f2a3b4c5d6e"},"checksum":"[TODO: checksum (G-182)]"}
+{"version":1,"sequence":17,"timestamp":"2026-10-12T15:31:15Z","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","stage":"build","epoch":2,"stale":false,"type":"action.done","data":{"id":"10bc121aa801a83e6d43012ce4dc8948572d92143175a47473d23fdcd5e56297","action":"spawn","args":{"agent":"builder","task":"tsk-add-lock"},"outcome":"ok","result":{"link":"claude-cli"}},"checksum":"[TODO: checksum (G-182)]"}
 ```
 
-Open decisions in this example: [G-198](#g-198), [G-182](#g-182).
+Open decisions in this example: [G-182](#g-182).
 
-Both action identifiers are computed from sequence 12 for the `wip_commit` and sequence 13 for the `spawn`, the events that ordered them.
+Both action identifiers are computed from sequence 12 for the `wip_commit` and sequence 13 for the `spawn`, the events that ordered them, over the `args` bytes exactly as written.
 
 ### 2.4 Interfaces
 
@@ -1916,7 +2304,7 @@ A fixed enumeration on `group.blocked`, named in `status`. A group that blocks [
 | `brief` | The reviewer reported `brief_incomplete`; a harness fault | Fixes the brief inputs |
 | `contract` | A `Next()` result broke its type's `Spec`. [TODO: the block row that produces this reason ([G-31](#g-31))] | Reads the named type and rule |
 | `state_invalid` | The state manager refused a write or moved a bad record aside as `.bad-*`; names kind, key and field. [TODO: the block row that produces this reason ([G-31](#g-31))] | Inspects the record |
-| (unnamed) | A session's `retries` after timeouts or idle stops, `limits.returns` on findings, a flap (the same failure fingerprint or a zero-diff return), or the job failures [TODO: when a failing job blocks ([G-149](#g-149))]; `reason` is empty and `BlockState.Counter` names the counter. [TODO: the `group.blocked` data field that carries the counter ([G-198](#g-198))] | Runs `resume` |
+| (unnamed) | A session's `retries` after timeouts or idle stops, `limits.returns` on findings, a flap (the same failure fingerprint or a zero-diff return), or the job failures [TODO: when a failing job blocks ([G-149](#g-149))]; `reason` is empty and `BlockState.Counter` names the counter. `group.blocked` carries that counter in its `counter` field. | Runs `resume` |
 
 Every row ends with `resume` unless the last column says otherwise.
 
@@ -1983,7 +2371,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-198](#g-198) | Each event type's data struct; the failure classes and per-kind results of `action.done`; the field that names an unnamed block's counter; `Action.Args`; the `config_hash` and task identifier formats and the failure fingerprint's hash and encoding | Yes |
 | [G-238](#g-238) | How the one builder session hands each finished task to the `commit` action without ending | Yes |
 | [G-211](#g-211) | The machine log file names; Which writer appends `state.truncated` | Yes |
 | [G-159](#g-159) | Which component checks that a finding's quote is at its line | Yes |
@@ -1992,7 +2379,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-182](#g-182) | The checksum algorithm | Yes |
 | [G-37](#g-37) | The epic gate's record identifier and file names; the event that carries a gate finding into a Done group's log | Yes |
 | [G-217](#g-217) | The startup sweep against an open spawn's rerun; Which component owns the action record; Whether `Drive` or `recover.go` calls `Load` | Yes |
-| [G-207](#g-207) | The `VerifyProgress` fields | Yes |
 | [G-38](#g-38) | How a slot is held and freed | Yes |
 | [G-112](#g-112) | How `agent.json` limits and `agents.<name>` keys combine | Yes |
 | [G-67](#g-67) | The session-end commit mechanism and the third inline hook | Yes |
@@ -2839,7 +3225,7 @@ Every worktree lives outside every clone, so no path contains `.git`, and one pl
 | [TODO: `the event the sweep records for a dead session` ([G-217](#g-217))] | The startup sweep | A session died without reporting |
 | `run.stopped` | Shutdown | After agents stop, work is saved and leases are freed |
 
-The payload of `lease.lost` is [TODO: `event payload struct` ([G-198](#g-198))]. The machine log file name is [TODO: `machine log file naming` ([G-202](#g-202))].
+The payload of `lease.lost` is `LeaseLost` ([Data structs (chapter 2)](#data-structs)): the higher fence number, the run now holding the lease, and whether a save or a push found it. The machine log file name is [TODO: `machine log file naming` ([G-202](#g-202))].
 
 **📐 How are the on-disk pieces related?**
 ```mermaid
@@ -3231,7 +3617,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-66](#g-66) | Idle removal trigger and measure; missing hidden reference at `resume` | No |
 | [G-67](#g-67) | Work-in-progress commit contents | No |
 | [G-217](#g-217) | Scan placement, pid file location; Which component owns the startup sweep; Which component owns the session pool slots; Which event the sweep records for a dead session | Yes |
-| [G-198](#g-198) | `lease.lost` payload | Yes |
 
 ## 5. Sessions, Agents and Briefs
 
@@ -3730,7 +4115,7 @@ func Supervise(ctx context.Context, s provider.Stream, lim SessionLimits, c *Clo
 | Supervisor | `Stream.Next`, `Stream.Inject`, `Stream.Stop` | Reading lines, the time warning and nudge, the stop ladder |
 | Supervisor | Events `session.start`, `task.claimed`, `session.idle`, `session.timewarn`, `session.end`, `task.released` | Each is a fact handed to `Drive` ([Event Spine and State Machine](#2-event-spine-and-state-machine)) |
 
-Failure behaviour: `Supervise` returns the exit reason it recorded and an error only when the stream or the stop ladder itself fails. [TODO: the signature and arguments of the `spawn` and `cancel` entry points ([G-203](#g-203))] [TODO: the data of each `session.*` event ([G-198](#g-198))] [TODO: how the tool server's events, such as a tool call starting and ending, reach the engine so `ToolsRunning` and the heartbeat are known ([G-42](#g-42))] [TODO: how `SessionLimits` is resolved from `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` ([G-112](#g-112))]
+Failure behaviour: `Supervise` returns the exit reason it recorded and an error only when the stream or the stop ladder itself fails. [TODO: the signature and arguments of the `spawn` and `cancel` entry points ([G-203](#g-203))] The data of each `session.*` event is in [Data structs (chapter 2)](#data-structs). [TODO: how the tool server's events, such as a tool call starting and ending, reach the engine so `ToolsRunning` and the heartbeat are known ([G-42](#g-42))] [TODO: how `SessionLimits` is resolved from `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` ([G-112](#g-112))]
 
 ### 5.5 Behaviour
 
@@ -4073,7 +4458,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-106](#g-106) | Whether `repo_context` and `standards` are slots, parts or both | Yes |
 | [G-112](#g-112) | How `agent.json` `limits`, the flat keys and `agents.<name>` combine | Yes |
 | [G-69](#g-69) | Who walks the chain when a brief is over the ceiling; The shape of an agent's provider chain | Yes |
-| [G-198](#g-198) | The data of the `session.*` events | Yes |
 | [G-217](#g-217) | The owner of the session pool slots; Which event the sweep records for a dead session; Which component owns the startup sweep | Yes |
 | [G-107](#g-107) | What `brief.md`, `system.md` and `mcp.json` hold | Yes |
 | [G-109](#g-109) | When the engine runs the architect, the researcher and the scout | No |
@@ -4563,7 +4947,7 @@ A builder session on a `claude-cli` link edits a file in its group's `files`, ru
 4. The model requests `run` with `{"class": "test", "args": ["./internal/safety/..."]}`. Row R1 finds `test` among the builder's `run_classes`.
 5. The sandbox backend wraps the command. It runs in the worktree with the allowlisted environment, and prints 40 KB. The reply keeps 4 KB and names `<session>/out/<call>.log`, which holds the full output.
 6. The model requests `edit` on a file that is neither in `files` nor a test sibling. Row B1 refuses and tells the builder to stop with result status `needs_scope`. The refusal counts once toward `guard.refusal_limit`.
-7. The refusal is logged afterwards as `tool.denied`. [TODO: the data of `tool.denied` ([G-198](#g-198))] [TODO: how the tool server's events reach the engine ([G-42](#g-42))]
+7. The refusal is logged afterwards as `tool.denied`. Its data is `ToolDenied`: the tool, the guard row, the refused target and the count under that row ([Data structs (chapter 2)](#data-structs)). [TODO: how the tool server's events reach the engine ([G-42](#g-42))]
 8. The builder ends with `needs_scope`, and the session's end makes the work-in-progress commit. [TODO: whether the inline `session.end` hook or the `wip_commit` action makes it ([G-67](#g-67))] The commit goes through the git wrapper in `internal/repo/git.go`.
 
 **📐 How does one tool call travel?**
@@ -4595,7 +4979,7 @@ sequenceDiagram
 4. The `tool.pre` hook runs the guard in-process before the tool runs.
 5. A refusal returns a reply naming the row and the allowed alternative. An allow runs the tool function.
 6. The reply is capped; the full output goes to `<session>/out/<call>.log`, and the capped reply names the path.
-7. A validated `submit_finding` becomes `finding.submit`. [TODO: the data of `finding.submit` ([G-198](#g-198))] [TODO: how the tool server's events reach the engine ([G-42](#g-42))]
+7. A validated `submit_finding` becomes `finding.submit`. Its data is `FindingSubmit`, whose fields `rule`, `file`, `line` and `quote` are the tool's own argument names ([Data structs (chapter 2)](#data-structs)). [TODO: how the tool server's events reach the engine ([G-42](#g-42))]
 8. The session's end makes the work-in-progress commit. [TODO: whether the inline `session.end` hook or the `wip_commit` action makes it ([G-67](#g-67))] The commit goes through the git wrapper in `internal/repo/git.go`. No model, repository or host hook runs inside a worker.
 
 ##### Guard check
@@ -4903,7 +5287,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-49](#g-49) | Sandbox profile text and environment values | Yes |
 | [G-56](#g-56) | Tool server start-up inputs and failures | Yes |
 | [G-57](#g-57) | The layout and versioning of `embed/policy.json` | Yes |
-| [G-198](#g-198) | The data of `tool.denied` and `finding.submit` | Yes |
 | [G-126](#g-126) | Whether a finding may cite a standards rule identifier `std.<skill>.<n>` | Yes |
 | [G-67](#g-67) | Whether the third inline hook is `session.end` or the commit is the `wip_commit` action | No |
 | [G-159](#g-159) | How `submit_finding` and `lint_backlog` reach the rule catalogs and lint, which sit above `tools`; which component checks the quote | Yes |
@@ -7073,7 +7456,7 @@ flowchart LR
 | `internal/engine/recover.go` | Crash resume through group state's `Load`; the startup sweep [TODO: `the sweep's owner` ([G-217](#g-217))] |
 | `embed/lenses/<lens>.json`, `embed/lenses/<lens>.md` | The lens catalogs: rule IDs, severities and file scopes in the JSON file, rule bodies in the Markdown file |
 
-No file is named for the baseline comparison, the impact set, the flake rule or the case-collision test; the table above holds only the placed steps. [TODO: `the files for the baseline comparison, impact set, flake rule and case-collision test` ([G-207](#g-207))]
+The remaining steps sit beside them: the baseline comparison and the flake rule (`Baseline`, `Classify`, `ClassifyFailure`) in `internal/quality/baseline.go`, the impact set (`ImpactSet`) in `internal/quality/impact.go`, and the case-collision test (`CaseCollisions`) in `check.go` with the scope check.
 
 `internal/quality` starts no session. The engine passes in each session, and the functions of this package validate what the session returns. Other files that take part:
 
@@ -7097,7 +7480,7 @@ No file is named for the baseline comparison, the impact set, the flake rule or 
 
 ### 9.3 Data Model
 
-The exported names below are the working shape. [TODO: `confirm the exported names and signatures of this subsystem` ([G-207](#g-207))]
+The exported names below are the names the code uses.
 
 #### Verdicts and enumerations
 
@@ -7204,7 +7587,7 @@ type CheckInput struct {
 | `Level` | `fail` blocks, `warn` is reported, `pass` is silent |
 | `Detail` | The failing test, file or secret location, so a return to Build names it |
 
-The `check.done` event carries pass or fail; its data fields are [TODO: `the data of check.done` ([G-198](#g-198))].
+The `check.done` event carries `CheckDone`: pass or fail, whether the Check ran on the epic tip, the head commit, whether a regression was found, and one `CheckStep` per `StepResult` ([Data structs (chapter 2)](#data-structs)).
 
 ```go
 // TestStatus classifies one test against the baseline.
@@ -7275,16 +7658,21 @@ Each `- **Never` and `- **Always` line of a standards skill compiles into a rule
 ```go
 // Finding is one reviewer claim, submitted with submit_finding.
 type Finding struct {
-	Rule  string // a rule ID from a lens catalog
-	File  string
-	Line  int
-	Quote string // the quoted line of evidence
+	Rule  string `json:"rule"`  // a rule ID from a lens catalog
+	File  string `json:"file"`  // path from the worktree root
+	Line  int    `json:"line"`  // line number from 1
+	Quote string `json:"quote"` // the quoted line of evidence
 }
 
 // TaskVerdict is the reviewer's verdict on one task.
 type TaskVerdict struct {
-	Task    string
-	Verdict Verdict
+	Task    string  `json:"task"`
+	Verdict Verdict `json:"verdict"`
+}
+
+// ReviewerResult is the reviewer's whole result: one verdict per task ID.
+type ReviewerResult struct {
+	Verdicts []TaskVerdict `json:"verdicts"`
 }
 
 // Precision counts one rule's findings for one model.
@@ -7303,9 +7691,9 @@ type Precision struct {
 | `Submitted` | Findings that passed `submit_finding` validation |
 | `Verified` | Findings whose quote Go found at `file:line` |
 | `Fixed` | Verified findings the builder fixed |
-| `Disputed` | Findings the builder rejected with a result code naming the file and line [TODO: `the format of that result code` ([G-207](#g-207))] |
+| `Disputed` | Findings the builder rejected by listing the finding's `<file>:<line>`, such as `internal/engine/stage.go:142`, in the `disputed` list of the builder's result |
 
-The wire shape of a finding and of the reviewer's result is [TODO: `result and finding field names` ([G-207](#g-207))]. The ledger keeps the precision counters. [TODO: where the precision counters are stored ([G-152](#g-152))]
+The wire names are the JSON tags above: `submit_finding` takes `rule`, `file`, `line` and `quote`, the fields of `FindingSubmit` ([Data structs (chapter 2)](#data-structs)), and the reviewer's result is a `verdicts` list of `task` and `verdict` pairs. The ledger keeps the precision counters. [TODO: where the precision counters are stored ([G-152](#g-152))]
 
 #### Tester
 
@@ -7320,21 +7708,22 @@ type Item struct {
 
 // ItemResult is the tester's pass or fail for one item.
 type ItemResult struct {
-	Item     string
-	Pass     bool
-	Evidence string
+	Item     string        `json:"item"` // the Item.ID from TG.md
+	Pass     bool          `json:"pass"`
+	Evidence string        `json:"evidence"`         // the output or observation behind the answer
+	Reason   DisputeReason `json:"reason,omitempty"` // after a restart with Go's output: why the item failed for the tester
 }
 
 // TaskConfirmation is the tester's answer for one task ID.
 type TaskConfirmation struct {
-	Task         string
-	Confirmation Confirmation
+	Task         string       `json:"task"`
+	Confirmation Confirmation `json:"confirmation"`
 }
 
 // TesterResult is everything the tester returns.
 type TesterResult struct {
-	Items []ItemResult
-	Tasks []TaskConfirmation
+	Items []ItemResult       `json:"items"`
+	Tasks []TaskConfirmation `json:"tasks"`
 }
 
 // RerunOutcome is Go's judgement of a failed item after two reruns.
@@ -7358,7 +7747,7 @@ An acceptance item in `TG.md`, with the `cmd:` line Go reruns ([Backlog, Plannin
 
 The sentence form `WHEN … THE SYSTEM SHALL …` is open [TODO: `the sentence form of an acceptance item` ([G-155](#g-155))].
 
-The tester's wire result is [TODO: `result field names` ([G-207](#g-207))].
+The tester's wire result is the JSON tags above: `items`, each with `item`, `pass`, `evidence` and, after a restart, `reason`; and `tasks`, each with `task` and `confirmation`.
 
 #### Scope request
 
@@ -7488,7 +7877,7 @@ func ExactlyOnce(want, got []string) error
 |---|---|
 | `Lenses` | Cannot fail |
 | `AcceptFinding` | An unknown rule ID returns an error and the finding is refused [TODO: `whether std.<skill>.<n> is known` ([G-126](#g-126))]; a quote not found returns `false`, and the finding is dropped and logged |
-| `AcceptResult` | A skipped or repeated task ID returns an error; the engine rejects the result and the session counts an attempt [TODO: `how a rejected result is retried` ([G-207](#g-207))] |
+| `AcceptResult` | A skipped or repeated task ID returns an error; the engine treats it as a schema failure: one re-prompt names the skipped or repeated IDs, and a second rejection ends the session `schema_fail`, which restarts the agent within its `retries` |
 
 ```go
 // Tester is the quality-side half of a tester session.
@@ -7777,7 +8166,7 @@ flowchart TD
 ```
 
 1. The tool refuses a rule ID that is in no lens catalog. [TODO: `whether the standards rule identifiers std.<skill>.<n> are in that set` ([G-126](#g-126))]
-2. `VerifyFinding` looks for the quote at `File:Line` in the head tree and in the diff. How exactly the line is matched is open. [TODO: `the match rule for a quote: exact line, whitespace, and the head tree versus the diff` ([G-207](#g-207))]
+2. `VerifyFinding` looks for the quote at `File:Line` in the head tree and in the diff. The line matches when it equals the quote once both are trimmed of leading and trailing whitespace; inner whitespace and letter case must match exactly, and a quote holding a line break is refused. The head tree is tried first, then the diff line, added or context, whose new-file number is `Line`; `finding.verified` records which matched in `in`.
 3. A quote that is not found drops the finding and logs it; the finding cannot block. The precision ledger counts it as submitted, not verified.
 4. A verified finding is appended as `finding.verified`; its rule's severity decides whether the group is blocked.
 5. The precision ledger counts the finding as submitted, and as verified or not.
@@ -8056,7 +8445,7 @@ This subsystem owns three small state machines. The group's own stages are in [E
 | Tester disputes a second time | Tester result | Group Blocked `tester` |
 | Go's reruns split | Rerun outcome | Group Blocked `flaky` |
 
-The fields of `VerifyProgress` are open [TODO: `VerifyProgress fields` ([G-207](#g-207))].
+`VerifyProgress` ([The State Struct (chapter 2)](#the-state-struct)) holds each agent's session, result, restarts and the tester's disputes, plus the claims, the verified findings, the `not_met` tasks and the failed items. The tester's `disputes` reaching 2 is the second dispute that blocks `tester`.
 
 #### A tester item
 
@@ -8246,9 +8635,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Blocks building? |
 |---|---|---|
 | [G-16](#g-16) | The content of the lens rule catalogs; the rule ID format | Yes |
-| [G-198](#g-198) | The data of `check.done`, `finding.submit` and `finding.verified` | Yes |
 | [G-29](#g-29) | How `scope approve | Yes |
-| [G-207](#g-207) | Exported names; files for the baseline, impact set, flake rule and case-collision steps; `VerifyProgress` fields and other formats left open; Reviewer and tester result and finding field names; the quote match rule; the builder's dispute code | Yes |
 | [G-167](#g-167) | Check step order, which steps are actions, who emits `check.done`, how a Check error is routed | Yes |
 | [G-43](#g-43) | The test-sibling rule; The secret content patterns; The glob grammar | Yes |
 | [G-169](#g-169) | Whole-repository coverage per language; a test with no base result; test-file imports in the impact set | Yes |
@@ -9176,7 +9563,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-198](#g-198) | The `data` struct of `lock.taken`, `task.*`, `job.due` and `job.fail`; the ledger copies and reads these fields | Yes |
 | [G-208](#g-208) | Fields and layout of `jobs/state.json` and `ledger/sessions.jsonl`; the task id and timestamp formats; exported names and signatures of the scheduler, cache store and ledger; Cache key joining and prefix, entry layout, verification basis, recency, eviction, kind folders, `cache clear` kinds, `--all`, counters, concurrent writers; Ledger files: file map, view shape and cursor, lease fields, task state values, session row trigger, host subagent events, trim, locking, secret patterns, missing-file behaviour | Yes |
 | [G-145](#g-145) | Template grammar, execution order, decode failure, minimum interval check, template paths and precedence | Yes |
 | [G-146](#g-146) | The file that holds `job.due` and `job.fail` | Yes |
@@ -9391,7 +9777,7 @@ Open decisions in this example: [G-155](#g-155).
 | `done_when:` | command | The task's pass condition; the builder's result is checked against it in its own session and Check reruns it with 0 model tokens |
 | `estimate_lines:` | integer | The planner's estimate of changed lines, at most 300 |
 
-The plan check refuses a task file that names a file missing from its group's `files`. [TODO: `the card's fields beyond these three named lines; the task identifier format` ([G-155](#g-155), [G-198](#g-198))]
+The plan check refuses a task file that names a file missing from its group's `files`. The task identifier is the file name without `.md`, such as `tsk-add-lock` ([The State Struct (chapter 2)](#the-state-struct)). [TODO: `the card's fields beyond these three named lines` ([G-155](#g-155))]
 
 #### Go types
 
@@ -9532,7 +9918,7 @@ type Symbol struct {
 | `land` key | `(group, fence, merge base)` | A landed merge commit already exists; the fence file, re-read just before the push, refuses a stale lander |
 | `open_pr` key | `(epic, head commit hash)` | `gh` finds the existing pull request for that head first |
 
-[TODO: `whether <epic> and <group> are the folder names such as epic-1 and tg-1.2` ([G-161](#g-161))] [TODO: `the argument struct of the land and open_pr actions` ([G-198](#g-198))]
+[TODO: `whether <epic> and <group> are the folder names such as epic-1 and tg-1.2` ([G-161](#g-161))] Their arguments are `LandArgs` and `OpenPRArgs` ([Actions (chapter 2)](#actions)); the merge base and the head commit of the keys are read when the action runs and recorded in its result.
 
 ```go
 // LandKey is the idempotency key of the land action.
@@ -9579,7 +9965,7 @@ type PRFacts struct {
 }
 ```
 
-`CheckSummary` carries the step and level of a Check result from [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery) as plain data, because `repo` sits below `quality`. [TODO: `the shape of the Check summary that Ship receives` ([G-198](#g-198))] [TODO: `the pull request title and labels` ([G-161](#g-161))]
+`CheckSummary` carries the step and level of a Check result from [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery) as plain data, because `repo` sits below `quality`. Ship fills each `CheckSummary` from the `step` and `level` of a cached check result, the pair `CheckStep` carries ([Data structs (chapter 2)](#data-structs)). [TODO: `the pull request title and labels` ([G-161](#g-161))]
 
 #### Release manifest
 
@@ -10117,7 +10503,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-160](#g-160) | Repo map: pattern file layout, reference counting, tie-break order, rendered form, token counting | Yes |
 | [G-161](#g-161) | Ship branches, remote, epic-branch merge location, group pull request merge method, title and labels | Yes |
 | [G-163](#g-163) | Push, forge and merge failure handling | Yes |
-| [G-198](#g-198) | The argument structs of `land` and `open_pr` | Yes |
 | [G-139](#g-139) | Release: key file format, embedded keys, manifest layout, target pairs, publishing, changelog input | Yes |
 | [G-154](#g-154) | How `add backlog` reads the locked state; who records a task's real line count | No |
 | [G-18](#g-18) | Repo map patterns for TypeScript, Python and Rust against 3 real repositories | No |
@@ -11728,7 +12113,7 @@ Replay costs at most one snapshot interval of lines. [TODO: `measure the replay 
 
 ##### State manager generated schema
 
-The build generates `embed/state.schema.json` from the kind registry and the event registry: one record kind per entry, all 34 event types of the catalog as Go structs, an enumeration for every `reason`. `help --json` serves it as `state`. The gate fails when the file disagrees with the Go types ([Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)). [TODO: the fields of each event type's `data` struct, which the schema lists ([G-198](#g-198))]
+The build generates `embed/state.schema.json` from the kind registry and the event registry: one record kind per entry, all 34 event types of the catalog as Go structs, an enumeration for every `reason`. `help --json` serves it as `state`. The gate fails when the file disagrees with the Go types ([Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)). The fields of each `data` struct are in [Data structs (chapter 2)](#data-structs).
 
 ### 13.6 State
 
@@ -11843,7 +12228,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-198](#g-198) | Each event type's data struct, which the schema lists | Yes |
 | [G-211](#g-211) | The header and body layout in one file; timestamp and writer encoding; the machine log file names; `Tail`'s file choice; exported names and signatures derived here; how a package obtains the manager; entry points; The caller identity for the writer check; the error values of each refusal; Where a record stores its checksum or hash; a `v` newer than the binary knows; The `rev` of a first write; File-level details of the primitives and the takeover call; Cut-short and bad-line handling; Group state: `Open`, `Snapshot` stage detection and `Load` without a snapshot; The `Watch` method and its result type name | Yes |
 | [G-74](#g-74) | Locking for machine-shared files; the engine's reaction to a failed write of `quota.json` or a timer record; locking for the group ledger and the quota file; locking for `config.json`, `config.sha` and `config.log`; Whether the group ledger is kept per repository or shared across the machine | Yes |
 | [G-182](#g-182) | The checksum algorithm and how it is written | Yes |
@@ -12446,7 +12830,7 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-139"></a>G-139 | Release manifest, verification and release | The key names of `latest.json`, the architectures built, the asset file names, the exact bytes the ed25519 signature covers and how it is encoded; whether either embedded key may sign and how the next key rotates in; whether the updater refetches `latest.json` or reads the asset from `fresh.json`; how a binary treats a manifest layout it does not know; where the install script saves the download before it runs it; the key file's format and what `release` does when its mode is wider than 0600; where `add changelog` stores its recorded lines until the release; where the current and `next` public keys live in the source and how the `next` key is produced at the first release; the operating system and architecture pairs built; how the release is published; how the changelog is rendered from the entries `add changelog` records; what `--notes-file` supplies | Owner decision on the architecture page; then 11.3, 11.5, 12.3 and 12.5 | [1.4](#14-interfaces), [11.4](#114-interfaces), [11.5](#115-behaviour), [12.3](#123-data-model), [12.5](#125-behaviour) |
 | <a id="g-142"></a>G-142 | Gate inputs and result | How the gate recognises the Komodo repository and its refusal code; where the check fixtures live and how they load; the layout of the gate result data, the verdict wording and the error code; the comment lint rules; how docs drift finds package names in `lld.md`; what the component map names now that each LLD chapter is a subsystem; the gap tag syntax the no-silent-gaps check scans now that open items are written as TODO with a gap identifier, and how a backlog task names the gap it closes | Owner decision; then 12.3 and 12.5 | [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour), [12.7](#127-invariants-and-failures) |
 | <a id="g-145"></a>G-145 | Scheduler, templates | Where a template lives: the scheduler section says `embed/jobs/` or `~/.komodo/jobs/` with the example `templates/jobs/nightly-review.json`; the file map says `embed/jobs/` holds job templates and none ship while `templates/jobs/` holds the example; the `jobs` verb reads `embed/jobs/` and `~/.komodo/jobs/`, not `templates/jobs/`; template grammar: accepted forms of `every`, the value type of a slot, characters allowed in `name`, whether the agents run in parallel or in turn, how the 5 min minimum is enforced (refuse or raise), what the tick does with a template that fails strict decoding, how an older or newer template is read. Paths disagree: the scheduler section says `embed/jobs/` or `~/.komodo/jobs/`, the file map and `jobs list` omit `templates/jobs/`; which file wins when two share a name | Owner decision, then 10.3 and 10.4 | [0.3](#03-package-map), [0.5](#05-embedded-assets), [10.3](#103-data-model), [10.4](#104-interfaces), [10.7](#107-invariants-and-failures), [14.1](#141-runtime-state) |
-| <a id="g-146"></a>G-146 | Scheduler, events | No file is named for `job.due` and `job.fail`. The catalog says the scheduler emits them and `stage` is forbidden on `job.*`; the machine log lists `job.due` but its family count has 3 types without it; a job run's own run state `runs/<run>.jsonl` has the run goroutine as its only writer | Owner decision with G-29, G-198 and G-208 | [2.3](#23-data-model), [10.5](#105-behaviour), [13.3](#133-data-model) |
+| <a id="g-146"></a>G-146 | Scheduler, events | No file is named for `job.due` and `job.fail`. The catalog says the scheduler emits them and `stage` is forbidden on `job.*`; the machine log lists `job.due` but its family count has 3 types without it; a job run's own run state `runs/<run>.jsonl` has the run goroutine as its only writer | Owner decision with G-29 and G-208 | [2.3](#23-data-model), [10.5](#105-behaviour), [13.3](#133-data-model) |
 | <a id="g-148"></a>G-148 | Scheduler, tick | What "drive the pool once" starts and in which process; the queue item id of a job so two ticks collide; how a job item is taken when job sessions take no pool slot though taking a slot deletes the item; `next_at` after a success, after a failure and for a job with no counters; where the run number `<n>` is kept; which of the lease and the `running` flag decides an overlap and where the skip is logged; tick behaviour on a refused `Replace` or other errors | Owner decision; then 10.5 | [3.3](#33-data-model), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state) |
 | <a id="g-149"></a>G-149 | Scheduler, retries | "Retried 3 times" with three delays versus "Blocked after the third failure"; how a Blocked job is stored when `jobs/state.json` has no field for it; which event wakes `status --wait` for it; how it resumes; what reads `last_fail_hash`; behaviour of `jobs run`, `pause`, `resume` and `--ignore-window`; whether a retry records a new `job.due` | Owner decision | [2.3](#23-data-model), [2.6](#26-state-and-transitions), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures) |
 | <a id="g-152"></a>G-152 | Scorecard | Cache hit rate is "per kind" in the scorecard and "per agent" in the token section; how group counts such as returns attribute to an agent and model; where the precision ledger counts and the cache counters are stored; where the cached totals live | Owner decision | [9.3](#93-data-model), [9.5](#95-behaviour), [9.9](#99-proof-cases), [10.3](#103-data-model), [10.5](#105-behaviour) |
@@ -12471,14 +12855,12 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-186"></a>G-186 | Race check | How two engines start on one group, since `run` refuses a group another run holds (chapter 1); which machine or clone the second engine runs on | Owner decision; then 15.1 and chapter 4 | [3.5](#35-behaviour), [15.1](#151-end-to-end-verification-plan) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file before the cleanup; then 15.3 | [15.3](#153-host-cleanup-before-phase-2) |
 | <a id="g-188"></a>G-188 | Cutover | The repo table that phase 9 applies: which repository files name retired verbs and the rewrite for each; the sources name it and do not list it | Owner decision; then 15.4 | [15.4](#154-cutover) |
-| <a id="g-198"></a>G-198 | Event spine, payloads and action arguments | The `data` struct of each of the 34 event types in `state.schema.json`, including `lease.lost`, the `session.*` events, `tool.denied`, `finding.submit`, `finding.verified`, `check.done`, `lock.taken`, the `task.*` events, `job.due` and `job.fail`; the failure classes and the per-kind result of `action.done`; the `group.blocked` data field that names an unnamed block's counter; the `Args` struct of each action kind, including `land` and `open_pr`; the `config_hash` and task identifier formats and the failure fingerprint's hash and encoding | One architect pass drafts every event body, every action kind's `Args` and their results in one change to 2.3, for one owner approval; taken first because the event examples and the schema in chapters 2 to 13 depend on it; then 11.3, 11.4 and the examples link to 2.3 | [HLD Open decisions](hld.md#open-decisions), [2.3](#23-data-model), [2.6](#26-state-and-transitions), [4.3](#43-data-model), [5.4](#54-interfaces), [6.5](#65-behaviour), [9.3](#93-data-model), [11.3](#113-data-model), [13.5](#135-behaviour) |
 | <a id="g-201"></a>G-201 | Engine, formats and names | The queue and slot file names, layouts and bodies; the timestamp format; how a repository identifier becomes a file name; how a record's header and body share one file; forward-version handling; the files for the run goroutine, run-order readiness, the landing gate, the epic gate and the panic-catching helper; the exported names of the engine's functions; how the engine learns that a dependency outside the run has landed | Owner decision on how the engine learns that an outside dependency landed; design patch to 3.2, 3.3 and the chapter 0 file map for the rest | [3.2](#32-package-layout), [3.3](#33-data-model), [3.4](#34-interfaces), [3.5](#35-behaviour) |
 | <a id="g-202"></a>G-202 | Workspace, formats and names | The lease file key names and record layout; the timestamp format; the exported names and signatures of the workspace functions; the worktree folder name on each platform (short hash of what, and `<group>` versus `<group-id>`); how the three Windows git settings are applied to one worktree; the tester worktree path, which file cuts it (`worktree.go` or `qa.go`), and how the sweep finds a dead run's tester worktrees | Design patch to 4.3 and 4.5; owner confirms the shapes in 4.4 | [4.2](#42-package-layout), [4.3](#43-data-model), [4.4](#44-interfaces), [4.5](#45-behaviour) |
 | <a id="g-203"></a>G-203 | Sessions and agents, formats and names | The fields of `request.json` and `result.json`; the signature and arguments of the `spawn` and `cancel` entry points; the Go shapes of the registry, the brief builder and the supervisor; the result schema of each of the 7 agents (`$id` and fields); the builder's `skills.allow` list beyond `standards-comments` | Design patch to 5.3; owner confirms the shapes in 5.4; agent schemas are an authoring task, phase 3 | [5.3](#53-data-model), [5.4](#54-interfaces) |
 | <a id="g-205"></a>G-205 | Providers, formats and names | The key names of `providers.json`, `quota.json` and `models.json`; how a record's header and body share one file; the `CtxSource` strings; the Go shapes of `Session`, `Stream`, `Event`, `Input`, `ResumeHandle` and `LimitError`; the error values of `Inject`, `Stop` and `Close`; the signature of `ToolHost` | Design patch to 7.3; owner confirms the shapes in 7.4 | [7.3](#73-data-model), [7.4](#74-interfaces) |
 | <a id="g-206"></a>G-206 | Skills and output, formats and names | The index file layout, its key names, the bytes the fingerprint covers and how `sha8` is cut from it; the exported names in 8.3 and 8.4; each caller's reaction to a loader or render error | Design patch to 8.3; owner confirms the shapes in 8.4 | [8.3](#83-data-model), [8.4](#84-interfaces) |
-| <a id="g-207"></a>G-207 | Check, review and tester, names | The `VerifyProgress` fields; the exported names and signatures of the quality subsystem; the files for the baseline comparison, the impact set, the flake rule and the case-collision test; the field names of the reviewer's and the tester's results and of `submit_finding`; how a quote is matched at `file:line` (exact line, whitespace, head tree against diff); the builder result code that counts as `disputed`; how a rejected result is retried | Design patch to 9.2 and 9.3; with G-198 for the event data | [2.3](#23-data-model), [9.2](#92-package-layout), [9.3](#93-data-model), [9.4](#94-interfaces), [9.5](#95-behaviour), [9.6](#96-state) |
-| <a id="g-208"></a>G-208 | Scheduler, cache and ledger, formats and names | The file layout, timestamp format and fingerprint algorithm of `jobs/state.json`; the key names of the session row and of `ledger/sessions.jsonl`, the model identifier key and the capacity profile text; the exported names and signatures of the scheduler, cache store and ledger. Cache store: how inputs are joined into the hash and what the config-hash prefix does; the fan-out widths and entry file layout; what the verification hash covers and where it is stored; how recency is tracked and when eviction runs; the folders of the repo profile and the test baseline; `cache clear --kind` has no value for `setup` and `map`; how `--all` finds other repositories; where hit and lookup counters live; behaviour when the folder is unreadable; concurrent writers of one key. Ledger: the files for the views, the scorecard and the status data; the shape of `groups.json` and `tasks.json` and where each group's last applied sequence is stored; which event or file updates the fence and lease fields of the group row and the effect of `lease.lost`; the task state after `task.released` and where `released: crash` shows; which call writes the session row; host subagent events; the trim algorithm and trigger; the secret patterns masked (same list as the guard's); when views catch up after a dropped subscriber; status behaviour when a ledger file is missing; the meaning of "tick" in the ledger batching rule | Owner decision with G-198; then 10.3 and 10.4 | [10.2](#102-package-layout), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures), [13.3](#133-data-model), [14.3](#143-data-flow) |
+| <a id="g-208"></a>G-208 | Scheduler, cache and ledger, formats and names | The file layout, timestamp format and fingerprint algorithm of `jobs/state.json`; the key names of the session row and of `ledger/sessions.jsonl`, the model identifier key and the capacity profile text; the exported names and signatures of the scheduler, cache store and ledger. Cache store: how inputs are joined into the hash and what the config-hash prefix does; the fan-out widths and entry file layout; what the verification hash covers and where it is stored; how recency is tracked and when eviction runs; the folders of the repo profile and the test baseline; `cache clear --kind` has no value for `setup` and `map`; how `--all` finds other repositories; where hit and lookup counters live; behaviour when the folder is unreadable; concurrent writers of one key. Ledger: the files for the views, the scorecard and the status data; the shape of `groups.json` and `tasks.json` and where each group's last applied sequence is stored; which event or file updates the fence and lease fields of the group row and the effect of `lease.lost`; the task state after `task.released` and where `released: crash` shows; which call writes the session row; host subagent events; the trim algorithm and trigger; the secret patterns masked (same list as the guard's); when views catch up after a dropped subscriber; status behaviour when a ledger file is missing; the meaning of "tick" in the ledger batching rule | Owner decision; then 10.3 and 10.4 | [10.2](#102-package-layout), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures), [13.3](#133-data-model), [14.3](#143-data-flow) |
 | <a id="g-210"></a>G-210 | Install and binary lifecycle, formats and names | The field names of `install.json`, its hash algorithm and how a settings entry is named; how a record's header and body share one file; forward-version handling; the exported names of the install, update, probe and gate functions. Install writes: how install chooses `~/.zshrc` or `~/.bashrc` and the text of the line; how the Windows user `PATH` is changed; the launchd label, cron line and Task Scheduler task name; the exact `SessionStart` hook entry; where the block goes in an `AGENTS.md` without markers and what happens with damaged markers; what a rerun does with files written before the manifest after a crash; where ownership of the binary, `PATH` line, `providers.json` and schedule entry is recorded; what `--repo-only` and `--machine-only` do outside a git repository. Lifecycle records: where the time of the last check and the count of consecutive failures are kept; the line format of `state/fresh.log`; the layout of `state/active/` and which code writes and removes its entries; how the previous version is recorded; when `komodo.exe.old` is deleted; whether `fresh.auto: false` and `CI=true` also stop the hourly fetch of `latest.json`; how the 2 minute checkpoint wait of `--restart-runs` fits the shutdown sequence's 30 second stop per agent and 60 second force-kill; the `restart` stop reason that `run.stopped` does not list | Owner decision; then 12.3 to 12.5 and chapter 2 | [12.2](#122-package-layout), [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour) |
 | <a id="g-211"></a>G-211 | State manager, interface and formats | The state manager's interface: the exported names and signatures, how a package obtains the manager, the generator and migration entry points, whether `Body` is an interface, and the parameters and results of `Append`, `Claim` and `Remove`; the `Watch` result type (`Wake` is taken), what it returns, and whether it uses operating-system notification or polling; how the manager identifies the calling component for the writer check; the error values of a stale `rev`, an unlisted writer, a taken claim, a failed disk write and a read of an absent record, whether `List` returns the good records beside an error, and what `Drive` does when `Append` or `Snapshot` refuses; the `rev` of a first write and whether `Replace` creates a record. Its formats: the timestamp format of `ts` and the encoding of `writer`; how a record's header and body share one file; where a replaced record stores its checksum or hash; whether append kinds other than events carry a checksum; what a binary does with a `v` newer than it knows and how an older event `version` is migrated; the machine log file name pattern; how `Tail` chooses the state file; the temp file name and folder of `Replace`, whether the folder is synced after the rename, the suffix after `.bad-`, the name of a stale file renamed aside, the line terminator and length limit, and which call performs a takeover. Damage: whether a dropped cut-short line is removed from the file, which writer appends `state.truncated`, whether the dropped line's `sequence` is reused, what `Tail` returns for a line a live writer has not finished, what is moved aside for a bad line before the last, which code appends `group.blocked` when the group's own state file is bad, and whether a read-only caller such as `status --wait` may drop a line. Group state: how `Open` learns the last `sequence` and checks the lease; where the checks that refuse a falling `epoch` or `fence` and detect a stage change live, given that `Snapshot` receives only the generic `S`; what `Load` returns for a group with no snapshot | Owner decision on `Watch` (notification or polling), on what `Drive` does when `Append` or `Snapshot` refuses, and on the damage rules; design patch to 13.3 to 13.7 and 4.5 for names and formats | [HLD Open decisions](hld.md#open-decisions), [2.3](#23-data-model), [3.4](#34-interfaces), [13.2](#132-package-layout), [13.3](#133-data-model), [13.4](#134-interfaces), [13.5](#135-behaviour), [13.6](#136-state), [13.7](#137-invariants-and-failures), [14.1](#141-runtime-state) |
 | <a id="g-217"></a>G-217 | Recovery ownership | Which component owns each recovery duty: the startup sweep (`worktree.go` or `recover.go`), the action record (the outbox), the session pool slots and the link slots under `~/.komodo/state/links/` (Engine Internals 3.2 gives link slots to `pool.go`, Providers and HTTP 7.4 and 7.5 give them to the session); which of the 4 startup scans runs each unplaced action; where the session process identifier (pid) files live; whether `Drive` or `recover.go` calls `Load` on a restart; after a crash, which of the spawn's rerun and the startup sweep skips a session whose `spawn` is still open, and whether the sweep records a dead session as `task.released` or `session.end` with reason `crash` | Owner decision on the architecture page; then 2.5, 3.5, 9.5 and 13.3 | [HLD Open decisions](hld.md#open-decisions), [2.1](#21-scope-and-concepts), [2.3](#23-data-model), [2.5](#25-behaviour), [2.6](#26-state-and-transitions), [2.7](#27-invariants-and-failures), [2.9](#29-proof-cases), [3.1](#31-scope-and-concepts), [3.2](#32-package-layout), [3.5](#35-behaviour), [3.7](#37-invariants-and-failures), [4.1](#41-scope-and-concepts), [4.2](#42-package-layout), [4.3](#43-data-model), [4.5](#45-behaviour), [5.6](#56-state), [5.7](#57-invariants-and-failures), [7.2](#72-package-layout), [7.5](#75-behaviour), [9.1](#91-scope-and-concepts), [9.2](#92-package-layout), [9.5](#95-behaviour), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures), [13.3](#133-data-model), [13.4](#134-interfaces), [14.1](#141-runtime-state), [15.2](#152-operations-runbook) |
@@ -12510,7 +12892,6 @@ A gap is a fact the design has not verified or a decision the owner has not made
 - **G-21:** Enterprise signing: moving the private key into a cloud KMS or keyless signing, and making `fresh` refuse a manifest older than the last one it accepted. Later minor; triggered the first time a machine the owner does not own runs `fresh`.
 - **G-22:** Enterprise model registry: a central gateway that owns model IDs, their `retired_on` dates and quotas, with `doctor` warning 30 days before a retirement. Later minor; triggered by 3 or more machines, or 2 people sharing one usage cap.
 - **G-23:** Enterprise scope: rows in `policy.json` saying which team owns which paths, a named human who must approve writes to another team's paths, and a digest of scope widenings in `status --metrics`. Later minor; triggered by the first repo with 2 teams or customer data.
-- **G-198:** The fields each of the 34 event types carries in its `data` part are not yet listed. It matters because the state manager validates every event against the one schema, so an unlisted field cannot be checked. One architect pass reads the event catalog and the 9 chapters that use events, and drafts in a single change to chapter 2 one body per event type, the `Args` of each of the 9 action kinds and their results. The owner approves the set once, and every chapter then links to that one list instead of repeating it. The per-chapter format rows G-119 to G-211 are worked afterwards.
 - **G-25:** Whether a Docker volume per worktree copies a large `node_modules` faster than the bind mount. It matters for Docker sandbox start time, but a volume puts files where the host sweep cannot reach them. A spike in phase 2 measures it alongside G-11.
 - **G-26:** Whether usage metrics should be split by provider family: Claude, GPT and local models. Deferred by owner decision on 2026-10-12; today `track.usage` records one set of tokens and USD per session. Nothing is designed yet.
 - **G-27:** Whether Komodo gets a browser dashboard a person can use instead of the orchestrator's verbs. It would show every stage, subsystem, agent and group on a live diagram, change an agent's model mid-run, and act on groups. Open: the front-end stack, a `komodo ui` verb run only from a terminal, whether model changes reach a running run ([Layers and write path (chapter 1)](#1-cli-and-configuration) pins config at run start), and the exception to "no server process"; a proof of concept is in `dashboard/`.
@@ -12619,6 +13000,9 @@ A dependency means one component calls code in another, so the second must exist
 | Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% coverage bar |
 | Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | EARS item grammar |
 | Aider repo map, https://github.com/pdavis68/RepoMapper | Repo map ranking |
+| Temporal event history reference, https://docs.temporal.io/references/events | One typed attribute set per event type; an activity's completion or failure event records its result or failure class against the scheduling key |
+| CloudEvents specification, https://github.com/cloudevents/spec/blob/main/cloudevents/spec.md | Envelope fields kept apart from a `data` part whose schema the `type` selects |
+| Sentry event grouping, https://docs.sentry.io/concepts/data-management/event-grouping/ | A failure fingerprint built only from stable parts, leaving out line numbers and message text |
 
 #### Archive sources at commit `fdf4f61f`
 
