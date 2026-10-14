@@ -185,10 +185,10 @@ The `embed/` folder holds every text and data file a model or the engine reads. 
 | `agents/<name>/{agent.json, prompt.md}` | Seven agents: builder, reviewer, planner, tester, architect, researcher, scout. `agent.json` is what Go reads; `prompt.md` is the role text the model reads | [5](#5-sessions-agents-and-briefs) |
 | `jobs/` | Job templates (none shipped by default) [TODO: where a job template lives and which file wins ([G-145](#g-145))] | [10](#10-scheduler-cache-and-observability) |
 | `rules/orchestrator.md`, `rules/backlog.md` | Orchestrator rules; backlog grammar rules | [8](#8-skills-rules-and-output), [11](#11-backlog-planning-ship-and-release) |
-| `output/{adhd,standard}/*.tmpl, *.golden`, `output/adhd.md` | Templates and golden fixtures (stored expected output that a test compares against) per profile; the style text `adhd.md` for the `AGENTS.md` block | [8](#8-skills-rules-and-output) |
+| `output/{adhd,standard}/*.tmpl, *.golden`, `output/fixtures/*.json`, `output/{adhd,standard}.md` | Templates and golden fixtures (stored expected output that a test compares against) per profile, the fact inputs of the fixtures, and each profile's style text for the `AGENTS.md` block | [8](#8-skills-rules-and-output) |
 | `lenses/<lens>.json, <lens>.md` | rule catalogs and bodies | [9](#9-check-review-tester-and-recovery) |
 | `langs/<lang>.json` | Per-language definition patterns for the repo map | [11](#11-backlog-planning-ship-and-release) |
-| `skills/index.json`, `skills/<name>/SKILL.md` | Generated index with SHA-256 (a standard content fingerprint) per skill; 4 orchestrator skills (`run`, `plan`, `respond`, `komodo`) [TODO: whether a `release` skill ships ([G-127](#g-127))] plus 34 `standards-*` | [8](#8-skills-rules-and-output) |
+| `skills/index.json`, `skills/rules.json`, `skills/<name>/SKILL.md` | Generated index with SHA-256 (a standard content fingerprint) per skill and the generated standards rule list; 5 orchestrator skills (`run`, `plan`, `respond`, `komodo`, `release`) plus 34 `standards-*` | [8](#8-skills-rules-and-output) |
 | `defaults.json` | Built-in defaults and hard limits; `komodo config --help` lists keys from this one schema | [1](#1-cli-and-configuration) |
 | `state.schema.json` | Generated at build from the state manager's kind registry, the event enum included | [13](#13-state-manager) |
 | `models.json` | Default models per weight and link, Claude windows and prices | [7](#7-providers-and-http) |
@@ -658,11 +658,9 @@ func Run(args []string) int
 
 // Renderer is what the render step needs from the output package.
 type Renderer interface {
-	Report(profile string, code string, facts map[string]any) string
+	Render(name string, facts any) (string, error)
 }
 ```
-
-[TODO: the one signature of the renderer, since Skills, Rules and Output declares `Render(name, facts any) (string, error)` ([G-130](#g-130))]
 
 The renderer's real signature is owned by [Skills, Rules and Output](#8-skills-rules-and-output); this interface states only what the command-line code needs from the output package.
 
@@ -870,7 +868,7 @@ Agent shells have no controlling terminal: Claude Code's Bash tool cannot open `
 - **`run [group]`:** Anyone runs `run`, usually the orchestrator. `run <group>` starts one group. `run` builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once and leaves the engine running detached under a small parent guard; the stages are in [Event Spine and State Machine](#26-state-and-transitions). `run` refuses, naming the dependency, a group whose dependency outside this run has not landed; `run` refuses, naming the holder, a group another run holds; and `run` refuses, naming the marker files that `run` looked for, a repo with no detected commands. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background, where `--wait` returns on the next wake event.
 - **`status [run]`:** Anyone runs `status`; a Claude `SessionStart` hook runs `status` so a new session sees state on line one. `status` prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings, and ends with `Verbs: komodo help`. `status` is one of three places that may fetch `latest.json`, at most hourly, and `status` fires due pause timers [TODO: how a `timer.due` from outside `Drive` reaches a group's state file ([G-29](#g-29))].
 - **`status` flags:** `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`). `--timeout <dur>` caps that wait at 9 minutes by default, because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard of first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and US dollars per accepted group. [TODO: what `--backlog` and `--all` print ([G-117](#g-117))]
-- **`skill list|get`:** Anyone runs `skill`, including a Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms; `get <name>` prints a skill's body and `--section <heading>` one section; `komodo skill get run|plan|respond|komodo` returns the workflow for each job. `skill` changes nothing. [TODO: the filter `list --agent <name>` applies ([G-117](#g-117))]
+- **`skill list|get`:** Anyone runs `skill`, including a Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms; `get <name>` prints a skill's body and `--section <heading>` one section; `komodo skill get run|plan|respond|komodo|release` returns the workflow for each job. `skill` changes nothing. [TODO: the filter `list --agent <name>` applies ([G-117](#g-117))]
 - **`scope approve|deny <group>`:** The orchestrator usually answers; a person can. A builder that needs a file outside its group's `files` stops with status `needs_scope`, the group blocks and `status --wait` wakes the orchestrator. `approve` adds the paths to `files` (action `scope_change`, logged in the ledger) and the engine resumes the same session with the answer; `deny` resumes the session with the refusal. `--paths <list>` names the paths and `--reason <text>` the reason. The engine denies by itself, without asking, when a path is protected or belongs to another live group. One request per task.
 - **`resume <run>`:** Anyone runs `resume`, because Blocked never retries by itself. `resume` replays the state events after the snapshot through group state's `Load`, retakes the lease or refuses naming the new holder, rebuilds a removed worktree from the hidden ref, and continues each session from the provider's resume handle; if that fails `resume` starts a fresh session with the brief, the uncommitted diff and the last summary, logging `resume_lost`. Paused agents attempt now; a refused attempt costs no turn and re-pauses. [TODO: what `--from <stage>` does beyond its name ([G-117](#g-117))]
 - **`stop <run>`:** Anyone runs `stop`. `stop` performs the clean shutdown a signal does: stop each agent (30 s each), commit unsaved work in every worktree to its hidden ref, free the leases, write `state.json` and exit; after 60 s the rest is force-killed. `stop` writes `run.stopped`, and `resume <run>` continues later.
@@ -1118,7 +1116,7 @@ The 34 flat keys: 25 here, and 9 provider keys in [Providers and HTTP](#78-confi
 | `output.profile` | enum | `adhd` | none | Text layout for everything a person reads: `adhd` (verdict first, bold labels, tables for data lists, at most 5 bullets and 3 options, turn-end headings in order) or the plainer `standard`. Facts and codes are the same under both, and no repo setting or flag changes a template. After a change, `komodo sync` rewrites the rules block in `AGENTS.md`. |
 | `output.turn_end_summary` | bool | `true` | none | Turns the 4 fixed headings at the end of every report on or off. [TODO: which 4 headings ([G-122](#g-122))] |
 | `output.color` | enum | `auto` | none | `auto` decides from the terminal, `on` forces colour, `off` removes colour. Applied only when text is rendered, so facts never change. |
-| `mode` | enum | `thorough` | none | `economy` or `thorough`. `thorough` runs every reviewer lens that applies plus a cold pass; `economy` runs one merged lens at reduced depth. `mode` sets the `auto` default of `track.usage` and never changes which model runs. |
+| `mode` | enum | `thorough` | none | `economy` or `thorough`. `thorough` runs every reviewer lens that applies at full depth; `economy` runs one merged lens at reduced depth, plus the `security` lens where it applies. `mode` sets the `auto` default of `track.usage` and never changes which model runs. |
 | `track.usage` | enum | `auto` | none | `auto`, `on` or `off`; `auto` is on in `economy` mode and off in `thorough` mode. Behaviour below the table. |
 | `fresh.auto` | bool | `true` | none | Background self-update. When `true`, a verb that sees a newer release spawns a detached updater; live runs keep their own version. |
 | `fresh.interval` | duration | `1h` | ≥ 10m | How long the release manifest is cached; the check is one 1 KB fetch on the few verbs that already touch the network. |
@@ -1131,7 +1129,7 @@ The 34 flat keys: 25 here, and 9 provider keys in [Providers and HTTP](#78-confi
 | `limits.session_idle_min` | int | 10 | 30 | Minutes of silence, with no stream line and no running tool, before the engine nudges. After the nudge and a 5-minute grace the session stops as `idle`; a session gets one nudge, so a second silence stops it as `idle`. |
 | `limits.returns` | int | 3 | 5 | Returns from Check or Verify to Build before the group blocks; each return is one more builder pass with the findings. The epic gate counts its own rounds against the same limit. |
 | `guard.refusal_limit` | int | 3 | 5 | Refusals under one guard rule before the session ends. The only tunable security value. |
-| `check.coverage` | int | 80 | 100 | Percent of the repository's lines tests must cover, in every language. Check fails a group that leaves coverage under the floor. [TODO: how coverage is measured in each language, and what Check does when coverage is already under the floor at the base commit ([G-169](#g-169))] |
+| `check.coverage` | int | 80 | 100 | Percent of the repository's lines tests must cover, in every language. Check fails a group that leaves coverage under the floor. When coverage at the base commit is already under the floor, Check fails a group only when it lowers coverage below the base value. The default tool per language is in [9.5](#95-behaviour). [TODO: confirm each default coverage tool yields a whole-repository line percent ([G-169](#g-169))] |
 | `sandbox.network` | enum | `deny` | none | Network access for commands of the run class (build, test, lint, format); loopback is always allowed. Intake's `setup` runs with network on regardless. [TODO: the values besides `deny` ([G-49](#g-49))] |
 | `sandbox.max_procs` | int | 512 | 2048 | Most processes one session's commands may start. Enforced through control groups on Linux and Docker on Windows; macOS has no limit and `doctor` says so. |
 | `sandbox.max_mem_gb` | int | 8 | 32 | Memory cap in gigabytes for one session's commands; the pool also uses the cap to decide whether free memory covers one more session. |
@@ -1207,7 +1205,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Blocks building? |
 |---|---|---|
 | [G-139](#g-139) | Where `add changelog` stores its recorded lines until the release, with the release manifest details | Yes |
-| [G-169](#g-169) | How whole-repository coverage is measured in each language | Yes |
+| [G-169](#g-169) | Confirming each default coverage tool yields a whole-repository line percent | No |
 | [G-115](#g-115) | Report text and data shape per verb, the run id key, the `help --json` result schema and the `--input` key names | Yes |
 | [G-116](#g-116) | The conditions for exit 3 and exit 4, and the `error.code` values for command-line refusals | Yes |
 | [G-119](#g-119) | Config file layouts, write order and crash behaviour, the writer of the checksum and the log, the probed-model check and the `--default` group target; The format of the effective-config hash and the other file formats left open | Yes |
@@ -1216,7 +1214,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-122](#g-122) | Config values and placement: the turn-end headings, the `CapacityProfile` package and effort mapping and two-marker commands | Yes |
 | [G-69](#g-69) | The shape of an agent's provider chain | Yes |
 | [G-231](#g-231) | Where the pinned run settings are stored and what resume does on a hash mismatch | Yes |
-| [G-130](#g-130) | The one signature of the renderer | Yes |
 | [G-155](#g-155) | The grammar of backlog card files and acceptance items | Yes |
 | [G-49](#g-49) | The values `sandbox.network` accepts besides `deny` | No |
 | [G-28](#g-28) | How `komodo init` writes into the global Claude Code setup | No |
@@ -1391,8 +1388,8 @@ The catalog is a fixed Go enumeration in 8 families, registered with the state m
 | `task.released` | Supervisor, recovery | With `session.end`. [TODO: which event the startup sweep records for a dead session, `task.released` or `session.end`, each with reason `crash` ([G-217](#g-217))] |
 | `task.done` | Engine (`Next()` follow-on) | The `commit` action ran `done_when` with exit 0 and the result is on the hidden ref |
 | `task.retry` | Engine | Another attempt after a schema-invalid result, a failed gate, a cut-off reply, `guard.refusal_limit` refusals under one rule or a failed `done_when`; the fresh session it orders counts toward `limits.group_attempts` |
-| `check.done` | Check [TODO: who emits `check.done` ([G-167](#g-167))] | Pass or fail after the zero-token checks |
-| `finding.submit` | Tools | A reviewer's `submit_finding` passed validation: a known rule identifier [TODO: whether a standards rule identifier is accepted ([G-126](#g-126))], a `file:line` and a quoted evidence line |
+| `check.done` | Engine (`Next()` follow-on of the last `check` action) | Pass or fail after the zero-token checks |
+| `finding.submit` | Tools | A reviewer's `submit_finding` passed validation: a known rule identifier (a lens rule or a standards rule `std.<skill>.<n>`), a `file:line` and a quoted evidence line |
 | `finding.verified` | Review | Go found the quoted evidence at that line in the head or the diff; unverified findings are dropped and logged [TODO: which component checks that the quote is at its line: the tool or the evidence check ([G-159](#g-159))] |
 | `tool.denied` | Guard | A tool call was refused inline; `guard.refusal_limit` refusals under one rule end the session |
 | `timer.due` | Scheduler, engine, sweep, `status` [TODO: how a `timer.due` from outside `Drive` reaches a group's state file ([G-29](#g-29))] | A paused group's `wait_until` passed; the live engine sleeps until the earliest one |
@@ -1737,6 +1734,7 @@ type State struct {
 	Attempts    int                `json:"attempts"`     // fresh builder sessions for the group, against limits.group_attempts
 	Retries     int                `json:"retries"`      // builder restarts after a timeout or idle stop, against the agent's retries
 	TokensUsed  int64              `json:"tokens_used"`  // with track.usage on, against limits.group_tokens
+	ScopeAdded  []string           `json:"scope_added"`  // paths scope approve added to the backlog files
 }
 
 // TaskState is one task's claim.
@@ -1744,6 +1742,7 @@ type TaskState struct {
 	ID       string   `json:"id"`       // the task identifier, such as tsk-add-lock
 	State    string   `json:"state"`    // queued, claimed or done
 	Session  state.ID `json:"session,omitempty"`
+	ScopeAsked bool   `json:"scope_asked"` // the task's one scope request is spent
 }
 
 // ResumeRef is how the group's last paused or ended session can be continued.
@@ -1993,7 +1992,7 @@ type ScopeChangeResult struct {
 | `done_when_failed` | `commit` | Emits `task.retry` with reason `check_fail` |
 | `fence_refused` | `wip_commit`, `commit`, `land` | `Drive` appends `lease.lost`; row 18 ends the group in this run |
 | `exit_nonzero` | `setup` | The block row `setup`, showing `output` |
-| `run_failed` | `check` | The step could not run. [TODO: how a Check error is routed ([G-167](#g-167))] |
+| `run_failed` | `check` | The step could not run, such as a sandbox refusal; the group blocks `setup` naming the step, and `resume` reruns Check |
 | `merge_conflict` | `land` | The block row `merge_conflict` |
 | `push_failed`, `forge_failed` | `land`, `open_pr` | [TODO: push and forge failure handling ([G-163](#g-163))] |
 
@@ -2296,12 +2295,13 @@ A fixed enumeration on `group.blocked`, named in `status`. A group that blocks [
 | `attempts` | The group's builder used all `limits.group_attempts` fresh sessions | Looks at why it keeps failing |
 | `context` | The brief exceeds half the context of every link in the chain. [TODO: the block row that produces this reason ([G-31](#g-31))] | Shrinks the task or adds a larger endpoint |
 | `merge_conflict` | Landing conflicted and the one automatic merge did not resolve it | Resolves the conflict |
+| `branch_missing` | Ship found the group's hidden reference gone, deleted outside Komodo; names the last head commit recorded | Restores the reference, or runs `abandon` |
 | `budget` | With `track.usage` on, the group used `limits.group_tokens`; never occurs with tracking off | Raises the cap or splits the group |
 | `wall` | The group's working time reached `limits.group_wall_min`; paused and blocked time excluded | Splits the group or approves more time |
 | `crash` | The group's `Drive` panicked; other groups kept running | Runs `resume`, which replays through `Load` |
 | `lint` | The planner's draft failed backlog lint 3 times, or the group's backlog entry failed lint at Intake | Fixes it with `doctor backlog` |
-| `setup` | The setup command or the worktree cut failed at Intake; `status` shows the output; no model session started | Fixes the command or the checkout |
-| `brief` | The reviewer reported `brief_incomplete`; a harness fault | Fixes the brief inputs |
+| `setup` | The setup command or the worktree cut failed at Intake, before any model session; or a Check step could not run, such as a sandbox refusal; `status` shows the output | Fixes the command or the checkout |
+| `brief` | The reviewer reported `brief_incomplete`, or the brief builder could not load a skill; a harness fault | Fixes the brief inputs |
 | `contract` | A `Next()` result broke its type's `Spec`. [TODO: the block row that produces this reason ([G-31](#g-31))] | Reads the named type and rule |
 | `state_invalid` | The state manager refused a write or moved a bad record aside as `.bad-*`; names kind, key and field. [TODO: the block row that produces this reason ([G-31](#g-31))] | Inspects the record |
 | (unnamed) | A session's `retries` after timeouts or idle stops, `limits.returns` on findings, a flap (the same failure fingerprint or a zero-diff return), or the job failures [TODO: when a failing job blocks ([G-149](#g-149))]; `reason` is empty and `BlockState.Counter` names the counter. `group.blocked` carries that counter in its `counter` field. | Runs `resume` |
@@ -2383,11 +2383,9 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-112](#g-112) | How `agent.json` limits and `agents.<name>` keys combine | Yes |
 | [G-67](#g-67) | The session-end commit mechanism and the third inline hook | Yes |
 | [G-149](#g-149) | When a failing job blocks | Yes |
-| [G-126](#g-126) | Whether a standards rule identifier is accepted | Yes |
 | [G-231](#g-231) | Where the pinned run settings are stored | Yes |
 | [G-146](#g-146) | Which file holds `job.due` and `job.fail` | Yes |
 | [G-19](#g-19) | The replay target is unmeasured | No |
-| [G-167](#g-167) | Who emits `check.done` | No |
 
 ---
 
@@ -4794,7 +4792,7 @@ A changed lockfile reruns setup instead of copying. Symlinks are copied as links
 | `run` | `{class, args[]}`; Go runs the class's command plus args directly, no shell; inside the sandbox; 10-min timeout |
 | `diff`, `git_read` | Reviewer only; read-only git |
 | `skill` | Any allowlisted skill or `<name>#<section>` |
-| `submit_finding` | Rule ID, `file:line`, quoted evidence. [TODO: whether a standards rule identifier `std.<skill>.<n>` is accepted, since the tool refuses a rule ID that is in no lens catalog ([G-126](#g-126))] |
+| `submit_finding` | Rule ID from a lens catalog or the standards rule list, `file:line`, quoted evidence; any other rule ID is refused |
 | `lint_backlog` | Planner only |
 | `web` | Architect and researcher, opt-in, GET only, allowlist |
 | External Model Context Protocol servers | Opt-in allowlist per agent, no credentials. [TODO: where the allowlist lives and how a server is mounted beside the Komodo server ([G-54](#g-54))] |
@@ -5287,7 +5285,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-49](#g-49) | Sandbox profile text and environment values | Yes |
 | [G-56](#g-56) | Tool server start-up inputs and failures | Yes |
 | [G-57](#g-57) | The layout and versioning of `embed/policy.json` | Yes |
-| [G-126](#g-126) | Whether a finding may cite a standards rule identifier `std.<skill>.<n>` | Yes |
 | [G-67](#g-67) | Whether the third inline hook is `session.end` or the commit is the `wip_commit` action | No |
 | [G-159](#g-159) | How `submit_finding` and `lint_backlog` reach the rule catalogs and lint, which sit above `tools`; which component checks the quote | Yes |
 | [G-13](#g-13) | The steering-phrase list | No |
@@ -6495,7 +6492,7 @@ The skill loader chooses the standards documents each model session receives and
 | `embed/rules/orchestrator.md` | The orchestrator rules O1 to O7, O9 and O10 as block text; `embed/rules/backlog.md` sits beside it and is outside this chapter |
 | `embed/output/{adhd,standard}/<name>.tmpl` | One template per output, per profile |
 | `embed/output/{adhd,standard}/<name>.golden` | The expected bytes of the matching template |
-| `embed/output/adhd.md` | The output style text pasted below the rules in the `AGENTS.md` block |
+| `embed/output/adhd.md`, `embed/output/standard.md` | The output style text of each profile, pasted below the rules in the `AGENTS.md` block |
 
 The guard rows that hold the steering phrases live in `embed/policy.json`, which [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox) owns.
 
@@ -6513,7 +6510,7 @@ The guard rows that hold the steering phrases live in `embed/policy.json`, which
 
 ### 8.3 Data Model
 
-All Go names in this chapter are derived from the stated behaviour. [TODO: confirm every exported name and signature in 8.3 and 8.4 ([G-206](#g-206))]
+The Go names and signatures in 8.3 and 8.4 are the ones the code uses.
 
 #### Skill file
 
@@ -6523,19 +6520,19 @@ Every `SKILL.md` opens with frontmatter, then Markdown sections. A line starting
 ---
 v: 1
 name: standards-go
-description: "[TODO: the description text of each skill (G-123)]"
+description: "Go standards: errors, naming, tests and package layout"
 globs:
   - "*.go"
 markers: []
 sections:
-  - "[TODO: the section names of each skill (G-123)]"
+  - "Errors"
+  - "Naming"
+  - "Tests"
 ---
-<a Markdown heading line>
+## Errors
 - **Never ... (the rest of the line is the rule text)
 - **Always ... (the rest of the line is the rule text)
 ```
-
-Open decisions in this example: [G-123](#g-123).
 
 ```go
 // SkillName names one embedded skill, such as "standards-go" or "run".
@@ -6556,12 +6553,12 @@ type Frontmatter struct {
 |---|---|---|
 | `v` | int | Schema version, 1 |
 | `name` | string | The skill name, the same as its folder name |
-| `description` | string | One line |
+| `description` | string | One line of at most 100 characters, shown by `skill list` |
 | `globs` | list | File patterns; a match with any file in the group's `files` selects the skill. [TODO: the glob grammar ([G-43](#g-43))] |
 | `markers` | list | Repo files; `standards-ui-mobile` lists `AndroidManifest.xml` and `*.xcodeproj`; `standards-aws` lists `cdk.json`, `samconfig.toml` and an Amazon Web Services provider in `*.tf` |
-| `sections` | list | Headings an agent may pull; the gate fails an entry with no heading and a duplicate heading |
+| `sections` | list | Every level-2 heading of the body, in body order; an agent may pull each one. The gate fails an entry with no heading, a level-2 heading with no entry and a duplicate heading |
 
-The frontmatter syntax, the parser and the meaning of an empty `markers` list are open. [TODO: the frontmatter syntax and how it is parsed with the standard library only ([G-123](#g-123))] [TODO: whether an empty `markers` list means no marker is required ([G-124](#g-124))]
+The frontmatter is a strict subset of YAML between two `---` lines: `key: value` lines with a plain or double-quoted value, the empty list `[]`, and block lists of `  - "item"` lines. A hand-written line parser in `internal/agent/skills.go` reads it with `bufio.Scanner` and `strconv.Unquote`, so no YAML library is needed; any other line fails the gate. An empty `markers` list means no marker is required.
 
 **Versioning.** Skill files are compiled into the binary that reads them, so a reader never meets another version at run time. The gate accepts only `v: 1`.
 
@@ -6570,35 +6567,48 @@ The frontmatter syntax, the parser and the meaning of an empty `markers` list ar
 `embed/skills/index.json` (`index.json` below) is generated at build from the 39 skill files. Each row carries the fingerprint the loader checks on every read.
 
 ```go
+// Index is the whole of embed/skills/index.json.
+type Index struct {
+	V      int          `json:"v"`      // schema version, 1
+	Skills []IndexEntry `json:"skills"` // one row per skill, sorted by name
+}
+
 // IndexEntry is one skill's row in embed/skills/index.json.
 type IndexEntry struct {
-	Name     SkillName `json:"name"`
-	Globs    []string  `json:"globs"`
-	Markers  []string  `json:"markers"`
-	Sections []string  `json:"sections"`
-	SHA256   string    `json:"sha256"` // hex fingerprint of the skill
+	Name        SkillName `json:"name"`
+	Description string    `json:"description"` // one line shown by skill list
+	Globs       []string  `json:"globs"`
+	Markers     []string  `json:"markers"`
+	Sections    []string  `json:"sections"`
+	SHA256      string    `json:"sha256"` // hex fingerprint of the whole SKILL.md
 }
 ```
 
 ```json
 {
-  "name": "standards-ui-mobile",
-  "globs": ["[TODO: the globs of each skill (G-123)]"],
-  "markers": ["AndroidManifest.xml", "*.xcodeproj"],
-  "sections": ["[TODO: the section names of each skill (G-123)]"],
-  "sha256": "[TODO: the fingerprint, generated at build (G-206)]"
+  "v": 1,
+  "skills": [
+    {
+      "name": "standards-ui-mobile",
+      "description": "Mobile interface standards for Android and iOS",
+      "globs": ["*.kt", "*.swift"],
+      "markers": ["AndroidManifest.xml", "*.xcodeproj"],
+      "sections": ["Layout", "Accessibility", "Lifecycle"],
+      "sha256": "<64 lowercase hex characters, written by the build>"
+    }
+  ]
 }
 ```
 
-Open decisions in this example: [G-123](#g-123), [G-206](#g-206).
-
 | Field | Type | Meaning |
 |---|---|---|
-| `name` | string | The skill name |
+| `v` | int | Index schema version, 1 |
+| `skills` | list | One row per skill, sorted by name |
+| `name`, `description` | string | The skill name and its one-line description |
 | `globs`, `markers`, `sections` | lists | Copied from the frontmatter |
 | `sha256` | string | The fingerprint; the loader compares it on every read and renders its short form `sha8` in the brief |
 
-The key names above are illustrative. [TODO: the top-level layout of the file, the final key names and which bytes the fingerprint covers and how `sha8` is cut from it ([G-206](#g-206))]
+The fingerprint is the SHA-256 of the whole `SKILL.md` file as embedded, frontmatter included, written as 64 lowercase hex characters; `sha8` is its first 8 characters.
 
 **Versioning.** The index is regenerated by every build and the gate compares it with the skill files; no older index is ever read.
 
@@ -6626,7 +6636,7 @@ type Rule struct {
 | `Rule.ID` | string | `std.<skill>.<n>`, the identifier a reviewer finding cites |
 | `Rule.Skill`, `Line` | string | The skill and the source line |
 
-[TODO: how `n` is numbered, how the rule text is cut from the line, and the name and location of the regenerated rule list the gate compares ([G-126](#g-126))]
+`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. `Line` holds the rule text: the line without its leading `- ` and every `**`, trimmed. The build writes every rule to `embed/skills/rules.json` as `{id, skill, line}` rows sorted by identifier; the gate regenerates it and compares byte for byte. A standards rule has severity `major`.
 
 #### Code list
 
@@ -6656,12 +6666,37 @@ const (
 	Lint            Code = "lint"
 	Disputed        Code = "disputed"
 	Crash           Code = "crash"
+	Other           Code = "other"
+	// --- block reasons of chapter 2
+	NoProvider      Code = "no_provider"
+	PauseTimeout    Code = "pause_timeout"
+	PaidRefused     Code = "paid_refused"
+	NeedsScope      Code = "needs_scope"
+	Attempts        Code = "attempts"
+	Context         Code = "context"
+	MergeConflict   Code = "merge_conflict"
+	Budget          Code = "budget"
+	Wall            Code = "wall"
+	Setup           Code = "setup"
+	Brief           Code = "brief"
+	Contract        Code = "contract"
+	StateInvalid    Code = "state_invalid"
+	// --- session exit reasons of chapter 5
+	Done            Code = "done"
+	CheckFail       Code = "check_fail"
+	NoResult        Code = "no_result"
+	SchemaFail      Code = "schema_fail"
+	Timeout         Code = "timeout"
+	Idle            Code = "idle"
+	Refusals        Code = "refusals"
+	Provider        Code = "provider"
+	Billing         Code = "billing"
 )
 ```
 
 | Code | Used by | Meaning |
 |---|---|---|
-| `branch_missing` | Engine | [TODO: the exact trigger ([G-133](#g-133))] |
+| `branch_missing` | Engine | Block: Ship found the group's hidden reference gone, deleted outside Komodo; names the last head commit recorded |
 | `cancelled` | Session, run | Stopped on purpose; also a session exit reason |
 | `paused` | Session | Halted by a provider limit with a resume handle; resumes on a ledger timer, not by a person |
 | `integration` | Engine | Check failed on the epic tip after a landing; landings pause and the last-landed group returns to Build; once its returns are spent it blocks |
@@ -6680,10 +6715,33 @@ const (
 | `lint` | Planner draft, Intake | The draft failed backlog lint 3 times, so the plan blocks; or a group's backlog entry failed lint at Intake |
 | `disputed` | Builder | A result code rejecting a finding by file and line; it feeds the precision ledger |
 | `crash` | Startup sweep | Found a dead session or claimed task; emitted as its exit reason |
+| `other` | Renderer | Any case with no template of its own; renders the fixed line pointing to a file |
+| `no_provider` | Engine | Block: every link in the chain was unavailable or unauthorized |
+| `pause_timeout` | Session, engine | Exit and block: paused longer than `limits.pause_max_min` |
+| `paid_refused` | Engine | Block: only a paid link was found and `providers.paid` forbids it |
+| `needs_scope` | Builder, engine | Exit and block: the builder needs a file outside `files` |
+| `attempts` | Engine | Block: every one of `limits.group_attempts` fresh sessions was used |
+| `context` | Engine | Block: the brief exceeds half the context of every link |
+| `merge_conflict` | Ship | Block: landing conflicted and the one automatic merge failed |
+| `budget` | Session, engine | Exit and block: `limits.group_tokens` spent; only with `track.usage` on |
+| `wall` | Engine | Block: the group's working time reached `limits.group_wall_min` |
+| `setup` | Intake, Check | Block: the setup command, the worktree cut or a Check step could not run |
+| `brief` | Engine | Block: a harness fault in the brief, such as `brief_incomplete` |
+| `contract` | Engine | Block: a `Next()` result broke its type's `Spec` |
+| `state_invalid` | State manager | Block: a write was refused or a bad record was moved aside |
+| `done` | Session | Exit: the session returned a valid result |
+| `check_fail` | Session | Exit: the result failed the agent's gate twice |
+| `no_result` | Session | Exit: the reply was cut off or outgrew the context |
+| `schema_fail` | Session | Exit: the result broke its schema after the one re-prompt |
+| `timeout` | Session | Exit: the wall limit stopped the session |
+| `idle` | Session | Exit: silent past the nudge and the grace |
+| `refusals` | Session | Exit: the guard refused one rule 3 times |
+| `provider` | Session | Exit: a provider limit, with another allowed link left |
+| `billing` | Session | Exit: a paid key showed on the first stream line |
 
 Every event `reason` is a code from this list. The gate checks that every code in every agent schema has a template in both profiles.
 
-[TODO: whether `other` is a member of the code list, the trigger of `branch_missing`, the template name of codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`), and why the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `wall`, `setup`, `brief`, `contract` and `state_invalid` of chapter 2 are absent from this list ([G-133](#g-133))]
+A code that blocks or escalates renders with `needs.<code>`; every other code, such as `pass` or `timeout`, renders with the one-line template `code.<code>`. `Code` and the state package's `Reason` stay separate types, so the state package imports nothing from output; every `Reason` value is a `Code` constant, and the gate fails a value of the schema's reason enumeration that this list lacks.
 
 **Versioning.** The list is compiled into the binary and into `embed/state.schema.json`; a code outside it fails schema validation.
 
@@ -6711,9 +6769,9 @@ Each template has exactly one fact struct in `internal/agent/render.go`. The gat
 // NeedsFacts feeds needs.<code>: the agent's code plus engine-checked facts.
 type NeedsFacts struct {
 	Code   Code
-	SHA    string // a commit hash
-	Ref    string // a git reference
-	TaskID string
+	SHA    string `fact:"commit"` // the group's head commit
+	Ref    string `fact:"ref"`    // the group's hidden reference
+	TaskID string `fact:"task"`   // the task the group was on
 }
 
 // FindingFacts feeds finding.<lens>.
@@ -6721,7 +6779,7 @@ type FindingFacts struct {
 	Severity string // blocker, major or minor
 	Lens     string
 	Rule     string // the rule identifier the reviewer cited
-	File     string
+	File     string `fact:"path"`
 	Line     int
 }
 
@@ -6754,8 +6812,60 @@ type OtherFacts struct {
 | Commit hash | The commit exists in the repo |
 | Path | The path is in the diff or the worktree |
 | Task identifier | The task exists |
+| Reference | `git rev-parse --verify --quiet` resolves it |
 
-[TODO: which fact fields are checked as which kind, which of `SHA`, `Ref` and `TaskID` each code carries, the field names and types of `pr_body`, `status`, `run_report`, `report.<verb>`, `error.<code>` and `event.<type>`, and how a struct field declares which check applies ([G-130](#g-130))]
+A field names its check with a `fact` struct tag, `commit`, `ref`, `path` or `task`; an untagged field is not checked and an empty tagged field is skipped. For every block the engine fills all three `NeedsFacts` fields, so every `needs.<code>` template may name them.
+
+```go
+// PRBodyFacts feeds pr_body.
+type PRBodyFacts struct {
+	Group    string     // the group identifier
+	Head     string     `fact:"commit"` // the commit the pull request opens on
+	Files    int        // files changed
+	Added    int        // lines added
+	Removed  int        // lines removed
+	Tasks    []string   `fact:"task"` // tasks closed
+	Checks   []StepLine // one line per Check step
+	Findings []Code     // codes of the minor findings reported
+}
+
+// StepLine is one Check step as a person reads it.
+type StepLine struct {
+	Step  string
+	Level string // pass, warn or fail
+}
+
+// StatusFacts feeds status and run_report.
+type StatusFacts struct {
+	Run    string
+	Groups Table // one row per group: group, stage, reason, wall time
+	Tokens int64 // 0 when track.usage is off
+}
+
+// Table is a fact the table function renders.
+type Table struct {
+	Head []string   // column labels
+	Rows [][]string // cells, already formatted
+	What string     // the noun of the overflow line, such as groups
+}
+
+// ErrorFacts feeds error.<code>.
+type ErrorFacts struct {
+	Code Code
+	Fix  string // the command that fixes it, such as komodo fresh
+}
+
+// EventFacts feeds event.<type>.
+type EventFacts struct {
+	Type   string // the event type, such as group.blocked
+	Group  string
+	Stage  string
+	Reason Code // empty when the event has none
+	At     time.Time
+}
+```
+
+`report.<verb>` takes the verb's own data struct, the one the envelope's `data` holds, so a report never shows a fact the data lacks.
 
 **What a person reads, the facts behind it, and the template**
 
@@ -6781,14 +6891,19 @@ var funcs template.FuncMap // keys: code, n, plural, dur, path, table
 
 | Function | Meaning |
 |---|---|
-| `code`, `n`, `plural`, `dur`, `path`, `table` | [TODO: the argument and result types and the meaning of each function ([G-130](#g-130))] |
+| `code(c Code) string` | The code word as a code span; a code outside the list fails with `ErrCodeUnknown` |
+| `n(i int64) string` | The number with comma thousands separators, such as `12,400` |
+| `plural(i int64, one, many string) string` | `one` when `i` is 1, else `many` |
+| `dur(d time.Duration) string` | The two largest units, such as `1h 5m` or `42s` |
+| `path(p Lit) string` | A repository-relative slash path as a code span; over 45 characters, middle folders become `…` |
+| `table(t Table) string` | A Markdown table with the row and cell limits of [Limiting tables](#limiting-tables-and-unlisted-cases) |
 
 **Files per profile.** `embed/output/{adhd,standard}/` each hold `<name>.tmpl` and `<name>.golden` for every template name; a golden file is `embed/output/<profile>/<name>.golden`. The profile is fixed per machine; no repo setting or flag changes a template.
 
 | Profile | Layout |
 |---|---|
 | `adhd` | The verdict on line one, bold labels, tables for data lists, at most 5 bullets and 3 options, and the turn-end headings in order (`output.turn_end_summary`) |
-| `standard` | [TODO: how the layout differs from `adhd`, and whether `embed/output/standard.md` exists beside `embed/output/adhd.md` ([G-134](#g-134))] |
+| `standard` | The same facts in the same order, verdict on line one, written as plain sentences: no bold labels and no bullet or option caps; tables keep the 5-row and 45-character limits. Its style text is `embed/output/standard.md` |
 
 The one template with fixed text is the line for the code `other`, which covers every unlisted case:
 
@@ -6796,13 +6911,19 @@ The one template with fixed text is the line for the code `other`, which covers 
 Needs a decision; details in {{.Path}}
 ```
 
-[TODO: the text of every other template and the inputs of each golden fixture ([G-135](#g-135))]
+Each template's text is written with its fact struct and follows its profile's layout above. Its golden fixture input is `embed/output/fixtures/<name>.json`, one fact set per template shared by both profiles and decoded into the template's fact struct; each golden file holds the bytes rendered from it with `output.color` off.
 
 **Versioning.** Templates and golden files are compiled into the binary. A change to any template is a change to its golden file in the same commit; the gate fails a mismatch.
 
 ### 8.4 Interfaces
 
-Derived signatures; the behaviour on each error is stated beside the method. [TODO: the reaction of each caller to a loader or render error ([G-206](#g-206))]
+The behaviour on each error is stated beside the method. Each caller reacts the same way to every loader or render error:
+
+- **Brief builder:** the session does not start and the group blocks `brief`, a harness fault that does not count against the builder.
+- **`skill` tool:** the error text is the tool reply and the session goes on.
+- **`komodo skill get` and `skill list`:** the envelope answers `ok: false` with the error.
+- **Engine and verbs:** any render error other than `ErrFactInvalid` prints the fixed `other` line instead, pointing to the ledger entry that holds the error.
+- **Install and `sync`:** they stop before writing any file.
 
 #### Skill loader
 
@@ -6813,7 +6934,7 @@ type SkillPolicy struct {
 	Always []SkillName `json:"always"` // injected into every brief
 }
 
-// MarkerSource reports whether a marker file exists in the repo.
+// MarkerSource reports whether a marker is satisfied in the tree of the group's base commit.
 type MarkerSource interface {
 	Exists(pattern string) bool
 }
@@ -6842,11 +6963,11 @@ var (
 | `Select` | `ErrSkillUnknown` | A name in `always` is absent from the index |
 | `Get` | `ErrSkillNotAllowed` | The skill is not on `skills.allow`; the pull is refused |
 | `Get` | `ErrSkillUnknown` | No skill has that name |
-| `Get` | `ErrSectionUnknown` | [TODO: the behaviour for a section not in `sections` ([G-123](#g-123))] |
+| `Get` | `ErrSectionUnknown` | The section is not in `sections`; the pull is refused and the reply lists the skill's sections |
 | `Get` | `ErrSkillHash` | Same as `Select`: the body is refused |
 | `List` | none | A map read of the embedded index |
 
-[TODO: which allowlist `komodo skill get` applies when typed outside a session, and the exact filter of `komodo skill list --agent <name>` ([G-124](#g-124))]
+Outside a session, `komodo skill get` and `komodo skill list` apply no allowlist: a person or the orchestrator may read any of the 39 skills. `komodo skill list --agent <name>` lists the index rows on that agent's `skills.allow`, sorted by name, and marks the ones in `skills.always`.
 
 #### Renderer
 
@@ -6854,14 +6975,15 @@ var (
 // ColorMode is the value of output.color.
 type ColorMode string
 
-// FactSource answers the three fact checks against the repo and the group.
+// FactSource answers the four fact checks against the repo and the group.
 type FactSource interface {
 	HasCommit(sha string) bool
 	HasPath(path string) bool // in the diff or the worktree
 	HasTask(id string) bool
+	HasRef(ref string) bool // git rev-parse --verify resolves it
 }
 
-// Renderer turns a template name and its facts into the text a person reads. The signature is open under G-130.
+// Renderer turns a template name and its facts into the text a person reads; the CLI uses this same interface.
 type Renderer interface {
 	// Render checks the facts, fills the template, wraps and colours the result.
 	Render(name string, facts any) (string, error)
@@ -6877,13 +6999,9 @@ var (
 )
 ```
 
-Open decisions in this example: [G-130](#g-130).
-
 | Method | Error | Meaning and what the caller does |
 |---|---|---|
 | `Render` | `ErrFactInvalid` | A commit, path or task identifier failed its check; the caller sends the schema re-prompt to the model |
-
-[TODO: the one signature of the renderer, since CLI and Configuration declares `Report(profile, code, facts) string` and this page declares `Render(name, facts) (string, error)` ([G-130](#g-130))]
 | `Render` | `ErrTemplateUnknown` | No template has that name; the gate prevents it for every code in a schema |
 | `Render` | `ErrCodeUnknown` | The code is outside the list; the schema enumeration prevents it |
 | `Render` | template error | A field missing from the facts fails with `missingkey=error`; the gate prevents it at build |
@@ -6923,7 +7041,7 @@ func CompileRules(skill SkillName, body string) []Rule
 | Engine, verbs | `Renderer.Render` | Any line a person reads: status, report, block, finding, commit |
 | Install and `sync` ([chapter 12](#12-install-binary-lifecycle-and-gate)) | `OrchestratorRules`, `OutputStyle` | Writing or rewriting the Komodo block |
 | Gate ([chapter 12](#12-install-binary-lifecycle-and-gate)) | `CheckSkills`, `CheckOutput` | Every `komodo gate` run |
-| Reviewer ([chapter 9](#9-check-review-tester-and-recovery)) | `CompileRules` output | Citing `std.<skill>.<n>` in a finding [TODO: whether a finding may cite it ([G-126](#g-126))] |
+| Reviewer ([chapter 9](#9-check-review-tester-and-recovery)) | `CompileRules` output | Citing `std.<skill>.<n>` in a finding |
 
 ### 8.5 Behaviour
 
@@ -6970,7 +7088,7 @@ A result or a block names the code `branch_missing` with commit hash `ffcf41e9`.
 6. The renderer wraps the text at 80 columns, then applies `output.color`.
 7. The verb places the text in the envelope `report`, and the orchestrator relays it to the person word for word.
 
-The secret patterns of guard row G4 and the attribution patterns of guard row G5 ([G-43](#g-43)) run on the rendered text, after the template has filled in the facts. [TODO: the function that runs them and what a hit does ([G-130](#g-130))]
+The secret patterns of guard row G4 and the attribution patterns of guard row G5 ([G-43](#g-43)) run on the rendered text, after the template has filled in the facts. `scrub` in `internal/agent/render.go` runs them with the guard's pattern set, after filling and before wrapping: a secret becomes `[redacted]` and is logged to the ledger, and a line holding an attribution pattern is removed.
 
 **📐 How do facts become a rendered line?**
 ```mermaid
@@ -6990,7 +7108,7 @@ sequenceDiagram
   Note over R,F: invalid at step 3 returns ErrFactInvalid
 ```
 
-[TODO: where redaction and the attribution check sit relative to wrapping and colour, and what a hit does to the line ([G-130](#g-130))]
+Redaction and the attribution check run after the template is filled and before wrapping and colour, so a colour code never splits a pattern.
 
 #### Algorithms
 
@@ -7020,7 +7138,7 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule. Ro
 
 `OrchestratorRules` returns the text of `embed/rules/orchestrator.md`. Install and `sync` write it into the Komodo block of `AGENTS.md` beside the style text from `OutputStyle`; the block layout and the markers are in [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate). The engine enforces the same prohibitions on its side, so a rule the orchestrator ignores is still refused ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)).
 
-[TODO: how `embed/rules/orchestrator.md` relates to the O rows in `embed/policy.json`, its file format, and whether the gate compares the two ([G-136](#g-136))]
+`embed/rules/orchestrator.md` is written by hand beside the O rows: one Markdown bullet per row, `- **O1.** <the rule in one sentence>`, in row order. The gate fails when the file's row identifiers differ from the O rows in `embed/policy.json`, so the text and the enforcement name the same rules.
 
 ##### Selecting skills
 
@@ -7029,7 +7147,7 @@ No rule text enters any worker brief. Role text in `prompt.md` is not a rule. Ro
 ```text
 Select(policy, files, markers):
   out = the skills named in policy.Always
-  for each index row whose name is in policy.Allow:
+  for each index row whose name is in policy.Allow and not in policy.Always:
     skip the row if no glob matches any file in files
     skip the row if its markers are not satisfied
     add the row to the matched set
@@ -7040,9 +7158,9 @@ Select(policy, files, markers):
 ```
 
 - Every match loads. There is no count cap and no token cap.
-- [TODO: whether a skill in both `always` and `allow` is listed once, and the order inside `always` when it names several skills ([G-124](#g-124))]
+- A skill in both `always` and `allow` is listed once, in its `always` position. The skills in `always` keep the order written in `agent.json`.
 - The markers `standards-ui-mobile` needs are alternatives: `AndroidManifest.xml` or `*.xcodeproj`. `standards-aws` needs one of `cdk.json`, `samconfig.toml` or an Amazon Web Services provider in a `*.tf` file. `standards-cicd` no longer matches `**/Makefile`.
-- [TODO: where markers are looked up (worktree, base commit or repo root), how a provider inside `*.tf` is written as a marker, and the meaning of an empty list ([G-124](#g-124))]
+- Markers are looked up in the tree of the group's base commit, the tree the addendum is read from. A marker is a glob some file path matches, or `<glob>:<text>`, met when a file matching the glob contains the text; `standards-aws` writes the Terraform case as `*.tf:provider "aws"`. An empty list means no marker is required.
 
 **📐 When is a skill selected?**
 ```mermaid
@@ -7065,7 +7183,7 @@ flowchart TD
 5. Without a section, return the whole body. With a section, return that section.
 6. There is no pull limit, and the 4 KB reply cap of the tools in chapter 6 does not apply: the 6,000-token skill limit bounds the reply.
 
-[TODO: where a section ends and how the heading text is matched ([G-138](#g-138))]
+A section starts at the line `## <section>` whose text after `## `, trailing spaces removed, equals the requested name exactly, letter case included. It runs to the line before the next level-1 or level-2 heading, or to the end of the file, so `###` headings stay inside it; the heading line is part of the reply.
 
 ##### Verifying a body
 
@@ -7073,7 +7191,7 @@ flowchart TD
 2. Compare it with the `sha256` of the skill's index row.
 3. On a mismatch return `ErrSkillHash`. The skill is refused.
 
-The cache stores skill bodies by content hash and the index by binary version, so the index is rebuilt only when the binary changes. [TODO: whether a body read from the cache is verified again or only a body read from the embedded files ([G-123](#g-123))]
+The cache stores skill bodies by content hash and the index by binary version, so the index is rebuilt only when the binary changes. Every body is verified on every read, from the cache or from the embedded files, so a damaged cache entry is refused like a damaged binary.
 
 ##### Compiling standards lines into rule identifiers
 
@@ -7081,7 +7199,7 @@ The cache stores skill bodies by content hash and the index by binary version, s
 2. Every line starting `- **Never` or `- **Always` becomes one `Rule` with the identifier `std.<skill>.<n>`.
 3. The gate regenerates the list from the skill and fails when the kept list differs: a skill edited without the regenerated list fails the gate.
 
-A reviewer finding must cite a rule identifier, so a finding cites a rule and not an opinion. [TODO: whether a reviewer may cite a standards rule identifier `std.<skill>.<n>` ([G-126](#g-126))] Lens rules belong to [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery); [TODO: the lens rule identifier format ([G-16](#g-16))].
+A reviewer finding must cite a rule identifier, so a finding cites a rule and not an opinion. A reviewer may cite a standards rule identifier `std.<skill>.<n>` or a lens rule identifier. Lens rules belong to [Check, Review, Tester and Recovery](#9-check-review-tester-and-recovery); a lens rule identifier is `<lens>.<n>`, such as `correctness.1`.
 
 ##### Scanning for steering phrases
 
@@ -7110,9 +7228,9 @@ func parse(name, text string) (*template.Template, error) {
 5. Wrap at 80 columns.
 6. Apply `output.color`. Colour changes the bytes of the line and never a fact.
 
-The secret patterns of row G4 and the attribution patterns of row G5 run on the rendered text, after step 4. [TODO: the function that runs them and what a hit does ([G-130](#g-130))]
+The secret patterns of row G4 and the attribution patterns of row G5 run on the rendered text, after step 4. `scrub` in `internal/agent/render.go` runs them with the guard's pattern set, after filling and before wrapping: a secret becomes `[redacted]` and is logged to the ledger, and a line holding an attribution pattern is removed.
 
-[TODO: the escape rule for a backtick or a newline inside a fact, and how wrapping treats code spans and tables ([G-130](#g-130))]
+A fact string becomes a `Lit` whose printed form is a code span: each newline or carriage return becomes the two characters `\n`, and the span is fenced by one more backtick than the longest backtick run inside it, padded with one space when the text starts or ends with a backtick (the CommonMark code span rule). Wrapping breaks only at spaces outside code spans; a span is never split, and one longer than 80 columns sits alone on its line. Table lines are never wrapped.
 
 ##### Limiting tables and unlisted cases
 
@@ -7121,7 +7239,7 @@ The secret patterns of row G4 and the attribution patterns of row G5 run on the 
 - A code that has no template of its own is `other`. It renders one fixed line, "Needs a decision; details in `<path>`", and the model's own text goes into that file.
 - Prose fields such as the builder `summary` are never rendered by a template.
 
-[TODO: the exact text of the `N more` line and the label of the moved cell ([G-130](#g-130))]
+The overflow line is `<N> more: <What>`, such as `2 more: groups`. A moved cell leaves `see below` in the table and appears under it as `<column label>, row <n>: <text>`.
 
 ##### Build-time checks
 
@@ -7143,7 +7261,7 @@ flowchart TD
     O3["goldens under both profiles"]
   end
   subgraph AG["agent files"]
-    A1["no worker lists run, plan, respond, komodo"]
+    A1["no worker lists an orchestrator skill"]
   end
   SK --> GATE["komodo gate"]
   OU --> GATE
@@ -7160,9 +7278,9 @@ flowchart TD
 | Fact structs | A template uses a field its struct lacks, or a struct field no template uses |
 | Codes | A code in any agent schema has no template in either profile |
 | Goldens | A template rendered under either profile differs by one byte from its golden file |
-| Worker files | A worker `agent.json` lists `run`, `plan`, `respond` or `komodo` in its allowlist |
+| Worker files | A worker `agent.json` lists `run`, `plan`, `respond`, `komodo` or `release` in its allowlist |
 
-[TODO: how tokens are counted for the 6,000-token limit and whether frontmatter counts ([G-48](#g-48))] [TODO: whether the worker check also names `release`, which is an orchestrator skill ([G-127](#g-127))]
+[TODO: how tokens are counted for the 6,000-token limit and whether frontmatter counts ([G-48](#g-48))]
 
 ##### No leaks
 
@@ -7171,7 +7289,7 @@ Harness rules and orchestrator skills never reach a worker, and a run cannot rew
 | Path | Guard |
 |---|---|
 | Orchestrator rules into a worker | A brief holds only role text, repo context, skills and the task; the addendum strips the Komodo block; broken block markers drop the whole addendum and `doctor` reports it |
-| Orchestrator skills into a worker | The gate fails a worker `agent.json` listing `run`, `plan`, `respond` or `komodo` |
+| Orchestrator skills into a worker | The gate fails a worker `agent.json` listing `run`, `plan`, `respond`, `komodo` or `release` |
 | Host auto-load | `claude-cli` workers start with `--setting-sources ""`; links where the harness calls the provider's interface itself send only the brief |
 | A run changing its own guidance | The addendum is read from the base commit; config, settings files and `policy.json` are protected by guard row G3 |
 
@@ -7179,7 +7297,7 @@ When the `codex-cli` link ships in a later minor version, its workers must also 
 
 ##### Orchestrator skills
 
-The five orchestrator skills are Markdown files under `embed/skills/`, served by `komodo skill get <name>`. They are embedded in the binary and not installed as files. [TODO: whether a `release` skill ships, since the `AGENTS.md` block lists 4 skills ([G-127](#g-127))]
+The five orchestrator skills are Markdown files under `embed/skills/`, served by `komodo skill get <name>`. They are embedded in the binary and not installed as files. All five ship and the `AGENTS.md` block names all five. Each body opens with its role line, then its workflow as numbered steps, each naming the exact `komodo` command; the gate's size and steering checks apply as to any skill.
 
 | Skill | Role |
 |---|---|
@@ -7187,7 +7305,7 @@ The five orchestrator skills are Markdown files under `embed/skills/`, served by
 | `plan` | Planning epics and backlog work |
 | `run` | Running groups, including `run --stage` |
 | `respond` | Answering pull request threads with `komodo threads` and `komodo gate` |
-| `release` | The workflow around the human-only `release` verb. [TODO: its contents ([G-127](#g-127))] |
+| `release` | The workflow around the human-only `release` verb: confirm with `status` that every epic meant for the release has landed, hand the person the exact `komodo release` command, since the verb refuses without a terminal, then read the result with `status` |
 
 ### 8.6 State
 
@@ -7239,9 +7357,9 @@ The schema re-prompt is the one that the session supervisor sends on a `claude-c
 | A steering phrase in the repo's `AGENTS.md` | `doctor` | Warns; the addendum still loads into briefs |
 | A skill body differs from its index fingerprint | `Select`, `Get` | `ErrSkillHash`; the skill is refused |
 | A pull of a skill not on `skills.allow` | `Get` | `ErrSkillNotAllowed`; the pull is refused |
-| A pull of a section not in `sections` | `Get` | [TODO: the behaviour ([G-123](#g-123))] |
+| A pull of a section not in `sections` | `Get` | `ErrSectionUnknown`; the pull is refused and the reply lists the skill's sections |
 | A standards skill edited without the regenerated rule list | The gate | Fails |
-| A worker `agent.json` lists `run`, `plan`, `respond` or `komodo` | The gate | Fails |
+| A worker `agent.json` lists `run`, `plan`, `respond`, `komodo` or `release` | The gate | Fails |
 | A brief is over the link's ceiling | Brief builder | No skill is dropped; next link, else Blocked `context` ([chapter 5](#5-sessions-agents-and-briefs)) |
 | A planted `.claude/skills/standards-go/SKILL.md` | Not read | No effect |
 | A template field has no struct field, or a struct field no template uses | The gate | Fails |
@@ -7335,22 +7453,10 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-123](#g-123) | The frontmatter syntax and parser, the section rules, the behaviour for an unknown section, and whether a cache read is verified | Yes |
-| [G-206](#g-206) | The index file layout, its key names and the bytes the fingerprint covers; confirmation of the derived names, and each caller's reaction to a loader or render error | Yes |
-| [G-124](#g-124) | Skill selection edge rules and the allowlist for `skill get` outside a session | Yes |
 | [G-48](#g-48) | How tokens are counted for the 6,000-token skill limit | Yes |
-| [G-126](#g-126) | Rule identifier numbering and the regenerated rule list; Whether a finding may cite a standards rule identifier `std.<skill>.<n>` | Yes |
 | [G-13](#g-13) | How a steering phrase matches; Tuning the steering-phrase list | Yes |
-| [G-130](#g-130) | The 6 template functions; The facts of every template and how a field declares its check; Escaping, wrapping, table overflow text, and redaction placement; The one signature of the renderer | Yes |
-| [G-133](#g-133) | The code list against the block reasons, and the trigger of `branch_missing` | Yes |
-| [G-136](#g-136) | The relation of `embed/rules/orchestrator.md` to the O rows in `embed/policy.json` | Yes |
-| [G-138](#g-138) | Where a pulled skill section ends and how the heading text is matched | Yes |
 | [G-43](#g-43) | The glob grammar; The secret and attribution patterns that run on rendered text | Yes |
 | [G-122](#g-122) | The 4 turn-end headings | Yes |
-| [G-16](#g-16) | The lens rule identifier format | Yes |
-| [G-127](#g-127) | Contents of the five orchestrator skills and whether the worker ban names `release` | No |
-| [G-134](#g-134) | The `standard` profile layout and the output style text it pastes | No |
-| [G-135](#g-135) | The text of every template and the golden fixture inputs | No |
 | [G-20](#g-20) | The `codex-cli` link and its `AGENTS.md` rule | No |
 | [G-19](#g-19) | The timing target for `skill list` | No |
 
@@ -7406,7 +7512,6 @@ The scans are specified in [Workspace and Leases](#4-workspace-and-leases). [TOD
 | Impact set | The tests Check runs for a change |
 | Lens | A catalog of review rules for one kind of problem, with a condition that says when it applies |
 | Finding | A reviewer claim: a rule ID, a `file:line` and a quoted line of evidence |
-| Cold pass | A reviewer pass in thorough mode in addition to the lenses [TODO: `what a cold pass is` ([G-171](#g-171))] |
 | Acceptance item | A line of a group's `TG.md` in the form `WHEN <event> THE SYSTEM SHALL <response>`, with an optional `cmd:` line [TODO: `the sentence form of an acceptance item` ([G-155](#g-155))] |
 | Return | A trip from Check or Verify back to Build, counted against `limits.returns` |
 | Attempt | One fresh builder session for a group, whatever ended it |
@@ -7597,6 +7702,7 @@ const (
 	StatusOK          TestStatus = "ok"
 	StatusRegression  TestStatus = "regression"   // passed at base, fails at head: blocks
 	StatusPreExisting TestStatus = "pre_existing" // fails at both: warns
+	StatusNew         TestStatus = "new"          // no base result, fails at head: blocks like a regression
 )
 
 // Baseline is the test-class result at one base commit, keyed by tree hash.
@@ -7610,7 +7716,7 @@ The baseline is cached by tree hash, one entry per epic tip, and every group cut
 
 #### Review
 
-The lens catalog rule shape is fixed. The catalogs' content is open [TODO: `the lens rule catalogs` ([G-16](#g-16))], and so are the rule ID format and the contents of `check` and `evidence`.
+The lens catalog rule shape is fixed. A rule ID is `<lens>.<n>`, with `n` counting from 1 in file order; a released ID is never reused for another rule. Each of the 10 catalogs starts with one rule per item in its lens's Checks column under Lens selection and profiles in 9.5: `correctness`, for example, holds `correctness.1` to `correctness.4` for logic, error paths, nil and bounds, and resource release. `<lens>.md` holds the lens text the `lens` slot carries. [TODO: `the rule text of each catalog` ([G-16](#g-16))]
 
 ```go
 // Rule is one review rule in embed/lenses/<lens>.json.
@@ -7645,12 +7751,12 @@ An example of the shape; the values are illustrative:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string | The rule ID a finding cites; an unknown ID is refused [TODO: `whether a standards rule identifier std.<skill>.<n> counts as known` ([G-126](#g-126))] |
+| `id` | string | The rule ID a finding cites; an unknown ID is refused; the known set is every lens catalog plus `embed/skills/rules.json` |
 | `severity` | string | `blocker`, `major` or `minor` |
 | `applies.globs` | string array | Changed-file patterns that make the rule apply |
 | `applies.markers` | string array | Text markers in the diff that make the rule apply |
-| `check` | string | The question the rule asks [TODO: `what check and evidence hold` ([G-16](#g-16))] |
-| `evidence` | string | What a finding must quote |
+| `check` | string | One sentence stating what must hold |
+| `evidence` | string | The line a finding must quote |
 | `source` | string | The origin of the rule |
 
 Each `- **Never` and `- **Always` line of a standards skill compiles into a rule ID the reviewer cites ([Skills, Rules and Output](#8-skills-rules-and-output)). The catalogs are compiled into the binary, so a reader never sees an older or newer catalog.
@@ -7658,7 +7764,7 @@ Each `- **Never` and `- **Always` line of a standards skill compiles into a rule
 ```go
 // Finding is one reviewer claim, submitted with submit_finding.
 type Finding struct {
-	Rule  string `json:"rule"`  // a rule ID from a lens catalog
+	Rule  string `json:"rule"`  // a rule ID from a lens catalog or the standards rule list
 	File  string `json:"file"`  // path from the worktree root
 	Line  int    `json:"line"`  // line number from 1
 	Quote string `json:"quote"` // the quoted line of evidence
@@ -7790,7 +7896,7 @@ Every counter lives in `State` ([Event Spine and State Machine](#23-data-model))
 | Blocks per reason | `State.Blocks` | 3 for one reason flags `needs redesign` |
 | Group wall used | `State.WallUsedS`, seconds worked excluding Paused and Blocked | `limits.group_wall_min` |
 | Tokens used | `State.TokensUsed`, only when `track.usage` is on | `limits.group_tokens` |
-| Scope requests | One per task | 1 |
+| Scope requests | `TaskState.ScopeAsked`, per task | 1 |
 
 ### 9.4 Interfaces
 
@@ -7830,9 +7936,9 @@ const (
 
 | Function | On failure |
 |---|---|
-| `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass Check and `Drive` records the error [TODO: `how a Check error is routed` ([G-167](#g-167))] |
+| `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass Check, `Drive` records the error, the group blocks `setup` naming the step, and `resume` reruns Check |
 | `ClassifyFailure` | Cannot fail |
-| `Baseline.Classify` | Cannot fail; a test absent from the baseline is [TODO: `a test with no base result` ([G-169](#g-169))] |
+| `Baseline.Classify` | Cannot fail; a test absent from the baseline is `ok` when it passes and `new` when it fails; `new` blocks like a regression |
 | `ImpactSet` | Cannot fail; an empty `changed` returns an empty set |
 | `OutOfScope`, `CaseCollisions` | Cannot fail |
 
@@ -7876,7 +7982,7 @@ func ExactlyOnce(want, got []string) error
 | Method | On failure |
 |---|---|
 | `Lenses` | Cannot fail |
-| `AcceptFinding` | An unknown rule ID returns an error and the finding is refused [TODO: `whether std.<skill>.<n> is known` ([G-126](#g-126))]; a quote not found returns `false`, and the finding is dropped and logged |
+| `AcceptFinding` | A rule ID in no lens catalog and not in `embed/skills/rules.json` returns an error and the finding is refused; a quote not found returns `false`, and the finding is dropped and logged |
 | `AcceptResult` | A skipped or repeated task ID returns an error; the engine treats it as a schema failure: one re-prompt names the skipped or repeated IDs, and a second rejection ends the session `schema_fail`, which restarts the agent within its `retries` |
 
 ```go
@@ -7894,7 +8000,7 @@ func AdjudicateItem(reruns [2]bool) RerunOutcome
 
 | Method | On failure |
 |---|---|
-| `Rerun` | An item with no `Cmd` is never rerun, so its failure is never confirmed; a command that cannot start returns the error [TODO: `where Go reruns the command and what a start failure means` ([G-180](#g-180))] |
+| `Rerun` | An item with no `Cmd` is never rerun, so its failure is never confirmed; Go reruns the command in the group's worktree at the Verify head commit, inside the sandbox as Check does; a command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking |
 | `AcceptResult` | Same as the reviewer's |
 | `AdjudicateItem` | Cannot fail |
 
@@ -7981,20 +8087,32 @@ sequenceDiagram
 
 ##### Check
 
-Check runs these steps. The order and which steps are `check` actions (a command) and which run inline in Go are open. [TODO: `the order of the steps, whether the first failure stops the rest, which steps are check actions, and who emits check.done` ([G-167](#g-167))]
+Check runs these steps in the order listed under the diagram. Every step runs even after one fails, so one return names every failure.
 
 | Step | Rule |
 |---|---|
 | `done_when` | Every task's `done_when` is rerun in the sandbox |
 | Scope | Every changed file is in the group's `files` or is a test sibling [TODO: `the test-sibling rule` ([G-43](#g-43))] [TODO: `the glob grammar` ([G-43](#g-43))] |
 | Secrets | The diff is scanned for secret patterns [TODO: `the secret patterns` ([G-43](#g-43))] |
-| Coverage | Whole-repository coverage against `check.coverage` (80); blocks in every language [TODO: `how coverage is measured in each language` ([G-169](#g-169))] |
+| Coverage | Whole-repository line coverage against `check.coverage` (80); blocks in every language. When the base is already under 80, a group fails only if it lowers coverage below the base value |
 | Baseline | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns |
 | Impact set | Go: the tests of every package that imports a changed package. Other languages: the full `test` class. The epic gate always runs the full suite |
 | Flake rule | Any failing test is rerun twice alone; see the flake rule below |
 | Case collision | Two files that differ only by letter case fail Check on every operating system |
 | Cache | A result is keyed by tree hash plus command; an unchanged tree skips the rerun |
 | Parallelism | The impact set and `done_when` run in parallel inside the sandbox's process cap |
+
+**Default coverage tool per language.** [TODO: `confirm each tool yields a whole-repository line percent` ([G-169](#g-169))]
+
+| Language | Command | Percent read from |
+|---|---|---|
+| Go | `go test -coverpkg=./... -coverprofile=c.out ./...` | `go tool cover -func=c.out`, `total:` |
+| Python | `coverage run -m pytest`, then `coverage json` | `totals.percent_covered` |
+| JavaScript, TypeScript | `c8 --reporter=json-summary` around `test` | `total.lines.pct` |
+| Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
+| Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
+
+A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
 **📐 Which Check step feeds which?**
 ```mermaid
@@ -8022,7 +8140,15 @@ flowchart LR
   CV -->|8 percent| OUT
 ```
 
-**Reading the diagram.** Edge numbers name the data that moves; they are not an execution order. The order is open (G-167).
+**Reading the diagram.** Edge numbers name the data that moves; they are not an execution order. The run order is:
+
+1. Inline in Go, reading only the diff: case collision, scope, secrets.
+2. `check` actions, one per command, in parallel inside the sandbox's process cap: each task's `done_when` and the impact-set tests.
+3. Inline in Go: the baseline comparison of the test results, then two solo reruns of each failing test as `check` actions under the flake rule.
+4. One `check` action: the coverage command.
+5. The engine emits one `check.done` as the follow-on of the last `check` action's `action.done`: pass only when every step passed.
+
+A step that cannot run, such as a sandbox refusal, blocks the group `setup` naming the step.
 
 ##### Baseline
 
@@ -8037,7 +8163,7 @@ flowchart LR
 For Go, the impact set is the changed packages plus every package that imports one of them, directly or through others. `go list -deps` prints each package's transitive dependencies; reading that relation backwards gives the importers.
 
 ```sh
-go list -f '{{.ImportPath}} {{join .Deps " "}}' ./...
+go list -test -f '{{.ImportPath}} {{join .Deps " "}}' ./...
 ```
 
 ```go
@@ -8064,7 +8190,7 @@ func ImpactSet(deps map[string][]string, changed []string) []string {
 }
 ```
 
-`go list` omits the packages a test file imports from `.Deps`; a scratch module showed a package whose test imports `a` and nothing else does, with `deps=[]` and `testimports=[poc/a testing]`. [TODO: `whether imports in test files count toward the impact set` ([G-169](#g-169))]
+`go list` omits the packages a test file imports from `.Deps`; a scratch module showed a package whose test imports `a` and nothing else does, with `deps=[]` and `testimports=[poc/a testing]`. Imports in test files count: with `-test`, the same module also lists the test variant `poc/b [poc/b.test]`, whose `.Deps` holds `poc/a`. The caller strips the bracket suffix and skips the generated `.test` main packages before calling `ImpactSet`.
 
 ##### Flake rule
 
@@ -8113,18 +8239,18 @@ The reviewer runs the lenses below. `correctness`, `readiness` and `quality` alw
 
 | Rule | Detail |
 |---|---|
-| Profiles | Thorough: every applicable lens in parallel plus a cold pass [TODO: `what a cold pass is` ([G-171](#g-171))]. Economy: one merged lens. A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality` |
+| Profiles | Thorough: every applicable lens at full depth. Economy: the one merged `economy` lens, plus the full `security` lens wherever that lens applies. A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality` |
 | Severity | `blocker` and `major` block; `minor` is reported and counted |
 | Verdicts | `met`, `not_met` or `brief_incomplete` per task ID, each exactly once; Go rejects a result that skips or repeats one |
 | Added checks | The reviewer runs build, tests and lint itself with `run`; the engine reruns any check a verdict depends on, so the verdict rests on the engine's result |
 | Findings | `submit_finding` takes a rule ID, `file:line` and quoted evidence; a finding blocks only if Go finds the quote at that line in the head or the diff; failing findings are dropped and logged |
 | Precision ledger | Per rule and model: submitted, verified, fixed, `disputed` (a builder result code naming file and line); `doctor` lists rules verified under 50% of the time; a rule under 30% for 60 days is a design change |
 | `brief_incomplete` | Blocks with `brief`; a harness fault, not counted against the builder |
-| Re-review | The delta only; cached findings keyed by `(lens, diff, prompt hash, model)` cost 0 tokens, and the prompt hash covers the lens rule set [TODO: `what the delta is and how the key is encoded` ([G-181](#g-181))] |
+| Re-review | The delta only: `git diff` from the head commit of the last review to the new head, with the open findings. A cached result costs 0 tokens; its key is the hex SHA-256 of the sorted lens names, the SHA-256 of the diff text, the prompt hash and the model identifier, joined by zero bytes. The prompt hash covers the lens rule set |
 | Epic mode | One verdict per group over the whole epic diff |
-| Pool | Lenses run in parallel under one slot each only when `pool_max` allows; else they queue behind the group's slot |
+| Pool | One reviewer session per group applies every selected lens, so the lenses share that session's one pool slot |
 
-Whether each lens is its own model session or one session applies them all, how the per-lens results merge into one verdict per task, and how economy keeps the `security` lens that some components require are open. [TODO: `lens sessions, merging and the economy security lens` ([G-171](#g-171))]
+One reviewer session applies every selected lens; each lens's text and rules are one part of the `lens` slot. The session returns one verdict per task over all lenses, and each finding carries its lens through its rule identifier. A lens takes no pool slot of its own.
 
 | Lens | Applies when | Checks |
 |---|---|---|
@@ -8165,7 +8291,7 @@ flowchart TD
   S -->|7 minor| COUNT
 ```
 
-1. The tool refuses a rule ID that is in no lens catalog. [TODO: `whether the standards rule identifiers std.<skill>.<n> are in that set` ([G-126](#g-126))]
+1. The tool refuses a rule ID that is in no lens catalog and not in the standards rule list `embed/skills/rules.json`.
 2. `VerifyFinding` looks for the quote at `File:Line` in the head tree and in the diff. The line matches when it equals the quote once both are trimmed of leading and trailing whitespace; inner whitespace and letter case must match exactly, and a quote holding a line break is refused. The head tree is tried first, then the diff line, added or context, whose new-file number is `Line`; `finding.verified` records which matched in `in`.
 3. A quote that is not found drops the finding and logs it; the finding cannot block. The precision ledger counts it as submitted, not verified.
 4. A verified finding is appended as `finding.verified`; its rule's severity decides whether the group is blocked.
@@ -8270,9 +8396,9 @@ sequenceDiagram
 | Go's two reruns split | Group blocks with `flaky` |
 | Both pass | Both `session.end done` events are needed; then `stage.exit` to Ship |
 | Both fail in one tick | Handled in `sequence` order; both reach the builder in the one return |
-| An item has no command | Its failure is never confirmed by Go |
+| An item has no command | Go cannot confirm its failure, so it is reported as unconfirmed and never blocks |
 
-The reviewer is never cancelled by a tester failure; Verify returns to Build only when the reviewer's session ends. [TODO: `what happens to a failed tester item that has no command, since the transition table also lists a recorded tester failure as a reason to return` ([G-180](#g-180))]
+The reviewer is never cancelled by a tester failure; Verify returns to Build only when the reviewer's session ends. A tester failure returns the group only when Go's two reruns confirm it; a failed item with no command is listed as unconfirmed in the run report and the pull request body and never returns the group.
 
 ##### Scope requests
 
@@ -8302,12 +8428,14 @@ sequenceDiagram
 1. The builder's final result has status `needs_scope`, the paths and a reason.
 2. The engine makes a work-in-progress commit through the git wrapper. The resume handle is already in `state.json`. The group goes Blocked with reason `needs_scope`.
 3. The lease and the worktree stay held, and the startup sweep skips them.
-4. The engine denies without asking anyone when a path is protected (guard rows G3 and G4: Komodo's own settings, `.git` and secret files) or is in another live group's `files`.
+4. The engine denies without asking anyone when a path is protected (guard rows G3 and G4: Komodo's own settings, `.git` and secret files) or is in another live group's `files` or approved scope paths.
 5. Otherwise `status --wait` wakes the orchestrator, which runs `komodo scope approve|deny --paths --reason`.
 6. Approval adds the paths to the group's `files` as action `scope_change` (key: group plus sorted paths), logged in the ledger. Denial leaves `files` unchanged.
 7. The engine resumes the same session with the answer in the `scope_answer` slot and the group returns to Build.
 
-Where the widened `files` list is stored while the task list is locked at Intake, what the builder does after a denial, and what a second request in one task does are open. [TODO: `storage of the widened files, behaviour after a denial and after a second request` ([G-176](#g-176))]
+Approval writes the paths into `State.ScopeAdded` through `scope_change`, so the backlog files and their card hash never change; the group's effective `files` is its backlog `files` plus `ScopeAdded`. The same action records each path with its group in `~/.komodo/state/scope/<repo-id>.json`, which Intake and the engine's own denial in step 4 read as owned by that group while its lease lives; the startup sweep removes the entries of a landed or abandoned group.
+
+After a denial the builder finishes the task inside `files`; a task it cannot finish fails its `done_when` and takes the usual attempt path. A second request in one task is denied by the engine without asking, with the reason `one scope request per task`. The `scope_answer` slot holds `approved` or `denied`, the paths and the reason, one line each.
 
 ##### Failure routing
 
@@ -8392,7 +8520,7 @@ The full list of scans, their parallelism and their time target are in [Workspac
 | Builder sessions | `limits.group_attempts` attempts, one per fresh builder session for the group; the in-session limits of the failure table (one re-prompt, one "continue", 2 gate results) are not attempts |
 | Per group | `limits.group_tokens`: input, output and cache writes; cache reads are reported only; only when `track.usage` is on |
 | Sessions | Pool of `limits.pool_min` to `limits.pool_max` machine-wide slots plus per-link slots |
-| Mode | `economy` (1 merged lens) or `thorough` (every applicable lens plus a cold pass) |
+| Mode | `economy` (1 merged lens) or `thorough` (every applicable lens at full depth) |
 
 `track.usage` set to `auto` is on under `economy` mode and off under `thorough` mode; `on` and `off` override it. With tracking off, no token data is collected and no token cap applies; returns, attempts, retries and wall time still bound the group.
 
@@ -8404,7 +8532,7 @@ The 12 savings are listed below. Where each is built is in the chapter that owns
 
 | Saving | Effect |
 |---|---|
-| Clipping | Shortens text before it enters a prompt [TODO: `which text and what length` ([G-179](#g-179))] |
+| Clipping | Cuts each command output a brief carries, the `checks` slot and a failing test's output on a return, to its first 20 and last 80 lines, with one line naming how many lines were cut and the file that holds them |
 | Signature trimming | Reduces Go source to its signatures in a brief; trimmed slices are cached per file version |
 | Glob-picked standards | Only standards skills whose file patterns match the group's files enter the brief |
 | Delta diffs | On re-review the reviewer sees only the lines changed since the last review |
@@ -8414,7 +8542,7 @@ The 12 savings are listed below. Where each is built is in the chapter that owns
 | A stable prefix | Tools, role, repo context and standards come first and the task last |
 | A sanitizer | Strips terminal colour codes and build noise from command output |
 | One builder session per group | The builder takes the group's tasks in order in one conversation and commits after each |
-| Light-weight work on local models | Runs lighter work on local, free models [TODO: `which work qualifies` ([G-179](#g-179))] |
+| Light-weight work on local models | A session of an agent with weight `light` runs on the `local` link when its chain names that link and the link is up |
 | Context compaction at 80% | At 80% of the window, old tool outputs shrink to one-line stubs; their text stays in `<session>/out/` |
 
 The brief layout is in [Sessions, Agents and Briefs](#5-sessions-agents-and-briefs); the reply cap and compaction are in [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox).
@@ -8566,7 +8694,7 @@ Keys this subsystem owns or reads. The full key table, the defaults, the hard li
 | `limits.group_attempts` | integer | set in [1.8](#18-config) | Attempts per group; one attempt is one fresh builder session for the group |
 | `limits.group_wall_min` | integer | set in [1.8](#18-config) | Wall time per group, paused time excluded; one 100% extension at most |
 | `limits.group_tokens` | integer | set in [1.8](#18-config) | Tokens per group: input, output and cache writes; used only when `track.usage` is on |
-| `mode` | string | set in [1.8](#18-config) | `economy` runs one merged lens; `thorough` runs every applicable lens plus a cold pass; sets the `track.usage` default |
+| `mode` | string | set in [1.8](#18-config) | `economy` runs one merged lens; `thorough` runs every applicable lens at full depth; sets the `track.usage` default |
 | `track.usage` | string | set in [1.8](#18-config) | `auto` is on under `economy` and off under `thorough`; `on` and `off` override it |
 | `retries` (per agent) | integer | set in [1.8](#18-config) | Restarts after a timeout or idle stop, per group and never reset while the group is open; counts inside `limits.group_attempts` |
 | `limits.pause_max_min` | integer | set in [7.8](#78-config) | Read here: longest a session stays paused; owned by [Providers and HTTP](#7-providers-and-http) |
@@ -8634,21 +8762,14 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-16](#g-16) | The content of the lens rule catalogs; the rule ID format | Yes |
+| [G-16](#g-16) | The rule text of each lens catalog | No |
 | [G-29](#g-29) | How `scope approve | Yes |
-| [G-167](#g-167) | Check step order, which steps are actions, who emits `check.done`, how a Check error is routed | Yes |
 | [G-43](#g-43) | The test-sibling rule; The secret content patterns; The glob grammar | Yes |
-| [G-169](#g-169) | Whole-repository coverage per language; a test with no base result; test-file imports in the impact set | Yes |
-| [G-171](#g-171) | What a cold pass is; Lens sessions, merging, the economy security lens | Yes |
-| [G-176](#g-176) | Scope request: storage of widened `files`, behaviour after a denial and a second request | Yes |
+| [G-169](#g-169) | Confirming each default coverage tool yields a whole-repository line percent | No |
 | [G-217](#g-217) | Whether `Drive` or `recover.go` calls `Load` on a restart; The owner of the startup sweep; Which event the sweep records for a dead session | Yes |
-| [G-180](#g-180) | A failed tester item with no command; where Go reruns | Yes |
-| [G-126](#g-126) | Whether a finding may cite a standards rule identifier `std.<skill>.<n>` | Yes |
 | [G-155](#g-155) | The sentence form of an acceptance item | Yes |
 | [G-159](#g-159) | Which component runs the evidence check | Yes |
 | [G-17](#g-17) | The 50% cache hit-rate fixture needs real API sessions | No |
-| [G-179](#g-179) | Which text clipping shortens; which work runs on local models | No |
-| [G-181](#g-181) | The re-review delta and the encoding of the review cache key | No |
 | [G-238](#g-238) | A group's wall time, the story-point scale and the one 100% extension | Yes |
 | [G-152](#g-152) | Where the precision counters are stored; cache hit rate per kind or per agent | No |
 | [G-237](#g-237) | What a review does when a read-only session edits a tracked file | No |
@@ -10585,7 +10706,7 @@ A link, the orchestrator and the outbox are defined in the [glossary](hld.md#12-
 | `internal/core/fs.go` | Atomic writes and glob matching |
 | `templates/claude/{CLAUDE.md, settings.json}.tmpl` | The `CLAUDE.md` line and the settings entries install writes |
 | `templates/project/{AGENTS.md, CHANGELOG.md, PULL_REQUEST_TEMPLATE.md, docs/{prd,hld,lld}.md}.tmpl` | The full `AGENTS.md` for a repository without one, and the extra files of `--project` |
-| `embed/rules/orchestrator.md`, `embed/output/adhd.md` | The rules and the output style rendered into the block |
+| `embed/rules/orchestrator.md`, `embed/output/<profile>.md` | The rules and the output style rendered into the block |
 | `testdata/fixture-repo/` | The end-to-end target the installer and the gate proofs run against |
 
 Files of other chapters that this chapter calls:
@@ -10836,11 +10957,11 @@ The begin marker of this release reads `<!-- komodo:begin min=1.0.0-beta.6 -->`.
 - **Your verbs:** the common ones are `plan`, `run`, `status`, `skill`, `scope`, `add`, `stop`, `resume`, `abandon`, `sync`, `doctor`, `gate`, `jobs tick` and config reads; `komodo help --json` lists all of them. Run `status --wait` in the background.
 - **Not yours:** the person-only verbs, such as `install`, `fresh`, `config` writes, `gate --install` and `release`; `komodo help --json` marks all of them. They refuse without a terminal. Hand the person the command.
 - **Start:** run `komodo status` first: version, live runs, blocked groups.
-- **Skills:** `komodo skill get run|plan|respond|komodo` returns the workflow for each job.
+- **Skills:** `komodo skill get run|plan|respond|komodo|release` returns the workflow for each job.
 - **Rules:** <O1–O7, O9 and O10, from `embed/rules/orchestrator.md`>
 - **Report:** relay the envelope's `report` field verbatim; it is already in the output contract.
 
-<output style for output.profile, from embed/output/adhd.md>
+<output style for output.profile, from embed/output/<profile>.md>
 <!-- komodo:end -->
 ```
 
@@ -10852,13 +10973,11 @@ The begin marker of this release reads `<!-- komodo:begin min=1.0.0-beta.6 -->`.
 | Your verbs | The template | The common verbs of the shared set, with a pointer to `help --json` for the full list; `status --wait` runs in the background so events wake the session |
 | Not yours | The template | The common verbs reserved for a person, with a pointer to `help --json`, which marks all of them; they refuse without a terminal, so the session hands over the exact command |
 | Start | The template | The first command is `komodo status`; the `SessionStart` hook of step 6 runs it automatically in Claude Code |
-| Skills | The template | `komodo skill get <name>` returns the workflow of `run`, `plan`, `respond` or `komodo`; the skills are embedded in the binary, never installed as files [TODO: whether the `release` skill is listed here ([G-127](#g-127))] |
+| Skills | The template | `komodo skill get <name>` returns the workflow of `run`, `plan`, `respond`, `komodo` or `release`; the skills are embedded in the binary, never installed as files |
 | Rules | `embed/rules/orchestrator.md` | Rules O1 to O7, O9 and O10 are rendered by `internal/agent/rules.go`; the engine enforces the same rules |
 | Report | The template | The session passes `report` to the person word for word and never summarises it |
-| Output style | `embed/output/adhd.md` | Pasted below the rules for the configured `output.profile` |
+| Output style | `embed/output/<profile>.md` | Pasted below the rules for the configured `output.profile`: `adhd.md` or `standard.md` |
 | End marker | The template | A missing or damaged marker drops the whole block from every brief and `doctor` reports it |
-
-[TODO: `which output style text is pasted when output.profile is standard, since the file map names only embed/output/adhd.md for the block` ([G-134](#g-134))]
 
 The pin is read by the verb dispatcher: a binary below `min=` refuses every verb except `help`, `version`, `fresh`, `install` and `doctor`, with the fix line `run komodo fresh` ([CLI and Configuration](#1-cli-and-configuration)).
 
@@ -11487,7 +11606,7 @@ The 34 flat keys and the hard limits are in [CLI and Configuration](#1-cli-and-c
 **Component level** (the real packages with a fake release server and a fixture repository)
 
 *Installer*
-- On a fresh repository on macOS and on Windows, a new `claude` session reads the `AGENTS.md` block, `komodo skill list` shows the 4 orchestrator skills [TODO: whether it shows 5 with the `release` skill ([G-127](#g-127))] and `komodo` resolves in a new shell.
+- On a fresh repository on macOS and on Windows, a new `claude` session reads the `AGENTS.md` block, `komodo skill list` shows the 5 orchestrator skills and `komodo` resolves in a new shell.
 - On those same repositories `.claude/settings.json` holds only the allow rule and the `SessionStart` hook, and a pre-existing key survives.
 - The second `install` makes 0 repository changes, and a hand-edited `CLAUDE.md` survives.
 - `--dry-run` on a fresh repository lists 4 writes, and on a rerun lists 0.
@@ -11524,8 +11643,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-28](#g-28) | How `komodo init` writes the orchestrator skills into the global Claude Code setup | No |
 | [G-240](#g-240) | Changing install selections after install | No |
 | [G-159](#g-159) | How the gate receives the verb table of `cli` to compare with `help --json` | No |
-| [G-127](#g-127) | Whether a `release` skill ships beside the four listed in the `AGENTS.md` block | No |
-| [G-134](#g-134) | The output style text pasted for the `standard` profile | No |
 
 ## 13. State Manager
 
@@ -12287,6 +12404,7 @@ Nothing here is committed. Every repository on the machine shares these files.
 | `cache/lang/<repo-id>/` | Komodo's own language caches (Go, npm, cargo, pip) per repository, never the person's; capped by `sandbox.lang_cache_gb`; `cache clear --kind lang` removes it | [6](#6-tools-guard-and-sandbox) |
 | `state/providers.json` | The provider probe result: which links work, their model identifiers and measured context | [7.3](#73-data-model) |
 | `state/quota.json` | Reset times from provider limits, shared by every repository on the machine | [7.3](#73-data-model) |
+| `state/scope/<repo-id>.json` | Paths approved by `scope approve`, each with its group; read by Intake and the engine's denial check, cleared by the sweep for landed or abandoned groups | [9.5](#95-behaviour) |
 | `state/timers/` | One record per paused group, `<repo-id>.<group>.json`, written with `Replace` and removed when fired, holding `wait_until` (the latest reset time among its halted sessions, plus 1 min) and `wait_link` | [7.3](#73-data-model) |
 | `state/pool/`, `state/links/` | Files for the machine-wide session pool slots and the per-link slots, each tagged with its holder's process identifier | [TODO: `which component owns the session pool slots` ([G-217](#g-217))] [TODO: `which package owns the link slots` ([G-217](#g-217))] |
 | `state/queue/` | The work queue: one create-only file per ready group or due job | [3.3](#33-data-model) |
@@ -12312,7 +12430,7 @@ Committed means the file is stored in the repository's git history and shared wi
 | `~/.komodo/jobs/` | Job templates | No |
 | `~/.komodo/leases/<repo-id>/` | One lease and fence file per group, machine-wide | No |
 | `~/.komodo/wt/<repo-id>/` | Detached worktrees per group | No |
-| `~/.komodo/state/` | Provider probe, quota timers, pause timers, pool and link slots, queue, wake files, fresh state, config hash and audit log | No |
+| `~/.komodo/state/` | Provider probe, quota timers, approved scope paths, pause timers, pool and link slots, queue, wake files, fresh state, config hash and audit log | No |
 | `~/.komodo/cache/lang/<repo-id>/` | Komodo's own language caches per repo, never the user's | No |
 
 The `AGENTS.md` block, between its `komodo:begin` and `komodo:end` markers, `CLAUDE.md` and `.claude/settings.json` are written by `komodo install` ([12.3](#123-data-model)); the backlog files are written by Backlog and Planning after lint, from the planner's draft, and read by the builder ([11.3](#113-data-model)).
@@ -12639,7 +12757,7 @@ flowchart TB
 
 1. **Before phase 2, by hand.** Remove from `~/.claude/settings.json` the `Bash(python -m komodo:*)` allow rule, the `komodo guard` hook, the `komodo hook status` and `komodo hook prune` hooks and the 36 `skillOverrides`. Delete the 5 Komodo skills under `~/.claude/skills/` and fix the 5 stale lines in `~/.claude/AGENTS.md`. The exact entries and lines are on [15.3](#153-host-cleanup-before-phase-2).
 2. **Phase 7: `komodo gate --install`.** The command places the development build at `~/.komodo/bin/komodo`, replacing the binary there. From here the harness runs its own task groups.
-3. **Phase 8: `komodo install` in this repository.** The command writes the `AGENTS.md` block, the `CLAUDE.md` import line and the two `.claude/settings.json` entries into the Komodo repository itself. From here the repository `SessionStart` hook runs `komodo status`, and `komodo skill get` serves the skills `komodo`, `plan`, `run` and `respond` from the binary [TODO: whether the `release` skill is served too ([G-127](#g-127))].
+3. **Phase 8: `komodo install` in this repository.** The command writes the `AGENTS.md` block, the `CLAUDE.md` import line and the two `.claude/settings.json` entries into the Komodo repository itself. From here the repository `SessionStart` hook runs `komodo status`, and `komodo skill get` serves the skills `komodo`, `plan`, `run`, `respond` and `release` from the binary.
 4. **Phase 9: the cutover rewrites.** The "At cutover" column of the [AGENTS.md table](#153-host-cleanup-before-phase-2) is applied to `~/.claude/AGENTS.md`. The repository's pull request template line that called `komodo pr create` is replaced with the engine's own pull request body template. [TODO: `the repo table that phase 9 applies, which the sources name but do not list` ([G-188](#g-188))]
 5. **Confirm with `doctor install`.** The command finds 0 shadowing binaries, meaning no other `komodo` earlier on the search path, and 0 Komodo hooks left in `~/.claude`.
 
@@ -12766,7 +12884,7 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-11"></a>G-11 | Sandbox | Docker Desktop bind-mount copy time for a 1 GB `node_modules` | Spike, phase 2 | [6.3](#63-data-model), [12.2](#122-package-layout) |
 | <a id="g-12"></a>G-12 | Sandbox | Whether a copied Rust `target/` is reused or rebuilt | Spike, phase 2 | [6.3](#63-data-model), [6.5](#65-behaviour) |
 | <a id="g-13"></a>G-13 | Guard, skills, steering phrases | The steering-phrase list is 6 entries by judgment; how a phrase matches: letter case, whole words, and whether frontmatter is scanned | Tune the list from `doctor` warnings, phase 3; owner decides the match rule, then 8.5 Scanning for steering phrases | [6.3](#63-data-model), [8.5](#85-behaviour) |
-| <a id="g-16"></a>G-16 | Review | The lens rule catalogs' content | Authoring task, phase 7; security lens reviewed by the owner | [8.5](#85-behaviour), [9.3](#93-data-model) |
+| <a id="g-16"></a>G-16 | Review | The rule text of each lens catalog; the identifier format, the field meanings and the outline are in 9.3 | Authoring task, phase 7; security lens reviewed by the owner | [8.5](#85-behaviour), [9.3](#93-data-model) |
 | <a id="g-17"></a>G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with `track.usage` on | Measured in phase 7 | [HLD 10](hld.md#10-quality-requirements), [9.5](#95-behaviour), [9.9](#99-proof-cases) |
 | <a id="g-18"></a>G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 | [11.5](#115-behaviour) |
 | <a id="g-19"></a>G-19 | Timing | The 10,000-event replay under 1 s and the 50 ms short-verb budget | Gate timing, phase 6 | [0.1](#01-how-to-read-this-document), [1.5](#15-behaviour), [2.5](#25-behaviour), [2.8](#28-config), [8.8](#88-config), [10.5](#105-behaviour), [10.9](#109-proof-cases), [12](#12-install-binary-lifecycle-and-gate), [12.3](#123-data-model), [12.5](#125-behaviour), [13.5](#135-behaviour), [13.8](#138-config) |
@@ -12817,16 +12935,6 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-119"></a>G-119 | Configuration files | Layout of `embed/defaults.json` and `embed/policy.json` and which holds hard limits; a version field in `config.json`; the line format of `config.log`, the encoding of `config.sha`, the batch id and the `--accept` row; the algorithm and input of the effective-config hash a run pins; the write order and crash behaviour of the three files; which package writes the checksum and log, since the file map says `core` and the state-kind table says the `config` verb; how the probed-model limit of an agent's `model` is checked; the states with a missing file or checksum; what "a group" means as a `--default` target | Owner decision, then a design patch to 1.3 | [0.4](#04-import-order), [1.2](#12-package-layout), [1.3](#13-data-model), [1.4](#14-interfaces), [1.5](#15-behaviour), [1.6](#16-state), [13.3](#133-data-model) |
 | <a id="g-121"></a>G-121 | CLI validate | The closest-match distance and cutoff, whether an unknown agent name is refused, pin check and repo resolution outside a git repository, which verbs the hash guard exempts, and the controlling-terminal check on native Windows | Owner decision; the Windows check proven when a Windows machine exists | [1.5](#15-behaviour) |
 | <a id="g-122"></a>G-122 | Configuration values | The 4 turn-end headings of `output.turn_end_summary`; the package that defines `CapacityProfile` and the mapping from agent weight to `effort`; command combination for a repo with 2 markers | Owner decision | [1.3](#13-data-model), [1.5](#15-behaviour), [1.8](#18-config), [5.1](#51-scope-and-concepts), [7.1](#71-scope-and-concepts), [8.8](#88-config) |
-| <a id="g-123"></a>G-123 | Skills, files | The frontmatter syntax and how it is parsed with the standard library only; the description and section names of each skill; where a section ends and how a heading is matched; the behaviour for a pull of a section not in `sections`; whether a body read from the cache is verified again | Owner decision with the skill file format; then 8.3 and 8.5 | [8.3](#83-data-model), [8.4](#84-interfaces), [8.5](#85-behaviour), [8.7](#87-invariants-and-failures) |
-| <a id="g-124"></a>G-124 | Skills, selection | The meaning of an empty `markers` list; where markers are looked up (worktree, base commit or repo root); how an Amazon Web Services provider inside a `*.tf` file is written as a marker; whether a skill in both `always` and `allow` is listed once; the order inside `always`; which allowlist `komodo skill get` applies outside a session; the exact filter of `skill list --agent <name>` | Owner decision; then 8.5 Selecting skills | [8.3](#83-data-model), [8.4](#84-interfaces), [8.5](#85-behaviour) |
-| <a id="g-126"></a>G-126 | Skills, standards rule identifiers | Whether a reviewer may cite a standards rule identifier `std.<skill>.<n>`: Skills, Rules and Output 8.5 lets a finding cite one, while `submit_finding` in Check, Review, Tester and Recovery refuses a rule identifier that is in no lens catalog; how `n` is numbered; how the rule text is cut from a `- **Never` or `- **Always` line; the name and location of the regenerated rule list the gate compares | Owner decision; then 8.3, 8.5 and 9.5 | [2.3](#23-data-model), [6.4](#64-interfaces), [8.3](#83-data-model), [8.4](#84-interfaces), [8.5](#85-behaviour), [9.3](#93-data-model), [9.4](#94-interfaces), [9.5](#95-behaviour) |
-| <a id="g-127"></a>G-127 | Skills, orchestrator | The contents of the `release` skill; the bodies of `komodo`, `plan`, `run` and `respond`, of which only the roles are designed; whether the worker ban in `agent.json` also names `release`; whether a `release` skill ships beside the four that the `AGENTS.md` block lists | Authoring task and owner decision | [0.5](#05-embedded-assets), [8.5](#85-behaviour), [12.3](#123-data-model), [12.9](#129-proof-cases), [15.4](#154-cutover) |
-| <a id="g-130"></a>G-130 | Output, renderer contract | The renderer's one signature: CLI and Configuration declares `Report(profile string, code string, facts map[string]any) string`, Skills, Rules and Output declares `Render(name, facts any) (string, error)` with typed fact structs; the facts of each template: which of commit hash, reference and task identifier each `needs.<code>` carries, the field names and types of the facts of `pr_body`, `status`, `run_report`, `report.<verb>`, `error.<code>` and `event.<type>`, the check for a reference and how a struct field declares which check applies; the argument and result types and the meaning of the 6 template functions `code`, `n`, `plural`, `dur`, `path`, `table`; the escape rule for a backtick or newline in a fact; how wrapping at 80 columns treats code spans and tables; the text of the `N more` line and the label of a moved cell; where secret redaction and the attribution check sit relative to wrapping and colour, and what a hit does | Owner decision with a per-template fact table; then 1.4, 8.3 and 8.5 | [1.4](#14-interfaces), [8.3](#83-data-model), [8.4](#84-interfaces), [8.5](#85-behaviour) |
-| <a id="g-133"></a>G-133 | Output, codes | The trigger of `branch_missing`; the template name of the codes that are not blocks (`pass`, `fail`, `env`, `wrong_command`, `real_failure`); the block reasons `no_provider`, `pause_timeout`, `paid_refused`, `needs_scope`, `attempts`, `context`, `merge_conflict`, `budget`, `wall`, `setup`, `brief`, `contract` and `state_invalid` are event reasons yet absent from the code list, while the design says every event reason is a code from the list; whether `Code` and the state package's `Reason` are one type; whether `other` is a member of the code list | Owner decision; then 8.3 Code list and the block reasons table of chapter 2 | [8.3](#83-data-model) |
-| <a id="g-134"></a>G-134 | Output, profiles | How the `standard` layout differs from `adhd`; whether `embed/output/standard.md` exists beside `embed/output/adhd.md`; which output style text is pasted for the `standard` profile | Owner decision | [8.3](#83-data-model), [12.3](#123-data-model) |
-| <a id="g-135"></a>G-135 | Output, templates | The text of every template and the inputs of each golden fixture; only the line for the code `other` is fixed | Authoring task | [8.3](#83-data-model) |
-| <a id="g-136"></a>G-136 | Rules, orchestrator | How `embed/rules/orchestrator.md` relates to the O rows in `embed/policy.json` (generated from them or written beside them); its file format; whether the gate compares the two | Owner decision; then 8.5 Rule enforcement map | [8.5](#85-behaviour) |
-| <a id="g-138"></a>G-138 | Skills, tools | Where a pulled skill section ends and how the heading text is matched | Owner decision; then 8.5 Pulling a skill and the tools chapter | [8.5](#85-behaviour) |
 | <a id="g-139"></a>G-139 | Release manifest, verification and release | The key names of `latest.json`, the architectures built, the asset file names, the exact bytes the ed25519 signature covers and how it is encoded; whether either embedded key may sign and how the next key rotates in; whether the updater refetches `latest.json` or reads the asset from `fresh.json`; how a binary treats a manifest layout it does not know; where the install script saves the download before it runs it; the key file's format and what `release` does when its mode is wider than 0600; where `add changelog` stores its recorded lines until the release; where the current and `next` public keys live in the source and how the `next` key is produced at the first release; the operating system and architecture pairs built; how the release is published; how the changelog is rendered from the entries `add changelog` records; what `--notes-file` supplies | Owner decision on the architecture page; then 11.3, 11.5, 12.3 and 12.5 | [1.4](#14-interfaces), [11.4](#114-interfaces), [11.5](#115-behaviour), [12.3](#123-data-model), [12.5](#125-behaviour) |
 | <a id="g-142"></a>G-142 | Gate inputs and result | How the gate recognises the Komodo repository and its refusal code; where the check fixtures live and how they load; the layout of the gate result data, the verdict wording and the error code; the comment lint rules; how docs drift finds package names in `lld.md`; what the component map names now that each LLD chapter is a subsystem; the gap tag syntax the no-silent-gaps check scans now that open items are written as TODO with a gap identifier, and how a backlog task names the gap it closes | Owner decision; then 12.3 and 12.5 | [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour), [12.7](#127-invariants-and-failures) |
 | <a id="g-145"></a>G-145 | Scheduler, templates | Where a template lives: the scheduler section says `embed/jobs/` or `~/.komodo/jobs/` with the example `templates/jobs/nightly-review.json`; the file map says `embed/jobs/` holds job templates and none ship while `templates/jobs/` holds the example; the `jobs` verb reads `embed/jobs/` and `~/.komodo/jobs/`, not `templates/jobs/`; template grammar: accepted forms of `every`, the value type of a slot, characters allowed in `name`, whether the agents run in parallel or in turn, how the 5 min minimum is enforced (refuse or raise), what the tick does with a template that fails strict decoding, how an older or newer template is read. Paths disagree: the scheduler section says `embed/jobs/` or `~/.komodo/jobs/`, the file map and `jobs list` omit `templates/jobs/`; which file wins when two share a name | Owner decision, then 10.3 and 10.4 | [0.3](#03-package-map), [0.5](#05-embedded-assets), [10.3](#103-data-model), [10.4](#104-interfaces), [10.7](#107-invariants-and-failures), [14.1](#141-runtime-state) |
@@ -12843,13 +12951,7 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-160"></a>G-160 | Planning, repo map | The layout of `embed/langs/<lang>.json`; how inbound references are counted from patterns; how the files a goal names are found; the order that breaks equal ranks (the proof needs byte-identical output); the text form the map renders to; how tokens are counted for the 10% fit; what happens for a language with no pattern file | Owner decision; then 11.3 and 11.5 | [11.3](#113-data-model), [11.4](#114-interfaces), [11.5](#115-behaviour) |
 | <a id="g-161"></a>G-161 | Ship, branches and merges | How and when the group branch is created from the hidden reference and the epic branch from the base; whether `<epic>` and `<group>` are the folder names; the remote name; where the epic-branch merge runs; the merge method of a group pull request; the pull request title and labels; which references count as critical | Owner decision; then 11.4 and 11.5 | [11.3](#113-data-model), [11.5](#115-behaviour) |
 | <a id="g-163"></a>G-163 | Ship, failures | What the engine does when a push, a `gh` call or a merge fails for a reason other than a conflict; how the push and pull request creation, which run beside `Drive`, return their result | Owner decision; then 11.4, 11.5 and 11.7 | [11.4](#114-interfaces), [11.7](#117-invariants-and-failures) |
-| <a id="g-167"></a>G-167 | Quality, Engine | Order of the 8 Check steps, whether the first failure stops the rest, which steps are `check` actions (a command, keyed by tree hash plus command) and which run inline in Go, who emits `check.done`, and how an error from Check (a sandbox refusal) is routed | Owner decision; then 9.5 Check and a patch to chapter 2 `check` | [2.3](#23-data-model), [9.4](#94-interfaces), [9.5](#95-behaviour) |
-| <a id="g-169"></a>G-169 | Quality | How whole-repository coverage is measured in each language, what Check does for a language with no coverage tool, and what Check does when coverage is already under the floor at the base commit; what Check does with a test that has no base result; whether imports in test files join the impact set (`go list` `.Deps` omits them, shown in a scratch module) | Spike, then a design patch to 9.5 | [1.8](#18-config), [9.4](#94-interfaces), [9.5](#95-behaviour) |
-| <a id="g-171"></a>G-171 | Review, Engine | Whether each lens is its own model session or one reviewer session applies every lens; what the "cold pass" in "every applicable lens in parallel plus a cold pass" is, since no page defines it; how per-lens output merges into one verdict per task; whether a lens takes a pool slot although only builder, reviewer and tester sessions do; how the one merged economy lens keeps the `security` lens that some components require | Owner decision on the architecture page; then 9.5 and chapter 3 `verify.go` | [9.1](#91-scope-and-concepts), [9.5](#95-behaviour) |
-| <a id="g-176"></a>G-176 | Scope request | Where the widened `files` list is stored while the task list is locked at Intake by its card hash; what the builder does after a denial; what a second request in one task does; the content of the `scope_answer` slot | Owner decision; then 9.5 Scope requests | [9.5](#95-behaviour) |
-| <a id="g-179"></a>G-179 | Budgets | Which text clipping shortens and to what length; which work counts as light-weight and runs on local models | Owner decision; then 9.5 Token savings | [9.5](#95-behaviour) |
-| <a id="g-180"></a>G-180 | Tester | What happens to a failed acceptance item that has no `cmd:` line, since Go never confirms it yet the transition table lists a recorded tester failure as a reason to return; in which worktree Go reruns an item's command; what a command that cannot start means | Owner decision; then 9.5 The tester | [9.4](#94-interfaces), [9.5](#95-behaviour) |
-| <a id="g-181"></a>G-181 | Review | What "delta only" means on re-review (the lines changed since the last review, by which comparison) and how the review cache key `(lens, diff, prompt hash, model)` is encoded | Design patch; with the cache store in chapter 10 | [9.5](#95-behaviour) |
+| <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, then a design patch to 9.5 | [1.8](#18-config), [9.5](#95-behaviour) |
 | <a id="g-182"></a>G-182 | Event spine | The checksum on each event line: the algorithm and how the value is written. The owner decided on 2026-10-12 that it covers the line itself (commit cdd4bfa8, "checksum of the line"); the field is written last | Owner decision on the architecture page; then 2.3 envelope field table and examples | [2.3](#23-data-model), [13.7](#137-invariants-and-failures) |
 | <a id="g-185"></a>G-185 | End-to-end fixtures | The files, tasks and acceptance items of `tg-fixture`; which local model the full run uses and the configuration that selects it; the process and the stage at which the crash check sends `kill -9`; the content of the two regression fixtures; whether the gate runs the seven checks or a person starts them; whether any check depends on an earlier one | Owner decision; then 15.1 and the contents of `testdata/fixture-repo/` | [15.1](#151-end-to-end-verification-plan) |
 | <a id="g-186"></a>G-186 | Race check | How two engines start on one group, since `run` refuses a group another run holds (chapter 1); which machine or clone the second engine runs on | Owner decision; then 15.1 and chapter 4 | [3.5](#35-behaviour), [15.1](#151-end-to-end-verification-plan) |
@@ -12859,7 +12961,6 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-202"></a>G-202 | Workspace, formats and names | The lease file key names and record layout; the timestamp format; the exported names and signatures of the workspace functions; the worktree folder name on each platform (short hash of what, and `<group>` versus `<group-id>`); how the three Windows git settings are applied to one worktree; the tester worktree path, which file cuts it (`worktree.go` or `qa.go`), and how the sweep finds a dead run's tester worktrees | Design patch to 4.3 and 4.5; owner confirms the shapes in 4.4 | [4.2](#42-package-layout), [4.3](#43-data-model), [4.4](#44-interfaces), [4.5](#45-behaviour) |
 | <a id="g-203"></a>G-203 | Sessions and agents, formats and names | The fields of `request.json` and `result.json`; the signature and arguments of the `spawn` and `cancel` entry points; the Go shapes of the registry, the brief builder and the supervisor; the result schema of each of the 7 agents (`$id` and fields); the builder's `skills.allow` list beyond `standards-comments` | Design patch to 5.3; owner confirms the shapes in 5.4; agent schemas are an authoring task, phase 3 | [5.3](#53-data-model), [5.4](#54-interfaces) |
 | <a id="g-205"></a>G-205 | Providers, formats and names | The key names of `providers.json`, `quota.json` and `models.json`; how a record's header and body share one file; the `CtxSource` strings; the Go shapes of `Session`, `Stream`, `Event`, `Input`, `ResumeHandle` and `LimitError`; the error values of `Inject`, `Stop` and `Close`; the signature of `ToolHost` | Design patch to 7.3; owner confirms the shapes in 7.4 | [7.3](#73-data-model), [7.4](#74-interfaces) |
-| <a id="g-206"></a>G-206 | Skills and output, formats and names | The index file layout, its key names, the bytes the fingerprint covers and how `sha8` is cut from it; the exported names in 8.3 and 8.4; each caller's reaction to a loader or render error | Design patch to 8.3; owner confirms the shapes in 8.4 | [8.3](#83-data-model), [8.4](#84-interfaces) |
 | <a id="g-208"></a>G-208 | Scheduler, cache and ledger, formats and names | The file layout, timestamp format and fingerprint algorithm of `jobs/state.json`; the key names of the session row and of `ledger/sessions.jsonl`, the model identifier key and the capacity profile text; the exported names and signatures of the scheduler, cache store and ledger. Cache store: how inputs are joined into the hash and what the config-hash prefix does; the fan-out widths and entry file layout; what the verification hash covers and where it is stored; how recency is tracked and when eviction runs; the folders of the repo profile and the test baseline; `cache clear --kind` has no value for `setup` and `map`; how `--all` finds other repositories; where hit and lookup counters live; behaviour when the folder is unreadable; concurrent writers of one key. Ledger: the files for the views, the scorecard and the status data; the shape of `groups.json` and `tasks.json` and where each group's last applied sequence is stored; which event or file updates the fence and lease fields of the group row and the effect of `lease.lost`; the task state after `task.released` and where `released: crash` shows; which call writes the session row; host subagent events; the trim algorithm and trigger; the secret patterns masked (same list as the guard's); when views catch up after a dropped subscriber; status behaviour when a ledger file is missing; the meaning of "tick" in the ledger batching rule | Owner decision; then 10.3 and 10.4 | [10.2](#102-package-layout), [10.3](#103-data-model), [10.4](#104-interfaces), [10.5](#105-behaviour), [10.6](#106-state), [10.7](#107-invariants-and-failures), [13.3](#133-data-model), [14.3](#143-data-flow) |
 | <a id="g-210"></a>G-210 | Install and binary lifecycle, formats and names | The field names of `install.json`, its hash algorithm and how a settings entry is named; how a record's header and body share one file; forward-version handling; the exported names of the install, update, probe and gate functions. Install writes: how install chooses `~/.zshrc` or `~/.bashrc` and the text of the line; how the Windows user `PATH` is changed; the launchd label, cron line and Task Scheduler task name; the exact `SessionStart` hook entry; where the block goes in an `AGENTS.md` without markers and what happens with damaged markers; what a rerun does with files written before the manifest after a crash; where ownership of the binary, `PATH` line, `providers.json` and schedule entry is recorded; what `--repo-only` and `--machine-only` do outside a git repository. Lifecycle records: where the time of the last check and the count of consecutive failures are kept; the line format of `state/fresh.log`; the layout of `state/active/` and which code writes and removes its entries; how the previous version is recorded; when `komodo.exe.old` is deleted; whether `fresh.auto: false` and `CI=true` also stop the hourly fetch of `latest.json`; how the 2 minute checkpoint wait of `--restart-runs` fits the shutdown sequence's 30 second stop per agent and 60 second force-kill; the `restart` stop reason that `run.stopped` does not list | Owner decision; then 12.3 to 12.5 and chapter 2 | [12.2](#122-package-layout), [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour) |
 | <a id="g-211"></a>G-211 | State manager, interface and formats | The state manager's interface: the exported names and signatures, how a package obtains the manager, the generator and migration entry points, whether `Body` is an interface, and the parameters and results of `Append`, `Claim` and `Remove`; the `Watch` result type (`Wake` is taken), what it returns, and whether it uses operating-system notification or polling; how the manager identifies the calling component for the writer check; the error values of a stale `rev`, an unlisted writer, a taken claim, a failed disk write and a read of an absent record, whether `List` returns the good records beside an error, and what `Drive` does when `Append` or `Snapshot` refuses; the `rev` of a first write and whether `Replace` creates a record. Its formats: the timestamp format of `ts` and the encoding of `writer`; how a record's header and body share one file; where a replaced record stores its checksum or hash; whether append kinds other than events carry a checksum; what a binary does with a `v` newer than it knows and how an older event `version` is migrated; the machine log file name pattern; how `Tail` chooses the state file; the temp file name and folder of `Replace`, whether the folder is synced after the rename, the suffix after `.bad-`, the name of a stale file renamed aside, the line terminator and length limit, and which call performs a takeover. Damage: whether a dropped cut-short line is removed from the file, which writer appends `state.truncated`, whether the dropped line's `sequence` is reused, what `Tail` returns for a line a live writer has not finished, what is moved aside for a bad line before the last, which code appends `group.blocked` when the group's own state file is bad, and whether a read-only caller such as `status --wait` may drop a line. Group state: how `Open` learns the last `sequence` and checks the lease; where the checks that refuse a falling `epoch` or `fence` and detect a stage change live, given that `Snapshot` receives only the generic `S`; what `Load` returns for a group with no snapshot | Owner decision on `Watch` (notification or polling), on what `Drive` does when `Append` or `Snapshot` refuses, and on the damage rules; design patch to 13.3 to 13.7 and 4.5 for names and formats | [HLD Open decisions](hld.md#open-decisions), [2.3](#23-data-model), [3.4](#34-interfaces), [13.2](#132-package-layout), [13.3](#133-data-model), [13.4](#134-interfaces), [13.5](#135-behaviour), [13.6](#136-state), [13.7](#137-invariants-and-failures), [14.1](#141-runtime-state) |
@@ -13000,6 +13101,11 @@ A dependency means one component calls code in another, so the second must exist
 | Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% coverage bar |
 | Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | EARS item grammar |
 | Aider repo map, https://github.com/pdavis68/RepoMapper | Repo map ranking |
+| Claude Code skills, https://code.claude.com/docs/en/skills | `SKILL.md` frontmatter with name and description, path-based selection, bodies loaded on demand |
+| Codecov commit status, https://docs.codecov.com/docs/commit-status | Comparing coverage with the base commit when the base is under the floor |
+| Bazel remote caching, https://bazel.build/remote/caching | Cache keys as a SHA-256 over every input, used for the review cache key |
+| CommonMark code spans, https://spec.commonmark.org/0.31.2/#code-spans | The backtick fence rule for escaping facts |
+| Go `go list`, https://pkg.go.dev/cmd/go#hdr-List_packages_or_modules | `-test` variants whose dependencies include test imports |
 | Temporal event history reference, https://docs.temporal.io/references/events | One typed attribute set per event type; an activity's completion or failure event records its result or failure class against the scheduling key |
 | CloudEvents specification, https://github.com/cloudevents/spec/blob/main/cloudevents/spec.md | Envelope fields kept apart from a `data` part whose schema the `type` selects |
 | Sentry event grouping, https://docs.sentry.io/concepts/data-management/event-grouping/ | A failure fingerprint built only from stable parts, leaving out line numbers and message text |
