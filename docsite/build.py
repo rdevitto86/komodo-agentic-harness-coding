@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render docs/hld.md and docs/lld.md as a browsable site.
 
-Usage: python3 docs/_site/build.py build|serve [--engine mkdocs|zensical] [--ref BRANCH]
+Usage: python3 docsite/build.py build|serve [--engine mkdocs|zensical] [--ref BRANCH]
 
 The Markdown in docs/ stays plain. This script adds the depth at build time:
 one page per chapter, per `### N.M` child page and per appendix, glossary hover definitions, plain-terms
@@ -11,7 +11,7 @@ serve reads a snapshot of docs/; rerun it after editing the source.
 import argparse, json, re, shutil, subprocess, sys, unicodedata
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 HERE = Path(__file__).resolve().parent
 WORK = ROOT / ".docs-build"
@@ -361,7 +361,7 @@ def main():
     ap.add_argument("--ref", default=None, help="git ref for links to repo files (default: current branch)")
     args = ap.parse_args()
     if shutil.which(args.engine) is None:
-        sys.exit(f"{args.engine} not found; install with: pip install -r docs/_site/requirements.txt")
+        sys.exit(f"{args.engine} not found; install with: pip install -r docsite/requirements.txt")
     prepare(args.ref or branch())
     cmd = [args.engine, args.action] + (["-a", ADDR] if args.action == "serve" else ["--strict"] if args.engine == "mkdocs" else [])
     sys.exit(subprocess.run(cmd, cwd=WORK).returncode)

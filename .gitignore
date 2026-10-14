@@ -16,3 +16,6 @@ CLAUDE.local.md
 
 # Design docs site build output
 /.docs-build/
+
+# Python bytecode
+__pycache__/
