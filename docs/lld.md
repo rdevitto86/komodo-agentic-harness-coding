@@ -143,7 +143,7 @@ flowchart TB
 | `cmd/komodo/`, `internal/` | All Go code, one folder per package in the table above | [0.3](#03-package-map) |
 | `embed/` | Everything a model reads, compiled into the binary | [0.5](#05-embedded-assets) |
 | `templates/` | Files `install` copies into a user's repository: project documents and the pull request template, the `CLAUDE.md` and `.claude/settings.json` pair, one example job under `templates/jobs/`, which `jobs list` never reads; a person copies it into `~/.komodo/jobs/` to turn the job on | [12](#12-install-binary-lifecycle-and-gate) |
-| `dashboard/` | A proof of concept of an opt-in browser dashboard on mock data: `dashboard.go` (loopback server), `assets/` (embedded htmx 2.0.11, pipeline pointers), `testdata/groups.json`, `poc/main.go` (`go run ./dashboard/poc`, moves mock groups every 2 s). Nothing imports it. [TODO: the dashboard design: stack, the `komodo ui` verb, live model changes and the "no server process" exception ([G-27](#g-27))] | none |
+| `dashboard/` | A proof of concept of an opt-in browser dashboard on mock data: `dashboard.go` (loopback server), `assets/` (embedded htmx 2.0.11, pipeline pointers), `testdata/groups.json`, `poc/main.go` (`go run ./dashboard/poc`, moves mock groups every 2 s). Nothing imports it. It becomes the `komodo ui` verb ([Verbs (chapter 1)](#verbs)): htmx and plain SVG fed by server-sent events, with no Node or build step; its code moves to `internal/cli/ui.go` and `embed/ui/` when the verb is built. | none |
 | `docs/` | `docs/prd.md` and `docs/decisions/0001-standalone-harness.md` (not yet written), `docs/hld.md`, `docs/lld.md`, and `docs/backlog/epic-1/`, the task groups that build each component | [11](#11-backlog-planning-ship-and-release) |
 | `testdata/fixture-repo/` | The small repository that end-to-end runs build against | [15](#15-verification-operations-and-cutover) |
 
@@ -155,7 +155,7 @@ An import is one package using another. Packages import in one direction only, s
 
 - **The rule:** a package may import any package to its right in the line above and none to its left. A package may skip levels: `cli` may import `core` directly.
 - **Higher needs as parameters:** when a lower package needs something from a higher one, the higher one passes it in as a function argument. When `quality` needs to start a model session (an `engine` job), the engine hands it a session runner function. The same applies to filled slots in `agent` and to the verb table that `komodo gate` compares with `help --json`, which `cli` passes in `GateOptions.Verbs`. `cli` also starts the tool server with two function values: a `tools.LintFunc` that runs `repo.LintDraft`, and a `tools.RuleKnown` that looks a rule identifier up in the lens catalogs of `quality`; `tools` imports neither.
-- **Why `state` sits just above `core`:** every package that keeps state calls the state manager, and the manager needs only the atomic file writes of `core`. `core` never imports `state`. [TODO: which package writes the configuration checksum and audit rows ([G-119](#g-119))]
+- **Why `state` sits just above `core`:** every package that keeps state calls the state manager, and the manager needs only the atomic file writes of `core`. `core` never imports `state`. The `config` verb in `cli` writes the checksum and the audit rows through the state manager; `core` builds them and receives the writer as a parameter ([1.4](#14-interfaces)).
 - **Enforcement:** `komodo gate` reads every import and fails the build when one points up the line.
 
 **📐 Which imports are allowed**
@@ -236,22 +236,33 @@ The command-line interface turns a typed `komodo <verb>` into one call into the 
 | `internal/cli/work.go` | `run`, `status`, `stop`, `resume`, `abandon` |
 | `internal/cli/plan.go` | `plan`, `skill`, `scope` |
 | `internal/cli/jobs.go` | `jobs` |
-| `internal/cli/setup.go` | `install`, `uninstall`, `fresh`, `doctor`, `sync`, `version` |
+| `internal/cli/setup.go` | `install`, `init`, `uninstall`, `fresh`, `doctor`, `sync`, `version` |
+| `internal/cli/ui.go` | `ui`: the loopback dashboard server |
 | `internal/cli/config.go` | The `config` verb: reads, writes, `--default` and `--accept` |
 | `internal/cli/repo.go` | `add`, `gate`, `release`, `cache` |
 | `internal/cli/internal.go` | `internal tools`, `internal fresh-bg` and `internal guard` |
 | `internal/core/config.go` | `config.json`, the agent and endpoint sections, hard limits, the audit log |
 | `internal/core/detect.go` | Repo profile and command classes |
 | `internal/core/version.go` | Embedded version and semantic-version comparison, used by the pin check |
+| `internal/core/capacity.go` | `CapacityProfile` and the weight-to-effort mapping |
 | `internal/core/fs.go` | Atomic file writes |
 | `internal/core/tokens.go` | The bundled tokenizer: counts for the brief ceiling, the skill size gate and the 80% trim |
 | `embed/tokenizer.bin` | The tokenizer's byte-pair vocabulary, the public `o200k_base` table; the one input outside the Go standard library |
 | `embed/defaults.json` | Built-in default of every key |
 | `embed/policy.json` | Guard rows with scopes and steering phrases |
 
-`init` has no file in this layout. The flags of `init` and how `init` writes into the global Claude Code setup are open: [TODO: where the `init` verb lives and what it writes ([G-28](#g-28))].
+`init` lives in `internal/cli/setup.go` beside `install`; it builds the Komodo plugin from `embed/` and runs the `claude plugin` commands ([Verbs](#verbs)).
 
-`embed/defaults.json` and `embed/policy.json` both appear as the home of hard limits in different places of the design. One passage says `defaults.json` holds the default of every setting and `policy.json` the hard limits and the guard rules; the file map says `defaults.json` holds defaults and hard limits together. [TODO: which embedded file holds each key's hard limit, and the layout of both files ([G-119](#g-119))]
+`embed/defaults.json` holds the default and the hard limit of every key, one `KeySpec` per key with its fields in snake_case. `embed/policy.json` holds only the guard rows and the steering phrases; its layout is in [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox).
+
+```json
+{
+  "keys": [
+    { "name": "limits.returns", "kind": "int", "default": 3, "min": 0, "max": 5 },
+    { "name": "limits.pool_min", "kind": "int", "default": 1, "min": 1, "max_key": "limits.pool_max" }
+  ]
+}
+```
 
 Imports run downward only: `cli` sits above every other package and may import any of them; `core` is the lowest and imports no Komodo package. Each verb file holds thin wrappers that call into the owning package, never the logic itself.
 
@@ -341,11 +352,23 @@ type Result struct {
 | 3 | `OutcomeBlocked` | The verb reports a blocked state |
 | 4 | `OutcomeInternal` | Komodo itself failed |
 
-[TODO: which situations exit 3 rather than 1, and which failures exit 4 ([G-116](#g-116))]
+Exit 1 means the verb refused before acting: a missing terminal, a pinned repo, a tampered config, a locked group, a value over its limit, no repository, or not the Komodo repository. Exit 3 means the verb acted and reports a state the caller must handle: a Blocked group (`run`, `resume`, `status --wait`), a failed gate, a `doctor` check that errored, or a plan blocked by `lint`. Exit 4 means Komodo itself failed: a recovered panic, an undecodable state record or a failed write to Komodo's own files.
 
-[TODO: the `error.code` values for a pin refusal, a missing terminal, a usage error, an over-limit value and an unknown key; the closed code list has `config_tampered` and `locked` but no code for these ([G-116](#g-116))]
+Command-line refusals use these codes of the closed code list ([Skills, Rules and Output](#8-skills-rules-and-output)):
 
-[TODO: the `report` text and `data` shape of each verb, and the schema `help --json` prints for each result ([G-115](#g-115))]
+| Situation | Exit | `error.code` |
+|---|---|---|
+| Repository pinned above the binary | 1 | `pinned` |
+| Terminal-only verb without a terminal | 1 | `no_terminal` |
+| Verb that needs a repository, run outside one | 1 | `no_repo` |
+| Value over its hard limit | 1 | `over_limit` |
+| Unknown verb or flag, bad flag value, bad `--input` | 2 | `usage` |
+| Unknown config key or agent name | 2 | `unknown_key` |
+| Value of the wrong type or outside its enum | 2 | `bad_value` |
+| Hand edit of a locked group's backlog files | 1 | `card_changed` |
+| Komodo itself failed | 4 | `internal` |
+
+`report` is the template of `Result.Code` rendered under `output.profile` ([Skills, Rules and Output](#8-skills-rules-and-output)). `data` is the verb's result struct from its owning package, encoded with snake_case JSON tags, and a field is never removed within one envelope version. `help --json` prints one object per verb, `{name, summary, tier, flags, result}`, where `result` is the JSON Schema (draft 2020-12) of that struct, generated at build from its tags; each verb's golden `--json` test pins the shape.
 
 A verb that refused, as printed under `--json` after a hand edit of `config.json`; exit code 1.
 
@@ -354,7 +377,7 @@ A verb that refused, as printed under `--json` after a hand edit of `config.json
   "v": 1,
   "ok": false,
   "verdict": "Refused: config.json was hand-edited",
-  "report": "[TODO: report text (G-115)]",
+  "report": "Refused: config.json was edited outside komodo config.\nFix: komodo config --accept",
   "data": {},
   "error": {
     "code": "config_tampered",
@@ -364,8 +387,6 @@ A verb that refused, as printed under `--json` after a hand edit of `config.json
 }
 ```
 
-Open decisions in this example: [G-115](#g-115).
-
 A verb that succeeded, `komodo run tg-1.2 --json`; exit code 0.
 
 ```json
@@ -373,16 +394,14 @@ A verb that succeeded, `komodo run tg-1.2 --json`; exit code 0.
   "v": 1,
   "ok": true,
   "verdict": "Run started for tg-1.2",
-  "report": "[TODO: report text (G-115)]",
+  "report": "Run started for tg-1.2.\nRun id: 0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57\nNext: komodo status --wait",
   "data": {
-    "[TODO: key name of the run id (G-115)]": "the run id"
+    "run_id": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"
   }
 }
 ```
 
-Open decisions in this example: [G-115](#g-115).
-
-**Versioning.** A reader branches on `v`. The only version is 1. [TODO: what a caller does with a larger version number ([G-119](#g-119))]
+**Versioning.** A reader branches on `v`. The only version is 1. A caller that reads a higher `v` than it knows treats the reply as unreadable and stops, reporting the version it got.
 
 #### Verb table
 
@@ -455,7 +474,7 @@ type Handler func(c *Call) Result
 
 `PinExempt` is `true` for exactly 5 verbs: `help`, `version`, `fresh`, `install` and `doctor`. `NeedsTerminal` is set for each terminal-only form in the [tier table](#14-interfaces): `config` calls that write, `doctor --fix`, `jobs run|pause|resume`, `cache clear`, `gate --install` and `gate --install-hooks`.
 
-[TODO: the keys of the `--input` JSON object for positional arguments such as a group id or a goal ([G-115](#g-115))]
+The `--input` object holds each flag under its long name and the positional arguments, in order, under `args`: `{"args": ["tg-1.2"], "stage": "build"}` is `run tg-1.2 --stage build`. An unknown key is a usage error, like an unknown flag.
 
 #### Configuration files
 
@@ -555,7 +574,7 @@ type Effective struct {
 }
 ```
 
-**Versioning.** `config.json` carries no version field. A reader decodes `config.json` strictly, so a key the running binary does not know is an error that names the closest known key; a file written by a newer binary with a new key therefore fails to load on an older one. [TODO: whether `config.json` gets a version field and how a newer file is treated ([G-119](#g-119))]
+**Versioning.** `config.json` carries no version field. A reader decodes `config.json` strictly, so a key the running binary does not know is an error that names the closest known key; a file written by a newer binary with a new key therefore fails to load on an older one. The strict decode is the version check, so `config.json` stays without a version field; the refusal names the key and the fix `run komodo fresh`.
 
 #### Audit log and hash
 
@@ -585,11 +604,16 @@ type Batch struct {
 | old value | The value before the write |
 | new value | The value after the write |
 
-`state/config.log` (the full path is `~/.komodo/state/config.log`) holds one row per changed key; `state/config.sha` holds the SHA-256 checksum of `config.json`. Both are the state kind `config_audit`, written with `Append` and `Replace` ([State Manager](#13-state-manager)) [TODO: which package writes the checksum and the audit rows ([G-119](#g-119))]. `config --accept` logs one row.
+`state/config.log` (the full path is `~/.komodo/state/config.log`) holds one row per changed key; `state/config.sha` holds the SHA-256 checksum of `config.json`. Both are the state kind `config_audit`, written with `Append` and `Replace` ([State Manager](#13-state-manager)). The `config` verb in `cli` writes both through the state manager, handing `core` an `AuditSink` ([1.4](#14-interfaces)). `config --accept` logs one row.
 
-[TODO: the line format of `config.log`, the encoding of the checksum in `config.sha`, the batch id format and the shape of the `--accept` row ([G-119](#g-119))]
+Each `config.log` line is one JSON object (JSON Lines): `time` in RFC 3339 UTC, `batch`, `key`, `old` and `new`. The batch id is a UUID version 7, the form of a run id, so ids sort by time. `config.sha` holds the 64 lowercase hexadecimal characters of the SHA-256 of the exact `config.json` bytes, then a newline. The `--accept` row has `key` `config.json`, with the checksums before and after as `old` and `new`.
 
-[TODO: the algorithm and input of the effective-config hash a run pins ([G-119](#g-119))]
+```json
+{"time":"2026-10-13T09:12:04Z","batch":"0192e5a1-3c00-7b10-8d2e-4f6a1b2c3d4e","key":"limits.returns","old":3,"new":4}
+{"time":"2026-10-13T09:20:11Z","batch":"0192e5a8-9e00-7c42-9a1b-5e7f2c3d4e5f","key":"config.json","old":"<64 hexadecimal characters>","new":"<64 hexadecimal characters>"}
+```
+
+The effective-config hash is the SHA-256, in lowercase hexadecimal, of the JSON encoding of `Effective` without `Hash` and without each setting's `Source`. Go's `encoding/json` writes map keys in sorted order, so the same values give the same hash on every machine.
 
 #### Command detection
 
@@ -635,7 +659,7 @@ A marker with no entry for a class leaves that class empty: `pyproject.toml` has
 #### Capacity profile
 
 ```go
-// package core; file placement open
+// internal/core/capacity.go
 
 // CapacityProfile is what the engine knows about one link before a session starts.
 type CapacityProfile struct {
@@ -646,7 +670,7 @@ type CapacityProfile struct {
 }
 ```
 
-[TODO: which package defines `CapacityProfile` and the mapping from an agent's weight to `Effort` ([G-122](#g-122))]
+`CapacityProfile` lives in `core`, so the provider adapters, the brief builder and the engine all import it downward. `Effort` follows the agent's weight: heavy `high`, standard `medium`, light `low` ([Providers and HTTP](#7-providers-and-http)).
 
 ### 1.4 Interfaces
 
@@ -773,9 +797,23 @@ func (s CommandSet) For(class Class) []Command
 | `Store.Accept` | The file cannot be hashed | The verb exits with a failure and the guard stays tripped |
 | `Detect` | A marker file cannot be read | The caller fails; an empty set is not an error, and `run` refuses naming `MarkerFiles` |
 
-[TODO: the exit code and `error.code` for an unknown key, a type error and a failed read; see the exit-code gap ([G-116](#g-116))]
+An unknown key exits 2 with `unknown_key`, a type error exits 2 with `bad_value`, and a failed read of `config.json` or `state/config.sha` exits 4 with `internal`.
 
-[TODO: how the `model` hard limit, a probed model, is checked when a value is written, since `core` cannot import the state manager that holds the probe result ([G-119](#g-119))]
+The `config` handler passes `core` what it cannot import: an `AuditSink` over the state manager, and a `probed` function that reads `state/providers.json` and accepts a model only when a probed link lists it. With no probe file a `model` write is refused with `over_limit` and the fix `komodo doctor`.
+
+```go
+// internal/core/config.go
+
+// AuditSink writes the audit log and the checksum through the state manager; cli implements it.
+type AuditSink interface {
+	AppendBatch(b Batch) error        // one config.log line per change
+	ReplaceChecksum(sum string) error // rewrites state/config.sha
+	Checksum() (string, error)        // reads state/config.sha; empty when the file is absent
+}
+
+// NewStore returns the config store; probed reports whether a model name passed the provider probe.
+func NewStore(home string, sink AuditSink, probed func(model string) bool) Store
+```
 
 | Caller | Calls | When |
 |---|---|---|
@@ -805,8 +843,8 @@ func (s CommandSet) For(class Class) []Command
 | Tier | Who calls it | Verbs |
 |---|---|---|
 | Shared | A person or the orchestrator | `help`, `version`, `doctor`, `sync`, `add backlog`, `add changelog`, `plan`, `run`, `status`, `skill`, `scope approve|deny`, `resume`, `stop`, `abandon`, `jobs list|show|tick`, `cache stats`, `gate` without `--install*`, `config` reads |
-| Terminal-only | A person; refused with exit 1 without a controlling terminal | `install`, `init`, `uninstall`, `fresh`, `config` writes, `doctor --fix`, `jobs run`, `jobs pause`, `jobs resume`, `cache clear`, `gate --install`, `gate --install-hooks`, `release` |
-| Internal | The engine, or the host hook `install` writes | `internal tools`, `internal fresh-bg`, `internal guard` |
+| Terminal-only | A person; refused with exit 1 without a controlling terminal | `install`, `init`, `ui`, `uninstall`, `fresh`, `config` writes, `doctor --fix`, `jobs run`, `jobs pause`, `jobs resume`, `cache clear`, `gate --install`, `gate --install-hooks`, `release` |
+| Internal | The engine, or the host hook `install` writes | `internal tools`, `internal fresh-bg`, `internal guard`, `internal job` |
 
 Agent shells have no controlling terminal: Claude Code's Bash tool cannot open `/dev/tty`. On Claude Code, deny rules that `install` writes into `.claude/settings.json` refuse `komodo config` writes, `install`, `fresh`, `release` and `gate --install` before the terminal check runs, and a denied command names the rule and the human path; other hosts rely on the terminal check alone. Orchestrator rule O7 forbids faking a terminal; a deny rule matches only a command that starts with the verb, so a wrapper is caught by the terminal check, not by the rule.
 
@@ -816,9 +854,10 @@ Agent shells have no controlling terminal: Claude Code's Bash tool cannot open `
 |---|---|
 | `help [verb]` | `--all` |
 | `version` | `--check` |
-| `install` | `--repo-only`, `--machine-only`, `--hosts claude,codex`, `--no-path`, `--from <file>`, `--project`, `--schedule`, `--force` |
+| `install` | `--repo-only`, `--machine-only`, `--hosts claude,codex`, `--no-path`, `--from <file>`, `--project`, `--no-project`, `--schedule`, `--no-schedule`, `--force` |
 | `uninstall` | `--repo-only`, `--machine-only` |
-| `init` | [TODO: flags of `init` ([G-28](#g-28))] |
+| `init` | `--remove` |
+| `ui` | `--port <n>` (0 picks a free port) |
 | `fresh` | `--check`, `--to <version>`, `--restart-runs` |
 | `doctor [install\|backlog]` | `--fix`, `--sandbox <cmd>` |
 | `config [agent\|endpoint <name>] <key>[=<value>]…` | `--all`, `--default`, `--accept` |
@@ -840,15 +879,16 @@ Agent shells have no controlling terminal: Claude Code's Bash tool cannot open `
 
 **Help, version and installation**
 - **`help [verb]`:** Prints the verb list, or one verb's flags and examples, from text generated at build and embedded, so `help` answers under 50 ms and changes nothing. `help --json` lists every verb, flag, type, default and result schema and marks the terminal-only verbs; the `AGENTS.md` block tells the orchestrator to run `help --json` first. `--all` also shows the internal tier.
-- **`version`:** Prints the running version, the binary's path, the latest release Komodo knows of from `state/fresh.json` and the repo pin from `AGENTS.md`. `version` makes no network call and changes nothing. [TODO: what `--check` adds ([G-117](#g-117))]
+- **`version`:** Prints the running version, the binary's path, the latest release Komodo knows of from `state/fresh.json` and the repo pin from `AGENTS.md`. `version` makes no network call and changes nothing. `--check` exits 3 when `state/fresh.json` names a release newer than the running binary and 0 otherwise, still with no network call.
 - **`install`:** A person at a terminal runs `install`. `install` places the binary under `~/.komodo/versions/` and `bin/`, adds the path entry, probes providers, writes the Komodo block into `AGENTS.md`, the `@AGENTS.md` line into `CLAUDE.md` and four entries into `.claude/settings.json`, records the manifest and optionally an operating-system schedule entry; the steps are in [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate). `install` diffs the wanted file list against `install.json`, applies only the differences, runs `doctor install` and fails when any check errors. A rerun makes 0 changes, a hand-edited owned file survives and is reported, and `install` never writes a config file.
 - **`install` flags:** `--repo-only` writes only files inside the repo; `--machine-only` only the machine parts, which is what `install.sh` runs; `--hosts claude,codex` overrides host detection; `--no-path` skips the path step; `--from <file>` installs that binary file; `--project` also adds `docs/{prd,hld,lld}.md`, `CHANGELOG.md` and a pull request template; `--schedule` adds a launchd, cron or Task Scheduler entry that runs `komodo jobs tick` every 5 minutes; `--force` overwrites hand-edited owned files.
 - **`uninstall`:** A person runs `uninstall`. `uninstall` reads the manifest and removes every file or settings entry `install` owns, in reverse, plus the repo's language cache. `--repo-only` and `--machine-only` limit the removal.
-- **`init`:** A person at a terminal runs `init`, typically once after `install`. `init` puts Komodo's orchestrator skills and commands (`run`, `plan`, `respond`, `komodo`) into the global Claude Code setup; the 7 worker agents stay inside the binary because worker sessions load no user settings. [TODO: how `init` writes there, as a Claude Code plugin or as plain files with a machine manifest ([G-28](#g-28))]
+- **`init`:** A person at a terminal runs `init`, typically once after `install`. `init` puts Komodo's orchestrator skills and commands (`run`, `plan`, `respond`, `komodo`) into the global Claude Code setup; the 7 worker agents stay inside the binary because worker sessions load no user settings. `init` writes a local Claude Code plugin marketplace to `~/.komodo/plugin/`: `.claude-plugin/marketplace.json`, and `plugins/komodo/` with its `plugin.json` at the binary's version and the 4 skills from `embed/`. It then runs `claude plugin marketplace add ~/.komodo/plugin` and `claude plugin install komodo@komodo`, so the skills appear as `/komodo:run` and the like and cannot shadow a person's own. Claude Code reads a local marketplace's files in place, so a rerun after an update rewrites them to the new binary's version. `--remove` runs `claude plugin marketplace remove komodo`, which also uninstalls the plugin, then deletes the folder. `init` never edits `~/.claude/settings.json` itself.
+- **`ui`:** A person at a terminal runs `ui`, the opt-in dashboard and the one verb that serves until stopped. `ui` listens on `127.0.0.1` at `--port` or a free port, prints the address with a random token, and stops on Ctrl-C. Every request must carry the token and name `127.0.0.1` as its host, so a web page cannot drive it. Pages are rendered with `html/template` and htmx from `embed/ui/`, and one small script draws the stage diagram from server-sent events built from the files `status` reads. Its buttons call the same Go functions as `resume`, `stop`, `abandon` and `config agent <name> model=<m>`, so it adds no rule of its own.
 - **`fresh`:** A person runs `fresh`. `fresh` downloads the newest release to `versions/<v>/`, verifies the SHA-256 checksum and the ed25519 signature, and atomically replaces `bin/komodo`; live runs keep their own version. `--check` fetches the 1 KB `latest.json` now, one of only three places that do. `--to <version>` installs a named version and may downgrade. `--restart-runs` signals each live run to save its work within 2 minutes and resumes the run on the new binary, at the cost of at most one repeated model turn. A pinned repo names `fresh` in the fix line `run komodo fresh`; `fresh.auto` set to `false` or `CI=true` turns background updates off.
 
 **Health and configuration**
-- **`doctor [install|backlog]`:** Anyone runs `doctor`, including the orchestrator, and `doctor` still runs when the repo is pinned above the binary. `doctor` prints each check's result with a fix line and changes nothing except refreshing the provider probe in `state/providers.json`. With no argument, `doctor` runs both halves. `install` runs `doctor` at the end; phase 2 requires `doctor backlog` to pass on epic-1; cutover requires `doctor install` to find 0 stale references. `--fix` is terminal-only; `doctor --sandbox <cmd>` runs one command under the sandbox policy to show what a worker's `run` would see. [TODO: what `--fix` fixes ([G-117](#g-117))]
+- **`doctor [install|backlog]`:** Anyone runs `doctor`, including the orchestrator, and `doctor` still runs when the repo is pinned above the binary. `doctor` prints each check's result with a fix line and changes nothing except refreshing the provider probe in `state/providers.json`. With no argument, `doctor` runs both halves. `install` runs `doctor` at the end; phase 2 requires `doctor backlog` to pass on epic-1; cutover requires `doctor install` to find 0 stale references. `--fix` is terminal-only; `doctor --sandbox <cmd>` runs one command under the sandbox policy to show what a worker's `run` would see. `--fix` runs each failing check's fix that is a Komodo command, `komodo install --repo-only` or `komodo sync`, one at a time after printing it; a fix outside Komodo's own files, such as a shell profile, `~/.claude` or an Ollama setting, is only printed.
 - **`doctor install` checks:**
   - The installed files against the manifest, the path entry and the sandbox, by running each detected command's `--version` inside the sandbox to prove the toolchain folders work.
   - The provider catalog as a table of weight, link, model identifier, window and the source of the window; each `http:` endpoint's context against `providers.ctx_floor`, where an Ollama server left at 4,096 fails and the fix `OLLAMA_CONTEXT_LENGTH=262144` is named; `OLLAMA_NUM_PARALLEL`; and that every agent's chain ends in a free backstop.
@@ -856,29 +896,29 @@ Agent shells have no controlling terminal: Claude Code's Bash tool cannot open `
   - Steering phrases or broken block markers in the repo's `AGENTS.md`; stale `~/.claude` files naming verbs missing from `help --json`; old Komodo hooks and shadowing binaries; and 3 background update failures in a row.
   - The cost class of each link, reviewer rules under 50% verified, and whether a lighter model's first-pass rate beats the standard one.
 - **`doctor backlog` checks** (`komodo doctor backlog`) the files under `docs/backlog/` against the lint table in [Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release): file shape, `files`, `done_when` and dependencies; that groups in one wave share no files; no protected path and no `docs/backlog/**` path in `files`; sizing of 5 files and 300 lines per task, 8 tasks per group and chains of 4; graph shape and cycles; the EARS form of acceptance items (the Easy Approach to Requirements Syntax), in the three shapes of [11.3](#113-data-model); and case-colliding paths.
-- **`config [agent|endpoint <name>] <key>[=<value>]…`:** Reads are shared; writes need a person at a terminal, so no session can change its own settings. `komodo config mode limits.returns` prints each value and which layer set each; an agent or endpoint name alone lists its keys. `komodo config mode=economy limits.returns=4` sets every pair or none, refuses an unknown key (naming the closest match) or a value over its hard limit, appends one audit row per changed key and rewrites `state/config.sha`. `agent <name>` and `endpoint <name>` address one agent's or one model server's keys. `--all` alone prints JSON of every key with value, default, limit and source; after a key, `--all` lists that key's valid values. `--default` resets a key, an agent, a group or the whole file; endpoint and whole-file resets list each change and need a typed `y`. `--accept` rehashes `config.json` after a hand edit. One call reads or writes, never both. [TODO: what "a group" means as a `--default` target ([G-119](#g-119))]
+- **`config [agent|endpoint <name>] <key>[=<value>]…`:** Reads are shared; writes need a person at a terminal, so no session can change its own settings. `komodo config mode limits.returns` prints each value and which layer set each; an agent or endpoint name alone lists its keys. `komodo config mode=economy limits.returns=4` sets every pair or none, refuses an unknown key (naming the closest match) or a value over its hard limit, appends one audit row per changed key and rewrites `state/config.sha`. `agent <name>` and `endpoint <name>` address one agent's or one model server's keys. `--all` alone prints JSON of every key with value, default, limit and source; after a key, `--all` lists that key's valid values. `--default` resets a key, an agent, an endpoint or the whole file; endpoint and whole-file resets list each change and need a typed `y`. `--accept` rehashes `config.json` after a hand edit. One call reads or writes, never both.
 - **`sync`:** Anyone runs `sync` after a person merged the epic pull request. `sync` fetches from the remote, prunes worktrees whose work has landed and refreshes the repo files, which is `install --repo-only` plus fetch and prune. `sync` also rewrites the `AGENTS.md` block after `config output.profile=standard`. `--no-fetch` skips the fetch.
 
 **Backlog and planning**
 - **`add backlog`:** Anyone runs `add`. `add` adds one task, group or epic file under `docs/backlog/`, which is where out-of-scope work gets parked. `--task <text>`, `--group <title>` or `--epic <title>` says what to add, `--to <id>` names the parent, `--files <globs>` lists the files the work may touch and `--done-when <text>` gives the check that proves a task done. `add` refuses with `locked` and the run id while that group is in a run. A repeat with the same task reports `0 changes`.
-- **`add changelog`:** Anyone runs `add`. `add` records one changelog line outside `CHANGELOG.md`, which never shows an unversioned line; `--entry <text>` is the line and `--kind` files the line under added, changed, fixed or removed. `release` writes every recorded line under the new version's heading. [TODO: where recorded lines wait until the release ([G-139](#g-139))]
+- **`add changelog`:** Anyone runs `add`. `add` records one changelog line outside `CHANGELOG.md`, which never shows an unversioned line; `--entry <text>` is the line and `--kind` files the line under added, changed, fixed or removed. `release` writes every recorded line under the new version's heading. Each recorded line is its own file, `docs/changelog.d/<id>.json` with `{kind, entry}` and a UUID version 7 as `id`, committed with its change, so parallel groups never conflict; `release` moves them under the new heading and deletes the files.
 - **`plan <goal>`:** Anyone runs `plan`, usually the orchestrator; `plan` costs model tokens. One heavy planner session drafts the whole plan: groups, goals, file globs, dependencies, tasks and acceptance items. Go lints every draft; a failing draft goes back into its session twice, then the plan blocks with `lint`. A bad plan writes 0 files. `--from <spec>` feeds any document set as input; `--epic <N>` adds or amends only unlocked groups in an existing epic.
 
 **Runs**
 - **`run [group]`:** Anyone runs `run`, usually the orchestrator. `run <group>` starts one group. `run` builds the dependency graph from the backlog, queues every group whose dependencies have landed, prints the run id at once and leaves the engine running detached under a small parent guard; the stages are in [Event Spine and State Machine](#26-state-and-transitions). `run` refuses, naming the dependency, a group whose dependency outside this run has not landed; `run` refuses, naming the holder, a group another run holds; and `run` refuses, naming the marker files that `run` looked for, a repo with no detected commands. `--stage <stage>` runs one stage only. Typical use: `komodo run tg-1.2`, then `komodo status --wait` in the background, where `--wait` returns on the next wake event.
 - **`status [run]`:** Anyone runs `status`; a Claude `SessionStart` hook runs `status` so a new session sees state on line one. `status` prints the version, live runs, the session pool, each group's stage, the group graph (dependencies and which groups touch which files), budgets, blocked groups with their reason, the model and cost class of each running session, and warnings, and ends with `Verbs: komodo help`. `status` is one of three places that may fetch `latest.json`, at most hourly, and `status` fires due pause timers by dropping a `request.timer` file in the group's inbox and, when no engine holds the group, starting a detached engine.
-- **`status` flags:** `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`). `--timeout <dur>` caps that wait at 9 minutes by default, because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard of first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and US dollars per accepted group. [TODO: what `--backlog` and `--all` print ([G-117](#g-117))]
-- **`skill list|get`:** Anyone runs `skill`, including a Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms; `get <name>` prints a skill's body and `--section <heading>` one section; `komodo skill get run|plan|respond|komodo|release` returns the workflow for each job. `skill` changes nothing. [TODO: the filter `list --agent <name>` applies ([G-117](#g-117))]
+- **`status` flags:** `--watch` redraws live. `--wait blocked|done|any` blocks until the next wake event (`group.blocked`, `group.paused`, `run.done`, `run.stopped`; `any` adds `stage.enter`). `--timeout <dur>` caps that wait at 9 minutes by default, because Claude Code's Bash tool stops at 2 minutes by default and 10 at most. `--session <id>` prints a session's stream tail and result. `--explain` prints the last 10 events with reasons. `--metrics` prints the scorecard of first-pass rate, returns, finding precision, cache hit rate and, when `track.usage` is on, tokens and US dollars per accepted group. `--backlog` prints every epic and group under `docs/backlog/` with its state (not started, queued, running, Blocked or Done) and its dependencies; `--all` adds the live runs of every repository on the machine.
+- **`skill list|get`:** Anyone runs `skill`, including a Claude Code session outside a run. `list` prints the embedded skill index, a map read under 50 ms; `get <name>` prints a skill's body and `--section <heading>` one section; `komodo skill get run|plan|respond|komodo|release` returns the workflow for each job. `skill` changes nothing. `list --agent <name>` lists only the skills named in that agent's `skills` field of `agent.json`.
 - **`scope approve|deny <group>`:** The orchestrator usually answers; a person can. A builder that needs a file outside its group's `files` stops with status `needs_scope`, the group blocks and `status --wait` wakes the orchestrator. `approve` adds the paths to `files` (action `scope_change`, logged in the ledger) and the engine resumes the same session with the answer; `deny` resumes the session with the refusal. `--paths <list>` names the paths and `--reason <text>` the reason. The engine denies by itself, without asking, when a path is protected or belongs to another live group. One request per task.
-- **`resume <run>`:** Anyone runs `resume`, because Blocked never retries by itself. `resume` replays the state events after the snapshot through group state's `Load`, retakes the lease or refuses naming the new holder, rebuilds a removed worktree from the hidden ref, and continues each session from the provider's resume handle; if that fails `resume` starts a fresh session with the brief, the uncommitted diff and the last summary, logging `resume_lost`. Paused agents attempt now; a refused attempt costs no turn and re-pauses. [TODO: what `--from <stage>` does beyond its name ([G-117](#g-117))]
+- **`resume <run>`:** Anyone runs `resume`, because Blocked never retries by itself. `resume` replays the state events after the snapshot through group state's `Load`, retakes the lease or refuses naming the new holder, rebuilds a removed worktree from the hidden ref, and continues each session from the provider's resume handle; if that fails `resume` starts a fresh session with the brief, the uncommitted diff and the last summary, logging `resume_lost`. Paused agents attempt now; a refused attempt costs no turn and re-pauses. `--from <stage>` restarts each Blocked group of the run at the named stage instead of the stage it left, in a new epoch; the stage must be the one the group left or an earlier one, and a later one is refused with `usage`.
 - **`stop <run>`:** Anyone runs `stop`. `stop` performs the clean shutdown a signal does: stop each agent (30 s each), commit unsaved work in every worktree to its hidden ref, free the leases, write `state.json` and exit; after 60 s the rest is force-killed. `stop` writes `run.stopped`, and `resume <run>` continues later.
-- **`abandon <group>`:** Anyone runs `abandon` to drop a group for good. `abandon` stops the group, frees its leases and task-list lock, clears any pause timer, deletes the hidden ref and keeps the evidence (state files, ledger rows, session folders). Groups that depended on the abandoned group block with `dependency`, naming the abandoned group. `--reason <text>` records why; by default the sweep removes a worktree with no live lease and no unsaved work. [TODO: what `--keep-worktree` keeps ([G-117](#g-117))]
+- **`abandon <group>`:** Anyone runs `abandon` to drop a group for good. `abandon` stops the group, frees its leases and task-list lock, clears any pause timer, deletes the hidden ref and keeps the evidence (state files, ledger rows, session folders). Groups that depended on the abandoned group block with `dependency`, naming the abandoned group. `--reason <text>` records why; by default the sweep removes a worktree with no live lease and no unsaved work. `--keep-worktree` leaves the group's worktree folder on disk for a person to inspect, and the sweep never removes it; `git worktree remove <path>` deletes it. The lease, the task-list lock and the hidden ref are freed as usual.
 
 **Scheduling, cache, gate and release**
-- **`jobs list|show|run|pause|resume|tick`:** `list`, `show` and `tick` are shared; `run`, `pause` and `resume` need a person. A job template is a JSON file naming an agent subset, brief slots and an interval, such as a nightly review; none ship by default. `list` and `show <id>` read `embed/jobs/` and `~/.komodo/jobs/`. `tick` is one idempotent engine step with no daemon: `tick` queues due jobs, fires due pause timers and drives the pool once; with nothing due `tick` exits under 50 ms with no network call. The entry from `install --schedule` calls `jobs tick` every 5 minutes, and Claude Code `/loop` also works but spends a model turn per tick. A due job starts a run named `job-<name>-<n>` that `status --wait` can take. [TODO: what `run <id> --ignore-window`, `pause <id>` and `resume <id>` do beyond their names ([G-117](#g-117))]
+- **`jobs list|show|run|pause|resume|tick`:** `list`, `show` and `tick` are shared; `run`, `pause` and `resume` need a person. A job template is a JSON file naming an agent subset, brief slots and an interval, such as a nightly review; none ship by default. `list` and `show <id>` read `embed/jobs/` and `~/.komodo/jobs/`. `tick` is one idempotent engine step with no daemon: `tick` queues due jobs, fires due pause timers and drives the pool once; with nothing due `tick` exits under 50 ms with no network call. The entry from `install --schedule` calls `jobs tick` every 5 minutes, and Claude Code `/loop` also works but spends a model turn per tick. A due job starts a run named `job-<name>-<n>` that `status --wait` can take. `run <id>` makes the job due now, whatever its next time says, and refuses a paused or Blocked job unless `--ignore-window` is given. `pause <id>` marks the job paused so `tick` skips it, and `resume <id>` clears the mark and its failure count and makes it due now ([Scheduler, Cache and Observability](#104-interfaces)).
 - **`cache stats|clear`:** `stats` is shared and `clear` needs a person. The cache is the content-addressed store under `<git-common-dir>/komodo/cache/` plus the language caches under `~/.komodo/cache/lang/`. `stats` prints size and hit rate for this repo and `--all` the machine total across repos. `clear` purges entries; `--kind skills|context|checks|review|lang` limits the purge to one kind, where `lang` is the language caches.
-- **`gate`:** Anyone runs `gate`, in the Komodo repo only; `gate` is Komodo's self-check before a change is accepted, and the checks are in [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate). `gate` covers `go vet`, tests and cross-builds for Windows, Linux and macOS, import direction, comment lint, strict decode of every `agent.json` and job template, the guard table, event catalog completeness, docs drift (a verb missing from `README.md` or the `komodo` skill, a broken decision link, a package named in this document that does not exist), component maps, no silent gaps, generated artifacts matching their sources and timing (short verbs under 50 ms, the gate under 3 minutes). Checks run in parallel by package, with cross-builds last. `--fast` skips cross-builds and timing. `--install` places a dev build at `~/.komodo/bin/komodo` and `--install-hooks` installs git hooks in the Komodo repo; both need a person. [TODO: what `--only <check>` selects beyond its name ([G-117](#g-117))]
-- **`release <version>`:** A person runs `release`, on the owner's machine, in the Komodo repo only. `release` sets the version, tags, cross-builds the binaries, writes checksums, signs them with `~/.komodo/release.key` (ed25519) and publishes a release whose `latest.json` every `fresh` reads; betas publish as normal releases with `beta` in the version. [TODO: what `--notes-file <path>` supplies ([G-117](#g-117))]
+- **`gate`:** Anyone runs `gate`, in the Komodo repo only; `gate` is Komodo's self-check before a change is accepted, and the checks are in [Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate). `gate` covers `go vet`, tests and cross-builds for Windows, Linux and macOS, import direction, comment lint, strict decode of every `agent.json` and job template, the guard table, event catalog completeness, docs drift (a verb missing from `README.md` or the `komodo` skill, a broken decision link, a package named in this document that does not exist), component maps, no silent gaps, generated artifacts matching their sources and timing (short verbs under 50 ms, the gate under 3 minutes). Checks run in parallel by package, with cross-builds last. `--fast` skips cross-builds and timing. `--install` places a dev build at `~/.komodo/bin/komodo` and `--install-hooks` installs git hooks in the Komodo repo; both need a person. `--only <check>` runs that one check, named as the gate report prints it.
+- **`release <version>`:** A person runs `release`, on the owner's machine, in the Komodo repo only. `release` sets the version, tags, cross-builds the binaries, writes checksums, signs them with `~/.komodo/release.key` (ed25519) and publishes a release whose `latest.json` every `fresh` reads; betas publish as normal releases with `beta` in the version. `--notes-file <path>` is a Markdown file whose text heads the GitHub release notes, above the version's changelog lines; it never enters `CHANGELOG.md`.
 
 **Internal tier** (`komodo internal <verb>`), listed only in `help --all`:
 
@@ -886,6 +926,7 @@ Agent shells have no controlling terminal: Claude Code's Bash tool cannot open `
 |---|---|---|
 | `internal tools --agent <a> --session <id>` | The engine, for each `claude -p` worker session | The private tool server for one session, speaking the Model Context Protocol over standard input and output; advertises only that agent's tools, such as `read`, `edit` and `run`, passes every call through the guard, starts in under 100 ms and dies with its session |
 | `internal guard` | The `PreToolUse` hook `install` writes, before every Bash command on Claude Code | Reads the hook's JSON from standard input, splits the command with `safety/shell.go`, and refuses rows O1 to O6 and O10 with exit code 2 and the row named on standard error; otherwise exits 0 |
+| `internal job <name>` | `jobs tick`, for a due job | The detached job process: runs the job's run, updates its counters and removes its queue item ([Scheduler, Cache and Observability](#105-behaviour)) |
 | `internal fresh-bg` | Any verb, only when `state/fresh.json` shows a newer release | The detached updater: downloads to `versions/<v>/komodo.part`, verifies SHA-256 and the ed25519 signature, renames the file into place, swaps `bin/komodo` and deletes versions no run uses; never downgrades, logs failures silently to `state/fresh.log` and allows one at a time through `state/fresh.lock` |
 
 #### Orchestrator contract
@@ -922,10 +963,9 @@ sequenceDiagram
   S-->>C: effective config
   Note over C: type, enum and limit check per pair
   C->>S: Apply changes
+  S->>M: Append one audit row per key
   S->>S: write config.json
   S->>M: Replace config.sha
-  S->>M: Append one audit row per key
-  Note over S,M: order of the three writes is open
   S-->>C: batch id, changes
   C-->>P: verdict, report, exit 0
 ```
@@ -934,11 +974,11 @@ sequenceDiagram
 2. **Validate:** the pin check passes. Because the call contains `=`, `NeedsTerminal` returns `true` and the process has a controlling terminal. `Store.Verify` finds the checksum matching.
 3. **Resolve:** `Store.Load` returns the effective config once for the process.
 4. **Dispatch:** the handler looks up `mode` and `limits.returns` in `Registry`, accepts `economy` as a member of the `mode` enum and `4` as at most the hard limit 5 of `limits.returns`, and compares each with the current value.
-5. **Apply:** both values differ from the current ones, so `Apply` receives two changes and writes the file, the checksum and two audit rows under one batch id.
+5. **Apply:** both values differ from the current ones, so `Apply` receives two changes and writes two audit rows under one batch id, then the file, then the checksum.
 6. **Render:** the result carries the batch id and the two changes. The report lists them and the process exits 0.
 7. **Repeat:** running the same line again produces no changes and reports `0 changes`; no audit row is written.
 
-[TODO: the order of the three writes in step 5 and what a crash between them leaves behind ([G-119](#g-119))]
+A crash after the audit rows leaves a logged batch that never applied, which the next write's `old` values show. A crash after `config.json` leaves the checksum stale, so every verb refuses with `config_tampered` until a person checks the file and runs `config --accept`. No crash leaves a change applied and unlogged.
 
 #### Algorithms
 
@@ -958,22 +998,22 @@ flowchart LR
 
 1. **Parse.** `parse` finds the verb in the verb table, builds a `flag.FlagSet` with Go's standard `flag` package from the global flags and the verb's `Flags`, and parses the rest of `argv`. An unknown flag is a usage error that names the closest known flag. With `--input <file|->`, the JSON object is read from the file or from standard input (`-`) and each key is applied as if typed, except where the same flag is on the command line, which wins. `-h` and `--help` run `help <verb>` for the verb.
 2. **Validate.** `validate` runs these checks in order and returns the first refusal:
-   1. Pin check: when `PinExempt` is `false` and the repo pin is above the running version, refuse with exit 1 and the fix `run komodo fresh`. [TODO: how validate locates the repo's `AGENTS.md` before resolve runs ([G-121](#g-121))]
+   1. Pin check: when `PinExempt` is `false` and the repo pin is above the running version, refuse with exit 1 and the fix `run komodo fresh`. Validate walks up from the working folder, or `-C`, to the first folder holding `.git` and reads `AGENTS.md` there, with no git process.
    2. Types and enums of every flag value; a failure is a usage error with exit 2.
    3. Terminal check: when `NeedsTerminal(c)` returns `true` and the process has no controlling terminal, refuse with exit 1.
-   4. Hash guard: `Store.Verify`; on `ErrTampered` refuse with `config_tampered`, except for `config --accept`.
+   4. Hash guard: `Store.Verify`; on `ErrTampered` refuse with `config_tampered`, except for `help`, `version` and `config --accept`.
 3. **Resolve.** `resolve` takes the repo id from the working folder or `-C`, calls `Store.Load` once and, for a verb that needs commands, calls `Detect`. The repo id is the normalized origin address such as `github.com/rdevitto86/komodo-agentic-harness-coding`; with no remote the id is the git common directory path, so every worktree of a repo shares one id. The id names worktrees, leases and caches, never config.
 4. **Dispatch.** `dispatch` calls the handler with the filled `Call`. The handler makes one thin call into the owning package, such as `engine` for `run`, and never opens state files itself. With `--dry-run` the owning package prints each write the verb would make and makes none.
 5. **Render.** `render` passes `Result.Code` and `Result.Facts` through the template set for `output.profile` into `report`. `render` prints the envelope when `--json` is on, which is automatic with no terminal, and plain text otherwise, then returns the exit code of `Result.Outcome`.
 
-[TODO: the distance measure and cutoff behind "closest known flag or key", what is said when nothing is close, and whether an unknown agent name is refused ([G-121](#g-121))]
+The closest match is the known name at the smallest Levenshtein distance, the fewest single-letter edits, when that distance is at most 2; ties go to table order. With nothing that close the message names `komodo help <verb>`. An unknown agent name is refused the same way, exit 2 with `unknown_key`, because the 7 agents are compiled in.
 
-[TODO: how the pin check and repo resolution behave for a verb run outside a git repository, and whether `help` and `version` are exempt from the hash guard ([G-121](#g-121))]
+Outside a git repository the pin check is skipped, because there is no `AGENTS.md` to read, and `Call.Repo` stays empty; a verb whose handler needs a repository refuses with exit 1 and `no_repo`. `help` and `version` are exempt from the hash guard, beside `config --accept`, so a person can always read the fix.
 
-[TODO: how the terminal check works on native Windows ([G-121](#g-121))]
+On native Windows the terminal check opens `CONIN$` and calls `GetConsoleMode` on it through the standard `syscall` package; success means a console is attached. [TODO: whether an agent shell on native Windows lacks a console, proven on a Windows machine ([G-121](#g-121))]
 
 **Pin check.**
-1. Read the repo's `AGENTS.md` and find the line `komodo:begin min=<version>`. [TODO: how validate locates the repo's `AGENTS.md` before resolve runs ([G-121](#g-121))]
+1. Read the repo's `AGENTS.md` and find the line `komodo:begin min=<version>`. Validate walks up from the working folder, or `-C`, to the first folder holding `.git` and reads `AGENTS.md` there, with no git process.
 2. Compare the version with the embedded version by semantic-version order.
 3. When the pin is higher and the verb is not exempt, return a refusal with exit 1.
 4. The exempt verbs are `help` (to see the verb list and the fix line), `version`, `fresh` (the fix itself), `install` (`install` can place a binary with `--from`) and `doctor` (to diagnose before updating).
@@ -997,13 +1037,20 @@ flowchart LR
 5. Take the machine value where present and the built-in value elsewhere, and record the `Layer` that set each.
 6. Compute `Hash` of the result. A run saves the hash in `runs/<group-id>/state.json`; edits made during a run do nothing to that run. The hash is also the prefix of every cache key, so a config change never serves a stale brief or check.
 
+**Per-agent limits.** A session's wall, idle and retry limits come from the highest layer that sets them:
+1. The `agents.<name>` key in `config.json`.
+2. The flat key `limits.session_wall_min` or `limits.session_idle_min` in `config.json`; `retries` has no flat key.
+3. The agent's `agent.json` `limits`, which sets all three.
+
+Each result is capped by its hard limit in [1.8](#18-config), and the builder's wall is the group's budget, `limits.group_wall_min`. `SessionWallMin`, `SessionIdleMin` and `Retries` apply this order.
+
 **Config write.**
 1. Refuse a call that mixes reads (`key`) and writes (`key=value`).
 2. For each pair, find the `KeySpec`, parse the value to its `Kind` and check enum membership, the `env:` form for `KindEnvRef`, the hard limits and `MaxKey`. An agent or endpoint call checks the section's keys the same way.
 3. Drop a pair whose value equals the effective value.
 4. When any pair fails, return its error and write nothing: a call sets every pair or none.
 5. With `--dry-run`, print the changes and stop.
-6. Call `Store.Apply` with the remaining changes. `Apply` writes `config.json`, rewrites `state/config.sha` and appends one audit row per changed key under one batch id. `~/.komodo/**` is protected by guard row G3, so no model session can reach any of these files.
+6. Call `Store.Apply` with the remaining changes. `Apply` appends one audit row per changed key under one batch id, writes `config.json` by an atomic rename, then rewrites `state/config.sha`. `~/.komodo/**` is protected by guard row G3, so no model session can reach any of these files.
 
 **Reset.** `--default` calls `PlanReset` for a key, an agent, an endpoint or the whole file, then follows the write path with the planned changes. For an endpoint or the whole file the verb first lists each change and waits for a typed `y`.
 
@@ -1034,7 +1081,7 @@ flowchart LR
 8. `setup` belongs to the engine: Intake runs `setup` once per worktree with the network on, and no agent can run `setup`.
 9. With no detected commands, `run` refuses and names the markers that `run` looked for; read-only agents still run.
 
-[TODO: how commands combine when a repo has two markers, such as `go.mod` and `package.json` ([G-122](#g-122))]
+With two or more markers, each class runs the commands of every marker present, in table order: a repository with `go.mod` and `package.json` tests with `go test ./...` and then `npm test`. A Makefile target for a class still replaces all of them.
 
 **Capacity profile.** Before each session the engine derives the record for the link the next session will use:
 1. `ctx` is the context window measured for the link ([Providers and HTTP](#7-providers-and-http)).
@@ -1067,14 +1114,14 @@ stateDiagram-v2
 | Defaults | `config` write | Guarded | `config.json` exists; `state/config.sha` matches the file; one audit row per changed key |
 | Guarded | `config` write | Guarded | The file, the checksum and the audit log changed together, or none of them |
 | Guarded | Hand edit of `config.json` | Tampered | The checksum no longer matches; Komodo wrote nothing |
-| Tampered | Any verb except `config --accept` | Tampered | Exit 1 with `config_tampered`; 0 writes |
+| Tampered | Any verb except `help`, `version` and `config --accept` | Tampered | Exit 1 with `config_tampered`; 0 writes |
 | Tampered | `config --accept` | Guarded | The checksum matches the edited file; one audit row logged |
 
 - **Defaults:** `config.json` does not exist; the built-in layer applies.
 - **Guarded:** `config.json` matches the checksum in `state/config.sha`.
 - **Tampered:** the checksum differs; every verb refuses.
 
-[TODO: the state when `config.json` exists with no `state/config.sha`, when the checksum exists with no file, and when the file is deleted ([G-119](#g-119))]
+A `config.json` with no `state/config.sha`, or a checksum with no `config.json`, is Tampered. With no `config.json`, `config --accept` deletes the checksum and logs one row, which returns the guard to Defaults. With neither file the guard is Defaults.
 
 ### 1.7 Invariants and Failures
 
@@ -1084,7 +1131,7 @@ stateDiagram-v2
 3. Every writing verb is idempotent: a repeat with the same arguments reports `0 changes`.
 4. `config.json` is written only by `komodo config`, which needs a terminal, so no model session changes its own settings.
 5. A `komodo config` call writes every pair or none, and writes one audit row per changed key.
-6. A run's effective config is the snapshot pinned at the run's start; later edits do not reach the run. [TODO: whether a model change can reach a running run ([G-27](#g-27))] The pinned copy is `runs/<run>.config.json`, written once at the run's start.
+6. A run's effective config is the snapshot pinned at the run's start; later edits do not reach the run. The one exception is an agent's `model`: a write reaches each open run at its next session start, and the session's `session.start` event records the model it used, so a replay makes the same choice; sessions already running finish on their model. The pinned copy is `runs/<run>.config.json`, written once at the run's start.
 7. A secret is never in config or logs: key settings are `env:NAME` references.
 8. Security rows are never config. The only guard setting is `guard.refusal_limit`.
 9. Tiers are enforced by the terminal check, and on Claude Code first by the deny rules `install` writes into `.claude/settings.json`.
@@ -1104,7 +1151,7 @@ stateDiagram-v2
 | `--default` on an endpoint or the whole file without a typed `y` | `config` handler | No change is written |
 | `run` with no detected commands | `Detect` returns an empty set | `run` refuses and names the marker files it looked for; read-only agents still run |
 | `add backlog` on a group that is in a run | Handler | Refused with `locked` and the run id |
-| `--input` unreadable or not a JSON object | `parse` | [TODO: exit code and message ([G-115](#g-115))] |
+| `--input` unreadable or not a JSON object | `parse` | Exit 2 with `usage`, naming the file and the decode error |
 
 Shell syntax in a detected command, and a missing or bad file named by `http.ca_bundle`, are reported by `doctor`, not refused by the pipeline.
 
@@ -1115,7 +1162,7 @@ The 33 flat keys: 24 here, and 9 provider keys in [Providers and HTTP](#78-confi
 | Key | Type | Default | Hard limit | Effect |
 |---|---|---|---|---|
 | `output.profile` | enum | `adhd` | none | Text layout for everything a person reads: `adhd` (verdict first, bold labels, tables for data lists, at most 5 bullets and 3 options, turn-end headings in order) or the plainer `standard`. Facts and codes are the same under both, and no repo setting or flag changes a template. After a change, `komodo sync` rewrites the rules block in `AGENTS.md`. |
-| `output.turn_end_summary` | bool | `true` | none | Turns the 4 fixed headings at the end of every report on or off. [TODO: which 4 headings ([G-122](#g-122))] |
+| `output.turn_end_summary` | bool | `true` | none | Turns the 4 fixed headings at the end of every report on or off: `✅ Successful Changes`, `❌ Blocked Changes`, `📌 Callouts` and `⚠️ Warnings`, in that order, each skipped when empty. |
 | `output.color` | enum | `auto` | none | `auto` decides from the terminal, `on` forces colour, `off` removes colour. Applied only when text is rendered, so facts never change. |
 | `mode` | enum | `thorough` | none | `economy` or `thorough`. `thorough` runs every reviewer lens that applies at full depth; `economy` runs one merged lens at reduced depth, plus the `security` lens where it applies. `mode` sets the `auto` default of `track.usage` and never changes which model runs. |
 | `track.usage` | enum | `auto` | none | `auto`, `on` or `off`; `auto` is on in `economy` mode and off in `thorough` mode. Behaviour below the table. |
@@ -1149,7 +1196,7 @@ The 33 flat keys: 24 here, and 9 provider keys in [Providers and HTTP](#78-confi
 
 | Key | Default | Hard limit | Effect |
 |---|---|---|---|
-| `model` | The agent's weight: `opus`, `sonnet` or `haiku` | A probed model | The model the agent starts on. `opus` is the latest in the line and `opus-prev` the prior; `<endpoint>:<model>` names an open-source model on a configured endpoint; Komodo never runs a Fable model. `model` beats `mode`, and the chain still ends in the free backstop. |
+| `model` | The agent's weight: `opus`, `sonnet` or `haiku` | A probed model | The model the agent starts on. `opus` is the latest in the line and `opus-prev` the prior; `<endpoint>:<model>` names an open-source model on a configured endpoint; Komodo never runs a Fable model. A change reaches a running run at its next session start. `model` beats `mode`, and the chain still ends in the free backstop. |
 | `session_wall_min` | `limits.session_wall_min` | 120 | Wall-clock limit for this agent's sessions; beats the flat key |
 | `session_idle_min` | `limits.session_idle_min` | 30 | Silence limit before a nudge for this agent; beats the flat key |
 | `retries` | 2 | 3 | Restarts after a timeout or idle stop, counted per group and never reset while the group is open, within `limits.group_attempts` |
@@ -1197,6 +1244,8 @@ The 33 flat keys: 24 here, and 9 provider keys in [Providers and HTTP](#78-confi
 - **Discovery:** `config --all` names a default, a limit and a source for every key.
 - **Agent models:** `agent builder model --all` lists only probed models above the context floor.
 - **Capacity profile:** a session on a 262,144-token endpoint and one on Opus 5.5 get different brief ceilings and the same engine path, and the ledger records both profiles.
+- **Dashboard:** `komodo ui` without a terminal exits 1; a request without the token, or naming another host, gets status 403.
+- **Live model:** a model write during a fixture run makes the next session's `session.start` name the new model, while the running session keeps its own.
 
 ### 1.10 Open Gaps
 
@@ -1204,17 +1253,9 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-139](#g-139) | Where `add changelog` stores its recorded lines until the release, with the release manifest details | Yes |
 | [G-169](#g-169) | Confirming each default coverage tool yields a whole-repository line percent | No |
-| [G-115](#g-115) | Report text and data shape per verb, the run id key, the `help --json` result schema and the `--input` key names | Yes |
-| [G-116](#g-116) | The conditions for exit 3 and exit 4, and the `error.code` values for command-line refusals | Yes |
-| [G-119](#g-119) | Config file layouts, write order and crash behaviour, the writer of the checksum and the log, the probed-model check and the `--default` group target; The format of the effective-config hash and the other file formats left open | Yes |
-| [G-121](#g-121) | Validate details: the closest-match rule, an unknown agent name, running outside a repo, guard exemptions and the Windows terminal check | Yes |
-| [G-122](#g-122) | Config values and placement: the turn-end headings, the `CapacityProfile` package and effort mapping and two-marker commands | Yes |
-| [G-28](#g-28) | How `komodo init` writes into the global Claude Code setup | No |
-| [G-117](#g-117) | Flag behaviour not yet designed for `version --check`, `doctor --fix`, `status --backlog` and `--all`, `skill list --agent`, `resume --from`, `abandon --keep-worktree`, `jobs run --ignore-window`, `jobs pause` and `resume`, `gate --only` and `release --notes-file` | No |
+| [G-121](#g-121) | Whether the console check on native Windows refuses an agent shell | No |
 | [G-19](#g-19) | The 50 ms short-verb budget is a target until the gate measures it | No |
-| [G-27](#g-27) | The dashboard, and whether a model change can reach a running run, since config is pinned at run start | No |
 
 ## 2. Event Spine and State Machine
 
@@ -1363,7 +1404,7 @@ The catalog is a fixed Go enumeration in 8 families, registered with the state m
 |---|---|---|
 | `run.start` | Engine | `komodo run` starts a run; every ready group enters Intake |
 | `run.done` | Engine | Every group of the run is Done or Blocked and none is queued, running or paused; wakes `status --wait` |
-| `run.stopped` | Shutdown | A signal or `stop <run>`, after agents stop, work is committed as work in progress and leases are freed; wakes `status --wait` |
+| `run.stopped` | Shutdown | A signal, `stop <run>` or `fresh --restart-runs`, after agents stop, work is committed as work in progress and leases are freed; the reason is `cancelled`, or `restart` for `fresh --restart-runs`; wakes `status --wait` |
 | `group.paused` | Engine | A provider limit left no allowed link; `status` shows the link and the resume time |
 | `group.blocked` | Engine | A bound ran out or a decision is needed, with a [block reason](#block-reasons) |
 | `group.shipped` | Engine (`Next()` follow-on) | Merge clean, Check passed on the epic tip, landing succeeded; records the files the landing changed; ends the group |
@@ -1783,11 +1824,9 @@ type Limits struct {
 	PauseMaxMin   int // limits.pause_max_min
 	GroupTokens   int // limits.group_tokens; 0 when track.usage is off
 	GroupWallMin  int // limits.group_wall_min
-	Retries       int // the builder agent's retries [TODO: how agent.json limits and agents.<name> keys combine (G-112)]
+	Retries       int // the builder agent's retries, resolved as in Per-agent limits (1.5)
 }
 ```
-
-Open decisions in this example: [G-112](#g-112).
 
 **Rules for the fields.**
 - **Never nil:** slices and maps in `State` are set empty by the constructor and by `Load`, so they marshal as `[]` and `{}`.
@@ -2320,7 +2359,7 @@ Every row ends with `resume` unless the last column says otherwise.
 
 ### 2.8 Config
 
-**Keys read into `Limits`:** `limits.returns`, `limits.group_attempts`, `limits.pause_max_min`, `limits.group_tokens`, `limits.group_wall_min`, `track.usage` ([Flat keys (1.8 Config)](#18-config)), plus each agent's `retries` from its `agent.json` [TODO: how `agent.json` limits and `agents.<name>` keys combine ([G-112](#g-112))].
+**Keys read into `Limits`:** `limits.returns`, `limits.group_attempts`, `limits.pause_max_min`, `limits.group_tokens`, `limits.group_wall_min`, `track.usage` ([Flat keys (1.8 Config)](#18-config)), plus each agent's `retries` from its `agent.json`, resolved as in [Per-agent limits (1.5)](#15-behaviour).
 
 | Constant | Value |
 |---|---|
@@ -2366,7 +2405,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-112](#g-112) | How `agent.json` limits and `agents.<name>` keys combine | Yes |
 | [G-19](#g-19) | The replay target is unmeasured | No |
 
 ---
@@ -2851,7 +2889,7 @@ flowchart TB
 
 1. Finished groups land one at a time. Each landing is followed by Check on the epic tip, which costs 0 tokens.
 2. When that Check fails, landings pause and the last-landed group returns to Build in a new worktree cut from the tip. The return spends the same `limits.returns` budget as Check and Verify returns, with the failing Check output as the findings; once it is spent the group blocks with reason `integration` ([row 8](#26-state-and-transitions)).
-3. Each epic has one landing gate: a file under `~/.komodo/state/`, created only if absent, so exactly one engine run holds it: `~/.komodo/state/landing/<repo-id>.<epic-id>.json`, kind `landing`, whose body names the holder's `run`, `group`, `pid`, process start time and `taken_at`; a gate whose holder is dead is taken over by the lease rule. A group takes the gate before merging the epic branch into its group branch, and frees it once the Check on the epic tip has recorded pass or fail. Groups of other epics are untouched. [TODO: landing by runs on other machines ([G-186](#g-186))]
+3. Each epic has one landing gate: a file under `~/.komodo/state/`, created only if absent, so exactly one engine run holds it: `~/.komodo/state/landing/<repo-id>.<epic-id>.json`, kind `landing`, whose body names the holder's `run`, `group`, `pid`, process start time and `taken_at`; a gate whose holder is dead is taken over by the lease rule. A group takes the gate before merging the epic branch into its group branch, and frees it once the Check on the epic tip has recorded pass or fail. Groups of other epics are untouched. Runs on other machines are out of scope: leases, fences and the landing gate are machine-wide files, so one epic is built on one machine.
 4. Paused landings reopen the moment a Check on the epic tip passes again, whatever made it pass. Normally that is the returned group's fix landing; when that group blocks with reason `integration`, landings stay shut until a person or the orchestrator fixes the tip and runs `resume`, and the next passing Check reopens them. Groups waiting to land keep their place and need no action of their own.
 
 **The epic gate**
@@ -3013,7 +3051,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-186](#g-186) | Landing by runs on other machines | Yes |
 | [G-04](#g-04) | Whether `OLLAMA_NUM_PARALLEL` above 1 lets `local` exceed 1 session | No |
 
 ## 4. Workspace and Leases
@@ -3606,7 +3643,7 @@ This chapter specifies how the engine starts, watches and stops one model sessio
 - The brief builder: the 5 parts and 20 slots of a brief, the fixed assembly order, and the size ceiling.
 
 **Does not own:**
-- Provider adapters, the billing check, link failover and the launch line of `claude`: [Providers and HTTP](#7-providers-and-http). The capacity profile [TODO: which package defines `CapacityProfile` ([G-122](#g-122))].
+- Provider adapters, the billing check, link failover and the launch line of `claude`: [Providers and HTTP](#7-providers-and-http). The capacity profile record is defined in `internal/core/capacity.go` ([CLI and Configuration](#1-cli-and-configuration)).
 - The tool runtime, the private tool server, the guard and the sandbox: [Tools, Guard and Sandbox](#6-tools-guard-and-sandbox).
 - Which skills match a task, the orchestrator rules and the output templates: [Skills, Rules and Output](#8-skills-rules-and-output).
 - The events a session produces, the `Next()` decision function and the `Drive` loop that calls this chapter: [Event Spine and State Machine](#2-event-spine-and-state-machine) and [Engine Internals](#3-engine-internals).
@@ -4088,7 +4125,7 @@ func Supervise(ctx context.Context, s provider.Stream, lim SessionLimits, c *Clo
 | Supervisor | `Stream.Next`, `Stream.Inject`, `Stream.Stop` | Reading lines, the time warning and nudge, the stop ladder |
 | Supervisor | Events `session.start`, `task.claimed`, `session.idle`, `session.timewarn`, `session.end`, `task.released` | Each is a fact handed to `Drive` ([Event Spine and State Machine](#2-event-spine-and-state-machine)) |
 
-Failure behaviour: `Supervise` returns the exit reason it recorded and an error only when the stream or the stop ladder itself fails. The `spawn` action carries `{agent, task, resume_from}` and calls `Spawn(ctx, SpawnArgs) (state.ID, error)` in `internal/engine/session.go`, which starts the session and runs `Supervise` on its stream; `cancel` carries `{session}` and calls `Cancel(ctx, session state.ID) error`, which runs the stop ladder. The data of each `session.*` event is in [Data structs (chapter 2)](#data-structs). The tool server appends `tool.start`, `tool.end`, `tool.denied` and `finding.submit` lines to `<session>/tools.jsonl` through the state manager's `Append`, and on API links the harness tool loop appends the same lines in-process. The supervisor tails that file beside the stream, keeps `ToolsRunning` from the start and end lines, and hands each line to `Drive` as a fact, so `Drive` stays the only writer of the group's events. [TODO: how `SessionLimits` is resolved from `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` ([G-112](#g-112))]
+Failure behaviour: `Supervise` returns the exit reason it recorded and an error only when the stream or the stop ladder itself fails. The `spawn` action carries `{agent, task, resume_from}` and calls `Spawn(ctx, SpawnArgs) (state.ID, error)` in `internal/engine/session.go`, which starts the session and runs `Supervise` on its stream; `cancel` carries `{session}` and calls `Cancel(ctx, session state.ID) error`, which runs the stop ladder. The data of each `session.*` event is in [Data structs (chapter 2)](#data-structs). The tool server appends `tool.start`, `tool.end`, `tool.denied` and `finding.submit` lines to `<session>/tools.jsonl` through the state manager's `Append`, and on API links the harness tool loop appends the same lines in-process. The supervisor tails that file beside the stream, keeps `ToolsRunning` from the start and end lines, and hands each line to `Drive` as a fact, so `Drive` stays the only writer of the group's events. `SessionLimits` is resolved as in [Per-agent limits (chapter 1)](#15-behaviour).
 
 ### 5.5 Behaviour
 
@@ -4425,8 +4462,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-112](#g-112) | How `agent.json` `limits`, the flat keys and `agents.<name>` combine | Yes |
-| [G-122](#g-122) | Which package defines `CapacityProfile` | Yes |
 | [G-20](#g-20) | The OpenAI links in the ceiling table; The OpenAI links in the ceiling table wait for a later minor version | No |
 
 ## 6. Tools, Guard and Sandbox
@@ -5319,7 +5354,7 @@ The provider package starts, streams and resumes one model session on one link, 
 
 **Owns:** the `Provider` interface and its adapters (`claude-cli`, `anthropic-api`, `http:<name>`, and the refusing stubs `codex-cli` and `openai-api`), the stream-event shape, link selection and failover, the billing check, the model catalog and measured context, provider limits with the pause timer and `quota.json`, and the shared HTTP client in `internal/core/http.go`.
 
-**Does not own:** the session supervisor that reads the stream, injects lines and runs the stop ladder ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)); the tool registry, the private Model Context Protocol (Model Context Protocol) tool server and the rules of the tool loop ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)); the install-time probe run and `doctor` output ([Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)); the configuration file ([command-line interface and Configuration](#1-cli-and-configuration)); the capacity-profile record [TODO: which package defines `CapacityProfile` ([G-122](#g-122))]; and the file primitives behind timers and `quota.json` ([State Manager](#13-state-manager)).
+**Does not own:** the session supervisor that reads the stream, injects lines and runs the stop ladder ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)); the tool registry, the private Model Context Protocol (Model Context Protocol) tool server and the rules of the tool loop ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)); the install-time probe run and `doctor` output ([Install, Binary Lifecycle and Gate](#12-install-binary-lifecycle-and-gate)); the configuration file ([command-line interface and Configuration](#1-cli-and-configuration)); the capacity-profile record, defined in `internal/core/capacity.go` ([CLI and Configuration](#1-cli-and-configuration)); and the file primitives behind timers and `quota.json` ([State Manager](#13-state-manager)).
 
 **Concepts**
 
@@ -6420,7 +6455,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-04](#g-04) | `OLLAMA_NUM_PARALLEL` above 1 and `limits.link_sessions.local` | No |
 | [G-07](#g-07) | The real Max 5-hour window against `link_sessions.claude-cli` 3 | No |
 | [G-20](#g-20) | The `codex-cli` link, `openai-api` chain and `.codex/` install | No |
-| [G-122](#g-122) | Which package defines `CapacityProfile` | Yes |
 
 ## 8. Skills, Rules and Output
 
@@ -6656,6 +6690,18 @@ const (
 	WrongCommand    Code = "wrong_command"
 	RealFailure     Code = "real_failure"
 	ConfigTampered  Code = "config_tampered"
+	Pinned          Code = "pinned"
+	NoTerminal      Code = "no_terminal"
+	NoRepo          Code = "no_repo"
+	Usage           Code = "usage"
+	UnknownKey      Code = "unknown_key"
+	BadValue        Code = "bad_value"
+	OverLimit       Code = "over_limit"
+	NotKomodoRepo   Code = "not_komodo_repo"
+	GateFailed      Code = "gate_failed"
+	Internal        Code = "internal"
+	Restart         Code = "restart"
+	CardChanged     Code = "card_changed"
 	Locked          Code = "locked"
 	Regression      Code = "regression"
 	Lint            Code = "lint"
@@ -6705,6 +6751,18 @@ const (
 | `wrong_command` | Tester | Restart reason: the first run used the wrong command |
 | `real_failure` | Tester | Restart reason: the tester holds the failure is genuine despite Go's reruns |
 | `config_tampered` | Every verb | `config.json` was hand-edited; every verb refuses until `komodo config --accept` |
+| `pinned` | Every verb but the 5 exempt ones | The repository pin is above the running binary; exit 1 with the fix `run komodo fresh` |
+| `no_terminal` | Terminal-only verbs | No controlling terminal; exit 1, and the person is handed the command |
+| `no_repo` | Verbs that need a repository | Run outside a git repository; exit 1 |
+| `usage` | Every verb | An unknown verb or flag, a bad flag value or an unreadable `--input`; exit 2, naming the closest match |
+| `unknown_key` | `config`, agent names | A key or agent name outside the registry; exit 2, naming the closest one |
+| `bad_value` | `config` | A value of the wrong type or outside its enum; exit 2 |
+| `over_limit` | `config` | A value over its hard limit, or a model no probe found; exit 1, naming the limit |
+| `not_komodo_repo` | `gate`, `release` | Run outside the Komodo repository; exit 1 |
+| `gate_failed` | `gate` | At least one gate check reported a finding; exit 3 |
+| `internal` | Every verb | Komodo itself failed; exit 4 |
+| `restart` | Shutdown | The `run.stopped` reason when `fresh --restart-runs` stopped the run |
+| `card_changed` | Verbs that read a locked group | A locked group's backlog files were hand-edited; exit 1, naming the file |
 | `locked` | Task list writes | A write to a group's task list while a run holds it; the refusal names the run identifier |
 | `regression` | Engine | A test that passed at the base commit fails at head; the group returns to Build naming the test |
 | `lint` | Planner draft, Intake | The draft failed backlog lint 3 times, so the plan blocks; or a group's backlog entry failed lint at Intake |
@@ -7375,7 +7433,7 @@ The engine reads these keys when a run starts and keeps that snapshot until the 
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `output.profile` | `adhd` or `standard` | set in [1.8](#18-config) | Picks the template set; facts and codes are the same under both. After a change, `komodo sync` rewrites the block in `AGENTS.md` |
-| `output.turn_end_summary` | boolean | set in [1.8](#18-config) | Turns the 4 fixed headings at the end of reports on or off. [TODO: which 4 headings they are ([G-122](#g-122))] |
+| `output.turn_end_summary` | boolean | set in [1.8](#18-config) | Turns the 4 fixed headings at the end of reports on or off. The headings are listed in [1.8](#18-config). |
 | `output.color` | `auto`, `on` or `off` | set in [1.8](#18-config) | `auto` decides from the terminal, `on` forces colour, `off` removes it; applied only at render time |
 
 The environment variable `NO_COLOR` and the flag `--no-color` also switch colour off. No repo setting and no flag changes a template.
@@ -7449,7 +7507,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Blocks building? |
 |---|---|---|
 | [G-13](#g-13) | Tuning the steering-phrase list | No |
-| [G-122](#g-122) | The 4 turn-end headings | Yes |
 | [G-20](#g-20) | The `codex-cli` link and its `AGENTS.md` rule | No |
 | [G-19](#g-19) | The timing target for `skill list` | No |
 
@@ -10289,7 +10346,7 @@ type Shipper interface {
 // ReleaseOptions are the inputs of komodo release.
 type ReleaseOptions struct {
 	Version   string // the version to cut, such as 1.0.0-beta.6
-	NotesFile string // the path given to --notes-file; what it supplies is open
+	NotesFile string // Markdown that heads the GitHub release notes (--notes-file)
 }
 
 // Release sets the version, tags, cross-builds, writes checksums, signs the manifest and publishes.
@@ -10299,7 +10356,7 @@ func Release(ctx context.Context, o ReleaseOptions) error
 func Sign(manifest []byte, keyPath string) (signature []byte, err error)
 ```
 
-`Release` runs on the owner's machine, in the Komodo repository only, and the verb refuses without a terminal. `Sign` returns an error when the key file is missing or unreadable, and the release stops before it publishes. [TODO: `the key file's format and what Release does when the key's mode is wider than 0600` ([G-139](#g-139))]
+`Release` runs on the owner's machine, in the Komodo repository only, and the verb refuses without a terminal. `Sign` returns an error when the key file is missing or unreadable, and the release stops before it publishes. The key file holds the 32-byte ed25519 seed as base64 on one line. On macOS and Linux `Release` refuses before it builds when the file's mode is wider than 0600, with the fix `chmod 600 ~/.komodo/release.key`.
 
 #### Callers
 
@@ -10532,7 +10589,7 @@ flowchart TB
 6. It renders the changelog, which starts fresh at `1.0.0-beta.6`.
 7. It publishes a release whose `latest.json` every `fresh` reads. A beta publishes as a normal release with "beta" in the version, because the updater reads `releases/latest`, which skips prereleases.
 
-[TODO: `the operating system and architecture pairs built, how the release is published to GitHub, how the changelog is rendered from the entries that add changelog records, and what --notes-file supplies` ([G-139](#g-139))]
+The release builds `darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64` and `windows/amd64`, and publishes them with `gh release create v<version>` together with `latest.json` and `latest.json.sig`, never marked as a prerelease. The changelog section groups the pending entries under Added, Changed, Fixed and Removed, in that order, sorted by entry id within each; the `--notes-file` text heads the GitHub release notes above that section.
 
 **Signing custody**
 
@@ -10664,7 +10721,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-139](#g-139) | Release: key file format, embedded keys, manifest layout, target pairs, publishing, changelog input | Yes |
 | [G-18](#g-18) | Repo map patterns for TypeScript, Python and Rust against 3 real repositories | No |
 
 ## 12. Install, Binary Lifecycle and Gate
@@ -10695,7 +10751,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 - Where Komodo's files live on one machine, and the binary built for each platform.
 
 **Does not own:**
-- The verb table, the result envelope, exit codes, the `config` verb and the repository pin check at verb dispatch ([CLI and Configuration](#1-cli-and-configuration)). The `komodo init` verb is also there [TODO: `how init writes the orchestrator skills and commands into the global Claude Code setup` ([G-28](#g-28))].
+- The verb table, the result envelope, exit codes, the `config` verb and the repository pin check at verb dispatch ([CLI and Configuration](#1-cli-and-configuration)). The `komodo init` verb is also there; it installs a Komodo plugin through Claude Code's `claude plugin` commands.
 - The `release` verb that sets the version, tags, cross-builds, writes checksums and signs ([Backlog, Planning, Ship and Release](#11-backlog-planning-ship-and-release)).
 - The probe of one link, `Provider.Probe`, and the `ProbeResult` record ([Providers and HTTP](#7-providers-and-http)).
 - The sandbox backends ([Tools, Guard and Sandbox](#6-tools-guard-and-sandbox)) and the guard table the gate renders.
@@ -10768,7 +10824,7 @@ Files of other chapters that this chapter calls:
 | Provider probe | `ProbeAll` in `host/probe.go` |
 | `komodo gate` | `Gate.Run` in `repo/gate.go` |
 
-The names are working names. [TODO: `confirm the exported names of the install, update, probe and gate functions` ([G-210](#g-210))]
+These are the exported names.
 
 #### Where the files live on one machine
 
@@ -10845,14 +10901,22 @@ const (
 
 #### Install manifest (`install.json`)
 
-The state manager wraps the body in its six-field record header; the layout of header and body is [TODO: `how a record's header and body share one file` ([G-210](#g-210))]. The body alone, with working field names:
+The state manager wraps the body in its six-field record header, one compact JSON object with the header fields, then `body` ([State Manager](#13-state-manager)). The body alone:
 
 ```go
 // internal/host/install.go
 
 // Manifest is the body of install.json: everything install owns in one repository.
 type Manifest struct {
-	Entries []Entry `json:"entries"` // one per owned file or settings entry
+	Entries    []Entry    `json:"entries"`    // one per owned file or settings entry
+	Selections Selections `json:"selections"` // the optional parts a person chose
+}
+
+// Selections are the optional parts chosen at install; a rerun without a flag keeps them.
+type Selections struct {
+	Hosts    []string `json:"hosts,omitempty"` // repository manifest: "claude", "codex"
+	Project  bool     `json:"project"`         // repository manifest: the --project files are owned
+	Schedule bool     `json:"schedule"`        // machine manifest: step 8 is wanted
 }
 
 // Entry records one owned file or settings entry and the content install wrote.
@@ -10884,11 +10948,11 @@ type Entry struct {
 }
 ```
 
-Hash values are shortened. [TODO: `the field names of install.json, the hash algorithm, and how a settings entry is named` ([G-210](#g-210))]
+Hash values are shortened here; `hash` is the full SHA-256, in lowercase hexadecimal, of the bytes install wrote. A settings entry is named by its JSON path and value, such as `permissions.allow Bash(komodo *)`.
 
-**Versioning.** The record header carries the schema version, `v: 1` today. A newer binary reads an older version through a registered migration step in memory. How a reader treats a manifest written by a newer binary is [TODO: `forward-version handling in the state manager` ([G-210](#g-210))].
+**Versioning.** The record header carries the schema version, `v: 1` today. A newer binary reads an older version through a registered migration step in memory. A manifest written by a newer binary is refused with `ErrNewerVersion` and left untouched, as every record is ([State Manager](#13-state-manager)); the verb exits 1 with the fix `run komodo fresh`.
 
-**Which steps the manifest covers.** The manifest sits in the git directory of one repository, yet steps 1 to 3 and step 8 write machine-wide files. [TODO: `where ownership of the binary, the PATH entry, providers.json and the operating system schedule entry is recorded, so uninstall --machine-only can remove them` ([G-210](#g-210))]
+**Which steps the manifest covers.** The manifest sits in the git directory of one repository, yet steps 1 to 3 and step 8 write machine-wide files. Those live in a second manifest, `~/.komodo/state/install.json`, with the same `Entry` shape: `target` is an absolute path and `step` is 1, 2, 3 or 8. `uninstall --machine-only` walks it backwards.
 
 #### Release manifest (`latest.json`)
 
@@ -10899,9 +10963,8 @@ The release manifest is published beside the binaries at `github.com/rdevitto86/
 
 // ReleaseManifest is latest.json: one release and how to verify its binaries.
 type ReleaseManifest struct {
-	Version   string  `json:"version"`   // semantic version of the release
-	Assets    []Asset `json:"assets"`    // one per operating system and architecture
-	Signature string  `json:"signature"` // ed25519 signature
+	Version string  `json:"version"` // semantic version of the release
+	Assets  []Asset `json:"assets"`  // one per operating system and architecture
 }
 
 // Asset is the binary of one operating system and architecture.
@@ -10925,7 +10988,7 @@ type KeySet struct {
 | `assets[].os`, `assets[].arch` | string | Select the binary for this machine |
 | `assets[].url` | string | Where the updater downloads the binary |
 | `assets[].sha256` | string | The checksum that the install scripts and the updater compare with the download |
-| `signature` | string | The ed25519 signature that the updater verifies against `KeySet` |
+| `latest.json.sig` | file | The detached ed25519 signature of the exact `latest.json` bytes, base64 on one line, that the updater verifies against `KeySet` |
 
 ```json
 {
@@ -10934,14 +10997,13 @@ type KeySet struct {
     { "os": "darwin",  "arch": "arm64", "url": "https://github.com/rdevitto86/komodo-agentic-harness-coding/releases/download/v1.0.0-beta.6/komodo_darwin_arm64",      "sha256": "<64 hexadecimal characters>" },
     { "os": "linux",   "arch": "amd64", "url": "https://github.com/rdevitto86/komodo-agentic-harness-coding/releases/download/v1.0.0-beta.6/komodo_linux_amd64",      "sha256": "<64 hexadecimal characters>" },
     { "os": "windows", "arch": "amd64", "url": "https://github.com/rdevitto86/komodo-agentic-harness-coding/releases/download/v1.0.0-beta.6/komodo_windows_amd64.exe", "sha256": "<64 hexadecimal characters>" }
-  ],
-  "signature": "<base64 of the 64-byte signature>"
+  ]
 }
 ```
 
-[TODO: `the key names of latest.json, the architectures built, the asset file names, the exact bytes the signature covers and how it is encoded` ([G-139](#g-139))]
+The signature is detached: `latest.json.sig` holds the base64 of the 64-byte ed25519 signature over the exact bytes of `latest.json`, so no canonical form is needed, and each asset is bound through its `sha256`. Five pairs are built, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64` and `windows/amd64`, each asset named `komodo_<os>_<arch>`, with `.exe` on Windows.
 
-**Versioning.** A binary reads the manifest versions it knows. [TODO: `how a binary treats a latest.json whose layout it does not know` ([G-139](#g-139))]
+**Versioning.** A binary reads the manifest versions it knows. Unknown keys are ignored, so a manifest that only adds keys still updates older binaries; a manifest without `version`, or without an asset for this machine, is refused and logged, and the binary stays.
 
 #### Update state (`state/fresh.json`)
 
@@ -10952,17 +11014,20 @@ The updater's records live under `~/.komodo/state/`, all written through the sta
 | `fresh.json` | The newest release seen | `Replace` |
 | `fresh.lock` | The lock that allows one updater at a time | `Claim` |
 | `fresh.log` | One line per silent failure | `Append` |
-| `active/` | Which versions live runs use | [TODO: `file layout` ([G-210](#g-210))] |
+| `active/` | Which versions live runs use | One file per live run, `active/<run-id>.json` with `{version, pid}`, written with `Claim` |
 
 The body of `fresh.json`:
 
 ```json
 {
-  "latest": "1.0.0-beta.6"
+  "latest": "1.0.0-beta.7",
+  "checked_at": "2026-10-13T09:00:00Z",
+  "failures": 0,
+  "previous": "1.0.0-beta.6"
 }
 ```
 
-[TODO: `where the time of the last check is kept, so a check runs at most once per fresh.interval` ([G-210](#g-210))] [TODO: `where the count of consecutive failures is kept, and the line format of fresh.log` ([G-210](#g-210))]
+`checked_at` is the time of the last fetch in RFC 3339 UTC, `failures` the count of consecutive failures, and `previous` the version `bin/komodo` held before the last swap. Each `fresh.log` line is one JSON object `{time, step, error}`, where `step` is `check`, `download`, `verify` or `swap`.
 
 #### The Komodo block in `AGENTS.md`
 
@@ -11030,11 +11095,12 @@ Step 6 adds exactly four entries to the repository's `.claude/settings.json` and
   "permissions": {
     "allow": ["Bash(komodo *)"],
     "deny": ["Bash(komodo config *=*)", "Bash(komodo config --accept*)", "Bash(komodo install*)",
-             "Bash(komodo fresh*)", "Bash(komodo release*)", "Bash(komodo gate --install*)"]
+             "Bash(komodo fresh*)", "Bash(komodo release*)", "Bash(komodo gate --install*)",
+             "Bash(komodo init*)", "Bash(komodo ui*)"]
   },
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "komodo status" } ] }
+      { "hooks": [ { "type": "command", "command": "komodo status", "timeout": 10 } ] }
     ],
     "PreToolUse": [
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "komodo internal guard" } ] }
@@ -11043,7 +11109,7 @@ Step 6 adds exactly four entries to the repository's `.claude/settings.json` and
 }
 ```
 
-[TODO: `the exact hook entry install writes, such as a matcher or a timeout; the text lives in templates/claude/settings.json.tmpl` ([G-210](#g-210))]
+The entries are exactly those above, from `templates/claude/settings.json.tmpl`. The `SessionStart` hook has no `matcher`, so it runs on every session start, resume and clear, with a `timeout` of 10 seconds; the `PreToolUse` hook matches `Bash` only.
 
 #### Probe result
 
@@ -11081,7 +11147,7 @@ A failing gate in the envelope that every verb returns ([CLI and Configuration](
 {
   "v": 1,
   "ok": false,
-  "verdict": "Gate failed: 1 check.",
+  "verdict": "Gate failed: 1 of 3 checks.",
   "report": "events: catalog type run.paused has no emitter",
   "data": {
     "checks": [
@@ -11097,11 +11163,11 @@ A failing gate in the envelope that every verb returns ([CLI and Configuration](
 }
 ```
 
-[TODO: `the data layout of the gate result, the verdict wording and the error code; only the envelope fields are fixed` ([G-142](#g-142))]
+The data is `GateReport` above. The verdict reads `Gate passed: <n> checks.` or `Gate failed: <f> of <n> checks.`; a failure exits 3 with `gate_failed`, `reason` lists the failing check names joined by commas, and `fix` is the first finding's fix.
 
 ### 12.4 Interfaces
 
-The names in this page are working names (G-210). The failure behaviour of each method is beside it.
+The failure behaviour of each method is beside it.
 
 #### Installer
 
@@ -11127,6 +11193,8 @@ type InstallOptions struct {
 	From        string   // install this binary file, with no network
 	Project     bool     // also add docs/{prd,hld,lld}.md, CHANGELOG.md and a pull request template
 	Schedule    bool     // add step 8
+	NoSchedule  bool     // remove the step 8 entry
+	NoProject   bool     // stop owning the --project files; they stay on disk
 	Force       bool     // overwrite hand-edited owned files
 	DryRun      bool     // print the plan and stop
 }
@@ -11158,7 +11226,7 @@ type Change struct {
 | Method | Error | Meaning and caller behaviour |
 |---|---|---|
 | `Plan` | Manifest unreadable | The state manager reports a record it cannot decode; the verb stops and writes nothing |
-| `Apply` | A write fails | The verb stops at that step and reports it. Step 7 writes the manifest after steps 4 to 6, so a rerun recomputes the diff. [TODO: `what a rerun does with files written before the manifest` ([G-210](#g-210))] |
+| `Apply` | A write fails | The verb stops at that step and reports it. Step 7 writes the manifest after steps 4 to 6, so a rerun recomputes the diff. On the rerun, a target missing from the manifest whose file already holds install's content byte for byte is adopted as `keep`; any other existing file is kept and reported, and `--force` overwrites it. |
 | `Apply` | `doctor install` reports an error | The install fails and names each failing check with its fix line |
 | `Uninstall` | Entry already gone | The entry is skipped; the other `settings.json` keys stay intact |
 
@@ -11259,7 +11327,7 @@ type Gate interface {
 |---|---|---|
 | `Check.Run` | A finding | The check fails; the gate runs the other checks and reports all findings |
 | `Check.Run` | An error | The check fails with the error as its finding; the gate does not stop |
-| `Gate.Run` | Not the Komodo repository | The verb refuses. [TODO: `how the gate recognises the Komodo repository and the refusal code` ([G-142](#g-142))] |
+| `Gate.Run` | Not the Komodo repository | The verb refuses with exit 1 and `not_komodo_repo` unless `go.mod` at the root declares the module `github.com/rdevitto86/komodo-agentic-harness-coding` |
 | `Gate.Run` | `--install` or `--install-hooks` without a terminal | The verb refuses; these flags need a person |
 | `Gate.Run` | `opts.Verbs` is empty | The verb check fails with a finding; `cli` always fills it |
 
@@ -11309,7 +11377,7 @@ sequenceDiagram
 ```
 
 1. The person runs `curl -fsSL <repo>/install.sh | sh` (macOS, Linux, WSL) or `irm <repo>/install.ps1 | iex` (Windows).
-2. The script fetches `latest.json`, selects the asset for the machine's operating system and architecture, and downloads the binary.
+2. The script fetches `latest.json`, selects the asset for the machine's operating system and architecture, and downloads the binary into a new `mktemp -d` folder, deleted after step 4.
 3. The script compares the download's SHA-256 checksum with the asset's `sha256`, over HTTPS. It does not verify the signature.
 4. The script runs `komodo install --machine-only`. The running binary is not older than `latest`, so install copies it: step 1 places `versions/<v>/komodo` and `bin/komodo`, step 2 puts `komodo` on `PATH`, step 3 writes `providers.json`.
 5. In a repository the person runs `komodo install`. Plan reads the empty manifest and finds 4 targets to write.
@@ -11340,7 +11408,7 @@ flowchart TD
 ```
 
 1. Resolve the hosts: `--hosts` if given, else detect. Claude Code is present when any of `CLAUDE.md`, `.claude/`, `claude` on `PATH` or `~/.claude/` exists. Codex is present when any of `.codex/`, `codex` on `PATH` or `~/.codex/` exists. Codex reads `AGENTS.md`, so step 4 serves it with no extra file.
-2. Resolve the scope. `--machine-only` keeps steps 1 to 3; `--repo-only` keeps steps 4 to 7; steps 4 to 7 need a git repository; step 8 needs `--schedule`. [TODO: `what --repo-only does outside a git repository` ([G-210](#g-210))]
+2. Resolve the scope. `--machine-only` keeps steps 1 to 3; `--repo-only` keeps steps 4 to 7; steps 4 to 7 need a git repository; step 8 needs `--schedule`. `--repo-only` outside a git repository refuses with exit 1 and `no_repo`; a plain `install` there runs only the machine steps and reports the repository steps as skipped.
 3. Build the desired set: each step's targets with the content install would write.
 4. Read `install.json`; an absent manifest is empty.
 5. Classify each target as in the diagram. A target in the manifest but no longer desired is pruned.
@@ -11365,11 +11433,11 @@ The pin rises only: the begin marker's `min=` becomes the higher of the existing
 
 Rules per step:
 - **Step 1, binary source.** `--from <file>` uses that file with no network. Otherwise the latest release is used if it is newer than the running binary and verified. Otherwise install copies the running binary. An offline install from an older binary leaves `bin/` on that older version, and the next online check by `status`, a run start or `fresh --check` moves it forward.
-- **Step 2.** [TODO: `how install chooses between ~/.zshrc and ~/.bashrc, the text of the line, and how the Windows user PATH is changed` ([G-210](#g-210))]
-- **Step 4.** With no `AGENTS.md`, the full template of `templates/project/AGENTS.md.tmpl` is written. With one, only the block between the markers is written or replaced; text outside the markers is never touched. [TODO: `where the block goes in an existing AGENTS.md that has no markers, and what install does with damaged markers` ([G-210](#g-210))]
+- **Step 2.** On macOS and Linux with no `~/.local/bin` on `PATH`, install picks the file from the name of `$SHELL`: `~/.zshrc` for zsh, `~/.bashrc` for bash, else `~/.profile`, and appends one marked line, `export PATH="$HOME/.komodo/bin:$PATH" # komodo`. On Windows it adds `%LOCALAPPDATA%\komodo\bin` to the user `Path` with `powershell -NoProfile -Command [Environment]::SetEnvironmentVariable('Path', <new>, 'User')`. The machine manifest records the change, so `uninstall --machine-only` removes it.
+- **Step 4.** With no `AGENTS.md`, the full template of `templates/project/AGENTS.md.tmpl` is written. With one, only the block between the markers is written or replaced; text outside the markers is never touched. In an `AGENTS.md` with no markers the block is appended at the end after one blank line. A begin marker without an end marker, or two of either, stops step 4 and names the lines to fix by hand; install never guesses where a block ends.
 - **Step 5.** The line imports the block into Claude Code at session start. A hand-edited `CLAUDE.md` survives.
 - **Step 6.** Install merges the two entries into the parsed JSON and leaves every other key as it was. A hook that fails prints an error and blocks nothing.
-- **Step 8.** [TODO: `the launchd label, the cron line and the Task Scheduler task name` ([G-210](#g-210))]
+- **Step 8.** The entry runs `komodo jobs tick --quiet` every `TickEvery`: on macOS the launchd agent `io.github.rdevitto86.komodo.tick` in `~/Library/LaunchAgents/`; on Linux the crontab line `*/5 * * * * "$HOME/.komodo/bin/komodo" jobs tick --quiet # komodo-tick`; on Windows the task `Komodo Jobs Tick`, made with `schtasks /Create /SC MINUTE /MO 5`.
 
 `doctor install` checks the installed files against the manifest and `PATH`, among others; the full check list is in [CLI and Configuration](#1-cli-and-configuration).
 
@@ -11417,14 +11485,14 @@ sequenceDiagram
 ```
 
 1. **Check.** Only `status`, the engine at run start and `fresh --check` fetch the release manifest, and only when `fresh.interval` has passed since the last check. A failed fetch is logged and the verb carries on. A successful fetch replaces `state/fresh.json` with the newest version.
-2. **Spawn.** Any verb reads `fresh.json` and compares `latest` with its own version using semantic version order. Only if `latest` is newer, `fresh.auto` is not `false` and `CI` is not `true`, the verb starts `komodo internal fresh-bg` detached and carries on. [TODO: `whether fresh.auto false and CI=true also stop the hourly fetch of latest.json` ([G-210](#g-210))]
+2. **Spawn.** Any verb reads `fresh.json` and compares `latest` with its own version using semantic version order. Only if `latest` is newer, `fresh.auto` is not `false` and `CI` is not `true`, the verb starts `komodo internal fresh-bg` detached and carries on. Both also stop the background fetch of `latest.json` by `status` and the engine; `fresh` and `fresh --check` still fetch.
 3. **Claim.** The updater claims `state/fresh.lock`, created exclusively. If the file exists and is younger than `FreshLockStale`, another updater is running and this one exits. An older lock is stale, so a crashed updater cannot block updates.
-4. **Download.** The updater downloads the asset for this operating system and architecture to `versions/<v>/komodo.part`. [TODO: `whether the updater fetches latest.json again or reads the asset entry from fresh.json` ([G-139](#g-139))]
+4. **Download.** The updater downloads the asset for this operating system and architecture to `versions/<v>/komodo.part`. The updater fetches `latest.json` and `latest.json.sig` again and verifies the signature before it downloads, because `fresh.json` keeps no asset entries.
 5. **Verify.** The updater compares the download's SHA-256 checksum with the asset's `sha256` and verifies the ed25519 signature against the embedded keys ([Release signing](#12-install-binary-lifecycle-and-gate)). On a mismatch it deletes the `.part` file, logs the failure and exits; the old binary stays.
 6. **Rename.** The updater renames `komodo.part` to `versions/<v>/komodo`.
-7. **Swap.** The updater replaces `bin/komodo` atomically, never waiting for runs. On Windows a running `.exe` cannot be overwritten, so it is renamed to `.old` first. From this moment every new call, including the orchestrator's next one, runs the new binary. [TODO: `when komodo.exe.old is deleted` ([G-210](#g-210))]
-8. **Pin.** Runs already in progress keep their version. The engine starts every child process from `VersionBinary(home, its own version)`, never from `bin/`, so a run finishes on the binary it started with, and the version is listed in `state/active/` for as long as the run lives. [TODO: `which code adds and removes the run's entry in state/active/` ([G-210](#g-210))]
-9. **Clean up.** The updater deletes version folders that are not the current version, not the previous version and not listed in `state/active/`. [TODO: `how the previous version is recorded` ([G-210](#g-210))]
+7. **Swap.** The updater replaces `bin/komodo` atomically, never waiting for runs. On Windows a running `.exe` cannot be overwritten, so it is renamed to `.old` first. From this moment every new call, including the orchestrator's next one, runs the new binary. The next updater run deletes `komodo.exe.old`; while the old process still runs the delete fails and is retried on the run after.
+8. **Pin.** Runs already in progress keep their version. The engine starts every child process from `VersionBinary(home, its own version)`, never from `bin/`, so a run finishes on the binary it started with, and the version is listed in `state/active/` for as long as the run lives. The engine claims `state/active/<run-id>.json` at run start and removes it at `run.done` or `run.stopped`; the startup sweep removes an entry whose `pid` is dead.
+9. **Clean up.** The updater deletes version folders that are not the current version, not the previous version and not listed in `state/active/`. The previous version is `previous` in `fresh.json`, written at the swap.
 
 The fresh verb runs the same steps in the foreground. Its failures are printed, because a person asked for the update.
 
@@ -11444,10 +11512,10 @@ The fresh verb runs the same steps in the foreground. Its failures are printed, 
 2. Send each run the stop signal of the shutdown sequence ([Engine Internals](#3-engine-internals)); the run checkpoints at its next safe point, between tool calls.
 3. The run exits with the reason `restart`.
 4. `fresh` resumes each stopped run on the new binary.
-5. A run that has not checkpointed after `RestartWait` stays on its version and is named in the report. It is never killed mid-write.
+5. A run whose `run.stopped` has not appeared after `RestartWait` is not resumed by `fresh`; it is named in the report, and a person resumes it later.
 6. The cost is at most one repeated model turn per run, the turn that was in flight.
 
-[TODO: `how the 2 minute checkpoint wait fits the shutdown sequence's 30 second stop per agent and 60 second force-kill, and the stop reason restart that the run.stopped event does not list` ([G-210](#g-210))]
+The restart uses the shutdown sequence unchanged: SIGINT to every session at once, SIGTERM after 30 seconds and the kill 60 seconds after that, so a healthy run has stopped within 90 seconds, inside the 2-minute `RestartWait`. Its `run.stopped` event carries the reason `restart`.
 
 **Version skew.** A new binary reads run state written by the previous state schema version. For state older than that, `status` tells the person to let the run finish or to use `fresh --restart-runs`.
 
@@ -11469,8 +11537,8 @@ flowchart LR
 
 1. The install scripts check the SHA-256 checksum over HTTPS only.
 2. From the first update on, the binary verifies the signature of the manifest against the public keys embedded in it, so a tampered release is refused.
-3. The embedded set holds the current key and a `next` key. The `next` key is set at the first release, so a leaked key can be rotated without breaking updates in the field. [TODO: `where the embedded public keys live in the source and how the next key is produced at the first release` ([G-139](#g-139))]
-4. A signature verifies when it matches a key of the set. [TODO: `confirm that either key may sign, how a release rotates the next key into the current slot, and the exact bytes the signature covers` ([G-139](#g-139))]
+3. The embedded set holds the current key and a `next` key. The `next` key is set at the first release, so a leaked key can be rotated without breaking updates in the field. The public keys are two base64 constants in `internal/host/keys.go`. At the first release, `release` makes the `next` key pair, `~/.komodo/release.next.key` with its own password-manager backup, and its public half is compiled in from then on.
+4. A signature verifies when it matches a key of the set. Either key may sign. A rotation release is signed with `next` and compiles `next` into the current slot and a newly made key into `next`, so binaries in the field accept it with no flag day. The signature covers the exact bytes of `latest.json`.
 
 Enterprise signing is not built: moving the private key into a key management service or keyless signing, and refusing a manifest older than the last one accepted, wait for the first machine the owner does not own that runs `fresh` (G-21).
 
@@ -11506,21 +11574,24 @@ flowchart TD
 | State | A package other than `state` writes a runtime state path; a record kind lacks a writer, a schema version or a fixture |
 | Docs drift | A verb is missing from `README.md` or the embedded `komodo` skill; a decision link is broken; `lld.md` names a Go package that does not exist |
 | Maps | A task group's `subsystem:` names no component, or a component has no entry in `lld.md` |
-| No silent gaps | A gap tag in `docs/lld.md` (`[NOT CHECKED]` or a gap identifier) names no backlog task that closes it, or a gap row has no phase |
+| No silent gaps | A gap tag in the HLD or LLD names a gap with no register row, or an open row with no trigger is named by no backlog task |
 | Generated artifacts | A derived file differs byte for byte from its regenerated copy |
 | Timing | A short verb takes 50 ms or more; the gate takes 3 minutes or more locally; replaying 10,000 events takes 1 second or more |
 
 Generated artifacts compared by the last-but-one check: the agent roster tables from `policy.json`; `state.schema.json` from the kind registry and the event enum (a fixed list of allowed values); the `skills/index.json` hashes; the standards rule identifiers; every output template's golden fixture (stored expected output that a test compares against) under both output profiles; and the error-recovery action table against the action kinds that `Next()` can emit.
 
-[TODO: `the comment lint rules, how docs drift finds package names in lld.md, what the component map names now that each LLD chapter is a subsystem, and the gap tag syntax the no-silent-gaps check scans together with how a backlog task names the gap it closes` ([G-142](#g-142))]
+- **Comment lint:** every function, exported or not, has a comment of at most 2 lines that starts with its name and says more than the name; a type, var, const or field comment has at most 1 line; a `WHY:`-style prefix, or a banner other than `// ---`, fails. Test files are exempt.
+- **Docs drift, packages:** every code span in `lld.md` that matches `internal/<name>` or `cmd/komodo` must be a directory that `go list ./...` reports.
+- **Component map:** a group's `subsystem:` names one LLD chapter by its title, such as `Workspace and Leases`, and every chapter has a row in [Appendix C](#appendix-c-component-map).
+- **No silent gaps:** a gap tag is `[TODO: <text> ([G-NN](#g-nn))]`, found by the pattern `G-[0-9]{2,3}`. Every tag's gap has a register row, and every open row is named in the `gaps:` list of a backlog task. A row closed by a trigger, such as a later-minor row, needs its trigger in the Closes column instead of a task.
 
 Flags:
 - **`--fast`.** Skips the cross-builds and the timing checks for a quicker local run.
-- **`--install`.** A person-only flag. It builds the current source as a development build and places it at `~/.komodo/bin/komodo`. Komodo runs its own groups from that build. [TODO: `whether it also writes the version folder that children start from` ([G-117](#g-117))]
-- **`--install-hooks`.** A person-only flag that installs git hooks in the Komodo repository. [TODO: `which hooks and what they run` ([G-117](#g-117))]
-- **`--only <check>`.** [TODO: `what --only selects beyond a check's name` ([G-117](#g-117))]
+- **`--install`.** A person-only flag. It builds the current source as a development build and places it at `~/.komodo/bin/komodo`. Komodo runs its own groups from that build. It writes `versions/<version>+dev.<commit>/komodo` first and copies it to `bin/komodo`, so the children of a run start from a version folder as for any release.
+- **`--install-hooks`.** A person-only flag that installs git hooks in the Komodo repository. It writes `pre-commit`, which runs `komodo gate --fast`, and `pre-push`, which runs `komodo gate`, into `.git/hooks/`. Each starts with a `# komodo` line, so a rerun replaces only its own hooks; an existing hook without that line is left alone and reported.
+- **`--only <check>`.** Runs one check, named as the report prints it, such as `events`; an unknown name exits 2 with `usage`, naming the closest check.
 
-**Fixtures.** For every check there is a deliberately broken fixture that makes the gate fail, which proves the check works. [TODO: `where the fixtures live and how the gate loads them` ([G-142](#g-142))]
+**Fixtures.** For every check there is a deliberately broken fixture that makes the gate fail, which proves the check works. Each check's fixture lives in `internal/repo/testdata/gate/<check>/`. `gate_test.go` runs every check against its folder and fails unless the check reports at least one finding, so a check without a folder fails the same test.
 
 ### 12.6 State
 
@@ -11607,7 +11678,7 @@ stateDiagram-v2
 | A live run does not checkpoint in 2 minutes | `RestartRuns` | The run stays on its version and is named in the report |
 | Broken Komodo block markers | `doctor` and the brief builder | The whole block is dropped from briefs and `doctor` reports it ([Sessions, Agents and Briefs](#5-sessions-agents-and-briefs)) |
 | A gate check finds a drift | The check | The gate fails and names the check, the path and the fix |
-| `gate` outside the Komodo repository | The gate | The verb refuses [TODO: `refusal code` ([G-142](#g-142))] |
+| `gate` outside the Komodo repository | The gate | The verb refuses with exit 1 and `not_komodo_repo` |
 
 ### 12.8 Config
 
@@ -11629,7 +11700,7 @@ Flags of the verbs this chapter implements:
 
 | Verb | Flags |
 |---|---|
-| `install` | `--repo-only`, `--machine-only`, `--hosts claude,codex`, `--no-path`, `--from <file>`, `--project`, `--schedule`, `--force`; `--dry-run` is the global flag of every writing verb. [TODO: `how a person adds or removes an optional part after install, such as an AI tool, the scheduled job or the starter documents` ([G-240](#g-240))] |
+| `install` | `--repo-only`, `--machine-only`, `--hosts claude,codex`, `--no-path`, `--from <file>`, `--project`, `--no-project`, `--schedule`, `--no-schedule`, `--force`; `--dry-run` is the global flag of every writing verb. A person changes an optional part by rerunning `install` with its flag: the manifests record each choice in `selections`, a rerun without the flag keeps it, `--no-schedule` prunes the schedule entry, `--no-project` stops owning the starter documents and leaves them on disk, and `--hosts` sets the host list anew. |
 | `uninstall` | `--repo-only`, `--machine-only` |
 | `fresh` | `--check`, `--to <version>`, `--restart-runs` |
 | `gate` | `--fast`, `--install`, `--install-hooks`, `--only <check>` |
@@ -11679,16 +11750,10 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Blocks building? |
 |---|---|---|
-| [G-139](#g-139) | `latest.json` key names, architectures, asset names, the exact bytes the signature covers and its encoding; which key may sign and how the next key rotates in; whether the updater refetches the manifest; unknown-layout handling | Yes |
-| [G-210](#g-210) | Install write details: zsh or bash, the `PATH` line, the Windows `PATH` change, schedule entries, the exact hook entry, existing `AGENTS.md` without markers, a crash before the manifest, machine-wide ownership, flag combinations outside a repository, the `standard` output style; Update records: last-check time, failure count and `fresh.log` format, `state/active/` layout, the previous version, `.old` cleanup, the off switch and the hourly fetch, the restart wait against the shutdown sequence and the `restart` stop reason; `install.json` field names, hash algorithm, settings entry naming, header and body layout, forward-version handling; exported names of the install, update, probe and gate functions | Yes |
-| [G-142](#g-142) | Gate inputs: Komodo repository detection and refusal code, fixture location, result data layout, comment lint rules, package discovery in docs drift, the component map, the gap tag syntax | Yes |
-| [G-117](#g-117) | `gate --install` and the version folder, `--install-hooks`, `--only` | No |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | No |
 | [G-19](#g-19) | Measured values for the gate's timing targets | No |
 | [G-20](#g-20) | The `codex-cli` and `openai-api` links are recorded, not usable, until a later minor release | No |
 | [G-21](#g-21) | Enterprise signing: key management service or keyless signing, and refusal of an older manifest | No |
-| [G-28](#g-28) | How `komodo init` writes the orchestrator skills into the global Claude Code setup | No |
-| [G-240](#g-240) | Changing install selections after install | No |
 
 ## 13. State Manager
 
@@ -11927,7 +11992,7 @@ Paths starting `runs/`, `sessions/`, `ledger/` and `jobs/`, and `install.json`, 
 | `timer`, `quota` | The provider router in the group's engine (written with `Replace`); the scheduler, the live engine, the sweep or `status` fires a due timer, which is then removed | [Data Model](#73-data-model) |
 | `providers`, `install` | The installer and the provider probe | [Data Model](#123-data-model) |
 | `fresh` | Binary lifecycle | [Data Model](#123-data-model) |
-| `config_audit` | The `config` verb in `cli` [TODO: which package writes the configuration checksum and audit rows ([G-119](#g-119))]; `config.json` itself stays outside | [Data Model](#13-data-model) |
+| `config_audit` | The `config` verb in `cli`, through the `AuditSink` it hands to `core`; `config.json` itself stays outside | [Data Model](#13-data-model) |
 | `wake` | The event bus touches the file on a waking event | [Behaviour](#25-behaviour) |
 
 - **`timer`:** one record per paused group, keyed `<repo-id>.<group>.json`, holding the latest reset time among the group's halted sessions plus 1 minute, and `wait_link`.
@@ -12422,7 +12487,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Blocks building? |
 |---|---|---|
 | [G-19](#g-19) | The replay target of 10,000 events under 1 s | No |
-| [G-119](#g-119) | Which package writes the configuration checksum and audit rows | Yes |
 
 ## 14. Data Locations and Data Flow
 
@@ -12624,7 +12688,11 @@ Seven checks run the whole harness against a fixture, because every subsystem ca
 - **`testdata/fixture-repo/`:** The small repository that end-to-end runs build against.
 - **`tg-fixture`:** The task group the full run, the crash check and the race check run.
 - **Broken fixtures:** One repository with a failing test that already fails at the base, and one builder change that breaks a passing test.
-- [TODO: `the files, tasks and acceptance items of tg-fixture, the local model the full run uses and the configuration that selects it, the process and the stage at which the crash check sends kill -9, and whether the gate runs these checks or a person starts them` ([G-185](#g-185))]
+- **Fixture contents:** `testdata/fixture-repo/` is a Go module with `calc/calc.go`, holding `Add`, and `calc/calc_test.go`. `tg-fixture` has 2 tasks, add `Sub` and then `Mul`, each with a table test; each acceptance item reads `When go test ./calc runs, the system shall pass`.
+- **Model:** the full run uses the default `local` endpoint, set for all 7 agents in a test home (`KOMODO_HOME`) with `komodo config agent <name> model=local:Qwen3.6-27B`, so it spends nothing.
+- **Crash point:** the crash check sends `kill -9` to the engine process, found from the run's process identifier file, at the first `session.start` of Build, so a builder session is live.
+- **Regression fixtures:** fixture A adds `calc/broken_test.go`, which fails at the base; in fixture B a fake provider returns a builder change that makes `Add` subtract, breaking `TestAdd`.
+- **Who runs them:** the checks are Go tests behind the `e2e` build tag in `cmd/komodo/e2e_test.go`, driving the built binary; a person or the orchestrator runs `go test -tags e2e ./cmd/komodo/` at each phase exit. The gate does not, because they need a local model and minutes per run.
 
 #### The seven checks
 
@@ -12638,7 +12706,7 @@ Seven checks run the whole harness against a fixture, because every subsystem ca
 | Fresh repo | On a clean macOS machine and a clean Windows machine, follow only `README.md` | A fixture group reaches shipped on both |
 | Scheduled | A `tick` fired by the entry that `install --schedule` wrote runs a fixture job; the job is forced to fail 3 times | The job ends Blocked and wakes a waiting `status --wait` |
 
-[TODO: `how two engines start on one group, since run refuses a group another run holds` ([G-186](#g-186))]
+The race check runs two engines on one machine against one clone. Engine A runs `komodo run tg-fixture`; at its builder's `session.start` the check freezes A with `SIGSTOP` and moves A's lease renewal time two hours back through the test home helper, so the lease is stale. Engine B's `komodo run tg-fixture` then takes the group over, raising the fence, and lands; `SIGCONT` wakes A, whose next save or push the fence refuses.
 
 The cross-build row expands to `GOOS=windows|linux|darwin go build ./...`, one build per operating system. The commands of the checks that have one:
 
@@ -12673,7 +12741,7 @@ flowchart TB
   F --> G["7 Scheduled<br>3 failures end Blocked"]
 ```
 
-The diagram follows the order of the table. The first check runs at the end of every delivery phase. [TODO: `whether any check depends on the result of an earlier one` ([G-185](#g-185))]
+The diagram follows the order of the table. The first check runs at the end of every delivery phase. Each check starts from a clean test home and a fresh copy of its fixture, so none depends on another's result; the order puts the cheapest first.
 
 ### 15.2 Operations Runbook
 
@@ -12694,7 +12762,7 @@ Watching a run (`status`, `status --wait`, `status --explain`, `status --metrics
 
 ### 15.3 Host Cleanup Before Phase 2
 
-The person's global Claude Code settings hold hooks, skill overrides and skills that call `~/.komodo/bin/komodo`, the install path of the new binary. The new binary has no `komodo guard` verb, so at that path it answers with exit code 2, which Claude Code reads as "block this tool call", and every edit in every repository is refused. The entries are removed by hand before phase 2. Only the person touches `~/.claude`; the harness writes there only through `komodo init`, which the person runs [TODO: `how init writes the orchestrator skills and commands into the global Claude Code setup` ([G-28](#g-28))].
+The person's global Claude Code settings hold hooks, skill overrides and skills that call `~/.komodo/bin/komodo`, the install path of the new binary. The new binary has no `komodo guard` verb, so at that path it answers with exit code 2, which Claude Code reads as "block this tool call", and every edit in every repository is refused. The entries are removed by hand before phase 2. Only the person touches `~/.claude`; the harness writes there only through `komodo init`, which the person runs, and only through Claude Code's `claude plugin` commands.
 
 **📐 What breaks if a stale hook stays**
 ```mermaid
@@ -12827,7 +12895,11 @@ flowchart TB
 1. **Before phase 2, by hand.** Remove from `~/.claude/settings.json` the `Bash(python -m komodo:*)` allow rule, the `komodo guard` hook, the `komodo hook status` and `komodo hook prune` hooks and the 36 `skillOverrides`. Delete the 5 Komodo skills under `~/.claude/skills/` and fix the 5 stale lines in `~/.claude/AGENTS.md`. The exact entries and lines are on [15.3](#153-host-cleanup-before-phase-2).
 2. **Phase 7: `komodo gate --install`.** The command places the development build at `~/.komodo/bin/komodo`, replacing the binary there. From here the harness runs its own task groups.
 3. **Phase 8: `komodo install` in this repository.** The command writes the `AGENTS.md` block, the `CLAUDE.md` import line and the four `.claude/settings.json` entries into the Komodo repository itself. From here the repository `SessionStart` hook runs `komodo status`, and `komodo skill get` serves the skills `komodo`, `plan`, `run`, `respond` and `release` from the binary.
-4. **Phase 9: the cutover rewrites.** The "At cutover" column of the [AGENTS.md table](#153-host-cleanup-before-phase-2) is applied to `~/.claude/AGENTS.md`. The repository's pull request template line that called `komodo pr create` is replaced with the engine's own pull request body template. [TODO: `the repo table that phase 9 applies, which the sources name but do not list` ([G-188](#g-188))]
+4. **Phase 9: the cutover rewrites.** The "At cutover" column of the [AGENTS.md table](#153-host-cleanup-before-phase-2) is applied to `~/.claude/AGENTS.md`. The repository's pull request template line that called `komodo pr create` is replaced with the engine's own pull request body template. A search of the repository's tracked files for the retired verbs finds one line; the search is rerun before phase 9 and any new hit joins the table.
+
+| File | Retired text | Rewrite |
+|---|---|---|
+| `.github/PULL_REQUEST_TEMPLATE.md`, line 5 | `Open it with komodo pr create --title ... --body-file ...` | The engine opens this pull request at Ship, checking the title and applying the labels |
 5. **Confirm with `doctor install`.** The command finds 0 shadowing binaries, meaning no other `komodo` earlier on the search path, and 0 Komodo hooks left in `~/.claude`.
 
 ```sh
@@ -12963,29 +13035,12 @@ A gap is a fact the design has not verified or a decision the owner has not made
 | <a id="g-23"></a>G-23 | Scope, enterprise | Path ownership rows in `policy.json`; a named human for other teams' paths; a widening digest in `status --metrics` | Later minor; trigger: the first repo with 2 teams or customer data | [HLD 9](hld.md#9-architecture-decisions), [HLD 11.2](hld.md#112-technical-debt) |
 | <a id="g-25"></a>G-25 | Sandbox | Whether a Docker volume per worktree beats the bind mount on copy time | Spike with G-11, phase 2 | [6.3](#63-data-model) |
 | <a id="g-26"></a>G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 | No text site |
-| <a id="g-27"></a>G-27 | Dashboard | An opt-in browser dashboard that stands in for the orchestrator: stack, `komodo ui` verb, live model changes, the "no server process" exception | Owner decision; proof of concept in `dashboard/` | [0.3](#03-package-map), [1.7](#17-invariants-and-failures) |
-| <a id="g-28"></a>G-28 | Install | How `komodo init` writes Komodo's orchestrator skills and commands into the global Claude Code setup: a Claude Code plugin, or plain files with a machine manifest | Owner decision | [1.2](#12-package-layout), [1.4](#14-interfaces), [12.1](#121-scope-and-concepts), [15.3](#153-host-cleanup-before-phase-2) |
 | <a id="g-71"></a>G-71 | Providers | `claude-cli` wire details not yet stated: working directory of the `claude` process, which stream line type is `output`, which field of the result line carries the structured answer, which field of `rate_limit_event` carries the reset time, what `--verbose` switches on, how `claude auth status --json` reports a logged-out user, and the signature of the tool host the API-link loop calls. | Spike against Claude Code 2.1.295, phase 4 | [7.3](#73-data-model), [7.5](#75-behaviour) |
 | <a id="g-72"></a>G-72 | Providers | `anthropic.go` and `openai.go` wire details not yet stated: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and which rate-limit headers give the window total that a percent needs (only `-remaining` and `-reset` are named). | Spike against both interfaces, phase 4 | [7.3](#73-data-model), [7.5](#75-behaviour) |
-| <a id="g-79"></a>G-79 | Decision reasons | Reasons not recorded in [HLD chapter 9](hld.md#9-architecture-decisions): why groups land one at a time; why an oversized brief moves to the next link and is never trimmed; why job overlap is prevented through the job's lease. Reasons the HLD gives in [Constraints](hld.md#2-constraints) that the owner confirms: a hand edit of the settings file makes every verb refuse because settings stay out of agent reach; recurring work uses the operating-system timer and not a daemon because every verb is a short process | Owner states or confirms each reason | No text site |
-| <a id="g-88"></a>G-88 | Risks | Each risk in [HLD 11.1](hld.md#111-risks) has no named owner. | Owner assigns owners | No text site |
 | <a id="g-89"></a>G-89 | Update | Design of scheduled updates run by the operating system | Later minor version design | No text site |
-| <a id="g-112"></a>G-112 | Config | How `agent.json` `limits`, the flat `limits.session_*` keys and `agents.<name>` keys combine into one session's clocks; only "the per-agent key beats the flat key" is stated. | Owner decision | [2.3](#23-data-model), [2.8](#28-config), [5.4](#54-interfaces) |
-| <a id="g-115"></a>G-115 | CLI envelope | The `report` text and `data` shape of each verb, the key that carries the run id, the result schema `help --json` prints, and the keys of the `--input` object for positional arguments | Owner decision, then a design patch to the verb table | [1.3](#13-data-model), [1.7](#17-invariants-and-failures) |
-| <a id="g-116"></a>G-116 | CLI exit codes | Which situations exit 3 rather than 1, which failures exit 4, and the `error.code` values for a pin refusal, a missing terminal, a usage error, an over-limit value, an unknown key and a type error | Owner decision | [1.3](#13-data-model), [1.4](#14-interfaces) |
-| <a id="g-117"></a>G-117 | CLI flags | Behaviour of `version --check`, `doctor --fix`, `status --backlog`, `status --all`, `skill list --agent`, `resume --from`, `abandon --keep-worktree`, `jobs run --ignore-window`, `jobs pause`, `jobs resume`, `release --notes-file` and the gate flags: whether `gate --install` also writes the version folder children start from, which git hooks `--install-hooks` installs and what they run, and what `--only <check>` selects beyond a check's name | Owner decision per flag; then 1.5 and 12.5 | [1.4](#14-interfaces), [12.5](#125-behaviour) |
-| <a id="g-119"></a>G-119 | Configuration files | Layout of `embed/defaults.json` and `embed/policy.json` and which holds hard limits; a version field in `config.json`; the line format of `config.log`, the encoding of `config.sha`, the batch id and the `--accept` row; the algorithm and input of the effective-config hash a run pins; the write order and crash behaviour of the three files; which package writes the checksum and log, since the file map says `core` and the state-kind table says the `config` verb; how the probed-model limit of an agent's `model` is checked; the states with a missing file or checksum; what "a group" means as a `--default` target | Owner decision, then a design patch to 1.3 | [0.4](#04-import-order), [1.2](#12-package-layout), [1.3](#13-data-model), [1.4](#14-interfaces), [1.5](#15-behaviour), [1.6](#16-state), [13.3](#133-data-model) |
-| <a id="g-121"></a>G-121 | CLI validate | The closest-match distance and cutoff, whether an unknown agent name is refused, pin check and repo resolution outside a git repository, which verbs the hash guard exempts, and the controlling-terminal check on native Windows | Owner decision; the Windows check proven when a Windows machine exists | [1.5](#15-behaviour) |
-| <a id="g-122"></a>G-122 | Configuration values | The 4 turn-end headings of `output.turn_end_summary`; the package that defines `CapacityProfile` and the mapping from agent weight to `effort`; command combination for a repo with 2 markers | Owner decision | [1.3](#13-data-model), [1.5](#15-behaviour), [1.8](#18-config), [5.1](#51-scope-and-concepts), [7.1](#71-scope-and-concepts), [8.8](#88-config) |
-| <a id="g-139"></a>G-139 | Release manifest, verification and release | The key names of `latest.json`, the architectures built, the asset file names, the exact bytes the ed25519 signature covers and how it is encoded; whether either embedded key may sign and how the next key rotates in; whether the updater refetches `latest.json` or reads the asset from `fresh.json`; how a binary treats a manifest layout it does not know; where the install script saves the download before it runs it; the key file's format and what `release` does when its mode is wider than 0600; where `add changelog` stores its recorded lines until the release; where the current and `next` public keys live in the source and how the `next` key is produced at the first release; the operating system and architecture pairs built; how the release is published; how the changelog is rendered from the entries `add changelog` records; what `--notes-file` supplies | Owner decision on the architecture page; then 11.3, 11.5, 12.3 and 12.5 | [1.4](#14-interfaces), [11.4](#114-interfaces), [11.5](#115-behaviour), [12.3](#123-data-model), [12.5](#125-behaviour) |
-| <a id="g-142"></a>G-142 | Gate inputs and result | How the gate recognises the Komodo repository and its refusal code; where the check fixtures live and how they load; the layout of the gate result data, the verdict wording and the error code; the comment lint rules; how docs drift finds package names in `lld.md`; what the component map names now that each LLD chapter is a subsystem; the gap tag syntax the no-silent-gaps check scans now that open items are written as TODO with a gap identifier, and how a backlog task names the gap it closes | Owner decision; then 12.3 and 12.5 | [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour), [12.7](#127-invariants-and-failures) |
+| <a id="g-121"></a>G-121 | CLI validate | Whether the `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix | Proven when a Windows machine exists | [1.5](#15-behaviour) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, then a design patch to 9.5 | [1.8](#18-config), [9.5](#95-behaviour) |
-| <a id="g-185"></a>G-185 | End-to-end fixtures | The files, tasks and acceptance items of `tg-fixture`; which local model the full run uses and the configuration that selects it; the process and the stage at which the crash check sends `kill -9`; the content of the two regression fixtures; whether the gate runs the seven checks or a person starts them; whether any check depends on an earlier one | Owner decision; then 15.1 and the contents of `testdata/fixture-repo/` | [15.1](#151-end-to-end-verification-plan) |
-| <a id="g-186"></a>G-186 | Race check | How two engines start on one group, since `run` refuses a group another run holds (chapter 1); which machine or clone the second engine runs on | Owner decision; then 15.1 and chapter 4 | [3.5](#35-behaviour), [15.1](#151-end-to-end-verification-plan) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file before the cleanup; then 15.3 | [15.3](#153-host-cleanup-before-phase-2) |
-| <a id="g-188"></a>G-188 | Cutover | The repo table that phase 9 applies: which repository files name retired verbs and the rewrite for each; the sources name it and do not list it | Owner decision; then 15.4 | [15.4](#154-cutover) |
-| <a id="g-210"></a>G-210 | Install and binary lifecycle, formats and names | The field names of `install.json`, its hash algorithm and how a settings entry is named; how a record's header and body share one file; forward-version handling; the exported names of the install, update, probe and gate functions. Install writes: how install chooses `~/.zshrc` or `~/.bashrc` and the text of the line; how the Windows user `PATH` is changed; the launchd label, cron line and Task Scheduler task name; the exact `SessionStart` hook entry; where the block goes in an `AGENTS.md` without markers and what happens with damaged markers; what a rerun does with files written before the manifest after a crash; where ownership of the binary, `PATH` line, `providers.json` and schedule entry is recorded; what `--repo-only` and `--machine-only` do outside a git repository. Lifecycle records: where the time of the last check and the count of consecutive failures are kept; the line format of `state/fresh.log`; the layout of `state/active/` and which code writes and removes its entries; how the previous version is recorded; when `komodo.exe.old` is deleted; whether `fresh.auto: false` and `CI=true` also stop the hourly fetch of `latest.json`; how the 2 minute checkpoint wait of `--restart-runs` fits the shutdown sequence's 30 second stop per agent and 60 second force-kill; the `restart` stop reason that `run.stopped` does not list | Owner decision; then 12.3 to 12.5 and chapter 2 | [12.2](#122-package-layout), [12.3](#123-data-model), [12.4](#124-interfaces), [12.5](#125-behaviour) |
-| <a id="g-240"></a>G-240 | Install | How a person adds or removes an optional install part after install, such as an AI tool, the scheduled job or the starter documents, and whether `install.json` records the selections | Owner decision | [12.8](#128-config) |
 
 **What each early gap decides**
 - **G-02:** Whether the probe can capture Claude's first `system/init` line without starting a paid model turn. It matters because every session is killed unless that line says `apiKeySource: none`, and the probe needs a reference line per CLI version. A spike in phase 4 settles it.
@@ -13008,8 +13063,6 @@ A gap is a fact the design has not verified or a decision the owner has not made
 - **G-23:** Enterprise scope: rows in `policy.json` saying which team owns which paths, a named human who must approve writes to another team's paths, and a digest of scope widenings in `status --metrics`. Later minor; triggered by the first repo with 2 teams or customer data.
 - **G-25:** Whether a Docker volume per worktree copies a large `node_modules` faster than the bind mount. It matters for Docker sandbox start time, but a volume puts files where the host sweep cannot reach them. A spike in phase 2 measures it alongside G-11.
 - **G-26:** Whether usage metrics should be split by provider family: Claude, GPT and local models. Deferred by owner decision on 2026-10-12; today `track.usage` records one set of tokens and USD per session. Nothing is designed yet.
-- **G-27:** Whether Komodo gets a browser dashboard a person can use instead of the orchestrator's verbs. It would show every stage, subsystem, agent and group on a live diagram, change an agent's model mid-run, and act on groups. Open: the front-end stack, a `komodo ui` verb run only from a terminal, whether model changes reach a running run ([Layers and write path (chapter 1)](#1-cli-and-configuration) pins config at run start), and the exception to "no server process"; a proof of concept is in `dashboard/`.
-- **G-28:** How `komodo init` ([Verbs (chapter 1)](#verbs)) puts Komodo's orchestrator skills and commands into the global Claude Code folder, while `install` places the binary and sets up the repo. It matters because `install` writes nothing under `~/.claude` ([Installer (chapter 12)](#installer)), so `init` is the only verb that does. Open: a Claude Code plugin, which Claude Code installs, names and removes itself, or plain files tracked by a new machine manifest. Its flags wait on the same answer.
 
 Rule for new gaps: no section may say "later" or "TBD", or carry a `[TODO]` tag, without a row here.
 
@@ -13120,6 +13173,19 @@ A dependency means one component calls code in another, so the second must exist
 | Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% coverage bar |
 | Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | EARS item grammar |
 | Aider repo map, https://github.com/pdavis68/RepoMapper | Repo map ranking |
+| Claude Code plugin marketplaces, https://code.claude.com/docs/en/plugin-marketplaces | A local marketplace folder that `komodo init` registers and installs |
+| Claude Code hooks, https://code.claude.com/docs/en/hooks | The `SessionStart` entry shape and its `timeout` |
+| htmx documentation, https://htmx.org/docs/ | Server-rendered dashboard pages with no build step |
+| Temporal Go SDK `SideEffect`, https://pkg.go.dev/go.temporal.io/sdk/workflow#SideEffect | A changing input recorded in history where it is used, so replay repeats it: the live model change |
+| OpenBSD signify, https://man.openbsd.org/signify | A detached ed25519 signature over the exact manifest bytes |
+| The Update Framework specification, https://theupdateframework.github.io/specification/latest/ | A current and a next key, rotated by a release the next key signs |
+| towncrier, https://towncrier.readthedocs.io/ | One changelog fragment file per change, so parallel groups never conflict |
+| rustup installation, https://rust-lang.github.io/rustup/installation/index.html | One marked `PATH` line in the shell profile, removed on uninstall |
+| Cobra `SuggestionsMinimumDistance`, https://pkg.go.dev/github.com/spf13/cobra#Command | Levenshtein distance 2 as the cutoff for the closest match |
+| Go doc comments, https://go.dev/doc/comment | The comment form the gate's comment lint checks |
+| The Not Rocket Science Rule, https://graydon2.dreamwidth.org/1597.html | Landing one change at a time with the tip checked after each |
+| GitHub CLI formatting, https://cli.github.com/manual/gh_help_formatting | One stable, typed `--json` result per command |
+| JSON Lines, https://jsonlines.org | The line format of `config.log` and `fresh.log` |
 | Aider repo map docs, https://aider.chat/docs/repomap.html | Files ranked by references, rendered as paths with indented symbols, fitted to a token budget |
 | SWE-agent agent-computer interface, https://swe-agent.com/latest/background/aci/ | Lint before a write lands: a failing planner draft writes nothing |
 | Git objects, https://git-scm.com/book/en/v2/Git-Internals-Git-Objects | Content-addressed entries under a two-hex-digit folder fan-out |

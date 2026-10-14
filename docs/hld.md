@@ -35,7 +35,7 @@ flowchart LR
 #### 1.2 Goals and Non-Goals
 
 Goals:
-- One Go binary that uses only the standard library, plus one bundled tokenizer vocabulary, and runs no server process.
+- One Go binary that uses only the standard library, plus one bundled tokenizer vocabulary, and runs no background server process.
 - Stateless workers: one fresh model session per group for the builder, the reviewer and the tester, each with private tools inside a worktree, a guard and an operating-system sandbox.
 - One verb set for a person and for the orchestrator, a model chat session that receives one structured reply per verb.
 - Three model links (the Claude command-line tool, the Anthropic programming interface, OpenAI-compatible endpoints) on four platforms (macOS, Linux, Windows Subsystem for Linux 2, native Windows).
@@ -59,7 +59,7 @@ A constraint is a locked rule that the design cannot trade away. The owner set e
 | Constraint | Consequence |
 |---|---|
 | Go, standard library only; the one exception is the tokenizer vocabulary bundled for size checks | Nothing external to download at run time; the vocabulary is one audited data file |
-| No server process | Every verb is a short process; a periodic tick replaces a daemon |
+| No server process | Every verb is a short process, except the opt-in `komodo ui` dashboard a person keeps open; a periodic tick replaces a daemon |
 | One sandbox per operating system: Seatbelt, Bubblewrap, Docker | Docker is used on native Windows only |
 | Only the config verb writes configuration | Settings stay out of agent reach |
 | Runtime state passes only through the state manager | One schema, checked before disk |
@@ -376,6 +376,9 @@ Each row names a decision, the alternative rejected, and the reason. The first t
 | The state manager runs inside each process | A separate server | The harness runs no server; atomic file writes keep processes consistent |
 | A counter and an end state on every loop | Unlimited retry with growing backoff | Unbounded retries burn tokens until someone notices |
 | Claude launched in print mode, its non-interactive run, with pinned flags | Bare mode | Bare mode never reads the subscription login |
+| Groups land on an epic one at a time | Parallel landings | A check on the epic tip after each landing names the one group that broke it |
+| An oversized brief moves to the next link | Trimming the brief | A trimmed brief drops facts the worker needs without saying so |
+| Job overlap is prevented by the job's lease | A scheduler that tracks running jobs | The lease already allows one holder per machine and survives a crash |
 
 ## 10. Quality Requirements
 
@@ -394,8 +397,8 @@ A risk is an assumption the design has not proved; a builder closes each risk wi
 
 #### 11.1 Risks
 
-- The probe may not read a Claude session's first stream line without a model turn; a tool version lacking the field fails the link (G-02).
-- The subscription window may drain faster than the per-link session limit assumes; the pool halves on a rate-limit error (G-07).
+- The probe may not read a Claude session's first stream line without a model turn; a tool version lacking the field fails the link (G-02). Owner: the technical lead.
+- The subscription window may drain faster than the per-link session limit assumes; the pool halves on a rate-limit error (G-07). Owner: the owner, who decides spend.
 
 #### 11.2 Technical Debt
 
@@ -405,17 +408,17 @@ The OpenAI path is scoped but not built (G-20), and enterprise custody, registry
 
 The owner builds phases 2 to 6 by hand in plain Claude Code sessions; from phase 7 the harness builds its own groups.
 
-| Phase | Scope |
-|---|---|
-| 1 | Design documents and the first epic |
-| 2 | Foundations: command line, state manager, configuration, sandbox, cache, backlog lint, gate core |
-| 3 | Model surface: agents, skills, rules, guardrails |
-| 4 | Model input and output: providers, tools, briefs |
-| 5 | Runtime: workspace, supervisor, observability, events |
-| 6 | Engine: engine, recovery, Check, ship |
-| 7 | Quality and scale: review, tester, scheduler, planner |
-| 8 | Edges: installer, updates, release, the docs-drift check |
-| 9 | User documents and cutover |
+| Phase | Scope | Exit proof |
+|---|---|---|
+| 1 | Design documents and the first epic | The owner approves the design |
+| 2 | Foundations: command line, state manager, configuration, sandbox, cache, backlog lint, gate core | `doctor backlog` passes on epic-1 |
+| 3 | Model surface: agents, skills, rules, guardrails | The gate decodes every agent and skill |
+| 4 | Model input and output: providers, tools, briefs | One session runs end to end |
+| 5 | Runtime: workspace, supervisor, observability, events | A session's events reach `status` |
+| 6 | Engine: engine, recovery, Check, ship | A group lands with `--stage`, Verify stubbed |
+| 7 | Quality and scale: review, tester, scheduler, planner | The harness builds its own group after `gate --install` |
+| 8 | Edges: installer, updates, release, the docs-drift check | A clean machine installs from a draft README |
+| 9 | User documents and cutover | `doctor install` finds 0 stale references |
 
 #### Open decisions
 
