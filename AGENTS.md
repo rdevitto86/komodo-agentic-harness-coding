@@ -15,7 +15,7 @@ Output that has to be re-read has failed, however correct.
 ## Design rules
 
 - **The HLD and LLD win.** Read the section before answering; never rely on memory or on the archive.
-- **The archive lives in git history.** `backups/` and `drafts/` are at commit `fdf4f61f` (`git show fdf4f61f:backups/<path>`); the retired `PLAN.md` is at commit `dee89326`. They are reference only, not a source of rules.
+- **The archive lives in git history.** `backups/` and `drafts/` are at commit `fdf4f61f` (`git show fdf4f61f:backups/<path>`); the retired `PLAN.md` is at commit `dee89326`. They are reference only, not a source of rules. Design v1 is frozen at tag `design/beta6-v1` (`git show design/beta6-v1:docs/lld.md`); the redesign lives on `feat/1.0.0-beta.6-v2`, and `feat/1.0.0-beta.6` stays at v1.
 - **Undecided design is a `[TODO]`, never an assumption.** In the HLD and LLD, an open decision is written `[TODO: <the open decision> ([G-NN](#g-nn))]`, linked to its gap register row (`lld.md#g-nn` from the HLD); never fill it with a default.
 - **Doc style:** descriptive and concise; no walls of text and no vague short labels; no acronyms in prose; no implied context.
 - **Doc edits are patches.** Change the smallest span. The HLD and LLD carry no revision history or version numbers; git history records changes. Exception: the approved subsystem-first restructure moves whole sections, as a pure-move commit followed by a rewrite commit.
