@@ -2,7 +2,7 @@
 
 ## 0. Front Matter
 
-This document is the high-level design of Komodo, a single Go program that starts model sessions as workers to plan, build, check, review and ship code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document, which is a draft awaiting sign-off. Every open item is a TODO placeholder that names its gap register rows, such as G-NN.
+This document is the high-level design of Komodo, a single Go program that starts model sessions as workers to plan, build, check, review and ship code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document, which is a draft awaiting sign-off. The design is complete for beta 6: a default that a spike or measurement still confirms names its gap register row, such as G-NN.
 
 ## 1. Introduction and Goals
 
@@ -15,7 +15,7 @@ Komodo is one Go binary that turns a goal into reviewed, merged code. The binary
 flowchart LR
   BL[("Backlog<br><small>epic · task groups</small>")]:::store
   I["Intake<br><small>lint · lease · worktree</small>"]
-  B["Build<br><small>one builder per task</small>"]:::core
+  B["Build<br><small>one builder per group</small>"]:::core
   C["Check<br><small>tests and scans · no tokens</small>"]
   V["Verify<br><small>reviewer + tester</small>"]:::core
   SH["Ship<br><small>land on epic branch</small>"]
@@ -101,7 +101,7 @@ flowchart LR
 
 ## 4. Solution Strategy
 
-Each quality goal has a mechanism, and the engine implements every mechanism. No model is trusted to behave.
+Each quality goal has a mechanism, and the harness implements every mechanism. No model is trusted to behave.
 
 | Goal | Strategy |
 |---|---|
@@ -115,7 +115,7 @@ Design principles: **mostly mechanical** (code prevents what code can), **never 
 
 ## 5. Building Blocks
 
-The harness, the `komodo` binary, has 13 subsystems that each have one job. Subsection 5.1 shows the layering, and 5.2 to 5.14 describe one subsystem each. The [Low-Level Design](lld.md) holds one chapter per subsystem. "Engine" means the orchestration engine of 5.4; the Go package `engine` is wider ([Appendix A](#appendix-a-traceability)).
+The harness, the `komodo` binary, has 13 subsystems that each have one job. Subsection 5.1 shows the layering, and 5.2 to 5.14 describe one subsystem each. The [Low-Level Design](lld.md) holds one chapter per subsystem. "Engine" means the `internal/engine` package of 5.4 that runs groups through their stages; "harness" means the whole program ([Appendix A](#appendix-a-traceability)).
 
 **📐 Where the 13 subsystems sit, by layer**
 ```mermaid
@@ -164,7 +164,7 @@ flowchart TB
 
 #### 5.1 Layers and Import Order
 
-The harness has nine groups: eight layers that each hold parts sharing one concern, and the state manager as a pillar under all of them. One import rule orders the 12 source folders, from top to bottom: cli, engine, quality, host, repo, provider, tools, ops, agent, safety, state, core. A folder imports only folders below it.
+The harness has nine groups: eight layers that each hold parts sharing one concern, and the state manager as a pillar under all of them. One import rule orders the source folders into layers, and a folder imports only folders below it ([LLD 0.4](lld.md#04-import-order)).
 
 #### 5.2 CLI and Configuration
 
@@ -184,7 +184,7 @@ A workspace is a private git checkout where one group is built, and a lease is t
 
 #### 5.6 Sessions, Agents and Briefs
 
-A session is one fresh model conversation for one task, an agent is its role, and a brief is its prompt. The subsystem owns the supervisor (spawn, watch, nudge, stop, resume), the registry of seven agent roles and the brief builder. It talks to providers, tools, skills and the engine. Every size check before sending counts tokens with one tokenizer bundled in the binary; spending comes from the provider's reported usage. Detail: [LLD chapter 5](lld.md#5-sessions-agents-and-briefs).
+A session is one fresh model conversation for one agent's job, such as one builder building a whole task group; an agent is its role, and a brief is its prompt. The subsystem owns the supervisor (spawn, watch, nudge, stop, resume), the registry of seven agent roles and the brief builder. It talks to providers, tools, skills and the engine. Every size check before sending counts tokens with one tokenizer bundled in the binary; spending comes from the provider's reported usage. Detail: [LLD chapter 5](lld.md#5-sessions-agents-and-briefs).
 
 #### 5.7 Tools, Guard and Sandbox
 
@@ -200,7 +200,7 @@ A skill is a document of standards placed before a session, and rules instruct t
 
 #### 5.10 Check, Review, Tester and Recovery
 
-After a builder finishes, Check proves the work with ordinary tools at zero model cost, then Verify runs a reviewer and a blind tester side by side. The subsystem owns the proofs, scope requests, budgets and the failure table, which gives every failure a detector, action, bound and final state. A group's time fits one builder's limits, and the group may ask once for 100% more. The wall is 60 minutes, and the engine grants the one extension itself the first time it runs out. Detail: [LLD chapter 9](lld.md#9-check-review-tester-and-recovery).
+After a builder finishes, Check proves the work with ordinary tools at zero model cost, then Verify runs a reviewer and a blind tester side by side. The subsystem owns the proofs, scope requests, budgets and the failure table, which gives every failure a detector, action, bound and final state. A group's time fits one builder's limits, and the engine grants one extension itself the first time it runs out. Detail: [LLD chapter 9](lld.md#9-check-review-tester-and-recovery).
 
 #### 5.11 Scheduler, Cache and Observability
 
@@ -216,7 +216,7 @@ Install puts the binary on a machine, probes the providers and writes the orches
 
 #### 5.14 State Manager
 
-The state manager is the one piece of code that reads and writes runtime state: events, snapshots, session files, leases, queue items, timers and ledgers. The subsystem owns one schema, four write primitives (append, replace, claim, remove) and group state, and it quarantines bad records. Settings, cache, git references and binaries stay with their owners. Detail: [LLD chapter 13](lld.md#13-state-manager).
+The state manager is the one piece of code that reads and writes runtime state: events, snapshots, session files, leases, queue items, timers and ledgers. The subsystem owns one schema, a small set of atomic write primitives and group state, and it quarantines bad records. Settings, cache, git references and binaries stay with their owners. Detail: [LLD chapter 13](lld.md#13-state-manager).
 
 ## 6. Runtime
 
@@ -250,7 +250,7 @@ sequenceDiagram
 2. The loop appends the event to group state, which checks the schema and forces the line to disk.
 3. The pure decision function returns a new state, actions and follow-on events, and ignores stale events.
 4. The loop appends the follow-ons and runs each action, recorded as started and then done under a key that makes a repeat harmless.
-5. The loop snapshots on an interval, and three subscribers (ledger, wake file, live status) read each event in order.
+5. The loop snapshots on an interval, and subscribers such as the ledger and live status read each event in order.
 
 #### 6.2 Group Lifecycle
 
@@ -268,8 +268,8 @@ sequenceDiagram
   participant S as Ship
   E->>W: lint, lease, worktree
   W-->>E: ready
+  E->>B: one fresh session for the group
   loop each task
-    E->>B: fresh session
     B-->>E: result, commit
   end
   E->>C: rerun all proofs
@@ -287,11 +287,11 @@ sequenceDiagram
   end
 ```
 
-1. The engine takes the group's lease as it picks the group from the queue; Intake then lints the group, cuts a worktree from the epic branch tip and runs the setup command, and the first session takes a pool slot after Intake.
+1. The engine takes the group's lease as it picks the group from the queue; Intake then lints the group, cuts a worktree from the epic branch tip and runs the setup command.
 2. Build starts one fresh builder session for the whole group; it works through the tasks in order, and after each task Go code reruns its completion command and commits to the hidden reference.
 3. Check reruns every proof, such as completion commands, scope, secrets scan, affected tests and whole-repository coverage, at zero model cost.
-4. Verify runs the reviewer and the tester on the same commit; a failed Check or a verified blocking finding returns the task to its builder.
-5. Ship merges the epic branch into the group, reruns Check, lands the group with the fence and checks the epic branch tip; a failed tip check returns the group to Build.
+4. Verify runs the reviewer and the tester on the same commit; a failed Check or a verified blocking finding returns the group to Build, where its builder resumes at the reopened task.
+5. Ship lands the group on the epic branch and checks the epic tip; a failed tip check returns the group to Build.
 
 #### 6.3 Pause, Block and Resume
 
@@ -310,9 +310,9 @@ Planning turns a goal into a linted backlog.
 
 A crash loses at most one model turn and no committed edit, and stays inside the crashed group.
 
-1. If the engine dies or stops its heartbeat, the parent guard kills the sessions, commits unsaved files as work in progress and frees the leases.
-2. If the parent guard also died, the startup sweep at the next engine start kills orphans, frees dead leases and requeues unleased items.
-3. The next engine loads each group's snapshot, replays later events (an event line cut short is dropped) and replays actions recorded as started but not done under their keys, so none happens twice.
+1. If the `komodo run` process dies or stops its heartbeat, the parent guard kills the sessions, commits unsaved files as work in progress and frees the leases.
+2. If the parent guard also died, the startup sweep at the next `komodo run` start kills orphans, frees dead leases and requeues unleased items.
+3. The next run rebuilds each group from its saved state, so no recorded action happens twice.
 
 ## 7. Deployment
 
@@ -324,11 +324,11 @@ The sandbox is Seatbelt on macOS, Bubblewrap on Linux and Windows Subsystem for 
 
 #### 7.2 One Machine, Many Repositories
 
-One engine runs per active run. Engines of different repositories meet only through files in the Komodo home folder (binaries, configuration, session pool, work queue, leases, worktrees); each repository keeps group state and cache in its git common directory.
+One `komodo run` process runs per active run. Runs of different repositories meet only through files in the Komodo home folder; each repository keeps group state and cache in its git common directory.
 
 #### 7.3 Install and Update
 
-Install puts the binary on the machine and the Komodo block into a repository by following a manifest, so a rerun changes nothing and hand edits survive. Updates download in the background into versioned binary folders, so a running engine keeps its own version.
+Install puts the binary on the machine and the Komodo block into a repository by following a manifest, so a rerun changes nothing and hand edits survive. Updates download in the background into versioned binary folders, so a running process keeps the binary version it started with.
 
 #### 7.4 Release
 
@@ -344,7 +344,7 @@ Committed files live in the repository: the rules file with the Komodo block and
 
 #### 8.2 Models and Cost
 
-Each agent has a weight (heavy: planner, architect, reviewer; standard: builder, researcher; light: tester, scout) and a fixed chain of links, with the subscription link first. A mechanical billing check that fails closed sets the cost class (subscription, free or paid) before every session. Komodo adds no cost cap; dollars are a warning-only metric.
+Each agent has a model weight ([LLD chapter 7](lld.md#7-providers-and-http)) and a fixed chain of links, with the subscription link first. A mechanical billing check that fails closed sets the cost class (subscription, free or paid) before every session. Komodo adds no cost cap; dollars are a warning-only metric.
 
 #### 8.3 Security
 
@@ -356,7 +356,7 @@ Four gates stand between build and landing: an 80% coverage floor over the whole
 
 #### 8.5 Operations
 
-The tick is one repeatable engine step, so no daemon runs. Every failure has a detector, an action, a bound and a final state. Status shows the pool, stages, budgets and blocks.
+The tick is one repeatable `komodo jobs tick` run, so no daemon runs. Every failure has a detector, an action, a bound and a final state. Status shows the pool, stages, budgets and blocks.
 
 ## 9. Architecture Decisions
 
@@ -371,7 +371,7 @@ Each row names a decision, the alternative rejected, and the reason. The first t
 | Only the engine emits events | Sessions reporting progress | A stage moves only on evidence the engine produced |
 | Epochs stamped on events | Applying every event | A cancelled session's late result could move a stage twice |
 | One loop per group owns its state | Shared state with locks | No locks to get wrong, and a crash stays in one group |
-| A lease together with a fence number | A lease alone | A stalled holder could overwrite its successor; every save checks the fence in the same git transaction, and every push re-reads the fence file first |
+| A lease together with a fence number | A lease alone | A stalled holder could overwrite its successor; the fence refuses its writes |
 | One machine-wide session pool | Per-repository lanes | Provider quotas and link limits are machine-wide |
 | The state manager runs inside each process | A separate server | The harness runs no server; atomic file writes keep processes consistent |
 | A counter and an end state on every loop | Unlimited retry with growing backoff | Unbounded retries burn tokens until someone notices |
@@ -387,9 +387,9 @@ A quality requirement is a scenario with a number that a test can pass or fail.
 | Attribute | Scenario | Measure |
 |---|---|---|
 | Performance | Help, version or a configuration read | Target under 50 milliseconds |
-| Durability | The engine is killed mid-run, then resumed | No paid session repeats; at most one model turn is lost |
+| Durability | The `komodo run` process is killed mid-run, then resumed | No paid session repeats; at most one model turn is lost |
 | Safety | A command writes outside the worktree or reaches a public address | The sandbox refuses it on every platform |
-| Cost | 20 sessions on the Anthropic programming interface | At least 50% of prompt tokens come from the provider cache [TODO: the fixture that proves it needs real paid sessions ([G-17](lld.md#g-17))] |
+| Cost | 20 sessions on the Anthropic programming interface | At least 50% of prompt tokens come from the provider cache; verified by [G-17](lld.md#g-17) in phase 7 |
 
 ## 11. Risks, Debt and Roadmap
 
@@ -398,7 +398,7 @@ A risk is an assumption the design has not proved; a builder closes each risk wi
 #### 11.1 Risks
 
 - The probe may not read a Claude session's first stream line without a model turn; a tool version lacking the field fails the link (G-02). Owner: the technical lead.
-- The subscription window may drain faster than the per-link session limit assumes; the pool halves on a rate-limit error (G-07). Owner: the owner, who decides spend.
+- The subscription window may drain faster than the per-link session limit assumes; the pool shrinks on a rate-limit error (G-07). Owner: the owner, who decides spend.
 
 #### 11.2 Technical Debt
 
@@ -422,7 +422,15 @@ The owner builds phases 2 to 6 by hand in plain Claude Code sessions; from phase
 
 #### Open decisions
 
-These 2 open items shape the architecture most; the Low-Level Design gap register holds the rest.
+None: the design is complete for beta 6. These spikes confirm defaults the design already states; each is a [gap register](lld.md#appendix-b-gap-register) row:
+
+- Claude wire details and probe capture: [G-02](lld.md#g-02), [G-71](lld.md#g-71), [G-72](lld.md#g-72), phase 4.
+- Local model size and parallel sessions: [G-03](lld.md#g-03), [G-04](lld.md#g-04), phase 4.
+- Sandbox copies and loopback: [G-08](lld.md#g-08) to [G-12](lld.md#g-12), [G-25](lld.md#g-25), phase 2.
+- Steering phrases: [G-13](lld.md#g-13), phase 3.
+- Timing and coverage: [G-19](lld.md#g-19), [G-169](lld.md#g-169), phase 6.
+- Cache hits, subscription window, lens rules, repo map: [G-17](lld.md#g-17), [G-07](lld.md#g-07), [G-16](lld.md#g-16), [G-18](lld.md#g-18), phase 7.
+- Host cleanup: [G-187](lld.md#g-187), phase 1; Windows console: [G-121](lld.md#g-121).
 
 
 ## 12. Glossary
@@ -434,15 +442,15 @@ These 2 open items shape the architecture most; the Low-Level Design gap registe
 | Orchestrator | A model chat session that drives the harness by verbs and never edits code |
 | Engine | The package that runs groups through their stages (`internal/engine`); never the whole program |
 | Agent | A model role with private tools |
-| Session | One fresh model conversation for one task |
+| Session | One fresh model conversation for one agent's job; a builder session builds a whole task group |
 | Brief | The prompt that a worker receives |
 | Epic, group, task | An epic holds task groups; a group holds a bounded set of tasks |
 | Stage | One of Intake, Build, Check, Verify and Ship |
 | Paused, Blocked | Holding states: waiting for a provider reset, or for a person |
 | Check, Verify | Check reruns proofs at zero model cost; Verify has the reviewer and tester judge one commit |
 | Finding | A reviewer claim with a quoted evidence line that Go code verifies |
-| Tick | One repeatable engine step fired by the operating-system scheduler |
-| Parent guard | The parent process that cleans up if the engine dies |
+| Tick | One repeatable `komodo jobs tick` run fired by the operating-system scheduler |
+| Parent guard | The parent process that cleans up if the `komodo run` process dies |
 | Event | A typed fact that the engine records before applying it |
 | Group loop | The engine's goroutine, a lightweight Go thread, for one group |
 | Decision function | The pure function from a state and an event to a new state and actions |
