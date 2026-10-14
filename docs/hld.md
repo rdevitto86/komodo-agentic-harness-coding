@@ -168,7 +168,7 @@ The harness has nine groups: eight layers that each hold parts sharing one conce
 
 #### 5.2 CLI and Configuration
 
-The command line is the only way to drive Komodo. Every verb parses, validates, resolves, dispatches and renders, then returns one structured reply and one of five exit codes. The subsystem owns the verb table and the settings (defaults, machine file, hard limits), and calls every other subsystem. [TODO: whether the init verb ships in this release ([G-222](lld.md#g-222))] Detail: [LLD chapter 1](lld.md#1-cli-and-configuration).
+The command line is the only way to drive Komodo. Every verb parses, validates, resolves, dispatches and renders, then returns one structured reply and one of five exit codes. The subsystem owns the verb table and the settings (defaults, machine file, hard limits), and calls every other subsystem. Detail: [LLD chapter 1](lld.md#1-cli-and-configuration).
 
 #### 5.3 Event Spine and State Machine
 
@@ -200,7 +200,7 @@ A skill is a document of standards placed before a session, and rules instruct t
 
 #### 5.10 Check, Review, Tester and Recovery
 
-After a builder finishes, Check proves the work with ordinary tools at zero model cost, then Verify runs a reviewer and a blind tester side by side. The subsystem owns the proofs, scope requests, budgets and the failure table, which gives every failure a detector, action, bound and final state. [TODO: the hard cap on a group's wall-clock time ([G-77](lld.md#g-77))] Detail: [LLD chapter 9](lld.md#9-check-review-tester-and-recovery).
+After a builder finishes, Check proves the work with ordinary tools at zero model cost, then Verify runs a reviewer and a blind tester side by side. The subsystem owns the proofs, scope requests, budgets and the failure table, which gives every failure a detector, action, bound and final state. A group's time fits one builder's limits, and the group may ask once for 100% more. [TODO: the group's wall time and how the extension is asked for ([G-238](lld.md#g-238))] Detail: [LLD chapter 9](lld.md#9-check-review-tester-and-recovery).
 
 #### 5.11 Scheduler, Cache and Observability
 
@@ -208,7 +208,7 @@ The scheduler runs agents on a timer from job templates, one file per recurring 
 
 #### 5.12 Backlog, Planning, Ship and Release
 
-The backlog is the epics, task groups and tasks that a repository holds. The subsystem owns the backlog grammar and lint, the planner flow, the dependency graph, ship (lands finished groups and opens pull requests at zero model cost) and release, which a person cuts. It talks to the engine and GitHub. Detail: [LLD chapter 11](lld.md#11-backlog-planning-ship-and-release).
+The backlog is the epics, task groups and tasks that a repository holds. The subsystem owns the backlog grammar and lint, the planner flow, the dependency graph, ship (lands finished groups and opens pull requests at zero model cost) and release, which a person cuts. Agents never change a task list or a backlog file; a blocker against the task list goes to the orchestrator or a person. It talks to the engine and GitHub. Detail: [LLD chapter 11](lld.md#11-backlog-planning-ship-and-release).
 
 #### 5.13 Install, Binary Lifecycle and Gate
 
@@ -216,7 +216,7 @@ Install puts the binary on a machine, probes the providers and writes the orches
 
 #### 5.14 State Manager
 
-The state manager is the one piece of code that reads and writes runtime state: events, snapshots, session files, leases, queue items, timers and ledgers. The subsystem owns one schema, four write primitives (append, replace, claim, remove) and group state, and it quarantines bad records. Settings, cache, git references and binaries stay with their owners. [TODO: whether the owner confirms the six data kinds kept outside the schema and quarantine without repair ([G-197](lld.md#g-197))] Detail: [LLD chapter 13](lld.md#13-state-manager).
+The state manager is the one piece of code that reads and writes runtime state: events, snapshots, session files, leases, queue items, timers and ledgers. The subsystem owns one schema, four write primitives (append, replace, claim, remove) and group state, and it quarantines bad records. Settings, cache, git references and binaries stay with their owners. Detail: [LLD chapter 13](lld.md#13-state-manager).
 
 ## 6. Runtime
 
@@ -289,7 +289,7 @@ sequenceDiagram
 
 1. Intake lints the group, takes a lease and a worktree cut from the epic branch tip, and runs the setup command. [TODO: the order of the pool slot, the lease and Intake ([G-38](lld.md#g-38))]
 2. Build starts one fresh builder session per task; Go code reruns each completion command and commits to the hidden reference.
-3. Check reruns every proof, such as completion commands, scope, secrets scan, affected tests and changed-line coverage, at zero model cost.
+3. Check reruns every proof, such as completion commands, scope, secrets scan, affected tests and whole-repository coverage, at zero model cost.
 4. Verify runs the reviewer and the tester on the same commit; a failed Check or a verified blocking finding returns the task to its builder.
 5. Ship lands the group with the fence and checks the epic branch tip. [TODO: the stage moves the transition table lacks, such as merging the epic branch before landing ([G-31](lld.md#g-31))]
 
@@ -304,7 +304,7 @@ Planning turns a goal into a linted backlog.
 1. The plan verb takes goal text or specification documents, and the backlog subsystem gives the planner a repository map, a ranked list of the code's functions and types.
 2. The planner drafts groups, file patterns, dependencies, tasks and acceptance items.
 3. Go code lints the draft; failures return to the same planner session a bounded number of times, then the plan blocks.
-4. A passing draft is written, one folder per group, and groups with overlapping patterns must be ordered. [TODO: whether planning runs in two passes with a lint between them ([G-96](lld.md#g-96))]
+4. A passing draft is written, one folder per group, and groups with overlapping patterns must be ordered.
 
 #### 6.5 Crash Recovery
 
@@ -328,7 +328,7 @@ One engine runs per active run. Engines of different repositories meet only thro
 
 #### 7.3 Install and Update
 
-Install puts the binary on the machine and the Komodo block into a repository by following a manifest, so a rerun changes nothing and hand edits survive. Updates download in the background into versioned binary folders, so a running engine keeps its own version. [TODO: the update behaviours of hot swap, check points, restart window and prerelease flag ([G-98](lld.md#g-98))]
+Install puts the binary on the machine and the Komodo block into a repository by following a manifest, so a rerun changes nothing and hand edits survive. Updates download in the background into versioned binary folders, so a running engine keeps its own version.
 
 #### 7.4 Release
 
@@ -352,7 +352,7 @@ Three fences hold every worker. The guard checks every tool call before it runs,
 
 #### 8.4 Quality Gates
 
-Four gates stand between build and landing: a changed-line coverage floor, a rerun of every completion command, tests of every affected package against a baseline, and judgement by the blind tester. The first three spend no model tokens. Separately, a reviewer finding blocks only when Go code finds its quoted line. [TODO: whether the coverage floor blocks groups in languages other than Go ([G-92](lld.md#g-92))]
+Four gates stand between build and landing: an 80% coverage floor over the whole repository in every language, a rerun of every completion command, tests of every affected package against a baseline, and judgement by the blind tester. The first three spend no model tokens. Separately, a reviewer finding blocks only when Go code finds its quoted line.
 
 #### 8.5 Operations
 
