@@ -8,7 +8,7 @@ This document is the high-level design of Komodo, a single Go program that start
 
 #### 1.1 Purpose
 
-Komodo is one Go binary that turns a goal into reviewed, merged code. The binary plans the work as a backlog, builds each task in a fresh model session, proves the result with mechanical checks and independent review, and lands the result on an epic branch. A person merges only the final epic pull request.
+Komodo is one Go binary that turns a goal into reviewed, merged code. The binary plans the work as a backlog, builds each task group in one fresh builder session that commits after each task, proves the result with mechanical checks and independent review, and lands the result on an epic branch. A person merges only the final epic pull request.
 
 **📐 How work moves from backlog to merged code**
 ```mermaid
@@ -36,7 +36,7 @@ flowchart LR
 
 Goals:
 - One Go binary that uses only the standard library and runs no server process.
-- Stateless workers: one fresh model session per task, each with private tools inside a worktree, a guard and an operating-system sandbox.
+- Stateless workers: one fresh model session per group for the builder, the reviewer and the tester, each with private tools inside a worktree, a guard and an operating-system sandbox.
 - One verb set for a person and for the orchestrator, a model chat session that receives one structured reply per verb.
 - Three model links (the Claude command-line tool, the Anthropic programming interface, OpenAI-compatible endpoints) on four platforms (macOS, Linux, Windows Subsystem for Linux 2, native Windows).
 
@@ -180,7 +180,7 @@ The engine runs task groups: it starts sessions, moves each group through its st
 
 #### 5.5 Workspace and Leases
 
-A workspace is a private git checkout where one group is built, and a lease is the lock file naming the run that owns the group. The subsystem owns the worktree, the lease, the fence number that rises on every take or takeover, and the hidden reference that saves progress and is never pushed. It talks to git and the state manager. [TODO: which subsystem owns git writes ([G-212](lld.md#g-212))] Detail: [LLD chapter 4](lld.md#4-workspace-and-leases).
+A workspace is a private git checkout where one group is built, and a lease is the lock file naming the run that owns the group. The subsystem owns the worktree, the lease, the fence number that rises on every take or takeover, and the hidden reference that saves progress and is never pushed. It talks to git through Ship's git wrapper and to the state manager. Detail: [LLD chapter 4](lld.md#4-workspace-and-leases).
 
 #### 5.6 Sessions, Agents and Briefs
 
@@ -208,7 +208,7 @@ The scheduler runs agents on a timer from job templates, one file per recurring 
 
 #### 5.12 Backlog, Planning, Ship and Release
 
-The backlog is the epics, task groups and tasks that a repository holds. The subsystem owns the backlog grammar and lint, the planner flow, the dependency graph, ship (lands finished groups and opens pull requests at zero model cost) and release, which a person cuts. Agents never change a task list or a backlog file; a blocker against the task list goes to the orchestrator or a person. It talks to the engine and GitHub. Detail: [LLD chapter 11](lld.md#11-backlog-planning-ship-and-release).
+The backlog is the epics, task groups and tasks that a repository holds. The subsystem owns the backlog grammar and lint, the planner flow, the dependency graph, ship (lands finished groups and opens pull requests at zero model cost) and release, which a person cuts. Agents never change a task list or a backlog file; a blocker against the task list goes to the orchestrator or a person. It owns every git write: one git wrapper holds the no-force and never-main rules, and the workspace, Build, the parent guard and the engine call it to write; read-only git commands stay outside it. It talks to the engine and GitHub. Detail: [LLD chapter 11](lld.md#11-backlog-planning-ship-and-release).
 
 #### 5.13 Install, Binary Lifecycle and Gate
 
@@ -288,10 +288,10 @@ sequenceDiagram
 ```
 
 1. Intake lints the group, takes a lease and a worktree cut from the epic branch tip, and runs the setup command. [TODO: the order of the pool slot, the lease and Intake ([G-38](lld.md#g-38))]
-2. Build starts one fresh builder session per task; Go code reruns each completion command and commits to the hidden reference.
+2. Build starts one fresh builder session for the whole group; it works through the tasks in order, and after each task Go code reruns its completion command and commits to the hidden reference.
 3. Check reruns every proof, such as completion commands, scope, secrets scan, affected tests and whole-repository coverage, at zero model cost.
 4. Verify runs the reviewer and the tester on the same commit; a failed Check or a verified blocking finding returns the task to its builder.
-5. Ship lands the group with the fence and checks the epic branch tip. [TODO: the stage moves the transition table lacks, such as merging the epic branch before landing ([G-31](lld.md#g-31))]
+5. Ship merges the epic branch into the group, reruns Check, lands the group with the fence and checks the epic branch tip; a failed tip check returns the group to Build.
 
 #### 6.3 Pause, Block and Resume
 
@@ -371,7 +371,7 @@ Each row names a decision, the alternative rejected, and the reason. The first t
 | Only the engine emits events | Sessions reporting progress | A stage moves only on evidence the engine produced |
 | Epochs stamped on events | Applying every event | A cancelled session's late result could move a stage twice |
 | One loop per group owns its state | Shared state with locks | No locks to get wrong, and a crash stays in one group |
-| A lease together with a fence number | A lease alone | A stalled holder could overwrite its successor; what checks the fence is open (G-61) |
+| A lease together with a fence number | A lease alone | A stalled holder could overwrite its successor; every save checks the fence in the same git transaction, and every push re-reads the fence file first |
 | One machine-wide session pool | Per-repository lanes | Provider quotas and link limits are machine-wide |
 | The state manager runs inside each process | A separate server | The harness runs no server; atomic file writes keep processes consistent |
 | A counter and an end state on every loop | Unlimited retry with growing backoff | Unbounded retries burn tokens until someone notices |
@@ -419,10 +419,8 @@ The owner builds phases 2 to 6 by hand in plain Claude Code sessions; from phase
 
 #### Open decisions
 
-These 10 open items shape the architecture most; the Low-Level Design gap register holds the rest.
+These 8 open items shape the architecture most; the Low-Level Design gap register holds the rest.
 
-- [TODO: which subsystem owns git writes ([G-212](lld.md#g-212))]
-- [TODO: what checks the fence before every git write ([G-61](lld.md#g-61))]
 - [TODO: the shape of an agent's provider chain ([G-69](lld.md#g-69))]
 - [TODO: how machine-shared files such as the quota file are locked ([G-74](lld.md#g-74))]
 - [TODO: how tool server events reach the engine ([G-42](lld.md#g-42))]
@@ -456,8 +454,8 @@ These 10 open items shape the architecture most; the Low-Level Design gap regist
 | State manager | The only code that reads or writes runtime state |
 | Group state | A group's events, snapshots and replay as one unit |
 | Epoch | An integer that rises on each stage entry; older events are stale |
-| Lease | A per-group lock file held until landing or abandon |
-| Fence | A rising integer beside the lease, meant to stop a stalled holder's git writes (G-61) |
+| Lease | A per-group lock file held until the epic branch check passes after landing, or abandon |
+| Fence | A rising integer beside the lease that refuses a stalled holder's git writes |
 | Gap | A fact not yet verified or a decision not yet made, tracked as G-NN |
 
 ---
