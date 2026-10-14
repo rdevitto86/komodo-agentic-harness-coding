@@ -6896,7 +6896,7 @@ var funcs template.FuncMap // keys: code, n, plural, dur, path, table
 | `plural(i int64, one, many string) string` | `one` when `i` is 1, else `many` |
 | `dur(d time.Duration) string` | The two largest units, such as `1h 5m` or `42s` |
 | `path(p Lit) string` | A repository-relative slash path as a code span; over 45 characters, middle folders become `…` |
-| `table(t Table) string` | A Markdown table with the row and cell limits of [Limiting tables](#limiting-tables-and-unlisted-cases) |
+| `table(t Table) string` | A Markdown table with the row and cell limits of [Limiting tables](#85-behaviour) |
 
 **Files per profile.** `embed/output/{adhd,standard}/` each hold `<name>.tmpl` and `<name>.golden` for every template name; a golden file is `embed/output/<profile>/<name>.golden`. The profile is fixed per machine; no repo setting or flag changes a template.
 
