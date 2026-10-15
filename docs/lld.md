@@ -2745,7 +2745,7 @@ Subtypes that other chapters define, with the chapter that owns the data body.
 |---|---|---|
 | `run-status` | `group.approved`, `publish.done`, `pr.opened` | [15. Commit Handler](#15-commit-handler) |
 | `run-status` | `cleanup.start`, `cleanup.done`, `group.discarded` | [16. Cleanup Handler](#16-cleanup-handler) |
-| `run-status` | `group.continued`, `group.done`, `group.closed`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
+| `run-status` | `group.done`, `group.closed`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
 | `run-status` | `sandbox.fallback`, `tool.outside` | [11. Task Manager](#11-task-manager) |
 | `run-status` | `epic.paused`, `epic.resumed` | [15. Commit Handler](#15-commit-handler) |
 | `run-failure` | `stalled` | [7. Runtime Manager](#7-runtime-manager) |
@@ -2868,6 +2868,14 @@ type GroupResumed struct {
 
 // EventKey binds GroupResumed to run-status / group.resumed.
 func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} }
+
+// GroupDone is the data of run-status / group.done: how a group ended.
+type GroupDone struct {
+	Outcome string `json:"outcome"` // complete, abandoned or lost
+}
+
+// EventKey binds GroupDone to run-status / group.done.
+func (GroupDone) EventKey() Key { return Key{TypeRunStatus, "group.done"} }
 
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
@@ -5538,7 +5546,7 @@ The Runtime Manager publishes with the shape every event has: `type`, `subtype`,
 | Type | Subtype | Published when |
 |---|---|---|
 | `run-status` | `stage.enter` | A group enters a stage |
-| `run-status` | `group.paused`, `group.resumed`, `group.continued` | A group pauses; a paused or blocked group leaves that state; a blocked group continues |
+| `run-status` | `group.paused`, `group.resumed` | A group pauses; a paused or blocked group leaves that state |
 | `run-failure` | `group.blocked` | A group blocks; `data.reason` names why |
 | `run-status` | `group.done` | A group reaches Done |
 | `run-status` | `session.start`, `session.end`, `session.resume-lost` | A session starts or ends; a handle failed and a fresh session replaced it |
@@ -5775,7 +5783,7 @@ A `wall` block is answered the same way: `--approve` grants more time and resets
 | `budget` | `TokensUsed` to 0 | [TODO: whether reaching the group token cap blocks the group ([G-246](#g-246))] |
 | a `spending` pause | `Pause` cleared | Never; the group returns to `Prior` and the Resource Manager pauses it again if the ceiling still holds |
 
-A continue that is accepted returns the group to `Prior`, raises the epoch, enters the stage and publishes `group.resumed` and `group.continued`. A continue that matches nothing publishes `request.refused` with the reason, which wakes a waiting orchestrator.
+A continue that is accepted returns the group to `Prior`, raises the epoch, enters the stage and publishes `group.resumed`. A continue that matches nothing publishes `request.refused` with the reason, which wakes a waiting orchestrator.
 
 `run-continue` with no group continues every Paused and Blocked group of the run. A group in a working stage ignores it.
 
@@ -5936,7 +5944,7 @@ type Transition struct {
 | 10 | Paused | `timer.due` | Reason is not `pause_timeout` | `Prior` | Same epoch; orders `enter_stage` from `Resume` and orders owed restarts; emits `group.resumed` |
 | 11 | Paused | `timer.due` reason `pause_timeout` | `Pause.Since` plus `limits.pause_max_min` reached, and `Pause.Cause` is `provider` | Blocked | Orders `cancel` for a live sibling; the saved work is kept; emits `group.blocked` |
 | 12 | Paused | `continue` | Before the timer | `Prior` | As row 10, with `group.resumed`; a refused attempt re-pauses by row 9 with `Since` kept |
-| 13 | Blocked | `continue` | The reason's reset rule is satisfied | `Prior` | Reset per the table in 7.5; Epoch + 1; emits `group.resumed`, `stage.enter`, `group.continued` |
+| 13 | Blocked | `continue` | The reason's reset rule is satisfied | `Prior` | Reset per the table in 7.5; Epoch + 1; emits `group.resumed`, `stage.enter` |
 | 14 | Blocked | `scope.answer` | `Block.Reason` is `needs_scope`, or `wall` with approval | Build | Approve adds paths to `ScopeAdded`, or resets the working time for `wall`; orders `scope` and `enter_stage` from `Resume`; Epoch + 1; emits `group.resumed` |
 | 15 | Any working stage, Paused | Any input in the block rows | See Block rows | Blocked | `Prior` = stage; orders `cancel` for every live session; `Blocks[reason]` + 1; emits `group.blocked` |
 | 16 | Any stage but Done | `lease.lost` | Another process holds the group | Done | `Outcome` lost; orders `cancel`; frees nothing, because the lease belongs to the other holder |
@@ -13341,7 +13349,7 @@ The Service writes the trimmed `sessions.jsonl` to a temporary name and renames 
 - Opening a log whose last byte is not a newline writes a newline first, so a new line never joins a torn one.
 - When the context ends, the loop finishes the event in hand, records what is still queued, then writes the figures.
 - `Rebuild` replays outside the lock and swaps the new figures in; events handled during the replay are counted by the next `Rebuild`.
-- The body of `group.done` is owned by the Runtime Manager; the Service reads its `outcome` field.
+- The Service reads the `outcome` field of `group.done`'s `GroupDone` body.
 
 ### 18.6 State
 

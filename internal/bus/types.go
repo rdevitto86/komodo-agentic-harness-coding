@@ -100,6 +100,7 @@ func init() {
 		func() Payload { return &RunStopped{} },
 		func() Payload { return &GroupPaused{} },
 		func() Payload { return &GroupResumed{} },
+		func() Payload { return &GroupDone{} },
 		func() Payload { return &GroupBlocked{} },
 		func() Payload { return &LeaseLost{} },
 		func() Payload { return &StageEnter{} },

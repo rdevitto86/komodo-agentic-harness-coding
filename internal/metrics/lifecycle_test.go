@@ -11,14 +11,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// groupDone stands in for the data of run-status / group.done, which another package owns.
-type groupDone struct {
-	Outcome string `json:"outcome"`
-}
-
-// EventKey binds the stand-in to run-status / group.done.
-func (groupDone) EventKey() bus.Key { return bus.Key{Type: bus.TypeRunStatus, Subtype: "group.done"} }
-
 // resumed builds a group.resumed event.
 func resumed(sec int, run, group bus.ID, stage string) bus.Event {
 	return ev(sec, bus.TypeRunStatus, "group.resumed", run, group, &bus.GroupResumed{From: stage, To: stage})
@@ -100,9 +92,9 @@ func (stalled) EventKey() bus.Key { return bus.Key{Type: bus.TypeRunFailure, Sub
 func TestGroupDoneOutcomes(t *testing.T) {
 	f := newFigures()
 	f.apply(startRun(0, "r", "g1", "g2", "g3"))
-	f.apply(ev(10, bus.TypeRunStatus, "group.done", "r", "g1", &groupDone{Outcome: "complete"}))
-	f.apply(ev(11, bus.TypeRunStatus, "group.done", "r", "g2", &groupDone{Outcome: "abandoned"}))
-	f.apply(ev(12, bus.TypeRunStatus, "group.done", "r", "g3", &groupDone{Outcome: "lost"}))
+	f.apply(ev(10, bus.TypeRunStatus, "group.done", "r", "g1", &bus.GroupDone{Outcome: "complete"}))
+	f.apply(ev(11, bus.TypeRunStatus, "group.done", "r", "g2", &bus.GroupDone{Outcome: "abandoned"}))
+	f.apply(ev(12, bus.TypeRunStatus, "group.done", "r", "g3", &bus.GroupDone{Outcome: "lost"}))
 	for id, want := range map[bus.ID]string{"g1": "done", "g2": "abandoned", "g3": "failed"} {
 		if g, _ := f.group("r", id); g.Outcome != want || g.EndedAt.IsZero() {
 			t.Errorf("%s = %+v, want %s and ended", id, g, want)

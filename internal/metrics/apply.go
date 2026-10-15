@@ -280,17 +280,13 @@ func (f *figures) apply(e bus.Event) *SessionRecord {
 	return nil
 }
 
-// groupOutcome maps the outcome a group.done body carries to a group outcome; its body is owned by another package.
+// groupOutcome maps a group.done body to a group outcome: complete is done, abandoned stays, lost is failed.
 func groupOutcome(p bus.Payload) string {
-	b, err := json.Marshal(p)
-	if err != nil {
+	d, ok := p.(*bus.GroupDone)
+	if !ok {
 		return outcomeDone
 	}
-	var body struct {
-		Outcome string `json:"outcome"`
-	}
-	_ = json.Unmarshal(b, &body)
-	switch body.Outcome {
+	switch d.Outcome {
 	case "abandoned":
 		return outcomeAbandoned
 	case "lost":

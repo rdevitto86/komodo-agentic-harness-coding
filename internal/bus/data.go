@@ -98,6 +98,14 @@ type GroupResumed struct {
 // EventKey binds GroupResumed to run-status / group.resumed.
 func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} }
 
+// GroupDone is the data of run-status / group.done: how a group ended.
+type GroupDone struct {
+	Outcome string `json:"outcome"` // complete, abandoned or lost
+}
+
+// EventKey binds GroupDone to run-status / group.done.
+func (GroupDone) EventKey() Key { return Key{TypeRunStatus, "group.done"} }
+
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
 	GroupFacts

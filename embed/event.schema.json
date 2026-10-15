@@ -225,6 +225,18 @@
       "required": [],
       "type": "object"
     },
+    "GroupDone": {
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "type": "object"
+    },
     "GroupPaused": {
       "additionalProperties": false,
       "properties": {
@@ -1204,6 +1216,19 @@
         },
         "subtype": {
           "const": "finding.verified"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/GroupDone"
+        },
+        "subtype": {
+          "const": "group.done"
         },
         "type": {
           "const": "run-status"
