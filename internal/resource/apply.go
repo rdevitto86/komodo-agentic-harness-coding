@@ -21,8 +21,8 @@ func check(e bus.Event) error {
 		if e.Subtype != subtypeUsage {
 			return bad("data does not match the subtype")
 		}
-		if d.Link == "" {
-			return bad("link is empty")
+		if d.Link == "" || e.Run == "" {
+			return bad("link or run is empty")
 		}
 		if d.TokensIn < 0 || d.TokensOut < 0 || d.CacheRead < 0 || d.CacheWrite < 0 || d.USD < 0 || d.USDEquiv < 0 {
 			return bad("a count or a cost is negative")
@@ -33,6 +33,9 @@ func check(e bus.Event) error {
 		}
 		if d.Link == "" || d.Window == "" {
 			return bad("link or window is empty")
+		}
+		if d.Limit < 0 || d.Remaining < 0 || d.Remaining > d.Limit {
+			return bad("remaining is outside the window total")
 		}
 	case *Overage:
 		if e.Subtype != subtypeOverage {
@@ -74,10 +77,10 @@ func (s *State) apply(e bus.Event, now time.Time) (o Observation, keys []WindowK
 		s.applyHeadroom(*d, now)
 		keys = []WindowKey{o.Key}
 	case *Overage:
-		o.Link, o.Key = d.Link, overageKey(d.Link)
+		o.Link, o.Key = d.Link, WindowKey{Link: d.Link}
 		s.applyOverage(*d, now)
 	case *Limit:
-		o.Link, o.Key = d.Link, limitKey(d.Link, d.Kind)
+		o.Link, o.Key = d.Link, WindowKey{Link: d.Link, Window: d.Kind}
 		s.applyLimit(*d, now)
 	default:
 		return o, nil, false

@@ -70,13 +70,17 @@ type fakePauser struct {
 	failPause int
 	failNudge int
 	got       chan struct{}
+	block     chan struct{} // when set, PauseGroups waits for it to close before returning
 }
 
 // PauseGroups records o unless a failure is queued.
 func (f *fakePauser) PauseGroups(_ context.Context, o PauseOrder) error {
+	f.c.add("pause:" + o.Reason)
+	if f.block != nil {
+		<-f.block
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.c.add("pause:" + o.Reason)
 	if f.failPause > 0 {
 		f.failPause--
 		return errors.New("runtime down")
@@ -184,7 +188,7 @@ func TestFullWindowThrowsThenPauses(t *testing.T) {
 	if want := []string{"throw:window_full", "pause:window_full"}; !reflect.DeepEqual(r.c.all(), want) {
 		t.Fatalf("calls %v, want %v", r.c.all(), want)
 	}
-	want := PauseOrder{Reason: "window_full", Link: "claude-cli", Groups: []string{"g1", "g2"}, Until: reset}
+	want := PauseOrder{Reason: "window_full", Link: "claude-cli", Window: "five_hour", Groups: []string{"g1", "g2"}, Until: reset}
 	if !reflect.DeepEqual(r.rt.pauses, []PauseOrder{want}) {
 		t.Fatalf("pauses %+v, want %+v", r.rt.pauses, want)
 	}

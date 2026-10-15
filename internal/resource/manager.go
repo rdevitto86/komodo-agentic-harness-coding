@@ -25,8 +25,7 @@ type Manager struct {
 	d   Deps
 	now func() time.Time
 
-	obsMu sync.Mutex // orders Observe calls so one event finishes before the next begins
-	mu    sync.Mutex // guards st and saved; never held across a call to another part
+	mu    sync.Mutex // orders Observe and every change of st and saved; held while a call to another part runs
 	st    *State
 	saved map[WindowKey]WindowRecord // what the State Manager last accepted for each window
 }
@@ -79,15 +78,16 @@ func (m *Manager) load(ctx context.Context) {
 		if !r.ResetAt.After(now) {
 			continue
 		}
-		m.st.Windows[k] = &WindowState{PercentUsed: r.PercentUsed, ResetAt: r.ResetAt, Sessions: r.Sessions, Reading: true}
+		w := m.st.window(k)
+		w.PercentUsed, w.ResetAt, w.Sessions = r.PercentUsed, r.ResetAt, r.Sessions
 		m.saved[k] = r
 	}
 }
 
-// Observe applies one resource event and raises any errors it causes.
+// Observe applies one resource event and raises any errors it causes; it waits for any other Observe, grant or end call to finish.
 func (m *Manager) Observe(ctx context.Context, e bus.Event) error {
-	m.obsMu.Lock()
-	defer m.obsMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if e.Type != bus.TypeResource {
 		return nil
 	}
@@ -99,38 +99,24 @@ func (m *Manager) Observe(ctx context.Context, e bus.Event) error {
 		slog.Info("ignored resource event", "subtype", string(e.Subtype))
 		return nil
 	}
-	o, res, dirty := m.step(e)
-	return errors.Join(m.save(ctx, dirty), m.deliver(ctx, o, res))
-}
-
-// step applies a checked event to the totals and evaluates the rules, all under the state lock.
-func (m *Manager) step(e bus.Event) (Observation, Result, map[WindowKey]WindowRecord) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	o, keys, ok := m.st.apply(e, m.now())
 	if !ok {
-		return o, Result{}, nil
+		return nil
 	}
-	dirty := map[WindowKey]WindowRecord{}
-	for _, k := range keys {
-		if w := m.st.Windows[k]; w != nil && w.Reading {
-			dirty[k] = WindowRecord{PercentUsed: w.PercentUsed, ResetAt: w.ResetAt, Sessions: w.Sessions}
-		}
-	}
-	return o, Evaluate(m.st, m.t, o), dirty
+	res := Evaluate(m.st, m.t, o)
+	return errors.Join(m.save(ctx, keys), m.deliver(ctx, o, res))
 }
 
-// save stores each window whose figures differ from the last accepted record; a failure is reported and the window stays in memory.
-func (m *Manager) save(ctx context.Context, dirty map[WindowKey]WindowRecord) error {
+// save stores each changed window whose figures differ from the last accepted record; a failure is reported and the window stays in memory.
+func (m *Manager) save(ctx context.Context, keys []WindowKey) error {
 	if m.d.State == nil {
 		return nil
 	}
 	var errs []error
-	for k, r := range dirty {
-		m.mu.Lock()
-		old, had := m.saved[k]
-		m.mu.Unlock()
-		if had && sameRecord(old, r) {
+	for _, k := range keys {
+		w := m.st.Windows[k]
+		r := WindowRecord{PercentUsed: w.PercentUsed, ResetAt: w.ResetAt, Sessions: w.Sessions}
+		if old, had := m.saved[k]; had && sameRecord(old, r) {
 			continue
 		}
 		if err := m.d.State.SaveWindow(ctx, k, r); err != nil {
@@ -139,53 +125,48 @@ func (m *Manager) save(ctx context.Context, dirty map[WindowKey]WindowRecord) er
 			errs = append(errs, err)
 			continue
 		}
-		m.mu.Lock()
 		m.saved[k] = r
-		m.mu.Unlock()
 	}
 	return errors.Join(errs...)
 }
 
-// deliver throws each new error, then sends each pause order whose error was thrown, then each nudge; a flag is set only after its call succeeds.
+// deliver throws each new error, then sends each pause order whose error was thrown, then each nudge.
+// A flag is set only after its call succeeds, and a failed call is reported and tried again on the next event.
 func (m *Manager) deliver(ctx context.Context, o Observation, res Result) error {
 	var errs []error
-	for _, re := range res.Errors {
+	fail := func(err error) {
+		m.report(err)
+		errs = append(errs, err)
+	}
+	for i, re := range res.Errors {
 		if err := m.d.Errors.ThrowResourceError(ctx, re); err != nil {
-			errs = append(errs, err)
+			fail(fmt.Errorf("throw %s: %w", re.Kind, err))
 			continue
 		}
-		m.mu.Lock()
-		m.st.markRaised(o, re)
-		m.mu.Unlock()
+		m.st.markRaised(o, res.keys[i], re)
 	}
 	for _, p := range res.Pauses {
-		m.mu.Lock()
-		ready := m.st.errorRaised(o, p)
-		m.mu.Unlock()
-		if !ready {
+		if !m.st.errorRaised(p) {
 			continue
 		}
 		if err := m.d.Runtime.PauseGroups(ctx, p); err != nil {
-			errs = append(errs, fmt.Errorf("pause %s: %w", p.Reason, err))
+			fail(fmt.Errorf("pause %s: %w", p.Reason, err))
 			continue
 		}
-		m.mu.Lock()
-		m.st.markPaused(o, p)
-		m.mu.Unlock()
+		m.st.markPaused(p)
 	}
 	for _, n := range res.Nudges {
 		if err := m.d.Runtime.NudgeGroups(ctx, n); err != nil {
-			errs = append(errs, fmt.Errorf("nudge groups: %w", err))
+			fail(fmt.Errorf("nudge groups: %w", err))
 			continue
 		}
-		m.mu.Lock()
 		m.st.markNudged(n)
-		m.mu.Unlock()
 	}
 	return errors.Join(errs...)
 }
 
 // GrantGroupTokens raises a group's cap by one limits.group_tokens and clears the group's nudge and cap flags.
+// It waits for an Observe in progress, so a grant is never overwritten by the delivery it raced; the Runtime Manager must not call it from inside a pause or nudge.
 func (m *Manager) GrantGroupTokens(group string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -194,6 +175,20 @@ func (m *Manager) GrantGroupTokens(group string) {
 	delete(s.GroupNudged, group)
 	delete(s.GroupCapped, group)
 	delete(s.GroupCapRaised, group)
+}
+
+// EndRun drops a finished run's totals, flags and group list.
+func (m *Manager) EndRun(run string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.st.forgetRun(run)
+}
+
+// EndGroup drops a finished group's totals and flags and removes it from every group list.
+func (m *Manager) EndGroup(group string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.st.forgetGroup(group)
 }
 
 // report sends an ordinary error to the Error Handler.

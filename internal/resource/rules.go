@@ -32,53 +32,67 @@ type Result struct {
 	Errors []fault.ResourceError
 	Pauses []PauseOrder
 	Nudges []NudgeOrder
+
+	keys []WindowKey // the window each error is about, in step with Errors; empty for an error about no window
+}
+
+// raise adds an error and the window it is about.
+func (r *Result) raise(e fault.ResourceError, k WindowKey) {
+	r.Errors = append(r.Errors, e)
+	r.keys = append(r.keys, k)
 }
 
 // Evaluate returns the resource errors, pause orders and nudges one observation causes; it reads State and Thresholds and changes neither.
 func Evaluate(s *State, t Thresholds, o Observation) Result {
+	r := Result{}
+	if o.Link != "" {
+		r = evalWindows(s, t, o)
+	}
 	switch o.Subtype {
-	case subtypeHeadroom:
-		return evalWindow(s, t, o)
 	case subtypeUsage:
-		r := evalSpend(s, t, o)
-		g := evalGroup(s, t, o)
-		r.Errors = append(r.Errors, g.Errors...)
-		r.Pauses = append(r.Pauses, g.Pauses...)
-		r.Nudges = append(r.Nudges, g.Nudges...)
-		return r
+		for _, x := range []Result{evalSpend(s, t, o), evalGroup(s, t, o)} {
+			for i, e := range x.Errors {
+				r.raise(e, x.keys[i])
+			}
+			r.Pauses = append(r.Pauses, x.Pauses...)
+			r.Nudges = append(r.Nudges, x.Nudges...)
+		}
 	case subtypeOverage:
-		if w := s.Windows[o.Key]; w != nil && !w.Overage {
-			return Result{Errors: []fault.ResourceError{{Kind: "overage", Severity: fault.SeverityWarn, Link: o.Link, Run: o.Run, ResetAt: w.ResetAt}}}
+		if n := s.Overages[o.Link]; n != nil && !n.Raised {
+			r.raise(fault.ResourceError{Kind: "overage", Severity: fault.SeverityWarn, Link: o.Link, Run: o.Run, ResetAt: n.ResetAt}, WindowKey{})
 		}
 	case subtypeLimit:
-		if w := s.Windows[o.Key]; w != nil && !w.Limited {
-			return Result{Errors: []fault.ResourceError{{Kind: "limit", Severity: fault.SeverityError, Link: o.Link, Run: o.Run, ResetAt: w.ResetAt}}}
+		if n := s.Limits[o.Key]; n != nil && !n.Raised {
+			r.raise(fault.ResourceError{Kind: "limit", Severity: fault.SeverityError, Link: o.Link, Run: o.Run, ResetAt: n.ResetAt}, WindowKey{})
 		}
 	}
-	return Result{}
+	return r
 }
 
-// evalWindow applies the plan window rules to the window a headroom reading set.
-func evalWindow(s *State, t Thresholds, o Observation) Result {
+// evalWindows applies the plan window rules: the warning to the window a reading set, and the full-window rule to every active window of the link.
+func evalWindows(s *State, t Thresholds, o Observation) Result {
 	var r Result
-	w := s.Windows[o.Key]
-	if w == nil {
-		return r
-	}
-	e := fault.ResourceError{Severity: fault.SeverityWarn, Link: o.Link, Run: o.Run, Value: w.PercentUsed, ResetAt: w.ResetAt}
-	if w.PercentUsed >= 100 {
-		if !w.Full {
-			e.Kind, e.Threshold = "window_full", 100
-			r.Errors = append(r.Errors, e)
+	for _, k := range s.windowKeys(o.Link) {
+		w := s.Windows[k]
+		fresh := o.Subtype == subtypeHeadroom && k == o.Key
+		if !fresh && !w.ResetAt.After(o.Now) {
+			continue
 		}
-		if g := names(s.LinkGroups[o.Link]); !w.Paused && len(g) > 0 {
-			r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonWindowFull, Link: o.Link, Groups: g, Until: w.ResetAt})
+		e := fault.ResourceError{Severity: fault.SeverityWarn, Link: o.Link, Run: o.Run, Value: w.PercentUsed, ResetAt: w.ResetAt}
+		if w.PercentUsed >= 100 {
+			if !w.Full {
+				e.Kind, e.Threshold = "window_full", 100
+				r.raise(e, k)
+			}
+			if g := without(names(w.Groups), w.Paused); len(g) > 0 {
+				r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonWindowFull, Link: o.Link, Window: k.Window, Groups: g, Until: w.ResetAt})
+			}
+			continue
 		}
-		return r
-	}
-	if t.QuotaPct > 0 && w.PercentUsed >= t.QuotaPct && !w.Warned {
-		e.Kind, e.Threshold = "window", t.QuotaPct
-		r.Errors = append(r.Errors, e)
+		if fresh && t.QuotaPct > 0 && w.PercentUsed >= t.QuotaPct && !w.Warned {
+			e.Kind, e.Threshold = "window", t.QuotaPct
+			r.raise(e, k)
+		}
 	}
 	return r
 }
@@ -89,9 +103,9 @@ func evalSpend(s *State, t Thresholds, o Observation) Result {
 	sp := &s.Spend
 	run, day := sp.RunUSD[o.Run], sp.DayUSD
 	warn := func(kind string, usd, amount float64) {
-		r.Errors = append(r.Errors, fault.ResourceError{
+		r.raise(fault.ResourceError{
 			Kind: kind, Severity: fault.SeverityWarn, Run: o.Run, Value: usd, Threshold: amount * t.QuotaPct / 100,
-		})
+		}, WindowKey{})
 	}
 	if t.QuotaPct > 0 && t.USDPerRun > 0 && run*100 >= t.QuotaPct*t.USDPerRun && !sp.RunWarned[o.Run] {
 		warn("spend_run", run, t.USDPerRun)
@@ -101,17 +115,17 @@ func evalSpend(s *State, t Thresholds, o Observation) Result {
 	}
 	if c := t.USDCeilingPerRun; c > 0 && run >= c {
 		if !sp.RunCeilingRaised[o.Run] {
-			r.Errors = append(r.Errors, fault.ResourceError{Kind: "spend_ceiling", Severity: fault.SeverityWarn, Run: o.Run, Value: run, Threshold: c})
+			r.raise(fault.ResourceError{Kind: "spend_ceiling", Severity: fault.SeverityWarn, Run: o.Run, Value: run, Threshold: c}, WindowKey{})
 		}
-		if g := names(s.RunGroups[o.Run]); !sp.RunCeiling[o.Run] && len(g) > 0 {
+		if g := without(names(s.RunGroups[o.Run]), sp.RunCeiling[o.Run]); len(g) > 0 {
 			r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonSpendCeiling, Run: o.Run, Groups: g})
 		}
 	}
 	if c := t.USDCeilingPerDay; c > 0 && day >= c {
 		if !sp.DayCeilingRaised {
-			r.Errors = append(r.Errors, fault.ResourceError{Kind: "spend_ceiling_day", Severity: fault.SeverityWarn, Run: o.Run, Value: day, Threshold: c})
+			r.raise(fault.ResourceError{Kind: "spend_ceiling_day", Severity: fault.SeverityWarn, Run: o.Run, Value: day, Threshold: c}, WindowKey{})
 		}
-		if g := paidGroups(s); !sp.DayCeiling && len(g) > 0 {
+		if g := without(paidGroups(s), sp.DayCeiling); len(g) > 0 {
 			r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonSpendCeilingDay, Groups: g, Until: nextMidnight(o.Now)})
 		}
 	}
@@ -139,9 +153,9 @@ func evalGroup(s *State, t Thresholds, o Observation) Result {
 	switch {
 	case tokens >= limit:
 		if !sp.GroupCapRaised[g] {
-			r.Errors = append(r.Errors, fault.ResourceError{
+			r.raise(fault.ResourceError{
 				Kind: "group_tokens", Severity: fault.SeverityWarn, Run: o.Run, Group: g, Value: float64(tokens), Threshold: float64(limit),
-			})
+			}, WindowKey{})
 		}
 		if !sp.GroupCapped[g] {
 			r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonGroupTokens, Groups: []string{g}})

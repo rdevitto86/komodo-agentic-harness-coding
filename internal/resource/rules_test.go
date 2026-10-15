@@ -45,12 +45,12 @@ func drive(t *testing.T, s *State, th Thresholds, e bus.Event, now time.Time) Re
 		return Result{}
 	}
 	res := Evaluate(s, th, o)
-	for _, er := range res.Errors {
-		s.markRaised(o, er)
+	for i, er := range res.Errors {
+		s.markRaised(o, res.keys[i], er)
 	}
 	for _, p := range res.Pauses {
-		if s.errorRaised(o, p) {
-			s.markPaused(o, p)
+		if s.errorRaised(p) {
+			s.markPaused(p)
 		}
 	}
 	for _, n := range res.Nudges {
@@ -111,7 +111,7 @@ func TestWindowFullPausesOnce(t *testing.T) {
 	if r.Errors[0].Severity != "warn" || r.Errors[0].Threshold != 100 {
 		t.Fatalf("window_full %+v", r.Errors[0])
 	}
-	want := PauseOrder{Reason: "window_full", Link: "claude-cli", Groups: []string{"g1", "g2"}, Until: reset}
+	want := PauseOrder{Reason: "window_full", Link: "claude-cli", Window: "five_hour", Groups: []string{"g1", "g2"}, Until: reset}
 	if len(r.Pauses) != 1 || !reflect.DeepEqual(r.Pauses[0], want) {
 		t.Fatalf("pauses %+v, want %+v", r.Pauses, want)
 	}
@@ -133,14 +133,14 @@ func TestWindowRearmsAfterReset(t *testing.T) {
 	wantKinds(t, drive(t, s, defaults, head("claude-cli", "r1", "g1", 81, later.Add(5*time.Hour)), later), "window")
 }
 
-// TestResetClearsLinkGroups: a window reset empties the groups seen on the link.
-func TestResetClearsLinkGroups(t *testing.T) {
+// TestResetClearsWindowGroups: a window reset empties the groups seen since the window last reset.
+func TestResetClearsWindowGroups(t *testing.T) {
 	s, reset := NewState(), base.Add(time.Hour)
 	drive(t, s, defaults, head("claude-cli", "r1", "gold", 10, reset), base)
 	later := base.Add(2 * time.Hour)
 	drive(t, s, defaults, head("claude-cli", "r1", "gnew", 100, later.Add(time.Hour)), later)
-	if got := names(s.LinkGroups["claude-cli"]); !reflect.DeepEqual(got, []string{"gnew"}) {
-		t.Fatalf("link groups %v, want [gnew]", got)
+	if got := names(s.Windows[WindowKey{Link: "claude-cli", Window: "five_hour"}].Groups); !reflect.DeepEqual(got, []string{"gnew"}) {
+		t.Fatalf("window groups %v, want [gnew]", got)
 	}
 }
 

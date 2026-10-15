@@ -2,17 +2,17 @@ package resource
 
 import "github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 
-// markRaised records that the error e was thrown, so the same crossing is not raised again.
-func (s *State) markRaised(o Observation, e fault.ResourceError) {
+// markRaised records that the error e was thrown, so the same crossing is not raised again; k is the window the error is about.
+func (s *State) markRaised(o Observation, k WindowKey, e fault.ResourceError) {
 	switch e.Kind {
 	case "window":
-		s.window(o.Key).Warned = true
+		s.Windows[k].Warned = true
 	case "window_full":
-		s.window(o.Key).Full = true
+		s.Windows[k].Full = true
 	case "overage":
-		s.window(o.Key).Overage = true
+		markNotice(s.Overages[o.Link])
 	case "limit":
-		s.window(o.Key).Limited = true
+		markNotice(s.Limits[o.Key])
 	case "spend_run":
 		s.Spend.RunWarned[e.Run] = true
 	case "spend_day":
@@ -26,11 +26,18 @@ func (s *State) markRaised(o Observation, e fault.ResourceError) {
 	}
 }
 
+// markNotice keeps a notice raised until its reset time; a notice with no reset time is never kept, so it raises every time.
+func markNotice(n *Notice) {
+	if n != nil && !n.ResetAt.IsZero() {
+		n.Raised = true
+	}
+}
+
 // errorRaised reports whether the error that goes with pause order p was thrown.
-func (s *State) errorRaised(o Observation, p PauseOrder) bool {
+func (s *State) errorRaised(p PauseOrder) bool {
 	switch p.Reason {
 	case reasonWindowFull:
-		return s.window(o.Key).Full
+		return s.Windows[WindowKey{Link: p.Link, Window: p.Window}].Full
 	case reasonSpendCeiling:
 		return s.Spend.RunCeilingRaised[p.Run]
 	case reasonSpendCeilingDay:
@@ -41,17 +48,20 @@ func (s *State) errorRaised(o Observation, p PauseOrder) bool {
 	return false
 }
 
-// markPaused records that pause order p was delivered.
-func (s *State) markPaused(o Observation, p PauseOrder) {
-	switch p.Reason {
-	case reasonWindowFull:
-		s.window(o.Key).Paused = true
-	case reasonSpendCeiling:
-		s.Spend.RunCeiling[p.Run] = true
-	case reasonSpendCeilingDay:
-		s.Spend.DayCeiling = true
-	case reasonGroupTokens:
-		for _, g := range p.Groups {
+// markPaused records that pause order p was delivered for each group it names.
+func (s *State) markPaused(p PauseOrder) {
+	for _, g := range p.Groups {
+		switch p.Reason {
+		case reasonWindowFull:
+			s.Windows[WindowKey{Link: p.Link, Window: p.Window}].Paused[g] = true
+		case reasonSpendCeiling:
+			if s.Spend.RunCeiling[p.Run] == nil {
+				s.Spend.RunCeiling[p.Run] = map[string]bool{}
+			}
+			s.Spend.RunCeiling[p.Run][g] = true
+		case reasonSpendCeilingDay:
+			s.Spend.DayCeiling[g] = true
+		case reasonGroupTokens:
 			s.Spend.GroupCapped[g] = true
 		}
 	}
