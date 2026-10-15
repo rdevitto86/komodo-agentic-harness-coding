@@ -487,7 +487,7 @@ func TestFinalDroppedEvent(t *testing.T) {
 
 // TestFinalContextEndsFirst checks an ended ctx stops the wait before the fallback fires.
 func TestFinalContextEndsFirst(t *testing.T) {
-	h, p, _ := newFullRig(t)
+	h, p, errBuf := newFullRig(t)
 	h.finalWait = 10 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -496,8 +496,12 @@ func TestFinalContextEndsFirst(t *testing.T) {
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("waited %v", time.Since(start))
 	}
+	// The printer is still busy, so the fault reaches the caller on standard error instead.
 	if len(p.calls()) != 0 {
-		t.Fatal("printed before the loop was free")
+		t.Fatal("printed through a busy printer")
+	}
+	if !strings.Contains(errBuf.String(), "final one") {
+		t.Fatalf("stderr %q lacks the fault", errBuf.String())
 	}
 }
 

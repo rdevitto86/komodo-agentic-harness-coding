@@ -12815,6 +12815,7 @@ The bus delivers the final event in publish order, so the Runtime Manager and th
 - After `Final`, `Report`, `Go`, `ThrowResourceError` and a second `Final` publish nothing and write the fault to standard error.
 - A `ResourceError` becomes a fault with component `resource`, code `over_limit` and kind `refused`; its severity is the caller's, except that `window_full` and `spend_ceiling` are always `warn`.
 - A `window` resource fault reads `plan window N% used on <link>` with the fix `wait for the window reset`; every other kind reads `<kind> at <value> against <threshold>`, plus ` on <link>` when a link is set, with no fix.
+- When `ctx` ends before the final print, `Final` writes the fault to standard error, so it still reaches the caller.
 - A recovered runtime panic keeps its message without the `runtime error: ` prefix; a panic inside the printer or the handler is written to standard error.
 
 **What no handler can catch.** A fatal Go runtime error, such as an out-of-memory kill or two goroutines writing one map, ends the process without a `recover`, so no final event is published. Recovery after it reads only the State Manager: `komodo run (id)` continues each group from its saved state ([7. Runtime Manager](#7-runtime-manager)).
@@ -13646,12 +13647,12 @@ func (e ResourceError) Error() string { return "resource " + string(e.Severity) 
 | Kind | Severity | Raised when | Raised once per |
 |---|---|---|---|
 | `window` | warn | A window's percent used reaches `warn.quota_pct` (80) | Window reset |
-| `window_full` | error | A window's percent used reaches 100 | Window reset |
+| `window_full` | warn | A window's percent used reaches 100; the affected groups pause, nothing fails | Window reset |
 | `limit` | error | A provider refuses because a cap was hit | Link, kind and reset time |
 | `overage` | warn | A subscription link starts drawing paid credits | Window reset |
 | `spend_run` | warn | A run's paid dollars reach `warn.quota_pct` percent of `warn.usd_per_run` | Run |
 | `spend_day` | warn | Today's paid dollars reach `warn.quota_pct` percent of `warn.usd_per_day` | Day |
-| `spend_ceiling` | error | A run's paid dollars reach `limits.usd_ceiling_per_run` | Run |
+| `spend_ceiling` | warn | A run's paid dollars reach `limits.usd_ceiling_per_run`; the run's groups pause, nothing fails | Run |
 | `group_tokens` | error | A group's tokens reach `limits.group_tokens` | Group |
 
 Two kinds are followed by a pause order: `window_full` and `spend_ceiling`. Every other kind only reaches the person. A provider-side spend cap that refuses a request arrives as a `limit` of kind `spend` and is raised as an error. The paid-spend rules count only `usd`; they never count `usd_equiv`.
@@ -13841,11 +13842,11 @@ Usage numbers are always read; no setting turns them off, because the Metrics Se
 
 **Unit** (`Evaluate` on fixed states)
 - A window at 79 percent raises nothing; at 80 percent it raises one `window` warning; a second reading at 90 percent raises none.
-- A window at 100 percent raises one `window_full` error and one pause order whose `Until` is the reset time; a second reading at 100 percent raises neither.
+- A window at 100 percent raises one `window_full` warning and one pause order whose `Until` is the reset time; a second reading at 100 percent raises neither.
 - After the reset time passes, the next reading at 81 percent raises a warning again.
 - With `warn.usd_per_run` 5, paid dollars of 3.99 then 4.01 in one run raise one `spend_run` warning; the same dollars across two runs raise none.
 - With no ceiling, paid dollars of 50 in one run raise a `spend_run` warning and no pause order.
-- With `limits.usd_ceiling_per_run` 10, paid dollars of 10 in one run raise one `spend_ceiling` error and one pause order naming the run's groups.
+- With `limits.usd_ceiling_per_run` 10, paid dollars of 10 in one run raise one `spend_ceiling` warning and one pause order naming the run's groups.
 - A `usage` event with `usd` 0 and `usd_equiv` 12 changes no spend total and raises nothing.
 - A day change resets the day's total and flag.
 - A group at 1,999,999 tokens raises nothing; at 2,000,000 it raises one `group_tokens` error.

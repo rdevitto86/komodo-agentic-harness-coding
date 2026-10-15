@@ -145,6 +145,7 @@ func (h *Handler) Final(ctx context.Context, src Source, f Fault) int {
 		case <-h.printed:
 			return code
 		case <-ctx.Done():
+			h.writeStderr(f, "context ended before the print")
 			return code
 		case <-timer.C:
 		}
