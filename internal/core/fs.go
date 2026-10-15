@@ -83,7 +83,7 @@ func syncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if err := syncDirHandle(d); err != nil && !errors.Is(err, syscall.EINVAL) {
 		return err
 	}

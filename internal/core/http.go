@@ -156,7 +156,7 @@ func (c *Client) Do(ctx context.Context, ep Endpoint, req *http.Request) (*Respo
 	if err != nil {
 		return nil, c.wrapErr(err)
 	}
-	defer s.resp.Body.Close()
+	defer func() { _ = s.resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(s.resp.Body, c.opts.MaxBody+1))
 	if err != nil {
 		return nil, c.wrapErr(fmt.Errorf("read response body: %w", err))
@@ -198,7 +198,7 @@ func (c *Client) send(ctx context.Context, ep Endpoint, req *http.Request) (*sen
 				return &sent{resp: resp, attempts: n, headroom: hr}, nil
 			}
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyCap))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			v := c.classify(resp.StatusCode, resp.Header, body)
 			if v.limit != nil {
 				return nil, v.limit
@@ -246,7 +246,7 @@ func (c *Client) once(ctx context.Context, ep Endpoint, req *http.Request) (*htt
 		<-fired
 		cancel()
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		return nil, fmt.Errorf("first byte not received within %s: %w", fb, errFirstByte)
 	}

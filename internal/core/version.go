@@ -164,7 +164,7 @@ func splitIdentifiers(s string, noLeadingZero bool) ([]string, error) {
 		}
 		for i := 0; i < len(id); i++ {
 			c := id[i]
-			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-') {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '-' {
 				return nil, fmt.Errorf("identifier %q has an invalid character", id)
 			}
 		}

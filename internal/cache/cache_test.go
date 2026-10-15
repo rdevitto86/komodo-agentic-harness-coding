@@ -1,4 +1,4 @@
-package core
+package cache
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 // newTestCache builds a cache with a fake clock that ticks one second per call.
 func newTestCache(t *testing.T, root, version string, maxBytes int64) *Cache {
 	t.Helper()
-	c, err := NewCache(root, version, maxBytes)
+	c, err := New(root, version, Limits{MaxBytes: maxBytes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +30,23 @@ func newTestCache(t *testing.T, root, version string, maxBytes int64) *Cache {
 	return c
 }
 
+// dirNames lists the names in dir.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// diskSize returns the size of the entry file a payload is stored in.
+func diskSize(payload []byte) int64 { return int64(len(encodeEntry(payload))) }
+
 func TestCachePutGetRoundTrip(t *testing.T) {
 	c := newTestCache(t, t.TempDir(), "v1", 0)
 	key := c.Key("diff", "base", "head")
@@ -40,7 +57,7 @@ func TestCachePutGetRoundTrip(t *testing.T) {
 	if !ok || string(got) != "payload" {
 		t.Fatalf("Get = %q, %v; want payload, true", got, ok)
 	}
-	if _, ok := c.Get(NSChecks, key); ok {
+	if _, ok := c.Get(NSMap, key); ok {
 		t.Fatal("same key in another namespace must miss")
 	}
 	if _, ok := c.Get(NSContext, c.Key("other")); ok {
@@ -50,8 +67,12 @@ func TestCachePutGetRoundTrip(t *testing.T) {
 
 func TestCacheKeyIsDeterministicAndUnambiguous(t *testing.T) {
 	c := newTestCache(t, t.TempDir(), "v1", 0)
-	if c.Key("a", "b") != c.Key("a", "b") {
+	first, second := c.Key("a", "b"), c.Key("a", "b")
+	if first != second {
 		t.Fatal("same inputs must give the same key")
+	}
+	if first == c.Key("a", "x") || first == c.Key("a") || first == c.Key("a", "b", "") {
+		t.Fatal("any changed, dropped or added input must change the key")
 	}
 	if c.Key("ab", "c") == c.Key("a", "bc") {
 		t.Fatal("input boundaries must change the key")
@@ -93,14 +114,14 @@ func TestCacheCorruptEntryIsDeletedAndMisses(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := newTestCache(t, t.TempDir(), "v1", 0)
 			key := c.Key("x")
-			if err := c.Put(NSChecks, key, []byte("good bytes")); err != nil {
+			if err := c.Put(NSMap, key, []byte("good bytes")); err != nil {
 				t.Fatal(err)
 			}
-			path, _ := c.entryPath(NSChecks, key)
+			path, _ := c.entryPath(NSMap, key)
 			if err := corrupt(path); err != nil {
 				t.Fatal(err)
 			}
-			got, ok := c.Get(NSChecks, key)
+			got, ok := c.Get(NSMap, key)
 			if ok || got != nil {
 				t.Fatalf("Get = %q, %v; want nil, false", got, ok)
 			}
@@ -126,10 +147,10 @@ func TestCacheRejectsBadNamespaceAndKey(t *testing.T) {
 
 func TestCacheEvictsLeastRecentlyReadUnderCap(t *testing.T) {
 	payload := bytes.Repeat([]byte("p"), 300)
-	entry := int64(len(payload)) + entryHeaderLen
+	entry := diskSize(payload)
 	c := newTestCache(t, t.TempDir(), "v1", entry*3+10)
 	ka, kb, kc, kd := c.Key("a"), c.Key("b"), c.Key("c"), c.Key("d")
-	for _, k := range []string{ka, kb, kc} {
+	for _, k := range []Key{ka, kb, kc} {
 		if err := c.Put(NSContext, k, payload); err != nil {
 			t.Fatal(err)
 		}
@@ -143,9 +164,9 @@ func TestCacheEvictsLeastRecentlyReadUnderCap(t *testing.T) {
 	if _, ok := c.Get(NSContext, kb); ok {
 		t.Fatal("b was read longest ago and must be evicted")
 	}
-	for _, k := range []string{ka, kc, kd} {
+	for _, k := range []Key{ka, kc, kd} {
 		if _, ok := c.Get(NSContext, k); !ok {
-			t.Fatalf("key %s must survive eviction", k[:6])
+			t.Fatalf("key %s must survive eviction", string(k)[:6])
 		}
 	}
 	st, err := c.Stats()
@@ -160,7 +181,7 @@ func TestCacheEvictsLeastRecentlyReadUnderCap(t *testing.T) {
 func TestCacheEvictionAcrossProcessesStaysUnderCap(t *testing.T) {
 	root := t.TempDir()
 	payload := bytes.Repeat([]byte("p"), 100)
-	capBytes := (int64(len(payload)) + entryHeaderLen) * 4
+	capBytes := diskSize(payload) * 4
 	a := newTestCache(t, root, "v1", capBytes)
 	b := newTestCache(t, root, "v1", capBytes)
 	for i := 0; i < 10; i++ {
@@ -168,7 +189,7 @@ func TestCacheEvictionAcrossProcessesStaysUnderCap(t *testing.T) {
 		if i%2 == 1 {
 			c = b
 		}
-		if err := c.Put(NSReview, c.Key(string(rune('a'+i))), payload); err != nil {
+		if err := c.Put(NSPrompt, c.Key(string(rune('a'+i))), payload); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -184,12 +205,12 @@ func TestCacheEvictionAcrossProcessesStaysUnderCap(t *testing.T) {
 func TestCachePutRefusesEntryOverCap(t *testing.T) {
 	c := newTestCache(t, t.TempDir(), "v1", 100)
 	err := c.Put(NSMap, c.Key("big"), bytes.Repeat([]byte("x"), 200))
-	if !errors.Is(err, ErrCacheEntryTooLarge) {
-		t.Fatalf("err = %v; want ErrCacheEntryTooLarge", err)
+	if !errors.Is(err, ErrEntryTooLarge) {
+		t.Fatalf("err = %v; want ErrEntryTooLarge", err)
 	}
 }
 
-func TestCacheStatsAndClear(t *testing.T) {
+func TestCacheStatsAndClearAll(t *testing.T) {
 	root := t.TempDir()
 	c := newTestCache(t, root, "v1", 0)
 	if err := c.Put(NSSkills, c.Key("1"), []byte("aaaa")); err != nil {
@@ -205,22 +226,12 @@ func TestCacheStatsAndClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := int64(4+2+1) + 3*entryHeaderLen
+	want := diskSize([]byte("aaaa")) + diskSize([]byte("bb")) + diskSize([]byte("c"))
 	if st.Entries != 3 || st.Bytes != want {
 		t.Fatalf("stats = %+v; want 3 entries, %d bytes", st, want)
 	}
 	if st.Namespaces[NSSkills].Entries != 2 || st.Namespaces[NSSetup].Entries != 1 {
 		t.Fatalf("per-namespace stats = %+v", st.Namespaces)
-	}
-
-	other := newTestCache(t, t.TempDir(), "v1", 0)
-	if err := other.Put(NSChecks, other.Key("z"), []byte("zz")); err != nil {
-		t.Fatal(err)
-	}
-	ost, _ := other.Stats()
-	sum := SumCacheStats(st, ost)
-	if sum.Entries != 4 || sum.Bytes != st.Bytes+ost.Bytes {
-		t.Fatalf("sum = %+v", sum)
 	}
 
 	removed, err := c.Clear()
@@ -242,9 +253,75 @@ func TestCacheStatsAndClear(t *testing.T) {
 }
 
 func TestCacheStatsOnMissingRoot(t *testing.T) {
-	st, err := CacheStatsOf(filepath.Join(t.TempDir(), "nope"))
-	if err != nil || st.Entries != 0 {
+	c := newTestCache(t, filepath.Join(t.TempDir(), "gone"), "v1", 0)
+	if err := os.RemoveAll(c.root); err != nil {
+		t.Fatal(err)
+	}
+	st, err := c.Stats()
+	if err != nil || st.Entries != 0 || st.Bytes != 0 || len(st.Namespaces) != 0 {
 		t.Fatalf("stats = %+v, %v; want empty and nil", st, err)
+	}
+}
+
+func TestCacheClearOneNamespaceLeavesOthers(t *testing.T) {
+	c := newTestCache(t, t.TempDir(), "v1", 0)
+	for _, ns := range []Namespace{NSSkills, NSContext, NSMap} {
+		if err := c.Put(ns, c.Key("k"), []byte("data")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := c.Clear(NSContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.Entries != 1 || removed.Namespaces[NSContext].Entries != 1 {
+		t.Fatalf("removed = %+v; want only the context entry", removed)
+	}
+	if _, ok := c.Get(NSContext, c.Key("k")); ok {
+		t.Fatal("cleared namespace must miss")
+	}
+	for _, ns := range []Namespace{NSSkills, NSMap} {
+		if _, ok := c.Get(ns, c.Key("k")); !ok {
+			t.Fatalf("namespace %s must survive a clear of another", ns)
+		}
+	}
+	if _, err := c.Clear("bogus"); err == nil {
+		t.Fatal("Clear of an unknown namespace must fail")
+	}
+}
+
+func TestCacheStatsCountHitsAndLookups(t *testing.T) {
+	c := newTestCache(t, t.TempDir(), "v1", 0)
+	key := c.Key("x")
+	if _, ok := c.Get(NSContext, key); ok {
+		t.Fatal("empty cache must miss")
+	}
+	if err := c.Put(NSContext, key, []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, ok := c.Get(NSContext, key); !ok {
+			t.Fatal("stored entry must hit")
+		}
+	}
+	st, err := c.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Lookups[NSContext] != 3 || st.Hits[NSContext] != 2 {
+		t.Fatalf("lookups = %d, hits = %d; want 3 and 2", st.Lookups[NSContext], st.Hits[NSContext])
+	}
+	if st.Lookups[NSSkills] != 0 {
+		t.Fatalf("lookups on an untouched namespace = %d; want 0", st.Lookups[NSSkills])
+	}
+}
+
+func TestCacheRefusesUnknownNamespaces(t *testing.T) {
+	c := newTestCache(t, t.TempDir(), "v1", 0)
+	for _, ns := range []Namespace{"checks", "review", ""} {
+		if err := c.Put(ns, c.Key("x"), []byte("v")); err == nil {
+			t.Fatalf("namespace %q must be refused", ns)
+		}
 	}
 }
 
@@ -259,11 +336,11 @@ func TestCacheConcurrentWritersLeaveValidEntry(t *testing.T) {
 			defer wg.Done()
 			c := newTestCache(t, root, "v1", 0) // a separate cache stands in for a separate process
 			for j := 0; j < 20; j++ {
-				if err := c.Put(NSReview, key, payloads[(i+j)%2]); err != nil {
+				if err := c.Put(NSPrompt, key, payloads[(i+j)%2]); err != nil {
 					t.Error(err)
 					return
 				}
-				if got, ok := c.Get(NSReview, key); ok && !bytes.Equal(got, payloads[0]) && !bytes.Equal(got, payloads[1]) {
+				if got, ok := c.Get(NSPrompt, key); ok && !bytes.Equal(got, payloads[0]) && !bytes.Equal(got, payloads[1]) {
 					t.Error("read a payload nobody wrote")
 					return
 				}
@@ -273,7 +350,7 @@ func TestCacheConcurrentWritersLeaveValidEntry(t *testing.T) {
 	wg.Wait()
 
 	c := newTestCache(t, root, "v1", 0)
-	got, ok := c.Get(NSReview, key)
+	got, ok := c.Get(NSPrompt, key)
 	if !ok || (!bytes.Equal(got, payloads[0]) && !bytes.Equal(got, payloads[1])) {
 		t.Fatalf("final entry invalid: ok=%v len=%d", ok, len(got))
 	}
@@ -309,7 +386,7 @@ func (k *testClock) advance(d time.Duration) {
 func TestCacheRescansDiskAfterInterval(t *testing.T) {
 	root := t.TempDir()
 	payload := bytes.Repeat([]byte("p"), 100)
-	entry := int64(len(payload)) + entryHeaderLen
+	entry := diskSize(payload)
 	capBytes := entry * 4
 	clock := &testClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	a := newTestCache(t, root, "v1", capBytes)
@@ -317,7 +394,7 @@ func TestCacheRescansDiskAfterInterval(t *testing.T) {
 	a.now, b.now = clock.now, clock.now
 	put := func(c *Cache, name string) {
 		t.Helper()
-		if err := c.Put(NSReview, c.Key(name), payload); err != nil {
+		if err := c.Put(NSPrompt, c.Key(name), payload); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -331,7 +408,7 @@ func TestCacheRescansDiskAfterInterval(t *testing.T) {
 	if st, _ := a.Stats(); st.Bytes <= capBytes {
 		t.Fatalf("setup: disk holds %d bytes; want it over cap %d", st.Bytes, capBytes)
 	}
-	clock.advance(cacheRescanInterval + time.Second)
+	clock.advance(rescanInterval + time.Second)
 	put(a, "a4")
 	st, err := a.Stats()
 	if err != nil {
@@ -340,7 +417,7 @@ func TestCacheRescansDiskAfterInterval(t *testing.T) {
 	if st.Bytes > capBytes {
 		t.Fatalf("bytes = %d after the rescan interval; want <= cap %d", st.Bytes, capBytes)
 	}
-	if _, ok := a.Get(NSReview, a.Key("a4")); !ok {
+	if _, ok := a.Get(NSPrompt, a.Key("a4")); !ok {
 		t.Fatal("the entry just written must survive eviction")
 	}
 }
@@ -351,7 +428,7 @@ func TestCacheScanFailureSurfacesAndRetries(t *testing.T) {
 	}
 	root := t.TempDir()
 	c := newTestCache(t, root, "v1", 0)
-	bad := filepath.Join(root, string(NSReview))
+	bad := filepath.Join(root, string(NSPrompt))
 	if err := os.MkdirAll(bad, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +437,7 @@ func TestCacheScanFailureSurfacesAndRetries(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(bad, 0o755) })
 	payload := []byte("payload")
-	size := int64(len(payload)) + entryHeaderLen
+	size := diskSize(payload)
 	if err := c.Put(NSContext, c.Key("one"), payload); err == nil {
 		t.Fatal("Put = nil; want the scan error")
 	}
@@ -387,33 +464,100 @@ func TestCachePutKeepsExistingEntryWhenRenameFails(t *testing.T) {
 	root := t.TempDir()
 	c := newTestCache(t, root, "v1", 0)
 	key := c.Key("same inputs")
-	if err := c.Put(NSChecks, key, []byte("result")); err != nil {
+	if err := c.Put(NSMap, key, []byte("result")); err != nil {
 		t.Fatal(err)
 	}
 	orig := renameFile
 	t.Cleanup(func() { renameFile = orig })
 	renameFile = func(string, string) error { return errors.New("access is denied") }
 
-	if err := c.Put(NSChecks, key, []byte("result")); err != nil {
+	if err := c.Put(NSMap, key, []byte("result")); err != nil {
 		t.Fatalf("Put = %v; want nil because a valid entry already exists", err)
 	}
-	if got, ok := c.Get(NSChecks, key); !ok || string(got) != "result" {
+	if got, ok := c.Get(NSMap, key); !ok || string(got) != "result" {
 		t.Fatalf("Get = %q, %v; want the existing entry", got, ok)
 	}
-	path, _ := c.entryPath(NSChecks, key)
+	path, _ := c.entryPath(NSMap, key)
 	for _, n := range dirNames(t, filepath.Dir(path)) {
 		if strings.Contains(n, ".tmp-") {
 			t.Fatalf("temp file %s left behind", n)
 		}
 	}
 
-	if err := c.Put(NSChecks, c.Key("new"), []byte("x")); err == nil {
+	if err := c.Put(NSMap, c.Key("new"), []byte("x")); err == nil {
 		t.Fatal("Put = nil; want the rename error when no entry exists")
 	}
 	if err := os.WriteFile(path, []byte("corrupt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Put(NSChecks, key, []byte("result")); err == nil {
+	if err := c.Put(NSMap, key, []byte("result")); err == nil {
 		t.Fatal("Put = nil; want the rename error when the existing entry is corrupt")
+	}
+}
+
+func TestCacheHandleSharesEntriesAndClosesCleanly(t *testing.T) {
+	c := newTestCache(t, t.TempDir(), "v1", 0)
+	h := c.Handle()
+	key := h.Key("shared")
+	if key != c.Key("shared") {
+		t.Fatal("handle and cache must build the same key")
+	}
+	done := make(chan error, 1)
+	go func() { done <- h.Put(NSContext, key, []byte("from goroutine")) }()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := c.Get(NSContext, key); !ok || string(got) != "from goroutine" {
+		t.Fatalf("cache Get = %q, %v; want the handle's write", got, ok)
+	}
+	if err := c.Put(NSMap, key, []byte("from cache")); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := h.Get(NSMap, key); !ok || string(got) != "from cache" {
+		t.Fatalf("handle Get = %q, %v; want the cache's write", got, ok)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.Get(NSContext, key); ok {
+		t.Fatal("Get after Close must miss")
+	}
+	if err := h.Put(NSContext, h.Key("late"), []byte("x")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Put after Close = %v; want ErrClosed", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("second Close = %v; want nil", err)
+	}
+}
+
+// Compile-time check: a Handle is what the cache hands out.
+var _ Handle = (*Cache)(nil).Handle()
+
+func TestCacheHandleHidesManagerCalls(t *testing.T) {
+	h := newTestCache(t, t.TempDir(), "v1", 0).Handle()
+	if _, ok := h.(interface{ Close() error }); ok {
+		t.Fatal("a Handle must not expose Close")
+	}
+	if _, ok := h.(interface{ Stats() (Stats, error) }); ok {
+		t.Fatal("a Handle must not expose Stats")
+	}
+	if _, ok := h.(interface {
+		Clear(...Namespace) (Stats, error)
+	}); ok {
+		t.Fatal("a Handle must not expose Clear")
+	}
+}
+
+func TestNewRefusesEmptyRootAndAppliesDefaults(t *testing.T) {
+	if _, err := New("", "v1", Limits{}); err == nil {
+		t.Fatal("an empty root must be refused")
+	}
+	c, err := New(filepath.Join(t.TempDir(), "a", "b"), "v1", Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.maxBytes != DefaultMaxBytes || c.langMaxBytes != DefaultLangMaxBytes {
+		t.Fatalf("caps = %d, %d; want the defaults", c.maxBytes, c.langMaxBytes)
 	}
 }

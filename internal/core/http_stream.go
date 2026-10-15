@@ -46,7 +46,7 @@ func (c *Client) Stream(ctx context.Context, ep Endpoint, req *http.Request, hoo
 		}
 		res := &Response{Status: s.resp.StatusCode, Header: s.resp.Header, Attempts: s.attempts, Headroom: s.headroom}
 		err = readSSE(ctx, s.resp.Body, hooks)
-		s.resp.Body.Close()
+		_ = s.resp.Body.Close()
 		if err == nil {
 			return res, nil
 		}
