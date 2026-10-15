@@ -133,3 +133,17 @@ func TestOtherErrorTable(t *testing.T) {
 		t.Errorf("%d rows, want %d", len(otherErrors), len(want))
 	}
 }
+
+// Each fault data type reports its final flag through the bus's Finaler interface.
+func TestFaultDataIsAFinaler(t *testing.T) {
+	for _, p := range []bus.Payload{&ErrorFault{}, &PanicFault{}, &ResourceFault{}} {
+		f, ok := p.(bus.Finaler)
+		if !ok || f.IsFinal() {
+			t.Fatalf("%T: Finaler %v, final %v, want a Finaler that is not final", p, ok, ok && f.IsFinal())
+		}
+	}
+	d := &ErrorFault{FaultData{Final: true}}
+	if !d.IsFinal() {
+		t.Fatal("a final fault reports false")
+	}
+}

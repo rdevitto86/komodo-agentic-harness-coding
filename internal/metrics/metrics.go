@@ -54,9 +54,9 @@ type Service struct {
 	listed map[string]bool       // every metrics folder repos.json names
 
 	// The fields below belong to the goroutine that handles events.
-	runRepo map[bus.ID]string     // the metrics folder of each run that has not ended
-	logs    map[string]*jsonlFile // open record files by path
-	failed  map[string]bool       // failures already recorded
+	runRepo map[bus.ID]string         // the metrics folder of each run that has not ended
+	logs    map[string]*core.LineFile // open record files by path
+	failed  map[string]bool           // failures already recorded
 }
 
 // New returns a Service that writes under dir and masks secrets with mask.
@@ -75,7 +75,7 @@ func New(b bus.Bus, dir string, o Options, mask func(string) string) (*Service, 
 	s := &Service{
 		bus: b, dir: dir, opt: o, mask: mask, sub: sub,
 		repos: map[string]*repoState{}, listed: map[string]bool{},
-		runRepo: map[bus.ID]string{}, logs: map[string]*jsonlFile{}, failed: map[string]bool{},
+		runRepo: map[bus.ID]string{}, logs: map[string]*core.LineFile{}, failed: map[string]bool{},
 	}
 	var dirs []string
 	if err := readJSON(filepath.Join(dir, reposFile), &dirs); err == nil {
@@ -357,7 +357,7 @@ func (s *Service) put(path string, v any) error {
 	}
 	l, ok := s.logs[path]
 	if !ok {
-		if l, err = openLog(path); err != nil {
+		if l, err = core.OpenLineFile(path); err != nil {
 			return err
 		}
 		s.logs[path] = l

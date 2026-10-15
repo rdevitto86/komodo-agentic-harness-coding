@@ -24,7 +24,7 @@ const tailBytes = 64 << 10
 // TrimOptions holds what a trim needs beyond the folder.
 type TrimOptions struct {
 	RetentionDays int           // days a log is kept; a value below 1 means 30
-	Open          func(ID) bool // reports whether a run is open; nil means none is
+	Open          func(ID) bool // reports whether a run is open; nil counts every run as open, so nothing is deleted
 }
 
 // TrimResult says what a trim did.
@@ -40,10 +40,11 @@ type logFile struct {
 	run       ID
 	size      int64
 	last      time.Time
-	protected bool // the run is open
+	protected bool // the run is open, or the log was written to within the last day
 }
 
-// Trim deletes the logs of an events folder past retention, then the oldest logs past the size bound; the log of an open run stays.
+// Trim deletes the logs of an events folder past retention, then the oldest logs past the size bound.
+// A log stays when its run is open or when it was written to within the last day.
 func Trim(ctx context.Context, dir string, o TrimOptions) (TrimResult, error) {
 	var res TrimResult
 	if o.RetentionDays <= 0 {
@@ -94,6 +95,9 @@ func Trim(ctx context.Context, dir string, o TrimOptions) (TrimResult, error) {
 	return res, nil
 }
 
+// recentWrite is how recently a log must have been written to for the trim to spare it.
+const recentWrite = 24 * time.Hour
+
 // listLogs returns the run logs of a folder with their last-line times.
 func listLogs(dir string, open func(ID) bool) ([]logFile, error) {
 	files, err := logFiles(dir)
@@ -111,7 +115,7 @@ func listLogs(dir string, open func(ID) bool) ([]logFile, error) {
 		if !ok {
 			last = st.ModTime()
 		}
-		out = append(out, logFile{path: p, run: run, size: st.Size(), last: last, protected: open != nil && open(run)})
+		out = append(out, logFile{path: p, run: run, size: st.Size(), last: last, protected: open == nil || open(run) || now().Sub(st.ModTime()) < recentWrite})
 	}
 	return out, nil
 }
@@ -164,64 +168,159 @@ func folderSize(dir string) (int64, error) {
 	return n, nil
 }
 
-// startTrimLocked marks dir for a trim unless it was trimmed within the last day; the caller holds the lock.
-func (b *memBus) startTrimLocked(dir string) {
-	if b.closed || now().Sub(b.lastTrim[dir]) < trimInterval {
-		return
+// dueLocked reports whether the trim named by key is due, and stamps it as started if so.
+func (b *memBus) dueLocked(key string) bool {
+	if now().Sub(b.lastTrim[key]) < trimInterval {
+		return false
 	}
-	b.lastTrim[dir] = now()
-	b.due = append(b.due, dir)
+	b.lastTrim[key] = now()
+	return true
 }
 
-// runDue starts the trims marked during a publish, after the bus lock is released.
-func (b *memBus) runDue() {
-	b.mu.Lock()
-	due := b.due
-	b.due = nil
+// startTrimLocked marks dir, and the machine log, for a trim unless each was trimmed within the last day; the caller holds the lock.
+func (b *memBus) startTrimLocked(dir string) {
 	if b.closed {
-		due = nil
+		return
 	}
-	b.trims.Add(len(due))
+	if b.dueLocked(dir) {
+		b.follow.trims = append(b.follow.trims, trimJob{dir: dir})
+	}
+	if b.dueLocked("\x00machine") {
+		b.follow.trims = append(b.follow.trims, trimJob{dir: b.dir, machine: true})
+	}
+}
+
+// startTrims starts the trims a publish marked, after the bus lock is released.
+func (b *memBus) startTrims(jobs []trimJob) {
+	if len(jobs) == 0 {
+		return
+	}
+	b.mu.Lock()
+	if b.closed {
+		jobs = nil
+	}
+	b.trims.Add(len(jobs))
 	b.mu.Unlock()
-	for _, dir := range due {
+	for _, j := range jobs {
 		if b.goFn != nil {
-			b.goFn(func() { b.trim(dir) })
+			b.goFn(func() { b.trim(j) })
 		} else {
-			b.trim(dir)
+			b.trim(j)
 		}
 	}
 }
 
-// trim runs Trim on dir, forgets the runs it deleted, and publishes bus.store_failed for a failed or over-bound trim.
-func (b *memBus) trim(dir string) {
+// trim runs one job, forgets the runs it deleted, and publishes bus.store_failed for a failed or over-bound trim.
+func (b *memBus) trim(j trimJob) {
 	defer b.trims.Done()
-	res, err := Trim(context.Background(), dir, TrimOptions{RetentionDays: b.retention, Open: b.runOpen})
+	if j.machine {
+		if err := b.trimMachineLog(); err != nil {
+			b.reportStore("", filepath.Join(j.dir, machineLogName), fmt.Sprintf("trim: %v", err))
+		}
+		return
+	}
+	res, err := Trim(context.Background(), j.dir, TrimOptions{RetentionDays: b.retention, Open: b.runOpen})
 	if len(res.Deleted) > 0 {
-		b.forget(dir, res.Deleted)
+		b.forget(j.dir, res.Deleted)
 	}
 	if err != nil {
-		b.reportStore(dir, fmt.Sprintf("trim %s: %v", dir, err))
+		b.reportStore("", j.dir, fmt.Sprintf("trim %s: %v", j.dir, err))
 	}
 	if res.OverBound {
-		b.reportStore(dir, fmt.Sprintf("the logs of open runs in %s are over the size bound", dir))
+		b.reportStore("", j.dir, fmt.Sprintf("the logs of open runs in %s are over the size bound", j.dir))
 	}
 }
 
-// forget drops deleted runs of dir from the run-to-folder map and rewrites runs.json.
+// forget drops deleted runs of dir from the run-to-folder map and from runs.json.
 func (b *memBus) forget(dir string, runs []ID) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var gone []ID
 	for _, r := range runs {
 		if b.runDir[r] == dir {
 			delete(b.runDir, r)
 			b.closeLogLocked(filepath.Join(dir, LogName(r)))
+			gone = append(gone, r)
 		}
 	}
-	// A runs.json that cannot be written keeps its stale rows until the next run-start rewrites it.
-	_ = b.saveRunsLocked()
+	b.mu.Unlock()
+	b.saveRuns(nil, gone)
 }
 
-// reportStore publishes a bus.store_failed event for a problem in the store that belongs to no run; a closed or sealed bus drops it.
-func (b *memBus) reportStore(path, reason string) {
-	_ = b.Publish(Event{Type: TypeError, Subtype: busStoreFailedKey.Subtype, Data: &BusStoreFailed{Path: path, Reason: reason}})
+// trimMachineLog rewrites engine.jsonl keeping the lines within retention and under the size bound, oldest lines dropped first.
+// It reads a snapshot outside the lock, then under the lock adds the lines appended since and swaps the file in.
+func (b *memBus) trimMachineLog() error {
+	path := filepath.Join(b.dir, machineLogName)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Bytes after the last newline are a line still being written; the swap carries them over.
+	end := bytes.LastIndexByte(data, '\n') + 1
+	lines := bytes.SplitAfter(data[:end], []byte{'\n'})
+	lines = lines[:len(lines)-1]
+	days := b.retention
+	if days <= 0 {
+		days = defaultRetentionDays
+	}
+	cutoff := now().Add(-time.Duration(days) * 24 * time.Hour)
+	var kept [][]byte
+	var total int64
+	for _, l := range lines {
+		var t struct {
+			Time time.Time `json:"time"`
+		}
+		if json.Unmarshal(l, &t) == nil && !t.Time.IsZero() && t.Time.Before(cutoff) {
+			continue
+		}
+		kept = append(kept, l)
+		total += int64(len(l))
+	}
+	if total > sizeBound {
+		for total > sizeBound*8/10 && len(kept) > 0 {
+			total -= int64(len(kept[0]))
+			kept = kept[1:]
+		}
+	}
+	if len(kept) == len(lines) {
+		return nil
+	}
+	tmp := path + ".trim"
+	if err := os.WriteFile(tmp, bytes.Join(kept, nil), filePerm); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.swapMachineLogLocked(path, tmp, int64(end)); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// swapMachineLogLocked appends what engine.jsonl gained after offset to tmp, closes the log and renames tmp over it.
+func (b *memBus) swapMachineLogLocked(path, tmp string, offset int64) error {
+	b.closeLogLocked(path)
+	src, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+	if _, err := src.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+	dst, err := os.OpenFile(tmp, os.O_APPEND|os.O_WRONLY, filePerm)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

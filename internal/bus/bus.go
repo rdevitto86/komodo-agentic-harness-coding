@@ -35,7 +35,7 @@ type Options struct {
 	BufferEvents  int                 // queue size per subscription
 	EventsDir     string              // the machine events folder, ~/.komodo/events; empty turns the event store off
 	RetentionDays int                 // days an event log is kept; a value below 1 means 30
-	RunOpen       func(ID) bool       // reports whether a run is open, so its log is never trimmed; nil means none is
+	RunOpen       func(ID) bool       // reports whether a run is open, so its log is never trimmed; nil counts every run as open
 	Go            func(func())        // starts a function on a goroutine the engine guards against panics; nil runs it before Publish returns
 	Mask          func(string) string // hides secrets in a line before it is written; nil writes it as is
 }
@@ -57,12 +57,14 @@ type memBus struct {
 	retention int                  // days an event log is kept
 	runOpen   func(ID) bool        // reports whether a run is open
 	runDir    map[ID]string        // the events folder of each run
-	logs      map[string]*eventLog // open logs by path
+	logs      map[string]*openLog  // open logs by path, at most maxOpenLogs
+	useSeq    uint64               // counts log writes, to find the least recently written log
+	follow    followUp             // work the current publish leaves for after the lock
+	saveMu    sync.Mutex           // orders the runs.json read-merge-write; taken without mu
 	missed    map[string]int       // events lost to failed appends, by log, not yet marked
 	failed    map[string]bool      // logs whose failure burst was announced and has not ended
 	lastTrim  map[string]time.Time // when each events folder was last trimmed
 	goFn      func(func())         // starts a trim; nil runs it inline
-	due       []string             // events folders whose trim starts once Publish releases the lock
 	trims     sync.WaitGroup       // running background trims
 }
 
@@ -73,13 +75,20 @@ func New(o Options) Bus {
 	}
 	b := &memBus{
 		buffer: o.BufferEvents, dir: o.EventsDir, mask: o.Mask, retention: o.RetentionDays, runOpen: o.RunOpen, goFn: o.Go,
-		runDir: map[ID]string{}, logs: map[string]*eventLog{}, missed: map[string]int{}, failed: map[string]bool{},
+		runDir: map[ID]string{}, logs: map[string]*openLog{}, missed: map[string]int{}, failed: map[string]bool{},
 		lastTrim: map[string]time.Time{},
 	}
 	if b.dir != "" {
-		// A runs.json that cannot be read starts the map empty; the next run-start writes it again.
-		if m, err := readRuns(filepath.Join(b.dir, runsFile)); err == nil {
+		// A runs.json that cannot be read starts the map empty and is reported; a corrupt one is moved aside first.
+		path := filepath.Join(b.dir, runsFile)
+		m, note, err := loadRuns(path)
+		if err == nil {
 			b.runDir = m
+		} else {
+			note = err.Error()
+		}
+		if note != "" {
+			b.reportStore("", path, note)
 		}
 	}
 	return b
@@ -91,24 +100,26 @@ func (b *memBus) Publish(e Event) error {
 	if !validate(e) {
 		return fmt.Errorf("publish %q/%q: %w", e.Type, e.Subtype, ErrUnknownEvent)
 	}
-	err := b.publish(e)
-	b.runDue()
+	fu, err := b.publish(e)
+	b.finish(fu)
 	return err
 }
 
-// publish stores and queues e under the bus lock.
-func (b *memBus) publish(e Event) error {
+// publish stamps, stores and queues e under the bus lock and returns the work left for after it.
+func (b *memBus) publish(e Event) (followUp, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
-		return ErrBusClosed
+		return followUp{}, ErrBusClosed
 	}
 	if b.sealed {
-		return ErrBusSealed
+		return followUp{}, ErrBusSealed
 	}
 	e.Time = now().UTC().Truncate(time.Second)
 	b.fanOutLocked(e)
-	return nil
+	fu := b.follow
+	b.follow = followUp{}
+	return fu, nil
 }
 
 // fanOutLocked stores and queues e and then any bus.overflow or bus.store_failed events it caused, so the log and every subscriber see one order.

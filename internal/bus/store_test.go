@@ -276,6 +276,9 @@ type finalFault struct {
 // EventKey binds the stand-in to a test-only subtype.
 func (finalFault) EventKey() Key { return Key{TypeError, "test.final"} }
 
+// IsFinal reports the final flag.
+func (d finalFault) IsFinal() bool { return d.Final }
+
 // init binds the stand-in once for the test binary.
 func init() { Register(finalFault{}.EventKey(), func() Payload { return &finalFault{} }) }
 

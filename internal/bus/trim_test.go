@@ -36,6 +36,17 @@ func openRuns(ids ...ID) func(ID) bool {
 	}
 }
 
+// oldLog writes a run log whose file was last written age ago.
+func oldLog(t *testing.T, dir string, run ID, content string, age time.Duration) string {
+	t.Helper()
+	p := writeLog(t, dir, run, content)
+	mt := time.Now().Add(-age)
+	if err := os.Chtimes(p, mt, mt); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // mkSparse makes a run log of mb megabytes with a modified time age ago.
 func mkSparse(t *testing.T, dir string, run ID, mb int64, age time.Duration) string {
 	t.Helper()
@@ -54,8 +65,8 @@ func mkSparse(t *testing.T, dir string, run ID, mb int64, age time.Duration) str
 func TestTrimDeletesLogsPastRetention(t *testing.T) {
 	dir := t.TempDir()
 	old := 31 * 24 * time.Hour
-	closed := writeLog(t, dir, "run-closed", joinLines(jsonLine(t, aged(old, "run-closed"))))
-	open := writeLog(t, dir, "run-open", joinLines(jsonLine(t, aged(old, "run-open"))))
+	closed := oldLog(t, dir, "run-closed", joinLines(jsonLine(t, aged(old, "run-closed"))), old)
+	open := oldLog(t, dir, "run-open", joinLines(jsonLine(t, aged(old, "run-open"))), old)
 	fresh := writeLog(t, dir, "run-fresh", joinLines(jsonLine(t, aged(time.Hour, "run-fresh"))))
 	res, err := Trim(context.Background(), dir, TrimOptions{RetentionDays: 30, Open: openRuns("run-open")})
 	if err != nil {
@@ -72,9 +83,9 @@ func TestTrimDeletesLogsPastRetention(t *testing.T) {
 // With no retention given the default of 30 days applies.
 func TestTrimDefaultsToThirtyDays(t *testing.T) {
 	dir := t.TempDir()
-	p := writeLog(t, dir, "run-old", joinLines(jsonLine(t, aged(31*24*time.Hour, "run-old"))))
-	q := writeLog(t, dir, "run-new", joinLines(jsonLine(t, aged(29*24*time.Hour, "run-new"))))
-	if _, err := Trim(context.Background(), dir, TrimOptions{}); err != nil {
+	p := oldLog(t, dir, "run-old", joinLines(jsonLine(t, aged(31*24*time.Hour, "run-old"))), 31*24*time.Hour)
+	q := oldLog(t, dir, "run-new", joinLines(jsonLine(t, aged(29*24*time.Hour, "run-new"))), 29*24*time.Hour)
+	if _, err := Trim(context.Background(), dir, TrimOptions{Open: openRuns()}); err != nil {
 		t.Fatal(err)
 	}
 	if exists(p) || !exists(q) {
@@ -125,7 +136,7 @@ func TestTrimAgesAnUnparseableLogByFileTime(t *testing.T) {
 	if err := os.Chtimes(p, mt, mt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Trim(context.Background(), dir, TrimOptions{RetentionDays: 30}); err != nil {
+	if _, err := Trim(context.Background(), dir, TrimOptions{RetentionDays: 30, Open: openRuns()}); err != nil {
 		t.Fatal(err)
 	}
 	if exists(p) {
@@ -143,7 +154,7 @@ func TestTrimOfAMissingFolder(t *testing.T) {
 // The first run-start in a folder trims it in the background and drops the deleted runs from runs.json.
 func TestRunStartTrimsItsFolder(t *testing.T) {
 	f := newStoreBus(t, 100, func(o *Options) { o.RetentionDays = 30 })
-	old := writeLog(t, f.repo, "run-old", joinLines(jsonLine(t, aged(40*24*time.Hour, "run-old"))))
+	old := oldLog(t, f.repo, "run-old", joinLines(jsonLine(t, aged(40*24*time.Hour, "run-old"))), 40*24*time.Hour)
 	m, _ := json.Marshal(map[ID]string{"run-old": f.repo})
 	if err := os.MkdirAll(f.home, 0o755); err != nil {
 		t.Fatal(err)
@@ -151,7 +162,7 @@ func TestRunStartTrimsItsFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.home, "runs.json"), m, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	b := New(Options{BufferEvents: 10, EventsDir: f.home, RetentionDays: 30})
+	b := New(Options{BufferEvents: 10, EventsDir: f.home, RetentionDays: 30, RunOpen: openRuns()})
 	if err := b.Publish(f.runStart("run-new")); err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +186,8 @@ func TestRunStartTrimsItsFolder(t *testing.T) {
 // The background trim asks the open check the engine passed in, and spares the logs of the runs it names.
 func TestRunStartTrimHonoursTheOpenCheck(t *testing.T) {
 	f := newStoreBus(t, 100, func(o *Options) { o.RetentionDays = 1; o.RunOpen = openRuns("run-paused") })
-	paused := writeLog(t, f.repo, "run-paused", joinLines(jsonLine(t, aged(5*24*time.Hour, "run-paused"))))
-	gone := writeLog(t, f.repo, "run-gone", joinLines(jsonLine(t, aged(5*24*time.Hour, "run-gone"))))
+	paused := oldLog(t, f.repo, "run-paused", joinLines(jsonLine(t, aged(5*24*time.Hour, "run-paused"))), 5*24*time.Hour)
+	gone := oldLog(t, f.repo, "run-gone", joinLines(jsonLine(t, aged(5*24*time.Hour, "run-gone"))), 5*24*time.Hour)
 	f.publish(f.runStart("run-a"))
 	if err := f.b.Close(); err != nil {
 		t.Fatal(err)
@@ -196,7 +207,7 @@ func TestTrimStartsThroughTheEngineGo(t *testing.T) {
 	if err := f.b.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if n := started.Load(); n != 1 {
-		t.Fatalf("%d trims started for one folder, want 1", n)
+	if n := started.Load(); n != 2 {
+		t.Fatalf("%d trims started, want 2 (the folder and the machine log)", n)
 	}
 }

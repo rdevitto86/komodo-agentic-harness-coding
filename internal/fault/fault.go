@@ -95,6 +95,9 @@ type FaultData struct {
 	Final     bool   `json:"final,omitempty"` // true for the last event before the program exits
 }
 
+// IsFinal reports whether this is the last event before the program exits; the bus syncs its logs for it.
+func (d FaultData) IsFinal() bool { return d.Final }
+
 // ErrorFault is the data of error / fault.error, a returned error.
 type ErrorFault struct{ FaultData }
 
