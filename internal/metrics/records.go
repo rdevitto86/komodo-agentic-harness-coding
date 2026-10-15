@@ -1,4 +1,4 @@
-// Package metrics is the Metrics Service: it appends every bus event to a per-run event log and keeps the run figures.
+// Package metrics is the Metrics Service: it follows every bus event and keeps the run figures, which it rebuilds from the bus's event store.
 package metrics
 
 import (
@@ -23,7 +23,7 @@ const (
 // FaultRecord is a failure of the Metrics Service itself, kept in the figures of the run it touched.
 type FaultRecord struct {
 	Time time.Time `json:"time"`
-	Kind string    `json:"kind"` // write, trim, size_bound, read or no_repository
+	Kind string    `json:"kind"` // write, trim, read, no_common_dir or no_repository
 	Text string    `json:"text"`
 }
 

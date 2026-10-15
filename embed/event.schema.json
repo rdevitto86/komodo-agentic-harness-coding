@@ -16,6 +16,26 @@
       ],
       "type": "object"
     },
+    "BusStoreFailed": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "path",
+        "reason"
+      ],
+      "type": "object"
+    },
     "CheckDone": {
       "additionalProperties": false,
       "properties": {
@@ -1069,6 +1089,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/BusStoreFailed"
+        },
+        "subtype": {
+          "const": "bus.store_failed"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/LimitWarn"
         },
         "subtype": {
@@ -1567,7 +1600,6 @@
     },
     "type": {
       "enum": [
-        "next",
         "plan",
         "skill",
         "mcp",

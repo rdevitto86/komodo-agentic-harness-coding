@@ -9,7 +9,6 @@ import (
 
 // The event types; every Event carries exactly one.
 const (
-	TypeNext        Type = "next"
 	TypePlan        Type = "plan"
 	TypeSkill       Type = "skill"
 	TypeMCP         Type = "mcp"
@@ -23,9 +22,9 @@ const (
 	TypeError       Type = "error"
 )
 
-// allTypes lists the 12 event types.
+// allTypes lists the 11 event types.
 var allTypes = []Type{
-	TypeNext, TypePlan, TypeSkill, TypeMCP, TypeRunStart, TypeRunStop, TypeRunContinue,
+	TypePlan, TypeSkill, TypeMCP, TypeRunStart, TypeRunStop, TypeRunContinue,
 	TypeRunStatus, TypeRunComplete, TypeRunFailure, TypeResource, TypeError,
 }
 
@@ -128,6 +127,7 @@ func init() {
 		func() Payload { return &LeaseTaken{} },
 		func() Payload { return &LimitWarn{} },
 		func() Payload { return &BusOverflow{} },
+		func() Payload { return &BusStoreFailed{} },
 		func() Payload { return &RequestAccepted{} },
 		func() Payload { return &RequestRefused{} },
 	} {

@@ -17,7 +17,8 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-4 }
 
 // TestScorecardMatchesHandCount checks first-pass rate, returns per group, finding precision, tester false fails, cache share and per-group cost against hand-counted values.
 func TestScorecardMatchesHandCount(t *testing.T) {
-	dir := t.TempDir()
+	common := t.TempDir()
+	dir := RepoDir(common)
 	base := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
 	at := func(sec int, e bus.Event) string {
 		e.Run = "run-a"
@@ -60,7 +61,10 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 		at(11, end("G1", "tt1", "tester", nil, &bus.VerifyOutcome{Failed: []string{"a"}, Disputed: []string{"b"}})),
 		at(12, bus.Event{Type: bus.TypeRunComplete, Subtype: "done", Data: &bus.RunDone{Done: []bus.ID{"G1", "G2"}}}),
 	)
-	writeLog(t, dir, "run-a", joinLines(ls...))
+	writeLog(t, bus.EventsDir(common), "run-a", joinLines(ls...))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	var recs []string
 	for _, r := range []SessionRecord{
 		{Session: "b1", Run: "run-a", Group: "G1", Agent: "builder", Model: "m1", StartedAt: base, Usage: u1},

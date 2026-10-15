@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
@@ -15,38 +14,23 @@ const (
 	filePerm = 0o644
 )
 
-// machineLogName is the log of events that name no run, kept in the machine metrics folder.
-const machineLogName = "engine.jsonl"
+// failuresFile is the machine metrics file of the Service's own failures that belong to no run's figures.
+const failuresFile = "failures.jsonl"
 
-// LogName returns the file name of a run's event log.
-func LogName(run bus.ID) string { return "events-" + string(run) + ".jsonl" }
-
-// runOfLog returns the run id a log file name carries, and whether the name is a run log's.
-func runOfLog(name string) (bus.ID, bool) {
-	id, ok := strings.CutPrefix(name, "events-")
-	if !ok {
-		return "", false
-	}
-	id, ok = strings.CutSuffix(id, ".jsonl")
-	return bus.ID(id), ok && id != ""
-}
+// eventsDirOf returns the events folder that sits beside a repository's metrics folder, as the bus lays it out.
+func eventsDirOf(dir string) string { return bus.EventsDir(filepath.Dir(filepath.Dir(dir))) }
 
 // RepoDir returns a repository's metrics folder inside its git common directory.
 func RepoDir(commonDir string) string { return filepath.Join(commonDir, "komodo", "metrics") }
 
-// safeName reports whether id can be one path segment of a file name.
-func safeName(id bus.ID) bool {
-	return id != "" && id != "." && id != ".." && !strings.ContainsAny(string(id), `/\`+"\x00")
-}
-
-// RunLog is an append-only log file; each line goes out in one write with no buffer between.
-type RunLog struct {
+// jsonlFile is an append-only line file; each line goes out in one write with no buffer between.
+type jsonlFile struct {
 	path string
 	f    *os.File
 }
 
 // openLog opens the file at path for appending, creating its folder and the file.
-func openLog(path string) (*RunLog, error) {
+func openLog(path string) (*jsonlFile, error) {
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return nil, fmt.Errorf("create folder of %s: %w", path, err)
 	}
@@ -54,7 +38,7 @@ func openLog(path string) (*RunLog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	l := &RunLog{path: path, f: f}
+	l := &jsonlFile{path: path, f: f}
 	if endsMidLine(f) {
 		// A dead program left a half-written line; end it so the next line starts clean.
 		if _, err := f.Write([]byte{'\n'}); err != nil {
@@ -79,7 +63,7 @@ func endsMidLine(f *os.File) bool {
 }
 
 // Append writes line and a newline with one write call.
-func (l *RunLog) Append(line []byte) error {
+func (l *jsonlFile) Append(line []byte) error {
 	buf := make([]byte, 0, len(line)+1)
 	buf = append(append(buf, line...), '\n')
 	if _, err := l.f.Write(buf); err != nil {
@@ -89,7 +73,7 @@ func (l *RunLog) Append(line []byte) error {
 }
 
 // Close closes the file; closing twice is harmless.
-func (l *RunLog) Close() error {
+func (l *jsonlFile) Close() error {
 	if l.f == nil {
 		return nil
 	}

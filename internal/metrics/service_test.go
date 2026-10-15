@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,8 +19,25 @@ func session(sec int, run, group, id bus.ID, agent string, u *bus.SessionUsage) 
 	}
 }
 
-// TestRunLogHoldsEveryEvent covers a run with 2 groups and 3 sessions: every event is a log line and sessions.jsonl holds 3 records.
-func TestRunLogHoldsEveryEvent(t *testing.T) {
+// dirNames lists the file names of a folder, or none when it is missing.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range ents {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+// TestFiguresFollowTheEvents covers a run with 2 groups and 3 sessions: sessions.jsonl holds 3 records, the figures count the groups, and the bus, not the Service, holds the run's event log.
+func TestFiguresFollowTheEvents(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	run := bus.ID("run-a")
 	evs := []bus.Event{
@@ -34,15 +52,6 @@ func TestRunLogHoldsEveryEvent(t *testing.T) {
 	f.publish(evs...)
 	stop()
 
-	got := lines(t, filepath.Join(f.repoDir, LogName(run)))
-	if len(got) != len(evs) {
-		t.Fatalf("log has %d lines, want %d", len(got), len(evs))
-	}
-	for i, l := range got {
-		if !strings.HasPrefix(l, `{"type":"`) {
-			t.Errorf("line %d is not an event line: %s", i, l)
-		}
-	}
 	if n := len(lines(t, filepath.Join(f.repoDir, "sessions.jsonl"))); n != 3 {
 		t.Fatalf("sessions.jsonl has %d records, want 3", n)
 	}
@@ -50,124 +59,55 @@ func TestRunLogHoldsEveryEvent(t *testing.T) {
 	if err != nil || len(rm) != 1 || rm[0].Groups != 2 || rm[0].Done != 2 {
 		t.Fatalf("Runs = %+v, %v", rm, err)
 	}
+	if got := lines(t, filepath.Join(f.events, bus.LogName(run))); len(got) != len(evs) {
+		t.Fatalf("the bus store holds %d lines, want %d", len(got), len(evs))
+	}
 }
 
-// TestTwoRunsOneBus checks each event lands in the log of its own run, in arrival order.
-func TestTwoRunsOneBus(t *testing.T) {
+// TestServiceWritesNoEventLog checks the Service's folders hold only its own records, for events with a run and without one.
+func TestServiceWritesNoEventLog(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	stop := f.start()
-	f.publish(f.runStart("run-a", "g1"), f.runStart("run-b", "g1"),
-		bus.Event{Type: bus.TypeRunStop, Run: "run-b", Data: &bus.RunStop{Target: "b-1"}},
-		bus.Event{Type: bus.TypeRunStop, Run: "run-a", Data: &bus.RunStop{Target: "a-1"}},
-		bus.Event{Type: bus.TypeRunStop, Run: "run-b", Data: &bus.RunStop{Target: "b-2"}},
-	)
+	f.publish(f.runStart("run-a", "g1"), bus.Event{Type: bus.TypeRunStop, Run: "run-a", Data: &bus.RunStop{Target: "x"}},
+		bus.Event{Type: bus.TypeRunStop, Data: &bus.RunStop{Target: "ep-1"}})
 	stop()
-	a := lines(t, filepath.Join(f.repoDir, LogName("run-a")))
-	b := lines(t, filepath.Join(f.repoDir, LogName("run-b")))
-	if len(a) != 2 || len(b) != 3 {
-		t.Fatalf("lines a=%d b=%d, want 2 and 3", len(a), len(b))
-	}
-	if !strings.Contains(b[1], "b-1") || !strings.Contains(b[2], "b-2") || strings.Contains(strings.Join(a, ""), "b-") {
-		t.Fatalf("order or routing wrong:\na=%v\nb=%v", a, b)
-	}
-}
-
-// TestEventWithoutRunGoesToMachineLog checks an event naming no run goes to engine.jsonl.
-func TestEventWithoutRunGoesToMachineLog(t *testing.T) {
-	f := newFixture(t, 100, nil)
-	stop := f.start()
-	f.publish(bus.Event{Type: bus.TypeRunStop, Data: &bus.RunStop{Target: "ep-1"}})
-	stop()
-	got := lines(t, filepath.Join(f.homeDir, "engine.jsonl"))
-	if len(got) != 1 || !strings.Contains(got[0], `"target":"ep-1"`) {
-		t.Fatalf("engine.jsonl = %v", got)
-	}
-}
-
-// TestKilledBeforeAppend checks an event published to a Service that never ran is absent from the log.
-func TestKilledBeforeAppend(t *testing.T) {
-	f := newFixture(t, 100, nil)
-	f.publish(f.runStart("run-a", "g1"))
-	if _, err := os.Stat(filepath.Join(f.repoDir, LogName("run-a"))); !os.IsNotExist(err) {
-		t.Fatalf("log exists or errored unexpectedly: %v", err)
-	}
-}
-
-// TestSecretIsMasked checks a line holding a secret is written masked.
-func TestSecretIsMasked(t *testing.T) {
-	mask := func(s string) string { return strings.ReplaceAll(s, "sk-SECRET", "***") }
-	f := newFixture(t, 100, mask)
-	stop := f.start()
-	f.publish(f.runStart("run-a", "g1"),
-		bus.Event{Type: bus.TypeRunFailure, Subtype: "group.blocked", Run: "run-a", Group: "g1", Data: &bus.GroupBlocked{Detail: "key sk-SECRET leaked"}})
-	stop()
-	raw, err := os.ReadFile(filepath.Join(f.repoDir, LogName("run-a")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "sk-SECRET") || !strings.Contains(string(raw), "key *** leaked") {
-		t.Fatalf("log not masked: %s", raw)
-	}
-}
-
-// TestFailedWriteIsRecordedOnce checks a failing log gives one failure record in the run's figures and the loop keeps reading.
-func TestFailedWriteIsRecordedOnce(t *testing.T) {
-	f := newFixture(t, 100, nil)
-	if err := os.MkdirAll(filepath.Join(f.repoDir, LogName("run-bad")), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	stop := f.start()
-	f.publish(f.runStart("run-bad", "g1"), f.runStart("run-ok", "g1"))
-	for range 3 {
-		f.publish(bus.Event{Type: bus.TypeRunStop, Run: "run-bad", Data: &bus.RunStop{Target: "x"}})
-	}
-	f.publish(bus.Event{Type: bus.TypeRunStop, Run: "run-ok", Data: &bus.RunStop{Target: "y"}})
-	stop()
-	runs, err := NewReader(f.repoDir).Runs(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range runs {
-		switch r.Run {
-		case "run-bad":
-			if len(r.Failures) != 1 || r.Failures[0].Kind != "write" || r.Failures[0].Time.IsZero() {
-				t.Errorf("run-bad failures = %+v, want one write failure", r.Failures)
-			}
-		case "run-ok":
-			if len(r.Failures) != 0 {
-				t.Errorf("run-ok failures = %+v", r.Failures)
-			}
+	for _, n := range dirNames(t, f.repoDir) {
+		if !slices.Contains([]string{"groups.json", "runs.json", "sessions.jsonl"}, n) {
+			t.Errorf("metrics folder holds %s", n)
 		}
 	}
-	if n := len(lines(t, filepath.Join(f.repoDir, LogName("run-ok")))); n != 2 {
-		t.Fatalf("run-ok log has %d lines, want 2", n)
-	}
-	if got := lines(t, filepath.Join(f.homeDir, "engine.jsonl")); len(got) != 0 {
-		t.Fatalf("engine.jsonl = %v, want nothing for a failure that has a run", got)
+	for _, n := range dirNames(t, f.homeDir) {
+		if strings.HasSuffix(n, ".jsonl") && n != failuresFile {
+			t.Errorf("machine metrics folder holds the event log %s", n)
+		}
 	}
 }
 
-// TestLostEventsReplayAsAGap checks events a failed write lost show as a dropped gap once writes work again.
-func TestLostEventsReplayAsAGap(t *testing.T) {
+// TestFailedRecordWriteIsRecordedOnce checks a failing sessions.jsonl gives one failure record in the run's figures and the loop keeps reading.
+func TestFailedRecordWriteIsRecordedOnce(t *testing.T) {
 	f := newFixture(t, 100, nil)
-	bad := filepath.Join(f.repoDir, LogName("run-a"))
-	if err := os.MkdirAll(bad, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(f.repoDir, "sessions.jsonl"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	f.svc.handle(ctx, ev(0, bus.TypeRunStart, "", "run-a", "", f.runStart("run-a", "g1").Data))
-	f.svc.handle(ctx, ev(1, bus.TypeRunStop, "", "run-a", "", &bus.RunStop{Target: "lost"}))
-	if err := os.Remove(bad); err != nil {
-		t.Fatal(err)
+	stop := f.start()
+	f.publish(f.runStart("run-bad", "g1"),
+		bus.Event{Type: bus.TypeRunStatus, Subtype: "run.start", Run: "run-bad", Data: &bus.RunStartedFact{Groups: []bus.ID{"g1"}}})
+	f.publish(session(0, "run-bad", "g1", "s1", "builder", nil)...)
+	f.publish(session(20, "run-bad", "g1", "s2", "builder", nil)...)
+	stop()
+	runs, err := NewReader(f.repoDir).Runs(context.Background())
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("Runs = %+v, %v", runs, err)
 	}
-	f.svc.handle(ctx, ev(2, bus.TypeRunStop, "", "run-a", "", &bus.RunStop{Target: "kept"}))
-	got, err := NewReader(f.repoDir).Replay(ctx, "run-a", "")
-	if err != nil || len(got.Events) != 1 || len(got.Gaps) != 1 || got.Gaps[0].Kind != "dropped" || got.Gaps[0].Dropped != 2 || got.Gaps[0].After != 0 {
-		t.Fatalf("replay = %+v, %v", got, err)
+	if fl := runs[0].Failures; len(fl) != 1 || fl[0].Kind != "write" || fl[0].Time.IsZero() {
+		t.Fatalf("failures = %+v, want one write failure", fl)
+	}
+	if got := lines(t, filepath.Join(f.homeDir, failuresFile)); len(got) != 0 {
+		t.Fatalf("%s = %v, want nothing for a failure that has a run", failuresFile, got)
 	}
 }
 
-// TestRebuildRewritesFigures checks Rebuild recomputes groups.json and runs.json from the run logs.
+// TestRebuildRewritesFigures checks Rebuild recomputes groups.json and runs.json from the bus store.
 func TestRebuildRewritesFigures(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	stop := f.start()

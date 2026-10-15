@@ -47,7 +47,7 @@ type tally struct {
 	groupUSD             map[groupKey]float64 // cost per group that reached Done
 }
 
-// scorecard works out the scorecard of a folder from the session records and run logs inside the window.
+// scorecard works out the scorecard of a folder from the session records and the bus store's run logs inside the window.
 func scorecard(ctx context.Context, dir string, window time.Duration, t time.Time) (Scorecard, error) {
 	var cutoff time.Time
 	if window > 0 {
@@ -71,20 +71,13 @@ func scorecard(ctx context.Context, dir string, window time.Duration, t time.Tim
 			tl.cacheRead += r.Usage.CacheRead
 		}
 	}
-	files, err := logFiles(dir)
+	doneGroups := map[groupKey]bool{}
+	err = bus.ReadFolder(ctx, eventsDirOf(dir), func(_ bus.ID, l bus.ReplayLog) error {
+		countEvents(l.Events, cutoff, byID, rows, doneGroups)
+		return nil
+	})
 	if err != nil {
 		return Scorecard{}, err
-	}
-	doneGroups := map[groupKey]bool{}
-	for _, p := range files {
-		if err := ctx.Err(); err != nil {
-			return Scorecard{}, err
-		}
-		log, err := readLog(p, "")
-		if err != nil {
-			return Scorecard{}, fmt.Errorf("read %s: %w", p, err)
-		}
-		countEvents(log.Events, cutoff, byID, rows, doneGroups)
 	}
 	for _, r := range byID {
 		gk := groupKey{r.Run, r.Group}

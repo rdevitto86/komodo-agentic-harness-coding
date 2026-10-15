@@ -46,6 +46,7 @@ type fixture struct {
 	root    string // the repository root
 	common  string // the repository's git common directory
 	repoDir string // the repository's metrics folder
+	events  string // the repository's events folder, which the bus fills
 	homeDir string // the machine metrics folder passed to New
 	bus     bus.Bus
 	svc     *Service
@@ -58,14 +59,14 @@ func newFixture(t *testing.T, buffer int, mask func(string) string) *fixture {
 	home := t.TempDir()
 	t.Setenv("KOMODO_HOME", home)
 	common := filepath.Join(root, ".git")
-	b := bus.New(bus.Options{BufferEvents: buffer})
+	b := bus.New(bus.Options{BufferEvents: buffer, EventsDir: filepath.Join(home, "events")})
 	t.Cleanup(func() { _ = b.Close() })
 	hd := filepath.Join(home, "metrics")
 	svc, err := New(b, hd, Options{RetentionDays: 30}, mask)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{t: t, root: root, common: common, repoDir: RepoDir(common), homeDir: hd, bus: b, svc: svc}
+	return &fixture{t: t, root: root, common: common, repoDir: RepoDir(common), events: bus.EventsDir(common), homeDir: hd, bus: b, svc: svc}
 }
 
 // publish puts events on the bus and fails the test on a refusal.
@@ -134,13 +135,13 @@ func jsonLine(t *testing.T, e bus.Event) string {
 	return string(b)
 }
 
-// writeLog writes raw content to a run's log in dir.
+// writeLog writes raw content to a run's event log in the events folder dir.
 func writeLog(t *testing.T, dir string, run bus.ID, content string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(dir, LogName(run))
+	p := filepath.Join(dir, bus.LogName(run))
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package bus
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -13,34 +14,53 @@ const DefaultBufferEvents = 50
 // busOverflowKey is the pair of the event the bus publishes when a queue is full.
 var busOverflowKey = BusOverflow{}.EventKey()
 
+// busStoreFailedKey is the pair of the event the bus publishes when an append to the event store fails.
+var busStoreFailedKey = BusStoreFailed{}.EventKey()
+
 // Bus accepts events and delivers each to the subscriptions that asked for its type.
 type Bus interface {
-	// Publish validates the event, stamps its time and queues it for every matching subscription; it never waits for a subscriber.
+	// Publish validates the event, stamps its time, appends it to the event store and queues it for every matching subscription; it never waits for a subscriber.
 	// Publish takes ownership of e.Data: the publisher and every subscriber treat it as read-only afterwards.
 	Publish(e Event) error
 	// Subscribe returns a private queue of events of the given types; no types means every type.
 	Subscribe(name string, types ...Type) (*Subscription, error)
 	// Seal refuses every later Publish with ErrBusSealed; queued events still reach their subscribers.
 	Seal()
-	// Close stops delivery and closes every subscription's channel.
+	// Close stops delivery, closes every subscription's channel and the event logs, and waits for a running trim.
 	Close() error
 }
 
 // Options holds the values the Configuration Manager hands to New.
 type Options struct {
-	BufferEvents int // queue size per subscription
+	BufferEvents  int                 // queue size per subscription
+	EventsDir     string              // the machine events folder, ~/.komodo/events; empty turns the event store off
+	RetentionDays int                 // days an event log is kept; a value below 1 means 30
+	RunOpen       func(ID) bool       // reports whether a run is open, so its log is never trimmed; nil means none is
+	Mask          func(string) string // hides secrets in a line before it is written; nil writes it as is
 }
 
 // now returns the current time; tests replace it to fix the stamp.
 var now = time.Now
 
-// memBus is the in-process Bus; one mutex orders every publish, so all subscribers see one order.
+// memBus is the in-process Bus; one mutex orders every publish, so the event log and all subscribers see one order.
 type memBus struct {
 	mu     sync.Mutex
 	buffer int
 	subs   []*Subscription
 	closed bool
 	sealed bool
+
+	// The fields below are the event store; all are guarded by mu.
+	dir       string               // the machine events folder; empty when the store is off
+	mask      func(string) string  // hides secrets in a line before it is written
+	retention int                  // days an event log is kept
+	runOpen   func(ID) bool        // reports whether a run is open
+	runDir    map[ID]string        // the events folder of each run
+	logs      map[string]*eventLog // open logs by path
+	missed    map[string]int       // events lost to failed appends, by log, not yet marked
+	failed    map[string]bool      // logs whose failure burst was announced and has not ended
+	lastTrim  map[string]time.Time // when each events folder was last trimmed
+	trims     sync.WaitGroup       // running background trims
 }
 
 // New returns an in-process bus; the engine holds the one bus of a machine.
@@ -48,10 +68,21 @@ func New(o Options) Bus {
 	if o.BufferEvents <= 0 {
 		o.BufferEvents = DefaultBufferEvents
 	}
-	return &memBus{buffer: o.BufferEvents}
+	b := &memBus{
+		buffer: o.BufferEvents, dir: o.EventsDir, mask: o.Mask, retention: o.RetentionDays, runOpen: o.RunOpen,
+		runDir: map[ID]string{}, logs: map[string]*eventLog{}, missed: map[string]int{}, failed: map[string]bool{},
+		lastTrim: map[string]time.Time{},
+	}
+	if b.dir != "" {
+		// A runs.json that cannot be read starts the map empty; the next run-start writes it again.
+		if m, err := readRuns(filepath.Join(b.dir, runsFile)); err == nil {
+			b.runDir = m
+		}
+	}
+	return b
 }
 
-// Publish checks the pair and data, then under the bus lock stamps the time and queues the event for every matching subscription.
+// Publish checks the pair and data, then under the bus lock stamps the time, appends the event to the event store and queues it for every matching subscription.
 // The data pointer is shared by all subscribers, so neither the publisher nor a subscriber modifies it after the call.
 func (b *memBus) Publish(e Event) error {
 	if !validate(e) {
@@ -70,12 +101,13 @@ func (b *memBus) Publish(e Event) error {
 	return nil
 }
 
-// fanOutLocked queues e and then any bus.overflow events its drops caused, so every subscriber sees them in one order.
+// fanOutLocked stores and queues e and then any bus.overflow or bus.store_failed events it caused, so the log and every subscriber see one order.
 func (b *memBus) fanOutLocked(e Event) {
 	pending := []Event{e}
 	for len(pending) > 0 {
 		next := pending[0]
 		pending = pending[1:]
+		pending = append(pending, b.storeLocked(next)...)
 		for _, s := range b.subs {
 			if !s.wants(next.Type) {
 				continue
@@ -132,16 +164,20 @@ func (b *memBus) Seal() {
 	b.sealed = true
 }
 
-// Close stops delivery and closes every subscription's channel; closing twice is harmless.
+// Close stops delivery, closes every subscription's channel and every open log, and waits for a running trim; closing twice is harmless.
 func (b *memBus) Close() error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.closed = true
 	for _, s := range b.subs {
 		s.closed = true
 		close(s.queue)
 	}
 	b.subs = nil
+	for p := range b.logs {
+		b.closeLogLocked(p)
+	}
+	b.mu.Unlock()
+	b.trims.Wait()
 	return nil
 }
 

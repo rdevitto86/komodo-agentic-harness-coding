@@ -426,6 +426,16 @@ type BusOverflow struct {
 // EventKey binds BusOverflow to error / bus.overflow.
 func (BusOverflow) EventKey() Key { return Key{TypeError, "bus.overflow"} }
 
+// BusStoreFailed is the data of error / bus.store_failed, published once per burst of failed appends to the event store.
+type BusStoreFailed struct {
+	Run    ID     `json:"run"`    // the run whose event was not stored; empty for an event with no run
+	Path   string `json:"path"`   // the file the append went to
+	Reason string `json:"reason"` // why the append failed
+}
+
+// EventKey binds BusStoreFailed to error / bus.store_failed.
+func (BusStoreFailed) EventKey() Key { return Key{TypeError, "bus.store_failed"} }
+
 // --- Command outcome
 
 // RequestRef names the command that a request outcome answers.

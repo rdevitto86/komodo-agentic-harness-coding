@@ -337,7 +337,7 @@ func TestPublishRefusesValueData(t *testing.T) {
 	}
 }
 
-// Register panics on a type outside the 12 constants, a duplicate pair, and a constructor that does not return a pointer.
+// Register panics on a type outside the 11 constants, a duplicate pair, and a constructor that does not return a pointer.
 func TestRegisterRefuses(t *testing.T) {
 	cases := map[string]func(){
 		"unknown type": func() { Register(Key{"bogus", ""}, func() Payload { return &RunStop{} }) },
@@ -362,7 +362,7 @@ func TestRegisterRefuses(t *testing.T) {
 	}
 }
 
-// Subscribe refuses a type name outside the 12 constants.
+// Subscribe refuses a type name outside the 11 constants.
 func TestSubscribeRefusesUnknownType(t *testing.T) {
 	b := newBus(t, 5)
 	if _, err := b.Subscribe("s", TypeRunStop, "bogus"); !errors.Is(err, ErrUnknownEvent) {

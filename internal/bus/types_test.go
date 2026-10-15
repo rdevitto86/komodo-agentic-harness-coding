@@ -58,6 +58,7 @@ var eventNameRows = []eventNameRow{
 	{"run-start", Key{TypeRunStart, ""}, false},
 	{"run-stop", Key{TypeRunStop, ""}, false},
 	{"bus.overflow", Key{TypeError, "bus.overflow"}, false},
+	{"bus.store_failed", Key{TypeError, "bus.store_failed"}, false},
 }
 
 // Every row of the event-name table is registered, or marked none.
@@ -92,9 +93,17 @@ func TestRegisteredStructsMatchTheirKey(t *testing.T) {
 	}
 }
 
-// The 12 type constants are the whole list.
-func TestTwelveTypes(t *testing.T) {
-	if n := len(allTypes); n != 12 {
-		t.Fatalf("%d types, want 12", n)
+// The 11 type constants are the whole list, and next is not one of them.
+func TestElevenTypes(t *testing.T) {
+	if n := len(allTypes); n != 11 {
+		t.Fatalf("%d types, want 11", n)
+	}
+	for _, ty := range allTypes {
+		if ty == "next" {
+			t.Fatal("the next type is still listed")
+		}
+	}
+	if _, err := New(Options{}).Subscribe("s", "next"); err == nil {
+		t.Fatal("Subscribe accepted the removed next type")
 	}
 }

@@ -32,7 +32,7 @@ type repoState struct {
 	fig *figures
 }
 
-// failLine is the line engine.jsonl holds for a failure that belongs to no run's figures.
+// failLine is the line failures.jsonl holds for a failure that belongs to no run's figures.
 type failLine struct {
 	Failure bool      `json:"failure"`
 	Time    time.Time `json:"time"`
@@ -41,10 +41,10 @@ type failLine struct {
 	Text    string    `json:"text"`
 }
 
-// Service records every event and keeps the figures current.
+// Service follows every event and keeps the figures current; it writes no event log, which the bus's event store holds.
 type Service struct {
 	bus  bus.Bus
-	dir  string // the machine metrics folder, which holds engine.jsonl and repos.json
+	dir  string // the machine metrics folder, which holds failures.jsonl and repos.json
 	opt  Options
 	mask func(string) string
 	sub  *bus.Subscription
@@ -54,15 +54,13 @@ type Service struct {
 	listed map[string]bool       // every metrics folder repos.json names
 
 	// The fields below belong to the goroutine that handles events.
-	runRepo     map[bus.ID]string  // the metrics folder of each run that has not ended
-	logs        map[string]*RunLog // open logs by path
-	missed      map[string]int     // events lost to failed writes, by log, not yet marked
-	failed      map[string]bool    // failures already recorded
-	lastDropped uint64             // the subscription's drop count the last gap lines covered
+	runRepo map[bus.ID]string     // the metrics folder of each run that has not ended
+	logs    map[string]*jsonlFile // open record files by path
+	failed  map[string]bool       // failures already recorded
 }
 
 // New returns a Service that writes under dir and masks secrets with mask.
-// dir is the machine metrics folder; a run's logs go to the folder its run-start names.
+// dir is the machine metrics folder; a run's records go to the folder its run-start names.
 func New(b bus.Bus, dir string, o Options, mask func(string) string) (*Service, error) {
 	if b == nil {
 		return nil, errors.New("metrics needs an event bus")
@@ -77,7 +75,7 @@ func New(b bus.Bus, dir string, o Options, mask func(string) string) (*Service, 
 	s := &Service{
 		bus: b, dir: dir, opt: o, mask: mask, sub: sub,
 		repos: map[string]*repoState{}, listed: map[string]bool{},
-		runRepo: map[bus.ID]string{}, logs: map[string]*RunLog{}, missed: map[string]int{}, failed: map[string]bool{},
+		runRepo: map[bus.ID]string{}, logs: map[string]*jsonlFile{}, failed: map[string]bool{},
 	}
 	var dirs []string
 	if err := readJSON(filepath.Join(dir, reposFile), &dirs); err == nil {
@@ -88,7 +86,7 @@ func New(b bus.Bus, dir string, o Options, mask func(string) string) (*Service, 
 	return s, nil
 }
 
-// Run subscribes to every event type and records until ctx ends, then records what is still queued.
+// Run follows every event type until ctx ends, then follows what is still queued.
 func (s *Service) Run(ctx context.Context) error {
 	defer s.closeLogs()
 	// Handling must finish an event it began, so the context that ends the loop does not reach the work.
@@ -115,7 +113,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 
-// drain records every event already queued, then writes the figures.
+// drain applies every event already queued, then writes the figures.
 func (s *Service) drain(ctx context.Context) {
 	for {
 		select {
@@ -132,7 +130,7 @@ func (s *Service) drain(ctx context.Context) {
 	}
 }
 
-// Rebuild recomputes groups.json and runs.json of every known repository from its run logs.
+// Rebuild recomputes groups.json and runs.json of every known repository from the bus's event store.
 // It replays outside the lock, then swaps the new figures in, keeping the open-session map.
 func (s *Service) Rebuild(ctx context.Context) error {
 	s.mu.Lock()
@@ -170,15 +168,13 @@ func (s *Service) Rebuild(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// handle records one event: a gap line if events were dropped, the event copy, then the figures.
+// handle applies one event to the figures and writes the session record it completes.
 func (s *Service) handle(ctx context.Context, e bus.Event) {
-	repo, path := s.target(ctx, e)
-	s.markDrops()
+	repo := s.target(ctx, e)
 	s.mu.Lock()
 	rec := repo.fig.apply(e)
 	ended := repo.fig.takeEnded()
 	s.mu.Unlock()
-	s.appendEvent(path, e.Run, e)
 	if rec != nil && repo.dir != "" {
 		if err := s.put(filepath.Join(repo.dir, "sessions.jsonl"), rec); err != nil {
 			s.fail(e.Run, "write", err.Error())
@@ -189,13 +185,8 @@ func (s *Service) handle(ctx context.Context, e bus.Event) {
 	}
 }
 
-// forgetRun closes a finished run's log and drops its entries from the Service's maps.
+// forgetRun drops a finished run's entries from the Service's maps.
 func (s *Service) forgetRun(run bus.ID) {
-	if dir, ok := s.runRepo[run]; ok {
-		p := filepath.Join(dir, LogName(run))
-		s.closeLog(p)
-		delete(s.missed, p)
-	}
 	delete(s.runRepo, run)
 	prefix := string(run) + "\x00"
 	for k := range s.failed {
@@ -205,14 +196,10 @@ func (s *Service) forgetRun(run bus.ID) {
 	}
 }
 
-// target returns the repository state and log path an event belongs to; the path is empty when none is known.
-func (s *Service) target(ctx context.Context, e bus.Event) (*repoState, string) {
+// target returns the repository state an event belongs to; the empty folder holds the events whose run has no known folder.
+func (s *Service) target(ctx context.Context, e bus.Event) *repoState {
 	if e.Run == "" {
-		return s.repoFor(""), filepath.Join(s.dir, machineLogName)
-	}
-	if !safeName(e.Run) {
-		s.fail("", "run_id", fmt.Sprintf("run id %q cannot name a log file", e.Run))
-		return s.repoFor(""), ""
+		return s.repoFor("")
 	}
 	if d, ok := e.Data.(*bus.RunStart); ok && e.Type == bus.TypeRunStart {
 		s.openRepo(ctx, e.Run, d.CommonDir)
@@ -226,9 +213,9 @@ func (s *Service) target(ctx context.Context, e bus.Event) (*repoState, string) 
 	}
 	if !ok {
 		s.fail("", "no_repository", fmt.Sprintf("no repository known for run %s", e.Run))
-		return s.repoFor(""), ""
+		return s.repoFor("")
 	}
-	return s.repoFor(dir), filepath.Join(dir, LogName(e.Run))
+	return s.repoFor(dir)
 }
 
 // repoFor returns the state of a metrics folder, creating it empty; the empty folder holds figures that are never written.
@@ -335,30 +322,16 @@ func (s *Service) lookupRun(ctx context.Context, run bus.ID) (dir string, ended,
 	return dir, ended, ok
 }
 
-// trimRepo trims a folder and returns the runs whose logs it deleted; its failures go to the Service's own records.
+// trimRepo trims a folder and returns the runs whose figures it dropped; its failures go to the Service's own records.
 func (s *Service) trimRepo(ctx context.Context, dir string) []bus.ID {
-	res, err := trimDir(ctx, dir, s.opt.RetentionDays, now(), s.openRuns(dir))
+	res, err := trimDir(ctx, dir, s.opt.RetentionDays, now())
 	if err != nil {
 		s.fail("", "trim", fmt.Sprintf("trim %s: %v", dir, err))
-	}
-	if res.OverBound {
-		s.fail("", "size_bound", fmt.Sprintf("the logs of runs that have not ended in %s are over the size bound", dir))
 	}
 	return res.Deleted
 }
 
-// openRuns returns the runs of a folder that have not ended.
-func (s *Service) openRuns(dir string) map[bus.ID]bool {
-	out := map[bus.ID]bool{}
-	for run, d := range s.runRepo {
-		if d == dir {
-			out[run] = true
-		}
-	}
-	return out
-}
-
-// trimKnown trims every loaded folder and drops the figures of the runs whose logs went.
+// trimKnown trims every loaded folder and drops the figures of the runs that aged out.
 func (s *Service) trimKnown(ctx context.Context) {
 	s.mu.Lock()
 	var dirs []string
@@ -376,65 +349,7 @@ func (s *Service) trimKnown(ctx context.Context) {
 	}
 }
 
-// markDrops writes a gap line to the log of every open run, or to engine.jsonl with none open, when the bus dropped events.
-func (s *Service) markDrops() {
-	d := s.sub.Dropped()
-	if d <= s.lastDropped {
-		return
-	}
-	gap := gapLine{Gap: true, Time: now().UTC().Truncate(time.Second), Dropped: int(d - s.lastDropped)}
-	type target struct {
-		path string
-		run  bus.ID
-	}
-	var targets []target
-	for run, dir := range s.runRepo {
-		targets = append(targets, target{filepath.Join(dir, LogName(run)), run})
-	}
-	if len(targets) == 0 {
-		targets = append(targets, target{filepath.Join(s.dir, machineLogName), ""})
-	}
-	slices.SortFunc(targets, func(a, b target) int { return compareStrings(a.path, b.path) })
-	ok := true
-	for _, t := range targets {
-		if err := s.put(t.path, gap); err != nil {
-			ok = false
-			s.fail(t.run, "write", err.Error())
-		}
-	}
-	if ok {
-		s.lastDropped = d
-	}
-}
-
-// compareStrings orders two strings.
-func compareStrings(a, b string) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
-}
-
-// appendEvent appends an event copy to the log at path; a failed write is recorded and later marked as a gap in that log.
-func (s *Service) appendEvent(path string, run bus.ID, e bus.Event) {
-	if path == "" {
-		return
-	}
-	if n := s.missed[path]; n > 0 {
-		if err := s.put(path, gapLine{Gap: true, Time: now().UTC().Truncate(time.Second), Dropped: n}); err == nil {
-			delete(s.missed, path)
-		}
-	}
-	if err := s.put(path, e); err != nil {
-		s.missed[path]++
-		s.fail(run, "write", err.Error())
-	}
-}
-
-// put masks v's JSON line and appends it to the log at path.
+// put masks v's JSON line and appends it to the file at path.
 func (s *Service) put(path string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -454,7 +369,7 @@ func (s *Service) put(path string, v any) error {
 	return nil
 }
 
-// closeLog closes the open log at path.
+// closeLog closes the open file at path.
 func (s *Service) closeLog(path string) {
 	if l, ok := s.logs[path]; ok {
 		_ = l.Close()
@@ -462,14 +377,14 @@ func (s *Service) closeLog(path string) {
 	}
 }
 
-// closeLogs closes every open log.
+// closeLogs closes every open file.
 func (s *Service) closeLogs() {
 	for p := range s.logs {
 		s.closeLog(p)
 	}
 }
 
-// fail records a failure once: in the run's figures when a run applies and its folder is known, otherwise in engine.jsonl.
+// fail records a failure once: in the run's figures when a run applies and its folder is known, otherwise in failures.jsonl.
 func (s *Service) fail(run bus.ID, kind, text string) {
 	key := string(run) + "\x00" + kind + "\x00" + text
 	if s.failed[key] {
@@ -490,7 +405,7 @@ func (s *Service) fail(run bus.ID, kind, text string) {
 		s.mu.Unlock()
 	}
 	// A failure to write this line has nowhere further to go.
-	_ = s.put(filepath.Join(s.dir, machineLogName), failLine{Failure: true, Time: at, Run: run, Kind: kind, Text: text})
+	_ = s.put(filepath.Join(s.dir, failuresFile), failLine{Failure: true, Time: at, Run: run, Kind: kind, Text: text})
 }
 
 // flush writes groups.json and runs.json of every repository whose figures changed; a failure leaves them marked for the next batch.
