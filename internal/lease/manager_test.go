@@ -8,13 +8,15 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 var bg = context.Background()
 
 func TestNewDefaults(t *testing.T) {
 	home := t.TempDir()
-	m, err := New(home, nil, nil)
+	m, err := New(home, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,9 +58,11 @@ func TestGrantFirst(t *testing.T) {
 	if err != nil || !ok || got != l {
 		t.Fatalf("Holder: %+v %v %v", got, ok, err)
 	}
-	if _, err := os.Stat(e.reg.lockPath(testRepo, "g1")); !os.IsNotExist(err) {
-		t.Fatal("a lock file must exist only during a write")
+	free, err := core.FileLock(bg, lockFile(t, e.reg, testRepo, "g1"), 0)
+	if err != nil {
+		t.Fatalf("no writer is left holding the lock: %v", err)
 	}
+	_ = free()
 }
 
 func TestGrantRejectsBadRequests(t *testing.T) {
@@ -136,7 +140,7 @@ func TestSameHostHolderNeverTakenForAge(t *testing.T) {
 func TestRemoteHostTakeoverAfterExpiry(t *testing.T) {
 	e := newEnv(t)
 	a, b := e.manager(100), e.manager(200)
-	a.host = "h2"
+	a.machine = "h2"
 	old, err := a.Grant(bg, req("run-a", "g1"))
 	if err != nil {
 		t.Fatal(err)
@@ -363,8 +367,8 @@ func TestRelease(t *testing.T) {
 		t.Fatalf("a second Release is a no-op: %v", err)
 	}
 	again, err := b.Grant(bg, req("run-b", "g1"))
-	if err != nil || again.Fence != 1 {
-		t.Fatalf("Grant after Release starts again at fence 1: %+v %v", again, err)
+	if err != nil || again.Fence != l2.Fence+1 {
+		t.Fatalf("Grant after Release starts above the highest fence the group had: %+v %v", again, err)
 	}
 }
 
@@ -428,5 +432,68 @@ func TestCancelledContext(t *testing.T) {
 	cancel()
 	if _, err := m.Grant(ctx, req("run-a", "g1")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Grant with a cancelled context: %v", err)
+	}
+}
+
+// The lock timeout key reaches the default file registry as the longest lock wait.
+func TestNewWiresTheLockTimeout(t *testing.T) {
+	for _, c := range []struct {
+		in   any
+		want time.Duration
+	}{{7, 7 * time.Second}, {nil, DefaultLockTimeout}, {-1, DefaultLockTimeout}} {
+		m, err := New(t.TempDir(), c.in, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := m.reg.(*FileRegistry).lockTimeout; got != c.want {
+			t.Errorf("lock_timeout_s %v: wait %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// Release then Grant gives fence 3 after fence 2: the fence never falls, even with no record left.
+func TestFenceSurvivesRelease(t *testing.T) {
+	e := newEnv(t)
+	m := e.manager(100)
+	l1, err := m.Grant(bg, req("run-a", "g1"))
+	if err != nil || l1.Fence != 1 {
+		t.Fatalf("first grant: %+v %v", l1, err)
+	}
+	if err := m.Revoke(bg, testRepo, "g1", RevokeStop); err != nil {
+		t.Fatal(err)
+	}
+	cur, _, _ := m.Holder(bg, testRepo, "g1")
+	if cur.Fence != 2 {
+		t.Fatalf("revoke should raise the fence to 2: %+v", cur)
+	}
+	if err := m.Release(bg, l1); err != nil {
+		t.Fatal(err)
+	}
+	l3, err := m.Grant(bg, req("run-b", "g1"))
+	if err != nil || l3.Fence != 3 {
+		t.Fatalf("grant after release: want fence 3, got %+v %v", l3, err)
+	}
+	other, err := m.Grant(bg, req("run-c", "g2"))
+	if err != nil || other.Fence != 1 {
+		t.Fatalf("another group keeps its own count: %+v %v", other, err)
+	}
+	if _, err := os.Stat(filepath.Join(e.root, "github.com%2Facme%2Fshop", ".fences.json")); err != nil {
+		t.Fatalf("the high-water file is missing: %v", err)
+	}
+}
+
+// A broken high-water file refuses the grant instead of restarting the count.
+func TestCorruptFenceFileRefusesGrant(t *testing.T) {
+	e := newEnv(t)
+	m := e.manager(100)
+	if _, err := m.Grant(bg, req("run-a", "g1")); err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := e.reg.repoDir(testRepo)
+	if err := os.WriteFile(filepath.Join(dir, ".fences.json"), []byte("{broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Grant(bg, req("run-b", "g2")); err == nil {
+		t.Fatal("a grant went ahead over an unreadable fence file")
 	}
 }

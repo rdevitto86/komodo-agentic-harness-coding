@@ -104,7 +104,7 @@ func TestSyncDirIgnoresWrappedEINVAL(t *testing.T) {
 	syncDirHandle = func(*os.File) error {
 		return &fs.PathError{Op: "sync", Path: dir, Err: syscall.EINVAL}
 	}
-	if err := syncDir(dir); err != nil {
+	if err := SyncDir(dir); err != nil {
 		t.Fatalf("syncDir = %v; want nil for a wrapped EINVAL", err)
 	}
 	target := filepath.Join(dir, "target")
@@ -113,7 +113,7 @@ func TestSyncDirIgnoresWrappedEINVAL(t *testing.T) {
 	}
 	boom := errors.New("disk on fire")
 	syncDirHandle = func(*os.File) error { return &fs.PathError{Op: "sync", Path: dir, Err: boom} }
-	if err := syncDir(dir); !errors.Is(err, boom) {
+	if err := SyncDir(dir); !errors.Is(err, boom) {
 		t.Fatalf("syncDir = %v; want the other error returned", err)
 	}
 }

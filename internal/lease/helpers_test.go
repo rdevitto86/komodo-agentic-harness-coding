@@ -81,13 +81,33 @@ func newEnv(t *testing.T) *testEnv {
 // manager returns a manager that acts as the process with this pid on host h1.
 func (e *testEnv) manager(pid int) *Manager {
 	e.t.Helper()
-	m, err := New(e.t.TempDir(), e.reg, e.procs.check)
+	m, err := New(e.t.TempDir(), nil, e.reg, e.procs.check)
 	if err != nil {
 		e.t.Fatalf("New: %v", err)
 	}
-	m.host, m.pid, m.procStart, m.now = "h1", pid, testStart, e.clk.now
+	m.machine, m.pid, m.procStart, m.now = "h1", pid, testStart, e.clk.now
 	e.procs.start(pid, testStart)
 	return m
+}
+
+// recordFile returns the path of a lease's record file.
+func recordFile(t *testing.T, r *FileRegistry, repo, group string) string {
+	t.Helper()
+	_, p, _, err := r.paths(repo, group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// lockFile returns the path of a lease's lock file.
+func lockFile(t *testing.T, r *FileRegistry, repo, group string) string {
+	t.Helper()
+	_, _, p, err := r.paths(repo, group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 // req builds a grant request for a group on its own branch and worktree.

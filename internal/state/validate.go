@@ -201,8 +201,11 @@ func validateParts(g *GroupState, f func(field, why string) error) error {
 	}
 	for i, a := range g.ActionsOpen {
 		p := fmt.Sprintf("actions_open[%d].", i)
-		if a.ID == "" || a.Kind == "" {
-			return f(p+"id", "id and kind are required")
+		if a.ID == "" {
+			return f(p+"id", "empty")
+		}
+		if a.Kind == "" {
+			return f(p+"kind", "empty")
 		}
 		if _, ok := objectOrEmpty(a.Args); !ok {
 			return f(p+"args", "not a JSON object")

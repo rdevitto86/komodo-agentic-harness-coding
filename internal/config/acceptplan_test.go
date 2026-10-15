@@ -3,7 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"slices"
+	"reflect"
 	"testing"
 )
 
@@ -17,8 +17,8 @@ func TestAcceptPlanListsDriftWithoutWriting(t *testing.T) {
 	writeFile(t, home, "settings.json", `{"limits.returns": 2}`)
 	shaBefore, _ := os.ReadFile(filepath.Join(home, "state", "config.sha"))
 	got, err := m.AcceptPlan()
-	if err != nil || !slices.Equal(got, []string{"settings.json"}) {
-		t.Fatalf("AcceptPlan: %v %v", got, err)
+	if err != nil || len(got) != 1 || got[0].Key != "settings.json" || got[0].Old == got[0].New || got[0].New == "" {
+		t.Fatalf("AcceptPlan: %+v %v", got, err)
 	}
 	shaAfter, _ := os.ReadFile(filepath.Join(home, "state", "config.sha"))
 	if string(shaBefore) != string(shaAfter) {
@@ -28,7 +28,7 @@ func TestAcceptPlanListsDriftWithoutWriting(t *testing.T) {
 		t.Fatal("AcceptPlan accepted the edit")
 	}
 	b, err := m.Accept()
-	if err != nil || len(b.Changes) != 1 || b.Changes[0].Key != got[0] {
+	if err != nil || !reflect.DeepEqual(b.Changes, got) {
 		t.Fatalf("Accept disagrees with AcceptPlan: %+v %v", b, err)
 	}
 }
@@ -41,8 +41,8 @@ func TestAcceptPlanUnrecordedAndEmpty(t *testing.T) {
 	}
 	writeFile(t, home, "agents.json", `{}`)
 	got, err := m.AcceptPlan()
-	if err != nil || !slices.Equal(got, []string{"agents.json"}) {
-		t.Fatalf("unrecorded file: %v %v", got, err)
+	if err != nil || len(got) != 1 || got[0].Key != "agents.json" || got[0].Old != "" || got[0].New == "" {
+		t.Fatalf("unrecorded file: %+v %v", got, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "state", "config.sha")); !os.IsNotExist(err) {
 		t.Fatal("AcceptPlan created config.sha")

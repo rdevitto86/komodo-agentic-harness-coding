@@ -16,7 +16,7 @@ import (
 
 const (
 	recordSuffix = ".json"        // a lease's record is <group-id>.json
-	repoLockName = ".repo.lock"   // holds one repository's grants still; no group id starts with a dot
+	repoLockName = ".repo.lock"   // holds one repository's grants and revocations still; no group id starts with a dot
 	crashAfter   = "after_rename" // test stage: the record is written and the lock is not yet deleted
 	crashLocked  = "after_lock"   // test stage: the lock is held and nothing is written yet
 )
@@ -30,7 +30,7 @@ type FileRegistry struct {
 	lockTimeout time.Duration
 }
 
-// NewFileRegistry opens the folder of JSON records and lock files; lockTimeout is the age at which a lock is stale.
+// NewFileRegistry opens the folder of JSON records and lock files; lockTimeout is the longest a writer waits for a lock.
 func NewFileRegistry(root string, lockTimeout time.Duration) *FileRegistry {
 	if lockTimeout <= 0 {
 		lockTimeout = DefaultLockTimeout
@@ -66,18 +66,6 @@ func (r *FileRegistry) paths(repo, group string) (dir, record, lock string, err 
 	return dir, filepath.Join(dir, group+recordSuffix), filepath.Join(dir, group+LockSuffix), nil
 }
 
-// recordPath returns the path of a lease's record, or an empty string for a key that cannot name one.
-func (r *FileRegistry) recordPath(repo, group string) string {
-	_, p, _, _ := r.paths(repo, group)
-	return p
-}
-
-// lockPath returns the path of a lease's lock file, or an empty string for a key that cannot name one.
-func (r *FileRegistry) lockPath(repo, group string) string {
-	_, _, p, _ := r.paths(repo, group)
-	return p
-}
-
 // readRecord reads one record file; the pointer is nil when the file does not exist.
 func readRecord(path string) (*Lease, error) {
 	b, err := os.ReadFile(path)
@@ -103,7 +91,7 @@ func syncFolder(dir string) {
 }
 
 // mutate runs fn on a record under its lock file. fn gets the current record (nil when absent) and returns the
-// record to write, or nil to delete it. A lock replaced mid-write makes the whole call run again.
+// record to write, or nil to delete it.
 func (r *FileRegistry) mutate(ctx context.Context, repo, group string, fn func(cur *Lease) (*Lease, error)) error {
 	dir, record, lock, err := r.paths(repo, group)
 	if err != nil {
@@ -112,22 +100,16 @@ func (r *FileRegistry) mutate(ctx context.Context, repo, group string, fn func(c
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create lease folder: %w", err)
 	}
-	for attempt := 0; attempt < 3; attempt++ {
-		h, err := r.acquire(ctx, lock)
-		if err != nil {
-			return err
-		}
-		err = writeLocked(h, dir, record, fn)
-		h.release()
-		if !errors.Is(err, errLockLost) {
-			return err
-		}
+	unlock, err := r.lock(ctx, lock)
+	if err != nil {
+		return err
 	}
-	return ErrLocked
+	defer unlock()
+	return writeLocked(dir, record, fn)
 }
 
-// writeLocked applies fn to the record while h is held and writes or deletes the result.
-func writeLocked(h *lockHandle, dir, record string, fn func(cur *Lease) (*Lease, error)) error {
+// writeLocked applies fn to the record while its lock is held and writes or deletes the result.
+func writeLocked(dir, record string, fn func(cur *Lease) (*Lease, error)) error {
 	crashHook(crashLocked)
 	cur, err := readRecord(record)
 	if err != nil {
@@ -136,9 +118,6 @@ func writeLocked(h *lockHandle, dir, record string, fn func(cur *Lease) (*Lease,
 	next, err := fn(cur)
 	if err != nil {
 		return err
-	}
-	if !h.owned() {
-		return errLockLost
 	}
 	if next == nil {
 		if err := os.Remove(record); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -263,9 +242,5 @@ func (r *FileRegistry) LockRepo(ctx context.Context, repo string) (func(), error
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create lease folder: %w", err)
 	}
-	h, err := r.acquire(ctx, filepath.Join(dir, repoLockName))
-	if err != nil {
-		return nil, err
-	}
-	return h.release, nil
+	return r.lock(ctx, filepath.Join(dir, repoLockName))
 }

@@ -68,14 +68,14 @@ func WriteAtomic(path string, perm os.FileMode, fill func(w io.Writer) error) (e
 		err = &renameError{path: path, err: err}
 		return err
 	}
-	if err = syncDir(dir); err != nil {
+	if err = SyncDir(dir); err != nil {
 		return fmt.Errorf("sync directory of %s: %w", path, err)
 	}
 	return nil
 }
 
-// syncDir flushes a directory entry to disk; it is a no-op where the OS cannot sync directories.
-func syncDir(dir string) error {
+// SyncDir flushes a directory entry to disk; it is a no-op where the OS cannot sync directories.
+func SyncDir(dir string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}

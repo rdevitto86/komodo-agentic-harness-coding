@@ -6,29 +6,10 @@ import (
 	"time"
 )
 
-// rmwTries is how many times a read-modify-write of providers.json is repeated after a stale revision.
-const rmwTries = 50
-
-// updateProviders reads providers.json, lets fn change the body and saves it, repeating after a stale revision.
+// updateProviders reads providers.json, lets fn change the body and saves it, all under the record's lock.
 // fn returns false when it changed nothing, and then nothing is written.
 func (m *Machine) updateProviders(fn func(b *ProvidersBody) bool) error {
-	m.rmw.Lock()
-	defer m.rmw.Unlock()
-	for i := 0; i < rmwTries; i++ {
-		r, err := LoadMachine[ProvidersBody](m, KindProviders)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-		if !fn(&r.Body) {
-			return nil
-		}
-		_, err = SaveMachine(m, KindProviders, r.Body, r.Header.Rev)
-		if errors.Is(err, ErrStaleRev) || errors.Is(err, ErrExists) {
-			continue
-		}
-		return err
-	}
-	return ErrStaleRev
+	return m.update(KindProviders, func(can any) bool { return fn(can.(*ProvidersBody)) })
 }
 
 // link returns a link's record, adding an empty one when the link is new.
@@ -129,12 +110,10 @@ func (m *Machine) SaveWindow(ctx context.Context, k WindowKey, rec WindowRecord)
 	}
 	return m.updateProviders(func(b *ProvidersBody) bool {
 		l := link(b, k.Link)
-		wins := make(map[string]WindowRecord, len(l.Windows)+1)
-		for n, w := range l.Windows {
-			wins[n] = w
+		if l.Windows == nil {
+			l.Windows = map[string]WindowRecord{}
 		}
-		wins[k.Window] = rec
-		l.Windows = wins
+		l.Windows[k.Window] = rec
 		b.Links[k.Link] = l
 		return true
 	})

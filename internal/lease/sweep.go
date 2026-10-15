@@ -21,7 +21,7 @@ func (m *Manager) Sweep(ctx context.Context, repo string) (SweepReport, error) {
 	}
 	now := m.stamp()
 	for _, l := range all {
-		if l.ClonePath == "" || l.Live(now, m.host, m.alive) {
+		if l.ClonePath == "" || l.Live(now, m.machine, m.alive) {
 			continue
 		}
 		if _, err := os.Stat(l.ClonePath); !errors.Is(err, os.ErrNotExist) {

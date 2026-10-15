@@ -185,12 +185,7 @@ func (m *Manager) Accept() (Batch, error) {
 	}
 	rec, _, _ := m.recordedSums()
 	b := newBatch()
-	for i, name := range machineFiles {
-		oldSum, newSum := pick(rec, i), pick(cur, i)
-		if oldSum != newSum {
-			b.Changes = append(b.Changes, Change{Key: name, Old: oldSum, New: newSum})
-		}
-	}
+	b.Changes = drift(rec, cur)
 	if len(b.Changes) == 0 {
 		if _, exists, valid := m.recordedSums(); exists && valid {
 			return Batch{}, nil
@@ -207,9 +202,9 @@ func (m *Manager) Accept() (Batch, error) {
 	return b, nil
 }
 
-// AcceptPlan lists the machine files Accept would record, those whose checksum differs from config.sha; it writes nothing.
+// AcceptPlan lists the changes Accept would record, one per machine file whose checksum differs from config.sha; it writes nothing.
 // With no machine files it lists none, as Accept does.
-func (m *Manager) AcceptPlan() ([]string, error) {
+func (m *Manager) AcceptPlan() ([]Change, error) {
 	cur, err := m.currentSums()
 	if err != nil {
 		return nil, err
@@ -218,13 +213,18 @@ func (m *Manager) AcceptPlan() ([]string, error) {
 		return nil, nil
 	}
 	rec, _, _ := m.recordedSums()
-	var out []string
+	return drift(rec, cur), nil
+}
+
+// drift returns one change per machine file whose recorded checksum differs from the current one.
+func drift(rec, cur checksums) []Change {
+	var out []Change
 	for i, name := range machineFiles {
-		if pick(rec, i) != pick(cur, i) {
-			out = append(out, name)
+		if oldSum, newSum := pick(rec, i), pick(cur, i); oldSum != newSum {
+			out = append(out, Change{Key: name, Old: oldSum, New: newSum})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // pick returns the settings checksum for index 0 and the agents checksum for index 1.

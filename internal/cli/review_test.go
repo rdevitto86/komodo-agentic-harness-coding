@@ -96,6 +96,9 @@ func TestAcceptDryRunWritesNothing(t *testing.T) {
 	if code != 0 || len(d.Changes) != 1 || d.Changes[0].Key != "settings.json" || d.Batch != "" {
 		t.Fatalf("exit %d, %+v", code, e)
 	}
+	if o, n := d.Changes[0].Old, d.Changes[0].New; o == nil || n == nil || o == n {
+		t.Fatalf("the preview should show the old and new checksum, got %v and %v", o, n)
+	}
 	after, _ := os.ReadFile(sha)
 	if string(before) != string(after) {
 		t.Fatal("--dry-run rewrote config.sha")

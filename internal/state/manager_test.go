@@ -404,13 +404,17 @@ func TestFenceFromLease(t *testing.T) {
 	}
 }
 
-// Counters reads only the counters; the rest of the record may be unreadable to it.
+// Counters returns the counters of a record that passes the Load checks, and nothing for one that fails them.
 func TestCountersReadsOnlyCounters(t *testing.T) {
 	m, root := newMgr(t)
-	writeRaw(t, statePath(root, testGroup), `{"v":1,"state":{"counters":{"returns":2,"blocks":null},"tasks":"not a list"}}`)
+	mustCreate(t, m)
 	c, err := m.Counters(testGroup)
-	if err != nil || c.Returns != 2 || c.Blocks == nil {
+	if err != nil || c.Returns != 1 || c.Blocks == nil {
 		t.Fatalf("Counters: %+v %v", c, err)
+	}
+	writeRaw(t, statePath(root, "unreadable"), `{"v":1,"state":{"counters":{"returns":2,"blocks":null},"tasks":"not a list"}}`)
+	if c, err := m.Counters("unreadable"); !errors.Is(err, ErrCorrupt) || c.Returns != 0 {
+		t.Fatalf("unreadable: %+v %v", c, err)
 	}
 	if _, err := m.Counters("absent"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("absent: %v", err)

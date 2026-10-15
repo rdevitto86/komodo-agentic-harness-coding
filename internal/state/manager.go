@@ -217,47 +217,20 @@ func decodeGroup(group string, data []byte) (Record, error) {
 		return Record{}, corrupt(fmt.Errorf("header names group %q rev %d", w.Group, w.Rev))
 	}
 	walkNil(reflect.ValueOf(&w.State), "state", true)
-	normalizeGroup(&w.State)
 	if err := validateGroup(group, &w.State); err != nil {
 		return Record{}, corrupt(err)
 	}
+	normalizeGroup(&w.State)
 	return Record{Header: w.Header, State: w.State}, nil
 }
 
-// Counters reads only the counters of a group.
+// Counters reads only the counters of a group, through the same checks as Load; a record Load would set aside gives none.
 func (m *Manager) Counters(group string) (Counters, error) {
-	if !validKey(group) {
-		return Counters{}, ErrNotFound
-	}
-	data, err := readRecord(m.path(group))
+	r, err := m.Peek(group)
 	if err != nil {
 		return Counters{}, err
 	}
-	v, err := versionOf(data)
-	if err != nil {
-		return Counters{}, corrupt(err)
-	}
-	if v > Version {
-		return Counters{}, ErrNewerVersion
-	}
-	if v < Version {
-		if data, err = migrate("", data, v); err != nil {
-			return Counters{}, corrupt(err)
-		}
-	}
-	var part struct {
-		State struct {
-			Counters Counters `json:"counters"`
-		} `json:"state"`
-	}
-	if err := json.Unmarshal(data, &part); err != nil {
-		return Counters{}, corrupt(err)
-	}
-	c := part.State.Counters
-	if c.Blocks == nil {
-		c.Blocks = map[string]int{}
-	}
-	return c, nil
+	return r.State.Counters, nil
 }
 
 // List reads every group record, returning good records with the first error.

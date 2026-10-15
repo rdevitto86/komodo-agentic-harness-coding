@@ -21,9 +21,32 @@ const staleTemp = time.Hour
 // writeFunc replaces a file with data; tests replace it to simulate a failing disk.
 type writeFunc func(path string, data []byte) error
 
+// syncFolder flushes a folder entry to disk; tests replace it to record the calls.
+var syncFolder = core.SyncDir
+
+// mkdirSynced makes a folder and any missing parents, then syncs the folder above each one it made.
+func mkdirSynced(dir string) error {
+	var made []string
+	for d := dir; filepath.Dir(d) != d; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil {
+			break
+		}
+		made = append(made, d)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, d := range made {
+		if err := syncFolder(filepath.Dir(d)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // atomicWrite makes the file's folder, then writes a temporary file, syncs it and renames it over path.
 func atomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := mkdirSynced(filepath.Dir(path)); err != nil {
 		return err
 	}
 	return core.WriteFileAtomic(path, data, 0o644)

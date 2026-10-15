@@ -6,11 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 // rec builds a held record for the registry tests.
@@ -135,7 +136,7 @@ func TestRegistryList(t *testing.T) {
 	if err := r.Create(ctx, other); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Dir(r.recordPath(testRepo, "a"))
+	dir := filepath.Dir(recordFile(t, r, testRepo, "a"))
 	for _, junk := range []string{"a.lock", ".a.json.tmp-123", "a.lock.stale-1-2", "notes.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, junk), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
@@ -153,7 +154,7 @@ func TestRegistryCorruptRecord(t *testing.T) {
 	if err := r.Create(ctx, rec("g1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(r.recordPath(testRepo, "g1"), []byte("{not json"), 0o644); err != nil {
+	if err := os.WriteFile(recordFile(t, r, testRepo, "g1"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Get(ctx, testRepo, "g1"); err == nil || errors.Is(err, ErrNotFound) {
@@ -161,67 +162,67 @@ func TestRegistryCorruptRecord(t *testing.T) {
 	}
 }
 
-func TestStaleLockIsReplaced(t *testing.T) {
-	ctx := context.Background()
-	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), 30*time.Second)
-	lock := r.lockPath(testRepo, "g1")
+// holdLock takes the operating-system lock a registry writer would take and ages the lock file.
+func holdLock(t *testing.T, lock string) func() error {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(lock, []byte("999-dead"), 0o644); err != nil {
+	unlock, err := core.FileLock(context.Background(), lock, time.Second)
+	if err != nil {
 		t.Fatal(err)
 	}
-	age(t, lock, time.Minute)
-	if err := r.Create(ctx, rec("g1")); err != nil {
-		t.Fatalf("Create past a stale lock: %v", err)
-	}
-	if _, err := os.Stat(lock); !os.IsNotExist(err) {
-		t.Fatalf("the lock must be gone after the write: %v", err)
-	}
+	age(t, lock, 48*time.Hour)
+	return unlock
 }
 
-func TestFreshLockMakesWriterWait(t *testing.T) {
+// A held lock keeps a writer waiting however old the lock file looks, and the writer goes ahead once it is freed.
+func TestHeldLockMakesWriterWait(t *testing.T) {
 	ctx := context.Background()
 	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), 30*time.Second)
-	lock := r.lockPath(testRepo, "g1")
-	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(lock, []byte("999-alive"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	unlock := holdLock(t, lockFile(t, r, testRepo, "g1"))
 	done := make(chan error, 1)
 	go func() { done <- r.Create(ctx, rec("g1")) }()
 	select {
 	case err := <-done:
-		t.Fatalf("the writer did not wait for a fresh lock: %v", err)
-	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("the writer did not wait for a held lock: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
-	if _, err := os.Stat(r.recordPath(testRepo, "g1")); err == nil {
+	if _, err := os.Stat(recordFile(t, r, testRepo, "g1")); err == nil {
 		t.Fatal("record written under a held lock")
 	}
-	if err := os.Remove(lock); err != nil {
+	if err := unlock(); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("Create after the lock went: %v", err)
+			t.Fatalf("Create after the lock was freed: %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the writer never proceeded")
 	}
 }
 
+// A lock held past the timeout gives ErrLocked, and the timeout is the whole wait.
+func TestLockTimeoutIsTheLongestWait(t *testing.T) {
+	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), 200*time.Millisecond)
+	unlock := holdLock(t, lockFile(t, r, testRepo, "g1"))
+	defer func() { _ = unlock() }()
+	start := time.Now()
+	err := r.Create(context.Background(), rec("g1"))
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("want ErrLocked, got %v", err)
+	}
+	if d := time.Since(start); d < 200*time.Millisecond || d > 2*time.Second {
+		t.Fatalf("waited %v, want about 200ms", d)
+	}
+}
+
 func TestWaitStopsOnContext(t *testing.T) {
 	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), time.Hour)
-	lock := r.lockPath(testRepo, "g1")
-	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(lock, []byte("999-alive"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	unlock := holdLock(t, lockFile(t, r, testRepo, "g1"))
+	defer func() { _ = unlock() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if err := r.Create(ctx, rec("g1")); !errors.Is(err, context.DeadlineExceeded) {
@@ -229,65 +230,22 @@ func TestWaitStopsOnContext(t *testing.T) {
 	}
 }
 
-func TestUnlockChecksToken(t *testing.T) {
+// Many writers cycling through one lock are never inside together.
+func TestLockedWritersNeverOverlap(t *testing.T) {
 	ctx := context.Background()
-	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), DefaultLockTimeout)
-	lock := r.lockPath(testRepo, "g1")
+	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), 30*time.Second)
+	lock := lockFile(t, r, testRepo, "g1")
 	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h, err := r.acquire(ctx, lock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A taker replaced our lock; our unlock must leave theirs alone.
-	if err := os.WriteFile(lock, []byte("other-token 2026"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if h.owned() {
-		t.Fatal("owned() must see the replaced token")
-	}
-	h.release()
-	if b, err := os.ReadFile(lock); err != nil || !strings.HasPrefix(string(b), "other-token") {
-		t.Fatalf("unlock removed a lock it did not own: %q %v", b, err)
-	}
-	_ = os.Remove(lock)
-	h2, err := r.acquire(ctx, lock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !h2.owned() {
-		t.Fatal("a fresh holder must own its lock")
-	}
-	h2.release()
-	if _, err := os.Stat(lock); !os.IsNotExist(err) {
-		t.Fatal("release must delete its own lock")
-	}
-}
-
-// TestStaleTakeoverIsExclusive races many writers for one stale lock and checks that no two are inside at once.
-func TestStaleTakeoverIsExclusive(t *testing.T) {
-	ctx := context.Background()
-	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), 10*time.Second)
-	lock := r.lockPath(testRepo, "g1")
-	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(lock, []byte("999-dead"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	age(t, lock, time.Hour)
-
 	var inside, overlaps, entered atomic.Int32
 	var wg sync.WaitGroup
-	start := make(chan struct{})
-	for i := 0; i < 24; i++ {
+	for i := 0; i < 16; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			<-start
-			for k := 0; k < 5; k++ {
-				h, err := r.acquire(ctx, lock)
+			for k := 0; k < 8; k++ {
+				unlock, err := r.lock(ctx, lock)
 				if err != nil {
 					t.Error(err)
 					return
@@ -298,53 +256,13 @@ func TestStaleTakeoverIsExclusive(t *testing.T) {
 				entered.Add(1)
 				time.Sleep(time.Millisecond)
 				inside.Add(-1)
-				h.release()
+				_ = unlock()
 			}
 		}()
 	}
-	close(start)
 	wg.Wait()
-	if overlaps.Load() != 0 || entered.Load() != 120 {
+	if overlaps.Load() != 0 || entered.Load() != 128 {
 		t.Fatalf("overlaps %d entered %d", overlaps.Load(), entered.Load())
-	}
-}
-
-// TestAbandonedLocksAreTakenOverExclusively lets holders die with their lock (it is aged, as time would) and checks no two writers overlap.
-func TestAbandonedLocksAreTakenOverExclusively(t *testing.T) {
-	ctx := context.Background()
-	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), 10*time.Second)
-	lock := r.lockPath(testRepo, "g1")
-	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var inside, overlaps atomic.Int32
-	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for k := 0; k < 8; k++ {
-				h, err := r.acquire(ctx, lock)
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				if inside.Add(1) != 1 {
-					overlaps.Add(1)
-				}
-				time.Sleep(time.Millisecond)
-				inside.Add(-1)
-				if (i+k)%3 == 0 { // the holder dies: its lock stays and ages
-					age(t, lock, time.Hour)
-					continue
-				}
-				h.release()
-			}
-		}()
-	}
-	wg.Wait()
-	if overlaps.Load() != 0 {
-		t.Fatalf("%d overlaps", overlaps.Load())
 	}
 }
 
@@ -384,9 +302,9 @@ func TestWriteCrash(t *testing.T) {
 			if err := cmd.Run(); !errors.As(err, &ee) || ee.ExitCode() != 7 {
 				t.Fatalf("child did not die at %s: %v", stage, err)
 			}
-			lock := r.lockPath(testRepo, "g1")
+			lock := lockFile(t, r, testRepo, "g1")
 			if _, err := os.Stat(lock); err != nil {
-				t.Fatalf("the dead writer must leave its lock: %v", err)
+				t.Fatalf("the dead writer leaves its lock file: %v", err)
 			}
 			got, err := r.Get(ctx, testRepo, "g1")
 			if err != nil {
@@ -399,14 +317,14 @@ func TestWriteCrash(t *testing.T) {
 			if got.Run != wantRun || got.Rev != wantRev {
 				t.Fatalf("record %+v", got)
 			}
-			// The lock expires; the next writer replaces it and writes.
-			age(t, lock, time.Minute)
+			// The kernel freed the dead writer's lock, so the next writer goes ahead at once.
 			got.Run = "run-next"
+			start := time.Now()
 			if _, err := r.Swap(ctx, got, got.Rev); err != nil {
-				t.Fatalf("Swap after the lock expired: %v", err)
+				t.Fatalf("Swap after the writer died: %v", err)
 			}
-			if _, err := os.Stat(lock); !os.IsNotExist(err) {
-				t.Fatal("the lock must be gone")
+			if d := time.Since(start); d > time.Second {
+				t.Fatalf("the next writer waited %v", d)
 			}
 		})
 	}

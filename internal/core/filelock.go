@@ -1,0 +1,58 @@
+package core
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"syscall"
+	"time"
+)
+
+// ErrLockWait reports that another holder kept the lock for the whole wait.
+var ErrLockWait = errors.New("lock is held by another process")
+
+// lockPoll is the pause between attempts to take a held lock.
+const lockPoll = 10 * time.Millisecond
+
+// FileLock takes an exclusive operating-system lock on the file at path, creating the file when it is absent.
+// It retries until the context ends or wait passes (then ErrLockWait); the kernel frees the lock when its holder dies.
+func FileLock(ctx context.Context, path string, wait time.Duration) (unlock func() error, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file %s: %w", path, err)
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() error { return releaseLock(f) }, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			_ = f.Close()
+			return nil, fmt.Errorf("lock %s: %w", path, err)
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			_ = f.Close()
+			return nil, cerr
+		}
+		if !time.Now().Before(deadline) {
+			_ = f.Close()
+			return nil, ErrLockWait
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(lockPoll):
+		}
+	}
+}
+
+// releaseLock unlocks and closes the lock file; closing alone would free the lock too.
+func releaseLock(f *os.File) error {
+	uerr := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	cerr := f.Close()
+	return errors.Join(uerr, cerr)
+}

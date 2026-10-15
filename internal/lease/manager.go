@@ -36,30 +36,30 @@ const (
 type Manager struct {
 	reg       Registry
 	alive     ProcessCheck
-	host      string // this machine's name
+	machine   string // this machine's id
 	pid       int    // this process
 	procStart time.Time
 	now       func() time.Time
 	locks     sync.Map // key to *sync.Mutex: one per group, one per repo
 }
 
-// New opens the lease manager over a registry and a process check.
-// A nil registry is the file registry under home/leases, which needs a home; a nil check is OSProcessCheck.
-func New(home string, reg Registry, alive ProcessCheck) (*Manager, error) {
+// New opens the lease manager over a registry and a process check; lockTimeoutS is the value of lease.lock_timeout_s.
+// A nil registry is the file registry under home/leases with that wait; a nil check is OSProcessCheck.
+func New(home string, lockTimeoutS any, reg Registry, alive ProcessCheck) (*Manager, error) {
+	if home == "" {
+		return nil, errors.New("lease manager needs a home folder")
+	}
 	if reg == nil {
-		if home == "" {
-			return nil, errors.New("lease registry needs a home folder")
-		}
-		reg = NewFileRegistry(filepath.Join(home, "leases"), DefaultLockTimeout)
+		reg = NewFileRegistry(filepath.Join(home, "leases"), LockTimeout(lockTimeoutS))
 	}
 	if alive == nil {
 		alive = OSProcessCheck
 	}
-	host, err := os.Hostname()
+	id, err := machineID(home)
 	if err != nil {
-		return nil, fmt.Errorf("read host name: %w", err)
+		return nil, err
 	}
-	return &Manager{reg: reg, alive: alive, host: host, pid: os.Getpid(), procStart: selfStart(), now: time.Now}, nil
+	return &Manager{reg: reg, alive: alive, machine: id, pid: os.Getpid(), procStart: selfStart(), now: time.Now}, nil
 }
 
 // mutex returns the in-process lock for a key, creating it on first use.
@@ -87,16 +87,11 @@ func (m *Manager) Grant(ctx context.Context, req GrantRequest) (Lease, error) {
 	if err := ctx.Err(); err != nil {
 		return Lease{}, err
 	}
-	repoMu := m.mutex("r\x00" + req.Repo)
-	repoMu.Lock()
-	defer repoMu.Unlock()
-	if rl, ok := m.reg.(RepoLocker); ok {
-		unlock, err := rl.LockRepo(ctx, req.Repo)
-		if err != nil {
-			return Lease{}, err
-		}
-		defer unlock()
+	unlockRepo, err := m.lockRepo(ctx, req.Repo)
+	if err != nil {
+		return Lease{}, err
 	}
+	defer unlockRepo()
 	defer m.groupLock(req.Repo, req.Group)()
 	for i := 0; i < retries; i++ {
 		l, again, err := m.grantOnce(ctx, req)
@@ -105,6 +100,38 @@ func (m *Manager) Grant(ctx context.Context, req GrantRequest) (Lease, error) {
 		}
 	}
 	return Lease{}, fmt.Errorf("grant %s: %w", req.Group, ErrStaleRev)
+}
+
+// lockRepo holds one repository's lock inside this process and, when the registry offers it, across processes.
+func (m *Manager) lockRepo(ctx context.Context, repo string) (func(), error) {
+	mu := m.mutex("r\x00" + repo)
+	mu.Lock()
+	rl, ok := m.reg.(RepoLocker)
+	if !ok {
+		return mu.Unlock, nil
+	}
+	unlock, err := rl.LockRepo(ctx, repo)
+	if err != nil {
+		mu.Unlock()
+		return nil, err
+	}
+	return func() { unlock(); mu.Unlock() }, nil
+}
+
+// highFence returns the highest fence a group ever had, or 0 when the registry keeps none.
+func (m *Manager) highFence(ctx context.Context, repo, group string) (Fence, error) {
+	if fk, ok := m.reg.(FenceKeeper); ok {
+		return fk.HighFence(ctx, repo, group)
+	}
+	return 0, nil
+}
+
+// raiseFence records a fence in the registry's high-water mark before the record that carries it is written.
+func (m *Manager) raiseFence(ctx context.Context, repo, group string, f Fence) error {
+	if fk, ok := m.reg.(FenceKeeper); ok {
+		return fk.RaiseFence(ctx, repo, group, f)
+	}
+	return nil
 }
 
 // checkRequest refuses a grant request that cannot be recorded.
@@ -130,28 +157,38 @@ func (m *Manager) grantOnce(ctx context.Context, req GrantRequest) (Lease, bool,
 		return Lease{}, false, err
 	}
 	for _, o := range all {
-		if o.Group != req.Group && (o.Branch == req.Branch || o.Worktree == req.Worktree) && o.Live(now, m.host, m.alive) {
+		if o.Group != req.Group && (o.Branch == req.Branch || o.Worktree == req.Worktree) && o.Live(now, m.machine, m.alive) {
 			return Lease{}, false, ErrBranchTaken
 		}
 	}
+	high, err := m.highFence(ctx, req.Repo, req.Group)
+	if err != nil {
+		return Lease{}, false, err
+	}
 	next := Lease{
 		Repo: req.Repo, Group: req.Group, Run: req.Run, Branch: req.Branch, Worktree: req.Worktree,
-		PID: m.pid, ProcStart: m.procStart.UTC().Truncate(time.Second), Host: m.host, ClonePath: req.ClonePath,
-		Fence: 1, State: StateHeld, TakenAt: now, RenewedAt: now,
+		PID: m.pid, ProcStart: m.procStart.UTC().Truncate(time.Second), Host: m.machine, ClonePath: req.ClonePath,
+		Fence: high + 1, State: StateHeld, TakenAt: now, RenewedAt: now,
 	}
 	cur, err := m.reg.Get(ctx, req.Repo, req.Group)
 	if errors.Is(err, ErrNotFound) {
 		next.Rev = 1
+		if err := m.raiseFence(ctx, req.Repo, req.Group, next.Fence); err != nil {
+			return Lease{}, false, err
+		}
 		err = m.reg.Create(ctx, next)
 		return next, errors.Is(err, ErrExists), exceptExists(err)
 	}
 	if err != nil {
 		return Lease{}, false, err
 	}
-	if cur.Live(now, m.host, m.alive) {
+	if cur.Live(now, m.machine, m.alive) {
 		return Lease{}, false, HeldError{Holder: cur}
 	}
-	next.Fence = cur.Fence + 1
+	next.Fence = max(cur.Fence, high) + 1
+	if err := m.raiseFence(ctx, req.Repo, req.Group, next.Fence); err != nil {
+		return Lease{}, false, err
+	}
 	rev, err := m.reg.Swap(ctx, next, cur.Rev)
 	if errors.Is(err, ErrStaleRev) || errors.Is(err, ErrNotFound) {
 		return Lease{}, true, nil
@@ -211,6 +248,11 @@ func (m *Manager) Revoke(ctx context.Context, repo, group string, why RevokeReas
 	default:
 		return fmt.Errorf("unknown revoke reason %q", why)
 	}
+	unlockRepo, err := m.lockRepo(ctx, repo)
+	if err != nil {
+		return err
+	}
+	defer unlockRepo()
 	defer m.groupLock(repo, group)()
 	for i := 0; i < retries; i++ {
 		cur, err := m.reg.Get(ctx, repo, group)
@@ -220,7 +262,14 @@ func (m *Manager) Revoke(ctx context.Context, repo, group string, why RevokeReas
 		if cur.State == StateRevoked {
 			return nil
 		}
-		cur.State, cur.Fence = StateRevoked, cur.Fence+1
+		high, err := m.highFence(ctx, repo, group)
+		if err != nil {
+			return err
+		}
+		cur.State, cur.Fence = StateRevoked, max(cur.Fence, high)+1
+		if err := m.raiseFence(ctx, repo, group, cur.Fence); err != nil {
+			return err
+		}
 		if _, err := m.reg.Swap(ctx, cur, cur.Rev); !errors.Is(err, ErrStaleRev) {
 			return err
 		}

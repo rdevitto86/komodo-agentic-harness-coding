@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"go/parser"
 	"go/token"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 const modulePath = "github.com/rdevitto86/komodo-agentic-harness-coding"
@@ -134,12 +137,7 @@ func TestCrashPoints(t *testing.T) {
 		if err := m.Verify(); err != nil {
 			t.Fatalf("Verify: %v", err)
 		}
-		// The dead writer left its lock; once stale, the next write replaces it.
-		lock := filepath.Join(home, "state", "settings.lock")
-		old := time.Now().Add(-time.Minute)
-		if err := os.Chtimes(lock, old, old); err != nil {
-			t.Fatalf("lock left behind? %v", err)
-		}
+		// The dead writer left its lock file, which holds nothing once the process is gone.
 		mustSet(t, m, "limits.returns", 5)
 		rows := logRows(t, home)
 		if len(rows) != 2 || rows[1]["old"].(float64) != 3 {
@@ -148,10 +146,6 @@ func TestCrashPoints(t *testing.T) {
 	})
 	t.Run("after the file, before the checksum", func(t *testing.T) {
 		m, home := crashAt(t, "after_files")
-		stale := time.Now().Add(-time.Minute)
-		if err := os.Chtimes(filepath.Join(home, "state", "settings.lock"), stale, stale); err != nil {
-			t.Fatal(err)
-		}
 		if it, _ := m.GetConfigItem("limits.returns"); it.Value != 4 {
 			t.Fatalf("settings as written: %+v", it)
 		}
@@ -223,31 +217,29 @@ func TestWritersNeverInterleave(t *testing.T) {
 	}
 }
 
-func TestLockWaitAndStale(t *testing.T) {
+func TestLockIsHeldByTheKernelNotTheFileAge(t *testing.T) {
 	m, home := newTestManager(t)
 	if err := os.MkdirAll(filepath.Join(home, "state"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	lock := filepath.Join(home, "state", "settings.lock")
-	if err := os.WriteFile(lock, []byte("999"), 0o644); err != nil {
+	hold, err := core.FileLock(context.Background(), lock, time.Second)
+	if err != nil {
 		t.Fatal(err)
 	}
-	old := lockWait
-	lockWait = 150 * time.Millisecond
-	defer func() { lockWait = old }()
-	start := time.Now()
-	_, err := m.SetConfigItem(Change{Key: "limits.returns", New: 4})
-	if !errors.Is(err, ErrLocked) || time.Since(start) < 150*time.Millisecond {
-		t.Fatalf("want ErrLocked after the wait, got %v", err)
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
 	}
-	stale := time.Now().Add(-31 * time.Second)
-	if err := os.Chtimes(lock, stale, stale); err != nil {
+	start := time.Now()
+	_, err = m.SetConfigItem(Change{Key: "limits.returns", New: 4})
+	if !errors.Is(err, ErrLocked) || time.Since(start) < lockWait {
+		t.Fatalf("want ErrLocked after the wait despite the old file, got %v", err)
+	}
+	if err := hold(); err != nil {
 		t.Fatal(err)
 	}
 	mustSet(t, m, "limits.returns", 4)
-	if _, err := os.Stat(lock); !os.IsNotExist(err) {
-		t.Fatal("the lock was not released")
-	}
 }
 
 func TestModelCheck(t *testing.T) {

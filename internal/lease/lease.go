@@ -8,7 +8,7 @@ import (
 
 const (
 	LeaseExpiry        = 2 * time.Hour    // age of the last renewal after which a lease on another host counts as dead
-	DefaultLockTimeout = 30 * time.Second // age after which a lock file is stale; the key lease.lock_timeout_s overrides it
+	DefaultLockTimeout = 30 * time.Second // longest wait for a lock; the key lease.lock_timeout_s overrides it
 	LockSuffix         = ".lock"          // a lease's lock file is <group-id>.lock beside its record
 )
 
@@ -52,7 +52,7 @@ var (
 	ErrLeaseLost   = errors.New("lease lost: another run took the group")
 	ErrBranchTaken = errors.New("branch or worktree is owned by another group")
 	ErrBadKey      = errors.New("repo or group id cannot name a file")
-	ErrLocked      = errors.New("lease record stayed locked by another writer")
+	ErrLocked      = errors.New("lease record stayed locked by another writer") // a lock stayed held for the whole wait
 )
 
 // HeldError carries the live holder so the caller can name it.

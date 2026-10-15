@@ -177,17 +177,9 @@ func (c *CLI) resetTarget(p config.Change) string {
 	return ""
 }
 
-// acceptPreview lists the files config set --accept would record, reading them and writing none.
+// acceptPreview lists the files config set --accept would record, with their old and new checksums, writing none.
 func acceptPreview(cfg *config.Manager) ([]config.Change, error) {
-	names, err := cfg.AcceptPlan()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]config.Change, 0, len(names))
-	for _, n := range names {
-		out = append(out, config.Change{Key: n})
-	}
-	return out, nil
+	return cfg.AcceptPlan()
 }
 
 // setResult builds the reply.config.set result from a written batch.

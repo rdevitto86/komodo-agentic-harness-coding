@@ -2,83 +2,10 @@ package config
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 )
-
-func TestStaleLockRaceHasOneWinner(t *testing.T) {
-	m, home := newTestManager(t)
-	lock := filepath.Join(home, "state", "settings.lock")
-	old := lockWait
-	lockWait = 120 * time.Millisecond
-	defer func() { lockWait = old }()
-	for i := 0; i < 40; i++ {
-		if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(lock, []byte("999-dead"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		stale := time.Now().Add(-time.Minute)
-		if err := os.Chtimes(lock, stale, stale); err != nil {
-			t.Fatal(err)
-		}
-		var wg sync.WaitGroup
-		done := make(chan struct{})
-		results := make(chan error, 2)
-		unlocks := make(chan func(), 2)
-		for j := 0; j < 2; j++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				unlock, err := m.lock()
-				results <- err
-				if err == nil {
-					<-done
-					unlocks <- unlock
-				}
-			}()
-		}
-		wins := 0
-		for j := 0; j < 2; j++ {
-			if err := <-results; err == nil {
-				wins++
-			} else if !errors.Is(err, ErrLocked) {
-				t.Fatalf("round %d: %v", i, err)
-			}
-		}
-		close(done)
-		wg.Wait()
-		close(unlocks)
-		for u := range unlocks {
-			u()
-		}
-		if wins != 1 {
-			t.Fatalf("round %d: %d writers hold the lock, want 1", i, wins)
-		}
-	}
-}
-
-func TestUnlockKeepsAnotherWritersLock(t *testing.T) {
-	m, home := newTestManager(t)
-	unlock, err := m.lock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	lock := filepath.Join(home, "state", "settings.lock")
-	if err := os.WriteFile(lock, []byte("1-someone-else"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	unlock()
-	if _, err := os.Stat(lock); err != nil {
-		t.Fatalf("unlock removed a lock it no longer held: %v", err)
-	}
-}
 
 func TestResetRepairsAnUnreadableFile(t *testing.T) {
 	for _, tc := range []struct{ file, target, body string }{

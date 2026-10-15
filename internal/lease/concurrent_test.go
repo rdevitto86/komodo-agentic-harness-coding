@@ -177,7 +177,7 @@ func TestGrantHelper(t *testing.T) {
 		t.Skip("child of TestGrantAcrossProcesses")
 	}
 	id := os.Getenv("KOMODO_LEASE_ID")
-	m, err := New(t.TempDir(), NewFileRegistry(os.Getenv("KOMODO_LEASE_ROOT"), DefaultLockTimeout), OSProcessCheck)
+	m, err := New(t.TempDir(), nil, NewFileRegistry(os.Getenv("KOMODO_LEASE_ROOT"), DefaultLockTimeout), OSProcessCheck)
 	if err != nil {
 		t.Fatal(err)
 	}
