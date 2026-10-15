@@ -1,0 +1,11 @@
+{{if .Changed.Rows}}Settings changed: {{n (len .Changed.Rows)}}.{{else}}No settings changed.{{end}}
+{{if .Batch}}
+The audit batch is {{.Batch}}.
+{{end}}{{if .Changed.Rows}}
+The old and new values were:
+
+{{table .Changed}}
+{{end}}
+{{- define "turnend"}}{{if .Changed.Rows}}✅ Successful Changes
+{{n (len .Changed.Rows)}} {{plural (len .Changed.Rows) "setting was" "settings were"}} changed.
+{{end}}{{end}}

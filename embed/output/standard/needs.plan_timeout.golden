@@ -1,0 +1,6 @@
+Group `tg-2.2` needs a decision: `plan_timeout`. The task is `plan the cache`.
+It asks: `The plan passed its deadline. Retry?` To resolve it, run
+`komodo run --approve tg-2.2`.
+
+❌ Blocked Changes
+Group `tg-2.2` waits for a person.

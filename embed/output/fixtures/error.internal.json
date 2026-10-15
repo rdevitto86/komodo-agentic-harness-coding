@@ -1,0 +1,5 @@
+{
+  "code": "internal",
+  "reason": "the harness itself failed",
+  "fix": "komodo doctor"
+}

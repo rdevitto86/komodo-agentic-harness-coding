@@ -1,0 +1,22 @@
+{
+  "checks": {
+    "head": [
+      "check",
+      "result",
+      "fix"
+    ],
+    "rows": [
+      [
+        "git on path",
+        "ok",
+        ""
+      ],
+      [
+        "claude on path",
+        "missing",
+        "install Claude Code"
+      ]
+    ],
+    "what": "checks"
+  }
+}

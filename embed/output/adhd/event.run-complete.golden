@@ -1,0 +1,9 @@
+Run complete `session.end` for run `0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57`.
+
+**Event:** `run-complete`
+
+**Group:** `tg-1.2`
+
+**At:** 2026-10-15T10:00:05Z
+
+**Data:** `ok`: true, `reason`: `done`, `turns`: 12

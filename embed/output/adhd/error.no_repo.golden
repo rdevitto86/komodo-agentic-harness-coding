@@ -1,0 +1,5 @@
+Refused: `this folder is not inside a repository`.
+
+**Code:** `no_repo`
+
+**Fix:** `cd into the repository`

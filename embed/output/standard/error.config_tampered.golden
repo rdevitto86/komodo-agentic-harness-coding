@@ -1,0 +1,2 @@
+Refused: `settings.json was hand-edited`. The code is `config_tampered`. To fix
+it, run `komodo config set --accept`.

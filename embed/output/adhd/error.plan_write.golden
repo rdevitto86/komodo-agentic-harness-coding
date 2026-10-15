@@ -1,0 +1,5 @@
+Error: `the plan files could not be written`.
+
+**Code:** `plan_write`
+
+**Fix:** `komodo doctor`

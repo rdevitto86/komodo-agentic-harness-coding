@@ -1,0 +1,5 @@
+Usage error: `unknown flag --fast`.
+
+**Code:** `usage`
+
+**Fix:** `komodo run --help`

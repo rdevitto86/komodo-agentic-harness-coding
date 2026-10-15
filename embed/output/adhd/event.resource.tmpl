@@ -1,0 +1,10 @@
+Resource {{.Subtype}} for run {{.Run}}.
+
+**Event:** {{.Type}}
+{{if .Group}}
+**Group:** {{.Group}}
+{{end}}
+**At:** {{.At.UTC.Format "2006-01-02T15:04:05Z07:00"}}
+{{if .Data}}
+**Data:** {{$sep := ""}}{{range $k, $v := .Data}}{{$sep}}{{$k}}: {{$v}}{{$sep = ", "}}{{end}}
+{{end}}

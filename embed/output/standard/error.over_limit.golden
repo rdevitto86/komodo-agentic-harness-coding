@@ -1,0 +1,2 @@
+Refused: `limits.returns is over its hard limit of 10`. The code is
+`over_limit`. To fix it, run `komodo config set limits.returns 10`.

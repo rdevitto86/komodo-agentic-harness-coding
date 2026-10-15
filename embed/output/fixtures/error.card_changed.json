@@ -1,0 +1,5 @@
+{
+  "code": "card_changed",
+  "reason": "a task card changed since the plan read it",
+  "fix": "komodo plan"
+}

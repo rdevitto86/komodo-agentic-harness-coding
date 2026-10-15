@@ -1,0 +1,2 @@
+Error: `the plan passed its deadline`. The code is `plan_timeout`. To fix it,
+run `komodo plan`.

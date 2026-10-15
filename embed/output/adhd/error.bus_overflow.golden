@@ -1,0 +1,5 @@
+Error: `a subscriber queue was full and events were dropped`.
+
+**Code:** `bus_overflow`
+
+**Fix:** `komodo status`

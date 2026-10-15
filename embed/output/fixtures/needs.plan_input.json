@@ -1,0 +1,7 @@
+{
+  "code": "plan_input",
+  "group": "tg-2.3",
+  "task": "plan from prd.md",
+  "question": "The input could not be read. Where is it?",
+  "fix": "komodo run --approve tg-2.3"
+}

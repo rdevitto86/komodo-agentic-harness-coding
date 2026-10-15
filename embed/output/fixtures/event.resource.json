@@ -1,0 +1,12 @@
+{
+  "type": "resource",
+  "subtype": "session.end",
+  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
+  "group": "tg-1.2",
+  "at": "2026-10-15T10:00:05Z",
+  "data": {
+    "reason": "done",
+    "turns": 12,
+    "ok": true
+  }
+}

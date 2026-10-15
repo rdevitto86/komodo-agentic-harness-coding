@@ -1,0 +1,7 @@
+{
+  "code": "not_blocked",
+  "reason": "tg-1.2 is not blocked",
+  "fix": "komodo status",
+  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
+  "group": "tg-1.2"
+}

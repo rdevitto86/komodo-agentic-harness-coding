@@ -1,0 +1,12 @@
+Settings changed: 1.
+
+The audit batch is `b-0192`.
+
+The old and new values were:
+
+| `key` | `old` | `new` |
+|---|---|---|
+| `output.profile` | `adhd` | `standard` |
+
+✅ Successful Changes
+1 setting was changed.

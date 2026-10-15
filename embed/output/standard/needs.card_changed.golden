@@ -1,0 +1,6 @@
+Group `tg-1.2` needs a decision: `card_changed`. The task is `update the card`.
+It asks: `A task card changed since the plan read it. Re-read it?` To resolve
+it, run `komodo run --approve tg-1.2`.
+
+❌ Blocked Changes
+Group `tg-1.2` waits for a person.

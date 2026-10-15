@@ -1,0 +1,19 @@
+{
+  "removed": {
+    "head": [
+      "item",
+      "kind"
+    ],
+    "rows": [
+      [
+        "/Users/rad/.komodo/worktrees/tg-1.2",
+        "worktree"
+      ],
+      [
+        "1.0.0-beta.4",
+        "binary"
+      ]
+    ],
+    "what": "items"
+  }
+}

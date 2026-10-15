@@ -1,0 +1,4 @@
+{{n (len .Rows.Rows)}} {{plural (len .Rows.Rows) "setting" "settings"}} found.
+{{if .Rows.Rows}}
+{{table .Rows}}
+{{end}}

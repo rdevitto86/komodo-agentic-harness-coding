@@ -1,0 +1,7 @@
+{
+  "code": "plan_timeout",
+  "group": "tg-2.2",
+  "task": "plan the cache",
+  "question": "The plan passed its deadline. Retry?",
+  "fix": "komodo run --approve tg-2.2"
+}

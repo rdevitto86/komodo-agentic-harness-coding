@@ -1,0 +1,5 @@
+Error: `the plan failed lint three times`.
+
+**Code:** `plan_blocked`
+
+**Fix:** `komodo plan`

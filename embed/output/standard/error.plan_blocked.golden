@@ -1,0 +1,2 @@
+Error: `the plan failed lint three times`. The code is `plan_blocked`. To fix
+it, run `komodo plan`.

@@ -1,0 +1,5 @@
+{
+  "code": "unknown_key",
+  "reason": "no setting named output.profil; the closest is output.profile",
+  "fix": "komodo config get output.profile"
+}

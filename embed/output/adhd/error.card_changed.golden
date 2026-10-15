@@ -1,0 +1,5 @@
+Error: `a task card changed since the plan read it`.
+
+**Code:** `card_changed`
+
+**Fix:** `komodo plan`

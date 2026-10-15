@@ -1,0 +1,5 @@
+{
+  "code": "plan_timeout",
+  "reason": "the plan passed its deadline",
+  "fix": "komodo plan"
+}

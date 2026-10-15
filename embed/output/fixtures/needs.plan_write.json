@@ -1,0 +1,7 @@
+{
+  "code": "plan_write",
+  "group": "tg-2.4",
+  "task": "write the plan files",
+  "question": "The plan files could not be written. Check the folder?",
+  "fix": "komodo run --approve tg-2.4"
+}

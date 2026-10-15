@@ -1,0 +1,5 @@
+{
+  "code": "over_limit",
+  "reason": "limits.returns is over its hard limit of 10",
+  "fix": "komodo config set limits.returns 10"
+}

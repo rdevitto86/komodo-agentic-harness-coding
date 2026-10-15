@@ -1,0 +1,5 @@
+Error: `the engine is past its exit check`.
+
+**Code:** `engine_stopping`
+
+**Fix:** `komodo status`

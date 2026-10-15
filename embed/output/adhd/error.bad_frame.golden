@@ -1,0 +1,5 @@
+Error: `a line on the control socket is not a valid request`.
+
+**Code:** `bad_frame`
+
+**Fix:** `komodo doctor`

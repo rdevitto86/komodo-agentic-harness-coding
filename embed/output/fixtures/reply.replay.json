@@ -1,0 +1,8 @@
+{
+  "run_id": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
+  "steps": [
+    "2026-10-15T10:00:00Z run-start tg-1.2",
+    "2026-10-15T10:00:05Z run-status session.start tg-1.2"
+  ],
+  "gaps": 1
+}

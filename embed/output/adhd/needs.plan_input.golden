@@ -1,0 +1,10 @@
+Group `tg-2.3` needs a decision: `plan_input`.
+
+**Task:** `plan from prd.md`
+
+**Question:** `The input could not be read. Where is it?`
+
+**Fix:** `komodo run --approve tg-2.3`
+
+**❌ Blocked Changes**
+- Group `tg-2.3` waits for a person

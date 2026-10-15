@@ -1,0 +1,17 @@
+Install finished with 2 changes.
+
+**Changes:**
+
+| `file` | `action` | `reason` |
+|---|---|---|
+| `AGENTS.md` | `updated` | `block changed` |
+| `.claude/settings.json` | `created` | `missing` |
+
+**Model links:**
+
+| `link` | `result` |
+|---|---|
+| `claude` | `ok` |
+
+**✅ Successful Changes**
+- 2 file changes applied

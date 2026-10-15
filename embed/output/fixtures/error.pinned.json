@@ -1,0 +1,5 @@
+{
+  "code": "pinned",
+  "reason": "the repository pin is above this binary",
+  "fix": "komodo update"
+}

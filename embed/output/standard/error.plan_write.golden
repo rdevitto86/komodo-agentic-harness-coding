@@ -1,0 +1,2 @@
+Error: `the plan files could not be written`. The code is `plan_write`. To fix
+it, run `komodo doctor`.

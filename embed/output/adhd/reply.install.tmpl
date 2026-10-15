@@ -1,0 +1,13 @@
+Install finished with {{n (len .Changes.Rows)}} {{plural (len .Changes.Rows) "change" "changes"}}.
+{{if .Changes.Rows}}
+**Changes:**
+
+{{table .Changes}}
+{{end}}{{if .Probe.Rows}}
+**Model links:**
+
+{{table .Probe}}
+{{end}}
+{{- define "turnend"}}{{if .Changes.Rows}}**✅ Successful Changes**
+- {{n (len .Changes.Rows)}} {{plural (len .Changes.Rows) "file change" "file changes"}} applied
+{{end}}{{end}}

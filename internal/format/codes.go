@@ -1,0 +1,48 @@
+package format
+
+import "slices"
+
+// Code is one word from the closed code list.
+type Code string
+
+const (
+	ConfigTampered Code = "config_tampered"
+	Pinned         Code = "pinned"
+	NoTerminal     Code = "no_terminal"
+	NotBlocked     Code = "not_blocked"
+	NoRepo         Code = "no_repo"
+	Usage          Code = "usage"
+	UnknownKey     Code = "unknown_key"
+	BadValue       Code = "bad_value"
+	OverLimit      Code = "over_limit"
+	UnknownTarget  Code = "unknown_target"
+	RunRefused     Code = "run_refused"
+	EngineStopping Code = "engine_stopping"
+	BadFrame       Code = "bad_frame"
+	CardChanged    Code = "card_changed"
+	Locked         Code = "locked"
+	BusOverflow    Code = "bus_overflow"
+	PlanBlocked    Code = "plan_blocked"
+	PlanTimeout    Code = "plan_timeout"
+	PlanInput      Code = "plan_input"
+	PlanWrite      Code = "plan_write"
+	ContextRefused Code = "context_refused"
+	Internal       Code = "internal"
+	Other          Code = "other"
+)
+
+// allCodes lists every code on the closed list, in list order.
+var allCodes = []Code{
+	ConfigTampered, Pinned, NoTerminal, NotBlocked, NoRepo, Usage, UnknownKey, BadValue, OverLimit,
+	UnknownTarget, RunRefused, EngineStopping, BadFrame, CardChanged, Locked, BusOverflow,
+	PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused, Internal, Other,
+}
+
+// needsCodes lists the codes that also render as a group waiting for a person (needs.<code>).
+var needsCodes = []Code{CardChanged, Locked, PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused}
+
+// AllCodes returns a copy of the closed code list.
+func AllCodes() []Code { return slices.Clone(allCodes) }
+
+// IsCode reports whether s is on the closed code list.
+func IsCode(s string) bool { return slices.Contains(allCodes, Code(s)) }

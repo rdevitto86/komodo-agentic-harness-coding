@@ -1,0 +1,5 @@
+{
+  "code": "plan_blocked",
+  "reason": "the plan failed lint three times",
+  "fix": "komodo plan"
+}

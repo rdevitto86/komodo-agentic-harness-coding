@@ -1,0 +1,10 @@
+Group `tg-2.1` needs a decision: `plan_blocked`.
+
+**Task:** `plan the retry limit`
+
+**Question:** `The plan failed lint three times. Retry with a smaller goal?`
+
+**Fix:** `komodo run --approve tg-2.1`
+
+**❌ Blocked Changes**
+- Group `tg-2.1` waits for a person

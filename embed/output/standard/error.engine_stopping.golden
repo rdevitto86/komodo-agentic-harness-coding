@@ -1,0 +1,2 @@
+Error: `the engine is past its exit check`. The code is `engine_stopping`. To
+fix it, run `komodo status`.

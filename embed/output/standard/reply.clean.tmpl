@@ -1,0 +1,9 @@
+Clean removed {{n (len .Removed.Rows)}} {{plural (len .Removed.Rows) "item" "items"}}.
+{{if .Removed.Rows}}
+The removed items were:
+
+{{table .Removed}}
+{{end}}
+{{- define "turnend"}}{{if .Removed.Rows}}✅ Successful Changes
+{{n (len .Removed.Rows)}} {{plural (len .Removed.Rows) "item was" "items were"}} removed.
+{{end}}{{end}}

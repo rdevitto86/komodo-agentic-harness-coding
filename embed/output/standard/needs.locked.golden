@@ -1,0 +1,6 @@
+Group `tg-1.3` needs a decision: `locked`. The task is `amend docs/lld.md`. It
+asks: `A live run holds this group. Stop it first?` To resolve it, run
+`komodo run --approve tg-1.3`.
+
+❌ Blocked Changes
+Group `tg-1.3` waits for a person.

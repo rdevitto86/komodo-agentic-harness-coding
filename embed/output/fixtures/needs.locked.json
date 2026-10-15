@@ -1,0 +1,7 @@
+{
+  "code": "locked",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "A live run holds this group. Stop it first?",
+  "fix": "komodo run --approve tg-1.3"
+}

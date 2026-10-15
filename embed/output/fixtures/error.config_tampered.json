@@ -1,0 +1,5 @@
+{
+  "code": "config_tampered",
+  "reason": "settings.json was hand-edited",
+  "fix": "komodo config set --accept"
+}

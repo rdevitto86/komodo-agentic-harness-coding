@@ -1,0 +1,18 @@
+{
+  "batch": "b-0192",
+  "changed": {
+    "head": [
+      "key",
+      "old",
+      "new"
+    ],
+    "rows": [
+      [
+        "output.profile",
+        "adhd",
+        "standard"
+      ]
+    ],
+    "what": "settings"
+  }
+}
