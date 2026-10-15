@@ -3,7 +3,7 @@
 This chapter holds what every reader needs first: how the document is organised, how names are spelled, which Go package holds which subsystem, which way imports may point and which files are compiled into the binary. The purpose, goals and decisions are in the [High-Level Design](hld.md).
 
 - **Owners:** the Komodo domain architect (CEO) decides every open gap; the technical lead is the author.
-- **Status:** draft, for Komodo 1.0.0-beta.6, following the owner's component diagram of 2026-10-14. The earlier design is frozen at git tag `design/beta6-v1`.
+- **Status:** draft, for Komodo 1.0.0-beta.6.
 
 ### 0.1 How to Read This Document
 
@@ -15,7 +15,7 @@ The document has 22 chapters, numbered 0 to 21. Chapters 1 to 19 each describe o
 
 | Chapter | Holds |
 |---|---|
-| [1. CLI](#1-cli) | Commands, the structured reply, exit codes, install and update |
+| [1. CLI](#1-cli) | Commands, the control socket to the engine, the structured reply, exit codes, install and update |
 | [2. Output Formatter](#2-output-formatter) | Turning structured replies into text, templates |
 | [3. Configuration Manager](#3-configuration-manager) | The settings file and the agent registry |
 | [4. Event Bus](#4-event-bus) | The event shape, types and subtypes, publish and subscribe |
@@ -58,7 +58,7 @@ Every subsystem chapter has the same child pages, numbered `N.1` to `N.10`. A pa
 
 - **Code formatting:** Go identifiers, file names, commands, configuration keys and JSON field names appear in code font. A function shown without a body is a signature only.
 - **Diagrams:** each diagram has a bold question above it, starting with the pencil-and-ruler symbol. Edge labels are numbered or are real command names.
-- **Open decisions:** an owner decision not yet made is written `[TODO: <the open question> (G-NNN)]`, with G-NNN linked to its gap register row, never filled with a default. The 18 open decisions are G-201 to G-214, G-216, G-217, G-220 and G-221.
+- **Open decisions:** a decision not yet made is written `[TODO: <the open question> (G-NNN)]`, with G-NNN linked to its gap register row, never filled with a default. The open ones are the rows of the gap register.
 - **Defaults are stated once:** a default value appears in the `N.8` page of the chapter that owns the key. Other pages name the key, not its number.
 - **Numbers are design targets:** a number not yet measured is the target the build holds to until its gap row records the measured value.
 
@@ -69,8 +69,8 @@ Every subsystem chapter has the same child pages, numbered `N.1` to `N.10`. A pa
 | Config keys | Dotted, lower case: `limits.returns`; agent entries as `agents.<name>` | The names typed in `komodo config get` and `set` |
 | Event types and subtypes | Type in kebab case from the diagram (`run-status`); subtype in `family.name` form (`session.end`) | [4. Event Bus](#4-event-bus) holds the full list |
 | Result and reason codes | Snake case from one enum (a fixed list of allowed values): `needs_scope`, `time_out` | A result, an event subtype's reason and a status line share the one list |
-| Runs, groups, sessions | A version 7 universally unique identifier (UUID) made by the binary; it starts with its creation time, so ids sort by age | A group keeps its readable label, such as `tg-1.2`, beside its id |
-| Branches | `komodo/<epic>-<group>`; the epic branch form waits on [TODO: where groups land ([G-210](#g-210))] | Never the main branch |
+| Runs, groups, sessions | A version 7 universally unique identifier (UUID) made by the binary; it starts with its creation time, so ids sort by age | A group keeps its readable label, such as `tg-1.2`, and an epic has one, such as `ep-1`; commands take labels, and a label is never reused after a plan is rewritten |
+| Branches | `komodo/<epic>` for an epic's shared branch and `komodo/<epic>-<group>` for a group's branch | Never the main branch |
 | Gaps | `G-NN` or `G-NNN`, one row each in the gap register | A gap is a fact not yet verified or a decision not yet made |
 
 ### 0.3 Package Map
@@ -80,13 +80,13 @@ Komodo is one Go program, the `komodo` binary. Each subsystem has one package un
 | Package | Subsystem | Chapter |
 |---|---|---|
 | `cmd/komodo` | `main.go`, calling `cli.New(deps).Run(os.Args)`, and the end-to-end tests | [1](#1-cli) |
-| `internal/cli` | CLI | [1](#1-cli) |
+| `internal/cli` | CLI and its control socket client | [1](#1-cli) |
 | `internal/format` | Output Formatter | [2](#2-output-formatter) |
 | `internal/config` | Configuration Manager | [3](#3-configuration-manager) |
 | `internal/bus` | Event Bus | [4](#4-event-bus) |
 | `internal/intake` | Intake Handler | [5](#5-intake-handler) |
 | `internal/contextmgr` | Context Manager | [6](#6-context-manager) |
-| `internal/engine` | Runtime Manager | [7](#7-runtime-manager) |
+| `internal/engine` | Runtime Manager, the engine process and its control socket | [7](#7-runtime-manager) |
 | `internal/cache` | Cache Manager | [8](#8-cache-manager) |
 | `internal/lease` | Lease Manager | [9](#9-lease-manager) |
 | `internal/state` | State Manager | [10](#10-state-manager) |
@@ -110,11 +110,11 @@ About 3,900 lines of Go exist on this branch. They move as follows when their su
 | `internal/core/fs.go` | 91 | Stays in `internal/core` |
 | `internal/core/version.go` | 194 | Stays in `internal/core` |
 | `internal/cli/cli.go` | 40 | Grows into `internal/cli` |
-| `dashboard/` | 556 | `internal/cli/ui.go` and `embed/ui/`, if the dashboard survives [TODO: commands kept beside the diagram's 12 ([G-204](#g-204))] |
+| `dashboard/` | 556 | `internal/cli/ui.go` and `embed/ui/` |
 
 #### Code rules
 
-- **Standard library only:** `go.mod` lists no modules; whether storage keeps this rule is [TODO: files or a database ([G-212](#g-212))].
+- **Standard library only:** `go.mod` lists no modules, and storage is folders of small JSON files.
 - **File size:** a file splits at about 600 lines.
 - **Tests:** `_test.go` files sit next to their sources, and every package has tests before it is wired in.
 
@@ -147,30 +147,31 @@ The `embed/` folder holds every text and data file the harness reads from its ow
 
 | Path | Contents | Chapter |
 |---|---|---|
-| `agents/<name>/{agent.json, prompt.md}` | The default agent registry: planner, builder, tester and reviewer; the other 3 earlier roles wait on [TODO: scheduled jobs and extra roles ([G-207](#g-207))] | [3](#3-configuration-manager) |
+| `agents/<name>/{agent.json, prompt.md}` | The default agent registry: planner, builder, tester and reviewer | [3](#3-configuration-manager) |
 | `skills/` | Skills, documents of standards placed in an agent's context | [6](#6-context-manager) |
 | `templates/` | Agent prompt templates | [6](#6-context-manager) |
 | `output/` | Output Formatter templates and their golden test files | [2](#2-output-formatter) |
 | `defaults.json` | Built-in settings and hard limits | [3](#3-configuration-manager) |
-| `ui/` | The dashboard page and its one script, if kept | [1](#1-cli) |
+| `ui/` | The dashboard page and its one script | [1](#1-cli) |
 
 ## 1. CLI
 
-The CLI is the front door of the harness: every command a person or the orchestrator types enters here. It parses and checks the command, then either publishes an event on the Event Bus or makes a direct call, and it prints exactly one reply. The purpose and the interactions are in [HLD 5.2](hld.md#52-cli).
+The CLI is the front door of the harness: every command a person or the orchestrator types enters here. It parses and checks the command, then makes a direct call or reaches the engine over a private local socket, and it prints exactly one reply. The purpose and the interactions are in [HLD 5.2](hld.md#52-cli).
 
 ### 1.1 Scope and Concepts
 
 **Owns:**
-- The command table: the 12 commands of the owner's diagram, their flags and who may call each.
+- The command table: the 13 commands, their flags and who may call each.
 - The five-step pipeline every command runs, the reply envelope and the exit codes.
-- How each command becomes an event or a direct call.
+- How each command becomes an event, a control request or a direct call.
+- The CLI's side of the control socket: finding the engine, starting it on demand, sending a request and reading the replies.
 - The install and update work: the install manifest, the block written into the repository's `AGENTS.md`, the settings entries for Claude Code, and the signed-binary update.
 - `PrintError()`, the call through which the Error Handler shows an error to the caller.
 
 **Does not own:**
 - Turning a reply into text: [Output Formatter](#2-output-formatter).
 - Reading or writing settings and the agent registry: [Configuration Manager](#3-configuration-manager).
-- The work behind a command: the Runtime Manager starts and stops runs ([chapter 7](#7-runtime-manager)), the Intake Handler plans ([chapter 5](#5-intake-handler)), the Cleanup Handler removes finished work ([chapter 16](#16-cleanup-handler)).
+- The work behind a command: the Runtime Manager starts and stops runs ([chapter 7](#7-runtime-manager)), the Intake Handler plans ([chapter 5](#5-intake-handler)), the Cleanup Handler removes finished work ([chapter 16](#16-cleanup-handler)); the engine's side of the control socket is the Runtime Manager's.
 - The event schema and delivery: [Event Bus](#4-event-bus).
 
 **Concepts**
@@ -178,13 +179,17 @@ The CLI is the front door of the harness: every command a person or the orchestr
 | Term | Meaning |
 |---|---|
 | Command | One word after `komodo`, such as `run`. Each command has one row in the command table |
-| Id | The argument that names what a command acts on, shown as `(id)` on the diagram. What it names depends on the command |
+| Id | The argument that names what a command acts on, shown as `(id)`. What it names depends on the command; the table under [the 13 commands](#the-13-commands) lists each |
 | Tier | Who may call a command: *shared* (a person or the orchestrator) or *terminal-only* (a person at a controlling terminal) |
 | Controlling terminal | The console a person types into. An agent's shell has none |
 | Orchestrator | The model chat session in Claude Code that drives the harness by commands and never edits code ([HLD glossary](hld.md#12-glossary)) |
 | Reply | The one JSON object a command prints when no terminal is attached, called the envelope |
 | Repository pin | The `min=` version in the Komodo block of the repository's `AGENTS.md`. A binary older than the pin refuses most commands |
-| Run id | A UUID version 7 (a unique id that sorts by creation time) the CLI generates for each `run` |
+| Run id | A UUID version 7 (a unique id that sorts by creation time) the CLI generates for each `run`. One group's attempt is named by its run id plus its group label |
+| Label | The readable name of an epic (`ep-1`) or a task group (`tg-1.2`). Commands take labels |
+| Engine | The Runtime Manager's process: one per user per machine, started on demand. It hosts every live run on the machine and the Event Bus in memory, and exits when no run is live and none is queued |
+| Control socket | The private local channel `~/.komodo/state/engine.sock` that only this user can open. A command sends its request on it and reads replies and live events back on the same connection |
+| Schedule queue | The machine-wide record `~/.komodo/state/schedule.json` of runs waiting for their `--schedule` time |
 
 ### 1.2 Package Layout
 
@@ -195,16 +200,20 @@ Go package `internal/cli`, plus the program entry point.
 | `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned |
 | `internal/cli/cli.go` | Command table, `parse`, `validate`, `resolve`, `dispatch`, `render`, envelope, exit codes, pin check |
 | `internal/cli/help.go` | `--help` text and `--help --json`, generated at build and embedded |
-| `internal/cli/work.go` | `plan`, `run`, `stop`, `replay`, `build`, `review`, `test`: each builds one event |
+| `internal/cli/work.go` | `plan`, `run`, `stop`, `replay`, `abandon`: each builds one event or one control request |
+| `internal/cli/engine.go` | The control socket client: dial, start the engine on demand, send a request, read the replies |
+| `internal/cli/status.go` | `status`, with `--wait` |
 | `internal/cli/config.go` | `config get` and `config set`: thin calls into the Configuration Manager |
 | `internal/cli/install.go` | `install` and `init`: the manifest diff, the repository files, the Claude Code plugin |
 | `internal/cli/update.go` | `update`: release check, download, verification, swap, cleanup of old versions |
 | `internal/cli/clean.go` | `clean` |
-| `internal/cli/print.go` | `PrintError()` and the printer for events the CLI subscribes to |
+| `internal/cli/doctor.go` | `doctor`: the health checks |
+| `internal/cli/ui.go` | `ui`: the web dashboard server, with its page under `embed/ui/` |
+| `internal/cli/print.go` | `PrintError()` and the printer for events the CLI reads from the engine |
 | `internal/cli/terminal.go` | The controlling-terminal check for each platform |
 | `templates/project/AGENTS.md.tmpl`, `templates/claude/settings.json.tmpl` | The text `install` writes |
 
-Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. The Error Handler sits below `cli`, so `cli` imports `fault` and implements its `fault.Printer` interface with `PrintError()`; `cmd/komodo/main.go` passes the CLI to `fault.New` ([1.4](#14-interfaces)).
+Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. Only `engine.go` opens the control socket. The Error Handler sits below `cli`, so `cli` imports `fault` and implements its `fault.Printer` interface with `PrintError()`. In the CLI process `fault` has no bus: `cmd/komodo/main.go` calls `fault.New(nil, cli)`, and `Guard` and `Final` print through the CLI ([1.4](#14-interfaces)). In the engine, `engine.ConnPrinter` prints to the connection that issued the command.
 
 **📐 Where the command-line code sits**
 ```mermaid
@@ -212,8 +221,8 @@ flowchart TB
   MAIN["cmd/komodo main.go"] -->|"1 New, Run"| CLI["internal/cli"]
   CLI -->|"2 FormatJSON"| FMT["internal/format"]
   CLI -->|"3 GetConfigItem, SetConfigItem"| CFG["internal/config"]
-  CLI -->|"4 publish, subscribe"| BUS["internal/bus"]
-  FLT["internal/fault"] -->|"5 PrintError via Printer"| CLI
+  CLI -->|"4 control socket"| ENG["internal/engine"]
+  FLT["internal/fault"] -->|"5 PrintError via Printer, no bus"| CLI
 ```
 
 ### 1.3 Data Model
@@ -249,7 +258,7 @@ const (
 	OutcomeOK       Outcome = 0 // the command did what was asked
 	OutcomeRefused  Outcome = 1 // the harness declined on purpose
 	OutcomeUsage    Outcome = 2 // the command line was wrong
-	OutcomeHeld     Outcome = 3 // the command ran and reports a run or group that needs a person
+	OutcomeHeld     Outcome = 3 // the command ran and reports a group or a check that needs a person
 	OutcomeInternal Outcome = 4 // the harness itself failed
 )
 
@@ -279,7 +288,7 @@ type Result struct {
 | 0 | `OutcomeOK` | The command succeeded |
 | 1 | `OutcomeRefused` | Declined before acting: no terminal, pinned repository, tampered settings, value over its limit, no repository |
 | 2 | `OutcomeUsage` | Unknown command or flag, or a bad value; an unknown flag's message names the closest real flag |
-| 3 | `OutcomeHeld` | The command acted and reports a group the Runtime Manager holds until a person continues it [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
+| 3 | `OutcomeHeld` | The command ran and reports a group the Runtime Manager holds until a person answers it (`status --wait` returns it with its question), or a failed `doctor` check |
 | 4 | `OutcomeInternal` | The harness itself failed: a recovered panic, an undecodable record, a failed write to its own files |
 
 Codes the CLI raises, from the closed code list owned by the [Output Formatter](#23-data-model):
@@ -350,7 +359,7 @@ const (
 type FlagSpec struct {
 	Name    string // long name without dashes, such as "dry-run"
 	Short   string // one-letter form; empty when none
-	Kind    string // bool, string, int or duration
+	Kind    string // bool, string, int, duration or time (an RFC 3339 timestamp)
 	Default string // text form of the default; empty when none
 	Help    string // one line shown by help
 }
@@ -362,6 +371,7 @@ type Command struct {
 	Tier          Tier
 	Flags         []FlagSpec         // command-specific flags; global flags are added by parse
 	NeedsTerminal func(c *Call) bool // nil when the command never needs a terminal
+	NeedsEngine   bool               // connects to the engine, starting it when none answers
 	PinExempt     bool               // runs even when the repository pin is above this binary
 	TamperPolicy  TamperPolicy       // what the command does when the settings guard has tripped
 	Run           Handler
@@ -386,6 +396,7 @@ type GlobalFlags struct {
 	DryRun  bool
 	List    bool // --list
 	All     bool // --all
+	Version bool // --version
 }
 
 // RepoRef names the repository a command acts on.
@@ -409,11 +420,55 @@ type Call struct {
 type Handler func(c *Call) Result
 ```
 
-`PinExempt` is `true` for `install`, `update` and the `--help` path. The `--input` object holds each flag under its long name and the positional arguments, in order, under `args`: `{"args": ["tg-1.2"], "dry-run": true}` is `run tg-1.2 --dry-run`. An unknown key is a usage error, like an unknown flag.
+`PinExempt` is `true` for `install`, `update`, `doctor` and the `--help` and `--version` paths. `NeedsEngine` is `true` for `run`, `stop`, `status`, `ui`, `abandon`, `replay`, `plan` and `clean`; `--version` and `--help` touch no engine. The `--input` object holds each flag under its long name and the positional arguments, in order, under `args`: `{"args": ["tg-1.2"], "dry-run": true}` is `run tg-1.2 --dry-run`. An unknown key is a usage error, like an unknown flag.
+
+The row of `run`, as the table holds it:
+
+```go
+// internal/cli/work.go
+
+var runCommand = Command{
+	Name:    "run",
+	Summary: "Start, schedule or continue a run, or answer a blocked group",
+	Tier:    TierShared,
+	Flags: []FlagSpec{ // --all is the global flag
+		{Name: "schedule", Kind: "time", Help: "Queue the run for this RFC 3339 time"},
+		{Name: "approve", Kind: "bool", Help: "Grant what the blocked group asked for"},
+		{Name: "deny", Kind: "bool", Help: "Refuse what the blocked group asked for"},
+	},
+	NeedsEngine:  true,
+	TamperPolicy: TamperRefuse,
+	Run:          handleRun,
+}
+```
+
+#### Control socket messages
+
+A command that needs the engine writes one `engine.Request` as a line of JSON on the control socket and reads `engine.Reply` lines back on the same connection. Both types, the `Verb` values and the codes a refusal carries are defined in [Control socket frames](#73-data-model); this package holds only the client in `internal/cli/engine.go`. The reply kinds map onto `Reply.Status` and `Reply.Final`: a command accepted is `ok`, a command declined is `refused` with a `Code`, a failure is `error`, a recorded event or a live fact is `event`, and the last reply of a request sets `Final`.
+
+| Command | Request | Replies |
+|---|---|---|
+| `run (id)`, `run --all` | `Verb` `run`; `Event` run-start; `Flags.All` | One final `ok` whose `data` holds the run id, or `refused` with a `Code` |
+| `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; no event | One final `ok` whose `data` holds the run id the engine minted and the queued time |
+| `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
+| `stop (id)` | `Verb` `stop`; `Event` run-stop | One final `ok`, or `refused` with `unknown_target` |
+| `plan` | `Verb` `plan`; `Event` plan | One final `ok` |
+| `status` | `Verb` `status`; `Root`; `Flags.All`, `Flags.Wait`, `Flags.TimeoutS` | One final `ok` holding `StatusData`. With `--wait`, an `ok` holding `StatusData` after each change, then a final `ok` with `{"waited": "blocked"}`, `"done"` or `"timeout"` |
+| `replay (id)` | `Verb` `replay`; `Target` | One `event` reply per recorded event, then a final `ok` with `{"gaps": 0}` |
+| `abandon (id)` | `Verb` `abandon`; `Target` | One final `ok`, or `refused` with `unknown_target` |
+| `ui` | `Verb` `status`, repeated by the page | The CLI process serves the page on `127.0.0.1` and reads from the engine over the socket; the engine never serves HTTP |
+| `clean` | `Verb` `clean` | One final `ok` listing what the Cleanup Handler removed or would remove |
+
+`komodo run tg-1.2` writes, and the engine answers:
+
+```json
+{"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","verb":"run","target":"tg-1.2","root":"/Users/rad/code/komodo","flags":{},"event":{"type":"run-start","subtype":"","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T09:12:04Z","data":{"target":"tg-1.2","groups":["tg-1.2"],"source":"cli","repo":"github.com/rdevitto86/komodo-agentic-harness-coding","root":"/Users/rad/code/komodo"}}}
+{"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","status":"ok","data":{"run_id":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"},"final":true}
+```
 
 #### Install manifest
 
-`install` records every file and settings entry it owns, so a rerun changes only the differences. The repository manifest sits in the git directory at `<git-common-dir>/komodo/install.json`. Steps that write machine-wide files record them in a second manifest, `~/.komodo/state/install.json`, with the same `Entry` shape and an absolute `target`. Who owns this machine-wide record is [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))].
+`install` records every file and settings entry it owns, so a rerun changes only the differences. The repository manifest sits in the git directory at `<git-common-dir>/komodo/install.json`. Steps that write machine-wide files record them in a second manifest, `~/.komodo/state/install.json`, with the same `Entry` shape and an absolute `target`. The State Manager stores this machine-wide record, and `install` reads and writes it only through the State Manager.
 
 ```go
 // internal/cli/install.go
@@ -458,6 +513,24 @@ type Entry struct {
 }
 ```
 
+The same manifest as the machine-wide record `~/.komodo/state/install.json`, with the State Manager's header, an absolute `target` and the body shape of [10.3](#103-data-model):
+
+```json
+{
+  "v": 1,
+  "kind": "install",
+  "rev": 2,
+  "ts": "2026-10-14T08:55:12Z",
+  "writer": "cli/48102",
+  "body": {
+    "entries": [
+      { "target": "/Users/dev/.komodo/bin/komodo", "hash": "1a9509c4…", "step": 1 }
+    ],
+    "selections": { "hosts": ["claude"], "project": false }
+  }
+}
+```
+
 #### The Komodo block in `AGENTS.md`
 
 `install` owns the text between two markers; a person never edits inside them. The block tells any host session how to drive the harness.
@@ -485,6 +558,8 @@ type Block struct {
 - **You are the orchestrator.** Drive the harness only through `komodo <command>`; with no terminal, every reply is the JSON envelope.
 - **Find your commands:** run `komodo --help --json` first. It lists every command, flag and result schema, and marks the terminal-only ones.
 - **Not yours:** the terminal-only commands (`install`, `init`, `update`, `config set`). They refuse without a terminal. Hand the person the command.
+- **Wait without polling:** run `komodo status --wait` in the background. It returns when a group is blocked or done, with the blocked group's question.
+- **Answer a blocked group:** `komodo run <id> --approve` grants what it asked for; `komodo run <id> --deny` refuses it.
 - **Report:** relay the envelope's `report` field verbatim.
 - **Rules:** <orchestrator rules text, supplied by the Context Manager>
 <output style for output.profile>
@@ -498,7 +573,7 @@ type Block struct {
 | Rules, output style | The [Context Manager](#6-context-manager) and the [Output Formatter](#2-output-formatter) | Pasted as supplied |
 | End marker | The template | A missing or damaged marker drops the whole block from every brief |
 
-Which further commands the block names, such as a status command, waits on [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))].
+The block names only commands the table holds. Among the shared commands it names `status --wait`, `run --approve` and `run --deny`.
 
 #### Claude Code settings entries
 
@@ -526,7 +601,7 @@ Step 6 of `install` adds exactly these entries to the repository's `.claude/sett
 | `onFailure` | `block`: when the guard hook crashes, times out or errors, Claude Code refuses the tool call instead of letting it through. This needs a Claude Code release that supports `onFailure` |
 | Guard exit codes | Every internal error of the guard command exits 2, the code Claude Code reads as "block" |
 
-Whether the guard command stays as `komodo internal guard`, and which hooks beside it install writes, such as a session-start status hook, is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))]. Under every option the entry that stays carries `onFailure: block`, the wider matcher and exit 2 on every guard error.
+The guard command is `komodo internal guard`, a hidden verb outside the 13 commands. The engine and the private tool server start the same way, as the hidden verbs `komodo internal engine` and `komodo internal tools`. The entry carries `onFailure: block`, the wider matcher and exit 2 on every guard error. Which hooks beside it `install` writes is [TODO: what `install` and `init` add to the host beyond the guard hook, such as a session-start status hook and the plugin's skill set ([G-231](#g-231))].
 
 #### Update records
 
@@ -543,7 +618,7 @@ type ReleaseManifest struct {
 
 // Asset is the binary of one operating system and architecture.
 type Asset struct {
-	OS     string `json:"os"`     // windows, linux or darwin
+	OS     string `json:"os"`     // linux or darwin
 	Arch   string `json:"arch"`   // processor architecture
 	URL    string `json:"url"`    // download address
 	SHA256 string `json:"sha256"` // SHA-256 checksum of the binary, hexadecimal
@@ -561,22 +636,29 @@ type KeySet struct {
   "version": "1.0.0",
   "assets": [
     { "os": "darwin", "arch": "arm64", "url": "https://github.com/…/releases/download/v1.0.0/komodo_darwin_arm64", "sha256": "<64 hexadecimal characters>" },
-    { "os": "windows", "arch": "amd64", "url": "https://github.com/…/releases/download/v1.0.0/komodo_windows_amd64.exe", "sha256": "<64 hexadecimal characters>" }
+    { "os": "linux", "arch": "amd64", "url": "https://github.com/…/releases/download/v1.0.0/komodo_linux_amd64", "sha256": "<64 hexadecimal characters>" }
   ]
 }
 ```
 
 - **`latest.json.sig`** is the detached ed25519 signature (base64, one line) over the exact bytes of `latest.json`. Each asset is bound through its `sha256`.
-- **Asset names** are `komodo_<os>_<arch>`, with `.exe` on Windows. Five pairs are built: `darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64`, `windows/amd64`.
+- **Asset names** are `komodo_<os>_<arch>`. Four pairs are built: `darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64`. Windows runs through Windows Subsystem for Linux 2, so it uses the Linux build.
 - **Unknown keys** in the manifest are ignored. A manifest without `version`, or without an asset for this machine, is refused.
 
-The update state is `~/.komodo/state/update.json`; who owns this machine-wide record is [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))]:
+The update state is `~/.komodo/state/update.json`; the State Manager stores this machine-wide record, and `update` reads and writes it only through the State Manager:
 
 ```json
-{ "latest": "1.0.1", "checked_at": "2026-10-14T09:00:00Z", "previous": "1.0.0" }
+{
+  "v": 1,
+  "kind": "update",
+  "rev": 4,
+  "ts": "2026-10-14T09:00:00Z",
+  "writer": "cli/48190",
+  "body": { "latest": "1.0.1", "checked_at": "2026-10-14T09:00:00Z", "previous": "1.0.0" }
+}
 ```
 
-`checked_at` is RFC 3339 UTC. `previous` is the version `bin/komodo` held before the last swap. `~/.komodo/state/update.lock` is a file created exclusively so only one `update` runs at a time.
+The header is the State Manager's `MachineHeader` ([10.3](#103-data-model)). `checked_at` is RFC 3339 UTC. `previous` is the version `bin/komodo` held before the last swap. `~/.komodo/state/update.lock` is a file created exclusively so only one `update` runs at a time.
 
 ### 1.4 Interfaces
 
@@ -585,12 +667,20 @@ The update state is `~/.komodo/state/update.json`; who owns this machine-wide re
 ```go
 // internal/cli/cli.go
 
-// Deps are the harness parts the CLI calls; main wires them once.
 type Deps struct {
 	Format   *format.Formatter // FormatJSON()
 	Config   *config.Manager   // GetConfigItem(), SetConfigItem(), Verify()
-	Bus      bus.Bus           // Publish, Subscribe
+	State    *state.Manager    // the machine-wide records the CLI installer writes: install.json, update.json and providers.json
+	Engine   Engine            // the control socket client
 	Terminal func() bool       // true when a controlling terminal is attached
+}
+
+// Engine is the CLI's client of the engine's control socket.
+type Engine interface {
+	// Ensure connects, starting the engine first when none answers.
+	Ensure(ctx context.Context) error
+	// Send writes one request and returns the replies until the one that ends it.
+	Send(ctx context.Context, r engine.Request) (<-chan engine.Reply, error)
 }
 
 // CLI is the command-line front door; it holds the parts in Deps.
@@ -611,14 +701,15 @@ func (c *CLI) PrintError(f fault.Fault) error
 | Caller | Calls | When |
 |---|---|---|
 | `main` | `Run` | Once per process |
-| Error Handler ([chapter 17](#17-error-handler)) | `PrintError` | A fault reaches the caller. `main` passes the CLI to `fault.New` as its `fault.Printer`, because `fault` sits below `cli` in the import order |
+| Error Handler ([chapter 17](#17-error-handler)) | `PrintError` | A fault reaches the caller. `main` calls `fault.New(nil, cli)` in the CLI process, so there is no bus and the CLI is the `fault.Printer`; the engine's own Handler prints through `engine.ConnPrinter` |
 
 | Dependency call | An error means | The CLI does |
 |---|---|---|
 | `Format.FormatJSON` | No template for the shape, or a template error | Prints the fixed `other` line and exits 4 with `internal` |
 | `Config.Verify` | `ErrTampered` | Applies the command's `TamperPolicy` |
 | `Config.GetConfigItem` | Unknown key | Exits 2 with `unknown_key`, naming the closest key |
-| `Bus.Publish` | The event was not accepted | Exits 4 with `internal`; nothing was started |
+| `Engine.Ensure` | No engine answered within 5 seconds | Exits 4 with `internal`, naming the socket path; nothing was started |
+| `Engine.Send` | The engine sent `refused`, or the connection broke | A `refused` reply exits 1 with its code and reason; a broken connection exits 4 with `internal` |
 
 #### Global flags
 
@@ -633,28 +724,49 @@ func (c *CLI) PrintError(f fault.Fault) error
 | `--help` | Same as the command's help; at any level of `config`, lists the keys below that level | none |
 | `--list` | Lists the ids the command accepts | none |
 | `--all` | Widens a listing or a read to everything the command can show | none |
+| `--version` | Prints the running version and nothing else; it touches no repository, network or engine | none |
 
-`--list` and `--all` are on the diagram; the exact output of each, per command, is in the command table below where this chapter can state it, and the rest is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))].
+`--list` and `--all` act per command:
 
-#### The 12 commands
+- **`--list`:** for `run` the epic and group labels under `docs/backlog/`, for `stop` and `replay` the run ids and labels the engine knows, for `abandon` the group labels that can be abandoned, and for `config get` every settings key.
+- **`--all`:** for `run` every group that is not done, for `status` every repository on the machine, and for `config get` a JSON listing of every key with value, default, limit and source.
 
-Each command is a *direct call* (the CLI makes the call and prints the result) or reaches its part through an event. Which events the CLI publishes is [TODO: who publishes run-start, run-stop, run-continue, plan, skill and mcp, which part consumes next, and which types the CLI subscribes to ([G-217](#g-217))].
+#### The 13 commands
+
+Each command is a *direct call* (the CLI makes the call and prints the result), an *event* the CLI sends to the engine, or a *control request* the engine answers. No command reaches a Task Manager, a lease, the state or the cache directly; the work goes through the engine.
 
 | Command | Becomes | Reaches |
 |---|---|---|
 | `install` | Direct call | The installer in this package; no event |
 | `init` | Direct call | The plugin writer in this package; `claude plugin` commands |
 | `config get\|set (id)` | Direct call | `GetConfigItem()`, `SetConfigItem()` |
-| `plan` | Event `plan`; publisher: [TODO: who publishes plan ([G-217](#g-217))] | Intake Handler subscribes to `plan` |
-| `run (id)` | Event `run-start`; publisher: [TODO: who publishes run-start and run-continue ([G-217](#g-217))] | Runtime Manager subscribes to `run-start` and `run-continue` |
-| `stop (id)` | Event `run-stop`; publisher: [TODO: who publishes run-stop ([G-217](#g-217))] | Runtime Manager subscribes to `run-stop` |
-| `replay (id)`, `build (id)`, `review (id)`, `test (id)` | [TODO: what each does and what its id names ([G-203](#g-203))] | [TODO: what each does and what its id names ([G-203](#g-203))] |
+| `plan` | Event `plan` | Intake Handler subscribes to `plan` |
+| `run (id)` | Event `run-start`; with `--approve` or `--deny`, event `run-continue` | Runtime Manager subscribes to both |
+| `stop (id)` | Event `run-stop` | Runtime Manager subscribes to `run-stop` |
+| `replay (id)` | Control request `replay` | Runtime Manager, which reads the Metrics Service's event log |
+| `status` | Control request `status` | Runtime Manager |
+| `abandon (id)` | Control request `abandon` | Runtime Manager, then the Cleanup Handler |
+| `ui` | Direct call, reading the engine over the socket | The dashboard server in this package |
+| `doctor` | Direct call | The checks in this package |
 | `update` | Direct call | The updater in this package |
-| `clean` | [TODO: what `clean` covers ([G-204](#g-204))] | Cleanup Handler `Sweep` and `Discard` ([chapter 16](#16-cleanup-handler)), whatever it covers |
+| `clean` | Control request `clean` | Runtime Manager, which asks the Cleanup Handler for `Sweep` and `UnusedVersions` ([chapter 16](#16-cleanup-handler)); what it removes is [TODO: what `clean` removes ([G-222](#g-222))] |
 
-**Terminal-only commands:** `install`, `init`, `update` and `config set`. A refused call exits 1 with `no_terminal`, and the orchestrator hands the command to the person. On Claude Code the deny rules from step 6 refuse them first. The tier of `clean` follows its meaning [TODO: what `clean` covers ([G-204](#g-204))].
+**Commands that start the engine:** `run`, `stop`, `status`, `ui`, `abandon`, `replay` and `clean`. Each connects to the engine and starts it first when none answers ([Reaching the engine](#reaching-the-engine)). `plan` sends its event the same way and starts the engine when none answers, because the Intake Handler runs inside the engine process.
 
-**Every other command is shared.** The orchestrator may call `plan`, `run`, `stop`, `config get` and `--help`.
+**Terminal-only commands:** `install`, `init`, `update` and `config set`. A refused call exits 1 with `no_terminal`, and the orchestrator hands the command to the person. On Claude Code the deny rules from step 6 refuse them first. The tier of `clean` follows [TODO: what `clean` removes and whether it needs a terminal ([G-222](#g-222))]. The tier of `ui` is [TODO: whether `ui` needs a terminal and whether the dashboard can send commands ([G-234](#g-234))].
+
+**Every other command is shared.** The orchestrator may call `plan`, `run`, `stop`, `replay`, `status`, `abandon`, `doctor`, `config get` and `--help`.
+
+**What `(id)` names**
+
+| Command | The id is |
+|---|---|
+| `run` | An epic label (`ep-1`) or a group label (`tg-1.2`); `--all` takes none |
+| `stop`, `replay` | A label or a run id. A label means the latest attempt; a run id means that one attempt |
+| `abandon` | A group label |
+| `config get\|set` | A settings key |
+
+Every reply shows both the label and the run id. A label is never reused after a plan is rewritten.
 
 ##### `install`
 
@@ -671,11 +783,9 @@ A person at a terminal runs `install`, in a repository for the repository steps 
 | `--no-project` | Stop owning the `--project` files; they stay on disk |
 | `--force` | Overwrite hand-edited owned files |
 
-An optional recurring-job step that earlier installs offered is [TODO: whether scheduled jobs are dropped ([G-207](#g-207))].
-
 ##### `init`
 
-A person at a terminal runs `init`, typically once after `install`. It writes a local Claude Code plugin marketplace to `~/.komodo/plugin/` (`.claude-plugin/marketplace.json` and `plugins/komodo/` with its `plugin.json` at the binary's version) and runs `claude plugin marketplace add ~/.komodo/plugin` and `claude plugin install komodo@komodo`. The skills then appear as `/komodo:<name>` and cannot shadow a person's own. `--remove` runs `claude plugin marketplace remove komodo`, which also uninstalls the plugin, then deletes the folder. `init` never edits `~/.claude/settings.json`. The skill set the plugin carries follows [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))].
+A person at a terminal runs `init`, typically once after `install`. It writes a local Claude Code plugin marketplace to `~/.komodo/plugin/` (`.claude-plugin/marketplace.json` and `plugins/komodo/` with its `plugin.json` at the binary's version) and runs `claude plugin marketplace add ~/.komodo/plugin` and `claude plugin install komodo@komodo`. The skills then appear as `/komodo:<name>` and cannot shadow a person's own. `--remove` runs `claude plugin marketplace remove komodo`, which also uninstalls the plugin, then deletes the folder. `init` never edits `~/.claude/settings.json`. The skill set the plugin carries is [TODO: what `install` and `init` add to the host beyond the guard hook, such as a session-start status hook and the plugin's skill set ([G-231](#g-231))].
 
 ##### `config get` and `config set`
 
@@ -686,22 +796,168 @@ The id is a dotted settings key such as `limits.returns` or `agents.reviewer.mod
 - **`config set --default <key>`** puts a key back to its built-in value. Resetting a whole section lists each change and waits for a typed `y`.
 - **`config set --accept`** rehashes the files after a hand edit and records the acceptance.
 
-Whether `--default` and `--accept` stay as flags is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))]; the Configuration Manager provides both operations either way.
-
 ##### `plan`
 
-Anyone runs `plan`, usually the orchestrator. It starts planning with the goal text or the document paths, and the Intake Handler subscribes to the `plan` event; who publishes that event is [TODO: who publishes plan ([G-217](#g-217))]. `plan` costs model tokens. `--from <path>` feeds a document set as input.
+Anyone runs `plan`, usually the orchestrator. It starts planning with the goal text or the document paths: the CLI sends a `plan` event to the engine, and the engine's Event Bus delivers it to the Intake Handler. `plan` costs model tokens. `--from <path>` feeds a document set as input.
 
-##### `run`, `stop`
+##### `run`
 
-- **`run [<group>]`** starts a run with a new run id and prints the id at once; the Runtime Manager subscribes to `run-start`, and who publishes it is [TODO: who publishes run-start ([G-217](#g-217))]. With a group id it starts that group; with none, every group whose dependencies have landed. Which command continues a blocked group is [TODO: which command continues a blocked group ([G-204](#g-204))].
-- **`stop <run>`** stops that run id; the Runtime Manager subscribes to `run-stop`, and who publishes it is [TODO: who publishes run-stop ([G-217](#g-217))].
+Anyone runs `run (id)`, usually the orchestrator. It sends the engine a `run-start` event with a unique run id and prints the id at once; it does not wait for the run.
 
-How a second command reaches a run that is already live, and what `run` waits for before it prints, is [TODO: how long the Runtime Manager lives and how stop reaches a live run ([G-201](#g-201))]. Under every option the reply states that the event was accepted, and nothing further.
+| Form | Effect |
+|---|---|
+| `run <id>` | Runs an epic or a group by label. `komodo run ep-1` runs every group in epic 1 and `komodo run tg-1.2` runs one group |
+| `run --all` | Runs every task group under `docs/backlog/` that is not done, in dependency order |
+| `run <id> --schedule <time>` | Queues the run for `<time>`, an RFC 3339 timestamp (an internet date-time format) such as `2026-10-16T02:00:00-07:00` |
+| `run <id> --approve` | Answers a blocked group by granting what it asked for, such as more files or more time |
+| `run <id> --deny` | Answers a blocked group by refusing what it asked for |
 
-##### `replay`, `build`, `review`, `test`
+- **Continuing.** A group that already has saved state continues from it, so `komodo run tg-1.2` after a crash continues each group from its saved state. A group that needs another pass, such as after a hand fix in its worktree, also continues with `komodo run tg-1.2`: it picks up at the group's current stage and runs test and review again before commit. `build`, `test` and `review` are not commands.
+- **Scheduling.** `--schedule` is a socket request, not an event. The engine mints the run id, writes the entry (`target`, `root`, `run_id`, `at`, `queued_at`) to the schedule queue, returns the run id in its reply, stays up while any run is live or queued, and starts the run at its time. The reply shows the run id and the queued time, and `status` lists the queued run. When the entry fires, the engine publishes the one `run-start` with that run id.
+- **Answering.** `--approve` and `--deny` send a `run-continue` event with `answer` set. The Runtime Manager passes the answer to the group's Task Manager over its command channel. A group that is not blocked refuses the answer with `not_blocked`.
+- **Combinations.** `--approve` and `--deny` take an id and cannot combine with each other, `--all` or `--schedule`. `--all` takes no id. A combination is a usage error.
 
-These four are parsed, checked and given the global flags like any command. Their meaning is [TODO: what replay, build, test and review do and what their id names ([G-203](#g-203))].
+##### `stop`
+
+Anyone runs `stop (id)`. It sends the engine a `run-stop` event, and the Runtime Manager halts the run's groups. The id is a label, which stops the latest attempt, or a run id, which stops that one attempt. `stop` also removes a queued run of that target from the schedule queue.
+
+##### `replay`
+
+Anyone runs `replay (id)`. It plays back the history of a run or a group from the Metrics Service's event log, one recorded step at a time and in recorded order. It makes no model calls, costs nothing and changes nothing.
+
+1. The CLI sends a `replay` request with the label or run id.
+2. The engine answers with one `event` reply per recorded event, then a final `ok` reply holding the gap count.
+3. A torn last line of the log, half-written when the program died, is dropped, and the gap count is 1 for each such place.
+4. The CLI returns the steps and the gap count as `ReplayData`.
+
+```go
+// internal/cli/work.go
+
+// ReplayData is the data of reply.replay.
+type ReplayData struct {
+	RunID string      `json:"run_id"` // the attempt that was replayed
+	Steps []bus.Event `json:"steps"`  // the recorded events, in recorded order
+	Gaps  int         `json:"gaps"`   // places where a torn last line was dropped
+}
+```
+
+##### `status`
+
+Anyone runs `status`, including the orchestrator. It sends a `status` request to the engine and prints live progress: each live run with its groups and their stages, the groups blocked on an answer with their question, and the queued runs with their start times. It covers the current repository; `--all` covers every repository on the machine.
+
+| Flag | Meaning |
+|---|---|
+| `--wait` | Waits until a group is blocked or done, then replies. A blocked group's question is in the reply and the command exits 3 |
+| `--timeout <dur>` | The longest wait; 9 minutes by default. At the limit the reply says `timeout` and the command exits 0 |
+
+`status --wait` is the orchestrator's way to wait. The orchestrator runs it in the background, so it reacts to a blocked group without polling, answers with `komodo run (id) --approve` or `--deny`, and waits again. With no live run, `--wait` returns at once with `waited` set to `done`.
+
+```go
+// internal/cli/status.go
+
+// StatusData is the data of reply.status.
+type StatusData struct {
+	Runs    []RunRow     `json:"runs"`
+	Queued  []QueuedRow  `json:"queued"`
+	Blocked []BlockedRow `json:"blocked"`          // groups that wait for an answer
+	Waited  string       `json:"waited,omitempty"` // with --wait: blocked, done or timeout
+}
+
+// RunRow is one live run and its groups.
+type RunRow struct {
+	RunID  string     `json:"run_id"`
+	Target string     `json:"target"` // the label the run was started with
+	Groups []GroupRow `json:"groups"`
+}
+
+// GroupRow is one group of a live run.
+type GroupRow struct {
+	Group string `json:"group"` // the group label
+	Stage string `json:"stage"`
+	State string `json:"state"` // the state the Runtime Manager holds the group in
+}
+
+// QueuedRow is one entry of the schedule queue.
+type QueuedRow struct {
+	Target   string    `json:"target"`
+	RunID    string    `json:"run_id"`   // the run id the engine minted when it queued the entry
+	Root     string    `json:"root"`      // the repository root the target belongs to
+	At       time.Time `json:"at"`
+	QueuedAt time.Time `json:"queued_at"`
+}
+
+// BlockedRow is a group that waits for an answer.
+type BlockedRow struct {
+	Group    string `json:"group"`
+	RunID    string `json:"run_id"`
+	Reason   string `json:"reason"`   // the block reason code
+	Question string `json:"question"` // what the group asks, in plain words
+}
+```
+
+`komodo status --wait --json` when a group asks for files (exit 3):
+
+```json
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "tg-1.2 is blocked: it asks for 2 more files",
+  "report": "`tg-1.2` is blocked: it asks for 2 more files.\n\n**Question:** the builder needs `internal/cache/store.go` and `internal/cache/lock.go`, outside its scope.\n**Fix:** `komodo run tg-1.2 --approve` or `--deny`",
+  "data": {
+    "runs": [
+      { "run_id": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "target": "ep-1",
+        "groups": [ { "group": "tg-1.2", "stage": "build", "state": "blocked" } ] }
+    ],
+    "queued": [],
+    "blocked": [
+      { "group": "tg-1.2", "run_id": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "reason": "needs_scope",
+        "question": "The builder needs internal/cache/store.go and internal/cache/lock.go, outside its scope." }
+    ],
+    "waited": "blocked"
+  }
+}
+```
+
+##### `abandon`
+
+Anyone runs `abandon (id)` to drop a group for good. The id is a group label; an epic label is a usage error.
+
+1. The CLI sends an `abandon` request to the engine.
+2. The Runtime Manager stops the group's Task Manager.
+3. The Cleanup Handler frees the group's resources: its branch, worktree and sandbox, and the Runtime Manager releases its lease through the Lease Manager.
+4. Groups that depend on the abandoned group block with the reason `dependency`, naming it.
+5. The group's saved state and event log stay on disk.
+
+##### `ui`
+
+A person runs `ui` to open the web dashboard. It starts the engine when none runs, serves the page from `embed/ui/` on `127.0.0.1` only, on a free port, prints the address and stops on Ctrl-C. The page shows the same runs, groups and queued runs as `status`, with live events, read from the engine over the control socket. Whether `ui` needs a terminal and whether its page can send commands such as `stop`, `abandon` and the answer flags is [TODO: whether `ui` needs a terminal and whether the dashboard can send commands ([G-234](#g-234))].
+
+##### `doctor`
+
+Anyone runs `doctor`, including the orchestrator. It prints each check's result with a fix line, changes nothing except refreshing the provider probe in `providers.json` (written through the State Manager), and still runs when the repository pin is above the binary. It exits 0 when every check passes and 3 when one fails, because it ran and reports something a person must fix.
+
+- **Install:** the installed files against `install.json`, and the path entry.
+- **Sandbox:** the operating-system sandbox (Seatbelt on macOS, Bubblewrap on Linux) by running a harmless command inside it.
+- **Docker:** whether the Docker tools exist and the daemon answers. Without Docker the Tester falls back to the operating-system sandbox, and the run report says so.
+- **Model links:** the Claude subscription link and the paid Anthropic interface, and the optional local model link when one is configured.
+- **Komodo block:** one begin marker and one end marker in the repository's `AGENTS.md`.
+
+```go
+// internal/cli/doctor.go
+
+// DoctorData is the data of reply.doctor.
+type DoctorData struct {
+	Checks []Check `json:"checks"`
+}
+
+// Check is the result of one doctor check.
+type Check struct {
+	Name   string `json:"name"`   // install, sandbox, docker, links or block
+	Result string `json:"result"` // pass or fail
+	Detail string `json:"detail"` // what was found
+	Fix    string `json:"fix"`    // the command or change that resolves a failure; empty on pass
+}
+```
 
 ##### `update`
 
@@ -711,31 +967,15 @@ A person at a terminal runs `update`. It downloads the newest release to `versio
 |---|---|
 | `--check` | Fetch `latest.json` now and report; changes nothing else |
 | `--to <version>` | Install that version; may downgrade |
-| `--restart-runs` | Move live runs onto the new binary: [TODO: how a live run is signaled ([G-201](#g-201))] |
+| `--restart-runs` | Move live runs onto the new binary: [TODO: how `update --restart-runs` moves live runs onto the new binary ([G-232](#g-232))] |
 
 ##### `clean`
 
-Removes what finished work leaves behind. Whether `clean` also covers abandoning a group, pruning landed worktrees and clearing caches is [TODO: what `clean` covers ([G-204](#g-204))]. Under every option `clean` removes a branch or worktree only through the Cleanup Handler, and never one a live lease owns.
-
-#### Commands from the earlier design
-
-These earlier commands are not on the diagram.
-
-| Command | Earlier purpose |
-|---|---|
-| `status` | Live state and a wait that wakes the orchestrator |
-| `ui` | Local dashboard |
-| `abandon` | Drop a group for good |
-| `doctor` | Install and configuration checks |
-| `version`, `uninstall`, `sync` | Print the version; remove what install owns; fetch and prune landed worktrees |
-| `skill`, `scope approve\|deny` | Read a skill from the terminal; answer a builder's request for files outside its scope |
-| `gate`, `release` | The harness's own self-check; sign and publish a release |
-
-[TODO: which of these commands survive beside the diagram's 12 ([G-204](#g-204))]. The orchestrator answers a builder's request for files outside its group's scope (owner decision of 2026-10-09); how it sends that answer is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))].
+Removes what finished work leaves behind. What `clean` removes, such as abandoned groups, landed worktrees or caches, is [TODO: what `clean` removes and whether it needs a terminal ([G-222](#g-222))]. Under every option `clean` removes a branch or worktree only through the Cleanup Handler, and never one a live lease owns.
 
 #### Terminal mode
 
-[TODO: whether the CLI gains a full-screen terminal mode ([G-209](#g-209))]. Under every option the 12 commands and the reply envelope stay as specified here, because the orchestrator and scripts depend on them.
+The CLI has no full-screen terminal mode. Watching a run uses the web dashboard (`ui`) or `status`. The 13 commands and the reply envelope stay as specified here, because the orchestrator and scripts depend on them.
 
 ### 1.5 Behaviour
 
@@ -761,11 +1001,38 @@ flowchart LR
    2. Types and allowed values of every flag; a failure is a usage error, exit 2.
    3. Terminal check: when `NeedsTerminal(c)` is true and no controlling terminal is attached, refuse with exit 1.
    4. Settings guard: call `Config.Verify`. On `ErrTampered` the command's `TamperPolicy` decides.
-3. **Resolve.** Take the repository id from the working folder or `-C`. The id is the normalized origin address, or the git common directory path when there is no remote, so every worktree of a repository shares one id.
+3. **Resolve.** Take the repository id from the working folder or `-C`. The id is the normalized origin address, or the git common directory path when there is no remote, so every worktree of a repository shares one id. Then resolve the command's `(id)`: a label such as `ep-1` or `tg-1.2` is matched against the task lists under `docs/backlog/` (read with the Intake Handler's `Load`), and an epic label expands to its group labels. A run id is a version 7 UUID. A label that names no epic or group is a usage error, exit 2; the engine refuses a run id it does not know.
 4. **Dispatch.** Call the handler with the filled `Call`. With `--dry-run`, the owning part prints each write the command would make and makes none.
 5. **Render.** Marshal `Result.Shape` and `Result.Facts` into a message, call `FormatJSON()`, place its report in `report` and its verdict in `verdict`, print the envelope under `--json` and the text otherwise, and return the exit code of `Result.Outcome`.
 
 The closest match for an unknown name is the known name at the smallest Levenshtein distance (fewest single-letter edits), when that distance is at most 2; ties go to table order. With nothing that close the message names `komodo --help`.
+
+#### Reaching the engine
+
+A command with `NeedsEngine` set connects to the engine on the control socket, `~/.komodo/state/engine.sock`, and starts the engine first when none answers. The socket is created readable and writable by its owner only, so no other user can send a request.
+
+**📐 How a command finds or starts the engine**
+```mermaid
+sequenceDiagram
+  participant C as komodo command
+  participant S as engine.sock
+  participant E as engine
+  C->>S: 1 dial
+  S-->>C: 2 refused, no engine
+  C->>E: 3 start the engine, detached
+  C->>S: 4 dial again, every 50 ms for 5 s
+  C->>E: 5 write one request line
+  E-->>C: 6 reply lines
+```
+
+1. **Dial.** Open `engine.sock`. When the connection succeeds, go to step 4.
+2. **Start.** When the file is missing, or the dial is refused because a crashed engine left the file, start the engine as a detached process of the `komodo` binary with the hidden verb `komodo internal engine`.
+3. **Wait.** Dial again every 50 ms for up to 5 seconds. When none answers, exit 4 with `internal`, naming the socket path.
+4. **Send.** Write one `engine.Request` line and read `engine.Reply` lines until the reply with `final` set ([Control socket messages](#control-socket-messages)).
+
+Two commands that start an engine at the same moment end with one engine: the engine that cannot create the socket exits, and both commands dial the winner.
+
+**Queued runs after a restart.** Every command, before its own work, checks whether an engine answers; when none does and the schedule queue holds an entry, the CLI starts the engine as in step 2, so a run that came due while the machine was off starts at once. The queue is read through the State Manager.
 
 #### Tamper policy per command
 
@@ -773,10 +1040,10 @@ A hand edit of the settings files must not lock out the command that stops a run
 
 | Policy | Commands |
 |---|---|
-| `TamperRefuse`: exit 1, `config_tampered`, fix `komodo config set --accept` | `config set`, `plan`, `run`, `replay`, `build`, `review`, `test` |
-| `TamperWarn`: run, print one warning line | `config get`, `stop`, `install`, `init`, `update`, `clean`, `--help` |
+| `TamperRefuse`: exit 1, `config_tampered`, fix `komodo config set --accept` | `config set`, `plan`, `run` |
+| `TamperWarn`: run, print one warning line | `config get`, `stop`, `replay`, `status`, `abandon`, `doctor`, `ui`, `install`, `init`, `update`, `clean`, `--help`, `--version` |
 
-The refused commands start agent work or change settings, so they need trusted values. The `stop` command and every read must always work, and `config set --accept` is the one `config set` form that runs, because it is the fix.
+The refused commands start agent work or change settings, so they need trusted values. The `stop` and `abandon` commands and every read must always work, and `config set --accept` is the one `config set` form that runs, because it is the fix.
 
 #### Repository pin
 
@@ -789,7 +1056,7 @@ Outside a git repository the pin check is skipped and `Call.Repo` stays empty. A
 
 #### Terminal check
 
-On macOS and Linux the check opens `/dev/tty`. On native Windows it opens `CONIN$` and calls `GetConsoleMode` through the standard `syscall` package; a failed open counts as no terminal, the result an agent shell gets on Unix. The Windows path is unproven until a Windows machine is available ([G-121](#g-121)).
+The check opens `/dev/tty`; a failed open counts as no terminal, the result an agent shell gets. Windows runs through Windows Subsystem for Linux 2, so the same check applies.
 
 #### Install
 
@@ -823,8 +1090,8 @@ flowchart TD
 | # | Target | Writes | Runs when |
 |---|---|---|---|
 | 1 | Binary | `~/.komodo/versions/<v>/komodo`, copied to `~/.komodo/bin/komodo` | Always |
-| 2 | `PATH` | Windows: the user `PATH`. macOS and Linux: a symlink into `~/.local/bin` if that is on `PATH`, else one marked line in `~/.zshrc`, `~/.bashrc` or `~/.profile` by `$SHELL` | If `komodo` is missing from `PATH`; `--no-path` skips |
-| 3 | Provider probe | `~/.komodo/state/providers.json`: [TODO: which model links the probe checks ([G-213](#g-213))] | Always |
+| 2 | `PATH` | A symlink into `~/.local/bin` if that is on `PATH`, else one marked line in `~/.zshrc`, `~/.bashrc` or `~/.profile` by `$SHELL` | If `komodo` is missing from `PATH`; `--no-path` skips |
+| 3 | Provider probe | `~/.komodo/state/providers.json`: written through the State Manager. It checks the Claude subscription link, the paid Anthropic interface and, when one is configured, the optional local model link | Always |
 | 4 | `AGENTS.md` | The full template, or only the Komodo block between the markers | Inside a git repository |
 | 5 | `CLAUDE.md` | The single line `@AGENTS.md` | Claude detected, or `--hosts claude` |
 | 6 | `.claude/settings.json` | The entries of Claude Code settings entries, merged; other keys untouched | Claude detected |
@@ -855,36 +1122,65 @@ sequenceDiagram
   U->>U: 7 delete old versions
 ```
 
-1. **Check.** Fetch `latest.json` and its signature with a 1 second timeout. Only `update` fetches the manifest; no other command makes a network call. A failed fetch prints the error and its fix.
+1. **Check.** Fetch `latest.json` and its signature with a 1 second timeout. Only `update` fetches the release manifest. A failed fetch prints the error and its fix.
 2. **Record.** Replace `update.json` with the newest version seen. With `--check`, stop here.
 3. **Claim.** Create `update.lock` exclusively. If it exists and is younger than 10 minutes, another `update` is running and this one exits. An older lock is stale, so a crashed update cannot block updates.
 4. **Download.** Fetch the asset for this operating system and architecture to `versions/<v>/komodo.part`.
 5. **Verify.** Compare the download's SHA-256 with the asset's `sha256`, and verify the signature of `latest.json` against the compiled-in keys. On a mismatch delete the `.part` file, keep the old binary and print the error.
-6. **Swap.** Rename `komodo.part` to `versions/<v>/komodo`, then replace `bin/komodo` atomically. On Windows a running `.exe` cannot be overwritten, so it is renamed to `.old` first and deleted by a later update.
+6. **Swap.** Rename `komodo.part` to `versions/<v>/komodo`, then replace `bin/komodo` atomically.
 7. **Clean up.** Delete version folders that are not removable roles: keep the current version, the previous version, and every version named by an unfinished task group in the State Manager. Delete the rest.
 
-A signature verifies when it matches a key of the set; either key may sign. A rotation release is signed with the `next` key and compiles `next` into the current slot, so installed binaries accept it with no flag day. Moving the private key into a key management service, and refusing a manifest older than the last one accepted, wait for the first machine the owner does not own that runs `update` ([G-21](#g-21)). Producing and signing a release is [TODO: whether `release` survives as a command ([G-204](#g-204))].
+A signature verifies when it matches a key of the set; either key may sign. A rotation release is signed with the `next` key and compiles `next` into the current slot, so installed binaries accept it with no flag day. Moving the private key into a key management service, and refusing a manifest older than the last one accepted, wait for the first machine the owner does not own that runs `update` ([G-21](#g-21)). Producing and signing a release is done by this repository's Makefile, outside the product.
 
 An install script reads the same `latest.json` over HTTPS, compares the SHA-256, and runs `komodo install --machine-only`; it does not verify the signature, because no key is on the machine yet.
 
 #### How a command reaches the work
 
-Whichever part publishes a command's event ([TODO: who publishes run-start, run-stop, run-continue, plan, skill and mcp, which part consumes next, and which types the CLI subscribes to ([G-217](#g-217))]), it never waits on the part that handles it. The example shows the shape of such an event.
+The CLI sends each event to the engine over the control socket, and the engine's Event Bus broadcasts it, so the CLI never waits on the part that handles it. It sends `run-start`, `run-stop` and `run-continue` for its commands and `plan` for `komodo plan`.
+
+- **Start from planning:** the Intake Handler publishes `run-start` itself, inside the engine process, with `source` set to `intake`, its own run id and the epic label as `target`, for the groups it has just written.
+- **Other events:** which part publishes `skill` and `mcp` is [TODO: who publishes the skill and mcp events ([G-223](#g-223))].
+
+The `run-start` the engine publishes when the entry for `komodo run ep-1 --schedule 2026-10-16T02:00:00-07:00` fires:
 
 ```json
 {
   "type": "run-start",
-  "subtype": "<set in chapter 4>",
+  "subtype": "",
   "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
-  "group": "tg-1.2",
+  "group": "",
   "time": "2026-10-14T09:12:04Z",
-  "data": { "repo": "github.com/rdevitto86/komodo-agentic-harness-coding", "root": "/Users/rad/code/komodo" }
+  "data": {
+    "target": "ep-1",
+    "groups": ["tg-1.1", "tg-1.2"],
+    "source": "cli",
+    "schedule": "2026-10-16T02:00:00-07:00",
+    "repo": "github.com/rdevitto86/komodo-agentic-harness-coding",
+    "root": "/Users/rad/code/komodo"
+  }
 }
 ```
 
-- `group` is empty when the command names no group.
-- `data` holds the fields this chapter needs from the CLI: the repository id and root. The full payload per event type is in [Event Bus](#4-event-bus).
-- The CLI subscribes to the bus for the events it prints. Which types it subscribes to is [TODO: which types the CLI subscribes to ([G-217](#g-217))]; how a printed event ends a waiting command is [TODO: how long the Runtime Manager lives and how stop reaches a live run ([G-201](#g-201))].
+A `run-continue` for `komodo run tg-1.2 --approve`:
+
+```json
+{
+  "type": "run-continue",
+  "subtype": "",
+  "run": "",
+  "group": "",
+  "time": "2026-10-14T09:40:10Z",
+  "data": { "target": "tg-1.2", "answer": "approve" }
+}
+```
+
+- `group` is empty on events the CLI sends; `data.target` and `data.groups` name what to run, so the Runtime Manager never searches on its own.
+- `groups` holds the group labels the CLI read from the task lists under `docs/backlog/`: the groups of an epic, one group, or every group for `run --all`. The Runtime Manager starts those that are not done, in dependency order.
+- `target` is the label the person typed, `all` for `run --all`, or the epic label when the Intake Handler starts the run. `schedule` is present only with `--schedule`. `source` is `cli` or `intake`.
+- `run` holds the run id the CLI generated for `run-start`; for a scheduled run it holds the run id the engine minted when it queued the entry. For `run-stop` and `run-continue` it holds the run id the caller typed, or is empty when a label was typed; the Runtime Manager then takes the label's latest attempt and returns the run id in its `accepted` reply.
+- `answer` is `approve` or `deny`, and is present only on `run-continue` sent by `--approve` or `--deny`.
+- `repo` and `root` are the repository id and root the engine needs because it hosts runs of several repositories. The full payload per event type is in [Event Bus](#4-event-bus).
+- Live events come back on the same connection for the commands that print them (`status --wait`, `replay` and `ui`). Which event types the CLI subscribes to is [TODO: which part consumes `next`, and which event types the CLI subscribes to ([G-224](#g-224))].
 
 #### Short commands
 
@@ -927,30 +1223,39 @@ An install manifest entry is Absent, Owned or Edited. `install` moves Absent to 
 3. Every writing command is idempotent: a repeat with the same arguments reports `0 changes`.
 4. A model session cannot change settings: `config set` needs a terminal, and on Claude Code the deny rules refuse it first.
 5. The guard hook fails closed: an error in it blocks the tool call.
-6. `stop` and every read run even when the settings guard has tripped.
+6. `stop`, `abandon` and every read run even when the settings guard has tripped.
 7. A binary is renamed into `versions/<v>/komodo` only after its checksum and signature match; a `.part` file is never run.
 8. `bin/komodo` is replaced atomically, so it always names a complete, verified binary.
 9. A running process starts every child from the version folder it started with, never from `bin/`.
 10. Cleanup never deletes the current version, the previous version, or a version an unfinished task group names.
 11. The repository pin only rises.
 12. Only `update` makes a network call to fetch a release.
+13. The CLI reaches the work only through the engine's control socket, never a Task Manager, a lease, the state or the cache.
+14. Only the user who owns `engine.sock` can open it.
+15. `status` and `replay` change nothing and make no model call.
 
 **Failures**
 
 | Situation | Detection | Action and bound | Final state |
 |---|---|---|---|
 | Unknown command or flag, or bad value | `parse`, `validate` | Exit 2; names the closest real flag | 0 writes |
-| Repository pinned above the binary | Pin check | Only `install`, `update` and `--help` run; others exit 1 with `run komodo update` | 0 writes |
+| Repository pinned above the binary | Pin check | Only `install`, `update`, `doctor`, `--help` and `--version` run; others exit 1 with `run komodo update` | 0 writes |
 | Settings hand-edited | `Config.Verify` | Per `TamperPolicy`: refuse with `config_tampered`, or warn once | Files unchanged |
 | Terminal-only command without a terminal | `NeedsTerminal` | Exit 1 with `no_terminal`; the command does not run | 0 writes |
 | `--input` unreadable or not a JSON object | `parse` | Exit 2 with `usage`, naming the file and the decode error | 0 writes |
-| Event not accepted by the bus | `Bus.Publish` | Exit 4 with `internal` | Nothing started |
+| Event or request not accepted by the engine | No `ok` reply, or `Engine.Send` fails | Exit 4 with `internal` | Nothing started |
 | Bad checksum or signature on update | Verify step | `.part` file discarded; error printed with its fix | Old binary stays |
 | Two `update` calls at once | `update.lock` | The second exits at once | One update runs |
 | Update crashes holding the lock | Lock age over 10 minutes | The next `update` takes over | Lock replaced |
 | An owned file hand-edited | Hash comparison | File left alone and listed; `--force` overwrites | File as edited |
 | A write fails during install | `Apply` | Stops at that step and reports it; the manifest is written after steps 4 to 6, so a rerun recomputes the diff | Earlier steps kept |
 | Guard hook errors or times out | Claude Code with `onFailure: block` | The tool call is refused | Nothing ran |
+| No engine answers and none can be started | `Engine.Ensure` waits 5 seconds | Exit 4 with `internal`, naming the socket path | Nothing started |
+| `engine.sock` left behind by a crashed engine | The dial is refused | The CLI starts an engine | One engine |
+| The engine refuses a request | A `refused` reply | Exit 1; the code and reason come from the reply | Nothing changed |
+| A label names no epic or group | Step 3 | Exit 2 with `usage` | 0 writes |
+| `--approve` or `--deny` for a group that is not blocked | The engine's `refused` reply | Exit 1 with `not_blocked` | Nothing changed |
+| `status --wait` reaches its timeout | `--timeout` | Exit 0 with `waited` set to `timeout`; the caller asks again | Nothing changed |
 | Panic in a handler | `Run` recovers | Exit 4 with `internal` | Process ends |
 
 ### 1.8 Config
@@ -961,6 +1266,11 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 |---|---|
 | `KOMODO_HOME` | Another home folder instead of `~/.komodo`, such as `KOMODO_HOME=/tmp/k komodo config get --list`; tests set it |
 | `NO_COLOR` | Plain text without colour codes |
+
+| Constant | Value |
+|---|---|
+| Wait for a started engine to answer the socket | 5 seconds, redialled every 50 ms |
+| Longest `status --wait` | 9 minutes, set by `--timeout`; Claude Code's shell tool stops a command at 10 minutes at most |
 
 ### 1.9 Proof Cases
 
@@ -976,15 +1286,22 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 - **Lock age:** a lock older than 10 minutes is stale; a younger one is not.
 
 **Component** (the real parts with a fake release server and a fixture repository)
-- **Golden envelope:** each of the 12 commands has a golden `--json` test that compares its output with a stored copy.
+- **Golden envelope:** each of the 13 commands has a golden `--json` test that compares its output with a stored copy.
 - **Terminal check:** with no controlling terminal, `komodo install` and `komodo config set limits.returns=4` exit 1 with `no_terminal`.
-- **Pinned repository:** a repository whose `AGENTS.md` has `min=` above the binary refuses `run` with exit 1 and `run komodo update`, while `install`, `update` and `--help` run.
+- **Pinned repository:** a repository whose `AGENTS.md` has `min=` above the binary refuses `run` with exit 1 and `run komodo update`, while `install`, `update`, `doctor`, `--help` and `--version` run.
 - **Idempotent install:** the second `install` makes 0 repository changes, and `--dry-run` on a fresh repository lists 4 writes.
 - **Guard fails closed:** a guard command forced to crash makes Claude Code refuse the tool call.
 - **Update:** a bad checksum or a bad signature keeps the old binary; two concurrent `update` calls run one.
 - **Help against the table:** `--help --json` and the command table disagree only when the test fails.
 - **Short commands:** `--help` and `config get` each answer under 50 ms.
 - **Version kept:** a fixture task group that names an older version keeps that version folder through an update.
+- **Label resolution:** `ep-1` expands to the group labels of epic 1 in a fixture task list, `tg-1.2` stays one group, and `ep-9` with no such epic exits 2 with `usage`.
+- **Answer flags:** `run tg-1.2 --approve --deny` exits 2 with `usage`; `--approve` for a group that is not blocked exits 1 with `not_blocked`.
+- **Schedule time:** `--schedule 2026-10-16T02:00:00-07:00` is accepted; `--schedule tomorrow` exits 2 with `usage`.
+- **Engine on demand:** with no listener on a fixture `engine.sock`, `Engine.Ensure` starts a fake engine and the request is sent once; a second command finds the first engine and starts none.
+- **Socket access:** the fixture `engine.sock` is created readable and writable by its owner only.
+- **Status wait:** a fake engine that reports one blocked group makes `status --wait` exit 3 with that group's question; a fake engine with no live run makes it exit 0 with `waited` set to `done`.
+- **Replay is read-only:** `replay tg-1.2` against a fixture event log prints each recorded event in order, marks a torn last line as a gap, and publishes nothing.
 
 ### 1.10 Open Gaps
 
@@ -992,17 +1309,14 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question |
 |---|---|
-| [G-201](#g-201) | How long the Runtime Manager lives and how `stop` reaches a live run |
-| [G-203](#g-203) | What `replay`, `build`, `test` and `review` do and what their id names |
-| [G-204](#g-204) | Which earlier commands survive beside the 12, and what `clean` covers |
-| [G-207](#g-207) | Whether the install step for scheduled jobs is dropped |
-| [G-216](#g-216) | Who owns the install and update records |
-| [G-217](#g-217) | Who publishes the command events, and which types the CLI subscribes to |
-| [G-209](#g-209) | Whether the CLI gains a full-screen terminal mode |
-| [G-213](#g-213) | Which model links the install probe checks |
 | [G-19](#g-19) | The 50 ms short-command budget is a target until measured |
-| [G-121](#g-121) | Whether the console check on native Windows refuses an agent shell |
 | [G-21](#g-21) | Enterprise signing: key management service and refusal of an older manifest |
+| [G-222](#g-222) | What `clean` removes, and whether it needs a terminal |
+| [G-223](#g-223) | Who publishes the `skill` and `mcp` events |
+| [G-224](#g-224) | Which part consumes `next`, and which event types the CLI subscribes to |
+| [G-231](#g-231) | What `install` and `init` add to the host beyond the guard hook |
+| [G-232](#g-232) | How `update --restart-runs` moves live runs onto the new binary |
+| [G-234](#g-234) | Whether `ui` needs a terminal and whether the dashboard can send commands |
 
 ## 2. Output Formatter
 
@@ -1140,7 +1454,7 @@ Each shape has exactly one fact struct. These are the structs for the CLI's shap
 
 // RunFacts feeds reply.run.
 type RunFacts struct {
-	Group string `json:"group"`  // empty when the run covers every ready group
+	Group string `json:"group"`  // the label the command named, such as tg-1.2 or ep-1; empty for run --all
 	RunID string `json:"run_id"`
 }
 
@@ -1190,6 +1504,55 @@ type CleanFacts struct {
 	Removed Table `json:"removed"`
 }
 
+// ScheduleFacts feeds reply.schedule.
+type ScheduleFacts struct {
+	Target string `json:"target"` // the label that was queued
+	RunID  string `json:"run_id"`
+	At     string `json:"at"` // the start time, RFC 3339
+}
+
+// AnswerFacts feeds reply.answer.
+type AnswerFacts struct {
+	Group  string `json:"group"`
+	Answer string `json:"answer"` // approve or deny
+}
+
+// AbandonFacts feeds reply.abandon.
+type AbandonFacts struct {
+	Group string `json:"group"`
+	RunID string `json:"run_id"`
+}
+
+// ReplayFacts feeds reply.replay.
+type ReplayFacts struct {
+	RunID string   `json:"run_id"`
+	Steps []string `json:"steps"` // one formatted line per recorded event, in recorded order
+	Gaps  int      `json:"gaps"`  // places where a torn last line was dropped
+}
+
+// StatusFacts feeds reply.status.
+type StatusFacts struct {
+	Runs    Table  `json:"runs"`             // run id, label, groups
+	Queued  Table  `json:"queued"`           // label, start time
+	Blocked Table  `json:"blocked"`          // group, reason, question
+	Waited  string `json:"waited,omitempty"` // with --wait: blocked, done or timeout
+}
+
+// DoctorFacts feeds reply.doctor.
+type DoctorFacts struct {
+	Checks Table `json:"checks"` // check, result, fix
+}
+
+// UIFacts feeds reply.ui.
+type UIFacts struct {
+	Address string `json:"address"` // where the dashboard listens
+}
+
+// VersionFacts feeds reply.version.
+type VersionFacts struct {
+	Version string `json:"version"`
+}
+
 // ErrorFacts feeds error.<code>.
 type ErrorFacts struct {
 	Code   string `json:"code"`
@@ -1201,10 +1564,11 @@ type ErrorFacts struct {
 
 // NeedsFacts feeds needs.<code>: a group that waits for a person.
 type NeedsFacts struct {
-	Code  string `json:"code"`
-	Group string `json:"group"`
-	Task  string `json:"task,omitempty"`
-	Fix   string `json:"fix"`
+	Code     string `json:"code"`
+	Group    string `json:"group"`
+	Task     string `json:"task,omitempty"`
+	Question string `json:"question,omitempty"` // what the blocked group asks, in plain words
+	Fix      string `json:"fix"`
 }
 
 // EventFacts feeds event.<type> for the events the CLI prints.
@@ -1235,12 +1599,13 @@ type Table struct {
 | `reply.install`, `reply.init`, `reply.update`, `reply.clean` | `InstallFacts`, none, `UpdateFacts`, `CleanFacts` | The command of that name |
 | `reply.config.get`, `reply.config.set` | `ConfigGetFacts`, `ConfigSetFacts` | `config get`, `config set` |
 | `reply.plan`, `reply.run`, `reply.stop` | `PlanFacts`, `RunFacts`, `StopFacts` | The command of that name |
-| `reply.replay`, `reply.build`, `reply.review`, `reply.test` | [TODO: what replay, build, test and review do and what their id names ([G-203](#g-203))] | Those commands |
+| `reply.schedule`, `reply.answer`, `reply.abandon` | `ScheduleFacts`, `AnswerFacts`, `AbandonFacts` | `run --schedule`, `run --approve` or `--deny`, `abandon` |
+| `reply.replay`, `reply.status` | `ReplayFacts`, `StatusFacts` | `replay`, `status` |
+| `reply.doctor`, `reply.ui`, `reply.version` | `DoctorFacts`, `UIFacts`, `VersionFacts` | `doctor`, `ui`, `--version` |
 | `error.<code>`, `needs.<code>`, `other` | `ErrorFacts`, `NeedsFacts`, `OtherFacts` | A refusal, a held group, any unlisted case |
 | `event.run-status`, `event.run-complete`, `event.run-failure`, `event.resource` | `EventFacts` | An event the CLI subscribed to |
-| `options` | [TODO: whether the architect and researcher roles are dropped ([G-207](#g-207))] | An architect or researcher result |
 
-A code that blocks or escalates renders with `needs.<code>`; every other listed code renders with the one-line shape `code.<code>`. The pull-request body and commit-message shapes belong to the [Commit Handler](#15-commit-handler) [TODO: where groups land ([G-210](#g-210))].
+A held group's block reason, one of the `Reason` values of [10.3](#103-data-model), is the code of its `needs.<code>` shape, so the block reasons are codes too and each has the same templates. A code that blocks or escalates renders with `needs.<code>`; every other listed code renders with the one-line shape `code.<code>`. The pull-request body and commit-message shapes belong to the [Commit Handler](#15-commit-handler).
 
 #### The closed code list
 
@@ -1256,11 +1621,24 @@ const (
 	ConfigTampered Code = "config_tampered"
 	Pinned         Code = "pinned"
 	NoTerminal     Code = "no_terminal"
+	NotBlocked     Code = "not_blocked"
 	NoRepo         Code = "no_repo"
 	Usage          Code = "usage"
 	UnknownKey     Code = "unknown_key"
 	BadValue       Code = "bad_value"
 	OverLimit      Code = "over_limit"
+	UnknownTarget  Code = "unknown_target"
+	RunRefused     Code = "run_refused"
+	EngineStopping Code = "engine_stopping"
+	BadFrame       Code = "bad_frame"
+	CardChanged    Code = "card_changed"
+	Locked         Code = "locked"
+	BusOverflow    Code = "bus_overflow"
+	PlanBlocked    Code = "plan_blocked"
+	PlanTimeout    Code = "plan_timeout"
+	PlanInput      Code = "plan_input"
+	PlanWrite      Code = "plan_write"
+	ContextRefused Code = "context_refused"
 	Internal       Code = "internal"
 	Other          Code = "other"
 )
@@ -1271,11 +1649,21 @@ const (
 | `config_tampered` | CLI, Configuration Manager | A settings file was hand-edited; the fix is `komodo config set --accept` |
 | `pinned` | CLI | The repository pin is above the running binary; the fix is `komodo update` |
 | `no_terminal` | CLI | A terminal-only command ran without a controlling terminal |
+| `not_blocked` | Runtime Manager, CLI | `--approve` or `--deny` named a group that is not blocked |
 | `no_repo` | CLI | A command that needs a repository ran outside one |
 | `usage` | CLI | Unknown command or flag, bad flag value or unreadable `--input` |
 | `unknown_key` | Configuration Manager | A settings key or agent role outside the registry; names the closest one |
 | `bad_value` | Configuration Manager | A value of the wrong type or outside its allowed list |
 | `over_limit` | Configuration Manager | A value over its hard limit, or a model no probe found |
+| `unknown_target` | Runtime Manager | A label or run id names nothing in the plan or the saved state |
+| `run_refused` | Runtime Manager | A run was refused, such as a dependency cycle or a dependency outside the run that is not Done |
+| `engine_stopping` | Runtime Manager | The engine is past its exit check; the CLI starts a new engine and repeats the request |
+| `bad_frame` | Runtime Manager | A line on the control socket is not a valid request |
+| `card_changed` | Intake Handler | A task card changed since the plan read it |
+| `locked` | Intake Handler | An amended file names a group a live run holds |
+| `bus_overflow` | Event Bus | A subscriber's queue was full and events were dropped |
+| `plan_blocked`, `plan_timeout`, `plan_input`, `plan_write` | Intake Handler | A plan failed lint three times, passed its deadline, had unreadable input or could not write its files |
+| `context_refused` | Context Manager | The brief was refused |
 | `internal` | Any part | The harness itself failed |
 | `other` | Any part | A case with no template of its own; prints one fixed line pointing to a file |
 
@@ -1388,6 +1776,7 @@ var funcs template.FuncMap // keys: code, n, plural, dur, path, table
 
 - A table of more than 5 rows prints the top 5 rows plus one line `<N> more: <what>`, such as `2 more: groups`.
 - A cell over 45 characters moves to a labeled line below the table, `<column label>, row <n>: <text>`, and the cell reads `see below`.
+- A replay is the exception to the table limit: its steps print as lines in one fenced block, because a replay is a log, not a summary.
 - A code with no template of its own is `other`. It prints one fixed line pointing to a file:
 
 ```text
@@ -1499,11 +1888,7 @@ Unit cases use fixtures; no case calls a model, a repository or the network.
 
 Each id is a row in the [gap register](#appendix-b-gap-register); the rows are not copied here.
 
-| Gap | Question |
-|---|---|
-| [G-203](#g-203) | The reply shape of `replay`, `build`, `test` and `review` waits on what they do |
-| [G-207](#g-207) | Whether the `options` shape for the architect and researcher is dropped |
-| [G-210](#g-210) | Where the pull-request and commit-message shapes live |
+No open gaps.
 
 ## 3. Configuration Manager
 
@@ -1533,7 +1918,7 @@ The Configuration Manager guards the harness settings and the agent registry, th
 | Hard limit | The largest or smallest value the built-in table allows for a key. A machine value cannot pass it |
 | Settings file | `~/.komodo/settings.json`: the flat keys a person has changed |
 | Agent registry | The role definitions: built-in files in the binary plus the person's overrides in `~/.komodo/agents.json` |
-| Role | One agent job: `planner`, `builder`, `tester` or `reviewer`. The other three earlier roles wait on [TODO: whether the architect, researcher and scout roles are dropped ([G-207](#g-207))] |
+| Role | One agent job: `planner`, `builder`, `tester` or `reviewer`. The registry holds these 4 roles and no others |
 | Weight | An agent's model size class: `heavy`, `standard` or `light`. It picks the model per link |
 | Effective settings | The built-in layer overlaid with the machine layer, after strict reading and limit checks |
 | Snapshot | The effective settings a run copies at its start, with a hash of them |
@@ -1594,7 +1979,7 @@ Go package `internal/config`. It imports only the Go standard library.
 | `~/.komodo/state/config.log` | guard | One audit row per changed key |
 | `~/.komodo/state/settings.lock` | guard | Held by the one writer at a time |
 
-`KOMODO_HOME` replaces `~/.komodo`. On Windows the folder is `%LOCALAPPDATA%\komodo`.
+`KOMODO_HOME` replaces `~/.komodo`.
 
 The Configuration Manager writes the guard files itself, with the standard library, instead of through the State Manager: it is built first, and the guard must work when no other part exists.
 
@@ -1655,7 +2040,7 @@ A `settings.json` in which a person has set three keys; every value is within it
 }
 ```
 
-A top-level key that is not in the built-in table is an error that names the closest known key. The local model server settings, a section keyed by endpoint name, are [TODO: which model links beta 6 supports ([G-213](#g-213))].
+A top-level key that is not in the built-in table is an error that names the closest known key. The settings of the optional free local model link, a section keyed by endpoint name, are listed with the other link keys in the [Task Manager](#11-task-manager) chapter.
 
 **Versioning.** The files carry no version field. Strict reading is the version check: a file written by a newer binary with a new key fails to load on an older one, naming the key and the fix `run komodo update`.
 
@@ -1706,7 +2091,7 @@ type Agent struct {
 	Skills     Skills          `json:"skills"`
 	Slots      Slots           `json:"slots"`
 	Result     json.RawMessage `json:"result"`    // JSON Schema of the final call
-	PoolSlot   bool            `json:"pool_slot"` // takes one session slot; who owns slots is [TODO: who owns session slots ([G-216](#g-216))]
+	PoolSlot   bool            `json:"pool_slot"` // takes one session slot; the slot rules are in chapter 7
 }
 
 // AgentOverride is one role's entry in agents.json; nil fields keep the built-in value.
@@ -1722,15 +2107,15 @@ type AgentOverride struct {
 |---|---|
 | `v` | Schema version, 1; a file with another number fails the build test |
 | `weight` | Picks the model per link. `heavy`, `standard` or `light` |
-| `chain` | The ordered model links the role may use, fixed in the file and never reordered by a key: [TODO: which model links beta 6 supports ([G-213](#g-213))] |
-| `tools` | The only tools advertised to the session. Whether a tool from an outside tool server may be listed is [TODO: whether agents may use outside tool servers ([G-214](#g-214))] |
+| `chain` | The ordered model links the role may use, fixed in the file and never reordered by a key: `claude-cli` (the Claude subscription), then `anthropic-api` (the paid Anthropic interface) |
+| `tools` | The only built-in tools advertised to the session. A tool from an outside tool server is never listed here: it reaches an agent only when a person switches that server on for the named agent in the Context Manager's list ([6](#6-context-manager)) |
 | `run_classes` | The only classes of command (build, test, lint, format) the `run` tool may execute |
 | `guard` | Row ids of the Task Manager's permission table that apply beyond the inherited ones |
 | `limits` | Time and retries only; no turn or token caps |
 | `skills` | `allow` lists skills the agent may pull (a trailing `*`, as in `standards-*`, names every skill with that prefix); `always` lists the ones injected into every brief |
 | `slots` | The brief slots the agent must and may receive |
 | `result` | The final call's schema; its `$id` is `komodo:agent/<role>/result/<v>` and its `code` fields draw on the [code list](#23-data-model) |
-| `pool_slot` | `true` when the role takes a session slot; who owns slots is [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))] |
+| `pool_slot` | `true` when the role takes a session slot; the slot rules are in [7. Runtime Manager](#7-runtime-manager) |
 
 The builder's `agent.json`:
 
@@ -1738,7 +2123,7 @@ The builder's `agent.json`:
 {
   "v": 1,
   "weight": "standard",
-  "chain": ["<link>", "<link>"],
+  "chain": ["claude-cli", "anthropic-api"],
   "tools": ["read", "search", "edit", "write", "run", "skill", "task_done"],
   "run_classes": ["build", "test", "lint", "format"],
   "guard": ["R1", "B1"],
@@ -1756,7 +2141,7 @@ The builder's `agent.json`:
 }
 ```
 
-The `chain` entries stand for the links of the open decision above.
+The `chain` names the 2 links beta 6 ships. OpenAI's subscription and interface links are designed into the model client's interface and built after beta 6.
 
 | Role | Weight | Pool slot | Purpose |
 |---|---|---|---|
@@ -1806,7 +2191,7 @@ type Item struct {
 }
 ```
 
-The hash is the SHA-256 of the JSON encoding of `Effective` without `Source`. Go's `encoding/json` writes map keys in sorted order, so the same values give the same hash on every machine. The hash is also the prefix of every Cache Manager key, so a settings change never serves a stale cached answer.
+The hash is the SHA-256 of the JSON encoding of `Effective` without `Source`. Go's `encoding/json` writes map keys in sorted order, so the same values give the same hash on every machine. The hash is also the prefix of every Cache Manager key, so a settings change never reuses context built under the old settings.
 
 #### The audit log and the checksums
 
@@ -1987,12 +2372,12 @@ A crash after step 7 leaves a logged batch that never applied; the next write's 
 
 A reader that finds a file and its checksum disagreeing while the lock is held rereads once after 100 milliseconds before reporting Tampered.
 
-Model values are validated against the probe. With no probe record, a `model` write is refused with `over_limit` and the fix `komodo install --machine-only`, which re-runs the probe. Which links the probe covers is [TODO: which model links beta 6 supports ([G-213](#g-213))].
+Model values are validated against the probe. With no probe record, a `model` write is refused with `over_limit` and the fix `komodo install --machine-only`, which re-runs the probe. The probe covers `claude-cli` and `anthropic-api`.
 
 #### Reset and accept
 
 - **Reset.** `PlanReset` returns the changes that put a key, a role's overrides or a whole file back to the built-in value. The CLI then follows the write path with those changes. A role or whole-file reset first lists each change and waits for a typed `y`.
-- **Accept.** `Accept` rehashes both machine files into `config.sha` and appends one row whose `key` is the file name. With no machine files it deletes `config.sha`, which returns the guard to Defaults. How a person triggers it from the CLI is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))].
+- **Accept.** `Accept` rehashes both machine files into `config.sha` and appends one row whose `key` is the file name. With no machine files it deletes `config.sha`, which returns the guard to Defaults. A person triggers `Accept` with `komodo config set --accept` and `PlanReset` with `komodo config set --default <key>`; both stay flags of `config set`.
 
 #### Loading the role files
 
@@ -2080,12 +2465,26 @@ Where the other keys are described:
 | Key group | Chapter |
 |---|---|
 | `output.*` | [Output Formatter](#28-config) |
-| `limits.pool_*`, `limits.group_*`, `limits.returns` | [Runtime Manager](#7-runtime-manager) |
-| `limits.session_*`, `guard.refusal_limit`, `sandbox.*`, `providers.*` | [Task Manager](#11-task-manager) |
+| `limits.pool_*`, `limits.group_*` except `limits.group_tokens`, `limits.returns`, `limits.pause_max_min` | [Runtime Manager](#78-config) |
+| `limits.session_*`, `limits.link_sessions.<link>`, `guard.refusal_limit`, `sandbox.*`, `providers.*`, `http.*` | [Task Manager](#118-config) |
 | `cache.*` | [Cache Manager](#8-cache-manager) |
-| `ledger.*`, `limits.group_tokens`, `warn.*` | [Metrics Service](#18-metrics-service) and [Resource Manager](#19-resource-manager) |
+| `bus.*` | [Event Bus](#48-config) |
+| `metrics.*` | [Metrics Service](#188-config) |
+| `commit.*` | [Commit Handler](#158-config) |
+| `check.*` | [Tester](#138-config) |
+| `limits.group_tokens`, `limits.usd_ceiling_per_run`, `warn.*` | [Resource Manager](#198-config) |
 
-The earlier keys `track.usage` and `mode` have no reader and are removed; token and cost usage are always read.
+Keys that other parts own and that the key table carries, with their type, default and owner:
+
+| Key | Type and default | Owner |
+|---|---|---|
+| `lease.lock_timeout_s` | int, 30 | [Lease Manager](#98-config) |
+| `limits.usd_ceiling_per_run` | number, 0 (no ceiling) | [Resource Manager](#19-resource-manager) |
+| `warn.quota_pct` | int, 80 | [Resource Manager](#19-resource-manager) |
+| `limits.link_sessions.<link>` | int; the default is in [11.8](#118-config) | [Task Manager](#118-config) |
+| `providers.local` | section keyed by endpoint name, absent (the local link is off) | [Task Manager](#11-task-manager) |
+
+Token and cost usage are always read; no key switches them off.
 
 | Constant | Value |
 |---|---|
@@ -2125,11 +2524,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question |
 |---|---|
-| [G-204](#g-204) | Whether `config set` keeps `--default` and `--accept` as flags |
-| [G-207](#g-207) | Whether the architect, researcher and scout role files are dropped |
-| [G-213](#g-213) | Which model links a chain may name, and whether the local endpoint section stays |
-| [G-214](#g-214) | Whether a role's `tools` may list tools from outside tool servers |
-
 ## 4. Event Bus
 
 The Event Bus is the harness's spine: a part that learns something publishes it as an event, and any part that needs it subscribes by event type, so a publisher never knows who listens. Every event has the same shape, so one reader can handle all of them. The design and its reasons are in [HLD 5.5](hld.md#55-event-bus).
@@ -2140,11 +2534,12 @@ The Event Bus is the harness's spine: a part that learns something publishes it 
 - The event shape, the list of types and subtypes, and the data struct of each subtype.
 - The `Publish` and `Subscribe` interfaces, ordered delivery per subscriber, and the bounded buffer.
 - The rule for a slow or failing subscriber.
+- Where the bus lives, in memory inside the engine, and how a command's event reaches it ([4.5](#45-behaviour)).
 
 **Does not own:**
-- The group state machine and the pure decision function that the old design kept in its event chapter. They move to [7. Runtime Manager](#7-runtime-manager) (stage rules, blocks, retries, timers) and [11. Task Manager](#11-task-manager) (the per-group flow of agent sessions).
-- Writing events to disk and replaying them. [TODO: which store recovery trusts, and whether an event is written before it is broadcast ([G-202](#g-202))]
-- Where the bus runs. [TODO: how long the Runtime Manager runs and how a second command reaches it ([G-201](#g-201))]
+- The group state machine and the pure decision function: [7. Runtime Manager](#7-runtime-manager) (stage rules, blocks, retries, timers) and [11. Task Manager](#11-task-manager) (the per-group flow of agent sessions).
+- Writing events to disk and replaying them: the [Metrics Service](#18-metrics-service) appends each event to the event log after the bus has broadcast it, and replay reads that log. Recovery never reads the log; it reads only the [State Manager](#10-state-manager).
+- Starting and stopping the engine, and serving the control socket: [7. Runtime Manager](#7-runtime-manager) and [1. CLI](#1-cli).
 
 **Concepts**
 - **Event:** one fact, as a small record: a type, a subtype, the run and group it belongs to, a time and a data body.
@@ -2153,6 +2548,9 @@ The Event Bus is the harness's spine: a part that learns something publishes it 
 - **Publisher:** a subsystem that puts an event on the bus.
 - **Subscriber:** a subsystem that asks the bus for the events of the types it needs.
 - **Subscription:** one subscriber's private queue of events, delivered in the order they were published.
+- **Engine:** the Runtime Manager's process. One engine runs per user per machine, is started on demand, and hosts every live run and the bus.
+- **Control socket:** the private local socket `~/.komodo/state/engine.sock` that only this user can open. The CLI reaches the engine through it.
+- **Event log:** the append-only file per run, under `<git-common-dir>/komodo/metrics/`, in which the Metrics Service stores each event it receives as one JSON line.
 
 Events are coarse: one per run, group, stage, session or task change, never one per model turn or token.
 
@@ -2225,7 +2623,7 @@ func (e *Event) UnmarshalJSON(b []byte) error
 |---|---|
 | `type` | One of the 12 constants; any other value is refused by `Publish` |
 | `subtype` | Part of the registered pair; `""` when the type has no subtypes |
-| `run` | The run the event belongs to; set on every event |
+| `run` | The run the event belongs to; set on every event except `run-stop` and `run-continue` when the person typed a label (the Runtime Manager resolves the label's latest attempt), and machine events that belong to no run, such as `bus.overflow` and a resource fact with no run |
 | `group` | The task group the event belongs to; `""` on a run-level event |
 | `time` | When `Publish` accepted the event, written as `2026-10-14T15:31:12Z`; never a model's claim |
 | `data` | The registered data struct; unknown fields are refused on decode |
@@ -2243,50 +2641,77 @@ func (e *Event) UnmarshalJSON(b []byte) error
 }
 ```
 
-A run-level event, a request to run a target:
+A run-level event, the CLI's request to run one task group at a scheduled time (`komodo run tg-1.2 --schedule 2026-10-16T02:00:00-07:00`):
 
 ```json
-{"type":"run-start","subtype":"","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T15:20:00Z","data":{"target":"tg-1.2"}}
+{
+  "type": "run-start",
+  "subtype": "",
+  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
+  "group": "",
+  "time": "2026-10-14T15:20:00Z",
+  "data": {
+    "target": "tg-1.2",
+    "groups": ["tg-1.2"],
+    "source": "cli",
+    "schedule": "2026-10-16T02:00:00-07:00"
+  }
+}
 ```
 
-**Fields the old envelope carried.** The old design's event line also held `version`, `sequence`, `epoch`, `stale`, `cause`, `last`, `checksum`, `stage`, `session` and `reason`. They are not on the bus event.
-- `stage`, `session` and `reason` move into `data`, through the embedded `GroupFacts` below.
-- `sequence`, `cause`, `last` and `checksum` served the on-disk record. [TODO: which store recovery trusts, and whether an event is written before it is broadcast ([G-202](#g-202))]
-- `epoch` and `stale` served the old decision loop and belong to the stage rules of [7. Runtime Manager](#7-runtime-manager).
+`data.schedule` is absent for a run that starts at once. The Intake Handler's request after planning has the same shape with `"source": "intake"`.
+
+**Fields the event does not carry.** The event line holds no `version`, `sequence`, `epoch`, `stale`, `cause`, `last`, `checksum`, `stage`, `session` or `reason`.
+- `stage`, `session` and `reason` live in `data`, through the embedded `GroupFacts` below.
+- `sequence`, `cause`, `last` and `checksum` are not part of an event. The event log stores each event as one JSON line, and recovery reads the State Manager instead.
+- `epoch` and `stale` belong to the stage rules of [7. Runtime Manager](#7-runtime-manager).
 
 #### Types and subtypes
 
 | Type | What it carries | Subtypes |
 |---|---|---|
 | `next` | The pipeline pointer moves to the next stage | `plan-ready`; the body is defined in [5. Intake Handler](#5-intake-handler) |
-| `plan` | A request to plan | Defined in [5. Intake Handler](#5-intake-handler) |
-| `skill` | A skill switch or request for the Context Manager | `set`, `reload`; body in [6.3](#63-data-model). Publisher: [TODO: who publishes skill and mcp ([G-217](#g-217))] |
-| `mcp` | A tool-server request for the Context Manager | `set`, `reload`; [TODO: whether outside tool servers are allowed ([G-214](#g-214))] |
-| `run-start`, `run-stop`, `run-continue` | A request to start, stop or continue a run; publisher: [TODO: who publishes run-start, run-stop and run-continue ([G-217](#g-217))] | `""` |
-| `run-status` | Progress facts of a run, group, stage, session or task | The old `family.name` events of the table below, plus those in [More subtypes](#43-data-model) |
+| `plan` | A request to plan, published by the CLI for `komodo plan` | Defined in [5. Intake Handler](#5-intake-handler) |
+| `skill` | A skill switch or request for the Context Manager | `set`, `reload`; body in [6.3](#63-data-model). Publisher: [TODO: who publishes skill and mcp ([G-223](#g-223))] |
+| `mcp` | A tool-server request for the Context Manager. Outside tool servers stay off until a person adds one to the Context Manager's list and switches it on for named agents | `set`, `reload`; publisher: [TODO: who publishes skill and mcp ([G-223](#g-223))] |
+| `run-start`, `run-stop`, `run-continue` | A request to start, stop or continue a run. The CLI publishes all three; the Intake Handler also publishes `run-start` after planning | `""` |
+| `run-status` | Progress facts of a run, group, stage, session or task | The `family.name` events of the table below, plus those in [More subtypes](#43-data-model) |
 | `run-complete` | A run ended with every group finished, or the stop sequence finished | `done`, `stopped` |
 | `run-failure` | A group or run cannot continue without a person | `group.blocked`, `lease.lost`, `stalled` |
 | `resource` | A usage or plan-limit fact for the Resource Manager | `usage`, `headroom`, `overage`, `limit`, `limit.warn` |
 | `error` | A fault for the Error Handler | `bus.overflow` (below); `fault.error`, `fault.panic`, `fault.resource` in [17. Error Handler](#17-error-handler); `plan-blocked`, `plan-timeout`, `plan-input`, `plan-write`, `context-refused`, `run-refused` |
 
-`run-start` and `run-stop` data:
+The three command events tell the Runtime Manager what to do, so it never searches for work on its own. Their `data`:
 
 ```go
 // RunStart is the data of run-start: a request to the Runtime Manager to run a target.
 type RunStart struct {
-	Target string `json:"target"` // [TODO: what the id names ([G-203](#g-203))]
+	Target   string    `json:"target"`            // the label the command named, such as ep-1 or tg-1.2; "all" for run --all; the epic label when the Intake Handler starts the run
+	Groups   []string  `json:"groups"`            // the group labels to run, such as tg-1.2
+	Source   string    `json:"source"`            // "cli" or "intake": who published the request
+	Schedule time.Time `json:"schedule,omitzero"` // RFC 3339 start time of a scheduled run; absent otherwise
+	Repo     string    `json:"repo"`              // the repository id the run belongs to
+	Root     string    `json:"root"`              // the repository root on this machine
+	Request  ID        `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 
-// RunStop is the data of run-stop.
+// RunStop is the data of run-stop: a request to stop a run, or to remove a queued scheduled run.
 type RunStop struct {
-	Target string `json:"target"` // [TODO: what the id names ([G-203](#g-203))]
+	Target  string `json:"target"`            // an epic or group label, or a run id when one attempt is meant; a label means the latest attempt
+	Request ID     `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 
 // RunContinue is the data of run-continue: a request for a blocked or paused group to go on.
 type RunContinue struct {
-	Target string `json:"target"` // [TODO: what the id names ([G-203](#g-203))]
+	Target string `json:"target"`           // an epic or group label
+	Answer string `json:"answer,omitempty"` // "approve" or "deny" from --approve or --deny; empty for a plain continue
+	Request ID    `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 ```
+
+A `run-start` that the Intake Handler publishes after planning carries its own run id, and `abandon` is a control request on the engine's socket, not an event ([7.5](#75-behaviour)).
+
+The Runtime Manager sends an `Answer` down the group's command channel to its Task Manager. `komodo run (id) --schedule` publishes no event. It is a request on the control socket; the engine mints the run id, stores it in the schedule queue entry (`~/.komodo/state/schedule.json`, kept by the [State Manager](#10-state-manager)) and publishes the one `run-start`, with that run id and `schedule` set, when the entry fires.
 
 What `run-continue` resets for each block reason is owned by [7. Runtime Manager](#7-runtime-manager).
 
@@ -2297,8 +2722,10 @@ Subtypes that other chapters define, with the chapter that owns the data body.
 | Type | Subtypes | Owner |
 |---|---|---|
 | `run-status` | `group.approved`, `publish.done`, `pr.opened` | [15. Commit Handler](#15-commit-handler) |
-| `run-status` | `cleanup.start`, `cleanup.done`, `cleanup.swept`, `group.discarded` | [16. Cleanup Handler](#16-cleanup-handler) |
+| `run-status` | `cleanup.start`, `cleanup.done`, `group.discarded` | [16. Cleanup Handler](#16-cleanup-handler) |
 | `run-status` | `group.continued`, `group.done`, `group.closed`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
+| `run-status` | `sandbox.fallback`, `tool.outside` | [11. Task Manager](#11-task-manager) |
+| `run-status` | `epic.paused`, `epic.resumed` | [15. Commit Handler](#15-commit-handler) |
 | `run-failure` | `stalled` | [7. Runtime Manager](#7-runtime-manager) |
 | `skill`, `mcp` | `set`, `reload` | [6. Context Manager](#6-context-manager) |
 | `resource` | `usage`, `headroom`, `overage`, `limit` | [19. Resource Manager](#19-resource-manager) |
@@ -2323,51 +2750,48 @@ func RegisterEvents() {
 
 `Publish` refuses a pair that no `RegisterEvents()` or `data.go` bound ([4.7](#47-invariants-and-failures)).
 
-#### Old event to type and subtype
+#### Event names to type and subtype
 
-The old catalog had 41 event types in the form `family.name`. The subtype keeps the old name, so the data structs and their table tests carry over. A row marked with a TODO has no clean mapping while its decision is open.
+Each event name has the form `family.name`, such as `session.end`. The table gives the type and subtype a name is published under. The subtype keeps the name, so a data struct and its table test follow it. A row marked `none` is not published.
 
-| Old event | New type / subtype | Data fields |
+| Event name | Type / subtype | Data fields |
 |---|---|---|
-| `run.start` | `run-status` / `run.start` | `groups`, `config_hash`, `version` kept; `table_hash` and `job` dropped |
-| `run.done` | `run-complete` / `done` | `done`, `blocked` kept |
-| `run.stopped` | `run-complete` / `stopped` | `signal`, `saved` kept |
-| `group.paused` | `run-status` / `group.paused` | `until`, `link` kept |
-| `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail` kept; `reason`, `prior` and `paths` join `data` |
-| `group.shipped` | `run-status` / `group.shipped` | [TODO: where groups land ([G-210](#g-210))]; the `merge`, `pr` and `files` fields depend on it |
-| `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` kept |
-| `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` kept; stage names are the new ones |
-| `stage.exit` | `run-status` / `stage.exit` | `from` kept |
-| `session.start` | `run-status` / `session.start` | `agent`, `task`, `link`, `model`, `resumed` kept |
-| `session.idle` | `run-status` / `session.idle` | `idle_s`, `nudged` kept |
-| `session.timewarn` | `run-status` / `session.timewarn` | `used_s`, `wall_s` kept |
-| `session.end` | `run-status` / `session.end` | All kept; `reason` joins `data`; `usage` (token and cost detail) added |
-| `task.claimed` | `run-status` / `task.claimed` | `task` kept |
-| `task.released` | `run-status` / `task.released` | `task` kept |
-| `task.done` | `run-status` / `task.done` | `task` kept; `commit` and `lines` dropped |
-| `task.retry` | `run-status` / `task.retry` | `task`, `attempt` kept |
-| `check.done` | `run-status` / `check.done` | [TODO: whether the free mechanical checks stay, and where ([G-206](#g-206))] |
-| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote` kept |
-| `finding.verified` | `run-status` / `finding.verified` | Submit fields plus `severity`, `in` kept |
-| `tool.denied` | `run-status` / `tool.denied` | `tool`, `row`, `target`, `count` kept |
-| `timer.due` | `run-status` / `timer.due` | `until` kept |
-| `job.due`, `job.fail` | none | [TODO: whether scheduled jobs and the extra agent roles are dropped ([G-207](#g-207))] |
-| `lock.taken` | `run-status` / `lock.taken` | `card_hash`, `tasks` kept |
-| `lock.released` | `run-status` / `lock.released` | `by` kept |
-| `action.start`, `action.done` | none yet | [TODO: which store recovery trusts ([G-202](#g-202))]; they existed only for the old write-ahead log |
-| `state.truncated` | none yet | [TODO: which store recovery trusts ([G-202](#g-202))] |
-| `provider.skip` | `run-status` / `provider.skip` | [TODO: model links in this release ([G-213](#g-213))]; `from`, `to` name links |
-| `limit.warn` | `resource` / `limit.warn` | `link`, `kind`, `pct`, `usd` kept |
-| `lease.taken` | `run-status` / `lease.taken` | `fence`, `pid` kept |
-| `pool.slot.taken`, `queue.enqueued` | none | [TODO: how long the Runtime Manager runs and how a second command reaches it ([G-201](#g-201))]; they were machine-wide records for several processes |
-| `request.resume` | `run-continue` | Replaced by the command event above |
-| `request.scope` | none yet | [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
-| `request.abandon` | none yet | [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
-| `request.timer` | none | [TODO: how long the Runtime Manager runs ([G-201](#g-201))]; it carried a timer to a process that was not running |
-| `request.return` | none | [TODO: where groups land ([G-210](#g-210))]; only the whole-epic review sent it |
+| `run.start` | `run-status` / `run.start` | `groups`, `config_hash`, `version` |
+| `run.done` | `run-complete` / `done` | `done`, `blocked` |
+| `run.stopped` | `run-complete` / `stopped` | `signal`, `saved` |
+| `group.paused` | `run-status` / `group.paused` | `until`, `link` |
+| `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail`, `reason`, `prior`, `paths` |
+| `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` |
+| `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` |
+| `stage.exit` | `run-status` / `stage.exit` | `from` |
+| `session.start` | `run-status` / `session.start` | `agent`, `task`, `link`, `model`, `resumed` |
+| `session.idle` | `run-status` / `session.idle` | `idle_s`, `nudged` |
+| `session.timewarn` | `run-status` / `session.timewarn` | `used_s`, `wall_s` |
+| `session.end` | `run-status` / `session.end` | The `SessionEnd` struct below, with `reason` and `usage` (token and cost detail) |
+| `task.claimed` | `run-status` / `task.claimed` | `task` |
+| `task.released` | `run-status` / `task.released` | `task` |
+| `task.done` | `run-status` / `task.done` | `task` |
+| `task.retry` | `run-status` / `task.retry` | `task`, `attempt` |
+| `check.done` | `run-status` / `check.done` | `pass`, `tip`, `head`, `regression`, `steps`; the free mechanical checks that open the Tester's turn |
+| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote` |
+| `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `severity`, `in` |
+| `tool.denied` | `run-status` / `tool.denied` | `tool`, `row`, `target`, `count` |
+| `sandbox.fallback` | `run-status` / `sandbox.fallback` | `role`, `wanted`, `used`, `why`; the Tester ran in the operating-system sandbox because Docker was missing |
+| `tool.outside` | `run-status` / `tool.outside` | `server`, `tool`, `outcome`; one call to an outside tool server |
+| `epic.paused` | `run-status` / `epic.paused` | `epic`, `group`, `output`; a recheck of the epic branch failed |
+| `epic.resumed` | `run-status` / `epic.resumed` | `epic`, `group`; a recheck passed on a paused epic |
+| `timer.due` | `run-status` / `timer.due` | `until` |
+| `lock.taken` | `run-status` / `lock.taken` | `card_hash`, `tasks` |
+| `lock.released` | `run-status` / `lock.released` | `by` |
+| `action.start`, `action.done` | none | Recovery reads only the State Manager, so no event marks an action before it runs |
+| `state.truncated` | none | A torn last line of the event log is dropped when read, and replay marks the gap ([18](#18-metrics-service)) |
+| `provider.skip` | `run-status` / `provider.skip` | `from`, `to`: link names, `claude-cli` or `anthropic-api` |
+| `limit.warn` | `resource` / `limit.warn` | `link`, `kind`, `pct`, `usd` |
+| `lease.taken` | `run-status` / `lease.taken` | `fence`, `pid` |
+| `pool.slot.taken`, `queue.enqueued` | none | Link session counts and the schedule queue are machine-wide records in the State Manager ([10](#10-state-manager)), not events |
+| `request.resume` | `run-continue` | The command event above |
+| `request.timer` | none | The schedule queue and the `schedule` field of `run-start` carry a scheduled start; the engine stays up while a run is queued |
 | `request.accepted`, `request.refused` | `run-status` / `request.accepted`, `request.refused` | `request` (the command's id), `why` on refusal |
-
-The `check.done` row's old `CheckDone` and `CheckStep` shapes, and the `action.*` shapes, stay in the old design at git tag `design/beta6-v1` until their gaps close.
 
 #### Data structs
 
@@ -2376,7 +2800,7 @@ A data struct holds the facts of its subtype and is bound to its pair by `EventK
 ```go
 // --- Shared by group facts
 
-// GroupFacts carries what the old envelope held on every group event; embedded in a group fact's data.
+// GroupFacts carries the stage, session and reason of a group event; embedded in a group fact's data.
 type GroupFacts struct {
 	Stage   string `json:"stage,omitempty"`   // the group's stage when the fact was seen: a state.Stage value
 	Session ID     `json:"session,omitempty"` // session and task facts only
@@ -2418,7 +2842,7 @@ type GroupBlocked struct {
 	GroupFacts
 	Prior   string   `json:"prior,omitempty"`   // the working stage the group left
 	Paths   []string `json:"paths,omitempty"`   // needs_scope only: the paths asked for
-	Counter string   `json:"counter,omitempty"` // unnamed block only: retries, returns, flap or job
+	Counter string   `json:"counter,omitempty"` // unnamed block only: retries, returns or flap
 	Detail  string   `json:"detail,omitempty"`  // what the CLI shows, at most 4 KB
 }
 
@@ -2449,7 +2873,7 @@ type SessionStart struct {
 	GroupFacts
 	Agent   string `json:"agent"`          // builder, tester, reviewer or planner
 	Task    string `json:"task,omitempty"` // builder only: the task claimed with it
-	Link    string `json:"link"`           // [TODO: model links in this release ([G-213](#g-213))]
+	Link    string `json:"link"`           // the model link: claude-cli or anthropic-api
 	Model   string `json:"model"`          // the model identifier the link reported
 	Resumed bool   `json:"resumed"`        // continued from a saved handle, so it adds no attempt
 }
@@ -2557,10 +2981,64 @@ type ToolDenied struct {
 	Count  int    `json:"count"`            // refusals under this row in this session
 }
 
+// SandboxFallback is the data of run-status / sandbox.fallback.
+type SandboxFallback struct {
+	GroupFacts
+	Role   string `json:"role"`   // the agent whose commands moved, such as tester
+	Wanted string `json:"wanted"` // the mechanism the role should have used, such as docker
+	Used   string `json:"used"`   // the mechanism it ran in, such as seatbelt or bubblewrap
+	Why    string `json:"why"`    // why the wanted mechanism was not used
+}
+
+// ToolOutside is the data of run-status / tool.outside.
+type ToolOutside struct {
+	GroupFacts
+	Server  string `json:"server"`  // the outside tool server's name
+	Tool    string `json:"tool"`    // the tool called
+	Outcome string `json:"outcome"` // ok, error or timeout
+}
+
+// EpicPaused is the data of run-status / epic.paused.
+type EpicPaused struct {
+	Epic   string `json:"epic"`   // the epic label, such as ep-1
+	Group  string `json:"group"`  // the label of the group whose landing paused the epic
+	Output string `json:"output"` // the exact output of the failing recheck
+}
+
+// EpicResumed is the data of run-status / epic.resumed.
+type EpicResumed struct {
+	Epic  string `json:"epic"`  // the epic label
+	Group string `json:"group"` // the label of the group whose recheck passed
+}
+
 // TimerDue is the data of run-status / timer.due; reason pause_timeout marks the pause cap.
 type TimerDue struct {
 	GroupFacts
 	Until time.Time `json:"until"` // the wait time, or the cap time, that passed
+}
+
+// CheckDone is the data of run-status / check.done: the result of the free mechanical checks.
+type CheckDone struct {
+	GroupFacts
+	Pass       bool        `json:"pass"`       // every step passed or warned
+	Tip        bool        `json:"tip"`        // the checks ran on the epic branch after a landing
+	Head       string      `json:"head"`       // the commit checked
+	Regression bool        `json:"regression"` // a test that passed at the base fails
+	Steps      []CheckStep `json:"steps"`
+}
+
+// CheckStep is one check step's result.
+type CheckStep struct {
+	Step   string   `json:"step"`             // a step name, such as coverage
+	Level  string   `json:"level"`            // pass, warn or fail
+	Detail []string `json:"detail,omitempty"` // the failing tests, files or secret locations
+}
+
+// ProviderSkip is the data of run-status / provider.skip.
+type ProviderSkip struct {
+	GroupFacts
+	From string `json:"from"` // the link skipped
+	To   string `json:"to"`   // the next link tried; empty when none is left
 }
 
 // LockTaken is the data of run-status / lock.taken.
@@ -2602,7 +3080,7 @@ type BusOverflow struct {
 
 // RequestRef names the command that a request outcome answers.
 type RequestRef struct {
-	Request ID `json:"request"` // the identifier of the command event
+	Request ID `json:"request"` // the control socket Request.ID of the command, copied into the command event's data as request
 }
 
 // RequestAccepted is the data of run-status / request.accepted.
@@ -2637,7 +3115,7 @@ type Options struct {
 	BufferEvents int // queue size per subscription
 }
 
-// New returns an in-process bus.
+// New returns an in-process bus; the engine holds the one bus of a machine.
 func New(o Options) Bus
 
 // Subscription is one subscriber's ordered, bounded queue.
@@ -2664,25 +3142,43 @@ func Register(k Key, newData func() Payload)
 |---|---|---|
 | Every subsystem | `Publish` | A fact it owns changed |
 | Every subscriber | `Subscribe`, then reads `Events` | Once at start; the subscriber's own goroutine reads |
-| Metrics Service | `Subscribe` with no types | Records every event |
-| Error Handler | `Subscribe` with `error` | Catches faults |
+| Metrics Service | `Subscribe` with no types | Appends every event it receives to the event log |
+| Error Handler (in the engine) | `Subscribe` with `error` | Catches faults |
 
 #### Who publishes and who subscribes
 
 | Type | Publishers | Subscribers |
 |---|---|---|
-| `next` | CLI, Intake Handler | [TODO: which part consumes next and follows the internal pointer, and which types the CLI subscribes to ([G-217](#g-217))] |
-| `plan` | [TODO: who publishes plan ([G-217](#g-217))] | Intake Handler |
-| `skill`, `mcp` | [TODO: who publishes skill and mcp ([G-217](#g-217))] | Context Manager |
-| `run-start`, `run-stop`, `run-continue` | [TODO: who publishes run-start, run-stop and run-continue ([G-217](#g-217))] | Runtime Manager |
-| `run-status`, `run-complete`, `run-failure` | Runtime Manager | [TODO: which part subscribes ([G-217](#g-217))] |
+| `next` | Intake Handler | [TODO: which part consumes next and follows the internal pointer, and which types the CLI subscribes to ([G-224](#g-224))] |
+| `plan` | CLI | Intake Handler |
+| `skill`, `mcp` | [TODO: who publishes skill and mcp ([G-223](#g-223))] | Context Manager |
+| `run-start` | CLI, Intake Handler (after planning) | Runtime Manager |
+| `run-stop`, `run-continue` | CLI | Runtime Manager |
+| `run-status`, `run-complete`, `run-failure` | Runtime Manager | [TODO: which types the CLI subscribes to ([G-224](#g-224))] |
 | `resource` | Runtime Manager | Resource Manager |
 | `error` | Any subsystem; the bus on overflow | Error Handler |
 | Every type | | Metrics Service |
 
-The diagram draws the CLI's subscription without a type label, and draws no publisher for `plan`, `skill`, `mcp`, `run-start`, `run-stop` and `run-continue`. All of this is [TODO: who publishes run-start, run-stop, run-continue, plan, skill and mcp, which part consumes next, and which types the CLI subscribes to ([G-217](#g-217))]
+The CLI is not in the engine's process. "The CLI publishes" means the CLI sends the event over the control socket, and the engine's bus broadcasts it ([4.5](#45-behaviour)). The CLI's subscriptions travel back over the same connection.
+
+The diagram also draws an arrow from the Metrics Service to the Error Handler: [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))]
 
 ### 4.5 Behaviour
+
+#### Where the bus runs
+
+1. The bus lives in memory inside the engine. `New` is called once, by the engine, and every part that runs in the engine shares that one bus.
+2. The first command that needs a live run (`run`, `stop`, `status`, `ui`, `abandon`, `replay`) starts the engine if none is running.
+3. A command reaches the engine over the control socket. The CLI sends its event over the socket, the engine publishes it on the bus, and replies and live events come back on the same connection.
+4. The engine exits when no run is live and none is queued. The bus and its queues end with it.
+
+#### The event log
+
+1. The Metrics Service subscribes to every type. It receives an event after `Publish` has queued it for the subscribers.
+2. It appends the event as one JSON line to the run's event log and flushes the write as the event arrives.
+3. The log is written after the broadcast, not before. A power cut or a killed process can lose the last few events from the log, and a full Metrics Service queue drops events from it, counted by `bus.overflow`.
+4. Replay and metrics read only the log. A torn last line is dropped on read, and replay marks the gap.
+5. Recovery after a crash never reads the log. It reads only the State Manager, so a lost log line never changes where a group continues.
 
 **📐 How does one event travel from publisher to subscriber?**
 ```mermaid
@@ -2706,7 +3202,7 @@ flowchart LR
 - **Panicking:** the bus never runs subscriber code, so a panic happens in the subscriber's own goroutine. That goroutine starts through the Error Handler's panic-catching helper ([17](#17-error-handler)), which publishes an `error` event; the subscriber's code then calls `Close`.
 - **Overflow of the Error Handler's own queue:** the bus does not publish `bus.overflow` for it, because that event would go to the same full queue. The count is still kept.
 
-Whether a subscriber can recover dropped events from disk depends on [TODO: which store recovery trusts, and whether an event is written before it is broadcast ([G-202](#g-202))].
+The bus keeps no history, so a subscriber cannot ask for a dropped event again. The event log in the [Metrics Service](#18-metrics-service) holds each event that service received.
 
 ### 4.6 State
 
@@ -2715,7 +3211,7 @@ The bus keeps its subscriptions and counters in memory only; nothing in this cha
 | State | Held in | Lost at a crash |
 |---|---|---|
 | Subscription list | `Bus` | Yes; subscribers subscribe again at start |
-| Queued events | Each `Subscription` | Yes, unless an event record survives. [TODO: which store recovery trusts ([G-202](#g-202))] |
+| Queued events | Each `Subscription` | Yes; the event log keeps what the Metrics Service had appended, and recovery reads the State Manager |
 | `Dropped` counts | Each `Subscription` | Yes; the `bus.overflow` events carry them |
 
 ### 4.7 Invariants and Failures
@@ -2734,7 +3230,7 @@ The bus keeps its subscriptions and counters in memory only; nothing in this cha
 | Queue full | `Publish`, at the queue | Drop the event for that subscription; publish `bus.overflow` | One `bus.overflow` per burst per subscription | The subscriber misses events |
 | Subscriber panics | The panic-catching helper | The helper publishes `error`; the subscriber closes | 0 | That subscriber stops; others continue |
 | Publish after close | `Publish` | Return `ErrBusClosed` | 0 | Nothing queued |
-| The bus is not reachable from a second command | The CLI | [TODO: how a second command reaches a live run ([G-201](#g-201))] | | |
+| The control socket does not answer | The CLI | Start the engine, then send the command again | Dial every 50 ms for 5 seconds | The command runs, or the CLI reports the error |
 
 ### 4.8 Config
 
@@ -2742,7 +3238,7 @@ The Configuration Manager reads the settings file and hands the value to `bus.Ne
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `bus.buffer_events` | integer | 50 | Queue size per subscription; the number is the old design's "50 events behind" flag, carried as the new queue limit |
+| `bus.buffer_events` | integer | 50 | Queue size per subscription; a subscription 50 events behind drops the next event |
 
 ### 4.9 Proof Cases
 
@@ -2758,7 +3254,9 @@ Component tests with fake subscribers; no live provider tests.
 | `Publish` of an unregistered subtype | `ErrUnknownEvent`; nothing queued |
 | Decode of the example `session.end` line | The registry returns `SessionEnd`; an unknown field is refused |
 | `Close` then `Publish` | `ErrBusClosed`; every `Events` channel is closed |
-| Every row of the old-event table | The pair is registered, or the row names its TODO |
+| Every row of the event-name table | The pair is registered, or the row says none or names its TODO |
+| A `run-start` with `schedule` set, sent over the control socket | The engine's bus broadcasts it once; the Runtime Manager receives `groups`, `source` and `schedule` |
+| 10 events, then the engine is killed | The event log holds the lines flushed before the kill; a torn last line is dropped on read |
 
 ### 4.10 Open Gaps
 
@@ -2766,22 +3264,15 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Touches |
 |---|---|---|
-| [G-201](#g-201) | How long the Runtime Manager runs and how a second command reaches it | Where the bus lives; machine-wide records |
-| [G-202](#g-202) | Which store recovery trusts | Write-before-broadcast, replay, `action.*`, `state.truncated` |
-| [G-203](#g-203) | What the id of `run`, `stop`, `replay`, `build`, `test` and `review` names | `Target` in the command data |
-| [G-204](#g-204) | Which old commands survive | `request.scope`, `request.abandon` |
-| [G-206](#g-206) | Whether the free mechanical checks stay | `check.done` |
-| [G-207](#g-207) | Whether scheduled jobs and extra roles are dropped | `job.due`, `job.fail` |
-| [G-210](#g-210) | Where groups land | `group.shipped`, `request.return` |
-| [G-213](#g-213) | Model links in this release | `provider.skip`, `link` fields |
-| [G-214](#g-214) | Outside tool servers | `mcp` subtypes |
-| [G-217](#g-217) | Event wiring the diagram leaves unlabelled | The publisher and subscriber table |
+| [G-223](#g-223) | Who publishes the skill and mcp events | The publisher and subscriber table |
+| [G-224](#g-224) | Which part consumes next, and which event types the CLI subscribes to | The publisher and subscriber table |
+| [G-225](#g-225) | What the Metrics Service sends the Error Handler | The publisher and subscriber table |
 
 ## 5. Intake Handler
 
-The Intake Handler turns a request to plan into task lists the rest of the harness can run. It reads source documents such as an HLD or a product requirements document, starts the planner agent through the model client, checks the planner's draft with plain Go code, and publishes the first `next` event when the draft passes. The purpose and the interactions are in [HLD 5.6](hld.md#56-intake-handler).
+The Intake Handler turns a request to plan into task lists the rest of the harness can run. It reads source documents such as an HLD or a product requirements document, starts the planner agent through the model client, checks the planner's draft with plain Go code, and publishes the `next` and `run-start` events when the draft passes. The purpose and the interactions are in [HLD 5.6](hld.md#56-intake-handler).
 
-The old Intake stage did other work too: it cut the worktree, took the lease and ran setup. That work is not here; it moves to the Runtime Manager; who cuts the worktree is [TODO: who creates a group's branch and worktree ([G-220](#g-220))].
+The Intake Handler writes task lists only. It creates no branch or worktree and takes no lease: the Task Manager creates a group's branch and worktree ([chapter 11](#11-task-manager)), and the Lease Manager holds the lease ([chapter 9](#9-lease-manager)).
 
 ### 5.1 Scope and Concepts
 
@@ -2791,14 +3282,15 @@ The old Intake stage did other work too: it cut the worktree, took the lease and
 - The dependency graph built from the task lists: nodes, edges, waves and the longest chain.
 - The planning run: the planner session, its lint returns and the all-or-nothing write.
 - The card hash of a group, a fingerprint of its task-list files.
-- The `plan` subscription and the `next` publication.
+- The `plan` subscription and the `next` and `run-start` publications.
+- The list of task groups under `docs/backlog/` that are not done, in dependency order: the source of `komodo run --all`.
 
 **Does not own:**
 - The planner's brief, its slots and the repo map: [chapter 6](#6-context-manager) builds them; this chapter asks for them through `GetContext()`.
 - Link choice and the model client (`internal/llm`) that the Intake Handler opens the planner session through ([chapter 11](#11-task-manager)).
 - Running groups, group order and group timers: [chapter 7](#7-runtime-manager).
-- The lease record of a group: [chapter 9](#9-lease-manager). Its branch and worktree: [TODO: who creates a group's branch and worktree ([G-220](#g-220))].
-- Committing the task lists: [TODO: who commits task lists ([G-220](#g-220))]. Pushing: [chapter 15](#15-commit-handler).
+- The lease record of a group: [chapter 9](#9-lease-manager). Its branch and worktree: the Task Manager ([chapter 11](#11-task-manager)).
+- Committing the task lists: [TODO: who commits the Intake Handler's task lists ([G-226](#g-226))]. Pushing: [chapter 15](#15-commit-handler).
 - The agent definition of the planner (model weight, limits, chain): [chapter 3](#3-configuration-manager).
 
 **Concepts**
@@ -2842,7 +3334,7 @@ docs/backlog/
       tsk-add-lock.md
     tg-1.2/
       TG.md
-      tsk-drive-stale.md
+      tsk-fence-stale.md
 ```
 
 **📐 How the task-list files relate**
@@ -2876,18 +3368,18 @@ The folder names are the readable names. A group's folder name is also what anot
 
 ```text
 id: 0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30
-goal: Drive ignores events from an older epoch
+goal: The lease refuses a write with an older fence
 subsystem: Runtime Manager
 touches: internal/engine/**
 priority: high
 points: 3
 status: todo
 files:
-- internal/engine/drive.go
+- internal/lease/fence.go
 - internal/engine/drive_test.go
 dependencies: tg-1.1
 
-- WHEN a stale event reaches Drive THE SYSTEM SHALL ignore it
+- WHEN a write carries an older fence THE SYSTEM SHALL refuse it
   cmd: go test ./internal/engine/...
 ```
 
@@ -3087,7 +3579,7 @@ type DraftFile struct {
 
 #### Event data
 
-The Intake Handler uses two event types. The Event Bus chapter owns the full list of subtypes ([chapter 4](#4-event-bus)).
+The Intake Handler subscribes to `plan` and publishes `next`, `run-start` and `error`. The Event Bus chapter owns the full list of subtypes ([chapter 4](#4-event-bus)).
 
 ```json
 {
@@ -3118,6 +3610,28 @@ The Intake Handler uses two event types. The Event Bus chapter owns the full lis
 | `data.root` | The epic folder, relative to the repository root |
 | `data.groups[].dependencies`, `touches`, `tasks` | What the Runtime Manager needs to order groups; it never reads the graph |
 | `data.groups[].card_hash` | The group's card hash at the moment of publishing |
+
+Which part consumes `next` is [TODO: which part consumes next, and which event types the CLI subscribes to ([G-224](#g-224))].
+
+After `next`, the handler publishes `run-start` for the groups it just wrote. Its `data` tells the Runtime Manager what to run, so the Runtime Manager never searches the task lists itself:
+
+```json
+{
+  "type": "run-start", "subtype": "", "run": "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25", "group": "",
+  "time": "2026-10-14T21:09:40Z",
+  "data": {"target": "ep-2", "groups": ["tg-2.1", "tg-2.2"], "source": "intake", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop"}
+}
+```
+
+| Field | Rule |
+|---|---|
+| `data.target` | The label of the epic the plan wrote, such as `ep-2` for the folder `epic-2` |
+| `data.groups` | The labels of the groups the plan wrote, in dependency order; a group not written by this plan is absent |
+| `data.source` | `intake`; a `run-start` from the CLI says `cli` |
+| `data.repo`, `data.root` | The repository id and the repository root the plan was written in |
+| `run` | The run id of this `run-start`: a new version 7 UUID, not the run id of the `plan` event |
+
+A group label is the group's folder name, such as `tg-2.1`. The full `run-start` shape is in [chapter 4](#4-event-bus).
 
 #### Card hash
 
@@ -3219,6 +3733,20 @@ func (g Graph) LongestChain() int
 
 `BuildGraph` cannot fail. A failing finding means the graph must not be used.
 
+#### Groups to run
+
+```go
+// Pending returns the labels of every group under target whose status is not done, in dependency order; target is all, an epic label or a group label.
+func Pending(epics []Epic, g Graph, target string) []string
+```
+
+The list is the source of `komodo run --all` (target `all`), and the engine uses it to expand a queued entry's `target`: the caller puts it in `data.groups` of a `run-start` event. `Pending` cannot fail; a graph with a failing finding is never passed in.
+
+| Caller | When |
+|---|---|
+| The CLI | `komodo run --all` fills `data.groups` with the result |
+| The handler | After a plan, `Plan` fills `PlanResult.Groups` with the written groups in the same order |
+
 #### Planning
 
 ```go
@@ -3237,6 +3765,7 @@ type StartSession func(ctx context.Context) (PlannerSession, error)
 type PlanResult struct {
 	Epic    int
 	Written []string // paths of the files written
+	Groups  []string // labels of the groups written, in dependency order
 }
 
 // PlanBlockedError ends a plan whose third draft failed lint; nothing was written.
@@ -3269,7 +3798,7 @@ type LockedError struct{ Run string }
 
 A person plans a goal that needs two groups.
 
-**📐 From a plan request to the first next event**
+**📐 From a plan request to the run-start event**
 ```mermaid
 sequenceDiagram
   participant B as Event Bus
@@ -3285,9 +3814,10 @@ sequenceDiagram
   H->>H: 6 lint, up to 2 returns
   H->>F: 7 write on a pass
   H->>B: 8 next
+  H->>B: 9 run-start
 ```
 
-1. A `plan` / `request` event reaches the handler; who publishes it is [TODO: who publishes plan ([G-217](#g-217))]. It handles one plan at a time.
+1. A `plan` / `request` event reaches the handler; the CLI publishes it for `komodo plan`. It handles one plan at a time.
 2. The handler reads each document named in `docs` and calls `GetContext()` with agent `planner`, the goal and the documents.
 3. The Context Manager returns the planner's brief; the repo map and the layout are part of it ([chapter 6](#6-context-manager)).
 4. The handler opens a planner session through the model client with a deadline of `WallMin` minutes and sends the brief.
@@ -3295,6 +3825,7 @@ sequenceDiagram
 6. Go lints the draft. A failing draft goes back into the same session with the finding text, up to 2 times; a third failing draft ends the plan.
 7. The handler writes the files, all or nothing.
 8. The handler computes each group's card hash and publishes `next` / `plan-ready`.
+9. The handler publishes `run-start` with the labels of the groups it wrote in `data.groups`.
 
 #### Algorithms
 
@@ -3305,7 +3836,7 @@ sequenceDiagram
 3. When `epic` is non-zero, `Load` the epic and ask `Locks.InRun` for each group; a locked group is a read-only input and an amended file naming it fails the plan with `LockedError`.
 4. Call `GetContext()` and open the session.
 5. Run the lint loop below.
-6. Write the files and publish `next`.
+6. Write the files, publish `next`, then publish `run-start` with `PlanResult.Groups`.
 
 A document that does not fit the planner's brief ceiling fails the plan with the error that `GetContext()` returns; nothing is cut ([chapter 6](#6-context-manager)).
 
@@ -3375,7 +3906,7 @@ flowchart TB
 5. An overlapping pair with no order fails lint and names both groups and the shared file. An order through a third group counts.
 6. Place groups with no dependency in wave 1, count the longest chain, and warn when it is over 4.
 
-Two globs overlap when one file matches both, among the tracked files of the base commit and every group's `files`; the file named is the first such path in byte order. After wave 1, a group's wave is 1 plus the highest wave of the groups it waits on. Waves serve lint and the graph view only; the Runtime Manager starts a group as soon as its dependencies finish.
+Two globs overlap when one file matches both, among the tracked files of the base commit and every group's `files`; the file named is the first such path in byte order. After wave 1, a group's wave is 1 plus the highest wave of the groups it waits on. Waves serve lint, the graph view and the order of `Pending` and `PlanResult.Groups` (wave first, then folder-name order); the Runtime Manager starts a group as soon as its dependencies finish.
 
 **Writing the files**
 
@@ -3405,7 +3936,7 @@ stateDiagram-v2
   [*] --> Drafting: 1 plan request
   Drafting --> Written: 2 lint passes
   Drafting --> Blocked: 3 third failure or deadline
-  Written --> [*]: 4 next published
+  Written --> [*]: 4 next and run-start published
   Blocked --> [*]: 5 error published
 ```
 
@@ -3417,7 +3948,7 @@ A lint failure under 3 returns the draft to the same session and leaves the plan
 
 1. A task-list file is written only from a draft that passed lint; a failing draft writes 0 files.
 2. Lint is one function; the planner's tool, the plan loop and any stored-list check call the same eight checks.
-3. The Intake Handler publishes `next` only after the files are written and every card hash is computed.
+3. The Intake Handler publishes `next` and `run-start` only after the files are written and every card hash is computed.
 4. The planner session holds no write tool and no git or forge credential.
 5. A group in a run is never rewritten by a plan.
 6. A plan handles one request at a time; a second `plan` event waits.
@@ -3442,9 +3973,9 @@ A lint failure under 3 returns the draft to the same session and leaves the plan
 
 A failed lint leaves no group started, so nothing is locked. The person fixes the file, or plans again with `epic` set to the epic number, which amends only groups that are not in a run.
 
-Whether a planner's earlier draft may be reused instead of asking the model again is [TODO: rules for reusing a stored prompt response ([G-208](#g-208))]. The mechanical results below hold under every option: the repo map and the lint result of one exact draft text on one tree hash, both from Go code.
+A plan always asks the model: no earlier draft is reused. The only cached input is the repo map of one exact tree, built by Go code ([chapter 8](#8-cache-manager)).
 
-The Intake Handler runs as part of the Runtime Manager's process or beside it: [TODO: how long the Runtime Manager runs and how a second command reaches it ([G-201](#g-201))]. Under every option a plan runs from an event and publishes an event, so the caller waits for `next` or `error`, and no caller blocks on the model.
+The Intake Handler runs inside the engine process, and `komodo plan` starts the engine when none runs ([chapter 7](#7-runtime-manager)). A plan runs from an event and publishes events, so the caller waits for `next` or `error`, and no caller blocks on the model.
 
 ### 5.8 Config
 
@@ -3455,7 +3986,7 @@ The Intake Handler owns no settings key. It receives values from the Configurati
 | `PlannerLimits.WallMin` | Agent Registry, planner `limits.wall_min` | Deadline of one plan |
 | `PlannerLimits.IdleMin` | Agent Registry, planner `limits.idle_min` | Silence before the session is stopped |
 | `Protected` | The Task Manager's guard data | Paths lint refuses in a group's `files` |
-| Model link and weight of the planner | Agent Registry; [TODO: which model links beta 6 supports ([G-213](#g-213))] | Which model the planner session uses |
+| Model link and weight of the planner | Agent Registry; the links are the Claude subscription link, then the paid Anthropic interface ([chapter 11](#11-task-manager)) | Which model the planner session uses |
 
 Fixed constants, not settings:
 
@@ -3487,6 +4018,7 @@ Fixed constants, not settings:
 - `CardHash` ignores the `status:` line and changes when any task file changes by one byte.
 - A fixture goal touching 2 overlapping areas yields 2 groups with a derived dependency; a draft that omits it fails lint naming the shared file.
 - A draft path with `..` fails the `grammar` rule.
+- `Pending` over a backlog of 3 groups, one with status `done`, returns the 2 other labels with a group after the groups it depends on.
 
 #### Component
 
@@ -3499,6 +4031,8 @@ These use a mock model client that returns scripted drafts, and a fake bus.
 - An amended plan naming a group in a run returns `LockedError` and leaves the group unchanged.
 - A killed process between the two renames leaves each group old or new, and the next plan restores `.plan-old-*`.
 - `next` / `plan-ready` lists every group with its dependencies, touches, task count and card hash.
+- After `next`, a `run-start` with source `intake` lists in `data.groups` exactly the groups the plan wrote, in dependency order.
+- A failed plan publishes no `next` and no `run-start`.
 - The planner session receives no write tool.
 
 ### 5.10 Open Gaps
@@ -3507,11 +4041,8 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question |
 |---|---|
-| [G-201](#g-201) | How long the Runtime Manager runs and how a second command reaches it |
-| [G-208](#g-208) | Rules for reusing a stored prompt response, including a planner's earlier answer |
-| [G-217](#g-217) | Who publishes `plan`, and which part consumes `next` |
-| [G-220](#g-220) | Who creates a group's branch and worktree, and who commits task lists |
-| [G-213](#g-213) | Which model links beta 6 supports |
+| [G-224](#g-224) | Which part consumes `next`, and which event types the CLI subscribes to |
+| [G-226](#g-226) | Who commits the Intake Handler's task lists |
 
 ## 6. Context Manager
 
@@ -3522,7 +4053,7 @@ The Context Manager owns everything an agent may see beyond the code: skills (do
 **Owns:**
 - The skill index, skill selection, skill pulls, the integrity check and the compile from standards lines to reviewer rule identifiers.
 - The 4 agent prompt templates (planner, builder, tester, reviewer) and the brief slots they name.
-- The connection table for Model Context Protocol servers.
+- The allow-listed list of Model Context Protocol servers: each entry is off by default and is switched on per agent.
 - The on/off state and the per-agent access of every skill and connection.
 - Brief assembly: the 5 parts, the slot fill, the size count and the ceiling check.
 - The repo map, the repo profile (detected languages and commands) and the repo guidance extracted from `AGENTS.md`.
@@ -3532,7 +4063,7 @@ The Context Manager owns everything an agent may see beyond the code: skills (do
 - Settings and the Agent Registry: the Configuration Manager ([chapter 3](#3-configuration-manager)). The Context Manager never reads them; the harness passes values in and events carry changes.
 - Opening a model session, choosing a link and the tool loop: [chapter 11](#11-task-manager).
 - The guard rows, including the steering-phrase list: [chapter 11](#11-task-manager).
-- The cache store: [chapter 8](#8-cache-manager). Whether the Context Manager reads and writes repeated pieces through it directly is [TODO: whether parts other than the Runtime Manager call the Cache Manager directly ([G-221](#g-221))]; without it the loader reads the files each time.
+- The cache store: [chapter 8](#8-cache-manager). The Runtime Manager opens the cache and passes the Context Manager a cache handle; the Context Manager reads and writes repeated pieces through it directly and never opens or closes the cache.
 - Rendering lines a person reads: [chapter 2](#2-output-formatter).
 
 **Concepts**
@@ -3567,7 +4098,7 @@ Every item is either embedded in the binary or read from disk. The split below h
 | Language pattern files for the repo map | Embedded | Patterns are code-like data that ship with the map builder |
 | The Komodo tool set entry | Embedded | It names the tools of the harness itself |
 | Local skills | Read from the context folder | A person adds standards of their own without a new binary |
-| Outside connections | Read from the context folder | Which servers exist is the person's choice; whether agents may use them is [TODO: whether agents may use outside Model Context Protocol servers the Context Manager connects ([G-214](#g-214))] |
+| Outside connections | Read from the context folder | Which servers exist is the person's choice; each is off until the person switches it on for named agents |
 
 The context folder is `skills/` and `connections.json` under the Komodo home folder ([chapter 20](#20-data-locations-and-data-flow)). It is never inside the repository, so a cloned repository cannot plant a skill or a connection. The repository's own `.claude/` folder is never read. A local skill cannot reuse a shipped skill's name: the loader refuses it.
 
@@ -3757,6 +4288,7 @@ type Connection struct {
 	Env     []string `json:"env"`               // names of environment variables passed through; never values
 	Enabled bool     `json:"enabled"`
 	Allow   []string `json:"allow"`             // agents that may use it
+	Hosts   []string `json:"hosts"`             // network hosts the server may reach; empty means no network
 	Origin  Origin   `json:"-"`                 // set by the loader, never read from the file
 }
 
@@ -3771,7 +4303,7 @@ type ConnectionFile struct {
 {
   "v": 1,
   "connections": [
-    {"name": "docs-search", "command": "docs-mcp", "args": ["--stdio"], "env": ["DOCS_TOKEN"], "enabled": false, "allow": ["planner"]}
+    {"name": "docs-search", "command": "docs-mcp", "args": ["--stdio"], "env": ["DOCS_TOKEN"], "enabled": false, "allow": ["planner"], "hosts": []}
   ]
 }
 ```
@@ -3783,8 +4315,15 @@ type ConnectionFile struct {
 | `env` | Names only; the values come from the harness's environment and never reach a file or a brief |
 | `enabled` | `false` by default for an entry read from the file |
 | `allow` | Agents that may use it; empty means none |
+| `hosts` | Network hosts the server may reach; empty means the server has no network |
 
-The embedded `komodo` entry always exists and is always enabled for every agent. The tools it advertises to one agent are that agent's tool list in the Agent Registry, and the Task Manager checks every call. Whether an entry read from `connections.json` can be enabled for any agent is [TODO: whether agents may use outside Model Context Protocol servers the Context Manager connects ([G-214](#g-214))].
+The embedded `komodo` entry always exists and is always enabled for every agent. The tools it advertises to one agent are that agent's tool list in the Agent Registry, and the Task Manager checks every call.
+
+Outside servers follow these rules:
+- **Off by default:** an entry read from `connections.json` is disabled until a `mcp` / `set` event enables it.
+- **Per agent:** an enabled entry reaches only the agents in its `allow` list.
+- **Sandboxed:** the server runs inside the sandbox, with no network unless `hosts` names a host.
+- **Guarded:** every call passes the Task Manager's guard ([chapter 11](#11-task-manager)), and every call is recorded as an event.
 
 #### Request and context
 
@@ -3921,14 +4460,14 @@ An empty required slot fails the brief before any model runs. An empty optional 
 | `files` | Caller: the group's `files` | Required: builder, reviewer |
 | `file_contents` | Caller: each file at base, or `new file` | Required: builder |
 | `diff` | Caller: base to the builder's head | Required: reviewer. Optional: builder, tester |
-| `checks` | Caller: [TODO: where the free mechanical checks run and who supplies their results ([G-206](#g-206))] | Required: reviewer. Optional: builder, tester |
+| `checks` | Caller: the Task Manager, from the free mechanical checks that run first in the Tester's turn | Required: reviewer. Optional: builder, tester |
 | `findings` | Caller: open reviewer findings | Optional: builder, reviewer |
-| `scope_answer` | Caller: the orchestrator's answer to a scope request; how it arrives is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))] | Optional: builder |
+| `scope_answer` | Caller: the orchestrator's answer to a scope request, given with `komodo run (id) --approve` or `--deny` | Optional: builder |
 | `lens`, `lens_rules` | Caller: the Reviewer's lens text and rule catalog | Required: reviewer |
 | `callers` | Caller: callers of changed symbols | Optional: reviewer |
 | `baseline` | Caller: tests failing at the base commit | Optional: tester |
 
-An agent not named in a row never receives the slot. Whether the architect, researcher and scout roles return, with their slot columns, is [TODO: whether the scheduled jobs and those three roles are dropped ([G-207](#g-207))].
+An agent not named in a row never receives the slot.
 
 #### Template file
 
@@ -4045,7 +4584,7 @@ func (m *Manager) GetContext(ctx context.Context, req Request) (Context, error)
 // Deps are the collaborators the harness passes in at construction.
 type Deps struct {
 	Bus       Publisher
-	Cache     Cache          // the Cache Manager's store; present only if G-221 allows a direct call
+	Cache     cache.Handle   // the cache handle the Runtime Manager opens and passes in
 	Items     []ItemState    // starting skill state, from the Configuration Manager
 	Conns     []Connection   // starting connection state
 	Phrases   func() []string // steering phrases, from the Task Manager's guard data
@@ -4053,11 +4592,8 @@ type Deps struct {
 	Count     Counter        // token counter; New uses the bundled one when nil
 }
 
-// Cache is the part of the Cache Manager the Context Manager uses.
-type Cache interface {
-	Get(key string) (value []byte, ok bool, err error)
-	Put(key string, value []byte) error
-}
+// The Context Manager reads and writes the skills, context, map and setup namespaces through
+// cache.Handle; it never creates or closes the cache.
 ```
 
 | Error | Meaning and what the caller does |
@@ -4106,14 +4642,14 @@ type EmptySlotError struct{ Slot Slot }
 func (e EmptySlotError) Error() string { return "required slot " + string(e.Slot) + " is empty" }
 ```
 
-The Task Manager calls `Place` with the chain from the Agent Registry and each link's measured context. Which links exist in beta 6 is [TODO: which model links beta 6 supports ([G-213](#g-213))]; the rule holds for every link: the ceiling is half the measured context, and nothing is cut to fit.
+The Task Manager calls `Place` with the chain from the Agent Registry and each link's measured context. Beta 6 ships two Claude links, the Claude subscription link first and then the paid Anthropic interface; links for OpenAI come after beta 6, and the free local model is an optional link ([chapter 11](#11-task-manager)). The rule holds for every link: the ceiling is half the measured context, and nothing is cut to fit.
 
 The token counter is one bundled estimate for every link, so a size check is repeatable. The half-context ceiling is the margin that absorbs the difference between the estimate and a provider's own count.
 
 #### Skills
 
 ```go
-// Loader selects and serves skills; every call reads the item table as it is now.
+// Loader selects and serves skills; every call reads the item table as it stands.
 type Loader interface {
 	// Select returns the preinject set: always first, then matches by name.
 	Select(agent string, files []string, t Tree) ([]Selected, error)
@@ -4145,7 +4681,6 @@ var (
 |---|---|
 | `GetContext` | `Select`, for the `standards` slot |
 | The Task Manager's `skill` tool | `Get`, when a session pulls a skill or a section |
-| The CLI | `List`, if a command shows skills; the command list is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))] |
 
 #### Rules
 
@@ -4158,7 +4693,7 @@ A body with no `- **Never` or `- **Always` line yields no rule. The Reviewer cit
 
 #### Events handled
 
-Who publishes `skill` and `mcp` is [TODO: who publishes skill and mcp ([G-217](#g-217))].
+Who publishes `skill` and `mcp` is [TODO: who publishes skill and mcp ([G-223](#g-223))].
 
 | Event | Data | Effect |
 |---|---|---|
@@ -4167,7 +4702,7 @@ Who publishes `skill` and `mcp` is [TODO: who publishes skill and mcp ([G-217](#
 | `mcp` / `set` | `name`, `enabled`, `allow` | Replaces that connection's state |
 | `mcp` / `reload` | none | Rereads `connections.json` |
 
-The Event Bus chapter owns the list of subtypes ([chapter 4](#4-event-bus)). The component that changes an item's setting publishes the event; the Configuration Manager does so after it validates and writes the change ([chapter 3](#3-configuration-manager)).
+The Event Bus chapter owns the list of subtypes ([chapter 4](#4-event-bus)).
 
 ### 6.5 Behaviour
 
@@ -4373,7 +4908,7 @@ An event that arrives while a brief is being built waits for the build to end; t
 | The cache cannot be read or written | `Cache` returns an error | Treated as a miss; the file is read and the result is correct |
 | A template names an unknown slot | Build-time test | The build fails, so it cannot reach run time |
 
-Cached model answers are not part of this component: the rules for reusing a stored prompt response are [TODO: rules for reusing a stored prompt response ([G-208](#g-208))]. The Context Manager caches only pieces Go code computes: skill bodies, the skill index, the repo map and the repo profile.
+No model answer is stored or reused. The Context Manager caches only pieces Go code computes: skill bodies, the skill index, the repo map and the repo profile.
 
 ### 6.8 Config
 
@@ -4441,70 +4976,83 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 |---|---|
 | [G-13](#g-13) | Tuning the steering-phrase list |
 | [G-18](#g-18) | Repo map patterns for TypeScript, Python and Rust against 3 real repositories |
-| [G-204](#g-204) | The final command list, which decides the orchestrator skills and the scope answer |
-| [G-206](#g-206) | Where the free mechanical checks run, which decides the `checks` slot |
-| [G-207](#g-207) | Whether the architect, researcher and scout roles are dropped |
-| [G-208](#g-208) | Rules for reusing a stored prompt response |
-| [G-217](#g-217) | Who publishes `skill` and `mcp` |
-| [G-221](#g-221) | Whether the Context Manager calls the Cache Manager directly |
-| [G-213](#g-213) | Which model links beta 6 supports |
-| [G-214](#g-214) | Whether agents may use outside Model Context Protocol servers |
+| [G-223](#g-223) | Who publishes `skill` and `mcp` |
 
 ## 7. Runtime Manager
 
-The Runtime Manager runs a run: it reads the plan's task groups, starts one Task Manager for each group once the group's dependencies are done, and keeps every group moving through its stages. It is the only writer of a group's stage, counters and blocks, and it is where retries, timeouts, timer extensions and blocks are decided. The purpose of the subsystem and who it talks to are in [HLD 5.8](hld.md#58-runtime-manager).
+The Runtime Manager runs a run: it reads the task groups named in the run-start event, starts one Task Manager for each group once the group's dependencies are done, and keeps every group moving through its stages. It runs inside the engine, the one background process per user per machine that hosts every live run. It is the only writer of a group's stage, counters and blocks, and it is where retries, timeouts, timer extensions and blocks are decided. The purpose of the subsystem and who it talks to are in [HLD 5.8](hld.md#58-runtime-manager).
 
 ### 7.1 Scope and Concepts
 
 **Owns:**
-- The run: loading the plan's task groups, ordering them by dependency, and running independent groups in parallel up to a limit (a limit of 1 runs them in sequence).
+- The engine process: its start on demand, its control socket and its exit when no run is live or queued.
+- The run: loading the task groups the run-start event names, ordering them by dependency, and running independent groups in parallel up to a limit (a limit of 1 runs them in sequence).
+- The schedule queue loop: starting each queued run at its time, and every overdue one when the engine starts.
+- One Task Manager goroutine per group, with a command channel down to it and a reply channel back (`task.Channels`). A goroutine is a lightweight thread inside one Go program.
 - Each group's stage machine: the pure decision function `Next`, the group's counters, and every move between stages, Paused, Blocked and Done.
-- Each group's State, lease and cache scope, held through the State Manager, Lease Manager and Cache Manager.
+- Each group's State and lease, held through the State Manager and the Lease Manager, and one cache per repository, which the engine opens and passes out as a handle.
+- Releasing a group's lease with the Lease Manager's `Release` when the group closes.
 - Answers to Task Manager requests: scope requests, timer extensions, retries and timeouts.
-- The pool of concurrent groups. Pause timers for provider limits wait on [TODO: what the Runtime Manager does when a provider refuses for a plan limit ([G-211](#g-211))]; session slots across groups wait on [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))].
-- The stop sequence. The recovery pass after a crash waits on [TODO: what survives a crash ([G-202](#g-202))].
+- The pool of concurrent groups, which every run in the engine shares, and the pauses at a provider limit or a plan limit. The model client counts the link session slots, which every run also shares ([11.3](#113-data-model)).
+- The stop sequence and the recovery pass.
+- The landing order of each epic's groups, handed to the Commit Handler.
 - Publishing `run-status`, `run-complete`, `run-failure` and `resource` events, and listening for `run-start`, `run-stop` and `run-continue`.
 
 **Does not own:**
 - What happens inside a stage: sessions, guards, sandboxes and the build, test, review, commit and cleanup work ([Task Manager](#11-task-manager), [Builder](#12-builder), [Tester](#13-tester), [Reviewer](#14-reviewer), [Commit Handler](#15-commit-handler), [Cleanup Handler](#16-cleanup-handler)).
 - Creating the task lists and checking them ([Intake Handler](#5-intake-handler)).
-- The lease records, the state file and the cache files ([Lease Manager](#9-lease-manager), [State Manager](#10-state-manager), [Cache Manager](#8-cache-manager)).
-- Event delivery ([Event Bus](#4-event-bus)), error printing ([Error Handler](#17-error-handler)) and watching usage against plan or cost limits ([Resource Manager](#19-resource-manager)).
+- The lease records, the state file, the machine-wide records (including `schedule.json`) and the cache contents ([Lease Manager](#9-lease-manager), [State Manager](#10-state-manager), [Cache Manager](#8-cache-manager)).
+- Pushing a group onto its epic's branch, rechecking that branch and opening the epic's pull request ([Commit Handler](#15-commit-handler)).
+- Event delivery ([Event Bus](#4-event-bus)), error printing ([Error Handler](#17-error-handler)) and watching usage against plan or cost limits ([Resource Manager](#19-resource-manager)), which asks this chapter to pause groups.
 - Reading the settings file: only the [Configuration Manager](#3-configuration-manager) does; this chapter asks it for values.
 
 **Concepts**
-- **Run:** one execution of a plan's task groups, started by a `run-start` event.
+- **Engine:** the one process per user per machine that runs the Runtime Manager, every live run and the Event Bus in memory.
+- **Control socket:** the private local socket `~/.komodo/state/engine.sock` that only this user can open; the CLI sends commands over it and receives replies and live events on the same connection.
+- **Command channel and reply channel:** the two Go channels of `task.Channels` between the Runtime Manager and one Task Manager goroutine; commands go down, messages come back.
+- **Schedule queue:** the machine-wide record `~/.komodo/state/schedule.json`, kept by the State Manager, of runs waiting for their start time.
+- **Plan window:** the span in which a subscription plan allows a fixed amount of use, such as a five-hour window.
+- **Run:** one execution of the task groups a `run-start` event names. Each run has its own run id, a version 7 UUID.
 - **Group record:** the State of one task group, saved by the State Manager after every change.
 - **Stage:** one of Intake, Build, Test and Review, Commit and Cleanup. A group is in exactly one at a time.
-- **Holding state:** Blocked (waiting for a person or the orchestrator), or Paused (waiting for a provider limit to reset), which exists only under [TODO: what the Runtime Manager does when a provider refuses for a plan limit ([G-211](#g-211))]. Neither is a stage and neither changes the epoch.
+- **Holding state:** Blocked (waiting for a person or the orchestrator), or Paused (waiting for a provider limit or a plan window to reset). Neither is a stage and neither changes the epoch.
 - **Epoch:** a number that rises each time a group enters a stage. An input stamped with an older epoch is stale and changes nothing.
 - **Input:** one fact the decision function reads: a Task Manager report, a command event, a timer or a lease loss.
 - **Order:** one instruction the Runtime Manager gives its Task Manager, such as "enter the Build stage".
 - **Return:** sending a group from Test and Review back to Build with findings. Each return spends one of `limits.returns`.
 - **Attempt:** one fresh builder session for the group, counted against `limits.group_attempts`.
-- **Slot:** permission to run one active group (pool slot) or one model session on one link (link slot); who owns link slots is [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))].
+- **Slot:** permission to run one active group (pool slot) or one model session on one link (link slot). The Runtime Manager keeps the one pool for the engine; the model client takes and releases link slots through the State Manager, which keeps the counts in `providers.json`.
 
 Group, epic and lease are defined in the [HLD glossary](hld.md#12-glossary).
 
 ### 7.2 Package Layout
 
-The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceability)). Import rule: it imports the State, Lease, Cache and Configuration Managers, the Context Manager and the Event Bus through the small interfaces in `deps.go`; the Task Manager and Intake Handler import `engine` for `Input` and `Order`.
+The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceability)). Import rule: it imports the State, Lease, Cache and Configuration Managers, the Context Manager and the Event Bus through the small interfaces in `deps.go`, and reads the machine-wide records only through the State Manager; the engine imports `internal/task` for `Channels`, `Command` and `Message`, and the Task Manager imports nothing from `engine`.
 
 | File | Holds |
 |---|---|
+| `engine.go` | `Engine`, `NewEngine`, `Serve`: process lifetime, the exit rule, the cache handle |
+| `socket.go` | `Request`, `Reply`, `Flags`, `ConnPrinter`, the listener on `engine.sock`, one goroutine per connection |
+| `schedule.go` | The schedule queue loop over `state.ScheduleEntry` |
+| `command.go` | The mapping from `Order` to `task.Command` and from `task.Message` to `Input`; the reader of each reply channel |
+| `landing.go` | `LandingPlan`, the landing order of an epic |
 | `manager.go` | `Manager`, `New`, `Run`: subscriptions, the run loop, the group goroutines |
 | `group.go` | The per-group loop: takes one input at a time, calls `Next`, saves, performs the actions |
 | `decide.go` | `Next`, the transition rows, the block rows, the in-stage rows |
 | `limits.go` | `Limits`, `LoadLimits`, the counter rules, `Fingerprint` |
 | `plan.go` | `GroupSpec`, the dependency graph as the Runtime Manager reads it, `Startable`, `Pick` |
-| `pool.go` | Active-group pool, `GrowPool`, `HalvePool`, `Grant`; link slots wait on [G-216](#g-216) |
+| `pool.go` | The active-group pool shared by every run in the engine, `GrowPool`, `HalvePool` |
+| `pause.go` | `PauseGroups`: the call the Resource Manager makes to pause groups at a limit |
 | `timer.go` | Pause timers, the wall clock rule, timer extensions |
-| `recover.go` | The recovery pass after a crash and the dead-session rule |
+| `recover.go` | The recovery pass from saved State and the dead-session rule |
 | `shutdown.go` | The stop sequence |
 | `deps.go` | The interfaces the package needs from other managers |
 
 | Flow | Starts at |
 |---|---|
+| The engine | `Engine.Serve` in `engine.go` |
+| A command from the CLI | `Engine.handle` in `socket.go` |
+| A queued run | `Engine.runSchedule` in `schedule.go` |
 | A run | `Manager.Run` in `manager.go` |
 | One group's life | `runGroup` in `group.go` |
 | Choosing the next group | `Pick` in `plan.go` |
@@ -4523,88 +5071,28 @@ const (
 	ShutdownDeadline  = 90 * time.Second // from the stop's start to the whole-tree kill
 	PoolHalveCooldown = 5 * time.Minute  // after a halving, further signals are ignored for this long
 	BlocksBeforeRedesign = 3             // blocks for one reason before a group is flagged needs redesign
+	EngineStartWait   = 5 * time.Second  // how long the CLI retries the socket after starting the engine
+	CommandBuffer     = 16               // capacity of a Task Manager's command channel and reply channel
 )
+
+// SocketName is the control socket's file name inside the state folder.
+const SocketName = "engine.sock"
+
 ```
 
 #### Stages and reasons
 
 The State Manager owns the `Stage` and `Reason` values ([10.3](#103-data-model)). This chapter uses the stage names `intake`, `build`, `test_review`, `commit` and `cleanup`, the holding states `paused` and `blocked`, and the end state `done`, written here as Intake, Build, Test and Review, Commit, Cleanup, Paused, Blocked and Done. A block reason in this chapter is one of the `Reason` values listed there.
 
-A block reason named `tester` or `flaky` exists only if the free mechanical checks stay: [TODO: whether the free mechanical checks stay, and where ([G-206](#g-206))].
+The block reasons `tester` and `flaky` come from the Tester's rerun rule ([13. Tester](#13-tester)); the Task Manager reports them as a `fault`. The free mechanical checks are the first step of the Tester's turn: a failed check returns the group to Build with the exact output and calls no model, and only a clean result starts the Tester and Reviewer agents.
 
 #### State
 
 `State` is what `Next` reads and returns. `Next` reads nothing outside `State`, the input and `Limits`, so every counter a bound needs is a `State` field. The State Manager saves it as the group's Runtime State ([10.3](#103-data-model)).
 
 ```go
-// State is one group's position and every counter Next reads.
-type State struct {
-	Run          string       `json:"run"`
-	Group        string       `json:"group"`
-	Stage        state.Stage  `json:"stage"`
-	Prior        state.Stage  `json:"prior"`         // the working stage a Paused or Blocked group left
-	Epoch        uint32       `json:"epoch"`
-	Fence        uint64       `json:"fence"`         // the lease's fence number, copied when the lease is granted
-	Outcome      string       `json:"outcome"`       // set in Done: "complete" or "lost"
-	Limits       Limits       `json:"limits"`        // the bounds pinned at run start
-	Tasks        []TaskState  `json:"tasks"`
-	OrdersOpen   []OpenOrder  `json:"orders_open"`   // ordered by Next, not yet done; rerun after a crash
-	Resume       []ResumeRef  `json:"resume"`        // one per halted session; a Test and Review pause can hold two
-	Owed         []string     `json:"owed"`          // agents whose restart is owed until the pause ends
-	Pause        PauseState   `json:"pause"`
-	Block        BlockState   `json:"block"`
-	Returns      int          `json:"returns"`       // returns to Build so far
-	FailureHash  string       `json:"failure_hash"`  // fingerprint of the failure behind the last return
-	ReturnTree   string       `json:"return_tree"`   // hash of the commit tested when the last return happened
-	Blocks       map[Reason]int `json:"blocks"`      // blocks per reason
-	Requests     []string     `json:"requests"`      // request identifiers applied, newest last, at most 64
-	WallUsedS    int64        `json:"wall_used_s"`   // seconds of Build with a live session or running action
-	WallExtended bool         `json:"wall_extended"` // the one 100% wall extension was granted
-	LastEventAt  time.Time    `json:"last_event_at"` // time of the previous applied input
-	Attempts     int          `json:"attempts"`      // fresh builder sessions, against limits.group_attempts
-	Retries      int          `json:"retries"`       // builder timeouts and idle stops, against the builder's retries
-	Restarts     map[string]int `json:"restarts"`    // per Test and Review agent, cleared on entering the stage
-	TokensUsed   int64        `json:"tokens_used"`   // input, output and cache writes, summed over the group
-	ScopeAdded   []string     `json:"scope_added"`   // paths a scope answer added to the group's files
-}
-
-// TaskState is one task's claim.
-type TaskState struct {
-	ID         string `json:"id"`          // the task identifier, such as tsk-add-lock
-	State      string `json:"state"`       // queued, claimed or done
-	Session    string `json:"session,omitempty"`
-	GateFails  int    `json:"gate_fails"`  // failed completion gates in the live session; the third ends it
-	ScopeAsked bool   `json:"scope_asked"` // the task's one scope request is spent
-}
-
-// ResumeRef is how a halted session can be continued.
-type ResumeRef struct {
-	Agent   string `json:"agent"`
-	Session string `json:"session,omitempty"`
-	Handle  string `json:"handle,omitempty"`
-	Link    string `json:"link,omitempty"`
-}
-
-// PauseState is the timer window of a Paused group.
-type PauseState struct {
-	Until   time.Time `json:"until,omitzero"`   // the earliest time to try again
-	Since   time.Time `json:"since,omitzero"`   // when the group first paused; kept across refused attempts
-	Link    string    `json:"link,omitempty"`
-	Refused int       `json:"refused"`          // attempts the provider refused, for the backoff
-}
-
-// BlockState names why and when a Blocked group stopped.
-type BlockState struct {
-	Reason state.Reason `json:"reason,omitempty"`
-	At     time.Time `json:"at,omitzero"`
-}
-
-// OpenOrder is an order Next gave that is not yet done; Key makes a rerun safe.
-type OpenOrder struct {
-	Kind    OrderKind `json:"kind"`
-	Key     string    `json:"key"`
-	Started bool      `json:"started"`
-}
+// State is the body of the group record; the State Manager owns the one schema (10.3).
+type State = state.GroupState
 
 // Limits are the bounds Next enforces, read once at run start through the Configuration Manager.
 type Limits struct {
@@ -4612,7 +5100,7 @@ type Limits struct {
 	GroupAttempts   int // limits.group_attempts
 	PauseMaxMin     int // limits.pause_max_min
 	GroupWallMin    int // limits.group_wall_min
-	GroupTokens     int // limits.group_tokens, owned by the Resource Manager; see G-211
+	GroupTokens     int // limits.group_tokens, owned by the Resource Manager; see G-246
 	BuilderRetries  int // the builder's retries in the agent registry
 	ReviewerRetries int // the reviewer's retries
 	TesterRetries   int // the tester's retries
@@ -4630,51 +5118,24 @@ type Limits struct {
 | `Retries` | Builder timeouts and idle stops; never reset while the group is open, except by `run-continue` on a `retries` block |
 | `FailureHash` | `Fingerprint` of the sorted failing items of the last failed Test and Review; a repeat is a flap |
 | `ReturnTree` | The tree hash of the commit that was tested at the last return; a failed result on the same tree is a flap, which catches a return that changed nothing |
-| `TokensUsed` | Summed from each session's usage; the cap that bounds it is [TODO: whether reaching the group token cap blocks the group ([G-211](#g-211))] |
+| `TokensUsed` | Summed from each session's usage; the cap that bounds it is [TODO: whether reaching the group token cap blocks the group ([G-246](#g-246))] |
 
-Example: the body of a group's Runtime State, group `tg-1.2`, in Build after one return.
+The group record and its example are in [10.3](#103-data-model). This chapter's tables name the fields as follows:
 
-```json
-{
-  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
-  "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
-  "stage": "build",
-  "prior": "",
-  "epoch": 4,
-  "fence": 3,
-  "outcome": "",
-  "tasks": [
-    {"id": "tsk-add-lock", "state": "claimed", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "gate_fails": 0, "scope_asked": false}
-  ],
-  "orders_open": [],
-  "resume": [{"agent": "builder", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "handle": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "link": "claude-subscription"}],
-  "owed": [],
-  "pause": {"refused": 0},
-  "block": {},
-  "returns": 1,
-  "failure_hash": "1a9509c4c1d09512211b773b90b562dc6e5a2fbbb344ccd72c2a230a51a86353",
-  "return_tree": "9f2c1e7a5b3d4c80a6e1f0d2b7c9a841e3d5f607",
-  "blocks": {},
-  "requests": [],
-  "wall_used_s": 2460,
-  "wall_extended": false,
-  "last_event_at": "2026-10-14T16:01:40Z",
-  "attempts": 1,
-  "retries": 0,
-  "restarts": {},
-  "tokens_used": 412300,
-  "scope_added": []
-}
-```
-
-The link name `claude-subscription` is an example; which model links exist is [TODO: which model links beta 6 supports ([G-213](#g-213))].
+| Name used here | Field of `state.GroupState` |
+|---|---|
+| `Returns`, `Attempts`, `Retries`, `Blocks`, `WallUsedS`, `WallExtended`, `TokensUsed` | `Counters.Returns`, `Counters.Attempts`, `Counters.Retries`, `Counters.Blocks`, `Counters.WallUsedS`, `Counters.WallExtended`, `Counters.TokensUsed` |
+| `OrdersOpen` | `ActionsOpen` |
+| `GateFails` | `TaskState.GateFailures` |
+| `Restarts` | `TestReview.Tester.Restarts` and `TestReview.Reviewer.Restarts` |
+| `Epoch`, `Outcome`, `Prior`, `Fence`, `FailureHash`, `ReturnTree`, `Owed`, `Resume`, `Pause`, `Block`, `Requests`, `ScopeAdded`, `LastEventAt` | The field of the same name |
 
 #### Input
 
-An input is the one thing the decision function reads. Task Managers send reports; the Runtime Manager makes the rest from events, timers and lease calls.
+An input is the one thing the decision function reads. A Task Manager's messages become inputs by the table in [Task Manager channels](#task-manager-channels); the Runtime Manager makes the rest from events, timers, lease calls and `PauseGroups`.
 
 ```go
-// Input is one fact for one group.
+// Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a PauseGroups call.
 type Input struct {
 	Kind    InputKind       `json:"kind"`
 	Group   string          `json:"group"`
@@ -4695,11 +5156,10 @@ const (
 	InResultFail    InputKind = "result.fail"    // Test and Review failed; data: items, tree, regression
 	InSessionStart  InputKind = "session.start"  // data: agent, session, link
 	InSessionEnd    InputKind = "session.end"    // data: agent, reason, usage, handle, reset_at
-	InSessionAsk    InputKind = "session.request" // a Task Manager wants a session; data: agent, links
 	InTaskDone      InputKind = "task.done"
 	InGateFail      InputKind = "gate.fail"      // a completion gate failed in the live session; data: task
 	InScopeAsk      InputKind = "scope.ask"      // data: task, paths, reason
-	InScopeAnswer   InputKind = "scope.answer"   // data: answer approved or denied, paths, reason
+	InScopeAnswer   InputKind = "scope.answer"   // from `run (id) --approve` or `--deny`; data: answer, paths, reason
 	InTimerExtend   InputKind = "timer.extend"   // a session asks for more wall time
 	InTimerDue      InputKind = "timer.due"      // the pause timer fired; data: reason
 	InContinue      InputKind = "continue"       // from a run-continue event
@@ -4707,20 +5167,22 @@ const (
 	InFault         InputKind = "fault"          // data: reason, detail; a Task Manager or handler could not go on
 	InGroupClosed   InputKind = "group.closed"   // the Task Manager finished CloseTaskGroup
 	InGroupCrash    InputKind = "group.crash"    // the panic-catching helper
+	InLimitPause    InputKind = "limit.pause"    // PauseGroups names the group; data: link, cause, reset_at
+	InAbandon       InputKind = "abandon"        // from `komodo abandon`
 )
 ```
 
 #### Order
 
 ```go
-// Order is one instruction from the Runtime Manager to a Task Manager.
+// Order is one instruction from the group loop to its Task Manager, sent as a task.Command.
 type Order struct {
 	Kind    OrderKind       `json:"kind"`
 	Key     string          `json:"key"`     // idempotency key: group, kind and epoch
 	Stage   state.Stage     `json:"stage,omitempty"`
-	Resume  []ResumeRef     `json:"resume,omitempty"`
+	Resume  []state.ResumeRef `json:"resume,omitempty"`
 	Context json.RawMessage `json:"context,omitempty"` // the Context Manager's answer for the stage
-	Data    json.RawMessage `json:"data,omitempty"`    // findings, scope answer, grant
+	Data    json.RawMessage `json:"data,omitempty"`    // findings, scope answer, extension
 }
 
 // OrderKind names an instruction.
@@ -4729,11 +5191,10 @@ type OrderKind string
 const (
 	OrderStartGroup OrderKind = "start_group" // create the Task Manager
 	OrderEnterStage OrderKind = "enter_stage" // run a stage, resuming the listed sessions
-	OrderGrant      OrderKind = "grant"       // answer to session.request: a session may start on a link
 	OrderCancel     OrderKind = "cancel"      // stop every live session of the group
-	OrderSaveWork   OrderKind = "save_work"   // save the group's unsaved work; who saves it is [TODO: whether finished tasks are saved before approval and by whom ([G-220](#g-220))]
 	OrderExtend     OrderKind = "extend"      // answer to timer.extend
 	OrderScope      OrderKind = "scope"       // answer to scope.ask: approved or denied
+	OrderHold       OrderKind = "hold"        // stop starting sessions; the live session may finish
 )
 ```
 
@@ -4743,6 +5204,7 @@ const (
 // GroupSpec is what the Runtime Manager reads from one task group's list.
 type GroupSpec struct {
 	ID        string   `json:"id"`
+	Label     string   `json:"label"`     // the readable label, such as tg-1.2
 	Epic      string   `json:"epic"`
 	Depends   []string `json:"depends"`   // group identifiers that must be Done first
 	Files     []string `json:"files"`     // the globs the group may touch
@@ -4761,22 +5223,162 @@ type Candidate struct {
 
 The Intake Handler checks the plan and refuses a dependency cycle ([5.3](#53-data-model)); the Runtime Manager rechecks when it builds the graph and refuses the run with an `error` event if it finds one.
 
+#### Control socket frames
+
+The CLI and the engine exchange newline-delimited JSON on `~/.komodo/state/engine.sock`: one `Request` per line from the CLI, and one or more `Reply` lines back on the same connection. A request with a live view keeps the connection open until a reply sets `final`. `status --wait` streams an `ok` reply holding the status after each change, then a final reply. `replay` streams one `event` reply per recorded event, then a final reply whose `data` carries the gap count.
+
+```go
+// Request is one frame from the CLI to the engine.
+type Request struct {
+	ID     string `json:"id"`               // minted by the CLI; every reply repeats it
+	Verb   string `json:"verb"`             // run, stop, status, abandon, replay, plan or clean
+	Target string `json:"target,omitempty"` // an epic label, a group label or a run id
+	Root   string `json:"root,omitempty"`   // the repository root the command ran in; status covers this repository unless Flags.All is set
+	Flags  Flags  `json:"flags"`
+	Event  *Event `json:"event,omitempty"`  // the run-start, run-stop, run-continue or plan event the CLI publishes
+}
+
+// Flags are the flags a verb may carry.
+type Flags struct {
+	All      bool      `json:"all,omitempty"`      // run --all, or status --all
+	Approve  bool      `json:"approve,omitempty"`  // run (id) --approve
+	Deny     bool      `json:"deny,omitempty"`     // run (id) --deny
+	Wait     bool      `json:"wait,omitempty"`     // status --wait
+	TimeoutS int       `json:"timeout_s,omitempty"` // status --wait: the longest wait, in seconds
+	Schedule time.Time `json:"schedule,omitzero"`  // run (id) --schedule, an RFC 3339 timestamp
+}
+
+// Reply is one frame from the engine to the CLI.
+type Reply struct {
+	ID     string          `json:"id"`               // the request's id
+	Status string          `json:"status"`           // ok, refused, error or event
+	Code   string          `json:"code,omitempty"`   // an error value from the table below
+	Detail string          `json:"detail,omitempty"` // one sentence for a person
+	Data   json.RawMessage `json:"data,omitempty"`   // the verb's answer, such as a status table or a blocked group's question
+	Event  *Event          `json:"event,omitempty"`  // set when Status is event
+	Final  bool            `json:"final"`            // the last frame for this request
+}
+```
+
+```json
+{"id":"0192e5a0-1c3d-7e44-8a10-5b7f2c9d6e31","verb":"run","target":"ep-1","root":"/Users/dev/src/shop","flags":{"schedule":"2026-10-16T02:00:00-07:00"}}
+{"id":"0192e5a0-1c3d-7e44-8a10-5b7f2c9d6e31","status":"ok","data":{"queued":{"target":"ep-1","at":"2026-10-16T02:00:00-07:00"}},"final":true}
+```
+
+| `Code` | Meaning |
+|---|---|
+| `bad_frame` | The line is not a valid `Request`; the connection stays open |
+| `unknown_target` | The label or run id names nothing in the plan or the saved state |
+| `run_refused` | The run was refused, such as a dependency cycle or a dependency outside the run that is not Done |
+| `not_blocked` | `--approve` or `--deny` named a group that is not waiting for an answer |
+| `engine_stopping` | The engine is past its exit check; the CLI starts a new engine and sends the request again |
+
+`ConnPrinter` is the engine's `fault.Printer`:
+
+```go
+// ConnPrinter prints a fault as a Reply with Status "error" on the connection that issued the command the fault belongs to; it implements fault.Printer.
+type ConnPrinter struct{ /* open connections by request id and run */ }
+
+// PrintError writes the fault to its connection; a fault with no connection attached is not printed.
+func (p *ConnPrinter) PrintError(f fault.Fault) error
+```
+
+#### Task Manager channels
+
+`TaskGroups.Start` returns the `task.Channels` pair of [11.3](#113-data-model), and the Runtime Manager keeps it for the life of the group. Commands go down `Commands` and `Message` values come back on `Replies`; each channel holds `CommandBuffer` items. Facts still travel as events on the Event Bus. A reader goroutine for each reply channel turns every `Message` into an `Input` and calls `Manager.Report`.
+
+The Task Manager calls the Commit Handler's `Save` itself after each finished task, so the Runtime Manager sends no save instruction. Unsaved partial work stays in the worktree.
+
+| Order or input | Travels as | Detail |
+|---|---|---|
+| `start_group`, `enter_stage` | Command `start` | The Task Manager runs from the stage in the State saved first |
+| `hold` | Command `pause` | `Link`, `Until` and `Cause` come from `Pause` |
+| `enter_stage` after a timer or `run (id)` on a Paused group | Command `continue` with `Wake` | `Wake.Reason` is `timer` or `run-continue` |
+| `extend` | Command `continue` with `Grant` | `Re` names the `timer` message; `Grant.Extra` is the extension |
+| `scope` | Command `continue` with `Answer` | `Answer.Action` is `approve` for `--approve` and `deny` for `--deny`; `Re` names the escalation |
+| `cancel` | Command `stop` | `Cause` is `stop`, `abandon` or `pause_timeout` |
+| `ready`, `session.start`, `session.end`, `task.done`, `gate.fail`, `stage.done`, `result.fail` | Message `state` | The facts in `StateReport.Facts` and the stage in `Progress.Stage` |
+| `scope.ask`, `fault` | Message `escalate` | `Escalation.Kind` `scope` gives `scope.ask`; `blocked` or `failed` gives `fault` with the escalation's reason |
+| `timer.extend` | Message `timer` | The `TimerRequest` |
+| `group.closed` | Message `ended` | Result `closed`; result `failed` gives `fault`, and `held`, `paused` and `stopped` give no input of their own |
+| `group.start`, `lease.granted`, `timer.due`, `continue`, `scope.answer`, `lease.lost`, `group.crash`, `limit.pause`, `abandon` | None | The Runtime Manager makes these from events, timers, lease calls and `PauseGroups` |
+
+#### Schedule queue entry
+
+The queue holds `state.ScheduleEntry` values (`target`, `root`, `run_id`, `at`, `queued_at`), defined with the machine-wide records in [10.3](#103-data-model). An entry in `schedule.json`:
+
+```json
+[
+  {"target": "ep-1", "root": "/Users/dev/src/shop", "run_id": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72", "at": "2026-10-16T02:00:00-07:00", "queued_at": "2026-10-15T18:12:44-07:00"}
+]
+```
+
+`repo` names the repository whose task lists the `target` refers to. When an entry fires, the engine expands `target` into group labels with the Intake Handler's `Pending` for that repository, and publishes `run-start` with those labels in `data.groups`.
+
+#### Landing plan
+
+```go
+// LandingPlan is what the Runtime Manager hands the Commit Handler for one epic.
+type LandingPlan struct {
+	Epic   string   `json:"epic"`   // the epic label, such as ep-1
+	Branch string   `json:"branch"` // the epic's shared branch, komodo/ep-1
+	Order  []string `json:"order"`  // the epic's group labels in the run, every group after its dependencies
+}
+```
+
+```json
+{"epic": "ep-1", "branch": "komodo/ep-1", "order": ["tg-1.1", "tg-1.2", "tg-1.3"]}
+```
+
+#### Run-start data
+
+The `run-start` event's `data` says what to run, so the Runtime Manager never searches for groups on its own. The event's data type is owned by [4. Event Bus](#4-event-bus).
+
+```json
+{
+  "type": "run-start",
+  "run": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72",
+  "time": "2026-10-15T18:20:00Z",
+  "data": {"target": "all", "groups": ["tg-1.1", "tg-1.2", "tg-2.1"], "source": "cli", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop"}
+}
+```
+
+| Field | Rule |
+|---|---|
+| `target` | The label the person typed; `all` for `run --all`; the epic label when the Intake Handler starts the run |
+| `groups` | The group labels to run. For `run --all` the CLI lists every group under `docs/backlog/` that is not done; the Runtime Manager orders them by dependency |
+| `source` | `cli`, or `intake` when the Intake Handler publishes after planning; that run gets its own run id |
+| `schedule` | Present only for a queued run: the entry's `at`; the run id is the entry's `run_id`, minted when the entry was queued |
+| `repo`, `root` | The repository id and the repository root, because the engine hosts runs of several repositories |
+
 ### 7.4 Interfaces
 
 #### What this package offers
 
 ```go
+// NewEngine wires an engine around a Runtime Manager; socketPath is the control socket.
+func NewEngine(d Deps, socketPath string) *Engine
+
+// Serve listens on the socket, opens each repository's cache at its first run, runs the schedule queue and returns when no run is live or queued.
+func (e *Engine) Serve(ctx context.Context) error
+
+// Dial connects to a running engine and returns ErrNoEngine when nothing answers.
+func Dial(socketPath string) (*Conn, error)
+
 // New wires a Runtime Manager from the managers it needs.
 func New(d Deps) *Manager
 
 // Run subscribes to run-start, run-stop and run-continue and serves them until ctx ends.
 func (m *Manager) Run(ctx context.Context) error
 
-// Report is the call a Task Manager makes for every need; the answer arrives later as an Order.
+// Report applies one Input a reader made from a Task Manager's message; the answer arrives later as an Order.
 func (m *Manager) Report(ctx context.Context, in Input) error
 
 // Stop runs the stop sequence for one run.
 func (m *Manager) Stop(ctx context.Context, run string) error
+
+// PauseGroups pauses each group a PauseOrder names after its current step; the Resource Manager calls it.
+func (m *Manager) PauseGroups(ctx context.Context, o resource.PauseOrder) error
 
 // Next applies one input to one group's state; it reads nothing, writes nothing and never fails.
 func Next(s State, in Input, l Limits) Result
@@ -4810,8 +5412,11 @@ type Result struct {
 
 | Function | On failure |
 |---|---|
+| `Serve` | Returns the error that stopped it; the Error Handler publishes one final `error` event first, and every group's State is already saved |
+| `Dial` | Returns `ErrNoEngine` when the socket is missing or refuses; the CLI then starts the engine |
 | `Run` | Returns the error that stopped the loop; a panic inside one group blocks that group `crash` and never reaches here |
 | `Report` | Returns an error only when the run is not live or the group is unknown; the Task Manager then stops its work |
+| `PauseGroups` | Returns an error when the order names a group the engine does not host; the Resource Manager sends it again on its next observation |
 | `Stop` | Always finishes within `ShutdownDeadline`; the whole-tree kill ends any session still alive |
 | `Next` | Cannot fail; an input with no row returns `Refused` |
 | `Pick`, `GrowPool`, `HalvePool` | Cannot fail; `Pick` returns `false` when nothing is ready |
@@ -4829,9 +5434,15 @@ type ConfigReader interface {
 
 // StateStore is the State Manager as the Runtime Manager uses it.
 type StateStore interface {
-	Load(ctx context.Context, run, group string) (State, error)
-	Save(ctx context.Context, s State, events []Event) error // one write: the state and the events it caused
+	Load(ctx context.Context, group string) (state.Record, error)
+	Save(ctx context.Context, group string, g State, rev int) (state.Record, error) // one write of the group record
 }
+
+// The machine-wide records come from the State Manager's generic functions ([10.3](#103-data-model)); Deps holds the *state.Machine.
+//
+//	q, err := state.LoadMachine[state.ScheduleBody](d.Machine, state.KindSchedule)
+//	_, err = state.SaveMachine(d.Machine, state.KindSchedule, body, q.Header.Rev)
+//	p, err := state.LoadMachine[state.ProvidersBody](d.Machine, state.KindProviders) // p.Body.Links[link].ResetAt
 
 // LeaseStore is the Lease Manager as the Runtime Manager uses it.
 type LeaseStore interface {
@@ -4840,43 +5451,52 @@ type LeaseStore interface {
 	Revoke(ctx context.Context, repo, group string, why lease.RevokeReason) error // ends the lease, keeps the branch and worktree
 	Holder(ctx context.Context, repo, group string) (lease.Lease, bool, error)
 	IsOwner(ctx context.Context, l lease.Lease) (bool, error)
+	Release(ctx context.Context, l lease.Lease) error // deletes the record when the group closes
 }
 
-// CacheStore is the Cache Manager as the Runtime Manager uses it.
+// CacheStore is the Cache Manager as the Runtime Manager uses it; only the Runtime Manager opens and closes a repository's cache.
 type CacheStore interface {
-	OpenScope(ctx context.Context, group string) error
-	CloseScope(ctx context.Context, group string) error
+	Open(ctx context.Context, repo string) (*cache.Cache, error) // one cache per repository; the caller passes (*Cache).Handle() out
+	Close(ctx context.Context) error
 }
 
 // Contexts is the Context Manager as the Runtime Manager uses it.
 type Contexts interface {
+	UseCache(repo string, h cache.Handle) // the handle the Context Manager reads and writes through for that repository
 	GetContext(ctx context.Context, agent, group string) (json.RawMessage, error)
 }
 
 // TaskGroups is the Task Manager as the Runtime Manager uses it.
 type TaskGroups interface {
-	Apply(ctx context.Context, o Order) error // performs one order; reports back through Manager.Report
+	// Start runs one Task Manager goroutine for the group and returns its channels; messages come back on Replies.
+	Start(ctx context.Context, spec GroupSpec, h cache.Handle) (task.Channels, error)
 }
 
 // PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
 type PlanSource interface {
-	Groups(ctx context.Context, plan string) ([]GroupSpec, error)
+	Specs(ctx context.Context, labels []string) ([]GroupSpec, error) // the specs of the labels a run-start names
 }
 ```
 
 | Caller | Call | When |
 |---|---|---|
-| [TODO: who publishes run-start, run-stop, run-continue, plan, skill and mcp, which part consumes next, and which types the CLI subscribes to ([G-217](#g-217))] | `run-start`, `run-stop`, `run-continue` events | A person or the orchestrator types the command |
-| Task Manager | `Manager.Report` | Any session start or end, task done, stage done, request or fault |
+| CLI | `Request` frames on `engine.sock`; the engine publishes `run-start`, `run-stop` and `run-continue` | A person or the orchestrator types the command |
+| Intake Handler | `run-start` event, `source` `intake` | After planning, for the groups it just wrote |
+| Resource Manager | `Manager.PauseGroups` | A plan window reaches 100%, or a spending ceiling is reached |
+| Task Manager | `Replies` channel, read into `Manager.Report` | Any state report, escalation, timer request or end of a call |
 | Cleanup Handler | `CloseTaskGroup` on the Task Manager, which reports `group.closed` | Work is pushed and cleaned |
-| Runtime Manager | `LeaseStore.Grant`, `Renew`, `Revoke` | A group starts, every `LeaseRenewEvery`, a stop |
-| Runtime Manager | `StateStore.Save` | After every applied input |
+| Runtime Manager | `LeaseStore.Grant`, `Renew`, `Revoke`, `Release` | A group starts, every `LeaseRenewEvery`, a stop, a group closes |
+| Runtime Manager | `StateStore.Load`, `Save` | After every applied input; at recovery |
+| Runtime Manager | `LoadMachine`, `SaveMachine` with `KindSchedule` | Engine start, a `--schedule`, a fired or removed entry |
+| Runtime Manager | Cleanup Handler `Discard` | An `abandon` after the group is stopped |
+| Runtime Manager | `TaskGroups.Start` and the command channel | A group starts; every order afterwards |
+| Runtime Manager | `CacheStore.Open`, `Close`; `Contexts.UseCache` | Engine start; engine exit |
 | Runtime Manager | `ConfigReader.GetConfigItem` | Once per key at run start |
 | Resource Manager | Subscribes to `resource` events | Every usage, window or limit fact |
 
 #### Events
 
-The Runtime Manager publishes with the shape every event has: `type`, `subtype`, `run`, `group`, `time` and `data`. Subtypes reuse the earlier event names where they map cleanly.
+The Runtime Manager publishes with the shape every event has: `type`, `subtype`, `run`, `group`, `time` and `data`. Subtypes follow the `family.name` form.
 
 | Type | Subtype | Published when |
 |---|---|---|
@@ -4902,9 +5522,67 @@ The Runtime Manager publishes with the shape every event has: `type`, `subtype`,
 }
 ```
 
-When `run-complete` fires relative to the last pull request opening is [TODO: whether each group has its own pull request or groups land on an epic branch ([G-210](#g-210))].
+The Commit Handler opens an epic's pull request when the last group of its landing order lands, which happens in that group's Commit stage. `run-complete` / `done` fires when every group is Done, so it always follows the pull request opening.
 
 ### 7.5 Behaviour
+
+#### The engine
+
+The engine hosts every live run on the machine, plus the Event Bus, in memory. One engine runs per user per machine, and the first command that needs a live run starts it: `run`, `stop`, `status`, `ui`, `abandon` and `replay`. A command reaches a running engine only through the control socket; no command reaches a Task Manager, a lease, the state or the cache directly.
+
+**📐 How a command reaches the engine**
+```mermaid
+flowchart LR
+  CL["CLI command"] -->|"1 dial"| SK["engine.sock"]
+  SK -->|"2 Request"| EN["Engine"]
+  EN -->|"3 command channel"| TM["Task Manager goroutine"]
+  TM -->|"4 reply channel"| EN
+  EN -->|"5 Reply, events"| SK
+  SK -->|"6 same connection"| CL
+```
+
+1. The CLI calls `Dial`. When nothing answers, it starts the engine as a detached background process with the hidden verb `komodo internal engine` and retries the dial for up to `EngineStartWait`. `plan` starts the engine the same way, and the Intake Handler runs inside the engine process.
+2. The engine binds `engine.sock` in the state folder with mode 0600, so only this user can open it. A socket file that nothing answers on is a leftover of a dead engine and is removed first. When another engine answers, the new process exits, so one engine runs per user.
+3. At a repository's first run the engine opens that repository's cache with `CacheStore.Open(ctx, repo)` and passes its `Handle()` to the Context Manager. It passes the same handle to every Task Manager of that repository's runs, and closes the cache when the repository's last run ends. Only the engine creates or closes a cache.
+4. The engine loads the schedule queue and starts every overdue entry (see Schedule queue).
+5. Each connection gets one goroutine. It reads `Request` lines, answers with `Reply` lines and streams the target's live events until a reply sets `final`.
+6. After every group closes, every `run-complete`, every queue change and every closed connection, the engine checks its exit rule. With no run live, no entry queued and no connection open, it closes the listener, removes the socket file, closes any open cache and exits. A request that arrives after the listener closed gets `engine_stopping`, and the CLI starts a new engine.
+
+On any error it catches, the Error Handler publishes one final `error` event before the engine exits, so a caught failure reaches both the saved State and the event log.
+
+What each verb does in the engine:
+- **`run (id)`:** publishes `run-start` for the groups in `data.groups`. A group that already has a saved record is continued ([Continuing a group with `run (id)`](#continuing-a-group-with-run-id)). With `--approve` or `--deny`, the engine makes a `scope.answer` input, or replies `not_blocked`. With `--schedule`, it writes a queue entry.
+- **`stop (id)`:** publishes `run-stop`, and removes a matching queue entry.
+- **`status`:** answers with live runs, their groups and the queued entries. With `--wait`, the connection stays open until a group is Blocked or every group is Done, and the final reply carries the blocked group's question.
+- **`ui`:** has no verb. The CLI process serves the dashboard page and reads from the engine over this socket with `status`; the engine never serves HTTP.
+- **`clean`:** asks the Cleanup Handler for `Sweep` and `UnusedVersions` and replies with what it removed or would remove. `komodo update` asks for `UnusedVersions` through the same verb.
+- **`abandon (id)`:** a control request, not an event. The Runtime Manager stops the group, makes the `abandon` input, and calls the Cleanup Handler's `Discard`, which frees the group's resources.
+- **`replay (id)`:** reads the Metrics Service's event log for the run or group and streams one `event` reply per recorded event, then a final reply carrying the gap count. It calls no model and changes nothing.
+- **`plan`:** publishes the `plan` event.
+
+Over the socket, "the CLI publishes" an event means the CLI sends the event inside a `Request` and the engine's bus broadcasts it.
+
+#### Schedule queue
+
+`komodo run (id) --schedule <time>` queues a run. It is a socket request (verb `run`, `Flags.Schedule`) that publishes no event. The queue is the machine-wide record `schedule.json`, kept by the State Manager; the engine reads and writes it only through `StateStore`.
+
+**📐 How a queued run starts**
+```mermaid
+flowchart LR
+  Q[("schedule.json")] -->|"1 load"| LP["Queue loop"]
+  LP -->|"2 overdue"| RS["run-start"]
+  RS -->|"3 first group saved"| RM["Remove entry"]
+  LP -->|"4 next at"| TI["Timer"]
+  TI -->|"5 due"| LP
+```
+
+1. `--schedule` reaches the engine as a request; the engine mints the run id, writes the entry with `run_id` set, with `SaveMachine` and `KindSchedule` before it replies with the run id, and the CLI starts the engine first if it is not running. The engine stays up while any run is live or queued.
+2. At engine start, and at every timer wake, the loop calls `LoadMachine` with `KindSchedule` and starts each entry whose `at` is not in the future, oldest first.
+3. Starting an entry expands its `target` into group labels with the Intake Handler's `Pending` for the entry's `root`, then publishes the one `run-start` with the entry's `run_id`, `source` `cli` and `schedule` set to the entry's `at`. The loop removes the entry with `SaveMachine` once the run's first group record is saved. A crash before that leaves the entry, and the next engine start fires it again; groups that already have records continue and are not duplicated.
+4. The loop arms one timer for the earliest `at` in the future. A `--schedule` or a `stop` re-arms it.
+5. After the machine restarts, the next `komodo` command finds the queue and starts the engine, which starts everything overdue at once ([1. CLI](#1-cli)).
+
+`komodo stop (id)` removes a queued entry, and `komodo status` lists the queued entries.
 
 #### Starting a run
 
@@ -4920,13 +5598,16 @@ flowchart LR
 ```
 
 1. `Run` receives `run-start` and calls `LoadLimits`, which asks the Configuration Manager for each key once.
-2. It reads the plan's groups through `PlanSource`, builds the dependency graph and refuses a cycle with an `error` event.
-3. A group is ready when `Startable` is true and its record does not exist yet. A group whose dependency is Blocked or Paused is not ready and is shown as waiting on that group in the run's view; its own record is untouched.
-4. When fewer than the pool size of groups are active, `Pick` chooses a ready group. An active group is one in any stage; Paused and Blocked groups are not active.
-5. The group's first input is `group.start`; its first order is to take the lease, which records the branch and worktree names; who creates them is [TODO: who creates a group's branch and worktree ([G-220](#g-220))].
-6. When `lease.granted` is saved, the Runtime Manager opens the group's cache scope, calls `OrderStartGroup`, and the Task Manager reports `ready`.
+2. It reads the group labels from the event's `data.groups`, never from a search of its own, gets their specs through `PlanSource.Specs`, builds the dependency graph and refuses a cycle or an unknown label with an `error` event.
+3. A group with a saved record that is not Done goes to the recovery pass instead ([Crash recovery](#crash-recovery-and-restarting-groups)); a Done group is skipped.
+4. A group is ready when `Startable` is true and its record does not exist yet. A group whose dependency is Blocked or Paused is not ready and is shown as waiting on that group in the run's view; its own record is untouched.
+5. When fewer than the pool size of groups are active, `Pick` chooses a ready group. An active group is one in any stage; Paused and Blocked groups are not active.
+6. The group's first input is `group.start`; its first order is to take the lease, which records the branch and worktree names. The Task Manager creates the branch `komodo/<epic>-<group>`, such as `komodo/ep-1-tg-1.2`, and the worktree when it handles `start`.
+7. When `lease.granted` is saved, the Runtime Manager calls `TaskGroups.Start` with the repository's cache handle. It then sends `start` for `OrderStartGroup` down the new command channel, and the Task Manager reports `ready`.
 
-`run-start` with a `group` set runs that group alone; it is refused with `error` / `run-refused`, naming the dependency, when a dependency outside the run is not Done. A cycle in the plan is refused the same way.
+`run-start` naming one group runs that group alone; it is refused with `error` / `run-refused`, naming the dependency, when a dependency outside the run is not Done. A cycle in the plan is refused the same way.
+
+When the run starts, the Runtime Manager also builds a `LandingPlan` for each epic in the run: the epic's groups in dependency order, ties broken by task-list `Order`. It sends the plan to the Commit Handler in `Order.Data` of every `enter_stage` Commit order. A group removed by `abandon` leaves the list, and the Runtime Manager sends the shortened plan.
 
 **Pick order.** When a slot frees, the Runtime Manager applies these rules in order:
 1. Groups marked `priority: high` go first.
@@ -4934,7 +5615,7 @@ flowchart LR
 3. The most groups unblocked (`Unblocks`).
 4. Task-list order (`Order`).
 
-Taking turns between repositories when several runs share a machine is [TODO: how long the Runtime Manager runs and whether runs share a machine-wide queue ([G-201](#g-201))].
+The pool is one per engine: groups of every run in the engine draw from it, and `Pick` chooses among the ready groups of all runs by the same rules.
 
 #### One turn of a group
 
@@ -4942,7 +5623,7 @@ Taking turns between repositories when several runs share a machine is [TODO: ho
 ```mermaid
 flowchart TB
   IN["Input arrives"] -->|"1 take one"| NX["Next in memory"]
-  NX -->|"2 State, orders, events"| SV["StateStore.Save"]
+  NX -->|"2 State and orders"| SV["StateStore.Save"]
   SV -->|"3 one write"| RO["Run each order"]
   RO -->|"4 order done"| SV2["Save order done"]
   SV2 -->|"5 publish"| PB["Event Bus"]
@@ -4950,27 +5631,26 @@ flowchart TB
 
 1. The group's goroutine takes the next input from its channel (capacity `GroupBuffer`); a full channel makes the sender wait and never drops an input.
 2. It sets `stale` when the input's epoch is older than the group's, then calls `Next`. A stale input changes nothing.
-3. It calls `Save` once, with the new State, the events and the first order marked open. The save returns only when the write is durable.
+3. It calls `Save` once, with the new State and the first order marked open. The save returns only when the write is durable.
 4. It performs each order, which `Next` also placed in `OrdersOpen`; a rerun after a crash skips an order whose key is done.
 5. It saves the order as done, then publishes the events on the Event Bus.
 
-Each group has exactly one goroutine, and it is the only writer of that group's State. A panic in a group goroutine is caught by one helper, `Go`, which sends `group.crash`; the run and the other groups continue.
+Each group has exactly one loop goroutine in the Runtime Manager, and it is the only writer of that group's State. It sends each order to the group's Task Manager goroutine as a `task.Command`, and the Task Manager's `Message` values come back on the reply channel. A panic in a group goroutine is caught by one helper, `Go`, which sends `group.crash`; the run and the other groups continue.
 
-#### Session grants
+#### Link slots
 
-A Task Manager sends `session.request` before every model session. Who owns the link slots is [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))]. Under every option the Runtime Manager answers with `OrderGrant` when a link slot is free, taking the slot in the same step.
+Before every model session the Task Manager's link choice takes a slot on a link with `LimitStore.TakeSlot`, and it releases the slot when the session ends ([11.5](#115-behaviour)). The Runtime Manager grants nothing and answers no request for a session.
 
-1. The request names the agent and the links its chain allows, in order.
-2. The Runtime Manager drops links whose reset time is in the future, using the reset times it recorded from earlier `session.end` inputs.
-3. It takes the first remaining link with a free slot (`limits.link_sessions.<link>` is the count) and answers with `OrderGrant` naming it.
-4. When links remain but all slots are full, the request waits and holds nothing; the pool slot of the group is not held for the wait, and the wait adds nothing to `WallUsedS`.
-5. When every allowed link is limited or unusable, the request is a provider limit: see below. When none is usable and none is limited, the group blocks `no_provider`.
+1. The link session counts and the reset times live in `providers.json`, kept by the State Manager. Every run in the engine shares one set of slots, because the count is machine-wide.
+2. `limits.link_sessions.<link>` is the most sessions one link carries at once.
+3. When every allowed link is limited or has no free slot, the Task Manager ends the session with reason `paused`, and the existing pause path below runs. A slot wait holds no pool slot and adds nothing to `WallUsedS`.
+4. When none of the links is usable and none is limited, the Task Manager escalates `blocked` with reason `no_provider`.
 
-The pool grows by 1 after a clean session end while free memory covers one more `sandbox.max_mem_gb`, up to `limits.pool_max`. It halves, never below `limits.pool_min`, on a rate-limit error from a provider; after a halving, further signals are ignored for `PoolHalveCooldown`. Halving when a plan window passes its warn percent is [TODO: whether the Resource Manager only warns or also slows or pauses work ([G-211](#g-211))]. Sharing the pool and the link slots between runs on one machine is [TODO: how long the Runtime Manager runs ([G-201](#g-201))].
+The pool grows by 1 after a clean session end while free memory covers one more `sandbox.max_mem_gb`, up to `limits.pool_max`. It halves, never below `limits.pool_min`, on a rate-limit error from a provider; after a halving, further signals are ignored for `PoolHalveCooldown`. A plan window that passes its 80% warning does not change the pool: the Resource Manager only warns until the window reaches 100%.
 
 #### A provider limit
 
-What the Runtime Manager does when a provider refuses for a plan limit is [TODO: what the Runtime Manager does when a provider refuses for a plan limit ([G-211](#g-211))]. The steps below apply only if the owner's answer is to hold the group until the limit resets. A provider limit reaches the Runtime Manager two ways: a running session ends with reason `paused`, or a new `session.request` finds every allowed link limited. Both take the same path, which fixes the case where a new session could not wait for a reset.
+When a provider refuses for a plan limit, the Runtime Manager holds the group until the limit resets. When Claude's window runs out and paid use is off, groups wait this way. A provider limit reaches the Runtime Manager as a session that ends with reason `paused`: either a running session hit the limit, or the Task Manager found every allowed link limited before it started one. Both take the same path.
 
 **📐 From a provider limit to a continued session**
 ```mermaid
@@ -4979,14 +5659,14 @@ sequenceDiagram
   participant T as Task Manager
   participant R as Runtime Manager
   participant S as State Manager
-  T->>R: session.end paused, or session.request with every link limited
+  T->>R: session.end paused, with every allowed link limited
   R->>S: Paused, Resume, Pause.Until, Pause.Since
   R->>R: arm timer at Pause.Until
   R->>T: timer.due: enter_stage with Resume
   T-->>R: session.end paused again, or work continues
 ```
 
-1. The Task Manager reports `session.end` with reason `paused` and the resume handle, or sends `session.request` when every link is limited.
+1. The Task Manager reports `session.end` with reason `paused` and the resume handle, if it has one.
 2. Row 9 of the transition table moves the group to Paused: `Prior` is the stage, `Resume` holds the handles, `Pause.Until` is the latest reset time among the halted sessions plus 1 minute, and `Pause.Since` is set only if the group was not already paused.
 3. The Runtime Manager arms an in-memory timer for `Pause.Until`; the same time is in the saved State, so a recovery pass re-arms it.
 4. At the time, `timer.due` returns the group to `Prior` under the same epoch and orders the stage again, with the saved handles. A restart owed to a sibling agent that ended while the group was paused is ordered now, not earlier.
@@ -4995,24 +5675,51 @@ sequenceDiagram
 
 A person's `run-continue` on a Paused group tries every halted agent at once. Paused time stops every wall clock. A sibling session that was not halted keeps running while the group is Paused, and its own timers keep running.
 
-The Resource Manager does not decide any of this; it watches the same numbers. Whether it may also cause a pause is [TODO: whether the Resource Manager only warns or also pauses work ([G-211](#g-211))].
+The Resource Manager does not decide any of this; it watches the same numbers and may also cause a pause, as the next section describes.
+
+#### A plan window or a spending ceiling
+
+The Resource Manager warns at 80% of a plan window, or of a spending amount set in configuration, and changes nothing. At 100% of a plan window it calls `PauseGroups` for the groups seen on that link.
+
+**📐 From a full plan window to resumed groups**
+```mermaid
+sequenceDiagram
+  autonumber
+  participant X as Resource Manager
+  participant R as Runtime Manager
+  participant S as State Manager
+  participant T as Task Manager
+  X->>R: PauseGroups with a PauseOrder
+  R->>S: Paused, Pause.Until, Resume
+  R->>T: pause command
+  R->>R: arm timer at Pause.Until
+  R->>T: continue command with Wake at the timer
+```
+
+1. `PauseGroups` receives a `PauseOrder` ([19.3](#193-data-model)): the reason `window_full` or `spend_ceiling`, the link or run, the group labels and `Until`. The reasons give the causes `plan_window` and `spending`.
+2. For a `window_full` order, a group is paused only when no other link in its current agent's chain can be used: every other link is limited, unavailable, unauthorized or refused by the billing check. Otherwise the group is left running, and its Task Manager's link choice moves the next session to the usable link. When Claude's window runs out and paid use is off, no other link is usable, so the groups wait.
+3. A group with no live session or running action moves to Paused at once (row 17). A group with a live session sets `Pause.After`, lets the session finish, and moves to Paused at its `session.end` with the handle in `Resume` (row 18). The finished session is the group's current step.
+4. The group loop saves the Paused State first, then sends the `pause` command, so no new session starts.
+5. For `plan_window`, `Pause.Until` is `Until` plus 1 minute and the Runtime Manager arms a timer for it. At the timer, `timer.due` sends `continue`, and the group resumes by itself (row 10). The pause is not subject to `limits.pause_max_min`, because the window's reset is the only end it needs.
+6. For `spend_ceiling`, which applies only when `limits.usd_ceiling_per_run` is set, every named group is paused with cause `spending`, no timer is armed and the pause is not subject to `limits.pause_max_min`. A group paused at the ceiling continues only with `komodo run (id)`.
+7. A paused group keeps its lease, and the Runtime Manager keeps renewing it every `LeaseRenewEvery`, 5 minutes. Its pool slot returns.
 
 #### Scope requests
 
-A builder that needs a file outside its group's files stops its session with a request; the Runtime Manager answers or blocks the group. The orchestrator answers a request no rule can settle (owner decision of 2026-10-09).
+A builder that needs a file outside its group's files stops its session with a request; the Runtime Manager answers or blocks the group. The orchestrator answers a request no rule can settle.
 
 1. The Task Manager reports `scope.ask` with the paths and the reason, and the session ends.
-2. The Runtime Manager orders the work saved and keeps the lease and the worktree.
-3. It denies with no one asked when a path is protected (the harness's own settings, `.git`, secret files), is in another live group's files, or the task already spent its one request (`ScopeAsked`). It sets `ScopeAsked` and sends `OrderScope` with the denial; the group stays in Build.
+2. The Runtime Manager keeps the lease and the worktree; the tasks finished so far are already saved as local commits.
+3. It denies with no one asked when a path is protected (the harness's own settings, `.git`, secret files), is in another live group's files, or the task already spent its one request (`ScopeAsked`). It sets `ScopeAsked` and sends `OrderScope` with the denial, which travels as a `continue` command with a deny `Answer`; the group stays in Build.
 4. Otherwise it blocks the group `needs_scope`, sets `ScopeAsked`, keeps the session's handle in `Resume`, and publishes `run-failure` / `group.blocked`. This block is never counted as a flap.
-5. The orchestrator answers; row 14 moves the group to Build. Approval adds the paths to `ScopeAdded`, so the group's effective files are its list plus `ScopeAdded`.
+5. The orchestrator waits with `komodo status --wait`, which returns the blocked group's question, and answers with `komodo run (id) --approve` or `komodo run (id) --deny`. The engine makes a `scope.answer` input; row 14 moves the group to Build and sends `continue` with an `Answer` of `approve` or `deny` down the command channel. Approval adds the paths to `ScopeAdded`, so the group's effective files are its list plus `ScopeAdded`.
 6. The same session resumes with the answer in its brief.
 
-How the answer reaches the Runtime Manager is [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))].
+A `wall` block is answered the same way: `--approve` grants more time and resets the group's working time as `run (id)` does for that reason, and `--deny` leaves the group Blocked. `--approve` or `--deny` on a group blocked for any other reason is refused with code `not_blocked`.
 
 #### Continuing a blocked group
 
-`run-continue` is a request to try again, so it must undo what stopped the group; otherwise the next input blocks it again at once. Each reason below names what the continue resets. A reset counter starts a full new round and never touches `Blocks`, so a group blocked 3 times for one reason is still flagged `needs redesign`.
+`komodo run (id)` on a Paused or Blocked group is a request to try again, so it must undo what stopped the group; otherwise the next input blocks it again at once. Each reason below names what the continue resets. A reset counter starts a full new round and never touches `Blocks`, so a group blocked 3 times for one reason is still flagged `needs redesign`.
 
 | Reason | `run-continue` resets | Refused when |
 |---|---|---|
@@ -5024,19 +5731,31 @@ How the answer reaches the Runtime Manager is [TODO: the final command list besi
 | `pause_timeout` | `Pause.Since` cleared, a new window starts | Never |
 | `no_provider`, `paid_refused`, `context` | Nothing; link selection and the billing check run again against the current settings | Never; the group blocks again if the cause remains |
 | `needs_scope` | Nothing | No answer yet: the request is refused, naming the answer needed |
-| `dependency` | Nothing | A dependency is still not Done: refused, naming it |
+| `dependency` | Nothing | A dependency is still not Done or was abandoned: refused, naming it |
 | `setup`, `publish`, `merge_conflict`, `cleanup`, `contract` | The failed stage's own retry count in the handler | Never |
 | `crash` | Nothing; the recovery pass replays the State | Never |
 | `state_invalid` | Nothing | The State Manager still reports the record invalid |
-| `budget` | `TokensUsed` to 0 | [TODO: whether reaching the group token cap blocks the group ([G-211](#g-211))] |
+| `budget` | `TokensUsed` to 0 | [TODO: whether reaching the group token cap blocks the group ([G-246](#g-246))] |
+| a `spending` pause | `Pause` cleared | Never; the group returns to `Prior` and the Resource Manager pauses it again if the ceiling still holds |
 
 A continue that is accepted returns the group to `Prior`, raises the epoch, enters the stage and publishes `group.continued`. A continue that matches nothing publishes `request.refused` with the reason, which wakes a waiting orchestrator.
 
 `run-continue` with no group continues every Paused and Blocked group of the run. A group in a working stage ignores it.
 
+#### Continuing a group with `run (id)`
+
+`komodo run (id)` continues a group from its saved State, wherever it stopped: after a stop, a crash, a block or a hand fix in its worktree. A group never skips Test and Review on the way to commit.
+
+1. The engine loads the group's record through the State Manager.
+2. A Done group is left alone and the reply says so.
+3. A Paused or Blocked group follows the table above and returns to `Prior`.
+4. A group saved in a working stage continues at that stage; a Build group with every task done goes on to Test and Review.
+5. A group whose stage, or whose `Prior`, is Commit re-enters Test and Review with the epoch raised (row 19). Its open Commit orders are dropped, since Commit runs again after approval.
+6. A group saved in Cleanup continues in Cleanup, because its work is already published.
+
 #### Crash recovery and restarting groups
 
-Which part restarts groups after a crash is [TODO: what survives a crash ([G-202](#g-202))]. Under every option, when a Runtime Manager starts for a run that already has group records, it runs the recovery pass before it accepts any new group. What starts a dead Runtime Manager without a person is [TODO: how long the Runtime Manager runs ([G-201](#g-201))].
+Recovery reads only the State Manager. The group loop saves a group's State before it acts on a change, so the saved State always reflects the last decided step. Nothing starts a dead engine by itself except the schedule queue; the next command starts a new engine, and `komodo run (id)` continues each group from its saved State. When a `run-start` names groups that have saved records, the recovery pass handles them before any new group starts.
 
 **📐 What the recovery pass does for each group**
 ```mermaid
@@ -5049,12 +5768,12 @@ flowchart TB
   T -->|"6 start"| TM["Task Manager"]
 ```
 
-1. It asks the State Manager to load each group of the run that is not Done. The State Manager returns the last saved State; events after that save are replayed only if a durable event record exists, which is [TODO: what survives a crash and who writes the durable event record ([G-202](#g-202))].
+1. It asks the State Manager to load each named group that is not Done. The State Manager returns the last saved State, which is all that recovery reads; the Metrics Service's event log is never used to recover.
 2. It calls `LeaseStore.Holder`, then `Grant` for each group. When another holder has the group, the group is Done with outcome `lost`, naming the holder.
-3. It reruns every open order under its key, so a commit or a stage entry happens once.
+3. It reruns every open order under its key, so a stage entry happens once. A group saved in Commit is the exception: it re-enters Test and Review ([Continuing a group with `run (id)`](#continuing-a-group-with-run-id)).
 4. It applies the dead-session rule below.
 5. It re-arms the timer of every Paused group; a timer already due fires at once.
-6. It starts a Task Manager for each group in a working stage and orders the stage again.
+6. It starts a Task Manager goroutine with `TaskGroups.Start` for each group in a working stage and sends `start` with the stage order again.
 
 **The dead-session rule.** One rule covers every session that was live at the crash, and the crash is never charged to `Attempts` or `Retries`:
 1. For each session the State shows as claimed with no `session.end`, the Runtime Manager saves `session.end` with reason `crash`, which releases its task.
@@ -5077,22 +5796,21 @@ sequenceDiagram
   participant L as Lease Manager
   R->>R: stop admitting groups and grants
   R->>T: cancel; sessions stop, terminate at 30 s, kill at 90 s
-  R->>T: save_work for each worktree
   R->>R: save every group State
   R->>L: revoke every lease
   R->>R: publish run-complete stopped
 ```
 
 1. The Runtime Manager starts no new group and grants no new session.
-2. It sends `OrderCancel` to every Task Manager. Each session is stopped with an interrupt, then the terminate signal `AgentStopGrace` later, then a whole-tree kill; the whole sequence is bounded by `ShutdownDeadline`, 90 seconds from the start.
-3. It orders the work of each worktree saved.
+2. It sends a `stop` command, from `OrderCancel`, to every Task Manager. Each session is stopped with an interrupt, then the terminate signal `AgentStopGrace` later, then a whole-tree kill; the whole sequence is bounded by `ShutdownDeadline`, 90 seconds from the start.
+3. Each Task Manager has already saved its finished tasks through the Commit Handler.
 4. It saves every group's State.
 5. Only then does it revoke the leases with reason `stop`, so no other process can open a group while this one still writes. The branches and worktrees stay.
 6. It publishes `run-complete` / `stopped`.
 
-A group keeps the stage it was in. A later `run-continue` for the run starts the recovery pass.
+A group keeps the stage it was in. A later `komodo run (id)` for the run starts the recovery pass.
 
-How `komodo stop` finds a live Runtime Manager, and what watches for one that hangs and kills its process tree first, is [TODO: how long the Runtime Manager runs and how a second command reaches a live run ([G-201](#g-201))].
+`komodo stop` dials the control socket and sends a `Request`; the engine runs `Manager.Stop` and publishes `run-stop`. While a group is Paused or Blocked its lease stays held and is renewed every 5 minutes until the stop. When the stop sequence ends and nothing else is live or queued, the engine exits. What watches an engine that stops answering and kills its process tree is [TODO: what watches an engine that stops answering and kills its process tree ([G-249](#g-249))].
 
 #### Timer extensions
 
@@ -5100,12 +5818,20 @@ A Task Manager sends `timer.extend` when a session nears its wall limit and its 
 
 #### Dependents, completion and the run's end
 
-1. A group reaches Done at `group.closed`; the pool slot returns and the Runtime Manager runs `Pick` again.
+1. A group reaches Done at `group.closed`; the pool slot returns, the Runtime Manager calls `LeaseStore.Release` and runs `Pick` again.
 2. A group starts once every dependency is Done. Done means the Commit Handler published the group and the Cleanup Handler closed it.
-3. Where a dependent cuts its branch from, and whether its dependency's pull request must be merged first, is [TODO: whether each group has its own pull request or groups land on an epic branch ([G-210](#g-210))].
+3. A dependent's branch is cut from its epic's branch `komodo/<epic>`, which holds every dependency that has landed. A dependency's pull request is not merged first: each epic has one pull request, opened when its last group lands and merged by a person.
 4. When every group is Done, the Runtime Manager publishes `run-complete` / `done`.
 5. When no group can run and at least one is Blocked, it publishes `run-failure` / `stalled`, listing each blocked group and its reason; the Error Handler and the CLI show it to the caller.
-6. Removing a group from a run, which blocks its dependents with `dependency`, depends on [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))].
+6. `komodo abandon (id)` drops a group for good: the Runtime Manager stops the group, the group is Done with outcome `abandoned` (row 20), the Cleanup Handler's `Discard` frees its resources, and each dependent blocks with `dependency`.
+
+#### Landing on an epic's branch
+
+Each epic has one shared branch, `komodo/<epic>`. Each group works on its own branch, `komodo/<epic>-<group>`. The Runtime Manager hands the Commit Handler the epic's `LandingPlan` and the Commit Handler does the rest:
+- It pushes each approved group onto the epic's branch, one group at a time per epic.
+- It rechecks the epic's branch after each landing; a failed recheck pauses landings on that epic until the recheck passes.
+- It opens one pull request for the epic when the last group of the plan's `order` lands, and a person merges it.
+Groups land in the order they are approved, which the plan's dependency order never contradicts, because a dependent cannot start before its dependencies are Done.
 
 ### 7.6 State
 
@@ -5128,7 +5854,12 @@ stateDiagram-v2
   Done --> [*]
 ```
 
-Rows 2, 12 and 14 to 16 are left off the drawing: any working stage, Paused and Blocked can enter Blocked (row 15), a lost lease ends a group from any stage (row 16), and Blocked can return to the stage it left.
+Rows 2, 12 and 14 to 20 are left off the drawing:
+- Any working stage, Paused and Blocked can enter Blocked (row 15), and Blocked can return to the stage it left.
+- A lost lease ends a group from any stage (row 16).
+- A plan pause reaches Paused by rows 17 and 18, the same Paused state as the drawing's row 9.
+- A group continued from Commit re-enters Test and Review (row 19).
+- `abandon` ends a group from any stage (row 20).
 
 Both tables below are one Go slice of `Transition`, whose `From`, `On` and `To` fields are the From, Input and To columns. For each input `Next` applies the first matching in-stage row, then the first matching stage-move row against the updated state; either may be absent. An input that matches neither is refused and logged, never dropped. Counter updates happen before any row.
 
@@ -5160,17 +5891,21 @@ type Transition struct {
 | 3 | Intake | `ready` | | Build | Epoch + 1; orders `enter_stage` Build at the first task not done; emits `stage.enter` |
 | 4 | Build | `stage.done` Build | Every task is done | Test and Review | Epoch + 1; `Restarts` cleared; orders `enter_stage` Test and Review on the group's tree; emits `stage.enter` |
 | 5 | Test and Review | `stage.done` | Tester and Reviewer both approved | Commit | Epoch + 1; orders `enter_stage` Commit; emits `stage.enter` |
-| 6 | Test and Review | `result.fail` | `Returns` under the limit; fingerprint and tree both differ from the last return | Build | `Returns` + 1; `FailureHash` and `ReturnTree` set; orders `cancel` for a live sibling, then `enter_stage` Build with the findings; emits `stage.enter` |
+| 6 | Test and Review | `result.fail` | `Returns` under the limit; fingerprint and tree both differ from the last return | Build | `Returns` + 1; `FailureHash` and `ReturnTree` set; orders `cancel` for a live sibling, then `enter_stage` Build with the findings; emits `stage.enter`. A failed mechanical check arrives here too, with its exact output as the findings |
 | 7 | Commit | `stage.done` | Published | Cleanup | Epoch + 1; orders `enter_stage` Cleanup; emits `stage.enter` |
-| 8 | Cleanup | `group.closed` | | Done | `Outcome` complete; returns the slot; closes the cache scope; emits `group.done` |
-| 9 | Build, Test and Review | `session.end` reason `paused`, or `session.request` with every allowed link limited | No allowed link left | Paused | `Prior` = stage; `Resume` added; `Pause` set; emits `group.paused` |
+| 8 | Cleanup | `group.closed` | | Done | `Outcome` complete; returns the slot; calls `LeaseStore.Release`; emits `group.done` |
+| 9 | Build, Test and Review | `session.end` reason `paused` | No allowed link left | Paused | `Prior` = stage; `Resume` added; `Pause` set; emits `group.paused` |
 | 10 | Paused | `timer.due` | Reason is not `pause_timeout` | `Prior` | Same epoch; orders `enter_stage` from `Resume` and orders owed restarts |
-| 11 | Paused | `timer.due` reason `pause_timeout` | `Pause.Since` plus `limits.pause_max_min` reached | Blocked | Orders `cancel` for a live sibling; `save_work` kept; emits `group.blocked` |
+| 11 | Paused | `timer.due` reason `pause_timeout` | `Pause.Since` plus `limits.pause_max_min` reached, and `Pause.Cause` is `provider` | Blocked | Orders `cancel` for a live sibling; the saved work is kept; emits `group.blocked` |
 | 12 | Paused | `continue` | Before the timer | `Prior` | As row 10; a refused attempt re-pauses by row 9 with `Since` kept |
 | 13 | Blocked | `continue` | The reason's reset rule is satisfied | `Prior` | Reset per the table in 7.5; Epoch + 1; emits `stage.enter`, `group.continued` |
-| 14 | Blocked | `scope.answer` | `Block.Reason` is `needs_scope` | Build | Approve adds paths to `ScopeAdded`; orders `scope` and `enter_stage` from `Resume`; Epoch + 1 |
+| 14 | Blocked | `scope.answer` | `Block.Reason` is `needs_scope`, or `wall` with approval | Build | Approve adds paths to `ScopeAdded`, or resets the working time for `wall`; orders `scope` and `enter_stage` from `Resume`; Epoch + 1 |
 | 15 | Any working stage, Paused | Any input in the block rows | See Block rows | Blocked | `Prior` = stage; orders `cancel` for every live session; `Blocks[reason]` + 1; emits `group.blocked` |
 | 16 | Any stage but Done | `lease.lost` | Another process holds the group | Done | `Outcome` lost; orders `cancel`; frees nothing, because the lease belongs to the other holder |
+| 17 | Build, Test and Review | `limit.pause` | No live session or running action | Paused | `Prior` = stage; `Pause` set from the input with `Until` = `reset_at` + 1 minute, and no `Until` for cause `spending`; orders `hold`; emits `group.paused` |
+| 18 | Build, Test and Review | `session.end` | `Pause.After` is set | Paused | `Prior` = stage; `Resume` added; `After` cleared; orders `hold`; emits `group.paused` |
+| 19 | Commit; Paused or Blocked with `Prior` Commit | `continue`, or the recovery pass | | Test and Review | Epoch + 1; open Commit orders dropped; orders `enter_stage` Test and Review on the group's tree; emits `stage.enter` |
+| 20 | Any stage but Done | `abandon` | | Done | `Outcome` abandoned; orders `cancel`; the Cleanup Handler's `Discard` frees the branch, worktree and sandbox; `LeaseStore.Release` ends the lease; dependents block `dependency`; emits `group.done` |
 
 #### Block rows
 
@@ -5185,15 +5920,16 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | `session.end` tester or reviewer without a result | Test and Review | The agent's `Restarts` passes its retries | `retries` |
 | `session.end` reason `billing` | Build, Test and Review | | `paid_refused` |
 | `session.end` reason `needs_scope`, or `scope.ask` | Build | The scope rules in 7.5 did not deny it | `needs_scope` |
-| `session.request` | Build, Test and Review | Every link is unavailable or unauthorized, none limited | `no_provider` |
+| `fault` | Build, Test and Review | Every link is unavailable or unauthorized, none limited | `no_provider` |
 | `fault` | Intake, Build, Test and Review | The brief exceeds half the context of every link | `context` |
 | `fault` | Intake | The lease, branch, worktree or sandbox could not be set up | `setup` |
 | `fault` | Commit | A push or pull request failed 3 times | `commit` |
 | `fault` | Commit | The branch conflicts with its base and one automatic merge did not resolve it | `merge_conflict` |
 | `fault` | Cleanup | Removal failed | `cleanup` |
 | Any input in Build | Build | `WallExtended` is set and `WallUsedS` reaches twice `limits.group_wall_min` | `wall` |
-| `session.end` | Build, Test and Review | `TokensUsed` reaches `limits.group_tokens` | `budget`, under [TODO: whether reaching the group token cap blocks the group ([G-211](#g-211))] |
-| A removal command | Any | A dependency group was removed from the run | `dependency`, under [TODO: the final command list beside the diagram's 12 ([G-204](#g-204))] |
+| `session.end` | Build, Test and Review | `TokensUsed` reaches `limits.group_tokens` | `budget`, under [TODO: whether reaching the group token cap blocks the group ([G-246](#g-246))] |
+| `abandon` of another group | Any working stage, Paused | A dependency group was abandoned | `dependency` |
+| `fault` | Test and Review | The Tester's reruns split once, or its second dispute stands | `flaky`, or `tester` |
 | `group.crash` | Any working stage, Paused | The group's goroutine panicked | `crash` |
 | A result that breaks its declared shape | Any working stage, Paused | Found by the group loop before the write | `contract` |
 | A refused save or a bad record | Any working stage, Paused | The State Manager refused | `state_invalid` |
@@ -5205,9 +5941,10 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | `session.start` | Build, Test and Review | Task `claimed` with its session; a fresh builder session started by a retry, timeout or idle stop adds 1 to `Attempts`; a restart after a crash adds nothing |
 | `session.end` builder | Build | Clears the task's session; `TokensUsed` grows by the session's usage; then the exit row below |
 | `task.done` | Build | Task `done`; `GateFails` reset |
-| `gate.fail` | Build | `GateFails` + 1 for the task; the third failure ends the session with reason `check_fail`, orders `save_work` and a retry |
+| `gate.fail` | Build | `GateFails` + 1 for the task; the third failure ends the session with reason `check_fail` and orders a retry |
 | `session.end` tester or reviewer, no result | Test and Review | `Restarts` + 1; orders a fresh session of the same agent on the group's tree while within its retries, or records the restart in `Owed` when the group is Paused; never a return |
 | `session.end` reason `paused` | Paused | Adds a `Resume` entry; `Pause.Until` takes the later time; `Pause.Refused` + 1 when the same session paused before |
+| `limit.pause` | Build, Test and Review | With a live session or running action: `Pause.After`, `Pause.Cause`, `Pause.Until` and `Pause.Link` set; no stage move until row 18 |
 | `timer.extend` | Build | Grants once per group: `WallExtended` set, orders `extend` |
 | `scope.ask` | Build | Denial rules of 7.5; sets `ScopeAsked` |
 | `request` identifiers | Any | Appended to `Requests`; an already-listed identifier is dropped |
@@ -5217,13 +5954,13 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 
 | Exit reason | Sets; orders; emits |
 |---|---|
-| `done` | Orders `save_work`; with every task done, row 4 moves the group; with a task not done, a retry |
-| `check_fail`, `no_result`, `schema_fail`, `refusals` | Orders `save_work`; a retry, which adds an attempt |
-| `timeout`, `idle` | Orders `save_work`; `Retries` + 1; a fresh session while within the builder's retries |
-| `provider` | Orders `save_work`; `Resume` set; orders the stage again on the next allowed link |
-| `paused` | Orders `save_work`; `Resume` set; row 9 |
-| `needs_scope` | Orders `save_work`; `Resume` set from the handle; the scope rules |
-| `billing`, `budget` | Orders `save_work`; the block rows |
+| `done` | With every task done, row 4 moves the group; with a task not done, a retry |
+| `check_fail`, `no_result`, `schema_fail`, `refusals` | A retry, which adds an attempt |
+| `timeout`, `idle` | `Retries` + 1; a fresh session while within the builder's retries |
+| `provider` | `Resume` set; orders the stage again on the next allowed link |
+| `paused` | `Resume` set; row 9 |
+| `needs_scope` | `Resume` set from the handle; the scope rules |
+| `billing`, `budget` | The block rows |
 | `cancelled`, `pause_timeout` | None; the cause already moved the group |
 | `crash` | None of its own; the dead-session rule |
 
@@ -5231,8 +5968,8 @@ The state of each holding state:
 
 | State | Waits on | Slot | Lease and worktree | Clocks | Ends by |
 |---|---|---|---|---|---|
-| Paused | `Pause.Until` | Pool slot returned | Kept, renewed | Stopped | The timer, `run-continue`, `pause_timeout` |
-| Blocked | A person or the orchestrator | Pool slot returned | Kept, renewed | Stopped | `run-continue`, `scope.answer` |
+| Paused | `Pause.Until` | Pool slot returned | Kept, renewed | Stopped | The timer, `run (id)`, `pause_timeout` for a provider pause |
+| Blocked | A person or the orchestrator | Pool slot returned | Kept, renewed | Stopped | `run (id)`, `scope.answer` |
 
 A group in a holding state still has its goroutine: it renews its lease every `LeaseRenewEvery` and waits for its timer and its commands.
 
@@ -5249,6 +5986,11 @@ A group in a holding state still has its goroutine: it renews its lease every `L
 8. A crash is never charged to `Attempts` or `Retries`.
 9. Waiting for a slot, a pause, a block and downtime never add to `WallUsedS`.
 10. Every loop has a counter, and only `Next` changes a counter.
+11. The engine exits only with no run live, no entry queued and no connection open.
+12. Only the engine creates or closes a cache, one per repository; every other part uses the handle it passes.
+13. A group's State is saved before the group acts on a change, so recovery reads only saved State.
+14. Every run in the engine draws from one active-group pool and one set of link slots.
+15. The Runtime Manager calls the Lease Manager's `Release` when a group closes.
 
 | Situation | Detected by | Action; bound | Final state |
 |---|---|---|---|
@@ -5260,16 +6002,20 @@ A group in a holding state still has its goroutine: it renews its lease every `L
 | Save refused by the State Manager | `Save` returns an error | Not applied | Blocked `state_invalid` |
 | Lease renewal refused | `Renew` returns the new holder | Cancel sessions; frees nothing | Done, outcome `lost` |
 | Lease renewal write fails | `Renew` returns an error | Retry at the next interval, inside the lease's life | Unchanged |
-| Provider limit with no link left | `session.end` or `session.request` | Pause until the reset; at `limits.pause_max_min` | Paused, then Blocked `pause_timeout` |
+| Provider limit with no link left | `session.end` reason `paused` | Pause until the reset; at `limits.pause_max_min` | Paused, then Blocked `pause_timeout` |
 | Return that changes nothing | Tree equals `ReturnTree` | Stop; 0 more | Blocked `flap` |
 | Returns spent | `Returns` at the limit | Stop | Blocked `returns` or `regression` |
 | Working time over twice the group wall | `WallUsedS` | Stop; the one extension is used | Blocked `wall` |
 | Session found dead after a crash | Recovery pass | The dead-session rule; 0 attempts charged | Group continues |
 | Sessions alive 90 seconds into a stop | The stop sequence | Whole-tree kill | Run stopped |
 | Dependency Blocked or Paused | The run's view | Dependents wait; unrelated groups run | Dependents not started |
-| Runtime process killed without a stop | Next `run-start` or `run-continue` | Recovery pass | Resumed |
+| Engine killed without a stop | The next command that starts an engine | `run (id)` runs the recovery pass from saved State | Resumed |
+| A socket file left by a dead engine | The new engine finds nothing answering | The file is removed and rebound | Engine serves |
+| A second engine starts | The bind finds an engine answering | The new process exits | One engine |
+| A request lands during the exit check | The listener is closed | Reply `engine_stopping`; the CLI starts a new engine | Request served |
+| A queued entry is overdue at engine start | The queue loop | Started at once | Run started |
 
-Process supervision of a Runtime Manager that hangs and what survives a crash are [TODO: how long the Runtime Manager runs ([G-201](#g-201))] and [TODO: what survives a crash ([G-202](#g-202))].
+A crash loses at most the last few events from the Metrics Service's event log, which is written after the broadcast, and never loses saved State. Watching a hung engine is [TODO: what watches an engine that stops answering and kills its process tree ([G-249](#g-249))].
 
 ### 7.8 Config
 
@@ -5283,11 +6029,11 @@ The Runtime Manager asks the Configuration Manager for these keys once, at run s
 | `limits.group_attempts` | integer | 6 (most 10) | Fresh builder sessions per group before the group blocks `attempts` |
 | `limits.group_wall_min` | integer | 60 | Minutes of counted Build working time; one 100% extension; `wall` at twice |
 | `limits.pause_max_min` | integer | 360 (most 1,440) | Longest a group stays Paused before it blocks `pause_timeout` |
-| `limits.link_sessions.<link>` | integer | 3; loopback links 1 (most 8) | Most concurrent sessions on one link; the link names are [TODO: which model links beta 6 supports ([G-213](#g-213))] |
+| `limits.link_sessions.<link>` | integer | Default and limit in [11.8](#118-config) | Most concurrent sessions on one link; the Task Manager's link choice enforces it |
 | `sandbox.max_mem_gb` | integer | Set by the Configuration Manager | Read here: the pool grows only while free memory covers one more |
 | agent `retries` | integer | Per agent in the registry | Read for the builder, reviewer and tester through `GetConfigItem` |
 
-`limits.group_tokens` is read here into `Limits` but owned by the [Resource Manager](#19-resource-manager). The defaults hold until the first measured runs show the Max five-hour window draining sooner ([G-07](#g-07)).
+The state folder holds `engine.sock` and `schedule.json`; neither has a setting. `limits.group_tokens` is read here into `Limits` but owned by the [Resource Manager](#19-resource-manager). The defaults hold until the first measured runs show the Max five-hour window draining sooner ([G-07](#g-07)).
 
 ### 7.9 Proof Cases
 
@@ -5305,6 +6051,13 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A slot wait, a Paused interval and a downtime gap add 0 to `WallUsedS`.
 - For each reason in the continue table, `Next` on `continue` resets exactly the named counters, and a second block of the same reason follows only when the cause remains.
 - A `continue` on `needs_scope` with no answer is refused and publishes `request.refused`.
+- `limit.pause` with no live session gives Paused with `Pause.Until` at `Until` plus 1 minute; with a live session it sets `Pause.After` and Paused follows at the session's end.
+- A Paused group with cause `plan_window` or `spending` ignores `limits.pause_max_min`; a `provider` pause blocks `pause_timeout` at it.
+- `continue` on a group whose stage or `Prior` is Commit goes to Test and Review, not Commit.
+- `abandon` ends any stage Done with outcome `abandoned` and blocks each dependent `dependency`.
+- A failed mechanical check returns the group to Build by row 6 with the output as findings, and orders no model session.
+- The landing plan lists each epic's groups with every group after its dependencies, ties by `Order`.
+- A `Request` and a `Reply` survive a JSON round trip; a bad line gives `bad_frame` and leaves the connection open.
 - `Fingerprint` ignores line numbers and gives the same hash for the same items in any order.
 
 **Component** (fake managers matching documented behaviour; no live provider)
@@ -5314,62 +6067,69 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A pause past `limits.pause_max_min` blocks `pause_timeout` and keeps the saved work.
 - With `limits.pool_max` 2 and 4 ready groups, 2 groups run and the rest wait; a group whose dependency is Blocked waits while an unrelated group runs.
 - A panic in one group blocks only that group `crash`; a second group keeps running.
-- `kill -9` with a builder live, then `run-continue`: one `session.end` reason `crash`, `Attempts` unchanged, the stage ordered again with the handle; with a failing handle, a fresh session and one `session.resume-lost`.
+- `kill -9` with a builder live, then `run (id)`: one `session.end` reason `crash`, `Attempts` unchanged, the stage ordered again with the handle; with a failing handle, a fresh session and one `session.resume-lost`.
 - `kill -9` between an order's start and done: the order runs again once by its key.
 - A run with all groups Blocked publishes one `run-failure` / `stalled` listing every reason.
 - A stop with a session that ignores the interrupt: the whole-tree kill lands at 90 seconds, the work is saved, and `run-complete` / `stopped` is published after the leases are revoked.
 - A scope request on another live group's file is denied without asking, sets `ScopeAsked`, and the group stays in Build; a second request on the same task is denied the same way.
 - A stale `result.fail` from a cancelled Tester after a return changes nothing.
 - `lease.lost` ends the group Done with outcome `lost` and releases nothing.
+- Two CLIs start together: one engine remains and both are served; a socket file left by a dead engine is removed and rebound.
+- With the last run finished and the last connection closed, the engine exits and removes the socket; a request during the exit gets `engine_stopping`.
+- Each of the four `task.Command` kinds (`start`, `pause`, `continue`, `stop`) reaches a fake Task Manager, and its `task.Message` returns on the reply channel and becomes the `Input` the mapping table names.
+- `--approve` on a blocked group sends `continue` with an `Answer` of `approve`; on a group that is not blocked the reply code is `not_blocked`.
+- Two runs in one engine with a pool of 2 start 2 groups between them, and a model session on a link at its `limits.link_sessions` count ends `paused` without a grant from the Runtime Manager.
+- A queue with one overdue and one future entry: the overdue run starts at engine start, the engine stays up for the future one, and `stop` removes it.
+- A crash after `--schedule` wrote the entry but before the run's first group record is saved: the next engine starts the run once, with no duplicate group.
+- `run --all` reads its groups only from the event's `data.groups`; `PlanSource.Specs` receives exactly those labels.
+- A repository's cache opens at that repository's first run, the same handle reaches the Context Manager and every Task Manager of its runs, and the cache closes when its last run ends.
+- Kill the engine after a `Save` and before its order: `run (id)` continues from the saved State and reads no event log.
+- A group saved in Commit with an open push order: `run (id)` runs Test and Review again before Commit.
+- A group with a live session when `PauseGroups` arrives finishes the session and pauses; at `Until` it resumes without a command.
+- `PauseGroups` for a `window_full` order leaves a group running when another link in its agent's chain is usable, and pauses it when none is.
+- A group paused at `spend_ceiling` has no timer and continues only with `komodo run (id)`; its lease is renewed every 5 minutes while paused.
+- A queued entry fires: the engine expands `target` with `Pending(epics, g, target)` for the entry's `root` into `data.groups`, and the `run-start` carries the `run_id` the queue reply returned.
+- Closing a group calls `LeaseStore.Release` once.
 
 ### 7.10 Open Gaps
 
 | Gap | Question | Closes by |
 |---|---|---|
-| [G-201](#g-201) | How long the Runtime Manager runs, how `stop` reaches it, who restarts it, and machine-wide pool sharing | Owner decision |
-| [G-202](#g-202) | What survives a crash and who writes the durable event record | Owner decision |
-| [G-204](#g-204) | How a scope answer is sent, and whether a removal command exists | Owner decision |
-| [G-206](#g-206) | Whether the `tester` and `flaky` block reasons exist | Owner decision |
-| [G-210](#g-210) | Where dependents branch from, and when `run-complete` fires | Owner decision |
-| [G-211](#g-211) | What happens at a plan limit, whether the group token cap blocks, and whether warnings slow the pool | Owner decision |
-| [G-213](#g-213) | Which model links exist for link slots | Owner decision |
-| [G-216](#g-216) | Who owns session slots, provider reset times, and install and update state | Owner decision |
-| [G-217](#g-217) | Event wiring the diagram leaves unlabelled | Owner decision |
-| [G-218](#g-218) | What triggers removing a dead run's leftover worktrees, branches and sandboxes after a crash | Depends on G-201 and G-202 |
-| [G-220](#g-220) | Saving work and git writes | Owner decision |
+| [G-218](#g-218) | What triggers removing a dead run's leftover worktrees, branches and sandboxes after a crash | Stated default |
+| [G-246](#g-246) | Whether reaching the group token cap blocks the group | Open design question |
+| [G-249](#g-249) | What watches an engine that stops answering and kills its process tree | Open design question |
 | [G-07](#g-07) | The real Max five-hour window against 3 sessions on one subscription link | Ledger measurement over the first 20 groups |
-
 ## 8. Cache Manager
 
-The Cache Manager is the local cache for things like frequent prompt responses, context, and other information needed to improve performance and token efficiency. It keeps results that are expensive to rebuild so the harness does not pay for them twice: pieces of context, results that depend only on exact inputs, and the plan that tells the model client which parts of a prompt the provider may remember. Every entry is found by a fingerprint of its inputs, so an entry is either exactly right or absent. The purpose of the subsystem and who it talks to are in [HLD 5.9](hld.md#59-cache-manager).
+The Cache Manager is the local cache for pieces of context and for prompt-cache markers. It keeps what is expensive to rebuild so the harness does not pay for it twice: pieces of context, and the plan that tells the model client which parts of a prompt the provider may remember. It never stores a model's answer, so a model call is always a real call. Every entry is found by a fingerprint of its inputs, so an entry is either exactly right or absent. The purpose of the subsystem and who it talks to are in [HLD 5.9](hld.md#59-cache-manager).
 
 ### 8.1 Scope and Concepts
 
 **Owns:**
 - The entry store: keys, the check that an entry is whole, the size cap and eviction.
+- The cache handle: the read and write view of an open cache that the Runtime Manager passes to the Context Manager and to each Task Manager.
 - The marker plan: which parts of a prompt carry a provider cache marker.
-- The hit and lookup counters that the Metrics Service reads.
 - The size rules of the language store; the Cache Manager owns the store itself, a default the design leaves unstated and [G-215](#g-215) confirms.
 
 **Does not own:**
 - What a skill, template or brief contains: [Context Manager](#6-context-manager).
 - Sending a request to a provider and writing its cache fields: the model client, [Task Manager](#11-task-manager).
 - The settings file that holds the size caps: [Configuration Manager](#3-configuration-manager).
-- Who calls the cache besides the Runtime Manager: [TODO: whether parts other than the Runtime Manager call the Cache Manager directly ([G-221](#g-221))].
-- The rules for reusing a stored prompt response: [TODO: rules for reusing a stored prompt response ([G-208](#g-208))].
+- Opening the cache: only the Runtime Manager creates or closes it ([chapter 7](#7-runtime-manager)).
 
 **Concepts**
 
 | Term | Meaning |
 |---|---|
-| Entry | One stored result: a byte string found by a namespace and a key |
-| Namespace | The family an entry belongs to, such as `context`; each family has its own folder or table |
+| Entry | One stored piece: a byte string found by a namespace and a key |
+| Namespace | The family an entry belongs to, such as `context`; each family has its own folder |
 | Key | A fixed-length fingerprint (SHA-256, a 256-bit hash of the inputs, written as 64 hexadecimal characters) of an entry's inputs and the binary version |
 | Exact fingerprint | A key built only from the inputs that decide the result, never from the clock |
 | Provider prompt cache | The provider's own short-lived memory of a prompt beginning; it lives at the provider, not here |
 | Marker | A flag in a request telling the provider to remember the prompt up to that point and bill later reads at a lower rate |
 | Marker plan | The ordered prompt layers and which of them carry a marker |
 | Language store | Downloaded dependencies and build output kept per repository; it is large and has its own cap |
+| Cache handle | The part of an open cache that other components hold: `Key`, `Get` and `Put`. Creating, clearing and closing stay with the Runtime Manager |
 
 #### What is cached
 
@@ -5377,24 +6137,22 @@ The Cache Manager is the local cache for things like frequent prompt responses, 
 |---|---|---|---|
 | `skills` | The skill index and each skill body | Binary version; body content hash | None |
 | `context` | File slices, signature trims, diffs, briefs | Git blob hash plus trim settings; commit pair; hash of every brief input | None |
-| `map` | The ranked repository map; the plan lint result | Tree hash; tree hash plus goal hash | None |
+| `map` | The ranked repository map | Tree hash plus goal hash | None |
 | `setup` | The repository profile: detected build, test, lint and format commands | Hash of the marker files such as `go.mod` | None |
-| `checks` | Command results on an exact tree | Tree hash, command, rerun number | [TODO: whether the free mechanical checks stay ([G-206](#g-206))] |
-| `review` | Findings of a read-only session | Prompt hash, model, diff | [TODO: rules for reusing a stored prompt response ([G-208](#g-208))] |
 | `prompt` | Marker plans | Agent role, config hash | None |
 
 - **Tree hash:** the git identifier of the full contents of a checkout; an unchanged tree has the same hash.
-- **Rerun number:** part of every `checks` key so the second run of a flaky test is a real second run and never a copy of the first.
-- **Builder results:** a builder session's response is never put in the cache, because it changes files.
-- **Dependency copies:** the old `setup` entry that held installed dependencies is too large for this store and lives in the language store.
+- **Model answers:** no model's answer is put in the cache, and no lookup returns one in place of a new call.
+- **Command results:** the free mechanical checks run every time, so no command result is cached.
+- **Dependency copies:** installed dependencies are too large for this store and live in the language store.
 
 ### 8.2 Package Layout
 
-The package is `internal/cache`. Today's code is `internal/core/cache.go` and its test file; both move here and the package name changes from `core` to `cache`.
+The package is `internal/cache`. It reuses the code of `internal/core/cache.go` and its test file, moved here and renamed from package `core` to `cache`. It uses only the Go standard library.
 
 ```
 internal/cache/
-├── cache.go      Cache, Get, Put, Stats, Clear, Key, eviction
+├── cache.go      Cache, Handle, Get, Put, Stats, Clear, Close, Key, eviction
 ├── entry.go      entry encode and verify, namespace and key checks
 ├── scan.go       directory scan, stale temporary file removal
 ├── marker.go     Layer, MarkerPlan, PlanMarkers
@@ -5403,8 +6161,8 @@ internal/cache/
 
 | File | Holds |
 |---|---|
-| `cache.go` | The `Cache` type and the four calls other parts use |
-| `entry.go` | `encodeEntry`, `decodeEntry`, `validNamespace`, `validKey` |
+| `cache.go` | The `Cache` type, the `Handle` interface and the calls on them |
+| `entry.go` | `encodeEntry`, `decodeEntry`, `validNamespace`, `validKey`; the JSON entry file |
 | `scan.go` | `scanCache`, `statsOf` |
 | `marker.go` | The marker plan and its computation |
 | `lang.go` | Language store trim to 80% of its cap |
@@ -5413,29 +6171,28 @@ internal/cache/
 
 | Flow | Starts in | Called by |
 |---|---|---|
-| Look up an entry | `Cache.Get` | Runtime Manager; [TODO: whether parts other than the Runtime Manager call the Cache Manager directly ([G-221](#g-221))] |
-| Store an entry | `Cache.Put` | The same callers after a miss |
-| Plan markers for a request | `PlanMarkers` | Runtime Manager; [TODO: whether parts other than the Runtime Manager call the Cache Manager directly ([G-221](#g-221))] |
-| Clear and count | `Cache.Clear`, `Cache.Stats` | Runtime Manager; [TODO: whether parts other than the Runtime Manager call the Cache Manager directly ([G-221](#g-221))] |
+| Look up an entry | `Handle.Get` | Context Manager; each Task Manager |
+| Store an entry | `Handle.Put` | The same callers after a miss |
+| Plan markers for a request | `PlanMarkers`, then `Handle.Put` in `prompt` | Each Task Manager's model client |
+| Open and close | `New`, `Cache.Close` | Runtime Manager only |
+| Clear and count | `Cache.Clear`, `Cache.Stats` | Runtime Manager only |
 
-The Runtime Manager builds the one `*Cache` of a repository at start and hands it to each part that reads it; no part opens a cache of its own.
+The Runtime Manager opens the one `*Cache` of a repository at that repository's first run and closes it when the repository's last run ends. When it starts the Context Manager and each Task Manager it passes them a `Handle` of that cache, and they read and write through it directly. No other part opens a cache of its own.
 
 ### 8.3 Data Model
 
 #### Namespace and key
 
 ```go
-// Namespace groups cache entries by the kind of result they hold.
+// Namespace groups cache entries by the kind of piece they hold.
 type Namespace string
 
 // The namespaces a cache holds.
 const (
 	NSSkills  Namespace = "skills"  // skill index and bodies
 	NSContext Namespace = "context" // file slices, trims, diffs and briefs
-	NSMap     Namespace = "map"     // repository map and plan lint
+	NSMap     Namespace = "map"     // repository map
 	NSSetup   Namespace = "setup"   // repository profile
-	NSChecks  Namespace = "checks"  // command results on an exact tree
-	NSReview  Namespace = "review"  // findings of read-only sessions
 	NSPrompt  Namespace = "prompt"  // marker plans
 )
 
@@ -5489,11 +6246,9 @@ type NamespaceStats struct {
 | `namespaces` | Only namespaces with at least one entry appear |
 | `hits`, `lookups` | Counted by `Get` since the cache was opened; the hit rate is `hits / lookups` |
 
-The hit and lookup counters are new; today's code counts entries and bytes only.
-
 #### Marker plan
 
-A provider can remember the start of a prompt if the request marks where that start ends. The old plan put up to 4 markers on layers that rarely changed. The plan here uses 2 fixed markers plus the provider's automatic marker, which moves to the newest message each turn so a growing conversation is remembered too. That is 3 of the 4 markers a request may carry.
+A provider can remember the start of a prompt if the request marks where that start ends. The plan uses 2 fixed markers plus the provider's automatic marker, which moves to the newest message each turn so a growing conversation is remembered too. That is 3 of the 4 markers a request may carry.
 
 ```go
 // Layer is one part of a prompt, in the order the parts are sent.
@@ -5538,21 +6293,29 @@ The provider's memory itself is at the provider. The cache keeps only the plan a
 
 #### Entry form of the current code
 
-The current code stores each entry as one file, which holds only if [TODO: files or an embedded database for the Runtime Cache ([G-212](#g-212))] picks plain files. Every option keeps the same calls, key, whole-entry check and eviction order; only the storage below changes.
+Each entry is one small JSON file. The cache is a folder of these files and uses only the Go standard library; it has no database.
 
 ```
-context/3f/a1/3fa1c9e0...e7        # <namespace>/<key[0:2]>/<key[2:4]>/<key>
+context/3f/a1/3fa1c9e0...e7.json   # <namespace>/<key[0:2]>/<key[2:4]>/<key>.json
 ```
 
-```
-8b1e...(64 hexadecimal characters: SHA-256 of the payload)
-<payload bytes>
+```go
+// entryFile is the JSON stored for one entry.
+type entryFile struct {
+	V       int    `json:"v"`       // schema version, 1
+	SHA256  string `json:"sha256"`  // 64 hexadecimal characters: SHA-256 of the payload bytes
+	Payload []byte `json:"payload"` // the payload; encoding/json writes it as base64
+}
 ```
 
-- **Header:** the first line is the SHA-256 of the payload; a read hashes the payload again and compares.
+```json
+{"v": 1, "sha256": "8b1e...", "payload": "eyJyYW5rIjogMX0="}
+```
+
+- **Whole-entry check:** a read decodes the file, hashes the payload again and compares it with `sha256`; a file that is not valid JSON fails the check.
 - **Last-read time:** the file's modification time; a hit sets it to now.
 - **Write:** a temporary file in the same folder, renamed into place, so a reader sees the old entry, the new one or none.
-- **Temporary files:** a file named `*.tmp-*` older than 1 hour is deleted by the next scan.
+- **Temporary files:** a file named `*.json.tmp-*` older than 1 hour is deleted by the next scan.
 
 ### 8.4 Interfaces
 
@@ -5560,39 +6323,51 @@ context/3f/a1/3fa1c9e0...e7        # <namespace>/<key[0:2]>/<key[2:4]>/<key>
 // ErrEntryTooLarge reports a Put whose entry alone exceeds the cache cap.
 var ErrEntryTooLarge = errors.New("cache entry larger than the cache cap")
 
-// New opens the cache of one repository at root for a binary version, creating root if needed.
+// ErrClosed reports a Put on a cache that the Runtime Manager has closed.
+var ErrClosed = errors.New("cache is closed")
+
+// Handle is what the Runtime Manager passes to the Context Manager and to each Task Manager.
+type Handle interface {
+	// Key hashes the version and inputs into an entry key.
+	Key(inputs ...string) Key
+	// Get returns the payload under key; a miss, a failed whole-entry check or an I/O error all return false.
+	Get(ns Namespace, key Key) ([]byte, bool)
+	// Put stores data under key atomically, then evicts least recently read entries until the cache fits its cap.
+	Put(ns Namespace, key Key, data []byte) error
+}
+
+// New opens the cache of one repository at root for a binary version, creating root if needed; only the Runtime Manager calls it.
 func New(root, version string, lim Limits) (*Cache, error)
 
-// Key hashes the version and inputs into an entry key.
-func (c *Cache) Key(inputs ...string) Key
-
-// Get returns the payload under key; a miss, a failed whole-entry check or an I/O error all return false.
-func (c *Cache) Get(ns Namespace, key Key) ([]byte, bool)
-
-// Put stores data under key atomically, then evicts least recently read entries until the cache fits its cap.
-func (c *Cache) Put(ns Namespace, key Key, data []byte) error
+// Handle returns the cache as a Handle, ready to pass to another component.
+func (c *Cache) Handle() Handle
 
 // Stats counts the entries held and the lookups served.
 func (c *Cache) Stats() (Stats, error)
 
 // Clear deletes every entry of the given namespaces, or of all when none is given, and returns what it removed.
 func (c *Cache) Clear(ns ...Namespace) (Stats, error)
+
+// Close stops the cache; later Get calls miss and later Put calls return ErrClosed. Only the Runtime Manager calls it.
+func (c *Cache) Close() error
 ```
 
 | Method | On failure |
 |---|---|
 | `New` | An empty root or an uncreatable folder returns an error; the harness runs without a cache |
 | `Get` | A bad entry is deleted and reported as a miss; the caller recomputes. The cache is never required |
-| `Put` | `ErrEntryTooLarge` for an entry over the cap; any other error is returned and the caller goes on without the entry |
+| `Put` | `ErrEntryTooLarge` for an entry over the cap; `ErrClosed` after `Close`; any other error is returned and the caller goes on without the entry |
 | `Stats` | A scan error is returned |
 | `Clear` | A removal error is returned with nothing partly reported |
+| `Close` | Cannot fail in a way a caller acts on; a second call returns nil |
 
 | Caller | Call | When |
 |---|---|---|
-| Runtime Manager | `Get`, `Put`, `PlanMarkers`, `Clear`, `Stats` | It manages the cache for each task group |
-| [TODO: whether parts other than the Runtime Manager call the Cache Manager directly ([G-221](#g-221))] | Not fixed | Not fixed |
+| Runtime Manager | `New`, `Handle`, `Stats`, `Clear`, `Close` | Opens a repository's cache at its first run, passes a handle to each part it starts, closes it when the repository's last run ends |
+| Context Manager | `Handle.Key`, `Get`, `Put` | Skills, context, map and setup pieces |
+| Task Manager | `Handle.Key`, `Get`, `Put`, `PlanMarkers` | Marker plans in `prompt` |
 
-The namespaces name the data a caller might read or write; which part is that caller is open under [G-221](#g-221).
+The Context Manager and each Task Manager never call `New`, `Stats`, `Clear` or `Close`; the interface they hold does not have them.
 
 ### 8.5 Behaviour
 
@@ -5611,7 +6386,7 @@ flowchart TD
 
 1. The caller builds the key from its inputs with `Key`. No input is a time.
 2. `Get` looks for the entry; an absent entry is a miss.
-3. A present entry is read whole.
+3. A present entry is read whole and decoded.
 4. A failed check deletes the entry and counts as a miss, so a wrong entry is never used.
 5. A good entry updates its last-read time and the hit counter.
 6. On a miss the caller computes the result and calls `Put`.
@@ -5658,10 +6433,10 @@ A cache that has never been used holds no index; the index is built on the first
 
 1. A key depends on the inputs and the binary version only; no key contains the clock.
 2. An entry that fails its check is deleted before the caller sees a miss.
-3. A builder result is never put in the cache.
+3. A model's answer is never put in the cache.
 4. An entry is stored whole or not at all.
 5. The cache never grows past its cap by more than one rescan interval of writes.
-6. No part reads the cache except the Runtime Manager and any caller that [G-221](#g-221) names.
+6. Only the Runtime Manager creates, clears or closes a cache; the Context Manager and each Task Manager hold a `Handle` that reads and writes.
 
 #### Failures
 
@@ -5670,7 +6445,7 @@ A cache that has never been used holds no index; the index is built on the first
 | Entry fails its check | `Get` | Delete it; the caller recomputes | Entry absent |
 | Entry larger than the cap | `Put` | Return `ErrEntryTooLarge` | Nothing stored |
 | Disk scan fails during eviction | `evict` | Return the error; the next `Put` retries the scan | Cache over cap until the retry |
-| A writer died mid-write | Scan finds `*.tmp-*` over 1 hour old | Delete it | No partial entry |
+| A writer died mid-write | Scan finds `*.json.tmp-*` over 1 hour old | Delete it | No partial entry |
 | Cache folder cannot be created | `New` | Return the error; the harness runs without a cache | No cache |
 
 ### 8.8 Config
@@ -5693,7 +6468,8 @@ Tests use a temporary directory; no network and no live provider.
 - `Put` then `Get` returns the payload; a different version misses.
 - A bad namespace or a key that is not 64 lowercase hexadecimal characters is refused.
 - `PlanMarkers` returns fixed markers on `repo` and `brief` and the automatic marker on; a layer missing from the input drops its marker.
-- The `checks` key differs when only the rerun number differs.
+- `Put` of a `checks` or `review` namespace is refused as a bad namespace.
+- An entry file is valid JSON with `v`, `sha256` and `payload`; changing one byte of `payload` fails the check.
 
 #### Component
 
@@ -5704,6 +6480,8 @@ Tests use a temporary directory; no network and no live provider.
 - Concurrent writers of one key leave one whole entry.
 - `Stats` on a missing root reports an empty cache; `Clear` for one namespace leaves the others.
 - A rename failure on `Put` keeps a valid existing entry.
+- A `Handle` given to a second goroutine reads and writes the same entries as the `Cache`; after `Close`, `Get` misses and `Put` returns `ErrClosed`.
+- A package that holds a `Handle` cannot call `Clear`, `Stats` or `Close` (a compile-time check).
 - A language store over its cap trims to about 80%, never deletes whole, and keeps a repository that holds a lease.
 - `Get` counts a hit and a lookup; a miss counts a lookup only.
 
@@ -5711,29 +6489,28 @@ Tests use a temporary directory; no network and no live provider.
 
 | Gap | Question |
 |---|---|
-| [G-206](#g-206) | Whether the free mechanical checks stay, which decides whether `checks` is used |
-| [G-208](#g-208) | Rules for reusing a stored prompt response, which decide `review` |
-| [G-221](#g-221) | Whether parts other than the Runtime Manager call the Cache Manager directly |
-| [G-212](#g-212) | Files or an embedded database for the Runtime Cache |
 | [G-215](#g-215) | Confirms that the Cache Manager owns the language and build caches, which the design names no owner for |
 
 ## 9. Lease Manager
 
-The Lease Manager keeps the lease registry, the single source of truth for which task group owns which branch and which worktree (a private git checkout where one group works), across all groups and runs on a machine. It controls access to them, revokes leases and times them out. It performs no git writes; the Runtime Manager is its caller. The purpose of the subsystem and who it talks to are in [HLD 5.10](hld.md#510-lease-manager).
+The Lease Manager keeps the lease registry, the single source of truth for which task group owns which branch and which worktree (a private git checkout where one group works), across all groups and runs on a machine. It controls access to them, revokes leases, times them out and releases a lease when its group closes. It performs no git writes; the Runtime Manager is its caller for grants, renewals, revocations and releases. The purpose of the subsystem and who it talks to are in [HLD 5.10](hld.md#510-lease-manager).
 
 ### 9.1 Scope and Concepts
 
 **Owns:**
-- The lease registry: one record per task group, the single source of truth for branch and worktree ownership across all groups and runs on a machine.
+- The lease registry: one JSON file per task group plus one lock file per lease, the single source of truth for branch and worktree ownership across all groups and runs on a machine.
 - Granting, renewing, revoking and timing out leases.
+- Releasing a lease when its group closes. Paused groups keep their leases.
 - The fence number, a counter in each record that rises on every grant, takeover and revocation.
 - Answering "is this group still the owner" when asked.
 
 **Does not own:**
-- Creating a group's branch and worktree, saving finished work, releasing the lease after cleanup, and committing task lists: [TODO: whether finished tasks are saved before approval and by whom, who creates a group's branch and worktree, who releases the lease after cleanup, and who commits task lists ([G-220](#g-220))].
+- Creating a group's branch and worktree: [Task Manager](#11-task-manager).
+- Saving finished work: the Task Manager asks the [Commit Handler](#15-commit-handler) for a local commit after each finished task.
+- Committing the Intake Handler's task lists: [TODO: who commits the Intake Handler's task lists ([G-226](#g-226))].
 - Any git write. The Lease Manager never runs `git commit`, `git push` or `git worktree`.
 - Removing a group's branches and worktrees: [Cleanup Handler](#16-cleanup-handler).
-- Pushing, pull requests and what the branch is named: [Commit Handler](#15-commit-handler); the naming rule waits on [TODO: pull request per group or per epic ([G-210](#g-210))].
+- Pushing each approved group onto its epic's shared branch, `komodo/<epic>`, and opening the epic's pull request: [Commit Handler](#15-commit-handler). A lease names only the group's own branch, `komodo/<epic>-<group>`; the epic branch is not leased.
 - When to renew, whom to revoke, and when to run the sweep: [Runtime Manager](#7-runtime-manager); the sweep trigger waits on [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))].
 - A group's runtime state, which only carries a copy of the fence: [State Manager](#10-state-manager).
 - Agent permissions inside the worktree: [Task Manager](#11-task-manager).
@@ -5749,6 +6526,8 @@ The Lease Manager keeps the lease registry, the single source of truth for which
 | Revocation | The Lease Manager ending a live holder's lease on the Runtime Manager's order |
 | Stalled holder | A holder that stopped for a while and wakes after its lease passed to someone else |
 | Repo id | The normalised origin URL, or the git common directory path when there is no remote |
+| Lock file | A file created exclusively beside a lease's record for the length of one write, so two runs never write one lease at once |
+| Stale lock | A lock file older than the lock timeout, left behind by a process that died mid-write |
 
 **📐 How does a lease record relate to the group's checkout?**
 ```mermaid
@@ -5773,6 +6552,7 @@ The package is `internal/lease`. It holds the registry and no git code.
 internal/lease/
 ├── manager.go    Manager and the calls other parts use
 ├── registry.go   Registry interface and Record
+├── files.go      file registry: JSON records and lock files
 ├── lease.go      Lease, Fence, liveness rule, errors
 └── sweep.go      registry sweep
 ```
@@ -5780,15 +6560,16 @@ internal/lease/
 | File | Holds |
 |---|---|
 | `manager.go` | `New`, `Grant`, `Renew`, `Revoke`, `Holder`, `IsOwner`, `Release` |
-| `registry.go` | The storage seam the registry form plugs into |
+| `registry.go` | The storage seam the file registry implements |
+| `files.go` | `FileRegistry`: one JSON file and one lock file per lease, safe writes, stale-lock replacement |
 | `lease.go` | The `Lease` value and the rule for whether it is live |
 | `sweep.go` | `Sweep` |
 
-On disk this chapter writes under the machine folder `~/.komodo/` (on Windows `%LOCALAPPDATA%\komodo`). The registry form is [TODO: files or an embedded database for the Lease Registry ([G-212](#g-212))].
+On disk this chapter writes under the machine folder `~/.komodo/`. The registry is a folder of small JSON files, one record per lease, with a lock file beside each record while it is written. It uses the standard library only.
 
 ```
-~/.komodo/
-└── (registry, form per G-212)
+~/.komodo/leases/<repo-id>/<group-id>.json   the lease record
+~/.komodo/leases/<repo-id>/<group-id>.lock   present only while a write is in progress
 ```
 
 **Entry points**
@@ -5799,7 +6580,7 @@ On disk this chapter writes under the machine folder `~/.komodo/` (on Windows `%
 | Renew | `Manager.Renew` | Runtime Manager, every 5 minutes while the group is held |
 | Revoke | `Manager.Revoke` | Runtime Manager, on a stop, a group timeout or a stalled holder |
 | Ask whether a lease still owns the group | `Manager.IsOwner` | Any part that asks |
-| Release a lease after cleanup | `Manager.Release` | [TODO: who releases the lease after cleanup ([G-220](#g-220))] |
+| Release a lease | `Manager.Release` | Runtime Manager, when the group closes |
 | Registry sweep | `Manager.Sweep` | [TODO: what triggers the sweep ([G-218](#g-218))] |
 
 ### 9.3 Data Model
@@ -5808,12 +6589,13 @@ On disk this chapter writes under the machine folder `~/.komodo/` (on Windows `%
 
 ```go
 const (
-	LeaseExpiry = 2 * time.Hour // age of the last renewal after which a lease on another host counts as dead
-	StaleSuffix = ".stale-"     // a record renamed aside by a file registry is <path>.stale-<time>
+	LeaseExpiry        = 2 * time.Hour    // age of the last renewal after which a lease on another host counts as dead
+	DefaultLockTimeout = 30 * time.Second // age after which a lock file is stale; the key lease.lock_timeout_s overrides it
+	LockSuffix         = ".lock"          // a lease's lock file is <group-id>.lock beside its record
 )
 ```
 
-The renewal period, 5 minutes, belongs to the Runtime Manager ([chapter 7](#7-runtime-manager)). None of these values has a configuration key.
+The renewal period, 5 minutes, belongs to the Runtime Manager ([chapter 7](#7-runtime-manager)). `LeaseExpiry` has no configuration key; the lock timeout has one, in [9.8](#98-config).
 
 #### Lease
 
@@ -5853,7 +6635,7 @@ type Lease struct {
   "repo": "github.com/acme/shop",
   "group": "0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
-  "branch": "komodo/tg-1-2",
+  "branch": "komodo/ep-1-tg-1.2",
   "worktree": "/Users/dev/.komodo/wt/github.com-acme-shop/0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "pid": 48213,
   "proc_start": "2026-10-14T09:12:40Z",
@@ -5878,7 +6660,7 @@ type Lease struct {
 | `rev` | Every registry write names the `rev` it read; a stale `rev` is refused |
 | `taken_at`, `renewed_at` | RFC 3339 in UTC to the second; renewal rewrites `renewed_at` only |
 
-The branch name is chosen by the caller; its rule waits on [TODO: pull request per group or per epic ([G-210](#g-210))].
+The branch name follows `komodo/<epic>-<group>`, and the caller of `Grant` passes it in. The record names the group's own branch only; the epic's shared branch, `komodo/<epic>`, has no lease.
 
 #### Liveness
 
@@ -5894,7 +6676,7 @@ func (l Lease) Live(now time.Time, host string, alive ProcessCheck) bool
 #### Registry seam
 
 ```go
-// Registry is the storage of lease records; every option for its form implements these five calls.
+// Registry is the storage of lease records; the file registry implements these five calls.
 type Registry interface {
 	Create(ctx context.Context, l Lease) error
 	Get(ctx context.Context, repo, group string) (Lease, error)
@@ -5911,7 +6693,9 @@ type Registry interface {
 | `Delete` | Removes the record only if `rev` is current |
 | `Get`, `List` | Return whole records; `ErrNotFound` for an absent key |
 
-Two runs racing for one stale lease both call `Swap` with the `rev` they read; exactly one succeeds. This is the same rule under files and under a database, and renewal uses the same `Swap`, so a renewal after a takeover fails instead of overwriting the new holder.
+Two runs racing for one stale lease both call `Swap` with the `rev` they read; exactly one succeeds. Renewal uses the same `Swap`, so a renewal after a takeover fails instead of overwriting the new holder.
+
+The file registry takes a lock file for the length of every `Create`, `Swap` and `Delete`; [File registry writes](#file-registry-writes) lists the steps.
 
 #### Requests and results
 
@@ -5943,9 +6727,9 @@ type SweepReport struct {
 
 #### Events
 
-The Lease Manager returns errors and publishes nothing; the Runtime Manager publishes the facts. The old names are listed so [chapter 4](#4-event-bus) can map them.
+The Lease Manager returns errors and publishes nothing; the Runtime Manager publishes the facts under these names, which [chapter 4](#4-event-bus) maps to bus events.
 
-| Old name | When |
+| Name | When |
 |---|---|
 | `lease.taken` | A grant or takeover succeeded |
 | `lease.lost` | A renewal or ownership check found that another run holds the group |
@@ -5974,6 +6758,9 @@ func (e HeldError) Unwrap() error { return ErrLeased }
 #### Manager
 
 ```go
+// NewFileRegistry opens the folder of JSON records and lock files; lockTimeout is the age at which a lock is stale.
+func NewFileRegistry(root string, lockTimeout time.Duration) *FileRegistry
+
 // New opens the lease manager over a registry and a process check.
 func New(home string, reg Registry, alive ProcessCheck) (*Manager, error)
 
@@ -6010,7 +6797,7 @@ func (m *Manager) Sweep(ctx context.Context, repo string) (SweepReport, error)
 |---|---|---|
 | Runtime Manager | `Grant`, `Renew`, `Revoke`, `Holder`, `IsOwner` | Group start, every 5 minutes, stop or timeout, any command that touches a worktree |
 | Any part | `IsOwner` | When it needs to know the group is still owned |
-| [TODO: who releases the lease after cleanup ([G-220](#g-220))] | `Release` | After cleanup |
+| Runtime Manager | `Release` | When the group closes |
 | [TODO: what triggers the sweep ([G-218](#g-218))] | `Sweep` | Not fixed |
 
 Agents never call the Lease Manager and never run git.
@@ -6033,7 +6820,7 @@ flowchart TD
 3. A record whose holder is live (see [Liveness](#93-data-model)) returns `HeldError` naming it.
 4. A dead record: `Swap` it, naming the `rev` read, into a `held` record with the fence raised by 1. Only one taker succeeds; the loser gets `ErrStaleRev`, rereads and finds a live holder.
 
-Creating the branch and worktree the record names is [TODO: who creates a group's branch and worktree ([G-220](#g-220))].
+The Task Manager creates the branch and worktree the record names, after `Grant` returns. The Lease Manager never creates them.
 
 #### The first record carries the right fence
 
@@ -6050,6 +6837,13 @@ Creating the branch and worktree the record names is [TODO: who creates a group'
 4. `Revoke` swaps the record to `revoked` and raises the fence by 1, so the old holder is no longer the owner.
 5. A group with a revoked lease is granted again with `Grant`.
 
+#### Paused groups
+
+1. When a plan window runs out, the Runtime Manager pauses the affected groups after their current step.
+2. A paused group keeps its lease. Neither `Revoke` nor `Release` is called for it.
+3. The Runtime Manager keeps renewing the lease every 5 minutes, so a pause longer than `LeaseExpiry` never makes the holder stalled.
+4. The group resumes under the same lease and the same fence.
+
 #### Ownership check
 
 1. `IsOwner` reads the record for the lease's repo and group.
@@ -6060,7 +6854,7 @@ Creating the branch and worktree the record names is [TODO: who creates a group'
 
 1. `Release` deletes the record with `Delete`, naming the `rev` read.
 2. A later `Grant` of the same group creates a new record at fence 1.
-3. Who calls it is [TODO: who releases the lease after cleanup ([G-220](#g-220))].
+3. The Runtime Manager calls it when the group closes, after the Cleanup Handler has reported the group closed.
 
 #### Registry sweep
 
@@ -6069,11 +6863,21 @@ Creating the branch and worktree the record names is [TODO: who creates a group'
 3. The sweep never touches a live lease.
 4. Removing the leftover worktrees of a dead run is [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))].
 
-A checkout the Tester might own waits on [TODO: where builder and tester commands run ([G-205](#g-205))].
+#### File registry writes
+
+1. Create `<group-id>.lock` exclusively, writing the process id and the time into it. Exclusive creation fails when the file exists.
+2. A lock younger than the lock timeout is held by a live writer: wait and try again until it is gone or has aged past the timeout.
+3. A lock older than the timeout is stale: delete it and go back to step 1.
+4. With the lock held, read the record and apply the call's rule: `Create` needs no record, `Swap` and `Delete` need the named `rev` to be current.
+5. Write the new record to `<group-id>.json.tmp-<pid>`, sync the file, rename it over `<group-id>.json` and sync the folder.
+6. Delete the lock.
+
+A crash between steps 1 and 6 leaves a lock, which expires after the timeout, and a record that is whole, old or new, because the rename is atomic. `Get` and `List` take no lock.
 
 #### Concurrency and locking
 
-- Two processes agree through `Registry.Create` and `Swap`; no in-memory lock crosses processes.
+- Two processes agree through the lock file and the `rev` check of `Create` and `Swap`; no in-memory lock crosses processes.
+- A lock left by a crash blocks one lease for at most the lock timeout.
 - Inside one process a mutex guards each group, so a `Renew` and an `IsOwner` of one group never interleave.
 
 ### 9.6 State
@@ -6096,7 +6900,7 @@ stateDiagram-v2
   Held --> Absent: Release
 ```
 
-After each move, `Held` means exactly one run is the owner, with the current fence.
+After each move, `Held` means exactly one run is the owner, with the current fence. A paused group stays in `Held`.
 
 ### 9.7 Invariants and Failures
 
@@ -6108,6 +6912,8 @@ After each move, `Held` means exactly one run is the owner, with the current fen
 4. The Lease Manager performs no git write; agents never touch git.
 5. A same-host lease with a live holder process is never taken over because of its age.
 6. `IsOwner` writes nothing.
+7. A paused group keeps its lease until the group closes.
+8. A lock file is held only for the length of one write, and a stale one is replaced.
 
 #### Failures
 
@@ -6120,10 +6926,16 @@ After each move, `Held` means exactly one run is the owner, with the current fen
 | Stalled holder wakes after takeover | `IsOwner` or `Renew` | `false` or `ErrLeaseLost` | Stale run stops |
 | Branch name already used by another group | Step 1 of the grant | `ErrBranchTaken` | Absent |
 | Clone path gone | Sweep | Delete the record | Absent |
+| Writer died holding a lock | Lock older than the lock timeout | The next writer deletes the lock and writes | Record whole |
+| Group paused at a limit | The Runtime Manager's pause | The lease stays held and is renewed | Held |
 
 ### 9.8 Config
 
-The Lease Manager owns no configuration key. The expiry and renewal period are constants in [Constants](#93-data-model).
+The Lease Manager owns one configuration key. The expiry and renewal period are constants in [Constants](#93-data-model).
+
+| Key | Kind | Default | Meaning |
+|---|---|---|---|
+| `lease.lock_timeout_s` | int | 30 | Age in seconds after which a lease's lock file is stale and the next writer deletes it |
 
 ### 9.9 Proof Cases
 
@@ -6141,43 +6953,46 @@ Tests use a temporary directory; no network, no git and no live provider.
 - `IsOwner` returns true for the lease that `Grant` returned.
 - `ErrBranchTaken` when a second group names a live group's branch.
 - The sweep deletes a record whose clone is gone and never touches a live lease.
+- A lock file older than `lease.lock_timeout_s` is deleted by the next writer, and the write succeeds.
+- A lock file younger than the timeout makes a second writer wait; it writes only after the first deletes the lock.
+- A write killed after step 5 and before step 6 leaves a whole record and a lock that expires.
+- A paused group's lease stays `held`, and `Renew` keeps succeeding while it is paused.
+- `Release` deletes the record, and a later `Grant` of the same group starts again at fence 1.
 
 ### 9.10 Open Gaps
 
 | Gap | Question |
 |---|---|
-| [G-205](#g-205) | Where test commands run, and whether the Tester has a checkout of its own |
-| [G-210](#g-210) | Branch naming and whether a branch outlives its group |
-| [G-212](#g-212) | Files or an embedded database for the Lease Registry |
 | [G-218](#g-218) | What triggers removing a dead run's leftovers |
-| [G-220](#g-220) | Saving work and git writes: who saves finished tasks, creates branches and worktrees, releases the lease, commits task lists |
+| [G-226](#g-226) | Who commits the Intake Handler's task lists |
 
 ## 10. State Manager
 
-The State Manager is the one place a task group's runtime state is read and written: its stage, the counters that bound its retries and time, its blocks and its progress. It checks every record against one schema before the record reaches disk, writes it whole or not at all, and sets aside a damaged record instead of guessing at repairs. The purpose of the subsystem and who it talks to are in [HLD 5.11](hld.md#511-state-manager).
+The State Manager is the one place a task group's runtime state is read and written: its stage, the counters that bound its retries and time, its blocks and its progress. It checks every record against one schema before the record reaches disk, writes it whole or not at all, and sets aside a damaged record instead of guessing at repairs. It is the only record that recovery reads, and the Runtime Manager saves a group's state through it before the Runtime Manager acts. It also stores the machine-wide records beside the group records, under the same checks and safe writes. The purpose of the subsystem and who it talks to are in [HLD 5.11](hld.md#511-state-manager).
 
 ### 10.1 Scope and Concepts
 
 **Owns:**
 - The schema of a task group's runtime state record and the checks run on every write and read.
-- Atomic writes, the revision check, and the group record's file.
-- Quarantine of a damaged record.
-- Migration of an older record version.
-- The generated schema file.
+- Atomic writes, the revision check, the group record's file, and quarantine of a damaged record.
+- Migration of an older record version, and the generated schema files.
+- The machine-wide records: provider reset times, link session counts, install and update state, and the schedule queue.
+- Being the only record recovery reads: a group continues from its saved state.
 
 **Does not own:**
-- Leases, the fence and the branch and worktree names the lease records: [Lease Manager](#9-lease-manager). Leases are no longer a State Manager kind; the record keeps only a copy of the fence.
-- Cached results: [Cache Manager](#8-cache-manager). The cache is no longer a State Manager kind.
+- Leases, the fence and the branch and worktree names the lease records: [Lease Manager](#9-lease-manager). The record keeps only a copy of the fence.
+- Cached results: [Cache Manager](#8-cache-manager).
 - The event shape and delivery: [Event Bus](#4-event-bus).
-- When a stage changes, when a counter rises and which bound applies: [Runtime Manager](#7-runtime-manager), the only caller that writes.
-- The durable event record that recovery and replay trust: [TODO: what survives a crash ([G-202](#g-202))].
-- Machine-wide records of the earlier design (session slots, provider reset times, install and update state): [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))].
+- The event log. The State Manager keeps none; the [Metrics Service](#18-metrics-service) appends every event to its own log, which replay and metrics read.
+- When a stage changes, when a counter rises and which bound applies: [Runtime Manager](#7-runtime-manager), the only caller that writes a group record.
+- What a machine-wide record says: the Resource Manager, the model client and the CLI decide the contents and reach the file only through the State Manager.
 
 **Concepts**
 
 | Term | Meaning |
 |---|---|
 | Group record | The runtime state of one task group: a header and a body, stored as one JSON file |
+| Machine-wide record | A JSON file under `~/.komodo/state/` that belongs to the machine, not to one group: a header and a body |
 | Header | Version, group, revision, time and writer, set by the manager |
 | Revision (`rev`) | A number that rises by 1 on every write; a writer names the revision it last read |
 | Stage | Which step of the pipeline the group is in, or that it is paused or blocked |
@@ -6202,6 +7017,19 @@ flowchart LR
 4. The Runtime Manager reads the record and the counters it needs.
 5. A record that fails a read check is set aside, never repaired.
 
+**📐 How does a machine-wide record reach disk?**
+```mermaid
+flowchart LR
+  RES["Resource Manager"] -->|"1 LoadMachine, SaveMachine"| SM["State Manager"]
+  MC["Model client"] -->|"1 LoadMachine, SaveMachine"| SM
+  CLI["CLI"] -->|"2 LoadMachine, SaveMachine"| SM
+  SM -->|"3 atomic write"| F[("~/.komodo/state/<br/>providers.json, update.json,<br/>install.json, schedule.json")]
+```
+
+1. The Resource Manager and the model client read and write `providers.json` through the State Manager.
+2. The CLI reads and writes `update.json`, `install.json` and `schedule.json` through it.
+3. The manager validates the record and writes it whole, as it does a group record.
+
 ### 10.2 Package Layout
 
 The package is `internal/state`. It imports no other Komodo package.
@@ -6212,8 +7040,9 @@ internal/state/
 ├── record.go     Header, Record, GroupState and its parts
 ├── validate.go   enum, invariant, writer and revision checks
 ├── store.go      atomic write, read, quarantine
+├── machine.go    machine-wide records and their calls
 ├── migrate.go    version steps
-└── schema.go     generates embed/state.schema.json
+└── schema.go     generates embed/state.schema.json and embed/machine.schema.json
 ```
 
 | File | Holds |
@@ -6222,16 +7051,21 @@ internal/state/
 | `record.go` | The structs of the group record |
 | `validate.go` | `Validate` and the errors it returns |
 | `store.go` | Temporary file, sync, rename; read; `.bad-<time>` |
+| `machine.go` | `Machine`, `NewMachine`, `LoadMachine`, `SaveMachine`, the four machine-wide bodies |
 | `migrate.go` | `Migration`, `RegisterMigration`, `ErrNewerVersion` |
 | `schema.go` | The schema generator run by `go generate` |
 
-`embed/state.schema.json` is generated at build; the build fails when the file disagrees with the Go structs.
+`embed/state.schema.json` and `embed/machine.schema.json` are generated at build; the build fails when a file disagrees with the Go structs.
 
-The group record is one file per group under the repository's runtime folder. The folder is fixed in [chapter 20](#20-data-locations-and-data-flow).
+The group record is one file per group under the repository's runtime folder, and the machine-wide records are four files under the machine folder. The folders are fixed in [chapter 20](#20-data-locations-and-data-flow).
 
 ```
 <git-common-dir>/komodo/runs/<group-id>/state.json
 <git-common-dir>/komodo/runs/<group-id>/state.json.bad-20261014T091405Z   (a quarantined record)
+~/.komodo/state/providers.json
+~/.komodo/state/update.json
+~/.komodo/state/install.json
+~/.komodo/state/schedule.json
 ```
 
 **Entry points**
@@ -6240,9 +7074,10 @@ The group record is one file per group under the repository's runtime folder. Th
 |---|---|---|
 | A group starts | `Manager.Create` | Runtime Manager, with the fence from the Lease Manager |
 | A change is saved | `Manager.Save` | Runtime Manager |
-| A group resumes | `Manager.Load` | Runtime Manager |
-| A read that must not write | `Manager.Peek` | CLI commands that show a run |
+| A group continues after a stop or a crash | `Manager.Load` | Runtime Manager, on `komodo run (id)` |
+| A read that must not write | `Manager.Peek` | The engine, for the `status` request |
 | A counter is read | `Manager.Counters` | Runtime Manager |
+| A machine-wide record is read or saved | `LoadMachine`, `SaveMachine` | Resource Manager, model client, CLI, Runtime Manager |
 | An older record is read | `Migrate` | `Load`, `Peek` |
 
 ### 10.3 Data Model
@@ -6287,7 +7122,7 @@ const (
 	StageCommit     Stage = "commit"      // the Commit Handler publishes
 	StageCleanup    Stage = "cleanup"     // the Cleanup Handler frees resources
 	StageDone       Stage = "done"        // the group is closed
-	StagePaused     Stage = "paused"      // a holding state; what puts a group here is [TODO: what the Runtime Manager does when a provider refuses for a plan limit ([G-211](#g-211))]
+	StagePaused     Stage = "paused"      // a plan window or a spending ceiling is reached; the lease is kept and the group resumes when the window resets
 	StageBlocked    Stage = "blocked"     // needs a person or the orchestrator
 )
 
@@ -6297,6 +7132,8 @@ type GroupState struct {
 	Group       string        `json:"group"`        // task group id
 	Stage       Stage         `json:"stage"`        // current stage
 	Prior       Stage         `json:"prior"`        // the working stage a paused or blocked group left
+	Epoch       uint32        `json:"epoch"`        // rises each time the group enters a stage; an input from an older epoch is stale
+	Outcome     string        `json:"outcome"`      // set in done: complete, lost or abandoned
 	Fence       uint64        `json:"fence"`        // the Lease Manager's fence for this holder; never zero
 	ConfigHash  string        `json:"config_hash"`  // SHA-256 of the settings pinned at run start
 	Counters    Counters      `json:"counters"`     // numbers the Runtime Manager reads
@@ -6307,6 +7144,8 @@ type GroupState struct {
 	Pause       PauseState    `json:"pause"`        // set while the group is paused
 	Block       BlockState    `json:"block"`        // set while the group is blocked
 	FailureHash string        `json:"failure_hash"` // fingerprint of the failure behind the last return to build
+	ReturnTree  string        `json:"return_tree"`  // tree hash tested at the last return; the same tree again is a flap
+	Owed        []string      `json:"owed"`         // agents whose restart is owed until a pause ends
 	Requests    []string      `json:"requests"`     // ids of requests applied, newest last, at most 64
 	ScopeAdded  []string      `json:"scope_added"`  // file patterns the orchestrator approved for the group
 	LastEventAt time.Time     `json:"last_event_at"` // time of the previous applied change, for wall time
@@ -6360,10 +7199,12 @@ type OpenAction struct {
 	ID   string          `json:"id"`   // fingerprint of the order, so a rerun is recognised
 	Kind string          `json:"kind"` // the kind of action
 	Args json.RawMessage `json:"args"` // arguments of that kind
+	Started bool         `json:"started"` // the action began; a rerun after a crash skips an action whose id is done
 }
 
 // ResumeRef is how an interrupted session can be continued.
 type ResumeRef struct {
+	Agent   string `json:"agent,omitempty"`  // the agent whose session halted
 	Session string `json:"session,omitempty"`
 	Handle  string `json:"handle,omitempty"` // the provider's conversation handle
 	Link    string `json:"link,omitempty"`   // the model link the session used
@@ -6374,6 +7215,9 @@ type PauseState struct {
 	Until time.Time `json:"until,omitzero"` // when the limit resets, plus a margin
 	Since time.Time `json:"since,omitzero"` // when the group paused
 	Link  string    `json:"link,omitempty"` // the limited link
+	Refused int     `json:"refused"`        // resume attempts the provider refused, for the backoff
+	Cause string    `json:"cause,omitempty"` // provider, plan_window or spending
+	After bool      `json:"after,omitempty"` // a limit pause waits for the live session to end
 }
 
 // BlockState names why and when a blocked group stopped.
@@ -6402,12 +7246,13 @@ const (
 	ReasonMergeConflict Reason = "merge_conflict" // the group's branch conflicts with its base
 	ReasonCleanup       Reason = "cleanup"        // cleanup could not remove what it must
 	ReasonWall          Reason = "wall"           // working time reached twice limits.group_wall_min
-	ReasonBudget        Reason = "budget"         // the group's token cap; whether it exists is G-211
+	ReasonBudget        Reason = "budget"         // the group's token cap; [TODO: whether reaching limits.group_tokens blocks the group ([G-246](#g-246))]
 	ReasonDependency    Reason = "dependency"     // a dependency was removed from the run
 	ReasonCrash         Reason = "crash"          // the group's goroutine panicked, or an action failed past its retry
 	ReasonContract      Reason = "contract"       // a decision result broke the event's declared shape
 	ReasonStateInvalid  Reason = "state_invalid"  // a record or a write failed a check
-	ReasonTester        Reason = "tester"         // the Tester's results were disputed twice; exists only if G-206 keeps the checks
+	ReasonTester        Reason = "tester"         // the Tester's results were disputed twice
+	ReasonFlaky         Reason = "flaky"          // the Tester's reruns split once and a role reported results it cannot confirm
 	ReasonDone          Reason = "done"           // session exit: the session returned a valid result
 	ReasonCheckFail     Reason = "check_fail"     // session exit: the result failed the agent's own gate twice
 	ReasonNoResult      Reason = "no_result"      // session exit: the reply was cut off or the conversation outgrew the context
@@ -6422,7 +7267,7 @@ const (
 )
 ```
 
-The fields of the earlier design that recorded the mechanical check run are not carried. Whether a record of that progress is needed waits on [TODO: whether the free mechanical checks stay ([G-206](#g-206))]. The event sequence number of the earlier record is also not carried; whether the record holds one waits on [TODO: what survives a crash ([G-202](#g-202))].
+The record holds no progress of the free mechanical checks, which run as the first step of the Tester's turn: a continued group runs them again from the start. It holds no event sequence number, because recovery reads the saved state alone and the event log belongs to the Metrics Service.
 
 ```json
 {
@@ -6436,6 +7281,8 @@ The fields of the earlier design that recorded the mechanical check run are not 
     "group": "0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
     "stage": "build",
     "prior": "",
+    "epoch": 4,
+    "outcome": "",
     "fence": 3,
     "config_hash": "023c648e364af6cf885bc15be12621607595a7ef64533179971d9e8d0603cb2c",
     "counters": {
@@ -6455,6 +7302,8 @@ The fields of the earlier design that recorded the mechanical check run are not 
     "pause": {},
     "block": {},
     "failure_hash": "1a9509c4c1d09512211b773b90b562dc6e5a2fbbb344ccd72c2a230a51a86353",
+    "return_tree": "9f2c1e7a5b3d4c80a6e1f0d2b7c9a841e3d5f607",
+    "owed": [],
     "requests": [],
     "scope_added": [],
     "last_event_at": "2026-10-14T16:01:40Z"
@@ -6477,6 +7326,181 @@ The fields of the earlier design that recorded the mechanical check run are not 
 `failure_hash` is the SHA-256 of the sorted list of failing items, each written as one line such as `finding:<rule>:<file>` or `not_met:<task>`, so a rerun of the same failure gives the same hash. `config_hash` is the SHA-256, in 64 lowercase hexadecimal characters, of the effective settings at run start encoded by Go's `encoding/json`; a settings edit during the run never reaches the run.
 
 The counters, the retry bounds and the rules for when each counter rises are in [chapter 7](#73-data-model).
+
+#### Machine-wide records
+
+Four records belong to the machine rather than to one group. Each is a header and a body in one JSON file under `~/.komodo/state/`, checked and written the same way as a group record.
+
+```go
+// MachineKind names a machine-wide record; it is also the file's name without .json.
+type MachineKind string
+
+const (
+	KindProviders MachineKind = "providers" // probe results, limit reset times and link session counts
+	KindUpdate    MachineKind = "update"    // the newest version seen and the one before the last swap
+	KindInstall   MachineKind = "install"   // every machine-wide file and entry that install owns
+	KindSchedule  MachineKind = "schedule"  // runs queued by komodo run --schedule
+)
+
+// MachineHeader is the five fields every machine-wide record carries; the manager fills in all of them.
+type MachineHeader struct {
+	V      int         `json:"v"`      // schema version the record was written under
+	Kind   MachineKind `json:"kind"`   // which record this is; equals the file's name
+	Rev    int         `json:"rev"`    // rises by 1 on every write
+	TS     time.Time   `json:"ts"`     // when the manager wrote the record
+	Writer string      `json:"writer"` // component and process of the writer
+}
+
+// MachineRecord is one stored machine-wide record as a reader receives it.
+type MachineRecord[T any] struct {
+	Header MachineHeader
+	Body   T
+}
+```
+
+**`providers.json`** holds what the machine knows about each model link. The Resource Manager and the model client are its users.
+
+```go
+// ProvidersBody is the body of providers.json.
+type ProvidersBody struct {
+	Links map[string]LinkRecord `json:"links"` // keyed by link name, such as claude-cli
+}
+
+// LinkRecord is one link's probe result, limit reset time and running session count.
+type LinkRecord struct {
+	Probe    json.RawMessage `json:"probe"`             // the model client's probe result, stored whole; the manager checks only that it is an object
+	ResetAt  time.Time       `json:"reset_at,omitzero"` // when the link's limit lifts; zero when not limited
+	Cap      string          `json:"cap,omitempty"`     // which cap was hit: window, weekly, model, spend or quota
+	Sessions int             `json:"sessions"`          // sessions running on the link across the machine
+}
+```
+
+```json
+{
+  "v": 1,
+  "kind": "providers",
+  "rev": 12,
+  "ts": "2026-10-14T16:01:40Z",
+  "writer": "resource/48213",
+  "body": {
+    "links": {
+      "claude-cli": {
+        "probe": {"OK": true, "Path": "/usr/local/bin/claude", "Ctx": 1000000},
+        "reset_at": "2026-10-14T21:30:00Z",
+        "cap": "window",
+        "sessions": 2
+      },
+      "anthropic-api": {"probe": {"OK": false, "Reason": "no key"}, "sessions": 0}
+    }
+  }
+}
+```
+
+**`update.json`** holds the update state. The CLI's `update` command is its user.
+
+```go
+// UpdateBody is the body of update.json.
+type UpdateBody struct {
+	Latest    string    `json:"latest"`     // newest released version seen
+	CheckedAt time.Time `json:"checked_at"` // when update last looked
+	Previous  string    `json:"previous"`   // version bin/komodo held before the last swap
+}
+```
+
+```json
+{
+  "v": 1,
+  "kind": "update",
+  "rev": 4,
+  "ts": "2026-10-14T09:00:00Z",
+  "writer": "cli/48190",
+  "body": {"latest": "1.0.1", "checked_at": "2026-10-14T09:00:00Z", "previous": "1.0.0"}
+}
+```
+
+**`install.json`** holds the machine-wide files and entries that `install` owns, so a rerun changes only the differences. The CLI's installer is its user.
+
+```go
+// InstallBody is the body of install.json.
+type InstallBody struct {
+	Entries    []InstallEntry    `json:"entries"`    // one per owned machine-wide file or entry
+	Selections InstallSelections `json:"selections"` // the optional parts a person chose
+}
+
+// InstallEntry records one owned file and the content install wrote.
+type InstallEntry struct {
+	Target string `json:"target"`          // absolute path of the file
+	Entry  string `json:"entry,omitempty"` // for a settings file, which entry inside it
+	Hash   string `json:"hash"`            // SHA-256 of the content install wrote, 64 lowercase hexadecimal characters
+	Step   int    `json:"step"`            // number of the install step that wrote it
+}
+
+// InstallSelections are the optional parts chosen at install.
+type InstallSelections struct {
+	Hosts   []string `json:"hosts,omitempty"` // "claude", "codex"
+	Project bool     `json:"project"`         // the --project files are owned
+}
+```
+
+```json
+{
+  "v": 1,
+  "kind": "install",
+  "rev": 2,
+  "ts": "2026-10-14T08:55:12Z",
+  "writer": "cli/48102",
+  "body": {
+    "entries": [
+      {"target": "/Users/dev/.komodo/bin/komodo", "hash": "1a9509c4c1d09512211b773b90b562dc6e5a2fbbb344ccd72c2a230a51a86353", "step": 1}
+    ],
+    "selections": {"hosts": ["claude"], "project": false}
+  }
+}
+```
+
+**`schedule.json`** is the schedule queue: runs waiting for their start time. The engine adds an entry when `komodo run --schedule` reaches it, and the Runtime Manager starts each run at its time.
+
+```go
+// ScheduleBody is the body of schedule.json.
+type ScheduleBody struct {
+	Entries []ScheduleEntry `json:"entries"` // queued runs, never null
+}
+
+// ScheduleEntry is one queued run.
+type ScheduleEntry struct {
+	Target   string    `json:"target"`    // the (id) given to komodo run, such as ep-1 or tg-1.2
+	Root     string    `json:"root"`      // the repository root the target belongs to
+	RunID    string    `json:"run_id"`    // the run id the engine minted when it queued the entry
+	At       time.Time `json:"at"`        // when the run starts
+	QueuedAt time.Time `json:"queued_at"` // when komodo run --schedule queued it
+}
+```
+
+```json
+{
+  "v": 1,
+  "kind": "schedule",
+  "rev": 3,
+  "ts": "2026-10-15T20:41:09Z",
+  "writer": "engine/48301",
+  "body": {
+    "entries": [
+      {"target": "ep-1", "root": "/Users/dev/src/shop", "run_id": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72", "at": "2026-10-16T09:00:00Z", "queued_at": "2026-10-15T20:41:09Z"}
+    ]
+  }
+}
+```
+
+`root` is the repository root, so an engine that hosts runs for several repositories knows which task lists a `target` names. When an entry fires, the Runtime Manager expands `target` into group labels with the Intake Handler's `Pending` for that repository ([chapter 7](#7-runtime-manager)).
+
+| Field | Rule |
+|---|---|
+| `kind` | One of the four kinds; equals the file's name |
+| `writer` | `<component>/<pid>`; the component is `resource`, `model`, `cli` or `engine` |
+| `providers` `links` | Never null; `probe` is a JSON object; `sessions` is never below 0; `cap` is empty or one of `window`, `weekly`, `model`, `spend`, `quota` |
+| `update` | `latest` and `previous` are version strings; `checked_at` is RFC 3339 in UTC |
+| `install` `entries` | Never null; every entry has `target`, `hash` and `step` |
+| `schedule` `entries` | Never null; `target`, `root` and `run_id` are not empty; `at` and `queued_at` are RFC 3339 in UTC |
 
 ### 10.4 Interfaces
 
@@ -6536,6 +7560,17 @@ func (m *Manager) Remove(group string, rev int) error
 func (m *Manager) Quarantined() ([]string, error)
 ```
 
+```go
+// NewMachine opens the manager over the machine's state folder; writer names the component allowed to write.
+func NewMachine(home, writer string) (*Machine, error)
+
+// LoadMachine reads and checks a machine-wide record; a first run gets ErrNotFound and starts from an empty body.
+func LoadMachine[T any](m *Machine, kind MachineKind) (MachineRecord[T], error)
+
+// SaveMachine replaces a machine-wide record after the checks; rev is the revision last read, or 0 to create the record.
+func SaveMachine[T any](m *Machine, kind MachineKind, body T, rev int) (MachineRecord[T], error)
+```
+
 | Method | An error means | The disk afterwards |
 |---|---|---|
 | `Create` | `*InvalidError`, `ErrExists`, `ErrNotWriter` or `*DiskError` | No record written |
@@ -6543,15 +7578,20 @@ func (m *Manager) Quarantined() ([]string, error)
 | `Load` | `ErrCorrupt`, `ErrNewerVersion`, `ErrNotFound` | `ErrCorrupt`: the record is renamed `.bad-<time>` |
 | `Peek` | The same | Nothing written |
 | `Remove` | `ErrStaleRev`, `ErrNotWriter` | The record stays |
+| `LoadMachine` | `ErrNotFound`, `ErrCorrupt`, `ErrNewerVersion` | `ErrCorrupt`: the record is renamed `.bad-<time>` |
+| `SaveMachine` | `*InvalidError`, `ErrStaleRev`, `ErrExists`, `ErrNotWriter` or `*DiskError` | The old record is unchanged |
 
 | Caller | Calls | When |
 |---|---|---|
 | Runtime Manager | `Create` | A group is granted its lease; the fence comes from that lease |
 | Runtime Manager | `Save` | Every change of stage, counter, task, block or open action |
-| Runtime Manager | `Load` | A group resumes after a stop or a crash |
+| Runtime Manager | `Load` | A group continues from its saved state, after a stop or a crash |
 | Runtime Manager | `Counters` | Before it decides a bound |
-| CLI | `Peek`, `List` | A command shows a run |
-| Runtime Manager, `clean` | `Remove` | A finished group's record is dropped; when is [TODO: what `replay` does ([G-203](#g-203))] |
+| Runtime Manager | `Peek`, `List` | The engine answers a `status` request from the CLI |
+| Runtime Manager | `Remove` | A group's record is dropped; when is [TODO: what `komodo clean` removes ([G-222](#g-222))] |
+| Resource Manager, model client | `LoadMachine`, `SaveMachine` | `providers.json`: probe results, limit reset times, link session counts |
+| CLI installer | `LoadMachine`, `SaveMachine` | `update.json` and `install.json`, written with a `rev` check; a conflict is read again and retried. `install` and `doctor` also refresh the probe in `providers.json` the same way |
+| Runtime Manager | `LoadMachine`, `SaveMachine` | `schedule.json`: writes an entry for `komodo run --schedule`, reads the queue at start; an entry leaves it when its run starts or `komodo stop (id)` removes it |
 
 The Runtime Manager handles a refusal by kind: `*InvalidError` or `ErrNotWriter` is a program fault and blocks the group `state_invalid`; `ErrStaleRev` makes it reread and retry once; `*DiskError` is retried once, then blocks the group `crash`.
 
@@ -6582,7 +7622,7 @@ sequenceDiagram
 7. It renames the temporary file over `state.json`, which is atomic, then syncs the folder.
 8. A failed check at steps 1 to 4 returns the error and leaves the file byte-identical.
 
-The Runtime Manager saves the new state, including any actions it orders, before it runs those actions. A crash after the save therefore finds them in `actions_open` and reruns them; a crash before it loses the change whole.
+The Runtime Manager saves the new state, including any actions it orders, before it acts on the change or runs those actions. A crash after the save therefore finds them in `actions_open` and reruns them; a crash before it loses the change whole.
 
 #### Read
 
@@ -6607,13 +7647,23 @@ flowchart TD
 
 A damaged record is never repaired automatically. A group whose record is set aside cannot continue until a person has dealt with the `.bad-<time>` file.
 
-#### Durable event record
+#### Recovery
 
-What survives a crash, and which part writes the record that recovery and replay trust, is [TODO: what survives a crash ([G-202](#g-202))]. These points hold under every option:
+1. A successful `Save` is on disk before the Runtime Manager acts on it, so the saved record always reflects the last decided step.
+2. After a crash, `komodo run (id)` starts the engine, which calls `Load` for each group of the target and continues each from its saved state.
+3. Recovery reads no other record: no event log and no snapshot.
+4. The State Manager keeps no event log and never publishes an event. The Event Bus delivers events, and the [Metrics Service](#18-metrics-service) appends each one to its own log, which replay reads.
 
-- A successful `Save` is on disk before the Runtime Manager acts on it.
-- Recovery reads the last saved record with `Load`.
-- The State Manager never publishes an event; the Event Bus does.
+#### Machine-wide records
+
+1. `SaveMachine` runs the same steps as a group write: the writer check, the revision check, the schema check and the invariants, then a write to a temporary file, a sync and a rename over the record.
+2. The writer check accepts the components `resource`, `model`, `cli` and `engine`.
+3. A rev of 0 creates the record and returns `ErrExists` when one is already stored; any other rev must equal the stored one, or `ErrStaleRev`.
+4. `LoadMachine` reads and checks the record as a group read does: a strict decode, the schema check, an in-memory migration of an older `v`, and `ErrNewerVersion` for a newer one.
+5. A record that fails a read check is renamed `<kind>.json.bad-<time>` and `ErrCorrupt` is returned, so it is never repaired automatically.
+6. A stale temporary file is deleted by the next open when it is older than 1 hour.
+
+After the machine restarts, the next komodo command finds `schedule.json` and starts the engine, which starts any entry whose `at` has passed at once. Each machine-wide record has one writer process, the engine. The one exception is the CLI installer, which writes `install.json` and `update.json` with a `rev` check and, on `ErrStaleRev`, reads the record again and retries. The session counts in `providers.json` reset to 0 when the engine starts, so a process that died holding a session leaves no stale count.
 
 #### Migration
 
@@ -6632,10 +7682,10 @@ A fixture with `v: 0` reads as `v: 1`. A group record is written under the curre
 
 #### Concurrency and locking
 
-- Each group has one writer, the Runtime Manager, and the lease keeps other runs away from the group.
+- Each group has one writer, the Runtime Manager inside the one engine process of the user, and the lease keeps other runs away from the group.
 - The revision check refuses a stale writer; the rename makes a reader see the old record or the new one, never a mix.
 - Inside one process a mutex per group serialises its calls. Two groups never wait on each other.
-- Whether more than one process may write one record depends on [TODO: runtime lifetime ([G-201](#g-201))]; the revision check holds under every option.
+- Machine-wide records can be written by the engine and by a separate CLI process; the revision check refuses a stale writer.
 
 ### 10.6 State
 
@@ -6655,9 +7705,11 @@ A `Save` with a stale `rev` is refused and the record is unchanged.
 2. A record is whole or absent: the rename is atomic.
 3. `rev` rises by 1 per write; `fence` and every counter never fall.
 4. A group record never has a zero fence.
-5. Only the Runtime Manager writes; the lease keeps other runs out.
+5. Only the Runtime Manager writes a group record; the lease keeps other runs out.
 6. A damaged record is set aside and never repaired automatically.
 7. The State Manager imports no other Komodo package.
+8. A machine-wide record follows rules 1 to 3 and 6: checked before it reaches disk, whole or absent, `rev` rising by 1.
+9. The State Manager keeps no event log; recovery reads only its records.
 
 #### Failures
 
@@ -6671,10 +7723,13 @@ A `Save` with a stale `rev` is refused and the record is unchanged.
 | Record from a newer binary | `Load` | `ErrNewerVersion`; nothing moved | Unchanged |
 | Disk write, sync or rename fails | The store | One retry, then `*DiskError`; the group blocks `crash` | Old record stands |
 | Crash during a save | A leftover `state.json.tmp-<pid>` | The next open deletes temporary files older than 1 hour | Old record stands |
+| Machine-wide record breaks the schema | `SaveMachine` checks | `*InvalidError` with the field path | Disk untouched |
+| Machine-wide record fails a read check | `LoadMachine` | Rename to `.bad-<time>`; `ErrCorrupt` | Set aside |
+| Write to a machine-wide record by an unlisted component | The writer check | `ErrNotWriter` | Disk untouched |
 
 ### 10.8 Config
 
-The State Manager owns no configuration key. The earlier snapshot interval of 50 events has no meaning without an event log; it returns only if [TODO: what survives a crash ([G-202](#g-202))] adds one.
+The State Manager owns no configuration key. It keeps no event log, so it has no snapshot interval.
 
 ### 10.9 Proof Cases
 
@@ -6698,37 +7753,45 @@ Tests use a temporary directory; no network and no live provider.
 - A group created with the fence from `Lease.Grant` accepts its first `Save` with that fence ([chapter 9](#9-lease-manager)).
 - `Counters` returns the stored counters without decoding the rest.
 - Saving a crash adds to `crashes` and leaves `attempts` and `retries` unchanged.
+- After a simulated crash, `Load` returns the last saved record, and the engine continues the group from it with no event log present.
+- Each of `providers.json`, `update.json`, `install.json` and `schedule.json` round-trips through `SaveMachine` and `LoadMachine` and comes back equal.
+- A `SaveMachine` with a null `entries` slice, an empty schedule `target` or a negative `sessions` is refused with its field path.
+- A `SaveMachine` from a component other than `resource`, `model`, `cli` or `engine` is refused with `ErrNotWriter`.
+- A `SaveMachine` with a stale `rev` is refused, and the record is unchanged.
+- A corrupted `schedule.json` is renamed `.bad-<time>` by `LoadMachine`, and `ErrCorrupt` is returned.
+- A schedule entry whose `at` has passed, found after a restart, is returned by `LoadMachine` and removed by a `SaveMachine` that names the `rev` read.
 
 ### 10.10 Open Gaps
 
 | Gap | Question |
 |---|---|
-| [G-201](#g-201) | Whether one or several processes write a record |
-| [G-202](#g-202) | Whether the State Manager also writes the durable event record |
-| [G-203](#g-203) | What `replay` needs from a finished group's record, which decides when `Remove` runs |
-| [G-206](#g-206) | Whether a record of mechanical check progress is needed |
+| [G-222](#g-222) | What `komodo clean` removes, which decides when `Remove` runs |
+| [G-246](#g-246) | Whether reaching the group token cap blocks the group |
 
 ## 11. Task Manager
 
-The Task Manager is the controller of one task group. It runs the group from Build to Cleanup, guards every action its agents request, opens the group's model sessions through the model client, and creates and destroys the group's test sandbox. It also talks to the Runtime Manager in both directions: it escalates blockers, asks for more time, and reports state. This chapter covers the Task Manager (`internal/task`) and the two adapters it owns: the model client (`internal/llm`) and the test sandbox (`internal/sandbox`). The purpose and interactions are in [HLD 5.12](hld.md#512-task-manager).
+The Task Manager is the controller of one task group. It runs as one goroutine, a lightweight thread inside one Go program, in the engine, which is the Runtime Manager's process. It runs the group from Build to Cleanup, creates the group's branch and worktree, guards every action its agents request, opens the group's model sessions through the model client, and creates and destroys the group's sandbox instances. It also talks to the Runtime Manager in both directions: it receives commands, escalates blockers, asks for more time, and reports state. This chapter covers the Task Manager (`internal/task`) and the two adapters it owns: the model client (`internal/llm`) and the test sandbox (`internal/sandbox`). The purpose and interactions are in [HLD 5.12](hld.md#512-task-manager).
 
 ### 11.1 Scope and Concepts
 
 **Owns:**
 - The pipeline of one task group: Build, then Test and Review in parallel, then Commit, then Cleanup, with the rework loop back to the builder.
-- The two-way calls with the Runtime Manager: escalate, ask for a timer extension, report state.
+- The two-way link with the Runtime Manager: a command channel down and a reply channel up. Over the reply channel it escalates, asks for a timer extension and reports state.
+- The group's branch and worktree, created at the names the lease records, and a local commit after each finished task, which the Task Manager asks the Commit Handler to make without a push.
 - The session supervisor: it starts, watches and stops each model session and records one exit reason.
 - The guard and the tool runtime: every agent action is checked against the agent's permissions, and refused by default.
 - Link choice and failover for each session: the chain, the billing decision and the hand-off of a provider limit.
-- The model client (`internal/llm`): the adapters for the Claude subscription command-line link and the paid HTTP links and the tool loop. The HTTP client they use stays in `internal/core`.
-- The test sandbox (`internal/sandbox`): `CreateSandboxInstance()` and `DestroySandboxInstance()`, called inside `CloseTaskGroup()`, and the confinement of every command. The language and build caches belong to the Cache Manager ([chapter 8](#8-cache-manager)); the sandbox mounts them.
+- The model client (`internal/llm`): the adapters for the Claude subscription command-line link, the paid Anthropic link and the optional local link, the places reserved for OpenAI's links, and the tool loop. The HTTP client they use stays in `internal/core`.
+- The sandbox (`internal/sandbox`): a Docker container per group for the Tester, the operating-system sandbox for the Builder's quick commands, `CreateSandboxInstance()` and `DestroySandboxInstance()` (the second is called inside `CloseTaskGroup()`), and the confinement of every command. The language and build caches belong to the Cache Manager ([chapter 8](#8-cache-manager)); the sandbox mounts them.
+- Outside tool servers: starting each enabled server inside the sandbox and passing every call it receives through the guard.
 
 **Does not own:**
 - The agent definitions and their permission values: the Configuration Manager ([chapter 3](#3-configuration-manager)).
 - Assembling a brief, the skills and the prompt templates: the Context Manager ([chapter 6](#6-context-manager)).
 - Timers, retry loops, holding states and the pause cap: the Runtime Manager ([chapter 7](#7-runtime-manager)).
 - The durable record of a group's state: the State Manager ([chapter 10](#10-state-manager)).
-- Lease records: the Lease Manager ([chapter 9](#9-lease-manager)). Creating a group's branch and worktree, and saving finished work, are [TODO: whether finished tasks are saved before approval and by whom, who creates a group's branch and worktree, who releases the lease after cleanup, and who commits task lists ([G-220](#g-220))]. Agents never touch git.
+- Lease records, and releasing the lease when the group closes: the Lease Manager ([chapter 9](#9-lease-manager)). Agents never touch git. Who commits the Intake Handler's task lists is [TODO: who commits the Intake Handler's task lists ([G-226](#g-226))].
+- The free mechanical checks (the task's completion commands, the affected tests, coverage and the secret scan): the first step of the Tester's turn ([chapter 13](#13-tester)). The Task Manager supplies the sandbox they run in.
 - What the builder, tester and reviewer decide: [chapter 12](#12-builder), [chapter 13](#13-tester) and [chapter 14](#14-reviewer).
 - Commit and push: the Commit Handler ([chapter 15](#15-commit-handler)). Branch and worktree removal: the Cleanup Handler ([chapter 16](#16-cleanup-handler)).
 - How an error reaches the person: the Error Handler ([chapter 17](#17-error-handler)). Usage and cost: [chapter 18](#18-metrics-service) and [chapter 19](#19-resource-manager).
@@ -6748,10 +7811,14 @@ The Task Manager is the controller of one task group. It runs the group from Bui
 | Chain | The ordered list of links an agent tries, subscription first |
 | Model client | The `internal/llm` package: it runs one session on one link and returns a stream of events |
 | API link | A link where Go sends requests over HTTP and runs the tool loop itself, as opposed to the `claude` program |
-| Test sandbox instance | A sealed environment the sandbox package creates for one group; commands run inside it |
+| Test sandbox instance | A sealed environment the sandbox package creates for one group and role: a Docker container for the Tester, an operating-system sandbox for the Builder; commands run inside it |
 | Confinement | Whatever makes a command start sealed: a test sandbox instance or an operating-system profile |
 | Resume handle | The provider's identifier of a saved conversation, kept so a halted session can continue |
 | Held | The Task Manager has stopped and waits for one answer from the Runtime Manager |
+| Command channel | The Go channel on which the Runtime Manager sends one Task Manager its commands: start, pause, continue and stop |
+| Reply channel | The Go channel on which the Task Manager sends escalations, timer requests, state reports and the end of each call back |
+| Operating-system sandbox | A Seatbelt profile on macOS or a Bubblewrap command line on Linux that seals one command without a container |
+| Cache handle | The open Cache Manager that the Runtime Manager passes in; the Task Manager and the model client read and write through it directly |
 
 ### 11.2 Package Layout
 
@@ -6759,7 +7826,8 @@ The Task Manager is the controller of one task group. It runs the group from Bui
 
 | File | Holds |
 |---|---|
-| `manager.go` | `Manager`, `New`, `Run`, `Resume`, `Continue`, `Stop`, `CloseTaskGroup` |
+| `manager.go` | `Manager`, `New`, `Run`, `Resume`, `Continue`, `Pause`, `Stop`, `CloseTaskGroup` |
+| `serve.go` | `Channels`, `Command`, `Message`, `Serve`: the command loop of the goroutine |
 | `pipeline.go` | Stage order, the parallel Test and Review, the rework loop and its counters |
 | `runtime.go` | The `Runtime` interface and the shapes of escalations, timer requests and state reports |
 | `session.go` | The session supervisor: spawn, clocks, time warning, nudge and the stop ladder |
@@ -6772,7 +7840,8 @@ The Task Manager is the controller of one task group. It runs the group from Bui
 | `tools_run.go` | `run` |
 | `tools_git.go` | `diff`, `git_read` |
 | `tools_submit.go` | `submit_finding`, `task_done`, `skill`, `lint_backlog` |
-| `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output |
+| `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output; it also fronts the enabled outside tool servers |
+| `outside.go` | Starts each enabled outside tool server inside the sandbox and forwards its guarded calls |
 | `gitptr.go` | Records the worktree's `.git` pointer and checks it before any host git call |
 | `proc.go`, `proc_unix.go` | Process groups, the 10-minute timeout, the output cap and the whole-tree kill |
 | `policy.json` | The guard rows with scopes, the secret patterns and the test-sibling rules, compiled into the binary |
@@ -6786,8 +7855,9 @@ The Task Manager is the controller of one task group. It runs the group from Bui
 | `errors.go` | Sentinel errors, `ProviderLimit`, `CapKind` |
 | `billing.go` | Cost class per link, the environment scrub, the first-line check; fails closed |
 | `claude.go` | The subscription link: launch line, stream parsing, resume, `claude` path search |
-| `anthropic.go` | The paid Anthropic link: Messages requests, cache markers, structured output, effort |
-| `openai.go` | OpenAI-compatible HTTP links. [TODO: which model links beta 6 supports ([G-213](#g-213))] |
+| `anthropic.go` | The paid Anthropic link: Messages requests, cache markers from the cache handle, structured output, effort |
+| `openai.go` | The place for OpenAI's subscription and interface links. They implement `Provider` and are not built, so each returns `ErrNotYet` |
+| `local.go` | The optional local link: an OpenAI-compatible server on this machine, and its context-size probe |
 | `loop.go` | The tool loop for API links and the result re-validation |
 | `probe.go` | `Probe` and the measured context |
 | `catalog.go`, `models.json` | The model catalog: default model per weight, windows and prices |
@@ -6798,31 +7868,33 @@ The Task Manager is the controller of one task group. It runs the group from Bui
 | File | Holds |
 |---|---|
 | `sandbox.go` | `Manager`, `Spec`, `Instance`, `Backend`, `CreateSandboxInstance`, `DestroySandboxInstance` |
-| `profile.go` | Turns a `Spec` into the mount, mask and limit rules every backend applies |
-| `backend_*.go` | One file per mechanism. [TODO: which mechanisms exist and which agent runs in which ([G-205](#g-205))] |
+| `profile.go` | Turns a `Spec` into the mount, mask and limit rules every backend applies, and renders the Seatbelt profile and the Bubblewrap arguments |
+| `backend_docker.go` | The Docker container, one per group, for the Tester |
+| `backend_seatbelt.go` | Seatbelt on macOS, for the Builder's quick commands and the Tester without Docker |
+| `backend_bubblewrap.go` | Bubblewrap on Linux and Windows Subsystem for Linux, for the same two jobs |
 | `copy.go` | The tester's dependency copy |
 
-Import rule: `task` imports `llm` and `sandbox`. `llm` and `sandbox` import neither `task` nor each other (both import `internal/core`), and every package uses the Go standard library only. The Runtime Manager, the Context Manager, the Commit Handler, the Cleanup Handler and git reach `task` through the narrow interfaces in [11.4](#114-interfaces), so `task` imports none of their packages.
+Import rule: `task` imports `llm` and `sandbox`. `llm` and `sandbox` import neither `task` nor each other (both import `internal/core`), and every package uses the Go standard library only. `task` and `llm` also import `internal/cache` for the type of the cache handle, and `task` imports the value types `Approval`, `SaveRequest`, `SaveResult` and `Result` from `internal/commit`, which imports neither `task` nor `engine`. The Runtime Manager, the Context Manager, the Commit Handler, the Cleanup Handler and git reach `task` through the narrow interfaces in [11.4](#114-interfaces), so `task` imports none of their other packages.
 
 ### 11.3 Data Model
 
 #### What the Runtime Manager hands over
 
-The Runtime Manager reads the agent registry from the Configuration Manager and the briefing source from the Context Manager. It builds one `GroupSpec` and starts the Task Manager with it.
+The Runtime Manager reads the agent registry from the Configuration Manager and the briefing source from the Context Manager. It builds one `GroupSpec`, starts the Task Manager goroutine with it, the two channels of the next section and the cache handle, and keeps the other ends of the channels.
 
 ```go
 // GroupSpec is everything one Task Manager needs to run its group.
 type GroupSpec struct {
-	Run       string                 // run identifier
-	Group     string                 // task group identifier
-	Tasks     []TaskSpec             // tasks in order
-	Files     []string               // the group's file globs; the builder writes only here
-	Lease     LeaseRef               // branch, worktree and git folder the lease records
-	Agents    map[string]Permissions // permissions per agent role
-	Limits    Limits                 // session clocks, returns, refusals, attempts
-	Stages    []state.Stage          // stages to run; the full pipeline unless a command names fewer
-	OtherFiles []string              // file globs of the other groups in the run
-	Resume    *PauseState            // set when the Runtime Manager restarts a paused group
+	Run        string                 // run identifier, a version 7 UUID (a time-ordered unique identifier)
+	Group      string                 // task group label, such as tg-1.2
+	Tasks      []TaskSpec             // tasks in order
+	Files      []string               // the group's file globs; the builder writes only here
+	Lease      LeaseRef               // branch, worktree and git folder the lease records
+	Agents     map[string]Permissions // permissions per agent role
+	Servers    []OutsideServer        // outside tool servers switched on for at least one agent
+	Limits     Limits                 // session clocks, returns, refusals, attempts
+	Saved      *Progress              // the group's saved state when `run` continues it; nil for a new group
+	OtherFiles []string               // file globs of the other groups in the run
 }
 
 // TaskSpec is one task of the group.
@@ -6845,6 +7917,7 @@ type Permissions struct {
 	Tools      []string `json:"tools"`       // the only tools advertised and callable
 	RunClasses []string `json:"run_classes"` // the only command classes `run` may start
 	Guard      []RowID  `json:"guard"`       // guard rows beyond the ones every agent inherits
+	Servers    []string `json:"servers"`     // outside tool servers switched on for this agent
 	Weight     string   `json:"weight"`      // heavy, standard or light
 	Chain      []string `json:"chain"`       // link names in order
 }
@@ -6858,27 +7931,37 @@ type Limits struct {
 	Attempts       int // fresh builder sessions for the group
 	RefusalLimit   int // refusals under one guard row before the session ends
 }
+
+// OutsideServer is one outside tool server from the Context Manager's list, switched on for at least one agent.
+type OutsideServer struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command"`         // started without a shell
+	Args    []string `json:"args,omitempty"`
+	Env     []string `json:"env,omitempty"`   // variable names only; the values come from the harness environment
+	Hosts   []string `json:"hosts,omitempty"` // hosts the server may reach; empty means no network
+}
 ```
 
-A command that runs one stage passes a subset of `Stages` [TODO: what `build`, `test` and `review` run and what their id names ([G-203](#g-203))]; every other run passes all 4. A role absent from `Agents` has no permissions, so any session for it is refused.
+A group that needs another pass, such as one fixed by hand in its worktree, continues with `komodo run (id)`. The Runtime Manager passes the group's saved state as `Saved`; the pipeline starts at `Saved.Stage` and runs test and review again before commit. A new group has `Saved` nil and starts at `build`. A role absent from `Agents` has no permissions, so any session for it is refused.
 
 ```json
 {
-  "run": "r-0192e5a1",
-  "group": "g-3",
+  "run": "0192e5a1-7c3e-7b1a-9d4e-5f2a8c1b3d60",
+  "group": "tg-1.2",
   "files": ["internal/lease/**"],
-  "lease": {"branch": "komodo/r-0192e5a1/g-3", "worktree": "/home/dev/.komodo/wt/r-0192e5a1/g-3",
-            "git_dir": "/home/dev/src/shop/.git/worktrees/g-3", "fence": 7},
+  "lease": {"branch": "komodo/ep-1-tg-1.2", "worktree": "/home/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22",
+            "git_dir": "/home/dev/src/shop/.git/worktrees/tg-1.2", "fence": 7},
   "agents": {"builder": {"tools": ["read", "search", "edit", "write", "run", "skill", "task_done"],
-                         "run_classes": ["build", "test", "lint", "format"], "guard": ["R1", "B1"],
+                         "run_classes": ["build", "test", "lint", "format"], "guard": ["R1", "B1"], "servers": [],
                          "weight": "standard", "chain": ["claude-cli", "anthropic-api"]}},
-  "stages": ["build", "test_review", "commit", "cleanup"]
+  "servers": [],
+  "saved": null
 }
 ```
 
 #### Stages and counters
 
-The pipeline's stages are the `state.Stage` values `build`, `test_review`, `commit` and `cleanup`; [10. State Manager](#10-state-manager) owns the type.
+The pipeline's stages are the `state.Stage` values `build`, `test_review`, `commit` and `cleanup`; [10. State Manager](#10-state-manager) owns the type. The State Manager saves this record before the Runtime Manager acts on a change, so a group continued after a crash starts from its last decided step.
 
 ```go
 // Progress is the Task Manager's own counters; the Runtime Manager persists them through ReportState.
@@ -6893,6 +7976,7 @@ type Progress struct {
 	Widened        []string `json:"widened"`          // paths a scope answer added to the group's files
 	Refusals       map[string]int `json:"refusals"`   // refusals per guard row in the current session
 	Pause          *PauseState `json:"pause,omitempty"`
+	Handles        map[string]llm.ResumeHandle `json:"handles,omitempty"` // handle of each agent's live session, reported before the session starts
 }
 
 // PauseState is a group waiting out a provider limit.
@@ -6907,6 +7991,71 @@ type PauseState struct {
 ```
 
 #### Calls with the Runtime Manager
+
+One Task Manager and the Runtime Manager talk over two Go channels. Commands go down the command channel; escalations, timer requests, state reports and the end of each call come back on the reply channel. Facts reach the Event Bus as events, which the Runtime Manager publishes from the state reports. The loop that serves the channels is in [11.4](#114-interfaces).
+
+```go
+// Channels connect a Task Manager goroutine to the Runtime Manager that started it.
+type Channels struct {
+	Commands <-chan Command // from the Runtime Manager
+	Replies  chan<- Message // to the Runtime Manager; closed when Serve returns
+}
+
+// CommandKind names an instruction on the command channel.
+type CommandKind string
+
+const (
+	CmdStart    CommandKind = "start"    // run the pipeline
+	CmdPause    CommandKind = "pause"    // hold the group after its current step
+	CmdContinue CommandKind = "continue" // an answer, a timer grant or a wake-up
+	CmdStop     CommandKind = "stop"     // cancel live sessions and end
+)
+
+// Command is one instruction the Runtime Manager sends to one Task Manager.
+type Command struct {
+	Kind   CommandKind `json:"kind"`
+	Re     string      `json:"re,omitempty"`     // the Message.ID this command answers
+	Answer *Answer     `json:"answer,omitempty"` // continue: the one reply to an Escalation
+	Grant  *TimerGrant `json:"grant,omitempty"`  // continue: the reply to a TimerRequest
+	Wake   *Wake       `json:"wake,omitempty"`   // continue: resume a paused group
+	Link   string      `json:"link,omitempty"`   // pause: the link whose window ran out
+	Until  time.Time   `json:"until,omitzero"`   // pause: when the window resets; zero when unknown
+	Cause  string      `json:"cause,omitempty"`  // stop and pause: why
+}
+
+// MessageKind names an item on the reply channel.
+type MessageKind string
+
+const (
+	MsgEscalate MessageKind = "escalate" // a blocker or a request
+	MsgTimer    MessageKind = "timer"    // a request for more wall time
+	MsgState    MessageKind = "state"    // progress and the facts since the last report
+	MsgEnded    MessageKind = "ended"    // Run, Resume or Continue returned
+)
+
+// Message is one item the Task Manager sends to the Runtime Manager.
+type Message struct {
+	ID         string        `json:"id"` // unique; a Command's Re names it
+	Kind       MessageKind   `json:"kind"`
+	Escalation *Escalation   `json:"escalation,omitempty"`
+	Timer      *TimerRequest `json:"timer,omitempty"`
+	State      *StateReport  `json:"state,omitempty"`
+	Ended      *Ended        `json:"ended,omitempty"`
+}
+
+// Ended says how a call that ran the pipeline ended.
+type Ended struct {
+	Result string `json:"result"`          // closed, held, paused, stopped or failed
+	Error  string `json:"error,omitempty"` // the error text when Result is failed
+}
+```
+
+A command and a message on the wire, as the tests read them:
+
+```json
+{"kind": "continue", "re": "esc-4", "answer": {"escalation": "esc-4", "action": "approve", "approved": ["internal/lease/clock.go"]}}
+{"id": "esc-4", "kind": "escalate", "escalation": {"id": "esc-4", "group": "tg-1.2", "kind": "scope", "reason": "needs_scope"}}
+```
 
 ```go
 // Escalation is a blocker or a request the Task Manager cannot settle alone.
@@ -6930,7 +8079,7 @@ const (
 // Answer is the one reply to an Escalation, delivered through Manager.Continue.
 type Answer struct {
 	Escalation string   `json:"escalation"` // the Escalation.ID
-	Action     string   `json:"action"`     // continue, deny or stop
+	Action     string   `json:"action"`     // approve (komodo run --approve) or deny (--deny)
 	Approved   []string `json:"approved,omitempty"` // scope: paths added to the group's files
 }
 
@@ -6969,11 +8118,13 @@ type Fact struct {
 | `attempts` | `blocked` | Fresh builder sessions reached `limits.group_attempts` |
 | `refusals` | `blocked` | The same guard row refused the same session `guard.refusal_limit` times, and the retries ran out |
 | `no_provider`, `paid_refused`, `context` | `blocked` | Link choice found no allowed link ([11.4](#114-interfaces)) |
-| `budget` | `blocked` | The group's token cap was spent; whether the cap blocks is [TODO: whether reaching the group token cap blocks the group ([G-211](#g-211))] |
+| `budget` | `blocked` | The group's token cap was spent; whether the cap blocks is [TODO: whether reaching the group token cap blocks the group ([G-246](#g-246))] |
 | `contract` | `blocked` | A reviewer's or tester's commands changed a tracked file twice in one trip |
 | `flaky` | `blocked` | A role reported results it cannot confirm |
 | `setup` | `blocked` | The setup command or the sandbox instance failed |
 | `crash` | `failed` | A session died and its retries ran out |
+
+An open escalation is the question that `komodo status --wait` returns for a blocked group. `komodo run (id) --approve` or `--deny` answers it ([11.5](#115-behaviour)).
 
 The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus) maps each to an event type and subtype.
 
@@ -6986,6 +8137,8 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | `provider.skip` | `from`, `to`, `reason` |
 | `limit.warn` | Link, kind (window past `warn.quota_pct`, overage drawn) |
 | `scope.request`, `scope.answer` | Task, paths; the answer's action and approved paths |
+| `sandbox.fallback` | Role, the mechanism wanted, the mechanism used, the reason; the run report says so |
+| `tool.outside` | Server, tool, outcome (`ok`, `error` or `timeout`) of one outside tool server call |
 
 #### The guard
 
@@ -7085,7 +8238,6 @@ A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`.
 | `submit_finding` | `{rule, file, line, quote, note}` | `filed <rule> at <file>:<line>` |
 | `task_done` | `{task}` | The `done_when` exit code and capped output |
 | `lint_backlog` | `{draft}`: the planned task list as one text | `ok`, or one lint error per line |
-| `web` | `{url}` | The page body as text. [TODO: whether the architect and researcher roles, the only users, are dropped ([G-207](#g-207))] |
 
 A reply is `Reply{Text, LogPath}`. When the output exceeds 4 KB, the first 1 KB and the last 3 KB are kept, joined by one line `[… <n> bytes cut; full output in <LogPath>]`, since errors usually sit at the end. `read` is not capped.
 
@@ -7107,8 +8259,11 @@ const (
 type Link string
 
 const (
-	ClaudeCLI    Link = "claude-cli"    // the Claude subscription, through the claude program
-	AnthropicAPI Link = "anthropic-api" // the paid Anthropic HTTP interface
+	ClaudeCLI          Link = "claude-cli"          // the Claude subscription, through the claude program
+	AnthropicAPI       Link = "anthropic-api"       // the paid Anthropic HTTP interface
+	OpenAISubscription Link = "openai-subscription" // OpenAI's subscription; in the interface, not built
+	OpenAIAPI          Link = "openai-api"          // OpenAI's paid HTTP interface; in the interface, not built
+	Local              Link = "local"               // the optional free model on this machine
 )
 
 // Session is one model session an adapter runs.
@@ -7122,6 +8277,7 @@ type Session struct {
 	Schema  json.RawMessage // the agent's result schema for the final call
 	Tools   ToolHost        // bound tool functions; used by API links only
 	Env     []string        // environment of the claude program, after the scrub
+	Cache   cache.Handle   // the cache handle; the paid adapter stores its marker plan there
 }
 
 // Input is the one new user message sent when a session resumes.
@@ -7309,6 +8465,7 @@ type ProbeResult struct {
 	Models    map[Weight]string // exact identifiers per weight
 	Ctx       int               // measured context in tokens
 	CtxSource string            // "models_api", "catalog", "default", "ollama_ps" or "endpoint"
+	Ollama    bool              // local link: true when GET /api/version answered
 }
 
 // AuthStatus holds the two login fields the billing check reads.
@@ -7321,8 +8478,8 @@ type AuthStatus struct {
 type CatalogEntry struct {
 	ID       string  `json:"id"`
 	Weight   string  `json:"weight"`           // heavy, standard or light
-	Tier     string  `json:"tier"`             // latest or prior
-	Window   int     `json:"window,omitempty"` // context tokens
+	Tier     string  `json:"tier"`             // latest, prior or local
+	Window   int     `json:"window,omitempty"` // context tokens; absent for local models, which are measured
 	MaxOut   int     `json:"max_out,omitempty"`
 	PriceIn  float64 `json:"price_in_usd_per_m"`
 	PriceOut float64 `json:"price_out_usd_per_m"`
@@ -7331,11 +8488,48 @@ type CatalogEntry struct {
 
 - **Weights:** planner and reviewer are heavy, builder is standard, tester is light; heavy runs the Opus line, standard the Sonnet line, light the Haiku line. The registry holds the weight per agent.
 - **Catalog rules:** only the latest and prior version of a line are used; every identifier is an exact pinned snapshot, never an alias. The probe writes the identifiers a run uses to a State Manager record, and no identifier changes mid-run.
-- **Local models:** [TODO: whether the free local model backstop stays and which models it runs ([G-213](#g-213))].
+- **Local models (optional link):** the catalog lists no window or price for them. Gemma 4 31B serves heavy, Qwen3.6-27B standard and Nemotron 3 Nano light, all free. A weight with no model listed uses the nearest listed one.
+
+**The optional local link**
+
+The local link is an OpenAI-compatible server on this machine, such as Ollama, a program that serves open models on one computer. It is not part of any chain unless a person configures it, and nothing requires it. Its entry holds:
+
+```go
+// LocalEndpoint is the optional local link's server.
+type LocalEndpoint struct {
+	URL        string            // the server's /v1 base, such as http://localhost:11434/v1
+	Models     map[Weight]string // a model name per weight
+	Ctx        int               // context tokens; required for a server that is not Ollama
+	Key        string            // env:NAME reference to an API key the server needs; optional
+	SelfHosted bool              // marks a server that is not on loopback as free
+	FirstByteS int               // seconds to wait for the first byte; the default is 300 on loopback
+}
+```
+
+```json
+{"url": "http://localhost:11434/v1", "models": {"standard": "Qwen3.6-27B"}}
+```
+
+The link's cost class is `free` on loopback, or when `SelfHosted` is true. A non-loopback server without `SelfHosted` is `paid`.
+
+**Measured context.** The model client measures the window each session runs with, in tokens. It never uses a typed number except to lower it.
+
+| Link | Source of the context |
+|---|---|
+| `claude-cli`, `anthropic-api` | The Models API `max_input_tokens`, else the catalog entry, else the default window 262,144 |
+| Local, Ollama | `/api/ps` `context_length` for the loaded model; an unloaded model is first loaded with an empty request; a typed `Ctx` only lowers it |
+| Local, any other server | The entry's `Ctx`, which is required |
+
+- **Reachable:** the probe sends `GET /models` to the server's `/v1` base. The server counts as reachable when it answers within 1 s.
+- **Ollama:** the probe sends `GET /api/version` to the endpoint's host; an answer sets `ProbeResult.Ollama` and means `/api/ps` is usable.
+- **Floor:** a local server whose measured context is below `providers.ctx_floor` fails `doctor`, which names the fix `OLLAMA_CONTEXT_LENGTH=262144`. At run time `Select` skips it with `ctx_below_floor`. The floor applies to the local link only.
+- **Default window:** 262,144 applies to any model neither measured nor in the catalog. A window smaller than the real one only shrinks briefs; a larger one would let a server cut the prompt.
+- **Keep loaded:** Ollama's `keep_alive` is set to the run's remaining wall time, so the server does not unload the model after its 5-minute default.
+- **Sizing:** the local model Qwen3.6-27B at a 262,144-token context suits a 24 GB (24 gigabyte) machine. A machine that serves it below the floor fails `doctor` as above. Verified by [G-03](#g-03).
 
 #### The HTTP client
 
-The client is the existing code in `internal/core/http.go`, `http_policy.go` and `http_stream.go`. It stays in `internal/core`; `internal/llm` wraps it and uses its `Client` and `Options` without copying them.
+The client is the existing code in `internal/core/http.go`, `http_policy.go` and `http_stream.go`. It stays in `internal/core`; `internal/llm` wraps it and uses its `Client` and `Options` without copying them. The paid Anthropic adapter, the optional local adapter and, once built, OpenAI's interface adapter all send through it.
 
 | Type | Holds |
 |---|---|
@@ -7370,6 +8564,8 @@ type Instance struct {
 	ID        string    `json:"id"`
 	Group     string    `json:"group"`
 	Backend   string    `json:"backend"` // the mechanism's name
+	Fallback  bool      `json:"fallback,omitempty"` // true when the Tester runs in the operating-system sandbox because Docker is missing
+	Reason    string    `json:"reason,omitempty"`   // why the first choice failed, when Fallback is true
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -7404,13 +8600,67 @@ The rules every mechanism applies, whatever it is:
 - Each instance has its own process limit and memory limit where the platform allows; the person is told where it does not.
 - Each instance has a private loopback where the platform allows, so two instances can bind one fixed port.
 
-[TODO: which mechanisms back the builder's and tester's commands, and whether Docker is required ([G-205](#g-205))]. A mechanism is one `Backend`. A container mechanism follows the image rules below.
+**Mechanisms.** A mechanism is one `Backend`. There are three:
+
+| Mechanism | Used for | Runs on |
+|---|---|---|
+| Docker container | The Tester's validation | One fresh container per group, wherever Docker runs |
+| Seatbelt | The Builder's quick commands, such as compiling one package; the Tester without Docker | macOS, through `sandbox-exec` |
+| Bubblewrap | The same two jobs | Linux and Windows Subsystem for Linux, through `bwrap` |
+
+- **Builder:** its commands run in the operating-system sandbox, with no container.
+- **Tester:** its commands run in a Docker container made for the group. The Cleanup Handler destroys the container at cleanup, through `CloseTaskGroup`.
+- **Fallback:** when Docker is missing or its daemon does not answer, the Tester's commands run in the operating-system sandbox. `Instance.Fallback` is true, the Task Manager reports the fact `sandbox.fallback`, and the run report says so.
+
+A container mechanism follows the image rules below. The operating-system mechanisms follow the profiles after them.
+
+**Operating-system profiles.** `profile.go` renders one profile per worktree and `Spec`, once, and reuses it for every command.
+
+| System | Mechanism | Profile |
+|---|---|---|
+| macOS | Seatbelt, through `sandbox-exec` | Reads allowed outside home; inside home only the worktree, the repository's git folder, the harness's caches and the toolchain folders; writes only to the worktree, the instance's temporary folder and the build cache; network denied except loopback; no process or memory cap, and `doctor` says so |
+| Linux, Windows Subsystem for Linux | Bubblewrap, through `bwrap` | `/` read-only; home an empty temporary file system with the worktree, git folder, caches and toolchains bound back; worktree, temporary folder and build cache writable; `/tmp` a temporary file system; network off; the sandbox dies with its parent; control-group caps where delegated, and without delegation no cap, with the same `doctor` and run report line as macOS; when user namespaces are blocked, no Builder command can start and the group escalates `blocked`, reason `setup`, naming the fix |
+
+The rendered Seatbelt profile for one worktree. Later rules win, so home is closed and then reopened for the listed folders:
+
+```scheme
+(version 1)
+(deny default)
+(allow process-exec process-fork signal sysctl-read mach-lookup)
+(allow file-read*)
+(deny file-read* (subpath "/Users/dev"))                        ; home closed
+(allow file-read* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")  ; worktree
+                  (subpath "/Users/dev/src/shop/.git")           ; git folder
+                  (subpath "/Users/dev/.komodo/cache/lang/shop") ; language caches
+                  (subpath "/Users/dev/.rustup"))                ; toolchain
+(deny file-read* (regex #"/\.env[^/]*$" #"\.pem$" #"\.key$"))    ; row G4 masks, rendered from its patterns
+(allow file-write* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")
+                   (subpath "/private/tmp/komodo-s1")            ; the instance's temporary folder
+                   (subpath "/Users/dev/.komodo/cache/lang/shop/build")) ; build caches only
+(deny file-write* (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.git")) ; ReadOnly
+(allow network* (remote ip "localhost:*") (local ip "localhost:*"))
+```
+
+The Bubblewrap command line for the same worktree:
+
+```text
+bwrap --ro-bind / / --tmpfs /home/dev \
+  --bind <worktree> <worktree> --ro-bind <worktree>/.git <worktree>/.git \
+  --ro-bind <git dir> <git dir> \
+  --bind <lang>/build <lang>/build --ro-bind <lang>/modules <lang>/modules \
+  --ro-bind /dev/null <worktree>/.env \
+  --tmpfs /tmp --bind <instance temp> <instance temp> \
+  --unshare-net --unshare-pid --die-with-parent --new-session \
+  --chdir <worktree> -- <command> <args>
+```
+
+For the group's setup command alone, `Spec.Network` is true: the Seatbelt profile then allows network access, and the Bubblewrap line leaves out `--unshare-net`.
 
 A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt` and `uv` where the language needs them, makes one container per instance with the worktree at `/work`, runs setup with network on and then disconnected, and runs each command as `docker exec`; a timeout kills the command's process group inside the container. A Makefile-only or 2-language repository sets `sandbox.image`.
 
 **Language caches.** The caches are the harness's own, under a per-repository folder: never the person's `~/.npm`, `~/.cargo/registry` or Go cache. The Cache Manager keeps them and their size rules ([chapter 8](#8-cache-manager)); the sandbox only mounts them, with the toolchain folders read-only. The per-user process limit is never used, because it counts every process the person runs.
 
-**Tester copy.** The tester gets its dependencies by the platform's mechanism: `cp -cR` (clonefile) on macOS, proven (1.2 GB with pnpm symlinks cloned in 0.00 s); `cp -R --reflink=auto` on Linux and Windows Subsystem for Linux 2, verified by [G-09](#g-09) and [G-10](#g-10). Go copies nothing; Node copies `node_modules` with symlinks kept; Rust copies nothing and shares one `CARGO_TARGET_DIR` per group under the language cache, because Cargo keys its fingerprints by absolute path ([G-12](#g-12)); Python reruns `uv sync`; Makefile-only reruns `make setup`. A changed lockfile reruns setup instead of copying. Symlinks are copied as links and never followed; a link resolving outside the worktree is dropped and logged. A `.venv` is never copied. [TODO: whether the tester gets a copy of the worktree or a read-only mount of the builder's ([G-205](#g-205))]; either way the builder's worktree is never writable from the tester's commands. Verified by [G-11](#g-11) and [G-25](#g-25).
+**Tester copy.** The tester gets its dependencies by the platform's mechanism: `cp -cR` (clonefile) on macOS, proven (1.2 GB with pnpm symlinks cloned in 0.00 s); `cp -R --reflink=auto` on Linux and Windows Subsystem for Linux 2, verified by [G-09](#g-09) and [G-10](#g-10). Go copies nothing; Node copies `node_modules` with symlinks kept; Rust copies nothing and shares one `CARGO_TARGET_DIR` per group under the language cache, because Cargo keys its fingerprints by absolute path ([G-12](#g-12)); Python reruns `uv sync`; Makefile-only reruns `make setup`. A changed lockfile reruns setup instead of copying. Symlinks are copied as links and never followed; a link resolving outside the worktree is dropped and logged. A `.venv` is never copied. [TODO: whether the tester gets a copy of the worktree or a read-only mount of the builder's ([G-261](#g-261))]; either way the builder's worktree is never writable from the tester's commands. Verified by [G-11](#g-11) and [G-25](#g-25).
 
 #### The session folder
 
@@ -7457,7 +8707,7 @@ Every session ends with exactly one `state.Reason` value ([10. State Manager](#1
 | `timeout` | The wall limit was hit and the ladder stopped the session | Starts a fresh session, up to the agent's retries |
 | `idle` | The session stayed silent past the nudge and 5 minutes of grace | Starts a fresh session, up to the agent's retries |
 | `refusals` | The guard refused the same row `guard.refusal_limit` times (row G6) | Retries the task |
-| `budget` | The group's token cap was spent | Escalates `blocked`, reason `budget`, under [TODO: whether reaching the group token cap blocks the group ([G-211](#g-211))] |
+| `budget` | The group's token cap was spent | Escalates `blocked`, reason `budget`, under [TODO: whether reaching the group token cap blocks the group ([G-246](#g-246))] |
 | `provider` | A usage limit ended the session and the chain has an allowed link | Keeps the resume handle; the next session starts on the next allowed link |
 | `billing` | The first stream line showed a paid API key instead of the subscription login | The session is killed before turn 1; escalates `blocked`, reason `paid_refused` |
 | `paused` | A provider limit halted the session, no link is left, and a resume handle exists | Reports the pause; resumes at the timer |
@@ -7477,7 +8727,10 @@ type Manager struct { /* spec, progress, runtime, router, sandbox, sessions */ }
 // New builds a Manager from the group's spec and the collaborators it calls.
 func New(spec GroupSpec, c Collaborators) (*Manager, error)
 
-// Run runs the spec's stages in order and returns when the group is closed, held or stopped.
+// Serve runs the command loop of the Task Manager goroutine until the group is closed or stopped.
+func (m *Manager) Serve(ctx context.Context, ch Channels) error
+
+// Run runs the pipeline from the saved stage, or from build for a new group, and returns when the group is closed, held or stopped.
 func (m *Manager) Run(ctx context.Context) error
 
 // Resume continues a paused group at its timer; it starts owed agents first.
@@ -7485,6 +8738,9 @@ func (m *Manager) Resume(ctx context.Context, w Wake) error
 
 // Continue delivers the one Answer to an Escalation and continues the held group.
 func (m *Manager) Continue(ctx context.Context, a Answer) error
+
+// Pause holds the group after its current step; Resume releases it at the reset time.
+func (m *Manager) Pause(ctx context.Context, link string, until time.Time) error
 
 // Stop cancels live sessions with a cause and returns.
 func (m *Manager) Stop(ctx context.Context, cause string) error
@@ -7509,19 +8765,30 @@ type Wake struct {
 
 | Method | Error | Meaning and what the caller does |
 |---|---|---|
-| `New` | A spec with no worktree or no stages | A programming error; the Runtime Manager does not start the group |
-| `Run` | `ErrHeld` | An escalation is open; the Runtime Manager waits and calls `Continue` |
-| `Run` | `ErrGroupPaused` | The group waits on a provider limit; the Runtime Manager sleeps and calls `Resume` |
-| `Run` | Any other error | The group failed; the Runtime Manager passes it to the Error Handler |
+| `New` | A spec with no worktree | A programming error; the Runtime Manager does not start the group |
+| `Run` | `ErrHeld` | An escalation is open; the loop sends `ended` with result `held`, and the Runtime Manager waits and sends `continue` |
+| `Run` | `ErrGroupPaused` | The group waits on a provider limit; the loop sends `ended` with result `paused`, and the Runtime Manager sleeps and sends `continue` with a wake-up |
+| `Run` | Any other error | The group failed; the loop sends `ended` with result `failed`, and the Runtime Manager passes it to the Error Handler |
 | `Continue` | `ErrNoEscalation` | The answer names no open escalation, or a second answer arrived; it is dropped and logged |
 | `Resume` | `ErrNotPaused` | The group is not paused; the call does nothing |
-| `Stop`, `CloseTaskGroup` | none | Safe to call twice; the second call does nothing |
+| `Pause`, `Stop`, `CloseTaskGroup` | none | Safe to call twice; the second call does nothing |
 
-[TODO: how long the Runtime Manager runs and how a second command such as stop reaches a live Manager ([G-201](#g-201))]. Under every option the Runtime Manager is the only caller of `Run`, `Resume`, `Continue` and `Stop`.
+**Runtime model.** The Task Manager is a goroutine that the Runtime Manager starts inside the engine, one per task group. The engine is the Runtime Manager's process: one per user per machine, started by the first command that needs a live run.
+
+1. The Runtime Manager builds the `GroupSpec`, calls `New`, creates a `Channels` pair and starts a goroutine that calls `Serve`.
+2. `Serve` waits for `start`, then runs the pipeline on this goroutine. Between steps, and while it waits on a session's stream, it reads the command channel, so a `stop` or `pause` is acted on without waiting for the group to finish.
+3. A `continue` command carries one of three things: an `Answer` to an open escalation (`Continue`), a `Wake` for a paused group (`Resume`), or a `TimerGrant` for a waiting `ExtendTimer`. Its `Re` field names the message it answers.
+4. A `pause` command makes the group finish its current session, judge the result, and then hold before it starts another. It sets `Progress.Pause` with `Until` as `WaitUntil`, and reports the state. The group keeps its lease. The Runtime Manager sends `continue` with a `Wake` when the window resets.
+5. A `stop` command calls `Stop` with the cause the command carries, such as `stop`, `abandon` or `pause_timeout`.
+6. Every escalation, timer request, state report and end of a call is a `Message` on the reply channel. A send on a full channel waits and drops nothing.
+
+A command from a person never reaches `Serve` directly. The command line sends it over the engine's private control socket, `~/.komodo/state/engine.sock`, to the Runtime Manager, which turns it into a `Command` for the group named by its label. The Runtime Manager is the only sender on a command channel, and `Serve` is the only caller of `Run`, `Resume`, `Continue`, `Pause` and `Stop`. `Serve` closes the reply channel when it returns.
+
+The engine supplies the `Runtime` interface below by sending `Message` values on the reply channel. `ExtendTimer` sends a `timer` message and blocks until the `continue` command whose `Re` names it arrives.
 
 #### Collaborators
 
-`RoleInput` holds the group's tasks, the diff, the trip number and the earlier findings. The Task Manager reaches everything outside its packages through these interfaces. The Runtime Manager supplies them, so `internal/task` imports no other subsystem.
+`RoleInput` holds the group's tasks, the diff, the trip number and the earlier findings. The Task Manager reaches everything outside its packages through these interfaces. The Runtime Manager supplies them, so `internal/task` imports no other subsystem beyond the types named in 11.2.
 
 ```go
 // Collaborators are the parts a Manager calls.
@@ -7535,6 +8802,7 @@ type Collaborators struct {
 	Client    *llm.Client
 	Sandboxes *sandbox.Manager
 	Limits    LimitStore
+	Cache     cache.Handle   // the cache handle; only the Runtime Manager creates or closes the cache
 }
 
 // Runtime is the Runtime Manager as the Task Manager sees it.
@@ -7599,17 +8867,25 @@ type Git interface {
 	Diff(ctx context.Context, l LeaseRef, paths []string) (string, error)
 	ReadOnly(ctx context.Context, l LeaseRef, command string, args []string) (string, error) // log, show, blame, status
 	ResetTracked(ctx context.Context, l LeaseRef) error // restores changed tracked files; removes untracked, non-ignored files
+	AddWorktree(ctx context.Context, l LeaseRef) error  // creates l.Branch and checks it out at l.Worktree, through core.Git.AddWorktree (15.4)
 }
 
 // Committer is the Commit Handler as the Task Manager sees it.
 type Committer interface {
-	Commit(ctx context.Context, group string) error
+	// Save makes a local commit of one finished task; it never pushes.
+	Save(ctx context.Context, r commit.SaveRequest) (commit.SaveResult, error)
+	// Publish hands over the approved group; the Commit Handler lands it on its epic's branch.
+	Publish(ctx context.Context, a commit.Approval) (commit.Result, error)
 }
 
-// LimitStore is the machine-wide record of limited links; who owns the storage is [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))].
+// LimitStore is the machine-wide record of limited links and link session counts, kept by the State Manager in providers.json.
 type LimitStore interface {
 	ResetAt(l llm.Link) (time.Time, bool) // when the link's limit lifts; false when not limited
 	Record(l llm.Link, reset time.Time, cap llm.CapKind) error
+	// TakeSlot counts one more live session on the link; false when the link already has max.
+	TakeSlot(l llm.Link, max int) (bool, error)
+	// ReleaseSlot counts one session fewer on the link.
+	ReleaseSlot(l llm.Link) error
 }
 ```
 
@@ -7627,7 +8903,7 @@ type SelectRequest struct {
 // Skip records one link passed over, published as the fact provider.skip.
 type Skip struct {
 	From, To llm.Link
-	Reason   string // ctx_below_floor, quota, unavailable, unauthorized, paid or the provider's reason
+	Reason   string // ctx_below_floor, quota, unavailable, unauthorized, not_built, paid or the provider's reason
 }
 
 // Selection is the chosen link and every skip on the way to it.
@@ -7714,7 +8990,7 @@ func (g *Guard) SetFiles(files []string)
 
 `Bind` fails on a permitted tool that is not registered, so the permission list is broken: the session does not start and the Task Manager escalates `blocked` with the tool named. `NewGuard` fails when the rows cannot be compiled: the session ends `no_result` and the task retries. `Dispatch` and `Check` cannot fail: a refusal or tool failure comes back as reply text (`error: <what failed>`), and a parse failure or internal error is a refusal.
 
-[TODO: whether agents may use outside Model Context Protocol servers and how the Task Manager guards their tools ([G-214](#g-214))]. Under every option, a tool that is not in the agent's permissions is refused by row G1, and a call whose path or class arguments the guard cannot read is refused.
+A tool of an outside tool server is listed in `Permissions.Tools` as `<server>.<tool>` and reaches an agent only when the server is also named in `Permissions.Servers` ([Outside tool servers](#115-behaviour)). A tool that is not in the agent's permissions is refused by row G1, and a call whose path or class arguments the guard cannot read is refused.
 
 #### Model client
 
@@ -7755,11 +9031,11 @@ func Scrub(env []string) []string
 func CheckInit(i Init) error
 ```
 
-`Probe` and `Profile` return `ErrUnavailable` or `ErrUnauthorized` for a missing program, a silent endpoint or a logged-out login; `Router.Select` skips the link. `Start` returns `ErrModelGone` on HTTP 404 (the task's next session takes the prior identifier), `ErrBilling` when the first line shows a paid key, `*ProviderLimit` for a provider cap, and `ErrNotYet` for a link named but not built. `Stream.Next` returns `io.EOF` after the result event; `Inject` and `Stop` return `ErrStreamClosed` on an ended session, which the caller ignores. A failed `Resume` gets a fresh session (resume).
+`Probe` and `Profile` return `ErrUnavailable` or `ErrUnauthorized` for a missing program, a silent endpoint or a logged-out login, and `ErrNotYet` for one of OpenAI's links, which the interface names and no adapter yet serves; `Router.Select` skips the link. `Start` returns `ErrModelGone` on HTTP 404 (the task's next session takes the prior identifier), `ErrBilling` when the first line shows a paid key, `*ProviderLimit` for a provider cap, and `ErrNotYet` for a link named but not built. `Stream.Next` returns `io.EOF` after the result event; `Inject` and `Stop` return `ErrStreamClosed` on an ended session, which the caller ignores. A failed `Resume` gets a fresh session (resume).
 
 #### HTTP client
 
-`NewHTTPClient(opts)` builds the client and loads the CA bundle. `Do(ctx, ep, req)` sends with retries and returns the whole body; `Stream(ctx, ep, req, hooks)` feeds SSE events to the hooks and retries a mid-answer drop once from the start; `Redact` and `AddSecrets` manage the redaction list. `Do` and `Stream` return `*LimitError`, `*StatusError`, `ErrRefused` (policy) or `ErrStreamIdle` (silent body). The paid Anthropic adapter and, if G-213 keeps them, the OpenAI-compatible adapter call it on every request; any other subsystem builds its own client with its own `Endpoint`.
+`NewHTTPClient(opts)` builds the client and loads the CA bundle. `Do(ctx, ep, req)` sends with retries and returns the whole body; `Stream(ctx, ep, req, hooks)` feeds SSE events to the hooks and retries a mid-answer drop once from the start; `Redact` and `AddSecrets` manage the redaction list. `Do` and `Stream` return `*LimitError`, `*StatusError`, `ErrRefused` (policy) or `ErrStreamIdle` (silent body). The paid Anthropic adapter, the optional local adapter and, once built, OpenAI's interface adapter call it on every request; any other subsystem builds its own client with its own `Endpoint`.
 
 #### Test sandbox
 
@@ -7767,8 +9043,8 @@ func CheckInit(i Init) error
 // Manager creates and destroys sandbox instances.
 type Manager struct { /* backends by role, live instances */ }
 
-// NewManager builds a Manager over the backends, keyed by role ("builder" or "tester").
-func NewManager(byRole map[string]Backend) *Manager
+// NewManager builds a Manager over the backends, keyed by role ("builder" or "tester"), and the operating-system backend the tester falls back to without Docker.
+func NewManager(byRole map[string]Backend, testerFallback Backend) *Manager
 
 // CreateSandboxInstance prepares one instance for a group and role.
 func (m *Manager) CreateSandboxInstance(ctx context.Context, s Spec) (Instance, error)
@@ -7780,9 +9056,9 @@ func (m *Manager) DestroySandboxInstance(ctx context.Context, id string) error
 func (m *Manager) Command(ctx context.Context, id string, c Command) (*exec.Cmd, error)
 ```
 
-A failing `Backend.Check` or `CreateSandboxInstance` makes the pipeline escalate `blocked`, reason `setup`, naming the fix. `Command` returns the reply `error: the sandbox could not start the command: <reason>` and never runs the command unsandboxed. A failed `DestroySandboxInstance` is ignored; the startup sweep removes the leftovers of dead runs.
+A failing `Backend.Check` or `CreateSandboxInstance` makes the pipeline escalate `blocked`, reason `setup`, naming the fix. `Command` returns the reply `error: the sandbox could not start the command: <reason>` and never runs the command unsandboxed. A failed `DestroySandboxInstance` is returned from `CloseTaskGroup`. Whether a container left by a run that died before cleanup is removed is [TODO: whether `komodo clean` removes the container of a group that never reached cleanup ([G-222](#g-222))].
 
-`Spec.Role` picks the backend. [TODO: which role uses which mechanism, and whether Docker is required ([G-205](#g-205))].
+`Spec.Role` picks the backend. The `builder` role gets the operating-system sandbox. The `tester` role gets a Docker container, or `testerFallback` when `Backend.Check` fails on Docker; the instance then carries `Fallback` and `Reason`.
 
 ### 11.5 Behaviour
 
@@ -7794,25 +9070,29 @@ One group from start to close: a build, one return, a second build, a pass, a co
 ```mermaid
 flowchart TB
   S["Setup"] -->|"1"| B["Build"]
-  B -->|"2"| T["Test"]
-  B -->|"2"| R["Review"]
-  T -->|"3"| J{"Both pass?"}
-  R -->|"3"| J
-  J -->|"4"| C["Commit"]
-  C -->|"5"| X["Cleanup"]
-  X -->|"6"| Z["Closed"]
-  J -->|"7"| W["Rework check"]
-  W -->|"8"| B
+  B -->|"2"| K["Mechanical checks"]
+  K -->|"3"| T["Test"]
+  K -->|"3"| R["Review"]
+  K -->|"4"| B
+  T -->|"5"| J{"Both pass?"}
+  R -->|"5"| J
+  J -->|"6"| C["Commit"]
+  C -->|"7"| X["Cleanup"]
+  X -->|"8"| Z["Closed"]
+  J -->|"9"| W["Rework check"]
+  W -->|"10"| B
 ```
 
-1. `Run` runs the setup command for the worktree, the only step with network access, then enters Build.
-2. Build ends with the builder's result judged `pass`. Saving any edit after the last task is [TODO: whether finished tasks are saved before approval and by whom ([G-220](#g-220))]. The pipeline then starts the tester and the reviewer together.
-3. Each of the two ends with an `Outcome`. The pipeline waits for both, unless the reviewer returns first (rework rules).
-4. Both `pass`: the pipeline calls `Committer.Commit` [TODO: one pull request per group or per epic ([G-210](#g-210))].
-5. The Commit Handler publishes the work, then calls the Cleanup Handler ([chapter 15](#15-commit-handler)). The Task Manager does not call it.
-6. The Cleanup Handler removes the branches and worktree and calls only `CloseTaskGroup()` on this Task Manager. Inside it the Task Manager calls `DestroySandboxInstance()`, reports stage `cleanup` closed, and `Run` returns.
-7. If either role returned, the pipeline runs the rework check.
-8. Inside the bound, the builder receives the findings and the group re-enters Build.
+1. `Run` creates the group's branch and worktree at the names the lease records, through `Git.AddWorktree`, unless the worktree already exists. It records the `.git` pointer, runs the setup command for the worktree, the only step with network access, then enters Build. The branch starts from [TODO: which ref a group's branch starts from, and who creates the epic's branch ([G-263](#g-263))].
+2. Build ends with the builder's result judged `pass`. After each finished task the Task Manager has already asked the Commit Handler to save a local commit (`Committer.Save`), which does not push. The pipeline then runs the mechanical checks.
+3. The checks run as Go code in the Tester's sandbox. Only a clean result starts the tester and the reviewer together; each ends with an `Outcome`. The pipeline waits for both, unless the reviewer returns first (rework rules).
+4. A failed check goes straight back to Build with the exact output, and no model is called ([Checks before the sessions](#115-behaviour)).
+5. Both roles `pass`.
+6. The pipeline calls `Committer.Publish`. The Commit Handler pushes the group onto its epic's branch, one group at a time per epic, and rechecks that branch. A failed recheck pauses landings on that epic until it passes. When the last group of the epic lands, the Commit Handler opens one pull request for the epic, and a person merges it.
+7. The Commit Handler then calls the Cleanup Handler ([chapter 15](#15-commit-handler)). The Task Manager does not call it.
+8. The Cleanup Handler removes the group's branch and worktree and calls only `CloseTaskGroup()` on this Task Manager. Inside it the Task Manager calls `DestroySandboxInstance()`, reports stage `cleanup` closed, and `Run` returns. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
+9. If either role returned, the pipeline runs the rework check.
+10. Inside the bound, the builder receives the findings and the group re-enters Build.
 
 Every stage change and every session start and end is a `ReportState` call.
 
@@ -7822,6 +9102,7 @@ The reviewer and the tester start together and run side by side. The reviewer is
 
 | Case | Outcome |
 |---|---|
+| A mechanical check fails | No tester or reviewer session starts; back to Build with the exact output |
 | Reviewer returns first | The tester is cancelled; the reviewer finishes; back to Build with all its verified findings |
 | Tester returns | The reviewer finishes; back to Build with the tester's findings and the reviewer's |
 | Tester result is `restart` and `Disputes` is 0 | `Disputes` becomes 1; the tester restarts once with Go's output; the reviewer keeps going; the group does not go back to Build |
@@ -7838,12 +9119,21 @@ A return counts one in `Progress.Returns`. The rework check runs these steps in 
 
 While the group is paused, a tester or reviewer restart is added to `Pause.Owed` and started at the timer, never at once, so no session starts with no allowed link and the agent's retry budget is not spent.
 
+#### Checks before the sessions
+
+When the group enters `test_review`, Go code runs the free checks before any model is called.
+
+1. `CreateSandboxInstance` makes the Tester's sandbox for the group: a Docker container, or the operating-system sandbox when Docker is missing.
+2. The checks run inside it as the first step of the Tester's turn ([chapter 13](#13-tester)): the task's completion commands, the affected tests, coverage and the secret scan.
+3. A failure becomes a `return` whose findings are the exact output. The rework check then runs, and the group re-enters Build. No session starts.
+4. A clean result starts the tester and the reviewer together.
+
 #### Start a session
 
 1. The pipeline asks the role for its slot values and the `Briefer` for the brief. The brief is sized once and never refitted.
 2. `Select` walks the chain (link choice) and returns the link, the model and the profile `{ctx, slots, cost_class, effort}`.
-3. The supervisor takes a slot on the link. Who counts slots across groups is [TODO: who owns session slots, provider reset times, and install and update state ([G-216](#g-216))]; the Task Manager asks for one before it starts the session and releases it when the session ends or pauses.
-4. The supervisor picks the session identifier, writes `brief.md` once, `scope.json`, `request.json` and, for the subscription link, `mcp.json`, and reports the fact `session.start` with the measured context and its source.
+3. The supervisor takes a slot on the link with `LimitStore.TakeSlot`, against `limits.link_sessions.<link>`. The count is the link's session count in `providers.json`, kept by the State Manager, so every group on the machine shares it. The supervisor releases the slot with `ReleaseSlot` when the session ends or pauses.
+4. The supervisor picks the session identifier, writes `brief.md` once, `scope.json`, `request.json` and, for the subscription link, `mcp.json`, and reports the fact `session.start` with the measured context and its source. The state report that holds the session's handle goes up before `Start` is called.
 5. `Start` runs the billing check (billing check), launches the process or sends the first request, and returns the stream.
 6. Events flow until the `result` event; `Next` then returns `io.EOF`.
 
@@ -7867,11 +9157,11 @@ flowchart TD
   F -->|"yes"| G["6 start the session"]
 ```
 
-1. Take the next link from `SelectRequest.Chain`. With an agent `model` override the model's link comes first. The chain lists the subscription link first, then paid links; [TODO: which further links the chain may hold, including OpenAI links and the free local backstop ([G-213](#g-213))].
+1. Take the next link from `SelectRequest.Chain`. With an agent `model` override the model's link comes first. The chain lists the Claude subscription link first, then the paid Anthropic link. The optional local link may follow. OpenAI's links can be named in a chain, and `Select` skips each with reason `not_built` until it is built.
 2. If `LimitStore.ResetAt` gives a reset time still in the future for the link, skip it as over its limit.
 3. If the probe record marks the link unavailable or unauthorized, skip it.
 4. Compute the cost class (billing check). Under `providers.paid: never` a `paid` link is removed from the chain. Under `fallback` a `paid` link runs only after every `subscription` link has been skipped. Under `allowed` a `paid` link runs in its chain position.
-5. If the brief exceeds half the measured context, skip the link and take the next one that fits. Nothing is cut to fit.
+5. If the brief exceeds half the measured context, skip the link and take the next one that fits. Nothing is cut to fit. The local link is also skipped with `ctx_below_floor` when its measured context is below `providers.ctx_floor`.
 6. Return the link, the model and the profile, plus one `Skip` per skipped link. Each `Skip` becomes a `provider.skip` fact and a warning that names the model the task actually ran on.
 
 Rules that hold on every walk:
@@ -7888,8 +9178,8 @@ The check gives each link a cost class before every session and fails closed: an
 | Cost class | When | Runs |
 |---|---|---|
 | `subscription` | The `claude` link with `authMethod: claude.ai` and `subscriptionType` in `pro`, `max`, `team`, `enterprise` | Always |
-| `free` | [TODO: whether free local model links exist ([G-213](#g-213))] | Always |
-| `paid` | The paid Anthropic link, any other login, any unknown link | Per `providers.paid` |
+| `free` | The optional local link, on loopback or marked `self_hosted` | Always |
+| `paid` | The paid Anthropic link, OpenAI's paid interface, any other login, any unknown link | Per `providers.paid` |
 
 | `providers.paid` | Effect |
 |---|---|
@@ -7935,7 +9225,7 @@ The launch line, one flag per line:
 | `--model` | The exact pinned model identifier for the agent's weight |
 | `--system-prompt-file` | Replaces the program's default system prompt with the harness's file |
 | `--tools ""` | Switches off every native tool, so only the harness's tools exist |
-| `--mcp-config … --strict-mcp-config` | Points to this session's private tool server and forbids every other Model Context Protocol server from the person's settings. [TODO: whether outside servers may be added ([G-214](#g-214))] |
+| `--mcp-config … --strict-mcp-config` | Points to this session's private tool server and forbids every other Model Context Protocol server from the person's settings. An enabled outside server is reached only through the private tool server ([Outside tool servers](#115-behaviour)) |
 | `--permission-mode dontAsk` | A tool call nothing allows is denied outright, since nobody is watching |
 | `--permission-prompts none` | Tells the model a denied call will not be retried by asking |
 | `--allowedTools mcp__komodo` | Allows calls to the harness's tool server and nothing else |
@@ -7953,7 +9243,7 @@ The launch line, one flag per line:
 2. A `retry` event has category `billing_error`.
 3. An HTTP response yields a `*LimitError`.
 
-A `retry` event of category `rate_limit` with no reset time, or one 60 s away or less, only extends liveness by its delay. A `rate_limit` event with `IsUsingOverage` true raises one `limit.warn` fact. [TODO: whether the Resource Manager only warns at a plan or cost limit or also pauses work ([G-211](#g-211))]. What holds under every option: a link classed `paid` never runs under `providers.paid: never`, and the overage fact reaches the Runtime Manager in the next `ReportState` so the Resource Manager can act on it.
+A `retry` event of category `rate_limit` with no reset time, or one 60 s away or less, only extends liveness by its delay. A `rate_limit` event with `IsUsingOverage` true raises one `limit.warn` fact. The fact reaches the Runtime Manager in the next `ReportState`. The Resource Manager warns at 80% of a plan window or of a spending amount set in configuration. Overage spending only warns, unless a spending ceiling is set in configuration, in which case it pauses the groups ([chapter 19](#19-resource-manager)). A link classed `paid` never runs under `providers.paid: never`.
 
 **Finding `claude`.** `exec.LookPath("claude")`, then `~/.local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/local/bin/claude`, in that order; never a file under `~/.local/share/claude/versions/`, which the program's updater deletes. Login state comes only from `claude auth status --json`; no code reads credentials.
 
@@ -7965,7 +9255,9 @@ On the paid Anthropic link, `Start` runs the tool loop in `loop.go` over the HTT
 |---|---|
 | Subscription | `--json-schema` on the launch line |
 | Paid Anthropic | Structured outputs (`output_config.format`) with thinking left on; the larger models refuse a forced `tool_choice` with HTTP 400, so none is sent |
-| OpenAI-compatible | [TODO: which OpenAI links exist ([G-213](#g-213))]; no tools, the schema as `response_format` |
+| OpenAI subscription | `--output-schema` on the launch line; in the interface, not built |
+| OpenAI interface | No tools, `response_format: json_schema` with `strict: true`; in the interface, not built |
+| Local | No tools, the schema as `response_format`; Ollama has no `tool_choice` |
 
 - Every link ends the same way: tools on `auto`, a text-only reply ends the work, one final call returns the result schema, and Go validates it again.
 - Effort per weight on API links is fixed per agent: heavy `high`, standard `medium`, light `low`. A change of effort or thinking invalidates the prompt cache.
@@ -7977,7 +9269,7 @@ On the paid Anthropic link, `Start` runs the tool loop in `loop.go` over the HTT
 3. The 2 fixed markers plus the automatic one leave 1 slot free. A fourth explicit marker would use the last slot, and the provider returns HTTP 400 when no slot is left for the automatic one.
 4. No timestamps, identifiers or unsorted maps appear in parts 1 to 4, so two sessions of one agent share every prefix byte.
 
-The subscription link caches on its own. [TODO: rules for reusing a stored prompt response ([G-208](#g-208))]. Under every option the model client itself stores no answers and no adapter calls the Cache Manager; any reuse goes through the Runtime Manager.
+The subscription link caches on its own. On the paid link the adapter passes the request's layers to `cache.PlanMarkers`, writes the markers the plan names, and stores the plan under the `prompt` namespace through the cache handle ([chapter 8](#8-cache-manager)). The cache never returns a stored model answer in place of a new call, and the model client stores no answers.
 
 #### The tool loop
 
@@ -8095,19 +9387,21 @@ sequenceDiagram
 **Resume a session.** One rule covers every resume (a timer, a scope answer, a crash):
 1. Try the saved handle. On the subscription link run `--resume <uuid>`; on API links replay `messages.jsonl`.
 2. If it fails, start a fresh session with the brief, the work-in-progress diff and the last builder `summary`, and report the fact `resume_lost`.
-3. A resume never charges `Attempts`, and a crash is never an attempt. [TODO: what survives a harness crash, and so what the Runtime Manager can hand a rebuilt Task Manager ([G-202](#g-202))]. Under every option the session folder and the handle in `request.json` are on disk before the session starts.
+3. A resume never charges `Attempts`, and a crash is never an attempt. After a crash the Runtime Manager reads only the State Manager, builds a new Task Manager and passes the group's saved state as `GroupSpec.Saved`. The saved `Progress.Handles` hold each live session's handle, so the new Task Manager resumes from them. The supervisor reports the handle, and writes it to `request.json` in the session folder, before the session starts.
 
 The rewriting of `scope.json` happens before either step, so a resumed session sees the paths a scope answer added.
 
+**Pause by command.** A `pause` command from the Runtime Manager holds a group for a plan window that ran out, not for a provider refusal. The group finishes its current session and judges the result. It then sets `Progress.Pause` with `WaitUntil` from the command, reports the state and starts no session. It keeps its lease. A `continue` command with a `Wake` at the reset time releases it.
+
 #### Scope request
 
-A builder that needs a file outside its list stops with result status `needs_scope`; the orchestrator answers, as decided on 2026-10-09. [TODO: how the answer reaches `Manager.Continue` ([G-204](#g-204))].
+A builder that needs a file outside its list stops with result status `needs_scope`. The orchestrator answers with `komodo run (id) --approve`, which grants the files, or `--deny`, which refuses them. The command line sends the answer to the Runtime Manager, which sends a `continue` command carrying an `Answer` down the command channel; `Serve` passes it to `Manager.Continue`.
 
 1. Row B1 refuses the write and tells the builder to stop with `needs_scope`, naming the paths. The builder ends with exit reason `needs_scope`.
-2. The Task Manager adds the task to `ScopeAsked`; saving the work is [TODO: whether finished tasks are saved before approval and by whom ([G-220](#g-220))]. This is recorded on the exit, so the one-request-per-task limit holds.
+2. The Task Manager adds the task to `ScopeAsked`. Tasks finished earlier are already saved as local commits; the stopped task's partial work stays in the worktree. This is recorded on the exit, so the one-request-per-task limit holds.
 3. It removes from the request every path that is protected (row G3), a secret file (row G4), or covered by another group's files. If the task is already in `ScopeAsked`, or no path is left, it denies at once without escalating and resumes the builder with a denial.
-4. Otherwise it calls `Runtime.Escalate` with kind `scope` and the remaining paths, and the group is held.
-5. `Continue` delivers the `Answer`. The Task Manager re-applies step 3 to the approved paths: it never applies a path it would have denied itself.
+4. Otherwise it calls `Runtime.Escalate` with kind `scope` and the remaining paths, and the group is held. `komodo status --wait` returns this question.
+5. `Continue` delivers the `Answer`, whose action is `approve` or `deny`. The Task Manager re-applies step 3 to the approved paths: it never applies a path it would have denied itself.
 6. It appends the applied paths to the group's files and to `Progress.Widened`, calls `Guard.SetFiles`, rewrites `scope.json` with the effective list, and resumes the builder with the answer as its input.
 
 #### Guard check
@@ -8125,12 +9419,13 @@ An agent's rows compile into a matcher once per session. A check is a map lookup
 #### Tool call and run
 
 1. At session start the registry binds the permitted tools to the session. A tool not in the list is neither advertised nor callable (row G1).
-2. On the subscription link the tool server talks to the program over standard input and output. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. The supervisor passes its inputs in `mcp.json`: the arguments name the agent and the session, and the environment carries the worktree, the file list and the permitted classes as JSON text. [TODO: whether the tool server starts as a hidden verb of the same binary ([G-204](#g-204))].
+2. On the subscription link the tool server talks to the program over standard input and output. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. The supervisor passes its inputs in `mcp.json`: the arguments name the agent and the session, and the environment carries the worktree, the file list and the permitted classes as JSON text. The tool server starts as the hidden verb `komodo internal tools` of the same binary, outside the 13 commands.
 3. On an API link, the tool loop calls the same tool functions in the harness process.
 4. The guard runs before the tool. A refusal returns a reply naming the row and the allowed alternative.
 5. The reply is capped; the full output goes to `out/<call>.log`, and the capped reply names the path.
 6. A validated `submit_finding` becomes the fact `finding.submit`. The role judges its evidence; a finding whose quote is not at its `file:line` is dropped and logged, and does not block.
 7. After an `edit`, the repository's detected `format` command runs on the edited file inside the confinement. If it fails, the edit stays unformatted and the reply carries the error; a repository with no `format` command skips the step.
+8. When `task_done` reports a task's `done_when` command passing, the Task Manager adds the task to `Progress.TasksDone`, calls `Committer.Save` for it, and reports the state. The commit stays local.
 
 **The run tool.**
 1. Row R1 checks that the class is in the agent's `run_classes`. Anything else is refused and the model is told which classes exist.
@@ -8163,6 +9458,17 @@ Rule 4 is unproven until its component case runs ([11.9](#119-proof-cases)).
 
 The tool server answers `initialize` inside the program's 30 s `MCP_TIMEOUT` (it takes under 100 ms). When the first `system/init` line does not list the harness server as `connected`, the supervisor stops the session before turn 1 with `no_result`. `MCP_TOOL_TIMEOUT` is about 28 hours, so the 10-minute `run` timeout is the only per-command timer. `CLAUDE_CODE_RETRY_WATCHDOG` is never set; the supervisor reads `system/api_retry` lines instead.
 
+#### Outside tool servers
+
+Outside tool servers are off by default. A server is on for an agent only when a person adds it to the Context Manager's list and switches it on for that agent by name.
+
+1. The Runtime Manager copies only the enabled entries into `GroupSpec.Servers`, and names each one in the `Servers` list of the agents allowed to use it.
+2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. How each mechanism limits a server to those hosts is [TODO: how each sandbox mechanism limits an outside server to the hosts its entry lists ([G-264](#g-264))].
+3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call.
+4. Every call passes the guard first, exactly like a built-in tool: row G1 refuses a name not in the permissions, and a refusal counts toward `guard.refusal_limit` (row G6).
+5. Every call, allowed or refused, is recorded: a `tool.outside` fact for an allowed call, and `tool.denied` for a refusal.
+6. The server dies with the session.
+
 #### HTTP client behaviour
 
 The client sends every request through one `http.Transport` per process, with keep-alive and HTTP/2 to hosted links.
@@ -8187,9 +9493,9 @@ Connection and safety rules:
 
 #### Sandbox instance
 
-`CreateSandboxInstance` is called when the group first needs a confined command and once per role. [TODO: when each instance is created and whether the tester's runs in a separate instance ([G-205](#g-205))].
+`CreateSandboxInstance` is called once per role. The Builder's instance is made when the group first needs a confined command. The Tester's instance, a separate Docker container, is made when the group enters `test_review`.
 
-1. Check `Backend.Check`; on failure escalate `blocked`, reason `setup`, naming the fix.
+1. Check `Backend.Check`; on failure escalate `blocked`, reason `setup`, naming the fix. When the Tester's Docker check fails, use the operating-system backend, report `sandbox.fallback`, and escalate only if that backend fails too.
 2. Build the `Spec`: the worktree, `.git` read-only, the instance's private temporary folder and build cache, read-only module caches, toolchain folders, the masked secret files, and the process and memory caps.
 3. Call `Backend.Prepare`. A container mechanism creates the container with network on for the setup command only.
 4. Run `commands.setup` with `Network` true, then turn the network off. This is the only network time an instance has.
@@ -8225,7 +9531,7 @@ The steps in 11.5 and the stop ladder give each move; a session that ends `pause
 |---|---|---|
 | `build` | `Run` starts, or a return | Builder `pass` |
 | `test_review` | Builder `pass` | Both roles `pass`, or a return |
-| `commit` | Both roles `pass` | `Committer.Commit` returns |
+| `commit` | Both roles `pass` | `Committer.Publish` returns |
 | `cleanup` | The commit is published | `CloseTaskGroup` |
 
 Paused and held are conditions, not stages: `Progress.Pause` is set while paused, and an open `Escalation` is held. A group can be paused or held in any stage.
@@ -8241,7 +9547,7 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 1. Every tool call passes the guard before its tool function runs. A refusal never turns into an allow: unparsable input, an unknown tool, an empty permission list and a guard error all refuse.
 2. A tool is callable only when the agent's permissions list it, and only listed tools are advertised. Rows G1 to G6 apply to every agent whatever the registry lists, and no guard row is Go code.
 3. No `run` command starts outside a confinement; with none available the group escalates `blocked`. Network is off for every `run`; only the group's setup command has network, and no agent can run it.
-4. No git command runs on the host against a path a confined command could write, unless the host git rules of 11.5 hold. This is true under every mechanism [TODO: which mechanisms exist ([G-205](#g-205))].
+4. No git command runs on the host against a path a confined command could write, unless the host git rules of 11.5 hold. This is true under every mechanism.
 5. No agent has a git write tool, and no command class runs a git write.
 6. The model client is never sandboxed; the confinement wraps `run` commands only.
 7. Language caches are the harness's own; module caches are read-only and build caches private to one instance. A tester's confined commands never write the builder's worktree.
@@ -8252,6 +9558,8 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 12. A run keeps the model identifiers the probe wrote. A link is skipped only because it is unavailable, unauthorized, limited, forbidden by `providers.paid` or too small for the brief, never because a task failed on it. A brief is never cut to fit a window.
 13. No API key and no `env:` value reaches a log, an event or an error text.
 14. The Task Manager accepts exactly one `Answer` per `Escalation`.
+15. Commands reach the Task Manager only on its command channel, from the Runtime Manager; no other part calls `Run`, `Resume`, `Continue`, `Pause` or `Stop`.
+16. An outside tool server is off unless a person adds it and switches it on for a named agent. It runs inside the sandbox, with no network unless its entry lists a host. Every call passes the guard and is recorded as an event.
 
 **Failures: pipeline and supervisor**
 
@@ -8274,6 +9582,9 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 | `.git` pointer text changed | Pointer check | The host git call is refused; escalate `blocked`, reason `contract` |
 | Reviewer's or tester's test edits a tracked file twice | `ResetTracked` count | Escalate `blocked`, reason `contract` |
 | Sandbox cannot start, or setup fails | `Backend.Check`, `Prepare` | Escalate `blocked`, reason `setup`, naming the fix |
+| Docker missing for the Tester | `Backend.Check` on Docker | The Tester runs in the operating-system sandbox; the fact `sandbox.fallback` is reported and the run report says so |
+| A mechanical check fails | The Tester's first step | Back to Build with the exact output; no model is called |
+| A `pause` command arrives during a session | Command channel | The session finishes and is judged; then the group holds, keeping its lease |
 | `CloseTaskGroup` while a session is live | Manager | The session is stopped with cause `cancelled`, then the instance is destroyed |
 
 **Failures: tools and guard**
@@ -8304,7 +9615,7 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 | Model ID returns 404 mid-run | HTTP status 404 at start | That start fails once; the task's next session takes the prior identifier |
 | Paid link under `providers.paid: never` | Billing check | Link removed from the chain; if nothing is left, escalate `paid_refused` |
 | `ANTHROPIC_API_KEY` set with a subscription login | Scrub, then the init line | Variable removed; the init line must say `apiKeySource: none` or the session dies before turn 1 |
-| Subscription draws overage credits | `rate_limit` event | One `limit.warn` fact; the session finishes; [TODO: warn or pause ([G-211](#g-211))] |
+| Subscription draws overage credits | `rate_limit` event | One `limit.warn` fact; the session finishes; the Resource Manager warns, and pauses only at a spending ceiling |
 | Short rate limit the program retries itself | `retry` event, no reset or reset within 60 s | Liveness only; the session continues |
 | Stream drops mid-answer | Connection closes before the final event | 1 retry from the start; a second drop fails the session |
 | 429 with a spend or quota code, or `retry-after` over 60 s | Status, header and body | `LimitError`; failover or pause, no retry |
@@ -8328,15 +9639,16 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `limits.group_attempts` | int | 6 | Fresh builder sessions per group before the group is escalated |
 | `limits.group_tokens` | int | 2,000,000 | Token cap per group; the Resource Manager owns it ([chapter 19](#19-resource-manager)) |
 | `limits.pause_max_min` | int | 360 | Read by the Runtime Manager: longest a session stays paused; hard limit 1,440 |
-| `limits.link_sessions.<link>` | int | 3 | Most concurrent sessions per link across all groups; counted by the Runtime Manager |
+| `limits.link_sessions.<link>` | int | 3 (most 8); the local link 1 | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
 | `agents.<name>.retries` | int | per agent | Fresh sessions after a timeout or idle stop, inside `limits.group_attempts` |
 | `guard.refusal_limit` | int | 3 | Refusals under one row before the session ends; hard limit 5; the only guard tunable |
 | `sandbox.max_procs` | int | 512 | Processes per instance, where the platform can cap them |
 | `sandbox.max_mem_gb` | int | 8 | Memory per instance in gigabytes |
-| `sandbox.image` | string | detected | Container image; required for a Makefile-only or 2-language repository. [TODO: whether a container is used ([G-205](#g-205))] |
+| `sandbox.image` | string | detected | Image of the Tester's container; required for a Makefile-only or 2-language repository |
 | `providers.paid` | enum | `never` | `never`, `fallback` or `allowed`; see the billing check |
 | `providers.keys.anthropic` | env ref | `env:ANTHROPIC_API_KEY` | Names the environment variable holding the key; the value is never stored or logged |
-| `providers.ctx_floor` | int | 262144 | Smallest context an HTTP-served model may have. [TODO: whether such links exist ([G-213](#g-213))] |
+| `providers.local` | object | none | The optional local link: `url`, `models`, `ctx`, `key`, `self_hosted`, `first_byte_s`; absent means the link is off |
+| `providers.ctx_floor` | int | 262144 | Smallest context the optional local link may have; the default catches Ollama's 4,096 |
 | `warn.quota_pct` | int | 90 | Warns when a provider window passes this percent used |
 | `http.ca_bundle` | path | none | Extra trusted certificates added to the system roots |
 
@@ -8371,6 +9683,18 @@ Component cases run real commands in the confinement of the platform. Unit cases
 - A group started while every link is limited pauses, reports a `Pause` with `Since` set, and makes 0 model calls.
 - A re-pause keeps `Since` and raises `RefusedResumes`.
 - A failover changes `Attempts` by 0.
+- A `Select` that meets `LimitStore.TakeSlot` returning false for every link pauses the group; a slot taken is released when the session ends.
+
+**Command loop and git**
+- A `stop` command sent while a session runs cancels the session and ends `Serve`; `Serve` closes the reply channel.
+- A `pause` command sent during a session lets the session finish, then holds the group with `Progress.Pause` set and the lease kept; a `continue` with a `Wake` releases it.
+- A `continue` carrying a `TimerGrant` with the `Re` of a waiting `ExtendTimer` returns the grant to that call.
+- A second `Answer` for one escalation is dropped and logged.
+- A group continued from a `Saved` state at `test_review` starts there and runs test and review before commit; a new group starts at `build`.
+- A `GroupSpec` with `Saved.Handles` resumes each live session from its handle; with a failing handle it starts a fresh session and reports `resume_lost`.
+- `Run` on a new group calls `Git.AddWorktree` once; on a continued group whose worktree exists it calls it 0 times.
+- A passing `task_done` calls `Committer.Save` once for that task and never pushes.
+- A failing mechanical check returns to Build with the exact output and starts 0 sessions and makes 0 model calls.
 
 **Scope request**
 - A request for `~/.komodo/x`, a secret file or another group's file is denied with no escalation.
@@ -8382,11 +9706,14 @@ Component cases run real commands in the confinement of the platform. Unit cases
 - The guard table test covers every row for every agent, and malformed input is refused.
 - An agent with an empty `Permissions` is refused for every tool.
 - A reviewer calling `edit` is refused; a builder calling `submit_finding` is refused.
+- An outside tool server absent from `Permissions.Servers` is never started; its tool is refused by row G1.
+- An enabled outside server with no `Hosts` starts with no network, and a call from it to a public address fails.
+- Every call to an outside tool, allowed or refused, produces one fact: `tool.outside` or `tool.denied`.
 - `write` on an existing file is refused.
 - A `run` argument of `&&` reaches the command as a literal string.
 - A 40 KB `run` output leaves its full log at the named path.
 - A `policy.json` row edited without its test fails the guard table test.
-- The Task Manager package compiles with no import of another subsystem.
+- The Task Manager package compiles with no import of another subsystem beyond the `state` and `cache` types and the `commit` value types.
 
 **Model client**
 - A fake `retry` line with category `rate_limit` and a reset 30 s away does not end the session.
@@ -8396,6 +9723,10 @@ Component cases run real commands in the confinement of the platform. Unit cases
 - With `ANTHROPIC_API_KEY` set and a subscription login, a session runs on `apiKeySource: none` and 0 paid calls are made.
 - `Select` removes a paid link under `never`, runs it last under `fallback`, and runs it in place under `allowed`.
 - A brief of exactly half the measured context fits; one token more moves to the next link.
+- A chain that names `openai-subscription` or `openai-api` skips it with reason `not_built`, and `Probe` returns `ErrNotYet`.
+- A fixture Ollama reporting 262,144 takes a brief of 131,072 tokens and refuses 131,073.
+- A fixture Ollama whose `/api/ps` reports `context_length: 4096` is skipped with `ctx_below_floor`.
+- A local entry with `Ctx` 65,536, 262,144 measured and `providers.ctx_floor` 32,768 sizes briefs to 32,768 tokens.
 - The `claude` environment holds the real `HOME`; the command environment holds the instance's temporary `HOME`.
 - The Anthropic request carries 2 explicit markers and the top-level marker; a request builder given 4 explicit markers returns an error before sending.
 - On each API link, a model that stops with text gets 1 final call and a schema-valid result; a builder whose gate fails continues in the same session.
@@ -8414,6 +9745,9 @@ Component cases run real commands in the confinement of the platform. Unit cases
 #### Component
 
 **Sandbox and process control**
+- A `run` in the operating-system sandbox that writes outside the worktree fails, on Seatbelt and on Bubblewrap.
+- The Tester's validation runs in a Docker container made for the group; the Cleanup Handler's `CloseTaskGroup` destroys it, and a second call does nothing.
+- With Docker missing, the Tester's commands run in the operating-system sandbox, `Instance.Fallback` is true and the fact `sandbox.fallback` is reported.
 - A `run` that writes outside the worktree fails.
 - A `run` that rewrites `<worktree>/.git` fails.
 - A `run` that connects to a public address fails.
@@ -8452,24 +9786,18 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Touches |
 |---|---|---|
-| [G-201](#g-201) | How long the Runtime Manager runs and how a second command reaches a live run | How `Continue`, `Resume` and `Stop` arrive |
-| [G-202](#g-202) | What survives a crash | How a Task Manager is rebuilt after a harness crash |
-| [G-203](#g-203) | What `build`, `test`, `review` and `replay` do | `GroupSpec.Stages` |
-| [G-204](#g-204) | Which old commands survive; how the scope answer is sent | `Manager.Continue`; the tool server start |
-| [G-205](#g-205) | Where builder and tester commands run; whether Docker is required | The sandbox mechanisms, instance timing, tester copy |
-| [G-206](#g-206) | Where the free mechanical checks run | The Tester's first step, not the Task Manager |
-| [G-207](#g-207) | Whether the architect, researcher and scout are dropped | The `web` tool |
-| [G-208](#g-208) | Whether a model's earlier answer may be reused | The model client and the Cache Manager |
-| [G-210](#g-210) | One pull request per group or per epic | `Committer.Commit` |
-| [G-211](#g-211) | Whether the Resource Manager only warns or also pauses | The overage fact |
-| [G-213](#g-213) | Which model links exist | The chain, the cost classes, `openai.go` |
-| [G-214](#g-214) | Whether outside Model Context Protocol servers are allowed | The guard and the launch line |
+| [G-222](#g-222) | What `komodo clean` removes | A container left by a run that died before cleanup |
+| [G-226](#g-226) | Who commits the Intake Handler's task lists | The Task Manager's scope in git |
+| [G-246](#g-246) | Whether reaching the group token cap blocks the group | Exit reason and escalation `budget` |
+| [G-261](#g-261) | Whether the Tester gets a copy of the worktree or a read-only mount | Tester copy |
+| [G-263](#g-263) | Which ref a group's branch starts from, and who creates the epic's branch | `Git.AddWorktree` |
+| [G-264](#g-264) | How each mechanism limits an outside server to its listed hosts | Outside tool servers |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | Billing check |
 | [G-08](#g-08) | A private loopback per instance | Sandbox |
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Tester copy mechanisms and costs | Sandbox |
 | [G-71](#g-71) | Details of the subscription link, including which environment variables the login needs | Subscription link |
 | [G-72](#g-72) | Request and response mapping of the API interfaces and the cache markers | API links |
-| [G-03](#g-03), [G-04](#g-04) | A local model at the context floor, and parallel requests | Only if G-213 keeps local models |
+| [G-03](#g-03), [G-04](#g-04) | A local model at the context floor, and parallel requests | Only the optional local link |
 | [G-07](#g-07) | The real 5-hour window against `limits.link_sessions` for the subscription link | Slots |
 
 ## 12. Builder
@@ -8481,17 +9809,17 @@ The Builder is the agent that writes the code of one task group. It works task b
 **Owns:**
 - The Builder's role definition: tools, command classes, guard rows, brief slots, result schema.
 - The Builder's result and how Go validates it.
-- The task gate: Go reruns a task's completion command and reports its exit code. Saving the result is [TODO: whether finished tasks are saved before approval and by whom ([G-220](#g-220))].
+- The task gate: Go reruns a task's completion command and reports its exit code. A passing task is then saved as a local commit by the Commit Handler, on the Task Manager's request (12.5).
 - The scope request: a Builder that needs a file outside its group's file list.
 - What the Builder receives when the Tester or Reviewer returns work to it.
 
 **Does not own:**
-- Starting, timing, stopping and resuming the Builder's model session, and the guard that checks every action: [Task Manager](#11-task-manager). Any work-in-progress save at a session's end is [TODO: whether finished tasks are saved before approval and by whom ([G-220](#g-220))].
+- Starting, timing, stopping and resuming the Builder's model session, and the guard that checks every action: [Task Manager](#11-task-manager). Whether unfinished edits are saved when a session ends is [TODO: whether a session's unfinished edits are saved as a local commit when it ends ([G-265](#g-265))].
 - The prompt text, skills and the filling of brief slots: [Context Manager](#6-context-manager).
 - The agent registry entry (model, link chain, limits): [Configuration Manager](#3-configuration-manager).
 - The return counter, attempt counter, retry loops and group clocks: [Runtime Manager](#7-runtime-manager).
-- Lease records: [Lease Manager](#9-lease-manager). Creating the branch and worktree: [TODO: who creates a group's branch and worktree ([G-220](#g-220))].
-- Judging the work under test: [Tester](#13-tester) and [Reviewer](#14-reviewer). Pushing it: [Commit Handler](#15-commit-handler).
+- Lease records: [Lease Manager](#9-lease-manager). Creating the group's branch and worktree: [Task Manager](#11-task-manager).
+- Judging the work under test: [Tester](#13-tester) and [Reviewer](#14-reviewer). Saving each finished task as a local commit and pushing the approved work: [Commit Handler](#15-commit-handler).
 
 **Concepts**
 
@@ -8499,12 +9827,14 @@ The Builder is the agent that writes the code of one task group. It works task b
 |---|---|
 | Task | One unit of work in a task group's task list, with an identifier, a card (its description) and a completion command. |
 | Completion command | The command a task names as its success test; the task list calls it `done_when`. |
-| Round | One pass of the Builder followed by the Tester and the Reviewer on the same work under test. |
-| Return | A trip from the Tester or Reviewer back to the Builder with findings; it ends a round. |
+| Round | One pass of the Builder followed by the mechanical checks, the Tester and the Reviewer on the same work under test. |
+| Return | A trip back to the Builder with a failed mechanical check, a failed acceptance item or Reviewer findings; it ends a round. |
 | Gate result | The completion command's exit code and capped output, handed back to the live Builder by the `task_done` tool. |
 | File list | The paths the group may change: the task list's `files`, plus any scope the orchestrator approved. |
 | Test sibling | A test file in the folder of a file in the file list, such as `lock_test.go` beside `lock.go`. |
 | Scope request | The Builder's stop with status `needs_scope`, naming the paths it needs and why. |
+| Local commit | A commit on the group's branch that is not pushed; the Commit Handler makes it when the Task Manager asks. |
+| Operating-system sandbox | Seatbelt on macOS, the built-in tool that confines a program to chosen files and network access, or Bubblewrap on Linux, a tool that runs a command in a locked-down view of the machine. |
 
 ### 12.2 Package Layout
 
@@ -8521,10 +9851,12 @@ Files this chapter calls but does not own:
 
 | File | Used for |
 |---|---|
-| `internal/task/` | Runs the Builder's session, guards each action, calls `TaskGate` and `ParseBuilderResult` |
-| `internal/sandbox/` | Runs the completion command through `CreateSandboxInstance()` or the sandbox the Task Manager names |
+| `internal/task/` | Runs the Builder's session, guards each action, calls `TaskGate` and `ParseBuilderResult`, and asks the Commit Handler for a local commit after each finished task |
+| `internal/sandbox/` | Runs the Builder's quick commands and the completion command in the operating-system sandbox |
 
 `agent` imports none of these packages. The command runner reaches it as a function value, so it can be tested with fakes.
+
+The Tester's validation runs in a Docker container (a tool that runs programs in isolated containers), not in the operating-system sandbox ([Tester](#13-tester)).
 
 ### 12.3 Data Model
 
@@ -8576,7 +9908,7 @@ The Builder's role as compiled:
 }
 ```
 
-The registry entry the Builder reads: a weight (model size: `heavy`, `standard` or `light`), a link chain and session limits. Defaults are in 12.8. Which links the chain may name is [TODO: model links an agent may use ([G-213](#g-213))].
+The registry entry the Builder reads: a weight (model size: `heavy`, `standard` or `light`), a link chain and session limits. Defaults are in 12.8. The chain names the Claude subscription link first and the paid Anthropic interface second; the free local model is an optional link.
 
 #### Brief slots
 
@@ -8591,7 +9923,7 @@ The [Context Manager](#6-context-manager) fills the slots through `GetContext()`
 | `file_contents` | Each file of the list at the base commit; `new file` when absent | Required |
 | `repo_context`, `standards`, `specs` | Repository guidance, standards skills, spec anchors the tasks cite | Optional |
 | `diff` | Base commit to the group's current files | Optional, on a return |
-| `checks` | Failing command output the Tester returned | Optional, on a return |
+| `checks` | Exact output of the failed mechanical check or the Tester's failing command | Optional, on a return |
 | `findings` | Open Reviewer findings | Optional, on a return |
 | `scope_answer` | `approved` or `denied`, the paths and the reason, one line each | Optional, on resume |
 
@@ -8754,19 +10086,19 @@ flowchart TD
   S["Task Manager starts the Builder"] -->|"1 brief"| W["Edit and test one task"]
   W -->|"2 task_done"| G{"Go reruns the completion command"}
   G -->|"3 exit non-zero, under 3 tries"| W
-  G -->|"4 exit 0: task done"| N{"More tasks?"}
+  G -->|"4 exit 0: task done, local commit"| N{"More tasks?"}
   N -->|"5 yes"| W
-  N -->|"6 no: final call"| H["Same work under test to Tester and Reviewer"]
-  H -->|"7 findings: return"| W
+  N -->|"6 no: final call"| H["Mechanical checks, then Tester and Reviewer"]
+  H -->|"7 failed check or findings: return"| W
 ```
 
 1. The Task Manager builds the brief and starts the Builder's session in the group's worktree.
 2. The Builder edits and tests one task, then calls `task_done` with the task identifier.
 3. Go runs `TaskGate.Complete`. A non-zero exit goes back to the live session as a gate result; the third failure of one task ends the session `check_fail`.
-4. An exit of 0 publishes `task.done`. Saving the finished task is [TODO: whether finished tasks are saved before approval and by whom ([G-220](#g-220))].
+4. An exit of 0 publishes `task.done`. The Task Manager then asks the Commit Handler to save a local commit of the task, without pushing.
 5. The Builder starts the next task.
-6. After the last `task.done` the Builder makes its final call, `BuilderResult` with status `done`, and the Task Manager hands the group's files to the Tester and the Reviewer at the same time.
-7. A return resumes the same Builder session with `findings`, `checks` and `diff` in its brief; the loop repeats from step 2 for the tasks the findings name.
+6. After the last `task.done` the Builder makes its final call, `BuilderResult` with status `done`. The group enters Test and Review: Go runs the mechanical checks first ([Tester](#13-tester)), and only a clean result starts the Tester and the Reviewer, at the same time.
+7. A return, from a failed check or from findings, resumes the same Builder session with `findings`, `checks` and `diff` in its brief; the loop repeats from step 2 for the tasks the return names.
 
 #### Algorithms
 
@@ -8774,7 +10106,8 @@ flowchart TD
 1. The `task_done` call carries only a task identifier; Go looks up the completion command in the task list.
 2. `Complete` runs the command through `CommandRunner` in the sandbox and caps the output.
 3. It returns the exit code and the capped output; it makes no commit.
-5. The Task Manager adds 1 to the task's gate-failure count on a non-zero exit, in the group's runtime state ([State Manager](#10-state-manager)); at 3 it ends the session `check_fail`.
+4. The Task Manager adds 1 to the task's gate-failure count on a non-zero exit, in the group's runtime state ([State Manager](#10-state-manager)); at 3 it ends the session `check_fail`.
+5. On exit 0 the Task Manager publishes `task.done` and asks the Commit Handler to save a local commit of the task's files. Nothing is pushed.
 
 **Request a file outside the list**
 
@@ -8790,13 +10123,14 @@ sequenceDiagram
   T->>T: 2 record the request
   T->>T: 3 AutoDeny and the one-request check
   alt denied without asking
-    T->>B: 7 resume the same session with the denial
+    T->>B: 8 resume the same session with the denial
   else any other path
     T->>R: 4 group waits on a scope answer
-    R->>O: 5 ask
-    O->>R: 5 approve or deny
-    R->>T: 6 answer, approval adds the paths
-    T->>B: 7 resume the same session with scope_answer
+    O->>R: 5 komodo status --wait
+    R->>O: 5 the blocked group's question
+    O->>R: 6 komodo run (id) --approve or --deny
+    R->>T: 7 answer, approval adds the paths
+    T->>B: 8 resume the same session with scope_answer
   end
 ```
 
@@ -8804,20 +10138,23 @@ sequenceDiagram
 2. The Task Manager validates the result and sets the task's `ScopeAsked` flag in the runtime state. The worktree and lease stay held.
 3. `AutoDeny` denies without asking when a path is protected (guard rows G3 and G4: Komodo's own settings, `.git`, secret files) or belongs to another live group's file list. A second request in one task is denied with the reason `one scope request per task`.
 4. For any other path the Task Manager tells the Runtime Manager that the group waits on a scope answer, with reason `needs_scope`.
-5. The Runtime Manager asks the orchestrator, which answers. The orchestrator's right to answer is decided (2026-10-09); how it is asked and how it replies is [TODO: how the orchestrator receives the question and sends the answer ([G-204](#g-204))].
-6. An approval adds the paths to the group's added-scope list in the runtime state, so the task list files never change; the effective file list is the task list's `files` plus that list.
-7. The Task Manager rewrites the guard's effective file list from the runtime state, then resumes the same session with the answer in `scope_answer`. It repeats the rewrite on every resume.
+5. The orchestrator learns of the question through `komodo status --wait`, which returns the blocked group's question: the paths and the reason.
+6. It answers with `komodo run (id) --approve`, which grants the requested paths, or `komodo run (id) --deny`, which refuses them. Whether `--deny` carries a reason text for the Builder is [TODO: whether `--deny` carries a reason text ([G-266](#g-266))].
+7. The Runtime Manager passes the answer to the Task Manager through its command channel. An approval adds the paths to the group's added-scope list in the runtime state, so the task list files never change; the effective file list is the task list's `files` plus that list.
+8. The Task Manager rewrites the guard's effective file list from the runtime state, then resumes the same session with the answer in `scope_answer`. It repeats the rewrite on every resume.
 
 After a denial the Builder finishes the task inside the file list; a task it cannot finish fails its completion command and takes the usual retry path.
 
 **Receive a return**
 1. The Runtime Manager counts the return against the group's return limit ([Runtime Manager](#7-runtime-manager)).
-2. The Task Manager fills `findings` with the verified findings of the Reviewer, `checks` with the failing output of the Tester, and `diff` with the delta since the last round.
+2. The Task Manager fills `findings` with the verified findings of the Reviewer, `checks` with the exact output of a failed mechanical check or the Tester's failing output, and `diff` with the delta since the last round.
 3. It resumes the Builder's session. When the session cannot resume, a fresh session receives the brief, the diff of the work so far and the last `summary`.
 4. The Builder fixes the named problems, calls `task_done` for each affected task, and may list a rejected finding in `disputed`.
 5. A return that left the tree unchanged is detected at the next hand-off (12.7).
 
-What the `komodo build` command runs is [TODO: what `build` does and what its id names ([G-203](#g-203))]. Where the Builder's commands run is [TODO: sandbox for builder commands ([G-205](#g-205))].
+`build` is not a command. The Builder runs when its group enters the Build stage. A group that needs another pass, for example after a hand fix in its worktree, continues with `komodo run (id)`, which picks up at the group's current stage and runs test and review again before commit.
+
+The Builder's quick commands, such as compiling one package, run through `CommandRunner` in the operating-system sandbox.
 
 ### 12.6 State
 
@@ -8838,7 +10175,7 @@ The Builder keeps no state of its own. The runtime state of the group ([State Ma
 2. The Builder holds no git path: only the Commit Handler commits and pushes.
 3. The Builder writes only inside the effective file list and its test siblings.
 4. Any single failure loses at most one model turn.
-6. Every rework loop has a counter and a bound.
+5. Every rework loop has a counter and a bound.
 
 **Failure rows**
 
@@ -8855,11 +10192,11 @@ The Builder keeps no state of its own. The runtime state of the group ([State Ma
 | Returns spent | Runtime Manager | Stop; the limit of 12.8 | Blocked with the reason of the last failing finding |
 | Fresh sessions spent | Runtime Manager | Stop; the attempt limit of 12.8 | Blocked `attempts` |
 | Timeout or idle stop | Task Manager | Fresh session resuming at the open task; the agent's `retries` | Blocked when spent |
-| Provider limit stops the session | Task Manager | Reported to the Runtime Manager; what follows is [TODO: pause, warn or fail at a plan limit ([G-211](#g-211))] | Per decision |
-| Runtime killed mid-session | Recovery | What replays the rest is [TODO: what survives a crash ([G-202](#g-202))] | Per decision |
+| Provider plan window reaches its limit | Task Manager | Reported to the Runtime Manager, which pauses the group after its current step; the lease stays held | The group resumes when the window resets |
+| Engine killed mid-session | Recovery | Reads only the State Manager; `komodo run (id)` continues the group from its saved state | A fresh session resumes at the first task not `done` |
 | The `.git` entry of the worktree is writable from the sandbox | Task Manager, at sandbox start | Refuse to start the command | Error event |
 
-Block reasons, attempt and return counters are specified in [Runtime Manager](#7-runtime-manager). A `disputed` entry changes only the precision counters; whether a disputed finding stops blocking is [UNKNOWN: the old text gives `disputed` only the precision role].
+Block reasons, attempt and return counters are specified in [Runtime Manager](#7-runtime-manager). A `disputed` entry changes only the precision counters; whether a disputed finding stops blocking is [UNKNOWN: the design gives `disputed` only the precision role].
 
 ### 12.8 Config
 
@@ -8868,7 +10205,7 @@ Only the Configuration Manager reads settings; the Task Manager and Runtime Mana
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | Registry entry `weight` | enum | `standard` | Model size for the Builder; the model per link is chosen by the model client |
-| Registry entry `chain` | list | [TODO: model links ([G-213](#g-213))] | Links tried in order |
+| Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
 | Registry entry wall, idle and `retries` | int | 60 min, 10 min, 2 | Session wall limit, silence before the nudge, fresh sessions after a timeout or idle stop |
 | `limits.returns` | int | 3 | Returns to the Builder before the group is blocked; owned by [Runtime Manager](#7-runtime-manager) |
 | `limits.group_attempts` | int | 6 | Fresh Builder sessions per group; owned by [Runtime Manager](#7-runtime-manager) |
@@ -8896,25 +10233,21 @@ const (
 - A `needs_scope` result for an allowed path asks the orchestrator, and an approval resumes the same session with `scope_answer`.
 - After an approval and a resume, the guard still allows the approved path.
 - A session killed after its first `task.done` resumes at the second task.
+- Each exit 0 asks the Commit Handler for one local commit and pushes nothing.
+- The quick command of a Builder session runs in the operating-system sandbox, never in Docker.
 - A return carrying one finding resumes the same session; a second return with an identical tree is blocked.
 
 ### 12.10 Open Gaps
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-203](#g-203) | What `build` does and what its id names | 12.5 |
-| [G-204](#g-204) | How the orchestrator receives a scope question and answers | 12.5 |
-| [G-205](#g-205) | Where builder commands run | 12.5 |
-| [G-202](#g-202) | What survives a crash | 12.7 |
-| [G-211](#g-211) | What happens at a plan or cost limit | 12.7 |
-| [G-213](#g-213) | Model links for each agent's chain | 12.3, 12.8 |
-| [G-214](#g-214) | Whether agents may use outside tool servers | below |
+| [G-265](#g-265) | Whether a session's unfinished edits are saved as a local commit when it ends | 12.1 |
+| [G-266](#g-266) | Whether `--deny` carries a reason text for the Builder | 12.5 |
 
-The Builder's tool list holds only Komodo's tools; whether outside tool servers may be added is [TODO: outside Model Context Protocol servers for agents ([G-214](#g-214))].
-
+The Builder's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 13. Tester
 
-The Tester is the agent that proves the Builder's new and changed code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before now fails. It runs inside the sandbox its Task Manager creates and side by side with the [Reviewer](#14-reviewer); the purpose and the interactions are in [HLD 5.14](hld.md#514-tester).
+The Tester is the agent that proves the Builder's added and modified code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before fails. Its turn begins with free mechanical checks that Go runs in the Tester's sandbox; only a clean result wakes the Tester and the [Reviewer](#14-reviewer), which then run side by side. The purpose and the interactions are in [HLD 5.14](hld.md#514-tester).
 
 ### 13.1 Scope and Concepts
 
@@ -8922,11 +10255,11 @@ The Tester is the agent that proves the Builder's new and changed code works. It
 - The Tester's role definition, brief slots and result.
 - Acceptance items, the Tester's blind pass over them, and Go's reruns of a failed item.
 - The per-task confirmation: one answer for every task identifier.
-- The mechanical checks on the delta code: rerun of completion commands, scope, secret scan, coverage, baseline comparison, impact set, flake rule and case collision (13.5).
+- The mechanical checks, the first step of the Tester's turn, run by Go code in the Tester's sandbox with no model call: rerun of completion commands, scope, secret scan, affected tests (impact set, baseline comparison and flake rule), coverage and case collision (13.5).
 
 **Does not own:**
-- Creating and destroying the sandbox, the guard that checks every Tester action, the session clocks, and the reset of files a read-only session touched: [Task Manager](#11-task-manager).
-- Starting both judges and cancelling the Tester: [Task Manager](#11-task-manager). The rule that both must pass: [Reviewer](#14-reviewer) (14.5).
+- Creating the group's sandbox, the guard that checks every Tester action, the session clocks, and the reset of files a read-only session touched: [Task Manager](#11-task-manager). Destroying the sandbox when the group closes: [Cleanup Handler](#16-cleanup-handler), through the Task Manager.
+- Returning a group with a failed check to the Builder, starting both judges after a clean result, and cancelling the Tester: [Task Manager](#11-task-manager). The rule that both must pass: [Reviewer](#14-reviewer) (14.5).
 - The task-list grammar of acceptance items: [Intake Handler](#5-intake-handler).
 - The return counter and block reasons: [Runtime Manager](#7-runtime-manager).
 - The prompt text and slot filling: [Context Manager](#6-context-manager).
@@ -8937,9 +10270,12 @@ The Tester is the agent that proves the Builder's new and changed code works. It
 |---|---|
 | Acceptance item | A line of a group's task list in the form `WHEN <event> THE SYSTEM SHALL <response>`, with an optional `cmd:` line and an optional `needs:` line. |
 | Delta code | The files changed between the group's base commit and the work under test. |
+| Mechanical checks | The free checks Go runs first in the Tester's turn: no model is called, and a failure returns the group to the Builder with the exact output. |
+| Clean result | A check run in which no step has level `fail`; warnings do not count. Only a clean result starts the Tester and the Reviewer. |
+| Sandbox | The group's Docker container (Docker runs programs in isolated containers), created fresh for the group. Without Docker, the operating-system sandbox: Seatbelt on macOS or Bubblewrap on Linux; the run report says so. |
 | Baseline | The result of the `test` command class at the base commit, keyed by the commit's tree hash (a hash of all file contents). |
 | Regression | A test that passed at the base commit and fails in the work under test. |
-| Impact set | The tests the mechanical checks run for a change: the changed packages and every package that imports one. |
+| Impact set | The affected tests the mechanical checks run for a change: the changed packages and every package that imports one. |
 | Rerun | Go running a failed item's command again, twice, alone, in the sandbox. |
 | Dispute | A failed item whose two reruns both pass. |
 | Flaky | A test whose two reruns disagree. |
@@ -8953,7 +10289,7 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 |---|---|
 | `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `TesterResult` and `Tester.AcceptResult` |
 | `internal/agent/rerun.go` | `Tester.Rerun` and `AdjudicateItem` |
-| `internal/agent/checks.go` | `Checker`, the check steps and their results |
+| `internal/agent/checks.go` | `Checker`, the check steps, their results and `CheckDone` |
 | `internal/agent/baseline.go` | `Baseline`, `Classify`, `ClassifyFailure` |
 | `internal/agent/impact.go` | `ImpactSet` |
 | `internal/agent/scope.go` | `OutOfScope`, shared with the Builder ([12.2](#122-package-layout)) |
@@ -8962,9 +10298,8 @@ Files this chapter calls but does not own:
 
 | File | Used for |
 |---|---|
-| `internal/sandbox/` | The sandbox instance, through `CreateSandboxInstance()` and `DestroySandboxInstance()` |
-| `internal/task/` | Runs the Tester's session and calls the functions below |
-| `internal/cache/` | Holds the baseline by tree hash ([Cache Manager](#8-cache-manager)) |
+| `internal/sandbox/` | The group's Docker container, or the operating-system sandbox as the fallback, through `CreateSandboxInstance()` and `DestroySandboxInstance()` |
+| `internal/task/` | Runs the mechanical checks and the Tester's session, and calls the functions below |
 
 ### 13.3 Data Model
 
@@ -8985,7 +10320,7 @@ Files this chapter calls but does not own:
 }
 ```
 
-The Tester has no write tool. Its `run` may write files in the sandbox; the Task Manager resets the checkout afterwards. The Tester's default weight is `light`; its link chain is [TODO: model links an agent may use ([G-213](#g-213))].
+The Tester has no write tool. Its `run` may write files in the sandbox; the Task Manager resets the checkout afterwards. The Tester's default weight is `light`; its link chain names the Claude subscription link first and the paid Anthropic interface second, and the free local model is an optional link.
 
 | Slot | Holds | Tester |
 |---|---|---|
@@ -8994,7 +10329,7 @@ The Tester has no write tool. Its `run` may write files in the sandbox; the Task
 | `diff` | Base commit to the work under test | Optional |
 | `baseline` | Tests failing at the base commit | Optional |
 | `acceptance` | The group's acceptance items at the base commit | Required |
-| `checks` | Go's mechanical check results, when they ran before the Tester ([TODO: where the zero-cost checks run ([G-206](#g-206))]) | Optional |
+| `checks` | The clean mechanical check result, with its warnings and flaky tests; the checks always run before the Tester starts | Optional |
 
 The `acceptance` slot is defined in the slot table of [chapter 6](#6-context-manager). The brief holds 0 bytes of the Builder's prose.
 
@@ -9023,7 +10358,7 @@ type Item struct {
 |---|---|
 | `ID` | The item's identifier in the task list. |
 | `Cmd` | Empty means Go can never confirm a failure of this item. |
-| `Needs` | An item that needs a network, Docker or a service is skipped with reason `env` and a warning line. Whether the new sandbox can satisfy a need is [UNKNOWN: not stated in the design]. |
+| `Needs` | An item that needs a network, Docker or a service is skipped with reason `env` and a warning line. Whether the Docker container can satisfy a need is [UNKNOWN: not stated in the design]. |
 
 #### Result
 
@@ -9145,6 +10480,7 @@ type StepResult struct {
 	Step   Step     `json:"step"`
 	Level  Level    `json:"level"`
 	Detail []string `json:"detail,omitempty"` // failing test, file path or secret location
+	Output string   `json:"output,omitempty"` // exact command output, capped like a gate result (12.3)
 }
 
 // CheckResult is the outcome of one run of all steps.
@@ -9152,6 +10488,9 @@ type CheckResult struct {
 	Steps []StepResult `json:"steps"`
 	Flaky []string     `json:"flaky,omitempty"` // tests reported flaky
 }
+
+// Clean reports whether no step has level fail; warnings do not count.
+func (r CheckResult) Clean() bool
 
 // CheckInput is everything one run reads.
 type CheckInput struct {
@@ -9183,16 +10522,40 @@ type Baseline struct {
 
 | Step result | Meaning |
 |---|---|
-| `fail` | Blocks; the group returns to the Builder naming the detail. |
+| `fail` | Blocks; the group returns to the Builder with the detail and the exact output. |
 | `warn` | Reported in the run report and the pull request body; does not block. |
 | `pass` | Silent. |
 
 ```json
 {"steps": [
   {"step": "scope", "level": "pass"},
-  {"step": "baseline", "level": "fail", "detail": ["TestLeaseTake"]},
+  {"step": "baseline", "level": "fail", "detail": ["TestLeaseTake"], "output": "--- FAIL: TestLeaseTake (0.00s)\n    lease_test.go:58: want held, got free"},
   {"step": "flake", "level": "warn", "detail": ["TestFenceRace"]}
 ], "flaky": ["TestFenceRace"]}
+```
+
+A run ends with one `check.done` event (type `run-status`; the subtype list is in [Event Bus](#4-event-bus)), whether the result is clean or not. Values are illustrative.
+
+```go
+// CheckDone is the data of the check.done event.
+type CheckDone struct {
+	Pass       bool         `json:"pass"`       // true when the result is clean
+	Head       string       `json:"head"`       // tree hash of the work under test
+	Regression bool         `json:"regression"` // a test passed at the base commit and fails at head
+	Steps      []StepResult `json:"steps"`
+}
+```
+
+```json
+{
+  "type": "run-status",
+  "subtype": "check.done",
+  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
+  "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
+  "time": "2026-10-14T15:36:40Z",
+  "data": {"pass": false, "head": "7d1a0c2e9b3f4a5d6c8e0f1a2b3c4d5e6f708192", "regression": true,
+           "steps": [{"step": "baseline", "level": "fail", "detail": ["TestLeaseTake"]}]}
+}
 ```
 
 ### 13.4 Interfaces
@@ -9227,7 +10590,7 @@ func ImpactSet(deps map[string][]string, changed []string) []string
 func CaseCollisions(paths []string) [][]string
 ```
 
-`CommandRunner` is defined in [12.4](#124-interfaces); for the Tester it is bound to the sandbox instance the Task Manager created with `CreateSandboxInstance()`.
+`CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`.
 
 | Function | On failure |
 |---|---|
@@ -9240,40 +10603,53 @@ func CaseCollisions(paths []string) [][]string
 
 | Caller | Call | When |
 |---|---|---|
-| Task Manager | `CreateSandboxInstance()` | Before the Tester's session starts |
-| Task Manager | `Checker.Check` | Per [TODO: where the zero-cost checks run ([G-206](#g-206))] |
+| Task Manager | `CreateSandboxInstance()` | The group first enters Test and Review |
+| Task Manager | `Checker.Check` | First step of Test and Review, before any model session |
 | Task Manager | `Tester.AcceptResult` | The Tester's final call arrives |
 | Task Manager | `Tester.Rerun` | The result holds a failed item that has a command |
-| Task Manager | `DestroySandboxInstance()` | The Tester's session and its reruns have ended |
+| Task Manager | `DestroySandboxInstance()` | The Cleanup Handler closes the group through `CloseTaskGroup()` |
 
 ### 13.5 Behaviour
 
 #### Walkthrough
 
-**📐 What happens when the Tester finishes a group**
+**📐 What happens when a group enters Test and Review**
 ```mermaid
 sequenceDiagram
   participant T as Task Manager
   participant X as Sandbox
-  participant A as Tester
   participant G as Go
+  participant A as Tester
+  participant B as Builder
   T->>X: 1 CreateSandboxInstance
-  T->>A: 1 start the session with the brief
-  A->>X: 2 run item commands
-  A->>T: 3 final call, items and tasks
-  T->>G: 4 AcceptResult
-  G->>X: 5 rerun each failed item twice
-  G->>T: 6 verdict
-  T->>X: 7 DestroySandboxInstance
+  T->>G: 2 Checker.Check
+  G->>X: 3 run the checks
+  alt a check fails
+    G->>T: 4 fail, exact output
+    T->>B: 5 return, no model call
+  else clean result
+    G->>T: 4 clean
+    T->>A: 5 start the session with the brief
+    A->>X: 6 run item commands
+    A->>T: 7 final call, items and tasks
+    T->>G: 8 AcceptResult
+    G->>X: 9 rerun each failed item twice
+    G->>T: 10 verdict
+  end
 ```
 
-1. The Task Manager creates the sandbox with the work under test and starts the Tester's session.
-2. The Tester runs each acceptance item's command with `run` (classes `build` and `test`) and reads the diff and files as needed.
-3. It ends with one final call: a pass or fail with evidence for every item, and `confirmed` or `not_confirmed` for every task identifier.
-4. Go rejects a result that skips or repeats a task identifier.
-5. Go reruns every failed item that has a command, twice, in the same sandbox, and judges it with `AdjudicateItem`.
-6. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour).
-7. The Task Manager destroys the sandbox. On a re-review round the Tester reruns every item.
+1. On the group's first entry to Test and Review, the Task Manager creates the group's Docker container. Later rounds place the latest work under test in the same container. Without Docker the Task Manager uses the operating-system sandbox, and the run report says so.
+2. The Task Manager calls `Checker.Check`. These are the first step of the Tester's turn: Go code, no model call.
+3. Go runs the mechanical checks (below) in the container.
+4. A failure returns the result with each failing step's exact output. A clean result continues at edge 5.
+5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither the Tester nor the Reviewer starts. On a clean result it starts the Tester's session with the brief, and the Reviewer at the same moment ([14.5](#145-behaviour)).
+6. The Tester runs each acceptance item's command with `run` (classes `build` and `test`) and reads the diff and files as needed.
+7. It ends with one final call: a pass or fail with evidence for every item, and `confirmed` or `not_confirmed` for every task identifier.
+8. Go rejects a result that skips or repeats a task identifier.
+9. Go reruns every failed item that has a command, twice, in the same container, and judges it with `AdjudicateItem`.
+10. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour).
+
+After every return, the Builder's revised work passes through the checks again, and the Tester reruns every item. `test` is not a command: a group that needs another pass, for example after a hand fix in its worktree, continues with `komodo run (id)`, which picks up at the group's current stage.
 
 #### A failed item
 
@@ -9315,7 +10691,7 @@ The Tester's split blocks the group, unlike a split of the flake rule below, whi
 
 #### Mechanical checks
 
-The checks below cost no model tokens; Go runs commands and scans text. Where they run is [TODO: where the zero-cost checks run: first step of the Tester, a separate step, or dropped ([G-206](#g-206))]. If the decision drops them, this sub-section is removed and the baseline, impact set and flake rule go with it.
+The checks are the first step of the Tester's turn. They cost no model tokens: Go runs commands and scans text in the Tester's sandbox. A failure returns the group to the Builder with the exact output and no model call; only a clean result wakes the Tester and the Reviewer.
 
 | Step | Rule |
 |---|---|
@@ -9324,11 +10700,11 @@ The checks below cost no model tokens; Go runs commands and scans text. Where th
 | `secrets` | The diff's added lines are scanned with the guard's secret-content patterns, the list guard row G4 uses ([Task Manager](#11-task-manager)). |
 | `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. |
 | `baseline` | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns. |
-| `impact_set` | Go: the tests of every package that imports a changed package. Other languages: the full `test` class. |
+| `impact_set` | The affected tests. Go: the tests of every package that imports a changed package. Other languages: the full `test` class. |
 | `flake` | Any failing test is rerun twice alone; see the flake rule below. |
 | `case_collision` | Two files that differ only by letter case fail the check on every operating system. |
 
-Every step runs even after another fails, so one return names every failure. A step that cannot run blocks the group `setup`, naming the step.
+Every step runs even after another fails, so one return names every failure. A step that cannot run blocks the group `setup`, naming the step. A warning does not stop the run: it travels in the `checks` slot, the run report and the pull request body.
 
 **📐 In what order do the checks run**
 ```mermaid
@@ -9347,14 +10723,14 @@ Edge N is the output of step N.
 3. `Baseline.Classify` compares each test with the base.
 4. Each failing test is rerun twice alone; results are never read from a cache, so the second rerun is never a copy of the first.
 5. The coverage command runs last, once, and is skipped once a blocking regression is confirmed.
+6. Go publishes one `check.done` event with the result (13.3).
 
 ##### Baseline
 
-1. Go runs the `test` command class at the base commit in a sandbox and keeps the result by tree hash. One entry serves every group cut from the same base.
-2. The run happens beside the Builder's session and is needed only when the checks start, so it never delays the Builder.
-3. `Classify` marks a test `regression` when it passed at base and fails at head, and `pre_existing` when it fails at both.
-4. A regression returns the group to the Builder with the failing test's output; a pre-existing failure only warns.
-5. Tests that need a database or a public host fail at both commits, so the baseline marks them pre-existing.
+1. Go runs the `test` command class at the base commit and keeps the result by tree hash. One entry serves every group cut from the same base. Where the result is stored and which sandbox produces it is [TODO: where the baseline result is stored and which sandbox runs it ([G-267](#g-267))].
+2. `Classify` marks a test `regression` when it passed at base and fails at head, and `pre_existing` when it fails at both.
+3. A regression returns the group to the Builder with the failing test's output; a pre-existing failure only warns.
+4. Tests that need a database or a public host fail at both commits, so the baseline marks them pre-existing.
 
 ##### Impact set
 
@@ -9447,7 +10823,7 @@ Each default tool reports a whole-repository line percent in the field named. Ve
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
 | Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
 
-A language with no default tool fails the coverage step, naming the language, because the floor holds in every language.
+A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
 ### 13.6 State
 
@@ -9475,7 +10851,7 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 **Invariants**
 1. A Tester failure counts only after Go's two reruns of its command also fail.
 2. The Tester's confirmation list holds every task identifier exactly once.
-3. The mechanical checks start no model session.
+3. The mechanical checks start no model session, and a failed check returns the group to the Builder before the Tester or the Reviewer starts.
 4. No command of the Tester can change the Builder's worktree or its `.git` entry; the sandbox receives the work under test and the Tester never holds a git path.
 5. A Tester brief holds 0 bytes of the Builder's prose.
 6. A failed item with no command never blocks.
@@ -9493,11 +10869,14 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 | Result skips or repeats a task | `AcceptResult` | One re-prompt; 1 | Session ends `schema_fail`; task retry |
 | Session ends without a result | Task Manager | Fresh Tester session; the agent's `retries` | Blocked when spent |
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
+| A completion command fails in the checks | `Checker.Check` | Return to the Builder with the exact output; no model call; the return limit | Blocked when returns are spent |
+| A scope, secret scan or case-collision step fails | `Checker.Check` | Return to the Builder naming the file or location; the return limit | Blocked when returns are spent |
 | Regression against the baseline | `Baseline.Classify` | Return to the Builder with the test's output; the return limit | Blocked `regression` when spent |
 | A check step cannot run | `Checker.Check` | Stop naming the step; 0 | Blocked `setup` |
 | Coverage tool missing for the language | Coverage step | Fail naming the language; 0 | Return to the Builder |
-| Sandbox cannot be created | Task Manager | Error event; what follows depends on [TODO: whether Docker is required ([G-205](#g-205))] | Per decision |
-| Provider limit stops the session | Task Manager | Reported to the Runtime Manager; what follows is [TODO: pause, warn or fail at a plan limit ([G-211](#g-211))] | Per decision |
+| Docker is not available | Task Manager | Use the operating-system sandbox; the run report says so; 0 | The checks and the Tester run there |
+| No sandbox can be created | Task Manager | Error event; 0 | Blocked `setup`, naming the fix |
+| Provider plan window reaches its limit | Task Manager | Reported to the Runtime Manager, which pauses the group after its current step; the lease stays held | The group resumes when the window resets |
 
 Block reasons are listed in [Runtime Manager](#7-runtime-manager). A provider pause or the Task Manager's cancel of the Tester (14.5) leaves no result to judge.
 
@@ -9509,7 +10888,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 |---|---|---|---|
 | `check.coverage` | int | 80 | Percent of the repository's lines tests must cover, in every language; hard limit 100. Owned here. |
 | Registry entry `weight` | enum | `light` | Model size for the Tester |
-| Registry entry `chain` | list | [TODO: model links ([G-213](#g-213))] | Links tried in order |
+| Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
 | Registry entry `retries` | int | set by the registry | Fresh Tester sessions after an end without a result, per round |
 | `limits.returns` | int | 3 | Returns to the Builder before the group is blocked; owned by [Runtime Manager](#7-runtime-manager) |
 | `sandbox.max_procs`, `sandbox.max_mem_gb` | int | 512, 8 | Process and memory caps for one session's commands; owned by [Task Manager](#11-task-manager) |
@@ -9530,31 +10909,33 @@ const (
 - `CaseCollisions` groups `README.md` and `readme.md`.
 - `Baseline.Classify` returns `new` for a failing test absent from the baseline.
 - `AcceptResult` refuses a repeated task identifier.
+- `CheckResult.Clean` is false when any step has level `fail` and true when only warnings remain.
+- A coverage of 79 percent against a floor of 80 fails. With a base of 70, a head of 72 passes and a head of 68 fails.
+- A language with no default coverage tool fails the coverage step and names the language.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
 - A seeded failing acceptance item with a command returns the group to the Builder.
+- A failing completion command returns the group to the Builder with the command's exact output, and the mock model records 0 calls.
+- A clean check result starts the Tester and the Reviewer; a failed one starts neither.
+- With Docker absent, the checks and the Tester run in the operating-system sandbox and the run report says so.
 - A fake Tester that fails an item the sandbox passes twice is restarted once; a second dispute blocks `tester`.
 - A fixture with one pre-existing failing test passes with a warning; the same fixture with a seeded regression names the test.
 - A seeded out-of-scope write fails the scope step, and a planted fake key fails the secrets step.
 - A test that fails once and passes twice is reported flaky and does not block.
 - An item with no command is listed unconfirmed and does not block.
-- The sandbox is destroyed after a Tester session that ended in `schema_fail`.
+- The Docker container survives a Tester session that ended in `schema_fail`, and `CloseTaskGroup()` destroys it.
 
 ### 13.10 Open Gaps
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-206](#g-206) | Where the mechanical checks run, or whether they stay | 13.3, 13.4, 13.5 |
-| [G-205](#g-205) | Where builder and tester commands run; whether Docker is required | 13.7 |
-| [G-213](#g-213) | Model links for each agent's chain | 13.3, 13.8 |
-| [G-211](#g-211) | What happens at a plan or cost limit | 13.7 |
+| [G-267](#g-267) | Where the baseline result is stored and which sandbox runs it | 13.5 |
 | [G-169](#g-169) | Whether each default coverage tool yields a whole-repository line percent | 13.5 |
 
-The Tester's tool list holds only Komodo's tools; whether outside tool servers may be added is [TODO: outside Model Context Protocol servers for agents ([G-214](#g-214))]. What `komodo test` runs is [TODO: what `test` does and what its id names ([G-203](#g-203))].
-
+The Tester's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
 
-The Reviewer is the final code check on the Builder's work. It reads the change while the [Tester](#13-tester) runs, files findings that Go verifies, and gives one verdict per task. This chapter also holds the approval rule: the group moves to the Commit Handler only when both the Tester and the Reviewer pass. The purpose and the interactions are in [HLD 5.15](hld.md#515-reviewer).
+The Reviewer is the final code check on the Builder's work. It starts once the free mechanical checks pass, reads the change while the [Tester](#13-tester) runs, files findings that Go verifies, and gives one verdict per task. This chapter also holds the approval rule: the group moves to the Commit Handler only when both the Tester and the Reviewer pass. The purpose and the interactions are in [HLD 5.15](hld.md#515-reviewer).
 
 ### 14.1 Scope and Concepts
 
@@ -9566,8 +10947,8 @@ The Reviewer is the final code check on the Builder's work. It reads the change 
 - The approval rule that joins the Tester's and the Reviewer's verdicts.
 
 **Does not own:**
-- Starting both judges on one commit, cancelling the Tester, the session clocks and the guard: [Task Manager](#11-task-manager).
-- Test accuracy, acceptance items and regression checks: [Tester](#13-tester).
+- Starting both judges on one commit after a clean check result, cancelling the Tester, the session clocks and the guard: [Task Manager](#11-task-manager).
+- Test accuracy, acceptance items, regression checks and the free mechanical checks that run before either judge starts: [Tester](#13-tester).
 - The return counter, retries and block reasons: [Runtime Manager](#7-runtime-manager).
 - The standards skills and the rule list compiled from them: [Context Manager](#6-context-manager).
 - Storing and reporting events and counters: [Metrics Service](#18-metrics-service).
@@ -9582,8 +10963,8 @@ The Reviewer is the final code check on the Builder's work. It reads the change 
 | Finding | A Reviewer claim: a rule identifier, a file and line, and the quoted line of evidence. |
 | Evidence check | Go looking for the quoted line at the stated file and line. |
 | Verdict | The Reviewer's answer for one task identifier: `met`, `not_met` or `brief_incomplete`. |
-| Profile | The review depth: `thorough` or `economy`. |
-| Round | One pass of the Builder followed by the Tester and the Reviewer on the same work under test. |
+| Profile | The review depth: `thorough` or `economy`. It has no link to the cache. |
+| Round | One pass of the Builder followed by the mechanical checks, the Tester and the Reviewer on the same work under test. |
 | Approval | Both judges passed the same work under test in the same round. |
 
 ### 14.2 Package Layout
@@ -9619,15 +11000,15 @@ The catalogs are compiled into the binary, so a reader never sees an older or ne
   "run_classes": ["build", "test", "lint"],
   "guard": ["R1"],
   "slots": {
-    "required": ["repo_profile", "group", "tasks", "files", "diff", "lens", "lens_rules"],
-    "optional": ["repo_context", "standards", "findings", "callers", "specs", "repo_map", "checks"]
+    "required": ["repo_profile", "group", "tasks", "files", "diff", "lens", "lens_rules", "checks"],
+    "optional": ["repo_context", "standards", "findings", "callers", "specs", "repo_map"]
   },
   "result": {"$id": "komodo:agent/reviewer/result/1", "type": "object", "required": ["verdicts"]},
   "pool_slot": true
 }
 ```
 
-The Reviewer has no write tool; `diff` and `git_read` are read-only git. Its `run` may write files, and the Task Manager resets the checkout afterwards. The default weight is `heavy`; its link chain is [TODO: model links an agent may use ([G-213](#g-213))].
+The Reviewer has no write tool; `diff` and `git_read` are read-only git. Its `run` may write files, and the Task Manager resets the checkout afterwards. The default weight is `heavy`; its link chain names the Claude subscription link first and the paid Anthropic interface second, and the free local model is an optional link.
 
 | Slot | Holds | Reviewer |
 |---|---|---|
@@ -9637,7 +11018,7 @@ The Reviewer has no write tool; `diff` and `git_read` are read-only git. Its `ru
 | `findings` | Open findings, on a re-review | Optional |
 | `callers` | Go callers of changed symbols, found with `go/packages`; other languages use `search` | Optional |
 | `repo_context`, `standards`, `specs`, `repo_map` | Repository guidance, standards skills, spec anchors, ranked symbol graph | Optional |
-| `checks` | Go's mechanical check results, when they ran ([TODO: where the zero-cost checks run ([G-206](#g-206))]) | Optional |
+| `checks` | The clean mechanical check result, one line per step, with its warnings and flaky tests | Required |
 
 A Reviewer brief holds 0 bytes of the Builder's prose.
 
@@ -9878,24 +11259,26 @@ sequenceDiagram
   participant G as Go
   participant Q as Tester
   participant B as Builder
-  T->>R: 1 start with the selected lenses
-  T->>Q: 1 start on the same work under test
-  R->>G: 2 submit_finding
-  G->>T: 3 quote found at file:line, finding verified
-  T->>Q: 4 cancel
-  R->>T: 5 final call, verdict per task
-  T->>G: 6 Decide
-  G->>T: 6 return, with every verified finding
-  T->>B: 7 resume the same session with the findings
+  T->>G: 1 Checker.Check, clean result
+  T->>R: 2 start with the selected lenses
+  T->>Q: 2 start on the same work under test
+  R->>G: 3 submit_finding
+  G->>T: 4 quote found at file:line, finding verified
+  T->>Q: 5 cancel
+  R->>T: 6 final call, verdict per task
+  T->>G: 7 Decide
+  G->>T: 7 return, with every verified finding
+  T->>B: 8 resume the same session with the findings
 ```
 
-1. The Task Manager chooses the lenses with `Lenses` and starts the Reviewer and the Tester on the same work under test at the same time.
-2. The Reviewer reads the diff and files, runs commands, and calls `submit_finding` for each problem.
-3. `AcceptFinding` runs the evidence check; when Go finds the quoted line, a `finding.verified` event is published.
-4. The first verified blocking finding makes the Task Manager cancel the Tester; the Tester's session ends `cancelled`.
-5. The Reviewer ends with its final call. `AcceptResult` checks that every task has exactly one verdict.
-6. `Decide` returns `return` with every verified blocking finding.
-7. The Task Manager resumes the Builder's session; output from the cancelled Tester that arrives after the return belongs to a superseded round and is recorded stale and ignored.
+1. The Task Manager runs the mechanical checks ([13.5](#135-behaviour)). A failed check returns the group to the Builder with no model call and starts neither judge; a clean result continues.
+2. The Task Manager chooses the lenses with `Lenses` and starts the Reviewer and the Tester on the same work under test at the same time.
+3. The Reviewer reads the diff and files, runs commands, and calls `submit_finding` for each problem.
+4. `AcceptFinding` runs the evidence check; when Go finds the quoted line, a `finding.verified` event is published.
+5. The first verified blocking finding makes the Task Manager cancel the Tester; the Tester's session ends `cancelled`.
+6. The Reviewer ends with its final call. `AcceptResult` checks that every task has exactly one verdict.
+7. `Decide` returns `return` with every verified blocking finding.
+8. The Task Manager resumes the Builder's session; output from the cancelled Tester that arrives after the return belongs to a superseded round and is recorded stale and ignored.
 
 #### Lens selection and profiles
 
@@ -9908,7 +11291,7 @@ sequenceDiagram
 | `spec` | A task cites a spec anchor | The diff matches the cited section, which is in the brief; a mismatch is `not_met`, not a finding |
 | `contract` | An exported symbol changed (Go through `go/ast`; other languages by export-line diff) | Every caller still compiles and a task intends the change |
 | `concurrency` | The diff adds `go`, `chan`, `sync`, `atomic`, threads or async | Data races, lock order, cancellation, goroutine leaks |
-| `platform` | `_windows.go`, `_darwin.go`, `_linux.go`, path or shell handling | Separators, case, line endings, signals |
+| `platform` | `_darwin.go`, `_linux.go`, path or shell handling | Separators, case, line endings, signals |
 | `config` | Embedded JSON defaults or the guard policy file | Hard limits kept, schema version bumped, gate fixture updated |
 | `readiness` | Always | Tests for changed behaviour; docs and changelog touched when the task says so |
 | `quality` | Always | Naming, duplication, comment rules from the comments standard |
@@ -9920,9 +11303,9 @@ sequenceDiagram
 | Markdown-only diff | A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality`. |
 | One session | One Reviewer session applies every selected lens, so the lenses share one pool slot. Each finding carries its lens in its rule identifier. |
 | Added checks | The Reviewer may run build, test and lint with `run`; Go reruns any command a verdict depends on, so the verdict rests on Go's result. |
-| Re-review | Only the delta: `git diff` from the work last reviewed to the work now under test, with the open findings. |
+| Re-review | Only the delta: `git diff` from the work last reviewed to the work under test, with the open findings. A re-review happens in the round after a return, and when `komodo run (id)` continues a group. |
 
-Whether a Reviewer result for an unchanged diff may be reused instead of asked again is [TODO: rules for reusing a stored prompt response ([G-208](#g-208))]. What `komodo review` runs and what its id names is [TODO: what `review` does ([G-203](#g-203))].
+A Reviewer result is never reused: every review is a model call, because the cache holds context pieces and prompt-cache markers, never a stored model answer. `review` is not a command. A group that needs another pass, for example after a hand fix in its worktree, continues with `komodo run (id)`, which picks up at the group's current stage and runs test and review again before commit.
 
 #### The evidence check
 
@@ -9992,7 +11375,7 @@ func ExactlyOnce(want, got []string) error {
 
 #### The approval rule
 
-`Decide` reads the Tester's and the Reviewer's verdicts for one round. The group goes to the Commit Handler only on `approve`: the Reviewer's session ended with every task `met` and no verified blocking finding, and the Tester confirmed every task with no failed, disputed or split item.
+`Decide` reads the Tester's and the Reviewer's verdicts for one round, and runs only after a clean mechanical check result. The group goes to the Commit Handler only on `approve`: the Reviewer's session ended with every task `met` and no verified blocking finding, and the Tester confirmed every task with no failed, disputed or split item.
 
 | Case | Outcome |
 |---|---|
@@ -10044,9 +11427,9 @@ The Reviewer keeps no state of its own. The group's runtime state ([State Manage
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
 | A verdict depends on a command whose rerun disagrees | Go | Use Go's result; 0 | The verdict rests on Go's result |
 | Verified blocking finding or `not_met` | `Decide` | Return to the Builder; the return limit | Blocked when returns are spent |
-| Provider limit stops the session | Task Manager | Reported to the Runtime Manager; what follows is [TODO: pause, warn or fail at a plan limit ([G-211](#g-211))] | Per decision |
+| Provider plan window reaches its limit | Task Manager | Reported to the Runtime Manager, which pauses the group after its current step; the lease stays held | The group resumes when the window resets |
 
-Block reasons are listed in [Runtime Manager](#7-runtime-manager). Whether a finding the Builder disputes stops blocking is [UNKNOWN: the earlier text gives `disputed` only the precision role].
+Block reasons are listed in [Runtime Manager](#7-runtime-manager). Whether a finding the Builder disputes stops blocking is [UNKNOWN: the design gives `disputed` only the precision role].
 
 ### 14.8 Config
 
@@ -10054,9 +11437,9 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `mode` | enum | `thorough` | `economy` runs one merged lens plus `security` where it applies; `thorough` runs every applicable lens at full depth. Owned here. |
+| `mode` | enum | `thorough` | `economy` runs one merged lens plus `security` where it applies; `thorough` runs every applicable lens at full depth. It sets review depth only. Owned here. |
 | Registry entry `weight` | enum | `heavy` | Model size for the Reviewer |
-| Registry entry `chain` | list | [TODO: model links ([G-213](#g-213))] | Links tried in order |
+| Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
 | Registry entry `retries` | int | set by the registry | Fresh Reviewer sessions after an end without a result, per round |
 | `limits.returns` | int | 3 | Returns to the Builder before the group is blocked; owned by [Runtime Manager](#7-runtime-manager) |
 
@@ -10068,7 +11451,7 @@ const (
 )
 ```
 
-A report of rules verified under 50% of the time existed in the earlier design as part of a health-check command; whether it survives is [TODO: the command list beside the diagram's 12 ([G-204](#g-204))].
+Whether `doctor`, the health check, reports rules verified under 50% of the time is [TODO: whether `doctor` reports rules verified under 50% of the time ([G-268](#g-268))].
 
 ### 14.9 Proof Cases
 
@@ -10078,6 +11461,7 @@ A report of rules verified under 50% of the time existed in the earlier design a
 - A quote that differs only in leading whitespace verifies; one that differs in letter case does not.
 - `ExactlyOnce` refuses a skipped and a repeated task identifier.
 - `Decide` returns `approve` only for two passing verdicts, and `block` with `flaky` for a split.
+- `mode: economy` selects the merged `economy` lens and the full `security` lens where it applies.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
 - A seeded bug in the fixture is found and verified.
@@ -10086,50 +11470,53 @@ A report of rules verified under 50% of the time existed in the earlier design a
 - The first verified blocking finding cancels the Tester, and the Tester's later output is recorded stale.
 - Both judges passing hands the approved work to the Commit Handler once.
 - A Tester `run` that edits a tracked file is reset and rerun once.
+- A failed mechanical check starts no Reviewer session.
+- `komodo run (id)` on a group that was fixed by hand sends the Reviewer only the lines changed since its last review.
+- An unchanged diff reviewed twice makes two model calls.
 
 ### 14.10 Open Gaps
 
 | Gap | Question | Used in |
 |---|---|---|
 | [G-16](#g-16) | The rule text of each lens catalog | 14.3 |
-| [G-206](#g-206) | Whether mechanical check results feed the Reviewer | 14.3 |
-| [G-208](#g-208) | Whether an earlier Reviewer result may be reused | 14.5 |
-| [G-203](#g-203) | What `review` does and what its id names | 14.5 |
-| [G-204](#g-204) | Whether the weak-rule report survives | 14.8 |
-| [G-211](#g-211) | What happens at a plan or cost limit | 14.7 |
-| [G-213](#g-213) | Model links for each agent's chain | 14.3, 14.8 |
+| [G-268](#g-268) | Whether `doctor` reports rules verified under 50% of the time | 14.8 |
 
-The Reviewer's tool list holds only Komodo's tools; whether outside tool servers may be added is [TODO: outside Model Context Protocol servers for agents ([G-214](#g-214))].
-
+The Reviewer's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 15. Commit Handler
 
-The Commit Handler publishes a task group's approved work: it records the approved files as a commit, pushes the group's branch to the remote, and opens or updates the pull request (the hosting service's page where a person reviews and merges a branch). It is the only part of the harness that pushes, and it runs only after the Tester and the Reviewer both approve the same tree. When it finishes it hands the group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
+The Commit Handler saves and publishes a task group's work. During the build it records each finished task as a local commit and pushes nothing. After the Tester and the Reviewer both approve the same tree, it lands the group on its epic's shared branch and pushes that branch. When the epic's last group has landed, it opens one pull request (the hosting service's page where a person reviews and merges a branch) for the whole epic. It is the only part of the harness that pushes, and it hands each landed group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
 
 ### 15.1 Scope and Concepts
 
-The Commit Handler owns three things: the publish sequence, the git wrapper (the code path through which the Commit Handler runs `git commit` and `git push`), and the wrapper for `gh`, GitHub's command-line tool. It writes nothing outside git and the hosting service.
+The Commit Handler owns four things: the local save of a finished task, the publish sequence with the epic landing rules, the git wrapper (the code path through which the Commit Handler runs `git commit` and `git push`), and the wrapper for `gh`, GitHub's command-line tool. It writes nothing outside git and the hosting service.
 
 | Term | Meaning |
 |---|---|
 | Approval | The hand-over from the Task Manager: the work, named by its tree hash, that both the Tester and the Reviewer approved |
 | Tree hash | A short fingerprint of every file's content in a commit or worktree; equal hashes mean equal content |
-| Group branch | The branch for the group, named `komodo/<epic>-<group>`, such as `komodo/epic-1-tg-1.2`; who creates it is [TODO: who creates a group's branch and worktree ([G-220](#g-220))] |
+| Group branch | The branch for the group, named `komodo/<epic>-<group>`, such as `komodo/ep-1-tg-1.2`; the Task Manager creates it together with the group's worktree |
+| Epic branch | The one shared branch of an epic, named `komodo/<epic>`, such as `komodo/ep-1`; every group of the epic lands on it, and it is the head of the epic's pull request |
+| Save | A local commit of a finished task's work on the group branch; it is never pushed |
+| Landing | Merging one approved group into the epic branch and pushing the epic branch; one group at a time per epic |
+| Recheck | The checks that call no model, run on the epic branch after each landing |
 | Critical reference | Any git reference outside `refs/heads/komodo/` and `refs/komodo/`, such as `main` |
 | Fence | A counter the Lease Manager raises each time it grants a group's lease; an older holder's number is refused |
 | Forge | The hosting service that holds the remote and the pull requests; GitHub |
 
 What the Commit Handler guarantees:
 - It publishes only content that both agents approved: the approved tree hash must equal the worktree's tree hash at commit time.
+- `Save` only commits locally; nothing is pushed before approval.
+- Groups of one epic land one at a time, and a failed recheck pauses landings on that epic until a recheck passes.
 - It never force-pushes, never deletes a remote branch, and never writes a critical reference.
 - Every step first checks whether it is already done, so repeating a publish creates no second commit, push or pull request.
 - No agent holds forge credentials or runs git; the credentials stay with the harness process.
 
 What lies beside it:
 - The Tester and the Reviewer judge the work; the Commit Handler never re-judges it.
-- The Lease Manager keeps the lease registry and performs no git write ([chapter 9](#9-lease-manager)).
-- Whether finished tasks are saved before approval and by whom, who creates a group's branch and worktree, and who commits the planner's task lists are [TODO: whether finished tasks are saved before approval and by whom, who creates a group's branch and worktree, who releases the lease after cleanup, and who commits task lists ([G-220](#g-220))].
-- Which verbs reach the Commit Handler is [TODO: what `replay`, `build`, `test` and `review` do ([G-203](#g-203))]. Under every option only a run that has both approvals publishes; a command that runs one stage never does.
-- Where a group lands is [TODO: one pull request per group or a shared epic branch ([G-210](#g-210))]. The behaviour common to both options is in 15.5; each option's own steps are in two short sub-sections there.
+- The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
+- The Task Manager creates each group's branch and worktree and calls `Save` after each finished task; the Cleanup Handler removes them ([chapter 16](#16-cleanup-handler)).
+- Who commits the Intake Handler's task lists is [TODO: who commits the Intake Handler's task lists ([G-226](#g-226))].
+- No command reaches the Commit Handler. `komodo run (id)` continues a group, and only a group with both approvals publishes; `replay` changes nothing.
 
 ### 15.2 Package Layout
 
@@ -10138,23 +11525,67 @@ The Go package is `internal/commit` (phase 6 of the build order in HLD Appendix 
 | File | Holds |
 |---|---|
 | `internal/commit/handler.go` | `Handler` and `Publish`: the publish sequence and its checks |
-| `internal/commit/types.go` | `Approval`, `Verdict`, `PRFacts`, `Result`, `PublishError` and the error values |
+| `internal/commit/save.go` | `Save`: the local commit of a finished task |
+| `internal/commit/landing.go` | `EpicGates`, `Turn` and the recheck: the landing rules of an epic |
+| `internal/commit/types.go` | `Approval`, `SaveRequest`, `SaveResult`, `Verdict`, `PRFacts`, `EpicFacts`, `Result`, `PublishError` and the error values |
 | `internal/core/git.go` | `Git`: the git wrapper, with the no-force and never-critical-reference rules; this chapter defines its rules |
 | `internal/commit/forge.go` | `Forge`: the `gh` wrapper that finds, opens and updates pull requests |
 | `internal/commit/message.go` | The commit message form and the check that it carries no trailer |
-| `internal/commit/body.go` | `RenderBody`: the Commit Handler's own pull request body template, filled from `PRFacts` |
+| `internal/commit/body.go` | `RenderBody` and `RenderEpicBody`: the Commit Handler's own body templates, filled from recorded facts |
 
-The git wrapper itself lives in `internal/core/git.go`, so a package below `internal/commit` can use it without importing this one. The Commit Handler and the Cleanup Handler (which deletes local branches and removes worktrees) declare the few `Git` methods they need as their own small interface; one `core.Git` value, created once at start-up, satisfies them. Whichever part [G-220](#g-220) names for other git writes uses the same value.
+The git wrapper itself lives in `internal/core/git.go`, so a package below `internal/commit` can use it without importing this one. The Commit Handler and the Cleanup Handler (which deletes local branches and removes worktrees) declare the few `Git` methods they need as their own small interface; one `core.Git` value, created once at start-up, satisfies them. The Task Manager, which creates each group's branch and worktree, uses the same value.
 
 **Entry points**
 
 | Flow | Starts at |
 |---|---|
+| Saving a finished task | `Handler.Save` in `save.go` |
 | Publishing a group | `Handler.Publish` in `handler.go` |
 | Any git write by any caller | A method of `Git` in `git.go` |
 | Any forge call | A method of `Forge` in `forge.go` |
 
 ### 15.3 Data Model
+
+#### Save request
+
+```go
+// SaveRequest names a finished task whose work Save records as a local commit.
+type SaveRequest struct {
+	Run      state.ID    `json:"run"`
+	Group    state.ID    `json:"group"`
+	Repo     string      `json:"repo"`     // repo id the lease is keyed by
+	Label    string      `json:"label"`    // group label, such as tg-1.2
+	Task     string      `json:"task"`     // finished task name, such as tsk-1.2.1
+	Worktree string      `json:"worktree"` // path of the group's worktree
+	Branch   string      `json:"branch"`   // group branch
+	Fence    lease.Fence `json:"fence"`    // fence of the lease the Task Manager holds
+}
+
+// SaveResult is what Save returns.
+type SaveResult struct {
+	Head  string `json:"head"`  // commit id at the group branch tip after the save
+	Tree  string `json:"tree"`  // tree hash of that commit
+	Saved bool   `json:"saved"` // false when the tip already held the worktree's content
+}
+```
+
+```json
+{
+  "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
+  "group": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
+  "repo": "github.com/acme/shop",
+  "label": "tg-1.2",
+  "task": "tsk-1.2.1",
+  "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
+  "branch": "komodo/ep-1-tg-1.2",
+  "fence": 3
+}
+```
+
+| Field | Rule |
+|---|---|
+| `branch` | Must start with `komodo/`; the wrapper refuses any other name |
+| `fence` | Must equal the lease's fence when `Save` runs |
 
 #### Approval
 
@@ -10167,18 +11598,20 @@ type Verdict struct {
 
 // Approval is what the Task Manager hands over when the Tester and Reviewer both approve.
 type Approval struct {
-	Run      state.ID    `json:"run"`
-	Group    state.ID    `json:"group"`
-	Repo     string      `json:"repo"`     // repo id the lease is keyed by
-	Epic     string      `json:"epic"`     // epic folder name, such as epic-1
-	Goal     string      `json:"goal"`     // the group goal; title of the commit and pull request
-	Worktree string      `json:"worktree"` // path of the group's worktree
-	Branch   string      `json:"branch"`   // group branch
-	Fence    lease.Fence `json:"fence"`    // fence of the lease the Task Manager holds
-	Tree     string      `json:"tree"`     // tree hash both agents approved
-	Tester   Verdict     `json:"tester"`
-	Reviewer Verdict     `json:"reviewer"`
-	Facts    PRFacts     `json:"facts"`
+	Run        state.ID    `json:"run"`
+	Group      state.ID    `json:"group"`
+	Repo       string      `json:"repo"`        // repo id the lease is keyed by
+	Epic       string      `json:"epic"`        // epic label, such as ep-1
+	Label      string      `json:"label"`       // group label, such as tg-1.2
+	EpicGroups []string    `json:"epic_groups"` // labels of every group of the epic
+	Goal       string      `json:"goal"`        // the group goal; title of the commit
+	Worktree   string      `json:"worktree"`    // path of the group's worktree
+	Branch     string      `json:"branch"`      // group branch
+	Fence      lease.Fence `json:"fence"`       // fence of the lease the Task Manager holds
+	Tree       string      `json:"tree"`        // tree hash both agents approved
+	Tester     Verdict     `json:"tester"`
+	Reviewer   Verdict     `json:"reviewer"`
+	Facts      PRFacts     `json:"facts"`
 }
 ```
 
@@ -10187,6 +11620,7 @@ type Approval struct {
 | `tree` | Must equal `tester.tree` and `reviewer.tree`; a difference is `ErrNotApproved`. Must also equal the worktree's tree hash when the commit step runs |
 | `fence` | Must equal the lease's fence when read just before the push |
 | `branch` | Must start with `komodo/`; the wrapper refuses any other name |
+| `epic_groups` | Every group label of the epic; the epic's last landing is the one after which each label has landed |
 | `facts` | Supplied by the Task Manager from recorded results; the handler never reruns a test |
 
 ```json
@@ -10194,10 +11628,12 @@ type Approval struct {
   "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
   "group": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
   "repo": "github.com/acme/shop",
-  "epic": "epic-1",
+  "epic": "ep-1",
+  "label": "tg-1.2",
+  "epic_groups": ["tg-1.1", "tg-1.2"],
   "goal": "Add the lease registry",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
-  "branch": "komodo/epic-1-tg-1.2",
+  "branch": "komodo/ep-1-tg-1.2",
   "fence": 3,
   "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4",
   "tester": { "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4", "summary": ["14 tests pass", "0 regressions"] },
@@ -10213,7 +11649,7 @@ type Approval struct {
 #### Pull request facts
 
 ```go
-// PRFacts are the facts the pull request body template renders; no model writes the text.
+// PRFacts are the facts one group adds to the pull request body; no model writes the text.
 type PRFacts struct {
 	DiffStat     string   `json:"diff_stat"`     // git's diff stat of the group
 	TasksClosed  []string `json:"tasks_closed"`  // names of the closed tasks
@@ -10221,10 +11657,10 @@ type PRFacts struct {
 }
 ```
 
-The body template is a constant in `body.go`, filled by Go's `text/template` from a value holding `Facts`, `Tester` and `Reviewer`; no model writes any of its words.
+The group template is a constant in `body.go`, filled by Go's `text/template` from a value holding `Facts`, `Tester` and `Reviewer`; no model writes any of its words. `RenderBody` renders one group's section, which the landing keeps in the group's merge commit message, and `RenderEpicBody` joins the sections of every landed group into the epic's pull request body.
 
 ```go
-// bodyTemplate is the pull request body; every value comes from the facts and the two verdicts.
+// bodyTemplate is one group's section of the pull request body; every value comes from the facts and the two verdicts.
 const bodyTemplate = `## Summary
 {{.Facts.DiffStat}}
 
@@ -10242,45 +11678,67 @@ const bodyTemplate = `## Summary
 {{end}}`
 ```
 
+```go
+// EpicFacts are the facts the epic pull request body renders.
+type EpicFacts struct {
+	DiffStat string     `json:"diff_stat"` // git's diff stat of the epic branch against the base branch
+	Groups   []string   `json:"groups"`    // one section per landed group, in landing order, as RenderBody wrote it
+}
+
+// epicBodyTemplate is the epic pull request body; every value comes from EpicFacts.
+const epicBodyTemplate = `## Summary
+{{.DiffStat}}
+
+{{range .Groups}}{{.}}
+{{end}}`
+```
+
 #### Result
 
 ```go
 // Result is what a finished Publish returns and what the Task Manager reports.
 type Result struct {
-	Branch string `json:"branch"`  // branch that was pushed
-	Head   string `json:"head"`    // commit id at the pushed tip
-	PRURL  string `json:"pr_url"`  // pull request address
+	Branch string `json:"branch"`  // epic branch that was pushed
+	Head   string `json:"head"`    // commit id at the pushed epic tip
+	Last   bool   `json:"last"`    // true when this landing was the epic's last group
+	PRURL  string `json:"pr_url"`  // epic pull request address; empty until the last group has landed
 	PRNew  bool   `json:"pr_new"`  // true when this call opened the pull request
 }
 ```
 
 ```json
 {
-  "branch": "komodo/epic-1-tg-1.2",
+  "branch": "komodo/ep-1",
   "head": "9f2c1ab04e6d7c33b1a8e5d0f4c7a92e1b6d3f80",
+  "last": true,
   "pr_url": "https://github.com/acme/shop/pull/41",
   "pr_new": true
 }
 ```
 
-A pull request is titled `<goal>` with the group name as a prefix, `tg-1.2: Add the lease registry`, and carries the label named by `commit.pr_label`. It is always opened ready for review, never as a draft.
+A group that lands before the epic's last group returns `last: false` and an empty `pr_url`. The epic's pull request is titled `<epic label>: <N> task groups`, such as `ep-1: 2 task groups`, where N is the number of labels in `epic_groups`, and it carries the label named by `commit.pr_label`. It is always opened ready for review, never as a draft.
 
 ### 15.4 Interfaces
 
 #### The handler
 
 ```go
-// Handler publishes approved work.
+// Handler saves and publishes work.
 type Handler struct {
 	Git     Git
 	Forge   Forge
-	Leases  Leases    // asks whether the lease still owns the group
-	Report  Reporter  // the Task Manager, which relays to the Runtime Manager
-	Cleanup Cleaner   // the Cleanup Handler
-	Config  Settings  // values received from the Configuration Manager
+	Leases  Leases     // asks whether the lease still owns the group
+	Epics   *EpicGates // one landing turn at a time per epic
+	Check   Rechecker  // runs the free checks on the epic branch
+	Report  Reporter   // the Task Manager, which relays to the Runtime Manager
+	Cleanup Cleaner    // the Cleanup Handler
+	Config  Settings   // values received from the Configuration Manager
 }
 
-// Publish commits, pushes and opens or updates the pull request, then hands the group to the Cleanup Handler.
+// Save records a finished task's work as a local commit on the group branch; it never pushes.
+func (h *Handler) Save(ctx context.Context, r SaveRequest) (SaveResult, error)
+
+// Publish commits the approved tree, lands it on the epic branch and pushes, opens or updates the epic's pull request after the last landing, then hands the group to the Cleanup Handler.
 func (h *Handler) Publish(ctx context.Context, a Approval) (Result, error)
 
 // Leases reads a group's lease; the Lease Manager implements it and the Commit Handler never writes to it.
@@ -10304,15 +11762,59 @@ type Cleaner interface {
 
 | Caller | Call | When |
 |---|---|---|
+| Task Manager | `Save` | A task of the group is finished |
 | Task Manager | `Publish` | The Tester and the Reviewer both approved the same tree |
-| `Publish` | `Cleaner.Complete` | The push and the pull request step are done |
+| `Publish` | `Cleaner.Complete` | The landing, the push and, after the last group, the pull request step are done |
+
+#### Landing and recheck
+
+```go
+// EpicGates holds each epic's landing turn in memory; one engine per machine lands, so no file is needed.
+type EpicGates struct{ /* per epic: a queue of waiting groups and the group that paused it */ }
+
+// Enter waits for the epic's turn, first come first served; a paused epic admits only the group that paused it.
+func (g *EpicGates) Enter(ctx context.Context, epic, group string) (*Turn, error)
+
+// Turn is one group's hold on its epic's landing turn.
+type Turn struct{ /* epic, group, gates */ }
+
+// Finish frees the turn: a failed recheck pauses the epic under this group, a passing one clears the pause.
+func (t *Turn) Finish(pass bool)
+
+// Release frees the turn without a recheck result and leaves the pause as it was.
+func (t *Turn) Release()
+
+// CheckResult is the outcome of one recheck.
+type CheckResult struct {
+	Pass   bool   `json:"pass"`
+	Output string `json:"output"` // the exact output of the failing check; empty on a pass
+}
+
+// Rechecker runs the free checks on the epic branch checked out in a worktree and calls no model.
+type Rechecker interface {
+	Recheck(ctx context.Context, epic, worktree string) (CheckResult, error)
+}
+```
+
+Which part runs the recheck is [TODO: which part runs the checks on the epic branch, and in which sandbox ([G-270](#g-270))].
+
+The Commit Handler reports two facts through `Reporter`, each published as a `run-status` event:
+
+| Subtype | Reported when | `data` |
+|---|---|---|
+| `epic.paused` | A recheck fails | `epic`, `group` (the label that paused it), `output` |
+| `epic.resumed` | A recheck passes on a paused epic | `epic`, `group` |
+
+```json
+{"epic": "ep-1", "group": "tg-1.2", "output": "FAIL internal/lease 2 tests failed"}
+```
 
 `Publish` returns `*PublishError` for every failure:
 
 ```go
-// PublishError says what failed and whether repeating the same call can fix it.
+// PublishError says what failed and whether repeating the same call can fix it; Save and Publish both return it.
 type PublishError struct {
-	Kind      string // one of the kinds in 15.7
+	Kind      string   // one of the kinds in 15.7
 	Retryable bool
 	Err       error
 }
@@ -10323,10 +11825,11 @@ var (
 	ErrCriticalRef  = errors.New("reference is outside refs/heads/komodo/ and refs/komodo/")
 	ErrConflict     = errors.New("merge conflict")
 	ErrPushRejected = errors.New("remote rejected the push")
+	ErrRecheck      = errors.New("checks failed on the epic branch after the landing")
 )
 ```
 
-The Task Manager passes a `PublishError` to the Runtime Manager, which owns retries and blocks ([chapter 7](#7-runtime-manager)). A retryable error is repeated with the same `Approval`.
+The Task Manager passes a `PublishError` to the Runtime Manager, which owns retries and blocks ([chapter 7](#7-runtime-manager)). A retryable error is repeated with the same `Approval`. How a group returns to Build after `ErrRecheck`, and which block reason follows, is [TODO: how a group returns to Build after a failed recheck, and which block reason applies ([G-272](#g-272))].
 
 #### The git wrapper
 
@@ -10347,8 +11850,26 @@ type Git interface {
 	RemoveWorktree(ctx context.Context, clone, path string) error
 	// DeleteBranch deletes a local komodo/ branch only when it still points at expectTip and that commit is in the history of containedIn.
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
-	// Merge merges ref into the branch checked out in dir; it never rebases.
-	Merge(ctx context.Context, dir, ref string, noFF bool) (head string, err error)
+	// Merge merges ref into the branch checked out in dir with the given message; it never rebases, and a conflict aborts the merge.
+	Merge(ctx context.Context, dir, ref, message string, noFF bool) (head string, err error)
+	// AddWorktree adds a worktree at path on a komodo/ branch cut from base, creating the branch when it does not exist.
+	AddWorktree(ctx context.Context, clone, path, branch, base string) error
+	// Fetch fetches one branch of the remote into its remote-tracking reference.
+	Fetch(ctx context.Context, dir, remote, branch string) error
+	// Landed lists the group landings on head since base, newest first, read from the merge commits on its first-parent line.
+	Landed(ctx context.Context, dir, base, head string) ([]Landing, error)
+	// DiffStat returns git's diff stat of head against base.
+	DiffStat(ctx context.Context, dir, base, head string) (string, error)
+	// DiscardBranch deletes a local komodo/ branch that still points at expectTip, whether or not the remote holds that commit.
+	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
+}
+
+// Landing is one group landing on an epic branch, read back from its merge commit.
+type Landing struct {
+	Label   string   `json:"label"`   // group label, from the subject
+	Goal    string   `json:"goal"`    // group goal, from the subject
+	Section string   `json:"section"` // the group's section of the pull request body, from the message body
+	Files   []string `json:"files"`   // files the landing changed
 }
 ```
 
@@ -10358,9 +11879,10 @@ type Git interface {
 | `Push` with `ErrPushRejected` | The remote refused, for example it holds commits the branch lacks | No force is tried; kind `push_rejected`, not retryable |
 | `Push`, other error | Network or authentication failure | Kind `push`, retryable |
 | `Merge` with `ErrConflict` | The merge conflicts | Kind `merge_conflict`, not retryable |
+| `Fetch`, error | The branch is missing, or the network failed | Kind `base_missing` when the remote lacks the branch; otherwise kind `push`, retryable |
 | `DeleteBranch` | The tip moved or the remote history lacks it | Nothing is deleted; the Cleanup Handler reports the branch as kept. The wrapper checks with `merge-base --is-ancestor`, then deletes with `update-ref -d` and the expected id, so there is no forced delete |
 
-`Merge` is used only by the epic option (15.5). `DeleteBranch` and `RemoveWorktree` belong to the same value but are called by the Cleanup Handler through its own interface.
+`Merge`, `Fetch`, `Landed` and `DiffStat` serve the epic landing (15.5). `AddWorktree` is also called by the Task Manager for a group's own worktree. `DeleteBranch`, `DiscardBranch` and `RemoveWorktree` belong to the same value but are called by the Cleanup Handler through its own interface.
 
 #### The forge wrapper
 
@@ -10382,9 +11904,24 @@ type Forge interface {
 }
 ```
 
+`RenderEpicBody` fills the body that `OpenPR` and `UpdatePR` send:
+
+```go
+// RenderEpicBody fills the epic pull request body template with the epic's facts.
+func RenderEpicBody(f EpicFacts) (string, error)
+```
+
 There is no merge method: a person merges the pull request. The label is made with `gh label create --force` when the repository lacks it.
 
 ### 15.5 Behaviour
+
+#### Saving a finished task
+
+1. After each finished task, the Task Manager calls `Save` on its own goroutine for the group.
+2. `Save` reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`.
+3. It takes the worktree's tree hash with `TreeOf`. When the checked-out commit already has that tree, nothing is committed and `Saved` is false.
+4. Otherwise `Commit` records the content with the message `<label>: <task>`, refusing a branch outside `komodo/` with `ErrCriticalRef` and a message that ends in `Name: value` lines.
+5. `Save` returns the new tip and tree. It never pushes, never calls the forge and never reaches the Cleanup Handler.
 
 #### Publish
 
@@ -10393,23 +11930,27 @@ There is no merge method: a person merges the pull request. The label is made wi
 flowchart TB
   A["Approval arrives"] -->|"1 publish"| B["Check approval and lease"]
   B -->|"2 ok"| C["Commit the approved tree"]
-  C -->|"3 recorded"| D["Land: per option"]
-  D -->|"4 landed"| E["Push"]
-  E -->|"5 pushed"| F["Find, open or update PR"]
-  F -->|"6 done"| G["Report"]
-  G -->|"7 reported"| H["Cleanup Handler"]
+  C -->|"3 recorded"| D["Wait for the epic's turn"]
+  D -->|"4 turn"| E["Merge into the epic branch"]
+  E -->|"5 merged"| F["Push the epic branch"]
+  F -->|"6 pushed"| G["Recheck the epic branch"]
+  G -->|"7 passed"| H["Last group: pull request"]
+  H -->|"8 done"| I["Report"]
+  I -->|"9 reported"| J["Cleanup Handler"]
   B -->|"2 refused"| X["Return error to Task Manager"]
-  E -->|"5 fails"| X
+  G -->|"7 fails"| X
 ```
 
 1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one.
 2. `Publish` refuses with `ErrNotApproved` unless `tree`, `tester.tree` and `reviewer.tree` are equal. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`.
-3. `Publish` takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`. When the checked-out commit already has that tree, nothing is committed. Otherwise `Commit` records the content with the message `<group>: <goal>`.
-4. The landing step runs as the chosen option says (below). Under the one-pull-request-per-group option it does nothing.
-5. `Publish` reads the lease's fence again, refuses on a higher number, and pushes. It then reads `RemoteTip` and fails unless the remote holds the local tip. When the remote already holds the tip, the push is skipped.
-6. `Forge.FindPR` looks for a pull request on the head branch first. If none exists, `OpenPR` opens one; if one exists, `UpdatePR` refreshes its body from `RenderBody`.
-7. `Report` sends `publish.done` with a `Result`, and `pr.opened` when `pr_new` is true. A person or the orchestrator waiting on a run wakes on `pr.opened`, so the pull request is announced before the run can finish.
-8. `Publish` calls `Cleaner.Complete` with the branch, the pushed tip and the pull request address. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again.
+3. `Publish` takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`. When the checked-out commit already has that tree, because `Save` recorded it, nothing is committed. Otherwise `Commit` records the content with the message `<label>: <goal>`.
+4. `Epics.Enter` waits for the epic's turn. The next steps run inside the turn, so one group at a time lands on an epic. The first turn on an epic after the engine starts runs the recheck (step 7) before the merge, so a pause the restart forgot is found again.
+5. The landing merges, as the epic landing steps below describe, and never rebases. A conflict is `ErrConflict` and frees the turn with `Release`.
+6. `Publish` reads the lease's fence again, refuses on a higher number, and pushes the epic branch. It then reads `RemoteTip` and fails unless the remote holds the local tip. When the remote already holds the tip, the push is skipped.
+7. `Check.Recheck` runs on the epic branch. A pass calls `Turn.Finish(true)`. A failure calls `Turn.Finish(false)`, reports `epic.paused` and returns `ErrRecheck`.
+8. When every label in `epic_groups` appears in `Git.Landed`, this landing was the epic's last: `Forge.FindPR` looks for a pull request on the epic branch. If none exists, `OpenPR` opens one; if one exists, `UpdatePR` refreshes its body from `RenderEpicBody`.
+9. `Report` sends `publish.done` with a `Result`, and `pr.opened` when `pr_new` is true. A person or the orchestrator waiting on a run wakes on `pr.opened`, so the epic's pull request is announced before the run can finish.
+10. `Publish` calls `Cleaner.Complete` with the group branch, its tip, the epic branch's remote reference, `epic_done` (true after the last group's landing opened the pull request) and the pull request address. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again.
 
 Publish runs on the Task Manager's own goroutine for the group, never inside the Runtime Manager's event loop, so a slow network holds up one group only.
 
@@ -10427,65 +11968,85 @@ Every method of `Git` follows these rules, and a test in 15.9 asserts each.
 
 The sandbox side of rule 5, mounting `.git` read-only in every sandbox profile, belongs to the Task Manager ([chapter 11](#11-task-manager)).
 
-#### Sub-section selected by the pull request decision: one pull request per group
+#### Epic landing
 
-Applies only if [TODO: one pull request per group or a shared epic branch ([G-210](#g-210))] chooses a pull request per group.
+Every group lands on its epic's branch `komodo/<epic>`. Steps 4 to 7 of Publish do the following.
 
-1. Step 4 does nothing: the group branch is the head.
-2. Step 6 opens the pull request from the group branch into the base branch.
-3. [TODO: what a dependent group is cut from while this group's pull request is unmerged ([G-210](#g-210))]
-4. `run-complete` fires only after every group's Cleanup Handler has closed it, and each pull request has been announced by `pr.opened`.
+1. Before the first merge, `Fetch` brings in the base branch. When the remote has no epic branch, `AddWorktree` creates the landing worktree on `komodo/<epic>` cut from the base branch's fetched tip; otherwise it checks out the remote epic tip.
+2. In the group's worktree, `Merge` merges the epic branch into the group branch with `noFF` false and the message `<label>: merge <epic>`. A conflict surfaces here, on the group branch, and never on the epic branch.
+3. In the landing worktree, `Merge` with `noFF` true merges the group branch into the epic branch. The merge commit's subject is `<label>: <goal>` and its body is the group's section from `RenderBody`, so `Landed` can read the group back later.
+4. The push sends the epic branch only. The group branch is not pushed.
+5. The recheck runs in the landing worktree, with the epic branch at the tip just pushed. The turn stays held until the recheck result is recorded in `Turn.Finish`.
+6. Only the epic's pull request targets the base branch. No pull request exists for a group.
 
-#### Sub-section selected by the pull request decision: shared epic branch
+**📐 What a recheck decides for the groups waiting to land**
+```mermaid
+flowchart TB
+  A["Landing pushed"] -->|"1 recheck"| B{"Checks pass?"}
+  B -->|"2 yes"| C["Next waiting group lands"]
+  B -->|"2 no"| D["Epic paused under this group"]
+  D -->|"3 group lands again"| E["Recheck on the new tip"]
+  E -->|"4 pass"| C
+```
 
-Applies only if [TODO: one pull request per group or a shared epic branch ([G-210](#g-210))] chooses an epic branch. The epic branch is `komodo/<epic>`, cut from the base branch.
-
-1. Step 4 takes the epic's landing lease from the Lease Manager, so only one group lands at a time. A group that cannot take it waits.
-2. It merges the epic branch into the group branch (a merge, never a rebase), then merges the group branch into the epic branch with `Merge(noFF=true)`, in a landing worktree checked out detached at the epic tip. A conflict is `ErrConflict`.
-3. Step 5 pushes the epic branch. The group branch is not pushed.
-4. Step 6 runs once, after the last group of the epic lands: it opens or updates the one pull request from the epic branch into the base branch. Only that pull request targets the base branch.
-5. The landing lease carries a paused flag. When whatever verifies the epic branch after a landing fails, the flag is set and the next landing waits until a passing result clears it, so a group never lands on a broken branch. What that verification is stays [TODO: what checks the epic branch after each landing ([G-210](#g-210))].
-6. `run-complete` fires only after the epic pull request is announced by `pr.opened`.
+1. A failed recheck sets the epic's pause under the group that ran it. The waiting groups keep their place in the queue and take no action.
+2. A paused epic admits only the group that paused it. Its next landing merges the epic branch into the group branch again, so a fix made by hand on the epic branch is picked up, and its recheck is the next one.
+3. The first passing recheck clears the pause and reports `epic.resumed`. Whatever made it pass counts.
+4. Groups of other epics are never touched.
 
 #### Base branch
 
-The base branch is the value of `commit.base_branch`; when it is empty, it is the remote's default branch at its fetched tip. `Publish` runs a fetch of that branch before step 6 and fails with kind `base_missing` when the remote has no such branch. Which base a group's branch is cut from is part of [TODO: who creates a group's branch and worktree ([G-220](#g-220))].
+The base branch is the value of `commit.base_branch`; when it is empty, it is the remote's default branch at its fetched tip. `Publish` runs a fetch of that branch before step 5 and fails with kind `base_missing` when the remote has no such branch. Which ref a group's branch starts from, and who creates the epic's branch, is [TODO: which ref a group's branch starts from, and who creates the epic's branch ([G-263](#g-263))].
 
 ### 15.6 State
 
-The Commit Handler keeps no state of its own. The group's stage lives in the State Manager, and the branch and pull request live in git and on the forge.
+The Commit Handler keeps no state on disk. The group's stage lives in the State Manager, and the branches and the pull request live in git and on the forge. The only thing it holds in memory is each epic's landing turn and pause in `EpicGates`.
 
 | Item | State | Moves on | True after the move |
 |---|---|---|---|
-| Group branch | Local | `Commit` | The approved content is a commit on the branch |
-| Group branch | Pushed | `Push` | The remote holds the local tip |
-| Pull request | Open | `OpenPR` | A ready pull request names the head branch |
+| Group branch | Saved | `Save` | Each finished task is a commit on the branch; nothing is pushed |
+| Group branch | Approved | `Commit` | The approved content is a commit on the branch |
+| Epic branch | Landed | `Push` | The remote holds the epic tip that contains the group |
+| Epic branch | Paused | A failed recheck | Only the group that paused it may land |
+| Pull request | Open | `OpenPR` | A ready pull request names the epic branch |
 | Pull request | Current | `UpdatePR` | The body matches the latest facts |
 
-**📐 States of one group branch**
+**📐 States of one group's work**
 ```mermaid
 stateDiagram-v2
   direction LR
-  [*] --> Local: 1 approved content committed
-  Local --> Pushed: 2 push
-  Pushed --> PROpen: 3 pull request opened
-  PROpen --> [*]: 4 hand-off to cleanup
+  [*] --> Saved: 1 each finished task saved
+  Saved --> Approved: 2 approved content committed
+  Approved --> Landed: 3 merged and pushed
+  Landed --> [*]: 4 hand-off to cleanup
 ```
 
-A repeat of `Publish` finds each state already true and moves on, which is why a crash at any step is safe to repeat.
+**📐 States of one epic branch**
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Open: 1 first landing
+  Open --> Paused: 2 recheck fails
+  Paused --> Open: 3 recheck passes
+  Open --> PROpen: 4 last group landed
+  PROpen --> [*]: 5 a person merges
+```
+
+A repeat of `Publish` finds each state already true and moves on, which is why a crash at any step is safe to repeat. After an engine restart `EpicGates` is empty, and the first landing on each epic runs the recheck first.
 
 ### 15.7 Invariants and Failures
 
 #### Invariants
 
 1. Only the Commit Handler pushes, and only a `komodo/` branch to its own name.
-2. A commit is made only from content whose tree hash equals the approved tree hash.
+2. `Publish` commits only content whose tree hash equals the approved tree hash; `Save` commits finished-task work locally and never pushes.
 3. Both approvals name the same tree; a rework returns the group to the Builder and voids both.
 4. The fence is read again just before every push; a higher number refuses the push.
 5. No force, no remote deletion, no trailer and no critical reference, in any method.
-6. A pull request is opened ready, once per head branch.
-7. The pull request body comes from recorded results, never from a rerun.
-8. The Cleanup Handler is called only after the remote holds the pushed tip.
+6. One group at a time lands on an epic, and a paused epic admits only the group that paused it.
+7. One pull request exists per epic, opened ready once the last group has landed.
+8. The pull request body comes from recorded results, never from a rerun.
+9. The Cleanup Handler is called only after the remote holds the pushed tip.
 
 #### Failures
 
@@ -10493,13 +12054,14 @@ A repeat of `Publish` finds each state already true and moves on, which is why a
 |---|---|---|---|
 | Verdicts name different trees | `tree` differs from a verdict | `ErrNotApproved`, nothing written | Group unchanged; Task Manager decides |
 | Worktree content changed since approval | `TreeOf` differs from `tree` | `ErrNotApproved`, nothing written | Group unchanged |
-| Another run took the group | Fence higher, or other holder | `ErrLeaseLost`, no push | Group ends in this run |
+| Another run took the group | Fence higher, or other holder | `ErrLeaseLost`, no commit, no push | Group ends in this run |
 | Remote refuses the push | `ErrPushRejected` | Not retried; the Runtime Manager blocks the group | Blocked, reason `publish` |
 | Network or login failure on push | `Push` error | Retryable; same call repeated after 30 s, then 2 min | Blocked, reason `publish` after the third failure |
 | `gh` fails | `Forge` error | `FindPR` runs first on each repeat, so none opens twice | Blocked, reason `publish` after the third failure |
-| Merge conflict (epic option) | `ErrConflict` | Not retried | Blocked, reason `merge_conflict` |
+| Merge conflict | `ErrConflict` | Not retried; the turn is released | Blocked, reason `merge_conflict` |
+| Recheck fails | `Check.Recheck` returns `Pass` false | The epic pauses under this group; `epic.paused` reported; `ErrRecheck` returned | Group per [TODO: how a group returns to Build after a failed recheck, and which block reason applies ([G-272](#g-272))] |
 | A critical reference is named | `ErrCriticalRef` | Refused before git runs; sent to the Error Handler | Group unchanged |
-| Crash after the push, before the pull request | The remote holds the tip on repeat | Push skipped; `FindPR`, then `OpenPR` | Pull request open |
+| Crash after the push, before the recheck | The remote holds the tip on repeat | Push skipped; the recheck runs | Landed |
 | Crash after the pull request, before cleanup | `FindPR` finds it on repeat | `UpdatePR`, then `Cleaner.Complete` | Cleanup runs |
 
 The retry schedule and the block reasons belong to the Runtime Manager ([chapter 7](#7-runtime-manager)); the numbers above are the schedule it applies to a retryable `PublishError`.
@@ -10510,16 +12072,19 @@ The Configuration Manager reads the settings file and passes these values in `Se
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `commit.base_branch` | string | empty | Branch pull requests target; empty means the remote's default branch at its fetched tip |
+| `commit.base_branch` | string | empty | Branch the epic's pull request targets; empty means the remote's default branch at its fetched tip |
 | `commit.remote` | string | empty | Remote to push to; empty means the remote of the base branch's upstream, `origin` when it has none |
 | `commit.pr_label` | string | `komodo` | Label put on every pull request |
 
-Whether groups land per pull request or on an epic branch is [TODO: where groups land ([G-210](#g-210))]; no key is defined until that is decided.
+No key selects where groups land: every group lands on its epic's branch.
 
 ### 15.9 Proof Cases
 
 Component tests use a local bare repository as the remote and a mock `gh` that returns documented output.
 
+- `Save` after a finished task commits the worktree on the group branch, pushes nothing and leaves the remote unchanged.
+- A second `Save` with an unchanged worktree commits nothing and returns `Saved` false.
+- `Save` with a stale fence returns `ErrLeaseLost` and commits nothing.
 - An approval whose verdicts name different trees writes nothing.
 - A worktree edited after approval fails with `ErrNotApproved` and makes no commit.
 - A published branch carries 0 trailers; a message ending in `Name: value` lines is refused.
@@ -10527,10 +12092,15 @@ Component tests use a local bare repository as the remote and a mock `gh` that r
 - No code path builds a command containing `--force`, `-f`, `--force-with-lease` or a `+` refspec; a test scans every argument list the wrapper produces.
 - A push to a remote that holds extra commits returns `ErrPushRejected` and leaves the remote unchanged.
 - A stale fence read just before the push refuses the push.
+- Two groups of one epic landing at once merge one after the other, in the order they arrived.
+- A seeded conflict returns `ErrConflict` on the group branch and leaves the epic branch unchanged.
+- A failing recheck pauses the epic, reports `epic.paused`, holds a second group's landing, and a passing recheck from the paused group clears the pause.
+- After an engine restart, the first landing on an epic runs the recheck before the merge.
+- The first group of 2 opens no pull request; the second opens exactly one, from `komodo/<epic>` into the base branch.
+- The epic's pull request is titled `<epic label>: <N> task groups`.
 - A second `Publish` with the same approval opens no second pull request and calls `Complete` again.
 - A crash simulated between push and pull request opens the pull request on the repeat.
 - A worktree whose `.git` pointer file names another folder is ignored: the commit lands in the group's own git folder.
-- Only the epic option: two groups landing at once merge one after the other, a seeded conflict returns `ErrConflict`, and a set paused flag holds the next landing.
 - `run-complete` is never published before `pr.opened` for the same run.
 
 ### 15.10 Open Gaps
@@ -10539,24 +12109,23 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Closes by |
 |---|---|---|
-| [G-210](#g-210) | One pull request per group, or a shared epic branch | Owner decision |
-| [G-203](#g-203) | What `build`, `test`, `review` and `replay` do and what their id names | Owner decision |
-| [G-205](#g-205) | Where commands run, which sets the sandbox mount for rule 5 | Owner decision |
-| [G-220](#g-220) | Saving work and git writes: who saves finished tasks, creates branches and worktrees, releases the lease, commits task lists | Owner decision |
-
+| [G-226](#g-226) | Who commits the Intake Handler's task lists | Owner decision |
+| [G-270](#g-270) | Which part runs the checks on the epic branch, and in which sandbox | Owner decision |
+| [G-272](#g-272) | How a group returns to Build after a failed recheck | Owner decision |
+| [G-263](#g-263) | Which ref a group's branch starts from, and who creates the epic's branch | Owner decision |
 ## 16. Cleanup Handler
 
-The Cleanup Handler removes what a task group no longer needs once its work is safely published: redundant local branches, the group's worktree (its private checkout) and its temporary files. It then tells the Task Manager to close the group, which destroys the group's sandbox and ends the group inside the Runtime Manager. It also clears the remains of stopped, crashed or discarded groups, and it is what `komodo clean` calls. See [HLD 5.17](hld.md#517-cleanup-handler).
+The Cleanup Handler removes what a task group no longer needs once its work is safely published: its local branch, the group's worktree (its private checkout), the group's Docker container and its temporary files. It then tells the Task Manager to close the group, which destroys the group's sandbox and ends the group inside the Runtime Manager. It also clears the remains of stopped, crashed or abandoned groups, and it is what `komodo clean` and `komodo abandon (id)` reach. See [HLD 5.17](hld.md#517-cleanup-handler).
 
 ### 16.1 Scope and Concepts
 
-The Cleanup Handler deletes only local files, local branches and worktrees. It never deletes a remote branch, closes a pull request, or removes a group's recorded history.
+The Cleanup Handler deletes only local files, local branches, worktrees and Docker containers. It never deletes a remote branch, closes a pull request, or removes a group's recorded history.
 
 | Term | Meaning |
 |---|---|
-| Published | A group whose approved tip is on the remote and whose pull request is open |
+| Published | A group whose approved tip is in the history of the epic's branch on the remote |
 | Redundant branch | A local `komodo/` branch whose tip is already in the history of a branch the remote holds |
-| Group resources | The group's worktree, tester checkout and session temporary folder |
+| Group resources | The group's worktree, Docker container, tester checkout and session temporary folder |
 | Sweep | A scan that removes the remains of runs that ended without cleaning up |
 
 Three entry points exist, each a method of `Handler`:
@@ -10565,7 +12134,7 @@ Three entry points exist, each a method of `Handler`:
 |---|---|---|
 | `Complete` | Commit Handler | One published group, in full |
 | `Sweep` | [TODO: what triggers the sweep ([G-218](#g-218))]; `komodo clean` | Remains of stopped or crashed runs |
-| `Discard` | `komodo clean`, if G-204 keeps it | One named group dropped for good |
+| `Discard` | The Runtime Manager, for `komodo abandon (id)` | One named group dropped for good |
 
 What the Cleanup Handler guarantees:
 - It never removes a worktree that holds files the published tip lacks; it keeps the worktree and lists it under `kept`.
@@ -10574,11 +12143,11 @@ What the Cleanup Handler guarantees:
 - It never removes a group's state record or events: history stays for `replay` and for reading what happened.
 
 What lies beside it:
-- The Cleanup Handler removes the group's redundant branches and worktree itself. The Lease Manager keeps the lease registry and performs no git write ([chapter 9](#9-lease-manager)).
+- The Cleanup Handler removes the group's branch, worktree and Docker container itself. The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
 - The Task Manager owns the sandbox and the group's closing; the Cleanup Handler calls only its `CloseTaskGroup()`, and the Task Manager destroys the sandbox inside it.
-- Who releases the group's lease after cleanup is [TODO: who releases the lease after cleanup ([G-220](#g-220))].
-- What `komodo clean` covers beyond the three entry points, and whether an `abandon` command survives, is [TODO: what `clean` covers and whether `abandon` survives ([G-204](#g-204))]. Under every option, whatever `clean` removes goes through these three methods and obeys the guarantees above.
-- Which redundant branches exist depends on [TODO: one pull request per group or a shared epic branch ([G-210](#g-210))]; 16.5 has a short sub-section for each option.
+- What `komodo clean` removes, and whether it needs a terminal, is [TODO: what `komodo clean` removes, and whether it needs a terminal ([G-222](#g-222))]. Whatever `clean` removes goes through these three methods and obeys the guarantees above.
+- `komodo abandon (id)` drops a group for good through `Discard`.
+- Every group lands on its epic's branch ([chapter 15](#15-commit-handler)), so each group's local branch is redundant once its landing is on the remote; 16.5 lists the branches that go.
 
 ### 16.2 Package Layout
 
@@ -10608,13 +12177,14 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 type Published struct {
 	Run      state.ID       `json:"run"`
 	Group    state.ID       `json:"group"`
-	Epic     string         `json:"epic"`     // epic folder name, such as epic-1
-	Branch   string         `json:"branch"`   // group branch that was published
+	Epic     string         `json:"epic"`     // epic folder name, such as ep-1
+	Branch   string         `json:"branch"`   // group branch that was landed
 	Tip      string         `json:"tip"`      // commit id the remote must hold
 	Remote   string         `json:"remote"`   // remote that received the push
 	Contains string         `json:"contains"` // remote reference whose history must hold Tip
 	Worktree string         `json:"worktree"` // path of the group's checkout
-	PRURL    string         `json:"pr_url"`
+	EpicDone bool           `json:"epic_done"` // true when this was the epic's last group and its pull request is open
+	PRURL    string         `json:"pr_url"`   // epic pull request address; empty before the last group lands
 }
 ```
 
@@ -10622,12 +12192,13 @@ type Published struct {
 {
   "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
   "group": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
-  "epic": "epic-1",
-  "branch": "komodo/epic-1-tg-1.2",
+  "epic": "ep-1",
+  "branch": "komodo/ep-1-tg-1.2",
   "tip": "9f2c1ab04e6d7c33b1a8e5d0f4c7a92e1b6d3f80",
   "remote": "origin",
-  "contains": "origin/komodo/epic-1-tg-1.2",
+  "contains": "origin/komodo/ep-1",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
+  "epic_done": true,
   "pr_url": "https://github.com/acme/shop/pull/41"
 }
 ```
@@ -10635,13 +12206,14 @@ type Published struct {
 | Field | Rule |
 |---|---|
 | `tip` | Must be in the history of `contains` on the remote; otherwise `ErrNotPublished` |
-| `contains` | The group's own remote branch, or under the epic option the epic's remote branch |
+| `contains` | The epic's remote branch, which holds the group's landing |
+| `epic_done` | When true, the landing worktree and the local epic branch are removed as well |
 | `worktree` | The checkout the handler removes; it holds nothing the published tip lacks |
 
 ```go
 // Item is one thing the Cleanup Handler removed or kept.
 type Item struct {
-	Kind   string `json:"kind"`   // worktree, tester_worktree, branch, temp, version
+	Kind   string `json:"kind"`   // worktree, tester_worktree, container, branch, temp, version
 	Name   string `json:"name"`   // path, branch, reference or version
 	Reason string `json:"reason"` // why it was kept; empty for removed items
 }
@@ -10658,8 +12230,9 @@ type Report struct {
 {
   "group": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
   "removed": [
+    { "kind": "container", "name": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22", "reason": "" },
     { "kind": "worktree", "name": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22", "reason": "" },
-    { "kind": "branch", "name": "komodo/epic-1-tg-1.2", "reason": "" }
+    { "kind": "branch", "name": "komodo/ep-1-tg-1.2", "reason": "" }
   ],
   "kept": []
 }
@@ -10672,9 +12245,10 @@ type Report struct {
 ```go
 // Handler cleans up after groups.
 type Handler struct {
-	Lease  Leases    // reads who holds a group; the Lease Manager
-	Git    Git       // the git wrapper, through the Cleanup Handler's own small interface
-	Task   TaskGroup // the group's Task Manager
+	Lease  Leases     // reads who holds a group; the Lease Manager
+	Git    Git        // the git wrapper, through the Cleanup Handler's own small interface
+	Boxes  Containers // the group's Docker container
+	Task   TaskGroup  // the group's Task Manager
 	Groups Groups    // reads group records from the State Manager
 	Report Reporter  // relays a progress fact to the Runtime Manager
 }
@@ -10685,7 +12259,7 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error)
 // Sweep removes the remains of runs that ended without cleaning up.
 func (h *Handler) Sweep(ctx context.Context) (Report, error)
 
-// Discard drops one group's resources for good; the worktree and its files are deleted unless KeepWorktree is set.
+// Discard drops one group's resources for good, including unpublished work; the worktree and its files are deleted unless KeepWorktree is set.
 func (h *Handler) Discard(ctx context.Context, group state.ID, o DiscardOptions) (Report, error)
 
 // UnusedVersions returns the installed binary versions that no unfinished group names.
@@ -10721,6 +12295,13 @@ type Git interface {
 	RemoveWorktree(ctx context.Context, clone, path string) error
 	// DeleteBranch deletes a local branch only when it still points at expectTip and that commit is in the history of containedIn.
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
+	// DiscardBranch deletes a local branch that still points at expectTip, whether or not the remote holds that commit; only Discard calls it.
+	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
+}
+
+// Containers removes a group's Docker container; the sandbox backend that created it implements it, and it succeeds when Docker is absent or the container is gone.
+type Containers interface {
+	Remove(ctx context.Context, group state.ID) error
 }
 
 // TaskGroup is the group's Task Manager.
@@ -10747,10 +12328,11 @@ type Reporter interface {
 
 | Caller | Call | When |
 |---|---|---|
-| Commit Handler | `Complete` | The push and the pull request step are done |
+| Commit Handler | `Complete` | A group's landing is pushed, and the epic's pull request step is done when it was the last group |
 | [TODO: what triggers the sweep ([G-218](#g-218))] | `Sweep` | Not fixed |
-| CLI | `Sweep`, `Discard`, `UnusedVersions` | `komodo clean`, within what [G-204](#g-204) decides |
-| CLI | `UnusedVersions` | `komodo update`, before it deletes old versions |
+| Runtime Manager | `Sweep`, `UnusedVersions` | The engine's `clean` request from `komodo clean`, within what [G-222](#g-222) leaves open |
+| Runtime Manager | `Discard` | `komodo abandon (id)`, after it stops the group |
+| Runtime Manager | `UnusedVersions` | The engine's `clean` request from `komodo update`, before it deletes old versions |
 
 | Error | Means | Caller does |
 |---|---|---|
@@ -10766,53 +12348,48 @@ type Reporter interface {
 ```mermaid
 flowchart TB
   A["Published arrives"] -->|"1 verify"| B["Remote holds the tip"]
-  B -->|"2 checkouts"| C["Remove tester checkout and temp files"]
-  C -->|"3 worktree"| D["Remove the worktree"]
-  D -->|"4 branches"| E["Delete redundant branches"]
-  E -->|"5 close"| F["CloseTaskGroup"]
+  B -->|"2 container"| C["Remove the Docker container"]
+  C -->|"3 checkouts"| D["Remove tester checkout and temp files"]
+  D -->|"4 worktree"| E["Remove the worktree"]
+  E -->|"5 branches"| F["Delete the local branch"]
+  F -->|"6 close"| G["CloseTaskGroup"]
   B -->|"1 refused"| X["ErrNotPublished"]
 ```
 
 1. `Complete` reports `cleanup.start` and checks that `tip` is in the history of `contains` on the remote. If not, it returns `ErrNotPublished` and removes nothing.
-2. It removes the tester's throwaway checkout and the group's session temporary folder.
-3. It removes the worktree with `Git.RemoveWorktree`. If the worktree holds files the tip lacks, it keeps the worktree and lists it under `kept`. Whether a sandbox that mounts the worktree blocks the removal waits on [TODO: where builder and tester commands run ([G-205](#g-205))].
-4. It deletes each redundant local branch with `DeleteBranch`, which refuses unless the branch still points at the published tip. A refusal is listed under `kept`.
-5. It calls `CloseTaskGroup()` on the group's Task Manager, which destroys the sandbox, then reports `cleanup.done` with the `Report`. Releasing the group's lease is [TODO: who releases the lease after cleanup ([G-220](#g-220))].
+2. It removes the group's Docker container through `Containers.Remove` first, because the container mounts the worktree. With no Docker, or no container, the step succeeds with nothing removed.
+3. It removes the tester's throwaway checkout and the group's session temporary folder.
+4. It removes the worktree with `Git.RemoveWorktree`. If the worktree holds files the tip lacks, it keeps the worktree and lists it under `kept`.
+5. It deletes the group's local branch with `DeleteBranch`, which refuses unless the branch still points at the landed tip. A refusal is listed under `kept`.
+6. It calls `CloseTaskGroup()` on the group's Task Manager, which destroys the sandbox, then reports `cleanup.done` with the `Report`. The Runtime Manager calls the Lease Manager's `Release` when the group closes ([chapter 9](#9-lease-manager)).
 
-The Runtime Manager publishes `run-complete` only after every group of the run has been closed this way, and under the epic option only after the epic pull request was announced ([chapter 15](#15-commit-handler)).
+The Runtime Manager publishes `run-complete` only after every group of the run has been closed this way and the epic's pull request was announced ([chapter 15](#15-commit-handler)).
 
-#### Sub-section selected by the pull request decision: one pull request per group
-
-Applies only if [TODO: one pull request per group or a shared epic branch ([G-210](#g-210))] chooses a pull request per group.
-
-1. The redundant branch is the group's local branch; `contains` is its own remote branch.
-2. The remote branch stays: the open pull request needs it.
-
-#### Sub-section selected by the pull request decision: shared epic branch
-
-Applies only if [TODO: one pull request per group or a shared epic branch ([G-210](#g-210))] chooses an epic branch.
+#### Branches under epic landing
 
 1. The redundant branch is the group's local branch, which was never pushed; `contains` is the epic's remote branch.
-2. When the last group of the epic is closed and the epic pull request is announced, the landing worktree and the local epic branch also go, with `contains` set to the epic's remote branch.
+2. When `epic_done` is true, the epic's pull request is open, so the landing worktree and the local epic branch also go, with `contains` set to the epic's remote branch.
+3. The remote epic branch stays: the open pull request needs it.
 
 #### Sweeping the remains of dead runs
 
 What triggers a sweep is [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))]; `komodo clean` calls it on demand.
 
 1. `Sweep` lists the group worktrees on disk and skips every group a live run holds, asking the Lease Manager through `Leases.Holder`.
-2. It removes the dead runs' tester checkouts and session temporary folders.
+2. It removes the dead runs' Docker containers, tester checkouts and session temporary folders.
 3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed.
 4. It returns a `Report` and reports `cleanup.swept`.
 
-What a crash or `stop` leaves for the sweep, and what triggers it again after a crash, is [TODO: what survives a crash ([G-202](#g-202))].
+A crash or `stop` leaves the group's worktree, branch and container in place. `komodo run (id)` continues the group from its saved state, and the sweep clears what no run continues.
 
 #### Discarding one group
 
-Reachable only if the command that calls it survives: [TODO: what `clean` covers and whether `abandon` survives ([G-204](#g-204))]. If it does:
+`komodo abandon (id)` reaches `Discard` through the Runtime Manager, which stops the group first.
 
-1. `Discard` refuses with `ErrLeaseHeld` when a live run holds the group; stopping the run comes first.
-2. It removes the checkouts and, unless `KeepWorktree` is set, the worktree. It deletes the local branch, which drops unpublished work, and calls `CloseTaskGroup()`, which destroys the sandbox.
-3. It keeps the group's state record and events, and reports `group.discarded` with the reason. Dependent groups are then marked `waiting on discarded group` by the Runtime Manager in status and in the task-list file, not in their own records, until `run` is given a plan that clears the wait.
+1. `Discard` refuses with `ErrLeaseHeld` when a live run still holds the group; stopping the group revokes its lease first.
+2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree. It deletes the local branch with `DiscardBranch`, which drops unpublished work, and calls `CloseTaskGroup()`, which destroys the sandbox.
+3. It keeps the group's state record and events, and reports `group.discarded` with the reason. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
+4. Dependent groups are then marked `waiting on discarded group` by the Runtime Manager in status and in the task-list file, not in their own records, until `run` is given a plan that clears the wait.
 
 #### Choosing which versions to delete
 
@@ -10824,7 +12401,7 @@ The Cleanup Handler keeps no state of its own. A group's stage and the progress 
 
 | Item | State | Moves on | True after the move |
 |---|---|---|---|
-| Group resources | Held | Lease granted | Worktree, branch and sandbox exist |
+| Group resources | Held | Lease granted | Worktree, branch, container and sandbox exist |
 | Group resources | Cleaning | `Complete` starts | Remote verified; removal under way |
 | Group resources | Gone | `Complete` returns | Nothing remains but state and events |
 | Group | Closed | `CloseTaskGroup` | The Runtime Manager no longer lists the group |
@@ -10847,9 +12424,9 @@ A crash inside `Cleaning` leaves some resources removed. A repeat of `Complete` 
 
 1. Cleanup runs only after the remote holds the group's tip.
 2. A worktree that holds files the published tip lacks is never removed by `Complete` or `Sweep`.
-3. The Cleanup Handler removes branches and worktrees and takes no lease or sandbox action except `CloseTaskGroup()`.
+3. The Cleanup Handler removes branches, worktrees and Docker containers and takes no lease or sandbox action except `CloseTaskGroup()`; it never releases a lease.
 4. Only local things are deleted: no remote branch, no pull request.
-5. A branch is deleted only when it still points at the published tip and that tip is in the remote's history; there is no forced delete.
+5. `Complete` and `Sweep` delete a branch only when it still points at the landed tip and that tip is in the remote's history; only `Discard`, which drops unpublished work, deletes without that check.
 6. A group held by a live run is never touched by `Sweep` or `Discard`.
 7. State records and events are never deleted.
 8. A binary version named by an unfinished group is never deleted.
@@ -10859,6 +12436,7 @@ A crash inside `Cleaning` leaves some resources removed. A repeat of `Complete` 
 | Situation | Detection | Action | Final state |
 |---|---|---|---|
 | Remote lacks the tip | `ErrNotPublished` | Nothing removed | Group stays in publishing |
+| Container removal fails | `Containers.Remove` returns an error | The container is listed under `kept` with the error; the worktree step still runs | Container kept |
 | Worktree holds files the tip lacks | `RemoveWorktree` refuses | Worktree kept and listed under `kept` | Worktree kept |
 | Branch moved since publish | `DeleteBranch` refuses | Branch kept and listed | Group still closes |
 | `CloseTaskGroup` fails | Error returned | The Error Handler receives the error; the sandbox may remain | Group open until the repeat succeeds |
@@ -10874,15 +12452,18 @@ No settings key belongs to this chapter.
 Component tests use a temporary git repository, a local bare repository as the remote, and mocks that match each owner's documented behaviour.
 
 - `Complete` with a tip the remote lacks removes nothing and returns `ErrNotPublished`.
-- `Complete` removes the worktree and local branch, and calls `CloseTaskGroup` last and only that Task Manager method.
-- A repeat of `Complete` after a failure between steps 3 and 4 finishes the rest and returns no error.
+- `Complete` removes the container, the worktree and the local branch in that order, and calls `CloseTaskGroup` last and only that Task Manager method.
+- `Complete` with Docker absent removes the worktree and branch and returns no error.
+- `Complete` never calls the Lease Manager's `Release`.
+- A repeat of `Complete` after a failure between steps 4 and 5 finishes the rest and returns no error.
+- `Complete` with `epic_done` true also removes the landing worktree and the local epic branch.
 - A worktree with an untracked file is kept and listed under `kept`.
 - A branch moved by one commit after publishing is not deleted.
 - No call deletes a remote branch or closes a pull request.
 - `Sweep` skips a group whose lease a live run holds.
 - `UnusedVersions` excludes the version named by a blocked group.
 - `run-complete` is not published while any group of the run is unclosed.
-- Only if `Discard` survives: it refuses a live group, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
+- `Discard`, reached by `abandon (id)`, refuses a group a live run holds, removes the container, deletes a branch holding unpublished commits, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
 
 ### 16.10 Open Gaps
 
@@ -10890,16 +12471,12 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Closes by |
 |---|---|---|
-| [G-204](#g-204) | What `clean` covers, and whether `abandon` survives | Owner decision |
-| [G-210](#g-210) | One pull request per group, or a shared epic branch | Owner decision |
-| [G-202](#g-202) | What survives a crash, and what restarts cleanup | Owner decision |
-| [G-205](#g-205) | Whether Docker holds the sandbox, and whether a mount blocks removing the worktree | Owner decision |
 | [G-218](#g-218) | What triggers removing a dead run's leftovers | Owner decision |
-| [G-220](#g-220) | Who releases the lease after cleanup | Owner decision |
+| [G-222](#g-222) | What `komodo clean` removes, and whether it needs a terminal | Owner decision |
 
 ## 17. Error Handler
 
-The Error Handler is the harness's global safety net. It catches every error and panic in every goroutine before it can crash the harness, turns each into an `error` event, and prints it to the person or program that issued the command, through the CLI. It also receives the Resource Manager's plan and cost warnings. The design and its reasons are in [HLD 5.18](hld.md#518-error-handler).
+The Error Handler is the harness's global safety net. It catches every error and panic in every goroutine before it can crash the harness, turns each into an `error` event, and prints it to the person or program that issued the command, through the CLI. Before the program exits on any error it caught, it publishes one final `error` event. It also receives the Resource Manager's plan and cost warnings. The design and its reasons are in [HLD 5.18](hld.md#518-error-handler).
 
 ### 17.1 Scope and Concepts
 
@@ -10907,12 +12484,13 @@ The Error Handler is the harness's global safety net. It catches every error and
 - The panic-catching helper that every goroutine in the harness starts through.
 - The `Fault` record, the `error` event data, and the single path that prints a fault.
 - `PrintError()` as the call into the CLI, and `ThrowResourceError()` as the call from the Resource Manager.
+- `Final()`, the call that publishes the one last `error` event when a caught error ends the program.
 - The list of error values and the failure table, listed by owning component in [17.7](#177-invariants-and-failures).
 
 **Does not own:**
 - What a component does after its own failure. Each component's chapter holds its failure rows; this chapter links to them.
 - The reply layout and the exit codes: [1. CLI](#1-cli) holds the envelope and the five exit codes, and [2. Output Formatter](#2-output-formatter) holds the closed code list and its text templates.
-- What happens at a plan or cost limit beyond reporting it. [TODO: what happens at a plan or cost limit ([G-211](#g-211))]
+- What happens at a plan or cost limit beyond reporting it: the Resource Manager and the Runtime Manager own the warning at 80% and the pause at 100% ([19. Resource Manager](#19-resource-manager)).
 
 **Concepts**
 - **Fault:** one thing that went wrong, as a record: where, what code, how serious, what to tell the person and how to fix it.
@@ -10923,13 +12501,13 @@ The Error Handler is the harness's global safety net. It catches every error and
 
 ### 17.2 Package Layout
 
-Go package `internal/fault` ([HLD Appendix A](hld.md#appendix-a-traceability)). It imports the packages to its right in the order of [0.4](#04-import-order), so it can publish to `bus` but never imports `cli`; the CLI passes itself in as a `Printer`.
+Go package `internal/fault` ([HLD Appendix A](hld.md#appendix-a-traceability)). It imports the packages to its right in the order of [0.4](#04-import-order), so it can publish to `bus` but never imports `cli` or `engine`. It is wired two ways: in the CLI process the CLI passes itself in as the `Printer`, and in the engine `engine.ConnPrinter` is the `Printer`.
 
 | File | Holds |
 |---|---|
 | `internal/fault/fault.go` | `Fault`, `Severity`, `Kind`, `Source`, `FaultData`, the three fault event structs and `RegisterEvents` |
-| `internal/fault/handler.go` | `Handler`, `New`, `Go`, `Recover`, `Guard`, `Report`, `Run` |
-| `internal/fault/printer.go` | The `Printer` interface that the CLI implements with `PrintError()` |
+| `internal/fault/handler.go` | `Handler`, `New`, `Go`, `Recover`, `Guard`, `Report`, `Final`, `Run` |
+| `internal/fault/printer.go` | The `Printer` interface that the CLI and `engine.ConnPrinter` implement with `PrintError()` |
 | `internal/fault/resource.go` | `ResourceError` and `ThrowResourceError()` |
 
 ### 17.3 Data Model
@@ -10990,6 +12568,7 @@ type FaultData struct {
 	Fix       string `json:"fix,omitempty"`   // what resolves it
 	Panic     bool   `json:"panic,omitempty"` // true for a recovered panic
 	Stack     string `json:"stack,omitempty"` // panic only, cut to 4 KB like a block's detail
+	Final     bool   `json:"final,omitempty"` // true for the last event before the program exits
 }
 
 // ErrorFault is the data of error / fault.error, a returned error.
@@ -11020,6 +12599,7 @@ func (ResourceFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Su
 | `kind` | Decides the exit code when the CLI is waiting on a reply |
 | `severity` | `warn` never changes a group; `error` means the affected goroutine's work ended |
 | `stack` | Present only with `panic: true` |
+| `final` | True on the one event a process publishes just before it exits on a caught error; no event follows it from that process |
 
 A recovered panic in a group's goroutine, as one event line:
 
@@ -11047,21 +12627,29 @@ These are the codes of the closed list that a command-line refusal or failure ca
 | `code` | Exit | Raised by |
 |---|---|---|
 | `config_tampered` | 1 | [3. Configuration Manager](#3-configuration-manager) |
-| `pinned` | 1 | [1. CLI](#1-cli) [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
+| `pinned` | 1 | [1. CLI](#1-cli) |
 | `no_terminal` | 1 | [1. CLI](#1-cli) |
 | `no_repo` | 1 | [1. CLI](#1-cli) |
 | `over_limit` | 1 | [3. Configuration Manager](#3-configuration-manager) |
 | `card_changed`, `locked` | 1 | [5. Intake Handler](#5-intake-handler) |
+| `plan_blocked`, `plan_timeout` | 1 | [5. Intake Handler](#5-intake-handler) |
+| `plan_input` | 2 | [5. Intake Handler](#5-intake-handler) |
+| `plan_write` | 4 | [5. Intake Handler](#5-intake-handler) |
+| `context_refused` | 1 | [6. Context Manager](#6-context-manager) |
+| `unknown_target`, `run_refused`, `not_blocked` | 1 | [7. Runtime Manager](#7-runtime-manager) |
+| `engine_stopping` | 1 | [7. Runtime Manager](#7-runtime-manager); the CLI starts a new engine and repeats the request, and prints this only when the repeat fails |
+| `bad_frame` | 4 | [7. Runtime Manager](#7-runtime-manager); the CLI sent a line the engine cannot read |
+| `bus_overflow` | 0 | [4. Event Bus](#4-event-bus); a warning line, the command's exit code is unchanged |
 | `usage` | 2 | [1. CLI](#1-cli) |
 | `unknown_key`, `bad_value` | 2 | [3. Configuration Manager](#3-configuration-manager) |
 | `internal` | 4 | The Error Handler, for a recovered panic or an undecodable record |
 
-Exit 3 carries a block or exit reason of a group; those codes are owned by [7. Runtime Manager](#7-runtime-manager) (block reasons) and [11. Task Manager](#11-task-manager) (session exit reasons). The old codes `not_komodo_repo`, `gate_failed` and `restart` belonged to commands whose survival is [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))].
+A held group's block reason is the code of its `needs.<code>` shape ([2.3](#23-data-model)). Exit 3 carries a block or exit reason of a group; those codes are owned by [7. Runtime Manager](#7-runtime-manager) (block reasons) and [11. Task Manager](#11-task-manager) (session exit reasons).
 
 ### 17.4 Interfaces
 
 ```go
-// Printer is implemented by the CLI; PrintError shows one fault to the caller.
+// Printer shows one fault to the caller; the CLI implements it in the CLI process and engine.ConnPrinter in the engine.
 type Printer interface {
 	PrintError(f Fault) error
 }
@@ -11069,7 +12657,7 @@ type Printer interface {
 // Handler catches faults, publishes them and prints them.
 type Handler struct{ /* bus, printer, subscription */ }
 
-// New returns a Handler that publishes on b and prints through p.
+// New returns a Handler that publishes on b and prints through p; b is nil in the CLI process, where Guard and Final print through p and publish nothing.
 func New(b bus.Bus, p Printer) *Handler
 
 // Go runs fn in a new goroutine; a panic is recovered, published, and then passed to onPanic.
@@ -11084,12 +12672,19 @@ func (h *Handler) Guard(src Source, fn func() error) error
 // Report publishes a returned error as an error event.
 func (h *Handler) Report(src Source, code string, kind Kind, err error)
 
+// Final publishes the one last error event with Final set, waits until the Run loop has printed it or ctx ends, and returns the exit code of the fault's Kind.
+func (h *Handler) Final(ctx context.Context, src Source, f Fault) int
+
 // ThrowResourceError publishes a resource fault; called by the Resource Manager.
 func (h *Handler) ThrowResourceError(ctx context.Context, e ResourceError) error
 
 // Run reads error events and prints each through the Printer until ctx ends.
 func (h *Handler) Run(ctx context.Context) error
 ```
+
+**Two wirings.**
+- **CLI process.** `fault` has no bus there. `cmd/komodo/main.go` calls `fault.New(nil, cli)`; `Guard` and `Final` print through `(*CLI).PrintError` and publish nothing.
+- **Engine.** The Handler has the engine's bus. Its `Printer` is `engine.ConnPrinter` ([7.3](#73-data-model)), which writes a `Reply` with `Status` `error` to the connection that issued the command the fault belongs to.
 
 The CLI implements the printer side:
 
@@ -11103,7 +12698,7 @@ func (c *CLI) PrintError(f fault.Fault) error
 type ResourceError struct {
 	Kind      string    `json:"kind"`      // window, overage, spend_run, spend_day, group_tokens or limit
 	Severity  Severity  `json:"severity"`
-	Link      string    `json:"link,omitempty"` // [TODO: model links in this release ([G-213](#g-213))]
+	Link      string    `json:"link,omitempty"` // the model link, such as claude-cli
 	Run       string    `json:"run,omitempty"`
 	Group     string    `json:"group,omitempty"`
 	Value     float64   `json:"value"`     // the measured number: percent, dollars or tokens
@@ -11121,7 +12716,8 @@ func (e ResourceError) Error() string { return "resource " + string(e.Severity) 
 | Runtime Manager, Task Manager, every subsystem that starts a goroutine | `Go` or `Recover` | At every `go` statement |
 | Any subsystem | `Report` | A returned error it cannot handle itself |
 | Resource Manager | `ThrowResourceError` | A plan or cost limit is near or passed |
-| Metrics Service | `Report` | What it sends is [TODO: what the Metrics Service sends the Error Handler ([G-217](#g-217))] |
+| `(*CLI).Run`, the engine's main loop | `Final` | A caught error ends the program |
+| Metrics Service | `Report` | What it sends is [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))] |
 
 ### 17.5 Behaviour
 
@@ -11164,13 +12760,22 @@ The `component` is `bus`, `intake`, `contextmgr` or `engine`, and `fix` is empty
 
 **A panic in the handler itself.** A deferred `recover` in `Run` and `Report` writes to standard error and returns; the handler never calls itself.
 
-**What no handler can catch.** A fatal Go runtime error, such as an out-of-memory kill or two goroutines writing one map, ends the process without a `recover`. The recovery after it belongs to the Runtime Manager's startup sweep. [TODO: how long the Runtime Manager runs and how a second command reaches it ([G-201](#g-201))]
+**An error that ends the program.** Any caught error that makes the program exit, in the CLI process or in the engine, goes through `Final` first.
 
-**When no command is waiting.** The `Printer` is registered by the CLI process that issued the command. Whether a fault raised in a run that no CLI is attached to is printed by a later command depends on [TODO: how long the Runtime Manager runs and how a second command reaches it ([G-201](#g-201))] and [TODO: which store recovery trusts ([G-202](#g-202))]. Under every option the fault stays on the bus and in the Metrics Service record.
+1. The caller passes its `Source` and `Fault` to `Final`.
+2. `Final` publishes one `error` event for the fault, with `final` set to true and the subtype the fault would have had.
+3. It waits until the `Run` loop has read the event and printed it, or until `ctx` ends.
+4. It returns the exit code of the fault's `Kind`, and the caller exits with it. The process publishes no event after the final one.
+
+The bus delivers the final event in publish order, so the Runtime Manager and the Metrics Service receive it after every event before it. A caught failure therefore reaches the group's state, which the Runtime Manager saves before it acts, and the Metrics Service's event log, which is written after the broadcast. If publishing fails, `Final` writes the fault to standard error and still returns the exit code.
+
+**What no handler can catch.** A fatal Go runtime error, such as an out-of-memory kill or two goroutines writing one map, ends the process without a `recover`, so no final event is published. Recovery after it reads only the State Manager: `komodo run (id)` continues each group from its saved state ([7. Runtime Manager](#7-runtime-manager)).
+
+**When no command is waiting.** The engine outlives any one command, and the `Printer` is `engine.ConnPrinter`, which reaches the connection of the CLI that issued the command ([1. CLI](#1-cli)). A fault raised in a run that no CLI is attached to is not printed. It stays on the bus and in the Metrics Service's event log, where `komodo replay (id)` plays it back.
 
 ### 17.6 State
 
-The handler keeps no state on disk. It holds its bus subscription and the registered `Printer` in memory. A fault survives a crash only if the event record does. [TODO: which store recovery trusts ([G-202](#g-202))]
+The handler keeps no state on disk. It holds its bus subscription and the registered `Printer` in memory. A fault survives a crash in the Metrics Service's event log, which is written after the broadcast: a power cut or a killed process can drop the last few events from the log, though never from recovery.
 
 ### 17.7 Invariants and Failures
 
@@ -11179,6 +12784,7 @@ The handler keeps no state on disk. It holds its bus subscription and the regist
 2. A fault is printed on one path only: the `Run` loop.
 3. Printing a fault never raises a new `error` event.
 4. A panic in one group's goroutine ends that goroutine's work only.
+5. A process that exits on a caught error publishes one `error` event with `final` set, and no event after it.
 
 #### Failures the Error Handler owns
 
@@ -11189,13 +12795,14 @@ The handler keeps no state on disk. It holds its bus subscription and the regist
 | `PrintError` fails | The `Run` loop | Write to standard error | 0 | Fault stays on the bus |
 | Publish fails or bus closed | `Go`, `Report` | Write to standard error | 0 | Fault not on the bus |
 | Panic inside the handler | Deferred `recover` in `Run` | Write to standard error | 0 | Handler keeps running |
-| Fatal runtime error | The operating system | Not catchable | | [TODO: how long the Runtime Manager runs ([G-201](#g-201))] |
+| Fatal runtime error | The operating system | Not catchable | | No final event; recovery reads the State Manager and `komodo run (id)` continues each group |
+| Caught error ends the program | `Final` | Publish the final event, wait for the print, return the exit code | `ctx` | Process exits with the code of the fault's `Kind` |
 
 #### The failure table, by owning component
 
-The old design held one failure table per chapter. Each table now lives with the component that owns the failure; rows owned elsewhere are only linked here.
+Each failure table lives with the component that owns the failure; rows owned elsewhere are only linked here.
 
-| Old table | Rows now in |
+| Failure area | Rows in |
 |---|---|
 | CLI and configuration | [1. CLI](#1-cli), [3. Configuration Manager](#3-configuration-manager) |
 | Event spine | [4. Event Bus](#4-event-bus) (subscribers), [7. Runtime Manager](#7-runtime-manager) (stage rules), [10. State Manager](#10-state-manager) (records) |
@@ -11220,11 +12827,11 @@ Each error value is declared in the package of its owner and returned to its cal
 | `ErrShapeUnknown`, `ErrFactsInvalid`, `ErrCodeUnknown` | A shape, fact set or code is not in its list | [2. Output Formatter](#2-output-formatter) |
 | `ErrLeased`, `ErrLeaseLost`, `ErrBranchTaken` | A lease is held by another run, lost, or names a taken branch | [9. Lease Manager](#9-lease-manager) |
 | `ErrStaleRev`, `ErrClaimed`, `ErrNotWriter`, `ErrNotFound`, `ErrNewerVersion` | A record is stale, taken, forbidden, absent or too new | [10. State Manager](#10-state-manager) |
-| `ErrUnavailable`, `ErrUnauthorized`, `ErrModelGone`, `ErrBilling`, `ErrNotYet`, `ErrStreamClosed`, `LimitError` (provider) | A model link failed or hit a cap | [11. Task Manager](#11-task-manager) [TODO: model links in this release ([G-213](#g-213))] |
-| `ErrNoProvider`, `ErrPaidRefused`, `ErrContext` (router), `ErrPaused` | No allowed link has room | [11. Task Manager](#11-task-manager) [TODO: model links in this release ([G-213](#g-213))] |
-| `ErrConflict` | A merge conflicted | [15. Commit Handler](#15-commit-handler) [TODO: where groups land ([G-210](#g-210))] |
+| `ErrUnavailable`, `ErrUnauthorized`, `ErrModelGone`, `ErrBilling`, `ErrNotYet`, `ErrStreamClosed`, `LimitError` (provider) | A model link failed or hit a cap | [11. Task Manager](#11-task-manager) |
+| `ErrNoProvider`, `ErrPaidRefused`, `ErrContext` (router), `ErrPaused` | No allowed link has room | [11. Task Manager](#11-task-manager) |
+| `ErrConflict`, `ErrRecheck` | A merge conflicted; the checks failed on the epic branch | [15. Commit Handler](#15-commit-handler) |
 
-Two packages declare `ErrContext` in the old design (the brief builder and the router). They stay separate values in separate packages.
+Two packages declare `ErrContext` (the brief builder and the router). They stay separate values in separate packages.
 
 ### 17.8 Config
 
@@ -11248,6 +12855,9 @@ Component tests with a fake bus and a fake `Printer`.
 | `Guard` around a panicking command | `PrintError` called; `kind: internal` selects exit 4 |
 | The bus is closed when a panic is caught | The fault goes to standard error; `onPanic` still runs |
 | A source scan of the repository | No `go` statement outside `fault` starts without `Go` or a deferred `Recover` |
+| `Final` with a refused fault | One `error` event with `final: true`; one `PrintError` call; the return value is 1 |
+| `Final` with a closed bus | The fault goes to standard error; the return value is still the fault's exit code |
+| A process that has called `Final` | No further event leaves that process |
 
 ### 17.10 Open Gaps
 
@@ -11255,40 +12865,37 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Touches |
 |---|---|---|
-| [G-201](#g-201) | How long the Runtime Manager runs | Printing with no CLI attached; fatal runtime errors |
-| [G-202](#g-202) | Which store recovery trusts | Whether a fault survives a crash |
-| [G-204](#g-204) | Which old commands survive | `pinned`, `not_komodo_repo`, `gate_failed`, `restart` |
-| [G-210](#g-210) | Where groups land | `ErrConflict` |
-| [G-211](#g-211) | Warn only, or also pause | What follows `ThrowResourceError` |
-| [G-213](#g-213) | Model links in this release | Provider error values, `ResourceError.Link` |
-| [G-217](#g-217) | Event wiring the diagram leaves unlabelled | The Metrics Service arrow |
+| [G-225](#g-225) | What the Metrics Service sends the Error Handler | The Metrics Service arrow |
 
-The arrow from the Metrics Service to the Error Handler is drawn without a label. What it carries is [TODO: what the Metrics Service sends the Error Handler ([G-217](#g-217))].
+The arrow from the Metrics Service to the Error Handler is drawn without a label. What it carries is [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))].
 
 ## 18. Metrics Service
 
-The Metrics Service keeps a copy of every event on the bus and turns the copies into run metrics: time per stage, per group and per run, tokens and cost, and general performance. The copies also help a person find out what happened when something fails. The design and its reasons are in [HLD 5.19](hld.md#519-metrics-service).
+The Metrics Service is the harness's event store: it appends a copy of every event on the bus to a log file per run, and turns the copies into run metrics: time per stage, per group and per run, tokens and cost, and general performance. The copies also help a person find out what happened when something fails, and `komodo replay` plays them back. The design and its reasons are in [HLD 5.19](hld.md#519-metrics-service).
 
 ### 18.1 Scope and Concepts
 
 **Owns:**
 - The subscription to every event type, and the files that hold the copies and the figures worked out from them.
-- The record formats, the retention bound, and the read interface. How metrics reach the person is [TODO: how metrics reach the person, and which commands survive beside the diagram's 12 ([G-204](#g-204))].
+- The write-ahead log: one append-only file per run, and the reader that `komodo replay` uses.
+- The record formats, the retention bound, and the read interface. Which command or view shows the figures and the scorecard to the person is [TODO: which command or view shows run metrics and the scorecard beside the 13 commands ([G-255](#g-255))].
 - The scorecard: how well each agent and model performed.
 
 **Does not own:**
 - Delivering events and what a slow subscriber loses: [4. Event Bus](#4-event-bus).
-- Whether this record is also the record that recovery and replay trust. [TODO: which store recovery trusts ([G-202](#g-202))] Nothing in this chapter assumes it is.
+- Recovery. Recovery reads only the State Manager ([10. State Manager](#10-state-manager)) and never reads this log, so a lost last line of the log never changes where a run continues.
 - Prices and plan limits. The model client turns tokens into dollars ([11. Task Manager](#11-task-manager)); the Resource Manager watches the limits ([19. Resource Manager](#19-resource-manager)).
 - The text and layout of any view: [2. Output Formatter](#2-output-formatter) and [1. CLI](#1-cli).
 
 **Concepts**
-- **Event copy:** one line of `events.jsonl`, an event exactly as the bus delivered it, with secrets masked.
+- **Write-ahead log:** a file to which lines are only added at the end, never changed in place. Each run has one, `events-<run-id>.jsonl`.
+- **Event copy:** one line of a run's write-ahead log, an event exactly as the bus delivered it, with secrets masked.
+- **Torn line:** a last line that was half-written when the program died, so it has no closing newline.
 - **Session record:** one line of `sessions.jsonl`, made from a session's start and end events.
 - **Group metrics and run metrics:** the figures for one group and for one run, kept up to date as events arrive.
 - **Stage time:** whole seconds a group spent in one stage, from its `stage.enter` to the next one.
 - **Scorecard:** one row per agent and model, over a window of days.
-- **Gap:** a point where events were lost before the Metrics Service read them; the record marks it.
+- **Gap:** a point where events are missing from a run's log, either because the bus dropped them before the Metrics Service read them or because a torn line was dropped on read; the record or the reader marks it.
 
 ### 18.2 Package Layout
 
@@ -11297,26 +12904,42 @@ Go package `internal/metrics` ([HLD Appendix A](hld.md#appendix-a-traceability))
 | File | Holds |
 |---|---|
 | `internal/metrics/metrics.go` | `Service`, `New`, `Run`, the all-events subscription loop |
+| `internal/metrics/log.go` | `RunLog`: the per-run file name, the append and the flush |
 | `internal/metrics/records.go` | `SessionRecord`, `GroupMetrics`, `RunMetrics`, `StageTime` |
 | `internal/metrics/apply.go` | How each event type and subtype changes the figures |
 | `internal/metrics/score.go` | `ScoreRow`, `Scorecard`, the scorecard computation |
-| `internal/metrics/reader.go` | The `Reader` interface and its file-backed implementation |
+| `internal/metrics/reader.go` | The `Reader` interface and its file-backed implementation, including the replay read that drops a torn last line |
 | `internal/metrics/trim.go` | Retention and the size bound |
 
 ### 18.3 Data Model
 
 #### Files
 
-The files live in one folder per repository; [20. Data Locations and Data Flow](#20-data-locations-and-data-flow) holds its path. Secrets are masked before anything is written.
+The files live in `<git-common-dir>/komodo/metrics/`, one folder per repository, and events with no run go to `~/.komodo/metrics/engine.jsonl`; [20. Data Locations and Data Flow](#20-data-locations-and-data-flow) lists it. Secrets are masked before anything is written.
 
 | File | Write | Holds |
 |---|---|---|
-| `events.jsonl` | Append | One copy of every event, plus gap lines |
+| `events-<run-id>.jsonl` | Append | One copy of every event of that run, plus gap lines |
 | `sessions.jsonl` | Append | One session record per ended session |
 | `groups.json` | Replace | One `GroupMetrics` per group, keyed by group id |
 | `runs.json` | Replace | One `RunMetrics` per run, keyed by run id |
 
-`Append` adds one line. `Replace` writes a temporary file and renames it into place, so a reader never sees half a file. `events.jsonl` and the event schema of [4. Event Bus](#4-event-bus) are the export format; there is no telemetry export in this release.
+`Append` adds one line. `Replace` writes a temporary file and renames it into place, so a reader never sees half a file. The run logs and the event schema of [4. Event Bus](#4-event-bus) are the export format; there is no telemetry export in this release.
+
+#### Write-ahead log
+
+Each run has one log, named by the run's version 7 UUID:
+
+```text
+<git-common-dir>/komodo/metrics/events-0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57.jsonl
+```
+
+- The Service creates the file when the first event of the run arrives, and every group of the run writes into it, in the order received.
+- A line is one event as JSON followed by a newline. The Service writes it with one write call straight to the file, with no buffer in between (a flush per event).
+- The bus broadcasts an event to every subscriber when it is published; the Service appends its line once it receives its copy. A crash between the two loses the line from the log only.
+- The Service does not force the operating system to save the file to disk after each line, so a power cut can lose the last lines the operating system had not yet written.
+- Each `komodo run` has its own run id and so its own file; one program life appends to a log.
+- Recovery never reads the log. It reads the State Manager.
 
 An event copy is the event line unchanged:
 
@@ -11330,6 +12953,15 @@ A gap line records events the bus dropped before the Metrics Service read them:
 {"gap":true,"time":"2026-10-14T15:40:11Z","dropped":12}
 ```
 
+The end of a log whose program died while writing holds a torn line, which has no closing newline:
+
+```text
+{"type":"run-status","subtype":"task.done","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","time":"2026-10-14T15:52:40Z","data":{"task":"tsk-fence-stale"}}
+{"type":"run-status","subtype":"stage.enter","run":"0192e4c5-6f00-7a21-8c3b-2d9
+```
+
+An event that names no run goes to the machine log `~/.komodo/metrics/engine.jsonl`, one JSON line per event, appended and flushed the same way as a run's log.
+
 #### Session record
 
 ```go
@@ -11340,7 +12972,7 @@ type SessionRecord struct {
 	Group     bus.ID            `json:"group"`
 	Agent     string            `json:"agent"`
 	Task      string            `json:"task,omitempty"`
-	Link      string            `json:"link"`   // [TODO: model links in this release ([G-213](#g-213))]
+	Link      string            `json:"link"`   // claude-cli or anthropic-api
 	Model     string            `json:"model"`
 	Stage     string            `json:"stage"`  // the stage the session ran in
 	Reason    string            `json:"reason"` // the exit reason
@@ -11363,7 +12995,7 @@ type SessionRecord struct {
   "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
   "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "agent": "builder",
-  "task": "tsk-drive-stale",
+  "task": "tsk-fence-stale",
   "link": "claude-cli",
   "model": "claude-sonnet-5-5",
   "stage": "build",
@@ -11474,7 +13106,7 @@ type Scorecard struct {
 | `cache_read_share` | `cache_read` over `tokens_in` in the session records |
 | `tokens_per_group`, `usd_per_group` | Group `usage`, per group that reached Done |
 
-A count goes to the agent whose work it judges: a return to the builder and model of the session that built the returned work, a tester false fail to the tester, finding precision to the reviewer. The old scorecard also held a cache hit rate from the Cache Manager's own counters; whether the Cache Manager reports it here is not drawn on the diagram. The old light-model suggestion ran under a command that is not on the diagram. [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))]
+A count goes to the agent whose work it judges: a return to the builder and model of the session that built the returned work, a tester false fail to the tester, finding precision to the reviewer. The scorecard holds no cache hit rate from the Cache Manager's own counters, because the Metrics Service holds no cache handle ([8. Cache Manager](#8-cache-manager)). Which command shows the scorecard, and whether it carries a light-model suggestion, is [TODO: which command or view shows run metrics and the scorecard beside the 13 commands ([G-255](#g-255))].
 
 ### 18.4 Interfaces
 
@@ -11493,7 +13125,7 @@ type Options struct {
 // Run subscribes to every event type and records until ctx ends.
 func (s *Service) Run(ctx context.Context) error
 
-// Rebuild recomputes groups.json and runs.json from events.jsonl.
+// Rebuild recomputes groups.json and runs.json from the run logs.
 func (s *Service) Rebuild(ctx context.Context) error
 
 // Reader is what the CLI reads; a read never writes.
@@ -11504,9 +13136,34 @@ type Reader interface {
 	Groups(ctx context.Context, run bus.ID) ([]GroupMetrics, error)
 	// Explain returns the last n event copies of a run, with their reasons.
 	Explain(ctx context.Context, run bus.ID, n int) ([]bus.Event, error)
+	// Replay returns a run's events in order, or one group's when group is not zero; it drops a torn last line and marks the gap.
+	Replay(ctx context.Context, run, group bus.ID) (ReplayLog, error)
 	// Scorecard returns one row per agent and model over the window.
 	Scorecard(ctx context.Context, window time.Duration) (Scorecard, error)
 }
+```
+
+`Replay` returns the events with their gaps marked:
+
+```go
+// ReplayLog is a run's event copies in the order written, with every gap marked.
+type ReplayLog struct {
+	Events  []bus.Event `json:"events"`
+	Gaps    []Gap       `json:"gaps"`
+	Skipped int         `json:"skipped"` // lines before the last that did not parse
+}
+
+// Gap marks where a run's log is missing events.
+type Gap struct {
+	After   int       `json:"after"`             // how many events came before the gap
+	Kind    string    `json:"kind"`              // dropped (the bus dropped events) or torn (the last line was half-written)
+	Dropped int       `json:"dropped,omitempty"` // events lost, for kind dropped
+	Time    time.Time `json:"time,omitzero"`     // from the gap line; zero for torn
+}
+```
+
+```json
+{"events":[{"type":"run-status","subtype":"task.done","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","time":"2026-10-14T15:52:40Z","data":{"task":"tsk-fence-stale"}}],"gaps":[{"after":1,"kind":"torn"}],"skipped":0}
 ```
 
 `mask` is passed in by the code that wires the harness together, from the Task Manager's secret patterns, because `metrics` cannot import `task` ([0.4](#04-import-order)).
@@ -11514,14 +13171,14 @@ type Reader interface {
 | Method | On failure |
 |---|---|
 | `Run` | A write error is reported through `fault.Handler.Report` and the Service keeps working in memory |
-| `Runs`, `Groups`, `Explain`, `Scorecard` | A missing file reads as empty. An unreadable `groups.json` or `runs.json` is rebuilt in memory from `events.jsonl`. An unreadable `.jsonl` line is skipped and counted in the result |
+| `Runs`, `Groups`, `Explain`, `Scorecard` | A missing file reads as empty. An unreadable `groups.json` or `runs.json` is rebuilt in memory from the run logs. An unreadable `.jsonl` line is skipped and counted in the result |
+| `Replay` | A missing log returns an error naming the run. A torn last line is dropped and marked as a `torn` gap. An unreadable line before the last is skipped and counted in `Skipped` |
 
 | Caller | Call | When |
 |---|---|---|
-| CLI wiring | `New`, `Run` | At start, in the process that hosts the run |
-| CLI | `Runs`, `Groups`, `Explain` | A command that lists runs and groups. [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
-| CLI | `Scorecard` | A command that shows the scorecard. [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
-| Dashboard | `Runs`, `Groups` | If the dashboard is built. [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
+| Engine startup | `New`, `Run` | The engine starts the Service before it hosts a run and keeps it until the engine exits |
+| Runtime Manager | `Replay` | A `komodo replay (id)` command arrives from the CLI; the Runtime Manager passes the run id, and the group id when one group is asked for |
+| The caller of `Runs`, `Groups`, `Explain` and `Scorecard` | Those four calls | [TODO: which command or view shows run metrics and the scorecard beside the 13 commands ([G-255](#g-255))] |
 
 ### 18.5 Behaviour
 
@@ -11529,7 +13186,7 @@ type Reader interface {
 ```mermaid
 flowchart LR
   B["Event Bus"] -->|"1 every event"| L["Run loop"]
-  L -->|"2 mask, append"| E["events.jsonl"]
+  L -->|"2 mask, append"| E["events-run-id.jsonl"]
   L -->|"3 update"| F["Figures in memory"]
   F -->|"4 on session.end"| S["sessions.jsonl"]
   F -->|"5 queue empty: Replace"| G["groups.json, runs.json"]
@@ -11537,11 +13194,11 @@ flowchart LR
 ```
 
 1. The Service subscribes with no type filter, so it receives every event ([4. Event Bus](#4-event-bus)).
-2. For each event the loop masks the line and appends it to `events.jsonl`. If the subscription's `Dropped` count rose, the loop first appends one gap line.
+2. For each event the loop masks the line and appends it to the log of the event's run, `events-<run-id>.jsonl`, with one write. If the subscription's `Dropped` count rose, the loop first appends one gap line.
 3. The loop updates the figures of the event's group and run by the table below.
 4. On `session.end`, the loop appends a session record built from the session's start and end events.
 5. When the queue is empty, the loop writes `groups.json` and `runs.json` with `Replace`. A burst of events costs one write.
-6. The CLI reads through the `Reader`; it never writes.
+6. A reader never writes; the Runtime Manager reads `Replay` for `komodo replay`.
 
 | Event | Effect on the figures |
 |---|---|
@@ -11556,27 +13213,43 @@ flowchart LR
 | `resource` | Copied only; the Resource Manager acts on it |
 | Every other event | Copied only |
 
-**Retention.** When the Service starts it drops session records and event copies older than `metrics.retention_days`, then the oldest rows until the files together are at or below 80% of 100 MB, so the next start does not rewrite them. It writes each trimmed file to a temporary name and renames it into place. The entries of a group that is open, paused or blocked are never trimmed.
+**Replay read.** `komodo replay (id)` plays a run's or group's history from the log, step by step, with no model call and no write.
+1. The CLI sends the command to the Runtime Manager, which calls `Replay` with the run id (the latest attempt when the person gave a label) and the group id when one group is asked for.
+2. The Reader opens that run's log and reads it line by line.
+3. A line that parses becomes an event; a gap line becomes a `dropped` mark at its position.
+4. A line before the last that does not parse is skipped and counted in `Skipped`.
+5. A last line with no closing newline is a torn line: the Reader drops it and adds a `torn` mark after the last event.
+6. The Runtime Manager hands the `ReplayLog` to the CLI, which plays it back and shows each mark.
 
-**What the record cannot do.** The Service writes without a forced save, because a lost tail rebuilds from the events that follow. It sees only what the bus delivered, so a dropped event is a gap. Whether anything else may rebuild from this record after a crash is [TODO: which store recovery trusts ([G-202](#g-202))].
+A read of a run that is still live can meet the line being written as a torn last line; the Reader treats it the same way.
 
-**Several processes on one repository.** [TODO: how long the Runtime Manager runs and how a second command reaches it ([G-201](#g-201))]
+**Retention.** When the Service starts it deletes the whole log of every run whose last line is older than `metrics.retention_days`, and drops session records older than that. It then deletes the oldest run logs, and the oldest session records, until the files together are at or below 80% of 100 MB, so the next start does not delete again. It writes the trimmed `sessions.jsonl` to a temporary name and renames it into place. The log of a run with a group that is open, paused or blocked is never deleted.
+
+**What the log can and cannot do.**
+- The log is written after the broadcast, so a crash can drop the last few events from the log and never from recovery.
+- The Service writes without a forced save to disk, so a power cut can drop the lines the operating system had not written.
+- The Error Handler publishes one final `error` event before the program exits on an error it catches, so a caught failure reaches the log.
+- The Service sees only what the bus delivered, so a dropped event is a gap.
+
+**One writer per run.** One engine per user per machine hosts every live run ([7. Runtime Manager](#7-runtime-manager)), so one Service appends to each run's log. Each run carries its repository in its `run-start` (`repo` and `root`), and the Service opens that repository's `metrics/` folder when the run starts and appends the run's events there.
 
 ### 18.6 State
 
 | State | Held in | After a restart |
 |---|---|---|
 | Open stage clocks, open sessions | Memory | Lost; the stage seconds of the interrupted stage are counted up to the last event copied |
-| Group and run figures | `groups.json`, `runs.json` | Read at start; `Rebuild` recomputes them from `events.jsonl` |
-| Event copies and session records | `events.jsonl`, `sessions.jsonl` | Kept until trimmed |
+| Group and run figures | `groups.json`, `runs.json` | Read at start; `Rebuild` recomputes them from the run logs |
+| Event copies and session records | `events-<run-id>.jsonl`, `sessions.jsonl` | Kept until retention deletes them |
 
 ### 18.7 Invariants and Failures
 
 **Invariants**
 1. Only the Metrics Service writes its files; the figures derive from event copies and never from a hand edit.
-2. Every line written is masked first.
-3. A write failure never stops a run: the Service keeps the figures in memory and reports the failure.
-4. A gap is always marked, never hidden.
+2. A run's log is only appended to; only retention removes it, and then whole.
+3. Every line written is masked first.
+4. A write failure never stops a run: the Service keeps the figures in memory and reports the failure.
+5. A gap is always marked, never hidden.
+6. Recovery never reads the log.
 
 **Failures**
 
@@ -11584,9 +13257,10 @@ flowchart LR
 |---|---|---|---|---|
 | Write to a metrics file fails | The loop | Report to the Error Handler; keep figures in memory; retry at the next batch | One report per run of failures | Files lag the figures |
 | Events dropped before the loop read them | `Subscription.Dropped` | Append a gap line | One line per burst | Figures may undercount |
-| `groups.json` or `runs.json` unreadable | The reader | Rebuild in memory from `events.jsonl` | 1 | `Rebuild` rewrites the file |
-| An unreadable line in a `.jsonl` file | The reader | Skip it; count it in the result | 0 retries | The line stays until trimmed |
-| Files past the size bound | The trim at start | Drop oldest rows down to 80% | 1 per start | Open groups kept |
+| `groups.json` or `runs.json` unreadable | The reader | Rebuild in memory from the run logs | 1 | `Rebuild` rewrites the file |
+| An unreadable line in a `.jsonl` file | The reader | Skip it; count it in the result | 0 retries | The line stays until retention deletes the log |
+| A torn last line in a run log | The reader | Drop it; add a `torn` mark | 1 per read | The fragment stays until retention deletes the log |
+| Files past the size bound | The trim at start | Delete the oldest run logs and rows down to 80% | 1 per start | Logs of open groups kept |
 | A session end with no start | The loop | Write the record with empty `agent` and `link`; count the session | 0 | Record marked incomplete by empty fields |
 | No usage reported for a session | The loop | Leave `usage` absent; per-group token figures are nil | 0 | Scorecard omits tokens and cost |
 
@@ -11598,7 +13272,7 @@ The Configuration Manager reads the settings file and hands the value to `New`.
 |---|---|---|---|
 | `metrics.retention_days` | integer | 30 | Days of session records and event copies kept; the size bound is the other limit |
 
-Usage is recorded whenever the model client reports it. The old design recorded it only when a `track.usage` setting was on; this chapter has no such switch.
+Usage is recorded whenever the model client reports it; no setting turns it off.
 
 | Constant | Value |
 |---|---|
@@ -11611,15 +13285,21 @@ Component tests with a fake bus and a temporary folder.
 
 | Fixture input | Expected result |
 |---|---|
-| A fixture run with 2 groups and 3 sessions | `events.jsonl` holds every event; `sessions.jsonl` holds 3 records |
+| A fixture run with 2 groups and 3 sessions | `events-<run-id>.jsonl` holds every event, one JSON line each; `sessions.jsonl` holds 3 records |
+| Two runs on one bus | Each event is in the log named by its own run id, in arrival order |
+| An event published, then the Service killed before its append | The log lacks that line; the State Manager fixture still holds the group's state |
+| A log whose last line has no closing newline | `Replay` returns every earlier event and one `torn` gap after the last |
+| A log with an unparseable line in the middle | `Replay` skips it and `Skipped` is 1 |
+| `Replay` for one group | Only that group's events return; every gap mark stays |
+| A run log whose last line is 31 days old, with retention 30 | The start deletes the whole file; a log of an open group stays |
 | `stage.enter` build at t=0, build again at t=100 with `return: true` | The group shows build with 2 entries and `returns` 1 |
 | A group blocked at t=50 and continued at t=80 | `blocked_s` is 30 |
 | Two sessions with usage | The group `usage` is their sum |
 | A session with no usage | `usage` absent; `tokens_per_group` nil |
-| A queue that overflows | A gap line in `events.jsonl` |
+| A queue that overflows | A gap line in the run's log |
 | An event line that holds a secret | The line is written masked |
-| A corrupt `groups.json` | The reader returns the figures rebuilt from `events.jsonl` |
-| Files at 120 MB | After the trim they are at or below 80 MB; an open group's entry stays |
+| A corrupt `groups.json` | The reader returns the figures rebuilt from the run logs |
+| Files at 120 MB | After the trim they are at or below 80 MB; an open group's log stays |
 | A failed write | One `Report` call; the loop keeps reading events |
 | The fixture scorecard | First-pass rate, returns per group and finding precision match hand-counted values |
 
@@ -11632,18 +13312,16 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-17](#g-17) | The 50% prompt-cache hit fixture needs real paid sessions | `cache_read_share` |
 | [G-19](#g-19) | The read target is unmeasured | 18.8 |
 | [G-26](#g-26) | Splitting tokens and dollars by provider family | `ScoreRow` |
-| [G-201](#g-201) | How long the Runtime Manager runs | Several writers; catch-up after a crash |
-| [G-202](#g-202) | Which store recovery trusts | Whether this record is trusted by recovery |
-| [G-204](#g-204) | Which old commands survive | Which command shows each view |
-| [G-213](#g-213) | Model links in this release | `link` fields |
-| [G-217](#g-217) | Event wiring the diagram leaves unlabelled | The arrow to the Error Handler |
-| [G-221](#g-221) | Whether parts other than the Runtime Manager call the Cache Manager directly | Cache hit rate |
+| [G-225](#g-225) | What the Metrics Service sends the Error Handler | The arrow to the Error Handler |
+| [G-255](#g-255) | Which command or view shows run metrics and the scorecard | `Runs`, `Groups`, `Explain`, `Scorecard` callers |
 
-The diagram draws the Metrics Service's arrow to the Error Handler without a label; what it carries is [TODO: what the Metrics Service sends the Error Handler ([G-217](#g-217))]. The Cache Manager's hit rate has no drawn path to this chapter; whether the Metrics Service calls the cache is [TODO: whether parts other than the Runtime Manager call the Cache Manager directly ([G-221](#g-221))].
+The diagram draws the Metrics Service's arrow to the Error Handler without a label; what it carries is [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))].
 
 ## 19. Resource Manager
 
-The Resource Manager watches the numbers that say how close the harness is to running out of model capacity: how much of a subscription plan's usage window is used, and how many paid dollars and tokens a run has spent. When a number crosses a threshold it hands a resource error to the Error Handler, so the person hears about it before work is lost. The purpose of the subsystem and who it talks to are in [HLD 5.20](hld.md#520-resource-manager).
+The Resource Manager watches the numbers that say how close the harness is to running out of model capacity: how much of a subscription plan's usage window is used, and how many paid dollars and tokens a run has spent. At 80% of a plan window or of a configured spending amount it hands a resource warning to the Error Handler, so the person hears about it before work is lost. At 100% of a plan window it also tells the Runtime Manager to pause the affected groups until the window resets.
+
+The purpose of the subsystem and who it talks to are in [HLD 5.20](hld.md#520-resource-manager).
 
 ### 19.1 Scope and Concepts
 
@@ -11652,29 +13330,36 @@ The Resource Manager watches the numbers that say how close the harness is to ru
 - The running totals per link: plan window use, paid spend per run and per day, tokens per group.
 - The warn thresholds and the rule that raises each resource error once per window.
 - Calling `ThrowResourceError()` on the Error Handler.
+- The pause order: telling the Runtime Manager to pause the affected groups at 100% of a plan window, or at a spending ceiling.
+- Reading and writing each window's reset time, percent used and session count through the State Manager.
 
 **Does not own:**
 - Producing the numbers: the model client reads them from provider replies and the Runtime Manager publishes them as `resource` events ([11](#11-task-manager), [7](#7-runtime-manager)).
 - Pricing tokens into dollars: the model client does it from its price table, and the [Metrics Service](#18-metrics-service) records the result.
 - Recording events: the Metrics Service holds the record.
 - Printing the error: the [Error Handler](#17-error-handler) records it and prints it through the CLI.
-- Reacting to a provider that has actually refused a request: that is a fact the Runtime Manager handles, and what it does is [TODO: what the Runtime Manager does when a provider refuses for a plan limit ([G-211](#g-211))].
+- Pausing and resuming a group: the Runtime Manager does both ([7.5](#75-behaviour)). The Resource Manager only orders the pause.
+- Reacting to a provider that has actually refused a request: the Runtime Manager pauses the group until the window resets ([7.5](#75-behaviour)), and the Resource Manager reports the refusal as a `limit` error.
+- Storing the records: the State Manager keeps the machine-wide provider record ([10. State Manager](#10-state-manager)).
 - Reading the settings file: only the [Configuration Manager](#3-configuration-manager) does.
 
-**What holds under every option of the open decision.** Whether the Resource Manager only warns or also pauses work is [TODO: whether the Resource Manager only warns or also pauses work at a plan or cost limit ([G-211](#g-211))]. Under every option:
-- The Resource Manager reads the same numbers and keeps the same totals.
-- It raises one resource error when each threshold in 19.3 is crossed, with the severity that threshold names.
-- The error reaches the person through the Error Handler and the CLI.
-- A real provider refusal is still handled by the Runtime Manager; how is [TODO: what the Runtime Manager does when a provider refuses for a plan limit ([G-211](#g-211))].
-- Everything about what the Resource Manager does to work after raising an error is outside this chapter until the decision is made.
+**What the Resource Manager does at a limit.**
+- At 80% of a plan window, or of a spending amount set in configuration, it raises a warning.
+- At 100% of a plan window it raises an error and tells the Runtime Manager to pause the affected groups after their current step. The groups resume by themselves when the window resets.
+- Paid spending only warns, unless a spending ceiling is set in configuration (`limits.usd_ceiling_per_run`, see 19.8). At the ceiling it pauses too.
+- A paused group keeps its lease.
+- Every error reaches the person through the Error Handler and the CLI.
 
 **Concepts**
-- **Link:** one way to reach a model, such as a subscription login or a paid interface. Which links beta 6 supports is [TODO: which model links beta 6 supports ([G-213](#g-213))].
+- **Link:** one way to reach a model, such as a subscription login or a paid interface. Beta 6 ships two: `claude-cli`, the Claude subscription, and `anthropic-api`, the paid Anthropic interface.
 - **Plan window:** a subscription's allowance of usage over a period, such as a five-hour window or a weekly window; it resets at a known time.
 - **Headroom:** the share of a window still left, as a percent.
 - **Overage:** a subscription session drawing paid credits beyond its plan.
 - **Paid spend:** dollars charged by a paid link, summed per run and per calendar day in Coordinated Universal Time. Notional dollars of a subscription session are not spend.
 - **Resource error:** a structured warning or error about a resource, with a severity of `warn` (approaching a limit) or `error` (a limit reached).
+- **Spending amount:** a dollar value set in configuration, per run or per day; the Resource Manager warns at `warn.quota_pct` percent of it.
+- **Ceiling:** a dollar value per run, `limits.usd_ceiling_per_run`, at which the run's groups pause.
+- **Pause order:** the Resource Manager's request to the Runtime Manager to pause named groups after their current step.
 
 ### 19.2 Package Layout
 
@@ -11685,6 +13370,8 @@ The Go package is `internal/resource` ([HLD Appendix A](hld.md#appendix-a-tracea
 | `manager.go` | `Manager`, `New`, `Run`, `Observe`: the subscription and the dispatch by subtype |
 | `window.go` | `WindowKey`, `WindowState` and the headroom and limit updates |
 | `spend.go` | `Spend`: paid dollars per run and per day, tokens per group |
+| `pause.go` | `PauseOrder`, and the groups seen on each link and run |
+| `records.go` | `WindowRecord`: reading and writing window records through the State Manager |
 | `rules.go` | `Evaluate`: the pure threshold rules |
 | `deps.go` | The interfaces the package needs |
 
@@ -11740,7 +13427,7 @@ type Limit struct {
   "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "time": "2026-10-14T16:42:09Z",
   "data": {
-    "link": "paid-api", "agent": "builder", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47",
+    "link": "anthropic-api", "agent": "builder", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47",
     "model": "claude-sonnet-5-5",
     "tokens_in": 51200, "tokens_out": 4300, "cache_read": 40960, "cache_write": 8192,
     "usd": 0.31, "usd_equiv": 0
@@ -11748,16 +13435,16 @@ type Limit struct {
 }
 ```
 
-The link names in the examples are placeholders for [TODO: which model links beta 6 supports ([G-213](#g-213))].
+The link names in the examples are the two beta 6 links, `claude-cli` and `anthropic-api`.
 
 | Number | Read from | Used for |
 |---|---|---|
 | Tokens and dollars per session | The final result of a session | Paid spend per run and per day, tokens per group |
 | `limit`, `remaining`, `reset_at` per window | Rate-limit headers on a reply from an interface that sends them | Window percent used, before any refusal |
 | Overage flag and reset time | The subscription program's rate-limit line | The overage warning; the line carries no percent used, and whether another field does is unverified ([G-71](#g-71)) |
-| Cap kind and reset time | A provider refusal | The limit error and the pause the Runtime Manager sets |
+| Cap kind and reset time | A provider refusal | The limit error; the Runtime Manager sets the pause |
 
-Which links send which numbers depends on [TODO: which model links beta 6 supports ([G-213](#g-213))].
+Both beta 6 links send `usage`. `headroom` comes from whichever link sends rate-limit headers; whether `claude-cli` sends a percent used is unverified ([G-71](#g-71)).
 
 #### State
 
@@ -11772,32 +13459,88 @@ type WindowKey struct {
 type WindowState struct {
 	PercentUsed float64   // 100 minus the percent of headroom
 	ResetAt     time.Time // when the window resets; a past time means it has
-	Warned      bool      // the warn threshold error was raised in this window
+	Sessions    int       // sessions finished in this window
+	Warned      bool      // the warn error was raised in this window
+	Full        bool      // the window_full error was raised in this window
+	Paused      bool      // the pause order for this window was delivered
 	Limited     bool      // the limit error was raised in this window
 	Overage     bool      // the overage warning was raised in this window
 }
 
 // Spend is the paid spend and token totals.
 type Spend struct {
-	RunUSD       map[string]float64 // paid dollars per run
-	Day          string             // the current day, "2006-01-02" in Coordinated Universal Time
-	DayUSD       float64            // paid dollars today
-	GroupTokens  map[string]int64   // input, output and cache-write tokens per group
-	RunWarned    map[string]bool    // the per-run threshold error was raised
-	DayWarned    bool               // the per-day threshold error was raised today
-	GroupCapped  map[string]bool    // the group token cap error was raised
+	RunUSD      map[string]float64 // paid dollars per run
+	Day         string             // the current day, "2006-01-02" in Coordinated Universal Time
+	DayUSD      float64            // paid dollars today
+	GroupTokens map[string]int64   // input, output and cache-write tokens per group
+	RunWarned   map[string]bool    // the per-run warning was raised
+	DayWarned   bool               // the per-day warning was raised today
+	RunCeiling  map[string]bool    // the per-run ceiling error and its pause order were delivered
+	GroupCapped map[string]bool    // the group token cap error was raised
+}
+
+// State is everything the rules read.
+type State struct {
+	Windows    map[WindowKey]*WindowState
+	Spend      Spend
+	LinkGroups map[string]map[string]bool // groups seen on each link; cleared when its window resets
+	RunGroups  map[string]map[string]bool // groups seen in each run
 }
 
 // Thresholds are the values the rules compare against, passed in at construction.
 type Thresholds struct {
-	QuotaPct   float64 // warn.quota_pct
-	USDPerRun  float64 // warn.usd_per_run
-	USDPerDay  float64 // warn.usd_per_day; 0 means no daily threshold
-	GroupTokens int64  // limits.group_tokens; 0 means no cap
+	QuotaPct         float64 // warn.quota_pct
+	USDPerRun        float64 // warn.usd_per_run
+	USDPerDay        float64 // warn.usd_per_day; 0 means no daily amount
+	USDCeilingPerRun float64 // limits.usd_ceiling_per_run; 0 means no ceiling
+	GroupTokens      int64   // limits.group_tokens; 0 means no cap
+}
+
+// PauseOrder asks the Runtime Manager to pause groups after their current step.
+type PauseOrder struct {
+	Reason string    `json:"reason"`          // window_full or spend_ceiling
+	Link   string    `json:"link,omitempty"`  // the link whose window is full
+	Run    string    `json:"run,omitempty"`   // the run whose ceiling was reached
+	Groups []string  `json:"groups"`          // groups seen on the link or in the run
+	Until  time.Time `json:"until,omitzero"`  // the window's reset time; zero for spend_ceiling
 }
 ```
 
-All state is in memory. After a restart the totals begin at zero unless the durable event record can replay the `resource` events, which is [TODO: what survives a crash and who writes the durable event record ([G-202](#g-202))].
+```json
+{
+  "reason": "window_full",
+  "link": "claude-cli",
+  "groups": ["0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "0192e4c5-7b02-7c11-8e4d-1f3a6b9c2d70"],
+  "until": "2026-10-14T21:30:00Z"
+}
+```
+
+#### Provider record
+
+The Resource Manager keeps each window's reset time, percent used and session count in `~/.komodo/state/providers.json`, read and written only through the State Manager. It changes only the `windows` of each link; the rest of the file belongs to other parts ([1. CLI](#1-cli)).
+
+```go
+// WindowRecord is one window's entry in providers.json.
+type WindowRecord struct {
+	PercentUsed float64   `json:"percent_used"`
+	ResetAt     time.Time `json:"reset_at"`
+	Sessions    int       `json:"sessions"` // sessions finished in the window
+}
+```
+
+```json
+{
+  "links": {
+    "claude-cli": {
+      "windows": {
+        "five_hour": {"percent_used": 83.2, "reset_at": "2026-10-14T21:30:00Z", "sessions": 14}
+      }
+    }
+  }
+}
+```
+
+At start the Resource Manager loads every window whose reset time is still in the future. Spend and token totals, the groups seen on each link and every flag are in memory only. After a restart they begin empty, so a threshold can warn a second time.
 
 #### Output: the resource error
 
@@ -11814,7 +13557,7 @@ const (
 
 // ResourceError is a structured resource warning or error; the Output Formatter writes its words.
 type ResourceError struct {
-	Kind      string    `json:"kind"`      // window, overage, spend_run, spend_day, group_tokens or limit
+	Kind      string    `json:"kind"`      // window, window_full, overage, spend_run, spend_day, spend_ceiling, group_tokens or limit
 	Severity  Severity  `json:"severity"`
 	Link      string    `json:"link,omitempty"`
 	Run       string    `json:"run,omitempty"`
@@ -11832,10 +13575,10 @@ func (e ResourceError) Error() string { return "resource " + string(e.Severity) 
 {
   "kind": "window",
   "severity": "warn",
-  "link": "claude-subscription",
+  "link": "claude-cli",
   "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
-  "value": 91.4,
-  "threshold": 90,
+  "value": 83.2,
+  "threshold": 80,
   "reset_at": "2026-10-14T21:30:00Z"
 }
 ```
@@ -11844,14 +13587,16 @@ func (e ResourceError) Error() string { return "resource " + string(e.Severity) 
 
 | Kind | Severity | Raised when | Raised once per |
 |---|---|---|---|
-| `window` | warn | A window's percent used reaches `warn.quota_pct` | Window reset |
+| `window` | warn | A window's percent used reaches `warn.quota_pct` (80) | Window reset |
+| `window_full` | error | A window's percent used reaches 100 | Window reset |
 | `limit` | error | A provider refuses because a cap was hit | Link, kind and reset time |
 | `overage` | warn | A subscription link starts drawing paid credits | Window reset |
-| `spend_run` | warn | A run's paid dollars reach `warn.usd_per_run` | Run |
-| `spend_day` | warn | Today's paid dollars reach `warn.usd_per_day` | Day |
+| `spend_run` | warn | A run's paid dollars reach `warn.quota_pct` percent of `warn.usd_per_run` | Run |
+| `spend_day` | warn | Today's paid dollars reach `warn.quota_pct` percent of `warn.usd_per_day` | Day |
+| `spend_ceiling` | error | A run's paid dollars reach `limits.usd_ceiling_per_run` | Run |
 | `group_tokens` | error | A group's tokens reach `limits.group_tokens` | Group |
 
-A provider-side spend cap that refuses a request arrives as a `limit` of kind `spend` and is raised as an error. The paid-spend rules count only `usd`; they never count `usd_equiv`.
+Two kinds are followed by a pause order: `window_full` and `spend_ceiling`. Every other kind only reaches the person. A provider-side spend cap that refuses a request arrives as a `limit` of kind `spend` and is raised as an error. The paid-spend rules count only `usd`; they never count `usd_equiv`.
 
 ### 19.4 Interfaces
 
@@ -11865,8 +13610,14 @@ func (m *Manager) Run(ctx context.Context) error
 // Observe applies one resource event and raises any errors it causes.
 func (m *Manager) Observe(ctx context.Context, e bus.Event) error
 
-// Evaluate returns the resource errors one observation causes; it reads State and Thresholds and changes neither.
-func Evaluate(s *State, t Thresholds, obs Observation) []fault.ResourceError
+// Evaluate returns the resource errors and pause orders one observation causes; it reads State and Thresholds and changes neither.
+func Evaluate(s *State, t Thresholds, obs Observation) Result
+
+// Result is what one observation causes.
+type Result struct {
+	Errors []fault.ResourceError
+	Pauses []PauseOrder
+}
 ```
 
 The call to the Error Handler, named on the diagram, is a method on the Error Handler's own type:
@@ -11882,10 +13633,26 @@ type Thrower interface {
 	ThrowResourceError(ctx context.Context, e fault.ResourceError) error
 }
 
+// Pauser is the Runtime Manager as the Resource Manager uses it.
+type Pauser interface {
+	// PauseGroups pauses each named group after its current step; the Runtime Manager resumes them at Until.
+	PauseGroups(ctx context.Context, o PauseOrder) error
+}
+
+// Records is the State Manager as the Resource Manager uses it.
+type Records interface {
+	// LoadWindows returns every stored window record.
+	LoadWindows(ctx context.Context) (map[WindowKey]WindowRecord, error)
+	// SaveWindow stores one window record.
+	SaveWindow(ctx context.Context, k WindowKey, r WindowRecord) error
+}
+
 // Deps are the parts the Resource Manager calls.
 type Deps struct {
-	Bus    bus.Subscriber // delivers events of type resource
-	Errors Thrower
+	Bus     bus.Subscriber // delivers events of type resource
+	Errors  Thrower
+	Runtime Pauser
+	State   Records
 }
 ```
 
@@ -11895,14 +13662,18 @@ type Deps struct {
 | `Observe` | Returns an error for a malformed event; the state is not changed |
 | `Evaluate` | Cannot fail; returns none for an unknown or zero-limit input |
 | `ThrowResourceError` | Returns an error if the Error Handler cannot record or print; the Resource Manager leaves that threshold unraised, so the next observation tries again |
+| `PauseGroups` | Returns an error if the Runtime Manager cannot take the order; the order stays undelivered and the next observation sends it again |
+| `SaveWindow` | Returns an error if the State Manager cannot write; the Resource Manager reports it through the Error Handler and keeps the window in memory |
 
 | Caller | Call | When |
 |---|---|---|
-| Program startup | `New`, `Run` | The harness starts the Resource Manager with the values it read through `GetConfigItem` |
+| Engine startup | `New`, `Run` | The engine starts the Resource Manager with the values it read through `GetConfigItem` |
 | Event Bus | Delivers a `resource` event | The Runtime Manager publishes a number |
 | Resource Manager | `ThrowResourceError` | A threshold in 19.3 is crossed |
+| Resource Manager | `PauseGroups` on the Runtime Manager | A `window_full` or `spend_ceiling` error was thrown |
+| Resource Manager | `LoadWindows`, `SaveWindow` on the State Manager | At start; and after a window's reset time, percent used or session count changes |
 
-The thresholds come from the Configuration Manager: program startup asks it for each key and passes the values to `New`. Where the Resource Manager runs while a run is live is [TODO: how long the Runtime Manager runs ([G-201](#g-201))].
+The thresholds come from the Configuration Manager: engine startup asks it for each key and passes the values to `New`. The engine hosts the Resource Manager for its whole life, so it watches every live run on the machine.
 
 ### 19.5 Behaviour
 
@@ -11911,27 +13682,41 @@ The thresholds come from the Configuration Manager: program startup asks it for 
 flowchart LR
   EV["resource event"] -->|"1 subscribe"| OB["Observe"]
   OB -->|"2 parse by subtype"| ST["Update window or spend"]
-  ST -->|"3 compare"| EVA["Evaluate"]
-  EVA -->|"4 once per window"| TH["ThrowResourceError"]
-  TH -->|"5 print"| EH["Error Handler, CLI"]
+  ST -->|"3 save"| SM["State Manager"]
+  ST -->|"4 compare"| EVA["Evaluate"]
+  EVA -->|"5 once per window"| TH["ThrowResourceError"]
+  TH -->|"6 print"| EH["Error Handler, CLI"]
+  EVA -->|"7 at 100% or ceiling"| PG["PauseGroups"]
+  PG -->|"8 pause after current step"| RM["Runtime Manager"]
 ```
 
 1. `Run` receives each event of type `resource` from the Event Bus.
 2. `Observe` parses `data` by subtype and updates the state:
-   - `usage` adds `usd` to the run's and the day's paid spend and the session's tokens to the group's total. A new calendar day in Coordinated Universal Time resets the day's total and its warned flag.
-   - `headroom` sets the window's percent used to `100 × (limit − remaining) ÷ limit` and its reset time. A `limit` of 0 is ignored. A reset time in the past clears the window's flags.
+   - `usage` adds `usd` to the run's and the day's paid spend and the session's tokens to the group's total, and adds 1 to `Sessions` of each unreset window of the link. A new calendar day in Coordinated Universal Time resets the day's total and its warned flag.
+   - `headroom` sets the window's percent used to `100 × (limit − remaining) ÷ limit` and its reset time. A `limit` of 0 is ignored. A reset time in the past clears the window's flags and the link's group list.
    - `overage` and `limit` set their flags and reset time.
-3. `Evaluate` compares the new state with the thresholds and returns the errors whose rule is newly true.
-4. For each error whose flag is not yet set, `Observe` sets the flag after `ThrowResourceError` succeeds, so a failed call is retried and a success is never repeated inside the window.
-5. The Error Handler records the error, publishes it as an `error` event and prints it through the CLI.
+   - Every event with a `group` adds that group to its link's and its run's group list.
+3. `Observe` saves each window whose reset time, percent used or session count changed through the State Manager.
+4. `Evaluate` compares the new state with the thresholds and returns the errors, and the pause orders, whose rule is newly true.
+5. For each error whose flag is not yet set, `Observe` sets the flag after `ThrowResourceError` succeeds, so a failed call is retried and a success is never repeated inside the window.
+6. The Error Handler records the error, publishes it as an `error` event and prints it through the CLI.
+7. For each pause order, `Observe` calls `PauseGroups` once the order's error was thrown, and sets the `Paused` flag (or `RunCeiling`) after the call succeeds.
+8. The Runtime Manager pauses each named group after its current step. For a full plan window it pauses a group only when no other link in that agent's chain can be used; when Claude's window runs out and paid use is off, the groups wait. A paused group keeps its lease, and the Runtime Manager keeps renewing it every 5 minutes.
 
-**Per-link watching.** The window state is keyed by link and window, so two links never share a flag. A link the Resource Manager has never heard from has no state and raises nothing. Which links beta 6 has is [TODO: which model links beta 6 supports ([G-213](#g-213))].
+**Per-link watching.** The window state is keyed by link and window, so two links never share a flag. A link the Resource Manager has never heard from has no state and raises nothing. Beta 6 ships the two Claude links, `claude-cli` and `anthropic-api`; no other link is built.
 
-**Paid spend ceiling.** Paid spend has two measured ceilings, one per run and one per day, and each raises a resource error when reached. What the harness does after the error, such as refusing further paid sessions, is [TODO: whether the Resource Manager only warns or also pauses work at a plan or cost limit ([G-211](#g-211))].
+**Pause and resume at a full window.**
+1. A window's percent used reaches 100.
+2. `Evaluate` returns a `window_full` error and a pause order for the groups seen on that link, with `Until` set to the window's reset time.
+3. Once the Error Handler call succeeds, `Observe` calls `PauseGroups`.
+4. The Runtime Manager lets each named group finish its current step, then pauses it ([7.5](#75-behaviour)). A group that is not running is skipped, and a paused group keeps its lease.
+5. At `Until` the Runtime Manager returns each group to the stage it left ([7.5](#75-behaviour)), so no command is needed.
 
-**Overage.** A subscription session that draws paid credits raises one `overage` warning per window. Whether work moves to another link or waits for the reset is [TODO: whether the Resource Manager only warns or also pauses work at a plan or cost limit ([G-211](#g-211))].
+**Paid spend.** Paid spend has two spending amounts, one per run and one per day, and each raises a warning at `warn.quota_pct` percent of it. Paid spend never pauses work, except at the ceiling: when `limits.usd_ceiling_per_run` is above 0 and a run's paid dollars reach it, the Resource Manager raises `spend_ceiling` and orders the run's groups to pause. Whether a daily ceiling exists is [TODO: whether a daily spending ceiling exists beside the per-run ceiling ([G-258](#g-258))]. A group paused at the ceiling continues only with `komodo run (id)`.
 
-**Group tokens.** The group token cap bounds a runaway loop. The Resource Manager raises the `group_tokens` error when a group's total reaches `limits.group_tokens`; whether the Runtime Manager then blocks the group is the decision in [7.5](#75-behaviour), recorded in [G-211](#g-211).
+**Overage.** A subscription session that draws paid credits raises one `overage` warning per window. It pauses nothing, because paid spending only warns.
+
+**Group tokens.** The group token cap bounds a runaway loop. The Resource Manager raises the `group_tokens` error when a group's total reaches `limits.group_tokens`; the Runtime Manager's reaction, if any, is in [7.5](#75-behaviour).
 
 ### 19.6 State
 
@@ -11940,17 +13725,19 @@ flowchart LR
 stateDiagram-v2
   [*] --> Below: 1 first headroom
   Below --> Warned: 2 percent used reaches warn.quota_pct
-  Warned --> Limited: 3 provider refuses
-  Below --> Limited: 3 provider refuses
+  Warned --> Full: 3 percent used reaches 100
+  Below --> Full: 3 percent used reaches 100
   Warned --> Below: 4 reset time passes
-  Limited --> Below: 4 reset time passes
+  Full --> Below: 4 reset time passes
 ```
 
 | State | Flags set | A new event can raise |
 |---|---|---|
-| Below | None | `window` warn, `limit` error, `overage` warn |
-| Warned | `Warned` | `limit` error, `overage` warn |
-| Limited | `Warned` or not, `Limited` | `overage` warn |
+| Below | None | `window` warn, `window_full` error, `limit` error, `overage` warn |
+| Warned | `Warned` | `window_full` error, `limit` error, `overage` warn |
+| Full | `Full`, `Paused` once the order is delivered | `limit` error, `overage` warn |
+
+A provider refusal sets `Limited` in any state and leaves the state shown unchanged.
 
 The per-run, per-day and per-group flags in `Spend` follow the same rule: set when raised, cleared by the end of the run, the day or the group.
 
@@ -11960,8 +13747,11 @@ The per-run, per-day and per-group flags in `Spend` follow the same rule: set wh
 1. Each threshold error is raised at most once per window, run, day or group, and only after `ThrowResourceError` succeeds.
 2. Paid spend counts `usd` only; `usd_equiv` never reaches a spend threshold.
 3. The Resource Manager never prices tokens: it adds the dollars the event carries.
-4. `Evaluate` is pure: the same state, thresholds and observation give the same errors.
+4. `Evaluate` is pure: the same state, thresholds and observation give the same errors and pause orders.
 5. A malformed event changes nothing.
+6. A pause order goes out once per window or run, only after its error was thrown, and its flag is set only after `PauseGroups` succeeds.
+7. The Resource Manager orders pauses and never pauses or resumes a group itself; a paused group keeps its lease.
+8. Paid spend pauses work only when `limits.usd_ceiling_per_run` is above 0.
 
 | Situation | Detected by | Action; bound | Final state |
 |---|---|---|---|
@@ -11970,7 +13760,9 @@ The per-run, per-day and per-group flags in `Spend` follow the same rule: set wh
 | Headroom with `limit` 0 | `Observe` | Ignored | Unchanged |
 | Window reset time in the past | `Observe` | Flags cleared, percent set from the new reply | Below |
 | `ThrowResourceError` fails | Its return value | The flag stays unset; retried on the next observation | Unraised |
-| Resource Manager restarts | Startup | Totals start at zero unless replayed; thresholds may warn again | [TODO: what survives a crash ([G-202](#g-202))] |
+| `PauseGroups` fails | Its return value | The pause flag stays unset; the order is sent again on the next observation | Unpaused |
+| `SaveWindow` fails | Its return value | Reported to the Error Handler; the window stays in memory and is saved on its next change | Record lags |
+| Resource Manager restarts | Startup | Windows load from `providers.json`; spend, tokens, group lists and flags start empty, so thresholds may warn again | Windows kept, totals zero |
 | Same threshold crossed twice in a window | The flags | Second error not raised | Warned |
 
 ### 19.8 Config
@@ -11979,27 +13771,35 @@ The Resource Manager receives these values from the Configuration Manager at con
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `warn.quota_pct` | integer | 90 | Raises a `window` warning when a plan window passes this percent used |
-| `warn.usd_per_run` | number | 5 | Raises a `spend_run` warning when a run's paid dollars reach this value |
-| `warn.usd_per_day` | number | 0, off until a measured daily spend sets it ([G-219](#g-219)) | Raises a `spend_day` warning when a day's paid dollars reach this value; 0 turns it off |
-| `limits.group_tokens` | integer | 2,000,000 (most 10,000,000) | Raises a `group_tokens` error when a group's tokens reach it; the Runtime Manager's reaction is in [G-211](#g-211) |
+| `warn.quota_pct` | integer | 80 | Raises a `window` warning when a plan window reaches this percent used, and a spend warning when a spending amount reaches this percent of itself |
+| `warn.usd_per_run` | number | 5 | The per-run spending amount; a `spend_run` warning is raised at `warn.quota_pct` percent of it |
+| `warn.usd_per_day` | number | 0, off until a measured daily spend sets it ([G-219](#g-219)) | The per-day spending amount; a `spend_day` warning is raised at `warn.quota_pct` percent of it; 0 turns it off |
+| `limits.usd_ceiling_per_run` | number | 0, no ceiling | Paid dollars per run at which the run's groups pause after their current step; 0 means paid spending only warns |
+| `limits.group_tokens` | integer | 2,000,000 (most 10,000,000) | Raises a `group_tokens` error when a group's tokens reach it; the Runtime Manager's reaction, if any, is in [7.5](#75-behaviour) |
 
-Usage numbers are always read; no setting turns them off, because the Metrics Service records cost on every run. Keys that would stop or pause work at a limit exist only if [TODO: whether the Resource Manager only warns or also pauses work at a plan or cost limit ([G-211](#g-211))].
+Usage numbers are always read; no setting turns them off, because the Metrics Service records cost on every run. Pausing at 100% of a plan window has no key.
 
 ### 19.9 Proof Cases
 
 **Unit** (`Evaluate` on fixed states)
-- A window at 89 percent raises nothing; at 90 percent it raises one `window` warning; a second reading at 95 percent raises none.
-- After the reset time passes, the next reading at 91 percent raises a warning again.
-- Paid dollars of 4.99 then 5.01 in one run raise one `spend_run` warning; the same dollars across two runs raise none.
+- A window at 79 percent raises nothing; at 80 percent it raises one `window` warning; a second reading at 90 percent raises none.
+- A window at 100 percent raises one `window_full` error and one pause order whose `Until` is the reset time; a second reading at 100 percent raises neither.
+- After the reset time passes, the next reading at 81 percent raises a warning again.
+- With `warn.usd_per_run` 5, paid dollars of 3.99 then 4.01 in one run raise one `spend_run` warning; the same dollars across two runs raise none.
+- With no ceiling, paid dollars of 50 in one run raise a `spend_run` warning and no pause order.
+- With `limits.usd_ceiling_per_run` 10, paid dollars of 10 in one run raise one `spend_ceiling` error and one pause order naming the run's groups.
 - A `usage` event with `usd` 0 and `usd_equiv` 12 changes no spend total and raises nothing.
 - A day change resets the day's total and flag.
 - A group at 1,999,999 tokens raises nothing; at 2,000,000 it raises one `group_tokens` error.
 - Headroom with `limit` 0 raises nothing and does not divide by zero.
 
 **Component** (fake bus and fake Error Handler; no live provider)
-- A `limit` event of kind `window` with a reset time calls `ThrowResourceError` once with severity `error` and that reset time.
+- A `limit` event of kind `window` with a reset time calls `ThrowResourceError` once with severity `error` and that reset time, and calls `PauseGroups` never.
+- A `headroom` event at 100 percent calls `ThrowResourceError` once, then `PauseGroups` once with the groups seen on that link.
 - When `ThrowResourceError` fails once, the next event with the same crossing calls it again, then never again.
+- When `PauseGroups` fails once, the next event calls it again, then never again.
+- A `headroom` event saves the window's reset time, percent used and session count through a fake State Manager; a restart loads them and drops a window whose reset time passed.
+- Two `usage` events on a link raise that window's `Sessions` by 2.
 - Two links in one run: a warning on the first leaves the second able to warn.
 - An `overage` event raises one warning and a second raises none until the reset.
 - A malformed event leaves the totals unchanged and the loop running.
@@ -12008,11 +13808,8 @@ Usage numbers are always read; no setting turns them off, because the Metrics Se
 
 | Gap | Question | Closes by |
 |---|---|---|
-| [G-211](#g-211) | Whether the Resource Manager only warns or also pauses work at a plan or cost limit | Owner decision |
-| [G-213](#g-213) | Which model links beta 6 supports, and so which numbers arrive | Owner decision |
-| [G-201](#g-201) | Where the Resource Manager runs while a run is live | Owner decision |
-| [G-202](#g-202) | Whether the totals survive a crash | Owner decision |
 | [G-71](#g-71) | Whether the subscription program's rate-limit line carries a percent used | Spike against the program |
+| [G-258](#g-258) | Whether a daily spending ceiling exists beside the per-run ceiling | A design answer in this chapter |
 
 ## 20. Data Locations and Data Flow
 
@@ -12020,7 +13817,7 @@ Every file Komodo reads or writes while it runs, where each lives, and how data 
 
 ### 20.1 Where Data Lives
 
-Komodo keeps its files in two places and never inside the repository's working tree. Machine files go in the Komodo home folder, `~/.komodo/`, which every repository on the machine shares; `KOMODO_HOME` replaces it, and on Windows it is `%LOCALAPPDATA%\komodo`. Repository files go in `<git-common-dir>/komodo/`, the git folder that every worktree of one repository shares, so nothing there is ever committed.
+Komodo keeps its files in two places and never inside the repository's working tree. Machine files go in the Komodo home folder, `~/.komodo/`, which every repository on the machine shares; `KOMODO_HOME` replaces it. Repository files go in `<git-common-dir>/komodo/`, the git folder that every worktree of one repository shares, so nothing there is ever committed.
 
 #### Machine files: `~/.komodo/`
 
@@ -12030,10 +13827,13 @@ Komodo keeps its files in two places and never inside the repository's working t
 | `agents.json` | Agent registry overrides | [3. Configuration Manager](#3-configuration-manager) |
 | `state/config.sha`, `state/config.log`, `state/settings.lock` | The settings checksum, audit log and writer lock | [3. Configuration Manager](#3-configuration-manager) |
 | `context/skills/`, `context/connections.json` | Local skills and tool-server connections a person added; the shipped ones are embedded | [6. Context Manager](#6-context-manager) |
-| Lease registry | Which group owns each branch and worktree; its form waits on [TODO: files or a database ([G-212](#g-212))] | [9. Lease Manager](#9-lease-manager) |
-| `wt/<repo-id>/<group>/` | One worktree per group, outside every clone; who creates it waits on [TODO: saving work and git writes ([G-220](#g-220))] | [16. Cleanup Handler](#16-cleanup-handler) removes it |
+| `leases/<repo-id>/<group-id>.json`, `leases/<repo-id>/<group-id>.lock` | Which group owns each branch and worktree: one small JSON file per lease, written to a temporary name and renamed into place, plus a lock file that expires after a timeout if a crash leaves it | [9. Lease Manager](#9-lease-manager) |
+| `wt/<repo-id>/<group>/` | One worktree per group, outside every clone | [11. Task Manager](#11-task-manager) creates it; [16. Cleanup Handler](#16-cleanup-handler) removes it |
 | `cache/lang/<repo-id>/` | Komodo's own language and build caches per repository, never the person's | [8. Cache Manager](#8-cache-manager) ([G-215](#g-215)) |
-| `state/providers.json`, `state/update.json`, `state/install.json`, `state/update.lock` | Machine-wide records: the provider probe, update and install state; their owner waits on [TODO: owner of machine-wide records ([G-216](#g-216))] | [1. CLI](#1-cli) writes them |
+| `state/engine.sock` | The engine's private control socket; only this user can open it, and it exists only while the engine runs | [7. Runtime Manager](#7-runtime-manager) |
+| `metrics/engine.jsonl` | The machine event log: events that name no run, one JSON line each, appended after the broadcast | [18. Metrics Service](#18-metrics-service) |
+| `state/schedule.json` | The schedule queue: one entry per queued run, with `target`, `root`, `run_id`, `at` and `queued_at` | [10. State Manager](#10-state-manager) keeps it; the Runtime Manager reads and writes it through the State Manager |
+| `state/providers.json`, `state/update.json`, `state/install.json`, `state/update.lock` | Machine-wide records: provider reset times and link session counts, update state, install state, and the update writer lock | [10. State Manager](#10-state-manager); the Resource Manager, the model client and the CLI's installer read and write them only through it |
 | `plugin/` | The local Claude Code plugin folder `init` writes | [1. CLI](#1-cli) |
 | `bin/komodo`, `versions/<v>/komodo` | The current binary and every installed version | [1. CLI](#1-cli) |
 
@@ -12044,9 +13844,9 @@ Komodo keeps its files in two places and never inside the repository's working t
 | `install.json` | The install manifest: every file and settings entry `install` owns | [1. CLI](#1-cli) |
 | `runs/<group-id>/state.json` | One task group's runtime state | [10. State Manager](#10-state-manager) |
 | `sessions/<session-id>/` | One folder per model session: brief, request and result | [11. Task Manager](#11-task-manager) |
-| `cache/` | The runtime cache; its form waits on [TODO: files or a database ([G-212](#g-212))] | [8. Cache Manager](#8-cache-manager) |
-| `metrics/` | The Metrics Service's records of every event, kept for `metrics.retention_days` | [18. Metrics Service](#18-metrics-service) |
-| Durable event record | Whether one exists, and who writes it, waits on [TODO: what survives a crash ([G-202](#g-202))] | [4. Event Bus](#4-event-bus) |
+| `cache/` | The runtime cache: a folder of small JSON files, each written to a temporary name and renamed into place; one cache per repository, which the Runtime Manager opens at the repository's first run and passes on as a handle | [8. Cache Manager](#8-cache-manager) |
+| `metrics/events-<run-id>.jsonl` | The per-run event log: one JSON line per event, appended after the broadcast; replay and metrics read only this file | [18. Metrics Service](#18-metrics-service) |
+| `metrics/` (other files) | The Metrics Service's session records and scorecards, kept for `metrics.retention_days` | [18. Metrics Service](#18-metrics-service) |
 
 #### Committed repository files
 
@@ -12055,40 +13855,41 @@ Komodo keeps its files in two places and never inside the repository's working t
 | `AGENTS.md` | Repository rules plus the Komodo block between its markers | `komodo install`, [1. CLI](#1-cli) |
 | `CLAUDE.md` | The `@AGENTS.md` import line | `komodo install` |
 | `.claude/settings.json` | The entries `install` owns | `komodo install` |
-| Task lists | Epics, task groups and tasks the Intake Handler writes; who commits them waits on [G-220](#g-220) | [5. Intake Handler](#5-intake-handler) |
+| Task lists | Epics, task groups and tasks the Intake Handler writes; who commits them is [TODO: who commits the Intake Handler's task lists ([G-226](#g-226))] | [5. Intake Handler](#5-intake-handler) |
 
 ### 20.2 Data Flow
 
-**📐 How data moves from a plan to a published group**
+**📐 How data moves from a command to a published group**
 ```mermaid
 flowchart LR
   CLI["CLI<br><small>commands</small>"]
   IH["Intake Handler<br><small>task lists</small>"]
-  RM["Runtime Manager<br><small>all groups</small>"]
+  RM["Runtime Manager<br><small>engine, all groups</small>"]
   TM["Task Manager<br><small>one group</small>"]
   CH["Commit Handler<br><small>push</small>"]
   CU["Cleanup Handler<br><small>free</small>"]
-  ST[("State, lease, cache")]
-  MS[("Metrics records")]
+  ST[("State, lease, cache, schedule")]
+  MS[("Event log")]
   CLI -->|"1 plan"| IH
-  IH -->|"2 task lists"| RM
-  RM -->|"3 start group"| TM
-  RM -->|"4 read, write"| ST
-  TM -->|"5 approved work"| CH
-  CH -->|"6 published"| CU
-  CU -->|"7 close group"| TM
-  RM -.->|"8 every event"| MS
+  IH -->|"2 run-start with groups"| RM
+  CLI -->|"3 run, stop, status"| RM
+  RM -->|"4 start group"| TM
+  RM -->|"5 save, then act"| ST
+  TM -->|"6 approved work"| CH
+  CH -->|"7 published"| CU
+  CU -->|"8 close group"| TM
+  RM -.->|"9 every event"| MS
 ```
 
-1. A plan command reaches the Intake Handler, which reads the person's documents and writes task lists.
-2. The Runtime Manager reads the task lists when a run starts; which event hands them over waits on [G-217](#g-217).
-3. The Runtime Manager starts one Task Manager per group whose dependencies are met.
-4. The Runtime Manager reads and writes each group's state, lease and cache through their managers.
-5. The Task Manager runs build, then test and review, and hands approved work to the Commit Handler.
-6. The Commit Handler commits and pushes, then hands over to the Cleanup Handler.
-7. The Cleanup Handler removes redundant branches and the worktree and calls `CloseTaskGroup()`.
-8. Every event on the bus is copied to the Metrics Service's records.
-
+1. `komodo plan` reaches the Intake Handler as a `plan` event. The CLI sends the event to the engine over `engine.sock`, and the engine's bus delivers it. The Intake Handler reads the person's documents and writes task lists.
+2. After planning, the Intake Handler publishes `run-start`. Its `data.groups` lists the groups it just wrote, so the Runtime Manager never searches for them.
+3. `komodo run (id)`, `stop`, `status`, `ui`, `abandon` and `replay` reach the Runtime Manager as requests on `engine.sock`. `run (id)` publishes `run-start` with the groups in `data.groups`, and `run --all` lists every group under `docs/backlog/` that is not done. `run (id) --schedule <time>` is a request that publishes no event: the engine mints the run id, writes an entry with it to `schedule.json`, and publishes the one `run-start` at that time.
+4. The Runtime Manager starts one Task Manager goroutine per group whose dependencies are met, and passes it the cache handle the Runtime Manager opened. Commands go down each group's command channel, and replies come back on its reply channel.
+5. The Runtime Manager saves each group's state through the State Manager before it acts on a change, and reads and writes the lease and the schedule queue through their managers. Recovery reads only that saved state.
+6. The Task Manager creates the group's branch and worktree, runs build, then test and review, and asks the Commit Handler for a local commit after each finished task. It hands approved work to the Commit Handler.
+7. The Commit Handler pushes each approved group onto its epic's branch, one group at a time per epic, and rechecks that branch. When the last group lands, it opens one pull request for the epic, and a person merges it. Then it hands over to the Cleanup Handler.
+8. The Cleanup Handler removes the group's branch and worktree and calls `CloseTaskGroup()`, and the Runtime Manager releases the lease through the Lease Manager.
+9. The Metrics Service appends every event on the bus to `metrics/events-<run-id>.jsonl` after the broadcast. A crash can drop the last few events from that file, never from the saved state.
 ## 21. Verification, Operations and Cutover
 
 This chapter holds what no single subsystem owns: the end-to-end checks of the whole harness, the operator runbook, the removal of the retired binary's entries from the host, and the cutover to the new install. Each subsystem's own proof cases are in its `N.9` page.
@@ -12110,13 +13911,40 @@ Every subsystem can pass its own proof cases while the whole still fails on a re
 |---|---|---|
 | Every phase | `go vet ./...`, `go test ./...`, then a build for each of the 3 operating systems | All pass, and all 3 builds succeed |
 | Event round trip | Start a run on `tg-fixture` with a subscriber that records every event | Every type the [Event Bus](#4-event-bus) lists for a group's life arrives once, in order, and the Metrics Service holds a copy of each |
-| Full run | `komodo install`, `komodo plan` on the fixture's goal, then `komodo run` | The group passes build, test and review, the Commit Handler pushes to a local bare remote, and the Cleanup Handler leaves 0 worktrees; the lease is released as [TODO: who releases the lease after cleanup ([G-220](#g-220))] decides |
+| Full run | `komodo install`, `komodo plan` on the fixture's goal, then `komodo run ep-1` | The group passes build, test and review, the Commit Handler lands it on `komodo/ep-1` of a local bare remote and opens 1 pull request for the epic, the Cleanup Handler leaves 0 worktrees and 0 containers, and the Runtime Manager releases the lease through the Lease Manager when the group closes |
 | Rework | Fixture B | The Tester or Reviewer returns the group to the Builder; after the bound it ends Blocked with reason `regression` |
 | Old failure | Fixture A | The group passes with a warning naming the test that already failed at the base |
-| Race | Two runs on one machine target the same group | The Lease Manager grants 1 lease; the other run is refused, and only 1 push reaches the remote |
-| Stop | `komodo stop` during Build | Work is saved as [TODO: whether finished tasks are saved before approval and by whom ([G-220](#g-220))] decides, the lease is revoked, and a later `komodo run` continues the group |
-| Crash | `kill -9` the run during Build, then `komodo run` | [TODO: what a crash must preserve ([G-202](#g-202))] |
+| Race | Two `komodo run tg-1.1` commands target the same group | The Lease Manager grants 1 lease; the other command is refused, and only 1 push reaches the remote |
+| Stop | `komodo stop tg-1.1` during Build, after the first task is finished | The finished task is a local commit on the group branch, nothing is pushed, the lease is revoked, and a later `komodo run tg-1.1` continues the group |
+| Crash | `kill -9` the engine during Build, then `komodo run tg-1.1` | The group continues from its saved state; the event log may lack its last few events, and recovery does not |
 | Fresh machine | On a clean macOS machine, follow only `README.md` | The fixture group is published |
+
+#### Checks of the design
+
+Each row proves one fact of the design that the full run does not reach. They use the same fixtures and the fake model.
+
+| Check | Steps | Pass line |
+|---|---|---|
+| Engine and socket | Start a run, then run `komodo status` in a second shell | `status` answers over `~/.komodo/state/engine.sock` from the same engine, which exits once no run is live or queued |
+| Event log | Finish a run, append half a line to its log, run `komodo replay tg-1.1` | Replay lists every event, drops the torn last line, marks the gap, and makes 0 model calls |
+| Final error event | Seed an error the Error Handler catches | The process's last event is an `error` with `final: true`, and the exit code matches the fault's kind |
+| Command list | `komodo --list`, then `komodo build`, `komodo test`, `komodo review` | The list names the 13 commands; the other three exit 2 as unknown commands |
+| Answering a block | A builder asks for a file outside its group; `komodo status --wait`, then `komodo run tg-1.1 --approve`; repeat with `--deny` | `status --wait` returns the question; `--approve` continues the group with the file, and `--deny` refuses it |
+| Scheduled run | `komodo run ep-1 --schedule <time>` | `schedule.json` holds `target`, `at` and `queued_at`; `status` lists the run; `stop ep-1` removes it |
+| Overdue run | Queue a run, kill the engine, pass the time, run `komodo status` | The next command starts the engine, which starts the overdue run at once |
+| Labels and run ids | `komodo run ep-1` twice, then `komodo replay tg-1.1` | Each run has its own version 7 UUID (a time-ordered unique identifier), replies show label and run id, and replay uses the latest attempt |
+| Whole backlog | `komodo run --all` with one finished epic and one open epic | Only the groups not done run, in dependency order |
+| Agent roles | Load the agent registry in a Go test | It holds 4 roles: planner, builder, tester and reviewer |
+| Sandbox | Run the fixture with Docker, then without | With Docker, the Tester's validation runs in a per-group container that cleanup destroys; without it, the Tester uses the operating-system sandbox and the run report says so |
+| Free checks | A fixture whose completion command fails | The failure returns to the Builder with the exact output, and the Tester and Reviewer make 0 model calls |
+| Cache | Repeat an identical request | Context pieces come from the cache, and every request still makes a new model call |
+| Epic landing | An epic of 2 groups, with a seeded failing recheck after the first landing | Landings go one at a time onto `komodo/ep-1`; the epic pauses; the second group lands only after a recheck passes; 1 pull request opens after the last landing |
+| Abandon | `komodo abandon tg-1.2` during Build | The branch, the worktree and the container are gone, the state record and events remain, and the lease is released when the group closes |
+| Limits | A fake provider reports a plan window at 80%, then 100% | A warning at 80%; at 100% the affected groups pause after their current step, keep their leases and resume when the window resets; paid spending only warns without a ceiling |
+| Storage | Kill the engine during a lease write, then leave a lock file behind | No half record is read, the stale lock expires after its timeout, and `go.mod` lists no modules |
+| Model links | Exhaust the Claude window with paid use off | The subscription link is tried first, the paid interface is refused, and the groups pause until the window resets |
+| Tool servers | Run once with none switched on, then add one for a named agent | With none, no tool server starts; the added one runs inside the sandbox with no network, and each call is an event |
+| Machine-wide records | A source scan for writers of `providers.json`, `update.json`, `install.json` and `schedule.json` | Only the State Manager writes them |
 
 #### Order of the checks
 
@@ -12126,30 +13954,37 @@ flowchart LR
   A["1 Every phase<br><small>vet, test, builds</small>"] --> B["2 Event round trip<br><small>bus and metrics</small>"]
   B --> C["3 Full run<br><small>publish and clean up</small>"]
   C --> D["4 Rework and old failure<br><small>fixtures A and B</small>"]
-  D --> E["5 Race, stop, crash<br><small>leases and recovery</small>"]
-  E --> F["6 Fresh machine<br><small>README only</small>"]
+  D --> E["5 Design checks<br><small>engine, landing, limits</small>"]
+  E --> F["6 Race, stop, crash<br><small>leases and recovery</small>"]
+  F --> G["7 Fresh machine<br><small>README only</small>"]
 ```
 
 1. The cheap checks run first, at the end of every phase.
 2. The event round trip proves the spine before any pipeline check depends on it.
 3. The full run proves the pipeline end to end on the happy path.
 4. The broken fixtures prove the rework loop and the base-failure rule.
-5. The race, stop and crash checks prove leases and recovery.
-6. The fresh-machine check proves install from the read-me alone.
+5. The design checks prove the engine, the commands, landing, limits and the other decisions one by one.
+6. The race, stop and crash checks prove leases and recovery.
+7. The fresh-machine check proves install from the read-me alone.
 
 Each check starts from a clean test home (`KOMODO_HOME`) and a fresh copy of its fixture, so none depends on another's leftovers.
 
 ### 21.2 Operations Runbook
 
-The orchestrator drives the normal path; a person steps in only for the situations below. The command each situation uses waits on [TODO: commands kept beside the diagram's 12 ([G-204](#g-204))] where it is not one of the diagram's 12.
+The orchestrator drives the normal path; a person steps in only for the situations below. Every command is one of the 13 in [1. CLI](#1-cli), and `<label>` is the readable name of an epic (`ep-1`) or a task group (`tg-1.2`).
 
 | Situation | What a person does | Where it is specified |
 |---|---|---|
-| A group is Blocked | Read the reason, fix the cause, then `komodo run <id>` to continue it | [7. Runtime Manager](#7-runtime-manager) |
-| A builder needs files outside its group | The orchestrator answers the request; the answer's command form waits on [G-204](#g-204) | [11. Task Manager](#11-task-manager) |
-| A plan window or spending limit is near | Read the warning; the effect at the limit waits on [TODO: warn or pause ([G-211](#g-211))] | [19. Resource Manager](#19-resource-manager) |
-| A run must stop | `komodo stop <id>`, later `komodo run <id>` | [1. CLI](#1-cli), [7. Runtime Manager](#7-runtime-manager) |
-| Leftover branches, worktrees or sandboxes | `komodo clean` | [16. Cleanup Handler](#16-cleanup-handler) |
+| Watching a run | `komodo status` for live progress and queued runs, or `komodo ui` for the web dashboard | [1. CLI](#1-cli) |
+| A group is Blocked | Read the reason in `komodo status`, fix the cause, then `komodo run <label>`; a hand fix in the group's worktree counts. The group continues at its current stage and runs test and review again before commit | [7. Runtime Manager](#7-runtime-manager) |
+| A group asks for more files or time | `komodo status --wait` returns the question; the orchestrator answers with `komodo run <label> --approve` or `--deny` | [11. Task Manager](#11-task-manager) |
+| A plan window or spending limit is near | Read the warning at 80%. At 100% of a plan window the affected groups pause and resume when it resets; paid spending only warns unless a spending ceiling is set | [19. Resource Manager](#19-resource-manager) |
+| A run must stop | `komodo stop <label>`, later `komodo run <label>` | [1. CLI](#1-cli), [7. Runtime Manager](#7-runtime-manager) |
+| A run should start later | `komodo run <label> --schedule <time>`; `komodo stop <label>` removes the queued entry | [1. CLI](#1-cli), [7. Runtime Manager](#7-runtime-manager) |
+| A group is dropped for good | `komodo abandon <label>` | [16. Cleanup Handler](#16-cleanup-handler) |
+| Leftover branches, worktrees or containers | `komodo clean`; what it removes is [TODO: what `komodo clean` removes, and whether it needs a terminal ([G-222](#g-222))] | [16. Cleanup Handler](#16-cleanup-handler) |
+| A past run must be read | `komodo replay <label>`, which makes no model calls | [18. Metrics Service](#18-metrics-service) |
+| The machine seems unhealthy | `komodo doctor` | [1. CLI](#1-cli) |
 | A newer release exists | `komodo update` | [1. CLI](#1-cli) |
 
 ### 21.3 Host Cleanup Before Phase 2
@@ -12168,7 +14003,7 @@ sequenceDiagram
   C->>C: 4 tool call blocked
 ```
 
-`~/.local/bin/komodo` is a symlink to `~/.komodo/bin/komodo`, so every global hook reaches whichever binary sits at that path. The retired binary stays there, unused, until `komodo gate --install` replaces it in phase 7.
+`~/.local/bin/komodo` is a symlink to `~/.komodo/bin/komodo`, so every global hook reaches whichever binary sits at that path. The retired binary stays there, unused, until the Makefile's `gate` target replaces it in phase 7.
 
 #### Find the entries
 
@@ -12203,8 +14038,8 @@ The cleanup reads the person's file first. It finds each entry in the table belo
 |---|---|---|
 | 26 | `Bash(python -m komodo:*)` | Removed; nothing in the harness runs Python |
 | 114 | `komodo guard` (`PreToolUse`) | Removed; from phase 8 the repository `PreToolUse` hook runs `komodo internal guard` instead |
-| 124 | `komodo hook status --host claude` | Removed; from phase 8 the repository `SessionStart` hook runs `komodo status` |
-| 128 | `komodo hook prune --host claude` | Removed; the startup sweep prunes |
+| 124 | `komodo hook status --host claude` | Removed; the session-start hook the repository gets is [TODO: what `install` and `init` add to the host beyond the guard hook, such as a session-start status hook ([G-231](#g-231))] |
+| 128 | `komodo hook prune --host claude` | Removed; what removes a dead run's leftovers is [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))] |
 | `skillOverrides` | 36 entries: `backlog`, `komodo`, `review` and 33 `standards-*` | Removed; the harness embeds its skills in the binary |
 
 #### `~/.claude/skills/`
@@ -12218,11 +14053,11 @@ rm -r ~/.claude/skills/komodo ~/.claude/skills/plan ~/.claude/skills/run \
 
 | Skill | Stale verbs it names | Replaced in phase 8 by |
 |---|---|---|
-| `komodo` | The retired verb list: `init`, `migrate`, `next`, `brief`, `ingest`, `close` and more | Embedded; `skill get komodo` |
-| `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | Embedded; `skill get plan` |
-| `run` | `komodo run <group>` in the background, `komodo resume <group>` | Embedded; `skill get run` |
-| `respond` | `komodo threads`, `komodo gate` | Embedded; `skill get respond` |
-| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | None; `run --stage` in the `run` skill |
+| `komodo` | The retired verb list: `init`, `migrate`, `next`, `brief`, `ingest`, `close` and more | Embedded in the binary |
+| `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | Embedded in the binary |
+| `run` | `komodo run <group>` in the background, `komodo resume <group>` | Embedded in the binary |
+| `respond` | `komodo threads`, `komodo gate` | Embedded in the binary |
+| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | None |
 
 #### `~/.claude/AGENTS.md`
 
@@ -12230,25 +14065,25 @@ The person's global instructions file has 5 stale lines. Before phase 2 each is 
 
 | Stale line | Before phase 2 | At cutover (phase 9) |
 |---|---|---|
-| 10: `komodo add` a task | A task in `docs/backlog/` | `komodo add backlog --task` |
+| 10: `komodo add` a task | A task in `docs/backlog/` | `komodo plan` writes the task list |
 | 18: a `komodo/policy.json` reference | Dropped | A critical ref in `embed/policy.json` |
-| 21: open a PR with `komodo pr create` | `gh pr create` | The engine opens it (Ship) |
-| 22: after a merge, run `komodo sync` | Dropped | Restored |
-| 24: `/run <group>` in session, `komodo run <group>` headless | Removed | `komodo run <group>` |
+| 21: open a PR with `komodo pr create` | `gh pr create` | The Commit Handler opens one pull request per epic |
+| 22: after a merge, run `komodo sync` | Dropped | Dropped |
+| 24: `/run <group>` in session, `komodo run <group>` headless | Removed | `komodo run <label>` |
 
 Before phase 2 and again at cutover, the cleanup reads the file, finds each line by the stale reference in the first column, and edits only those lines. Verified by [G-187](#g-187) in phase 1.
 
 
 #### Retired commands
 
-The retired binary's commands, and the earlier beta 6 commands this redesign drops, are listed in the frozen earlier design (`git show design/beta6-v1:docs/lld.md`, section 15.3). Which of the earlier beta 6 commands still exist waits on [TODO: commands kept beside the diagram's 12 ([G-204](#g-204))]; the new list replaces those tables when it closes.
+The product has the 13 commands of [1. CLI](#1-cli). The retired binary's other commands are not part of the product. `gate` and `release` live in this repository's Makefile, outside the product.
 
 ### 21.4 Cutover
 
 The cutover moves a machine from the retired binary to the new install in 4 steps.
 
 1. **Before phase 2, by hand.** Remove the retired entries listed in [21.3](#213-host-cleanup-before-phase-2) from `~/.claude`.
-2. **Phase 7: install the development build.** Place the development build at `~/.komodo/bin/komodo`, replacing the retired binary; the command that does it waits on [G-204](#g-204).
+2. **Phase 7: install the development build.** Run `make gate` in this repository; the Makefile's `gate` target places the development build at `~/.komodo/bin/komodo`, replacing the retired binary.
 3. **Phase 7: `komodo install` in this repository.** The command writes the `AGENTS.md` block, the `CLAUDE.md` import line and the `.claude/settings.json` entries into the Komodo repository itself.
 4. **Confirm.** No other `komodo` sits earlier on the search path, and no Komodo hook that names a removed command is left in `~/.claude`.
 
@@ -12265,13 +14100,12 @@ Programming and operating-system terms used in this document. Architecture terms
 | Term | Meaning |
 |---|---|
 | Agent | A model role with its own permissions: planner, builder, tester or reviewer. Its entry in the agent registry names its model and links. |
-| State events | The append-only event file per group, `events.jsonl`. With the snapshot, it makes up group state, and replaying it rebuilds the state. |
-| Snapshot | `state.json`: a group's state at one `sequence`, written every 50 events or on a stage change, so a restart replays at most 50 events. |
-| State schema | `embed/state.schema.json`: one schema for every state record and every event type, generated from Go structs at build. |
-| Kind | One type of state record in the schema, such as `group`, `lease`, `timer` or `event`; each kind lists its writers, and the manager refuses any other. |
-| Record header | The fields every record carries, set by the state manager: `v`, `kind`, `key`, `rev`, `ts`, `writer`. Event lines carry their own envelope instead. |
-| Append, Replace, Claim, Remove | The state manager's 4 ways to write: add a event line, swap a snapshot by rename, create a file only if it does not exist, or delete a record after checking its owner and revision. |
-| Quarantine | A record that fails its check on read is moved aside as `.bad-*`, and its group blocks with `state_invalid`. A torn last event line is dropped instead. |
+| Event log | The write-ahead log of one run, `events-<run-id>.jsonl`, which the Metrics Service appends to after each broadcast. Replay and metrics read it; recovery never does, and a torn last line is dropped on read. |
+| State schema | The one schema of a group record and of each machine-wide record, checked by the State Manager on every write. |
+| Kind | One type of machine-wide record: `providers`, `update`, `install` or `schedule`. |
+| Record header | The fields every record carries, set by the State Manager: `v`, `rev`, `ts`, `writer`, and `group` or `kind`. |
+| Create, Save, Remove | The State Manager's ways to write a record: create it once, replace it after checking the revision, or delete it after checking the revision. |
+| Quarantine | A record that fails its check on read is renamed `.bad-<time>`, and its group blocks with `state_invalid`. |
 | Hidden ref | `refs/komodo/groups/<group-id>`, where the engine saves every group commit. Never pushed, hidden from `git branch`. |
 | Slot | One named input to a brief, required or optional per agent. |
 | Skill | A Markdown standards document embedded in the binary, preinjected by file globs or pulled on demand. |
@@ -12280,12 +14114,11 @@ Programming and operating-system terms used in this document. Architecture terms
 | arc42 | The 12-section architecture documentation template this document's section set follows. |
 | `hash` | A short fingerprint worked out from some content; change one character and the fingerprint changes. Komodo hashes the config file, the task cards and every cache input to detect edits and name cached results. |
 | `SHA-256`, `sha256` | A standard way to make a 64-character fingerprint of content. Komodo uses it to catch hand edits to config.json and to name each cache entry from its inputs. |
-| `checksum` | A small number worked out from data to spot damage. Each event line in group state carries one, so a line cut short by a crash is detected and dropped on replay. |
-| `CRC-32` | The formula behind Komodo's checksum: a standard, fast way to turn a line of text into one number of up to ten digits. Each event line's checksum covers that line's own text, so a cut-short last line is detected. |
+| `checksum` | A small number worked out from data to spot damage. Komodo uses a SHA-256 hash of the settings files to detect hand edits. |
 | `lint` | An automatic check that reads files for rule breaks without running them. Komodo lints every planner draft of the backlog before writing any file, spending no model tokens. |
 | `MCP` | Model Context Protocol: a standard way for an AI model to call tools that a small program offers it. Each Claude Code worker session gets its own private MCP server over stdio. |
 | `DAG` | Directed acyclic graph: steps joined by arrows meaning must finish first, with no loops, so a valid order always exists. Komodo builds one from group dependencies and refuses a plan with a loop. |
-| `enum` | A fixed list of allowed values. Komodo's 41 event types, stage names and block reasons are enums, so the state manager rejects any value not on the list. |
+| `enum` | A fixed list of allowed values. Komodo's event types, stage names and block reasons are enums, so the State Manager and the Event Bus reject any value not on the list. |
 | `atomic write`, `atomic` | Saving a file so it lands whole or not at all, never half-written. Komodo writes a temp file, syncs it to disk, then renames it into place. |
 | `allowlist` | A list of the only things permitted; everything else is refused. Komodo uses allowlists for the web hosts agents may reach, the shell settings a sandbox passes in, and the skills an agent may load. |
 | `idempotent`, `idempotency` | Safe to repeat: doing it twice has the same effect as once. Every Komodo side effect has an idempotency key, so replaying after a crash never commits or starts a session twice. |
@@ -12294,7 +14127,7 @@ Programming and operating-system terms used in this document. Architecture terms
 | `stdio` | Standard input and output: the plain text pipe between a program and the one that started it. Claude Code workers reach Komodo's private tool server through it. |
 | `fsync` | An instruction that forces the operating system to write data to the physical disk now. Komodo calls it when appending an event and before renaming a record into place, so a crash cannot lose them. |
 | `stream-json` | A format where a program sends one JSON message per line as it works instead of one reply at the end. Komodo reads Claude's output this way and writes nudges into its open input. |
-| `redaction`, `redact` | Blacking out sensitive text before it is stored. Komodo masks keys and secret matches before anything is written to the ledger, and in HTTP logs. |
+| `redaction`, `redact` | Blacking out sensitive text before it is stored. Komodo masks keys and secret matches before anything is written to the event log or the session records, and in HTTP logs. |
 | `cgroups` | A Linux feature that caps the processes or memory a set of programs may use. Komodo uses it for sandbox.max_procs on Linux; macOS has no equivalent, and doctor says so. |
 | `LRU` | Least recently used: when a store is full, the entry untouched for longest is deleted first. Komodo's cache keeps at most 256 MB per repo this way. |
 | `prompt cache`, `prompt caching` | A provider feature that charges less for the opening of a prompt it has seen before. Komodo puts the stable parts of each brief first so the provider can reuse them. |
@@ -12302,15 +14135,15 @@ Programming and operating-system terms used in this document. Architecture terms
 | `stdlib` | Go's standard library: the code that ships with the language itself. Komodo's go.mod uses it alone, with no third-party packages. |
 | `TTY` | A terminal: the interactive text window a person types in. Komodo's terminal-only verbs refuse to run without one, which keeps an agent's shell from running them. |
 | `semver` | Semantic versioning: version numbers written major.minor.patch, where each part signals how big a change is. Komodo embeds its version this way, and a repo can pin the lowest version it accepts. |
-| `replay` | Reading recorded events back in order to rebuild a state. After a restart Komodo loads the latest snapshot and replays only the events after it, at most 50. |
-| `ledger` | Komodo's history on disk: one line per model session, a copy of every event, and a row per group and task. The status command and the scorecard read from it. |
+| `replay` | Playing recorded events back in order, from the run's event log, to show what happened. It makes no model calls and changes nothing. |
+| Metrics records | Komodo's history on disk: the event log of each run, one record per model session, and the figures per group and run. The scorecard reads them. |
 | `supervisor` | The engine code that starts, watches and stops each model session. It enforces time limits with a stop ladder: interrupt, terminate after 30 seconds, whole-tree kill after 60. |
 | `fixture` | A prepared example used in tests. Komodo ships a fixture repo for end-to-end runs and deliberately broken fixtures that prove each gate check fails when it should. |
-| `JSONL`, `jsonl` | JSON Lines: a text file with one JSON record per line, so new records are simply added at the end. Komodo's group events, ledger and raw session streams are JSONL files. |
+| `JSONL`, `jsonl` | JSON Lines: a text file with one JSON record per line, so new records are simply added at the end. Komodo's event logs and raw session streams are JSONL files. |
 | `loopback` | The machine talking to itself, also called localhost. A Komodo sandbox denies all network access except loopback, so a local test server works but the internet does not. |
 | `seatbelt` | The macOS built-in tool, run as sandbox-exec, that confines a program to chosen files and network access. Komodo runs session commands under it on macOS. |
 | `bwrap` | Bubblewrap: a Linux tool that runs a command in a locked-down view of the machine. Komodo uses it on Linux and WSL to make everything read-only except the worktree and to cut the network. |
-| `Docker` | A tool that runs programs inside isolated containers. Komodo uses it as the sandbox on native Windows when WSL is absent, with no network and only the worktree writable. |
+| `Docker` | A tool that runs programs inside isolated containers. Komodo uses a fresh container per group as the Tester's sandbox, with no network and only the worktree writable. |
 | `WSL` | Windows Subsystem for Linux: a real Linux running inside Windows. Komodo treats WSL like Linux and sandboxes with bwrap; native Windows without WSL falls back to Docker. |
 | `compare-and-swap` | An update that succeeds only if the value is still what the caller last saw. Komodo moves the hidden ref this way, on the old commit id. |
 | `create-only` | A file written only if it does not exist yet, so the first writer wins and any other is refused. Komodo's leases and queue items are create-only files. |
@@ -12329,66 +14162,69 @@ Programming and operating-system terms used in this document. Architecture terms
 | `symlink` | A shortcut file that points to another file or folder. Komodo's guard blocks reads and writes that escape the worktree through one. |
 | `SIGTERM`, `SIGINT` | Signals the operating system sends to ask a program to stop: SIGINT is an interrupt, SIGTERM a firmer request. Komodo sends SIGINT, SIGTERM after 30 s, then a whole-tree kill 60 s after SIGTERM. |
 | `TLS` | Transport Layer Security: the encryption behind https connections. Komodo's HTTP client keeps one connection pool, so a 4-task group shares one TLS session. |
-| `PATH` | The list of folders the shell searches when you type a command name. The installer puts komodo on it: Windows user PATH, or a symlink into ~/.local/bin on macOS and Linux. |
+| `PATH` | The list of folders the shell searches when you type a command name. The installer puts komodo on it with a symlink into ~/.local/bin, or one marked line in the shell's start-up file. |
 | `glob`, `globs` | A pattern with wildcards, such as src/*.go, that matches many file names. Komodo uses globs to decide which skills to preinject and in each group's touches list. |
 
 ## Appendix B. Gap Register
 
-Each row is an open owner decision, a verification spike, a measurement or a later-minor item. The 18 owner decisions the 2026-10-14 redesign left open are G-201 to G-214, G-216, G-217, G-220 and G-221; text that depends on one says TODO and links here. The other rows confirm a default the text already states.
+Each row is an open owner decision, a verification spike, a measurement or a later-minor item. Text that depends on one says TODO and links here.
 
-#### Open owner decisions
+#### Open questions
 
 | ID | Area | Gap | Closes by | Affects |
 |---|---|---|---|---|
-| <a id="g-201"></a>G-201 | Process model | How long the Runtime Manager runs (one per run, one per machine, or no long-running process) and how a second command reaches a live run | Owner decision on the decision page of 2026-10-14 | [4](#4-event-bus), [7](#7-runtime-manager), [1](#1-cli) |
-| <a id="g-202"></a>G-202 | Crash safety | What survives a crash: which part writes the durable event record that recovery and replay trust | Owner decision on the decision page of 2026-10-14 | [4](#4-event-bus), [7](#7-runtime-manager), [10](#10-state-manager), [18](#18-metrics-service) |
-| <a id="g-203"></a>G-203 | Commands | What `replay`, `build`, `test` and `review` do and what their id names | Owner decision on the decision page of 2026-10-14 | [1](#1-cli) |
-| <a id="g-204"></a>G-204 | Commands | Which earlier commands survive beside the diagram's 12: status, ui, abandon, doctor, version, sync, skill, scope answers, uninstall, gate, release | Owner decision on the decision page of 2026-10-14 | [1](#1-cli), [16](#16-cleanup-handler) |
-| <a id="g-205"></a>G-205 | Sandbox | Where builder and tester commands run (Docker, the operating-system sandbox, or both) and whether Docker is required | Owner decision on the decision page of 2026-10-14 | [11](#11-task-manager), [13](#13-tester) |
-| <a id="g-206"></a>G-206 | Quality | Whether the zero-cost mechanical checks stay, and where | Owner decision on the decision page of 2026-10-14 | [13](#13-tester) |
-| <a id="g-207"></a>G-207 | Agents | Whether scheduled jobs and the architect, researcher and scout roles are dropped | Owner decision on the decision page of 2026-10-14 | [3](#3-configuration-manager) |
-| <a id="g-208"></a>G-208 | Cache | The rules for reusing a stored prompt response | Owner decision on the decision page of 2026-10-14 | [8](#8-cache-manager), [6](#6-context-manager) |
-| <a id="g-209"></a>G-209 | Commands | Whether the CLI gains a full-screen terminal mode | Owner decision on the decision page of 2026-10-14 | [1](#1-cli) |
-| <a id="g-210"></a>G-210 | Publishing | One pull request per task group, or a shared epic branch with one pull request per epic | Owner decision on the decision page of 2026-10-14 | [15](#15-commit-handler), [7](#7-runtime-manager) |
-| <a id="g-211"></a>G-211 | Limits | Whether the Resource Manager only warns at a plan or cost limit, or also pauses work | Owner decision on the decision page of 2026-10-14 | [19](#19-resource-manager), [7](#7-runtime-manager) |
-| <a id="g-212"></a>G-212 | Storage | Whether the Runtime Cache and Lease Registry are plain files or an embedded database | Owner decision on the decision page of 2026-10-14 | [8](#8-cache-manager), [9](#9-lease-manager) |
-| <a id="g-213"></a>G-213 | Models | Which model links beta 6 supports: Claude subscription and paid interface, OpenAI, the free local backstop | Owner decision on the decision page of 2026-10-14 | [11](#11-task-manager), [19](#19-resource-manager) |
-| <a id="g-214"></a>G-214 | Context, safety | Whether agents may use outside Model Context Protocol servers, and how they are guarded | Owner decision on the decision page of 2026-10-14 | [6](#6-context-manager), [11](#11-task-manager) |
-| <a id="g-216"></a>G-216 | Shared records | Which part owns records shared by every run on the machine: provider reset times, link session counts, install and update state | Owner decision on the decision page of 2026-10-14 | [10](#10-state-manager), [19](#19-resource-manager), [1](#1-cli) |
-| <a id="g-217"></a>G-217 | Event wiring | Who publishes run-start, run-stop, run-continue, plan, skill and mcp, which part consumes next, and which types the CLI subscribes to | Owner decision on the decision page of 2026-10-14 | [4](#4-event-bus), [1](#1-cli), [7](#7-runtime-manager) |
-| <a id="g-220"></a>G-220 | Saving work | Whether finished tasks are saved before approval and by whom, who creates a group's branch and worktree, who releases the lease after cleanup, and who commits task lists | Owner decision on the decision page of 2026-10-14 | [11](#11-task-manager), [12](#12-builder), [15](#15-commit-handler), [16](#16-cleanup-handler), [9](#9-lease-manager) |
-| <a id="g-221"></a>G-221 | Cache | Whether parts other than the Runtime Manager call the Cache Manager directly | Owner decision on the decision page of 2026-10-14 | [8](#8-cache-manager), [6](#6-context-manager), [11](#11-task-manager) |
+| <a id="g-222"></a>G-222 | Commands | What `komodo clean` removes, and whether it needs a terminal | Owner decision | [1](#1-cli), [16](#16-cleanup-handler), [10](#10-state-manager) |
+| <a id="g-223"></a>G-223 | Event wiring | Who publishes the skill and mcp events | Owner decision | [4](#4-event-bus), [6](#6-context-manager), [1](#1-cli) |
+| <a id="g-224"></a>G-224 | Event wiring | Which part consumes next, and which event types the CLI subscribes to | Owner decision | [4](#4-event-bus), [1](#1-cli), [5](#5-intake-handler) |
+| <a id="g-225"></a>G-225 | Event wiring | What the Metrics Service sends the Error Handler | Owner decision | [4](#4-event-bus), [17](#17-error-handler), [18](#18-metrics-service) |
+| <a id="g-226"></a>G-226 | Saving work | Who commits the Intake Handler's task lists | Owner decision | [5](#5-intake-handler), [15](#15-commit-handler), [20](#20-data-locations-and-data-flow) |
+| <a id="g-231"></a>G-231 | Install | What `install` and `init` add to the host beyond the guard hook: a session-start `status` hook, and the plugin's skill set | Owner decision | [1](#1-cli), [21](#21-verification-operations-and-cutover) |
+| <a id="g-232"></a>G-232 | Update | How `update --restart-runs` moves live runs onto the new binary | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |
+| <a id="g-234"></a>G-234 | Commands | Whether `ui` needs a terminal, and whether the dashboard can send commands such as stop, abandon or an answer | Owner decision | [1](#1-cli) |
+| <a id="g-246"></a>G-246 | Limits | Whether reaching the group token cap, `limits.group_tokens`, blocks the group with reason `budget` | Owner decision | [7](#7-runtime-manager), [10](#10-state-manager), [11](#11-task-manager), [19](#19-resource-manager) |
+| <a id="g-249"></a>G-249 | Runtime | What notices an engine that stops answering, and stops its process tree | Owner decision | [7](#7-runtime-manager), [1](#1-cli) |
+| <a id="g-255"></a>G-255 | Metrics | Which command or view shows run metrics and the scorecard | Owner decision | [18](#18-metrics-service), [1](#1-cli) |
+| <a id="g-258"></a>G-258 | Limits | Whether a daily spending ceiling exists beside the per-run ceiling | Owner decision | [19](#19-resource-manager), [3](#3-configuration-manager) |
+| <a id="g-261"></a>G-261 | Sandbox | Whether the Tester gets a copy of the worktree or a read-only mount of the Builder's | Phase 5, with the sandbox | [11](#11-task-manager), [13](#13-tester) |
+| <a id="g-263"></a>G-263 | Saving work | Which commit a group's branch starts from, and which part creates the epic branch `komodo/<epic>` | Owner decision | [11](#11-task-manager), [15](#15-commit-handler) |
+| <a id="g-264"></a>G-264 | Sandbox | How Seatbelt, Bubblewrap and Docker limit an outside tool server to the hosts its entry lists | Spike in phase 5 | [6](#6-context-manager), [11](#11-task-manager) |
+| <a id="g-265"></a>G-265 | Builder | Whether a session's unfinished edits are saved as a local commit when the session ends | Owner decision | [12](#12-builder), [15](#15-commit-handler) |
+| <a id="g-266"></a>G-266 | Builder | Whether `--deny` carries a reason text for the Builder | Phase 2, with the CLI | [12](#12-builder), [1](#1-cli) |
+| <a id="g-267"></a>G-267 | Tester | Where the baseline test result is stored, and which sandbox runs it | Phase 5, with the Tester | [13](#13-tester) |
+| <a id="g-268"></a>G-268 | Reviewer | Whether `doctor` reports review rules verified less than half the time | Phase 7, with `doctor` | [14](#14-reviewer), [1](#1-cli) |
+| <a id="g-270"></a>G-270 | Landing | Which part runs the recheck on the epic branch after each landing, and in which sandbox | Owner decision | [15](#15-commit-handler), [11](#11-task-manager) |
+| <a id="g-272"></a>G-272 | Landing | How a group returns to Build after a failed recheck, and which block reason applies | Phase 6, with the Commit Handler | [15](#15-commit-handler), [7](#7-runtime-manager) |
 
 #### Spikes, measurements and later-minor items
 
 | ID | Area | Gap | Closes by | Affects |
 |---|---|---|---|---|
 | <a id="g-215"></a>G-215 | Cache | The Cache Manager owns the language and build caches, which the design names no owner for; each session gets its own build cache (review S6) | Confirmed when the Cache Manager is built, phase 3 | [8](#8-cache-manager) |
-| <a id="g-218"></a>G-218 | Recovery | What triggers removing a dead run's leftover worktrees, branches and sandboxes after a crash; the Cleanup Handler does the removal | Closes with G-201 and G-202 | [7](#7-runtime-manager), [16](#16-cleanup-handler) |
+| <a id="g-218"></a>G-218 | Recovery | What triggers removing a dead run's leftover worktrees, branches and sandboxes after a crash; the Cleanup Handler does the removal | When the Runtime Manager is built, phase 5 | [7](#7-runtime-manager), [16](#16-cleanup-handler) |
 | <a id="g-219"></a>G-219 | Spending | A default for `warn.usd_per_day`, set from measured daily paid spend; off until then | Metrics measurement over the first 20 paid groups | [19](#19-resource-manager) |
 | <a id="g-02"></a>G-02 | Provider probe | Capturing the `system/init` line at probe time without a model turn | Spike, phase 4 | [11](#11-task-manager), [1](#1-cli) |
 | <a id="g-03"></a>G-03 | Local models | A 24 GB machine running Qwen3.6-27B at 262,144 context | Spike, phase 4 | [11](#11-task-manager) |
 | <a id="g-04"></a>G-04 | Pool | `OLLAMA_NUM_PARALLEL` above 1 on one machine, deciding whether `limits.link_sessions.local` can exceed 1 | Spike, phase 4 | [7](#7-runtime-manager), [11](#11-task-manager) |
-| <a id="g-07"></a>G-07 | Limits | The real Max 5-hour window against `limits.link_sessions.claude-cli` 3 | Ledger measurement over the first 20 groups, phase 7 | [11](#11-task-manager) |
+| <a id="g-07"></a>G-07 | Limits | The real Max 5-hour window against `limits.link_sessions.claude-cli` 3 | Metrics measurement over the first 20 groups, phase 7 | [11](#11-task-manager) |
 | <a id="g-08"></a>G-08 | Sandbox | `bwrap --unshare-net` gives each session a private loopback | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
 | <a id="g-09"></a>G-09 | Sandbox | `cp --reflink=auto` behaviour on ext4 and btrfs, symlinks kept | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
-| <a id="g-10"></a>G-10 | Sandbox | Windows symlink and junction handling in the byte copy, `core.symlinks` | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
+| <a id="g-10"></a>G-10 | Sandbox | Windows symlink and junction handling in the byte copy, `core.symlinks`; applies only if native Windows returns | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
 | <a id="g-11"></a>G-11 | Sandbox | Docker Desktop bind-mount copy time for a 1 GB `node_modules` | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
 | <a id="g-12"></a>G-12 | Sandbox | Whether a copied Rust `target/` would be reused or rebuilt; until the spike reports, the design shares one `CARGO_TARGET_DIR` per group | Spike, phase 2 | [11](#11-task-manager) |
 | <a id="g-13"></a>G-13 | Guard, skills, steering phrases | The steering-phrase list is 6 entries by judgment | Tune the list from `doctor` warnings and dropped-paragraph warnings, phase 3 | [11](#11-task-manager), [6](#6-context-manager) |
 | <a id="g-16"></a>G-16 | Review | The rule text of each lens catalog; the identifier format, the field meanings and the outline are in 9.3 | Authoring task, phase 7; security lens reviewed by the owner | [6](#6-context-manager), [13](#13-tester) |
-| <a id="g-17"></a>G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with `track.usage` on | Measured in phase 7 | [13](#13-tester) |
+| <a id="g-17"></a>G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with usage metrics on | Measured in phase 7 | [13](#13-tester) |
 | <a id="g-18"></a>G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 | [5](#5-intake-handler) |
 | <a id="g-19"></a>G-19 | Timing | The 10,000-event replay under 1 s and the 50 ms short-verb budget | Gate timing, phase 6 | [0](#0-front-matter-and-code-structure), [1](#1-cli), [4](#4-event-bus), [6](#6-context-manager), [18](#18-metrics-service), [10](#10-state-manager) |
 | <a id="g-20"></a>G-20 | OpenAI | The `codex-cli` link, `openai-api` chain and `.codex/` install | Later minor, by design | [11](#11-task-manager), [6](#6-context-manager), [1](#1-cli) |
-| <a id="g-21"></a>G-21 | Release signing, enterprise | Private key in a KMS or keyless signing; `fresh` refuses a manifest older than the last accepted | Later minor; trigger: the first machine the owner does not own runs `fresh` | [1](#1-cli) |
+| <a id="g-21"></a>G-21 | Release signing, enterprise | Private key in a KMS or keyless signing; `update` refuses a manifest older than the last accepted | Later minor; trigger: the first machine the owner does not own runs `update` | [1](#1-cli) |
 | <a id="g-22"></a>G-22 | Model registry, enterprise | A central gateway owning IDs, `retired_on` dates, quotas; `doctor` warns 30 days ahead | Later minor; trigger: 3 or more machines, or 2 people sharing one cap | No text site |
-| <a id="g-23"></a>G-23 | Scope, enterprise | Path ownership rows in `policy.json`; a named human for other teams' paths; a widening digest in `status --metrics` | Later minor; trigger: the first repo with 2 teams or customer data | No text site |
+| <a id="g-23"></a>G-23 | Scope, enterprise | Path ownership rows in `policy.json`; a named human for other teams' paths; a widening digest in the open metrics view ([G-255](#g-255)) | Later minor; trigger: the first repo with 2 teams or customer data | No text site |
 | <a id="g-25"></a>G-25 | Sandbox | Whether a Docker volume per worktree beats the bind mount on copy time | Spike with G-11, phase 2 | [11](#11-task-manager) |
 | <a id="g-26"></a>G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 | No text site |
 | <a id="g-71"></a>G-71 | Providers | Confirming the `claude-cli` wire defaults stated in 5.3 and 7.5: working directory of the `claude` process, which stream line type is `output`, which field of the result line carries the structured answer, which field of `rate_limit_event` carries the reset time, what `--verbose` switches on, how `claude auth status --json` reports a logged-out user, and the signature of the tool host the API-link loop calls. | Spike against Claude Code 2.1.295, phase 4 | [11](#11-task-manager) |
 | <a id="g-72"></a>G-72 | Providers | Confirming the `anthropic.go` and `openai.go` wire defaults stated in 5.3 and 7.5: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and the `-limit` header that gives the window total. | Spike against both interfaces, phase 4 | [11](#11-task-manager) |
-| <a id="g-121"></a>G-121 | CLI validate | Whether the `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix | Proven when a Windows machine exists; low priority | [1](#1-cli) |
+| <a id="g-121"></a>G-121 | CLI validate | Whether a `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix; applies only if native Windows returns | Not planned; Windows runs through Windows Subsystem for Linux 2 | [1](#1-cli) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-tester) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file at the cleanup, phase 1; then 15.3 | [21](#21-verification-operations-and-cutover) |
 
@@ -12441,10 +14277,10 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | AWS exponential backoff (waiting longer between retries) and jitter, https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter | Full-jitter formula |
 | Distributed leases with fencing tokens, https://hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens | Fence semantics |
 | Temporal retry policies, https://docs.temporal.io/encyclopedia/retry-policies | The rejected unlimited-retry default; maximum attempts that count the first run, used by job retries and the ship actions |
-| Temporal event history, https://docs.temporal.io/workflow-execution/event | A decision's commands saved in one write with the fact that caused them; replay rebuilds state; the event sequence is the identifier |
+| Temporal event history, https://docs.temporal.io/workflow-execution/event | A group's state saved before the program acts on a change, so recovery reads only saved state; the recorded events are played back for replay only |
 | Temporal signals, https://docs.temporal.io/sending-messages | Commands reach a running group as durable messages recorded in its history, with accepted and refused outcomes |
 | Maildir delivery, https://cr.yp.to/proto/maildir.html | The inbox: a request written to a temp name and linked into place, never read half written |
-| LevelDB log format, https://github.com/google/leveldb/blob/main/doc/log_format.md | CRC-32C per record and dropping a torn tail on recovery |
+| LevelDB log format, https://github.com/google/leveldb/blob/main/doc/log_format.md | Dropping a torn last record when a log is read |
 | Kafka consumer position, https://kafka.apache.org/documentation/#design_consumerposition | Each subscriber keeps its own bookmark and rereads from it after a failure |
 | Git lock files, https://github.com/git/git/blob/master/Documentation/technical/api-lockfile.txt | A create-only `<path>.lock` beside a shared file, then write and rename |
 | Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% coverage bar |
@@ -12453,7 +14289,7 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | Claude Code plugin marketplaces, https://code.claude.com/docs/en/plugin-marketplaces | A local marketplace folder that `komodo init` registers and installs |
 | Claude Code hooks, https://code.claude.com/docs/en/hooks | The `SessionStart` entry shape and its `timeout` |
 | Datastar server-sent event reference, https://data-star.dev/reference/sse_events | Server-rendered dashboard pages patched in place from one event stream, with no build step |
-| Temporal Go SDK `SideEffect`, https://pkg.go.dev/go.temporal.io/sdk/workflow#SideEffect | A changing input recorded in history where it is used, so replay repeats it: the live model change |
+| Temporal Go SDK `SideEffect`, https://pkg.go.dev/go.temporal.io/sdk/workflow#SideEffect | A changing input recorded where it is used, so a replay shows it as it was: the live model change |
 | OpenBSD signify, https://man.openbsd.org/signify | A detached ed25519 signature over the exact manifest bytes |
 | The Update Framework specification, https://theupdateframework.github.io/specification/latest/ | A current and a next key, rotated by a release the next key signs |
 | towncrier, https://towncrier.readthedocs.io/ | One changelog fragment file per change, so parallel groups never conflict |
@@ -12462,7 +14298,7 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | Go doc comments, https://go.dev/doc/comment | The comment form the gate's comment lint checks |
 | The Not Rocket Science Rule, https://graydon2.dreamwidth.org/1597.html | Landing one change at a time with the tip checked after each |
 | GitHub CLI formatting, https://cli.github.com/manual/gh_help_formatting | One stable, typed `--json` result per command |
-| JSON Lines, https://jsonlines.org | The line format of `config.log` and `fresh.log` |
+| JSON Lines, https://jsonlines.org | The line format of `config.log` and the event logs |
 | Aider repo map docs, https://aider.chat/docs/repomap.html | Files ranked by references, rendered as paths with indented symbols, fitted to a token budget |
 | SWE-agent agent-computer interface, https://swe-agent.com/latest/background/aci/ | Lint before a write lands: a failing planner draft writes nothing |
 | Git objects, https://git-scm.com/book/en/v2/Git-Internals-Git-Objects | Content-addressed entries under a two-hex-digit folder fan-out |
@@ -12477,7 +14313,7 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | Anthropic errors, https://platform.claude.com/docs/en/api/errors | The 400 a self-set spend limit returns |
 | Claude Code skills, https://code.claude.com/docs/en/skills | `SKILL.md` frontmatter with name and description, path-based selection, bodies loaded on demand |
 | Codecov commit status, https://docs.codecov.com/docs/commit-status | Comparing coverage with the base commit when the base is under the floor |
-| Bazel remote caching, https://bazel.build/remote/caching | Cache keys as a SHA-256 over every input, used for the review cache key |
+| Bazel remote caching, https://bazel.build/remote/caching | Cache keys as a SHA-256 over every input, used for the keys of cached context pieces |
 | CommonMark code spans, https://spec.commonmark.org/0.31.2/#code-spans | The backtick fence rule for escaping facts |
 | Go `go list`, https://pkg.go.dev/cmd/go#hdr-List_packages_or_modules | `-test` variants whose dependencies include test imports |
 | Temporal event history reference, https://docs.temporal.io/references/events | One typed attribute set per event type; an activity's completion or failure event records its result or failure class against the scheduling key |
@@ -12493,15 +14329,15 @@ Commit `fdf4f61f` holds an earlier, working tree of Komodo's code. It is referen
 | `cmd/komodo/*.go` (about 20 files) | `cmd/komodo/main.go` and `cli/` (CLI processor) | **Rewrite** as a thin verb table |
 | `conductor`, `lease`, `harness/worktree*` | `engine/` (Orchestration engine, Workspace and leases) | **Port**; keep the pure `Next()` |
 | `check`, `review` | `quality/` (Check, Review and evidence) | **Port**; lenses become data |
-| `ledger` | `ops/ledger.go` (Runtime observability) | **Port**; add events and redaction (blanking secrets out) |
+| `ledger` | `ops/ledger.go` (Runtime observability) | **Port** as the Metrics Service's records; add events and redaction (blanking secrets out) |
 | `harness/brief*`, `clip`, `diff`, `toolkit` | `agent/` (Brief builder) | **Rewrite** with the stable prefix |
 | standards, rules | `agent/` and `embed/` (Skill loader, Rules and output contract) | **Rewrite**: the loader; rules stay embedded Markdown |
 | `mount/{claude,codex,ollama}` | `provider/` and `tools/` (Provider adapters, Tool runtime) | **Rewrite** behind one interface |
-| `guard` suites and table, `proc` | `safety/` (Guardrails, Sandbox and process control) | **Port** the table; fail closed; add Job Objects |
+| `guard` suites and table, `proc` | `safety/` (Guardrails, Sandbox and process control) | **Port** the table; fail closed |
 | `install`, `profile`, `preflight`, `doctor` | `host/` (Installer, Binary lifecycle, Configuration) | **Rewrite**, thin |
 | `backlog`, `gate`, `git`, `pr`, `release`, `changelog`, `comments` | `repo/` (Backlog and planning, Ship, Gate and self-checks) | **Port** into one package |
 | `detect`, `fsx`, `glob`, `testhome` | `core/` (Configuration) | **Port** |
-| 7 roles | `embed/agents/*` (Agent registry) | **Port** to `agent.json` and `prompt.md` |
+| the planner, builder, tester and reviewer roles | `embed/agents/*` (Agent registry) | **Port** to `agent.json` and `prompt.md`; the other roles are dropped |
 | `eval`, `recall`, `plugin`, `facet`, `ingest`, `run`, `harness`, `mount`, `hooks`, `_idea`, `migrate`, `machine` | none | **Delete** once the surviving code has moved |
 | `komodo/rules/accessibility.md` | `embed/output/adhd.md` and the `adhd` templates under `embed/output/` (Rules and output contract) | **Port**; the same text also goes into the `AGENTS.md` block |
 | `internal/harness/report.go` | the 4-heading run report templates under `embed/output/` (Rules and output contract) | **Port** |
@@ -12509,24 +14345,9 @@ Commit `fdf4f61f` holds an earlier, working tree of Komodo's code. It is referen
 **Output profile sources**
 - **The last two rows:** They are the sources of the output profile. The `adhd` templates follow the accessibility rules text, and the run report keeps the 4-heading shape of `report.go`.
 
-**New, with no archive source:** the network client (Network client), the scheduler (Scheduler and job templates), `recover.go` (Error recovery), the cache store (Cache store) and `fresh` (Binary lifecycle).
+**New, with no archive source:** the network client (Network client), `recover.go` (Error recovery), the cache store (Cache store) and `update` (Binary lifecycle).
 
 **Restart from zero:** the CHANGELOG, the PRD, HLD and LLD, and `docs/backlog/epic-*`. Their history stays in git; nothing is ported.
 
 ---
 
-## Appendix E. Held for Owner Decisions
-
-Some parts of the earlier design have no home in the redesign until an owner decision lands. They are not copied here; each stays readable, unchanged, in the frozen earlier design (`git show design/beta6-v1:docs/lld.md`, by the section number given). When its decision closes, the part is either re-homed into the named chapter or deleted.
-
-| Earlier part (section in `design/beta6-v1`) | Waits on | Goes to, if kept |
-|---|---|---|
-| Scheduler, job templates and the `jobs` commands (10.1 to 10.9, scheduler parts) | [G-207](#g-207) | [7. Runtime Manager](#7-runtime-manager) |
-| The architect, researcher and scout roles (5.3, agent table) | [G-207](#g-207) | [3. Configuration Manager](#3-configuration-manager) |
-| `status`, `status --wait`, `resume`, `abandon`, `scope approve` and `deny`, `doctor`, `sync`, `skill`, `uninstall` commands (1.4, verbs) | [G-204](#g-204) | [1. CLI](#1-cli) |
-| The `gate` self-check and the `release` command (12.5 gate checks, 11.5 release) | [G-204](#g-204) | This repository's Makefile, outside the product |
-| Epic branch, one-at-a-time landing, the epic-tip check and the epic gate (3.5 landing, 11.5 ship) | [G-210](#g-210) | [15. Commit Handler](#15-commit-handler) |
-| Check stage proofs: completion commands, scope, secret scan, affected tests, coverage (9.5 Check) | [G-206](#g-206) | [13. Tester](#13-tester) |
-| The parent guard, startup sweep and per-group event files used for crash recovery (3.5, 13.5) | [G-201](#g-201), [G-202](#g-202) | [7. Runtime Manager](#7-runtime-manager), [10. State Manager](#10-state-manager) |
-| Operating-system sandbox profiles for Seatbelt and Bubblewrap (6.3, 6.5) | [G-205](#g-205) | [11. Task Manager](#11-task-manager) |
-| The free local model link and its context-size probe (7.3, 7.5) | [G-213](#g-213) | [11. Task Manager](#11-task-manager) |
