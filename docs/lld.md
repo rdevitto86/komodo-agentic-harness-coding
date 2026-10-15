@@ -3197,7 +3197,7 @@ Each field is a fact its publisher saw, never a model's claim.
 | Path | Write | Holds |
 |---|---|---|
 | `<common_dir>/komodo/events/<run-id>.jsonl` | Append | One line for every event of that run, plus gap lines |
-| `~/.komodo/events/engine.jsonl` | Append | Events with no run, and events of a run whose folder is unknown, plus gap lines; never trimmed |
+| `~/.komodo/events/engine.jsonl` | Append | Events with no run, and events of a run whose folder is unknown, plus gap lines; trimmed daily |
 | `~/.komodo/events/runs.json` | Replace | The run-to-folder map |
 
 `Append` adds one line. `Replace` writes a temporary file and renames it into place, so a reader never sees half a file. The run logs and the event schema are the export format; there is no telemetry export in this release.
@@ -3246,7 +3246,7 @@ type ReadFolder struct {
 }
 ```
 
-`Reader` reads the store; a read never writes. `komodo replay` and the Metrics Service's rebuild use it. Whether a run is open is not stored in the map: the engine passes `Options.Open`, a function that answers for a run id.
+`Reader` reads the store; a read never writes. `komodo replay` and the Metrics Service's rebuild use it. Whether a run is open is not stored in the map: the engine passes `Options.RunOpen`, a function that answers for a run id.
 
 ```go
 // Reader reads the event store; a read never writes.
@@ -3309,7 +3309,7 @@ type Options struct {
 	RetentionDays int                 // events.retention_days; 0 or less means 30
 	Mask          func(string) string // masks secrets in an event line before it is written; passed in by the code that wires the harness
 	Go            func(func())        // starts the work that must follow Publish after it releases its lock, such as publishing bus.store_failed; the engine passes the Error Handler's Go wrapper, and nil runs the work inline
-	Open          func(run ID) bool   // reports whether a run is open; retention never deletes the log of an open run
+	RunOpen       func(run ID) bool   // reports whether a run is open; retention never deletes the log of an open run; nil counts every run as open
 }
 
 // New returns an in-process bus with its event store; the engine holds the one bus of a machine.
@@ -3372,11 +3372,13 @@ The CLI is not in the engine's process. "The CLI publishes" means the CLI sends 
 #### Appending to the event store
 
 1. `Publish` appends each event, masked, as one JSON line to the run's event log `<common_dir>/komodo/events/<run-id>.jsonl` before it broadcasts. `common_dir` comes from the run's `run-start` event, and the bus records the run's folder in `runs.json` when that event arrives. An event with no run, or with a run whose folder the map does not hold, goes to `~/.komodo/events/engine.jsonl`.
-2. The append is one write call with no buffer, so each line reaches the operating system at once and survives a killed process. The log is forced to disk on every `stage.enter` and on the final `error` event.
+2. The append is one write call with no buffer, so each line reaches the operating system at once and survives a killed process. A `stage.enter` forces its own log to disk, and the final `error` event, one whose data implements `bus.Finaler` and reports `IsFinal`, forces every open log to disk. These syncs run after `Publish` releases the bus lock and before it returns, so a slow disk never holds up another publisher.
 3. The append runs while `Publish` holds the bus lock, so the log holds every event in exact publish order.
 4. A failed append still broadcasts the event. The bus counts the failure, and after `Publish` releases its lock it publishes one `error` / `bus.store_failed` event for the burst through `Options.Go`; the Error Handler maps it to severity warn. Once appends work again the bus writes a gap line before the next event.
-5. When the store opens a log whose last byte is not a newline, it writes a newline first, so a new line never joins a torn one.
-6. Recovery after a crash never reads the event store. It reads only the State Manager, so a lost log line never changes where a group continues.
+5. Each failure kind has its own burst, keyed by the log path, `unplaced:<run>` for an event whose folder is unknown (empty path), `runs.json` for a failed map save, and `sync:<path>` for a failed disk sync. Each burst is announced once and ends at that key's next success. A failed sync after a good write loses nothing, so it writes no gap line.
+6. At most 64 logs stay open; the least recently written is closed and reopened on demand.
+7. When the store opens a log whose last byte is not a newline, it writes a newline first, so a new line never joins a torn one.
+8. Recovery after a crash never reads the event store. It reads only the State Manager, so a lost log line never changes where a group continues.
 
 **Run end.** A run ends at `run-complete` of either subtype or at `run-failure` / `stalled`. The bus then forces the log to disk and closes it. A later event of that run reopens the log for append.
 
@@ -3391,12 +3393,12 @@ The CLI is not in the engine's process. "The CLI publishes" means the CLI sends 
 A read of a run that is still live can meet the line being written as a torn last line; the Reader treats it the same way. With a group filter, `Gap.After` counts the events returned, not all events. A last line with no closing newline is torn even if it parses; a last line that has its newline and does not parse counts in `Skipped`.
 
 **Retention.** The bus trims an events folder at the first `run-start` for that folder, then at most once a day on a later `run-start`; no timer runs. `komodo clean` calls `Trim` on demand. A trim reads `runs.json` once.
-1. It deletes the whole log of every run that `Options.Open` reports closed and whose file is older than `events.retention_days`. The log of an open run is never deleted.
+1. It deletes the whole log of every run that `Options.RunOpen` reports closed and whose file is older than `events.retention_days`. The log of an open run is never deleted, a nil `RunOpen` counts every run as open, and a log written to in the last 24 hours is never deleted.
 2. It drops those runs from `runs.json`.
 3. When the folder holds more than 100 MB, it deletes the oldest logs of closed runs until the folder is at or below 80 MB.
 4. When the logs of open runs exceed 100 MB by themselves, it deletes none of them and publishes one `bus.store_failed` naming the folder.
 
-`engine.jsonl` is never trimmed.
+The same daily trigger trims `engine.jsonl`: it keeps the lines within `events.retention_days` and cuts the file to 80% of 100 MB, dropping the oldest lines first.
 
 With `dry` set, `Trim` deletes nothing and returns the paths it would delete.
 
@@ -3469,7 +3471,7 @@ The bus keeps its subscriptions and counters in memory. The event store is the o
 | An append to a log fails | The store | Broadcast the event anyway; count the failure; publish `bus.store_failed` once per burst; write a gap line when appends work again | One `bus.store_failed` per burst per log | The log lacks the events of the burst, marked by the gap line |
 | A torn last line in a log | The Reader | Drop it; add a `torn` mark | 1 per read | The fragment stays until retention deletes the log |
 | An unreadable line in a log | The Reader | Skip it; count it in `Skipped` | 0 retries | The line stays until retention deletes the log |
-| `runs.json` unreadable | The store, at start | Start with an empty map; events of unknown runs go to `engine.jsonl` | 1 | The map refills as `run-start` events arrive |
+| `runs.json` unreadable | The store, at start | Rename it `runs.json.bad-<unix>`; start with an empty map; publish one `bus.store_failed`; every later save re-reads the file and merges, so a save never drops entries it did not know | 1 | The map refills as `run-start` events arrive |
 | Logs of open runs over the size bound | The trim | Delete none of them; publish `bus.store_failed` naming the folder | 1 per folder | The folder stays over the bound |
 | The control socket does not answer | The CLI | Start the engine, then send the command again | Dial every 50 ms for 5 seconds | The command runs, or the CLI reports the error |
 
