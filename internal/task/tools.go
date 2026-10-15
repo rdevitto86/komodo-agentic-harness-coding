@@ -119,7 +119,7 @@ func (r *Registry) AddOutside(def llm.ToolDef, run func(ctx context.Context, arg
 	r.outside[def.Name] = outsideTool{def: def, run: run}
 }
 
-// KnownTools returns the names of the built-in tools, for the Configuration Manager's registry check.
+// KnownTools returns the names of the built-in tools, the engine hands it to the Configuration Manager as the known tools.
 func KnownTools() map[string]bool {
 	out := map[string]bool{}
 	for _, t := range builtinTools() {
@@ -261,7 +261,7 @@ func (b *Bound) line(l ToolLine) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, _ = f.Write(append(raw, '\n'))
 }
 

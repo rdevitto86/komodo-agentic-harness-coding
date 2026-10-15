@@ -64,7 +64,7 @@ func toolRead(_ context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	if err != nil {
 		return errReply("open %s: %v", r.Rel, cause(err))
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if st, err := f.Stat(); err != nil || st.IsDir() {
 		return errReply("%s is a folder, not a file", r.Rel)
 	}
@@ -175,7 +175,7 @@ func searchFile(abs, rel string, re *regexp.Regexp) []searchHit {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if st, err := f.Stat(); err != nil || st.Size() > maxSearchFile {
 		return nil
 	}

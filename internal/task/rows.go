@@ -13,7 +13,6 @@ import (
 	"sync"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
@@ -153,7 +152,7 @@ func expandHome(pats Patterns, home string) Patterns {
 	return out
 }
 
-// KnownRows returns the identifiers of the rows an agent's Guard list may name, for the Configuration Manager's registry check.
+// KnownRows returns the identifiers of the rows an agent's Guard list may name, the engine hands it to the Configuration Manager as the known guard rows.
 func KnownRows() map[string]bool {
 	out := map[string]bool{}
 	p, err := loadPolicy()
@@ -164,11 +163,6 @@ func KnownRows() map[string]bool {
 		out[string(r.ID)] = true
 	}
 	return out
-}
-
-// Known returns the guard rows and tool names the Configuration Manager checks the agent registry against.
-func Known() config.Known {
-	return config.Known{GuardRows: KnownRows(), Tools: KnownTools()}
 }
 
 // mandatoryRows are the rows every agent inherits whatever its permissions list.

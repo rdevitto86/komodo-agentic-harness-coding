@@ -8667,7 +8667,7 @@ type Row struct {
 }
 ```
 
-`*` matches within one path segment, `**` any number of whole segments, `?` one character, `[abc]` one of a set; a pattern with no `/` matches the base name at any depth; matching is case-sensitive except row G4. `message` and `alternative` name templates `refuse.<id>` and `alt.<id>` in the policy file's `templates` map, for example `refuse.G3`: "Refused by G3: {{path}} is a protected path." The policy file is one object, `{"v": 1, "rows": [...], "secret_content": [...], "test_siblings": {...}, "templates": {...}}`, compiled into the binary and read only by it.
+`*` matches within one path segment, `**` any number of whole segments, `?` one character, `[abc]` one of a set; a pattern with no `/` matches the base name at any depth; matching is case-sensitive except rows G3 and G4. A pattern that starts with `!` removes matches: G4 lists `!.env.example`, `!.env.sample` and `!.env.template` after `.env*`. The patterns of a `text` row (G5) are regular expressions. `message` and `alternative` name templates `refuse.<id>` and `alt.<id>` in the policy file's `templates` map, for example `refuse.G3`: "Refused by G3: {{path}} is a protected path." The policy file is one object, `{"v": 1, "rows": [...], "secret_content": [...], "test_siblings": {...}, "templates": {...}}`, compiled into the binary and read only by it. `secret_content`, `test_siblings` and `templates` are read from the compiled file; `NewGuard` takes the rows, so a test can pass altered rows. `test_siblings` holds `pairs` (`{"test": "{name}_test.go", "source": "{name}.go"}`) and `tests_dirs` (`["tests"]`).
 
 **The rows**
 
@@ -8691,7 +8691,7 @@ Rows O1 to O10, which guarded the orchestrator's shell, are not part of the Task
 
 A test sibling sits in the folder of a file in `files`: Go `<name>_test.go`; Python `test_<name>.py` or `<name>_test.py`; JavaScript and TypeScript `<name>.test.<ext>` or `<name>.spec.<ext>`; Rust any file under the crate's `tests/`.
 
-Each agent's rows compile from the rows its scope selects plus the row identifiers in its `Permissions.Guard`. The rows G1 to G6 are compiled in and apply to every agent whatever the registry lists, so a registry edit cannot widen an agent below that floor.
+Each agent's rows compile from the rows its scope selects plus the row identifiers in its `Permissions.Guard`. `writers` are agents whose tools include `edit` or `write`; `runners` are agents whose tools include `run`. The rows G1 to G6 are compiled in and apply to every agent whatever the registry lists, so a registry edit cannot widen an agent below that floor.
 
 #### The tool call
 
@@ -8709,6 +8709,8 @@ type Verdict struct {
 	Message     string // the refusal line naming the row
 	Alternative string // what the model may do instead
 	EndSession  bool   // true on the refusal that reaches guard.refusal_limit
+	Count       int    // refusals under Row so far in this session
+	Target      string // the refused path, class or tool name, for the tool.denied fact
 }
 
 // Binding is what the guard needs from an agent and its group.
@@ -8726,7 +8728,7 @@ type RunArgs struct {
 }
 ```
 
-A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`.
+A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The command is the class's detected argv with the arguments appended.
 
 | Tool | Arguments | Reply text |
 |---|---|---|
@@ -10037,7 +10039,7 @@ The shared git wrapper runs git on the host for the Task Manager's tree hashes, 
 4. **Blank hooks and monitors.** Each call passes `-c core.fsmonitor=` (blank) and `-c core.hooksPath=` set to an empty folder, and the environment `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` set to the null device, so a planted setting cannot run code outside the confinement.
 5. **No other path.** No git command runs on the host with a working directory inside a folder a confined command could write unless rules 1 to 4 hold.
 
-Rule 4 is unproven until its component case runs ([11.9](#119-proof-cases)).
+Beside the rules above, `git_read` passes on only the flags `-n`, `-N`, `-p`, `-s`, `-w`, `-M`, `-L` and a fixed list of long flags, and names a secret file only by name; the diff of a secret file shows its header and no body. Rule 4 is unproven until its component case runs ([11.9](#119-proof-cases)).
 
 #### Tool server timing
 
@@ -10048,7 +10050,7 @@ The tool server answers `initialize` inside the program's 30 s `MCP_TIMEOUT` (it
 Outside tool servers are off by default. A server is on for an agent only when a person adds it to the Context Manager's list and switches it on for that agent by name.
 
 1. The Runtime Manager copies only the enabled entries into `GroupSpec.Servers`, and names each one in the `Servers` list of the agents allowed to use it.
-2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. How each mechanism limits a server to those hosts is [TODO: how each sandbox mechanism limits an outside server to the hosts its entry lists ([G-264](#g-264))].
+2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Until the open gap below is settled, a server that lists `Hosts` still gets no network and a warning says so. How each mechanism limits a server to those hosts is [TODO: how each sandbox mechanism limits an outside server to the hosts its entry lists ([G-264](#g-264))].
 3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call.
 4. Every call passes the guard first, exactly like a built-in tool: row G1 refuses a name not in the permissions, and a refusal counts toward `guard.refusal_limit` (row G6).
 5. Every call, allowed or refused, is recorded: a `tool.outside` fact for an allowed call, and `tool.denied` for a refusal.

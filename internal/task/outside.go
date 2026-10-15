@@ -81,7 +81,10 @@ func StartOutside(ctx context.Context, c Confiner, instance string, s OutsideSer
 	if len(s.Hosts) > 0 {
 		o.warnings = append(o.warnings, fmt.Sprintf("outside server %s lists hosts %s, but no mechanism limits a server to hosts, so it keeps no network", s.Name, strings.Join(s.Hosts, ", ")))
 	}
-	go o.read(out)
+	go func() {
+		defer guardian.Recover(taskSource, nil)
+		o.read(out)
+	}()
 	hctx, hcancel := context.WithTimeout(ctx, outsideInit)
 	defer hcancel()
 	if _, err := o.rpc(hctx, "initialize", map[string]any{"protocolVersion": mcpVersion, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "komodo", "version": "1"}}); err != nil {

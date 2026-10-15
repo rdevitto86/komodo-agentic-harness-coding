@@ -177,6 +177,7 @@ func ServeMCP(ctx context.Context, in io.Reader, out io.Writer, b *Bound) error 
 		if req.Method == "tools/call" {
 			wg.Add(1)
 			go func() {
+				defer guardian.Recover(taskSource, nil)
 				defer wg.Done()
 				send(callTool(ctx, b, req))
 			}()

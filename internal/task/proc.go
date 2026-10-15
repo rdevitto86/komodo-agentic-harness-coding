@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
 )
 
@@ -102,7 +103,7 @@ func (c *capture) reply() Reply {
 	if c.f == nil {
 		return Reply{Text: c.buf.String()}
 	}
-	defer c.f.Close()
+	defer func() { _ = c.f.Close() }()
 	size := min(c.total, maxLogBytes)
 	head := make([]byte, headKeep)
 	nh, _ := c.f.ReadAt(head, 0)
@@ -174,3 +175,18 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// taskSource names this package in a fault.
+var taskSource = fault.Source{Component: "task"}
+
+// stderrPrinter shows a fault on standard error; standard output belongs to the tool server's protocol.
+type stderrPrinter struct{}
+
+// PrintError writes the fault's reason on one line.
+func (stderrPrinter) PrintError(f fault.Fault) error {
+	_, err := fmt.Fprintf(os.Stderr, "komodo: %s\n", f.Reason)
+	return err
+}
+
+// guardian turns a panic of a goroutine this package starts into a published fault.
+var guardian = fault.New(nil, stderrPrinter{})

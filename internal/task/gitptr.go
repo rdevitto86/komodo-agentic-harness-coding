@@ -145,7 +145,7 @@ func (h *HostGit) snapshot(ctx context.Context, use func(env []string) error) er
 	if err != nil {
 		return fmt.Errorf("make the snapshot folder: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(dir, "index"), "GIT_OBJECT_DIRECTORY=" + dir,
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + filepath.Join(h.commonDir(), "objects")}
 	if _, err := h.run(ctx, env, "read-tree", h.base); err != nil {
