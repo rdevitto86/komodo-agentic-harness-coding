@@ -2,8 +2,6 @@ package contextmgr
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,12 +145,6 @@ func (m *Manager) loadWarnings() []Warning {
 	return append(append([]Warning(nil), m.skillWarns...), m.connWarns...)
 }
 
-// hashHex returns the SHA-256 of s as lowercase hex.
-func hashHex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
-
 // commands returns the detected commands, cached under the hash of the marker files.
 func (m *Manager) commands(t Tree) CommandSet {
 	hash := markerHash(t)
@@ -179,7 +171,7 @@ func (m *Manager) repoMap(t Tree, goal string, budget int) RepoMap {
 	c := m.deps.Cache
 	var key cache.Key
 	if c != nil {
-		key = c.Key("map", t.Hash(), hashHex(goal), strconv.Itoa(budget))
+		key = c.Key("map", t.Hash(), fingerprint([]byte(goal)), strconv.Itoa(budget))
 		if b, ok := c.Get(cache.NSMap, key); ok {
 			var rm RepoMap
 			if json.Unmarshal(b, &rm) == nil && rm.TreeHash == t.Hash() {
@@ -231,6 +223,7 @@ func renderStandards(sel []Selected) string {
 }
 
 // GetContext assembles the brief and the tool list for one agent from the base-commit tree.
+// It holds the table lock only to snapshot skills and tools, so an event never waits for a slow read.
 func (m *Manager) GetContext(ctx context.Context, req Request) (Context, error) {
 	if !validAgent(req.Agent) {
 		return Context{}, fmt.Errorf("agent %q: %w", req.Agent, ErrAgentUnknown)
@@ -242,8 +235,9 @@ func (m *Manager) GetContext(ctx context.Context, req Request) (Context, error) 
 		return Context{}, err
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	skills, err := m.selectLocked(req.Agent, req.Files, req.Tree)
+	tools, loadWarns := m.toolsFor(req.Agent), m.loadWarnings()
+	m.mu.RUnlock()
 	if err != nil {
 		return Context{}, err
 	}
@@ -256,25 +250,23 @@ func (m *Manager) GetContext(ctx context.Context, req Request) (Context, error) 
 		vals[s] = v
 	}
 	vals[RepoProfile] = renderProfile(detectLanguages(req.Tree, m.langs), cs)
-	vals[RepoContext], vals[Standards] = addendum, standards
 	budget := mapBudget(req.Chain)
 	if req.Agent == "planner" || (req.Agent == "reviewer" && budget > 0) {
 		vals[SlotRepoMap] = m.repoMap(req.Tree, req.Slots[Goal], budget).Render()
 	}
 	if req.Agent == "planner" {
-		vals[Layout] = renderLayout(req.Tree)
+		vals[Layout] = renderLayout(req.Tree, budget)
 	}
 	guidance := ""
 	if addendum != "" {
 		guidance = "# Repository guidance\n\n" + addendum
 	}
-	tools := m.toolsFor(req.Agent)
 	br, err := buildBrief(req.Agent, m.tpls[req.Agent], renderTools(m.deps.Tools[req.Agent], tools), guidance, standards, vals)
 	if err != nil {
 		return Context{}, err
 	}
 	return Context{
 		Brief: br, Skills: skills, Tools: slices.Clone(tools), Commands: cs,
-		Warnings: append(m.loadWarnings(), addWarns...), BriefTokens: br.Tokens(m.count),
+		Warnings: append(loadWarns, addWarns...), BriefTokens: br.Tokens(m.count),
 	}, nil
 }

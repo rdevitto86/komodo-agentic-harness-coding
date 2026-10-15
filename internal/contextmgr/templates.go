@@ -82,6 +82,9 @@ func ParseTemplate(agent, text string) (Template, error) {
 		if !knownSlots[s] {
 			return Template{}, fmt.Errorf("%w: unknown slot %q", ErrTemplate, m[1])
 		}
+		if s == RepoContext || s == Standards {
+			return Template{}, fmt.Errorf("%w: slot %q is filled in part 3 or 4 and takes no hole", ErrTemplate, m[1])
+		}
 		if !slices.Contains(row.required, s) && !slices.Contains(row.optional, s) {
 			return Template{}, fmt.Errorf("%w: slot %q is not named in the %s row", ErrTemplate, m[1], agent)
 		}

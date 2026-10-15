@@ -134,27 +134,35 @@ func (m *Manager) startItems(idx Index) error {
 	return nil
 }
 
-// reloadLocal rereads the local skills; a skill that is still there keeps its state, a new one loads disabled.
+// reloadLocal rereads the local skills in place: a skill still there keeps its row and state, a new one loads disabled at the end.
 func (m *Manager) reloadLocal() {
 	shipped := map[SkillName]bool{}
-	var kept []*item
-	prior := map[SkillName]ItemState{}
 	for _, it := range m.items {
 		if it.state.Origin == OriginEmbedded {
 			shipped[it.state.Name] = true
-			kept = append(kept, it)
-		} else {
-			prior[it.state.Name] = it.state
 		}
 	}
 	local, warns := loadLocalSkills(m.deps.Home, shipped, m.phrases(), m.count)
+	fresh := map[SkillName]*item{}
 	for _, it := range local {
-		if st, ok := prior[it.state.Name]; ok {
-			it.state = st
+		fresh[it.state.Name] = it
+	}
+	out := make([]*item, 0, len(m.items))
+	for _, it := range m.items {
+		if it.state.Origin == OriginEmbedded {
+			out = append(out, it)
+		} else if f, ok := fresh[it.state.Name]; ok {
+			f.state = it.state
+			out = append(out, f)
+			delete(fresh, it.state.Name)
 		}
 	}
-	m.items = append(kept, local...)
-	m.skillWarns = warns
+	for _, it := range local {
+		if _, ok := fresh[it.state.Name]; ok {
+			out = append(out, it)
+		}
+	}
+	m.items, m.skillWarns = out, warns
 }
 
 // phrases returns the current steering phrases.

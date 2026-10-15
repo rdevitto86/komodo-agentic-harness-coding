@@ -183,9 +183,7 @@ func TestSlotTableMatchesRegistry(t *testing.T) {
 		row := slotTable[a]
 		var req []string
 		for _, s := range row.required {
-			if s != Acceptance { // the registry's tester row lacks acceptance; chapter 6 requires it
-				req = append(req, string(s))
-			}
+			req = append(req, string(s))
 		}
 		var opt []string
 		for _, s := range row.optional {

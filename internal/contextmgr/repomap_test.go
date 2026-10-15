@@ -44,11 +44,11 @@ func TestRepoMapRankAndRender(t *testing.T) {
 	if !reflect.DeepEqual(ranks, want) {
 		t.Fatalf("ranks %v", ranks)
 	}
-	if !reflect.DeepEqual(order, []string{"a.go", "b.go", "d.py", "README.md", "c.go", "e.py"}) {
+	if !reflect.DeepEqual(order, []string{"a.go", "b.go", "d.py", "c.go", "e.py", "README.md"}) {
 		t.Fatalf("order %v", order)
 	}
 	out := rm.Render()
-	if !strings.HasPrefix(out, "a.go (2)\n  function Alpha\n  type Thing\n  function Run\n") || !strings.Contains(out, "d.py (1)\n  function delta\n  class Echo\n") || !strings.HasSuffix(out, "e.py (0)\n  function zed") {
+	if !strings.HasPrefix(out, "a.go (2)\n  function Alpha\n  type Thing\n  function Run\n") || !strings.Contains(out, "d.py (1)\n  function delta\n  class Echo\n") || !strings.HasSuffix(out, "README.md (0)") {
 		t.Fatalf("render:\n%s", out)
 	}
 	if again := buildRepoMap(mapFixture(), "", shippedLangs(t)).Render(); again != out {

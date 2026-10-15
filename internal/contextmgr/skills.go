@@ -301,15 +301,12 @@ func markersMet(t Tree, markers []string) bool {
 	}
 	for _, mk := range markers {
 		glob, text, withText := strings.Cut(mk, ":")
-		if !withText {
-			if t.Exists(mk) {
-				return true
-			}
-			continue
-		}
 		for _, p := range t.Paths() {
 			if !matchGlob(glob, p) {
 				continue
+			}
+			if !withText {
+				return true
 			}
 			if b, err := t.ReadFile(p); err == nil && strings.Contains(string(b), text) {
 				return true

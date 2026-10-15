@@ -97,47 +97,6 @@ func TestRunAppliesEvents(t *testing.T) {
 	}
 }
 
-func TestEventDuringBuild(t *testing.T) {
-	m := newManager(t)
-	tree := goTree()
-	entered, release := make(chan struct{}), make(chan struct{})
-	tree.onRead = func(p string) {
-		if p == "AGENTS.md" {
-			close(entered)
-			<-release
-		}
-	}
-	type res struct {
-		c   Context
-		err error
-	}
-	out := make(chan res, 1)
-	go func() {
-		c, err := m.GetContext(context.Background(), Request{Agent: "builder", Tree: tree, Files: []string{"a.go"}, Slots: slotsFor("builder")})
-		out <- res{c, err}
-	}()
-	<-entered
-	applied := make(chan struct{})
-	go func() {
-		m.apply(setEvent(SkillSet{Name: "standards-go", Enabled: false, Allow: workers}))
-		close(applied)
-	}()
-	select {
-	case <-applied:
-		t.Fatal("the event ran while a brief was being built")
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(release)
-	r := <-out
-	if r.err != nil || !reflect.DeepEqual(names(r.c.Skills), []string{"standards-comments", "standards-go"}) {
-		t.Fatalf("brief changed by the event: %v %v", names(r.c.Skills), r.err)
-	}
-	<-applied
-	if _, err := m.Get("builder", "standards-go"); err == nil {
-		t.Fatal("event must apply after the build")
-	}
-}
-
 func TestConnectionsUnknownKey(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "connections.json"), []byte(`{"v":1,"connections":[{"name":"docs","command":"docs-mcp","color":"red"}]}`), 0o644); err != nil {

@@ -23,7 +23,7 @@ func TestDetectGo(t *testing.T) {
 	cs := Detect(goTree())
 	want := map[Class][]string{
 		ClassSetup: {"go", "mod", "download"}, ClassBuild: {"go", "build", "./..."}, ClassTest: {"go", "test", "./..."},
-		ClassLint: {"go", "vet", "./..."}, ClassFormat: {"gofmt", "-l", "."},
+		ClassLint: {"go", "vet", "./..."}, ClassFormat: {"gofmt", "-w"},
 	}
 	for c, argv := range want {
 		if got := argvOf(cs, c); !reflect.DeepEqual(got, argv) {

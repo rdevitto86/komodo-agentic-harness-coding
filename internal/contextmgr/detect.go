@@ -3,7 +3,9 @@ package contextmgr
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -23,9 +25,10 @@ const (
 
 // Command is one detected command, run without a shell.
 type Command struct {
-	Class  Class
-	Argv   []string
-	Marker string // the file that produced it; "Makefile" when a target won
+	Class   Class
+	Argv    []string
+	Marker  string // the file that produced it; "Makefile" when a target won
+	PerFile bool   // true when the caller appends the edited file paths as final arguments
 }
 
 // CommandSet is the detected commands of one repo and the hash they are cached under.
@@ -37,29 +40,72 @@ type CommandSet struct {
 // classOrder lists the detected classes in rendering order.
 var classOrder = []Class{ClassSetup, ClassBuild, ClassTest, ClassLint, ClassFormat}
 
+// cmdSpec is the argv of one class under one marker.
+type cmdSpec struct {
+	argv    []string
+	perFile bool
+}
+
 // markerRow is the commands one marker file implies; a class with no entry stays empty.
 type markerRow struct {
 	file string
-	cmds map[Class][]string
+	cmds func(t Tree) map[Class]cmdSpec
 }
 
 // markerRows lists the language markers in priority order.
 var markerRows = []markerRow{
-	{"go.mod", map[Class][]string{
-		ClassSetup: {"go", "mod", "download"}, ClassBuild: {"go", "build", "./..."}, ClassTest: {"go", "test", "./..."},
-		ClassLint: {"go", "vet", "./..."}, ClassFormat: {"gofmt", "-l", "."},
-	}},
-	{"package.json", map[Class][]string{
-		ClassSetup: {"npm", "ci"}, ClassBuild: {"npm", "run", "build"}, ClassTest: {"npm", "test"},
-		ClassLint: {"npm", "run", "lint"}, ClassFormat: {"npm", "run", "format"},
-	}},
-	{"Cargo.toml", map[Class][]string{
-		ClassSetup: {"cargo", "fetch"}, ClassBuild: {"cargo", "build"}, ClassTest: {"cargo", "test"},
-		ClassLint: {"cargo", "clippy"}, ClassFormat: {"cargo", "fmt", "--check"},
-	}},
-	{"pyproject.toml", map[Class][]string{
-		ClassTest: {"pytest"}, ClassLint: {"ruff", "check"}, ClassFormat: {"ruff", "format", "--check"},
-	}},
+	{"go.mod", fixedCmds(map[Class]cmdSpec{
+		ClassSetup: {argv: []string{"go", "mod", "download"}}, ClassBuild: {argv: []string{"go", "build", "./..."}},
+		ClassTest: {argv: []string{"go", "test", "./..."}}, ClassLint: {argv: []string{"go", "vet", "./..."}},
+		ClassFormat: {argv: []string{"gofmt", "-w"}, perFile: true},
+	})},
+	{"package.json", nodeCmds},
+	{"Cargo.toml", fixedCmds(map[Class]cmdSpec{
+		ClassSetup: {argv: []string{"cargo", "fetch"}}, ClassBuild: {argv: []string{"cargo", "build"}},
+		ClassTest: {argv: []string{"cargo", "test"}}, ClassLint: {argv: []string{"cargo", "clippy"}},
+		ClassFormat: {argv: []string{"cargo", "fmt", "--"}, perFile: true},
+	})},
+	{"pyproject.toml", fixedCmds(map[Class]cmdSpec{
+		ClassTest: {argv: []string{"pytest"}}, ClassLint: {argv: []string{"ruff", "check"}},
+		ClassFormat: {argv: []string{"ruff", "format"}, perFile: true},
+	})},
+}
+
+// fixedCmds returns a command table that does not depend on the tree.
+func fixedCmds(m map[Class]cmdSpec) func(Tree) map[Class]cmdSpec {
+	return func(Tree) map[Class]cmdSpec { return m }
+}
+
+// nodeCmds fills a class only when package.json defines its script; setup needs none.
+func nodeCmds(t Tree) map[Class]cmdSpec {
+	out := map[Class]cmdSpec{ClassSetup: {argv: []string{"npm", "ci"}}}
+	raw, err := t.ReadFile("package.json")
+	if err != nil {
+		return out
+	}
+	var pkg struct {
+		Scripts         map[string]string          `json:"scripts"`
+		Dependencies    map[string]json.RawMessage `json:"dependencies"`
+		DevDependencies map[string]json.RawMessage `json:"devDependencies"`
+	}
+	if json.Unmarshal(raw, &pkg) != nil {
+		return out
+	}
+	scripts := map[Class][]string{ClassBuild: {"npm", "run", "build"}, ClassTest: {"npm", "test"}, ClassLint: {"npm", "run", "lint"}}
+	names := map[Class]string{ClassBuild: "build", ClassTest: "test", ClassLint: "lint"}
+	for c, argv := range scripts {
+		if _, ok := pkg.Scripts[names[c]]; ok {
+			out[c] = cmdSpec{argv: argv}
+		}
+	}
+	_, dep := pkg.Dependencies["prettier"]
+	_, dev := pkg.DevDependencies["prettier"]
+	if _, ok := pkg.Scripts["format"]; dep || dev {
+		out[ClassFormat] = cmdSpec{argv: []string{"npx", "prettier", "--write"}, perFile: true}
+	} else if ok {
+		out[ClassFormat] = cmdSpec{argv: []string{"npm", "run", "format", "--"}, perFile: true}
+	}
+	return out
 }
 
 // makeTargets names the Makefile target of each class.
@@ -122,6 +168,12 @@ func detectWith(t Tree, hash string) CommandSet {
 			}
 		}
 	}
+	tables := map[string]map[Class]cmdSpec{}
+	for _, row := range markerRows {
+		if slices.Contains(files, row.file) {
+			tables[row.file] = row.cmds(t)
+		}
+	}
 	cs := CommandSet{MarkerHash: hash}
 	for _, c := range classOrder {
 		if targets[makeTargets[c]] {
@@ -129,8 +181,8 @@ func detectWith(t Tree, hash string) CommandSet {
 			continue
 		}
 		for _, row := range markerRows {
-			if argv, ok := row.cmds[c]; ok && containsStr(files, row.file) {
-				cs.Commands = append(cs.Commands, Command{Class: c, Argv: append([]string(nil), argv...), Marker: row.file})
+			if spec, ok := tables[row.file][c]; ok {
+				cs.Commands = append(cs.Commands, Command{Class: c, Argv: slices.Clone(spec.argv), Marker: row.file, PerFile: spec.perFile})
 				break
 			}
 		}
@@ -139,16 +191,6 @@ func detectWith(t Tree, hash string) CommandSet {
 		cs.Commands = append(cs.Commands, Command{Class: ClassGitRead, Argv: argv})
 	}
 	return cs
-}
-
-// containsStr reports whether list holds s.
-func containsStr(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // detectLanguages lists the languages of the tree's files by extension, sorted by name.
@@ -177,12 +219,17 @@ func renderProfile(languages []string, cs CommandSet) string {
 	}
 	b.WriteString("Commands:")
 	found := false
-	for _, c := range append(append([]Class(nil), classOrder...), ClassGitRead) {
+	for _, c := range append(slices.Clone(classOrder), ClassGitRead) {
 		var cmds []string
 		for _, cmd := range cs.Commands {
-			if cmd.Class == c {
-				cmds = append(cmds, strings.Join(cmd.Argv, " "))
+			if cmd.Class != c {
+				continue
 			}
+			text := strings.Join(cmd.Argv, " ")
+			if cmd.PerFile {
+				text += " <file>"
+			}
+			cmds = append(cmds, text)
 		}
 		if len(cmds) > 0 {
 			found = true

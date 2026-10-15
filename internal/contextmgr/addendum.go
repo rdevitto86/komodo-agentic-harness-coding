@@ -3,6 +3,7 @@ package contextmgr
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // The markers that fence the Komodo block inside AGENTS.md.
@@ -102,10 +103,10 @@ func findPhrase(text string, phrases []string) (string, bool) {
 			j := i + len(np)
 			before, after := rune(' '), rune(' ')
 			if i > 0 {
-				before = lastRune(norm[:i])
+				before, _ = utf8.DecodeLastRuneInString(norm[:i])
 			}
 			if j < len(norm) {
-				after = firstRune(norm[j:])
+				after, _ = utf8.DecodeRuneInString(norm[j:])
 			}
 			if !isWordRune(before) && !isWordRune(after) {
 				return p, true
@@ -114,18 +115,4 @@ func findPhrase(text string, phrases []string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// firstRune returns the first rune of s.
-func firstRune(s string) rune {
-	for _, r := range s {
-		return r
-	}
-	return ' '
-}
-
-// lastRune returns the last rune of s.
-func lastRune(s string) rune {
-	r := []rune(s)
-	return r[len(r)-1]
 }

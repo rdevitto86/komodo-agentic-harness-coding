@@ -25,6 +25,8 @@ type MapFile struct {
 	Path    string
 	Rank    int      // inbound references; a file the goal names counts three times
 	Symbols []Symbol // functions, types, classes and exports found in the file
+	Source  bool     // true for a Go file or a file of a language with a pattern file
+	Named   bool     // true when the goal names the file
 }
 
 // Symbol is one named definition.
@@ -201,7 +203,7 @@ func buildRepoMap(t Tree, goal string, langs []langPattern) RepoMap {
 		for w := range words {
 			df[w]++
 		}
-		all = append(all, scanned{file: MapFile{Path: p, Symbols: dedupeSymbols(syms)}, words: words})
+		all = append(all, scanned{file: MapFile{Path: p, Symbols: dedupeSymbols(syms), Source: true}, words: words})
 	}
 	gf, gw := goalFields(goal), wordSet(goal)
 	rm := RepoMap{TreeHash: t.Hash(), Files: make([]MapFile, 0, len(all))}
@@ -219,15 +221,28 @@ func buildRepoMap(t Tree, goal string, langs []langPattern) RepoMap {
 			s.file.Rank += n
 		}
 		if goalNames(s.file, gf, gw) {
-			s.file.Rank *= goalBoost
+			s.file.Named = true
+			s.file.Rank = max(s.file.Rank*goalBoost, 1)
 		}
 		rm.Files = append(rm.Files, s.file)
 	}
-	sort.SliceStable(rm.Files, func(i, j int) bool {
-		if rm.Files[i].Rank != rm.Files[j].Rank {
-			return rm.Files[i].Rank > rm.Files[j].Rank
+	tier := func(f MapFile) int {
+		if f.Source || f.Named {
+			return 0
 		}
-		return rm.Files[i].Path < rm.Files[j].Path
+		return 1
+	}
+	sort.SliceStable(rm.Files, func(i, j int) bool {
+		a, b := rm.Files[i], rm.Files[j]
+		switch {
+		case tier(a) != tier(b):
+			return tier(a) < tier(b)
+		case a.Rank != b.Rank:
+			return a.Rank > b.Rank
+		case a.Named != b.Named:
+			return a.Named
+		}
+		return a.Path < b.Path
 	})
 	return rm
 }
@@ -300,11 +315,54 @@ func (rm RepoMap) Fit(budgetTokens int) RepoMap {
 	return RepoMap{TreeHash: rm.TreeHash, Files: rm.Files[:keep:keep]}
 }
 
-// renderLayout lists the tree's paths, one per line.
-func renderLayout(t Tree) string {
+// renderLayout lists the tree's paths, one per line; over the token budget, deep folders collapse to file counts.
+// A budget of 0 or less lists every path.
+func renderLayout(t Tree, budget int) string {
 	paths := t.Paths()
 	if len(paths) == 0 {
 		return noFiles
 	}
-	return strings.Join(paths, "\n")
+	full := strings.Join(paths, "\n")
+	if budget <= 0 || CountTokens(full) <= budget {
+		return full
+	}
+	deepest := 0
+	for _, p := range paths {
+		deepest = max(deepest, strings.Count(p, "/")+1)
+	}
+	for d := deepest - 1; d > 1; d-- {
+		if out := collapseLayout(paths, d); CountTokens(out) <= budget {
+			return out
+		}
+	}
+	return collapseLayout(paths, 1)
+}
+
+// collapseLayout keeps paths of at most depth segments and folds deeper ones into "dir/ (N files)" lines.
+func collapseLayout(paths []string, depth int) string {
+	counts := map[string]int{}
+	var keys []string
+	for _, p := range paths {
+		key := p
+		if segs := strings.SplitN(p, "/", depth+1); len(segs) > depth {
+			key = strings.Join(segs[:depth], "/") + "/"
+		}
+		if counts[key] == 0 {
+			keys = append(keys, key)
+		}
+		counts[key]++
+	}
+	sort.Strings(keys)
+	lines := make([]string, len(keys))
+	for i, k := range keys {
+		switch {
+		case !strings.HasSuffix(k, "/"):
+			lines[i] = k
+		case counts[k] == 1:
+			lines[i] = k + " (1 file)"
+		default:
+			lines[i] = fmt.Sprintf("%s (%d files)", k, counts[k])
+		}
+	}
+	return strings.Join(lines, "\n")
 }

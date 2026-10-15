@@ -4417,7 +4417,7 @@ type Frontmatter struct {
 
 The frontmatter is a strict subset of YAML between two `---` lines: `key: value` lines with a plain or double-quoted value, the empty list `[]`, and block lists of `  - "item"` lines. A hand-written line parser in `skills.go` reads it with `bufio.Scanner` and `strconv.Unquote`, so no YAML library is needed; any other line is refused.
 
-A marker is a glob some file path in the base tree matches, or `<glob>:<text>`, met when a file matching the glob contains the text. A glob without a `/` matches any one segment of a path, so `*.xcodeproj` matches a folder; a `/` pattern matches whole paths, and `**` stands for any number of segments. `standards-aws` writes its Terraform marker as `*.tf:provider "aws"`.
+A marker is a glob some file path in the base tree matches, or `<glob>:<text>`, met when a file matching the glob contains the text. The Context Manager applies this rule to the tree's `Paths()` for every marker, so it never depends on a `Tree`'s own `Exists`. A glob without a `/` matches any one segment of a path, so `*.xcodeproj` matches a folder; a `/` pattern matches whole paths, and `**` stands for any number of segments. `standards-aws` writes its Terraform marker as `*.tf:provider "aws"`.
 
 #### Skill index
 
@@ -4627,7 +4627,7 @@ type Warning struct {
 | `tree` | The base commit of the group, or of the repository for a plan; the Context Manager reads nothing from the working tree |
 | `files` | Used only for skill selection and for the `files` slot check |
 | `slots` | Filled by the caller; the Context Manager adds the slots it computes ([6.5](#65-behaviour)) |
-| `chain` | The agent's links with their measured contexts. The repo map is fitted to a tenth of the smallest ceiling in it; with no chain the planner's map is not fitted and a reviewer gets no map |
+| `chain` | The agent's links with their measured contexts. The repo map and the layout are each fitted to a tenth of the smallest ceiling in it; with no chain the planner's map is not fitted and a reviewer gets no map |
 
 #### Brief
 
@@ -4716,7 +4716,7 @@ An empty required slot fails the brief before any model runs. An empty optional 
 | `callers` | Caller: callers of changed symbols | Optional: reviewer |
 | `baseline` | Caller: tests failing at the base commit | Optional: tester |
 
-An agent not named in a row never receives the slot.
+An agent not named in a row never receives the slot. `repo_context` and `standards` are the text of parts 3 and 4, so a template names neither and `ParseTemplate` refuses a hole for them.
 
 #### Template file
 
@@ -4757,6 +4757,8 @@ type MapFile struct {
 	Path    string
 	Rank    int      // inbound references; a file the goal names counts three times
 	Symbols []Symbol // functions, types, classes and exports found in the file
+	Source  bool     // true for a Go file or a file of a language with a pattern file
+	Named   bool     // true when the goal names the file
 }
 
 // Symbol is one named definition.
@@ -4771,8 +4773,8 @@ A pattern file `embed/langs/<lang>.json` looks like `{"extensions": [".py"], "sy
 | Rule | Detail |
 |---|---|
 | Rank | The number of other files that name one of the file's symbols as a whole word, each file counted once per symbol |
-| Goal files | A file whose path, base name or symbol name appears as a word in the goal counts three times |
-| Order | Rank descending, then path in byte order, so equal ranks always render the same |
+| Goal files | A file whose path, base name or symbol name appears as a word in the goal counts three times, and at least 1, so the goal can lift a file nothing references |
+| Order | Source files and files the goal names first: rank descending, then files the goal names, then path in byte order. Every other file follows, by path, so it drops first and equal ranks always render the same |
 | Rendered form | One line `<path> (<rank>)` per file, then each symbol on its own line as two spaces, its kind and its name, in file order |
 
 #### Repo profile
@@ -4795,6 +4797,7 @@ type Command struct {
 	Class  Class
 	Argv   []string
 	Marker string // the file that produced it; "Makefile" when a target won
+	PerFile bool // true when the caller appends the edited file paths as final arguments
 }
 
 // CommandSet is the detected commands of one repo and the hash they are cached under.
@@ -4806,13 +4809,13 @@ type CommandSet struct {
 
 | Marker | `setup` | `build` | `test` | `lint` | `format` |
 |---|---|---|---|---|---|
-| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...` | `gofmt -l .` |
-| `package.json` | `npm ci` | `npm run build` | `npm test` | `npm run lint` | `npm run format` |
-| `Cargo.toml` | `cargo fetch` | `cargo build` | `cargo test` | `cargo clippy` | `cargo fmt --check` |
-| `pyproject.toml` | none | none | `pytest` | `ruff check` | `ruff format --check` |
+| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...` | `gofmt -w` |
+| `package.json` | `npm ci` | `npm run build` | `npm test` | `npm run lint` | `npx prettier --write` |
+| `Cargo.toml` | `cargo fetch` | `cargo build` | `cargo test` | `cargo clippy` | `cargo fmt --` |
+| `pyproject.toml` | none | none | `pytest` | `ruff check` | `ruff format` |
 | `Makefile` | `make setup` | `make build` | `make test` | `make lint` | `make fmt` |
 
-A marker with no entry for a class leaves that class empty. A `Makefile` target named like the class (`setup`, `build`, `test`, `lint`, or `fmt` for `format`) beats the language marker for that class. Markers are looked up at the repository root; the `git-read` class holds `git status`, `git diff`, `git log` and `git show`. `MarkerHash` is the SHA-256 of the marker file names and contents. The `repo_profile` slot renders `Languages: <names by extension>` and one `  <class>: <commands>` line per class found.
+A marker with no entry for a class leaves that class empty. For `package.json`, `build`, `test` and `lint` are filled only when `scripts` defines `build`, `test` or `lint`, and `format` is `npx prettier --write` when `prettier` is a dependency, else `npm run format --` when `scripts` defines `format`, else empty; `setup` needs no script. **The format class rewrites files:** its command runs on each edited file after an edit, the caller appends the file path as the last argument, and `PerFile` is true; a `Makefile` `fmt` target takes no path, runs on the whole repository, and has `PerFile` false. A `Makefile` target named like the class (`setup`, `build`, `test`, `lint`, or `fmt` for `format`) beats the language marker for that class. Markers are looked up at the repository root; the `git-read` class holds `git status`, `git diff`, `git log` and `git show`. `MarkerHash` is the SHA-256 of the marker file names and contents. The `repo_profile` slot renders `Languages: <names by extension>` and one `  <class>: <commands>` line per class found.
 
 ### 6.4 Interfaces
 
@@ -5101,7 +5104,7 @@ Slots the Context Manager computes itself:
 - **`repo_context`:** the addendum, below.
 - **`repo_profile`:** from `Detect`, cached under the marker hash.
 - **`standards`:** from `Select`.
-- **`repo_map` and `layout`:** from the tree; the map is fitted to 10% of the smallest ceiling in the agent's chain, so one brief suits every link.
+- **`repo_map` and `layout`:** from the tree; each is fitted to its own budget of 10% of the smallest ceiling in the agent's chain, so one brief suits every link. A layout over its budget lists the paths to the deepest folder depth that fits, and folds deeper folders into `<dir>/ (N files)` lines; with no chain it lists every path.
 
 **The addendum**
 
@@ -5139,9 +5142,9 @@ The Context Manager holds the item table in memory and keeps no state file. It r
 |---|---|---|
 | Item enabled | A `set` event with `enabled: false` | The item is absent from every later selection and pull |
 | Item disabled | A `set` event with `enabled: true` | The item is selectable by the agents in its `allow` list |
-| Local item loaded | `reload` or start | The file is parsed, scanned, fingerprinted and disabled until a `set` event; a reload keeps the state of a skill that is still there |
+| Local item loaded | `reload` or start | The file is parsed, scanned, fingerprinted and disabled until a `set` event; a reload keeps the state and the table place of a skill that is still there, and a new skill goes last |
 
-An event that arrives while a brief is being built waits for the build to end; the table's lock makes each brief see one consistent table.
+`GetContext` holds the table's lock only while it picks the skills and the tools, so each brief sees one consistent table. An event that arrives later never changes a brief already picked and never waits for a file read, the repo map or the addendum.
 
 ### 6.7 Invariants and Failures
 
@@ -5196,7 +5199,7 @@ Fixed constants, not settings:
 | Constant | Value | Effect |
 |---|---|---|
 | Brief ceiling | Half the link's measured context | `Place` rejects a link above it |
-| Repo map budget | 10% of the smallest ceiling in the agent's chain | The map drops its lowest-ranked entries to fit |
+| Repo map and layout budget | 10% of the smallest ceiling in the agent's chain, for each | The map drops its lowest-ranked entries to fit; the layout folds deep folders into counts |
 | Boost for files the goal names | 3 times | Their inbound references count three times |
 | Skill size limit | 6,000 tokens | A local skill over it is refused; a Go test fails a shipped skill over it |
 | Pull reply cap for skills | The skill size limit | The 4 KB tool-reply cap does not apply |
