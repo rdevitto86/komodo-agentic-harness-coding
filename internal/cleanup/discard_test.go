@@ -72,8 +72,8 @@ func TestDiscardKeepWorktreeLeavesCheckout(t *testing.T) {
 	if !kept {
 		t.Fatalf("kept = %+v", rep.Kept)
 	}
-	if e.hasBranch(testBranch) {
-		t.Fatal("branch survived")
+	if !e.hasBranch(testBranch) {
+		t.Fatal("the branch of a kept worktree was deleted")
 	}
 }
 

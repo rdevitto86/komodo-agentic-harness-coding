@@ -28,7 +28,7 @@ func TestCompleteNotPublishedRemovesNothing(t *testing.T) {
 	if len(rep.Removed) != 0 || !exists(g.wt) || !e.hasBranch(testBranch) {
 		t.Fatalf("something was removed: %+v", rep)
 	}
-	if got := e.log.names("container.", "git.", "task."); len(got) != 0 {
+	if got := e.log.names("container.", "git.Remove", "git.Delete", "git.Discard", "task."); len(got) != 0 {
 		t.Fatalf("calls = %v, want none", got)
 	}
 }
@@ -169,7 +169,7 @@ func TestCompleteKeepsWorktreeWithUntrackedFile(t *testing.T) {
 	if !exists(filepath.Join(g.wt, "notes.txt")) {
 		t.Fatal("untracked file was deleted")
 	}
-	if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindWorktree || rep.Kept[0].Name != g.wt {
+	if len(rep.Kept) != 2 || rep.Kept[0].Kind != KindWorktree || rep.Kept[0].Name != g.wt {
 		t.Fatalf("kept = %+v", rep.Kept)
 	}
 	if e.errs.count() != 0 {

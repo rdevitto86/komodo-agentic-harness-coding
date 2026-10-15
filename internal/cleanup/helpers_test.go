@@ -18,7 +18,7 @@ import (
 const (
 	testRepo   = "github.com/acme/shop"
 	testBranch = "komodo/ep-1-tg-1.2"
-	testEpic = "komodo/ep-1"
+	testEpic   = "komodo/ep-1"
 	epicRef    = "origin/komodo/ep-1"
 )
 
@@ -58,8 +58,9 @@ func (l *callLog) names(prefixes ...string) []string {
 
 // fakeBoxes is a Containers that logs and can fail.
 type fakeBoxes struct {
-	log *callLog
-	err error
+	log    *callLog
+	err    error
+	groups []string // groups that have a container
 }
 
 // Remove logs the removal.
@@ -67,6 +68,9 @@ func (b *fakeBoxes) Remove(_ context.Context, group string) error {
 	b.log.add("container.Remove " + group)
 	return b.err
 }
+
+// List returns the groups the fake docker holds containers for.
+func (b *fakeBoxes) List(context.Context) ([]string, error) { return b.groups, nil }
 
 // fakeTask is a TaskGroup that logs and can fail.
 type fakeTask struct {
@@ -80,16 +84,34 @@ func (t *fakeTask) CloseTaskGroup(context.Context) error {
 	return t.err
 }
 
-// fakeLeases serves lease records by group.
-type fakeLeases struct{ recs map[string]lease.Lease }
+// fakeLeases serves lease records by group; after flipAfter reads a group's lease turns into a live run's.
+type fakeLeases struct {
+	mu        sync.Mutex
+	recs      map[string]lease.Lease
+	log       *callLog
+	flipAfter int // reads before the holder changes; 0 means never
+	reads     int
+}
 
-// Holder returns the record of a group.
+// Holder returns the record of a group, turning it into a new run's lease after flipAfter reads.
 func (f *fakeLeases) Holder(_ context.Context, repo, group string) (lease.Lease, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if repo != testRepo {
 		return lease.Lease{}, false, nil
 	}
 	l, ok := f.recs[group]
+	f.reads++
+	if ok && f.flipAfter > 0 && f.reads > f.flipAfter {
+		l.Run = "new"
+	}
 	return l, ok, nil
+}
+
+// LockGroup logs the lock and its release.
+func (f *fakeLeases) LockGroup(_ context.Context, _, group string) (func(), error) {
+	f.log.add("lease.Lock " + group)
+	return func() { f.log.add("lease.Unlock " + group) }, nil
 }
 
 // fakeGroups serves the unfinished groups.
@@ -232,11 +254,14 @@ func (g execGit) DiscardBranch(ctx context.Context, clone, branch, expectTip str
 	return err
 }
 
+// Fetch brings the remote's branches in without pruning.
+func (g execGit) Fetch(_ context.Context, clone, remote string) error {
+	_, err := g.git(clone, "fetch", remote)
+	return err
+}
+
 // Holds fetches the remote and checks the tip against one reference or every remote branch.
 func (g execGit) Holds(_ context.Context, clone, remote, contains, tip string) (string, bool, error) {
-	if _, err := g.git(clone, "fetch", "--prune", remote); err != nil {
-		return "", false, err
-	}
 	refs := []string{contains}
 	if contains == "" {
 		out, err := g.git(clone, "for-each-ref", "--format=%(refname)", "refs/remotes/"+remote+"/")
@@ -271,6 +296,14 @@ func (r *recGit) hit(name, detail string) error {
 		return err
 	}
 	return nil
+}
+
+// Fetch logs and forwards.
+func (r *recGit) Fetch(ctx context.Context, clone, remote string) error {
+	if err := r.hit("git.Fetch", remote); err != nil {
+		return err
+	}
+	return r.Git.Fetch(ctx, clone, remote)
 }
 
 // RemoveWorktree logs and forwards.
@@ -375,7 +408,7 @@ func newEnv(t *testing.T) *env {
 	e.log = &callLog{}
 	e.boxes = &fakeBoxes{log: e.log}
 	e.task = &fakeTask{log: e.log}
-	e.leases = &fakeLeases{recs: map[string]lease.Lease{}}
+	e.leases = &fakeLeases{recs: map[string]lease.Lease{}, log: e.log}
 	e.groups = &fakeGroups{}
 	e.rep = &fakeReporter{}
 	e.errs = &fakeErrors{}

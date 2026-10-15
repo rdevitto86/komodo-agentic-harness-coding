@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
@@ -25,17 +26,25 @@ type DiscardedFact struct {
 
 // run is one call's working state: the group it cleans, the report it fills and whether it only lists.
 type run struct {
-	h     *Handler
-	ctx   context.Context
-	group string
-	rep   *Report
-	dry   bool
+	h        *Handler
+	ctx      context.Context
+	group    string
+	rep      *Report
+	dry      bool
+	guard    bool  // re-read the lease before each removal and stop when a live run holds the group
+	stopped  bool  // the guard saw a live holder; no further step runs
+	noRemote error // why the remote's branches are unknown; branches are then kept
 }
 
 // refused reports whether err is a refusal on purpose rather than a failure.
 func refused(err error) bool {
 	var r interface{ Refused() bool }
 	return errors.As(err, &r) && r.Refused()
+}
+
+// komodoBranch reports whether name is a branch under komodo/, the only branches the handler may delete.
+func komodoBranch(name string) bool {
+	return strings.HasPrefix(name, "komodo/") && len(name) > len("komodo/") && !strings.Contains(name, "..")
 }
 
 // say relays a progress fact; a failed relay never stops a removal.
@@ -67,6 +76,35 @@ func (h *Handler) holder(ctx context.Context, group string) (l lease.Lease, have
 	return l, true, l.State == lease.StateHeld, nil
 }
 
+// lockGroup holds the Lease Manager's lock on a group when it offers one; otherwise it returns a no-op release.
+func (h *Handler) lockGroup(ctx context.Context, group string) (func(), error) {
+	if gl, ok := h.Lease.(GroupLocker); ok {
+		return gl.LockGroup(ctx, h.Repo, group)
+	}
+	return func() {}, nil
+}
+
+// proceed reports whether the next removal may run; with the guard on it re-reads the lease first and stops the call for good on a live holder.
+func (r *run) proceed() bool {
+	if r.stopped {
+		return false
+	}
+	if !r.guard || r.dry {
+		return true
+	}
+	_, _, live, err := r.h.holder(r.ctx, r.group)
+	if err == nil && !live {
+		return true
+	}
+	r.stopped = true
+	reason := ErrLeaseHeld.Error()
+	if err != nil {
+		reason = err.Error()
+	}
+	r.kept(KindWorktree, r.group, reason)
+	return false
+}
+
 // removed lists a removed item.
 func (r *run) removed(kind, name string) {
 	r.rep.Removed = append(r.rep.Removed, Item{Kind: kind, Name: name})
@@ -87,7 +125,7 @@ func (r *run) fail(kind, name string, err error) {
 
 // container removes the group's Docker container; with no Docker wired the step has nothing to do.
 func (r *run) container() {
-	if r.h.Boxes == nil {
+	if r.h.Boxes == nil || !r.proceed() {
 		return
 	}
 	if !r.dry {
@@ -102,7 +140,7 @@ func (r *run) container() {
 // checkouts removes the group's tester checkout and session temporary folder.
 func (r *run) checkouts() {
 	for _, c := range []struct{ kind, root string }{{KindTester, r.h.Roots.Testers}, {KindTemp, r.h.Roots.Temp}} {
-		if c.root == "" {
+		if c.root == "" || !r.proceed() {
 			continue
 		}
 		p, err := child(c.root, r.group)
@@ -125,18 +163,32 @@ func (r *run) checkouts() {
 	}
 }
 
-// worktree removes a worktree under root; force also drops work the tip lacks. A missing worktree counts as removed already.
-func (r *run) worktree(root, path string, force bool) {
+// worktree removes a worktree under root; force also drops work the tip lacks. It reports whether the worktree is now gone.
+// A link in its place is unlinked and never handed to git, which would follow it.
+func (r *run) worktree(root, path string, force bool) bool {
 	if err := inside(root, path); err != nil {
 		r.fail(KindWorktree, path, err)
-		return
+		return false
 	}
-	was := exists(path)
+	if !r.proceed() {
+		return false
+	}
+	fi, lerr := os.Lstat(path)
+	if lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if !r.dry {
+			if err := os.Remove(path); err != nil {
+				r.fail(KindWorktree, path, err)
+				return false
+			}
+		}
+		r.removed(KindWorktree, path)
+		return true
+	}
 	if r.dry {
-		if was {
+		if lerr == nil {
 			r.removed(KindWorktree, path)
 		}
-		return
+		return true
 	}
 	var err error
 	if force {
@@ -146,15 +198,35 @@ func (r *run) worktree(root, path string, force bool) {
 	}
 	if err != nil {
 		r.fail(KindWorktree, path, err)
-		return
+		return false
 	}
-	if was {
+	if lerr == nil {
 		r.removed(KindWorktree, path)
 	}
+	return true
+}
+
+// keepBranch lists a branch kept because its worktree is kept.
+func (r *run) keepBranch(name string) {
+	if name != "" {
+		r.kept(KindBranch, name, "kept with its worktree")
+	}
+}
+
+// allowed reports whether a branch may be deleted; one outside komodo/ is kept and listed.
+func (r *run) allowed(name string) bool {
+	if komodoBranch(name) {
+		return true
+	}
+	r.kept(KindBranch, name, "not a branch under komodo/")
+	return false
 }
 
 // branch deletes a local branch that still points at tip and is in the history of in; a branch already gone counts as done.
 func (r *run) branch(name, tip, in string) {
+	if !r.allowed(name) || !r.proceed() {
+		return
+	}
 	cur, ok, err := r.h.Git.BranchTip(r.ctx, r.h.Clone, name)
 	if err != nil {
 		r.fail(KindBranch, name, err)
@@ -180,12 +252,19 @@ func (r *run) branch(name, tip, in string) {
 
 // redundantBranch deletes a group's branch when the remote holds its tip in any branch; otherwise it keeps the branch.
 func (r *run) redundantBranch(name string) {
+	if !r.allowed(name) {
+		return
+	}
 	tip, ok, err := r.h.Git.BranchTip(r.ctx, r.h.Clone, name)
 	if err != nil {
 		r.fail(KindBranch, name, err)
 		return
 	}
 	if !ok {
+		return
+	}
+	if r.noRemote != nil {
+		r.kept(KindBranch, name, "remote not reachable: "+r.noRemote.Error())
 		return
 	}
 	ref, held, err := r.h.Git.Holds(r.ctx, r.h.Clone, r.h.Remote, "", tip)

@@ -10,7 +10,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// UnusedVersions returns the installed binary versions that no unfinished group names, oldest first.
+// UnusedVersions returns the installed binary versions that no unfinished group names and that is not the running binary's, oldest first; it fails closed when a version is unknown.
 func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error) {
 	if h.Groups == nil {
 		return nil, errors.New("no group reader to name the versions in use")
@@ -19,8 +19,14 @@ func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list unfinished groups: %w", err)
 	}
-	named := map[string]bool{}
+	if h.Current == "" {
+		return nil, fmt.Errorf("version of the running binary: %w", ErrUnknownVersion)
+	}
+	named := map[string]bool{h.Current: true}
 	for _, g := range used {
+		if g.Version == "" {
+			return nil, fmt.Errorf("unfinished group %s: %w", g.Group, ErrUnknownVersion)
+		}
 		named[g.Version] = true
 	}
 	ents, err := os.ReadDir(h.Roots.Versions)

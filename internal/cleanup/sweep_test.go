@@ -58,7 +58,7 @@ func TestSweepSkipsGroupAliveRunHolds(t *testing.T) {
 	}
 }
 
-func TestSweepKeepsUnpublishedBranchAndRemovesCleanWorktree(t *testing.T) {
+func TestSweepKeepsUnpublishedBranchOfClosedGroup(t *testing.T) {
 	e := newEnv(t)
 	g := e.addGroup("g1", testBranch)
 	e.holdLease(g, lease.StateRevoked)

@@ -60,5 +60,6 @@ const (
 var (
 	ErrNotPublished = errors.New("remote does not hold the group's tip") // Complete: nothing is removed
 	ErrLeaseHeld    = errors.New("a live run holds the group")           // Sweep, Discard: the group is skipped
+	ErrUnknownVersion = errors.New("a binary version is unknown, so none can be deleted")
 	ErrOutsideRoots = errors.New("path is outside the folders cleanup may delete in")
 )
