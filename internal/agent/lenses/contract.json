@@ -1,0 +1,43 @@
+{
+  "lens": "contract",
+  "when": "filter",
+  "applies": {
+    "globs": [],
+    "markers": [
+      "^func (\\([^)]*\\) )?[A-Z]",
+      "^type [A-Z]",
+      "^(var|const) [A-Z]",
+      "^export ",
+      "^pub ",
+      "^public "
+    ]
+  },
+  "rules": [
+    {
+      "id": "contract.1",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "every caller of a changed exported symbol still compiles and behaves as before",
+      "evidence": "the call site that no longer matches the changed symbol",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "contract.2",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "a task intends each changed exported symbol",
+      "evidence": "the changed declaration no task names",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

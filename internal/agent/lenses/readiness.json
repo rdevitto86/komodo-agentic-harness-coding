@@ -1,0 +1,36 @@
+{
+  "lens": "readiness",
+  "when": "always",
+  "applies": {
+    "globs": [],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "readiness.1",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "changed behaviour has a test that fails without the change",
+      "evidence": "the changed function with no test that covers it",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "readiness.2",
+      "severity": "minor",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "documents and the changelog are touched when a task says so",
+      "evidence": "the task line that names the document",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

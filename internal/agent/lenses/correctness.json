@@ -1,0 +1,62 @@
+{
+  "lens": "correctness",
+  "when": "always",
+  "applies": {
+    "globs": [],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "correctness.1",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "the logic does what the task card says for every input the card names",
+      "evidence": "the line whose result differs from the card",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.2",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "an error return or failure is handled, not ignored",
+      "evidence": "the line that drops or swallows the error",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.3",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "nil, empty and out-of-range values cannot crash the changed code",
+      "evidence": "the line that dereferences or indexes without a check",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.4",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "files, connections, locks and processes opened by the changed code are released on every path",
+      "evidence": "the line that opens the resource with no matching release",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}
