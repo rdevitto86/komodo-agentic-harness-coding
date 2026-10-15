@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"slices"
 )
 
 // ProbeResult is what Probe records for one link.
@@ -31,5 +32,22 @@ const DefaultWindow = 262144
 
 // ProbeAll probes each link and returns one result per link; a failing link is a result with OK false, never an error.
 func (c *Client) ProbeAll(ctx context.Context) []ProbeResult {
-	return nil
+	links := make([]Link, 0, len(c.providers))
+	for l := range c.providers {
+		links = append(links, l)
+	}
+	slices.Sort(links)
+	out := make([]ProbeResult, 0, len(links))
+	for _, l := range links {
+		res, err := c.Probe(ctx, l)
+		res.Link = l
+		if err != nil {
+			res.OK = false
+			if res.Reason == "" {
+				res.Reason = err.Error()
+			}
+		}
+		out = append(out, res)
+	}
+	return out
 }

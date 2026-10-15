@@ -426,7 +426,7 @@ func TestAnthropicProbeAndProfile(t *testing.T) {
 }
 
 func TestAnthropicProbeRefusedKey(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, `{"error":{}}`, 401) }))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, `{"error":{}}`, http.StatusUnauthorized) }))
 	defer srv.Close()
 	a, _ := NewAnthropic(AnthropicOptions{BaseURL: srv.URL, Key: apiKey})
 	if _, err := a.Probe(context.Background()); !errors.Is(err, ErrUnauthorized) {

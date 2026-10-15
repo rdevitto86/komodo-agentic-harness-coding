@@ -76,14 +76,6 @@ func NewAnthropic(opts AnthropicOptions) (*Anthropic, error) {
 // Link returns AnthropicAPI.
 func (a *Anthropic) Link() Link { return AnthropicAPI }
 
-// now returns the adapter's clock.
-func (a *Anthropic) now() time.Time {
-	if a.opts.Now != nil {
-		return a.opts.Now()
-	}
-	return time.Now()
-}
-
 // request builds one authenticated request.
 func (a *Anthropic) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	var rd *bytes.Reader
