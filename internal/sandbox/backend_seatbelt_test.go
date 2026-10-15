@@ -60,7 +60,7 @@ func TestSeatbeltCommandWrapsTheArgv(t *testing.T) {
 	sb := NewSeatbelt(SeatbeltOptions{GOOS: "darwin", Home: "/Users/dev"})
 	s := testSpec(t, RoleBuilder)
 	inst, _ := sb.Prepare(context.Background(), s)
-	cmd, err := sb.Command(context.Background(), inst, s, Command{Argv: []string{"go", "build", "-buildvcs=false", "./..."}, Env: []string{"GOCACHE=" + s.Writable[1], "TOKEN=x"}})
+	cmd, err := sb.Command(context.Background(), inst, s, Command{Argv: []string{"go", "build", "./..."}, Env: []string{"GOCACHE=" + s.Writable[1], "TOKEN=x"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestSeatbeltLive(t *testing.T) {
 	if goBin, err := exec.LookPath("go"); err == nil {
 		s.Toolchains = []string{filepath.Dir(goBin)}
 	}
-	sb :=NewSeatbelt(SeatbeltOptions{Home: root})
+	sb := NewSeatbelt(SeatbeltOptions{Home: root})
 	m := NewManager(map[string]Backend{RoleBuilder: sb}, nil)
 	inst, err := m.CreateSandboxInstance(context.Background(), s)
 	if err != nil {

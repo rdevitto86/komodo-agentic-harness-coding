@@ -134,7 +134,7 @@ func TestSeatbeltProfileOrdersItsRules(t *testing.T) {
 	masked := at(`(deny file-read* (literal "/Users/dev/.komodo/wt/shop/g1/.env")`)
 	writes := at(`(allow file-write* (subpath "/Users/dev/.komodo/wt/shop/g1")`)
 	gitDeny := at(`(deny file-write* (subpath "/Users/dev/.komodo/wt/shop/g1/.git"))`)
-	if !(closed < reopened && reopened < masked && masked < writes && writes < gitDeny) {
+	if closed >= reopened || reopened >= masked || masked >= writes || writes >= gitDeny {
 		t.Fatalf("rule order wrong: %d %d %d %d %d", closed, reopened, masked, writes, gitDeny)
 	}
 	for _, want := range []string{
