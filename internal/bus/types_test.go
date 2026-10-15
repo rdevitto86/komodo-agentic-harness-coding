@@ -17,6 +17,7 @@ var eventNameRows = []eventNameRow{
 	{"run.done", Key{TypeRunComplete, "done"}, false},
 	{"run.stopped", Key{TypeRunComplete, "stopped"}, false},
 	{"group.paused", Key{TypeRunStatus, "group.paused"}, false},
+	{"group.resumed", Key{TypeRunStatus, "group.resumed"}, false},
 	{"group.blocked", Key{TypeRunFailure, "group.blocked"}, false},
 	{"lease.lost", Key{TypeRunFailure, "lease.lost"}, false},
 	{"stage.enter", Key{TypeRunStatus, "stage.enter"}, false},

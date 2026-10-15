@@ -93,32 +93,6 @@ func TestKilledBeforeAppend(t *testing.T) {
 	}
 }
 
-// TestQueueOverflowWritesGapLine checks a queue that overflowed leaves a gap line in the run's log.
-func TestQueueOverflowWritesGapLine(t *testing.T) {
-	f := newFixture(t, 3, nil)
-	f.publish(f.runStart("run-a", "g1"))
-	for range 10 {
-		f.publish(bus.Event{Type: bus.TypeRunStop, Run: "run-a", Data: &bus.RunStop{Target: "x"}})
-	}
-	if f.svc.sub.Dropped() == 0 {
-		t.Fatal("fixture dropped nothing")
-	}
-	stop := f.start()
-	stop()
-	var gaps int
-	for _, l := range lines(t, filepath.Join(f.repoDir, LogName("run-a"))) {
-		if strings.Contains(l, `"gap":true`) {
-			gaps++
-			if !strings.Contains(l, `"dropped":`) {
-				t.Errorf("gap line has no count: %s", l)
-			}
-		}
-	}
-	if gaps != 1 {
-		t.Fatalf("%d gap lines, want 1", gaps)
-	}
-}
-
 // TestSecretIsMasked checks a line holding a secret is written masked.
 func TestSecretIsMasked(t *testing.T) {
 	mask := func(s string) string { return strings.ReplaceAll(s, "sk-SECRET", "***") }
@@ -136,8 +110,8 @@ func TestSecretIsMasked(t *testing.T) {
 	}
 }
 
-// TestFailedWriteReportsOnce checks a failing log gives one fault report per failure streak and the loop keeps reading.
-func TestFailedWriteReportsOnce(t *testing.T) {
+// TestFailedWriteIsRecordedOnce checks a failing log gives one failure record in the run's figures and the loop keeps reading.
+func TestFailedWriteIsRecordedOnce(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	if err := os.MkdirAll(filepath.Join(f.repoDir, LogName("run-bad")), 0o755); err != nil {
 		t.Fatal(err)
@@ -149,17 +123,47 @@ func TestFailedWriteReportsOnce(t *testing.T) {
 	}
 	f.publish(bus.Event{Type: bus.TypeRunStop, Run: "run-ok", Data: &bus.RunStop{Target: "y"}})
 	stop()
-	var reports int
-	for len(f.errs.Events) > 0 {
-		if e := <-f.errs.Events; e.Run == "run-bad" {
-			reports++
-		}
+	runs, err := NewReader(f.repoDir).Runs(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if reports != 1 {
-		t.Fatalf("%d reports, want 1", reports)
+	for _, r := range runs {
+		switch r.Run {
+		case "run-bad":
+			if len(r.Failures) != 1 || r.Failures[0].Kind != "write" || r.Failures[0].Time.IsZero() {
+				t.Errorf("run-bad failures = %+v, want one write failure", r.Failures)
+			}
+		case "run-ok":
+			if len(r.Failures) != 0 {
+				t.Errorf("run-ok failures = %+v", r.Failures)
+			}
+		}
 	}
 	if n := len(lines(t, filepath.Join(f.repoDir, LogName("run-ok")))); n != 2 {
 		t.Fatalf("run-ok log has %d lines, want 2", n)
+	}
+	if got := lines(t, filepath.Join(f.homeDir, "engine.jsonl")); len(got) != 0 {
+		t.Fatalf("engine.jsonl = %v, want nothing for a failure that has a run", got)
+	}
+}
+
+// TestLostEventsReplayAsAGap checks events a failed write lost show as a dropped gap once writes work again.
+func TestLostEventsReplayAsAGap(t *testing.T) {
+	f := newFixture(t, 100, nil)
+	bad := filepath.Join(f.repoDir, LogName("run-a"))
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	f.svc.handle(ctx, ev(0, bus.TypeRunStart, "", "run-a", "", f.runStart("run-a", "g1").Data))
+	f.svc.handle(ctx, ev(1, bus.TypeRunStop, "", "run-a", "", &bus.RunStop{Target: "lost"}))
+	if err := os.Remove(bad); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.handle(ctx, ev(2, bus.TypeRunStop, "", "run-a", "", &bus.RunStop{Target: "kept"}))
+	got, err := NewReader(f.repoDir).Replay(ctx, "run-a", "")
+	if err != nil || len(got.Events) != 1 || len(got.Gaps) != 1 || got.Gaps[0].Kind != "dropped" || got.Gaps[0].Dropped != 2 || got.Gaps[0].After != 0 {
+		t.Fatalf("replay = %+v, %v", got, err)
 	}
 }
 

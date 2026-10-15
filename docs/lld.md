@@ -463,7 +463,7 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 `komodo run tg-1.2` writes, and the engine answers:
 
 ```json
-{"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","verb":"run","target":"tg-1.2","root":"/Users/rad/code/komodo","flags":{},"event":{"type":"run-start","subtype":"","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T09:12:04Z","data":{"target":"tg-1.2","groups":["tg-1.2"],"source":"cli","repo":"github.com/rdevitto86/komodo-agentic-harness-coding","root":"/Users/rad/code/komodo"}}}
+{"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","verb":"run","target":"tg-1.2","root":"/Users/rad/code/komodo","flags":{},"event":{"type":"run-start","subtype":"","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T09:12:04Z","data":{"target":"tg-1.2","groups":["tg-1.2"],"source":"cli","repo":"github.com/rdevitto86/komodo-agentic-harness-coding","root":"/Users/rad/code/komodo","common_dir":"/Users/rad/code/komodo/.git"}}}
 {"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","status":"ok","data":{"run_id":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"},"final":true}
 ```
 
@@ -1002,7 +1002,7 @@ flowchart LR
    2. Types and allowed values of every flag; a failure is a usage error, exit 2.
    3. Terminal check: when `NeedsTerminal(c)` is true and no controlling terminal is attached, refuse with exit 1.
    4. Settings guard: call `Config.Verify`. On `ErrTampered` the command's `TamperPolicy` decides.
-3. **Resolve.** Take the repository id from the working folder or `-C`. The id is the normalized origin address, or the git common directory path when there is no remote, so every worktree of a repository shares one id. Then resolve the command's `(id)`: a label such as `ep-1` or `tg-1.2` is matched against the task lists under `docs/backlog/` (read with the Intake Handler's `Load`), and an epic label expands to its group labels. A run id is a version 7 UUID. A label that names no epic or group is a usage error, exit 2; the engine refuses a run id it does not know.
+3. **Resolve.** Take the repository id from the working folder or `-C`. The id is the normalized origin address, or the git common directory path when there is no remote, so every worktree of a repository shares one id. It also resolves that repository's git common directory, which it puts in `common_dir` of the `run-start` it publishes. Then resolve the command's `(id)`: a label such as `ep-1` or `tg-1.2` is matched against the task lists under `docs/backlog/` (read with the Intake Handler's `Load`), and an epic label expands to its group labels. A run id is a version 7 UUID. A label that names no epic or group is a usage error, exit 2; the engine refuses a run id it does not know.
 4. **Dispatch.** Call the handler with the filled `Call`. With `--dry-run`, the owning part prints each write the command would make and makes none.
 5. **Render.** Marshal `Result.Shape` and `Result.Facts` into a message, call `FormatJSON()`, place its report in `report` and its verdict in `verdict`, print the envelope under `--json` and the text otherwise, and return the exit code of `Result.Outcome`.
 
@@ -1157,7 +1157,8 @@ The `run-start` the engine publishes when the entry for `komodo run ep-1 --sched
     "source": "cli",
     "schedule": "2026-10-16T02:00:00-07:00",
     "repo": "github.com/rdevitto86/komodo-agentic-harness-coding",
-    "root": "/Users/rad/code/komodo"
+    "root": "/Users/rad/code/komodo",
+    "common_dir": "/Users/rad/code/komodo/.git"
   }
 }
 ```
@@ -2712,6 +2713,7 @@ type RunStart struct {
 	Schedule time.Time `json:"schedule,omitzero"` // RFC 3339 start time of a scheduled run; absent otherwise
 	Repo     string    `json:"repo"`              // the repository id the run belongs to
 	Root     string    `json:"root"`              // the repository root on this machine
+	CommonDir string   `json:"common_dir"`        // the repository's git common directory, which holds its Komodo files
 	Request  ID        `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 
@@ -2780,6 +2782,7 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `run.done` | `run-complete` / `done` | `done`, `blocked` |
 | `run.stopped` | `run-complete` / `stopped` | `signal`, `saved` |
 | `group.paused` | `run-status` / `group.paused` | `until`, `link` |
+| `group.resumed` | `run-status` / `group.resumed` | `from`, `to` |
 | `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail`, `reason`, `prior`, `paths` |
 | `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` |
 | `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` |
@@ -2856,6 +2859,15 @@ type GroupPaused struct {
 	Until time.Time `json:"until"` // the provider's reset time
 	Link  string    `json:"link"`  // the link whose limit paused the group
 }
+
+// GroupResumed is the data of run-status / group.resumed: a group left Paused or Blocked.
+type GroupResumed struct {
+	From string `json:"from"` // the stage the group was held in
+	To   string `json:"to"`   // the stage it re-enters
+}
+
+// EventKey binds GroupResumed to run-status / group.resumed.
+func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} }
 
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
@@ -3184,8 +3196,6 @@ func Register(k Key, newData func() Payload)
 
 The CLI is not in the engine's process. "The CLI publishes" means the CLI sends the event over the control socket, and the engine's bus broadcasts it ([4.5](#45-behaviour)). The CLI's subscriptions travel back over the same connection.
 
-The diagram also draws an arrow from the Metrics Service to the Error Handler: [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))]
-
 ### 4.5 Behaviour
 
 #### Where the bus runs
@@ -3294,7 +3304,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 |---|---|---|
 | [G-223](#g-223) | Who publishes the skill and mcp events | The publisher and subscriber table |
 | [G-224](#g-224) | Which part consumes next, and which event types the CLI subscribes to | The publisher and subscriber table |
-| [G-225](#g-225) | What the Metrics Service sends the Error Handler | The publisher and subscriber table |
 
 ## 5. Intake Handler
 
@@ -3647,7 +3656,7 @@ After `next`, the handler publishes `run-start` for the groups it just wrote. It
 {
   "type": "run-start", "subtype": "", "run": "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25", "group": "",
   "time": "2026-10-14T21:09:40Z",
-  "data": {"target": "ep-2", "groups": ["tg-2.1", "tg-2.2"], "source": "intake", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop"}
+  "data": {"target": "ep-2", "groups": ["tg-2.1", "tg-2.2"], "source": "intake", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop", "common_dir": "/Users/dev/src/shop/.git"}
 }
 ```
 
@@ -3656,7 +3665,7 @@ After `next`, the handler publishes `run-start` for the groups it just wrote. It
 | `data.target` | The label of the epic the plan wrote, such as `ep-2` for the folder `epic-2` |
 | `data.groups` | The labels of the groups the plan wrote, in dependency order; a group not written by this plan is absent |
 | `data.source` | `intake`; a `run-start` from the CLI says `cli` |
-| `data.repo`, `data.root` | The repository id and the repository root the plan was written in |
+| `data.repo`, `data.root`, `data.common_dir` | The repository id, the repository root and the git common directory the plan was written in |
 | `run` | The run id of this `run-start`: a new version 7 UUID, not the run id of the `plan` event |
 
 A group label is the group's folder name, such as `tg-2.1`. The full `run-start` shape is in [chapter 4](#4-event-bus).
@@ -5367,7 +5376,7 @@ The `run-start` event's `data` says what to run, so the Runtime Manager never se
   "type": "run-start",
   "run": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72",
   "time": "2026-10-15T18:20:00Z",
-  "data": {"target": "all", "groups": ["tg-1.1", "tg-1.2", "tg-2.1"], "source": "cli", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop"}
+  "data": {"target": "all", "groups": ["tg-1.1", "tg-1.2", "tg-2.1"], "source": "cli", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop", "common_dir": "/Users/dev/src/shop/.git"}
 }
 ```
 
@@ -5529,7 +5538,7 @@ The Runtime Manager publishes with the shape every event has: `type`, `subtype`,
 | Type | Subtype | Published when |
 |---|---|---|
 | `run-status` | `stage.enter` | A group enters a stage |
-| `run-status` | `group.paused`, `group.continued` | A group pauses; a paused or blocked group continues |
+| `run-status` | `group.paused`, `group.resumed`, `group.continued` | A group pauses; a paused or blocked group leaves that state; a blocked group continues |
 | `run-failure` | `group.blocked` | A group blocks; `data.reason` names why |
 | `run-status` | `group.done` | A group reaches Done |
 | `run-status` | `session.start`, `session.end`, `session.resume-lost` | A session starts or ends; a handle failed and a fresh session replaced it |
@@ -5766,7 +5775,7 @@ A `wall` block is answered the same way: `--approve` grants more time and resets
 | `budget` | `TokensUsed` to 0 | [TODO: whether reaching the group token cap blocks the group ([G-246](#g-246))] |
 | a `spending` pause | `Pause` cleared | Never; the group returns to `Prior` and the Resource Manager pauses it again if the ceiling still holds |
 
-A continue that is accepted returns the group to `Prior`, raises the epoch, enters the stage and publishes `group.continued`. A continue that matches nothing publishes `request.refused` with the reason, which wakes a waiting orchestrator.
+A continue that is accepted returns the group to `Prior`, raises the epoch, enters the stage and publishes `group.resumed` and `group.continued`. A continue that matches nothing publishes `request.refused` with the reason, which wakes a waiting orchestrator.
 
 `run-continue` with no group continues every Paused and Blocked group of the run. A group in a working stage ignores it.
 
@@ -5908,6 +5917,7 @@ type Transition struct {
 - Into a working stage: `run-status` / `stage.enter`, and the epoch rises.
 - Out of Paused to `Prior`: no `stage.enter` and the epoch stays; the group continues in place.
 - Into Paused, Blocked or Done: `group.paused`, `group.blocked` or `group.done`.
+- Out of Paused or Blocked into a working stage: `group.resumed`, with the stage the group was held in and the stage it re-enters.
 - `Prior` is set only when a group leaves a working stage, so a group that blocks from Paused keeps the stage it paused in.
 
 #### Stage moves
@@ -5923,16 +5933,16 @@ type Transition struct {
 | 7 | Commit | `stage.done` | Published | Cleanup | Epoch + 1; orders `enter_stage` Cleanup; emits `stage.enter` |
 | 8 | Cleanup | `group.closed` | | Done | `Outcome` complete; returns the slot; calls `LeaseStore.Release`; emits `group.done` |
 | 9 | Build, Test and Review | `session.end` reason `paused` | No allowed link left | Paused | `Prior` = stage; `Resume` added; `Pause` set; emits `group.paused` |
-| 10 | Paused | `timer.due` | Reason is not `pause_timeout` | `Prior` | Same epoch; orders `enter_stage` from `Resume` and orders owed restarts |
+| 10 | Paused | `timer.due` | Reason is not `pause_timeout` | `Prior` | Same epoch; orders `enter_stage` from `Resume` and orders owed restarts; emits `group.resumed` |
 | 11 | Paused | `timer.due` reason `pause_timeout` | `Pause.Since` plus `limits.pause_max_min` reached, and `Pause.Cause` is `provider` | Blocked | Orders `cancel` for a live sibling; the saved work is kept; emits `group.blocked` |
-| 12 | Paused | `continue` | Before the timer | `Prior` | As row 10; a refused attempt re-pauses by row 9 with `Since` kept |
-| 13 | Blocked | `continue` | The reason's reset rule is satisfied | `Prior` | Reset per the table in 7.5; Epoch + 1; emits `stage.enter`, `group.continued` |
-| 14 | Blocked | `scope.answer` | `Block.Reason` is `needs_scope`, or `wall` with approval | Build | Approve adds paths to `ScopeAdded`, or resets the working time for `wall`; orders `scope` and `enter_stage` from `Resume`; Epoch + 1 |
+| 12 | Paused | `continue` | Before the timer | `Prior` | As row 10, with `group.resumed`; a refused attempt re-pauses by row 9 with `Since` kept |
+| 13 | Blocked | `continue` | The reason's reset rule is satisfied | `Prior` | Reset per the table in 7.5; Epoch + 1; emits `group.resumed`, `stage.enter`, `group.continued` |
+| 14 | Blocked | `scope.answer` | `Block.Reason` is `needs_scope`, or `wall` with approval | Build | Approve adds paths to `ScopeAdded`, or resets the working time for `wall`; orders `scope` and `enter_stage` from `Resume`; Epoch + 1; emits `group.resumed` |
 | 15 | Any working stage, Paused | Any input in the block rows | See Block rows | Blocked | `Prior` = stage; orders `cancel` for every live session; `Blocks[reason]` + 1; emits `group.blocked` |
 | 16 | Any stage but Done | `lease.lost` | Another process holds the group | Done | `Outcome` lost; orders `cancel`; frees nothing, because the lease belongs to the other holder |
 | 17 | Build, Test and Review | `limit.pause` | No live session or running action | Paused | `Prior` = stage; `Pause` set from the input with `Until` = `reset_at` + 1 minute, and no `Until` for cause `spending`; orders `hold`; emits `group.paused` |
 | 18 | Build, Test and Review | `session.end` | `Pause.After` is set | Paused | `Prior` = stage; `Resume` added; `After` cleared; orders `hold`; emits `group.paused` |
-| 19 | Commit; Paused or Blocked with `Prior` Commit | `continue`, or the recovery pass | | Test and Review | Epoch + 1; open Commit orders dropped; orders `enter_stage` Test and Review on the group's tree; emits `stage.enter` |
+| 19 | Commit; Paused or Blocked with `Prior` Commit | `continue`, or the recovery pass | | Test and Review | Epoch + 1; open Commit orders dropped; orders `enter_stage` Test and Review on the group's tree; emits `group.resumed` when the group was Paused or Blocked, then `stage.enter` |
 | 20 | Any stage but Done | `abandon` | | Done | `Outcome` abandoned; orders `cancel`; the Cleanup Handler's `Discard` frees the branch, worktree and sandbox; `LeaseStore.Release` ends the lease; dependents block `dependency`; emits `group.done` |
 
 #### Block rows
@@ -12754,7 +12764,6 @@ func (e ResourceError) Error() string { return "resource " + string(e.Severity) 
 | Any subsystem | `Report` | A returned error it cannot handle itself |
 | Resource Manager | `ThrowResourceError` | A plan or cost limit is near or passed |
 | `(*CLI).Run`, the engine's main loop | `Final` | A caught error ends the program |
-| Metrics Service | `Report` | What it sends is [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))] |
 
 ### 17.5 Behaviour
 
@@ -12920,13 +12929,7 @@ Component tests with a fake bus and a fake `Printer`.
 
 ### 17.10 Open Gaps
 
-Each id is a row in the [gap register](#appendix-b-gap-register); the rows are not copied here.
-
-| Gap | Question | Touches |
-|---|---|---|
-| [G-225](#g-225) | What the Metrics Service sends the Error Handler | The Metrics Service arrow |
-
-The arrow from the Metrics Service to the Error Handler is drawn without a label. What it carries is [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))].
+No gap is open for this chapter.
 
 ## 18. Metrics Service
 
@@ -12954,11 +12957,11 @@ The Metrics Service is the harness's event store: it appends a copy of every eve
 - **Group metrics and run metrics:** the figures for one group and for one run, kept up to date as events arrive.
 - **Stage time:** whole seconds a group spent in one stage, from its `stage.enter` to the next one.
 - **Scorecard:** one row per agent and model, over a window of days.
-- **Gap:** a point where events are missing from a run's log, either because the bus dropped them before the Metrics Service read them or because a torn line was dropped on read; the record or the reader marks it.
+- **Gap:** a point where events are missing from a run's log, because the bus dropped them before the Metrics Service read them, because a write to the log failed, or because a torn line was dropped on read; the record or the reader marks it.
 
 ### 18.2 Package Layout
 
-Go package `internal/metrics` ([HLD Appendix A](hld.md#appendix-a-traceability)). It imports `fault`, `bus` and `core` ([0.4](#04-import-order)); the CLI imports it to read.
+Go package `internal/metrics` ([HLD Appendix A](hld.md#appendix-a-traceability)). It imports `bus` and `core` ([0.4](#04-import-order)); the CLI imports it to read. It sends nothing to the Error Handler: its own failures are kept in its own records ([18.7](#187-invariants-and-failures)).
 
 | File | Holds |
 |---|---|
@@ -12974,14 +12977,15 @@ Go package `internal/metrics` ([HLD Appendix A](hld.md#appendix-a-traceability))
 
 #### Files
 
-The files live in `<git-common-dir>/komodo/metrics/`, one folder per repository, and events with no run go to `~/.komodo/metrics/engine.jsonl`; [20. Data Locations and Data Flow](#20-data-locations-and-data-flow) lists it. Secrets are masked before anything is written.
+The files live in `<git-common-dir>/komodo/metrics/`, one folder per repository, and events with no run go to `~/.komodo/metrics/engine.jsonl`, with the failures that belong to no run; [20. Data Locations and Data Flow](#20-data-locations-and-data-flow) lists it. Secrets are masked before anything is written.
 
 | File | Write | Holds |
 |---|---|---|
 | `events-<run-id>.jsonl` | Append | One copy of every event of that run, plus gap lines |
 | `sessions.jsonl` | Append | One session record per ended session |
-| `groups.json` | Replace | One `GroupMetrics` per group, keyed by group id |
-| `runs.json` | Replace | One `RunMetrics` per run, keyed by run id |
+| `groups.json` | Replace | One `GroupMetrics` per group, keyed by run id and then group id |
+| `runs.json` | Replace | One `RunMetrics` per run, keyed by run id; each holds its metrics folder and its failures |
+| `repos.json` | Replace | In `~/.komodo/metrics/`: the metrics folder of every repository the Service has opened |
 
 `Append` adds one line. `Replace` writes a temporary file and renames it into place, so a reader never sees half a file. The run logs and the event schema of [4. Event Bus](#4-event-bus) are the export format; there is no telemetry export in this release.
 
@@ -13019,7 +13023,11 @@ The end of a log whose program died while writing holds a torn line, which has n
 {"type":"run-status","subtype":"stage.enter","run":"0192e4c5-6f00-7a21-8c3b-2d9
 ```
 
-An event that names no run goes to the machine log `~/.komodo/metrics/engine.jsonl`, one JSON line per event, appended and flushed the same way as a run's log.
+An event that names no run goes to the machine log `~/.komodo/metrics/engine.jsonl`, one JSON line per event, appended and flushed the same way as a run's log. A failure of the Service itself that belongs to no run is one more line there, written once:
+
+```json
+{"failure":true,"time":"2026-10-14T15:41:02Z","kind":"size_bound","text":"the logs of runs that have not ended in /Users/dev/src/shop/.git/komodo/metrics are over the size bound"}
+```
 
 #### Session record
 
@@ -13035,8 +13043,9 @@ type SessionRecord struct {
 	Model     string            `json:"model"`
 	Stage     string            `json:"stage"`  // the stage the session ran in
 	Reason    string            `json:"reason"` // the exit reason
-	StartedAt time.Time         `json:"started_at"`
-	WallS     int64             `json:"wall_s"` // wall time in seconds
+	StartedAt time.Time         `json:"started_at,omitzero"` // zero when the session end had no start
+	EndedAt   time.Time         `json:"ended_at,omitzero"`   // the time of session.end
+	WallS     int64             `json:"wall_s"`              // wall time in seconds
 	Usage     *bus.SessionUsage `json:"usage,omitempty"`
 }
 ```
@@ -13046,7 +13055,8 @@ type SessionRecord struct {
 | `session`, `run`, `group` | From the session's events |
 | `agent`, `task`, `link`, `model`, `stage` | From `session.start` |
 | `reason`, `wall_s`, `usage` | From `session.end`; `usage` is absent when the model client reported none |
-| `started_at` | The `time` of `session.start` |
+| `started_at` | The `time` of `session.start`; absent when the session end had no start |
+| `ended_at` | The `time` of `session.end`; retention ages a record by it |
 
 ```json
 {
@@ -13081,7 +13091,7 @@ type GroupMetrics struct {
 	Run       bus.ID            `json:"run"`
 	StartedAt time.Time         `json:"started_at"`
 	EndedAt   time.Time         `json:"ended_at,omitzero"` // zero while the group is open
-	Outcome   string            `json:"outcome"`           // running, done, blocked or paused
+	Outcome   string            `json:"outcome"`           // running, paused, blocked, done, stopped, failed, abandoned or interrupted
 	Stages    []StageTime       `json:"stages"`
 	PausedS   int64             `json:"paused_s"`  // seconds in the holding state paused
 	BlockedS  int64             `json:"blocked_s"` // seconds in the holding state blocked
@@ -13104,6 +13114,15 @@ type RunMetrics struct {
 	Faults    int              `json:"faults"`   // error events with severity error
 	Warnings  int              `json:"warnings"` // error events with severity warn
 	Usage     bus.SessionUsage `json:"usage"`
+	Dir       string           `json:"dir"`      // the metrics folder of the run's repository
+	Failures  []FaultRecord    `json:"failures"` // the Service's own failures that touched this run, each once
+}
+
+// FaultRecord is a failure of the Metrics Service itself.
+type FaultRecord struct {
+	Time time.Time `json:"time"`
+	Kind string    `json:"kind"` // write, trim, size_bound, read or no_repository
+	Text string    `json:"text"`
 }
 ```
 
@@ -13115,7 +13134,7 @@ type RunMetrics struct {
 | Tokens and cost | The sum of `usage` over the sessions of the group or run |
 | Performance | Session `wall_s`, stage seconds, `retries`, `returns` |
 
-One group entry of `groups.json`:
+`groups.json` holds `{"<run id>": {"<group id>": GroupMetrics}}`, because a later run that attempts a group again adds its own entry. One group entry:
 
 ```json
 {
@@ -13173,8 +13192,8 @@ A count goes to the agent whose work it judges: a return to the builder and mode
 // Service records every event and keeps the figures current.
 type Service struct{ /* subscription, files, figures */ }
 
-// New returns a Service that writes to dir, reports its own failures to h and masks secrets with mask.
-func New(b bus.Bus, h *fault.Handler, dir string, o Options, mask func(string) string) (*Service, error)
+// New returns a Service that writes under dir, the machine metrics folder, and masks secrets with mask.
+func New(b bus.Bus, dir string, o Options, mask func(string) string) (*Service, error)
 
 // Options holds the values the Configuration Manager hands to New.
 type Options struct {
@@ -13184,7 +13203,7 @@ type Options struct {
 // Run subscribes to every event type and records until ctx ends.
 func (s *Service) Run(ctx context.Context) error
 
-// Rebuild recomputes groups.json and runs.json from the run logs.
+// Rebuild recomputes groups.json and runs.json of every folder repos.json lists, from the run logs.
 func (s *Service) Rebuild(ctx context.Context) error
 
 // Reader is what the CLI reads; a read never writes.
@@ -13201,6 +13220,8 @@ type Reader interface {
 	Scorecard(ctx context.Context, window time.Duration) (Scorecard, error)
 }
 ```
+
+`NewReader(dir string) Reader` returns the file-backed Reader over one repository's metrics folder.
 
 `Replay` returns the events with their gaps marked:
 
@@ -13229,7 +13250,7 @@ type Gap struct {
 
 | Method | On failure |
 |---|---|
-| `Run` | A write error is reported through `fault.Handler.Report` and the Service keeps working in memory |
+| `Run` | A write error is recorded in the Service's own records ([18.7](#187-invariants-and-failures)) and the Service keeps working in memory |
 | `Runs`, `Groups`, `Explain`, `Scorecard` | A missing file reads as empty. An unreadable `groups.json` or `runs.json` is rebuilt in memory from the run logs. An unreadable `.jsonl` line is skipped and counted in the result |
 | `Replay` | A missing log returns an error naming the run. A torn last line is dropped and marked as a `torn` gap. An unreadable line before the last is skipped and counted in `Skipped` |
 
@@ -13253,7 +13274,7 @@ flowchart LR
 ```
 
 1. The Service subscribes with no type filter, so it receives every event ([4. Event Bus](#4-event-bus)).
-2. For each event the loop masks the line and appends it to the log of the event's run, `events-<run-id>.jsonl`, with one write. If the subscription's `Dropped` count rose, the loop first appends one gap line.
+2. For each event the loop masks the line and appends it to the log of the event's run, `events-<run-id>.jsonl`, with one write. If the subscription's `Dropped` count rose, the loop first appends one gap line to the log of every run open at that moment, or to `engine.jsonl` when none is open; the count counts as covered only when every gap line was written.
 3. The loop updates the figures of the event's group and run by the table below.
 4. On `session.end`, the loop appends a session record built from the session's start and end events.
 5. When the queue is empty, the loop writes `groups.json` and `runs.json` with `Replace`. A burst of events costs one write.
@@ -13261,14 +13282,19 @@ flowchart LR
 
 | Event | Effect on the figures |
 |---|---|
-| `run-status` / `run.start` | Creates the run entry and one group entry per group |
-| `run-status` / `stage.enter` | Closes the open stage clock; opens the new one; `returns` rises when `return` is true |
+| `run-status` / `run.start` | Creates the run entry and one group entry per group; a group whose earlier attempt in another run never ended closes that attempt as `interrupted`, at its last event |
+| `run-status` / `stage.enter` | Closes the open stage clock and any paused or blocked clock; opens the new stage clock; `returns` rises when `return` is true |
+| `run-status` / `group.resumed` | Closes the paused or blocked clock; the outcome returns to `running` |
 | `run-status` / `session.start` | Remembers the session's agent, task, link, model and stage; `sessions` rises |
 | `run-status` / `session.end` | Adds `usage`; writes the session record |
 | `run-status` / `task.done`, `task.retry` | `tasks_done` or `retries` rises |
 | `run-status` / `group.paused`, `run-failure` / `group.blocked` | Closes the stage clock; starts the `paused_s` or `blocked_s` clock |
-| `run-complete` / `done` | Closes every open clock; sets `ended_at` and `outcome` |
-| `error` | `faults` or `warnings` of the run rises |
+| `run-status` / `group.done` | Ends the group with the `outcome` its data names: complete is `done`, abandoned is `abandoned`, lost is `failed` |
+| `run-failure` / `lease.lost` | Ends the group as `failed` |
+| `run-failure` / `stalled` | Ends the run: groups already blocked stay `blocked`, every other open group is `failed` |
+| `run-complete` / `done` | Closes every open clock; sets `ended_at`, `wall_s` and the outcomes the event lists |
+| `run-complete` / `stopped` | Ends every open group as `stopped`; sets the run's `ended_at` and `wall_s` |
+| `error` | `faults` or `warnings` of the run rises, by the `severity` in the event's data |
 | `resource` | Copied only; the Resource Manager acts on it |
 | Every other event | Copied only |
 
@@ -13282,7 +13308,16 @@ flowchart LR
 
 A read of a run that is still live can meet the line being written as a torn last line; the Reader treats it the same way.
 
-**Retention.** When the Service starts it deletes the whole log of every run whose last line is older than `metrics.retention_days`, and drops session records older than that. It then deletes the oldest run logs, and the oldest session records, until the files together are at or below 80% of 100 MB, so the next start does not delete again. It writes the trimmed `sessions.jsonl` to a temporary name and renames it into place. The log of a run with a group that is open, paused or blocked is never deleted.
+**Retention.** The Service trims a repository's metrics folder when the first `run-start` of that repository arrives, and every 24 hours after while the engine lives. A trim reads `groups.json` and `runs.json` once.
+1. It deletes the whole log of every run whose last line is older than `metrics.retention_days`, unless the run has not ended. A run has ended when its `runs.json` entry has an `ended_at`.
+2. It drops the figures of every run whose log it deleted, from `groups.json` and `runs.json`.
+3. It drops session records whose `ended_at` is older than that, or whose `started_at` when there is no `ended_at`. A record with neither, and a line that does not parse, stay.
+4. It deletes the oldest run logs of runs that have ended, and then the oldest session records, until the files together are at or below 80% of 100 MB, so the next trim does not delete again.
+5. When the logs of runs that have not ended exceed 100 MB by themselves, it deletes none of them and records one `size_bound` failure for the folder.
+
+The Service writes the trimmed `sessions.jsonl` to a temporary name and renames it into place.
+
+**Run end.** A run ends at `run-complete` of either subtype, at `run-failure` / `stalled`, or when every group of it has ended. When it ends the Service sets `ended_at` and `wall_s`, closes the run's log and drops the run from its in-memory maps. A group ends at `group.done`, at `lease.lost` or with its run.
 
 **What the log can and cannot do.**
 - The log is written after the broadcast, so a crash can drop the last few events from the log and never from recovery.
@@ -13290,13 +13325,30 @@ A read of a run that is still live can meet the line being written as a torn las
 - The Error Handler publishes one final `error` event before the program exits on an error it catches, so a caught failure reaches the log.
 - The Service sees only what the bus delivered, so a dropped event is a gap.
 
-**One writer per run.** One engine per user per machine hosts every live run ([7. Runtime Manager](#7-runtime-manager)), so one Service appends to each run's log. Each run carries its repository in its `run-start` (`repo` and `root`), and the Service opens that repository's `metrics/` folder when the run starts and appends the run's events there.
+**One writer per run.** One engine per user per machine hosts every live run ([7. Runtime Manager](#7-runtime-manager)), so one Service appends to each run's log. Each run carries its repository in its `run-start` (`repo`, `root` and `common_dir`). The Service makes no git call: it opens `<common_dir>/komodo/metrics/` when the run starts, lists the folder in `repos.json`, and appends the run's events there. An event of a run the Service has not seen is placed by the `dir` of that run in the `runs.json` of the folders `repos.json` lists.
+
+**Further rules.** Choices inside the component that the design leaves open.
+- `New` takes the machine metrics folder; `engine.jsonl` and `repos.json` live there, and each run's files live in the folder its `run-start` names.
+- `metrics.retention_days` of 0 or less means 30.
+- `NewReader` takes one repository's metrics folder.
+- A group that is held by `group.paused` or `group.blocked` stays held until `group.resumed` or `stage.enter`.
+- With a group filter, `Gap.After` counts the events returned, not all events.
+- A last line with no closing newline is torn, even if it parses; a last line that has its newline and does not parse counts in `Skipped`.
+- Only the three fault bodies count in `faults` and `warnings`; the Service reads their `severity`. Other `error` subtypes are copied only.
+- A scorecard row averages over the groups its sessions ran in, counting one group once per run; `usd_per_group` adds `usd` and `usd_equiv`.
+- A session end with no start leaves `agent`, `task`, `link`, `model`, `stage` and `started_at` empty.
+- An event of a run with no known folder is recorded as a failure and kept in the figures in memory only.
+- Opening a log whose last byte is not a newline writes a newline first, so a new line never joins a torn one.
+- When the context ends, the loop finishes the event in hand, records what is still queued, then writes the figures.
+- `Rebuild` replays outside the lock and swaps the new figures in; events handled during the replay are counted by the next `Rebuild`.
+- The body of `group.done` is owned by the Runtime Manager; the Service reads its `outcome` field.
 
 ### 18.6 State
 
 | State | Held in | After a restart |
 |---|---|---|
 | Open stage clocks, open sessions | Memory | Lost; the stage seconds of the interrupted stage are counted up to the last event copied |
+| The metrics folder of each live run | Memory, and `dir` in `runs.json` | Found again through `repos.json` and the `runs.json` of each listed folder |
 | Group and run figures | `groups.json`, `runs.json` | Read at start; `Rebuild` recomputes them from the run logs |
 | Event copies and session records | `events-<run-id>.jsonl`, `sessions.jsonl` | Kept until retention deletes them |
 
@@ -13306,7 +13358,7 @@ A read of a run that is still live can meet the line being written as a torn las
 1. Only the Metrics Service writes its files; the figures derive from event copies and never from a hand edit.
 2. A run's log is only appended to; only retention removes it, and then whole.
 3. Every line written is masked first.
-4. A write failure never stops a run: the Service keeps the figures in memory and reports the failure.
+4. A write failure never stops a run: the Service keeps the figures in memory and records the failure in its own records.
 5. A gap is always marked, never hidden.
 6. Recovery never reads the log.
 
@@ -13314,8 +13366,10 @@ A read of a run that is still live can meet the line being written as a torn las
 
 | Failure | Detected by | Action | Bound | Final state |
 |---|---|---|---|---|
-| Write to a metrics file fails | The loop | Report to the Error Handler; keep figures in memory; retry at the next batch | One report per run of failures | Files lag the figures |
-| Events dropped before the loop read them | `Subscription.Dropped` | Append a gap line | One line per burst | Figures may undercount |
+| Write to a metrics file fails | The loop | Record the failure (kind `write`) once in the run's `failures`, or in `engine.jsonl` when no run applies; keep figures in memory; retry at the next batch; mark the events lost as a gap when writes work again | One record per distinct failure | Files lag the figures |
+| Events dropped before the loop read them | `Subscription.Dropped` | Append a gap line to the log of every run open at that moment, or to `engine.jsonl` when none is open | One line per burst and open run | Figures may undercount |
+| Run events with no known folder, or a `run-start` with no `common_dir` | The loop | Record the failure in `engine.jsonl`; keep the figures in memory | One record per distinct failure | The events are in no log |
+| Logs of runs that have not ended past the size bound | The trim | Record a `size_bound` failure; delete none of them | 1 per folder | The folder stays over the bound |
 | `groups.json` or `runs.json` unreadable | The reader | Rebuild in memory from the run logs | 1 | `Rebuild` rewrites the file |
 | An unreadable line in a `.jsonl` file | The reader | Skip it; count it in the result | 0 retries | The line stays until retention deletes the log |
 | A torn last line in a run log | The reader | Drop it; add a `torn` mark | 1 per read | The fragment stays until retention deletes the log |
@@ -13336,6 +13390,7 @@ Usage is recorded whenever the model client reports it; no setting turns it off.
 | Constant | Value |
 |---|---|
 | Size bound | 100 MB per repository, trimmed to 80% |
+| Trim interval | 24 hours |
 | Reading 1,000 group entries | Under 100 ms, a target measured by [G-19](#g-19) |
 
 ### 18.9 Proof Cases
@@ -13350,16 +13405,22 @@ Component tests with a fake bus and a temporary folder.
 | A log whose last line has no closing newline | `Replay` returns every earlier event and one `torn` gap after the last |
 | A log with an unparseable line in the middle | `Replay` skips it and `Skipped` is 1 |
 | `Replay` for one group | Only that group's events return; every gap mark stays |
-| A run log whose last line is 31 days old, with retention 30 | The start deletes the whole file; a log of an open group stays |
+| A run log whose last line is 31 days old, with retention 30 | The folder's first `run-start` deletes the whole file and the run's figures; a log of a run that has not ended stays |
 | `stage.enter` build at t=0, build again at t=100 with `return: true` | The group shows build with 2 entries and `returns` 1 |
-| A group blocked at t=50 and continued at t=80 | `blocked_s` is 30 |
+| A group blocked at t=50 and `group.resumed` at t=80 | `blocked_s` is 30 |
 | Two sessions with usage | The group `usage` is their sum |
 | A session with no usage | `usage` absent; `tokens_per_group` nil |
-| A queue that overflows | A gap line in the run's log |
+| A queue that overflows with 2 runs open | A gap line in each run's log; with no run open, in `engine.jsonl` |
 | An event line that holds a secret | The line is written masked |
 | A corrupt `groups.json` | The reader returns the figures rebuilt from the run logs |
-| Files at 120 MB | After the trim they are at or below 80 MB; an open group's log stays |
-| A failed write | One `Report` call; the loop keeps reading events |
+| Files at 120 MB | After the trim they are at or below 80 MB; a log of a run that has not ended stays |
+| Logs of runs that have not ended past the size bound | One `size_bound` record; none of them deleted |
+| `run-complete` / `stopped` | Open groups end `stopped`; the run has `ended_at` and `wall_s` |
+| `group.done` abandoned; `lease.lost` | The group ends `abandoned`; the group ends `failed` |
+| A `run.start` for a group whose earlier run never ended | The earlier attempt ends `interrupted` |
+| An event of a run the Service never saw start | Appended to that run's log, found through `repos.json` and `runs.json` |
+| `Rebuild` on a new Service | The figures of every folder in `repos.json` are rewritten from the run logs |
+| A failed write | One failure record in the run's `failures`; the loop keeps reading events; replay shows a gap once writes work again |
 | The fixture scorecard | First-pass rate, returns per group and finding precision match hand-counted values |
 
 ### 18.10 Open Gaps
@@ -13371,10 +13432,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-17](#g-17) | The 50% prompt-cache hit fixture needs real paid sessions | `cache_read_share` |
 | [G-19](#g-19) | The read target is unmeasured | 18.8 |
 | [G-26](#g-26) | Splitting tokens and dollars by provider family | `ScoreRow` |
-| [G-225](#g-225) | What the Metrics Service sends the Error Handler | The arrow to the Error Handler |
 | [G-255](#g-255) | Which command or view shows run metrics and the scorecard | `Runs`, `Groups`, `Explain`, `Scorecard` callers |
-
-The diagram draws the Metrics Service's arrow to the Error Handler without a label; what it carries is [TODO: what the Metrics Service sends the Error Handler ([G-225](#g-225))].
 
 ## 19. Resource Manager
 
@@ -14235,7 +14293,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-222"></a>G-222 | Commands | What `komodo clean` removes, and whether it needs a terminal | Owner decision | [1](#1-cli), [16](#16-cleanup-handler), [10](#10-state-manager) |
 | <a id="g-223"></a>G-223 | Event wiring | Who publishes the skill and mcp events | Owner decision | [4](#4-event-bus), [6](#6-context-manager), [1](#1-cli) |
 | <a id="g-224"></a>G-224 | Event wiring | Which part consumes next, and which event types the CLI subscribes to | Owner decision | [4](#4-event-bus), [1](#1-cli), [5](#5-intake-handler) |
-| <a id="g-225"></a>G-225 | Event wiring | What the Metrics Service sends the Error Handler | Owner decision | [4](#4-event-bus), [17](#17-error-handler), [18](#18-metrics-service) |
 | <a id="g-226"></a>G-226 | Saving work | Who commits the Intake Handler's task lists | Owner decision | [5](#5-intake-handler), [15](#15-commit-handler), [20](#20-data-locations-and-data-flow) |
 | <a id="g-231"></a>G-231 | Install | What `install` and `init` add to the host beyond the guard hook: a session-start `status` hook, and the plugin's skill set | Owner decision | [1](#1-cli), [21](#21-verification-operations-and-cutover) |
 | <a id="g-232"></a>G-232 | Update | How `update --restart-runs` moves live runs onto the new binary | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |

@@ -6,13 +6,14 @@ import "time"
 
 // RunStart is the data of run-start: a request to the Runtime Manager to run a target.
 type RunStart struct {
-	Target   string    `json:"target"`            // the label the command named, such as ep-1 or tg-1.2; "all" for run --all; the epic label when the Intake Handler starts the run
-	Groups   []string  `json:"groups"`            // the group labels to run, such as tg-1.2
-	Source   string    `json:"source"`            // "cli" or "intake": who published the request
-	Schedule time.Time `json:"schedule,omitzero"` // RFC 3339 start time of a scheduled run; absent otherwise
-	Repo     string    `json:"repo"`              // the repository id the run belongs to
-	Root     string    `json:"root"`              // the repository root on this machine
-	Request  ID        `json:"request,omitempty"` // the control socket Request.ID of the command
+	Target    string    `json:"target"`            // the label the command named, such as ep-1 or tg-1.2; "all" for run --all; the epic label when the Intake Handler starts the run
+	Groups    []string  `json:"groups"`            // the group labels to run, such as tg-1.2
+	Source    string    `json:"source"`            // "cli" or "intake": who published the request
+	Schedule  time.Time `json:"schedule,omitzero"` // RFC 3339 start time of a scheduled run; absent otherwise
+	Repo      string    `json:"repo"`              // the repository id the run belongs to
+	Root      string    `json:"root"`              // the repository root on this machine
+	CommonDir string    `json:"common_dir"`        // the repository's git common directory, which holds its Komodo files
+	Request   ID        `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 
 // EventKey binds RunStart to run-start.
@@ -87,6 +88,15 @@ type GroupPaused struct {
 
 // EventKey binds GroupPaused to run-status / group.paused.
 func (GroupPaused) EventKey() Key { return Key{TypeRunStatus, "group.paused"} }
+
+// GroupResumed is the data of run-status / group.resumed: a group left Paused or Blocked.
+type GroupResumed struct {
+	From string `json:"from"` // the stage the group was held in
+	To   string `json:"to"`   // the stage it re-enters
+}
+
+// EventKey binds GroupResumed to run-status / group.resumed.
+func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} }
 
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {

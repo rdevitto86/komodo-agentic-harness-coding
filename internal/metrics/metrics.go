@@ -7,14 +7,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/format"
 )
+
+// retentionInterval is how often the loop trims the folders it knows after the trim at a folder's first run-start.
+const retentionInterval = 24 * time.Hour
+
+// reposFile lists, in the machine metrics folder, every repository metrics folder the Service has opened.
+const reposFile = "repos.json"
 
 // Options holds the values the Configuration Manager hands to New.
 type Options struct {
@@ -27,26 +32,38 @@ type repoState struct {
 	fig *figures
 }
 
+// failLine is the line engine.jsonl holds for a failure that belongs to no run's figures.
+type failLine struct {
+	Failure bool      `json:"failure"`
+	Time    time.Time `json:"time"`
+	Run     bus.ID    `json:"run,omitempty"`
+	Kind    string    `json:"kind"`
+	Text    string    `json:"text"`
+}
+
 // Service records every event and keeps the figures current.
 type Service struct {
 	bus  bus.Bus
-	h    *fault.Handler
-	dir  string // the machine metrics folder, which holds engine.jsonl
+	dir  string // the machine metrics folder, which holds engine.jsonl and repos.json
 	opt  Options
 	mask func(string) string
 	sub  *bus.Subscription
 
-	mu          sync.Mutex
-	repos       map[string]*repoState // by metrics folder
-	runRepo     map[bus.ID]string     // the metrics folder of each run
-	logs        map[string]*RunLog    // open logs by path
-	failing     map[string]bool       // targets whose failure was already reported
-	lastDropped uint64                // the subscription's drop count at the last gap check
+	mu     sync.Mutex            // guards repos, listed and every figures value; never held across file I/O
+	repos  map[string]*repoState // loaded metrics folders
+	listed map[string]bool       // every metrics folder repos.json names
+
+	// The fields below belong to the goroutine that handles events.
+	runRepo     map[bus.ID]string  // the metrics folder of each run that has not ended
+	logs        map[string]*RunLog // open logs by path
+	missed      map[string]int     // events lost to failed writes, by log, not yet marked
+	failed      map[string]bool    // failures already recorded
+	lastDropped uint64             // the subscription's drop count the last gap lines covered
 }
 
-// New returns a Service that writes to dir, reports its own failures to h and masks secrets with mask.
-// dir is the machine metrics folder; a run's logs go to its repository's folder, found from its run-start.
-func New(b bus.Bus, h *fault.Handler, dir string, o Options, mask func(string) string) (*Service, error) {
+// New returns a Service that writes under dir and masks secrets with mask.
+// dir is the machine metrics folder; a run's logs go to the folder its run-start names.
+func New(b bus.Bus, dir string, o Options, mask func(string) string) (*Service, error) {
 	if b == nil {
 		return nil, errors.New("metrics needs an event bus")
 	}
@@ -57,10 +74,18 @@ func New(b bus.Bus, h *fault.Handler, dir string, o Options, mask func(string) s
 	if err != nil {
 		return nil, fmt.Errorf("subscribe to every event: %w", err)
 	}
-	return &Service{
-		bus: b, h: h, dir: dir, opt: o, mask: mask, sub: sub,
-		repos: map[string]*repoState{}, runRepo: map[bus.ID]string{}, logs: map[string]*RunLog{}, failing: map[string]bool{},
-	}, nil
+	s := &Service{
+		bus: b, dir: dir, opt: o, mask: mask, sub: sub,
+		repos: map[string]*repoState{}, listed: map[string]bool{},
+		runRepo: map[bus.ID]string{}, logs: map[string]*RunLog{}, missed: map[string]int{}, failed: map[string]bool{},
+	}
+	var dirs []string
+	if err := readJSON(filepath.Join(dir, reposFile), &dirs); err == nil {
+		for _, d := range dirs {
+			s.listed[d] = true
+		}
+	}
+	return s, nil
 }
 
 // Run subscribes to every event type and records until ctx ends, then records what is still queued.
@@ -68,19 +93,23 @@ func (s *Service) Run(ctx context.Context) error {
 	defer s.closeLogs()
 	// Handling must finish an event it began, so the context that ends the loop does not reach the work.
 	work := context.WithoutCancel(ctx)
+	tick := time.NewTicker(retentionInterval)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			s.drain(work)
 			return nil
+		case <-tick.C:
+			s.trimKnown(work)
 		case e, ok := <-s.sub.Events:
 			if !ok {
-				s.lockedFlush()
+				s.flush()
 				return nil
 			}
 			s.handle(work, e)
 			if len(s.sub.Events) == 0 {
-				s.lockedFlush()
+				s.flush()
 			}
 		}
 	}
@@ -92,139 +121,337 @@ func (s *Service) drain(ctx context.Context) {
 		select {
 		case e, ok := <-s.sub.Events:
 			if !ok {
-				s.lockedFlush()
+				s.flush()
 				return
 			}
 			s.handle(ctx, e)
 		default:
-			s.lockedFlush()
+			s.flush()
 			return
 		}
 	}
 }
 
-// Rebuild recomputes groups.json and runs.json from the run logs.
+// Rebuild recomputes groups.json and runs.json of every known repository from its run logs.
+// It replays outside the lock, then swaps the new figures in, keeping the open-session map.
 func (s *Service) Rebuild(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	dirs := make([]string, 0, len(s.repos)+len(s.listed))
+	for d := range s.listed {
+		dirs = append(dirs, d)
+	}
+	for d := range s.repos {
+		if d != "" && !s.listed[d] {
+			dirs = append(dirs, d)
+		}
+	}
+	s.mu.Unlock()
 	var errs []error
-	for _, r := range s.repos {
-		if r.dir == "" {
+	for _, d := range dirs {
+		if st, err := os.Stat(d); err != nil || !st.IsDir() {
 			continue
 		}
-		fig, err := rebuildFigures(ctx, r.dir)
+		fig, err := rebuildFigures(ctx, d)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		fig.dirty = true
-		r.fig = fig
+		s.mu.Lock()
+		if r, ok := s.repos[d]; ok {
+			fig.sessions = r.fig.sessions
+			r.fig = fig
+		} else {
+			s.repos[d] = &repoState{dir: d, fig: fig}
+		}
+		fig.ver++
+		s.mu.Unlock()
 	}
 	s.flush()
 	return errors.Join(errs...)
 }
 
-// lockedFlush writes the changed figures under the lock.
-func (s *Service) lockedFlush() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.flush()
-}
-
 // handle records one event: a gap line if events were dropped, the event copy, then the figures.
 func (s *Service) handle(ctx context.Context, e bus.Event) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	repo, path := s.target(ctx, e)
-	if d := s.sub.Dropped(); d > s.lastDropped {
-		gap := gapLine{Gap: true, Time: now().UTC().Truncate(time.Second), Dropped: int(d - s.lastDropped)}
-		s.lastDropped = d
-		s.appendJSON(path, e.Run, gap)
+	s.markDrops()
+	s.mu.Lock()
+	rec := repo.fig.apply(e)
+	ended := repo.fig.takeEnded()
+	s.mu.Unlock()
+	s.appendEvent(path, e.Run, e)
+	if rec != nil && repo.dir != "" {
+		if err := s.put(filepath.Join(repo.dir, "sessions.jsonl"), rec); err != nil {
+			s.fail(e.Run, "write", err.Error())
+		}
 	}
-	s.appendJSON(path, e.Run, e)
-	if rec := repo.fig.apply(e); rec != nil && repo.dir != "" {
-		s.appendJSON(filepath.Join(repo.dir, "sessions.jsonl"), e.Run, rec)
+	for _, run := range ended {
+		s.forgetRun(run)
 	}
-	if e.Type == bus.TypeRunComplete && path != "" {
-		s.closeLog(path)
+}
+
+// forgetRun closes a finished run's log and drops its entries from the Service's maps.
+func (s *Service) forgetRun(run bus.ID) {
+	if dir, ok := s.runRepo[run]; ok {
+		p := filepath.Join(dir, LogName(run))
+		s.closeLog(p)
+		delete(s.missed, p)
+	}
+	delete(s.runRepo, run)
+	prefix := string(run) + "\x00"
+	for k := range s.failed {
+		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
+			delete(s.failed, k)
+		}
 	}
 }
 
 // target returns the repository state and log path an event belongs to; the path is empty when none is known.
 func (s *Service) target(ctx context.Context, e bus.Event) (*repoState, string) {
 	if e.Run == "" {
-		return s.repo(""), filepath.Join(s.dir, machineLogName)
+		return s.repoFor(""), filepath.Join(s.dir, machineLogName)
 	}
 	if !safeName(e.Run) {
-		s.reportOnce("run:"+string(e.Run), e.Run, fmt.Errorf("run id %q cannot name a log file", e.Run))
-		return s.repo(""), ""
+		s.fail("", "run_id", fmt.Sprintf("run id %q cannot name a log file", e.Run))
+		return s.repoFor(""), ""
 	}
 	if d, ok := e.Data.(*bus.RunStart); ok && e.Type == bus.TypeRunStart {
-		s.openRepo(ctx, e.Run, d.Root)
+		s.openRepo(ctx, e.Run, d.CommonDir)
 	}
 	dir, ok := s.runRepo[e.Run]
 	if !ok {
-		s.reportOnce("run:"+string(e.Run), e.Run, fmt.Errorf("no repository known for run %s", e.Run))
-		return s.repo(""), ""
+		var ended bool
+		if dir, ended, ok = s.lookupRun(ctx, e.Run); ok && !ended {
+			s.runRepo[e.Run] = dir
+		}
 	}
-	return s.repo(dir), filepath.Join(dir, LogName(e.Run))
+	if !ok {
+		s.fail("", "no_repository", fmt.Sprintf("no repository known for run %s", e.Run))
+		return s.repoFor(""), ""
+	}
+	return s.repoFor(dir), filepath.Join(dir, LogName(e.Run))
 }
 
-// repo returns the state of a metrics folder; the empty folder holds figures that are never written.
-func (s *Service) repo(dir string) *repoState {
+// repoFor returns the state of a metrics folder, creating it empty; the empty folder holds figures that are never written.
+func (s *Service) repoFor(dir string) *repoState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	r, ok := s.repos[dir]
 	if !ok {
 		r = &repoState{dir: dir, fig: newFigures()}
+		r.fig.dir = dir
 		s.repos[dir] = r
 	}
 	return r
 }
 
-// openRepo finds the metrics folder of the repository at root, trims it on first use and binds the run to it.
-func (s *Service) openRepo(ctx context.Context, run bus.ID, root string) {
-	common, err := commonDir(ctx, root)
-	if err != nil {
-		s.reportOnce("run:"+string(run), run, err)
+// openRepo binds a run to the metrics folder inside its git common directory, loading and trimming the folder on first use.
+func (s *Service) openRepo(ctx context.Context, run bus.ID, commonDir string) {
+	if commonDir == "" {
+		s.fail("", "no_common_dir", fmt.Sprintf("the run-start of run %s names no git directory", run))
 		return
 	}
-	dir := RepoDir(common)
-	if _, seen := s.repos[dir]; !seen {
-		if err := trimDir(ctx, dir, s.opt.RetentionDays, now()); err != nil {
-			s.reportOnce("trim:"+dir, run, fmt.Errorf("trim %s: %w", dir, err))
-		}
-		r := s.repo(dir)
-		if groups, runs, err := readFigures(ctx, dir); err == nil {
-			r.fig.load(groups, runs)
-		}
+	dir := RepoDir(filepath.Clean(commonDir))
+	s.mu.Lock()
+	_, loaded := s.repos[dir]
+	s.mu.Unlock()
+	if !loaded {
+		s.loadRepo(ctx, dir, true)
 	}
 	s.runRepo[run] = dir
 }
 
-// appendJSON masks v's JSON line and appends it to the log at path; a failure is reported once per streak.
-func (s *Service) appendJSON(path string, run bus.ID, v any) {
+// loadRepo reads a folder's figures into memory; with first set it also trims the folder and lists it in repos.json.
+func (s *Service) loadRepo(ctx context.Context, dir string, first bool) {
+	var deleted []bus.ID
+	if first {
+		deleted = s.trimRepo(ctx, dir)
+	}
+	groups, runs, err := readFigures(ctx, dir)
+	if err != nil {
+		s.fail("", "read", err.Error())
+	}
+	s.mu.Lock()
+	r, ok := s.repos[dir]
+	if !ok {
+		r = &repoState{dir: dir, fig: newFigures()}
+		r.fig.dir = dir
+		s.repos[dir] = r
+	}
+	r.fig.load(groups, runs)
+	r.fig.dropRuns(deleted)
+	known := s.listed[dir]
+	s.listed[dir] = true
+	list := slices.Sorted(mapKeys(s.listed))
+	s.mu.Unlock()
+	if first && !known {
+		b, _ := json.Marshal(list)
+		err := os.MkdirAll(s.dir, dirPerm)
+		if err == nil {
+			err = core.WriteFileAtomic(filepath.Join(s.dir, reposFile), b, filePerm)
+		}
+		if err != nil {
+			s.fail("", "write", err.Error())
+		}
+	}
+}
+
+// mapKeys yields the keys of a set.
+func mapKeys(m map[string]bool) func(yield func(string) bool) {
+	return func(yield func(string) bool) {
+		for k := range m {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+// lookupRun finds the metrics folder of a run from the runs.json files in memory, then from those of listed folders not yet loaded.
+func (s *Service) lookupRun(ctx context.Context, run bus.ID) (dir string, ended, ok bool) {
+	find := func() (todo []string) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, r := range s.repos {
+			if rm, found := r.fig.runs[run]; found {
+				dir, ended, ok = r.dir, !rm.EndedAt.IsZero(), true
+				return nil
+			}
+		}
+		for d := range s.listed {
+			if _, loaded := s.repos[d]; !loaded {
+				todo = append(todo, d)
+			}
+		}
+		return todo
+	}
+	todo := find()
+	if ok || len(todo) == 0 {
+		return dir, ended, ok
+	}
+	for _, d := range todo {
+		s.loadRepo(ctx, d, false)
+	}
+	find()
+	return dir, ended, ok
+}
+
+// trimRepo trims a folder and returns the runs whose logs it deleted; its failures go to the Service's own records.
+func (s *Service) trimRepo(ctx context.Context, dir string) []bus.ID {
+	res, err := trimDir(ctx, dir, s.opt.RetentionDays, now(), s.openRuns(dir))
+	if err != nil {
+		s.fail("", "trim", fmt.Sprintf("trim %s: %v", dir, err))
+	}
+	if res.OverBound {
+		s.fail("", "size_bound", fmt.Sprintf("the logs of runs that have not ended in %s are over the size bound", dir))
+	}
+	return res.Deleted
+}
+
+// openRuns returns the runs of a folder that have not ended.
+func (s *Service) openRuns(dir string) map[bus.ID]bool {
+	out := map[bus.ID]bool{}
+	for run, d := range s.runRepo {
+		if d == dir {
+			out[run] = true
+		}
+	}
+	return out
+}
+
+// trimKnown trims every loaded folder and drops the figures of the runs whose logs went.
+func (s *Service) trimKnown(ctx context.Context) {
+	s.mu.Lock()
+	var dirs []string
+	for d := range s.repos {
+		if d != "" {
+			dirs = append(dirs, d)
+		}
+	}
+	s.mu.Unlock()
+	for _, d := range dirs {
+		deleted := s.trimRepo(ctx, d)
+		s.mu.Lock()
+		s.repos[d].fig.dropRuns(deleted)
+		s.mu.Unlock()
+	}
+}
+
+// markDrops writes a gap line to the log of every open run, or to engine.jsonl with none open, when the bus dropped events.
+func (s *Service) markDrops() {
+	d := s.sub.Dropped()
+	if d <= s.lastDropped {
+		return
+	}
+	gap := gapLine{Gap: true, Time: now().UTC().Truncate(time.Second), Dropped: int(d - s.lastDropped)}
+	type target struct {
+		path string
+		run  bus.ID
+	}
+	var targets []target
+	for run, dir := range s.runRepo {
+		targets = append(targets, target{filepath.Join(dir, LogName(run)), run})
+	}
+	if len(targets) == 0 {
+		targets = append(targets, target{filepath.Join(s.dir, machineLogName), ""})
+	}
+	slices.SortFunc(targets, func(a, b target) int { return compareStrings(a.path, b.path) })
+	ok := true
+	for _, t := range targets {
+		if err := s.put(t.path, gap); err != nil {
+			ok = false
+			s.fail(t.run, "write", err.Error())
+		}
+	}
+	if ok {
+		s.lastDropped = d
+	}
+}
+
+// compareStrings orders two strings.
+func compareStrings(a, b string) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+// appendEvent appends an event copy to the log at path; a failed write is recorded and later marked as a gap in that log.
+func (s *Service) appendEvent(path string, run bus.ID, e bus.Event) {
 	if path == "" {
 		return
 	}
+	if n := s.missed[path]; n > 0 {
+		if err := s.put(path, gapLine{Gap: true, Time: now().UTC().Truncate(time.Second), Dropped: n}); err == nil {
+			delete(s.missed, path)
+		}
+	}
+	if err := s.put(path, e); err != nil {
+		s.missed[path]++
+		s.fail(run, "write", err.Error())
+	}
+}
+
+// put masks v's JSON line and appends it to the log at path.
+func (s *Service) put(path string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
-		s.reportOnce(path, run, fmt.Errorf("encode line for %s: %w", path, err))
-		return
+		return fmt.Errorf("encode line for %s: %w", path, err)
 	}
-	line := []byte(s.mask(string(b)))
 	l, ok := s.logs[path]
 	if !ok {
 		if l, err = openLog(path); err != nil {
-			s.reportOnce(path, run, err)
-			return
+			return err
 		}
 		s.logs[path] = l
 	}
-	if err := l.Append(line); err != nil {
+	if err := l.Append([]byte(s.mask(string(b)))); err != nil {
 		s.closeLog(path)
-		s.reportOnce(path, run, err)
-		return
+		return err
 	}
-	delete(s.failing, path)
+	return nil
 }
 
 // closeLog closes the open log at path.
@@ -237,42 +464,66 @@ func (s *Service) closeLog(path string) {
 
 // closeLogs closes every open log.
 func (s *Service) closeLogs() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for p := range s.logs {
 		s.closeLog(p)
 	}
 }
 
-// reportOnce sends err to the Error Handler unless the same target already failed and has not recovered.
-func (s *Service) reportOnce(key string, run bus.ID, err error) {
-	if s.failing[key] {
+// fail records a failure once: in the run's figures when a run applies and its folder is known, otherwise in engine.jsonl.
+func (s *Service) fail(run bus.ID, kind, text string) {
+	key := string(run) + "\x00" + kind + "\x00" + text
+	if s.failed[key] {
 		return
 	}
-	s.failing[key] = true
-	if s.h != nil {
-		s.h.Report(fault.Source{Component: "metrics", Run: run}, string(format.Internal), fault.KindInternal, err)
+	s.failed[key] = true
+	at := now().UTC().Truncate(time.Second)
+	if run != "" {
+		s.mu.Lock()
+		if dir, ok := s.runRepo[run]; ok {
+			if r, ok := s.repos[dir]; ok && r.fig.runs[run] != nil {
+				r.fig.runs[run].Failures = append(r.fig.runs[run].Failures, FaultRecord{Time: at, Kind: kind, Text: text})
+				r.fig.ver++
+				s.mu.Unlock()
+				return
+			}
+		}
+		s.mu.Unlock()
 	}
+	// A failure to write this line has nowhere further to go.
+	_ = s.put(filepath.Join(s.dir, machineLogName), failLine{Failure: true, Time: at, Run: run, Kind: kind, Text: text})
 }
 
 // flush writes groups.json and runs.json of every repository whose figures changed; a failure leaves them marked for the next batch.
 func (s *Service) flush() {
+	type job struct {
+		r      *repoState
+		groups map[bus.ID]map[bus.ID]GroupMetrics
+		runs   map[bus.ID]RunMetrics
+		ver    uint64
+	}
+	var jobs []job
+	s.mu.Lock()
 	for _, r := range s.repos {
-		if r.dir == "" || !r.fig.dirty {
-			continue
+		if r.dir != "" && r.fig.dirty() {
+			g, rs := r.fig.snapshot()
+			jobs = append(jobs, job{r, g, rs, r.fig.ver})
 		}
-		groups, runs := r.fig.snapshot()
-		key := "figures:" + r.dir
-		err := s.writeFigure(filepath.Join(r.dir, "groups.json"), groups)
+	}
+	s.mu.Unlock()
+	for _, j := range jobs {
+		err := s.writeFigure(filepath.Join(j.r.dir, "groups.json"), j.groups)
 		if err == nil {
-			err = s.writeFigure(filepath.Join(r.dir, "runs.json"), runs)
+			err = s.writeFigure(filepath.Join(j.r.dir, "runs.json"), j.runs)
 		}
 		if err != nil {
-			s.reportOnce(key, "", err)
+			s.fail("", "write", err.Error())
 			continue
 		}
-		delete(s.failing, key)
-		r.fig.dirty = false
+		s.mu.Lock()
+		if j.r.fig.ver == j.ver {
+			j.r.fig.written = j.ver
+		}
+		s.mu.Unlock()
 	}
 }
 

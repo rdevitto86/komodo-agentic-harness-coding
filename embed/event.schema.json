@@ -251,6 +251,22 @@
       ],
       "type": "object"
     },
+    "GroupResumed": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
     "LeaseLost": {
       "additionalProperties": false,
       "properties": {
@@ -453,6 +469,9 @@
     "RunStart": {
       "additionalProperties": false,
       "properties": {
+        "common_dir": {
+          "type": "string"
+        },
         "groups": {
           "items": {
             "type": "string"
@@ -487,7 +506,8 @@
         "groups",
         "source",
         "repo",
-        "root"
+        "root",
+        "common_dir"
       ],
       "type": "object"
     },
@@ -1197,6 +1217,19 @@
         },
         "subtype": {
           "const": "group.paused"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/GroupResumed"
+        },
+        "subtype": {
+          "const": "group.resumed"
         },
         "type": {
           "const": "run-status"

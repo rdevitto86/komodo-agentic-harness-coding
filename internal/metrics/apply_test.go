@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 )
 
 // start builds the run.start fact that creates a run and its groups.
@@ -36,13 +35,13 @@ func TestReturnToBuildCountsEntries(t *testing.T) {
 	f.apply(startRun(0, "r", "g"))
 	f.apply(enter(0, "r", "g", "build", false))
 	f.apply(enter(100, "r", "g", "build", true))
-	g, _ := f.group("g")
+	g, _ := f.group("r", "g")
 	b := stageOf(t, g, "build")
 	if b.Entries != 2 || g.Returns != 1 || b.Seconds != 100 {
 		t.Fatalf("build = %+v returns %d, want entries 2, seconds 100, returns 1", b, g.Returns)
 	}
 	f.apply(ev(130, bus.TypeRunStatus, "task.done", "r", "g", &bus.TaskDone{Task: "t"}))
-	g, _ = f.group("g")
+	g, _ = f.group("r", "g")
 	if got := stageOf(t, g, "build").Seconds; got != 130 {
 		t.Fatalf("seconds after a later event = %d, want 130", got)
 	}
@@ -54,11 +53,11 @@ func TestBlockedSeconds(t *testing.T) {
 	f.apply(startRun(0, "r", "g"))
 	f.apply(enter(0, "r", "g", "build", false))
 	f.apply(ev(50, bus.TypeRunFailure, "group.blocked", "r", "g", &bus.GroupBlocked{GroupFacts: bus.GroupFacts{Reason: "tester"}}))
-	if g, _ := f.group("g"); g.Outcome != "blocked" {
+	if g, _ := f.group("r", "g"); g.Outcome != "blocked" {
 		t.Fatalf("outcome = %q, want blocked", g.Outcome)
 	}
 	f.apply(enter(80, "r", "g", "build", false))
-	g, _ := f.group("g")
+	g, _ := f.group("r", "g")
 	if g.BlockedS != 30 || g.Outcome != "running" || stageOf(t, g, "build").Seconds != 50 {
 		t.Fatalf("group = %+v, want blocked_s 30, running, build 50 s", g)
 	}
@@ -70,7 +69,7 @@ func TestPausedSeconds(t *testing.T) {
 	f.apply(enter(0, "r", "g", "build", false))
 	f.apply(ev(10, bus.TypeRunStatus, "group.paused", "r", "g", &bus.GroupPaused{}))
 	f.apply(enter(25, "r", "g", "build", false))
-	if g, _ := f.group("g"); g.PausedS != 15 {
+	if g, _ := f.group("r", "g"); g.PausedS != 15 {
 		t.Fatalf("paused_s = %d, want 15", g.PausedS)
 	}
 }
@@ -87,7 +86,7 @@ func TestUsageSums(t *testing.T) {
 			recs = append(recs, r)
 		}
 	}
-	g, _ := f.group("g")
+	g, _ := f.group("r", "g")
 	want := bus.SessionUsage{TokensIn: 300, TokensOut: 30, CacheRead: 50, CacheWrite: 7, USD: 1.25, USDEquiv: 0.5, SkillTokens: 3}
 	if g.Usage != want || g.Sessions != 2 {
 		t.Fatalf("group usage = %+v sessions %d, want %+v and 2", g.Usage, g.Sessions, want)
@@ -122,7 +121,7 @@ func TestSessionEndWithoutStart(t *testing.T) {
 	if rec == nil || rec.Agent != "" || rec.Link != "" || rec.Session != "s9" || rec.Reason != "done" {
 		t.Fatalf("record = %+v", rec)
 	}
-	if g, _ := f.group("g"); g.Sessions != 1 {
+	if g, _ := f.group("r", "g"); g.Sessions != 1 {
 		t.Fatalf("sessions = %d, want 1", g.Sessions)
 	}
 }
@@ -134,13 +133,11 @@ func TestCountersAndRunComplete(t *testing.T) {
 	f.apply(enter(0, "r", "g1", "build", false))
 	f.apply(ev(5, bus.TypeRunStatus, "task.retry", "r", "g1", &bus.TaskRetry{Task: "a", Attempt: 2}))
 	f.apply(ev(6, bus.TypeRunStatus, "task.done", "r", "g1", &bus.TaskDone{Task: "a"}))
-	fd := fault.FaultData{Severity: "error"}
-	f.apply(ev(7, bus.TypeError, "fault.error", "r", "g1", &fault.ErrorFault{FaultData: fd}))
-	fd.Severity = "warn"
-	f.apply(ev(8, bus.TypeError, "fault.error", "r", "", &fault.ErrorFault{FaultData: fd}))
+	f.apply(ev(7, bus.TypeError, "fault.error", "r", "g1", &errBody{Severity: "error"}))
+	f.apply(ev(8, bus.TypeError, "fault.error", "r", "", &errBody{Severity: "warn"}))
 	f.apply(ev(60, bus.TypeRunComplete, "done", "r", "", &bus.RunDone{Done: []bus.ID{"g1"}, Blocked: []bus.ID{"g2"}}))
-	g1, _ := f.group("g1")
-	g2, _ := f.group("g2")
+	g1, _ := f.group("r", "g1")
+	g2, _ := f.group("r", "g2")
 	r, _ := f.run("r")
 	if g1.Retries != 1 || g1.TasksDone != 1 || g1.Outcome != "done" || g1.EndedAt != t0.Add(60*time.Second) || stageOf(t, g1, "build").Seconds != 60 {
 		t.Fatalf("g1 = %+v", g1)

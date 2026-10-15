@@ -33,72 +33,80 @@ type logFile struct {
 	run       bus.ID
 	size      int64
 	last      time.Time
-	protected bool // a group of the run is open, paused or blocked
+	protected bool // the run has not ended
 }
 
-// trimDir deletes logs and session records past retention, then the oldest past the size bound.
-func trimDir(ctx context.Context, dir string, retentionDays int, t time.Time) error {
+// trimResult says what a trim did.
+type trimResult struct {
+	Deleted        []bus.ID // runs whose log the trim deleted
+	ProtectedBytes int64    // bytes held by logs of runs that have not ended
+	OverBound      bool     // those logs alone exceed the size bound
+}
+
+// trimDir deletes logs and session records past retention, then the oldest logs past the size bound; open names runs still live.
+func trimDir(ctx context.Context, dir string, retentionDays int, t time.Time, open map[bus.ID]bool) (trimResult, error) {
+	var res trimResult
 	if retentionDays <= 0 {
 		retentionDays = defaultRetentionDays
 	}
 	cutoff := t.Add(-time.Duration(retentionDays) * 24 * time.Hour)
-	logs, err := listLogs(ctx, dir)
+	logs, err := listLogs(ctx, dir, open)
 	if err != nil {
-		return err
+		return res, err
 	}
 	var kept []logFile
 	for _, l := range logs {
 		if !l.protected && l.last.Before(cutoff) {
 			if err := os.Remove(l.path); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("delete %s: %w", l.path, err)
+				return res, fmt.Errorf("delete %s: %w", l.path, err)
 			}
+			res.Deleted = append(res.Deleted, l.run)
 			continue
+		}
+		if l.protected {
+			res.ProtectedBytes += l.size
 		}
 		kept = append(kept, l)
 	}
+	res.OverBound = res.ProtectedBytes > sizeBound
 	sessPath := filepath.Join(dir, "sessions.jsonl")
 	if err := rewriteSessions(sessPath, func(lines [][]byte) [][]byte { return keepSince(lines, cutoff) }); err != nil {
-		return err
+		return res, err
 	}
 	total, err := folderSize(dir)
 	if err != nil || total <= sizeBound {
-		return err
+		return res, err
 	}
 	target := sizeBound * 8 / 10
 	slices.SortFunc(kept, func(a, b logFile) int { return a.last.Compare(b.last) })
 	for _, l := range kept {
 		if total <= target {
-			return nil
+			return res, nil
 		}
 		if l.protected {
 			continue
 		}
 		if err := os.Remove(l.path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("delete %s: %w", l.path, err)
+			return res, fmt.Errorf("delete %s: %w", l.path, err)
 		}
+		res.Deleted = append(res.Deleted, l.run)
 		total -= l.size
 	}
 	if total <= target {
-		return nil
+		return res, nil
 	}
-	return rewriteSessions(sessPath, func(lines [][]byte) [][]byte { return dropOldest(lines, total-target) })
+	return res, rewriteSessions(sessPath, func(lines [][]byte) [][]byte { return dropOldest(lines, total-target) })
 }
 
-// listLogs returns the run logs of a folder with their last-line times and protection.
-func listLogs(ctx context.Context, dir string) ([]logFile, error) {
+// listLogs returns the run logs of a folder with their last-line times; groups.json and runs.json are read once.
+func listLogs(ctx context.Context, dir string, open map[bus.ID]bool) ([]logFile, error) {
 	files, err := logFiles(dir)
 	if err != nil || len(files) == 0 {
 		return nil, err
 	}
-	groups, _, err := readFigures(ctx, dir)
+	_, runs, err := readFigures(ctx, dir)
 	if err != nil {
 		return nil, err
-	}
-	open := map[bus.ID]bool{}
-	for _, g := range groups {
-		if g.Outcome != outcomeDone {
-			open[g.Run] = true
-		}
 	}
 	out := make([]logFile, 0, len(files))
 	for _, p := range files {
@@ -111,7 +119,11 @@ func listLogs(ctx context.Context, dir string) ([]logFile, error) {
 		if !ok {
 			last = st.ModTime()
 		}
-		out = append(out, logFile{path: p, run: run, size: st.Size(), last: last, protected: open[run]})
+		live := open[run]
+		if r, found := runs[run]; found && r.EndedAt.IsZero() {
+			live = true
+		}
+		out = append(out, logFile{path: p, run: run, size: st.Size(), last: last, protected: live})
 	}
 	return out, nil
 }
@@ -190,12 +202,12 @@ func rewriteSessions(path string, edit func(lines [][]byte) [][]byte) error {
 	return core.WriteFileAtomic(path, out, filePerm)
 }
 
-// keepSince keeps the session records that started at or after cutoff.
+// keepSince keeps the session records that ended at or after cutoff; a record with no time and a line that does not parse stay.
 func keepSince(lines [][]byte, cutoff time.Time) [][]byte {
 	var out [][]byte
 	for _, l := range lines {
 		var r SessionRecord
-		if json.Unmarshal(l, &r) == nil && !r.StartedAt.Before(cutoff) {
+		if json.Unmarshal(l, &r) != nil || r.age().IsZero() || !r.age().Before(cutoff) {
 			out = append(out, l)
 		}
 	}

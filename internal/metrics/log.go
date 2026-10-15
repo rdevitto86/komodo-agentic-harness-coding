@@ -1,14 +1,11 @@
 package metrics
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
@@ -17,9 +14,6 @@ const (
 	dirPerm  = 0o755
 	filePerm = 0o644
 )
-
-// gitTimeout bounds the git call that finds a repository's git directory.
-const gitTimeout = 10 * time.Second
 
 // machineLogName is the log of events that name no run, kept in the machine metrics folder.
 const machineLogName = "engine.jsonl"
@@ -39,24 +33,6 @@ func runOfLog(name string) (bus.ID, bool) {
 
 // RepoDir returns a repository's metrics folder inside its git common directory.
 func RepoDir(commonDir string) string { return filepath.Join(commonDir, "komodo", "metrics") }
-
-// commonDir returns the absolute git common directory of the repository at root.
-func commonDir(ctx context.Context, root string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--git-common-dir").Output()
-	if err != nil {
-		return "", fmt.Errorf("find the git directory of %s: %w", root, err)
-	}
-	dir := strings.TrimSpace(string(out))
-	if dir == "" {
-		return "", fmt.Errorf("find the git directory of %s: empty answer", root)
-	}
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(root, dir)
-	}
-	return filepath.Clean(dir), nil
-}
 
 // safeName reports whether id can be one path segment of a file name.
 func safeName(id bus.ID) bool {

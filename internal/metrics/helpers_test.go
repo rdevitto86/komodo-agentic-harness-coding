@@ -5,19 +5,25 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 )
 
-// TestMain binds the fault events once, as the program does before its first publish.
+// errBody stands in for the data of an error event, which another package owns.
+type errBody struct {
+	Severity string `json:"severity"`
+}
+
+// EventKey binds the stand-in to error / fault.error.
+func (errBody) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "fault.error"} }
+
+// TestMain binds the stand-in error event once, as the program binds the real ones before its first publish.
 func TestMain(m *testing.M) {
-	fault.RegisterEvents()
+	bus.Register(errBody{}.EventKey(), func() bus.Payload { return &errBody{} })
 	os.Exit(m.Run())
 }
 
@@ -38,11 +44,11 @@ func facts(stage string, session bus.ID) bus.GroupFacts {
 type fixture struct {
 	t       *testing.T
 	root    string // the repository root
+	common  string // the repository's git common directory
 	repoDir string // the repository's metrics folder
 	homeDir string // the machine metrics folder passed to New
 	bus     bus.Bus
 	svc     *Service
-	errs    *bus.Subscription // error events published by the handler
 }
 
 // newFixture makes a git repository and a home folder in temporary folders and a Service over them.
@@ -51,26 +57,15 @@ func newFixture(t *testing.T, buffer int, mask func(string) string) *fixture {
 	root := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("KOMODO_HOME", home)
-	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
-	}
-	common, err := commonDir(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	common := filepath.Join(root, ".git")
 	b := bus.New(bus.Options{BufferEvents: buffer})
 	t.Cleanup(func() { _ = b.Close() })
-	errs, err := b.Subscribe("test-errors", bus.TypeError)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := fault.New(b, nil)
 	hd := filepath.Join(home, "metrics")
-	svc, err := New(b, h, hd, Options{RetentionDays: 30}, mask)
+	svc, err := New(b, hd, Options{RetentionDays: 30}, mask)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{t: t, root: root, repoDir: RepoDir(common), homeDir: hd, bus: b, svc: svc, errs: errs}
+	return &fixture{t: t, root: root, common: common, repoDir: RepoDir(common), homeDir: hd, bus: b, svc: svc}
 }
 
 // publish puts events on the bus and fails the test on a refusal.
@@ -104,7 +99,7 @@ func (f *fixture) start() (stop func()) {
 
 // runStart builds the run-start command of a run in the fixture repository.
 func (f *fixture) runStart(run bus.ID, groups ...string) bus.Event {
-	return bus.Event{Type: bus.TypeRunStart, Run: run, Data: &bus.RunStart{Target: "ep-1", Groups: groups, Source: "cli", Repo: "r", Root: f.root}}
+	return bus.Event{Type: bus.TypeRunStart, Run: run, Data: &bus.RunStart{Target: "ep-1", Groups: groups, Source: "cli", Repo: "r", Root: f.root, CommonDir: f.common}}
 }
 
 // lines returns the non-empty lines of a file, or none when it is missing.

@@ -85,10 +85,8 @@ func (r *fileReader) Groups(ctx context.Context, run bus.ID) ([]GroupMetrics, er
 		return nil, err
 	}
 	var out []GroupMetrics
-	for _, g := range groups {
-		if g.Run == run {
-			out = append(out, g)
-		}
+	for _, g := range groups[run] {
+		out = append(out, g)
 	}
 	slices.SortFunc(out, func(a, b GroupMetrics) int { return strings.Compare(string(a.Group), string(b.Group)) })
 	return out, nil
@@ -199,6 +197,7 @@ func rebuildFigures(ctx context.Context, dir string) (*figures, error) {
 		return nil, err
 	}
 	f := newFigures()
+	f.dir = dir
 	for _, p := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -215,8 +214,8 @@ func rebuildFigures(ctx context.Context, dir string) (*figures, error) {
 }
 
 // readFigures reads groups.json and runs.json; a missing file reads as empty and an unreadable one is rebuilt in memory from the run logs.
-func readFigures(ctx context.Context, dir string) (map[bus.ID]GroupMetrics, map[bus.ID]RunMetrics, error) {
-	groups, runs := map[bus.ID]GroupMetrics{}, map[bus.ID]RunMetrics{}
+func readFigures(ctx context.Context, dir string) (map[bus.ID]map[bus.ID]GroupMetrics, map[bus.ID]RunMetrics, error) {
+	groups, runs := map[bus.ID]map[bus.ID]GroupMetrics{}, map[bus.ID]RunMetrics{}
 	e1 := readJSON(filepath.Join(dir, "groups.json"), &groups)
 	e2 := readJSON(filepath.Join(dir, "runs.json"), &runs)
 	if e1 == nil && e2 == nil {
