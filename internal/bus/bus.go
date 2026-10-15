@@ -20,6 +20,8 @@ type Bus interface {
 	Publish(e Event) error
 	// Subscribe returns a private queue of events of the given types; no types means every type.
 	Subscribe(name string, types ...Type) (*Subscription, error)
+	// Seal refuses every later Publish with ErrBusSealed; queued events still reach their subscribers.
+	Seal()
 	// Close stops delivery and closes every subscription's channel.
 	Close() error
 }
@@ -38,6 +40,7 @@ type memBus struct {
 	buffer int
 	subs   []*Subscription
 	closed bool
+	sealed bool
 }
 
 // New returns an in-process bus; the engine holds the one bus of a machine.
@@ -58,6 +61,9 @@ func (b *memBus) Publish(e Event) error {
 	defer b.mu.Unlock()
 	if b.closed {
 		return ErrBusClosed
+	}
+	if b.sealed {
+		return ErrBusSealed
 	}
 	e.Time = now().UTC().Truncate(time.Second)
 	b.fanOutLocked(e)
@@ -117,6 +123,13 @@ func (b *memBus) Subscribe(name string, types ...Type) (*Subscription, error) {
 	}
 	b.subs = append(b.subs, s)
 	return s, nil
+}
+
+// Seal makes every later Publish fail with ErrBusSealed; subscriptions keep draining what is queued.
+func (b *memBus) Seal() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sealed = true
 }
 
 // Close stops delivery and closes every subscription's channel; closing twice is harmless.

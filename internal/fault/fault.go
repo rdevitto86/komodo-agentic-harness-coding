@@ -61,6 +61,14 @@ type Fault struct {
 	Stack    string // set for a panic
 }
 
+// ExitCode returns the exit code of the command the fault ends; a warn fault never changes it.
+func (f Fault) ExitCode() int {
+	if f.Severity == SeverityWarn {
+		return 0
+	}
+	return f.Kind.ExitCode()
+}
+
 // Error returns the reason, so a Fault can travel as an error.
 func (f Fault) Error() string { return f.Reason }
 
@@ -166,8 +174,8 @@ type otherRow struct {
 // otherErrors maps each error subtype that is not a fault event to the fault the Run loop prints for it.
 var otherErrors = map[bus.Subtype]otherRow{
 	"plan-blocked":    {"intake", format.PlanBlocked, KindBlocked, SeverityError, "The third planner draft failed lint"},
-	"plan-timeout":    {"intake", format.PlanTimeout, KindBlocked, SeverityError, "The planner's wall clock ran out"},
-	"plan-input":      {"intake", format.PlanInput, KindRefused, SeverityError, "A named document or the lock check could not be read"},
+	"plan-timeout":    {"intake", format.PlanTimeout, KindRefused, SeverityError, "The planner's wall clock ran out"},
+	"plan-input":      {"intake", format.PlanInput, KindUsage, SeverityError, "A named document or the lock check could not be read"},
 	"plan-write":      {"intake", format.PlanWrite, KindInternal, SeverityError, "The new task-list folder could not be written"},
 	"context-refused": {"contextmgr", format.ContextRefused, KindRefused, SeverityError, "A skill or tool-server request failed validation"},
 	"run-refused":     {"engine", format.RunRefused, KindRefused, SeverityError, "A command was refused, such as a dependency outside the run that is not Done"},

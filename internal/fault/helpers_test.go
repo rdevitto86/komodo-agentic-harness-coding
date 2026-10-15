@@ -3,6 +3,7 @@ package fault
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -118,7 +119,67 @@ func newRig(t *testing.T, run bool) *rig {
 		<-done
 		_ = b.Close()
 	})
+	if run {
+		waitRunning(t, h)
+	}
 	return r
+}
+
+// waitRunning waits until the Run loop of h is reading.
+func waitRunning(t *testing.T, h *Handler) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !h.running.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("Run loop did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// gatePrinter blocks on a fault whose reason is "block" until its gate opens.
+type gatePrinter struct {
+	fakePrinter
+	entered chan struct{}
+	gate    chan struct{}
+	once    sync.Once
+}
+
+// open lets the held fault through; calling it twice is harmless.
+func (p *gatePrinter) open() { p.once.Do(func() { close(p.gate) }) }
+
+// PrintError holds a "block" fault until the gate opens, then records it.
+func (p *gatePrinter) PrintError(f Fault) error {
+	if f.Reason == "block" {
+		close(p.entered)
+		<-p.gate
+	}
+	return p.fakePrinter.PrintError(f)
+}
+
+// newFullRig builds a handler whose one-slot queue is full: its loop is held in the printer and a second fault waits behind it.
+func newFullRig(t *testing.T) (*Handler, *gatePrinter, *syncBuf) {
+	t.Helper()
+	b := bus.New(bus.Options{BufferEvents: 1})
+	p := &gatePrinter{entered: make(chan struct{}), gate: make(chan struct{})}
+	h := New(b, p)
+	h.finalWait = 50 * time.Millisecond
+	errBuf := &syncBuf{}
+	h.stderr = errBuf
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = h.Run(ctx) }()
+	t.Cleanup(func() {
+		p.open()
+		cancel()
+		<-done
+		_ = b.Close()
+	})
+	waitRunning(t, h)
+	h.Report(srcTask, "internal", KindInternal, errors.New("block"))
+	<-p.entered
+	h.Report(srcTask, "internal", KindInternal, errors.New("fill"))
+	return h, p, errBuf
 }
 
 // next reads the next event the observer sees or fails after a second.

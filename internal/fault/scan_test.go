@@ -33,18 +33,17 @@ func bareGoStatements(t *testing.T, name string, src any) []string {
 	return bare
 }
 
-// defersRecover reports whether body defers a call to a method named Recover.
+// defersRecover reports whether the first statement of body defers a call to a method named Recover.
 func defersRecover(body *ast.BlockStmt) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if d, ok := n.(*ast.DeferStmt); ok {
-			if sel, ok := d.Call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Recover" {
-				found = true
-			}
-		}
-		return !found
-	})
-	return found
+	if len(body.List) == 0 {
+		return false
+	}
+	d, ok := body.List[0].(*ast.DeferStmt)
+	if !ok {
+		return false
+	}
+	sel, ok := d.Call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "Recover"
 }
 
 // TestBareGoStatementDetector checks the scanner flags a bare go statement and accepts a deferred Recover.
@@ -57,13 +56,21 @@ func TestBareGoStatementDetector(t *testing.T) {
 	if got := bareGoStatements(t, "lit.go", lit); len(got) != 1 {
 		t.Fatalf("go func without Recover not flagged: %v", got)
 	}
+	nested := "package x\nfunc f(h H) { go func() { func() { defer h.Recover(s, nil) }(); work() }() }\nfunc work() {}\n"
+	if got := bareGoStatements(t, "nested.go", nested); len(got) != 1 {
+		t.Fatalf("Recover in a nested literal not flagged: %v", got)
+	}
+	late := "package x\nfunc f(h H) { go func() { work(); defer h.Recover(s, nil) }() }\nfunc work() {}\n"
+	if got := bareGoStatements(t, "late.go", late); len(got) != 1 {
+		t.Fatalf("Recover that is not the first statement not flagged: %v", got)
+	}
 	ok := "package x\nfunc f(h H) { go func() { defer h.Recover(s, nil); work() }() }\nfunc work() {}\n"
 	if got := bareGoStatements(t, "ok.go", ok); len(got) != 0 {
 		t.Fatalf("deferred Recover flagged: %v", got)
 	}
 }
 
-// TestNoBareGoStatements is proof case 8: no go statement outside fault starts without Go or a deferred Recover.
+// TestNoBareGoStatements: no go statement outside fault starts without Go or a deferred Recover.
 func TestNoBareGoStatements(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {

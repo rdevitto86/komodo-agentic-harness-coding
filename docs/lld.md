@@ -697,7 +697,7 @@ func (c *CLI) Run(args []string) int
 func (c *CLI) PrintError(f fault.Fault) error
 ```
 
-`PrintError()` turns the fault into an `error.<code>` reply with the Output Formatter: `Code`, `Reason` and `Fix` become the `ErrorFacts` of [2.3](#23-data-model), and the run and group come from the fault's `Source`. It prints the envelope under `--json` and text otherwise, returns the print error, and never exits the process; the exit code of the command in progress is set by `render` from the fault's `Kind`.
+`PrintError()` turns the fault into an `error.<code>` reply with the Output Formatter: `Code`, `Reason` and `Fix` become the `ErrorFacts` of [2.3](#23-data-model), and the run and group come from the fault's `Source`. It prints the envelope under `--json` and text otherwise, returns the print error, and never exits the process; the exit code of the command in progress is set by `render` from the fault's `Kind`, except that a fault with severity `warn` never changes it.
 
 | Caller | Calls | When |
 |---|---|---|
@@ -3126,6 +3126,8 @@ type Bus interface {
 	Publish(e Event) error
 	// Subscribe returns a private queue of events of the given types; no types means every type.
 	Subscribe(name string, types ...Type) (*Subscription, error)
+	// Seal refuses every later Publish with ErrBusSealed; queued events still reach their subscribers.
+	Seal()
 	// Close stops delivery and closes every subscription's channel.
 	Close() error
 }
@@ -3157,6 +3159,7 @@ func Register(k Key, newData func() Payload)
 |---|---|---|
 | `ErrUnknownEvent` | `Publish` | The type and subtype pair is not registered, or `data` is not the registered struct |
 | `ErrBusClosed` | `Publish`, `Subscribe` | The bus was closed |
+| `ErrBusSealed` | `Publish` | The bus was sealed; a closed bus reports `ErrBusClosed` first |
 
 | Caller | Calls | When |
 |---|---|---|
@@ -3243,6 +3246,7 @@ The bus keeps its subscriptions and counters in memory only; nothing in this cha
 4. Every published event has a registered type and subtype pair; a test fails when an emitted pair is missing from the registry, or a registered pair is never emitted.
 5. `Publish` takes ownership of the event's data, a pointer to its registered struct; neither the publisher nor any subscriber changes it afterwards, so every subscriber reads the same body.
 6. An event's time is stamped while `Publish` holds the bus lock, so times never decrease along the stream.
+7. After `Seal`, every `Publish` from every caller returns `ErrBusSealed` and queues nothing; events queued before it still reach their subscribers. The Error Handler seals the bus after its final event ([17.7](#177-invariants-and-failures)).
 
 **Failures**
 
@@ -3252,6 +3256,7 @@ The bus keeps its subscriptions and counters in memory only; nothing in this cha
 | Queue full | `Publish`, at the queue | Drop the event for that subscription; publish `bus.overflow` | One `bus.overflow` per burst per subscription; a burst ends when that queue drains to half its size | The subscriber misses events |
 | Subscriber panics | The panic-catching helper | The helper publishes `error`; the subscriber closes | 0 | That subscriber stops; others continue |
 | Publish after close | `Publish` | Return `ErrBusClosed` | 0 | Nothing queued |
+| Publish after seal | `Publish` | Return `ErrBusSealed` | 0 | Nothing queued; earlier events still drain |
 | The control socket does not answer | The CLI | Start the engine, then send the command again | Dial every 50 ms for 5 seconds | The command runs, or the CLI reports the error |
 
 ### 4.8 Config
@@ -3276,6 +3281,7 @@ Component tests with fake subscribers; no live provider tests.
 | `Publish` of an unregistered subtype | `ErrUnknownEvent`; nothing queued |
 | Decode of the example `session.end` line | The registry returns `SessionEnd`; an unknown field is refused |
 | `Close` then `Publish` | `ErrBusClosed`; every `Events` channel is closed |
+| `Seal` with events queued, then `Publish` from 8 goroutines | Every `Publish` returns `ErrBusSealed`; the queued events are still delivered in order |
 | Every row of the event-name table | The pair is registered, or the row says none or names its TODO |
 | A `run-start` with `schedule` set, sent over the control socket | The engine's bus broadcasts it once; the Runtime Manager receives `groups`, `source` and `schedule` |
 | 10 events, then the engine is killed | The event log holds the lines flushed before the kill; a torn last line is dropped on read |
@@ -12523,7 +12529,7 @@ The Error Handler is the harness's global safety net. It catches every error and
 - **Fault:** one thing that went wrong, as a record: where, what code, how serious, what to tell the person and how to fix it.
 - **Panic:** a Go runtime failure inside a goroutine, such as an index out of range. The built-in `recover` catches a panic; it cannot catch a fatal runtime error such as running out of memory.
 - **Severity:** `warn` for a condition that does not stop work, `error` for one that does.
-- **Kind:** the class of fault that picks the CLI's exit code: refused, usage, blocked or internal.
+- **Kind:** the class of fault that picks the CLI's exit code: refused, usage, blocked or internal. A fault with severity `warn` never changes the exit code, whatever its kind.
 - **Starter:** the code that launched a goroutine; it decides what a panic in that goroutine means for its group.
 
 ### 17.2 Package Layout
@@ -12624,7 +12630,7 @@ func (ResourceFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Su
 | `component` | The package name; the run and group are on the event's own `run` and `group` |
 | `code` | One word of the closed code list; a panic uses `internal` |
 | `kind` | Decides the exit code when the CLI is waiting on a reply |
-| `severity` | `warn` never changes a group; `error` means the affected goroutine's work ended |
+| `severity` | `warn` never changes a group or the command's exit code; `error` means the affected goroutine's work ended |
 | `stack` | Present only with `panic: true` |
 | `final` | True on the one event a process publishes just before it exits on a caught error; no event follows it from that process |
 
@@ -12659,7 +12665,8 @@ These are the codes of the closed list that a command-line refusal or failure ca
 | `no_repo` | 1 | [1. CLI](#1-cli) |
 | `over_limit` | 1 | [3. Configuration Manager](#3-configuration-manager) |
 | `card_changed`, `locked` | 1 | [5. Intake Handler](#5-intake-handler) |
-| `plan_blocked`, `plan_timeout` | 1 | [5. Intake Handler](#5-intake-handler) |
+| `plan_blocked` | 3 | [5. Intake Handler](#5-intake-handler) |
+| `plan_timeout` | 1 | [5. Intake Handler](#5-intake-handler) |
 | `plan_input` | 2 | [5. Intake Handler](#5-intake-handler) |
 | `plan_write` | 4 | [5. Intake Handler](#5-intake-handler) |
 | `context_refused` | 1 | [6. Context Manager](#6-context-manager) |
@@ -12670,6 +12677,8 @@ These are the codes of the closed list that a command-line refusal or failure ca
 | `usage` | 2 | [1. CLI](#1-cli) |
 | `unknown_key`, `bad_value` | 2 | [3. Configuration Manager](#3-configuration-manager) |
 | `internal` | 4 | The Error Handler, for a recovered panic or an undecodable record |
+
+**The exit rule.** The exit code is the exit of the printed fault's `Kind`: refused 1, usage 2, blocked 3, internal 4. A fault with severity `warn` never changes the exit code: `bus_overflow` and the resource kinds `window_full` and `spend_ceiling` are `warn`, because the run pauses and does not fail. A `Kind` outside the four exits 4.
 
 A held group's block reason is the code of its `needs.<reason>` shape ([2.3](#23-data-model)). Exit 3 carries a block or exit reason of a group; those codes are owned by [7. Runtime Manager](#7-runtime-manager) (block reasons) and [11. Task Manager](#11-task-manager) (session exit reasons).
 
@@ -12684,25 +12693,26 @@ type Printer interface {
 // Handler catches faults, publishes them and prints them.
 type Handler struct{ /* bus, printer, subscription */ }
 
-// New returns a Handler that publishes on b and prints through p; b is nil in the CLI process, where Guard and Final print through p and publish nothing.
+// New returns a Handler that publishes on b and prints through p; b is nil in the CLI process, where Final prints through p and publishes nothing.
 func New(b bus.Bus, p Printer) *Handler
 
-// Go runs fn in a new goroutine; a panic is recovered, published, and then passed to onPanic.
+// Go runs fn in a new goroutine; a panic is recovered, published, and then passed to onPanic. A panic inside onPanic is published as its own fault.
 func (h *Handler) Go(src Source, fn func(), onPanic func(Fault))
 
 // Recover is deferred at the top of a goroutine that Go did not start.
 func (h *Handler) Recover(src Source, onPanic func(Fault))
 
-// Guard runs fn in the calling goroutine and returns its error, or a Fault for its panic.
+// Guard runs fn in the calling goroutine and returns its error, or a Fault for its panic; with no bus it prints nothing, and the caller passes the Fault to Final.
 func (h *Handler) Guard(src Source, fn func() error) error
 
 // Report publishes a returned error as an error event.
 func (h *Handler) Report(src Source, code string, kind Kind, err error)
 
-// Final publishes the one last error event with Final set, waits until the Run loop has printed it or ctx ends, and returns the exit code of the fault's Kind.
+// Final publishes the one last error event with Final set and seals the bus, waits until the Run loop has printed it, ctx ends or 2 seconds pass, and returns the fault's exit code.
+// With no bus, no Run loop reading, or a wait that ran out, Final prints the fault itself.
 func (h *Handler) Final(ctx context.Context, src Source, f Fault) int
 
-// ThrowResourceError publishes a resource fault; called by the Resource Manager.
+// ThrowResourceError publishes a resource fault; called by the Resource Manager. It returns an error when no Run loop is reading or the loop's queue dropped the event.
 func (h *Handler) ThrowResourceError(ctx context.Context, e ResourceError) error
 
 // Run reads error events and prints each through the Printer until ctx ends.
@@ -12710,7 +12720,7 @@ func (h *Handler) Run(ctx context.Context) error
 ```
 
 **Two wirings.**
-- **CLI process.** `fault` has no bus there. `cmd/komodo/main.go` calls `fault.New(nil, cli)`; `Guard` and `Final` print through `(*CLI).PrintError` and publish nothing.
+- **CLI process.** `fault` has no bus there. `cmd/komodo/main.go` calls `fault.New(nil, cli)`; `Guard` returns the `Fault` of a panic without printing, and `Final` prints it once through `(*CLI).PrintError` and publishes nothing.
 - **Engine.** The Handler has the engine's bus. Its `Printer` is `engine.ConnPrinter` ([7.3](#73-data-model)), which writes a `Reply` with `Status` `error` to the connection that issued the command the fault belongs to.
 
 The CLI implements the printer side:
@@ -12764,7 +12774,7 @@ flowchart LR
 3. The handler publishes the fault as an `error` event with the run and group of its `Source`. If publishing fails, the handler writes the fault to standard error and goes on.
 4. The bus delivers the event to the handler's own subscription, which the `Run` loop reads. This is the only path that prints, so a fault is never printed twice.
 5. The loop calls `PrintError` on the registered `Printer`. If `PrintError` fails, the loop writes the fault to standard error; it never publishes a new `error` event for a print failure, so a failing printer cannot loop.
-6. For a panic, `Go` then calls `onPanic` with the fault. The starter decides the effect: the Task Manager asks the Runtime Manager to block that group with reason `crash`, and the run and the other groups continue.
+6. For a panic, `Go` then calls `onPanic` with the fault. The starter decides the effect: the Task Manager asks the Runtime Manager to block that group with reason `crash`, and the run and the other groups continue. A panic inside `onPanic` is recovered and published as a second `fault.panic` event; it never leaves the handler.
 
 The Metrics Service sees the same event through its all-events subscription ([18](#18-metrics-service)).
 
@@ -12776,25 +12786,36 @@ The `Run` loop reads every `error` event. A `fault.*` event already holds a `Fau
 |---|---|---|
 | `bus.overflow` | `bus_overflow`, `internal`, `warn` | The subscription named in the data dropped the counted events |
 | `plan-blocked` | `plan_blocked`, `blocked`, `error` | The third planner draft failed lint |
-| `plan-timeout` | `plan_timeout`, `blocked`, `error` | The planner's wall clock ran out |
-| `plan-input` | `plan_input`, `refused`, `error` | A named document or the lock check could not be read |
+| `plan-timeout` | `plan_timeout`, `refused`, `error` | The planner's wall clock ran out |
+| `plan-input` | `plan_input`, `usage`, `error` | A named document or the lock check could not be read |
 | `plan-write` | `plan_write`, `internal`, `error` | The new task-list folder could not be written |
 | `context-refused` | `context_refused`, `refused`, `error` | A skill or tool-server request failed validation; the field is named |
 | `run-refused` | `run_refused`, `refused`, `error` | A command was refused, such as a dependency outside the run that is not Done |
 
-The `component` is `bus`, `intake`, `contextmgr` or `engine`, and `fix` is empty; the loop reads the `run` and `group` from the event.
-**A panic outside a group.** `(*CLI).Run` wraps the command in `Guard`. A panic there prints through `PrintError` and exits 4, `internal`.
+The `component` is `bus`, `intake`, `contextmgr` or `engine`, and `fix` is empty; the loop reads the `run` and `group` from the event. The `kind` of each row gives the exit of its code in [17.3](#173-data-model); an error subtype with no row is written to standard error and not printed.
+
+**A panic outside a group.** `(*CLI).Run` wraps the command in `Guard`. With no bus, `Guard` returns the `Fault` of the panic without printing; `(*CLI).Run` passes it to `Final`, which prints it once through `PrintError` and returns 4, `internal`. A panic inside the printer becomes a line on standard error and exit 4.
 
 **A panic in the handler itself.** A deferred `recover` in `Run` and `Report` writes to standard error and returns; the handler never calls itself.
 
 **An error that ends the program.** Any caught error that makes the program exit, in the CLI process or in the engine, goes through `Final` first.
 
 1. The caller passes its `Source` and `Fault` to `Final`.
-2. `Final` publishes one `error` event for the fault, with `final` set to true and the subtype the fault would have had.
-3. It waits until the `Run` loop has read the event and printed it, or until `ctx` ends.
-4. It returns the exit code of the fault's `Kind`, and the caller exits with it. The process publishes no event after the final one.
+2. `Final` publishes one `error` event for the fault, with `final` set to true and the subtype the fault would have had, then seals the bus: every later `Publish` returns `ErrBusSealed`, while queued events still reach their subscribers.
+3. It waits until the `Run` loop has read the event and printed it, until `ctx` ends, or for 2 seconds.
+4. When no `Run` loop is reading, or the 2 seconds pass because the queue dropped the event, `Final` prints the fault itself through the `Printer`; the loop and `Final` never both print it.
+5. It returns the exit code of the fault, and the caller exits with it. The process publishes no event after the final one.
 
-The bus delivers the final event in publish order, so the Runtime Manager and the Metrics Service receive it after every event before it. A caught failure therefore reaches the group's state, which the Runtime Manager saves before it acts, and the Metrics Service's event log, which is written after the broadcast. If publishing fails, `Final` writes the fault to standard error and still returns the exit code.
+The bus delivers the final event in publish order, so the Runtime Manager and the Metrics Service receive it after every event before it. A caught failure therefore reaches the group's state, which the Runtime Manager saves before it acts, and the Metrics Service's event log, which is written after the broadcast. If publishing fails, `Final` writes the fault to standard error and still returns the exit code. With no bus, `Final` prints through the `Printer` and publishes nothing.
+
+**Rules the signatures leave open**
+- `Fault.Error` returns `Reason`, so a `Fault` travels as an `error`.
+- `Final` uses its `src` argument as the fault's source when `src` is not the zero `Source`, and `f.Source` otherwise.
+- A handler with no bus treats every publish as a failed publish and writes the fault to standard error; `ThrowResourceError` also returns an error.
+- After `Final`, `Report`, `Go`, `ThrowResourceError` and a second `Final` publish nothing and write the fault to standard error.
+- A `ResourceError` becomes a fault with component `resource`, code `over_limit` and kind `refused`; its severity is the caller's, except that `window_full` and `spend_ceiling` are always `warn`.
+- A `window` resource fault reads `plan window N% used on <link>` with the fix `wait for the window reset`; every other kind reads `<kind> at <value> against <threshold>`, plus ` on <link>` when a link is set, with no fix.
+- A recovered runtime panic keeps its message without the `runtime error: ` prefix; a panic inside the printer or the handler is written to standard error.
 
 **What no handler can catch.** A fatal Go runtime error, such as an out-of-memory kill or two goroutines writing one map, ends the process without a `recover`, so no final event is published. Recovery after it reads only the State Manager: `komodo run (id)` continues each group from its saved state ([7. Runtime Manager](#7-runtime-manager)).
 
@@ -12811,19 +12832,21 @@ The handler keeps no state on disk. It holds its bus subscription and the regist
 2. A fault is printed on one path only: the `Run` loop.
 3. Printing a fault never raises a new `error` event.
 4. A panic in one group's goroutine ends that goroutine's work only.
-5. A process that exits on a caught error publishes one `error` event with `final` set, and no event after it.
+5. A process that exits on a caught error publishes one `error` event with `final` set, and no event after it; the bus enforces this because `Final` seals it right after that event.
 
 #### Failures the Error Handler owns
 
 | Failure | Detected by | Action | Bound | Final state |
 |---|---|---|---|---|
 | Panic in a goroutine | `recover` in `Go` | Publish `fault.panic`; call `onPanic` | 0 retries | The starter's effect; for a group, blocked `crash` |
-| Panic in the CLI command | `Guard` | Print, exit 4 `internal` | 0 | Command ends |
+| Panic in the CLI command | `Guard` | Return the `Fault`; `Final` prints it, exit 4 `internal` | 0 | Command ends |
 | `PrintError` fails | The `Run` loop | Write to standard error | 0 | Fault stays on the bus |
 | Publish fails or bus closed | `Go`, `Report` | Write to standard error | 0 | Fault not on the bus |
 | Panic inside the handler | Deferred `recover` in `Run` | Write to standard error | 0 | Handler keeps running |
 | Fatal runtime error | The operating system | Not catchable | | No final event; recovery reads the State Manager and `komodo run (id)` continues each group |
-| Caught error ends the program | `Final` | Publish the final event, wait for the print, return the exit code | `ctx` | Process exits with the code of the fault's `Kind` |
+| Caught error ends the program | `Final` | Publish the final event, seal the bus, wait for the print, print it itself if no loop reads or the event was dropped, return the exit code | `ctx`, 2 seconds | Process exits with the code of the fault |
+| Panic in `onPanic` or in the printer | Deferred `recover` in `Recover` and in the print path | Publish a second `fault.panic`, or write to standard error; `Final` returns 4 | 0 | The handler keeps running |
+| Resource fault not printed | `ThrowResourceError` | Return an error; the Resource Manager retries on its next observation | 0 | Fault on the bus only |
 
 #### The failure table, by owning component
 
@@ -12862,11 +12885,12 @@ Two packages declare `ErrContext` (the brief builder and the router). They stay 
 
 ### 17.8 Config
 
-The Error Handler reads no settings key. One constant has no key.
+The Error Handler reads no settings key. Two constants have no key.
 
 | Constant | Value |
 |---|---|
 | Stack kept in an event | 4 KB, the cap of a block's detail |
+| Wait of `Final` for the print | 2 seconds, a design target |
 
 ### 17.9 Proof Cases
 
@@ -12879,12 +12903,19 @@ Component tests with a fake bus and a fake `Printer`.
 | `Report` with a refused error | One `fault.error` event with `kind: refused`; one `PrintError` call |
 | `ThrowResourceError` at warn | One `fault.resource` event with `severity: warn`; one `PrintError` call |
 | `PrintError` returns an error | A line on standard error; no new `error` event |
-| `Guard` around a panicking command | `PrintError` called; `kind: internal` selects exit 4 |
+| `Guard` around a panicking command | A `Fault` with `kind: internal` is returned; `Final` prints it and selects exit 4 |
 | The bus is closed when a panic is caught | The fault goes to standard error; `onPanic` still runs |
 | A source scan of the repository | No `go` statement outside `fault` starts without `Go` or a deferred `Recover` |
 | `Final` with a refused fault | One `error` event with `final: true`; one `PrintError` call; the return value is 1 |
 | `Final` with a closed bus | The fault goes to standard error; the return value is still the fault's exit code |
-| A process that has called `Final` | No further event leaves that process |
+| A process that has called `Final` | No further event leaves that process; the bus refuses a `Publish` with `ErrBusSealed` |
+| `Final` with no `Run` loop reading | The fault is printed once by `Final` and the call returns |
+| `Final` when the full queue drops the event | After the wait, `Final` prints the fault once; the loop never prints it again |
+| A panic inside `onPanic` | A second `fault.panic` event; nothing escapes |
+| A printer that panics, under `Final` | A line on standard error; the return value is 4 |
+| `Guard` around a panicking command with no bus, then `Final` | One `PrintError` call in all |
+| `ThrowResourceError` with no `Run` loop, or with the event dropped | An error is returned |
+| A fault with severity `warn` | The exit code is 0; each code in the table of 17.3 selects its listed exit |
 
 ### 17.10 Open Gaps
 

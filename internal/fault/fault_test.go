@@ -19,7 +19,7 @@ func TestKindExitCode(t *testing.T) {
 	}
 }
 
-// TestEventKeys checks each fault struct binds the type and subtype of the contract.
+// TestEventKeys checks each fault struct binds the type and subtype.
 func TestEventKeys(t *testing.T) {
 	cases := map[string]bus.Payload{"fault.error": ErrorFault{}, "fault.panic": PanicFault{}, "fault.resource": ResourceFault{}}
 	for st, p := range cases {
@@ -29,7 +29,7 @@ func TestEventKeys(t *testing.T) {
 	}
 }
 
-// TestDecodeContractLines decodes the two event lines of the contract through the bus registry.
+// TestDecodeContractLines decodes the two event lines through the bus registry.
 func TestDecodeContractLines(t *testing.T) {
 	panicLine := `{"type":"error","subtype":"fault.panic","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","time":"2026-10-14T16:02:45Z","data":{"component":"task","code":"internal","kind":"internal","severity":"error","reason":"index out of range [3] with length 3","panic":true,"stack":"goroutine 41 [running]:\n..."}}`
 	resLine := `{"type":"error","subtype":"fault.resource","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T16:10:00Z","data":{"component":"resource","code":"over_limit","kind":"refused","severity":"warn","reason":"plan window 82% used on claude-cli","fix":"wait for the window reset"}}`
@@ -109,12 +109,12 @@ func TestCodesAreOnTheClosedList(t *testing.T) {
 	}
 }
 
-// TestOtherErrorTable checks each non-fault error subtype maps to the code, kind and severity of the contract.
+// TestOtherErrorTable checks each non-fault error subtype maps to the code, kind and severity.
 func TestOtherErrorTable(t *testing.T) {
 	want := map[bus.Subtype][4]string{
 		"plan-blocked":    {"plan_blocked", "blocked", "error", "intake"},
-		"plan-timeout":    {"plan_timeout", "blocked", "error", "intake"},
-		"plan-input":      {"plan_input", "refused", "error", "intake"},
+		"plan-timeout":    {"plan_timeout", "refused", "error", "intake"},
+		"plan-input":      {"plan_input", "usage", "error", "intake"},
 		"plan-write":      {"plan_write", "internal", "error", "intake"},
 		"context-refused": {"context_refused", "refused", "error", "contextmgr"},
 		"run-refused":     {"run_refused", "refused", "error", "engine"},

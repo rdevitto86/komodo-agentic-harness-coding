@@ -24,15 +24,27 @@ type ResourceError struct {
 // Error implements the error interface.
 func (e ResourceError) Error() string { return "resource " + string(e.Severity) + ": " + e.Kind }
 
-// ThrowResourceError publishes a resource fault; a dead bus is written to standard error and returned.
+// ThrowResourceError publishes a resource fault; it returns an error when the fault is not published or no Run loop will print it.
 func (h *Handler) ThrowResourceError(ctx context.Context, e ResourceError) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	f := resourceFault(e)
+	var before uint64
+	if h.sub != nil {
+		before = h.sub.Dropped()
+	}
 	if err := h.publish(f, subtypeResource, false); err != nil {
 		h.writeStderr(f, "not published: "+err.Error())
 		return fmt.Errorf("publish resource fault: %w", err)
+	}
+	if !h.running.Load() {
+		h.writeStderr(f, "not printed: "+errNoRunLoop.Error())
+		return fmt.Errorf("print resource fault: %w", errNoRunLoop)
+	}
+	if h.sub.Dropped() > before {
+		h.writeStderr(f, "not printed: "+errDropped.Error())
+		return fmt.Errorf("print resource fault: %w", errDropped)
 	}
 	return nil
 }
@@ -44,6 +56,9 @@ func resourceFault(e ResourceError) Fault {
 		Code:     string(format.OverLimit),
 		Kind:     KindRefused,
 		Severity: e.Severity,
+	}
+	if e.Kind == "window_full" || e.Kind == "spend_ceiling" {
+		f.Severity = SeverityWarn
 	}
 	if e.Kind == "window" {
 		f.Reason = fmt.Sprintf("plan window %.0f%% used on %s", e.Value, e.Link)

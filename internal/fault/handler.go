@@ -9,6 +9,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/format"
@@ -16,6 +18,15 @@ import (
 
 // errNoBus marks a publish on a handler that has no bus, as in the CLI process.
 var errNoBus = errors.New("no event bus")
+
+// errNoRunLoop marks a fault published while no Run loop was reading to print it.
+var errNoRunLoop = errors.New("no Run loop is reading")
+
+// errDropped marks a fault the Run loop's full queue dropped.
+var errDropped = errors.New("the Run loop's queue dropped the event")
+
+// defaultFinalWait is how long Final waits for the Run loop to print before it prints the fault itself.
+const defaultFinalWait = 2 * time.Second
 
 // errAfterFinal marks an event refused because the final event already left the process.
 var errAfterFinal = errors.New("final event already published")
@@ -31,15 +42,18 @@ type Handler struct {
 	mu        sync.Mutex // orders every publish against the final one
 	finalSent bool       // the final event was published; nothing follows it
 
-	printed     chan struct{} // closed once the Run loop has printed the final event
+	printed     chan struct{} // closed once the Run loop has handled the final event
 	printedOnce sync.Once
+	finalOnce   sync.Once     // lets exactly one of the Run loop and Final print the final fault
+	finalWait   time.Duration // how long Final waits for the Run loop
+	running     atomic.Bool   // the Run loop is reading
 
 	errMu sync.Mutex // keeps lines on standard error whole
 }
 
 // New returns a Handler that publishes on b and prints through p; b is nil in the CLI process, where Guard and Final print through p and publish nothing.
 func New(b bus.Bus, p Printer) *Handler {
-	h := &Handler{bus: b, printer: p, stderr: os.Stderr, printed: make(chan struct{})}
+	h := &Handler{bus: b, printer: p, stderr: os.Stderr, printed: make(chan struct{}), finalWait: defaultFinalWait}
 	if b != nil {
 		h.sub, h.subErr = b.Subscribe("fault", bus.TypeError)
 	}
@@ -63,12 +77,24 @@ func (h *Handler) Recover(src Source, onPanic func(Fault)) {
 	f := panicFault(src, r)
 	h.emit(f, subtypePanic)
 	if onPanic != nil {
-		onPanic(f)
+		h.callOnPanic(src, f, onPanic)
 	}
 }
 
+// callOnPanic runs the starter's callback; a panic inside it is reported as its own internal fault.
+func (h *Handler) callOnPanic(src Source, f Fault, onPanic func(Fault)) {
+	defer func() {
+		if r := recover(); r != nil {
+			g := panicFault(src, r)
+			g.Reason = "panic in onPanic callback: " + g.Reason
+			h.emit(g, subtypePanic)
+		}
+	}()
+	onPanic(f)
+}
+
 // Guard runs fn in the calling goroutine and returns its error, or a Fault for its panic.
-// Without a bus it prints the panic through the printer; with one it publishes it and the Run loop prints.
+// Without a bus it only returns the Fault, which the caller passes to Final; with one it publishes it.
 func (h *Handler) Guard(src Source, fn func() error) (err error) {
 	defer func() {
 		r := recover()
@@ -76,9 +102,7 @@ func (h *Handler) Guard(src Source, fn func() error) (err error) {
 			return
 		}
 		f := panicFault(src, r)
-		if h.bus == nil {
-			h.print(f)
-		} else {
+		if h.bus != nil {
 			h.emit(f, subtypePanic)
 		}
 		err = f
@@ -95,30 +119,38 @@ func (h *Handler) Report(src Source, code string, kind Kind, err error) {
 	h.emit(Fault{Source: src, Code: code, Kind: kind, Severity: SeverityError, Reason: err.Error()}, subtypeError)
 }
 
-// TODO(G-225): the entry point for what the Metrics Service sends the Error Handler goes here.
+// The Metrics Service's link to the Error Handler is not specified yet; its entry point goes here.
 
-// Final publishes the one last error event with Final set, waits until the Run loop has printed it or ctx ends, and returns the exit code of the fault's Kind.
-// Without a bus it prints through the printer and publishes nothing.
+// Final publishes the one last error event with Final set, seals the bus, and waits until the Run loop has printed it, ctx ends or the wait runs out.
+// Without a bus, with no Run loop reading, or after a timeout, it prints the fault itself; it returns the fault's exit code, or 4 if the printer panics.
 func (h *Handler) Final(ctx context.Context, src Source, f Fault) int {
-	code := f.Kind.ExitCode()
+	code := f.ExitCode()
 	if src != (Source{}) {
 		f.Source = src
 	}
 	if h.bus == nil {
-		h.print(f)
+		if !h.print(f) {
+			return KindInternal.ExitCode()
+		}
 		return code
 	}
 	if err := h.publish(f, subtypeOf(f), true); err != nil {
 		h.writeStderr(f, "not published: "+err.Error())
 		return code
 	}
-	if h.sub == nil {
-		h.print(f)
-		return code
+	if h.running.Load() {
+		timer := time.NewTimer(h.finalWait)
+		defer timer.Stop()
+		select {
+		case <-h.printed:
+			return code
+		case <-ctx.Done():
+			return code
+		case <-timer.C:
+		}
 	}
-	select {
-	case <-h.printed:
-	case <-ctx.Done():
+	if !h.printFinal(f) {
+		return KindInternal.ExitCode()
 	}
 	return code
 }
@@ -132,6 +164,8 @@ func (h *Handler) Run(ctx context.Context) error {
 		return errNoBus
 	}
 	defer h.sub.Close()
+	h.running.Store(true)
+	defer h.running.Store(false)
 	for {
 		select {
 		case <-ctx.Done():
@@ -156,7 +190,18 @@ func (h *Handler) handle(e bus.Event) {
 		h.writeLine(fmt.Sprintf("komodo: unhandled error event %s\n", e.Subtype))
 		return
 	}
+	if finalOf(e) {
+		h.printFinal(f)
+		return
+	}
 	h.print(f)
+}
+
+// printFinal prints the final fault unless the Run loop or Final already did; ok is false if the printer panicked.
+func (h *Handler) printFinal(f Fault) (ok bool) {
+	ok = true
+	h.finalOnce.Do(func() { ok = h.print(f) })
+	return ok
 }
 
 // guardSelf is deferred in the handler's own paths; it writes a panic to standard error and returns.
@@ -166,15 +211,17 @@ func (h *Handler) guardSelf() {
 	}
 }
 
-// print hands f to the printer; a failure goes to standard error and raises no event.
-func (h *Handler) print(f Fault) {
+// print hands f to the printer; a failure goes to standard error and raises no event, and ok is false if the printer panicked.
+func (h *Handler) print(f Fault) (ok bool) {
+	defer h.guardSelf()
 	if h.printer == nil {
 		h.writeStderr(f, "no printer")
-		return
+		return true
 	}
 	if err := h.printer.PrintError(f); err != nil {
 		h.writeStderr(f, "print failed: "+err.Error())
 	}
+	return true
 }
 
 // emit publishes f under the subtype and writes it to standard error when it cannot be published.
@@ -208,7 +255,11 @@ func (h *Handler) publish(f Fault, st bus.Subtype, final bool) error {
 	if final {
 		h.finalSent = true
 	}
-	return h.bus.Publish(bus.Event{Type: bus.TypeError, Subtype: st, Run: f.Source.Run, Group: f.Source.Group, Data: p})
+	err := h.bus.Publish(bus.Event{Type: bus.TypeError, Subtype: st, Run: f.Source.Run, Group: f.Source.Group, Data: p})
+	if err == nil && final {
+		h.bus.Seal()
+	}
+	return err
 }
 
 // subtypeOf returns the subtype a fault is published under.

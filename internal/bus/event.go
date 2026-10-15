@@ -43,6 +43,9 @@ var ErrUnknownEvent = errors.New("unknown event type, subtype or data")
 // ErrBusClosed marks a call on a bus that was closed.
 var ErrBusClosed = errors.New("bus closed")
 
+// ErrBusSealed marks a publish on a bus that was sealed.
+var ErrBusSealed = errors.New("bus sealed")
+
 // wireEvent is the event line with its data body still undecoded.
 type wireEvent struct {
 	Type    Type            `json:"type"`
