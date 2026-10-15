@@ -1,0 +1,11 @@
+[
+  {"id": "claude-opus-5-5", "weight": "heavy", "tier": "latest", "window": 1000000, "max_out": 128000, "price_in_usd_per_m": 4, "price_out_usd_per_m": 20},
+  {"id": "claude-opus-5", "weight": "heavy", "tier": "prior", "window": 1000000, "max_out": 128000, "price_in_usd_per_m": 5, "price_out_usd_per_m": 25},
+  {"id": "claude-sonnet-5-5", "weight": "standard", "tier": "latest", "window": 1000000, "max_out": 128000, "price_in_usd_per_m": 2, "price_out_usd_per_m": 10},
+  {"id": "claude-sonnet-5", "weight": "standard", "tier": "prior", "window": 1000000, "max_out": 128000, "price_in_usd_per_m": 2, "price_out_usd_per_m": 10},
+  {"id": "claude-haiku-5-5", "weight": "light", "tier": "latest", "window": 1000000, "max_out": 128000, "price_in_usd_per_m": 0.1, "price_out_usd_per_m": 0.5},
+  {"id": "claude-haiku-4-5", "weight": "light", "tier": "prior", "window": 200000, "max_out": 64000, "price_in_usd_per_m": 1, "price_out_usd_per_m": 5},
+  {"id": "Gemma 4 31B", "weight": "heavy", "tier": "local", "price_in_usd_per_m": 0, "price_out_usd_per_m": 0},
+  {"id": "Qwen3.6-27B", "weight": "standard", "tier": "local", "price_in_usd_per_m": 0, "price_out_usd_per_m": 0},
+  {"id": "Nemotron 3 Nano", "weight": "light", "tier": "local", "price_in_usd_per_m": 0, "price_out_usd_per_m": 0}
+]
