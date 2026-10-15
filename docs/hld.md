@@ -22,7 +22,7 @@ flowchart LR
   CL["Cleanup<br><small>free branch, worktree, resources</small>"]
   PR(["Pull request<br><small>a person merges</small>"]):::ok
   G -->|"1 plan"| I
-  I -->|"2 next"| B
+  I -->|"2 run-start"| B
   B -->|"3 ready"| T
   B -->|"3 ready"| R
   T -->|"4 pass"| C
@@ -108,7 +108,7 @@ Each quality goal has a mechanism that code enforces. No model is trusted to beh
 | Simplicity | 19 subsystems with one job each, joined by one event bus instead of point-to-point messages |
 | Durability | Leases name exactly one owner per branch and worktree; each finished task is saved as a local commit before approval |
 | Cost control | The Resource Manager watches plan windows and spending, and the Cache Manager reuses context instead of re-sending it |
-| Observability | The Metrics Service records a copy of every event on the bus |
+| Observability | The bus stores every event before delivering it; the Metrics Service turns them into figures |
 
 Design principles: **one owner per data kind**, **announce on the bus, call for answers**, and **fail closed**.
 
@@ -131,7 +131,7 @@ flowchart LR
   WA["Watchers<br><small>Error Handler · Metrics · Resource Manager</small>"]:::muted
   IF -->|"1 command events"| SP
   SP -->|"2 plan"| PL
-  PL -->|"3 next: task lists ready"| RT
+  PL -->|"3 run-start: task lists ready"| RT
   RT -->|"4 start a Task Manager"| WK
   WK -->|"5 run status"| SP
   SP -->|"6 every event"| WA
@@ -140,7 +140,7 @@ flowchart LR
 
 1. The CLI sends each command to the Runtime Manager, which broadcasts it as run-start, run-stop, run-continue or plan.
 2. A plan command reaches the Intake Handler, which plans with context from the Context Manager.
-3. The Intake Handler publishes next when task lists are ready, and may publish run-start for them; the consumer of next is [TODO: ([G-224](lld.md#g-224))].
+3. The Intake Handler publishes run-start for the task lists it wrote.
 4. The Runtime Manager starts one Task Manager per task group, with its lease, state and cache.
 5. Each group's progress goes back onto the bus as run-status events.
 6. The watchers receive every event: errors, metrics and resource use.
@@ -150,7 +150,7 @@ Besides these hand-offs, a subsystem calls another directly when it needs an ans
 
 #### 5.2 CLI
 
-The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, init, config get and set, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it, and replay plays back recorded events at no cost. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
+The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 12 commands: install, config get and set, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it, replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
 
 #### 5.3 Output Formatter
 
@@ -162,11 +162,11 @@ The Configuration Manager guards the harness settings and the agent registry, th
 
 #### 5.5 Event Bus
 
-The Event Bus is the spine: every subsystem publishes facts to it, and every subsystem subscribes to the types it needs, so parts never need to know who listens. Every event has the same shape: a type, a subtype, the run and group it belongs to, a time and a small body. The main types are next and plan (intake), skill and mcp (context), run-start, run-stop and run-continue (commands), run-status, run-complete and run-failure (runtime), resource, and error. The bus lives in memory inside the runtime. Detail: [chapter 4](lld.md#4-event-bus).
+The Event Bus is the spine: every subsystem publishes facts to it, and every subsystem subscribes to the types it needs, so parts never need to know who listens. Every event has the same shape: a type, a subtype, the run and group it belongs to, a time and a small body. The main types are plan (intake), skill and mcp (context, published by the Configuration Manager), run-start, run-stop and run-continue (commands), run-status, run-complete and run-failure (runtime), resource, and error. The bus lives in memory inside the runtime and keeps the event store: it writes every event to the run's log before it delivers it, and replay reads that log. Detail: [chapter 4](lld.md#4-event-bus).
 
 #### 5.6 Intake Handler
 
-The Intake Handler is the Intake stage. It starts the planner agent, gives it context from the Context Manager, and turns existing documents such as an HLD or a product requirements document into task lists of task groups and tasks. When a plan passes its checks, the handler publishes the first next event, which moves the internal pointer to the next stage. Detail: [chapter 5](lld.md#5-intake-handler).
+The Intake Handler is the Intake stage. It starts the planner agent, gives it context from the Context Manager, and turns existing documents such as an HLD or a product requirements document into task lists of task groups and tasks. When a plan passes its checks, the handler publishes run-start for the groups it wrote. Detail: [chapter 5](lld.md#5-intake-handler).
 
 #### 5.7 Context Manager
 
@@ -174,7 +174,7 @@ The Context Manager guards everything an agent may see beyond the code: skills (
 
 #### 5.8 Runtime Manager
 
-The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, retries, timeouts and blocks. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand and stopped when no run is live or scheduled. Each Task Manager runs inside it with a direct command channel. Detail: [chapter 7](lld.md#7-runtime-manager).
+The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, retries, timeouts and blocks. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand and stopped when no run is live or scheduled. Each Task Manager runs inside it with a direct command channel and a heartbeat; a silent part is restarted. Before any group starts it creates the epic's branch, and the Commit Handler commits the task lists onto it. Detail: [chapter 7](lld.md#7-runtime-manager).
 
 #### 5.9 Cache Manager
 
@@ -218,11 +218,11 @@ The Error Handler is the global safety net: it catches every error and panic bef
 
 #### 5.19 Metrics Service
 
-The Metrics Service records a copy of every event on the bus and turns them into run metrics: time per stage, per group and per run, tokens and cost, and general performance. Its records also help explain failures. Detail: [chapter 18](lld.md#18-metrics-service).
+The Metrics Service listens to every event on the bus and turns them into run metrics: time per stage, per group and per run, tokens and cost, and general performance. Its records also help explain failures. Detail: [chapter 18](lld.md#18-metrics-service).
 
 #### 5.20 Resource Manager
 
-The Resource Manager watches agent resources for overages, such as a subscription plan's usage window or paid token costs, so work is not lost to a limit. It raises warnings and errors through the Error Handler. It warns at 80% of a limit, and a full plan window pauses the affected groups until it resets. Detail: [chapter 19](lld.md#19-resource-manager).
+The Resource Manager watches agent resources for overages, such as a subscription plan's usage window or paid token costs, so work is not lost to a limit. It raises warnings and errors through the Error Handler. It warns at 80% of a limit; a full plan window, a spending ceiling or a group's token cap pauses the affected groups, and agents near the token cap are nudged to finish first. Detail: [chapter 19](lld.md#19-resource-manager).
 
 ## 6. Runtime
 
@@ -242,12 +242,13 @@ sequenceDiagram
   participant M as Metrics Service
   P->>B: event with type, subtype, run, group
   B->>S: deliver to each subscriber of that type
+  B->>B: write the event to the store first
   B->>M: deliver a copy of every event
   S-->>P: reply only through a direct call, never through the bus
 ```
 
 1. A producer, such as the Runtime Manager, publishes an event with its type and subtype.
-2. The bus delivers it to every subscriber of that type, in the order it was published.
+2. The bus writes it to the run's event log, then delivers it to every subscriber of that type, in publish order.
 3. The Metrics Service receives a copy of every event.
 4. A part that needs an answer calls the owner directly instead of waiting for an event.
 
@@ -289,7 +290,7 @@ sequenceDiagram
 2. The Intake Handler gets context from the Context Manager and starts the planner agent.
 3. The planner drafts task groups, tasks, file patterns, dependencies and acceptance items.
 4. Go code checks the draft; a failure goes back to the same planner session a bounded number of times.
-5. A passing plan is written as task lists, and the next event moves the internal pointer to the next stage.
+5. A passing plan is written as task lists, and the Intake Handler publishes run-start for them.
 
 #### 6.4 Errors, Limits and Blocks
 
@@ -312,7 +313,7 @@ Komodo runs on macOS, Linux and Windows Subsystem for Linux 2. Test sandboxes us
 
 #### 7.3 Install and Update
 
-`komodo install` puts the binary on the machine and the Komodo block into a repository; `komodo init` sets up the orchestrator's skills in Claude Code. `komodo update` downloads, verifies and swaps in a new signed binary, and a running process keeps the version it started with.
+`komodo install` puts the binary on the machine and a short Komodo block into the repository's AGENTS.md, telling any host agent the harness is there; no agents or skills are copied into a host. `komodo update` downloads, verifies and swaps in a new signed binary, and a running process keeps the version it started with.
 
 ## 8. Crosscutting Concepts
 
@@ -357,7 +358,7 @@ Each row names a decision, the alternative rejected and the reason.
 | Only the Configuration Manager touches settings | Each part reading settings files | Settings stay consistent and out of agent reach |
 | A lease registry as the single source of truth for branch and worktree ownership | Locks spread across files | One answer to "who owns this branch" |
 | One runtime per machine, reached by a local socket | One per run, or none | Scheduled runs and every group share one owner |
-| Recovery reads saved state; the Metrics Service keeps the event log | One log for both | Each record has one owner and one reader |
+| Recovery reads saved state; the bus stores every event before delivering it | A log kept by the Metrics Service | Replay has no gaps, and each record has one owner |
 | Continue a group with `run` | Separate build, test and review commands | No stage runs out of order |
 | One pull request per epic | One per group | Groups land in order and are rechecked |
 
@@ -396,12 +397,7 @@ The OpenAI path is scoped but not built (G-20).
 
 #### 11.4 Open Decisions
 
-Each is a [gap register](lld.md#appendix-b-gap-register) row awaiting the owner:
-
-- Commands: what `clean` removes ([G-222](lld.md#g-222)), what `install` and `init` add to the host ([G-231](lld.md#g-231)), what `ui` may do ([G-234](lld.md#g-234)) and where metrics are shown ([G-255](lld.md#g-255)).
-- Event wiring: [G-223](lld.md#g-223) and [G-224](lld.md#g-224).
-- Saving work and landing: [G-226](lld.md#g-226), [G-263](lld.md#g-263), [G-265](lld.md#g-265) and [G-270](lld.md#g-270).
-- Limits and health: [G-246](lld.md#g-246), [G-249](lld.md#g-249) and [G-258](lld.md#g-258).
+None are open. Build-time questions are [gap register](lld.md#appendix-b-gap-register) rows.
 
 ## 12. Glossary
 
