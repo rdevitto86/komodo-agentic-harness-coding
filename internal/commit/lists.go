@@ -30,7 +30,7 @@ func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 	if err != nil {
 		return fail(KindGit, true, fmt.Errorf("create a temporary worktree folder: %w", err))
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	wt := filepath.Join(tmp, "wt")
 	if err := h.Git.AddWorktree(ctx, r.CommonDir, wt, epic, remote+"/"+epic); err != nil {
 		return gitFail(err)

@@ -428,3 +428,39 @@ func TestPublishCriticalBranch(t *testing.T) {
 		t.Fatalf("git ran: %v", w.traced[n:])
 	}
 }
+
+// Two groups of one epic landing at once merge one after the other, in the order they arrived.
+func TestPublishConcurrentGroupsLandInArrivalOrder(t *testing.T) {
+	w := newWorld(t)
+	h := w.handler()
+	gA, gB := w.newGroup("tg-1.1"), w.newGroup("tg-1.2")
+	w.work(gA, "a.txt", "a")
+	w.work(gB, "b.txt", "b")
+	aA, aB := w.approval(gA, "tg-1.1", "tg-1.2"), w.approval(gB, "tg-1.1", "tg-1.2")
+	hold, err := h.Epics.Enter(w.ctx, "repo/ep-1", "holder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 2)
+	// B arrives first, A second.
+	go func() { _, err := h.Publish(w.ctx, aB); errs <- err }()
+	waitQueued(t, h.Epics, "repo/ep-1", 1)
+	go func() { _, err := h.Publish(w.ctx, aA); errs <- err }()
+	waitQueued(t, h.Epics, "repo/ep-1", 2)
+	hold.Release()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	ls, err := w.git.Landed(w.ctx, w.clone, "origin/main", "origin/komodo/ep-1")
+	if err != nil || len(ls) != 2 {
+		t.Fatalf("landings = %+v, %v", ls, err)
+	}
+	if ls[1].Label != "tg-1.2" || ls[0].Label != "tg-1.1" {
+		t.Fatalf("landing order (oldest last) = %s, %s; want tg-1.2 then tg-1.1", ls[1].Label, ls[0].Label)
+	}
+	if len(ls[0].Files) == 0 {
+		t.Fatalf("files missing: %+v", ls[0])
+	}
+}

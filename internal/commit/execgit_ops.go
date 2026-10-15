@@ -25,7 +25,7 @@ func (g *ExecGit) TreeOf(ctx context.Context, worktree string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create temporary index folder: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(tmp, "index")}
 	if g.hasHead(ctx, t) {
 		if _, err := g.run(ctx, t, "", env, "read-tree", "HEAD"); err != nil {
@@ -255,7 +255,7 @@ func (g *ExecGit) Merge(ctx context.Context, dir, ref, message string, noFF bool
 	if err != nil {
 		return "", fmt.Errorf("write merge message: %w", err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	_, werr := f.WriteString(message)
 	if cerr := f.Close(); werr == nil {
 		werr = cerr

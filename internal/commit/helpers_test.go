@@ -28,7 +28,7 @@ func isolate(t *testing.T) {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"} {
 		t.Setenv(k, "")
-		os.Unsetenv(k)
+		_ = os.Unsetenv(k)
 	}
 }
 
