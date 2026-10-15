@@ -381,7 +381,9 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 		}
 		st.emit(KindOutput, map[string]any{"type": "assistant", "message": res.Content})
 		for i := range res.Headroom {
-			st.emit(KindHeadroom, res.Headroom[i])
+			h := res.Headroom[i]
+			raw, _ := json.Marshal(map[string]any{"type": "headroom", "name": h.Name, "limit": h.Limit, "remaining": h.Remaining, "reset": h.Reset})
+			st.push(loopItem{ev: StreamEvent{Kind: KindHeadroom, Raw: raw, Headroom: &h}})
 		}
 		if res.Stop == stopMaxTokens {
 			if cut {
