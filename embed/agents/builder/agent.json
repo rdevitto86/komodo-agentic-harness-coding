@@ -1,0 +1,67 @@
+{
+  "v": 1,
+  "weight": "standard",
+  "chain": [
+    "claude-cli",
+    "anthropic-api"
+  ],
+  "tools": [
+    "read",
+    "search",
+    "edit",
+    "write",
+    "run",
+    "skill",
+    "task_done"
+  ],
+  "run_classes": [
+    "build",
+    "test",
+    "lint",
+    "format"
+  ],
+  "guard": [
+    "R1",
+    "B1"
+  ],
+  "limits": {
+    "wall_min": 60,
+    "idle_min": 10,
+    "retries": 2
+  },
+  "skills": {
+    "allow": [
+      "standards-*"
+    ],
+    "always": [
+      "standards-comments"
+    ]
+  },
+  "slots": {
+    "required": [
+      "repo_profile",
+      "group",
+      "tasks",
+      "files",
+      "file_contents"
+    ],
+    "optional": [
+      "repo_context",
+      "standards",
+      "diff",
+      "checks",
+      "findings",
+      "scope_answer",
+      "specs"
+    ]
+  },
+  "result": {
+    "$id": "komodo:agent/builder/result/1",
+    "type": "object",
+    "required": [
+      "status",
+      "summary"
+    ]
+  },
+  "pool_slot": true
+}
