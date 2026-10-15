@@ -11,8 +11,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -46,10 +49,17 @@ var ErrClosed = errors.New("cache is closed")
 // renameFile moves the temp file into place; tests replace it to simulate rename failures.
 var renameFile = os.Rename
 
+// syncFile flushes the temp file before it is renamed; tests replace it to watch the order of steps.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
+// syncDirHandle flushes an open directory after a rename; tests replace it to watch the order of steps.
+var syncDirHandle = func(d *os.File) error { return d.Sync() }
+
 // Limits are the size caps the Runtime Manager passes in from the Configuration Manager.
 type Limits struct {
-	MaxBytes     int64 // cap of the entry store, from cache.max_mb
-	LangMaxBytes int64 // cap of the language store, from sandbox.lang_cache_gb
+	MaxBytes     int64  // cap of the entry store, from cache.max_mb
+	LangMaxBytes int64  // cap of the language store, from sandbox.lang_cache_gb
+	LangRoot     string // folder that holds one language store per repository; TouchLang stamps inside it
 }
 
 // NamespaceStats counts the entries and bytes of one namespace.
@@ -68,6 +78,7 @@ type Stats struct {
 }
 
 // Handle is what the Runtime Manager passes to the Context Manager and to each Task Manager.
+// It has no Stats, Clear, Close, TrimLang or TouchLang; only the Runtime Manager calls those on the Cache.
 type Handle interface {
 	// Key hashes the version and inputs into an entry key.
 	Key(inputs ...string) Key
@@ -83,14 +94,27 @@ type Cache struct {
 	version      string
 	maxBytes     int64
 	langMaxBytes int64
-	now          func() time.Time // clock for last-read stamps; tests replace it
-	mu           sync.Mutex
+	langRoot     string
+	now          func() time.Time      // clock for last-read stamps; tests replace it
+	closed       atomic.Bool           // set by Close
+	hits         counters              // Get calls that found a valid entry
+	lookups      counters              // all Get calls
+	mu           sync.Mutex            // guards the three fields below
 	index        map[string]cacheEntry // path -> entry; nil until first needed
 	total        int64                 // sum of sizes in index
 	scanned      time.Time             // when index last came from a disk scan
-	closed       bool                  // set by Close
-	hits         map[Namespace]int64   // Get calls that found a valid entry
-	lookups      map[Namespace]int64   // all Get calls
+}
+
+// counters holds one atomic count per namespace; the map is built once and never changes.
+type counters map[Namespace]*atomic.Int64
+
+// newCounters returns a zero count for every namespace.
+func newCounters() counters {
+	c := counters{}
+	for _, ns := range namespaces {
+		c[ns] = new(atomic.Int64)
+	}
+	return c
 }
 
 // handle is the Key, Get and Put view of a Cache; it has no Stats, Clear or Close.
@@ -121,8 +145,8 @@ func New(root, version string, lim Limits) (*Cache, error) {
 		return nil, fmt.Errorf("create cache root: %w", err)
 	}
 	return &Cache{
-		root: root, version: version, maxBytes: lim.MaxBytes, langMaxBytes: lim.LangMaxBytes, now: time.Now,
-		hits: map[Namespace]int64{}, lookups: map[Namespace]int64{},
+		root: root, version: version, maxBytes: lim.MaxBytes, langMaxBytes: lim.LangMaxBytes, langRoot: lim.LangRoot,
+		now: time.Now, hits: newCounters(), lookups: newCounters(),
 	}, nil
 }
 
@@ -146,11 +170,14 @@ func (c *Cache) Key(inputs ...string) Key {
 // An entry that fails its check is deleted and reported as a miss; I/O errors and a closed cache also miss.
 func (c *Cache) Get(ns Namespace, key Key) ([]byte, bool) {
 	path, err := c.entryPath(ns, key)
-	if err != nil || c.isClosed() {
+	if err != nil || c.closed.Load() {
 		return nil, false
 	}
 	payload, ok := c.read(ns, path)
-	c.count(ns, ok)
+	c.lookups[ns].Add(1)
+	if ok {
+		c.hits[ns].Add(1)
+	}
 	return payload, ok
 }
 
@@ -173,27 +200,10 @@ func (c *Cache) read(ns Namespace, path string) ([]byte, bool) {
 	return payload, true
 }
 
-// count adds one lookup, and one hit when hit is true, to the namespace's counters.
-func (c *Cache) count(ns Namespace, hit bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lookups[ns]++
-	if hit {
-		c.hits[ns]++
-	}
-}
-
-// isClosed reports whether Close has been called.
-func (c *Cache) isClosed() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.closed
-}
-
 // Put stores data under key atomically, then evicts least recently read entries until the cache fits its cap.
 // Concurrent Puts of one key from any number of processes leave one complete entry.
 func (c *Cache) Put(ns Namespace, key Key, data []byte) error {
-	if c.isClosed() {
+	if c.closed.Load() {
 		return ErrClosed
 	}
 	path, err := c.entryPath(ns, key)
@@ -238,6 +248,9 @@ func writeEntry(path string, data []byte) (renameFailed bool, err error) {
 	if _, err = tmp.Write(data); err == nil {
 		err = tmp.Chmod(0o644)
 	}
+	if err == nil {
+		err = syncFile(tmp)
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
@@ -249,7 +262,26 @@ func writeEntry(path string, data []byte) (renameFailed bool, err error) {
 		_ = os.Remove(name)
 		return true, fmt.Errorf("rename onto %s: %w", path, err)
 	}
+	if err = syncDir(filepath.Dir(path)); err != nil {
+		return false, fmt.Errorf("sync directory of %s: %w", path, err)
+	}
 	return false, nil
+}
+
+// syncDir flushes a directory entry to disk; it is a no-op where the OS cannot sync directories.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	if err := syncDirHandle(d); err != nil && !errors.Is(err, syscall.EINVAL) {
+		return err
+	}
+	return nil
 }
 
 // validEntrySize returns the on-disk size of the entry file at path, or false when it is missing or fails its check.
@@ -271,13 +303,15 @@ func (c *Cache) Stats() (Stats, error) {
 		return Stats{}, err
 	}
 	s := statsOf(entries)
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	for ns, n := range c.lookups {
-		s.Lookups[ns] = n
+		if v := n.Load(); v > 0 {
+			s.Lookups[ns] = v
+		}
 	}
 	for ns, n := range c.hits {
-		s.Hits[ns] = n
+		if v := n.Load(); v > 0 {
+			s.Hits[ns] = v
+		}
 	}
 	return s, nil
 }
@@ -288,31 +322,35 @@ func (c *Cache) Clear(ns ...Namespace) (Stats, error) {
 	if len(ns) == 0 {
 		ns = namespaces
 	}
+	seen := map[Namespace]bool{}
+	var targets []Namespace
 	for _, n := range ns {
 		if !validNamespace(n) {
 			return Stats{}, fmt.Errorf("unknown cache namespace %q", n)
 		}
+		if !seen[n] {
+			seen[n] = true
+			targets = append(targets, n)
+		}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entries, err := scanCache(c.root, ns...)
+	entries, err := scanCache(c.root, targets...)
 	if err != nil {
 		return Stats{}, err
 	}
-	for _, n := range ns {
+	for _, n := range targets {
 		if err := os.RemoveAll(filepath.Join(c.root, string(n))); err != nil {
 			return Stats{}, fmt.Errorf("remove namespace %s: %w", n, err)
 		}
 	}
+	c.mu.Lock()
 	c.index, c.total = nil, 0
+	c.mu.Unlock()
 	return statsOf(entries), nil
 }
 
 // Close stops the cache; later Get calls miss and later Put calls return ErrClosed. A second call returns nil.
 func (c *Cache) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.closed = true
+	c.closed.Store(true)
 	return nil
 }
 

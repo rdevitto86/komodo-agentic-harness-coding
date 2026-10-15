@@ -6508,7 +6508,7 @@ internal/cache/
 | Plan markers for a request | `PlanMarkers`, then `Handle.Put` in `prompt` | Each Task Manager's model client |
 | Open and close | `New`, `Cache.Close` | Runtime Manager only |
 | Clear and count | `Cache.Clear`, `Cache.Stats` | Runtime Manager only |
-| Trim the language store | `Cache.TrimLang` | Runtime Manager only |
+| Stamp and trim the language store | `Cache.TouchLang`, `Cache.TrimLang` | Runtime Manager only |
 
 The Runtime Manager opens the one `*Cache` of a repository at that repository's first run and closes it when the repository's last run ends. When it starts the Context Manager and each Task Manager it passes them a `Handle` of that cache, and they read and write through it directly. No other part opens a cache of its own.
 
@@ -6541,7 +6541,8 @@ The key is the SHA-256 of the binary version and every input, each written as it
 // Limits are the size caps the Runtime Manager passes in from the Configuration Manager.
 type Limits struct {
 	MaxBytes     int64 // cap of the entry store, from cache.max_mb
-	LangMaxBytes int64 // cap of the language store, from sandbox.lang_cache_gb
+	LangMaxBytes int64 // cap of the language stores of all repositories together, from sandbox.lang_cache_gb
+	LangRoot     string // folder that holds one language store per repository, such as cache/lang
 }
 
 // Stats counts one cache in total and per namespace.
@@ -6685,8 +6686,12 @@ func (c *Cache) Clear(ns ...Namespace) (Stats, error)
 // Close stops the cache; later Get calls miss and later Put calls return ErrClosed. Only the Runtime Manager calls it.
 func (c *Cache) Close() error
 
-// TrimLang removes the least recently modified files of the language store at dir until about 80% of its cap is left, and returns the bytes removed.
-func (c *Cache) TrimLang(dir string) (int64, error)
+// TouchLang stamps the repository's language store as used now; the Runtime Manager calls it when a group of that repository starts.
+func (c *Cache) TouchLang(repo string) error
+
+// TrimLang deletes whole repository stores under dir, least recently used first, until about 80% of the cap is left, and returns the bytes removed.
+// A repository for which keep returns true is never deleted; a nil keep keeps all. An empty dir means LangRoot.
+func (c *Cache) TrimLang(dir string, keep func(repo string) bool) (int64, error)
 ```
 
 | Method | On failure |
@@ -6696,17 +6701,18 @@ func (c *Cache) TrimLang(dir string) (int64, error)
 | `Put` | `ErrEntryTooLarge` for an entry over the cap; `ErrClosed` after `Close`; any other error is returned and the caller goes on without the entry |
 | `Stats` | A scan error is returned |
 | `Clear` | A removal error is returned with nothing partly reported |
-| `Close` | Cannot fail in a way a caller acts on; a second call returns nil. `Stats`, `Clear` and `TrimLang` still work after it |
+| `Close` | Cannot fail in a way a caller acts on; a second call returns nil. `Stats`, `Clear`, `TouchLang` and `TrimLang` still work after it |
 | `Clear` with an unknown namespace | An error, and nothing is removed |
-| `TrimLang` | A scan or removal error is returned with the bytes already removed; a missing folder removes nothing |
+| `TrimLang` | A scan or removal error is returned with the bytes already removed; a missing folder removes nothing; an empty `dir` with no `LangRoot` is an error |
+| `TouchLang` | An id that is not one folder name, or no `LangRoot`, returns an error |
 
 | Caller | Call | When |
 |---|---|---|
-| Runtime Manager | `New`, `Handle`, `Stats`, `Clear`, `TrimLang`, `Close` | Opens a repository's cache at its first run, passes a handle to each part it starts, closes it when the repository's last run ends |
+| Runtime Manager | `New`, `Handle`, `Stats`, `Clear`, `TouchLang`, `TrimLang`, `Close` | Opens a repository's cache at its first run, passes a handle to each part it starts, closes it when the repository's last run ends |
 | Context Manager | `Handle.Key`, `Get`, `Put` | Skills, context, map and setup pieces |
 | Task Manager | `Handle.Key`, `Get`, `Put`, `PlanMarkers` | Marker plans in `prompt` |
 
-The Context Manager and each Task Manager never call `New`, `Stats`, `Clear` or `Close`; the interface they hold does not have them.
+The Context Manager and each Task Manager never call `New`, `Stats`, `Clear`, `TouchLang`, `TrimLang` or `Close`; the interface they hold does not have them.
 
 ### 8.5 Behaviour
 
@@ -6740,10 +6746,11 @@ flowchart TD
 
 #### Language store trim
 
-1. The language store is trimmed while the harness runs, not deleted whole.
-2. When the store passes its cap, the least recently used entries are removed until it is at about 80% of the cap.
-3. A store whose repository holds a lease is trimmed but never deleted whole: `TrimLang` removes files only, never the store folder, so a repository that holds a lease keeps its store.
-4. Only regular files count. They go oldest modification time first, ties broken by path. A file in a read-only folder, as a module cache leaves them, is removed after the folder is made writable, and folders left empty are removed.
+1. The language store is trimmed while the harness runs, not deleted whole. Its unit is one repository's folder, `cache/lang/<repo-id>/`.
+2. `TouchLang` rewrites an empty `.last-used` file in the repository's folder; the file's modification time is the unit's last use. A folder with no stamp counts as the oldest.
+3. When the folders together pass the cap, `TrimLang` deletes whole folders, least recently used first, ties broken by repository id, until the total is at about 80% of the cap.
+4. A repository for which the `keep` function returns true is skipped, so a repository that holds a lease is never deleted; the Runtime Manager passes a function that asks the Lease Manager. A nil `keep` skips every repository.
+5. A folder goes whole or stays whole: it is never trimmed file by file. Read-only folders, as a module cache leaves them, are made writable first, and the folder named by `dir` itself is never removed.
 
 #### Marker plan for one request
 
@@ -6795,7 +6802,7 @@ The Configuration Manager reads the settings file and passes these values to the
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `cache.max_mb` | integer | 256 (maximum 4096) | Size cap of one repository's entry store; least recently used entries go first |
-| `sandbox.lang_cache_gb` | integer | 10 (maximum 50) | Size cap of one repository's language store; trimmed to about 80% when passed. The key's owner is [TODO: owner of the language and build caches ([G-215](#g-215))] |
+| `sandbox.lang_cache_gb` | integer | 10 (maximum 50) | Size cap of the language stores of all repositories together; least recently used repositories are deleted whole until about 80% is left. The key's owner is [TODO: owner of the language and build caches ([G-215](#g-215))] |
 
 ### 8.9 Proof Cases
 
@@ -6821,8 +6828,8 @@ Tests use a temporary directory; no network and no live provider.
 - `Stats` on a missing root reports an empty cache; `Clear` for one namespace leaves the others.
 - A rename failure on `Put` keeps a valid existing entry.
 - A `Handle` given to a second goroutine reads and writes the same entries as the `Cache`; after `Close`, `Get` misses and `Put` returns `ErrClosed`.
-- A package that holds a `Handle` cannot call `Clear`, `Stats` or `Close` (a compile-time check).
-- A language store over its cap trims to about 80%, never deletes whole, and keeps a repository that holds a lease.
+- The method set of `Handle` is exactly `Key`, `Get` and `Put`: a test over the interface type finds no `Clear`, `Stats`, `Close`, `TrimLang` or `TouchLang`.
+- A language store over its cap deletes repository folders whole, in stamp order, to about 80%; a repository the `keep` function names survives; a read-only module tree is removed whole; the store's root folder stays.
 - `Get` counts a hit and a lookup; a miss counts a lookup only.
 
 ### 8.10 Open Gaps
