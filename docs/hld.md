@@ -399,7 +399,7 @@ The OpenAI path is scoped but not built (G-20).
 Each is a [gap register](lld.md#appendix-b-gap-register) row awaiting the owner:
 
 - Commands: what `clean` removes ([G-222](lld.md#g-222)), what `install` and `init` add to the host ([G-231](lld.md#g-231)), what `ui` may do ([G-234](lld.md#g-234)) and where metrics are shown ([G-255](lld.md#g-255)).
-- Event wiring: [G-223](lld.md#g-223) to [G-225](lld.md#g-225).
+- Event wiring: [G-223](lld.md#g-223) and [G-224](lld.md#g-224).
 - Saving work and landing: [G-226](lld.md#g-226), [G-263](lld.md#g-263), [G-265](lld.md#g-265) and [G-270](lld.md#g-270).
 - Limits and health: [G-246](lld.md#g-246), [G-249](lld.md#g-249) and [G-258](lld.md#g-258).
 

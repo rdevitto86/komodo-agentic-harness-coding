@@ -119,8 +119,6 @@ func (h *Handler) Report(src Source, code string, kind Kind, err error) {
 	h.emit(Fault{Source: src, Code: code, Kind: kind, Severity: SeverityError, Reason: err.Error()}, subtypeError)
 }
 
-// The Metrics Service's link to the Error Handler is not specified yet; its entry point goes here.
-
 // Final publishes the one last error event with Final set, seals the bus, and waits until the Run loop has printed it, ctx ends or the wait runs out.
 // Without a bus, with no Run loop reading, or after a timeout, it prints the fault itself; it returns the fault's exit code, or 4 if the printer panics.
 func (h *Handler) Final(ctx context.Context, src Source, f Fault) int {
