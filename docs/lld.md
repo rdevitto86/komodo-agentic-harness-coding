@@ -13766,7 +13766,7 @@ flowchart LR
 
 **Pause and resume at a full window.**
 1. A window's percent used reaches 100.
-2. `Evaluate` returns a `window_full` error and a pause order for the groups seen on that link, with `Until` set to the window's reset time.
+2. `Evaluate` returns a `window_full` warning and a pause order for the groups seen on that link, with `Until` set to the window's reset time.
 3. Once the Error Handler call succeeds, `Observe` calls `PauseGroups`.
 4. The Runtime Manager lets each named group finish its current step, then pauses it ([7.5](#75-behaviour)). A group that is not running is skipped, and a paused group keeps its lease.
 5. At `Until` the Runtime Manager returns each group to the stage it left ([7.5](#75-behaviour)), so no command is needed.
