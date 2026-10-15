@@ -3595,6 +3595,8 @@ The package is `internal/intake`.
 | `internal/intake/docs.go` | Reading the source documents a plan request names |
 | `internal/intake/hash.go` | The card hash of a group |
 
+The planner's role definition and result decoder are in `internal/agent/planner.go`: `PlannerRole`, `PlannerResult` and `ParsePlannerResult`. A `PlannerResult` has the shape of a `PlanDraft`; the handler copies one into the other.
+
 ### 5.3 Data Model
 
 #### Task-list layout
@@ -10328,8 +10330,8 @@ Go package `internal/agent` (HLD Appendix A). It holds the role definitions and 
 |---|---|
 | `internal/agent/role.go` | `Role` and `Slots`, the compiled role definition every agent shares |
 | `internal/agent/builder.go` | The Builder's `Role`, `BuilderResult` and `ParseBuilderResult` |
-| `internal/agent/taskgate.go` | `TaskGate`: rerun a completion command and return its outcome |
-| `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` |
+| `internal/agent/taskgate.go` | `CommandRunner`, `TaskGate` and `CapOutput`: rerun a completion command and return its capped outcome |
+| `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` and `MatchGlob`, the file pattern matcher of the guard's pattern rules |
 
 Files this chapter calls but does not own:
 
@@ -10771,9 +10773,13 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 
 | File | Holds |
 |---|---|
-| `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `TesterResult` and `Tester.AcceptResult` |
+| `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `TesterResult`, `TesterVerdict`, `ParseTesterResult`, `NewTester` and `Tester.AcceptResult` |
 | `internal/agent/rerun.go` | `Tester.Rerun` and `AdjudicateItem` |
 | `internal/agent/checks.go` | `Checker`, the check steps, their results and `CheckDone` |
+| `internal/agent/checker.go` | `CheckerConfig`, `NewChecker` and the eight steps |
+| `internal/agent/coverage.go` | `CoverageCommand`, `ParseCoverage` and `CoverageLevel` |
+| `internal/agent/gotest.go` | `TestRun`, `ParseGoTestJSON` and `NewBaseline`: Go test and package-list output |
+| `internal/agent/secrets.go` | The diff's added lines and the secret scan |
 | `internal/agent/baseline.go` | `Baseline`, `Classify`, `ClassifyFailure` |
 | `internal/agent/impact.go` | `ImpactSet` |
 | `internal/agent/scope.go` | `OutOfScope`, shared with the Builder ([12.2](#122-package-layout)) |
@@ -10796,7 +10802,7 @@ Files this chapter calls but does not own:
   "run_classes": ["build", "test"],
   "guard": ["R1"],
   "slots": {
-    "required": ["repo_profile", "group", "tasks"],
+    "required": ["repo_profile", "group", "tasks", "acceptance"],
     "optional": ["repo_context", "standards", "diff", "checks", "baseline"]
   },
   "result": {"$id": "komodo:agent/tester/result/1", "type": "object", "required": ["items", "tasks"]},
@@ -10914,6 +10920,7 @@ const (
 	RerunConfirmed RerunOutcome = "confirmed" // both reruns failed
 	RerunDisputed  RerunOutcome = "disputed"  // both reruns passed
 	RerunSplit     RerunOutcome = "split"     // one passed, one failed
+	RerunUnconfirmed RerunOutcome = "unconfirmed" // the item has no command, so Go ran nothing
 )
 ```
 
@@ -10922,6 +10929,8 @@ The Task Manager folds the validated result and the rerun outcomes into one verd
 ```go
 // TesterVerdict is the Tester's outcome as the approval rule reads it.
 type TesterVerdict struct {
+	Ended    bool     `json:"ended"`              // the Tester's session ended with a valid result and Go's reruns finished
+	Restarts int      `json:"restarts,omitempty"` // restarts spent after a dispute
 	Pass     bool     `json:"pass"`               // every task confirmed and every item passed or skipped
 	NotMet   []string `json:"not_met,omitempty"`  // task identifiers marked not_confirmed
 	Failed   []string `json:"failed,omitempty"`   // items Go's two reruns confirmed failed
@@ -11076,9 +11085,11 @@ func CaseCollisions(paths []string) [][]string
 
 `CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`.
 
+`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling and file-list matchers, and each language's test command. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>`; for another language the whole test command counts as one test that passes or fails by its exit code ([UNKNOWN: how the test output of languages other than Go is split into single tests]).
+
 | Function | On failure |
 |---|---|
-| `Tester.Rerun` | An item with no `Cmd` is never rerun and its failure is never confirmed. A command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking. |
+| `Tester.Rerun` | An item with no `Cmd` is never rerun and its failure is never confirmed: `Rerun` returns `RerunUnconfirmed`. A command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking. |
 | `Tester.AcceptResult` | A skipped or repeated task identifier returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
 | `AdjudicateItem`, `ClassifyFailure`, `Baseline.Classify`, `ImpactSet`, `CaseCollisions` | Cannot fail. A test absent from the baseline is `ok` when it passes and `new` when it fails. |
 | `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass and is blocked `setup` naming the step. |
@@ -11307,6 +11318,8 @@ Each default tool reports a whole-repository line percent in the field named. Ve
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
 | Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
 
+JavaScript, TypeScript, Java and Kotlin wrap the repository's own `test` command. The Java and Kotlin default prints Gradle's JaCoCo report from `build/reports/jacoco/test/jacocoTestReport.xml` [UNKNOWN: the report path of a Maven build].
+
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
 ### 13.6 State
@@ -11457,8 +11470,8 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 
 | File | Holds |
 |---|---|
-| `internal/agent/reviewer.go` | The Reviewer's `Role`, `ReviewerResult`, `Reviewer.AcceptResult` and `ExactlyOnce` |
-| `internal/agent/lens.go` | `Rule`, `Applies`, `Profile` and `Reviewer.Lenses` |
+| `internal/agent/reviewer.go` | The Reviewer's `Role`, `ReviewerResult`, `ParseReviewerResult`, `Reviewer.AcceptResult` and `ExactlyOnce` |
+| `internal/agent/lens.go` | `Rule`, `Applies`, `Catalog`, `LoadCatalogs`, `NewReviewer`, `Profile` and `Reviewer.Lenses` |
 | `internal/agent/evidence.go` | `Finding`, `LineSource`, `VerifyFinding` and `Reviewer.AcceptFinding` |
 | `internal/agent/precision.go` | `Precision`, the per-rule counters |
 | `internal/agent/approval.go` | `ReviewerVerdict`, `Outcome` and `Decide`, the approval rule |
@@ -11545,6 +11558,8 @@ type Applies struct {
 | `applies.markers` | Text markers in the diff that make the rule apply. |
 | `check` | One sentence stating what must hold. |
 | `evidence` | The line a finding must quote. |
+
+A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a severity is unknown or a field is empty. The catalogs ship with one short rule per item of the Checks column in 14.5; the full rule text is still to author ([G-16](#g-16)).
 
 The values below are illustrative:
 
@@ -11685,7 +11700,8 @@ type Reviewer interface {
 // Diff is what lens selection reads.
 type Diff struct {
 	Paths []string
-	Text  string
+	Text  string // the unified diff
+	Specs bool   // a task cites a spec anchor
 }
 
 // Profile is the review depth.
@@ -11711,7 +11727,7 @@ func ExactlyOnce(want, got []string) error
 func Decide(t TesterVerdict, r ReviewerVerdict) Outcome
 ```
 
-`TesterVerdict` is defined in [13.3](#133-data-model). `ExactlyOnce` serves both judges.
+`TesterVerdict` is defined in [13.3](#133-data-model). `ExactlyOnce` serves both judges. `NewReviewer(standards)` loads the compiled catalogs and builds the `Reviewer`; `standards` reports the severity of a rule compiled from a standards skill.
 
 | Function | On failure |
 |---|---|
@@ -11873,6 +11889,8 @@ func ExactlyOnce(want, got []string) error {
 | Reviewer answers `brief_incomplete` | `block` with reason `brief` |
 | Both fail in one tick | Handled in the order the events were published; both reach the Builder in one return |
 | Item has no command | Unconfirmed in the report; never blocks |
+
+`Decide` reads `TesterVerdict.Ended` and `TesterVerdict.Restarts`: a first dispute (`Restarts` 0) waits for the restart, and a second blocks `tester`. A fault blocks at once. Every other case waits until the Reviewer's session has ended; a Reviewer that ended with a failure then returns the round even while the Tester is cancelled or awaits a restart.
 
 A Tester failure never cancels the Reviewer. A round returns to the Builder only when the Reviewer's session has ended. The return counter is the Runtime Manager's ([Runtime Manager](#7-runtime-manager)).
 

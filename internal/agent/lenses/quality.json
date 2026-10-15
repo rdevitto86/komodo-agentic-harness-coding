@@ -1,0 +1,49 @@
+{
+  "lens": "quality",
+  "when": "always",
+  "applies": {
+    "globs": [],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "quality.1",
+      "severity": "minor",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "names say what the thing is or does",
+      "evidence": "the line with the misleading or empty name",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "quality.2",
+      "severity": "minor",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "the same code is not written twice",
+      "evidence": "the second copy of the repeated lines",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "quality.3",
+      "severity": "minor",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "comments follow the comments standard of the brief",
+      "evidence": "the function or field that lacks or breaks the comment rule",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "lens": "economy",
+  "when": "economy_only",
+  "applies": {
+    "globs": [],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "economy.1",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "the logic, error handling, empty-value checks and resource release of the changed code are correct",
+      "evidence": "the line that breaks the rule",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "economy.2",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "callers of changed exported symbols still work and a task intends the change",
+      "evidence": "the call site or declaration",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "economy.3",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "shared data is guarded, locks are ordered, and goroutines can end",
+      "evidence": "the unguarded access or the goroutine start",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "economy.4",
+      "severity": "minor",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "paths, case, line endings and signals do not assume one platform",
+      "evidence": "the platform-bound line",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "economy.5",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "hard limits, schema versions and gate fixtures of embedded data are kept",
+      "evidence": "the changed line of the data file",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "economy.6",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "changed behaviour has tests, and named documents are touched",
+      "evidence": "the changed function with no test",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "economy.7",
+      "severity": "minor",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "names, repetition and comments follow the standards of the brief",
+      "evidence": "the declaration that breaks the standard",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}
