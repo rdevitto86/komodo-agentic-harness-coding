@@ -190,6 +190,12 @@ func faultFromEvent(e bus.Event) (f Fault, ok bool) {
 		return fromData(d.FaultData, e.Run, e.Group), true
 	case *ResourceFault:
 		return fromData(d.FaultData, e.Run, e.Group), true
+	case *bus.BusStoreFailed:
+		return Fault{
+			Source: Source{Component: "bus", Run: e.Run, Group: e.Group},
+			Code:   string(format.StoreFailed), Kind: KindInternal, Severity: SeverityWarn,
+			Reason: fmt.Sprintf("event store append to %s failed: %s", d.Path, d.Reason),
+		}, true
 	case *bus.BusOverflow:
 		return Fault{
 			Source: Source{Component: "bus", Run: e.Run, Group: e.Group},

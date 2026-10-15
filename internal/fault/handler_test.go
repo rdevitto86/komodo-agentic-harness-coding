@@ -691,3 +691,17 @@ func TestRunEnds(t *testing.T) {
 		t.Fatalf("closed bus: %v", err)
 	}
 }
+
+// TestRunBusStoreFailed checks a bus.store_failed event is printed as a warning that keeps the exit code.
+func TestRunBusStoreFailed(t *testing.T) {
+	r := newRig(t, true)
+	if err := r.b.Publish(bus.Event{Type: bus.TypeError, Subtype: "bus.store_failed", Run: "run-1", Data: &bus.BusStoreFailed{Run: "run-1", Path: "/x/run-1.jsonl", Reason: "disk full"}}); err != nil {
+		t.Fatal(err)
+	}
+	f := r.p.waitCalls(t, 1)[0]
+	if f.Code != "store_failed" || f.Severity != SeverityWarn || f.ExitCode() != 0 || f.Source.Component != "bus" {
+		t.Fatalf("fault %+v", f)
+	}
+	mustContain(t, f.Reason, "disk full")
+	mustContain(t, f.Reason, "/x/run-1.jsonl")
+}

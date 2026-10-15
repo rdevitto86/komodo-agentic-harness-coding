@@ -1,0 +1,5 @@
+{
+  "code": "store_failed",
+  "reason": "an event could not be written to the event store, so replay will show a gap",
+  "fix": "komodo doctor"
+}

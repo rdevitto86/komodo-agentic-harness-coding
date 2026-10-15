@@ -22,6 +22,7 @@ const (
 	CardChanged    Code = "card_changed"
 	Locked         Code = "locked"
 	BusOverflow    Code = "bus_overflow"
+	StoreFailed    Code = "store_failed"
 	PlanBlocked    Code = "plan_blocked"
 	PlanTimeout    Code = "plan_timeout"
 	PlanInput      Code = "plan_input"
@@ -34,7 +35,7 @@ const (
 // allCodes lists every code on the closed list, in list order.
 var allCodes = []Code{
 	ConfigTampered, Pinned, NoTerminal, NotBlocked, NoRepo, Usage, UnknownKey, BadValue, OverLimit,
-	UnknownTarget, RunRefused, EngineStopping, BadFrame, CardChanged, Locked, BusOverflow,
+	UnknownTarget, RunRefused, EngineStopping, BadFrame, CardChanged, Locked, BusOverflow, StoreFailed,
 	PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused, Internal, Other,
 }
 

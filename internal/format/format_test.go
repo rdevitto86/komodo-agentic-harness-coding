@@ -313,8 +313,8 @@ func TestCodesHaveTemplates(t *testing.T) {
 			}
 		}
 	}
-	if len(AllCodes()) != 23 {
-		t.Errorf("code list has %d entries, want 23", len(AllCodes()))
+	if len(AllCodes()) != 24 {
+		t.Errorf("code list has %d entries, want 24", len(AllCodes()))
 	}
 }
 
