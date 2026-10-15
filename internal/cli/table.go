@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // alwaysTerminal marks a command that never runs without a controlling terminal.
@@ -99,10 +100,22 @@ var tableRows = []Command{
 		Name: "clean", Summary: "Remove everything that belongs to no open run", Tier: TierShared,
 		NeedsEngine: true, TamperPolicy: TamperWarn, Run: handleClean,
 	},
+	{
+		Name: "internal engine", Summary: "Run the engine process", Tier: TierShared, Hidden: true,
+		PinExempt: true, TamperPolicy: TamperWarn, Run: handleEngine,
+	},
 }
 
-// commands returns the command table.
-func commands() []Command { return tableRows }
+// commands returns the 12 commands of the table; hidden verbs are left out.
+func commands() []Command {
+	var out []Command
+	for _, c := range tableRows {
+		if !c.Hidden {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
 // findCommand returns the row named name, or nil.
 func findCommand(name string) *Command {
@@ -186,8 +199,8 @@ func checkRunArgs(c *Call) string {
 
 // checkStatusArgs checks the optional id and the wait limit of status.
 func checkStatusArgs(c *Call) string {
-	if flagDuration(c, "timeout") <= 0 {
-		return "--timeout must be a positive duration such as 9m"
+	if flagDuration(c, "timeout") < time.Second {
+		return "--timeout must be at least 1s, such as 9m"
 	}
 	if len(c.Args) > 1 {
 		return "status takes at most one id"

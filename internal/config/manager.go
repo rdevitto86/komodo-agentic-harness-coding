@@ -180,13 +180,14 @@ func (m *Manager) PlanReset(target string) ([]Change, error) {
 		if err != nil {
 			return nil, err
 		}
+		if equalValues(it.Value, it.Default) {
+			continue
+		}
 		want := it.Default
 		if strings.HasSuffix(k, ".model") && strings.HasPrefix(k, "agents.") {
-			want = nil
+			want = nil // a model reset removes the override; the weight is not a value to write
 		}
-		if !equalValues(it.Value, want) {
-			out = append(out, Change{Key: k, Old: it.Value, New: want})
-		}
+		out = append(out, Change{Key: k, Old: it.Value, New: want})
 	}
 	return out, nil
 }

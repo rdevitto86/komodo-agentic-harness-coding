@@ -2,9 +2,13 @@ package cli
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
@@ -94,6 +98,8 @@ func text(v any) string {
 func handleConfigSet(c *Call) Result {
 	cfg := c.cli.deps.Config
 	switch {
+	case flagBool(c, "accept") && c.Global.DryRun:
+		return setResult(config.Batch{Changes: acceptPreview(c.cli.deps.Home)})
 	case flagBool(c, "accept"):
 		b, err := cfg.Accept()
 		if err != nil {
@@ -149,7 +155,7 @@ func resetKeys(c *Call) Result {
 func (c *CLI) confirm(plan []config.Change) bool {
 	_, _ = fmt.Fprintln(c.errOut, "These settings go back to their built-in values:")
 	for _, p := range plan {
-		_, _ = fmt.Fprintf(c.errOut, "  %s: %s -> %s\n", p.Key, text(p.Old), text(p.New))
+		_, _ = fmt.Fprintf(c.errOut, "  %s: %s -> %s\n", p.Key, text(p.Old), c.resetTarget(p))
 	}
 	_, _ = fmt.Fprint(c.errOut, "Type y to continue: ")
 	line, _ := bufio.NewReader(c.in).ReadString('\n')
@@ -158,6 +164,40 @@ func (c *CLI) confirm(plan []config.Change) bool {
 	}
 	_, _ = fmt.Fprintln(c.errOut, "Nothing was changed.")
 	return false
+}
+
+// resetTarget spells the value a reset puts back; a model reset has no value to write, so it shows the default.
+func (c *CLI) resetTarget(p config.Change) string {
+	if p.New != nil {
+		return text(p.New)
+	}
+	if it, err := c.deps.Config.GetConfigItem(p.Key); err == nil {
+		return text(it.Default)
+	}
+	return ""
+}
+
+// acceptPreview lists the checksums config set --accept would record, reading the files and writing none.
+func acceptPreview(home string) []config.Change {
+	var rec struct {
+		Settings string `json:"settings"`
+		Agents   string `json:"agents"`
+	}
+	if b, err := os.ReadFile(filepath.Join(home, "state", "config.sha")); err == nil {
+		_ = json.Unmarshal(b, &rec)
+	}
+	var out []config.Change
+	for _, f := range []struct{ name, old string }{{"settings.json", rec.Settings}, {"agents.json", rec.Agents}} {
+		cur := ""
+		if b, err := os.ReadFile(filepath.Join(home, f.name)); err == nil {
+			sum := sha256.Sum256(b)
+			cur = hex.EncodeToString(sum[:])
+		}
+		if cur != f.old {
+			out = append(out, config.Change{Key: f.name, Old: f.old, New: cur})
+		}
+	}
+	return out
 }
 
 // setResult builds the reply.config.set result from a written batch.

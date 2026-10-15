@@ -104,7 +104,7 @@ func splitCommand(args []string) (words, rest []string) {
 				i++
 				rest = append(rest, args[i])
 			}
-		case len(words) == 0, len(words) == 1 && words[0] == "config":
+		case len(words) == 0, len(words) == 1 && (words[0] == "config" || words[0] == "internal"):
 			words = append(words, tok)
 		default:
 			rest = append(rest, tok)
@@ -150,11 +150,11 @@ func (c *CLI) parse(args []string, hasTerm bool) (*Call, *Result) {
 
 // parseInterleaved parses flags that may follow positional arguments and returns the positionals.
 func parseInterleaved(fs *flag.FlagSet, rest []string) ([]string, error) {
-	var pos []string
+	var pos, tail []string
+	if i := slices.Index(rest, "--"); i >= 0 {
+		rest, tail = rest[:i], rest[i+1:]
+	}
 	for len(rest) > 0 {
-		if rest[0] == "--" {
-			return append(pos, rest[1:]...), nil
-		}
 		if err := fs.Parse(rest); err != nil {
 			return nil, err
 		}
@@ -162,13 +162,10 @@ func parseInterleaved(fs *flag.FlagSet, rest []string) ([]string, error) {
 		if len(rest) == 0 {
 			break
 		}
-		if rest[0] == "--" {
-			continue
-		}
 		pos = append(pos, rest[0])
 		rest = rest[1:]
 	}
-	return pos, nil
+	return append(pos, tail...), nil
 }
 
 // readGlobals copies the global flag values out of fs.

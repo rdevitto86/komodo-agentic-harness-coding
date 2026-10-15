@@ -254,6 +254,7 @@ func (m *Manager) agentItem(it Item, role, field string, r resolved) (Item, erro
 	it.Source = LayerBuiltIn
 	if field == "model" {
 		it.Default = "weight:" + string(m.roles[role].Weight)
+		it.Value = it.Default
 		if v := overrideValue(over, field); v != nil {
 			it.Value, it.Source = v, LayerMachine
 		}

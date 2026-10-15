@@ -181,7 +181,7 @@ func TestRunSchedule(t *testing.T) {
 	}
 	req := srv.Requests()[0]
 	want, _ := time.Parse(time.RFC3339, "2026-10-16T02:00:00-07:00")
-	if req.Event != nil || !req.Flags.Schedule.Equal(want) {
+	if req.Event == nil || !req.Flags.Schedule.Equal(want) {
 		t.Fatalf("request = %+v", req)
 	}
 	d := dataOf[RunData](t, e)

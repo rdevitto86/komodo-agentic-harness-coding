@@ -88,6 +88,7 @@ type Command struct {
 	NeedsTerminal func(c *Call) bool // nil when the command never needs a terminal
 	NeedsRepo     func(c *Call) bool // nil when the command works outside a repository
 	NeedsEngine   bool               // connects to the engine, starting it when none answers
+	Hidden        bool               // a verb the harness starts itself; left out of help and the 12 commands
 	PinExempt     bool               // runs even when the repository pin is above this binary
 	TamperPolicy  TamperPolicy       // what the command does when the settings guard has tripped
 	Run           Handler
@@ -144,6 +145,7 @@ type Deps struct {
 	Config   *config.Manager   // GetConfigItem(), SetConfigItem(), Verify()
 	Engine   Engine            // the control socket client
 	Terminal func() bool       // true when a controlling terminal is attached
+	Home     string            // the Komodo home folder, for the settings checksums a dry run reads
 	Stdout   io.Writer
 	Stderr   io.Writer
 	Stdin    io.Reader
@@ -255,9 +257,13 @@ func (c *CLI) checkTamper(call *Call) *Result {
 		return nil
 	}
 	var re config.ReadError
-	if !errors.Is(err, config.ErrTampered) && !errors.As(err, &re) {
-		r := internalErr("read settings: " + err.Error())
-		return &r
+	if !errors.Is(err, config.ErrTampered) {
+		if !errors.As(err, &re) {
+			r := internalErr("read settings: " + err.Error())
+			return &r
+		}
+		_, _ = fmt.Fprintf(c.errOut, "Warning: settings file %s is unreadable; built-in values are served. Fix: komodo config set --default %s\n", re.File, re.File)
+		return nil
 	}
 	const fix = "komodo config set --accept"
 	if call.Command.TamperPolicy == TamperWarn || (call.Command.Name == "config set" && flagBool(call, "accept")) {

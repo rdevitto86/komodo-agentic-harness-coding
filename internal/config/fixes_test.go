@@ -218,7 +218,7 @@ func TestAgentModelWithoutOverrideNamesTheWeight(t *testing.T) {
 	m, _ := newTestManager(t)
 	for role, a := range m.roles {
 		it, err := m.GetConfigItem("agents." + role + ".model")
-		if err != nil || it.Value != nil || it.Source != LayerBuiltIn || it.Default != "weight:"+string(a.Weight) {
+		if err != nil || it.Value != "weight:"+string(a.Weight) || it.Source != LayerBuiltIn || it.Default != "weight:"+string(a.Weight) {
 			t.Errorf("%s: %+v %v", role, it, err)
 		}
 	}
@@ -234,7 +234,15 @@ func TestAgentModelWithoutOverrideNamesTheWeight(t *testing.T) {
 	if _, err := m.SetConfigItem(cs...); err != nil {
 		t.Fatal(err)
 	}
-	if it, _ := m.GetConfigItem("agents.builder.model"); it.Value != nil {
+	if it, _ := m.GetConfigItem("agents.builder.model"); it.Value != "weight:"+string(m.roles["builder"].Weight) || it.Source != LayerBuiltIn {
 		t.Fatalf("after reset: %+v", it)
+	}
+}
+
+func TestResetOfUnoverriddenModelPlansNothing(t *testing.T) {
+	m, _ := newTestManager(t)
+	cs, err := m.PlanReset("agents.builder.model")
+	if err != nil || len(cs) != 0 {
+		t.Fatalf("plan: %+v %v", cs, err)
 	}
 }

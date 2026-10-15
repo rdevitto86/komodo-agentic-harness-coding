@@ -198,9 +198,12 @@ func TestStaleSocketFileStartsEngine(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "state"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "state", "engine.sock"), nil, 0o600); err != nil {
+	ln, err := net.Listen("unix", filepath.Join(home, "state", "engine.sock"))
+	if err != nil {
 		t.Fatal(err)
 	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = ln.Close() // a crashed engine leaves its socket file behind
 	started := false
 	e := quickEngine(home)
 	e.Start = func(context.Context) error {

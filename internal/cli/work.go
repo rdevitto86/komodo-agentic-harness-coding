@@ -11,6 +11,7 @@ import (
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/format"
 )
 
@@ -77,13 +78,9 @@ func now() time.Time { return time.Now().UTC().Truncate(time.Second) }
 func (c *Call) ask(req engine.Request) ([]engine.Reply, *Result) {
 	ctx := context.Background()
 	eng := c.cli.deps.Engine
-	if err := eng.Ensure(ctx); err != nil {
-		r := internalErr("reach the engine: " + err.Error())
-		return nil, &r
-	}
 	ch, err := eng.Send(ctx, req)
 	if err != nil {
-		r := internalErr("send to the engine: " + err.Error())
+		r := internalErr("reach the engine: " + err.Error())
 		return nil, &r
 	}
 	var frames []engine.Reply
@@ -106,16 +103,28 @@ func (c *Call) ask(req engine.Request) ([]engine.Reply, *Result) {
 	return frames, nil
 }
 
-// refusedResult maps a refused reply to the exit 1 result carrying its code and reason.
+// codeKinds maps each error code a refusal may carry to the fault kind that sets the exit code.
+var codeKinds = map[string]fault.Kind{
+	"config_tampered": fault.KindRefused, "pinned": fault.KindRefused, "no_terminal": fault.KindRefused,
+	"no_repo": fault.KindRefused, "over_limit": fault.KindRefused, "card_changed": fault.KindRefused,
+	"locked": fault.KindRefused, "plan_timeout": fault.KindRefused, "context_refused": fault.KindRefused,
+	"unknown_target": fault.KindRefused, "run_refused": fault.KindRefused, "not_blocked": fault.KindRefused,
+	"engine_stopping": fault.KindRefused, "plan_blocked": fault.KindBlocked,
+	"usage": fault.KindUsage, "plan_input": fault.KindUsage, "unknown_key": fault.KindUsage, "bad_value": fault.KindUsage,
+	"plan_write": fault.KindInternal, "bad_frame": fault.KindInternal, "internal": fault.KindInternal,
+}
+
+// refusedResult maps a refused reply to the result its code's kind sets; an unknown code is an internal failure.
 func refusedResult(rep engine.Reply) Result {
-	if !format.IsCode(rep.Code) || rep.Code == string(format.Other) {
+	kind, known := codeKinds[rep.Code]
+	if !known {
 		return internalErr(fmt.Sprintf("the engine refused with the unknown code %q: %s", rep.Code, rep.Detail))
 	}
 	reason := rep.Detail
 	if reason == "" {
 		reason = "the engine refused the request"
 	}
-	return errResult(OutcomeRefused, format.Code(rep.Code), reason, "komodo status")
+	return errResult(Outcome(kind.ExitCode()), format.Code(rep.Code), reason, "komodo status")
 }
 
 // decodeFinal decodes the data of the last frame into v; absent data leaves v alone.
@@ -147,21 +156,20 @@ func handleRun(c *Call) Result {
 	if !c.Global.All {
 		target, label = c.Args[0], c.Args[0]
 	}
+	req := c.request(engine.VerbRun, label)
+	req.Flags = engine.Flags{All: c.Global.All}
+	start := &bus.RunStart{
+		Target: target, Groups: c.Groups, Source: "cli", Repo: c.Repo.ID, Root: c.Repo.Root,
+		CommonDir: c.CommonDir, Request: bus.ID(req.ID),
+	}
 	if at := flagTime(c, "schedule"); !at.IsZero() {
-		req := c.request(engine.VerbRun, label)
-		req.Flags = engine.Flags{All: c.Global.All, Schedule: at}
+		start.Schedule = at
+		req.Flags.Schedule = at
+		req.Event = &engine.Event{Type: bus.TypeRunStart, Time: now(), Data: start} // the engine mints the run id and stores this event
 		return runSchedule(c, req, target)
 	}
 	runID := newID()
-	req := c.request(engine.VerbRun, label)
-	req.Flags = engine.Flags{All: c.Global.All}
-	req.Event = &engine.Event{
-		Type: bus.TypeRunStart, Run: bus.ID(runID), Time: now(),
-		Data: &bus.RunStart{
-			Target: target, Groups: c.Groups, Source: "cli", Repo: c.Repo.ID, Root: c.Repo.Root,
-			CommonDir: c.CommonDir, Request: bus.ID(req.ID),
-		},
-	}
+	req.Event = &engine.Event{Type: bus.TypeRunStart, Run: bus.ID(runID), Time: now(), Data: start}
 	frames, res := c.ask(req)
 	if res != nil {
 		return *res

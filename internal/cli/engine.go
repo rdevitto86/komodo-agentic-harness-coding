@@ -58,8 +58,15 @@ func (e *SocketEngine) Ensure(ctx context.Context) error {
 // connect dials the socket, starting the engine and redialling when the first dial fails.
 func (e *SocketEngine) connect(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
-	if conn, err := d.DialContext(ctx, "unix", e.socketPath()); err == nil {
+	if n := len(e.socketPath()); n > maxSocketPath {
+		return nil, fmt.Errorf("the socket path %s is %d bytes, over the %d a unix socket allows; set KOMODO_HOME to a shorter folder", e.socketPath(), n, maxSocketPath)
+	}
+	conn, err := d.DialContext(ctx, "unix", e.socketPath())
+	if err == nil {
 		return conn, nil
+	}
+	if !engineAbsent(err) {
+		return nil, fmt.Errorf("dial %s: %w", e.socketPath(), err)
 	}
 	start := e.Start
 	if start == nil {
@@ -77,11 +84,22 @@ func (e *SocketEngine) connect(ctx context.Context) (net.Conn, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		if !engineAbsent(err) {
+			return nil, fmt.Errorf("dial %s: %w", e.socketPath(), err)
+		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("no engine answered on %s within %s: %w", e.socketPath(), e.StartWait, err)
 		}
 		time.Sleep(e.Redial)
 	}
+}
+
+// maxSocketPath is the longest unix socket path every supported system accepts.
+const maxSocketPath = 103
+
+// engineAbsent reports whether a failed dial means no engine listens: the socket file is missing or refuses.
+func engineAbsent(err error) bool {
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // spawn starts the engine as a detached process in its own process group.

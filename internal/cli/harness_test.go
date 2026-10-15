@@ -56,7 +56,7 @@ func (h *harness) run(args ...string) (int, string, string) {
 	}
 	var out, errOut bytes.Buffer
 	c := New(Deps{
-		Format: f, Config: h.cfg, Engine: h.engine,
+		Format: f, Config: h.cfg, Engine: h.engine, Home: h.home,
 		Terminal: func() bool { return h.terminal },
 		Stdout:   &out, Stderr: &errOut, Stdin: strings.NewReader(h.stdin),
 	})

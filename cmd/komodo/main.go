@@ -58,7 +58,7 @@ func buildDeps(stdout, stderr io.Writer) (cli.Deps, error) {
 	}
 	return cli.Deps{
 		Format: f, Config: cfg, Engine: cli.NewSocketEngine(home),
-		Terminal: cli.HasControllingTerminal, Stdout: stdout, Stderr: stderr,
+		Terminal: cli.HasControllingTerminal, Home: home, Stdout: stdout, Stderr: stderr,
 	}, nil
 }
 
