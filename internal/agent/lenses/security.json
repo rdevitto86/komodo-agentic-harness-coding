@@ -1,0 +1,90 @@
+{
+  "lens": "security",
+  "when": "filter",
+  "applies": {
+    "globs": [
+      "internal/cli/install*.go",
+      "internal/cli/update*.go",
+      "internal/llm/**",
+      "internal/task/guard*.go",
+      "internal/task/tools*.go",
+      "internal/sandbox/**",
+      "internal/commit/**"
+    ],
+    "markers": [
+      "crypto/",
+      "os/exec",
+      "net/http",
+      "os\\.Getenv|os\\.Environ",
+      "filepath\\.(Join|Clean|Abs)",
+      "(?i)\\b(auth|token|password|secret)"
+    ]
+  },
+  "rules": [
+    {
+      "id": "security.1",
+      "severity": "blocker",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "no input reaches a shell, query or template without being escaped or passed as separate arguments",
+      "evidence": "the line that builds the command, query or template from input",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "security.2",
+      "severity": "blocker",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "no secret, key or token is written into code, logs or events",
+      "evidence": "the line that holds or prints the secret",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "security.3",
+      "severity": "blocker",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "a path built from input cannot leave its allowed folder",
+      "evidence": "the line that joins the input path without checking the result",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "security.4",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "a program is started only with fixed arguments and a controlled environment",
+      "evidence": "the line that starts the program",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "security.5",
+      "severity": "blocker",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "network clients verify certificates and do not disable TLS checks",
+      "evidence": "the line that turns off verification",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "lens": "concurrency",
+  "when": "filter",
+  "applies": {
+    "globs": [],
+    "markers": [
+      "\\bgo (func\\b|[A-Za-z_][A-Za-z0-9_.]*\\()",
+      "\\bchan\\b",
+      "\\bsync\\.",
+      "\\batomic\\.",
+      "\\bthreading\\b",
+      "\\bThread\\b",
+      "\\basync\\b"
+    ]
+  },
+  "rules": [
+    {
+      "id": "concurrency.1",
+      "severity": "blocker",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "shared data is read and written under one lock or through one channel",
+      "evidence": "the line that touches shared data without the lock",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "concurrency.2",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "locks are taken in one fixed order and never held across a blocking call",
+      "evidence": "the line that takes the second lock or blocks while holding one",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "concurrency.3",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "long work stops when its context is cancelled",
+      "evidence": "the loop or call that ignores cancellation",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "concurrency.4",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "every goroutine started has a way to end",
+      "evidence": "the line that starts the goroutine with no exit path",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

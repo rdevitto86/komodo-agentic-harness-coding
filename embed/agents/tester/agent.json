@@ -32,7 +32,8 @@
     "required": [
       "repo_profile",
       "group",
-      "tasks"
+      "tasks",
+      "acceptance"
     ],
     "optional": [
       "repo_context",

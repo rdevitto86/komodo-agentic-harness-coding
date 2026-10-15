@@ -392,7 +392,13 @@ func TestRunServesTheBus(t *testing.T) {
 	go func() { done <- r.m.Run(ctx) }()
 
 	deadline := time.After(5 * time.Second)
-	// Events published before Run subscribes are lost, so both are repeated until the pause arrives.
+	// Events published before Run subscribes are lost, so both are repeated until the pause and a report arrive.
+	reported := func() bool {
+		r.th.mu.Lock()
+		defer r.th.mu.Unlock()
+		return len(r.th.reports) > 0
+	}
+	paused := false
 	for pending := true; pending; {
 		for _, e := range []bus.Event{
 			ev(subtypeUsage, "r1", "g1", &Usage{Link: "", USD: 1}),
@@ -404,11 +410,12 @@ func TestRunServesTheBus(t *testing.T) {
 		}
 		select {
 		case <-r.rt.got:
-			pending = false
+			paused = true
 		case <-time.After(20 * time.Millisecond):
 		case <-deadline:
-			t.Fatal("no pause order arrived")
+			t.Fatalf("pause arrived %v, malformed event reported %v", paused, reported())
 		}
+		pending = !paused || !reported()
 	}
 	cancel()
 	select {

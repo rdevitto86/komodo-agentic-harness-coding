@@ -2485,7 +2485,7 @@ stateDiagram-v2
 ### 3.7 Invariants and Failures
 
 **Invariants**
-1. Only the CLI and the Runtime Manager hold a `*Manager`; no other package imports `internal/config`.
+1. Only the CLI and the Runtime Manager hold a `*Manager`; no other package imports `internal/config`, except the cross-package tests in `internal/integration`.
 2. The settings files and the agent registry are written only by `SetConfigItem` and `Accept`.
 3. A `SetConfigItem` call writes every pair or none, and one audit row per changed key.
 4. No value passes its hard limit, and no model passes without a probe.
@@ -3595,6 +3595,8 @@ The package is `internal/intake`.
 | `internal/intake/docs.go` | Reading the source documents a plan request names |
 | `internal/intake/hash.go` | The card hash of a group |
 
+The planner's role definition and result decoder are in `internal/agent/planner.go`: `PlannerRole`, `PlannerResult` and `ParsePlannerResult`. A `PlannerResult` has the shape of a `PlanDraft`; the handler copies one into the other.
+
 ### 5.3 Data Model
 
 #### Task-list layout
@@ -4412,12 +4414,12 @@ type Frontmatter struct {
 | `name` | string | The skill name, the same as its folder name |
 | `description` | string | One line of at most 100 characters |
 | `globs` | list | File patterns; a match with any file in the group's `files` selects the skill |
-| `markers` | list | Repo files that must exist; an empty list means no marker is required |
+| `markers` | list | Repo files; the skill is selected when at least one is met; an empty list means no marker is required |
 | `sections` | list | Every level-2 heading of the body, in body order; an entry with no heading, a heading with no entry and a duplicate heading are all refused |
 
 The frontmatter is a strict subset of YAML between two `---` lines: `key: value` lines with a plain or double-quoted value, the empty list `[]`, and block lists of `  - "item"` lines. A hand-written line parser in `skills.go` reads it with `bufio.Scanner` and `strconv.Unquote`, so no YAML library is needed; any other line is refused.
 
-A marker is a glob some file path in the base tree matches, or `<glob>:<text>`, met when a file matching the glob contains the text. `standards-aws` writes its Terraform marker as `*.tf:provider "aws"`.
+A marker is a glob some file path in the base tree matches, or `<glob>:<text>`, met when a file matching the glob contains the text. The Context Manager applies this rule to the tree's `Paths()` for every marker, so it never depends on a `Tree`'s own `Exists`. A glob without a `/` matches any one segment of a path, so `*.xcodeproj` matches a folder; a `/` pattern matches whole paths, and `**` stands for any number of segments. `standards-aws` writes its Terraform marker as `*.tf:provider "aws"`.
 
 #### Skill index
 
@@ -4436,6 +4438,7 @@ type IndexEntry struct {
 	Markers     []string  `json:"markers"`
 	Sections    []string  `json:"sections"`
 	SHA256      string    `json:"sha256"` // 64 lowercase hex characters, written by the build
+	Always      bool      `json:"-"`      // set by List for a skill in the agent's always list
 }
 ```
 
@@ -4482,7 +4485,7 @@ type Rule struct {
 | `Rule.ID` | `std.<skill>.<n>`, the identifier a reviewer finding cites |
 | `Rule.Line` | The line without its leading `- ` and every `**`, trimmed |
 
-`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as `{id, skill, line}` rows sorted by identifier; a Go test regenerates it and compares byte for byte. A standards rule has severity `major`.
+`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as a JSON array of `{id, skill, line}` rows, ordered by skill name and then by `n`; a Go test regenerates it and compares byte for byte, and `go test -run TestShippedIndexAndRules -update` rewrites both `rules.json` and `index.json`. A standards rule has severity `major`.
 
 #### Item table
 
@@ -4517,7 +4520,7 @@ type ItemState struct {
 | `name` | A skill the table holds; an unknown name is refused |
 | `enabled` | `false` removes the skill from every selection and every pull |
 | `allow` | Agent names; a name that is not one of the 4 agents is refused |
-| `always` | A subset of `allow`; these skills lead the agent's standards, in the order written |
+| `always` | A subset of `allow`; these skills lead the agent's standards, in the order of the item table: the harness's starting rows in the order it gave them, then the rest in index order |
 
 An agent reaches a skill when the skill is enabled and the agent is in its `allow` list. A trailing `*` in an `allow` entry of the Agent Registry names every skill with that prefix, such as `standards-*`; the harness expands it against the table when it builds the starting values.
 
@@ -4557,11 +4560,11 @@ type ConnectionFile struct {
 | `name` | Unique; the name `komodo` is reserved for the embedded tool set entry |
 | `command`, `args` | Started without a shell |
 | `env` | Names only; the values come from the harness's environment and never reach a file or a brief |
-| `enabled` | `false` by default for an entry read from the file |
+| `enabled` | `false` by default for an entry read from the file; a value in the file is ignored |
 | `allow` | Agents that may use it; empty means none |
 | `hosts` | Network hosts the server may reach; empty means the server has no network |
 
-The embedded `komodo` entry always exists and is always enabled for every agent. The tools it advertises to one agent are that agent's tool list in the Agent Registry, and the Task Manager checks every call.
+The embedded `komodo` entry always exists and is always enabled for every agent. It is `{name: komodo, command: komodo}` with no arguments, no variables and no hosts, and an `mcp` / `set` event that names it is refused. `Deps.Conns` changes only the `enabled` and `allow` of an entry that is in the file; a name that is not in the file adds a `Warning`. The tools it advertises to one agent are that agent's tool list in the Agent Registry, and the Task Manager checks every call.
 
 Outside servers follow these rules:
 - **Off by default:** an entry read from `connections.json` is disabled until a `mcp` / `set` event enables it.
@@ -4580,6 +4583,7 @@ type Request struct {
 	Tree  Tree   // read-only view of the base commit
 	Files []string // the group's files; selects skills; empty for the planner
 	Slots Values // slot values only the caller has: goal, group, tasks, diff, findings and so on
+	Chain []Candidate // the agent's link chain with each link's measured context; sizes the repo map
 }
 
 // Tree is a read-only view of the repository at one commit.
@@ -4601,6 +4605,7 @@ type Context struct {
 }
 
 // Warning is a problem GetContext reports without failing, such as a dropped paragraph.
+// Load problems (a refused local skill, an unreadable connections.json) are in every Context and in Manager.Warnings.
 type Warning struct {
 	Code string // for example addendum_paragraph_dropped
 	Path string
@@ -4624,6 +4629,7 @@ type Warning struct {
 | `tree` | The base commit of the group, or of the repository for a plan; the Context Manager reads nothing from the working tree |
 | `files` | Used only for skill selection and for the `files` slot check |
 | `slots` | Filled by the caller; the Context Manager adds the slots it computes ([6.5](#65-behaviour)) |
+| `chain` | The agent's links with their measured contexts. The repo map and the layout are each fitted to a tenth of the smallest ceiling in it; with no chain the planner's map is not fitted and a reviewer gets no map |
 
 #### Brief
 
@@ -4637,7 +4643,7 @@ A brief has 5 parts, ordered so the parts that change least come first and the p
 | 4 Standards | Skills, `always` first, then by name | The group's file types or item state change |
 | 5 Task | The template's `# Brief` with its slots filled | Every task |
 
-Parts 1 to 4 hold no timestamps, identifiers or unsorted maps, so two briefs for one agent share every prefix byte. No harness rule appears in any part. Where the model client places its provider cache markers is [chapter 11](#11-task-manager)'s.
+Parts 1 to 4 hold no timestamps, identifiers or unsorted maps, so two briefs for one agent share every prefix byte. No harness rule appears in any part. Part 1 lists the agent's tool names (`Deps.Tools`, from the Agent Registry) under `# Tools` and the connection names under `# Tool servers`; part 3 is the addendum under `# Repository guidance`, or empty; part 4 is each skill under `## Standards: <name> (<sha8>)`, or empty. Where the model client places its provider cache markers is [chapter 11](#11-task-manager)'s.
 
 ```go
 // Slot names one hole in a template's # Brief section.
@@ -4662,8 +4668,9 @@ const (
 	Goal         Slot = "goal"
 	Layout       Slot = "layout"
 	Backlog      Slot = "backlog"
-	RepoMap      Slot = "repo_map"
+	SlotRepoMap  Slot = "repo_map" // named SlotRepoMap because RepoMap is the map type
 	Baseline     Slot = "baseline"
+	Acceptance   Slot = "acceptance"
 )
 
 // Values holds the filled text of each slot; a missing or empty entry is an empty slot.
@@ -4711,7 +4718,7 @@ An empty required slot fails the brief before any model runs. An empty optional 
 | `callers` | Caller: callers of changed symbols | Optional: reviewer |
 | `baseline` | Caller: tests failing at the base commit | Optional: tester |
 
-An agent not named in a row never receives the slot.
+An agent not named in a row never receives the slot. `repo_context` and `standards` are the text of parts 3 and 4, so a template names neither and `ParseTemplate` refuses a hole for them.
 
 #### Template file
 
@@ -4736,7 +4743,7 @@ You are the builder. Read neighbouring code, make the smallest change, test what
 {{specs}}
 ```
 
-A template holds `# Role` text, never a rule, and a `# Brief` section with `{{slots}}`. Role text says how to do the job. The orchestrator rules and the output contract live outside every worker template. A Go test fails an unknown slot, an unfilled slot and a slot the agent's table row does not name. A template cannot name a tool, so no file can widen an agent's powers.
+A template holds `# Role` text, never a rule, and a `# Brief` section with `{{slots}}`. Role text says how to do the job. The orchestrator rules and the output contract live outside every worker template. A Go test fails an unknown slot, an unfilled slot and a slot the agent's table row does not name. A template cannot name a tool, so no file can widen an agent's powers. `ParseTemplate` refuses a template with text before `# Role`, a second level-1 heading, a slot in the role text, an unknown slot, a slot outside the agent's row, or no hole for a required slot; headings inside a code fence are not headings.
 
 #### Repo map
 
@@ -4752,6 +4759,8 @@ type MapFile struct {
 	Path    string
 	Rank    int      // inbound references; a file the goal names counts three times
 	Symbols []Symbol // functions, types, classes and exports found in the file
+	Source  bool     // true for a Go file or a file of a language with a pattern file
+	Named   bool     // true when the goal names the file
 }
 
 // Symbol is one named definition.
@@ -4761,13 +4770,13 @@ type Symbol struct {
 }
 ```
 
-A pattern file `embed/langs/<lang>.json` looks like `{"extensions": [".py"], "symbols": [{"kind": "function", "pattern": "^def (\\w+)"}]}`. Each pattern is a Go regular expression whose first group is the symbol name, matched line by line.
+A pattern file `embed/langs/<lang>.json` looks like `{"extensions": [".py"], "symbols": [{"kind": "function", "pattern": "^def (\\w+)"}]}`. Each pattern is a Go regular expression whose first group is the symbol name, matched line by line; the first pattern that matches a line wins. Go symbols are `function` (methods included), `type`, and `export` for an exported constant or variable. Only a Go file or a file of a language with a pattern file is read for references; a file of any other language is listed with rank 0. A map with no file renders `no source files`, and so does an empty layout.
 
 | Rule | Detail |
 |---|---|
 | Rank | The number of other files that name one of the file's symbols as a whole word, each file counted once per symbol |
-| Goal files | A file whose path, base name or symbol name appears as a word in the goal counts three times |
-| Order | Rank descending, then path in byte order, so equal ranks always render the same |
+| Goal files | A file whose path, base name or symbol name appears as a word in the goal counts three times, and at least 1, so the goal can lift a file nothing references |
+| Order | Source files and files the goal names first: rank descending, then files the goal names, then path in byte order. Every other file follows, by path, so it drops first and equal ranks always render the same |
 | Rendered form | One line `<path> (<rank>)` per file, then each symbol on its own line as two spaces, its kind and its name, in file order |
 
 #### Repo profile
@@ -4790,6 +4799,7 @@ type Command struct {
 	Class  Class
 	Argv   []string
 	Marker string // the file that produced it; "Makefile" when a target won
+	PerFile bool // true when the caller appends the edited file paths as final arguments
 }
 
 // CommandSet is the detected commands of one repo and the hash they are cached under.
@@ -4801,13 +4811,13 @@ type CommandSet struct {
 
 | Marker | `setup` | `build` | `test` | `lint` | `format` |
 |---|---|---|---|---|---|
-| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...` | `gofmt -l .` |
-| `package.json` | `npm ci` | `npm run build` | `npm test` | `npm run lint` | `npm run format` |
-| `Cargo.toml` | `cargo fetch` | `cargo build` | `cargo test` | `cargo clippy` | `cargo fmt --check` |
-| `pyproject.toml` | none | none | `pytest` | `ruff check` | `ruff format --check` |
+| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...` | `gofmt -w` |
+| `package.json` | `npm ci` | `npm run build` | `npm test` | `npm run lint` | `npx prettier --write` |
+| `Cargo.toml` | `cargo fetch` | `cargo build` | `cargo test` | `cargo clippy` | `cargo fmt --` |
+| `pyproject.toml` | none | none | `pytest` | `ruff check` | `ruff format` |
 | `Makefile` | `make setup` | `make build` | `make test` | `make lint` | `make fmt` |
 
-A marker with no entry for a class leaves that class empty. The `repo_profile` slot renders the detected languages and the command classes found.
+A marker with no entry for a class leaves that class empty. For `package.json`, `build`, `test` and `lint` are filled only when `scripts` defines `build`, `test` or `lint`, and `format` is `npx prettier --write` when `prettier` is a dependency, else `npm run format --` when `scripts` defines `format`, else empty; `setup` needs no script. **The format class rewrites files:** its command runs on each edited file after an edit, the caller appends the file path as the last argument, and `PerFile` is true; a `Makefile` `fmt` target takes no path, runs on the whole repository, and has `PerFile` false. A `Makefile` target named like the class (`setup`, `build`, `test`, `lint`, or `fmt` for `format`) beats the language marker for that class. Markers are looked up at the repository root; the `git-read` class holds `git status`, `git diff`, `git log` and `git show`. `MarkerHash` is the SHA-256 of the marker file names and contents. The `repo_profile` slot renders `Languages: <names by extension>` and one `  <class>: <commands>` line per class found.
 
 ### 6.4 Interfaces
 
@@ -4834,6 +4844,8 @@ type Deps struct {
 	Phrases   func() []string // steering phrases, from the Task Manager's guard data
 	Home      string         // Komodo home folder; the context folder is under it
 	Count     Counter        // token counter; New uses the bundled one when nil
+	Tools     map[string][]string // each agent's tool names, from the Agent Registry; part 1 lists them
+	Embedded  fs.FS               // the embedded files; New uses the binary's own when nil
 }
 
 // The Context Manager reads and writes the skills, context, map and setup namespaces through
@@ -4946,7 +4958,26 @@ The Configuration Manager publishes `skill` and `mcp` right after it saves a cha
 | `mcp` / `set` | `name`, `enabled`, `allow` | Replaces that connection's state |
 | `mcp` / `reload` | none | Rereads `connections.json` |
 
-The Event Bus chapter owns the list of subtypes ([chapter 4](#4-event-bus)).
+The Event Bus chapter owns the list of subtypes ([chapter 4](#4-event-bus)). The Context Manager declares the data structs and binds them with `RegisterEvents()`; it reads an event body of any other type with the same fields by encoding it to JSON, with unknown fields refused.
+
+```go
+// SkillSet is the data of skill / set; MCPSet carries name, enabled and allow of mcp / set.
+type SkillSet struct {
+	Name    string   `json:"name"`
+	Enabled bool     `json:"enabled"`
+	Allow   []string `json:"allow"`
+	Always  []string `json:"always"`
+}
+
+// ContextRefused is the data of error / context-refused.
+type ContextRefused struct {
+	Event  string `json:"event"`  // the refused event as type/subtype
+	Field  string `json:"field"`  // the field that failed
+	Reason string `json:"reason"` // what was wrong with it
+}
+```
+
+The `reload` subtypes carry an empty body. A `set` that names the `komodo` connection is refused.
 
 ### 6.5 Behaviour
 
@@ -4988,10 +5019,10 @@ sequenceDiagram
 
 ```text
 Select(agent, files, tree):
-  out = the skills in the agent's always list, in the order written; each must be enabled
+  out = the skills in the agent's always list, in table order; each must be enabled
   for each enabled skill whose allow list has the agent and which is not in out:
     skip the skill if no glob matches any file in files
-    skip the skill if its markers are not met in tree
+    skip the skill if it has markers and none is met in tree
     add the skill to the matched set
   sort the matched set by name, ascending
   out = out + matched set
@@ -5075,7 +5106,7 @@ Slots the Context Manager computes itself:
 - **`repo_context`:** the addendum, below.
 - **`repo_profile`:** from `Detect`, cached under the marker hash.
 - **`standards`:** from `Select`.
-- **`repo_map` and `layout`:** from the tree; the map is fitted to 10% of the smallest ceiling in the agent's chain, so one brief suits every link.
+- **`repo_map` and `layout`:** from the tree; each is fitted to its own budget of 10% of the smallest ceiling in the agent's chain, so one brief suits every link. A layout over its budget lists the paths to the deepest folder depth that fits, and folds deeper folders into `<dir>/ (N files)` lines; with no chain it lists every path.
 
 **The addendum**
 
@@ -5113,9 +5144,9 @@ The Context Manager holds the item table in memory and keeps no state file. It r
 |---|---|---|
 | Item enabled | A `set` event with `enabled: false` | The item is absent from every later selection and pull |
 | Item disabled | A `set` event with `enabled: true` | The item is selectable by the agents in its `allow` list |
-| Local item loaded | `reload` or start | The file is parsed, scanned, fingerprinted and disabled until a `set` event |
+| Local item loaded | `reload` or start | The file is parsed, scanned, fingerprinted and disabled until a `set` event; a reload keeps the state and the table place of a skill that is still there, and a new skill goes last |
 
-An event that arrives while a brief is being built waits for the build to end; the table's lock makes each brief see one consistent table.
+`GetContext` holds the table's lock only while it picks the skills and the tools, so each brief sees one consistent table. An event that arrives later never changes a brief already picked and never waits for a file read, the repo map or the addendum.
 
 ### 6.7 Invariants and Failures
 
@@ -5170,7 +5201,7 @@ Fixed constants, not settings:
 | Constant | Value | Effect |
 |---|---|---|
 | Brief ceiling | Half the link's measured context | `Place` rejects a link above it |
-| Repo map budget | 10% of the smallest ceiling in the agent's chain | The map drops its lowest-ranked entries to fit |
+| Repo map and layout budget | 10% of the smallest ceiling in the agent's chain, for each | The map drops its lowest-ranked entries to fit; the layout folds deep folders into counts |
 | Boost for files the goal names | 3 times | Their inbound references count three times |
 | Skill size limit | 6,000 tokens | A local skill over it is refused; a Go test fails a shipped skill over it |
 | Pull reply cap for skills | The skill size limit | The 4 KB tool-reply cap does not apply |
@@ -8338,12 +8369,12 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 
 | File | Holds |
 |---|---|
-| `sandbox.go` | `Manager`, `Spec`, `Instance`, `Backend`, `CreateSandboxInstance`, `DestroySandboxInstance` |
+| `sandbox.go` | `Manager`, `Spec`, `Instance`, `Backend`, `CreateSandboxInstance`, `DestroySandboxInstance`, `Command`, `EndSetup`, `SetMasked`, `Caveats` |
 | `profile.go` | Turns a `Spec` into the mount, mask and limit rules every backend applies, and renders the Seatbelt profile and the Bubblewrap arguments |
-| `backend_docker.go` | The Docker container, one per group, for the Tester |
+| `backend_docker.go` | The Docker container, one per group, for the Tester, and the image chosen from the repository's version files |
 | `backend_seatbelt.go` | Seatbelt on macOS, for the Builder's quick commands and the Tester without Docker |
 | `backend_bubblewrap.go` | Bubblewrap on Linux and Windows Subsystem for Linux, for the same two jobs |
-| `copy.go` | The tester's dependency copy |
+| `copy.go` | The tester's dependency copy and the plan that says, per language, what to copy, what to rerun and what to share |
 
 Import rule: `task` imports `llm` and `sandbox`. `llm` and `sandbox` import neither `task` nor each other (both import `internal/core`), and every package uses the Go standard library only. `task` and `llm` also import `internal/cache` for the type of the cache handle, and `task` imports the value types `Approval`, `SaveRequest`, `SaveResult` and `Result` from `internal/commit`, which imports neither `task` nor `engine`. The Runtime Manager, the Context Manager, the Commit Handler, the Cleanup Handler and git reach `task` through the narrow interfaces in [11.4](#114-interfaces), so `task` imports none of their other packages.
 
@@ -8750,6 +8781,8 @@ type Session struct {
 	Tools   ToolHost        // bound tool functions; used by API links only
 	Env     []string        // environment of the claude program, after the scrub
 	Cache   cache.Handle   // the cache handle; the paid adapter stores its marker plan there
+	Parts   [5]string       // the brief's five parts; API links place cache markers between them
+	Gate    Gate            // the role's own check of a result; API links only, nil accepts any valid result
 }
 
 // Input is the one new user message sent when a session resumes.
@@ -8895,6 +8928,7 @@ var (
 	ErrBilling      = errors.New("first line shows a paid API key")
 	ErrNotYet       = errors.New("link not built")
 	ErrStreamClosed = errors.New("stream already closed")
+	ErrUnpriced     = errors.New("model has no price in the catalog")
 )
 
 // CapKind names which provider cap was hit.
@@ -9021,7 +9055,7 @@ type Spec struct {
 	Worktree   string   // working directory; writable except the .git entry
 	GitDir     string   // this worktree's own git folder; read-only
 	ReadOnly   []string // always includes <Worktree>/.git
-	Writable   []string // the instance's temporary folder and its private build cache
+	Writable   []string // the instance's temporary folder first, then its private build cache
 	Modules    string   // module and registry caches; read-only
 	Toolchains []string // toolchain folders; read-only
 	Masked     []string // worktree files matching row G4; unreadable
@@ -9063,9 +9097,9 @@ type Backend interface {
 }
 ```
 
-Notes on `Spec`: `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable and refreshed before each command. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed.
+Notes on `Spec`: `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable; the Task Manager refreshes the list through `SetMasked` before each command, and a container hides only the files that existed when it was made. `Command` refuses a masked file that exists now and was not mounted over, or whose file on the host was replaced since the mount (a different device or inode); a listed file that does not exist is ignored. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed.
 
-The command environment holds only `PATH`, `HOME` (the instance's temporary folder), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables. `PATH` is the detected toolchain folders in detection order, then the system folders.
+The command environment holds only `PATH`, `HOME` (the instance's temporary folder), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables, plus the tag `KOMODO_SANDBOX_CMD` that names the command to the sandbox. `PATH` is the detected toolchain folders in detection order, then the system folders.
 
 The rules every mechanism applies, whatever it is:
 - The host's service sockets are unreachable: no mount of the container runtime's socket, and for a mechanism that shares the host filesystem, `/run`, `/var/run` and `/run/user` are replaced by empty folders.
@@ -9098,37 +9132,57 @@ The rendered Seatbelt profile for one worktree. Later rules win, so home is clos
 ```scheme
 (version 1)
 (deny default)
-(allow process-exec process-fork signal sysctl-read mach-lookup)
+(allow process-exec process-fork sysctl-read)
+(allow signal (target same-sandbox))                              ; never a host process
+(allow mach-lookup (global-name "com.apple.system.logger")      ; an allow-list of 17 system services, not every service
+                   (global-name "com.apple.cfprefsd.daemon"))   ; the full list is `machServices` in profile.go
 (allow file-read*)
 (deny file-read* (subpath "/Users/dev"))                        ; home closed
+(allow file-read-metadata)                                       ; names and sizes stay visible, contents do not
 (allow file-read* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")  ; worktree
                   (subpath "/Users/dev/src/shop/.git")           ; git folder
-                  (subpath "/Users/dev/.komodo/cache/lang/shop") ; language caches
-                  (subpath "/Users/dev/.rustup"))                ; toolchain
-(deny file-read* (regex #"/\.env[^/]*$" #"\.pem$" #"\.key$"))    ; row G4 masks, rendered from its patterns
+                  (subpath "/Users/dev/.komodo/cache/lang/shop/modules") ; module caches
+                  (subpath "/Users/dev/.rustup")                 ; toolchain
+                  (subpath "/private/tmp/komodo-s1")             ; the instance's temporary folder
+                  (subpath "/Users/dev/.komodo/cache/lang/shop/build")) ; build caches
+(deny file-read* (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.env")) ; one literal per Spec.Masked file
+(allow file-write* (subpath "/dev/null") (subpath "/dev/dtracehelper"))
 (allow file-write* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")
                    (subpath "/private/tmp/komodo-s1")            ; the instance's temporary folder
                    (subpath "/Users/dev/.komodo/cache/lang/shop/build")) ; build caches only
-(deny file-write* (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.git")) ; ReadOnly
-(allow network* (remote ip "localhost:*") (local ip "localhost:*"))
+(deny file-write* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.git")) ; ReadOnly
+(deny file-write* (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.env")) ; a masked file cannot be rewritten, renamed or removed
+(deny file-write-unlink (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/cfg")) ; nor can the folder that holds one
+(deny file-read* file-write* (subpath "/private/var/run") (subpath "/var/run") (subpath "/run")) ; host service sockets
+(allow network-outbound (remote unix-socket (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")
+                                            (subpath "/private/tmp/komodo-s1")
+                                            (subpath "/Users/dev/.komodo/cache/lang/shop/build"))) ; Unix sockets only inside the writable folders
+(allow network-bind (local unix-socket (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")
+                                       (subpath "/private/tmp/komodo-s1")
+                                       (subpath "/Users/dev/.komodo/cache/lang/shop/build")))
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-bind network-inbound (local ip "localhost:*"))
 ```
+
+The loopback rule is two rules on purpose. Filters inside one rule are alternatives, so `(allow network* (remote ip "localhost:*") (local ip "localhost:*"))` let a command connect to a public address, which a real `sandbox-exec` run showed. For the setup command, `Spec.Network` replaces the last two rules with `(allow network-outbound (remote ip))` and the name-resolver socket `/private/var/run/mDNSResponder`; a bare `(allow network*)` is never used, because it also opens every Unix socket, such as the container runtime's and the key agent's.
+
+Seatbelt's loopback is the host's own: unlike Bubblewrap and Docker, a command can reach any service listening on `127.0.0.1`. Seatbelt cannot give a private one, so `Caveats` names this line together with the missing process and memory caps, for the run report and `doctor`. A masked file or the folder above it cannot be moved by the confined command, so `mv .env stolen && cat stolen` fails. Seatbelt applies the profile to a command's processes, so a command that starts a daemon in a new session can outlive it; each command therefore runs as `sh -c 'trap "kill -9 -1" TERM; "$@" <&0 & wait $!; exit $?'`, and a cancel or timeout sends SIGTERM to that shell, which kills every process of its sandbox (`signal` is limited to `same-sandbox`), and then the host kills the process group, the descendants it finds and any process carrying the command's `KOMODO_SANDBOX_CMD` tag. Whoever starts a command waits for it with `sandbox.Wait`, which also releases the timeout. If the home folder cannot be found, `Check` and `Prepare` fail instead of leaving home open.
 
 The Bubblewrap command line for the same worktree:
 
 ```text
-bwrap --ro-bind / / --tmpfs /home/dev \
+bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /home/dev --tmpfs /tmp \
   --bind <worktree> <worktree> --ro-bind <worktree>/.git <worktree>/.git \
-  --ro-bind <git dir> <git dir> \
-  --bind <lang>/build <lang>/build --ro-bind <lang>/modules <lang>/modules \
+  --ro-bind <git dir> <git dir> --ro-bind <lang>/modules <lang>/modules \
+  --bind <instance temp> <instance temp> --bind <lang>/build <lang>/build \
   --ro-bind /dev/null <worktree>/.env \
-  --tmpfs /tmp --bind <instance temp> <instance temp> \
   --unshare-net --unshare-pid --die-with-parent --new-session \
   --chdir <worktree> -- <command> <args>
 ```
 
 For the group's setup command alone, `Spec.Network` is true: the Seatbelt profile then allows network access, and the Bubblewrap line leaves out `--unshare-net`.
 
-A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt` and `uv` where the language needs them, makes one container per instance with the worktree at `/work`, runs setup with network on and then disconnected, and runs each command as `docker exec`; a timeout kills the command's process group inside the container. A Makefile-only or 2-language repository sets `sandbox.image`.
+A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt` and `uv` where the language needs them, makes one container per instance with the worktree at `/work`, runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
 
 **Language caches.** The caches are the harness's own, under a per-repository folder: never the person's `~/.npm`, `~/.cargo/registry` or Go cache. The Cache Manager keeps them and their size rules ([chapter 8](#8-cache-manager)); the sandbox only mounts them, with the toolchain folders read-only. The per-user process limit is never used, because it counts every process the person runs.
 
@@ -9504,6 +9558,28 @@ func CheckInit(i Init) error
 
 `Probe` and `Profile` return `ErrUnavailable` or `ErrUnauthorized` for a missing program, a silent endpoint or a logged-out login, and `ErrNotYet` for one of OpenAI's links, which the interface names and no adapter yet serves; `Router.Select` skips the link. `Start` returns `ErrModelGone` on HTTP 404 (the task's next session takes the prior identifier), `ErrBilling` when the first line shows a paid key, `*ProviderLimit` for a provider cap, and `ErrNotYet` for a link named but not built. `Stream.Next` returns `io.EOF` after the result event; `Inject` and `Stop` return `ErrStreamClosed` on an ended session, which the caller ignores. A failed `Resume` gets a fresh session (resume).
 
+The API links add a few shapes beside `Provider`:
+
+```go
+// ToolDefiner is implemented by a ToolHost that can describe its tools; a host without it gets a permissive schema.
+type ToolDefiner interface {
+	Definition(name string) (ToolDef, bool)
+}
+
+// Gate is the role's own check of a result; an empty reply passes it, any text goes back into the session.
+type Gate interface {
+	Check(ctx context.Context, output json.RawMessage) (string, error)
+}
+
+// EndError is what Stream.Next returns when the tool loop ends without a usable result.
+type EndError struct {
+	Reason state.Reason // check_fail, no_result or schema_fail
+	Detail string
+}
+```
+
+`Session` also carries `Parts`, the brief's five parts, so the paid adapter can place its cache markers between them, and `Gate`. `Client.ProbeAll` probes every adapter and returns one `ProbeResult` per link, with `OK` false and a `Reason` for a link that failed. `NewModelCheck(catalog, probes...)` returns the function the Configuration Manager takes as its `modelOK`: a model passes when a successful probe found it, or when it is a hosted catalog model and at least one probe succeeded. A paid-link `400` whose message begins `You have reached your specified API usage limits` becomes a `ProviderLimit` of cap `spend` inside the adapter.
+
 #### HTTP client
 
 `NewHTTPClient(opts)` builds the client and loads the CA bundle. `Do(ctx, ep, req)` sends with retries and returns the whole body; `Stream(ctx, ep, req, hooks)` feeds SSE events to the hooks and retries a mid-answer drop once from the start; `Redact` and `AddSecrets` manage the redaction list. `Do` and `Stream` return `*LimitError`, `*StatusError`, `ErrRefused` (policy) or `ErrStreamIdle` (silent body). The paid Anthropic adapter, the optional local adapter and, once built, OpenAI's interface adapter call it on every request; any other subsystem builds its own client with its own `Endpoint`.
@@ -9525,11 +9601,20 @@ func (m *Manager) DestroySandboxInstance(ctx context.Context, id string) error
 
 // Command wraps one command so that it starts inside the instance; the command never runs unwrapped.
 func (m *Manager) Command(ctx context.Context, id string, c Command) (*exec.Cmd, error)
+
+// EndSetup turns the network off for every later command; calling it twice does nothing.
+func (m *Manager) EndSetup(ctx context.Context, id string) error
+
+// SetMasked replaces the unreadable file list; the Task Manager calls it before each command.
+func (m *Manager) SetMasked(id string, masked []string) error
+
+// Caveats names the requested limits the instance's mechanism cannot enforce here, for the run report and `doctor`.
+func (m *Manager) Caveats(id string) []string
 ```
 
-A failing `Backend.Check` or `CreateSandboxInstance` makes the pipeline escalate `blocked`, reason `setup`, naming the fix. `Command` returns the reply `error: the sandbox could not start the command: <reason>` and never runs the command unsandboxed. A failed `DestroySandboxInstance` is returned from `CloseTaskGroup`. A container left by a run that died before cleanup is removed by `komodo clean`, through the Cleanup Handler's `Sweep`, when no open run uses it.
+A failing `Backend.Check` or `CreateSandboxInstance` makes the pipeline escalate `blocked`, reason `setup`, naming the fix. `Command` returns a `*StartError` whose text is the reply `error: the sandbox could not start the command: <reason>` and never runs the command unsandboxed. A backend whose network is fixed at creation also implements `CutNetwork`, which `EndSetup` calls, and one that cannot enforce a limit implements `Caveats`. A failed `DestroySandboxInstance` is returned from `CloseTaskGroup`. A container left by a run that died before cleanup is removed by `komodo clean`, through the Cleanup Handler's `Sweep`, when no open run uses it; the Docker backend's `Sweep(ctx, keep)` removes the labelled containers whose group `keep` does not claim.
 
-`Spec.Role` picks the backend. The `builder` role gets the operating-system sandbox. The `tester` role gets a Docker container, or `testerFallback` when `Backend.Check` fails on Docker; the instance then carries `Fallback` and `Reason`.
+`Spec.Role` picks the backend. The `builder` role gets the operating-system sandbox. The `tester` role gets a Docker container, or `testerFallback` when `Backend.Check` fails on Docker; the instance then carries `Fallback` and `Reason`. A Docker `Prepare` that fails after a passing check does not fall back: it escalates `blocked`, reason `setup`.
 
 ### 11.5 Behaviour
 
@@ -9646,6 +9731,8 @@ Rules that hold on every walk:
 
 The check gives each link a cost class before every session and fails closed: any doubt counts as `paid`.
 
+**Pricing a paid session.** The paid adapter prices every turn from the catalog: cache reads at 0.1 times the input price, cache writes at 1.25 times for the 5-minute lifetime and 2 times for the 1-hour lifetime. A paid model with no catalog price, or a price of zero, is never started: `Start` and `Resume` return `ErrUnpriced`, so spend is never reported as zero.
+
 | Cost class | When | Runs |
 |---|---|---|
 | `subscription` | The `claude` link with `authMethod: claude.ai` and `subscriptionType` in `pro`, `max`, `team`, `enterprise` | Always |
@@ -9658,7 +9745,7 @@ The check gives each link a cost class before every session and fails closed: an
 | `fallback` | A paid link runs only after every subscription link is skipped |
 | `allowed` | Paid links run in chain order |
 
-1. Before each subscription session run `claude auth status --json` (0.1 s, cached 60 s per process). It sets the cost class; a logged-out or unknown login is `paid`.
+1. Before each subscription session run `claude auth status --json` (0.1 s) with the environment the session will use. The answer is cached 60 s per fingerprint of the variables that choose the login (`HOME`, `USER`, `LOGNAME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN` and the `XDG_*` folders), so a session with another login is checked on its own; a read that a cancelled caller or a timeout cut short is never cached. It sets the cost class; a logged-out or unknown login is `paid`.
 2. Remove `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and every `CLAUDE_CODE_USE_*` from the environment. `CLAUDE_CODE_OAUTH_TOKEN` stays: it is a subscription token. The `claude` program in print mode prefers a present key over the login.
 3. Spawn the program and read its first line.
 4. `system/init` must say `apiKeySource: "none"`, else the session is killed before turn 1, exits `billing`, and the group escalates `blocked`, reason `paid_refused`.
@@ -9709,6 +9796,14 @@ The launch line, one flag per line:
 
 **Stream facts.** The first line is `system/init`. Piped standard input is capped at 10 MB; a 500K-token brief is about 2 MB. The program's `SIGINT` ends a turn and keeps its result, while `SIGTERM` leaves it unfinished with exit code 143, so the stop ladder sends `SIGINT` first.
 
+**Wire details the adapter fixes.**
+- The program starts in the session folder. A resume replaces `--session-id <uuid>` with `--resume <uuid>`, and the new input is the one message on standard input.
+- The brief is written to standard input right after the start, and the first line is read at once; the adapter kills the program on any first line that is not `system/init` with `apiKeySource: "none"`.
+- `api_retry` carries its category in `error` and its delay in `retry_delay_ms`; `rate_limit_event` carries `status`, `rateLimitType`, `isUsingOverage` and `resetsAt` under `rate_limit_info`.
+- A `rate_limit` event whose status starts with `allowed`, or that reports overage, never ends the session. `rateLimitType` maps to the cap: `five_hour` to `window`, `seven_day` to `weekly`, a name holding `opus` or `sonnet` to `model`.
+- The probe reuses the `system/init` line already recorded for the program version, so a second probe of one version spends no turn.
+- The `result` line is checked before it is passed on. `is_error` true or a subtype starting `error` ends the session with `no_result`; a missing `structured_output`, or one that breaks the agent's result schema, ends it with `schema_fail`. The program's own `--json-schema` is not trusted alone.
+
 **When a session ends on a limit.** A short rate limit that the program retries itself must not end the session. The adapter ends a session with exit reason `provider` only when:
 1. A `rate_limit` event carries a reset time more than 60 s away, the same bound the HTTP client uses to turn a rate limit into a stop.
 2. A `retry` event has category `billing_error`.
@@ -9754,7 +9849,15 @@ The loop runs on API links. It is the harness's copy of what the `claude` progra
 
 No result tool exists mid-session: the result always comes from the final call, on every link.
 
-**Context limit.** The loop counts tokens every turn with the bundled tokenizer. When the conversation passes `min(200,000 tokens, 80% of the link's measured context)`, the oldest tool outputs become one-line stubs, `[output of <tool> call <n> cut: <bytes> bytes in out/<n>.log]`, until the conversation is half that size. Cutting to half lets the cache break rarely and each turn send less. If the conversation is still over the context after stubbing, the session ends with `no_result` and nothing past the context is sent. Tokens spent come from the provider's reported usage after each turn.
+**Stop and inject.** `Inject` queues a line that rides on the next user message sent to the model. `Stop(Interrupt)` lets the current tool call finish and then makes the next call the final one; `Terminate` and `Kill` cancel at once. A loop that ends without a usable result returns `*EndError`, whose `Reason` is `check_fail`, `no_result` or `schema_fail`. `messages.jsonl` numbers each line `turn` by the message's position in the conversation.
+
+**Stubs and numbering.** The stub names the log path the tool host returned in `ToolReply.LogPath`; when the host saved no log, the stub ends `bytes, not saved]`. A call numbers from 1 in the session; a resumed session continues the numbering from the saved conversation, and the log paths of calls made before the resume are not kept, so their stubs say `not saved`.
+
+**Cut tool calls.** A tool call whose arguments were cut off at the output limit, never closed, or are not valid JSON is never dispatched. It gets an `error:` tool result that says it did not run, and the model sends it again.
+
+**Saved conversation.** `messages.jsonl` holds one line per message. A tool result, the `continue` message and the final-call prompt that follow one model reply share one user message and one line, so a resumed session reads alternating user and assistant messages. A reply with no content ends the session with `no_result`. The saved blocks keep the fields the Messages interface requires even when empty: a `thinking` block keeps its `thinking` and `signature`, a `tool_use` keeps `input`, and an empty text block is dropped when the reply is assembled.
+
+**Context limit.** The loop counts tokens every turn: the larger of the encoded size divided by 4 and the last reported input size plus the encoded size of what was added since, because the standard library has no tokenizer. When the conversation passes `min(200,000 tokens, 80% of the link's measured context)`, the oldest tool outputs become one-line stubs, `[output of <tool> call <n> cut: <bytes> bytes in <log path>]`, until the conversation is half that size. Cutting to half lets the cache break rarely and each turn send less. If the conversation is still over the context after stubbing, the session ends with `no_result` and nothing past the context is sent. Tokens spent come from the provider's reported usage after each turn.
 
 #### Run the session clocks
 
@@ -10328,8 +10431,8 @@ Go package `internal/agent` (HLD Appendix A). It holds the role definitions and 
 |---|---|
 | `internal/agent/role.go` | `Role` and `Slots`, the compiled role definition every agent shares |
 | `internal/agent/builder.go` | The Builder's `Role`, `BuilderResult` and `ParseBuilderResult` |
-| `internal/agent/taskgate.go` | `TaskGate`: rerun a completion command and return its outcome |
-| `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` |
+| `internal/agent/taskgate.go` | `CommandRunner`, `TaskGate` and `CapOutput`: rerun a completion command and return its capped outcome |
+| `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` and `MatchGlob`, the guard's pattern matcher (a pattern with no slash matches the base name at any depth), and `MatchPath`, the matcher of a group's file list (a pattern with no slash matches only at the root, so `go.mod` never allows `tools/go.mod`) |
 
 Files this chapter calls but does not own:
 
@@ -10771,9 +10874,14 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 
 | File | Holds |
 |---|---|
-| `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `TesterResult` and `Tester.AcceptResult` |
+| `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `TesterResult`, `TesterVerdict`, `ParseTesterResult`, `NewTester` and `Tester.AcceptResult` |
 | `internal/agent/rerun.go` | `Tester.Rerun` and `AdjudicateItem` |
 | `internal/agent/checks.go` | `Checker`, the check steps, their results and `CheckDone` |
+| `internal/agent/checker.go` | `CheckerConfig`, `NewChecker` and the eight steps |
+| `internal/agent/coverage.go` | `CoverageCommand`, `ParseCoverage` and `CoverageLevel` |
+| `internal/agent/gotest.go` | `TestRun`, `ParseGoTestJSON` and `NewBaseline`: Go test and package-list output |
+| `internal/agent/secrets.go` | The diff reader (`diffLines`, which `Reviewer.Lenses` also uses) and the secret scan |
+| `internal/agent/junit.go` | `ParseJUnit`: per-test results from a JUnit XML report |
 | `internal/agent/baseline.go` | `Baseline`, `Classify`, `ClassifyFailure` |
 | `internal/agent/impact.go` | `ImpactSet` |
 | `internal/agent/scope.go` | `OutOfScope`, shared with the Builder ([12.2](#122-package-layout)) |
@@ -10796,7 +10904,7 @@ Files this chapter calls but does not own:
   "run_classes": ["build", "test"],
   "guard": ["R1"],
   "slots": {
-    "required": ["repo_profile", "group", "tasks"],
+    "required": ["repo_profile", "group", "tasks", "acceptance"],
     "optional": ["repo_context", "standards", "diff", "checks", "baseline"]
   },
   "result": {"$id": "komodo:agent/tester/result/1", "type": "object", "required": ["items", "tasks"]},
@@ -10914,6 +11022,7 @@ const (
 	RerunConfirmed RerunOutcome = "confirmed" // both reruns failed
 	RerunDisputed  RerunOutcome = "disputed"  // both reruns passed
 	RerunSplit     RerunOutcome = "split"     // one passed, one failed
+	RerunUnconfirmed RerunOutcome = "unconfirmed" // the item has no command, so Go ran nothing
 )
 ```
 
@@ -10922,6 +11031,8 @@ The Task Manager folds the validated result and the rerun outcomes into one verd
 ```go
 // TesterVerdict is the Tester's outcome as the approval rule reads it.
 type TesterVerdict struct {
+	Ended    bool     `json:"ended"`              // the Tester's session ended with a valid result and Go's reruns finished
+	Restarts int      `json:"restarts,omitempty"` // restarts spent after a dispute
 	Pass     bool     `json:"pass"`               // every task confirmed and every item passed or skipped
 	NotMet   []string `json:"not_met,omitempty"`  // task identifiers marked not_confirmed
 	Failed   []string `json:"failed,omitempty"`   // items Go's two reruns confirmed failed
@@ -11049,8 +11160,8 @@ type CheckDone struct {
 type Tester interface {
 	// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
 	Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error)
-	// AcceptResult rejects a result that skips or repeats a task identifier or leaves evidence empty.
-	AcceptResult(tasks []string, r TesterResult) error
+	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, or leaves evidence empty.
+	AcceptResult(tasks, items []string, r TesterResult) error
 }
 
 // AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
@@ -11076,10 +11187,12 @@ func CaseCollisions(paths []string) [][]string
 
 `CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`.
 
+`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Where a language's JUnit report command comes from is [TODO: where each non-Go language's JUnit report command comes from ([G-282](#g-282))].
+
 | Function | On failure |
 |---|---|
-| `Tester.Rerun` | An item with no `Cmd` is never rerun and its failure is never confirmed. A command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking. |
-| `Tester.AcceptResult` | A skipped or repeated task identifier returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
+| `Tester.Rerun` | An item with no `Cmd` is never rerun and its failure is never confirmed: `Rerun` returns `RerunUnconfirmed`. A command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking. |
+| `Tester.AcceptResult` | A skipped or repeated task identifier or acceptance item, or an item the group does not have, returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
 | `AdjudicateItem`, `ClassifyFailure`, `Baseline.Classify`, `ImpactSet`, `CaseCollisions` | Cannot fail. A test absent from the baseline is `ok` when it passes and `new` when it fails. |
 | `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass and is blocked `setup` naming the step. |
 
@@ -11129,7 +11242,7 @@ sequenceDiagram
 5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither the Tester nor the Reviewer starts. On a clean result it starts the Tester's session with the brief, and the Reviewer at the same moment ([14.5](#145-behaviour)).
 6. The Tester runs each acceptance item's command with `run` (classes `build` and `test`) and reads the diff and files as needed.
 7. It ends with one final call: a pass or fail with evidence for every item, and `confirmed` or `not_confirmed` for every task identifier.
-8. Go rejects a result that skips or repeats a task identifier.
+8. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item.
 9. Go reruns every failed item that has a command, twice, in the same container, and judges it with `AdjudicateItem`.
 10. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour).
 
@@ -11248,6 +11361,12 @@ func ImpactSet(deps map[string][]string, changed []string) []string {
 }
 ```
 
+A changed file that is not Go source belongs to the nearest package at or above its folder, so an embedded file or `testdata` selects the package that owns it. A change in a nested module, or one that maps to no package, selects every package of the module, and the `impact_set` step warns and names the file. Nested modules are not tested separately.
+
+For a language other than Go, the test command runs once and its JUnit report gives one result per test. When the report is missing or unreadable, a failing command is one whole-command failure. That failure is never classed as pre-existing, even when the command also failed at the base: it blocks, with a detail line saying that per-test results are unavailable, because a failure at the base would otherwise hide every new failure.
+
+A Go test that started and never finished, killed by another test's panic or a timeout, counts as failed.
+
 Without `-test`, `go list` omits packages that only a test file imports. With it, the test variant such as `poc/b [poc/b.test]` lists them, so the caller strips the bracket suffix and skips the generated `.test` main packages before calling `ImpactSet`.
 
 ##### Flake rule
@@ -11306,6 +11425,8 @@ Each default tool reports a whole-repository line percent in the field named. Ve
 | JavaScript, TypeScript | `c8 --reporter=json-summary` around `test` | `total.lines.pct` |
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
 | Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
+
+JavaScript and TypeScript wrap the repository's own `test` command. Java and Kotlin have no default command; the command that prints the JaCoCo report is [TODO: the command and report path for Java and Kotlin coverage ([G-281](#g-281))], so their coverage step fails naming the language until one is configured.
 
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
@@ -11415,6 +11536,8 @@ const (
 |---|---|---|
 | [G-267](#g-267) | Where the baseline result is stored and which sandbox runs it | 13.5 |
 | [G-169](#g-169) | Whether each default coverage tool yields a whole-repository line percent | 13.5 |
+| [G-281](#g-281) | The command and report path for Java and Kotlin coverage | 13.5 |
+| [G-282](#g-282) | Where each non-Go language's JUnit report command comes from | 13.4 |
 
 The Tester's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
@@ -11457,8 +11580,8 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 
 | File | Holds |
 |---|---|
-| `internal/agent/reviewer.go` | The Reviewer's `Role`, `ReviewerResult`, `Reviewer.AcceptResult` and `ExactlyOnce` |
-| `internal/agent/lens.go` | `Rule`, `Applies`, `Profile` and `Reviewer.Lenses` |
+| `internal/agent/reviewer.go` | The Reviewer's `Role`, `ReviewerResult`, `ParseReviewerResult`, `Reviewer.AcceptResult` and `ExactlyOnce` |
+| `internal/agent/lens.go` | `Rule`, `Applies`, `Catalog`, `LoadCatalogs`, `NewReviewer`, `Profile` and `Reviewer.Lenses` |
 | `internal/agent/evidence.go` | `Finding`, `LineSource`, `VerifyFinding` and `Reviewer.AcceptFinding` |
 | `internal/agent/precision.go` | `Precision`, the per-rule counters |
 | `internal/agent/approval.go` | `ReviewerVerdict`, `Outcome` and `Decide`, the approval rule |
@@ -11545,6 +11668,8 @@ type Applies struct {
 | `applies.markers` | Text markers in the diff that make the rule apply. |
 | `check` | One sentence stating what must hold. |
 | `evidence` | The line a finding must quote. |
+
+A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a severity is unknown or a field is empty. The catalogs ship with one short rule per item of the Checks column in 14.5; the full rule text is still to author ([G-16](#g-16)).
 
 The values below are illustrative:
 
@@ -11685,7 +11810,8 @@ type Reviewer interface {
 // Diff is what lens selection reads.
 type Diff struct {
 	Paths []string
-	Text  string
+	Text  string // the unified diff
+	Specs bool   // a task cites a spec anchor
 }
 
 // Profile is the review depth.
@@ -11711,7 +11837,7 @@ func ExactlyOnce(want, got []string) error
 func Decide(t TesterVerdict, r ReviewerVerdict) Outcome
 ```
 
-`TesterVerdict` is defined in [13.3](#133-data-model). `ExactlyOnce` serves both judges.
+`TesterVerdict` is defined in [13.3](#133-data-model). `ExactlyOnce` serves both judges. `NewReviewer(standards)` loads the compiled catalogs and builds the `Reviewer`; `standards` reports the severity of a rule compiled from a standards skill.
 
 | Function | On failure |
 |---|---|
@@ -11873,6 +11999,8 @@ func ExactlyOnce(want, got []string) error {
 | Reviewer answers `brief_incomplete` | `block` with reason `brief` |
 | Both fail in one tick | Handled in the order the events were published; both reach the Builder in one return |
 | Item has no command | Unconfirmed in the report; never blocks |
+
+`Decide` reads `TesterVerdict.Ended` and `TesterVerdict.Restarts`: a first dispute (`Restarts` 0) waits for the restart, and a second blocks `tester`. A fault blocks at once. Every other case waits until the Reviewer's session has ended; a Reviewer that ended with a failure then returns the round even while the Tester is cancelled or awaits a restart.
 
 A Tester failure never cancels the Reviewer. A round returns to the Builder only when the Reviewer's session has ended. The return counter is the Runtime Manager's ([Runtime Manager](#7-runtime-manager)).
 
@@ -12698,9 +12826,11 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 |---|---|
 | `internal/cleanup/handler.go` | `Handler`, `Complete` and the interfaces it needs from other parts |
 | `internal/cleanup/types.go` | `Published`, `Report`, `Item` and the error values |
-| `internal/cleanup/sweep.go` | `Sweep`: removal of the remains of dead runs |
+| `internal/cleanup/sweep.go` | `Sweep`: removal of the remains of dead runs; `Preview`: the same walk that lists and removes nothing |
 | `internal/cleanup/discard.go` | `Discard`: removal of one named group's resources |
 | `internal/cleanup/versions.go` | `UnusedVersions`: installed binary versions no unfinished group names |
+| `internal/cleanup/steps.go` | The removal steps that `Complete`, `Sweep` and `Discard` share: container, checkouts, worktree, branch |
+| `internal/cleanup/paths.go` | The check that every deleted path lies inside one of the handler's folders |
 
 **Entry points**
 
@@ -12708,6 +12838,7 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 |---|---|
 | Cleaning a published group | `Handler.Complete` in `handler.go` |
 | Clearing the remains of dead runs | `Handler.Sweep` in `sweep.go` |
+| Listing what a sweep would clear | `Handler.Preview` in `sweep.go` |
 | Dropping one group | `Handler.Discard` in `discard.go` |
 | Choosing which binary versions may be deleted | `Handler.UnusedVersions` in `versions.go` |
 
@@ -12716,14 +12847,15 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 ```go
 // Published says that a group's work is on the remote and may be cleaned up.
 type Published struct {
-	Run      state.ID       `json:"run"`
-	Group    state.ID       `json:"group"`
+	Run      string         `json:"run"`
+	Group    string         `json:"group"`
 	Epic     string         `json:"epic"`     // epic folder name, such as ep-1
 	Branch   string         `json:"branch"`   // group branch that was landed
 	Tip      string         `json:"tip"`      // commit id the remote must hold
 	Remote   string         `json:"remote"`   // remote that received the push
 	Contains string         `json:"contains"` // remote reference whose history must hold Tip
 	Worktree string         `json:"worktree"` // path of the group's checkout
+	Landing  string         `json:"landing,omitempty"` // path of the epic's landing worktree; used when EpicDone is true
 	EpicDone bool           `json:"epic_done"` // true when this was the epic's last group and its pull request is open
 	PRURL    string         `json:"pr_url"`   // epic pull request address; empty before the last group lands
 }
@@ -12739,6 +12871,7 @@ type Published struct {
   "remote": "origin",
   "contains": "origin/komodo/ep-1",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
+  "landing": "/Users/dev/.komodo/landing/shop/ep-1",
   "epic_done": true,
   "pr_url": "https://github.com/acme/shop/pull/41"
 }
@@ -12749,7 +12882,8 @@ type Published struct {
 | `tip` | Must be in the history of `contains` on the remote; otherwise `ErrNotPublished` |
 | `contains` | The epic's remote branch, which holds the group's landing |
 | `epic_done` | When true, the landing worktree and the local epic branch are removed as well |
-| `worktree` | The checkout the handler removes; it holds nothing the published tip lacks |
+| `worktree` | The checkout the handler removes; it holds nothing the published tip lacks, and it is exactly `<Roots.Worktrees>/<group>`, or `Complete` returns `ErrOutsideRoots` |
+| `landing` | The landing worktree removed when `epic_done` is true; it is exactly `<Roots.Landings>/<epic>` |
 
 ```go
 // Item is one thing the Cleanup Handler removed or kept.
@@ -12761,11 +12895,24 @@ type Item struct {
 
 // Report lists what one call removed and what it kept, for the CLI to print.
 type Report struct {
-	Group   state.ID `json:"group"`   // empty for a Sweep
+	Group   string   `json:"group"`   // empty for a Sweep
 	Removed []Item   `json:"removed"`
 	Kept    []Item   `json:"kept"`
 }
 ```
+
+```go
+// Roots are the folders the handler may delete inside; it refuses every path outside them.
+type Roots struct {
+	Worktrees string // one folder per group, such as ~/.komodo/wt/<repo-id>/
+	Landings  string // one landing worktree per epic
+	Testers   string // one tester checkout per group; empty means none exist
+	Temp      string // one session temporary folder per group; empty means none exist
+	Versions  string // one folder per installed binary version
+}
+```
+
+Every group-named path is `<root>/<group>`. A group id that is not one plain path element, a path that is not strictly below its root, and a path that reaches outside its root through a link are all refused with `ErrOutsideRoots`; a link inside a root is removed as a link and never followed or handed to git. Only branches under `komodo/` are ever deleted; any other branch name is kept and listed.
 
 ```json
 {
@@ -12788,10 +12935,18 @@ type Report struct {
 type Handler struct {
 	Lease  Leases     // reads who holds a group; the Lease Manager
 	Git    Git        // the git wrapper, through the Cleanup Handler's own small interface
-	Boxes  Containers // the group's Docker container
+	Boxes  Containers // the group's Docker container; nil means Docker is absent
 	Task   TaskGroup  // the group's Task Manager
-	Groups Groups    // reads group records from the State Manager
-	Report Reporter  // relays a progress fact to the Runtime Manager
+	Groups Groups     // reads group records from the State Manager
+	Report Reporter   // relays a progress fact to the Runtime Manager
+	Errors Errors     // the Error Handler; receives each removal failure
+
+	Repo   string                 // repo id the lease registry files the groups under
+	Clone  string                 // path of the clone every git call runs in
+	Remote string                 // remote whose branches count as published
+	Current string                // version of the running binary; UnusedVersions always keeps it
+	Roots  Roots                  // the only folders the handler deletes in
+	Live   func(lease.Lease) bool // true while a working run holds the lease; nil counts every held lease as live
 }
 
 // Complete cleans up one published group, then closes it; the Commit Handler calls it after the push.
@@ -12800,8 +12955,11 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error)
 // Sweep removes the remains of runs that ended without cleaning up.
 func (h *Handler) Sweep(ctx context.Context) (Report, error)
 
+// Preview lists what Sweep would remove and removes nothing; `komodo clean --dry-run` prints it.
+func (h *Handler) Preview(ctx context.Context) (Report, error)
+
 // Discard drops one group's resources for good, including unpublished work; the worktree and its files are deleted unless KeepWorktree is set.
-func (h *Handler) Discard(ctx context.Context, group state.ID, o DiscardOptions) (Report, error)
+func (h *Handler) Discard(ctx context.Context, group string, o DiscardOptions) (Report, error)
 
 // UnusedVersions returns the installed binary versions that no unfinished group names.
 func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error)
@@ -12817,6 +12975,8 @@ type DiscardOptions struct {
 var (
 	ErrNotPublished = errors.New("remote does not hold the group's tip") // Complete: nothing is removed
 	ErrLeaseHeld    = errors.New("a live run holds the group")           // Sweep, Discard: the group is skipped
+	ErrUnknownVersion = errors.New("a binary version is unknown, so none can be deleted") // UnusedVersions: nothing is returned
+	ErrOutsideRoots = errors.New("path is outside the folders cleanup may delete in") // Complete, Discard: nothing is removed
 )
 ```
 
@@ -12838,11 +12998,26 @@ type Git interface {
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
 	// DiscardBranch deletes a local branch that still points at expectTip, whether or not the remote holds that commit; only Discard calls it.
 	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
+	// DiscardWorktree removes a worktree and its files even when they hold work the tip lacks; only Discard calls it.
+	DiscardWorktree(ctx context.Context, clone, path string) error
+	// BranchTip returns the commit a local branch points at; the bool is false when the branch does not exist.
+	BranchTip(ctx context.Context, clone, branch string) (tip string, ok bool, err error)
+	// Fetch brings the remote's branches into their remote-tracking references; it never prunes.
+	Fetch(ctx context.Context, clone, remote string) error
+	// Holds reads the remote-tracking references, which Fetch refreshes, and reports whether the remote holds tip in the history of contains, or of any of its branches when contains is empty.
+	Holds(ctx context.Context, clone, remote, contains, tip string) (ref string, ok bool, err error)
+}
+
+// GroupLocker is implemented by a Leases that can hold a group still against a grant; the handler holds it while it sweeps or discards that group.
+type GroupLocker interface {
+	LockGroup(ctx context.Context, repo, group string) (unlock func(), err error)
 }
 
 // Containers removes a group's Docker container; the sandbox backend that created it implements it, and it succeeds when Docker is absent or the container is gone.
 type Containers interface {
-	Remove(ctx context.Context, group state.ID) error
+	Remove(ctx context.Context, group string) error
+	// List returns the group of every Komodo container, running or stopped; with Docker absent it returns none.
+	List(ctx context.Context) ([]string, error)
 }
 
 // TaskGroup is the group's Task Manager.
@@ -12857,21 +13032,28 @@ type Groups interface {
 
 // GroupRef names an unfinished group and the binary version its run pinned.
 type GroupRef struct {
-	Group   state.ID
+	Group   string
 	Version string
 }
 
 // Reporter relays a progress fact to the Runtime Manager, which publishes it as a run-status event.
 type Reporter interface {
-	Report(ctx context.Context, group state.ID, subtype string, data any) error
+	Report(ctx context.Context, group string, subtype string, data any) error
+}
+
+// Errors is the Error Handler as the Cleanup Handler uses it.
+type Errors interface {
+	Report(src fault.Source, code string, kind fault.Kind, err error)
 }
 ```
+
+An error from `RemoveWorktree`, `DeleteBranch`, `DiscardBranch` or `DiscardWorktree` that carries a `Refused() bool` method answering true is a refusal on purpose: it is listed under `kept` and not sent to the Error Handler.
 
 | Caller | Call | When |
 |---|---|---|
 | Commit Handler | `Complete` | A group's landing is pushed, and the epic's pull request step is done when it was the last group |
 | [TODO: what triggers the sweep ([G-218](#g-218))] | `Sweep` | Not fixed |
-| Runtime Manager | `Sweep`, `UnusedVersions` | The engine's `clean` request from `komodo clean`; with `--dry-run` the Report lists what would go |
+| Runtime Manager | `Sweep`, `Preview`, `UnusedVersions` | The engine's `clean` request from `komodo clean`; with `--dry-run` it calls `Preview` and the Report lists what would go |
 | Runtime Manager | `Discard` | `komodo abandon (id)`, after it stops the group |
 | Runtime Manager | `UnusedVersions` | The engine's `clean` request from `komodo update`, before it deletes old versions |
 
@@ -12879,6 +13061,8 @@ type Reporter interface {
 |---|---|---|
 | `ErrNotPublished` | The remote lacks the tip | Nothing removed; the Commit Handler repeats its push check |
 | `ErrLeaseHeld` | Another live run holds the group | The group is skipped and listed under `kept` |
+| `ErrOutsideRoots` | A path or group id reaches outside the handler's folders | Nothing removed |
+| `ErrUnknownVersion` | A group or the running binary has no version | No version is returned for deletion |
 | Any other error | A removal failed | The step is listed under `kept` with the error; the Error Handler receives it |
 
 ### 16.5 Behaviour
@@ -12897,11 +13081,11 @@ flowchart TB
   B -->|"1 refused"| X["ErrNotPublished"]
 ```
 
-1. `Complete` reports `cleanup.start` and checks that `tip` is in the history of `contains` on the remote. If not, it returns `ErrNotPublished` and removes nothing.
+1. `Complete` reports `cleanup.start`, fetches the remote once (a fetch never prunes) and checks that `tip` is in the history of `contains` on the remote. If not, it returns `ErrNotPublished` and removes nothing.
 2. It removes the group's Docker container through `Containers.Remove` first, because the container mounts the worktree. With no Docker, or no container, the step succeeds with nothing removed.
-3. It removes the tester's throwaway checkout and the group's session temporary folder.
-4. It removes the worktree with `Git.RemoveWorktree`. If the worktree holds files the tip lacks, it keeps the worktree and lists it under `kept`.
-5. It deletes the group's local branch with `DeleteBranch`, which refuses unless the branch still points at the landed tip. A refusal is listed under `kept`.
+3. It removes the tester's throwaway checkout `<Roots.Testers>/<group>` and the group's session temporary folder `<Roots.Temp>/<group>`.
+4. It removes the worktree with `Git.RemoveWorktree`. If the worktree holds files the tip lacks, it keeps the worktree and lists it under `kept`. A link in place of the worktree is unlinked and never passed to git.
+5. It deletes the group's local branch with `DeleteBranch`, which refuses unless the branch still points at the landed tip. A refusal is listed under `kept`. When the worktree was kept, the branch is kept with it.
 6. It calls `CloseTaskGroup()` on the group's Task Manager, which destroys the sandbox, then reports `cleanup.done` with the `Report`. The Runtime Manager calls the Lease Manager's `Release` when the group closes ([chapter 9](#9-lease-manager)).
 
 The Runtime Manager publishes `run-complete` only after every group of the run has been closed this way and the epic's pull request was announced ([chapter 15](#15-commit-handler)).
@@ -12909,17 +13093,21 @@ The Runtime Manager publishes `run-complete` only after every group of the run h
 #### Branches under epic landing
 
 1. The redundant branch is the group's local branch, which was never pushed; `contains` is the epic's remote branch.
-2. When `epic_done` is true, the epic's pull request is open, so the landing worktree and the local epic branch also go, with `contains` set to the epic's remote branch.
+2. When `epic_done` is true, the epic's pull request is open, so the landing worktree (`landing`) and the local epic branch also go, with `contains` set to the epic's remote branch. The local epic branch is `contains` without its `remote/` prefix, and it goes only if it is in the history of `contains` and the landing worktree is gone. A `contains` outside `komodo/`, such as `origin/main`, deletes no local branch.
 3. The remote epic branch stays: the open pull request needs it.
 
 #### Sweeping the remains of dead runs
 
 What triggers a sweep is [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))]; `komodo clean` calls it on demand.
 
-1. `Sweep` lists the group worktrees on disk and skips every group a live run holds, asking the Lease Manager through `Leases.Holder`.
-2. It removes the dead runs' Docker containers, tester checkouts and session temporary folders.
-3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed. It then deletes the group's local branch with `DeleteBranch`, which keeps a branch whose tip the remote lacks.
+1. `Sweep` asks `Groups.Unfinished` and fetches the remote once, without pruning. It collects group ids from the folders in `Roots.Worktrees`, `Roots.Testers` and `Roots.Temp` and from `Containers.List`. A group that is unfinished (stopped, blocked, paused or crashed, so `komodo run (id)` can continue it) is kept whole and listed under `kept`.
+2. For each remaining group it takes the Lease Manager's group lock when `Leases` offers one, then reads the lease through `Leases.Holder` and skips a group a live run holds (live when `Handler.Live` says so). Before every removal it reads the lease again and stops that group if a live run has taken it. It removes the group's Docker container, tester checkout and session temporary folder.
+3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed. It then deletes the group's local branch, named by the group's lease record, with `DeleteBranch`, passing the branch's current tip and the remote branch `Holds` found it in. A branch whose tip no remote branch holds, a group with no lease record to name its branch, and the branch of a worktree that was kept are kept and listed.
 4. It returns a `Report` and reports `cleanup.swept`.
+
+Last, `Sweep` removes the landing worktree `<Roots.Landings>/<epic>` and the local branch `komodo/<epic>` of every epic that no unfinished group lands on, judged by the unfinished groups' lease branches `komodo/<epic>-<group>`; when any unfinished group has no lease branch to read, every landing is kept.
+
+`Preview` fetches once without pruning and walks the same groups and lists each container, checkout, worktree and branch that `Sweep` would try to remove, under `removed`; it calls no removal and reports no fact. A worktree that holds files the tip lacks shows as removable in a preview and is kept when `Sweep` runs.
 
 A crash or `stop` leaves the group's worktree, branch and container in place. `komodo run (id)` continues the group from its saved state, and the sweep clears what no run continues.
 
@@ -12927,14 +13115,14 @@ A crash or `stop` leaves the group's worktree, branch and container in place. `k
 
 `komodo abandon (id)` reaches `Discard` through the Runtime Manager, which stops the group first.
 
-1. `Discard` refuses with `ErrLeaseHeld` when a live run still holds the group; stopping the group revokes its lease first.
-2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree. It deletes the local branch with `DiscardBranch`, which drops unpublished work, and calls `CloseTaskGroup()`, which destroys the sandbox.
+1. `Discard` takes the Lease Manager's group lock when `Leases` offers one and refuses with `ErrLeaseHeld` when a live run still holds the group; stopping the group revokes its lease first. It reads the lease again before every removal, and a live holder stops it with `ErrLeaseHeld`.
+2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree with `DiscardWorktree`, which deletes its files too; a link in its place is unlinked, not followed. With `KeepWorktree` the branch stays with the worktree. Otherwise it deletes the local branch, named by the group's lease record, with `DiscardBranch`, which drops unpublished work, and calls `CloseTaskGroup()`, which destroys the sandbox.
 3. It keeps the group's state record and events, and reports `group.discarded` with the reason. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
 4. Dependent groups are then marked `waiting on discarded group` by the Runtime Manager in status and in the task-list file, not in their own records, until `run` is given a plan that clears the wait.
 
 #### Choosing which versions to delete
 
-`komodo update` and `komodo clean` delete installed binary versions that nothing needs. `UnusedVersions` returns the installed versions minus every version named by a `GroupRef` from `Groups.Unfinished`. A blocked or stopped group counts as unfinished, so a group that waits for a person never loses the binary it was started with.
+`komodo update` and `komodo clean` delete installed binary versions that nothing needs. `UnusedVersions` returns the folder names in `Roots.Versions`, oldest first, minus `Handler.Current`, the running binary's version, and every version named by a `GroupRef` from `Groups.Unfinished`. A `GroupRef` with an empty `Version`, or an empty `Current`, makes it return `ErrUnknownVersion` and no versions. A blocked or stopped group counts as unfinished, so a group that waits for a person never loses the binary it was started with.
 
 ### 16.6 State
 
@@ -12971,6 +13159,8 @@ A crash inside `Cleaning` leaves some resources removed. A repeat of `Complete` 
 6. A group held by a live run is never touched by `Sweep` or `Discard`.
 7. State records and events are never deleted.
 8. A binary version named by an unfinished group is never deleted.
+9. `Sweep` never touches an unfinished group, and a branch is deleted only when it lies under `komodo/` and its worktree is gone.
+10. The handler deletes only below `Roots`; a path outside them is refused with `ErrOutsideRoots` before anything is removed.
 
 #### Failures
 
@@ -13002,6 +13192,15 @@ Component tests use a temporary git repository, a local bare repository as the r
 - A branch moved by one commit after publishing is not deleted.
 - No call deletes a remote branch or closes a pull request.
 - `Sweep` skips a group whose lease a live run holds.
+- `Preview` lists what `Sweep` would remove and removes nothing, and prunes no reference.
+- `Sweep` keeps an unfinished group's container, checkouts, worktree and branch, and fetches the remote once however many groups it visits.
+- `Sweep` clears the container and checkouts of a group whose worktree is gone, and the landing worktree of an epic no unfinished group lands on.
+- A link in place of a worktree is unlinked, and the worktree it points at survives.
+- A group another run takes after the lease was read is not touched by `Sweep` or `Discard`.
+- `Complete` refuses a worktree path that is not its own group's, and deletes no branch outside `komodo/`.
+- A kept worktree keeps its branch, in `Complete`, `Sweep` and `Discard` with `KeepWorktree`.
+- `UnusedVersions` returns nothing for a group with no version, and never returns the running binary's version.
+- A path or group id outside `Roots`, including one reached through a link, is refused with `ErrOutsideRoots` and nothing there is deleted.
 - `UnusedVersions` excludes the version named by a blocked group.
 - `run-complete` is not published while any group of the run is unclosed.
 - `Discard`, reached by `abandon (id)`, refuses a group a live run holds, removes the container, deletes a branch holding unpublished commits, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
@@ -14797,6 +14996,8 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
 | <a id="g-277"></a>G-277 | Landing | How the group's Docker container sees the epic tip, which sits in the Commit Handler's landing worktree | Phase 6, with the Commit Handler | [11](#11-task-manager), [15](#15-commit-handler) |
 | <a id="g-280"></a>G-280 | Platform | Whether Komodo refuses a network or shared home folder, where the operating-system file lock may not be honoured or several machines or containers share one set of state files; `doctor` checks both | Phase 7, with `doctor` | [0](#0-front-matter-and-code-structure), [9](#9-lease-manager), [10](#10-state-manager) |
+| <a id="g-281"></a>G-281 | Tester | The command and report path that print the JaCoCo line coverage of a Java or Kotlin repository, for Gradle and for Maven; no default is built in, so the coverage step fails naming the language | Phase 5, with the Task Manager | [13](#13-tester) |
+| <a id="g-282"></a>G-282 | Tester | Where the command that prints a non-Go language's JUnit XML report comes from (the repository profile or the configuration); until set, a failing test command of that language blocks as unclassifiable, so no default hides a failure | Phase 5, with the Task Manager | [13](#13-tester) |
 
 #### Spikes, measurements and later-minor items
 

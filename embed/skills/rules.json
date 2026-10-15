@@ -1,0 +1,137 @@
+[
+  {
+    "id": "std.aws.1",
+    "skill": "standards-aws",
+    "line": "Always grant a role the least permissions that let it work."
+  },
+  {
+    "id": "std.aws.2",
+    "skill": "standards-aws",
+    "line": "Never put an access key in code or in a variable file."
+  },
+  {
+    "id": "std.aws.3",
+    "skill": "standards-aws",
+    "line": "Never open a security group to 0.0.0.0/0 except for a public load balancer."
+  },
+  {
+    "id": "std.aws.4",
+    "skill": "standards-aws",
+    "line": "Always encrypt storage at rest and turn on versioning for buckets that hold state."
+  },
+  {
+    "id": "std.comments.1",
+    "skill": "standards-comments",
+    "line": "Always comment every function, public or private, in at most 2 lines."
+  },
+  {
+    "id": "std.comments.2",
+    "skill": "standards-comments",
+    "line": "Always comment a type, constant, variable or field in at most 1 line."
+  },
+  {
+    "id": "std.comments.3",
+    "skill": "standards-comments",
+    "line": "Always say what the code does; never restate the name."
+  },
+  {
+    "id": "std.comments.4",
+    "skill": "standards-comments",
+    "line": "Never open a comment with a label such as WHY."
+  },
+  {
+    "id": "std.comments.5",
+    "skill": "standards-comments",
+    "line": "Never name a plan, task, ticket, phase or version in a comment."
+  },
+  {
+    "id": "std.comments.6",
+    "skill": "standards-comments",
+    "line": "Never remove or rewrite a comment you did not write."
+  },
+  {
+    "id": "std.go.1",
+    "skill": "standards-go",
+    "line": "Always wrap an error with %w and a message that describes the failure."
+  },
+  {
+    "id": "std.go.2",
+    "skill": "standards-go",
+    "line": "Never start an error string with the name of the function."
+  },
+  {
+    "id": "std.go.3",
+    "skill": "standards-go",
+    "line": "Never discard an error with the blank identifier outside a deferred cleanup."
+  },
+  {
+    "id": "std.go.4",
+    "skill": "standards-go",
+    "line": "Never name a package util, common or helpers."
+  },
+  {
+    "id": "std.go.5",
+    "skill": "standards-go",
+    "line": "Always declare a sentinel error once at package level, named ErrSomething."
+  },
+  {
+    "id": "std.go.6",
+    "skill": "standards-go",
+    "line": "Always write the failing test before the fix."
+  },
+  {
+    "id": "std.go.7",
+    "skill": "standards-go",
+    "line": "Always keep tests beside their source and run them with the race detector."
+  },
+  {
+    "id": "std.kotlin.1",
+    "skill": "standards-kotlin",
+    "line": "Never use the not-null assertion operator in production code."
+  },
+  {
+    "id": "std.kotlin.2",
+    "skill": "standards-kotlin",
+    "line": "Always prefer val and immutable collections over var and mutable ones."
+  },
+  {
+    "id": "std.kotlin.3",
+    "skill": "standards-kotlin",
+    "line": "Always run a coroutine in a scope that has an owner."
+  },
+  {
+    "id": "std.kotlin.4",
+    "skill": "standards-kotlin",
+    "line": "Never block a thread inside a suspending function."
+  },
+  {
+    "id": "std.ui-mobile.1",
+    "skill": "standards-ui-mobile",
+    "line": "Always size touch targets to at least 44 by 44 points."
+  },
+  {
+    "id": "std.ui-mobile.2",
+    "skill": "standards-ui-mobile",
+    "line": "Never hard-code a screen size."
+  },
+  {
+    "id": "std.ui-mobile.3",
+    "skill": "standards-ui-mobile",
+    "line": "Always give every control a text label for screen readers."
+  },
+  {
+    "id": "std.ui-mobile.4",
+    "skill": "standards-ui-mobile",
+    "line": "Never carry meaning in color alone."
+  },
+  {
+    "id": "std.ui-mobile.5",
+    "skill": "standards-ui-mobile",
+    "line": "Always release listeners and observers when the screen goes away."
+  },
+  {
+    "id": "std.ui-mobile.6",
+    "skill": "standards-ui-mobile",
+    "line": "Never do network or disk work on the main thread."
+  }
+]

@@ -1,0 +1,51 @@
+{
+  "lens": "config",
+  "when": "filter",
+  "applies": {
+    "globs": [
+      "embed/**/*.json"
+    ],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "config.1",
+      "severity": "blocker",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "hard limits stay at their stated values",
+      "evidence": "the line that changes a hard limit",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "config.2",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "the schema version is raised when the shape of the data changes",
+      "evidence": "the changed field with an unchanged version line",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "config.3",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "the gate fixture matches the changed policy",
+      "evidence": "the policy row with no matching fixture case",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}
