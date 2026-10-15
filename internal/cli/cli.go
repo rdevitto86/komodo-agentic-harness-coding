@@ -239,8 +239,7 @@ func (c *CLI) validate(call *Call) *Result {
 		return r
 	}
 	if cmd.NeedsTerminal != nil && cmd.NeedsTerminal(call) && !call.HasTerminal {
-		r := refuse(format.NoTerminal, "komodo "+cmd.Name+" changes settings or the install and needs a terminal",
-			"hand the command to the person: komodo "+cmd.Name)
+		r := refuse(format.NoTerminal, "komodo "+cmd.Name+" needs a terminal", "komodo "+cmd.Name+" in a terminal")
 		return &r
 	}
 	return c.checkTamper(call)
@@ -267,7 +266,7 @@ func (c *CLI) checkTamper(call *Call) *Result {
 		}
 		return nil
 	}
-	r := refuse(format.ConfigTampered, "settings were edited outside komodo config", fix)
+	r := refuse(format.ConfigTampered, "settings were hand-edited", fix)
 	return &r
 }
 
@@ -279,8 +278,7 @@ func (c *CLI) resolve(call *Call) *Result {
 		call.CommonDir = commonDir(root)
 	}
 	if call.Command.NeedsRepo != nil && call.Command.NeedsRepo(call) && !ok {
-		r := refuse(format.NoRepo, "komodo "+call.Command.Name+" acts on a repository and "+call.dir()+" is not inside one",
-			"run it inside a git repository, or pass -C <path>")
+		r := refuse(format.NoRepo, "no git repository found", "komodo "+call.Command.Name+" inside a git repository, or pass -C <path>")
 		return &r
 	}
 	if call.Command.Name == "run" {

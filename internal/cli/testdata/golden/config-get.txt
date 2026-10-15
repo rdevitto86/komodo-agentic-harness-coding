@@ -1,0 +1,16 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "1 setting was found.",
+  "report": "1 setting was found.\n\nThey are:\n\n| `Key` | `Value` | `Source` |\n|---|---|---|\n| `limits.returns` | `3` | `built-in` |\n",
+  "data": {
+    "items": [
+      {
+        "key": "limits.returns",
+        "value": 3,
+        "source": "built-in"
+      }
+    ]
+  }
+}

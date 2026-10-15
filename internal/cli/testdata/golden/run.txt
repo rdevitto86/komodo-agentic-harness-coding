@@ -1,0 +1,10 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Run started for tg-1.2. The run id is <uuid>.",
+  "report": "Run started for `tg-1.2`. The run id is `<uuid>`.\n",
+  "data": {
+    "run_id": "<uuid>"
+  }
+}

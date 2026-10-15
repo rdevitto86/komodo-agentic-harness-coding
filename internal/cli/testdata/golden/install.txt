@@ -1,0 +1,13 @@
+exit 4
+{
+  "v": 1,
+  "ok": false,
+  "verdict": "Failed: komodo install is not built yet. The code is internal.",
+  "report": "Failed: `komodo install is not built yet`. The code is `internal`.\n",
+  "data": {},
+  "error": {
+    "code": "internal",
+    "reason": "komodo install is not built yet",
+    "fix": ""
+  }
+}

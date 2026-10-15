@@ -61,7 +61,7 @@ func (c *CLI) checkPin(call *Call) *Result {
 	if err != nil || meets {
 		return nil
 	}
-	r := refuse(format.Pinned, "this repository needs komodo "+pin+" or newer and this binary is "+core.BinaryVersion(), "run komodo update")
+	r := refuse(format.Pinned, "repository pinned to komodo "+pin, "run komodo update")
 	return &r
 }
 

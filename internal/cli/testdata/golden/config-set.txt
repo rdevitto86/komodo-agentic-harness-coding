@@ -1,0 +1,17 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Settings changed: 1.",
+  "report": "Settings changed: 1.\n\nThe audit batch is `<uuid>`.\n\nThe old and new values were:\n\n| `Key` | `Old` | `New` |\n|---|---|---|\n| `limits.returns` | `3` | `2` |\n",
+  "data": {
+    "batch": "<uuid>",
+    "changes": [
+      {
+        "key": "limits.returns",
+        "old": 3,
+        "new": 2
+      }
+    ]
+  }
+}

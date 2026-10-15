@@ -1,0 +1,15 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Plan started for the goal Add lease revocation.",
+  "report": "Plan started for the goal `Add lease revocation`.\n",
+  "data": {
+    "run_id": "<uuid>",
+    "target": "ep-2",
+    "groups": [
+      "tg-2.1",
+      "tg-2.2"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+exit 1
+{
+  "v": 1,
+  "ok": false,
+  "verdict": "Refused: komodo config set needs a terminal. The code is no_terminal. To fix",
+  "report": "Refused: `komodo config set needs a terminal`. The code is `no_terminal`. To fix\nit, run `komodo config set in a terminal`.\n",
+  "data": {},
+  "error": {
+    "code": "no_terminal",
+    "reason": "komodo config set needs a terminal",
+    "fix": "komodo config set in a terminal"
+  }
+}
