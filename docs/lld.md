@@ -4412,12 +4412,12 @@ type Frontmatter struct {
 | `name` | string | The skill name, the same as its folder name |
 | `description` | string | One line of at most 100 characters |
 | `globs` | list | File patterns; a match with any file in the group's `files` selects the skill |
-| `markers` | list | Repo files that must exist; an empty list means no marker is required |
+| `markers` | list | Repo files; the skill is selected when at least one is met; an empty list means no marker is required |
 | `sections` | list | Every level-2 heading of the body, in body order; an entry with no heading, a heading with no entry and a duplicate heading are all refused |
 
 The frontmatter is a strict subset of YAML between two `---` lines: `key: value` lines with a plain or double-quoted value, the empty list `[]`, and block lists of `  - "item"` lines. A hand-written line parser in `skills.go` reads it with `bufio.Scanner` and `strconv.Unquote`, so no YAML library is needed; any other line is refused.
 
-A marker is a glob some file path in the base tree matches, or `<glob>:<text>`, met when a file matching the glob contains the text. `standards-aws` writes its Terraform marker as `*.tf:provider "aws"`.
+A marker is a glob some file path in the base tree matches, or `<glob>:<text>`, met when a file matching the glob contains the text. A glob without a `/` matches any one segment of a path, so `*.xcodeproj` matches a folder; a `/` pattern matches whole paths, and `**` stands for any number of segments. `standards-aws` writes its Terraform marker as `*.tf:provider "aws"`.
 
 #### Skill index
 
@@ -4436,6 +4436,7 @@ type IndexEntry struct {
 	Markers     []string  `json:"markers"`
 	Sections    []string  `json:"sections"`
 	SHA256      string    `json:"sha256"` // 64 lowercase hex characters, written by the build
+	Always      bool      `json:"-"`      // set by List for a skill in the agent's always list
 }
 ```
 
@@ -4482,7 +4483,7 @@ type Rule struct {
 | `Rule.ID` | `std.<skill>.<n>`, the identifier a reviewer finding cites |
 | `Rule.Line` | The line without its leading `- ` and every `**`, trimmed |
 
-`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as `{id, skill, line}` rows sorted by identifier; a Go test regenerates it and compares byte for byte. A standards rule has severity `major`.
+`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as a JSON array of `{id, skill, line}` rows, ordered by skill name and then by `n`; a Go test regenerates it and compares byte for byte, and `go test -run TestShippedIndexAndRules -update` rewrites both `rules.json` and `index.json`. A standards rule has severity `major`.
 
 #### Item table
 
@@ -4517,7 +4518,7 @@ type ItemState struct {
 | `name` | A skill the table holds; an unknown name is refused |
 | `enabled` | `false` removes the skill from every selection and every pull |
 | `allow` | Agent names; a name that is not one of the 4 agents is refused |
-| `always` | A subset of `allow`; these skills lead the agent's standards, in the order written |
+| `always` | A subset of `allow`; these skills lead the agent's standards, in the order of the item table: the harness's starting rows in the order it gave them, then the rest in index order |
 
 An agent reaches a skill when the skill is enabled and the agent is in its `allow` list. A trailing `*` in an `allow` entry of the Agent Registry names every skill with that prefix, such as `standards-*`; the harness expands it against the table when it builds the starting values.
 
@@ -4557,11 +4558,11 @@ type ConnectionFile struct {
 | `name` | Unique; the name `komodo` is reserved for the embedded tool set entry |
 | `command`, `args` | Started without a shell |
 | `env` | Names only; the values come from the harness's environment and never reach a file or a brief |
-| `enabled` | `false` by default for an entry read from the file |
+| `enabled` | `false` by default for an entry read from the file; a value in the file is ignored |
 | `allow` | Agents that may use it; empty means none |
 | `hosts` | Network hosts the server may reach; empty means the server has no network |
 
-The embedded `komodo` entry always exists and is always enabled for every agent. The tools it advertises to one agent are that agent's tool list in the Agent Registry, and the Task Manager checks every call.
+The embedded `komodo` entry always exists and is always enabled for every agent. It is `{name: komodo, command: komodo}` with no arguments, no variables and no hosts, and an `mcp` / `set` event that names it is refused. `Deps.Conns` changes only the `enabled` and `allow` of an entry that is in the file; a name that is not in the file adds a `Warning`. The tools it advertises to one agent are that agent's tool list in the Agent Registry, and the Task Manager checks every call.
 
 Outside servers follow these rules:
 - **Off by default:** an entry read from `connections.json` is disabled until a `mcp` / `set` event enables it.
@@ -4580,6 +4581,7 @@ type Request struct {
 	Tree  Tree   // read-only view of the base commit
 	Files []string // the group's files; selects skills; empty for the planner
 	Slots Values // slot values only the caller has: goal, group, tasks, diff, findings and so on
+	Chain []Candidate // the agent's link chain with each link's measured context; sizes the repo map
 }
 
 // Tree is a read-only view of the repository at one commit.
@@ -4601,6 +4603,7 @@ type Context struct {
 }
 
 // Warning is a problem GetContext reports without failing, such as a dropped paragraph.
+// Load problems (a refused local skill, an unreadable connections.json) are in every Context and in Manager.Warnings.
 type Warning struct {
 	Code string // for example addendum_paragraph_dropped
 	Path string
@@ -4624,6 +4627,7 @@ type Warning struct {
 | `tree` | The base commit of the group, or of the repository for a plan; the Context Manager reads nothing from the working tree |
 | `files` | Used only for skill selection and for the `files` slot check |
 | `slots` | Filled by the caller; the Context Manager adds the slots it computes ([6.5](#65-behaviour)) |
+| `chain` | The agent's links with their measured contexts. The repo map is fitted to a tenth of the smallest ceiling in it; with no chain the planner's map is not fitted and a reviewer gets no map |
 
 #### Brief
 
@@ -4637,7 +4641,7 @@ A brief has 5 parts, ordered so the parts that change least come first and the p
 | 4 Standards | Skills, `always` first, then by name | The group's file types or item state change |
 | 5 Task | The template's `# Brief` with its slots filled | Every task |
 
-Parts 1 to 4 hold no timestamps, identifiers or unsorted maps, so two briefs for one agent share every prefix byte. No harness rule appears in any part. Where the model client places its provider cache markers is [chapter 11](#11-task-manager)'s.
+Parts 1 to 4 hold no timestamps, identifiers or unsorted maps, so two briefs for one agent share every prefix byte. No harness rule appears in any part. Part 1 lists the agent's tool names (`Deps.Tools`, from the Agent Registry) under `# Tools` and the connection names under `# Tool servers`; part 3 is the addendum under `# Repository guidance`, or empty; part 4 is each skill under `## Standards: <name> (<sha8>)`, or empty. Where the model client places its provider cache markers is [chapter 11](#11-task-manager)'s.
 
 ```go
 // Slot names one hole in a template's # Brief section.
@@ -4662,8 +4666,9 @@ const (
 	Goal         Slot = "goal"
 	Layout       Slot = "layout"
 	Backlog      Slot = "backlog"
-	RepoMap      Slot = "repo_map"
+	SlotRepoMap  Slot = "repo_map" // named SlotRepoMap because RepoMap is the map type
 	Baseline     Slot = "baseline"
+	Acceptance   Slot = "acceptance"
 )
 
 // Values holds the filled text of each slot; a missing or empty entry is an empty slot.
@@ -4736,7 +4741,7 @@ You are the builder. Read neighbouring code, make the smallest change, test what
 {{specs}}
 ```
 
-A template holds `# Role` text, never a rule, and a `# Brief` section with `{{slots}}`. Role text says how to do the job. The orchestrator rules and the output contract live outside every worker template. A Go test fails an unknown slot, an unfilled slot and a slot the agent's table row does not name. A template cannot name a tool, so no file can widen an agent's powers.
+A template holds `# Role` text, never a rule, and a `# Brief` section with `{{slots}}`. Role text says how to do the job. The orchestrator rules and the output contract live outside every worker template. A Go test fails an unknown slot, an unfilled slot and a slot the agent's table row does not name. A template cannot name a tool, so no file can widen an agent's powers. `ParseTemplate` refuses a template with text before `# Role`, a second level-1 heading, a slot in the role text, an unknown slot, a slot outside the agent's row, or no hole for a required slot; headings inside a code fence are not headings.
 
 #### Repo map
 
@@ -4761,7 +4766,7 @@ type Symbol struct {
 }
 ```
 
-A pattern file `embed/langs/<lang>.json` looks like `{"extensions": [".py"], "symbols": [{"kind": "function", "pattern": "^def (\\w+)"}]}`. Each pattern is a Go regular expression whose first group is the symbol name, matched line by line.
+A pattern file `embed/langs/<lang>.json` looks like `{"extensions": [".py"], "symbols": [{"kind": "function", "pattern": "^def (\\w+)"}]}`. Each pattern is a Go regular expression whose first group is the symbol name, matched line by line; the first pattern that matches a line wins. Go symbols are `function` (methods included), `type`, and `export` for an exported constant or variable. Only a Go file or a file of a language with a pattern file is read for references; a file of any other language is listed with rank 0. A map with no file renders `no source files`, and so does an empty layout.
 
 | Rule | Detail |
 |---|---|
@@ -4807,7 +4812,7 @@ type CommandSet struct {
 | `pyproject.toml` | none | none | `pytest` | `ruff check` | `ruff format --check` |
 | `Makefile` | `make setup` | `make build` | `make test` | `make lint` | `make fmt` |
 
-A marker with no entry for a class leaves that class empty. The `repo_profile` slot renders the detected languages and the command classes found.
+A marker with no entry for a class leaves that class empty. A `Makefile` target named like the class (`setup`, `build`, `test`, `lint`, or `fmt` for `format`) beats the language marker for that class. Markers are looked up at the repository root; the `git-read` class holds `git status`, `git diff`, `git log` and `git show`. `MarkerHash` is the SHA-256 of the marker file names and contents. The `repo_profile` slot renders `Languages: <names by extension>` and one `  <class>: <commands>` line per class found.
 
 ### 6.4 Interfaces
 
@@ -4834,6 +4839,8 @@ type Deps struct {
 	Phrases   func() []string // steering phrases, from the Task Manager's guard data
 	Home      string         // Komodo home folder; the context folder is under it
 	Count     Counter        // token counter; New uses the bundled one when nil
+	Tools     map[string][]string // each agent's tool names, from the Agent Registry; part 1 lists them
+	Embedded  fs.FS               // the embedded files; New uses the binary's own when nil
 }
 
 // The Context Manager reads and writes the skills, context, map and setup namespaces through
@@ -4946,7 +4953,26 @@ The Configuration Manager publishes `skill` and `mcp` right after it saves a cha
 | `mcp` / `set` | `name`, `enabled`, `allow` | Replaces that connection's state |
 | `mcp` / `reload` | none | Rereads `connections.json` |
 
-The Event Bus chapter owns the list of subtypes ([chapter 4](#4-event-bus)).
+The Event Bus chapter owns the list of subtypes ([chapter 4](#4-event-bus)). The Context Manager declares the data structs and binds them with `RegisterEvents()`; it reads an event body of any other type with the same fields by encoding it to JSON, with unknown fields refused.
+
+```go
+// SkillSet is the data of skill / set; MCPSet carries name, enabled and allow of mcp / set.
+type SkillSet struct {
+	Name    string   `json:"name"`
+	Enabled bool     `json:"enabled"`
+	Allow   []string `json:"allow"`
+	Always  []string `json:"always"`
+}
+
+// ContextRefused is the data of error / context-refused.
+type ContextRefused struct {
+	Event  string `json:"event"`  // the refused event as type/subtype
+	Field  string `json:"field"`  // the field that failed
+	Reason string `json:"reason"` // what was wrong with it
+}
+```
+
+The `reload` subtypes carry an empty body. A `set` that names the `komodo` connection is refused.
 
 ### 6.5 Behaviour
 
@@ -4988,10 +5014,10 @@ sequenceDiagram
 
 ```text
 Select(agent, files, tree):
-  out = the skills in the agent's always list, in the order written; each must be enabled
+  out = the skills in the agent's always list, in table order; each must be enabled
   for each enabled skill whose allow list has the agent and which is not in out:
     skip the skill if no glob matches any file in files
-    skip the skill if its markers are not met in tree
+    skip the skill if it has markers and none is met in tree
     add the skill to the matched set
   sort the matched set by name, ascending
   out = out + matched set
@@ -5113,7 +5139,7 @@ The Context Manager holds the item table in memory and keeps no state file. It r
 |---|---|---|
 | Item enabled | A `set` event with `enabled: false` | The item is absent from every later selection and pull |
 | Item disabled | A `set` event with `enabled: true` | The item is selectable by the agents in its `allow` list |
-| Local item loaded | `reload` or start | The file is parsed, scanned, fingerprinted and disabled until a `set` event |
+| Local item loaded | `reload` or start | The file is parsed, scanned, fingerprinted and disabled until a `set` event; a reload keeps the state of a skill that is still there |
 
 An event that arrives while a brief is being built waits for the build to end; the table's lock makes each brief see one consistent table.
 

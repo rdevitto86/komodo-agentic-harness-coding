@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"testing/fstest"
 )
 
 const goodSkill = "---\nv: 1\nname: standards-demo\ndescription: \"Demo\"\nglobs:\n  - \"*.go\"\nmarkers: []\nsections:\n  - \"Errors\"\n  - \"Tests\"\n---\n## Errors\n- **Never** ignore errors.\n\n## Tests\n- **Always** test.\n"
@@ -255,5 +254,4 @@ func TestSelectFixtureOrder(t *testing.T) {
 	if got := names(one); !reflect.DeepEqual(got, []string{"standards-go", "standards-kotlin", "standards-ui-mobile"}) {
 		t.Fatalf("matched set sorts by name: %v", got)
 	}
-	_ = fstest.MapFS{}
 }

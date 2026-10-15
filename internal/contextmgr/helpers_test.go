@@ -119,7 +119,7 @@ func (c *fakeCache) Put(ns cache.Namespace, key cache.Key, data []byte) error {
 	return nil
 }
 
-// builderOnly and the lists below are the allow lists the tests start from.
+// workers and steerList are the allow list and the steering phrases the tests start from.
 var (
 	workers   = []string{"builder", "reviewer", "tester"}
 	steerList = []string{"ignore previous instructions"}
