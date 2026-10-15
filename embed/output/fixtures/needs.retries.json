@@ -1,0 +1,7 @@
+{
+  "code": "retries",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "An agent's timeouts or idle stops passed its retries. Continue?",
+  "fix": "komodo run --approve tg-1.3"
+}

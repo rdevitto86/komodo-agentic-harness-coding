@@ -1,0 +1,7 @@
+{
+  "code": "flaky",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The Tester's reruns split and a role reported results it cannot confirm. Continue?",
+  "fix": "komodo run --approve tg-1.3"
+}

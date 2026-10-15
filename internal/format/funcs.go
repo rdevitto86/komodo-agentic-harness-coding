@@ -21,6 +21,7 @@ const (
 // funcs is the added template function map; no other added function is callable.
 var funcs = template.FuncMap{
 	"code":   fnCode,
+	"fenced": fnFenced,
 	"n":      fnN,
 	"plural": fnPlural,
 	"dur":    fnDur,
@@ -28,13 +29,32 @@ var funcs = template.FuncMap{
 	"table":  tableText,
 }
 
-// fnCode returns a code word, or a code span holding one, as a code span; a word off the list fails.
+// fnCode returns a code word, or a code span holding one, as a code span; a word on neither list fails.
 func fnCode(c string) (string, error) {
 	word := unspan(c)
-	if !IsCode(word) {
+	if !IsCode(word) && !IsBlockReason(word) {
 		return "", fmt.Errorf("%w: %q", ErrCodeUnknown, word)
 	}
 	return span(word), nil
+}
+
+// fnFenced returns an escaped fact as plain text for a fenced block, breaking every run of 3 or more backticks.
+func fnFenced(s string) string {
+	raw := unspan(s)
+	var b strings.Builder
+	run := 0
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == '`' {
+			if run++; run == 3 {
+				b.WriteByte(' ')
+				run = 1
+			}
+		} else {
+			run = 0
+		}
+		b.WriteByte(raw[i])
+	}
+	return b.String()
 }
 
 // fnN returns an integer with comma thousands separators.
@@ -160,6 +180,11 @@ func tableText(t Table) (string, error) {
 	}
 	if cols == 0 {
 		return "", nil
+	}
+	for i, r := range t.Rows {
+		if len(t.Head) > 0 && len(r) > len(t.Head) {
+			return "", fmt.Errorf("table row %d has %d cells but the header has %d", i+1, len(r), len(t.Head))
+		}
 	}
 	shown := t.Rows[:min(len(t.Rows), maxRows)]
 	var lines, below []string

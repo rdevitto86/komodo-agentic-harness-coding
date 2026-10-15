@@ -8,6 +8,7 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,13 +39,14 @@ var kindNames = map[string]Kind{
 type KeySpec struct {
 	Name    string
 	Kind    Kind
-	Default any      // nil when Derived is set
-	Enum    []string // allowed values for KindEnum
-	Min     any      // hard minimum; nil when none
-	Max     any      // hard maximum; nil when none
-	MaxKey  string   // another key that caps this one, such as limits.pool_max
-	Derived string   // names the rule when the default is computed per group
-	Family  bool     // the name ends in a variable part, such as a link name
+	Default any            // nil when Derived is set
+	Enum    []string       // allowed values for KindEnum
+	Min     any            // hard minimum; nil when none
+	Max     any            // hard maximum; nil when none
+	MaxKey  string         // another key that caps this one, such as limits.pool_max
+	Derived string         // names the rule when the default is computed per group
+	Family  bool           // the name holds one variable part in angle brackets, such as a link name
+	Members map[string]any // the variable parts a family allows with their defaults; nil allows any name
 }
 
 // Layer names where a value came from.
@@ -101,15 +103,16 @@ var envRefPattern = regexp.MustCompile(`^env:[A-Za-z_][A-Za-z0-9_]*$`)
 
 // rawSpec is one defaults.json row before its kind and numbers are resolved.
 type rawSpec struct {
-	Name    string   `json:"name"`
-	Kind    string   `json:"kind"`
-	Default any      `json:"default"`
-	Enum    []string `json:"enum"`
-	Min     any      `json:"min"`
-	Max     any      `json:"max"`
-	MaxKey  string   `json:"max_key"`
-	Derived string   `json:"derived"`
-	Family  bool     `json:"family"`
+	Name    string         `json:"name"`
+	Kind    string         `json:"kind"`
+	Default any            `json:"default"`
+	Enum    []string       `json:"enum"`
+	Min     any            `json:"min"`
+	Max     any            `json:"max"`
+	MaxKey  string         `json:"max_key"`
+	Derived string         `json:"derived"`
+	Family  bool           `json:"family"`
+	Members map[string]any `json:"members"`
 }
 
 // loadSpecs reads and checks the built-in key table from defaults.json.
@@ -151,6 +154,22 @@ func loadSpecs(fsys fs.FS) ([]KeySpec, error) {
 				return nil, fmt.Errorf("defaults.json: %w", err)
 			}
 		}
+		if len(r.Members) > 0 && !r.Family {
+			return nil, fmt.Errorf("defaults.json: %s lists members but is not a family", r.Name)
+		}
+		for name, v := range r.Members {
+			def, err := specBound(kind, v)
+			if err == nil {
+				_, err = checkValue(s, def, false)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("defaults.json: member %s of %s: %w", name, r.Name, err)
+			}
+			if s.Members == nil {
+				s.Members = map[string]any{}
+			}
+			s.Members[name] = def
+		}
 		specs = append(specs, s)
 	}
 	for _, s := range specs {
@@ -191,7 +210,7 @@ func checkValue(s KeySpec, v any, fromText bool) (any, error) {
 		return str, nil
 	case KindEnum:
 		str, ok := v.(string)
-		if !ok || !containsString(s.Enum, str) {
+		if !ok || !slices.Contains(s.Enum, str) {
 			return nil, bad("want one of " + strings.Join(s.Enum, ", "))
 		}
 		return str, nil
@@ -275,37 +294,68 @@ func mustFloat(v any) float64 {
 // equalValues reports whether two normalised values are the same.
 func equalValues(a, b any) bool { return reflect.DeepEqual(a, b) }
 
-// containsString reports whether list holds s.
-func containsString(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
-// lookup finds the spec for a key, matching a family by its prefix; a family hit carries the full key as its name.
+// lookup finds the spec for a key, matching a family by its prefix and tail; a family hit carries the full key as its name.
+// A family with members accepts only those members and takes the member's default.
 func (m *Manager) lookup(key string) (KeySpec, bool) {
 	if i, ok := m.byName[key]; ok && !m.specs[i].Family {
 		return m.specs[i], true
 	}
 	for _, i := range m.famIdx {
-		prefix := m.specs[i].Name[:strings.Index(m.specs[i].Name, "<")]
-		if strings.HasPrefix(key, prefix) && len(key) > len(prefix) {
-			s := m.specs[i]
-			s.Name = key
-			return s, true
+		s := m.specs[i]
+		member, ok := familyMember(s.Name, key)
+		if !ok {
+			continue
 		}
+		if s.Members != nil {
+			def, known := s.Members[member]
+			if !known {
+				continue
+			}
+			s.Default = def
+		}
+		s.Name = key
+		return s, true
 	}
 	return KeySpec{}, false
+}
+
+// familyMember returns the variable part of key for a family name such as limits.link_sessions.<link>.
+func familyMember(family, key string) (string, bool) {
+	open, end := strings.Index(family, "<"), strings.Index(family, ">")
+	if open < 0 || end < open {
+		return "", false
+	}
+	prefix, tail := family[:open], family[end+1:]
+	if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, tail) || len(key) <= len(prefix)+len(tail) {
+		return "", false
+	}
+	member := key[len(prefix) : len(key)-len(tail)]
+	return member, !strings.Contains(member, ".")
+}
+
+// familyKeys lists the keys of a family: one per member, or the template name when any name is allowed.
+func familyKeys(s KeySpec) []string {
+	if s.Members == nil {
+		return []string{s.Name}
+	}
+	open, end := strings.Index(s.Name, "<"), strings.Index(s.Name, ">")
+	var keys []string
+	for member := range s.Members {
+		keys = append(keys, s.Name[:open]+member+s.Name[end+1:])
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // allKeyNames lists every settable key name for closest-match suggestions.
 func (m *Manager) allKeyNames() []string {
 	names := make([]string, 0, len(m.specs)+len(roleNames)*len(agentFieldNames))
 	for _, s := range m.specs {
-		names = append(names, s.Name)
+		if s.Family {
+			names = append(names, familyKeys(s)...)
+		} else {
+			names = append(names, s.Name)
+		}
 	}
 	for _, r := range roleNames {
 		for _, f := range agentFieldNames {

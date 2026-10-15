@@ -1,0 +1,7 @@
+{
+  "code": "tester",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The Tester's results were disputed twice. Decide the result?",
+  "fix": "komodo run --approve tg-1.3"
+}

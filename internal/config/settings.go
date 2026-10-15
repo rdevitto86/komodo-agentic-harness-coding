@@ -58,50 +58,70 @@ func (e ReadError) Unwrap() error { return e.Err }
 type machine struct {
 	flat map[string]any           // settings.json: key to normalised value
 	over map[string]AgentOverride // agents.json: role to override
+	bad  map[string]bool          // machine files that failed strict reading and are rewritten by the next write
 }
 
 // resolved is the effective settings with the machine files they came from.
 type resolved struct {
 	ms      machine
 	eff     Effective
-	readErr error // set when a machine file failed strict reading; eff is then the built-in layer
+	readErr error   // set when a machine file failed strict reading; eff is then the built-in layer
+	partial machine // what the readable files hold when readErr is set
 }
 
 // emptyMachine returns a machine state with no values.
 func emptyMachine() machine {
-	return machine{flat: map[string]any{}, over: map[string]AgentOverride{}}
+	return machine{flat: map[string]any{}, over: map[string]AgentOverride{}, bad: map[string]bool{}}
 }
 
 // resolve reads the machine files and merges them over the built-in layer.
+// When a file fails strict reading, the built-in layer is served and the readable files are kept in partial.
 func (m *Manager) resolve() resolved {
-	ms, err := m.readMachine()
+	ms, eff, err := m.readMachine()
 	if err != nil {
-		ms = emptyMachine()
+		return resolved{ms: emptyMachine(), eff: m.effective(emptyMachine()), partial: ms, readErr: err}
 	}
-	return resolved{ms: ms, eff: m.effective(ms), readErr: err}
+	return resolved{ms: ms, eff: eff}
 }
 
 // readMachine reads settings.json and agents.json strictly; an absent file holds no values.
-func (m *Manager) readMachine() (machine, error) {
+// It returns what the readable files hold, their effective settings and the first read failure.
+func (m *Manager) readMachine() (machine, Effective, error) {
 	ms := emptyMachine()
+	var first error
+	fail := func(file string, err error) {
+		ms.bad[file] = true
+		if first == nil {
+			first = ReadError{File: file, Err: err}
+		}
+	}
 	if b, err := readIfExists(filepath.Join(m.home, "settings.json")); err != nil {
-		return ms, ReadError{File: "settings.json", Err: err}
+		fail("settings.json", err)
 	} else if b != nil {
-		if ms.flat, err = m.decodeFlat(b); err != nil {
-			return ms, ReadError{File: "settings.json", Err: err}
+		if flat, err := m.decodeFlat(b); err != nil {
+			fail("settings.json", err)
+		} else {
+			ms.flat = flat
 		}
 	}
 	if b, err := readIfExists(filepath.Join(m.home, "agents.json")); err != nil {
-		return ms, ReadError{File: "agents.json", Err: err}
+		fail("agents.json", err)
 	} else if b != nil {
-		if ms.over, err = m.readOverrides(b); err != nil {
-			return ms, ReadError{File: "agents.json", Err: err}
+		if over, err := m.readOverrides(b); err != nil {
+			fail("agents.json", err)
+		} else {
+			ms.over = over
 		}
 	}
-	if err := m.checkMaxKeys(m.effective(ms).Flat); err != nil {
-		return ms, ReadError{File: "settings.json", Err: err}
+	eff := m.effective(ms)
+	if !ms.bad["settings.json"] {
+		if err := m.checkMaxKeys(eff.Flat); err != nil {
+			fail("settings.json", err)
+			ms.flat = map[string]any{}
+			eff = m.effective(ms)
+		}
 	}
-	return ms, nil
+	return ms, eff, first
 }
 
 // readIfExists returns a file's bytes, or nil when it does not exist.
@@ -233,6 +253,7 @@ func (m *Manager) agentItem(it Item, role, field string, r resolved) (Item, erro
 	over := r.ms.over[role]
 	it.Source = LayerBuiltIn
 	if field == "model" {
+		it.Default = "weight:" + string(m.roles[role].Weight)
 		if v := overrideValue(over, field); v != nil {
 			it.Value, it.Source = v, LayerMachine
 		}

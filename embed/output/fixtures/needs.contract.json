@@ -1,0 +1,7 @@
+{
+  "code": "contract",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "A decision result broke the event's declared shape. Retry?",
+  "fix": "komodo run --approve tg-1.3"
+}

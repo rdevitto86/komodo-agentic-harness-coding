@@ -139,6 +139,7 @@ An import is one package using another. Packages import in one direction only, s
 - **The rule:** a package may import any package to its right and none to its left; skipping levels is allowed.
 - **Callbacks for upward needs:** when a lower package must reach a higher one, the higher one passes a function in. The Cleanup Handler calls `CloseTaskGroup()` through a function the Task Manager hands it, so `cleanup` never imports `task`.
 - **Events cross every layer:** every package may publish to and subscribe on `bus`, which imports only `core`.
+- **The root package:** `komodo`, in `komodo.go`, holds only the embedded files and imports only `embed`; any package may import it.
 - **Enforcement:** a test reads every import and fails when one points to the left.
 
 ### 0.5 Embedded Assets
@@ -1326,7 +1327,7 @@ The Output Formatter turns the harness's structured messages into text a person 
 
 **Owns:**
 - `FormatJSON()`, the one entry point, and the templates behind it, one per reply shape and profile.
-- The two profiles, the closed code list, the six template functions, escaping, wrapping, colour and table limits.
+- The two profiles, the two closed code lists, the seven template functions, escaping, wrapping, colour and table limits.
 - The golden files that pin the exact bytes of every template.
 
 **Does not own:**
@@ -1351,14 +1352,14 @@ The Output Formatter turns the harness's structured messages into text a person 
 
 ### 2.2 Package Layout
 
-Go package `internal/format`. It imports only the Go standard library.
+Go package `internal/format`. It imports the Go standard library and the packages the import order in [0.4](#04-import-order) allows.
 
 | File | Holds |
 |---|---|
 | `internal/format/format.go` | `Formatter`, `New`, `FormatJSON`, template parse and the render steps |
 | `internal/format/shapes.go` | One fact struct per shape and the shape registry |
-| `internal/format/codes.go` | The closed code list |
-| `internal/format/funcs.go` | The six template functions and the table limiter |
+| `internal/format/codes.go` | The closed error code list and the closed block reason list |
+| `internal/format/funcs.go` | The seven template functions and the table limiter |
 | `internal/format/escape.go` | Code-span escaping, wrapping at 80 columns, colour |
 | `embed/output/{adhd,standard}/<shape>.tmpl` | One template per shape, per profile |
 | `embed/output/{adhd,standard}/<shape>.golden` | The expected bytes of the matching template |
@@ -1385,7 +1386,7 @@ The CLI builds a message from a `Result` and receives the rendered text back.
 // Message is the JSON that FormatJSON reads.
 type Message struct {
 	Shape string          `json:"shape"`          // reply.run, error.over_limit, event.run-status, ...
-	Code  string          `json:"code,omitempty"` // set for error.* and needs.* shapes
+	Code  string          `json:"code,omitempty"` // set for error.* and needs.* shapes; the code the shape name ends in
 	Facts json.RawMessage `json:"facts"`          // decoded strictly into the shape's fact struct
 }
 
@@ -1406,7 +1407,7 @@ type Rendered struct {
 | Field | Type | Rule |
 |---|---|---|
 | `shape` | string | Must name a registered shape, else `ErrShapeUnknown` |
-| `code` | string | Required for `error.*` and `needs.*` shapes; must be on the code list, else `ErrCodeUnknown` |
+| `code` | string | Required for `error.*` and `needs.*` shapes. It must be on the error code list (`error.*`) or the block reason list (`needs.*`), equal the code the shape name ends in, and equal `facts.code` when that is present; else `ErrCodeUnknown` |
 | `facts` | object | Decoded with unknown fields refused; a missing field takes its zero value |
 
 #### Profiles and options
@@ -1577,7 +1578,7 @@ type EventFacts struct {
 	Subtype string         `json:"subtype"`
 	Run     string         `json:"run"`
 	Group   string         `json:"group,omitempty"`
-	At      time.Time      `json:"at"`
+	Time    time.Time      `json:"time"`
 	Data    map[string]any `json:"data,omitempty"`
 }
 
@@ -1605,11 +1606,11 @@ type Table struct {
 | `error.<code>`, `needs.<code>`, `other` | `ErrorFacts`, `NeedsFacts`, `OtherFacts` | A refusal, a held group, any unlisted case |
 | `event.run-status`, `event.run-complete`, `event.run-failure`, `event.resource` | `EventFacts` | An event the CLI subscribed to |
 
-A held group's block reason, one of the `Reason` values of [10.3](#103-data-model), is the code of its `needs.<code>` shape, so the block reasons are codes too and each has the same templates. A code that blocks or escalates renders with `needs.<code>`; every other listed code renders with the one-line shape `code.<code>`. The pull-request body and commit-message shapes belong to the [Commit Handler](#15-commit-handler).
+A held group's block reason, one of the `Reason` values of [10.3](#103-data-model) that is not a session exit, is the code of its `needs.<reason>` shape. Every error code, including `card_changed`, `locked` and the `plan_*` codes, renders as `error.<code>`. The pull-request body and commit-message shapes belong to the [Commit Handler](#15-commit-handler).
 
 #### The closed code list
 
-The code list is the closed set of words an error or a held group may name. Each code has a template and a golden file under both profiles. Adding a code changes the list, both templates and both golden files together.
+Two closed lists hold the words an error or a held group may name: the error codes, each rendered as `error.<code>`, and the block reasons, each rendered as `needs.<reason>`. Each entry has a template and a golden file under both profiles. Adding an entry changes the list, both templates and both golden files together.
 
 ```go
 // internal/format/codes.go
@@ -1667,6 +1668,19 @@ const (
 | `internal` | Any part | The harness itself failed |
 | `other` | Any part | A case with no template of its own; prints one fixed line pointing to a file |
 
+The block reasons are the `Reason` values of [10.3](#103-data-model) that end a group's work and not a session; the State Manager owns their meaning. The formatter holds the same words as a closed list:
+
+```go
+// internal/format/codes.go
+
+// blockReasons lists the reasons a group is blocked; each is the code of a needs.<reason> shape.
+var blockReasons = []string{
+	"no_provider", "pause_timeout", "paid_refused", "regression", "returns", "flap", "retries",
+	"attempts", "needs_scope", "context", "setup", "publish", "merge_conflict", "cleanup", "wall",
+	"budget", "dependency", "crash", "contract", "state_invalid", "tester", "flaky",
+}
+```
+
 Every other component adds the codes it raises to this list in its own chapter's failure table, and the golden tests fail until each has both templates. The types are strings so that no component imports `internal/format` for a constant: a producer writes the code word into its message.
 
 ### 2.4 Interfaces
@@ -1697,7 +1711,7 @@ var (
 |---|---|---|
 | `New` | A template does not parse, or calls a function outside the allowed set | The program refuses to start and names the template; the tests prevent it at build |
 | `FormatJSON` | `ErrShapeUnknown` | No template has that shape; the CLI prints the fixed `other` line and exits 4 with `internal` |
-| `FormatJSON` | `ErrCodeUnknown` | The code is not on the list; same handling |
+| `FormatJSON` | `ErrCodeUnknown` | The code is not on the list of its shape, or differs from the code the shape name or `facts.code` gives; same handling |
 | `FormatJSON` | `ErrFactsInvalid` | The facts have an unknown field or a wrong type; same handling |
 | `FormatJSON` | Template execution error | A template names a field the struct lacks; same handling. The tests prevent it at build |
 | `OutputStyle` | Read error | The embedded file is missing; the error returns to `install` |
@@ -1726,7 +1740,7 @@ flowchart LR
   W -->|"6 colour"| R["Rendered"]
 ```
 
-1. **Look up.** Decode the message envelope. An unknown shape returns `ErrShapeUnknown`; a code outside the list returns `ErrCodeUnknown`.
+1. **Look up.** Decode the message envelope. An unknown shape returns `ErrShapeUnknown`; a code outside its list, or one that differs from the code the shape name ends in, returns `ErrCodeUnknown`.
 2. **Decode.** Decode `facts` into the shape's fact struct with unknown fields refused. A failure returns `ErrFactsInvalid`.
 3. **Escape.** Replace every string in the struct with its code-span form, described below.
 4. **Run.** Execute the template for the profile. It is parsed once with the fixed options:
@@ -1748,35 +1762,38 @@ func parse(name, text string) (*template.Template, error) {
 A fact string becomes a code span so a value containing Markdown cannot reshape the output.
 
 - Each newline or carriage return becomes the two characters `\n`.
+- Every other control byte below 0x20 except the tab, such as the escape byte, becomes the visible four characters `\xNN`, so no terminal sequence survives.
 - The span is fenced by one more backtick than the longest backtick run inside it, and padded with one space when the text starts or ends with a backtick (the CommonMark code-span rule).
 - Wrapping breaks only at spaces outside code spans. A span is never split, and one longer than 80 columns sits alone on its line.
 - Table lines are never wrapped.
 
-#### The six template functions
+#### The seven template functions
 
-The function map adds exactly six functions.
+The function map adds exactly seven functions.
 
 ```go
 // funcs is the added template function map; no other added function is callable.
-var funcs template.FuncMap // keys: code, n, plural, dur, path, table
+var funcs template.FuncMap // keys: code, fenced, n, plural, dur, path, table
 ```
 
 | Function | Meaning |
 |---|---|
-| `code(c string) string` | The code word as a code span; a word outside the list fails with `ErrCodeUnknown` |
+| `code(c string) string` | The code word as a code span; a word on neither list fails with `ErrCodeUnknown` |
+| `fenced(s string) string` | An escaped fact as plain text for a fenced block: a run of 3 or more backticks is broken so the fact cannot close the fence |
 | `n(i int64) string` | The number with comma thousands separators, such as `12,400` |
 | `plural(i int64, one, many string) string` | `one` when `i` is 1, else `many` |
 | `dur(d time.Duration) string` | The two largest units, such as `1h 5m` or `42s` |
 | `path(p string) string` | A slash path as a code span; over 45 characters, middle folders become `…` |
 | `table(t Table) string` | A Markdown table with the limits below |
 
-`New` walks every parsed template and rejects `call`, `html`, `js`, `print`, `printf`, `println` and `urlquery`, so a template cannot reach anything beyond its facts and the six functions.
+`New` walks every parsed template and rejects `call`, `html`, `js`, `print`, `printf`, `println` and `urlquery`, so a template cannot reach anything beyond its facts and the seven functions.
 
 #### Limiting tables and unlisted cases
 
 - A table of more than 5 rows prints the top 5 rows plus one line `<N> more: <what>`, such as `2 more: groups`.
 - A cell over 45 characters moves to a labeled line below the table, `<column label>, row <n>: <text>`, and the cell reads `see below`.
-- A replay is the exception to the table limit: its steps print as lines in one fenced block, because a replay is a log, not a summary.
+- A row with more cells than the header fails the render, so a template never hides a fact.
+- A replay is the exception to the table limit: its steps print as lines in one fenced block through `fenced`, because a replay is a log, not a summary.
 - A code with no template of its own is `other`. It prints one fixed line pointing to a file:
 
 ```text
@@ -1827,8 +1844,8 @@ The formatter holds no state across calls. `New` parses the templates once; afte
 2. Facts are escaped before a template sees them.
 3. The same profile and the same message give the same bytes.
 4. The formatter reads no repository, no settings file, no clock and no network, and calls no model.
-5. Every code on the list has a template and a golden file under both profiles.
-6. A template calls only the six added functions and Go's own comparison and flow functions.
+5. Every error code and every block reason has a template and a golden file under both profiles.
+6. A template calls only the seven added functions and Go's own comparison and flow functions.
 7. Colour adds escape codes and removes none of the text.
 
 **Failures**
@@ -1836,12 +1853,13 @@ The formatter holds no state across calls. `New` parses the templates once; afte
 | Situation | Detection | Action and bound | Final state |
 |---|---|---|---|
 | Message names no known shape | `FormatJSON` | `ErrShapeUnknown`; the CLI prints the fixed line, exit 4 | No text rendered |
-| Code outside the list | `FormatJSON` | `ErrCodeUnknown`; same handling | No text rendered |
+| Code outside its list, or unequal to the shape name or `facts.code` | `FormatJSON` | `ErrCodeUnknown`; same handling | No text rendered |
 | Facts with an unknown field or wrong type | `FormatJSON` | `ErrFactsInvalid`; same handling | No text rendered |
 | A template does not parse or names a banned function | `New` | The program refuses to start, naming the template | No process |
 | A template names a field the struct lacks | `missingkey=error` at run, and the field test at build | Execution error; the build test prevents it | No text rendered |
 | A table over 5 rows | `table` | Top 5 rows plus `<N> more: <what>` | Text rendered |
 | A cell over 45 characters | `table` | The cell moves below the table | Text rendered |
+| A row with more cells than the header | `table` | Execution error; the render fails | No text rendered |
 | A golden file differs from the rendered bytes | `go test` | The test fails and names the shape and profile | Build blocked |
 
 ### 2.8 Config
@@ -1858,7 +1876,7 @@ The environment variable `NO_COLOR` and the flag `--no-color` also turn colour o
 
 | Constant | Value |
 |---|---|
-| Template functions added | 6 |
+| Template functions added | 7 |
 | Wrap width | 80 columns |
 | Rows a rendered table shows; cell length before it moves | 5; 45 characters |
 | Bullets and options under `adhd` | At most 5 bullets and 3 options |
@@ -1869,7 +1887,7 @@ Unit cases use fixtures; no case calls a model, a repository or the network.
 
 **Unit**
 - **Same bytes:** a fixture `reply.run` renders identical bytes on 2 runs under `adhd`.
-- **Escaping:** a fact path holding a newline and `## x` renders as one literal code span.
+- **Escaping:** a fact path holding a newline and `## x` renders as one literal code span; a fact holding an escape sequence renders with no raw escape byte.
 - **Wrapping:** a 100-character span sits alone on its line and is not split.
 - **Table limit:** a 7-row table renders 5 rows and one `2 more: groups` line.
 - **Cell limit:** a 46-character cell moves below the table under a labeled line; a 45-character cell stays.
@@ -1880,7 +1898,7 @@ Unit cases use fixtures; no case calls a model, a repository or the network.
 **Component**
 - **Golden files:** every shape renders under both profiles to its golden bytes; a golden file changed by one byte fails.
 - **Struct against template:** a template field with no struct field fails, and a struct field no template uses fails.
-- **Codes:** every code on the list has a template and a golden file under both profiles.
+- **Codes:** every error code and every block reason has a template and a golden file under both profiles; a code that differs from its shape name is refused.
 - **Banned functions:** a template calling `printf` makes `New` fail.
 - **Unknown input:** a message with an unknown shape, an unlisted code or an unknown fact field returns the matching error.
 
@@ -1932,7 +1950,7 @@ The Configuration Manager guards the harness settings and the agent registry, th
 
 ### 3.2 Package Layout
 
-Go package `internal/config`. It imports only the Go standard library.
+Go package `internal/config`. It imports the Go standard library and the packages the import order in [0.4](#04-import-order) allows.
 
 | File | Holds |
 |---|---|
@@ -2012,7 +2030,8 @@ type KeySpec struct {
 	Max     any      // hard maximum; nil when none
 	MaxKey  string   // another key that caps this one, such as limits.pool_max
 	Derived string   // names the rule when the default is computed per group
-	Family  bool     // the name ends in a variable part, such as a link name
+	Family  bool     // the name holds one variable part in angle brackets, such as a link name
+	Members map[string]any // the variable parts a family allows with their defaults; nil allows any name
 }
 
 // Layer names where a value came from.
@@ -2040,7 +2059,7 @@ A `settings.json` in which a person has set three keys; every value is within it
 }
 ```
 
-A top-level key that is not in the built-in table is an error that names the closest known key. The settings of the optional free local model link, a section keyed by endpoint name, are listed with the other link keys in the [Task Manager](#11-task-manager) chapter.
+A top-level key that is not in the built-in table is an error that names the closest known key. The settings of the optional free local model link are flat keys of the form `providers.local.<name>.<field>`, one set per endpoint name; they are listed with the other link keys in the [Task Manager](#118-config) chapter.
 
 **Versioning.** The files carry no version field. Strict reading is the version check: a file written by a newer binary with a new key fails to load on an older one, naming the key and the fix `run komodo update`.
 
@@ -2321,7 +2340,7 @@ A key name addresses one of two files. A key that starts with `agents.<role>.` i
 
 1. Read the built-in table and the role files from the embedded data. Every key has a value there, so no key is ever missing.
 2. Read `settings.json` and `agents.json` if they exist; absent means the built-in layer alone applies.
-3. Decode strictly: each top-level key must be a table key or a member of a key family; otherwise fail naming the closest key.
+3. Decode strictly: each top-level key must be a table key or a member of a key family, and a family with a member list accepts only those members; otherwise fail naming the closest key.
 4. Check each value against its `Kind`, `Enum`, `Min`, `Max` and `MaxKey`; fail naming the key, the value and the limit.
 5. Take the machine value where present and the built-in value elsewhere, and record the `Layer` of each.
 6. Apply each role's overrides to its definition.
@@ -2363,7 +2382,7 @@ sequenceDiagram
 3. For each pair the manager finds the `KeySpec`, parses the value to its `Kind`, and checks enum membership, the `env:` form for `KindEnvRef`, the hard limits and `MaxKey`. A `model` value must also pass `modelOK`.
 4. A pair whose value equals the effective value is dropped. When every pair is dropped the batch is empty and nothing is written.
 5. When any pair fails, the manager returns its error and writes nothing: a call sets every pair or none.
-6. The manager takes `settings.lock`, created exclusively.
+6. The manager takes `settings.lock`, created exclusively. The file holds a writer id, the process id and a random token, and the release removes it only while it still holds that id.
 7. It appends one audit row per changed key under one batch id.
 8. It writes each changed file by writing a temporary file and renaming it over the original.
 9. It replaces `config.sha` with the new checksums, releases the lock and returns the batch.
@@ -2376,7 +2395,7 @@ Model values are validated against the probe. With no probe record, a `model` wr
 
 #### Reset and accept
 
-- **Reset.** `PlanReset` returns the changes that put a key, a role's overrides or a whole file back to the built-in value. The CLI then follows the write path with those changes. A role or whole-file reset first lists each change and waits for a typed `y`.
+- **Reset.** `PlanReset` returns the changes that put a key, a role's overrides or a whole file back to the built-in value. The CLI then follows the write path with those changes. A role or whole-file reset first lists each change and waits for a typed `y`. A reset of a file that failed strict reading plans one change for the file; applying it rewrites the file to built-in values, and a set rewrites it from built-ins plus the change.
 - **Accept.** `Accept` rehashes both machine files into `config.sha` and appends one row whose `key` is the file name. With no machine files it deletes `config.sha`, which returns the guard to Defaults. A person triggers `Accept` with `komodo config set --accept` and `PlanReset` with `komodo config set --default <key>`; both stay flags of `config set`.
 
 #### Loading the role files
@@ -2443,10 +2462,10 @@ stateDiagram-v2
 | One bad pair out of several | `SetConfigItem` | Nothing is written for any pair | Files unchanged |
 | Model that no probe found | `modelOK` | Refused as `over_limit`, fix `komodo install --machine-only` | Files unchanged |
 | A machine file hand-edited | `Verify` | `ErrTampered`; the CLI's policy decides which commands run | Guard Tampered |
-| A machine file fails strict reading | `Load` | Serves the built-in value with `Fallback` set; `Verify` reports it | Files unchanged |
+| A machine file fails strict reading | `Load` | Serves the built-in value with `Fallback` set; `Verify` reports it; `PlanReset` and `SetConfigItem` still rewrite the file | Files unchanged |
 | Crash after the audit rows, before the file | Next write | The log shows a batch that never applied | Settings as before |
 | Crash after the file, before the checksum | `Verify` | Guard reads Tampered until `Accept` | Settings as written |
-| Another writer holds `settings.lock` | Exclusive create | Wait up to 2 seconds, then fail; a lock older than 30 seconds is stale and replaced | One writer at a time |
+| Another writer holds `settings.lock` | Exclusive create | Wait up to 2 seconds, then fail; a lock older than 30 seconds is stale, and a writer renames it to a unique name before it creates a new one exclusively | One writer at a time |
 | A role file breaks a cross-check | Build test, `Snapshot` | The build fails; at run time the run does not start | No run |
 
 ### 3.8 Config
@@ -2455,7 +2474,7 @@ The Configuration Manager owns the four per-role override keys. Every other key 
 
 | Key | Type | Default | Hard limit | Effect |
 |---|---|---|---|---|
-| `agents.<role>.model` | string | The role weight's model | A probed model | The model the role starts on. A change reaches an open run at its next session start. The chain is not changed |
+| `agents.<role>.model` | string | The role weight's model | A probed model | The model the role starts on. With no override, `config get` shows no value and the default `weight:<the role's weight>`, such as `weight:heavy`, which the model client resolves to a model. A change reaches an open run at its next session start. The chain is not changed |
 | `agents.<role>.session_wall_min` | int | `limits.session_wall_min` | 120 | Wall-clock limit for this role's sessions; beats the flat key |
 | `agents.<role>.session_idle_min` | int | `limits.session_idle_min` | 30 | Silence limit before a nudge; beats the flat key |
 | `agents.<role>.retries` | int | 2 | 3 | Fresh sessions after a timeout or idle stop, counted per group and never reset while the group is open |
@@ -2481,8 +2500,9 @@ Keys that other parts own and that the key table carries, with their type, defau
 | `lease.lock_timeout_s` | int, 30 | [Lease Manager](#98-config) |
 | `limits.usd_ceiling_per_run` | number, 0 (no ceiling) | [Resource Manager](#19-resource-manager) |
 | `warn.quota_pct` | int, 80 | [Resource Manager](#19-resource-manager) |
+| `review.mode` | enum `economy` or `thorough`, `thorough` | [Reviewer](#148-config) |
 | `limits.link_sessions.<link>` | int; the default is in [11.8](#118-config) | [Task Manager](#118-config) |
-| `providers.local` | section keyed by endpoint name, absent (the local link is off) | [Task Manager](#11-task-manager) |
+| `providers.local.<name>.url`, `.models`, `.ctx`, `.key`, `.self_hosted`, `.first_byte_s` | six flat keys per endpoint name, all absent (the local link is off); types in [11.8](#118-config) | [Task Manager](#118-config) |
 
 Token and cost usage are always read; no key switches them off.
 
@@ -9641,7 +9661,7 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `limits.group_attempts` | int | 6 | Fresh builder sessions per group before the group is escalated |
 | `limits.group_tokens` | int | 2,000,000 | Token cap per group; the Resource Manager owns it ([chapter 19](#19-resource-manager)) |
 | `limits.pause_max_min` | int | 360 | Read by the Runtime Manager: longest a session stays paused; hard limit 1,440 |
-| `limits.link_sessions.<link>` | int | 3 (most 8); the local link 1 | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
+| `limits.link_sessions.<link>` | int | 3 for `claude-cli` and `anthropic-api`, 1 for `local` (most 8) | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
 | `agents.<name>.retries` | int | per agent | Fresh sessions after a timeout or idle stop, inside `limits.group_attempts` |
 | `guard.refusal_limit` | int | 3 | Refusals under one row before the session ends; hard limit 5; the only guard tunable |
 | `sandbox.max_procs` | int | 512 | Processes per instance, where the platform can cap them |
@@ -9649,9 +9669,14 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `sandbox.image` | string | detected | Image of the Tester's container; required for a Makefile-only or 2-language repository |
 | `providers.paid` | enum | `never` | `never`, `fallback` or `allowed`; see the billing check |
 | `providers.keys.anthropic` | env ref | `env:ANTHROPIC_API_KEY` | Names the environment variable holding the key; the value is never stored or logged |
-| `providers.local` | object | none | The optional local link: `url`, `models`, `ctx`, `key`, `self_hosted`, `first_byte_s`; absent means the link is off |
+| `providers.local.<name>.url` | string | none | Address of one local endpoint; the local link is off while no endpoint has a `url` |
+| `providers.local.<name>.models` | string | none | The model names that endpoint serves; [TODO: how several model names are written in the one string ([G-273](#g-273))] |
+| `providers.local.<name>.ctx` | int | none | Context size of the endpoint in tokens; the link is refused below `providers.ctx_floor` |
+| `providers.local.<name>.key` | env ref | none | Names the environment variable holding the endpoint's key; the value is never stored or logged |
+| `providers.local.<name>.self_hosted` | bool | `false` | Marks an endpoint off the loopback address as under the person's control, which makes it free |
+| `providers.local.<name>.first_byte_s` | int | none | Seconds to wait for the first byte of a reply; at least 1 |
 | `providers.ctx_floor` | int | 262144 | Smallest context the optional local link may have; the default catches Ollama's 4,096 |
-| `warn.quota_pct` | int | 90 | Warns when a provider window passes this percent used |
+| `warn.quota_pct` | int | 80 | Warns when a provider window passes this percent used |
 | `http.ca_bundle` | path | none | Extra trusted certificates added to the system roots |
 
 The default values of the agents' weights, chains and permissions live in the agent registry ([chapter 3](#3-configuration-manager)). Security rows are never config.
@@ -11439,7 +11464,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `mode` | enum | `thorough` | `economy` runs one merged lens plus `security` where it applies; `thorough` runs every applicable lens at full depth. It sets review depth only. Owned here. |
+| `review.mode` | enum | `thorough` | `economy` runs one merged lens plus `security` where it applies; `thorough` runs every applicable lens at full depth. It sets review depth only. Owned here. |
 | Registry entry `weight` | enum | `heavy` | Model size for the Reviewer |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
 | Registry entry `retries` | int | set by the registry | Fresh Reviewer sessions after an end without a result, per round |
@@ -11463,7 +11488,7 @@ Whether `doctor`, the health check, reports rules verified under 50% of the time
 - A quote that differs only in leading whitespace verifies; one that differs in letter case does not.
 - `ExactlyOnce` refuses a skipped and a repeated task identifier.
 - `Decide` returns `approve` only for two passing verdicts, and `block` with `flaky` for a split.
-- `mode: economy` selects the merged `economy` lens and the full `security` lens where it applies.
+- `review.mode: economy` selects the merged `economy` lens and the full `security` lens where it applies.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
 - A seeded bug in the fixture is found and verified.
@@ -12646,7 +12671,7 @@ These are the codes of the closed list that a command-line refusal or failure ca
 | `unknown_key`, `bad_value` | 2 | [3. Configuration Manager](#3-configuration-manager) |
 | `internal` | 4 | The Error Handler, for a recovered panic or an undecodable record |
 
-A held group's block reason is the code of its `needs.<code>` shape ([2.3](#23-data-model)). Exit 3 carries a block or exit reason of a group; those codes are owned by [7. Runtime Manager](#7-runtime-manager) (block reasons) and [11. Task Manager](#11-task-manager) (session exit reasons).
+A held group's block reason is the code of its `needs.<reason>` shape ([2.3](#23-data-model)). Exit 3 carries a block or exit reason of a group; those codes are owned by [7. Runtime Manager](#7-runtime-manager) (block reasons) and [11. Task Manager](#11-task-manager) (session exit reasons).
 
 ### 17.4 Interfaces
 
@@ -14196,6 +14221,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-268"></a>G-268 | Reviewer | Whether `doctor` reports review rules verified less than half the time | Phase 7, with `doctor` | [14](#14-reviewer), [1](#1-cli) |
 | <a id="g-270"></a>G-270 | Landing | Which part runs the recheck on the epic branch after each landing, and in which sandbox | Owner decision | [15](#15-commit-handler), [11](#11-task-manager) |
 | <a id="g-272"></a>G-272 | Landing | How a group returns to Build after a failed recheck, and which block reason applies | Phase 6, with the Commit Handler | [15](#15-commit-handler), [7](#7-runtime-manager) |
+| <a id="g-273"></a>G-273 | Config | How `providers.local.<name>.models` writes several model names in one string | Phase 4, with the model client | [11](#11-task-manager), [3](#3-configuration-manager) |
 
 #### Spikes, measurements and later-minor items
 

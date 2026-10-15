@@ -359,6 +359,14 @@ func TestDiscoveryListsEveryKey(t *testing.T) {
 		}
 	}
 	for _, s := range m.specs {
+		if s.Family && s.Members != nil {
+			for _, k := range familyKeys(s) {
+				if _, ok := seen[k]; !ok {
+					t.Errorf("family key %s not listed", k)
+				}
+			}
+			continue
+		}
 		it, ok := seen[s.Name]
 		if !ok {
 			t.Errorf("table key %s not listed", s.Name)

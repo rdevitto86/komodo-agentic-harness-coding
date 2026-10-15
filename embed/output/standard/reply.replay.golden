@@ -1,8 +1,8 @@
 Replay of run `0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57` has 2 steps.
 
 ```text
-`2026-10-15T10:00:00Z run-start tg-1.2`
-`2026-10-15T10:00:05Z run-status session.start tg-1.2`
+2026-10-15T10:00:00Z run-start tg-1.2
+2026-10-15T10:00:05Z run-status session.start tg-1.2
 ```
 
 1 torn last line was dropped.

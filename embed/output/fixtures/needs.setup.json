@@ -1,0 +1,7 @@
+{
+  "code": "setup",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The group could not start: lease, worktree or sandbox. Retry?",
+  "fix": "komodo run --approve tg-1.3"
+}

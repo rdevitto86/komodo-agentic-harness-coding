@@ -1,7 +1,0 @@
-{
-  "code": "plan_blocked",
-  "group": "tg-2.1",
-  "task": "plan the retry limit",
-  "question": "The plan failed lint three times. Retry with a smaller goal?",
-  "fix": "komodo run --approve tg-2.1"
-}

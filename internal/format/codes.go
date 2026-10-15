@@ -2,7 +2,7 @@ package format
 
 import "slices"
 
-// Code is one word from the closed code list.
+// Code is one word from the closed error code list.
 type Code string
 
 const (
@@ -38,11 +38,40 @@ var allCodes = []Code{
 	PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused, Internal, Other,
 }
 
-// needsCodes lists the codes that also render as a group waiting for a person (needs.<code>).
-var needsCodes = []Code{CardChanged, Locked, PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused}
+// blockReasons lists the reasons a group is blocked; each is the code of a needs.<reason> shape.
+var blockReasons = []string{
+	"no_provider",
+	"pause_timeout",
+	"paid_refused",
+	"regression",
+	"returns",
+	"flap",
+	"retries",
+	"attempts",
+	"needs_scope",
+	"context",
+	"setup",
+	"publish",
+	"merge_conflict",
+	"cleanup",
+	"wall",
+	"budget",
+	"dependency",
+	"crash",
+	"contract",
+	"state_invalid",
+	"tester",
+	"flaky",
+}
 
 // AllCodes returns a copy of the closed code list.
 func AllCodes() []Code { return slices.Clone(allCodes) }
 
-// IsCode reports whether s is on the closed code list.
+// IsCode reports whether s is on the closed error code list.
 func IsCode(s string) bool { return slices.Contains(allCodes, Code(s)) }
+
+// BlockReasons returns a copy of the closed list of block reasons.
+func BlockReasons() []string { return slices.Clone(blockReasons) }
+
+// IsBlockReason reports whether s is on the closed list of block reasons.
+func IsBlockReason(s string) bool { return slices.Contains(blockReasons, s) }

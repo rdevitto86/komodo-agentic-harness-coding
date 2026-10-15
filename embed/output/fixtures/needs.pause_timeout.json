@@ -1,0 +1,7 @@
+{
+  "code": "pause_timeout",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The group stayed paused for the whole pause limit. Resume it?",
+  "fix": "komodo run --approve tg-1.3"
+}

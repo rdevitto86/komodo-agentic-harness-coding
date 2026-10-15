@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -13,7 +14,8 @@ type target struct {
 	role  string // set for an agents.<role>.<field> key
 	field string
 	spec  KeySpec
-	val   any // the normalised new value; nil puts the key back to its built-in value
+	val   any    // the normalised new value; nil puts the key back to its built-in value
+	file  string // set for a machine file name, which rewrites that file to its readable contents
 }
 
 // modelFix is the limit text of a model refused by the probe check.
@@ -38,17 +40,19 @@ func (m *Manager) SetConfigItem(changes ...Change) (Batch, error) {
 	}
 	pre := m.resolve()
 	if pre.readErr != nil {
-		return Batch{}, pre.readErr
+		pre = resolved{ms: pre.partial, eff: m.effective(pre.partial)}
 	}
-	ms := machine{flat: maps.Clone(pre.ms.flat), over: maps.Clone(pre.ms.over)}
+	ms := machine{flat: maps.Clone(pre.ms.flat), over: maps.Clone(pre.ms.over), bad: maps.Clone(pre.ms.bad)}
 	for _, t := range targets {
-		if t.role == "" {
+		if t.file != "" {
+			ms.bad[t.file] = true
+		} else if t.role == "" {
 			m.applyFlat(&ms, t)
 		}
 	}
 	flat := m.effective(ms).Flat
 	for _, t := range targets {
-		if t.role != "" {
+		if t.role != "" && t.file == "" {
 			ms.over[t.role] = m.applyOverride(ms.over[t.role], t, flat)
 		}
 	}
@@ -58,14 +62,20 @@ func (m *Manager) SetConfigItem(changes ...Change) (Batch, error) {
 	}
 	b := newBatch()
 	for _, t := range targets {
+		if t.file != "" {
+			continue
+		}
 		o, _ := m.item(t.key, pre)
 		n, _ := m.item(t.key, post)
 		if !equalValues(o.Value, n.Value) {
 			b.Changes = append(b.Changes, Change{Key: t.key, Old: o.Value, New: n.Value})
 		}
 	}
-	if len(b.Changes) == 0 {
+	if len(b.Changes) == 0 && len(ms.bad) == 0 {
 		return Batch{}, nil
+	}
+	if len(b.Changes) == 0 {
+		return Batch{}, m.commit(Batch{}, ms)
 	}
 	return b, m.commit(b, ms)
 }
@@ -94,8 +104,12 @@ func (m *Manager) prepare(changes []Change) ([]target, error) {
 // target checks one pair against the key table or the four override keys.
 func (m *Manager) target(c Change) (target, error) {
 	t := target{key: c.Key}
+	if slices.Contains(machineFiles, c.Key) && c.New == nil {
+		t.file = c.Key
+		return t, nil
+	}
 	if role, field, ok := splitAgentKey(c.Key); ok {
-		if !containsString(roleNames, role) || !containsString(agentFieldNames, field) {
+		if !slices.Contains(roleNames, role) || !slices.Contains(agentFieldNames, field) {
 			return t, m.unknownKey(c.Key)
 		}
 		t.role, t.field, t.spec = role, field, agentSpec(role, field)
@@ -149,7 +163,7 @@ func (m *Manager) commit(b Batch, ms machine) error {
 		return err
 	}
 	crashHook("after_audit")
-	var settings, agents bool
+	settings, agents := ms.bad["settings.json"], ms.bad["agents.json"]
 	for _, c := range b.Changes {
 		if strings.HasPrefix(c.Key, "agents.") {
 			agents = true

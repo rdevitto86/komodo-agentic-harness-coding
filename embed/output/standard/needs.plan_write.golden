@@ -1,7 +1,0 @@
-Group `tg-2.4` needs a decision: `plan_write`. The task is
-`write the plan files`. It asks:
-`The plan files could not be written. Check the folder?` To resolve it, run
-`komodo run --approve tg-2.4`.
-
-❌ Blocked Changes
-Group `tg-2.4` waits for a person.

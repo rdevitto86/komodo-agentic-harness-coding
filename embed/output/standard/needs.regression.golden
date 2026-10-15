@@ -1,0 +1,7 @@
+Group `tg-1.3` needs a decision: `regression`. The task is `amend docs/lld.md`.
+It asks:
+`A test that passed at the base now fails and the returns are spent. Continue?`
+To resolve it, run `komodo run --approve tg-1.3`.
+
+❌ Blocked Changes
+Group `tg-1.3` waits for a person.

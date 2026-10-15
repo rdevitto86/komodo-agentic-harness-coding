@@ -1,0 +1,7 @@
+{
+  "code": "publish",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The push or pull request failed. Retry?",
+  "fix": "komodo run --approve tg-1.3"
+}

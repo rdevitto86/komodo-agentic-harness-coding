@@ -151,6 +151,8 @@ func walkNodes(n parse.Node, fn func(parse.Node)) {
 		for _, c := range x.Args {
 			walkNodes(c, fn)
 		}
+	case *parse.ChainNode:
+		walkNodes(x.Node, fn)
 	case *parse.IfNode:
 		walkBranch(&x.BranchNode, fn)
 	case *parse.RangeNode:
@@ -179,12 +181,15 @@ func (f *Formatter) FormatJSON(msg []byte) (Rendered, error) {
 	if !ok {
 		return Rendered{}, fmt.Errorf("%w: %q", ErrShapeUnknown, m.Shape)
 	}
-	if (info.coded || m.Code != "") && !IsCode(m.Code) {
-		return Rendered{}, fmt.Errorf("%w: %q", ErrCodeUnknown, m.Code)
+	if err := checkCode(m, info.coded); err != nil {
+		return Rendered{}, err
 	}
 	facts := info.facts()
 	if err := decodeFacts(m.Facts, facts); err != nil {
 		return Rendered{}, fmt.Errorf("%w: %v", ErrFactsInvalid, err)
+	}
+	if err := checkFactsCode(m, facts); err != nil {
+		return Rendered{}, err
 	}
 	escapeFacts(reflect.ValueOf(facts))
 	text, err := f.execute(m.Shape, reflect.ValueOf(facts).Elem().Interface())
@@ -197,6 +202,43 @@ func (f *Formatter) FormatJSON(msg []byte) (Rendered, error) {
 		r.Report = colorize(wrapped)
 	}
 	return r, nil
+}
+
+// checkCode refuses a code off its list, or one that differs from the code the shape name ends in.
+func checkCode(m Message, coded bool) error {
+	known := IsCode(m.Code)
+	if strings.HasPrefix(m.Shape, "needs.") {
+		known = IsBlockReason(m.Code)
+	}
+	if (coded || m.Code != "") && !known {
+		return fmt.Errorf("%w: %q", ErrCodeUnknown, m.Code)
+	}
+	for _, prefix := range []string{"error.", "needs.", "code."} {
+		if want, ok := strings.CutPrefix(m.Shape, prefix); ok && m.Code != want {
+			return fmt.Errorf("%w: code %q does not match shape %q", ErrCodeUnknown, m.Code, m.Shape)
+		}
+	}
+	return nil
+}
+
+// checkFactsCode fills an absent facts.code from the message code and refuses one that differs from it.
+func checkFactsCode(m Message, facts any) error {
+	var code *string
+	switch f := facts.(type) {
+	case *ErrorFacts:
+		code = &f.Code
+	case *NeedsFacts:
+		code = &f.Code
+	default:
+		return nil
+	}
+	if *code == "" {
+		*code = m.Code
+	}
+	if *code != m.Code {
+		return fmt.Errorf("%w: facts code %q does not match message code %q", ErrCodeUnknown, *code, m.Code)
+	}
+	return nil
 }
 
 // execute runs the shape's template, then its closing headings when they are on and hold items.

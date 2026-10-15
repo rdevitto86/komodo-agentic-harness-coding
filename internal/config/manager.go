@@ -88,7 +88,11 @@ func (m *Manager) ListConfigItems(prefix string) []Item {
 	r := m.resolve()
 	var keys []string
 	for _, s := range m.specs {
-		keys = append(keys, s.Name)
+		if s.Family {
+			keys = append(keys, familyKeys(s)...)
+		} else {
+			keys = append(keys, s.Name)
+		}
 	}
 	for k := range r.ms.flat {
 		if _, listed := m.byName[k]; !listed {
@@ -120,11 +124,8 @@ func (m *Manager) GetAgent(role string) (Agent, bool) {
 }
 
 // Snapshot returns the effective settings and their hash for a run to pin.
-// It fails when a machine file cannot be read strictly or a role file fails a cross-check.
+// It fails when a machine file cannot be read strictly.
 func (m *Manager) Snapshot() (Snapshot, error) {
-	if err := checkRoles(m.roles, m.known); err != nil {
-		return Snapshot{}, err
-	}
 	r := m.resolve()
 	if r.readErr != nil {
 		return Snapshot{}, r.readErr
@@ -138,13 +139,26 @@ func (m *Manager) Snapshot() (Snapshot, error) {
 
 // PlanReset returns the changes that put a key, a role or a whole file back to its built-in value.
 // A target is a key, a role name, agents.<role>, settings.json or agents.json.
+// A target in a file that failed strict reading plans one change for the file, which rewrites it to built-in values.
 func (m *Manager) PlanReset(target string) ([]Change, error) {
 	r := m.resolve()
+	role := strings.TrimPrefix(target, "agents.")
+	file, isRole := "settings.json", slices.Contains(roleNames, role)
+	if target == "agents.json" || isRole || strings.HasPrefix(target, "agents.") {
+		file = "agents.json"
+	}
 	if r.readErr != nil {
-		return nil, r.readErr
+		if r.partial.bad[file] {
+			if target != "settings.json" && target != "agents.json" && !isRole {
+				if _, err := m.item(target, r); err != nil {
+					return nil, err
+				}
+			}
+			return []Change{{Key: file}}, nil
+		}
+		r.ms, r.eff = r.partial, m.effective(r.partial)
 	}
 	var keys []string
-	role := strings.TrimPrefix(target, "agents.")
 	switch {
 	case target == "settings.json":
 		for k := range r.ms.flat {
@@ -154,7 +168,7 @@ func (m *Manager) PlanReset(target string) ([]Change, error) {
 		for _, ro := range roleNames {
 			keys = append(keys, overrideKeys(ro, r.ms.over[ro])...)
 		}
-	case slices.Contains(roleNames, role):
+	case isRole:
 		keys = overrideKeys(role, r.ms.over[role])
 	default:
 		keys = []string{target}
@@ -166,8 +180,12 @@ func (m *Manager) PlanReset(target string) ([]Change, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !equalValues(it.Value, it.Default) {
-			out = append(out, Change{Key: k, Old: it.Value, New: it.Default})
+		want := it.Default
+		if strings.HasSuffix(k, ".model") && strings.HasPrefix(k, "agents.") {
+			want = nil
+		}
+		if !equalValues(it.Value, want) {
+			out = append(out, Change{Key: k, Old: it.Value, New: want})
 		}
 	}
 	return out, nil

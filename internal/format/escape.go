@@ -2,6 +2,7 @@ package format
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -27,12 +28,12 @@ type segment struct {
 // timeType is the one struct type the escaper leaves alone.
 var timeType = reflect.TypeOf(time.Time{})
 
-// span returns s as a Markdown code span: newlines escaped, fenced one backtick longer than its longest run.
+// span returns s as a Markdown code span: newlines and control bytes escaped, fenced one backtick longer than its longest run.
 func span(s string) string {
 	if s == "" {
 		return ""
 	}
-	s = strings.NewReplacer("\r", `\n`, "\n", `\n`).Replace(s)
+	s = escapeControls(strings.NewReplacer("\r", `\n`, "\n", `\n`).Replace(s))
 	longest, run := 0, 0
 	for i := 0; i < len(s); i++ {
 		if s[i] == '`' {
@@ -49,6 +50,19 @@ func span(s string) string {
 		s = " " + s + " "
 	}
 	return fence + s + fence
+}
+
+// escapeControls writes every C0 control byte except tab as a visible \xNN, so no terminal sequence survives.
+func escapeControls(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 && c != '\t' {
+			fmt.Fprintf(&b, `\x%02x`, c)
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // unspan returns the text inside a code span, or s unchanged when s is not one whole span.

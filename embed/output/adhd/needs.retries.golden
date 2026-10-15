@@ -1,0 +1,10 @@
+Group `tg-1.3` needs a decision: `retries`.
+
+**Task:** `amend docs/lld.md`
+
+**Question:** `An agent's timeouts or idle stops passed its retries. Continue?`
+
+**Fix:** `komodo run --approve tg-1.3`
+
+**❌ Blocked Changes**
+- Group `tg-1.3` waits for a person

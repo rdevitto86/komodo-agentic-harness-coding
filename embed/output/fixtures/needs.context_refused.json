@@ -1,7 +1,0 @@
-{
-  "code": "context_refused",
-  "group": "tg-3.1",
-  "task": "build the brief",
-  "question": "The brief was refused. Allow the skill?",
-  "fix": "komodo run --approve tg-3.1"
-}

@@ -1,7 +1,0 @@
-{
-  "code": "card_changed",
-  "group": "tg-1.2",
-  "task": "update the card",
-  "question": "A task card changed since the plan read it. Re-read it?",
-  "fix": "komodo run --approve tg-1.2"
-}

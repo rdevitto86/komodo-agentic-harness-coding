@@ -13,7 +13,7 @@
     {"name": "limits.usd_ceiling_per_run", "kind": "number", "default": 0, "min": 0},
     {"name": "limits.session_wall_min", "kind": "int", "default": 60, "min": 1, "max": 120},
     {"name": "limits.session_idle_min", "kind": "int", "default": 10, "min": 1, "max": 30},
-    {"name": "limits.link_sessions.<link>", "kind": "int", "default": 3, "min": 0, "max": 8, "family": true},
+    {"name": "limits.link_sessions.<link>", "kind": "int", "min": 0, "max": 8, "family": true, "members": {"claude-cli": 3, "anthropic-api": 3, "local": 1}},
     {"name": "guard.refusal_limit", "kind": "int", "default": 3, "min": 1, "max": 5},
     {"name": "sandbox.max_procs", "kind": "int", "default": 512, "min": 0},
     {"name": "sandbox.max_mem_gb", "kind": "int", "default": 8, "min": 0},
@@ -21,6 +21,12 @@
     {"name": "sandbox.lang_cache_gb", "kind": "int", "default": 10, "min": 0, "max": 50},
     {"name": "providers.paid", "kind": "enum", "default": "never", "enum": ["never", "fallback", "allowed"]},
     {"name": "providers.keys.anthropic", "kind": "env_ref", "default": "env:ANTHROPIC_API_KEY"},
+    {"name": "providers.local.<name>.url", "kind": "string", "family": true},
+    {"name": "providers.local.<name>.models", "kind": "string", "family": true},
+    {"name": "providers.local.<name>.ctx", "kind": "int", "min": 0, "family": true},
+    {"name": "providers.local.<name>.key", "kind": "env_ref", "family": true},
+    {"name": "providers.local.<name>.self_hosted", "kind": "bool", "default": false, "family": true},
+    {"name": "providers.local.<name>.first_byte_s", "kind": "int", "min": 1, "family": true},
     {"name": "providers.ctx_floor", "kind": "int", "default": 262144, "min": 0},
     {"name": "warn.quota_pct", "kind": "int", "default": 80, "min": 0, "max": 100},
     {"name": "warn.usd_per_run", "kind": "number", "default": 5, "min": 0},
@@ -33,7 +39,7 @@
     {"name": "commit.remote", "kind": "string", "default": ""},
     {"name": "commit.pr_label", "kind": "string", "default": "komodo"},
     {"name": "check.coverage", "kind": "int", "default": 80, "min": 0, "max": 100},
-    {"name": "mode", "kind": "enum", "default": "thorough", "enum": ["economy", "thorough"]},
+    {"name": "review.mode", "kind": "enum", "default": "thorough", "enum": ["economy", "thorough"]},
     {"name": "lease.lock_timeout_s", "kind": "int", "default": 30, "min": 1}
   ]
 }

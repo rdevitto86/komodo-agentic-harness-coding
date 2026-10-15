@@ -81,8 +81,8 @@ func TestCodeFunc(t *testing.T) {
 }
 
 func TestFuncMapHasSix(t *testing.T) {
-	if len(funcs) != 6 {
-		t.Fatalf("function map has %d entries, want 6", len(funcs))
+	if len(funcs) != 7 {
+		t.Fatalf("function map has %d entries, want 7", len(funcs))
 	}
 	for _, k := range []string{"code", "n", "plural", "dur", "path", "table"} {
 		if _, ok := funcs[k]; !ok {

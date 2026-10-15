@@ -65,7 +65,7 @@ type AgentOverride struct {
 var roleNames = []string{"planner", "builder", "tester", "reviewer"}
 
 // validLinks lists the model links a role chain may name.
-var validLinks = []string{"claude-cli", "anthropic-api"}
+var validLinks = []string{"claude-cli", "anthropic-api", "local"}
 
 // agentFieldNames lists the four override keys a person may set per role.
 var agentFieldNames = []string{"model", "session_wall_min", "session_idle_min", "retries"}

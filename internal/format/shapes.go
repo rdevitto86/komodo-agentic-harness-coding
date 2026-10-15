@@ -130,7 +130,7 @@ type EventFacts struct {
 	Subtype string         `json:"subtype"`
 	Run     string         `json:"run"`
 	Group   string         `json:"group,omitempty"`
-	At      time.Time      `json:"at"`
+	Time    time.Time      `json:"time"`
 	Data    map[string]any `json:"data,omitempty"`
 }
 
@@ -158,7 +158,7 @@ type shapeInfo struct {
 // shapes is the registry of every shape a message may name.
 var shapes = buildShapes()
 
-// buildShapes fills the registry: the fixed reply and event shapes, then error.<code> and needs.<code>.
+// buildShapes fills the registry: the fixed reply and event shapes, then error.<code> and needs.<reason>.
 func buildShapes() map[string]shapeInfo {
 	m := map[string]shapeInfo{
 		"reply.install":      {facts: func() any { return new(InstallFacts) }},
@@ -189,8 +189,8 @@ func buildShapes() map[string]shapeInfo {
 			m["error."+string(c)] = shapeInfo{facts: func() any { return new(ErrorFacts) }, coded: true}
 		}
 	}
-	for _, c := range needsCodes {
-		m["needs."+string(c)] = shapeInfo{facts: func() any { return new(NeedsFacts) }, coded: true}
+	for _, r := range blockReasons {
+		m["needs."+r] = shapeInfo{facts: func() any { return new(NeedsFacts) }, coded: true}
 	}
 	return m
 }
