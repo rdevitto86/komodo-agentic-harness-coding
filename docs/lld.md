@@ -3200,7 +3200,7 @@ flowchart LR
 
 - **Slow:** its queue fills; later events are dropped for it alone and counted. Other subscribers and the publisher are not affected.
 - **Panicking:** the bus never runs subscriber code, so a panic happens in the subscriber's own goroutine. That goroutine starts through the Error Handler's panic-catching helper ([17](#17-error-handler)), which publishes an `error` event; the subscriber's code then calls `Close`.
-- **Overflow of the Error Handler's own queue:** the bus does not publish `bus.overflow` for it, because that event would go to the same full queue. The count is still kept.
+- **An overflow event that is itself dropped:** the bus counts it but never announces it, so a full queue cannot feed a loop. Every other drop is announced, including one on the Error Handler's queue, so the other subscribers still record it.
 
 The bus keeps no history, so a subscriber cannot ask for a dropped event again. The event log in the [Metrics Service](#18-metrics-service) holds each event that service received.
 
@@ -3221,13 +3221,15 @@ The bus keeps its subscriptions and counters in memory only; nothing in this cha
 2. `Publish` never blocks on a subscriber.
 3. A subscriber's failure never changes another subscriber's queue or the publisher.
 4. Every published event has a registered type and subtype pair; a test fails when an emitted pair is missing from the registry, or a registered pair is never emitted.
+5. `Publish` takes ownership of the event's data, a pointer to its registered struct; neither the publisher nor any subscriber changes it afterwards, so every subscriber reads the same body.
+6. An event's time is stamped while `Publish` holds the bus lock, so times never decrease along the stream.
 
 **Failures**
 
 | Failure | Detected by | Action | Bound | Final state |
 |---|---|---|---|---|
 | Unknown type, subtype or data struct | `Publish` | Return `ErrUnknownEvent`; the event is not queued | 0 retries | The publisher logs through the Error Handler |
-| Queue full | `Publish`, at the queue | Drop the event for that subscription; publish `bus.overflow` | One `bus.overflow` per burst per subscription | The subscriber misses events |
+| Queue full | `Publish`, at the queue | Drop the event for that subscription; publish `bus.overflow` | One `bus.overflow` per burst per subscription; a burst ends when that queue drains to half its size | The subscriber misses events |
 | Subscriber panics | The panic-catching helper | The helper publishes `error`; the subscriber closes | 0 | That subscriber stops; others continue |
 | Publish after close | `Publish` | Return `ErrBusClosed` | 0 | Nothing queued |
 | The control socket does not answer | The CLI | Start the engine, then send the command again | Dial every 50 ms for 5 seconds | The command runs, or the CLI reports the error |
