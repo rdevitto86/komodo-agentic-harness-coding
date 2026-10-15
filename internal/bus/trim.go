@@ -164,14 +164,32 @@ func folderSize(dir string) (int64, error) {
 	return n, nil
 }
 
-// startTrimLocked trims dir in the background unless it was trimmed within the last day; the caller holds the lock.
+// startTrimLocked marks dir for a trim unless it was trimmed within the last day; the caller holds the lock.
 func (b *memBus) startTrimLocked(dir string) {
 	if b.closed || now().Sub(b.lastTrim[dir]) < trimInterval {
 		return
 	}
 	b.lastTrim[dir] = now()
-	b.trims.Add(1)
-	go b.trim(dir)
+	b.due = append(b.due, dir)
+}
+
+// runDue starts the trims marked during a publish, after the bus lock is released.
+func (b *memBus) runDue() {
+	b.mu.Lock()
+	due := b.due
+	b.due = nil
+	if b.closed {
+		due = nil
+	}
+	b.trims.Add(len(due))
+	b.mu.Unlock()
+	for _, dir := range due {
+		if b.goFn != nil {
+			b.goFn(func() { b.trim(dir) })
+		} else {
+			b.trim(dir)
+		}
+	}
 }
 
 // trim runs Trim on dir, forgets the runs it deleted, and publishes bus.store_failed for a failed or over-bound trim.

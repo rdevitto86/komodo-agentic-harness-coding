@@ -86,15 +86,16 @@ func TestServiceWritesNoEventLog(t *testing.T) {
 // TestFailedRecordWriteIsRecordedOnce checks a failing sessions.jsonl gives one failure record in the run's figures and the loop keeps reading.
 func TestFailedRecordWriteIsRecordedOnce(t *testing.T) {
 	f := newFixture(t, 100, nil)
+	ctx := context.Background()
+	openRun(t, f, "run-bad")
+	f.svc.handle(ctx, startRun(1, "run-bad", "g1"))
 	if err := os.MkdirAll(filepath.Join(f.repoDir, "sessions.jsonl"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stop := f.start()
-	f.publish(f.runStart("run-bad", "g1"),
-		bus.Event{Type: bus.TypeRunStatus, Subtype: "run.start", Run: "run-bad", Data: &bus.RunStartedFact{Groups: []bus.ID{"g1"}}})
-	f.publish(session(0, "run-bad", "g1", "s1", "builder", nil)...)
-	f.publish(session(20, "run-bad", "g1", "s2", "builder", nil)...)
-	stop()
+	for _, e := range append(session(0, "run-bad", "g1", "s1", "builder", nil), session(20, "run-bad", "g1", "s2", "builder", nil)...) {
+		f.svc.handle(ctx, e)
+	}
+	f.svc.flush()
 	runs, err := NewReader(f.repoDir).Runs(context.Background())
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("Runs = %+v, %v", runs, err)

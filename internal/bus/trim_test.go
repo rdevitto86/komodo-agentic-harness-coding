@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -182,5 +183,20 @@ func TestRunStartTrimHonoursTheOpenCheck(t *testing.T) {
 	}
 	if !exists(paused) || exists(gone) {
 		t.Fatalf("paused=%v gone=%v, want true false", exists(paused), exists(gone))
+	}
+}
+
+// A trim starts through the Go function the engine passed in, so a panic in it is the engine's to handle.
+func TestTrimStartsThroughTheEngineGo(t *testing.T) {
+	var started atomic.Int32
+	f := newStoreBus(t, 100, func(o *Options) {
+		o.Go = func(fn func()) { started.Add(1); go fn() }
+	})
+	f.publish(f.runStart("run-a"), f.runStart("run-b"))
+	if err := f.b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := started.Load(); n != 1 {
+		t.Fatalf("%d trims started for one folder, want 1", n)
 	}
 }
