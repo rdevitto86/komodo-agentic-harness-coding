@@ -72,4 +72,5 @@ type loopConfig struct {
 	Messages []message           // the history to start from; the loop writes it to messages.jsonl
 	Price    func(Usage) float64 // metered cost of a turn; nil means zero
 	Now      func() time.Time
+	Faults   Recoverer // guards the loop goroutine; nil prints a panic on standard error
 }

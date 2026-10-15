@@ -34,9 +34,12 @@ type claudeStream struct {
 }
 
 // newClaudeStream starts the reader goroutine over the program's output.
-func newClaudeStream(p *proc, id string, now func() time.Time) *claudeStream {
+func newClaudeStream(p *proc, id string, now func() time.Time, rec Recoverer) *claudeStream {
 	s := &claudeStream{p: p, id: id, now: now, events: make(chan StreamEvent, 64), quit: make(chan struct{})}
-	go s.read()
+	go func() {
+		defer rec.Recover(llmSource, nil)
+		s.read()
+	}()
 	return s
 }
 

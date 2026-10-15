@@ -37,6 +37,7 @@ type AnthropicOptions struct {
 	MaxTokens int              // output cap per request; 0 means 64,000 or the model's cap if lower
 	Catalog   *Catalog         // model catalog; nil loads the embedded one
 	Now       func() time.Time // clock; nil uses time.Now
+	Faults    Recoverer        // guards the loop goroutine; nil prints a panic on standard error
 }
 
 // Anthropic is the paid HTTP adapter for the Messages interface.
@@ -245,7 +246,7 @@ func (a *Anthropic) Start(ctx context.Context, s Session) (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return startLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Price: a.price(s.Model),
+	return startLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Faults: a.opts.Faults, Price: a.price(s.Model),
 		Messages: []message{{Role: "user", Content: blocks}}})
 }
 
@@ -255,7 +256,7 @@ func (a *Anthropic) Resume(ctx context.Context, s Session, in Input) (Stream, er
 	if err != nil {
 		return nil, err
 	}
-	return resumeLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Price: a.price(s.Model)}, in.Text)
+	return resumeLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Faults: a.opts.Faults, Price: a.price(s.Model)}, in.Text)
 }
 
 // layerNames are the brief parts in send order.

@@ -184,6 +184,7 @@ func (l *loopState) begin(ctx context.Context) (Stream, error) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	st := &loopStream{l: l, items: make(chan loopItem, 64), quit: make(chan struct{}), cancel: cancel}
 	go func() {
+		defer recoverer(l.cfg.Faults).Recover(llmSource, nil)
 		res, err := l.run(runCtx, st)
 		err = l.mapErr(err)
 		l.signalReady(err)

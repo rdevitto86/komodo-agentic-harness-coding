@@ -36,6 +36,7 @@ type ClaudeOptions struct {
 	Now       func() time.Time           // clock; nil uses time.Now
 	Catalog   *Catalog                   // model catalog; nil loads the embedded one
 	ProbeWait time.Duration              // longest wait for the probe's init line; 0 means 30 s
+	Faults    Recoverer                  // guards the adapter's goroutines; nil prints a panic on standard error
 }
 
 // Claude is the subscription adapter: it drives the claude program.
@@ -266,9 +267,14 @@ func (c *Claude) initLine(ctx context.Context, path, version string) (json.RawMe
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	go func() { _ = p.writeUser("ok") }()
+	rec := recoverer(c.opts.Faults)
+	go func() {
+		defer rec.Recover(llmSource, nil)
+		_ = p.writeUser("ok")
+	}()
 	lines := make(chan []byte, 1)
 	go func() {
+		defer rec.Recover(llmSource, nil)
 		defer func() {
 			_, _ = io.Copy(io.Discard, p.out)
 			_ = p.cmd.Wait()
@@ -361,8 +367,12 @@ func (c *Claude) launch(ctx context.Context, s Session, resume bool, text string
 	if err != nil {
 		return nil, err
 	}
-	st := newClaudeStream(p, s.ID, c.now)
-	go func() { _ = p.writeUser(text) }()
+	rec := recoverer(c.opts.Faults)
+	st := newClaudeStream(p, s.ID, c.now, rec)
+	go func() {
+		defer rec.Recover(llmSource, nil)
+		_ = p.writeUser(text)
+	}()
 	first, err := st.firstEvent(ctx)
 	if err == nil && (first.Kind != KindInit || first.Init == nil) {
 		err = fmt.Errorf("first line is not system/init: %w", ErrBilling)

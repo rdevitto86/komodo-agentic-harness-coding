@@ -60,6 +60,7 @@ type LocalOptions struct {
 	Slots     int                 // concurrent sessions on the link; 0 means 1
 	Catalog   *Catalog            // model catalog; nil loads the embedded one
 	Now       func() time.Time    // clock; nil uses time.Now
+	Faults    Recoverer           // guards the loop goroutine; nil prints a panic on standard error
 }
 
 // LocalProvider is the optional local adapter: an OpenAI-compatible server on this machine.
@@ -341,11 +342,11 @@ func (p *LocalProvider) Start(ctx context.Context, s Session) (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return startLoop(ctx, loopConfig{Session: s, Wire: p.newWire(s), Link: Local, Now: p.opts.Now,
+	return startLoop(ctx, loopConfig{Session: s, Wire: p.newWire(s), Link: Local, Now: p.opts.Now, Faults: p.opts.Faults,
 		Messages: []message{{Role: "user", Content: blocks}}})
 }
 
 // Resume loads the saved messages and continues them with the new input.
 func (p *LocalProvider) Resume(ctx context.Context, s Session, in Input) (Stream, error) {
-	return resumeLoop(ctx, loopConfig{Session: s, Wire: p.newWire(s), Link: Local, Now: p.opts.Now}, in.Text)
+	return resumeLoop(ctx, loopConfig{Session: s, Wire: p.newWire(s), Link: Local, Now: p.opts.Now, Faults: p.opts.Faults}, in.Text)
 }
