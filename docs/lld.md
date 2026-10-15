@@ -7378,30 +7378,40 @@ flowchart LR
 
 ### 10.2 Package Layout
 
-The package is `internal/state`. It imports no other Komodo package.
+The package is `internal/state`. It imports only the Event Bus package, for `bus.RunStart` in the schedule entry, and `internal/core`, for the atomic file write.
 
 ```
 internal/state/
-├── manager.go    Manager and the calls other parts use
-├── record.go     Header, Record, GroupState and its parts
-├── validate.go   enum, invariant, writer and revision checks
-├── store.go      atomic write, read, quarantine
-├── machine.go    machine-wide records and their calls
-├── migrate.go    version steps
-└── schema.go     generates embed/state.schema.json and embed/machine.schema.json
+├── manager.go        Manager and the calls other parts use
+├── record.go         Header, Record, GroupState and its parts
+├── reason.go         the Reason list
+├── errors.go         the error values, InvalidError and DiskError
+├── validate.go       enum, invariant, writer and revision checks
+├── walk.go           the check for a null slice or map, and its repair on read
+├── store.go          atomic write, read, quarantine
+├── machine.go        Machine, NewMachine, LoadMachine and SaveMachine
+├── machine_types.go  the machine-wide record types
+├── machine_check.go  the rules of the four machine-wide bodies
+├── limits.go         link slots, reset times, session reset and plan windows
+├── migrate.go        version steps
+└── schema_test.go    builds embed/state.schema.json and embed/machine.schema.json
 ```
 
 | File | Holds |
 |---|---|
-| `manager.go` | `New`, `Create`, `Save`, `Load`, `Peek`, `Counters`, `List`, `Remove` |
-| `record.go` | The structs of the group record |
-| `validate.go` | `Validate` and the errors it returns |
+| `manager.go` | `New`, `Create`, `Save`, `Load`, `Peek`, `Counters`, `List`, `Remove`, `Quarantined` |
+| `record.go`, `reason.go` | The structs of the group record, and the reasons |
+| `errors.go` | The error values, `InvalidError`, `DiskError` |
+| `validate.go`, `walk.go` | The group record checks, and the null slice and map check |
 | `store.go` | Temporary file, sync, rename; read; `.bad-<time>` |
-| `machine.go` | `Machine`, `NewMachine`, `LoadMachine`, `SaveMachine`, the four machine-wide bodies |
-| `migrate.go` | `Migration`, `RegisterMigration`, `ErrNewerVersion` |
-| `schema.go` | The schema generator run by `go generate` |
+| `machine.go`, `machine_types.go`, `machine_check.go` | `Machine`, `NewMachine`, `LoadMachine`, `SaveMachine`, the four machine-wide bodies and their rules |
+| `limits.go` | The link slot, reset time and session reset calls, and the plan window calls |
+| `migrate.go` | `Migration`, `RegisterMigration` |
+| `schema_test.go` | The schema builder; `go test ./internal/state -run TestSchemasMatchGoTypes -update` rewrites the files |
 
-`embed/state.schema.json` and `embed/machine.schema.json` are generated at build; the build fails when a file disagrees with the Go structs.
+`embed/state.schema.json` and `embed/machine.schema.json` are built from the Go structs; a test fails when a file disagrees with them.
+
+`New` takes the repository's Komodo folder (`<git-common-dir>/komodo`), and the records live under its `runs` folder. `NewMachine` takes the Komodo home folder, and the records live under its `state` folder. A writer is a component name such as `engine`, or the full `<component>/<run>/<pid>` form; a bare name gets the run and process added to each header.
 
 The group record is one file per group under the repository's runtime folder, and the machine-wide records are four files under the machine folder. The folders are fixed in [chapter 20](#20-data-locations-and-data-flow).
 
@@ -7724,6 +7734,21 @@ type LinkRecord struct {
 	ResetAt  time.Time       `json:"reset_at,omitzero"` // when the link's limit lifts; zero when not limited
 	Cap      string          `json:"cap,omitempty"`     // which cap was hit: window, weekly, model, spend or quota
 	Sessions int             `json:"sessions"`          // sessions running on the link across the machine
+
+	Windows map[string]WindowRecord `json:"windows,omitempty"` // the Resource Manager's plan windows of the link, keyed by window name
+}
+
+// WindowKey names one window on one link.
+type WindowKey struct {
+	Link   string
+	Window string
+}
+
+// WindowRecord is one window's entry in providers.json.
+type WindowRecord struct {
+	PercentUsed float64   `json:"percent_used"`
+	ResetAt     time.Time `json:"reset_at"`
+	Sessions    int       `json:"sessions"` // sessions finished in the window
 }
 ```
 
@@ -7851,8 +7876,8 @@ type ScheduleEntry struct {
 |---|---|
 | `kind` | One of the four kinds; equals the file's name |
 | `writer` | `<component>/<pid>`; the component is `resource`, `model`, `cli` or `engine` |
-| `providers` `links` | Never null; `probe` is a JSON object; `sessions` is never below 0; `cap` is empty or one of `window`, `weekly`, `model`, `spend`, `quota` |
-| `update` | `latest` and `previous` are version strings; `checked_at` is RFC 3339 in UTC |
+| `providers` `links` | Never null; `probe` is a JSON object, `{}` when absent; `sessions` is never below 0; `cap` is empty or one of `window`, `weekly`, `model`, `spend`, `quota`; a window's `percent_used` and `sessions` are never below 0 |
+| `update` | `latest` and `previous` are empty or version strings; `checked_at` is RFC 3339 in UTC |
 | `install` `entries` | Never null; every entry has `target`, `hash` and `step` |
 | `schedule` `entries` | Never null; `target`, `root`, `run_id` and `start.groups` are not empty; `at` and `queued_at` are RFC 3339 in UTC |
 
@@ -7871,11 +7896,12 @@ var (
 
 // InvalidError is returned for a write that breaks the schema or an invariant; the disk is untouched.
 type InvalidError struct {
-	Group string // the group id
+	Group string // the group id, or the kind of a machine-wide record
 	Field string // path of the failing field
+	Why   string // what is wrong with it
 }
 
-// Error describes the refusal as state_invalid with the group and field.
+// Error describes the refusal as state_invalid with the group, the field and the reason.
 func (e *InvalidError) Error() string
 
 // DiskError wraps a failed open, write, sync or rename; the disk keeps the old record.
@@ -7925,15 +7951,42 @@ func LoadMachine[T any](m *Machine, kind MachineKind) (MachineRecord[T], error)
 func SaveMachine[T any](m *Machine, kind MachineKind, body T, rev int) (MachineRecord[T], error)
 ```
 
+The calls on `providers.json` that the Task Manager and the Resource Manager make are methods of `Machine`. They use plain strings for a link and a cap, so `internal/state` imports neither the model client nor the Resource Manager; each caller adapts them to its own interface.
+
+```go
+// ResetSessions sets every link's session count to 0; the engine calls it at start.
+func (m *Machine) ResetSessions() error
+
+// ResetAt returns when a link's limit lifts; false when the link has no recorded limit.
+func (m *Machine) ResetAt(link string) (time.Time, bool)
+
+// Record stores when a link's limit lifts and which cap was hit.
+func (m *Machine) Record(link string, reset time.Time, capKind string) error
+
+// TakeSlot counts one more live session on the link; false when the link already has most.
+func (m *Machine) TakeSlot(link string, most int) (bool, error)
+
+// ReleaseSlot counts one session fewer on the link, never below 0.
+func (m *Machine) ReleaseSlot(link string) error
+
+// LoadWindows returns every stored window record.
+func (m *Machine) LoadWindows(ctx context.Context) (map[WindowKey]WindowRecord, error)
+
+// SaveWindow stores one window record under its link, leaving the rest of the link's record as it is.
+func (m *Machine) SaveWindow(ctx context.Context, k WindowKey, r WindowRecord) error
+```
+
+Each of these reads `providers.json`, changes it and saves it with the `rev` read, and repeats after `ErrStaleRev`.
+
 | Method | An error means | The disk afterwards |
 |---|---|---|
 | `Create` | `*InvalidError`, `ErrExists`, `ErrNotWriter` or `*DiskError` | No record written |
-| `Save` | `*InvalidError`, `ErrStaleRev`, `ErrNotWriter` or `*DiskError` | The old record is unchanged |
+| `Save` | `*InvalidError`, `ErrStaleRev`, `ErrNotFound`, `ErrNotWriter` or `*DiskError` | The old record is unchanged |
 | `Load` | `ErrCorrupt`, `ErrNewerVersion`, `ErrNotFound` | `ErrCorrupt`: the record is renamed `.bad-<time>` |
 | `Peek` | The same | Nothing written |
-| `Remove` | `ErrStaleRev`, `ErrNotWriter` | The record stays |
+| `Remove` | `ErrStaleRev`, `ErrNotFound`, `ErrNotWriter` | The record stays |
 | `LoadMachine` | `ErrNotFound`, `ErrCorrupt`, `ErrNewerVersion` | `ErrCorrupt`: the record is renamed `.bad-<time>` |
-| `SaveMachine` | `*InvalidError`, `ErrStaleRev`, `ErrExists`, `ErrNotWriter` or `*DiskError` | The old record is unchanged |
+| `SaveMachine` | `*InvalidError`, `ErrStaleRev`, `ErrExists`, `ErrNotWriter` or `*DiskError` | The old record is unchanged; a `rev` other than 0 with no record is `ErrStaleRev` |
 
 | Caller | Calls | When |
 |---|---|---|
@@ -7944,6 +7997,9 @@ func SaveMachine[T any](m *Machine, kind MachineKind, body T, rev int) (MachineR
 | Runtime Manager | `Peek`, `List` | The engine answers a `status` request from the CLI |
 | Runtime Manager | `Remove` | A group's record is dropped; no command calls it, because `komodo clean` keeps state records |
 | Resource Manager, model client | `LoadMachine`, `SaveMachine` | `providers.json`: probe results, limit reset times, link session counts |
+| Resource Manager | `LoadWindows`, `SaveWindow` | `providers.json`: the plan windows of each link |
+| Task Manager (model client) | `TakeSlot`, `ReleaseSlot`, `ResetAt`, `Record` | `providers.json`: link session counts and limit reset times |
+| Runtime Manager | `ResetSessions` | The engine starts |
 | CLI installer | `LoadMachine`, `SaveMachine` | `update.json` and `install.json`, written with a `rev` check; a conflict is read again and retried. `install` and `doctor` also refresh the probe in `providers.json` the same way |
 | Runtime Manager | `LoadMachine`, `SaveMachine` | `schedule.json`: writes an entry for `komodo run --schedule`, reads the queue at start; an entry leaves it when its run starts or `komodo stop (id)` removes it |
 
@@ -7970,9 +8026,9 @@ sequenceDiagram
 1. The writer check: only `engine` may write.
 2. The revision check: the named `rev` must equal the stored one, or `ErrStaleRev`. `Create` instead requires that no record exists.
 3. The schema check: types, required fields, enum values (stage, reason, task state, result), no null slices or maps.
-4. The invariants: `fence` is not zero and not lower than the stored one, and no counter is lower than the stored one.
-5. The manager fills the header (`v`, `rev + 1`, `ts`, `writer`).
-6. It writes the record to `state.json.tmp-<pid>` in the same folder and syncs the file.
+4. The invariants: `fence` is not zero and not lower than the stored one, and no counter is lower than the stored one. `outcome` is set exactly when the stage is `done`, and `prior` only while the group is paused or blocked.
+5. The manager fills the header (`v`, `rev + 1`, `ts`, `writer`). It keeps the 64 newest `requests`, and an open action with no `args` is stored with `{}`.
+6. It writes the record to a temporary file named `.state.json.tmp-<number>` in the same folder and syncs the file. A failed write is tried once more; a second failure is a `*DiskError`.
 7. It renames the temporary file over `state.json`, which is atomic, then syncs the folder.
 8. A failed check at steps 1 to 4 returns the error and leaves the file byte-identical.
 
@@ -8016,15 +8072,19 @@ A damaged record is never repaired automatically. A group whose record is set as
 4. `LoadMachine` reads and checks the record as a group read does: a strict decode, the schema check, an in-memory migration of an older `v`, and `ErrNewerVersion` for a newer one.
 5. A record that fails a read check is renamed `<kind>.json.bad-<time>` and `ErrCorrupt` is returned, so it is never repaired automatically.
 6. A stale temporary file is deleted by the next open when it is older than 1 hour.
+7. A quarantined name that already exists gets `-1`, `-2` and so on after the time.
+8. Probe results are stored compact, and every time is stored in UTC.
+9. A write holds the record's lock file `<kind>.json.lock` from the revision check to the rename, so two processes never both pass the check. A lock older than 5 seconds is taken over.
 
 After the machine restarts, the next komodo command finds `schedule.json` and starts the engine, which starts any entry whose `at` has passed at once. Each machine-wide record has one writer process, the engine. The one exception is the CLI installer, which writes `install.json` and `update.json` with a `rev` check and, on `ErrStaleRev`, reads the record again and retries. The session counts in `providers.json` reset to 0 when the engine starts, so a process that died holding a session leaves no stale count.
 
 #### Migration
 
 ```go
-// Migration upgrades the state of a record from version From to From+1, in memory.
+// Migration upgrades a record from version From to From+1, in memory.
 type Migration struct {
 	From int
+	Kind MachineKind // empty for a group record
 	Step func(old []byte) ([]byte, error)
 }
 
@@ -8032,7 +8092,7 @@ type Migration struct {
 func RegisterMigration(m Migration)
 ```
 
-A fixture with `v: 0` reads as `v: 1`. A group record is written under the current version the next time the Runtime Manager saves it.
+A step receives the whole record as JSON and returns it upgraded; the runner sets `v` after each step. `Kind` is empty for a group record and names the record for a machine-wide one. Version 0 has the same shape as version 1, so its step returns the record unchanged. A fixture with `v: 0` reads as `v: 1`. A group record is written under the current version the next time the Runtime Manager saves it.
 
 #### Concurrency and locking
 
@@ -8061,7 +8121,7 @@ A `Save` with a stale `rev` is refused and the record is unchanged.
 4. A group record never has a zero fence.
 5. Only the Runtime Manager writes a group record; the lease keeps other runs out.
 6. A damaged record is set aside and never repaired automatically.
-7. The State Manager imports no other Komodo package.
+7. The State Manager imports only the Event Bus package and `internal/core`.
 8. A machine-wide record follows rules 1 to 3 and 6: checked before it reaches disk, whole or absent, `rev` rising by 1.
 9. The State Manager keeps no event log; recovery reads only its records.
 
@@ -8076,7 +8136,7 @@ A `Save` with a stale `rev` is refused and the record is unchanged.
 | Record fails a read check | `Load` | Rename to `.bad-<time>`; the group blocks `state_invalid` | Set aside |
 | Record from a newer binary | `Load` | `ErrNewerVersion`; nothing moved | Unchanged |
 | Disk write, sync or rename fails | The store | One retry, then `*DiskError`; the group blocks `crash` | Old record stands |
-| Crash during a save | A leftover `state.json.tmp-<pid>` | The next open deletes temporary files older than 1 hour | Old record stands |
+| Crash during a save | A leftover `.state.json.tmp-<number>` | The next open deletes temporary files older than 1 hour | Old record stands |
 | Machine-wide record breaks the schema | `SaveMachine` checks | `*InvalidError` with the field path | Disk untouched |
 | Machine-wide record fails a read check | `LoadMachine` | Rename to `.bad-<time>`; `ErrCorrupt` | Set aside |
 | Write to a machine-wide record by an unlisted component | The writer check | `ErrNotWriter` | Disk untouched |
