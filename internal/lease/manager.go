@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 )
 
 // retries bounds how often a call rereads after losing a race on a record's rev.
@@ -46,15 +44,12 @@ type Manager struct {
 }
 
 // New opens the lease manager over a registry and a process check.
-// An empty home means the default machine folder; a nil registry is the file registry under home/leases; a nil check is OSProcessCheck.
+// A nil registry is the file registry under home/leases, which needs a home; a nil check is OSProcessCheck.
 func New(home string, reg Registry, alive ProcessCheck) (*Manager, error) {
-	if home == "" {
-		var err error
-		if home, err = config.DefaultHome(); err != nil {
-			return nil, err
-		}
-	}
 	if reg == nil {
+		if home == "" {
+			return nil, errors.New("lease registry needs a home folder")
+		}
 		reg = NewFileRegistry(filepath.Join(home, "leases"), DefaultLockTimeout)
 	}
 	if alive == nil {

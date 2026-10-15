@@ -58,7 +58,10 @@ var (
 // HeldError carries the live holder so the caller can name it.
 type HeldError struct{ Holder Lease }
 
+// Error names the run that holds the group.
 func (e HeldError) Error() string { return "group is leased by run " + e.Holder.Run }
+
+// Unwrap lets errors.Is match ErrLeased.
 func (e HeldError) Unwrap() error { return ErrLeased }
 
 // Live reports whether a lease still has a working holder as seen from host.

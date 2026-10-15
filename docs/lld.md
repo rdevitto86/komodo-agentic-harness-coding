@@ -6899,8 +6899,11 @@ The package is `internal/lease`. It holds the registry and no git code.
 internal/lease/
 ├── manager.go    Manager and the calls other parts use
 ├── registry.go   Registry interface and Record
-├── files.go      file registry: JSON records and lock files
+├── files.go      file registry: JSON records
+├── lock.go       lock files: take, stale takeover, release
 ├── lease.go      Lease, Fence, liveness rule, errors
+├── proc.go       process existence and process start time
+├── config.go     lock timeout from the config value
 └── sweep.go      registry sweep
 ```
 
@@ -6908,8 +6911,11 @@ internal/lease/
 |---|---|
 | `manager.go` | `New`, `Grant`, `Renew`, `Revoke`, `Holder`, `IsOwner`, `Release` |
 | `registry.go` | The storage seam the file registry implements |
-| `files.go` | `FileRegistry`: one JSON file and one lock file per lease, safe writes, stale-lock replacement |
+| `files.go` | `FileRegistry`: one JSON file per lease, safe writes |
+| `lock.go` | The lock file: exclusive create with a token, stale-lock takeover, release by token |
 | `lease.go` | The `Lease` value and the rule for whether it is live |
+| `proc.go` | `ProcessCheck`, `OSProcessCheck` and `ProcessStart`, which ask `ps` for a process start time |
+| `config.go` | `LockTimeout`, which turns the value of `lease.lock_timeout_s` into a duration. The caller reads the key from the Configuration Manager, because no other package imports it ([3.7](#37-invariants-and-failures)) |
 | `sweep.go` | `Sweep` |
 
 On disk this chapter writes under the machine folder `~/.komodo/`. The registry is a folder of small JSON files, one record per lease, with a lock file beside each record while it is written. It uses the standard library only.
@@ -6917,7 +6923,10 @@ On disk this chapter writes under the machine folder `~/.komodo/`. The registry 
 ```
 ~/.komodo/leases/<repo-id>/<group-id>.json   the lease record
 ~/.komodo/leases/<repo-id>/<group-id>.lock   present only while a write is in progress
+~/.komodo/leases/<repo-id>/.repo.lock        present only while a grant is in progress
 ```
+
+The repo id is written as one folder name by URL path escaping, so `/` becomes `%2F` and a leading `.` becomes `%2E`. A group id that is empty, starts with `.` or holds a path separator is refused with `ErrBadKey`.
 
 **Entry points**
 
@@ -7016,9 +7025,16 @@ The branch name follows `komodo/<epic>-<group>`, and the caller of `Grant` passe
 func (l Lease) Live(now time.Time, host string, alive ProcessCheck) bool
 ```
 
-- **Revoked or saved:** never live.
+```go
+// ProcessCheck reports whether a process with this id exists and started at the given time.
+type ProcessCheck func(pid int, start time.Time) bool
+```
+
+- **Revoked:** never live.
 - **Same host:** live while the holder's process exists with the recorded start time, however old the last renewal is. A laptop that slept for hours keeps its lease.
 - **Another host:** live while the last renewal is no older than `LeaseExpiry`.
+
+`OSProcessCheck` is the check `New` uses when it is given none. It reads a start time from `ps -o lstart=` and accepts a difference of up to 2 seconds, because `ps` reports whole seconds; where `ps` is missing it only asks whether the process id exists.
 
 #### Registry seam
 
@@ -7042,7 +7058,16 @@ type Registry interface {
 
 Two runs racing for one stale lease both call `Swap` with the `rev` they read; exactly one succeeds. Renewal uses the same `Swap`, so a renewal after a takeover fails instead of overwriting the new holder.
 
-The file registry takes a lock file for the length of every `Create`, `Swap` and `Delete`; [File registry writes](#file-registry-writes) lists the steps.
+The file registry takes a lock file for the length of every `Create`, `Swap` and `Delete`; [File registry writes](#file-registry-writes) lists the steps. `Create` sets `rev` to 1, and `Swap` sets it to the named `rev` plus 1.
+
+A registry may also implement the optional `RepoLocker`. `Grant` holds it for the whole grant, which is what keeps two grants of one repository from interleaving; the file registry holds it as `<repo-id>/.repo.lock`, with the same lock file rules.
+
+```go
+// RepoLocker is implemented by a registry that can hold one repository's grants still across processes.
+type RepoLocker interface {
+	LockRepo(ctx context.Context, repo string) (unlock func(), err error)
+}
+```
 
 #### Requests and results
 
@@ -7093,6 +7118,8 @@ var (
 	ErrLeased      = errors.New("group is leased by another run")         // Grant: a live holder exists
 	ErrLeaseLost   = errors.New("lease lost: another run took the group")
 	ErrBranchTaken = errors.New("branch or worktree is owned by another group")
+	ErrBadKey      = errors.New("repo or group id cannot name a file")
+	ErrLocked      = errors.New("lease record stayed locked by another writer") // a lock stayed held past twice the lock timeout
 )
 
 // HeldError carries the live holder so the caller can name it.
@@ -7108,8 +7135,13 @@ func (e HeldError) Unwrap() error { return ErrLeased }
 // NewFileRegistry opens the folder of JSON records and lock files; lockTimeout is the age at which a lock is stale.
 func NewFileRegistry(root string, lockTimeout time.Duration) *FileRegistry
 
-// New opens the lease manager over a registry and a process check.
+// New opens the lease manager over a registry and a process check. A nil registry is the file registry
+// under home/leases, which needs a home; a nil check is OSProcessCheck.
 func New(home string, reg Registry, alive ProcessCheck) (*Manager, error)
+
+// LockTimeout turns the value of lease.lock_timeout_s into a duration; a missing or non-positive value gives DefaultLockTimeout.
+// The caller reads the key and passes the result to NewFileRegistry.
+func LockTimeout(seconds any) time.Duration
 
 // Grant takes the group's lease, raises the fence and records the branch and worktree names.
 func (m *Manager) Grant(ctx context.Context, req GrantRequest) (Lease, error)
@@ -7167,6 +7199,8 @@ flowchart TD
 3. A record whose holder is live (see [Liveness](#93-data-model)) returns `HeldError` naming it.
 4. A dead record: `Swap` it, naming the `rev` read, into a `held` record with the fence raised by 1. Only one taker succeeds; the loser gets `ErrStaleRev`, rereads and finds a live holder.
 
+Before step 1, `Grant` takes the repository's grant lock (`RepoLocker`) and the group's in-process mutex. The holder's process id, start time and host name are the Manager's own, read when `New` ran; `GrantRequest` carries none of them. The grant lock makes step 1 and step 2 or 4 one step across processes, so two groups never both get one branch.
+
 The Task Manager creates the branch and worktree the record names, after `Grant` returns. The Lease Manager never creates them.
 
 #### The first record carries the right fence
@@ -7182,7 +7216,9 @@ The Task Manager creates the branch and worktree the record names, after `Grant`
 2. A lease on this host is live while its process lives; a lease on another host is dead when its last renewal is older than `LeaseExpiry`.
 3. A holder that is live by process but has not renewed for `LeaseExpiry` is stalled, not dead. The Runtime Manager first kills the holder's process tree, then calls `Revoke`.
 4. `Revoke` swaps the record to `revoked` and raises the fence by 1, so the old holder is no longer the owner.
-5. A group with a revoked lease is granted again with `Grant`.
+5. A group with a revoked lease is granted again with `Grant`, which raises the fence by 1 again.
+6. `Revoke` of a group with no record returns `ErrNotFound`; of an already revoked lease it changes nothing. A reason other than the three constants is refused.
+7. `Holder` returns the record in any state, so a caller can see a revoked lease; its bool is false only when no record exists.
 
 #### Paused groups
 
@@ -7199,25 +7235,26 @@ The Task Manager creates the branch and worktree the record names, after `Grant`
 
 #### Release
 
-1. `Release` deletes the record with `Delete`, naming the `rev` read.
-2. A later `Grant` of the same group creates a new record at fence 1.
-3. The Runtime Manager calls it when the group closes, after the Cleanup Handler has reported the group closed.
+1. `Release` deletes the record with `Delete`, naming the `rev` read. A group with no record is a no-op.
+2. A record of another run, or a held record with another fence, is left alone and `Release` returns `ErrLeaseLost`; a revoked record of the same run is deleted.
+3. A later `Grant` of the same group creates a new record at fence 1.
+4. The Runtime Manager calls it when the group closes, after the Cleanup Handler has reported the group closed.
 
 #### Registry sweep
 
 1. `Sweep` lists the repository's records.
-2. A record whose clone path is gone is deleted.
-3. The sweep never touches a live lease.
+2. A record whose clone path is gone is deleted, unless its lease is live. A record with no clone path is kept.
+3. The sweep never touches a live lease. A record that changed during the sweep is left alone.
 4. Removing the leftover worktrees of a dead run is [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))].
 
 #### File registry writes
 
-1. Create `<group-id>.lock` exclusively, writing the process id and the time into it. Exclusive creation fails when the file exists.
-2. A lock younger than the lock timeout is held by a live writer: wait and try again until it is gone or has aged past the timeout.
-3. A lock older than the timeout is stale: delete it and go back to step 1.
+1. Create `<group-id>.lock` exclusively, writing a token and the time into it. The token is the process id and a random suffix. Exclusive creation fails when the file exists.
+2. A lock younger than the lock timeout is held by a live writer: wait and try again until it is gone or has aged past the timeout. The wait ends with `ErrLocked` after twice the timeout, or with the context's error.
+3. A lock older than the timeout is stale. The taker creates `<group-id>.lock.stale-<token>` exclusively, named after the stale lock's token, and only the one that creates it goes on. It then moves the lock to a unique name, checks that the moved file is the one it saw and deletes it, or moves a different file back; it removes its claim file and goes back to step 1. A claim older than the timeout belongs to a taker that died and is deleted.
 4. With the lock held, read the record and apply the call's rule: `Create` needs no record, `Swap` and `Delete` need the named `rev` to be current.
-5. Write the new record to `<group-id>.json.tmp-<pid>`, sync the file, rename it over `<group-id>.json` and sync the folder.
-6. Delete the lock.
+5. Check that the lock still holds the writer's token, then write the new record to a temporary file beside it, sync the file, rename it over `<group-id>.json` and sync the folder. A lock found replaced makes the call start again from step 1, up to 3 times.
+6. Delete the lock only while it still holds the writer's token.
 
 A crash between steps 1 and 6 leaves a lock, which expires after the timeout, and a record that is whole, old or new, because the rename is atomic. `Get` and `List` take no lock.
 
@@ -7226,6 +7263,7 @@ A crash between steps 1 and 6 leaves a lock, which expires after the timeout, an
 - Two processes agree through the lock file and the `rev` check of `Create` and `Swap`; no in-memory lock crosses processes.
 - A lock left by a crash blocks one lease for at most the lock timeout.
 - Inside one process a mutex guards each group, so a `Renew` and an `IsOwner` of one group never interleave.
+- A `Grant` also holds the repository's grant lock, so grants of one repository run one at a time across processes. A stalled writer that wakes after its lock was taken is caught by the token check of step 5, not by the lock.
 
 ### 9.6 State
 
@@ -7305,6 +7343,13 @@ Tests use a temporary directory; no network, no git and no live provider.
 - A write killed after step 5 and before step 6 leaves a whole record and a lock that expires.
 - A paused group's lease stays `held`, and `Renew` keeps succeeding while it is paused.
 - `Release` deletes the record, and a later `Grant` of the same group starts again at fence 1.
+- `Release` of a lease another run took leaves the new holder's record and returns `ErrLeaseLost`.
+- Many goroutines granting one group, and many groups naming one branch, give one owner and no records left by the losers.
+- Two processes granting one group, and two processes granting groups that name one branch, give one owner in total (child-process test).
+- Two processes taking over a dead group again and again give fences that are each used once and rise without a gap (child-process test).
+- Many writers racing for one stale lock never overlap, including when holders die and leave aged locks.
+- A writer that finds its lock replaced does not delete the new lock.
+- A repo id of dots or slashes stays inside the registry folder, and a group id with a path separator is refused.
 
 ### 9.10 Open Gaps
 

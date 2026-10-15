@@ -104,7 +104,7 @@ func (r *FileRegistry) clearStale(path string) bool {
 		return false
 	}
 	_ = f.Close()
-	defer os.Remove(claim)
+	defer func() { _ = os.Remove(claim) }()
 	return removeIfSame(path, gen, r.lockTimeout)
 }
 
