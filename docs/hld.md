@@ -2,463 +2,437 @@
 
 ## 0. Front Matter
 
-This document is the high-level design of Komodo, a single Go program that starts model sessions as workers to plan, build, check, review and ship code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document, which is a draft awaiting sign-off. The design is complete for beta 6: a default that a spike or measurement still confirms names its gap register row, such as G-NN.
+This document is the high-level design of Komodo, a single Go program that runs model agents to plan, build, test, review and publish code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document. Its structure follows the owner's component diagram of 2026-10-14, which replaced the earlier 13-subsystem design; the earlier design stays readable at git tag `design/beta6-v1`. An open decision is written as a TODO that names its [gap register](lld.md#appendix-b-gap-register) row, such as G-201.
 
 ## 1. Introduction and Goals
 
 #### 1.1 Purpose
 
-Komodo is one Go binary that turns a goal into reviewed, merged code. The binary plans the work as a backlog, builds each task group in one fresh builder session that commits after each task, proves the result with mechanical checks and independent review, and lands the result on an epic branch. A person merges only the final epic pull request.
+Komodo is one Go binary that turns a goal into reviewed, published code. It plans the work into task groups, runs each group through a fixed pipeline of agents inside a private copy of the repository, and publishes only work that both a tester and a reviewer approved. A person merges the result.
 
-**📐 How work moves from backlog to merged code**
+**📐 How work moves from a goal to published code**
 ```mermaid
 flowchart LR
-  BL[("Backlog<br><small>epic · task groups</small>")]:::store
-  I["Intake<br><small>lint · lease · worktree</small>"]
+  G(["Goal or documents"]):::actor
+  I["Intake<br><small>planner writes task lists</small>"]
   B["Build<br><small>one builder per group</small>"]:::core
-  C["Check<br><small>tests and scans · no tokens</small>"]
-  V["Verify<br><small>reviewer + tester</small>"]:::core
-  SH["Ship<br><small>land on epic branch</small>"]
-  EG["Epic gate<br><small>whole-epic review</small>"]:::core
-  PR(["Epic pull request<br><small>a person merges</small>"]):::ok
-  BL -->|"1 run"| I
-  I -->|"2 ready"| B
-  B -->|"3 tasks done"| C
-  C -->|"4 pass"| V
-  V -->|"5 approved"| SH
-  SH -->|"6 last group landed"| EG
-  EG -->|"7 pass"| PR
-  C -.->|"8 fail"| B
-  V -.->|"8 findings"| B
+  T["Test<br><small>tester in a sandbox</small>"]:::core
+  R["Review<br><small>reviewer</small>"]:::core
+  C["Commit<br><small>push branch, open pull request</small>"]
+  CL["Cleanup<br><small>free branch, worktree, resources</small>"]
+  PR(["Pull request<br><small>a person merges</small>"]):::ok
+  G -->|"1 plan"| I
+  I -->|"2 next"| B
+  B -->|"3 ready"| T
+  B -->|"3 ready"| R
+  T -->|"4 pass"| C
+  R -->|"4 approve"| C
+  C -->|"5 published"| CL
+  C -->|"6"| PR
+  T -.->|"7 fail"| B
+  R -.->|"7 changes"| B
 ```
 
 #### 1.2 Goals and Non-Goals
 
 Goals:
-- One Go binary that uses only the standard library, plus one bundled tokenizer vocabulary, and runs no background server process.
-- Stateless workers: one fresh model session per group for the builder, the reviewer and the tester, each with private tools inside a worktree, a guard and an operating-system sandbox.
-- One verb set for a person and for the orchestrator, a model chat session that receives one structured reply per verb.
-- Three model links (the Claude command-line tool, the Anthropic programming interface, OpenAI-compatible endpoints) on four platforms (macOS, Linux, Windows Subsystem for Linux 2, native Windows).
+- One Go binary that uses only the standard library, with every part reachable through one command line.
+- One event bus that every part publishes to and listens on, using one event shape with a type and a subtype.
+- One task manager per task group, which guards its agents and runs the pipeline from build to cleanup.
+- A tester and a reviewer that judge the builder's work side by side, with tests run in a sandbox.
+- One owner per kind of data: settings, context, cache, leases and runtime state each have exactly one manager.
 
-Non-goals: a cost cap owned by Komodo, per-run or per-repository configuration, repository-defined agents or hooks, third-party Go dependencies, and a long-running service.
+Non-goals: per-repository agent definitions, third-party Go dependencies, a hosted service, and agents that push to git themselves.
 
 #### 1.3 Quality Goals
 
 | Priority | Goal | Scenario |
 |---|---|---|
-| 1 | Safety | A worker never writes outside its worktree, reads a secret, pushes to git, or spends money without permission |
-| 2 | Durability | A crash loses at most one model turn and no committed edit |
-| 3 | Determinism | The same facts render the same bytes |
-| 4 | Cost control | The subscription link comes first, and every loop has a bound |
-| 5 | Portability | One binary behaves the same on four platforms |
+| 1 | Safety | An agent never writes outside its worktree, pushes to git, reads a secret or spends money without permission |
+| 2 | Simplicity | Each component has one job, and each kind of data has one owner |
+| 3 | Durability | A crash loses no committed work; how much in-flight work survives is [TODO: what survives a crash of the runtime ([G-202](lld.md#g-202))] |
+| 4 | Cost control | Subscription links come first, every loop has a bound, and the Resource Manager watches spending |
+| 5 | Observability | Every event is recorded, so any run can be measured and explained |
 
 ## 2. Constraints
 
-A constraint is a locked rule that the design cannot trade away. The owner set every constraint, and holds the release signing key.
+A constraint is a locked rule that the design cannot trade away. The owner set every constraint.
 
 | Constraint | Consequence |
 |---|---|
-| Go, standard library only; the one exception is the tokenizer vocabulary bundled for size checks | Nothing external to download at run time; the vocabulary is one audited data file |
-| No server process | Every verb is a short process, except the opt-in `komodo ui` dashboard a person keeps open; a periodic tick replaces a daemon |
-| One sandbox per operating system: Seatbelt, Bubblewrap, Docker | Docker is used on native Windows only |
-| Only the config verb writes configuration | Settings stay out of agent reach |
-| Runtime state passes only through the state manager | One schema, checked before disk |
+| Go, standard library only; whether storage keeps this rule is [TODO: files or a database ([G-212](lld.md#g-212))] | Nothing external to download at run time |
+| Only the Configuration Manager reads and writes settings and the agent registry | Settings stay out of agent reach |
+| Every event uses one schema with a type and a subtype | Any part can listen to any event without a private format |
+| Runtime state passes only through the State Manager | One schema, checked before disk |
 
 ## 3. Context and Scope
 
-Two callers start work: a person at a shell, and the orchestrator, a model chat session inside a host harness such as Claude Code. Komodo runs no daemon, so the operating-system scheduler only fires a periodic tick.
+Two callers drive Komodo: a person at a shell, and the orchestrator, a model chat session inside Claude Code that turns the person's intent into commands. Komodo reaches model providers, a container runtime for test sandboxes, and GitHub.
 
 **📐 Who uses Komodo, and what Komodo reaches**
 ```mermaid
 flowchart LR
   H(["Person"]):::actor
-  subgraph HH["Host harness: Claude Code"]
-    O(["Orchestrator<br><small>model chat session</small>"]):::actor
-  end
+  O(["Orchestrator<br><small>Claude Code</small>"]):::actor
   K["Komodo<br><small>Go binary</small>"]:::core
-  M["Model links<br><small>Claude tool · programming interface · local</small>"]:::ext
-  S["Operating system<br><small>sandbox · scheduler</small>"]:::ext
-  G["GitHub<br><small>remote · releases</small>"]:::ext
-  RF[("Repository files<br><small>rules file · backlog</small>")]:::store
-  MF[("Machine files<br><small>Komodo home folder</small>")]:::store
-  H -->|"1 verbs"| K
-  O -->|"2 verbs, structured reply"| K
-  K -->|"3 sessions"| M
-  K -->|"4 confine commands"| S
-  K -->|"5 push, pull requests, updates"| G
-  K -->|"6 install, write backlog"| RF
-  K -->|"7 state, leases, worktrees"| MF
-  S -.->|"8 tick"| K
+  P["Planner and agent models<br><small>subscription or paid links</small>"]:::ext
+  D["Container runtime<br><small>test sandboxes</small>"]:::ext
+  G["GitHub<br><small>branches, pull requests</small>"]:::ext
+  RF[("Repository<br><small>documents, task lists</small>")]:::store
+  MF[("Machine files<br><small>settings, state, leases, cache</small>")]:::store
+  H <-->|"1 intent, results"| O
+  H -->|"2 commands"| K
+  O -->|"3 commands, structured reply"| K
+  K -->|"4 sessions"| P
+  K -->|"5 create, validate, destroy"| D
+  K -->|"6 commit, push"| G
+  K -->|"7 read documents, write task lists"| RF
+  K -->|"8 settings, state, leases"| MF
 ```
 
 | Neighbour | Direction | Description |
 |---|---|---|
-| Person at a shell | In | Installs, configures, updates and releases; may run every shared verb |
-| Orchestrator | In | Turns the person's intent into plan and run verbs, waits, answers scope requests and never edits code |
-| Model links | Out | Claude command-line tool on the subscription login, Anthropic programming interface when a paid link is allowed, OpenAI-compatible endpoints |
-| Git remote and GitHub | Out | Receive group and epic branches and pull requests; GitHub Releases serves signed binaries |
-| Operating-system sandbox | Out | Confines every command that a worker runs |
+| Person | In | Installs, configures and updates Komodo; may run every command |
+| Orchestrator | In | Runs plan, run, stop and status commands for the person and reads structured replies |
+| Model providers | Out | Planner and agent sessions over subscription links first, paid programming interfaces when allowed |
+| Container runtime | Out | Hosts one test sandbox per task group, created and destroyed by its task manager |
+| GitHub | Out | Receives pushed branches and pull requests from the Commit Handler |
 
 ## 4. Solution Strategy
 
-Each quality goal has a mechanism, and the harness implements every mechanism. No model is trusted to behave.
+Each quality goal has a mechanism that code enforces. No model is trusted to behave.
 
 | Goal | Strategy |
 |---|---|
-| Safety | No shell, a fail-closed guard on every tool call, a sandbox around every command, and no git write tool for any worker |
-| Durability | Events written before they apply, one pure decision function, and epochs that fence late events |
-| Determinism | Typed result schemas, Go templates that render codes and facts, and events emitted only by the engine |
-| Cost control | A fixed chain of links per agent, a mechanical billing check and a cached prompt prefix |
-| Portability | One binary cross-built at every gate, with one sandbox backend per operating system |
+| Safety | The Task Manager checks every agent action against its permissions, and the Tester validates inside a sandbox |
+| Simplicity | 19 subsystems with one job each, joined by one event bus instead of point-to-point messages |
+| Durability | Leases name exactly one owner per branch and worktree; whether finished tasks are saved before approval is [TODO: saving work and git writes ([G-220](lld.md#g-220))] |
+| Cost control | The Resource Manager watches plan windows and spending, and the Cache Manager reuses context instead of re-sending it |
+| Observability | The Metrics Service records a copy of every event on the bus |
 
-Design principles: **mostly mechanical** (code prevents what code can), **never pay by accident** and **fail closed**.
+Design principles: **one owner per data kind**, **announce on the bus, call for answers**, and **fail closed**.
 
 ## 5. Building Blocks
 
-The harness, the `komodo` binary, has 13 subsystems that each have one job. Subsection 5.1 shows the layering, and 5.2 to 5.14 describe one subsystem each. The [Low-Level Design](lld.md) holds one chapter per subsystem. "Engine" means the `internal/engine` package of 5.4 that runs groups through their stages; "harness" means the whole program ([Appendix A](#appendix-a-traceability)).
+The harness has 19 subsystems in 5 layers, plus two adapters that the Task Manager uses: the model client and the test sandbox. Subsection 5.1 shows the layers and their hand-offs; 5.2 to 5.20 describe one subsystem each, and the [Low-Level Design](lld.md) holds one chapter per subsystem in the same order.
 
-**📐 Where the 13 subsystems sit, by layer**
+#### 5.1 Layers
+
+The **Interface** layer is where commands enter and settings change; the **Watchers** span every layer.
+
+**📐 How the 5 layers hand work to each other**
 ```mermaid
-flowchart TB
-  subgraph IF["Interface"]
-    P2["5.2 Command line and Configuration"]
-    P13["5.13 Install, Lifecycle, Gate"]
-  end
-  subgraph DL["Delivery"]
-    P12["5.12 Backlog, Planning, Ship"]
-  end
-  subgraph OR["Orchestration"]
-    P3["5.3 Event Spine"]
-    P4["5.4 Engine Internals"]
-    P5["5.5 Workspace and Leases"]
-    P6["5.6 Sessions, Agents, Briefs"]
-  end
-  subgraph CX["Context"]
-    P9["5.9 Skills, Rules, Output"]
-  end
-  subgraph MI["Model input and output"]
-    P8["5.8 Providers and HTTP"]
-  end
-  subgraph SF["Safety"]
-    P7["5.7 Tools, Guard, Sandbox"]
-  end
-  subgraph QL["Quality"]
-    P10["5.10 Check, Review, Recovery"]
-  end
-  subgraph EO["Economy and operations"]
-    P11["5.11 Scheduler, Cache, Observability"]
-  end
-  subgraph ST["State pillar"]
-    P14["5.14 State Manager"]
-  end
-  IF -->|"1 plan"| DL
-  IF -->|"2 run"| OR
-  DL -->|"3 ready groups"| OR
-  OR -->|"4 brief request"| CX
-  CX -->|"5 brief"| MI
-  MI -->|"6 tool calls"| SF
-  OR -->|"7 finished work"| QL
-  OR -->|"8 events"| EO
-  OR -->|"9 state reads, writes"| ST
+flowchart LR
+  IF["Interface<br><small>CLI · Output Formatter · Configuration Manager</small>"]:::actor
+  SP["Spine<br><small>Event Bus</small>"]:::core
+  PL["Planning and context<br><small>Intake Handler · Context Manager</small>"]
+  RT["Runtime<br><small>Runtime Manager · Cache · Lease · State</small>"]:::core
+  WK["Work, one per group<br><small>Task Manager · Builder · Tester · Reviewer · Commit · Cleanup</small>"]
+  WA["Watchers<br><small>Error Handler · Metrics · Resource Manager</small>"]:::muted
+  IF -->|"1 command events"| SP
+  SP -->|"2 plan"| PL
+  PL -->|"3 next: task lists ready"| RT
+  RT -->|"4 start a Task Manager"| WK
+  WK -->|"5 run status"| SP
+  SP -->|"6 every event"| WA
+  WA -->|"7 errors to the caller"| IF
 ```
 
-#### 5.1 Layers and Import Order
+1. The CLI turns a command into an event on the Event Bus; which command publishes which type is [TODO: event wiring ([G-217](lld.md#g-217))].
+2. A plan command reaches the Intake Handler, which plans with context from the Context Manager.
+3. The Intake Handler publishes next when task lists are ready; which part consumes next is [TODO: event wiring ([G-217](lld.md#g-217))].
+4. The Runtime Manager starts one Task Manager per task group, with its lease, state and cache.
+5. Each group's progress goes back onto the bus as run-status events.
+6. The watchers receive every event: errors, metrics and resource use.
+7. The Error Handler prints errors to the caller through the CLI.
 
-The harness has nine groups: eight layers that each hold parts sharing one concern, and the state manager as a pillar under all of them. One import rule orders the source folders into layers, and a folder imports only folders below it ([Low-Level Design 0.4](lld.md#04-import-order)).
+Besides these hand-offs, a subsystem calls another directly when it needs an answer, such as asking the Configuration Manager for a setting. Every subsystem also publishes events to the Event Bus and listens for the types it needs; [5.5](#55-event-bus) lists them.
 
-#### 5.2 CLI and Configuration
+#### 5.2 CLI
 
-The command line is the only way to drive Komodo. Every verb parses, validates, resolves, dispatches and renders, then returns one structured reply and one of five exit codes. The subsystem owns the verb table and the settings (defaults, machine file, hard limits), and calls every other subsystem. Detail: [chapter 1](lld.md#1-cli-and-configuration).
+The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, starts the work through the Event Bus or a direct call, and returns one structured reply. It owns the command list: install, init, config get and set, plan, run, stop, replay, build, test, review, update and clean, with the flags help, list and all. Which earlier commands also survive, such as status, the `ui` dashboard and abandon, is [TODO: the final command list beside the diagram's 12 ([G-204](lld.md#g-204))]. What replay, build, test and review do is [TODO: their meaning and what their id names ([G-203](lld.md#g-203))]. A full-screen terminal mode is [TODO: whether the CLI gains one ([G-209](lld.md#g-209))]. Detail: [chapter 1](lld.md#1-cli).
 
-#### 5.3 Event Spine and State Machine
+#### 5.3 Output Formatter
 
-The event spine records every change to a task group as a typed event, and one pure decision function decides what each event means. Events reach disk before they apply, and epochs make late results harmless. The subsystem owns the event catalog and the five-stage rulebook; the state manager (5.14) stores the events. Detail: [chapter 2](lld.md#2-event-spine-and-state-machine).
+The Output Formatter turns the harness's structured messages into text a person reads, mechanically and with no model. The CLI hands it every reply and error. It owns the templates for each reply shape, so the same facts always print the same words. Detail: [chapter 2](lld.md#2-output-formatter).
 
-#### 5.4 Engine Internals
+#### 5.4 Configuration Manager
 
-The engine runs task groups: it starts sessions, moves each group through its stages and lands finished work, with one loop per group. The subsystem owns that loop, the only writer of the group's events, plus the work queue, landing order and crash containment. It calls the workspace, sessions, check and ship. Detail: [chapter 3](lld.md#3-engine-internals).
+The Configuration Manager guards the harness settings and the agent registry, the list of agent roles with their models and permissions. It is the only subsystem allowed to read or change them; the CLI and the Runtime Manager ask it for values. It validates every change before writing. Detail: [chapter 3](lld.md#3-configuration-manager).
 
-#### 5.5 Workspace and Leases
+#### 5.5 Event Bus
 
-A workspace is a private git checkout where one group is built, and a lease is the lock file naming the run that owns the group. The subsystem owns the worktree, the lease, the fence number that rises on every take or takeover, and the hidden reference that saves progress and is never pushed. It talks to git through Ship's git wrapper and to the state manager. Detail: [chapter 4](lld.md#4-workspace-and-leases).
+The Event Bus is the spine: every subsystem publishes facts to it, and every subsystem subscribes to the types it needs, so parts never need to know who listens. Every event has the same shape: a type, a subtype, the run and group it belongs to, a time and a small body. The main types are next and plan (intake), skill and mcp (context), run-start, run-stop and run-continue (commands), run-status, run-complete and run-failure (runtime), resource, and error. Where the bus lives is [TODO: how long the Runtime Manager runs and how a second command reaches it ([G-201](lld.md#g-201))], and whether events reach disk before broadcast is [TODO: which store recovery trusts ([G-202](lld.md#g-202))]. Detail: [chapter 4](lld.md#4-event-bus).
 
-#### 5.6 Sessions, Agents and Briefs
+#### 5.6 Intake Handler
 
-A session is one fresh model conversation for one agent's job, such as one builder building a whole task group; an agent is its role, and a brief is its prompt. The subsystem owns the supervisor (spawn, watch, nudge, stop, resume), the registry of seven agent roles and the brief builder. It talks to providers, tools, skills and the engine. Every size check before sending counts tokens with one tokenizer bundled in the binary; spending comes from the provider's reported usage. Detail: [chapter 5](lld.md#5-sessions-agents-and-briefs).
+The Intake Handler is the Intake stage. It starts the planner agent, gives it context from the Context Manager, and turns existing documents such as an HLD or a product requirements document into task lists of task groups and tasks. When a plan passes its checks, the handler publishes the first next event, which moves the internal pointer to the next stage. Detail: [chapter 5](lld.md#5-intake-handler).
 
-#### 5.7 Tools, Guard and Sandbox
+#### 5.7 Context Manager
 
-A tool is a named action that a model may request. The subsystem owns a few typed tools with no shell and no git write tool, the in-process guard that checks every call and fails closed, and the sandbox that bounds the processes, memory, time and output of every command. It serves sessions and providers. Detail: [chapter 6](lld.md#6-tools-guard-and-sandbox).
+The Context Manager guards everything an agent may see beyond the code: skills (documents of standards), agent prompt templates, and connections to Model Context Protocol servers, the tool servers some agents may use. It switches each item on or off, decides which agents may use it, and assembles an agent's prompt from them. The Intake Handler and Runtime Manager ask it for context, and it reads its skill, template and connection files. Detail: [chapter 6](lld.md#6-context-manager).
 
-#### 5.8 Providers and HTTP
+#### 5.8 Runtime Manager
 
-A link is one way to reach a model provider, and an adapter starts, streams and resumes a session over it. The subsystem owns one adapter interface, each agent's chain of links with failover only when a provider is unavailable, unauthorized or over a limit (an endpoint below the context floor is skipped), the billing check, and the network client. The provider router walks the chain: the subscription link, then the paid programming interface when allowed, then the free backstop last. Detail: [chapter 7](lld.md#7-providers-and-http).
+The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, retries, timeouts and blocks. Task Managers bring every need to it, and it produces most of the events on the bus. It reads settings directly from the Configuration Manager. Detail: [chapter 7](lld.md#7-runtime-manager).
 
-#### 5.9 Skills, Rules and Output
+#### 5.9 Cache Manager
 
-A skill is a document of standards placed before a session, and rules instruct the orchestrator. The subsystem owns the skill index, the rules built into the binary, and the output contract: models return codes and facts, and templates write every word a person reads. It feeds the brief builder and install. Detail: [chapter 8](lld.md#8-skills-rules-and-output).
+The Cache Manager keeps a local cache of things like frequent prompt responses, context and other information needed to improve performance and token efficiency. The Runtime Manager uses it for each task group. The rules for reusing a stored prompt response are [TODO: reuse rules ([G-208](lld.md#g-208))], and whether other parts call it directly is [TODO: cache callers ([G-221](lld.md#g-221))]. Detail: [chapter 8](lld.md#8-cache-manager).
 
-#### 5.10 Check, Review, Tester and Recovery
+#### 5.10 Lease Manager
 
-After a builder finishes, Check proves the work with ordinary tools at zero model cost, then Verify runs a reviewer and a blind tester side by side. The subsystem owns the proofs, scope requests, budgets and the failure table, which gives every failure a detector, action, bound and final state. A group's time fits one builder's limits, and the engine grants one extension itself the first time it runs out. Detail: [chapter 9](lld.md#9-check-review-tester-and-recovery).
+The Lease Manager manages the local lease registry, the single source of truth for which task group and agent owns which branch and worktree, the private checkout where a group works. It controls access to them and manages lease revocation and timeouts. Who creates a group's branch and worktree is [TODO: saving work and git writes ([G-220](lld.md#g-220))]. Detail: [chapter 9](lld.md#9-lease-manager).
 
-#### 5.11 Scheduler, Cache and Observability
+#### 5.11 State Manager
 
-The scheduler runs agents on a timer from job templates, one file per recurring job; each tick queues due jobs, fires expired timers and advances the session pool once. The subsystem owns the cache outside every worktree, the ledger built from events, and the status views. It talks to the operating-system scheduler and the event spine. Detail: [chapter 10](lld.md#10-scheduler-cache-and-observability).
+The State Manager is the one place a task group's runtime state is read and written: its stage, counters, blocks and progress. Task Managers update it often through the Runtime Manager, and it checks every record against one schema before saving. Detail: [chapter 10](lld.md#10-state-manager).
 
-#### 5.12 Backlog, Planning, Ship and Release
+#### 5.12 Task Manager
 
-The backlog is the epics, task groups and tasks that a repository holds. The subsystem owns the backlog grammar and lint, the planner flow, the dependency graph, ship (lands finished groups and opens pull requests at zero model cost) and release, which a person cuts. Agents never change a task list or a backlog file; a blocker against the task list goes to the orchestrator or a person. It owns every git write: one git wrapper holds the no-force and never-main rules, and the workspace, Build, the parent guard and the engine call it to write; read-only git commands stay outside it. It talks to the engine and GitHub. Detail: [chapter 11](lld.md#11-backlog-planning-ship-and-release).
+The Task Manager is the controller for one task group; the Runtime Manager starts one per group. It runs the pipeline from build to cleanup, talks to the Runtime Manager in both directions, and acts as the guard for its agents: every action an agent requests is checked against that agent's permissions before it runs. It owns the group's outbound model connections through the model client, which reaches subscription and paid links, and creates and destroys the group's test sandbox. Where builder and tester commands run is [TODO: the sandbox split and whether Docker is required ([G-205](lld.md#g-205))]. Detail: [chapter 11](lld.md#11-task-manager).
 
-#### 5.13 Install, Binary Lifecycle and Gate
+#### 5.13 Builder
 
-Install puts the binary on a machine, probes the providers and writes the orchestrator block into the repository. The subsystem owns the installer, the doctor health check, the update lifecycle (check, download, signature check, atomic swap), the signing-key policy, and the gate, a self-check for the Komodo repository only. Detail: [chapter 12](lld.md#12-install-binary-lifecycle-and-gate).
+The Builder is the engineering agent that writes the code for one task group, task by task, inside the group's worktree. It works only through the actions its Task Manager allows; whether each finished task is saved before approval, and by whom, is [TODO: saving work and git writes ([G-220](lld.md#g-220))]. It hands finished work to the Tester and Reviewer together and fixes what they return. Detail: [chapter 12](lld.md#12-builder).
 
-#### 5.14 State Manager
+#### 5.14 Tester
 
-The state manager is the one piece of code that reads and writes runtime state: events, snapshots, session files, leases, queue items, timers and ledgers. The subsystem owns one schema, a small set of atomic write primitives and group state, and it quarantines bad records. Settings, cache, git references and binaries stay with their owners. Detail: [chapter 13](lld.md#13-state-manager).
+The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox, which its Task Manager creates. Whether free mechanical checks run first is [TODO: where the zero-cost checks run ([G-206](lld.md#g-206))]. Detail: [chapter 13](lld.md#13-tester).
+
+#### 5.15 Reviewer
+
+The Reviewer is the final code check. It reads the builder's change while the Tester runs, and the group moves to publishing only when both approve; otherwise the work returns to the Builder with their findings. Detail: [chapter 14](lld.md#14-reviewer).
+
+#### 5.16 Commit Handler
+
+The Commit Handler publishes approved work: it commits, pushes the group's branch and opens or updates its pull request. It is the only part that pushes. Whether each group gets its own pull request or lands on a shared epic branch is [TODO: where groups land ([G-210](lld.md#g-210))]. Detail: [chapter 15](lld.md#15-commit-handler).
+
+#### 5.17 Cleanup Handler
+
+The Cleanup Handler runs after work is pushed. It removes the group's redundant branches and worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. Detail: [chapter 16](lld.md#16-cleanup-handler).
+
+#### 5.18 Error Handler
+
+The Error Handler is the global safety net: it catches every error and panic before it can crash the harness, records it, and sends it back to the original caller through the CLI. It listens for error events and receives resource errors from the Resource Manager. Detail: [chapter 17](lld.md#17-error-handler).
+
+#### 5.19 Metrics Service
+
+The Metrics Service records a copy of every event on the bus and turns them into run metrics: time per stage, per group and per run, tokens and cost, and general performance. Its records also help explain failures. Detail: [chapter 18](lld.md#18-metrics-service).
+
+#### 5.20 Resource Manager
+
+The Resource Manager watches agent resources for overages, such as a subscription plan's usage window or paid token costs, so work is not lost to a limit. It raises warnings and errors through the Error Handler. Whether it may also pause work is [TODO: what happens at a plan or cost limit ([G-211](lld.md#g-211))]. Detail: [chapter 19](lld.md#19-resource-manager).
 
 ## 6. Runtime
 
-Five flows show the parts at work.
+Four flows show the parts at work.
 
-#### 6.1 Event Spine and Group State
+#### 6.1 One Event, Many Listeners
 
-An event, a typed fact such as "a task finished", changes a group's state only through one pure decision function.
+A fact is announced once and reaches every subscriber, so adding a listener changes no producer.
 
-**📐 How one event changes a group's state**
+**📐 How one event travels**
 ```mermaid
 sequenceDiagram
   autonumber
   participant P as Producer
-  participant D as Group loop
-  participant G as Group state
-  participant N as Decision function
+  participant B as Event Bus
   participant S as Subscribers
-  P->>D: fact, stamped with stage epoch
-  D->>N: state and event
-  N-->>D: new state, actions, follow-ons
-  D->>G: event and follow-ons, one write
-  G-->>D: checked and on disk
-  D->>D: run each action
-  D->>G: snapshot on an interval
-  D->>S: event, in order
+  participant M as Metrics Service
+  P->>B: event with type, subtype, run, group
+  B->>S: deliver to each subscriber of that type
+  B->>M: deliver a copy of every event
+  S-->>P: reply only through a direct call, never through the bus
 ```
 
-1. A producer reports a fact stamped with its stage epoch; the group loop marks the event stale when the epoch is older than the group's current stage.
-2. The pure decision function returns a new state, actions and follow-on events in memory, and ignores stale events.
-3. The loop saves the event and its follow-ons as one write, which group state checks and forces to disk, so a fact never reaches disk without its decision.
-4. The loop then runs each action, recorded as started and then done under a key that makes a repeat harmless.
-5. The loop snapshots on an interval, and subscribers such as the ledger and live status read each event in order.
+1. A producer, such as the Runtime Manager, publishes an event with its type and subtype.
+2. The bus delivers it to every subscriber of that type, in the order it was published.
+3. The Metrics Service receives a copy of every event.
+4. A part that needs an answer calls the owner directly instead of waiting for an event.
 
-#### 6.2 Group Lifecycle
+#### 6.2 Task Group Lifecycle
 
-A group holds a small bounded set of tasks that ship together, and passes five stages that each end only on evidence the engine produced.
-
-**📐 How one group passes through the five stages**
+**📐 How one task group passes through the pipeline**
 ```mermaid
 sequenceDiagram
   autonumber
-  participant E as Engine
-  participant W as Workspace
+  participant R as Runtime Manager
+  participant T as Task Manager
   participant B as Builder
-  participant C as Check
-  participant V as Reviewer and tester
-  participant S as Ship
-  E->>W: lint, lease, worktree
-  W-->>E: ready
-  E->>B: one fresh session for the group
-  loop each task
-    B-->>E: result, commit
-  end
-  E->>C: rerun all proofs
-  alt Check fails
-    C-->>E: fail, back to Build
-  else Check passes
-    E->>V: same commit, both at once
-    alt blocking finding
-      V-->>E: findings, back to Build
-    else both pass
-      V-->>E: approved
-      E->>S: land
-      S-->>E: shipped
-    end
+  participant Q as Tester and Reviewer
+  participant C as Commit Handler
+  participant U as Cleanup Handler
+  R->>T: start group, lease granted
+  T->>B: build each task
+  B-->>T: tasks done, committed
+  T->>Q: same commit to both at once
+  alt tester fails or reviewer asks for changes
+    Q-->>B: findings, back to build
+  else both approve
+    Q->>C: approved
+    C->>C: commit, push, pull request
+    C->>U: published
+    U->>T: close group
+    T-->>R: group complete
   end
 ```
 
-1. The engine takes the group's lease as it picks the group from the queue; Intake then lints the group, cuts a worktree from the epic branch tip and runs the setup command.
-2. Build starts one fresh builder session for the whole group; it works through the tasks in order, and after each task Go code reruns its completion command and commits to the hidden reference.
-3. Check reruns every proof, such as completion commands, scope, secrets scan, affected tests and whole-repository coverage, at zero model cost.
-4. Verify runs the reviewer and the tester on the same commit; a failed Check or a verified blocking finding returns the group to Build, where its builder resumes at the reopened task.
-5. Ship lands the group on the epic branch and checks the epic tip; a failed tip check returns the group to Build.
+1. The Runtime Manager starts a Task Manager once the group's dependencies are met and its lease is granted.
+2. The Builder works through the tasks in the group's worktree.
+3. The Tester and Reviewer judge the same commit at the same time; any failure returns the group to the Builder, a bounded number of times.
+4. With both approvals, the Commit Handler commits and pushes, then hands over to the Cleanup Handler. It removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
 
-#### 6.3 Pause, Block and Resume
+#### 6.3 Planning
 
-Paused and Blocked are holding states, not stages. Paused waits for a provider limit to reset: the group frees its pool slot, keeps its lease and worktree, and a timer record fires at the reset time; past the pause cap it becomes Blocked. Blocked waits for a person or the orchestrator, never retries by itself, and wakes the orchestrator through the status-wait verb.
+1. `komodo plan` starts the Intake Handler with goal text or documents.
+2. The Intake Handler gets context from the Context Manager and starts the planner agent.
+3. The planner drafts task groups, tasks, file patterns, dependencies and acceptance items.
+4. Go code checks the draft; a failure goes back to the same planner session a bounded number of times.
+5. A passing plan is written as task lists, and the next event moves the internal pointer to the next stage.
 
-#### 6.4 Planning
+#### 6.4 Errors, Limits and Blocks
 
-Planning turns a goal into a linted backlog.
-
-1. The plan verb takes goal text or specification documents, and the backlog subsystem gives the planner a repository map, a ranked list of the code's functions and types.
-2. The planner drafts groups, file patterns, dependencies, tasks and acceptance items.
-3. Go code lints the draft; failures return to the same planner session a bounded number of times, then the plan blocks.
-4. A passing draft is written, one folder per group, and groups with overlapping patterns must be ordered.
-
-#### 6.5 Crash Recovery
-
-A crash loses at most one model turn and no committed edit, and stays inside the crashed group.
-
-1. If the `komodo run` process dies or stops its heartbeat, the parent guard kills the sessions, commits unsaved files as work in progress and frees the leases.
-2. If the parent guard also died, the startup sweep at the next `komodo run` start kills orphans, frees dead leases and requeues unleased items.
-3. The next run rebuilds each group from its saved state, so no recorded action happens twice.
+1. Any part that fails publishes an error event; the Error Handler records it and prints it to the caller through the CLI.
+2. The Resource Manager raises a resource event before a plan window or spending limit is reached.
+3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`.
+4. How a crash of the runtime itself is recovered is [TODO: what survives a crash ([G-202](lld.md#g-202))].
 
 ## 7. Deployment
 
 Komodo is one dependency-free file shared by every repository on a machine.
 
-#### 7.1 Platforms and Sandboxes
+#### 7.1 Processes
 
-The sandbox is Seatbelt on macOS, Bubblewrap on Linux and Windows Subsystem for Linux 2 (preferred on Windows), and Docker on native Windows.
+How long the runtime lives and how commands reach a live run is [TODO: one runtime per run, one per machine, or none ([G-201](lld.md#g-201))]. Every other command is a short process.
 
-#### 7.2 One Machine, Many Repositories
+#### 7.2 Platforms and Sandboxes
 
-One `komodo run` process runs per active run. Runs of different repositories meet only through files in the Komodo home folder; each repository keeps group state and cache in its git common directory.
+Komodo runs on macOS, Linux and Windows Subsystem for Linux 2. Test sandboxes use a container runtime such as Docker; the fallback on a machine without one is [TODO: the sandbox split ([G-205](lld.md#g-205))].
 
 #### 7.3 Install and Update
 
-Install puts the binary on the machine and the Komodo block into a repository by following a manifest, so a rerun changes nothing and hand edits survive. Updates download in the background into versioned binary folders, so a running process keeps the binary version it started with.
-
-#### 7.4 Release
-
-Only a person releases, on the owner's machine: the release verb tags the commit, cross-builds for Windows, Linux and macOS, signs the manifest with a local key (one backup copy, plus a second public key for rotation) and renders the changelog.
+`komodo install` puts the binary on the machine and the Komodo block into a repository; `komodo init` sets up the orchestrator's skills in Claude Code. `komodo update` downloads, verifies and swaps in a new signed binary, and a running process keeps the version it started with.
 
 ## 8. Crosscutting Concepts
 
-A crosscutting concept is a rule that spans many components.
+#### 8.1 Data Ownership
 
-#### 8.1 Data and Configuration
+Each kind of data has one owner, and every other part asks that owner.
 
-Committed files live in the repository: the rules file with the Komodo block and the backlog folder. Machine files never ship: configuration, leases, worktrees and language caches under the Komodo home folder, and each repository's group state, ledgers and cache in its git common directory. Only the config verb writes the configuration file, and a hand edit makes every verb refuse until the owner accepts it.
+| Data | Owner |
+|---|---|
+| Harness settings and agent registry | Configuration Manager |
+| Skills, prompt templates, tool-server connections | Context Manager |
+| Runtime cache | Cache Manager |
+| Lease registry: who owns each branch and worktree | Lease Manager |
+| Removing redundant branches and worktrees | Cleanup Handler |
+| Task group runtime state | State Manager |
+| Events | Event Bus in flight; Metrics Service for the record |
 
 #### 8.2 Models and Cost
 
-Each agent has a model weight ([Low-Level Design chapter 7](lld.md#7-providers-and-http)) and a fixed chain of links, with the subscription link first. A mechanical billing check that fails closed sets the cost class (subscription, free or paid) before every session. Komodo adds no cost cap; dollars are a warning-only metric.
+Each agent role in the registry names its model and its chain of links, subscription first. The Task Manager opens every model connection through the model client, and the Resource Manager watches each link's usage. Dollars are measured by the Metrics Service.
 
 #### 8.3 Security
 
-Three fences hold every worker. The guard checks every tool call before it runs, names the allowed alternative in a refusal, and ends a session after repeated refusals. The sandbox confines every command, with the network off except loopback. The worktree and lease keep a session inside its own group. No agent holds forge credentials, a git write tool or a shell. On Claude Code, install also writes a hook that refuses the orchestrator's protected-branch and force-push commands, and deny rules for the human-only verbs.
+Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default. Commands run in a sandbox with no network except what the task needs. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
 
 #### 8.4 Quality Gates
 
-Four gates stand between build and landing: an 80% coverage floor over the whole repository in every language, a rerun of every completion command, tests of every affected package against a baseline, and judgement by the blind tester. The first three spend no model tokens. Separately, a reviewer finding blocks only when Go code finds its quoted line.
-
-#### 8.5 Operations
-
-The tick is one repeatable `komodo jobs tick` run, so no daemon runs. Every failure has a detector, an action, a bound and a final state. Status shows the pool, stages, budgets and blocks.
+Work reaches publishing only when the Tester passes it and the Reviewer approves it. The free mechanical checks of the earlier design are [TODO: kept, and where ([G-206](lld.md#g-206))].
 
 ## 9. Architecture Decisions
 
-Each row names a decision, the alternative rejected, and the reason. The first three rows are owner decisions of 2026-10-09.
+Each row names a decision, the alternative rejected and the reason. The first group is the owner's redesign of 2026-10-14.
 
 | Decision | Chosen over | Because |
 |---|---|---|
-| Local signing key, one backup, a second public key | A cloud key service | One machine needs nothing bigger; a machine the owner does not own triggers it (G-21) |
-| The install probe's model registry | A central model gateway | Needed at 3 or more machines, or 2 people sharing one cap (G-22) |
-| The orchestrator answers scope requests | A named human per path | Needed at the first repository with 2 teams or customer data (G-23) |
-| Events reach disk before they apply | Applying first | A group's place survives any crash |
-| Only the engine emits events | Sessions reporting progress | A stage moves only on evidence the engine produced |
-| Epochs stamped on events | Applying every event | A cancelled session's late result could move a stage twice |
-| One loop per group owns its state | Shared state with locks | No locks to get wrong, and a crash stays in one group |
-| A lease together with a fence number | A lease alone | A stalled holder could overwrite its successor; the fence refuses its writes |
-| One machine-wide session pool | Per-repository lanes | Provider quotas and link limits are machine-wide |
-| The state manager runs inside each process | A separate server | The harness runs no server; atomic file writes keep processes consistent |
-| A counter and an end state on every loop | Unlimited retry with growing backoff | Unbounded retries burn tokens until someone notices |
-| Claude launched in print mode, its non-interactive run, with pinned flags | Bare mode | Bare mode never reads the subscription login |
-| Groups land on an epic one at a time | Parallel landings | A check on the epic tip after each landing names the one group that broke it |
-| An oversized brief moves to the next link | Trimming the brief | A trimmed brief drops facts the worker needs without saying so |
-| Job overlap is prevented by the job's lease | A scheduler that tracks running jobs | The lease already allows one holder per machine and survives a crash |
+| 19 subsystems with one job each | 13 subsystems that each held several jobs | Each part can be read, built and tested alone; the review found the old parts too heavy |
+| One event bus with a type and subtype per event | Point-to-point messages and per-group event files | Any part can listen without the producer knowing, and one schema serves every listener |
+| One Task Manager per task group | One engine loop owning every group's details | A group's guard, agents and sandbox live in one place, and a failure stays in its group |
+| Tester and Reviewer side by side | Mechanical check, then reviewer and tester | One step judges the work twice at once, which shortens each group |
+| A separate Commit Handler and Cleanup Handler | Ship doing landing and cleanup together | Publishing and freeing resources fail and retry independently |
+| Error Handler, Metrics Service and Resource Manager as watchers | Error handling and metrics spread through every part | One place catches errors, one records, one watches limits |
+| Only the Configuration Manager touches settings | Each part reading settings files | Settings stay consistent and out of agent reach |
+| A lease registry as the single source of truth for branch and worktree ownership | Locks spread across files | One answer to "who owns this branch" |
+| The earlier design's open questions | Defaults chosen without the owner | 18 owner decisions are pending: G-201 to G-214, G-216, G-217, G-220 and G-221 |
 
 ## 10. Quality Requirements
 
-A quality requirement is a scenario with a number that a test can pass or fail.
-
 | Attribute | Scenario | Measure |
 |---|---|---|
-| Performance | Help, version or a configuration read | Target under 50 milliseconds |
-| Durability | The `komodo run` process is killed mid-run, then resumed | No paid session repeats; at most one model turn is lost |
-| Safety | A command writes outside the worktree or reaches a public address | The sandbox refuses it on every platform |
-| Cost | 20 sessions on the Anthropic programming interface | At least 50% of prompt tokens come from the provider cache; verified by [G-17](lld.md#g-17) in phase 7 |
+| Performance | Help or a configuration read | Target under 50 milliseconds |
+| Safety | An agent command writes outside its worktree or reaches a public address | The sandbox refuses it |
+| Safety | An agent asks for an action outside its permissions | The Task Manager refuses it and records an error event |
+| Observability | Any finished run | Its time per stage, tokens and cost are reported from recorded events |
+| Durability | The runtime is killed mid-run | No committed work is lost; the rest is [TODO: ([G-202](lld.md#g-202))] |
 
 ## 11. Risks, Debt and Roadmap
 
-A risk is an assumption the design has not proved; a builder closes each risk with a spike, a small experiment that answers one question.
-
 #### 11.1 Risks
 
-- The probe may not read a Claude session's first stream line without a model turn; a tool version lacking the field fails the link (G-02). Owner: the technical lead.
-- The subscription window may drain faster than the per-link session limit assumes; the pool shrinks on a rate-limit error (G-07). Owner: the owner, who decides spend.
+- About 3,900 lines of Go exist today: the network client, cache store, file helpers and the dashboard proof of concept.
+- A pub/sub bus inside one process is simple only while one process hosts the run; [G-201](lld.md#g-201) decides that.
 
 #### 11.2 Technical Debt
 
-The OpenAI path is scoped but not built (G-20), and enterprise custody, registry and scope ownership are single-machine designs (G-21, G-22, G-23).
+The OpenAI path is scoped but not built (G-20).
 
 #### 11.3 Delivery Roadmap
 
-The owner builds phases 2 to 6 by hand in plain Claude Code sessions; from phase 7 the harness builds its own groups.
-
 | Phase | Scope | Exit proof |
 |---|---|---|
-| 1 | Design documents and the first epic | The owner approves the design |
-| 2 | Foundations: command line, state manager, configuration, sandbox, cache, backlog lint, gate core | `doctor backlog` passes on epic-1 |
-| 3 | Model surface: agents, skills, rules, guardrails | The gate decodes every agent and skill |
-| 4 | Model input and output: providers, tools, briefs | One session runs end to end |
-| 5 | Runtime: workspace, supervisor, observability, events | A session's events reach `status` |
-| 6 | Engine: engine, recovery, Check, ship | A group lands with `--stage`, Verify stubbed |
-| 7 | Quality and scale: review, tester, scheduler, planner | The harness builds its own group after `gate --install` |
-| 8 | Edges: installer, updates, release, the docs-drift check | A clean machine installs from a draft read-me file |
-| 9 | User documents and cutover | `doctor install` finds 0 stale references |
+| 1 | Design: this document and the low-level design, with every open decision answered | The owner approves the design |
+| 2 | Spine and interface: Event Bus, CLI, Output Formatter, Configuration Manager, Error Handler, Metrics Service | `komodo config get` and an event round trip pass their tests |
+| 3 | Runtime stores: State Manager, Lease Manager, Cache Manager | A lease, a state record and a cache entry survive a restart |
+| 4 | Context and models: Context Manager, model client, agent registry | One agent session runs end to end |
+| 5 | Pipeline: Runtime Manager, Task Manager, Builder, Tester, Reviewer, sandbox | One task group passes build, test and review |
+| 6 | Publishing: Commit Handler, Cleanup Handler, Resource Manager, Intake Handler | A planned group is published and cleaned up |
+| 7 | Install, update, dashboard and cutover | A clean machine installs and runs one plan |
 
-#### Open decisions
+#### 11.4 Open Decisions
 
-None: the design is complete for beta 6. These spikes confirm defaults the design already states; each is a [gap register](lld.md#appendix-b-gap-register) row:
+Each is a [gap register](lld.md#appendix-b-gap-register) row and a tab on the owner's decision page:
 
-- Claude wire details and probe capture: [G-02](lld.md#g-02), [G-71](lld.md#g-71), [G-72](lld.md#g-72), phase 4.
-- Local model size and parallel sessions: [G-03](lld.md#g-03), [G-04](lld.md#g-04), phase 4.
-- Sandbox copies and loopback: [G-08](lld.md#g-08) to [G-12](lld.md#g-12), [G-25](lld.md#g-25), phase 2.
-- Steering phrases: [G-13](lld.md#g-13), phase 3.
-- Timing and coverage: [G-19](lld.md#g-19), [G-169](lld.md#g-169), phase 6.
-- Cache hits, subscription window, lens rules, repo map: [G-17](lld.md#g-17), [G-07](lld.md#g-07), [G-16](lld.md#g-16), [G-18](lld.md#g-18), phase 7.
-- Host cleanup: [G-187](lld.md#g-187), phase 1; Windows console: [G-121](lld.md#g-121).
-
+- Runtime lifetime and how commands reach it: [G-201](lld.md#g-201).
+- What survives a crash, and who keeps the event record: [G-202](lld.md#g-202).
+- Meaning of replay, build, test and review: [G-203](lld.md#g-203).
+- Commands kept beside the diagram's 12: [G-204](lld.md#g-204).
+- Where builder and tester commands run: [G-205](lld.md#g-205).
+- Free mechanical checks: [G-206](lld.md#g-206).
+- Scheduled jobs and the 3 extra agent roles: [G-207](lld.md#g-207).
+- What the cache may reuse: [G-208](lld.md#g-208).
+- A full-screen terminal mode: [G-209](lld.md#g-209).
+- Where groups land: [G-210](lld.md#g-210).
+- What happens at a plan or cost limit: [G-211](lld.md#g-211).
+- Files or an embedded database for the cache and lease registry: [G-212](lld.md#g-212).
+- Model links in beta 6: [G-213](lld.md#g-213).
+- Outside tool servers for agents: [G-214](lld.md#g-214).
+- Owner of machine-wide records such as provider reset times: [G-216](lld.md#g-216).
+- Event wiring the diagram leaves unlabelled: [G-217](lld.md#g-217).
+- Saving work and git writes before publishing: [G-220](lld.md#g-220).
+- Which parts call the Cache Manager: [G-221](lld.md#g-221).
 
 ## 12. Glossary
 
 | Term | Meaning |
 |---|---|
 | Harness | The whole Komodo program: the `komodo` binary and everything it runs |
-| Verb | One `komodo` command, such as plan, run or status |
-| Orchestrator | A model chat session that drives the harness by verbs and never edits code |
-| Engine | The package that runs groups through their stages (`internal/engine`); never the whole program |
-| Agent | A model role with private tools |
-| Session | One fresh model conversation for one agent's job; a builder session builds a whole task group |
-| Brief | The prompt that a worker receives |
-| Epic, group, task | An epic holds task groups; a group holds a bounded set of tasks |
-| Stage | One of Intake, Build, Check, Verify and Ship |
-| Paused, Blocked | Holding states: waiting for a provider reset, or for a person |
-| Check, Verify | Check reruns proofs at zero model cost; Verify has the reviewer and tester judge one commit |
-| Finding | A reviewer claim with a quoted evidence line that Go code verifies |
-| Tick | One repeatable `komodo jobs tick` run fired by the operating-system scheduler |
-| Parent guard | The parent process that cleans up if the `komodo run` process dies |
-| Event | A typed fact that the engine records before applying it |
-| Group loop | The engine's goroutine, a lightweight Go thread, for one group |
-| Decision function | The pure function from a state and an event to a new state and actions |
-| State manager | The only code that reads or writes runtime state |
-| Group state | A group's events, snapshots and replay as one unit |
-| Epoch | An integer that rises on each stage entry; older events are stale |
-| Lease | A per-group lock file held until the epic branch check passes after landing, or abandon |
-| Fence | A rising integer beside the lease that refuses a stalled holder's git writes |
-| Gap | A fact not yet verified or a decision not yet made, tracked as G-NN |
+| Command | One `komodo` entry point, such as plan, run or stop |
+| Orchestrator | A model chat session in Claude Code that drives Komodo by commands and never edits code |
+| Agent | A model role with its own permissions: planner, builder, tester or reviewer |
+| Agent registry | The list of agent roles with their models, links and permissions |
+| Session | One model conversation for one agent's job |
+| Epic, task group, task | An epic holds task groups; a group holds a bounded set of tasks that ship together |
+| Run | One execution of a plan's task groups, started by `komodo run` |
+| Event | A fact with a type and a subtype, published on the Event Bus |
+| Subscriber | A part that listens for one or more event types |
+| Lease | The registry entry that names the one group owning a branch and worktree |
+| Worktree | A private git checkout where one group works |
+| Sandbox | A sealed environment where agent commands run |
+| Skill | A document of standards placed in an agent's context |
+| Gap | A decision not yet made or a fact not yet verified, tracked as G-NN |
 
 ---
 
@@ -468,37 +442,35 @@ None: the design is complete for beta 6. These spikes confirm defaults the desig
 
 ## Appendix A. Traceability
 
-| Package | Components (build phase) |
-|---|---|
-| `cli` | Command-line processor (2); Scheduler and job templates, in part (7); Runtime observability, in part (5) |
-| `host` | Installer (8); Binary lifecycle, in part (2, 8) |
-| `core` | Configuration (2); Network client (2); Cache store (2); Binary lifecycle, in part (2, 8) |
-| `provider` | Provider adapters (4); Tool runtime, in part (4) |
-| `tools` | Tool runtime, in part (4) |
-| `agent` | Agent registry (3); Skill loader (3); Rules and output contract (3); Brief builder (4); Scheduler and job templates, in part (7); Token and resource management, in part (6) |
-| `safety` | Guardrails (3); Sandbox and process control (2); Gate and self-checks, in part (2, 8) |
-| `engine` | Orchestration engine (6); Workspace and leases (5); Session supervisor (5); Scheduler and job templates, in part (7); Error recovery (6) |
-| `quality` | Check (6); Review and evidence (7) |
-| `ops` | Token and resource management, in part (6); Runtime observability, in part (5); Event bus (5) |
-| `repo` | Backlog and planning (2, 7); Ship (6, 8); Gate and self-checks, in part (2, 8) |
-| `state` | State manager (2) |
+| Subsystem | Go package | Build phase |
+|---|---|---|
+| CLI | `internal/cli` | 2 |
+| Output Formatter | `internal/format` | 2 |
+| Configuration Manager | `internal/config` | 2 |
+| Event Bus | `internal/bus` | 2 |
+| Intake Handler | `internal/intake` | 6 |
+| Context Manager | `internal/contextmgr` | 4 |
+| Runtime Manager | `internal/engine` | 5 |
+| Cache Manager | `internal/cache` | 3 |
+| Lease Manager | `internal/lease` | 3 |
+| State Manager | `internal/state` | 3 |
+| Task Manager, model client, sandbox | `internal/task`, `internal/llm`, `internal/sandbox` | 4, 5 |
+| Builder, Tester, Reviewer, Planner | `internal/agent` | 4, 5 |
+| Commit Handler | `internal/commit` | 6 |
+| Cleanup Handler | `internal/cleanup` | 6 |
+| Error Handler | `internal/fault` | 2 |
+| Metrics Service | `internal/metrics` | 2 |
+| Resource Manager | `internal/resource` | 6 |
 
 ## Appendix B. References
 
 | Reference | Use in this document |
 |---|---|
-| arc42 template, https://arc42.org/overview | Section structure: introduction and goals, constraints, context, solution strategy, building blocks, runtime, deployment, crosscutting concepts, decisions, quality requirements, risks |
-| ISO/IEC/IEEE 42010:2022 | Stakeholders, concerns and views framing ([Introduction and Goals](#1-introduction-and-goals)) |
+| arc42 template, https://arc42.org/overview | Section structure |
 | Design Docs at Google, https://www.industrialempathy.com/posts/design-docs-at-google/ | Goals and non-goals, decisions with rejected alternatives |
-| Temporal workflows, https://docs.temporal.io/workflows | Pure decider and recorded activities |
+| Enterprise Integration Patterns, publish-subscribe channel, https://www.enterpriseintegrationpatterns.com/patterns/messaging/PublishSubscribeChannel.html | The Event Bus |
 | Distributed leases with fencing tokens, https://hackernoon.com/building-distributed-leases-with-consensus-heartbeats-and-fencing-tokens | Lease with a rising fence number |
 | OpenHands, https://arxiv.org/pdf/2407.16741 | Event stream as the agent's spine |
-| Codex CLI security, https://developers.openai.com/codex/security | Sandbox shape per operating system, network off by default |
-| AWS exponential backoff and jitter, https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter | Full-jitter retries |
-| Aider repo map, https://github.com/pdavis68/RepoMapper | Ranked repository map |
-| Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | Structured acceptance items |
-| Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | Coverage bands |
-| Claude Code headless docs, https://code.claude.com/docs/en/headless | Session launch, resume, structured output, signals |
 | Anthropic prompt caching, https://platform.claude.com/docs/en/build-with-claude/prompt-caching | Cache breakpoints and pricing |
-| Anthropic rate limits, https://platform.claude.com/docs/en/api/rate-limits | Pool and link defaults, limit classes |
-| Ollama FAQ, https://docs.ollama.com/faq | Context length and parallelism defaults |
+| Anthropic rate limits, https://platform.claude.com/docs/en/api/rate-limits | Plan windows and limit classes |
+| Docker Engine security, https://docs.docker.com/engine/security/ | Test sandbox isolation |
