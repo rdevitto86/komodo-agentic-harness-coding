@@ -2,13 +2,9 @@ package cli
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
@@ -99,7 +95,11 @@ func handleConfigSet(c *Call) Result {
 	cfg := c.cli.deps.Config
 	switch {
 	case flagBool(c, "accept") && c.Global.DryRun:
-		return setResult(config.Batch{Changes: acceptPreview(c.cli.deps.Home)})
+		changes, err := acceptPreview(cfg)
+		if err != nil {
+			return configErr(err)
+		}
+		return setResult(config.Batch{Changes: changes})
 	case flagBool(c, "accept"):
 		b, err := cfg.Accept()
 		if err != nil {
@@ -177,27 +177,17 @@ func (c *CLI) resetTarget(p config.Change) string {
 	return ""
 }
 
-// acceptPreview lists the checksums config set --accept would record, reading the files and writing none.
-func acceptPreview(home string) []config.Change {
-	var rec struct {
-		Settings string `json:"settings"`
-		Agents   string `json:"agents"`
+// acceptPreview lists the files config set --accept would record, reading them and writing none.
+func acceptPreview(cfg *config.Manager) ([]config.Change, error) {
+	names, err := cfg.AcceptPlan()
+	if err != nil {
+		return nil, err
 	}
-	if b, err := os.ReadFile(filepath.Join(home, "state", "config.sha")); err == nil {
-		_ = json.Unmarshal(b, &rec)
+	out := make([]config.Change, 0, len(names))
+	for _, n := range names {
+		out = append(out, config.Change{Key: n})
 	}
-	var out []config.Change
-	for _, f := range []struct{ name, old string }{{"settings.json", rec.Settings}, {"agents.json", rec.Agents}} {
-		cur := ""
-		if b, err := os.ReadFile(filepath.Join(home, f.name)); err == nil {
-			sum := sha256.Sum256(b)
-			cur = hex.EncodeToString(sum[:])
-		}
-		if cur != f.old {
-			out = append(out, config.Change{Key: f.name, Old: f.old, New: cur})
-		}
-	}
-	return out
+	return out, nil
 }
 
 // setResult builds the reply.config.set result from a written batch.

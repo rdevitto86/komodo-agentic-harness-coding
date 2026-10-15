@@ -207,6 +207,26 @@ func (m *Manager) Accept() (Batch, error) {
 	return b, nil
 }
 
+// AcceptPlan lists the machine files Accept would record, those whose checksum differs from config.sha; it writes nothing.
+// With no machine files it lists none, as Accept does.
+func (m *Manager) AcceptPlan() ([]string, error) {
+	cur, err := m.currentSums()
+	if err != nil {
+		return nil, err
+	}
+	if cur == (checksums{}) {
+		return nil, nil
+	}
+	rec, _, _ := m.recordedSums()
+	var out []string
+	for i, name := range machineFiles {
+		if pick(rec, i) != pick(cur, i) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
 // pick returns the settings checksum for index 0 and the agents checksum for index 1.
 func pick(c checksums, i int) string {
 	if i == 0 {

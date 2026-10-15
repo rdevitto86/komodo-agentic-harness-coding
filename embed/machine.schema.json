@@ -1,0 +1,312 @@
+{
+  "$defs": {
+    "InstallBody": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "entry": {
+                "type": "string"
+              },
+              "hash": {
+                "type": "string"
+              },
+              "step": {
+                "type": "integer"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "target",
+              "hash",
+              "step"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "selections": {
+          "additionalProperties": false,
+          "properties": {
+            "hosts": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "project": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "project"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "entries",
+        "selections"
+      ],
+      "type": "object"
+    },
+    "ProvidersBody": {
+      "additionalProperties": false,
+      "properties": {
+        "links": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "cap": {
+                "enum": [
+                  "",
+                  "window",
+                  "weekly",
+                  "model",
+                  "spend",
+                  "quota"
+                ],
+                "type": "string"
+              },
+              "probe": {
+                "type": "object"
+              },
+              "reset_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "sessions": {
+                "type": "integer"
+              },
+              "windows": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "percent_used": {
+                      "type": "number"
+                    },
+                    "reset_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "sessions": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "percent_used",
+                    "reset_at",
+                    "sessions"
+                  ],
+                  "type": "object"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "probe",
+              "sessions"
+            ],
+            "type": "object"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "links"
+      ],
+      "type": "object"
+    },
+    "ScheduleBody": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "queued_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "start": {
+                "additionalProperties": false,
+                "properties": {
+                  "common_dir": {
+                    "type": "string"
+                  },
+                  "groups": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "repo": {
+                    "type": "string"
+                  },
+                  "request": {
+                    "type": "string"
+                  },
+                  "root": {
+                    "type": "string"
+                  },
+                  "schedule": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target",
+                  "groups",
+                  "source",
+                  "repo",
+                  "root",
+                  "common_dir"
+                ],
+                "type": "object"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "target",
+              "root",
+              "run_id",
+              "at",
+              "queued_at",
+              "start"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "UpdateBody": {
+      "additionalProperties": false,
+      "properties": {
+        "checked_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "latest": {
+          "type": "string"
+        },
+        "previous": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "latest",
+        "checked_at",
+        "previous"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ProvidersBody"
+        },
+        "kind": {
+          "const": "providers"
+        }
+      }
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/UpdateBody"
+        },
+        "kind": {
+          "const": "update"
+        }
+      }
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/InstallBody"
+        },
+        "kind": {
+          "const": "install"
+        }
+      }
+    },
+    {
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ScheduleBody"
+        },
+        "kind": {
+          "const": "schedule"
+        }
+      }
+    }
+  ],
+  "properties": {
+    "body": {
+      "type": "object"
+    },
+    "kind": {
+      "enum": [
+        "providers",
+        "update",
+        "install",
+        "schedule"
+      ],
+      "type": "string"
+    },
+    "rev": {
+      "type": "integer"
+    },
+    "ts": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "v": {
+      "type": "integer"
+    },
+    "writer": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "v",
+    "kind",
+    "rev",
+    "ts",
+    "writer",
+    "body"
+  ],
+  "title": "Komodo machine-wide record",
+  "type": "object"
+}
