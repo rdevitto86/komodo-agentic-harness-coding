@@ -201,22 +201,23 @@ Go package `internal/cli`, plus the program entry point.
 | File | Holds |
 |---|---|
 | `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned |
-| `internal/cli/cli.go` | Command table, `parse`, `validate`, `resolve`, `dispatch`, `render`, envelope, exit codes, pin check |
-| `internal/cli/help.go` | `--help` text and `--help --json`, generated at build and embedded |
+| `internal/cli/cli.go` | The types (`Envelope`, `Result`, `Command`, `Call`, `Deps`), `New`, `Run`, `validate`, `resolve`, `render`, `PrintError` and the exit codes |
+| `internal/cli/parse.go` | `parse`: splitting the command words, the flag sets, `--input`, the closest-name match |
+| `internal/cli/table.go` | The command table and the checks of each command's arguments |
+| `internal/cli/repo.go` | The pin check, the repository id and root, and the expansion of a run label from `docs/backlog/` |
+| `internal/cli/help.go` | `--help` text and `--help --json`, built when the command runs from the table and the field tags of each data struct |
 | `internal/cli/work.go` | `plan`, `run`, `stop`, `replay`, `abandon`: each builds one event or one control request |
 | `internal/cli/engine.go` | The control socket client: dial, start the engine on demand, send a request, read the replies |
 | `internal/cli/status.go` | `status`, with `--wait` |
 | `internal/cli/config.go` | `config get` and `config set`: thin calls into the Configuration Manager |
-| `internal/cli/install.go` | `install`: the manifest diff, the repository files and the guard hook entry |
-| `internal/cli/update.go` | `update`: release check, download, verification, swap, cleanup of old versions |
 | `internal/cli/clean.go` | `clean` |
-| `internal/cli/doctor.go` | `doctor`: the health checks |
-| `internal/cli/ui.go` | `ui`: the web dashboard server, with its page under `embed/ui/` |
-| `internal/cli/print.go` | `PrintError()` and the printer for events the CLI reads from the engine |
-| `internal/cli/terminal.go` | The controlling-terminal check for each platform |
-| `templates/project/AGENTS.md.tmpl`, `templates/claude/settings.json.tmpl` | The text `install` writes |
+| `internal/cli/stubs.go` | The handlers of `install`, `update`, `doctor`, `ui` and the hidden `internal engine` verb; each returns the not-built-yet fault until its part exists |
+| `internal/cli/print.go` | The line printed for a recorded event, and the fault built from an error event |
+| `internal/cli/terminal.go` | `HasControllingTerminal`: opens `/dev/tty` |
 
-Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. Only `engine.go` opens the control socket. The Error Handler sits below `cli`, so `cli` imports `fault` and implements its `fault.Printer` interface with `PrintError()`. In the CLI process `fault` has no bus: `cmd/komodo/main.go` calls `fault.New(nil, cli)`, and `Guard` and `Final` print through the CLI ([1.4](#14-interfaces)). In the engine, `engine.ConnPrinter` prints to the connection that issued the command.
+`install.go`, `update.go`, `doctor.go`, `ui.go` and the text templates `install` writes arrive with their commands and replace the handlers in `stubs.go`.
+
+Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. Only `engine.go` opens the control socket. The Error Handler sits below `cli`, so `cli` imports `fault` and implements its `fault.Printer` interface with `PrintError()`. In the CLI process `fault` has no bus: `cli.New` calls `fault.New(nil, c)`, and `Guard` and `Final` print through the CLI ([1.4](#14-interfaces)). In the engine, `engine.ConnPrinter` prints to the connection that issued the command.
 
 **📐 Where the command-line code sits**
 ```mermaid
@@ -274,6 +275,7 @@ type Result struct {
 	Data    any    // the command's typed result, placed in Envelope.Data
 	Reason  string // set when Outcome is not OutcomeOK
 	Fix     string // the command or change that resolves it
+	Raw     string // text printed as is, for help; the formatter is skipped
 }
 ```
 
@@ -341,7 +343,7 @@ A success, `komodo run tg-1.2 --json` (exit 0):
 
 A caller branches on `v`. A caller that reads a higher `v` than it knows treats the reply as unreadable and stops, reporting the version it got. A field is never removed within one envelope version.
 
-The `--help --json` output has one object per command, `{name, summary, tier, flags, result}`, where `result` is the JSON Schema (draft 2020-12) of the `data` struct, generated at build from its field tags.
+The `--help --json` output has one object per command, `{name, summary, tier, flags, result}`, where `result` is the JSON Schema (draft 2020-12) of the `data` struct, generated when the command runs from its field tags.
 
 #### The command table
 
@@ -374,7 +376,9 @@ type Command struct {
 	Tier          Tier
 	Flags         []FlagSpec         // command-specific flags; global flags are added by parse
 	NeedsTerminal func(c *Call) bool // nil when the command never needs a terminal
+	NeedsRepo     func(c *Call) bool // nil when the command works outside a repository
 	NeedsEngine   bool               // connects to the engine, starting it when none answers
+	Hidden        bool               // a verb the harness starts itself; left out of help and the 12 commands
 	PinExempt     bool               // runs even when the repository pin is above this binary
 	TamperPolicy  TamperPolicy       // what the command does when the settings guard has tripped
 	Run           Handler
@@ -417,13 +421,15 @@ type Call struct {
 	Repo        RepoRef // zero value when the command needs no repository
 	HasTerminal bool
 	Stdout      io.Writer
+	CommonDir   string   // the repository's git common directory; empty outside a repository
+	Groups      []string // the group labels a run label expands to, read from docs/backlog/
 }
 
 // Handler is one command's thin call into the part that owns the work.
 type Handler func(c *Call) Result
 ```
 
-`PinExempt` is `true` for `install`, `update`, `doctor` and the `--help` and `--version` paths. `NeedsEngine` is `true` for `run`, `stop`, `status`, `ui`, `abandon`, `replay`, `plan` and `clean`; `--version` and `--help` touch no engine. The `--input` object holds each flag under its long name and the positional arguments, in order, under `args`: `{"args": ["tg-1.2"], "dry-run": true}` is `run tg-1.2 --dry-run`. An unknown key is a usage error, like an unknown flag.
+`PinExempt` is `true` for `install`, `update`, `doctor` and the `--help` and `--version` paths. `NeedsEngine` is `true` for `run`, `stop`, `status`, `ui`, `abandon`, `replay`, `plan` and `clean`; `--version` and `--help` touch no engine. `NeedsRepo` is set for `run`, `plan` and `status` without `--all`. `Hidden` marks `internal engine`, which `commands()` and the help leave out. The `--input` object holds each flag under its long name and the positional arguments, in order, under `args`: `{"args": ["tg-1.2"], "dry-run": true}` is `run tg-1.2 --dry-run`. An unknown key is a usage error, like an unknown flag.
 
 The row of `run`, as the table holds it:
 
@@ -452,7 +458,7 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 | Command | Request | Replies |
 |---|---|---|
 | `run (id)`, `run --all` | `Verb` `run`; `Event` run-start; `Flags.All` | One final `ok` whose `data` holds the run id, or `refused` with a `Code` |
-| `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; no event | One final `ok` whose `data` holds the run id the engine minted and the queued time |
+| `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; `Event` run-start with no run id and `data.schedule` set | One final `ok` whose `data` holds the run id the engine minted and the queued time |
 | `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
 | `stop (id)` | `Verb` `stop`; `Event` run-stop | One final `ok`, or `refused` with `unknown_target` |
 | `plan` | `Verb` `plan`; `Event` plan | `event` replies for the `error` events of the plan and for the `run-start` the Intake Handler publishes, which ends planning, then one final `ok` |
@@ -675,10 +681,15 @@ The header is the State Manager's `MachineHeader` ([10.3](#103-data-model)). `ch
 type Deps struct {
 	Format   *format.Formatter // FormatJSON()
 	Config   *config.Manager   // GetConfigItem(), SetConfigItem(), Verify()
-	State    *state.Manager    // the machine-wide records the CLI installer writes: install.json, update.json and providers.json
 	Engine   Engine            // the control socket client
 	Terminal func() bool       // true when a controlling terminal is attached
+	Home     string            // the Komodo home folder, which a dry run of config set --accept reads
+	Stdout   io.Writer         // the reply stream; os.Stdout when nil
+	Stderr   io.Writer         // warnings and prompts; os.Stderr when nil
+	Stdin    io.Reader         // the answer to a confirmation; os.Stdin when nil
 }
+
+// A State field for the install records (install.json, update.json, providers.json) joins Deps when install and update are built.
 
 // Engine is the CLI's client of the engine's control socket.
 type Engine interface {
@@ -816,7 +827,7 @@ Anyone runs `run (id)`, usually the orchestrator. It sends the engine a `run-sta
 | `run <id> --deny` | Answers a blocked group by refusing what it asked for |
 
 - **Continuing.** A group that already has saved state continues from it, so `komodo run tg-1.2` after a crash continues each group from its saved state. A group that needs another pass, such as after a hand fix in its worktree, also continues with `komodo run tg-1.2`: it picks up at the group's current stage and runs test and review again before commit. `build`, `test` and `review` are not commands.
-- **Scheduling.** `--schedule` is a socket request, not an event. The engine mints the run id, writes the entry (`target`, `root`, `run_id`, `at`, `queued_at`) to the schedule queue, returns the run id in its reply, stays up while any run is live or queued, and starts the run at its time. The reply shows the run id and the queued time, and `status` lists the queued run. When the entry fires, the engine publishes the one `run-start` with that run id.
+- **Scheduling.** `--schedule` is a socket request, not an event. The engine mints the run id, writes the entry (`target`, `root`, `run_id`, `at`, `queued_at`, `start`) to the schedule queue, returns the run id in its reply, stays up while any run is live or queued, and starts the run at its time. The reply shows the run id and the queued time, and `status` lists the queued run. When the entry fires, the engine publishes the one `run-start` with that run id.
 - **Answering.** `--approve` and `--deny` send a `run-continue` event with `answer` set. The Runtime Manager passes the answer to the group's Task Manager over its command channel. A group that is not blocked refuses the answer with `not_blocked`.
 - **Combinations.** `--approve` and `--deny` take an id and cannot combine with each other, `--all` or `--schedule`. `--all` takes no id. A combination is a usage error.
 
@@ -2505,7 +2516,7 @@ The Configuration Manager owns the four per-role override keys. Every other key 
 
 | Key | Type | Default | Hard limit | Effect |
 |---|---|---|---|---|
-| `agents.<role>.model` | string | The role weight's model | A probed model | The model the role starts on. With no override, `config get` shows no value and the default `weight:<the role's weight>`, such as `weight:heavy`, which the model client resolves to a model. A change reaches an open run at its next session start. The chain is not changed |
+| `agents.<role>.model` | string | The role weight's model | A probed model | The model the role starts on. With no override, `config get` shows `weight:<the role's weight>` as both the value and the default, such as `weight:heavy`, which the model client resolves to a model. A change reaches an open run at its next session start. The chain is not changed |
 | `agents.<role>.session_wall_min` | int | `limits.session_wall_min` | 120 | Wall-clock limit for this role's sessions; beats the flat key |
 | `agents.<role>.session_idle_min` | int | `limits.session_idle_min` | 30 | Silence limit before a nudge; beats the flat key |
 | `agents.<role>.retries` | int | 2 | 3 | Fresh sessions after a timeout or idle stop, counted per group and never reset while the group is open |
@@ -3977,7 +3988,7 @@ func (g Graph) LongestChain() int
 func Pending(epics []Epic, g Graph, target string) []string
 ```
 
-The list is the source of `komodo run --all` (target `all`), and the engine uses it to expand a queued entry's `target`: the caller puts it in `data.groups` of a `run-start` event. `Pending` cannot fail; a graph with a failing finding is never passed in.
+The list is the source of `komodo run --all` (target `all`), and the CLI uses it to fill `data.groups` of a `run-start` event. `Pending` cannot fail; a graph with a failing finding is never passed in.
 
 | Caller | When |
 |---|---|
@@ -5543,15 +5554,16 @@ The Task Manager calls the Commit Handler's `Save` itself after each finished ta
 
 #### Schedule queue entry
 
-The queue holds `state.ScheduleEntry` values (`target`, `root`, `run_id`, `at`, `queued_at`), defined with the machine-wide records in [10.3](#103-data-model). An entry in `schedule.json`:
+The queue holds `state.ScheduleEntry` values (`target`, `root`, `run_id`, `at`, `queued_at`, `start`), defined with the machine-wide records in [10.3](#103-data-model). An entry in `schedule.json`:
 
 ```json
 [
-  {"target": "ep-1", "root": "/Users/dev/src/shop", "run_id": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72", "at": "2026-10-16T02:00:00-07:00", "queued_at": "2026-10-15T18:12:44-07:00"}
+  {"target": "ep-1", "root": "/Users/dev/src/shop", "run_id": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72", "at": "2026-10-16T02:00:00-07:00", "queued_at": "2026-10-15T18:12:44-07:00",
+   "start": {"target": "ep-1", "groups": ["tg-1.1", "tg-1.2"], "source": "cli", "schedule": "2026-10-16T02:00:00-07:00", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop", "common_dir": "/Users/dev/src/shop/.git"}}
 ]
 ```
 
-`repo` names the repository whose task lists the `target` refers to. When an entry fires, the engine expands `target` into group labels with the Intake Handler's `Pending` for that repository, and publishes `run-start` with those labels in `data.groups`.
+`start` is the `run-start` data the CLI sent in `Request.Event` when it queued the run: `target`, `groups`, `source`, `schedule`, `repo`, `root` and `common_dir`. When an entry fires, the engine publishes the `run-start` that holds `start` as its data and the entry's `run_id`; it never searches the task lists.
 
 #### Landing plan
 
@@ -5837,9 +5849,9 @@ flowchart LR
   TI -->|"5 due"| LP
 ```
 
-1. `--schedule` reaches the engine as a request; the engine mints the run id, writes the entry with `run_id` set, with `SaveMachine` and `KindSchedule` before it replies with the run id, and the CLI starts the engine first if it is not running. The engine stays up while any run is live or queued.
+1. `--schedule` reaches the engine as a request whose `Event` holds the `run-start` data; the engine mints the run id, writes the entry with `run_id` and `start` set, with `SaveMachine` and `KindSchedule` before it replies with the run id, and the CLI starts the engine first if it is not running. The engine stays up while any run is live or queued.
 2. At engine start, and at every timer wake, the loop calls `LoadMachine` with `KindSchedule` and starts each entry whose `at` is not in the future, oldest first.
-3. Starting an entry expands its `target` into group labels with the Intake Handler's `Pending` for the entry's `root`, then publishes the one `run-start` with the entry's `run_id`, `source` `cli` and `schedule` set to the entry's `at`. The loop removes the entry with `SaveMachine` once the run's first group record is saved. A crash before that leaves the entry, and the next engine start fires it again; groups that already have records continue and are not duplicated.
+3. Starting an entry publishes the one `run-start` that holds the entry's stored `start` as its data, with the entry's `run_id`. The loop removes the entry with `SaveMachine` once the run's first group record is saved. A crash before that leaves the entry, and the next engine start fires it again; groups that already have records continue and are not duplicated.
 4. The loop arms one timer for the earliest `at` in the future. A `--schedule` or a `stop` re-arms it.
 5. After the machine restarts, the next `komodo` command finds the queue and starts the engine, which starts everything overdue at once ([1. CLI](#1-cli)).
 
@@ -6410,7 +6422,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A fake engine that does not reply for 10 seconds with a beat file 31 seconds old is killed as a process tree, a new engine starts, and the command is sent once more; with a beat file 20 seconds old the CLI keeps waiting.
 - A `session.end` input with `unfinished` sets `Unfinished`; a continued group's `enter_stage` order carries it, and the group record shows no commit for that task.
 - A run whose epic branch is missing gets it created from the base branch and one first commit of the task lists, pushed, before the first group branch is cut; an existing epic branch is left as it is.
-- A queued entry fires: the engine expands `target` with `Pending(epics, g, target)` for the entry's `root` into `data.groups`, and the `run-start` carries the `run_id` the queue reply returned.
+- A queued entry fires: the engine publishes the entry's stored `start` as the `run-start` data, and the event carries the `run_id` the queue reply returned.
 - Closing a group calls `LeaseStore.Release` once.
 
 ### 7.10 Open Gaps
@@ -7798,6 +7810,7 @@ type ScheduleEntry struct {
 	RunID    string    `json:"run_id"`    // the run id the engine minted when it queued the entry
 	At       time.Time `json:"at"`        // when the run starts
 	QueuedAt time.Time `json:"queued_at"` // when komodo run --schedule queued it
+	Start    bus.RunStart `json:"start"`  // the run-start data the CLI sent; published as is when the entry fires
 }
 ```
 
@@ -7810,13 +7823,14 @@ type ScheduleEntry struct {
   "writer": "engine/48301",
   "body": {
     "entries": [
-      {"target": "ep-1", "root": "/Users/dev/src/shop", "run_id": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72", "at": "2026-10-16T09:00:00Z", "queued_at": "2026-10-15T20:41:09Z"}
+      {"target": "ep-1", "root": "/Users/dev/src/shop", "run_id": "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72", "at": "2026-10-16T09:00:00Z", "queued_at": "2026-10-15T20:41:09Z",
+       "start": {"target": "ep-1", "groups": ["tg-1.1", "tg-1.2"], "source": "cli", "schedule": "2026-10-16T09:00:00Z", "repo": "github.com/acme/shop", "root": "/Users/dev/src/shop", "common_dir": "/Users/dev/src/shop/.git"}}
     ]
   }
 }
 ```
 
-`root` is the repository root, so an engine that hosts runs for several repositories knows which task lists a `target` names. When an entry fires, the Runtime Manager expands `target` into group labels with the Intake Handler's `Pending` for that repository ([chapter 7](#7-runtime-manager)).
+`root` is the repository root, so an engine that hosts runs for several repositories knows which repository a `target` names. `start` is the `run-start` data the CLI read from the task lists when it queued the run; when an entry fires, the Runtime Manager publishes it as is and searches nothing ([chapter 7](#7-runtime-manager)).
 
 | Field | Rule |
 |---|---|
@@ -7825,7 +7839,7 @@ type ScheduleEntry struct {
 | `providers` `links` | Never null; `probe` is a JSON object; `sessions` is never below 0; `cap` is empty or one of `window`, `weekly`, `model`, `spend`, `quota` |
 | `update` | `latest` and `previous` are version strings; `checked_at` is RFC 3339 in UTC |
 | `install` `entries` | Never null; every entry has `target`, `hash` and `step` |
-| `schedule` `entries` | Never null; `target`, `root` and `run_id` are not empty; `at` and `queued_at` are RFC 3339 in UTC |
+| `schedule` `entries` | Never null; `target`, `root`, `run_id` and `start.groups` are not empty; `at` and `queued_at` are RFC 3339 in UTC |
 
 ### 10.4 Interfaces
 
@@ -14195,7 +14209,7 @@ Komodo keeps its files in two places and never inside the repository's working t
 | `events/runs.json` | The run-to-folder map: where each run's event log lives | [4. Event Bus](#4-event-bus) |
 | `metrics/repos.json`, `metrics/failures.jsonl` | The metrics folder of every repository the Metrics Service opened, and its failures that belong to no run | [18. Metrics Service](#18-metrics-service) |
 | `state/engine.beat` | The engine's heartbeat: its process id and the time, rewritten every 5 seconds | [7. Runtime Manager](#7-runtime-manager) |
-| `state/schedule.json` | The schedule queue: one entry per queued run, with `target`, `root`, `run_id`, `at` and `queued_at` | [10. State Manager](#10-state-manager) keeps it; the Runtime Manager reads and writes it through the State Manager |
+| `state/schedule.json` | The schedule queue: one entry per queued run, with `target`, `root`, `run_id`, `at`, `queued_at` and `start` | [10. State Manager](#10-state-manager) keeps it; the Runtime Manager reads and writes it through the State Manager |
 | `state/providers.json`, `state/update.json`, `state/install.json`, `state/update.lock` | Machine-wide records: provider reset times and link session counts, update state, install state, and the update writer lock | [10. State Manager](#10-state-manager); the Resource Manager, the model client and the CLI's installer read and write them only through it |
 | `bin/komodo`, `versions/<v>/komodo` | The current binary and every installed version | [1. CLI](#1-cli) |
 
@@ -14292,7 +14306,7 @@ Each row proves one fact of the design that the full run does not reach. They us
 | Final error event | Seed an error the Error Handler catches | The process's last event is an `error` with `final: true`, and the exit code matches the fault's kind |
 | Command list | `komodo --list`, then `komodo build`, `komodo test`, `komodo review` | The list names the 12 commands; the other three exit 2 as unknown commands |
 | Answering a block | A builder asks for a file outside its group; `komodo status --wait`, then `komodo run tg-1.1 --approve`; repeat with `--deny` | `status --wait` returns the question; `--approve` continues the group with the file, and `--deny` refuses it |
-| Scheduled run | `komodo run ep-1 --schedule <time>` | `schedule.json` holds `target`, `at` and `queued_at`; `status` lists the run; `stop ep-1` removes it |
+| Scheduled run | `komodo run ep-1 --schedule <time>` | `schedule.json` holds `target`, `at`, `queued_at` and `start`; `status` lists the run; `stop ep-1` removes it |
 | Overdue run | Queue a run, kill the engine, pass the time, run `komodo status` | The next command starts the engine, which starts the overdue run at once |
 | Labels and run ids | `komodo run ep-1` twice, then `komodo replay tg-1.1` | Each run has its own version 7 UUID (a time-ordered unique identifier), replies show label and run id, and replay uses the latest attempt |
 | Whole backlog | `komodo run --all` with one finished epic and one open epic | Only the groups not done run, in dependency order |
