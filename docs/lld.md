@@ -8369,12 +8369,12 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 
 | File | Holds |
 |---|---|
-| `sandbox.go` | `Manager`, `Spec`, `Instance`, `Backend`, `CreateSandboxInstance`, `DestroySandboxInstance` |
+| `sandbox.go` | `Manager`, `Spec`, `Instance`, `Backend`, `CreateSandboxInstance`, `DestroySandboxInstance`, `Command`, `EndSetup`, `SetMasked`, `Caveats` |
 | `profile.go` | Turns a `Spec` into the mount, mask and limit rules every backend applies, and renders the Seatbelt profile and the Bubblewrap arguments |
-| `backend_docker.go` | The Docker container, one per group, for the Tester |
+| `backend_docker.go` | The Docker container, one per group, for the Tester, and the image chosen from the repository's version files |
 | `backend_seatbelt.go` | Seatbelt on macOS, for the Builder's quick commands and the Tester without Docker |
 | `backend_bubblewrap.go` | Bubblewrap on Linux and Windows Subsystem for Linux, for the same two jobs |
-| `copy.go` | The tester's dependency copy |
+| `copy.go` | The tester's dependency copy and the plan that says, per language, what to copy, what to rerun and what to share |
 
 Import rule: `task` imports `llm` and `sandbox`. `llm` and `sandbox` import neither `task` nor each other (both import `internal/core`), and every package uses the Go standard library only. `task` and `llm` also import `internal/cache` for the type of the cache handle, and `task` imports the value types `Approval`, `SaveRequest`, `SaveResult` and `Result` from `internal/commit`, which imports neither `task` nor `engine`. The Runtime Manager, the Context Manager, the Commit Handler, the Cleanup Handler and git reach `task` through the narrow interfaces in [11.4](#114-interfaces), so `task` imports none of their other packages.
 
@@ -9052,7 +9052,7 @@ type Spec struct {
 	Worktree   string   // working directory; writable except the .git entry
 	GitDir     string   // this worktree's own git folder; read-only
 	ReadOnly   []string // always includes <Worktree>/.git
-	Writable   []string // the instance's temporary folder and its private build cache
+	Writable   []string // the instance's temporary folder first, then its private build cache
 	Modules    string   // module and registry caches; read-only
 	Toolchains []string // toolchain folders; read-only
 	Masked     []string // worktree files matching row G4; unreadable
@@ -9094,9 +9094,9 @@ type Backend interface {
 }
 ```
 
-Notes on `Spec`: `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable and refreshed before each command. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed.
+Notes on `Spec`: `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable; the Task Manager refreshes the list through `SetMasked` before each command, and a container hides only the files that existed when it was made. `Command` refuses a masked file that exists now and was not mounted over, or whose file on the host was replaced since the mount (a different device or inode); a listed file that does not exist is ignored. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed.
 
-The command environment holds only `PATH`, `HOME` (the instance's temporary folder), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables. `PATH` is the detected toolchain folders in detection order, then the system folders.
+The command environment holds only `PATH`, `HOME` (the instance's temporary folder), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables, plus the tag `KOMODO_SANDBOX_CMD` that names the command to the sandbox. `PATH` is the detected toolchain folders in detection order, then the system folders.
 
 The rules every mechanism applies, whatever it is:
 - The host's service sockets are unreachable: no mount of the container runtime's socket, and for a mechanism that shares the host filesystem, `/run`, `/var/run` and `/run/user` are replaced by empty folders.
@@ -9129,37 +9129,57 @@ The rendered Seatbelt profile for one worktree. Later rules win, so home is clos
 ```scheme
 (version 1)
 (deny default)
-(allow process-exec process-fork signal sysctl-read mach-lookup)
+(allow process-exec process-fork sysctl-read)
+(allow signal (target same-sandbox))                              ; never a host process
+(allow mach-lookup (global-name "com.apple.system.logger")      ; an allow-list of 17 system services, not every service
+                   (global-name "com.apple.cfprefsd.daemon"))   ; the full list is `machServices` in profile.go
 (allow file-read*)
 (deny file-read* (subpath "/Users/dev"))                        ; home closed
+(allow file-read-metadata)                                       ; names and sizes stay visible, contents do not
 (allow file-read* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")  ; worktree
                   (subpath "/Users/dev/src/shop/.git")           ; git folder
-                  (subpath "/Users/dev/.komodo/cache/lang/shop") ; language caches
-                  (subpath "/Users/dev/.rustup"))                ; toolchain
-(deny file-read* (regex #"/\.env[^/]*$" #"\.pem$" #"\.key$"))    ; row G4 masks, rendered from its patterns
+                  (subpath "/Users/dev/.komodo/cache/lang/shop/modules") ; module caches
+                  (subpath "/Users/dev/.rustup")                 ; toolchain
+                  (subpath "/private/tmp/komodo-s1")             ; the instance's temporary folder
+                  (subpath "/Users/dev/.komodo/cache/lang/shop/build")) ; build caches
+(deny file-read* (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.env")) ; one literal per Spec.Masked file
+(allow file-write* (subpath "/dev/null") (subpath "/dev/dtracehelper"))
 (allow file-write* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")
                    (subpath "/private/tmp/komodo-s1")            ; the instance's temporary folder
                    (subpath "/Users/dev/.komodo/cache/lang/shop/build")) ; build caches only
-(deny file-write* (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.git")) ; ReadOnly
-(allow network* (remote ip "localhost:*") (local ip "localhost:*"))
+(deny file-write* (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.git")) ; ReadOnly
+(deny file-write* (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/.env")) ; a masked file cannot be rewritten, renamed or removed
+(deny file-write-unlink (literal "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22/cfg")) ; nor can the folder that holds one
+(deny file-read* file-write* (subpath "/private/var/run") (subpath "/var/run") (subpath "/run")) ; host service sockets
+(allow network-outbound (remote unix-socket (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")
+                                            (subpath "/private/tmp/komodo-s1")
+                                            (subpath "/Users/dev/.komodo/cache/lang/shop/build"))) ; Unix sockets only inside the writable folders
+(allow network-bind (local unix-socket (subpath "/Users/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22")
+                                       (subpath "/private/tmp/komodo-s1")
+                                       (subpath "/Users/dev/.komodo/cache/lang/shop/build")))
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-bind network-inbound (local ip "localhost:*"))
 ```
+
+The loopback rule is two rules on purpose. Filters inside one rule are alternatives, so `(allow network* (remote ip "localhost:*") (local ip "localhost:*"))` let a command connect to a public address, which a real `sandbox-exec` run showed. For the setup command, `Spec.Network` replaces the last two rules with `(allow network-outbound (remote ip))` and the name-resolver socket `/private/var/run/mDNSResponder`; a bare `(allow network*)` is never used, because it also opens every Unix socket, such as the container runtime's and the key agent's.
+
+Seatbelt's loopback is the host's own: unlike Bubblewrap and Docker, a command can reach any service listening on `127.0.0.1`. Seatbelt cannot give a private one, so `Caveats` names this line together with the missing process and memory caps, for the run report and `doctor`. A masked file or the folder above it cannot be moved by the confined command, so `mv .env stolen && cat stolen` fails. Seatbelt applies the profile to a command's processes, so a command that starts a daemon in a new session can outlive it; each command therefore runs as `sh -c 'trap "kill -9 -1" TERM; "$@" <&0 & wait $!; exit $?'`, and a cancel or timeout sends SIGTERM to that shell, which kills every process of its sandbox (`signal` is limited to `same-sandbox`), and then the host kills the process group, the descendants it finds and any process carrying the command's `KOMODO_SANDBOX_CMD` tag. Whoever starts a command waits for it with `sandbox.Wait`, which also releases the timeout. If the home folder cannot be found, `Check` and `Prepare` fail instead of leaving home open.
 
 The Bubblewrap command line for the same worktree:
 
 ```text
-bwrap --ro-bind / / --tmpfs /home/dev \
+bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /home/dev --tmpfs /tmp \
   --bind <worktree> <worktree> --ro-bind <worktree>/.git <worktree>/.git \
-  --ro-bind <git dir> <git dir> \
-  --bind <lang>/build <lang>/build --ro-bind <lang>/modules <lang>/modules \
+  --ro-bind <git dir> <git dir> --ro-bind <lang>/modules <lang>/modules \
+  --bind <instance temp> <instance temp> --bind <lang>/build <lang>/build \
   --ro-bind /dev/null <worktree>/.env \
-  --tmpfs /tmp --bind <instance temp> <instance temp> \
   --unshare-net --unshare-pid --die-with-parent --new-session \
   --chdir <worktree> -- <command> <args>
 ```
 
 For the group's setup command alone, `Spec.Network` is true: the Seatbelt profile then allows network access, and the Bubblewrap line leaves out `--unshare-net`.
 
-A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt` and `uv` where the language needs them, makes one container per instance with the worktree at `/work`, runs setup with network on and then disconnected, and runs each command as `docker exec`; a timeout kills the command's process group inside the container. A Makefile-only or 2-language repository sets `sandbox.image`.
+A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt` and `uv` where the language needs them, makes one container per instance with the worktree at `/work`, runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
 
 **Language caches.** The caches are the harness's own, under a per-repository folder: never the person's `~/.npm`, `~/.cargo/registry` or Go cache. The Cache Manager keeps them and their size rules ([chapter 8](#8-cache-manager)); the sandbox only mounts them, with the toolchain folders read-only. The per-user process limit is never used, because it counts every process the person runs.
 
@@ -9556,11 +9576,20 @@ func (m *Manager) DestroySandboxInstance(ctx context.Context, id string) error
 
 // Command wraps one command so that it starts inside the instance; the command never runs unwrapped.
 func (m *Manager) Command(ctx context.Context, id string, c Command) (*exec.Cmd, error)
+
+// EndSetup turns the network off for every later command; calling it twice does nothing.
+func (m *Manager) EndSetup(ctx context.Context, id string) error
+
+// SetMasked replaces the unreadable file list; the Task Manager calls it before each command.
+func (m *Manager) SetMasked(id string, masked []string) error
+
+// Caveats names the requested limits the instance's mechanism cannot enforce here, for the run report and `doctor`.
+func (m *Manager) Caveats(id string) []string
 ```
 
-A failing `Backend.Check` or `CreateSandboxInstance` makes the pipeline escalate `blocked`, reason `setup`, naming the fix. `Command` returns the reply `error: the sandbox could not start the command: <reason>` and never runs the command unsandboxed. A failed `DestroySandboxInstance` is returned from `CloseTaskGroup`. A container left by a run that died before cleanup is removed by `komodo clean`, through the Cleanup Handler's `Sweep`, when no open run uses it.
+A failing `Backend.Check` or `CreateSandboxInstance` makes the pipeline escalate `blocked`, reason `setup`, naming the fix. `Command` returns a `*StartError` whose text is the reply `error: the sandbox could not start the command: <reason>` and never runs the command unsandboxed. A backend whose network is fixed at creation also implements `CutNetwork`, which `EndSetup` calls, and one that cannot enforce a limit implements `Caveats`. A failed `DestroySandboxInstance` is returned from `CloseTaskGroup`. A container left by a run that died before cleanup is removed by `komodo clean`, through the Cleanup Handler's `Sweep`, when no open run uses it; the Docker backend's `Sweep(ctx, keep)` removes the labelled containers whose group `keep` does not claim.
 
-`Spec.Role` picks the backend. The `builder` role gets the operating-system sandbox. The `tester` role gets a Docker container, or `testerFallback` when `Backend.Check` fails on Docker; the instance then carries `Fallback` and `Reason`.
+`Spec.Role` picks the backend. The `builder` role gets the operating-system sandbox. The `tester` role gets a Docker container, or `testerFallback` when `Backend.Check` fails on Docker; the instance then carries `Fallback` and `Reason`. A Docker `Prepare` that fails after a passing check does not fall back: it escalates `blocked`, reason `setup`.
 
 ### 11.5 Behaviour
 
