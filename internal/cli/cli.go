@@ -262,7 +262,7 @@ func (c *CLI) checkTamper(call *Call) *Result {
 	const fix = "komodo config set --accept"
 	if call.Command.TamperPolicy == TamperWarn || (call.Command.Name == "config set" && flagBool(call, "accept")) {
 		if call.Command.TamperPolicy == TamperWarn {
-			fmt.Fprintf(c.errOut, "Warning: settings were edited outside komodo config. Fix: %s\n", fix)
+			_, _ = fmt.Fprintf(c.errOut, "Warning: settings were edited outside komodo config. Fix: %s\n", fix)
 		}
 		return nil
 	}
@@ -311,7 +311,7 @@ var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
 func (c *CLI) render(res Result) int {
 	code, err := c.print(res)
 	if err != nil {
-		fmt.Fprintln(c.errOut, "komodo: write reply:", err)
+		_, _ = fmt.Fprintln(c.errOut, "komodo: write reply:", err)
 		return int(OutcomeInternal)
 	}
 	return code

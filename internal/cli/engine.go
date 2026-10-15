@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 )
 
 // SocketEngine is the Engine that talks to engine.sock; only this file opens the control socket.
@@ -109,16 +110,19 @@ func (e *SocketEngine) Send(ctx context.Context, r engine.Request) (<-chan engin
 	}
 	line, err := json.Marshal(r)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
 	line = append(line, '\n')
 	if _, err := conn.Write(line); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("write request: %w", err)
 	}
 	ch := make(chan engine.Reply, 16)
-	go e.pump(ctx, conn, r.ID, line, ch)
+	go func() {
+		defer fault.New(nil, nil).Recover(fault.Source{Component: "cli"}, nil)
+		e.pump(ctx, conn, r.ID, line, ch)
+	}()
 	return ch, nil
 }
 
@@ -128,12 +132,12 @@ func (e *SocketEngine) pump(ctx context.Context, conn net.Conn, id string, line 
 	defer close(ch)
 	retried, first := false, true
 	rd := bufio.NewReader(conn)
-	defer func() { conn.Close() }()
+	defer func() { _ = conn.Close() }()
 	fail := func(detail string) {
 		ch <- engine.Reply{ID: id, Status: engine.StatusError, Code: "internal", Detail: detail, Final: true}
 	}
 	resend := func() bool {
-		conn.Close()
+		_ = conn.Close()
 		nc, err := e.connect(ctx)
 		if err != nil {
 			fail(err.Error())
@@ -147,7 +151,7 @@ func (e *SocketEngine) pump(ctx context.Context, conn net.Conn, id string, line 
 		return true
 	}
 	for {
-		conn.SetReadDeadline(e.now().Add(e.HungReply))
+		_ = conn.SetReadDeadline(e.now().Add(e.HungReply))
 		b, err := rd.ReadBytes('\n')
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			if !e.hung() {

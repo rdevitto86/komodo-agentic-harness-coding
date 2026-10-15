@@ -37,7 +37,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("KOMODO_HOME", home)
 	t.Setenv("NO_COLOR", "")
 	cfg, err := config.New(home, config.Known{}, func(string) bool { return true })
@@ -143,7 +143,7 @@ func shortHome(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	return home
 }
 

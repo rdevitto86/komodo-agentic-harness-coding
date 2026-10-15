@@ -112,7 +112,7 @@ func originURL(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	in := false
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -220,7 +220,7 @@ func groupDone(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "status:"); ok {

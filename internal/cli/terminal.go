@@ -8,6 +8,6 @@ func HasControllingTerminal() bool {
 	if err != nil {
 		return false
 	}
-	f.Close()
+	_ = f.Close()
 	return true
 }

@@ -455,8 +455,8 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 | `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; no event | One final `ok` whose `data` holds the run id the engine minted and the queued time |
 | `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
 | `stop (id)` | `Verb` `stop`; `Event` run-stop | One final `ok`, or `refused` with `unknown_target` |
-| `plan` | `Verb` `plan`; `Event` plan | One final `ok` |
-| `status`, `status (id)` | `Verb` `status`; `Target` for `(id)`; `Root`; `Flags.All`, `Flags.Wait`, `Flags.TimeoutS` | One final `ok` holding `StatusData`, with `figures` for `(id)` and `recent` and `scorecard` for `--all`. With `--wait`, an `ok` holding `StatusData` after each change, then a final `ok` with `{"waited": "blocked"}`, `"done"` or `"timeout"` |
+| `plan` | `Verb` `plan`; `Event` plan | `event` replies for the `error` events of the plan and for the `run-start` the Intake Handler publishes, which ends planning, then one final `ok` |
+| `status`, `status (id)` | `Verb` `status`; `Target` for `(id)`; `Root`; `Flags.All`, `Flags.Wait`, `Flags.TimeoutS` | One final `ok` holding `StatusData`, with `figures` for `(id)`, `explain` for a failed or blocked group, and `recent` and `scorecard` for `--all`. With `--wait`, an `ok` holding `StatusData` after each change, then a final `ok` with `{"waited": "blocked"}`, `"done"` or `"timeout"` |
 | `replay (id)` | `Verb` `replay`; `Target` | One `event` reply per recorded event, then a final `ok` with `{"gaps": 0}` |
 | `abandon (id)` | `Verb` `abandon`; `Target` | One final `ok`, or `refused` with `unknown_target` |
 | `ui` | `Verb` `status`, repeated by the page | The CLI process serves the page on `127.0.0.1` and reads from the engine over the socket; the page only reads, and the engine never serves HTTP |
@@ -848,7 +848,7 @@ type ReplayData struct {
 
 Anyone runs `status`, including the orchestrator. It sends a `status` request to the engine and prints live progress: each live run with its groups and their stages, the groups blocked on an answer with their question, and the queued runs with their start times. It covers the current repository; `--all` covers every repository on the machine.
 
-`status (id)` adds the time, tokens and cost figures for that run or group. `status --all` also lists recent runs with their totals, and the per-agent scorecard. The figures come from the Metrics Service ([chapter 18](#18-metrics-service)); how many recent runs it lists and over which days the scorecard counts is [TODO: how many recent runs `status --all` lists and the scorecard window ([G-279](#g-279))].
+`status (id)` adds the time, tokens and cost figures for that run or group; for a failed or blocked group it also adds the run's last events, which the Runtime Manager reads through `Explain`. `status --all` also lists recent runs with their totals, and the per-agent scorecard. The figures come from the Metrics Service ([chapter 18](#18-metrics-service)); `status --all` lists the 20 most recent runs, and the scorecard counts the last 30 days.
 
 | Flag | Meaning |
 |---|---|
@@ -867,8 +867,9 @@ type StatusData struct {
 	Blocked []BlockedRow `json:"blocked"`          // groups that wait for an answer
 	Waited  string       `json:"waited,omitempty"` // with --wait: blocked, done or timeout
 	Figures   *Figures            `json:"figures,omitempty"`   // status (id): the run's or group's time, tokens and cost
-	Recent    []metrics.RunMetrics `json:"recent,omitempty"`   // status --all: recent runs with their totals
-	Scorecard *metrics.Scorecard  `json:"scorecard,omitempty"` // status --all: one row per agent and model
+	Explain   []bus.Event          `json:"explain,omitempty"`   // status (id) of a failed or blocked group: the run's last events
+	Recent    []metrics.RunMetrics `json:"recent,omitempty"`   // status --all: the 20 most recent runs with their totals
+	Scorecard *metrics.Scorecard  `json:"scorecard,omitempty"` // status --all: one row per agent and model, over the last 30 days
 }
 
 // Figures are the time, tokens and cost of one run or group, from the Metrics Service.
@@ -1205,7 +1206,7 @@ A `run-continue` for `komodo run tg-1.2 --approve`:
 - `run` holds the run id the CLI generated for `run-start`; for a scheduled run it holds the run id the engine minted when it queued the entry. For `run-stop` and `run-continue` it holds the run id the caller typed, or is empty when a label was typed; the Runtime Manager then takes the label's latest attempt and returns the run id in its `accepted` reply.
 - `answer` is `approve` or `deny`, and is present only on `run-continue` sent by `--approve` or `--deny`.
 - `repo` and `root` are the repository id and root the engine needs because it hosts runs of several repositories. The full payload per event type is in [Event Bus](#4-event-bus).
-- While a command waits, the CLI receives over its socket connection the `run-status`, `run-complete`, `run-failure` and `error` events of the run it waits on. The CLI starts work directly: it sends `plan`, which goes to the Intake Handler, or `run-start`, `run-stop` and `run-continue`, which go to the Runtime Manager.
+- While a command waits, the CLI receives over its socket connection the `run-status`, `run-complete`, `run-failure` and `error` events of the run it waits on; while `plan` waits, it also receives the run's `run-start`. The CLI starts work directly: it sends `plan`, which goes to the Intake Handler, or `run-start`, `run-stop` and `run-continue`, which go to the Runtime Manager.
 
 #### Short commands
 
@@ -1342,7 +1343,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-19](#g-19) | The 50 ms short-command budget is a target until measured |
 | [G-21](#g-21) | Enterprise signing: key management service and refusal of an older manifest |
 | [G-232](#g-232) | How `update --restart-runs` moves live runs onto the new binary |
-| [G-279](#g-279) | How many recent runs `status --all` lists, and the scorecard window |
 
 ## 2. Output Formatter
 
@@ -4210,7 +4210,7 @@ A failed lint leaves no group started, so nothing is locked. The person fixes th
 
 A plan always asks the model: no earlier draft is reused. The only cached input is the repo map of one exact tree, built by Go code ([chapter 8](#8-cache-manager)).
 
-The Intake Handler runs inside the engine process, and `komodo plan` starts the engine when none runs ([chapter 7](#7-runtime-manager)). A plan runs from an event and publishes events, so no caller blocks on the model. How the CLI learns that planning ended is [TODO: how `komodo plan` learns that planning ended, when the CLI hears only run-status, run-complete, run-failure and error events and the last planning event is `run-start` ([G-274](#g-274))].
+The Intake Handler runs inside the engine process, and `komodo plan` starts the engine when none runs ([chapter 7](#7-runtime-manager)). A plan runs from an event and publishes events, so no caller blocks on the model. The CLI learns that planning ended from the `run-start` the Intake Handler publishes with `source` `intake`: while `plan` waits, the CLI also receives that event over its socket connection, and an `error` event ends the wait with that fault.
 
 ### 5.8 Config
 
@@ -4275,7 +4275,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question |
 |---|---|
-| [G-274](#g-274) | How `komodo plan` learns that planning ended |
 
 ## 6. Context Manager
 
@@ -13505,7 +13504,7 @@ type Reader interface {
 | Engine startup | `New`, `Run` | The engine starts the Service before it hosts a run and keeps it until the engine exits |
 | Runtime Manager | `Runs`, `Groups`, `Scorecard` | A `komodo status (id)` or `komodo status --all` request; the dashboard's repeated `status` request asks the same |
 | Runtime Manager | `Trim` | A `komodo clean` request |
-| The caller of `Explain` | `Explain` | [TODO: which command or view calls `Explain` to show a run's last events ([G-278](#g-278))] |
+| Runtime Manager | `Explain` | A `komodo status (id)` request for a failed or blocked group; the events go in the reply's `explain` |
 
 ### 18.5 Behaviour
 
@@ -13648,7 +13647,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-17](#g-17) | The 50% prompt-cache hit fixture needs real paid sessions | `cache_read_share` |
 | [G-19](#g-19) | The read target is unmeasured | 18.8 |
 | [G-26](#g-26) | Splitting tokens and dollars by provider family | `ScoreRow` |
-| [G-278](#g-278) | Which command or view calls `Explain` | The `Explain` caller |
 
 ## 19. Resource Manager
 
@@ -14545,12 +14543,9 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-268"></a>G-268 | Reviewer | Whether `doctor` reports review rules verified less than half the time | Phase 7, with `doctor` | [14](#14-reviewer), [1](#1-cli) |
 | <a id="g-272"></a>G-272 | Landing | How a group returns to Build after a failed recheck, and which block reason applies | Phase 6, with the Commit Handler | [15](#15-commit-handler), [7](#7-runtime-manager) |
 | <a id="g-273"></a>G-273 | Config | How `providers.local.<name>.models` writes several model names in one string | Phase 4, with the model client | [11](#11-task-manager), [3](#3-configuration-manager) |
-| <a id="g-274"></a>G-274 | Planning | How `komodo plan` learns that planning ended, when the CLI hears only run-status, run-complete, run-failure and error events and the last planning event is `run-start` | Phase 2, with the CLI | [1](#1-cli), [5](#5-intake-handler) |
 | <a id="g-275"></a>G-275 | Limits | How a group's token total survives an engine restart, since the Resource Manager keeps totals in memory only | Phase 5, with the Runtime Manager | [19](#19-resource-manager), [7](#7-runtime-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
 | <a id="g-277"></a>G-277 | Landing | How the group's Docker container sees the epic tip, which sits in the Commit Handler's landing worktree | Phase 6, with the Commit Handler | [11](#11-task-manager), [15](#15-commit-handler) |
-| <a id="g-278"></a>G-278 | Metrics | Which command or view calls `Explain` to show a run's last events | Phase 2, with the CLI | [18](#18-metrics-service), [1](#1-cli) |
-| <a id="g-279"></a>G-279 | Metrics | How many recent runs `status --all` lists, and over which days the scorecard counts | Phase 2, with the CLI | [1](#1-cli), [18](#18-metrics-service) |
 
 #### Spikes, measurements and later-minor items
 

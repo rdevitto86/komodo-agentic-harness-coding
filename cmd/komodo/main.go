@@ -26,7 +26,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	registerFaults.Do(fault.RegisterEvents)
 	deps, err := buildDeps(stdout, stderr)
 	if err != nil {
-		fmt.Fprintln(stderr, "komodo:", err)
+		_, _ = fmt.Fprintln(stderr, "komodo:", err)
 		return cli.ExitInternal
 	}
 	return cli.New(deps).Run(args)

@@ -133,10 +133,10 @@ var (
 
 // schemaOf builds the JSON Schema of a Go type from its field tags.
 func schemaOf(t reflect.Type) map[string]any {
-	switch {
-	case t == timeType:
+	switch t {
+	case timeType:
 		return map[string]any{"type": "string", "format": "date-time"}
-	case t == rawType:
+	case rawType:
 		return map[string]any{}
 	}
 	switch t.Kind() {

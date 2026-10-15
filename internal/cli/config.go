@@ -147,16 +147,16 @@ func resetKeys(c *Call) Result {
 
 // confirm lists each change on standard error and reads one line from standard input; only y accepts.
 func (c *CLI) confirm(plan []config.Change) bool {
-	fmt.Fprintln(c.errOut, "These settings go back to their built-in values:")
+	_, _ = fmt.Fprintln(c.errOut, "These settings go back to their built-in values:")
 	for _, p := range plan {
-		fmt.Fprintf(c.errOut, "  %s: %s -> %s\n", p.Key, text(p.Old), text(p.New))
+		_, _ = fmt.Fprintf(c.errOut, "  %s: %s -> %s\n", p.Key, text(p.Old), text(p.New))
 	}
-	fmt.Fprint(c.errOut, "Type y to continue: ")
+	_, _ = fmt.Fprint(c.errOut, "Type y to continue: ")
 	line, _ := bufio.NewReader(c.in).ReadString('\n')
 	if strings.EqualFold(strings.TrimSpace(line), "y") {
 		return true
 	}
-	fmt.Fprintln(c.errOut, "Nothing was changed.")
+	_, _ = fmt.Fprintln(c.errOut, "Nothing was changed.")
 	return false
 }
 

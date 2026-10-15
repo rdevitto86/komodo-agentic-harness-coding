@@ -70,18 +70,18 @@ func (s *fakeServer) serve(conn net.Conn) {
 		s.handler(s, req, func(rep engine.Reply) {
 			rep.ID = req.ID
 			b, _ := json.Marshal(rep)
-			conn.Write(append(b, '\n'))
+			_, _ = conn.Write(append(b, '\n'))
 		})
 	}
 }
 
 // Close stops listening and drops every connection.
 func (s *fakeServer) Close() {
-	s.ln.Close()
+	_ = s.ln.Close()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, c := range s.conns {
-		c.Close()
+		_ = c.Close()
 	}
 }
 
@@ -205,7 +205,7 @@ func TestStaleSocketFileStartsEngine(t *testing.T) {
 	e := quickEngine(home)
 	e.Start = func(context.Context) error {
 		started = true
-		os.Remove(filepath.Join(home, "state", "engine.sock"))
+		_ = os.Remove(filepath.Join(home, "state", "engine.sock"))
 		startFake(t, home, finalOK)
 		return nil
 	}
@@ -271,7 +271,7 @@ func TestSlowEngineWithFreshBeatIsNotKilled(t *testing.T) {
 func TestEngineStoppingStartsNewEngineAndResends(t *testing.T) {
 	home := shortHome(t)
 	stopping := startFake(t, home, func(s *fakeServer, _ engine.Request, send func(engine.Reply)) {
-		s.ln.Close()
+		_ = s.ln.Close()
 		send(engine.Reply{Status: engine.StatusRefused, Code: engine.CodeEngineStopping, Final: true})
 	})
 	var fresh *fakeServer
@@ -354,13 +354,13 @@ func TestHelperEngine(t *testing.T) {
 		}
 		line, err := bufio.NewReader(conn).ReadBytes('\n')
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			continue
 		}
 		var req engine.Request
 		_ = json.Unmarshal(line, &req)
 		b, _ := json.Marshal(engine.Reply{ID: req.ID, Status: engine.StatusOK, Data: json.RawMessage(`{"spawned":true}`), Final: true})
-		conn.Write(append(b, '\n'))
+		_, _ = conn.Write(append(b, '\n'))
 		os.Exit(0)
 	}
 }
