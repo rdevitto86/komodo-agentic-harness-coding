@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,36 +46,81 @@ func TestMachineRecordLockIgnoresFileAge(t *testing.T) {
 	}
 }
 
-// The per-process write mutex is taken only after the file lock, and a read never takes it.
-func TestMachineMutexAfterFileLockAndReadsFree(t *testing.T) {
-	m, home := newMach(t, "engine/1")
+// Writers of one process queue on the kind's semaphore and only one polls the file lock, so none times out.
+func TestConcurrentSlotsInOneProcessAllSucceed(t *testing.T) {
+	m, _ := newMach(t, "engine/1")
+	var wg sync.WaitGroup
+	var failed atomic.Int32
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if ok, err := m.TakeSlot("l", 1000); !ok || err != nil {
+				failed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if failed.Load() != 0 {
+		t.Fatalf("%d of 200 TakeSlot calls failed", failed.Load())
+	}
+	r, _ := LoadMachine[ProvidersBody](m, KindProviders)
+	if r.Body.Links["l"].Sessions != 200 {
+		t.Fatalf("sessions %d, want 200", r.Body.Links["l"].Sessions)
+	}
+}
+
+// A writer waiting on the kind's semaphore gives up when its context ends, and a read never takes the semaphore.
+func TestKindSemaphoreHonoursContextAndReadsAreFree(t *testing.T) {
+	m, _ := newMach(t, "engine/1")
 	if _, err := SaveMachine(m, KindUpdate, UpdateBody{Latest: "1.0.1", CheckedAt: t0}, 0); err != nil {
 		t.Fatal(err)
 	}
-	hold, err := core.FileLock(context.Background(), machPath(home, KindUpdate)+".lock", time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := SaveMachine(m, KindUpdate, UpdateBody{Latest: "1.0.2", CheckedAt: t0}, 1)
-		done <- err
-	}()
-	time.Sleep(100 * time.Millisecond)
-	if !m.kindMu[KindUpdate].TryLock() {
-		t.Fatal("a writer waiting for the file lock already holds the process mutex")
-	}
-	m.kindMu[KindUpdate].Unlock()
-	m.kindMu[KindUpdate].Lock()
+	m.kindSem[KindUpdate] <- struct{}{}
 	if _, err := LoadMachine[UpdateBody](m, KindUpdate); err != nil {
-		t.Fatalf("a read blocked on the write mutex: %v", err)
+		t.Fatalf("a read blocked on the write semaphore: %v", err)
 	}
-	m.kindMu[KindUpdate].Unlock()
-	if err := hold(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := m.lockRecord(ctx, KindUpdate); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Fatalf("want the context error at once, got %v after %v", err, time.Since(start))
+	}
+	<-m.kindSem[KindUpdate]
+}
+
+// A record that turns good between the bad read and the lock is returned, not moved aside.
+func TestLoadMachineKeepsARecordFixedMeanwhile(t *testing.T) {
+	good, goodHome := newMach(t, "engine/1")
+	if _, err := SaveMachine(good, KindUpdate, UpdateBody{Latest: "1.0.9", CheckedAt: t0}, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("save after the holder let go: %v", err)
+	fresh := readBytes(t, machPath(goodHome, KindUpdate))
+
+	for name, replace := range map[string][]byte{"good bytes": fresh, "other bad bytes": []byte("{still broken")} {
+		m, home := newMach(t, "engine/1")
+		writeRaw(t, machPath(home, KindUpdate), "{broken")
+		afterBadRead = func(MachineKind) { writeRaw(t, machPath(home, KindUpdate), string(replace)) }
+		r, err := LoadMachine[UpdateBody](m, KindUpdate)
+		afterBadRead = func(MachineKind) {}
+		bad, _ := filepath.Glob(machPath(home, KindUpdate) + ".bad-*")
+		if len(bad) != 0 {
+			t.Errorf("%s: a record changed meanwhile was set aside: %v", name, bad)
+		}
+		if name == "good bytes" && (err != nil || r.Body.Latest != "1.0.9") {
+			t.Errorf("%s: want the fresh record, got %+v %v", name, r, err)
+		}
+		if name != "good bytes" && !errors.Is(err, ErrCorrupt) {
+			t.Errorf("%s: want ErrCorrupt, got %v", name, err)
+		}
+	}
+	m, home := newMach(t, "engine/1")
+	writeRaw(t, machPath(home, KindUpdate), "{broken")
+	if _, err := LoadMachine[UpdateBody](m, KindUpdate); !errors.Is(err, ErrCorrupt) {
+		t.Fatal(err)
+	}
+	if bad, _ := filepath.Glob(machPath(home, KindUpdate) + ".bad-*"); len(bad) != 1 {
+		t.Fatalf("an unchanged bad record should be set aside once: %v", bad)
 	}
 }
 

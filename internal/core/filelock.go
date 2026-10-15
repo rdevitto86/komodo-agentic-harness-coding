@@ -56,3 +56,27 @@ func releaseLock(f *os.File) error {
 	cerr := f.Close()
 	return errors.Join(uerr, cerr)
 }
+
+// LockHeld reports whether another holder has the lock on path, opening the file read-only and never creating it.
+// A missing file is not held; any other failure counts as held, so a caller errs toward waiting.
+func LockHeld(path string) bool {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	defer func() { _ = f.Close() }()
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		return true
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
+}

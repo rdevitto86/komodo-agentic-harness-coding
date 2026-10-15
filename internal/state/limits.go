@@ -8,8 +8,8 @@ import (
 
 // updateProviders reads providers.json, lets fn change the body and saves it, all under the record's lock.
 // fn returns false when it changed nothing, and then nothing is written.
-func (m *Machine) updateProviders(fn func(b *ProvidersBody) bool) error {
-	return m.update(KindProviders, func(can any) bool { return fn(can.(*ProvidersBody)) })
+func (m *Machine) updateProviders(ctx context.Context, fn func(b *ProvidersBody) bool) error {
+	return m.update(ctx, KindProviders, func(can any) bool { return fn(can.(*ProvidersBody)) })
 }
 
 // link returns a link's record, adding an empty one when the link is new.
@@ -22,7 +22,7 @@ func link(b *ProvidersBody, name string) LinkRecord {
 
 // ResetSessions sets every link's session count to 0; the engine calls it at start.
 func (m *Machine) ResetSessions() error {
-	return m.updateProviders(func(b *ProvidersBody) bool {
+	return m.updateProviders(context.Background(), func(b *ProvidersBody) bool {
 		changed := false
 		for n, l := range b.Links {
 			if l.Sessions != 0 {
@@ -47,7 +47,7 @@ func (m *Machine) ResetAt(name string) (time.Time, bool) {
 
 // Record stores when a link's limit lifts and which cap was hit.
 func (m *Machine) Record(name string, reset time.Time, capKind string) error {
-	return m.updateProviders(func(b *ProvidersBody) bool {
+	return m.updateProviders(context.Background(), func(b *ProvidersBody) bool {
 		l := link(b, name)
 		l.ResetAt, l.Cap = reset, capKind
 		b.Links[name] = l
@@ -58,7 +58,7 @@ func (m *Machine) Record(name string, reset time.Time, capKind string) error {
 // TakeSlot counts one more live session on the link; false when the link already has most.
 func (m *Machine) TakeSlot(name string, most int) (bool, error) {
 	taken := false
-	err := m.updateProviders(func(b *ProvidersBody) bool {
+	err := m.updateProviders(context.Background(), func(b *ProvidersBody) bool {
 		l := link(b, name)
 		if l.Sessions >= most {
 			taken = false
@@ -74,7 +74,7 @@ func (m *Machine) TakeSlot(name string, most int) (bool, error) {
 
 // ReleaseSlot counts one session fewer on the link, never below 0.
 func (m *Machine) ReleaseSlot(name string) error {
-	return m.updateProviders(func(b *ProvidersBody) bool {
+	return m.updateProviders(context.Background(), func(b *ProvidersBody) bool {
 		l, ok := b.Links[name]
 		if !ok || l.Sessions == 0 {
 			return false
@@ -108,7 +108,7 @@ func (m *Machine) SaveWindow(ctx context.Context, k WindowKey, rec WindowRecord)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return m.updateProviders(func(b *ProvidersBody) bool {
+	return m.updateProviders(ctx, func(b *ProvidersBody) bool {
 		l := link(b, k.Link)
 		if l.Windows == nil {
 			l.Windows = map[string]WindowRecord{}

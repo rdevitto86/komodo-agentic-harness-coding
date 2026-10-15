@@ -481,19 +481,3 @@ func TestFenceSurvivesRelease(t *testing.T) {
 		t.Fatalf("the high-water file is missing: %v", err)
 	}
 }
-
-// A broken high-water file refuses the grant instead of restarting the count.
-func TestCorruptFenceFileRefusesGrant(t *testing.T) {
-	e := newEnv(t)
-	m := e.manager(100)
-	if _, err := m.Grant(bg, req("run-a", "g1")); err != nil {
-		t.Fatal(err)
-	}
-	dir, _ := e.reg.repoDir(testRepo)
-	if err := os.WriteFile(filepath.Join(dir, ".fences.json"), []byte("{broken"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.Grant(bg, req("run-b", "g2")); err == nil {
-		t.Fatal("a grant went ahead over an unreadable fence file")
-	}
-}

@@ -40,7 +40,8 @@ type Manager struct {
 	pid       int    // this process
 	procStart time.Time
 	now       func() time.Time
-	locks     sync.Map // key to *sync.Mutex: one per group, one per repo
+	locks     sync.Map // group key to *sync.Mutex
+	sems      sync.Map // repo id to the repository's semaphore
 }
 
 // New opens the lease manager over a registry and a process check; lockTimeoutS is the value of lease.lock_timeout_s.
@@ -102,20 +103,31 @@ func (m *Manager) Grant(ctx context.Context, req GrantRequest) (Lease, error) {
 	return Lease{}, fmt.Errorf("grant %s: %w", req.Group, ErrStaleRev)
 }
 
+// repoSem returns the in-process semaphore of a repository, creating it on first use.
+func (m *Manager) repoSem(repo string) chan struct{} {
+	sem, _ := m.sems.LoadOrStore(repo, make(chan struct{}, 1))
+	return sem.(chan struct{})
+}
+
 // lockRepo holds one repository's lock inside this process and, when the registry offers it, across processes.
+// Waiting for either ends when the context does.
 func (m *Manager) lockRepo(ctx context.Context, repo string) (func(), error) {
-	mu := m.mutex("r\x00" + repo)
-	mu.Lock()
+	sem := m.repoSem(repo)
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	rl, ok := m.reg.(RepoLocker)
 	if !ok {
-		return mu.Unlock, nil
+		return func() { <-sem }, nil
 	}
 	unlock, err := rl.LockRepo(ctx, repo)
 	if err != nil {
-		mu.Unlock()
+		<-sem
 		return nil, err
 	}
-	return func() { unlock(); mu.Unlock() }, nil
+	return func() { unlock(); <-sem }, nil
 }
 
 // highFence returns the highest fence a group ever had, or 0 when the registry keeps none.

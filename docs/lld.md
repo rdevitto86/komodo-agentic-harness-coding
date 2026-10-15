@@ -2432,7 +2432,7 @@ sequenceDiagram
 
 A crash after step 7 leaves a logged batch that never applied; the next write's `old` values show it. A crash after step 8 leaves the checksum stale, so the guard reads Tampered until a person checks the file and accepts it. No crash leaves a change applied and unlogged.
 
-A reader that finds a file and its checksum disagreeing while the lock is held rereads once after 100 milliseconds before reporting Tampered.
+A reader that finds a file and its checksum disagreeing while another process holds the lock rereads once after 100 milliseconds before reporting Tampered. The reader checks the lock through a read-only open that never creates the file; a missing lock file is not held, and any other open failure counts as held.
 
 Model values are validated against the probe. With no probe record, a `model` write is refused with `over_limit` and the fix `komodo install --machine-only`, which re-runs the probe. The probe covers `claude-cli` and `anthropic-api`.
 
@@ -2588,7 +2588,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question |
 |---|---|
-| [G-280](#g-280) | Whether Komodo refuses a home folder on a network filesystem |
+| [G-280](#g-280) | Whether Komodo refuses a network or shared home folder |
 ## 4. Event Bus
 
 The Event Bus is the harness's spine: a part that learns something publishes it as an event, and any part that needs it subscribes by event type, so a publisher never knows who listens. Every event has the same shape, so one reader can handle all of them. The design and its reasons are in [HLD 5.5](hld.md#55-event-bus).
@@ -6431,7 +6431,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 | Gap | Question | Closes by |
 |---|---|---|
 | [G-218](#g-218) | What triggers removing a dead run's leftover worktrees, branches and sandboxes after a crash | Stated default |
-| [G-280](#g-280) | Whether Komodo refuses a home folder on a network filesystem |
+| [G-280](#g-280) | Whether Komodo refuses a network or shared home folder |
 | [G-07](#g-07) | The real Max five-hour window against 3 sessions on one subscription link | Ledger measurement over the first 20 groups |
 ## 8. Cache Manager
 
@@ -6904,7 +6904,7 @@ internal/lease/
 ├── files.go      file registry: JSON records
 ├── lock.go       lock files: take through core.FileLock
 ├── fences.go     the per-repository fence high-water mark
-├── identity.go   the machine id
+├── identity.go   the machine id from the operating system
 ├── lease.go      Lease, Fence, liveness rule, errors
 ├── proc.go       process existence and process start time
 ├── config.go     lock timeout from the config value
@@ -6917,8 +6917,8 @@ internal/lease/
 | `registry.go` | The storage seam the file registry implements |
 | `files.go` | `FileRegistry`: one JSON file per lease, safe writes |
 | `lock.go` | The lock file: `core.FileLock` with the registry's lock timeout as the longest wait |
-| `fences.go` | `FenceKeeper` and the file registry's `.fences.json`, the highest fence each group ever had |
-| `identity.go` | The machine id read from `~/.komodo/state/machine-id`, created with a random value when missing |
+| `fences.go` | `FenceKeeper` and the file registry's `.fences.json`, the highest fence each group ever had; a damaged file is set aside and rebuilt with a floor |
+| `identity.go` | The machine id: Linux `/etc/machine-id` then `/var/lib/dbus/machine-id`, macOS `IOPlatformUUID` from `ioreg -rd1 -c IOPlatformExpertDevice`; only without one, a random value kept in `~/.komodo/state/machine-id` |
 | `lease.go` | The `Lease` value and the rule for whether it is live |
 | `proc.go` | `ProcessCheck`, `OSProcessCheck` and `ProcessStart`, which ask `ps` for a process start time |
 | `config.go` | `LockTimeout`, which turns the value of `lease.lock_timeout_s` into a duration. The caller reads the key from the Configuration Manager, because no other package imports it ([3.7](#37-invariants-and-failures)) |
@@ -6931,7 +6931,7 @@ On disk this chapter writes under the machine folder `~/.komodo/`. The registry 
 ~/.komodo/leases/<repo-id>/<group-id>.lock   locked only while a write is in progress
 ~/.komodo/leases/<repo-id>/.fences.json       the highest fence each group of the repository ever had
 ~/.komodo/leases/<repo-id>/.repo.lock        locked only while a grant or a revocation is in progress
-~/.komodo/state/machine-id                   the id of this machine, made on first use
+~/.komodo/state/machine-id                   the id of this machine, made on first use only when the operating system gives none
 ```
 
 The repo id is written as one folder name by URL path escaping, so `/` becomes `%2F` and a leading `.` becomes `%2E`. A group id that is empty, starts with `.` or holds a path separator is refused with `ErrBadKey`.
@@ -7017,8 +7017,8 @@ type Lease struct {
 |---|---|
 | `repo`, `group` | Together the registry key; one record per group |
 | `branch`, `worktree` | No two live records name the same branch or the same worktree path |
-| `pid`, `proc_start` | On the same host a lease is live while this process exists and started at this time; a reused process id with a different start time is a different process |
-| `host` | The machine id of the holder; the process check runs only when it equals this machine's id, so a changed network host name never splits liveness |
+| `pid`, `proc_start` | On the same machine a lease is live while this process exists and started at this time; a reused process id with a different start time is a different process. A holder whose start time is unknown (the zero time) is judged by its last renewal against `LeaseExpiry`, never by its process id alone |
+| `host` | The machine id of the holder; the process check runs only when it equals this machine's id, so a changed network host name never splits liveness. A home folder shared by several machines or containers is unsupported ([G-280](#g-280)) |
 | `clone_path` | The sweep removes a record whose clone is gone |
 | `fence` | The fence written at grant, takeover or revocation; it never falls, and a new record after `Release` starts above the highest fence the group had |
 | `rev` | Every registry write names the `rev` it read; a stale `rev` is refused |
@@ -7270,7 +7270,7 @@ A crash between steps 1 and 5 frees the lock at once and leaves a record that is
 - Two processes agree through the file lock and the `rev` check of `Create` and `Swap`; no in-memory lock crosses processes.
 - A lock held by a dead writer is free at once, because the kernel releases it with the process.
 - Inside one process a mutex guards each group, so a `Renew` and an `IsOwner` of one group never interleave.
-- A `Grant` and a `Revoke` hold the repository's lock first, so they run one at a time per repository across processes; each raises the group's entry in `.fences.json` under that lock before it writes the record that carries the fence. Lock order is always the repository, then the group.
+- A `Grant` and a `Revoke` hold the repository's lock first, so they run one at a time per repository across processes. The in-process part is a semaphore that a context can cancel, taken before the file lock; each call raises the group's entry in `.fences.json` under that lock before it writes the record that carries the fence. Lock order is always the repository, then the group.
 
 ### 9.6 State
 
@@ -7356,7 +7356,10 @@ Tests use a temporary directory; no network, no git and no live provider.
 - Two processes taking over a dead group again and again give fences that are each used once and rise without a gap (child-process test).
 - Many writers racing for one lock never overlap.
 - A `ps` that times out, is killed or rejects its flags is unknown, and a live process that answers signal 0 is never taken over.
-- A machine id is made once under `~/.komodo/state/machine-id` and every lease records it.
+- A machine id comes from the operating system, and only without one is it made once under `~/.komodo/state/machine-id`; every lease records it.
+- A holder with an unknown start time is live only while its last renewal is within `LeaseExpiry`, whatever process holds its pid.
+- A damaged `.fences.json` is set aside as `.fences.json.bad-<unix>` and rebuilt with a floor of the larger of the current Unix seconds and the highest fence in any record of the repository; the next fence of every group is above that floor, and the repair is reported once.
+- A grant or revocation waiting for the repository's lock, in this process or another, ends when its context does.
 - A repo id of dots or slashes stays inside the registry folder, and a group id with a path separator is refused.
 
 ### 9.10 Open Gaps
@@ -8127,8 +8130,9 @@ A damaged record is never repaired automatically. A group whose record is set as
 6. A stale temporary file is deleted by the next open when it is older than 1 hour.
 7. A quarantined name that already exists gets `-1`, `-2` and so on after the time.
 8. Probe results are stored compact, and every time is stored in UTC.
-9. A write holds the exclusive operating-system lock on `<kind>.json.lock` from the revision check to the rename, taken through `core.FileLock` with a 2 second wait, so two processes never both pass the check. The kernel frees the lock when its holder dies; the file stays. The per-process mutex of the kind is taken only after the file lock, and reads never take it.
-10. A folder a write creates (`runs/<group>`, `~/.komodo/state`) is followed by a sync of the folder above it.
+9. A write holds the exclusive operating-system lock on `<kind>.json.lock` from the revision check to the rename, taken through `core.FileLock` with a 2 second wait, so two processes never both pass the check. The kernel frees the lock when its holder dies; the file stays. Writers of one process first queue on a per-kind semaphore that a context can cancel, so only one of them polls the file lock; reads never take the semaphore. A home folder shared by several machines is unsupported.
+10. A record that fails a read check is set aside only after a reread under the record lock shows the same bytes; a record replaced meanwhile is returned or judged afresh.
+11. A folder a write creates (`runs/<group>`, `~/.komodo/state`) is followed by a sync of the folder above it.
 
 After the machine restarts, the next komodo command finds `schedule.json` and starts the engine, which starts any entry whose `at` has passed at once. Each machine-wide record has one writer process, the engine. The one exception is the CLI installer, which writes `install.json` and `update.json` with a `rev` check and, on `ErrStaleRev`, reads the record again and retries. The session counts in `providers.json` reset to 0 when the engine starts, so a process that died holding a session leaves no stale count.
 
@@ -8233,7 +8237,7 @@ Tests use a temporary directory; no network and no live provider.
 
 | Gap | Question |
 |---|---|
-| [G-280](#g-280) | Whether Komodo refuses a home folder on a network filesystem |
+| [G-280](#g-280) | Whether Komodo refuses a network or shared home folder |
 
 ## 11. Task Manager
 
@@ -14690,7 +14694,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-275"></a>G-275 | Limits | How a group's token total survives an engine restart, since the Resource Manager keeps totals in memory only | Phase 5, with the Runtime Manager | [19](#19-resource-manager), [7](#7-runtime-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
 | <a id="g-277"></a>G-277 | Landing | How the group's Docker container sees the epic tip, which sits in the Commit Handler's landing worktree | Phase 6, with the Commit Handler | [11](#11-task-manager), [15](#15-commit-handler) |
-| <a id="g-280"></a>G-280 | Platform | Whether Komodo refuses a home folder on a network filesystem, where the operating-system file lock may not be honoured | Phase 7, with `doctor` | [0](#0-front-matter-and-code-structure), [9](#9-lease-manager), [10](#10-state-manager) |
+| <a id="g-280"></a>G-280 | Platform | Whether Komodo refuses a network or shared home folder, where the operating-system file lock may not be honoured or several machines or containers share one set of state files; `doctor` checks both | Phase 7, with `doctor` | [0](#0-front-matter-and-code-structure), [9](#9-lease-manager), [10](#10-state-manager) |
 
 #### Spikes, measurements and later-minor items
 

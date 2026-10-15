@@ -412,3 +412,33 @@ func TestFamilyKeys(t *testing.T) {
 		t.Fatalf("empty variable part: %v", err)
 	}
 }
+
+// A lock in a read-only folder, on a read-only file, still shows as held, so Verify rereads.
+func TestLockHeldThroughReadOnlyFolder(t *testing.T) {
+	m, home := newTestManager(t)
+	state := filepath.Join(home, "state")
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if m.lockHeld() {
+		t.Fatal("no lock file is not held")
+	}
+	hold, err := core.FileLock(context.Background(), m.lockPath(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(m.lockPath(), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(state, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(state, 0o755) }()
+	if !m.lockHeld() {
+		t.Fatal("a held lock in a read-only folder must show as held")
+	}
+	_ = hold()
+	if m.lockHeld() {
+		t.Fatal("a freed lock must show as free")
+	}
+}

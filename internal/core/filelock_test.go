@@ -192,3 +192,41 @@ func TestFileLockStoppedHolderNeverLosesIt(t *testing.T) {
 	}
 	_ = unlock()
 }
+
+// LockHeld sees a lock through a read-only open, reports a missing file as free and any other open failure as held.
+func TestLockHeld(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.lock")
+	if LockHeld(path) {
+		t.Fatal("a missing lock file is not held")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("LockHeld must not create the file")
+	}
+	unlock, err := FileLock(context.Background(), path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+	if !LockHeld(path) {
+		t.Fatal("a held lock in a read-only folder must show as held")
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if LockHeld(path) {
+		t.Fatal("a freed lock must show as free")
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() != 0 && !LockHeld(path) {
+		t.Fatal("a file that cannot be opened must count as held, so callers reread")
+	}
+}

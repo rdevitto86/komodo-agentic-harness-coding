@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
@@ -32,7 +32,7 @@ type Machine struct {
 	writer    string // the writer as given to NewMachine
 	writeFile writeFunc
 
-	kindMu map[MachineKind]*sync.Mutex // one write mutex per record kind, taken after the file lock
+	kindSem map[MachineKind]chan struct{} // one write semaphore per record kind, taken before the file lock
 }
 
 // machineOut is a machine-wide record as encoded: the header fields beside the body.
@@ -53,9 +53,9 @@ func NewMachine(home, writer string) (*Machine, error) {
 	if home == "" {
 		return nil, errors.New("home folder is empty")
 	}
-	m := &Machine{dir: filepath.Join(home, "state"), writer: writer, writeFile: atomicWrite, kindMu: map[MachineKind]*sync.Mutex{}}
+	m := &Machine{dir: filepath.Join(home, "state"), writer: writer, writeFile: atomicWrite, kindSem: map[MachineKind]chan struct{}{}}
 	for _, k := range machineKinds {
-		m.kindMu[k] = &sync.Mutex{}
+		m.kindSem[k] = make(chan struct{}, 1)
 	}
 	sweepTemp(m.dir, ".", time.Now())
 	return m, nil
@@ -75,23 +75,32 @@ func (m *Machine) headerWriter() string {
 	return m.writer + "/" + strconv.Itoa(os.Getpid())
 }
 
-// lockRecord takes the operating-system lock of one record, then this process's write mutex for the kind.
-// It returns the function that releases both.
-func (m *Machine) lockRecord(k MachineKind) (func(), error) {
+// lockRecord takes this process's write semaphore for the kind, then the operating-system lock of the record.
+// Writers of one process queue on the semaphore, so only one polls the file lock; it returns the function that releases both.
+func (m *Machine) lockRecord(ctx context.Context, k MachineKind) (func(), error) {
+	sem := m.kindSem[k]
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	if err := mkdirSynced(m.dir); err != nil {
+		<-sem
 		return nil, &DiskError{Path: m.dir, Err: err}
 	}
 	lp := m.path(k) + ".lock"
-	unlock, err := core.FileLock(context.Background(), lp, machineLockWait)
-	if errors.Is(err, core.ErrLockWait) {
-		return nil, &DiskError{Path: lp, Err: errors.New("another komodo process holds the record lock")}
+	unlock, err := core.FileLock(ctx, lp, machineLockWait)
+	switch {
+	case errors.Is(err, core.ErrLockWait):
+		err = &DiskError{Path: lp, Err: errors.New("another komodo process holds the record lock")}
+	case err != nil && ctx.Err() == nil:
+		err = &DiskError{Path: lp, Err: err}
 	}
 	if err != nil {
-		return nil, &DiskError{Path: lp, Err: err}
+		<-sem
+		return nil, err
 	}
-	mu := m.kindMu[k]
-	mu.Lock()
-	return func() { mu.Unlock(); _ = unlock() }, nil
+	return func() { _ = unlock(); <-sem }, nil
 }
 
 // newBody returns an empty body struct of a kind, or nil for an unknown kind.
@@ -109,35 +118,62 @@ func newBody(k MachineKind) any {
 	return nil
 }
 
+// afterBadRead runs between a read that failed its checks and the lock that confirms it; tests replace it.
+var afterBadRead = func(MachineKind) {}
+
 // LoadMachine reads and checks a machine-wide record; a first run gets ErrNotFound and starts from an empty body.
+// A record that fails its checks is set aside only after a reread under the record lock shows the same bytes.
 func LoadMachine[T any](m *Machine, k MachineKind) (MachineRecord[T], error) {
+	rec, bad, err := loadRecord[T](m, k)
+	if bad == nil || !m.canWrite() {
+		return rec, err
+	}
+	afterBadRead(k)
+	unlock, lerr := m.lockRecord(context.Background(), k)
+	if lerr != nil {
+		return MachineRecord[T]{}, err
+	}
+	defer unlock()
+	if again, rerr := readRecord(m.path(k)); rerr != nil || !bytes.Equal(again, bad) {
+		rec, _, err = loadRecord[T](m, k)
+		return rec, err
+	}
+	return MachineRecord[T]{}, m.setAside(k, err)
+}
+
+// loadRecord reads and checks a record without moving anything; the bytes are returned when they failed a read check.
+func loadRecord[T any](m *Machine, k MachineKind) (MachineRecord[T], []byte, error) {
 	if newBody(k) == nil {
-		return MachineRecord[T]{}, invalid(string(k), "kind", "not a machine-wide record")
+		return MachineRecord[T]{}, nil, invalid(string(k), "kind", "not a machine-wide record")
 	}
 	data, err := readRecord(m.path(k))
 	if errors.Is(err, ErrNotFound) {
 		empty, cerr := convertBody[T](k, newBody(k))
 		if cerr != nil {
-			return MachineRecord[T]{}, cerr
+			return MachineRecord[T]{}, nil, cerr
 		}
-		return MachineRecord[T]{Header: MachineHeader{V: Version, Kind: k}, Body: empty}, ErrNotFound
+		return MachineRecord[T]{Header: MachineHeader{V: Version, Kind: k}, Body: empty}, nil, ErrNotFound
 	}
 	if err != nil {
-		return MachineRecord[T]{}, err
+		return MachineRecord[T]{}, nil, err
 	}
 	h, can, err := decodeMachine(k, data)
 	if err != nil {
-		return MachineRecord[T]{}, m.setAside(k, err)
+		var bad []byte
+		if errors.Is(err, ErrCorrupt) {
+			bad = data
+		}
+		return MachineRecord[T]{}, bad, err
 	}
 	body, err := convertBody[T](k, can)
 	if err != nil {
-		return MachineRecord[T]{}, err
+		return MachineRecord[T]{}, nil, err
 	}
-	return MachineRecord[T]{Header: h, Body: body}, nil
+	return MachineRecord[T]{Header: h, Body: body}, nil, nil
 }
 
-// setAside moves a record that failed a read check out of the way when this manager may write; other errors pass through.
-// A record another reader already moved is not a second failure.
+// setAside moves a record that failed a read check out of the way; the caller holds the record lock.
+// A record already moved is not a second failure.
 func (m *Machine) setAside(k MachineKind, err error) error {
 	if !errors.Is(err, ErrCorrupt) || !m.canWrite() {
 		return err
@@ -221,7 +257,7 @@ func SaveMachine[T any](m *Machine, k MachineKind, body T, rev int) (MachineReco
 		return zero, err
 	}
 
-	unlock, err := m.lockRecord(k)
+	unlock, err := m.lockRecord(context.Background(), k)
 	if err != nil {
 		return zero, err
 	}
@@ -286,11 +322,11 @@ func (m *Machine) readLocked(k MachineKind) (any, int, error) {
 
 // update reads a record under its lock, lets fn change the canonical body, checks it and stores it once.
 // fn returns false when it changed nothing, and then nothing is written.
-func (m *Machine) update(k MachineKind, fn func(can any) bool) error {
+func (m *Machine) update(ctx context.Context, k MachineKind, fn func(can any) bool) error {
 	if !m.canWrite() {
 		return ErrNotWriter
 	}
-	unlock, err := m.lockRecord(k)
+	unlock, err := m.lockRecord(ctx, k)
 	if err != nil {
 		return err
 	}

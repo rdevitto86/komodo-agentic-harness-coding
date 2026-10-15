@@ -65,12 +65,12 @@ func (e HeldError) Error() string { return "group is leased by run " + e.Holder.
 func (e HeldError) Unwrap() error { return ErrLeased }
 
 // Live reports whether a lease still has a working holder as seen from host.
-// A holder on this host is live while its process lives; one elsewhere, while its last renewal is young.
+// A holder on this host is live while its process lives; one elsewhere, or one whose start time is unknown, while its last renewal is young.
 func (l Lease) Live(now time.Time, host string, alive ProcessCheck) bool {
 	if l.State != StateHeld {
 		return false
 	}
-	if l.Host == host {
+	if l.Host == host && !l.ProcStart.IsZero() {
 		return alive != nil && alive(l.PID, l.ProcStart)
 	}
 	return now.Sub(l.RenewedAt) <= LeaseExpiry

@@ -40,18 +40,8 @@ func (m *Manager) lock() (func(), error) {
 	return func() { _ = unlock() }, nil
 }
 
-// lockHeld reports whether another holder has settings.lock right now.
-func (m *Manager) lockHeld() bool {
-	if _, err := os.Stat(m.lockPath()); err != nil {
-		return false
-	}
-	unlock, err := core.FileLock(context.Background(), m.lockPath(), 0)
-	if err != nil {
-		return errors.Is(err, core.ErrLockWait)
-	}
-	_ = unlock()
-	return false
-}
+// lockHeld reports whether another holder has settings.lock right now; an unreadable lock file counts as held.
+func (m *Manager) lockHeld() bool { return core.LockHeld(m.lockPath()) }
 
 // writeAtomic replaces a file in the home folder so a reader sees the old or the new bytes.
 func (m *Manager) writeAtomic(path string, data []byte) error {

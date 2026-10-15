@@ -17,7 +17,7 @@ import (
 const (
 	recordSuffix = ".json"        // a lease's record is <group-id>.json
 	repoLockName = ".repo.lock"   // holds one repository's grants and revocations still; no group id starts with a dot
-	crashAfter   = "after_rename" // test stage: the record is written and the lock is not yet deleted
+	crashAfter   = "after_rename" // test stage: the record is written and the lock is not yet released
 	crashLocked  = "after_lock"   // test stage: the lock is held and nothing is written yet
 )
 
@@ -28,6 +28,8 @@ var crashHook = func(string) {}
 type FileRegistry struct {
 	root        string
 	lockTimeout time.Duration
+	// OnRepair, when set, is told the path a damaged fence file was set aside to and why; it runs once per repair.
+	OnRepair func(setAside string, cause error)
 }
 
 // NewFileRegistry opens the folder of JSON records and lock files; lockTimeout is the longest a writer waits for a lock.
