@@ -8781,6 +8781,8 @@ type Session struct {
 	Tools   ToolHost        // bound tool functions; used by API links only
 	Env     []string        // environment of the claude program, after the scrub
 	Cache   cache.Handle   // the cache handle; the paid adapter stores its marker plan there
+	Parts   [5]string       // the brief's five parts; API links place cache markers between them
+	Gate    Gate            // the role's own check of a result; API links only, nil accepts any valid result
 }
 
 // Input is the one new user message sent when a session resumes.
@@ -8926,6 +8928,7 @@ var (
 	ErrBilling      = errors.New("first line shows a paid API key")
 	ErrNotYet       = errors.New("link not built")
 	ErrStreamClosed = errors.New("stream already closed")
+	ErrUnpriced     = errors.New("model has no price in the catalog")
 )
 
 // CapKind names which provider cap was hit.
@@ -9555,6 +9558,28 @@ func CheckInit(i Init) error
 
 `Probe` and `Profile` return `ErrUnavailable` or `ErrUnauthorized` for a missing program, a silent endpoint or a logged-out login, and `ErrNotYet` for one of OpenAI's links, which the interface names and no adapter yet serves; `Router.Select` skips the link. `Start` returns `ErrModelGone` on HTTP 404 (the task's next session takes the prior identifier), `ErrBilling` when the first line shows a paid key, `*ProviderLimit` for a provider cap, and `ErrNotYet` for a link named but not built. `Stream.Next` returns `io.EOF` after the result event; `Inject` and `Stop` return `ErrStreamClosed` on an ended session, which the caller ignores. A failed `Resume` gets a fresh session (resume).
 
+The API links add a few shapes beside `Provider`:
+
+```go
+// ToolDefiner is implemented by a ToolHost that can describe its tools; a host without it gets a permissive schema.
+type ToolDefiner interface {
+	Definition(name string) (ToolDef, bool)
+}
+
+// Gate is the role's own check of a result; an empty reply passes it, any text goes back into the session.
+type Gate interface {
+	Check(ctx context.Context, output json.RawMessage) (string, error)
+}
+
+// EndError is what Stream.Next returns when the tool loop ends without a usable result.
+type EndError struct {
+	Reason state.Reason // check_fail, no_result or schema_fail
+	Detail string
+}
+```
+
+`Session` also carries `Parts`, the brief's five parts, so the paid adapter can place its cache markers between them, and `Gate`. `Client.ProbeAll` probes every adapter and returns one `ProbeResult` per link, with `OK` false and a `Reason` for a link that failed. `NewModelCheck(catalog, probes...)` returns the function the Configuration Manager takes as its `modelOK`: a model passes when a successful probe found it, or when it is a hosted catalog model and at least one probe succeeded. A paid-link `400` whose message begins `You have reached your specified API usage limits` becomes a `ProviderLimit` of cap `spend` inside the adapter.
+
 #### HTTP client
 
 `NewHTTPClient(opts)` builds the client and loads the CA bundle. `Do(ctx, ep, req)` sends with retries and returns the whole body; `Stream(ctx, ep, req, hooks)` feeds SSE events to the hooks and retries a mid-answer drop once from the start; `Redact` and `AddSecrets` manage the redaction list. `Do` and `Stream` return `*LimitError`, `*StatusError`, `ErrRefused` (policy) or `ErrStreamIdle` (silent body). The paid Anthropic adapter, the optional local adapter and, once built, OpenAI's interface adapter call it on every request; any other subsystem builds its own client with its own `Endpoint`.
@@ -9706,6 +9731,8 @@ Rules that hold on every walk:
 
 The check gives each link a cost class before every session and fails closed: any doubt counts as `paid`.
 
+**Pricing a paid session.** The paid adapter prices every turn from the catalog: cache reads at 0.1 times the input price, cache writes at 1.25 times for the 5-minute lifetime and 2 times for the 1-hour lifetime. A paid model with no catalog price, or a price of zero, is never started: `Start` and `Resume` return `ErrUnpriced`, so spend is never reported as zero.
+
 | Cost class | When | Runs |
 |---|---|---|
 | `subscription` | The `claude` link with `authMethod: claude.ai` and `subscriptionType` in `pro`, `max`, `team`, `enterprise` | Always |
@@ -9718,7 +9745,7 @@ The check gives each link a cost class before every session and fails closed: an
 | `fallback` | A paid link runs only after every subscription link is skipped |
 | `allowed` | Paid links run in chain order |
 
-1. Before each subscription session run `claude auth status --json` (0.1 s, cached 60 s per process). It sets the cost class; a logged-out or unknown login is `paid`.
+1. Before each subscription session run `claude auth status --json` (0.1 s) with the environment the session will use. The answer is cached 60 s per fingerprint of the variables that choose the login (`HOME`, `USER`, `LOGNAME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN` and the `XDG_*` folders), so a session with another login is checked on its own; a read that a cancelled caller or a timeout cut short is never cached. It sets the cost class; a logged-out or unknown login is `paid`.
 2. Remove `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` and every `CLAUDE_CODE_USE_*` from the environment. `CLAUDE_CODE_OAUTH_TOKEN` stays: it is a subscription token. The `claude` program in print mode prefers a present key over the login.
 3. Spawn the program and read its first line.
 4. `system/init` must say `apiKeySource: "none"`, else the session is killed before turn 1, exits `billing`, and the group escalates `blocked`, reason `paid_refused`.
@@ -9769,6 +9796,14 @@ The launch line, one flag per line:
 
 **Stream facts.** The first line is `system/init`. Piped standard input is capped at 10 MB; a 500K-token brief is about 2 MB. The program's `SIGINT` ends a turn and keeps its result, while `SIGTERM` leaves it unfinished with exit code 143, so the stop ladder sends `SIGINT` first.
 
+**Wire details the adapter fixes.**
+- The program starts in the session folder. A resume replaces `--session-id <uuid>` with `--resume <uuid>`, and the new input is the one message on standard input.
+- The brief is written to standard input right after the start, and the first line is read at once; the adapter kills the program on any first line that is not `system/init` with `apiKeySource: "none"`.
+- `api_retry` carries its category in `error` and its delay in `retry_delay_ms`; `rate_limit_event` carries `status`, `rateLimitType`, `isUsingOverage` and `resetsAt` under `rate_limit_info`.
+- A `rate_limit` event whose status starts with `allowed`, or that reports overage, never ends the session. `rateLimitType` maps to the cap: `five_hour` to `window`, `seven_day` to `weekly`, a name holding `opus` or `sonnet` to `model`.
+- The probe reuses the `system/init` line already recorded for the program version, so a second probe of one version spends no turn.
+- The `result` line is checked before it is passed on. `is_error` true or a subtype starting `error` ends the session with `no_result`; a missing `structured_output`, or one that breaks the agent's result schema, ends it with `schema_fail`. The program's own `--json-schema` is not trusted alone.
+
 **When a session ends on a limit.** A short rate limit that the program retries itself must not end the session. The adapter ends a session with exit reason `provider` only when:
 1. A `rate_limit` event carries a reset time more than 60 s away, the same bound the HTTP client uses to turn a rate limit into a stop.
 2. A `retry` event has category `billing_error`.
@@ -9814,7 +9849,15 @@ The loop runs on API links. It is the harness's copy of what the `claude` progra
 
 No result tool exists mid-session: the result always comes from the final call, on every link.
 
-**Context limit.** The loop counts tokens every turn with the bundled tokenizer. When the conversation passes `min(200,000 tokens, 80% of the link's measured context)`, the oldest tool outputs become one-line stubs, `[output of <tool> call <n> cut: <bytes> bytes in out/<n>.log]`, until the conversation is half that size. Cutting to half lets the cache break rarely and each turn send less. If the conversation is still over the context after stubbing, the session ends with `no_result` and nothing past the context is sent. Tokens spent come from the provider's reported usage after each turn.
+**Stop and inject.** `Inject` queues a line that rides on the next user message sent to the model. `Stop(Interrupt)` lets the current tool call finish and then makes the next call the final one; `Terminate` and `Kill` cancel at once. A loop that ends without a usable result returns `*EndError`, whose `Reason` is `check_fail`, `no_result` or `schema_fail`. `messages.jsonl` numbers each line `turn` by the message's position in the conversation.
+
+**Stubs and numbering.** The stub names the log path the tool host returned in `ToolReply.LogPath`; when the host saved no log, the stub ends `bytes, not saved]`. A call numbers from 1 in the session; a resumed session continues the numbering from the saved conversation, and the log paths of calls made before the resume are not kept, so their stubs say `not saved`.
+
+**Cut tool calls.** A tool call whose arguments were cut off at the output limit, never closed, or are not valid JSON is never dispatched. It gets an `error:` tool result that says it did not run, and the model sends it again.
+
+**Saved conversation.** `messages.jsonl` holds one line per message. A tool result, the `continue` message and the final-call prompt that follow one model reply share one user message and one line, so a resumed session reads alternating user and assistant messages. A reply with no content ends the session with `no_result`. The saved blocks keep the fields the Messages interface requires even when empty: a `thinking` block keeps its `thinking` and `signature`, a `tool_use` keeps `input`, and an empty text block is dropped when the reply is assembled.
+
+**Context limit.** The loop counts tokens every turn: the larger of the encoded size divided by 4 and the last reported input size plus the encoded size of what was added since, because the standard library has no tokenizer. When the conversation passes `min(200,000 tokens, 80% of the link's measured context)`, the oldest tool outputs become one-line stubs, `[output of <tool> call <n> cut: <bytes> bytes in <log path>]`, until the conversation is half that size. Cutting to half lets the cache break rarely and each turn send less. If the conversation is still over the context after stubbing, the session ends with `no_result` and nothing past the context is sent. Tokens spent come from the provider's reported usage after each turn.
 
 #### Run the session clocks
 
