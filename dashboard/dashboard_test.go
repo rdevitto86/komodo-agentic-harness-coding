@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -80,10 +81,16 @@ func TestAssetServedWithoutToken(t *testing.T) {
 
 func TestPageDrawsEveryStageAndAgent(t *testing.T) {
 	body := do(newTestServer(t), http.MethodGet, "/?t="+testToken, "127.0.0.1:9000").Body.String()
-	for _, want := range append(append([]string{}, Stages...), Agents...) {
+	for _, want := range append([]string{"Intake", "Build", "Test · review", "Commit", "Cleanup", "Done"}, Agents...) {
 		if !strings.Contains(body, want) {
 			t.Errorf("page missing %q", want)
 		}
+	}
+	if len(Agents) != 4 {
+		t.Errorf("agents = %v, want planner, builder, tester, reviewer", Agents)
+	}
+	if !strings.Contains(body, `name="viewport"`) {
+		t.Errorf("page has no viewport meta for phone width")
 	}
 	if !strings.Contains(body, `data-on:change="@post('/agents/builder/model'+location.search)"`) {
 		t.Errorf("builder select does not post its model change: %q", body)
@@ -108,37 +115,39 @@ func TestPageAndStreamCarryNoToken(t *testing.T) {
 
 func TestEventsShowReadError(t *testing.T) {
 	body := stream(New(testToken, "testdata/missing.json", false)).Body.String()
-	if !strings.Contains(body, `data: elements <div id="groups"><p class="Blocked">read groups view:`) {
+	if !strings.Contains(body, `data: elements <div id="groups"><p class="err">read dashboard view:`) {
 		t.Fatalf("stream hides the read error: %q", body)
 	}
 }
 
-func TestEventsPatchTableAndDiagram(t *testing.T) {
+func TestEventsPatchCardsAndDiagram(t *testing.T) {
 	rec := stream(newTestServer(t))
 	body := rec.Body.String()
 	if rec.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("type = %q", rec.Header().Get("Content-Type"))
 	}
 	if n := strings.Count(body, "event: datastar-patch-elements\n"); n != 2 {
-		t.Errorf("patch events = %d, want 2 (table and diagram)", n)
+		t.Errorf("patch events = %d, want 2 (html parts and diagram)", n)
 	}
-	for _, want := range []string{`data: elements <div id="groups">`, "data: namespace svg",
-		`id="ptr-tg-1.2"`, `id="ptr-tg-1.3" class="pointer blocked"`} {
+	for _, want := range []string{`data: elements <div id="groups" class="cards">`, "data: namespace svg",
+		`id="ptr-tg-1.2" class="pointer active"`, `id="ptr-tg-1.3" class="pointer blocked"`,
+		`id="ptr-tg-1.4" class="pointer paused"`, `id="ptr-tg-1.0" class="pointer done"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("stream missing %q", want)
 		}
 	}
 }
 
-func TestEventsRenderRowsAndResumeOnlyWhenBlocked(t *testing.T) {
+func TestEventsRenderCardsAndResumeOnlyWhenHeld(t *testing.T) {
 	body := stream(newTestServer(t)).Body.String()
-	for _, want := range []string{"tg-1.2", "tg-1.3", "claude-opus-5-5", "regression", "You are the builder."} {
+	for _, want := range []string{"tg-1.2", "tg-1.3", "Audit log", "opus", "regression: tester failed 3 times",
+		"You are the builder.", "2 / 5 tasks", "18 min"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("stream missing %q", want)
 		}
 	}
-	if n := strings.Count(body, "/resume"); n != 1 {
-		t.Errorf("resume buttons = %d, want 1", n)
+	if n := strings.Count(body, "/resume"); n != 2 {
+		t.Errorf("resume buttons = %d, want 2 (one blocked, one paused)", n)
 	}
 }
 
@@ -166,7 +175,7 @@ func TestResumeRecordsAction(t *testing.T) {
 	s := newTestServer(t)
 	rec := post(s, "/groups/tg-1.3/resume?t="+testToken, "{}")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "resume tg-1.3") ||
-		!strings.Contains(rec.Body.String(), `data: elements <p id="log">`) {
+		!strings.Contains(rec.Body.String(), `data: elements <p id="log"`) {
 		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
 	}
 	if got := s.Actions(); len(got) != 1 || got[0] != "resume tg-1.3" {
@@ -218,14 +227,149 @@ func TestSetModelRefusesOversizedBody(t *testing.T) {
 
 func TestUsageHiddenWhenTrackingOff(t *testing.T) {
 	body := stream(newTestServer(t)).Body.String()
-	if strings.Contains(body, "Tokens") || strings.Contains(body, "48210") || strings.Contains(body, "1.92") {
-		t.Fatalf("usage streamed with tracking off: %q", body)
+	for _, bad := range []string{"Tokens", "USD", "48,210", "393,610", "$3.96"} {
+		if strings.Contains(body, bad) {
+			t.Fatalf("usage streamed with tracking off: %q in %q", bad, body)
+		}
 	}
 }
 
 func TestUsageShownWhenTrackingOn(t *testing.T) {
 	body := stream(New(testToken, "testdata/groups.json", true)).Body.String()
-	for _, want := range []string{"Tokens", "USD", "48210", "1.92"} {
+	for _, want := range []string{"Tokens", "USD", "48,210", "393,610", "$3.96", "$0.41"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stream missing %q", want)
+		}
+	}
+}
+
+// view loads the mock view the tests share.
+func view(t *testing.T) View {
+	t.Helper()
+	v, err := New(testToken, "testdata/groups.json", true).readView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestKPICountsRunningBlockedDoneAndUsage(t *testing.T) {
+	k := kpis(view(t))
+	if k.Running != 2 || k.Blocked != 1 || k.Done != 1 {
+		t.Errorf("running/blocked/done = %d/%d/%d, want 2/1/1", k.Running, k.Blocked, k.Done)
+	}
+	if k.Tokens != 393610 || k.USD < 3.959 || k.USD > 3.961 {
+		t.Errorf("tokens = %d, usd = %.2f, want 393610 and 3.96", k.Tokens, k.USD)
+	}
+}
+
+func TestKPITilesOnTheStream(t *testing.T) {
+	body := stream(New(testToken, "testdata/groups.json", true)).Body.String()
+	for _, want := range []string{`<div class="kpi running"><b>2</b>`, `<div class="kpi blocked"><b>1</b>`, `<div class="kpi done"><b>1</b>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stream missing %q", want)
+		}
+	}
+}
+
+func TestStageCountsFollowGroups(t *testing.T) {
+	got := stageCounts(view(t).Groups)
+	want := []int{1, 2, 1, 0, 0, 1}
+	if len(got) != len(Stages) {
+		t.Fatalf("counts = %v, want one per stage %v", got, Stages)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%s count = %d, want %d", Stages[i], got[i], want[i])
+		}
+	}
+}
+
+func TestStageBoxesShowLiveCounts(t *testing.T) {
+	body := stream(newTestServer(t)).Body.String()
+	if !strings.Contains(body, `id="count-build">2<`) || !strings.Contains(body, `id="count-commit">0<`) {
+		t.Errorf("stage boxes lack live counts: %q", body)
+	}
+}
+
+func TestRecentEventsNewestFirstAndCapped(t *testing.T) {
+	var es []Event
+	base := time.Date(2026, 10, 14, 15, 0, 0, 0, time.UTC)
+	for i := range 20 {
+		es = append(es, Event{Type: "run-status", Subtype: fmt.Sprint("e", i), At: base.Add(time.Duration(i%7) * time.Minute)})
+	}
+	got := recentEvents(es)
+	if len(got) != 15 {
+		t.Fatalf("events = %d, want 15", len(got))
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].At.After(got[i-1].At) {
+			t.Fatalf("event %d is newer than event %d", i, i-1)
+		}
+	}
+}
+
+func TestEventFeedOrderOnTheStream(t *testing.T) {
+	body := stream(newTestServer(t)).Body.String()
+	last := -1
+	for _, sub := range []string{"paused<", "resource-limit<", "window-warn<", "stage-entered<", "tester-fail<", "group-done<"} {
+		i := strings.Index(body[strings.Index(body, `id="events"`):], sub)
+		if i < 0 || i < last {
+			t.Fatalf("event %q at %d, after previous at %d: want newest first", sub, i, last)
+		}
+		last = i
+	}
+}
+
+func TestCardShowsChipsProgressAndSessions(t *testing.T) {
+	body := stream(newTestServer(t)).Body.String()
+	for _, want := range []string{
+		`class="chip blocked">Blocked`, `class="chip paused">Paused`, `class="chip done">Done`, `class="chip active">Build`,
+		`class="chip active">Test · review`, `style="width:40%"`,
+		`class="sessions test-review"`, `class="sess running"`, `class="sess pass"`, `class="sess fail"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stream missing %q", want)
+		}
+	}
+}
+
+func TestBriefDetailsAreSkippedByMorph(t *testing.T) {
+	body := stream(newTestServer(t)).Body.String()
+	if n := strings.Count(body, `<details id="brief-tg-1-2-`); n != 1 {
+		t.Errorf("details with a group id = %d, want 1", n)
+	}
+	if n, want := strings.Count(body, " data-ignore-morph>"), len(view(t).Groups); n != want {
+		t.Errorf("details that morph skips = %d, want %d", n, want)
+	}
+}
+
+func TestBriefDetailsIDChangesWithTheBrief(t *testing.T) {
+	cs := cards([]Group{{Group: "tg-1", Brief: "a"}, {Group: "tg-1", Brief: "a"}, {Group: "tg-1", Brief: "b"}})
+	if cs[0].ID != cs[1].ID || cs[0].ID == cs[2].ID || !strings.HasPrefix(cs[0].ID, "brief-tg-1-") {
+		t.Errorf("ids = %q, %q, %q: want a stable id per brief", cs[0].ID, cs[1].ID, cs[2].ID)
+	}
+}
+
+func TestPointersStackInTheirStageColumn(t *testing.T) {
+	ps := pointers([]Group{{Group: "a", Stage: "build"}, {Group: "b", Stage: "intake"}, {Group: "c", Stage: "build"}})
+	if ps[0].X != ps[2].X || ps[2].Y != ps[0].Y+26 || ps[1].Y != ps[0].Y {
+		t.Errorf("pointers = %+v, want a and c stacked 26 apart in one column, b in the first row of its own", ps)
+	}
+}
+
+func TestResourceMetersShowEveryLink(t *testing.T) {
+	body := stream(newTestServer(t)).Body.String()
+	for _, want := range []string{"claude-max", "96%", "codex-api", "41%", `meter hot`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stream missing %q", want)
+		}
+	}
+}
+
+func TestRunHeaderShowsRunRepoAndEpic(t *testing.T) {
+	body := stream(newTestServer(t)).Body.String()
+	for _, want := range []string{"r-7f2", "komodo-auth-api", "Lease renewal and token refresh"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("stream missing %q", want)
 		}
