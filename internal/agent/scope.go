@@ -66,8 +66,8 @@ func AutoDeny(paths []string, protected func(string) bool, ownedByOther func(str
 	return "", "", false
 }
 
-// MatchGlob matches a slash path against a pattern: * within one segment, ** across segments, ? one character, [abc] a set.
-// A pattern with no slash matches the base name at any depth.
+// MatchGlob matches a slash path against a guard pattern: * within one segment, ** across segments, ? one character, [abc] a set.
+// A pattern with no slash matches the base name at any depth; a group's file list uses MatchPath instead.
 func MatchGlob(glob, p string) bool {
 	if !strings.Contains(glob, "/") {
 		ok, err := path.Match(glob, path.Base(p))
@@ -96,4 +96,9 @@ func matchSegments(pat, segs []string) bool {
 		pat, segs = pat[1:], segs[1:]
 	}
 	return len(segs) == 0
+}
+
+// MatchPath matches a slash path against a file list entry: the same pattern grammar as MatchGlob, but an entry with no slash matches only at the root.
+func MatchPath(glob, p string) bool {
+	return matchSegments(strings.Split(glob, "/"), strings.Split(p, "/"))
 }

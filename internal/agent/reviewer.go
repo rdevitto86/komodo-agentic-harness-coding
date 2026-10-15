@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 // Verdict is the Reviewer's answer for one task identifier.
@@ -40,7 +42,7 @@ func ReviewerRole() Role {
 // ParseReviewerResult decodes a Reviewer final call, refusing unknown fields and verdict words.
 func ParseReviewerResult(raw []byte) (ReviewerResult, error) {
 	var r ReviewerResult
-	if err := decodeStrict(raw, &r); err != nil {
+	if err := core.DecodeStrict(raw, &r); err != nil {
 		return ReviewerResult{}, fmt.Errorf("decode reviewer result: %w", err)
 	}
 	for _, v := range r.Verdicts {
@@ -72,7 +74,10 @@ func (reviewer) AcceptResult(tasks []string, r ReviewerResult) error {
 }
 
 // ExactlyOnce rejects a list that skips or repeats a task identifier.
-func ExactlyOnce(want, got []string) error {
+func ExactlyOnce(want, got []string) error { return onceOf("task", want, got) }
+
+// onceOf rejects a list that skips or repeats an identifier of the named kind.
+func onceOf(kind string, want, got []string) error {
 	seen := map[string]int{}
 	for _, g := range got {
 		seen[g]++
@@ -80,10 +85,10 @@ func ExactlyOnce(want, got []string) error {
 	for _, w := range want {
 		switch seen[w] {
 		case 0:
-			return fmt.Errorf("task %s has no entry", w)
+			return fmt.Errorf("%s %s has no entry", kind, w)
 		case 1:
 		default:
-			return fmt.Errorf("task %s has %d entries", w, seen[w])
+			return fmt.Errorf("%s %s has %d entries", kind, w, seen[w])
 		}
 	}
 	return nil

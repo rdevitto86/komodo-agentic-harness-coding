@@ -21,8 +21,9 @@ type CheckerConfig struct {
 	BaseCoverage     func(ctx context.Context, base string) (float64, bool, error) // coverage at the base, when known
 	SecretPatterns   []*regexp.Regexp                                              // content patterns of the guard's secret row
 	Sibling          func(path string) bool                                        // reports a test sibling of a file in the list
-	Match            func(glob, path string) bool                                  // file list matcher; MatchGlob when nil
+	Match            func(glob, path string) bool                                  // file list matcher; MatchPath when nil
 	TestCommands     map[string]string                                             // language to its test command class
+	ReportCommands   map[string]string                                             // language to a command that prints its JUnit XML report
 	CoverageCommands map[string]string                                             // language to a coverage command that replaces the default
 }
 
@@ -32,7 +33,7 @@ type checker struct{ cfg CheckerConfig }
 // NewChecker returns the Checker that runs the eight mechanical steps.
 func NewChecker(cfg CheckerConfig) Checker {
 	if cfg.Match == nil {
-		cfg.Match = MatchGlob
+		cfg.Match = MatchPath
 	}
 	return checker{cfg}
 }
@@ -53,11 +54,14 @@ func (c checker) Check(ctx context.Context, run CommandRunner, in CheckInput) (C
 	if got[StepDoneWhen], err = doneWhenStep(ctx, run, in); err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepDoneWhen, err)
 	}
-	pkgs, tests, solo, err := c.runImpact(ctx, run, in)
+	pkgs, notes, tests, solo, err := c.runImpact(ctx, run, in)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepImpactSet, err)
 	}
 	got[StepImpactSet] = StepResult{Step: StepImpactSet, Level: LevelPass, Detail: pkgs}
+	if len(notes) > 0 {
+		got[StepImpactSet] = StepResult{Step: StepImpactSet, Level: LevelWarn, Detail: append(slices.Clone(pkgs), notes...)}
+	}
 	base, flake, flaky, blocked, err := c.judgeFailures(ctx, run, in, tests, solo)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepBaseline, err)
@@ -145,25 +149,15 @@ func joinOutputs(names, outs []string) string {
 }
 
 // runImpact runs the tests the change affects and returns their results; solo gives the command that reruns one failure alone.
-func (c checker) runImpact(ctx context.Context, run CommandRunner, in CheckInput) (pkgs []string, tests []TestRun, solo func(TestRun) string, err error) {
+// notes name each change that maps to no package, for which the whole module ran.
+func (c checker) runImpact(ctx context.Context, run CommandRunner, in CheckInput) (pkgs, notes []string, tests []TestRun, solo func(TestRun) string, err error) {
 	if in.Language != "go" {
-		cmd := c.cfg.TestCommands[in.Language]
-		if cmd == "" {
-			return nil, nil, nil, fmt.Errorf("no test command for language %q", in.Language)
-		}
-		exit, out, err := run(ctx, cmd)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("run %s: %w", cmd, err)
-		}
-		return []string{"test class"}, []TestRun{{Name: cmd, Passed: exit == 0, Output: CapOutput(out, GateOutputCap)}},
-			func(TestRun) string { return cmd }, nil
+		tests, solo, err = c.runTestClass(ctx, run, in.Language)
+		return []string{"test class"}, nil, tests, solo, err
 	}
-	pkgs, err = goImpactPackages(ctx, run, in.Changed)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if len(pkgs) == 0 {
-		return nil, nil, nil, nil
+	pkgs, notes, err = goImpactPackages(ctx, run, in.Changed)
+	if err != nil || len(pkgs) == 0 {
+		return nil, nil, nil, nil, err
 	}
 	quoted := make([]string, len(pkgs))
 	for i, p := range pkgs {
@@ -172,13 +166,13 @@ func (c checker) runImpact(ctx context.Context, run CommandRunner, in CheckInput
 	cmd := "go test -json -count=1 " + strings.Join(quoted, " ")
 	exit, out, err := run(ctx, cmd)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("run affected tests: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("run affected tests: %w", err)
 	}
 	tests = ParseGoTestJSON(out)
 	if len(tests) == 0 && exit != 0 {
-		tests = []TestRun{{Name: "go test", Output: CapOutput(out, GateOutputCap)}}
+		tests = []TestRun{{Name: "go test", Whole: true, Output: CapOutput(out, GateOutputCap)}}
 	}
-	return pkgs, tests, func(t TestRun) string {
+	return pkgs, notes, tests, func(t TestRun) string {
 		if t.Package == "" {
 			return cmd
 		}
@@ -186,32 +180,103 @@ func (c checker) runImpact(ctx context.Context, run CommandRunner, in CheckInput
 	}, nil
 }
 
-// goImpactPackages lists the packages a change affects: the changed packages and everything that imports one.
-func goImpactPackages(ctx context.Context, run CommandRunner, changed []string) ([]string, error) {
+// runTestClass runs a non-Go language's test command and reads per-test results from its JUnit report when one is configured.
+// Without per-test results, a failing command is one whole-command failure that can never be classed as pre-existing.
+func (c checker) runTestClass(ctx context.Context, run CommandRunner, lang string) ([]TestRun, func(TestRun) string, error) {
+	cmd := c.cfg.TestCommands[lang]
+	if cmd == "" {
+		return nil, nil, fmt.Errorf("no test command for language %q", lang)
+	}
+	exit, out, err := run(ctx, cmd)
+	if err != nil {
+		return nil, nil, fmt.Errorf("run %s: %w", cmd, err)
+	}
+	var tests []TestRun
+	if rc := c.cfg.ReportCommands[lang]; rc != "" {
+		_, rep, rerr := run(ctx, rc)
+		if rerr != nil {
+			return nil, nil, fmt.Errorf("read test report: %w", rerr)
+		}
+		if runs, perr := ParseJUnit(rep); perr == nil {
+			tests = runs
+		}
+	}
+	if tests == nil || (exit != 0 && !slices.ContainsFunc(tests, func(t TestRun) bool { return !t.Passed })) {
+		tests = append(tests, TestRun{Name: cmd, Passed: exit == 0, Whole: true, Output: CapOutput(out, GateOutputCap)})
+	}
+	return tests, func(TestRun) string { return cmd }, nil
+}
+
+// goImpactPackages lists the packages a change affects: the packages owning the changed files and everything that imports one.
+// A change that maps to no package, or lies in a nested module, selects the whole module and adds a note.
+func goImpactPackages(ctx context.Context, run CommandRunner, changed []string) (pkgs, notes []string, err error) {
 	exit, out, err := run(ctx, "go list -m")
 	if err != nil || exit != 0 {
-		return nil, fmt.Errorf("read module path: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
+		return nil, nil, fmt.Errorf("read module path: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
 	}
 	module := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
 	exit, out, err = run(ctx, goListCmd)
 	if err != nil || exit != 0 {
-		return nil, fmt.Errorf("list packages: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
+		return nil, nil, fmt.Errorf("list packages: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
 	}
 	deps := parseGoList(out)
-	var pkgs []string
+	nested, err := nestedModules(ctx, run)
+	if err != nil {
+		return nil, nil, err
+	}
+	var hit []string
+	whole := false
 	for _, p := range changed {
 		switch {
 		case p == "go.mod" || p == "go.sum":
-			return ImpactSet(deps, keysOf(deps)), nil
-		case strings.HasSuffix(p, ".go"):
-			if d := path.Dir(p); d == "." {
-				pkgs = append(pkgs, module)
+			whole = true
+		case slices.ContainsFunc(nested, func(d string) bool { return strings.HasPrefix(p, d+"/") }):
+			whole = true
+			notes = append(notes, "whole module: "+p+" is in a nested module")
+		default:
+			if pkg, ok := owningPackage(module, deps, p); ok {
+				hit = append(hit, pkg)
 			} else {
-				pkgs = append(pkgs, module+"/"+d)
+				whole = true
+				notes = append(notes, "whole module: "+p+" belongs to no package")
 			}
 		}
 	}
-	return ImpactSet(deps, pkgs), nil
+	if whole {
+		hit = keysOf(deps)
+	}
+	return ImpactSet(deps, hit), notes, nil
+}
+
+// nestedModules returns the folders of go.mod files below the root module.
+func nestedModules(ctx context.Context, run CommandRunner) ([]string, error) {
+	exit, out, err := run(ctx, "find . -name go.mod -not -path ./go.mod -not -path '*/node_modules/*'")
+	if err != nil || exit != 0 {
+		return nil, fmt.Errorf("list nested modules: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
+	}
+	var dirs []string
+	for _, ln := range strings.Split(out, "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			dirs = append(dirs, strings.TrimPrefix(path.Dir(ln), "./"))
+		}
+	}
+	return dirs, nil
+}
+
+// owningPackage returns the nearest package at or above a changed file's folder.
+func owningPackage(module string, deps map[string][]string, file string) (string, bool) {
+	for dir := path.Dir(file); ; dir = path.Dir(dir) {
+		pkg := module
+		if dir != "." {
+			pkg = module + "/" + dir
+		}
+		if _, ok := deps[pkg]; ok {
+			return pkg, true
+		}
+		if dir == "." {
+			return "", false
+		}
+	}
 }
 
 // keysOf returns the keys of a map.
@@ -245,6 +310,11 @@ func (c checker) judgeFailures(ctx context.Context, run CommandRunner, in CheckI
 		}
 		if ClassifyFailure(passed) == FlakeFlaky {
 			flaky = append(flaky, t.Key())
+			continue
+		}
+		if t.Whole {
+			blockNames = append(blockNames, t.Name+": per-test results are unavailable, so the failure cannot be classified against the baseline")
+			blockOuts = append(blockOuts, t.Output)
 			continue
 		}
 		if !loaded {

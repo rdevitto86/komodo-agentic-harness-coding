@@ -15,7 +15,7 @@ var (
 )
 
 // CoverageCommand returns the default command that prints a whole-repository line coverage report.
-// JavaScript, TypeScript, Java and Kotlin wrap the repository's own test command, so they need it.
+// JavaScript and TypeScript wrap the repository's own test command, so they need it. Java and Kotlin have no default: their command comes from the configuration.
 func CoverageCommand(language, testCmd string) (string, bool) {
 	switch language {
 	case "go":
@@ -29,13 +29,33 @@ func CoverageCommand(language, testCmd string) (string, bool) {
 		return "c8 --reporter=json-summary " + testCmd + "; cat coverage/coverage-summary.json", true
 	case "rust":
 		return "cargo llvm-cov --json --summary-only", true
-	case "java", "kotlin":
-		if testCmd == "" {
-			return "", false
-		}
-		return testCmd + "; cat build/reports/jacoco/test/jacocoTestReport.xml", true
 	}
 	return "", false
+}
+
+// pyReport, jsReport and rustReport hold the coverage field of each tool's JSON report.
+type pyReport struct {
+	Totals struct {
+		P *float64 `json:"percent_covered"`
+	} `json:"totals"`
+}
+
+type jsReport struct {
+	Total struct {
+		Lines struct {
+			Pct *float64 `json:"pct"`
+		} `json:"lines"`
+	} `json:"total"`
+}
+
+type rustReport struct {
+	Data []struct {
+		Totals struct {
+			Lines struct {
+				Percent *float64 `json:"percent"`
+			} `json:"lines"`
+		} `json:"totals"`
+	} `json:"data"`
 }
 
 // ParseCoverage reads the whole-repository line percent from a coverage command's output.
@@ -46,36 +66,15 @@ func ParseCoverage(language, output string) (float64, error) {
 			return strconv.ParseFloat(m[1], 64)
 		}
 	case "python":
-		var v struct {
-			Totals struct {
-				P *float64 `json:"percent_covered"`
-			} `json:"totals"`
-		}
-		if lastJSON(output, &v) && v.Totals.P != nil {
+		if v, ok := lastJSON(output, func(r pyReport) bool { return r.Totals.P != nil }); ok {
 			return *v.Totals.P, nil
 		}
 	case "javascript", "typescript":
-		var v struct {
-			Total struct {
-				Lines struct {
-					Pct *float64 `json:"pct"`
-				} `json:"lines"`
-			} `json:"total"`
-		}
-		if lastJSON(output, &v) && v.Total.Lines.Pct != nil {
+		if v, ok := lastJSON(output, func(r jsReport) bool { return r.Total.Lines.Pct != nil }); ok {
 			return *v.Total.Lines.Pct, nil
 		}
 	case "rust":
-		var v struct {
-			Data []struct {
-				Totals struct {
-					Lines struct {
-						Percent *float64 `json:"percent"`
-					} `json:"lines"`
-				} `json:"totals"`
-			} `json:"data"`
-		}
-		if lastJSON(output, &v) && len(v.Data) > 0 && v.Data[0].Totals.Lines.Percent != nil {
+		if v, ok := lastJSON(output, func(r rustReport) bool { return len(r.Data) > 0 && r.Data[0].Totals.Lines.Percent != nil }); ok {
 			return *v.Data[0].Totals.Lines.Percent, nil
 		}
 	case "java", "kotlin":
@@ -93,15 +92,17 @@ func ParseCoverage(language, output string) (float64, error) {
 	return 0, fmt.Errorf("no %s coverage percent in the output", language)
 }
 
-// lastJSON decodes the last JSON object that starts a line of out into v, reporting whether one decoded.
-func lastJSON(out string, v any) bool {
+// lastJSON returns the last JSON object that starts a line of out and passes has.
+func lastJSON[T any](out string, has func(T) bool) (T, bool) {
 	locs := lineStartJS.FindAllStringIndex(out, -1)
 	for i := len(locs) - 1; i >= 0; i-- {
-		if json.NewDecoder(strings.NewReader(out[locs[i][0]:])).Decode(v) == nil {
-			return true
+		var v T
+		if json.NewDecoder(strings.NewReader(out[locs[i][0]:])).Decode(&v) == nil && has(v) {
+			return v, true
 		}
 	}
-	return false
+	var zero T
+	return zero, false
 }
 
 // CoverageLevel judges head coverage against the floor; a base already under the floor only forbids lowering it.

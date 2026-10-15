@@ -13,6 +13,7 @@ type TestRun struct {
 	Name    string // empty for a package that failed without a failing test
 	Passed  bool
 	Output  string
+	Whole   bool // the whole test command, because no per-test results exist
 }
 
 // Key is the test's name in a baseline: the package and the test name joined by a dot.
@@ -41,7 +42,7 @@ type goEvent struct {
 }
 
 // ParseGoTestJSON reads go test -json output into one run per test.
-// A test whose subtest failed is left out beside the subtest, and a package that failed without a failing test is one run with an empty name.
+// A test with no pass, skip or fail event counts as failed. A test whose subtest failed is left out beside the subtest, and a package that failed without a failing test is one run with an empty name.
 func ParseGoTestJSON(out string) []TestRun {
 	type key struct{ pkg, test string }
 	results := map[key]*TestRun{}
@@ -54,13 +55,15 @@ func ParseGoTestJSON(out string) []TestRun {
 		k := key{e.Package, e.Test}
 		r := results[k]
 		if r == nil {
-			r = &TestRun{Package: e.Package, Name: e.Test, Passed: true}
+			r = &TestRun{Package: e.Package, Name: e.Test}
 			results[k] = r
 			order = append(order, k)
 		}
 		switch e.Action {
 		case "output":
 			r.Output += e.Output
+		case "pass", "skip":
+			r.Passed = true
 		case "fail":
 			r.Passed = false
 		}

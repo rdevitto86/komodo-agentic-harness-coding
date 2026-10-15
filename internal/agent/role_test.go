@@ -84,13 +84,8 @@ func TestCompiledRolesMatchTheEmbeddedRegistry(t *testing.T) {
 		if !slices.Equal(e.Slots.Optional, r.Slots.Optional) {
 			t.Errorf("%s: optional slots differ: %v vs %v", r.Name, e.Slots.Optional, r.Slots.Optional)
 		}
-		want := e.Slots.Required
-		if r.Name == "tester" {
-			// The registry entry omits the acceptance slot the Tester needs; the compiled role adds it.
-			want = append(slices.Clone(want), "acceptance")
-		}
-		if !slices.Equal(want, r.Slots.Required) {
-			t.Errorf("%s: required slots differ: %v vs %v", r.Name, want, r.Slots.Required)
+		if !slices.Equal(e.Slots.Required, r.Slots.Required) {
+			t.Errorf("%s: required slots differ: %v vs %v", r.Name, e.Slots.Required, r.Slots.Required)
 		}
 		var a, b any
 		if json.Unmarshal(e.Result, &a) != nil || json.Unmarshal(r.Result, &b) != nil || !reflect.DeepEqual(a, b) {

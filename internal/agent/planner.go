@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 // PlannerFile is one task-list file of the planner's draft.
@@ -32,7 +34,7 @@ func PlannerRole() Role {
 // Path and grammar rules are the lint's work.
 func ParsePlannerResult(raw []byte) (PlannerResult, error) {
 	var r PlannerResult
-	if err := decodeStrict(raw, &r); err != nil {
+	if err := core.DecodeStrict(raw, &r); err != nil {
 		return PlannerResult{}, fmt.Errorf("decode planner result: %w", err)
 	}
 	if len(r.Files) == 0 {

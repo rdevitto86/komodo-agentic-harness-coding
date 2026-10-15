@@ -2,11 +2,7 @@
 package agent
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"slices"
 )
 
@@ -57,17 +53,4 @@ func newRole(name string, tools, classes, guard, required, optional []string, re
 		Result:     schema,
 		PoolSlot:   pool,
 	}
-}
-
-// decodeStrict decodes one JSON value into v, refusing unknown fields and trailing data.
-func decodeStrict(raw []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("unexpected data after the JSON value")
-	}
-	return nil
 }

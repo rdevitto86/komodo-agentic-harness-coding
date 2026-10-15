@@ -102,9 +102,6 @@ func newTestChecker(cfg CheckerConfig) Checker {
 	if cfg.SecretPatterns == nil {
 		cfg.SecretPatterns = []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)}
 	}
-	if cfg.Match == nil {
-		cfg.Match = MatchGlob
-	}
 	if cfg.Sibling == nil {
 		cfg.Sibling = func(p string) bool { return strings.HasSuffix(p, "_test.go") }
 	}

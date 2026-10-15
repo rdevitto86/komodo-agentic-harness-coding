@@ -10331,7 +10331,7 @@ Go package `internal/agent` (HLD Appendix A). It holds the role definitions and 
 | `internal/agent/role.go` | `Role` and `Slots`, the compiled role definition every agent shares |
 | `internal/agent/builder.go` | The Builder's `Role`, `BuilderResult` and `ParseBuilderResult` |
 | `internal/agent/taskgate.go` | `CommandRunner`, `TaskGate` and `CapOutput`: rerun a completion command and return its capped outcome |
-| `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` and `MatchGlob`, the file pattern matcher of the guard's pattern rules |
+| `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` and `MatchGlob`, the guard's pattern matcher (a pattern with no slash matches the base name at any depth), and `MatchPath`, the matcher of a group's file list (a pattern with no slash matches only at the root, so `go.mod` never allows `tools/go.mod`) |
 
 Files this chapter calls but does not own:
 
@@ -10779,7 +10779,8 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 | `internal/agent/checker.go` | `CheckerConfig`, `NewChecker` and the eight steps |
 | `internal/agent/coverage.go` | `CoverageCommand`, `ParseCoverage` and `CoverageLevel` |
 | `internal/agent/gotest.go` | `TestRun`, `ParseGoTestJSON` and `NewBaseline`: Go test and package-list output |
-| `internal/agent/secrets.go` | The diff's added lines and the secret scan |
+| `internal/agent/secrets.go` | The diff reader (`diffLines`, which `Reviewer.Lenses` also uses) and the secret scan |
+| `internal/agent/junit.go` | `ParseJUnit`: per-test results from a JUnit XML report |
 | `internal/agent/baseline.go` | `Baseline`, `Classify`, `ClassifyFailure` |
 | `internal/agent/impact.go` | `ImpactSet` |
 | `internal/agent/scope.go` | `OutOfScope`, shared with the Builder ([12.2](#122-package-layout)) |
@@ -11058,8 +11059,8 @@ type CheckDone struct {
 type Tester interface {
 	// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
 	Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error)
-	// AcceptResult rejects a result that skips or repeats a task identifier or leaves evidence empty.
-	AcceptResult(tasks []string, r TesterResult) error
+	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, or leaves evidence empty.
+	AcceptResult(tasks, items []string, r TesterResult) error
 }
 
 // AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
@@ -11085,12 +11086,12 @@ func CaseCollisions(paths []string) [][]string
 
 `CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`.
 
-`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling and file-list matchers, and each language's test command. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>`; for another language the whole test command counts as one test that passes or fails by its exit code ([UNKNOWN: how the test output of languages other than Go is split into single tests]).
+`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Where a language's JUnit report command comes from is [TODO: where each non-Go language's JUnit report command comes from ([G-282](#g-282))].
 
 | Function | On failure |
 |---|---|
 | `Tester.Rerun` | An item with no `Cmd` is never rerun and its failure is never confirmed: `Rerun` returns `RerunUnconfirmed`. A command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking. |
-| `Tester.AcceptResult` | A skipped or repeated task identifier returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
+| `Tester.AcceptResult` | A skipped or repeated task identifier or acceptance item, or an item the group does not have, returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
 | `AdjudicateItem`, `ClassifyFailure`, `Baseline.Classify`, `ImpactSet`, `CaseCollisions` | Cannot fail. A test absent from the baseline is `ok` when it passes and `new` when it fails. |
 | `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass and is blocked `setup` naming the step. |
 
@@ -11140,7 +11141,7 @@ sequenceDiagram
 5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither the Tester nor the Reviewer starts. On a clean result it starts the Tester's session with the brief, and the Reviewer at the same moment ([14.5](#145-behaviour)).
 6. The Tester runs each acceptance item's command with `run` (classes `build` and `test`) and reads the diff and files as needed.
 7. It ends with one final call: a pass or fail with evidence for every item, and `confirmed` or `not_confirmed` for every task identifier.
-8. Go rejects a result that skips or repeats a task identifier.
+8. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item.
 9. Go reruns every failed item that has a command, twice, in the same container, and judges it with `AdjudicateItem`.
 10. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour).
 
@@ -11259,6 +11260,12 @@ func ImpactSet(deps map[string][]string, changed []string) []string {
 }
 ```
 
+A changed file that is not Go source belongs to the nearest package at or above its folder, so an embedded file or `testdata` selects the package that owns it. A change in a nested module, or one that maps to no package, selects every package of the module, and the `impact_set` step warns and names the file. Nested modules are not tested separately.
+
+For a language other than Go, the test command runs once and its JUnit report gives one result per test. When the report is missing or unreadable, a failing command is one whole-command failure. That failure is never classed as pre-existing, even when the command also failed at the base: it blocks, with a detail line saying that per-test results are unavailable, because a failure at the base would otherwise hide every new failure.
+
+A Go test that started and never finished, killed by another test's panic or a timeout, counts as failed.
+
 Without `-test`, `go list` omits packages that only a test file imports. With it, the test variant such as `poc/b [poc/b.test]` lists them, so the caller strips the bracket suffix and skips the generated `.test` main packages before calling `ImpactSet`.
 
 ##### Flake rule
@@ -11318,7 +11325,7 @@ Each default tool reports a whole-repository line percent in the field named. Ve
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
 | Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
 
-JavaScript, TypeScript, Java and Kotlin wrap the repository's own `test` command. The Java and Kotlin default prints Gradle's JaCoCo report from `build/reports/jacoco/test/jacocoTestReport.xml` [UNKNOWN: the report path of a Maven build].
+JavaScript and TypeScript wrap the repository's own `test` command. Java and Kotlin have no default command; the command that prints the JaCoCo report is [TODO: the command and report path for Java and Kotlin coverage ([G-281](#g-281))], so their coverage step fails naming the language until one is configured.
 
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
@@ -11428,6 +11435,8 @@ const (
 |---|---|---|
 | [G-267](#g-267) | Where the baseline result is stored and which sandbox runs it | 13.5 |
 | [G-169](#g-169) | Whether each default coverage tool yields a whole-repository line percent | 13.5 |
+| [G-281](#g-281) | The command and report path for Java and Kotlin coverage | 13.5 |
+| [G-282](#g-282) | Where each non-Go language's JUnit report command comes from | 13.4 |
 
 The Tester's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
@@ -14713,6 +14722,8 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
 | <a id="g-277"></a>G-277 | Landing | How the group's Docker container sees the epic tip, which sits in the Commit Handler's landing worktree | Phase 6, with the Commit Handler | [11](#11-task-manager), [15](#15-commit-handler) |
 | <a id="g-280"></a>G-280 | Platform | Whether Komodo refuses a network or shared home folder, where the operating-system file lock may not be honoured or several machines or containers share one set of state files; `doctor` checks both | Phase 7, with `doctor` | [0](#0-front-matter-and-code-structure), [9](#9-lease-manager), [10](#10-state-manager) |
+| <a id="g-281"></a>G-281 | Tester | The command and report path that print the JaCoCo line coverage of a Java or Kotlin repository, for Gradle and for Maven; no default is built in, so the coverage step fails naming the language | Phase 5, with the Task Manager | [13](#13-tester) |
+| <a id="g-282"></a>G-282 | Tester | Where the command that prints a non-Go language's JUnit XML report comes from (the repository profile or the configuration); until set, a failing test command of that language blocks as unclassifiable, so no default hides a failure | Phase 5, with the Task Manager | [13](#13-tester) |
 
 #### Spikes, measurements and later-minor items
 

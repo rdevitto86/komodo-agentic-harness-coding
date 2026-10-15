@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 // lensFS holds the lens catalogs: rule data in <lens>.json and rule text in <lens>.md.
@@ -146,7 +148,7 @@ func loadCatalog(name string) (Catalog, error) {
 		return Catalog{}, err
 	}
 	var c Catalog
-	if err := decodeStrict(raw, &c); err != nil {
+	if err := core.DecodeStrict(raw, &c); err != nil {
 		return Catalog{}, fmt.Errorf("decode catalog: %w", err)
 	}
 	if c.Lens != name {
@@ -278,13 +280,8 @@ func (r reviewer) AcceptFinding(f Finding, head, diff LineSource) (Severity, boo
 // changedLines returns the added and removed lines of a unified diff, without their marker or the file headers.
 func changedLines(text string) []string {
 	var out []string
-	for _, ln := range strings.Split(text, "\n") {
-		if len(ln) == 0 || strings.HasPrefix(ln, "+++ ") || strings.HasPrefix(ln, "--- ") {
-			continue
-		}
-		if ln[0] == '+' || ln[0] == '-' {
-			out = append(out, ln[1:])
-		}
+	for _, d := range diffLines(text) {
+		out = append(out, d.Text)
 	}
 	return out
 }

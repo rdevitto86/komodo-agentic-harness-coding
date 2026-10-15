@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 // BuilderStatus is how a Builder session ended its work.
@@ -41,7 +43,7 @@ func BuilderRole() Role {
 // ParseBuilderResult decodes and validates a Builder final call.
 func ParseBuilderResult(raw []byte) (BuilderResult, error) {
 	var r BuilderResult
-	if err := decodeStrict(raw, &r); err != nil {
+	if err := core.DecodeStrict(raw, &r); err != nil {
 		return BuilderResult{}, fmt.Errorf("decode builder result: %w", err)
 	}
 	if strings.TrimSpace(r.Summary) == "" {

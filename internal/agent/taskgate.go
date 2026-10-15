@@ -59,7 +59,11 @@ func CapOutput(s string, max int) string {
 	}
 	keep := max - len(truncMarker)
 	if keep < 2 {
-		return s[:max]
+		end := max
+		for end > 0 && !utf8.RuneStart(s[end]) {
+			end--
+		}
+		return s[:end]
 	}
 	head, tail := keep/2, keep-keep/2
 	for head > 0 && !utf8.RuneStart(s[head]) {

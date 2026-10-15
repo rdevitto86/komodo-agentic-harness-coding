@@ -94,7 +94,7 @@ func TestTesterAcceptResult(t *testing.T) {
 		Tasks: []TaskConfirmation{{Task: "tsk-a", Confirmation: Confirmed}, {Task: "tsk-b", Confirmation: NotConfirmed}},
 	}
 	tr := NewTester()
-	if err := tr.AcceptResult(tasks, good); err != nil {
+	if err := tr.AcceptResult(tasks, []string{"ac-1"}, good); err != nil {
 		t.Fatalf("good result: %v", err)
 	}
 	mut := func(f func(r *TesterResult)) TesterResult {
@@ -113,7 +113,7 @@ func TestTesterAcceptResult(t *testing.T) {
 		"bad reason":     mut(func(r *TesterResult) { r.Items[0].Reason = "because" }),
 	}
 	for name, r := range bad {
-		if err := tr.AcceptResult(tasks, r); err == nil {
+		if err := tr.AcceptResult(tasks, []string{"ac-1"}, r); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}

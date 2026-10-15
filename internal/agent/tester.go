@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 const (
@@ -84,8 +86,8 @@ type TesterVerdict struct {
 type Tester interface {
 	// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
 	Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error)
-	// AcceptResult rejects a result that skips or repeats a task identifier or leaves evidence empty.
-	AcceptResult(tasks []string, r TesterResult) error
+	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, or leaves evidence empty.
+	AcceptResult(tasks, items []string, r TesterResult) error
 }
 
 // TesterRole returns the compiled Tester role.
@@ -108,14 +110,14 @@ type goTester struct{}
 // ParseTesterResult decodes a Tester final call, refusing unknown fields.
 func ParseTesterResult(raw []byte) (TesterResult, error) {
 	var r TesterResult
-	if err := decodeStrict(raw, &r); err != nil {
+	if err := core.DecodeStrict(raw, &r); err != nil {
 		return TesterResult{}, fmt.Errorf("decode tester result: %w", err)
 	}
 	return r, nil
 }
 
-// AcceptResult rejects a result that skips or repeats a task identifier, leaves evidence empty or uses a word outside the schema.
-func (goTester) AcceptResult(tasks []string, r TesterResult) error {
+// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, leaves evidence empty or uses a word outside the schema.
+func (goTester) AcceptResult(tasks, items []string, r TesterResult) error {
 	got := make([]string, len(r.Tasks))
 	for i, t := range r.Tasks {
 		got[i] = t.Task
@@ -128,6 +130,16 @@ func (goTester) AcceptResult(tasks []string, r TesterResult) error {
 	}
 	if len(got) != len(tasks) {
 		return errors.New("result names a task that is not in the group")
+	}
+	gotItems := make([]string, len(r.Items))
+	for i, it := range r.Items {
+		gotItems[i] = it.Item
+	}
+	if err := onceOf("acceptance item", items, gotItems); err != nil {
+		return err
+	}
+	if len(gotItems) != len(items) {
+		return errors.New("result names an item that is not an acceptance item of the group")
 	}
 	for _, it := range r.Items {
 		if strings.TrimSpace(it.Item) == "" {
