@@ -48,8 +48,8 @@ type Guard struct {
 	pol   *policy
 	b     Binding
 	limit int
-	order []Row          // the rows that bind this agent, in policy order
-	byID  map[RowID]Row  // every row, for refusal templates
+	order []Row            // the rows that bind this agent, in policy order
+	byID  map[RowID]Row    // every row, for refusal templates
 	text  []*regexp.Regexp // the G5 patterns
 
 	mu     sync.Mutex

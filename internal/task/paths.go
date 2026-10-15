@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 )
@@ -68,7 +69,7 @@ func evalExisting(abs string) (string, error) {
 		if err == nil {
 			return filepath.Join(real, rest), nil
 		}
-		if !errors.Is(err, fs.ErrNotExist) {
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			return "", err
 		}
 		if _, lerr := os.Lstat(cur); lerr == nil {

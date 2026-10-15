@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
@@ -67,36 +68,29 @@ type OutsideServer struct {
 	Hosts   []string `json:"hosts,omitempty"` // hosts the server may reach; empty means no network
 }
 
-// ResumeHandle names a saved session so a later resume can continue it; its fields and wire form match the model client's handle.
-type ResumeHandle struct {
-	Link  string // the link that made the handle
-	Kind  string // "session_id" (claude program) or "messages_file" (API links)
-	Value string // the session UUID, or the path of the saved messages file
-}
-
 // Progress is the Task Manager's own counters; the Runtime Manager persists them through ReportState.
 type Progress struct {
-	Stage        state.Stage             `json:"stage"`
-	TasksDone    []string                `json:"tasks_done"`
-	Returns      int                     `json:"returns"`        // trips back to Build so far
-	Disputes     int                     `json:"disputes"`       // tester restarts after a disputed result
-	Attempts     int                     `json:"attempts"`       // fresh builder sessions so far
-	TreeAtReturn string                  `json:"tree_at_return"` // tree hash when the group last went back to Build
-	ScopeAsked   []string                `json:"scope_asked"`    // task identifiers that already made their one scope request
-	Widened      []string                `json:"widened"`        // paths a scope answer added to the group's files
-	Refusals     map[string]int          `json:"refusals"`       // refusals per guard row in the current session
-	Pause        *PauseState             `json:"pause,omitempty"`
-	Handles      map[string]ResumeHandle `json:"handles,omitempty"` // handle of each agent's live session, reported before the session starts
+	Stage        state.Stage                 `json:"stage"`
+	TasksDone    []string                    `json:"tasks_done"`
+	Returns      int                         `json:"returns"`        // trips back to Build so far
+	Disputes     int                         `json:"disputes"`       // tester restarts after a disputed result
+	Attempts     int                         `json:"attempts"`       // fresh builder sessions so far
+	TreeAtReturn string                      `json:"tree_at_return"` // tree hash when the group last went back to Build
+	ScopeAsked   []string                    `json:"scope_asked"`    // task identifiers that already made their one scope request
+	Widened      []string                    `json:"widened"`        // paths a scope answer added to the group's files
+	Refusals     map[string]int              `json:"refusals"`       // refusals per guard row in the current session
+	Pause        *PauseState                 `json:"pause,omitempty"`
+	Handles      map[string]llm.ResumeHandle `json:"handles,omitempty"` // handle of each agent's live session, reported before the session starts
 }
 
 // PauseState is a group waiting out a provider limit.
 type PauseState struct {
-	Since          time.Time     `json:"since"`           // first pause of this wait; kept across re-pauses
-	WaitUntil      time.Time     `json:"wait_until"`      // latest reset time among halted sessions, plus 1 minute
-	WaitLink       string        `json:"wait_link"`       // the link whose reset the group waits for
-	RefusedResumes int           `json:"refused_resumes"` // resumes the provider refused at 0 turns
-	Owed           []string      `json:"owed"`            // agents to start at the timer, instead of starting now
-	Handle         *ResumeHandle `json:"handle,omitempty"`
+	Since          time.Time         `json:"since"`           // first pause of this wait; kept across re-pauses
+	WaitUntil      time.Time         `json:"wait_until"`      // latest reset time among halted sessions, plus 1 minute
+	WaitLink       string            `json:"wait_link"`       // the link whose reset the group waits for
+	RefusedResumes int               `json:"refused_resumes"` // resumes the provider refused at 0 turns
+	Owed           []string          `json:"owed"`            // agents to start at the timer, instead of starting now
+	Handle         *llm.ResumeHandle `json:"handle,omitempty"`
 }
 
 // Escalation is a blocker or a request the Task Manager cannot settle alone.
