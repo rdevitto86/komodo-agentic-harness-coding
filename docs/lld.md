@@ -2485,7 +2485,7 @@ stateDiagram-v2
 ### 3.7 Invariants and Failures
 
 **Invariants**
-1. Only the CLI and the Runtime Manager hold a `*Manager`; no other package imports `internal/config`.
+1. Only the CLI and the Runtime Manager hold a `*Manager`; no other package imports `internal/config`, except the cross-package tests in `internal/integration`.
 2. The settings files and the agent registry are written only by `SetConfigItem` and `Accept`.
 3. A `SetConfigItem` call writes every pair or none, and one audit row per changed key.
 4. No value passes its hard limit, and no model passes without a probe.
