@@ -13792,8 +13792,8 @@ stateDiagram-v2
 
 | State | Flags set | A new event can raise |
 |---|---|---|
-| Below | None | `window` warn, `window_full` error, `limit` error, `overage` warn |
-| Warned | `Warned` | `window_full` error, `limit` error, `overage` warn |
+| Below | None | `window` warn, `window_full` warn, `limit` error, `overage` warn |
+| Warned | `Warned` | `window_full` warn, `limit` error, `overage` warn |
 | Full | `Full`, `Paused` once the order is delivered | `limit` error, `overage` warn |
 
 A provider refusal sets `Limited` in any state and leaves the state shown unchanged.
