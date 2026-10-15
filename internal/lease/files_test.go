@@ -91,8 +91,8 @@ func TestRegistryFilesOnDisk(t *testing.T) {
 		t.Fatalf("a repo id with slashes must map to one folder: %v %v", dirs, err)
 	}
 	files, _ := os.ReadDir(filepath.Join(root, dirs[0].Name()))
-	if len(files) != 1 || files[0].Name() != "g1.json" {
-		t.Fatalf("after a write only the record stays; no lock and no temp file: %v", files)
+	if len(files) != 2 || files[0].Name() != "g1.json" || files[1].Name() != "g1.lock" {
+		t.Fatalf("after a write the record and its free lock file stay, with no temp file: %v", files)
 	}
 	for _, bad := range []string{"", ".", "..", "a/b", `a\b`, ".hidden"} {
 		if err := r.Create(ctx, rec(bad)); !errors.Is(err, ErrBadKey) {
@@ -256,7 +256,7 @@ func TestLockedWritersNeverOverlap(t *testing.T) {
 				entered.Add(1)
 				time.Sleep(time.Millisecond)
 				inside.Add(-1)
-				_ = unlock()
+				unlock()
 			}
 		}()
 	}

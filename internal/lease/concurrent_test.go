@@ -177,7 +177,7 @@ func TestGrantHelper(t *testing.T) {
 		t.Skip("child of TestGrantAcrossProcesses")
 	}
 	id := os.Getenv("KOMODO_LEASE_ID")
-	m, err := New(t.TempDir(), nil, NewFileRegistry(os.Getenv("KOMODO_LEASE_ROOT"), DefaultLockTimeout), OSProcessCheck)
+	m, err := New(os.Getenv("KOMODO_LEASE_HOME"), nil, NewFileRegistry(os.Getenv("KOMODO_LEASE_ROOT"), DefaultLockTimeout), OSProcessCheck)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func runChildren(t *testing.T, root, mode string) []grantResult {
 	var cmds []*exec.Cmd
 	for _, id := range []string{"A", "B"} {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestGrantHelper$")
-		cmd.Env = append(os.Environ(), "KOMODO_LEASE_MODE="+mode, "KOMODO_LEASE_ID="+id, "KOMODO_LEASE_ROOT="+root,
+		cmd.Env = append(os.Environ(), "KOMODO_LEASE_MODE="+mode, "KOMODO_LEASE_ID="+id, "KOMODO_LEASE_ROOT="+root, "KOMODO_LEASE_HOME="+filepath.Join(dir, "home"),
 			"KOMODO_LEASE_GO="+gate, "KOMODO_LEASE_DONE="+filepath.Join(dir, "done"), "KOMODO_LEASE_OUT="+filepath.Join(dir, id+".json"))
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)

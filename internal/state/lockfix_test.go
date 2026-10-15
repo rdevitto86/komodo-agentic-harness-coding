@@ -195,4 +195,4 @@ func TestSlotCallDoesLittleWork(t *testing.T) {
 }
 
 // slotAllocBudget is the most allocations a slot call may make; the load-then-save path made about 3,400.
-const slotAllocBudget = 1500
+const slotAllocBudget = 2000

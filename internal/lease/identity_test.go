@@ -17,6 +17,9 @@ import (
 func exitErr(t *testing.T, stderr string, code int) error {
 	t.Helper()
 	script := fmt.Sprintf("echo %q >&2; exit %d", stderr, code)
+	if stderr == "" {
+		script = fmt.Sprintf("exit %d", code)
+	}
 	if code < 0 {
 		script = "kill -9 $$"
 	}

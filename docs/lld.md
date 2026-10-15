@@ -97,7 +97,7 @@ Komodo is one Go program, the `komodo` binary. Each subsystem has one package un
 | `internal/fault` | Error Handler | [17](#17-error-handler) |
 | `internal/metrics` | Metrics Service | [18](#18-metrics-service) |
 | `internal/resource` | Resource Manager | [19](#19-resource-manager) |
-| `internal/core` | Shared plumbing: atomic file writes, the low-level HTTP client, version checks | [10](#10-state-manager), [11](#11-task-manager) |
+| `internal/core` | Shared plumbing: atomic file writes, the operating-system file lock, the low-level HTTP client, version checks | [10](#10-state-manager), [11](#11-task-manager) |
 
 #### Code that exists today
 
@@ -108,6 +108,7 @@ About 3,900 lines of Go exist on this branch. They move as follows when their su
 | `internal/core/cache.go` | 415 | `internal/cache` |
 | `internal/core/http.go`, `http_policy.go`, `http_stream.go` | 857 | Stay in `internal/core`; `internal/llm` builds on them |
 | `internal/core/fs.go` | 91 | Stays in `internal/core` |
+| `internal/core/filelock.go` | 58 | New: `FileLock`, the one operating-system file lock that the Configuration, State and Lease Managers share |
 | `internal/core/version.go` | 194 | Stays in `internal/core` |
 | `internal/cli/cli.go` | 40 | Grows into `internal/cli` |
 | `dashboard/` | 556 | `internal/cli/ui.go` and `embed/ui/` |
@@ -2037,7 +2038,7 @@ Go package `internal/config`. It imports the Go standard library and the package
 | `~/.komodo/agents.json` | 2 | Per-role overrides of 4 keys. Created by the first agent override |
 | `~/.komodo/state/config.sha` | guard | The checksum of each machine file |
 | `~/.komodo/state/config.log` | guard | One audit row per changed key |
-| `~/.komodo/state/settings.lock` | guard | Held by the one writer at a time |
+| `~/.komodo/state/settings.lock` | guard | Locked by the one writer at a time; the file stays on disk and its presence means nothing |
 
 `KOMODO_HOME` replaces `~/.komodo`.
 
@@ -2424,7 +2425,7 @@ sequenceDiagram
 3. For each pair the manager finds the `KeySpec`, parses the value to its `Kind`, and checks enum membership, the `env:` form for `KindEnvRef`, the hard limits and `MaxKey`. A `model` value must also pass `modelOK`.
 4. A pair whose value equals the effective value is dropped. When every pair is dropped the batch is empty and nothing is written.
 5. When any pair fails, the manager returns its error and writes nothing: a call sets every pair or none.
-6. The manager takes `settings.lock`, created exclusively. The file holds a writer id, the process id and a random token, and the release removes it only while it still holds that id.
+6. The manager takes an exclusive operating-system lock on `settings.lock` through `core.FileLock`. The kernel frees the lock when its holder dies and never takes it from a holder that is only slow, so no age or token is checked.
 7. It appends one audit row per changed key under one batch id.
 8. It writes each changed file by writing a temporary file and renaming it over the original.
 9. It replaces `config.sha` with the new checksums, releases the lock and returns the batch.
@@ -2507,7 +2508,7 @@ stateDiagram-v2
 | A machine file fails strict reading | `Load` | Serves the built-in value with `Fallback` set; `Verify` reports it; `PlanReset` and `SetConfigItem` still rewrite the file | Files unchanged |
 | Crash after the audit rows, before the file | Next write | The log shows a batch that never applied | Settings as before |
 | Crash after the file, before the checksum | `Verify` | Guard reads Tampered until `Accept` | Settings as written |
-| Another writer holds `settings.lock` | Exclusive create | Wait up to 2 seconds, then fail; a lock older than 30 seconds is stale, and a writer renames it to a unique name before it creates a new one exclusively | One writer at a time |
+| Another writer holds `settings.lock` | `core.FileLock` finds the lock taken | Retry for up to 2 seconds, then fail with `ErrLocked`; a dead holder frees the lock at once | One writer at a time |
 | A role file breaks a cross-check | Build test, `Snapshot` | The build fails; at run time the run does not start | No run |
 
 ### 3.8 Config
@@ -2554,7 +2555,6 @@ Token and cost usage are always read; no key switches them off.
 |---|---|
 | Reread wait on a mismatch while the lock is held | 100 milliseconds |
 | Lock wait before a write fails | 2 seconds |
-| Lock age after which it is stale | 30 seconds |
 | Roles | 4 |
 
 | Variable | Effect |
@@ -2588,6 +2588,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question |
 |---|---|
+| [G-280](#g-280) | Whether Komodo refuses a home folder on a network filesystem |
 ## 4. Event Bus
 
 The Event Bus is the harness's spine: a part that learns something publishes it as an event, and any part that needs it subscribes by event type, so a publisher never knows who listens. Every event has the same shape, so one reader can handle all of them. The design and its reasons are in [HLD 5.5](hld.md#55-event-bus).
@@ -6430,6 +6431,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 | Gap | Question | Closes by |
 |---|---|---|
 | [G-218](#g-218) | What triggers removing a dead run's leftover worktrees, branches and sandboxes after a crash | Stated default |
+| [G-280](#g-280) | Whether Komodo refuses a home folder on a network filesystem |
 | [G-07](#g-07) | The real Max five-hour window against 3 sessions on one subscription link | Ledger measurement over the first 20 groups |
 ## 8. Cache Manager
 
@@ -6874,7 +6876,7 @@ The Lease Manager keeps the lease registry, the single source of truth for which
 | Stalled holder | A holder that stopped for a while and wakes after its lease passed to someone else |
 | Repo id | The normalised origin URL, or the git common directory path when there is no remote |
 | Lock file | A file created exclusively beside a lease's record for the length of one write, so two runs never write one lease at once |
-| Stale lock | A lock file older than the lock timeout, left behind by a process that died mid-write |
+| File lock | The exclusive operating-system lock on a lock file; the kernel frees it when its holder dies, and the file stays on disk |
 
 **📐 How does a lease record relate to the group's checkout?**
 ```mermaid
@@ -6900,7 +6902,9 @@ internal/lease/
 ├── manager.go    Manager and the calls other parts use
 ├── registry.go   Registry interface and Record
 ├── files.go      file registry: JSON records
-├── lock.go       lock files: take, stale takeover, release
+├── lock.go       lock files: take through core.FileLock
+├── fences.go     the per-repository fence high-water mark
+├── identity.go   the machine id
 ├── lease.go      Lease, Fence, liveness rule, errors
 ├── proc.go       process existence and process start time
 ├── config.go     lock timeout from the config value
@@ -6912,18 +6916,22 @@ internal/lease/
 | `manager.go` | `New`, `Grant`, `Renew`, `Revoke`, `Holder`, `IsOwner`, `Release` |
 | `registry.go` | The storage seam the file registry implements |
 | `files.go` | `FileRegistry`: one JSON file per lease, safe writes |
-| `lock.go` | The lock file: exclusive create with a token, stale-lock takeover, release by token |
+| `lock.go` | The lock file: `core.FileLock` with the registry's lock timeout as the longest wait |
+| `fences.go` | `FenceKeeper` and the file registry's `.fences.json`, the highest fence each group ever had |
+| `identity.go` | The machine id read from `~/.komodo/state/machine-id`, created with a random value when missing |
 | `lease.go` | The `Lease` value and the rule for whether it is live |
 | `proc.go` | `ProcessCheck`, `OSProcessCheck` and `ProcessStart`, which ask `ps` for a process start time |
 | `config.go` | `LockTimeout`, which turns the value of `lease.lock_timeout_s` into a duration. The caller reads the key from the Configuration Manager, because no other package imports it ([3.7](#37-invariants-and-failures)) |
 | `sweep.go` | `Sweep` |
 
-On disk this chapter writes under the machine folder `~/.komodo/`. The registry is a folder of small JSON files, one record per lease, with a lock file beside each record while it is written. It uses the standard library only.
+On disk this chapter writes under the machine folder `~/.komodo/`. The registry is a folder of small JSON files, one record per lease, with a lock file beside each record. The lock files stay on disk; only the operating-system lock on one means a write is in progress. It uses the standard library only.
 
 ```
 ~/.komodo/leases/<repo-id>/<group-id>.json   the lease record
-~/.komodo/leases/<repo-id>/<group-id>.lock   present only while a write is in progress
-~/.komodo/leases/<repo-id>/.repo.lock        present only while a grant is in progress
+~/.komodo/leases/<repo-id>/<group-id>.lock   locked only while a write is in progress
+~/.komodo/leases/<repo-id>/.fences.json       the highest fence each group of the repository ever had
+~/.komodo/leases/<repo-id>/.repo.lock        locked only while a grant or a revocation is in progress
+~/.komodo/state/machine-id                   the id of this machine, made on first use
 ```
 
 The repo id is written as one folder name by URL path escaping, so `/` becomes `%2F` and a leading `.` becomes `%2E`. A group id that is empty, starts with `.` or holds a path separator is refused with `ErrBadKey`.
@@ -6946,7 +6954,7 @@ The repo id is written as one folder name by URL path escaping, so `/` becomes `
 ```go
 const (
 	LeaseExpiry        = 2 * time.Hour    // age of the last renewal after which a lease on another host counts as dead
-	DefaultLockTimeout = 30 * time.Second // age after which a lock file is stale; the key lease.lock_timeout_s overrides it
+	DefaultLockTimeout = 30 * time.Second // longest wait for a lock; the key lease.lock_timeout_s overrides it
 	LockSuffix         = ".lock"          // a lease's lock file is <group-id>.lock beside its record
 )
 ```
@@ -6995,7 +7003,7 @@ type Lease struct {
   "worktree": "/Users/dev/.komodo/wt/github.com-acme-shop/0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "pid": 48213,
   "proc_start": "2026-10-14T09:12:40Z",
-  "host": "devbox-1",
+  "host": "5d41402abc4b2a76b9719d911017c592",
   "clone_path": "/Users/dev/src/shop",
   "fence": 3,
   "state": "held",
@@ -7010,9 +7018,9 @@ type Lease struct {
 | `repo`, `group` | Together the registry key; one record per group |
 | `branch`, `worktree` | No two live records name the same branch or the same worktree path |
 | `pid`, `proc_start` | On the same host a lease is live while this process exists and started at this time; a reused process id with a different start time is a different process |
-| `host` | The process check runs only when `host` is this machine's name |
+| `host` | The machine id of the holder; the process check runs only when it equals this machine's id, so a changed network host name never splits liveness |
 | `clone_path` | The sweep removes a record whose clone is gone |
-| `fence` | The fence written at grant, takeover or revocation; it never falls |
+| `fence` | The fence written at grant, takeover or revocation; it never falls, and a new record after `Release` starts above the highest fence the group had |
 | `rev` | Every registry write names the `rev` it read; a stale `rev` is refused |
 | `taken_at`, `renewed_at` | RFC 3339 in UTC to the second; renewal rewrites `renewed_at` only |
 
@@ -7034,7 +7042,7 @@ type ProcessCheck func(pid int, start time.Time) bool
 - **Same host:** live while the holder's process exists with the recorded start time, however old the last renewal is. A laptop that slept for hours keeps its lease.
 - **Another host:** live while the last renewal is no older than `LeaseExpiry`.
 
-`OSProcessCheck` is the check `New` uses when it is given none. It reads a start time from `ps -o lstart=` and accepts a difference of up to 2 seconds, because `ps` reports whole seconds; where `ps` is missing it only asks whether the process id exists.
+`OSProcessCheck` is the check `New` uses when it is given none. It reads a start time from `ps -o lstart=` and accepts a difference of up to 2 seconds, because `ps` reports whole seconds. `ps` exiting 1 with no output means the process is gone. A timeout, a kill or any other `ps` failure means unknown, not gone: the check then asks the process with signal 0 and counts it live whenever it answers. A holder whose own start time cannot be read records the zero time, which only asks whether the process exists.
 
 #### Registry seam
 
@@ -7132,15 +7140,15 @@ func (e HeldError) Unwrap() error { return ErrLeased }
 #### Manager
 
 ```go
-// NewFileRegistry opens the folder of JSON records and lock files; lockTimeout is the age at which a lock is stale.
+// NewFileRegistry opens the folder of JSON records and lock files; lockTimeout is the longest a writer waits for a lock.
 func NewFileRegistry(root string, lockTimeout time.Duration) *FileRegistry
 
-// New opens the lease manager over a registry and a process check. A nil registry is the file registry
-// under home/leases, which needs a home; a nil check is OSProcessCheck.
-func New(home string, reg Registry, alive ProcessCheck) (*Manager, error)
+// New opens the lease manager over a registry and a process check; lockTimeoutS is the value of lease.lock_timeout_s.
+// A nil registry is the file registry under home/leases with that wait; a nil check is OSProcessCheck.
+func New(home string, lockTimeoutS any, reg Registry, alive ProcessCheck) (*Manager, error)
 
 // LockTimeout turns the value of lease.lock_timeout_s into a duration; a missing or non-positive value gives DefaultLockTimeout.
-// The caller reads the key and passes the result to NewFileRegistry.
+// The caller reads the key and passes its value to New.
 func LockTimeout(seconds any) time.Duration
 
 // Grant takes the group's lease, raises the fence and records the branch and worktree names.
@@ -7237,7 +7245,7 @@ The Task Manager creates the branch and worktree the record names, after `Grant`
 
 1. `Release` deletes the record with `Delete`, naming the `rev` read. A group with no record is a no-op.
 2. A record of another run, or a held record with another fence, is left alone and `Release` returns `ErrLeaseLost`; a revoked record of the same run is deleted.
-3. A later `Grant` of the same group creates a new record at fence 1.
+3. A later `Grant` of the same group creates a new record above the highest fence the group had, taken from `.fences.json`; release after fence 2 and grant again gives fence 3.
 4. The Runtime Manager calls it when the group closes, after the Cleanup Handler has reported the group closed.
 
 #### Registry sweep
@@ -7249,21 +7257,20 @@ The Task Manager creates the branch and worktree the record names, after `Grant`
 
 #### File registry writes
 
-1. Create `<group-id>.lock` exclusively, writing a token and the time into it. The token is the process id and a random suffix. Exclusive creation fails when the file exists.
-2. A lock younger than the lock timeout is held by a live writer: wait and try again until it is gone or has aged past the timeout. The wait ends with `ErrLocked` after twice the timeout, or with the context's error.
-3. A lock older than the timeout is stale. The taker creates `<group-id>.lock.stale-<token>` exclusively, named after the stale lock's token, and only the one that creates it goes on. It then moves the lock to a unique name, checks that the moved file is the one it saw and deletes it, or moves a different file back; it removes its claim file and goes back to step 1. A claim older than the timeout belongs to a taker that died and is deleted.
-4. With the lock held, read the record and apply the call's rule: `Create` needs no record, `Swap` and `Delete` need the named `rev` to be current.
-5. Check that the lock still holds the writer's token, then write the new record to a temporary file beside it, sync the file, rename it over `<group-id>.json` and sync the folder. A lock found replaced makes the call start again from step 1, up to 3 times.
-6. Delete the lock only while it still holds the writer's token.
+1. Take the exclusive operating-system lock on `<group-id>.lock` through `core.FileLock`, creating the file when it is absent. The call polls without blocking until it holds the lock.
+2. The wait ends with `ErrLocked` after the lock timeout, or with the context's error. A holder that is merely slow, stopped or asleep keeps its lock however old the file is; the kernel frees the lock only when the holder's process ends.
+3. With the lock held, read the record and apply the call's rule: `Create` needs no record, `Swap` and `Delete` need the named `rev` to be current.
+4. Write the new record to a temporary file beside it, sync the file, rename it over `<group-id>.json` and sync the folder.
+5. Release the lock. The lock file stays.
 
-A crash between steps 1 and 6 leaves a lock, which expires after the timeout, and a record that is whole, old or new, because the rename is atomic. `Get` and `List` take no lock.
+A crash between steps 1 and 5 frees the lock at once and leaves a record that is whole, old or new, because the rename is atomic. `Get` and `List` take no lock.
 
 #### Concurrency and locking
 
-- Two processes agree through the lock file and the `rev` check of `Create` and `Swap`; no in-memory lock crosses processes.
-- A lock left by a crash blocks one lease for at most the lock timeout.
+- Two processes agree through the file lock and the `rev` check of `Create` and `Swap`; no in-memory lock crosses processes.
+- A lock held by a dead writer is free at once, because the kernel releases it with the process.
 - Inside one process a mutex guards each group, so a `Renew` and an `IsOwner` of one group never interleave.
-- A `Grant` also holds the repository's grant lock, so grants of one repository run one at a time across processes. A stalled writer that wakes after its lock was taken is caught by the token check of step 5, not by the lock.
+- A `Grant` and a `Revoke` hold the repository's lock first, so they run one at a time per repository across processes; each raises the group's entry in `.fences.json` under that lock before it writes the record that carries the fence. Lock order is always the repository, then the group.
 
 ### 9.6 State
 
@@ -7298,7 +7305,7 @@ After each move, `Held` means exactly one run is the owner, with the current fen
 5. A same-host lease with a live holder process is never taken over because of its age.
 6. `IsOwner` writes nothing.
 7. A paused group keeps its lease until the group closes.
-8. A lock file is held only for the length of one write, and a stale one is replaced.
+8. A lock is held only for the length of one write, and the kernel frees it when its holder dies.
 
 #### Failures
 
@@ -7311,7 +7318,7 @@ After each move, `Held` means exactly one run is the owner, with the current fen
 | Stalled holder wakes after takeover | `IsOwner` or `Renew` | `false` or `ErrLeaseLost` | Stale run stops |
 | Branch name already used by another group | Step 1 of the grant | `ErrBranchTaken` | Absent |
 | Clone path gone | Sweep | Delete the record | Absent |
-| Writer died holding a lock | Lock older than the lock timeout | The next writer deletes the lock and writes | Record whole |
+| Writer died holding a lock | None needed | The kernel freed the lock with the process; the next writer takes it at once | Record whole |
 | Group paused at a limit | The Runtime Manager's pause | The lease stays held and is renewed | Held |
 
 ### 9.8 Config
@@ -7320,7 +7327,7 @@ The Lease Manager owns one configuration key. The expiry and renewal period are 
 
 | Key | Kind | Default | Meaning |
 |---|---|---|---|
-| `lease.lock_timeout_s` | int | 30 | Age in seconds after which a lease's lock file is stale and the next writer deletes it |
+| `lease.lock_timeout_s` | int | 30 | Longest wait in seconds for a lease's lock file before a write fails with `ErrLocked` |
 
 ### 9.9 Proof Cases
 
@@ -7338,17 +7345,18 @@ Tests use a temporary directory; no network, no git and no live provider.
 - `IsOwner` returns true for the lease that `Grant` returned.
 - `ErrBranchTaken` when a second group names a live group's branch.
 - The sweep deletes a record whose clone is gone and never touches a live lease.
-- A lock file older than `lease.lock_timeout_s` is deleted by the next writer, and the write succeeds.
-- A lock file younger than the timeout makes a second writer wait; it writes only after the first deletes the lock.
-- A write killed after step 5 and before step 6 leaves a whole record and a lock that expires.
+- A lock file with an old modification time but a live holder is not taken over; the writer waits and then fails with `ErrLocked` after `lease.lock_timeout_s`.
+- A held lock makes a second writer wait; it writes once the first releases (child-process tests in `internal/core` show that a killed holder frees the lock at once and a stopped holder never loses it).
+- A write killed after the rename and before the release leaves a whole record, and the next writer takes the lock at once.
 - A paused group's lease stays `held`, and `Renew` keeps succeeding while it is paused.
-- `Release` deletes the record, and a later `Grant` of the same group starts again at fence 1.
+- `Release` deletes the record, and a later `Grant` of the same group starts above its highest fence (fence 3 after fence 2).
 - `Release` of a lease another run took leaves the new holder's record and returns `ErrLeaseLost`.
 - Many goroutines granting one group, and many groups naming one branch, give one owner and no records left by the losers.
 - Two processes granting one group, and two processes granting groups that name one branch, give one owner in total (child-process test).
 - Two processes taking over a dead group again and again give fences that are each used once and rise without a gap (child-process test).
-- Many writers racing for one stale lock never overlap, including when holders die and leave aged locks.
-- A writer that finds its lock replaced does not delete the new lock.
+- Many writers racing for one lock never overlap.
+- A `ps` that times out, is killed or rejects its flags is unknown, and a live process that answers signal 0 is never taken over.
+- A machine id is made once under `~/.komodo/state/machine-id` and every lease records it.
 - A repo id of dots or slashes stays inside the registry folder, and a group id with a path separator is refused.
 
 ### 9.10 Open Gaps
@@ -8021,7 +8029,7 @@ func (m *Machine) LoadWindows(ctx context.Context) (map[WindowKey]WindowRecord, 
 func (m *Machine) SaveWindow(ctx context.Context, k WindowKey, r WindowRecord) error
 ```
 
-Each of these reads `providers.json`, changes it and saves it with the `rev` read, and repeats after `ErrStaleRev`.
+Each of these takes the record's file lock, reads `providers.json` once, changes it and writes it once, so no revision can go stale in between.
 
 | Method | An error means | The disk afterwards |
 |---|---|---|
@@ -8119,7 +8127,8 @@ A damaged record is never repaired automatically. A group whose record is set as
 6. A stale temporary file is deleted by the next open when it is older than 1 hour.
 7. A quarantined name that already exists gets `-1`, `-2` and so on after the time.
 8. Probe results are stored compact, and every time is stored in UTC.
-9. A write holds the record's lock file `<kind>.json.lock` from the revision check to the rename, so two processes never both pass the check. A lock older than 5 seconds is taken over.
+9. A write holds the exclusive operating-system lock on `<kind>.json.lock` from the revision check to the rename, taken through `core.FileLock` with a 2 second wait, so two processes never both pass the check. The kernel frees the lock when its holder dies; the file stays. The per-process mutex of the kind is taken only after the file lock, and reads never take it.
+10. A folder a write creates (`runs/<group>`, `~/.komodo/state`) is followed by a sync of the folder above it.
 
 After the machine restarts, the next komodo command finds `schedule.json` and starts the engine, which starts any entry whose `at` has passed at once. Each machine-wide record has one writer process, the engine. The one exception is the CLI installer, which writes `install.json` and `update.json` with a `rev` check and, on `ErrStaleRev`, reads the record again and retries. The session counts in `providers.json` reset to 0 when the engine starts, so a process that died holding a session leaves no stale count.
 
@@ -8224,6 +8233,7 @@ Tests use a temporary directory; no network and no live provider.
 
 | Gap | Question |
 |---|---|
+| [G-280](#g-280) | Whether Komodo refuses a home folder on a network filesystem |
 
 ## 11. Task Manager
 
@@ -14680,6 +14690,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-275"></a>G-275 | Limits | How a group's token total survives an engine restart, since the Resource Manager keeps totals in memory only | Phase 5, with the Runtime Manager | [19](#19-resource-manager), [7](#7-runtime-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
 | <a id="g-277"></a>G-277 | Landing | How the group's Docker container sees the epic tip, which sits in the Commit Handler's landing worktree | Phase 6, with the Commit Handler | [11](#11-task-manager), [15](#15-commit-handler) |
+| <a id="g-280"></a>G-280 | Platform | Whether Komodo refuses a home folder on a network filesystem, where the operating-system file lock may not be honoured | Phase 7, with `doctor` | [0](#0-front-matter-and-code-structure), [9](#9-lease-manager), [10](#10-state-manager) |
 
 #### Spikes, measurements and later-minor items
 
