@@ -12739,9 +12739,11 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 |---|---|
 | `internal/cleanup/handler.go` | `Handler`, `Complete` and the interfaces it needs from other parts |
 | `internal/cleanup/types.go` | `Published`, `Report`, `Item` and the error values |
-| `internal/cleanup/sweep.go` | `Sweep`: removal of the remains of dead runs |
+| `internal/cleanup/sweep.go` | `Sweep`: removal of the remains of dead runs; `Preview`: the same walk that lists and removes nothing |
 | `internal/cleanup/discard.go` | `Discard`: removal of one named group's resources |
 | `internal/cleanup/versions.go` | `UnusedVersions`: installed binary versions no unfinished group names |
+| `internal/cleanup/steps.go` | The removal steps that `Complete`, `Sweep` and `Discard` share: container, checkouts, worktree, branch |
+| `internal/cleanup/paths.go` | The check that every deleted path lies inside one of the handler's folders |
 
 **Entry points**
 
@@ -12749,6 +12751,7 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 |---|---|
 | Cleaning a published group | `Handler.Complete` in `handler.go` |
 | Clearing the remains of dead runs | `Handler.Sweep` in `sweep.go` |
+| Listing what a sweep would clear | `Handler.Preview` in `sweep.go` |
 | Dropping one group | `Handler.Discard` in `discard.go` |
 | Choosing which binary versions may be deleted | `Handler.UnusedVersions` in `versions.go` |
 
@@ -12757,14 +12760,15 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 ```go
 // Published says that a group's work is on the remote and may be cleaned up.
 type Published struct {
-	Run      state.ID       `json:"run"`
-	Group    state.ID       `json:"group"`
+	Run      string         `json:"run"`
+	Group    string         `json:"group"`
 	Epic     string         `json:"epic"`     // epic folder name, such as ep-1
 	Branch   string         `json:"branch"`   // group branch that was landed
 	Tip      string         `json:"tip"`      // commit id the remote must hold
 	Remote   string         `json:"remote"`   // remote that received the push
 	Contains string         `json:"contains"` // remote reference whose history must hold Tip
 	Worktree string         `json:"worktree"` // path of the group's checkout
+	Landing  string         `json:"landing,omitempty"` // path of the epic's landing worktree; used when EpicDone is true
 	EpicDone bool           `json:"epic_done"` // true when this was the epic's last group and its pull request is open
 	PRURL    string         `json:"pr_url"`   // epic pull request address; empty before the last group lands
 }
@@ -12780,6 +12784,7 @@ type Published struct {
   "remote": "origin",
   "contains": "origin/komodo/ep-1",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
+  "landing": "/Users/dev/.komodo/landing/shop/ep-1",
   "epic_done": true,
   "pr_url": "https://github.com/acme/shop/pull/41"
 }
@@ -12790,7 +12795,8 @@ type Published struct {
 | `tip` | Must be in the history of `contains` on the remote; otherwise `ErrNotPublished` |
 | `contains` | The epic's remote branch, which holds the group's landing |
 | `epic_done` | When true, the landing worktree and the local epic branch are removed as well |
-| `worktree` | The checkout the handler removes; it holds nothing the published tip lacks |
+| `worktree` | The checkout the handler removes; it holds nothing the published tip lacks, and it lies inside `Roots.Worktrees` or `Complete` returns `ErrOutsideRoots` |
+| `landing` | The landing worktree removed when `epic_done` is true; it lies inside `Roots.Landings` |
 
 ```go
 // Item is one thing the Cleanup Handler removed or kept.
@@ -12802,11 +12808,24 @@ type Item struct {
 
 // Report lists what one call removed and what it kept, for the CLI to print.
 type Report struct {
-	Group   state.ID `json:"group"`   // empty for a Sweep
+	Group   string   `json:"group"`   // empty for a Sweep
 	Removed []Item   `json:"removed"`
 	Kept    []Item   `json:"kept"`
 }
 ```
+
+```go
+// Roots are the folders the handler may delete inside; it refuses every path outside them.
+type Roots struct {
+	Worktrees string // one folder per group, such as ~/.komodo/wt/<repo-id>/
+	Landings  string // one landing worktree per epic
+	Testers   string // one tester checkout per group; empty means none exist
+	Temp      string // one session temporary folder per group; empty means none exist
+	Versions  string // one folder per installed binary version
+}
+```
+
+Every group-named path is `<root>/<group>`. A group id that is not one plain path element, a path that is not strictly below its root, and a path that reaches outside its root through a link are all refused with `ErrOutsideRoots`; a link inside a root is removed as a link and never followed.
 
 ```json
 {
@@ -12829,10 +12848,17 @@ type Report struct {
 type Handler struct {
 	Lease  Leases     // reads who holds a group; the Lease Manager
 	Git    Git        // the git wrapper, through the Cleanup Handler's own small interface
-	Boxes  Containers // the group's Docker container
+	Boxes  Containers // the group's Docker container; nil means Docker is absent
 	Task   TaskGroup  // the group's Task Manager
-	Groups Groups    // reads group records from the State Manager
-	Report Reporter  // relays a progress fact to the Runtime Manager
+	Groups Groups     // reads group records from the State Manager
+	Report Reporter   // relays a progress fact to the Runtime Manager
+	Errors Errors     // the Error Handler; receives each removal failure
+
+	Repo   string                 // repo id the lease registry files the groups under
+	Clone  string                 // path of the clone every git call runs in
+	Remote string                 // remote whose branches count as published
+	Roots  Roots                  // the only folders the handler deletes in
+	Live   func(lease.Lease) bool // true while a working run holds the lease; nil counts every held lease as live
 }
 
 // Complete cleans up one published group, then closes it; the Commit Handler calls it after the push.
@@ -12841,8 +12867,11 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error)
 // Sweep removes the remains of runs that ended without cleaning up.
 func (h *Handler) Sweep(ctx context.Context) (Report, error)
 
+// Preview lists what Sweep would remove and removes nothing; `komodo clean --dry-run` prints it.
+func (h *Handler) Preview(ctx context.Context) (Report, error)
+
 // Discard drops one group's resources for good, including unpublished work; the worktree and its files are deleted unless KeepWorktree is set.
-func (h *Handler) Discard(ctx context.Context, group state.ID, o DiscardOptions) (Report, error)
+func (h *Handler) Discard(ctx context.Context, group string, o DiscardOptions) (Report, error)
 
 // UnusedVersions returns the installed binary versions that no unfinished group names.
 func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error)
@@ -12858,6 +12887,7 @@ type DiscardOptions struct {
 var (
 	ErrNotPublished = errors.New("remote does not hold the group's tip") // Complete: nothing is removed
 	ErrLeaseHeld    = errors.New("a live run holds the group")           // Sweep, Discard: the group is skipped
+	ErrOutsideRoots = errors.New("path is outside the folders cleanup may delete in") // Complete, Discard: nothing is removed
 )
 ```
 
@@ -12879,11 +12909,17 @@ type Git interface {
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
 	// DiscardBranch deletes a local branch that still points at expectTip, whether or not the remote holds that commit; only Discard calls it.
 	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
+	// DiscardWorktree removes a worktree and its files even when they hold work the tip lacks; only Discard calls it.
+	DiscardWorktree(ctx context.Context, clone, path string) error
+	// BranchTip returns the commit a local branch points at; the bool is false when the branch does not exist.
+	BranchTip(ctx context.Context, clone, branch string) (tip string, ok bool, err error)
+	// Holds reports whether the remote holds tip in the history of the reference contains, or of any of its branches when contains is empty.
+	Holds(ctx context.Context, clone, remote, contains, tip string) (ref string, ok bool, err error)
 }
 
 // Containers removes a group's Docker container; the sandbox backend that created it implements it, and it succeeds when Docker is absent or the container is gone.
 type Containers interface {
-	Remove(ctx context.Context, group state.ID) error
+	Remove(ctx context.Context, group string) error
 }
 
 // TaskGroup is the group's Task Manager.
@@ -12898,21 +12934,28 @@ type Groups interface {
 
 // GroupRef names an unfinished group and the binary version its run pinned.
 type GroupRef struct {
-	Group   state.ID
+	Group   string
 	Version string
 }
 
 // Reporter relays a progress fact to the Runtime Manager, which publishes it as a run-status event.
 type Reporter interface {
-	Report(ctx context.Context, group state.ID, subtype string, data any) error
+	Report(ctx context.Context, group string, subtype string, data any) error
+}
+
+// Errors is the Error Handler as the Cleanup Handler uses it.
+type Errors interface {
+	Report(src fault.Source, code string, kind fault.Kind, err error)
 }
 ```
+
+An error from `RemoveWorktree`, `DeleteBranch`, `DiscardBranch` or `DiscardWorktree` that carries a `Refused() bool` method answering true is a refusal on purpose: it is listed under `kept` and not sent to the Error Handler.
 
 | Caller | Call | When |
 |---|---|---|
 | Commit Handler | `Complete` | A group's landing is pushed, and the epic's pull request step is done when it was the last group |
 | [TODO: what triggers the sweep ([G-218](#g-218))] | `Sweep` | Not fixed |
-| Runtime Manager | `Sweep`, `UnusedVersions` | The engine's `clean` request from `komodo clean`; with `--dry-run` the Report lists what would go |
+| Runtime Manager | `Sweep`, `Preview`, `UnusedVersions` | The engine's `clean` request from `komodo clean`; with `--dry-run` it calls `Preview` and the Report lists what would go |
 | Runtime Manager | `Discard` | `komodo abandon (id)`, after it stops the group |
 | Runtime Manager | `UnusedVersions` | The engine's `clean` request from `komodo update`, before it deletes old versions |
 
@@ -12920,6 +12963,7 @@ type Reporter interface {
 |---|---|---|
 | `ErrNotPublished` | The remote lacks the tip | Nothing removed; the Commit Handler repeats its push check |
 | `ErrLeaseHeld` | Another live run holds the group | The group is skipped and listed under `kept` |
+| `ErrOutsideRoots` | A path or group id reaches outside the handler's folders | Nothing removed |
 | Any other error | A removal failed | The step is listed under `kept` with the error; the Error Handler receives it |
 
 ### 16.5 Behaviour
@@ -12940,7 +12984,7 @@ flowchart TB
 
 1. `Complete` reports `cleanup.start` and checks that `tip` is in the history of `contains` on the remote. If not, it returns `ErrNotPublished` and removes nothing.
 2. It removes the group's Docker container through `Containers.Remove` first, because the container mounts the worktree. With no Docker, or no container, the step succeeds with nothing removed.
-3. It removes the tester's throwaway checkout and the group's session temporary folder.
+3. It removes the tester's throwaway checkout `<Roots.Testers>/<group>` and the group's session temporary folder `<Roots.Temp>/<group>`.
 4. It removes the worktree with `Git.RemoveWorktree`. If the worktree holds files the tip lacks, it keeps the worktree and lists it under `kept`.
 5. It deletes the group's local branch with `DeleteBranch`, which refuses unless the branch still points at the landed tip. A refusal is listed under `kept`.
 6. It calls `CloseTaskGroup()` on the group's Task Manager, which destroys the sandbox, then reports `cleanup.done` with the `Report`. The Runtime Manager calls the Lease Manager's `Release` when the group closes ([chapter 9](#9-lease-manager)).
@@ -12950,17 +12994,19 @@ The Runtime Manager publishes `run-complete` only after every group of the run h
 #### Branches under epic landing
 
 1. The redundant branch is the group's local branch, which was never pushed; `contains` is the epic's remote branch.
-2. When `epic_done` is true, the epic's pull request is open, so the landing worktree and the local epic branch also go, with `contains` set to the epic's remote branch.
+2. When `epic_done` is true, the epic's pull request is open, so the landing worktree (`landing`) and the local epic branch also go, with `contains` set to the epic's remote branch. The local epic branch is `contains` without its `remote/` prefix, and it goes only if it is in the history of `contains`.
 3. The remote epic branch stays: the open pull request needs it.
 
 #### Sweeping the remains of dead runs
 
 What triggers a sweep is [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))]; `komodo clean` calls it on demand.
 
-1. `Sweep` lists the group worktrees on disk and skips every group a live run holds, asking the Lease Manager through `Leases.Holder`.
+1. `Sweep` lists the group folders in `Roots.Worktrees` and skips every group a live run holds, asking the Lease Manager through `Leases.Holder`; a lease is live when `Handler.Live` says so. A skipped group is listed under `kept`.
 2. It removes the dead runs' Docker containers, tester checkouts and session temporary folders.
-3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed. It then deletes the group's local branch with `DeleteBranch`, which keeps a branch whose tip the remote lacks.
+3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed. It then deletes the group's local branch, named by the group's lease record, with `DeleteBranch`, passing the branch's current tip and the remote branch `Holds` found it in. A branch whose tip no remote branch holds, and a group with no lease record to name its branch, are kept and listed.
 4. It returns a `Report` and reports `cleanup.swept`.
+
+`Preview` walks the same groups and lists each container, checkout, worktree and branch that `Sweep` would try to remove, under `removed`; it calls no removal and reports no fact. A worktree that holds files the tip lacks shows as removable in a preview and is kept when `Sweep` runs.
 
 A crash or `stop` leaves the group's worktree, branch and container in place. `komodo run (id)` continues the group from its saved state, and the sweep clears what no run continues.
 
@@ -12969,13 +13015,13 @@ A crash or `stop` leaves the group's worktree, branch and container in place. `k
 `komodo abandon (id)` reaches `Discard` through the Runtime Manager, which stops the group first.
 
 1. `Discard` refuses with `ErrLeaseHeld` when a live run still holds the group; stopping the group revokes its lease first.
-2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree. It deletes the local branch with `DiscardBranch`, which drops unpublished work, and calls `CloseTaskGroup()`, which destroys the sandbox.
+2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree with `DiscardWorktree`, which deletes its files too. It deletes the local branch, named by the group's lease record, with `DiscardBranch`, which drops unpublished work, and calls `CloseTaskGroup()`, which destroys the sandbox.
 3. It keeps the group's state record and events, and reports `group.discarded` with the reason. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
 4. Dependent groups are then marked `waiting on discarded group` by the Runtime Manager in status and in the task-list file, not in their own records, until `run` is given a plan that clears the wait.
 
 #### Choosing which versions to delete
 
-`komodo update` and `komodo clean` delete installed binary versions that nothing needs. `UnusedVersions` returns the installed versions minus every version named by a `GroupRef` from `Groups.Unfinished`. A blocked or stopped group counts as unfinished, so a group that waits for a person never loses the binary it was started with.
+`komodo update` and `komodo clean` delete installed binary versions that nothing needs. `UnusedVersions` returns the folder names in `Roots.Versions`, oldest first, minus every version named by a `GroupRef` from `Groups.Unfinished`. A blocked or stopped group counts as unfinished, so a group that waits for a person never loses the binary it was started with.
 
 ### 16.6 State
 
@@ -13012,6 +13058,7 @@ A crash inside `Cleaning` leaves some resources removed. A repeat of `Complete` 
 6. A group held by a live run is never touched by `Sweep` or `Discard`.
 7. State records and events are never deleted.
 8. A binary version named by an unfinished group is never deleted.
+9. The handler deletes only below `Roots`; a path outside them is refused with `ErrOutsideRoots` before anything is removed.
 
 #### Failures
 
@@ -13043,6 +13090,8 @@ Component tests use a temporary git repository, a local bare repository as the r
 - A branch moved by one commit after publishing is not deleted.
 - No call deletes a remote branch or closes a pull request.
 - `Sweep` skips a group whose lease a live run holds.
+- `Preview` lists what `Sweep` would remove and removes nothing.
+- A path or group id outside `Roots`, including one reached through a link, is refused with `ErrOutsideRoots` and nothing there is deleted.
 - `UnusedVersions` excludes the version named by a blocked group.
 - `run-complete` is not published while any group of the run is unclosed.
 - `Discard`, reached by `abandon (id)`, refuses a group a live run holds, removes the container, deletes a branch holding unpublished commits, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
