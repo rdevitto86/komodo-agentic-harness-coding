@@ -79,7 +79,7 @@ Komodo is one Go program, the `komodo` binary. Each subsystem has one package un
 
 | Package | Subsystem | Chapter |
 |---|---|---|
-| `cmd/komodo` | `main.go`, calling `cli.Run(os.Args)`, and the end-to-end tests | [1](#1-cli) |
+| `cmd/komodo` | `main.go`, calling `cli.New(deps).Run(os.Args)`, and the end-to-end tests | [1](#1-cli) |
 | `internal/cli` | CLI | [1](#1-cli) |
 | `internal/format` | Output Formatter | [2](#2-output-formatter) |
 | `internal/config` | Configuration Manager | [3](#3-configuration-manager) |
@@ -192,7 +192,7 @@ Go package `internal/cli`, plus the program entry point.
 
 | File | Holds |
 |---|---|
-| `cmd/komodo/main.go` | Builds the harness parts, calls `cli.Run(os.Args)` and exits with the code returned |
+| `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned |
 | `internal/cli/cli.go` | Command table, `parse`, `validate`, `resolve`, `dispatch`, `render`, envelope, exit codes, pin check |
 | `internal/cli/help.go` | `--help` text and `--help --json`, generated at build and embedded |
 | `internal/cli/work.go` | `plan`, `run`, `stop`, `replay`, `build`, `review`, `test`: each builds one event |
@@ -204,16 +204,16 @@ Go package `internal/cli`, plus the program entry point.
 | `internal/cli/terminal.go` | The controlling-terminal check for each platform |
 | `templates/project/AGENTS.md.tmpl`, `templates/claude/settings.json.tmpl` | The text `install` writes |
 
-Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. The Error Handler sits below `cli`, so `cmd/komodo/main.go` hands it the CLI's `PrintError()` as a callback ([1.4](#14-interfaces)).
+Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. The Error Handler sits below `cli`, so `cli` imports `fault` and implements its `fault.Printer` interface with `PrintError()`; `cmd/komodo/main.go` passes the CLI to `fault.New` ([1.4](#14-interfaces)).
 
 **📐 Where the command-line code sits**
 ```mermaid
 flowchart TB
-  MAIN["cmd/komodo main.go"] -->|"1 cli.Run"| CLI["internal/cli"]
+  MAIN["cmd/komodo main.go"] -->|"1 New, Run"| CLI["internal/cli"]
   CLI -->|"2 FormatJSON"| FMT["internal/format"]
   CLI -->|"3 GetConfigItem, SetConfigItem"| CFG["internal/config"]
   CLI -->|"4 publish, subscribe"| BUS["internal/bus"]
-  FLT["internal/fault"] -->|"5 PrintError callback"| CLI
+  FLT["internal/fault"] -->|"5 PrintError via Printer"| CLI
 ```
 
 ### 1.3 Data Model
@@ -279,7 +279,7 @@ type Result struct {
 | 0 | `OutcomeOK` | The command succeeded |
 | 1 | `OutcomeRefused` | Declined before acting: no terminal, pinned repository, tampered settings, value over its limit, no repository |
 | 2 | `OutcomeUsage` | Unknown command or flag, or a bad value; an unknown flag's message names the closest real flag |
-| 3 | `OutcomeHeld` | The command acted and reports a group the Runtime Manager holds until a person continues it with `run` |
+| 3 | `OutcomeHeld` | The command acted and reports a group the Runtime Manager holds until a person continues it [TODO: which old commands survive beside the diagram's 12 ([G-204](#g-204))] |
 | 4 | `OutcomeInternal` | The harness itself failed: a recovered panic, an undecodable record, a failed write to its own files |
 
 Codes the CLI raises, from the closed code list owned by the [Output Formatter](#23-data-model):
@@ -585,27 +585,33 @@ The update state is `~/.komodo/state/update.json`; who owns this machine-wide re
 ```go
 // internal/cli/cli.go
 
-// Run parses args, runs one command and returns the process exit code.
-func Run(args []string) int
-
 // Deps are the harness parts the CLI calls; main wires them once.
 type Deps struct {
 	Format   *format.Formatter // FormatJSON()
 	Config   *config.Manager   // GetConfigItem(), SetConfigItem(), Verify()
-	Bus      *bus.Bus          // Publish, Subscribe
+	Bus      bus.Bus           // Publish, Subscribe
 	Terminal func() bool       // true when a controlling terminal is attached
 }
 
-// PrintError shows an error to the caller; the Error Handler holds it as a callback.
-func (c *CLI) PrintError(e format.ErrorFacts)
+// CLI is the command-line front door; it holds the parts in Deps.
+type CLI struct{ /* deps, parsed flags, the command in progress */ }
+
+// New returns a CLI that calls the parts in d.
+func New(d Deps) *CLI
+
+// Run parses args, runs one command and returns the process exit code.
+func (c *CLI) Run(args []string) int
+
+// PrintError shows a fault to the caller; it implements fault.Printer, which the Error Handler holds.
+func (c *CLI) PrintError(f fault.Fault) error
 ```
 
-`PrintError()` builds an `error.<code>` reply with the Output Formatter and prints it: the envelope under `--json`, text otherwise. It never exits the process; the exit code of the command in progress is set by `render`.
+`PrintError()` turns the fault into an `error.<code>` reply with the Output Formatter: `Code`, `Reason` and `Fix` become the `ErrorFacts` of [2.3](#23-data-model), and the run and group come from the fault's `Source`. It prints the envelope under `--json` and text otherwise, returns the print error, and never exits the process; the exit code of the command in progress is set by `render` from the fault's `Kind`.
 
 | Caller | Calls | When |
 |---|---|---|
 | `main` | `Run` | Once per process |
-| Error Handler ([chapter 17](#17-error-handler)) | `PrintError` | An error reaches the caller. The callback is handed over in `main`, because `fault` sits below `cli` in the import order |
+| Error Handler ([chapter 17](#17-error-handler)) | `PrintError` | A fault reaches the caller. `main` passes the CLI to `fault.New` as its `fault.Printer`, because `fault` sits below `cli` in the import order |
 
 | Dependency call | An error means | The CLI does |
 |---|---|---|
@@ -1013,7 +1019,7 @@ The Output Formatter turns the harness's structured messages into text a person 
 - The reply envelope and the exit code: [CLI](#1-cli).
 - Deciding what a reply says. The part that produces a fact owns the check that the fact is true, because the formatter reads no repository.
 - Model-written prose. A summary written by an agent feeds briefs and logs; no template renders it.
-- The facts of a commit message and a pull request body: [Commit Handler](#15-commit-handler). The Output Formatter renders the pull request body from those facts with `PRBody`.
+- The facts of a commit message and a pull request body: [Commit Handler](#15-commit-handler). The Commit Handler renders its own pull request body from its own template.
 
 **Concepts**
 
@@ -1288,9 +1294,6 @@ func New(o Options) (*Formatter, error)
 
 // FormatJSON reads one Message and returns the rendered text for the profile.
 func (f *Formatter) FormatJSON(msg []byte) (Rendered, error)
-
-// PRBody renders a pull request body from the Commit Handler's facts; it is the same template path as FormatJSON.
-func (f *Formatter) PRBody(ctx context.Context, facts commit.PRFacts) (string, error)
 
 // OutputStyle returns the style text of one profile for the AGENTS.md block.
 func OutputStyle(p Profile) (string, error)
@@ -1878,6 +1881,8 @@ func (m *Manager) PlanReset(target string) ([]Change, error)
 func (m *Manager) Accept() (Batch, error)
 ```
 
+**What phase 2 checks.** The Configuration Manager is built in phase 2, before the Task Manager (phase 5) and the model client (phase 4) exist, so phase 2 passes an empty `Known` and a `modelOK` that always returns true. Phase 2 checks the key table: types, enums, hard limits, the tamper checksums, unknown fields in role files, unique `result` identifiers and valid `chain` and `v`. Phase 5 adds the `known.GuardRows` check, and phase 4 adds the `known.Tools` check and the model probe, by passing filled values to `New`.
+
 ```go
 var ErrTampered = errors.New("a settings file was edited outside komodo config")
 
@@ -2159,7 +2164,7 @@ Go package `internal/bus` ([HLD Appendix A](hld.md#appendix-a-traceability)). It
 |---|---|
 | `internal/bus/event.go` | `Event`, `Type`, `Subtype`, `ID`, `Payload`, JSON encoding and decoding |
 | `internal/bus/types.go` | The `Type` constants and the registry that binds each type and subtype to its data struct |
-| `internal/bus/data.go` | The data struct of every subtype ([4.3](#43-data-model)) |
+| `internal/bus/data.go` | The data struct of every subtype whose body this chapter defines ([4.3](#43-data-model)); the other owning packages declare their own |
 | `internal/bus/bus.go` | `Bus`, `New`, `Publish`, `Subscribe`, `Close` |
 | `internal/bus/subscription.go` | `Subscription`, its bounded queue, `Close`, `Dropped` |
 | `embed/event.schema.json` | JSON Schema generated at build from the registry; a test fails when it disagrees with the Go types |
@@ -2238,7 +2243,7 @@ func (e *Event) UnmarshalJSON(b []byte) error
 }
 ```
 
-A run-level event, a command from the CLI:
+A run-level event, a request to run a target:
 
 ```json
 {"type":"run-start","subtype":"","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T15:20:00Z","data":{"target":"tg-1.2"}}
@@ -2293,11 +2298,30 @@ Subtypes that other chapters define, with the chapter that owns the data body.
 |---|---|---|
 | `run-status` | `group.approved`, `publish.done`, `pr.opened` | [15. Commit Handler](#15-commit-handler) |
 | `run-status` | `cleanup.start`, `cleanup.done`, `cleanup.swept`, `group.discarded` | [16. Cleanup Handler](#16-cleanup-handler) |
-| `run-status` | `group.continued`, `group.done`, `group.closed`, `request.refused`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
+| `run-status` | `group.continued`, `group.done`, `group.closed`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
+| `run-failure` | `stalled` | [7. Runtime Manager](#7-runtime-manager) |
+| `skill`, `mcp` | `set`, `reload` | [6. Context Manager](#6-context-manager) |
+| `resource` | `usage`, `headroom`, `overage`, `limit` | [19. Resource Manager](#19-resource-manager) |
 | `next` | `plan-ready`: groups with dependencies, touches, task count and card hash | [5. Intake Handler](#5-intake-handler) |
 | `error` | `plan-blocked`, `plan-timeout`, `plan-input`, `plan-write` | [5. Intake Handler](#5-intake-handler) |
 | `error` | `context-refused` | [6. Context Manager](#6-context-manager) |
 | `error` | `run-refused` | [7. Runtime Manager](#7-runtime-manager) |
+| `error` | `fault.error`, `fault.panic`, `fault.resource` | [17. Error Handler](#17-error-handler) |
+
+The package that publishes a subtype in this table declares its data struct and registers the pair with `Register` ([4.4](#44-interfaces)). It exposes one `RegisterEvents()` function, and `main` calls every `RegisterEvents()` before the first `Publish`:
+
+```go
+// internal/fault/fault.go
+
+// RegisterEvents binds the three fault subtypes to their data structs.
+func RegisterEvents() {
+	bus.Register(bus.Key{Type: bus.TypeError, Subtype: "fault.error"}, func() bus.Payload { return &ErrorFault{} })
+	bus.Register(bus.Key{Type: bus.TypeError, Subtype: "fault.panic"}, func() bus.Payload { return &PanicFault{} })
+	bus.Register(bus.Key{Type: bus.TypeError, Subtype: "fault.resource"}, func() bus.Payload { return &ResourceFault{} })
+}
+```
+
+`Publish` refuses a pair that no `RegisterEvents()` or `data.go` bound ([4.7](#47-invariants-and-failures)).
 
 #### Old event to type and subtype
 
@@ -2309,7 +2333,7 @@ The old catalog had 41 event types in the form `family.name`. The subtype keeps 
 | `run.done` | `run-complete` / `done` | `done`, `blocked` kept |
 | `run.stopped` | `run-complete` / `stopped` | `signal`, `saved` kept |
 | `group.paused` | `run-status` / `group.paused` | `until`, `link` kept |
-| `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail` kept; `reason` joins `data` |
+| `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail` kept; `reason`, `prior` and `paths` join `data` |
 | `group.shipped` | `run-status` / `group.shipped` | [TODO: where groups land ([G-210](#g-210))]; the `merge`, `pr` and `files` fields depend on it |
 | `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` kept |
 | `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` kept; stage names are the new ones |
@@ -2347,23 +2371,17 @@ The `check.done` row's old `CheckDone` and `CheckStep` shapes, and the `action.*
 
 #### Data structs
 
-A data struct holds the facts of its subtype and is bound to its pair by `EventKey()`. The schema allows no field beyond these tags, and a field marked `omitempty` or `omitzero` is absent when empty. Stage names and the `Reason` list are owned by [10. State Manager](#10-state-manager).
+A data struct holds the facts of its subtype and is bound to its pair by `EventKey()`. The schema allows no field beyond these tags, and a field marked `omitempty` or `omitzero` is absent when empty. The `stage` and `reason` fields are plain strings here because `bus` imports only `core`; their values are the one `Stage` list and the one `Reason` list that [10. State Manager](#10-state-manager) owns.
 
 ```go
 // --- Shared by group facts
 
 // GroupFacts carries what the old envelope held on every group event; embedded in a group fact's data.
 type GroupFacts struct {
-	Stage   Stage  `json:"stage,omitempty"`   // the group's stage when the fact was seen
+	Stage   string `json:"stage,omitempty"`   // the group's stage when the fact was seen: a state.Stage value
 	Session ID     `json:"session,omitempty"` // session and task facts only
-	Reason  Reason `json:"reason,omitempty"`  // one value of the closed reason list
+	Reason  string `json:"reason,omitempty"`  // a state.Reason value, block or exit
 }
-
-// Stage names a stage or holding state; the values are listed in chapter 10.
-type Stage string
-
-// Reason is one value of the closed reason list: block, exit and skip reasons.
-type Reason string
 
 // --- Run
 
@@ -2398,8 +2416,10 @@ type GroupPaused struct {
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
 	GroupFacts
-	Counter string `json:"counter,omitempty"` // unnamed block only: retries, returns, flap or job
-	Detail  string `json:"detail,omitempty"`  // what the CLI shows, at most 4 KB
+	Prior   string   `json:"prior,omitempty"`   // the working stage the group left
+	Paths   []string `json:"paths,omitempty"`   // needs_scope only: the paths asked for
+	Counter string   `json:"counter,omitempty"` // unnamed block only: retries, returns, flap or job
+	Detail  string   `json:"detail,omitempty"`  // what the CLI shows, at most 4 KB
 }
 
 // LeaseLost is the data of run-failure / lease.lost.
@@ -2412,14 +2432,14 @@ type LeaseLost struct {
 
 // StageEnter is the data of run-status / stage.enter.
 type StageEnter struct {
-	From   Stage `json:"from"`   // the stage left; empty for the first entry
-	To     Stage `json:"to"`     // the stage entered
-	Return bool  `json:"return"` // a failure sent the group back to Build
+	From   string `json:"from"`   // the stage left; empty for the first entry
+	To     string `json:"to"`     // the stage entered
+	Return bool   `json:"return"` // a failure sent the group back to Build
 }
 
 // StageExit is the data of run-status / stage.exit.
 type StageExit struct {
-	From Stage `json:"from"` // the stage whose gate was met
+	From string `json:"from"` // the stage whose gate was met
 }
 
 // --- Session
@@ -2502,9 +2522,7 @@ type TaskReleased struct {
 // TaskDone is the data of run-status / task.done.
 type TaskDone struct {
 	GroupFacts
-	Task   string `json:"task"`
-	Commit string `json:"commit"` // the hidden-reference commit that holds the task
-	Lines  int    `json:"lines"`  // changed lines of the task's commit
+	Task string `json:"task"`
 }
 
 // TaskRetry is the data of run-status / task.retry; the reason is the cause.
@@ -2585,6 +2603,11 @@ type BusOverflow struct {
 // RequestRef names the command that a request outcome answers.
 type RequestRef struct {
 	Request ID `json:"request"` // the identifier of the command event
+}
+
+// RequestAccepted is the data of run-status / request.accepted.
+type RequestAccepted struct {
+	RequestRef
 }
 
 // RequestRefused is the data of run-status / request.refused.
@@ -3068,7 +3091,7 @@ The Intake Handler uses two event types. The Event Bus chapter owns the full lis
 
 ```json
 {
-  "type": "plan", "subtype": "request", "run": "r-0192e4", "group": "",
+  "type": "plan", "subtype": "request", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "",
   "time": "2026-10-14T21:03:11Z",
   "data": {"goal": "Add lease revocation", "docs": ["docs/hld.md"], "epic": 0}
 }
@@ -3076,7 +3099,7 @@ The Intake Handler uses two event types. The Event Bus chapter owns the full lis
 
 ```json
 {
-  "type": "next", "subtype": "plan-ready", "run": "r-0192e4", "group": "",
+  "type": "next", "subtype": "plan-ready", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "",
   "time": "2026-10-14T21:09:40Z",
   "data": {
     "epic": 2,
@@ -3805,7 +3828,7 @@ type Warning struct {
 ```json
 {
   "agent": "builder",
-  "run": "r-0192e4",
+  "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
   "group": "tg-2.1",
   "files": ["internal/lease/lock.go", "internal/lease/lock_test.go"],
   "slots": {"group": "tg-2.1: lease revocation", "tasks": "...", "file_contents": "..."}
@@ -4518,8 +4541,8 @@ A block reason named `tester` or `flaky` exists only if the free mechanical chec
 type State struct {
 	Run          string       `json:"run"`
 	Group        string       `json:"group"`
-	Stage        Stage        `json:"stage"`
-	Prior        Stage        `json:"prior"`         // the working stage a Paused or Blocked group left
+	Stage        state.Stage  `json:"stage"`
+	Prior        state.Stage  `json:"prior"`         // the working stage a Paused or Blocked group left
 	Epoch        uint32       `json:"epoch"`
 	Fence        uint64       `json:"fence"`         // the lease's fence number, copied when the lease is granted
 	Outcome      string       `json:"outcome"`       // set in Done: "complete" or "lost"
@@ -4572,7 +4595,7 @@ type PauseState struct {
 
 // BlockState names why and when a Blocked group stopped.
 type BlockState struct {
-	Reason Reason    `json:"reason,omitempty"`
+	Reason state.Reason `json:"reason,omitempty"`
 	At     time.Time `json:"at,omitzero"`
 }
 
@@ -4694,7 +4717,7 @@ const (
 type Order struct {
 	Kind    OrderKind       `json:"kind"`
 	Key     string          `json:"key"`     // idempotency key: group, kind and epoch
-	Stage   Stage           `json:"stage,omitempty"`
+	Stage   state.Stage     `json:"stage,omitempty"`
 	Resume  []ResumeRef     `json:"resume,omitempty"`
 	Context json.RawMessage `json:"context,omitempty"` // the Context Manager's answer for the stage
 	Data    json.RawMessage `json:"data,omitempty"`    // findings, scope answer, grant
@@ -4859,7 +4882,7 @@ The Runtime Manager publishes with the shape every event has: `type`, `subtype`,
 |---|---|---|
 | `run-status` | `stage.enter` | A group enters a stage |
 | `run-status` | `group.paused`, `group.continued` | A group pauses; a paused or blocked group continues |
-| `run-status` | `group.blocked` | A group blocks; `data.reason` names why |
+| `run-failure` | `group.blocked` | A group blocks; `data.reason` names why |
 | `run-status` | `group.done` | A group reaches Done |
 | `run-status` | `session.start`, `session.end`, `session.resume-lost` | A session starts or ends; a handle failed and a fresh session replaced it |
 | `run-status` | `request.refused` | A `run-continue` or scope answer matched no row |
@@ -4870,7 +4893,7 @@ The Runtime Manager publishes with the shape every event has: `type`, `subtype`,
 
 ```json
 {
-  "type": "run-status",
+  "type": "run-failure",
   "subtype": "group.blocked",
   "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
   "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
@@ -4981,7 +5004,7 @@ A builder that needs a file outside its group's files stops its session with a r
 1. The Task Manager reports `scope.ask` with the paths and the reason, and the session ends.
 2. The Runtime Manager orders the work saved and keeps the lease and the worktree.
 3. It denies with no one asked when a path is protected (the harness's own settings, `.git`, secret files), is in another live group's files, or the task already spent its one request (`ScopeAsked`). It sets `ScopeAsked` and sends `OrderScope` with the denial; the group stays in Build.
-4. Otherwise it blocks the group `needs_scope`, sets `ScopeAsked`, keeps the session's handle in `Resume`, and publishes `run-status` / `group.blocked`. This block is never counted as a flap.
+4. Otherwise it blocks the group `needs_scope`, sets `ScopeAsked`, keeps the session's handle in `Resume`, and publishes `run-failure` / `group.blocked`. This block is never counted as a flap.
 5. The orchestrator answers; row 14 moves the group to Build. Approval adds the paths to `ScopeAdded`, so the group's effective files are its list plus `ScopeAdded`.
 6. The same session resumes with the answer in its brief.
 
@@ -5036,7 +5059,7 @@ flowchart TB
 **The dead-session rule.** One rule covers every session that was live at the crash, and the crash is never charged to `Attempts` or `Retries`:
 1. For each session the State shows as claimed with no `session.end`, the Runtime Manager saves `session.end` with reason `crash`, which releases its task.
 2. It orders the worktree's work saved, then orders the stage again with the session's `ResumeRef`.
-3. The Task Manager continues the same conversation from the handle. If the handle fails, it starts a fresh session with the brief, the uncommitted diff and the last summary, and the Runtime Manager publishes `session.resume-lost`.
+3. The Task Manager continues the same conversation from the handle. If the handle fails, it starts a fresh session with the brief, the diff of the work so far and the last summary, and the Runtime Manager publishes `session.resume-lost`.
 4. A session whose start order is still open is not marked dead; rerunning the order starts it once.
 
 The Cleanup Handler removes the branches and worktrees a dead run left behind ([16](#16-cleanup-handler)); what triggers it after a crash is [TODO: what triggers removing a dead run's leftovers ([G-218](#g-218))].
@@ -5112,7 +5135,7 @@ Both tables below are one Go slice of `Transition`, whose `From`, `On` and `To` 
 ```go
 // Transition is one row of the stage-move and in-stage tables.
 type Transition struct {
-	From   []Stage                             // nil means any stage
+	From   []state.Stage                       // nil means any stage
 	On     InputKind
 	When   func(State, Input, Limits) bool     // the condition column; nil means always
 	To     Stage                               // a stage, Keep or ToPrior
@@ -5135,7 +5158,7 @@ type Transition struct {
 | 1 | `NoStage` | `group.start` | The group is ready and a slot is free | Intake | Epoch 1; orders the lease grant; emits `stage.enter` |
 | 2 | Intake | `lease.granted` | | Intake | `Fence` set from the grant; orders `start_group` |
 | 3 | Intake | `ready` | | Build | Epoch + 1; orders `enter_stage` Build at the first task not done; emits `stage.enter` |
-| 4 | Build | `stage.done` Build | Every task is done | Test and Review | Epoch + 1; `Restarts` cleared; orders `enter_stage` Test and Review on the same commit; emits `stage.enter` |
+| 4 | Build | `stage.done` Build | Every task is done | Test and Review | Epoch + 1; `Restarts` cleared; orders `enter_stage` Test and Review on the group's tree; emits `stage.enter` |
 | 5 | Test and Review | `stage.done` | Tester and Reviewer both approved | Commit | Epoch + 1; orders `enter_stage` Commit; emits `stage.enter` |
 | 6 | Test and Review | `result.fail` | `Returns` under the limit; fingerprint and tree both differ from the last return | Build | `Returns` + 1; `FailureHash` and `ReturnTree` set; orders `cancel` for a live sibling, then `enter_stage` Build with the findings; emits `stage.enter` |
 | 7 | Commit | `stage.done` | Published | Cleanup | Epoch + 1; orders `enter_stage` Cleanup; emits `stage.enter` |
@@ -5183,7 +5206,7 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | `session.end` builder | Build | Clears the task's session; `TokensUsed` grows by the session's usage; then the exit row below |
 | `task.done` | Build | Task `done`; `GateFails` reset |
 | `gate.fail` | Build | `GateFails` + 1 for the task; the third failure ends the session with reason `check_fail`, orders `save_work` and a retry |
-| `session.end` tester or reviewer, no result | Test and Review | `Restarts` + 1; orders a fresh session of the same agent on the same commit while within its retries, or records the restart in `Owed` when the group is Paused; never a return |
+| `session.end` tester or reviewer, no result | Test and Review | `Restarts` + 1; orders a fresh session of the same agent on the group's tree while within its retries, or records the restart in `Owed` when the group is Paused; never a return |
 | `session.end` reason `paused` | Paused | Adds a `Resume` entry; `Pause.Until` takes the later time; `Pause.Refused` + 1 when the same session paused before |
 | `timer.extend` | Build | Grants once per group: `WallExtended` set, orders `extend` |
 | `scope.ask` | Build | Denial rules of 7.5; sets `ScopeAsked` |
@@ -6360,7 +6383,7 @@ type BlockState struct {
 	At      time.Time `json:"at,omitzero"`
 }
 
-// Reason is why a group is blocked; this package owns the list and the Runtime Manager uses it.
+// Reason is the one closed list of why a group is blocked and why a session ended; this package owns it, and the Runtime Manager and the Task Manager use it.
 type Reason string
 
 const (
@@ -6385,6 +6408,17 @@ const (
 	ReasonContract      Reason = "contract"       // a decision result broke the event's declared shape
 	ReasonStateInvalid  Reason = "state_invalid"  // a record or a write failed a check
 	ReasonTester        Reason = "tester"         // the Tester's results were disputed twice; exists only if G-206 keeps the checks
+	ReasonDone          Reason = "done"           // session exit: the session returned a valid result
+	ReasonCheckFail     Reason = "check_fail"     // session exit: the result failed the agent's own gate twice
+	ReasonNoResult      Reason = "no_result"      // session exit: the reply was cut off or the conversation outgrew the context
+	ReasonSchemaFail    Reason = "schema_fail"    // session exit: the result broke the schema after the one re-prompt
+	ReasonTimeout       Reason = "timeout"        // session exit: the wall limit stopped the session
+	ReasonIdle          Reason = "idle"           // session exit: the session stayed silent past the nudge and its grace
+	ReasonRefusals      Reason = "refusals"       // session exit: the guard refused one row the limit's number of times
+	ReasonProvider      Reason = "provider"       // session exit: a usage limit ended it and another link is allowed
+	ReasonBilling       Reason = "billing"        // session exit: the first stream line showed a paid key
+	ReasonPaused        Reason = "paused"         // session exit: a limit halted it, no link is left, a resume handle exists
+	ReasonCancelled     Reason = "cancelled"      // session exit: the Task Manager stopped it on purpose
 )
 ```
 
@@ -6786,7 +6820,7 @@ type GroupSpec struct {
 	Lease     LeaseRef               // branch, worktree and git folder the lease records
 	Agents    map[string]Permissions // permissions per agent role
 	Limits    Limits                 // session clocks, returns, refusals, attempts
-	Stages    []Stage                // stages to run; the full pipeline unless a command names fewer
+	Stages    []state.Stage          // stages to run; the full pipeline unless a command names fewer
 	OtherFiles []string              // file globs of the other groups in the run
 	Resume    *PauseState            // set when the Runtime Manager restarts a paused group
 }
@@ -6844,20 +6878,12 @@ A command that runs one stage passes a subset of `Stages` [TODO: what `build`, `
 
 #### Stages and counters
 
+The pipeline's stages are the `state.Stage` values `build`, `test_review`, `commit` and `cleanup`; [10. State Manager](#10-state-manager) owns the type.
+
 ```go
-// Stage is one step of the pipeline.
-type Stage string
-
-const (
-	StageBuild      Stage = "build"
-	StageTestReview Stage = "test_review"
-	StageCommit     Stage = "commit"
-	StageCleanup    Stage = "cleanup"
-)
-
 // Progress is the Task Manager's own counters; the Runtime Manager persists them through ReportState.
 type Progress struct {
-	Stage          Stage    `json:"stage"`
+	Stage          state.Stage `json:"stage"`
 	TasksDone      []string `json:"tasks_done"`
 	Returns        int      `json:"returns"`          // trips back to Build so far
 	Disputes       int      `json:"disputes"`         // tester restarts after a disputed result
@@ -7419,7 +7445,7 @@ Only `denied` and `finding` lines become facts; `start` and `end` lines stay in 
 
 #### Exit reasons
 
-Every session ends with exactly one reason, written to `result.json` and to the `session.end` fact.
+Every session ends with exactly one `state.Reason` value ([10. State Manager](#10-state-manager) owns the one list), written to `result.json` and to the `session.end` fact. This table gives the meaning of the exit values.
 
 | Reason | Set when | The Task Manager then |
 |---|---|---|
@@ -7465,9 +7491,6 @@ func (m *Manager) Stop(ctx context.Context, cause string) error
 
 // CloseTaskGroup ends the group: it destroys the sandbox instance and reports the closing state.
 func (m *Manager) CloseTaskGroup(ctx context.Context) error
-
-// Reason is a session exit reason: one of the values in the exit reasons table.
-type Reason string
 
 // Errors Run, Resume and Continue return.
 var (
@@ -7810,7 +7833,7 @@ The reviewer and the tester start together and run side by side. The reviewer is
 A return counts one in `Progress.Returns`. The rework check runs these steps in order:
 
 1. If `Returns` has reached `limits.returns`, escalate `blocked`, reason `returns`.
-2. Take the tree hash of the group's last commit through `Git.TreeHash`. If it equals `TreeAtReturn`, the builder changed nothing since the last return: escalate `blocked`, reason `flap`.
+2. Take the tree hash of the group's worktree through `Git.TreeHash`. If it equals `TreeAtReturn`, the builder changed nothing since the last return: escalate `blocked`, reason `flap`.
 3. Store the hash in `TreeAtReturn`, raise `Returns`, and enter Build with the findings in the builder's brief.
 
 While the group is paused, a tester or reviewer restart is added to `Pause.Owed` and started at the timer, never at once, so no session starts with no allowed link and the agent's retry budget is not spent.
@@ -8468,7 +8491,7 @@ The Builder is the agent that writes the code of one task group. It works task b
 - The agent registry entry (model, link chain, limits): [Configuration Manager](#3-configuration-manager).
 - The return counter, attempt counter, retry loops and group clocks: [Runtime Manager](#7-runtime-manager).
 - Lease records: [Lease Manager](#9-lease-manager). Creating the branch and worktree: [TODO: who creates a group's branch and worktree ([G-220](#g-220))].
-- Judging the commit: [Tester](#13-tester) and [Reviewer](#14-reviewer). Pushing it: [Commit Handler](#15-commit-handler).
+- Judging the work under test: [Tester](#13-tester) and [Reviewer](#14-reviewer). Pushing it: [Commit Handler](#15-commit-handler).
 
 **Concepts**
 
@@ -8476,7 +8499,7 @@ The Builder is the agent that writes the code of one task group. It works task b
 |---|---|
 | Task | One unit of work in a task group's task list, with an identifier, a card (its description) and a completion command. |
 | Completion command | The command a task names as its success test; the task list calls it `done_when`. |
-| Round | One pass of the Builder followed by the Tester and the Reviewer on the same commit. |
+| Round | One pass of the Builder followed by the Tester and the Reviewer on the same work under test. |
 | Return | A trip from the Tester or Reviewer back to the Builder with findings; it ends a round. |
 | Gate result | The completion command's exit code and capped output, handed back to the live Builder by the `task_done` tool. |
 | File list | The paths the group may change: the task list's `files`, plus any scope the orchestrator approved. |
@@ -8733,7 +8756,7 @@ flowchart TD
   G -->|"3 exit non-zero, under 3 tries"| W
   G -->|"4 exit 0: task done"| N{"More tasks?"}
   N -->|"5 yes"| W
-  N -->|"6 no: final call"| H["Same commit to Tester and Reviewer"]
+  N -->|"6 no: final call"| H["Same work under test to Tester and Reviewer"]
   H -->|"7 findings: return"| W
 ```
 
@@ -8790,7 +8813,7 @@ After a denial the Builder finishes the task inside the file list; a task it can
 **Receive a return**
 1. The Runtime Manager counts the return against the group's return limit ([Runtime Manager](#7-runtime-manager)).
 2. The Task Manager fills `findings` with the verified findings of the Reviewer, `checks` with the failing output of the Tester, and `diff` with the delta since the last round.
-3. It resumes the Builder's session. When the session cannot resume, a fresh session receives the brief, the uncommitted diff and the last `summary`.
+3. It resumes the Builder's session. When the session cannot resume, a fresh session receives the brief, the diff of the work so far and the last `summary`.
 4. The Builder fixes the named problems, calls `task_done` for each affected task, and may list a rejected finding in `disputed`.
 5. A return that left the tree unchanged is detected at the next hand-off (12.7).
 
@@ -8913,9 +8936,9 @@ The Tester is the agent that proves the Builder's new and changed code works. It
 | Term | Meaning in this chapter |
 |---|---|
 | Acceptance item | A line of a group's task list in the form `WHEN <event> THE SYSTEM SHALL <response>`, with an optional `cmd:` line and an optional `needs:` line. |
-| Delta code | The files changed between the group's base commit and the head commit under test. |
+| Delta code | The files changed between the group's base commit and the work under test. |
 | Baseline | The result of the `test` command class at the base commit, keyed by the commit's tree hash (a hash of all file contents). |
-| Regression | A test that passed at the base commit and fails at the head commit. |
+| Regression | A test that passed at the base commit and fails in the work under test. |
 | Impact set | The tests the mechanical checks run for a change: the changed packages and every package that imports one. |
 | Rerun | Go running a failed item's command again, twice, alone, in the sandbox. |
 | Dispute | A failed item whose two reruns both pass. |
@@ -8968,7 +8991,7 @@ The Tester has no write tool. Its `run` may write files in the sandbox; the Task
 |---|---|---|
 | `repo_profile`, `group`, `tasks` | Languages and command classes; group goal; per task: identifier, title, card, completion command | Required |
 | `repo_context`, `standards` | Repository guidance and standards skills | Optional |
-| `diff` | Base commit to the head commit | Optional |
+| `diff` | Base commit to the work under test | Optional |
 | `baseline` | Tests failing at the base commit | Optional |
 | `acceptance` | The group's acceptance items at the base commit | Required |
 | `checks` | Go's mechanical check results, when they ran before the Tester ([TODO: where the zero-cost checks run ([G-206](#g-206))]) | Optional |
@@ -9134,7 +9157,7 @@ type CheckResult struct {
 type CheckInput struct {
 	Group    string
 	Base     string            // base commit
-	Head     string            // head commit
+	Head     string            // tree hash of the work under test
 	Files    []string          // the group's effective file list
 	Changed  []string          // paths changed between Base and Head
 	DoneWhen map[string]string // task identifier to completion command
@@ -9186,7 +9209,7 @@ type Tester interface {
 // AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
 func AdjudicateItem(reruns [2]bool) RerunOutcome
 
-// Checker runs the mechanical checks on one group's head commit.
+// Checker runs the mechanical checks on the work under test.
 type Checker interface {
 	Check(ctx context.Context, run CommandRunner, in CheckInput) (CheckResult, error)
 }
@@ -9244,7 +9267,7 @@ sequenceDiagram
   T->>X: 7 DestroySandboxInstance
 ```
 
-1. The Task Manager creates the sandbox with the commit under test and starts the Tester's session.
+1. The Task Manager creates the sandbox with the work under test and starts the Tester's session.
 2. The Tester runs each acceptance item's command with `run` (classes `build` and `test`) and reads the diff and files as needed.
 3. It ends with one final call: a pass or fail with evidence for every item, and `confirmed` or `not_confirmed` for every task identifier.
 4. Go rejects a result that skips or repeats a task identifier.
@@ -9296,7 +9319,7 @@ The checks below cost no model tokens; Go runs commands and scans text. Where th
 
 | Step | Rule |
 |---|---|
-| `done_when` | Every task's completion command is rerun in the sandbox at the head commit. |
+| `done_when` | Every task's completion command is rerun in the sandbox on the work under test. |
 | `scope` | Every changed file is in the effective file list or is a test sibling (`OutOfScope`). |
 | `secrets` | The diff's added lines are scanned with the guard's secret-content patterns, the list guard row G4 uses ([Task Manager](#11-task-manager)). |
 | `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. |
@@ -9453,7 +9476,7 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 1. A Tester failure counts only after Go's two reruns of its command also fail.
 2. The Tester's confirmation list holds every task identifier exactly once.
 3. The mechanical checks start no model session.
-4. No command of the Tester can change the Builder's worktree or its `.git` entry; the sandbox receives the commit under test and the Tester never holds a git path.
+4. No command of the Tester can change the Builder's worktree or its `.git` entry; the sandbox receives the work under test and the Tester never holds a git path.
 5. A Tester brief holds 0 bytes of the Builder's prose.
 6. A failed item with no command never blocks.
 
@@ -9560,8 +9583,8 @@ The Reviewer is the final code check on the Builder's work. It reads the change 
 | Evidence check | Go looking for the quoted line at the stated file and line. |
 | Verdict | The Reviewer's answer for one task identifier: `met`, `not_met` or `brief_incomplete`. |
 | Profile | The review depth: `thorough` or `economy`. |
-| Round | One pass of the Builder followed by the Tester and the Reviewer on the same commit. |
-| Approval | Both judges passed the same commit in the same round. |
+| Round | One pass of the Builder followed by the Tester and the Reviewer on the same work under test. |
+| Approval | Both judges passed the same work under test in the same round. |
 
 ### 14.2 Package Layout
 
@@ -9609,7 +9632,7 @@ The Reviewer has no write tool; `diff` and `git_read` are read-only git. Its `ru
 | Slot | Holds | Reviewer |
 |---|---|---|
 | `repo_profile`, `group`, `tasks`, `files` | Languages; group goal; per task identifier, title, card and completion command; the file list | Required |
-| `diff` | Base commit to the head commit; on a re-review, only the lines changed since the last review | Required |
+| `diff` | Base commit to the work under test; on a re-review, only the lines changed since the last review | Required |
 | `lens`, `lens_rules` | The selected lenses' text and their rule catalogs | Required |
 | `findings` | Open findings, on a re-review | Optional |
 | `callers` | Go callers of changed symbols, found with `go/packages`; other languages use `search` | Optional |
@@ -9766,7 +9789,7 @@ type Decision string
 
 const (
 	DecisionWait    Decision = "wait"    // a judge has not finished, or the Tester is being restarted
-	DecisionApprove Decision = "approve" // both passed: hand the commit to the Commit Handler
+	DecisionApprove Decision = "approve" // both passed: hand the approved work to the Commit Handler
 	DecisionReturn  Decision = "return"  // back to the Builder with findings
 	DecisionBlock   Decision = "block"   // a harness fault or a flaky item; a person is needed
 )
@@ -9856,7 +9879,7 @@ sequenceDiagram
   participant Q as Tester
   participant B as Builder
   T->>R: 1 start with the selected lenses
-  T->>Q: 1 start on the same commit
+  T->>Q: 1 start on the same work under test
   R->>G: 2 submit_finding
   G->>T: 3 quote found at file:line, finding verified
   T->>Q: 4 cancel
@@ -9866,7 +9889,7 @@ sequenceDiagram
   T->>B: 7 resume the same session with the findings
 ```
 
-1. The Task Manager chooses the lenses with `Lenses` and starts the Reviewer and the Tester on the same commit at the same time.
+1. The Task Manager chooses the lenses with `Lenses` and starts the Reviewer and the Tester on the same work under test at the same time.
 2. The Reviewer reads the diff and files, runs commands, and calls `submit_finding` for each problem.
 3. `AcceptFinding` runs the evidence check; when Go finds the quoted line, a `finding.verified` event is published.
 4. The first verified blocking finding makes the Task Manager cancel the Tester; the Tester's session ends `cancelled`.
@@ -9897,7 +9920,7 @@ sequenceDiagram
 | Markdown-only diff | A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality`. |
 | One session | One Reviewer session applies every selected lens, so the lenses share one pool slot. Each finding carries its lens in its rule identifier. |
 | Added checks | The Reviewer may run build, test and lint with `run`; Go reruns any command a verdict depends on, so the verdict rests on Go's result. |
-| Re-review | Only the delta: `git diff` from the head commit of the last review to the new head, with the open findings. |
+| Re-review | Only the delta: `git diff` from the work last reviewed to the work now under test, with the open findings. |
 
 Whether a Reviewer result for an unchanged diff may be reused instead of asked again is [TODO: rules for reusing a stored prompt response ([G-208](#g-208))]. What `komodo review` runs and what its id names is [TODO: what `review` does ([G-203](#g-203))].
 
@@ -9973,7 +9996,7 @@ func ExactlyOnce(want, got []string) error {
 
 | Case | Outcome |
 |---|---|
-| Both pass | `approve`; the Task Manager hands the commit to the Commit Handler |
+| Both pass | `approve`; the Task Manager hands the approved work to the Commit Handler |
 | One judge has not ended | `wait` |
 | Reviewer fails first | The Tester is cancelled; the Reviewer finishes; `return` with all its verified findings |
 | Tester item confirmed failed | The Reviewer finishes; `return` with the item and the Reviewer's findings |
@@ -10003,11 +10026,11 @@ The Reviewer keeps no state of its own. The group's runtime state ([State Manage
 **Invariants**
 1. A finding blocks only when Go found its quote at the stated file and line, in the head tree or the diff.
 2. The Reviewer's verdict list holds every task identifier exactly once.
-3. The group reaches the Commit Handler only when the Tester and the Reviewer both pass the same commit in the same round.
+3. The group reaches the Commit Handler only when the Tester and the Reviewer both pass the same work under test in the same round.
 4. A Reviewer brief holds 0 bytes of the Builder's prose.
 5. Output from a superseded round never moves a group.
 6. The Reviewer holds no git write path and cannot change the Builder's worktree.
-7. Any single failure loses at most one model turn and no committed task.
+7. Any single failure loses at most one model turn and no finished task.
 
 **Failure rows**
 
@@ -10017,7 +10040,7 @@ The Reviewer keeps no state of its own. The group's runtime state ([State Manage
 | Quote not at `file:line` | `VerifyFinding` | Drop and log; 0 | The finding cannot block |
 | Result skips or repeats a task | `AcceptResult` | One re-prompt; 1 | Session ends `schema_fail`; task retry |
 | `brief_incomplete` | `Decide` | Stop; 0 | Blocked `brief` |
-| Session ends without a result | Task Manager | Fresh Reviewer session on the same commit; the agent's `retries` per round | Blocked when spent |
+| Session ends without a result | Task Manager | Fresh Reviewer session on the same work under test; the agent's `retries` per round | Blocked when spent |
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
 | A verdict depends on a command whose rerun disagrees | Go | Use Go's result; 0 | The verdict rests on Go's result |
 | Verified blocking finding or `not_met` | `Decide` | Return to the Builder; the return limit | Blocked when returns are spent |
@@ -10061,7 +10084,7 @@ A report of rules verified under 50% of the time existed in the earlier design a
 - A seeded failing acceptance item and a Reviewer finding reach the Builder in one return.
 - A seeded exported-signature change selects `contract`, and the finding names the caller.
 - The first verified blocking finding cancels the Tester, and the Tester's later output is recorded stale.
-- Both judges passing hands the commit to the Commit Handler once.
+- Both judges passing hands the approved work to the Commit Handler once.
 - A Tester `run` that edits a tracked file is reset and rerun once.
 
 ### 14.10 Open Gaps
@@ -10080,7 +10103,7 @@ The Reviewer's tool list holds only Komodo's tools; whether outside tool servers
 
 ## 15. Commit Handler
 
-The Commit Handler publishes a task group's approved work: it records the approved files as a commit, pushes the group's branch to the remote, and opens or updates the pull request (the hosting service's page where a person reviews and merges a branch). It is the only part of the harness that pushes, and it runs only after the Tester and the Reviewer both approve the same commit. When it finishes it hands the group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
+The Commit Handler publishes a task group's approved work: it records the approved files as a commit, pushes the group's branch to the remote, and opens or updates the pull request (the hosting service's page where a person reviews and merges a branch). It is the only part of the harness that pushes, and it runs only after the Tester and the Reviewer both approve the same tree. When it finishes it hands the group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
 
 ### 15.1 Scope and Concepts
 
@@ -10088,7 +10111,7 @@ The Commit Handler owns three things: the publish sequence, the git wrapper (the
 
 | Term | Meaning |
 |---|---|
-| Approval | The hand-over from the Task Manager: one commit that both the Tester and the Reviewer approved |
+| Approval | The hand-over from the Task Manager: the work, named by its tree hash, that both the Tester and the Reviewer approved |
 | Tree hash | A short fingerprint of every file's content in a commit or worktree; equal hashes mean equal content |
 | Group branch | The branch for the group, named `komodo/<epic>-<group>`, such as `komodo/epic-1-tg-1.2`; who creates it is [TODO: who creates a group's branch and worktree ([G-220](#g-220))] |
 | Critical reference | Any git reference outside `refs/heads/komodo/` and `refs/komodo/`, such as `main` |
@@ -10102,7 +10125,7 @@ What the Commit Handler guarantees:
 - No agent holds forge credentials or runs git; the credentials stay with the harness process.
 
 What lies beside it:
-- The Tester and the Reviewer judge the commit; the Commit Handler never re-judges it.
+- The Tester and the Reviewer judge the work; the Commit Handler never re-judges it.
 - The Lease Manager keeps the lease registry and performs no git write ([chapter 9](#9-lease-manager)).
 - Whether finished tasks are saved before approval and by whom, who creates a group's branch and worktree, and who commits the planner's task lists are [TODO: whether finished tasks are saved before approval and by whom, who creates a group's branch and worktree, who releases the lease after cleanup, and who commits task lists ([G-220](#g-220))].
 - Which verbs reach the Commit Handler is [TODO: what `replay`, `build`, `test` and `review` do ([G-203](#g-203))]. Under every option only a run that has both approvals publishes; a command that runs one stage never does.
@@ -10119,6 +10142,7 @@ The Go package is `internal/commit` (phase 6 of the build order in HLD Appendix 
 | `internal/core/git.go` | `Git`: the git wrapper, with the no-force and never-critical-reference rules; this chapter defines its rules |
 | `internal/commit/forge.go` | `Forge`: the `gh` wrapper that finds, opens and updates pull requests |
 | `internal/commit/message.go` | The commit message form and the check that it carries no trailer |
+| `internal/commit/body.go` | `RenderBody`: the Commit Handler's own pull request body template, filled from `PRFacts` |
 
 The git wrapper itself lives in `internal/core/git.go`, so a package below `internal/commit` can use it without importing this one. The Commit Handler and the Cleanup Handler (which deletes local branches and removes worktrees) declare the few `Git` methods they need as their own small interface; one `core.Git` value, created once at start-up, satisfies them. Whichever part [G-220](#g-220) names for other git writes uses the same value.
 
@@ -10135,9 +10159,9 @@ The git wrapper itself lives in `internal/core/git.go`, so a package below `inte
 #### Approval
 
 ```go
-// Verdict is one agent's approval and the commit it judged.
+// Verdict is one agent's approval and the tree it judged.
 type Verdict struct {
-	Commit  string   `json:"commit"`  // commit id the agent judged
+	Tree    string   `json:"tree"`    // tree hash of the work the agent judged
 	Summary []string `json:"summary"` // result lines the pull request body prints
 }
 
@@ -10151,8 +10175,7 @@ type Approval struct {
 	Worktree string      `json:"worktree"` // path of the group's worktree
 	Branch   string      `json:"branch"`   // group branch
 	Fence    lease.Fence `json:"fence"`    // fence of the lease the Task Manager holds
-	Commit   string      `json:"commit"`   // commit id both agents approved
-	Tree     string      `json:"tree"`     // tree hash of the approved content
+	Tree     string      `json:"tree"`     // tree hash both agents approved
 	Tester   Verdict     `json:"tester"`
 	Reviewer Verdict     `json:"reviewer"`
 	Facts    PRFacts     `json:"facts"`
@@ -10161,8 +10184,7 @@ type Approval struct {
 
 | Field | Rule |
 |---|---|
-| `commit` | Must equal `tester.commit` and `reviewer.commit`; a difference is `ErrNotApproved` |
-| `tree` | Must equal the worktree's tree hash when the commit step runs |
+| `tree` | Must equal `tester.tree` and `reviewer.tree`; a difference is `ErrNotApproved`. Must also equal the worktree's tree hash when the commit step runs |
 | `fence` | Must equal the lease's fence when read just before the push |
 | `branch` | Must start with `komodo/`; the wrapper refuses any other name |
 | `facts` | Supplied by the Task Manager from recorded results; the handler never reruns a test |
@@ -10177,10 +10199,9 @@ type Approval struct {
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
   "branch": "komodo/epic-1-tg-1.2",
   "fence": 3,
-  "commit": "9f2c1ab04e6d7c33b1a8e5d0f4c7a92e1b6d3f80",
   "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4",
-  "tester": { "commit": "9f2c1ab04e6d7c33b1a8e5d0f4c7a92e1b6d3f80", "summary": ["14 tests pass", "0 regressions"] },
-  "reviewer": { "commit": "9f2c1ab04e6d7c33b1a8e5d0f4c7a92e1b6d3f80", "summary": ["0 blocking findings"] },
+  "tester": { "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4", "summary": ["14 tests pass", "0 regressions"] },
+  "reviewer": { "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4", "summary": ["0 blocking findings"] },
   "facts": {
     "diff_stat": "6 files changed, 212 insertions(+), 9 deletions(-)",
     "tasks_closed": ["tsk-1.2.1", "tsk-1.2.2"],
@@ -10198,6 +10219,27 @@ type PRFacts struct {
 	TasksClosed  []string `json:"tasks_closed"`  // names of the closed tasks
 	FindingCodes []string `json:"finding_codes"` // codes of findings that were resolved
 }
+```
+
+The body template is a constant in `body.go`, filled by Go's `text/template` from a value holding `Facts`, `Tester` and `Reviewer`; no model writes any of its words.
+
+```go
+// bodyTemplate is the pull request body; every value comes from the facts and the two verdicts.
+const bodyTemplate = `## Summary
+{{.Facts.DiffStat}}
+
+## Tasks closed
+{{range .Facts.TasksClosed}}- {{.}}
+{{end}}
+## Findings resolved
+{{range .Facts.FindingCodes}}- {{.}}
+{{end}}
+## Tester
+{{range .Tester.Summary}}- {{.}}
+{{end}}
+## Reviewer
+{{range .Reviewer.Summary}}- {{.}}
+{{end}}`
 ```
 
 #### Result
@@ -10233,7 +10275,6 @@ type Handler struct {
 	Git     Git
 	Forge   Forge
 	Leases  Leases    // asks whether the lease still owns the group
-	Body    BodyRenderer
 	Report  Reporter  // the Task Manager, which relays to the Runtime Manager
 	Cleanup Cleaner   // the Cleanup Handler
 	Config  Settings  // values received from the Configuration Manager
@@ -10247,10 +10288,8 @@ type Leases interface {
 	Holder(ctx context.Context, repo, group string) (lease.Lease, bool, error)
 }
 
-// BodyRenderer renders the pull request body from facts; the Output Formatter implements it.
-type BodyRenderer interface {
-	PRBody(ctx context.Context, f PRFacts) (string, error)
-}
+// RenderBody fills the Commit Handler's own pull request body template with the facts; the Output Formatter is not involved.
+func RenderBody(f PRFacts, tester, reviewer Verdict) (string, error)
 
 // Reporter relays a progress fact to the Runtime Manager, which publishes it as a run-status event.
 type Reporter interface {
@@ -10265,7 +10304,7 @@ type Cleaner interface {
 
 | Caller | Call | When |
 |---|---|---|
-| Task Manager | `Publish` | The Tester and the Reviewer both approved the same commit |
+| Task Manager | `Publish` | The Tester and the Reviewer both approved the same tree |
 | `Publish` | `Cleaner.Complete` | The push and the pull request step are done |
 
 `Publish` returns `*PublishError` for every failure:
@@ -10364,11 +10403,11 @@ flowchart TB
 ```
 
 1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one.
-2. `Publish` refuses with `ErrNotApproved` unless `commit`, `tester.commit` and `reviewer.commit` are equal. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`.
+2. `Publish` refuses with `ErrNotApproved` unless `tree`, `tester.tree` and `reviewer.tree` are equal. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`.
 3. `Publish` takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`. When the checked-out commit already has that tree, nothing is committed. Otherwise `Commit` records the content with the message `<group>: <goal>`.
 4. The landing step runs as the chosen option says (below). Under the one-pull-request-per-group option it does nothing.
 5. `Publish` reads the lease's fence again, refuses on a higher number, and pushes. It then reads `RemoteTip` and fails unless the remote holds the local tip. When the remote already holds the tip, the push is skipped.
-6. `Forge.FindPR` looks for a pull request on the head branch first. If none exists, `OpenPR` opens one; if one exists, `UpdatePR` refreshes its body from `BodyRenderer.PRBody`.
+6. `Forge.FindPR` looks for a pull request on the head branch first. If none exists, `OpenPR` opens one; if one exists, `UpdatePR` refreshes its body from `RenderBody`.
 7. `Report` sends `publish.done` with a `Result`, and `pr.opened` when `pr_new` is true. A person or the orchestrator waiting on a run wakes on `pr.opened`, so the pull request is announced before the run can finish.
 8. `Publish` calls `Cleaner.Complete` with the branch, the pushed tip and the pull request address. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again.
 
@@ -10441,7 +10480,7 @@ A repeat of `Publish` finds each state already true and moves on, which is why a
 
 1. Only the Commit Handler pushes, and only a `komodo/` branch to its own name.
 2. A commit is made only from content whose tree hash equals the approved tree hash.
-3. Both approvals name the same commit; a rework returns the group to the Builder and voids both.
+3. Both approvals name the same tree; a rework returns the group to the Builder and voids both.
 4. The fence is read again just before every push; a higher number refuses the push.
 5. No force, no remote deletion, no trailer and no critical reference, in any method.
 6. A pull request is opened ready, once per head branch.
@@ -10452,7 +10491,7 @@ A repeat of `Publish` finds each state already true and moves on, which is why a
 
 | Situation | Detection | Action | Final state |
 |---|---|---|---|
-| Verdicts name different commits | `commit` differs from a verdict | `ErrNotApproved`, nothing written | Group unchanged; Task Manager decides |
+| Verdicts name different trees | `tree` differs from a verdict | `ErrNotApproved`, nothing written | Group unchanged; Task Manager decides |
 | Worktree content changed since approval | `TreeOf` differs from `tree` | `ErrNotApproved`, nothing written | Group unchanged |
 | Another run took the group | Fence higher, or other holder | `ErrLeaseLost`, no push | Group ends in this run |
 | Remote refuses the push | `ErrPushRejected` | Not retried; the Runtime Manager blocks the group | Blocked, reason `publish` |
@@ -10481,7 +10520,7 @@ Whether groups land per pull request or on an epic branch is [TODO: where groups
 
 Component tests use a local bare repository as the remote and a mock `gh` that returns documented output.
 
-- An approval whose verdicts name different commits writes nothing.
+- An approval whose verdicts name different trees writes nothing.
 - A worktree edited after approval fails with `ErrNotApproved` and makes no commit.
 - A published branch carries 0 trailers; a message ending in `Name: value` lines is refused.
 - A `Push` of `main`, or of any reference outside `refs/heads/komodo/` and `refs/komodo/`, returns `ErrCriticalRef` and runs no git.
@@ -10888,7 +10927,7 @@ Go package `internal/fault` ([HLD Appendix A](hld.md#appendix-a-traceability)). 
 
 | File | Holds |
 |---|---|
-| `internal/fault/fault.go` | `Fault`, `Severity`, `Kind`, `Source`, `FaultData` and its registration with the bus |
+| `internal/fault/fault.go` | `Fault`, `Severity`, `Kind`, `Source`, `FaultData`, the three fault event structs and `RegisterEvents` |
 | `internal/fault/handler.go` | `Handler`, `New`, `Go`, `Recover`, `Guard`, `Report`, `Run` |
 | `internal/fault/printer.go` | The `Printer` interface that the CLI implements with `PrintError()` |
 | `internal/fault/resource.go` | `ResourceError` and `ThrowResourceError()` |
@@ -10941,7 +10980,7 @@ type Fault struct {
 Every fault travels as an `error` event ([4. Event Bus](#4-event-bus)). The subtypes are `fault.error` (a returned error), `fault.panic` (a recovered panic) and `fault.resource` (from the Resource Manager). The bus also publishes `bus.overflow` as an `error` event.
 
 ```go
-// FaultData is the data of every error event that the Error Handler publishes.
+// FaultData holds the fields every fault event carries; each fault subtype embeds it.
 type FaultData struct {
 	Component string `json:"component"`       // the package the fault came from
 	Code      string `json:"code"`            // a word from the closed code list
@@ -10953,9 +10992,26 @@ type FaultData struct {
 	Stack     string `json:"stack,omitempty"` // panic only, cut to 4 KB like a block's detail
 }
 
-// EventKey binds FaultData to the error type; the subtype is set by the publisher.
-func (FaultData) EventKey() bus.Key
+// ErrorFault is the data of error / fault.error, a returned error.
+type ErrorFault struct{ FaultData }
+
+// EventKey binds ErrorFault to its type and subtype.
+func (ErrorFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "fault.error"} }
+
+// PanicFault is the data of error / fault.panic, a recovered panic.
+type PanicFault struct{ FaultData }
+
+// EventKey binds PanicFault to its type and subtype.
+func (PanicFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "fault.panic"} }
+
+// ResourceFault is the data of error / fault.resource, from the Resource Manager.
+type ResourceFault struct{ FaultData }
+
+// EventKey binds ResourceFault to its type and subtype.
+func (ResourceFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "fault.resource"} }
 ```
+
+`RegisterEvents()` binds each of the three pairs to its struct, as shown in [4.3](#43-data-model). The embedded `FaultData` is flattened into the `data` object, so the event lines below are unchanged.
 
 | Field | Rule |
 |---|---|
@@ -11061,7 +11117,7 @@ func (e ResourceError) Error() string { return "resource " + string(e.Severity) 
 
 | Caller | Calls | When |
 |---|---|---|
-| `cli.Run` | `Guard` | Around the whole command |
+| `(*CLI).Run` | `Guard` | Around the whole command |
 | Runtime Manager, Task Manager, every subsystem that starts a goroutine | `Go` or `Recover` | At every `go` statement |
 | Any subsystem | `Report` | A returned error it cannot handle itself |
 | Resource Manager | `ThrowResourceError` | A plan or cost limit is near or passed |
@@ -11089,7 +11145,22 @@ flowchart LR
 
 The Metrics Service sees the same event through its all-events subscription ([18](#18-metrics-service)).
 
-**A panic outside a group.** `cli.Run` wraps the command in `Guard`. A panic there prints through `PrintError` and exits 4, `internal`.
+#### Error events that are not faults
+
+The `Run` loop reads every `error` event. A `fault.*` event already holds a `FaultData`, which becomes the `Fault` field for field. The other `error` subtypes carry the data of their own chapter, so the loop builds their `Fault` from this table; each `code` is added to the closed code list of [2. Output Formatter](#2-output-formatter) with both templates.
+
+| Subtype | `code`, `kind`, `severity` | `reason` |
+|---|---|---|
+| `bus.overflow` | `bus_overflow`, `internal`, `warn` | The subscription named in the data dropped the counted events |
+| `plan-blocked` | `plan_blocked`, `blocked`, `error` | The third planner draft failed lint |
+| `plan-timeout` | `plan_timeout`, `blocked`, `error` | The planner's wall clock ran out |
+| `plan-input` | `plan_input`, `refused`, `error` | A named document or the lock check could not be read |
+| `plan-write` | `plan_write`, `internal`, `error` | The new task-list folder could not be written |
+| `context-refused` | `context_refused`, `refused`, `error` | A skill or tool-server request failed validation; the field is named |
+| `run-refused` | `run_refused`, `refused`, `error` | A command was refused, such as a dependency outside the run that is not Done |
+
+The `component` is `bus`, `intake`, `contextmgr` or `engine`, and `fix` is empty; the loop reads the `run` and `group` from the event.
+**A panic outside a group.** `(*CLI).Run` wraps the command in `Guard`. A panic there prints through `PrintError` and exits 4, `internal`.
 
 **A panic in the handler itself.** A deferred `recover` in `Run` and `Report` writes to standard error and returns; the handler never calls itself.
 
@@ -11146,7 +11217,7 @@ Each error value is declared in the package of its owner and returned to its cal
 | `ErrTampered`, `LimitError` | Settings file edited by hand; a value over its hard limit | [3. Configuration Manager](#3-configuration-manager) |
 | `ErrSkillUnknown`, `ErrSkillNotAllowed`, `ErrSectionUnknown`, `ErrSkillHash` | A skill name, allowlist, heading or fingerprint failed | [6. Context Manager](#6-context-manager) |
 | `ErrContext` (brief builder) | The brief exceeds half the context of every link | [6. Context Manager](#6-context-manager) |
-| `ErrTemplateUnknown`, `ErrFactInvalid`, `ErrCodeUnknown` | A template, fact or code is not in its list | [2. Output Formatter](#2-output-formatter) |
+| `ErrShapeUnknown`, `ErrFactsInvalid`, `ErrCodeUnknown` | A shape, fact set or code is not in its list | [2. Output Formatter](#2-output-formatter) |
 | `ErrLeased`, `ErrLeaseLost`, `ErrBranchTaken` | A lease is held by another run, lost, or names a taken branch | [9. Lease Manager](#9-lease-manager) |
 | `ErrStaleRev`, `ErrClaimed`, `ErrNotWriter`, `ErrNotFound`, `ErrNewerVersion` | A record is stale, taken, forbidden, absent or too new | [10. State Manager](#10-state-manager) |
 | `ErrUnavailable`, `ErrUnauthorized`, `ErrModelGone`, `ErrBilling`, `ErrNotYet`, `ErrStreamClosed`, `LimitError` (provider) | A model link failed or hit a cap | [11. Task Manager](#11-task-manager) [TODO: model links in this release ([G-213](#g-213))] |
@@ -11480,7 +11551,7 @@ flowchart LR
 | `run-status` / `session.end` | Adds `usage`; writes the session record |
 | `run-status` / `task.done`, `task.retry` | `tasks_done` or `retries` rises |
 | `run-status` / `group.paused`, `run-failure` / `group.blocked` | Closes the stage clock; starts the `paused_s` or `blocked_s` clock |
-| `run-complete` / `run.done` | Closes every open clock; sets `ended_at` and `outcome` |
+| `run-complete` / `done` | Closes every open clock; sets `ended_at` and `outcome` |
 | `error` | `faults` or `warnings` of the run rises |
 | `resource` | Copied only; the Resource Manager acts on it |
 | Every other event | Copied only |
@@ -12263,7 +12334,7 @@ Programming and operating-system terms used in this document. Architecture terms
 
 ## Appendix B. Gap Register
 
-Each row is an open owner decision, a verification spike, a measurement or a later-minor item. Rows G-201 to G-214 are the owner decisions the 2026-10-14 redesign left open; text that depends on one says TODO and links here. The other rows confirm a default the text already states.
+Each row is an open owner decision, a verification spike, a measurement or a later-minor item. The 18 owner decisions the 2026-10-14 redesign left open are G-201 to G-214, G-216, G-217, G-220 and G-221; text that depends on one says TODO and links here. The other rows confirm a default the text already states.
 
 #### Open owner decisions
 

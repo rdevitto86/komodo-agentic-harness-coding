@@ -265,8 +265,8 @@ sequenceDiagram
   participant U as Cleanup Handler
   R->>T: start group, lease granted
   T->>B: build each task
-  B-->>T: tasks done, committed
-  T->>Q: same commit to both at once
+  B-->>T: tasks done
+  T->>Q: same work to both at once
   alt tester fails or reviewer asks for changes
     Q-->>B: findings, back to build
   else both approve
@@ -280,7 +280,7 @@ sequenceDiagram
 
 1. The Runtime Manager starts a Task Manager once the group's dependencies are met and its lease is granted.
 2. The Builder works through the tasks in the group's worktree.
-3. The Tester and Reviewer judge the same commit at the same time; any failure returns the group to the Builder, a bounded number of times.
+3. The Tester and Reviewer judge the same work at the same time; any failure returns the group to the Builder, a bounded number of times.
 4. With both approvals, the Commit Handler commits and pushes, then hands over to the Cleanup Handler. It removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
 
 #### 6.3 Planning
@@ -386,7 +386,7 @@ The OpenAI path is scoped but not built (G-20).
 | 1 | Design: this document and the low-level design, with every open decision answered | The owner approves the design |
 | 2 | Spine and interface: Event Bus, CLI, Output Formatter, Configuration Manager, Error Handler, Metrics Service | `komodo config get` and an event round trip pass their tests |
 | 3 | Runtime stores: State Manager, Lease Manager, Cache Manager | A lease, a state record and a cache entry survive a restart |
-| 4 | Context and models: Context Manager, model client, agent registry | One agent session runs end to end |
+| 4 | Context and models: Context Manager, model client, model and tool checks | One agent session runs end to end |
 | 5 | Pipeline: Runtime Manager, Task Manager, Builder, Tester, Reviewer, sandbox | One task group passes build, test and review |
 | 6 | Publishing: Commit Handler, Cleanup Handler, Resource Manager, Intake Handler | A planned group is published and cleaned up |
 | 7 | Install, update, dashboard and cutover | A clean machine installs and runs one plan |
