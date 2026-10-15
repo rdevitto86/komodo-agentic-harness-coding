@@ -225,19 +225,26 @@ func (a *Anthropic) Profile(ctx context.Context, w Weight) (CapacityProfile, err
 }
 
 // price returns the metered cost of one turn for a model, from the catalog prices.
-func (a *Anthropic) price(model string) func(Usage) float64 {
+// Cache reads cost 0.1x the input price; writes cost 1.25x for five minutes and 2x for one hour.
+// A model with no catalog price fails closed with ErrUnpriced, so a paid session never under-reports spend.
+func (a *Anthropic) price(model string) (func(u Usage, write1h int) float64, error) {
 	e, ok := a.cat.Lookup(model)
-	if !ok {
-		return nil
+	if !ok || e.Tier == "local" || (e.PriceIn <= 0 && e.PriceOut <= 0) {
+		return nil, fmt.Errorf("%q: %w", model, ErrUnpriced)
 	}
-	return func(u Usage) float64 {
-		in := float64(u.TokensIn) + 0.1*float64(u.CacheRead) + 1.25*float64(u.CacheWrite)
+	return func(u Usage, write1h int) float64 {
+		w1 := min(max(write1h, 0), u.CacheWrite)
+		in := float64(u.TokensIn) + 0.1*float64(u.CacheRead) + 1.25*float64(u.CacheWrite-w1) + 2*float64(w1)
 		return (in*e.PriceIn + float64(u.TokensOut)*e.PriceOut) / 1e6
-	}
+	}, nil
 }
 
 // Start runs the tool loop over the Messages interface.
 func (a *Anthropic) Start(ctx context.Context, s Session) (Stream, error) {
+	price, err := a.price(s.Model)
+	if err != nil {
+		return nil, err
+	}
 	blocks, err := a.firstBlocks(s)
 	if err != nil {
 		return nil, err
@@ -246,17 +253,21 @@ func (a *Anthropic) Start(ctx context.Context, s Session) (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return startLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Faults: a.opts.Faults, Price: a.price(s.Model),
+	return startLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Faults: a.opts.Faults, Price: price,
 		Messages: []message{{Role: "user", Content: blocks}}})
 }
 
 // Resume loads the saved messages and continues them with the new input.
 func (a *Anthropic) Resume(ctx context.Context, s Session, in Input) (Stream, error) {
+	price, err := a.price(s.Model)
+	if err != nil {
+		return nil, err
+	}
 	w, err := a.newWire(s)
 	if err != nil {
 		return nil, err
 	}
-	return resumeLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Faults: a.opts.Faults, Price: a.price(s.Model)}, in.Text)
+	return resumeLoop(ctx, loopConfig{Session: s, Wire: w, Link: AnthropicAPI, Now: a.opts.Now, Faults: a.opts.Faults, Price: price}, in.Text)
 }
 
 // layerNames are the brief parts in send order.

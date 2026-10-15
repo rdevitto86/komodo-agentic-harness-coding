@@ -22,6 +22,7 @@ const (
 	continueText = "continue"
 	finalText    = "The work is complete. Return the final result now as JSON that matches the result schema, and nothing else."
 	noToolsText  = "error: tools are off for the final call; return the result as JSON that matches the result schema"
+	cutCallText  = "error: the tool call was cut off or its arguments were not valid JSON, so it did not run; send it again"
 )
 
 // maxContextTokens caps the conversation size before old tool outputs are stubbed.
@@ -53,10 +54,11 @@ type loopState struct {
 	ready     chan error
 }
 
-// toolInfo remembers which tool made an output, for its stub.
+// toolInfo remembers which tool made an output and where the host saved it, for its stub.
 type toolInfo struct {
 	name string
 	n    int
+	log  string // the host's log file for the full output; empty when it saved none
 }
 
 // newLoop opens messages.jsonl and records the starting history.
@@ -73,6 +75,7 @@ func newLoop(cfg loopConfig, resume bool) (*loopState, error) {
 			return nil, err
 		}
 		l.msgs = saved
+		l.rebuildInfo()
 		flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	}
 	f, err := os.OpenFile(l.path, flags, 0o644)
@@ -243,9 +246,9 @@ func (l *loopState) mapErr(err error) error {
 	if errors.As(err, &se) {
 		switch se.Status {
 		case 404:
-			return fmt.Errorf("%s: %w", se.Error(), ErrModelGone)
+			return fmt.Errorf("%w: %w", err, ErrModelGone)
 		case 401, 403:
-			return fmt.Errorf("%s: %w", se.Error(), ErrUnauthorized)
+			return fmt.Errorf("%w: %w", err, ErrUnauthorized)
 		}
 	}
 	return err
@@ -377,6 +380,9 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 			return nil, err
 		}
 		l.account(res)
+		if len(res.Content) == 0 {
+			return nil, &EndError{Reason: state.ReasonNoResult, Detail: "the model returned no content"}
+		}
 		if err := l.add("assistant", res.Content); err != nil {
 			return nil, err
 		}
@@ -391,30 +397,25 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 				return nil, &EndError{Reason: state.ReasonNoResult, Detail: "reply cut off twice at the output limit"}
 			}
 			cut = true
-			if err := l.addUser(l.resultsFor(ctx, st, res, !final)...); err != nil {
-				return nil, err
-			}
-			if err := l.appendText(continueText); err != nil {
+			if err := l.addUser(append(l.resultsFor(ctx, st, res, !final), block{Type: "text", Text: continueText})...); err != nil {
 				return nil, err
 			}
 			continue
 		}
 		cut = false
 		if res.Stop == stopToolUse {
-			if err := l.addUser(l.resultsFor(ctx, st, res, !final)...); err != nil {
+			blocks := l.resultsFor(ctx, st, res, !final)
+			if !final && l.interrupt.Load() {
+				l.wantFinal = true
+				blocks = append(blocks, block{Type: "text", Text: finalText})
+			}
+			if err := l.addUser(blocks...); err != nil {
 				return nil, err
 			}
 			if final {
 				schemaTries++
 				if schemaTries > 1 {
 					return nil, &EndError{Reason: state.ReasonSchemaFail, Detail: "the final call asked for tools"}
-				}
-				continue
-			}
-			if l.interrupt.Load() {
-				l.wantFinal = true
-				if err := l.appendText(finalText); err != nil {
-					return nil, err
 				}
 			}
 			continue
@@ -458,26 +459,12 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 	}
 }
 
-// appendText adds a text block to the user message just written, or starts one.
-func (l *loopState) appendText(text string) error {
-	if n := len(l.msgs); n > 0 && l.msgs[n-1].Role == "user" {
-		l.msgs[n-1].Content = append(l.msgs[n-1].Content, block{Type: "text", Text: text})
-		raw, _ := json.Marshal(l.msgs[n-1].Content)
-		line, _ := json.Marshal(messageLine{Turn: n, Role: "user", Content: raw, Ts: l.now()})
-		if _, err := l.file.Write(append(line, '\n')); err != nil {
-			return fmt.Errorf("write %s: %w", messagesFile, err)
-		}
-		return nil
-	}
-	return l.addUser(block{Type: "text", Text: text})
-}
-
 // account adds a turn's usage and remembers the size the provider reported.
 func (l *loopState) account(res turnResult) {
 	l.turns++
 	u := res.Usage
 	if l.cfg.Price != nil {
-		l.usage.USD += l.cfg.Price(u)
+		l.usage.USD += l.cfg.Price(u, res.CacheWrite1h)
 	}
 	l.usage.TokensIn += u.TokensIn
 	l.usage.TokensOut += u.TokensOut
@@ -495,12 +482,15 @@ func (l *loopState) resultsFor(ctx context.Context, st *loopStream, res turnResu
 			continue
 		}
 		l.calls++
-		text := noToolsText
-		if run {
-			text = l.dispatch(ctx, b)
+		reply := ToolReply{Text: noToolsText}
+		switch {
+		case b.Invalid:
+			reply.Text = cutCallText
+		case run:
+			reply = l.dispatch(ctx, b)
 		}
-		l.info[b.ID] = toolInfo{name: b.Name, n: l.calls}
-		out = append(out, block{Type: "tool_result", ToolUseID: b.ID, Content: text})
+		l.info[b.ID] = toolInfo{name: b.Name, n: l.calls, log: reply.LogPath}
+		out = append(out, block{Type: "tool_result", ToolUseID: b.ID, Content: reply.Text})
 	}
 	if len(out) > 0 {
 		st.emit(KindOutput, map[string]any{"type": "user", "message": out})
@@ -509,12 +499,12 @@ func (l *loopState) resultsFor(ctx context.Context, st *loopStream, res turnResu
 }
 
 // dispatch sends one tool call to the tool host.
-func (l *loopState) dispatch(ctx context.Context, b block) string {
+func (l *loopState) dispatch(ctx context.Context, b block) ToolReply {
 	host := l.cfg.Session.Tools
 	if host == nil {
-		return "error: no tools are available"
+		return ToolReply{Text: "error: no tools are available"}
 	}
-	return host.Dispatch(ctx, b.Name, b.Input).Text
+	return host.Dispatch(ctx, b.Name, b.Input)
 }
 
 // checkResult validates the final reply against the agent's schema and returns the output or the reason it failed.

@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -41,13 +44,44 @@ type ClaudeOptions struct {
 
 // Claude is the subscription adapter: it drives the claude program.
 type Claude struct {
-	opts    ClaudeOptions
-	cat     *Catalog
-	mu      sync.Mutex
-	authAt  time.Time
-	auth    AuthStatus
-	authErr error
-	inits   map[string]json.RawMessage
+	opts   ClaudeOptions
+	cat    *Catalog
+	mu     sync.Mutex
+	logins map[string]loginEntry // one login read per auth-relevant environment
+	inits  map[string]json.RawMessage
+}
+
+// loginEntry is one cached `claude auth status` answer.
+type loginEntry struct {
+	at  time.Time
+	st  AuthStatus
+	err error
+}
+
+// authVars are the environment variables that change which login the claude program finds.
+var authVars = map[string]bool{
+	"HOME": true, "USER": true, "LOGNAME": true, "CLAUDE_CONFIG_DIR": true, "CLAUDE_CODE_OAUTH_TOKEN": true,
+	"XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true, "XDG_STATE_HOME": true, "XDG_CACHE_HOME": true,
+}
+
+// authKey fingerprints the auth-relevant part of an environment; the token never sits in the key as plain text.
+func authKey(env []string) string {
+	var rel []string
+	for _, kv := range env {
+		if name, _, _ := strings.Cut(kv, "="); authVars[name] {
+			rel = append(rel, kv)
+		}
+	}
+	slices.Sort(rel)
+	sum := sha256.Sum256([]byte(strings.Join(rel, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+// resetAuth forgets every cached login read.
+func (c *Claude) resetAuth() {
+	c.mu.Lock()
+	c.logins = map[string]loginEntry{}
+	c.mu.Unlock()
 }
 
 // NewClaude builds the subscription adapter.
@@ -107,26 +141,35 @@ func (c *Claude) find() (string, error) {
 }
 
 // output runs one short claude subcommand with the scrubbed environment and returns its standard output.
-func (c *Claude) output(ctx context.Context, path string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, cmdWait)
+func (c *Claude) output(ctx context.Context, path string, env []string, args ...string) ([]byte, error) {
+	cctx, cancel := context.WithTimeout(ctx, cmdWait)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = Scrub(c.baseEnv())
-	return cmd.Output()
+	cmd := exec.CommandContext(cctx, path, args...)
+	cmd.Env = Scrub(env)
+	out, err := cmd.Output()
+	if cerr := cctx.Err(); cerr != nil {
+		return nil, fmt.Errorf("claude %s: %w", args[0], cerr)
+	}
+	return out, err
 }
 
-// loginStatus reads `claude auth status --json`, reusing the answer for 60 s.
-func (c *Claude) loginStatus(ctx context.Context) (AuthStatus, error) {
+// loginStatus reads `claude auth status --json` with the given environment and reuses the answer for 60 s.
+// Only a real answer is kept; a cancelled or timed-out read is returned and forgotten.
+func (c *Claude) loginStatus(ctx context.Context, env []string) (AuthStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.authAt.IsZero() && c.now().Sub(c.authAt) < authTTL {
-		return c.auth, c.authErr
+	key := authKey(env)
+	if e, ok := c.logins[key]; ok && c.now().Sub(e.at) < authTTL {
+		return e.st, e.err
 	}
 	path, err := c.find()
 	if err != nil {
 		return AuthStatus{}, err
 	}
-	out, runErr := c.output(ctx, path, "auth", "status", "--json")
+	out, runErr := c.output(ctx, path, env, "auth", "status", "--json")
+	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		return AuthStatus{}, runErr
+	}
 	var raw struct {
 		LoggedIn *bool `json:"loggedIn"`
 		AuthStatus
@@ -144,7 +187,10 @@ func (c *Claude) loginStatus(ctx context.Context) (AuthStatus, error) {
 	default:
 		st = raw.AuthStatus
 	}
-	c.authAt, c.auth, c.authErr = c.now(), st, aerr
+	if c.logins == nil {
+		c.logins = map[string]loginEntry{}
+	}
+	c.logins[key] = loginEntry{at: c.now(), st: st, err: aerr}
 	return st, aerr
 }
 
@@ -169,7 +215,7 @@ func windowFor(cat *Catalog, model string) (int, string) {
 
 // Profile measures the capacity profile for a weight from the login and the catalog.
 func (c *Claude) Profile(ctx context.Context, w Weight) (CapacityProfile, error) {
-	auth, err := c.loginStatus(ctx)
+	auth, err := c.loginStatus(ctx, c.baseEnv())
 	if err != nil {
 		return CapacityProfile{}, err
 	}
@@ -196,15 +242,17 @@ func (c *Claude) Probe(ctx context.Context) (ProbeResult, error) {
 		return fail(ErrUnavailable, "claude program not found")
 	}
 	res.Path = path
-	out, err := c.output(ctx, path, "--version")
+	out, err := c.output(ctx, path, c.baseEnv(), "--version")
 	if err != nil {
 		return fail(ErrUnavailable, "claude --version failed")
 	}
 	res.Version, _, _ = strings.Cut(strings.TrimSpace(string(out)), " ")
-	c.mu.Lock()
-	c.authAt = time.Time{}
-	c.mu.Unlock()
-	if res.Auth, err = c.loginStatus(ctx); err != nil {
+	c.resetAuth()
+	if res.Auth, err = c.loginStatus(ctx, c.baseEnv()); err != nil {
+		if !errors.Is(err, ErrUnauthorized) {
+			res.Reason = err.Error()
+			return res, err
+		}
 		return fail(ErrUnauthorized, "claude is logged out")
 	}
 	res.Ctx = c.smallestWindow()
@@ -344,7 +392,11 @@ func launchArgs(s Session, resume bool) []string {
 
 // launch runs the billing check, spawns the program, sends the message and checks the init line.
 func (c *Claude) launch(ctx context.Context, s Session, resume bool, text string) (Stream, error) {
-	auth, err := c.loginStatus(ctx)
+	base := s.Env
+	if base == nil {
+		base = c.baseEnv()
+	}
+	auth, err := c.loginStatus(ctx, base)
 	if err != nil {
 		return nil, err
 	}
@@ -355,10 +407,6 @@ func (c *Claude) launch(ctx context.Context, s Session, resume bool, text string
 	if err != nil {
 		return nil, err
 	}
-	base := s.Env
-	if base == nil {
-		base = c.baseEnv()
-	}
 	env := Scrub(base)
 	if resume {
 		env = append(env, "CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1")
@@ -368,7 +416,7 @@ func (c *Claude) launch(ctx context.Context, s Session, resume bool, text string
 		return nil, err
 	}
 	rec := recoverer(c.opts.Faults)
-	st := newClaudeStream(p, s.ID, c.now, rec)
+	st := newClaudeStream(p, s.ID, c.now, rec, s.Schema)
 	go func() {
 		defer rec.Recover(llmSource, nil)
 		_ = p.writeUser(text)

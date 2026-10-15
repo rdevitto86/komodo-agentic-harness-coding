@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
 // rateLimitHold is the reset distance past which a rate limit ends the session.
@@ -22,6 +24,7 @@ type claudeStream struct {
 	p       *proc
 	id      string
 	now     func() time.Time
+	schema  json.RawMessage // the agent's result schema; the structured output is checked against it
 	events  chan StreamEvent
 	quit    chan struct{}
 	pending []StreamEvent
@@ -34,8 +37,8 @@ type claudeStream struct {
 }
 
 // newClaudeStream starts the reader goroutine over the program's output.
-func newClaudeStream(p *proc, id string, now func() time.Time, rec Recoverer) *claudeStream {
-	s := &claudeStream{p: p, id: id, now: now, events: make(chan StreamEvent, 64), quit: make(chan struct{})}
+func newClaudeStream(p *proc, id string, now func() time.Time, rec Recoverer, schema json.RawMessage) *claudeStream {
+	s := &claudeStream{p: p, id: id, now: now, schema: schema, events: make(chan StreamEvent, 64), quit: make(chan struct{})}
 	go func() {
 		defer rec.Recover(llmSource, nil)
 		s.read()
@@ -117,10 +120,16 @@ func (s *claudeStream) Next(ctx context.Context) (StreamEvent, error) {
 			return StreamEvent{}, pl
 		}
 		if ev.Kind == KindResult {
+			s.p.closeInput()
+			if end := resultFailure(ev, s.schema); end != nil {
+				s.mu.Lock()
+				s.limited = true
+				s.mu.Unlock()
+				return StreamEvent{}, end
+			}
 			s.mu.Lock()
 			s.done = true
 			s.mu.Unlock()
-			s.p.closeInput()
 		}
 		return ev, nil
 	case <-ctx.Done():
@@ -260,6 +269,33 @@ func parseClaudeLine(line []byte, sessionID string) (StreamEvent, error) {
 		ev.Kind, ev.Result = KindResult, parseClaudeResult(line, sessionID)
 	}
 	return ev, nil
+}
+
+// resultFailure returns the exit a result event ends the session with, or nil when it holds a valid answer.
+// An error result is no_result; a missing or schema-breaking structured output is schema_fail.
+func resultFailure(ev StreamEvent, schema json.RawMessage) *EndError {
+	var v struct {
+		Subtype string `json:"subtype"`
+		IsError bool   `json:"is_error"`
+		Result  string `json:"result"`
+	}
+	_ = json.Unmarshal(ev.Raw, &v)
+	if v.IsError || strings.HasPrefix(v.Subtype, "error") {
+		detail := v.Subtype
+		if t := strings.TrimSpace(v.Result); t != "" {
+			detail += ": " + t[:min(len(t), 200)]
+		}
+		return &EndError{Reason: state.ReasonNoResult, Detail: detail}
+	}
+	if ev.Result == nil || len(ev.Result.Output) == 0 {
+		return &EndError{Reason: state.ReasonSchemaFail, Detail: "the result holds no structured output"}
+	}
+	if len(schema) > 0 {
+		if err := validateSchema(schema, ev.Result.Output); err != nil {
+			return &EndError{Reason: state.ReasonSchemaFail, Detail: err.Error()}
+		}
+	}
+	return nil
 }
 
 // parseClaudeResult reads the answer, usage and handle out of a result line.

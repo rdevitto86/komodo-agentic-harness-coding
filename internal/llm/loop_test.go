@@ -61,18 +61,23 @@ type fakeHost struct {
 	mu    sync.Mutex
 	calls []string
 	text  func(name string) string
+	log   string        // LogPath of every reply; empty means none
+	gate  chan struct{} // when set, Dispatch waits for it to close
 }
 
 func (h *fakeHost) Advertised() []string { return []string{"read", "run"} }
 
 func (h *fakeHost) Dispatch(_ context.Context, name string, args json.RawMessage) ToolReply {
+	if h.gate != nil {
+		<-h.gate
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.calls = append(h.calls, name+" "+string(args))
 	if h.text != nil {
-		return ToolReply{Text: h.text(name)}
+		return ToolReply{Text: h.text(name), LogPath: h.log}
 	}
-	return ToolReply{Text: "ok from " + name}
+	return ToolReply{Text: "ok from " + name, LogPath: h.log}
 }
 
 // gateFunc adapts a function to Gate.
@@ -257,7 +262,7 @@ func TestLoopStubsOldOutputsPastTheBudget(t *testing.T) {
 		}
 		for _, m := range req.Messages {
 			for _, b := range m.Content {
-				if b.Type == "tool_result" && b.Content == "[output of read call 1 cut: 12000 bytes in out/1.log]" {
+				if b.Type == "tool_result" && b.Content == "[output of read call 1 cut: 12000 bytes, not saved]" {
 					stubbed = true
 				}
 			}
@@ -290,7 +295,7 @@ func TestLoopOverContextAfterStubbingSendsNothing(t *testing.T) {
 }
 
 func TestLoopInterruptJumpsToFinalCall(t *testing.T) {
-	host := &fakeHost{}
+	host := &fakeHost{gate: make(chan struct{})}
 	w := &fakeWire{script: []func(turnRequest) (turnResult, error){callTool("t1", "run", `{}`), say(`{"done":true}`)}}
 	cfg := loopSession(t, w, host, nil, 100000)
 	st, err := startLoop(context.Background(), cfg)
@@ -299,6 +304,7 @@ func TestLoopInterruptJumpsToFinalCall(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 	_ = st.Stop(Interrupt)
+	close(host.gate)
 	evs, err := drain(t, st)
 	if !errors.Is(err, io.EOF) || lastResult(t, evs) == nil {
 		t.Fatalf("err %v", err)

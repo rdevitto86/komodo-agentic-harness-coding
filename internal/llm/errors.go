@@ -13,6 +13,7 @@ var (
 	ErrBilling      = errors.New("first line shows a paid API key")
 	ErrNotYet       = errors.New("link not built")
 	ErrStreamClosed = errors.New("stream already closed")
+	ErrUnpriced     = errors.New("model has no price in the catalog")
 )
 
 // CapKind names which provider cap was hit.

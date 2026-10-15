@@ -75,7 +75,11 @@ func resolveRef(root any, ref string) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("schema reference %q does not resolve", ref)
 		}
-		cur = m[strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")]
+		next, found := m[strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")]
+		if !found {
+			return nil, fmt.Errorf("schema reference %q does not resolve", ref)
+		}
+		cur = next
 	}
 	return cur, nil
 }

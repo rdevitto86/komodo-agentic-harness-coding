@@ -232,14 +232,18 @@ func (a *chatAcc) result() turnResult {
 	for _, i := range idx {
 		c := a.calls[i]
 		in := strings.TrimSpace(c.Function.Arguments)
-		if in == "" || !json.Valid([]byte(in)) {
+		if in == "" {
+			in = "{}"
+		}
+		invalid := a.finish == "length" || !json.Valid([]byte(in))
+		if invalid {
 			in = "{}"
 		}
 		id := c.ID
 		if id == "" {
 			id = "call_" + strings.Repeat("0", 3) + string(rune('a'+i%26))
 		}
-		res.Content = append(res.Content, block{Type: "tool_use", ID: id, Name: c.Function.Name, Input: json.RawMessage(in)})
+		res.Content = append(res.Content, block{Type: "tool_use", ID: id, Name: c.Function.Name, Input: json.RawMessage(in), Invalid: invalid})
 	}
 	switch {
 	case a.finish == "length":

@@ -21,7 +21,9 @@ const fakeScript = `#!/bin/sh
 d="$FAKE_DIR"
 case "$1" in
 --version) cat "$d/version"; exit 0 ;;
-auth) cat "$d/auth.json"; exit "$(cat "$d/auth.rc" 2>/dev/null || echo 0)" ;;
+auth) f="$d/auth.json"
+  if [ -n "$CLAUDE_CONFIG_DIR" ] && [ -f "$d/auth-$(basename "$CLAUDE_CONFIG_DIR").json" ]; then f="$d/auth-$(basename "$CLAUDE_CONFIG_DIR").json"; fi
+  cat "$f"; exit "$(cat "$d/auth.rc" 2>/dev/null || echo 0)" ;;
 esac
 printf '%s\n' "$@" > "$d/args.txt"
 env > "$d/env.txt"
@@ -481,7 +483,7 @@ func TestProfile(t *testing.T) {
 	}
 	f.write("auth.json", `{"loggedIn":false}`)
 	f.write("auth.rc", "1")
-	f.cl.authAt = time.Time{} // force a fresh login read
+	f.cl.resetAuth() // force a fresh login read
 	if _, err := f.cl.Profile(context.Background(), Standard); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("logged out Profile = %v, want ErrUnauthorized", err)
 	}

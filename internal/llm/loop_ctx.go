@@ -31,8 +31,31 @@ func (l *loopState) tokens() int {
 const stubPrefix = "[output of "
 
 // stubText is what replaces a cut tool output.
-func stubText(tool string, n, size int) string {
-	return fmt.Sprintf("[output of %s call %d cut: %d bytes in out/%d.log]", tool, n, size, n)
+func stubText(tool string, n, size int, log string) string {
+	if log == "" {
+		return fmt.Sprintf("[output of %s call %d cut: %d bytes, not saved]", tool, n, size)
+	}
+	return fmt.Sprintf("[output of %s call %d cut: %d bytes in %s]", tool, n, size, log)
+}
+
+// rebuildInfo restores the tool names and call numbers of a saved conversation; the host's log paths are not kept.
+func (l *loopState) rebuildInfo() {
+	names := map[string]string{}
+	for _, m := range l.msgs {
+		for _, b := range m.Content {
+			switch b.Type {
+			case "tool_use":
+				names[b.ID] = b.Name
+			case "tool_result":
+				l.calls++
+				name := names[b.ToolUseID]
+				if name == "" {
+					name = "tool"
+				}
+				l.info[b.ToolUseID] = toolInfo{name: name, n: l.calls}
+			}
+		}
+	}
 }
 
 // fitContext stubs the oldest tool outputs when the conversation passes min(200,000, 80% of the context), down to half of that.
@@ -57,7 +80,7 @@ func (l *loopState) fitContext() error {
 				if !known {
 					info = toolInfo{name: "tool", n: i + 1}
 				}
-				stub := stubText(info.name, info.n, len(b.Content))
+				stub := stubText(info.name, info.n, len(b.Content), info.log)
 				if len(stub) >= len(b.Content) {
 					continue
 				}

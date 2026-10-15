@@ -167,6 +167,8 @@ func normalizeAPIErr(err error) error {
 type sseAcc struct {
 	blocks  map[int]*block
 	partial map[int]*bytes.Buffer
+	closed  map[int]bool // blocks whose content_block_stop arrived
+	write1h int          // cache tokens written with the one-hour lifetime
 	usage   Usage
 	stop    string
 }
@@ -177,7 +179,7 @@ func (a *sseAcc) reset() { *a = sseAcc{} }
 // event folds one server-sent event into the reply.
 func (a *sseAcc) event(e core.SSEEvent) error {
 	if a.blocks == nil {
-		a.blocks, a.partial = map[int]*block{}, map[int]*bytes.Buffer{}
+		a.blocks, a.partial, a.closed = map[int]*block{}, map[int]*bytes.Buffer{}, map[int]bool{}
 	}
 	var p struct {
 		Type  string `json:"type"`
@@ -207,6 +209,9 @@ func (a *sseAcc) event(e core.SSEEvent) error {
 	case "message_start":
 		u := p.Message.Usage
 		a.usage = Usage{TokensIn: u.Input, TokensOut: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
+		a.write1h = u.Created.Hour1
+	case "content_block_stop":
+		a.closed[p.Index] = true
 	case "content_block_start":
 		if p.Block != nil {
 			b := *p.Block
@@ -247,6 +252,9 @@ type apiUsage struct {
 	Output     int `json:"output_tokens"`
 	CacheRead  int `json:"cache_read_input_tokens"`
 	CacheWrite int `json:"cache_creation_input_tokens"`
+	Created    struct {
+		Hour1 int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
 }
 
 // result returns the assembled reply with the stop reason mapped to the loop's.
@@ -256,13 +264,21 @@ func (a *sseAcc) result() turnResult {
 		idx = append(idx, i)
 	}
 	slices.Sort(idx)
-	res := turnResult{Usage: a.usage, Stop: stopEnd}
+	res := turnResult{Usage: a.usage, Stop: stopEnd, CacheWrite1h: a.write1h}
 	for _, i := range idx {
 		b := *a.blocks[i]
-		if b.Type == "tool_use" {
+		switch b.Type {
+		case "text":
+			if b.Text == "" {
+				continue // the interface refuses an empty text block
+			}
+		case "tool_use":
 			in := bytes.TrimSpace(a.partial[i].Bytes())
-			if len(in) == 0 || !json.Valid(in) {
+			if len(in) == 0 {
 				in = []byte("{}")
+			}
+			if !a.closed[i] || !json.Valid(in) {
+				in, b.Invalid = []byte("{}"), true
 			}
 			b.Input = json.RawMessage(append([]byte(nil), in...))
 		}
