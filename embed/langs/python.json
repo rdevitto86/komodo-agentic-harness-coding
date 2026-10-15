@@ -1,0 +1,7 @@
+{
+  "extensions": [".py"],
+  "symbols": [
+    {"kind": "function", "pattern": "^(?:async )?def (\\w+)"},
+    {"kind": "class", "pattern": "^class (\\w+)"}
+  ]
+}

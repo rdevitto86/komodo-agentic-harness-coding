@@ -1,0 +1,9 @@
+{
+  "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs"],
+  "symbols": [
+    {"kind": "function", "pattern": "^\\s*(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?function\\*?\\s+(\\w+)"},
+    {"kind": "class", "pattern": "^\\s*(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?class (\\w+)"},
+    {"kind": "type", "pattern": "^\\s*(?:export\\s+)?(?:interface|type|enum) (\\w+)"},
+    {"kind": "export", "pattern": "^\\s*export\\s+(?:const|let|var)\\s+(\\w+)"}
+  ]
+}

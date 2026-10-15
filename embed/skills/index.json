@@ -1,0 +1,78 @@
+{
+  "v": 1,
+  "skills": [
+    {
+      "name": "standards-aws",
+      "description": "AWS standards: identity, networking and data",
+      "globs": [
+        "*.tf"
+      ],
+      "markers": [
+        "*.tf:provider \"aws\""
+      ],
+      "sections": [
+        "Identity",
+        "Networking",
+        "Data"
+      ],
+      "sha256": "32da2f2a51beab79847ce8972513399a3c6d849e2809751c7bea5f0eeaace36d"
+    },
+    {
+      "name": "standards-comments",
+      "description": "Comments: where they go, how long they are and what they never say",
+      "globs": [],
+      "markers": [],
+      "sections": [
+        "Where",
+        "Shape",
+        "Banned"
+      ],
+      "sha256": "d7a7717b53a818ac6123789734ffab5763fe90e9c2eeed590c26878a9692d07b"
+    },
+    {
+      "name": "standards-go",
+      "description": "Go standards: errors, naming, tests and package layout",
+      "globs": [
+        "*.go"
+      ],
+      "markers": [],
+      "sections": [
+        "Errors",
+        "Naming",
+        "Tests"
+      ],
+      "sha256": "29ae26c602ff9421afcc08a9e773ac3574385849486eaea4f7e8d9ab995b790f"
+    },
+    {
+      "name": "standards-kotlin",
+      "description": "Kotlin standards: null safety, immutability and coroutines",
+      "globs": [
+        "*.kt"
+      ],
+      "markers": [],
+      "sections": [
+        "Safety",
+        "Coroutines"
+      ],
+      "sha256": "b5c1424ec24c6ac453df3f41b09be0a921afa7736b7890861f94ca3c14f5c888"
+    },
+    {
+      "name": "standards-ui-mobile",
+      "description": "Mobile interface standards for Android and iOS",
+      "globs": [
+        "*.kt",
+        "*.swift"
+      ],
+      "markers": [
+        "AndroidManifest.xml",
+        "*.xcodeproj"
+      ],
+      "sections": [
+        "Layout",
+        "Accessibility",
+        "Lifecycle"
+      ],
+      "sha256": "cde8d84ff2058ad788df864d6e922b2a78dd03f7a6bacf230096c1a6815db09c"
+    }
+  ]
+}
