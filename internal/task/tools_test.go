@@ -22,6 +22,7 @@ type fakeConfiner struct {
 	mu      sync.Mutex
 	masked  []string
 	started int
+	env     []string // added to the environment of every command
 }
 
 // SetMasked records the last masked list.
@@ -39,6 +40,9 @@ func (f *fakeConfiner) Command(ctx context.Context, _ string, c sandbox.Command)
 	f.mu.Unlock()
 	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
 	cmd.Dir = f.dir
+	if len(f.env) > 0 || len(c.Env) > 0 {
+		cmd.Env = append(append(os.Environ(), f.env...), c.Env...)
+	}
 	killGroupOnCancel(cmd)
 	return cmd, nil
 }
