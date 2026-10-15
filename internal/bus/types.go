@@ -1,10 +1,13 @@
 package bus
 
 import (
+	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 )
 
+// The event types; every Event carries exactly one.
 const (
 	TypeNext        Type = "next"
 	TypePlan        Type = "plan"
@@ -38,12 +41,21 @@ var (
 )
 
 // Register binds a type and subtype pair to its data struct; called once per pair at start.
-// A second call for the same pair replaces the first.
+// It panics on a type outside allTypes, a pair bound before, or a constructor that does not return a non-nil pointer.
 func Register(k Key, newData func() Payload) {
-	typ := elemType(reflect.TypeOf(newData()))
+	if !slices.Contains(allTypes, k.Type) {
+		panic(fmt.Sprintf("register event %q/%q: unknown type", k.Type, k.Subtype))
+	}
+	v := reflect.ValueOf(newData())
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		panic(fmt.Sprintf("register event %q/%q: constructor must return a non-nil pointer", k.Type, k.Subtype))
+	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	registry[k] = entry{newData: newData, typ: typ}
+	if _, dup := registry[k]; dup {
+		panic(fmt.Sprintf("register event %q/%q: pair already registered", k.Type, k.Subtype))
+	}
+	registry[k] = entry{newData: newData, typ: v.Type().Elem()}
 }
 
 // lookup returns the data constructor bound to a pair.
@@ -65,30 +77,19 @@ func registeredKeys() []Key {
 	return keys
 }
 
-// validate reports whether e names a registered pair and carries that pair's struct, as a value or a non-nil pointer.
+// validate reports whether e names a registered pair and carries a non-nil pointer to that pair's struct.
 func validate(e Event) bool {
-	if e.Data == nil {
-		return false
-	}
 	v := reflect.ValueOf(e.Data)
-	if v.Kind() == reflect.Pointer && v.IsNil() {
+	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return false
 	}
 	registryMu.RLock()
 	en, ok := registry[Key{Type: e.Type, Subtype: e.Subtype}]
 	registryMu.RUnlock()
-	return ok && elemType(v.Type()) == en.typ
+	return ok && v.Type().Elem() == en.typ
 }
 
-// elemType returns t, or the type it points to when t is a pointer.
-func elemType(t reflect.Type) reflect.Type {
-	if t.Kind() == reflect.Pointer {
-		return t.Elem()
-	}
-	return t
-}
-
-// The data structs this chapter defines are bound here; the other owning packages register their own.
+// The data structs declared in data.go are bound here; other packages bind theirs with Register.
 func init() {
 	for _, p := range []func() Payload{
 		func() Payload { return &RunStart{} },

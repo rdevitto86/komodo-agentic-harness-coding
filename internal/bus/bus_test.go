@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -324,15 +325,128 @@ func TestPublishRefusesUnknown(t *testing.T) {
 	}
 }
 
-// Publish takes a struct value as well as a pointer.
-func TestPublishAcceptsValueData(t *testing.T) {
+// Publish refuses data given as a struct value; the registered shape is a non-nil pointer.
+func TestPublishRefusesValueData(t *testing.T) {
 	b := newBus(t, 10)
 	s := sub(t, b, "s")
-	if err := b.Publish(Event{Type: TypeRunStop, Data: RunStop{Target: "v"}}); err != nil {
-		t.Fatal(err)
+	if err := b.Publish(Event{Type: TypeRunStop, Data: RunStop{Target: "v"}}); !errors.Is(err, ErrUnknownEvent) {
+		t.Fatalf("err %v, want ErrUnknownEvent", err)
 	}
-	if recv(t, s).Data.(RunStop).Target != "v" {
-		t.Fatal("wrong data")
+	if got := drain(s); len(got) != 0 {
+		t.Fatalf("queued %d events", len(got))
+	}
+}
+
+// Register panics on a type outside the 12 constants, a duplicate pair, and a constructor that does not return a pointer.
+func TestRegisterRefuses(t *testing.T) {
+	cases := map[string]func(){
+		"unknown type": func() { Register(Key{"bogus", ""}, func() Payload { return &RunStop{} }) },
+		"duplicate":    func() { Register(Key{TypeRunStop, ""}, func() Payload { return &RunStop{} }) },
+		"value":        func() { Register(Key{TypeRunStop, "test.value"}, func() Payload { return RunStop{} }) },
+		"nil":          func() { Register(Key{TypeRunStop, "test.nil"}, func() Payload { return nil }) },
+	}
+	for name, f := range cases {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s: no panic", name)
+				}
+			}()
+			f()
+		}()
+	}
+	for _, k := range []Key{{"bogus", ""}, {TypeRunStop, "test.value"}, {TypeRunStop, "test.nil"}} {
+		if _, ok := lookup(k); ok {
+			t.Errorf("%v registered despite the panic", k)
+		}
+	}
+}
+
+// Subscribe refuses a type name outside the 12 constants.
+func TestSubscribeRefusesUnknownType(t *testing.T) {
+	b := newBus(t, 5)
+	if _, err := b.Subscribe("s", TypeRunStop, "bogus"); !errors.Is(err, ErrUnknownEvent) {
+		t.Fatalf("err %v, want ErrUnknownEvent", err)
+	}
+}
+
+// A dropped bus.overflow does not mark a subscription as overflowing: z's own later drops are still announced.
+func TestDroppedOverflowDoesNotHideLaterBurst(t *testing.T) {
+	b := newBus(t, 2)
+	sub(t, b, "x", TypeRunStop)
+	z := sub(t, b, "z")
+	e := sub(t, b, "e", TypeError)
+	stop(t, b, "1")
+	stop(t, b, "2")
+	<-z.Events
+	// Event 3 fits in z with the one free slot; x's bus.overflow then meets the full z and drops there.
+	stop(t, b, "3")
+	stop(t, b, "4")
+	var names []string
+	for _, ev := range drain(e) {
+		names = append(names, ev.Data.(*BusOverflow).Subscription)
+	}
+	if fmt.Sprint(names) != "[x z]" {
+		t.Fatalf("overflow events name %v, want [x z]", names)
+	}
+}
+
+// A subscriber hovering at full gets one bus.overflow, not one per drop, until it drains to half.
+func TestHoveringAtFullIsOneBurst(t *testing.T) {
+	b := newBus(t, 4)
+	hover := sub(t, b, "hover", TypeRunStop)
+	e := sub(t, b, "e", TypeError)
+	for i := 0; i < 4; i++ {
+		stop(t, b, fmt.Sprint(i))
+	}
+	for i := 0; i < 20; i++ {
+		<-hover.Events
+		stop(t, b, "a")
+		stop(t, b, "b")
+	}
+	if n := len(drain(e)); n != 1 {
+		t.Fatalf("%d overflow events, want 1", n)
+	}
+	if hover.Dropped() != 20 {
+		t.Fatalf("Dropped %d, want 20", hover.Dropped())
+	}
+	for len(hover.Events) > 1 {
+		<-hover.Events
+	}
+	for _, l := range []string{"c", "d", "e", "f"} {
+		stop(t, b, l)
+	}
+	if n := len(drain(e)); n != 1 {
+		t.Fatalf("%d overflow events after draining to half, want 1", n)
+	}
+}
+
+// Event times never decrease in delivery order across concurrent publishers.
+func TestTimeFollowsDeliveryOrder(t *testing.T) {
+	var tick atomic.Int64
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	old := now
+	now = func() time.Time { return base.Add(time.Duration(tick.Add(1)) * time.Second) }
+	t.Cleanup(func() { now = old })
+	b := newBus(t, 2000)
+	s := sub(t, b, "s")
+	var wg sync.WaitGroup
+	for p := 0; p < 4; p++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				stop(t, b, "x")
+			}
+		}()
+	}
+	wg.Wait()
+	var last time.Time
+	for i, ev := range drain(s) {
+		if ev.Time.Before(last) {
+			t.Fatalf("event %d time %v before %v", i, ev.Time, last)
+		}
+		last = ev.Time
 	}
 }
 

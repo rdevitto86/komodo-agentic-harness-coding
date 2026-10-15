@@ -11,7 +11,7 @@ type Subscription struct {
 	queue       chan Event        // the writable end of Events
 	bus         *memBus           // the bus that fans out to this subscription
 	closed      bool              // guarded by bus.mu
-	overflowing bool              // a drop happened since the last queued event; guarded by bus.mu
+	overflowing bool              // a bus.overflow was announced and the queue has not drained to half; guarded by bus.mu
 	dropped     atomic.Uint64     // events lost to a full queue
 }
 

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Type is the coarse kind of an event, one of the 12 types of the diagram.
+// Type is the coarse kind of an event, one of the 12 constants below.
 type Type string
 
 // Subtype is the finer kind inside a type, such as "session.end"; empty when the type needs no refinement.

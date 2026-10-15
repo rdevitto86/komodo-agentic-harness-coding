@@ -7,12 +7,16 @@ import (
 	"time"
 )
 
-// DefaultBufferEvents is the queue size used when Options.BufferEvents is not positive; it matches the bus.buffer_events default.
+// DefaultBufferEvents is the queue size used when Options.BufferEvents is not positive.
 const DefaultBufferEvents = 50
+
+// busOverflowKey is the pair of the event the bus publishes when a queue is full.
+var busOverflowKey = BusOverflow{}.EventKey()
 
 // Bus accepts events and delivers each to the subscriptions that asked for its type.
 type Bus interface {
 	// Publish validates the event, stamps its time and queues it for every matching subscription; it never waits for a subscriber.
+	// Publish takes ownership of e.Data: the publisher and every subscriber treat it as read-only afterwards.
 	Publish(e Event) error
 	// Subscribe returns a private queue of events of the given types; no types means every type.
 	Subscribe(name string, types ...Type) (*Subscription, error)
@@ -44,17 +48,18 @@ func New(o Options) Bus {
 	return &memBus{buffer: o.BufferEvents}
 }
 
-// Publish checks the pair and data, stamps the time and queues the event for every matching subscription.
+// Publish checks the pair and data, then under the bus lock stamps the time and queues the event for every matching subscription.
+// The data pointer is shared by all subscribers, so neither the publisher nor a subscriber modifies it after the call.
 func (b *memBus) Publish(e Event) error {
 	if !validate(e) {
 		return fmt.Errorf("publish %q/%q: %w", e.Type, e.Subtype, ErrUnknownEvent)
 	}
-	e.Time = now().UTC().Truncate(time.Second)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
 		return ErrBusClosed
 	}
+	e.Time = now().UTC().Truncate(time.Second)
 	b.fanOutLocked(e)
 	return nil
 }
@@ -65,23 +70,26 @@ func (b *memBus) fanOutLocked(e Event) {
 	for len(pending) > 0 {
 		next := pending[0]
 		pending = pending[1:]
-		for _, s := range slices.Clone(b.subs) {
+		for _, s := range b.subs {
 			if !s.wants(next.Type) {
 				continue
 			}
 			select {
 			case s.queue <- next:
-				s.overflowing = false
+				// A burst ends once the queue is back at half its capacity or below.
+				if s.overflowing && len(s.queue) <= cap(s.queue)/2 {
+					s.overflowing = false
+				}
 			default:
 				n := s.dropped.Add(1)
-				// A dropped bus.overflow is counted but never announced, or a full queue would feed itself.
-				if !s.overflowing && next.Subtype != (BusOverflow{}).EventKey().Subtype {
+				// Every drop that starts a burst is announced, except a dropped bus.overflow, which is only counted.
+				if !s.overflowing && (Key{next.Type, next.Subtype}) != busOverflowKey {
+					s.overflowing = true
 					pending = append(pending, Event{
-						Type: TypeError, Subtype: BusOverflow{}.EventKey().Subtype, Time: next.Time,
+						Type: busOverflowKey.Type, Subtype: busOverflowKey.Subtype, Time: next.Time,
 						Data: &BusOverflow{Subscription: s.name, Dropped: n},
 					})
 				}
-				s.overflowing = true
 			}
 		}
 	}
@@ -89,6 +97,11 @@ func (b *memBus) fanOutLocked(e Event) {
 
 // Subscribe adds a subscription for the given types, or for every type when none are given.
 func (b *memBus) Subscribe(name string, types ...Type) (*Subscription, error) {
+	for _, t := range types {
+		if !slices.Contains(allTypes, t) {
+			return nil, fmt.Errorf("subscribe %q to %q: %w", name, t, ErrUnknownEvent)
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -111,9 +124,11 @@ func (b *memBus) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.closed = true
-	for _, s := range slices.Clone(b.subs) {
-		b.removeLocked(s)
+	for _, s := range b.subs {
+		s.closed = true
+		close(s.queue)
 	}
+	b.subs = nil
 	return nil
 }
 

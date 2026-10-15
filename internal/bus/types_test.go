@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// eventNameRow is one row of the LLD event-name table; none marks a name that is not published.
+// eventNameRow is one published event name and its pair; none marks a name that is not published.
 type eventNameRow struct {
 	name string
 	key  Key
@@ -52,7 +52,7 @@ var eventNameRows = []eventNameRow{
 	{"request.timer", Key{}, true},
 	{"request.accepted", Key{TypeRunStatus, "request.accepted"}, false},
 	{"request.refused", Key{TypeRunStatus, "request.refused"}, false},
-	// The command events and the bus's own event, defined in the same chapter.
+	// The command events and the bus's own event.
 	{"run-start", Key{TypeRunStart, ""}, false},
 	{"run-stop", Key{TypeRunStop, ""}, false},
 	{"bus.overflow", Key{TypeError, "bus.overflow"}, false},
