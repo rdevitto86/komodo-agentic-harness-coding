@@ -6480,7 +6480,7 @@ The Cache Manager is the local cache for pieces of context and for prompt-cache 
 
 ### 8.2 Package Layout
 
-The package is `internal/cache`. It reuses the code of `internal/core/cache.go` and its test file, moved here and renamed from package `core` to `cache`. It uses only the Go standard library.
+The package is `internal/cache`. It reuses the code of `internal/core/cache.go` and its test file, moved here and renamed from package `core` to `cache`. It uses only the Go standard library and writes its temporary files itself, so it imports no other Komodo package.
 
 ```
 internal/cache/
@@ -6508,6 +6508,7 @@ internal/cache/
 | Plan markers for a request | `PlanMarkers`, then `Handle.Put` in `prompt` | Each Task Manager's model client |
 | Open and close | `New`, `Cache.Close` | Runtime Manager only |
 | Clear and count | `Cache.Clear`, `Cache.Stats` | Runtime Manager only |
+| Trim the language store | `Cache.TrimLang` | Runtime Manager only |
 
 The Runtime Manager opens the one `*Cache` of a repository at that repository's first run and closes it when the repository's last run ends. When it starts the Context Manager and each Task Manager it passes them a `Handle` of that cache, and they read and write through it directly. No other part opens a cache of its own.
 
@@ -6576,7 +6577,7 @@ type NamespaceStats struct {
 |---|---|
 | `entries`, `bytes` | Totals over every namespace of one repository's cache |
 | `namespaces` | Only namespaces with at least one entry appear |
-| `hits`, `lookups` | Counted by `Get` since the cache was opened; the hit rate is `hits / lookups` |
+| `hits`, `lookups` | Counted by `Get` since the cache was opened, for a valid namespace and key on an open cache; the hit rate is `hits / lookups` |
 
 #### Marker plan
 
@@ -6585,8 +6586,8 @@ A provider can remember the start of a prompt if the request marks where that st
 ```go
 // Layer is one part of a prompt, in the order the parts are sent.
 type Layer struct {
-	Name string // tools, role, repo, standards, brief or conversation
-	Hash string // SHA-256 of the layer's bytes
+	Name string `json:"name"` // tools, role, repo, standards, brief or conversation
+	Hash string `json:"hash"` // SHA-256 of the layer's bytes
 }
 
 // MarkerPlan says where the model client places markers for one agent role.
@@ -6619,7 +6620,7 @@ func PlanMarkers(layers []Layer) MarkerPlan
 |---|---|
 | `layers` | Tools and role come first because they change least; a changed layer breaks the provider's memory of every layer after it |
 | `fixed` | Exactly `repo` and `brief`; a layer missing from the request drops its marker |
-| `auto` | True on every link whose provider offers the automatic marker; false elsewhere |
+| `auto` | `PlanMarkers` always sets it true; the model client clears it for a link whose provider has no automatic marker |
 
 The provider's memory itself is at the provider. The cache keeps only the plan and the counters, so that a change in a layer's hash is visible before the request is sent.
 
@@ -6645,9 +6646,10 @@ type entryFile struct {
 ```
 
 - **Whole-entry check:** a read decodes the file, hashes the payload again and compares it with `sha256`; a file that is not valid JSON fails the check.
+- **Size:** the entry's size is the size of its file on disk, base64 expansion included; the cap and `ErrEntryTooLarge` count that size.
 - **Last-read time:** the file's modification time; a hit sets it to now.
 - **Write:** a temporary file in the same folder, renamed into place, so a reader sees the old entry, the new one or none.
-- **Temporary files:** a file named `*.json.tmp-*` older than 1 hour is deleted by the next scan.
+- **Temporary files:** a write goes to `.<key>.json.tmp-<n>` beside the entry. A file named `*.json.tmp-*` older than 1 hour is deleted by the next scan.
 
 ### 8.4 Interfaces
 
@@ -6682,6 +6684,9 @@ func (c *Cache) Clear(ns ...Namespace) (Stats, error)
 
 // Close stops the cache; later Get calls miss and later Put calls return ErrClosed. Only the Runtime Manager calls it.
 func (c *Cache) Close() error
+
+// TrimLang removes the least recently modified files of the language store at dir until about 80% of its cap is left, and returns the bytes removed.
+func (c *Cache) TrimLang(dir string) (int64, error)
 ```
 
 | Method | On failure |
@@ -6691,11 +6696,13 @@ func (c *Cache) Close() error
 | `Put` | `ErrEntryTooLarge` for an entry over the cap; `ErrClosed` after `Close`; any other error is returned and the caller goes on without the entry |
 | `Stats` | A scan error is returned |
 | `Clear` | A removal error is returned with nothing partly reported |
-| `Close` | Cannot fail in a way a caller acts on; a second call returns nil |
+| `Close` | Cannot fail in a way a caller acts on; a second call returns nil. `Stats`, `Clear` and `TrimLang` still work after it |
+| `Clear` with an unknown namespace | An error, and nothing is removed |
+| `TrimLang` | A scan or removal error is returned with the bytes already removed; a missing folder removes nothing |
 
 | Caller | Call | When |
 |---|---|---|
-| Runtime Manager | `New`, `Handle`, `Stats`, `Clear`, `Close` | Opens a repository's cache at its first run, passes a handle to each part it starts, closes it when the repository's last run ends |
+| Runtime Manager | `New`, `Handle`, `Stats`, `Clear`, `TrimLang`, `Close` | Opens a repository's cache at its first run, passes a handle to each part it starts, closes it when the repository's last run ends |
 | Context Manager | `Handle.Key`, `Get`, `Put` | Skills, context, map and setup pieces |
 | Task Manager | `Handle.Key`, `Get`, `Put`, `PlanMarkers` | Marker plans in `prompt` |
 
@@ -6735,7 +6742,8 @@ flowchart TD
 
 1. The language store is trimmed while the harness runs, not deleted whole.
 2. When the store passes its cap, the least recently used entries are removed until it is at about 80% of the cap.
-3. A store whose repository holds a lease is trimmed but never deleted whole.
+3. A store whose repository holds a lease is trimmed but never deleted whole: `TrimLang` removes files only, never the store folder, so a repository that holds a lease keeps its store.
+4. Only regular files count. They go oldest modification time first, ties broken by path. A file in a read-only folder, as a module cache leaves them, is removed after the folder is made writable, and folders left empty are removed.
 
 #### Marker plan for one request
 
