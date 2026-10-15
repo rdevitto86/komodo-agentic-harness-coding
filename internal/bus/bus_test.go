@@ -546,3 +546,21 @@ func TestZeroBufferUsesDefault(t *testing.T) {
 		t.Fatalf("Dropped %d, want 10", s.Dropped())
 	}
 }
+
+// A one-slot queue still ends its burst once it accepts an event again.
+func TestOneSlotQueueEndsBurst(t *testing.T) {
+	b := newBus(t, 1)
+	s := sub(t, b, "one", TypeRunStop)
+	e := sub(t, b, "e", TypeError)
+	stop(t, b, "a")
+	stop(t, b, "b")
+	if n := len(drain(e)); n != 1 {
+		t.Fatalf("%d overflow events in the first burst, want 1", n)
+	}
+	<-s.Events
+	stop(t, b, "c")
+	stop(t, b, "d")
+	if n := len(drain(e)); n != 1 {
+		t.Fatalf("%d overflow events in the second burst, want 1", n)
+	}
+}

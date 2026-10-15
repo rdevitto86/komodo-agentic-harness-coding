@@ -76,8 +76,8 @@ func (b *memBus) fanOutLocked(e Event) {
 			}
 			select {
 			case s.queue <- next:
-				// A burst ends once the queue is back at half its capacity or below.
-				if s.overflowing && len(s.queue) <= cap(s.queue)/2 {
+				// A burst ends once the queue is back at half its capacity or below; a one-slot queue ends it on any accept.
+				if s.overflowing && len(s.queue) <= max(cap(s.queue)/2, 1) {
 					s.overflowing = false
 				}
 			default:
