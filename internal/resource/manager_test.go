@@ -379,7 +379,7 @@ func TestUnknownSubtypeIgnored(t *testing.T) {
 // TestRunServesTheBus: Run reads resource events from a real bus, survives a malformed event, orders the pause and ends with the context.
 func TestRunServesTheBus(t *testing.T) {
 	b := bus.New(bus.Options{})
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 	r := newRig(defaults)
 	r.rt.got = make(chan struct{}, 1)
 	r.m.d.Bus = b

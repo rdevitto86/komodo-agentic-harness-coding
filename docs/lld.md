@@ -13825,7 +13825,7 @@ The purpose of the subsystem and who it talks to are in [HLD 5.20](hld.md#520-re
 
 **What the Resource Manager does at a limit.**
 - At 80% of a plan window, or of a spending amount set in configuration, it raises a warning.
-- At 100% of a plan window it raises an error and tells the Runtime Manager to pause the affected groups after their current step. The groups resume by themselves when the window resets.
+- At 100% of a plan window it raises a `window_full` warning and tells the Runtime Manager to pause the affected groups after their current step. The groups resume by themselves when the window resets.
 - Paid spending only warns, unless a spending ceiling is set in configuration (`limits.usd_ceiling_per_run` or `limits.usd_ceiling_per_day`, see 19.8). At a ceiling it pauses too.
 - At 90% of `limits.group_tokens` it orders a nudge of the group's running agents; at 100% it orders the group paused.
 - A paused group keeps its lease.
@@ -13844,15 +13844,18 @@ The purpose of the subsystem and who it talks to are in [HLD 5.20](hld.md#520-re
 
 ### 19.2 Package Layout
 
-The Go package is `internal/resource` ([HLD Appendix A](hld.md#appendix-a-traceability)). It imports `internal/fault` for `ResourceError` and the bus package for events; nothing imports it except program startup.
+The Go package is `internal/resource` ([HLD Appendix A](hld.md#appendix-a-traceability)). It imports `internal/fault` for `ResourceError`, the bus package for events, `internal/state` for the window records and `internal/format` for an error code; nothing imports it except program startup and the Runtime Manager, which uses its event data types.
 
 | File | Holds |
 |---|---|
-| `manager.go` | `Manager`, `New`, `Run`, `Observe`: the subscription and the dispatch by subtype |
+| `manager.go` | `Manager`, `New`, `Run`, `Observe`: the subscription and the delivery of errors, pause orders and nudges |
+| `events.go` | `Usage`, `Headroom`, `Overage`, `Limit`: the four `resource` event data structs, bound to the bus at start |
+| `apply.go` | The check of an event and the dispatch by subtype that updates `State` |
+| `flags.go` | The marks that record an error, a pause order or a nudge as delivered |
 | `window.go` | `WindowKey`, `WindowState` and the headroom and limit updates |
 | `spend.go` | `Spend`: paid dollars per run and per day, tokens per group |
 | `pause.go` | `PauseOrder`, and the groups seen on each link and run |
-| `records.go` | `WindowRecord`: reading and writing window records through the State Manager |
+| `records.go` | `WindowRecord`, and `NewRecords`, which reads and writes window records through the State Manager |
 | `rules.go` | `Evaluate`: the pure threshold rules |
 | `deps.go` | The interfaces the package needs |
 
@@ -13916,7 +13919,7 @@ type Limit struct {
 }
 ```
 
-The link names in the examples are the two beta 6 links, `claude-cli` and `anthropic-api`.
+The link names in the examples are the two beta 6 links, `claude-cli` and `anthropic-api`. Each struct has an `EventKey` method that binds it to its `resource` subtype, and the package binds all four to the bus at start, so the Runtime Manager publishes them without registering them again.
 
 | Number | Read from | Used for |
 |---|---|---|
@@ -13946,6 +13949,7 @@ type WindowState struct {
 	Paused      bool      // the pause order for this window was delivered
 	Limited     bool      // the limit error was raised in this window
 	Overage     bool      // the overage warning was raised in this window
+	Reading     bool      // a headroom reading or a stored record set this window; only these are stored
 }
 
 // Spend is the paid spend and token totals.
@@ -13956,11 +13960,15 @@ type Spend struct {
 	GroupTokens map[string]int64   // input, output and cache-write tokens per group
 	RunWarned   map[string]bool    // the per-run warning was raised
 	DayWarned   bool               // the per-day warning was raised today
-	RunCeiling  map[string]bool    // the per-run ceiling error and its pause order were delivered
-	GroupCapped map[string]bool    // the group token cap error and its pause order were delivered
+	RunCeiling  map[string]bool    // the per-run ceiling pause order was delivered
+	GroupCapped map[string]bool    // the group token cap pause order was delivered
 	GroupNudged map[string]bool    // the 90% nudge was ordered
 	CapGrants   map[string]int     // caps granted by run --approve, per group
-	DayCeiling  bool               // the daily ceiling error and its pause order were delivered today
+	DayCeiling  bool               // the daily ceiling pause order was delivered today
+
+	RunCeilingRaised map[string]bool // the per-run ceiling error was raised
+	GroupCapRaised   map[string]bool // the group token cap error was raised
+	DayCeilingRaised bool            // the daily ceiling error was raised today
 }
 
 // State is everything the rules read.
@@ -13969,6 +13977,7 @@ type State struct {
 	Spend      Spend
 	LinkGroups map[string]map[string]bool // groups seen on each link; cleared when its window resets
 	RunGroups  map[string]map[string]bool // groups seen in each run
+	PaidLinks  map[string]bool            // links that have reported metered dollars
 }
 
 // Thresholds are the values the rules compare against, passed in at construction.
@@ -14101,13 +14110,24 @@ func (m *Manager) Run(ctx context.Context) error
 // Observe applies one resource event and raises any errors it causes.
 func (m *Manager) Observe(ctx context.Context, e bus.Event) error
 
-// Evaluate returns the resource errors and pause orders one observation causes; it reads State and Thresholds and changes neither.
+// Evaluate returns the resource errors, pause orders and nudges one observation causes; it reads State and Thresholds and changes neither.
 func Evaluate(s *State, t Thresholds, obs Observation) Result
+
+// Observation names what one event changed.
+type Observation struct {
+	Subtype bus.Subtype
+	Key     WindowKey // the window, or link-level entry, the event set; empty for usage
+	Link    string
+	Run     string
+	Group   string
+	Now     time.Time
+}
 
 // Result is what one observation causes.
 type Result struct {
 	Errors []fault.ResourceError
 	Pauses []PauseOrder
+	Nudges []NudgeOrder
 }
 ```
 
@@ -14122,6 +14142,13 @@ func (h *Handler) ThrowResourceError(ctx context.Context, e fault.ResourceError)
 // Thrower is the Error Handler as the Resource Manager uses it.
 type Thrower interface {
 	ThrowResourceError(ctx context.Context, e fault.ResourceError) error
+	// Report publishes an ordinary error that the Resource Manager cannot act on itself.
+	Report(src fault.Source, code string, kind fault.Kind, err error)
+}
+
+// Subscriber is the Event Bus as the Resource Manager uses it.
+type Subscriber interface {
+	Subscribe(name string, types ...bus.Type) (*bus.Subscription, error)
 }
 
 // Pauser is the Runtime Manager as the Resource Manager uses it.
@@ -14143,12 +14170,16 @@ type Records interface {
 	SaveWindow(ctx context.Context, k WindowKey, r WindowRecord) error
 }
 
+// NewRecords returns the Records that reads and writes window records through the State Manager.
+func NewRecords(m *state.Machine) Records
+
 // Deps are the parts the Resource Manager calls.
 type Deps struct {
-	Bus     bus.Subscriber // delivers events of type resource
+	Bus     Subscriber // delivers events of type resource
 	Errors  Thrower
 	Runtime Pauser
 	State   Records
+	Now     func() time.Time // the clock; nil means time.Now
 }
 ```
 
@@ -14202,6 +14233,16 @@ flowchart LR
 8. The Runtime Manager pauses each named group after its current step. For a full plan window it pauses a group only when no other link in that agent's chain can be used; when Claude's window runs out and paid use is off, the groups wait. A paused group keeps its lease, and the Runtime Manager keeps renewing it every 5 minutes.
 
 **Per-link watching.** The window state is keyed by link and window, so two links never share a flag. A link the Resource Manager has never heard from has no state and raises nothing. Beta 6 ships the two Claude links, `claude-cli` and `anthropic-api`; no other link is built.
+
+**Details the rules fix.**
+- A reading at 100 percent raises `window_full` and not `window`; percent used is held between 0 and 100.
+- In a spend warning, `threshold` is the dollar value crossed, which is `warn.quota_pct` percent of the spending amount.
+- Overage and limit keep their flags in link-level entries of `Windows`, named `overage` and `limit:<kind>`. Only entries a headroom reading set are stored in `providers.json` or count sessions.
+- A limit event with a new reset time is a new refusal and raises again.
+- A link is paid once it has reported `usd` above 0; `spend_ceiling_day` pauses the groups seen on paid links.
+- A pause order with no group to name is not sent; the next observation sends it once a group is seen.
+- The 90% nudge is not ordered when the group is already at or over its cap.
+- An event with an empty link, window or kind, or a negative count or cost, is malformed.
 
 **Pause and resume at a full window.**
 1. A window's percent used reaches 100.
