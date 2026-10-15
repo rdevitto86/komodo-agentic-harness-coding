@@ -27,6 +27,18 @@ func TestBubblewrapCheck(t *testing.T) {
 	}
 }
 
+func TestBubblewrapFailsClosedWithoutAHomeFolder(t *testing.T) {
+	putFake(t, "bwrap", "exit 0\n")
+	t.Setenv("HOME", "")
+	bw := NewBubblewrap(BubblewrapOptions{GOOS: "linux"})
+	if err := bw.Check(); err == nil || !strings.Contains(err.Error(), "home") {
+		t.Fatalf("Check: %v", err)
+	}
+	if _, err := bw.Prepare(context.Background(), testSpec(t, RoleBuilder)); err == nil || !strings.Contains(err.Error(), "home") {
+		t.Fatalf("Prepare: %v", err)
+	}
+}
+
 func TestBubblewrapCommandWrapsTheArgv(t *testing.T) {
 	putFake(t, "bwrap", "exit 0\n")
 	bw := NewBubblewrap(BubblewrapOptions{GOOS: "linux", Home: "/home/dev"})

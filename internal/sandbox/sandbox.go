@@ -6,12 +6,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os/exec"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -272,27 +270,4 @@ func newInstance(group, backend string) (Instance, error) {
 		return Instance{}, fmt.Errorf("make an instance id: %w", err)
 	}
 	return Instance{ID: hex.EncodeToString(b[:]), Group: group, Backend: backend, CreatedAt: time.Now().UTC()}, nil
-}
-
-// confined builds the process for one wrapped command: its own process group, a kill that takes the group, and the timeout.
-func confined(ctx context.Context, timeout time.Duration, bin string, args []string) *exec.Cmd {
-	cancel := context.CancelFunc(func() {})
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-	}
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		cancel()
-		if cmd.Process == nil {
-			return nil
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return err
-	}
-	cmd.WaitDelay = 5 * time.Second
-	return cmd
 }

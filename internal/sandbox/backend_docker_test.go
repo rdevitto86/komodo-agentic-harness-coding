@@ -17,6 +17,7 @@ case "$1" in
   create) if [ -n "$FAKE_DOCKER_CREATE_FAIL" ]; then echo "no such image" >&2; exit 1; fi; echo abc123 ;;
   start) if [ -n "$FAKE_DOCKER_START_FAIL" ]; then echo "cannot start" >&2; exit 1; fi ;;
   ps) printf '%s\n' "$FAKE_DOCKER_PS" ;;
+  exec) if [ -n "$FAKE_DOCKER_EXEC_SLEEP" ] && [ "$2" = "-i" ]; then exec sleep 30; fi ;;
 esac
 exit 0
 `
@@ -242,13 +243,81 @@ func TestDockerRefusesAMaskedFileItCouldNotCover(t *testing.T) {
 	d := NewDocker(DockerOptions{})
 	s := testSpec(t, RoleTester)
 	goRepo(t, s)
+	late := filepath.Join(s.Worktree, ".env.local")
+	s.Masked = []string{late}
 	inst, err := d.Prepare(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Masked = []string{filepath.Join(s.Worktree, ".env.local")}
+	if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err != nil {
+		t.Fatalf("a masked file that does not exist has nothing to hide: %v", err)
+	}
+	if err := os.WriteFile(late, []byte("K=v"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err == nil || !strings.Contains(err.Error(), ".env.local") {
 		t.Fatalf("a mask that appeared after the container was made must stop the command: %v", err)
+	}
+}
+
+func TestDockerKeepsAcceptingTheMasksItCovered(t *testing.T) {
+	fakeDocker(t)
+	d := NewDocker(DockerOptions{})
+	s := testSpec(t, RoleTester)
+	goRepo(t, s)
+	env := filepath.Join(s.Worktree, ".env")
+	if err := os.WriteFile(env, []byte("K=v"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Masked = []string{env, filepath.Join(s.Worktree, "never-created.pem")}
+	inst, err := d.Prepare(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err != nil {
+			t.Fatalf("command %d: %v", i, err)
+		}
+	}
+}
+
+func TestDockerRefusesAMaskedFileThatWasReplacedOnTheHost(t *testing.T) {
+	fakeDocker(t)
+	d := NewDocker(DockerOptions{})
+	s := testSpec(t, RoleTester)
+	goRepo(t, s)
+	env := filepath.Join(s.Worktree, ".env")
+	if err := os.WriteFile(env, []byte("K=v"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Masked = []string{env}
+	inst, err := d.Prepare(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(s.Worktree, ".env.tmp")
+	if err := os.WriteFile(tmp, []byte("K=other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, env); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err == nil || !strings.Contains(err.Error(), "replaced") {
+		t.Fatalf("a replaced masked file is no longer covered by the mount: %v", err)
+	}
+}
+
+func TestDockerCustomImageGetsNoToolAdditions(t *testing.T) {
+	calls := fakeDocker(t)
+	s := testSpec(t, RoleTester)
+	if err := os.WriteFile(filepath.Join(s.Worktree, "Cargo.toml"), []byte("rust-version = \"1.78\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewDocker(DockerOptions{Image: "my/rust:1"}).Prepare(context.Background(), s); err != nil {
+		t.Fatalf("a custom image is used as it is, offline: %v", err)
+	}
+	if n := len(calls().verb("exec")); n != 0 {
+		t.Fatalf("%d tool additions ran in a custom image", n)
 	}
 }
 

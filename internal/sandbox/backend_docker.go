@@ -10,9 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -31,8 +33,8 @@ type Docker struct {
 
 // containerState is what Docker remembers about one container between calls.
 type containerState struct {
-	online bool            // true while the bridge network is connected
-	masked map[string]bool // masked files already covered by a mount
+	online bool              // true while the bridge network is connected
+	masked map[string]fileID // masked files covered by a mount, with the file each mount hides
 }
 
 // workDir is where the worktree is mounted inside the container.
@@ -103,8 +105,8 @@ func (d *Docker) Prepare(ctx context.Context, s Spec) (Instance, error) {
 	return inst, nil
 }
 
-// createArgs returns the docker create arguments and the masked files they cover.
-func (d *Docker) createArgs(r rules, inst Instance, name, image string) ([]string, map[string]bool) {
+// createArgs returns the docker create arguments and the masked files they cover, each with its identity on the host.
+func (d *Docker) createArgs(r rules, inst Instance, name, image string) ([]string, map[string]fileID) {
 	a := []string{"create", "--name", name, "--init",
 		"--label", "komodo.sandbox=1", "--label", "komodo.group=" + inst.Group, "--label", "komodo.instance=" + inst.ID,
 		"--workdir", workDir, "--security-opt", "no-new-privileges",
@@ -124,13 +126,15 @@ func (d *Docker) createArgs(r rules, inst Instance, name, image string) ([]strin
 	for _, p := range r.ReadOnly {
 		a = append(a, "-v", p+":"+inContainer(r.Worktree, p)+":ro")
 	}
-	covered := map[string]bool{}
+	covered := map[string]fileID{}
 	for _, p := range r.Masked {
 		a = append(a, "-v", "/dev/null:"+inContainer(r.Worktree, p)+":ro")
-		covered[p] = true
+		if id, ok := identify(p); ok {
+			covered[p] = id
+		}
 	}
 	for _, p := range r.Readable {
-		if !contains(r.Toolchains, p) {
+		if !slices.Contains(r.Toolchains, p) {
 			a = append(a, "-v", p+":"+p+":ro")
 		}
 	}
@@ -167,16 +171,21 @@ func (d *Docker) Command(ctx context.Context, i Instance, s Spec, c Command) (*e
 	if err != nil {
 		return nil, errors.New("docker is not installed: install Docker")
 	}
+	marker := newMarker()
+	name := containerName(i.Group, i.ID)
 	args := []string{"exec", "-i", "-w", workDir}
-	for _, kv := range buildEnv(r, c, true) {
+	for _, kv := range append(buildEnv(r, c, true), marker) {
 		args = append(args, "-e", kv)
 	}
-	args = append(args, containerName(i.Group, i.ID))
+	args = append(args, name)
 	if c.Timeout > 0 {
 		secs := int((c.Timeout + time.Second - 1) / time.Second)
 		args = append(args, "timeout", "-k", "5", strconv.Itoa(secs))
 	}
-	return confined(ctx, 0, bin, append(args, c.Argv...)), nil
+	return confined(ctx, launch{
+		Timeout: c.Timeout, Bin: bin, Args: append(args, c.Argv...), Marker: marker,
+		Remote: func() { d.killMarked(name, marker) },
+	}), nil
 }
 
 // guard refuses a command whose network state or masked files the container cannot honour.
@@ -190,11 +199,45 @@ func (d *Docker) guard(st *containerState, r rules) error {
 		return errors.New("the container's network is still connected: end setup first")
 	}
 	for _, m := range r.Masked {
-		if !st.masked[m] {
+		now, exists := identify(m)
+		if !exists {
+			continue
+		}
+		covered, ok := st.masked[m]
+		switch {
+		case !ok:
 			return fmt.Errorf("masked file %s appeared after the container was made and cannot be hidden from it", m)
+		case covered != now:
+			return fmt.Errorf("masked file %s was replaced after the container was made, so the container no longer hides it", m)
 		}
 	}
 	return nil
+}
+
+// fileID identifies a file on the host by device and inode.
+type fileID struct{ dev, ino uint64 }
+
+// identify returns the identity of the file at a path, or false when it is not there.
+func identify(path string) (fileID, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fileID{}, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fileID{}, false
+	}
+	return fileID{dev: uint64(st.Dev), ino: uint64(st.Ino)}, true
+}
+
+// killScript kills every process of the container that carries the marker.
+const killScript = `for p in /proc/[0-9]*; do if tr '\0' '\n' < "$p/environ" 2>/dev/null | grep -qx '%s'; then kill -9 "${p#/proc/}" 2>/dev/null; fi; done`
+
+// killMarked kills inside the container every process that carries the marker, because ending the docker client leaves them running.
+func (d *Docker) killMarked(name, marker string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = d.run(ctx, "exec", name, "sh", "-c", fmt.Sprintf(killScript, marker))
 }
 
 // CutNetwork disconnects the container from the bridge network once setup ends; loopback stays.
@@ -261,15 +304,12 @@ func (d *Docker) run(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// image returns the container image and the language it serves.
+// image returns the container image and the language whose tools it needs added; a configured image is used as it is.
 func (d *Docker) image(worktree string) (image, lang string, err error) {
 	if d.opt.Image == "" {
 		return detectImage(worktree)
 	}
-	if langs := codeLanguages(worktree); len(langs) == 1 {
-		lang = langs[0]
-	}
-	return d.opt.Image, lang, nil
+	return d.opt.Image, "", nil
 }
 
 // toolAdditions returns the commands that add the tools the official image of a language lacks.

@@ -19,7 +19,10 @@ type BubblewrapOptions struct {
 }
 
 // Bubblewrap confines a command with Linux namespaces through bwrap.
-type Bubblewrap struct{ opt BubblewrapOptions }
+type Bubblewrap struct {
+	opt     BubblewrapOptions
+	homeErr error
+}
 
 // NewBubblewrap returns the Bubblewrap backend.
 func NewBubblewrap(o BubblewrapOptions) *Bubblewrap {
@@ -29,10 +32,11 @@ func NewBubblewrap(o BubblewrapOptions) *Bubblewrap {
 	if o.GOOS == "" {
 		o.GOOS = runtime.GOOS
 	}
+	var homeErr error
 	if o.Home == "" {
-		o.Home, _ = os.UserHomeDir()
+		o.Home, homeErr = os.UserHomeDir()
 	}
-	return &Bubblewrap{opt: o}
+	return &Bubblewrap{opt: o, homeErr: homeErr}
 }
 
 // Name returns the mechanism name.
@@ -42,6 +46,9 @@ func (b *Bubblewrap) Name() string { return "bubblewrap" }
 func (b *Bubblewrap) Check() error {
 	if b.opt.GOOS != "linux" {
 		return errors.New("Bubblewrap runs on Linux and Windows Subsystem for Linux only")
+	}
+	if err := homeProblem(b.opt.Home, b.homeErr); err != nil {
+		return err
 	}
 	bin, err := exec.LookPath(b.opt.Binary)
 	if err != nil {
@@ -60,6 +67,9 @@ func (b *Bubblewrap) Check() error {
 
 // Prepare gives the instance an id; the arguments are rendered for each command from the Spec.
 func (b *Bubblewrap) Prepare(_ context.Context, s Spec) (Instance, error) {
+	if err := homeProblem(b.opt.Home, b.homeErr); err != nil {
+		return Instance{}, err
+	}
 	if _, err := newRules(s); err != nil {
 		return Instance{}, err
 	}
@@ -68,6 +78,9 @@ func (b *Bubblewrap) Prepare(_ context.Context, s Spec) (Instance, error) {
 
 // Command wraps the argv in bwrap; folders that are not on the host are left out of the mounts.
 func (b *Bubblewrap) Command(ctx context.Context, _ Instance, s Spec, c Command) (*exec.Cmd, error) {
+	if err := homeProblem(b.opt.Home, b.homeErr); err != nil {
+		return nil, err
+	}
 	r, err := newRules(s)
 	if err != nil {
 		return nil, err
@@ -79,9 +92,10 @@ func (b *Bubblewrap) Command(ctx context.Context, _ Instance, s Spec, c Command)
 	fi, lerr := os.Lstat("/var/run")
 	varRunDir := lerr == nil && fi.IsDir()
 	args := append(bwrapArgs(r.existing(), b.opt.Home, varRunDir), "--")
-	cmd := confined(ctx, c.Timeout, bin, append(args, c.Argv...))
-	cmd.Env = buildEnv(r, c, false)
-	return cmd, nil
+	return confined(ctx, launch{
+		Timeout: c.Timeout, Bin: bin, Args: append(args, c.Argv...),
+		Env: buildEnv(r, c, false), Marker: newMarker(),
+	}), nil
 }
 
 // Release has nothing to remove: the sandbox ends with each command.

@@ -188,12 +188,31 @@ func commandPath(r rules) string {
 	return strings.Join(append(parts, systemPath), ":")
 }
 
+// machServices are the system services a build or a test may look up; every other lookup is refused.
+var machServices = []string{
+	"com.apple.system.logger", "com.apple.logd", "com.apple.diagnosticd",
+	"com.apple.system.notification_center", "com.apple.cfprefsd.daemon", "com.apple.cfprefsd.agent",
+	"com.apple.system.opendirectoryd.libinfo", "com.apple.system.opendirectoryd.membership",
+	"com.apple.system.DirectoryService.libinfo_v1", "com.apple.system.DirectoryService.membership_v1",
+	"com.apple.bsd.dirhelper", "com.apple.FSEvents", "com.apple.SecurityServer", "com.apple.trustd",
+	"com.apple.trustd.agent", "com.apple.coreservices.launchservicesd", "com.apple.lsd.mapdb",
+}
+
 // seatbeltProfile renders the Seatbelt profile; later rules win, so home is closed and then reopened for the listed folders.
 func seatbeltProfile(r rules, home string) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n(deny default)\n")
-	b.WriteString("(allow process-exec process-fork signal sysctl-read mach-lookup)\n")
-	b.WriteString("(allow file-read*)\n")
+	b.WriteString("(allow process-exec process-fork sysctl-read)\n")
+	b.WriteString("(allow signal (target same-sandbox))\n")
+	b.WriteString("(allow mach-lookup")
+	for i, n := range machServices {
+		sep := " "
+		if i > 0 {
+			sep = "\n    "
+		}
+		fmt.Fprintf(&b, "%s(global-name %s)", sep, sbq(n))
+	}
+	b.WriteString(")\n(allow file-read*)\n")
 	if home != "" {
 		fmt.Fprintf(&b, "(deny file-read* (subpath %s))\n", sbq(resolved(home)))
 	}
@@ -203,16 +222,46 @@ func seatbeltProfile(r rules, home string) string {
 	b.WriteString(sbRule("allow file-read*", "subpath", reads))
 	b.WriteString(sbRule("deny file-read*", "literal", r.Masked))
 	b.WriteString(`(allow file-write* (subpath "/dev/null") (subpath "/dev/dtracehelper"))` + "\n")
-	b.WriteString(sbRule("allow file-write*", "subpath", append([]string{r.Worktree}, r.Writable...)))
+	writes := append([]string{r.Worktree}, r.Writable...)
+	b.WriteString(sbRule("allow file-write*", "subpath", writes))
 	b.WriteString(sbRule("deny file-write*", "subpath", r.ReadOnly))
+	b.WriteString(sbRule("deny file-write*", "literal", r.Masked))
+	b.WriteString(sbRule("deny file-write-unlink", "literal", maskedParents(r)))
 	b.WriteString(sbRule("deny file-read* file-write*", "subpath", runFolders))
+	b.WriteString(sbSockets("network-outbound", "remote", writes))
+	b.WriteString(sbSockets("network-bind", "local", writes))
 	if r.Network {
-		b.WriteString("(allow network*)\n")
+		b.WriteString("(allow network-outbound (remote ip))\n")
+		b.WriteString(`(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))` + "\n")
+		b.WriteString(`(allow file-read* file-write* (literal "/private/var/run/mDNSResponder"))` + "\n")
 		return b.String()
 	}
 	b.WriteString(`(allow network-outbound (remote ip "localhost:*"))` + "\n")
 	b.WriteString(`(allow network-bind network-inbound (local ip "localhost:*"))` + "\n")
 	return b.String()
+}
+
+// maskedParents returns every folder between the worktree and a masked file, so a masked file cannot be moved out by renaming its folder.
+func maskedParents(r rules) []string {
+	var out []string
+	for _, m := range r.Masked {
+		for d := filepath.Dir(m); d != r.Worktree && d != filepath.Dir(d); d = filepath.Dir(d) {
+			if !within(r.Worktree, d) {
+				break
+			}
+			out = append(out, d)
+		}
+	}
+	return dedupe(out)
+}
+
+// sbSockets renders the rule that lets a command reach Unix sockets only inside the given folders.
+func sbSockets(op, side string, dirs []string) string {
+	parts := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		parts = append(parts, fmt.Sprintf("(subpath %s)", sbq(resolved(d))))
+	}
+	return fmt.Sprintf("(allow %s (%s unix-socket %s))\n", op, side, strings.Join(parts, " "))
 }
 
 // sbRule renders one rule over a list of paths, resolving each through symbolic links; an empty list renders nothing.

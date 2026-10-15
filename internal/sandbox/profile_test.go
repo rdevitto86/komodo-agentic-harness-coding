@@ -156,13 +156,13 @@ func TestSeatbeltProfileOrdersItsRules(t *testing.T) {
 func TestSeatbeltNetworkIsLoopbackOnlyUnlessSetup(t *testing.T) {
 	r := mustRules(t, fakeSpec())
 	off := seatbeltProfile(r, "/Users/dev")
-	if !strings.Contains(off, `(allow network-outbound (remote ip "localhost:*"))`) || !strings.Contains(off, `(allow network-bind network-inbound (local ip "localhost:*"))`) || strings.Contains(off, "(allow network*)\n") {
+	if !strings.Contains(off, `(allow network-outbound (remote ip "localhost:*"))`) || !strings.Contains(off, `(allow network-bind network-inbound (local ip "localhost:*"))`) || strings.Contains(off, "(allow network*)") {
 		t.Fatalf("network off profile:\n%s", off)
 	}
 	s := fakeSpec()
 	s.Network = true
 	on := seatbeltProfile(mustRules(t, s), "/Users/dev")
-	if !strings.Contains(on, "(allow network*)\n") {
+	if strings.Contains(on, "(allow network*)") || !strings.Contains(on, "(allow network-outbound (remote ip))\n") {
 		t.Fatalf("network on profile:\n%s", on)
 	}
 }
@@ -234,5 +234,70 @@ func TestBwrapNetworkAndRunFolder(t *testing.T) {
 	}
 	if indexOf(a, "--tmpfs", "/run") < 0 {
 		t.Fatal("/run must be emptied")
+	}
+}
+
+func TestSeatbeltFreezesMaskedFilesAndTheirFolders(t *testing.T) {
+	s := fakeSpec()
+	wt := s.Worktree
+	s.Masked = append(s.Masked, wt+"/cfg/deep/.env")
+	p := seatbeltProfile(mustRules(t, s), "/Users/dev")
+	i := strings.Index(p, "(deny file-write* (literal ")
+	if i < 0 {
+		t.Fatalf("no write denial for masked files:\n%s", p)
+	}
+	rule := p[i : i+strings.Index(p[i:], "))\n")+3]
+	for _, m := range s.Masked {
+		if !strings.Contains(rule, `(literal "`+m+`")`) {
+			t.Errorf("masked %s can still be written, renamed or removed", m)
+		}
+	}
+	j := strings.Index(p, "(deny file-write-unlink (literal ")
+	if j < 0 {
+		t.Fatalf("no unlink denial for the folders above a masked file:\n%s", p)
+	}
+	unlink := p[j : j+strings.Index(p[j:], "))\n")+3]
+	for _, dir := range []string{wt + "/cfg", wt + "/cfg/deep"} {
+		if !strings.Contains(unlink, `(literal "`+dir+`")`) {
+			t.Errorf("folder %s can be renamed away with a masked file inside", dir)
+		}
+	}
+	if strings.Contains(unlink, `(literal "`+wt+`")`) {
+		t.Error("the worktree itself must not be frozen")
+	}
+}
+
+func TestSeatbeltScopesSignalsAndMachLookups(t *testing.T) {
+	p := seatbeltProfile(mustRules(t, fakeSpec()), "/Users/dev")
+	if !strings.Contains(p, "(allow signal (target same-sandbox))\n") {
+		t.Fatalf("signals must stay inside the sandbox:\n%s", p)
+	}
+	for _, line := range strings.Split(p, "\n") {
+		if strings.HasPrefix(line, "(allow process-exec") && (strings.Contains(line, "signal") || strings.Contains(line, "mach-lookup")) {
+			t.Fatalf("unfiltered operation on %q", line)
+		}
+	}
+	if !strings.Contains(p, `(allow mach-lookup (global-name "com.apple.`) || strings.Contains(p, "mach-lookup)") {
+		t.Fatalf("mach lookups need an allow-list:\n%s", p)
+	}
+}
+
+func TestSeatbeltUnixSocketsStayInsideTheWorktreeAndTemp(t *testing.T) {
+	for _, network := range []bool{false, true} {
+		s := fakeSpec()
+		s.Network = network
+		p := seatbeltProfile(mustRules(t, s), "/Users/dev")
+		for _, want := range []string{
+			`(allow network-outbound (remote unix-socket (subpath "/Users/dev/.komodo/wt/shop/g1")`,
+			`(subpath "/private/tmp/komodo-s1")`,
+			`(allow network-bind (local unix-socket (subpath "/Users/dev/.komodo/wt/shop/g1")`,
+		} {
+			if !strings.Contains(p, want) {
+				t.Errorf("network=%v lacks %s", network, want)
+			}
+		}
+		if strings.Contains(p, "(allow network*)") {
+			t.Errorf("network=%v: a bare network allow opens every Unix socket", network)
+		}
 	}
 }

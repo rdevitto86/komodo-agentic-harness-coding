@@ -24,9 +24,13 @@ type SeatbeltOptions struct {
 // Seatbelt confines a command with a macOS sandbox profile.
 type Seatbelt struct {
 	opt      SeatbeltOptions
+	homeErr  error
 	mu       sync.Mutex
 	profiles map[string]renderedProfile
 }
+
+// reapScript runs the command and, on SIGTERM, kills every process of its sandbox, including one that left the process group or the session.
+const reapScript = `trap 'kill -9 -1' TERM; "$@" <&0 & wait $!; exit $?`
 
 // renderedProfile is the profile of one instance and the Spec it was rendered from.
 type renderedProfile struct {
@@ -42,10 +46,11 @@ func NewSeatbelt(o SeatbeltOptions) *Seatbelt {
 	if o.GOOS == "" {
 		o.GOOS = runtime.GOOS
 	}
+	var homeErr error
 	if o.Home == "" {
-		o.Home, _ = os.UserHomeDir()
+		o.Home, homeErr = os.UserHomeDir()
 	}
-	return &Seatbelt{opt: o, profiles: map[string]renderedProfile{}}
+	return &Seatbelt{opt: o, homeErr: homeErr, profiles: map[string]renderedProfile{}}
 }
 
 // Name returns the mechanism name.
@@ -59,11 +64,17 @@ func (s *Seatbelt) Check() error {
 	if _, err := exec.LookPath(s.opt.Binary); err != nil {
 		return fmt.Errorf("%s is missing: restore /usr/bin/sandbox-exec or install Docker", s.opt.Binary)
 	}
-	return nil
+	return s.checkHome()
 }
+
+// checkHome fails when the home folder is unknown, because the profile would then leave it open.
+func (s *Seatbelt) checkHome() error { return homeProblem(s.opt.Home, s.homeErr) }
 
 // Prepare renders the profile once and has sandbox-exec accept it before any command depends on it.
 func (s *Seatbelt) Prepare(ctx context.Context, sp Spec) (Instance, error) {
+	if err := s.checkHome(); err != nil {
+		return Instance{}, err
+	}
 	r, err := newRules(sp)
 	if err != nil {
 		return Instance{}, err
@@ -93,6 +104,9 @@ func (s *Seatbelt) Prepare(ctx context.Context, sp Spec) (Instance, error) {
 
 // Command wraps the argv in sandbox-exec with the instance's profile, which is rendered again only when the Spec changed.
 func (s *Seatbelt) Command(ctx context.Context, i Instance, sp Spec, c Command) (*exec.Cmd, error) {
+	if err := s.checkHome(); err != nil {
+		return nil, err
+	}
 	r, err := newRules(sp)
 	if err != nil {
 		return nil, err
@@ -112,10 +126,11 @@ func (s *Seatbelt) Command(ctx context.Context, i Instance, sp Spec, c Command) 
 		s.profiles[i.ID] = cur
 	}
 	s.mu.Unlock()
-	cmd := confined(ctx, c.Timeout, bin, append([]string{"-p", cur.text}, c.Argv...))
-	cmd.Dir = r.Worktree
-	cmd.Env = buildEnv(r, c, false)
-	return cmd, nil
+	args := append([]string{"-p", cur.text, "/bin/sh", "-c", reapScript, "sh"}, c.Argv...)
+	return confined(ctx, launch{
+		Timeout: c.Timeout, Bin: bin, Args: args, Reap: true,
+		Env: buildEnv(r, c, false), Dir: r.Worktree, Marker: newMarker(),
+	}), nil
 }
 
 // Release forgets the instance's profile.
@@ -126,8 +141,18 @@ func (s *Seatbelt) Release(_ context.Context, i Instance) error {
 	return nil
 }
 
-// Caveats names the limits Seatbelt cannot enforce: it has no process or memory cap.
-func (s *Seatbelt) Caveats(sp Spec) []string { return osCaveats("Seatbelt", sp) }
+// Caveats names the limits Seatbelt cannot enforce: no process or memory cap, and a loopback shared with the host.
+func (s *Seatbelt) Caveats(sp Spec) []string {
+	return append(osCaveats("Seatbelt", sp), "Seatbelt shares the host's loopback: a command can reach any service listening on 127.0.0.1 or ::1")
+}
+
+// homeProblem returns the error for an unknown home folder, or nil.
+func homeProblem(home string, err error) error {
+	if home != "" && err == nil {
+		return nil
+	}
+	return fmt.Errorf("cannot find the home folder, so it cannot be hidden from commands: set HOME (%v)", err)
+}
 
 // osCaveats names the process and memory caps an operating-system sandbox without control groups cannot apply.
 func osCaveats(name string, sp Spec) []string {
