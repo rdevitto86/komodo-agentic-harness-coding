@@ -1,13 +1,12 @@
-exit 4
+exit 0
 {
   "v": 1,
-  "ok": false,
-  "verdict": "Failed: komodo update is not built yet. The code is internal.",
-  "report": "Failed: `komodo update is not built yet`. The code is `internal`.\n",
-  "data": {},
-  "error": {
-    "code": "internal",
-    "reason": "komodo update is not built yet",
-    "fix": ""
+  "ok": true,
+  "verdict": "Update checked: the version went from 1.0.0-beta.6 to 1.0.1.",
+  "report": "Update `checked`: the version went from `1.0.0-beta.6` to `1.0.1`.\n",
+  "data": {
+    "from": "1.0.0-beta.6",
+    "to": "1.0.1",
+    "action": "checked"
   }
 }

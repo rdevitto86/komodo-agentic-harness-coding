@@ -43,7 +43,7 @@ func TestGoldenEnvelopes(t *testing.T) {
 		terminal bool
 		args     []string
 	}{
-		{"install", true, []string{"install"}},
+		{"install", true, []string{"install", "--repo-only", "--hosts", "claude"}},
 		{"config-get", false, []string{"config", "get", "limits.returns"}},
 		{"config-set", true, []string{"config", "set", "limits.returns=2"}},
 		{"plan", false, []string{"plan", "Add lease revocation"}},
@@ -54,7 +54,7 @@ func TestGoldenEnvelopes(t *testing.T) {
 		{"abandon", false, []string{"abandon", "tg-1.2"}},
 		{"ui", false, []string{"ui"}},
 		{"doctor", false, []string{"doctor"}},
-		{"update", true, []string{"update"}},
+		{"update", true, []string{"update", "--check"}},
 		{"clean", false, []string{"clean"}},
 		{"refusal-no-terminal", false, []string{"config", "set", "limits.returns=4"}},
 		{"usage-unknown-command", false, []string{"rnu"}},
@@ -64,6 +64,7 @@ func TestGoldenEnvelopes(t *testing.T) {
 			h := newHarness(t)
 			h.terminal = c.terminal
 			h.fake(goldenReplies)
+			h.host.Release = newRelease(t, "1.0.1", "golden").config()
 			repo := repoDir(t, "")
 			backlog(t, repo, map[string]string{"epic-1/tg-1.2": "todo"})
 			code, out, errOut := h.run(append([]string{"--json", "-C", repo}, c.args...)...)
@@ -71,7 +72,7 @@ func TestGoldenEnvelopes(t *testing.T) {
 				t.Fatalf("stderr = %q", errOut)
 			}
 			got := uuidPattern.ReplaceAllString(out, "<uuid>")
-			got = strings.ReplaceAll(strings.ReplaceAll(got, repo, "<repo>"), h.home, "<home>")
+			got = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(got, repo, "<repo>"), h.home, "<home>"), h.userHome, "<user>")
 			got = "exit " + string(rune('0'+code)) + "\n" + got
 			path := filepath.Join("testdata", "golden", c.name+".txt")
 			if *update {

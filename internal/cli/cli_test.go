@@ -213,7 +213,7 @@ func TestPanicExitsFour(t *testing.T) {
 func TestStubsReportNotBuilt(t *testing.T) {
 	h := newHarness(t)
 	h.terminal = true
-	for _, name := range []string{"install", "update", "doctor"} {
+	for _, name := range []string{"ui"} {
 		code, e := h.envelope(name)
 		if code != 4 || e.Error.Code != "internal" || !strings.Contains(e.Error.Reason, "not built yet") {
 			t.Errorf("%s: exit %d, %+v", name, code, e.Error)

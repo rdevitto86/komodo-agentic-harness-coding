@@ -28,9 +28,9 @@ type helpDoc struct {
 
 // resultTypes maps each command to the struct its data field holds.
 var resultTypes = map[string]any{
-	"install": EmptyData{}, "config get": ConfigGetData{}, "config set": ConfigSetData{}, "plan": PlanData{},
+	"install": InstallData{}, "config get": ConfigGetData{}, "config set": ConfigSetData{}, "plan": PlanData{},
 	"run": RunData{}, "stop": StopData{}, "replay": ReplayData{}, "status": StatusData{}, "abandon": AbandonData{},
-	"ui": EmptyData{}, "doctor": EmptyData{}, "update": EmptyData{}, "clean": CleanData{},
+	"ui": EmptyData{}, "doctor": DoctorData{}, "update": UpdateData{}, "clean": CleanData{},
 }
 
 // EmptyData is the data of a command whose result is not built yet.
