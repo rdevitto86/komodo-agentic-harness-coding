@@ -17,6 +17,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/format"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
 // ExitInternal is the exit code of a harness failure before any command runs.
@@ -146,6 +147,8 @@ type Deps struct {
 	Engine   Engine            // the control socket client
 	Terminal func() bool       // true when a controlling terminal is attached
 	Home     string            // the Komodo home folder, for the settings checksums a dry run reads
+	State    *state.Machine    // the machine-wide records; opened over Home with the cli writer when nil
+	Host     Host              // what install, update and doctor read from the machine
 	Stdout   io.Writer
 	Stderr   io.Writer
 	Stdin    io.Reader
