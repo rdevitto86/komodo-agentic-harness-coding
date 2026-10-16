@@ -68,7 +68,12 @@ func (g groupChecker) Recheck(ctx context.Context, _, landing string) (commit.Ch
 	defer g.ref.recheckMu.Unlock()
 	g.ref.slot.take()
 	tm.Recheck(ctx)
+	// The checks leave files such as the coverage profile in the checkout, and cleanup refuses to remove a checkout holding files the tip lacks.
+	_, cleanErr := gitOut("-C", g.worktree, "clean", "-fdq")
 	pass, out, ok := g.ref.slot.take()
+	if cleanErr != nil {
+		return commit.CheckResult{}, fmt.Errorf("remove the files the checks left: %w", cleanErr)
+	}
 	if !ok {
 		return commit.CheckResult{}, errors.New("the task manager returned no check result")
 	}
