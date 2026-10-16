@@ -92,6 +92,8 @@ type Manager struct {
 	pool     *Pool
 	chg      chan struct{}
 	stopped  bool
+	ready    chan struct{} // closed once Run has subscribed to the command events
+	readyOne sync.Once
 }
 
 // New wires a Runtime Manager from the managers it needs.
@@ -99,7 +101,7 @@ func New(d Deps) *Manager {
 	return &Manager{
 		d: d, clk: clockOf(d.Clock), t: d.Timing.filled(), ctx: context.Background(),
 		runs: map[string]*run{}, groups: map[string]*group{}, starting: map[string]bool{}, repos: map[string]*repoCache{},
-		expect: map[string]chan error{}, beats: map[string]time.Time{}, chg: make(chan struct{}),
+		expect: map[string]chan error{}, beats: map[string]time.Time{}, chg: make(chan struct{}), ready: make(chan struct{}),
 	}
 }
 
@@ -113,6 +115,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		return fmt.Errorf("subscribe to run commands: %w", err)
 	}
 	defer sub.Close()
+	m.readyOne.Do(func() { close(m.ready) })
 	go m.watch(ctx)
 	for {
 		select {
