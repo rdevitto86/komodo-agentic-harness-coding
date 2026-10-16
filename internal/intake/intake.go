@@ -162,7 +162,8 @@ func (h *Handler) handle(ctx context.Context, run bus.ID, req PlanRequest) error
 	if ctx.Err() != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}
-	return h.d.Bus.Publish(bus.Event{Type: bus.TypeError, Run: run, Data: faultData(err, h.d.Limits.WallMin)})
+	data := faultData(err, h.d.Limits.WallMin)
+	return h.d.Bus.Publish(bus.Event{Type: bus.TypeError, Subtype: data.EventKey().Subtype, Run: run, Data: data})
 }
 
 // faultData maps a failed plan to the data of its error event.
