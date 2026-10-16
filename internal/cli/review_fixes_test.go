@@ -50,12 +50,12 @@ func TestInstallEditsOnlyTheGuardInsideAForeignHookGroup(t *testing.T) {
 	h := newHarness(t)
 	repo := repoDir(t, "")
 	mustWrite(t, filepath.Join(repo, ".claude", "settings.json"),
-		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"my-linter"},{"type":"command","command":"komodo internal guard"}]}]}}`)
+		`{"hooks":{"PreToolUse":[{"matcher":"Read|Bash|Edit|Write","hooks":[{"type":"command","command":"my-linter"},{"type":"command","command":"komodo internal guard"}]}]}}`)
 	if code, e := h.install(repo, "--repo-only", "--hosts", "claude"); code != 0 {
 		t.Fatalf("install: exit %d, %+v", code, e.Error)
 	}
 	flat := strings.Join(strings.Fields(string(settingsOf(t, repo)["hooks"])), "")
-	for _, want := range []string{`"matcher":"Bash"`, `"command":"my-linter"`, `"onFailure":"block"`} {
+	for _, want := range []string{`"matcher":"Read|Bash|Edit|Write"`, `"command":"my-linter"`, `"onFailure":"block"`} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("after install the hooks lack %s: %s", want, flat)
 		}
@@ -67,7 +67,7 @@ func TestInstallEditsOnlyTheGuardInsideAForeignHookGroup(t *testing.T) {
 		t.Fatalf("remove: exit %d, %+v", code, e.Error)
 	}
 	flat = strings.Join(strings.Fields(string(settingsOf(t, repo)["hooks"])), "")
-	if !strings.Contains(flat, `"command":"my-linter"`) || !strings.Contains(flat, `"matcher":"Bash"`) || strings.Contains(flat, "komodointernalguard") {
+	if !strings.Contains(flat, `"command":"my-linter"`) || !strings.Contains(flat, `"matcher":"Read|Bash|Edit|Write"`) || strings.Contains(flat, "komodointernalguard") {
 		t.Errorf("after remove: %s", flat)
 	}
 }

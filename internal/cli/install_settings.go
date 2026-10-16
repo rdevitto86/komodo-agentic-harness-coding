@@ -221,15 +221,33 @@ func hookCommand(h json.RawMessage) string {
 	return x.Command
 }
 
-// findGuard locates the guard command inside the groups of a PreToolUse list.
+// matcherCovers reports whether a hook matcher runs for every tool the guard matcher names; an empty or * matcher runs for all.
+func matcherCovers(m string) bool {
+	if m == "" || m == "*" {
+		return true
+	}
+	have := strings.Split(m, "|")
+	for _, want := range strings.Split(guardMatcher, "|") {
+		if !slices.Contains(have, want) {
+			return false
+		}
+	}
+	return true
+}
+
+// findGuard locates the guard command inside a group of a PreToolUse list whose matcher covers the guard matcher.
 func findGuard(l []json.RawMessage) (gi, hi int, group *obj, hooks []json.RawMessage) {
 	for gi, el := range l {
 		g, err := parseObj(el)
 		if err != nil {
 			continue
 		}
+		var matcher string
+		if m, ok := g.get("matcher"); ok {
+			_ = json.Unmarshal(m, &matcher)
+		}
 		raw, ok := g.get("hooks")
-		if !ok {
+		if !ok || !matcherCovers(matcher) {
 			continue
 		}
 		var hs []json.RawMessage
