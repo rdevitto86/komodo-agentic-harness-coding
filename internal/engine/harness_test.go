@@ -120,12 +120,13 @@ type fakeLeases struct {
 	released map[string]int
 	revoked  []string
 	renewErr map[string]error
+	renews   map[string]int
 	order    *seqLog // shared log of lease and event order
 }
 
 // newLeases returns a lease fake.
 func newLeases() *fakeLeases {
-	return &fakeLeases{held: map[string]string{}, released: map[string]int{}, renewErr: map[string]error{}}
+	return &fakeLeases{held: map[string]string{}, released: map[string]int{}, renews: map[string]int{}, renewErr: map[string]error{}}
 }
 
 // Grant takes a lease unless another run holds the group.
@@ -143,6 +144,7 @@ func (l *fakeLeases) Grant(_ context.Context, req lease.GrantRequest) (lease.Lea
 func (l *fakeLeases) Renew(_ context.Context, x lease.Lease) (lease.Lease, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.renews[x.Group]++
 	return x, l.renewErr[x.Group]
 }
 
@@ -334,7 +336,7 @@ func (e *tmEnv) send(m task.Message) {
 
 // fact builds a fact of a subtype with data.
 func fact(sub string, data any) task.Fact {
-	return task.Fact{Subtype: sub, At: time.Now(), Data: mustJSON(data)}
+	return task.Fact{Subtype: sub, Data: mustJSON(data)}
 }
 
 // sessionFacts is a clean builder session on one task.
@@ -628,3 +630,31 @@ func (l *seqLog) get() []string {
 }
 
 var _ = os.Getpid
+
+// renewCount returns how many times a group's lease was renewed.
+func (l *fakeLeases) renewCount(g string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.renews[g]
+}
+
+// fakeCleaner records the groups discarded.
+type fakeCleaner struct {
+	mu   sync.Mutex
+	gone []string
+}
+
+// Discard records a discard.
+func (c *fakeCleaner) Discard(_ context.Context, _, group string) error {
+	c.mu.Lock()
+	c.gone = append(c.gone, group)
+	c.mu.Unlock()
+	return nil
+}
+
+// env returns the script environment of a group's Task Manager.
+func (f *fakeTasks) env(g string) *tmEnv {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.envs[g]
+}

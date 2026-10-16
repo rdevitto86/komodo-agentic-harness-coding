@@ -15,7 +15,10 @@ import (
 )
 
 // withClock runs the rig on its fake clock.
-func withClock(r *rig) { r.d.Clock = r.clock }
+func withClock(r *rig) {
+	r.d.Clock = r.clock
+	r.d.Timing.LoopSilentFor = 10000 * time.Hour // a test that jumps the clock is not a silent loop
+}
 
 // idleScript is a Task Manager that reports ready, then does nothing until it is stopped.
 func idleScript(e *tmEnv) {
