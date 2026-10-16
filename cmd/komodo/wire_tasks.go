@@ -26,8 +26,17 @@ import (
 
 // groupRef lets the Commit and Cleanup handlers reach the Task Manager that is built after them.
 type groupRef struct {
-	mu sync.Mutex
-	tm *task.Manager
+	mu        sync.Mutex
+	tm        *task.Manager
+	recheckMu sync.Mutex // serialises rechecks so each reads its own verdict
+	slot      recheckSlot
+}
+
+// manager returns the group's Task Manager, or nil before it is built.
+func (g *groupRef) manager() *task.Manager {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.tm
 }
 
 // CloseTaskGroup closes the group's Task Manager, which ends its sandbox and the group.
@@ -72,6 +81,7 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		Base: base, Language: lang, Exe: exe,
 		Meta:        task.GroupMeta{Repo: spec.Repo, Epic: spec.Epic, EpicGroups: k.epicGroups(spec), Goal: grp.Goal},
 		Plan:        s.sandboxPlan(spec.ID),
+		OnRecheck:   ref.slot.deliver,
 		SessionsDir: filepath.Join(s.home, "sessions", spec.ID),
 	}
 	c.Briefs = &task.ContextBriefer{Manager: k.cm, Tree: task.NewBaseTree(gitRunner{k.root}, base), Run: spec.Run, Group: spec.ID}
@@ -179,6 +189,7 @@ func (k *repoKit) committer(ref *groupRef, spec engine.GroupSpec) task.Committer
 	cl := *k.cleanup
 	cl.Task = ref
 	h.Cleanup = publishedAdapter{h: &cl, landing: k.landingPath}
+	h.Check = groupChecker{ref: ref, worktree: spec.Lease.Worktree}
 	return landingCommitter{h: &h, k: k, spec: spec}
 }
 
@@ -200,11 +211,6 @@ func (l landingCommitter) Publish(ctx context.Context, a commit.Approval) (commi
 	a.Group = bus.ID(l.spec.ID)
 	a.EpicGroups = l.k.epicGroups(l.spec)
 	return l.h.Publish(ctx, a)
-}
-
-// Recheck passes: the free checks on the landing worktree are not wired to a runner yet.
-func (k *repoKit) Recheck(context.Context, string, string) (commit.CheckResult, error) {
-	return commit.CheckResult{Pass: true}, nil
 }
 
 // commitReporter relays progress facts of the Commit Handler.

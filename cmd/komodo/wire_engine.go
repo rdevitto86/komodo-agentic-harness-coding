@@ -164,7 +164,7 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 	}
 	k.commit = &commit.Handler{
 		Git: s.git, Forge: commit.NewGH(root), Leases: s.leases, Epics: &commit.EpicGates{},
-		Check: k, Report: commitReporter{s}, Cleanup: publishedAdapter{h: k.cleanup, landing: k.landingPath},
+		Check: groupChecker{ref: &groupRef{}}, Report: commitReporter{s}, Cleanup: publishedAdapter{h: k.cleanup, landing: k.landingPath},
 		Config: commit.Settings{LandingRoot: k.landings},
 	}
 	k.intake = intake.New(k.intakeDeps(k.cm))

@@ -1,6 +1,9 @@
 package integration
 
 import (
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +50,62 @@ func TestOneEngineRunsGroupsFromTwoRepositories(t *testing.T) {
 	for _, r := range []*binRig{a, b} {
 		if out := r.git(r.origin, "show", "komodo/ep-1:tiny/add.go"); !strings.Contains(out, "func Add") {
 			t.Fatalf("the epic branch of %s lacks the builder's file: %q", r.repo, out)
+		}
+	}
+}
+
+// Two repositories on one engine each get their own metrics folder, and the machine folder lists both.
+func TestMetricsEachRunWritesItsOwnRepositoryFolder(t *testing.T) {
+	a := newBinRig(t, planFiles())
+	b := newBinRig(t, planFiles())
+	b.home, b.model = a.home, a.model
+	for i, e := range b.env {
+		switch {
+		case strings.HasPrefix(e, "KOMODO_HOME="):
+			b.env[i] = "KOMODO_HOME=" + a.home
+		case strings.HasPrefix(e, "ANTHROPIC_BASE_URL="):
+			b.env[i] = "ANTHROPIC_BASE_URL=" + a.model.srv.URL
+		}
+	}
+	for _, r := range []*binRig{a, b} {
+		if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
+			t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+		}
+	}
+	for end := time.Now().Add(90 * time.Second); ; time.Sleep(300 * time.Millisecond) {
+		n := 0
+		for _, r := range []*binRig{a, b} {
+			if _, err := os.Stat(filepath.Join(r.repo, ".git", "komodo", "metrics", "runs.json")); err == nil {
+				n++
+			}
+		}
+		if n == 2 {
+			break
+		}
+		if time.Now().After(end) {
+			var found []string
+			_ = filepath.WalkDir(a.home, func(p string, d fs.DirEntry, err error) error {
+				if err == nil && strings.Contains(p, "metrics") {
+					found = append(found, p)
+				}
+				return nil
+			})
+			t.Fatalf("a repository metrics folder lacks runs.json; machine metrics files: %v", found)
+		}
+	}
+	for _, f := range []string{"runs.json", "groups.json", "sessions.jsonl"} {
+		if _, err := os.Stat(filepath.Join(a.home, "metrics", f)); err == nil {
+			t.Fatalf("the machine metrics folder holds %s, which belongs in a repository folder", f)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(a.home, "metrics", "repos.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []*binRig{a, b} {
+		resolved, _ := filepath.EvalSymlinks(filepath.Join(r.repo, ".git"))
+		if !strings.Contains(string(raw), filepath.Join(resolved, "komodo", "metrics")) {
+			t.Fatalf("repos.json %s lacks the folder of %s", raw, r.repo)
 		}
 	}
 }
