@@ -105,14 +105,15 @@ func laterOf(a, b time.Time) time.Time {
 // Hooks are the parts of a supervised session that live outside the stream; every field is optional.
 type Hooks struct {
 	Now       func() time.Time
-	Every     time.Duration                                                                // timer period; TickEvery when zero
-	TermAfter time.Duration                                                                // wait from the interrupt to SIGTERM; TermAfter when zero
-	KillAfter time.Duration                                                                // wait from SIGTERM to the whole-tree kill; KillAfter when zero
+	Every     time.Duration                                                               // timer period; TickEvery when zero
+	TermAfter time.Duration                                                               // wait from the interrupt to SIGTERM; TermAfter when zero
+	KillAfter time.Duration                                                               // wait from SIGTERM to the whole-tree kill; KillAfter when zero
 	Extend    func(ctx context.Context, used, limit time.Duration) (time.Duration, error) // asks the Runtime Manager for more wall time
-	Fact      func(subtype string, data map[string]any)                                    // receives the supervisor's facts
-	Raw       func(line []byte)                                                            // receives each raw stream line
-	Tools     func() (running int, last time.Time)                                         // tool calls in flight and the last tool activity
-	Inject    <-chan string                                                                // lines to send to the live session, such as the token-cap nudge
+	Fact      func(subtype string, data map[string]any)                                   // receives the supervisor's facts
+	Raw       func(line []byte)                                                           // receives each raw stream line
+	Tools     func() (running int, last time.Time)                                        // tool calls in flight and the last tool activity
+	Halt      func() Reason                                                               // a reason to stop the session at once, such as the refusal limit; empty to go on
+	Inject    <-chan string                                                               // lines to send to the live session, such as the token-cap nudge
 }
 
 // Supervise reads one stream to its Result, injecting lines and stopping the session as the clocks decide.
@@ -212,6 +213,9 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 				}
 				return finish(st, *n.ev.Result, nil)
 			}
+			if halted(h, st) {
+				climb(h.Halt())
+			}
 		case <-ticker.C:
 			if h.Tools != nil {
 				var last time.Time
@@ -219,6 +223,10 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 				c.LastLine = laterOf(c.LastLine, last)
 			}
 			if st.stop != "" {
+				continue
+			}
+			if halted(h, st) {
+				climb(h.Halt())
 				continue
 			}
 			switch c.Tick(now(), lim) {
@@ -268,6 +276,9 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 		}
 	}
 }
+
+// halted reports whether the hooks ask for a stop the loop has not started yet.
+func halted(h Hooks, st *superviseState) bool { return h.Halt != nil && st.stop == "" && h.Halt() != "" }
 
 // finish turns the end of the stream into the supervisor's answer.
 func finish(st *superviseState, res llm.Result, err error) (llm.Result, Reason, error) {

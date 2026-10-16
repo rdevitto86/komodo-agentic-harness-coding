@@ -80,7 +80,9 @@ type walk struct {
 }
 
 // skip records one passed-over link; To is filled in when a link is chosen.
-func (w *walk) skip(l llm.Link, reason string) { w.skips = append(w.skips, Skip{From: l, Reason: reason}) }
+func (w *walk) skip(l llm.Link, reason string) {
+	w.skips = append(w.skips, Skip{From: l, Reason: reason})
+}
 
 // Select returns the first link in the chain that can serve the session now.
 // Under providers.paid fallback a paid link is tried only after every other link.
