@@ -224,7 +224,7 @@ func TestDisputedTesterResultRestartsTheTesterOnceAndASecondEscalatesFlaky(t *te
 	if err := f.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)
 	}
-	if escs := f.rt.escalations(); len(escs) != 1 || escs[0].Reason != "flaky" {
+	if escs := f.rt.escalations(); len(escs) != 1 || escs[0].Reason != "tester" {
 		t.Fatalf("escalations %+v", escs)
 	}
 	if f.model.started("builder") != 1 {

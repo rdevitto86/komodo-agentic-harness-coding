@@ -446,7 +446,7 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 			m.prog.Disputes = 1
 			m.mu.Unlock()
 			if d >= 1 {
-				out.outcome = Outcome{Kind: OutcomeBlock, Reason: "flaky", Findings: out.outcome.Findings}
+				out.outcome = Outcome{Kind: OutcomeBlock, Reason: agent.BlockTester, Findings: out.outcome.Findings}
 				return branch{out: out}
 			}
 			in.Findings = out.outcome.Findings

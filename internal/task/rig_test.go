@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -503,13 +502,4 @@ func (r *pipeRig) reachCleanupWith(call func(context.Context) error) {
 // nextBrief returns a string field of the nth brief an agent received.
 func (r *pipeRig) slot(name string, n int, key string) string {
 	return r.briefs.slotsOf(name, n)[key]
-}
-
-// mustJSON encodes v.
-func mustJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
 }

@@ -95,7 +95,6 @@ type Manager struct {
 	closeOnce  sync.Once
 	closeErr   error
 	tmp        string
-	disputeOut []string
 	scopeInput string // the scope answer text the builder's next session receives
 	keepHandle *llm.ResumeHandle
 	taskMu     sync.Mutex // one completion command at a time
@@ -539,16 +538,6 @@ func (m *Manager) awaitClose(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ErrStopped
-	}
-}
-
-// isClosed reports whether CloseTaskGroup ran.
-func (m *Manager) isClosed() bool {
-	select {
-	case <-m.closed:
-		return true
-	default:
-		return false
 	}
 }
 
