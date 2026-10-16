@@ -12,6 +12,7 @@ import (
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
@@ -211,7 +212,7 @@ func (m *Manager) finishTask(ctx context.Context, id string) (int, string, error
 		return o.ExitCode, o.Output, nil
 	}
 	if m.c.Commit != nil {
-		_, err := m.c.Commit.Save(ctx, SaveRequest{Run: bus.ID(m.spec.Run), Group: bus.ID(m.spec.Group), Repo: m.c.Meta.Repo, Label: m.spec.Group,
+		_, err := m.c.Commit.Save(ctx, commit.SaveRequest{Run: bus.ID(m.spec.Run), Group: bus.ID(m.spec.Group), Repo: m.c.Meta.Repo, Label: m.spec.Group,
 			Task: id, Worktree: m.spec.Lease.Worktree, Branch: m.spec.Lease.Branch, Fence: lease.Fence(m.spec.Lease.Fence)})
 		if err != nil {
 			return -1, "", fmt.Errorf("save the task %s: %w", id, err)
@@ -541,7 +542,7 @@ func (m *Manager) saveDirty(ctx context.Context) error {
 	if strings.TrimSpace(st) == "" || m.c.Commit == nil || len(m.spec.Tasks) == 0 {
 		return nil
 	}
-	_, err = m.c.Commit.Save(ctx, SaveRequest{Run: bus.ID(m.spec.Run), Group: bus.ID(m.spec.Group), Repo: m.c.Meta.Repo, Label: m.spec.Group,
+	_, err = m.c.Commit.Save(ctx, commit.SaveRequest{Run: bus.ID(m.spec.Run), Group: bus.ID(m.spec.Group), Repo: m.c.Meta.Repo, Label: m.spec.Group,
 		Task: m.spec.Tasks[len(m.spec.Tasks)-1].ID, Worktree: m.spec.Lease.Worktree, Branch: m.spec.Lease.Branch, Fence: lease.Fence(m.spec.Lease.Fence)})
 	if err != nil {
 		return fmt.Errorf("save the builder's last edits: %w", err)
@@ -739,10 +740,10 @@ func (m *Manager) runCommit(ctx context.Context) error {
 	}
 	t, _ := m.verdictOf("tester")
 	r, _ := m.verdictOf("reviewer")
-	a := Approval{Run: bus.ID(m.spec.Run), Group: bus.ID(m.spec.Group), Repo: m.c.Meta.Repo, Epic: m.c.Meta.Epic, Label: m.spec.Group,
+	a := commit.Approval{Run: bus.ID(m.spec.Run), Group: bus.ID(m.spec.Group), Repo: m.c.Meta.Repo, Epic: m.c.Meta.Epic, Label: m.spec.Group,
 		EpicGroups: m.c.Meta.EpicGroups, Goal: m.c.Meta.Goal, Worktree: m.spec.Lease.Worktree, Branch: m.spec.Lease.Branch,
-		Fence: lease.Fence(m.spec.Lease.Fence), Tree: tree, Tester: AgentVerdict{Tree: tree, Summary: t.Summary},
-		Reviewer: AgentVerdict{Tree: tree, Summary: r.Summary}, Facts: PRFacts{TasksClosed: m.Progress().TasksDone}}
+		Fence: lease.Fence(m.spec.Lease.Fence), Tree: tree, Tester: commit.Verdict{Tree: tree, Summary: t.Summary},
+		Reviewer: commit.Verdict{Tree: tree, Summary: r.Summary}, Facts: commit.PRFacts{TasksClosed: m.Progress().TasksDone}}
 	if _, err := m.c.Commit.Publish(ctx, a); err != nil {
 		return block("publish", map[string]string{"error": err.Error()})
 	}
