@@ -1,6 +1,14 @@
 package task
 
-import "time"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
 
 // Channels connect a Task Manager goroutine to the Runtime Manager that started it.
 type Channels struct {
@@ -64,4 +72,278 @@ type Message struct {
 type Ended struct {
 	Result string `json:"result"`          // closed, held, paused, stopped or failed
 	Error  string `json:"error,omitempty"` // the error text when Result is failed
+}
+
+// chanRuntime is the Runtime over the reply channel: each call is a message, and a timer request waits for the grant that names it.
+type chanRuntime struct {
+	ctx   context.Context
+	out   chan<- Message
+	seq   atomic.Int64
+	mu    sync.Mutex
+	waits map[string]chan TimerGrant
+}
+
+// send puts one message on the reply channel and waits while it is full.
+func (c *chanRuntime) send(m Message) error {
+	select {
+	case c.out <- m:
+		return nil
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	}
+}
+
+// Escalate sends the escalation under its own identifier.
+func (c *chanRuntime) Escalate(_ context.Context, e Escalation) error {
+	return c.send(Message{ID: e.ID, Kind: MsgEscalate, Escalation: &e})
+}
+
+// ReportState sends one state report.
+func (c *chanRuntime) ReportState(_ context.Context, s StateReport) error {
+	return c.send(Message{ID: fmt.Sprintf("state-%d", c.seq.Add(1)), Kind: MsgState, State: &s})
+}
+
+// ExtendTimer sends a timer message and blocks until the continue command that names it arrives.
+func (c *chanRuntime) ExtendTimer(ctx context.Context, r TimerRequest) (TimerGrant, error) {
+	id := fmt.Sprintf("tmr-%d", c.seq.Add(1))
+	ch := make(chan TimerGrant, 1)
+	c.mu.Lock()
+	c.waits[id] = ch
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.waits, id)
+		c.mu.Unlock()
+	}()
+	if err := c.send(Message{ID: id, Kind: MsgTimer, Timer: &r}); err != nil {
+		return TimerGrant{}, err
+	}
+	select {
+	case g := <-ch:
+		return g, nil
+	case <-ctx.Done():
+		return TimerGrant{}, ctx.Err()
+	case <-c.ctx.Done():
+		return TimerGrant{}, c.ctx.Err()
+	}
+}
+
+// grant hands a timer grant to the call that waits under the identifier; false when none waits.
+func (c *chanRuntime) grant(re string, g TimerGrant) bool {
+	c.mu.Lock()
+	ch := c.waits[re]
+	c.mu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- g:
+	default:
+	}
+	return true
+}
+
+// runtime returns the Runtime the Manager reports to.
+func (m *Manager) runtime() Runtime {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rt
+}
+
+// serveLoop is the state of one Serve call.
+type serveLoop struct {
+	m     *Manager
+	ctx   context.Context
+	cr    *chanRuntime
+	wg    sync.WaitGroup
+	calls chan error
+	busy  atomic.Bool
+}
+
+// Serve runs the command loop of the Task Manager goroutine until the group is closed or stopped.
+func (m *Manager) Serve(ctx context.Context, ch Channels) error {
+	defer close(ch.Replies)
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	l := &serveLoop{m: m, ctx: sctx, calls: make(chan error, 1),
+		cr: &chanRuntime{ctx: sctx, out: ch.Replies, waits: map[string]chan TimerGrant{}}}
+	m.mu.Lock()
+	if m.rt == nil {
+		m.rt = l.cr
+	}
+	m.mu.Unlock()
+	defer func() {
+		// Queued facts reach the Runtime Manager before the reply channel closes.
+		l.wg.Wait()
+		if m.hasFacts() {
+			_ = m.report(context.WithoutCancel(sctx))
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			m.stopCancel(ErrStopped)
+			return ctx.Err()
+		case err := <-l.calls:
+			if l.ended(err) {
+				return nil
+			}
+		case cmd, ok := <-ch.Commands:
+			if !ok {
+				m.stopCancel(ErrStopped)
+				return nil
+			}
+			if l.dispatch(cmd) {
+				return nil
+			}
+		}
+	}
+}
+
+// hasFacts reports whether facts wait for the next report.
+func (m *Manager) hasFacts() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.facts) > 0
+}
+
+// ended sends the end of a call; it returns true when the group is done with the loop.
+func (l *serveLoop) ended(err error) bool {
+	l.busy.Store(false)
+	e := l.m.endedMessage(err)
+	_ = l.cr.send(Message{ID: l.m.nextID("end"), Kind: MsgEnded, Ended: &e})
+	return e.Result == "closed" || e.Result == "stopped" || e.Result == "failed"
+}
+
+// start runs one pipeline call on its own goroutine, so the loop keeps reading commands.
+func (l *serveLoop) start(f func(context.Context) error) {
+	l.busy.Store(true)
+	l.wg.Add(1)
+	go func() {
+		defer guardian.Recover(taskSource, nil)
+		defer l.wg.Done()
+		l.calls <- f(l.ctx)
+	}()
+}
+
+// dispatch acts on one command; it returns true when the loop ends.
+func (l *serveLoop) dispatch(cmd Command) bool {
+	m := l.m
+	drop := func(why string) {
+		m.fact("command.dropped", map[string]string{"kind": string(cmd.Kind), "re": cmd.Re, "why": why})
+	}
+	switch cmd.Kind {
+	case CmdStart:
+		if l.busy.Load() {
+			drop("a call is running")
+			return false
+		}
+		l.start(m.Run)
+	case CmdPause:
+		if err := m.Pause(l.ctx, cmd.Link, cmd.Until); err != nil {
+			drop(err.Error())
+		}
+	case CmdStop:
+		_ = m.Stop(l.ctx, cmd.Cause)
+		if l.busy.Load() {
+			l.ended(<-l.calls)
+			return true
+		}
+		e := Ended{Result: "stopped"}
+		_ = l.cr.send(Message{ID: m.nextID("end"), Kind: MsgEnded, Ended: &e})
+		return true
+	case CmdNudge:
+		m.Nudge()
+	case CmdRecheck:
+		l.wg.Add(1)
+		go func() {
+			defer guardian.Recover(taskSource, nil)
+			defer l.wg.Done()
+			m.Recheck(l.ctx)
+		}()
+	case CmdContinue:
+		l.deliver(cmd, drop)
+	default:
+		drop("unknown command")
+	}
+	return false
+}
+
+// deliver routes a continue command by what it carries: a timer grant, an answer or a wake-up.
+func (l *serveLoop) deliver(cmd Command, drop func(string)) {
+	m := l.m
+	switch {
+	case cmd.Grant != nil:
+		if !l.cr.grant(cmd.Re, *cmd.Grant) {
+			drop("no timer request waits")
+		}
+	case cmd.Answer != nil:
+		a := *cmd.Answer
+		if l.busy.Load() || !m.holds(a.Escalation) {
+			drop(ErrNoEscalation.Error())
+			return
+		}
+		l.start(func(c context.Context) error { return m.Continue(c, a) })
+	case cmd.Wake != nil:
+		w := *cmd.Wake
+		if l.busy.Load() || !m.isPaused() {
+			drop(ErrNotPaused.Error())
+			return
+		}
+		l.start(func(c context.Context) error { return m.Resume(c, w) })
+	default:
+		drop("a continue with nothing to deliver")
+	}
+}
+
+// holds reports whether the escalation with this identifier is the open one.
+func (m *Manager) holds(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.open != nil && m.open.ID == id
+}
+
+// isPaused reports whether the group waits on a pause.
+func (m *Manager) isPaused() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.prog.Pause != nil
+}
+
+// endedMessage maps how a call ended to the result the Runtime Manager reads.
+func (m *Manager) endedMessage(err error) Ended {
+	var fe *failedErr
+	switch {
+	case errors.Is(err, ErrStopped), err == nil && m.isStopped():
+		return Ended{Result: "stopped"}
+	case err == nil:
+		return Ended{Result: "closed"}
+	case errors.Is(err, ErrHeld):
+		return Ended{Result: "held"}
+	case errors.Is(err, ErrGroupPaused):
+		return Ended{Result: "paused"}
+	case errors.As(err, &fe):
+		return Ended{Result: "failed", Error: fe.Error()}
+	}
+	return Ended{Result: "failed", Error: err.Error()}
+}
+
+// Recheck runs the mechanical checks in the group's tester sandbox and hands the verdict to OnRecheck.
+func (m *Manager) Recheck(ctx context.Context) {
+	if m.c.OnRecheck == nil {
+		return
+	}
+	if _, err := m.instance(ctx, "tester"); err != nil {
+		m.c.OnRecheck(false, err.Error())
+		return
+	}
+	fails, err := m.runChecks(ctx)
+	switch {
+	case err != nil:
+		m.c.OnRecheck(false, err.Error())
+	case len(fails) > 0:
+		m.c.OnRecheck(false, strings.Join(fails, "\n"))
+	default:
+		m.c.OnRecheck(true, "")
+	}
 }

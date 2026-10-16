@@ -617,6 +617,12 @@ func (m *Manager) runIn(ctx context.Context, id string, argv []string, logDir st
 	return res.Reply.Text, res.Exit, nil
 }
 
+// Runner returns the command runner bound to the sandbox instance of a role, for the role adapters built before the Manager.
+func (m *Manager) Runner(role string) agent.CommandRunner { return m.runner(role) }
+
+// Files returns the group's file list including what scope answers added.
+func (m *Manager) Files() []string { return m.effectiveFiles() }
+
 // runner returns the command runner bound to the instance of a role; a class name stands for its command.
 func (m *Manager) runner(role string) agent.CommandRunner {
 	return func(ctx context.Context, command string) (int, string, error) {

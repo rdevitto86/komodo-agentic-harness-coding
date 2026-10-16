@@ -87,7 +87,6 @@ func (m *Manager) runBuild(ctx context.Context) error {
 		if m.Progress().Returns > 0 && m.c.Git != nil {
 			in.Diff, _ = m.c.Git.Diff(ctx, m.spec.Lease, nil)
 		}
-		first := m.Progress().Attempts
 		task := ""
 		if p := m.pendingTasks(); len(p) > 0 {
 			task = p[0].ID
@@ -97,7 +96,6 @@ func (m *Manager) runBuild(ctx context.Context) error {
 			return err
 		}
 		resume, input = nil, ""
-		_ = first
 		switch out.reason {
 		case state.ReasonDone:
 			switch out.outcome.Kind {
@@ -629,6 +627,9 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 		var be *blockErr
 		switch {
 		case err == nil:
+		case errors.Is(err, ErrStopped):
+			// A tester that never started because the reviewer returned first.
+			res[name].err, res[name].out.reason = nil, state.ReasonCancelled
 		case errors.Is(err, ErrGroupPaused):
 			paused = err
 		case errors.As(err, &be) && blocked == nil:
