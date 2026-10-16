@@ -27,7 +27,7 @@ type DoctorData struct {
 // Check is the result of one doctor check.
 type Check struct {
 	Name   string `json:"name"`   // install, sandbox, docker, links, block, home or rules
-	Result string `json:"result"` // pass or fail
+	Result string `json:"result"` // pass, fail, or skip when the check cannot run in this build
 	Detail string `json:"detail"` // what was found
 	Fix    string `json:"fix"`    // the command or change that resolves a failure; empty on pass
 }
@@ -64,7 +64,7 @@ func handleDoctor(c *Call) Result {
 	out := OutcomeOK
 	for _, ck := range checks {
 		rows.Rows = append(rows.Rows, []string{ck.Name, ck.Result, ck.Fix})
-		if ck.Result != "pass" {
+		if ck.Result == "fail" {
 			out = OutcomeHeld
 		}
 	}
@@ -172,7 +172,7 @@ func checkDocker(_ context.Context, h Host) Check {
 // checkLinks probes the model links, records the probe, and passes when a required link works and a configured local link works.
 func (in *installer) checkLinks(ctx context.Context) Check {
 	if in.host.Links == nil {
-		return fail("links", "this build has no model client to probe", "reinstall komodo")
+		return Check{Name: "links", Result: "skip", Detail: "the model client is not wired in this build, so the links were not probed"}
 	}
 	_, results, err := probeLinks(ctx, in.host, in.machine)
 	var parts []string

@@ -61,6 +61,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	h := &harness{t: t, home: home, engine: deadEngine{}, cfg: cfg, userHome: userHome, exe: exe, workdir: t.TempDir()}
+	mustBeOutsideRepo(t, h.workdir)
 	h.host = Host{
 		Executable: func() (string, error) { return exe, nil },
 		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
@@ -153,6 +154,7 @@ func okReply(v any) engine.Reply {
 func repoDir(t *testing.T, pin string) string {
 	t.Helper()
 	d := t.TempDir()
+	mustBeOutsideRepo(t, filepath.Dir(d))
 	if err := os.MkdirAll(filepath.Join(d, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -208,3 +210,14 @@ type fakeLinks []llm.ProbeResult
 
 // ProbeAll returns the fixed results.
 func (f fakeLinks) ProbeAll(context.Context) []llm.ProbeResult { return f }
+
+// mustBeOutsideRepo fails the test when dir sits inside a git repository, so a command cannot write a real repository's files.
+func mustBeOutsideRepo(t interface {
+	Helper()
+	Fatalf(string, ...any)
+}, dir string) {
+	t.Helper()
+	if root, ok := findRepoRoot(dir); ok {
+		t.Fatalf("the temporary folder %s sits inside the repository %s: set TMPDIR to a folder outside every checkout", dir, root)
+	}
+}

@@ -20,10 +20,11 @@ const lockStaleAfter = 10 * time.Minute
 
 // UpdateData is the data of reply.update.
 type UpdateData struct {
-	From      string `json:"from"`                 // the version that was running
-	To        string `json:"to"`                   // the release found
-	Action    string `json:"action"`               // swapped, current or checked
-	RunsMoved int    `json:"runs_moved,omitempty"` // with --restart-runs: live runs moved onto the new binary
+	From      string   `json:"from"`                 // the version that was running
+	To        string   `json:"to"`                   // the release found
+	Action    string   `json:"action"`               // swapped, current or checked
+	RunsMoved int      `json:"runs_moved,omitempty"` // with --restart-runs: live runs moved onto the new binary
+	Notes     []string `json:"notes,omitempty"`      // things the update left undone and why
 }
 
 // updater holds what one update run needs.
@@ -108,7 +109,7 @@ func (u *updater) run(ctx context.Context) Result {
 		return updateFail(err, "run komodo update again")
 	}
 	u.recordSwap(man, previous, dir)
-	u.cleanup(man.Version, previous)
+	data.Notes = u.cleanup(man.Version, previous)
 	data.Action = "swapped"
 	if u.restart {
 		n, err := u.host.Runs.MoveRuns(ctx, filepath.Join(u.home, "bin", "komodo"))
@@ -155,36 +156,18 @@ func (u *updater) record(version string) error {
 	return nil
 }
 
-// lockStale reports whether a lock last touched at modified is old enough to take over.
-func lockStale(modified, now time.Time) bool { return now.Sub(modified) > lockStaleAfter }
-
-// claim creates update.lock exclusively; a lock younger than ten minutes means another update is running.
+// claim takes update.lock; a lock held by another update is a refusal.
 func (u *updater) claim() (func(), *Result) {
-	path := filepath.Join(u.home, "state", "update.lock")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		r := internalErr("create the state folder: " + err.Error())
+	release, err := claimLock(u.home, u.host.now)
+	switch {
+	case errors.Is(err, errLockHeld):
+		r := refuse(format.Locked, err.Error(), "wait for it to finish, then retry")
+		return nil, &r
+	case err != nil:
+		r := internalErr(err.Error())
 		return nil, &r
 	}
-	for attempt := 0; attempt < 2; attempt++ {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
-			_ = f.Close()
-			return func() { _ = os.Remove(path) }, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			r := internalErr("claim update.lock: " + err.Error())
-			return nil, &r
-		}
-		fi, serr := os.Stat(path)
-		if serr == nil && !lockStale(fi.ModTime(), u.host.now()) {
-			r := refuse(format.Locked, "another komodo update is running", "wait for it to finish, then retry")
-			return nil, &r
-		}
-		_ = os.Remove(path)
-	}
-	r := refuse(format.Locked, "another komodo update holds update.lock", "wait for it to finish, then retry")
-	return nil, &r
+	return release, nil
 }
 
 // download fetches the asset to komodo.part, checks its SHA-256 and renames it into place.
@@ -290,21 +273,22 @@ func (u *updater) recordSwap(man ReleaseManifest, previous, dir string) {
 }
 
 // cleanup deletes version folders that are not the current, the previous or one an unfinished task group names.
-func (u *updater) cleanup(current, previous string) {
+// It returns a note when it kept every old version because it cannot tell which ones unfinished groups need.
+func (u *updater) cleanup(current, previous string) []string {
 	keep := map[string]bool{current: true, previous: true}
-	if u.host.InUse != nil {
-		used, err := u.host.InUse()
-		if err != nil {
-			u.warn("Warning: old versions were kept: read the versions in use: %v\n", err)
-			return
-		}
-		for _, v := range used {
-			keep[v] = true
-		}
+	if u.host.InUse == nil {
+		return u.kept("no record of the versions in use is wired")
+	}
+	used, err := u.host.InUse()
+	if err != nil {
+		return u.kept("reading the versions in use failed: " + err.Error())
+	}
+	for _, v := range used {
+		keep[v] = true
 	}
 	ents, err := os.ReadDir(filepath.Join(u.home, "versions"))
 	if err != nil {
-		return
+		return nil
 	}
 	for _, e := range ents {
 		if e.IsDir() && !keep[e.Name()] {
@@ -313,4 +297,12 @@ func (u *updater) cleanup(current, previous string) {
 			}
 		}
 	}
+	return nil
+}
+
+// kept warns that old versions were kept and returns the note for the reply.
+func (u *updater) kept(why string) []string {
+	note := "old versions were kept: " + why
+	u.warn("Warning: %s\n", note)
+	return []string{note}
 }

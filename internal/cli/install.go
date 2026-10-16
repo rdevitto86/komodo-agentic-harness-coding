@@ -100,8 +100,10 @@ type planRow struct {
 	it     item
 	action string // write, keep or prune
 	reason string
-	edited bool   // kept because the owned content was changed by hand
-	rec    *Entry // the recorded entry, nil when none
+	edited bool // kept because the owned content was changed by hand
+	// foreign marks content of a shared file that was already there, which stays the person's and is never recorded.
+	foreign bool
+	rec     *Entry // the recorded entry, nil when none
 }
 
 // installer holds what one install run needs.
@@ -218,6 +220,9 @@ func (in *installer) run() Result {
 	}
 	data.Changes = in.changes(rows, mchanged, rchanged)
 	if !in.dry && in.doMachine && !in.remove {
+		if in.host.Links == nil {
+			data.Skipped = append(data.Skipped, "step 3, provider probe: no model client is wired in this build")
+		}
 		data.Probe = in.probe(context.Background())
 	}
 	for _, f := range data.Edited {
@@ -319,6 +324,7 @@ func planInstall(wanted []item, recorded []Entry, disk func(machine bool, e Entr
 		switch {
 		case rec == nil && d.exists && d.hash == w.Hash:
 			row.action, row.reason = "keep", "already current"
+			row.foreign = w.Step == stepClaude || w.Step == stepSettings
 		case rec == nil && d.exists:
 			row.action, row.reason = "write", "not yet owned"
 		case rec == nil:
@@ -363,6 +369,16 @@ func planInstall(wanted []item, recorded []Entry, disk func(machine bool, e Entr
 
 // apply takes the write and prune actions in step order and stops at the first failure.
 func (in *installer) apply(rows []planRow) error {
+	if touchesBinary(rows) {
+		release, err := claimLock(in.home, in.host.now)
+		if errors.Is(err, errLockHeld) {
+			return errors.New("another komodo update is running: wait for it to finish, then run komodo install again")
+		}
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	for i := range rows {
 		r := &rows[i]
 		var err error
@@ -385,15 +401,14 @@ func (in *installer) apply(rows []planRow) error {
 // writeManifests records the applied entries in the repository manifest and the machine-wide record.
 func (in *installer) writeManifests(mrows, rrows []planRow) (machineChanged, repoChanged bool, err error) {
 	if in.doMachine {
-		body := state.InstallBody{Entries: []state.InstallEntry{}, Selections: state.InstallSelections{Hosts: in.sel.Hosts, Project: in.sel.Project}}
-		for _, e := range recordedAfter(mrows) {
-			body.Entries = append(body.Entries, state.InstallEntry(e))
-		}
-		machineChanged = !in.manifestSame(body)
-		if machineChanged && !in.dry {
-			if _, err = updateMachine(in.machine, state.KindInstall, func(b *state.InstallBody) bool { *b = body; return true }); err != nil {
-				return false, false, fmt.Errorf("write install.json: %w", err)
-			}
+		keys, after := rowKeys(mrows), recordedAfter(mrows)
+		if in.dry {
+			cur := state.InstallBody{Entries: toInstallEntries(in.machineRec), Selections: state.InstallSelections{Hosts: in.machineSel.Hosts, Project: in.machineSel.Project}}
+			machineChanged = in.machineRev == 0 && len(after) > 0 || mergeInstallBody(&cur, keys, after, in.sel)
+		} else if machineChanged, err = updateMachine(in.machine, state.KindInstall, func(b *state.InstallBody) bool {
+			return mergeInstallBody(b, keys, after, in.sel)
+		}); err != nil {
+			return false, false, fmt.Errorf("write install.json: %w", err)
 		}
 	}
 	if in.doRepo {
@@ -421,17 +436,54 @@ func sameSelections(a, b Selections) bool {
 	return a.Project == b.Project && slices.Equal(a.Hosts, b.Hosts)
 }
 
-// manifestSame reports whether the recorded machine-wide body already equals body.
-func (in *installer) manifestSame(body state.InstallBody) bool {
-	if in.machineRev == 0 {
-		return false
+// toInstallEntries converts manifest entries to the State Manager's form.
+func toInstallEntries(es []Entry) []state.InstallEntry {
+	out := make([]state.InstallEntry, 0, len(es))
+	for _, e := range es {
+		out = append(out, state.InstallEntry(e))
 	}
-	old := make([]state.InstallEntry, 0, len(in.machineRec))
-	for _, e := range in.machineRec {
-		old = append(old, state.InstallEntry(e))
+	return out
+}
+
+// rowKeys names every target the rows decided, so a merge replaces exactly those records.
+func rowKeys(rows []planRow) map[string]bool {
+	keys := map[string]bool{}
+	for _, r := range rows {
+		keys[r.it.Target+"\x00"+r.it.Entry.Entry] = true
 	}
-	return reflect.DeepEqual(old, body.Entries) &&
-		sameSelections(in.machineSel, Selections{Hosts: body.Selections.Hosts, Project: body.Selections.Project})
+	return keys
+}
+
+// touchesBinary reports whether any row writes or prunes the binary, which needs update.lock.
+func touchesBinary(rows []planRow) bool {
+	for _, r := range rows {
+		if r.it.Step == stepBinary && (r.action == "write" || r.action == "prune") {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeInstallBody puts this run's entries into a freshly read record: entries for the decided targets are replaced, the rest stay.
+// It reports whether the body changed.
+func mergeInstallBody(b *state.InstallBody, keys map[string]bool, after []Entry, sel Selections) bool {
+	old, oldSel := slices.Clone(b.Entries), b.Selections
+	next := []state.InstallEntry{}
+	for _, e := range b.Entries {
+		if !keys[e.Target+"\x00"+e.Entry] {
+			next = append(next, e)
+		}
+	}
+	next = append(next, toInstallEntries(after)...)
+	slices.SortStableFunc(next, func(a, c state.InstallEntry) int {
+		if a.Step != c.Step {
+			return a.Step - c.Step
+		}
+		return strings.Compare(a.Target+a.Entry, c.Target+c.Entry)
+	})
+	b.Entries = next
+	b.Selections = state.InstallSelections{Hosts: sel.Hosts, Project: sel.Project}
+	return !slices.Equal(old, next) || !sameSelections(Selections{Hosts: oldSel.Hosts, Project: oldSel.Project}, sel)
 }
 
 // recordedAfter returns the entries the manifest holds once the rows are applied, sorted by step.
@@ -440,7 +492,7 @@ func recordedAfter(rows []planRow) []Entry {
 	for _, r := range rows {
 		switch {
 		case r.action == "prune":
-		case r.action == "failed" && r.rec == nil:
+		case r.action == "failed" && r.rec == nil, r.foreign:
 		case r.action == "failed" || (r.action == "keep" && r.rec != nil):
 			out = append(out, *r.rec)
 		default:

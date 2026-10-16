@@ -25,7 +25,7 @@ const defaultReleases = "https://github.com/rdevitto86/komodo-agentic-harness-co
 const manifestTimeout = time.Second
 
 // downloadTimeout is the longest a binary download may take.
-const downloadTimeout = 10 * time.Minute
+const downloadTimeout = 5 * time.Minute
 
 // maxBinary caps the size of a downloaded binary.
 const maxBinary = 512 << 20

@@ -985,7 +985,7 @@ Anyone runs `doctor`, including the orchestrator. It prints each check's result 
 - **Home folder:** the Komodo home folder is on a local file system and honours file locks; a network file system or a lock that lets two holders in fails the check ([G-280](#g-280) holds the open question of refusing such a folder).
 - **Review rules:** each review rule whose findings Go verified under 50% of the time, with at least one finding submitted, fails the check ([G-268](#g-268) holds the open question of whether `doctor` reports them).
 
-The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
+The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check is skipped, with the detail "not wired", when this build has no model client. It passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
 
 ```go
 // internal/cli/doctor.go
@@ -998,7 +998,7 @@ type DoctorData struct {
 // Check is the result of one doctor check.
 type Check struct {
 	Name   string `json:"name"`   // install, sandbox, docker, links, block, home or rules
-	Result string `json:"result"` // pass or fail
+	Result string `json:"result"` // pass, fail, or skip when the check cannot run in this build; only fail makes the exit code 3
 	Detail string `json:"detail"` // what was found
 	Fix    string `json:"fix"`    // the command or change that resolves a failure; empty on pass
 }
@@ -1150,6 +1150,9 @@ flowchart TD
 | 7 | Manifest | `<git-common-dir>/komodo/install.json` | Inside a git repository |
 
 - **Step 1, binary source.** `--from <file>` uses that file with no network; its version is what it prints for `--version`. Otherwise the running binary is copied. `install` makes no network call (invariant 12), so a newer release arrives through `update`, and an install from an older binary leaves `bin/` on the older version.
+- **Shared files.** Content of `CLAUDE.md` or `.claude/settings.json` that is already there and equal to what step 5 or 6 would write stays the person's: install does not record it, and `--remove` never deletes it.
+- **Step 6, the guard.** The hook entry is the guard command, not a whole group. When a `PreToolUse` group already runs `komodo internal guard`, install sets only that command inside the group and keeps the group's matcher and other hooks; otherwise it adds a group with the matcher `Bash|Edit|Write`. `--remove` deletes only the guard command, and its group only when no other hook is left. A rewrite keeps the file's key order and every value as written, with no escaping of `&`, `<` or `>`, and indents with 2 spaces.
+- **Step 1, the lock.** The binary step takes `update.lock` like `update`, so an install and an update never write `bin/komodo` together; a held lock stops the install with a message.
 - **Step 2, kept entry.** A path entry install recorded stays wanted on a rerun even though `komodo` is now on `PATH`, so a rerun never prunes its own symlink or shell line; `--no-path` leaves a recorded entry as it is.
 - **Step 4.** With no `AGENTS.md`, the full template is written. With one, only the block is written or replaced; text outside the markers is never touched. A begin marker without an end marker, or two of either, stops the step and names the lines to fix by hand.
 - **Step 6.** A hook that fails prints an error; `onFailure: block` makes the guard fail closed.
@@ -1177,11 +1180,11 @@ sequenceDiagram
 
 1. **Check.** Fetch `latest.json` and its signature with a 1 second timeout, and verify the signature against the compiled-in keys before the manifest is trusted. Only `update` fetches the release manifest. A failed fetch prints the error and its fix. With `--to <version>` the manifest comes from that version's release folder (`<releases>/download/v<version>/`), and its `version` must equal the one asked for; the newest release is `<releases>/latest/download/`.
 2. **Record.** Replace `update.json` with the newest version seen. With `--check` or `--dry-run`, stop here; a dry run records nothing.
-3. **Claim.** Create `update.lock` exclusively. If it exists and is younger than 10 minutes, another `update` is running and this one exits. An older lock is stale, so a crashed update cannot block updates.
+3. **Claim.** Create `update.lock` exclusively, with a token in it. If it exists and is younger than 10 minutes, another `update` is running and this one exits. An older lock is stale, so a crashed update cannot block updates; one claimer at a time takes a stale lock over, and release deletes the lock only while it still holds the claimer's token. The download limit is 5 minutes, under the 10-minute age.
 4. **Download.** Fetch the asset for this operating system and architecture to `versions/<v>/komodo.part`.
 5. **Verify.** Compare the download's SHA-256 with the asset's `sha256`; the signature was verified at step 1. On a mismatch delete the `.part` file, keep the old binary and print the error.
 6. **Swap.** Rename `komodo.part` to `versions/<v>/komodo`, then replace `bin/komodo` atomically.
-7. **Clean up.** Delete version folders that are not removable roles: keep the current version, the previous version, and every version named by an unfinished task group in the State Manager. Delete the rest. The previous version is the folder `install.json` records for `bin/komodo`, else the running version; the swap also rewrites the `bin/komodo` hash and the version entry in `install.json`. The compiled-in keys are set by the release build with `-ldflags -X` on `releaseKeyCurrent` and `releaseKeyNext` (base64).
+7. **Clean up.** Delete version folders that are not removable roles: keep the current version, the previous version, and every version named by an unfinished task group in the State Manager. Delete the rest. When the Host supplies no list of versions in use, cleanup deletes nothing and the reply says so in `notes`. The previous version is the folder `install.json` records for `bin/komodo`, else the running version; the swap also rewrites the `bin/komodo` hash and the version entry in `install.json`. The compiled-in keys are set by the release build with `-ldflags -X` on `releaseKeyCurrent` and `releaseKeyNext` (base64).
 
 A signature verifies when it matches a key of the set; either key may sign. A rotation release is signed with the `next` key and compiles `next` into the current slot, so installed binaries accept it with no flag day. Moving the private key into a key management service, and refusing a manifest older than the last one accepted, wait for the first machine the owner does not own that runs `update` ([G-21](#g-21)). Producing and signing a release is done by this repository's Makefile, outside the product.
 
