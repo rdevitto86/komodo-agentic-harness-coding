@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -37,6 +38,11 @@ func goldenReplies(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
 	}
 }
 
+var (
+	uiAddrLine = regexp.MustCompile(`^Dashboard at http://127\.0\.0\.1:[0-9]+ \(Ctrl-C to stop\)\n$`)
+	uiPort     = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
+)
+
 func TestGoldenEnvelopes(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -67,7 +73,17 @@ func TestGoldenEnvelopes(t *testing.T) {
 			h.host.Release = newRelease(t, "1.0.1", "golden").config()
 			repo := repoDir(t, "")
 			backlog(t, repo, map[string]string{"epic-1/tg-1.2": "todo"})
+			if c.name == "ui" {
+				withUIHooks(t, func(string) {})
+			}
 			code, out, errOut := h.run(append([]string{"--json", "-C", repo}, c.args...)...)
+			if c.name == "ui" {
+				// The dashboard prints its free port on stderr and in the reply; the port differs on every run.
+				if !uiAddrLine.MatchString(errOut) {
+					t.Fatalf("stderr = %q", errOut)
+				}
+				errOut, out = "", uiPort.ReplaceAllString(out, "127.0.0.1:<port>")
+			}
 			if errOut != "" {
 				t.Fatalf("stderr = %q", errOut)
 			}
