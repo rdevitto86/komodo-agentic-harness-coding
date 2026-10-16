@@ -471,7 +471,9 @@ func (m *Manager) Stop(ctx context.Context, cause string) error {
 	m.stopCancel(ErrStopped)
 	m.fact("group.stop", map[string]string{"cause": cause})
 	if cause == string(state.ReasonPauseTimeout) && !running {
-		return m.escalate(ctx, &blockErr{kind: EscBlocked, reason: cause})
+		if err := m.escalate(ctx, &blockErr{kind: EscBlocked, reason: cause}); err != nil && !errors.Is(err, ErrHeld) {
+			return err
+		}
 	}
 	return nil
 }

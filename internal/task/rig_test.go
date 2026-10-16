@@ -362,6 +362,7 @@ type rigOpts struct {
 	saved  *Progress
 	items  []agent.Item
 	mut    func(*GroupSpec, *Collaborators)
+	starts map[llm.Link]func(llm.Session) (llm.Stream, error) // replaces the scripted model on a link
 }
 
 // newPipeRig builds a one-task group whose completion command is `true`.
@@ -395,6 +396,9 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 	for _, l := range append([]string{string(llm.AnthropicAPI)}, chain...) {
 		p := subLink(llm.Link(l))
 		p.start = mdl.start
+		if f := o.starts[llm.Link(l)]; f != nil {
+			p.start = f
+		}
 		p.resume = func(s llm.Session, in llm.Input) (llm.Stream, error) {
 			if mdl.resume == nil {
 				return nil, llm.ErrUnavailable
@@ -466,13 +470,19 @@ func (r *pipeRig) within(f func() error) error {
 // reachCleanup runs the group until it waits in cleanup, then closes it.
 func (r *pipeRig) reachCleanup() {
 	r.t.Helper()
+	r.reachCleanupWith(r.m.Run)
+}
+
+// reachCleanupWith runs the call until the group waits in cleanup, then closes it.
+func (r *pipeRig) reachCleanupWith(call func(context.Context) error) {
+	r.t.Helper()
 	done := make(chan error, 1)
-	go func() { done <- r.m.Run(context.Background()) }()
+	go func() { done <- call(context.Background()) }()
 	deadline := time.After(10 * time.Second)
 	for r.m.Progress().Stage != state.StageCleanup {
 		select {
 		case err := <-done:
-			r.t.Fatalf("Run ended before cleanup: %v (stages %v)", err, r.rt.stagesSeen())
+			r.t.Fatalf("the call ended before cleanup: %v (stages %v)", err, r.rt.stagesSeen())
 		case <-deadline:
 			r.t.Fatalf("the group never reached cleanup (stages %v)", r.rt.stagesSeen())
 		case <-time.After(5 * time.Millisecond):
