@@ -229,6 +229,7 @@ type GroupSpec struct {
 	// The Runtime Manager fills these before it starts the group's Task Manager.
 	Run        string      `json:"-"` // the run that holds the group
 	Repo       string      `json:"-"` // the repository id
+	Root       string      `json:"-"` // the repository root on this machine
 	Lease      lease.Lease `json:"-"` // branch, worktree and fence
 	Limits     Limits      `json:"-"` // the bounds copied at run start
 	Saved      *State      `json:"-"` // the group's saved state when it continues; nil for a new group

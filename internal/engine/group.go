@@ -365,7 +365,7 @@ func (g *group) do(o Order) {
 		return
 	case OrderDiscard:
 		if g.m.d.Cleaner != nil {
-			if err := g.m.d.Cleaner.Discard(g.ctx, g.r.start.Repo, g.spec.ID); err != nil {
+			if err := g.m.d.Cleaner.Discard(context.WithoutCancel(g.ctx), g.r.start.Repo, g.r.start.Root, g.spec.ID); err != nil {
 				g.m.report(g, fmt.Errorf("discard %s: %w", g.spec.Label, err))
 			}
 		}
@@ -373,10 +373,13 @@ func (g *group) do(o Order) {
 	case OrderGrantLease:
 		return
 	case OrderCancel:
-		if !g.tmUp() {
+		if !g.tmUp() || g.holdsScopeRequest(o) {
 			return
 		}
 	case OrderStartGroup, OrderEnterStage:
+		if o.Kind == OrderEnterStage && o.Stage == StageCleanup && !g.tmUp() {
+			return // the Cleanup Handler already closed the group and its Task Manager ended
+		}
 		if o.Kind == OrderEnterStage && o.Stage == StageCommit {
 			g.attachLanding(&o)
 		}
@@ -390,6 +393,7 @@ func (g *group) do(o Order) {
 		if o.Re == "" {
 			o.Re = g.pendingEsc
 		}
+		g.pendingEsc = ""
 		g.mu.Unlock()
 	}
 	cmd, ok := commandFor(o, g.st)
@@ -398,6 +402,16 @@ func (g *group) do(o Order) {
 	}
 	cmd.Wake = wakeAt(cmd.Wake, g.now())
 	g.send(cmd)
+}
+
+// holdsScopeRequest reports whether a block's cancel meets a Task Manager that holds the group's open scope request; it stays up for the answer.
+func (g *group) holdsScopeRequest(o Order) bool {
+	if decode[map[string]string](o.Data)["cause"] != "block" {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.pendingEsc != ""
 }
 
 // wakeAt stamps a wake command with the engine clock's time.
@@ -448,7 +462,7 @@ func (g *group) ensureTM() error {
 		return nil
 	}
 	spec := g.spec
-	spec.Run, spec.Repo, spec.Lease, spec.Limits = g.r.id, g.r.start.Repo, g.l, g.r.limits
+	spec.Run, spec.Repo, spec.Root, spec.Lease, spec.Limits = g.r.id, g.r.start.Repo, g.r.start.Root, g.l, g.r.limits
 	spec.OtherFiles = g.r.otherFiles(g.spec.ID)
 	if g.created && g.st.Stage != StageIntake {
 		s := cloneState(g.st)
@@ -515,7 +529,7 @@ func (g *group) drainTM() {
 
 // releaseLease releases the group's lease and tells the Resource Manager the group ended.
 func (g *group) releaseLease() {
-	if err := g.m.d.Leases.Release(g.ctx, g.l); err != nil {
+	if err := g.m.d.Leases.Release(context.WithoutCancel(g.ctx), g.l); err != nil {
 		g.m.report(g, fmt.Errorf("release the lease of %s: %w", g.spec.Label, err))
 	}
 	if g.m.d.Resource != nil {

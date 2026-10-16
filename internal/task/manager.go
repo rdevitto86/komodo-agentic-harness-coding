@@ -220,8 +220,22 @@ func (m *Manager) report(ctx context.Context) error {
 // setStage moves the group to a stage and reports it.
 func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
 	m.mu.Lock()
+	prev := m.prog.Stage
 	m.prog.Stage = st
+	findings := slices.Clone(m.pending)
+	tree := m.prog.TreeAtReturn
 	m.mu.Unlock()
+	switch {
+	case prev == st:
+	case prev == state.StageTestReview && st == state.StageBuild:
+		m.fact("result.fail", map[string]any{"items": findings, "tree": tree, "findings": strings.Join(findings, "\n")})
+	default:
+		// The Cleanup Handler closes the group inside the publish, which sets the stage to done before cleanup is entered.
+		if prev == state.StageDone && st == state.StageCleanup {
+			prev = state.StageCommit
+		}
+		m.fact("stage.done", map[string]any{"stage": prev})
+	}
 	return m.report(ctx)
 }
 
@@ -357,6 +371,9 @@ func (m *Manager) begin(ctx context.Context) error {
 		if err := pr.RecordPointer(m.spec.Lease); err != nil {
 			return block("contract", map[string]string{"error": err.Error()})
 		}
+	}
+	if m.spec.Saved == nil {
+		m.fact("ready", nil)
 	}
 	// A group continued from a commit stage runs test and review again before the commit.
 	if m.Progress().Stage == state.StageCommit {
@@ -640,7 +657,7 @@ func (m *Manager) runner(role string) agent.CommandRunner {
 		}
 		argv, ok := m.c.Commands[command]
 		if !ok {
-			argv = strings.Fields(command)
+			argv = []string{"sh", "-c", command}
 		}
 		if len(argv) == 0 {
 			return -1, "", errors.New("the command is empty")

@@ -18,7 +18,14 @@ type PlanRequest struct {
 	Goal string   `json:"goal"` // the one-line goal; may be empty when Docs is set
 	Docs []string `json:"docs"` // source documents to plan from, as repository paths
 	Epic int      `json:"epic"` // an existing epic to amend as a delta; 0 for a new epic
+
+	Repo      string `json:"repo"`       // the repository id the plan belongs to
+	Root      string `json:"root"`       // the repository root on this machine
+	CommonDir string `json:"common_dir"` // the repository's git common directory
 }
+
+// GitCommonDir names the repository whose events folder holds the plan run.
+func (r PlanRequest) GitCommonDir() string { return r.CommonDir }
 
 // EventKey binds PlanRequest to plan / request.
 func (PlanRequest) EventKey() bus.Key { return bus.Key{Type: bus.TypePlan, Subtype: "request"} }
@@ -142,16 +149,16 @@ func (h *Handler) Run(ctx context.Context) error {
 			if !ok {
 				continue
 			}
-			if err := h.handle(ctx, ev.Run, *req); err != nil {
+			if err := h.Handle(ctx, ev.Run, *req); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-// handle plans one request and publishes run-start on success or the error event the failure maps to.
+// Handle plans one request and publishes run-start on success or the error event the failure maps to.
 // It returns an error only when the bus refuses a publish.
-func (h *Handler) handle(ctx context.Context, run bus.ID, req PlanRequest) error {
+func (h *Handler) Handle(ctx context.Context, run bus.ID, req PlanRequest) error {
 	res, err := h.Plan(ctx, req)
 	if err == nil {
 		return h.d.Bus.Publish(bus.Event{Type: bus.TypeRunStart, Run: newID(), Data: &bus.RunStart{

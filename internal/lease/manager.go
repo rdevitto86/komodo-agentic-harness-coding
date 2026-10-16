@@ -336,3 +336,6 @@ func (m *Manager) Release(ctx context.Context, l Lease) error {
 	}
 	return fmt.Errorf("release %s: %w", l.Group, ErrStaleRev)
 }
+
+// Live reports whether a lease still has a working holder: a running process on this machine, or a recent renewal elsewhere.
+func (m *Manager) Live(l Lease) bool { return l.Live(time.Now(), m.machine, m.alive) }

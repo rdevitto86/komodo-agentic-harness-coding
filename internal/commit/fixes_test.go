@@ -166,7 +166,7 @@ func TestPublishRecheckSurvivesFailedReport(t *testing.T) {
 func TestSaveListsReusesLandingWorktree(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
-	land := filepath.Join(w.root, "landing-ep-1")
+	land := filepath.Join(w.root, "ep-1")
 	if err := w.git.AddWorktree(w.ctx, w.clone, land, "komodo/ep-1", "origin/komodo/ep-1"); err != nil {
 		t.Fatal(err)
 	}

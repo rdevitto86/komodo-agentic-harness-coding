@@ -283,3 +283,12 @@ func underStatic(dir string, files []string) bool {
 
 // errNoPolicy is returned when the embedded policy cannot be read.
 var errNoPolicy = errors.New("the guard policy cannot be read")
+
+// CheckerPolicy returns the secret content patterns and the test-sibling test of the policy, for the mechanical checks.
+func CheckerPolicy(files func() []string, root string) ([]*regexp.Regexp, func(string) bool, error) {
+	p, err := loadPolicy()
+	if err != nil {
+		return nil, nil, err
+	}
+	return p.secret, func(rel string) bool { return p.siblingOf(rel, files(), root) }, nil
+}

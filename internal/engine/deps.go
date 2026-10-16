@@ -64,7 +64,7 @@ type TaskGroups interface {
 
 // PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
 type PlanSource interface {
-	Specs(ctx context.Context, labels []string) ([]GroupSpec, error)
+	Specs(ctx context.Context, root string, labels []string) ([]GroupSpec, error) // root is the repository the run names
 }
 
 // EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's branch.
@@ -87,7 +87,7 @@ type TokenCaps interface {
 
 // Discarder is the Cleanup Handler's Discard as the Runtime Manager uses it.
 type Discarder interface {
-	Discard(ctx context.Context, repo, group string) error
+	Discard(ctx context.Context, repo, root, group string) error // root is the repository root of the run
 }
 
 // CleanItem is one thing a clean removed, or would remove.
@@ -98,7 +98,7 @@ type CleanItem struct {
 
 // Janitor runs the machine-wide clean; open names the repositories that still have an open run.
 type Janitor interface {
-	Clean(ctx context.Context, dryRun bool, open map[string]bool) ([]CleanItem, error)
+	Clean(ctx context.Context, dryRun bool, root string, open map[string]bool) ([]CleanItem, error)
 }
 
 // Extras adds the Metrics Service figures to a status answer; the keys are the StatusData JSON fields.

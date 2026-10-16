@@ -201,7 +201,14 @@ Go package `internal/cli`, plus the program entry point.
 
 | File | Holds |
 |---|---|
-| `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned |
+| `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned; also runs the hidden `internal engine` verb in the foreground |
+| `cmd/komodo/wire.go` | The engine process's shared parts: event registration, settings, bus, model links, sandbox backends, the lease and machine records, and one kit per repository |
+| `cmd/komodo/wire_engine.go` | `buildEngine`: the Runtime Manager's dependencies, the hub that routes its calls to the repository they name, the per-repository kit and the plan router |
+| `cmd/komodo/wire_tasks.go` | Builds each group's Task Manager from the group spec and the task lists, serves it over the command and reply channels, and adapts the Commit Handler to the group |
+| `cmd/komodo/wire_intake.go` | The Intake Handler's dependencies: the planner session over the model client, its tool host and the group-record lock reader |
+| `cmd/komodo/wire_adapters.go` | Small adapters: the State Manager with a context, the plan source, the clean-up wrappers and the compile-time git assertions |
+| `cmd/komodo/wire_events.go` | Binds the Commit and Cleanup handlers' progress facts to run-status event types |
+| `internal/integration/phase5_test.go`, `phase6_test.go`, `multirepo_test.go` | The phase 5 and phase 6 exits and the two-repository run, driven through the built binary ([21.1](#211-end-to-end-verification-plan)) |
 | `internal/cli/cli.go` | The types (`Envelope`, `Result`, `Command`, `Call`, `Deps`), `New`, `Run`, `validate`, `resolve`, `render`, `PrintError` and the exit codes |
 | `internal/cli/parse.go` | `parse`: splitting the command words, the flag sets, `--input`, the closest-name match |
 | `internal/cli/table.go` | The command table and the checks of each command's arguments |
@@ -3845,6 +3852,10 @@ type PlanRequest struct {
 	Goal string   `json:"goal"` // the one-line goal; may be empty when Docs is set
 	Docs []string `json:"docs"` // source documents to plan from, as repository paths
 	Epic int      `json:"epic"` // an existing epic to amend as a delta; 0 for a new epic
+
+	Repo      string `json:"repo"`       // the repository id the plan belongs to
+	Root      string `json:"root"`       // the repository root on this machine
+	CommonDir string `json:"common_dir"` // the repository's git common directory; the event store binds the plan run to its events folder
 }
 
 // PlanDraft is the planner's result: every task-list file of the plan, in memory.
@@ -5553,6 +5564,7 @@ type GroupSpec struct {
 	Tasks     []string `json:"tasks"`     // task identifiers in order
 	Priority  string   `json:"priority"`  // "high" or "normal"
 	Order     int      `json:"order"`     // position in task-list order; lower is earlier
+	Root      string   `json:"-"`         // the repository root on this machine; the Runtime Manager fills it from the run-start before it starts the group
 }
 
 // Candidate is a ready group with the three facts the tie-break rules read.
@@ -5830,17 +5842,17 @@ type Channels struct {
 
 // Discarder is the Cleanup Handler as the Runtime Manager uses it for abandon.
 type Discarder interface {
-	Discard(ctx context.Context, repo, group string) error
+	Discard(ctx context.Context, repo, root, group string) error // root is the repository root of the run
 }
 
 // Janitor is the machine-wide clean; open names the repositories that still have an open run.
 type Janitor interface {
-	Clean(ctx context.Context, dryRun bool, open map[string]bool) ([]CleanItem, error)
+	Clean(ctx context.Context, dryRun bool, root string, open map[string]bool) ([]CleanItem, error)
 }
 
 // PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
 type PlanSource interface {
-	Specs(ctx context.Context, labels []string) ([]GroupSpec, error) // the specs of the labels a run-start names
+	Specs(ctx context.Context, root string, labels []string) ([]GroupSpec, error) // the specs of the labels a run-start names, read from the task lists under the run's repository root
 }
 
 // EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's branch; it follows the wrapper rules of 15.4.
@@ -6151,6 +6163,7 @@ A builder that needs a file outside its group's files stops its session with a r
 4. Otherwise it blocks the group `needs_scope`, sets `ScopeAsked`, keeps the session's handle in `Resume`, and publishes `run-failure` / `group.blocked`. This block is never counted as a flap.
 5. The orchestrator waits with `komodo status --wait`, which returns the blocked group's question, and answers with `komodo run (id) --approve` or `komodo run (id) --deny`. The engine makes a `scope.answer` input; row 14 moves the group to Build and sends `continue` with an `Answer` of `approve` or `deny` down the command channel. Approval adds the paths to `ScopeAdded`, so the group's effective files are its list plus `ScopeAdded`.
 6. The same session resumes with the answer in its brief.
+7. The block's cancel order does not stop a Task Manager that holds the open scope request: that Task Manager stays up to take the `continue`. A Task Manager that ended, such as one lost to an engine restart, is started again from the saved State, which carries `ScopeAdded` as `Progress.Widened`.
 
 A `wall` block is answered the same way: `--approve` grants more time and resets the group's working time as `run (id)` does for that reason, and `--deny` leaves the group Blocked. `--approve` or `--deny` on a group blocked for any other reason is refused with code `not_blocked`.
 
@@ -12759,7 +12772,7 @@ The sandbox side of rule 5, mounting `.git` read-only in every sandbox profile, 
 
 Every group lands on its epic's branch `komodo/<epic>`. Steps 4 to 7 of Publish do the following.
 
-1. Before the first merge, `Fetch` brings in the base branch. The epic branch exists on the remote, because the Runtime Manager created it and `SaveLists` pushed it at run start ([7.5](#75-behaviour)); `AddWorktree` checks out the epic branch in the landing worktree and `Merge` brings it to the remote tip. The landing worktree is `landing-<epic>` inside `Settings.LandingRoot`, which defaults to the folder that holds the group's worktree; a repeat finds it and adds nothing.
+1. Before the first merge, `Fetch` brings in the base branch. The epic branch exists on the remote, because the Runtime Manager created it and `SaveLists` pushed it at run start ([7.5](#75-behaviour)); `AddWorktree` checks out the epic branch in the landing worktree and `Merge` brings it to the remote tip. The landing worktree is `<epic>` inside `Settings.LandingRoot`, which defaults to the folder that holds the group's worktree and is set to the repository's landing folder by the binary, matching the Cleanup Handler's `Roots.Landings/<epic>`; a repeat finds it and adds nothing.
 2. In the group's worktree, `Merge` merges the epic branch into the group branch with `noFF` false and the message `<label>: merge <epic>`. A conflict surfaces here, on the group branch, and never on the epic branch.
 3. In the landing worktree, `Merge` with `noFF` true merges the group branch into the epic branch. The merge commit's subject is `<label>: <goal>` and its body is the group's section from `RenderBody`, so `Landed` can read the group back later. When the group branch tip is already in the history of the landing worktree's epic branch and `Landed` lists the group's label, steps 2 and 3 are skipped; this is how a repeated `Publish` avoids a second landing.
 4. The push sends the epic branch only. The group branch is not pushed.
@@ -14831,6 +14844,8 @@ This chapter holds what no single subsystem owns: the end-to-end checks of the w
 ### 21.1 End-to-End Verification Plan
 
 Every subsystem can pass its own proof cases while the whole still fails on a real repository, so these checks run the built binary against a fixture. They are Go tests behind the `e2e` build tag in `cmd/komodo/e2e_test.go`; a person or the orchestrator runs `go test -tags e2e ./cmd/komodo/` at the end of each delivery phase.
+
+Three of these checks already run in `internal/integration`, without the build tag, against the built binary, a temporary Komodo home, a local bare remote, a fake `gh` and a fake Messages server that picks its reply by agent role: `TestPhase5OneGroupPassesBuildTestAndReview` (one group passes build, test and review and ends done), `TestPhase6PlannedGroupIsPublishedAndCleanedUp` (`komodo plan`, then the run, a `publish.done` fact, the epic branch on the remote, and no worktree, group branch or lease left) and `TestOneEngineRunsGroupsFromTwoRepositories` (one engine, two repositories). `TestBinaryEngineServesStatus` proves the hidden engine verb binds the socket.
 
 #### Fixtures
 

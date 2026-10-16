@@ -417,3 +417,39 @@ func pythonTag(dir string) string {
 	}
 	return versionIn(firstMatch(pythonReq, readText(dir, "pyproject.toml")))
 }
+
+// List returns the group of every komodo container, running or stopped.
+func (d *Docker) List(ctx context.Context) ([]string, error) {
+	out, err := d.run(ctx, "ps", "-a", "--filter", "name=^komodo-", "--format", "{{.Names}}")
+	if err != nil {
+		return nil, err
+	}
+	var groups []string
+	for _, n := range strings.Fields(out) {
+		g := strings.TrimPrefix(n, "komodo-")
+		if i := strings.LastIndex(g, "-"); i > 0 {
+			g = g[:i]
+		}
+		if !slices.Contains(groups, g) {
+			groups = append(groups, g)
+		}
+	}
+	return groups, nil
+}
+
+// Remove force-removes every container of the group.
+func (d *Docker) Remove(ctx context.Context, group string) error {
+	out, err := d.run(ctx, "ps", "-a", "--filter", "name=^komodo-"+unsafeName.ReplaceAllString(group, "_")+"-", "--format", "{{.Names}}")
+	if err != nil {
+		return err
+	}
+	for _, n := range strings.Fields(out) {
+		if i := strings.LastIndex(n, "-"); i < 0 || n[:i] != "komodo-"+unsafeName.ReplaceAllString(group, "_") {
+			continue
+		}
+		if _, err := d.run(ctx, "rm", "-f", n); err != nil {
+			return err
+		}
+	}
+	return nil
+}

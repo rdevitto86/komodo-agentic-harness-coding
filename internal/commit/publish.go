@@ -69,7 +69,7 @@ func (p *publication) settle(ctx context.Context) error {
 	if root == "" {
 		root = filepath.Dir(p.a.Worktree)
 	}
-	p.wt = filepath.Join(root, "landing-"+p.a.Epic)
+	p.wt = filepath.Join(root, p.a.Epic)
 	if err := resolveRemote(ctx, p.h.Git, p.a.Worktree, &p.base, &p.remote); err != nil {
 		return err
 	}

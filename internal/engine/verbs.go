@@ -324,7 +324,7 @@ func (e *Engine) verbClean(ctx context.Context, w *connWriter, req Request) {
 				open[ent.Start.Repo] = true
 			}
 		}
-		got, err := e.d.Janitor.Clean(ctx, req.Flags.DryRun, open)
+		got, err := e.d.Janitor.Clean(ctx, req.Flags.DryRun, req.Root, open)
 		if err != nil {
 			e.fail(w, req.ID, err)
 			return

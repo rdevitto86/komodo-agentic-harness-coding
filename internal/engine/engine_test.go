@@ -420,7 +420,7 @@ type fakeJanitor struct {
 }
 
 // Clean records its arguments.
-func (j *fakeJanitor) Clean(_ context.Context, dry bool, open map[string]bool) ([]CleanItem, error) {
+func (j *fakeJanitor) Clean(_ context.Context, dry bool, _ string, open map[string]bool) ([]CleanItem, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.dry, j.open = dry, open

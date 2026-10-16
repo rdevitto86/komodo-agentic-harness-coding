@@ -261,7 +261,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 	if err != nil {
 		return fail("read the limits: %v", err)
 	}
-	specs, err := m.d.Plans.Specs(ctx, rs.Groups)
+	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Groups)
 	if err != nil {
 		return fail("read the task lists: %v", err)
 	}
