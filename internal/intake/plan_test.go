@@ -425,7 +425,10 @@ func TestSessionErrorFailsThePlan(t *testing.T) {
 func TestPlanLintToolMatchesLintDraft(t *testing.T) {
 	var fromTool []Finding
 	var r *rig
-	probe := func(context.Context) (PlanDraft, error) { fromTool = r.h.LintBacklog(badDraft()); return twoGroupDraft(), nil }
+	probe := func(context.Context) (PlanDraft, error) {
+		fromTool = r.h.LintBacklog(badDraft())
+		return twoGroupDraft(), nil
+	}
 	r = newRig(t, probe)
 	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
 		t.Fatal(err)

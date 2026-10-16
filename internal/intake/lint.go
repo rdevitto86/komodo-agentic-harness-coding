@@ -45,7 +45,6 @@ const (
 	maxTaskFiles     = 5
 	maxTaskLines     = 300
 	maxGroupTasks    = 8
-	maxGroupPoints   = 8
 	overEstimateFold = 2
 	backlogDir       = "docs/backlog"
 )

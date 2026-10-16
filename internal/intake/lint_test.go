@@ -118,15 +118,15 @@ func TestLintGroupEveryoneWaitsOnWarns(t *testing.T) {
 
 func TestLintEARS(t *testing.T) {
 	cases := map[string]bool{
-		"WHEN a thing happens THE SYSTEM SHALL respond":    true,
-		"IF the disk is full THEN THE SYSTEM SHALL stop":   true,
-		"WHILE paused THE SYSTEM SHALL queue events":       true,
-		"WHEN a thing happens THE SYSTEM responds":         false,
-		"WHEN a thing happens THE SYSTEM SHOULD respond":   false,
-		"IF the disk is full THE SYSTEM SHALL stop":        false,
-		"AFTER a thing THE SYSTEM SHALL respond":           false,
-		"WHEN THE SYSTEM SHALL respond":                    false,
-		"WHEN a thing happens THE SYSTEM SHALL":            false,
+		"WHEN a thing happens THE SYSTEM SHALL respond":  true,
+		"IF the disk is full THEN THE SYSTEM SHALL stop": true,
+		"WHILE paused THE SYSTEM SHALL queue events":     true,
+		"WHEN a thing happens THE SYSTEM responds":       false,
+		"WHEN a thing happens THE SYSTEM SHOULD respond": false,
+		"IF the disk is full THE SYSTEM SHALL stop":      false,
+		"AFTER a thing THE SYSTEM SHALL respond":         false,
+		"WHEN THE SYSTEM SHALL respond":                  false,
+		"WHEN a thing happens THE SYSTEM SHALL":          false,
 	}
 	for item, ok := range cases {
 		files := goodGroup(1, 1, tgSpec{items: []string{item}})

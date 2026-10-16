@@ -31,7 +31,7 @@ func (h *Handler) write(d PlanDraft, pl *planState, reqEpic int) (PlanResult, er
 	if err != nil {
 		return PlanResult{}, writeError{fmt.Errorf("create staging folder: %w", err)}
 	}
-	defer os.RemoveAll(stage)
+	defer func() { _ = os.RemoveAll(stage) }()
 	var written []string
 	for _, f := range d.Files {
 		p := filepath.Join(stage, filepath.FromSlash(f.Path))

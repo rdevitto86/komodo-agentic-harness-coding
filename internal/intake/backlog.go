@@ -166,8 +166,8 @@ func parseFiles(files []DraftFile) ([]Epic, []Finding) {
 	})
 	var epics []Epic
 	for _, p := range parts {
-		g, fs := parseGroup(p)
-		found = append(found, fs...)
+		g, gf := parseGroup(p)
+		found = append(found, gf...)
 		if len(epics) == 0 || epics[len(epics)-1].Number != p.epic {
 			epics = append(epics, Epic{Number: p.epic})
 		}
@@ -210,9 +210,9 @@ func parseGroup(p *groupParts) (Group, []Finding) {
 	}
 	sort.Slice(p.tasks, func(i, j int) bool { return p.tasks[i].Path < p.tasks[j].Path })
 	for _, t := range p.tasks {
-		task, fs := parseTask(t.Path, t.Content)
+		task, tf := parseTask(t.Path, t.Content)
 		g.Tasks = append(g.Tasks, task)
-		found = append(found, fs...)
+		found = append(found, tf...)
 	}
 	if len(p.tasks) == 0 {
 		found = append(found, grammar(tgPath, "group has no task file"))
