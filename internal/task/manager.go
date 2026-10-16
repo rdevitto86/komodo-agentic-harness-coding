@@ -615,6 +615,11 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 
 // runIn runs one command in an instance and returns its capped output and exit code.
 func (m *Manager) runIn(ctx context.Context, id string, argv []string, logDir string) (string, int, error) {
+	if g, err := m.scopeGuard(); err == nil {
+		if err := m.c.Sandboxes.SetMasked(id, g.SecretFiles()); err != nil {
+			return "", -1, err
+		}
+	}
 	cmd, err := m.c.Sandboxes.Command(ctx, id, sandbox.Command{Argv: argv, Timeout: runTimeout})
 	if err != nil {
 		return "", -1, err

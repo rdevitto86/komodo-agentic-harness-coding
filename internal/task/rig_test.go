@@ -28,6 +28,7 @@ type hostBackend struct {
 	mu       sync.Mutex
 	n        int
 	prepared []sandbox.Spec
+	masked   []string // the masked list of the last command
 	released []string
 }
 
@@ -43,6 +44,9 @@ func (b *hostBackend) Prepare(_ context.Context, s sandbox.Spec) (sandbox.Instan
 }
 
 func (b *hostBackend) Command(ctx context.Context, _ sandbox.Instance, s sandbox.Spec, c sandbox.Command) (*exec.Cmd, error) {
+	b.mu.Lock()
+	b.masked = s.Masked
+	b.mu.Unlock()
 	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
 	cmd.Dir = s.Worktree
 	killGroupOnCancel(cmd)
