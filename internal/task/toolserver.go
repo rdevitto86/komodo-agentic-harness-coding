@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ const (
 	EnvCommands     = "KOMODO_TOOLS_COMMANDS"
 	EnvFormat       = "KOMODO_TOOLS_FORMAT"
 	EnvRefusalLimit = "KOMODO_TOOLS_REFUSAL_LIMIT"
+	EnvServers      = "KOMODO_TOOLS_SERVERS"
 )
 
 // ToolServerConfig is what the tool server process of one session starts from.
@@ -40,6 +42,7 @@ type ToolServerConfig struct {
 	Commands     map[string][]string // command class to argv
 	Format       []string            // format command argv, or none
 	RefusalLimit int
+	Servers      []OutsideServer // the enabled outside tool servers
 }
 
 // toolServerVerb is the hidden verb of the same binary that runs the tool server.
@@ -59,6 +62,10 @@ func MCPConfig(exe string, c ToolServerConfig) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode the commands: %w", err)
 	}
+	servers, err := json.Marshal(c.Servers)
+	if err != nil {
+		return nil, fmt.Errorf("encode the outside servers: %w", err)
+	}
 	format, err := json.Marshal(c.Format)
 	if err != nil {
 		return nil, fmt.Errorf("encode the format command: %w", err)
@@ -68,7 +75,7 @@ func MCPConfig(exe string, c ToolServerConfig) ([]byte, error) {
 		"args":    append(append([]string{}, toolServerVerb...), "--agent", c.Agent, "--session", c.Session),
 		"env": map[string]string{
 			EnvWorktree: c.Worktree, EnvSessionDir: c.Dir, EnvFiles: string(files), EnvPermissions: string(perms),
-			EnvCommands: string(cmds), EnvFormat: string(format), EnvRefusalLimit: strconv.Itoa(c.RefusalLimit),
+			EnvCommands: string(cmds), EnvFormat: string(format), EnvRefusalLimit: strconv.Itoa(c.RefusalLimit), EnvServers: string(servers),
 		},
 	}
 	return json.MarshalIndent(map[string]any{"mcpServers": map[string]any{"komodo": entry}}, "", "  ")
@@ -91,7 +98,7 @@ func LoadToolServer(args []string, getenv func(string) string) (ToolServerConfig
 		return c, errors.New("the tool server needs --agent and --session")
 	}
 	c.Worktree, c.Dir = getenv(EnvWorktree), getenv(EnvSessionDir)
-	for name, dst := range map[string]any{EnvFiles: &c.Files, EnvPermissions: &c.Permissions, EnvCommands: &c.Commands, EnvFormat: &c.Format} {
+	for name, dst := range map[string]any{EnvFiles: &c.Files, EnvPermissions: &c.Permissions, EnvCommands: &c.Commands, EnvFormat: &c.Format, EnvServers: &c.Servers} {
 		if v := getenv(name); v != "" {
 			if err := json.Unmarshal([]byte(v), dst); err != nil {
 				return c, fmt.Errorf("read %s: %w", name, err)
@@ -118,7 +125,30 @@ func (c ToolServerConfig) Bind(home string, env Env) (*Bound, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compile the guard: %w", err)
 	}
-	return NewRegistry(&env).Bind(c.Permissions.Tools, g)
+	reg := NewRegistry(&env)
+	var conns []*OutsideConn
+	if len(c.Servers) > 0 {
+		if conns, err = StartAllowed(context.Background(), env.Confiner, env.Instance, c.Permissions, c.Servers, os.Getenv); err != nil {
+			return nil, err
+		}
+	}
+	for _, o := range conns {
+		if err = reg.AddOutsideConn(context.Background(), o); err != nil {
+			break
+		}
+	}
+	var b *Bound
+	if err == nil {
+		b, err = reg.Bind(c.Permissions.Tools, g)
+	}
+	if err != nil {
+		for _, o := range conns {
+			_ = o.Close()
+		}
+		return nil, err
+	}
+	b.outside = conns
+	return b, nil
 }
 
 // rpcRequest is one JSON-RPC message from the client.

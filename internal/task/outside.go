@@ -57,6 +57,10 @@ func StartOutside(ctx context.Context, c Confiner, instance string, s OutsideSer
 			env = append(env, n+"="+v)
 		}
 	}
+	var dropped []string
+	for _, n := range s.Env {
+		dropped = append(dropped, fmt.Sprintf("outside server %s lists the variable %s, but the sandbox passes only its own allow-listed variables, so the server does not receive it", s.Name, n))
+	}
 	cctx, cancel := context.WithCancel(ctx)
 	cmd, err := c.Command(cctx, instance, sandbox.Command{Argv: append([]string{s.Command}, s.Args...), Env: env})
 	if err != nil {
@@ -78,6 +82,7 @@ func StartOutside(ctx context.Context, c Confiner, instance string, s OutsideSer
 		return nil, fmt.Errorf("start the outside server %s: %w", s.Name, err)
 	}
 	o := &OutsideConn{name: s.Name, cmd: cmd, in: in, cancel: cancel, pending: map[int]chan rpcResponse{}, gone: make(chan struct{})}
+	o.warnings = append(o.warnings, dropped...)
 	if len(s.Hosts) > 0 {
 		o.warnings = append(o.warnings, fmt.Sprintf("outside server %s lists hosts %s, but no mechanism limits a server to hosts, so it keeps no network", s.Name, strings.Join(s.Hosts, ", ")))
 	}

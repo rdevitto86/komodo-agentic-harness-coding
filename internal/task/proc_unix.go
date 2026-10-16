@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+// reapGroup kills every process left in the command's process group.
+func reapGroup(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}
+
 // killGroupOnCancel puts the command in its own process group and makes a cancel kill the whole group.
 func killGroupOnCancel(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

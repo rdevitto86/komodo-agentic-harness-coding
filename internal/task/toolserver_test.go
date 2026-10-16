@@ -137,6 +137,7 @@ func TestToolServerInputsRoundTripThroughMCPConfig(t *testing.T) {
 	want := ToolServerConfig{
 		Agent: "builder", Session: "s-1", Worktree: "/wt", Dir: "/sess", Files: []string{"a/**", "b.go"},
 		Permissions: builderPerms(), Commands: map[string][]string{"test": {"go", "test", "./..."}}, Format: []string{"gofmt", "-w"}, RefusalLimit: 3,
+		Servers: []OutsideServer{{Name: "docs", Command: "docs-server", Args: []string{"--stdio"}, Env: []string{"TOKEN"}, Hosts: []string{"example.com"}}},
 	}
 	raw, err := MCPConfig("/bin/komodo", want)
 	if err != nil {

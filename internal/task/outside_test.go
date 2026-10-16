@@ -118,7 +118,7 @@ func TestOutsideServerWithHostsKeepsNoNetworkAndSaysSo(t *testing.T) {
 	s := fakeServer()
 	s.Hosts = []string{"api.example.com"}
 	o := startFake(t, &fakeConfiner{dir: t.TempDir()}, s)
-	if w := o.Warnings(); len(w) != 1 || !strings.Contains(w[0], "api.example.com") {
+	if w := strings.Join(o.Warnings(), "\n"); !strings.Contains(w, "api.example.com") {
 		t.Fatalf("warnings = %v", w)
 	}
 }

@@ -10,14 +10,12 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
+	"time"
 )
 
 // File tool limits.
@@ -37,14 +35,27 @@ func errReply(format string, a ...any) Reply {
 // bad builds the reply for arguments that cannot be read.
 func bad(err error) Reply { return errReply("the arguments cannot be read: %v", err) }
 
-// locate resolves a request path inside the worktree; the guard has already allowed it, so a failure here is still an error reply.
+// locate returns the path the guard resolved for this call; a path the guard did not resolve is an error, never resolved again.
 func locate(tc *toolCall, p string) (resolved, *Reply) {
-	r, why := resolveInside(tc.env.Worktree, p)
-	if why != "" {
-		e := errReply("%s %s", p, why)
+	r, ok := tc.res[p]
+	if !ok {
+		e := errReply("%s was not checked by the guard", p)
 		return resolved{}, &e
 	}
+	if tc.env.afterResolve != nil {
+		tc.env.afterResolve()
+	}
 	return r, nil
+}
+
+// openRoot opens the worktree as a root that refuses any path leaving it, links included.
+func openRoot(r resolved) (*os.Root, *Reply) {
+	root, err := os.OpenRoot(r.Root)
+	if err != nil {
+		e := errReply("open the worktree: %v", cause(err))
+		return nil, &e
+	}
+	return root, nil
 }
 
 // isBinary reports whether the first bytes of a file hold a NUL.
@@ -60,7 +71,12 @@ func toolRead(_ context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	if e != nil {
 		return *e
 	}
-	f, err := os.Open(r.Abs)
+	root, e := openRoot(r)
+	if e != nil {
+		return *e
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.Open(filepath.FromSlash(r.Rel))
 	if err != nil {
 		return errReply("open %s: %v", r.Rel, cause(err))
 	}
@@ -123,31 +139,34 @@ func toolSearch(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	if e != nil {
 		return *e
 	}
+	root, e := openRoot(r)
+	if e != nil {
+		return *e
+	}
+	defer func() { _ = root.Close() }()
 	var hits []searchHit
 	walk := func(p string, d fs.DirEntry, err error) error {
 		if err != nil || ctx.Err() != nil {
 			return nil
 		}
-		rel, _ := filepath.Rel(r.Abs, p)
-		rel = path.Join(r.Rel, filepath.ToSlash(rel))
 		if d.IsDir() {
 			if d.Name() == ".git" {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() || tc.guard.IsSecretFile(rel) {
+		if !d.Type().IsRegular() || tc.guard.IsSecretFile(p) {
 			return nil
 		}
-		hits = append(hits, searchFile(p, rel, re)...)
+		hits = append(hits, searchFile(root, p, re)...)
 		return nil
 	}
-	if st, err := os.Stat(r.Abs); err != nil {
+	if st, err := root.Stat(filepath.FromSlash(r.Rel)); err != nil {
 		return errReply("%s does not exist", r.Rel)
 	} else if !st.IsDir() {
-		_ = walk(r.Abs, fs.FileInfoToDirEntry(st), nil)
+		_ = walk(r.Rel, fs.FileInfoToDirEntry(st), nil)
 	} else {
-		_ = filepath.WalkDir(r.Abs, walk)
+		_ = fs.WalkDir(root.FS(), r.Rel, walk)
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].path != hits[j].path {
@@ -170,8 +189,8 @@ func toolSearch(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 }
 
 // searchFile returns the matching lines of one text file.
-func searchFile(abs, rel string, re *regexp.Regexp) []searchHit {
-	f, err := os.Open(abs)
+func searchFile(root *os.Root, rel string, re *regexp.Regexp) []searchHit {
+	f, err := root.Open(filepath.FromSlash(rel))
 	if err != nil {
 		return nil
 	}
@@ -222,7 +241,13 @@ func toolEdit(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	if e != nil {
 		return *e
 	}
-	st, err := os.Stat(r.Abs)
+	root, e := openRoot(r)
+	if e != nil {
+		return *e
+	}
+	defer func() { _ = root.Close() }()
+	rel := filepath.FromSlash(r.Rel)
+	st, err := root.Stat(rel)
 	switch {
 	case err != nil:
 		return errReply("%s does not exist; use write to create it", r.Rel)
@@ -231,7 +256,7 @@ func toolEdit(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	case a.Old == "":
 		return errReply("old is empty; give the exact text to replace")
 	}
-	data, err := os.ReadFile(r.Abs)
+	data, err := root.ReadFile(rel)
 	if err != nil {
 		return errReply("read %s: %v", r.Rel, cause(err))
 	}
@@ -244,12 +269,12 @@ func toolEdit(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	}
 	at := strings.Index(text, a.Old)
 	edited := text[:at] + a.New + text[at+len(a.Old):]
-	if err := core.WriteFileAtomic(r.Abs, []byte(edited), st.Mode().Perm()); err != nil {
-		return errReply("write %s: %v", r.Rel, err)
+	if err := writeAtomicIn(root, rel, []byte(edited), st.Mode().Perm()); err != nil {
+		return errReply("write %s: %v", r.Rel, cause(err))
 	}
 	note := formatFile(ctx, tc, r.Rel)
 	final := edited
-	if b, err := os.ReadFile(r.Abs); err == nil {
+	if b, err := root.ReadFile(rel); err == nil {
 		final = string(b)
 	}
 	first := strings.Count(edited[:at], "\n")
@@ -276,7 +301,11 @@ func formatFile(ctx context.Context, tc *toolCall, rel string) string {
 	if len(tc.env.Format) == 0 || tc.env.Confiner == nil {
 		return ""
 	}
-	argv := append(append([]string{}, tc.env.Format...), rel)
+	arg := rel
+	if strings.HasPrefix(arg, "-") {
+		arg = "./" + arg
+	}
+	argv := append(append([]string{}, tc.env.Format...), arg)
 	res := confinedRun(ctx, tc, argv, filepath.Join(tc.env.Dir, "out", tc.id+".fmt.log"))
 	switch {
 	case res.StartErr != nil:
@@ -344,13 +373,22 @@ func toolWrite(_ context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	if e != nil {
 		return *e
 	}
-	if _, err := os.Lstat(r.Abs); err == nil {
+	root, e := openRoot(r)
+	if e != nil {
+		return *e
+	}
+	defer func() { _ = root.Close() }()
+	rel := filepath.FromSlash(r.Rel)
+	if _, err := root.Lstat(rel); err == nil {
 		return errReply("%s already exists; use edit to change it", r.Rel)
 	}
-	if err := os.MkdirAll(filepath.Dir(r.Abs), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return errReply("create the folder of %s: %v", r.Rel, cause(err))
 	}
-	f, err := os.OpenFile(r.Abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return errReply("%s already exists; use edit to change it", r.Rel)
+	}
 	if err != nil {
 		return errReply("create %s: %v", r.Rel, cause(err))
 	}
@@ -380,6 +418,29 @@ func countLines(s string) int {
 func cause(err error) error {
 	if u := errors.Unwrap(err); u != nil {
 		return u
+	}
+	return err
+}
+
+// writeAtomicIn replaces a file inside the root with data so a reader sees the old file or the new one, never a partial one.
+func writeAtomicIn(root *os.Root, rel string, data []byte, perm fs.FileMode) error {
+	tmp := filepath.Join(filepath.Dir(rel), fmt.Sprintf(".%s.tmp-%d", filepath.Base(rel), time.Now().UnixNano()))
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(perm)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = root.Rename(tmp, rel)
+	}
+	if err != nil {
+		_ = root.Remove(tmp)
 	}
 	return err
 }

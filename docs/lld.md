@@ -8689,7 +8689,7 @@ Rows O1 to O10, which guarded the orchestrator's shell, are not part of the Task
 - **Secret files:** `.env*` except `.env.example`, `.env.sample` and `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`.
 - **Secret content:** private-key headers (`-----BEGIN` … `PRIVATE KEY-----`), AWS access key identifiers (`AKIA` plus 16 capitals or digits), GitHub tokens (`ghp_`, `gho_`, `ghs_`, `github_pat_`), Anthropic and OpenAI keys (`sk-ant-`, `sk-proj-`) and Slack tokens (`xoxb-`, `xoxp-`).
 
-A test sibling sits in the folder of a file in `files`: Go `<name>_test.go`; Python `test_<name>.py` or `<name>_test.py`; JavaScript and TypeScript `<name>.test.<ext>` or `<name>.spec.<ext>`; Rust any file under the crate's `tests/`.
+A test sibling sits in the folder of a file in `files`: Go `<name>_test.go`; Python `test_<name>.py` or `<name>_test.py`; JavaScript and TypeScript `<name>.test.<ext>` or `<name>.spec.<ext>`; Rust any `.rs` file under the `tests/` folder of a crate, where the crate is the folder of the nearest `Cargo.toml` above the file and holds a file in `files`.
 
 Each agent's rows compile from the rows its scope selects plus the row identifiers in its `Permissions.Guard`. `writers` are agents whose tools include `edit` or `write`; `runners` are agents whose tools include `run`. The rows G1 to G6 are compiled in and apply to every agent whatever the registry lists, so a registry edit cannot widen an agent below that floor.
 
@@ -10036,10 +10036,10 @@ The shared git wrapper runs git on the host for the Task Manager's tree hashes, 
 1. **Read-only pointer.** Every confinement makes `<Worktree>/.git` and the worktree's own git folder read-only. A confined command cannot rewrite the pointer to a folder it controls.
 2. **Pointer check.** When a group starts, `gitptr.go` records the exact text of `<Worktree>/.git`. Before every host git call it reads the file again; any difference refuses the call and escalates `blocked`, reason `contract`.
 3. **Explicit folders.** Each git call passes `--git-dir=<Lease.GitDir>` and `--work-tree=<Lease.Worktree>`, so git never follows the pointer file.
-4. **Blank hooks and monitors.** Each call passes `-c core.fsmonitor=` (blank) and `-c core.hooksPath=` set to an empty folder, and the environment `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` set to the null device, so a planted setting cannot run code outside the confinement.
+4. **Blank hooks and monitors.** Each call passes `-c core.fsmonitor=` (blank) and `-c core.hooksPath=` set to an empty folder, and the environment `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` set to the null device, so a planted setting cannot run code outside the confinement. Each call also passes `-c diff.external=` (blank), and `log`, `show` and `blame` pass `--no-textconv` (and `log` and `show` pass `--no-ext-diff`), so a `.gitattributes` file the agent wrote cannot select a configured conversion program.
 5. **No other path.** No git command runs on the host with a working directory inside a folder a confined command could write unless rules 1 to 4 hold.
 
-Beside the rules above, `git_read` passes on only the flags `-n`, `-N`, `-p`, `-s`, `-w`, `-M`, `-L` and a fixed list of long flags, and names a secret file only by name; the diff of a secret file shows its header and no body. Rule 4 is unproven until its component case runs ([11.9](#119-proof-cases)).
+Beside the rules above, `git_read` passes on only the flags `-n`, `-N`, `-p`, `-s`, `-w`, `-M`, `-L` and a fixed list of long flags, and names a secret file only by name. A revision argument is read the way git reads it: `<rev>:<path>`, `:<path>`, `:<stage>:<path>`, with a colon inside `{...}` belonging to the revision; the object path is checked as a read path, and an argument whose object path the guard cannot classify is refused. The diff of a secret file, in a combined diff or under a quoted name, shows its header and no body, and so does a header the Task Manager cannot read. Rule 4 is unproven until its component case runs ([11.9](#119-proof-cases)).
 
 #### Tool server timing
 
@@ -10051,7 +10051,7 @@ Outside tool servers are off by default. A server is on for an agent only when a
 
 1. The Runtime Manager copies only the enabled entries into `GroupSpec.Servers`, and names each one in the `Servers` list of the agents allowed to use it.
 2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Until the open gap below is settled, a server that lists `Hosts` still gets no network and a warning says so. How each mechanism limits a server to those hosts is [TODO: how each sandbox mechanism limits an outside server to the hosts its entry lists ([G-264](#g-264))].
-3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call.
+3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call. The variable names in an entry's `Env` are not passed to the server while the sandbox passes only its own variables, and the start warns once per variable; [TODO: whether and how an outside server receives the variables its entry names ([G-283](#g-283))].
 4. Every call passes the guard first, exactly like a built-in tool: row G1 refuses a name not in the permissions, and a refusal counts toward `guard.refusal_limit` (row G6).
 5. Every call, allowed or refused, is recorded: a `tool.outside` fact for an allowed call, and `tool.denied` for a refusal.
 6. The server dies with the session.
@@ -10381,6 +10381,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-261](#g-261) | Whether the Tester gets a copy of the worktree or a read-only mount | Tester copy |
 | [G-277](#g-277) | How the group's container sees the epic tip held in the landing worktree | The landing recheck |
 | [G-264](#g-264) | How each mechanism limits an outside server to its listed hosts | Outside tool servers |
+| [G-283](#g-283) | Whether and how an outside server receives the variables its entry names | Outside tool servers |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | Billing check |
 | [G-08](#g-08) | A private loopback per instance | Sandbox |
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Tester copy mechanisms and costs | Sandbox |
@@ -12142,12 +12143,12 @@ The Go package is `internal/commit` (phase 6 of the build order in HLD Appendix 
 | `internal/commit/save.go` | `Save`: the local commit of a finished task |
 | `internal/commit/landing.go` | `EpicGates`, `Turn` and the recheck: the landing rules of an epic |
 | `internal/commit/types.go` | `Approval`, `SaveRequest`, `SaveResult`, `Verdict`, `PRFacts`, `EpicFacts`, `Result`, `PublishError` and the error values |
-| `internal/core/git.go` | `Git`: the git wrapper, with the no-force and never-critical-reference rules; this chapter defines its rules |
+| `internal/core/git.go`, `internal/core/git_ops.go` | `Git`: the git wrapper, with the no-force and never-critical-reference rules; this chapter defines its rules |
 | `internal/commit/forge.go` | `Forge`: the `gh` wrapper that finds, opens and updates pull requests |
 | `internal/commit/message.go` | The commit message form and the check that it carries no trailer |
 | `internal/commit/body.go` | `RenderBody` and `RenderEpicBody`: the Commit Handler's own body templates, filled from recorded facts |
 
-The git wrapper itself lives in `internal/core/git.go`, so a package below `internal/commit` can use it without importing this one. The Commit Handler and the Cleanup Handler (which deletes local branches and removes worktrees) declare the few `Git` methods they need as their own small interface; one `core.Git` value, created once at start-up, satisfies them. The Task Manager, which creates each group's branch and worktree, uses the same value.
+The git wrapper itself lives in `internal/core/git.go`, so a package below `internal/commit` can use it without importing this one. The Commit Handler and the Cleanup Handler (which deletes local branches and removes worktrees) declare the few `Git` methods they need as their own small interface (the Cleanup Handler's is in [16.4](#164-interfaces)); one `core.Git` value, created once at start-up, satisfies them, and a test in `internal/integration` asserts it at compile time. The Task Manager, which creates each group's branch and worktree, uses the same value.
 
 **Entry points**
 
@@ -12165,8 +12166,8 @@ The git wrapper itself lives in `internal/core/git.go`, so a package below `inte
 ```go
 // SaveRequest names a finished task whose work Save records as a local commit.
 type SaveRequest struct {
-	Run      state.ID    `json:"run"`
-	Group    state.ID    `json:"group"`
+	Run      bus.ID    `json:"run"`
+	Group    bus.ID    `json:"group"`
 	Repo     string      `json:"repo"`     // repo id the lease is keyed by
 	Label    string      `json:"label"`    // group label, such as tg-1.2
 	Task     string      `json:"task"`     // finished task name, such as tsk-1.2.1
@@ -12212,8 +12213,8 @@ type Verdict struct {
 
 // Approval is what the Task Manager hands over when the Tester and Reviewer both approve.
 type Approval struct {
-	Run        state.ID    `json:"run"`
-	Group      state.ID    `json:"group"`
+	Run        bus.ID    `json:"run"`
+	Group      bus.ID    `json:"group"`
 	Repo       string      `json:"repo"`        // repo id the lease is keyed by
 	Epic       string      `json:"epic"`        // epic label, such as ep-1
 	Label      string      `json:"label"`       // group label, such as tg-1.2
@@ -12366,6 +12367,14 @@ type ListsRequest struct {
 	Epic      string `json:"epic"`       // the epic label, such as ep-1
 }
 
+// Settings are the values the Configuration Manager passes in; LandingRoot is derived, not a settings key.
+type Settings struct {
+	BaseBranch  string // commit.base_branch
+	Remote      string // commit.remote
+	PRLabel     string // commit.pr_label; empty means komodo
+	LandingRoot string // folder that holds the landing worktrees; empty means the folder that holds the group's worktree
+}
+
 // Leases reads a group's lease; the Lease Manager implements it and the Commit Handler never writes to it.
 type Leases interface {
 	Holder(ctx context.Context, repo, group string) (lease.Lease, bool, error)
@@ -12376,7 +12385,7 @@ func RenderBody(f PRFacts, tester, reviewer Verdict) (string, error)
 
 // Reporter relays a progress fact to the Runtime Manager, which publishes it as a run-status event.
 type Reporter interface {
-	Report(ctx context.Context, group state.ID, subtype string, data any) error
+	Report(ctx context.Context, group bus.ID, subtype string, data any) error
 }
 
 // Cleaner is the Cleanup Handler's entry for a published group.
@@ -12394,7 +12403,7 @@ type Cleaner interface {
 #### Landing and recheck
 
 ```go
-// EpicGates holds each epic's landing turn in memory; one engine per machine lands, so no file is needed.
+// EpicGates holds each epic's landing turn in memory; one engine per machine lands, so no file is needed. The zero value is ready to use.
 type EpicGates struct{ /* per epic: a queue of waiting groups and the group that paused it */ }
 
 // Enter waits for the epic's turn, first come first served; a paused epic admits only the group that paused it.
@@ -12408,6 +12417,15 @@ func (t *Turn) Finish(pass bool)
 
 // Release frees the turn without a recheck result and leaves the pause as it was.
 func (t *Turn) Release()
+
+// First reports whether no group had held a turn on this epic since the engine started.
+func (t *Turn) First() bool
+
+// Paused reports whether the epic was paused when this turn began.
+func (t *Turn) Paused() bool
+
+// Lock waits for the epic's turn like Enter but is admitted while the epic is paused; SaveLists uses it.
+func (g *EpicGates) Lock(ctx context.Context, epic string) (*Turn, error)
 
 // CheckResult is the outcome of one recheck.
 type CheckResult struct {
@@ -12454,53 +12472,80 @@ var (
 )
 ```
 
+`Kind` is one of these values:
+
+| Kind | Retryable | Raised by |
+|---|---|---|
+| `not_approved`, `lease_lost`, `critical_ref`, `merge_conflict`, `push_rejected`, `base_missing` | No | The checks in 15.5 and the failures table in 15.7 |
+| `push`, `forge`, `report`, `recheck` (a check that could not run) | Yes | A network, login, `gh` or reporting failure |
+| `recheck` (a check that failed) | No | `Check.Recheck` returned `Pass` false |
+| `git` | Yes, except a refused message or an unknown worktree | Any other git failure |
+
 The Task Manager passes a `PublishError` to the Runtime Manager, which owns retries and blocks ([chapter 7](#7-runtime-manager)). A retryable error is repeated with the same `Approval`. How a group returns to Build after `ErrRecheck`, and which block reason follows, is [TODO: how a group returns to Build after a failed recheck, and which block reason applies ([G-272](#g-272))].
 
 #### The git wrapper
 
 ```go
-// Git runs every git write of the harness; it has no force option and no refspec argument.
+// Git is the part of the git wrapper the Commit Handler uses; core.Git implements it. It has no force option and no refspec argument.
 type Git interface {
 	// TreeOf returns the tree hash of the worktree's content, tracked and untracked, ignored files skipped.
 	TreeOf(ctx context.Context, worktree string) (string, error)
 	// Head returns the commit id and tree hash of the worktree's checked-out commit.
 	Head(ctx context.Context, worktree string) (commit, tree string, err error)
+	// Info describes one commit of the worktree: its id, tree, parents and subject.
+	Info(ctx context.Context, worktree, rev string) (CommitInfo, error)
+	// CurrentBranch returns the komodo/ branch the worktree has checked out.
+	CurrentBranch(ctx context.Context, worktree string) (string, error)
 	// Commit records the worktree's content as one commit on the checked-out branch and returns its id.
 	Commit(ctx context.Context, worktree, message string) (commit string, err error)
 	// Push pushes one komodo/ branch to its own name on the remote, with a plain push.
 	Push(ctx context.Context, worktree, remote, branch string) error
 	// RemoteTip returns the commit id the remote holds for a branch; the bool is false when it has none.
 	RemoteTip(ctx context.Context, worktree, remote, branch string) (string, bool, error)
-	// RemoveWorktree removes a group's worktree and refuses when it holds files the tip lacks.
-	RemoveWorktree(ctx context.Context, clone, path string) error
-	// DeleteBranch deletes a local komodo/ branch only when it still points at expectTip and that commit is in the history of containedIn.
-	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
 	// Merge merges ref into the branch checked out in dir with the given message; it never rebases, and a conflict aborts the merge.
 	Merge(ctx context.Context, dir, ref, message string, noFF bool) (head string, err error)
+	// IsAncestor reports whether anc is in the history of desc, or equal to it.
+	IsAncestor(ctx context.Context, dir, anc, desc string) (bool, error)
 	// AddWorktree adds a worktree at path on a komodo/ branch cut from base, creating the branch when it does not exist.
 	AddWorktree(ctx context.Context, clone, path, branch, base string) error
-	// Fetch fetches one branch of the remote into its remote-tracking reference.
-	Fetch(ctx context.Context, dir, remote, branch string) error
-	// Landed lists the group landings on head since base, newest first, read from the merge commits on its first-parent line.
+	// RemoveWorktree removes a worktree and refuses when it holds files the tip lacks.
+	RemoveWorktree(ctx context.Context, clone, path string) error
+	// WorktreeOf returns the linked worktree that has a komodo/ branch checked out.
+	WorktreeOf(ctx context.Context, clone, branch string) (string, bool, error)
+	// FetchBranch fetches one branch of the remote into its remote-tracking reference.
+	FetchBranch(ctx context.Context, dir, remote, branch string) error
+	// Landed lists the group landings on head since base, newest first: merge commits on its first-parent line with two parents and a group section as body.
 	Landed(ctx context.Context, dir, base, head string) ([]Landing, error)
-	// DiffStat returns git's diff stat of head against base.
+	// DiffStat returns git's one-line diff stat of head against its common ancestor with base.
 	DiffStat(ctx context.Context, dir, base, head string) (string, error)
-	// DiscardBranch deletes a local komodo/ branch that still points at expectTip, whether or not the remote holds that commit.
-	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
-	// BranchExists reports whether a komodo/ branch exists locally or on the remote.
+	// BranchExists reports whether a komodo/ branch exists locally or among the remote-tracking references.
 	BranchExists(ctx context.Context, clone, branch string) (bool, error)
 	// CreateBranch cuts a komodo/ branch from base without checking it out.
 	CreateBranch(ctx context.Context, clone, branch, base string) error
+	// DefaultBranch returns the branch the remote's HEAD names, such as main.
+	DefaultBranch(ctx context.Context, dir, remote string) (string, error)
+	// UpstreamRemote returns the remote the branch tracks; the bool is false when it tracks none.
+	UpstreamRemote(ctx context.Context, dir, branch string) (string, bool, error)
+}
+
+// CommitInfo describes one commit.
+type CommitInfo struct {
+	ID      string `json:"id"`      // commit id
+	Tree    string `json:"tree"`    // tree hash of the commit
+	Parent  string `json:"parent"`  // first parent's id; empty for a root commit
+	Second  string `json:"second"`  // second parent's id; empty unless the commit is a merge
+	Subject string `json:"subject"` // first line of the message
 }
 
 // Landing is one group landing on an epic branch, read back from its merge commit.
 type Landing struct {
-	Label   string   `json:"label"`   // group label, from the subject
-	Goal    string   `json:"goal"`    // group goal, from the subject
-	Section string   `json:"section"` // the group's section of the pull request body, from the message body
-	Files   []string `json:"files"`   // files the landing changed
+	Label   string `json:"label"`   // group label, from the subject
+	Goal    string `json:"goal"`    // group goal, from the subject
+	Section string `json:"section"` // the group's section of the pull request body, from the message body
 }
 ```
+
+`core.Git` also carries the methods the Cleanup Handler calls: `DeleteBranch`, `DiscardBranch`, `DiscardWorktree`, `BranchTip`, `Fetch` (every branch of the remote, never pruning) and `Holds` (reads the remote-tracking references only). A refusal it makes on purpose (`ErrCriticalRef`, `ErrDirty`, `ErrTipMoved`, `ErrNotContained`, `ErrForce`) answers `Refused() bool` with true.
 
 | Method | Error means | Caller does |
 |---|---|---|
@@ -12508,10 +12553,10 @@ type Landing struct {
 | `Push` with `ErrPushRejected` | The remote refused, for example it holds commits the branch lacks | No force is tried; kind `push_rejected`, not retryable |
 | `Push`, other error | Network or authentication failure | Kind `push`, retryable |
 | `Merge` with `ErrConflict` | The merge conflicts | Kind `merge_conflict`, not retryable |
-| `Fetch`, error | The branch is missing, or the network failed | Kind `base_missing` when the remote lacks the branch; otherwise kind `push`, retryable |
-| `DeleteBranch` | The tip moved or the remote history lacks it | Nothing is deleted; the Cleanup Handler reports the branch as kept. The wrapper checks with `merge-base --is-ancestor`, then deletes with `update-ref -d` and the expected id, so there is no forced delete |
+| `FetchBranch`, error | The branch is missing, or the network failed | Kind `base_missing` when the remote lacks the branch; otherwise kind `push`, retryable |
+| `DeleteBranch` (Cleanup Handler) | The tip moved or the remote history lacks it | Nothing is deleted; the Cleanup Handler reports the branch as kept. The wrapper checks with `merge-base --is-ancestor`, then deletes with `update-ref -d` and the expected id, so there is no forced delete |
 
-`Merge`, `Fetch`, `Landed` and `DiffStat` serve the epic landing (15.5). `AddWorktree` is also called by the Task Manager for a group's own worktree. `DeleteBranch`, `DiscardBranch` and `RemoveWorktree` belong to the same value but are called by the Cleanup Handler through its own interface.
+`Merge`, `FetchBranch`, `Landed`, `IsAncestor` and `DiffStat` serve the epic landing (15.5). `Info` and `IsAncestor` let `Publish` recognise a group branch that already merged the epic branch, and `CurrentBranch` checks the worktree is on the approved group branch. `WorktreeOf` lets `SaveLists` find the landing worktree. `DefaultBranch` and `UpstreamRemote` resolve an empty `commit.base_branch` and `commit.remote` (15.5, Base branch). `Commit` returns the current tip, with no new commit, when the worktree's tree already equals the tip's tree. `AddWorktree` is also called by the Task Manager for a group's own worktree. `DeleteBranch`, `DiscardBranch` and `RemoveWorktree` are also called by the Cleanup Handler through its own interface.
 
 #### The forge wrapper
 
@@ -12571,14 +12616,14 @@ flowchart TB
 ```
 
 1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one.
-2. `Publish` refuses with `ErrNotApproved` unless `tree`, `tester.tree` and `reviewer.tree` are equal. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`.
-3. `Publish` takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`. When the checked-out commit already has that tree, because `Save` recorded it, nothing is committed. Otherwise `Commit` records the content with the message `<label>: <goal>`.
-4. `Epics.Enter` waits for the epic's turn. The next steps run inside the turn, so one group at a time lands on an epic. The first turn on an epic after the engine starts runs the recheck (step 7) before the merge, so a pause the restart forgot is found again.
-5. The landing merges, as the epic landing steps below describe, and never rebases. A conflict is `ErrConflict` and frees the turn with `Release`.
+2. `Publish` refuses with `ErrNotApproved` unless `tree`, `tester.tree` and `reviewer.tree` are equal. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`. It refuses with `ErrCriticalRef` when the group branch or the epic branch is the base branch.
+3. `Publish` requires the worktree to have `branch` checked out (`CurrentBranch`; any other branch is `ErrNotApproved`). It takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`, except on a repeat: a clean worktree whose tip is a merge commit with the subject `<label>: merge <epic>` and a second parent the remote epic branch holds, over a commit with the tree `tree`, is accepted as the group's own sync with the epic. When the checked-out commit already has that tree, because `Save` recorded it, nothing is committed. Otherwise `Commit` records the content with the message `<label>: <goal>`.
+4. `Epics.Enter` waits for the epic's turn. The next steps run inside the turn, so one group at a time lands on an epic. The first turn on an epic after the engine starts runs the recheck (step 7) before the merge, so a pause the restart forgot is found again; a group that has already landed skips it, because step 7 then runs on the same tip.
+5. The landing merges, as the epic landing steps below describe, and never rebases. The group branch merges into the epic branch by the commit id verified in step 3 and after the sync, never by a branch name. A conflict is `ErrConflict` and frees the turn with `Release`.
 6. `Publish` reads the lease's fence again, refuses on a higher number, and pushes the epic branch. It then reads `RemoteTip` and fails unless the remote holds the local tip. When the remote already holds the tip, the push is skipped.
-7. `Check.Recheck` runs on the epic branch. A pass calls `Turn.Finish(true)`. A failure calls `Turn.Finish(false)`, reports `epic.paused` and returns `ErrRecheck`.
-8. When every label in `epic_groups` appears in `Git.Landed`, this landing was the epic's last: `Forge.FindPR` looks for a pull request on the epic branch. If none exists, `OpenPR` opens one; if one exists, `UpdatePR` refreshes its body from `RenderEpicBody`.
-9. `Report` sends `publish.done` with a `Result`, and `pr.opened` when `pr_new` is true. A person or the orchestrator waiting on a run wakes on `pr.opened`, so the epic's pull request is announced before the run can finish.
+7. `Check.Recheck` runs on the epic branch. A pass calls `Turn.Finish(true)`. A failure calls `Turn.Finish(false)`, reports `epic.paused` and returns `ErrRecheck`; the check result decides, so a failed `epic.paused` report is added to the error and does not change its kind.
+8. When every label in `epic_groups` appears in `Git.Landed`, this landing was the epic's last: `Forge.FindPR` looks for a pull request on the epic branch. If none exists, `OpenPR` opens one; if one exists, `UpdatePR` refreshes its body from `RenderEpicBody`. The landing list and the epic's diff stat are read before step 7 frees the turn, because the next group then uses the landing worktree.
+9. `Report` sends `publish.done` with a `Result`, and `pr.opened` whenever `last` is true and the pull request exists, not only when this call opened it; the receiver treats a repeat as the same fact. A report lost to a failure or a crash after `OpenPR` is thereby sent on the repeat. A person or the orchestrator waiting on a run wakes on `pr.opened`, so the epic's pull request is announced before the run can finish.
 10. `Publish` calls `Cleaner.Complete` with the group branch, its tip, the epic branch's remote reference, `epic_done` (true after the last group's landing opened the pull request) and the pull request address. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again.
 
 Publish runs on the Task Manager's own goroutine for the group, never inside the Runtime Manager's event loop, so a slow network holds up one group only.
@@ -12587,13 +12632,13 @@ Publish runs on the Task Manager's own goroutine for the group, never inside the
 
 Every method of `Git` follows these rules, and a test in 15.9 asserts each.
 
-1. No force: no `--force`, `--force-with-lease`, `-f` or `+` refspec is ever built. `Push` builds the refspec itself as `refs/heads/<branch>:refs/heads/<branch>` after the branch passes rule 2; no caller supplies flags.
+1. No force: no `--force`, `--force-with-lease`, `-f` or `+` refspec is ever built for a push. The one plus refspec is a fetch into `refs/remotes/`, which only the harness reads and which must follow a remote branch whose history was rewritten. `Push` builds the refspec itself as `refs/heads/<branch>:refs/heads/<branch>` after the branch passes rule 2; no caller supplies flags.
 2. Never a critical reference: a branch or reference outside `refs/heads/komodo/` and `refs/komodo/` is refused with `ErrCriticalRef`, and so is a branch equal to the base branch.
 3. No remote deletion: the wrapper has no method that pushes an empty source, so no remote branch is deleted.
 4. No trailers: `Commit` refuses a message whose last paragraph is only `Name: value` lines. The wrapper adds no session link or attribution.
-5. Explicit git folder: each command runs with `--git-dir` set to the group's folder under the clone's own `.git`, found from the clone and never from the `.git` pointer file inside the worktree, and with `-c core.fsmonitor=` (blank). A command that ran in the sandbox cannot plant a pointer or a monitor program that later runs on the host.
+5. Explicit git folder: each command runs with `--git-dir` set to the group's folder under the clone's own `.git`, found from the clone and never from the `.git` pointer file inside the worktree, with `-c core.fsmonitor=` (blank) and with `-c core.hooksPath=` set to an empty folder, so no repository hook runs, whatever the repository's configuration or an agent's edits say; `commit`, `merge` and `push` also pass `--no-verify`. A command that ran in the sandbox cannot plant a pointer or a monitor program that later runs on the host. The wrapper finds the folder from the back-pointer files `worktrees/*/gitdir` inside the git folders of the clones it knows; `NewGit`, `Adopt` and every call that takes a clone register one, and `Publish` and `Save` adopt the clone named by the lease.
 6. Fixed worktree settings: each command in a worktree passes `-c core.longpaths=true -c core.filemode=false -c core.autocrlf=false`, so these settings never enter the repository's configuration.
-7. Credentials: git and `gh` read the person's own login; the wrapper hands none of it to a child process other than git and `gh`.
+7. Credentials: git and `gh` read the person's own login. Each git command gets a scrubbed environment (`PATH`, `HOME`, the person's global git configuration, no system configuration, no prompt); only a command that talks to the remote (`push`, `fetch`, `ls-remote`) also gets the login variables (`SSH_AUTH_SOCK`, `GH_TOKEN`, `GITHUB_TOKEN`, askpass and proxy variables). No other variable reaches git.
 
 The sandbox side of rule 5, mounting `.git` read-only in every sandbox profile, belongs to the Task Manager ([chapter 11](#11-task-manager)).
 
@@ -12601,9 +12646,9 @@ The sandbox side of rule 5, mounting `.git` read-only in every sandbox profile, 
 
 Every group lands on its epic's branch `komodo/<epic>`. Steps 4 to 7 of Publish do the following.
 
-1. Before the first merge, `Fetch` brings in the base branch. The epic branch exists on the remote, because the Runtime Manager created it and `SaveLists` pushed it at run start ([7.5](#75-behaviour)); `AddWorktree` checks out the remote epic tip in the landing worktree.
+1. Before the first merge, `Fetch` brings in the base branch. The epic branch exists on the remote, because the Runtime Manager created it and `SaveLists` pushed it at run start ([7.5](#75-behaviour)); `AddWorktree` checks out the epic branch in the landing worktree and `Merge` brings it to the remote tip. The landing worktree is `landing-<epic>` inside `Settings.LandingRoot`, which defaults to the folder that holds the group's worktree; a repeat finds it and adds nothing.
 2. In the group's worktree, `Merge` merges the epic branch into the group branch with `noFF` false and the message `<label>: merge <epic>`. A conflict surfaces here, on the group branch, and never on the epic branch.
-3. In the landing worktree, `Merge` with `noFF` true merges the group branch into the epic branch. The merge commit's subject is `<label>: <goal>` and its body is the group's section from `RenderBody`, so `Landed` can read the group back later.
+3. In the landing worktree, `Merge` with `noFF` true merges the group branch into the epic branch. The merge commit's subject is `<label>: <goal>` and its body is the group's section from `RenderBody`, so `Landed` can read the group back later. When the group branch tip is already in the history of the landing worktree's epic branch and `Landed` lists the group's label, steps 2 and 3 are skipped; this is how a repeated `Publish` avoids a second landing.
 4. The push sends the epic branch only. The group branch is not pushed.
 5. The Commit Handler asks the group's Task Manager to run the recheck on the epic branch at the tip just pushed, in the group's Docker container. The turn stays held until the recheck result is recorded in `Turn.Finish`.
 6. Only the epic's pull request targets the base branch. No pull request exists for a group.
@@ -12622,6 +12667,13 @@ flowchart TB
 2. A paused epic admits only the group that paused it. Its next landing merges the epic branch into the group branch again, so a fix made by hand on the epic branch is picked up, and its recheck is the next one.
 3. The first passing recheck clears the pause and reports `epic.resumed`. Whatever made it pass counts.
 4. Groups of other epics are never touched.
+
+#### Saving the task lists
+
+1. `SaveLists` takes the epic's landing turn with `EpicGates.Lock`, which waits like `Enter` but is admitted while the epic is paused and changes no pause. It works in the landing worktree when `WorktreeOf` finds the epic branch checked out there, and otherwise adds a temporary worktree on `komodo/<epic>` in the clone named by `common_dir`. It refuses with `ErrCriticalRef` when the base branch is the epic branch.
+2. It merges the remote epic branch into it when the remote has one; a missing remote branch is not an error, because the first run creates it.
+3. It replaces `docs/backlog/<folder>` with a copy of the epic's folder under `root`, skipping `.plan-*` folders and links. `<folder>` is the epic label, or `epic-N` for a label `ep-N`.
+4. `Commit` records the copy with the message `<epic>: task lists` and adds nothing when the tree is unchanged. `Push` sends it unless the remote already holds the tip, and a temporary worktree, if one was added, is then removed.
 
 #### Base branch
 
@@ -14956,6 +15008,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-280"></a>G-280 | Platform | Whether Komodo refuses a network or shared home folder, where the operating-system file lock may not be honoured or several machines or containers share one set of state files; `doctor` checks both | Phase 7, with `doctor` | [0](#0-front-matter-and-code-structure), [9](#9-lease-manager), [10](#10-state-manager) |
 | <a id="g-281"></a>G-281 | Tester | The command and report path that print the JaCoCo line coverage of a Java or Kotlin repository, for Gradle and for Maven; no default is built in, so the coverage step fails naming the language | Phase 5, with the Task Manager | [13](#13-tester) |
 | <a id="g-282"></a>G-282 | Tester | Where the command that prints a non-Go language's JUnit XML report comes from (the repository profile or the configuration); until set, a failing test command of that language blocks as unclassifiable, so no default hides a failure | Phase 5, with the Task Manager | [13](#13-tester) |
+| <a id="g-283"></a>G-283 | Sandbox | Whether the sandbox passes the variables an outside tool server entry names, and how a value reaches the server without reaching the model | Owner decision, phase 5 | [11](#11-task-manager), [6](#6-context-manager) |
 
 #### Spikes, measurements and later-minor items
 
