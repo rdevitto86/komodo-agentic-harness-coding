@@ -8383,6 +8383,11 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output; it also fronts the enabled outside tool servers |
 | `outside.go` | Starts each enabled outside tool server inside the sandbox and forwards its guarded calls |
 | `gitptr.go` | Records the worktree's `.git` pointer and checks it before any host git call |
+| `collab.go`, `commitseam.go` | `Collaborators`, `Role`, `Outcome`, `Git`, `LimitStore`, `Committer` and `GroupMeta` |
+| `sessrun.go` | Runs one agent's session: brief, link choice, slot, tools, supervisor, judge and `result.json` |
+| `roles.go`, `briefer.go` | The builder, tester and reviewer over `internal/agent`; the briefer and base-commit tree over `internal/contextmgr` |
+| `gitcli.go` | `GitCLI`: the `Git` over the host git rules, including `AddWorktree` |
+| `toolwatch.go` | Counts tool calls in flight, activity and refusals for the supervisor |
 | `proc.go`, `proc_unix.go` | Process groups, the 10-minute timeout, the output cap and the whole-tree kill |
 | `policy.json` | The guard rows with scopes, the secret patterns and the test-sibling rules, compiled into the binary |
 
@@ -8414,7 +8419,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `backend_bubblewrap.go` | Bubblewrap on Linux and Windows Subsystem for Linux, for the same two jobs |
 | `copy.go` | The tester's dependency copy and the plan that says, per language, what to copy, what to rerun and what to share |
 
-Import rule: `task` imports `llm` and `sandbox`. `llm` and `sandbox` import neither `task` nor each other (both import `internal/core`), and every package uses the Go standard library only. `task` and `llm` also import `internal/cache` for the type of the cache handle, and `task` imports the value types `Approval`, `SaveRequest`, `SaveResult` and `Result` from `internal/commit`, which imports neither `task` nor `engine`. The Runtime Manager, the Context Manager, the Commit Handler, the Cleanup Handler and git reach `task` through the narrow interfaces in [11.4](#114-interfaces), so `task` imports none of their other packages.
+Import rule: `task` imports `llm` and `sandbox`. `llm` and `sandbox` import neither `task` nor each other (both import `internal/core`), and every package uses the Go standard library only. `task` and `llm` also import `internal/cache` for the type of the cache handle, and `task` imports the value types `Approval`, `SaveRequest`, `SaveResult` and `Result` from `internal/commit`, which imports neither `task` nor `engine`. The Runtime Manager, the Context Manager, the Commit Handler, the Cleanup Handler and git reach `task` through the narrow interfaces in [11.4](#114-interfaces), so `task` imports none of their other packages. The role adapters import `internal/agent` for the pure role functions, the briefer imports `internal/contextmgr` for its `Tree` and `Request` types, and the group's lease, event and fault types come from `internal/lease`, `internal/bus` and `internal/fault`.
 
 ### 11.3 Data Model
 
@@ -8661,7 +8666,8 @@ type Fact struct {
 | `refusals` | `blocked` | The same guard row refused the same session `guard.refusal_limit` times, and the retries ran out |
 | `no_provider`, `paid_refused`, `context` | `blocked` | Link choice found no allowed link ([11.4](#114-interfaces)) |
 | `contract` | `blocked` | A reviewer's or tester's commands changed a tracked file twice in one trip |
-| `flaky` | `blocked` | A role reported results it cannot confirm |
+| `flaky` | `blocked` | The Tester's two reruns of an item disagreed |
+| `tester` | `blocked` | The Tester disputed Go's reruns a second time |
 | `setup` | `blocked` | The setup command or the sandbox instance failed |
 | `crash` | `failed` | A session died and its retries ran out |
 
@@ -9313,6 +9319,14 @@ func (m *Manager) Stop(ctx context.Context, cause string) error
 // CloseTaskGroup ends the group: it destroys the sandbox instance and reports the closing state.
 func (m *Manager) CloseTaskGroup(ctx context.Context) error
 
+// Recheck runs the mechanical checks in the group's Tester sandbox and hands the verdict to Collaborators.OnRecheck.
+func (m *Manager) Recheck(ctx context.Context)
+
+// Files returns the group's file list including what scope answers added; Runner returns the command runner bound to a role's sandbox instance.
+// The Tester and Reviewer adapters are built before the Manager and read both through closures.
+func (m *Manager) Files() []string
+func (m *Manager) Runner(role string) agent.CommandRunner
+
 // Errors Run, Resume and Continue return.
 var (
 	ErrHeld         = errors.New("an escalation is open")
@@ -9368,6 +9382,20 @@ type Collaborators struct {
 	Sandboxes *sandbox.Manager
 	Limits    LimitStore
 	Cache     cache.Handle   // the cache handle; only the Runtime Manager creates or closes the cache
+
+	Checks      agent.Checker       // the mechanical checks run before the Tester and Reviewer start
+	Commands    map[string][]string // command class to argv: setup, build, test, lint, format
+	Base        string              // the commit the group's checks diff against
+	Language    string              // decides the impact set of the checks
+	Meta        GroupMeta           // repo, epic, sibling groups and goal, which the Commit Handler needs
+	Plan        SandboxPlan         // where the sandbox instances keep their files
+	SessionsDir string              // folder that holds one folder per session
+	Exe         string              // the komodo program, which the subscription link starts as its tool server
+	OnRecheck   func(pass bool, output string) // receives the result of a recheck command
+	Now         func() time.Time    // clock; time.Now when nil
+	Tick        time.Duration       // session timer period; 15 s when zero
+	Ladder      [2]time.Duration    // stop ladder waits; 30 s and 60 s when zero
+	ResumeWait  func(try int) time.Duration // backoff after a refused resume; 15, 30, 60 minutes when nil
 }
 
 // Runtime is the Runtime Manager as the Task Manager sees it.
@@ -9401,7 +9429,7 @@ type RoleInput struct {
 	Findings []string
 }
 
-// Role is the agent-specific half of a stage; internal/agent implements it.
+// Role is the agent-specific half of a stage; roles.go implements it over the pure functions of internal/agent.
 type Role interface {
 	// Slots returns the brief values for this trip, from the group's state and earlier findings.
 	Slots(ctx context.Context, in RoleInput) (map[string]string, error)
@@ -9412,8 +9440,10 @@ type Role interface {
 // Outcome is what a role's Judge decides.
 type Outcome struct {
 	Kind     OutcomeKind
-	Reason   string   // for Block
-	Findings []string // for Return: verified findings the builder receives
+	Reason   string   // for Block, and the builder's reason for Scope
+	Findings []string // for Return: verified findings the builder receives; for Restart: Go's output
+	Paths    []string // for Scope: the paths the builder asked for
+	Summary  []string // for Pass: the result lines the pull request body prints
 }
 
 // OutcomeKind is the pipeline's next move for one role.
@@ -9424,6 +9454,7 @@ const (
 	OutcomeReturn  OutcomeKind = "return"  // back to Build with Findings
 	OutcomeRestart OutcomeKind = "restart" // start the same role once more (a disputed tester result)
 	OutcomeBlock   OutcomeKind = "block"   // escalate with Reason
+	OutcomeScope   OutcomeKind = "scope"   // the builder asks for files outside its list
 )
 
 // Git is the shared git wrapper as the Task Manager uses it; every call follows the host git rules in 11.5.
@@ -9463,6 +9494,7 @@ type SelectRequest struct {
 	Weight      llm.Weight
 	Model       string // agent model override, empty for none
 	BriefTokens int    // size of the assembled brief
+	Exclude     []llm.Link // links already tried for this session
 }
 
 // Skip records one link passed over, published as the fact provider.skip.
@@ -9484,6 +9516,9 @@ type Router struct {
 	Client *llm.Client
 	Quota  LimitStore
 	Paid   string // providers.paid: never, fallback or allowed
+	CtxFloor int  // providers.ctx_floor: smallest context the local link may have
+	Catalog *llm.Catalog // default and prior model identifiers
+	Now    func() time.Time
 }
 
 // Select returns the first link in the chain that can serve the session now.
@@ -9702,7 +9737,7 @@ The reviewer and the tester start together and run side by side. The reviewer is
 | Reviewer returns first | The tester is cancelled; the reviewer finishes; back to Build with all its verified findings |
 | Tester returns | The reviewer finishes; back to Build with the tester's findings and the reviewer's |
 | Tester result is `restart` and `Disputes` is 0 | `Disputes` becomes 1; the tester restarts once with Go's output; the reviewer keeps going; the group does not go back to Build |
-| Tester result is `restart` and `Disputes` is 1 | Escalate `blocked`, reason `flaky`; the group does not go back to Build |
+| Tester result is `restart` and `Disputes` is 1 | Escalate `blocked`, reason `tester`; the group does not go back to Build |
 | Both pass | The pipeline enters Commit |
 | Both return in one moment | Both reach the builder in the one return |
 | Either `block` | Escalate `blocked` with the role's reason |
@@ -10307,7 +10342,7 @@ Component cases run real commands in the confinement of the platform. Unit cases
 - `Tick` with a session that recovered after its nudge and goes silent again returns `TickStopIdle`, with no second nudge.
 - A fake Runtime Manager that grants 10 minutes at the 80% mark raises the wall limit by 10 minutes; a zero grant leaves it.
 - A reviewer `return` while the tester runs cancels the tester and sends the builder the findings.
-- A tester `restart` with `Disputes` 0 restarts the tester once and does not return to Build; with `Disputes` 1 it escalates `flaky`.
+- A tester `restart` with `Disputes` 0 restarts the tester once and does not return to Build; with `Disputes` 1 it escalates `tester`.
 - A return whose tree hash equals `TreeAtReturn` escalates `flap`; `Returns` at the limit escalates `returns`.
 - A tester restart that comes due while the group is paused is added to `Owed` and starts at the timer.
 - A group started while every link is limited pauses, reports a `Pause` with `Since` set, and makes 0 model calls.
