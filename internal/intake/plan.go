@@ -225,7 +225,10 @@ func (h *Handler) lintLoop(ctx context.Context, sess PlannerSession, brief strin
 // lockedInDraft returns the run of a group in a run that the draft rewrites, or "".
 func lockedInDraft(d PlanDraft, locked map[string]string, epic int) string {
 	for _, f := range d.Files {
-		if m := pathShape.FindStringSubmatch(f.Path); m != nil && m[1] == strconv.Itoa(epic) {
+		if m := pathShape.FindStringSubmatch(f.Path); m != nil {
+			if n, _ := strconv.Atoi(m[1]); n != epic {
+				continue
+			}
 			if run, ok := locked[m[2]]; ok {
 				return run
 			}

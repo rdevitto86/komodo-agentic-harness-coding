@@ -4168,7 +4168,8 @@ Each finding names its rule and its file. Lint never stops at the first finding;
 | Sizing | A task has over 5 files or 300 estimated lines; a group has over 8 tasks or 8 points | A chain has over 4 groups; a task's real lines exceed twice its estimate after Build |
 | Graph | The dependency graph has a cycle | The longest chain has over 4 groups; one group is waited on by every other group; a group has over 5 dependencies |
 
-- **Case collision inputs:** every tracked file of the base commit plus every group's `files`.
+- **Case collision inputs:** every tracked file of the base commit plus every group's `files`. Task file names within one group are checked too.
+- **Draft numbers and status:** a draft group that is new must take the next `tg-N.M` of its epic, a draft group must write `status: todo`, and a path number has no leading zero. Each is a failed draft.
 - **Protected list:** it comes from the caller, never from a file this package reads.
 
 **Building the dependency graph**

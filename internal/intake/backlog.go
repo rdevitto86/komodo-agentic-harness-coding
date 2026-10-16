@@ -63,10 +63,10 @@ type Task struct {
 }
 
 // pathShape matches a task-list path under docs/backlog/: epic folder, group folder, then TG.md or a task file.
-var pathShape = regexp.MustCompile(`^epic-(\d+)/(tg-(\d+)\.(\d+))/(TG\.md|(tsk-[^/]+)\.md)$`)
+var pathShape = regexp.MustCompile(`^epic-([1-9]\d*)/(tg-([1-9]\d*)\.([1-9]\d*))/(TG\.md|(tsk-[^/]+)\.md)$`)
 
 // epicFolder matches the name of an epic folder.
-var epicFolder = regexp.MustCompile(`^epic-\d+$`)
+var epicFolder = regexp.MustCompile(`^epic-[1-9]\d*$`)
 
 // groupParts collects the files of one group folder while a set of paths is read.
 type groupParts struct {
@@ -111,7 +111,7 @@ func Load(root string) ([]Epic, []Finding, error) {
 		}
 	}
 	epics, found := parseFiles(files)
-	return epics, found, nil
+	return epics, append(found, strip(duplicateIDs(epics))...), nil
 }
 
 // parseFiles groups task-list files by group folder and parses each group; paths are relative to docs/backlog.
@@ -174,7 +174,6 @@ func parseFiles(files []DraftFile) ([]Epic, []Finding) {
 		e := &epics[len(epics)-1]
 		e.Groups = append(e.Groups, g)
 	}
-	found = append(found, duplicateIDs(epics)...)
 	return epics, found
 }
 
@@ -220,9 +219,9 @@ func parseGroup(p *groupParts) (Group, []Finding) {
 	return g, found
 }
 
-// duplicateIDs reports each group whose id repeats an earlier group's id.
-func duplicateIDs(epics []Epic) []Finding {
-	var found []Finding
+// duplicateIDs reports each group whose id repeats an earlier group's id; the finding names both groups.
+func duplicateIDs(epics []Epic) []scoped {
+	var found []scoped
 	first := map[string]string{}
 	for _, e := range epics {
 		for _, g := range e.Groups {
@@ -230,7 +229,7 @@ func duplicateIDs(epics []Epic) []Finding {
 				continue
 			}
 			if prev, ok := first[g.ID]; ok {
-				found = append(found, grammar(groupPath(e.Number, g.Name), fmt.Sprintf("id %s is already the id of %s", g.ID, prev)))
+				found = append(found, scoped{grammar(groupPath(e.Number, g.Name), fmt.Sprintf("id %s is already the id of %s", g.ID, prev)), []string{g.Name, prev}})
 				continue
 			}
 			first[g.ID] = g.Name

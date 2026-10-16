@@ -90,23 +90,13 @@ func lintAll(epics []Epic, protected, tracked []string) []scoped {
 			lintGroup(e.Number, g, protected, add)
 		}
 	}
-	graph, gf := BuildGraph(epics, tracked)
-	for _, f := range gf {
-		add(f, groupOfPath(f.Path))
-	}
+	graph, gf := buildGraph(epics, tracked)
+	out = append(out, gf...)
 	if graph.cycle() == nil {
 		waveIsolation(epics, graph, add)
 	}
 	caseCollisions(epics, tracked, add)
 	return out
-}
-
-// groupOfPath returns the group folder name in a task-list path, or "".
-func groupOfPath(p string) string {
-	if m := pathShape.FindStringSubmatch(p); m != nil {
-		return m[2]
-	}
-	return ""
 }
 
 // lintGroup runs the checks that look at one group alone: required, sizing, ears and protected.
@@ -134,8 +124,13 @@ func lintGroup(epic int, g Group, protected []string, add func(Finding, ...strin
 			fail(RuleProtected, tg, "file %s is a protected path or a task list", f)
 		}
 	}
+	folded := map[string]string{}
 	for _, t := range g.Tasks {
 		tp := fmt.Sprintf("epic-%d/%s/%s.md", epic, g.Name, t.Name)
+		if prev, ok := folded[strings.ToLower(t.Name)]; ok {
+			fail(RuleCaseCollision, tp, "task file %s.md differs only by case from %s.md", t.Name, prev)
+		}
+		folded[strings.ToLower(t.Name)] = t.Name
 		if len(t.Files) > maxTaskFiles {
 			fail(RuleSizing, tp, "task names %d files; at most %d", len(t.Files), maxTaskFiles)
 		}
@@ -265,7 +260,10 @@ func LintDraft(d PlanDraft, existing []Epic, protected, tracked []string) []Find
 			drafted[g.Name] = true
 		}
 	}
-	for _, f := range lintAll(mergeEpics(existing, epics), protected, tracked) {
+	merged := mergeEpics(existing, epics)
+	found = append(found, numberFindings(existing, epics)...)
+	all := append(lintAll(merged, protected, tracked), duplicateIDs(merged)...)
+	for _, f := range all {
 		if slices.ContainsFunc(f.groups, func(n string) bool { return drafted[n] }) {
 			found = append(found, f.Finding)
 		}
@@ -331,4 +329,36 @@ func sortFindings(f []Finding) []Finding {
 		return f[i].Rule < f[j].Rule
 	})
 	return f
+}
+
+// numberFindings fails a draft group that is new but does not take the next number of its epic, and a draft group whose status is not todo.
+func numberFindings(existing, draft []Epic) []Finding {
+	var found []Finding
+	for _, e := range draft {
+		next := 1
+		have := map[string]bool{}
+		for _, se := range existing {
+			if se.Number != e.Number {
+				continue
+			}
+			for _, g := range se.Groups {
+				have[g.Name] = true
+				next = max(next, groupIndex(g.Name)+1)
+			}
+		}
+		for _, g := range e.Groups {
+			if g.Status != "todo" {
+				found = append(found, grammar(groupPath(e.Number, g.Name), fmt.Sprintf("status %q: a plan writes status todo", g.Status)))
+			}
+			if have[g.Name] {
+				continue
+			}
+			want := fmt.Sprintf("tg-%d.%d", e.Number, next)
+			if g.Name != want {
+				found = append(found, grammar(groupPath(e.Number, g.Name), fmt.Sprintf("new group must be %s, the next number of epic-%d", want, e.Number)))
+			}
+			next++
+		}
+	}
+	return found
 }

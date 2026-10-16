@@ -81,32 +81,37 @@ func (h *Handler) swapIn(base, stage string, ep Epic) error {
 	if err != nil {
 		return fmt.Errorf("create folder for old groups: %w", err)
 	}
-	var undo []func()
-	rollback := func() {
+	var undo []func() error
+	// rollback undoes every move made; when one undo fails it keeps the aside folder for restoreOrphans and returns both failures.
+	rollback := func(cause error) error {
+		var errs []error
 		for i := len(undo) - 1; i >= 0; i-- {
-			undo[i]()
+			if err := undo[i](); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("%w; undo failed, old groups kept in %s: %w", cause, aside, errors.Join(errs...))
 		}
 		_ = os.RemoveAll(aside)
+		return cause
 	}
 	for _, g := range ep.Groups {
 		dst := filepath.Join(epicDir, g.Name)
 		if _, err := os.Lstat(dst); err == nil {
 			old := filepath.Join(aside, name, g.Name)
 			if err := os.MkdirAll(filepath.Dir(old), 0o755); err != nil {
-				rollback()
-				return fmt.Errorf("set aside %s: %w", g.Name, err)
+				return rollback(fmt.Errorf("set aside %s: %w", g.Name, err))
 			}
 			if err := h.rename(dst, old); err != nil {
-				rollback()
-				return fmt.Errorf("set aside %s: %w", g.Name, err)
+				return rollback(fmt.Errorf("set aside %s: %w", g.Name, err))
 			}
-			undo = append(undo, func() { _ = h.rename(old, dst) })
+			undo = append(undo, func() error { return h.rename(old, dst) })
 		}
 		if err := h.rename(filepath.Join(stage, name, g.Name), dst); err != nil {
-			rollback()
-			return fmt.Errorf("move %s into place: %w", g.Name, err)
+			return rollback(fmt.Errorf("move %s into place: %w", g.Name, err))
 		}
-		undo = append(undo, func() { _ = os.RemoveAll(dst) })
+		undo = append(undo, func() error { return os.RemoveAll(dst) })
 	}
 	_ = os.RemoveAll(aside)
 	_ = core.SyncDir(epicDir)
