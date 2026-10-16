@@ -106,22 +106,22 @@ type planRow struct {
 
 // installer holds what one install run needs.
 type installer struct {
-	cli                                    *CLI
-	host                                   Host
-	home, user, root, common               string
-	machine                                *state.Machine
-	repoOnly, machineOnly, noPath          bool
-	force, remove, dry                     bool
-	project, noProject                     bool
-	from                                   string
-	hosts                                  []string
-	errOut                                 func(f string, a ...any)
-	doMachine, doRepo                      bool
-	skipped                                []string
-	machineRec, repoRec                    []Entry
-	sel, machineSel                        Selections
-	machineRev                             int
-	hasRepoManifest                        bool
+	cli                           *CLI
+	host                          Host
+	home, user, root, common      string
+	machine                       *state.Machine
+	repoOnly, machineOnly, noPath bool
+	force, remove, dry            bool
+	project, noProject            bool
+	from                          string
+	hosts                         []string
+	errOut                        func(f string, a ...any)
+	doMachine, doRepo             bool
+	skipped                       []string
+	machineRec, repoRec           []Entry
+	sel, machineSel               Selections
+	machineRev                    int
+	hasRepoManifest               bool
 }
 
 // handleInstall installs the binary, the path entry, the provider probe and the repository files, or undoes them with --remove.
@@ -548,7 +548,7 @@ func updateMachine[T any](m *state.Machine, k state.MachineKind, mutate func(bod
 
 // probe asks the model client to probe every link and stores each result in providers.json.
 func (in *installer) probe(ctx context.Context) []InstallProbe {
-	rows, err := probeLinks(ctx, in.host, in.machine)
+	rows, _, err := probeLinks(ctx, in.host, in.machine)
 	if err != nil {
 		in.errOut("Warning: record the model link probe: %v\n", err)
 	}

@@ -438,10 +438,10 @@ func (in *installer) dropFromFile(path string, drop func(string) (string, error)
 }
 
 // probeLinks probes every model link and stores each result in providers.json, leaving the other fields of a link alone.
-func probeLinks(ctx context.Context, host Host, m *state.Machine) ([]InstallProbe, error) {
+func probeLinks(ctx context.Context, host Host, m *state.Machine) ([]InstallProbe, []llm.ProbeResult, error) {
 	rows := []InstallProbe{}
 	if host.Links == nil {
-		return rows, nil
+		return rows, nil, nil
 	}
 	results := host.Links.ProbeAll(ctx)
 	for _, r := range results {
@@ -464,7 +464,7 @@ func probeLinks(ctx context.Context, host Host, m *state.Machine) ([]InstallProb
 		}
 		return true
 	})
-	return rows, err
+	return rows, results, err
 }
 
 // linkName spells a link as providers.json keys it.

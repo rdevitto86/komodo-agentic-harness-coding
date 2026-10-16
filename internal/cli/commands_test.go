@@ -404,7 +404,7 @@ func TestNoEngineExitsFourNamingSocket(t *testing.T) {
 
 func TestListFormsOutsideConfigAreNotBuilt(t *testing.T) {
 	h := newHarness(t)
-	code, e := h.envelope("run", "--list")
+	code, e := h.envelope("-C", repoDir(t, ""), "run", "--list")
 	if code != 4 || !strings.Contains(e.Error.Reason, "not built yet") {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}

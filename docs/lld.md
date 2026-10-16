@@ -212,11 +212,15 @@ Go package `internal/cli`, plus the program entry point.
 | `internal/cli/status.go` | `status`, with `--wait` |
 | `internal/cli/config.go` | `config get` and `config set`: thin calls into the Configuration Manager |
 | `internal/cli/clean.go` | `clean` |
-| `internal/cli/stubs.go` | The handlers of `install`, `update`, `doctor`, `ui` and the hidden `internal engine` verb; each returns the not-built-yet fault until its part exists |
+| `internal/cli/install.go`, `install_wanted.go`, `install_files.go` | `install`: the manifest types, the diff planner, the wanted targets of each step, and the edits to `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, the binary and the path entry |
+| `internal/cli/update.go`, `update_release.go` | `update`: the update steps, the release manifest, the signature check and the release fetch |
+| `internal/cli/doctor.go`, `doctor_fs_*.go` | `doctor`: the seven checks and the file system type of the home folder, per platform |
+| `internal/cli/host.go` | `Host`: the machine probes and seams that `install`, `update` and `doctor` read, and the State Manager hookup |
+| `internal/cli/stubs.go` | The handlers of `ui` and the hidden `internal engine` verb; each returns the not-built-yet fault until its part exists |
 | `internal/cli/print.go` | The line printed for a recorded event, and the fault built from an error event |
 | `internal/cli/terminal.go` | `HasControllingTerminal`: opens `/dev/tty` |
 
-`install.go`, `update.go`, `doctor.go`, `ui.go` and the text templates `install` writes arrive with their commands and replace the handlers in `stubs.go`.
+`ui.go` arrives with its command and replaces the handler in `stubs.go`.
 
 Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. Only `engine.go` opens the control socket. The Error Handler sits below `cli`, so `cli` imports `fault` and implements its `fault.Printer` interface with `PrintError()`. In the CLI process `fault` has no bus: `cli.New` calls `fault.New(nil, c)`, and `Guard` and `Final` print through the CLI ([1.4](#14-interfaces)). In the engine, `engine.ConnPrinter` prints to the connection that issued the command.
 
@@ -517,6 +521,9 @@ type Entry struct {
     { "target": "AGENTS.md", "hash": "9f2c61aa…", "step": 4 },
     { "target": "CLAUDE.md", "hash": "41d07be3…", "step": 5 },
     { "target": ".claude/settings.json", "entry": "permissions.allow Bash(komodo *)", "hash": "c3e8920f…", "step": 6 },
+    { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo config set*)", "hash": "7a1d4e52…", "step": 6 },
+    { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo install*)", "hash": "5b60c9d1…", "step": 6 },
+    { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo update*)", "hash": "0e83f2a6…", "step": 6 },
     { "target": ".claude/settings.json", "entry": "hooks.PreToolUse komodo internal guard", "hash": "e19a3b07…", "step": 6 }
   ],
   "selections": { "hosts": ["claude"], "project": false }
@@ -685,12 +692,14 @@ type Deps struct {
 	Engine   Engine            // the control socket client
 	Terminal func() bool       // true when a controlling terminal is attached
 	Home     string            // the Komodo home folder, which a dry run of config set --accept reads
+	State    *state.Machine    // install.json, update.json and providers.json; opened over Home with the cli writer when nil
+	Host     Host              // the machine probes and seams of install, update and doctor; a nil field uses the real machine
 	Stdout   io.Writer         // the reply stream; os.Stdout when nil
 	Stderr   io.Writer         // warnings and prompts; os.Stderr when nil
 	Stdin    io.Reader         // the answer to a confirmation; os.Stdin when nil
 }
 
-// A State field for the install records (install.json, update.json, providers.json) joins Deps when install and update are built.
+// State is the machine-wide records; Deps.Host holds what install, update and doctor read from the machine.
 
 // Engine is the CLI's client of the engine's control socket.
 type Engine interface {
@@ -799,6 +808,8 @@ A person at a terminal runs `install`, in a repository for the repository steps 
 | `--no-project` | Stop owning the `--project` files; they stay on disk |
 | `--force` | Overwrite hand-edited owned files |
 | `--remove` | Undo the install: prune every entry `install.json` lists |
+
+`install` writes the `AGENTS.md` block, the `@AGENTS.md` line and the settings entries as 7 manifest entries: the block, the import line, the allow rule, the three deny rules and the hook. A dry run prints one row per file, so a fresh repository with Claude Code lists 4 writes: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and the manifest. With no `AGENTS.md` the full template is the block alone. `--project` and `--no-project` record the choice in the manifest selections and add no file, because no project file template is defined. The hosts are kept in the selections only when `--hosts` named them; a rerun without the flag reuses them, else detects.
 
 `install` does 3 things for a host: it places the binary, writes the short Komodo block into the repository's `AGENTS.md` (the harness is installed, here is its path, drive it only through `komodo` commands), and keeps the guard hook and the `@AGENTS.md` import. It starts no session-start hook and copies no agent or skill into any host. With `--remove` the wanted set is empty, so the diff prunes each owned entry: the Komodo block between its markers, the `@AGENTS.md` line, the owned settings entries and the placed binary version. A hand-edited owned file stays and is reported unless `--force` is given.
 
@@ -971,6 +982,10 @@ Anyone runs `doctor`, including the orchestrator. It prints each check's result 
 - **Docker:** whether the Docker tools exist and the daemon answers. Without Docker the Tester falls back to the operating-system sandbox, and the run report says so.
 - **Model links:** the Claude subscription link and the paid Anthropic interface, and the optional local model link when one is configured.
 - **Komodo block:** one begin marker and one end marker in the repository's `AGENTS.md`.
+- **Home folder:** the Komodo home folder is on a local file system and honours file locks; a network file system or a lock that lets two holders in fails the check ([G-280](#g-280) holds the open question of refusing such a folder).
+- **Review rules:** each review rule whose findings Go verified under 50% of the time, with at least one finding submitted, fails the check ([G-268](#g-268) holds the open question of whether `doctor` reports them).
+
+The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
 
 ```go
 // internal/cli/doctor.go
@@ -982,7 +997,7 @@ type DoctorData struct {
 
 // Check is the result of one doctor check.
 type Check struct {
-	Name   string `json:"name"`   // install, sandbox, docker, links or block
+	Name   string `json:"name"`   // install, sandbox, docker, links, block, home or rules
 	Result string `json:"result"` // pass or fail
 	Detail string `json:"detail"` // what was found
 	Fix    string `json:"fix"`    // the command or change that resolves a failure; empty on pass
@@ -997,7 +1012,7 @@ A person at a terminal runs `update`. It downloads the newest release to `versio
 |---|---|
 | `--check` | Fetch `latest.json` now and report; changes nothing else |
 | `--to <version>` | Install that version; may downgrade |
-| `--restart-runs` | Move live runs onto the new binary: [TODO: how `update --restart-runs` moves live runs onto the new binary ([G-232](#g-232))] |
+| `--restart-runs` | Move live runs onto the new binary: [TODO: how `update --restart-runs` moves live runs onto the new binary ([G-232](#g-232))]. Until it is decided the CLI calls a `RunMover` the engine will supply, and the flag refuses with the not-built-yet fault when none is wired |
 
 ##### `clean`
 
@@ -1134,7 +1149,8 @@ flowchart TD
 | 6 | `.claude/settings.json` | The entries of Claude Code settings entries, merged; other keys untouched | Claude detected |
 | 7 | Manifest | `<git-common-dir>/komodo/install.json` | Inside a git repository |
 
-- **Step 1, binary source.** `--from <file>` uses that file with no network. Otherwise the latest release is used if it is newer than the running binary and verified, else the running binary is copied. An offline install from an older binary leaves `bin/` on the older version.
+- **Step 1, binary source.** `--from <file>` uses that file with no network; its version is what it prints for `--version`. Otherwise the running binary is copied. `install` makes no network call (invariant 12), so a newer release arrives through `update`, and an install from an older binary leaves `bin/` on the older version.
+- **Step 2, kept entry.** A path entry install recorded stays wanted on a rerun even though `komodo` is now on `PATH`, so a rerun never prunes its own symlink or shell line; `--no-path` leaves a recorded entry as it is.
 - **Step 4.** With no `AGENTS.md`, the full template is written. With one, only the block is written or replaced; text outside the markers is never touched. A begin marker without an end marker, or two of either, stops the step and names the lines to fix by hand.
 - **Step 6.** A hook that fails prints an error; `onFailure: block` makes the guard fail closed.
 - **Never written:** a repository configuration folder, git hooks, `.codex/`, anything under `~/.claude` or `~/.codex`, or anything under `.claude/` beyond step 6. The settings files appear on the first `config set`, not at install.
@@ -1159,13 +1175,13 @@ sequenceDiagram
   U->>U: 7 delete old versions
 ```
 
-1. **Check.** Fetch `latest.json` and its signature with a 1 second timeout. Only `update` fetches the release manifest. A failed fetch prints the error and its fix.
-2. **Record.** Replace `update.json` with the newest version seen. With `--check`, stop here.
+1. **Check.** Fetch `latest.json` and its signature with a 1 second timeout, and verify the signature against the compiled-in keys before the manifest is trusted. Only `update` fetches the release manifest. A failed fetch prints the error and its fix. With `--to <version>` the manifest comes from that version's release folder (`<releases>/download/v<version>/`), and its `version` must equal the one asked for; the newest release is `<releases>/latest/download/`.
+2. **Record.** Replace `update.json` with the newest version seen. With `--check` or `--dry-run`, stop here; a dry run records nothing.
 3. **Claim.** Create `update.lock` exclusively. If it exists and is younger than 10 minutes, another `update` is running and this one exits. An older lock is stale, so a crashed update cannot block updates.
 4. **Download.** Fetch the asset for this operating system and architecture to `versions/<v>/komodo.part`.
-5. **Verify.** Compare the download's SHA-256 with the asset's `sha256`, and verify the signature of `latest.json` against the compiled-in keys. On a mismatch delete the `.part` file, keep the old binary and print the error.
+5. **Verify.** Compare the download's SHA-256 with the asset's `sha256`; the signature was verified at step 1. On a mismatch delete the `.part` file, keep the old binary and print the error.
 6. **Swap.** Rename `komodo.part` to `versions/<v>/komodo`, then replace `bin/komodo` atomically.
-7. **Clean up.** Delete version folders that are not removable roles: keep the current version, the previous version, and every version named by an unfinished task group in the State Manager. Delete the rest.
+7. **Clean up.** Delete version folders that are not removable roles: keep the current version, the previous version, and every version named by an unfinished task group in the State Manager. Delete the rest. The previous version is the folder `install.json` records for `bin/komodo`, else the running version; the swap also rewrites the `bin/komodo` hash and the version entry in `install.json`. The compiled-in keys are set by the release build with `-ldflags -X` on `releaseKeyCurrent` and `releaseKeyNext` (base64).
 
 A signature verifies when it matches a key of the set; either key may sign. A rotation release is signed with the `next` key and compiles `next` into the current slot, so installed binaries accept it with no flag day. Moving the private key into a key management service, and refusing a manifest older than the last one accepted, wait for the first machine the owner does not own that runs `update` ([G-21](#g-21)). Producing and signing a release is done by this repository's Makefile, outside the product.
 

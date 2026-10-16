@@ -34,6 +34,7 @@ type harness struct {
 	host     Host   // the machine probes the commands use; every one is a fake
 	userHome string // HOME for the test, so no step touches the real home folder
 	exe      string // the fake running binary install copies
+	workdir  string // a folder outside every repository, where a command with no -C starts
 }
 
 // newHarness builds a harness with no terminal and an engine that fails every call.
@@ -59,7 +60,7 @@ func newHarness(t *testing.T) *harness {
 	if err := os.WriteFile(exe, []byte("komodo test binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{t: t, home: home, engine: deadEngine{}, cfg: cfg, userHome: userHome, exe: exe}
+	h := &harness{t: t, home: home, engine: deadEngine{}, cfg: cfg, userHome: userHome, exe: exe, workdir: t.TempDir()}
 	h.host = Host{
 		Executable: func() (string, error) { return exe, nil },
 		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
@@ -84,6 +85,10 @@ func (h *harness) run(args ...string) (int, string, string) {
 		Terminal: func() bool { return h.terminal },
 		Stdout:   &out, Stderr: &errOut, Stdin: strings.NewReader(h.stdin),
 	})
+	if !hasToken(args, "-C") {
+		// A command with no -C would start from the real repository this test runs in.
+		args = append([]string{"-C", h.workdir}, args...)
+	}
 	code := c.Run(append([]string{"komodo"}, args...))
 	return code, out.String(), errOut.String()
 }
