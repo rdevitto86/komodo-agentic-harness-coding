@@ -95,8 +95,7 @@ type Manager struct {
 	closeOnce  sync.Once
 	closeErr   error
 	tmp        string
-	scopeInput string // the scope answer text the builder's next session receives
-	keepHandle *llm.ResumeHandle
+	scopeInput string     // the scope answer text the builder's next session receives
 	taskMu     sync.Mutex // one completion command at a time
 	closing    atomic.Bool
 }
@@ -372,7 +371,11 @@ func (m *Manager) begin(ctx context.Context) error {
 func (m *Manager) checkpoint(ctx context.Context) error {
 	m.mu.Lock()
 	req := m.pauseReq
-	if req == nil || m.prog.Pause != nil {
+	if m.prog.Pause != nil {
+		m.mu.Unlock()
+		return ErrGroupPaused
+	}
+	if req == nil {
 		m.mu.Unlock()
 		return nil
 	}

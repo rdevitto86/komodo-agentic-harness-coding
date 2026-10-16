@@ -113,7 +113,7 @@ func (b *builderRole) Slots(_ context.Context, in RoleInput) (map[string]string,
 	}
 	b.mu.Lock()
 	if b.ans != "" {
-		s["scope_answer"] = b.ans
+		s["scope_answer"], b.ans = b.ans, ""
 	}
 	b.mu.Unlock()
 	return s, nil
@@ -211,10 +211,19 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 	if err := t.cfg.Tester.AcceptResult(t.cfg.taskIDs(), items, res); err != nil {
 		return Outcome{}, &GateError{Text: "the result was rejected: " + err.Error()}
 	}
-	var failed, disputed, split, goOut, notMet []string
+	var failed, disputed, split, goOut, notMet, listed []string
 	for _, ir := range res.Items {
 		it := byID[ir.Item]
-		if ir.Pass || len(it.Needs) > 0 || t.cfg.Runner == nil {
+		switch {
+		case ir.Pass:
+			continue
+		case len(it.Needs) > 0:
+			listed = append(listed, fmt.Sprintf("tester: item %s skipped, it needs %s", it.ID, strings.Join(it.Needs, ", ")))
+			continue
+		case strings.TrimSpace(it.Cmd) == "":
+			listed = append(listed, fmt.Sprintf("tester: item %s unconfirmed, it has no command for Go to rerun", it.ID))
+			continue
+		case t.cfg.Runner == nil:
 			continue
 		}
 		out, text, rerr := t.cfg.Tester.Rerun(ctx, t.cfg.Runner(), it)
@@ -253,7 +262,7 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		}
 		return Outcome{Kind: OutcomeReturn, Findings: failed}, nil
 	}
-	return Outcome{Kind: OutcomePass, Summary: []string{fmt.Sprintf("tester: %d items, %d tasks confirmed", len(res.Items), len(res.Tasks))}}, nil
+	return Outcome{Kind: OutcomePass, Summary: append([]string{fmt.Sprintf("tester: %d items, %d tasks confirmed", len(res.Items), len(res.Tasks))}, listed...)}, nil
 }
 
 // reviewerRole is the reviewer over agent.Reviewer.

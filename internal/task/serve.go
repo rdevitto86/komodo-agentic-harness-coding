@@ -180,19 +180,19 @@ func (m *Manager) Serve(ctx context.Context, ch Channels) error {
 	sctx, cancel := context.WithCancel(ctx)
 	l := &serveLoop{m: m, ctx: sctx, calls: make(chan error, 1),
 		cr: &chanRuntime{ctx: sctx, out: ch.Replies, waits: map[string]chan TimerGrant{}}}
-	defer l.cr.close()
-	defer cancel()
 	m.mu.Lock()
 	if m.rt == nil {
 		m.rt = l.cr
 	}
 	m.mu.Unlock()
 	defer func() {
-		// Queued facts reach the Runtime Manager before the reply channel closes.
-		l.wg.Wait()
+		// Queued facts go up first; then the work still running is cancelled, awaited, and the reply channel closes.
 		if m.hasFacts() {
-			_ = m.report(context.WithoutCancel(sctx))
+			_ = m.report(sctx)
 		}
+		cancel()
+		l.wg.Wait()
+		l.cr.close()
 	}()
 	for {
 		select {
@@ -236,8 +236,16 @@ func (l *serveLoop) start(f func(context.Context) error) {
 	l.wg.Add(1)
 	go func() {
 		defer guardian.Recover(taskSource, nil)
+		finished := false
 		defer l.wg.Done()
-		l.calls <- f(l.ctx)
+		defer func() {
+			if !finished {
+				l.calls <- errors.New("the pipeline call crashed")
+			}
+		}()
+		err := f(l.ctx)
+		finished = true
+		l.calls <- err
 	}()
 }
 

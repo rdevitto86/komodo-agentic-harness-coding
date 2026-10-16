@@ -502,7 +502,12 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 		return err
 	}
 	m.mu.Lock()
-	owed := slices.Clone(m.lastPause.Owed)
+	var owed []string
+	for _, a := range m.lastPause.Owed {
+		if a == "tester" || a == "reviewer" {
+			owed = append(owed, a)
+		}
+	}
 	m.lastPause.Owed = nil
 	m.mu.Unlock()
 	if len(owed) == 0 {
@@ -605,15 +610,26 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 		wg.Add(1)
 		go func() {
 			defer guardian.Recover(taskSource, nil)
+			finished := false
 			defer wg.Done()
+			defer func() {
+				if !finished {
+					*b = branch{err: fmt.Errorf("the %s goroutine crashed", name)}
+				}
+			}()
 			c := tctx
 			if name == "reviewer" {
 				c = ctx
 			}
 			*b = m.judgeBranch(c, name, in)
+			if name == "tester" && b.err != nil && tctx.Err() != nil && ctx.Err() == nil &&
+				(errors.Is(b.err, context.Canceled) || errors.Is(b.err, ErrStopped)) {
+				*b = branch{out: sessOut{reason: state.ReasonCancelled}}
+			}
 			if name == "reviewer" && b.err == nil && b.out.outcome.Kind == OutcomeReturn {
 				tcancel()
 			}
+			finished = true
 		}()
 	}
 	wg.Wait()
@@ -624,12 +640,12 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 	var blocked *blockErr
 	for _, name := range judges {
 		err := res[name].err
+		if err == nil && res[name].out.reason == "" {
+			err = fmt.Errorf("the %s ended with no exit reason", name)
+		}
 		var be *blockErr
 		switch {
 		case err == nil:
-		case errors.Is(err, ErrStopped):
-			// A tester that never started because the reviewer returned first.
-			res[name].err, res[name].out.reason = nil, state.ReasonCancelled
 		case errors.Is(err, ErrGroupPaused):
 			paused = err
 		case errors.As(err, &be) && blocked == nil:

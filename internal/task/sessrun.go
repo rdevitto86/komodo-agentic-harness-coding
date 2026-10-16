@@ -172,10 +172,7 @@ func (m *Manager) runAgent(ctx context.Context, req sessReq) (sessOut, error) {
 				continue
 			}
 		}
-		out, retry, err := m.oneSession(ctx, req, role, perm, brief, sel)
-		if m.c.Limits != nil {
-			_ = m.c.Limits.ReleaseSlot(sel.Link)
-		}
+		out, retry, err := m.sessionInSlot(ctx, req, role, perm, brief, sel)
 		switch {
 		case err != nil:
 			return out, err
@@ -184,21 +181,18 @@ func (m *Manager) runAgent(ctx context.Context, req sessReq) (sessOut, error) {
 			req.resume = nil
 		case out.reason == state.ReasonProvider:
 			req.resume = nil
-			if len(out.handleLimits()) > 0 {
-				m.keepHandle = &out.handle
-			}
 		default:
 			return out, nil
 		}
 	}
 }
 
-// handleLimits returns the limit that ended a session, as a list.
-func (o sessOut) handleLimits() []*llm.ProviderLimit {
-	if o.limit == nil {
-		return nil
+// sessionInSlot runs one session and gives its link slot back when it ends, even by a panic.
+func (m *Manager) sessionInSlot(ctx context.Context, req sessReq, role Role, perm Permissions, brief Brief, sel Selection) (sessOut, bool, error) {
+	if m.c.Limits != nil {
+		defer func() { _ = m.c.Limits.ReleaseSlot(sel.Link) }()
 	}
-	return []*llm.ProviderLimit{o.limit}
+	return m.oneSession(ctx, req, role, perm, brief, sel)
 }
 
 // checkStop returns ErrStopped once a stop command or a cancelled context ended the work.
@@ -235,6 +229,20 @@ func (m *Manager) effectiveFiles() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.files)
+}
+
+// writeBriefFiles writes brief.md and system.md into a session folder.
+func writeBriefFiles(dir string, parts [5]string) error {
+	sys, rerr := komodo.Embedded.ReadFile("embed/output/standard.md")
+	if rerr != nil {
+		sys = []byte("Reply with the final result in the requested shape.\n")
+	}
+	for name, body := range map[string]string{"brief.md": briefText(Brief{Parts: parts}), "system.md": string(sys)} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // briefText joins the non-empty brief parts with a blank line.
@@ -279,14 +287,8 @@ func (m *Manager) prepare(req sessReq, role Role, perm Permissions, brief Brief,
 	}
 	sc := &sessCtx{id: id, dir: dir, resumed: resumed, memo: &judgeMemo{role: role}}
 	if !resumed {
-		sys, rerr := komodo.Embedded.ReadFile("embed/output/standard.md")
-		if rerr != nil {
-			sys = []byte("Reply with the final result in the requested shape.\n")
-		}
-		for name, body := range map[string]string{"brief.md": briefText(brief), "system.md": string(sys)} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-				return nil, fmt.Errorf("write %s: %w", name, err)
-			}
+		if err := writeBriefFiles(dir, brief.Parts); err != nil {
+			return nil, err
 		}
 	}
 	files := m.effectiveFiles()
@@ -498,6 +500,12 @@ func (m *Manager) start(ctx context.Context, sc *sessCtx, req sessReq, sel Selec
 		}
 		sc.handle = llm.ResumeHandle{Link: sel.Link, Kind: kind, Value: val}
 		sc.resumed = false
+		if req.input != "" {
+			sc.sess.Parts[4] = strings.TrimSpace(sc.sess.Parts[4] + "\n\n" + req.input)
+		}
+		if err := writeBriefFiles(sc.dir, sc.sess.Parts); err != nil {
+			return nil, false, err
+		}
 	}
 	st, err := m.c.Client.Start(ctx, sc.sess)
 	if errors.Is(err, llm.ErrModelGone) && m.c.Router.Catalog != nil {
