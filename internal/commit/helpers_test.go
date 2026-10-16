@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 )
 
@@ -61,7 +62,7 @@ type world struct {
 	root   string
 	remote string
 	clone  string
-	git    *ExecGit
+	git    *core.Git
 	traced [][]string
 	mu     sync.Mutex
 	// fakes
@@ -92,7 +93,7 @@ func newWorld(t *testing.T) *world {
 	git(t, w.clone, "branch", "komodo/ep-1", "main")
 	git(t, w.clone, "push", "origin", "komodo/ep-1")
 	git(t, w.clone, "fetch", "origin")
-	w.git = NewExecGit(w.clone)
+	w.git = core.NewGit(w.clone)
 	w.git.Trace = func(a []string) {
 		w.mu.Lock()
 		w.traced = append(w.traced, append([]string(nil), a...))
@@ -203,16 +204,21 @@ type report struct {
 	data    any
 }
 
-// fakeReporter records every report.
+// fakeReporter records every delivered report; a subtype in fail is refused once.
 type fakeReporter struct {
 	mu   sync.Mutex
 	list []report
+	fail map[string]error
 }
 
-// Report records the call.
+// Report records the call, or returns the one-shot failure planned for its subtype.
 func (f *fakeReporter) Report(_ context.Context, _ bus.ID, subtype string, data any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.fail[subtype]; ok {
+		delete(f.fail, subtype)
+		return err
+	}
 	f.list = append(f.list, report{subtype, data})
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 )
 
@@ -29,7 +30,7 @@ func gitFail(err error) *PublishError {
 		return fail(KindPushRejected, false, err)
 	case errors.Is(err, ErrBranchMissing):
 		return fail(KindBaseMissing, false, err)
-	case errors.Is(err, ErrTrailer), errors.Is(err, ErrNoGitDir), errors.Is(err, ErrForce), errors.Is(err, errEmptyMessage):
+	case errors.Is(err, ErrTrailer), errors.Is(err, ErrNoGitDir), errors.Is(err, ErrForce), errors.Is(err, core.ErrEmptyMessage):
 		return fail(KindGit, false, err)
 	}
 	return fail(KindGit, true, err)
@@ -67,20 +68,26 @@ func (h *Handler) Save(ctx context.Context, r SaveRequest) (SaveResult, error) {
 		return SaveResult{}, err
 	}
 	h.adopt(l.ClonePath)
-	tree, err := h.Git.TreeOf(ctx, r.Worktree)
+	cur, err := h.Git.CurrentBranch(ctx, r.Worktree)
 	if err != nil {
 		return SaveResult{}, gitFail(err)
 	}
-	head, headTree, err := h.Git.Head(ctx, r.Worktree)
-	if err == nil && headTree == tree {
-		return SaveResult{Head: head, Tree: tree}, nil
+	if cur != r.Branch {
+		return SaveResult{}, fail(KindNotApproved, false, fmt.Errorf("worktree is on %s, not %s: %w", cur, r.Branch, ErrNotApproved))
+	}
+	before, _, herr := h.Git.Head(ctx, r.Worktree)
+	if herr != nil {
+		before = ""
 	}
 	if _, err := h.Git.Commit(ctx, r.Worktree, r.Label+": "+oneLine(r.Task)); err != nil {
 		return SaveResult{}, gitFail(err)
 	}
-	head, headTree, err = h.Git.Head(ctx, r.Worktree)
+	head, tree, err := h.Git.Head(ctx, r.Worktree)
 	if err != nil {
 		return SaveResult{}, gitFail(err)
 	}
-	return SaveResult{Head: head, Tree: headTree, Saved: true}, nil
+	return SaveResult{Head: head, Tree: tree, Saved: head != before}, nil
 }
+
+// validBranch reports whether name is a komodo/ branch with a safe spelling.
+func validBranch(name string) bool { return core.ValidBranch(name) }

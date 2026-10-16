@@ -22,9 +22,10 @@ type epicGate struct {
 
 // waiter is one group waiting for its turn.
 type waiter struct {
-	group string
-	ready chan struct{}
-	turn  *Turn // set under the lock when the turn is granted
+	group    string
+	anyPause bool // admitted even while another group's failed recheck holds the epic
+	ready    chan struct{}
+	turn     *Turn // set under the lock when the turn is granted
 }
 
 // Turn is one group's hold on its epic's landing turn.
@@ -51,9 +52,14 @@ func (g *EpicGates) gate(epic string) *epicGate {
 }
 
 // grant gives the free turn to group and returns it; the caller holds the lock.
-func (g *EpicGates) grant(epic string, e *epicGate, group string) *Turn {
-	t := &Turn{gates: g, epic: epic, group: group, first: !e.seen, paused: e.pausedBy != ""}
-	e.held, e.seen = true, true
+// A turn taken only to edit the landing worktree is not a landing: it neither counts as the epic's first turn nor carries a pause.
+func (g *EpicGates) grant(epic string, e *epicGate, w *waiter) *Turn {
+	t := &Turn{gates: g, epic: epic, group: w.group}
+	if !w.anyPause {
+		t.first, t.paused = !e.seen, e.pausedBy != ""
+		e.seen = true
+	}
+	e.held = true
 	return t
 }
 
@@ -64,11 +70,11 @@ func (g *EpicGates) dispatch(epic string, e *epicGate) {
 		return
 	}
 	for i, w := range e.queue {
-		if e.pausedBy != "" && w.group != e.pausedBy {
+		if e.pausedBy != "" && w.group != e.pausedBy && !w.anyPause {
 			continue
 		}
 		e.queue = append(e.queue[:i], e.queue[i+1:]...)
-		w.turn = g.grant(epic, e, w.group)
+		w.turn = g.grant(epic, e, w)
 		close(w.ready)
 		return
 	}
@@ -76,14 +82,26 @@ func (g *EpicGates) dispatch(epic string, e *epicGate) {
 
 // Enter waits for the epic's turn, first come first served; a paused epic admits only the group that paused it.
 func (g *EpicGates) Enter(ctx context.Context, epic, group string) (*Turn, error) {
+	return g.enter(ctx, epic, &waiter{group: group, ready: make(chan struct{})})
+}
+
+// Lock waits for the epic's turn like Enter but is admitted even while the epic is paused; it only lets the
+// caller edit the epic's landing worktree, so it never changes the pause.
+func (g *EpicGates) Lock(ctx context.Context, epic string) (*Turn, error) {
+	return g.enter(ctx, epic, &waiter{anyPause: true, ready: make(chan struct{})})
+}
+
+// enter admits w at once when it may, and otherwise queues it until its turn or the end of ctx.
+func (g *EpicGates) enter(ctx context.Context, epic string, w *waiter) (*Turn, error) {
 	g.mu.Lock()
 	e := g.gate(epic)
-	if !e.held && ((e.pausedBy == "" && len(e.queue) == 0) || e.pausedBy == group) {
-		t := g.grant(epic, e, group)
+	free := !e.held && ((w.anyPause && (len(e.queue) == 0 || e.pausedBy != "")) ||
+		(!w.anyPause && ((e.pausedBy == "" && len(e.queue) == 0) || e.pausedBy == w.group)))
+	if free {
+		t := g.grant(epic, e, w)
 		g.mu.Unlock()
 		return t, nil
 	}
-	w := &waiter{group: group, ready: make(chan struct{})}
 	e.queue = append(e.queue, w)
 	g.mu.Unlock()
 	select {

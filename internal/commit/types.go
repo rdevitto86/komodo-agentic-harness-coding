@@ -123,10 +123,7 @@ func (e *PublishError) Error() string { return e.Kind + ": " + e.Err.Error() }
 func (e *PublishError) Unwrap() error { return e.Err }
 
 var (
-	ErrNotApproved  = errors.New("approval does not match the commit or the files") // verdicts disagree, or the tree changed
-	ErrLeaseLost    = errors.New("lease lost: another run holds the group")          // fence higher, or the holder differs
-	ErrCriticalRef  = errors.New("reference is outside refs/heads/komodo/ and refs/komodo/")
-	ErrConflict     = errors.New("merge conflict")
-	ErrPushRejected = errors.New("remote rejected the push")
-	ErrRecheck      = errors.New("checks failed on the epic branch after the landing")
+	ErrNotApproved = errors.New("approval does not match the commit or the files") // verdicts disagree, or the tree changed
+	ErrLeaseLost   = errors.New("lease lost: another run holds the group")         // fence higher, or the holder differs
+	ErrRecheck     = errors.New("checks failed on the epic branch after the landing")
 )

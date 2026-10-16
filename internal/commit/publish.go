@@ -61,7 +61,7 @@ func (p *publication) validate() error {
 	return nil
 }
 
-// settle resolves the base branch and the remote from the settings, the remote's default branch and the base branch's upstream.
+// settle resolves the base branch and the remote, refuses a group or epic branch that is the base branch, and picks the landing worktree path.
 func (p *publication) settle(ctx context.Context) error {
 	cfg := p.h.Config
 	p.base, p.remote = cfg.BaseBranch, cfg.Remote
@@ -70,7 +70,13 @@ func (p *publication) settle(ctx context.Context) error {
 		root = filepath.Dir(p.a.Worktree)
 	}
 	p.wt = filepath.Join(root, "landing-"+p.a.Epic)
-	return resolveRemote(ctx, p.h.Git, p.a.Worktree, &p.base, &p.remote)
+	if err := resolveRemote(ctx, p.h.Git, p.a.Worktree, &p.base, &p.remote); err != nil {
+		return err
+	}
+	if p.base == p.a.Branch || p.base == p.epic {
+		return fail(KindCriticalRef, false, fmt.Errorf("base branch %q is a group or epic branch: %w", p.base, ErrCriticalRef))
+	}
+	return nil
 }
 
 // resolveRemote fills an empty base branch from the remote's default branch and an empty remote from the base branch's upstream.
@@ -99,9 +105,17 @@ func resolveRemote(ctx context.Context, g Git, dir string, base, remote *string)
 	return nil
 }
 
+// tracking names a remote-tracking reference in full, so no other reference of the same short name can win.
+func (p *publication) tracking(branch string) string {
+	return "refs/remotes/" + p.remote + "/" + branch
+}
+
 // commit records the approved tree on the group branch unless a commit already holds it.
 func (p *publication) commit(ctx context.Context) error {
 	g, a := p.h.Git, p.a
+	if err := p.onGroupBranch(ctx); err != nil {
+		return err
+	}
 	wtTree, err := g.TreeOf(ctx, a.Worktree)
 	if err != nil {
 		return gitFail(err)
@@ -128,14 +142,31 @@ func (p *publication) commit(ctx context.Context) error {
 	return notApproved
 }
 
+// onGroupBranch refuses a worktree that does not have the approved group branch checked out.
+func (p *publication) onGroupBranch(ctx context.Context) error {
+	cur, err := p.h.Git.CurrentBranch(ctx, p.a.Worktree)
+	if err != nil {
+		return gitFail(err)
+	}
+	if cur != p.a.Branch {
+		return fail(KindNotApproved, false, fmt.Errorf("worktree is on %s, approved %s: %w", cur, p.a.Branch, ErrNotApproved))
+	}
+	return nil
+}
+
 // holdsApproved reports whether the approved commit lies behind HEAD through only this group's merges of the epic branch.
+// Each such merge must be a real merge commit whose second parent is a commit the remote epic branch already holds.
 func (p *publication) holdsApproved(ctx context.Context, cur CommitInfo) bool {
 	syncSubject := p.a.Label + ": merge " + p.a.Epic
 	for i := 0; i < maxSyncWalk; i++ {
 		if cur.Tree == p.a.Tree {
 			return true
 		}
-		if cur.Subject != syncSubject || cur.Parent == "" {
+		if cur.Subject != syncSubject || cur.Parent == "" || cur.Second == "" {
+			return false
+		}
+		held, err := p.h.Git.IsAncestor(ctx, p.a.Worktree, cur.Second, p.tracking(p.epic))
+		if err != nil || !held {
 			return false
 		}
 		next, err := p.h.Git.Info(ctx, p.a.Worktree, cur.Parent)
@@ -149,7 +180,7 @@ func (p *publication) holdsApproved(ctx context.Context, cur CommitInfo) bool {
 
 // fetchBranch fetches one remote branch and maps a missing one to base_missing and a network failure to a retryable push error.
 func (p *publication) fetchBranch(ctx context.Context, dir, branch string) error {
-	err := p.h.Git.Fetch(ctx, dir, p.remote, branch)
+	err := p.h.Git.FetchBranch(ctx, dir, p.remote, branch)
 	switch {
 	case err == nil:
 		return nil
@@ -160,20 +191,22 @@ func (p *publication) fetchBranch(ctx context.Context, dir, branch string) error
 }
 
 // recheck runs the free checks on the landing worktree; a failure pauses the epic under this group.
+// The check result decides the outcome, whether or not the pause could be reported.
 func (p *publication) recheck(ctx context.Context, turn *Turn) error {
 	res, err := p.h.Check.Recheck(ctx, p.a.Epic, p.wt)
 	if err != nil {
 		turn.Release()
 		return fail(KindRecheck, true, fmt.Errorf("run the checks: %w", err))
 	}
-	if !res.Pass {
-		turn.Finish(false)
-		if rerr := p.report(ctx, "epic.paused", bus.EpicPaused{Epic: p.a.Epic, Group: p.a.Label, Output: res.Output}); rerr != nil {
-			return rerr
-		}
-		return fail(KindRecheck, false, fmt.Errorf("%w: %s", ErrRecheck, res.Output))
+	if res.Pass {
+		return nil
 	}
-	return nil
+	turn.Finish(false)
+	failed := fmt.Errorf("%w: %s", ErrRecheck, res.Output)
+	if rerr := p.report(ctx, "epic.paused", bus.EpicPaused{Epic: p.a.Epic, Group: p.a.Label, Output: res.Output}); rerr != nil {
+		failed = errors.Join(failed, rerr)
+	}
+	return fail(KindRecheck, false, failed)
 }
 
 // report sends one progress fact through the Reporter.
@@ -185,20 +218,6 @@ func (p *publication) report(ctx context.Context, subtype string, data any) erro
 		return fail(KindReport, true, fmt.Errorf("report %s: %w", subtype, err))
 	}
 	return nil
-}
-
-// landed reports whether the landing worktree's epic branch already holds a merge for this group, and lists every landing.
-func (p *publication) landed(ctx context.Context) (bool, []Landing, error) {
-	ls, err := p.h.Git.Landed(ctx, p.wt, p.remote+"/"+p.base, "HEAD")
-	if err != nil {
-		return false, nil, gitFail(err)
-	}
-	for _, l := range ls {
-		if l.Label == p.a.Label {
-			return true, ls, nil
-		}
-	}
-	return false, ls, nil
 }
 
 // land runs the landing turn, the push, the recheck, the pull request, the report and the hand-off.
@@ -220,16 +239,28 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	if err := p.fetchBranch(ctx, a.Worktree, p.epic); err != nil {
 		return Result{}, err
 	}
-	tracking := p.remote + "/" + p.epic
-	if err := h.Git.AddWorktree(ctx, p.clone, p.wt, p.epic, tracking); err != nil {
+	if err := h.Git.AddWorktree(ctx, p.clone, p.wt, p.epic, p.remote+"/"+p.epic); err != nil {
 		return Result{}, gitFail(err)
 	}
-	if _, err := h.Git.Merge(ctx, p.wt, tracking, a.Epic+": update from "+p.remote, false); err != nil {
+	if _, err := h.Git.Merge(ctx, p.wt, p.tracking(p.epic), a.Epic+": update from "+p.remote, false); err != nil {
 		return Result{}, gitFail(err)
 	}
-	already, _, err := p.landed(ctx)
+	tip, _, err := h.Git.Head(ctx, a.Worktree)
 	if err != nil {
-		return Result{}, err
+		return Result{}, gitFail(err)
+	}
+	var ls []Landing
+	already, err := h.Git.IsAncestor(ctx, p.wt, tip, "HEAD")
+	if err != nil {
+		return Result{}, gitFail(err)
+	}
+	if already {
+		if ls, err = h.Git.Landed(ctx, p.wt, p.tracking(p.base), "HEAD"); err != nil {
+			return Result{}, gitFail(err)
+		}
+		if already = p.hasLanded(ls); !already {
+			ls = nil
+		}
 	}
 	if turn.First() && !already {
 		if err := p.recheck(ctx, turn); err != nil {
@@ -238,7 +269,7 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 		}
 	}
 	if !already {
-		if err := p.merge(ctx, tracking); err != nil {
+		if err := p.merge(ctx); err != nil {
 			return Result{}, err
 		}
 	}
@@ -246,14 +277,15 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	_, ls, err := p.landed(ctx)
-	if err != nil {
-		return Result{}, err
+	if ls == nil {
+		if ls, err = h.Git.Landed(ctx, p.wt, p.tracking(p.base), "HEAD"); err != nil {
+			return Result{}, gitFail(err)
+		}
 	}
 	last := p.isLast(ls)
 	var epicStat string
 	if last {
-		if epicStat, err = h.Git.DiffStat(ctx, p.wt, p.remote+"/"+p.base, "HEAD"); err != nil {
+		if epicStat, err = h.Git.DiffStat(ctx, p.wt, p.tracking(p.base), "HEAD"); err != nil {
 			return Result{}, gitFail(err)
 		}
 	}
@@ -278,17 +310,24 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	return p.finish(ctx, res)
 }
 
-// merge brings the epic branch into the group branch, then merges the group branch into the epic branch in the landing worktree.
-func (p *publication) merge(ctx context.Context, tracking string) error {
+// merge brings the epic branch into the group branch, then merges the verified group commit into the epic branch in the landing worktree.
+func (p *publication) merge(ctx context.Context) error {
 	g, a := p.h.Git, p.a
-	if _, err := g.Merge(ctx, a.Worktree, tracking, a.Label+": merge "+a.Epic, false); err != nil {
+	if err := p.onGroupBranch(ctx); err != nil {
+		return err
+	}
+	if _, err := g.Merge(ctx, a.Worktree, p.tracking(p.epic), a.Label+": merge "+a.Epic, false); err != nil {
+		return gitFail(err)
+	}
+	groupTip, _, err := g.Head(ctx, a.Worktree)
+	if err != nil {
 		return gitFail(err)
 	}
 	section, err := RenderBody(a.Facts, a.Tester, a.Reviewer)
 	if err != nil {
 		return fail(KindGit, false, err)
 	}
-	if _, err := g.Merge(ctx, p.wt, a.Branch, a.Label+": "+oneLine(a.Goal)+"\n\n"+section, true); err != nil {
+	if _, err := g.Merge(ctx, p.wt, groupTip, a.Label+": "+oneLine(a.Goal)+"\n\n"+section, true); err != nil {
 		return gitFail(err)
 	}
 	return nil
@@ -325,6 +364,11 @@ func (p *publication) push(ctx context.Context) (string, error) {
 	return local, nil
 }
 
+// hasLanded reports whether the list holds this group's landing.
+func (p *publication) hasLanded(ls []Landing) bool {
+	return slices.ContainsFunc(ls, func(l Landing) bool { return l.Label == p.a.Label })
+}
+
 // isLast reports whether every group label of the epic has landed.
 func (p *publication) isLast(ls []Landing) bool {
 	got := map[string]bool{}
@@ -343,7 +387,9 @@ func (p *publication) isLast(ls []Landing) bool {
 func (p *publication) pullRequest(ctx context.Context, ls []Landing, stat string, res *Result) error {
 	f := EpicFacts{DiffStat: stat}
 	for i := len(ls) - 1; i >= 0; i-- {
-		f.Groups = append(f.Groups, ls[i].Section)
+		if slices.Contains(p.a.EpicGroups, ls[i].Label) {
+			f.Groups = append(f.Groups, ls[i].Section)
+		}
 	}
 	body, err := RenderEpicBody(f)
 	if err != nil {
@@ -373,12 +419,13 @@ func (p *publication) pullRequest(ctx context.Context, ls []Landing, stat string
 }
 
 // finish reports the result and hands the group to the Cleanup Handler; a cleanup error comes back unchanged.
+// pr.opened goes out on every publish that finds the epic complete and its pull request open, so a lost report or a crash after the pull request cannot strand the run.
 func (p *publication) finish(ctx context.Context, res Result) (Result, error) {
 	a := p.a
 	if err := p.report(ctx, "publish.done", res); err != nil {
 		return Result{}, err
 	}
-	if res.PRNew {
+	if res.Last && res.PRURL != "" {
 		if err := p.report(ctx, "pr.opened", res); err != nil {
 			return Result{}, err
 		}
