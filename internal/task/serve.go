@@ -81,16 +81,31 @@ type chanRuntime struct {
 	seq   atomic.Int64
 	mu    sync.Mutex
 	waits map[string]chan TimerGrant
+	sendM sync.RWMutex // held while a send is in flight; shut takes it to close the channel
+	shut  bool
 }
 
 // send puts one message on the reply channel and waits while it is full.
 func (c *chanRuntime) send(m Message) error {
+	c.sendM.RLock()
+	defer c.sendM.RUnlock()
+	if c.shut {
+		return context.Canceled
+	}
 	select {
 	case c.out <- m:
 		return nil
 	case <-c.ctx.Done():
 		return c.ctx.Err()
 	}
+}
+
+// close ends the reply channel once no send is in flight; later sends fail.
+func (c *chanRuntime) close() {
+	c.sendM.Lock()
+	defer c.sendM.Unlock()
+	c.shut = true
+	close(c.out)
 }
 
 // Escalate sends the escalation under its own identifier.
@@ -162,11 +177,11 @@ type serveLoop struct {
 
 // Serve runs the command loop of the Task Manager goroutine until the group is closed or stopped.
 func (m *Manager) Serve(ctx context.Context, ch Channels) error {
-	defer close(ch.Replies)
 	sctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	l := &serveLoop{m: m, ctx: sctx, calls: make(chan error, 1),
 		cr: &chanRuntime{ctx: sctx, out: ch.Replies, waits: map[string]chan TimerGrant{}}}
+	defer l.cr.close()
+	defer cancel()
 	m.mu.Lock()
 	if m.rt == nil {
 		m.rt = l.cr
@@ -313,6 +328,10 @@ func (m *Manager) isPaused() bool {
 // endedMessage maps how a call ended to the result the Runtime Manager reads.
 func (m *Manager) endedMessage(err error) Ended {
 	var fe *failedErr
+	if m.closing.Load() && (err == nil || errors.Is(err, ErrStopped)) {
+		<-m.closed
+		return Ended{Result: "closed"}
+	}
 	switch {
 	case errors.Is(err, ErrStopped), err == nil && m.isStopped():
 		return Ended{Result: "stopped"}

@@ -99,6 +99,7 @@ type Manager struct {
 	scopeInput string // the scope answer text the builder's next session receives
 	keepHandle *llm.ResumeHandle
 	taskMu     sync.Mutex // one completion command at a time
+	closing    atomic.Bool
 }
 
 // scopeWait is a builder's open scope request.
@@ -494,7 +495,13 @@ func (m *Manager) Nudge() {
 // CloseTaskGroup ends the group: it destroys the sandbox instances and reports the closing state.
 func (m *Manager) CloseTaskGroup(ctx context.Context) error {
 	m.closeOnce.Do(func() {
-		m.stopCancel(ErrStopped)
+		m.closing.Store(true)
+		m.mu.Lock()
+		liveNow := len(m.live) > 0
+		m.mu.Unlock()
+		if liveNow {
+			m.stopCancel(ErrStopped)
+		}
 		var errs []error
 		m.mu.Lock()
 		ids := make([]string, 0, len(m.instances))
