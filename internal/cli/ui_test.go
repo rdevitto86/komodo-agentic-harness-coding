@@ -32,16 +32,25 @@ type uiFake struct {
 	verbs  []string
 	events map[string][]bus.Event // replay answers by run id
 	down   error                  // returned by Send when set
+	hang   bool                   // Send blocks until the request's context ends
+	stageB string                 // the stage of run B's group; commit when empty
+	replay map[string]int         // replay requests by run id
 }
 
 // Ensure always succeeds.
 func (*uiFake) Ensure(context.Context) error { return nil }
 
 // Send answers a status or replay request from the fixtures.
-func (f *uiFake) Send(_ context.Context, r engine.Request) (<-chan engine.Reply, error) {
+func (f *uiFake) Send(ctx context.Context, r engine.Request) (<-chan engine.Reply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.verbs = append(f.verbs, r.Verb)
+	if f.hang {
+		f.mu.Unlock()
+		<-ctx.Done()
+		f.mu.Lock()
+		return nil, ctx.Err()
+	}
 	if f.down != nil {
 		return nil, f.down
 	}
@@ -49,6 +58,7 @@ func (f *uiFake) Send(_ context.Context, r engine.Request) (<-chan engine.Reply,
 	defer close(ch)
 	switch r.Verb {
 	case engine.VerbReplay:
+		f.replay[r.Target]++
 		for _, e := range f.events[r.Target] {
 			ch <- engine.Reply{ID: r.ID, Status: engine.StatusEvent, Event: &e}
 		}
@@ -61,7 +71,7 @@ func (f *uiFake) Send(_ context.Context, r engine.Request) (<-chan engine.Reply,
 					{Group: "tg-1.2", Stage: "test_review", State: "blocked"},
 					{Group: "tg-1.3", Stage: "done", State: "done"},
 				}},
-				{RunID: uiRunB, Target: "tg-2.1", Groups: []GroupRow{{Group: "tg-2.1", Stage: "commit", State: "paused"}}},
+				{RunID: uiRunB, Target: "tg-2.1", Groups: []GroupRow{{Group: "tg-2.1", Stage: f.stage(), State: "paused"}}},
 			},
 			"queued":  []QueuedRow{{Target: "ep-3", RunID: "q1", At: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}},
 			"blocked": []BlockedRow{{Group: "tg-1.2", RunID: uiRunA, Reason: "needs_scope", Question: "Approve a change outside the files?"}},
@@ -75,6 +85,28 @@ func (f *uiFake) Send(_ context.Context, r engine.Request) (<-chan engine.Reply,
 		ch <- okReply(d)
 	}
 	return ch, nil
+}
+
+// stage returns run B's stage; the caller holds the lock.
+func (f *uiFake) stage() string {
+	if f.stageB == "" {
+		return "commit"
+	}
+	return f.stageB
+}
+
+// moveB sets the stage of run B's group.
+func (f *uiFake) moveB(stage string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stageB = stage
+}
+
+// replays returns how many replay requests a run got.
+func (f *uiFake) replays(run string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.replay[run]
 }
 
 // add appends an event to a run's replay.
@@ -98,7 +130,7 @@ func uiEventAt(run string, s int, group string) bus.Event {
 }
 
 func newUIFake() *uiFake {
-	return &uiFake{events: map[string][]bus.Event{
+	return &uiFake{replay: map[string]int{}, events: map[string][]bus.Event{
 		uiRunA: {uiEventAt(uiRunA, 1, ""), uiEventAt(uiRunA, 3, "tg-1.1")},
 		uiRunB: {uiEventAt(uiRunB, 2, "tg-2.1")},
 	}}
@@ -186,6 +218,9 @@ func TestUIOnlyReadsFromTheEngine(t *testing.T) {
 }
 
 func TestUIEventsStreamPushesChanges(t *testing.T) {
+	old := uiReplayEvery
+	uiReplayEvery = 20 * time.Millisecond
+	t.Cleanup(func() { uiReplayEvery = old })
 	fake := newUIFake()
 	ts, _ := uiFixture(t, fake, realAssets(t))
 	resp, err := http.Get(ts.URL + "/events")
@@ -341,4 +376,86 @@ func TestUIServeStopsWhenTheContextEnds(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+}
+
+func TestUIReplaysARunOnlyWhenItsStatusChanged(t *testing.T) {
+	old := uiReplayEvery
+	uiReplayEvery = time.Hour
+	t.Cleanup(func() { uiReplayEvery = old })
+	fake := newUIFake()
+	ts, _ := uiFixture(t, fake, realAssets(t))
+	getState(t, ts)
+	time.Sleep(200 * time.Millisecond) // about 20 polls at 10 ms
+	if a, b := fake.replays(uiRunA), fake.replays(uiRunB); a != 1 || b != 1 {
+		t.Fatalf("replays after quiet polls: run A %d, run B %d, want 1 each", a, b)
+	}
+	fake.moveB("cleanup")
+	deadline := time.Now().Add(3 * time.Second)
+	for fake.replays(uiRunB) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if a, b := fake.replays(uiRunA), fake.replays(uiRunB); a != 1 || b != 2 {
+		t.Fatalf("replays after run B moved: run A %d, run B %d, want 1 and 2", a, b)
+	}
+}
+
+func TestUIReadsAHungEngineWithinItsLimit(t *testing.T) {
+	old := uiReadLimit
+	uiReadLimit = 100 * time.Millisecond
+	t.Cleanup(func() { uiReadLimit = old })
+	fake := newUIFake()
+	fake.hang = true
+	ts, _ := uiFixture(t, fake, realAssets(t))
+	st := getState(t, ts)
+	if !strings.Contains(st.Error, "did not answer") {
+		t.Fatalf("error = %q", st.Error)
+	}
+}
+
+func TestUIStartsTheEngineOnceAcrossManyPolls(t *testing.T) {
+	home := shortHome(t)
+	eng := quickEngine(home)
+	var mu sync.Mutex
+	var fakeSrv *fakeServer
+	starts := 0
+	eng.Start = func(context.Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		starts++
+		fakeSrv = startFake(t, home, func(_ *fakeServer, req engine.Request, send func(engine.Reply)) { emptyReply(req, send) })
+		return nil
+	}
+	h := newHarness(t)
+	h.engine = eng
+	oldEvery := uiEvery
+	uiEvery = 10 * time.Millisecond
+	t.Cleanup(func() { uiEvery = oldEvery })
+	var st uiState
+	withUIHooks(t, func(addr string) {
+		mu.Lock()
+		fakeSrv.Close() // the engine exits: no run is live and its last connection closed
+		mu.Unlock()
+		time.Sleep(300 * time.Millisecond) // about 30 polls
+		resp, err := http.Get("http://" + addr + "/state")
+		if err != nil {
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_ = json.NewDecoder(resp.Body).Decode(&st)
+	})
+	if code, e := h.envelope("ui"); code != 0 {
+		t.Fatalf("exit %d, %+v", code, e.Error)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 1 || st.Error != "the engine is not running" {
+		t.Fatalf("engine started %d times, error %q; want 1 and the not-running error", starts, st.Error)
+	}
+}
+
+// emptyReply answers a status request with no runs.
+func emptyReply(_ engine.Request, send func(engine.Reply)) {
+	b, _ := json.Marshal(StatusData{Runs: []RunRow{}, Queued: []QueuedRow{}, Blocked: []BlockedRow{}})
+	send(engine.Reply{Status: engine.StatusOK, Data: b, Final: true})
 }

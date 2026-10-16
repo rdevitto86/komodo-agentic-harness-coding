@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
@@ -15,6 +17,16 @@ const (
 	uiFeedPerRun = 50
 	uiFeedTotal  = 40
 )
+
+// errUINoEngine is what the dashboard's engine client returns instead of starting an engine.
+var errUINoEngine = errors.New("the engine is not running")
+
+// uiRunEvents are one run's cached events with the status they were read under and when.
+type uiRunEvents struct {
+	sig    string    // the run's groups as JSON when the events were read
+	at     time.Time // when they were read
+	events []uiEvent
+}
 
 // uiState is everything the page draws, in one JSON document.
 type uiState struct {
@@ -110,11 +122,12 @@ func (s *uiServer) collect(ctx context.Context) uiState {
 	st := uiState{Runs: []uiRun{}, Queued: []QueuedRow{}, Blocked: []BlockedRow{}, Events: []uiEvent{}}
 	d, err := s.readStatus(ctx, "")
 	if err != nil {
-		st.Error = trimDetail(err)
+		st.Error = readError(err)
 		return st
 	}
 	st.Queued, st.Blocked = d.Queued, d.Blocked
 	var feed []uiEvent
+	live := map[string]bool{}
 	for _, r := range d.Runs {
 		run := uiRun{RunID: r.RunID, Target: r.Target, Groups: make([]uiGroup, 0, len(r.Groups))}
 		for _, g := range r.Groups {
@@ -123,8 +136,17 @@ func (s *uiServer) collect(ctx context.Context) uiState {
 		if fd, err := s.readStatus(ctx, r.RunID); err == nil {
 			run.Figures = fd.Figures
 		}
-		feed = append(feed, s.readEvents(ctx, r.RunID)...)
+		feed = append(feed, s.runEvents(ctx, r)...)
 		st.Runs = append(st.Runs, run)
+		live[r.RunID] = true
+	}
+	for id := range s.evCache {
+		if !live[id] {
+			delete(s.evCache, id)
+		}
+	}
+	if ctx.Err() != nil {
+		st.Error = readError(ctx.Err())
 	}
 	st.Totals = totalsOf(st)
 	slices.SortStableFunc(feed, func(a, b uiEvent) int { return b.Time.Compare(a.Time) })
@@ -158,11 +180,26 @@ func (s *uiServer) readStatus(ctx context.Context, target string) (StatusData, e
 	return d, nil
 }
 
-// readEvents returns the newest recorded events of a run; a failed read gives none.
-func (s *uiServer) readEvents(ctx context.Context, runID string) []uiEvent {
+// runEvents returns a run's newest events, reading the engine's replay only when the run's groups changed or the cached events are old.
+func (s *uiServer) runEvents(ctx context.Context, r RunRow) []uiEvent {
+	sig := string(mustJSONBytes(r.Groups))
+	c, ok := s.evCache[r.RunID]
+	if ok && c.sig == sig && time.Since(c.at) < uiReplayEvery {
+		return c.events
+	}
+	events, err := s.readEvents(ctx, r.RunID)
+	if err != nil {
+		return c.events
+	}
+	s.evCache[r.RunID] = uiRunEvents{sig: sig, at: time.Now(), events: events}
+	return events
+}
+
+// readEvents returns the newest recorded events of a run.
+func (s *uiServer) readEvents(ctx context.Context, runID string) ([]uiEvent, error) {
 	frames, err := uiAsk(ctx, s.deps.Engine, engine.Request{ID: newID(), Verb: engine.VerbReplay, Target: runID, Root: s.deps.Root})
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var out []uiEvent
 	for _, f := range frames {
@@ -175,7 +212,18 @@ func (s *uiServer) readEvents(ctx context.Context, runID string) []uiEvent {
 	if len(out) > uiFeedPerRun {
 		out = out[len(out)-uiFeedPerRun:]
 	}
-	return out
+	return out, nil
+}
+
+// readError words a failed engine read for the page.
+func readError(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("the engine did not answer within %s", uiReadLimit)
+	case errors.Is(err, errUINoEngine), strings.Contains(err.Error(), errUINoEngine.Error()):
+		return errUINoEngine.Error()
+	}
+	return trimDetail(err)
 }
 
 // withBlock adds the reason and question of the blocked row that names this group and run.

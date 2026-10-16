@@ -34,7 +34,13 @@ var uiContext = func() (context.Context, context.CancelFunc) {
 var uiStarted func(addr string)
 
 // uiEvery is how often the dashboard asks the engine for the current state.
-const uiEvery = 2 * time.Second
+var uiEvery = 2 * time.Second
+
+// uiReplayEvery is the longest a run's recorded events are kept before they are read again when its status is unchanged.
+var uiReplayEvery = 10 * time.Second
+
+// uiReadLimit is how long one read of the engine may take before the page shows the engine as not answering.
+var uiReadLimit = 1500 * time.Millisecond
 
 // uiPing is how often an idle event stream sends a comment line so the browser keeps it open.
 const uiPing = 15 * time.Second
@@ -55,6 +61,8 @@ type uiServer struct {
 	deps  uiDeps
 	hosts map[string]bool // the Host header values a request may carry
 
+	evCache map[string]uiRunEvents // events by run id; only collect touches it
+
 	mu     sync.Mutex
 	cur    []byte        // the latest state as JSON
 	notify chan struct{} // closed and replaced when cur changes
@@ -68,10 +76,22 @@ func newUIServer(d uiDeps, addr string) *uiServer {
 		d.Every = uiEvery
 	}
 	_, port, _ := net.SplitHostPort(addr)
+	d.Engine = uiReader(d.Engine)
 	return &uiServer{
-		deps: d, hosts: map[string]bool{addr: true, "localhost:" + port: true},
+		deps: d, evCache: map[string]uiRunEvents{}, hosts: map[string]bool{addr: true, "localhost:" + port: true},
 		notify: make(chan struct{}), first: make(chan struct{}),
 	}
+}
+
+// uiReader returns the engine client the page polls with: a socket client that reports a missing engine instead of starting one.
+func uiReader(eng Engine) Engine {
+	se, ok := eng.(*SocketEngine)
+	if !ok {
+		return eng
+	}
+	c := *se
+	c.Start = func(context.Context) error { return errUINoEngine }
+	return &c
 }
 
 // handleUI serves the dashboard until Ctrl-C, starting the engine first when none runs.
@@ -278,7 +298,9 @@ func (s *uiServer) Poll(ctx context.Context) {
 
 // refresh reads the engine once and wakes every open stream when the state changed.
 func (s *uiServer) refresh(ctx context.Context) {
-	b := mustJSONBytes(s.collect(ctx))
+	rctx, cancel := context.WithTimeout(ctx, uiReadLimit)
+	b := mustJSONBytes(s.collect(rctx))
+	cancel()
 	s.mu.Lock()
 	if !bytes.Equal(b, s.cur) {
 		s.cur = b

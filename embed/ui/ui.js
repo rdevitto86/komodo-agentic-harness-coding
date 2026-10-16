@@ -18,7 +18,7 @@ const svg = (tag, attrs, ...kids) => el(tag, {svg: 1, ...attrs}, ...kids);
 
 // fill replaces the children of the element with the id.
 function fill(id, ...kids) {
-  document.getElementById(id).replaceChildren(...kids.flat());
+  document.getElementById(id).replaceChildren(...kids.flat().filter((k) => k != null));
 }
 
 const num = (n) => Math.round(n).toLocaleString("en-US");
@@ -103,8 +103,9 @@ function pipeline(runs) {
 // groupCard draws one group: its chip, and the question it asks when it is blocked.
 function groupCard(g) {
   const t = tone(g.state);
+  const heldAt = (g.state === "blocked" || g.state === "paused") && TITLES[g.stage] ? "held in " + TITLES[g.stage] : null;
   return html("article", "g " + t,
-    html("header", "", html("div", "", html("h3", "", g.group), html("span", "gid", g.stage || "not started")), html("span", "chip " + t, chipText(g))),
+    html("header", "", html("div", "", html("h3", "", g.group), heldAt ? html("span", "gid", heldAt) : null), html("span", "chip " + t, chipText(g))),
     g.question ? html("p", "reason", html("b", "", g.reason + ": "), g.question) : null);
 }
 
