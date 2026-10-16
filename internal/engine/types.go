@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
@@ -85,6 +86,7 @@ const (
 	InAbandon      InputKind = "abandon"      // data: AbandonData
 	InProgress     InputKind = "progress"     // data: ProgressData; the live session handles of a state report
 	InFact         InputKind = "fact"         // data: FactData; a fact that is published and changes nothing
+	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; counts as one retry
 )
 
 // Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a PauseGroups call.
@@ -169,6 +171,8 @@ type (
 		Paths  []string `json:"paths"`
 		Reason string   `json:"reason"`
 		Deny   string   `json:"deny,omitempty"`
+		// Escalation names the Task Manager's escalation, which the answer replies to.
+		Escalation string `json:"escalation,omitempty"`
 	}
 	// ScopeAnswer is the data of scope.answer.
 	ScopeAnswer struct {
@@ -221,6 +225,14 @@ type GroupSpec struct {
 	Tasks    []string `json:"tasks"`    // task identifiers in order
 	Priority string   `json:"priority"` // "high" or "normal"
 	Order    int      `json:"order"`    // position in task-list order; lower is earlier
+
+	// The Runtime Manager fills these before it starts the group's Task Manager.
+	Run        string      `json:"-"` // the run that holds the group
+	Repo       string      `json:"-"` // the repository id
+	Lease      lease.Lease `json:"-"` // branch, worktree and fence
+	Limits     Limits      `json:"-"` // the bounds copied at run start
+	Saved      *State      `json:"-"` // the group's saved state when it continues; nil for a new group
+	OtherFiles []string    `json:"-"` // file globs of the other groups in the run
 }
 
 // Candidate is a ready group with the three facts the tie-break rules read.

@@ -228,7 +228,10 @@ func (c *calc) scopeRules(a ScopeAsk) {
 			why = "spent"
 		}
 		o := c.order(OrderScope, StageBuild, ScopeAnswer{Answer: "deny", Paths: a.Paths, Reason: why})
-		o.Re = c.in.Request
+		o.Re = a.Escalation
+		if o.Re == "" {
+			o.Re = c.in.Request
+		}
 		return
 	}
 	c.scopeBlock = &a

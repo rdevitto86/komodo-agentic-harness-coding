@@ -165,6 +165,7 @@ type stageData struct {
 	Agent      string                 `json:"agent,omitempty"`      // the one agent to start, when not the whole stage
 	Wake       string                 `json:"wake,omitempty"`       // timer or run-continue, for a resumed pause
 	Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"` // edits a session left in the worktree
+	Landing    *LandingPlan           `json:"landing,omitempty"`    // the epic's landing plan, for a Commit order
 }
 
 // firstOpenTask returns the first task not done.
@@ -266,6 +267,12 @@ func (c *calc) inStage() bool {
 			c.setResume(r.Agent, &r)
 		}
 		return true
+	case InLoopRestart:
+		if s.Stage == StageBuild || s.Stage == StageTestReview {
+			s.Counters.Retries++
+			c.enterStage(s.Stage, stageData{Task: c.firstOpenTask(), Retry: "loop"})
+			return true
+		}
 	case InSessionStart:
 		return c.sessionStart()
 	case InSessionEnd:

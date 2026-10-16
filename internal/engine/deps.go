@@ -12,7 +12,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
 // ConfigReader is the Configuration Manager as the Runtime Manager uses it.
@@ -60,7 +59,7 @@ type Contexts interface {
 // TaskGroups is the Task Manager as the Runtime Manager uses it.
 type TaskGroups interface {
 	// Start runs one Task Manager goroutine for the group and returns its channels.
-	Start(ctx context.Context, spec GroupSpec, h cache.Handle) (task.Channels, error)
+	Start(ctx context.Context, spec GroupSpec, h cache.Handle) (Channels, error)
 }
 
 // PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
@@ -121,34 +120,37 @@ type Timing struct {
 
 // Deps are the managers the Runtime Manager and the engine call.
 type Deps struct {
-	Bus        bus.Bus
-	Reader     bus.Reader
-	Config     ConfigReader
-	Agents     AgentLimits
-	States     StateOpener
-	Machine    *state.Machine
-	Leases     LeaseStore
-	Caches     CacheStore
-	Contexts   Contexts
-	Tasks      TaskGroups
-	Plans      PlanSource
-	Git        EpicGit
-	Commits    EpicCommitter
-	Resource   TokenCaps
-	Cleaner    Discarder
-	Janitor    Janitor
-	Extras     Extras
-	Clock      Clock
-	Timing     Timing
-	Version    string                  // the binary version a run is pinned to
-	Home       string                  // the Komodo home folder; the worktrees live under Home/wt
-	BaseBranch string                  // the branch an epic's branch is cut from
-	FreeMemGB  func() float64          // free memory, for growing the pool; nil means the pool never grows
-	KillTree   func(run, group string) // ends every process of a group; called when a stop passes its deadline
-	Go         func(func())            // starts a goroutine the caller guards against panics; nil starts a plain one
+	Bus         bus.Bus
+	Reader      bus.Reader
+	Config      ConfigReader
+	Agents      AgentLimits
+	States      StateOpener
+	Machine     *state.Machine
+	Leases      LeaseStore
+	Caches      CacheStore
+	Contexts    Contexts
+	Tasks       TaskGroups
+	Plans       PlanSource
+	Git         EpicGit
+	Commits     EpicCommitter
+	Resource    TokenCaps
+	Cleaner     Discarder
+	Janitor     Janitor
+	Extras      Extras
+	Clock       Clock
+	Timing      Timing
+	Version     string                             // the binary version a run is pinned to
+	Home        string                             // the Komodo home folder; the worktrees live under Home/wt
+	BaseBranch  string                             // the branch an epic's branch is cut from
+	FreeMemGB   func() float64                     // free memory, for growing the pool; nil means the pool never grows
+	KillTree    func(run, group string)            // ends every process of a group; called when a stop passes its deadline
+	Go          func(func())                       // starts a goroutine the caller guards against panics; nil starts a plain one
+	Errors      func(run, group string, err error) // reports an error the engine cannot act on; nil drops it
+	RestartLoop func(loop string)                  // restarts a silent watcher loop in place
+	Chain       func(group string) []string        // the model links of the group's current agent, in order
 }
 
-// timing returns t with every zero field filled from the constants.
+// filled returns t with every zero field replaced by its constant.
 func (t Timing) filled() Timing {
 	def := func(v *time.Duration, d time.Duration) {
 		if *v <= 0 {
