@@ -165,7 +165,7 @@ func (q *queue) fire(ctx context.Context, ent state.ScheduleEntry) {
 	}
 	q.firing[ent.RunID] = true
 	q.mu.Unlock()
-	go func() {
+	q.e.m.spawn(func() {
 		defer func() {
 			q.mu.Lock()
 			delete(q.firing, ent.RunID)
@@ -193,5 +193,5 @@ func (q *queue) fire(ctx context.Context, ent state.ScheduleEntry) {
 		if _, err := q.remove(ent.RunID); err != nil {
 			q.e.m.reportErr(ent.RunID, "", err)
 		}
-	}()
+	})
 }

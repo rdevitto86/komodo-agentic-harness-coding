@@ -88,12 +88,12 @@ func (g *group) enqueue(in Input) {
 	select {
 	case g.in <- in:
 	default:
-		go func() {
+		g.m.spawn(func() {
 			select {
 			case g.in <- in:
 			case <-g.ctx.Done():
 			}
-		}()
+		})
 	}
 }
 
@@ -451,7 +451,7 @@ func (g *group) ensureTM() error {
 	g.mu.Lock()
 	g.cmds, g.tmDone = ch.Commands, done
 	g.mu.Unlock()
-	go g.read(ch.Replies, done)
+	g.m.spawn(func() { g.read(ch.Replies, done) })
 	return nil
 }
 

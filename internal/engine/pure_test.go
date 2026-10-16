@@ -110,7 +110,8 @@ func TestPoolHalvesToTheFloorAndIgnoresSignalsInTheCooldown(t *testing.T) {
 
 func TestPoolSlotsAndWaiters(t *testing.T) {
 	p := NewPool(Limits{PoolMin: 1, PoolMax: 2}, NewFakeClock(t0), time.Minute)
-	if !p.TryAcquire() || !p.TryAcquire() || p.TryAcquire() {
+	first, second, third := p.TryAcquire(), p.TryAcquire(), p.TryAcquire()
+	if !first || !second || third {
 		t.Fatal("a pool of 2 must give exactly 2 slots")
 	}
 	done := make(chan struct{})

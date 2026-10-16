@@ -14,6 +14,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
@@ -92,7 +93,8 @@ type Manager struct {
 	pool     *Pool
 	chg      chan struct{}
 	stopped  bool
-	ready    chan struct{} // closed once Run has subscribed to the command events
+	faults   *fault.Handler // reports a panic of a goroutine the package starts
+	ready    chan struct{}  // closed once Run has subscribed to the command events
 	readyOne sync.Once
 }
 
@@ -101,7 +103,7 @@ func New(d Deps) *Manager {
 	return &Manager{
 		d: d, clk: clockOf(d.Clock), t: d.Timing.filled(), ctx: context.Background(),
 		runs: map[string]*run{}, groups: map[string]*group{}, starting: map[string]bool{}, repos: map[string]*repoCache{},
-		expect: map[string]chan error{}, beats: map[string]time.Time{}, chg: make(chan struct{}), ready: make(chan struct{}),
+		expect: map[string]chan error{}, beats: map[string]time.Time{}, chg: make(chan struct{}), ready: make(chan struct{}), faults: faultsOf(d.Faults),
 	}
 }
 
@@ -116,7 +118,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 	defer sub.Close()
 	m.readyOne.Do(func() { close(m.ready) })
-	go m.watch(ctx)
+	m.spawn(func() { m.watch(ctx) })
 	for {
 		select {
 		case e, ok := <-sub.Events:
@@ -152,7 +154,7 @@ func (m *Manager) spawn(fn func()) {
 		m.d.Go(fn)
 		return
 	}
-	go fn()
+	guarded(m.faults, fn)
 }
 
 // Expect registers interest in the outcome of a command before it is published; the channel receives the error or nil.
@@ -356,7 +358,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		g := m.newGroup(r, r.specs[gid])
 		r.groups[gid] = g
 		m.groups[gid] = g
-		go g.main(&rec)
+		m.spawn(func() { g.main(&rec) })
 		if rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked {
 			g.enqueue(Input{Kind: InContinue, Request: "run-" + id + "-" + gid})
 		}
@@ -432,10 +434,6 @@ func (m *Manager) schedule() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for !m.stopped {
-		type pick struct {
-			r *run
-			c Candidate
-		}
 		var all []Candidate
 		owner := map[string]*run{}
 		for _, r := range m.runs {
@@ -464,7 +462,7 @@ func (m *Manager) schedule() {
 		g.hasSlot = true
 		r.groups[c.Spec.ID] = g
 		m.groups[c.Spec.ID] = g
-		go g.main(nil)
+		m.spawn(func() { g.main(nil) })
 	}
 }
 
@@ -623,7 +621,7 @@ func (m *Manager) endRunLocked(r *run, payload bus.Payload, sub string) {
 		m.d.Resource.EndRun(r.id)
 	}
 	if r.cancel != nil {
-		go r.cancel()
+		m.spawn(r.cancel)
 	}
 	m.signalLocked()
 	if len(m.runs) == 0 && len(m.starting) == 0 {

@@ -138,10 +138,10 @@ func (m *Manager) StopAll(ctx context.Context) {
 	m.mu.Unlock()
 	done := make(chan struct{}, len(ids))
 	for _, id := range ids {
-		go func() {
+		m.spawn(func() {
 			_ = m.Stop(ctx, id)
 			done <- struct{}{}
-		}()
+		})
 	}
 	for range ids {
 		<-done

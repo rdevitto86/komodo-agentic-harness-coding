@@ -148,6 +148,7 @@ type Deps struct {
 	Errors      func(run, group string, err error) // reports an error the engine cannot act on; nil drops it
 	RestartLoop func(loop string)                  // restarts a silent watcher loop in place
 	Chain       func(group string) []string        // the model links of the group's current agent, in order
+	Faults      *fault.Handler                     // reports a panic of a goroutine the engine starts; nil reports nothing
 }
 
 // filled returns t with every zero field replaced by its constant.

@@ -292,13 +292,17 @@ type fakeResource struct {
 }
 
 // GrantGroupTokens records a grant.
-func (r *fakeResource) GrantGroupTokens(g string) { r.mu.Lock(); r.granted = append(r.granted, g); r.mu.Unlock() }
+func (r *fakeResource) GrantGroupTokens(g string) {
+	r.mu.Lock()
+	r.granted = append(r.granted, g)
+	r.mu.Unlock()
+}
 
 // EndRun records a run end.
 func (r *fakeResource) EndRun(id string) { r.mu.Lock(); r.runs = append(r.runs, id); r.mu.Unlock() }
 
 // EndGroup records a group end.
-func (r *fakeResource) EndGroup(g string) { r.mu.Lock(); r.groups = append(r.groups, g) ; r.mu.Unlock() }
+func (r *fakeResource) EndGroup(g string) { r.mu.Lock(); r.groups = append(r.groups, g); r.mu.Unlock() }
 
 // tmEnv is what a fake Task Manager script sees.
 type tmEnv struct {

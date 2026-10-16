@@ -57,7 +57,7 @@ func (e *Engine) Serve(ctx context.Context) error {
 	runCtx, stopRun := context.WithCancel(context.Background())
 	defer stopRun()
 	mdone := make(chan error, 1)
-	go func() { mdone <- e.m.Run(runCtx) }()
+	e.m.spawn(func() { mdone <- e.m.Run(runCtx) })
 	select {
 	case <-e.m.Ready():
 	case err := <-mdone:
@@ -70,10 +70,10 @@ func (e *Engine) Serve(ctx context.Context) error {
 	if es, _, err := e.q.load(); err == nil && len(es) > 0 {
 		e.markSeen()
 	}
-	go e.beatLoop(runCtx)
-	go e.q.loop(runCtx)
-	go e.watchChanges(runCtx)
-	go e.accept(runCtx, ln)
+	e.m.spawn(func() { e.beatLoop(runCtx) })
+	e.m.spawn(func() { e.q.loop(runCtx) })
+	e.m.spawn(func() { e.watchChanges(runCtx) })
+	e.m.spawn(func() { e.accept(runCtx, ln) })
 
 	var serveErr error
 	select {
@@ -142,7 +142,7 @@ func (e *Engine) accept(ctx context.Context, ln net.Listener) {
 		e.seen = true
 		e.conns[c] = struct{}{}
 		e.mu.Unlock()
-		go e.serveConn(ctx, c)
+		e.m.spawn(func() { e.serveConn(ctx, c) })
 	}
 }
 

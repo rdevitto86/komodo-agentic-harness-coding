@@ -88,7 +88,7 @@ func (x *eng) ask(req Request) []Reply {
 	if err != nil {
 		x.t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	return roundTrip(x.t, c, req)
 }
 
@@ -150,7 +150,7 @@ func TestBadFrameKeepsTheConnectionOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if err := c.SendRaw([]byte(`{"id":"b1","verb":`)); err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestStatusWaitStreamsThenAnswersBlockedWithTheQuestion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if reps := roundTrip(t, c, x.runReq("q1", "run-1", "tg-1")); reps[len(reps)-1].Status != StatusOK {
 		t.Fatalf("%+v", reps)
 	}
@@ -498,8 +498,8 @@ func TestConnPrinterWritesAFaultToTheCommandInFlightOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, b := net.Pipe()
-	defer a.Close()
-	defer b.Close()
+	defer func() { _ = a.Close() }()
+	defer func() { _ = b.Close() }()
 	end := p.attach(&connWriter{c: a}, "req-7")
 	got := make(chan Reply, 1)
 	go func() {

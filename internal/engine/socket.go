@@ -86,7 +86,7 @@ func (e *Engine) serveConn(ctx context.Context, c net.Conn) {
 	defer cancel()
 	w := &connWriter{c: c}
 	lines := make(chan []byte)
-	go func() {
+	e.m.spawn(func() {
 		defer close(lines)
 		rd := bufio.NewReaderSize(c, 64<<10)
 		for {
@@ -106,7 +106,7 @@ func (e *Engine) serveConn(ctx context.Context, c net.Conn) {
 				return
 			}
 		}
-	}()
+	})
 	for b := range lines {
 		var req Request
 		if err := json.Unmarshal(b, &req); err != nil {
