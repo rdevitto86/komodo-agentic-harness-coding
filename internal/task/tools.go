@@ -54,20 +54,21 @@ type Submitted struct {
 
 // Env is everything the tools of one session reach.
 type Env struct {
-	Worktree   string                                                      // absolute worktree path
-	Dir        string                                                      // the session folder; out/ and tools.jsonl live in it, and none is written when empty
-	Confiner   Confiner                                                    // wraps run commands
-	Instance   string                                                      // the sandbox instance id for this agent's role
-	Commands   map[string][]string                                         // command class to the argv the run tool starts
-	Format     []string                                                    // the format command's argv; the edited file path is appended
-	RunTimeout time.Duration                                               // zero means 10 minutes
-	Git        GitReader                                                   // host git for diff and git_read
-	Skill      func(ref string) (string, error)                            // the text of a skill or one of its sections
-	Done       func(ctx context.Context, task string) (int, string, error) // reruns a task's done_when command and returns its exit code and output
-	Lint       func(draft string) []string                                 // lint errors of a planned task list; empty means clean
-	OnFinding  func(Submitted)                                             // receives each validated finding
-	OnFact     func(Fact)                                                  // receives tool.denied, tool.outside and finding.submit
-	Now        func() time.Time                                            // clock; time.Now when nil
+	Worktree     string                                                      // absolute worktree path
+	Dir          string                                                      // the session folder; out/ and tools.jsonl live in it, and none is written when empty
+	Confiner     Confiner                                                    // wraps run commands
+	Instance     string                                                      // the sandbox instance id for this agent's role
+	Commands     map[string][]string                                         // command class to the argv the run tool starts
+	Format       []string                                                    // the format command's argv; the edited file path is appended
+	RunTimeout   time.Duration                                               // zero means 10 minutes
+	Git          GitReader                                                   // host git for diff and git_read
+	Skill        func(ref string) (string, error)                            // the text of a skill or one of its sections
+	Done         func(ctx context.Context, task string) (int, string, error) // reruns a task's done_when command and returns its exit code and output
+	Lint         func(draft string) []string                                 // lint errors of a planned task list; empty means clean
+	OnFinding    func(Submitted)                                             // receives each validated finding
+	OnFact       func(Fact)                                                  // receives tool.denied, tool.outside and finding.submit
+	afterResolve func()                                                      // test seam: runs after a path is resolved and before the file is opened
+	Now          func() time.Time                                            // clock; time.Now when nil
 }
 
 // now returns the current time.
@@ -84,6 +85,7 @@ type toolCall struct {
 	guard *Guard
 	bound *Bound
 	id    string
+	res   map[string]resolved // the guard's resolution of each path argument
 }
 
 // tool is one registered tool: its definition and its function.
@@ -130,11 +132,12 @@ func KnownTools() map[string]bool {
 
 // Bound is the registry narrowed to one session's tools and guard.
 type Bound struct {
-	reg   *Registry
-	names []string
-	guard *Guard
-	calls atomic.Int64
-	logMu sync.Mutex
+	reg     *Registry
+	names   []string
+	guard   *Guard
+	calls   atomic.Int64
+	outside []*OutsideConn // the outside servers started for this session
+	logMu   sync.Mutex
 }
 
 // Bind attaches the permitted tools to one session and fails on a permitted tool that is not registered.
@@ -202,7 +205,7 @@ func (b *Bound) Dispatch(ctx context.Context, name string, args json.RawMessage)
 		b.line(ToolLine{Kind: "end", Call: id, Tool: name, Outcome: outcome})
 	}()
 	if t, ok := b.reg.tools[name]; ok {
-		return t.run(ctx, &toolCall{env: env, guard: b.guard, bound: b, id: id}, args)
+		return t.run(ctx, &toolCall{env: env, guard: b.guard, bound: b, id: id, res: v.res}, args)
 	}
 	if o, ok := b.reg.outside[name]; ok {
 		text, res := o.run(ctx, args)
@@ -303,4 +306,15 @@ func builtinTools() []tool {
 		{def("lint_backlog", "Check a planned task list and return its lint errors, or ok.",
 			`{"type":"object","properties":{"draft":{"type":"string"}},"required":["draft"],"additionalProperties":false}`), toolLintBacklog},
 	}
+}
+
+// Close ends the outside servers this set started; the first failure is returned.
+func (b *Bound) Close() error {
+	var first error
+	for _, o := range b.outside {
+		if err := o.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }

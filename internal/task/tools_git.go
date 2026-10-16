@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -41,30 +42,79 @@ func toolGitRead(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	return Reply{Text: hideSecretDiffs(out, tc.guard)}
 }
 
-// hideSecretDiffs keeps the header of each file section of a git patch and drops the body of a secret file's section.
+// hideSecretDiffs keeps each diff header and drops the body of a section that names a secret file or whose header cannot be read.
+// A section ends at the next diff header or at a commit line.
 func hideSecretDiffs(out string, g *Guard) string {
-	if !strings.Contains(out, "diff --git ") {
-		return out
-	}
 	var b strings.Builder
 	hide := false
 	for _, ln := range strings.SplitAfter(out, "\n") {
-		if rest, ok := strings.CutPrefix(ln, "diff --git "); ok {
+		switch {
+		case strings.HasPrefix(ln, "commit "):
 			hide = false
-			for _, f := range strings.Fields(rest) {
-				if g.IsSecretFile(strings.TrimPrefix(strings.TrimPrefix(f, "a/"), "b/")) {
-					hide = true
-				}
-			}
+			b.WriteString(ln)
+		case strings.HasPrefix(ln, "diff "):
+			hide = headerHasSecret(strings.TrimRight(ln, "\r\n"), g)
 			b.WriteString(ln)
 			if hide {
 				b.WriteString(secretNote + "\n")
 			}
-			continue
-		}
-		if !hide {
+		case hide && (ln == "" || ln == "\n" || strings.ContainsRune(" +-@\\", rune(ln[0]))):
+		default:
 			b.WriteString(ln)
 		}
 	}
 	return b.String()
+}
+
+// headerHasSecret reports whether a "diff" header names a secret file; a header it cannot read counts as naming one.
+func headerHasSecret(h string, g *Guard) bool {
+	var rest string
+	for _, p := range []string{"diff --git ", "diff --cc ", "diff --combined "} {
+		if r, ok := strings.CutPrefix(h, p); ok {
+			rest = r
+		}
+	}
+	if rest == "" {
+		return true
+	}
+	names, ok := headerNames(rest)
+	if !ok {
+		return true
+	}
+	for _, n := range names {
+		if g.IsSecretFile(strings.TrimPrefix(strings.TrimPrefix(n, "a/"), "b/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// headerNames splits the paths of a diff header: quoted names are unquoted the way git writes them, and the rest split at spaces.
+func headerNames(s string) ([]string, bool) {
+	var out []string
+	for s = strings.TrimLeft(s, " "); s != ""; s = strings.TrimLeft(s, " ") {
+		if s[0] != '"' {
+			tok, rest, _ := strings.Cut(s, " ")
+			out, s = append(out, tok), rest
+			continue
+		}
+		end := -1
+		for i := 1; i < len(s); i++ {
+			if s[i] == '\\' {
+				i++
+			} else if s[i] == '"' {
+				end = i
+				break
+			}
+		}
+		if end < 0 {
+			return nil, false
+		}
+		name, err := strconv.Unquote(s[:end+1])
+		if err != nil {
+			return nil, false
+		}
+		out, s = append(out, name), s[end+1:]
+	}
+	return out, len(out) > 0
 }

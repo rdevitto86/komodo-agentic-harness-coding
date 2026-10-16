@@ -8689,7 +8689,7 @@ Rows O1 to O10, which guarded the orchestrator's shell, are not part of the Task
 - **Secret files:** `.env*` except `.env.example`, `.env.sample` and `.env.template`; `*.pem`; `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`; `*.key`.
 - **Secret content:** private-key headers (`-----BEGIN` … `PRIVATE KEY-----`), AWS access key identifiers (`AKIA` plus 16 capitals or digits), GitHub tokens (`ghp_`, `gho_`, `ghs_`, `github_pat_`), Anthropic and OpenAI keys (`sk-ant-`, `sk-proj-`) and Slack tokens (`xoxb-`, `xoxp-`).
 
-A test sibling sits in the folder of a file in `files`: Go `<name>_test.go`; Python `test_<name>.py` or `<name>_test.py`; JavaScript and TypeScript `<name>.test.<ext>` or `<name>.spec.<ext>`; Rust any file under the crate's `tests/`.
+A test sibling sits in the folder of a file in `files`: Go `<name>_test.go`; Python `test_<name>.py` or `<name>_test.py`; JavaScript and TypeScript `<name>.test.<ext>` or `<name>.spec.<ext>`; Rust any `.rs` file under the `tests/` folder of a crate, where the crate is the folder of the nearest `Cargo.toml` above the file and holds a file in `files`.
 
 Each agent's rows compile from the rows its scope selects plus the row identifiers in its `Permissions.Guard`. `writers` are agents whose tools include `edit` or `write`; `runners` are agents whose tools include `run`. The rows G1 to G6 are compiled in and apply to every agent whatever the registry lists, so a registry edit cannot widen an agent below that floor.
 
@@ -10036,10 +10036,10 @@ The shared git wrapper runs git on the host for the Task Manager's tree hashes, 
 1. **Read-only pointer.** Every confinement makes `<Worktree>/.git` and the worktree's own git folder read-only. A confined command cannot rewrite the pointer to a folder it controls.
 2. **Pointer check.** When a group starts, `gitptr.go` records the exact text of `<Worktree>/.git`. Before every host git call it reads the file again; any difference refuses the call and escalates `blocked`, reason `contract`.
 3. **Explicit folders.** Each git call passes `--git-dir=<Lease.GitDir>` and `--work-tree=<Lease.Worktree>`, so git never follows the pointer file.
-4. **Blank hooks and monitors.** Each call passes `-c core.fsmonitor=` (blank) and `-c core.hooksPath=` set to an empty folder, and the environment `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` set to the null device, so a planted setting cannot run code outside the confinement.
+4. **Blank hooks and monitors.** Each call passes `-c core.fsmonitor=` (blank) and `-c core.hooksPath=` set to an empty folder, and the environment `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` set to the null device, so a planted setting cannot run code outside the confinement. Each call also passes `-c diff.external=` (blank), and `log`, `show` and `blame` pass `--no-textconv` (and `log` and `show` pass `--no-ext-diff`), so a `.gitattributes` file the agent wrote cannot select a configured conversion program.
 5. **No other path.** No git command runs on the host with a working directory inside a folder a confined command could write unless rules 1 to 4 hold.
 
-Beside the rules above, `git_read` passes on only the flags `-n`, `-N`, `-p`, `-s`, `-w`, `-M`, `-L` and a fixed list of long flags, and names a secret file only by name; the diff of a secret file shows its header and no body. Rule 4 is unproven until its component case runs ([11.9](#119-proof-cases)).
+Beside the rules above, `git_read` passes on only the flags `-n`, `-N`, `-p`, `-s`, `-w`, `-M`, `-L` and a fixed list of long flags, and names a secret file only by name. A revision argument is read the way git reads it: `<rev>:<path>`, `:<path>`, `:<stage>:<path>`, with a colon inside `{...}` belonging to the revision; the object path is checked as a read path, and an argument whose object path the guard cannot classify is refused. The diff of a secret file, in a combined diff or under a quoted name, shows its header and no body, and so does a header the Task Manager cannot read. Rule 4 is unproven until its component case runs ([11.9](#119-proof-cases)).
 
 #### Tool server timing
 
@@ -10051,7 +10051,7 @@ Outside tool servers are off by default. A server is on for an agent only when a
 
 1. The Runtime Manager copies only the enabled entries into `GroupSpec.Servers`, and names each one in the `Servers` list of the agents allowed to use it.
 2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Until the open gap below is settled, a server that lists `Hosts` still gets no network and a warning says so. How each mechanism limits a server to those hosts is [TODO: how each sandbox mechanism limits an outside server to the hosts its entry lists ([G-264](#g-264))].
-3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call.
+3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call. The variable names in an entry's `Env` are not passed to the server while the sandbox passes only its own variables, and the start warns once per variable; [TODO: whether and how an outside server receives the variables its entry names ([G-283](#g-283))].
 4. Every call passes the guard first, exactly like a built-in tool: row G1 refuses a name not in the permissions, and a refusal counts toward `guard.refusal_limit` (row G6).
 5. Every call, allowed or refused, is recorded: a `tool.outside` fact for an allowed call, and `tool.denied` for a refusal.
 6. The server dies with the session.
@@ -10381,6 +10381,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-261](#g-261) | Whether the Tester gets a copy of the worktree or a read-only mount | Tester copy |
 | [G-277](#g-277) | How the group's container sees the epic tip held in the landing worktree | The landing recheck |
 | [G-264](#g-264) | How each mechanism limits an outside server to its listed hosts | Outside tool servers |
+| [G-283](#g-283) | Whether and how an outside server receives the variables its entry names | Outside tool servers |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | Billing check |
 | [G-08](#g-08) | A private loopback per instance | Sandbox |
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Tester copy mechanisms and costs | Sandbox |
@@ -14956,6 +14957,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-280"></a>G-280 | Platform | Whether Komodo refuses a network or shared home folder, where the operating-system file lock may not be honoured or several machines or containers share one set of state files; `doctor` checks both | Phase 7, with `doctor` | [0](#0-front-matter-and-code-structure), [9](#9-lease-manager), [10](#10-state-manager) |
 | <a id="g-281"></a>G-281 | Tester | The command and report path that print the JaCoCo line coverage of a Java or Kotlin repository, for Gradle and for Maven; no default is built in, so the coverage step fails naming the language | Phase 5, with the Task Manager | [13](#13-tester) |
 | <a id="g-282"></a>G-282 | Tester | Where the command that prints a non-Go language's JUnit XML report comes from (the repository profile or the configuration); until set, a failing test command of that language blocks as unclassifiable, so no default hides a failure | Phase 5, with the Task Manager | [13](#13-tester) |
+| <a id="g-283"></a>G-283 | Sandbox | Whether the sandbox passes the variables an outside tool server entry names, and how a value reaches the server without reaching the model | Owner decision, phase 5 | [11](#11-task-manager), [6](#6-context-manager) |
 
 #### Spikes, measurements and later-minor items
 
