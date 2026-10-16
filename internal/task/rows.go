@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -13,7 +14,6 @@ import (
 	"sync"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
@@ -153,7 +153,7 @@ func expandHome(pats Patterns, home string) Patterns {
 	return out
 }
 
-// KnownRows returns the identifiers of the rows an agent's Guard list may name, for the Configuration Manager's registry check.
+// KnownRows returns the identifiers of the rows an agent's Guard list may name, the engine hands it to the Configuration Manager as the known guard rows.
 func KnownRows() map[string]bool {
 	out := map[string]bool{}
 	p, err := loadPolicy()
@@ -164,11 +164,6 @@ func KnownRows() map[string]bool {
 		out[string(r.ID)] = true
 	}
 	return out
-}
-
-// Known returns the guard rows and tool names the Configuration Manager checks the agent registry against.
-func Known() config.Known {
-	return config.Known{GuardRows: KnownRows(), Tools: KnownTools()}
 }
 
 // mandatoryRows are the rows every agent inherits whatever its permissions list.
@@ -208,8 +203,8 @@ func (p *policy) render(id string, vars map[string]string) string {
 	return t
 }
 
-// siblingOf reports whether p is a test file that sits beside a source file in files.
-func (p *policy) siblingOf(rel string, files []string) bool {
+// siblingOf reports whether p is a test file that sits beside a source file in files, or a Rust file in the tests folder of a crate that holds one.
+func (p *policy) siblingOf(rel string, files []string, root string) bool {
 	dir, base := path.Split(rel)
 	for _, rule := range p.siblings {
 		m := rule.test.FindStringSubmatch(base)
@@ -226,12 +221,18 @@ func (p *policy) siblingOf(rel string, files []string) bool {
 			return true
 		}
 	}
+	if !strings.HasSuffix(rel, ".rs") {
+		return false
+	}
 	segs := strings.Split(rel, "/")
 	for i, s := range segs[:len(segs)-1] {
 		if !slices.Contains(p.file.TestSiblings.TestsDirs, s) {
 			continue
 		}
 		crate := strings.Join(segs[:i], "/")
+		if dir, ok := nearestCargo(root, path.Dir(rel)); !ok || dir != crate {
+			continue
+		}
 		if crate != "" {
 			crate += "/"
 		}
@@ -242,21 +243,38 @@ func (p *policy) siblingOf(rel string, files []string) bool {
 	return false
 }
 
+// nearestCargo returns the closest folder at or above dir (relative to root, "" for the root) that holds a Cargo.toml.
+func nearestCargo(root, dir string) (string, bool) {
+	for {
+		if dir == "." {
+			dir = ""
+		}
+		if st, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir), "Cargo.toml")); err == nil && st.Mode().IsRegular() {
+			return dir, true
+		}
+		if dir == "" {
+			return "", false
+		}
+		dir = path.Dir(dir)
+	}
+}
+
 // inFiles reports whether rel is one of the group's files or matches one of its globs.
 func inFiles(rel string, files []string) bool {
 	return slices.ContainsFunc(files, func(f string) bool { return f == rel || agent.MatchPath(f, rel) })
 }
 
-// underStatic reports whether any file entry names a folder inside dir before its first wildcard.
+// underStatic reports whether any file entry inside dir is a Rust file or a pattern, judged before its first wildcard.
 func underStatic(dir string, files []string) bool {
 	if dir == "" {
 		return false
 	}
 	for _, f := range files {
+		glob := strings.ContainsAny(f, "*?[")
 		if i := strings.IndexAny(f, "*?["); i >= 0 {
 			f = f[:i]
 		}
-		if strings.HasPrefix(f, dir) {
+		if strings.HasPrefix(f, dir) && (glob || strings.HasSuffix(f, ".rs")) {
 			return true
 		}
 	}

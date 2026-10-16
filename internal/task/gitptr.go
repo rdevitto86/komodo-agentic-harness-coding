@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -80,7 +81,7 @@ func lookGit() (string, error) {
 // args puts the explicit folders and the blank settings in front of a git command.
 func (h *HostGit) args(rest ...string) []string {
 	return append([]string{h.bin, "--git-dir=" + h.lease.GitDir, "--work-tree=" + h.lease.Worktree,
-		"-c", "core.fsmonitor=", "-c", "core.hooksPath=" + h.empty, "-c", "core.pager=cat"}, rest...)
+		"-c", "core.fsmonitor=", "-c", "core.hooksPath=" + h.empty, "-c", "core.pager=cat", "-c", "diff.external="}, rest...)
 }
 
 // env is the only environment a git call gets.
@@ -99,8 +100,26 @@ func (h *HostGit) run(ctx context.Context, extraEnv []string, rest ...string) (s
 	if err := h.ptr.Check(); err != nil {
 		return "", err
 	}
-	out, err := hostOutput(ctx, h.lease.Worktree, h.env(extraEnv...), h.args(rest...)...)
-	return string(out), err
+	out, err := hostOutput(ctx, h.lease.Worktree, h.env(extraEnv...), "git "+rest[0], h.args(rest...)...)
+	if err != nil {
+		return string(out), errors.New(h.scrub(err.Error(), extraEnv))
+	}
+	return string(out), nil
+}
+
+// absPath finds a host path inside a message.
+var absPath = regexp.MustCompile(`(^|[\s'"(=])/[^\s'")]+`)
+
+// scrub removes the host's folders from a message that may reach the model: the git folder, the worktree, the temporary folders and any other absolute path.
+func (h *HostGit) scrub(msg string, extraEnv []string) string {
+	pairs := []string{h.lease.GitDir, "<git dir>", h.commonDir(), "<git dir>", h.lease.Worktree, "<worktree>", h.empty, "<tmp>"}
+	for _, kv := range extraEnv {
+		if _, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(v, "/") {
+			pairs = append(pairs, v, "<tmp>")
+		}
+	}
+	msg = strings.NewReplacer(pairs...).Replace(msg)
+	return absPath.ReplaceAllString(msg, "${1}<path>")
 }
 
 // ReadOnly runs log, show, blame or status; the guard has already checked the arguments.
@@ -110,7 +129,12 @@ func (h *HostGit) ReadOnly(ctx context.Context, command string, args []string) (
 	default:
 		return "", fmt.Errorf("git %s is not a read-only command the harness runs", command)
 	}
-	return h.Run(ctx, append([]string{command}, args...)...)
+	flags := map[string][]string{
+		"log":   {"--no-textconv", "--no-ext-diff"},
+		"show":  {"--no-textconv", "--no-ext-diff"},
+		"blame": {"--no-textconv"},
+	}[command]
+	return h.Run(ctx, append(append([]string{command}, flags...), args...)...)
 }
 
 // Diff returns the unified diff of the worktree, new files included, against the base commit.
@@ -145,7 +169,7 @@ func (h *HostGit) snapshot(ctx context.Context, use func(env []string) error) er
 	if err != nil {
 		return fmt.Errorf("make the snapshot folder: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(dir, "index"), "GIT_OBJECT_DIRECTORY=" + dir,
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + filepath.Join(h.commonDir(), "objects")}
 	if _, err := h.run(ctx, env, "read-tree", h.base); err != nil {

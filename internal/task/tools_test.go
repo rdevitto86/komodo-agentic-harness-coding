@@ -107,12 +107,12 @@ func TestBindFailsOnAnUnregisteredTool(t *testing.T) {
 }
 
 func TestKnownMatchesRegistry(t *testing.T) {
-	known := Known()
-	if len(known.Tools) != len(allTools) || len(known.GuardRows) != 8 {
-		t.Fatalf("Known = %d tools, %d rows", len(known.Tools), len(known.GuardRows))
+	tools, rows := KnownTools(), KnownRows()
+	if len(tools) != len(allTools) || len(rows) != 8 {
+		t.Fatalf("known: %d tools, %d rows", len(tools), len(rows))
 	}
 	for _, n := range allTools {
-		if !known.Tools[n] {
+		if !tools[n] {
 			t.Errorf("Known lacks the tool %s", n)
 		}
 	}

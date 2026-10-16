@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
 )
 
@@ -26,6 +27,7 @@ const (
 	maxLogBytes = 64 << 20         // bytes of one command's output kept in its log
 	runTimeout  = 10 * time.Minute // a run command is killed with its whole tree after this
 	hostTimeout = 2 * time.Minute  // a host git call is killed after this
+	drainWait   = 2 * time.Second  // how long output is read after a command ends, for a process that kept the pipe
 )
 
 // capText keeps the first headKeep and the last bytes of s within replyCap, joined by one line naming the log.
@@ -102,7 +104,7 @@ func (c *capture) reply() Reply {
 	if c.f == nil {
 		return Reply{Text: c.buf.String()}
 	}
-	defer c.f.Close()
+	defer func() { _ = c.f.Close() }()
 	size := min(c.total, maxLogBytes)
 	head := make([]byte, headKeep)
 	nh, _ := c.f.ReadAt(head, 0)
@@ -124,13 +126,34 @@ type runResult struct {
 }
 
 // runConfined starts a command from the sandbox, waits for it with the sandbox's own wait and collects its output.
+// When the command ends, whatever it left running in its process group is killed.
 func runConfined(ctx context.Context, cmd *exec.Cmd, logPath string) runResult {
 	out := &capture{logPath: logPath, limit: replyCap - exitRoom}
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := cmd.Start(); err != nil {
+	pr, pw, err := os.Pipe()
+	if err != nil {
 		return runResult{StartErr: err}
 	}
-	err := sandbox.Wait(cmd)
+	cmd.Stdout, cmd.Stderr = pw, pw
+	if err := cmd.Start(); err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return runResult{StartErr: err}
+	}
+	_ = pw.Close()
+	copied := make(chan struct{})
+	go func() {
+		defer guardian.Recover(taskSource, nil)
+		defer close(copied)
+		_, _ = io.Copy(out, pr)
+	}()
+	err = sandbox.Wait(cmd)
+	reapGroup(cmd)
+	select {
+	case <-copied:
+	case <-time.After(drainWait):
+	}
+	_ = pr.Close()
+	<-copied
 	res := runResult{Reply: out.reply(), Exit: cmd.ProcessState.ExitCode()}
 	res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	if err != nil && cmd.ProcessState == nil {
@@ -141,7 +164,7 @@ func runConfined(ctx context.Context, cmd *exec.Cmd, logPath string) runResult {
 
 // hostOutput runs a host command in its own process group with a timeout and returns its standard output.
 // The group is killed whole when the time runs out or the context ends.
-func hostOutput(ctx context.Context, dir string, env []string, argv ...string) ([]byte, error) {
+func hostOutput(ctx context.Context, dir string, env []string, label string, argv ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, hostTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -154,7 +177,7 @@ func hostOutput(ctx context.Context, dir string, env []string, argv ...string) (
 		if msg == "" {
 			msg = err.Error()
 		}
-		return stdout.Bytes(), fmt.Errorf("%s: %s", argv[1], msg)
+		return stdout.Bytes(), fmt.Errorf("%s: %s", label, msg)
 	}
 	return stdout.Bytes(), nil
 }
@@ -174,3 +197,18 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// taskSource names this package in a fault.
+var taskSource = fault.Source{Component: "task"}
+
+// stderrPrinter shows a fault on standard error; standard output belongs to the tool server's protocol.
+type stderrPrinter struct{}
+
+// PrintError writes the fault's reason on one line.
+func (stderrPrinter) PrintError(f fault.Fault) error {
+	_, err := fmt.Fprintf(os.Stderr, "komodo: %s\n", f.Reason)
+	return err
+}
+
+// guardian turns a panic of a goroutine this package starts into a published fault.
+var guardian = fault.New(nil, stderrPrinter{})

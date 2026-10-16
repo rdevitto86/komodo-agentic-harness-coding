@@ -375,6 +375,8 @@ func TestGuardSetFilesAfterScopeAnswer(t *testing.T) {
 
 func TestGuardSiblingRules(t *testing.T) {
 	f := newFixture(t)
+	writeFile(t, filepath.Join(f.Root, "crates/foo/Cargo.toml"), "[package]\n")
+	writeFile(t, filepath.Join(f.Root, "crates/bar/Cargo.toml"), "[package]\n")
 	g := newTestGuard(t, f, "builder", builderPerms(), []string{"internal/lease/clock.go", "web/app.ts", "py/mod.py", "crates/foo/src/**"}, 100)
 	write := func(p string) Verdict {
 		return g.Check(Call{Tool: "write", Args: jsonArgs(t, map[string]any{"path": p, "content": "x"})})

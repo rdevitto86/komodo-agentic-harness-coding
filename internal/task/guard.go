@@ -30,6 +30,8 @@ type Verdict struct {
 	EndSession  bool   // true on the refusal that reaches guard.refusal_limit
 	Count       int    // refusals under Row so far in this session
 	Target      string // the refused path, class or tool, for the tool.denied fact
+
+	res map[string]resolved // the paths the guard resolved for an allowed call, keyed by the path as requested
 }
 
 // Binding is what the guard needs from an agent and its group.
@@ -165,10 +167,11 @@ func (g *Guard) Check(c Call) (v Verdict) {
 	if ended {
 		return g.finish(refuse("G6", c.Tool, nil))
 	}
-	if r := g.evaluate(c, files); r != nil {
+	res := map[string]resolved{}
+	if r := g.evaluate(c, files, res); r != nil {
 		return g.finish(r)
 	}
-	return Verdict{Allowed: true}
+	return Verdict{Allowed: true, res: res}
 }
 
 // toolList names the agent's permitted tools for a refusal line.
@@ -196,7 +199,7 @@ func (g *Guard) finish(r *refusal) Verdict {
 }
 
 // evaluate runs the rows in policy order against one call and returns the first refusal.
-func (g *Guard) evaluate(c Call, files []string) *refusal {
+func (g *Guard) evaluate(c Call, files []string, res map[string]resolved) *refusal {
 	perm := g.b.Permissions
 	switch {
 	case len(perm.Tools) == 0:
@@ -224,6 +227,7 @@ func (g *Guard) evaluate(c Call, files []string) *refusal {
 			return refuse("G2", p, map[string]string{"why": why})
 		}
 		reads = append(reads, r)
+		res[p] = r
 	}
 	for _, p := range pc.writes {
 		r, why := resolveInside(g.b.Worktree, p)
@@ -231,6 +235,7 @@ func (g *Guard) evaluate(c Call, files []string) *refusal {
 			return refuse("G2", p, map[string]string{"why": why})
 		}
 		writes = append(writes, r)
+		res[p] = r
 	}
 	for _, row := range g.order {
 		var r *refusal
@@ -327,7 +332,7 @@ func (g *Guard) checkRun(run *RunArgs) *refusal {
 // checkScope refuses a write outside the group's files and their test siblings (row B1).
 func (g *Guard) checkScope(writes []resolved, files []string) *refusal {
 	for _, w := range writes {
-		if !inFiles(w.Rel, files) && !g.pol.siblingOf(w.Rel, files) {
+		if !inFiles(w.Rel, files) && !g.pol.siblingOf(w.Rel, files, g.b.Worktree) {
 			return refuse("B1", w.Rel, map[string]string{"files": strings.Join(files, ", ")})
 		}
 	}
@@ -556,16 +561,69 @@ func parseGitRead(c Call, a gitReadArgs) (parsed, *refusal) {
 			if !gitFlag.MatchString(s) {
 				return bad("the flag " + strconv.Quote(s) + " is not one git_read passes on")
 			}
+		case paths && strings.HasPrefix(s, ":"):
+			return bad("the pathspec " + strconv.Quote(s) + " uses magic the guard cannot classify")
 		case paths:
 			p.reads = append(p.reads, s)
 		default:
-			rev, file, hasPath := strings.Cut(s, ":")
-			if hasPath && rev != "" {
-				p.rev = append(p.rev, path.Clean(file))
-				continue
+			file, has, ok := objectPath(s)
+			switch {
+			case !ok:
+				return bad("the argument " + strconv.Quote(s) + " names a path the guard cannot classify")
+			case has:
+				p.rev = append(p.rev, file)
+			default:
+				p.reads = append(p.reads, s)
 			}
-			p.reads = append(p.reads, s)
 		}
 	}
 	return p, nil
+}
+
+// objectPath reads a revision argument the way git does: "<rev>:<path>" names a file in a tree, ":<path>" and ":<stage>:<path>" a file in the index,
+// and a colon inside {...} belongs to the revision. ok is false when the argument holds a path the guard cannot classify.
+func objectPath(s string) (file string, has, ok bool) {
+	if !strings.Contains(s, ":") {
+		return "", false, true
+	}
+	depth, cut := 0, -1
+	for i := 0; i < len(s) && cut < 0; i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ':':
+			if depth == 0 && i > 0 {
+				cut = i
+			}
+		}
+	}
+	if depth != 0 {
+		return "", false, false
+	}
+	switch {
+	case strings.HasPrefix(s, ":/"):
+		return "", false, true
+	case strings.HasPrefix(s, ":"):
+		file = s[1:]
+		if len(file) >= 2 && file[0] >= '0' && file[0] <= '3' && file[1] == ':' {
+			file = file[2:]
+		}
+	case cut >= 0:
+		file = s[cut+1:]
+	default:
+		return "", false, true
+	}
+	if file == "" {
+		return "", false, true
+	}
+	if strings.Contains(file, ":") {
+		return "", false, false
+	}
+	file = path.Clean(file)
+	if file == ".." || strings.HasPrefix(file, "../") || path.IsAbs(file) {
+		return "", false, false
+	}
+	return file, true, true
 }

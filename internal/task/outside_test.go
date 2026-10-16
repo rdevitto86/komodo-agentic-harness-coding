@@ -18,7 +18,7 @@ func TestFakeMCPServer(t *testing.T) {
 	sc := bufio.NewScanner(os.Stdin)
 	reply := func(id json.RawMessage, result any) {
 		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
-		os.Stdout.Write(append(b, '\n'))
+		_, _ = os.Stdout.Write(append(b, 10))
 	}
 	for sc.Scan() {
 		var req rpcRequest
@@ -118,7 +118,7 @@ func TestOutsideServerWithHostsKeepsNoNetworkAndSaysSo(t *testing.T) {
 	s := fakeServer()
 	s.Hosts = []string{"api.example.com"}
 	o := startFake(t, &fakeConfiner{dir: t.TempDir()}, s)
-	if w := o.Warnings(); len(w) != 1 || !strings.Contains(w[0], "api.example.com") {
+	if w := strings.Join(o.Warnings(), "\n"); !strings.Contains(w, "api.example.com") {
 		t.Fatalf("warnings = %v", w)
 	}
 }

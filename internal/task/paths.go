@@ -14,8 +14,9 @@ import (
 
 // resolved is a path the guard accepted: Rel is relative to the real worktree root with slashes, Abs is the real path on disk.
 type resolved struct {
-	Rel string
-	Abs string
+	Rel  string
+	Abs  string
+	Root string // the real worktree root the path was resolved under
 }
 
 // resolveInside resolves p against the worktree root with every symlink followed and returns why when it leaves the root.
@@ -52,7 +53,7 @@ func resolveInside(root, p string) (resolved, string) {
 	if err != nil {
 		return resolved{}, "is outside the worktree"
 	}
-	return resolved{Rel: filepath.ToSlash(rel), Abs: real}, ""
+	return resolved{Rel: filepath.ToSlash(rel), Abs: real, Root: realRoot}, ""
 }
 
 // inside reports whether abs lies under root by its spelling alone.
