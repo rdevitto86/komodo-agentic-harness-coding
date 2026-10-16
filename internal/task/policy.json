@@ -1,0 +1,54 @@
+{
+  "v": 1,
+  "rows": [
+    {"id": "G1", "scope": "all", "kind": "tool", "pattern": [], "action": "refuse", "message": "refuse.G1", "alternative": "alt.G1"},
+    {"id": "G2", "scope": "all", "kind": "path", "pattern": [], "action": "refuse", "message": "refuse.G2", "alternative": "alt.G2"},
+    {"id": "G3", "scope": "writers", "kind": "path",
+     "pattern": [".git", ".git/**", "**/.git", "**/.git/**", "bin/komodo", "~/.komodo/**", "~/.claude/settings*.json", ".claude/settings*.json", "internal/task/policy.json", "docs/prd.md"],
+     "action": "refuse", "message": "refuse.G3", "alternative": "alt.G3"},
+    {"id": "G4", "scope": "all", "kind": "path",
+     "pattern": [".env*", "!.env.example", "!.env.sample", "!.env.template", "*.pem", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "*.key"],
+     "action": "refuse", "message": "refuse.G4", "alternative": "alt.G4"},
+    {"id": "G5", "scope": "writers", "kind": "text",
+     "pattern": ["(?im)^[ \\t]*co-authored-by:.*(claude|anthropic)", "(?i)generated with \\[?claude code", "(?i)claude\\.ai/(code|share)"],
+     "action": "refuse", "message": "refuse.G5", "alternative": "alt.G5"},
+    {"id": "G6", "scope": "all", "kind": "tool", "pattern": [], "action": "refuse", "message": "refuse.G6", "alternative": "alt.G6"},
+    {"id": "R1", "scope": "runners", "kind": "run", "pattern": [], "action": "refuse", "message": "refuse.R1", "alternative": "alt.R1"},
+    {"id": "B1", "scope": "builder", "kind": "path", "pattern": [], "action": "refuse", "message": "refuse.B1", "alternative": "alt.B1"}
+  ],
+  "secret_content": [
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    "AKIA[0-9A-Z]{16}",
+    "(?:ghp_|gho_|ghs_|github_pat_)[A-Za-z0-9_]{20,}",
+    "(?:sk-ant-|sk-proj-)[A-Za-z0-9_-]{20,}",
+    "(?:xoxb-|xoxp-)[A-Za-z0-9-]{10,}"
+  ],
+  "test_siblings": {
+    "pairs": [
+      {"test": "{name}_test.go", "source": "{name}.go"},
+      {"test": "test_{name}.py", "source": "{name}.py"},
+      {"test": "{name}_test.py", "source": "{name}.py"},
+      {"test": "{name}.test.{ext}", "source": "{name}.{ext}"},
+      {"test": "{name}.spec.{ext}", "source": "{name}.{ext}"}
+    ],
+    "tests_dirs": ["tests"]
+  },
+  "templates": {
+    "refuse.G1": "Refused by G1: {{why}}.",
+    "alt.G1": "The tools you may call are: {{tools}}.",
+    "refuse.G2": "Refused by G2: {{path}} {{why}}.",
+    "alt.G2": "Use a path inside the worktree, relative to its root.",
+    "refuse.G3": "Refused by G3: {{path}} is a protected path.",
+    "alt.G3": "Leave protected paths alone; if the task needs a change there, stop and say so in your result.",
+    "refuse.G4": "Refused by G4: {{why}}.",
+    "alt.G4": "Read configuration through an example file, and keep secrets out of the files you write.",
+    "refuse.G5": "Refused by G5: the text carries an attribution trailer or a session link.",
+    "alt.G5": "Write the text without any trailer naming Claude or Anthropic and without session links.",
+    "refuse.G6": "Refused by G6: {{row}} refused {{count}} calls in this session, so the session ends.",
+    "alt.G6": "The harness starts a fresh session for the task.",
+    "refuse.R1": "Refused by R1: {{why}}.",
+    "alt.R1": "The command classes you may run are: {{classes}}.",
+    "refuse.B1": "Refused by B1: {{path}} is outside the files of this group.",
+    "alt.B1": "Stop with result status needs_scope and name the paths you need."
+  }
+}
