@@ -1,13 +1,10 @@
-exit 4
+exit 0
 {
   "v": 1,
-  "ok": false,
-  "verdict": "Failed: komodo ui is not built yet. The code is internal.",
-  "report": "Failed: `komodo ui is not built yet`. The code is `internal`.\n",
-  "data": {},
-  "error": {
-    "code": "internal",
-    "reason": "komodo ui is not built yet",
-    "fix": ""
+  "ok": true,
+  "verdict": "Dashboard is listening at 127.0.0.1:<port>.",
+  "report": "Dashboard is listening at `127.0.0.1:<port>`.\n",
+  "data": {
+    "address": "127.0.0.1:<port>"
   }
 }

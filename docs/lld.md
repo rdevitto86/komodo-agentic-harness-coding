@@ -111,7 +111,7 @@ About 3,900 lines of Go exist on this branch. They move as follows when their su
 | `internal/core/filelock.go` | 58 | New: `FileLock`, the one operating-system file lock that the Configuration, State and Lease Managers share |
 | `internal/core/version.go` | 194 | Stays in `internal/core` |
 | `internal/cli/cli.go` | 40 | Grows into `internal/cli` |
-| `dashboard/` | 556 | `internal/cli/ui.go` and `embed/ui/` |
+| `dashboard/` | 556 | `internal/cli/ui.go`, `internal/cli/ui_view.go` and `embed/ui/` |
 
 #### Code rules
 
@@ -216,11 +216,11 @@ Go package `internal/cli`, plus the program entry point.
 | `internal/cli/update.go`, `update_release.go` | `update`: the update steps, the release manifest, the signature check and the release fetch |
 | `internal/cli/doctor.go`, `doctor_fs_*.go` | `doctor`: the seven checks and the file system type of the home folder, per platform |
 | `internal/cli/host.go` | `Host`: the machine probes and seams that `install`, `update` and `doctor` read, and the State Manager hookup |
-| `internal/cli/stubs.go` | The handlers of `ui` and the hidden `internal engine` verb; each returns the not-built-yet fault until its part exists |
+| `internal/cli/ui.go`, `ui_view.go` | `ui`: the dashboard server (routes, the event stream, the host check) and the state it draws, read from the engine with `status` and `replay` |
+| `embed/ui/` | `index.html` and `ui.js`, the dashboard page and its one script, compiled into the binary |
+| `internal/cli/stubs.go` | The handler of the hidden `internal engine` verb; it returns the not-built-yet fault until the engine part exists |
 | `internal/cli/print.go` | The line printed for a recorded event, and the fault built from an error event |
 | `internal/cli/terminal.go` | `HasControllingTerminal`: opens `/dev/tty` |
-
-`ui.go` arrives with its command and replaces the handler in `stubs.go`.
 
 Imports run downward only: `cli` sits above every other package and may import any of them. A verb file holds thin wrappers that call into the owning package, never the logic itself. Only `engine.go` opens the control socket. The Error Handler sits below `cli`, so `cli` imports `fault` and implements its `fault.Printer` interface with `PrintError()`. In the CLI process `fault` has no bus: `cli.New` calls `fault.New(nil, c)`, and `Guard` and `Final` print through the CLI ([1.4](#14-interfaces)). In the engine, `engine.ConnPrinter` prints to the connection that issued the command.
 
@@ -972,6 +972,8 @@ Anyone runs `abandon (id)` to drop a group for good. The id is a group label; an
 ##### `ui`
 
 A person runs `ui` to open the web dashboard. It starts the engine when none runs, serves the page from `embed/ui/` on `127.0.0.1` only, on a free port, prints the address and stops on Ctrl-C. The page shows the same runs, groups and queued runs as `status`, with live events, read from the engine over the control socket. The page is read-only: every action stays a command, so it has no control for `stop`, `abandon` or an answer. Anyone may start `ui`, including the orchestrator. It is served on this machine's local address only. Beside each run the page shows the same time, tokens and cost figures as `status (id)`.
+
+The server answers `GET` and `HEAD` only and refuses any other method with 405. It serves four routes: `/` (the page), `/ui.js` (its script), `/state` (the current state as JSON) and `/events` (a server-sent event stream that sends the state now and again on every change). It refuses a request whose `Host` header is not its own address or `localhost` on its port with 403, so a web page on another site cannot read it through a rebound name. One reader asks the engine every 2 seconds, whatever the number of open pages: `status` for the runs, groups, queued runs and blocked questions, `status (run id)` for each run's figures, and `replay (run id)` for each run's newest 50 events. It reads a run's events again only when that run's groups changed or the last read is 10 seconds old, because `replay` returns the whole log. The command starts the engine once, before it listens; the reader never starts one, so when the engine exits the page shows `the engine is not running`. A read that takes over 1.5 seconds shows as `the engine did not answer`. The page shows the 40 newest events of all runs and draws a stage pipeline with one dot per group. It sends no `run`, `stop`, `abandon` or `plan` request, and it shows no plan-window meter, because the engine has no verb that reports one. When the engine cannot be read the page stays up and shows the failure with no runs.
 
 ##### `doctor`
 
