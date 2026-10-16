@@ -5362,16 +5362,19 @@ The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceabi
 
 | File | Holds |
 |---|---|
-| `engine.go` | `Engine`, `NewEngine`, `Serve`: process lifetime, the exit rule, the cache handle |
-| `socket.go` | `Request`, `Reply`, `Flags`, `ConnPrinter`, the listener on `engine.sock`, one goroutine per connection |
+| `engine.go` | `Engine`, `NewEngine`, `Serve`: process lifetime, the exit rule, the engine heartbeat file |
+| `proto.go` | `Request`, `Reply`, `Flags` and the reply codes |
+| `socket.go` | `ConnPrinter`, `Dial`, `Conn`, the listener's connection loop, one goroutine per connection |
+| `verbs.go` | `Engine.handle` and what each verb does |
+| `status.go` | `StatusData`, `Manager.Snapshot`, and the small views the engine reads from the Runtime Manager |
 | `schedule.go` | The schedule queue loop over `state.ScheduleEntry` |
-| `command.go` | The mapping from `Order` to `task.Command` and from `task.Message` to `Input`; the reader of each reply channel |
-| `landing.go` | `LandingPlan`, the landing order of an epic |
+| `command.go` | The mapping from `Order` to `task.Command` and from `task.Message` to `Input`; `Channels` |
+| `events.go` | The data of the events only this package publishes (`stalled`, `run-refused`, `session.resume-lost`) |
 | `manager.go` | `Manager`, `New`, `Run`: subscriptions, the run loop, the group goroutines |
 | `group.go` | The per-group loop: takes one input at a time, calls `Next`, saves, performs the actions |
-| `decide.go` | `Next`, the transition rows, the block rows, the in-stage rows |
+| `decide.go`, `decide_moves.go`, `decide_end.go` | `Next`, the transition rows, the block rows, the in-stage rows |
 | `limits.go` | `Limits`, `LoadLimits`, the counter rules, `Fingerprint` |
-| `plan.go` | `GroupSpec`, the dependency graph as the Runtime Manager reads it, `Startable`, `Pick` |
+| `plan.go` | `GroupSpec`, the dependency graph as the Runtime Manager reads it, `Startable`, `Pick`, `LandingPlan` and `BuildLanding` |
 | `pool.go` | The active-group pool shared by every run in the engine, `GrowPool`, `HalvePool` |
 | `pause.go` | `PauseGroups`: the call the Resource Manager makes to pause groups at a limit |
 | `timer.go` | Pause timers, the wall clock rule, timer extensions |
@@ -5382,7 +5385,7 @@ The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceabi
 | Flow | Starts at |
 |---|---|
 | The engine | `Engine.Serve` in `engine.go` |
-| A command from the CLI | `Engine.handle` in `socket.go` |
+| A command from the CLI | `Engine.handle` in `verbs.go` |
 | A queued run | `Engine.runSchedule` in `schedule.go` |
 | A run | `Manager.Run` in `manager.go` |
 | One group's life | `runGroup` in `group.go` |
@@ -5614,7 +5617,7 @@ type Reply struct {
 `ConnPrinter` is the engine's `fault.Printer`:
 
 ```go
-// ConnPrinter prints a fault as a Reply with Status "error" on the connection that issued the command the fault belongs to; it implements fault.Printer.
+// ConnPrinter prints a fault as a Reply with Status "error" on the connection of the newest command in flight, because a fault carries no request id; it implements fault.Printer.
 type ConnPrinter struct{ /* open connections by request id and run */ }
 
 // PrintError writes the fault to its connection; a fault with no connection attached is not printed.
@@ -5813,8 +5816,24 @@ type Contexts interface {
 
 // TaskGroups is the Task Manager as the Runtime Manager uses it.
 type TaskGroups interface {
-	// Start runs one Task Manager goroutine for the group and returns its channels; messages come back on Replies.
-	Start(ctx context.Context, spec GroupSpec, h cache.Handle) (task.Channels, error)
+	// Start runs one Task Manager goroutine for the group and returns the Runtime Manager's end of its channels; messages come back on Replies.
+	Start(ctx context.Context, spec GroupSpec, h cache.Handle) (Channels, error)
+}
+
+// Channels are the two channels of task.Channels as the Runtime Manager holds them: it sends on Commands and receives on Replies.
+type Channels struct {
+	Commands chan<- task.Command
+	Replies  <-chan task.Message
+}
+
+// Discarder is the Cleanup Handler as the Runtime Manager uses it for abandon.
+type Discarder interface {
+	Discard(ctx context.Context, repo, group string) error
+}
+
+// Janitor is the machine-wide clean; open names the repositories that still have an open run.
+type Janitor interface {
+	Clean(ctx context.Context, dryRun bool, open map[string]bool) ([]CleanItem, error)
 }
 
 // PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
@@ -5908,7 +5927,7 @@ flowchart LR
 3. At a repository's first run the engine opens that repository's cache with `CacheStore.Open(ctx, repo)` and passes its `Handle()` to the Context Manager. It passes the same handle to every Task Manager of that repository's runs, and closes the cache when the repository's last run ends. Only the engine creates or closes a cache.
 4. The engine loads the schedule queue and starts every overdue entry (see Schedule queue).
 5. Each connection gets one goroutine. It reads `Request` lines, answers with `Reply` lines and streams the target's live events until a reply sets `final`.
-6. After every group closes, every `run-complete`, every queue change and every closed connection, the engine checks its exit rule. With no run live, no entry queued and no connection open, it closes the listener, removes the socket file, closes any open cache and exits. A request that arrives after the listener closed gets `engine_stopping`, and the CLI starts a new engine.
+6. After every group closes, every `run-complete`, every queue change and every closed connection, the engine checks its exit rule. The rule applies once a connection, a run or a queued entry has existed, so a freshly started engine waits for its first request. With no run live, no entry queued and no connection open, it closes the listener, removes the socket file and the heartbeat file, closes any open cache and exits. A request that arrives after the listener closed gets `engine_stopping`, and the CLI starts a new engine.
 
 On any error it catches, the Error Handler publishes one final `error` event before the engine exits, so a caught failure reaches both the saved State and the event log.
 
@@ -5940,7 +5959,7 @@ flowchart LR
 
 1. `--schedule` reaches the engine as a request whose `Event` holds the `run-start` data; the engine mints the run id, writes the entry with `run_id` and `start` set, with `SaveMachine` and `KindSchedule` before it replies with the run id, and the CLI starts the engine first if it is not running. The engine stays up while any run is live or queued.
 2. At engine start, and at every timer wake, the loop calls `LoadMachine` with `KindSchedule` and starts each entry whose `at` is not in the future, oldest first.
-3. Starting an entry publishes the one `run-start` that holds the entry's stored `start` as its data, with the entry's `run_id`. The loop removes the entry with `SaveMachine` once the run's first group record is saved. A crash before that leaves the entry, and the next engine start fires it again; groups that already have records continue and are not duplicated.
+3. Starting an entry publishes the one `run-start` that holds the entry's stored `start` as its data, with the entry's `run_id`. The loop removes the entry with `SaveMachine` once the run's first group record is saved, or at once when the run is refused. A crash before that leaves the entry, and the next engine start fires it again; groups that already have records continue and are not duplicated.
 4. The loop arms one timer for the earliest `at` in the future. A `--schedule` or a `stop` re-arms it.
 5. After the machine restarts, the next `komodo` command finds the queue and starts the engine, which starts everything overdue at once ([1. CLI](#1-cli)).
 
