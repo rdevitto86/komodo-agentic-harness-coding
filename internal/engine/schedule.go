@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -39,6 +40,9 @@ func (q *queue) load() ([]state.ScheduleEntry, int, error) {
 		return nil, 0, nil
 	}
 	rec, err := state.LoadMachine[state.ScheduleBody](q.e.d.Machine, state.KindSchedule)
+	if errors.Is(err, state.ErrNotFound) {
+		return nil, 0, nil
+	}
 	if err != nil {
 		return nil, 0, err
 	}

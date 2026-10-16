@@ -12,10 +12,12 @@ import (
 // recoverInit continues a group from its saved state: lease, open orders, dead sessions and timers. It reports whether the loop should run.
 func (g *group) recoverInit(rec state.Record) bool {
 	g.st, g.rev, g.created = rec.State, rec.Header.Rev, true
+	g.mu.Lock()
 	g.snap = g.st
 	if working(g.st.Stage) || g.st.Stage == StagePaused || g.st.Stage == StageBlocked {
 		g.epochs[workingOf(g.st)] = g.st.Epoch
 	}
+	g.mu.Unlock()
 	if g.st.Stage == StageDone {
 		return false
 	}

@@ -468,6 +468,7 @@ type rig struct {
 	killed  atomic.Int64
 	restart []string
 	rmu     sync.Mutex
+	noRun   bool // the test builds its own Manager through an Engine
 }
 
 // evlog collects every published event.
@@ -515,7 +516,7 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 	t.Helper()
 	RegisterEvents()
 	home := t.TempDir()
-	machine, err := state.NewMachine(home, "test")
+	machine, err := state.NewMachine(home, "engine")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,6 +555,10 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 			r.ev.mu.Unlock()
 		}
 	}()
+	if r.noRun {
+		t.Cleanup(func() { _ = r.bus.Close() })
+		return r
+	}
 	r.m = New(r.d)
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
