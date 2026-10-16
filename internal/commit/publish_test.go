@@ -460,7 +460,4 @@ func TestPublishConcurrentGroupsLandInArrivalOrder(t *testing.T) {
 	if ls[1].Label != "tg-1.2" || ls[0].Label != "tg-1.1" {
 		t.Fatalf("landing order (oldest last) = %s, %s; want tg-1.2 then tg-1.1", ls[1].Label, ls[0].Label)
 	}
-	if len(ls[0].Files) == 0 {
-		t.Fatalf("files missing: %+v", ls[0])
-	}
 }

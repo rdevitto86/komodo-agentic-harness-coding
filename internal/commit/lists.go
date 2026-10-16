@@ -11,14 +11,11 @@ import (
 )
 
 // SaveLists commits the epic's task lists, from docs/backlog/, onto the epic branch as a commit and pushes it.
+// It holds the epic's landing turn, and works in the landing worktree when the epic branch is checked out there.
 func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 	epic := "komodo/" + r.Epic
 	if !validBranch(epic) || strings.ContainsAny(r.Epic, "/\\") {
 		return fail(KindCriticalRef, false, fmt.Errorf("epic branch %q: %w", epic, ErrCriticalRef))
-	}
-	src, name, err := listsFolder(r.Root, r.Epic)
-	if err != nil {
-		return fail(KindGit, false, err)
 	}
 	h.adopt(r.CommonDir)
 	h.adopt(r.Root)
@@ -26,23 +23,25 @@ func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 	if err := resolveRemote(ctx, h.Git, r.Root, &base, &remote); err != nil {
 		return err
 	}
-	tmp, err := os.MkdirTemp("", "komodo-lists-")
+	if base == epic {
+		return fail(KindCriticalRef, false, fmt.Errorf("base branch %q is the epic branch: %w", base, ErrCriticalRef))
+	}
+	src, name, err := listsFolder(r.Root, r.Epic)
 	if err != nil {
-		return fail(KindGit, true, fmt.Errorf("create a temporary worktree folder: %w", err))
+		return fail(KindGit, false, err)
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-	wt := filepath.Join(tmp, "wt")
-	if err := h.Git.AddWorktree(ctx, r.CommonDir, wt, epic, remote+"/"+epic); err != nil {
-		return gitFail(err)
+	turn, err := h.Epics.Lock(ctx, r.Repo+"/"+r.Epic)
+	if err != nil {
+		return fail(KindGit, true, fmt.Errorf("wait for the epic's turn: %w", err))
 	}
-	defer func() {
-		if h.Git.RemoveWorktree(ctx, r.CommonDir, wt) != nil {
-			_ = os.RemoveAll(wt)
-			_ = h.Git.RemoveWorktree(ctx, r.CommonDir, wt)
-		}
-	}()
-	if err := h.Git.Fetch(ctx, wt, remote, epic); err == nil {
-		if _, err := h.Git.Merge(ctx, wt, remote+"/"+epic, r.Epic+": update from "+remote, false); err != nil {
+	defer turn.Release()
+	wt, release, err := h.listsWorktree(ctx, r.CommonDir, epic, remote)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := h.Git.FetchBranch(ctx, wt, remote, epic); err == nil {
+		if _, err := h.Git.Merge(ctx, wt, "refs/remotes/"+remote+"/"+epic, r.Epic+": update from "+remote, false); err != nil {
 			return gitFail(err)
 		}
 	} else if !errors.Is(err, ErrBranchMissing) {
@@ -74,6 +73,32 @@ func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 		return fail(KindPush, true, err)
 	}
 	return nil
+}
+
+// listsWorktree returns a worktree with the epic branch checked out and a function that releases it: the
+// landing worktree when it exists, which stays, otherwise a temporary one that is removed.
+func (h *Handler) listsWorktree(ctx context.Context, common, epic, remote string) (string, func(), error) {
+	if path, ok, err := h.Git.WorktreeOf(ctx, common, epic); err != nil {
+		return "", nil, gitFail(err)
+	} else if ok {
+		return path, func() {}, nil
+	}
+	tmp, err := os.MkdirTemp("", "komodo-lists-")
+	if err != nil {
+		return "", nil, fail(KindGit, true, fmt.Errorf("create a temporary worktree folder: %w", err))
+	}
+	wt := filepath.Join(tmp, "wt")
+	if err := h.Git.AddWorktree(ctx, common, wt, epic, remote+"/"+epic); err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", nil, gitFail(err)
+	}
+	return wt, func() {
+		if h.Git.RemoveWorktree(ctx, common, wt) != nil {
+			_ = os.RemoveAll(wt)
+			_ = h.Git.RemoveWorktree(ctx, common, wt)
+		}
+		_ = os.RemoveAll(tmp)
+	}, nil
 }
 
 // listsFolder finds the epic's folder under docs/backlog/: the label itself, or epic-N for a label ep-N.

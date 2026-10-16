@@ -1,4 +1,4 @@
-package commit
+package core
 
 import (
 	"errors"
@@ -150,13 +150,13 @@ func TestPushRejectedLeavesRemote(t *testing.T) {
 	}
 }
 
-// Across a whole workflow no argument list holds a force flag, a plus refspec or an empty-source refspec.
+// Across a whole workflow no push holds a force flag, a plus refspec or an empty-source refspec; only a fetch into refs/remotes/ may carry a plus.
 func TestNoForceInAnyArgument(t *testing.T) {
 	w := newWorld(t)
 	g := w.newGroup("tg-1.1")
 	w.work(g, "a.txt", "a")
 	_, _ = w.git.Commit(w.ctx, g.wt, "tg-1.1: a")
-	_ = w.git.Fetch(w.ctx, g.wt, "origin", "main")
+	_ = w.git.FetchBranch(w.ctx, g.wt, "origin", "main")
 	_, _ = w.git.Merge(w.ctx, g.wt, "origin/komodo/ep-1", "tg-1.1: merge ep-1", false)
 	_ = w.git.Push(w.ctx, g.wt, "origin", g.branch)
 	_, _, _ = w.git.RemoteTip(w.ctx, g.wt, "origin", g.branch)
@@ -171,7 +171,8 @@ func TestNoForceInAnyArgument(t *testing.T) {
 	}
 	for _, a := range w.traced {
 		for i, s := range a {
-			bad := s == "-f" || strings.HasPrefix(s, "--force") || strings.HasPrefix(s, "+") || strings.HasPrefix(s, ":") || s == "--delete" || s == "-D"
+			plusOK := subcommand(a) == "fetch" && strings.HasPrefix(s, "+refs/heads/") && strings.Contains(s, ":refs/remotes/")
+			bad := s == "-f" || strings.HasPrefix(s, "--force") || (strings.HasPrefix(s, "+") && !plusOK) || strings.HasPrefix(s, ":") || s == "--delete" || s == "-D"
 			if bad {
 				t.Fatalf("argument %d of %v forbids force or delete", i, a)
 			}
@@ -261,7 +262,7 @@ func TestLandedAndDiffStat(t *testing.T) {
 	if err != nil || len(ls) != 2 {
 		t.Fatalf("landed = %+v, %v", ls, err)
 	}
-	if ls[0].Label != "tg-1.2" || ls[0].Goal != "Goal two" || ls[0].Section != "## Summary\n2 file" || len(ls[0].Files) != 1 || ls[0].Files[0] != "b.txt" {
+	if ls[0].Label != "tg-1.2" || ls[0].Goal != "Goal two" || ls[0].Section != "## Summary\n2 file" {
 		t.Fatalf("newest = %+v", ls[0])
 	}
 	if ls[1].Label != "tg-1.1" {
@@ -347,10 +348,10 @@ func TestBranchExistsAndCreate(t *testing.T) {
 // Fetch of a missing branch returns ErrBranchMissing; DefaultBranch and UpstreamRemote read the configuration.
 func TestFetchDefaultBranchUpstream(t *testing.T) {
 	w := newWorld(t)
-	if err := w.git.Fetch(w.ctx, w.clone, "origin", "main"); err != nil {
+	if err := w.git.FetchBranch(w.ctx, w.clone, "origin", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.git.Fetch(w.ctx, w.clone, "origin", "nope"); !errors.Is(err, ErrBranchMissing) {
+	if err := w.git.FetchBranch(w.ctx, w.clone, "origin", "nope"); !errors.Is(err, ErrBranchMissing) {
 		t.Fatalf("err = %v, want ErrBranchMissing", err)
 	}
 	if b, err := w.git.DefaultBranch(w.ctx, w.clone, "origin"); err != nil || b != "main" {
