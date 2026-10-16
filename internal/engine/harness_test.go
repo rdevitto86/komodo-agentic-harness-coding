@@ -41,10 +41,11 @@ func (rigAgents) Retries(string) (int, error) { return 1, nil }
 
 // fakeStore is an in-memory State Manager.
 type fakeStore struct {
-	mu     sync.Mutex
-	recs   map[string]state.Record
-	onSave func(group string, s State)
-	saves  atomic.Int64
+	mu       sync.Mutex
+	recs     map[string]state.Record
+	onSave   func(group string, s State)
+	failSave atomic.Bool // makes every Save fail
+	saves    atomic.Int64
 }
 
 // newStore returns an empty store.
@@ -79,6 +80,10 @@ func (s *fakeStore) Create(_ context.Context, g string, st State) (state.Record,
 func (s *fakeStore) Save(_ context.Context, g string, st State, rev int) (state.Record, error) {
 	s.mu.Lock()
 	cur, ok := s.recs[g]
+	if s.failSave.Load() {
+		s.mu.Unlock()
+		return state.Record{}, fmt.Errorf("save refused")
+	}
 	if !ok || cur.Header.Rev != rev {
 		s.mu.Unlock()
 		return state.Record{}, fmt.Errorf("revision %d is stale", rev)
@@ -114,14 +119,15 @@ func (s *fakeStore) put(g string, st State, rev int) {
 
 // fakeLeases is an in-memory Lease Manager.
 type fakeLeases struct {
-	mu       sync.Mutex
-	fence    int
-	held     map[string]string // groups another run holds
-	released map[string]int
-	revoked  []string
-	renewErr map[string]error
-	renews   map[string]int
-	order    *seqLog // shared log of lease and event order
+	mu        sync.Mutex
+	fence     int
+	held      map[string]string // groups another run holds
+	released  map[string]int
+	revoked   []string
+	renewErr  map[string]error
+	renews    map[string]int
+	zeroFence bool    // grants a lease with fence 0, which Next refuses
+	order     *seqLog // shared log of lease and event order
 }
 
 // newLeases returns a lease fake.
@@ -137,6 +143,9 @@ func (l *fakeLeases) Grant(_ context.Context, req lease.GrantRequest) (lease.Lea
 		return lease.Lease{}, lease.HeldError{Holder: lease.Lease{Run: h, Group: req.Group}}
 	}
 	l.fence++
+	if l.zeroFence {
+		return lease.Lease{Repo: req.Repo, Group: req.Group, Run: req.Run, Branch: req.Branch, Worktree: req.Worktree}, nil
+	}
 	return lease.Lease{Repo: req.Repo, Group: req.Group, Run: req.Run, Branch: req.Branch, Worktree: req.Worktree, Fence: lease.Fence(l.fence)}, nil
 }
 
@@ -400,6 +409,7 @@ type fakeTasks struct {
 	cmdLog  map[string][]task.Command
 	specs   map[string]GroupSpec
 	failFor map[string]error
+	onStart func(group string, n int) // called with the start count under the lock
 }
 
 // Start starts a Task Manager goroutine and returns its channels.
@@ -410,6 +420,9 @@ func (f *fakeTasks) Start(ctx context.Context, spec GroupSpec, _ cache.Handle) (
 		return Channels{}, err
 	}
 	f.started[spec.ID]++
+	if f.onStart != nil {
+		f.onStart(spec.ID, f.started[spec.ID])
+	}
 	f.specs[spec.ID] = spec
 	cmds := make(chan task.Command, CommandBuffer)
 	out := make(chan task.Message, CommandBuffer)

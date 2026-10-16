@@ -75,40 +75,34 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 	}
 	m.mu.Unlock()
 
-	deadline := time.NewTimer(m.t.ShutdownDeadline)
-	defer deadline.Stop()
+	expired := make(chan struct{})
+	timer := time.AfterFunc(m.t.ShutdownDeadline, func() { close(expired) })
+	defer timer.Stop()
 	for _, g := range groups {
 		g.stopping.Store(true)
 		g.send(stopCommand("stop"))
 	}
-	for _, g := range groups {
-		g.mu.Lock()
-		done := g.tmDone
-		g.mu.Unlock()
-		if done == nil {
-			continue
-		}
-		select {
-		case <-done:
-		case <-deadline.C:
-			m.killRemaining(r, groups)
-			deadline.Reset(time.Second)
-			select {
-			case <-done:
-			case <-deadline.C:
-			}
-		case <-ctx.Done():
-		}
+	if !m.waitTMs(ctx, groups, expired) {
+		m.killRemaining(r, groups)
+		grace := make(chan struct{})
+		gt := time.AfterFunc(killGrace, func() { close(grace) })
+		m.waitTMs(ctx, groups, grace)
+		gt.Stop()
 	}
 	for _, g := range groups {
 		g.cancel()
 	}
-	var saved []bus.ID
+	loops := make(chan struct{})
+	lt := time.AfterFunc(killGrace, func() { close(loops) })
+	defer lt.Stop()
 	for _, g := range groups {
 		select {
 		case <-g.done:
-		case <-time.After(time.Second):
+		case <-loops:
 		}
+	}
+	var saved []bus.ID
+	for _, g := range groups {
 		g.mu.Lock()
 		st := g.snap
 		g.mu.Unlock()
@@ -138,4 +132,24 @@ func (m *Manager) killRemaining(r *run, groups []*group) {
 			m.d.KillTree(r.id, g.spec.ID)
 		}
 	}
+}
+
+// waitTMs waits until every group's Task Manager has ended; it reports false when stop fires first.
+func (m *Manager) waitTMs(ctx context.Context, groups []*group, stop <-chan struct{}) bool {
+	for _, g := range groups {
+		g.mu.Lock()
+		done := g.tmDone
+		g.mu.Unlock()
+		if done == nil {
+			continue
+		}
+		select {
+		case <-done:
+		case <-stop:
+			return false
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
 }

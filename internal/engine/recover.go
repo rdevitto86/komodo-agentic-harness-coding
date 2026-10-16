@@ -37,6 +37,7 @@ func (g *group) recoverInit(rec state.Record) bool {
 	ns.Run, ns.Fence, ns.LastEventAt = g.r.id, uint64(l.Fence), g.now()
 	if err := g.save(ns); err != nil {
 		g.m.report(g, fmt.Errorf("save recovered %s: %w", g.spec.Label, err))
+		_ = g.m.d.Leases.Release(g.ctx, l)
 		return false
 	}
 	g.r.firstSave()

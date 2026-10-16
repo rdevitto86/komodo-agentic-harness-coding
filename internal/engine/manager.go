@@ -94,6 +94,7 @@ type Manager struct {
 	chg      chan struct{}
 	stopped  bool
 	faults   *fault.Handler // reports a panic of a goroutine the package starts
+	openMu   sync.Mutex     // makes the check and the open of a repository cache one step
 	ready    chan struct{}  // closed once Run has subscribed to the command events
 	readyOne sync.Once
 }
@@ -407,6 +408,8 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 
 // openCache opens the repository's cache at its first run and hands the handle to the Context Manager.
 func (m *Manager) openCache(ctx context.Context, r *run) error {
+	m.openMu.Lock()
+	defer m.openMu.Unlock()
 	repo := r.start.Repo
 	m.mu.Lock()
 	rc := m.repos[repo]
@@ -449,6 +452,10 @@ func (m *Manager) schedule() {
 				if r.groups[id] != nil || r.finished[id] || r.lost[id] || r.depBlocked[id] != "" {
 					continue
 				}
+				if m.groups[id] != nil {
+					r.lost[id] = true // another run's loop owns the group, so this run never starts it
+					continue
+				}
 				all = append(all, c)
 				owner[id] = r
 			}
@@ -482,6 +489,7 @@ func (m *Manager) groupDone(g *group) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r := g.r
+	delete(m.beats, "task:"+g.spec.ID)
 	r.finished[g.spec.ID] = true
 	r.done[g.spec.ID] = g.st.Outcome == "complete"
 }
@@ -495,6 +503,8 @@ func (m *Manager) leaseRefused(g *group, err error) {
 	}
 	m.mu.Lock()
 	g.r.lost[g.spec.ID] = true
+	delete(g.r.groups, g.spec.ID)
+	m.dropGroupLocked(g)
 	m.mu.Unlock()
 	_ = m.d.Bus.Publish(Event{Type: bus.TypeRunFailure, Subtype: "lease.lost", Run: bus.ID(g.r.id), Group: bus.ID(g.spec.ID),
 		Data: &bus.LeaseLost{GroupFacts: bus.GroupFacts{Stage: string(StageIntake)}, Holder: bus.ID(holder), Where: "renew"}})
@@ -747,14 +757,14 @@ func (m *Manager) CheckBeats() {
 	m.mu.Unlock()
 	for _, loop := range silent {
 		if id, ok := strings.CutPrefix(loop, "task:"); ok {
-			m.restartTM(id)
+			m.spawn(func() { m.restartTM(id) })
 		} else if m.d.RestartLoop != nil {
 			m.d.RestartLoop(loop)
 		}
 	}
 }
 
-// restartTM stops a silent Task Manager and lets the group's loop start a new one from the saved state.
+// restartTM stops a silent Task Manager, waits for it to end (killing its process tree at the deadline), and lets the group's loop start a new one from the saved state.
 func (m *Manager) restartTM(id string) {
 	m.mu.Lock()
 	g := m.groups[id]
@@ -764,14 +774,57 @@ func (m *Manager) restartTM(id string) {
 	}
 	g.mu.Lock()
 	old, done := g.cmds, g.tmDone
-	g.cmds, g.tmDone = nil, nil
 	g.mu.Unlock()
 	if old != nil {
 		select {
 		case old <- stopCommand("restart"):
 		default:
 		}
+		m.waitEnded(g, done)
+		g.mu.Lock()
+		if g.tmDone == done {
+			g.cmds, g.tmDone = nil, nil
+		}
+		g.mu.Unlock()
 	}
-	_ = done
 	g.enqueue(Input{Kind: InLoopRestart})
 }
+
+// waitEnded waits for a stopped Task Manager to end; at the shutdown deadline it kills the group's process tree and waits a short grace.
+func (m *Manager) waitEnded(g *group, done chan struct{}) {
+	if done == nil {
+		return
+	}
+	t := time.NewTimer(m.t.ShutdownDeadline)
+	defer t.Stop()
+	select {
+	case <-done:
+		return
+	case <-t.C:
+	}
+	if m.d.KillTree != nil {
+		m.d.KillTree(g.r.id, g.spec.ID)
+	}
+	select {
+	case <-done:
+	case <-time.After(killGrace):
+	}
+}
+
+// dropGroupLocked removes a group that will not run from the engine-wide table, if the table still holds it, and drops its heartbeat.
+func (m *Manager) dropGroupLocked(g *group) {
+	if m.groups[g.spec.ID] == g {
+		delete(m.groups, g.spec.ID)
+	}
+	delete(m.beats, "task:"+g.spec.ID)
+}
+
+// dropGroup is dropGroupLocked for a caller that does not hold the lock.
+func (m *Manager) dropGroup(g *group) {
+	m.mu.Lock()
+	m.dropGroupLocked(g)
+	m.mu.Unlock()
+}
+
+// killGrace is how long a stop waits for a Task Manager after its process tree was killed.
+const killGrace = time.Second

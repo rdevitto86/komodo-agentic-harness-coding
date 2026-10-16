@@ -85,18 +85,15 @@ func (e *Engine) serveConn(ctx context.Context, c net.Conn) {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	w := &connWriter{c: c}
-	lines := make(chan []byte)
+	lines := make(chan frame)
 	e.m.spawn(func() {
 		defer close(lines)
 		rd := bufio.NewReaderSize(c, 64<<10)
 		for {
-			b, err := rd.ReadBytes('\n')
-			if len(b) > maxFrame {
-				b = nil
-			}
-			if len(b) > 1 {
+			f, err := readFrame(rd)
+			if len(f.b) > 0 || f.long {
 				select {
-				case lines <- b:
+				case lines <- f:
 				case <-cctx.Done():
 					return
 				}
@@ -107,7 +104,12 @@ func (e *Engine) serveConn(ctx context.Context, c net.Conn) {
 			}
 		}
 	})
-	for b := range lines {
+	for f := range lines {
+		if f.long {
+			_ = w.send(Reply{Status: StatusError, Code: CodeBadFrame, Detail: "the request line is longer than the 4 MiB limit", Final: true})
+			continue
+		}
+		b := f.b
 		var req Request
 		if err := json.Unmarshal(b, &req); err != nil {
 			_ = w.send(Reply{ID: scrapeID(b), Status: StatusError, Code: CodeBadFrame, Detail: "the line is not a valid request: " + err.Error(), Final: true})
@@ -200,3 +202,31 @@ func (c *Conn) Recv() (Reply, error) {
 
 // Close closes the connection.
 func (c *Conn) Close() error { return c.c.Close() }
+
+// frame is one request line; long marks a line that passed the size limit and was dropped unread.
+type frame struct {
+	b    []byte
+	long bool
+}
+
+// readFrame reads one line, keeping at most maxFrame bytes: a longer line is read through and reported as long.
+func readFrame(rd *bufio.Reader) (frame, error) {
+	var buf []byte
+	long := false
+	for {
+		part, isPrefix, err := rd.ReadLine()
+		if err != nil {
+			return frame{b: buf, long: long}, err
+		}
+		if !long {
+			if len(buf)+len(part) > maxFrame {
+				long, buf = true, nil
+			} else {
+				buf = append(buf, part...)
+			}
+		}
+		if !isPrefix {
+			return frame{b: buf, long: long}, nil
+		}
+	}
+}

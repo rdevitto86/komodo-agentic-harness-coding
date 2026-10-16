@@ -101,6 +101,7 @@ func (g *group) enqueue(in Input) {
 func (g *group) main(rec *state.Record) {
 	defer close(g.done)
 	defer g.stopTimers()
+	defer g.giveBackSlot()
 	ok := false
 	g.safe(func() {
 		if rec == nil {
@@ -141,15 +142,21 @@ func (g *group) safe(fn func()) {
 	fn()
 }
 
+// giveBackSlot returns the group's pool slot, if it holds one; the loop calls it on every way out.
+func (g *group) giveBackSlot() {
+	if g.hasSlot {
+		g.hasSlot = false
+		g.m.pool.Release()
+	}
+}
+
 // markDead records that the loop ended before the group was Done and lets the run notice.
 func (g *group) markDead() {
 	g.mu.Lock()
 	g.dead = true
 	g.mu.Unlock()
-	if g.hasSlot {
-		g.hasSlot = false
-		g.m.pool.Release()
-	}
+	g.giveBackSlot()
+	g.m.dropGroup(g)
 	g.m.groupChanged(g)
 }
 
@@ -172,6 +179,7 @@ func (g *group) begin() bool {
 	st.ActionsOpen = slices.DeleteFunc(st.ActionsOpen, func(a state.OpenAction) bool { return a.Kind == string(OrderGrantLease) })
 	granted := Next(st, Input{Kind: InLeaseGranted, Group: g.spec.ID, Time: g.now(), Data: mustJSON(LeaseGrant{Fence: uint64(l.Fence), Branch: l.Branch, Worktree: l.Worktree})}, g.r.limits)
 	if granted.Refused {
+		_ = g.m.d.Leases.Release(g.ctx, l)
 		return false
 	}
 	if err := g.save(granted.State); err != nil {
@@ -402,7 +410,10 @@ func wakeAt(w *task.Wake, now time.Time) *task.Wake {
 
 // attachLanding records the epic's landing plan in a Commit order's data.
 func (g *group) attachLanding(o *Order) {
-	if p, ok := g.r.landingFor(g.spec.Epic); ok {
+	g.m.mu.Lock()
+	p, ok := g.r.landingFor(g.spec.Epic)
+	g.m.mu.Unlock()
+	if ok {
 		d := decode[stageData](o.Data)
 		d.Landing = &p
 		o.Data = mustJSON(d)
