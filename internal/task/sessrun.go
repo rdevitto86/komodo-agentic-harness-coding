@@ -36,6 +36,7 @@ type sessOut struct {
 	outcome Outcome
 	handle  llm.ResumeHandle
 	limit   *llm.ProviderLimit
+	result  llm.Result
 }
 
 // sessCtx is everything one running session owns.

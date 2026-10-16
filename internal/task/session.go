@@ -278,7 +278,9 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 }
 
 // halted reports whether the hooks ask for a stop the loop has not started yet.
-func halted(h Hooks, st *superviseState) bool { return h.Halt != nil && st.stop == "" && h.Halt() != "" }
+func halted(h Hooks, st *superviseState) bool {
+	return h.Halt != nil && st.stop == "" && h.Halt() != ""
+}
 
 // finish turns the end of the stream into the supervisor's answer.
 func finish(st *superviseState, res llm.Result, err error) (llm.Result, Reason, error) {

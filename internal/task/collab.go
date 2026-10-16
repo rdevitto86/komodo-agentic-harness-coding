@@ -126,6 +126,7 @@ type Collaborators struct {
 
 	Checks      agent.Checker       // the mechanical checks run before the Tester and Reviewer start
 	Commands    map[string][]string // command class to argv: setup, build, test, lint, format
+	Base        string              // the commit the group's checks diff against
 	Language    string              // decides the impact set of the checks
 	Meta        GroupMeta           // what the Commit Handler needs besides the spec
 	Plan        SandboxPlan         // where the sandbox instances keep their files

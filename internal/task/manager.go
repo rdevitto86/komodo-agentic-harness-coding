@@ -96,6 +96,9 @@ type Manager struct {
 	closeErr   error
 	tmp        string
 	disputeOut []string
+	scopeInput string // the scope answer text the builder's next session receives
+	keepHandle *llm.ResumeHandle
+	taskMu     sync.Mutex // one completion command at a time
 }
 
 // scopeWait is a builder's open scope request.
@@ -224,7 +227,9 @@ func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
 }
 
 // nextID returns a unique identifier with a prefix.
-func (m *Manager) nextID(prefix string) string { return prefix + "-" + strconv.FormatInt(m.ids.Add(1), 10) }
+func (m *Manager) nextID(prefix string) string {
+	return prefix + "-" + strconv.FormatInt(m.ids.Add(1), 10)
+}
 
 // block builds the error that holds the group with an escalation.
 func block(reason string, detail any) error {
