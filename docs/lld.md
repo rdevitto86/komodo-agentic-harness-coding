@@ -3594,6 +3594,8 @@ The package is `internal/intake`.
 | `internal/intake/plan.go` | `Plan`: the planner session, lint returns and the all-or-nothing write |
 | `internal/intake/docs.go` | Reading the source documents a plan request names |
 | `internal/intake/hash.go` | The card hash of a group |
+| `internal/intake/fields.go` | Field blocks, acceptance items and the value checks of `TG.md` and `tsk-*.md` |
+| `internal/intake/write.go` | Staging, the folder swap with rollback and the restore of `.plan-old-*` folders |
 
 The planner's role definition and result decoder are in `internal/agent/planner.go`: `PlannerRole`, `PlannerResult` and `ParsePlannerResult`. A `PlannerResult` has the shape of a `PlanDraft`; the handler copies one into the other.
 
@@ -3685,7 +3687,7 @@ Grammar of both files:
 - **Lists:** a one-line value is a list of one; several values are `- ` lines under the key, as `files:` shows.
 - **Acceptance items:** `- ` lines after the field block, in one of three shapes: `WHEN <event> THE SYSTEM SHALL <response>`, `IF <condition> THEN THE SYSTEM SHALL <response>` or `WHILE <state> THE SYSTEM SHALL <response>`. An indented `cmd:` or `needs:` line belongs to the item above it.
 - **Numbers:** a new epic is the highest `epic-N` plus 1; a new group is the highest `tg-N.M` of its epic plus 1.
-- **Unknown key:** a `grammar` finding names the key, so a file from a newer grammar is refused, never half read. A missing optional key reads as its default.
+- **Unknown key:** a `grammar` finding names the key, so a file from a newer grammar is refused, never half read. A missing optional key reads as its default: `subsystem` `none`, `touches` empty, `priority` `normal`, `status` `todo`. A missing `id`, `goal` or `points` is a `grammar` finding; a missing or empty `files`, a missing `dependencies` key (a group with none writes the key with no value) and a task without `files` or `done_when` are `required` findings.
 
 #### Task file: `tsk-*.md`
 
@@ -3884,6 +3886,33 @@ The handler ends planning by publishing `run-start` for the groups it just wrote
 
 A group label is the group's folder name, such as `tg-2.1`. The full `run-start` shape is in [chapter 4](#4-event-bus).
 
+The package registers `plan` / `request` and the four plan error subtypes with `RegisterEvents()`. The `error` data structs:
+
+```go
+// PlanBlocked is the data of error / plan-blocked.
+type PlanBlocked struct {
+	Findings  []Finding `json:"findings"`   // the findings of the third draft
+	DraftPath string    `json:"draft_path"` // folder holding the last failing draft; empty when it could not be saved
+}
+
+// PlanTimeout is the data of error / plan-timeout.
+type PlanTimeout struct {
+	WallMin int `json:"wall_min"` // the minutes the plan was allowed
+}
+
+// PlanInput is the data of error / plan-input.
+type PlanInput struct {
+	Reason string `json:"reason"` // what failed, in one sentence
+}
+
+// PlanWrite is the data of error / plan-write.
+type PlanWrite struct {
+	Reason string `json:"reason"` // what failed, in one sentence
+}
+```
+
+Each `error` event carries the run id of the `plan` event it answers. A planner session that fails for any other reason, such as an unreachable model, ends the plan with `error` / `plan-input` and its reason.
+
 #### Card hash
 
 The card hash is `sha256:` followed by the lowercase hexadecimal SHA-256 of `TG.md` and then each `tsk-*.md` in byte order of file name. Each file is written as its path from the repository root, a newline, its length in decimal, a newline and its bytes. The `status:` line of `TG.md` is left out, because other components write it. The hash lets the harness detect an edit to a group's task list after the run started.
@@ -3895,13 +3924,17 @@ The card hash is `sha256:` followed by the lowercase hexadecimal SHA-256 of `TG.
 ```go
 // Deps are the collaborators the harness passes in at construction.
 type Deps struct {
-	Bus       Publisher      // publishes events and subscribes by type
-	Context   ContextSource  // GetContext() of the Context Manager
-	Start     StartSession   // opens a planner session through the model client
-	Locks     LockReader     // reports whether a group is in a run
-	Protected func() []string // paths no agent may write, from the Task Manager's guard data
-	Limits    PlannerLimits  // wall clock and returns, from the Agent Registry
-	Root      string         // repository root
+	Bus       Publisher                                          // publishes events and subscribes by type
+	Context   ContextSource                                      // GetContext() of the Context Manager
+	Start     StartSession                                       // opens a planner session through the model client
+	Locks     LockReader                                         // reports whether a group is in a run
+	Protected func() []string                                    // paths no agent may write, from the Task Manager's guard data
+	Limits    PlannerLimits                                      // wall clock and returns, from the Agent Registry
+	Root      string                                             // repository root
+	Tree      func(ctx context.Context) (contextmgr.Tree, error) // read-only view of the base commit: the tracked files and the documents a plan names
+	Chain     []contextmgr.Candidate                             // the planner's link chain with measured contexts; sizes the repo map
+	Repo      string                                             // repository id, copied into run-start
+	CommonDir string                                             // git common directory, copied into run-start
 }
 
 // New returns a Handler; it does not subscribe until Run is called.
@@ -3919,8 +3952,8 @@ type ContextSource interface {
 
 // Publisher is the part of the Event Bus the Intake Handler uses.
 type Publisher interface {
-	Publish(ctx context.Context, e bus.Event) error
-	Subscribe(types ...string) (<-chan bus.Event, func())
+	Publish(e bus.Event) error
+	Subscribe(name string, types ...bus.Type) (*bus.Subscription, error)
 }
 
 // LockReader answers whether a group is in a run; the State Manager backs it.
@@ -3930,7 +3963,7 @@ type LockReader interface {
 
 // PlannerLimits are the planner's clocks from the Agent Registry.
 type PlannerLimits struct {
-	WallMin int // most minutes one plan may run
+	WallMin int // most minutes one plan may run; 0 means no deadline
 	IdleMin int // minutes of silence before the session is stopped
 }
 ```
@@ -3949,10 +3982,10 @@ type PlannerLimits struct {
 func Load(root string) ([]Epic, []Finding, error)
 
 // Lint runs the eight checks on the loaded task lists and returns their findings.
-func Lint(epics []Epic, protected []string) []Finding
+func Lint(epics []Epic, protected, tracked []string) []Finding
 
 // LintDraft parses a draft in memory and runs the same checks as Lint.
-func LintDraft(d PlanDraft, protected []string) []Finding
+func LintDraft(d PlanDraft, existing []Epic, protected, tracked []string) []Finding
 
 // OverEstimate warns when a task's real changed lines exceed twice its estimate.
 func OverEstimate(t Task, actualLines int) (Finding, bool)
@@ -3973,7 +4006,7 @@ func CardHash(root string, g Group) (string, error)
 
 ```go
 // BuildGraph builds the dependency graph; a cycle is a failing graph finding.
-func BuildGraph(epics []Epic) (Graph, []Finding)
+func BuildGraph(epics []Epic, tracked []string) (Graph, []Finding)
 
 // Waves returns the groups that can run together; wave 1 holds the groups with no dependency.
 func (g Graph) Waves() [][]string
@@ -4015,8 +4048,10 @@ type StartSession func(ctx context.Context) (PlannerSession, error)
 // PlanResult says what a plan wrote.
 type PlanResult struct {
 	Epic    int
-	Written []string // paths of the files written
+	Written []string // paths of the files written, from the repository root
 	Groups  []string // labels of the groups written, in dependency order
+
+	Hashes map[string]string // card hash of each group written, by label
 }
 
 // PlanBlockedError ends a plan whose third draft failed lint; nothing was written.
@@ -4035,7 +4070,7 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error)
 | Error | Meaning and what the caller does |
 |---|---|
 | `PlanBlockedError` | The third draft failed lint. `Run` publishes an `error` event with subtype `plan-blocked` carrying the findings |
-| `LockedError` | An amended plan touched a group that is in a run; the group is left unchanged and the plan fails naming the run |
+| `LockedError` | An amended plan touched a group that is in a run; the group is left unchanged and the plan fails naming the run. `Run` publishes `error` / `plan-input` |
 | `context.DeadlineExceeded` | The planner's wall clock ran out; no file is written |
 
 ```go
@@ -4087,6 +4122,8 @@ sequenceDiagram
 5. Run the lint loop below.
 6. Write the files, then publish `run-start` with `PlanResult.Groups`.
 
+The draft's epic must be the one the request allows: highest `epic-N` plus 1 for a new epic, the named epic for an amendment. Any other epic number is a `grammar` finding and counts as a failed draft. A `WallMin` of 0 sets no deadline.
+
 A document that does not fit the planner's brief ceiling fails the plan with the error that `GetContext()` returns; nothing is cut ([chapter 6](#6-context-manager)).
 
 **The lint loop**
@@ -4109,7 +4146,7 @@ flowchart TB
 5. The third failing draft ends the plan with `PlanBlockedError`; 0 task-list files exist.
 6. Save the last failing draft under `docs/backlog/.plan-failed-<random>/` so a person can read it; `Load` ignores that folder.
 
-The planner may call a `lint_backlog` tool before it answers. The tool calls the same `LintDraft` and does not count as a return.
+The planner may call a `lint_backlog` tool before it answers. The tool calls `Handler.LintBacklog(d PlanDraft) []Finding`, which runs `LintDraft` with the stored task lists, the protected list and the tracked files of the plan in progress, and does not count as a return. `DraftFromResult(agent.PlannerResult) PlanDraft` copies the planner's final call into a draft.
 
 **Lint**
 
@@ -4131,7 +4168,8 @@ Each finding names its rule and its file. Lint never stops at the first finding;
 | Sizing | A task has over 5 files or 300 estimated lines; a group has over 8 tasks or 8 points | A chain has over 4 groups; a task's real lines exceed twice its estimate after Build |
 | Graph | The dependency graph has a cycle | The longest chain has over 4 groups; one group is waited on by every other group; a group has over 5 dependencies |
 
-- **Case collision inputs:** every tracked file of the base commit plus every group's `files`.
+- **Case collision inputs:** every tracked file of the base commit plus every group's `files`. Task file names within one group are checked too.
+- **Draft numbers and status:** a draft group that is new must take the next `tg-N.M` of its epic, a draft group must write `status: todo`, and a path number has no leading zero. Each is a failed draft.
 - **Protected list:** it comes from the caller, never from a file this package reads.
 
 **Building the dependency graph**
@@ -4155,11 +4193,11 @@ flowchart TB
 5. An overlapping pair with no order fails lint and names both groups and the shared file. An order through a third group counts.
 6. Place groups with no dependency in wave 1, count the longest chain, and warn when it is over 4.
 
-Two globs overlap when one file matches both, among the tracked files of the base commit and every group's `files`; the file named is the first such path in byte order. After wave 1, a group's wave is 1 plus the highest wave of the groups it waits on. Waves serve lint, the graph view and the order of `Pending` and `PlanResult.Groups` (wave first, then folder-name order); the Runtime Manager starts a group as soon as its dependencies finish.
+Two globs overlap when one file matches both, among the tracked files of the base commit and every group's `files`; the file named is the first such path in byte order. After wave 1, a group's wave is 1 plus the highest wave of the groups it waits on. A group counts as waited on by every other group only when the plan has at least 3 groups and every other group lists it directly. Waves serve lint, the graph view and the order of `Pending` and `PlanResult.Groups` (wave first, then folder-name order); the Runtime Manager starts a group as soon as its dependencies finish.
 
 **Writing the files**
 
-1. A new epic is written whole into `docs/backlog/.plan-<random>/` and renamed to `epic-N` in one rename.
+1. The draft is staged under `docs/backlog/.plan-<random>/epic-N/`. A new epic is then renamed into place as `epic-N` in one rename.
 2. An amended group is written the same way: the old folder is renamed aside to `.plan-old-<random>`, the new one goes into place, and the old one is then removed.
 3. A crash leaves each group old or new, never half. The next plan restores an orphaned `.plan-old-*` folder.
 4. `Load` ignores every `.plan-*` folder.
