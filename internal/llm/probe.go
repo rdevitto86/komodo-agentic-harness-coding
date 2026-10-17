@@ -30,16 +30,20 @@ type AuthStatus struct {
 // DefaultWindow is the context assumed for a model neither measured nor in the catalog.
 const DefaultWindow = 262144
 
-// ProbeAll probes each link and returns one result per link; a failing link is a result with OK false, never an error.
+// ProbeAll probes each link and returns one result per link; a failing link is a result with OK
+// false, never an error.
 func (c *Client) ProbeAll(ctx context.Context) []ProbeResult {
 	links := make([]Link, 0, len(c.providers))
 	for l := range c.providers {
 		links = append(links, l)
 	}
+
 	slices.Sort(links)
+
 	out := make([]ProbeResult, 0, len(links))
 	for _, l := range links {
 		res, err := c.Probe(ctx, l)
+
 		res.Link = l
 		if err != nil {
 			res.OK = false
@@ -47,7 +51,9 @@ func (c *Client) ProbeAll(ctx context.Context) []ProbeResult {
 				res.Reason = err.Error()
 			}
 		}
+
 		out = append(out, res)
 	}
+
 	return out
 }
