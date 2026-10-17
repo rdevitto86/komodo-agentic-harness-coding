@@ -13,9 +13,10 @@ type StopLevel int
 
 // The rungs, gentlest first.
 const (
-	Interrupt StopLevel = iota // ends the turn, keeps its result (API links: cancel after the current tool call)
-	Terminate                  // SIGTERM
-	Kill                       // whole process tree
+	// ends the turn, keeps its result (API links: cancel after the current tool call)
+	Interrupt StopLevel = iota
+	Terminate           // SIGTERM
+	Kill                // whole process tree
 )
 
 // Stream delivers one session's events and accepts injected lines.
@@ -70,7 +71,8 @@ type RateLimit struct {
 	IsUsingOverage bool      // true when a Max plan draws paid overage credits
 	ResetAt        time.Time // when the cap lifts; zero when absent
 	Type           string    // the program's window name, such as five_hour or seven_day
-	Status         string    // the program's status word, such as allowed or rejected; empty when absent
+	// the program's status word, such as allowed or rejected; empty when absent
+	Status string
 }
 
 // Headroom is one rate-limit bucket read from response headers.
@@ -79,14 +81,6 @@ type Headroom struct {
 	Limit     int64
 	Remaining int64
 	Reset     time.Time
-}
-
-// PercentLeft returns Remaining divided by Limit, times 100; zero when the limit is unknown.
-func (h Headroom) PercentLeft() float64 {
-	if h.Limit <= 0 {
-		return 0
-	}
-	return float64(h.Remaining) / float64(h.Limit) * 100
 }
 
 // Usage counts tokens and cost; always read.
@@ -113,10 +107,20 @@ type Result struct {
 	Handle ResumeHandle
 }
 
-// EndError is returned by Next when the tool loop ends a session without a usable result; Reason is the session's exit reason.
+// EndError is returned by Next when the tool loop ends a session without a usable result; Reason is
+// the session's exit reason.
 type EndError struct {
 	Reason state.Reason
 	Detail string
+}
+
+// PercentLeft returns Remaining divided by Limit, times 100; zero when the limit is unknown.
+func (h Headroom) PercentLeft() float64 {
+	if h.Limit <= 0 {
+		return 0
+	}
+
+	return float64(h.Remaining) / float64(h.Limit) * 100
 }
 
 // Error describes the exit reason and any detail.
@@ -124,5 +128,6 @@ func (e *EndError) Error() string {
 	if e.Detail == "" {
 		return "session ended: " + string(e.Reason)
 	}
+
 	return "session ended: " + string(e.Reason) + ": " + e.Detail
 }

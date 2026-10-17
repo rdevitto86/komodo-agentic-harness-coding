@@ -10,5 +10,6 @@ import (
 // setProcAttrs does nothing on Windows; the program is stopped by killing its process.
 func setProcAttrs(*exec.Cmd) {}
 
-// signalProc ends the process; Windows has no gentler rung that reaches a program without a console.
+// signalProc ends the process; Windows has no gentler rung that reaches a program without a
+// console.
 func signalProc(p *os.Process, _ StopLevel) error { return p.Kill() }
