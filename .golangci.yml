@@ -1,0 +1,12 @@
+version: "2"
+linters:
+  enable:
+    - lll
+    - nlreturn
+    - wsl_v5
+    - whitespace
+    - funcorder
+  settings:
+    lll:
+      line-length: 100
+      tab-width: 4

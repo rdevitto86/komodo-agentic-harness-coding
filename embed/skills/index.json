@@ -31,7 +31,7 @@
     },
     {
       "name": "standards-go",
-      "description": "Go standards: errors, naming, tests and package layout",
+      "description": "Go standards: errors, naming, tests, formatting and file layout",
       "globs": [
         "*.go"
       ],
@@ -39,9 +39,11 @@
       "sections": [
         "Errors",
         "Naming",
-        "Tests"
+        "Tests",
+        "Formatting",
+        "File layout"
       ],
-      "sha256": "29ae26c602ff9421afcc08a9e773ac3574385849486eaea4f7e8d9ab995b790f"
+      "sha256": "4f2bb58b556399d34aa5eb20dce2c7e96e7d7388d803175a1b1c8829ab2faa90"
     },
     {
       "name": "standards-kotlin",
