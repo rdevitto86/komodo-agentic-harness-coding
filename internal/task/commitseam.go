@@ -14,8 +14,6 @@ type Committer interface {
 	Publish(ctx context.Context, a commit.Approval) (commit.Result, error)
 }
 
-var _ Committer = (*commit.Handler)(nil)
-
 // GroupMeta is what the Commit Handler needs about the group beyond the spec.
 type GroupMeta struct {
 	Repo       string   // repo id the lease is keyed by
@@ -23,3 +21,5 @@ type GroupMeta struct {
 	EpicGroups []string // labels of every group of the epic
 	Goal       string   // the group goal
 }
+
+var _ Committer = (*commit.Handler)(nil)
