@@ -19,6 +19,7 @@ type Subscription struct {
 func (s *Subscription) Close() {
 	s.bus.mu.Lock()
 	defer s.bus.mu.Unlock()
+
 	s.bus.removeLocked(s)
 }
 
@@ -32,6 +33,8 @@ func (s *Subscription) wants(t Type) bool {
 	if len(s.types) == 0 {
 		return true
 	}
+
 	_, ok := s.types[t]
+
 	return ok
 }
