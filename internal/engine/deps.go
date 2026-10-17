@@ -27,7 +27,8 @@ type AgentLimits interface {
 // StateStore is the State Manager of one repository as the Runtime Manager uses it.
 type StateStore interface {
 	Load(ctx context.Context, group string) (state.Record, error)
-	Create(ctx context.Context, group string, g State) (state.Record, error) // the first write of a group record
+	// the first write of a group record
+	Create(ctx context.Context, group string, g State) (state.Record, error)
 	Save(ctx context.Context, group string, g State, rev int) (state.Record, error)
 }
 
@@ -44,7 +45,8 @@ type LeaseStore interface {
 	Release(ctx context.Context, l lease.Lease) error
 }
 
-// CacheStore is the Cache Manager as the Runtime Manager uses it; only the engine opens and closes a repository's cache.
+// CacheStore is the Cache Manager as the Runtime Manager uses it; only the engine opens and closes
+// a repository's cache.
 type CacheStore interface {
 	Open(ctx context.Context, repo string) (*cache.Cache, error)
 	Close(ctx context.Context) error
@@ -64,10 +66,12 @@ type TaskGroups interface {
 
 // PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
 type PlanSource interface {
-	Specs(ctx context.Context, root string, labels []string) ([]GroupSpec, error) // root is the repository the run names
+	// root is the repository the run names
+	Specs(ctx context.Context, root string, labels []string) ([]GroupSpec, error)
 }
 
-// EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's branch.
+// EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's
+// branch.
 type EpicGit interface {
 	BranchExists(ctx context.Context, clone, branch string) (bool, error)
 	CreateBranch(ctx context.Context, clone, branch, base string) error
@@ -87,7 +91,8 @@ type TokenCaps interface {
 
 // Discarder is the Cleanup Handler's Discard as the Runtime Manager uses it.
 type Discarder interface {
-	Discard(ctx context.Context, repo, root, group string) error // root is the repository root of the run
+	// root is the repository root of the run
+	Discard(ctx context.Context, repo, root, group string) error
 }
 
 // CleanItem is one thing a clean removed, or would remove.
@@ -101,7 +106,8 @@ type Janitor interface {
 	Clean(ctx context.Context, dryRun bool, root string, open map[string]bool) ([]CleanItem, error)
 }
 
-// Extras adds the Metrics Service figures to a status answer; the keys are the StatusData JSON fields.
+// Extras adds the Metrics Service figures to a status answer; the keys are the StatusData JSON
+// fields.
 type Extras func(ctx context.Context, target string, all bool) map[string]any
 
 // Printer is where the engine sends the faults that belong to a connection.
@@ -120,35 +126,45 @@ type Timing struct {
 
 // Deps are the managers the Runtime Manager and the engine call.
 type Deps struct {
-	Bus         bus.Bus
-	Reader      bus.Reader
-	Config      ConfigReader
-	Agents      AgentLimits
-	States      StateOpener
-	Machine     *state.Machine
-	Leases      LeaseStore
-	Caches      CacheStore
-	Contexts    Contexts
-	Tasks       TaskGroups
-	Plans       PlanSource
-	Git         EpicGit
-	Commits     EpicCommitter
-	Resource    TokenCaps
-	Cleaner     Discarder
-	Janitor     Janitor
-	Extras      Extras
-	Clock       Clock
-	Timing      Timing
-	Version     string                             // the binary version a run is pinned to
-	Home        string                             // the Komodo home folder; the worktrees live under Home/wt
-	BaseBranch  string                             // the branch an epic's branch is cut from
-	FreeMemGB   func() float64                     // free memory, for growing the pool; nil means the pool never grows
-	KillTree    func(run, group string)            // ends every process of a group; called when a stop passes its deadline
-	Go          func(func())                       // starts a goroutine the caller guards against panics; nil starts a plain one
-	Errors      func(run, group string, err error) // reports an error the engine cannot act on; nil drops it
-	RestartLoop func(loop string)                  // restarts a silent watcher loop in place
-	Chain       func(group string) []string        // the model links of the group's current agent, in order
-	Faults      *fault.Handler                     // reports a panic of a goroutine the engine starts; nil reports nothing
+	Bus      bus.Bus
+	Reader   bus.Reader
+	Config   ConfigReader
+	Agents   AgentLimits
+	States   StateOpener
+	Machine  *state.Machine
+	Leases   LeaseStore
+	Caches   CacheStore
+	Contexts Contexts
+	Tasks    TaskGroups
+	Plans    PlanSource
+	Git      EpicGit
+	Commits  EpicCommitter
+	Resource TokenCaps
+	Cleaner  Discarder
+	Janitor  Janitor
+	Extras   Extras
+	Clock    Clock
+	Timing   Timing
+	// the binary version a run is pinned to
+	Version string
+	// the Komodo home folder; the worktrees live under Home/wt
+	Home string
+	// the branch an epic's branch is cut from
+	BaseBranch string
+	// free memory, for growing the pool; nil means the pool never grows
+	FreeMemGB func() float64
+	// ends every process of a group; called when a stop passes its deadline
+	KillTree func(run, group string)
+	// starts a goroutine the caller guards against panics; nil starts a plain one
+	Go func(func())
+	// reports an error the engine cannot act on; nil drops it
+	Errors func(run, group string, err error)
+	// restarts a silent watcher loop in place
+	RestartLoop func(loop string)
+	// the model links of the group's current agent, in order
+	Chain func(group string) []string
+	// reports a panic of a goroutine the engine starts; nil reports nothing
+	Faults *fault.Handler
 }
 
 // filled returns t with every zero field replaced by its constant.
@@ -165,5 +181,6 @@ func (t Timing) filled() Timing {
 	def(&t.HeartbeatEvery, HeartbeatEvery)
 	def(&t.LoopSilentFor, LoopSilentFor)
 	def(&t.EngineBeatEvery, EngineBeatEvery)
+
 	return t
 }
