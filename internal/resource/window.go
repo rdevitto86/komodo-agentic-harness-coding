@@ -38,44 +38,45 @@ func (s *State) window(k WindowKey) *WindowState {
 		if w.Groups == nil {
 			w.Groups = map[string]bool{}
 		}
+
 		s.Windows[k] = w
 	}
+
 	return w
 }
 
 // windowKeys returns the keys of a link's windows in name order.
 func (s *State) windowKeys(link string) []WindowKey {
 	var keys []WindowKey
+
 	for k := range s.Windows {
 		if k.Link == link {
 			keys = append(keys, k)
 		}
 	}
+
 	slices.SortFunc(keys, func(a, b WindowKey) int { return cmp.Compare(a.Window, b.Window) })
+
 	return keys
 }
 
-// expire starts a window over once its reset time has passed: flags, sessions and groups seen are cleared.
+// expire starts a window over once its reset time has passed: flags, sessions and groups seen
+// are cleared.
 func (s *State) expire(k WindowKey, now time.Time) {
 	w := s.Windows[k]
 	if w == nil || w.ResetAt.IsZero() || w.ResetAt.After(now) {
 		return
 	}
+
 	w.Warned, w.Full, w.Sessions = false, false, 0
 	w.Paused, w.Groups = map[string]bool{}, map[string]bool{}
-}
-
-// expireNotice lets a notice be raised again once its reset time has passed.
-func expireNotice(n *Notice, now time.Time) {
-	if !n.ResetAt.IsZero() && !n.ResetAt.After(now) {
-		n.Raised = false
-	}
 }
 
 // applyHeadroom sets a window's percent used and reset time from one checked reading.
 func (s *State) applyHeadroom(h Headroom, now time.Time) {
 	k := WindowKey{Link: h.Link, Window: h.Window}
 	s.expire(k, now)
+
 	w := s.window(k)
 	w.PercentUsed = float64(h.Limit-h.Remaining) * 100 / float64(h.Limit)
 	w.ResetAt = h.ResetAt
@@ -88,7 +89,9 @@ func (s *State) applyOverage(o Overage, now time.Time) {
 		n = &Notice{}
 		s.Overages[o.Link] = n
 	}
+
 	expireNotice(n, now)
+
 	if !o.ResetAt.IsZero() {
 		n.ResetAt = o.ResetAt
 	}
@@ -97,27 +100,43 @@ func (s *State) applyOverage(o Overage, now time.Time) {
 // applyLimit records a provider refusal; a new reset time starts a new refusal.
 func (s *State) applyLimit(l Limit, now time.Time) {
 	k := WindowKey{Link: l.Link, Window: l.Kind}
+
 	n := s.Limits[k]
 	if n == nil {
 		n = &Notice{}
 		s.Limits[k] = n
 	}
+
 	expireNotice(n, now)
+
 	if !n.ResetAt.Equal(l.ResetAt) {
 		n.Raised = false
 	}
+
 	n.ResetAt = l.ResetAt
 }
 
-// bumpSessions adds one finished session to each unreset window of a link and returns the keys it changed.
+// bumpSessions adds one finished session to each unreset window of a link and returns the keys
+// it changed.
 func (s *State) bumpSessions(link string, now time.Time) []WindowKey {
 	var keys []WindowKey
+
 	for _, k := range s.windowKeys(link) {
 		s.expire(k, now)
+
 		if w := s.Windows[k]; w.ResetAt.After(now) {
 			w.Sessions++
+
 			keys = append(keys, k)
 		}
 	}
+
 	return keys
+}
+
+// expireNotice lets a notice be raised again once its reset time has passed.
+func expireNotice(n *Notice, now time.Time) {
+	if !n.ResetAt.IsZero() && !n.ResetAt.After(now) {
+		n.Raised = false
+	}
 }

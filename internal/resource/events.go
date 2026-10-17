@@ -41,7 +41,9 @@ type Headroom struct {
 }
 
 // EventKey binds Headroom to resource/headroom.
-func (Headroom) EventKey() bus.Key { return bus.Key{Type: bus.TypeResource, Subtype: subtypeHeadroom} }
+func (Headroom) EventKey() bus.Key {
+	return bus.Key{Type: bus.TypeResource, Subtype: subtypeHeadroom}
+}
 
 // Overage is the data of resource/overage: a subscription link is drawing paid credits.
 type Overage struct {
@@ -50,7 +52,9 @@ type Overage struct {
 }
 
 // EventKey binds Overage to resource/overage.
-func (Overage) EventKey() bus.Key { return bus.Key{Type: bus.TypeResource, Subtype: subtypeOverage} }
+func (Overage) EventKey() bus.Key {
+	return bus.Key{Type: bus.TypeResource, Subtype: subtypeOverage}
+}
 
 // Limit is the data of resource/limit: a provider refused a request because a cap was hit.
 type Limit struct {
