@@ -6,12 +6,6 @@ import (
 	"time"
 )
 
-const (
-	LeaseExpiry        = 2 * time.Hour    // age of the last renewal after which a lease on another host counts as dead
-	DefaultLockTimeout = 30 * time.Second // longest wait for a lock; the key lease.lock_timeout_s overrides it
-	LockSuffix         = ".lock"          // a lease's lock file is <group-id>.lock beside its record
-)
-
 // Fence is the number that rises on every grant, takeover and revocation of a group's lease.
 type Fence uint64
 
@@ -44,19 +38,39 @@ type Lease struct {
 // ProcessCheck reports whether a process with this id exists and started at the given time.
 type ProcessCheck func(pid int, start time.Time) bool
 
+// HeldError carries the live holder so the caller can name it.
+type HeldError struct{ Holder Lease }
+
+const (
+	// age of the last renewal after which a lease on another host counts as dead
+	LeaseExpiry = 2 * time.Hour
+
+	// longest wait for a lock; the key lease.lock_timeout_s overrides it
+	DefaultLockTimeout = 30 * time.Second
+
+	// a lease's lock file is <group-id>.lock beside its record
+	LockSuffix = ".lock"
+)
+
 var (
-	ErrExists      = errors.New("lease record already exists")            // Registry.Create lost the race
-	ErrStaleRev    = errors.New("lease record changed since it was read") // Registry.Swap or Delete saw a newer rev
-	ErrNotFound    = errors.New("lease record does not exist")
-	ErrLeased      = errors.New("group is leased by another run") // Grant: a live holder exists
+	// Registry.Create lost the race
+	ErrExists = errors.New("lease record already exists")
+
+	// Registry.Swap or Delete saw a newer rev
+	ErrStaleRev = errors.New("lease record changed since it was read")
+
+	ErrNotFound = errors.New("lease record does not exist")
+
+	// Grant: a live holder exists
+	ErrLeased = errors.New("group is leased by another run")
+
 	ErrLeaseLost   = errors.New("lease lost: another run took the group")
 	ErrBranchTaken = errors.New("branch or worktree is owned by another group")
 	ErrBadKey      = errors.New("repo or group id cannot name a file")
-	ErrLocked      = errors.New("lease record stayed locked by another writer") // a lock stayed held for the whole wait
-)
 
-// HeldError carries the live holder so the caller can name it.
-type HeldError struct{ Holder Lease }
+	// a lock stayed held for the whole wait
+	ErrLocked = errors.New("lease record stayed locked by another writer")
+)
 
 // Error names the run that holds the group.
 func (e HeldError) Error() string { return "group is leased by run " + e.Holder.Run }
@@ -65,13 +79,16 @@ func (e HeldError) Error() string { return "group is leased by run " + e.Holder.
 func (e HeldError) Unwrap() error { return ErrLeased }
 
 // Live reports whether a lease still has a working holder as seen from host.
-// A holder on this host is live while its process lives; one elsewhere, or one whose start time is unknown, while its last renewal is young.
+// A holder on this host is live while its process lives; one elsewhere, or one whose start time
+// is unknown, while its last renewal is young.
 func (l Lease) Live(now time.Time, host string, alive ProcessCheck) bool {
 	if l.State != StateHeld {
 		return false
 	}
+
 	if l.Host == host && !l.ProcStart.IsZero() {
 		return alive != nil && alive(l.PID, l.ProcStart)
 	}
+
 	return now.Sub(l.RenewedAt) <= LeaseExpiry
 }

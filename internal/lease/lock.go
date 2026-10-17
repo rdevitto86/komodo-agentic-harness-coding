@@ -14,8 +14,10 @@ func (r *FileRegistry) lock(ctx context.Context, path string) (func(), error) {
 	if errors.Is(err, core.ErrLockWait) {
 		return nil, ErrLocked
 	}
+
 	if err != nil {
 		return nil, err
 	}
+
 	return func() { _ = unlock() }, nil
 }
