@@ -41,7 +41,7 @@ type Manager struct {
 	sems      sync.Map // repo id to the repository's semaphore
 }
 
-// bounds how often a call rereads after losing a race on a record's rev.
+// retries bounds how often a call rereads after losing a race on a record's rev.
 const retries = 8
 
 // New opens the lease manager over a registry and a process check; lockTimeoutS is the value of

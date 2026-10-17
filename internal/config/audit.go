@@ -66,6 +66,37 @@ func newBatch() Batch {
 	return Batch{ID: newUUIDv7(), Time: time.Now().UTC().Truncate(time.Second)}
 }
 
+// newUUIDv7 returns a version 7 UUID: 48 bits of milliseconds, then a counter and random bits.
+func newUUIDv7() string {
+	uuidMu.Lock()
+	defer uuidMu.Unlock()
+
+	ms := time.Now().UnixMilli()
+	if ms <= uuidLast {
+		ms = uuidLast
+		uuidSeq++
+	} else {
+		uuidLast, uuidSeq = ms, 0
+	}
+
+	if uuidSeq > 0xfff {
+		uuidLast++
+		ms, uuidSeq = uuidLast, 0
+	}
+
+	var b [16]byte
+
+	_, _ = rand.Read(b[:])
+	b[0], b[1], b[2] = byte(ms>>40), byte(ms>>32), byte(ms>>24)
+	b[3], b[4], b[5] = byte(ms>>16), byte(ms>>8), byte(ms)
+	b[6] = 0x70 | byte(uuidSeq>>8)
+	b[7] = byte(uuidSeq)
+	b[8] = 0x80 | b[8]&0x3f
+	h := hex.EncodeToString(b[:])
+
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
 // Verify compares each machine file with its recorded checksum; ErrTampered on mismatch.
 // A match is reread once after a pause while the writer lock is held; unreadable machine files are
 // reported too.
@@ -298,35 +329,4 @@ func pick(c checksums, i int) string {
 	}
 
 	return c.Agents
-}
-
-// newUUIDv7 returns a version 7 UUID: 48 bits of milliseconds, then a counter and random bits.
-func newUUIDv7() string {
-	uuidMu.Lock()
-	defer uuidMu.Unlock()
-
-	ms := time.Now().UnixMilli()
-	if ms <= uuidLast {
-		ms = uuidLast
-		uuidSeq++
-	} else {
-		uuidLast, uuidSeq = ms, 0
-	}
-
-	if uuidSeq > 0xfff {
-		uuidLast++
-		ms, uuidSeq = uuidLast, 0
-	}
-
-	var b [16]byte
-
-	_, _ = rand.Read(b[:])
-	b[0], b[1], b[2] = byte(ms>>40), byte(ms>>32), byte(ms>>24)
-	b[3], b[4], b[5] = byte(ms>>16), byte(ms>>8), byte(ms)
-	b[6] = 0x70 | byte(uuidSeq>>8)
-	b[7] = byte(uuidSeq)
-	b[8] = 0x80 | b[8]&0x3f
-	h := hex.EncodeToString(b[:])
-
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }

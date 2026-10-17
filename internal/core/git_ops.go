@@ -17,27 +17,6 @@ var (
 	paragraphBreak = regexp.MustCompile(`\n[ \t]*\n+`)
 )
 
-// CheckMessage refuses an empty message and one whose last paragraph is only Name: value lines.
-func CheckMessage(msg string) error {
-	m := strings.TrimSpace(strings.ReplaceAll(msg, "\r\n", "\n"))
-	if m == "" {
-		return ErrEmptyMessage
-	}
-
-	paras := paragraphBreak.Split(m, -1)
-	if len(paras) < 2 {
-		return nil
-	}
-
-	for _, line := range strings.Split(paras[len(paras)-1], "\n") {
-		if !trailerLine.MatchString(line) {
-			return nil
-		}
-	}
-
-	return ErrTrailer
-}
-
 // TreeOf hashes the worktree's content, tracked and untracked with ignored files skipped, through a
 // throwaway index.
 func (g *Git) TreeOf(ctx context.Context, worktree string) (string, error) {
@@ -827,4 +806,25 @@ func (g *Git) branchTip(ctx context.Context, t target, branch string) (string, b
 	}
 
 	return strings.TrimSpace(out), true, nil
+}
+
+// CheckMessage refuses an empty message and one whose last paragraph is only Name: value lines.
+func CheckMessage(msg string) error {
+	m := strings.TrimSpace(strings.ReplaceAll(msg, "\r\n", "\n"))
+	if m == "" {
+		return ErrEmptyMessage
+	}
+
+	paras := paragraphBreak.Split(m, -1)
+	if len(paras) < 2 {
+		return nil
+	}
+
+	for _, line := range strings.Split(paras[len(paras)-1], "\n") {
+		if !trailerLine.MatchString(line) {
+			return nil
+		}
+	}
+
+	return ErrTrailer
 }

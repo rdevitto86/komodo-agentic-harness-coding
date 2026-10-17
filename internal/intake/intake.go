@@ -118,6 +118,24 @@ func New(d Deps) *Handler {
 	return &Handler{d: d, wallUnit: time.Minute, rename: osRename}
 }
 
+// newID returns a version 7 UUID: 48 bits of milliseconds, then random bits.
+func newID() bus.ID {
+	var b [16]byte
+
+	_, _ = rand.Read(b[:])
+
+	ms := uint64(time.Now().UnixMilli())
+	for i := 0; i < 6; i++ {
+		b[i] = byte(ms >> (8 * (5 - i)))
+	}
+
+	b[6] = 0x70 | b[6]&0x0f
+	b[8] = 0x80 | b[8]&0x3f
+	h := hex.EncodeToString(b[:])
+
+	return bus.ID(h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32])
+}
+
 // GitCommonDir names the repository whose events folder holds the plan run.
 func (r PlanRequest) GitCommonDir() string { return r.CommonDir }
 
@@ -201,24 +219,6 @@ func RegisterEvents() {
 	bus.Register(PlanTimeout{}.EventKey(), func() bus.Payload { return &PlanTimeout{} })
 	bus.Register(PlanInput{}.EventKey(), func() bus.Payload { return &PlanInput{} })
 	bus.Register(PlanWrite{}.EventKey(), func() bus.Payload { return &PlanWrite{} })
-}
-
-// newID returns a version 7 UUID: 48 bits of milliseconds, then random bits.
-func newID() bus.ID {
-	var b [16]byte
-
-	_, _ = rand.Read(b[:])
-
-	ms := uint64(time.Now().UnixMilli())
-	for i := 0; i < 6; i++ {
-		b[i] = byte(ms >> (8 * (5 - i)))
-	}
-
-	b[6] = 0x70 | b[6]&0x0f
-	b[8] = 0x80 | b[8]&0x3f
-	h := hex.EncodeToString(b[:])
-
-	return bus.ID(h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32])
 }
 
 // faultData maps a failed plan to the data of its error event.

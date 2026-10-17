@@ -27,14 +27,6 @@ func (s *State) markRaised(o Observation, k WindowKey, e fault.ResourceError) {
 	}
 }
 
-// markNotice keeps a notice raised until its reset time; a notice with no reset time is never
-// kept, so it raises every time.
-func markNotice(n *Notice) {
-	if n != nil && !n.ResetAt.IsZero() {
-		n.Raised = true
-	}
-}
-
 // errorRaised reports whether the error that goes with pause order p was thrown.
 func (s *State) errorRaised(p PauseOrder) bool {
 	switch p.Reason {
@@ -75,5 +67,13 @@ func (s *State) markPaused(p PauseOrder) {
 func (s *State) markNudged(n NudgeOrder) {
 	for _, g := range n.Groups {
 		s.Spend.GroupNudged[g] = true
+	}
+}
+
+// markNotice keeps a notice raised until its reset time; a notice with no reset time is never
+// kept, so it raises every time.
+func markNotice(n *Notice) {
+	if n != nil && !n.ResetAt.IsZero() {
+		n.Raised = true
 	}
 }

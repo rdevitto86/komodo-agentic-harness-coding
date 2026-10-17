@@ -63,7 +63,8 @@ func ProcessStart(pid int) (time.Time, error) {
 // When ps gives no answer it asks the process with signal 0, which cannot tell a reused id but
 // never calls a live process dead.
 func OSProcessCheck(pid int, start time.Time) bool {
-	// the slack allowed between a recorded and a read process start time; ps reports whole seconds
+	// startTolerance is the slack allowed between a recorded and a read process start time; ps
+	// reports whole seconds.
 	const startTolerance = 2 * time.Second
 
 	if pid <= 0 {

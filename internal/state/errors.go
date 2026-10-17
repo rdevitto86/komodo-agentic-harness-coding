@@ -34,15 +34,15 @@ type InvalidError struct {
 	Why   string // what is wrong with it
 }
 
-// Error describes the refusal as state_invalid with the group, the field and the reason.
-func (e *InvalidError) Error() string {
-	return fmt.Sprintf("state_invalid: %s: field %s: %s", e.Group, e.Field, e.Why)
-}
-
 // DiskError wraps a failed open, write, sync or rename; the disk keeps the old record.
 type DiskError struct {
 	Path string // the file the call touched
 	Err  error  // the operating system error
+}
+
+// Error describes the refusal as state_invalid with the group, the field and the reason.
+func (e *InvalidError) Error() string {
+	return fmt.Sprintf("state_invalid: %s: field %s: %s", e.Group, e.Field, e.Why)
 }
 
 // Error names the file and the operating system error.

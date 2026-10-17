@@ -41,14 +41,8 @@ type SkillSet struct {
 	Always  []string `json:"always"`
 }
 
-// EventKey names the skill / set pair.
-func (SkillSet) EventKey() bus.Key { return bus.Key{Type: bus.TypeSkill, Subtype: "set"} }
-
 // SkillReload is the data of skill / reload: it rereads the local skills.
 type SkillReload struct{}
-
-// EventKey names the skill / reload pair.
-func (SkillReload) EventKey() bus.Key { return bus.Key{Type: bus.TypeSkill, Subtype: "reload"} }
 
 // MCPSet is the data of mcp / set: it replaces one connection's state.
 type MCPSet struct {
@@ -57,14 +51,8 @@ type MCPSet struct {
 	Allow   []string `json:"allow"`
 }
 
-// EventKey names the mcp / set pair.
-func (MCPSet) EventKey() bus.Key { return bus.Key{Type: bus.TypeMCP, Subtype: "set"} }
-
 // MCPReload is the data of mcp / reload: it rereads connections.json.
 type MCPReload struct{}
-
-// EventKey names the mcp / reload pair.
-func (MCPReload) EventKey() bus.Key { return bus.Key{Type: bus.TypeMCP, Subtype: "reload"} }
 
 // ContextRefused is the data of error / context-refused: a skill or mcp event that failed
 // validation.
@@ -73,6 +61,18 @@ type ContextRefused struct {
 	Field  string `json:"field"`  // the field that failed
 	Reason string `json:"reason"` // what was wrong with it
 }
+
+// EventKey names the skill / set pair.
+func (SkillSet) EventKey() bus.Key { return bus.Key{Type: bus.TypeSkill, Subtype: "set"} }
+
+// EventKey names the skill / reload pair.
+func (SkillReload) EventKey() bus.Key { return bus.Key{Type: bus.TypeSkill, Subtype: "reload"} }
+
+// EventKey names the mcp / set pair.
+func (MCPSet) EventKey() bus.Key { return bus.Key{Type: bus.TypeMCP, Subtype: "set"} }
+
+// EventKey names the mcp / reload pair.
+func (MCPReload) EventKey() bus.Key { return bus.Key{Type: bus.TypeMCP, Subtype: "reload"} }
 
 // EventKey names the error / context-refused pair.
 func (ContextRefused) EventKey() bus.Key {

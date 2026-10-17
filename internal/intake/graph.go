@@ -24,6 +24,34 @@ func BuildGraph(epics []Epic, tracked []string) (Graph, []Finding) {
 	return g, strip(found)
 }
 
+// Pending returns the labels of every group under target whose status is not done, in dependency
+// order; target is all, an epic label or a group label.
+func Pending(epics []Epic, g Graph, target string) []string {
+	inScope := map[string]bool{}
+
+	for _, e := range epics {
+		for _, gr := range e.Groups {
+			if gr.Status == "done" {
+				continue
+			}
+
+			if target == "all" || target == gr.Name || target == fmt.Sprintf("ep-%d", e.Number) {
+				inScope[gr.Name] = true
+			}
+		}
+	}
+
+	out := []string{}
+
+	for _, n := range g.ordered() {
+		if inScope[n] {
+			out = append(out, n)
+		}
+	}
+
+	return out
+}
+
 // buildGraph builds the graph and returns each finding with every group it names.
 func buildGraph(epics []Epic, tracked []string) (Graph, []scoped) {
 	const maxDependencies = 5 // dependencies of one group before lint warns
@@ -328,34 +356,6 @@ func (g Graph) ordered() []string {
 	var out []string
 	for _, w := range g.Waves() {
 		out = append(out, w...)
-	}
-
-	return out
-}
-
-// Pending returns the labels of every group under target whose status is not done, in dependency
-// order; target is all, an epic label or a group label.
-func Pending(epics []Epic, g Graph, target string) []string {
-	inScope := map[string]bool{}
-
-	for _, e := range epics {
-		for _, gr := range e.Groups {
-			if gr.Status == "done" {
-				continue
-			}
-
-			if target == "all" || target == gr.Name || target == fmt.Sprintf("ep-%d", e.Number) {
-				inScope[gr.Name] = true
-			}
-		}
-	}
-
-	out := []string{}
-
-	for _, n := range g.ordered() {
-		if inScope[n] {
-			out = append(out, n)
-		}
 	}
 
 	return out

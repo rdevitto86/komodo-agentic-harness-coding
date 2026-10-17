@@ -18,16 +18,17 @@ import (
 )
 
 var (
-	// the shape of an id: 32 to 36 hexadecimal characters and dashes
+	// machineIDForm is the shape of an id: 32 to 36 hexadecimal characters and dashes.
 	machineIDForm = regexp.MustCompile(`^[0-9a-f-]{32,36}$`)
 
-	// the shape of an id drawn into the home folder: 32 lowercase hexadecimal characters
+	// homeIDForm is the shape of an id drawn into the home folder: 32 lowercase hexadecimal
+	// characters.
 	homeIDForm = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-	// where Linux keeps the machine id, in the order they are tried
+	// linuxIDFiles lists where Linux keeps the machine id, in the order they are tried.
 	linuxIDFiles = []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}
 
-	// finds the platform UUID in the output of ioreg
+	// ioUUIDLine finds the platform UUID in the output of ioreg.
 	ioUUIDLine = regexp.MustCompile(`"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{32,36})"`)
 )
 

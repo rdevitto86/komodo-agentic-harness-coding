@@ -81,6 +81,22 @@ func NewMachine(home, writer string) (*Machine, error) {
 	return m, nil
 }
 
+// newBody returns an empty body struct of a kind, or nil for an unknown kind.
+func newBody(k MachineKind) any {
+	switch k {
+	case KindProviders:
+		return &ProvidersBody{}
+	case KindUpdate:
+		return &UpdateBody{}
+	case KindInstall:
+		return &InstallBody{}
+	case KindSchedule:
+		return &ScheduleBody{}
+	}
+
+	return nil
+}
+
 // canWrite reports whether this manager's writer is one of the four allowed components.
 func (m *Machine) canWrite() bool { return slices.Contains(machineWriters, component(m.writer)) }
 
@@ -330,22 +346,6 @@ func SaveMachine[T any](m *Machine, k MachineKind, body T, rev int) (MachineReco
 	}
 
 	return MachineRecord[T]{Header: h, Body: out}, nil
-}
-
-// newBody returns an empty body struct of a kind, or nil for an unknown kind.
-func newBody(k MachineKind) any {
-	switch k {
-	case KindProviders:
-		return &ProvidersBody{}
-	case KindUpdate:
-		return &UpdateBody{}
-	case KindInstall:
-		return &InstallBody{}
-	case KindSchedule:
-		return &ScheduleBody{}
-	}
-
-	return nil
 }
 
 // loadRecord reads and checks a record without moving anything; the bytes are returned when they

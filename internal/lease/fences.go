@@ -20,7 +20,7 @@ type FenceKeeper interface {
 	RaiseFence(ctx context.Context, repo, group string, f Fence) error
 }
 
-// names the entry that holds the rebuilt file's floor; no group id starts with a dot.
+// floorKey names the entry that holds the rebuilt file's floor; no group id starts with a dot.
 const floorKey = ".floor"
 
 // HighFence returns the highest fence the group ever had, or 0 for a group that never had a lease.
@@ -62,7 +62,8 @@ func (r *FileRegistry) readFences(
 	ctx context.Context,
 	repo string,
 ) (map[string]Fence, string, error) {
-	// holds, per repository, the highest fence each group ever had; no group id starts with a dot
+	// fenceFileName holds, per repository, the highest fence each group ever had; no group id
+	// starts with a dot.
 	const fenceFileName = ".fences.json"
 
 	dir, err := r.repoDir(repo)

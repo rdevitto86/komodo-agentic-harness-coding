@@ -32,6 +32,15 @@ type plannerSession struct {
 	started bool
 }
 
+// newSessionID returns a random session identifier.
+func newSessionID() string {
+	var b [16]byte
+
+	_, _ = rand.Read(b[:])
+
+	return hex.EncodeToString(b[:])
+}
+
 // start opens a planner session over the first link of the planner's chain that can serve it.
 func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error) {
 	s, k := h.k.s, h.k
@@ -202,13 +211,4 @@ func protectedPaths() []string {
 	}
 
 	return out
-}
-
-// newSessionID returns a random session identifier.
-func newSessionID() string {
-	var b [16]byte
-
-	_, _ = rand.Read(b[:])
-
-	return hex.EncodeToString(b[:])
 }
