@@ -9,13 +9,19 @@ import (
 
 // Settings are the values the Configuration Manager passes in.
 type Settings struct {
-	BaseBranch  string // commit.base_branch; empty means the remote's default branch
-	Remote      string // commit.remote; empty means the base branch's upstream remote, origin when it has none
-	PRLabel     string // commit.pr_label; empty means komodo
-	LandingRoot string // folder that holds the epics' landing worktrees; empty means the folder that holds the group's worktree
+	// commit.base_branch; empty means the remote's default branch
+	BaseBranch string
+	// commit.remote; empty means the base branch's upstream remote, origin when it has none
+	Remote string
+	// commit.pr_label; empty means komodo
+	PRLabel string
+	// folder that holds the epics' landing worktrees; empty means the folder that holds the group's
+	// worktree
+	LandingRoot string
 }
 
-// Leases reads a group's lease; the Lease Manager implements it and the Commit Handler never writes to it.
+// Leases reads a group's lease; the Lease Manager implements it and the Commit Handler never writes
+// to it.
 type Leases interface {
 	Holder(ctx context.Context, repo, group string) (lease.Lease, bool, error)
 }

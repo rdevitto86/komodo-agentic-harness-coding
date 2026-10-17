@@ -59,8 +59,10 @@ type PRFacts struct {
 
 // EpicFacts are the facts the epic pull request body renders.
 type EpicFacts struct {
-	DiffStat string   `json:"diff_stat"` // git's diff stat of the epic branch against the base branch
-	Groups   []string `json:"groups"`    // one section per landed group, in landing order, as RenderBody wrote it
+	// git's diff stat of the epic branch against the base branch
+	DiffStat string `json:"diff_stat"`
+	// one section per landed group, in landing order, as RenderBody wrote it
+	Groups []string `json:"groups"`
 }
 
 // Result is what a finished Publish returns and what the Task Manager reports.
@@ -68,8 +70,9 @@ type Result struct {
 	Branch string `json:"branch"` // epic branch that was pushed
 	Head   string `json:"head"`   // commit id at the pushed epic tip
 	Last   bool   `json:"last"`   // true when this landing was the epic's last group
-	PRURL  string `json:"pr_url"` // epic pull request address; empty until the last group has landed
-	PRNew  bool   `json:"pr_new"` // true when this call opened the pull request
+	// epic pull request address; empty until the last group has landed
+	PRURL string `json:"pr_url"`
+	PRNew bool   `json:"pr_new"` // true when this call opened the pull request
 }
 
 // ListsRequest names the epic whose task lists SaveLists commits.
@@ -84,14 +87,16 @@ type ListsRequest struct {
 type Published struct {
 	Run      bus.ID `json:"run"`
 	Group    bus.ID `json:"group"`
-	Epic     string `json:"epic"`      // epic label, such as ep-1
-	Branch   string `json:"branch"`    // group branch that was landed
-	Tip      string `json:"tip"`       // commit id the remote must hold
-	Remote   string `json:"remote"`    // remote that received the push
-	Contains string `json:"contains"`  // remote reference whose history must hold Tip
-	Worktree string `json:"worktree"`  // path of the group's checkout
-	EpicDone bool   `json:"epic_done"` // true when this was the epic's last group and its pull request is open
-	PRURL    string `json:"pr_url"`    // epic pull request address; empty before the last group lands
+	Epic     string `json:"epic"`     // epic label, such as ep-1
+	Branch   string `json:"branch"`   // group branch that was landed
+	Tip      string `json:"tip"`      // commit id the remote must hold
+	Remote   string `json:"remote"`   // remote that received the push
+	Contains string `json:"contains"` // remote reference whose history must hold Tip
+	Worktree string `json:"worktree"` // path of the group's checkout
+	// true when this was the epic's last group and its pull request is open
+	EpicDone bool `json:"epic_done"`
+	// epic pull request address; empty before the last group lands
+	PRURL string `json:"pr_url"`
 }
 
 // Kinds of PublishError; the Runtime Manager maps each to a retry or a block reason.
@@ -109,21 +114,24 @@ const (
 	KindReport       = "report"
 )
 
-// PublishError says what failed and whether repeating the same call can fix it; Save and Publish both return it.
+// PublishError says what failed and whether repeating the same call can fix it; Save and Publish
+// both return it.
 type PublishError struct {
 	Kind      string // one of the Kind constants
 	Retryable bool
 	Err       error
 }
 
+var (
+	// verdicts disagree, or the tree changed
+	ErrNotApproved = errors.New("approval does not match the commit or the files")
+	// fence higher, or the holder differs
+	ErrLeaseLost = errors.New("lease lost: another run holds the group")
+	ErrRecheck   = errors.New("checks failed on the epic branch after the landing")
+)
+
 // Error describes the failure with its kind.
 func (e *PublishError) Error() string { return e.Kind + ": " + e.Err.Error() }
 
 // Unwrap returns the underlying error so errors.Is finds the error values below.
 func (e *PublishError) Unwrap() error { return e.Err }
-
-var (
-	ErrNotApproved = errors.New("approval does not match the commit or the files") // verdicts disagree, or the tree changed
-	ErrLeaseLost   = errors.New("lease lost: another run holds the group")         // fence higher, or the holder differs
-	ErrRecheck     = errors.New("checks failed on the epic branch after the landing")
-)
