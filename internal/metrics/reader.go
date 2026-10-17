@@ -25,7 +25,8 @@ type Reader interface {
 	Scorecard(ctx context.Context, window time.Duration) (Scorecard, error)
 }
 
-// fileReader is the file-backed Reader over one repository's metrics folder; it rebuilds missing figures from the bus store.
+// fileReader is the file-backed Reader over one repository's metrics folder; it rebuilds missing
+// figures from the bus store.
 type fileReader struct{ dir string }
 
 // NewReader returns a Reader over the metrics folder of one repository.
@@ -37,11 +38,16 @@ func (r *fileReader) Runs(ctx context.Context) ([]RunMetrics, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	out := make([]RunMetrics, 0, len(runs))
 	for _, m := range runs {
 		out = append(out, m)
 	}
-	slices.SortFunc(out, func(a, b RunMetrics) int { return strings.Compare(string(a.Run), string(b.Run)) })
+
+	slices.SortFunc(out, func(a, b RunMetrics) int {
+		return strings.Compare(string(a.Run), string(b.Run))
+	})
+
 	return out, nil
 }
 
@@ -51,11 +57,16 @@ func (r *fileReader) Groups(ctx context.Context, run bus.ID) ([]GroupMetrics, er
 	if err != nil {
 		return nil, err
 	}
+
 	var out []GroupMetrics
 	for _, g := range groups[run] {
 		out = append(out, g)
 	}
-	slices.SortFunc(out, func(a, b GroupMetrics) int { return strings.Compare(string(a.Group), string(b.Group)) })
+
+	slices.SortFunc(out, func(a, b GroupMetrics) int {
+		return strings.Compare(string(a.Group), string(b.Group))
+	})
+
 	return out, nil
 }
 
@@ -64,35 +75,47 @@ func (r *fileReader) Scorecard(ctx context.Context, window time.Duration) (Score
 	return scorecard(ctx, r.dir, window, now())
 }
 
-// rebuildFigures recomputes the figures of a folder from the run logs in the bus's event store beside it.
+// rebuildFigures recomputes the figures of a folder from the run logs in the bus's event store
+// beside it.
 func rebuildFigures(ctx context.Context, dir string) (*figures, error) {
 	f := newFigures()
 	f.dir = dir
+
 	err := bus.ReadFolder(ctx, eventsDirOf(dir), func(_ bus.ID, l bus.ReplayLog) error {
 		for _, e := range l.Events {
 			f.apply(e)
 		}
+
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
 	return f, nil
 }
 
-// readFigures reads groups.json and runs.json; a missing file reads as empty and an unreadable one is rebuilt in memory from the bus store.
-func readFigures(ctx context.Context, dir string) (map[bus.ID]map[bus.ID]GroupMetrics, map[bus.ID]RunMetrics, error) {
+// readFigures reads groups.json and runs.json; a missing file reads as empty and an unreadable one
+// is rebuilt in memory from the bus store.
+func readFigures(
+	ctx context.Context,
+	dir string,
+) (map[bus.ID]map[bus.ID]GroupMetrics, map[bus.ID]RunMetrics, error) {
 	groups, runs := map[bus.ID]map[bus.ID]GroupMetrics{}, map[bus.ID]RunMetrics{}
 	e1 := readJSON(filepath.Join(dir, "groups.json"), &groups)
+
 	e2 := readJSON(filepath.Join(dir, "runs.json"), &runs)
 	if e1 == nil && e2 == nil {
 		return groups, runs, nil
 	}
+
 	f, err := rebuildFigures(ctx, dir)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	g, r := f.snapshot()
+
 	return g, r, nil
 }
 
@@ -102,9 +125,11 @@ func readJSON(path string, v any) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
+
 	return json.Unmarshal(b, v)
 }
 
@@ -114,11 +139,15 @@ func readSessions(path string) ([]SessionRecord, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
+
 	if err != nil {
 		return nil, err
 	}
+
 	defer func() { _ = f.Close() }()
+
 	var out []SessionRecord
+
 	br := bufio.NewReader(f)
 	for {
 		line, err := br.ReadBytes('\n')
@@ -128,10 +157,12 @@ func readSessions(path string) ([]SessionRecord, error) {
 				out = append(out, r)
 			}
 		}
+
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return out, nil
 			}
+
 			return nil, err
 		}
 	}
