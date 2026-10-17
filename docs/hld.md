@@ -150,7 +150,7 @@ Besides these hand-offs, a subsystem calls another directly when it needs an ans
 
 #### 5.2 CLI
 
-The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 12 commands: install, config get and set, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it, replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
+The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, config get and set, login, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it, replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
 
 #### 5.3 Output Formatter
 
@@ -313,7 +313,7 @@ Komodo runs on macOS, Linux and Windows Subsystem for Linux 2. Test sandboxes us
 
 #### 7.3 Install and Update
 
-`komodo install` puts the binary on the machine and a short Komodo block into the repository's AGENTS.md, telling any host agent the harness is there; no agents or skills are copied into a host. `komodo update` downloads, verifies and swaps in a new signed binary, and a running process keeps the version it started with.
+`komodo install` puts the binary on the machine and a short Komodo block into the repository's AGENTS.md, telling any host agent the harness is there; no agents or skills are copied into a host. `komodo update` downloads, verifies and swaps in a new signed binary, and a running process keeps the version it started with. A background routine checks for a new version every 1 to 8 hours and downloads it, but swaps it in only when no run is active. `komodo login --{provider}` sets up model access for one provider. Detail: [chapter 1](lld.md#1-cli).
 
 ## 8. Crosscutting Concepts
 
