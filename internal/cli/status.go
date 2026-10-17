@@ -69,34 +69,46 @@ func handleStatus(c *Call) Result {
 	if len(c.Args) == 1 {
 		target = c.Args[0]
 	}
+
 	wait := flagBool(c, "wait")
 	req := c.request(engine.VerbStatus, target)
 	if c.Global.All {
 		req.Root = ""
 	}
+
 	req.Flags = engine.Flags{All: c.Global.All, Wait: wait}
 	if wait {
 		req.Flags.TimeoutS = int(flagDuration(c, "timeout").Seconds())
 	}
+
 	frames, res := c.ask(req)
 	if res != nil {
 		return *res
 	}
+
 	sd := statusFrames(frames, wait)
 	if wait && sd.Waited == "blocked" && len(sd.Blocked) > 0 {
 		return blockedResult(sd)
 	}
+
 	outcome := OutcomeOK
 	if wait && sd.Waited == "blocked" {
 		outcome = OutcomeHeld
 	}
-	return Result{Outcome: outcome, Shape: "reply.status", Facts: statusFacts(sd), Data: sd}
+
+	return Result{
+		Outcome: outcome,
+		Shape:   "reply.status",
+		Facts:   statusFacts(sd),
+		Data:    sd,
+	}
 }
 
 // statusFrames builds the status from the reply frames: the last streamed status, and the final frame's waited value.
 func statusFrames(frames []engine.Reply, wait bool) StatusData {
 	var sd StatusData
 	final := frames[len(frames)-1]
+
 	if !wait {
 		decodeFinal(frames, &sd)
 	} else {
@@ -112,6 +124,7 @@ func statusFrames(frames []engine.Reply, wait bool) StatusData {
 		}
 		sd.Waited = fin.Waited
 	}
+
 	if sd.Runs == nil {
 		sd.Runs = []RunRow{}
 	}
@@ -130,11 +143,19 @@ func blockedResult(sd StatusData) Result {
 	if !format.IsBlockReason(b.Reason) {
 		return Result{Outcome: OutcomeHeld, Shape: "reply.status", Facts: statusFacts(sd), Data: sd}
 	}
+
 	facts := format.NeedsFacts{
 		Code: b.Reason, Group: b.Group, Question: b.Question,
 		Fix: "komodo run " + b.Group + " --approve or --deny",
 	}
-	return Result{Outcome: OutcomeHeld, Shape: "needs." + b.Reason, Code: b.Reason, Facts: facts, Data: sd}
+
+	return Result{
+		Outcome: OutcomeHeld,
+		Shape:   "needs." + b.Reason,
+		Code:    b.Reason,
+		Facts:   facts,
+		Data:    sd,
+	}
 }
 
 // statusFacts turns the status into the tables reply.status prints.
@@ -145,6 +166,7 @@ func statusFacts(sd StatusData) format.StatusFacts {
 		Blocked: format.Table{Head: []string{"Group", "Reason", "Question"}, What: "blocked groups"},
 		Waited:  sd.Waited,
 	}
+
 	for _, r := range sd.Runs {
 		var gs []string
 		for _, g := range r.Groups {
@@ -158,5 +180,6 @@ func statusFacts(sd StatusData) format.StatusFacts {
 	for _, b := range sd.Blocked {
 		f.Blocked.Rows = append(f.Blocked.Rows, []string{b.Group, b.Reason, b.Question})
 	}
+
 	return f
 }

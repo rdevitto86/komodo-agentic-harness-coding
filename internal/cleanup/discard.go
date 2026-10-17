@@ -12,15 +12,19 @@ func (h *Handler) Discard(ctx context.Context, group string, o DiscardOptions) (
 	if h.Task == nil {
 		return rep, errors.New("no task manager to close the group")
 	}
+
 	path, err := child(h.Roots.Worktrees, group)
 	if err != nil {
 		return rep, err
 	}
+
 	unlock, err := h.lockGroup(ctx, group)
 	if err != nil {
 		return rep, fmt.Errorf("lock group %s: %w", group, err)
 	}
+
 	defer unlock()
+
 	l, have, live, err := h.holder(ctx, group)
 	if err != nil {
 		return rep, fmt.Errorf("read lease of %s: %w", group, err)
@@ -28,10 +32,12 @@ func (h *Handler) Discard(ctx context.Context, group string, o DiscardOptions) (
 	if live {
 		return rep, fmt.Errorf("group %s: %w", group, ErrLeaseHeld)
 	}
+
 	r := &run{h: h, ctx: ctx, group: group, rep: &rep, guard: true}
 	r.container()
 	r.checkouts()
 	gone := false
+
 	if o.KeepWorktree {
 		r.kept(KindWorktree, path, "kept on request")
 	} else {
@@ -49,6 +55,7 @@ func (h *Handler) Discard(ctx context.Context, group string, o DiscardOptions) (
 		h.escalate(group, fmt.Errorf("close task group: %w", err))
 		return rep, fmt.Errorf("close task group %s: %w", group, err)
 	}
+
 	h.say(ctx, group, "group.discarded", DiscardedFact{Reason: o.Reason})
 	return rep, nil
 }
@@ -62,6 +69,7 @@ func (h *Handler) discardBranch(r *run, branch string, have bool) {
 	if !r.allowed(branch) || !r.proceed() {
 		return
 	}
+
 	tip, ok, err := h.Git.BranchTip(r.ctx, h.Clone, branch)
 	if err != nil {
 		r.fail(KindBranch, branch, err)
@@ -74,5 +82,6 @@ func (h *Handler) discardBranch(r *run, branch string, have bool) {
 		r.fail(KindBranch, branch, err)
 		return
 	}
+
 	r.removed(KindBranch, branch)
 }

@@ -11,6 +11,7 @@ func ImpactSet(deps map[string][]string, changed []string) []string {
 	for _, c := range changed {
 		want[c] = true
 	}
+
 	var out []string
 	for pkg, ds := range deps {
 		hit := want[pkg]
@@ -23,6 +24,7 @@ func ImpactSet(deps map[string][]string, changed []string) []string {
 			out = append(out, pkg)
 		}
 	}
+
 	sort.Strings(out)
 	return out
 }
@@ -34,6 +36,7 @@ func CaseCollisions(paths []string) [][]string {
 		k := strings.ToLower(p)
 		by[k] = append(by[k], p)
 	}
+
 	var out [][]string
 	for _, g := range by {
 		if len(g) > 1 {
@@ -41,6 +44,7 @@ func CaseCollisions(paths []string) [][]string {
 			out = append(out, g)
 		}
 	}
+
 	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
 	return out
 }

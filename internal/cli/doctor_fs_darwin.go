@@ -8,6 +8,7 @@ func fsTypeOf(dir string) (string, error) {
 	if err := syscall.Statfs(dir, &st); err != nil {
 		return "", err
 	}
+
 	b := make([]byte, 0, len(st.Fstypename))
 	for _, c := range st.Fstypename {
 		if c == 0 {

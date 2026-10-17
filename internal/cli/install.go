@@ -143,10 +143,12 @@ func newInstaller(c *Call) (*installer, *Result) {
 	in.project, in.noProject = flagBool(c, "project"), flagBool(c, "no-project")
 	in.from, in.dry = flagString(c, "from"), c.Global.DryRun
 	in.errOut = func(f string, a ...any) { _, _ = fmt.Fprintf(c.cli.errOut, f, a...) }
+
 	if in.repoOnly && in.machineOnly || in.project && in.noProject {
 		r := usageErr("--repo-only and --machine-only cannot combine, and neither can --project and --no-project", helpFix("install"))
 		return nil, &r
 	}
+
 	for _, h := range strings.Split(flagString(c, "hosts"), ",") {
 		switch h = strings.TrimSpace(h); h {
 		case "":
@@ -157,10 +159,15 @@ func newInstaller(c *Call) (*installer, *Result) {
 			return nil, &r
 		}
 	}
+
 	if in.repoOnly && in.root == "" {
-		r := refuse(format.NoRepo, "no git repository found", "komodo install --repo-only inside a git repository, or pass -C <path>")
+		r := refuse(
+			format.NoRepo,
+			"no git repository found", "komodo install --repo-only inside a git repository, or pass -C <path>",
+		)
 		return nil, &r
 	}
+
 	var err error
 	if in.home, err = c.cli.komodoHome(); err == nil {
 		in.user, err = os.UserHomeDir()
@@ -172,8 +179,10 @@ func newInstaller(c *Call) (*installer, *Result) {
 		r := internalErr("find the install folders: " + err.Error())
 		return nil, &r
 	}
+
 	in.doMachine = !in.repoOnly
 	in.doRepo = !in.machineOnly && in.root != ""
+
 	if !in.machineOnly && !in.repoOnly && in.root == "" {
 		in.skipped = append(in.skipped, "steps 4 to 7: not inside a git repository")
 	}
@@ -185,10 +194,12 @@ func (in *installer) run() Result {
 	if err := in.load(); err != nil {
 		return internalErr(err.Error())
 	}
+
 	machineWant, repoWant, err := in.wanted()
 	if err != nil {
 		return internalErr(err.Error())
 	}
+
 	var mrows, rrows []planRow
 	if in.doMachine {
 		mrows = planInstall(machineWant, in.machineRec, in.disk, in.force)
@@ -196,21 +207,31 @@ func (in *installer) run() Result {
 	if in.doRepo {
 		rrows = planInstall(repoWant, in.repoRec, in.disk, in.force)
 	}
-	data := InstallData{DryRun: in.dry, Changes: []InstallChange{}, Edited: []string{}, Skipped: in.skipped, Probe: []InstallProbe{}}
+
+	data := InstallData{
+		DryRun:  in.dry,
+		Changes: []InstallChange{},
+		Edited:  []string{},
+		Skipped: in.skipped,
+		Probe:   []InstallProbe{},
+	}
 	if data.Skipped == nil {
 		data.Skipped = []string{}
 	}
+
 	rows := append(slices.Clone(mrows), rrows...)
 	for _, r := range rows {
 		if r.edited {
 			data.Edited = append(data.Edited, r.it.Target)
 		}
 	}
+
 	data.Edited = slices.Compact(data.Edited)
 	var applyErr error
 	if !in.dry {
 		applyErr = in.apply(rows)
 	}
+
 	mchanged, rchanged, err := in.writeManifests(mrows, rrows)
 	if err != nil && applyErr == nil {
 		applyErr = err
@@ -218,6 +239,7 @@ func (in *installer) run() Result {
 	if applyErr != nil {
 		return refuse(format.Internal, applyErr.Error(), "fix the file named above, then run komodo install again")
 	}
+
 	data.Changes = in.changes(rows, mchanged, rchanged)
 	if !in.dry && in.doMachine && !in.remove {
 		if in.host.Links == nil {
@@ -225,9 +247,11 @@ func (in *installer) run() Result {
 		}
 		data.Probe = in.probe(context.Background())
 	}
+
 	for _, f := range data.Edited {
 		in.errOut("Warning: %s was edited by hand and was left alone. Fix: komodo install --force\n", f)
 	}
+
 	if in.project {
 		in.errOut("Warning: --project adds no files: no project file templates exist yet\n")
 	}
@@ -240,11 +264,17 @@ func installResult(d InstallData) Result {
 	for _, c := range d.Changes {
 		ch.Rows = append(ch.Rows, []string{c.File, c.Action, c.Reason})
 	}
+
 	pr := format.Table{Head: []string{"link", "result"}, What: "links"}
 	for _, p := range d.Probe {
 		pr.Rows = append(pr.Rows, []string{p.Link, p.Result})
 	}
-	return Result{Shape: "reply.install", Facts: format.InstallFacts{Changes: ch, Probe: pr}, Data: d}
+
+	return Result{
+		Shape: "reply.install",
+		Facts: format.InstallFacts{Changes: ch, Probe: pr},
+		Data:  d,
+	}
 }
 
 // load reads the recorded manifests and the selections.
@@ -254,13 +284,16 @@ func (in *installer) load() error {
 		if err != nil && !errors.Is(err, state.ErrNotFound) {
 			return fmt.Errorf("read install.json: %w", err)
 		}
+
 		in.machineRev = rec.Header.Rev
 		for _, e := range rec.Body.Entries {
 			in.machineRec = append(in.machineRec, Entry(e))
 		}
+
 		in.machineSel = Selections{Hosts: rec.Body.Selections.Hosts, Project: rec.Body.Selections.Project}
 		in.sel = in.machineSel
 	}
+
 	if in.doRepo {
 		m, ok, err := readRepoManifest(in.repoManifestPath())
 		if err != nil {
@@ -297,6 +330,7 @@ func readRepoManifest(path string) (Manifest, bool, error) {
 	if err != nil {
 		return Manifest{}, false, fmt.Errorf("read install.json: %w", err)
 	}
+
 	var m Manifest
 	if err := json.Unmarshal(b, &m); err != nil {
 		return Manifest{}, false, fmt.Errorf("read %s: %w", path, err)
@@ -316,6 +350,7 @@ func planInstall(wanted []item, recorded []Entry, disk func(machine bool, e Entr
 		}
 		return nil
 	}
+
 	for _, w := range wanted {
 		rec := recOf(w.Entry)
 		seen[w.Target+"\x00"+w.Entry.Entry] = true
@@ -342,6 +377,7 @@ func planInstall(wanted []item, recorded []Entry, disk func(machine bool, e Entr
 		}
 		rows = append(rows, row)
 	}
+
 	for i := range recorded {
 		rec := &recorded[i]
 		if seen[rec.Target+"\x00"+rec.Entry] {
@@ -363,6 +399,7 @@ func planInstall(wanted []item, recorded []Entry, disk func(machine bool, e Entr
 		}
 		rows = append(rows, row)
 	}
+
 	slices.SortStableFunc(rows, func(a, b planRow) int { return a.it.Step - b.it.Step })
 	return rows
 }
@@ -379,6 +416,7 @@ func (in *installer) apply(rows []planRow) error {
 		}
 		defer release()
 	}
+
 	for i := range rows {
 		r := &rows[i]
 		var err error
@@ -403,7 +441,13 @@ func (in *installer) writeManifests(mrows, rrows []planRow) (machineChanged, rep
 	if in.doMachine {
 		keys, after := rowKeys(mrows), recordedAfter(mrows)
 		if in.dry {
-			cur := state.InstallBody{Entries: toInstallEntries(in.machineRec), Selections: state.InstallSelections{Hosts: in.machineSel.Hosts, Project: in.machineSel.Project}}
+			cur := state.InstallBody{
+				Entries: toInstallEntries(in.machineRec),
+				Selections: state.InstallSelections{
+					Hosts:   in.machineSel.Hosts,
+					Project: in.machineSel.Project,
+				},
+			}
 			machineChanged = in.machineRev == 0 && len(after) > 0 || mergeInstallBody(&cur, keys, after, in.sel)
 		} else if machineChanged, err = updateMachine(in.machine, state.KindInstall, func(b *state.InstallBody) bool {
 			return mergeInstallBody(b, keys, after, in.sel)
@@ -416,8 +460,10 @@ func (in *installer) writeManifests(mrows, rrows []planRow) (machineChanged, rep
 		if m.Selections.Hosts == nil {
 			m.Selections.Hosts = []string{}
 		}
+
 		old, _, _ := readRepoManifest(in.repoManifestPath())
 		repoChanged = !in.hasRepoManifest || !reflect.DeepEqual(old.Entries, m.Entries) || !sameSelections(old.Selections, m.Selections)
+
 		if repoChanged && !in.dry {
 			b, _ := json.MarshalIndent(m, "", "  ")
 			if err = os.MkdirAll(filepath.Dir(in.repoManifestPath()), 0o755); err == nil {
@@ -469,11 +515,13 @@ func touchesBinary(rows []planRow) bool {
 func mergeInstallBody(b *state.InstallBody, keys map[string]bool, after []Entry, sel Selections) bool {
 	old, oldSel := slices.Clone(b.Entries), b.Selections
 	next := []state.InstallEntry{}
+
 	for _, e := range b.Entries {
 		if !keys[e.Target+"\x00"+e.Entry] {
 			next = append(next, e)
 		}
 	}
+
 	next = append(next, toInstallEntries(after)...)
 	slices.SortStableFunc(next, func(a, c state.InstallEntry) int {
 		if a.Step != c.Step {
@@ -481,8 +529,10 @@ func mergeInstallBody(b *state.InstallBody, keys map[string]bool, after []Entry,
 		}
 		return strings.Compare(a.Target+a.Entry, c.Target+c.Entry)
 	})
+
 	b.Entries = next
 	b.Selections = state.InstallSelections{Hosts: sel.Hosts, Project: sel.Project}
+
 	return !slices.Equal(old, next) || !sameSelections(Selections{Hosts: oldSel.Hosts, Project: oldSel.Project}, sel)
 }
 
@@ -499,6 +549,7 @@ func recordedAfter(rows []planRow) []Entry {
 			out = append(out, r.it.Entry)
 		}
 	}
+
 	slices.SortStableFunc(out, func(a, b Entry) int {
 		if a.Step != b.Step {
 			return a.Step - b.Step
@@ -513,6 +564,7 @@ func (in *installer) changes(rows []planRow, machineChanged, repoChanged bool) [
 	var out []InstallChange
 	idx := map[string]int{}
 	rank := map[string]int{"keep": 0, "prune": 1, "write": 2, "failed": 3}
+
 	for _, r := range rows {
 		file := r.it.Target
 		i, ok := idx[file]
@@ -529,11 +581,13 @@ func (in *installer) changes(rows []planRow, machineChanged, repoChanged bool) [
 			c.Reason += "; " + r.reason
 		}
 	}
-	for _, m := range []struct {
-		on      bool
-		changed bool
-		file    string
-	}{
+
+	type changesMachine struct {
+		on, changed bool
+		file        string
+	}
+
+	for _, m := range []changesMachine{
 		{in.doMachine, machineChanged, filepath.Join(in.home, "state", "install.json")},
 		{in.doRepo, repoChanged, relTo(in.root, in.repoManifestPath())},
 	} {
@@ -546,15 +600,18 @@ func (in *installer) changes(rows []planRow, machineChanged, repoChanged bool) [
 		}
 		out = append(out, InstallChange{File: m.file, Action: action, Reason: reason})
 	}
+
 	if in.dry {
 		return out
 	}
+
 	kept := out[:0]
 	for _, c := range out {
 		if c.Action != "keep" {
 			kept = append(kept, c)
 		}
 	}
+
 	return slices.Clone(kept)
 }
 
@@ -580,7 +637,8 @@ func sha(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// updateMachine reads a machine-wide record, lets mutate change its body and saves it with a revision check, rereading on a conflict.
+// updateMachine reads a machine-wide record, lets mutate change its body and saves it with a revision check,
+// rereading on a conflict.
 func updateMachine[T any](m *state.Machine, k state.MachineKind, mutate func(body *T) bool) (bool, error) {
 	for range 3 {
 		rec, err := state.LoadMachine[T](m, k)

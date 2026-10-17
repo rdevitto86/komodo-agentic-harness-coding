@@ -38,10 +38,12 @@ func buildDeps(stdout, stderr io.Writer) (cli.Deps, error) {
 	if err != nil {
 		return cli.Deps{}, err
 	}
+
 	cfg, err := config.New(home, config.Known{}, func(string) bool { return true })
 	if err != nil {
 		return cli.Deps{}, fmt.Errorf("open settings: %w", err)
 	}
+
 	opts := format.Options{Profile: format.ProfileAdhd, Color: format.ColorOff}
 	if it, err := cfg.GetConfigItem("output.profile"); err == nil && it.Value == string(format.ProfileStandard) {
 		opts.Profile = format.ProfileStandard
@@ -52,10 +54,12 @@ func buildDeps(stdout, stderr io.Writer) (cli.Deps, error) {
 	if it, err := cfg.GetConfigItem("output.color"); err == nil && colorOn(it.Value, stdout) {
 		opts.Color = format.ColorOn
 	}
+
 	f, err := format.New(opts)
 	if err != nil {
 		return cli.Deps{}, fmt.Errorf("load output templates: %w", err)
 	}
+
 	return cli.Deps{
 		Format: f, Config: cfg, Engine: cli.NewSocketEngine(home),
 		Terminal: cli.HasControllingTerminal, Home: home, Stdout: stdout, Stderr: stderr,

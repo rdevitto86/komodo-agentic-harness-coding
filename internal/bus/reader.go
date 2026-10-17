@@ -56,14 +56,17 @@ func (r *fileReader) Replay(ctx context.Context, run, group ID) (ReplayLog, erro
 	if !safeName(run) {
 		return ReplayLog{}, fmt.Errorf("run %q is not a run id", run)
 	}
+
 	runs, err := readRuns(filepath.Join(r.dir, runsFile))
 	if err != nil {
 		return ReplayLog{}, fmt.Errorf("read run folders: %w", err)
 	}
+
 	dir, ok := runs[run]
 	if !ok {
 		return ReplayLog{}, fmt.Errorf("no event log for run %s", run)
 	}
+
 	log, err := readLog(filepath.Join(dir, LogName(run)), group)
 	if errors.Is(err, os.ErrNotExist) {
 		return ReplayLog{}, fmt.Errorf("no event log for run %s", run)
@@ -92,6 +95,7 @@ func ReadFolder(ctx context.Context, dir string, fn func(run ID, l ReplayLog) er
 	if err != nil {
 		return err
 	}
+
 	for _, p := range files {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -114,7 +118,9 @@ func readLog(path string, group ID) (ReplayLog, error) {
 	if err != nil {
 		return ReplayLog{}, err
 	}
+
 	defer func() { _ = f.Close() }()
+
 	out := ReplayLog{Events: []Event{}, Gaps: []Gap{}}
 	br := bufio.NewReader(f)
 	for {
@@ -138,11 +144,13 @@ func (l *ReplayLog) addLine(line []byte, group ID) {
 	if len(line) == 0 {
 		return
 	}
+
 	var g gapLine
 	if json.Unmarshal(line, &g) == nil && g.Gap {
 		l.Gaps = append(l.Gaps, Gap{After: len(l.Events), Kind: gapDropped, Dropped: g.Dropped, Time: g.Time})
 		return
 	}
+
 	var e Event
 	if err := json.Unmarshal(line, &e); err != nil {
 		l.Skipped++
@@ -162,6 +170,7 @@ func logFiles(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var out []string
 	for _, e := range ents {
 		if _, ok := runOfLog(e.Name()); ok && !e.IsDir() {

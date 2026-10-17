@@ -19,8 +19,9 @@ var busStoreFailedKey = BusStoreFailed{}.EventKey()
 
 // Bus accepts events and delivers each to the subscriptions that asked for its type.
 type Bus interface {
-	// Publish validates the event, stamps its time, appends it to the event store and queues it for every matching subscription; it never waits for a subscriber.
-	// Publish takes ownership of e.Data: the publisher and every subscriber treat it as read-only afterwards.
+	// Publish validates the event, stamps its time, appends it to the event store and queues it for every
+	// matching subscription; it never waits for a subscriber. Publish takes ownership of e.Data: the publisher and
+	// every subscriber treat it as read-only afterwards.
 	Publish(e Event) error
 	// Subscribe returns a private queue of events of the given types; no types means every type.
 	Subscribe(name string, types ...Type) (*Subscription, error)
@@ -73,11 +74,13 @@ func New(o Options) Bus {
 	if o.BufferEvents <= 0 {
 		o.BufferEvents = DefaultBufferEvents
 	}
+
 	b := &memBus{
 		buffer: o.BufferEvents, dir: o.EventsDir, mask: o.Mask, retention: o.RetentionDays, runOpen: o.RunOpen, goFn: o.Go,
 		runDir: map[ID]string{}, logs: map[string]*openLog{}, missed: map[string]int{}, failed: map[string]bool{},
 		lastTrim: map[string]time.Time{},
 	}
+
 	if b.dir != "" {
 		// A runs.json that cannot be read starts the map empty and is reported; a corrupt one is moved aside first.
 		path := filepath.Join(b.dir, runsFile)
@@ -94,8 +97,9 @@ func New(o Options) Bus {
 	return b
 }
 
-// Publish checks the pair and data, then under the bus lock stamps the time, appends the event to the event store and queues it for every matching subscription.
-// The data pointer is shared by all subscribers, so neither the publisher nor a subscriber modifies it after the call.
+// Publish checks the pair and data, then under the bus lock stamps the time, appends the event to
+// the event store and queues it for every matching subscription. The data pointer is shared by all subscribers,
+// so neither the publisher nor a subscriber modifies it after the call.
 func (b *memBus) Publish(e Event) error {
 	if !validate(e) {
 		return fmt.Errorf("publish %q/%q: %w", e.Type, e.Subtype, ErrUnknownEvent)
@@ -109,12 +113,14 @@ func (b *memBus) Publish(e Event) error {
 func (b *memBus) publish(e Event) (followUp, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	if b.closed {
 		return followUp{}, ErrBusClosed
 	}
 	if b.sealed {
 		return followUp{}, ErrBusSealed
 	}
+
 	e.Time = now().UTC().Truncate(time.Second)
 	b.fanOutLocked(e)
 	fu := b.follow
@@ -122,7 +128,8 @@ func (b *memBus) publish(e Event) (followUp, error) {
 	return fu, nil
 }
 
-// fanOutLocked stores and queues e and then any bus.overflow or bus.store_failed events it caused, so the log and every subscriber see one order.
+// fanOutLocked stores and queues e and then any bus.overflow or bus.store_failed events it caused,
+// so the log and every subscriber see one order.
 func (b *memBus) fanOutLocked(e Event) {
 	pending := []Event{e}
 	for len(pending) > 0 {
@@ -161,11 +168,14 @@ func (b *memBus) Subscribe(name string, types ...Type) (*Subscription, error) {
 			return nil, fmt.Errorf("subscribe %q to %q: %w", name, t, ErrUnknownEvent)
 		}
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	if b.closed {
 		return nil, ErrBusClosed
 	}
+
 	q := make(chan Event, b.buffer)
 	s := &Subscription{Events: q, name: name, queue: q, bus: b}
 	if len(types) > 0 {
@@ -185,7 +195,8 @@ func (b *memBus) Seal() {
 	b.sealed = true
 }
 
-// Close stops delivery, closes every subscription's channel and every open log, and waits for a running trim; closing twice is harmless.
+// Close stops delivery, closes every subscription's channel and every open log,
+// and waits for a running trim; closing twice is harmless.
 func (b *memBus) Close() error {
 	b.mu.Lock()
 	b.closed = true
@@ -193,10 +204,12 @@ func (b *memBus) Close() error {
 		s.closed = true
 		close(s.queue)
 	}
+
 	b.subs = nil
 	for p := range b.logs {
 		b.closeLogLocked(p)
 	}
+
 	b.mu.Unlock()
 	b.trims.Wait()
 	return nil

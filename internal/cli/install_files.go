@@ -10,18 +10,16 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// beginPrefix starts the begin marker line of the Komodo block.
-const beginPrefix = "<!-- komodo:begin min="
-
-// importLine is the single line install owns in CLAUDE.md.
-const importLine = "@AGENTS.md"
-
-// guardCommand is the command of the hook entry install owns.
-const guardCommand = "komodo internal guard"
+const (
+	beginPrefix  = "<!-- komodo:begin min=" // beginPrefix starts the begin marker line of the Komodo block.
+	importLine   = "@AGENTS.md"             // importLine is the single line install owns in CLAUDE.md.
+	guardCommand = "komodo internal guard"  // guardCommand is the command of the hook entry install owns.
+)
 
 // renderBlock builds the Komodo block text; an empty rules text leaves out the rules line.
 func renderBlock(pin, bin, rules, style string) string {
 	var b strings.Builder
+
 	fmt.Fprintf(&b, BlockBegin+"\n", pin)
 	b.WriteString("#### Komodo harness\n\n")
 	b.WriteString("- **You are the orchestrator.** Drive the harness only through `komodo <command>`; with no terminal, every reply is the JSON envelope.\n")
@@ -31,12 +29,14 @@ func renderBlock(pin, bin, rules, style string) string {
 	b.WriteString("- **Wait without polling:** run `komodo status --wait` in the background. It returns when a group is blocked or done, with the blocked group's question.\n")
 	b.WriteString("- **Answer a blocked group:** `komodo run <id> --approve` grants what it asked for; `komodo run <id> --deny` refuses it.\n")
 	b.WriteString("- **Report:** relay the envelope's `report` field verbatim.\n")
+
 	if r := strings.TrimSpace(rules); r != "" {
 		fmt.Fprintf(&b, "- **Rules:** %s\n", r)
 	}
 	if s := strings.TrimSpace(style); s != "" {
-		b.WriteString(s + "\n")
+		b.WriteString(s + "\n") // TODO - linter error "Inefficient string concatenation in call to WriteString"
 	}
+
 	b.WriteString(BlockEnd)
 	return b.String()
 }
@@ -46,6 +46,7 @@ func findBlock(text string) (Block, bool, error) {
 	var begins, ends []int
 	var starts []int
 	off := 0
+
 	for i, line := range strings.SplitAfter(text, "\n") {
 		t := strings.TrimSpace(line)
 		switch {
@@ -58,16 +59,25 @@ func findBlock(text string) (Block, bool, error) {
 		}
 		off += len(line)
 	}
+
 	switch {
 	case len(begins) == 0 && len(ends) == 0:
 		return Block{}, false, nil
 	case len(begins) != 1 || len(ends) != 1 || begins[0] > ends[0]:
-		return Block{}, false, fmt.Errorf("AGENTS.md has %d begin markers (lines %v) and %d end markers (lines %v): keep one begin marker before one end marker", len(begins), begins, len(ends), ends)
+		return Block{}, false, fmt.Errorf(
+			"AGENTS.md has %d begin markers (lines %v) and %d end markers (lines %v): keep one begin marker before one end marker",
+			len(begins),
+			begins,
+			len(ends),
+			ends,
+		)
 	}
+
 	// starts holds, in file order, the begin marker's start and the end marker's end.
 	b := Block{Start: starts[0], End: starts[3]}
 	line := strings.TrimSpace(text[b.Start:starts[1]])
 	b.Min = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, beginPrefix), "-->"))
+
 	return b, true, nil
 }
 
@@ -77,6 +87,7 @@ func putBlock(text, block string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	switch {
 	case ok:
 		return text[:b.Start] + block + text[b.End:], nil
@@ -85,6 +96,7 @@ func putBlock(text, block string) (string, error) {
 	case strings.HasSuffix(text, "\n"):
 		return text + "\n" + block + "\n", nil
 	}
+
 	return text + "\n\n" + block + "\n", nil
 }
 

@@ -20,15 +20,22 @@ type CleanItem struct {
 func handleClean(c *Call) Result {
 	req := c.request(engine.VerbClean, "")
 	req.Flags = engine.Flags{DryRun: c.Global.DryRun}
+
 	frames, res := c.ask(req)
 	if res != nil {
 		return *res
 	}
+
 	d := CleanData{Removed: []CleanItem{}}
 	decodeFinal(frames, &d)
 	rows := format.Table{Head: []string{"Kind", "Name"}, What: "items"}
+
 	for _, it := range d.Removed {
 		rows.Rows = append(rows.Rows, []string{it.Kind, it.Name})
 	}
-	return Result{Shape: "reply.clean", Facts: format.CleanFacts{Removed: rows}, Data: d}
+	return Result{
+		Shape: "reply.clean",
+		Facts: format.CleanFacts{Removed: rows},
+		Data:  d,
+	}
 }

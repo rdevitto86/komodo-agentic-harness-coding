@@ -39,7 +39,13 @@ func RoleByName(name string) (Role, bool) {
 }
 
 // newRole builds a role whose slices are fresh copies, so a caller can never change the compiled definition.
-func newRole(name string, tools, classes, guard, required, optional []string, resultID string, resultRequired []string, pool bool) Role {
+func newRole(
+	name string,
+	tools, classes, guard, required, optional []string,
+	resultID string,
+	resultRequired []string,
+	pool bool,
+) Role {
 	schema, err := json.Marshal(map[string]any{"$id": resultID, "type": "object", "required": resultRequired})
 	if err != nil {
 		panic("marshal result schema: " + err.Error())

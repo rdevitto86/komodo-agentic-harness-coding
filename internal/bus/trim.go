@@ -12,14 +12,13 @@ import (
 	"time"
 )
 
-// defaultRetentionDays is the retention used when TrimOptions.RetentionDays is not positive.
-const defaultRetentionDays = 30
+const (
+	defaultRetentionDays = 30       // defaultRetentionDays is the retention used when TrimOptions.RetentionDays is not positive.
+	tailBytes            = 64 << 10 // tailBytes is how much of the end of a log is read to find its last line's time.
+)
 
 // sizeBound is the most bytes a repository's events folder may hold; the trim brings it to 80% of this.
 var sizeBound int64 = 100 << 20
-
-// tailBytes is how much of the end of a log is read to find its last line's time.
-const tailBytes = 64 << 10
 
 // TrimOptions holds what a trim needs beyond the folder.
 type TrimOptions struct {
@@ -50,11 +49,13 @@ func Trim(ctx context.Context, dir string, o TrimOptions) (TrimResult, error) {
 	if o.RetentionDays <= 0 {
 		o.RetentionDays = defaultRetentionDays
 	}
+
 	cutoff := now().Add(-time.Duration(o.RetentionDays) * 24 * time.Hour)
 	logs, err := listLogs(dir, o.Open)
 	if err != nil {
 		return res, err
 	}
+
 	var kept []logFile
 	for _, l := range logs {
 		if err := ctx.Err(); err != nil {
@@ -72,11 +73,13 @@ func Trim(ctx context.Context, dir string, o TrimOptions) (TrimResult, error) {
 		}
 		kept = append(kept, l)
 	}
+
 	res.OverBound = res.ProtectedBytes > sizeBound
 	total, err := folderSize(dir)
 	if err != nil || total <= sizeBound {
 		return res, err
 	}
+
 	target := sizeBound * 8 / 10
 	slices.SortFunc(kept, func(a, b logFile) int { return a.last.Compare(b.last) })
 	for _, l := range kept {
@@ -126,18 +129,22 @@ func lastLineTime(path string, size int64) (time.Time, bool) {
 	if err != nil {
 		return time.Time{}, false
 	}
+
 	defer func() { _ = f.Close() }()
+
 	start := max(size-tailBytes, 0)
 	buf := make([]byte, size-start)
 	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
 		return time.Time{}, false
 	}
+
 	// Bytes after the last newline are a torn line.
 	if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
 		buf = buf[:i]
 	} else {
 		return time.Time{}, false
 	}
+
 	parts := bytes.Split(buf, []byte{'\n'})
 	for i := len(parts) - 1; i >= 0; i-- {
 		var l struct {
@@ -159,6 +166,7 @@ func folderSize(dir string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+
 	var n int64
 	for _, e := range ents {
 		if info, err := e.Info(); err == nil && info.Mode().IsRegular() {
@@ -195,12 +203,15 @@ func (b *memBus) startTrims(jobs []trimJob) {
 	if len(jobs) == 0 {
 		return
 	}
+
 	b.mu.Lock()
 	if b.closed {
 		jobs = nil
 	}
 	b.trims.Add(len(jobs))
+
 	b.mu.Unlock()
+
 	for _, j := range jobs {
 		if b.goFn != nil {
 			b.goFn(func() { b.trim(j) })
@@ -213,12 +224,14 @@ func (b *memBus) startTrims(jobs []trimJob) {
 // trim runs one job, forgets the runs it deleted, and publishes bus.store_failed for a failed or over-bound trim.
 func (b *memBus) trim(j trimJob) {
 	defer b.trims.Done()
+
 	if j.machine {
 		if err := b.trimMachineLog(); err != nil {
 			b.reportStore("", filepath.Join(j.dir, machineLogName), fmt.Sprintf("trim: %v", err))
 		}
 		return
 	}
+
 	res, err := Trim(context.Background(), j.dir, TrimOptions{RetentionDays: b.retention, Open: b.runOpen})
 	if len(res.Deleted) > 0 {
 		b.forget(j.dir, res.Deleted)
@@ -257,15 +270,19 @@ func (b *memBus) trimMachineLog() error {
 	if err != nil {
 		return err
 	}
+
 	// Bytes after the last newline are a line still being written; the swap carries them over.
 	end := bytes.LastIndexByte(data, '\n') + 1
 	lines := bytes.SplitAfter(data[:end], []byte{'\n'})
 	lines = lines[:len(lines)-1]
+
 	days := b.retention
 	if days <= 0 {
 		days = defaultRetentionDays
 	}
+
 	cutoff := now().Add(-time.Duration(days) * 24 * time.Hour)
+
 	var kept [][]byte
 	var total int64
 	for _, l := range lines {
@@ -278,6 +295,7 @@ func (b *memBus) trimMachineLog() error {
 		kept = append(kept, l)
 		total += int64(len(l))
 	}
+
 	if total > sizeBound {
 		for total > sizeBound*8/10 && len(kept) > 0 {
 			total -= int64(len(kept[0]))
@@ -287,12 +305,15 @@ func (b *memBus) trimMachineLog() error {
 	if len(kept) == len(lines) {
 		return nil
 	}
+
 	tmp := path + ".trim"
 	if err := os.WriteFile(tmp, bytes.Join(kept, nil), filePerm); err != nil {
 		return err
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	if err := b.swapMachineLogLocked(path, tmp, int64(end)); err != nil {
 		_ = os.Remove(tmp)
 		return err
@@ -307,10 +328,13 @@ func (b *memBus) swapMachineLogLocked(path, tmp string, offset int64) error {
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = src.Close() }()
+
 	if _, err := src.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
+
 	dst, err := os.OpenFile(tmp, os.O_APPEND|os.O_WRONLY, filePerm)
 	if err != nil {
 		return err

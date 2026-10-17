@@ -15,6 +15,11 @@ type LineSource interface {
 	Line(file string, n int) (string, bool)
 }
 
+type sourceFinding struct {
+	name string
+	ls   LineSource
+}
+
 // VerifyFinding reports where the quoted line is found, "head" or "diff", and whether it is.
 // A line matches when it equals the quote after both are trimmed; a quote with a line break or no text never matches.
 func VerifyFinding(f Finding, head, diff LineSource) (in string, ok bool) {
@@ -22,10 +27,8 @@ func VerifyFinding(f Finding, head, diff LineSource) (in string, ok bool) {
 	if want == "" || strings.ContainsAny(f.Quote, "\r\n") {
 		return "", false
 	}
-	for _, src := range []struct {
-		name string
-		ls   LineSource
-	}{{"head", head}, {"diff", diff}} {
+
+	for _, src := range []sourceFinding{{"head", head}, {"diff", diff}} {
 		if src.ls == nil {
 			continue
 		}

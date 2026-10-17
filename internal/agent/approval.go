@@ -49,10 +49,12 @@ func Decide(t TesterVerdict, r ReviewerVerdict) Outcome {
 	case !r.Ended:
 		return Outcome{Decision: DecisionWait}
 	}
+
 	out := Outcome{Findings: r.Blocking, NotMet: unionSorted(t.NotMet, r.NotMet)}
 	if t.Ended {
 		out.Items = t.Failed
 	}
+
 	switch {
 	case len(r.NotMet) > 0 || len(r.Blocking) > 0:
 		out.Decision = DecisionReturn

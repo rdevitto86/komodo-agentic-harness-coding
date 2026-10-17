@@ -15,11 +15,13 @@ import (
 // newTestCache builds a cache with a fake clock that ticks one second per call.
 func newTestCache(t *testing.T, root, version string, maxBytes int64) *Cache {
 	t.Helper()
+
 	c, err := New(root, version, Limits{MaxBytes: maxBytes})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tick := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
 	var mu sync.Mutex
 	c.now = func() time.Time {
 		mu.Lock()

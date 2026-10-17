@@ -15,7 +15,8 @@ var (
 )
 
 // CoverageCommand returns the default command that prints a whole-repository line coverage report.
-// JavaScript and TypeScript wrap the repository's own test command, so they need it. Java and Kotlin have no default: their command comes from the configuration.
+// JavaScript and TypeScript wrap the repository's own test command, so they need it.
+// Java and Kotlin have no default: their command comes from the configuration.
 func CoverageCommand(language, testCmd string) (string, bool) {
 	switch language {
 	case "go":

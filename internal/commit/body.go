@@ -42,6 +42,7 @@ func RenderBody(f PRFacts, tester, reviewer Verdict) (string, error) {
 		Facts            PRFacts
 		Tester, Reviewer Verdict
 	}{f, tester, reviewer}
+
 	if err := groupBody.Execute(&b, data); err != nil {
 		return "", fmt.Errorf("render group body: %w", err)
 	}

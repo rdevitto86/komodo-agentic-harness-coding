@@ -26,11 +26,14 @@ func claimLock(home string, now func() time.Time) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create the state folder: %w", err)
 	}
+
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return nil, fmt.Errorf("make a lock token: %w", err)
 	}
+
 	token := fmt.Sprintf("%d %s\n", os.Getpid(), hex.EncodeToString(b[:]))
+
 	for range 3 {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {

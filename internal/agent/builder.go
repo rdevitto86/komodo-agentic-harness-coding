@@ -49,6 +49,7 @@ func ParseBuilderResult(raw []byte) (BuilderResult, error) {
 	if strings.TrimSpace(r.Summary) == "" {
 		return BuilderResult{}, errors.New("builder result has no summary")
 	}
+
 	switch r.Status {
 	case BuilderDone:
 		if len(r.Paths) > 0 || r.Reason != "" {
@@ -66,6 +67,7 @@ func ParseBuilderResult(raw []byte) (BuilderResult, error) {
 	default:
 		return BuilderResult{}, fmt.Errorf("builder result has unknown status %q", r.Status)
 	}
+
 	for _, d := range r.Disputed {
 		if !disputedRef.MatchString(d) {
 			return BuilderResult{}, fmt.Errorf("disputed entry %q is not file:line", d)

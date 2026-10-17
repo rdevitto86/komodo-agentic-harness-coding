@@ -6,11 +6,10 @@ import (
 	"strings"
 )
 
-// ScopeRequestsPerTask is the number of scope requests one task may make.
-const ScopeRequestsPerTask = 1
-
-// ReasonOneScopeRequest is the denial reason for a second scope request in one task.
-const ReasonOneScopeRequest = "one scope request per task"
+const (
+	ScopeRequestsPerTask  = 1                            // ScopeRequestsPerTask is the number of scope requests one task may make.
+	ReasonOneScopeRequest = "one scope request per task" // ReasonOneScopeRequest is the denial reason for a second scope request in one task.
+)
 
 // ScopeRequest is a Builder's request for paths outside its file list.
 type ScopeRequest struct {
@@ -29,7 +28,11 @@ type ScopeAnswer struct {
 
 // OutOfScope returns the changed paths that are neither in the file list nor a test sibling.
 // A nil sibling or match function never matches; a file list entry also matches its own path exactly.
-func OutOfScope(changed, files []string, sibling func(path string) bool, match func(glob, path string) bool) []string {
+func OutOfScope(
+	changed, files []string,
+	sibling func(path string) bool,
+	match func(glob, path string) bool,
+) []string {
 	var out []string
 	for _, c := range changed {
 		if inList(c, files, match) || (sibling != nil && sibling(c)) {
@@ -52,7 +55,11 @@ func inList(p string, files []string, match func(glob, path string) bool) bool {
 
 // AutoDeny returns the first requested path denied without asking anyone, and why.
 // A nil callback denies nothing.
-func AutoDeny(paths []string, protected func(string) bool, ownedByOther func(string) (group string, ok bool)) (path, why string, denied bool) {
+func AutoDeny(
+	paths []string,
+	protected func(string) bool,
+	ownedByOther func(string) (group string, ok bool),
+) (path, why string, denied bool) {
 	for _, p := range paths {
 		if protected != nil && protected(p) {
 			return p, "protected path", true
@@ -98,7 +105,8 @@ func matchSegments(pat, segs []string) bool {
 	return len(segs) == 0
 }
 
-// MatchPath matches a slash path against a file list entry: the same pattern grammar as MatchGlob, but an entry with no slash matches only at the root.
+// MatchPath matches a slash path against a file list entry: the same pattern grammar as MatchGlob,
+// but an entry with no slash matches only at the root.
 func MatchPath(glob, p string) bool {
 	return matchSegments(strings.Split(glob, "/"), strings.Split(p, "/"))
 }

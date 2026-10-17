@@ -11,10 +11,10 @@ import (
 )
 
 // staleTempAge is how old a leftover temp file must be before a scan deletes it.
-const staleTempAge = time.Hour
-
-// tempMarker is the part of a temporary file's name that marks it as an unfinished write.
-const tempMarker = ".json.tmp-"
+const (
+	staleTempAge = time.Hour
+	tempMarker   = ".json.tmp-" // tempMarker is the part of a temporary file's name that marks it as an unfinished write.
+)
 
 // cacheEntry is one entry file as seen by a directory scan.
 type cacheEntry struct {
@@ -29,6 +29,7 @@ func scanCache(root string, nss ...Namespace) ([]cacheEntry, error) {
 	if len(nss) == 0 {
 		nss = namespaces
 	}
+
 	var out []cacheEntry
 	for _, ns := range nss {
 		dir := filepath.Join(root, string(ns))
@@ -64,7 +65,11 @@ func scanCache(root string, nss ...Namespace) ([]cacheEntry, error) {
 
 // statsOf totals a scan overall and per namespace, with empty counters.
 func statsOf(entries []cacheEntry) Stats {
-	s := Stats{Namespaces: map[Namespace]NamespaceStats{}, Hits: map[Namespace]int64{}, Lookups: map[Namespace]int64{}}
+	s := Stats{
+		Namespaces: map[Namespace]NamespaceStats{},
+		Hits:       map[Namespace]int64{},
+		Lookups:    map[Namespace]int64{},
+	}
 	for _, e := range entries {
 		s.Entries++
 		s.Bytes += e.size

@@ -17,7 +17,18 @@ import (
 var lensFS embed.FS
 
 // lensOrder lists the lenses in the order Lenses returns them.
-var lensOrder = []string{"correctness", "security", "spec", "contract", "concurrency", "platform", "config", "readiness", "quality", "economy"}
+var lensOrder = []string{
+	"correctness",
+	"security",
+	"spec",
+	"contract",
+	"concurrency",
+	"platform",
+	"config",
+	"readiness",
+	"quality",
+	"economy",
+}
 
 // MarkdownOnlyLenses is the number of lenses a diff of only *.md files runs.
 const MarkdownOnlyLenses = 3
@@ -130,6 +141,7 @@ func LoadCatalogs() ([]Catalog, error) {
 	if len(files) != 2*len(lensOrder) {
 		return nil, fmt.Errorf("lens folder holds %d files, want %d", len(files), 2*len(lensOrder))
 	}
+
 	cats := make([]Catalog, 0, len(lensOrder))
 	for _, name := range lensOrder {
 		c, err := loadCatalog(name)
@@ -147,6 +159,7 @@ func loadCatalog(name string) (Catalog, error) {
 	if err != nil {
 		return Catalog{}, err
 	}
+
 	var c Catalog
 	if err := core.DecodeStrict(raw, &c); err != nil {
 		return Catalog{}, fmt.Errorf("decode catalog: %w", err)
@@ -154,10 +167,12 @@ func loadCatalog(name string) (Catalog, error) {
 	if c.Lens != name {
 		return Catalog{}, fmt.Errorf("catalog names lens %q", c.Lens)
 	}
+
 	md, err := lensFS.ReadFile("lenses/" + name + ".md")
 	if err != nil {
 		return Catalog{}, err
 	}
+
 	c.Text = ruleText(string(md))
 	if err := c.validate(); err != nil {
 		return Catalog{}, err
@@ -176,6 +191,7 @@ func ruleText(md string) map[string]string {
 		}
 		body = nil
 	}
+
 	for _, ln := range strings.Split(md, "\n") {
 		if rest, ok := strings.CutPrefix(ln, "## "); ok {
 			flush()
@@ -184,6 +200,7 @@ func ruleText(md string) map[string]string {
 		}
 		body = append(body, ln)
 	}
+
 	flush()
 	return text
 }
@@ -199,6 +216,7 @@ func (c *Catalog) validate() error {
 	default:
 		return fmt.Errorf("lens %s has unknown when %q", c.Lens, c.When)
 	}
+
 	var err error
 	if c.markers, err = compileMarkers(c.Applies.Markers); err != nil {
 		return err
@@ -206,6 +224,7 @@ func (c *Catalog) validate() error {
 	if len(c.Rules) == 0 {
 		return fmt.Errorf("lens %s has no rules", c.Lens)
 	}
+
 	for i, r := range c.Rules {
 		if want := fmt.Sprintf("%s.%d", c.Lens, i+1); r.ID != want {
 			return fmt.Errorf("rule %d is %q, want %q", i+1, r.ID, want)
@@ -217,6 +236,7 @@ func (c *Catalog) validate() error {
 			return fmt.Errorf("rule %s has no text", r.ID)
 		}
 	}
+
 	if len(c.Text) != len(c.Rules) {
 		return fmt.Errorf("lens %s has text for %d rules but %d rules", c.Lens, len(c.Text), len(c.Rules))
 	}
@@ -230,12 +250,14 @@ func (r Rule) validate() error {
 	default:
 		return fmt.Errorf("unknown severity %q", r.Severity)
 	}
+
 	if r.Check == "" || r.Evidence == "" || r.Source == "" {
 		return fmt.Errorf("check, evidence and source are all required")
 	}
 	if len(r.Applies.Globs) == 0 {
 		return fmt.Errorf("no file globs")
 	}
+
 	_, err := compileMarkers(r.Applies.Markers)
 	return err
 }
@@ -273,6 +295,7 @@ func (r reviewer) AcceptFinding(f Finding, head, diff LineSource) (Severity, boo
 	if strings.TrimSpace(f.File) == "" || f.Line < 1 {
 		return "", false, fmt.Errorf("finding needs a file and a line from 1")
 	}
+
 	_, found := VerifyFinding(f, head, diff)
 	return sev, found, nil
 }
@@ -307,6 +330,7 @@ func (r reviewer) Lenses(d Diff, p Profile) []string {
 	if markdownOnly(d.Paths) {
 		return slices.Clone(markdownLenses)
 	}
+
 	lines := changedLines(d.Text)
 	var out []string
 	for _, c := range r.cats {

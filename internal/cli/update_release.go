@@ -18,17 +18,12 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// defaultReleases is the address of the project's GitHub releases.
-const defaultReleases = "https://github.com/rdevitto86/komodo-agentic-harness-coding/releases"
-
-// manifestTimeout is the longest the release manifest fetch may take.
-const manifestTimeout = time.Second
-
-// downloadTimeout is the longest a binary download may take.
-const downloadTimeout = 5 * time.Minute
-
-// maxBinary caps the size of a downloaded binary.
-const maxBinary = 512 << 20
+const (
+	defaultReleases = "https://github.com/rdevitto86/komodo-agentic-harness-coding/releases" // defaultReleases is the address of the project's GitHub releases.
+	manifestTimeout = time.Second                                                            // manifestTimeout is the longest the release manifest fetch may take.
+	downloadTimeout = 5 * time.Minute                                                        // downloadTimeout is the longest a binary download may take.
+	maxBinary       = 512 << 20                                                              // maxBinary caps the size of a downloaded binary.
+)
 
 // cdnHosts are the hosts GitHub redirects release downloads to.
 var cdnHosts = []string{"objects.githubusercontent.com", "release-assets.githubusercontent.com"}
@@ -85,6 +80,7 @@ func (r ReleaseConfig) keys() KeySet {
 	if len(r.Keys.Current) > 0 || len(r.Keys.Next) > 0 {
 		return r.Keys
 	}
+
 	var k KeySet
 	if b, err := base64.StdEncoding.DecodeString(releaseKeyCurrent); err == nil && len(b) == ed25519.PublicKeySize {
 		k.Current = b
@@ -134,18 +130,22 @@ func (r ReleaseConfig) platform() (string, string) {
 func fetchManifest(ctx context.Context, c *core.Client, r ReleaseConfig, version string) (ReleaseManifest, error) {
 	var m ReleaseManifest
 	timeout := r.Timeout
+
 	if timeout <= 0 {
 		timeout = manifestTimeout
 	}
+
 	base := r.base(version)
 	body, err := httpGet(ctx, c, base+"/latest.json", timeout, nil)
 	if err != nil {
 		return m, fmt.Errorf("fetch latest.json: %w", err)
 	}
+
 	sigText, err := httpGet(ctx, c, base+"/latest.json.sig", timeout, nil)
 	if err != nil {
 		return m, fmt.Errorf("fetch latest.json.sig: %w", err)
 	}
+
 	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigText)))
 	if err != nil {
 		return m, fmt.Errorf("latest.json.sig is not base64: %w", err)
@@ -159,6 +159,7 @@ func fetchManifest(ctx context.Context, c *core.Client, r ReleaseConfig, version
 	if _, err := core.ParseSemVer(m.Version); err != nil {
 		return m, fmt.Errorf("latest.json has no usable version: %w", err)
 	}
+
 	goos, goarch := r.platform()
 	if _, ok := m.asset(goos, goarch); !ok {
 		return m, fmt.Errorf("latest.json has no binary for %s/%s", goos, goarch)
@@ -170,15 +171,22 @@ func fetchManifest(ctx context.Context, c *core.Client, r ReleaseConfig, version
 func httpGet(ctx context.Context, c *core.Client, address string, limit time.Duration, hosts []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+
 	u, err := url.Parse(address)
 	if err != nil {
 		return nil, err
 	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return nil, err
 	}
-	ep := core.Endpoint{Hosts: append([]string{u.Host}, append(hosts, cdnHosts...)...), Methods: []string{http.MethodGet}}
+
+	ep := core.Endpoint{
+		Hosts:   append([]string{u.Host}, append(hosts, cdnHosts...)...),
+		Methods: []string{http.MethodGet},
+	}
+
 	resp, err := c.Do(ctx, ep, req)
 	if err != nil {
 		return nil, err

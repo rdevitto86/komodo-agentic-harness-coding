@@ -19,11 +19,13 @@ func inside(root, path string) error {
 	if root == "" || path == "" || !filepath.IsAbs(root) || !filepath.IsAbs(path) {
 		return fmt.Errorf("%q in %q: %w", path, root, ErrOutsideRoots)
 	}
+
 	cr, cp := filepath.Clean(root), filepath.Clean(path)
 	rel, err := filepath.Rel(cr, cp)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("%q in %q: %w", path, root, ErrOutsideRoots)
 	}
+
 	realRoot, err := filepath.EvalSymlinks(cr)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // nothing exists below a missing root
@@ -31,6 +33,7 @@ func inside(root, path string) error {
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", root, err)
 	}
+
 	realParent, err := filepath.EvalSymlinks(filepath.Dir(cp))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // nothing exists below a missing parent

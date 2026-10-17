@@ -25,20 +25,24 @@ func (h *Handler) Preview(ctx context.Context) (Report, error) { return h.sweep(
 // sweep visits every group that has a container, checkout or folder left and cleans the ones that no run can continue.
 func (h *Handler) sweep(ctx context.Context, dry bool) (Report, error) {
 	rep := Report{}
+
 	if h.Roots.Worktrees == "" {
 		return rep, errors.New("no worktree folder to sweep")
 	}
 	if h.Groups == nil {
 		return rep, errors.New("no group reader to name the groups still in use")
 	}
+
 	used, err := h.Groups.Unfinished(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("list unfinished groups: %w", err)
 	}
+
 	unfinished := map[string]bool{}
 	for _, g := range used {
 		unfinished[g.Group] = true
 	}
+
 	// One non-pruning fetch serves every branch decision; if it fails, branches are kept.
 	fetchErr := h.Git.Fetch(ctx, h.Clone, h.Remote)
 	names, err := h.leftovers(ctx, &rep)
@@ -67,6 +71,7 @@ func (h *Handler) leftovers(ctx context.Context, rep *Report) ([]string, error) 
 			set[n] = true
 		}
 	}
+
 	if h.Boxes != nil {
 		groups, err := h.Boxes.List(ctx)
 		if err != nil {
@@ -78,10 +83,12 @@ func (h *Handler) leftovers(ctx context.Context, rep *Report) ([]string, error) 
 			}
 		}
 	}
+
 	out := make([]string, 0, len(set))
 	for n := range set {
 		out = append(out, n)
 	}
+
 	sort.Strings(out)
 	return out, nil
 }
@@ -91,6 +98,7 @@ func folders(root string) ([]string, error) {
 	if root == "" {
 		return nil, nil
 	}
+
 	ents, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -98,6 +106,7 @@ func folders(root string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", root, err)
 	}
+
 	var out []string
 	for _, e := range ents {
 		if (e.IsDir() || e.Type()&os.ModeSymlink != 0) && validName(e.Name()) {
@@ -122,6 +131,7 @@ func (h *Handler) sweepGroup(ctx context.Context, rep *Report, group string, unf
 		}
 		defer unlock()
 	}
+
 	l, have, live, err := h.holder(ctx, group)
 	if err != nil {
 		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: err.Error()})
@@ -131,10 +141,12 @@ func (h *Handler) sweepGroup(ctx context.Context, rep *Report, group string, unf
 		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: ErrLeaseHeld.Error()})
 		return
 	}
+
 	r := &run{h: h, ctx: ctx, group: group, rep: rep, dry: dry, guard: true, noRemote: fetchErr}
 	r.container()
 	r.checkouts()
 	gone := r.worktree(h.Roots.Worktrees, path, false)
+
 	switch {
 	case !have || l.Branch == "":
 		r.kept(KindBranch, "", "no lease record names the group's branch")
@@ -155,6 +167,7 @@ func (h *Handler) sweepLandings(ctx context.Context, rep *Report, used []GroupRe
 		}
 		return
 	}
+
 	var branches []string
 	unknown := false
 	for _, g := range used {
@@ -165,6 +178,7 @@ func (h *Handler) sweepLandings(ctx context.Context, rep *Report, used []GroupRe
 		}
 		branches = append(branches, l.Branch)
 	}
+
 	for _, epic := range epics {
 		path := filepath.Join(h.Roots.Landings, epic)
 		if reason := landingInUse(epic, branches, unknown); reason != "" {

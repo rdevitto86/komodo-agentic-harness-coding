@@ -34,9 +34,13 @@ type SocketEngine struct {
 // NewSocketEngine returns a client for the engine under home with the design's timings.
 func NewSocketEngine(home string) *SocketEngine {
 	return &SocketEngine{
-		Home: home, Args: []string{"internal", "engine"},
-		Redial: 50 * time.Millisecond, StartWait: 5 * time.Second,
-		HungReply: 10 * time.Second, HungBeat: 30 * time.Second, Now: time.Now,
+		Home:      home,
+		Args:      []string{"internal", "engine"},
+		Redial:    50 * time.Millisecond,
+		StartWait: 5 * time.Second,
+		HungReply: 10 * time.Second,
+		HungBeat:  30 * time.Second,
+		Now:       time.Now,
 	}
 }
 
@@ -59,8 +63,14 @@ func (e *SocketEngine) Ensure(ctx context.Context) error {
 func (e *SocketEngine) connect(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
 	if n := len(e.socketPath()); n > maxSocketPath {
-		return nil, fmt.Errorf("the socket path %s is %d bytes, over the %d a unix socket allows; set KOMODO_HOME to a shorter folder", e.socketPath(), n, maxSocketPath)
+		return nil, fmt.Errorf(
+			"the socket path %s is %d bytes, over the %d a unix socket allows; set KOMODO_HOME to a shorter folder",
+			e.socketPath(),
+			n,
+			maxSocketPath,
+		)
 	}
+
 	conn, err := d.DialContext(ctx, "unix", e.socketPath())
 	if err == nil {
 		return conn, nil
@@ -68,6 +78,7 @@ func (e *SocketEngine) connect(ctx context.Context) (net.Conn, error) {
 	if !engineAbsent(err) {
 		return nil, fmt.Errorf("dial %s: %w", e.socketPath(), err)
 	}
+
 	start := e.Start
 	if start == nil {
 		start = e.spawn
@@ -75,7 +86,9 @@ func (e *SocketEngine) connect(ctx context.Context) (net.Conn, error) {
 	if err := start(ctx); err != nil {
 		return nil, fmt.Errorf("start the engine: %w", err)
 	}
+
 	deadline := time.Now().Add(e.StartWait)
+
 	for {
 		conn, err := d.DialContext(ctx, "unix", e.socketPath())
 		if err == nil {
@@ -88,7 +101,9 @@ func (e *SocketEngine) connect(ctx context.Context) (net.Conn, error) {
 			return nil, fmt.Errorf("dial %s: %w", e.socketPath(), err)
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("no engine answered on %s within %s: %w", e.socketPath(), e.StartWait, err)
+			return nil, fmt.Errorf(
+				"no engine answered on %s within %s: %w", e.socketPath(), e.StartWait, err,
+			)
 		}
 		time.Sleep(e.Redial)
 	}
@@ -111,9 +126,11 @@ func (e *SocketEngine) spawn(context.Context) error {
 			return fmt.Errorf("find the komodo binary: %w", err)
 		}
 	}
+
 	cmd := exec.Command(exe, e.Args...)
 	cmd.Env = append(os.Environ(), "KOMODO_HOME="+e.Home)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -126,21 +143,25 @@ func (e *SocketEngine) Send(ctx context.Context, r engine.Request) (<-chan engin
 	if err != nil {
 		return nil, err
 	}
+
 	line, err := json.Marshal(r)
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
+
 	line = append(line, '\n')
 	if _, err := conn.Write(line); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("write request: %w", err)
 	}
+
 	ch := make(chan engine.Reply, 16)
 	go func() {
 		defer fault.New(nil, nil).Recover(fault.Source{Component: "cli"}, nil)
 		e.pump(ctx, conn, r.ID, line, ch)
 	}()
+
 	return ch, nil
 }
 
@@ -148,12 +169,24 @@ func (e *SocketEngine) Send(ctx context.Context, r engine.Request) (<-chan engin
 // when the first answers engine_stopping or hangs. A broken connection ends with an error frame.
 func (e *SocketEngine) pump(ctx context.Context, conn net.Conn, id string, line []byte, ch chan<- engine.Reply) {
 	defer close(ch)
+
 	retried, first := false, true
 	rd := bufio.NewReader(conn)
+
 	defer func() { _ = conn.Close() }()
+
+	// TODO - needs small comment on functioality
 	fail := func(detail string) {
-		ch <- engine.Reply{ID: id, Status: engine.StatusError, Code: "internal", Detail: detail, Final: true}
+		ch <- engine.Reply{
+			ID:     id,
+			Status: engine.StatusError,
+			Code:   "internal",
+			Detail: detail,
+			Final:  true,
+		}
 	}
+
+	// TODO - needs small comment on functioality
 	resend := func() bool {
 		_ = conn.Close()
 		nc, err := e.connect(ctx)
@@ -168,6 +201,8 @@ func (e *SocketEngine) pump(ctx context.Context, conn net.Conn, id string, line 
 		}
 		return true
 	}
+
+	// TODO - needs small comment on functioality
 	for {
 		_ = conn.SetReadDeadline(e.now().Add(e.HungReply))
 		b, err := rd.ReadBytes('\n')
@@ -189,6 +224,7 @@ func (e *SocketEngine) pump(ctx context.Context, conn net.Conn, id string, line 
 			fail("the connection to the engine broke: " + err.Error())
 			return
 		}
+
 		var rep engine.Reply
 		if err := json.Unmarshal(b, &rep); err != nil {
 			fail("read an engine reply: " + err.Error())
@@ -201,7 +237,9 @@ func (e *SocketEngine) pump(ctx context.Context, conn net.Conn, id string, line 
 			}
 			continue
 		}
+
 		first = false
+
 		select {
 		case ch <- rep:
 		case <-ctx.Done():
@@ -233,6 +271,7 @@ func (e *SocketEngine) readBeat() (beat, bool) {
 	if err != nil {
 		return beat{}, false
 	}
+
 	var h beat
 	if json.Unmarshal(b, &h) != nil {
 		return beat{}, false
@@ -252,6 +291,7 @@ func (e *SocketEngine) killEngine() {
 	if !ok || h.PID <= 1 {
 		return
 	}
+
 	kill := e.Kill
 	if kill == nil {
 		kill = func(pid int) error { return syscall.Kill(-pid, syscall.SIGKILL) }

@@ -26,7 +26,9 @@ func parseObj(raw []byte) (*obj, error) {
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return nil, errors.New("not a JSON object")
 	}
+
 	o := newObj()
+
 	for dec.More() {
 		kt, err := dec.Token()
 		if err != nil {
@@ -42,6 +44,7 @@ func parseObj(raw []byte) (*obj, error) {
 		}
 		o.vals[key] = v
 	}
+
 	if _, err := dec.Token(); err != nil {
 		return nil, err
 	}
@@ -72,6 +75,7 @@ func (o *obj) del(k string) {
 func (o *obj) bytes() []byte {
 	var b bytes.Buffer
 	b.WriteByte('{')
+
 	for i, k := range o.keys {
 		if i > 0 {
 			b.WriteByte(',')
@@ -80,6 +84,7 @@ func (o *obj) bytes() []byte {
 		b.WriteByte(':')
 		b.WriteString(compact(o.vals[k]))
 	}
+
 	b.WriteByte('}')
 	return b.Bytes()
 }
@@ -150,6 +155,7 @@ func loadSettings(path string) (*obj, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	o, err := parseObj(b)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not a JSON object: %w", path, err)
@@ -164,14 +170,17 @@ func (o *obj) list(path string) ([]json.RawMessage, error) {
 	if !ok {
 		return nil, nil
 	}
+
 	mid, err := parseObj(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not an object: %w", outer, err)
 	}
+
 	raw, ok = mid.get(inner)
 	if !ok {
 		return nil, nil
 	}
+
 	var l []json.RawMessage
 	if err := json.Unmarshal(raw, &l); err != nil {
 		return nil, fmt.Errorf("%s is not a list: %w", path, err)
@@ -183,6 +192,7 @@ func (o *obj) list(path string) ([]json.RawMessage, error) {
 func (o *obj) setList(path string, l []json.RawMessage) error {
 	outer, inner, _ := strings.Cut(path, ".")
 	mid := newObj()
+
 	if raw, ok := o.get(outer); ok {
 		var err error
 		if mid, err = parseObj(raw); err != nil {
@@ -198,6 +208,7 @@ func (o *obj) setList(path string, l []json.RawMessage) error {
 		o.del(outer)
 		return nil
 	}
+
 	o.set(outer, mid.bytes())
 	return nil
 }
@@ -226,6 +237,7 @@ func matcherCovers(m string) bool {
 	if m == "" || m == "*" {
 		return true
 	}
+
 	have := strings.Split(m, "|")
 	for _, want := range strings.Split(guardMatcher, "|") {
 		if !slices.Contains(have, want) {
@@ -242,18 +254,22 @@ func findGuard(l []json.RawMessage) (gi, hi int, group *obj, hooks []json.RawMes
 		if err != nil {
 			continue
 		}
+
 		var matcher string
 		if m, ok := g.get("matcher"); ok {
 			_ = json.Unmarshal(m, &matcher)
 		}
+
 		raw, ok := g.get("hooks")
 		if !ok || !matcherCovers(matcher) {
 			continue
 		}
+
 		var hs []json.RawMessage
 		if json.Unmarshal(raw, &hs) != nil {
 			continue
 		}
+
 		for hi, h := range hs {
 			if hookCommand(h) == guardCommand {
 				return gi, hi, g, hs
@@ -269,14 +285,17 @@ func settingsState(path, id string) diskState {
 	if !ok {
 		return diskState{}
 	}
+
 	doc, err := loadSettings(path)
 	if err != nil {
 		return diskState{}
 	}
+
 	l, err := doc.list(e.list)
 	if err != nil {
 		return diskState{}
 	}
+
 	if e.hook {
 		if gi, hi, _, hs := findGuard(l); gi >= 0 {
 			return diskState{exists: true, hash: sha([]byte(compact(hs[hi])))}
@@ -298,6 +317,7 @@ func saveSettings(path string, doc *obj) error {
 		_ = os.Remove(filepath.Dir(path))
 		return nil
 	}
+
 	var out bytes.Buffer
 	if err := json.Indent(&out, doc.bytes(), "", "  "); err != nil {
 		return err
@@ -311,14 +331,17 @@ func putSettings(path, id string) error {
 	if !ok {
 		return fmt.Errorf("unknown settings entry %q", id)
 	}
+
 	doc, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
+
 	l, err := doc.list(e.list)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
+
 	switch gi, hi, g, hs := findGuard(l); {
 	case e.hook && gi >= 0:
 		hs[hi] = json.RawMessage(e.value)
@@ -334,26 +357,31 @@ func putSettings(path, id string) error {
 			l = append(l, json.RawMessage(e.value))
 		}
 	}
+
 	if err := doc.setList(e.list, l); err != nil {
 		return err
 	}
 	return saveSettings(path, doc)
 }
 
-// dropSettings removes the entry from the settings file. For the guard it removes only that command, and its group only when no other hook is left.
+// dropSettings removes the entry from the settings file. For the guard it removes only that command,
+// and its group only when no other hook is left.
 func dropSettings(path, id string) error {
 	e, ok := settingsEntryOf(id)
 	if !ok {
 		return fmt.Errorf("unknown settings entry %q", id)
 	}
+
 	doc, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
+
 	l, err := doc.list(e.list)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
+
 	if e.hook {
 		gi, hi, g, hs := findGuard(l)
 		if gi < 0 {
@@ -372,6 +400,7 @@ func dropSettings(path, id string) error {
 		}
 		l = slices.Delete(slices.Clone(l), i, i+1)
 	}
+
 	if err := doc.setList(e.list, l); err != nil {
 		return err
 	}

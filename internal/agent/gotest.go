@@ -42,16 +42,19 @@ type goEvent struct {
 }
 
 // ParseGoTestJSON reads go test -json output into one run per test.
-// A test with no pass, skip or fail event counts as failed. A test whose subtest failed is left out beside the subtest, and a package that failed without a failing test is one run with an empty name.
+// A test with no pass, skip or fail event counts as failed. A test whose subtest failed is left out beside the subtest,
+// and a package that failed without a failing test is one run with an empty name.
 func ParseGoTestJSON(out string) []TestRun {
 	type key struct{ pkg, test string }
 	results := map[key]*TestRun{}
+
 	var order []key
 	for _, ln := range strings.Split(out, "\n") {
 		var e goEvent
 		if !strings.HasPrefix(ln, "{") || json.Unmarshal([]byte(ln), &e) != nil || e.Package == "" {
 			continue
 		}
+
 		k := key{e.Package, e.Test}
 		r := results[k]
 		if r == nil {
@@ -59,6 +62,7 @@ func ParseGoTestJSON(out string) []TestRun {
 			results[k] = r
 			order = append(order, k)
 		}
+
 		switch e.Action {
 		case "output":
 			r.Output += e.Output
@@ -68,6 +72,7 @@ func ParseGoTestJSON(out string) []TestRun {
 			r.Passed = false
 		}
 	}
+
 	failedTest := map[string]bool{} // packages with a failing test
 	hasFailedSub := map[key]bool{}  // tests with a failing subtest
 	for _, k := range order {
@@ -79,6 +84,7 @@ func ParseGoTestJSON(out string) []TestRun {
 			hasFailedSub[key{k.pkg, k.test[:i]}] = true
 		}
 	}
+
 	var runs []TestRun
 	for _, k := range order {
 		r := results[k]
@@ -99,6 +105,7 @@ func goListLine(ln string) (pkg string, deps []string) {
 	if len(f) == 0 {
 		return "", nil
 	}
+
 	pkg, f = f[0], f[1:]
 	if len(f) > 0 && strings.HasPrefix(f[0], "[") {
 		for len(f) > 0 && !strings.HasSuffix(f[0], "]") {
@@ -130,6 +137,7 @@ func parseGoList(out string) map[string][]string {
 			}
 		}
 	}
+
 	res := make(map[string][]string, len(sets))
 	for p, s := range sets {
 		res[p] = make([]string, 0, len(s))
@@ -142,9 +150,7 @@ func parseGoList(out string) map[string][]string {
 }
 
 // shQuote wraps s in single quotes for a shell command line.
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // soloGoCommand returns the command that reruns one Go test alone, bypassing the test cache.
 func soloGoCommand(t TestRun) string {

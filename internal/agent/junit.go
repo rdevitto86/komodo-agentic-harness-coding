@@ -34,10 +34,12 @@ func ParseJUnit(report string) ([]TestRun, error) {
 	if i < 0 {
 		return nil, errors.New("no JUnit report in the output")
 	}
+
 	var root junitNode
 	if err := xml.Unmarshal([]byte(report[i:]), &root); err != nil {
 		return nil, fmt.Errorf("decode JUnit report: %w", err)
 	}
+
 	var runs []TestRun
 	var walk func(n junitNode)
 	walk = func(n junitNode) {
@@ -53,6 +55,7 @@ func ParseJUnit(report string) ([]TestRun, error) {
 			walk(s)
 		}
 	}
+
 	walk(root)
 	if len(runs) == 0 {
 		return nil, errors.New("JUnit report has no test case")

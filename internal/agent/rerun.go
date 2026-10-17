@@ -12,6 +12,7 @@ func (goTester) Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOut
 	if strings.TrimSpace(it.Cmd) == "" {
 		return RerunUnconfirmed, "", nil
 	}
+
 	var passed [2]bool
 	var last string
 	for i := range passed {

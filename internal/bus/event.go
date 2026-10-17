@@ -37,14 +37,11 @@ type Key struct {
 	Subtype Subtype
 }
 
-// ErrUnknownEvent marks a type and subtype pair that is not registered, or data that is not the registered struct.
-var ErrUnknownEvent = errors.New("unknown event type, subtype or data")
-
-// ErrBusClosed marks a call on a bus that was closed.
-var ErrBusClosed = errors.New("bus closed")
-
-// ErrBusSealed marks a publish on a bus that was sealed.
-var ErrBusSealed = errors.New("bus sealed")
+var (
+	ErrUnknownEvent = errors.New("unknown event type, subtype or data") // ErrUnknownEvent marks a type and subtype pair that is not registered, or data that is not the registered struct.
+	ErrBusClosed    = errors.New("bus closed")                          // ErrBusClosed marks a call on a bus that was closed.
+	ErrBusSealed    = errors.New("bus sealed")                          // ErrBusSealed marks a publish on a bus that was sealed.
+)
 
 // wireEvent is the event line with its data body still undecoded.
 type wireEvent struct {
@@ -63,18 +60,20 @@ func (e *Event) UnmarshalJSON(b []byte) error {
 	if err := decodeStrict(b, &w); err != nil {
 		return fmt.Errorf("decode event envelope: %w", err)
 	}
-	k := Key{Type: w.Type, Subtype: w.Subtype}
-	newData, ok := lookup(k)
+
+	newData, ok := lookup(Key{Type: w.Type, Subtype: w.Subtype})
 	if !ok {
 		return fmt.Errorf("decode event %q/%q: %w", w.Type, w.Subtype, ErrUnknownEvent)
 	}
 	if len(w.Data) == 0 || bytes.Equal(bytes.TrimSpace(w.Data), []byte("null")) {
 		return fmt.Errorf("decode event %q/%q: data is missing", w.Type, w.Subtype)
 	}
+
 	p := newData()
 	if err := decodeStrict(w.Data, p); err != nil {
 		return fmt.Errorf("decode data of %q/%q: %w", w.Type, w.Subtype, err)
 	}
+
 	*e = Event{Type: w.Type, Subtype: w.Subtype, Run: w.Run, Group: w.Group, Time: w.Time, Data: p}
 	return nil
 }

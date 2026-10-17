@@ -7,15 +7,6 @@ import (
 	"time"
 )
 
-// alwaysTerminal marks a command that never runs without a controlling terminal.
-func alwaysTerminal(*Call) bool { return true }
-
-// needsRepo marks a command that acts on one repository.
-func needsRepo(*Call) bool { return true }
-
-// needsRepoUnlessAll marks a command that covers the current repository unless --all widens it.
-func needsRepoUnlessAll(c *Call) bool { return !c.Global.All }
-
 // tableRows is the command table: the one place parse, validate, help and the drift test read.
 var tableRows = []Command{
 	{
@@ -106,6 +97,15 @@ var tableRows = []Command{
 	},
 }
 
+// alwaysTerminal marks a command that never runs without a controlling terminal.
+func alwaysTerminal(*Call) bool { return true }
+
+// needsRepo marks a command that acts on one repository.
+func needsRepo(*Call) bool { return true }
+
+// needsRepoUnlessAll marks a command that covers the current repository unless --all widens it.
+func needsRepoUnlessAll(c *Call) bool { return !c.Global.All }
+
 // commands returns the 12 commands of the table; hidden verbs are left out.
 func commands() []Command {
 	var out []Command
@@ -143,7 +143,9 @@ func checkArgs(c *Call) *Result {
 	case "run":
 		msg = checkRunArgs(c)
 	case "stop", "replay":
-		msg = oneTarget(c, "a label or a run id", func(s string) bool { return isLabel(s) || runIDShape.MatchString(s) })
+		msg = oneTarget(c, "a label or a run id", func(s string) bool {
+			return isLabel(s) || runIDShape.MatchString(s)
+		})
 	case "abandon":
 		msg = oneTarget(c, "a group label such as tg-1.2", groupLabel.MatchString)
 	case "status":
@@ -184,6 +186,7 @@ func oneTarget(c *Call, want string, ok func(string) bool) string {
 func checkRunArgs(c *Call) string {
 	approve, deny := flagBool(c, "approve"), flagBool(c, "deny")
 	scheduled := !flagTime(c, "schedule").IsZero()
+
 	switch {
 	case approve && deny:
 		return "--approve and --deny cannot combine"
@@ -194,6 +197,7 @@ func checkRunArgs(c *Call) string {
 	case c.Global.All:
 		return ""
 	}
+
 	return oneTarget(c, "an epic label such as ep-1 or a group label such as tg-1.2", isLabel)
 }
 
@@ -214,6 +218,7 @@ func checkStatusArgs(c *Call) string {
 // checkSetArgs checks the key=value pairs, --default keys and --accept of config set.
 func checkSetArgs(c *Call) string {
 	def, accept := flagBool(c, "default"), flagBool(c, "accept")
+
 	switch {
 	case def && accept:
 		return "--default and --accept cannot combine"
@@ -226,6 +231,7 @@ func checkSetArgs(c *Call) string {
 	case def:
 		return ""
 	}
+
 	for _, a := range c.Args {
 		if !strings.Contains(a, "=") {
 			return fmt.Sprintf("%q is not key=value", a)

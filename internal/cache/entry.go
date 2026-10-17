@@ -24,6 +24,7 @@ func encodeEntry(payload []byte) []byte {
 	if payload == nil {
 		payload = []byte{}
 	}
+
 	sum := sha256.Sum256(payload)
 	raw, err := json.Marshal(entryFile{V: entryVersion, SHA256: hex.EncodeToString(sum[:]), Payload: payload})
 	if err != nil {

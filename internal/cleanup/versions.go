@@ -15,6 +15,7 @@ func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error) {
 	if h.Groups == nil {
 		return nil, errors.New("no group reader to name the versions in use")
 	}
+
 	used, err := h.Groups.Unfinished(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list unfinished groups: %w", err)
@@ -22,6 +23,7 @@ func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error) {
 	if h.Current == "" {
 		return nil, fmt.Errorf("version of the running binary: %w", ErrUnknownVersion)
 	}
+
 	named := map[string]bool{h.Current: true}
 	for _, g := range used {
 		if g.Version == "" {
@@ -29,6 +31,7 @@ func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error) {
 		}
 		named[g.Version] = true
 	}
+
 	ents, err := os.ReadDir(h.Roots.Versions)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -36,12 +39,14 @@ func (h *Handler) UnusedVersions(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list installed versions: %w", err)
 	}
+
 	var out []string
 	for _, e := range ents {
 		if e.Type().IsDir() && !named[e.Name()] {
 			out = append(out, e.Name())
 		}
 	}
+
 	sort.SliceStable(out, func(i, j int) bool { return olderVersion(out[i], out[j]) })
 	return out, nil
 }

@@ -57,7 +57,9 @@ func (h *Handler) say(ctx context.Context, group, subtype string, data any) {
 // escalate sends an error to the Error Handler when one is wired.
 func (h *Handler) escalate(group string, err error) {
 	if h.Errors != nil {
-		h.Errors.Report(fault.Source{Component: "cleanup", Group: bus.ID(group)}, string(format.Internal), fault.KindInternal, err)
+		h.Errors.Report(fault.Source{
+			Component: "cleanup", Group: bus.ID(group),
+		}, string(format.Internal), fault.KindInternal, err)
 	}
 }
 
@@ -96,8 +98,10 @@ func (r *run) proceed() bool {
 	if err == nil && !live {
 		return true
 	}
+
 	r.stopped = true
 	reason := ErrLeaseHeld.Error()
+
 	if err != nil {
 		reason = err.Error()
 	}
@@ -139,7 +143,11 @@ func (r *run) container() {
 
 // checkouts removes the group's tester checkout and session temporary folder.
 func (r *run) checkouts() {
-	for _, c := range []struct{ kind, root string }{{KindTester, r.h.Roots.Testers}, {KindTemp, r.h.Roots.Temp}} {
+	type checkoutKind struct{ kind, root string }
+
+	for _, c := range []checkoutKind{{
+		KindTester, r.h.Roots.Testers}, {KindTemp, r.h.Roots.Temp},
+	} {
 		if c.root == "" || !r.proceed() {
 			continue
 		}
@@ -173,6 +181,7 @@ func (r *run) worktree(root, path string, force bool) bool {
 	if !r.proceed() {
 		return false
 	}
+
 	fi, lerr := os.Lstat(path)
 	if lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 		if !r.dry {
@@ -190,6 +199,7 @@ func (r *run) worktree(root, path string, force bool) bool {
 		}
 		return true
 	}
+
 	var err error
 	if force {
 		err = r.h.Git.DiscardWorktree(r.ctx, r.h.Clone, path)
@@ -227,6 +237,7 @@ func (r *run) branch(name, tip, in string) {
 	if !r.allowed(name) || !r.proceed() {
 		return
 	}
+
 	cur, ok, err := r.h.Git.BranchTip(r.ctx, r.h.Clone, name)
 	if err != nil {
 		r.fail(KindBranch, name, err)
@@ -255,6 +266,7 @@ func (r *run) redundantBranch(name string) {
 	if !r.allowed(name) {
 		return
 	}
+
 	tip, ok, err := r.h.Git.BranchTip(r.ctx, r.h.Clone, name)
 	if err != nil {
 		r.fail(KindBranch, name, err)
@@ -267,6 +279,7 @@ func (r *run) redundantBranch(name string) {
 		r.kept(KindBranch, name, "remote not reachable: "+r.noRemote.Error())
 		return
 	}
+
 	ref, held, err := r.h.Git.Holds(r.ctx, r.h.Clone, r.h.Remote, "", tip)
 	if err != nil {
 		r.fail(KindBranch, name, err)

@@ -200,6 +200,7 @@ func (c *CLI) Run(args []string) int {
 		code = c.run(args, hasTerm)
 		return nil
 	})
+
 	if err != nil {
 		var f fault.Fault
 		if errors.As(err, &f) {
@@ -222,7 +223,9 @@ func (c *CLI) run(args []string, hasTerm bool) int {
 		res = c.resolve(call)
 	}
 	if res == nil && call.Global.List && call.Command.Name != "config get" {
-		r := notBuilt("--list for komodo " + call.Command.Name + ", which has no list reply shape in the Output Formatter,")
+		r := notBuilt(
+			"--list for komodo " + call.Command.Name + ", which has no list reply shape in the Output Formatter,",
+		)
 		res = &r
 	}
 	if res == nil {
@@ -255,19 +258,27 @@ func (c *CLI) checkTamper(call *Call) *Result {
 	if c.deps.Config == nil {
 		return nil
 	}
+
 	err := c.deps.Config.Verify()
 	if err == nil {
 		return nil
 	}
+
 	var re config.ReadError
 	if !errors.Is(err, config.ErrTampered) {
 		if !errors.As(err, &re) {
 			r := internalErr("read settings: " + err.Error())
 			return &r
 		}
-		_, _ = fmt.Fprintf(c.errOut, "Warning: settings file %s is unreadable; built-in values are served. Fix: komodo config set --default %s\n", re.File, re.File)
+		_, _ = fmt.Fprintf(
+			c.errOut,
+			"Warning: settings file %s is unreadable; built-in values are served. Fix: komodo config set --default %s\n",
+			re.File,
+			re.File,
+		)
 		return nil
 	}
+
 	const fix = "komodo config set --accept"
 	if call.Command.TamperPolicy == TamperWarn || (call.Command.Name == "config set" && flagBool(call, "accept")) {
 		if call.Command.TamperPolicy == TamperWarn {
@@ -275,6 +286,7 @@ func (c *CLI) checkTamper(call *Call) *Result {
 		}
 		return nil
 	}
+
 	r := refuse(format.ConfigTampered, "settings were hand-edited", fix)
 	return &r
 }
@@ -287,7 +299,10 @@ func (c *CLI) resolve(call *Call) *Result {
 		call.CommonDir = commonDir(root)
 	}
 	if call.Command.NeedsRepo != nil && call.Command.NeedsRepo(call) && !ok {
-		r := refuse(format.NoRepo, "no git repository found", "komodo "+call.Command.Name+" inside a git repository, or pass -C <path>")
+		r := refuse(
+			format.NoRepo,
+			"no git repository found", "komodo "+call.Command.Name+" inside a git repository, or pass -C <path>",
+		)
 		return &r
 	}
 	if call.Command.Name == "run" {
@@ -332,6 +347,7 @@ func (c *CLI) print(res Result) (int, error) {
 		_, err := fmt.Fprintln(c.out, strings.TrimRight(res.Raw, "\n"))
 		return int(res.Outcome), err
 	}
+
 	rendered, err := c.format(res)
 	if err != nil {
 		res = Result{Outcome: OutcomeInternal, Code: string(format.Internal), Reason: "format the reply: " + err.Error()}
@@ -345,6 +361,7 @@ func (c *CLI) print(res Result) (int, error) {
 		_, err := fmt.Fprintln(c.out, rendered.Report)
 		return int(res.Outcome), err
 	}
+
 	ok := res.Outcome == OutcomeOK || (res.Outcome == OutcomeHeld && !strings.HasPrefix(res.Shape, "error."))
 	env := Envelope{V: 1, OK: ok, Verdict: rendered.Verdict, Report: rendered.Report, Data: res.Data}
 	if env.Data == nil {
@@ -353,6 +370,7 @@ func (c *CLI) print(res Result) (int, error) {
 	if !ok {
 		env.Error = &ErrorBody{Code: res.Code, Reason: res.Reason, Fix: res.Fix}
 	}
+
 	enc := json.NewEncoder(c.out)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
@@ -364,18 +382,22 @@ func (c *CLI) format(res Result) (format.Rendered, error) {
 	if c.deps.Format == nil {
 		return format.Rendered{}, errors.New("no formatter")
 	}
+
 	shape := res.Shape
 	if shape == "" {
 		shape = "error." + res.Code
 	}
+
 	facts := res.Facts
 	if facts == nil {
 		facts = struct{}{}
 	}
+
 	fb, err := json.Marshal(facts)
 	if err != nil {
 		return format.Rendered{}, fmt.Errorf("encode facts: %w", err)
 	}
+
 	msg, err := json.Marshal(format.Message{Shape: shape, Code: res.Code, Facts: fb})
 	if err != nil {
 		return format.Rendered{}, fmt.Errorf("encode message: %w", err)
@@ -423,8 +445,13 @@ func notBuilt(what string) Result {
 // errResult builds a result whose shape is error.<code>.
 func errResult(o Outcome, code format.Code, reason, fix string) Result {
 	return Result{
-		Outcome: o, Shape: "error." + string(code), Code: string(code), Reason: reason, Fix: fix,
-		Facts: format.ErrorFacts{Code: string(code), Reason: reason, Fix: fix},
+		Outcome: o, Shape: "error." + string(code),
+		Code:   string(code),
+		Reason: reason, Fix: fix,
+		Facts: format.ErrorFacts{Code: string(code),
+			Reason: reason,
+			Fix:    fix,
+		},
 	}
 }
 
@@ -443,7 +470,11 @@ func hasToken(args []string, tokens ...string) bool {
 // versionResult is the reply to --version.
 func versionResult() Result {
 	v := core.BinaryVersion()
-	return Result{Shape: "reply.version", Facts: format.VersionFacts{Version: v}, Data: VersionData{Version: v}}
+	return Result{
+		Shape: "reply.version",
+		Facts: format.VersionFacts{Version: v},
+		Data:  VersionData{Version: v},
+	}
 }
 
 // VersionData is the data of reply.version.

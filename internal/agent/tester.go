@@ -116,7 +116,8 @@ func ParseTesterResult(raw []byte) (TesterResult, error) {
 	return r, nil
 }
 
-// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, leaves evidence empty or uses a word outside the schema.
+// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item,
+// leaves evidence empty or uses a word outside the schema.
 func (goTester) AcceptResult(tasks, items []string, r TesterResult) error {
 	got := make([]string, len(r.Tasks))
 	for i, t := range r.Tasks {
@@ -131,6 +132,7 @@ func (goTester) AcceptResult(tasks, items []string, r TesterResult) error {
 	if len(got) != len(tasks) {
 		return errors.New("result names a task that is not in the group")
 	}
+
 	gotItems := make([]string, len(r.Items))
 	for i, it := range r.Items {
 		gotItems[i] = it.Item
@@ -141,6 +143,7 @@ func (goTester) AcceptResult(tasks, items []string, r TesterResult) error {
 	if len(gotItems) != len(items) {
 		return errors.New("result names an item that is not an acceptance item of the group")
 	}
+
 	for _, it := range r.Items {
 		if strings.TrimSpace(it.Item) == "" {
 			return errors.New("an item result has no item identifier")

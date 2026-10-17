@@ -17,19 +17,12 @@ import (
 const (
 	dirPerm  = 0o755
 	filePerm = 0o644
+
+	machineLogName = "engine.jsonl" // machineLogName is the log of events that name no run, kept in the machine events folder.
+	runsFile       = "runs.json"    // runsFile is the machine events folder's map from each run to the events folder of its repository.
+	trimInterval   = 24 * time.Hour // trimInterval is the least time between two background trims of one events folder.
+	maxOpenLogs    = 64             // maxOpenLogs is the most log files the bus holds open; the least recently written is closed first.
 )
-
-// machineLogName is the log of events that name no run, kept in the machine events folder.
-const machineLogName = "engine.jsonl"
-
-// runsFile is the machine events folder's map from each run to the events folder of its repository.
-const runsFile = "runs.json"
-
-// trimInterval is the least time between two background trims of one events folder.
-const trimInterval = 24 * time.Hour
-
-// maxOpenLogs is the most log files the bus holds open; the least recently written is closed first.
-const maxOpenLogs = 64
 
 // syncFile forces a file's content to disk; tests replace it to count or slow the calls.
 var syncFile = func(f *os.File) error { return f.Sync() }
@@ -133,7 +126,9 @@ func (b *memBus) storeLocked(e Event) []Event {
 	if b.dir == "" {
 		return nil
 	}
+
 	var out []Event
+
 	// A burst of failures on one key is announced once and ends when the key succeeds again.
 	announce := func(key, path string, err error) {
 		if !b.failed[key] {
@@ -144,13 +139,16 @@ func (b *memBus) storeLocked(e Event) []Event {
 			})
 		}
 	}
+
 	unplaced := "unplaced:" + string(e.Run)
 	path, err := b.placeLocked(e)
 	if err != nil {
 		announce(unplaced, "", err)
 		return out
 	}
+
 	delete(b.failed, unplaced)
+
 	line, err := json.Marshal(e)
 	if err != nil {
 		b.missed[path]++
@@ -162,7 +160,9 @@ func (b *memBus) storeLocked(e Event) []Event {
 		announce(path, path, err)
 		return out
 	}
+
 	delete(b.failed, path)
+
 	b.wantSyncLocked(e, path)
 	if e.Type == TypeRunComplete || e.Type == TypeRunFailure && e.Subtype == "stalled" {
 		b.closeLogLocked(path)
@@ -177,6 +177,7 @@ func (b *memBus) wantSyncLocked(e Event, path string) {
 			b.follow.syncs = append(b.follow.syncs, syncJob{path: p, run: run})
 		}
 	}
+
 	switch f, final := e.Data.(Finaler); {
 	case e.Type == TypeRunStatus && e.Subtype == "stage.enter":
 		add(path, e.Run)
@@ -196,6 +197,7 @@ func (b *memBus) placeLocked(e Event) (string, error) {
 	if !safeName(e.Run) {
 		return "", fmt.Errorf("run id %q cannot name a log file", e.Run)
 	}
+
 	if d, ok := e.Data.(*RunStart); ok && e.Type == TypeRunStart {
 		if d.CommonDir == "" {
 			return "", fmt.Errorf("the run-start of run %s names no git directory", e.Run)
@@ -210,6 +212,7 @@ func (b *memBus) placeLocked(e Event) (string, error) {
 		}
 		b.startTrimLocked(dir)
 	}
+
 	dir, ok := b.runDir[e.Run]
 	if !ok {
 		return "", fmt.Errorf("no repository known for run %s", e.Run)
@@ -243,8 +246,10 @@ func (b *memBus) appendLocked(path string, line []byte) error {
 		l = &openLog{LineFile: lf}
 		b.logs[path] = l
 	}
+
 	b.useSeq++
 	l.used = b.useSeq
+
 	if b.mask != nil {
 		line = []byte(b.mask(string(line)))
 	}
@@ -293,12 +298,14 @@ func (b *memBus) syncLog(j syncJob) {
 	err := syncPath(j.path)
 	key := "sync:" + j.path
 	b.mu.Lock()
+
 	announce := err != nil && !b.failed[key]
 	if err != nil {
 		b.failed[key] = true
 	} else {
 		delete(b.failed, key)
 	}
+
 	b.mu.Unlock()
 	if announce {
 		b.reportStore(j.run, j.path, "sync: "+err.Error())
@@ -323,6 +330,7 @@ func (b *memBus) saveRuns(adds map[ID]string, removes []ID) {
 	if note != "" {
 		b.reportStore("", path, note)
 	}
+
 	b.mu.Lock()
 	announce := err != nil && !b.failed[runsFile]
 	if err != nil {
@@ -330,6 +338,7 @@ func (b *memBus) saveRuns(adds map[ID]string, removes []ID) {
 	} else {
 		delete(b.failed, runsFile)
 	}
+
 	b.mu.Unlock()
 	if announce {
 		b.reportStore("", path, err.Error())
@@ -340,14 +349,17 @@ func (b *memBus) saveRuns(adds map[ID]string, removes []ID) {
 func (b *memBus) mergeRuns(path string, adds map[ID]string, removes []ID) (note string, err error) {
 	b.saveMu.Lock()
 	defer b.saveMu.Unlock()
+
 	cur, note, err := loadRuns(path)
 	if err != nil {
 		return "", err
 	}
+
 	maps.Copy(cur, adds)
 	for _, r := range removes {
 		delete(cur, r)
 	}
+
 	out, err := json.Marshal(cur)
 	if err != nil {
 		return note, fmt.Errorf("encode %s: %w", runsFile, err)
@@ -360,5 +372,10 @@ func (b *memBus) mergeRuns(path string, adds map[ID]string, removes []ID) (note 
 
 // reportStore publishes a bus.store_failed event for a problem in the store; a closed or sealed bus drops it.
 func (b *memBus) reportStore(run ID, path, reason string) {
-	_ = b.Publish(Event{Type: TypeError, Subtype: busStoreFailedKey.Subtype, Run: run, Data: &BusStoreFailed{Run: run, Path: path, Reason: reason}})
+	_ = b.Publish(Event{
+		Type:    TypeError,
+		Subtype: busStoreFailedKey.Subtype,
+		Run:     run,
+		Data:    &BusStoreFailed{Run: run, Path: path, Reason: reason},
+	})
 }

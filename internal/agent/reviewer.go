@@ -45,6 +45,7 @@ func ParseReviewerResult(raw []byte) (ReviewerResult, error) {
 	if err := core.DecodeStrict(raw, &r); err != nil {
 		return ReviewerResult{}, fmt.Errorf("decode reviewer result: %w", err)
 	}
+
 	for _, v := range r.Verdicts {
 		if strings.TrimSpace(v.Task) == "" {
 			return ReviewerResult{}, errors.New("a verdict has no task identifier")

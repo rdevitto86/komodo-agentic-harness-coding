@@ -2,8 +2,6 @@ package bus
 
 import "time"
 
-// --- Commands
-
 // RunStart is the data of run-start: a request to the Runtime Manager to run a target.
 type RunStart struct {
 	Target    string    `json:"target"`            // the label the command named, such as ep-1 or tg-1.2; "all" for run --all; the epic label when the Intake Handler starts the run
@@ -38,16 +36,12 @@ type RunContinue struct {
 // EventKey binds RunContinue to run-continue.
 func (RunContinue) EventKey() Key { return Key{TypeRunContinue, ""} }
 
-// --- Shared by group facts
-
 // GroupFacts carries the stage, session and reason of a group event; embedded in a group fact's data.
 type GroupFacts struct {
 	Stage   string `json:"stage,omitempty"`   // the group's stage when the fact was seen: a state.Stage value
 	Session ID     `json:"session,omitempty"` // session and task facts only
 	Reason  string `json:"reason,omitempty"`  // a state.Reason value, block or exit
 }
-
-// --- Run
 
 // RunStartedFact is the data of run-status / run.start.
 type RunStartedFact struct {
@@ -76,8 +70,6 @@ type RunStopped struct {
 
 // EventKey binds RunStopped to run-complete / stopped.
 func (RunStopped) EventKey() Key { return Key{TypeRunComplete, "stopped"} }
-
-// --- Group
 
 // GroupPaused is the data of run-status / group.paused.
 type GroupPaused struct {
@@ -146,8 +138,6 @@ type StageExit struct {
 
 // EventKey binds StageExit to run-status / stage.exit.
 func (StageExit) EventKey() Key { return Key{TypeRunStatus, "stage.exit"} }
-
-// --- Session
 
 // SessionStart is the data of run-status / session.start.
 type SessionStart struct {
@@ -221,8 +211,6 @@ type VerifyOutcome struct {
 	Disputed        []string `json:"disputed,omitempty"`         // tester items the reruns passed
 	Split           []string `json:"split,omitempty"`            // tester items whose two reruns disagreed
 }
-
-// --- Work
 
 // TaskClaimed is the data of run-status / task.claimed.
 type TaskClaimed struct {
@@ -402,8 +390,6 @@ type LeaseTaken struct {
 // EventKey binds LeaseTaken to run-status / lease.taken.
 func (LeaseTaken) EventKey() Key { return Key{TypeRunStatus, "lease.taken"} }
 
-// --- Resource
-
 // LimitWarn is the data of resource / limit.warn.
 type LimitWarn struct {
 	Link string  `json:"link"`
@@ -435,8 +421,6 @@ type BusStoreFailed struct {
 
 // EventKey binds BusStoreFailed to error / bus.store_failed.
 func (BusStoreFailed) EventKey() Key { return Key{TypeError, "bus.store_failed"} }
-
-// --- Command outcome
 
 // RequestRef names the command that a request outcome answers.
 type RequestRef struct {

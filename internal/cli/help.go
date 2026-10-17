@@ -55,17 +55,27 @@ func (c *CLI) helpResult(call *Call, words []string) Result {
 // helpJSON renders one object per command: name, summary, tier, flags and the result schema.
 func helpJSON(rows []Command) string {
 	docs := make([]helpDoc, 0, len(rows))
+
 	for _, r := range rows {
 		tier := "shared"
 		if r.Tier == TierTerminal {
 			tier = "terminal-only"
 		}
-		d := helpDoc{Name: r.Name, Summary: r.Summary, Tier: tier, Flags: []helpFlag{}, Result: resultSchema(r.Name)}
+
+		d := helpDoc{
+			Name:    r.Name,
+			Summary: r.Summary,
+			Tier:    tier,
+			Flags:   []helpFlag{},
+			Result:  resultSchema(r.Name),
+		}
 		for _, f := range append(append([]FlagSpec{}, r.Flags...), globalSpecs...) {
 			d.Flags = append(d.Flags, helpFlag(f))
 		}
+
 		docs = append(docs, d)
 	}
+
 	b, _ := json.MarshalIndent(docs, "", "  ")
 	return string(b)
 }
@@ -82,6 +92,7 @@ func (c *CLI) helpText(call *Call, rows []Command, words []string) string {
 		writeFlags(&b, globalSpecs)
 		return b.String()
 	}
+
 	for _, r := range rows {
 		fmt.Fprintf(&b, "komodo %s: %s\n\nUsage: komodo %s [flags]\n", r.Name, r.Summary, r.Name)
 		if len(r.Flags) > 0 {
@@ -92,6 +103,7 @@ func (c *CLI) helpText(call *Call, rows []Command, words []string) string {
 		writeFlags(&b, globalSpecs)
 		b.WriteString("\n")
 	}
+
 	if strings.HasPrefix(call.name()+strings.Join(words, " "), "config") && c.deps.Config != nil {
 		prefix := ""
 		if len(call.Args) > 0 {
@@ -164,6 +176,7 @@ func schemaOf(t reflect.Type) map[string]any {
 func structSchema(t reflect.Type) map[string]any {
 	props := map[string]any{}
 	var required []string
+
 	for i := range t.NumField() {
 		f := t.Field(i)
 		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -175,6 +188,7 @@ func structSchema(t reflect.Type) map[string]any {
 			required = append(required, name)
 		}
 	}
+
 	s := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
 		s["required"] = required

@@ -30,23 +30,15 @@ var uiContext = func() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-// uiStarted is called with the address once the dashboard listens; tests set it, nothing else does.
-var uiStarted func(addr string)
-
-// uiEvery is how often the dashboard asks the engine for the current state.
-var uiEvery = 2 * time.Second
-
-// uiReplayEvery is the longest a run's recorded events are kept before they are read again when its status is unchanged.
-var uiReplayEvery = 10 * time.Second
-
-// uiReadLimit is how long one read of the engine may take before the page shows the engine as not answering.
-var uiReadLimit = 1500 * time.Millisecond
+var (
+	uiStarted     func(addr string)         // uiStarted is called with the address once the dashboard listens; tests set it, nothing else does.
+	uiEvery       = 2 * time.Second         // uiEvery is how often the dashboard asks the engine for the current state.
+	uiReplayEvery = 10 * time.Second        // uiReplayEvery is the longest a run's recorded events are kept before they are read again when its status is unchanged.
+	uiReadLimit   = 1500 * time.Millisecond // uiReadLimit is how long one read of the engine may take before the page shows the engine as not answering.
+)
 
 // uiPing is how often an idle event stream sends a comment line so the browser keeps it open.
 const uiPing = 15 * time.Second
-
-// uiListen opens a free port on the loopback address only.
-func uiListen() (net.Listener, error) { return net.Listen("tcp4", "127.0.0.1:0") }
 
 // uiDeps are the parts the dashboard server reads.
 type uiDeps struct {
@@ -75,13 +67,21 @@ func newUIServer(d uiDeps, addr string) *uiServer {
 	if d.Every <= 0 {
 		d.Every = uiEvery
 	}
+
 	_, port, _ := net.SplitHostPort(addr)
 	d.Engine = uiReader(d.Engine)
+
 	return &uiServer{
-		deps: d, evCache: map[string]uiRunEvents{}, hosts: map[string]bool{addr: true, "localhost:" + port: true},
-		notify: make(chan struct{}), first: make(chan struct{}),
+		deps:    d,
+		evCache: map[string]uiRunEvents{},
+		hosts:   map[string]bool{addr: true, "localhost:" + port: true},
+		notify:  make(chan struct{}),
+		first:   make(chan struct{}),
 	}
 }
+
+// uiListen opens a free port on the loopback address only.
+func uiListen() (net.Listener, error) { return net.Listen("tcp4", "127.0.0.1:0") }
 
 // uiReader returns the engine client the page polls with: a socket client that reports a missing engine instead of starting one.
 func uiReader(eng Engine) Engine {
@@ -98,29 +98,36 @@ func uiReader(eng Engine) Engine {
 func handleUI(c *Call) Result {
 	ctx, stop := uiContext()
 	defer stop()
+
 	eng := c.cli.deps.Engine
 	if err := eng.Ensure(ctx); err != nil {
 		return internalErr("reach the engine: " + err.Error())
 	}
+
 	ln, err := uiListen()
 	if err != nil {
 		return internalErr("listen on the local address: " + err.Error())
 	}
+
 	assets, err := fs.Sub(komodo.Embedded, "embed/ui")
 	if err != nil {
 		_ = ln.Close()
 		return internalErr("open the dashboard files: " + err.Error())
 	}
+
 	root := c.Repo.Root
 	if c.Global.All {
 		root = ""
 	}
+
 	addr := ln.Addr().String()
 	s := newUIServer(uiDeps{Engine: eng, Root: root, Assets: assets}, addr)
+
 	_, _ = fmt.Fprintf(c.cli.errOut, "Dashboard at http://%s (Ctrl-C to stop)\n", addr)
 	if uiStarted != nil {
 		uiStarted(addr)
 	}
+
 	if err := s.Serve(ctx, ln); err != nil {
 		return internalErr("serve the dashboard: " + err.Error())
 	}
@@ -131,23 +138,29 @@ func handleUI(c *Call) Result {
 func (s *uiServer) Serve(ctx context.Context, ln net.Listener) error {
 	srvCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	srv := &http.Server{
 		Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second,
 		BaseContext: func(net.Listener) context.Context { return srvCtx },
 	}
+
 	polled := make(chan struct{})
+
 	go func() {
 		defer fault.New(nil, nil).Recover(fault.Source{Component: "cli"}, nil)
 		defer close(polled)
 		s.Poll(srvCtx)
 	}()
+
 	errc := make(chan error, 1)
+
 	go func() {
 		defer fault.New(nil, nil).Recover(fault.Source{Component: "cli"}, nil)
 		err := errors.New("the dashboard server stopped unexpectedly")
 		defer func() { errc <- err }()
 		err = srv.Serve(ln)
 	}()
+
 	select {
 	case err := <-errc:
 		cancel()
@@ -155,11 +168,13 @@ func (s *uiServer) Serve(ctx context.Context, ln net.Listener) error {
 		return err
 	case <-ctx.Done():
 	}
+
 	cancel()
 	shut, done := context.WithTimeout(context.Background(), 3*time.Second)
 	defer done()
 	err := srv.Shutdown(shut)
 	<-polled
+
 	if err != nil {
 		return err
 	}
@@ -175,6 +190,7 @@ func (s *uiServer) Handler() http.Handler {
 	mux.HandleFunc("/", s.page)
 	mux.HandleFunc("/state", s.state)
 	mux.HandleFunc("/events", s.stream)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'")
@@ -196,6 +212,7 @@ func (s *uiServer) Handler() http.Handler {
 // page serves index.html at the root and ui.js beside it.
 func (s *uiServer) page(w http.ResponseWriter, r *http.Request) {
 	name, kind := "index.html", "text/html; charset=utf-8"
+
 	switch r.URL.Path {
 	case "/":
 	case "/ui.js":
@@ -204,11 +221,13 @@ func (s *uiServer) page(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
 	b, err := fs.ReadFile(s.deps.Assets, name)
 	if err != nil {
 		http.Error(w, "the dashboard file is missing", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", kind)
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(b)
@@ -238,6 +257,7 @@ func (s *uiServer) state(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the engine has not answered yet", http.StatusServiceUnavailable)
 		return
 	}
+
 	b, _ := s.snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -251,15 +271,19 @@ func (s *uiServer) stream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming is not supported", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	fl.Flush()
+
 	if r.Method == http.MethodHead || !s.waitFirst(r) {
 		return
 	}
+
 	ping := time.NewTicker(uiPing)
 	defer ping.Stop()
+
 	for {
 		b, changed := s.snapshot()
 		if _, err := fmt.Fprintf(w, "event: state\ndata: %s\n\n", b); err != nil {
@@ -286,6 +310,7 @@ func (s *uiServer) stream(w http.ResponseWriter, r *http.Request) {
 func (s *uiServer) Poll(ctx context.Context) {
 	t := time.NewTicker(s.deps.Every)
 	defer t.Stop()
+
 	for {
 		s.refresh(ctx)
 		select {
@@ -302,11 +327,13 @@ func (s *uiServer) refresh(ctx context.Context) {
 	b := mustJSONBytes(s.collect(rctx))
 	cancel()
 	s.mu.Lock()
+
 	if !bytes.Equal(b, s.cur) {
 		s.cur = b
 		close(s.notify)
 		s.notify = make(chan struct{})
 	}
+
 	s.mu.Unlock()
 	s.once.Do(func() { close(s.first) })
 }

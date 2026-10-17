@@ -57,9 +57,11 @@ func newFlagSet(cmd *Command) *flag.FlagSet {
 	fs := flag.NewFlagSet("komodo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	specs := slices.Clone(globalSpecs)
+
 	if cmd != nil {
 		specs = append(specs, cmd.Flags...)
 	}
+
 	for _, s := range specs {
 		switch s.Kind {
 		case "bool":
@@ -118,14 +120,17 @@ func (c *CLI) parse(args []string, hasTerm bool) (*Call, *Result) {
 	words, rest := splitCommand(args)
 	name := strings.Join(words, " ")
 	cmd := findCommand(name)
+
 	if name != "" && cmd == nil && name != "config" {
 		r := unknownCommand(name)
 		return nil, &r
 	}
+
 	fs := newFlagSet(cmd)
 	call := c.newCall(cmd, hasTerm)
 	call.Flags = fs
 	pos, err := parseInterleaved(fs, rest)
+
 	if err != nil {
 		r := flagError(fs, err, name)
 		return nil, &r
@@ -133,10 +138,12 @@ func (c *CLI) parse(args []string, hasTerm bool) (*Call, *Result) {
 	if r := c.applyInput(call, fs, &pos); r != nil {
 		return nil, r
 	}
+
 	call.Args = pos
 	call.Global = readGlobals(fs)
 	c.json = call.Global.JSON || !hasTerm
 	c.noColor = c.noColor || call.Global.NoColor
+
 	switch {
 	case call.Global.Version:
 		r := versionResult()
@@ -145,6 +152,7 @@ func (c *CLI) parse(args []string, hasTerm bool) (*Call, *Result) {
 		r := c.helpResult(call, words)
 		return nil, &r
 	}
+
 	return call, nil
 }
 
@@ -154,6 +162,7 @@ func parseInterleaved(fs *flag.FlagSet, rest []string) ([]string, error) {
 	if i := slices.Index(rest, "--"); i >= 0 {
 		rest, tail = rest[:i], rest[i+1:]
 	}
+
 	for len(rest) > 0 {
 		if err := fs.Parse(rest); err != nil {
 			return nil, err
@@ -172,9 +181,15 @@ func parseInterleaved(fs *flag.FlagSet, rest []string) ([]string, error) {
 func readGlobals(fs *flag.FlagSet) GlobalFlags {
 	b := func(n string) bool { return fs.Lookup(n).Value.String() == "true" }
 	return GlobalFlags{
-		JSON: b("json"), Dir: fs.Lookup("C").Value.String(), Input: fs.Lookup("input").Value.String(),
-		Quiet: b("q"), Verbose: b("v"), NoColor: b("no-color"), DryRun: b("dry-run"),
-		List: b("list"), All: b("all"), Version: b("version"),
+		JSON:  b("json"),
+		Dir:   fs.Lookup("C").Value.String(),
+		Input: fs.Lookup("input").Value.String(),
+		Quiet: b("q"), Verbose: b("v"),
+		NoColor: b("no-color"),
+		DryRun:  b("dry-run"),
+		List:    b("list"),
+		All:     b("all"),
+		Version: b("version"),
 	}
 }
 
@@ -184,18 +199,27 @@ func (c *CLI) applyInput(call *Call, fs *flag.FlagSet, pos *[]string) *Result {
 	if path == "" {
 		return nil
 	}
+
 	obj, err := c.readInput(path)
 	if err != nil {
-		r := usageErr(fmt.Sprintf("read --input %s: %v", path, err), "pass a JSON object, such as {\"args\": [\"tg-1.2\"]}")
+		r := usageErr(fmt.Sprintf(
+			"read --input %s: %v", path, err),
+			"pass a JSON object, such as {\"args\": [\"tg-1.2\"]}",
+		)
 		return &r
 	}
+
 	typed := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { typed[canonicalName(call, f.Name)] = true })
 	keys := make([]string, 0, len(obj))
+
 	for k := range obj {
 		keys = append(keys, k)
 	}
+
 	slices.Sort(keys)
+
+	// TODO - need a short decsitpion of this
 	for _, k := range keys {
 		v := obj[k]
 		if k == "args" {
@@ -250,6 +274,7 @@ func (c *Call) name() string {
 func (c *CLI) readInput(path string) (map[string]any, error) {
 	var b []byte
 	var err error
+
 	if path == "-" {
 		b, err = io.ReadAll(c.in)
 	} else {
@@ -258,9 +283,11 @@ func (c *CLI) readInput(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
 	var obj map[string]any
+
 	if err := dec.Decode(&obj); err != nil {
 		return nil, fmt.Errorf("not a JSON object: %w", err)
 	}
@@ -322,9 +349,11 @@ func closest(bad string, names []string) (string, bool) {
 func distance(a, b string) int {
 	ra, rb := []rune(a), []rune(b)
 	prev := make([]int, len(rb)+1)
+
 	for j := range prev {
 		prev[j] = j
 	}
+
 	for i := 1; i <= len(ra); i++ {
 		cur := make([]int, len(rb)+1)
 		cur[0] = i
@@ -337,6 +366,7 @@ func distance(a, b string) int {
 		}
 		prev = cur
 	}
+
 	return prev[len(rb)]
 }
 

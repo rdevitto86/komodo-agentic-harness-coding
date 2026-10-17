@@ -34,26 +34,19 @@ const (
 // Key is the 64-character lowercase hexadecimal fingerprint of an entry's inputs.
 type Key string
 
-// DefaultMaxBytes is the entry store cap used when none is given (256 MB).
-const DefaultMaxBytes int64 = 256 << 20
+const (
+	DefaultMaxBytes int64 = 256 << 20        // DefaultMaxBytes is the entry store cap used when none is given (256 MB).
+	rescanInterval        = 30 * time.Second // rescanInterval bounds how stale a Put's view of other processes' writes can be, so overshoot stays small without a walk per Put.
+)
 
-// rescanInterval bounds how stale a Put's view of other processes' writes can be, so overshoot stays small without a walk per Put.
-const rescanInterval = 30 * time.Second
+var (
+	ErrEntryTooLarge = errors.New("cache entry larger than the cache cap") // ErrEntryTooLarge reports a Put whose entry alone exceeds the cache cap.
+	ErrClosed        = errors.New("cache is closed")                       // ErrClosed reports a Put on a cache that the Runtime Manager has closed.
 
-// ErrEntryTooLarge reports a Put whose entry alone exceeds the cache cap.
-var ErrEntryTooLarge = errors.New("cache entry larger than the cache cap")
-
-// ErrClosed reports a Put on a cache that the Runtime Manager has closed.
-var ErrClosed = errors.New("cache is closed")
-
-// renameFile moves the temp file into place; tests replace it to simulate rename failures.
-var renameFile = os.Rename
-
-// syncFile flushes the temp file before it is renamed; tests replace it to watch the order of steps.
-var syncFile = func(f *os.File) error { return f.Sync() }
-
-// syncDirHandle flushes an open directory after a rename; tests replace it to watch the order of steps.
-var syncDirHandle = func(d *os.File) error { return d.Sync() }
+	renameFile    = os.Rename                                  // renameFile moves the temp file into place; tests replace it to simulate rename failures.
+	syncFile      = func(f *os.File) error { return f.Sync() } // syncFile flushes the temp file before it is renamed; tests replace it to watch the order of steps.
+	syncDirHandle = func(d *os.File) error { return d.Sync() } // syncDirHandle flushes an open directory after a rename; tests replace it to watch the order of steps.
+)
 
 // Limits are the size caps the Runtime Manager passes in from the Configuration Manager.
 type Limits struct {
@@ -145,8 +138,14 @@ func New(root, version string, lim Limits) (*Cache, error) {
 		return nil, fmt.Errorf("create cache root: %w", err)
 	}
 	return &Cache{
-		root: root, version: version, maxBytes: lim.MaxBytes, langMaxBytes: lim.LangMaxBytes, langRoot: lim.LangRoot,
-		now: time.Now, hits: newCounters(), lookups: newCounters(),
+		root:         root,
+		version:      version,
+		maxBytes:     lim.MaxBytes,
+		langMaxBytes: lim.LangMaxBytes,
+		langRoot:     lim.LangRoot,
+		now:          time.Now,
+		hits:         newCounters(),
+		lookups:      newCounters(),
 	}, nil
 }
 
@@ -187,12 +186,14 @@ func (c *Cache) read(ns Namespace, path string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
+
 	payload, ok := decodeEntry(raw)
 	if !ok {
 		_ = os.Remove(path)
 		c.forget(path)
 		return nil, false
 	}
+
 	now := c.now()
 	if os.Chtimes(path, now, now) == nil {
 		c.track(cacheEntry{ns: ns, path: path, size: int64(len(raw)), used: now}, false)
@@ -206,10 +207,12 @@ func (c *Cache) Put(ns Namespace, key Key, data []byte) error {
 	if c.closed.Load() {
 		return ErrClosed
 	}
+
 	path, err := c.entryPath(ns, key)
 	if err != nil {
 		return err
 	}
+
 	raw := encodeEntry(data)
 	size := int64(len(raw))
 	if size > c.maxBytes {
@@ -218,6 +221,7 @@ func (c *Cache) Put(ns Namespace, key Key, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create cache directory: %w", err)
 	}
+
 	if renameFailed, err := writeEntry(path, raw); err != nil {
 		// A key names its inputs, so a valid entry already at path is as good as ours.
 		if !renameFailed {
@@ -229,10 +233,12 @@ func (c *Cache) Put(ns Namespace, key Key, data []byte) error {
 		}
 		size = existing
 	}
+
 	now := c.now()
 	if err := os.Chtimes(path, now, now); err != nil {
 		return fmt.Errorf("stamp cache entry: %w", err)
 	}
+
 	c.track(cacheEntry{ns: ns, path: path, size: size, used: now}, true)
 	return c.evict(path)
 }
@@ -244,7 +250,9 @@ func writeEntry(path string, data []byte) (renameFailed bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("create temp file: %w", err)
 	}
+
 	name := tmp.Name()
+
 	if _, err = tmp.Write(data); err == nil {
 		err = tmp.Chmod(0o644)
 	}
@@ -273,11 +281,14 @@ func syncDir(dir string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
+
 	d, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = d.Close() }()
+
 	if err := syncDirHandle(d); err != nil && !errors.Is(err, syscall.EINVAL) {
 		return err
 	}
@@ -303,6 +314,7 @@ func (c *Cache) Stats() (Stats, error) {
 		return Stats{}, err
 	}
 	s := statsOf(entries)
+
 	for ns, n := range c.lookups {
 		if v := n.Load(); v > 0 {
 			s.Lookups[ns] = v
@@ -322,6 +334,7 @@ func (c *Cache) Clear(ns ...Namespace) (Stats, error) {
 	if len(ns) == 0 {
 		ns = namespaces
 	}
+
 	seen := map[Namespace]bool{}
 	var targets []Namespace
 	for _, n := range ns {
@@ -333,15 +346,18 @@ func (c *Cache) Clear(ns ...Namespace) (Stats, error) {
 			targets = append(targets, n)
 		}
 	}
+
 	entries, err := scanCache(c.root, targets...)
 	if err != nil {
 		return Stats{}, err
 	}
+
 	for _, n := range targets {
 		if err := os.RemoveAll(filepath.Join(c.root, string(n))); err != nil {
 			return Stats{}, fmt.Errorf("remove namespace %s: %w", n, err)
 		}
 	}
+
 	c.mu.Lock()
 	c.index, c.total = nil, 0
 	c.mu.Unlock()
@@ -370,6 +386,7 @@ func (c *Cache) entryPath(ns Namespace, key Key) (string, error) {
 func (c *Cache) track(e cacheEntry, write bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if c.index == nil {
 		if !write {
 			return
@@ -381,6 +398,7 @@ func (c *Cache) track(e cacheEntry, write bool) {
 	if old, ok := c.index[e.path]; ok {
 		c.total -= old.size
 	}
+
 	c.index[e.path] = e
 	c.total += e.size
 }
@@ -417,24 +435,28 @@ func (c *Cache) loadLocked() error {
 func (c *Cache) evict(keep string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if c.index != nil && c.total <= c.maxBytes && c.now().Sub(c.scanned) < rescanInterval {
 		return nil
 	}
 	if err := c.loadLocked(); err != nil {
 		return err
 	}
+
 	var victims []cacheEntry
 	for _, e := range c.index {
 		if e.path != keep {
 			victims = append(victims, e)
 		}
 	}
+
 	sort.Slice(victims, func(i, j int) bool {
 		if !victims[i].used.Equal(victims[j].used) {
 			return victims[i].used.Before(victims[j].used)
 		}
 		return victims[i].path < victims[j].path
 	})
+
 	for _, v := range victims {
 		if c.total <= c.maxBytes {
 			break

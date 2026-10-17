@@ -100,10 +100,12 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 	if err := h.checkPublished(p); err != nil {
 		return rep, err
 	}
+
 	h.say(ctx, p.Group, "cleanup.start", StartedFact{Branch: p.Branch, Tip: p.Tip})
 	if err := h.Git.Fetch(ctx, h.Clone, p.Remote); err != nil {
 		return rep, fmt.Errorf("fetch %s: %w", p.Remote, err)
 	}
+
 	_, held, err := h.Git.Holds(ctx, h.Clone, p.Remote, p.Contains, p.Tip)
 	if err != nil {
 		return rep, fmt.Errorf("check remote for tip %s: %w", p.Tip, err)
@@ -111,9 +113,11 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 	if !held {
 		return rep, ErrNotPublished
 	}
+
 	r := &run{h: h, ctx: ctx, group: p.Group, rep: &rep}
 	r.container()
 	r.checkouts()
+
 	if r.worktree(h.Roots.Worktrees, p.Worktree, false) {
 		r.branch(p.Branch, p.Tip, p.Contains)
 	} else {
@@ -126,6 +130,7 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 		h.escalate(p.Group, fmt.Errorf("close task group: %w", err))
 		return rep, fmt.Errorf("close task group %s: %w", p.Group, err)
 	}
+
 	h.say(ctx, p.Group, "cleanup.done", rep)
 	return rep, nil
 }
@@ -162,6 +167,7 @@ func (h *Handler) cleanEpic(r *run, p Published) {
 	if p.Landing != "" {
 		landed = r.worktree(h.Roots.Landings, p.Landing, false)
 	}
+
 	name, ok := epicBranch(p)
 	if !ok {
 		r.kept(KindBranch, p.Contains, "reference does not name a branch of the remote")
@@ -171,6 +177,7 @@ func (h *Handler) cleanEpic(r *run, p Published) {
 		r.keepBranch(name)
 		return
 	}
+
 	tip, have, err := h.Git.BranchTip(r.ctx, h.Clone, name)
 	if err != nil {
 		r.fail(KindBranch, name, err)

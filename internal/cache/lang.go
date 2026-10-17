@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// DefaultLangMaxBytes is the language store cap used when none is given (10 GB).
-const DefaultLangMaxBytes int64 = 10 << 30
+const (
+	DefaultLangMaxBytes int64 = 10 << 30 // DefaultLangMaxBytes is the language store cap used when none is given (10 GB).
 
-// langStamp is the file in a repository's language store whose modification time records its last use.
-const langStamp = ".last-used"
+	langStamp = ".last-used" // langStamp is the file in a repository's language store whose modification time records its last use.
+)
 
 // langUnit is one repository's language store as seen by a trim.
 type langUnit struct {
@@ -34,14 +34,17 @@ func (c *Cache) TouchLang(repo string) error {
 	if repo == "" || repo == "." || repo == ".." || strings.ContainsAny(repo, `/\`) {
 		return fmt.Errorf("repository id %q is not a single folder name", repo)
 	}
+
 	dir := filepath.Join(c.langRoot, repo)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create language store: %w", err)
 	}
+
 	stamp := filepath.Join(dir, langStamp)
 	if err := os.WriteFile(stamp, nil, 0o644); err != nil {
 		return fmt.Errorf("write language store stamp: %w", err)
 	}
+
 	now := c.now()
 	if err := os.Chtimes(stamp, now, now); err != nil {
 		return fmt.Errorf("stamp language store: %w", err)
@@ -58,10 +61,12 @@ func (c *Cache) TrimLang(dir string, keep func(repo string) bool) (int64, error)
 	if dir == "" {
 		return 0, errors.New("language store folder is empty")
 	}
+
 	dir = filepath.Clean(dir)
 	if keep == nil {
 		keep = func(string) bool { return true }
 	}
+
 	units, total, err := scanLang(dir)
 	if err != nil {
 		return 0, err
@@ -69,13 +74,16 @@ func (c *Cache) TrimLang(dir string, keep func(repo string) bool) (int64, error)
 	if total <= c.langMaxBytes {
 		return 0, nil
 	}
+
 	sort.Slice(units, func(i, j int) bool {
 		if !units[i].used.Equal(units[j].used) {
 			return units[i].used.Before(units[j].used)
 		}
 		return units[i].repo < units[j].repo
 	})
+
 	target := c.langMaxBytes - c.langMaxBytes/5
+
 	var removed int64
 	for _, u := range units {
 		if total-removed <= target {
@@ -101,8 +109,10 @@ func scanLang(dir string) ([]langUnit, int64, error) {
 		}
 		return nil, 0, fmt.Errorf("read language store: %w", err)
 	}
+
 	var units []langUnit
 	var total int64
+
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue

@@ -42,6 +42,7 @@ type ConfigChangeData struct {
 // handleConfigGet prints the named keys, every key with --list, or the full listing with --all.
 func handleConfigGet(c *Call) Result {
 	cfg := c.cli.deps.Config
+
 	var items []config.Item
 	switch {
 	case c.Global.List || (c.Global.All && len(c.Args) == 0):
@@ -57,8 +58,10 @@ func handleConfigGet(c *Call) Result {
 			items = append(items, it)
 		}
 	}
+
 	data := ConfigGetData{Items: make([]ConfigItemData, 0, len(items))}
 	rows := format.Table{Head: []string{"Key", "Value", "Source"}, What: "settings"}
+
 	for _, it := range items {
 		d := ConfigItemData{Key: it.Key, Value: it.Value, Source: layerName(it.Source)}
 		if c.Global.All {
@@ -67,6 +70,7 @@ func handleConfigGet(c *Call) Result {
 		data.Items = append(data.Items, d)
 		rows.Rows = append(rows.Rows, []string{it.Key, text(it.Value), d.Source})
 	}
+
 	if c.Global.All && !c.cli.json {
 		b, _ := json.MarshalIndent(data.Items, "", "  ")
 		return Result{Raw: string(b)}
@@ -93,6 +97,7 @@ func text(v any) string {
 // handleConfigSet sets pairs, resets keys with --default, or accepts a hand edit with --accept.
 func handleConfigSet(c *Call) Result {
 	cfg := c.cli.deps.Config
+
 	switch {
 	case flagBool(c, "accept") && c.Global.DryRun:
 		changes, err := acceptPreview(cfg)
@@ -111,11 +116,13 @@ func handleConfigSet(c *Call) Result {
 	case c.Global.DryRun:
 		return notBuilt("--dry-run for config set key=value, which the Configuration Manager has no check-only call for,")
 	}
+
 	changes := make([]config.Change, 0, len(c.Args))
 	for _, a := range c.Args {
 		k, v, _ := strings.Cut(a, "=")
 		changes = append(changes, config.Change{Key: strings.TrimSpace(k), New: v})
 	}
+
 	b, err := cfg.SetConfigItem(changes...)
 	if err != nil {
 		return configErr(err)
@@ -126,6 +133,7 @@ func handleConfigSet(c *Call) Result {
 // resetKeys puts each named key, role or file back to its built-in value; several changes wait for a typed y.
 func resetKeys(c *Call) Result {
 	cfg := c.cli.deps.Config
+
 	var plan []config.Change
 	for _, k := range c.Args {
 		p, err := cfg.PlanReset(k)
@@ -134,16 +142,19 @@ func resetKeys(c *Call) Result {
 		}
 		plan = append(plan, p...)
 	}
+
 	if c.Global.DryRun {
 		return setResult(config.Batch{Changes: plan})
 	}
 	if len(plan) > 1 && !c.cli.confirm(plan) {
 		return setResult(config.Batch{})
 	}
+
 	reset := make([]config.Change, len(plan))
 	for i, p := range plan {
 		reset[i] = config.Change{Key: p.Key}
 	}
+
 	b, err := cfg.SetConfigItem(reset...)
 	if err != nil {
 		return configErr(err)
@@ -157,11 +168,14 @@ func (c *CLI) confirm(plan []config.Change) bool {
 	for _, p := range plan {
 		_, _ = fmt.Fprintf(c.errOut, "  %s: %s -> %s\n", p.Key, text(p.Old), c.resetTarget(p))
 	}
+
 	_, _ = fmt.Fprint(c.errOut, "Type y to continue: ")
 	line, _ := bufio.NewReader(c.in).ReadString('\n')
+
 	if strings.EqualFold(strings.TrimSpace(line), "y") {
 		return true
 	}
+
 	_, _ = fmt.Fprintln(c.errOut, "Nothing was changed.")
 	return false
 }
@@ -178,26 +192,33 @@ func (c *CLI) resetTarget(p config.Change) string {
 }
 
 // acceptPreview lists the files config set --accept would record, with their old and new checksums, writing none.
-func acceptPreview(cfg *config.Manager) ([]config.Change, error) {
-	return cfg.AcceptPlan()
-}
+func acceptPreview(cfg *config.Manager) ([]config.Change, error) { return cfg.AcceptPlan() }
 
 // setResult builds the reply.config.set result from a written batch.
 func setResult(b config.Batch) Result {
 	data := ConfigSetData{Batch: b.ID, Changes: make([]ConfigChangeData, 0, len(b.Changes))}
 	rows := format.Table{Head: []string{"Key", "Old", "New"}, What: "settings"}
+
 	for _, ch := range b.Changes {
 		data.Changes = append(data.Changes, ConfigChangeData{Key: ch.Key, Old: ch.Old, New: ch.New})
 		rows.Rows = append(rows.Rows, []string{ch.Key, text(ch.Old), text(ch.New)})
 	}
-	return Result{Shape: "reply.config.set", Facts: format.ConfigSetFacts{Batch: b.ID, Changed: rows}, Data: data}
+
+	return Result{Shape: "reply.config.set", Facts: format.ConfigSetFacts{
+		Batch:   b.ID,
+		Changed: rows},
+		Data: data,
+	}
 }
 
 // configErr maps a Configuration Manager error to the code and exit the CLI table gives it.
 func configErr(err error) Result {
-	var uk config.UnknownKeyError
-	var bv config.BadValueError
-	var lim config.LimitError
+	var (
+		uk  config.UnknownKeyError
+		bv  config.BadValueError
+		lim config.LimitError
+	)
+
 	switch {
 	case errors.As(err, &uk):
 		return errResult(OutcomeUsage, format.UnknownKey, err.Error(), "komodo config get "+uk.Closest)

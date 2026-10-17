@@ -50,26 +50,32 @@ func (c checker) Check(ctx context.Context, run CommandRunner, in CheckInput) (C
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepSecrets, err)
 	}
+
 	got[StepSecrets] = sec
 	if got[StepDoneWhen], err = doneWhenStep(ctx, run, in); err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepDoneWhen, err)
 	}
+
 	pkgs, notes, tests, solo, err := c.runImpact(ctx, run, in)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepImpactSet, err)
 	}
+
 	got[StepImpactSet] = StepResult{Step: StepImpactSet, Level: LevelPass, Detail: pkgs}
 	if len(notes) > 0 {
 		got[StepImpactSet] = StepResult{Step: StepImpactSet, Level: LevelWarn, Detail: append(slices.Clone(pkgs), notes...)}
 	}
+
 	base, flake, flaky, blocked, err := c.judgeFailures(ctx, run, in, tests, solo)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepBaseline, err)
 	}
+
 	got[StepBaseline], got[StepFlake] = base, flake
 	if got[StepCoverage], err = c.coverageStep(ctx, run, in, blocked); err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepCoverage, err)
 	}
+
 	res := CheckResult{Flaky: flaky}
 	for _, s := range stepOrder {
 		res.Steps = append(res.Steps, got[s])
@@ -101,10 +107,12 @@ func (c checker) secretsStep(ctx context.Context, in CheckInput) (StepResult, er
 	if c.cfg.Diff == nil || len(c.cfg.SecretPatterns) == 0 {
 		return StepResult{}, errors.New("no diff source or secret patterns configured")
 	}
+
 	diff, err := c.cfg.Diff(ctx, in.Base, in.Head)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("read diff: %w", err)
 	}
+
 	s := StepResult{Step: StepSecrets, Level: LevelPass}
 	if hits := scanSecrets(diff, c.cfg.SecretPatterns); len(hits) > 0 {
 		s.Level, s.Detail = LevelFail, hits
@@ -115,11 +123,13 @@ func (c checker) secretsStep(ctx context.Context, in CheckInput) (StepResult, er
 // doneWhenStep reruns every task's completion command and fails on any non-zero exit.
 func doneWhenStep(ctx context.Context, run CommandRunner, in CheckInput) (StepResult, error) {
 	s := StepResult{Step: StepDoneWhen, Level: LevelPass}
+
 	ids := make([]string, 0, len(in.DoneWhen))
 	for id := range in.DoneWhen {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
+
 	var outs []string
 	for _, id := range ids {
 		exit, out, err := run(ctx, in.DoneWhen[id])
@@ -132,6 +142,7 @@ func doneWhenStep(ctx context.Context, run CommandRunner, in CheckInput) (StepRe
 			outs = append(outs, CapOutput(out, GateOutputCap))
 		}
 	}
+
 	s.Output = joinOutputs(s.Detail, outs)
 	return s, nil
 }
@@ -155,23 +166,28 @@ func (c checker) runImpact(ctx context.Context, run CommandRunner, in CheckInput
 		tests, solo, err = c.runTestClass(ctx, run, in.Language)
 		return []string{"test class"}, nil, tests, solo, err
 	}
+
 	pkgs, notes, err = goImpactPackages(ctx, run, in.Changed)
 	if err != nil || len(pkgs) == 0 {
 		return nil, nil, nil, nil, err
 	}
+
 	quoted := make([]string, len(pkgs))
 	for i, p := range pkgs {
 		quoted[i] = shQuote(p)
 	}
+
 	cmd := "go test -json -count=1 " + strings.Join(quoted, " ")
 	exit, out, err := run(ctx, cmd)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("run affected tests: %w", err)
 	}
+
 	tests = ParseGoTestJSON(out)
 	if len(tests) == 0 && exit != 0 {
 		tests = []TestRun{{Name: "go test", Whole: true, Output: CapOutput(out, GateOutputCap)}}
 	}
+
 	return pkgs, notes, tests, func(t TestRun) string {
 		if t.Package == "" {
 			return cmd
@@ -187,10 +203,12 @@ func (c checker) runTestClass(ctx context.Context, run CommandRunner, lang strin
 	if cmd == "" {
 		return nil, nil, fmt.Errorf("no test command for language %q", lang)
 	}
+
 	exit, out, err := run(ctx, cmd)
 	if err != nil {
 		return nil, nil, fmt.Errorf("run %s: %w", cmd, err)
 	}
+
 	var tests []TestRun
 	if rc := c.cfg.ReportCommands[lang]; rc != "" {
 		_, rep, rerr := run(ctx, rc)
@@ -201,6 +219,7 @@ func (c checker) runTestClass(ctx context.Context, run CommandRunner, lang strin
 			tests = runs
 		}
 	}
+
 	if tests == nil || (exit != 0 && !slices.ContainsFunc(tests, func(t TestRun) bool { return !t.Passed })) {
 		tests = append(tests, TestRun{Name: cmd, Passed: exit == 0, Whole: true, Output: CapOutput(out, GateOutputCap)})
 	}
@@ -214,16 +233,19 @@ func goImpactPackages(ctx context.Context, run CommandRunner, changed []string) 
 	if err != nil || exit != 0 {
 		return nil, nil, fmt.Errorf("read module path: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
 	}
+
 	module := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
 	exit, out, err = run(ctx, goListCmd)
 	if err != nil || exit != 0 {
 		return nil, nil, fmt.Errorf("list packages: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
 	}
+
 	deps := parseGoList(out)
 	nested, err := nestedModules(ctx, run)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	var hit []string
 	whole := false
 	for _, p := range changed {
@@ -242,6 +264,7 @@ func goImpactPackages(ctx context.Context, run CommandRunner, changed []string) 
 			}
 		}
 	}
+
 	if whole {
 		hit = keysOf(deps)
 	}
@@ -254,6 +277,7 @@ func nestedModules(ctx context.Context, run CommandRunner) ([]string, error) {
 	if err != nil || exit != 0 {
 		return nil, fmt.Errorf("list nested modules: exit %d: %w", exit, errors.Join(err, errors.New(CapOutput(out, 512))))
 	}
+
 	var dirs []string
 	for _, ln := range strings.Split(out, "\n") {
 		if ln = strings.TrimSpace(ln); ln != "" {
@@ -290,11 +314,18 @@ func keysOf(m map[string][]string) []string {
 
 // judgeFailures reruns each failing test twice alone and classifies the confirmed ones against the baseline.
 // blocked is true when a regression or new failure was confirmed.
-func (c checker) judgeFailures(ctx context.Context, run CommandRunner, in CheckInput, tests []TestRun, solo func(TestRun) string) (base, flake StepResult, flaky []string, blocked bool, err error) {
+func (c checker) judgeFailures(
+	ctx context.Context,
+	run CommandRunner,
+	in CheckInput,
+	tests []TestRun,
+	solo func(TestRun) string,
+) (base, flake StepResult, flaky []string, blocked bool, err error) {
 	base = StepResult{Step: StepBaseline, Level: LevelPass}
 	flake = StepResult{Step: StepFlake, Level: LevelPass}
 	var bl Baseline
 	loaded := false
+
 	var blockNames, blockOuts, warnNames []string
 	for _, t := range tests {
 		if t.Passed {
@@ -313,7 +344,10 @@ func (c checker) judgeFailures(ctx context.Context, run CommandRunner, in CheckI
 			continue
 		}
 		if t.Whole {
-			blockNames = append(blockNames, t.Name+": per-test results are unavailable, so the failure cannot be classified against the baseline")
+			blockNames = append(
+				blockNames,
+				t.Name+": per-test results are unavailable, so the failure cannot be classified against the baseline",
+			)
 			blockOuts = append(blockOuts, t.Output)
 			continue
 		}
@@ -332,12 +366,14 @@ func (c checker) judgeFailures(ctx context.Context, run CommandRunner, in CheckI
 		blockNames = append(blockNames, t.Key())
 		blockOuts = append(blockOuts, t.Output)
 	}
+
 	switch {
 	case len(blockNames) > 0:
 		base.Level, base.Detail, base.Output = LevelFail, blockNames, joinOutputs(blockNames, blockOuts)
 	case len(warnNames) > 0:
 		base.Level, base.Detail = LevelWarn, warnNames
 	}
+
 	if len(flaky) > 0 {
 		flake.Level, flake.Detail = LevelWarn, flaky
 	}

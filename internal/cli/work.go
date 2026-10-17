@@ -66,9 +66,10 @@ func newID() string {
 		b[i] = byte(ms >> (8 * (5 - i)))
 	}
 	_, _ = rand.Read(b[6:])
-	b[6] = b[6]&0x0f | 0x70
-	b[8] = b[8]&0x3f | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+
+	b[6] = b[6]&0x0f | 0x70                                                       // TODO - we need a small comment here
+	b[8] = b[8]&0x3f | 0x80                                                       // TODO - we need a small comment here
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]) // TODO - we need a small comment here
 }
 
 // now returns the current UTC time to the second, as an event carries it.
@@ -79,19 +80,24 @@ func (c *Call) ask(req engine.Request) ([]engine.Reply, *Result) {
 	ctx := context.Background()
 	eng := c.cli.deps.Engine
 	ch, err := eng.Send(ctx, req)
+
 	if err != nil {
 		r := internalErr("reach the engine: " + err.Error())
 		return nil, &r
 	}
+
 	var frames []engine.Reply
 	for rep := range ch {
 		frames = append(frames, rep)
 	}
+
 	if len(frames) == 0 || !frames[len(frames)-1].Final {
 		r := internalErr("the engine closed the connection before it finished")
 		return nil, &r
 	}
+
 	last := frames[len(frames)-1]
+
 	switch last.Status {
 	case engine.StatusRefused:
 		r := refusedResult(last)
@@ -100,6 +106,7 @@ func (c *Call) ask(req engine.Request) ([]engine.Reply, *Result) {
 		r := internalErr("the engine failed: " + last.Detail)
 		return nil, &r
 	}
+
 	return frames, nil
 }
 
@@ -120,6 +127,7 @@ func refusedResult(rep engine.Reply) Result {
 	if !known {
 		return internalErr(fmt.Sprintf("the engine refused with the unknown code %q: %s", rep.Code, rep.Detail))
 	}
+
 	reason := rep.Detail
 	if reason == "" {
 		reason = "the engine refused the request"
@@ -152,36 +160,62 @@ func handleRun(c *Call) Result {
 	if flagBool(c, "approve") || flagBool(c, "deny") {
 		return runAnswer(c)
 	}
+
 	target, label := "all", ""
 	if !c.Global.All {
 		target, label = c.Args[0], c.Args[0]
 	}
+
 	req := c.request(engine.VerbRun, label)
 	req.Flags = engine.Flags{All: c.Global.All}
 	start := &bus.RunStart{
-		Target: target, Groups: c.Groups, Source: "cli", Repo: c.Repo.ID, Root: c.Repo.Root,
-		CommonDir: c.CommonDir, Request: bus.ID(req.ID),
+		Target:    target,
+		Groups:    c.Groups,
+		Source:    "cli",
+		Repo:      c.Repo.ID,
+		Root:      c.Repo.Root,
+		CommonDir: c.CommonDir,
+		Request:   bus.ID(req.ID),
 	}
+
 	if at := flagTime(c, "schedule"); !at.IsZero() {
 		start.Schedule = at
 		req.Flags.Schedule = at
-		req.Event = &engine.Event{Type: bus.TypeRunStart, Time: now(), Data: start} // the engine mints the run id and stores this event
+		req.Event = &engine.Event{ // the engine mints the run id and stores this event
+			Type: bus.TypeRunStart,
+			Time: now(),
+			Data: start,
+		}
 		return runSchedule(c, req, target)
 	}
+
 	runID := newID()
-	req.Event = &engine.Event{Type: bus.TypeRunStart, Run: bus.ID(runID), Time: now(), Data: start}
+	req.Event = &engine.Event{
+		Type: bus.TypeRunStart,
+		Run:  bus.ID(runID),
+		Time: now(),
+		Data: start,
+	}
+
 	frames, res := c.ask(req)
 	if res != nil {
 		return *res
 	}
+
 	var d struct {
 		RunID string `json:"run_id"`
 	}
 	decodeFinal(frames, &d)
+
 	if d.RunID != "" {
 		runID = d.RunID
 	}
-	return Result{Shape: "reply.run", Facts: format.RunFacts{Group: label, RunID: runID}, Data: RunData{RunID: runID}}
+
+	return Result{
+		Shape: "reply.run",
+		Facts: format.RunFacts{Group: label, RunID: runID},
+		Data:  RunData{RunID: runID},
+	}
 }
 
 // runSchedule queues a run; the engine mints the run id and answers with it and the queued time.
@@ -190,6 +224,7 @@ func runSchedule(c *Call, req engine.Request, target string) Result {
 	if res != nil {
 		return *res
 	}
+
 	var d struct {
 		RunID  string `json:"run_id"`
 		Queued *struct {
@@ -199,16 +234,33 @@ func runSchedule(c *Call, req engine.Request, target string) Result {
 			QueuedAt time.Time `json:"queued_at"`
 		} `json:"queued"`
 	}
+
 	decodeFinal(frames, &d)
-	row := QueuedRow{Target: target, RunID: d.RunID, Root: c.Repo.Root, At: req.Flags.Schedule}
+	row := QueuedRow{
+		Target: target,
+		RunID:  d.RunID,
+		Root:   c.Repo.Root,
+		At:     req.Flags.Schedule,
+	}
+
 	if q := d.Queued; q != nil {
 		row.At, row.QueuedAt = q.At, q.QueuedAt
 		if row.RunID == "" {
 			row.RunID = q.RunID
 		}
 	}
-	facts := format.ScheduleFacts{Target: target, RunID: row.RunID, At: row.At.Format(time.RFC3339)}
-	return Result{Shape: "reply.schedule", Facts: facts, Data: RunData{RunID: row.RunID, Queued: &row}}
+
+	facts := format.ScheduleFacts{
+		Target: target,
+		RunID:  row.RunID,
+		At:     row.At.Format(time.RFC3339),
+	}
+
+	return Result{
+		Shape: "reply.schedule",
+		Facts: facts,
+		Data:  RunData{RunID: row.RunID, Queued: &row},
+	}
 }
 
 // runAnswer sends a run-continue event that answers a blocked group.
@@ -217,6 +269,7 @@ func runAnswer(c *Call) Result {
 	if flagBool(c, "deny") {
 		answer = "deny"
 	}
+
 	target := c.Args[0]
 	req := c.request(engine.VerbRun, target)
 	req.Flags = engine.Flags{Approve: answer == "approve", Deny: answer == "deny"}
@@ -224,10 +277,15 @@ func runAnswer(c *Call) Result {
 		Type: bus.TypeRunContinue, Run: typedRunID(target), Time: now(),
 		Data: &bus.RunContinue{Target: target, Answer: answer, Request: bus.ID(req.ID)},
 	}
+
 	if _, res := c.ask(req); res != nil {
 		return *res
 	}
-	return Result{Shape: "reply.answer", Facts: format.AnswerFacts{Group: target, Answer: answer}, Data: RunData{Group: target, Answer: answer}}
+	return Result{
+		Shape: "reply.answer",
+		Facts: format.AnswerFacts{Group: target, Answer: answer},
+		Data:  RunData{Group: target, Answer: answer},
+	}
 }
 
 // handleStop sends a run-stop event for a label or a run id.
@@ -238,12 +296,15 @@ func handleStop(c *Call) Result {
 		Type: bus.TypeRunStop, Run: typedRunID(target), Time: now(),
 		Data: &bus.RunStop{Target: target, Request: bus.ID(req.ID)},
 	}
+
 	frames, res := c.ask(req)
 	if res != nil {
 		return *res
 	}
+
 	d := StopData{RunID: string(typedRunID(target))}
 	decodeFinal(frames, &d)
+
 	return Result{Shape: "reply.stop", Facts: format.StopFacts{RunID: d.RunID}, Data: d}
 }
 
@@ -254,9 +315,15 @@ func handleAbandon(c *Call) Result {
 	if res != nil {
 		return *res
 	}
+
 	d := AbandonData{Group: group}
 	decodeFinal(frames, &d)
-	return Result{Shape: "reply.abandon", Facts: format.AbandonFacts{Group: group, RunID: d.RunID}, Data: d}
+
+	return Result{
+		Shape: "reply.abandon",
+		Facts: format.AbandonFacts{Group: group, RunID: d.RunID},
+		Data:  d,
+	}
 }
 
 // handleReplay collects the recorded events of a run or group and the gap count.
@@ -265,8 +332,10 @@ func handleReplay(c *Call) Result {
 	if res != nil {
 		return *res
 	}
+
 	d := ReplayData{RunID: string(typedRunID(c.Args[0])), Steps: []bus.Event{}}
 	var lines []string
+
 	for _, f := range frames {
 		if f.Status == engine.StatusEvent && f.Event != nil {
 			d.Steps = append(d.Steps, *f.Event)
@@ -276,17 +345,24 @@ func handleReplay(c *Call) Result {
 			}
 		}
 	}
+
 	var fin struct {
 		Gaps int `json:"gaps"`
 	}
 	decodeFinal(frames, &fin)
 	d.Gaps = fin.Gaps
-	return Result{Shape: "reply.replay", Facts: format.ReplayFacts{RunID: d.RunID, Steps: lines, Gaps: d.Gaps}, Data: d}
+
+	return Result{
+		Shape: "reply.replay",
+		Facts: format.ReplayFacts{RunID: d.RunID, Steps: lines, Gaps: d.Gaps},
+		Data:  d,
+	}
 }
 
 // handlePlan sends a plan event and waits for the run-start that ends planning, or for an error event.
 func handlePlan(c *Call) Result {
 	pr := &planRequest{Goal: strings.Join(c.Args, " "), Docs: []string{}}
+
 	if from := flagString(c, "from"); from != "" {
 		if !filepath.IsAbs(from) {
 			from = filepath.Join(c.dir(), from)
@@ -297,13 +373,23 @@ func handlePlan(c *Call) Result {
 		}
 		pr.Docs = append(pr.Docs, filepath.ToSlash(rel))
 	}
+
 	req := c.request(engine.VerbPlan, "")
-	req.Event = &engine.Event{Type: bus.TypePlan, Subtype: "request", Run: bus.ID(newID()), Time: now(), Data: pr}
+	req.Event = &engine.Event{
+		Type:    bus.TypePlan,
+		Subtype: "request",
+		Run:     bus.ID(newID()),
+		Time:    now(),
+		Data:    pr,
+	}
 	frames, res := c.ask(req)
+
 	if res != nil {
 		return *res
 	}
+
 	d := PlanData{}
+
 	for _, f := range frames {
 		if f.Status != engine.StatusEvent || f.Event == nil {
 			continue
@@ -317,5 +403,10 @@ func handlePlan(c *Call) Result {
 			}
 		}
 	}
-	return Result{Shape: "reply.plan", Facts: format.PlanFacts{Goal: pr.Goal}, Data: d}
+
+	return Result{
+		Shape: "reply.plan",
+		Facts: format.PlanFacts{Goal: pr.Goal},
+		Data:  d,
+	}
 }

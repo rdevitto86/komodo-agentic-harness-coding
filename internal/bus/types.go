@@ -45,12 +45,15 @@ func Register(k Key, newData func() Payload) {
 	if !slices.Contains(allTypes, k.Type) {
 		panic(fmt.Sprintf("register event %q/%q: unknown type", k.Type, k.Subtype))
 	}
+
 	v := reflect.ValueOf(newData())
 	if v.Kind() != reflect.Pointer || v.IsNil() {
 		panic(fmt.Sprintf("register event %q/%q: constructor must return a non-nil pointer", k.Type, k.Subtype))
 	}
+
 	registryMu.Lock()
 	defer registryMu.Unlock()
+
 	if _, dup := registry[k]; dup {
 		panic(fmt.Sprintf("register event %q/%q: pair already registered", k.Type, k.Subtype))
 	}
@@ -82,6 +85,7 @@ func validate(e Event) bool {
 	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return false
 	}
+
 	registryMu.RLock()
 	en, ok := registry[Key{Type: e.Type, Subtype: e.Subtype}]
 	registryMu.RUnlock()

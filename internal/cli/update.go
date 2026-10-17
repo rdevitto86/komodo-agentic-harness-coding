@@ -45,6 +45,7 @@ func handleUpdate(c *Call) Result {
 	u := &updater{cli: c.cli, host: c.cli.deps.Host, running: core.BinaryVersion()}
 	u.check, u.restart, u.dry, u.to = flagBool(c, "check"), flagBool(c, "restart-runs"), c.Global.DryRun, flagString(c, "to")
 	u.warn = func(f string, a ...any) { _, _ = fmt.Fprintf(c.cli.errOut, f, a...) }
+
 	if u.to != "" {
 		if _, err := core.ParseSemVer(u.to); err != nil {
 			return usageErr(fmt.Sprintf("--to %q is not a version", u.to), helpFix("update"))
@@ -53,6 +54,7 @@ func handleUpdate(c *Call) Result {
 	if u.restart && u.host.Runs == nil {
 		return notBuilt("update --restart-runs, which needs the engine to move live runs,")
 	}
+
 	var err error
 	if u.home, err = c.cli.komodoHome(); err == nil {
 		u.machine, err = c.cli.machine()
@@ -63,6 +65,7 @@ func handleUpdate(c *Call) Result {
 	if err != nil {
 		return internalErr("prepare the update: " + err.Error())
 	}
+
 	return u.run(context.Background())
 }
 
@@ -78,14 +81,19 @@ func (u *updater) run(ctx context.Context) Result {
 		return updateFail(err, "check the network, then run komodo update again")
 	}
 	if u.to != "" && semverCompare(man.Version, u.to) != 0 {
-		return updateFail(fmt.Errorf("the release holds version %s, not %s", man.Version, u.to), "run komodo update --check to see the newest version")
+		return updateFail(fmt.Errorf(
+			"the release holds version %s, not %s", man.Version, u.to),
+			"run komodo update --check to see the newest version",
+		)
 	}
+
 	data := UpdateData{From: strings.SplitN(u.running, "+", 2)[0], To: man.Version, Action: "checked"}
 	if !u.dry {
 		if err := u.record(man.Version); err != nil {
 			return updateFail(err, "run komodo update again")
 		}
 	}
+
 	cmp := semverCompare(man.Version, u.running)
 	if u.check || u.dry {
 		return updateResult(data)
@@ -94,27 +102,36 @@ func (u *updater) run(ctx context.Context) Result {
 		data.Action = "current"
 		return updateResult(data)
 	}
+
 	release, res := u.claim()
 	if res != nil {
 		return *res
 	}
+
 	defer release()
 	asset, _ := man.asset(u.host.Release.platform())
 	dir := filepath.Join(u.home, "versions", man.Version)
+
 	if err := u.download(ctx, asset, dir); err != nil {
 		return updateFail(err, "run komodo update again")
 	}
+
 	previous := u.previous()
 	if err := u.swap(dir); err != nil {
 		return updateFail(err, "run komodo update again")
 	}
+
 	u.recordSwap(man, previous, dir)
 	data.Notes = u.cleanup(man.Version, previous)
 	data.Action = "swapped"
+
 	if u.restart {
 		n, err := u.host.Runs.MoveRuns(ctx, filepath.Join(u.home, "bin", "komodo"))
 		if err != nil {
-			return updateFail(fmt.Errorf("the binary was updated, but moving live runs failed: %w", err), "komodo stop each run, then komodo run it again")
+			return updateFail(
+				fmt.Errorf("the binary was updated, but moving live runs failed: %w", err),
+				"komodo stop each run, then komodo run it again",
+			)
 		}
 		data.RunsMoved = n
 	}

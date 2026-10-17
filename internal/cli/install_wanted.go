@@ -51,8 +51,10 @@ func (in *installer) hostsWanted() []string {
 	if len(in.sel.Hosts) > 0 {
 		return in.sel.Hosts
 	}
+
 	var out []string
 	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+
 	if exists(filepath.Join(in.root, "CLAUDE.md")) || exists(filepath.Join(in.root, ".claude")) || exists(filepath.Join(in.user, ".claude")) {
 		out = append(out, "claude")
 	} else if _, err := in.host.lookPath("claude"); err == nil {
@@ -81,10 +83,12 @@ func (in *installer) binaryItems() ([]item, error) {
 			return nil, fmt.Errorf("find the running binary: %w", err)
 		}
 	}
+
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return nil, fmt.Errorf("read the binary: %w", err)
 	}
+
 	h := sha(data)
 	write := func(p string) func() error {
 		return func() error {
@@ -94,8 +98,10 @@ func (in *installer) binaryItems() ([]item, error) {
 			return core.WriteFileAtomic(p, data, 0o755)
 		}
 	}
+
 	ver := filepath.Join(in.home, "versions", version, "komodo")
 	bin := filepath.Join(in.home, "bin", "komodo")
+
 	return []item{
 		{Entry: Entry{Target: ver, Hash: h, Step: stepBinary}, machine: true, apply: write(ver)},
 		{Entry: Entry{Target: bin, Hash: h, Step: stepBinary}, machine: true, apply: write(bin)},
@@ -106,10 +112,12 @@ func (in *installer) binaryItems() ([]item, error) {
 func binaryVersion(ctx context.Context, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
 	out, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {
 		return "", fmt.Errorf("ask %s for its version: %w", path, err)
 	}
+
 	s := strings.TrimSpace(string(out))
 	if strings.HasPrefix(s, "{") {
 		var env struct {
@@ -121,6 +129,7 @@ func binaryVersion(ctx context.Context, path string) (string, error) {
 			s = env.Data.Version
 		}
 	}
+
 	if _, err := core.ParseSemVer(s); err != nil {
 		return "", fmt.Errorf("%s printed %q, which is not a version", path, s)
 	}
@@ -137,6 +146,7 @@ func (in *installer) pathItems() []item {
 			recorded = &in.machineRec[i]
 		}
 	}
+
 	if recorded == nil {
 		if in.noPath {
 			return nil
@@ -145,10 +155,12 @@ func (in *installer) pathItems() []item {
 			return nil
 		}
 	}
+
 	link := filepath.Join(in.user, ".local", "bin", "komodo")
 	if recorded != nil && recorded.Target != link && recorded.Target != "" && filepath.Base(recorded.Target) == "komodo" {
 		link = recorded.Target
 	}
+
 	useLink := (recorded != nil && recorded.Target == link) || (recorded == nil && onPath(filepath.Dir(link)))
 	if useLink {
 		return []item{{
@@ -156,10 +168,12 @@ func (in *installer) pathItems() []item {
 			apply: func() error { return putSymlink(link, bin) },
 		}}
 	}
+
 	rc := filepath.Join(in.user, rcName(os.Getenv("SHELL")))
 	if recorded != nil {
 		rc = recorded.Target
 	}
+
 	line := rcLine(filepath.Dir(bin))
 	return []item{{
 		Entry: Entry{Target: rc, Hash: sha([]byte(line)), Step: stepPath}, machine: true,
@@ -216,8 +230,10 @@ func putRcLine(path, line string) error {
 	if err != nil {
 		return err
 	}
+
 	var out []string
 	done := false
+
 	for _, l := range strings.Split(text, "\n") {
 		if strings.HasSuffix(strings.TrimSpace(l), pathMarker) {
 			if !done {
@@ -228,6 +244,7 @@ func putRcLine(path, line string) error {
 		}
 		out = append(out, l)
 	}
+
 	text = strings.Join(out, "\n")
 	if !done {
 		if text != "" && !strings.HasSuffix(text, "\n") {
@@ -244,6 +261,7 @@ func dropRcLine(path string) error {
 	if err != nil || !ok {
 		return err
 	}
+
 	var keep []string
 	for _, l := range strings.SplitAfter(text, "\n") {
 		if !strings.HasSuffix(strings.TrimSpace(l), pathMarker) {
@@ -273,8 +291,15 @@ func (in *installer) settingsItems() []item {
 	var out []item
 	for _, e := range settingsEntries {
 		out = append(out, item{
-			Entry: Entry{Target: filepath.Join(".claude", "settings.json"), Entry: e.id, Hash: sha([]byte(e.value)), Step: stepSettings},
-			apply: func() error { return putSettings(filepath.Join(in.root, ".claude", "settings.json"), e.id) },
+			Entry: Entry{
+				Target: filepath.Join(".claude", "settings.json"),
+				Entry:  e.id,
+				Hash:   sha([]byte(e.value)),
+				Step:   stepSettings,
+			},
+			apply: func() error {
+				return putSettings(filepath.Join(in.root, ".claude", "settings.json"), e.id)
+			},
 		})
 	}
 	return out
@@ -287,29 +312,36 @@ func (in *installer) blockItem() (item, error) {
 	if err != nil {
 		return item{}, fmt.Errorf("read AGENTS.md: %w", err)
 	}
+
 	existing := ""
 	if b, ok, ferr := findBlock(text); ferr == nil && ok {
 		existing = b.Min
 	}
+
 	seen := ""
 	if rec, err := state.LoadMachine[state.UpdateBody](in.machine, state.KindUpdate); err == nil {
 		seen = rec.Body.Latest
 	}
+
 	pin, err := nextPin(existing, core.BinaryVersion(), seen)
 	if err != nil {
 		return item{}, err
 	}
+
 	var rules string
 	if in.host.Style != nil {
 		if rules, err = in.host.Style(); err != nil {
 			return item{}, fmt.Errorf("read the orchestrator rules: %w", err)
 		}
 	}
+
 	style, err := format.OutputStyle(in.profile())
 	if err != nil {
 		return item{}, err
 	}
+
 	block := renderBlock(pin, filepath.Join(in.home, "bin", "komodo"), rules, style)
+
 	return item{
 		Entry: Entry{Target: "AGENTS.md", Hash: sha([]byte(block)), Step: stepAgents},
 		apply: func() error {
@@ -336,7 +368,8 @@ func (in *installer) profile() format.Profile {
 	return format.ProfileAdhd
 }
 
-// nextPin returns the pin to write: the running version without its build suffix, capped at the newest release seen, and never below the existing pin.
+// nextPin returns the pin to write: the running version without its build suffix,
+// capped at the newest release seen, and never below the existing pin.
 func nextPin(existing, running, seen string) (string, error) {
 	r, err := core.ParseSemVer(running)
 	if err != nil {
@@ -386,6 +419,7 @@ func pathState(p string) diskState {
 		dest, _ := os.Readlink(p)
 		return diskState{exists: true, hash: sha([]byte(dest))}
 	}
+
 	text, _, _ := readText(p)
 	for _, l := range strings.Split(text, "\n") {
 		if t := strings.TrimSpace(l); strings.HasSuffix(t, pathMarker) {
@@ -398,6 +432,7 @@ func pathState(p string) diskState {
 // prune removes the owned part of a target and leaves everything else in the file.
 func (in *installer) prune(_ bool, e Entry) error {
 	p := in.abs(e.Target)
+
 	switch e.Step {
 	case stepBinary:
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -427,6 +462,7 @@ func (in *installer) dropFromFile(path string, drop func(string) (string, error)
 	if err != nil || !ok {
 		return err
 	}
+
 	next, err := drop(text)
 	if err != nil {
 		return err
@@ -443,6 +479,7 @@ func probeLinks(ctx context.Context, host Host, m *state.Machine) ([]InstallProb
 	if host.Links == nil {
 		return rows, nil, nil
 	}
+
 	results := host.Links.ProbeAll(ctx)
 	for _, r := range results {
 		res := "ok"
@@ -453,6 +490,7 @@ func probeLinks(ctx context.Context, host Host, m *state.Machine) ([]InstallProb
 		}
 		rows = append(rows, InstallProbe{Link: linkName(r.Link), Result: res})
 	}
+
 	_, err := updateMachine(m, state.KindProviders, func(b *state.ProvidersBody) bool {
 		if b.Links == nil {
 			b.Links = map[string]state.LinkRecord{}

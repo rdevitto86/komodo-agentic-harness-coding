@@ -23,6 +23,7 @@ func diffLines(diff string) []diffLine {
 	var out []diffLine
 	file := ""
 	oldLeft, newLeft, newLine := 0, 0, 0
+
 	for _, ln := range strings.Split(diff, "\n") {
 		if oldLeft > 0 || newLeft > 0 {
 			switch {
@@ -45,6 +46,7 @@ func diffLines(diff string) []diffLine {
 			}
 			oldLeft, newLeft = 0, 0
 		}
+
 		switch m := hunkHead.FindStringSubmatch(ln); {
 		case strings.HasPrefix(ln, "+++ "):
 			file = strings.TrimPrefix(strings.TrimPrefix(ln[4:], "b/"), "./")
