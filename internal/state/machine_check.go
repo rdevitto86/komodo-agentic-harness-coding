@@ -10,7 +10,8 @@ import (
 // installHosts lists the hosts install may be asked to set up.
 var installHosts = []string{"claude", "codex"}
 
-// normalizeMachine puts a decoded machine-wide body in its stored form: probes compacted and times in UTC.
+// normalizeMachine puts a decoded machine-wide body in its stored form: probes compacted and times
+// in UTC.
 func normalizeMachine(can any) {
 	switch b := can.(type) {
 	case *ProvidersBody:
@@ -18,11 +19,13 @@ func normalizeMachine(can any) {
 			if p, ok := objectOrEmpty(l.Probe); ok {
 				l.Probe = p
 			}
+
 			l.ResetAt = l.ResetAt.UTC()
 			for wn, w := range l.Windows {
 				w.ResetAt = w.ResetAt.UTC()
 				l.Windows[wn] = w
 			}
+
 			b.Links[name] = l
 		}
 	case *UpdateBody:
@@ -30,7 +33,9 @@ func normalizeMachine(can any) {
 	case *ScheduleBody:
 		for i := range b.Entries {
 			e := &b.Entries[i]
-			e.At, e.QueuedAt, e.Start.Schedule = e.At.UTC(), e.QueuedAt.UTC(), e.Start.Schedule.UTC()
+			e.At = e.At.UTC()
+			e.QueuedAt = e.QueuedAt.UTC()
+			e.Start.Schedule = e.Start.Schedule.UTC()
 		}
 	}
 }
@@ -38,21 +43,29 @@ func normalizeMachine(can any) {
 // validateMachine runs the rules of one machine-wide record on its normalised body.
 func validateMachine(k MachineKind, can any) error {
 	f := func(field, why string) error { return invalid(string(k), "body."+field, why) }
+
 	switch b := can.(type) {
 	case *ProvidersBody:
 		return validateProviders(b, f)
 	case *UpdateBody:
-		for _, v := range []struct{ name, val string }{{"latest", b.Latest}, {"previous", b.Previous}} {
+		versions := []struct{ name, val string }{
+			{"latest", b.Latest},
+			{"previous", b.Previous},
+		}
+
+		for _, v := range versions {
 			if _, err := core.ParseSemVer(v.val); v.val != "" && err != nil {
 				return f(v.name, fmt.Sprintf("%q is not a version", v.val))
 			}
 		}
+
 		if b.CheckedAt.IsZero() {
 			return f("checked_at", "empty")
 		}
 	case *InstallBody:
 		for i, e := range b.Entries {
 			p := fmt.Sprintf("entries[%d].", i)
+
 			switch {
 			case e.Target == "":
 				return f(p+"target", "empty")
@@ -62,6 +75,7 @@ func validateMachine(k MachineKind, can any) error {
 				return f(p+"step", "below 1")
 			}
 		}
+
 		for i, h := range b.Selections.Hosts {
 			if !oneOf(h, installHosts) {
 				return f(fmt.Sprintf("selections.hosts[%d]", i), fmt.Sprintf("%q is not a host", h))
@@ -70,6 +84,7 @@ func validateMachine(k MachineKind, can any) error {
 	case *ScheduleBody:
 		for i, e := range b.Entries {
 			p := fmt.Sprintf("entries[%d].", i)
+
 			switch {
 			case e.Target == "":
 				return f(p+"target", "empty")
@@ -86,6 +101,7 @@ func validateMachine(k MachineKind, can any) error {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -95,9 +111,12 @@ func validateProviders(b *ProvidersBody, f func(field, why string) error) error 
 	for n := range b.Links {
 		names = append(names, n)
 	}
+
 	sort.Strings(names)
+
 	for _, n := range names {
 		l := b.Links[n]
+
 		p := "links." + n
 		switch {
 		case n == "":
@@ -109,11 +128,14 @@ func validateProviders(b *ProvidersBody, f func(field, why string) error) error 
 		case !oneOf(l.Cap, fieldEnums["LinkRecord.Cap"]):
 			return f(p+".cap", fmt.Sprintf("%q is not a cap", l.Cap))
 		}
+
 		wins := make([]string, 0, len(l.Windows))
 		for wn := range l.Windows {
 			wins = append(wins, wn)
 		}
+
 		sort.Strings(wins)
+
 		for _, wn := range wins {
 			w := l.Windows[wn]
 			switch {
@@ -126,11 +148,13 @@ func validateProviders(b *ProvidersBody, f func(field, why string) error) error 
 			}
 		}
 	}
+
 	return nil
 }
 
 // validProbe reports whether a link's probe is a JSON object.
 func validProbe(l LinkRecord) bool {
 	_, ok := objectOrEmpty(l.Probe)
+
 	return ok
 }

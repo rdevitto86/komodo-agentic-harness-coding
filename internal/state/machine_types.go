@@ -11,13 +11,21 @@ import (
 type MachineKind string
 
 const (
-	KindProviders MachineKind = "providers" // probe results, limit reset times and link session counts
-	KindUpdate    MachineKind = "update"    // the newest version seen and the one before the last swap
-	KindInstall   MachineKind = "install"   // every machine-wide file and entry that install owns
-	KindSchedule  MachineKind = "schedule"  // runs queued by komodo run --schedule
+	// probe results, limit reset times and link session counts
+	KindProviders MachineKind = "providers"
+
+	// the newest version seen and the one before the last swap
+	KindUpdate MachineKind = "update"
+
+	// every machine-wide file and entry that install owns
+	KindInstall MachineKind = "install"
+
+	// runs queued by komodo run --schedule
+	KindSchedule MachineKind = "schedule"
 )
 
-// MachineHeader is the five fields every machine-wide record carries; the manager fills in all of them.
+// MachineHeader is the five fields every machine-wide record carries; the manager fills in all of
+// them.
 type MachineHeader struct {
 	V      int         `json:"v"`      // schema version the record was written under
 	Kind   MachineKind `json:"kind"`   // which record this is; equals the file's name
@@ -39,12 +47,20 @@ type ProvidersBody struct {
 
 // LinkRecord is one link's probe result, limit reset time and running session count.
 type LinkRecord struct {
-	Probe    json.RawMessage `json:"probe"`             // the model client's probe result, stored whole; the manager checks only that it is an object
-	ResetAt  time.Time       `json:"reset_at,omitzero"` // when the link's limit lifts; zero when not limited
-	Cap      string          `json:"cap,omitempty"`     // which cap was hit: window, weekly, model, spend or quota
-	Sessions int             `json:"sessions"`          // sessions running on the link across the machine
+	// the model client's probe result, stored whole; the manager checks only that it is an object
+	Probe json.RawMessage `json:"probe"`
 
-	Windows map[string]WindowRecord `json:"windows,omitempty"` // the Resource Manager's plan windows of the link, keyed by window name
+	// when the link's limit lifts; zero when not limited
+	ResetAt time.Time `json:"reset_at,omitzero"`
+
+	// which cap was hit: window, weekly, model, spend or quota
+	Cap string `json:"cap,omitempty"`
+
+	// sessions running on the link across the machine
+	Sessions int `json:"sessions"`
+
+	// the Resource Manager's plan windows of the link, keyed by window name
+	Windows map[string]WindowRecord `json:"windows,omitempty"`
 }
 
 // WindowKey names one window on one link.
@@ -74,10 +90,17 @@ type InstallBody struct {
 
 // InstallEntry records one owned file and the content install wrote.
 type InstallEntry struct {
-	Target string `json:"target"`          // absolute path of the file
-	Entry  string `json:"entry,omitempty"` // for a settings file, which entry inside it
-	Hash   string `json:"hash"`            // SHA-256 of the content install wrote, 64 lowercase hexadecimal characters
-	Step   int    `json:"step"`            // number of the install step that wrote it
+	// absolute path of the file
+	Target string `json:"target"`
+
+	// for a settings file, which entry inside it
+	Entry string `json:"entry,omitempty"`
+
+	// SHA-256 of the content install wrote, 64 lowercase hexadecimal characters
+	Hash string `json:"hash"`
+
+	// number of the install step that wrote it
+	Step int `json:"step"`
 }
 
 // InstallSelections are the optional parts chosen at install.
@@ -93,10 +116,21 @@ type ScheduleBody struct {
 
 // ScheduleEntry is one queued run.
 type ScheduleEntry struct {
-	Target   string       `json:"target"`    // the (id) given to komodo run, such as ep-1 or tg-1.2
-	Root     string       `json:"root"`      // the repository root the target belongs to
-	RunID    string       `json:"run_id"`    // the run id the engine minted when it queued the entry
-	At       time.Time    `json:"at"`        // when the run starts
-	QueuedAt time.Time    `json:"queued_at"` // when komodo run --schedule queued it
-	Start    bus.RunStart `json:"start"`     // the run-start data the CLI sent; published as is when the entry fires
+	// the (id) given to komodo run, such as ep-1 or tg-1.2
+	Target string `json:"target"`
+
+	// the repository root the target belongs to
+	Root string `json:"root"`
+
+	// the run id the engine minted when it queued the entry
+	RunID string `json:"run_id"`
+
+	// when the run starts
+	At time.Time `json:"at"`
+
+	// when komodo run --schedule queued it
+	QueuedAt time.Time `json:"queued_at"`
+
+	// the run-start data the CLI sent; published as is when the entry fires
+	Start bus.RunStart `json:"start"`
 }
