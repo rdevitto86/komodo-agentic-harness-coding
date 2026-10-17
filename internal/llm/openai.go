@@ -17,9 +17,6 @@ func NewOpenAIAPI() Provider { return openAIStub{link: OpenAIAPI} }
 // Link returns the link the stub names.
 func (o openAIStub) Link() Link { return o.link }
 
-// notYet is the error every call of the stub returns.
-func (o openAIStub) notYet() error { return fmt.Errorf("%s: %w", o.link, ErrNotYet) }
-
 // Probe returns ErrNotYet.
 func (o openAIStub) Probe(context.Context) (ProbeResult, error) {
 	return ProbeResult{Link: o.link, Reason: ErrNotYet.Error()}, o.notYet()
@@ -37,3 +34,6 @@ func (o openAIStub) Start(context.Context, Session) (Stream, error) { return nil
 func (o openAIStub) Resume(context.Context, Session, Input) (Stream, error) {
 	return nil, o.notYet()
 }
+
+// notYet is the error every call of the stub returns.
+func (o openAIStub) notYet() error { return fmt.Errorf("%s: %w", o.link, ErrNotYet) }

@@ -255,6 +255,7 @@ func TestNudgeSendsOneCommandAndChangesNoState(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.waitStage("tg-1", StageBuild)
+	waitUntil(t, "the stage orders are done", func() bool { return len(r.store.get("g-tg-1").ActionsOpen) == 0 })
 	before := r.store.saves.Load()
 	if err := r.m.NudgeGroups(context.Background(), resource.NudgeOrder{Groups: []string{"tg-1"}}); err != nil {
 		t.Fatal(err)

@@ -53,6 +53,10 @@ type planRequest struct {
 	Goal string   `json:"goal"` // the one-line goal; may be empty when Docs is set
 	Docs []string `json:"docs"` // source documents to plan from, as repository paths
 	Epic int      `json:"epic"` // an existing epic to amend as a delta; 0 for a new epic
+
+	Repo      string `json:"repo"`       // the repository id the plan belongs to
+	Root      string `json:"root"`       // the repository root on this machine
+	CommonDir string `json:"common_dir"` // the repository's git common directory
 }
 
 // EventKey binds planRequest to plan / request.
@@ -361,7 +365,13 @@ func handleReplay(c *Call) Result {
 
 // handlePlan sends a plan event and waits for the run-start that ends planning, or for an error event.
 func handlePlan(c *Call) Result {
-	pr := &planRequest{Goal: strings.Join(c.Args, " "), Docs: []string{}}
+	pr := &planRequest{
+		Goal:      strings.Join(c.Args, " "),
+		Docs:      []string{},
+		Repo:      c.Repo.ID,
+		Root:      c.Repo.Root,
+		CommonDir: c.CommonDir,
+	}
 
 	if from := flagString(c, "from"); from != "" {
 		if !filepath.IsAbs(from) {

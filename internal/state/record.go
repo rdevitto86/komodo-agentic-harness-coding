@@ -24,40 +24,99 @@ type Record struct {
 type Stage string
 
 const (
-	StageIntake     Stage = "intake"      // the Intake Handler's planning stage
-	StageBuild      Stage = "build"       // the Builder works through the tasks
-	StageTestReview Stage = "test_review" // the Tester and Reviewer judge in parallel
-	StageCommit     Stage = "commit"      // the Commit Handler publishes
-	StageCleanup    Stage = "cleanup"     // the Cleanup Handler frees resources
-	StageDone       Stage = "done"        // the group is closed
-	StagePaused     Stage = "paused"      // a plan window or a spending ceiling is reached; the lease is kept and the group resumes when the window resets
-	StageBlocked    Stage = "blocked"     // needs a person or the orchestrator
+	// the Intake Handler's planning stage
+	StageIntake Stage = "intake"
+
+	// the Builder works through the tasks
+	StageBuild Stage = "build"
+
+	// the Tester and Reviewer judge in parallel
+	StageTestReview Stage = "test_review"
+
+	// the Commit Handler publishes
+	StageCommit Stage = "commit"
+
+	// the Cleanup Handler frees resources
+	StageCleanup Stage = "cleanup"
+
+	// the group is closed
+	StageDone Stage = "done"
+
+	// a plan window or a spending ceiling is reached; the lease is kept and the group resumes when
+	// the window resets
+	StagePaused Stage = "paused"
+
+	// needs a person or the orchestrator
+	StageBlocked Stage = "blocked"
 )
 
 // GroupState is one task group's runtime state: the body of a group record.
 type GroupState struct {
-	Run         string           `json:"run"`                  // run that holds the group
-	Group       string           `json:"group"`                // task group id
-	Stage       Stage            `json:"stage"`                // current stage
-	Prior       Stage            `json:"prior"`                // the working stage a paused or blocked group left
-	Epoch       uint32           `json:"epoch"`                // rises each time the group enters a stage; an input from an older epoch is stale
-	Outcome     string           `json:"outcome"`              // set in done: complete, lost or abandoned
-	Fence       uint64           `json:"fence"`                // the Lease Manager's fence for this holder; never zero
-	ConfigHash  string           `json:"config_hash"`          // SHA-256 of the settings pinned at run start
-	Counters    Counters         `json:"counters"`             // numbers the Runtime Manager reads
-	Tasks       []TaskState      `json:"tasks"`                // progress of each task
-	TestReview  TestReview       `json:"test_review"`          // results of the current test and review round
-	ActionsOpen []OpenAction     `json:"actions_open"`         // actions ordered but not yet done
-	Resume      []ResumeRef      `json:"resume"`               // how each interrupted session can continue
-	Pause       PauseState       `json:"pause"`                // set while the group is paused
-	Block       BlockState       `json:"block"`                // set while the group is blocked
-	FailureHash string           `json:"failure_hash"`         // fingerprint of the failure behind the last return to build
-	ReturnTree  string           `json:"return_tree"`          // tree hash tested at the last return; the same tree again is a flap
-	Owed        []string         `json:"owed"`                 // agents whose restart is owed until a pause ends
-	Requests    []string         `json:"requests"`             // ids of requests applied, newest last, at most 64
-	ScopeAdded  []string         `json:"scope_added"`          // file patterns the orchestrator approved for the group
-	Unfinished  *UnfinishedEdits `json:"unfinished,omitempty"` // the task whose edits a Builder session left in the worktree
-	LastEventAt time.Time        `json:"last_event_at"`        // time of the previous applied change, for wall time
+	// run that holds the group
+	Run string `json:"run"`
+
+	// task group id
+	Group string `json:"group"`
+
+	// current stage
+	Stage Stage `json:"stage"`
+
+	// the working stage a paused or blocked group left
+	Prior Stage `json:"prior"`
+
+	// rises each time the group enters a stage; an input from an older epoch is stale
+	Epoch uint32 `json:"epoch"`
+
+	// set in done: complete, lost or abandoned
+	Outcome string `json:"outcome"`
+
+	// the Lease Manager's fence for this holder; never zero
+	Fence uint64 `json:"fence"`
+
+	// SHA-256 of the settings pinned at run start
+	ConfigHash string `json:"config_hash"`
+
+	// numbers the Runtime Manager reads
+	Counters Counters `json:"counters"`
+
+	// progress of each task
+	Tasks []TaskState `json:"tasks"`
+
+	// results of the current test and review round
+	TestReview TestReview `json:"test_review"`
+
+	// actions ordered but not yet done
+	ActionsOpen []OpenAction `json:"actions_open"`
+
+	// how each interrupted session can continue
+	Resume []ResumeRef `json:"resume"`
+
+	// set while the group is paused
+	Pause PauseState `json:"pause"`
+
+	// set while the group is blocked
+	Block BlockState `json:"block"`
+
+	// fingerprint of the failure behind the last return to build
+	FailureHash string `json:"failure_hash"`
+
+	// tree hash tested at the last return; the same tree again is a flap
+	ReturnTree string `json:"return_tree"`
+
+	// agents whose restart is owed until a pause ends
+	Owed []string `json:"owed"`
+
+	// ids of requests applied, newest last, at most 64
+	Requests []string `json:"requests"`
+
+	// file patterns the orchestrator approved for the group
+	ScopeAdded []string `json:"scope_added"`
+
+	// the task whose edits a Builder session left in the worktree
+	Unfinished *UnfinishedEdits `json:"unfinished,omitempty"`
+
+	// time of the previous applied change, for wall time
+	LastEventAt time.Time `json:"last_event_at"`
 }
 
 // UnfinishedEdits names a task whose edits sit in the worktree uncommitted.
@@ -68,14 +127,29 @@ type UnfinishedEdits struct {
 
 // Counters are the numbers that bound a group; only the Runtime Manager changes them.
 type Counters struct {
-	Returns      int            `json:"returns"`       // returns to build after a failed test or review
-	Attempts     int            `json:"attempts"`      // fresh builder sessions for the group
-	Retries      int            `json:"retries"`       // builder restarts after a timeout or idle stop
-	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to attempts or retries
-	Blocks       map[string]int `json:"blocks"`        // blocks per reason
-	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time
-	WallExtended bool           `json:"wall_extended"` // the one wall-time extension was granted
-	TokensUsed   int64          `json:"tokens_used"`   // tokens used by the group
+	// returns to build after a failed test or review
+	Returns int `json:"returns"`
+
+	// fresh builder sessions for the group
+	Attempts int `json:"attempts"`
+
+	// builder restarts after a timeout or idle stop
+	Retries int `json:"retries"`
+
+	// sessions lost to a crash; never charged to attempts or retries
+	Crashes int `json:"crashes"`
+
+	// blocks per reason
+	Blocks map[string]int `json:"blocks"`
+
+	// seconds worked, excluding paused and blocked time
+	WallUsedS int64 `json:"wall_used_s"`
+
+	// the one wall-time extension was granted
+	WallExtended bool `json:"wall_extended"`
+
+	// tokens used by the group
+	TokensUsed int64 `json:"tokens_used"`
 }
 
 // TaskState is one task's progress.
@@ -111,10 +185,17 @@ type Finding struct {
 
 // OpenAction is a side effect the Runtime Manager ordered that has not finished.
 type OpenAction struct {
-	ID      string          `json:"id"`      // fingerprint of the order, so a rerun is recognised
-	Kind    string          `json:"kind"`    // the kind of action
-	Args    json.RawMessage `json:"args"`    // arguments of that kind
-	Started bool            `json:"started"` // the action began; a rerun after a crash skips an action whose id is done
+	// fingerprint of the order, so a rerun is recognised
+	ID string `json:"id"`
+
+	// the kind of action
+	Kind string `json:"kind"`
+
+	// arguments of that kind
+	Args json.RawMessage `json:"args"`
+
+	// the action began; a rerun after a crash skips an action whose id is done
+	Started bool `json:"started"`
 }
 
 // ResumeRef is how an interrupted session can be continued.
@@ -127,12 +208,23 @@ type ResumeRef struct {
 
 // PauseState holds a paused group's wait.
 type PauseState struct {
-	Until   time.Time `json:"until,omitzero"`  // when the limit resets, plus a margin
-	Since   time.Time `json:"since,omitzero"`  // when the group paused
-	Link    string    `json:"link,omitempty"`  // the limited link
-	Refused int       `json:"refused"`         // resume attempts the provider refused, for the backoff
-	Cause   string    `json:"cause,omitempty"` // provider, plan_window, spending or group_tokens
-	After   bool      `json:"after,omitempty"` // a limit pause waits for the live session to end
+	// when the limit resets, plus a margin
+	Until time.Time `json:"until,omitzero"`
+
+	// when the group paused
+	Since time.Time `json:"since,omitzero"`
+
+	// the limited link
+	Link string `json:"link,omitempty"`
+
+	// resume attempts the provider refused, for the backoff
+	Refused int `json:"refused"`
+
+	// provider, plan_window, spending or group_tokens
+	Cause string `json:"cause,omitempty"`
+
+	// a limit pause waits for the live session to end
+	After bool `json:"after,omitempty"`
 }
 
 // BlockState names why and when a blocked group stopped.

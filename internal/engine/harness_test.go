@@ -241,7 +241,7 @@ type fakePlans struct {
 }
 
 // Specs returns the specs of the labels.
-func (p *fakePlans) Specs(_ context.Context, labels []string) ([]GroupSpec, error) {
+func (p *fakePlans) Specs(_ context.Context, _ string, labels []string) ([]GroupSpec, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.asked = append(p.asked, slices.Clone(labels))
@@ -667,7 +667,7 @@ type fakeCleaner struct {
 }
 
 // Discard records a discard.
-func (c *fakeCleaner) Discard(_ context.Context, _, group string) error {
+func (c *fakeCleaner) Discard(_ context.Context, _, _, group string) error {
 	c.mu.Lock()
 	c.gone = append(c.gone, group)
 	c.mu.Unlock()

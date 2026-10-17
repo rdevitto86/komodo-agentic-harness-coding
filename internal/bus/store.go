@@ -189,6 +189,12 @@ func (b *memBus) wantSyncLocked(e Event, path string) {
 	}
 }
 
+// RepoBound is implemented by an event payload that names the repository its run belongs to, such as a plan request.
+type RepoBound interface {
+	// GitCommonDir returns the repository's common folder, or empty when the payload names none.
+	GitCommonDir() string
+}
+
 // placeLocked returns the log path of e; a run-start binds its run to the events folder in its git directory first.
 func (b *memBus) placeLocked(e Event) (string, error) {
 	if e.Run == "" {
@@ -198,11 +204,21 @@ func (b *memBus) placeLocked(e Event) (string, error) {
 		return "", fmt.Errorf("run id %q cannot name a log file", e.Run)
 	}
 
-	if d, ok := e.Data.(*RunStart); ok && e.Type == TypeRunStart {
-		if d.CommonDir == "" {
-			return "", fmt.Errorf("the run-start of run %s names no git directory", e.Run)
+	common, bind := "", false
+	switch d := e.Data.(type) {
+	case *RunStart:
+		if e.Type == TypeRunStart {
+			if d.CommonDir == "" {
+				return "", fmt.Errorf("the run-start of run %s names no git directory", e.Run)
+			}
+			common, bind = d.CommonDir, true
 		}
-		dir := EventsDir(filepath.Clean(d.CommonDir))
+	case RepoBound:
+		common = d.GitCommonDir()
+		bind = common != ""
+	}
+	if bind {
+		dir := EventsDir(filepath.Clean(common))
 		if b.runDir[e.Run] != dir {
 			b.runDir[e.Run] = dir
 			if b.follow.adds == nil {

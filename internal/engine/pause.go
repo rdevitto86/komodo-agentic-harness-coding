@@ -13,61 +13,28 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
-// taskStart is the command that starts or restarts a group's pipeline.
-func taskStart() task.Command { return task.Command{Kind: task.CmdStart} }
-
-// stopCommand is the command that cancels every live session of a group.
-func stopCommand(cause string) task.Command { return task.Command{Kind: task.CmdStop, Cause: cause} }
-
-// sessionCrash is the session.end the dead-session rule saves for a session found live after a crash.
-func sessionCrash(agent, session, taskID string, stage Stage) SessionEndData {
-	d := SessionEndData{}
-	d.Agent, d.Task, d.Reason, d.Stage, d.Session = agent, taskID, string(state.ReasonCrash), string(stage), busID(session)
-	if agent == "builder" && taskID != "" {
-		d.Unfinished = &state.UnfinishedEdits{Task: taskID, Files: []string{}}
-	}
-	return d
-}
-
-// groupsNamed returns the live groups the names identify, and the names that match none.
-func (m *Manager) groupsNamed(names []string) ([]*group, []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []*group
-	var missing []string
-	for _, n := range names {
-		var found *group
-		for _, g := range m.groups {
-			if g.spec.ID == n || g.spec.Label == n {
-				found = g
-			}
-		}
-		if found == nil {
-			missing = append(missing, n)
-			continue
-		}
-		out = append(out, found)
-	}
-	return out, missing
-}
-
-// PauseGroups pauses each group a PauseOrder names after its current step; the Resource Manager calls it.
+// PauseGroups pauses each group a PauseOrder names after its current step; the Resource Manager
+// calls it.
 func (m *Manager) PauseGroups(ctx context.Context, o resource.PauseOrder) error {
 	gs, missing := m.groupsNamed(o.Groups)
 	now := m.clk.Now()
+
 	for _, g := range gs {
 		g.mu.Lock()
 		st := g.snap
 		g.mu.Unlock()
+
 		if st.Stage != StageBuild && st.Stage != StageTestReview {
 			continue
 		}
+
 		lp := LimitPause{Link: o.Link}
 		switch o.Reason {
 		case "window_full":
 			if m.otherLinkUsable(g, o.Link, now) {
 				continue
 			}
+
 			lp.Cause, lp.Until = "plan_window", o.Until.Add(time.Minute)
 		case "spend_ceiling":
 			lp.Cause = "spending"
@@ -81,46 +48,29 @@ func (m *Manager) PauseGroups(ctx context.Context, o resource.PauseOrder) error 
 		default:
 			return fmt.Errorf("pause order has the unknown reason %q", o.Reason)
 		}
+
 		g.enqueue(Input{Kind: InLimitPause, Time: now, Data: mustJSON(lp)})
 	}
+
 	if len(missing) > 0 {
 		return fmt.Errorf("the engine does not host group %s", strings.Join(missing, ", "))
 	}
+
 	return nil
 }
 
-// otherLinkUsable reports whether the group's current agent has another link in its chain that is not limited.
-func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool {
-	if m.d.Chain == nil {
-		return false
-	}
-	var providers map[string]state.LinkRecord
-	if m.d.Machine != nil {
-		if rec, err := state.LoadMachine[state.ProvidersBody](m.d.Machine, state.KindProviders); err == nil {
-			providers = rec.Body.Links
-		}
-	}
-	for _, l := range m.d.Chain(g.spec.ID) {
-		if l == limited {
-			continue
-		}
-		if p, ok := providers[l]; ok && p.ResetAt.After(now) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-// NudgeGroups sends the token-cap nudge to the running agents of each named group; it changes no state.
+// NudgeGroups sends the token-cap nudge to the running agents of each named group; it changes no
+// state.
 func (m *Manager) NudgeGroups(ctx context.Context, o resource.NudgeOrder) error {
 	gs, missing := m.groupsNamed(o.Groups)
 	for _, g := range gs {
 		g.send(task.Command{Kind: task.CmdNudge})
 	}
+
 	if len(missing) > 0 {
 		return fmt.Errorf("the engine does not host group %s", strings.Join(missing, ", "))
 	}
+
 	return nil
 }
 
@@ -130,37 +80,180 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	if len(gs) == 0 {
 		return &codeError{CodeUnknownTarget, "no live group named " + target}
 	}
+
 	g := gs[0]
 	g.mu.Lock()
 	st, ask := g.snap, g.ask
 	g.mu.Unlock()
+
 	answer := "deny"
 	if approve {
 		answer = "approve"
 	}
+
 	switch {
-	case st.Stage == StageBlocked && (st.Block.Reason == state.ReasonNeedsScope || st.Block.Reason == state.ReasonWall):
+	case st.Stage == StageBlocked &&
+		(st.Block.Reason == state.ReasonNeedsScope || st.Block.Reason == state.ReasonWall):
 		sa := ScopeAnswer{Answer: answer}
 		if ask != nil {
 			sa.Paths, sa.Reason = ask.Paths, ask.Reason
 		}
+
 		g.enqueue(Input{Kind: InScopeAnswer, Request: request, Data: mustJSON(sa)})
 	case st.Stage == StagePaused && st.Pause.Cause == "group_tokens" && approve:
 		if m.d.Resource != nil {
 			m.d.Resource.GrantGroupTokens(g.spec.ID)
 		}
-		g.enqueue(Input{Kind: InContinue, Request: request, Data: mustJSON(ContinueData{Answer: answer})})
+
+		g.enqueue(Input{
+			Kind:    InContinue,
+			Request: request,
+			Data:    mustJSON(ContinueData{Answer: answer}),
+		})
 	default:
 		return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an answer"}
 	}
+
 	return nil
 }
 
-// continueTarget handles a run-continue event: an answer, or a plain continue of every held group the target names.
+// Abandon drops a group for good: it is stopped, Done with outcome abandoned, discarded, and each
+// dependent blocks.
+func (m *Manager) Abandon(ctx context.Context, target string) (string, error) {
+	gs := m.byTarget(target)
+	if len(gs) == 0 {
+		return "", &codeError{CodeUnknownTarget, "no live group named " + target}
+	}
+
+	g := gs[0]
+	g.enqueue(Input{Kind: InAbandon, Data: mustJSON(AbandonData{Group: g.spec.ID})})
+
+	select {
+	case <-g.done:
+	case <-ctx.Done():
+		return g.r.id, ctx.Err()
+	case <-time.After(10 * time.Second):
+		return g.r.id, fmt.Errorf("group %s did not stop in time", g.spec.Label)
+	}
+
+	m.mu.Lock()
+	r := g.r
+
+	var dependents []*group
+
+	for id, s := range r.specs {
+		if !slices.Contains(s.Depends, g.spec.ID) {
+			continue
+		}
+
+		if d := r.groups[id]; d != nil && !r.finished[id] {
+			dependents = append(dependents, d)
+		} else if d == nil && !r.finished[id] {
+			r.depBlocked[id] = g.spec.Label
+		}
+	}
+
+	if p, ok := r.landing[g.spec.Epic]; ok {
+		p.Order = slices.DeleteFunc(slices.Clone(p.Order), func(l string) bool {
+			return l == g.spec.Label
+		})
+		r.landing[g.spec.Epic] = p
+	}
+	m.mu.Unlock()
+
+	for _, d := range dependents {
+		d.enqueue(Input{Kind: InAbandon, Data: mustJSON(AbandonData{Group: g.spec.ID})})
+	}
+
+	m.groupChanged(g)
+
+	return r.id, nil
+}
+
+// LandingPlan returns the landing plan of the epic a group belongs to, for the Commit Handler.
+func (m *Manager) LandingPlan(group string) (LandingPlan, bool) {
+	gs, _ := m.groupsNamed([]string{group})
+	if len(gs) == 0 {
+		return LandingPlan{}, false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return gs[0].r.landingFor(gs[0].spec.Epic)
+}
+
+// groupsNamed returns the live groups the names identify, and the names that match none.
+func (m *Manager) groupsNamed(names []string) ([]*group, []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var (
+		out     []*group
+		missing []string
+	)
+
+	for _, n := range names {
+		var found *group
+
+		for _, g := range m.groups {
+			if g.spec.ID == n || g.spec.Label == n {
+				found = g
+			}
+		}
+
+		if found == nil {
+			missing = append(missing, n)
+
+			continue
+		}
+
+		out = append(out, found)
+	}
+
+	return out, missing
+}
+
+// otherLinkUsable reports whether the group's current agent has another link in its chain that is
+// not limited.
+func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool {
+	if m.d.Chain == nil {
+		return false
+	}
+
+	var providers map[string]state.LinkRecord
+
+	if m.d.Machine != nil {
+		if rec, err := state.LoadMachine[state.ProvidersBody](
+			m.d.Machine,
+			state.KindProviders,
+		); err == nil {
+			providers = rec.Body.Links
+		}
+	}
+
+	for _, l := range m.d.Chain(g.spec.ID) {
+		if l == limited {
+			continue
+		}
+
+		if p, ok := providers[l]; ok && p.ResetAt.After(now) {
+			continue
+		}
+
+		return true
+	}
+
+	return false
+}
+
+// continueTarget handles a run-continue event: an answer, or a plain continue of every held group
+// the target names.
 func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run string) error {
 	if rc.Answer != "" {
 		return m.Answer(rc.Target, rc.Answer == "approve", string(rc.Request))
 	}
+
 	gs := m.byTarget(rc.Target)
 	if len(gs) == 0 {
 		m.mu.Lock()
@@ -171,24 +264,31 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 		}
 		m.mu.Unlock()
 	}
+
 	if len(gs) == 0 {
 		return &codeError{CodeUnknownTarget, "no live group or run named " + rc.Target}
 	}
+
 	for _, g := range gs {
 		g.mu.Lock()
 		st := g.snap
 		g.mu.Unlock()
+
 		if st.Stage != StagePaused && st.Stage != StageBlocked {
 			continue
 		}
+
 		if st.Stage == StageBlocked && st.Block.Reason == state.ReasonDependency {
 			if dep := m.undoneDep(g); dep != "" {
 				m.publishRefusal(g, string(rc.Request), "dependency "+dep+" is not Done")
+
 				continue
 			}
 		}
+
 		g.enqueue(Input{Kind: InContinue, Request: string(rc.Request) + "/" + g.spec.ID})
 	}
+
 	return nil
 }
 
@@ -196,6 +296,7 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 func (m *Manager) undoneDep(g *group) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	return m.firstUnfinishedDep(g.r, g.spec.ID)
 }
 
@@ -204,57 +305,38 @@ func (m *Manager) publishRefusal(g *group, request, why string) {
 	if request == "" {
 		return
 	}
-	_ = m.d.Bus.Publish(Event{Type: bus.TypeRunStatus, Subtype: "request.refused", Run: bus.ID(g.r.id), Group: bus.ID(g.spec.ID),
-		Data: &bus.RequestRefused{RequestRef: bus.RequestRef{Request: bus.ID(request)}, Why: why}})
+
+	_ = m.d.Bus.Publish(Event{
+		Type:    bus.TypeRunStatus,
+		Subtype: "request.refused",
+		Run:     bus.ID(g.r.id),
+		Group:   bus.ID(g.spec.ID),
+		Data: &bus.RequestRefused{
+			RequestRef: bus.RequestRef{Request: bus.ID(request)},
+			Why:        why,
+		},
+	})
 }
 
-// Abandon drops a group for good: it is stopped, Done with outcome abandoned, discarded, and each dependent blocks.
-func (m *Manager) Abandon(ctx context.Context, target string) (string, error) {
-	gs := m.byTarget(target)
-	if len(gs) == 0 {
-		return "", &codeError{CodeUnknownTarget, "no live group named " + target}
-	}
-	g := gs[0]
-	g.enqueue(Input{Kind: InAbandon, Data: mustJSON(AbandonData{Group: g.spec.ID})})
-	select {
-	case <-g.done:
-	case <-ctx.Done():
-		return g.r.id, ctx.Err()
-	case <-time.After(10 * time.Second):
-		return g.r.id, fmt.Errorf("group %s did not stop in time", g.spec.Label)
-	}
-	m.mu.Lock()
-	r := g.r
-	var dependents []*group
-	for id, s := range r.specs {
-		if !slices.Contains(s.Depends, g.spec.ID) {
-			continue
-		}
-		if d := r.groups[id]; d != nil && !r.finished[id] {
-			dependents = append(dependents, d)
-		} else if d == nil && !r.finished[id] {
-			r.depBlocked[id] = g.spec.Label
-		}
-	}
-	if p, ok := r.landing[g.spec.Epic]; ok {
-		p.Order = slices.DeleteFunc(slices.Clone(p.Order), func(l string) bool { return l == g.spec.Label })
-		r.landing[g.spec.Epic] = p
-	}
-	m.mu.Unlock()
-	for _, d := range dependents {
-		d.enqueue(Input{Kind: InAbandon, Data: mustJSON(AbandonData{Group: g.spec.ID})})
-	}
-	m.groupChanged(g)
-	return r.id, nil
+// taskStart is the command that starts or restarts a group's pipeline.
+func taskStart() task.Command { return task.Command{Kind: task.CmdStart} }
+
+// stopCommand is the command that cancels every live session of a group.
+func stopCommand(cause string) task.Command {
+	return task.Command{Kind: task.CmdStop, Cause: cause}
 }
 
-// LandingPlan returns the landing plan of the epic a group belongs to, for the Commit Handler.
-func (m *Manager) LandingPlan(group string) (LandingPlan, bool) {
-	gs, _ := m.groupsNamed([]string{group})
-	if len(gs) == 0 {
-		return LandingPlan{}, false
+// sessionCrash is the session.end the dead-session rule saves for a session found live after a
+// crash.
+func sessionCrash(agent, session, taskID string, stage Stage) SessionEndData {
+	d := SessionEndData{}
+
+	d.Agent, d.Task, d.Reason = agent, taskID, string(state.ReasonCrash)
+
+	d.Stage, d.Session = string(stage), busID(session)
+	if agent == "builder" && taskID != "" {
+		d.Unfinished = &state.UnfinishedEdits{Task: taskID, Files: []string{}}
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return gs[0].r.landingFor(gs[0].spec.Epic)
+
+	return d
 }

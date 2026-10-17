@@ -5,8 +5,8 @@ import (
 	"sync"
 )
 
-// EpicGates holds each epic's landing turn in memory; one engine per machine lands, so no file is needed.
-// The zero value is ready to use.
+// EpicGates holds each epic's landing turn in memory; one engine per machine lands, so no file is
+// needed. The zero value is ready to use.
 type EpicGates struct {
 	mu    sync.Mutex
 	epics map[string]*epicGate
@@ -38,28 +38,45 @@ type Turn struct {
 	done   bool
 }
 
+// Enter waits for the epic's turn, first come first served; a paused epic admits only the group
+// that paused it.
+func (g *EpicGates) Enter(ctx context.Context, epic, group string) (*Turn, error) {
+	return g.enter(ctx, epic, &waiter{group: group, ready: make(chan struct{})})
+}
+
+// Lock waits for the epic's turn like Enter but is admitted even while the epic is paused; it only
+// lets the caller edit the epic's landing worktree, so it never changes the pause.
+func (g *EpicGates) Lock(ctx context.Context, epic string) (*Turn, error) {
+	return g.enter(ctx, epic, &waiter{anyPause: true, ready: make(chan struct{})})
+}
+
 // gate returns the epic's gate, creating it; the caller holds the lock.
 func (g *EpicGates) gate(epic string) *epicGate {
 	if g.epics == nil {
 		g.epics = map[string]*epicGate{}
 	}
+
 	e := g.epics[epic]
 	if e == nil {
 		e = &epicGate{}
 		g.epics[epic] = e
 	}
+
 	return e
 }
 
 // grant gives the free turn to group and returns it; the caller holds the lock.
-// A turn taken only to edit the landing worktree is not a landing: it neither counts as the epic's first turn nor carries a pause.
+// A turn taken only to edit the landing worktree is not a landing: it neither counts as the epic's
+// first turn nor carries a pause.
 func (g *EpicGates) grant(epic string, e *epicGate, w *waiter) *Turn {
 	t := &Turn{gates: g, epic: epic, group: w.group}
 	if !w.anyPause {
 		t.first, t.paused = !e.seen, e.pausedBy != ""
 		e.seen = true
 	}
+
 	e.held = true
+
 	return t
 }
 
@@ -69,59 +86,61 @@ func (g *EpicGates) dispatch(epic string, e *epicGate) {
 	if e.held {
 		return
 	}
+
 	for i, w := range e.queue {
 		if e.pausedBy != "" && w.group != e.pausedBy && !w.anyPause {
 			continue
 		}
+
 		e.queue = append(e.queue[:i], e.queue[i+1:]...)
 		w.turn = g.grant(epic, e, w)
 		close(w.ready)
+
 		return
 	}
-}
-
-// Enter waits for the epic's turn, first come first served; a paused epic admits only the group that paused it.
-func (g *EpicGates) Enter(ctx context.Context, epic, group string) (*Turn, error) {
-	return g.enter(ctx, epic, &waiter{group: group, ready: make(chan struct{})})
-}
-
-// Lock waits for the epic's turn like Enter but is admitted even while the epic is paused; it only lets the
-// caller edit the epic's landing worktree, so it never changes the pause.
-func (g *EpicGates) Lock(ctx context.Context, epic string) (*Turn, error) {
-	return g.enter(ctx, epic, &waiter{anyPause: true, ready: make(chan struct{})})
 }
 
 // enter admits w at once when it may, and otherwise queues it until its turn or the end of ctx.
 func (g *EpicGates) enter(ctx context.Context, epic string, w *waiter) (*Turn, error) {
 	g.mu.Lock()
 	e := g.gate(epic)
+
 	free := !e.held && ((w.anyPause && (len(e.queue) == 0 || e.pausedBy != "")) ||
 		(!w.anyPause && ((e.pausedBy == "" && len(e.queue) == 0) || e.pausedBy == w.group)))
 	if free {
 		t := g.grant(epic, e, w)
 		g.mu.Unlock()
+
 		return t, nil
 	}
+
 	e.queue = append(e.queue, w)
 	g.mu.Unlock()
+
 	select {
 	case <-w.ready:
 		return w.turn, nil
 	case <-ctx.Done():
 	}
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
 	if w.turn != nil {
 		e.held = false
 		g.dispatch(epic, e)
+
 		return nil, ctx.Err()
 	}
+
 	for i, q := range e.queue {
 		if q == w {
 			e.queue = append(e.queue[:i], e.queue[i+1:]...)
+
 			break
 		}
 	}
+
 	return nil, ctx.Err()
 }
 
@@ -129,24 +148,12 @@ func (g *EpicGates) enter(ctx context.Context, epic string, w *waiter) (*Turn, e
 func (g *EpicGates) queued(epic string) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
 	return len(g.gate(epic).queue)
 }
 
-// free ends the turn once; set runs under the lock before the next group is admitted.
-func (t *Turn) free(set func(e *epicGate)) {
-	t.gates.mu.Lock()
-	defer t.gates.mu.Unlock()
-	if t.done {
-		return
-	}
-	t.done = true
-	e := t.gates.gate(t.epic)
-	set(e)
-	e.held = false
-	t.gates.dispatch(t.epic, e)
-}
-
-// Finish frees the turn: a failed recheck pauses the epic under this group, a passing one clears the pause.
+// Finish frees the turn: a failed recheck pauses the epic under this group, a passing one clears
+// the pause.
 func (t *Turn) Finish(pass bool) {
 	t.free(func(e *epicGate) {
 		if pass {
@@ -165,3 +172,19 @@ func (t *Turn) First() bool { return t.first }
 
 // Paused reports whether the epic was paused when this turn began.
 func (t *Turn) Paused() bool { return t.paused }
+
+// free ends the turn once; set runs under the lock before the next group is admitted.
+func (t *Turn) free(set func(e *epicGate)) {
+	t.gates.mu.Lock()
+	defer t.gates.mu.Unlock()
+
+	if t.done {
+		return
+	}
+
+	t.done = true
+	e := t.gates.gate(t.epic)
+	set(e)
+	e.held = false
+	t.gates.dispatch(t.epic, e)
+}

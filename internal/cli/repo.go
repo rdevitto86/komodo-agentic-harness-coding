@@ -115,6 +115,9 @@ func repoID(root string) string {
 	return common
 }
 
+// RepoID returns the repository id of the repository at root, as the commands name it in a run-start.
+func RepoID(root string) string { return repoID(root) }
+
 // originURL reads the url of [remote "origin"] from a git config file.
 func originURL(path string) string {
 	f, err := os.Open(path)

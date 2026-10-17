@@ -37,9 +37,6 @@ type CommandSet struct {
 	MarkerHash string // hash of the marker files; the cache key
 }
 
-// classOrder lists the detected classes in rendering order.
-var classOrder = []Class{ClassSetup, ClassBuild, ClassTest, ClassLint, ClassFormat}
-
 // cmdSpec is the argv of one class under one marker.
 type cmdSpec struct {
 	argv    []string
@@ -52,24 +49,65 @@ type markerRow struct {
 	cmds func(t Tree) map[Class]cmdSpec
 }
 
-// markerRows lists the language markers in priority order.
-var markerRows = []markerRow{
-	{"go.mod", fixedCmds(map[Class]cmdSpec{
-		ClassSetup: {argv: []string{"go", "mod", "download"}}, ClassBuild: {argv: []string{"go", "build", "./..."}},
-		ClassTest: {argv: []string{"go", "test", "./..."}}, ClassLint: {argv: []string{"go", "vet", "./..."}},
-		ClassFormat: {argv: []string{"gofmt", "-w"}, perFile: true},
-	})},
-	{"package.json", nodeCmds},
-	{"Cargo.toml", fixedCmds(map[Class]cmdSpec{
-		ClassSetup: {argv: []string{"cargo", "fetch"}}, ClassBuild: {argv: []string{"cargo", "build"}},
-		ClassTest: {argv: []string{"cargo", "test"}}, ClassLint: {argv: []string{"cargo", "clippy"}},
-		ClassFormat: {argv: []string{"cargo", "fmt", "--"}, perFile: true},
-	})},
-	{"pyproject.toml", fixedCmds(map[Class]cmdSpec{
-		ClassTest: {argv: []string{"pytest"}}, ClassLint: {argv: []string{"ruff", "check"}},
-		ClassFormat: {argv: []string{"ruff", "format"}, perFile: true},
-	})},
-}
+var (
+	// classOrder lists the detected classes in rendering order.
+	classOrder = []Class{ClassSetup, ClassBuild, ClassTest, ClassLint, ClassFormat}
+
+	// markerRows lists the language markers in priority order.
+	markerRows = []markerRow{
+		{"go.mod", fixedCmds(map[Class]cmdSpec{
+			ClassSetup:  {argv: []string{"go", "mod", "download"}},
+			ClassBuild:  {argv: []string{"go", "build", "./..."}},
+			ClassTest:   {argv: []string{"go", "test", "./..."}},
+			ClassLint:   {argv: []string{"go", "vet", "./..."}},
+			ClassFormat: {argv: []string{"gofmt", "-w"}, perFile: true},
+		})},
+		{"package.json", nodeCmds},
+		{"Cargo.toml", fixedCmds(map[Class]cmdSpec{
+			ClassSetup:  {argv: []string{"cargo", "fetch"}},
+			ClassBuild:  {argv: []string{"cargo", "build"}},
+			ClassTest:   {argv: []string{"cargo", "test"}},
+			ClassLint:   {argv: []string{"cargo", "clippy"}},
+			ClassFormat: {argv: []string{"cargo", "fmt", "--"}, perFile: true},
+		})},
+		{"pyproject.toml", fixedCmds(map[Class]cmdSpec{
+			ClassTest:   {argv: []string{"pytest"}},
+			ClassLint:   {argv: []string{"ruff", "check"}},
+			ClassFormat: {argv: []string{"ruff", "format"}, perFile: true},
+		})},
+	}
+
+	// makeTargets names the Makefile target of each class.
+	makeTargets = map[Class]string{
+		ClassSetup:  "setup",
+		ClassBuild:  "build",
+		ClassTest:   "test",
+		ClassLint:   "lint",
+		ClassFormat: "fmt",
+	}
+
+	// gitRead lists the read-only git commands that are always on.
+	gitRead = [][]string{{"git", "status"}, {"git", "diff"}, {"git", "log"}, {"git", "show"}}
+
+	// targetRe finds a Makefile rule line and captures its target.
+	targetRe = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+)\s*:([^=]|$)`)
+
+	nodeScripts = map[Class][]string{
+		ClassBuild: {"npm", "run", "build"},
+		ClassTest:  {"npm", "test"},
+		ClassLint:  {"npm", "run", "lint"},
+	}
+
+	nodeScriptNames = map[Class]string{
+		ClassBuild: "build",
+		ClassTest:  "test",
+		ClassLint:  "lint",
+	}
+)
+
+// Detect finds the repo's commands from its marker files; a Makefile target beats a language
+// default.
+func Detect(t Tree) CommandSet { return detectWith(t, markerHash(t)) }
 
 // fixedCmds returns a command table that does not depend on the tree.
 func fixedCmds(m map[Class]cmdSpec) func(Tree) map[Class]cmdSpec {
@@ -79,10 +117,12 @@ func fixedCmds(m map[Class]cmdSpec) func(Tree) map[Class]cmdSpec {
 // nodeCmds fills a class only when package.json defines its script; setup needs none.
 func nodeCmds(t Tree) map[Class]cmdSpec {
 	out := map[Class]cmdSpec{ClassSetup: {argv: []string{"npm", "ci"}}}
+
 	raw, err := t.ReadFile("package.json")
 	if err != nil {
 		return out
 	}
+
 	var pkg struct {
 		Scripts         map[string]string          `json:"scripts"`
 		Dependencies    map[string]json.RawMessage `json:"dependencies"`
@@ -91,44 +131,41 @@ func nodeCmds(t Tree) map[Class]cmdSpec {
 	if json.Unmarshal(raw, &pkg) != nil {
 		return out
 	}
-	scripts := map[Class][]string{ClassBuild: {"npm", "run", "build"}, ClassTest: {"npm", "test"}, ClassLint: {"npm", "run", "lint"}}
-	names := map[Class]string{ClassBuild: "build", ClassTest: "test", ClassLint: "lint"}
-	for c, argv := range scripts {
-		if _, ok := pkg.Scripts[names[c]]; ok {
+
+	for c, argv := range nodeScripts {
+		if _, ok := pkg.Scripts[nodeScriptNames[c]]; ok {
 			out[c] = cmdSpec{argv: argv}
 		}
 	}
+
 	_, dep := pkg.Dependencies["prettier"]
 	_, dev := pkg.DevDependencies["prettier"]
+
 	if _, ok := pkg.Scripts["format"]; dep || dev {
 		out[ClassFormat] = cmdSpec{argv: []string{"npx", "prettier", "--write"}, perFile: true}
 	} else if ok {
 		out[ClassFormat] = cmdSpec{argv: []string{"npm", "run", "format", "--"}, perFile: true}
 	}
+
 	return out
 }
 
-// makeTargets names the Makefile target of each class.
-var makeTargets = map[Class]string{ClassSetup: "setup", ClassBuild: "build", ClassTest: "test", ClassLint: "lint", ClassFormat: "fmt"}
-
-// gitRead lists the read-only git commands that are always on.
-var gitRead = [][]string{{"git", "status"}, {"git", "diff"}, {"git", "log"}, {"git", "show"}}
-
-// targetRe finds a Makefile rule line and captures its target.
-var targetRe = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+)\s*:([^=]|$)`)
-
-// markerFiles returns the marker files the tree holds at its root, Makefile first, then in table order.
+// markerFiles returns the marker files the tree holds at its root, Makefile first, then in table
+// order.
 func markerFiles(t Tree) []string {
 	have := map[string]bool{}
 	for _, p := range t.Paths() {
 		have[p] = true
 	}
+
 	var out []string
+
 	for _, f := range append([]string{"Makefile"}, rowFiles()...) {
 		if have[f] {
 			out = append(out, f)
 		}
 	}
+
 	return out
 }
 
@@ -138,28 +175,29 @@ func rowFiles() []string {
 	for i, r := range markerRows {
 		out[i] = r.file
 	}
+
 	return out
 }
 
 // markerHash hashes the names and contents of the marker files.
 func markerHash(t Tree) string {
 	h := sha256.New()
+
 	for _, f := range markerFiles(t) {
 		b, _ := t.ReadFile(f)
 		h.Write([]byte(f + "\x00"))
 		h.Write(b)
 		h.Write([]byte{0})
 	}
+
 	return hex.EncodeToString(h.Sum(nil))
 }
-
-// Detect finds the repo's commands from its marker files; a Makefile target beats a language default.
-func Detect(t Tree) CommandSet { return detectWith(t, markerHash(t)) }
 
 // detectWith is Detect with the marker hash already computed.
 func detectWith(t Tree, hash string) CommandSet {
 	files := markerFiles(t)
 	targets := map[string]bool{}
+
 	for _, f := range files {
 		if f == "Makefile" {
 			b, _ := t.ReadFile(f)
@@ -168,76 +206,110 @@ func detectWith(t Tree, hash string) CommandSet {
 			}
 		}
 	}
+
 	tables := map[string]map[Class]cmdSpec{}
+
 	for _, row := range markerRows {
 		if slices.Contains(files, row.file) {
 			tables[row.file] = row.cmds(t)
 		}
 	}
+
 	cs := CommandSet{MarkerHash: hash}
+
 	for _, c := range classOrder {
 		if targets[makeTargets[c]] {
-			cs.Commands = append(cs.Commands, Command{Class: c, Argv: []string{"make", makeTargets[c]}, Marker: "Makefile"})
+			cs.Commands = append(cs.Commands, Command{
+				Class:  c,
+				Argv:   []string{"make", makeTargets[c]},
+				Marker: "Makefile",
+			})
+
 			continue
 		}
+
 		for _, row := range markerRows {
 			if spec, ok := tables[row.file][c]; ok {
-				cs.Commands = append(cs.Commands, Command{Class: c, Argv: slices.Clone(spec.argv), Marker: row.file, PerFile: spec.perFile})
+				cs.Commands = append(cs.Commands, Command{
+					Class:   c,
+					Argv:    slices.Clone(spec.argv),
+					Marker:  row.file,
+					PerFile: spec.perFile,
+				})
+
 				break
 			}
 		}
 	}
+
 	for _, argv := range gitRead {
 		cs.Commands = append(cs.Commands, Command{Class: ClassGitRead, Argv: argv})
 	}
+
 	return cs
 }
 
 // detectLanguages lists the languages of the tree's files by extension, sorted by name.
 func detectLanguages(t Tree, langs []langPattern) []string {
 	set := map[string]bool{}
+
 	for _, p := range t.Paths() {
 		if name, _ := languageOf(p, langs); name != "" {
 			set[name] = true
 		}
 	}
+
 	out := make([]string, 0, len(set))
 	for n := range set {
 		out = append(out, n)
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
-// renderProfile renders the repo_profile slot: the languages, then one line per detected command class.
+// renderProfile renders the repo_profile slot: the languages, then one line per detected command
+// class.
 func renderProfile(languages []string, cs CommandSet) string {
 	var b strings.Builder
+
 	if len(languages) == 0 {
 		b.WriteString("Languages: none\n")
 	} else {
 		b.WriteString("Languages: " + strings.Join(languages, ", ") + "\n")
 	}
+
 	b.WriteString("Commands:")
+
 	found := false
+
 	for _, c := range append(slices.Clone(classOrder), ClassGitRead) {
 		var cmds []string
+
 		for _, cmd := range cs.Commands {
 			if cmd.Class != c {
 				continue
 			}
+
 			text := strings.Join(cmd.Argv, " ")
 			if cmd.PerFile {
 				text += " <file>"
 			}
+
 			cmds = append(cmds, text)
 		}
+
 		if len(cmds) > 0 {
 			found = true
+
 			b.WriteString("\n  " + string(c) + ": " + strings.Join(cmds, ", "))
 		}
 	}
+
 	if !found {
 		b.WriteString(" none")
 	}
+
 	return b.String()
 }

@@ -85,6 +85,56 @@
     "line": "Always keep tests beside their source and run them with the race detector."
   },
   {
+    "id": "std.go.8",
+    "skill": "standards-go",
+    "line": "Always wrap a line at 100 columns, counting a tab as 4, in code and in comments."
+  },
+  {
+    "id": "std.go.9",
+    "skill": "standards-go",
+    "line": "Always wrap a call, a signature or a struct literal that does not fit as one item per line, aligned."
+  },
+  {
+    "id": "std.go.10",
+    "skill": "standards-go",
+    "line": "Always put a blank line before a return, after an error check, and around a defer, switch, for or select block."
+  },
+  {
+    "id": "std.go.11",
+    "skill": "standards-go",
+    "line": "Always separate the steps of a function with a blank line."
+  },
+  {
+    "id": "std.go.12",
+    "skill": "standards-go",
+    "line": "Always group constants and variables into const and var blocks, one block per purpose."
+  },
+  {
+    "id": "std.go.13",
+    "skill": "standards-go",
+    "line": "Never leave a table, map or compiled pattern inside a function when it never changes; declare it once at package level."
+  },
+  {
+    "id": "std.go.14",
+    "skill": "standards-go",
+    "line": "Always declare a constant inside the one function that uses it."
+  },
+  {
+    "id": "std.go.15",
+    "skill": "standards-go",
+    "line": "Always order a file as types and interfaces, then constants and variables, then New functions, then methods, then plain functions."
+  },
+  {
+    "id": "std.go.16",
+    "skill": "standards-go",
+    "line": "Always put public declarations before private ones within each group."
+  },
+  {
+    "id": "std.go.17",
+    "skill": "standards-go",
+    "line": "Always keep a constant or variable beside the type it belongs to when it describes that type."
+  },
+  {
     "id": "std.kotlin.1",
     "skill": "standards-kotlin",
     "line": "Never use the not-null assertion operator in production code."

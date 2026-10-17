@@ -12,9 +12,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// maxRequests is the most request identifiers a group record keeps.
-const maxRequests = 64
-
 // calc is the working copy of one call of Next.
 type calc struct {
 	s      State
@@ -25,87 +22,29 @@ type calc struct {
 	orders []Order
 	emit   []Event
 	refuse *bus.RequestRefused
-	// scopeBlock is set when the scope rules did not deny a request, so the block rows block the group.
+	// scopeBlock is set when the scope rules did not deny a request, so the block rows block the
+	// group.
 	scopeBlock *ScopeAsk
 }
 
-// Next applies one input to one group's state; it reads nothing, writes nothing and never fails.
-func Next(s0 State, in Input, l Limits) Result {
-	if in.Epoch != 0 && in.Epoch < s0.Epoch {
-		return Result{State: s0, Stale: true}
-	}
-	if in.Request != "" && slices.Contains(s0.Requests, in.Request) {
-		return Result{State: s0, Dup: true}
-	}
-	c := &calc{s: cloneState(s0), in: in, eff: in, l: l}
-	c.from = c.s.Stage
-	if in.Request != "" {
-		c.s.Requests = append(c.s.Requests, in.Request)
-		if n := len(c.s.Requests) - maxRequests; n > 0 {
-			c.s.Requests = slices.Clone(c.s.Requests[n:])
-		}
-	}
-	c.tick()
-	a := c.inStage()
-	b := c.move()
-	if !a && !b {
-		r := Result{State: s0, Refused: true}
-		if c.refuse != nil {
-			r.Emit = []Event{c.event(bus.TypeRunStatus, c.refuse)}
-		}
-		return r
-	}
-	if in.Time.After(c.s.LastEventAt) {
-		c.s.LastEventAt = in.Time
-	}
-	for _, o := range c.orders {
-		args, _ := json.Marshal(o)
-		c.s.ActionsOpen = append(c.s.ActionsOpen, state.OpenAction{ID: o.Key, Kind: string(o.Kind), Args: args})
-	}
-	return Result{State: c.s, Orders: c.orders, Emit: c.emit}
-}
-
-// cloneState returns a deep copy of s with no nil slice or map.
-func cloneState(s State) State {
-	b, _ := json.Marshal(s)
-	var out State
-	_ = json.Unmarshal(b, &out)
-	normalize(&out)
-	return out
-}
-
-// normalize replaces every nil slice and map of a group state with an empty one.
-func normalize(s *State) {
-	if s.Counters.Blocks == nil {
-		s.Counters.Blocks = map[string]int{}
-	}
-	if s.Tasks == nil {
-		s.Tasks = []state.TaskState{}
-	}
-	if s.TestReview.Findings == nil {
-		s.TestReview.Findings = []state.Finding{}
-	}
-	if s.TestReview.NotMet == nil {
-		s.TestReview.NotMet = []string{}
-	}
-	if s.TestReview.Failed == nil {
-		s.TestReview.Failed = []string{}
-	}
-	if s.ActionsOpen == nil {
-		s.ActionsOpen = []state.OpenAction{}
-	}
-	if s.Resume == nil {
-		s.Resume = []state.ResumeRef{}
-	}
-	if s.Owed == nil {
-		s.Owed = []string{}
-	}
-	if s.Requests == nil {
-		s.Requests = []string{}
-	}
-	if s.ScopeAdded == nil {
-		s.ScopeAdded = []string{}
-	}
+// stageData is the data of an enter_stage order.
+type stageData struct {
+	// the first task not done, for Build
+	Task string `json:"task,omitempty"`
+	// the exact output of a failed round
+	Findings string `json:"findings,omitempty"`
+	// the failing items of a failed round
+	Items []string `json:"items,omitempty"`
+	// the reason a fresh session is ordered
+	Retry string `json:"retry,omitempty"`
+	// the one agent to start, when not the whole stage
+	Agent string `json:"agent,omitempty"`
+	// timer or run-continue, for a resumed pause
+	Wake string `json:"wake,omitempty"`
+	// edits a session left in the worktree
+	Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"`
+	// the epic's landing plan, for a Commit order
+	Landing *LandingPlan `json:"landing,omitempty"`
 }
 
 // NewState returns the state of a group before its first input.
@@ -114,22 +53,21 @@ func NewState(run string, spec GroupSpec, configHash string) State {
 	for _, t := range spec.Tasks {
 		s.Tasks = append(s.Tasks, state.TaskState{ID: t, State: "queued"})
 	}
-	normalize(&s)
-	return s
-}
 
-// decode reads the input's data into a T; a missing or broken body gives the zero value.
-func decode[T any](raw json.RawMessage) T {
-	var v T
-	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &v)
-	}
-	return v
+	normalize(&s)
+
+	return s
 }
 
 // event wraps a payload as an event of this group.
 func (c *calc) event(t bus.Type, p bus.Payload) Event {
-	return Event{Type: t, Subtype: p.EventKey().Subtype, Run: bus.ID(c.s.Run), Group: bus.ID(c.s.Group), Data: p}
+	return Event{
+		Type:    t,
+		Subtype: p.EventKey().Subtype,
+		Run:     bus.ID(c.s.Run),
+		Group:   bus.ID(c.s.Group),
+		Data:    p,
+	}
 }
 
 // emitStatus queues a run-status event.
@@ -141,31 +79,31 @@ func (c *calc) order(k OrderKind, stage Stage, data any) *Order {
 	if data != nil {
 		o.Data, _ = json.Marshal(data)
 	}
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%s|%d|%s|%d", k, c.s.Epoch, c.in.Kind, c.in.Time.UnixNano(), c.in.Request, len(c.orders))))
+
+	h := sha256.Sum256([]byte(fmt.Sprintf(
+		"%s|%d|%s|%d|%s|%d",
+		k,
+		c.s.Epoch,
+		c.in.Kind,
+		c.in.Time.UnixNano(),
+		c.in.Request,
+		len(c.orders),
+	)))
 	o.Key = fmt.Sprintf("%s-%s-e%d-%s", c.s.Group, k, c.s.Epoch, hex.EncodeToString(h[:4]))
 	c.orders = append(c.orders, o)
+
 	return &c.orders[len(c.orders)-1]
 }
 
-// enterStage queues an enter_stage order that carries the saved resume references and the extra detail.
+// enterStage queues an enter_stage order that carries the saved resume references and the extra
+// detail.
 func (c *calc) enterStage(stage Stage, d stageData) {
 	if d.Unfinished == nil {
 		d.Unfinished = c.s.Unfinished
 	}
+
 	o := c.order(OrderEnterStage, stage, d)
 	o.Resume = slices.Clone(c.s.Resume)
-}
-
-// stageData is the data of an enter_stage order.
-type stageData struct {
-	Task       string                 `json:"task,omitempty"`       // the first task not done, for Build
-	Findings   string                 `json:"findings,omitempty"`   // the exact output of a failed round
-	Items      []string               `json:"items,omitempty"`      // the failing items of a failed round
-	Retry      string                 `json:"retry,omitempty"`      // the reason a fresh session is ordered
-	Agent      string                 `json:"agent,omitempty"`      // the one agent to start, when not the whole stage
-	Wake       string                 `json:"wake,omitempty"`       // timer or run-continue, for a resumed pause
-	Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"` // edits a session left in the worktree
-	Landing    *LandingPlan           `json:"landing,omitempty"`    // the epic's landing plan, for a Commit order
 }
 
 // firstOpenTask returns the first task not done.
@@ -175,20 +113,12 @@ func (c *calc) firstOpenTask() string {
 			return t.ID
 		}
 	}
+
 	return ""
 }
 
 // allTasksDone reports whether every task is done.
 func (c *calc) allTasksDone() bool { return c.firstOpenTask() == "" }
-
-// working reports whether a stage is one a group works in.
-func working(st Stage) bool {
-	switch st {
-	case StageIntake, StageBuild, StageTestReview, StageCommit, StageCleanup:
-		return true
-	}
-	return false
-}
 
 // builderLive reports whether a builder session holds a task.
 func (c *calc) builderLive() bool {
@@ -197,6 +127,7 @@ func (c *calc) builderLive() bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -207,6 +138,7 @@ func (c *calc) anyLive() bool {
 			return true
 		}
 	}
+
 	return c.builderLive()
 }
 
@@ -216,9 +148,11 @@ func (c *calc) tick() {
 	if s.Stage != StageBuild {
 		return
 	}
+
 	if c.builderLive() && !s.LastEventAt.IsZero() && c.in.Time.After(s.LastEventAt) {
 		s.Counters.WallUsedS += int64(c.in.Time.Sub(s.LastEventAt) / time.Second)
 	}
+
 	if c.l.GroupWallMin > 0 && s.Counters.WallUsedS >= int64(c.l.GroupWallMin)*60 {
 		s.Counters.WallExtended = true
 	}
@@ -232,18 +166,22 @@ func (c *calc) taskByID(id, session string) *state.TaskState {
 			return t
 		}
 	}
+
 	for i := range c.s.Tasks {
 		t := &c.s.Tasks[i]
 		if t.State == "claimed" && (session == "" || t.Session == session) {
 			return t
 		}
 	}
+
 	return nil
 }
 
 // setResume replaces the resume reference of an agent, or removes it when ref is nil.
 func (c *calc) setResume(agent string, ref *state.ResumeRef) {
-	c.s.Resume = slices.DeleteFunc(c.s.Resume, func(r state.ResumeRef) bool { return r.Agent == agent })
+	c.s.Resume = slices.DeleteFunc(c.s.Resume, func(r state.ResumeRef) bool {
+		return r.Agent == agent
+	})
 	if ref != nil {
 		c.s.Resume = append(c.s.Resume, *ref)
 	}
@@ -258,19 +196,23 @@ func (c *calc) inStage() bool {
 		if e, ok := factEvent(s.Run, s.Group, d.Subtype, d.Data); ok {
 			c.emit = append(c.emit, e)
 		}
+
 		return true
 	case InProgress:
 		if s.Stage == StageDone {
 			return false
 		}
+
 		for _, r := range decode[ProgressData](c.in.Data).Live {
 			c.setResume(r.Agent, &r)
 		}
+
 		return true
 	case InLoopRestart:
 		if s.Stage == StageBuild || s.Stage == StageTestReview {
 			s.Counters.Retries++
 			c.enterStage(s.Stage, stageData{Task: c.firstOpenTask(), Retry: "loop"})
+
 			return true
 		}
 	case InSessionStart:
@@ -288,10 +230,13 @@ func (c *calc) inStage() bool {
 	case InLimitPause:
 		if (s.Stage == StageBuild || s.Stage == StageTestReview) && c.anyLive() {
 			d := decode[LimitPause](c.in.Data)
-			s.Pause.After, s.Pause.Cause, s.Pause.Link, s.Pause.Until = true, d.Cause, d.Link, d.Until
+			s.Pause.After, s.Pause.Cause = true, d.Cause
+			s.Pause.Link, s.Pause.Until = d.Link, d.Until
+
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -299,22 +244,28 @@ func (c *calc) inStage() bool {
 func (c *calc) sessionStart() bool {
 	s := &c.s
 	d := decode[SessionStartData](c.in.Data)
+
 	switch s.Stage {
 	case StageBuild, StageTestReview:
 	case StagePaused, StageBlocked, StageDone:
 		c.emitSession(d.SessionStart)
+
 		return true
 	default:
 		return false
 	}
+
 	switch d.Agent {
 	case "builder":
 		for i := range s.Tasks {
-			if (d.Task != "" && s.Tasks[i].ID == d.Task) || (d.Task == "" && s.Tasks[i].State != "done") {
+			if (d.Task != "" && s.Tasks[i].ID == d.Task) ||
+				(d.Task == "" && s.Tasks[i].State != "done") {
 				s.Tasks[i].State, s.Tasks[i].Session = "claimed", string(d.Session)
+
 				break
 			}
 		}
+
 		if !d.Resumed && !d.Restart {
 			s.Counters.Attempts++
 		}
@@ -323,7 +274,9 @@ func (c *calc) sessionStart() bool {
 	case "reviewer":
 		s.TestReview.Reviewer.Session, s.TestReview.Reviewer.Result = string(d.Session), ""
 	}
+
 	c.emitSession(d.SessionStart)
+
 	return true
 }
 
@@ -332,50 +285,71 @@ func (c *calc) emitSession(e bus.SessionStart) {
 	if e.Stage == "" {
 		e.Stage = string(c.s.Stage)
 	}
+
 	c.emitStatus(&e)
 }
 
 // taskDone marks a task done and clears what only an unfinished task needs.
 func (c *calc) taskDone() bool {
 	s := &c.s
+
 	d := decode[bus.TaskDone](c.in.Data)
 	if s.Stage == StagePaused || s.Stage == StageBlocked || s.Stage == StageDone {
 		c.emitStatus(&d)
+
 		return true
 	}
+
 	if s.Stage != StageBuild {
 		return false
 	}
+
 	if t := c.taskByID(d.Task, ""); t != nil {
 		t.State, t.Session, t.GateFailures = "done", "", 0
 	}
+
 	if s.Unfinished != nil && (d.Task == "" || s.Unfinished.Task == d.Task) {
 		s.Unfinished = nil
 	}
+
 	s.Pause = state.PauseState{}
 	if d.Stage == "" {
 		d.Stage = string(s.Stage)
 	}
+
 	c.emitStatus(&d)
+
 	return true
 }
 
-// gateFail counts a failed completion gate; the third failure is a retry the Task Manager ends the session for.
+// gateFail counts a failed completion gate; the third failure is a retry the Task Manager ends the
+// session for.
 func (c *calc) gateFail() bool {
 	s := &c.s
 	if s.Stage != StageBuild {
 		return false
 	}
+
 	d := decode[bus.TaskDone](c.in.Data)
+
 	t := c.taskByID(d.Task, "")
 	if t == nil {
 		return false
 	}
+
 	t.GateFailures++
 	if t.GateFailures >= 3 {
-		c.emitStatus(&bus.TaskRetry{GroupFacts: bus.GroupFacts{Stage: string(s.Stage), Reason: string(state.ReasonCheckFail)}, Task: t.ID, Attempt: s.Counters.Attempts + 1})
+		c.emitStatus(&bus.TaskRetry{
+			GroupFacts: bus.GroupFacts{
+				Stage:  string(s.Stage),
+				Reason: string(state.ReasonCheckFail),
+			},
+			Task:    t.ID,
+			Attempt: s.Counters.Attempts + 1,
+		})
 		t.GateFailures = 0
 	}
+
 	return true
 }
 
@@ -385,37 +359,179 @@ func (c *calc) timerExtend() bool {
 	if s.Stage != StageBuild {
 		return false
 	}
+
 	req := decode[struct {
 		Limit time.Duration `json:"limit"`
 	}](c.in.Data)
 	grant := struct {
 		Extra time.Duration `json:"extra"`
 	}{}
+
 	if !s.Counters.WallExtended {
 		s.Counters.WallExtended = true
 		grant.Extra = req.Limit
 	}
+
 	o := c.order(OrderExtend, StageBuild, grant)
 	o.Re = c.in.Request
+
 	return true
 }
 
-// factEvent builds the event a Task Manager fact stands for; it reports false when the fact has no registered shape.
+// Next applies one input to one group's state; it reads nothing, writes nothing and never fails.
+func Next(s0 State, in Input, l Limits) Result {
+	// maxRequests is the most request identifiers a group record keeps.
+	const maxRequests = 64
+
+	if in.Epoch != 0 && in.Epoch < s0.Epoch {
+		return Result{State: s0, Stale: true}
+	}
+
+	if in.Request != "" && slices.Contains(s0.Requests, in.Request) {
+		return Result{State: s0, Dup: true}
+	}
+
+	c := &calc{s: cloneState(s0), in: in, eff: in, l: l}
+
+	c.from = c.s.Stage
+	if in.Request != "" {
+		c.s.Requests = append(c.s.Requests, in.Request)
+		if n := len(c.s.Requests) - maxRequests; n > 0 {
+			c.s.Requests = slices.Clone(c.s.Requests[n:])
+		}
+	}
+
+	c.tick()
+	a := c.inStage()
+
+	b := c.move()
+	if !a && !b {
+		r := Result{State: s0, Refused: true}
+		if c.refuse != nil {
+			r.Emit = []Event{c.event(bus.TypeRunStatus, c.refuse)}
+		}
+
+		return r
+	}
+
+	if in.Time.After(c.s.LastEventAt) {
+		c.s.LastEventAt = in.Time
+	}
+
+	for _, o := range c.orders {
+		args, _ := json.Marshal(o)
+		c.s.ActionsOpen = append(
+			c.s.ActionsOpen,
+			state.OpenAction{ID: o.Key, Kind: string(o.Kind), Args: args},
+		)
+	}
+
+	return Result{State: c.s, Orders: c.orders, Emit: c.emit}
+}
+
+// cloneState returns a deep copy of s with no nil slice or map.
+func cloneState(s State) State {
+	b, _ := json.Marshal(s)
+
+	var out State
+
+	_ = json.Unmarshal(b, &out)
+	normalize(&out)
+
+	return out
+}
+
+// normalize replaces every nil slice and map of a group state with an empty one.
+func normalize(s *State) {
+	if s.Counters.Blocks == nil {
+		s.Counters.Blocks = map[string]int{}
+	}
+
+	if s.Tasks == nil {
+		s.Tasks = []state.TaskState{}
+	}
+
+	if s.TestReview.Findings == nil {
+		s.TestReview.Findings = []state.Finding{}
+	}
+
+	if s.TestReview.NotMet == nil {
+		s.TestReview.NotMet = []string{}
+	}
+
+	if s.TestReview.Failed == nil {
+		s.TestReview.Failed = []string{}
+	}
+
+	if s.ActionsOpen == nil {
+		s.ActionsOpen = []state.OpenAction{}
+	}
+
+	if s.Resume == nil {
+		s.Resume = []state.ResumeRef{}
+	}
+
+	if s.Owed == nil {
+		s.Owed = []string{}
+	}
+
+	if s.Requests == nil {
+		s.Requests = []string{}
+	}
+
+	if s.ScopeAdded == nil {
+		s.ScopeAdded = []string{}
+	}
+}
+
+// decode reads the input's data into a T; a missing or broken body gives the zero value.
+func decode[T any](raw json.RawMessage) T {
+	var v T
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &v)
+	}
+
+	return v
+}
+
+// working reports whether a stage is one a group works in.
+func working(st Stage) bool {
+	switch st {
+	case StageIntake, StageBuild, StageTestReview, StageCommit, StageCleanup:
+		return true
+	}
+
+	return false
+}
+
+// factEvent builds the event a Task Manager fact stands for; it reports false when the fact has no
+// registered shape.
 func factEvent(run, group, subtype string, data json.RawMessage) (Event, bool) {
 	typ := bus.TypeRunStatus
 	if subtype == "limit.warn" {
 		typ = bus.TypeResource
 	}
+
 	if len(data) == 0 {
 		data = json.RawMessage(`{}`)
 	}
-	b, err := json.Marshal(map[string]any{"type": typ, "subtype": subtype, "run": run, "group": group, "time": time.Time{}, "data": data})
+
+	b, err := json.Marshal(map[string]any{
+		"type":    typ,
+		"subtype": subtype,
+		"run":     run,
+		"group":   group,
+		"time":    time.Time{},
+		"data":    data,
+	})
 	if err != nil {
 		return Event{}, false
 	}
+
 	var e Event
 	if err := json.Unmarshal(b, &e); err != nil {
 		return Event{}, false
 	}
+
 	return e, true
 }

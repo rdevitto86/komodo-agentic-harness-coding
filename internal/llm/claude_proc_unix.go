@@ -19,5 +19,6 @@ func signalProc(p *os.Process, level StopLevel) error {
 	case Terminate:
 		return p.Signal(syscall.SIGTERM)
 	}
+
 	return syscall.Kill(-p.Pid, syscall.SIGKILL)
 }

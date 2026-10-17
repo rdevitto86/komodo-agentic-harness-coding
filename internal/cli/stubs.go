@@ -1,4 +1,18 @@
 package cli
 
-// handleEngine is the hidden verb that starts the engine; it fails fast until the engine is built.
-func handleEngine(*Call) Result { return notBuilt("the engine") }
+// EngineMain runs the engine in the foreground; the binary's main sets it, because the engine's
+// parts sit outside this package's imports.
+var EngineMain func(*Call) error
+
+// handleEngine is the hidden verb that runs the engine in the foreground.
+func handleEngine(c *Call) Result {
+	if EngineMain == nil {
+		return notBuilt("the engine")
+	}
+
+	if err := EngineMain(c); err != nil {
+		return internalErr(err.Error())
+	}
+
+	return Result{Outcome: OutcomeOK, Raw: "engine stopped\n"}
+}

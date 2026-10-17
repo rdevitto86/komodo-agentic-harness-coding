@@ -7,7 +7,8 @@ const (
 	StatusOK          TestStatus = "ok"
 	StatusRegression  TestStatus = "regression"   // passed at base, fails at head: blocks
 	StatusPreExisting TestStatus = "pre_existing" // fails at both: warns
-	StatusNew         TestStatus = "new"          // no base result, fails at head: blocks like a regression
+	// no base result, fails at head: blocks like a regression
+	StatusNew TestStatus = "new"
 )
 
 // Baseline is the test-class result at one base commit, keyed by tree hash.
@@ -44,5 +45,6 @@ func ClassifyFailure(reruns [2]bool) FlakeOutcome {
 	if !reruns[0] && !reruns[1] {
 		return FlakeConfirmed
 	}
+
 	return FlakeFlaky
 }

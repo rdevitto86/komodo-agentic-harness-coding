@@ -28,9 +28,6 @@ type Usage struct {
 	USDEquiv   float64 `json:"usd_equiv"` // notional cost of a subscription session; for display
 }
 
-// EventKey binds Usage to resource/usage.
-func (Usage) EventKey() bus.Key { return bus.Key{Type: bus.TypeResource, Subtype: subtypeUsage} }
-
 // Headroom is the data of resource/headroom: one window after one reply.
 type Headroom struct {
 	Link      string    `json:"link"`
@@ -40,23 +37,30 @@ type Headroom struct {
 	ResetAt   time.Time `json:"reset_at"`
 }
 
-// EventKey binds Headroom to resource/headroom.
-func (Headroom) EventKey() bus.Key { return bus.Key{Type: bus.TypeResource, Subtype: subtypeHeadroom} }
-
 // Overage is the data of resource/overage: a subscription link is drawing paid credits.
 type Overage struct {
 	Link    string    `json:"link"`
 	ResetAt time.Time `json:"reset_at"`
 }
 
-// EventKey binds Overage to resource/overage.
-func (Overage) EventKey() bus.Key { return bus.Key{Type: bus.TypeResource, Subtype: subtypeOverage} }
-
 // Limit is the data of resource/limit: a provider refused a request because a cap was hit.
 type Limit struct {
 	Link    string    `json:"link"`
 	Kind    string    `json:"kind"`     // window, weekly, model, spend or quota
 	ResetAt time.Time `json:"reset_at"` // zero when the provider gave none
+}
+
+// EventKey binds Usage to resource/usage.
+func (Usage) EventKey() bus.Key { return bus.Key{Type: bus.TypeResource, Subtype: subtypeUsage} }
+
+// EventKey binds Headroom to resource/headroom.
+func (Headroom) EventKey() bus.Key {
+	return bus.Key{Type: bus.TypeResource, Subtype: subtypeHeadroom}
+}
+
+// EventKey binds Overage to resource/overage.
+func (Overage) EventKey() bus.Key {
+	return bus.Key{Type: bus.TypeResource, Subtype: subtypeOverage}
 }
 
 // EventKey binds Limit to resource/limit.
