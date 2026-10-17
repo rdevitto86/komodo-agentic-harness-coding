@@ -1,4 +1,5 @@
-// Package cleanup is the Cleanup Handler: it removes a published, abandoned or dead group's branch, worktree and Docker container.
+// Package cleanup is the Cleanup Handler: it removes a published, abandoned or dead group's branch,
+// worktree and Docker container.
 package cleanup
 
 import "errors"
@@ -7,15 +8,18 @@ import "errors"
 type Published struct {
 	Run      string `json:"run"`
 	Group    string `json:"group"`
-	Epic     string `json:"epic"`              // epic folder name, such as ep-1
-	Branch   string `json:"branch"`            // group branch that was landed
-	Tip      string `json:"tip"`               // commit id the remote must hold
-	Remote   string `json:"remote"`            // remote that received the push
-	Contains string `json:"contains"`          // remote reference whose history must hold Tip
-	Worktree string `json:"worktree"`          // path of the group's checkout
-	Landing  string `json:"landing,omitempty"` // path of the epic's landing worktree; used when EpicDone is true
-	EpicDone bool   `json:"epic_done"`         // true when this was the epic's last group and its pull request is open
-	PRURL    string `json:"pr_url"`            // epic pull request address; empty before the last group lands
+	Epic     string `json:"epic"`     // epic folder name, such as ep-1
+	Branch   string `json:"branch"`   // group branch that was landed
+	Tip      string `json:"tip"`      // commit id the remote must hold
+	Remote   string `json:"remote"`   // remote that received the push
+	Contains string `json:"contains"` // remote reference whose history must hold Tip
+	Worktree string `json:"worktree"` // path of the group's checkout
+	// path of the epic's landing worktree; used when EpicDone is true
+	Landing string `json:"landing,omitempty"`
+	// true when this was the epic's last group and its pull request is open
+	EpicDone bool `json:"epic_done"`
+	// epic pull request address; empty before the last group lands
+	PRURL string `json:"pr_url"`
 }
 
 // Item is one thing the Cleanup Handler removed or kept.
@@ -58,8 +62,10 @@ const (
 )
 
 var (
-	ErrNotPublished = errors.New("remote does not hold the group's tip") // Complete: nothing is removed
-	ErrLeaseHeld    = errors.New("a live run holds the group")           // Sweep, Discard: the group is skipped
+	// Complete: nothing is removed
+	ErrNotPublished = errors.New("remote does not hold the group's tip")
+	// Sweep, Discard: the group is skipped
+	ErrLeaseHeld      = errors.New("a live run holds the group")
 	ErrUnknownVersion = errors.New("a binary version is unknown, so none can be deleted")
-	ErrOutsideRoots = errors.New("path is outside the folders cleanup may delete in")
+	ErrOutsideRoots   = errors.New("path is outside the folders cleanup may delete in")
 )
