@@ -11,7 +11,8 @@ type Registry interface {
 	List(ctx context.Context, repo string) ([]Lease, error)
 }
 
-// RepoLocker is implemented by a registry that can hold one repository's grants and revocations still across processes.
+// RepoLocker is implemented by a registry that can hold one repository's grants and revocations
+// still across processes.
 type RepoLocker interface {
 	LockRepo(ctx context.Context, repo string) (unlock func(), err error)
 }
