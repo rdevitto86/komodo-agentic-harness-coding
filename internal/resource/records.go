@@ -14,11 +14,6 @@ type WindowRecord struct {
 	Sessions    int       `json:"sessions"` // sessions finished in the window
 }
 
-// sameRecord reports whether two records hold the same figures and the same instant.
-func sameRecord(a, b WindowRecord) bool {
-	return a.PercentUsed == b.PercentUsed && a.Sessions == b.Sessions && a.ResetAt.Equal(b.ResetAt)
-}
-
 // machineRecords adapts the State Manager's machine-wide record to Records.
 type machineRecords struct{ m *state.Machine }
 
@@ -31,15 +26,35 @@ func (r machineRecords) LoadWindows(ctx context.Context) (map[WindowKey]WindowRe
 	if err != nil {
 		return nil, err
 	}
+
 	out := make(map[WindowKey]WindowRecord, len(stored))
 	for k, v := range stored {
-		out[WindowKey{Link: k.Link, Window: k.Window}] = WindowRecord{PercentUsed: v.PercentUsed, ResetAt: v.ResetAt, Sessions: v.Sessions}
+		out[WindowKey{Link: k.Link, Window: k.Window}] = WindowRecord{
+			PercentUsed: v.PercentUsed,
+			ResetAt:     v.ResetAt,
+			Sessions:    v.Sessions,
+		}
 	}
+
 	return out, nil
 }
 
 // SaveWindow stores one window record.
 func (r machineRecords) SaveWindow(ctx context.Context, k WindowKey, rec WindowRecord) error {
-	return r.m.SaveWindow(ctx, state.WindowKey{Link: k.Link, Window: k.Window},
-		state.WindowRecord{PercentUsed: rec.PercentUsed, ResetAt: rec.ResetAt, Sessions: rec.Sessions})
+	return r.m.SaveWindow(
+		ctx,
+		state.WindowKey{Link: k.Link, Window: k.Window},
+		state.WindowRecord{
+			PercentUsed: rec.PercentUsed,
+			ResetAt:     rec.ResetAt,
+			Sessions:    rec.Sessions,
+		},
+	)
+}
+
+// sameRecord reports whether two records hold the same figures and the same instant.
+func sameRecord(a, b WindowRecord) bool {
+	return a.PercentUsed == b.PercentUsed &&
+		a.Sessions == b.Sessions &&
+		a.ResetAt.Equal(b.ResetAt)
 }

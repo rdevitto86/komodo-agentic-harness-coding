@@ -2,7 +2,8 @@ package resource
 
 import "github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 
-// markRaised records that the error e was thrown, so the same crossing is not raised again; k is the window the error is about.
+// markRaised records that the error e was thrown, so the same crossing is not raised again;
+// k is the window the error is about.
 func (s *State) markRaised(o Observation, k WindowKey, e fault.ResourceError) {
 	switch e.Kind {
 	case "window":
@@ -26,7 +27,8 @@ func (s *State) markRaised(o Observation, k WindowKey, e fault.ResourceError) {
 	}
 }
 
-// markNotice keeps a notice raised until its reset time; a notice with no reset time is never kept, so it raises every time.
+// markNotice keeps a notice raised until its reset time; a notice with no reset time is never
+// kept, so it raises every time.
 func markNotice(n *Notice) {
 	if n != nil && !n.ResetAt.IsZero() {
 		n.Raised = true
@@ -45,6 +47,7 @@ func (s *State) errorRaised(p PauseOrder) bool {
 	case reasonGroupTokens:
 		return len(p.Groups) == 1 && s.Spend.GroupCapRaised[p.Groups[0]]
 	}
+
 	return false
 }
 
@@ -58,6 +61,7 @@ func (s *State) markPaused(p PauseOrder) {
 			if s.Spend.RunCeiling[p.Run] == nil {
 				s.Spend.RunCeiling[p.Run] = map[string]bool{}
 			}
+
 			s.Spend.RunCeiling[p.Run][g] = true
 		case reasonSpendCeilingDay:
 			s.Spend.DayCeiling[g] = true
