@@ -29,5 +29,6 @@ func clockOf(c Clock) Clock {
 	if c == nil {
 		return realClock{}
 	}
+
 	return c
 }

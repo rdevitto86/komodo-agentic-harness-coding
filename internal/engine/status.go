@@ -10,7 +10,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// StatusData is the data of a status reply; the Metrics Service figures are merged in beside these fields.
+// StatusData is the data of a status reply; the Metrics Service figures are merged in beside these
+// fields.
 type StatusData struct {
 	Runs    []RunRow     `json:"runs"`
 	Queued  []QueuedRow  `json:"queued"`
@@ -49,79 +50,71 @@ type BlockedRow struct {
 	Question string `json:"question"` // what the group asks, in plain words
 }
 
-// Snapshot returns the live runs of one repository root (every root when it is empty) with their groups and the groups that wait for an answer.
+// Snapshot returns the live runs of one repository root (every root when it is empty) with their
+// groups and the groups that wait for an answer.
 func (m *Manager) Snapshot(root string) ([]RunRow, []BlockedRow) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	rows, blocked := []RunRow{}, []BlockedRow{}
+
 	for _, r := range m.runs {
 		if root != "" && r.start.Root != root {
 			continue
 		}
+
 		row := RunRow{RunID: r.id, Target: r.start.Target, Groups: []GroupRow{}}
 		for _, id := range r.order {
 			s := r.specs[id]
+
 			g := r.groups[id]
 			if g == nil {
 				stage, st := "", "waiting"
 				if r.finished[id] {
 					stage, st = string(StageDone), "done"
 				}
+
 				row.Groups = append(row.Groups, GroupRow{Group: s.Label, Stage: stage, State: st})
+
 				continue
 			}
+
 			g.mu.Lock()
 			snap := g.snap
 			g.mu.Unlock()
+
 			gr := GroupRow{Group: s.Label, Stage: string(workingOf(snap)), State: "running"}
 			switch snap.Stage {
 			case StagePaused:
 				gr.State = "paused"
 			case StageBlocked:
 				gr.State = "blocked"
-				blocked = append(blocked, BlockedRow{Group: s.Label, RunID: r.id, Reason: string(snap.Block.Reason), Question: g.question(snap)})
+
+				blocked = append(
+					blocked,
+					BlockedRow{
+						Group:    s.Label,
+						RunID:    r.id,
+						Reason:   string(snap.Block.Reason),
+						Question: g.question(snap),
+					},
+				)
 			case StageDone:
 				gr.Stage, gr.State = string(StageDone), "done"
 			case NoStage:
 				gr.Stage, gr.State = "", "waiting"
 			}
+
 			row.Groups = append(row.Groups, gr)
 		}
+
 		rows = append(rows, row)
 	}
+
 	slices.SortFunc(rows, func(a, b RunRow) int { return strings.Compare(a.RunID, b.RunID) })
 	slices.SortFunc(blocked, func(a, b BlockedRow) int { return strings.Compare(a.Group, b.Group) })
+
 	return rows, blocked
-}
-
-// question says in plain words what a blocked group waits for.
-func (g *group) question(s State) string {
-	label := g.spec.Label
-	g.mu.Lock()
-	ask := g.ask
-	g.mu.Unlock()
-	switch s.Block.Reason {
-	case state.ReasonNeedsScope:
-		if ask != nil {
-			return fmt.Sprintf("%s asks to change %s outside its files (%s). Approve or deny?", label, strings.Join(ask.Paths, ", "), ask.Reason)
-		}
-		return label + " asks to change files outside its list. Approve or deny?"
-	case state.ReasonWall:
-		return label + " used twice its working time. Approve more time or leave it blocked?"
-	}
-	return fmt.Sprintf("%s is blocked: %s. Fix the cause and run it again.", label, s.Block.Reason)
-}
-
-// firstSaved returns a channel that closes when the run's first group record is saved; it is closed for a run that is not live.
-func (m *Manager) firstSaved(runID string) <-chan struct{} {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if r := m.runs[runID]; r != nil {
-		return r.firstCh
-	}
-	c := make(chan struct{})
-	close(c)
-	return c
 }
 
 // Ready returns a channel that closes once Run listens for run commands.
@@ -130,22 +123,43 @@ func (m *Manager) Ready() <-chan struct{} { return m.ready }
 // StopAll runs the stop sequence for every live run at once.
 func (m *Manager) StopAll(ctx context.Context) {
 	m.mu.Lock()
+
 	ids := make([]string, 0, len(m.runs))
 	for id := range m.runs {
 		ids = append(ids, id)
 	}
+
 	m.stopped = true
 	m.mu.Unlock()
+
 	done := make(chan struct{}, len(ids))
 	for _, id := range ids {
 		m.spawn(func() {
 			_ = m.Stop(ctx, id)
+
 			done <- struct{}{}
 		})
 	}
+
 	for range ids {
 		<-done
 	}
+}
+
+// firstSaved returns a channel that closes when the run's first group record is saved; it is closed
+// for a run that is not live.
+func (m *Manager) firstSaved(runID string) <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if r := m.runs[runID]; r != nil {
+		return r.firstCh
+	}
+
+	c := make(chan struct{})
+	close(c)
+
+	return c
 }
 
 // reportErr hands an error the Runtime Manager cannot act on to the error reporter.
@@ -159,10 +173,13 @@ func (m *Manager) reportErr(run, group string, err error) {
 func (m *Manager) closeAllCaches() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	if len(m.repos) == 0 {
 		return
 	}
+
 	clear(m.repos)
+
 	if m.d.Caches != nil {
 		_ = m.d.Caches.Close(context.Background())
 	}
@@ -173,4 +190,30 @@ func (m *Manager) forget(request string) {
 	m.mu.Lock()
 	delete(m.expect, request)
 	m.mu.Unlock()
+}
+
+// question says in plain words what a blocked group waits for.
+func (g *group) question(s State) string {
+	label := g.spec.Label
+	g.mu.Lock()
+	ask := g.ask
+	g.mu.Unlock()
+
+	switch s.Block.Reason {
+	case state.ReasonNeedsScope:
+		if ask != nil {
+			return fmt.Sprintf(
+				"%s asks to change %s outside its files (%s). Approve or deny?",
+				label,
+				strings.Join(ask.Paths, ", "),
+				ask.Reason,
+			)
+		}
+
+		return label + " asks to change files outside its list. Approve or deny?"
+	case state.ReasonWall:
+		return label + " used twice its working time. Approve more time or leave it blocked?"
+	}
+
+	return fmt.Sprintf("%s is blocked: %s. Fix the cause and run it again.", label, s.Block.Reason)
 }
