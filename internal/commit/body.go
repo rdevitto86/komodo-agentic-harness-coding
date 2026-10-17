@@ -6,8 +6,10 @@ import (
 	"text/template"
 )
 
-// bodyTemplate is one group's section of the pull request body; every value comes from the facts and the two verdicts.
-const bodyTemplate = `## Summary
+const (
+	// bodyTemplate is one group's section of the pull request body; every value comes from the
+	// facts and the two verdicts.
+	bodyTemplate = `## Summary
 {{.Facts.DiffStat}}
 
 ## Tasks closed
@@ -23,12 +25,13 @@ const bodyTemplate = `## Summary
 {{range .Reviewer.Summary}}- {{.}}
 {{end}}`
 
-// epicBodyTemplate is the epic pull request body; every value comes from EpicFacts.
-const epicBodyTemplate = `## Summary
+	// epicBodyTemplate is the epic pull request body; every value comes from EpicFacts.
+	epicBodyTemplate = `## Summary
 {{.DiffStat}}
 
 {{range .Groups}}{{.}}
 {{end}}`
+)
 
 var (
 	groupBody = template.Must(template.New("group").Parse(bodyTemplate))
@@ -38,6 +41,7 @@ var (
 // RenderBody fills the Commit Handler's own pull request body template with the facts.
 func RenderBody(f PRFacts, tester, reviewer Verdict) (string, error) {
 	var b bytes.Buffer
+
 	data := struct {
 		Facts            PRFacts
 		Tester, Reviewer Verdict
@@ -45,6 +49,7 @@ func RenderBody(f PRFacts, tester, reviewer Verdict) (string, error) {
 	if err := groupBody.Execute(&b, data); err != nil {
 		return "", fmt.Errorf("render group body: %w", err)
 	}
+
 	return b.String(), nil
 }
 
@@ -54,5 +59,6 @@ func RenderEpicBody(f EpicFacts) (string, error) {
 	if err := epicBody.Execute(&b, f); err != nil {
 		return "", fmt.Errorf("render epic body: %w", err)
 	}
+
 	return b.String(), nil
 }
