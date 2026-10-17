@@ -2,68 +2,6 @@ package dashboard
 
 import "html/template"
 
-// funcs are the helpers the page templates call.
-var funcs = template.FuncMap{"num": num, "usd": usd}
-
-// pageTmpl is the shell page; on load it opens the one stream that fills every element with an id.
-// Actions reuse the page's own query string, so the token is never written into the page.
-var pageTmpl = template.Must(template.New("page").Funcs(funcs).Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Komodo</title>
-<script type="module" src="/assets/datastar.js"></script>
-<style>` + pageCSS + `</style></head>
-<body data-init="@get('/events'+location.search)">
-<main>
-<header class="top"><div class="brand"><span class="logo"></span>Komodo<small>runs</small></div><div id="runhead"></div></header>
-<div id="kpis" class="kpis"></div>
-<section class="card"><h2>Pipeline</h2>
-<svg id="pipeline" viewBox="0 0 640 {{.Height}}" role="img" aria-label="Stage pipeline with a live count per stage">
-{{range $i, $b := .Boxes}}{{if $i}}<line class="flow" x1="{{$b.Prev}}" y1="54" x2="{{$b.X}}" y2="54"/>{{end}}{{end}}
-<g id="diagram">{{template "stages" .Boxes}}<g id="pointers"></g></g>
-</svg></section>
-<div class="cols">
-<section><h2 class="h">Groups</h2><div id="groups"></div></section>
-<aside>
-<section class="card"><h2>Events</h2><div id="events"></div></section>
-<section class="card"><h2>Plan windows</h2><div id="resources"></div></section>
-<section class="card"><h2>Agent models</h2><div class="models">
-{{range .Agents}}<label>{{.}} <select data-bind="{{.}}" data-on:change="@post('/agents/{{.}}/model'+location.search)">{{range $.Models}}<option>{{.}}</option>{{end}}</select></label>
-{{end}}</div><p id="log" class="muted">{{.Actions}} actions</p></section>
-</aside></div>
-</main></body></html>
-
-{{define "stages"}}<g id="stages">{{range .}}<g class="stage{{if .Count}} on{{end}}"><rect x="{{.X}}" y="8" width="88" height="92" rx="12"/>
-<text class="stage-label" x="{{.Mid}}" y="32">{{.Title}}</text><text class="stage-count" x="{{.Mid}}" y="82" id="count-{{.Key}}">{{.Count}}</text></g>{{end}}</g>{{end}}`))
-
-// viewTmpl renders the elements the stream patches as HTML: header, tiles, cards, feed and meters.
-var viewTmpl = template.Must(template.New("view").Funcs(funcs).Parse(`{{define "runhead"}}<div id="runhead">
-<span><i>Run</i><b>{{.Run.ID}}</b></span><span><i>Repo</i><b>{{.Run.Repo}}</b></span><span class="wide"><i>Epic</i><b>{{.Run.Epic}}</b></span><span><i>Started</i><b>{{.Started}}</b></span></div>{{end}}
-
-{{define "kpis"}}<div id="kpis" class="kpis">
-<div class="kpi running"><b>{{.KPIs.Running}}</b><span>Running</span></div>
-<div class="kpi blocked{{if not .KPIs.Blocked}} zero{{end}}"><b>{{.KPIs.Blocked}}</b><span>Blocked</span></div>
-<div class="kpi done"><b>{{.KPIs.Done}}</b><span>Done</span></div>
-{{if .Usage}}<div class="kpi"><b>{{num .KPIs.Tokens}}</b><span>Tokens</span></div>
-<div class="kpi"><b>{{usd .KPIs.USD}}</b><span>USD</span></div>{{end}}</div>{{end}}
-
-{{define "groups"}}<div id="groups" class="cards">{{range .Cards}}
-<article class="card g {{.Tone}}">
-<header><div><h3>{{.Label}}</h3><span class="gid">{{.Group.Group}}</span></div><span class="chip {{.Tone}}">{{.Chip}}</span></header>
-<div class="prog"><div class="bar"><i style="width:{{.Pct}}%"></i></div><span>{{.TasksDone}} / {{.TasksTotal}} tasks · {{.ElapsedMin}} min</span></div>
-<div class="sessions{{if .InTest}} test-review{{end}}">{{range .Rows}}<div class="sess {{.Status}}"><span class="role">{{.Role}}</span><span class="st">{{.Status}}</span><span class="model">{{.Model}}</span>{{if $.Usage}}<span class="use">{{num .Tokens}} tok · {{usd .USD}}</span>{{end}}</div>{{end}}</div>
-{{if .Block}}<p class="reason {{.Tone}}"><b>{{.Chip}}</b> {{.Block}}</p>{{end}}
-{{if .Held}}<button class="resume" data-on:click="@post('/groups/{{.Group.Group}}/resume'+location.search)">Resume</button>{{end}}
-<details id="{{.ID}}" data-ignore-morph><summary>Brief</summary><pre>{{.Brief}}</pre></details>
-</article>{{end}}</div>{{end}}
-
-{{define "events"}}<div id="events" class="feed">{{range .Events}}<div class="ev"><time>{{.Time}}</time><span class="tag {{.Tone}}">{{.Type}}</span><span class="sub">{{.Subtype}}</span><span class="gid">{{.Group}}</span></div>{{else}}<p class="muted">No events yet.</p>{{end}}</div>{{end}}
-
-{{define "resources"}}<div id="resources">{{range .Links}}<div class="res"><div class="rl"><span>{{.Name}}</span><b>{{.Percent}}%</b></div><div class="meter {{.Tone}}"><i style="width:{{.Width}}%"></i></div></div>{{else}}<p class="muted">No links.</p>{{end}}</div>{{end}}`))
-
-// diagramTmpl renders the pipeline boxes and the group dots, patched in the svg namespace.
-var diagramTmpl = template.Must(template.Must(pageTmpl.Clone()).New("dots").Parse(
-	`<g id="diagram">{{template "stages" .Boxes}}<g id="pointers">{{range .Pointers}}<g id="ptr-{{.ID}}" class="pointer {{.Tone}}" style="transform:translate({{.X}}px,{{.Y}}px)"><circle r="5" cx="-26"/><text x="-16" y="4">{{.ID}}</text></g>{{end}}</g></g>`))
-
 // pageCSS styles the page with tokens; the dark tokens follow the system theme.
 const pageCSS = `
 :root{--bg:#f1f5f9;--card:#fff;--soft:#f8fafc;--ink:#0f172a;--mute:#64748b;--line:#e2e8f0;
@@ -150,3 +88,65 @@ select{font:13px system-ui;padding:6px 8px;border-radius:8px;border:1px solid va
 @media (max-width:900px){.cols{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:480px){main{padding:14px 16px 32px}.kpi b{font-size:24px}.ev{grid-template-columns:56px auto 1fr}.ev .gid{display:none}}
 `
+
+// funcs are the helpers the page templates call.
+var funcs = template.FuncMap{"num": num, "usd": usd}
+
+// pageTmpl is the shell page; on load it opens the one stream that fills every element with an id.
+// Actions reuse the page's own query string, so the token is never written into the page.
+var pageTmpl = template.Must(template.New("page").Funcs(funcs).Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Komodo</title>
+<script type="module" src="/assets/datastar.js"></script>
+<style>` + pageCSS + `</style></head>
+<body data-init="@get('/events'+location.search)">
+<main>
+<header class="top"><div class="brand"><span class="logo"></span>Komodo<small>runs</small></div><div id="runhead"></div></header>
+<div id="kpis" class="kpis"></div>
+<section class="card"><h2>Pipeline</h2>
+<svg id="pipeline" viewBox="0 0 640 {{.Height}}" role="img" aria-label="Stage pipeline with a live count per stage">
+{{range $i, $b := .Boxes}}{{if $i}}<line class="flow" x1="{{$b.Prev}}" y1="54" x2="{{$b.X}}" y2="54"/>{{end}}{{end}}
+<g id="diagram">{{template "stages" .Boxes}}<g id="pointers"></g></g>
+</svg></section>
+<div class="cols">
+<section><h2 class="h">Groups</h2><div id="groups"></div></section>
+<aside>
+<section class="card"><h2>Events</h2><div id="events"></div></section>
+<section class="card"><h2>Plan windows</h2><div id="resources"></div></section>
+<section class="card"><h2>Agent models</h2><div class="models">
+{{range .Agents}}<label>{{.}} <select data-bind="{{.}}" data-on:change="@post('/agents/{{.}}/model'+location.search)">{{range $.Models}}<option>{{.}}</option>{{end}}</select></label>
+{{end}}</div><p id="log" class="muted">{{.Actions}} actions</p></section>
+</aside></div>
+</main></body></html>
+
+{{define "stages"}}<g id="stages">{{range .}}<g class="stage{{if .Count}} on{{end}}"><rect x="{{.X}}" y="8" width="88" height="92" rx="12"/>
+<text class="stage-label" x="{{.Mid}}" y="32">{{.Title}}</text><text class="stage-count" x="{{.Mid}}" y="82" id="count-{{.Key}}">{{.Count}}</text></g>{{end}}</g>{{end}}`))
+
+// viewTmpl renders the elements the stream patches as HTML: header, tiles, cards, feed and meters.
+var viewTmpl = template.Must(template.New("view").Funcs(funcs).Parse(`{{define "runhead"}}<div id="runhead">
+<span><i>Run</i><b>{{.Run.ID}}</b></span><span><i>Repo</i><b>{{.Run.Repo}}</b></span><span class="wide"><i>Epic</i><b>{{.Run.Epic}}</b></span><span><i>Started</i><b>{{.Started}}</b></span></div>{{end}}
+
+{{define "kpis"}}<div id="kpis" class="kpis">
+<div class="kpi running"><b>{{.KPIs.Running}}</b><span>Running</span></div>
+<div class="kpi blocked{{if not .KPIs.Blocked}} zero{{end}}"><b>{{.KPIs.Blocked}}</b><span>Blocked</span></div>
+<div class="kpi done"><b>{{.KPIs.Done}}</b><span>Done</span></div>
+{{if .Usage}}<div class="kpi"><b>{{num .KPIs.Tokens}}</b><span>Tokens</span></div>
+<div class="kpi"><b>{{usd .KPIs.USD}}</b><span>USD</span></div>{{end}}</div>{{end}}
+
+{{define "groups"}}<div id="groups" class="cards">{{range .Cards}}
+<article class="card g {{.Tone}}">
+<header><div><h3>{{.Label}}</h3><span class="gid">{{.Group.Group}}</span></div><span class="chip {{.Tone}}">{{.Chip}}</span></header>
+<div class="prog"><div class="bar"><i style="width:{{.Pct}}%"></i></div><span>{{.TasksDone}} / {{.TasksTotal}} tasks · {{.ElapsedMin}} min</span></div>
+<div class="sessions{{if .InTest}} test-review{{end}}">{{range .Rows}}<div class="sess {{.Status}}"><span class="role">{{.Role}}</span><span class="st">{{.Status}}</span><span class="model">{{.Model}}</span>{{if $.Usage}}<span class="use">{{num .Tokens}} tok · {{usd .USD}}</span>{{end}}</div>{{end}}</div>
+{{if .Block}}<p class="reason {{.Tone}}"><b>{{.Chip}}</b> {{.Block}}</p>{{end}}
+{{if .Held}}<button class="resume" data-on:click="@post('/groups/{{.Group.Group}}/resume'+location.search)">Resume</button>{{end}}
+<details id="{{.ID}}" data-ignore-morph><summary>Brief</summary><pre>{{.Brief}}</pre></details>
+</article>{{end}}</div>{{end}}
+
+{{define "events"}}<div id="events" class="feed">{{range .Events}}<div class="ev"><time>{{.Time}}</time><span class="tag {{.Tone}}">{{.Type}}</span><span class="sub">{{.Subtype}}</span><span class="gid">{{.Group}}</span></div>{{else}}<p class="muted">No events yet.</p>{{end}}</div>{{end}}
+
+{{define "resources"}}<div id="resources">{{range .Links}}<div class="res"><div class="rl"><span>{{.Name}}</span><b>{{.Percent}}%</b></div><div class="meter {{.Tone}}"><i style="width:{{.Width}}%"></i></div></div>{{else}}<p class="muted">No links.</p>{{end}}</div>{{end}}`))
+
+// diagramTmpl renders the pipeline boxes and the group dots, patched in the svg namespace.
+var diagramTmpl = template.Must(template.Must(pageTmpl.Clone()).New("dots").Parse(
+	`<g id="diagram">{{template "stages" .Boxes}}<g id="pointers">{{range .Pointers}}<g id="ptr-{{.ID}}" class="pointer {{.Tone}}" style="transform:translate({{.X}}px,{{.Y}}px)"><circle r="5" cx="-26"/><text x="-16" y="4">{{.ID}}</text></g>{{end}}</g></g>`))
