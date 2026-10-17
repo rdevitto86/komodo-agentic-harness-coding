@@ -52,9 +52,10 @@ type CheckInput struct {
 
 // CheckDone is the data of the check.done event.
 type CheckDone struct {
-	Pass       bool         `json:"pass"`       // true when the result is clean
-	Head       string       `json:"head"`       // tree hash of the work under test
-	Regression bool         `json:"regression"` // a test passed at the base commit and fails at head
+	Pass bool   `json:"pass"` // true when the result is clean
+	Head string `json:"head"` // tree hash of the work under test
+	// a test passed at the base commit and fails at head
+	Regression bool         `json:"regression"`
 	Steps      []StepResult `json:"steps"`
 }
 
@@ -70,6 +71,7 @@ func (r CheckResult) Clean() bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -81,5 +83,6 @@ func (r CheckResult) Done(head string) CheckDone {
 			d.Regression = true
 		}
 	}
+
 	return d
 }

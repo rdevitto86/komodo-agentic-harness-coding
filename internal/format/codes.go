@@ -35,8 +35,8 @@ const (
 // allCodes lists every code on the closed list, in list order.
 var allCodes = []Code{
 	ConfigTampered, Pinned, NoTerminal, NotBlocked, NoRepo, Usage, UnknownKey, BadValue, OverLimit,
-	UnknownTarget, RunRefused, EngineStopping, BadFrame, CardChanged, Locked, BusOverflow, StoreFailed,
-	PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused, Internal, Other,
+	UnknownTarget, RunRefused, EngineStopping, BadFrame, CardChanged, Locked, BusOverflow,
+	StoreFailed, PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused, Internal, Other,
 }
 
 // blockReasons lists the reasons a group is blocked; each is the code of a needs.<reason> shape.
