@@ -106,7 +106,6 @@ func (c *Claude) Link() Link { return ClaudeCLI }
 
 // Profile measures the capacity profile for a weight from the login and the catalog.
 func (c *Claude) Profile(ctx context.Context, w Weight) (CapacityProfile, error) {
-	// Timing limits of the subscription adapter.
 	const defaultSlot = 3 // sessions allowed on the link when none is set
 
 	auth, err := c.loginStatus(ctx, c.baseEnv())

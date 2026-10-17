@@ -185,7 +185,7 @@ func (s *uiServer) runEvents(ctx context.Context, r RunRow) []uiEvent {
 
 // readEvents returns the newest recorded events of a run.
 func (s *uiServer) readEvents(ctx context.Context, runID string) ([]uiEvent, error) {
-	// uiFeedPerRun is how many of a run's newest events the feed keeps;
+	// uiFeedPerRun is how many of a run's newest events the feed keeps.
 	const uiFeedPerRun = 50
 
 	req := engine.Request{

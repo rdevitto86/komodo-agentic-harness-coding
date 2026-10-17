@@ -133,5 +133,5 @@ var (
 // Error describes the failure with its kind.
 func (e *PublishError) Error() string { return e.Kind + ": " + e.Err.Error() }
 
-// Unwrap returns the underlying error so errors.Is finds the error values below.
+// Unwrap returns the underlying error so errors.Is finds the error values above.
 func (e *PublishError) Unwrap() error { return e.Err }

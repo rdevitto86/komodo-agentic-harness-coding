@@ -44,8 +44,8 @@ type checksums struct {
 	Agents   string `json:"agents"`
 }
 
-// ErrTampered reports a machine file that no longer matches its recorded checksum.
 var (
+	// ErrTampered reports a machine file that no longer matches its recorded checksum.
 	ErrTampered = errors.New("a settings file was edited outside komodo config")
 
 	// crashHook is called at named points of a write; tests replace it to kill the process there.

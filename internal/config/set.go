@@ -188,10 +188,12 @@ func (m *Manager) applyFlat(ms *machine, t target) {
 // applyOverride sets or clears one override field; a value equal to the unoverridden one is
 // cleared.
 func (m *Manager) applyOverride(o AgentOverride, t target, flat map[string]Setting) AgentOverride {
-	current := limitField(m.roleLimits(t.role, flat, AgentOverride{}), t.field)
+	if t.val != nil && t.field != "model" {
+		current := limitField(m.roleLimits(t.role, flat, AgentOverride{}), t.field)
 
-	if t.val != nil && t.field != "model" && equalValues(t.val, current) {
-		return withOverride(o, t.field, nil)
+		if equalValues(t.val, current) {
+			return withOverride(o, t.field, nil)
+		}
 	}
 
 	return withOverride(o, t.field, t.val)
