@@ -15,7 +15,8 @@ type reply struct {
 	out  string
 }
 
-// sandbox is a fake command runner: each rule matches a command by substring and answers from a queue, the last answer repeating.
+// sandbox is a fake command runner: each rule matches a command by substring and answers from a queue, the last answer
+// repeating.
 type sandbox struct {
 	rules []*sbRule
 	ran   []string
@@ -83,7 +84,9 @@ const goListOut = "m m/a m/b\nm/a\nm/b m/a\nm/b [m/b.test] m/a\nm/b.test m/b\nm/
 // goInput is a Go group that changed package m/a.
 func goInput() CheckInput {
 	return CheckInput{Group: "tg-1", Base: "base1", Head: "tree1", Language: "go",
-		Files: []string{"a/a.go"}, Changed: []string{"a/a.go", "a/a_test.go"}, DoneWhen: map[string]string{"tsk-a": "go test ./a/..."}}
+		Files: []string{
+			"a/a.go",
+		}, Changed: []string{"a/a.go", "a/a_test.go"}, DoneWhen: map[string]string{"tsk-a": "go test ./a/..."}}
 }
 
 // goSandbox answers the Go listing commands; callers add test and coverage rules before it.
@@ -120,7 +123,10 @@ func step(t *testing.T, r CheckResult, s Step) StepResult {
 }
 
 func TestCheckAllCleanRunsEveryStep(t *testing.T) {
-	sb := goSandbox().on("go test -json", reply{0, jsonTest("m/a", map[string]bool{"TestA": true})}).on("-coverprofile", okCoverage("91.2"))
+	sb := goSandbox().on("go test -json", reply{
+		0,
+		jsonTest("m/a", map[string]bool{"TestA": true}),
+	}).on("-coverprofile", okCoverage("91.2"))
 	r, err := newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), sb.run, goInput())
 	if err != nil || !r.Clean() || len(r.Steps) != 8 {
 		t.Fatalf("clean run: %+v %v", r, err)
@@ -134,19 +140,24 @@ func TestCheckAllCleanRunsEveryStep(t *testing.T) {
 }
 
 func TestCheckFailingCompletionCommandReturnsExactOutput(t *testing.T) {
-	sb := goSandbox().on("go test ./a/...", reply{1, "--- FAIL: TestLock\n    lock_test.go:9: want 1"}).on("-coverprofile", okCoverage("90"))
+	sb := goSandbox().on("go test ./a/...", reply{
+		1,
+		"--- FAIL: TestLock\n    lock_test.go:9: want 1",
+	}).on("-coverprofile", okCoverage("90"))
 	r, err := newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), sb.run, goInput())
 	if err != nil || r.Clean() {
 		t.Fatalf("result: %+v %v", r, err)
 	}
 	s := step(t, r, StepDoneWhen)
-	if s.Level != LevelFail || !slices.Equal(s.Detail, []string{"tsk-a"}) || !strings.Contains(s.Output, "lock_test.go:9: want 1") {
+	if s.Level != LevelFail || !slices.Equal(s.Detail, []string{"tsk-a"}) ||
+		!strings.Contains(s.Output, "lock_test.go:9: want 1") {
 		t.Errorf("done_when = %+v", s)
 	}
 }
 
 func TestCheckScopeSecretsAndCaseCollision(t *testing.T) {
-	diff := "diff --git a/a/a.go b/a/a.go\n--- a/a/a.go\n+++ b/a/a.go\n@@ -1,2 +1,4 @@\n package a\n+// ok\n+var key = \"AKIAABCDEFGHIJKLMNOP\"\n x\n"
+	diff := "diff --git a/a/a.go b/a/a.go\n--- a/a/a.go\n+++ b/a/a.go\n@@ -1,2 +1,4 @@\n package a\n+// ok\n+var key = " +
+		"\"AKIAABCDEFGHIJKLMNOP\"\n x\n"
 	in := goInput()
 	in.Changed = []string{"a/a.go", "docs/hld.md", "README.md", "readme.md"}
 	sb := goSandbox().on("-coverprofile", okCoverage("90"))
@@ -155,14 +166,17 @@ func TestCheckScopeSecretsAndCaseCollision(t *testing.T) {
 	if err != nil || r.Clean() {
 		t.Fatalf("result: %+v %v", r, err)
 	}
-	if s := step(t, r, StepScope); s.Level != LevelFail || !slices.Equal(s.Detail, []string{"docs/hld.md", "README.md", "readme.md"}) {
+	if s := step(t, r, StepScope); s.Level != LevelFail ||
+		!slices.Equal(s.Detail, []string{"docs/hld.md", "README.md", "readme.md"}) {
 		t.Errorf("scope = %+v", s)
 	}
 	s := step(t, r, StepSecrets)
-	if s.Level != LevelFail || !slices.Equal(s.Detail, []string{"a/a.go:3"}) || strings.Contains(s.Output+strings.Join(s.Detail, ""), "AKIA") {
+	if s.Level != LevelFail || !slices.Equal(s.Detail, []string{"a/a.go:3"}) ||
+		strings.Contains(s.Output+strings.Join(s.Detail, ""), "AKIA") {
 		t.Errorf("secrets = %+v", s)
 	}
-	if s := step(t, r, StepCaseCollision); s.Level != LevelFail || len(s.Detail) != 1 || !strings.Contains(s.Detail[0], "README.md") {
+	if s := step(t, r, StepCaseCollision); s.Level != LevelFail || len(s.Detail) != 1 ||
+		!strings.Contains(s.Detail[0], "README.md") {
 		t.Errorf("case_collision = %+v", s)
 	}
 }
@@ -170,14 +184,18 @@ func TestCheckScopeSecretsAndCaseCollision(t *testing.T) {
 func TestCheckRegressionBlocksPreExistingWarns(t *testing.T) {
 	head := jsonTest("m/a", map[string]bool{"TestOld": false, "TestRegressed": false, "TestFine": true})
 	sb := goSandbox().on("-run", reply{1, "FAIL"}).on("go test -json", reply{1, head}).on("-coverprofile", okCoverage("95"))
-	base := Baseline{TreeHash: "t", Passed: map[string]bool{"m/a.TestOld": false, "m/a.TestRegressed": true, "m/a.TestFine": true}}
+	base := Baseline{
+		TreeHash: "t",
+		Passed:   map[string]bool{"m/a.TestOld": false, "m/a.TestRegressed": true, "m/a.TestFine": true},
+	}
 	cfg := CheckerConfig{CoverageFloor: 80, BaseResult: func(context.Context, string) (Baseline, error) { return base, nil }}
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())
 	if err != nil || r.Clean() {
 		t.Fatalf("result: %+v %v", r, err)
 	}
 	s := step(t, r, StepBaseline)
-	if s.Level != LevelFail || !slices.Equal(s.Detail, []string{"m/a.TestRegressed"}) || !strings.Contains(s.Output, "FAIL: TestRegressed") {
+	if s.Level != LevelFail || !slices.Equal(s.Detail, []string{"m/a.TestRegressed"}) ||
+		!strings.Contains(s.Output, "FAIL: TestRegressed") {
 		t.Errorf("baseline = %+v", s)
 	}
 	if sb.count("-coverprofile") != 0 {
@@ -209,7 +227,8 @@ func TestCheckFlakyTestIsReportedAndDoesNotBlock(t *testing.T) {
 	if err != nil || !r.Clean() {
 		t.Fatalf("result: %+v %v", r, err)
 	}
-	if s := step(t, r, StepFlake); s.Level != LevelWarn || !slices.Equal(s.Detail, []string{"m/a.TestRace"}) || !slices.Equal(r.Flaky, []string{"m/a.TestRace"}) {
+	if s := step(t, r, StepFlake); s.Level != LevelWarn || !slices.Equal(s.Detail, []string{"m/a.TestRace"}) ||
+		!slices.Equal(r.Flaky, []string{"m/a.TestRace"}) {
 		t.Errorf("flake = %+v flaky %v", s, r.Flaky)
 	}
 	if sb.count("-run") != FlakeReruns || !strings.Contains(sb.ran[len(sb.ran)-3], "-count=1") {
@@ -235,12 +254,25 @@ func TestCheckCoverageFloor(t *testing.T) {
 	}{
 		{"79 under 80", "79.0", nil, LevelFail},
 		{"80 on the floor", "80.0", nil, LevelPass},
-		{"72 over a base of 70", "72", func(context.Context, string) (float64, bool, error) { return 70, true, nil }, LevelPass},
-		{"68 under a base of 70", "68", func(context.Context, string) (float64, bool, error) { return 70, true, nil }, LevelFail},
+		{
+			"72 over a base of 70",
+			"72",
+			func(context.Context, string) (float64, bool, error) { return 70, true, nil },
+			LevelPass,
+		},
+		{
+			"68 under a base of 70",
+			"68",
+			func(context.Context, string) (float64, bool, error) { return 70, true, nil },
+			LevelFail,
+		},
 	}
 	for _, c := range cases {
 		sb := goSandbox().on("-coverprofile", okCoverage(c.pct))
-		r, err := newTestChecker(CheckerConfig{CoverageFloor: 80, BaseCoverage: c.base}).Check(context.Background(), sb.run, goInput())
+		r, err := newTestChecker(CheckerConfig{
+			CoverageFloor: 80,
+			BaseCoverage:  c.base,
+		}).Check(context.Background(), sb.run, goInput())
 		if err != nil || step(t, r, StepCoverage).Level != c.want {
 			t.Errorf("%s: %+v %v", c.name, step(t, r, StepCoverage), err)
 		}
@@ -248,7 +280,14 @@ func TestCheckCoverageFloor(t *testing.T) {
 }
 
 func TestCheckLanguageWithoutCoverageToolFailsNamingIt(t *testing.T) {
-	in := CheckInput{Group: "g", Base: "b", Head: "h", Language: "cobol", Files: []string{"x.cob"}, Changed: []string{"x.cob"}}
+	in := CheckInput{
+		Group:    "g",
+		Base:     "b",
+		Head:     "h",
+		Language: "cobol",
+		Files:    []string{"x.cob"},
+		Changed:  []string{"x.cob"},
+	}
 	cfg := CheckerConfig{CoverageFloor: 80, TestCommands: map[string]string{"cobol": "run-tests"}}
 	r, err := newTestChecker(cfg).Check(context.Background(), newSandbox().run, in)
 	if err != nil {
@@ -260,14 +299,26 @@ func TestCheckLanguageWithoutCoverageToolFailsNamingIt(t *testing.T) {
 }
 
 func TestCheckNonGoRunsFullTestClass(t *testing.T) {
-	in := CheckInput{Group: "g", Base: "b", Head: "h", Language: "python", Files: []string{"a.py"}, Changed: []string{"a.py"}}
-	sb := newSandbox().on("pytest -q", reply{1, "1 failed"}).on("coverage run", reply{0, "...\n{\"totals\": {\"percent_covered\": 91.5}}\n"})
+	in := CheckInput{
+		Group:    "g",
+		Base:     "b",
+		Head:     "h",
+		Language: "python",
+		Files:    []string{"a.py"},
+		Changed:  []string{"a.py"},
+	}
+	sb := newSandbox().on("pytest -q", reply{
+		1,
+		"1 failed",
+	}).on("coverage run", reply{0, "...\n{\"totals\": {\"percent_covered\": 91.5}}\n"})
 	cfg := CheckerConfig{CoverageFloor: 80, TestCommands: map[string]string{"python": "pytest -q"}}
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, in)
 	if err != nil || step(t, r, StepBaseline).Level != LevelFail {
 		t.Fatalf("result: %+v %v", r, err)
 	}
-	if _, err := newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), newSandbox().run, in); err == nil {
+	if _, err := newTestChecker(CheckerConfig{
+		CoverageFloor: 80,
+	}).Check(context.Background(), newSandbox().run, in); err == nil {
 		t.Error("a language with no test command ran")
 	}
 }
@@ -280,7 +331,8 @@ func TestCheckStepThatCannotRunReturnsError(t *testing.T) {
 	}
 	cfg := CheckerConfig{CoverageFloor: 80, SecretPatterns: []*regexp.Regexp{}}
 	cfg.Diff = func(context.Context, string, string) (string, error) { return "", nil }
-	if _, err := NewChecker(cfg).Check(context.Background(), goSandbox().run, goInput()); err == nil || !strings.Contains(err.Error(), "secrets") {
+	if _, err := NewChecker(cfg).Check(context.Background(), goSandbox().run, goInput()); err == nil ||
+		!strings.Contains(err.Error(), "secrets") {
 		t.Fatalf("no patterns error = %v", err)
 	}
 }
@@ -298,8 +350,10 @@ func TestParseGoTestJSON(t *testing.T) {
 	if _, parent := got["m/a.TestC"]; parent {
 		t.Error("a parent test with a failing subtest is listed beside it")
 	}
-	build := `{"Action":"output","Package":"m/z","Output":"z.go:3: undefined: q\n"}` + "\n" + `{"Action":"fail","Package":"m/z"}` + "\n"
-	if runs := ParseGoTestJSON(build); len(runs) != 1 || runs[0].Passed || runs[0].Key() != "m/z." || !strings.Contains(runs[0].Output, "undefined: q") {
+	build := `{"Action":"output","Package":"m/z","Output":"z.go:3: undefined: q\n"}` + "\n" +
+		`{"Action":"fail","Package":"m/z"}` + "\n"
+	if runs := ParseGoTestJSON(build); len(runs) != 1 || runs[0].Passed || runs[0].Key() != "m/z." ||
+		!strings.Contains(runs[0].Output, "undefined: q") {
 		t.Fatalf("package failure = %+v", runs)
 	}
 	b := NewBaseline("t1", ParseGoTestJSON(out))
@@ -322,7 +376,8 @@ func TestParseGoList(t *testing.T) {
 }
 
 func TestScanSecretsLocatesAddedLinesOnly(t *testing.T) {
-	diff := "+++ b/x.go\n@@ -5,2 +5,3 @@\n-old AKIAABCDEFGHIJKLMNOP\n ctx\n+new AKIAABCDEFGHIJKLMNOP\n+safe\n+++ b/y.go\n@@ -0,0 +1 @@\n+AKIAABCDEFGHIJKLMNOP\n"
+	diff := "+++ b/x.go\n@@ -5,2 +5,3 @@\n-old AKIAABCDEFGHIJKLMNOP\n ctx\n+new AKIAABCDEFGHIJKLMNOP\n+safe\n+++ " +
+		"b/y.go\n@@ -0,0 +1 @@\n+AKIAABCDEFGHIJKLMNOP\n"
 	got := scanSecrets(diff, []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)})
 	if !slices.Equal(got, []string{"x.go:6", "y.go:1"}) {
 		t.Fatalf("locations = %v", got)

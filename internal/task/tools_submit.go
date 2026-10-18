@@ -16,7 +16,6 @@ func toolSubmitFinding(_ context.Context, tc *toolCall, raw json.RawMessage) Rep
 	if err := decode(raw, &a); err != nil {
 		return bad(err)
 	}
-
 	if strings.TrimSpace(a.Rule) == "" || strings.TrimSpace(a.Quote) == "" || a.Line < 1 {
 		return errReply("a finding needs a rule, a line from 1 and the quoted line")
 	}
@@ -26,10 +25,7 @@ func toolSubmitFinding(_ context.Context, tc *toolCall, raw json.RawMessage) Rep
 		return *e
 	}
 
-	f := Submitted{
-		Finding: agent.Finding{Rule: a.Rule, File: r.Rel, Line: a.Line, Quote: a.Quote},
-		Note:    a.Note,
-	}
+	f := Submitted{Finding: agent.Finding{Rule: a.Rule, File: r.Rel, Line: a.Line, Quote: a.Quote}, Note: a.Note}
 	data, _ := json.Marshal(
 		map[string]any{
 			"rule":  f.Rule,
@@ -41,7 +37,6 @@ func toolSubmitFinding(_ context.Context, tc *toolCall, raw json.RawMessage) Rep
 	)
 	tc.bound.line(ToolLine{Kind: "finding", Call: tc.id, Tool: "submit_finding", Data: data})
 	tc.bound.fact(Fact{Subtype: "finding.submit", At: tc.env.now(), Data: data})
-
 	if tc.env.OnFinding != nil {
 		tc.env.OnFinding(f)
 	}
@@ -49,14 +44,12 @@ func toolSubmitFinding(_ context.Context, tc *toolCall, raw json.RawMessage) Rep
 	return Reply{Text: "filed " + f.Rule + " at " + f.File + ":" + strconv.Itoa(f.Line)}
 }
 
-// toolTaskDone reruns the task's done_when command through the pipeline and reports its exit code
-// and output.
+// toolTaskDone reruns the task's done_when command through the pipeline and reports its exit code and output.
 func toolTaskDone(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	var a doneArgs
 	if err := decode(raw, &a); err != nil {
 		return bad(err)
 	}
-
 	if tc.env.Done == nil {
 		return errReply("task_done is not available in this session")
 	}
@@ -75,7 +68,6 @@ func toolSkill(_ context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	if err := decode(raw, &a); err != nil {
 		return bad(err)
 	}
-
 	if tc.env.Skill == nil {
 		return errReply("skills are not available in this session")
 	}
@@ -94,11 +86,9 @@ func toolLintBacklog(_ context.Context, tc *toolCall, raw json.RawMessage) Reply
 	if err := decode(raw, &a); err != nil {
 		return bad(err)
 	}
-
 	if tc.env.Lint == nil {
 		return errReply("lint_backlog is not available in this session")
 	}
-
 	if errs := tc.env.Lint(a.Draft); len(errs) > 0 {
 		return Reply{Text: strings.Join(errs, "\n")}
 	}

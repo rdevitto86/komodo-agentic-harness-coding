@@ -51,17 +51,6 @@ type fakeStore struct {
 // newStore returns an empty store.
 func newStore() *fakeStore { return &fakeStore{recs: map[string]state.Record{}} }
 
-// Load returns a group's record.
-func (s *fakeStore) Load(_ context.Context, g string) (state.Record, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.recs[g]
-	if !ok {
-		return state.Record{}, state.ErrNotFound
-	}
-	return r, nil
-}
-
 // Create writes a first record.
 func (s *fakeStore) Create(_ context.Context, g string, st State) (state.Record, error) {
 	s.mu.Lock()
@@ -92,6 +81,17 @@ func (s *fakeStore) Save(_ context.Context, g string, st State, rev int) (state.
 	s.recs[g] = r
 	s.mu.Unlock()
 	s.saved(g, st)
+	return r, nil
+}
+
+// Load returns a group's record.
+func (s *fakeStore) Load(_ context.Context, g string) (state.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.recs[g]
+	if !ok {
+		return state.Record{}, state.ErrNotFound
+	}
 	return r, nil
 }
 
@@ -132,7 +132,12 @@ type fakeLeases struct {
 
 // newLeases returns a lease fake.
 func newLeases() *fakeLeases {
-	return &fakeLeases{held: map[string]string{}, released: map[string]int{}, renews: map[string]int{}, renewErr: map[string]error{}}
+	return &fakeLeases{
+		held:     map[string]string{},
+		released: map[string]int{},
+		renews:   map[string]int{},
+		renewErr: map[string]error{},
+	}
 }
 
 // Grant takes a lease unless another run holds the group.
@@ -146,7 +151,14 @@ func (l *fakeLeases) Grant(_ context.Context, req lease.GrantRequest) (lease.Lea
 	if l.zeroFence {
 		return lease.Lease{Repo: req.Repo, Group: req.Group, Run: req.Run, Branch: req.Branch, Worktree: req.Worktree}, nil
 	}
-	return lease.Lease{Repo: req.Repo, Group: req.Group, Run: req.Run, Branch: req.Branch, Worktree: req.Worktree, Fence: lease.Fence(l.fence)}, nil
+	return lease.Lease{
+		Repo:     req.Repo,
+		Group:    req.Group,
+		Run:      req.Run,
+		Branch:   req.Branch,
+		Worktree: req.Worktree,
+		Fence:    lease.Fence(l.fence),
+	}, nil
 }
 
 // Renew renews a lease or returns the error planted for the group.
@@ -187,6 +199,13 @@ func (l *fakeLeases) releases(g string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.released[g]
+}
+
+// renewCount returns how many times a group's lease was renewed.
+func (l *fakeLeases) renewCount(g string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.renews[g]
 }
 
 // fakeCaches opens one real cache per call and counts opens and closes.
@@ -347,58 +366,6 @@ func (e *tmEnv) send(m task.Message) {
 	}
 }
 
-// fact builds a fact of a subtype with data.
-func fact(sub string, data any) task.Fact {
-	return task.Fact{Subtype: sub, Data: mustJSON(data)}
-}
-
-// sessionFacts is a clean builder session on one task.
-func sessionFacts(taskID string) []task.Fact {
-	return []task.Fact{
-		fact("session.start", map[string]any{"agent": "builder", "task": taskID, "session": "s-" + taskID, "link": "claude-cli", "model": "m", "stage": "build"}),
-		fact("task.done", map[string]any{"task": taskID, "stage": "build"}),
-		fact("session.end", map[string]any{"agent": "builder", "task": taskID, "session": "s-" + taskID, "link": "claude-cli", "reason": "done", "stage": "build"}),
-	}
-}
-
-// happy is a Task Manager that completes every stage as soon as it is told to start.
-func happy(e *tmEnv) {
-	defer close(e.out)
-	for {
-		select {
-		case c := <-e.cmds:
-			if c.Kind == task.CmdStop {
-				return
-			}
-			if c.Kind != task.CmdStart {
-				continue
-			}
-			st := e.store.get(e.spec.ID)
-			switch st.Stage {
-			case StageIntake:
-				e.say(fact("ready", nil))
-			case StageBuild:
-				var fs []task.Fact
-				for _, t := range st.Tasks {
-					if t.State != "done" {
-						fs = append(fs, sessionFacts(t.ID)...)
-					}
-				}
-				e.say(append(fs, fact("stage.done", StageDoneData{Stage: StageBuild}))...)
-			case StageTestReview:
-				e.say(fact("stage.done", StageDoneData{Stage: StageTestReview}))
-			case StageCommit:
-				e.say(fact("stage.done", StageDoneData{Stage: StageCommit}))
-			case StageCleanup:
-				e.send(task.Message{Kind: task.MsgEnded, Ended: &task.Ended{Result: "closed"}})
-				return
-			}
-		case <-e.ctx.Done():
-			return
-		}
-	}
-}
-
 // fakeTasks starts fake Task Managers, one script per group.
 type fakeTasks struct {
 	mu      sync.Mutex
@@ -460,6 +427,13 @@ func (f *fakeTasks) commands(g string) []task.Command {
 	return slices.Clone(f.cmdLog[g])
 }
 
+// env returns the script environment of a group's Task Manager.
+func (f *fakeTasks) env(g string) *tmEnv {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.envs[g]
+}
+
 // rig is a Runtime Manager wired to fakes.
 type rig struct {
 	t       *testing.T
@@ -488,46 +462,6 @@ type rig struct {
 	noRun   bool // the test builds its own Manager through an Engine
 }
 
-// evlog collects every published event.
-type evlog struct {
-	mu  sync.Mutex
-	all []bus.Event
-}
-
-// list returns the events so far.
-func (l *evlog) list() []bus.Event {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.all)
-}
-
-// count returns how many events have a type and subtype.
-func (l *evlog) count(t bus.Type, sub string) int {
-	n := 0
-	for _, e := range l.list() {
-		if e.Type == t && string(e.Subtype) == sub {
-			n++
-		}
-	}
-	return n
-}
-
-// rigOpt changes a rig before it starts.
-type rigOpt func(*rig)
-
-// groupSpecs builds specs from label, depends pairs; ids are "g-"+label.
-func groupSpecs(epic string, defs ...[]string) map[string]GroupSpec {
-	out := map[string]GroupSpec{}
-	for i, d := range defs {
-		s := GroupSpec{ID: "g-" + d[0], Label: d[0], Epic: epic, Tasks: []string{"t-" + d[0] + "-1"}, Files: []string{d[0] + "/**"}, Order: i}
-		for _, dep := range d[1:] {
-			s.Depends = append(s.Depends, "g-"+dep)
-		}
-		out[d[0]] = s
-	}
-	return out
-}
-
 // newRig starts a Runtime Manager over fakes; the groups are label then dependency labels.
 func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 	t.Helper()
@@ -537,7 +471,16 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &rig{log: &seqLog{}, t: t, home: home, root: filepath.Join(home, "repo"), store: newStore(), leases: newLeases(), ev: &evlog{}, clock: NewFakeClock(t0)}
+	r := &rig{
+		log:    &seqLog{},
+		t:      t,
+		home:   home,
+		root:   filepath.Join(home, "repo"),
+		store:  newStore(),
+		leases: newLeases(),
+		ev:     &evlog{},
+		clock:  NewFakeClock(t0),
+	}
 	r.bus = bus.New(bus.Options{BufferEvents: 4096})
 	r.caches = &fakeCaches{dir: home}
 	r.ctxs = &fakeContexts{panics: map[string]bool{}}
@@ -546,12 +489,34 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 	r.commits = &fakeCommits{log: r.log}
 	r.res = &fakeResource{}
 	r.leases.order = r.log
-	r.tasks = &fakeTasks{store: r.store, started: map[string]int{}, envs: map[string]*tmEnv{}, cmdLog: map[string][]task.Command{}, specs: map[string]GroupSpec{}, failFor: map[string]error{}}
-	cfg := rigConfig{"limits.returns": 2, "limits.group_attempts": 2, "limits.pause_max_min": 360, "limits.group_wall_min": 60,
-		"limits.group_tokens": 0, "limits.pool_min": 1, "limits.pool_max": 4, "sandbox.max_mem_gb": 2}
-	r.d = Deps{Bus: r.bus, Config: cfg, Agents: rigAgents{}, States: func(string) (StateStore, error) { return r.store, nil }, Machine: machine,
-		Leases: r.leases, Caches: r.caches, Contexts: r.ctxs, Tasks: r.tasks, Plans: r.plans, Git: r.git, Commits: r.commits, Resource: r.res,
-		Home: home, BaseBranch: "main", Version: "test",
+	r.tasks = &fakeTasks{
+		store:   r.store,
+		started: map[string]int{},
+		envs:    map[string]*tmEnv{},
+		cmdLog:  map[string][]task.Command{},
+		specs:   map[string]GroupSpec{},
+		failFor: map[string]error{},
+	}
+	cfg := rigConfig{
+		"limits.returns":        2,
+		"limits.group_attempts": 2,
+		"limits.pause_max_min":  360,
+		"limits.group_wall_min": 60,
+		"limits.group_tokens":   0, "limits.pool_min": 1, "limits.pool_max": 4, "sandbox.max_mem_gb": 2}
+	r.d = Deps{Bus: r.bus, Config: cfg, Agents: rigAgents{}, States: func(
+		string,
+	) (StateStore, error) {
+		return r.store, nil
+	}, Machine: machine,
+		Leases:   r.leases,
+		Caches:   r.caches,
+		Contexts: r.ctxs,
+		Tasks:    r.tasks,
+		Plans:    r.plans,
+		Git:      r.git,
+		Commits:  r.commits,
+		Resource: r.res,
+		Home:     home, BaseBranch: "main", Version: "test",
 		Errors:      func(string, string, error) { r.errs.Add(1) },
 		KillTree:    func(string, string) { r.killed.Add(1) },
 		RestartLoop: func(l string) { r.rmu.Lock(); r.restart = append(r.restart, l); r.rmu.Unlock() },
@@ -593,7 +558,15 @@ func (r *rig) startRun(runID string, labels ...string) error {
 	r.t.Helper()
 	req := "req-" + runID
 	ch := r.m.Expect(req)
-	rs := &bus.RunStart{Target: "ep-1", Groups: labels, Source: "cli", Repo: "github.com/acme/shop", Root: r.root, CommonDir: filepath.Join(r.root, ".git"), Request: bus.ID(req)}
+	rs := &bus.RunStart{
+		Target:    "ep-1",
+		Groups:    labels,
+		Source:    "cli",
+		Repo:      "github.com/acme/shop",
+		Root:      r.root,
+		CommonDir: filepath.Join(r.root, ".git"),
+		Request:   bus.ID(req),
+	}
 	if err := r.bus.Publish(Event{Type: bus.TypeRunStart, Run: bus.ID(runID), Data: rs}); err != nil {
 		r.t.Fatal(err)
 	}
@@ -606,33 +579,49 @@ func (r *rig) startRun(runID string, labels ...string) error {
 	return nil
 }
 
-// until polls cond until it holds or the test fails.
-func until(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
-
-// stageOf returns a group's saved stage.
-func (r *rig) stageOf(label string) Stage { return r.store.get("g-" + label).Stage }
-
 // waitStage waits for a group's saved stage.
 func (r *rig) waitStage(label string, st Stage) {
 	r.t.Helper()
 	until(r.t, label+" in "+string(st), func() bool { return r.stageOf(label) == st })
 }
 
+// stageOf returns a group's saved stage.
+func (r *rig) stageOf(label string) Stage { return r.store.get("g-" + label).Stage }
+
+// evlog collects every published event.
+type evlog struct {
+	mu  sync.Mutex
+	all []bus.Event
+}
+
+// count returns how many events have a type and subtype.
+func (l *evlog) count(t bus.Type, sub string) int {
+	n := 0
+	for _, e := range l.list() {
+		if e.Type == t && string(e.Subtype) == sub {
+			n++
+		}
+	}
+	return n
+}
+
+// list returns the events so far.
+func (l *evlog) list() []bus.Event {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.all)
+}
+
+// rigOpt changes a rig before it starts.
+type rigOpt func(*rig)
+
 // seqLog is an ordered, shared log of what the fakes were asked to do.
 type seqLog struct {
 	mu    sync.Mutex
 	items []string
 }
+
+var _ = os.Getpid
 
 // add appends a line; a nil log drops it.
 func (l *seqLog) add(s string) {
@@ -651,15 +640,6 @@ func (l *seqLog) get() []string {
 	return slices.Clone(l.items)
 }
 
-var _ = os.Getpid
-
-// renewCount returns how many times a group's lease was renewed.
-func (l *fakeLeases) renewCount(g string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.renews[g]
-}
-
 // fakeCleaner records the groups discarded.
 type fakeCleaner struct {
 	mu   sync.Mutex
@@ -674,9 +654,99 @@ func (c *fakeCleaner) Discard(_ context.Context, _, _, group string) error {
 	return nil
 }
 
-// env returns the script environment of a group's Task Manager.
-func (f *fakeTasks) env(g string) *tmEnv {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.envs[g]
+// happy is a Task Manager that completes every stage as soon as it is told to start.
+func happy(e *tmEnv) {
+	defer close(e.out)
+	for {
+		select {
+		case c := <-e.cmds:
+			if c.Kind == task.CmdStop {
+				return
+			}
+			if c.Kind != task.CmdStart {
+				continue
+			}
+			st := e.store.get(e.spec.ID)
+			switch st.Stage {
+			case StageIntake:
+				e.say(fact("ready", nil))
+			case StageBuild:
+				var fs []task.Fact
+				for _, t := range st.Tasks {
+					if t.State != "done" {
+						fs = append(fs, sessionFacts(t.ID)...)
+					}
+				}
+				e.say(append(fs, fact("stage.done", StageDoneData{Stage: StageBuild}))...)
+			case StageTestReview:
+				e.say(fact("stage.done", StageDoneData{Stage: StageTestReview}))
+			case StageCommit:
+				e.say(fact("stage.done", StageDoneData{Stage: StageCommit}))
+			case StageCleanup:
+				e.send(task.Message{Kind: task.MsgEnded, Ended: &task.Ended{Result: "closed"}})
+				return
+			}
+		case <-e.ctx.Done():
+			return
+		}
+	}
+}
+
+// fact builds a fact of a subtype with data.
+func fact(sub string, data any) task.Fact { return task.Fact{Subtype: sub, Data: mustJSON(data)} }
+
+// sessionFacts is a clean builder session on one task.
+func sessionFacts(taskID string) []task.Fact {
+	return []task.Fact{
+		fact("session.start", map[string]any{
+			"agent":   "builder",
+			"task":    taskID,
+			"session": "s-" + taskID,
+			"link":    "claude-cli",
+			"model":   "m",
+			"stage":   "build",
+		}),
+		fact("task.done", map[string]any{"task": taskID, "stage": "build"}),
+		fact("session.end", map[string]any{
+			"agent":   "builder",
+			"task":    taskID,
+			"session": "s-" + taskID,
+			"link":    "claude-cli",
+			"reason":  "done",
+			"stage":   "build",
+		}),
+	}
+}
+
+// groupSpecs builds specs from label, depends pairs; ids are "g-"+label.
+func groupSpecs(epic string, defs ...[]string) map[string]GroupSpec {
+	out := map[string]GroupSpec{}
+	for i, d := range defs {
+		s := GroupSpec{
+			ID:    "g-" + d[0],
+			Label: d[0],
+			Epic:  epic,
+			Tasks: []string{"t-" + d[0] + "-1"},
+			Files: []string{d[0] + "/**"},
+			Order: i,
+		}
+		for _, dep := range d[1:] {
+			s.Depends = append(s.Depends, "g-"+dep)
+		}
+		out[d[0]] = s
+	}
+	return out
+}
+
+// until polls cond until it holds or the test fails.
+func until(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }

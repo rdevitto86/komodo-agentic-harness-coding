@@ -5,31 +5,6 @@ import (
 	"testing"
 )
 
-// fakeSpec is a Spec over paths that do not exist, for pure rendering tests.
-func fakeSpec() Spec {
-	return Spec{
-		Group:      "g1",
-		Worktree:   "/Users/dev/.komodo/wt/shop/g1",
-		GitDir:     "/Users/dev/src/shop/.git",
-		Writable:   []string{"/private/tmp/komodo-s1", "/Users/dev/.komodo/cache/lang/shop/build"},
-		Modules:    "/Users/dev/.komodo/cache/lang/shop/modules",
-		Toolchains: []string{"/Users/dev/.rustup"},
-		Masked:     []string{"/Users/dev/.komodo/wt/shop/g1/.env", "/Users/dev/.komodo/wt/shop/g1/tls.pem"},
-		MaxProcs:   512,
-		MaxMemGB:   8,
-		Role:       RoleBuilder,
-	}
-}
-
-func mustRules(t *testing.T, s Spec) rules {
-	t.Helper()
-	r, err := newRules(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return r
-}
-
 func TestNewRulesSplitsTheSpec(t *testing.T) {
 	s := fakeSpec()
 	r := mustRules(t, s)
@@ -91,7 +66,8 @@ func TestEnvHoldsOnlyTheAllowedVariables(t *testing.T) {
 	if got["HOME"] != "/private/tmp/komodo-s1" || got["TMPDIR"] != "/private/tmp/komodo-s1" {
 		t.Fatalf("HOME %q TMPDIR %q", got["HOME"], got["TMPDIR"])
 	}
-	if got["LANG"] != "en_US.UTF-8" || got["GOCACHE"] != "/c/go" || got["RUSTUP_HOME"] != "/u/rustup" || got["CARGO_TARGET_DIR"] != "/t" {
+	if got["LANG"] != "en_US.UTF-8" || got["GOCACHE"] != "/c/go" || got["RUSTUP_HOME"] != "/u/rustup" ||
+		got["CARGO_TARGET_DIR"] != "/t" {
 		t.Fatalf("lost an allowed variable: %v", got)
 	}
 	for _, bad := range []string{"SECRET_TOKEN", "AWS_SECRET_ACCESS_KEY"} {
@@ -99,7 +75,8 @@ func TestEnvHoldsOnlyTheAllowedVariables(t *testing.T) {
 			t.Errorf("%s leaked", bad)
 		}
 	}
-	if !strings.HasPrefix(got["PATH"], "/Users/dev/.rustup:") || strings.Contains(got["PATH"], "/evil") || !strings.HasSuffix(got["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin") {
+	if !strings.HasPrefix(got["PATH"], "/Users/dev/.rustup:") || strings.Contains(got["PATH"], "/evil") ||
+		!strings.HasSuffix(got["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin") {
 		t.Fatalf("PATH %q", got["PATH"])
 	}
 	if len(env) != len(got) {
@@ -156,7 +133,9 @@ func TestSeatbeltProfileOrdersItsRules(t *testing.T) {
 func TestSeatbeltNetworkIsLoopbackOnlyUnlessSetup(t *testing.T) {
 	r := mustRules(t, fakeSpec())
 	off := seatbeltProfile(r, "/Users/dev")
-	if !strings.Contains(off, `(allow network-outbound (remote ip "localhost:*"))`) || !strings.Contains(off, `(allow network-bind network-inbound (local ip "localhost:*"))`) || strings.Contains(off, "(allow network*)") {
+	if !strings.Contains(off, `(allow network-outbound (remote ip "localhost:*"))`) ||
+		!strings.Contains(off, `(allow network-bind network-inbound (local ip "localhost:*"))`) ||
+		strings.Contains(off, "(allow network*)") {
 		t.Fatalf("network off profile:\n%s", off)
 	}
 	s := fakeSpec()
@@ -273,7 +252,8 @@ func TestSeatbeltScopesSignalsAndMachLookups(t *testing.T) {
 		t.Fatalf("signals must stay inside the sandbox:\n%s", p)
 	}
 	for _, line := range strings.Split(p, "\n") {
-		if strings.HasPrefix(line, "(allow process-exec") && (strings.Contains(line, "signal") || strings.Contains(line, "mach-lookup")) {
+		if strings.HasPrefix(line, "(allow process-exec") &&
+			(strings.Contains(line, "signal") || strings.Contains(line, "mach-lookup")) {
 			t.Fatalf("unfiltered operation on %q", line)
 		}
 	}
@@ -300,4 +280,29 @@ func TestSeatbeltUnixSocketsStayInsideTheWorktreeAndTemp(t *testing.T) {
 			t.Errorf("network=%v: a bare network allow opens every Unix socket", network)
 		}
 	}
+}
+
+// fakeSpec is a Spec over paths that do not exist, for pure rendering tests.
+func fakeSpec() Spec {
+	return Spec{
+		Group:      "g1",
+		Worktree:   "/Users/dev/.komodo/wt/shop/g1",
+		GitDir:     "/Users/dev/src/shop/.git",
+		Writable:   []string{"/private/tmp/komodo-s1", "/Users/dev/.komodo/cache/lang/shop/build"},
+		Modules:    "/Users/dev/.komodo/cache/lang/shop/modules",
+		Toolchains: []string{"/Users/dev/.rustup"},
+		Masked:     []string{"/Users/dev/.komodo/wt/shop/g1/.env", "/Users/dev/.komodo/wt/shop/g1/tls.pem"},
+		MaxProcs:   512,
+		MaxMemGB:   8,
+		Role:       RoleBuilder,
+	}
+}
+
+func mustRules(t *testing.T, s Spec) rules {
+	t.Helper()
+	r, err := newRules(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }

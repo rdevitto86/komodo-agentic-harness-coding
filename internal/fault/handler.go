@@ -47,11 +47,10 @@ var (
 	errAfterFinal = errors.New("final event already published")
 )
 
-// New returns a Handler that publishes on b and prints through p; b is nil in the CLI process,
-// where Guard and Final print through p and publish nothing.
+// New returns a Handler that publishes on b and prints through p; b is nil in the CLI process, where Guard and Final print
+// through p and publish nothing.
 func New(b bus.Bus, p Printer) *Handler {
-	// defaultFinalWait is how long Final waits for the Run loop to print before it prints the fault
-	// itself.
+	// defaultFinalWait is how long Final waits for the Run loop to print before it prints the fault itself.
 	const defaultFinalWait = 2 * time.Second
 
 	h := &Handler{
@@ -72,7 +71,6 @@ func New(b bus.Bus, p Printer) *Handler {
 func (h *Handler) Go(src Source, fn func(), onPanic func(Fault)) {
 	go func() {
 		defer h.Recover(src, onPanic)
-
 		fn()
 	}()
 }
@@ -83,18 +81,15 @@ func (h *Handler) Recover(src Source, onPanic func(Fault)) {
 	if r == nil {
 		return
 	}
-
 	f := panicFault(src, r)
 	h.emit(f, subtypePanic)
-
 	if onPanic != nil {
 		h.callOnPanic(src, f, onPanic)
 	}
 }
 
 // Guard runs fn in the calling goroutine and returns its error, or a Fault for its panic.
-// Without a bus it only returns the Fault, which the caller passes to Final; with one it publishes
-// it.
+// Without a bus it only returns the Fault, which the caller passes to Final; with one it publishes it.
 func (h *Handler) Guard(src Source, fn func() error) (err error) {
 	defer func() {
 		r := recover()
@@ -133,27 +128,22 @@ func (h *Handler) Report(src Source, code string, kind Kind, err error) {
 	)
 }
 
-// Final publishes the one last error event with Final set, seals the bus, and waits until the Run
-// loop has printed it, ctx ends or the wait runs out. Without a bus, with no Run loop reading, or
-// after a timeout, it prints the fault itself; it returns the fault's exit code, or 4 if the
-// printer panics.
+// Final publishes the one last error event with Final set, seals the bus, and waits until the Run loop has printed it, ctx
+// ends or the wait runs out. Without a bus, with no Run loop reading, or
+// after a timeout, it prints the fault itself; it returns the fault's exit code, or 4 if the printer panics.
 func (h *Handler) Final(ctx context.Context, src Source, f Fault) int {
 	code := f.ExitCode()
 	if src != (Source{}) {
 		f.Source = src
 	}
-
 	if h.bus == nil {
 		if !h.print(f) {
 			return KindInternal.ExitCode()
 		}
-
 		return code
 	}
-
 	if err := h.publish(f, subtypeOf(f), true); err != nil {
 		h.writeStderr(f, "not published: "+err.Error())
-
 		return code
 	}
 
@@ -166,7 +156,6 @@ func (h *Handler) Final(ctx context.Context, src Source, f Fault) int {
 			return code
 		case <-ctx.Done():
 			h.writeStderr(f, "context ended before the print")
-
 			return code
 		case <-timer.C:
 		}
@@ -185,7 +174,6 @@ func (h *Handler) Run(ctx context.Context) error {
 		if h.subErr != nil {
 			return h.subErr
 		}
-
 		return errNoBus
 	}
 	defer h.sub.Close()
@@ -201,7 +189,6 @@ func (h *Handler) Run(ctx context.Context) error {
 			if !ok {
 				return bus.ErrBusClosed
 			}
-
 			h.handle(e)
 		}
 	}
@@ -216,73 +203,7 @@ func (h *Handler) callOnPanic(src Source, f Fault, onPanic func(Fault)) {
 			h.emit(g, subtypePanic)
 		}
 	}()
-
 	onPanic(f)
-}
-
-// handle prints the fault in one error event; a panic here goes to standard error and the loop goes
-// on.
-func (h *Handler) handle(e bus.Event) {
-	if finalOf(e) {
-		defer h.printedOnce.Do(func() { close(h.printed) })
-	}
-
-	defer h.guardSelf()
-
-	f, ok := faultFromEvent(e)
-	if !ok {
-		h.writeLine(fmt.Sprintf("komodo: unhandled error event %s\n", e.Subtype))
-
-		return
-	}
-
-	if finalOf(e) {
-		h.printFinal(f)
-
-		return
-	}
-
-	h.print(f)
-}
-
-// printFinal prints the final fault unless the Run loop or Final already did; ok is false if the
-// printer panicked.
-func (h *Handler) printFinal(f Fault) (ok bool) {
-	ok = true
-
-	h.finalOnce.Do(func() { ok = h.print(f) })
-
-	return ok
-}
-
-// guardSelf is deferred in the handler's own paths; it writes a panic to standard error and
-// returns.
-func (h *Handler) guardSelf() {
-	if r := recover(); r != nil {
-		h.writeLine(fmt.Sprintf(
-			"komodo: error handler recovered: %s\n%s",
-			panicReason(r),
-			debug.Stack(),
-		))
-	}
-}
-
-// print hands f to the printer; a failure goes to standard error and raises no event, and ok is
-// false if the printer panicked.
-func (h *Handler) print(f Fault) (ok bool) {
-	defer h.guardSelf()
-
-	if h.printer == nil {
-		h.writeStderr(f, "no printer")
-
-		return true
-	}
-
-	if err := h.printer.PrintError(f); err != nil {
-		h.writeStderr(f, "print failed: "+err.Error())
-	}
-
-	return true
 }
 
 // emit publishes f under the subtype and writes it to standard error when it cannot be published.
@@ -292,8 +213,7 @@ func (h *Handler) emit(f Fault, st bus.Subtype) {
 	}
 }
 
-// publish puts f on the bus as an error event; once the final event is out, nothing else is
-// published.
+// publish puts f on the bus as an error event; once the final event is out, nothing else is published.
 func (h *Handler) publish(f Fault, st bus.Subtype, final bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -301,7 +221,6 @@ func (h *Handler) publish(f Fault, st bus.Subtype, final bool) error {
 	if h.bus == nil {
 		return errNoBus
 	}
-
 	if h.finalSent {
 		return errAfterFinal
 	}
@@ -310,7 +229,6 @@ func (h *Handler) publish(f Fault, st bus.Subtype, final bool) error {
 	d.Final = final
 
 	var p bus.Payload
-
 	switch st {
 	case subtypePanic:
 		p = &PanicFault{d}
@@ -319,7 +237,6 @@ func (h *Handler) publish(f Fault, st bus.Subtype, final bool) error {
 	default:
 		p = &ErrorFault{d}
 	}
-
 	if final {
 		h.finalSent = true
 	}
@@ -341,24 +258,13 @@ func (h *Handler) publish(f Fault, st bus.Subtype, final bool) error {
 // writeStderr writes f and the note on why it is here to standard error.
 func (h *Handler) writeStderr(f Fault, note string) {
 	var sb strings.Builder
-	fmt.Fprintf(
-		&sb,
-		"komodo: %s %s in %s: %s (%s)\n",
-		f.Severity,
-		f.Code,
-		f.Source.Component,
-		f.Reason,
-		note,
-	)
-
+	fmt.Fprintf(&sb, "komodo: %s %s in %s: %s (%s)\n", f.Severity, f.Code, f.Source.Component, f.Reason, note)
 	if f.Fix != "" {
 		fmt.Fprintf(&sb, "fix: %s\n", f.Fix)
 	}
-
 	if f.Stack != "" {
 		sb.WriteString(f.Stack + "\n")
 	}
-
 	h.writeLine(sb.String())
 }
 
@@ -366,8 +272,58 @@ func (h *Handler) writeStderr(f Fault, note string) {
 func (h *Handler) writeLine(s string) {
 	h.errMu.Lock()
 	defer h.errMu.Unlock()
-
 	_, _ = io.WriteString(h.stderr, s)
+}
+
+// handle prints the fault in one error event; a panic here goes to standard error and the loop goes on.
+func (h *Handler) handle(e bus.Event) {
+	if finalOf(e) {
+		defer h.printedOnce.Do(func() { close(h.printed) })
+	}
+
+	defer h.guardSelf()
+
+	f, ok := faultFromEvent(e)
+	if !ok {
+		h.writeLine(fmt.Sprintf("komodo: unhandled error event %s\n", e.Subtype))
+		return
+	}
+	if finalOf(e) {
+		h.printFinal(f)
+		return
+	}
+
+	h.print(f)
+}
+
+// guardSelf is deferred in the handler's own paths; it writes a panic to standard error and returns.
+func (h *Handler) guardSelf() {
+	if r := recover(); r != nil {
+		h.writeLine(fmt.Sprintf("komodo: error handler recovered: %s\n%s", panicReason(r), debug.Stack()))
+	}
+}
+
+// printFinal prints the final fault unless the Run loop or Final already did; ok is false if the printer panicked.
+func (h *Handler) printFinal(f Fault) (ok bool) {
+	ok = true
+	h.finalOnce.Do(func() { ok = h.print(f) })
+	return ok
+}
+
+// print hands f to the printer; a failure goes to standard error and raises no event, and ok is false if the printer
+// panicked.
+func (h *Handler) print(f Fault) (ok bool) {
+	defer h.guardSelf()
+
+	if h.printer == nil {
+		h.writeStderr(f, "no printer")
+		return true
+	}
+	if err := h.printer.PrintError(f); err != nil {
+		h.writeStderr(f, "print failed: "+err.Error())
+	}
+
+	return true
 }
 
 // subtypeOf returns the subtype a fault is published under.
@@ -375,7 +331,6 @@ func subtypeOf(f Fault) bus.Subtype {
 	if f.Panic {
 		return subtypePanic
 	}
-
 	return subtypeError
 }
 

@@ -126,7 +126,8 @@ type installer struct {
 	hasRepoManifest               bool
 }
 
-// handleInstall installs the binary, the path entry, the provider probe and the repository files, or undoes them with --remove.
+// handleInstall installs the binary, the path entry, the provider probe and the repository files, or undoes them with
+// --remove.
 func handleInstall(c *Call) Result {
 	in, res := newInstaller(c)
 	if res != nil {
@@ -145,7 +146,10 @@ func newInstaller(c *Call) (*installer, *Result) {
 	in.errOut = func(f string, a ...any) { _, _ = fmt.Fprintf(c.cli.errOut, f, a...) }
 
 	if in.repoOnly && in.machineOnly || in.project && in.noProject {
-		r := usageErr("--repo-only and --machine-only cannot combine, and neither can --project and --no-project", helpFix("install"))
+		r := usageErr(
+			"--repo-only and --machine-only cannot combine, and neither can --project and --no-project",
+			helpFix("install"),
+		)
 		return nil, &r
 	}
 
@@ -462,7 +466,8 @@ func (in *installer) writeManifests(mrows, rrows []planRow) (machineChanged, rep
 		}
 
 		old, _, _ := readRepoManifest(in.repoManifestPath())
-		repoChanged = !in.hasRepoManifest || !reflect.DeepEqual(old.Entries, m.Entries) || !sameSelections(old.Selections, m.Selections)
+		repoChanged = !in.hasRepoManifest || !reflect.DeepEqual(old.Entries, m.Entries) ||
+			!sameSelections(old.Selections, m.Selections)
 
 		if repoChanged && !in.dry {
 			b, _ := json.MarshalIndent(m, "", "  ")
@@ -510,7 +515,8 @@ func touchesBinary(rows []planRow) bool {
 	return false
 }
 
-// mergeInstallBody puts this run's entries into a freshly read record: entries for the decided targets are replaced, the rest stay.
+// mergeInstallBody puts this run's entries into a freshly read record: entries for the decided targets are replaced, the
+// rest stay.
 // It reports whether the body changed.
 func mergeInstallBody(b *state.InstallBody, keys map[string]bool, after []Entry, sel Selections) bool {
 	old, oldSel := slices.Clone(b.Entries), b.Selections

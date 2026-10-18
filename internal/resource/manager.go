@@ -68,7 +68,6 @@ func (m *Manager) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-
 			// A failed observation is already reported or retried by the next event; the loop
 			// goes on.
 			_ = m.Observe(ctx, e)
@@ -76,8 +75,8 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 }
 
-// Observe applies one resource event and raises any errors it causes; it waits for any other
-// Observe, grant or end call to finish.
+// Observe applies one resource event and raises any errors it causes; it waits for any other Observe, grant or end call to
+// finish.
 func (m *Manager) Observe(ctx context.Context, e bus.Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -85,16 +84,12 @@ func (m *Manager) Observe(ctx context.Context, e bus.Event) error {
 	if e.Type != bus.TypeResource {
 		return nil
 	}
-
 	if err := check(e); err != nil {
 		if !errors.Is(err, errUnknownSubtype) {
 			m.report(err)
-
 			return err
 		}
-
 		slog.Info("ignored resource event", "subtype", string(e.Subtype))
-
 		return nil
 	}
 
@@ -104,20 +99,17 @@ func (m *Manager) Observe(ctx context.Context, e bus.Event) error {
 	}
 
 	res := Evaluate(m.st, m.t, o)
-
 	return errors.Join(m.save(ctx, keys), m.deliver(ctx, o, res))
 }
 
 // GrantGroupTokens raises a group's cap by one limits.group_tokens and clears the group's nudge
-// and cap flags. It waits for an Observe in progress, so a grant is never overwritten by the
-// delivery it raced; the Runtime Manager must not call it from inside a pause or nudge.
+// and cap flags. It waits for an Observe in progress, so a grant is never overwritten by the delivery it raced; the Runtime
+// Manager must not call it from inside a pause or nudge.
 func (m *Manager) GrantGroupTokens(group string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	s := &m.st.Spend
 	s.CapGrants[group]++
-
 	delete(s.GroupNudged, group)
 	delete(s.GroupCapped, group)
 	delete(s.GroupCapRaised, group)
@@ -127,7 +119,6 @@ func (m *Manager) GrantGroupTokens(group string) {
 func (m *Manager) EndRun(run string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	m.st.forgetRun(run)
 }
 
@@ -135,7 +126,6 @@ func (m *Manager) EndRun(run string) {
 func (m *Manager) EndGroup(group string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	m.st.forgetGroup(group)
 }
 
@@ -149,7 +139,6 @@ func (m *Manager) load(ctx context.Context) {
 	recs, err := m.d.State.LoadWindows(ctx)
 	if err != nil {
 		m.report(fmt.Errorf("load window records: %w", err))
-
 		return
 	}
 
@@ -162,11 +151,18 @@ func (m *Manager) load(ctx context.Context) {
 		if !r.ResetAt.After(now) {
 			continue
 		}
-
 		w := m.st.window(k)
 		w.PercentUsed, w.ResetAt, w.Sessions = r.PercentUsed, r.ResetAt, r.Sessions
 		m.saved[k] = r
 	}
+}
+
+// report sends an ordinary error to the Error Handler.
+func (m *Manager) report(err error) {
+	if m.d.Errors == nil {
+		return
+	}
+	m.d.Errors.Report(fault.Source{Component: "resource"}, string(format.Internal), fault.KindInternal, err)
 }
 
 // save stores each changed window whose figures differ from the last accepted record; a failure
@@ -181,17 +177,13 @@ func (m *Manager) save(ctx context.Context, keys []WindowKey) error {
 	for _, k := range keys {
 		w := m.st.Windows[k]
 		r := WindowRecord{PercentUsed: w.PercentUsed, ResetAt: w.ResetAt, Sessions: w.Sessions}
-
 		if old, had := m.saved[k]; had && sameRecord(old, r) {
 			continue
 		}
-
 		if err := m.d.State.SaveWindow(ctx, k, r); err != nil {
 			err = fmt.Errorf("save window %s of %s: %w", k.Window, k.Link, err)
 			m.report(err)
-
 			errs = append(errs, err)
-
 			continue
 		}
 
@@ -201,25 +193,21 @@ func (m *Manager) save(ctx context.Context, keys []WindowKey) error {
 	return errors.Join(errs...)
 }
 
-// deliver throws each new error, then sends each pause order whose error was thrown, then each
-// nudge. A flag is set only after its call succeeds, and a failed call is reported and tried
+// deliver throws each new error, then sends each pause order whose error was thrown, then each nudge. A flag is set only
+// after its call succeeds, and a failed call is reported and tried
 // again on the next event.
 func (m *Manager) deliver(ctx context.Context, o Observation, res Result) error {
 	var errs []error
-
 	fail := func(err error) {
 		m.report(err)
-
 		errs = append(errs, err)
 	}
 
 	for i, re := range res.Errors {
 		if err := m.d.Errors.ThrowResourceError(ctx, re); err != nil {
 			fail(fmt.Errorf("throw %s: %w", re.Kind, err))
-
 			continue
 		}
-
 		m.st.markRaised(o, res.keys[i], re)
 	}
 
@@ -227,39 +215,20 @@ func (m *Manager) deliver(ctx context.Context, o Observation, res Result) error 
 		if !m.st.errorRaised(p) {
 			continue
 		}
-
 		if err := m.d.Runtime.PauseGroups(ctx, p); err != nil {
 			fail(fmt.Errorf("pause %s: %w", p.Reason, err))
-
 			continue
 		}
-
 		m.st.markPaused(p)
 	}
 
 	for _, n := range res.Nudges {
 		if err := m.d.Runtime.NudgeGroups(ctx, n); err != nil {
 			fail(fmt.Errorf("nudge groups: %w", err))
-
 			continue
 		}
-
 		m.st.markNudged(n)
 	}
 
 	return errors.Join(errs...)
-}
-
-// report sends an ordinary error to the Error Handler.
-func (m *Manager) report(err error) {
-	if m.d.Errors == nil {
-		return
-	}
-
-	m.d.Errors.Report(
-		fault.Source{Component: "resource"},
-		string(format.Internal),
-		fault.KindInternal,
-		err,
-	)
 }

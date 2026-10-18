@@ -122,15 +122,18 @@ func goListLine(ln string) (pkg string, deps []string) {
 // Generated .test mains are skipped and an external test package is merged into its package.
 func parseGoList(out string) map[string][]string {
 	sets := map[string]map[string]bool{}
+
 	for _, ln := range strings.Split(out, "\n") {
 		pkg, deps := goListLine(ln)
 		if pkg == "" || strings.HasSuffix(pkg, ".test") {
 			continue
 		}
+
 		pkg = strings.TrimSuffix(pkg, "_test")
 		if sets[pkg] == nil {
 			sets[pkg] = map[string]bool{}
 		}
+
 		for _, d := range deps {
 			if d = strings.TrimSuffix(d, "_test"); d != pkg {
 				sets[pkg][d] = true

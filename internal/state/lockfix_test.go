@@ -17,6 +17,9 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
+// slotAllocBudget is the most allocations a slot call may make; the load-then-save path made about 3,400.
+const slotAllocBudget = 2000
+
 // A record lock is the operating system's, so a lock file with an old time still keeps a second writer out.
 func TestMachineRecordLockIgnoresFileAge(t *testing.T) {
 	m, home := newMach(t, "engine/1")
@@ -35,7 +38,8 @@ func TestMachineRecordLockIgnoresFileAge(t *testing.T) {
 	start := time.Now()
 	_, err = SaveMachine(m, KindUpdate, UpdateBody{Latest: "1.0.1", CheckedAt: t0}, 0)
 	var de *DiskError
-	if !errors.As(err, &de) || !strings.Contains(err.Error(), "holds the record lock") || time.Since(start) < machineLockWait {
+	if !errors.As(err, &de) || !strings.Contains(err.Error(), "holds the record lock") ||
+		time.Since(start) < machineLockWait {
 		t.Fatalf("want a lock refusal after the wait, got %v", err)
 	}
 	if err := hold(); err != nil {
@@ -83,7 +87,8 @@ func TestKindSemaphoreHonoursContextAndReadsAreFree(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := m.lockRecord(ctx, KindUpdate); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+	if _, err := m.lockRecord(ctx, KindUpdate); !errors.Is(err, context.DeadlineExceeded) ||
+		time.Since(start) > time.Second {
 		t.Fatalf("want the context error at once, got %v after %v", err, time.Since(start))
 	}
 	<-m.kindSem[KindUpdate]
@@ -240,6 +245,3 @@ func TestSlotCallDoesLittleWork(t *testing.T) {
 		t.Fatalf("a slot call allocated %.0f times, budget %d", got, slotAllocBudget)
 	}
 }
-
-// slotAllocBudget is the most allocations a slot call may make; the load-then-save path made about 3,400.
-const slotAllocBudget = 2000

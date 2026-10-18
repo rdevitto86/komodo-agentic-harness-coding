@@ -96,9 +96,16 @@ func newBinRig(t *testing.T, extra map[string]string) *binRig {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	if r, bad := inRepo(root); bad {
-		t.Fatalf("the temporary folder %s sits inside the repository %s: set TMPDIR to a folder outside every checkout", root, r)
+		t.Fatalf(
+			"the temporary folder %s sits inside the repository %s: set TMPDIR to a folder outside every checkout",
+			root,
+			r,
+		)
 	}
-	r := &binRig{t: t, root: root, home: filepath.Join(root, "h"), repo: filepath.Join(root, "work"), origin: filepath.Join(root, "origin.git"),
+	r := &binRig{t: t, root: root, home: filepath.Join(
+		root,
+		"h",
+	), repo: filepath.Join(root, "work"), origin: filepath.Join(root, "origin.git"),
 		ghLog: filepath.Join(root, "gh.log"), bin: komodoBinary(t)}
 	if n := len(filepath.Join(r.home, "state", "engine.sock")); n > 100 {
 		t.Fatalf("the socket path is %d bytes; set TMPDIR to a shorter folder", n)
@@ -114,12 +121,19 @@ func newBinRig(t *testing.T, extra map[string]string) *binRig {
 		"KOMODO_HOME=" + r.home, "HOME=" + filepath.Join(root, "home"),
 		"PATH=" + filepath.Join(root, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"ANTHROPIC_API_KEY=test-key", "ANTHROPIC_BASE_URL=" + r.model.srv.URL,
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
 		"GIT_CONFIG_NOSYSTEM=1", "NO_COLOR=1",
 	}
 	r.initRepo(extra)
 	t.Cleanup(r.killEngine)
-	cfg, err := config.New(r.home, config.Known{GuardRows: task.KnownRows(), Tools: task.KnownTools()}, func(string) bool { return true })
+	cfg, err := config.New(
+		r.home,
+		config.Known{GuardRows: task.KnownRows(), Tools: task.KnownTools()},
+		func(string) bool { return true },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +146,8 @@ func newBinRig(t *testing.T, extra map[string]string) *binRig {
 // writeGH installs a fake gh that records its arguments and prints what the Commit Handler reads.
 func (r *binRig) writeGH() {
 	script := "#!/bin/sh\necho \"$@\" >> '" + r.ghLog + "'\n" +
-		"case \"$1 $2\" in\n  \"pr list\") echo '[]';;\n  \"pr create\") echo 'https://example.invalid/pull/1';;\nesac\nexit 0\n"
+		"case \"$1 $2\" in\n  \"pr list\") echo '[]';;\n  \"pr create\") echo " +
+		"'https://example.invalid/pull/1';;\nesac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(r.root, "bin", "gh"), []byte(script), 0o755); err != nil {
 		r.t.Fatal(err)
 	}
@@ -153,10 +168,11 @@ func (r *binRig) git(dir string, args ...string) string {
 
 // baseFiles is the tiny Go module every fixture starts from.
 var baseFiles = map[string]string{
-	"go.mod":            "module example.com/tiny\n\ngo 1.21\n",
-	"tiny/tiny.go":      "// Package tiny is a fixture.\npackage tiny\n\n// One returns 1.\nfunc One() int { return 1 }\n",
-	"tiny/tiny_test.go": "package tiny\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 {\n\t\tt.Fatal(\"one\")\n\t}\n}\n",
-	"README.md":         "# tiny\n",
+	"go.mod":       "module example.com/tiny\n\ngo 1.21\n",
+	"tiny/tiny.go": "// Package tiny is a fixture.\npackage tiny\n\n// One returns 1.\nfunc One() int { return 1 }\n",
+	"tiny/tiny_test.go": "package tiny\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 " +
+		"{\n\t\tt.Fatal(\"one\")\n\t}\n}\n",
+	"README.md": "# tiny\n",
 }
 
 // initRepo creates the working repository with one commit, the bare origin and the first push.
@@ -214,7 +230,13 @@ func (r *binRig) komodo(timeout time.Duration, args ...string) result {
 		return result{code, out.String(), errb.String()}
 	case <-time.After(timeout):
 		_ = cmd.Process.Kill()
-		r.t.Fatalf("komodo %s did not finish in %s\nstdout: %s\nstderr: %s", strings.Join(args, " "), timeout, out.String(), errb.String())
+		r.t.Fatalf(
+			"komodo %s did not finish in %s\nstdout: %s\nstderr: %s",
+			strings.Join(args, " "),
+			timeout,
+			out.String(),
+			errb.String(),
+		)
 		return result{}
 	}
 }
@@ -304,7 +326,8 @@ func stages(evs []event) []string {
 	return out
 }
 
-// waitDone polls the event store until a group.done event appears; a blocked group or the timeout fails the test with the evidence.
+// waitDone polls the event store until a group.done event appears; a blocked group or the timeout fails the test with the
+// evidence.
 func (r *binRig) waitDone(timeout time.Duration) []event {
 	r.t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -378,10 +401,12 @@ func (r *binRig) ghCalls() string {
 // planFiles is the one-epic, one-group task list the fake planner returns and phase 5 commits in advance.
 func planFiles() map[string]string {
 	return map[string]string{
-		"docs/backlog/epic-1/tg-1.1/TG.md": "id: 0192e4c5-7a10-7d3e-9b2f-000000000101\ngoal: Add an Add function to the tiny package\nsubsystem: none\n" +
+		"docs/backlog/epic-1/tg-1.1/TG.md": "id: 0192e4c5-7a10-7d3e-9b2f-000000000101\ngoal: Add an Add function to the " +
+			"tiny package\nsubsystem: none\n" +
 			"priority: normal\npoints: 3\nstatus: todo\nfiles:\n- tiny/add.go\ndependencies:\n\n" +
 			"- WHEN Add is called THE SYSTEM SHALL return the sum of its arguments\n  cmd: go test ./...\n",
-		"docs/backlog/epic-1/tg-1.1/tsk-add.md": "files:\n- tiny/add.go\ndone_when: go test ./...\nestimate_lines: 10\n\nAdd func Add(a, b int) int to the tiny package.\n",
+		"docs/backlog/epic-1/tg-1.1/tsk-add.md": "files:\n- tiny/add.go\ndone_when: go test ./...\nestimate_lines: " +
+			"10\n\nAdd func Add(a, b int) int to the tiny package.\n",
 	}
 }
 
@@ -422,7 +447,11 @@ func (f *fakeModel) callCounts() map[string]int {
 func (f *fakeModel) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/v1/models":
-		_, _ = io.WriteString(w, `{"data":[{"id":"claude-opus-5-5","max_input_tokens":1000000},{"id":"claude-sonnet-5","max_input_tokens":900000},{"id":"claude-haiku-5-5","max_input_tokens":800000}]}`)
+		_, _ = io.WriteString(
+			w,
+			`{"data":[{"id":"claude-opus-5-5","max_input_tokens":1000000},{"id":"claude-sonnet-5",`+
+				`"max_input_tokens":900000},{"id":"claude-haiku-5-5","max_input_tokens":800000}]}`,
+		)
 	case strings.HasPrefix(r.URL.Path, "/v1/models/"):
 		_, _ = io.WriteString(w, `{"id":"x","max_input_tokens":777000}`)
 	case r.URL.Path == "/v1/messages":
@@ -569,16 +598,31 @@ func sseEvent(w http.ResponseWriter, name string, data any) {
 // sseHead writes the stream header and the opening event.
 func sseHead(w http.ResponseWriter) {
 	w.Header().Set("content-type", "text/event-stream")
-	sseEvent(w, "message_start", map[string]any{"type": "message_start", "message": map[string]any{"usage": map[string]any{"input_tokens": 30, "output_tokens": 1}}})
+	sseEvent(w, "message_start", map[string]any{
+		"type":    "message_start",
+		"message": map[string]any{"usage": map[string]any{"input_tokens": 30, "output_tokens": 1}},
+	})
 }
 
 // sseText streams a text-only reply that ends the turn.
 func sseText(w http.ResponseWriter, text string) {
 	sseHead(w)
-	sseEvent(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
-	sseEvent(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
+	sseEvent(w, "content_block_start", map[string]any{
+		"type":          "content_block_start",
+		"index":         0,
+		"content_block": map[string]any{"type": "text", "text": ""},
+	})
+	sseEvent(w, "content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": 0,
+		"delta": map[string]any{"type": "text_delta", "text": text},
+	})
 	sseEvent(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-	sseEvent(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 12}})
+	sseEvent(w, "message_delta", map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": "end_turn"},
+		"usage": map[string]any{"output_tokens": 12},
+	})
 	sseEvent(w, "message_stop", map[string]any{"type": "message_stop"})
 }
 
@@ -588,9 +632,17 @@ func sseTool(w http.ResponseWriter, id, name string, input map[string]any) {
 	sseEvent(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0,
 		"content_block": map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{}}})
 	args, _ := json.Marshal(input)
-	sseEvent(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": string(args)}})
+	sseEvent(w, "content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": 0,
+		"delta": map[string]any{"type": "input_json_delta", "partial_json": string(args)},
+	})
 	sseEvent(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-	sseEvent(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "tool_use"}, "usage": map[string]any{"output_tokens": 9}})
+	sseEvent(w, "message_delta", map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": "tool_use"},
+		"usage": map[string]any{"output_tokens": 9},
+	})
 	sseEvent(w, "message_stop", map[string]any{"type": "message_stop"})
 }
 
@@ -603,14 +655,19 @@ func (f *fakeModel) arm() (started <-chan struct{}, release func()) {
 	return f.started, func() { close(hold) }
 }
 
-// writeDocker puts a fake docker on PATH that keeps one file per container in a folder and understands ps and rm; it returns the folder.
+// writeDocker puts a fake docker on PATH that keeps one file per container in a folder and understands ps and rm; it returns
+// the folder.
 func (r *binRig) writeDocker() string {
 	dir := filepath.Join(r.root, "containers")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		r.t.Fatal(err)
 	}
-	script := "#!/bin/sh\nD=" + dir + "\ncase \"$1\" in\nps)\n  pat=\"\"\n  while [ $# -gt 0 ]; do case \"$1\" in --filter) shift; pat=${1#name=};; esac; shift; done\n" +
-		"  for f in \"$D\"/*; do [ -e \"$f\" ] || continue; n=$(basename \"$f\"); echo \"$n\" | grep -Eq \"$pat\" && echo \"$n\"; done;;\n" +
+	script := "#!/bin/sh\nD=" + dir +
+		"\ncase \"$1\" in\nps)\n  pat=\"\"\n  while [ $# -gt 0 ]; do case \"$1\" in --filter) shift; pat=${1#name=};; " +
+		"esac; shift; done\n" +
+
+		"  for f in \"$D\"/*; do [ -e \"$f\" ] || continue; n=$(basename \"$f\"); echo \"$n\" | grep -Eq \"$pat\" && echo " +
+		"\"$n\"; done;;\n" +
 		"rm) shift; [ \"$1\" = -f ] && shift; rm -f \"$D/$1\";;\nesac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(r.root, "bin", "docker"), []byte(script), 0o755); err != nil {
 		r.t.Fatal(err)

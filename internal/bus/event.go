@@ -38,9 +38,12 @@ type Key struct {
 }
 
 var (
-	ErrUnknownEvent = errors.New("unknown event type, subtype or data") // ErrUnknownEvent marks a type and subtype pair that is not registered, or data that is not the registered struct.
-	ErrBusClosed    = errors.New("bus closed")                          // ErrBusClosed marks a call on a bus that was closed.
-	ErrBusSealed    = errors.New("bus sealed")                          // ErrBusSealed marks a publish on a bus that was sealed.
+	// ErrUnknownEvent marks a type and subtype pair that is not registered, or data that is not the registered struct.
+	ErrUnknownEvent = errors.New("unknown event type, subtype or data")
+	// ErrBusClosed marks a call on a bus that was closed.
+	ErrBusClosed = errors.New("bus closed")
+	// ErrBusSealed marks a publish on a bus that was sealed.
+	ErrBusSealed = errors.New("bus sealed")
 )
 
 // wireEvent is the event line with its data body still undecoded.
@@ -74,7 +77,14 @@ func (e *Event) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("decode data of %q/%q: %w", w.Type, w.Subtype, err)
 	}
 
-	*e = Event{Type: w.Type, Subtype: w.Subtype, Run: w.Run, Group: w.Group, Time: w.Time, Data: p}
+	*e = Event{
+		Type:    w.Type,
+		Subtype: w.Subtype,
+		Run:     w.Run,
+		Group:   w.Group,
+		Time:    w.Time,
+		Data:    p,
+	}
 	return nil
 }
 

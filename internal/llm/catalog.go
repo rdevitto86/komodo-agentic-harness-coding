@@ -28,71 +28,6 @@ var modelsJSON []byte
 // weightOrder lists the weights from heaviest to lightest, for the nearest-weight rule.
 var weightOrder = []Weight{Heavy, Standard, Light}
 
-// NewModelCheck returns the function the Configuration Manager takes as its modelOK argument.
-// A model passes when a successful probe found it, or when it is a catalog model and some probe
-// succeeded.
-func NewModelCheck(c *Catalog, probes ...ProbeResult) func(model string) bool {
-	ok := map[string]bool{}
-	anyOK := false
-
-	for _, p := range probes {
-		if !p.OK {
-			continue
-		}
-
-		anyOK = true
-
-		for _, m := range p.Models {
-			ok[m] = true
-		}
-	}
-
-	return func(model string) bool {
-		if model == "" || !anyOK {
-			return false
-		}
-
-		if ok[model] {
-			return true
-		}
-
-		e, found := c.Lookup(model)
-
-		return found && e.Tier != "local"
-	}
-}
-
-// Entries returns a copy of every entry.
-func (c *Catalog) Entries() []CatalogEntry {
-	if c == nil {
-		return nil
-	}
-
-	return slices.Clone(c.entries)
-}
-
-// Lookup finds an entry by its exact identifier.
-func (c *Catalog) Lookup(id string) (CatalogEntry, bool) {
-	for _, e := range c.Entries() {
-		if e.ID == id {
-			return e, true
-		}
-	}
-
-	return CatalogEntry{}, false
-}
-
-// Default returns the latest hosted model of a weight.
-func (c *Catalog) Default(w Weight) (CatalogEntry, bool) {
-	for _, e := range c.Entries() {
-		if e.Tier == "latest" && e.Weight == string(w) {
-			return e, true
-		}
-	}
-
-	return CatalogEntry{}, false
-}
-
 // Prior returns the prior model of the same weight as the given latest identifier.
 func (c *Catalog) Prior(id string) (CatalogEntry, bool) {
 	cur, ok := c.Lookup(id)
@@ -109,6 +44,24 @@ func (c *Catalog) Prior(id string) (CatalogEntry, bool) {
 	return CatalogEntry{}, false
 }
 
+// Lookup finds an entry by its exact identifier.
+func (c *Catalog) Lookup(id string) (CatalogEntry, bool) {
+	for _, e := range c.Entries() {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return CatalogEntry{}, false
+}
+
+// Entries returns a copy of every entry.
+func (c *Catalog) Entries() []CatalogEntry {
+	if c == nil {
+		return nil
+	}
+	return slices.Clone(c.entries)
+}
+
 // LocalModel returns the local model of a weight, or the nearest weight that lists one.
 func (c *Catalog) LocalModel(w Weight) (CatalogEntry, bool) {
 	at := slices.Index(weightOrder, w)
@@ -121,7 +74,6 @@ func (c *Catalog) LocalModel(w Weight) (CatalogEntry, bool) {
 			if i < 0 || i >= len(weightOrder) {
 				continue
 			}
-
 			for _, e := range c.Entries() {
 				if e.Tier == "local" && e.Weight == string(weightOrder[i]) {
 					return e, true
@@ -136,21 +88,55 @@ func (c *Catalog) LocalModel(w Weight) (CatalogEntry, bool) {
 // Models returns the latest hosted identifier per weight.
 func (c *Catalog) Models() map[Weight]string {
 	out := map[Weight]string{}
-
 	for _, w := range weightOrder {
 		if e, ok := c.Default(w); ok {
 			out[w] = e.ID
 		}
 	}
-
 	return out
+}
+
+// Default returns the latest hosted model of a weight.
+func (c *Catalog) Default(w Weight) (CatalogEntry, bool) {
+	for _, e := range c.Entries() {
+		if e.Tier == "latest" && e.Weight == string(w) {
+			return e, true
+		}
+	}
+	return CatalogEntry{}, false
+}
+
+// NewModelCheck returns the function the Configuration Manager takes as its modelOK argument.
+// A model passes when a successful probe found it, or when it is a catalog model and some probe succeeded.
+func NewModelCheck(c *Catalog, probes ...ProbeResult) func(model string) bool {
+	ok := map[string]bool{}
+	anyOK := false
+	for _, p := range probes {
+		if !p.OK {
+			continue
+		}
+		anyOK = true
+		for _, m := range p.Models {
+			ok[m] = true
+		}
+	}
+
+	return func(model string) bool {
+		if model == "" || !anyOK {
+			return false
+		}
+		if ok[model] {
+			return true
+		}
+		e, found := c.Lookup(model)
+		return found && e.Tier != "local"
+	}
 }
 
 // LoadCatalog parses the embedded catalog.
 func LoadCatalog() (*Catalog, error) { return ParseCatalog(modelsJSON) }
 
-// ParseCatalog parses catalog JSON and checks weights, tiers, unique identifiers and one latest
-// model per weight.
+// ParseCatalog parses catalog JSON and checks weights, tiers, unique identifiers and one latest model per weight.
 func ParseCatalog(data []byte) (*Catalog, error) {
 	var entries []CatalogEntry
 	if err := json.Unmarshal(data, &entries); err != nil {

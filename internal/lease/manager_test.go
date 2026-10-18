@@ -205,7 +205,8 @@ func TestRenew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Renew: %v", err)
 	}
-	if !r.RenewedAt.Equal(testStart.Add(5*time.Minute)) || !r.TakenAt.Equal(l.TakenAt) || r.Fence != l.Fence || r.Rev != l.Rev+1 {
+	if !r.RenewedAt.Equal(testStart.Add(5*time.Minute)) || !r.TakenAt.Equal(l.TakenAt) || r.Fence != l.Fence ||
+		r.Rev != l.Rev+1 {
 		t.Fatalf("renewal changes renewed_at only: %+v", r)
 	}
 	if ok, _ := m.IsOwner(bg, r); !ok {
@@ -350,7 +351,6 @@ func TestRelease(t *testing.T) {
 	l, _ := a.Grant(bg, req("run-a", "g1"))
 	e.procs.kill(100)
 	l2, _ := b.Grant(bg, req("run-b", "g1"))
-
 	if err := a.Release(bg, l); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("releasing a lease another run holds: %v", err)
 	}

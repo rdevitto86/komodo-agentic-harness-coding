@@ -48,7 +48,8 @@ func TestUnreadableSettingsAreNotATamper(t *testing.T) {
 	repo := repoDir(t, "")
 	backlog(t, repo, map[string]string{"epic-1/tg-1.2": "todo"})
 	h.fake(answerRunID)
-	const warn = "settings file settings.json is unreadable; built-in values are served. Fix: komodo config set --default settings.json"
+	const warn = "settings file settings.json is unreadable; built-in values are served. Fix: komodo config set --default " +
+		"settings.json"
 	for _, args := range [][]string{{"config", "get", "limits.returns"}, {"stop", "tg-1.2"}, {"run", "tg-1.2"}} {
 		code, out, errOut := h.run(append([]string{"--json", "-C", repo}, args...)...)
 		if code != 0 || strings.Count(errOut, warn) != 1 || strings.Count(out, `"v"`) != 1 {
@@ -130,7 +131,8 @@ func TestOnlyAMissingEngineIsStarted(t *testing.T) {
 	started := false
 	e.Start = startRecorder(&started)
 	_, err := e.Send(t.Context(), engine.Request{ID: "x", Verb: engine.VerbClean})
-	if err == nil || started || strings.Contains(err.Error(), "no engine answered") || !strings.Contains(err.Error(), "permission denied") {
+	if err == nil || started || strings.Contains(err.Error(), "no engine answered") ||
+		!strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("err = %v, started = %v", err, started)
 	}
 }
@@ -178,7 +180,8 @@ func TestScheduleCarriesTheRunStart(t *testing.T) {
 		t.Fatalf("event = %+v", ev)
 	}
 	rs := ev.Data.(*bus.RunStart)
-	if rs.Target != "ep-1" || len(rs.Groups) != 2 || rs.Source != "cli" || rs.Schedule.IsZero() || rs.Root != repo || rs.CommonDir == "" || rs.Repo == "" {
+	if rs.Target != "ep-1" || len(rs.Groups) != 2 || rs.Source != "cli" || rs.Schedule.IsZero() || rs.Root != repo ||
+		rs.CommonDir == "" || rs.Repo == "" {
 		t.Fatalf("run-start = %+v", rs)
 	}
 }

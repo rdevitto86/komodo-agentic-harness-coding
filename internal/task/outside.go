@@ -32,16 +32,6 @@ type OutsideConn struct {
 	gone    chan struct{} // closed when the server's output ends
 }
 
-// rpcResponse is one reply from an outside server.
-type rpcResponse struct {
-	ID     json.RawMessage `json:"id"`
-	Result json.RawMessage `json:"result"`
-	Error  *rpcError       `json:"error"`
-}
-
-// How long an outside server gets to answer.
-const outsideInit = 30 * time.Second // initialize and tools/list
-
 // Warnings lists what the server's entry asked for and the sandbox could not give.
 func (o *OutsideConn) Warnings() []string { return append([]string{}, o.warnings...) }
 
@@ -93,7 +83,6 @@ func (o *OutsideConn) Call(
 	args json.RawMessage,
 ) (string, string) {
 	const outsideCall = runTimeout // one tool call
-
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
@@ -121,7 +110,6 @@ func (o *OutsideConn) Call(
 	}
 
 	var parts []string
-
 	for _, c := range res.Content {
 		if c.Type == "text" {
 			parts = append(parts, c.Text)
@@ -143,17 +131,14 @@ func (o *OutsideConn) Close() error {
 	_ = o.in.Close()
 	o.cancel()
 	err := sandbox.Wait(o.cmd)
-
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		return nil
 	}
-
 	return err
 }
 
-// read routes each reply to the call waiting for it, and answers a request from the server with
-// "method not found".
+// read routes each reply to the call waiting for it, and answers a request from the server with "method not found".
 func (o *OutsideConn) read(out io.Reader) {
 	defer close(o.gone)
 
@@ -179,7 +164,6 @@ func (o *OutsideConn) read(out io.Reader) {
 					},
 				)
 			}
-
 			continue
 		}
 
@@ -192,7 +176,6 @@ func (o *OutsideConn) read(out io.Reader) {
 		ch := o.pending[id]
 		delete(o.pending, id)
 		o.mu.Unlock()
-
 		if ch != nil {
 			ch <- m.rpcResponse
 		}
@@ -205,12 +188,9 @@ func (o *OutsideConn) send(v any) error {
 	if err != nil {
 		return err
 	}
-
 	o.wmu.Lock()
 	defer o.wmu.Unlock()
-
 	_, err = o.in.Write(append(raw, '\n'))
-
 	return err
 }
 
@@ -228,7 +208,6 @@ func (o *OutsideConn) rpc(ctx context.Context, method string, params any) (json.
 	req := map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}
 	if err := o.send(req); err != nil {
 		forget()
-
 		return nil, fmt.Errorf("send to the server: %w", err)
 	}
 
@@ -237,18 +216,25 @@ func (o *OutsideConn) rpc(ctx context.Context, method string, params any) (json.
 		if r.Error != nil {
 			return nil, fmt.Errorf("%s", r.Error.Message)
 		}
-
 		return r.Result, nil
 	case <-ctx.Done():
 		forget()
-
 		return nil, ctx.Err()
 	case <-o.gone:
 		forget()
-
 		return nil, errors.New("the server exited")
 	}
 }
+
+// rpcResponse is one reply from an outside server.
+type rpcResponse struct {
+	ID     json.RawMessage `json:"id"`
+	Result json.RawMessage `json:"result"`
+	Error  *rpcError       `json:"error"`
+}
+
+// How long an outside server gets to answer.
+const outsideInit = 30 * time.Second // initialize and tools/list
 
 // AddOutsideConn registers every tool of a running server as "<server>.<tool>".
 func (r *Registry) AddOutsideConn(ctx context.Context, o *OutsideConn) error {
@@ -270,8 +256,39 @@ func (r *Registry) AddOutsideConn(ctx context.Context, o *OutsideConn) error {
 	return nil
 }
 
-// StartOutside starts one outside server inside the sandbox instance of the agent's role, without a
-// shell and without network. The variables named in its entry are read from getenv; it dies with
+// StartAllowed starts the servers an agent's permissions name and no others; a server nobody named is never started. On a
+// failure the servers already started are closed.
+func StartAllowed(
+	ctx context.Context,
+	c Confiner,
+	instance string,
+	perm Permissions,
+	servers []OutsideServer,
+	getenv func(string) string,
+) ([]*OutsideConn, error) {
+	var started []*OutsideConn
+
+	for _, s := range servers {
+		if !slices.Contains(perm.Servers, s.Name) {
+			continue
+		}
+
+		o, err := StartOutside(ctx, c, instance, s, getenv)
+		if err != nil {
+			for _, x := range started {
+				_ = x.Close()
+			}
+			return nil, err
+		}
+
+		started = append(started, o)
+	}
+
+	return started, nil
+}
+
+// StartOutside starts one outside server inside the sandbox instance of the agent's role, without a shell and without
+// network. The variables named in its entry are read from getenv; it dies with
 // ctx.
 func StartOutside(
 	ctx context.Context,
@@ -285,7 +302,6 @@ func StartOutside(
 	}
 
 	var env []string
-
 	for _, n := range s.Env {
 		if v := getenv(n); v != "" {
 			env = append(env, n+"="+v)
@@ -306,7 +322,6 @@ func StartOutside(
 	}
 
 	cctx, cancel := context.WithCancel(ctx)
-
 	cmd, err := c.Command(
 		cctx,
 		instance,
@@ -314,27 +329,22 @@ func StartOutside(
 	)
 	if err != nil {
 		cancel()
-
 		return nil, fmt.Errorf("start the outside server %s: %w", s.Name, err)
 	}
 
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
-
 		return nil, fmt.Errorf("open the input of %s: %w", s.Name, err)
 	}
 
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
-
 		return nil, fmt.Errorf("open the output of %s: %w", s.Name, err)
 	}
-
 	if err := cmd.Start(); err != nil {
 		cancel()
-
 		return nil, fmt.Errorf("start the outside server %s: %w", s.Name, err)
 	}
 
@@ -362,7 +372,6 @@ func StartOutside(
 
 	go func() {
 		defer guardian.Recover(taskSource, nil)
-
 		o.read(out)
 	}()
 
@@ -376,48 +385,14 @@ func StartOutside(
 	}
 	if _, err := o.rpc(hctx, "initialize", hello); err != nil {
 		_ = o.Close()
-
 		return nil, fmt.Errorf("initialize the outside server %s: %w", s.Name, err)
 	}
 
 	ready := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
 	if err := o.send(ready); err != nil {
 		_ = o.Close()
-
 		return nil, fmt.Errorf("start the outside server %s: %w", s.Name, err)
 	}
 
 	return o, nil
-}
-
-// StartAllowed starts the servers an agent's permissions name and no others; a server nobody named
-// is never started. On a failure the servers already started are closed.
-func StartAllowed(
-	ctx context.Context,
-	c Confiner,
-	instance string,
-	perm Permissions,
-	servers []OutsideServer,
-	getenv func(string) string,
-) ([]*OutsideConn, error) {
-	var started []*OutsideConn
-
-	for _, s := range servers {
-		if !slices.Contains(perm.Servers, s.Name) {
-			continue
-		}
-
-		o, err := StartOutside(ctx, c, instance, s, getenv)
-		if err != nil {
-			for _, x := range started {
-				_ = x.Close()
-			}
-
-			return nil, err
-		}
-
-		started = append(started, o)
-	}
-
-	return started, nil
 }

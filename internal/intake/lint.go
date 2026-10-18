@@ -40,8 +40,7 @@ type Finding struct {
 	Message  string   `json:"message"` // what is wrong, in one sentence
 }
 
-// scoped is a finding with the names of the groups it concerns, so a draft check can keep only its
-// own.
+// scoped is a finding with the names of the groups it concerns, so a draft check can keep only its own.
 type scoped struct {
 	Finding
 	groups []string
@@ -60,14 +59,14 @@ var (
 	hasShall  = regexp.MustCompile(`\bSHALL\b`)
 )
 
-// Lint runs the eight checks on the loaded task lists and returns their findings. tracked is every
-// tracked file of the base commit; it feeds the case-collision and overlapping-glob checks.
+// Lint runs the eight checks on the loaded task lists and returns their findings. tracked is every tracked file of the base
+// commit; it feeds the case-collision and overlapping-glob checks.
 func Lint(epics []Epic, protected, tracked []string) []Finding {
 	return sortFindings(strip(lintAll(epics, protected, tracked)))
 }
 
-// LintDraft parses a draft in memory and runs the same checks as Lint. existing holds the stored
-// epics: a draft group replaces the stored group of the same name, and only findings about draft
+// LintDraft parses a draft in memory and runs the same checks as Lint. existing holds the stored epics: a draft group
+// replaces the stored group of the same name, and only findings about draft
 // groups come back.
 func LintDraft(d PlanDraft, existing []Epic, protected, tracked []string) []Finding {
 	if len(d.Files) == 0 {
@@ -76,7 +75,6 @@ func LintDraft(d PlanDraft, existing []Epic, protected, tracked []string) []Find
 
 	epics, found := parseFiles(d.Files)
 	drafted := map[string]bool{}
-
 	for _, e := range epics {
 		for _, g := range e.Groups {
 			drafted[g.Name] = true
@@ -99,7 +97,6 @@ func LintDraft(d PlanDraft, existing []Epic, protected, tracked []string) []Find
 // OverEstimate warns when a task's real changed lines exceed twice its estimate.
 func OverEstimate(t Task, actualLines int) (Finding, bool) {
 	const overEstimateFold = 2
-
 	if actualLines <= overEstimateFold*t.EstimateLines {
 		return Finding{}, false
 	}
@@ -121,16 +118,13 @@ func strip(in []scoped) []Finding {
 	for i, s := range in {
 		out[i] = s.Finding
 	}
-
 	return out
 }
 
 // lintAll runs every check and returns the findings with the groups each concerns.
 func lintAll(epics []Epic, protected, tracked []string) []scoped {
 	var out []scoped
-
 	add := func(f Finding, groups ...string) { out = append(out, scoped{f, groups}) }
-
 	for _, e := range epics {
 		for _, g := range e.Groups {
 			lintGroup(e.Number, g, protected, add)
@@ -139,13 +133,11 @@ func lintAll(epics []Epic, protected, tracked []string) []scoped {
 
 	graph, gf := buildGraph(epics, tracked)
 	out = append(out, gf...)
-
 	if graph.cycle() == nil {
 		waveIsolation(epics, graph, add)
 	}
 
 	caseCollisions(epics, tracked, add)
-
 	return out
 }
 
@@ -161,21 +153,14 @@ func lintGroup(epic int, g Group, protected []string, add func(Finding, ...strin
 	tg := groupPath(epic, g.Name)
 
 	fail := func(r Rule, path, msg string, a ...any) {
-		add(Finding{
-			Rule:     r,
-			Severity: SeverityFail,
-			Path:     path,
-			Message:  fmt.Sprintf(msg, a...),
-		}, g.Name)
+		add(Finding{Rule: r, Severity: SeverityFail, Path: path, Message: fmt.Sprintf(msg, a...)}, g.Name)
 	}
 	if !slices.Contains(pointScale, g.Points) {
 		fail(RuleSizing, tg, "points %d is not on the scale 1, 2, 3, 5, 8", g.Points)
 	}
-
 	if len(g.Tasks) > maxGroupTasks {
 		fail(RuleSizing, tg, "group has %d tasks; at most %d", len(g.Tasks), maxGroupTasks)
 	}
-
 	if len(g.Acceptance) == 0 {
 		fail(RuleRequired, tg, "group has no acceptance item")
 	}
@@ -197,22 +182,15 @@ func lintGroup(epic int, g Group, protected []string, add func(Finding, ...strin
 	for _, t := range g.Tasks {
 		tp := fmt.Sprintf("epic-%d/%s/%s.md", epic, g.Name, t.Name)
 		if prev, ok := folded[strings.ToLower(t.Name)]; ok {
-			fail(
-				RuleCaseCollision, tp,
-				"task file %s.md differs only by case from %s.md", t.Name, prev,
-			)
+			fail(RuleCaseCollision, tp, "task file %s.md differs only by case from %s.md", t.Name, prev)
 		}
 
 		folded[strings.ToLower(t.Name)] = t.Name
 		if len(t.Files) > maxTaskFiles {
 			fail(RuleSizing, tp, "task names %d files; at most %d", len(t.Files), maxTaskFiles)
 		}
-
 		if t.EstimateLines > maxTaskLines {
-			fail(
-				RuleSizing, tp,
-				"task estimates %d lines; at most %d", t.EstimateLines, maxTaskLines,
-			)
+			fail(RuleSizing, tp, "task estimates %d lines; at most %d", t.EstimateLines, maxTaskLines)
 		}
 
 		for _, f := range t.Files {
@@ -223,14 +201,12 @@ func lintGroup(epic int, g Group, protected []string, add func(Finding, ...strin
 	}
 }
 
-// earsProblem returns what is wrong with an acceptance item's shape, or "" when it matches one of
-// the three.
+// earsProblem returns what is wrong with an acceptance item's shape, or "" when it matches one of the three.
 func earsProblem(a Acceptance) string {
 	text := strings.TrimSpace(a.Keyword + " " + a.Text)
 	if !hasShall.MatchString(text) {
 		return "has no SHALL"
 	}
-
 	if earsWhen.MatchString(text) || earsIf.MatchString(text) || earsWhile.MatchString(text) {
 		return ""
 	}
@@ -249,7 +225,6 @@ func protectedPath(f string, protected []string) bool {
 func waveIsolation(epics []Epic, graph Graph, add func(Finding, ...string)) {
 	paths := map[string]string{}
 	files := map[string][]string{}
-
 	for _, e := range epics {
 		for _, g := range e.Groups {
 			paths[g.Name] = groupPath(e.Number, g.Name)
@@ -290,13 +265,11 @@ func caseCollisions(epics []Epic, tracked []string, add func(Finding, ...string)
 
 	byFold := map[string][]owner{}
 	seen := map[string]bool{}
-
 	note := func(p, group string) {
 		k := group + "\x00" + p
 		if seen[k] {
 			return
 		}
-
 		seen[k] = true
 		f := strings.ToLower(p)
 		byFold[f] = append(byFold[f], owner{p, group})
@@ -308,11 +281,9 @@ func caseCollisions(epics []Epic, tracked []string, add func(Finding, ...string)
 	var order []string
 
 	paths := map[string]string{}
-
 	for _, e := range epics {
 		for _, g := range e.Groups {
 			paths[g.Name] = groupPath(e.Number, g.Name)
-
 			order = append(order, g.Name)
 			for _, f := range g.Files {
 				note(f, g.Name)
@@ -331,14 +302,12 @@ func caseCollisions(epics []Epic, tracked []string, add func(Finding, ...string)
 		distinct := map[string]bool{}
 
 		var groups []string
-
 		for _, o := range byFold[k] {
 			distinct[o.path] = true
 			if o.group != "" && !slices.Contains(groups, o.group) {
 				groups = append(groups, o.group)
 			}
 		}
-
 		if len(distinct) < 2 || len(groups) == 0 {
 			continue
 		}
@@ -356,8 +325,7 @@ func caseCollisions(epics []Epic, tracked []string, add func(Finding, ...string)
 	}
 }
 
-// mergeEpics overlays the draft's groups on the stored epics; a draft group replaces a stored group
-// of the same name.
+// mergeEpics overlays the draft's groups on the stored epics; a draft group replaces a stored group of the same name.
 func mergeEpics(existing, draft []Epic) []Epic {
 	byNum := map[int]*Epic{}
 
@@ -405,7 +373,6 @@ func groupIndex(name string) int {
 	if _, err := fmt.Sscanf(name, "tg-%d.%d", &n, &m); err != nil {
 		return 0
 	}
-
 	return m
 }
 
@@ -415,27 +382,23 @@ func sortFindings(f []Finding) []Finding {
 		if f[i].Path != f[j].Path {
 			return f[i].Path < f[j].Path
 		}
-
 		return f[i].Rule < f[j].Rule
 	})
-
 	return f
 }
 
-// numberFindings fails a draft group that is new but does not take the next number of its epic, and
-// a draft group whose status is not todo.
+// numberFindings fails a draft group that is new but does not take the next number of its epic, and a draft group whose
+// status is not todo.
 func numberFindings(existing, draft []Epic) []Finding {
 	var found []Finding
 
 	for _, e := range draft {
 		next := 1
 		have := map[string]bool{}
-
 		for _, se := range existing {
 			if se.Number != e.Number {
 				continue
 			}
-
 			for _, g := range se.Groups {
 				have[g.Name] = true
 				next = max(next, groupIndex(g.Name)+1)
@@ -449,7 +412,6 @@ func numberFindings(existing, draft []Epic) []Finding {
 					fmt.Sprintf("status %q: a plan writes status todo", g.Status),
 				))
 			}
-
 			if have[g.Name] {
 				continue
 			}

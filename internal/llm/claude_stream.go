@@ -31,12 +31,6 @@ type claudeStream struct {
 	once    sync.Once
 }
 
-// claudeHead is the type fields every program line carries.
-type claudeHead struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
-}
-
 // newClaudeStream starts the reader goroutine over the program's output.
 func newClaudeStream(
 	p *proc,
@@ -56,7 +50,6 @@ func newClaudeStream(
 
 	go func() {
 		defer rec.Recover(llmSource, nil)
-
 		s.read()
 	}()
 
@@ -75,11 +68,9 @@ func (s *claudeStream) Next(ctx context.Context) (StreamEvent, error) {
 	case closed || limited:
 		return StreamEvent{}, ErrStreamClosed
 	}
-
 	if len(s.pending) > 0 {
 		ev := s.pending[0]
 		s.pending = s.pending[1:]
-
 		return ev, nil
 	}
 
@@ -87,7 +78,6 @@ func (s *claudeStream) Next(ctx context.Context) (StreamEvent, error) {
 	case ev, ok := <-s.events:
 		if !ok {
 			<-s.p.exited
-
 			return StreamEvent{}, fmt.Errorf(
 				"%w%s: %w",
 				errNoResult,
@@ -95,24 +85,20 @@ func (s *claudeStream) Next(ctx context.Context) (StreamEvent, error) {
 				io.ErrUnexpectedEOF,
 			)
 		}
-
 		if pl := s.limitOf(ev); pl != nil {
 			s.mu.Lock()
 			s.limited = true
 			s.mu.Unlock()
 			s.p.kill()
-
 			return StreamEvent{}, pl
 		}
 
 		if ev.Kind == KindResult {
 			s.p.closeInput()
-
 			if end := resultFailure(ev, s.schema); end != nil {
 				s.mu.Lock()
 				s.limited = true
 				s.mu.Unlock()
-
 				return StreamEvent{}, end
 			}
 
@@ -132,7 +118,6 @@ func (s *claudeStream) Inject(line string) error {
 	if s.isEnded() {
 		return ErrStreamClosed
 	}
-
 	return s.p.writeUser(line)
 }
 
@@ -141,13 +126,10 @@ func (s *claudeStream) Stop(level StopLevel) error {
 	if s.isEnded() {
 		return ErrStreamClosed
 	}
-
 	if level == Kill {
 		s.p.kill()
-
 		return nil
 	}
-
 	return signalProc(s.p.cmd.Process, level)
 }
 
@@ -187,7 +169,6 @@ func (s *claudeStream) read() {
 			case <-s.quit:
 			}
 		}
-
 		if err != nil {
 			break
 		}
@@ -197,30 +178,18 @@ func (s *claudeStream) read() {
 	close(s.p.exited)
 }
 
-// exited reports whether the program has been reaped.
-func (s *claudeStream) exited() bool {
-	select {
-	case <-s.p.exited:
-		return true
-	default:
-		return false
-	}
-}
-
 // firstEvent waits for the first parsed line.
 func (s *claudeStream) firstEvent(ctx context.Context) (StreamEvent, error) {
 	select {
 	case ev, ok := <-s.events:
 		if !ok {
 			<-s.p.exited
-
 			return StreamEvent{}, fmt.Errorf(
 				"claude ended before its first line%s: %w",
 				s.p.stderrTail(),
 				ErrUnavailable,
 			)
 		}
-
 		return ev, nil
 	case <-ctx.Done():
 		return StreamEvent{}, ctx.Err()
@@ -241,9 +210,7 @@ func (s *claudeStream) limitOf(ev StreamEvent) *ProviderLimit {
 		if ev.Retry.Category != "billing_error" {
 			return nil
 		}
-
 		pl.Cap = CapSpend
-
 		return pl
 	case KindRateLimit:
 		rl := ev.RateLimit
@@ -253,9 +220,7 @@ func (s *claudeStream) limitOf(ev StreamEvent) *ProviderLimit {
 			rl.ResetAt.Sub(s.now()) <= rateLimitHold {
 			return nil
 		}
-
 		pl.ResetAt, pl.Cap = rl.ResetAt, capOf(rl.Type)
-
 		return pl
 	}
 
@@ -266,8 +231,23 @@ func (s *claudeStream) limitOf(ev StreamEvent) *ProviderLimit {
 func (s *claudeStream) isEnded() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	return s.closed || s.limited || s.exited()
+}
+
+// exited reports whether the program has been reaped.
+func (s *claudeStream) exited() bool {
+	select {
+	case <-s.p.exited:
+		return true
+	default:
+		return false
+	}
+}
+
+// claudeHead is the type fields every program line carries.
+type claudeHead struct {
+	Type    string `json:"type"`
+	Subtype string `json:"subtype"`
 }
 
 // capOf maps the program's rate-limit window name to a cap kind.
@@ -280,7 +260,6 @@ func capOf(window string) CapKind {
 	case strings.Contains(w, "overage"), strings.Contains(w, "spend"):
 		return CapSpend
 	}
-
 	return CapWindow
 }
 
@@ -291,7 +270,6 @@ func parseClaudeLine(line []byte, sessionID string) (StreamEvent, error) {
 	var head claudeHead
 	if err := json.Unmarshal(line, &head); err != nil {
 		quoted, _ := json.Marshal(string(line))
-
 		return StreamEvent{Kind: KindOutput, Raw: quoted}, nil
 	}
 
@@ -302,7 +280,6 @@ func parseClaudeLine(line []byte, sessionID string) (StreamEvent, error) {
 		var v struct {
 			APIKeySource string `json:"apiKeySource"`
 		}
-
 		_ = json.Unmarshal(line, &v)
 		ev.Kind, ev.Init = KindInit, &Init{APIKeySource: v.APIKeySource}
 	case head.Type == "system" && head.Subtype == "api_retry":
@@ -349,42 +326,6 @@ func parseClaudeLine(line []byte, sessionID string) (StreamEvent, error) {
 	return ev, nil
 }
 
-// resultFailure returns the exit a result event ends the session with, or nil when it holds a valid
-// answer. An error result is no_result; a missing or schema-breaking structured output is
-// schema_fail.
-func resultFailure(ev StreamEvent, schema json.RawMessage) *EndError {
-	var v struct {
-		Subtype string `json:"subtype"`
-		IsError bool   `json:"is_error"`
-		Result  string `json:"result"`
-	}
-
-	_ = json.Unmarshal(ev.Raw, &v)
-	if v.IsError || strings.HasPrefix(v.Subtype, "error") {
-		detail := v.Subtype
-		if t := strings.TrimSpace(v.Result); t != "" {
-			detail += ": " + t[:min(len(t), 200)]
-		}
-
-		return &EndError{Reason: state.ReasonNoResult, Detail: detail}
-	}
-
-	if ev.Result == nil || len(ev.Result.Output) == 0 {
-		return &EndError{
-			Reason: state.ReasonSchemaFail,
-			Detail: "the result holds no structured output",
-		}
-	}
-
-	if len(schema) > 0 {
-		if err := validateSchema(schema, ev.Result.Output); err != nil {
-			return &EndError{Reason: state.ReasonSchemaFail, Detail: err.Error()}
-		}
-	}
-
-	return nil
-}
-
 // parseClaudeResult reads the answer, usage and handle out of a result line.
 func parseClaudeResult(line []byte, sessionID string) *Result {
 	var v struct {
@@ -419,4 +360,37 @@ func parseClaudeResult(line []byte, sessionID string) *Result {
 	}
 
 	return r
+}
+
+// resultFailure returns the exit a result event ends the session with, or nil when it holds a valid answer. An error result
+// is no_result; a missing or schema-breaking structured output is
+// schema_fail.
+func resultFailure(ev StreamEvent, schema json.RawMessage) *EndError {
+	var v struct {
+		Subtype string `json:"subtype"`
+		IsError bool   `json:"is_error"`
+		Result  string `json:"result"`
+	}
+
+	_ = json.Unmarshal(ev.Raw, &v)
+	if v.IsError || strings.HasPrefix(v.Subtype, "error") {
+		detail := v.Subtype
+		if t := strings.TrimSpace(v.Result); t != "" {
+			detail += ": " + t[:min(len(t), 200)]
+		}
+		return &EndError{Reason: state.ReasonNoResult, Detail: detail}
+	}
+	if ev.Result == nil || len(ev.Result.Output) == 0 {
+		return &EndError{
+			Reason: state.ReasonSchemaFail,
+			Detail: "the result holds no structured output",
+		}
+	}
+	if len(schema) > 0 {
+		if err := validateSchema(schema, ev.Result.Output); err != nil {
+			return &EndError{Reason: state.ReasonSchemaFail, Detail: err.Error()}
+		}
+	}
+
+	return nil
 }

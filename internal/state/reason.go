@@ -1,7 +1,7 @@
 package state
 
-// Reason is the one closed list of why a group is blocked and why a session ended; this package
-// owns it, and the Runtime Manager and the Task Manager use it.
+// Reason is the one closed list of why a group is blocked and why a session ended; this package owns it, and the Runtime
+// Manager and the Task Manager use it.
 type Reason string
 
 const (

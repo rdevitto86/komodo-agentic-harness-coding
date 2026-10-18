@@ -12,9 +12,11 @@ import (
 )
 
 const (
-	DefaultLangMaxBytes int64 = 10 << 30 // DefaultLangMaxBytes is the language store cap used when none is given (10 GB).
+	// DefaultLangMaxBytes is the language store cap used when none is given (10 GB).
+	DefaultLangMaxBytes int64 = 10 << 30
 
-	langStamp = ".last-used" // langStamp is the file in a repository's language store whose modification time records its last use.
+	// langStamp is the file in a repository's language store whose modification time records its last use.
+	langStamp = ".last-used"
 )
 
 // langUnit is one repository's language store as seen by a trim.
@@ -52,8 +54,9 @@ func (c *Cache) TouchLang(repo string) error {
 	return nil
 }
 
-// TrimLang deletes whole repository stores under dir, least recently used first, until the language store holds about 80% of its cap.
-// A repository for which keep returns true is never deleted; a nil keep keeps all. It returns the bytes removed and never removes dir.
+// TrimLang deletes whole repository stores under dir, least recently used first,
+// until the language store holds about 80% of its cap. A repository for which keep returns true is never deleted;
+// a nil keep keeps all. It returns the bytes removed and never removes dir.
 func (c *Cache) TrimLang(dir string, keep func(repo string) bool) (int64, error) {
 	if dir == "" {
 		dir = c.langRoot
@@ -117,10 +120,12 @@ func scanLang(dir string) ([]langUnit, int64, error) {
 		if !e.IsDir() {
 			continue
 		}
+
 		u := langUnit{repo: e.Name(), path: filepath.Join(dir, e.Name())}
 		if info, err := os.Stat(filepath.Join(u.path, langStamp)); err == nil {
 			u.used = info.ModTime()
 		}
+
 		err := filepath.WalkDir(u.path, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
@@ -139,9 +144,11 @@ func scanLang(dir string) ([]langUnit, int64, error) {
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan language store of %s: %w", u.repo, err)
 		}
+
 		units = append(units, u)
 		total += u.size
 	}
+
 	return units, total, nil
 }
 

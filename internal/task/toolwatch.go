@@ -14,8 +14,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// toolWatch counts the tool calls of one session: in flight, last activity and refusals per guard
-// row. On an API link it wraps the bound tools; on the subscription link it follows tools.jsonl.
+// toolWatch counts the tool calls of one session: in flight, last activity and refusals per guard row. On an API link it
+// wraps the bound tools; on the subscription link it follows tools.jsonl.
 type toolWatch struct {
 	inner   *Bound
 	dir     string
@@ -47,7 +47,6 @@ func (w *toolWatch) Definition(name string) (llm.ToolDef, bool) { return w.inner
 func (w *toolWatch) Dispatch(ctx context.Context, name string, args json.RawMessage) Reply {
 	w.touch(1)
 	defer w.touch(-1)
-
 	return w.inner.Dispatch(ctx, name, args)
 }
 
@@ -56,7 +55,6 @@ func (w *toolWatch) Tools() (int, time.Time) {
 	w.poll()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
 	return w.running, w.last
 }
 
@@ -75,7 +73,6 @@ func (w *toolWatch) Halt() Reason {
 			return state.ReasonRefusals
 		}
 	}
-
 	if w.inner != nil {
 		for _, n := range w.inner.Guard().Refusals() {
 			if w.limit > 0 && n >= w.limit {
@@ -96,7 +93,6 @@ func (w *toolWatch) Refusals() map[string]int {
 	for k, v := range w.denied {
 		out[k] = v
 	}
-
 	if w.inner != nil {
 		for k, v := range w.inner.Guard().Refusals() {
 			out[string(k)] = v
@@ -157,7 +153,6 @@ func (w *toolWatch) poll() {
 		if json.Unmarshal(line, &tl) != nil {
 			continue
 		}
-
 		w.last = w.now()
 		w.apply(tl)
 	}
@@ -170,7 +165,6 @@ func (w *toolWatch) apply(tl ToolLine) {
 		if w.started == nil {
 			w.started = map[string]bool{}
 		}
-
 		w.started[tl.Call] = true
 		w.running++
 	case "end":
@@ -185,7 +179,6 @@ func (w *toolWatch) apply(tl ToolLine) {
 		}
 
 		_ = json.Unmarshal(tl.Data, &d)
-
 		if w.denied == nil {
 			w.denied = map[string]int{}
 		}

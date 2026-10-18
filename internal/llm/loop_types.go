@@ -12,8 +12,7 @@ type cacheControl struct {
 	TTL  string `json:"ttl,omitempty"`
 }
 
-// block is one content block of a message, in the Messages interface's shape; the local adapter
-// maps it to its own.
+// block is one content block of a message, in the Messages interface's shape; the local adapter maps it to its own.
 type block struct {
 	Type         string          `json:"type"`
 	Text         string          `json:"text,omitempty"`
@@ -28,6 +27,49 @@ type block struct {
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 	// a tool_use whose arguments were cut off or not valid JSON; it is answered, never run
 	Invalid bool `json:"-"`
+}
+
+// MarshalJSON writes the fields the Messages interface requires for each block type, even when empty.
+func (b block) MarshalJSON() ([]byte, error) {
+	switch b.Type {
+	case "text":
+		return json.Marshal(struct {
+			Type         string        `json:"type"`
+			Text         string        `json:"text"`
+			CacheControl *cacheControl `json:"cache_control,omitempty"`
+		}{b.Type, b.Text, b.CacheControl})
+	case "thinking":
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
+		}{b.Type, b.Thinking, b.Signature})
+	case "redacted_thinking":
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			Data string `json:"data"`
+		}{b.Type, b.Data})
+	case "tool_use":
+		in := b.Input
+		if len(in) == 0 {
+			in = json.RawMessage("{}")
+		}
+
+		return json.Marshal(struct {
+			Type  string          `json:"type"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}{b.Type, b.ID, b.Name, in})
+	case "tool_result":
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			ToolUseID string `json:"tool_use_id"`
+			Content   string `json:"content"`
+		}{b.Type, b.ToolUseID, b.Content})
+	}
+
+	return json.Marshal(plainBlock(b))
 }
 
 // plainBlock has block's fields and none of its methods, so a fallback encode cannot recurse.
@@ -83,47 +125,3 @@ const (
 	stopToolUse   = "tool_use"
 	stopMaxTokens = "max_tokens"
 )
-
-// MarshalJSON writes the fields the Messages interface requires for each block type, even when
-// empty.
-func (b block) MarshalJSON() ([]byte, error) {
-	switch b.Type {
-	case "text":
-		return json.Marshal(struct {
-			Type         string        `json:"type"`
-			Text         string        `json:"text"`
-			CacheControl *cacheControl `json:"cache_control,omitempty"`
-		}{b.Type, b.Text, b.CacheControl})
-	case "thinking":
-		return json.Marshal(struct {
-			Type      string `json:"type"`
-			Thinking  string `json:"thinking"`
-			Signature string `json:"signature"`
-		}{b.Type, b.Thinking, b.Signature})
-	case "redacted_thinking":
-		return json.Marshal(struct {
-			Type string `json:"type"`
-			Data string `json:"data"`
-		}{b.Type, b.Data})
-	case "tool_use":
-		in := b.Input
-		if len(in) == 0 {
-			in = json.RawMessage("{}")
-		}
-
-		return json.Marshal(struct {
-			Type  string          `json:"type"`
-			ID    string          `json:"id"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
-		}{b.Type, b.ID, b.Name, in})
-	case "tool_result":
-		return json.Marshal(struct {
-			Type      string `json:"type"`
-			ToolUseID string `json:"tool_use_id"`
-			Content   string `json:"content"`
-		}{b.Type, b.ToolUseID, b.Content})
-	}
-
-	return json.Marshal(plainBlock(b))
-}

@@ -45,6 +45,5 @@ func ClassifyFailure(reruns [2]bool) FlakeOutcome {
 	if !reruns[0] && !reruns[1] {
 		return FlakeConfirmed
 	}
-
 	return FlakeFlaky
 }

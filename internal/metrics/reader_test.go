@@ -9,11 +9,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// doneEvent builds a task.done event for a group.
-func doneEvent(sec int, group bus.ID, task string) bus.Event {
-	return ev(sec, bus.TypeRunStatus, "task.done", "run-a", group, &bus.TaskDone{Task: task})
-}
-
 // TestMissingFilesReadAsEmpty checks a read of a folder with no files returns no figures and no error.
 func TestMissingFilesReadAsEmpty(t *testing.T) {
 	r := NewReader(RepoDir(t.TempDir()))
@@ -61,4 +56,9 @@ func TestCorruptFiguresAreRebuilt(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dir, "groups.json")); string(b) != "{corrupt" {
 		t.Fatalf("a read must not write; groups.json is now %q", b)
 	}
+}
+
+// doneEvent builds a task.done event for a group.
+func doneEvent(sec int, group bus.ID, task string) bus.Event {
+	return ev(sec, bus.TypeRunStatus, "task.done", "run-a", group, &bus.TaskDone{Task: task})
 }

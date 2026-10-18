@@ -32,6 +32,7 @@ type hostBackend struct {
 }
 
 func (b *hostBackend) Name() string { return "host" }
+
 func (b *hostBackend) Check() error { return nil }
 
 func (b *hostBackend) Prepare(_ context.Context, s sandbox.Spec) (sandbox.Instance, error) {
@@ -42,7 +43,12 @@ func (b *hostBackend) Prepare(_ context.Context, s sandbox.Spec) (sandbox.Instan
 	return sandbox.Instance{ID: fmt.Sprintf("inst-%d", b.n), Group: s.Group, Backend: "host"}, nil
 }
 
-func (b *hostBackend) Command(ctx context.Context, _ sandbox.Instance, s sandbox.Spec, c sandbox.Command) (*exec.Cmd, error) {
+func (b *hostBackend) Command(
+	ctx context.Context,
+	_ sandbox.Instance,
+	s sandbox.Spec,
+	c sandbox.Command,
+) (*exec.Cmd, error) {
 	b.mu.Lock()
 	b.masked = s.Masked
 	b.mu.Unlock()
@@ -259,7 +265,16 @@ func (c *fakeChecks) Check(context.Context, agent.CommandRunner, agent.CheckInpu
 	n := c.calls
 	c.calls++
 	if n < len(c.fail) && c.fail[n] {
-		return agent.CheckResult{Steps: []agent.StepResult{{Step: agent.StepDoneWhen, Level: agent.LevelFail, Detail: []string{"task t1"}, Output: "FAIL: exact output"}}}, nil
+		return agent.CheckResult{
+			Steps: []agent.StepResult{
+				{
+					Step:   agent.StepDoneWhen,
+					Level:  agent.LevelFail,
+					Detail: []string{"task t1"},
+					Output: "FAIL: exact output",
+				},
+			},
+		}, nil
 	}
 	return agent.CheckResult{Steps: []agent.StepResult{{Step: agent.StepDoneWhen, Level: agent.LevelPass}}}, nil
 }
@@ -272,6 +287,15 @@ type model struct {
 	resume func(s llm.Session, in llm.Input) (llm.Stream, error)
 	t      *testing.T
 }
+
+// Results the scripted agents return.
+const (
+	builderDone  = `{"status":"done","summary":"added the file"}`
+	testerPass   = `{"items":[],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
+	testerNoTask = `{"items":[],"tasks":[{"task":"t1","confirmation":"not_confirmed"}]}`
+	reviewerMet  = `{"verdicts":[{"task":"t1","verdict":"met"}]}`
+	reviewerNot  = `{"verdicts":[{"task":"t1","verdict":"not_met"}]}`
+)
 
 // on queues steps for an agent.
 func (m *model) on(name string, steps ...func(s llm.Session) (llm.Stream, error)) {
@@ -314,34 +338,6 @@ func (m *model) start(s llm.Session) (llm.Stream, error) {
 	return step(s)
 }
 
-// sayResult is a step that returns a finished stream with this result.
-func sayResult(out string) func(llm.Session) (llm.Stream, error) {
-	return func(llm.Session) (llm.Stream, error) {
-		st := newFakeStream()
-		st.ev <- resultEvent(out)
-		return st, nil
-	}
-}
-
-// building is a step that writes a file into the worktree, then returns this result.
-func building(wt, file, body, out string) func(llm.Session) (llm.Stream, error) {
-	return func(s llm.Session) (llm.Stream, error) {
-		if err := os.WriteFile(filepath.Join(wt, file), []byte(body), 0o644); err != nil {
-			return nil, err
-		}
-		return sayResult(out)(s)
-	}
-}
-
-// Results the scripted agents return.
-const (
-	builderDone  = `{"status":"done","summary":"added the file"}`
-	testerPass   = `{"items":[],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
-	testerNoTask = `{"items":[],"tasks":[{"task":"t1","confirmation":"not_confirmed"}]}`
-	reviewerMet  = `{"verdicts":[{"task":"t1","verdict":"met"}]}`
-	reviewerNot  = `{"verdicts":[{"task":"t1","verdict":"not_met"}]}`
-)
-
 // pipeRig is one task group over fakes of every collaborator.
 type pipeRig struct {
 	t      *testing.T
@@ -358,16 +354,6 @@ type pipeRig struct {
 	roles  map[string]Role
 }
 
-// rigOpts changes the defaults of newPipeRig.
-type rigOpts struct {
-	chain  []string
-	limits Limits
-	saved  *Progress
-	items  []agent.Item
-	mut    func(*GroupSpec, *Collaborators)
-	starts map[llm.Link]func(llm.Session) (llm.Stream, error) // replaces the scripted model on a link
-}
-
 // newPipeRig builds a one-task group whose completion command is `true`.
 func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 	t.Helper()
@@ -382,13 +368,23 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 	}
 	perms := func(name string) Permissions {
 		r, _ := agent.RoleByName(name)
-		return Permissions{Tools: r.Tools, RunClasses: r.RunClasses, Guard: toRowIDs(r.Guard), Weight: "standard", Chain: chain}
+		return Permissions{
+			Tools:      r.Tools,
+			RunClasses: r.RunClasses,
+			Guard:      toRowIDs(r.Guard),
+			Weight:     "standard",
+			Chain:      chain,
+		}
 	}
 	spec := GroupSpec{
 		Run: "run-1", Group: "tg-1", Files: []string{"src/**", "*.go"}, Saved: o.saved,
-		Tasks:  []TaskSpec{{ID: "t1", Title: "add the file", DoneWhen: "build"}},
-		Lease:  LeaseRef{Branch: "komodo/tg-1", Worktree: wt, GitDir: filepath.Join(wt, "gd"), Fence: 3},
-		Agents: map[string]Permissions{"builder": perms("builder"), "tester": perms("tester"), "reviewer": perms("reviewer")},
+		Tasks: []TaskSpec{{ID: "t1", Title: "add the file", DoneWhen: "build"}},
+		Lease: LeaseRef{Branch: "komodo/tg-1", Worktree: wt, GitDir: filepath.Join(wt, "gd"), Fence: 3},
+		Agents: map[string]Permissions{
+			"builder":  perms("builder"),
+			"tester":   perms("tester"),
+			"reviewer": perms("reviewer"),
+		},
 		Limits: o.limits,
 	}
 	if spec.Limits.SessionRetries == 0 {
@@ -411,7 +407,15 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 		links[llm.Link(l)] = p
 	}
 	lim := newLimits()
-	r := &pipeRig{t: t, wt: wt, rt: &fakeRT{}, briefs: &fakeBriefs{}, cm: &fakeCommit{}, git: &treeGit{}, model: mdl, lim: lim,
+	r := &pipeRig{
+		t:      t,
+		wt:     wt,
+		rt:     &fakeRT{},
+		briefs: &fakeBriefs{},
+		cm:     &fakeCommit{},
+		git:    &treeGit{},
+		model:  mdl,
+		lim:    lim,
 		checks: &fakeChecks{}, be: &hostBackend{}}
 	router := &Router{Client: llm.New(links), Quota: lim, Paid: "never", Now: func() time.Time { return t0 }}
 	c := Collaborators{
@@ -439,15 +443,6 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 	}
 	r.m, r.roles, r.wt = m, roles, spec.Lease.Worktree
 	return r
-}
-
-// toRowIDs converts row names.
-func toRowIDs(s []string) []RowID {
-	out := make([]RowID, len(s))
-	for i, v := range s {
-		out[i] = RowID(v)
-	}
-	return out
 }
 
 // run calls Run and waits for it to end, failing the test after ten seconds.
@@ -502,4 +497,42 @@ func (r *pipeRig) reachCleanupWith(call func(context.Context) error) {
 // nextBrief returns a string field of the nth brief an agent received.
 func (r *pipeRig) slot(name string, n int, key string) string {
 	return r.briefs.slotsOf(name, n)[key]
+}
+
+// rigOpts changes the defaults of newPipeRig.
+type rigOpts struct {
+	chain  []string
+	limits Limits
+	saved  *Progress
+	items  []agent.Item
+	mut    func(*GroupSpec, *Collaborators)
+	starts map[llm.Link]func(llm.Session) (llm.Stream, error) // replaces the scripted model on a link
+}
+
+// building is a step that writes a file into the worktree, then returns this result.
+func building(wt, file, body, out string) func(llm.Session) (llm.Stream, error) {
+	return func(s llm.Session) (llm.Stream, error) {
+		if err := os.WriteFile(filepath.Join(wt, file), []byte(body), 0o644); err != nil {
+			return nil, err
+		}
+		return sayResult(out)(s)
+	}
+}
+
+// sayResult is a step that returns a finished stream with this result.
+func sayResult(out string) func(llm.Session) (llm.Stream, error) {
+	return func(llm.Session) (llm.Stream, error) {
+		st := newFakeStream()
+		st.ev <- resultEvent(out)
+		return st, nil
+	}
+}
+
+// toRowIDs converts row names.
+func toRowIDs(s []string) []RowID {
+	out := make([]RowID, len(s))
+	for i, v := range s {
+		out[i] = RowID(v)
+	}
+	return out
 }

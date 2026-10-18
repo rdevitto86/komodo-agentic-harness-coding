@@ -6,8 +6,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
 )
 
-// The progress facts the Commit and Cleanup handlers report are published as run-status events;
-// each wrapper binds the handler's own fact struct to its subtype.
+// The progress facts the Commit and Cleanup handlers report are published as run-status events; each wrapper binds the
+// handler's own fact struct to its subtype.
 type (
 	publishDoneEvent struct{ commit.Result }
 	prOpenedEvent    struct{ commit.Result }

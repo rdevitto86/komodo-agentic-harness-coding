@@ -16,7 +16,6 @@ import (
 func decodeStrict(b []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-
 	return dec.Decode(v)
 }
 
@@ -31,7 +30,6 @@ func loadIndex(fsys fs.FS) (Index, error) {
 	if err := decodeStrict(raw, &idx); err != nil {
 		return Index{}, fmt.Errorf("decode skill index: %w", err)
 	}
-
 	if idx.V != 1 {
 		return Index{}, fmt.Errorf("skill index version %d is not 1", idx.V)
 	}
@@ -58,12 +56,10 @@ func loadTemplates(fsys fs.FS) (map[string]Template, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read template %s: %w", a, err)
 		}
-
 		tpl, err := ParseTemplate(a, string(raw))
 		if err != nil {
 			return nil, fmt.Errorf("template %s: %w", a, err)
 		}
-
 		out[a] = tpl
 	}
 
@@ -79,7 +75,6 @@ func refuseLocal(
 	count Counter,
 ) (IndexEntry, error) {
 	text := string(raw)
-
 	fm, err := parseSkill(text)
 
 	switch {
@@ -94,7 +89,6 @@ func refuseLocal(
 	if err := checkSkillSize(count, text); err != nil {
 		return IndexEntry{}, err
 	}
-
 	if phrase, hit := findPhrase(text, phrases); hit {
 		return IndexEntry{}, fmt.Errorf("steering phrase %q", phrase)
 	}
@@ -109,33 +103,24 @@ func refuseLocal(
 	}, nil
 }
 
-// loadLocalSkills reads skills/*/SKILL.md under the home folder, in folder order; each loads
-// disabled.
-func loadLocalSkills(
-	home string,
-	shipped map[SkillName]bool,
-	phrases []string,
-	count Counter,
-) ([]*item, []Warning) {
+// loadLocalSkills reads skills/*/SKILL.md under the home folder, in folder order; each loads disabled.
+func loadLocalSkills(home string, shipped map[SkillName]bool, phrases []string, count Counter) ([]*item, []Warning) {
 	if home == "" {
 		return nil, nil
 	}
 
 	dir := filepath.Join(home, "skills")
-
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-
 		return nil, []Warning{{Code: "local_skills_unreadable", Path: dir, Note: err.Error()}}
 	}
 
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
 
 	var items []*item
-
 	var warns []Warning
 
 	for _, e := range ents {
@@ -144,7 +129,6 @@ func loadLocalSkills(
 		}
 
 		file := filepath.Join(dir, e.Name(), "SKILL.md")
-
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
@@ -154,7 +138,6 @@ func loadLocalSkills(
 					Note: err.Error(),
 				})
 			}
-
 			continue
 		}
 
@@ -165,7 +148,6 @@ func loadLocalSkills(
 				Path: file,
 				Note: err.Error(),
 			})
-
 			continue
 		}
 
@@ -192,13 +174,11 @@ func loadConnections(home string) ([]Connection, []Warning) {
 	}
 
 	file := filepath.Join(home, "connections.json")
-
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-
 		return nil, []Warning{{Code: "connections_unreadable", Path: file, Note: err.Error()}}
 	}
 
@@ -208,14 +188,11 @@ func loadConnections(home string) ([]Connection, []Warning) {
 		if err != nil {
 			note = err.Error()
 		}
-
 		return nil, []Warning{{Code: "connections_unreadable", Path: file, Note: note}}
 	}
 
 	var out []Connection
-
 	var warns []Warning
-
 	seen := map[string]bool{}
 
 	for _, c := range cf.Connections {
@@ -225,7 +202,6 @@ func loadConnections(home string) ([]Connection, []Warning) {
 				Path: file,
 				Note: fmt.Sprintf("connection %q: %s", c.Name, reason),
 			})
-
 			continue
 		}
 
@@ -255,7 +231,6 @@ func refuseConnection(c Connection, seen map[string]bool) string {
 	if bad := badAgent(c.Allow); bad != "" {
 		return fmt.Sprintf("allow names %q, which is not an agent", bad)
 	}
-
 	return ""
 }
 
@@ -264,7 +239,6 @@ func nonNil(s []string) []string {
 	if s == nil {
 		return []string{}
 	}
-
 	return s
 }
 
@@ -275,6 +249,5 @@ func badAgent(names []string) string {
 			return n
 		}
 	}
-
 	return ""
 }

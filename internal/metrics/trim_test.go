@@ -18,41 +18,8 @@ type figureRow struct {
 	endedAgo   time.Duration // how long ago the run ended; zero for a run that has not ended
 }
 
-// writeFigures writes a groups.json and a runs.json holding the given runs, each with one group.
-func writeFigures(t *testing.T, dir string, rows ...figureRow) {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	groups := map[bus.ID]map[bus.ID]GroupMetrics{}
-	runs := map[bus.ID]RunMetrics{}
-	for _, r := range rows {
-		groups[r.run] = map[bus.ID]GroupMetrics{r.group: {Group: r.group, Run: r.run, Outcome: r.outcome}}
-		rm := RunMetrics{Run: r.run, Dir: dir}
-		if r.endedAgo > 0 {
-			rm.EndedAt = time.Now().Add(-r.endedAgo)
-		}
-		runs[r.run] = rm
-	}
-	for name, v := range map[string]any{"groups.json": groups, "runs.json": runs} {
-		b, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// startAndStop starts the Service, opens the repository with a run-start, and stops it.
-func startAndStop(f *fixture) {
-	stop := f.start()
-	f.publish(f.runStart("run-new", "g1"))
-	stop()
-}
-
-// TestRetentionDropsOldRecords covers records 31 days old with retention 30: the start drops old session records and the figures of runs that ended before the cutoff, and keeps open and recent runs.
+// TestRetentionDropsOldRecords covers records 31 days old with retention 30: the start drops old session records and the
+// figures of runs that ended before the cutoff, and keeps open and recent runs.
 func TestRetentionDropsOldRecords(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	old := 31 * 24 * time.Hour
@@ -108,7 +75,8 @@ func TestTrimLeavesTheEventStoreAlone(t *testing.T) {
 	}
 }
 
-// TestPeriodicTrimDropsRunsThatAged checks the trim the loop runs every 24 hours drops the figures of a run that ended before the cutoff.
+// TestPeriodicTrimDropsRunsThatAged checks the trim the loop runs every 24 hours drops the figures of a run that ended
+// before the cutoff.
 func TestPeriodicTrimDropsRunsThatAged(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	startAndStop(f)
@@ -121,4 +89,38 @@ func TestPeriodicTrimDropsRunsThatAged(t *testing.T) {
 			t.Fatalf("the aged run survived the periodic trim: %+v", r)
 		}
 	}
+}
+
+// writeFigures writes a groups.json and a runs.json holding the given runs, each with one group.
+func writeFigures(t *testing.T, dir string, rows ...figureRow) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	groups := map[bus.ID]map[bus.ID]GroupMetrics{}
+	runs := map[bus.ID]RunMetrics{}
+	for _, r := range rows {
+		groups[r.run] = map[bus.ID]GroupMetrics{r.group: {Group: r.group, Run: r.run, Outcome: r.outcome}}
+		rm := RunMetrics{Run: r.run, Dir: dir}
+		if r.endedAgo > 0 {
+			rm.EndedAt = time.Now().Add(-r.endedAgo)
+		}
+		runs[r.run] = rm
+	}
+	for name, v := range map[string]any{"groups.json": groups, "runs.json": runs} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// startAndStop starts the Service, opens the repository with a run-start, and stops it.
+func startAndStop(f *fixture) {
+	stop := f.start()
+	f.publish(f.runStart("run-new", "g1"))
+	stop()
 }

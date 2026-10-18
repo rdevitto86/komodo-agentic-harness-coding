@@ -18,10 +18,14 @@ const (
 	dirPerm  = 0o755
 	filePerm = 0o644
 
-	machineLogName = "engine.jsonl" // machineLogName is the log of events that name no run, kept in the machine events folder.
-	runsFile       = "runs.json"    // runsFile is the machine events folder's map from each run to the events folder of its repository.
-	trimInterval   = 24 * time.Hour // trimInterval is the least time between two background trims of one events folder.
-	maxOpenLogs    = 64             // maxOpenLogs is the most log files the bus holds open; the least recently written is closed first.
+	// machineLogName is the log of events that name no run, kept in the machine events folder.
+	machineLogName = "engine.jsonl"
+	// runsFile is the machine events folder's map from each run to the events folder of its repository.
+	runsFile = "runs.json"
+	// trimInterval is the least time between two background trims of one events folder.
+	trimInterval = 24 * time.Hour
+	// maxOpenLogs is the most log files the bus holds open; the least recently written is closed first.
+	maxOpenLogs = 64
 )
 
 // syncFile forces a file's content to disk; tests replace it to count or slow the calls.
@@ -114,10 +118,12 @@ func loadRuns(path string) (m map[ID]string, note string, err error) {
 	if !errors.As(err, &bad) {
 		return m, "", err
 	}
+
 	aside := fmt.Sprintf("%s.bad-%d", path, now().Unix())
 	if err := os.Rename(path, aside); err != nil {
 		return nil, "", fmt.Errorf("move corrupt %s aside: %w", path, err)
 	}
+
 	return map[ID]string{}, fmt.Sprintf("%v; moved to %s", bad, aside), nil
 }
 
@@ -167,11 +173,13 @@ func (b *memBus) storeLocked(e Event) []Event {
 	if e.Type == TypeRunComplete || e.Type == TypeRunFailure && e.Subtype == "stalled" {
 		b.closeLogLocked(path)
 	}
+
 	return out
 }
 
 // wantSyncLocked queues the syncs an event asks for: its own log for a stage.enter, every open log for a final error.
 func (b *memBus) wantSyncLocked(e Event, path string) {
+	// add queues a sync of the log at p unless one is already queued for it.
 	add := func(p string, run ID) {
 		if !slices.ContainsFunc(b.follow.syncs, func(j syncJob) bool { return j.path == p }) {
 			b.follow.syncs = append(b.follow.syncs, syncJob{path: p, run: run})
@@ -205,6 +213,7 @@ func (b *memBus) placeLocked(e Event) (string, error) {
 	}
 
 	common, bind := "", false
+
 	switch d := e.Data.(type) {
 	case *RunStart:
 		if e.Type == TypeRunStart {
@@ -217,6 +226,7 @@ func (b *memBus) placeLocked(e Event) (string, error) {
 		common = d.GitCommonDir()
 		bind = common != ""
 	}
+
 	if bind {
 		dir := EventsDir(filepath.Clean(common))
 		if b.runDir[e.Run] != dir {
@@ -248,7 +258,8 @@ func (b *memBus) putLocked(path string, line []byte) error {
 	return b.appendLocked(path, line)
 }
 
-// appendLocked masks line and appends it to the log at path, opening it first and closing the least recently written log at the cap.
+// appendLocked masks line and appends it to the log at path, opening it first
+// and closing the least recently written log at the cap.
 func (b *memBus) appendLocked(path string, line []byte) error {
 	l, ok := b.logs[path]
 	if !ok {
@@ -383,6 +394,7 @@ func (b *memBus) mergeRuns(path string, adds map[ID]string, removes []ID) (note 
 	if err := os.MkdirAll(b.dir, dirPerm); err != nil {
 		return note, fmt.Errorf("create folder %s: %w", b.dir, err)
 	}
+
 	return note, core.WriteFileAtomic(path, out, filePerm)
 }
 

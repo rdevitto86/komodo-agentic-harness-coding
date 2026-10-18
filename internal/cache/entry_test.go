@@ -72,7 +72,13 @@ func TestEmptyPayloadRoundTrips(t *testing.T) {
 
 func TestValidKeyAndNamespace(t *testing.T) {
 	good := strings.Repeat("ab", 32)
-	for key, want := range map[string]bool{good: true, good[:63]: false, strings.ToUpper(good): false, strings.Repeat("g", 64): false, "": false} {
+	for key, want := range map[string]bool{
+		good:                    true,
+		good[:63]:               false,
+		strings.ToUpper(good):   false,
+		strings.Repeat("g", 64): false,
+		"":                      false,
+	} {
 		if validKey(Key(key)) != want {
 			t.Errorf("validKey(%q) = %v; want %v", key, !want, want)
 		}

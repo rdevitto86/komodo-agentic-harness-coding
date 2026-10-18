@@ -14,8 +14,7 @@ var (
 	rawType  = reflect.TypeOf(json.RawMessage(nil))
 )
 
-// walkNil returns the path of the first nil slice or map that its field tag does not allow to be
-// absent.
+// walkNil returns the path of the first nil slice or map that its field tag does not allow to be absent.
 // With fix set it replaces each one with an empty value and returns "".
 func walkNil(v reflect.Value, path string, fix bool) string {
 	switch v.Kind() {
@@ -23,7 +22,6 @@ func walkNil(v reflect.Value, path string, fix bool) string {
 		if v.IsNil() {
 			return ""
 		}
-
 		return walkNil(v.Elem(), path, fix)
 	case reflect.Struct:
 		if v.Type() == timeType {
@@ -33,12 +31,10 @@ func walkNil(v reflect.Value, path string, fix bool) string {
 		t := v.Type()
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
-
 			name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
 			if !f.IsExported() || name == "-" || f.Type == rawType {
 				continue
 			}
-
 			optional := strings.Contains(opts, "omitempty") || strings.Contains(opts, "omitzero")
 			if bad := walkField(v.Field(i), path+"."+name, optional, fix); bad != "" {
 				return bad
@@ -49,8 +45,7 @@ func walkNil(v reflect.Value, path string, fix bool) string {
 	return ""
 }
 
-// walkField checks one field: a nil slice or map is allowed only when optional, and the contents
-// are walked.
+// walkField checks one field: a nil slice or map is allowed only when optional, and the contents are walked.
 func walkField(f reflect.Value, path string, optional, fix bool) string {
 	switch f.Kind() {
 	case reflect.Slice:
@@ -58,13 +53,10 @@ func walkField(f reflect.Value, path string, optional, fix bool) string {
 			if optional {
 				return ""
 			}
-
 			if !fix {
 				return path
 			}
-
 			f.Set(reflect.MakeSlice(f.Type(), 0, 0))
-
 			return ""
 		}
 
@@ -78,13 +70,10 @@ func walkField(f reflect.Value, path string, optional, fix bool) string {
 			if optional {
 				return ""
 			}
-
 			if !fix {
 				return path
 			}
-
 			f.Set(reflect.MakeMap(f.Type()))
-
 			return ""
 		}
 
@@ -94,11 +83,9 @@ func walkField(f reflect.Value, path string, optional, fix bool) string {
 		for _, k := range keys {
 			val := reflect.New(f.Type().Elem()).Elem()
 			val.Set(f.MapIndex(k))
-
 			if bad := walkNil(val, path+"."+fmt.Sprint(k), fix); bad != "" {
 				return bad
 			}
-
 			if fix {
 				f.SetMapIndex(k, val)
 			}

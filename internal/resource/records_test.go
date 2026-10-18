@@ -8,7 +8,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// TestRecordsRoundTrip: windows saved through the State Manager are loaded back by a new Resource Manager, which keeps only the unreset ones.
+// TestRecordsRoundTrip: windows saved through the State Manager are loaded back by a new Resource Manager, which keeps only
+// the unreset ones.
 func TestRecordsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
@@ -23,7 +24,11 @@ func TestRecordsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := WindowKey{Link: "claude-cli", Window: "weekly"}
-	if err := rec.SaveWindow(ctx, old, WindowRecord{PercentUsed: 5, ResetAt: time.Now().Add(-time.Hour), Sessions: 1}); err != nil {
+	if err := rec.SaveWindow(ctx, old, WindowRecord{
+		PercentUsed: 5,
+		ResetAt:     time.Now().Add(-time.Hour),
+		Sessions:    1,
+	}); err != nil {
 		t.Fatal(err)
 	}
 

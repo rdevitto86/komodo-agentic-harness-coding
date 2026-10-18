@@ -11,8 +11,7 @@ type SweepReport struct {
 	LeasesDropped int `json:"leases_dropped"` // records removed because their clone is gone
 }
 
-// Sweep drops the records of a repository whose clone is gone, skipping any lease that is still
-// live.
+// Sweep drops the records of a repository whose clone is gone, skipping any lease that is still live.
 // A record that changed while the sweep ran is left alone.
 func (m *Manager) Sweep(ctx context.Context, repo string) (SweepReport, error) {
 	var rep SweepReport
@@ -28,7 +27,6 @@ func (m *Manager) Sweep(ctx context.Context, repo string) (SweepReport, error) {
 		if l.ClonePath == "" || l.Live(now, m.machine, m.alive) {
 			continue
 		}
-
 		if _, err := os.Stat(l.ClonePath); !errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -37,7 +35,6 @@ func (m *Manager) Sweep(ctx context.Context, repo string) (SweepReport, error) {
 		if errors.Is(err, ErrStaleRev) || errors.Is(err, ErrNotFound) {
 			continue
 		}
-
 		if err != nil {
 			return rep, err
 		}

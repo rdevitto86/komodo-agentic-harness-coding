@@ -63,7 +63,11 @@ func TestCommandTableFollowsTheTreesMarkerFiles(t *testing.T) {
 
 // A done_when command keeps its quoting: it runs through the shell, not through a split on spaces.
 func TestDoneWhenRunsThroughTheShell(t *testing.T) {
-	cfg, err := config.New(t.TempDir(), config.Known{GuardRows: task.KnownRows(), Tools: task.KnownTools()}, func(string) bool { return true })
+	cfg, err := config.New(
+		t.TempDir(),
+		config.Known{GuardRows: task.KnownRows(), Tools: task.KnownTools()},
+		func(string) bool { return true },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +112,21 @@ func TestFailedKitStartsNoGoroutine(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := bus.New(bus.Options{})
-	s := &stack{home: home, bus: b, ctx: context.Background(), stderr: io.Discard, faults: fault.New(b, &engine.ConnPrinter{}),
-		caches: &cacheStore{home: home, version: "t", open: map[string]*cache.Cache{}}, kits: map[string]*repoKit{}, byID: map[string]*repoKit{}, refs: map[string]*groupRef{}}
+	s := &stack{
+		home:   home,
+		bus:    b,
+		ctx:    context.Background(),
+		stderr: io.Discard,
+		faults: fault.New(b, &engine.ConnPrinter{}),
+		caches: &cacheStore{
+			home:    home,
+			version: "t",
+			open:    map[string]*cache.Cache{},
+		},
+		kits: map[string]*repoKit{},
+		byID: map[string]*repoKit{},
+		refs: map[string]*groupRef{},
+	}
 	before := runtime.NumGoroutine()
 	for range 5 {
 		if _, err := s.kitFor(home, filepath.Join(notDir, "x"), "repo"); err == nil {

@@ -22,7 +22,9 @@ d="$FAKE_DIR"
 case "$1" in
 --version) cat "$d/version"; exit 0 ;;
 auth) f="$d/auth.json"
-  if [ -n "$CLAUDE_CONFIG_DIR" ] && [ -f "$d/auth-$(basename "$CLAUDE_CONFIG_DIR").json" ]; then f="$d/auth-$(basename "$CLAUDE_CONFIG_DIR").json"; fi
+  if [ -n "$CLAUDE_CONFIG_DIR" ] && [ -f "$d/auth-$(basename "$CLAUDE_CONFIG_DIR").json" ]; then
+    f="$d/auth-$(basename "$CLAUDE_CONFIG_DIR").json"
+  fi
   cat "$f"; exit "$(cat "$d/auth.rc" 2>/dev/null || echo 0)" ;;
 esac
 printf '%s\n' "$@" > "$d/args.txt"
@@ -50,6 +52,7 @@ type fake struct {
 }
 
 const initNone = `{"type":"system","subtype":"init","apiKeySource":"none","session_id":"s1"}`
+
 const subAuth = `{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}`
 
 // newFake writes the fake program, puts it on PATH and returns an adapter over it.
@@ -72,19 +75,6 @@ func newFake(t *testing.T, out ...string) *fake {
 	return f
 }
 
-// env is the environment handed to the fake program.
-func (f *fake) env() []string {
-	return append(os.Environ(), "FAKE_DIR="+f.dir, "ANTHROPIC_API_KEY=sk-planted", "CLAUDE_CODE_USE_BEDROCK=1")
-}
-
-// write stores one file in the fake's folder.
-func (f *fake) write(name, body string) {
-	f.t.Helper()
-	if err := os.WriteFile(filepath.Join(f.dir, name), []byte(body), 0o644); err != nil {
-		f.t.Fatal(err)
-	}
-}
-
 // read returns one file of the fake's folder, or empty when absent.
 func (f *fake) read(name string) string {
 	b, _ := os.ReadFile(filepath.Join(f.dir, name))
@@ -93,6 +83,14 @@ func (f *fake) read(name string) string {
 
 // lines sets what the program prints.
 func (f *fake) lines(out ...string) { f.write("out.jsonl", strings.Join(out, "\n")+"\n") }
+
+// write stores one file in the fake's folder.
+func (f *fake) write(name, body string) {
+	f.t.Helper()
+	if err := os.WriteFile(filepath.Join(f.dir, name), []byte(body), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+}
 
 // session returns a session folder with a brief, ready to start.
 func (f *fake) session() Session {
@@ -107,19 +105,9 @@ func (f *fake) session() Session {
 		Model: "claude-sonnet-5-5", Schema: json.RawMessage(`{"type":"object"}`), Env: f.env()}
 }
 
-// drain reads events until an error and returns them with that error.
-func drain(t *testing.T, st Stream) ([]StreamEvent, error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	var evs []StreamEvent
-	for {
-		ev, err := st.Next(ctx)
-		if err != nil {
-			return evs, err
-		}
-		evs = append(evs, ev)
-	}
+// env is the environment handed to the fake program.
+func (f *fake) env() []string {
+	return append(os.Environ(), "FAKE_DIR="+f.dir, "ANTHROPIC_API_KEY=sk-planted", "CLAUDE_CODE_USE_BEDROCK=1")
 }
 
 func TestParseClaudeLine(t *testing.T) {
@@ -131,7 +119,11 @@ func TestParseClaudeLine(t *testing.T) {
 	}{
 		{"init", initNone, KindInit},
 		{"api_retry", `{"type":"system","subtype":"api_retry","error":"rate_limit","retry_delay_ms":500}`, KindRetry},
-		{"rate limit", `{"type":"rate_limit_event","rate_limit_info":{"resetsAt":` + strconv.FormatInt(reset, 10) + `}}`, KindRateLimit},
+		{
+			"rate limit",
+			`{"type":"rate_limit_event","rate_limit_info":{"resetsAt":` + strconv.FormatInt(reset, 10) + `}}`,
+			KindRateLimit,
+		},
 		{"assistant", `{"type":"assistant","message":{}}`, KindOutput},
 		{"user", `{"type":"user","message":{}}`, KindOutput},
 		{"other system", `{"type":"system","subtype":"hook"}`, KindOutput},
@@ -157,7 +149,8 @@ func TestParseClaudeLine(t *testing.T) {
 	}
 	ev, _ = parseClaudeLine([]byte(cases[6].line), "sid")
 	r := ev.Result
-	if r == nil || string(r.Output) != `{"a":1}` || r.Usage.USDEquiv != 0.5 || r.Usage.USD != 0 || r.Handle != (ResumeHandle{ClaudeCLI, "session_id", "sid"}) {
+	if r == nil || string(r.Output) != `{"a":1}` || r.Usage.USDEquiv != 0.5 || r.Usage.USD != 0 ||
+		r.Handle != (ResumeHandle{ClaudeCLI, "session_id", "sid"}) {
 		t.Errorf("result payload = %+v", r)
 	}
 	if _, err := parseClaudeLine([]byte("not json"), "sid"); err != nil {
@@ -246,7 +239,10 @@ func TestStartRefusesLoggedOutAndPaidLogin(t *testing.T) {
 func TestShortRetryDoesNotEndSession(t *testing.T) {
 	f := newFake(t, initNone,
 		`{"type":"system","subtype":"api_retry","error":"rate_limit","retry_delay_ms":30000}`,
-		`{"type":"rate_limit_event","rate_limit_info":{"resetsAt":`+strconv.FormatInt(time.Now().Add(30*time.Second).Unix(), 10)+`,"status":"rejected"}}`,
+		`{"type":"rate_limit_event","rate_limit_info":{"resetsAt":`+strconv.FormatInt(
+			time.Now().Add(30*time.Second).Unix(),
+			10,
+		)+`,"status":"rejected"}}`,
 		`{"type":"result","structured_output":{}}`)
 	st, _ := f.cl.Start(context.Background(), f.session())
 	defer func() { _ = st.Close() }()
@@ -258,7 +254,15 @@ func TestShortRetryDoesNotEndSession(t *testing.T) {
 
 func TestLongRateLimitEndsWithProviderLimit(t *testing.T) {
 	reset := time.Now().Add(3 * time.Hour).Truncate(time.Second)
-	f := newFake(t, initNone, `{"type":"rate_limit_event","rate_limit_info":{"resetsAt":`+strconv.FormatInt(reset.Unix(), 10)+`,"rateLimitType":"seven_day"}}`, `{"type":"assistant"}`)
+	f := newFake(
+		t,
+		initNone,
+		`{"type":"rate_limit_event","rate_limit_info":{"resetsAt":`+strconv.FormatInt(
+			reset.Unix(),
+			10,
+		)+`,"rateLimitType":"seven_day"}}`,
+		`{"type":"assistant"}`,
+	)
 	f.write("hold", "")
 	s := f.session()
 	st, _ := f.cl.Start(context.Background(), s)
@@ -268,7 +272,8 @@ func TestLongRateLimitEndsWithProviderLimit(t *testing.T) {
 	if !errors.As(err, &pl) {
 		t.Fatalf("err = %v, want ProviderLimit", err)
 	}
-	if pl.Link != ClaudeCLI || pl.Cap != CapWeekly || !pl.ResetAt.Equal(reset) || pl.Handle == nil || pl.Handle.Value != s.ID {
+	if pl.Link != ClaudeCLI || pl.Cap != CapWeekly || !pl.ResetAt.Equal(reset) || pl.Handle == nil ||
+		pl.Handle.Value != s.ID {
 		t.Errorf("limit = %+v handle %+v", pl, pl.Handle)
 	}
 	if _, err := st.Next(context.Background()); !errors.Is(err, ErrStreamClosed) {
@@ -309,8 +314,11 @@ func TestOverageWarnsAndSessionFinishes(t *testing.T) {
 }
 
 func TestResultMapsUsageAndHandle(t *testing.T) {
-	f := newFake(t, initNone, `{"type":"result","subtype":"success","structured_output":{"done":true},"total_cost_usd":1.25,`+
-		`"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":40}}`)
+	f := newFake(
+		t,
+		initNone,
+		`{"type":"result","subtype":"success","structured_output":{"done":true},"total_cost_usd":1.25,`+
+			`"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":40}}`)
 	s := f.session()
 	st, _ := f.cl.Start(context.Background(), s)
 	defer func() { _ = st.Close() }()
@@ -504,5 +512,20 @@ func TestAuthStatusCachedFor60s(t *testing.T) {
 	now = now.Add(61 * time.Second)
 	if _, err := f.cl.Profile(context.Background(), Light); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("after 60 s the login is read again: %v", err)
+	}
+}
+
+// drain reads events until an error and returns them with that error.
+func drain(t *testing.T, st Stream) ([]StreamEvent, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var evs []StreamEvent
+	for {
+		ev, err := st.Next(ctx)
+		if err != nil {
+			return evs, err
+		}
+		evs = append(evs, ev)
 	}
 }

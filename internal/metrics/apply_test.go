@@ -7,28 +7,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// start builds the run.start fact that creates a run and its groups.
-func startRun(sec int, run bus.ID, groups ...bus.ID) bus.Event {
-	return ev(sec, bus.TypeRunStatus, "run.start", run, "", &bus.RunStartedFact{Groups: groups})
-}
-
-// enter builds a stage.enter event.
-func enter(sec int, run, group bus.ID, to string, ret bool) bus.Event {
-	return ev(sec, bus.TypeRunStatus, "stage.enter", run, group, &bus.StageEnter{To: to, Return: ret})
-}
-
-// stageOf returns the stage row with the given name.
-func stageOf(t *testing.T, g GroupMetrics, name string) StageTime {
-	t.Helper()
-	for _, s := range g.Stages {
-		if s.Stage == name {
-			return s
-		}
-	}
-	t.Fatalf("group has no stage %q: %+v", name, g.Stages)
-	return StageTime{}
-}
-
 // TestReturnToBuildCountsEntries covers build at t=0 and build again at t=100 with return: 2 entries and returns 1.
 func TestReturnToBuildCountsEntries(t *testing.T) {
 	f := newFigures()
@@ -52,7 +30,11 @@ func TestBlockedSeconds(t *testing.T) {
 	f := newFigures()
 	f.apply(startRun(0, "r", "g"))
 	f.apply(enter(0, "r", "g", "build", false))
-	f.apply(ev(50, bus.TypeRunFailure, "group.blocked", "r", "g", &bus.GroupBlocked{GroupFacts: bus.GroupFacts{Reason: "tester"}}))
+	f.apply(
+		ev(50, bus.TypeRunFailure, "group.blocked", "r", "g", &bus.GroupBlocked{
+			GroupFacts: bus.GroupFacts{Reason: "tester"},
+		}),
+	)
 	if g, _ := f.group("r", "g"); g.Outcome != "blocked" {
 		t.Fatalf("outcome = %q, want blocked", g.Outcome)
 	}
@@ -87,14 +69,23 @@ func TestUsageSums(t *testing.T) {
 		}
 	}
 	g, _ := f.group("r", "g")
-	want := bus.SessionUsage{TokensIn: 300, TokensOut: 30, CacheRead: 50, CacheWrite: 7, USD: 1.25, USDEquiv: 0.5, SkillTokens: 3}
+	want := bus.SessionUsage{
+		TokensIn:    300,
+		TokensOut:   30,
+		CacheRead:   50,
+		CacheWrite:  7,
+		USD:         1.25,
+		USDEquiv:    0.5,
+		SkillTokens: 3,
+	}
 	if g.Usage != want || g.Sessions != 2 {
 		t.Fatalf("group usage = %+v sessions %d, want %+v and 2", g.Usage, g.Sessions, want)
 	}
 	if r, _ := f.run("r"); r.Usage != want {
 		t.Fatalf("run usage = %+v, want %+v", r.Usage, want)
 	}
-	if len(recs) != 2 || recs[0].Agent != "builder" || recs[0].Task != "t-s1" || recs[0].Model != "m1" || recs[0].Stage != "build" ||
+	if len(recs) != 2 || recs[0].Agent != "builder" || recs[0].Task != "t-s1" || recs[0].Model != "m1" ||
+		recs[0].Stage != "build" ||
 		recs[0].Reason != "done" || recs[0].WallS != 10 || recs[0].Usage == nil || recs[0].StartedAt != t0 {
 		t.Fatalf("records = %+v", recs)
 	}
@@ -139,13 +130,37 @@ func TestCountersAndRunComplete(t *testing.T) {
 	g1, _ := f.group("r", "g1")
 	g2, _ := f.group("r", "g2")
 	r, _ := f.run("r")
-	if g1.Retries != 1 || g1.TasksDone != 1 || g1.Outcome != "done" || g1.EndedAt != t0.Add(60*time.Second) || stageOf(t, g1, "build").Seconds != 60 {
+	if g1.Retries != 1 || g1.TasksDone != 1 || g1.Outcome != "done" || g1.EndedAt != t0.Add(60*time.Second) ||
+		stageOf(t, g1, "build").Seconds != 60 {
 		t.Fatalf("g1 = %+v", g1)
 	}
 	if g2.Outcome != "blocked" || g2.EndedAt.IsZero() {
 		t.Fatalf("g2 = %+v", g2)
 	}
-	if r.Faults != 1 || r.Warnings != 1 || r.WallS != 60 || r.Done != 1 || r.Blocked != 1 || r.Groups != 2 || r.EndedAt.IsZero() {
+	if r.Faults != 1 || r.Warnings != 1 || r.WallS != 60 || r.Done != 1 || r.Blocked != 1 || r.Groups != 2 ||
+		r.EndedAt.IsZero() {
 		t.Fatalf("run = %+v", r)
 	}
+}
+
+// start builds the run.start fact that creates a run and its groups.
+func startRun(sec int, run bus.ID, groups ...bus.ID) bus.Event {
+	return ev(sec, bus.TypeRunStatus, "run.start", run, "", &bus.RunStartedFact{Groups: groups})
+}
+
+// enter builds a stage.enter event.
+func enter(sec int, run, group bus.ID, to string, ret bool) bus.Event {
+	return ev(sec, bus.TypeRunStatus, "stage.enter", run, group, &bus.StageEnter{To: to, Return: ret})
+}
+
+// stageOf returns the stage row with the given name.
+func stageOf(t *testing.T, g GroupMetrics, name string) StageTime {
+	t.Helper()
+	for _, s := range g.Stages {
+		if s.Stage == name {
+			return s
+		}
+	}
+	t.Fatalf("group has no stage %q: %+v", name, g.Stages)
+	return StageTime{}
 }

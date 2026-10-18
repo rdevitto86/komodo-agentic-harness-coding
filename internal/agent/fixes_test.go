@@ -10,7 +10,14 @@ import (
 
 // pyInput is a Python group that changed one file.
 func pyInput() CheckInput {
-	return CheckInput{Group: "g", Base: "b", Head: "h", Language: "python", Files: []string{"a.py"}, Changed: []string{"a.py"}}
+	return CheckInput{
+		Group:    "g",
+		Base:     "b",
+		Head:     "h",
+		Language: "python",
+		Files:    []string{"a.py"},
+		Changed:  []string{"a.py"},
+	}
 }
 
 const junitMixed = `<?xml version="1.0"?><testsuites><testsuite name="p">
@@ -30,7 +37,10 @@ func pyChecker(base Baseline, report bool) Checker {
 }
 
 func pySandbox(xml string) *sandbox {
-	sb := newSandbox().on("pytest -q", reply{1, "failed"}).on("coverage run", reply{0, "{\"totals\": {\"percent_covered\": 95}}\n"})
+	sb := newSandbox().on("pytest -q", reply{
+		1,
+		"failed",
+	}).on("coverage run", reply{0, "{\"totals\": {\"percent_covered\": 95}}\n"})
 	if xml != "" {
 		sb.on("cat junit.xml", reply{0, xml})
 	}
@@ -45,7 +55,8 @@ func TestWholeCommandFailureAtBaseNeverHidesHeadFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := step(t, r, StepBaseline)
-	if s.Level != LevelFail || len(s.Detail) != 1 || !strings.Contains(s.Detail[0], "pytest -q") || !strings.Contains(s.Detail[0], "cannot be classified") {
+	if s.Level != LevelFail || len(s.Detail) != 1 || !strings.Contains(s.Detail[0], "pytest -q") ||
+		!strings.Contains(s.Detail[0], "cannot be classified") {
 		t.Fatalf("baseline = %+v", s)
 	}
 }
@@ -57,7 +68,8 @@ func TestJUnitReportClassifiesEachTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := step(t, r, StepBaseline); s.Level != LevelFail || !slices.Equal(s.Detail, []string{"tests.a.test_n1", "tests.a.test_n2"}) {
+	if s := step(t, r, StepBaseline); s.Level != LevelFail ||
+		!slices.Equal(s.Detail, []string{"tests.a.test_n1", "tests.a.test_n2"}) {
 		t.Errorf("new failures = %+v", s)
 	}
 	only := `<testsuite><testcase classname="tests.a" name="test_old"><failure message="boom"/></testcase></testsuite>`
@@ -95,7 +107,8 @@ func TestParseJUnit(t *testing.T) {
 	if failed != 3 {
 		t.Errorf("%d failed, want 3 (skipped passes)", failed)
 	}
-	if runs, err := ParseJUnit(`<testsuite><testcase classname="c" name="n"/></testsuite>`); err != nil || len(runs) != 1 || !runs[0].Passed {
+	if runs, err := ParseJUnit(`<testsuite><testcase classname="c" name="n"/></testsuite>`); err != nil || len(runs) != 1 ||
+		!runs[0].Passed {
 		t.Errorf("single suite: %+v %v", runs, err)
 	}
 	for _, bad := range []string{"", "plain text", "<testsuite></testsuite>", "<testsuite><testcase"} {
@@ -109,7 +122,9 @@ func TestParseJUnit(t *testing.T) {
 func TestImpactSetMapsNonGoFiles(t *testing.T) {
 	in := goInput()
 	in.Files, in.Changed = []string{"a/testdata/x.golden"}, []string{"a/testdata/x.golden"}
-	r, err := newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), goSandbox().on("-coverprofile", okCoverage("90")).run, in)
+	r, err := newTestChecker(CheckerConfig{
+		CoverageFloor: 80,
+	}).Check(context.Background(), goSandbox().on("-coverprofile", okCoverage("90")).run, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +132,9 @@ func TestImpactSetMapsNonGoFiles(t *testing.T) {
 		t.Errorf("testdata impact = %+v", s)
 	}
 	in.Files, in.Changed = []string{"README.md"}, []string{"README.md"}
-	r, _ = newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), goSandbox().on("-coverprofile", okCoverage("90")).run, in)
+	r, _ = newTestChecker(CheckerConfig{
+		CoverageFloor: 80,
+	}).Check(context.Background(), goSandbox().on("-coverprofile", okCoverage("90")).run, in)
 	if s := step(t, r, StepImpactSet); !slices.Equal(s.Detail, []string{"m"}) {
 		t.Errorf("root file impact = %+v", s)
 	}
@@ -132,13 +149,18 @@ func TestImpactSetRunsWholeModuleWhenUnmapped(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := step(t, r, StepImpactSet)
-	if s.Level != LevelWarn || !slices.Contains(s.Detail, "m/c") || !slices.ContainsFunc(s.Detail, func(d string) bool { return strings.HasPrefix(d, "whole module:") }) {
+	if s.Level != LevelWarn || !slices.Contains(s.Detail, "m/c") ||
+		!slices.ContainsFunc(s.Detail, func(d string) bool { return strings.HasPrefix(d, "whole module:") }) {
 		t.Errorf("nested module impact = %+v", s)
 	}
-	noRoot := newSandbox().on("go list -m", reply{0, "m\n"}).on("go list -test", reply{0, "m/a\nm/b m/a\n"}).on("-coverprofile", okCoverage("90"))
+	noRoot := newSandbox().on("go list -m", reply{
+		0,
+		"m\n",
+	}).on("go list -test", reply{0, "m/a\nm/b m/a\n"}).on("-coverprofile", okCoverage("90"))
 	in.Files, in.Changed = []string{"docs/x.txt"}, []string{"docs/x.txt"}
 	r, _ = newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), noRoot.run, in)
-	if s := step(t, r, StepImpactSet); s.Level != LevelWarn || !slices.Contains(s.Detail, "m/a") || !slices.Contains(s.Detail, "m/b") {
+	if s := step(t, r, StepImpactSet); s.Level != LevelWarn || !slices.Contains(s.Detail, "m/a") ||
+		!slices.Contains(s.Detail, "m/b") {
 		t.Errorf("unmapped impact = %+v", s)
 	}
 }
@@ -146,7 +168,8 @@ func TestImpactSetRunsWholeModuleWhenUnmapped(t *testing.T) {
 // Fix 3: a test that started and never finished counts as failed.
 func TestUnfinishedTestCountsAsFailed(t *testing.T) {
 	out := `{"Action":"run","Package":"m/a","Test":"TestKilled"}` + "\n" +
-		`{"Action":"run","Package":"m/a","Test":"TestOK"}` + "\n" + `{"Action":"pass","Package":"m/a","Test":"TestOK"}` + "\n" +
+		`{"Action":"run","Package":"m/a","Test":"TestOK"}` + "\n" + `{"Action":"pass","Package":"m/a","Test":"TestOK"}` +
+		"\n" +
 		`{"Action":"output","Package":"m/b","Output":"panic: timed out\n"}` + "\n"
 	got := map[string]bool{}
 	for _, r := range ParseGoTestJSON(out) {
@@ -177,7 +200,11 @@ func TestTesterAcceptResultChecksItems(t *testing.T) {
 	if err := tr.AcceptResult(tasks, items, mk("ac-2", "ac-1")); err != nil {
 		t.Errorf("exact items: %v", err)
 	}
-	for name, r := range map[string]TesterResult{"missing": mk("ac-1"), "repeated": mk("ac-1", "ac-2", "ac-1"), "unknown": mk("ac-1", "ac-2", "ac-9")} {
+	for name, r := range map[string]TesterResult{
+		"missing":  mk("ac-1"),
+		"repeated": mk("ac-1", "ac-2", "ac-1"),
+		"unknown":  mk("ac-1", "ac-2", "ac-9"),
+	} {
 		if err := tr.AcceptResult(tasks, items, r); err == nil {
 			t.Errorf("%s item accepted", name)
 		}
@@ -191,7 +218,9 @@ func TestTesterAcceptResultChecksItems(t *testing.T) {
 func TestFileListEntryWithoutSlashMatchesOnlyAtRoot(t *testing.T) {
 	in := goInput()
 	in.Files, in.Changed = []string{"go.mod"}, []string{"go.mod", "tools/go.mod"}
-	r, err := newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), goSandbox().on("-coverprofile", okCoverage("90")).run, in)
+	r, err := newTestChecker(CheckerConfig{
+		CoverageFloor: 80,
+	}).Check(context.Background(), goSandbox().on("-coverprofile", okCoverage("90")).run, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +235,10 @@ func TestMatchPath(t *testing.T) {
 		want       bool
 	}{
 		{"go.mod", "go.mod", true}, {"go.mod", "tools/go.mod", false}, {"*.md", "docs/a.md", false}, {"*.md", "a.md", true},
-		{"docs/**", "docs/a/b.md", true}, {"**/*.go", "a/b.go", true}, {"a/b.go", "a/b.go", true}, {"a/b.go", "c/a/b.go", false},
+		{"docs/**", "docs/a/b.md", true},
+		{"**/*.go", "a/b.go", true},
+		{"a/b.go", "a/b.go", true},
+		{"a/b.go", "c/a/b.go", false},
 	}
 	for _, c := range cases {
 		if got := MatchPath(c.glob, c.path); got != c.want {

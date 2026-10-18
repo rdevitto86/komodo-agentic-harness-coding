@@ -12,7 +12,11 @@ func TestGitCLIAddsTheWorktreeOnceHashesTheTreeAndResetsTrackedEdits(t *testing.
 	r := newGitRepo(t)
 	g := &GitCLI{Repo: r.Main, Base: "HEAD", Start: "main"}
 	t.Cleanup(func() { _ = g.Close() })
-	l := LeaseRef{Branch: "komodo/ep-1-tg-9", Worktree: filepath.Join(filepath.Dir(r.Main), "wt9"), GitDir: filepath.Join(r.Main, ".git", "worktrees", "wt9")}
+	l := LeaseRef{
+		Branch:   "komodo/ep-1-tg-9",
+		Worktree: filepath.Join(filepath.Dir(r.Main), "wt9"),
+		GitDir:   filepath.Join(r.Main, ".git", "worktrees", "wt9"),
+	}
 	ctx := context.Background()
 	for range 2 {
 		if err := g.AddWorktree(ctx, l); err != nil {

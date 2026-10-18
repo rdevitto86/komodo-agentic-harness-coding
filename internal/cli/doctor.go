@@ -35,67 +35,6 @@ type Check struct {
 // networkFS lists the parts of file system type names that mean a network or shared disk.
 var networkFS = []string{"nfs", "smb", "cifs", "afp", "webdav", "9p", "ceph", "afs", "sshfs"}
 
-// handleDoctor runs every check and exits 3 when one fails; it only refreshes the provider probe.
-func handleDoctor(c *Call) Result {
-	ctx := context.Background()
-	in := &installer{
-		cli:       c.cli,
-		host:      c.cli.deps.Host,
-		root:      c.Repo.Root,
-		common:    c.CommonDir,
-		doMachine: true,
-		doRepo:    c.Repo.Root != "",
-	}
-
-	var err error
-	if in.home, err = c.cli.komodoHome(); err == nil {
-		in.user, err = os.UserHomeDir()
-	}
-	if err == nil {
-		in.machine, err = c.cli.machine()
-	}
-	if err != nil {
-		return internalErr("find the install folders: " + err.Error())
-	}
-
-	loadErr := in.load()
-	checks := []Check{
-		in.checkInstall(loadErr),
-		checkSandbox(ctx, in.host),
-		checkDocker(ctx, in.host),
-		in.checkLinks(ctx),
-		in.checkBlock(),
-		in.checkHome(ctx),
-		in.checkRules(),
-	}
-
-	data := DoctorData{Checks: checks}
-	rows := format.Table{Head: []string{"check", "result", "fix"}, What: "checks"}
-	out := OutcomeOK
-
-	for _, ck := range checks {
-		rows.Rows = append(rows.Rows, []string{ck.Name, ck.Result, ck.Fix})
-		if ck.Result == "fail" {
-			out = OutcomeHeld
-		}
-	}
-
-	return Result{
-		Outcome: out,
-		Shape:   "reply.doctor",
-		Facts:   format.DoctorFacts{Checks: rows},
-		Data:    data,
-	}
-}
-
-// pass builds a passing check.
-func pass(name, detail string) Check { return Check{Name: name, Result: "pass", Detail: detail} }
-
-// fail builds a failing check.
-func fail(name, detail, fix string) Check {
-	return Check{Name: name, Result: "fail", Detail: detail, Fix: fix}
-}
-
 // checkInstall compares every file install owns with its recorded fingerprint, and looks for komodo on PATH.
 func (in *installer) checkInstall(loadErr error) Check {
 	if loadErr != nil {
@@ -138,87 +77,8 @@ func (in *installer) checkInstall(loadErr error) Check {
 	return fail("install", strings.Join(problems, "; "), "komodo install")
 }
 
-// checkSandbox runs a harmless command inside the operating-system sandbox.
-func checkSandbox(ctx context.Context, h Host) Check {
-	be := h.osSandbox()
-	if err := runHarmless(ctx, be); err != nil {
-		return fail(
-			"sandbox", be.Name()+" could not run a command: "+err.Error(),
-			"fix the cause above, or install Docker",
-		)
-	}
-	return pass("sandbox", be.Name()+" ran a harmless command")
-}
-
-// runHarmless starts the true program inside a throwaway instance of the backend.
-func runHarmless(ctx context.Context, be sandbox.Backend) error {
-	if err := be.Check(); err != nil {
-		return err
-	}
-
-	tmp, err := os.MkdirTemp("", "komodo-doctor-")
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = os.RemoveAll(tmp) }()
-
-	if real, err := filepath.EvalSymlinks(tmp); err == nil {
-		tmp = real
-	}
-
-	spec := sandbox.Spec{
-		Group:    "doctor",
-		Worktree: filepath.Join(tmp, "wt"),
-		Writable: []string{filepath.Join(tmp, "tmp")},
-		Role:     sandbox.RoleBuilder,
-	}
-
-	for _, d := range []string{spec.Worktree, spec.Writable[0]} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
-		}
-	}
-
-	inst, err := be.Prepare(ctx, spec)
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = be.Release(ctx, inst) }()
-
-	prog, err := exec.LookPath("true")
-	if err != nil {
-		prog = "/usr/bin/true"
-	}
-
-	cmd, err := be.Command(
-		ctx, inst, spec, sandbox.Command{Argv: []string{prog}, Timeout: 10 * time.Second},
-	)
-	if err != nil {
-		return err
-	}
-
-	return cmd.Run()
-}
-
-// checkDocker looks for the Docker tools and asks the daemon; without Docker the Tester uses the operating-system sandbox.
-func checkDocker(_ context.Context, h Host) Check {
-	if _, err := h.lookPath("docker"); err != nil {
-		return pass(
-			"docker", "Docker is not installed; the Tester uses the operating-system sandbox and the run report says so",
-		)
-	}
-	be := h.docker()
-	if err := be.Check(); err != nil {
-		return fail(
-			"docker", err.Error(), "start Docker, or the Tester falls back to the operating-system sandbox",
-		)
-	}
-	return pass("docker", "the Docker daemon answers")
-}
-
-// checkLinks probes the model links, records the probe, and passes when a required link works and a configured local link works.
+// checkLinks probes the model links, records the probe, and passes when a required link works and a configured local link
+// works.
 func (in *installer) checkLinks(ctx context.Context) Check {
 	if in.host.Links == nil {
 		return Check{
@@ -331,31 +191,6 @@ func (in *installer) checkHome(ctx context.Context) Check {
 	return pass("home", dir+" is on a local file system ("+fs+") and honours file locks")
 }
 
-// lockHonoured takes a lock on a probe file in dir and checks that a second taker is kept out.
-func lockHonoured(ctx context.Context, dir string) error {
-	path := filepath.Join(dir, fmt.Sprintf(".komodo-doctor-lock-%d", os.Getpid()))
-
-	defer func() { _ = os.Remove(path) }()
-
-	unlock, err := core.FileLock(ctx, path, time.Second)
-	if err != nil {
-		return fmt.Errorf("take a file lock in %s: %w", dir, err)
-	}
-
-	defer func() { _ = unlock() }()
-
-	second, err := core.FileLock(ctx, path, 100*time.Millisecond)
-	if err == nil {
-		_ = second()
-		return fmt.Errorf("%s does not honour file locks: two holders took the same lock", dir)
-	}
-	if !errors.Is(err, core.ErrLockWait) {
-		return fmt.Errorf("test the file lock in %s: %w", dir, err)
-	}
-
-	return nil
-}
-
 // checkRules reports review rules whose findings were verified less than half the time.
 func (in *installer) checkRules() Check {
 	if in.host.Rules == nil {
@@ -383,4 +218,170 @@ func (in *installer) checkRules() Check {
 	}
 
 	return pass("rules", fmt.Sprintf("%d review rules checked; none under 50%%", len(all)))
+}
+
+// handleDoctor runs every check and exits 3 when one fails; it only refreshes the provider probe.
+func handleDoctor(c *Call) Result {
+	ctx := context.Background()
+	in := &installer{
+		cli:       c.cli,
+		host:      c.cli.deps.Host,
+		root:      c.Repo.Root,
+		common:    c.CommonDir,
+		doMachine: true,
+		doRepo:    c.Repo.Root != "",
+	}
+
+	var err error
+	if in.home, err = c.cli.komodoHome(); err == nil {
+		in.user, err = os.UserHomeDir()
+	}
+	if err == nil {
+		in.machine, err = c.cli.machine()
+	}
+	if err != nil {
+		return internalErr("find the install folders: " + err.Error())
+	}
+
+	loadErr := in.load()
+	checks := []Check{
+		in.checkInstall(loadErr),
+		checkSandbox(ctx, in.host),
+		checkDocker(ctx, in.host),
+		in.checkLinks(ctx),
+		in.checkBlock(),
+		in.checkHome(ctx),
+		in.checkRules(),
+	}
+
+	data := DoctorData{Checks: checks}
+	rows := format.Table{Head: []string{"check", "result", "fix"}, What: "checks"}
+	out := OutcomeOK
+
+	for _, ck := range checks {
+		rows.Rows = append(rows.Rows, []string{ck.Name, ck.Result, ck.Fix})
+		if ck.Result == "fail" {
+			out = OutcomeHeld
+		}
+	}
+
+	return Result{
+		Outcome: out,
+		Shape:   "reply.doctor",
+		Facts:   format.DoctorFacts{Checks: rows},
+		Data:    data,
+	}
+}
+
+// pass builds a passing check.
+func pass(name, detail string) Check { return Check{Name: name, Result: "pass", Detail: detail} }
+
+// fail builds a failing check.
+func fail(name, detail, fix string) Check {
+	return Check{Name: name, Result: "fail", Detail: detail, Fix: fix}
+}
+
+// checkSandbox runs a harmless command inside the operating-system sandbox.
+func checkSandbox(ctx context.Context, h Host) Check {
+	be := h.osSandbox()
+	if err := runHarmless(ctx, be); err != nil {
+		return fail(
+			"sandbox", be.Name()+" could not run a command: "+err.Error(),
+			"fix the cause above, or install Docker",
+		)
+	}
+	return pass("sandbox", be.Name()+" ran a harmless command")
+}
+
+// runHarmless starts the true program inside a throwaway instance of the backend.
+func runHarmless(ctx context.Context, be sandbox.Backend) error {
+	if err := be.Check(); err != nil {
+		return err
+	}
+
+	tmp, err := os.MkdirTemp("", "komodo-doctor-")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = os.RemoveAll(tmp) }()
+
+	if real, err := filepath.EvalSymlinks(tmp); err == nil {
+		tmp = real
+	}
+
+	spec := sandbox.Spec{
+		Group:    "doctor",
+		Worktree: filepath.Join(tmp, "wt"),
+		Writable: []string{filepath.Join(tmp, "tmp")},
+		Role:     sandbox.RoleBuilder,
+	}
+
+	for _, d := range []string{spec.Worktree, spec.Writable[0]} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+	}
+
+	inst, err := be.Prepare(ctx, spec)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = be.Release(ctx, inst) }()
+
+	prog, err := exec.LookPath("true")
+	if err != nil {
+		prog = "/usr/bin/true"
+	}
+
+	cmd, err := be.Command(
+		ctx, inst, spec, sandbox.Command{Argv: []string{prog}, Timeout: 10 * time.Second},
+	)
+	if err != nil {
+		return err
+	}
+
+	return cmd.Run()
+}
+
+// checkDocker looks for the Docker tools and asks the daemon; without Docker the Tester uses the operating-system sandbox.
+func checkDocker(_ context.Context, h Host) Check {
+	if _, err := h.lookPath("docker"); err != nil {
+		return pass(
+			"docker", "Docker is not installed; the Tester uses the operating-system sandbox and the run report says so",
+		)
+	}
+	be := h.docker()
+	if err := be.Check(); err != nil {
+		return fail(
+			"docker", err.Error(), "start Docker, or the Tester falls back to the operating-system sandbox",
+		)
+	}
+	return pass("docker", "the Docker daemon answers")
+}
+
+// lockHonoured takes a lock on a probe file in dir and checks that a second taker is kept out.
+func lockHonoured(ctx context.Context, dir string) error {
+	path := filepath.Join(dir, fmt.Sprintf(".komodo-doctor-lock-%d", os.Getpid()))
+
+	defer func() { _ = os.Remove(path) }()
+
+	unlock, err := core.FileLock(ctx, path, time.Second)
+	if err != nil {
+		return fmt.Errorf("take a file lock in %s: %w", dir, err)
+	}
+
+	defer func() { _ = unlock() }()
+
+	second, err := core.FileLock(ctx, path, 100*time.Millisecond)
+	if err == nil {
+		_ = second()
+		return fmt.Errorf("%s does not honour file locks: two holders took the same lock", dir)
+	}
+	if !errors.Is(err, core.ErrLockWait) {
+		return fmt.Errorf("test the file lock in %s: %w", dir, err)
+	}
+
+	return nil
 }

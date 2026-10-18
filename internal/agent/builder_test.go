@@ -16,7 +16,8 @@ func TestBuilderRole(t *testing.T) {
 	if !reflect.DeepEqual(r.Tools, []string{"read", "search", "edit", "write", "run", "skill", "task_done"}) {
 		t.Errorf("tools = %v", r.Tools)
 	}
-	if !reflect.DeepEqual(r.RunClasses, []string{"build", "test", "lint", "format"}) || !reflect.DeepEqual(r.Guard, []string{"R1", "B1"}) {
+	if !reflect.DeepEqual(r.RunClasses, []string{"build", "test", "lint", "format"}) ||
+		!reflect.DeepEqual(r.Guard, []string{"R1", "B1"}) {
 		t.Errorf("classes %v guard %v", r.RunClasses, r.Guard)
 	}
 	if len(r.Slots.Required) != 5 || len(r.Slots.Optional) != 7 {
@@ -37,8 +38,15 @@ func TestBuilderRoleIsACopy(t *testing.T) {
 
 func TestParseBuilderResult(t *testing.T) {
 	ok := []struct{ name, raw string }{
-		{"done", `{"status": "done", "summary": "Added the lock file type and its tests; both tasks pass.", "disputed": []}`},
-		{"scope", `{"status": "needs_scope", "summary": "Stopped before tsk-add-lock.", "paths": ["internal/lease/lock.go"], "reason": "The lock type must be read by the lease package."}`},
+		{
+			"done",
+			`{"status": "done", "summary": "Added the lock file type and its tests; both tasks pass.", "disputed": []}`,
+		},
+		{
+			"scope",
+			`{"status": "needs_scope", "summary": "Stopped before tsk-add-lock.", "paths": ["internal/lease/lock.go"], ` +
+				`"reason": "The lock type must be read by the lease package."}`,
+		},
 		{"disputed", `{"status": "done", "summary": "s", "disputed": ["internal/agent/lock.go:42"]}`},
 	}
 	for _, c := range ok {
@@ -71,7 +79,12 @@ func TestOutOfScope(t *testing.T) {
 	sibling := func(p string) bool {
 		return strings.HasSuffix(p, "_test.go") && strings.HasPrefix(p, "internal/agent/")
 	}
-	got := OutOfScope([]string{"internal/agent/lock.go", "internal/agent/lock_test.go", "docs/a/b.md", "internal/lease/x.go"}, files, sibling, MatchGlob)
+	got := OutOfScope(
+		[]string{"internal/agent/lock.go", "internal/agent/lock_test.go", "docs/a/b.md", "internal/lease/x.go"},
+		files,
+		sibling,
+		MatchGlob,
+	)
 	if !reflect.DeepEqual(got, []string{"internal/lease/x.go"}) {
 		t.Fatalf("out of scope = %v", got)
 	}
@@ -119,7 +132,9 @@ func TestTaskGateComplete(t *testing.T) {
 		t.Fatalf("commands run = %v", ran)
 	}
 	boom := errors.New("sandbox refused")
-	_, err = TaskGate{Run: func(context.Context, string) (int, string, error) { return 0, "", boom }}.Complete(context.Background(), ref)
+	_, err = TaskGate{
+		Run: func(context.Context, string) (int, string, error) { return 0, "", boom },
+	}.Complete(context.Background(), ref)
 	if !errors.Is(err, boom) {
 		t.Fatalf("runner error = %v", err)
 	}
@@ -133,8 +148,11 @@ func TestTaskGateComplete(t *testing.T) {
 
 func TestTaskGateCapsOutput(t *testing.T) {
 	big := strings.Repeat("a", 3000) + "MIDDLE" + strings.Repeat("z", 3000)
-	o, _ := TaskGate{Run: func(context.Context, string) (int, string, error) { return 1, big, nil }}.Complete(context.Background(), TaskRef{Task: "t", DoneCommand: "x"})
-	if len(o.Output) > GateOutputCap || !strings.HasPrefix(o.Output, "aaa") || !strings.HasSuffix(o.Output, "zzz") || strings.Contains(o.Output, "MIDDLE") {
+	o, _ := TaskGate{
+		Run: func(context.Context, string) (int, string, error) { return 1, big, nil },
+	}.Complete(context.Background(), TaskRef{Task: "t", DoneCommand: "x"})
+	if len(o.Output) > GateOutputCap || !strings.HasPrefix(o.Output, "aaa") || !strings.HasSuffix(o.Output, "zzz") ||
+		strings.Contains(o.Output, "MIDDLE") {
 		t.Fatalf("capped output len %d", len(o.Output))
 	}
 }

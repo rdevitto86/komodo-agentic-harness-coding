@@ -10,9 +10,8 @@ import (
 	"time"
 )
 
-// staleTempAge is how old a leftover temp file must be before a scan deletes it.
 const (
-	staleTempAge = time.Hour
+	staleTempAge = time.Hour    // staleTempAge is how old a leftover temp file must be before a scan deletes it.
 	tempMarker   = ".json.tmp-" // tempMarker is the part of a temporary file's name that marks it as an unfinished write.
 )
 
@@ -24,7 +23,8 @@ type cacheEntry struct {
 	used time.Time // last read, kept in the file's mtime
 }
 
-// scanCache lists every entry file of the given namespaces (all when none) and deletes stale temp files left by crashed writers.
+// scanCache lists every entry file of the given namespaces (all when none)
+// and deletes stale temp files left by crashed writers.
 func scanCache(root string, nss ...Namespace) ([]cacheEntry, error) {
 	if len(nss) == 0 {
 		nss = namespaces
@@ -43,19 +43,23 @@ func scanCache(root string, nss ...Namespace) ([]cacheEntry, error) {
 			if d.IsDir() {
 				return nil
 			}
+
 			info, err := d.Info()
 			if err != nil {
 				return nil // vanished between listing and stat
 			}
 			name := d.Name()
+
 			switch {
 			case strings.HasSuffix(name, ".json") && validKey(Key(strings.TrimSuffix(name, ".json"))):
 				out = append(out, cacheEntry{ns: ns, path: path, size: info.Size(), used: info.ModTime()})
 			case strings.Contains(name, tempMarker) && time.Since(info.ModTime()) > staleTempAge:
 				_ = os.Remove(path)
 			}
+
 			return nil
 		})
+
 		if err != nil {
 			return nil, fmt.Errorf("scan cache namespace %s: %w", ns, err)
 		}

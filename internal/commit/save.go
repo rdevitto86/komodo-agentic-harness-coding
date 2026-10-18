@@ -32,7 +32,6 @@ func (h *Handler) Save(ctx context.Context, r SaveRequest) (SaveResult, error) {
 	if err != nil {
 		return SaveResult{}, gitFail(err)
 	}
-
 	if cur != r.Branch {
 		return SaveResult{}, fail(
 			KindNotApproved,
@@ -76,11 +75,9 @@ func (h *Handler) owns(
 	if err != nil {
 		return lease.Lease{}, fail(KindGit, true, fmt.Errorf("read lease: %w", err))
 	}
-
 	if !ok || l.State != lease.StateHeld || l.Run != string(run) || l.Fence != fence {
 		return lease.Lease{}, fail(KindLeaseLost, false, ErrLeaseLost)
 	}
-
 	return l, nil
 }
 

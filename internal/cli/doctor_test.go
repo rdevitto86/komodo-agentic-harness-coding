@@ -12,7 +12,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// installed runs a full install into a fresh repository and returns the repository; komodo is then on PATH and docker is not.
+// installed runs a full install into a fresh repository and returns the repository; komodo is then on PATH and docker is
+// not.
 func installed(t *testing.T, h *harness) string {
 	t.Helper()
 	repo := repoDir(t, "")
@@ -71,14 +72,20 @@ func TestDoctorRefreshesTheProviderProbe(t *testing.T) {
 func TestDoctorFailsWithAFixAndExitsThree(t *testing.T) {
 	cases := map[string]func(h *harness, repo string){
 		"sandbox": func(h *harness, _ string) {
-			h.host.Sandbox = fakeBackend{name: "x", err: errors.New("bwrap is not installed: install the bubblewrap package")}
+			h.host.Sandbox = fakeBackend{
+				name: "x",
+				err:  errors.New("bwrap is not installed: install the bubblewrap package"),
+			}
 		},
 		"docker": func(h *harness, _ string) {
 			h.host.LookPath = func(string) (string, error) { return "/usr/bin/docker", nil }
 			h.host.Docker = fakeBackend{name: "docker", err: errors.New("the docker daemon does not answer: start Docker")}
 		},
 		"links": func(h *harness, _ string) {
-			h.host.Links = fakeLinks{{Link: llm.ClaudeCLI, Reason: "claude is not logged in"}, {Link: llm.AnthropicAPI, Reason: "no key"}}
+			h.host.Links = fakeLinks{
+				{Link: llm.ClaudeCLI, Reason: "claude is not logged in"},
+				{Link: llm.AnthropicAPI, Reason: "no key"},
+			}
 		},
 		"block": func(_ *harness, repo string) {
 			mustWrite(t, filepath.Join(repo, "AGENTS.md"), "<!-- komodo:begin min=1.0.0 -->\nno end\n")
@@ -87,7 +94,10 @@ func TestDoctorFailsWithAFixAndExitsThree(t *testing.T) {
 		"home":    func(h *harness, _ string) { h.host.FSType = func(string) (string, error) { return "nfs", nil } },
 		"rules": func(h *harness, _ string) {
 			h.host.Rules = func() ([]agent.Precision, error) {
-				return []agent.Precision{{Rule: "correctness.1", Model: "m", Submitted: 10, Verified: 4}, {Rule: "style.2", Model: "m", Submitted: 10, Verified: 6}}, nil
+				return []agent.Precision{
+					{Rule: "correctness.1", Model: "m", Submitted: 10, Verified: 4},
+					{Rule: "style.2", Model: "m", Submitted: 10, Verified: 6},
+				}, nil
 			}
 		},
 	}

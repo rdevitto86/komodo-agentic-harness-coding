@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-// runMain runs the binary's entry point with a temporary home folder.
-func runMain(t *testing.T, args ...string) (int, string, string) {
-	t.Helper()
-	t.Setenv("KOMODO_HOME", t.TempDir())
-	var out, errOut bytes.Buffer
-	code := run(append([]string{"komodo"}, args...), &out, &errOut)
-	return code, out.String(), errOut.String()
-}
-
 func TestConfigGetListEndToEnd(t *testing.T) {
 	code, out, errOut := runMain(t, "config", "get", "--list", "--json")
 	if code != 0 {
@@ -44,4 +35,13 @@ func TestUnknownCommandExitsTwo(t *testing.T) {
 	if code != 2 || !strings.Contains(out, `"code": "usage"`) {
 		t.Fatalf("exit %d: %s", code, out)
 	}
+}
+
+// runMain runs the binary's entry point with a temporary home folder.
+func runMain(t *testing.T, args ...string) (int, string, string) {
+	t.Helper()
+	t.Setenv("KOMODO_HOME", t.TempDir())
+	var out, errOut bytes.Buffer
+	code := run(append([]string{"komodo"}, args...), &out, &errOut)
+	return code, out.String(), errOut.String()
 }

@@ -48,6 +48,7 @@ func (g TaskGate) Complete(ctx context.Context, t TaskRef) (TaskOutcome, error) 
 	if err != nil {
 		return TaskOutcome{}, fmt.Errorf("run completion command of %s: %w", t.Task, err)
 	}
+
 	return TaskOutcome{ExitCode: exit, Output: CapOutput(out, GateOutputCap)}, nil
 }
 
@@ -75,5 +76,6 @@ func CapOutput(s string, max int) string {
 	for start < len(s) && !utf8.RuneStart(s[start]) {
 		start++
 	}
+
 	return s[:head] + truncMarker + s[start:]
 }

@@ -75,7 +75,10 @@ func ParseCoverage(language, output string) (float64, error) {
 			return *v.Total.Lines.Pct, nil
 		}
 	case "rust":
-		if v, ok := lastJSON(output, func(r rustReport) bool { return len(r.Data) > 0 && r.Data[0].Totals.Lines.Percent != nil }); ok {
+		if v, ok := lastJSON(
+			output,
+			func(r rustReport) bool { return len(r.Data) > 0 && r.Data[0].Totals.Lines.Percent != nil },
+		); ok {
 			return *v.Data[0].Totals.Lines.Percent, nil
 		}
 	case "java", "kotlin":

@@ -146,7 +146,8 @@ func TestTrimAgesAnUnparseableLogByFileTime(t *testing.T) {
 
 // A missing folder trims to nothing.
 func TestTrimOfAMissingFolder(t *testing.T) {
-	if res, err := Trim(context.Background(), filepath.Join(t.TempDir(), "none"), TrimOptions{}); err != nil || len(res.Deleted) != 0 {
+	if res, err := Trim(context.Background(), filepath.Join(t.TempDir(), "none"), TrimOptions{}); err != nil ||
+		len(res.Deleted) != 0 {
 		t.Fatalf("res %+v err %v", res, err)
 	}
 }

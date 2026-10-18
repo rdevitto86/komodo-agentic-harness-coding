@@ -13,16 +13,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// TestMain binds the fault events once, as the program does before its first publish.
-func TestMain(m *testing.M) {
-	RegisterEvents()
-	// The owning chapters of these error subtypes are not built; a stand-in body lets them be published.
-	for _, st := range []bus.Subtype{"plan-blocked", "plan-timeout", "plan-input", "plan-write", "context-refused", "run-refused", "mystery"} {
-		bus.Register(bus.Key{Type: bus.TypeError, Subtype: st}, func() bus.Payload { return &otherBody{st: st} })
-	}
-	os.Exit(m.Run())
-}
-
 // otherBody is a stand-in data body for an error subtype that another package owns.
 type otherBody struct{ st bus.Subtype }
 
@@ -44,13 +34,6 @@ func (p *fakePrinter) PrintError(f Fault) error {
 	return p.err
 }
 
-// calls returns a copy of the faults printed so far.
-func (p *fakePrinter) calls() []Fault {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]Fault(nil), p.got...)
-}
-
 // waitCalls waits until n faults were printed and returns them.
 func (p *fakePrinter) waitCalls(t *testing.T, n int) []Fault {
 	t.Helper()
@@ -63,6 +46,13 @@ func (p *fakePrinter) waitCalls(t *testing.T, n int) []Fault {
 	}
 	t.Fatalf("want %d PrintError calls, got %d", n, len(p.calls()))
 	return nil
+}
+
+// calls returns a copy of the faults printed so far.
+func (p *fakePrinter) calls() []Fault {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]Fault(nil), p.got...)
 }
 
 // syncBuf is a goroutine-safe buffer that stands in for standard error.
@@ -125,15 +115,28 @@ func newRig(t *testing.T, run bool) *rig {
 	return r
 }
 
-// waitRunning waits until the Run loop of h is reading.
-func waitRunning(t *testing.T, h *Handler) {
+// next reads the next event the observer sees or fails after a second.
+func (r *rig) next(t *testing.T) bus.Event {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for !h.running.Load() {
-		if time.Now().After(deadline) {
-			t.Fatal("Run loop did not start")
+	select {
+	case e, ok := <-r.obs.Events:
+		if !ok {
+			t.Fatal("observer closed")
 		}
-		time.Sleep(time.Millisecond)
+		return e
+	case <-time.After(time.Second):
+		t.Fatal("no event within 1s")
+	}
+	return bus.Event{}
+}
+
+// none fails when the observer sees any event within a short wait.
+func (r *rig) none(t *testing.T) {
+	t.Helper()
+	select {
+	case e := <-r.obs.Events:
+		t.Fatalf("unexpected event %s/%s", e.Type, e.Subtype)
+	case <-time.After(80 * time.Millisecond):
 	}
 }
 
@@ -145,9 +148,6 @@ type gatePrinter struct {
 	once    sync.Once
 }
 
-// open lets the held fault through; calling it twice is harmless.
-func (p *gatePrinter) open() { p.once.Do(func() { close(p.gate) }) }
-
 // PrintError holds a "block" fault until the gate opens, then records it.
 func (p *gatePrinter) PrintError(f Fault) error {
 	if f.Reason == "block" {
@@ -157,7 +157,29 @@ func (p *gatePrinter) PrintError(f Fault) error {
 	return p.fakePrinter.PrintError(f)
 }
 
-// newFullRig builds a handler whose one-slot queue is full: its loop is held in the printer and a second fault waits behind it.
+// open lets the held fault through; calling it twice is harmless.
+func (p *gatePrinter) open() { p.once.Do(func() { close(p.gate) }) }
+
+// TestMain binds the fault events once, as the program does before its first publish.
+func TestMain(m *testing.M) {
+	RegisterEvents()
+	// The owning chapters of these error subtypes are not built; a stand-in body lets them be published.
+	for _, st := range []bus.Subtype{
+		"plan-blocked",
+		"plan-timeout",
+		"plan-input",
+		"plan-write",
+		"context-refused",
+		"run-refused",
+		"mystery",
+	} {
+		bus.Register(bus.Key{Type: bus.TypeError, Subtype: st}, func() bus.Payload { return &otherBody{st: st} })
+	}
+	os.Exit(m.Run())
+}
+
+// newFullRig builds a handler whose one-slot queue is full: its loop is held in the printer and a second fault waits behind
+// it.
 func newFullRig(t *testing.T) (*Handler, *gatePrinter, *syncBuf) {
 	t.Helper()
 	b := bus.New(bus.Options{BufferEvents: 1})
@@ -182,28 +204,15 @@ func newFullRig(t *testing.T) (*Handler, *gatePrinter, *syncBuf) {
 	return h, p, errBuf
 }
 
-// next reads the next event the observer sees or fails after a second.
-func (r *rig) next(t *testing.T) bus.Event {
+// waitRunning waits until the Run loop of h is reading.
+func waitRunning(t *testing.T, h *Handler) {
 	t.Helper()
-	select {
-	case e, ok := <-r.obs.Events:
-		if !ok {
-			t.Fatal("observer closed")
+	deadline := time.Now().Add(2 * time.Second)
+	for !h.running.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("Run loop did not start")
 		}
-		return e
-	case <-time.After(time.Second):
-		t.Fatal("no event within 1s")
-	}
-	return bus.Event{}
-}
-
-// none fails when the observer sees any event within a short wait.
-func (r *rig) none(t *testing.T) {
-	t.Helper()
-	select {
-	case e := <-r.obs.Events:
-		t.Fatalf("unexpected event %s/%s", e.Type, e.Subtype)
-	case <-time.After(80 * time.Millisecond):
+		time.Sleep(time.Millisecond)
 	}
 }
 

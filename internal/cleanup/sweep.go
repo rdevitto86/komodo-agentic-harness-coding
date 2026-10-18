@@ -19,7 +19,8 @@ func (h *Handler) Sweep(ctx context.Context) (Report, error) {
 	return rep, err
 }
 
-// Preview lists what Sweep would remove and removes nothing; a worktree that holds unpublished files shows only when Sweep runs.
+// Preview lists what Sweep would remove and removes nothing; a worktree that
+// holds unpublished files shows only when Sweep runs.
 func (h *Handler) Preview(ctx context.Context) (Report, error) { return h.sweep(ctx, true) }
 
 // sweep visits every group that has a container, checkout or folder left and cleans the ones that no run can continue.
@@ -55,6 +56,7 @@ func (h *Handler) sweep(ctx context.Context, dry bool) (Report, error) {
 		}
 		h.sweepGroup(ctx, &rep, g, unfinished, dry, fetchErr)
 	}
+
 	h.sweepLandings(ctx, &rep, used, dry, fetchErr)
 	return rep, nil
 }
@@ -93,7 +95,8 @@ func (h *Handler) leftovers(ctx context.Context, rep *Report) ([]string, error) 
 	return out, nil
 }
 
-// folders returns the plain-named folders and links in root; stray files and odd names are ignored, and an empty or missing root has none.
+// folders returns the plain-named folders and links in root; stray files and odd names are
+// ignored, and an empty or missing root has none.
 func folders(root string) ([]string, error) {
 	if root == "" {
 		return nil, nil
@@ -116,8 +119,16 @@ func folders(root string) ([]string, error) {
 	return out, nil
 }
 
-// sweepGroup cleans one group's remains, or lists them when dry; a group a run can continue or a live run holds is kept untouched.
-func (h *Handler) sweepGroup(ctx context.Context, rep *Report, group string, unfinished map[string]bool, dry bool, fetchErr error) {
+// sweepGroup cleans one group's remains, or lists them when dry; a group a
+// run can continue or a live run holds is kept untouched.
+func (h *Handler) sweepGroup(
+	ctx context.Context,
+	rep *Report,
+	group string,
+	unfinished map[string]bool,
+	dry bool,
+	fetchErr error,
+) {
 	path := filepath.Join(h.Roots.Worktrees, group)
 	if unfinished[group] {
 		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: "a run can still continue the group"})
@@ -142,7 +153,15 @@ func (h *Handler) sweepGroup(ctx context.Context, rep *Report, group string, unf
 		return
 	}
 
-	r := &run{h: h, ctx: ctx, group: group, rep: rep, dry: dry, guard: true, noRemote: fetchErr}
+	r := &run{
+		h:        h,
+		ctx:      ctx,
+		group:    group,
+		rep:      rep,
+		dry:      dry,
+		guard:    true,
+		noRemote: fetchErr,
+	}
 	r.container()
 	r.checkouts()
 	gone := r.worktree(h.Roots.Worktrees, path, false)
@@ -185,6 +204,7 @@ func (h *Handler) sweepLandings(ctx context.Context, rep *Report, used []GroupRe
 			rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: reason})
 			continue
 		}
+
 		r := &run{h: h, ctx: ctx, group: epic, rep: rep, dry: dry, noRemote: fetchErr}
 		if r.worktree(h.Roots.Landings, path, false) {
 			r.redundantBranch("komodo/" + epic)

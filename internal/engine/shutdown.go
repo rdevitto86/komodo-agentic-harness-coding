@@ -18,7 +18,6 @@ func (m *Manager) RunOf(target string) string {
 		if id == target || r.start.Target == target {
 			return id
 		}
-
 		for _, s := range r.specs {
 			if s.Label == target || s.Epic == target || s.ID == target {
 				return id
@@ -36,11 +35,9 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 	r := m.runs[runID]
 	if r == nil || r.stopping {
 		m.mu.Unlock()
-
 		if r == nil {
 			return &codeError{CodeUnknownTarget, "no live run " + runID}
 		}
-
 		return nil
 	}
 
@@ -53,7 +50,6 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 	m.mu.Unlock()
 
 	expired := make(chan struct{})
-
 	timer := time.AfterFunc(m.t.ShutdownDeadline, func() { close(expired) })
 	defer timer.Stop()
 
@@ -61,13 +57,10 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 		g.stopping.Store(true)
 		g.send(stopCommand("stop"))
 	}
-
 	if !m.waitTMs(ctx, groups, expired) {
 		m.killRemaining(r, groups)
-
 		grace := make(chan struct{})
 		gt := time.AfterFunc(killGrace, func() { close(grace) })
-
 		m.waitTMs(ctx, groups, grace)
 		gt.Stop()
 	}
@@ -77,7 +70,6 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 	}
 
 	loops := make(chan struct{})
-
 	lt := time.AfterFunc(killGrace, func() { close(loops) })
 	defer lt.Stop()
 
@@ -94,7 +86,6 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 		g.mu.Lock()
 		st := g.snap
 		g.mu.Unlock()
-
 		if st.Stage == NoStage || st.Stage == StageDone {
 			continue
 		}
@@ -110,7 +101,6 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 	m.endRunLocked(r, &bus.RunStopped{Saved: orEmpty(saved)}, "stopped")
 	m.mu.Unlock()
 	m.schedule()
-
 	return nil
 }
 
@@ -123,20 +113,17 @@ func (m *Manager) stopTarget(ctx context.Context, target string) error {
 	for id, r := range m.runs {
 		if id == target || r.start.Target == target {
 			ids = append(ids, id)
-
 			continue
 		}
 
 		for _, s := range r.specs {
 			if s.Label == target || s.Epic == target || s.ID == target {
 				ids = append(ids, id)
-
 				break
 			}
 		}
 	}
 	m.mu.Unlock()
-
 	if len(ids) == 0 {
 		return &codeError{CodeUnknownTarget, "no live run named " + target}
 	}
@@ -150,14 +137,12 @@ func (m *Manager) stopTarget(ctx context.Context, target string) error {
 	return nil
 }
 
-// killRemaining ends every process of the groups whose Task Manager is still running at the
-// deadline.
+// killRemaining ends every process of the groups whose Task Manager is still running at the deadline.
 func (m *Manager) killRemaining(r *run, groups []*group) {
 	for _, g := range groups {
 		g.mu.Lock()
 		up := g.tmDone != nil
 		g.mu.Unlock()
-
 		if up && m.d.KillTree != nil {
 			m.d.KillTree(r.id, g.spec.ID)
 		}
@@ -170,7 +155,6 @@ func (m *Manager) waitTMs(ctx context.Context, groups []*group, stop <-chan stru
 		g.mu.Lock()
 		done := g.tmDone
 		g.mu.Unlock()
-
 		if done == nil {
 			continue
 		}

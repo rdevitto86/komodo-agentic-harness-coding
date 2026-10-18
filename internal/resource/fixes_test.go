@@ -23,7 +23,8 @@ func TestLateGroupPausedPastRunCeiling(t *testing.T) {
 	wantNone(t, drive(t, s, th, paid("anthropic-api", "r1", "gb", 1), base))
 }
 
-// TestLateGroupPausedPastFullWindowAndDayCeiling: a group that joins a full window or a day over its ceiling is paused alone.
+// TestLateGroupPausedPastFullWindowAndDayCeiling: a group that joins a full window or a day over its ceiling is paused
+// alone.
 func TestLateGroupPausedPastFullWindowAndDayCeiling(t *testing.T) {
 	th := defaults
 	th.USDPerRun, th.USDCeilingPerDay = 0, 20
@@ -40,22 +41,36 @@ func TestLateGroupPausedPastFullWindowAndDayCeiling(t *testing.T) {
 	}
 }
 
-// TestSiblingResetKeepsGroups: groups seen before one window of a link resets are still named when another window of it fills.
+// TestSiblingResetKeepsGroups: groups seen before one window of a link resets are still named when another window of it
+// fills.
 func TestSiblingResetKeepsGroups(t *testing.T) {
 	s := NewState()
 	drive(t, s, defaults, head("claude-cli", "r1", "g1", 10, base.Add(time.Hour)), base)
-	week := ev(subtypeHeadroom, "r1", "g2", &Headroom{Link: "claude-cli", Window: "weekly", Limit: 100, Remaining: 90, ResetAt: base.Add(10 * time.Hour)})
+	week := ev(subtypeHeadroom, "r1", "g2", &Headroom{
+		Link:      "claude-cli",
+		Window:    "weekly",
+		Limit:     100,
+		Remaining: 90,
+		ResetAt:   base.Add(10 * time.Hour),
+	})
 	drive(t, s, defaults, week, base)
 	later := base.Add(2 * time.Hour)
 	drive(t, s, defaults, head("claude-cli", "r1", "g3", 10, later.Add(5*time.Hour)), later)
-	week = ev(subtypeHeadroom, "r1", "g3", &Headroom{Link: "claude-cli", Window: "weekly", Limit: 100, Remaining: 0, ResetAt: base.Add(10 * time.Hour)})
+	week = ev(subtypeHeadroom, "r1", "g3", &Headroom{
+		Link:      "claude-cli",
+		Window:    "weekly",
+		Limit:     100,
+		Remaining: 0,
+		ResetAt:   base.Add(10 * time.Hour),
+	})
 	r := drive(t, s, defaults, week, later)
 	if len(r.Pauses) != 1 || !reflect.DeepEqual(r.Pauses[0].Groups, []string{"g1", "g2", "g3"}) {
 		t.Fatalf("pause %+v, want g1 g2 g3", r.Pauses)
 	}
 }
 
-// TestBadHeadroomIsMalformed: a negative total, a negative remainder or a remainder above the total is refused and changes nothing.
+// TestBadHeadroomIsMalformed: a negative total, a negative remainder or a remainder above the total is refused and changes
+// nothing.
 func TestBadHeadroomIsMalformed(t *testing.T) {
 	r := newRig(defaults)
 	for _, h := range []Headroom{
@@ -73,7 +88,8 @@ func TestBadHeadroomIsMalformed(t *testing.T) {
 	}
 }
 
-// TestFullWindowPauseRetriedByUsage: a pause that failed, or had no group to name, is sent by the next event that names a group on the link.
+// TestFullWindowPauseRetriedByUsage: a pause that failed, or had no group to name, is sent by the next event that names a
+// group on the link.
 func TestFullWindowPauseRetriedByUsage(t *testing.T) {
 	r := newRig(defaults)
 	r.rt.failPause = 1
@@ -133,7 +149,12 @@ func TestZeroResetRaisesEachTime(t *testing.T) {
 		_ = r.observe(ev(subtypeLimit, "r1", "g1", &Limit{Link: "claude-cli", Kind: "spend"}))
 		_ = r.observe(ev(subtypeOverage, "r1", "g1", &Overage{Link: "claude-cli"}))
 	}
-	if want := []string{"throw:limit", "throw:overage", "throw:limit", "throw:overage"}; !reflect.DeepEqual(r.c.all(), want) {
+	if want := []string{
+		"throw:limit",
+		"throw:overage",
+		"throw:limit",
+		"throw:overage",
+	}; !reflect.DeepEqual(r.c.all(), want) {
 		t.Fatalf("calls %v, want %v", r.c.all(), want)
 	}
 }
@@ -183,12 +204,19 @@ func TestUsageWithoutRunIsMalformed(t *testing.T) {
 	}
 }
 
-// TestProviderWindowNamesDoNotCollide: a provider window may carry any name, including the names the link-level notices once used.
+// TestProviderWindowNamesDoNotCollide: a provider window may carry any name, including the names the link-level notices once
+// used.
 func TestProviderWindowNamesDoNotCollide(t *testing.T) {
 	r := newRig(defaults)
 	reset := base.Add(time.Hour)
 	for _, name := range []string{"overage", "limit:window"} {
-		h := ev(subtypeHeadroom, "r1", "g1", &Headroom{Link: "claude-cli", Window: name, Limit: 100, Remaining: 50, ResetAt: reset})
+		h := ev(subtypeHeadroom, "r1", "g1", &Headroom{
+			Link:      "claude-cli",
+			Window:    name,
+			Limit:     100,
+			Remaining: 50,
+			ResetAt:   reset,
+		})
 		if err := r.observe(h); err != nil {
 			t.Fatal(err)
 		}

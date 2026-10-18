@@ -10,15 +10,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// openRun handles a run-start so the Service treats the run as open.
-func openRun(t *testing.T, f *fixture, run bus.ID) {
-	t.Helper()
-	rs := f.runStart(run, "g1")
-	rs.Time = t0
-	f.svc.handle(context.Background(), rs)
-}
-
-// TestRunStartWithoutCommonDirIsRecorded checks a run-start that names no git directory is recorded once in the failures file.
+// TestRunStartWithoutCommonDirIsRecorded checks a run-start that names no git directory is recorded once in the failures
+// file.
 func TestRunStartWithoutCommonDirIsRecorded(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	rs := f.runStart("run-a", "g1")
@@ -45,7 +38,8 @@ func TestRunEndPrunesTheMaps(t *testing.T) {
 	}
 }
 
-// TestUnknownRunFindsItsFolderInRunsJSON checks a restarted Service places an event of an earlier run by that folder's runs.json.
+// TestUnknownRunFindsItsFolderInRunsJSON checks a restarted Service places an event of an earlier run by that folder's
+// runs.json.
 func TestUnknownRunFindsItsFolderInRunsJSON(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	openRun(t, f, "run-a")
@@ -75,12 +69,18 @@ func TestEventOfAnUnknownRunIsRecordedOnce(t *testing.T) {
 	}
 }
 
-// TestRebuildCoversKnownRepositoriesOnAFreshEngine checks Rebuild on a new Service rewrites figures for repositories the machine folder lists.
+// TestRebuildCoversKnownRepositoriesOnAFreshEngine checks Rebuild on a new Service rewrites figures for repositories the
+// machine folder lists.
 func TestRebuildCoversKnownRepositoriesOnAFreshEngine(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	stop := f.start()
 	f.publish(f.runStart("run-a", "g1"),
-		bus.Event{Type: bus.TypeRunStatus, Subtype: "run.start", Run: "run-a", Data: &bus.RunStartedFact{Groups: []bus.ID{"g1"}}})
+		bus.Event{
+			Type:    bus.TypeRunStatus,
+			Subtype: "run.start",
+			Run:     "run-a",
+			Data:    &bus.RunStartedFact{Groups: []bus.ID{"g1"}},
+		})
 	stop()
 	for _, n := range []string{"groups.json", "runs.json"} {
 		if err := os.Remove(filepath.Join(f.repoDir, n)); err != nil {
@@ -98,4 +98,12 @@ func TestRebuildCoversKnownRepositoriesOnAFreshEngine(t *testing.T) {
 	if err != nil || len(runs) != 1 || runs[0].Dir != f.repoDir {
 		t.Fatalf("Runs = %+v, %v", runs, err)
 	}
+}
+
+// openRun handles a run-start so the Service treats the run as open.
+func openRun(t *testing.T, f *fixture, run bus.ID) {
+	t.Helper()
+	rs := f.runStart(run, "g1")
+	rs.Time = t0
+	f.svc.handle(context.Background(), rs)
 }

@@ -127,7 +127,7 @@ About 3,900 lines of Go exist on this branch. They move as follows when their su
 | `go.mod`, `komodo.go` | `komodo.go` embeds `embed/` with `//go:embed`, naming each folder, never a wildcard |
 | `cmd/komodo/`, `internal/` | All Go code, one folder per package in the table above |
 | `embed/` | Everything compiled into the binary that a model or the harness reads |
-| `dashboard/` | The dashboard proof of concept on mock data (Datastar, one server-sent event stream) |
+| `dashboard/` | The dashboard proof of concept on mock data (Datastar, one server-sent event stream; styles and templates in `page.css`, `page.html`, `view.html`, `diagram.html`, loaded with `//go:embed`) |
 | `docs/` | `hld.md`, `lld.md` and the task lists that build each subsystem |
 | `docsite/` | The tool that renders these documents as a site; never part of the binary |
 

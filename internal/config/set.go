@@ -78,7 +78,6 @@ func (m *Manager) SetConfigItem(changes ...Change) (Batch, error) {
 		}
 
 		o, _ := m.item(t.key, pre)
-
 		n, _ := m.item(t.key, post)
 		if !equalValues(o.Value, n.Value) {
 			b.Changes = append(b.Changes, Change{Key: t.key, Old: o.Value, New: n.Value})
@@ -88,7 +87,6 @@ func (m *Manager) SetConfigItem(changes ...Change) (Batch, error) {
 	if len(b.Changes) == 0 && len(ms.bad) == 0 {
 		return Batch{}, nil
 	}
-
 	if len(b.Changes) == 0 {
 		return Batch{}, m.commit(Batch{}, ms)
 	}

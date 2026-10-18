@@ -13,29 +13,6 @@ import (
 	"time"
 )
 
-// resetHandler drops every connection without answering.
-func resetHandler(hits *atomic.Int32) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		conn, _, _ := w.(http.Hijacker).Hijack()
-		_ = conn.Close()
-	}
-}
-
-// stallHandler sends one event, then goes silent until release closes.
-func stallHandler(hits *atomic.Int32, release <-chan struct{}) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: one\n\n"))
-		w.(http.Flusher).Flush()
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	}
-}
-
 func TestStreamDropWithUnrewindableBodyIsNotResent(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(sseHandler(2, &hits))
@@ -146,21 +123,6 @@ func TestFirstByteTimerFiringAfterResponseFailsTheCall(t *testing.T) {
 	}
 }
 
-// finalHandler streams events and ends cleanly; requests from number completeOn on send the done event.
-func finalHandler(completeOn int32, hits *atomic.Int32) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		n := hits.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: one\n\n"))
-		if n >= completeOn {
-			_, _ = w.Write([]byte("event: done\ndata: bye\n\n"))
-		}
-	}
-}
-
-// isDone matches the end-of-answer event.
-func isDone(e SSEEvent) bool { return e.Event == "done" }
-
 func TestCleanEOFWithoutFinalEventIsADrop(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(finalHandler(99, &hits))
@@ -197,7 +159,8 @@ func TestCleanEOFWithoutFinalHookStaysSuccess(t *testing.T) {
 	defer srv.Close()
 	h := newHarness(t, Options{})
 	col := &collector{}
-	if _, err := h.c.Stream(context.Background(), epFor(t, srv.URL), get(t, srv.URL), col.hooks()); err != nil || hits.Load() != 1 {
+	if _, err := h.c.Stream(context.Background(), epFor(t, srv.URL), get(t, srv.URL), col.hooks()); err != nil ||
+		hits.Load() != 1 {
 		t.Fatalf("err=%v hits=%d", err, hits.Load())
 	}
 }
@@ -226,3 +189,41 @@ func TestAllowlistEntryWithDefaultPortMatches(t *testing.T) {
 		}
 	}
 }
+
+// resetHandler drops every connection without answering.
+func resetHandler(hits *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		_ = conn.Close()
+	}
+}
+
+// stallHandler sends one event, then goes silent until release closes.
+func stallHandler(hits *atomic.Int32, release <-chan struct{}) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: one\n\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}
+}
+
+// finalHandler streams events and ends cleanly; requests from number completeOn on send the done event.
+func finalHandler(completeOn int32, hits *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: one\n\n"))
+		if n >= completeOn {
+			_, _ = w.Write([]byte("event: done\ndata: bye\n\n"))
+		}
+	}
+}
+
+// isDone matches the end-of-answer event.
+func isDone(e SSEEvent) bool { return e.Event == "done" }

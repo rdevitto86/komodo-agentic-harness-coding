@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"sort"
@@ -52,7 +53,6 @@ type markerRow struct {
 var (
 	// classOrder lists the detected classes in rendering order.
 	classOrder = []Class{ClassSetup, ClassBuild, ClassTest, ClassLint, ClassFormat}
-
 	// markerRows lists the language markers in priority order.
 	markerRows = []markerRow{
 		{"go.mod", fixedCmds(map[Class]cmdSpec{
@@ -76,7 +76,6 @@ var (
 			ClassFormat: {argv: []string{"ruff", "format"}, perFile: true},
 		})},
 	}
-
 	// makeTargets names the Makefile target of each class.
 	makeTargets = map[Class]string{
 		ClassSetup:  "setup",
@@ -85,19 +84,17 @@ var (
 		ClassLint:   "lint",
 		ClassFormat: "fmt",
 	}
-
 	// gitRead lists the read-only git commands that are always on.
 	gitRead = [][]string{{"git", "status"}, {"git", "diff"}, {"git", "log"}, {"git", "show"}}
-
 	// targetRe finds a Makefile rule line and captures its target.
 	targetRe = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+)\s*:([^=]|$)`)
-
+	// nodeScripts maps each class to the npm command that runs it.
 	nodeScripts = map[Class][]string{
 		ClassBuild: {"npm", "run", "build"},
 		ClassTest:  {"npm", "test"},
 		ClassLint:  {"npm", "run", "lint"},
 	}
-
+	// nodeScriptNames maps each class to the package.json script that must exist for it to apply.
 	nodeScriptNames = map[Class]string{
 		ClassBuild: "build",
 		ClassTest:  "test",
@@ -159,7 +156,6 @@ func markerFiles(t Tree) []string {
 	}
 
 	var out []string
-
 	for _, f := range append([]string{"Makefile"}, rowFiles()...) {
 		if have[f] {
 			out = append(out, f)
@@ -175,7 +171,6 @@ func rowFiles() []string {
 	for i, r := range markerRows {
 		out[i] = r.file
 	}
-
 	return out
 }
 
@@ -224,7 +219,6 @@ func detectWith(t Tree, hash string) CommandSet {
 				Argv:   []string{"make", makeTargets[c]},
 				Marker: "Makefile",
 			})
-
 			continue
 		}
 
@@ -236,7 +230,6 @@ func detectWith(t Tree, hash string) CommandSet {
 					Marker:  row.file,
 					PerFile: spec.perFile,
 				})
-
 				break
 			}
 		}
@@ -265,21 +258,17 @@ func detectLanguages(t Tree, langs []langPattern) []string {
 	}
 
 	sort.Strings(out)
-
 	return out
 }
 
-// renderProfile renders the repo_profile slot: the languages, then one line per detected command
-// class.
+// renderProfile renders the repo_profile slot: the languages, then one line per detected command class.
 func renderProfile(languages []string, cs CommandSet) string {
 	var b strings.Builder
-
 	if len(languages) == 0 {
 		b.WriteString("Languages: none\n")
 	} else {
-		b.WriteString("Languages: " + strings.Join(languages, ", ") + "\n")
+		fmt.Fprintf(&b, "Languages: %s\n", strings.Join(languages, ", "))
 	}
-
 	b.WriteString("Commands:")
 
 	found := false
@@ -291,19 +280,16 @@ func renderProfile(languages []string, cs CommandSet) string {
 			if cmd.Class != c {
 				continue
 			}
-
 			text := strings.Join(cmd.Argv, " ")
 			if cmd.PerFile {
 				text += " <file>"
 			}
-
 			cmds = append(cmds, text)
 		}
 
 		if len(cmds) > 0 {
 			found = true
-
-			b.WriteString("\n  " + string(c) + ": " + strings.Join(cmds, ", "))
+			fmt.Fprintf(&b, "\n  %s: %s", c, strings.Join(cmds, ", "))
 		}
 	}
 

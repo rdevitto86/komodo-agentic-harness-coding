@@ -15,7 +15,12 @@ func TestLoadReadsGroupsInFolderOrder(t *testing.T) {
 		"IF the lease is gone THEN THE SYSTEM SHALL stop",
 	}}
 	g := goodGroup(1, 2, spec)
-	g[0].Content = strings.Replace(g[0].Content, "  cmd: go test ./...\n", "  cmd: go test ./...\n  needs: network, docker\n", 1)
+	g[0].Content = strings.Replace(
+		g[0].Content,
+		"  cmd: go test ./...\n",
+		"  cmd: go test ./...\n  needs: network, docker\n",
+		1,
+	)
 	writeBacklog(t, root, cat(g, goodGroup(1, 10, tgSpec{}), goodGroup(1, 9, tgSpec{deps: []string{"tg-1.2"}})))
 	epics, fs := mustLoad(t, root)
 	if len(fs) != 0 {
@@ -32,20 +37,23 @@ func TestLoadReadsGroupsInFolderOrder(t *testing.T) {
 		t.Fatalf("order: %v", names)
 	}
 	got := epics[0].Groups[0]
-	if got.ID != uid(102) || got.Goal != "Group goal" || got.Points != 3 || got.Status != "todo" || got.Priority != PriorityNormal {
+	if got.ID != uid(102) || got.Goal != "Group goal" || got.Points != 3 || got.Status != "todo" ||
+		got.Priority != PriorityNormal {
 		t.Fatalf("fields: %+v", got)
 	}
 	if !reflect.DeepEqual(got.Touches, []string{"internal/engine/**"}) || len(got.Files) != 1 || len(got.Dependencies) != 0 {
 		t.Fatalf("lists: %+v", got)
 	}
 	if len(got.Acceptance) != 2 || got.Acceptance[0].Keyword != "WHEN" || got.Acceptance[1].Keyword != "IF" ||
-		got.Acceptance[0].Text != "a write carries an older fence THE SYSTEM SHALL refuse it" || got.Acceptance[0].Cmd != "go test ./..." {
+		got.Acceptance[0].Text != "a write carries an older fence THE SYSTEM SHALL refuse it" ||
+		got.Acceptance[0].Cmd != "go test ./..." {
 		t.Fatalf("acceptance: %+v", got.Acceptance)
 	}
 	if !reflect.DeepEqual(got.Acceptance[0].Needs, []string{"network", "docker"}) {
 		t.Fatalf("needs: %+v", got.Acceptance[0].Needs)
 	}
-	if tk := got.Tasks[0]; tk.Name != "tsk-one" || tk.DoneWhen != "go test ./..." || tk.EstimateLines != 100 || tk.Card != "Write the thing." {
+	if tk := got.Tasks[0]; tk.Name != "tsk-one" || tk.DoneWhen != "go test ./..." || tk.EstimateLines != 100 ||
+		tk.Card != "Write the thing." {
 		t.Fatalf("task: %+v", tk)
 	}
 	if !reflect.DeepEqual(epics[0].Groups[1].Dependencies, []string{"tg-1.2"}) {
@@ -97,16 +105,32 @@ func TestGrammarFindingsNameTheFile(t *testing.T) {
 		mutate func(string) string
 		want   string
 	}{
-		{"unknown key", func(s string) string { return strings.Replace(s, "subsystem: none", "subsystem: none\nowner: me", 1) }, "owner"},
-		{"duplicate key", func(s string) string { return strings.Replace(s, "goal: Group goal", "goal: a\ngoal: b", 1) }, "goal"},
+		{
+			"unknown key",
+			func(s string) string { return strings.Replace(s, "subsystem: none", "subsystem: none\nowner: me", 1) },
+			"owner",
+		},
+		{
+			"duplicate key",
+			func(s string) string { return strings.Replace(s, "goal: Group goal", "goal: a\ngoal: b", 1) },
+			"goal",
+		},
 		{"upper case key", func(s string) string { return strings.Replace(s, "goal:", "Goal:", 1) }, "Goal"},
 		{"bad line", func(s string) string { return strings.Replace(s, "subsystem: none", "not a field", 1) }, "line 3"},
 		{"missing goal", func(s string) string { return strings.Replace(s, "goal: Group goal\n", "", 1) }, "goal"},
 		{"missing id", func(s string) string { return strings.Replace(s, "id: "+uid(101)+"\n", "", 1) }, "id"},
 		{"bad id", func(s string) string { return strings.Replace(s, uid(101), "0192e4c5-...", 1) }, "id"},
 		{"missing points", func(s string) string { return strings.Replace(s, "points: 3\n", "", 1) }, "points"},
-		{"points not a number", func(s string) string { return strings.Replace(s, "points: 3", "points: three", 1) }, "points"},
-		{"bad priority", func(s string) string { return strings.Replace(s, "priority: normal", "priority: urgent", 1) }, "priority"},
+		{
+			"points not a number",
+			func(s string) string { return strings.Replace(s, "points: 3", "points: three", 1) },
+			"points",
+		},
+		{
+			"bad priority",
+			func(s string) string { return strings.Replace(s, "priority: normal", "priority: urgent", 1) },
+			"priority",
+		},
 		{"bad status", func(s string) string { return strings.Replace(s, "status: todo", "status: nope", 1) }, "status"},
 		{"bad needs", func(s string) string { return strings.Replace(s, "  cmd:", "  needs: wifi\n  cmd:", 1) }, "wifi"},
 	}
@@ -152,7 +176,14 @@ func TestTaskGrammar(t *testing.T) {
 }
 
 func TestDraftPathsAreChecked(t *testing.T) {
-	for _, p := range []string{"epic-1/../../etc/x.md", "/abs/epic-1/tg-1.1/TG.md", "epic-1/tg-1.1/notes.md", "epic-1/tg-2.1/TG.md", "epic-x/tg-1.1/TG.md", "TG.md"} {
+	for _, p := range []string{
+		"epic-1/../../etc/x.md",
+		"/abs/epic-1/tg-1.1/TG.md",
+		"epic-1/tg-1.1/notes.md",
+		"epic-1/tg-2.1/TG.md",
+		"epic-x/tg-1.1/TG.md",
+		"TG.md",
+	} {
 		files := goodGroup(1, 1, tgSpec{})
 		files = append(files, DraftFile{Path: p, Content: "files: a\n"})
 		fs := rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)

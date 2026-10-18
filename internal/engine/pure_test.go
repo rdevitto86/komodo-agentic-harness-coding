@@ -11,9 +11,19 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 )
 
-func spec(id string, order int, deps ...string) GroupSpec {
-	return GroupSpec{ID: id, Label: id, Epic: "ep-1", Depends: deps, Tasks: []string{"a", "b"}, Priority: "normal", Order: order}
+type fakeConfig map[string]any
+
+func (f fakeConfig) GetConfigItem(key string) (config.Item, error) {
+	v, ok := f[key]
+	if !ok {
+		return config.Item{}, errors.New("unknown key " + key)
+	}
+	return config.Item{Key: key, Value: v}, nil
 }
+
+type fakeAgents map[string]int
+
+func (f fakeAgents) Retries(a string) (int, error) { return f[a], nil }
 
 func TestPickPrefersHighPriorityThenChainThenUnblocksThenOrder(t *testing.T) {
 	hi := spec("hi", 5)
@@ -154,7 +164,8 @@ func TestLandingPlanOrdersEachEpicByDependencyThenOrder(t *testing.T) {
 	if len(plans) != 2 {
 		t.Fatalf("plans = %+v", plans)
 	}
-	if plans[0].Epic != "ep-1" || plans[0].Branch != "komodo/ep-1" || !slices.Equal(plans[0].Order, []string{"tg-1.2", "tg-1.1", "tg-1.3"}) {
+	if plans[0].Epic != "ep-1" || plans[0].Branch != "komodo/ep-1" ||
+		!slices.Equal(plans[0].Order, []string{"tg-1.2", "tg-1.1", "tg-1.3"}) {
 		t.Fatalf("ep-1 plan = %+v", plans[0])
 	}
 	if !slices.Equal(plans[1].Order, []string{"tg-2.1"}) {
@@ -163,7 +174,8 @@ func TestLandingPlanOrdersEachEpicByDependencyThenOrder(t *testing.T) {
 }
 
 func TestPlanRefusesACycleAndAnUnknownDependencyOutsideTheRun(t *testing.T) {
-	if err := CheckPlan([]GroupSpec{spec("a", 1, "b"), spec("b", 2, "a")}); err == nil || !strings.Contains(err.Error(), "cycle") {
+	if err := CheckPlan([]GroupSpec{spec("a", 1, "b"), spec("b", 2, "a")}); err == nil ||
+		!strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("cycle error = %v", err)
 	}
 	if err := CheckPlan([]GroupSpec{spec("a", 1), spec("b", 2, "a")}); err != nil {
@@ -171,28 +183,27 @@ func TestPlanRefusesACycleAndAnUnknownDependencyOutsideTheRun(t *testing.T) {
 	}
 }
 
-type fakeConfig map[string]any
-
-func (f fakeConfig) GetConfigItem(key string) (config.Item, error) {
-	v, ok := f[key]
-	if !ok {
-		return config.Item{}, errors.New("unknown key " + key)
-	}
-	return config.Item{Key: key, Value: v}, nil
-}
-
-type fakeAgents map[string]int
-
-func (f fakeAgents) Retries(a string) (int, error) { return f[a], nil }
-
 func TestLoadLimitsReadsEveryKeyOnce(t *testing.T) {
-	cfg := fakeConfig{"limits.returns": 3, "limits.group_attempts": 6, "limits.pause_max_min": float64(360), "limits.group_wall_min": 60,
+	cfg := fakeConfig{"limits.returns": 3, "limits.group_attempts": 6, "limits.pause_max_min": float64(
+		360,
+	), "limits.group_wall_min": 60,
 		"limits.group_tokens": 0, "limits.pool_min": 1, "limits.pool_max": 6, "sandbox.max_mem_gb": 4}
 	l, err := LoadLimits(cfg, fakeAgents{"builder": 2, "reviewer": 1, "tester": 3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Limits{Returns: 3, GroupAttempts: 6, PauseMaxMin: 360, GroupWallMin: 60, BuilderRetries: 2, ReviewerRetries: 1, TesterRetries: 3, PoolMin: 1, PoolMax: 6, SessionMemGB: 4}
+	want := Limits{
+		Returns:         3,
+		GroupAttempts:   6,
+		PauseMaxMin:     360,
+		GroupWallMin:    60,
+		BuilderRetries:  2,
+		ReviewerRetries: 1,
+		TesterRetries:   3,
+		PoolMin:         1,
+		PoolMax:         6,
+		SessionMemGB:    4,
+	}
 	if l != want {
 		t.Fatalf("limits = %+v", l)
 	}
@@ -207,12 +218,31 @@ func TestGlobMatching(t *testing.T) {
 		pat, path string
 		want      bool
 	}{
-		{"internal/lease/**", "internal/lease/fence.go", true}, {"internal/lease/**", "internal/lease/x/y.go", true}, {"internal/lease/*", "internal/lease/x/y.go", false},
-		{"**/*.pem", "a/b/key.pem", true}, {".env*", ".env.local", true}, {".git", ".git", true}, {".git/**", ".git/config", true}, {"a?c", "abc", true}, {"*.go", "x.go", true},
+		{"internal/lease/**", "internal/lease/fence.go", true},
+		{"internal/lease/**", "internal/lease/x/y.go", true},
+		{"internal/lease/*", "internal/lease/x/y.go", false},
+		{"**/*.pem", "a/b/key.pem", true},
+		{".env*", ".env.local", true},
+		{".git", ".git", true},
+		{".git/**", ".git/config", true},
+		{"a?c", "abc", true},
+		{"*.go", "x.go", true},
 	}
 	for _, c := range cases {
 		if got := globMatch(c.pat, c.path); got != c.want {
 			t.Errorf("globMatch(%q, %q) = %v", c.pat, c.path, got)
 		}
+	}
+}
+
+func spec(id string, order int, deps ...string) GroupSpec {
+	return GroupSpec{
+		ID:       id,
+		Label:    id,
+		Epic:     "ep-1",
+		Depends:  deps,
+		Tasks:    []string{"a", "b"},
+		Priority: "normal",
+		Order:    order,
 	}
 }

@@ -38,7 +38,6 @@ func (m *Manager) toolsFor(agent string) []Connection {
 	out := []Connection{embeddedConnection()}
 
 	var rest []Connection
-
 	for _, c := range m.conns {
 		if c.Enabled && slices.Contains(c.Allow, agent) {
 			rest = append(rest, c)
@@ -46,7 +45,6 @@ func (m *Manager) toolsFor(agent string) []Connection {
 	}
 
 	sort.Slice(rest, func(i, j int) bool { return rest[i].Name < rest[j].Name })
-
 	return append(out, rest...)
 }
 
@@ -82,7 +80,6 @@ func (m *Manager) startConnections() {
 func (m *Manager) reloadConnections() {
 	old := m.conns
 	conns, warns := loadConnections(m.deps.Home)
-
 	for i := range conns {
 		for _, o := range old {
 			if o.Name == conns[i].Name {
@@ -90,7 +87,6 @@ func (m *Manager) reloadConnections() {
 			}
 		}
 	}
-
 	m.conns, m.connWarns = conns, warns
 }
 

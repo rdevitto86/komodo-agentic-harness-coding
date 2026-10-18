@@ -22,14 +22,13 @@ type trimResult struct {
 	Deleted []bus.ID // runs whose figures the trim dropped
 }
 
-// trimDir drops session records past retention and names the runs that ended before the cutoff, so
-// the caller drops their figures.
+// trimDir drops session records past retention and names the runs that ended before the cutoff, so the caller drops their
+// figures.
 func trimDir(ctx context.Context, dir string, retentionDays int, t time.Time) (trimResult, error) {
 	// defaultRetentionDays is the retention used when Options.RetentionDays is not positive.
 	const defaultRetentionDays = 30
 
 	var res trimResult
-
 	if retentionDays <= 0 {
 		retentionDays = defaultRetentionDays
 	}
@@ -57,20 +56,17 @@ func trimDir(ctx context.Context, dir string, retentionDays int, t time.Time) (t
 	return res, err
 }
 
-// rewriteSessions replaces sessions.jsonl with the lines edit keeps; the file is untouched when
-// edit drops nothing.
+// rewriteSessions replaces sessions.jsonl with the lines edit keeps; the file is untouched when edit drops nothing.
 func rewriteSessions(path string, edit func(lines [][]byte) [][]byte) error {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
-
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
 
 	var lines [][]byte
-
 	for _, l := range bytes.Split(b, []byte{'\n'}) {
 		if len(bytes.TrimSpace(l)) > 0 {
 			lines = append(lines, l)
@@ -90,17 +86,15 @@ func rewriteSessions(path string, edit func(lines [][]byte) [][]byte) error {
 	return core.WriteFileAtomic(path, out, filePerm)
 }
 
-// keepSince keeps the session records that ended at or after cutoff; a record with no time and a
-// line that does not parse stay.
+// keepSince keeps the session records that ended at or after cutoff; a record with no time and a line that does not parse
+// stay.
 func keepSince(lines [][]byte, cutoff time.Time) [][]byte {
 	var out [][]byte
-
 	for _, l := range lines {
 		var r SessionRecord
 		if json.Unmarshal(l, &r) != nil || r.age().IsZero() || !r.age().Before(cutoff) {
 			out = append(out, l)
 		}
 	}
-
 	return out
 }

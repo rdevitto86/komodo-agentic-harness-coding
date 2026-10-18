@@ -137,6 +137,18 @@ type Call struct {
 	cli         *CLI
 }
 
+// dir returns the folder commands start from: -C, else the working folder.
+func (c *Call) dir() string {
+	if c.Global.Dir != "" {
+		return c.Global.Dir
+	}
+	d, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return d
+}
+
 // Handler is one command's thin call into the part that owns the work.
 type Handler func(c *Call) Result
 
@@ -173,6 +185,9 @@ type CLI struct {
 	noColor bool
 }
 
+// ansiPattern matches the colour and style codes the Output Formatter may add.
+var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
 // New returns a CLI that calls the parts in d and prints faults through itself, with no bus.
 func New(d Deps) *CLI {
 	c := &CLI{deps: d, out: d.Stdout, errOut: d.Stderr, in: d.Stdin}
@@ -207,7 +222,19 @@ func (c *CLI) Run(args []string) int {
 			return c.fault.Final(context.Background(), src, f)
 		}
 	}
+
 	return code
+}
+
+// PrintError shows a fault to the caller; it implements fault.Printer, which the Error Handler holds.
+func (c *CLI) PrintError(f fault.Fault) error {
+	if f.Severity == fault.SeverityWarn {
+		_, err := fmt.Fprintf(c.errOut, "Warning: %s (%s)\n", f.Reason, f.Code)
+		return err
+	}
+	res, _ := c.faultResult(f)
+	_, err := c.print(res)
+	return err
 }
 
 // run takes the five steps for one command line.
@@ -215,6 +242,7 @@ func (c *CLI) run(args []string, hasTerm bool) int {
 	if len(args) > 0 {
 		args = args[1:]
 	}
+
 	call, res := c.parse(args, hasTerm)
 	if res == nil {
 		res = c.validate(call)
@@ -232,6 +260,7 @@ func (c *CLI) run(args []string, hasTerm bool) int {
 		r := call.Command.Run(call)
 		res = &r
 	}
+
 	return c.render(*res)
 }
 
@@ -310,26 +339,6 @@ func (c *CLI) resolve(call *Call) *Result {
 	}
 	return nil
 }
-
-// dir returns the folder commands start from: -C, else the working folder.
-func (c *Call) dir() string {
-	if c.Global.Dir != "" {
-		return c.Global.Dir
-	}
-	d, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return d
-}
-
-// newCall builds a Call for cmd with the CLI behind it.
-func (c *CLI) newCall(cmd *Command, hasTerm bool) *Call {
-	return &Call{Command: cmd, HasTerminal: hasTerm, Stdout: c.out, cli: c}
-}
-
-// ansiPattern matches the colour and style codes the Output Formatter may add.
-var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 // render prints the reply for res and returns its exit code.
 func (c *CLI) render(res Result) int {
@@ -411,35 +420,19 @@ func (c *CLI) fixedLine() format.Rendered {
 	return format.Rendered{Verdict: line, Report: line}
 }
 
-// PrintError shows a fault to the caller; it implements fault.Printer, which the Error Handler holds.
-func (c *CLI) PrintError(f fault.Fault) error {
-	if f.Severity == fault.SeverityWarn {
-		_, err := fmt.Fprintf(c.errOut, "Warning: %s (%s)\n", f.Reason, f.Code)
-		return err
-	}
-	res, _ := c.faultResult(f)
-	_, err := c.print(res)
-	return err
+// newCall builds a Call for cmd with the CLI behind it.
+func (c *CLI) newCall(cmd *Command, hasTerm bool) *Call {
+	return &Call{Command: cmd, HasTerminal: hasTerm, Stdout: c.out, cli: c}
+}
+
+// VersionData is the data of reply.version.
+type VersionData struct {
+	Version string `json:"version"`
 }
 
 // refuse builds a declined-on-purpose result (exit 1).
 func refuse(code format.Code, reason, fix string) Result {
 	return errResult(OutcomeRefused, code, reason, fix)
-}
-
-// usageErr builds a bad-command-line result (exit 2).
-func usageErr(reason, fix string) Result {
-	return errResult(OutcomeUsage, format.Usage, reason, fix)
-}
-
-// internalErr builds a harness-failure result (exit 4).
-func internalErr(reason string) Result {
-	return errResult(OutcomeInternal, format.Internal, reason, "")
-}
-
-// notBuilt builds the internal failure a stubbed command returns.
-func notBuilt(what string) Result {
-	return internalErr(what + " is not built yet")
 }
 
 // errResult builds a result whose shape is error.<code>.
@@ -453,6 +446,21 @@ func errResult(o Outcome, code format.Code, reason, fix string) Result {
 			Fix:    fix,
 		},
 	}
+}
+
+// usageErr builds a bad-command-line result (exit 2).
+func usageErr(reason, fix string) Result {
+	return errResult(OutcomeUsage, format.Usage, reason, fix)
+}
+
+// notBuilt builds the internal failure a stubbed command returns.
+func notBuilt(what string) Result {
+	return internalErr(what + " is not built yet")
+}
+
+// internalErr builds a harness-failure result (exit 4).
+func internalErr(reason string) Result {
+	return errResult(OutcomeInternal, format.Internal, reason, "")
 }
 
 // hasToken reports whether args holds any of the tokens.
@@ -475,9 +483,4 @@ func versionResult() Result {
 		Facts: format.VersionFacts{Version: v},
 		Data:  VersionData{Version: v},
 	}
-}
-
-// VersionData is the data of reply.version.
-type VersionData struct {
-	Version string `json:"version"`
 }

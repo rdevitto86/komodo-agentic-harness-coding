@@ -10,8 +10,7 @@ import (
 // installHosts lists the hosts install may be asked to set up.
 var installHosts = []string{"claude", "codex"}
 
-// normalizeMachine puts a decoded machine-wide body in its stored form: probes compacted and times
-// in UTC.
+// normalizeMachine puts a decoded machine-wide body in its stored form: probes compacted and times in UTC.
 func normalizeMachine(can any) {
 	switch b := can.(type) {
 	case *ProvidersBody:
@@ -48,24 +47,18 @@ func validateMachine(k MachineKind, can any) error {
 	case *ProvidersBody:
 		return validateProviders(b, f)
 	case *UpdateBody:
-		versions := []struct{ name, val string }{
-			{"latest", b.Latest},
-			{"previous", b.Previous},
-		}
-
+		versions := []struct{ name, val string }{{"latest", b.Latest}, {"previous", b.Previous}}
 		for _, v := range versions {
 			if _, err := core.ParseSemVer(v.val); v.val != "" && err != nil {
 				return f(v.name, fmt.Sprintf("%q is not a version", v.val))
 			}
 		}
-
 		if b.CheckedAt.IsZero() {
 			return f("checked_at", "empty")
 		}
 	case *InstallBody:
 		for i, e := range b.Entries {
 			p := fmt.Sprintf("entries[%d].", i)
-
 			switch {
 			case e.Target == "":
 				return f(p+"target", "empty")
@@ -155,6 +148,5 @@ func validateProviders(b *ProvidersBody, f func(field, why string) error) error 
 // validProbe reports whether a link's probe is a JSON object.
 func validProbe(l LinkRecord) bool {
 	_, ok := objectOrEmpty(l.Probe)
-
 	return ok
 }

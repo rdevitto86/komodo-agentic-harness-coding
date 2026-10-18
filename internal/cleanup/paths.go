@@ -44,6 +44,7 @@ func inside(root, path string) error {
 	if realParent != realRoot && !strings.HasPrefix(realParent, realRoot+string(filepath.Separator)) {
 		return fmt.Errorf("%q in %q: %w", path, root, ErrOutsideRoots)
 	}
+
 	return nil
 }
 

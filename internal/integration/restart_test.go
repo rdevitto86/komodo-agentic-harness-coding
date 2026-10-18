@@ -23,37 +23,6 @@ const (
 	payload = "repository map for the restart proof"
 )
 
-// stores opens the three phase-3 stores under one root, as a fresh process would.
-func stores(t *testing.T, root string) (*state.Manager, *lease.Manager, *cache.Cache) {
-	t.Helper()
-	st, err := state.New(filepath.Join(root, "repo"), "engine")
-	if err != nil {
-		t.Fatalf("state: %v", err)
-	}
-	ls, err := lease.New(filepath.Join(root, "home"), 30, nil, nil)
-	if err != nil {
-		t.Fatalf("lease: %v", err)
-	}
-	c, err := cache.New(filepath.Join(root, "cache"), version, cache.Limits{})
-	if err != nil {
-		t.Fatalf("cache: %v", err)
-	}
-	return st, ls, c
-}
-
-// groupState returns a valid group record for the proof.
-func groupState() state.GroupState {
-	return state.GroupState{
-		Run: run, Group: group, Stage: state.StageBuild, Epoch: 1, Fence: 1, ConfigHash: hash,
-		Counters:    state.Counters{Blocks: map[string]int{}},
-		Tasks:       []state.TaskState{},
-		TestReview:  state.TestReview{Findings: []state.Finding{}, NotMet: []string{}, Failed: []string{}},
-		ActionsOpen: []state.OpenAction{}, Resume: []state.ResumeRef{}, Owed: []string{},
-		Requests: []string{}, ScopeAdded: []string{},
-		LastEventAt: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC),
-	}
-}
-
 // TestStoresSurviveARestart writes a lease, a group record and a cache entry in a child process that then exits,
 // and reads all three back in this process.
 func TestStoresSurviveARestart(t *testing.T) {
@@ -90,5 +59,36 @@ func TestStoresSurviveARestart(t *testing.T) {
 	got, hit := c.Get(cache.NSMap, c.Key("map", repo))
 	if !hit || string(got) != payload {
 		t.Fatalf("cache after restart: %q %v", got, hit)
+	}
+}
+
+// stores opens the three phase-3 stores under one root, as a fresh process would.
+func stores(t *testing.T, root string) (*state.Manager, *lease.Manager, *cache.Cache) {
+	t.Helper()
+	st, err := state.New(filepath.Join(root, "repo"), "engine")
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	ls, err := lease.New(filepath.Join(root, "home"), 30, nil, nil)
+	if err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+	c, err := cache.New(filepath.Join(root, "cache"), version, cache.Limits{})
+	if err != nil {
+		t.Fatalf("cache: %v", err)
+	}
+	return st, ls, c
+}
+
+// groupState returns a valid group record for the proof.
+func groupState() state.GroupState {
+	return state.GroupState{
+		Run: run, Group: group, Stage: state.StageBuild, Epoch: 1, Fence: 1, ConfigHash: hash,
+		Counters:    state.Counters{Blocks: map[string]int{}},
+		Tasks:       []state.TaskState{},
+		TestReview:  state.TestReview{Findings: []state.Finding{}, NotMet: []string{}, Failed: []string{}},
+		ActionsOpen: []state.OpenAction{}, Resume: []state.ResumeRef{}, Owed: []string{},
+		Requests: []string{}, ScopeAdded: []string{},
+		LastEventAt: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC),
 	}
 }

@@ -23,7 +23,6 @@ type Pool struct {
 func NewPool(l Limits, c Clock, cooldown time.Duration) *Pool {
 	lo, hi := max(l.PoolMin, 1), max(l.PoolMax, 1)
 	hi = max(hi, lo)
-
 	return &Pool{
 		size:      hi,
 		lo:        lo,
@@ -38,7 +37,6 @@ func NewPool(l Limits, c Clock, cooldown time.Duration) *Pool {
 func (p *Pool) Size() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	return p.size
 }
 
@@ -46,7 +44,6 @@ func (p *Pool) Size() int {
 func (p *Pool) Used() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	return p.used
 }
 
@@ -54,13 +51,10 @@ func (p *Pool) Used() int {
 func (p *Pool) TryAcquire() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	if p.used < p.size && len(p.waiters) == 0 {
 		p.used++
-
 		return true
 	}
-
 	return false
 }
 
@@ -70,7 +64,6 @@ func (p *Pool) Acquire(ctx context.Context) error {
 	if p.used < p.size && len(p.waiters) == 0 {
 		p.used++
 		p.mu.Unlock()
-
 		return nil
 	}
 
@@ -88,14 +81,12 @@ func (p *Pool) Acquire(ctx context.Context) error {
 		for i, x := range p.waiters {
 			if x == w {
 				p.waiters = append(p.waiters[:i], p.waiters[i+1:]...)
-
 				return ctx.Err()
 			}
 		}
 
 		p.used-- // the slot was handed over as the context ended
 		p.drainLocked()
-
 		return ctx.Err()
 	}
 }
@@ -104,11 +95,9 @@ func (p *Pool) Acquire(ctx context.Context) error {
 func (p *Pool) Release() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	if p.used > 0 {
 		p.used--
 	}
-
 	p.drainLocked()
 }
 
@@ -116,12 +105,10 @@ func (p *Pool) Release() {
 func (p *Pool) Halve() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	now := p.clock.Now()
 	if !p.lastHalve.IsZero() && now.Sub(p.lastHalve) < p.cooldown {
 		return
 	}
-
 	p.lastHalve = now
 	p.size = HalvePool(p.size, p.lo)
 }
@@ -130,7 +117,6 @@ func (p *Pool) Halve() {
 func (p *Pool) Grow(freeMemGB float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	p.size = GrowPool(p.size, p.hi, freeMemGB, p.sessionGB)
 	p.drainLocked()
 }
@@ -149,7 +135,6 @@ func GrowPool(size, ceiling int, freeMemGB, sessionMemGB float64) int {
 	if size < ceiling && freeMemGB >= sessionMemGB {
 		return size + 1
 	}
-
 	return size
 }
 

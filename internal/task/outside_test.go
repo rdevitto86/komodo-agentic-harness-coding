@@ -27,7 +27,10 @@ func TestFakeMCPServer(t *testing.T) {
 		}
 		switch req.Method {
 		case "initialize":
-			reply(req.ID, map[string]any{"protocolVersion": mcpVersion, "capabilities": map[string]any{"tools": map[string]any{}}})
+			reply(req.ID, map[string]any{
+				"protocolVersion": mcpVersion,
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+			})
 		case "tools/list":
 			reply(req.ID, map[string]any{"tools": []map[string]any{
 				{"name": "echo", "description": "echo", "inputSchema": map[string]any{"type": "object"}},
@@ -43,39 +46,24 @@ func TestFakeMCPServer(t *testing.T) {
 			_ = json.Unmarshal(req.Params, &p)
 			switch p.Name {
 			case "echo":
-				reply(req.ID, map[string]any{"content": []map[string]string{{"type": "text", "text": "echo:" + p.Arguments["q"]}}})
+				reply(req.ID, map[string]any{
+					"content": []map[string]string{{"type": "text", "text": "echo:" + p.Arguments["q"]}},
+				})
 			case "fail":
-				reply(req.ID, map[string]any{"content": []map[string]string{{"type": "text", "text": "it broke"}}, "isError": true})
+				reply(req.ID, map[string]any{
+					"content": []map[string]string{{"type": "text", "text": "it broke"}},
+					"isError": true,
+				})
 			case "env":
-				reply(req.ID, map[string]any{"content": []map[string]string{{"type": "text", "text": "token=" + os.Getenv("TOKEN")}}})
+				reply(req.ID, map[string]any{
+					"content": []map[string]string{{"type": "text", "text": "token=" + os.Getenv("TOKEN")}},
+				})
 			case "slow":
 				// no reply ever comes
 			}
 		}
 	}
 	os.Exit(0)
-}
-
-// fakeServer is the entry that starts the helper process.
-func fakeServer() OutsideServer {
-	return OutsideServer{Name: "fake", Command: os.Args[0], Args: []string{"-test.run=^TestFakeMCPServer$"}, Env: []string{"TOKEN"}}
-}
-
-// startFake starts the helper through a fake confiner.
-func startFake(t *testing.T, conf *fakeConfiner, s OutsideServer) *OutsideConn {
-	t.Helper()
-	conf.env = []string{"KOMODO_FAKE_MCP=1"}
-	o, err := StartOutside(context.Background(), conf, "i1", s, func(n string) string {
-		if n == "TOKEN" {
-			return "t0k"
-		}
-		return ""
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = o.Close() })
-	return o
 }
 
 func TestOutsideServerListsAndCallsTools(t *testing.T) {
@@ -109,7 +97,8 @@ func TestOutsideServerListsAndCallsTools(t *testing.T) {
 	if text, out := o.Call(ctx, "slow", nil); out != "timeout" || !strings.HasPrefix(text, "error:") {
 		t.Fatalf("slow = %q %q", text, out)
 	}
-	if text, out := o.Call(context.Background(), "echo", json.RawMessage(`{"q":"after"}`)); text != "echo:after" || out != "ok" {
+	if text, out := o.Call(context.Background(), "echo", json.RawMessage(`{"q":"after"}`)); text != "echo:after" ||
+		out != "ok" {
 		t.Fatalf("a timed-out call must not block the next: %q %q", text, out)
 	}
 }
@@ -125,11 +114,25 @@ func TestOutsideServerWithHostsKeepsNoNetworkAndSaysSo(t *testing.T) {
 
 func TestOutsideServerNotNamedIsNeverStarted(t *testing.T) {
 	conf := &fakeConfiner{dir: t.TempDir(), env: []string{"KOMODO_FAKE_MCP=1"}}
-	conns, err := StartAllowed(context.Background(), conf, "i1", Permissions{Servers: []string{"other"}}, []OutsideServer{fakeServer()}, func(string) string { return "" })
+	conns, err := StartAllowed(
+		context.Background(),
+		conf,
+		"i1",
+		Permissions{Servers: []string{"other"}},
+		[]OutsideServer{fakeServer()},
+		func(string) string { return "" },
+	)
 	if err != nil || len(conns) != 0 || conf.started != 0 {
 		t.Fatalf("conns %d started %d err %v", len(conns), conf.started, err)
 	}
-	conns, err = StartAllowed(context.Background(), conf, "i1", Permissions{Servers: []string{"fake"}}, []OutsideServer{fakeServer()}, func(string) string { return "" })
+	conns, err = StartAllowed(
+		context.Background(),
+		conf,
+		"i1",
+		Permissions{Servers: []string{"fake"}},
+		[]OutsideServer{fakeServer()},
+		func(string) string { return "" },
+	)
 	if err != nil || len(conns) != 1 || conf.started != 1 {
 		t.Fatalf("conns %d started %d err %v", len(conns), conf.started, err)
 	}
@@ -166,4 +169,31 @@ func TestOutsideToolsReachTheModelThroughTheGuard(t *testing.T) {
 	if strings.Join(outcomes, ",") != "tool.outside,tool.outside,tool.denied" {
 		t.Fatalf("one fact per call expected, got %v", outcomes)
 	}
+}
+
+// fakeServer is the entry that starts the helper process.
+func fakeServer() OutsideServer {
+	return OutsideServer{
+		Name:    "fake",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=^TestFakeMCPServer$"},
+		Env:     []string{"TOKEN"},
+	}
+}
+
+// startFake starts the helper through a fake confiner.
+func startFake(t *testing.T, conf *fakeConfiner, s OutsideServer) *OutsideConn {
+	t.Helper()
+	conf.env = []string{"KOMODO_FAKE_MCP=1"}
+	o, err := StartOutside(context.Background(), conf, "i1", s, func(n string) string {
+		if n == "TOKEN" {
+			return "t0k"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = o.Close() })
+	return o
 }

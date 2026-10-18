@@ -15,7 +15,8 @@ import (
 
 // Reader is what replay and the metrics rebuild read; a read never writes.
 type Reader interface {
-	// Replay returns a run's events in order, or one group's when group is not empty; it drops a torn last line and marks the gap.
+	// Replay returns a run's events in order, or one group's when group is not empty; it drops a torn last line and marks
+	// the gap.
 	Replay(ctx context.Context, run, group ID) (ReplayLog, error)
 	// Explain returns the last n event copies of a run.
 	Explain(ctx context.Context, run ID, n int) ([]Event, error)
@@ -123,6 +124,7 @@ func readLog(path string, group ID) (ReplayLog, error) {
 
 	out := ReplayLog{Events: []Event{}, Gaps: []Gap{}}
 	br := bufio.NewReader(f)
+
 	for {
 		line, err := br.ReadBytes('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -147,7 +149,12 @@ func (l *ReplayLog) addLine(line []byte, group ID) {
 
 	var g gapLine
 	if json.Unmarshal(line, &g) == nil && g.Gap {
-		l.Gaps = append(l.Gaps, Gap{After: len(l.Events), Kind: gapDropped, Dropped: g.Dropped, Time: g.Time})
+		l.Gaps = append(l.Gaps, Gap{
+			After:   len(l.Events),
+			Kind:    gapDropped,
+			Dropped: g.Dropped,
+			Time:    g.Time,
+		})
 		return
 	}
 
@@ -177,5 +184,6 @@ func logFiles(dir string) ([]string, error) {
 			out = append(out, filepath.Join(dir, e.Name()))
 		}
 	}
+
 	return out, nil
 }

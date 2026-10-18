@@ -6,7 +6,8 @@ import (
 )
 
 func TestExtractAddendum(t *testing.T) {
-	md := "# Repo\n\nUse tabs.\n\n<!-- komodo:begin min=1.0.0 -->\nKomodo owns this.\n<!-- komodo:end -->\n\nRun make test.\n"
+	md := "# Repo\n\nUse tabs.\n\n<!-- komodo:begin min=1.0.0 -->\nKomodo owns this.\n<!-- komodo:end -->\n\nRun make " +
+		"test.\n"
 	got, warns := extractAddendum(md, steerList)
 	if got != "# Repo\n\nUse tabs.\n\nRun make test." || len(warns) != 0 {
 		t.Fatalf("got %q %v", got, warns)
@@ -33,7 +34,8 @@ func TestExtractAddendumSteering(t *testing.T) {
 	if got != "Keep functions short.\n\nUse tabs." {
 		t.Fatalf("got %q", got)
 	}
-	if len(warns) != 1 || warns[0].Code != "addendum_paragraph_dropped" || warns[0].Path != "AGENTS.md" || !strings.Contains(warns[0].Note, "ignore previous instructions") {
+	if len(warns) != 1 || warns[0].Code != "addendum_paragraph_dropped" || warns[0].Path != "AGENTS.md" ||
+		!strings.Contains(warns[0].Note, "ignore previous instructions") {
 		t.Fatalf("warns %v", warns)
 	}
 }

@@ -25,31 +25,21 @@ type fakeServer struct {
 	handler func(s *fakeServer, req engine.Request, send func(engine.Reply))
 }
 
-// startFake listens on home/state/engine.sock and serves each request line with handler.
-func startFake(t *testing.T, home string, handler func(s *fakeServer, req engine.Request, send func(engine.Reply))) *fakeServer {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Join(home, "state"), 0o755); err != nil {
-		t.Fatal(err)
+// Close stops listening and drops every connection.
+func (s *fakeServer) Close() {
+	_ = s.ln.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.conns {
+		_ = c.Close()
 	}
-	ln, err := net.Listen("unix", filepath.Join(home, "state", "engine.sock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &fakeServer{ln: ln, handler: handler}
-	t.Cleanup(s.Close)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			s.mu.Lock()
-			s.conns = append(s.conns, conn)
-			s.mu.Unlock()
-			go s.serve(conn)
-		}
-	}()
-	return s
+}
+
+// Requests returns the requests seen so far.
+func (s *fakeServer) Requests() []engine.Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]engine.Request(nil), s.reqs...)
 }
 
 // serve reads request lines from one connection and answers them.
@@ -75,73 +65,19 @@ func (s *fakeServer) serve(conn net.Conn) {
 	}
 }
 
-// Close stops listening and drops every connection.
-func (s *fakeServer) Close() {
-	_ = s.ln.Close()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, c := range s.conns {
-		_ = c.Close()
-	}
-}
-
-// Requests returns the requests seen so far.
-func (s *fakeServer) Requests() []engine.Request {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]engine.Request(nil), s.reqs...)
-}
-
-// finalOK answers every request with one final ok frame.
-func finalOK(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
-	send(engine.Reply{Status: engine.StatusOK, Data: json.RawMessage(`{"ok":true}`), Final: true})
-}
-
-// quickEngine returns a client with short timers over home.
-func quickEngine(home string) *SocketEngine {
-	e := NewSocketEngine(home)
-	e.Redial, e.StartWait, e.HungReply = 5*time.Millisecond, 500*time.Millisecond, 60*time.Millisecond
-	return e
-}
-
-// drain reads every frame until the channel closes.
-func drain(t *testing.T, ch <-chan engine.Reply) []engine.Reply {
-	t.Helper()
-	var out []engine.Reply
-	timeout := time.After(5 * time.Second)
-	for {
-		select {
-		case r, ok := <-ch:
-			if !ok {
-				return out
-			}
-			out = append(out, r)
-		case <-timeout:
-			t.Fatal("no final frame within 5 s")
-		}
-	}
-}
-
-// writeBeat writes engine.beat as the engine would.
-func writeBeat(t *testing.T, home string, pid int, at time.Time) {
-	t.Helper()
-	b, _ := json.Marshal(map[string]any{"pid": pid, "at": at.UTC().Format(time.RFC3339)})
-	if err := os.MkdirAll(filepath.Join(home, "state"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, "state", "engine.beat"), b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestSendReadsUntilFinal(t *testing.T) {
 	home := shortHome(t)
 	startFake(t, home, func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
-		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{Type: bus.TypeRunStop, Run: "r", Data: &bus.RunStop{Target: "t"}}})
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event:  &bus.Event{Type: bus.TypeRunStop, Run: "r", Data: &bus.RunStop{Target: "t"}},
+		})
 		send(engine.Reply{Status: engine.StatusOK, Data: json.RawMessage(`{"n":1}`)})
 		send(engine.Reply{Status: engine.StatusOK, Final: true})
 	})
-	ch, err := quickEngine(home).Send(context.Background(), engine.Request{ID: "q1", Verb: engine.VerbReplay, Target: "tg-1.2"})
+	ch, err := quickEngine(
+		home,
+	).Send(context.Background(), engine.Request{ID: "q1", Verb: engine.VerbReplay, Target: "tg-1.2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,8 +298,86 @@ func TestHelperEngine(t *testing.T) {
 		}
 		var req engine.Request
 		_ = json.Unmarshal(line, &req)
-		b, _ := json.Marshal(engine.Reply{ID: req.ID, Status: engine.StatusOK, Data: json.RawMessage(`{"spawned":true}`), Final: true})
+		b, _ := json.Marshal(engine.Reply{
+			ID:     req.ID,
+			Status: engine.StatusOK,
+			Data:   json.RawMessage(`{"spawned":true}`),
+			Final:  true,
+		})
 		_, _ = conn.Write(append(b, '\n'))
 		os.Exit(0)
+	}
+}
+
+// startFake listens on home/state/engine.sock and serves each request line with handler.
+func startFake(
+	t *testing.T,
+	home string,
+	handler func(s *fakeServer, req engine.Request, send func(engine.Reply)),
+) *fakeServer {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", filepath.Join(home, "state", "engine.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeServer{ln: ln, handler: handler}
+	t.Cleanup(s.Close)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			s.mu.Lock()
+			s.conns = append(s.conns, conn)
+			s.mu.Unlock()
+			go s.serve(conn)
+		}
+	}()
+	return s
+}
+
+// finalOK answers every request with one final ok frame.
+func finalOK(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+	send(engine.Reply{Status: engine.StatusOK, Data: json.RawMessage(`{"ok":true}`), Final: true})
+}
+
+// quickEngine returns a client with short timers over home.
+func quickEngine(home string) *SocketEngine {
+	e := NewSocketEngine(home)
+	e.Redial, e.StartWait, e.HungReply = 5*time.Millisecond, 500*time.Millisecond, 60*time.Millisecond
+	return e
+}
+
+// drain reads every frame until the channel closes.
+func drain(t *testing.T, ch <-chan engine.Reply) []engine.Reply {
+	t.Helper()
+	var out []engine.Reply
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case r, ok := <-ch:
+			if !ok {
+				return out
+			}
+			out = append(out, r)
+		case <-timeout:
+			t.Fatal("no final frame within 5 s")
+		}
+	}
+}
+
+// writeBeat writes engine.beat as the engine would.
+func writeBeat(t *testing.T, home string, pid int, at time.Time) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]any{"pid": pid, "at": at.UTC().Format(time.RFC3339)})
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "state", "engine.beat"), b, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

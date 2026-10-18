@@ -48,7 +48,12 @@ func TestSaveListsMissingFolder(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
 	before := w.remoteTip("komodo/ep-1")
-	err := h.SaveLists(w.ctx, ListsRequest{Repo: "repo", Root: w.clone, CommonDir: filepath.Join(w.clone, ".git"), Epic: "ep-1"})
+	err := h.SaveLists(w.ctx, ListsRequest{
+		Repo:      "repo",
+		Root:      w.clone,
+		CommonDir: filepath.Join(w.clone, ".git"),
+		Epic:      "ep-1",
+	})
 	if err == nil || errors.Is(err, ErrCriticalRef) {
 		t.Fatalf("err = %v", err)
 	}

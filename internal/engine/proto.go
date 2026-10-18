@@ -1,5 +1,4 @@
-// Package engine holds the engine process and its control socket; this file holds only the socket's
-// wire types.
+// Package engine holds the engine process and its control socket; this file holds only the socket's wire types.
 package engine
 
 import (
@@ -77,14 +76,9 @@ const (
 
 // The values of Reply.Code.
 const (
-	// the line is not a valid Request; the connection stays open
-	CodeBadFrame = "bad_frame"
-	// the label or run id names nothing in the plan or the saved state
-	CodeUnknownTarget = "unknown_target"
-	// the run was refused, such as a dependency cycle
-	CodeRunRefused = "run_refused"
-	// --approve or --deny named a group that is not waiting for an answer
-	CodeNotBlocked = "not_blocked"
-	// the engine is past its exit check; the CLI starts a new engine and resends
-	CodeEngineStopping = "engine_stopping"
+	CodeBadFrame       = "bad_frame"       // the line is not a valid Request; the connection stays open
+	CodeUnknownTarget  = "unknown_target"  // the label or run id names nothing in the plan or the saved state
+	CodeRunRefused     = "run_refused"     // the run was refused, such as a dependency cycle
+	CodeNotBlocked     = "not_blocked"     // --approve or --deny named a group that is not waiting for an answer
+	CodeEngineStopping = "engine_stopping" // the engine is past its exit check; the CLI starts a new engine and resends
 )

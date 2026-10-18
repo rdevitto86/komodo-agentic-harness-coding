@@ -103,7 +103,6 @@ func TestTrimLangKeepsARepositoryThatHoldsALease(t *testing.T) {
 	}
 	touchAll(t, c, "leased", "idle", "newer") // leased is the oldest
 	keep := func(repo string) bool { return repo == "leased" }
-
 	if _, err := c.TrimLang(root, keep); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +137,14 @@ func TestTrimLangRemovesAReadOnlyGoModuleTreeWhole(t *testing.T) {
 	if err := os.Chmod(file, 0o444); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{"go/pkg/mod/github.com/x/y@v1.0.0", "go/pkg/mod/github.com/x", "go/pkg/mod/github.com", "go/pkg/mod", "go/pkg", "go"} {
+	for _, d := range []string{
+		"go/pkg/mod/github.com/x/y@v1.0.0",
+		"go/pkg/mod/github.com/x",
+		"go/pkg/mod/github.com",
+		"go/pkg/mod",
+		"go/pkg",
+		"go",
+	} {
 		if err := os.Chmod(filepath.Join(unit, d), 0o555); err != nil {
 			t.Fatal(err)
 		}

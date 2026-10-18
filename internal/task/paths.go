@@ -12,22 +12,21 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 )
 
-// resolved is a path the guard accepted: Rel is relative to the real worktree root with slashes,
-// Abs is the real path on disk.
+// resolved is a path the guard accepted: Rel is relative to the real worktree root with slashes, Abs is the real path on
+// disk.
 type resolved struct {
 	Rel  string
 	Abs  string
 	Root string // the real worktree root the path was resolved under
 }
 
-// resolveInside resolves p against the worktree root with every symlink followed and returns why
-// when it leaves the root. A link that cannot be followed, including a dangling one, counts as
+// resolveInside resolves p against the worktree root with every symlink followed and returns why when it leaves the root. A
+// link that cannot be followed, including a dangling one, counts as
 // leaving it.
 func resolveInside(root, p string) (resolved, string) {
 	if p == "" {
 		return resolved{}, "is empty"
 	}
-
 	if strings.ContainsRune(p, 0) {
 		return resolved{}, "contains a NUL byte"
 	}
@@ -49,12 +48,10 @@ func resolveInside(root, p string) (resolved, string) {
 	if err != nil {
 		return resolved{}, "cannot be followed to a real location"
 	}
-
 	if real != realRoot && !strings.HasPrefix(real, realRoot+string(filepath.Separator)) {
 		if inside(realRoot, abs) {
 			return resolved{}, "resolves outside the worktree through a symlink"
 		}
-
 		return resolved{}, "is outside the worktree"
 	}
 
@@ -66,13 +63,8 @@ func resolveInside(root, p string) (resolved, string) {
 	return resolved{Rel: filepath.ToSlash(rel), Abs: real, Root: realRoot}, ""
 }
 
-// inside reports whether abs lies under root by its spelling alone.
-func inside(root, abs string) bool {
-	return abs == root || strings.HasPrefix(abs, root+string(filepath.Separator))
-}
-
-// evalExisting follows the symlinks of the deepest part of abs that exists and appends the rest,
-// which cannot be a link. A part that exists but cannot be followed, such as a dangling link, is an
+// evalExisting follows the symlinks of the deepest part of abs that exists and appends the rest, which cannot be a link. A
+// part that exists but cannot be followed, such as a dangling link, is an
 // error.
 func evalExisting(abs string) (string, error) {
 	cur, rest := abs, ""
@@ -81,11 +73,9 @@ func evalExisting(abs string) (string, error) {
 		if err == nil {
 			return filepath.Join(real, rest), nil
 		}
-
 		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			return "", err
 		}
-
 		if _, lerr := os.Lstat(cur); lerr == nil {
 			return "", err
 		}
@@ -100,45 +90,12 @@ func evalExisting(abs string) (string, error) {
 	}
 }
 
-// matchAny reports whether a path matches the pattern list: some positive pattern matches and no
-// "!" pattern does. A home-anchored (absolute) pattern is tested against the real path, and never
-// for a path inside the worktree.
-func matchAny(pats Patterns, rel, abs string, inWorktree, fold bool) bool {
-	hit := false
-
-	for _, p := range pats {
-		neg := strings.HasPrefix(p, "!")
-		p = strings.TrimPrefix(p, "!")
-		cand := rel
-
-		if path.IsAbs(p) {
-			if inWorktree {
-				continue
-			}
-
-			cand = filepath.ToSlash(abs)
-		}
-
-		if fold {
-			p, cand = strings.ToLower(p), strings.ToLower(cand)
-		}
-
-		if !agent.MatchGlob(p, cand) {
-			continue
-		}
-
-		if neg {
-			return false
-		}
-
-		hit = true
-	}
-
-	return hit
+// inside reports whether abs lies under root by its spelling alone.
+func inside(root, abs string) bool {
+	return abs == root || strings.HasPrefix(abs, root+string(filepath.Separator))
 }
 
-// secretFiles lists the absolute paths of the regular files under the worktree whose names match
-// the secret list.
+// secretFiles lists the absolute paths of the regular files under the worktree whose names match the secret list.
 func secretFiles(worktree string, pats Patterns) []string {
 	realRoot, err := filepath.EvalSymlinks(worktree)
 	if err != nil {
@@ -151,18 +108,15 @@ func secretFiles(worktree string, pats Patterns) []string {
 		if err != nil {
 			return nil
 		}
-
 		if d.IsDir() {
 			if d.Name() == ".git" {
 				return filepath.SkipDir
 			}
-
 			return nil
 		}
 
 		rel, rerr := filepath.Rel(realRoot, p)
-		if rerr == nil && d.Type().IsRegular() &&
-			matchAny(pats, filepath.ToSlash(rel), p, true, true) {
+		if rerr == nil && d.Type().IsRegular() && matchAny(pats, filepath.ToSlash(rel), p, true, true) {
 			out = append(out, filepath.Join(worktree, rel))
 		}
 
@@ -170,4 +124,36 @@ func secretFiles(worktree string, pats Patterns) []string {
 	})
 
 	return out
+}
+
+// matchAny reports whether a path matches the pattern list: some positive pattern matches and no "!" pattern does. A
+// home-anchored (absolute) pattern is tested against the real path, and never
+// for a path inside the worktree.
+func matchAny(pats Patterns, rel, abs string, inWorktree, fold bool) bool {
+	hit := false
+
+	for _, p := range pats {
+		neg := strings.HasPrefix(p, "!")
+		p = strings.TrimPrefix(p, "!")
+		cand := rel
+		if path.IsAbs(p) {
+			if inWorktree {
+				continue
+			}
+			cand = filepath.ToSlash(abs)
+		}
+		if fold {
+			p, cand = strings.ToLower(p), strings.ToLower(cand)
+		}
+		if !agent.MatchGlob(p, cand) {
+			continue
+		}
+		if neg {
+			return false
+		}
+
+		hit = true
+	}
+
+	return hit
 }

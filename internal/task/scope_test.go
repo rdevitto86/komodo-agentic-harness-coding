@@ -13,24 +13,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
-// needsScope is a builder result that asks for these paths.
-func needsScope(paths ...string) string {
-	b, _ := json.Marshal(map[string]any{"status": "needs_scope", "summary": "blocked", "paths": paths, "reason": "the task needs them"})
-	return string(b)
-}
-
-// resumeWith makes the scripted model answer a resume with a builder result, keeping the input it got.
-func resumeWith(r *pipeRig, in *[]string, steps ...string) {
-	r.model.resume = func(_ llm.Session, i llm.Input) (llm.Stream, error) {
-		*in = append(*in, i.Text)
-		out := steps[0]
-		if len(steps) > 1 {
-			steps = steps[1:]
-		}
-		return building(r.wt, "a.go", "package a\n", out)(llm.Session{})
-	}
-}
-
 func TestScopeRequestForAProtectedSecretOrOtherGroupPathIsDeniedWithoutEscalating(t *testing.T) {
 	for _, p := range []string{"~/.komodo/x", ".env", "internal/task/policy.json", "other/x.go"} {
 		r := newPipeRig(t, rigOpts{mut: func(s *GroupSpec, _ *Collaborators) { s.OtherFiles = []string{"other/**"} }})
@@ -60,7 +42,8 @@ func TestSecondScopeRequestFromOneTaskIsDeniedAtOnce(t *testing.T) {
 		t.Fatalf("Run returned %v", err)
 	}
 	escs := r.rt.escalations()
-	if len(escs) != 1 || escs[0].Kind != EscScope || escs[0].Reason != "needs_scope" || !strings.Contains(string(escs[0].Detail), "lib/y.go") {
+	if len(escs) != 1 || escs[0].Kind != EscScope || escs[0].Reason != "needs_scope" ||
+		!strings.Contains(string(escs[0].Detail), "lib/y.go") {
 		t.Fatalf("escalations %+v", escs)
 	}
 	r.reachCleanupWith(func(ctx context.Context) error {
@@ -69,7 +52,8 @@ func TestSecondScopeRequestFromOneTaskIsDeniedAtOnce(t *testing.T) {
 	if len(r.rt.escalations()) != 1 {
 		t.Fatalf("the second request escalated: %+v", r.rt.escalations())
 	}
-	if len(inputs) != 2 || !strings.Contains(inputs[0], "approved for: lib/y.go") || !strings.Contains(inputs[1], "one scope request per task") {
+	if len(inputs) != 2 || !strings.Contains(inputs[0], "approved for: lib/y.go") ||
+		!strings.Contains(inputs[1], "one scope request per task") {
 		t.Fatalf("resume inputs %q", inputs)
 	}
 }
@@ -94,7 +78,11 @@ func TestApprovedProtectedPathIsNotAppliedAndAnApprovedOneReachesScopeJSONAndThe
 	}
 	id := r.rt.escalations()[0].ID
 	r.reachCleanupWith(func(ctx context.Context) error {
-		return r.m.Continue(ctx, Answer{Escalation: id, Action: "approve", Approved: []string{"lib/y.go", "internal/task/policy.json"}})
+		return r.m.Continue(ctx, Answer{
+			Escalation: id,
+			Action:     "approve",
+			Approved:   []string{"lib/y.go", "internal/task/policy.json"},
+		})
 	})
 	if got := r.rt.progress().Widened; !slices.Equal(got, []string{"lib/y.go"}) {
 		t.Fatalf("widened %v", got)
@@ -106,7 +94,10 @@ func TestApprovedProtectedPathIsNotAppliedAndAnApprovedOneReachesScopeJSONAndThe
 	if v := g.Check(write); !v.Allowed {
 		t.Fatalf("after the answer the write is %+v", v)
 	}
-	if v := g.Check(Call{Tool: "write", Args: json.RawMessage(`{"path":"internal/task/policy.json","content":"x"}`)}); v.Allowed {
+	if v := g.Check(Call{
+		Tool: "write",
+		Args: json.RawMessage(`{"path":"internal/task/policy.json","content":"x"}`),
+	}); v.Allowed {
 		t.Fatal("a protected path was applied")
 	}
 	var found bool
@@ -136,5 +127,28 @@ func TestDeniedScopeAnswerResumesTheBuilderWithADenial(t *testing.T) {
 	})
 	if len(inputs) != 1 || inputs[0] != "scope request denied" || len(r.rt.progress().Widened) != 0 {
 		t.Fatalf("inputs %q, widened %v", inputs, r.rt.progress().Widened)
+	}
+}
+
+// needsScope is a builder result that asks for these paths.
+func needsScope(paths ...string) string {
+	b, _ := json.Marshal(map[string]any{
+		"status":  "needs_scope",
+		"summary": "blocked",
+		"paths":   paths,
+		"reason":  "the task needs them",
+	})
+	return string(b)
+}
+
+// resumeWith makes the scripted model answer a resume with a builder result, keeping the input it got.
+func resumeWith(r *pipeRig, in *[]string, steps ...string) {
+	r.model.resume = func(_ llm.Session, i llm.Input) (llm.Stream, error) {
+		*in = append(*in, i.Text)
+		out := steps[0]
+		if len(steps) > 1 {
+			steps = steps[1:]
+		}
+		return building(r.wt, "a.go", "package a\n", out)(llm.Session{})
 	}
 }

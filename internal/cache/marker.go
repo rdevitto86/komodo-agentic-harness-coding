@@ -17,14 +17,12 @@ type MarkerPlan struct {
 var fixedMarkerLayers = map[string]bool{"repo": true, "brief": true}
 
 // PlanMarkers returns the plan for a layer list: fixed markers after repo and brief, automatic
-// marker on. A layer missing from the list drops its marker; the plan holds its own copy of the
-// layers.
+// marker on. A layer missing from the list drops its marker; the plan holds its own copy of the layers.
 func PlanMarkers(layers []Layer) MarkerPlan {
 	plan := MarkerPlan{Layers: make([]Layer, len(layers)), Fixed: []string{}, Auto: true}
 	copy(plan.Layers, layers)
 
 	seen := map[string]bool{}
-
 	for _, l := range layers {
 		if fixedMarkerLayers[l.Name] && !seen[l.Name] {
 			seen[l.Name] = true

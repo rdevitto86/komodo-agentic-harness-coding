@@ -75,7 +75,13 @@ type testEnv struct {
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "leases")
-	return &testEnv{t: t, root: root, reg: NewFileRegistry(root, DefaultLockTimeout), procs: newProcs(), clk: &clock{t: testStart}}
+	return &testEnv{
+		t:     t,
+		root:  root,
+		reg:   NewFileRegistry(root, DefaultLockTimeout),
+		procs: newProcs(),
+		clk:   &clock{t: testStart},
+	}
 }
 
 // manager returns a manager that acts as the process with this pid on host h1.

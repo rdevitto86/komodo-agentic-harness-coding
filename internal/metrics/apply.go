@@ -21,6 +21,42 @@ type groupState struct {
 	holdBase   int64
 }
 
+// finish ends the group at time t with outcome; an outcome of "" keeps the current one.
+func (g *groupState) finish(outcome string, t time.Time) {
+	g.closeClocks()
+	if outcome != "" {
+		g.m.Outcome = outcome
+	}
+	if g.m.EndedAt.IsZero() {
+		g.m.EndedAt = t
+	}
+}
+
+// closeClocks stops the group's stage and holding clocks; touch has already counted up to now.
+func (g *groupState) closeClocks() { g.stage, g.hold = "", "" }
+
+// openStage starts the clock of stage name at time t.
+func (g *groupState) openStage(name string, t time.Time) {
+	idx := slices.IndexFunc(g.m.Stages, func(s StageTime) bool { return s.Stage == name })
+	if idx < 0 {
+		g.m.Stages = append(g.m.Stages, StageTime{Stage: name})
+		idx = len(g.m.Stages) - 1
+	}
+	g.m.Stages[idx].Entries++
+	g.stage, g.stageIdx, g.stageSince, g.stageBase = name, idx, t, g.m.Stages[idx].Seconds
+}
+
+// openHold closes the stage clock and starts the paused or blocked clock at time t.
+func (g *groupState) openHold(kind string, t time.Time) {
+	g.closeClocks()
+	g.hold, g.holdSince = kind, t
+	g.holdBase = g.m.PausedS
+	if kind == outcomeBlocked {
+		g.holdBase = g.m.BlockedS
+	}
+	g.m.Outcome = kind
+}
+
 // openSession is what a session.start remembered until its session.end.
 type openSession struct {
 	run                             bus.ID
@@ -51,14 +87,12 @@ func newFigures() *figures {
 // dirty reports whether a figure changed since the files were written.
 func (f *figures) dirty() bool { return f.ver != f.written }
 
-// load seeds the figures with entries read from groups.json and runs.json; their clocks stay
-// closed.
+// load seeds the figures with entries read from groups.json and runs.json; their clocks stay closed.
 func (f *figures) load(groups map[bus.ID]map[bus.ID]GroupMetrics, runs map[bus.ID]RunMetrics) {
 	for id, r := range runs {
 		if r.Dir == "" {
 			r.Dir = f.dir
 		}
-
 		f.runs[id] = &r
 	}
 
@@ -67,10 +101,8 @@ func (f *figures) load(groups map[bus.ID]map[bus.ID]GroupMetrics, runs map[bus.I
 			if f.groups[run] == nil {
 				f.groups[run] = map[bus.ID]*groupState{}
 			}
-
 			f.groups[run][id] = &groupState{m: g}
-			if prev, ok := f.latest[id]; !ok || f.runs[prev] == nil ||
-				g.StartedAt.After(f.runs[prev].StartedAt) {
+			if prev, ok := f.latest[id]; !ok || f.runs[prev] == nil || g.StartedAt.After(f.runs[prev].StartedAt) {
 				f.latest[id] = run
 			}
 		}
@@ -84,12 +116,10 @@ func (f *figures) snapshot() (map[bus.ID]map[bus.ID]GroupMetrics, map[bus.ID]Run
 		gs[run] = make(map[bus.ID]GroupMetrics, len(byID))
 		for id, g := range byID {
 			m := g.m
-
 			m.Stages = slices.Clone(m.Stages)
 			if m.Stages == nil {
 				m.Stages = []StageTime{}
 			}
-
 			gs[run][id] = m
 		}
 	}
@@ -108,7 +138,6 @@ func (f *figures) group(run, id bus.ID) (GroupMetrics, bool) {
 	if !ok {
 		return GroupMetrics{}, false
 	}
-
 	return g.m, true
 }
 
@@ -118,7 +147,6 @@ func (f *figures) run(id bus.ID) (RunMetrics, bool) {
 	if !ok {
 		return RunMetrics{}, false
 	}
-
 	return *r, true
 }
 
@@ -126,7 +154,6 @@ func (f *figures) run(id bus.ID) (RunMetrics, bool) {
 func (f *figures) takeEnded() []bus.ID {
 	out := f.ended
 	f.ended = nil
-
 	return out
 }
 
@@ -138,12 +165,10 @@ func (f *figures) dropRuns(ids []bus.ID) {
 				delete(f.latest, id)
 			}
 		}
-
 		delete(f.groups, run)
 		delete(f.runs, run)
 		f.dropSessions(run)
 	}
-
 	if len(ids) > 0 {
 		f.ver++
 	}
@@ -158,71 +183,7 @@ func (f *figures) dropSessions(run bus.ID) {
 	}
 }
 
-// ensureRun returns the run's figures, creating them at time t.
-func (f *figures) ensureRun(id bus.ID, t time.Time) *RunMetrics {
-	r, ok := f.runs[id]
-	if !ok {
-		r = &RunMetrics{Run: id, StartedAt: t, Dir: f.dir}
-		f.runs[id] = r
-	}
-
-	return r
-}
-
-// ensureGroup returns the group's figures in a run, creating them at time t; a group with no id is
-// not kept.
-func (f *figures) ensureGroup(id, run bus.ID, t time.Time) *groupState {
-	g, ok := f.groups[run][id]
-	if ok {
-		return g
-	}
-
-	g = &groupState{
-		m: GroupMetrics{
-			Group:     id,
-			Run:       run,
-			StartedAt: t,
-			Outcome:   outcomeRunning,
-			Stages:    []StageTime{},
-		},
-		last: t,
-	}
-	if id == "" {
-		return g
-	}
-
-	if f.groups[run] == nil {
-		f.groups[run] = map[bus.ID]*groupState{}
-	}
-
-	f.groups[run][id] = g
-	if _, seen := f.latest[id]; !seen {
-		f.latest[id] = run
-	}
-
-	return g
-}
-
-// touch advances every open clock of a run to time t, so seconds count up to the latest event
-// copied.
-func (f *figures) touch(run bus.ID, t time.Time) {
-	for _, g := range f.groups[run] {
-		g.last = t
-		if g.stage != "" {
-			g.m.Stages[g.stageIdx].Seconds = g.stageBase + secondsBetween(g.stageSince, t)
-		}
-
-		switch g.hold {
-		case outcomePaused:
-			g.m.PausedS = g.holdBase + secondsBetween(g.holdSince, t)
-		case outcomeBlocked:
-			g.m.BlockedS = g.holdBase + secondsBetween(g.holdSince, t)
-		}
-	}
-}
-
-// apply changes the figures for one event; it returns the session record when the event ends a
-// session.
+// apply changes the figures for one event; it returns the session record when the event ends a session.
 func (f *figures) apply(e bus.Event) *SessionRecord {
 	if e.Run == "" {
 		return nil
@@ -272,8 +233,35 @@ func (f *figures) apply(e bus.Event) *SessionRecord {
 	return nil
 }
 
-// applyRunStart creates the run entry and one group entry per queued group, closing an earlier
-// attempt of a group as interrupted.
+// ensureRun returns the run's figures, creating them at time t.
+func (f *figures) ensureRun(id bus.ID, t time.Time) *RunMetrics {
+	r, ok := f.runs[id]
+	if !ok {
+		r = &RunMetrics{Run: id, StartedAt: t, Dir: f.dir}
+		f.runs[id] = r
+	}
+	return r
+}
+
+// touch advances every open clock of a run to time t, so seconds count up to the latest event copied.
+func (f *figures) touch(run bus.ID, t time.Time) {
+	for _, g := range f.groups[run] {
+		g.last = t
+		if g.stage != "" {
+			g.m.Stages[g.stageIdx].Seconds = g.stageBase + secondsBetween(g.stageSince, t)
+		}
+
+		switch g.hold {
+		case outcomePaused:
+			g.m.PausedS = g.holdBase + secondsBetween(g.holdSince, t)
+		case outcomeBlocked:
+			g.m.BlockedS = g.holdBase + secondsBetween(g.holdSince, t)
+		}
+	}
+}
+
+// applyRunStart creates the run entry and one group entry per queued group, closing an earlier attempt of a group as
+// interrupted.
 func (f *figures) applyRunStart(e bus.Event) {
 	d, ok := e.Data.(*bus.RunStartedFact)
 	if !ok {
@@ -288,7 +276,6 @@ func (f *figures) applyRunStart(e bus.Event) {
 				if at.IsZero() {
 					at = pg.m.StartedAt
 				}
-
 				pg.finish(outcomeInterrupted, at)
 				f.endRunIfSettled(prev)
 			}
@@ -297,6 +284,65 @@ func (f *figures) applyRunStart(e bus.Event) {
 		f.latest[id] = e.Run
 		f.ensureGroup(id, e.Run, e.Time)
 	}
+}
+
+// endRunIfSettled ends a run once all its groups have ended, at the latest group end.
+func (f *figures) endRunIfSettled(run bus.ID) {
+	var last time.Time
+	for _, g := range f.groups[run] {
+		if g.m.EndedAt.IsZero() {
+			return
+		}
+		if g.m.EndedAt.After(last) {
+			last = g.m.EndedAt
+		}
+	}
+
+	f.closeRun(run, last)
+}
+
+// closeRun sets the end time and wall time of a run that has not ended and forgets its open sessions.
+func (f *figures) closeRun(run bus.ID, t time.Time) {
+	r, ok := f.runs[run]
+	if !ok || !r.EndedAt.IsZero() {
+		return
+	}
+	r.EndedAt, r.WallS = t, secondsBetween(r.StartedAt, t)
+	f.ended = append(f.ended, run)
+	f.dropSessions(run)
+	f.ver++
+}
+
+// ensureGroup returns the group's figures in a run, creating them at time t; a group with no id is not kept.
+func (f *figures) ensureGroup(id, run bus.ID, t time.Time) *groupState {
+	g, ok := f.groups[run][id]
+	if ok {
+		return g
+	}
+
+	g = &groupState{
+		m: GroupMetrics{
+			Group:     id,
+			Run:       run,
+			StartedAt: t,
+			Outcome:   outcomeRunning,
+			Stages:    []StageTime{},
+		},
+		last: t,
+	}
+	if id == "" {
+		return g
+	}
+	if f.groups[run] == nil {
+		f.groups[run] = map[bus.ID]*groupState{}
+	}
+
+	f.groups[run][id] = g
+	if _, seen := f.latest[id]; !seen {
+		f.latest[id] = run
+	}
+
+	return g
 }
 
 // applyStageEnter closes the open clocks, opens the new stage's clock and counts a return.
@@ -310,7 +356,6 @@ func (f *figures) applyStageEnter(e bus.Event) {
 	g.closeClocks()
 	g.m.Outcome = outcomeRunning
 	g.openStage(d.To, e.Time)
-
 	if d.Return {
 		g.m.Returns++
 	}
@@ -355,12 +400,10 @@ func (f *figures) applySessionEnd(e bus.Event) *SessionRecord {
 	if s, found := f.sessions[d.Session]; found {
 		rec.Agent, rec.Task, rec.Link = s.agent, s.task, s.link
 		rec.Model, rec.Stage, rec.StartedAt = s.model, s.stage, s.started
-
 		delete(f.sessions, d.Session)
 	} else {
 		g.m.Sessions++
 	}
-
 	if d.Usage != nil {
 		u := *d.Usage
 		rec.Usage = &u
@@ -370,6 +413,26 @@ func (f *figures) applySessionEnd(e bus.Event) *SessionRecord {
 	}
 
 	return rec
+}
+
+// applyStalled ends the run: blocked groups stay blocked and every other open group fails.
+func (f *figures) applyStalled(e bus.Event) {
+	for _, g := range f.groups[e.Run] {
+		if g.m.EndedAt.IsZero() && g.m.Outcome == outcomeBlocked {
+			g.finish("", e.Time)
+		}
+	}
+	f.endRun(e.Run, e.Time, outcomeFailed)
+}
+
+// endRun ends every open group of the run with outcome (or keeps theirs when empty), then the run itself.
+func (f *figures) endRun(run bus.ID, t time.Time, outcome string) {
+	for _, g := range f.groups[run] {
+		if g.m.EndedAt.IsZero() {
+			g.finish(outcome, t)
+		}
+	}
+	f.closeRun(run, t)
 }
 
 // applyRunDone sets the outcomes the event lists, closes every clock of the run and ends it.
@@ -392,61 +455,6 @@ func (f *figures) applyRunDone(e bus.Event) {
 	r.Done, r.Blocked = len(d.Done), len(d.Blocked)
 }
 
-// applyStalled ends the run: blocked groups stay blocked and every other open group fails.
-func (f *figures) applyStalled(e bus.Event) {
-	for _, g := range f.groups[e.Run] {
-		if g.m.EndedAt.IsZero() && g.m.Outcome == outcomeBlocked {
-			g.finish("", e.Time)
-		}
-	}
-
-	f.endRun(e.Run, e.Time, outcomeFailed)
-}
-
-// endRun ends every open group of the run with outcome (or keeps theirs when empty), then the run
-// itself.
-func (f *figures) endRun(run bus.ID, t time.Time, outcome string) {
-	for _, g := range f.groups[run] {
-		if g.m.EndedAt.IsZero() {
-			g.finish(outcome, t)
-		}
-	}
-
-	f.closeRun(run, t)
-}
-
-// endRunIfSettled ends a run once all its groups have ended, at the latest group end.
-func (f *figures) endRunIfSettled(run bus.ID) {
-	var last time.Time
-
-	for _, g := range f.groups[run] {
-		if g.m.EndedAt.IsZero() {
-			return
-		}
-
-		if g.m.EndedAt.After(last) {
-			last = g.m.EndedAt
-		}
-	}
-
-	f.closeRun(run, last)
-}
-
-// closeRun sets the end time and wall time of a run that has not ended and forgets its open
-// sessions.
-func (f *figures) closeRun(run bus.ID, t time.Time) {
-	r, ok := f.runs[run]
-	if !ok || !r.EndedAt.IsZero() {
-		return
-	}
-
-	r.EndedAt, r.WallS = t, secondsBetween(r.StartedAt, t)
-
-	f.ended = append(f.ended, run)
-	f.dropSessions(run)
-	f.ver++
-}
-
 // applyError raises the run's fault or warning count by the event's severity.
 func (f *figures) applyError(e bus.Event) {
 	b, err := json.Marshal(e.Data)
@@ -467,56 +475,10 @@ func (f *figures) applyError(e bus.Event) {
 	}
 }
 
-// closeClocks stops the group's stage and holding clocks; touch has already counted up to now.
-func (g *groupState) closeClocks() {
-	g.stage, g.hold = "", ""
-}
-
-// finish ends the group at time t with outcome; an outcome of "" keeps the current one.
-func (g *groupState) finish(outcome string, t time.Time) {
-	g.closeClocks()
-
-	if outcome != "" {
-		g.m.Outcome = outcome
-	}
-
-	if g.m.EndedAt.IsZero() {
-		g.m.EndedAt = t
-	}
-}
-
-// openStage starts the clock of stage name at time t.
-func (g *groupState) openStage(name string, t time.Time) {
-	idx := slices.IndexFunc(g.m.Stages, func(s StageTime) bool { return s.Stage == name })
-	if idx < 0 {
-		g.m.Stages = append(g.m.Stages, StageTime{Stage: name})
-		idx = len(g.m.Stages) - 1
-	}
-
-	g.m.Stages[idx].Entries++
-	g.stage, g.stageIdx, g.stageSince, g.stageBase = name, idx, t, g.m.Stages[idx].Seconds
-}
-
-// openHold closes the stage clock and starts the paused or blocked clock at time t.
-func (g *groupState) openHold(kind string, t time.Time) {
-	g.closeClocks()
-	g.hold, g.holdSince = kind, t
-
-	g.holdBase = g.m.PausedS
-	if kind == outcomeBlocked {
-		g.holdBase = g.m.BlockedS
-	}
-
-	g.m.Outcome = kind
-}
-
 // secondsBetween returns whole seconds from a to b, never negative.
-func secondsBetween(a, b time.Time) int64 {
-	return max(int64(b.Sub(a)/time.Second), 0)
-}
+func secondsBetween(a, b time.Time) int64 { return max(int64(b.Sub(a)/time.Second), 0) }
 
-// groupOutcome maps a group.done body to a group outcome: complete is done, abandoned stays, lost
-// is failed.
+// groupOutcome maps a group.done body to a group outcome: complete is done, abandoned stays, lost is failed.
 func groupOutcome(p bus.Payload) string {
 	d, ok := p.(*bus.GroupDone)
 	if !ok {

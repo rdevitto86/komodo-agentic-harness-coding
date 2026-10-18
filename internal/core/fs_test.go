@@ -11,20 +11,6 @@ import (
 	"testing"
 )
 
-// dirNames lists the entry names in dir.
-func dirNames(t *testing.T, dir string) []string {
-	t.Helper()
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, e := range ents {
-		names = append(names, e.Name())
-	}
-	return names
-}
-
 func TestWriteFileAtomicRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
@@ -133,4 +119,18 @@ func TestWriteAtomicRenameFailureIsTyped(t *testing.T) {
 	if names := dirNames(t, dir); len(names) != 0 {
 		t.Fatalf("dir holds %v; want it empty", names)
 	}
+}
+
+// dirNames lists the entry names in dir.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	return names
 }

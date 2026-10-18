@@ -79,25 +79,21 @@ func (f *fakeBackend) Caveats(Spec) []string { return f.caveats }
 // plainOnly hides the optional interfaces of the fake it wraps.
 type plainOnly struct{ f *fakeBackend }
 
+var errBoom = errors.New("boom")
+
 func (p plainOnly) Name() string { return p.f.Name() }
+
 func (p plainOnly) Check() error { return p.f.Check() }
+
 func (p plainOnly) Prepare(ctx context.Context, s Spec) (Instance, error) {
 	return p.f.Prepare(ctx, s)
 }
+
 func (p plainOnly) Command(ctx context.Context, i Instance, s Spec, c Command) (*exec.Cmd, error) {
 	return p.f.Command(ctx, i, s, c)
 }
-func (p plainOnly) Release(ctx context.Context, i Instance) error { return p.f.Release(ctx, i) }
 
-// realPath returns the symlink-free form of a temporary folder.
-func realPath(t *testing.T, p string) string {
-	t.Helper()
-	r, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return r
-}
+func (p plainOnly) Release(ctx context.Context, i Instance) error { return p.f.Release(ctx, i) }
 
 // testSpec builds a Spec over real folders in a temporary tree.
 func testSpec(t *testing.T, role string) Spec {
@@ -121,6 +117,16 @@ func testSpec(t *testing.T, role string) Spec {
 		Writable: []string{dirs["tmp"], dirs["build"]}, Modules: dirs["mod"],
 		Toolchains: []string{dirs["tool"]}, MaxProcs: 512, MaxMemGB: 8, Role: role,
 	}
+}
+
+// realPath returns the symlink-free form of a temporary folder.
+func realPath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // fakeManager returns a Manager over a builder fake, a tester fake and a fallback fake.
@@ -167,5 +173,3 @@ func indexOf(list []string, seq ...string) int {
 	}
 	return -1
 }
-
-var errBoom = errors.New("boom")

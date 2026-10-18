@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-// TestBinaryEngineServesStatus proves the binary's wiring: the CLI starts `komodo internal engine`, which binds the socket and answers status.
+// TestBinaryEngineServesStatus proves the binary's wiring: the CLI starts `komodo internal engine`, which binds the socket
+// and answers status.
 func TestBinaryEngineServesStatus(t *testing.T) {
 	r := newBinRig(t, nil)
 	res := r.komodo(60*time.Second, "status")

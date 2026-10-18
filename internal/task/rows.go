@@ -23,6 +23,23 @@ type RowID string
 // Patterns is one glob or a list of globs; JSON accepts either form.
 type Patterns []string
 
+// UnmarshalJSON reads a string or an array of strings.
+func (p *Patterns) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*p = Patterns{one}
+		return nil
+	}
+
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return fmt.Errorf("a pattern is a string or a list of strings: %w", err)
+	}
+
+	*p = many
+	return nil
+}
+
 // Row is one guard rule as stored in policy.json.
 type Row struct {
 	ID    RowID  `json:"id"`    // G1..G6, R1, B1
@@ -33,6 +50,24 @@ type Row struct {
 	Action      string   `json:"action"`      // refuse
 	Message     string   `json:"message"`     // template id of the refusal line
 	Alternative string   `json:"alternative"` // template id of the allowed alternative
+}
+
+// selects reports whether the row binds this agent: by scope, by being named in its guard list, or by being a mandatory row.
+func (r Row) selects(b Binding) bool {
+	if slices.Contains(mandatoryRows, r.ID) || slices.Contains(b.Permissions.Guard, r.ID) {
+		return true
+	}
+
+	switch r.Scope {
+	case "all":
+		return true
+	case "writers":
+		return b.Permissions.writes()
+	case "runners":
+		return slices.Contains(b.Permissions.Tools, "run")
+	default:
+		return r.Scope == b.Agent
+	}
 }
 
 // siblingPair says which source file a test file name belongs to.
@@ -81,7 +116,6 @@ var loadPolicy = sync.OnceValues(func() (*policy, error) {
 	if err := core.DecodeStrict(policyJSON, &f); err != nil {
 		return nil, fmt.Errorf("read policy.json: %w", err)
 	}
-
 	if f.V != 1 {
 		return nil, fmt.Errorf("policy.json has version %d, want 1", f.V)
 	}
@@ -92,7 +126,6 @@ var loadPolicy = sync.OnceValues(func() (*policy, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compile secret content pattern %q: %w", s, err)
 		}
-
 		p.secret = append(p.secret, re)
 	}
 
@@ -100,12 +133,10 @@ var loadPolicy = sync.OnceValues(func() (*policy, error) {
 		expr := regexp.QuoteMeta(pr.Test)
 		expr = strings.ReplaceAll(expr, `\{name\}`, `(?P<name>[^/]+)`)
 		expr = strings.ReplaceAll(expr, `\{ext\}`, `(?P<ext>[^/.]+)`)
-
 		re, err := regexp.Compile("^" + expr + "$")
 		if err != nil {
 			return nil, fmt.Errorf("compile test sibling %q: %w", pr.Test, err)
 		}
-
 		p.siblings = append(p.siblings, siblingRule{test: re, source: pr.Source})
 	}
 
@@ -118,61 +149,20 @@ var mandatoryRows = []RowID{"G1", "G2", "G3", "G4", "G5", "G6"}
 // errNoPolicy is returned when the embedded policy cannot be read.
 var errNoPolicy = errors.New("the guard policy cannot be read")
 
-// UnmarshalJSON reads a string or an array of strings.
-func (p *Patterns) UnmarshalJSON(b []byte) error {
-	var one string
-	if err := json.Unmarshal(b, &one); err == nil {
-		*p = Patterns{one}
-
-		return nil
-	}
-
-	var many []string
-	if err := json.Unmarshal(b, &many); err != nil {
-		return fmt.Errorf("a pattern is a string or a list of strings: %w", err)
-	}
-
-	*p = many
-
-	return nil
-}
-
-// selects reports whether the row binds this agent: by scope, by being named in its guard list, or
-// by being a mandatory row.
-func (r Row) selects(b Binding) bool {
-	if slices.Contains(mandatoryRows, r.ID) || slices.Contains(b.Permissions.Guard, r.ID) {
-		return true
-	}
-
-	switch r.Scope {
-	case "all":
-		return true
-	case "writers":
-		return b.Permissions.writes()
-	case "runners":
-		return slices.Contains(b.Permissions.Tools, "run")
-	default:
-		return r.Scope == b.Agent
-	}
-}
-
-// render fills a refusal template by id; an unknown id yields a plain line naming the id, never an
-// empty reply.
+// render fills a refusal template by id; an unknown id yields a plain line naming the id, never an empty reply.
 func (p *policy) render(id string, vars map[string]string) string {
 	t, ok := p.file.Templates[id]
 	if !ok {
 		return "Refused: " + id
 	}
-
 	for k, v := range vars {
 		t = strings.ReplaceAll(t, "{{"+k+"}}", v)
 	}
-
 	return t
 }
 
-// siblingOf reports whether p is a test file that sits beside a source file in files, or a Rust
-// file in the tests folder of a crate that holds one.
+// siblingOf reports whether p is a test file that sits beside a source file in files, or a Rust file in the tests folder of
+// a crate that holds one.
 func (p *policy) siblingOf(rel string, files []string, root string) bool {
 	dir, base := path.Split(rel)
 	for _, rule := range p.siblings {
@@ -187,7 +177,6 @@ func (p *policy) siblingOf(rel string, files []string, root string) bool {
 				src = strings.ReplaceAll(src, "{"+n+"}", m[i])
 			}
 		}
-
 		if inFiles(dir+src, files) {
 			return true
 		}
@@ -207,13 +196,10 @@ func (p *policy) siblingOf(rel string, files []string, root string) bool {
 		if dir, ok := nearestCargo(root, path.Dir(rel)); !ok || dir != crate {
 			continue
 		}
-
 		if crate != "" {
 			crate += "/"
 		}
-
-		if inFiles(crate+"src/lib.rs", files) || inFiles(crate+"src/main.rs", files) ||
-			underStatic(crate, files) {
+		if inFiles(crate+"src/lib.rs", files) || inFiles(crate+"src/main.rs", files) || underStatic(crate, files) {
 			return true
 		}
 	}
@@ -226,8 +212,7 @@ func (p Permissions) writes() bool {
 	return slices.Contains(p.Tools, "edit") || slices.Contains(p.Tools, "write")
 }
 
-// LoadRows returns the policy rows in file order, with every home-relative pattern expanded under
-// home.
+// LoadRows returns the policy rows in file order, with every home-relative pattern expanded under home.
 func LoadRows(home string) ([]Row, error) {
 	p, err := loadPolicy()
 	if err != nil {
@@ -243,8 +228,8 @@ func LoadRows(home string) ([]Row, error) {
 	return rows, nil
 }
 
-// KnownRows returns the identifiers of the rows an agent's Guard list may name, the engine hands it
-// to the Configuration Manager as the known guard rows.
+// KnownRows returns the identifiers of the rows an agent's Guard list may name, the engine hands it to the Configuration
+// Manager as the known guard rows.
 func KnownRows() map[string]bool {
 	out := map[string]bool{}
 
@@ -260,22 +245,17 @@ func KnownRows() map[string]bool {
 	return out
 }
 
-// CheckerPolicy returns the secret content patterns and the test-sibling test of the policy, for
-// the mechanical checks.
-func CheckerPolicy(
-	files func() []string,
-	root string,
-) ([]*regexp.Regexp, func(string) bool, error) {
+// CheckerPolicy returns the secret content patterns and the test-sibling test of the policy, for the mechanical checks.
+func CheckerPolicy(files func() []string, root string) ([]*regexp.Regexp, func(string) bool, error) {
 	p, err := loadPolicy()
 	if err != nil {
 		return nil, nil, err
 	}
-
 	return p.secret, func(rel string) bool { return p.siblingOf(rel, files(), root) }, nil
 }
 
-// expandHome rewrites each pattern that starts with "~/" to an absolute pattern under home; an
-// empty home leaves them unmatchable.
+// expandHome rewrites each pattern that starts with "~/" to an absolute pattern under home; an empty home leaves them
+// unmatchable.
 func expandHome(pats Patterns, home string) Patterns {
 	out := make(Patterns, len(pats))
 	for i, s := range pats {
@@ -289,7 +269,6 @@ func expandHome(pats Patterns, home string) Patterns {
 				body = path.Join(filepath.ToSlash(home), rest)
 			}
 		}
-
 		if neg {
 			body = "!" + body
 		}
@@ -300,8 +279,7 @@ func expandHome(pats Patterns, home string) Patterns {
 	return out
 }
 
-// nearestCargo returns the closest folder at or above dir (relative to root, "" for the root) that
-// holds a Cargo.toml.
+// nearestCargo returns the closest folder at or above dir (relative to root, "" for the root) that holds a Cargo.toml.
 func nearestCargo(root, dir string) (string, bool) {
 	for {
 		if dir == "." {
@@ -312,7 +290,6 @@ func nearestCargo(root, dir string) (string, bool) {
 		if st, err := os.Stat(manifest); err == nil && st.Mode().IsRegular() {
 			return dir, true
 		}
-
 		if dir == "" {
 			return "", false
 		}
@@ -329,8 +306,7 @@ func inFiles(rel string, files []string) bool {
 	)
 }
 
-// underStatic reports whether any file entry inside dir is a Rust file or a pattern, judged before
-// its first wildcard.
+// underStatic reports whether any file entry inside dir is a Rust file or a pattern, judged before its first wildcard.
 func underStatic(dir string, files []string) bool {
 	if dir == "" {
 		return false
@@ -341,7 +317,6 @@ func underStatic(dir string, files []string) bool {
 		if i := strings.IndexAny(f, "*?["); i >= 0 {
 			f = f[:i]
 		}
-
 		if strings.HasPrefix(f, dir) && (glob || strings.HasSuffix(f, ".rs")) {
 			return true
 		}

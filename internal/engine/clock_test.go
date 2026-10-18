@@ -14,13 +14,6 @@ type FakeClock struct {
 	timers []*fakeTimer
 }
 
-type fakeTimer struct {
-	c    *FakeClock
-	at   time.Time
-	f    func()
-	done bool
-}
-
 // NewFakeClock returns a clock set to t.
 func NewFakeClock(t time.Time) *FakeClock { return &FakeClock{now: t} }
 
@@ -38,15 +31,6 @@ func (c *FakeClock) AfterFunc(d time.Duration, f func()) Timer {
 	t := &fakeTimer{c: c, at: c.now.Add(d), f: f}
 	c.timers = append(c.timers, t)
 	return t
-}
-
-// Stop cancels the timer.
-func (t *fakeTimer) Stop() bool {
-	t.c.mu.Lock()
-	defer t.c.mu.Unlock()
-	was := !t.done
-	t.done = true
-	return was
 }
 
 // Pending returns how many timers wait.
@@ -78,6 +62,22 @@ func (c *FakeClock) Advance(d time.Duration) {
 	for _, t := range due {
 		t.f()
 	}
+}
+
+type fakeTimer struct {
+	c    *FakeClock
+	at   time.Time
+	f    func()
+	done bool
+}
+
+// Stop cancels the timer.
+func (t *fakeTimer) Stop() bool {
+	t.c.mu.Lock()
+	defer t.c.mu.Unlock()
+	was := !t.done
+	t.done = true
+	return was
 }
 
 func TestFakeClockFiresTimersInOrder(t *testing.T) {

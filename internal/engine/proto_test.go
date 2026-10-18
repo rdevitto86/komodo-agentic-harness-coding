@@ -13,7 +13,11 @@ func TestRequestRoundTrip(t *testing.T) {
 	in := Request{
 		ID: "0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80", Verb: VerbRun, Target: "tg-1.2", Root: "/r",
 		Flags: Flags{All: true, TimeoutS: 5, Schedule: time.Date(2026, 10, 16, 2, 0, 0, 0, time.UTC)},
-		Event: &Event{Type: bus.TypeRunStart, Run: "r1", Data: &bus.RunStart{Target: "tg-1.2", Groups: []string{"tg-1.2"}, Source: "cli"}},
+		Event: &Event{
+			Type: bus.TypeRunStart,
+			Run:  "r1",
+			Data: &bus.RunStart{Target: "tg-1.2", Groups: []string{"tg-1.2"}, Source: "cli"},
+		},
 	}
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -42,7 +46,14 @@ func TestZeroFlagsEncodeEmpty(t *testing.T) {
 }
 
 func TestReplyRoundTrip(t *testing.T) {
-	in := Reply{ID: "x", Status: StatusRefused, Code: CodeNotBlocked, Detail: "d", Data: json.RawMessage(`{"a":1}`), Final: true}
+	in := Reply{
+		ID:     "x",
+		Status: StatusRefused,
+		Code:   CodeNotBlocked,
+		Detail: "d",
+		Data:   json.RawMessage(`{"a":1}`),
+		Final:  true,
+	}
 	b, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)

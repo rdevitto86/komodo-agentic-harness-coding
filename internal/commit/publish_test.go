@@ -36,7 +36,8 @@ func TestPublishVerdictsDisagree(t *testing.T) {
 	if k, _ := peKind(err); !errors.Is(err, ErrNotApproved) || k != KindNotApproved {
 		t.Fatalf("err = %v", err)
 	}
-	if git(t, w.clone, "rev-parse", g.branch) != before || w.remoteTip("komodo/ep-1") == "" || len(w.gh.calls()) != 0 || len(w.check.calls) != 0 {
+	if git(t, w.clone, "rev-parse", g.branch) != before || w.remoteTip("komodo/ep-1") == "" || len(w.gh.calls()) != 0 ||
+		len(w.check.calls) != 0 {
 		t.Fatal("something was written or run")
 	}
 }
@@ -62,7 +63,8 @@ func TestPublishWorktreeEditedAfterApproval(t *testing.T) {
 	}
 }
 
-// The first group of 2 opens no pull request; the second opens exactly one, from the epic branch into the base, titled with the group count.
+// The first group of 2 opens no pull request; the second opens exactly one, from the epic branch into the base, titled with
+// the group count.
 func TestPublishTwoGroupsOpensOnePullRequest(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
@@ -81,7 +83,8 @@ func TestPublishTwoGroupsOpensOnePullRequest(t *testing.T) {
 	if r1.Head != w.remoteTip("komodo/ep-1") {
 		t.Fatalf("head %s, remote %s", r1.Head, w.remoteTip("komodo/ep-1"))
 	}
-	if n := w.clean.calls[0]; n.EpicDone || n.Tip == "" || n.Contains != "origin/komodo/ep-1" || n.Branch != g1.branch || n.Remote != "origin" {
+	if n := w.clean.calls[0]; n.EpicDone || n.Tip == "" || n.Contains != "origin/komodo/ep-1" || n.Branch != g1.branch ||
+		n.Remote != "origin" {
 		t.Fatalf("published = %+v", n)
 	}
 	g2 := w.newGroup("tg-1.2")
@@ -111,7 +114,8 @@ func TestPublishTwoGroupsOpensOnePullRequest(t *testing.T) {
 		t.Fatal("pull request opened as a draft")
 	}
 	body := w.gh.file("create-body.txt")
-	if !strings.Contains(body, "Goal") && !strings.Contains(body, "14 tests pass") || !strings.Contains(body, "tsk-tg-1.1") || !strings.Contains(body, "tsk-tg-1.2") {
+	if !strings.Contains(body, "Goal") && !strings.Contains(body, "14 tests pass") ||
+		!strings.Contains(body, "tsk-tg-1.1") || !strings.Contains(body, "tsk-tg-1.2") {
 		t.Fatalf("body lacks both group sections:\n%s", body)
 	}
 	if got := w.rep.subtypes(); strings.Join(got, ",") != "publish.done,publish.done,pr.opened" {
@@ -247,7 +251,8 @@ func TestPublishConflict(t *testing.T) {
 	}
 }
 
-// A failing recheck pauses the epic, reports epic.paused, holds a second group, and a passing recheck from the paused group clears the pause.
+// A failing recheck pauses the epic, reports epic.paused, holds a second group, and a passing recheck from the paused group
+// clears the pause.
 func TestPublishRecheckPausesAndResumes(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
@@ -263,7 +268,8 @@ func TestPublishRecheckPausesAndResumes(t *testing.T) {
 	if got := w.rep.subtypes(); strings.Join(got, ",") != "epic.paused" {
 		t.Fatalf("reports = %v", got)
 	}
-	if p, ok := w.rep.list[0].data.(bus.EpicPaused); !ok || p.Epic != "ep-1" || p.Group != "tg-1.1" || p.Output != "FAIL internal/lease 2 tests failed" {
+	if p, ok := w.rep.list[0].data.(bus.EpicPaused); !ok || p.Epic != "ep-1" || p.Group != "tg-1.1" ||
+		p.Output != "FAIL internal/lease 2 tests failed" {
 		t.Fatalf("paused data = %+v", w.rep.list[0].data)
 	}
 	g2 := w.newGroup("tg-1.2")

@@ -38,7 +38,12 @@ func TestCleanSweepsWhatAKilledEngineLeft(t *testing.T) {
 			return
 		}
 		if time.Now().After(end) {
-			t.Fatalf("clean left the worktree (%v) or the container (%v)\n%s", werr == nil, berr == nil, r.evidence(r.events()))
+			t.Fatalf(
+				"clean left the worktree (%v) or the container (%v)\n%s",
+				werr == nil,
+				berr == nil,
+				r.evidence(r.events()),
+			)
 		}
 	}
 }

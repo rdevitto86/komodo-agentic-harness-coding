@@ -1,5 +1,4 @@
-// Package llm is the model client: one adapter per link, a tool loop for the HTTP links, and the
-// model catalog.
+// Package llm is the model client: one adapter per link, a tool loop for the HTTP links, and the model catalog.
 package llm
 
 import (
@@ -25,14 +24,11 @@ type Link string
 
 // The links; the two OpenAI links are named in the interface and not built.
 const (
-	// the Claude subscription, through the claude program
-	ClaudeCLI    Link = "claude-cli"
-	AnthropicAPI Link = "anthropic-api" // the paid Anthropic HTTP interface
-	// OpenAI's subscription; in the interface, not built
-	OpenAISubscription Link = "openai-subscription"
-	// OpenAI's paid HTTP interface; in the interface, not built
-	OpenAIAPI Link = "openai-api"
-	Local     Link = "local" // the optional free model on this machine
+	ClaudeCLI          Link = "claude-cli"          // the Claude subscription, through the claude program
+	AnthropicAPI       Link = "anthropic-api"       // the paid Anthropic HTTP interface
+	OpenAISubscription Link = "openai-subscription" // OpenAI's subscription; in the interface, not built
+	OpenAIAPI          Link = "openai-api"          // OpenAI's paid HTTP interface; in the interface, not built
+	Local              Link = "local"               // the optional free model on this machine
 )
 
 // Session is one model session an adapter runs.
@@ -48,8 +44,7 @@ type Session struct {
 	Env     []string        // environment of the claude program, after the scrub
 	Cache   cache.Handle    // the cache handle; the paid adapter stores its marker plan there
 	Parts   [5]string       // the brief's five parts; API links place cache markers between them
-	// the role's own check of a result; API links only, nil accepts any valid result
-	Gate Gate
+	Gate    Gate            // the role's own check of a result; API links only, nil accepts any valid result
 }
 
 // Input is the one new user message sent when a session resumes.
@@ -86,8 +81,7 @@ type ToolDef struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
-// ToolDefiner is implemented by a ToolHost that can describe its tools; a host without it gets a
-// permissive schema.
+// ToolDefiner is implemented by a ToolHost that can describe its tools; a host without it gets a permissive schema.
 type ToolDefiner interface {
 	// Definition returns the definition of one advertised tool.
 	Definition(name string) (ToolDef, bool)
@@ -95,8 +89,7 @@ type ToolDefiner interface {
 
 // Gate is the role's own check of a session result.
 type Gate interface {
-	// Check returns an empty string when the result passes, else the text sent back into the
-	// session.
+	// Check returns an empty string when the result passes, else the text sent back into the session.
 	Check(ctx context.Context, output json.RawMessage) (string, error)
 }
 
@@ -132,7 +125,6 @@ func New(providers map[Link]Provider) *Client {
 	for l, p := range providers {
 		m[l] = p
 	}
-
 	return &Client{providers: m}
 }
 
@@ -142,7 +134,6 @@ func (c *Client) Probe(ctx context.Context, l Link) (ProbeResult, error) {
 	if err != nil {
 		return ProbeResult{Link: l, Reason: err.Error()}, err
 	}
-
 	return p.Probe(ctx)
 }
 
@@ -152,7 +143,6 @@ func (c *Client) Profile(ctx context.Context, l Link, w Weight) (CapacityProfile
 	if err != nil {
 		return CapacityProfile{}, err
 	}
-
 	return p.Profile(ctx, w)
 }
 
@@ -162,7 +152,6 @@ func (c *Client) Start(ctx context.Context, s Session) (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return p.Start(ctx, s)
 }
 
@@ -172,21 +161,17 @@ func (c *Client) Resume(ctx context.Context, s Session, in Input) (Stream, error
 	if err != nil {
 		return nil, err
 	}
-
 	return p.Resume(ctx, s, in)
 }
 
-// provider returns the adapter of a link, ErrNotYet for an OpenAI link and ErrUnavailable for any
-// other missing one.
+// provider returns the adapter of a link, ErrNotYet for an OpenAI link and ErrUnavailable for any other missing one.
 func (c *Client) provider(l Link) (Provider, error) {
 	if p, ok := c.providers[l]; ok {
 		return p, nil
 	}
-
 	switch l {
 	case OpenAISubscription, OpenAIAPI:
 		return nil, fmt.Errorf("%s: %w", l, ErrNotYet)
 	}
-
 	return nil, fmt.Errorf("%s: %w", l, ErrUnavailable)
 }

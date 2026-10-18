@@ -472,7 +472,6 @@ func TestCachePutKeepsExistingEntryWhenRenameFails(t *testing.T) {
 	orig := renameFile
 	t.Cleanup(func() { renameFile = orig })
 	renameFile = func(string, string) error { return errors.New("access is denied") }
-
 	if err := c.Put(NSMap, key, []byte("result")); err != nil {
 		t.Fatalf("Put = %v; want nil because a valid entry already exists", err)
 	}
@@ -485,7 +484,6 @@ func TestCachePutKeepsExistingEntryWhenRenameFails(t *testing.T) {
 			t.Fatalf("temp file %s left behind", n)
 		}
 	}
-
 	if err := c.Put(NSMap, c.Key("new"), []byte("x")); err == nil {
 		t.Fatal("Put = nil; want the rename error when no entry exists")
 	}
@@ -518,7 +516,6 @@ func TestCacheHandleSharesEntriesAndClosesCleanly(t *testing.T) {
 	if got, ok := h.Get(NSMap, key); !ok || string(got) != "from cache" {
 		t.Fatalf("handle Get = %q, %v; want the cache's write", got, ok)
 	}
-
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}

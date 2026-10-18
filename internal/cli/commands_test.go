@@ -135,7 +135,12 @@ func TestRunAnswerFlags(t *testing.T) {
 	var refuse bool
 	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
 		if refuse {
-			send(engine.Reply{Status: engine.StatusRefused, Code: engine.CodeNotBlocked, Detail: "tg-1.2 is not blocked", Final: true})
+			send(engine.Reply{
+				Status: engine.StatusRefused,
+				Code:   engine.CodeNotBlocked,
+				Detail: "tg-1.2 is not blocked",
+				Final:  true,
+			})
 			return
 		}
 		send(okReply(map[string]any{}))
@@ -146,7 +151,8 @@ func TestRunAnswerFlags(t *testing.T) {
 	}
 	req := srv.Requests()[0]
 	rc, ok := req.Event.Data.(*bus.RunContinue)
-	if !req.Flags.Approve || req.Event.Type != bus.TypeRunContinue || !ok || rc.Answer != "approve" || rc.Target != "tg-1.2" {
+	if !req.Flags.Approve || req.Event.Type != bus.TypeRunContinue || !ok || rc.Answer != "approve" ||
+		rc.Target != "tg-1.2" {
 		t.Fatalf("request = %+v", req)
 	}
 	refuse = true
@@ -173,7 +179,12 @@ func TestRunSchedule(t *testing.T) {
 	repo := repoDir(t, "")
 	backlog(t, repo, map[string]string{"epic-1/tg-1.2": "todo"})
 	srv := h.fake(func(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
-		send(okReply(map[string]any{"run_id": sampleRun, "queued": map[string]any{"target": req.Target, "at": req.Flags.Schedule}}))
+		send(
+			okReply(map[string]any{
+				"run_id": sampleRun,
+				"queued": map[string]any{"target": req.Target, "at": req.Flags.Schedule},
+			}),
+		)
 	})
 	code, e := h.envelope("-C", repo, "run", "tg-1.2", "--schedule", "2026-10-16T02:00:00-07:00")
 	if code != 0 || !e.OK {
@@ -199,19 +210,26 @@ func TestStopAndAbandon(t *testing.T) {
 	refuse := false
 	srv := h.fake(func(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
 		if refuse {
-			send(engine.Reply{Status: engine.StatusRefused, Code: engine.CodeUnknownTarget, Detail: "nothing named " + req.Target, Final: true})
+			send(engine.Reply{
+				Status: engine.StatusRefused,
+				Code:   engine.CodeUnknownTarget,
+				Detail: "nothing named " + req.Target,
+				Final:  true,
+			})
 			return
 		}
 		send(okReply(map[string]any{"run_id": sampleRun}))
 	})
 	code, e := h.envelope("-C", repo, "stop", "tg-1.2")
 	req := srv.Requests()[0]
-	if code != 0 || req.Verb != engine.VerbStop || req.Event.Type != bus.TypeRunStop || req.Event.Data.(*bus.RunStop).Target != "tg-1.2" ||
+	if code != 0 || req.Verb != engine.VerbStop || req.Event.Type != bus.TypeRunStop ||
+		req.Event.Data.(*bus.RunStop).Target != "tg-1.2" ||
 		dataOf[StopData](t, e).RunID != sampleRun {
 		t.Fatalf("stop: exit %d, %+v, %+v", code, e, req)
 	}
 	code, e = h.envelope("-C", repo, "abandon", "tg-1.2")
-	if code != 0 || srv.Requests()[1].Verb != engine.VerbAbandon || srv.Requests()[1].Target != "tg-1.2" || srv.Requests()[1].Event != nil {
+	if code != 0 || srv.Requests()[1].Verb != engine.VerbAbandon || srv.Requests()[1].Target != "tg-1.2" ||
+		srv.Requests()[1].Event != nil {
 		t.Fatalf("abandon: exit %d, %+v", code, e)
 	}
 	if code, e = h.envelope("-C", repo, "abandon", "ep-1"); code != 2 || e.Error.Code != "usage" {
@@ -243,11 +261,13 @@ func TestPlanWaitsForRunStart(t *testing.T) {
 	req := srv.Requests()[0]
 	pr, ok := req.Event.Data.(*planRequest)
 	if req.Verb != engine.VerbPlan || req.Event.Type != bus.TypePlan || req.Event.Subtype != "request" || !ok ||
-		pr.Goal != "Add lease revocation" || len(pr.Docs) != 1 || pr.Docs[0] != "docs/hld.md" || !uuidPattern.MatchString(string(req.Event.Run)) {
+		pr.Goal != "Add lease revocation" || len(pr.Docs) != 1 || pr.Docs[0] != "docs/hld.md" ||
+		!uuidPattern.MatchString(string(req.Event.Run)) {
 		t.Fatalf("request = %+v", req)
 	}
 	d := dataOf[PlanData](t, e)
-	if d.Target != "ep-2" || strings.Join(d.Groups, ",") != "tg-2.1,tg-2.2" || d.RunID != "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25" {
+	if d.Target != "ep-2" || strings.Join(d.Groups, ",") != "tg-2.1,tg-2.2" ||
+		d.RunID != "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25" {
 		t.Fatalf("data = %+v", d)
 	}
 	if code, e := h.envelope("-C", repo, "plan"); code != 2 {
@@ -259,9 +279,18 @@ func TestPlanFailureIsTheErrorEvent(t *testing.T) {
 	h := newHarness(t)
 	repo := repoDir(t, "")
 	h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
-		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{Type: bus.TypeError, Subtype: "fault.error", Data: &fault.ErrorFault{FaultData: fault.FaultData{
-			Component: "intake", Code: "plan_blocked", Kind: "blocked", Severity: "error", Reason: "The third planner draft failed lint",
-		}}}})
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event: &bus.Event{
+				Type:    bus.TypeError,
+				Subtype: "fault.error",
+				Data: &fault.ErrorFault{FaultData: fault.FaultData{
+					Component: "intake",
+					Code:      "plan_blocked",
+					Kind:      "blocked",
+					Severity:  "error",
+					Reason:    "The third planner draft failed lint",
+				}}}})
 		send(okReply(map[string]any{}))
 	})
 	code, e := h.envelope("-C", repo, "plan", "goal text")
@@ -274,13 +303,25 @@ func TestReplayCollectsEventsAndGaps(t *testing.T) {
 	h := newHarness(t)
 	repo := repoDir(t, "")
 	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
-		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{Type: bus.TypeRunStatus, Subtype: "run.start", Run: sampleRun, Data: &bus.RunStartedFact{Groups: []bus.ID{"g1"}, ConfigHash: "h", Version: "v"}}})
-		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{Type: bus.TypeRunComplete, Subtype: "stopped", Run: sampleRun, Data: &bus.RunStopped{}}})
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event: &bus.Event{
+				Type:    bus.TypeRunStatus,
+				Subtype: "run.start",
+				Run:     sampleRun,
+				Data:    &bus.RunStartedFact{Groups: []bus.ID{"g1"}, ConfigHash: "h", Version: "v"},
+			},
+		})
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event:  &bus.Event{Type: bus.TypeRunComplete, Subtype: "stopped", Run: sampleRun, Data: &bus.RunStopped{}},
+		})
 		send(okReply(map[string]any{"gaps": 1}))
 	})
 	code, e := h.envelope("-C", repo, "replay", "tg-1.2")
 	d := dataOf[ReplayData](t, e)
-	if code != 0 || len(d.Steps) != 2 || d.Gaps != 1 || d.RunID != sampleRun || d.Steps[0].Type != bus.TypeRunStatus || d.Steps[1].Subtype != "stopped" {
+	if code != 0 || len(d.Steps) != 2 || d.Gaps != 1 || d.RunID != sampleRun || d.Steps[0].Type != bus.TypeRunStatus ||
+		d.Steps[1].Subtype != "stopped" {
 		t.Fatalf("exit %d, data %+v", code, d)
 	}
 	if req := srv.Requests()[0]; req.Verb != engine.VerbReplay || req.Target != "tg-1.2" || req.Event != nil {
@@ -297,7 +338,8 @@ func TestCleanDryRun(t *testing.T) {
 		send(okReply(CleanData{Removed: []CleanItem{{Kind: "worktree", Name: "tg-1.2"}}}))
 	})
 	code, e := h.envelope("clean", "--dry-run")
-	if code != 0 || len(dataOf[CleanData](t, e).Removed) != 1 || !srv.Requests()[0].Flags.DryRun || srv.Requests()[0].Verb != engine.VerbClean {
+	if code != 0 || len(dataOf[CleanData](t, e).Removed) != 1 || !srv.Requests()[0].Flags.DryRun ||
+		srv.Requests()[0].Verb != engine.VerbClean {
 		t.Fatalf("exit %d, %+v", code, e)
 	}
 	if !strings.Contains(e.Report, "tg-1.2") {
@@ -307,9 +349,18 @@ func TestCleanDryRun(t *testing.T) {
 
 func statusFixture() StatusData {
 	return StatusData{
-		Runs:    []RunRow{{RunID: sampleRun, Target: "ep-1", Groups: []GroupRow{{Group: "tg-1.2", Stage: "build", State: "blocked"}}}},
-		Queued:  []QueuedRow{},
-		Blocked: []BlockedRow{{Group: "tg-1.2", RunID: sampleRun, Reason: "needs_scope", Question: "The builder needs internal/cache/store.go, outside its scope."}},
+		Runs: []RunRow{
+			{RunID: sampleRun, Target: "ep-1", Groups: []GroupRow{{Group: "tg-1.2", Stage: "build", State: "blocked"}}},
+		},
+		Queued: []QueuedRow{},
+		Blocked: []BlockedRow{
+			{
+				Group:    "tg-1.2",
+				RunID:    sampleRun,
+				Reason:   "needs_scope",
+				Question: "The builder needs internal/cache/store.go, outside its scope.",
+			},
+		},
 	}
 }
 
@@ -330,7 +381,8 @@ func TestStatusFiguresAndScorecard(t *testing.T) {
 	code, e := h.envelope("-C", repo, "status", "tg-1.2")
 	d := dataOf[StatusData](t, e)
 	req := srv.Requests()[0]
-	if code != 0 || req.Verb != engine.VerbStatus || req.Target != "tg-1.2" || req.Root != repo || d.Figures == nil || d.Figures.TokensIn != 1000 || len(d.Explain) != 1 {
+	if code != 0 || req.Verb != engine.VerbStatus || req.Target != "tg-1.2" || req.Root != repo || d.Figures == nil ||
+		d.Figures.TokensIn != 1000 || len(d.Explain) != 1 {
 		t.Fatalf("status (id): exit %d, req %+v, data %+v", code, req, d)
 	}
 	if !strings.Contains(e.Report, "1 active run") {
@@ -359,7 +411,8 @@ func TestStatusWait(t *testing.T) {
 	})
 	code, e := h.envelope("-C", repo, "status", "--wait")
 	d := dataOf[StatusData](t, e)
-	if code != 3 || !e.OK || d.Waited != "blocked" || len(d.Blocked) != 1 || !strings.Contains(e.Report, "internal/cache/store.go") {
+	if code != 3 || !e.OK || d.Waited != "blocked" || len(d.Blocked) != 1 ||
+		!strings.Contains(e.Report, "internal/cache/store.go") {
 		t.Fatalf("blocked: exit %d, %+v", code, e)
 	}
 	if f := srv.Requests()[0].Flags; !f.Wait || f.TimeoutS != 540 {
@@ -381,11 +434,13 @@ func TestEngineFailuresMapToExitCodes(t *testing.T) {
 	repo := repoDir(t, "")
 	reply := engine.Reply{Status: engine.StatusRefused, Code: engine.CodeRunRefused, Detail: "dependency cycle", Final: true}
 	h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) { send(reply) })
-	if code, e := h.envelope("-C", repo, "clean"); code != 1 || e.Error.Code != "run_refused" || !strings.Contains(e.Error.Reason, "dependency cycle") {
+	if code, e := h.envelope("-C", repo, "clean"); code != 1 || e.Error.Code != "run_refused" ||
+		!strings.Contains(e.Error.Reason, "dependency cycle") {
 		t.Fatalf("refused: exit %d, %+v", code, e.Error)
 	}
 	reply = engine.Reply{Status: engine.StatusError, Detail: "disk full", Final: true}
-	if code, e := h.envelope("-C", repo, "clean"); code != 4 || e.Error.Code != "internal" || !strings.Contains(e.Error.Reason, "disk full") {
+	if code, e := h.envelope("-C", repo, "clean"); code != 4 || e.Error.Code != "internal" ||
+		!strings.Contains(e.Error.Reason, "disk full") {
 		t.Fatalf("error: exit %d, %+v", code, e.Error)
 	}
 }
@@ -397,7 +452,8 @@ func TestNoEngineExitsFourNamingSocket(t *testing.T) {
 	e.Start = func(context.Context) error { return nil }
 	h.engine = e
 	code, env := h.envelope("clean")
-	if code != 4 || env.Error.Code != "internal" || !strings.Contains(env.Error.Reason, filepath.Join(h.home, "state", "engine.sock")) {
+	if code != 4 || env.Error.Code != "internal" ||
+		!strings.Contains(env.Error.Reason, filepath.Join(h.home, "state", "engine.sock")) {
 		t.Fatalf("exit %d, %+v", code, env.Error)
 	}
 }

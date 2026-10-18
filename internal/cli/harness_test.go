@@ -211,13 +211,18 @@ type fakeLinks []llm.ProbeResult
 // ProbeAll returns the fixed results.
 func (f fakeLinks) ProbeAll(context.Context) []llm.ProbeResult { return f }
 
-// mustBeOutsideRepo fails the test when dir sits inside a git repository, so a command cannot write a real repository's files.
+// mustBeOutsideRepo fails the test when dir sits inside a git repository, so a command cannot write a real repository's
+// files.
 func mustBeOutsideRepo(t interface {
 	Helper()
 	Fatalf(string, ...any)
 }, dir string) {
 	t.Helper()
 	if root, ok := findRepoRoot(dir); ok {
-		t.Fatalf("the temporary folder %s sits inside the repository %s: set TMPDIR to a folder outside every checkout", dir, root)
+		t.Fatalf(
+			"the temporary folder %s sits inside the repository %s: set TMPDIR to a folder outside every checkout",
+			dir,
+			root,
+		)
 	}
 }

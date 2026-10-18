@@ -1,5 +1,5 @@
-// Package metrics is the Metrics Service: it follows every bus event and keeps the run figures,
-// which it rebuilds from the bus's event store.
+// Package metrics is the Metrics Service: it follows every bus event and keeps the run figures, which it rebuilds from the
+// bus's event store.
 package metrics
 
 import (
@@ -21,8 +21,7 @@ const (
 	outcomeInterrupted = "interrupted"
 )
 
-// FaultRecord is a failure of the Metrics Service itself, kept in the figures of the run it
-// touched.
+// FaultRecord is a failure of the Metrics Service itself, kept in the figures of the run it touched.
 type FaultRecord struct {
 	Time time.Time `json:"time"`
 	Kind string    `json:"kind"` // write, trim, read, no_common_dir or no_repository
@@ -45,6 +44,14 @@ type SessionRecord struct {
 	EndedAt time.Time         `json:"ended_at,omitzero"`
 	WallS   int64             `json:"wall_s"` // wall time in seconds
 	Usage   *bus.SessionUsage `json:"usage,omitempty"`
+}
+
+// age returns the time a record is aged by: its end, or its start when it has no end.
+func (r SessionRecord) age() time.Time {
+	if !r.EndedAt.IsZero() {
+		return r.EndedAt
+	}
+	return r.StartedAt
 }
 
 // StageTime is the time a group spent in one stage.
@@ -88,15 +95,6 @@ type RunMetrics struct {
 	Dir       string           `json:"dir"` // the metrics folder of the run's repository
 	// the Service's own failures that touched this run, each once
 	Failures []FaultRecord `json:"failures"`
-}
-
-// age returns the time a record is aged by: its end, or its start when it has no end.
-func (r SessionRecord) age() time.Time {
-	if !r.EndedAt.IsZero() {
-		return r.EndedAt
-	}
-
-	return r.StartedAt
 }
 
 // addUsage returns a plus b, field by field.

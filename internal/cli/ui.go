@@ -31,10 +31,14 @@ var uiContext = func() (context.Context, context.CancelFunc) {
 }
 
 var (
-	uiStarted     func(addr string)         // uiStarted is called with the address once the dashboard listens; tests set it, nothing else does.
-	uiEvery       = 2 * time.Second         // uiEvery is how often the dashboard asks the engine for the current state.
-	uiReplayEvery = 10 * time.Second        // uiReplayEvery is the longest a run's recorded events are kept before they are read again when its status is unchanged.
-	uiReadLimit   = 1500 * time.Millisecond // uiReadLimit is how long one read of the engine may take before the page shows the engine as not answering.
+	// uiStarted is called with the address once the dashboard listens; tests set it, nothing else does.
+	uiStarted func(addr string)
+	// uiEvery is how often the dashboard asks the engine for the current state.
+	uiEvery = 2 * time.Second
+	// uiReplayEvery is the longest a run's recorded events are kept before they are read again when its status is unchanged.
+	uiReplayEvery = 10 * time.Second
+	// uiReadLimit is how long one read of the engine may take before the page shows the engine as not answering.
+	uiReadLimit = 1500 * time.Millisecond
 )
 
 // uiPing is how often an idle event stream sends a comment line so the browser keeps it open.
@@ -78,60 +82,6 @@ func newUIServer(d uiDeps, addr string) *uiServer {
 		notify:  make(chan struct{}),
 		first:   make(chan struct{}),
 	}
-}
-
-// uiListen opens a free port on the loopback address only.
-func uiListen() (net.Listener, error) { return net.Listen("tcp4", "127.0.0.1:0") }
-
-// uiReader returns the engine client the page polls with: a socket client that reports a missing engine instead of starting one.
-func uiReader(eng Engine) Engine {
-	se, ok := eng.(*SocketEngine)
-	if !ok {
-		return eng
-	}
-	c := *se
-	c.Start = func(context.Context) error { return errUINoEngine }
-	return &c
-}
-
-// handleUI serves the dashboard until Ctrl-C, starting the engine first when none runs.
-func handleUI(c *Call) Result {
-	ctx, stop := uiContext()
-	defer stop()
-
-	eng := c.cli.deps.Engine
-	if err := eng.Ensure(ctx); err != nil {
-		return internalErr("reach the engine: " + err.Error())
-	}
-
-	ln, err := uiListen()
-	if err != nil {
-		return internalErr("listen on the local address: " + err.Error())
-	}
-
-	assets, err := fs.Sub(komodo.Embedded, "embed/ui")
-	if err != nil {
-		_ = ln.Close()
-		return internalErr("open the dashboard files: " + err.Error())
-	}
-
-	root := c.Repo.Root
-	if c.Global.All {
-		root = ""
-	}
-
-	addr := ln.Addr().String()
-	s := newUIServer(uiDeps{Engine: eng, Root: root, Assets: assets}, addr)
-
-	_, _ = fmt.Fprintf(c.cli.errOut, "Dashboard at http://%s (Ctrl-C to stop)\n", addr)
-	if uiStarted != nil {
-		uiStarted(addr)
-	}
-
-	if err := s.Serve(ctx, ln); err != nil {
-		return internalErr("serve the dashboard: " + err.Error())
-	}
-	return Result{Outcome: OutcomeOK, Shape: "reply.ui", Facts: format.UIFacts{Address: addr}, Data: UIData{Address: addr}}
 }
 
 // Serve answers requests on ln and reads the engine until ctx ends, then closes every open stream and returns.
@@ -184,7 +134,8 @@ func (s *uiServer) Serve(ctx context.Context, ln net.Listener) error {
 	return nil
 }
 
-// Handler returns the routes: the page, its script, the current state and the live event stream. Only GET and HEAD are served.
+// Handler returns the routes: the page, its script, the current state and the live event stream. Only GET and HEAD are
+// served.
 func (s *uiServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.page)
@@ -193,7 +144,10 @@ func (s *uiServer) Handler() http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'")
+		h.Set(
+			"Content-Security-Policy",
+			"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'",
+		)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -207,6 +161,21 @@ func (s *uiServer) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// Poll reads the engine every interval and publishes the state until ctx ends.
+func (s *uiServer) Poll(ctx context.Context) {
+	t := time.NewTicker(s.deps.Every)
+	defer t.Stop()
+
+	for {
+		s.refresh(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // page serves index.html at the root and ui.js beside it.
@@ -233,11 +202,17 @@ func (s *uiServer) page(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-// snapshot returns the latest state JSON and the channel that closes when it changes.
-func (s *uiServer) snapshot() ([]byte, <-chan struct{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cur, s.notify
+// state serves the current state as JSON.
+func (s *uiServer) state(w http.ResponseWriter, r *http.Request) {
+	if !s.waitFirst(r) {
+		http.Error(w, "the engine has not answered yet", http.StatusServiceUnavailable)
+		return
+	}
+
+	b, _ := s.snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(b)
 }
 
 // waitFirst blocks until the engine was read once, the request ends or 10 seconds pass.
@@ -251,17 +226,11 @@ func (s *uiServer) waitFirst(r *http.Request) bool {
 	return false
 }
 
-// state serves the current state as JSON.
-func (s *uiServer) state(w http.ResponseWriter, r *http.Request) {
-	if !s.waitFirst(r) {
-		http.Error(w, "the engine has not answered yet", http.StatusServiceUnavailable)
-		return
-	}
-
-	b, _ := s.snapshot()
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(b)
+// snapshot returns the latest state JSON and the channel that closes when it changes.
+func (s *uiServer) snapshot() ([]byte, <-chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cur, s.notify
 }
 
 // stream sends the state as a server-sent event now and again on every change, until the browser or the server ends it.
@@ -306,21 +275,6 @@ func (s *uiServer) stream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Poll reads the engine every interval and publishes the state until ctx ends.
-func (s *uiServer) Poll(ctx context.Context) {
-	t := time.NewTicker(s.deps.Every)
-	defer t.Stop()
-
-	for {
-		s.refresh(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
-}
-
 // refresh reads the engine once and wakes every open stream when the state changed.
 func (s *uiServer) refresh(ctx context.Context) {
 	rctx, cancel := context.WithTimeout(ctx, uiReadLimit)
@@ -337,6 +291,61 @@ func (s *uiServer) refresh(ctx context.Context) {
 	s.mu.Unlock()
 	s.once.Do(func() { close(s.first) })
 }
+
+// uiReader returns the engine client the page polls with: a socket client that reports a missing engine instead of starting
+// one.
+func uiReader(eng Engine) Engine {
+	se, ok := eng.(*SocketEngine)
+	if !ok {
+		return eng
+	}
+	c := *se
+	c.Start = func(context.Context) error { return errUINoEngine }
+	return &c
+}
+
+// handleUI serves the dashboard until Ctrl-C, starting the engine first when none runs.
+func handleUI(c *Call) Result {
+	ctx, stop := uiContext()
+	defer stop()
+
+	eng := c.cli.deps.Engine
+	if err := eng.Ensure(ctx); err != nil {
+		return internalErr("reach the engine: " + err.Error())
+	}
+
+	ln, err := uiListen()
+	if err != nil {
+		return internalErr("listen on the local address: " + err.Error())
+	}
+
+	assets, err := fs.Sub(komodo.Embedded, "embed/ui")
+	if err != nil {
+		_ = ln.Close()
+		return internalErr("open the dashboard files: " + err.Error())
+	}
+
+	root := c.Repo.Root
+	if c.Global.All {
+		root = ""
+	}
+
+	addr := ln.Addr().String()
+	s := newUIServer(uiDeps{Engine: eng, Root: root, Assets: assets}, addr)
+
+	_, _ = fmt.Fprintf(c.cli.errOut, "Dashboard at http://%s (Ctrl-C to stop)\n", addr)
+	if uiStarted != nil {
+		uiStarted(addr)
+	}
+
+	if err := s.Serve(ctx, ln); err != nil {
+		return internalErr("serve the dashboard: " + err.Error())
+	}
+	return Result{Outcome: OutcomeOK, Shape: "reply.ui", Facts: format.UIFacts{Address: addr}, Data: UIData{Address: addr}}
+}
+
+// uiListen opens a free port on the loopback address only.
+func uiListen() (net.Listener, error) { return net.Listen("tcp4", "127.0.0.1:0") }
 
 // trimDetail keeps an error to its first line so one engine message stays one line on the page.
 func trimDetail(err error) string {

@@ -39,10 +39,12 @@ func decodeEntry(raw []byte) ([]byte, bool) {
 	if err := json.Unmarshal(raw, &f); err != nil || f.V != entryVersion {
 		return nil, false
 	}
+
 	sum := sha256.Sum256(f.Payload)
 	if f.SHA256 != hex.EncodeToString(sum[:]) {
 		return nil, false
 	}
+
 	return f.Payload, true
 }
 

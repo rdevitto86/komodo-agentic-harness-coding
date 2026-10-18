@@ -32,34 +32,38 @@ type StreamHooks struct {
 // dropError marks a stream that broke mid-answer.
 type dropError struct{ err error }
 
+// Error describes the read failure.
+func (e *dropError) Error() string { return "stream dropped: " + e.err.Error() }
+
+// Unwrap exposes the read failure.
+func (e *dropError) Unwrap() error { return e.err }
+
 // activityReader reports every read that returns bytes.
 type activityReader struct {
 	r  io.Reader
 	fn func()
 }
 
+// Read reads from the wrapped reader and signals activity.
+func (a *activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 && a.fn != nil {
+		a.fn()
+	}
+	return n, err
+}
+
 // Stream sends req and feeds SSE events to hooks; a drop mid-answer retries once from the start.
-func (c *Client) Stream(
-	ctx context.Context,
-	ep Endpoint,
-	req *http.Request,
-	hooks StreamHooks,
-) (*Response, error) {
+func (c *Client) Stream(ctx context.Context, ep Endpoint, req *http.Request, hooks StreamHooks) (*Response, error) {
 	for drops := 0; ; drops++ {
 		s, err := c.send(ctx, ep, req)
 		if err != nil {
 			return nil, c.wrapErr(err)
 		}
 
-		res := &Response{
-			Status:   s.resp.StatusCode,
-			Header:   s.resp.Header,
-			Attempts: s.attempts,
-			Headroom: s.headroom,
-		}
+		res := &Response{Status: s.resp.StatusCode, Header: s.resp.Header, Attempts: s.attempts, Headroom: s.headroom}
 		err = readSSE(ctx, s.resp.Body, hooks)
 		_ = s.resp.Body.Close()
-
 		if err == nil {
 			return res, nil
 		}
@@ -68,47 +72,22 @@ func (c *Client) Stream(
 		if !errors.As(err, &drop) {
 			return nil, c.wrapErr(err)
 		}
-
 		if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
-			c.logf(
-				"stream from %s dropped mid-answer: %v; request body cannot be resent",
-				c.target(req),
-				err,
-			)
-
+			c.logf("stream from %s dropped mid-answer: %v; request body cannot be resent", c.target(req), err)
 			return nil, c.wrapErr(err)
 		}
-
 		if drops == 1 {
 			return nil, c.wrapErr(fmt.Errorf("stream dropped twice: %w", err))
 		}
 
 		c.logf("stream from %s dropped mid-answer: %v; retrying from the start", c.target(req), err)
-
 		if hooks.Restart != nil {
 			hooks.Restart()
 		}
 	}
 }
 
-// Error describes the read failure.
-func (e *dropError) Error() string { return "stream dropped: " + e.err.Error() }
-
-// Unwrap exposes the read failure.
-func (e *dropError) Unwrap() error { return e.err }
-
-// Read reads from the wrapped reader and signals activity.
-func (a *activityReader) Read(p []byte) (int, error) {
-	n, err := a.r.Read(p)
-	if n > 0 && a.fn != nil {
-		a.fn()
-	}
-
-	return n, err
-}
-
-// readSSE parses events until the body ends; a broken read, or a clean end before the final event,
-// is a dropError.
+// readSSE parses events until the body ends; a broken read, or a clean end before the final event, is a dropError.
 func readSSE(ctx context.Context, body io.Reader, hooks StreamHooks) error {
 	// sseLineMax is the longest SSE line the reader accepts.
 	const sseLineMax = 1 << 20
@@ -131,7 +110,6 @@ func readSSE(ctx context.Context, body io.Reader, hooks StreamHooks) error {
 				if hooks.Final != nil && hooks.Final(ev) {
 					final = true
 				}
-
 				if hooks.Event != nil {
 					if err := hooks.Event(ev); err != nil {
 						return err
@@ -140,7 +118,6 @@ func readSSE(ctx context.Context, body io.Reader, hooks StreamHooks) error {
 			}
 
 			ev, data, pending = SSEEvent{}, nil, false
-
 			continue
 		}
 

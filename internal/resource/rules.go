@@ -17,8 +17,7 @@ type Thresholds struct {
 	GroupTokens      int64   // limits.group_tokens; 0 means no cap and no nudge
 }
 
-// Observation names what one event changed, so Evaluate looks only at the rules it can have made
-// true.
+// Observation names what one event changed, so Evaluate looks only at the rules it can have made true.
 type Observation struct {
 	Subtype bus.Subtype
 	Key     WindowKey // the window, or link-level entry, the event set; empty for usage
@@ -44,11 +43,10 @@ func (r *Result) raise(e fault.ResourceError, k WindowKey) {
 	r.keys = append(r.keys, k)
 }
 
-// Evaluate returns the resource errors, pause orders and nudges one observation causes; it reads
-// State and Thresholds and changes neither.
+// Evaluate returns the resource errors, pause orders and nudges one observation causes; it reads State and Thresholds and
+// changes neither.
 func Evaluate(s *State, t Thresholds, o Observation) Result {
 	r := Result{}
-
 	if o.Link != "" {
 		r = evalWindows(s, t, o)
 	}
@@ -59,7 +57,6 @@ func Evaluate(s *State, t Thresholds, o Observation) Result {
 			for i, e := range x.Errors {
 				r.raise(e, x.keys[i])
 			}
-
 			r.Pauses = append(r.Pauses, x.Pauses...)
 			r.Nudges = append(r.Nudges, x.Nudges...)
 		}
@@ -88,8 +85,8 @@ func Evaluate(s *State, t Thresholds, o Observation) Result {
 	return r
 }
 
-// evalWindows applies the plan window rules: the warning to the window a reading set, and the
-// full-window rule to every active window of the link.
+// evalWindows applies the plan window rules: the warning to the window a reading set, and the full-window rule to every
+// active window of the link.
 func evalWindows(s *State, t Thresholds, o Observation) Result {
 	var r Result
 
@@ -114,7 +111,6 @@ func evalWindows(s *State, t Thresholds, o Observation) Result {
 				e.Kind, e.Threshold = "window_full", 100
 				r.raise(e, k)
 			}
-
 			if g := without(names(w.Groups), w.Paused); len(g) > 0 {
 				r.Pauses = append(r.Pauses, PauseOrder{
 					Reason: reasonWindowFull,
@@ -124,7 +120,6 @@ func evalWindows(s *State, t Thresholds, o Observation) Result {
 					Until:  w.ResetAt,
 				})
 			}
-
 			continue
 		}
 
@@ -137,8 +132,7 @@ func evalWindows(s *State, t Thresholds, o Observation) Result {
 	return r
 }
 
-// evalSpend applies the paid dollar rules, per run and per day, to the totals a usage event
-// changed.
+// evalSpend applies the paid dollar rules, per run and per day, to the totals a usage event changed.
 func evalSpend(s *State, t Thresholds, o Observation) Result {
 	var r Result
 
@@ -154,14 +148,10 @@ func evalSpend(s *State, t Thresholds, o Observation) Result {
 			Threshold: amount * t.QuotaPct / 100,
 		}, WindowKey{})
 	}
-
-	if t.QuotaPct > 0 && t.USDPerRun > 0 &&
-		run*100 >= t.QuotaPct*t.USDPerRun && !sp.RunWarned[o.Run] {
+	if t.QuotaPct > 0 && t.USDPerRun > 0 && run*100 >= t.QuotaPct*t.USDPerRun && !sp.RunWarned[o.Run] {
 		warn("spend_run", run, t.USDPerRun)
 	}
-
-	if t.QuotaPct > 0 && t.USDPerDay > 0 &&
-		day*100 >= t.QuotaPct*t.USDPerDay && !sp.DayWarned {
+	if t.QuotaPct > 0 && t.USDPerDay > 0 && day*100 >= t.QuotaPct*t.USDPerDay && !sp.DayWarned {
 		warn("spend_day", day, t.USDPerDay)
 	}
 
@@ -175,13 +165,8 @@ func evalSpend(s *State, t Thresholds, o Observation) Result {
 				Threshold: c,
 			}, WindowKey{})
 		}
-
 		if g := without(names(s.RunGroups[o.Run]), sp.RunCeiling[o.Run]); len(g) > 0 {
-			r.Pauses = append(r.Pauses, PauseOrder{
-				Reason: reasonSpendCeiling,
-				Run:    o.Run,
-				Groups: g,
-			})
+			r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonSpendCeiling, Run: o.Run, Groups: g})
 		}
 	}
 
@@ -195,17 +180,21 @@ func evalSpend(s *State, t Thresholds, o Observation) Result {
 				Threshold: c,
 			}, WindowKey{})
 		}
-
 		if g := without(paidGroups(s), sp.DayCeiling); len(g) > 0 {
-			r.Pauses = append(r.Pauses, PauseOrder{
-				Reason: reasonSpendCeilingDay,
-				Groups: g,
-				Until:  nextMidnight(o.Now),
-			})
+			r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonSpendCeilingDay, Groups: g, Until: nextMidnight(o.Now)})
 		}
 	}
 
 	return r
+}
+
+// paidGroups returns the groups seen on every link that has reported metered dollars.
+func paidGroups(s *State) []string {
+	var sets []map[string]bool
+	for link := range s.PaidLinks {
+		sets = append(sets, s.LinkGroups[link])
+	}
+	return names(sets...)
 }
 
 // evalGroup applies the token cap rules to the group a usage event names.
@@ -232,7 +221,6 @@ func evalGroup(s *State, t Thresholds, o Observation) Result {
 				Threshold: float64(limit),
 			}, WindowKey{})
 		}
-
 		if !sp.GroupCapped[g] {
 			r.Pauses = append(r.Pauses, PauseOrder{Reason: reasonGroupTokens, Groups: []string{g}})
 		}
@@ -241,15 +229,4 @@ func evalGroup(s *State, t Thresholds, o Observation) Result {
 	}
 
 	return r
-}
-
-// paidGroups returns the groups seen on every link that has reported metered dollars.
-func paidGroups(s *State) []string {
-	var sets []map[string]bool
-
-	for link := range s.PaidLinks {
-		sets = append(sets, s.LinkGroups[link])
-	}
-
-	return names(sets...)
 }

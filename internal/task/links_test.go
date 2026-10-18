@@ -22,37 +22,28 @@ type fakeProvider struct {
 }
 
 func (f *fakeProvider) Link() llm.Link { return f.link }
+
 func (f *fakeProvider) Probe(context.Context) (llm.ProbeResult, error) {
 	f.probe.Link = f.link
 	return f.probe, f.perr
 }
+
 func (f *fakeProvider) Profile(context.Context, llm.Weight) (llm.CapacityProfile, error) {
 	return f.prof, f.proerr
 }
+
 func (f *fakeProvider) Start(_ context.Context, s llm.Session) (llm.Stream, error) {
 	if f.start == nil {
 		return nil, llm.ErrUnavailable
 	}
 	return f.start(s)
 }
+
 func (f *fakeProvider) Resume(_ context.Context, s llm.Session, in llm.Input) (llm.Stream, error) {
 	if f.resume == nil {
 		return nil, llm.ErrUnavailable
 	}
 	return f.resume(s, in)
-}
-
-// subLink is a healthy subscription link with a 200,000-token context.
-func subLink(l llm.Link) *fakeProvider {
-	return &fakeProvider{link: l, probe: llm.ProbeResult{OK: true, Models: map[llm.Weight]string{llm.Standard: "model-" + string(l)}},
-		prof: llm.CapacityProfile{Ctx: 200000, Slots: 3, CostClass: llm.CostSubscription, Effort: "medium"}}
-}
-
-// paidLink is a healthy paid link.
-func paidLink(l llm.Link) *fakeProvider {
-	p := subLink(l)
-	p.prof.CostClass = llm.CostPaid
-	return p
 }
 
 // fakeLimits is an in-memory LimitStore.
@@ -64,6 +55,8 @@ type fakeLimits struct {
 	released []llm.Link
 }
 
+var bothLinks = []llm.Link{llm.ClaudeCLI, llm.AnthropicAPI}
+
 func newLimits() *fakeLimits {
 	return &fakeLimits{resets: map[llm.Link]time.Time{}, slots: map[llm.Link]int{}, full: map[llm.Link]bool{}}
 }
@@ -74,12 +67,14 @@ func (f *fakeLimits) ResetAt(l llm.Link) (time.Time, bool) {
 	t, ok := f.resets[l]
 	return t, ok
 }
+
 func (f *fakeLimits) Record(l llm.Link, reset time.Time, _ llm.CapKind) error {
 	f.mu.Lock()
 	f.resets[l] = reset
 	f.mu.Unlock()
 	return nil
 }
+
 func (f *fakeLimits) TakeSlot(l llm.Link, max int) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -89,6 +84,7 @@ func (f *fakeLimits) TakeSlot(l llm.Link, max int) (bool, error) {
 	f.slots[l]++
 	return true, nil
 }
+
 func (f *fakeLimits) ReleaseSlot(l llm.Link) error {
 	f.mu.Lock()
 	f.slots[l]--
@@ -96,17 +92,6 @@ func (f *fakeLimits) ReleaseSlot(l llm.Link) error {
 	f.mu.Unlock()
 	return nil
 }
-
-// newRouter builds a router over fake providers at a fixed clock.
-func newRouter(paid string, lim *fakeLimits, ps ...*fakeProvider) *Router {
-	m := map[llm.Link]llm.Provider{}
-	for _, p := range ps {
-		m[p.link] = p
-	}
-	return &Router{Client: llm.New(m), Quota: lim, Paid: paid, Now: func() time.Time { return t0 }}
-}
-
-var bothLinks = []llm.Link{llm.ClaudeCLI, llm.AnthropicAPI}
 
 func TestSelectPaidLinkUnderEachPolicy(t *testing.T) {
 	ctx := context.Background()
@@ -117,7 +102,8 @@ func TestSelectPaidLinkUnderEachPolicy(t *testing.T) {
 	if err != nil || sel.Link != llm.ClaudeCLI {
 		t.Fatalf("never: got %+v, %v", sel, err)
 	}
-	if len(sel.Skips) != 1 || sel.Skips[0].Reason != "paid" || sel.Skips[0].From != llm.AnthropicAPI || sel.Skips[0].To != llm.ClaudeCLI {
+	if len(sel.Skips) != 1 || sel.Skips[0].Reason != "paid" || sel.Skips[0].From != llm.AnthropicAPI ||
+		sel.Skips[0].To != llm.ClaudeCLI {
 		t.Fatalf("never: skips %+v", sel.Skips)
 	}
 	// fallback: the paid link runs only after every subscription link is skipped, whatever its chain place.
@@ -138,7 +124,10 @@ func TestSelectPaidLinkUnderEachPolicy(t *testing.T) {
 	}
 	// never with only a paid link left: paid_refused.
 	r = newRouter("never", newLimits(), paidLink(llm.AnthropicAPI))
-	if _, err = r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.AnthropicAPI}, Weight: llm.Standard}); !errors.Is(err, ErrPaidRefused) {
+	if _, err = r.Select(ctx, SelectRequest{
+		Chain:  []llm.Link{llm.AnthropicAPI},
+		Weight: llm.Standard,
+	}); !errors.Is(err, ErrPaidRefused) {
 		t.Fatalf("never with only paid: %v", err)
 	}
 }
@@ -157,7 +146,11 @@ func TestSelectBriefOfExactlyHalfTheContextFits(t *testing.T) {
 		t.Fatalf("one token more moves on: got %+v, %v", sel, err)
 	}
 	big.prof.Ctx = 1000
-	if _, err = r.Select(ctx, SelectRequest{Chain: bothLinks, Weight: llm.Standard, BriefTokens: 501}); !errors.Is(err, ErrContext) {
+	if _, err = r.Select(ctx, SelectRequest{
+		Chain:       bothLinks,
+		Weight:      llm.Standard,
+		BriefTokens: 501,
+	}); !errors.Is(err, ErrContext) {
 		t.Fatalf("every link too small: %v", err)
 	}
 }
@@ -177,11 +170,16 @@ func TestSelectSkipsLimitedLinksAndPausesWhenNoneIsLeft(t *testing.T) {
 	}
 	// A reset in the past no longer limits the link.
 	lim.resets[llm.ClaudeCLI] = t0.Add(-time.Minute)
-	if sel, err := r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.ClaudeCLI}, Weight: llm.Standard}); err != nil || sel.Link != llm.ClaudeCLI {
+	if sel, err := r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.ClaudeCLI}, Weight: llm.Standard}); err != nil ||
+		sel.Link != llm.ClaudeCLI {
 		t.Fatalf("limit lifted: %+v, %v", sel, err)
 	}
 	// Excluded links (no free slot) pause too.
-	if _, err := r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.ClaudeCLI}, Weight: llm.Standard, Exclude: []llm.Link{llm.ClaudeCLI}}); !errors.Is(err, ErrPaused) {
+	if _, err := r.Select(ctx, SelectRequest{
+		Chain:   []llm.Link{llm.ClaudeCLI},
+		Weight:  llm.Standard,
+		Exclude: []llm.Link{llm.ClaudeCLI},
+	}); !errors.Is(err, ErrPaused) {
 		t.Fatalf("excluded link: %v", err)
 	}
 }
@@ -193,7 +191,10 @@ func TestSelectSkipsUnbuiltUnavailableAndUnauthorizedLinks(t *testing.T) {
 	out := subLink(llm.Local)
 	out.perr = llm.ErrUnauthorized
 	r := newRouter("allowed", newLimits(), down, out, subLink(llm.ClaudeCLI))
-	sel, err := r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.OpenAISubscription, llm.OpenAIAPI, llm.AnthropicAPI, llm.Local, llm.ClaudeCLI}, Weight: llm.Standard})
+	sel, err := r.Select(ctx, SelectRequest{
+		Chain:  []llm.Link{llm.OpenAISubscription, llm.OpenAIAPI, llm.AnthropicAPI, llm.Local, llm.ClaudeCLI},
+		Weight: llm.Standard,
+	})
 	if err != nil || sel.Link != llm.ClaudeCLI {
 		t.Fatalf("got %+v, %v", sel, err)
 	}
@@ -207,7 +208,10 @@ func TestSelectSkipsUnbuiltUnavailableAndUnauthorizedLinks(t *testing.T) {
 		}
 	}
 	r = newRouter("allowed", newLimits(), down)
-	if _, err = r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.AnthropicAPI}, Weight: llm.Standard}); !errors.Is(err, ErrNoProvider) {
+	if _, err = r.Select(ctx, SelectRequest{
+		Chain:  []llm.Link{llm.AnthropicAPI},
+		Weight: llm.Standard,
+	}); !errors.Is(err, ErrNoProvider) {
 		t.Fatalf("nothing usable: %v", err)
 	}
 }
@@ -218,7 +222,11 @@ func TestSelectLocalLinkBelowTheContextFloor(t *testing.T) {
 	local.prof = llm.CapacityProfile{Ctx: 4096, Slots: 1, CostClass: llm.CostFree}
 	r := newRouter("never", newLimits(), local, subLink(llm.ClaudeCLI))
 	r.CtxFloor = 262144
-	sel, err := r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.Local, llm.ClaudeCLI}, Weight: llm.Standard, BriefTokens: 100})
+	sel, err := r.Select(ctx, SelectRequest{
+		Chain:       []llm.Link{llm.Local, llm.ClaudeCLI},
+		Weight:      llm.Standard,
+		BriefTokens: 100,
+	})
 	if err != nil || sel.Link != llm.ClaudeCLI || sel.Skips[0].Reason != "ctx_below_floor" {
 		t.Fatalf("got %+v, %v", sel, err)
 	}
@@ -241,16 +249,48 @@ func TestRecordLimitStoresTheResetAndDefaultsAnUnknownOne(t *testing.T) {
 	lim := newLimits()
 	r := newRouter("never", lim)
 	reset := t0.Add(3 * time.Hour)
-	if err := r.RecordLimit(context.Background(), &llm.ProviderLimit{Link: llm.ClaudeCLI, Cap: llm.CapWindow, ResetAt: reset}); err != nil {
+	if err := r.RecordLimit(context.Background(), &llm.ProviderLimit{
+		Link:    llm.ClaudeCLI,
+		Cap:     llm.CapWindow,
+		ResetAt: reset,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if got, ok := lim.ResetAt(llm.ClaudeCLI); !ok || !got.Equal(reset) {
 		t.Fatalf("stored %v, %v", got, ok)
 	}
-	if err := r.RecordLimit(context.Background(), &llm.ProviderLimit{Link: llm.AnthropicAPI, Cap: llm.CapQuota}); err != nil {
+	if err := r.RecordLimit(context.Background(), &llm.ProviderLimit{
+		Link: llm.AnthropicAPI,
+		Cap:  llm.CapQuota,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := lim.ResetAt(llm.AnthropicAPI); !got.Equal(t0.Add(15 * time.Minute)) {
 		t.Fatalf("an unknown reset is stored as 15 minutes out, got %v", got)
 	}
+}
+
+// paidLink is a healthy paid link.
+func paidLink(l llm.Link) *fakeProvider {
+	p := subLink(l)
+	p.prof.CostClass = llm.CostPaid
+	return p
+}
+
+// subLink is a healthy subscription link with a 200,000-token context.
+func subLink(l llm.Link) *fakeProvider {
+	return &fakeProvider{link: l, probe: llm.ProbeResult{
+		OK:     true,
+		Models: map[llm.Weight]string{llm.Standard: "model-" + string(l)},
+	},
+		prof: llm.CapacityProfile{Ctx: 200000, Slots: 3, CostClass: llm.CostSubscription, Effort: "medium"}}
+}
+
+// newRouter builds a router over fake providers at a fixed clock.
+func newRouter(paid string, lim *fakeLimits, ps ...*fakeProvider) *Router {
+	m := map[llm.Link]llm.Provider{}
+	for _, p := range ps {
+		m[p.link] = p
+	}
+	return &Router{Client: llm.New(m), Quota: lim, Paid: paid, Now: func() time.Time { return t0 }}
 }

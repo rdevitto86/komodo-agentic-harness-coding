@@ -7,19 +7,7 @@ import (
 	"strings"
 )
 
-// Startable reports whether a group may start: every dependency is Done.
-func Startable(depends []string, done map[string]bool) bool {
-	for _, d := range depends {
-		if !done[d] {
-			return false
-		}
-	}
-
-	return true
-}
-
-// CheckPlan refuses a dependency cycle among the groups of a run; a dependency outside the run is
-// not part of the graph.
+// CheckPlan refuses a dependency cycle among the groups of a run; a dependency outside the run is not part of the graph.
 func CheckPlan(specs []GroupSpec) error {
 	in := map[string]GroupSpec{}
 	for _, s := range specs {
@@ -44,11 +32,7 @@ func CheckPlan(specs []GroupSpec) error {
 			return nil
 		case visiting:
 			i := slices.Index(path, id)
-
-			return fmt.Errorf(
-				"dependency cycle among %s",
-				strings.Join(append(slices.Clone(path[i:]), id), " -> "),
-			)
+			return fmt.Errorf("dependency cycle among %s", strings.Join(append(slices.Clone(path[i:]), id), " -> "))
 		}
 
 		mark[id] = visiting
@@ -58,7 +42,6 @@ func CheckPlan(specs []GroupSpec) error {
 			if _, ok := in[d]; !ok {
 				continue
 			}
-
 			if err := walk(d); err != nil {
 				return err
 			}
@@ -66,7 +49,6 @@ func CheckPlan(specs []GroupSpec) error {
 
 		path = path[:len(path)-1]
 		mark[id] = visited
-
 		return nil
 	}
 
@@ -86,11 +68,10 @@ func CheckPlan(specs []GroupSpec) error {
 	return nil
 }
 
-// Candidates returns the groups that are ready now, each with its chain weight and unblock count;
-// done maps finished group ids.
+// Candidates returns the groups that are ready now, each with its chain weight and unblock count; done maps finished group
+// ids.
 func Candidates(specs []GroupSpec, done map[string]bool) []Candidate {
 	open := map[string]GroupSpec{}
-
 	for _, s := range specs {
 		if !done[s.ID] {
 			open[s.ID] = s
@@ -98,7 +79,6 @@ func Candidates(specs []GroupSpec, done map[string]bool) []Candidate {
 	}
 
 	dependents := map[string][]string{}
-
 	for _, s := range open {
 		for _, d := range s.Depends {
 			if _, ok := open[d]; ok {
@@ -124,7 +104,6 @@ func Candidates(specs []GroupSpec, done map[string]bool) []Candidate {
 		}
 
 		memo[id] = len(open[id].Tasks) + best
-
 		return memo[id]
 	}
 
@@ -139,13 +118,11 @@ func Candidates(specs []GroupSpec, done map[string]bool) []Candidate {
 
 		for _, c := range dependents[s.ID] {
 			only := true
-
 			for _, d := range open[c].Depends {
 				if !done[d] && d != s.ID {
 					only = false
 				}
 			}
-
 			if only {
 				unblocks++
 			}
@@ -157,8 +134,18 @@ func Candidates(specs []GroupSpec, done map[string]bool) []Candidate {
 	return out
 }
 
-// Pick returns the ready group to start next: high priority, then the longest chain, then the most
-// unblocked, then task-list order.
+// Startable reports whether a group may start: every dependency is Done.
+func Startable(depends []string, done map[string]bool) bool {
+	for _, d := range depends {
+		if !done[d] {
+			return false
+		}
+	}
+	return true
+}
+
+// Pick returns the ready group to start next: high priority, then the longest chain, then the most unblocked, then task-list
+// order.
 func Pick(ready []Candidate) (Candidate, bool) {
 	if len(ready) == 0 {
 		return Candidate{}, false
@@ -174,8 +161,7 @@ func Pick(ready []Candidate) (Candidate, bool) {
 	return best, true
 }
 
-// BuildLanding returns one landing plan per epic: its groups in dependency order, ties broken by
-// task-list order.
+// BuildLanding returns one landing plan per epic: its groups in dependency order, ties broken by task-list order.
 func BuildLanding(specs []GroupSpec) []LandingPlan {
 	byEpic := map[string][]GroupSpec{}
 
@@ -184,7 +170,6 @@ func BuildLanding(specs []GroupSpec) []LandingPlan {
 		if _, ok := first[s.Epic]; !ok || s.Order < first[s.Epic] {
 			first[s.Epic] = s.Order
 		}
-
 		byEpic[s.Epic] = append(byEpic[s.Epic], s)
 	}
 
@@ -197,10 +182,7 @@ func BuildLanding(specs []GroupSpec) []LandingPlan {
 
 	var plans []LandingPlan
 	for _, e := range epics {
-		plans = append(
-			plans,
-			LandingPlan{Epic: e, Branch: "komodo/" + e, Order: landingOrder(byEpic[e])},
-		)
+		plans = append(plans, LandingPlan{Epic: e, Branch: "komodo/" + e, Order: landingOrder(byEpic[e])})
 	}
 
 	return plans
@@ -211,11 +193,9 @@ func better(a, b Candidate) bool {
 	if ah, bh := a.Spec.Priority == "high", b.Spec.Priority == "high"; ah != bh {
 		return ah
 	}
-
 	if a.ChainWeight != b.ChainWeight {
 		return a.ChainWeight > b.ChainWeight
 	}
-
 	if a.Unblocks != b.Unblocks {
 		return a.Unblocks > b.Unblocks
 	}
@@ -223,8 +203,7 @@ func better(a, b Candidate) bool {
 	return a.Spec.Order < b.Spec.Order
 }
 
-// landingOrder sorts one epic's groups so every group follows its dependencies, taking the lowest
-// Order first.
+// landingOrder sorts one epic's groups so every group follows its dependencies, taking the lowest Order first.
 func landingOrder(specs []GroupSpec) []string {
 	left := slices.Clone(specs)
 	sort.SliceStable(left, func(i, j int) bool { return left[i].Order < left[j].Order })
@@ -243,16 +222,13 @@ func landingOrder(specs []GroupSpec) []string {
 
 		for i, s := range left {
 			ready := true
-
 			for _, d := range s.Depends {
 				if inEpic[d] && !placed[d] {
 					ready = false
 				}
 			}
-
 			if ready {
 				pick = i
-
 				break
 			}
 		}

@@ -67,7 +67,9 @@ func TestInstallWritesOnlyTheOwnedParts(t *testing.T) {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}
 	agents := readFile(t, filepath.Join(repo, "AGENTS.md"))
-	if !strings.HasPrefix(agents, "# Mine\n\nKeep this text.\n") || !strings.Contains(agents, "<!-- komodo:begin min=1.0.0-beta.6 -->") || !strings.Contains(agents, "<!-- komodo:end -->") {
+	if !strings.HasPrefix(agents, "# Mine\n\nKeep this text.\n") ||
+		!strings.Contains(agents, "<!-- komodo:begin min=1.0.0-beta.6 -->") ||
+		!strings.Contains(agents, "<!-- komodo:end -->") {
 		t.Fatalf("AGENTS.md = %q", agents)
 	}
 	if got := readFile(t, filepath.Join(repo, "CLAUDE.md")); got != "@AGENTS.md\n" {
@@ -78,8 +80,20 @@ func TestInstallWritesOnlyTheOwnedParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(settings["permissions"]) + string(settings["hooks"])
-	for _, want := range []string{"Bash(ls)", "Bash(komodo *)", "Bash(komodo config set*)", "Bash(komodo install*)", "Bash(komodo update*)", "komodo internal guard", `"onFailure":"block"`, "Bash|Edit|Write"} {
-		if !strings.Contains(strings.ReplaceAll(strings.ReplaceAll(text, " ", ""), "\n", ""), strings.ReplaceAll(want, " ", "")) {
+	for _, want := range []string{
+		"Bash(ls)",
+		"Bash(komodo *)",
+		"Bash(komodo config set*)",
+		"Bash(komodo install*)",
+		"Bash(komodo update*)",
+		"komodo internal guard",
+		`"onFailure":"block"`,
+		"Bash|Edit|Write",
+	} {
+		if !strings.Contains(
+			strings.ReplaceAll(strings.ReplaceAll(text, " ", ""), "\n", ""),
+			strings.ReplaceAll(want, " ", ""),
+		) {
 			t.Errorf("settings lack %q:\n%s", want, text)
 		}
 	}
@@ -87,7 +101,8 @@ func TestInstallWritesOnlyTheOwnedParts(t *testing.T) {
 		t.Errorf("model = %s", settings["model"])
 	}
 	var m Manifest
-	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".git", "komodo", "install.json"))), &m); err != nil || len(m.Entries) != 7 {
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".git", "komodo", "install.json"))), &m); err != nil ||
+		len(m.Entries) != 7 {
 		t.Fatalf("manifest = %+v, %v", m, err)
 	}
 }
@@ -104,7 +119,10 @@ func TestInstallRerunMakesNoChanges(t *testing.T) {
 	if code != 0 || len(d.Changes) != 0 || !strings.Contains(e.Report, "0 changes") {
 		t.Fatalf("second: exit %d, rows %+v, report %q", code, d.Changes, e.Report)
 	}
-	if after := readFile(t, filepath.Join(repo, "AGENTS.md")) + readFile(t, filepath.Join(repo, ".claude", "settings.json")); after != before {
+	if after := readFile(
+		t,
+		filepath.Join(repo, "AGENTS.md"),
+	) + readFile(t, filepath.Join(repo, ".claude", "settings.json")); after != before {
 		t.Fatal("a rerun rewrote a file")
 	}
 }
@@ -121,7 +139,8 @@ func TestInstallKeepsAHandEditedBlockUnlessForced(t *testing.T) {
 	if code != 0 || len(d.Edited) != 1 || d.Edited[0] != "AGENTS.md" || readFile(t, path) != edited {
 		t.Fatalf("exit %d, edited %v", code, d.Edited)
 	}
-	if code, _ = h.install(repo, "--repo-only", "--hosts", "claude", "--force"); code != 0 || !strings.Contains(readFile(t, path), "#### Komodo harness") {
+	if code, _ = h.install(repo, "--repo-only", "--hosts", "claude", "--force"); code != 0 ||
+		!strings.Contains(readFile(t, path), "#### Komodo harness") {
 		t.Fatalf("force: exit %d, AGENTS.md = %q", code, readFile(t, path))
 	}
 }
@@ -136,17 +155,22 @@ func TestInstallRemoveLeavesNoEntriesAndKeepsOtherText(t *testing.T) {
 	if code != 0 || !e.OK {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}
-	if got := readFile(t, filepath.Join(repo, "AGENTS.md")); strings.Contains(got, "komodo:") || !strings.Contains(got, "# Mine") {
+	if got := readFile(t, filepath.Join(repo, "AGENTS.md")); strings.Contains(got, "komodo:") ||
+		!strings.Contains(got, "# Mine") {
 		t.Fatalf("AGENTS.md = %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(repo, "CLAUDE.md")); err == nil {
 		t.Error("CLAUDE.md was left")
 	}
-	if got := strings.Join(strings.Fields(readFile(t, filepath.Join(repo, ".claude", "settings.json"))), ""); got != `{"model":"opus"}` {
+	if got := strings.Join(
+		strings.Fields(readFile(t, filepath.Join(repo, ".claude", "settings.json"))),
+		"",
+	); got != `{"model":"opus"}` {
 		t.Errorf("settings = %q", got)
 	}
 	var m Manifest
-	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".git", "komodo", "install.json"))), &m); err != nil || len(m.Entries) != 0 {
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".git", "komodo", "install.json"))), &m); err != nil ||
+		len(m.Entries) != 0 {
 		t.Fatalf("manifest = %+v, %v", m, err)
 	}
 }
@@ -157,7 +181,11 @@ func TestInstallRemoveKeepsAHandEditedOwnedFile(t *testing.T) {
 	h.install(repo, "--repo-only", "--hosts", "claude")
 	mustWrite(t, filepath.Join(repo, "CLAUDE.md"), "@AGENTS.md\n@docs/extra.md\n")
 	// CLAUDE.md still holds the owned line, so only a changed owned line counts as a hand edit.
-	mustWrite(t, filepath.Join(repo, "AGENTS.md"), strings.Replace(readFile(t, filepath.Join(repo, "AGENTS.md")), "#### Komodo harness", "#### Edited", 1))
+	mustWrite(
+		t,
+		filepath.Join(repo, "AGENTS.md"),
+		strings.Replace(readFile(t, filepath.Join(repo, "AGENTS.md")), "#### Komodo harness", "#### Edited", 1),
+	)
 	code, e := h.install(repo, "--repo-only", "--remove")
 	d := dataOf[InstallData](t, e)
 	if code != 0 || len(d.Edited) != 1 || !strings.Contains(readFile(t, filepath.Join(repo, "AGENTS.md")), "#### Edited") {
@@ -174,7 +202,8 @@ func TestInstallBrokenMarkersStopTheStep(t *testing.T) {
 	broken := "# Mine\n<!-- komodo:begin min=1.0.0 -->\nno end marker\n"
 	mustWrite(t, filepath.Join(repo, "AGENTS.md"), broken)
 	code, e := h.install(repo, "--repo-only")
-	if code != 1 || e.Error == nil || !strings.Contains(e.Error.Reason, "AGENTS.md") || readFile(t, filepath.Join(repo, "AGENTS.md")) != broken {
+	if code != 1 || e.Error == nil || !strings.Contains(e.Error.Reason, "AGENTS.md") ||
+		readFile(t, filepath.Join(repo, "AGENTS.md")) != broken {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}
 }

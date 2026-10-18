@@ -126,7 +126,10 @@ func TestUpdateSwapsTheBinaryAndRecordsIt(t *testing.T) {
 	if err != nil || rec.Latest != "1.0.1" || rec.Previous == "" {
 		t.Fatalf("update.json = %+v, %v", rec, err)
 	}
-	for _, f := range []string{filepath.Join(h.home, "state", "update.lock"), filepath.Join(h.home, "versions", "1.0.1", "komodo.part")} {
+	for _, f := range []string{
+		filepath.Join(h.home, "state", "update.lock"),
+		filepath.Join(h.home, "versions", "1.0.1", "komodo.part"),
+	} {
 		if _, err := os.Stat(f); err == nil {
 			t.Errorf("%s was left behind", f)
 		}
@@ -138,7 +141,8 @@ func TestUpdateCheckRecordsAndChangesNothingElse(t *testing.T) {
 	bin := seedBin(t, h)
 	r := newRelease(t, "1.0.1", "new binary")
 	code, e := h.update(r, "--check")
-	if d := dataOf[UpdateData](t, e); code != 0 || d.Action != "checked" || readFile(t, bin) != "old binary" || r.assetHit.Load() != 0 {
+	if d := dataOf[UpdateData](t, e); code != 0 || d.Action != "checked" || readFile(t, bin) != "old binary" ||
+		r.assetHit.Load() != 0 {
 		t.Fatalf("exit %d, data %+v, downloads %d", code, d, r.assetHit.Load())
 	}
 	if rec, err := updateRecord(t, h); err != nil || rec.Latest != "1.0.1" {
@@ -151,7 +155,8 @@ func TestUpdateWhenNotNewerDownloadsNothing(t *testing.T) {
 	bin := seedBin(t, h)
 	r := newRelease(t, "1.0.0-beta.6", "same")
 	code, e := h.update(r)
-	if d := dataOf[UpdateData](t, e); code != 0 || d.Action != "current" || readFile(t, bin) != "old binary" || r.assetHit.Load() != 0 {
+	if d := dataOf[UpdateData](t, e); code != 0 || d.Action != "current" || readFile(t, bin) != "old binary" ||
+		r.assetHit.Load() != 0 {
 		t.Fatalf("exit %d, data %+v", code, d)
 	}
 }
@@ -181,7 +186,8 @@ func TestUpdateBadSignatureKeepsTheOldBinaryAndRecordsNothing(t *testing.T) {
 	r := newRelease(t, "1.0.1", "new binary")
 	r.badSig = true
 	code, e := h.update(r)
-	if code != 4 || e.Error == nil || !strings.Contains(e.Error.Reason, "signature") || readFile(t, bin) != "old binary" || r.assetHit.Load() != 0 {
+	if code != 4 || e.Error == nil || !strings.Contains(e.Error.Reason, "signature") || readFile(t, bin) != "old binary" ||
+		r.assetHit.Load() != 0 {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}
 	if _, err := updateRecord(t, h); err == nil {
@@ -271,7 +277,8 @@ func TestUpdateRestartRunsWithoutAMoverWritesNothing(t *testing.T) {
 	bin := seedBin(t, h)
 	r := newRelease(t, "1.0.1", "new binary")
 	code, e := h.update(r, "--restart-runs")
-	if code != 4 || !strings.Contains(e.Error.Reason, "not built yet") || readFile(t, bin) != "old binary" || r.assetHit.Load() != 0 {
+	if code != 4 || !strings.Contains(e.Error.Reason, "not built yet") || readFile(t, bin) != "old binary" ||
+		r.assetHit.Load() != 0 {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}
 	if _, err := updateRecord(t, h); err == nil {

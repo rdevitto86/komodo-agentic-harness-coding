@@ -58,7 +58,8 @@ func TestCheckInit(t *testing.T) {
 			t.Errorf("source %q: err = %v, want ErrBilling", src, err)
 		}
 	}
-	if err := CheckInit(Init{APIKeySource: "ANTHROPIC_API_KEY"}); err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+	if err := CheckInit(Init{APIKeySource: "ANTHROPIC_API_KEY"}); err == nil ||
+		!strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
 		t.Errorf("error should name the source: %v", err)
 	}
 }

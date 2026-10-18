@@ -15,16 +15,26 @@ const goListCmd = `go list -test -f '{{.ImportPath}} {{join .Deps " "}}' ./...`
 
 // CheckerConfig supplies what the steps read besides the sandbox runner.
 type CheckerConfig struct {
-	CoverageFloor    int                                                           // percent of lines tests must cover
-	Diff             func(ctx context.Context, base, head string) (string, error)  // unified diff of the work under test
-	BaseResult       func(ctx context.Context, base string) (Baseline, error)      // test-class result at the base; nil means an empty baseline
-	BaseCoverage     func(ctx context.Context, base string) (float64, bool, error) // coverage at the base, when known
-	SecretPatterns   []*regexp.Regexp                                              // content patterns of the guard's secret row
-	Sibling          func(path string) bool                                        // reports a test sibling of a file in the list
-	Match            func(glob, path string) bool                                  // file list matcher; MatchPath when nil
-	TestCommands     map[string]string                                             // language to its test command class
-	ReportCommands   map[string]string                                             // language to a command that prints its JUnit XML report
-	CoverageCommands map[string]string                                             // language to a coverage command that replaces the default
+	// percent of lines tests must cover
+	CoverageFloor int
+	// unified diff of the work under test
+	Diff func(ctx context.Context, base, head string) (string, error)
+	// test-class result at the base; nil means an empty baseline
+	BaseResult func(ctx context.Context, base string) (Baseline, error)
+	// coverage at the base, when known
+	BaseCoverage func(ctx context.Context, base string) (float64, bool, error)
+	// content patterns of the guard's secret row
+	SecretPatterns []*regexp.Regexp
+	// reports a test sibling of a file in the list
+	Sibling func(path string) bool
+	// file list matcher; MatchPath when nil
+	Match func(glob, path string) bool
+	// language to its test command class
+	TestCommands map[string]string
+	// language to a command that prints its JUnit XML report
+	ReportCommands map[string]string
+	// language to a coverage command that replaces the default
+	CoverageCommands map[string]string
 }
 
 // checker runs the mechanical checks with a fixed configuration.
@@ -39,7 +49,16 @@ func NewChecker(cfg CheckerConfig) Checker {
 }
 
 // stepOrder is the order steps appear in a result.
-var stepOrder = []Step{StepDoneWhen, StepScope, StepSecrets, StepCoverage, StepBaseline, StepImpactSet, StepFlake, StepCaseCollision}
+var stepOrder = []Step{
+	StepDoneWhen,
+	StepScope,
+	StepSecrets,
+	StepCoverage,
+	StepBaseline,
+	StepImpactSet,
+	StepFlake,
+	StepCaseCollision,
+}
 
 // Check runs every step on the work under test; an error means a step could not run.
 func (c checker) Check(ctx context.Context, run CommandRunner, in CheckInput) (CheckResult, error) {
@@ -159,9 +178,14 @@ func joinOutputs(names, outs []string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// runImpact runs the tests the change affects and returns their results; solo gives the command that reruns one failure alone.
+// runImpact runs the tests the change affects and returns their results; solo gives the command that reruns one failure
+// alone.
 // notes name each change that maps to no package, for which the whole module ran.
-func (c checker) runImpact(ctx context.Context, run CommandRunner, in CheckInput) (pkgs, notes []string, tests []TestRun, solo func(TestRun) string, err error) {
+func (c checker) runImpact(
+	ctx context.Context,
+	run CommandRunner,
+	in CheckInput,
+) (pkgs, notes []string, tests []TestRun, solo func(TestRun) string, err error) {
 	if in.Language != "go" {
 		tests, solo, err = c.runTestClass(ctx, run, in.Language)
 		return []string{"test class"}, nil, tests, solo, err
@@ -196,7 +220,8 @@ func (c checker) runImpact(ctx context.Context, run CommandRunner, in CheckInput
 	}, nil
 }
 
-// runTestClass runs a non-Go language's test command and reads per-test results from its JUnit report when one is configured.
+// runTestClass runs a non-Go language's test command and reads per-test results from its JUnit report when one is
+// configured.
 // Without per-test results, a failing command is one whole-command failure that can never be classed as pre-existing.
 func (c checker) runTestClass(ctx context.Context, run CommandRunner, lang string) ([]TestRun, func(TestRun) string, error) {
 	cmd := c.cfg.TestCommands[lang]
@@ -226,7 +251,8 @@ func (c checker) runTestClass(ctx context.Context, run CommandRunner, lang strin
 	return tests, func(TestRun) string { return cmd }, nil
 }
 
-// goImpactPackages lists the packages a change affects: the packages owning the changed files and everything that imports one.
+// goImpactPackages lists the packages a change affects: the packages owning the changed files and everything that imports
+// one.
 // A change that maps to no package, or lies in a nested module, selects the whole module and adds a note.
 func goImpactPackages(ctx context.Context, run CommandRunner, changed []string) (pkgs, notes []string, err error) {
 	exit, out, err := run(ctx, "go list -m")
@@ -323,14 +349,17 @@ func (c checker) judgeFailures(
 ) (base, flake StepResult, flaky []string, blocked bool, err error) {
 	base = StepResult{Step: StepBaseline, Level: LevelPass}
 	flake = StepResult{Step: StepFlake, Level: LevelPass}
-	var bl Baseline
 	loaded := false
 
+	var bl Baseline
 	var blockNames, blockOuts, warnNames []string
+
+	// Rerun each failing test twice: flaky ones warn, the rest are judged against the baseline.
 	for _, t := range tests {
 		if t.Passed {
 			continue
 		}
+
 		var passed [2]bool
 		for i := range passed {
 			exit, _, rerr := run(ctx, solo(t))
@@ -339,10 +368,12 @@ func (c checker) judgeFailures(
 			}
 			passed[i] = exit == 0
 		}
+
 		if ClassifyFailure(passed) == FlakeFlaky {
 			flaky = append(flaky, t.Key())
 			continue
 		}
+
 		if t.Whole {
 			blockNames = append(
 				blockNames,
@@ -351,6 +382,7 @@ func (c checker) judgeFailures(
 			blockOuts = append(blockOuts, t.Output)
 			continue
 		}
+
 		if !loaded {
 			loaded = true
 			if c.cfg.BaseResult != nil {
@@ -359,10 +391,12 @@ func (c checker) judgeFailures(
 				}
 			}
 		}
+
 		if bl.Classify(t.Key(), false) == StatusPreExisting {
 			warnNames = append(warnNames, t.Key())
 			continue
 		}
+
 		blockNames = append(blockNames, t.Key())
 		blockOuts = append(blockOuts, t.Output)
 	}
@@ -381,12 +415,18 @@ func (c checker) judgeFailures(
 }
 
 // coverageStep runs the coverage command last, unless a confirmed regression already blocks the group.
-func (c checker) coverageStep(ctx context.Context, run CommandRunner, in CheckInput, blocked bool) (StepResult, error) {
+func (c checker) coverageStep(
+	ctx context.Context,
+	run CommandRunner,
+	in CheckInput,
+	blocked bool,
+) (StepResult, error) {
 	s := StepResult{Step: StepCoverage, Level: LevelPass}
 	if blocked {
 		s.Detail = []string{"skipped: a regression is confirmed"}
 		return s, nil
 	}
+
 	cmd, ok := c.cfg.CoverageCommands[in.Language]
 	if !ok {
 		cmd, ok = CoverageCommand(in.Language, c.cfg.TestCommands[in.Language])
@@ -395,10 +435,12 @@ func (c checker) coverageStep(ctx context.Context, run CommandRunner, in CheckIn
 		s.Level, s.Detail = LevelFail, []string{in.Language}
 		return s, nil
 	}
+
 	exit, out, err := run(ctx, cmd)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("run coverage command: %w", err)
 	}
+
 	head, err := ParseCoverage(in.Language, out)
 	if err != nil {
 		if exit != 0 {
@@ -407,6 +449,7 @@ func (c checker) coverageStep(ctx context.Context, run CommandRunner, in CheckIn
 		}
 		return StepResult{}, err
 	}
+
 	var baseCov float64
 	var haveBase bool
 	if head < float64(c.cfg.CoverageFloor) && c.cfg.BaseCoverage != nil {
@@ -417,5 +460,6 @@ func (c checker) coverageStep(ctx context.Context, run CommandRunner, in CheckIn
 	if s.Level = CoverageLevel(c.cfg.CoverageFloor, baseCov, haveBase, head); s.Level == LevelFail {
 		s.Detail = []string{fmt.Sprintf("%.1f%% is under the floor of %d%%", head, c.cfg.CoverageFloor)}
 	}
+
 	return s, nil
 }

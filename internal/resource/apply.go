@@ -11,8 +11,8 @@ import (
 // errUnknownSubtype marks a resource event of a subtype the Resource Manager does not read.
 var errUnknownSubtype = errors.New("unknown resource subtype")
 
-// apply updates the totals from a checked event and returns what it changed and the window keys
-// whose figures moved; ok is false for an event it ignores.
+// apply updates the totals from a checked event and returns what it changed and the window keys whose figures moved; ok is
+// false for an event it ignores.
 func (s *State) apply(e bus.Event, now time.Time) (o Observation, keys []WindowKey, ok bool) {
 	run, group := string(e.Run), string(e.Group)
 	o = Observation{Subtype: e.Subtype, Run: run, Group: group, Now: now}
@@ -25,10 +25,8 @@ func (s *State) apply(e bus.Event, now time.Time) (o Observation, keys []WindowK
 		if d.Limit <= 0 {
 			return o, nil, false
 		}
-
 		o.Link, o.Key = d.Link, WindowKey{Link: d.Link, Window: d.Window}
 		s.applyHeadroom(*d, now)
-
 		keys = []WindowKey{o.Key}
 	case *Overage:
 		o.Link, o.Key = d.Link, WindowKey{Link: d.Link}
@@ -41,7 +39,6 @@ func (s *State) apply(e bus.Event, now time.Time) (o Observation, keys []WindowK
 	}
 
 	s.seen(o.Link, run, group)
-
 	return o, keys, true
 }
 
@@ -57,24 +54,19 @@ func check(e bus.Event) error {
 		if e.Subtype != subtypeUsage {
 			return bad("data does not match the subtype")
 		}
-
 		if d.Link == "" || e.Run == "" {
 			return bad("link or run is empty")
 		}
-
-		if d.TokensIn < 0 || d.TokensOut < 0 || d.CacheRead < 0 || d.CacheWrite < 0 ||
-			d.USD < 0 || d.USDEquiv < 0 {
+		if d.TokensIn < 0 || d.TokensOut < 0 || d.CacheRead < 0 || d.CacheWrite < 0 || d.USD < 0 || d.USDEquiv < 0 {
 			return bad("a count or a cost is negative")
 		}
 	case *Headroom:
 		if e.Subtype != subtypeHeadroom {
 			return bad("data does not match the subtype")
 		}
-
 		if d.Link == "" || d.Window == "" {
 			return bad("link or window is empty")
 		}
-
 		if d.Limit < 0 || d.Remaining < 0 || d.Remaining > d.Limit {
 			return bad("remaining is outside the window total")
 		}
@@ -82,7 +74,6 @@ func check(e bus.Event) error {
 		if e.Subtype != subtypeOverage {
 			return bad("data does not match the subtype")
 		}
-
 		if d.Link == "" {
 			return bad("link is empty")
 		}
@@ -90,7 +81,6 @@ func check(e bus.Event) error {
 		if e.Subtype != subtypeLimit {
 			return bad("data does not match the subtype")
 		}
-
 		if d.Link == "" || d.Kind == "" {
 			return bad("link or kind is empty")
 		}
@@ -99,7 +89,6 @@ func check(e bus.Event) error {
 		case subtypeUsage, subtypeHeadroom, subtypeOverage, subtypeLimit:
 			return bad("data is missing")
 		}
-
 		return fmt.Errorf("%q: %w", e.Subtype, errUnknownSubtype)
 	}
 

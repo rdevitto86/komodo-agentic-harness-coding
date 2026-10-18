@@ -8,18 +8,6 @@ import (
 	"testing"
 )
 
-// loadFiles writes files under a temporary root and loads them.
-func loadFiles(t *testing.T, files []DraftFile) (string, []Epic) {
-	t.Helper()
-	root := t.TempDir()
-	writeBacklog(t, root, files)
-	epics, fs := mustLoad(t, root)
-	if len(fails(fs)) != 0 {
-		t.Fatalf("load findings: %+v", fs)
-	}
-	return root, epics
-}
-
 func TestWavesAndLongestChain(t *testing.T) {
 	files := cat(
 		goodGroup(1, 1, tgSpec{}),
@@ -47,11 +35,16 @@ func TestOverlappingTouchesNeedAnOrder(t *testing.T) {
 	_, epics := loadFiles(t, cat(a, b))
 	_, fs := BuildGraph(epics, []string{"internal/lease/fence.go"})
 	got := rulesOf(fs, RuleGraph, SeverityFail)
-	if len(got) != 1 || !strings.Contains(got[0].Message, "internal/lease/a.go") || !strings.Contains(got[0].Message, "tg-1.1") || !strings.Contains(got[0].Message, "tg-1.2") {
+	if len(got) != 1 || !strings.Contains(got[0].Message, "internal/lease/a.go") ||
+		!strings.Contains(got[0].Message, "tg-1.1") || !strings.Contains(got[0].Message, "tg-1.2") {
 		t.Fatalf("findings: %+v", fs)
 	}
 	// An order, stated on the draft, clears the finding.
-	b = goodGroup(1, 2, tgSpec{touches: "internal/lease/*.go", files: []string{"internal/lease/b.go"}, deps: []string{"tg-1.1"}})
+	b = goodGroup(1, 2, tgSpec{
+		touches: "internal/lease/*.go",
+		files:   []string{"internal/lease/b.go"},
+		deps:    []string{"tg-1.1"},
+	})
 	_, epics = loadFiles(t, cat(a, b))
 	if _, fs := BuildGraph(epics, nil); len(fails(fs)) != 0 {
 		t.Fatalf("ordered pair: %+v", fs)
@@ -120,7 +113,11 @@ func TestCardHashIgnoresStatusAndSeesEveryByte(t *testing.T) {
 		if !strings.Contains(string(b), from) {
 			t.Fatalf("%s lacks %q", name, from)
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(strings.Replace(string(b), from, to, 1)), 0o644); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(dir, name),
+			[]byte(strings.Replace(string(b), from, to, 1)),
+			0o644,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,4 +143,16 @@ func TestCardHashErrors(t *testing.T) {
 	if _, err := CardHash(t.TempDir(), Group{Name: "odd"}); err == nil {
 		t.Fatal("a bad group name must be an error")
 	}
+}
+
+// loadFiles writes files under a temporary root and loads them.
+func loadFiles(t *testing.T, files []DraftFile) (string, []Epic) {
+	t.Helper()
+	root := t.TempDir()
+	writeBacklog(t, root, files)
+	epics, fs := mustLoad(t, root)
+	if len(fails(fs)) != 0 {
+		t.Fatalf("load findings: %+v", fs)
+	}
+	return root, epics
 }

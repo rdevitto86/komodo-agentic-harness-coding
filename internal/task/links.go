@@ -43,29 +43,6 @@ type Router struct {
 	Now      func() time.Time
 }
 
-// PausedError carries the limits that emptied the chain; it unwraps to ErrPaused.
-type PausedError struct{ Limits []*llm.ProviderLimit }
-
-// walk is the state of one pass over a chain.
-type walk struct {
-	skips      []Skip
-	limits     []*llm.ProviderLimit
-	paidRefuse bool
-	ctxFail    bool
-	deferred   []llm.Link
-}
-
-// unknownReset is how long a limit without a reset time keeps its link out of every chain.
-const unknownReset = 15 * time.Minute
-
-// Errors Select returns when no link can serve the session.
-var (
-	ErrNoProvider  = errors.New("every link unavailable or unauthorized")
-	ErrPaidRefused = errors.New("only a paid link remains and providers.paid forbids it")
-	ErrContext     = errors.New("the brief exceeds half the context of every link")
-	ErrPaused      = errors.New("every remaining link is over its limit")
-)
-
 // Select returns the first link in the chain that can serve the session now.
 // Under providers.paid fallback a paid link is tried only after every other link.
 func (r *Router) Select(ctx context.Context, req SelectRequest) (Selection, error) {
@@ -75,7 +52,6 @@ func (r *Router) Select(ctx context.Context, req SelectRequest) (Selection, erro
 		if err != nil {
 			return Selection{}, err
 		}
-
 		if ok {
 			return r.chosen(sel, &w), nil
 		}
@@ -86,7 +62,6 @@ func (r *Router) Select(ctx context.Context, req SelectRequest) (Selection, erro
 		if err != nil {
 			return Selection{}, err
 		}
-
 		if ok {
 			return r.chosen(sel, &w), nil
 		}
@@ -110,17 +85,7 @@ func (r *Router) RecordLimit(_ context.Context, e *llm.ProviderLimit) error {
 	if reset.IsZero() {
 		reset = r.now().Add(unknownReset)
 	}
-
 	return r.Quota.Record(e.Link, reset, e.Cap)
-}
-
-// now returns the current time.
-func (r *Router) now() time.Time {
-	if r.Now != nil {
-		return r.Now()
-	}
-
-	return time.Now()
 }
 
 // chosen stamps the destination on every skip.
@@ -128,20 +93,12 @@ func (r *Router) chosen(sel Selection, w *walk) Selection {
 	for i := range w.skips {
 		w.skips[i].To = sel.Link
 	}
-
 	sel.Skips = w.skips
-
 	return sel
 }
 
 // try checks one link against the walk's rules and returns the selection when it can serve.
-func (r *Router) try(
-	ctx context.Context,
-	w *walk,
-	l llm.Link,
-	req SelectRequest,
-	paidNow bool,
-) (Selection, bool, error) {
+func (r *Router) try(ctx context.Context, w *walk, l llm.Link, req SelectRequest, paidNow bool) (Selection, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return Selection{}, false, err
 	}
@@ -150,17 +107,11 @@ func (r *Router) try(
 		if slices.Contains(req.Exclude, l) {
 			w.skip(l, "slots")
 			w.limits = append(w.limits, &llm.ProviderLimit{Link: l})
-
 			return Selection{}, false, nil
 		}
-
 		if at, ok := r.Quota.ResetAt(l); ok && at.After(r.now()) {
 			w.skip(l, "quota")
-			w.limits = append(
-				w.limits,
-				&llm.ProviderLimit{Link: l, Cap: llm.CapWindow, ResetAt: at},
-			)
-
+			w.limits = append(w.limits, &llm.ProviderLimit{Link: l, Cap: llm.CapWindow, ResetAt: at})
 			return Selection{}, false, nil
 		}
 	}
@@ -174,10 +125,8 @@ func (r *Router) try(
 	if err == nil {
 		prof, err = r.Client.Profile(ctx, l, req.Weight)
 	}
-
 	if err != nil {
 		w.skip(l, unusable(err))
-
 		return Selection{}, false, nil
 	}
 
@@ -185,27 +134,22 @@ func (r *Router) try(
 		switch r.Paid {
 		case "fallback":
 			w.deferred = append(w.deferred, l)
-
 			return Selection{}, false, nil
 		case "allowed":
 		default:
 			w.skip(l, "paid")
 			w.paidRefuse = true
-
 			return Selection{}, false, nil
 		}
 	}
 
 	if l == llm.Local && r.CtxFloor > 0 && prof.Ctx < r.CtxFloor {
 		w.skip(l, "ctx_below_floor")
-
 		return Selection{}, false, nil
 	}
-
 	if req.BriefTokens > prof.Ctx/2 {
 		w.skip(l, "ctx")
 		w.ctxFail = true
-
 		return Selection{}, false, nil
 	}
 
@@ -213,27 +157,55 @@ func (r *Router) try(
 	if model == "" {
 		model = probe.Models[req.Weight]
 	}
-
 	if model == "" && r.Catalog != nil {
 		if e, ok := r.Catalog.Default(req.Weight); ok {
 			model = e.ID
 		}
 	}
-
 	if model == "" {
 		w.skip(l, "unavailable")
-
 		return Selection{}, false, nil
 	}
 
 	return Selection{Link: l, Model: model, Profile: prof}, true, nil
 }
 
+// now returns the current time.
+func (r *Router) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+// PausedError carries the limits that emptied the chain; it unwraps to ErrPaused.
+type PausedError struct{ Limits []*llm.ProviderLimit }
+
 // Error describes the pause.
 func (e *PausedError) Error() string { return ErrPaused.Error() }
 
 // Unwrap returns ErrPaused.
 func (e *PausedError) Unwrap() error { return ErrPaused }
+
+// walk is the state of one pass over a chain.
+type walk struct {
+	skips      []Skip
+	limits     []*llm.ProviderLimit
+	paidRefuse bool
+	ctxFail    bool
+	deferred   []llm.Link
+}
+
+// unknownReset is how long a limit without a reset time keeps its link out of every chain.
+const unknownReset = 15 * time.Minute
+
+// Errors Select returns when no link can serve the session.
+var (
+	ErrNoProvider  = errors.New("every link unavailable or unauthorized")
+	ErrPaidRefused = errors.New("only a paid link remains and providers.paid forbids it")
+	ErrContext     = errors.New("the brief exceeds half the context of every link")
+	ErrPaused      = errors.New("every remaining link is over its limit")
+)
 
 // skip records one passed-over link; To is filled in when a link is chosen.
 func (w *walk) skip(l llm.Link, reason string) {
@@ -248,6 +220,5 @@ func unusable(err error) string {
 	case errors.Is(err, llm.ErrUnauthorized):
 		return "unauthorized"
 	}
-
 	return "unavailable"
 }

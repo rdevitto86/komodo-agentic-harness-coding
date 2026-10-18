@@ -20,6 +20,5 @@ func (p Precision) VerifiedPct() float64 {
 	if p.Submitted == 0 {
 		return 0
 	}
-
 	return float64(p.Verified) * 100 / float64(p.Submitted)
 }

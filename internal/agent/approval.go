@@ -65,6 +65,7 @@ func Decide(t TesterVerdict, r ReviewerVerdict) Outcome {
 	default:
 		return Outcome{Decision: DecisionApprove}
 	}
+
 	return out
 }
 

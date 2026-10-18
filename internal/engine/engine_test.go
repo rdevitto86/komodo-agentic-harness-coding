@@ -60,14 +60,6 @@ func (x *eng) serve() {
 	x.t.Cleanup(x.release)
 }
 
-// release closes the connection that holds the engine up.
-func (x *eng) release() {
-	if x.hold != nil {
-		_ = x.hold.Close()
-		x.hold = nil
-	}
-}
-
 // exited waits for Serve to return and gives its error.
 func (x *eng) exited() error {
 	x.t.Helper()
@@ -81,6 +73,14 @@ func (x *eng) exited() error {
 	return nil
 }
 
+// release closes the connection that holds the engine up.
+func (x *eng) release() {
+	if x.hold != nil {
+		_ = x.hold.Close()
+		x.hold = nil
+	}
+}
+
 // ask sends one request on a new connection and returns every reply up to the final one.
 func (x *eng) ask(req Request) []Reply {
 	x.t.Helper()
@@ -92,29 +92,48 @@ func (x *eng) ask(req Request) []Reply {
 	return roundTrip(x.t, c, req)
 }
 
-// roundTrip sends a request and reads replies until the final one.
-func roundTrip(t *testing.T, c *Conn, req Request) []Reply {
-	t.Helper()
-	if err := c.Send(req); err != nil {
-		t.Fatal(err)
+// runReq builds a run request carrying a run-start event.
+func (x *eng) runReq(id, runID string, labels ...string) Request {
+	rs := &bus.RunStart{
+		Target:    "ep-1",
+		Groups:    labels,
+		Source:    "cli",
+		Repo:      "github.com/acme/shop",
+		Root:      x.root,
+		CommonDir: filepath.Join(x.root, ".git"),
+		Request:   bus.ID(id),
 	}
-	var out []Reply
-	for {
-		rep, err := c.Recv()
-		if err != nil {
-			t.Fatalf("read reply: %v", err)
-		}
-		out = append(out, rep)
-		if rep.Final {
-			return out
-		}
+	return Request{
+		ID:     id,
+		Verb:   VerbRun,
+		Target: "ep-1",
+		Root:   x.root,
+		Event:  &Event{Type: bus.TypeRunStart, Run: bus.ID(runID), Data: rs},
 	}
 }
 
-// runReq builds a run request carrying a run-start event.
-func (x *eng) runReq(id, runID string, labels ...string) Request {
-	rs := &bus.RunStart{Target: "ep-1", Groups: labels, Source: "cli", Repo: "github.com/acme/shop", Root: x.root, CommonDir: filepath.Join(x.root, ".git"), Request: bus.ID(id)}
-	return Request{ID: id, Verb: VerbRun, Target: "ep-1", Root: x.root, Event: &Event{Type: bus.TypeRunStart, Run: bus.ID(runID), Data: rs}}
+// fakeReader serves a canned replay.
+type fakeReader struct{ log bus.ReplayLog }
+
+// Replay returns the canned log.
+func (f fakeReader) Replay(context.Context, bus.ID, bus.ID) (bus.ReplayLog, error) { return f.log, nil }
+
+// Explain returns nothing.
+func (fakeReader) Explain(context.Context, bus.ID, int) ([]bus.Event, error) { return nil, nil }
+
+// fakeJanitor records the clean request.
+type fakeJanitor struct {
+	mu   sync.Mutex
+	dry  bool
+	open map[string]bool
+}
+
+// Clean records its arguments.
+func (j *fakeJanitor) Clean(_ context.Context, dry bool, _ string, open map[string]bool) ([]CleanItem, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.dry, j.open = dry, open
+	return []CleanItem{{Kind: "worktree", Name: "old"}}, nil
 }
 
 func TestServeRunsAGroupThroughTheSocketAndExitsWhenIdle(t *testing.T) {
@@ -238,9 +257,22 @@ func TestOverdueEntryStartsAtOnceFutureEntryKeepsTheEngineUpAndStopRemovesIt(t *
 	now := time.Now()
 	mk := func(run, label string, at time.Time) state.ScheduleEntry {
 		return state.ScheduleEntry{Target: label, Root: x.root, RunID: run, At: at, QueuedAt: now,
-			Start: bus.RunStart{Target: label, Groups: []string{label}, Source: "cli", Repo: "github.com/acme/shop", Root: x.root, CommonDir: filepath.Join(x.root, ".git"), Schedule: at}}
+			Start: bus.RunStart{
+				Target:    label,
+				Groups:    []string{label},
+				Source:    "cli",
+				Repo:      "github.com/acme/shop",
+				Root:      x.root,
+				CommonDir: filepath.Join(x.root, ".git"),
+				Schedule:  at,
+			}}
 	}
-	body := state.ScheduleBody{Entries: []state.ScheduleEntry{mk("run-overdue", "tg-1", now.Add(-time.Minute)), mk("run-future", "tg-2", now.Add(time.Hour))}}
+	body := state.ScheduleBody{
+		Entries: []state.ScheduleEntry{
+			mk("run-overdue", "tg-1", now.Add(-time.Minute)),
+			mk("run-future", "tg-2", now.Add(time.Hour)),
+		},
+	}
 	if _, err := state.SaveMachine(x.d.Machine, state.KindSchedule, body, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -321,8 +353,20 @@ func TestQueuedEntryWhoseGroupAlreadyHasARecordContinuesWithoutADuplicate(t *tes
 	x.savedGroup("tg-1", StageBuild, nil)
 	now := time.Now()
 	e := state.ScheduleEntry{Target: "tg-1", Root: x.root, RunID: "run-q", At: now.Add(-time.Second), QueuedAt: now,
-		Start: bus.RunStart{Target: "tg-1", Groups: []string{"tg-1"}, Source: "cli", Repo: "github.com/acme/shop", Root: x.root, CommonDir: filepath.Join(x.root, ".git")}}
-	if _, err := state.SaveMachine(x.d.Machine, state.KindSchedule, state.ScheduleBody{Entries: []state.ScheduleEntry{e}}, 0); err != nil {
+		Start: bus.RunStart{
+			Target:    "tg-1",
+			Groups:    []string{"tg-1"},
+			Source:    "cli",
+			Repo:      "github.com/acme/shop",
+			Root:      x.root,
+			CommonDir: filepath.Join(x.root, ".git"),
+		}}
+	if _, err := state.SaveMachine(
+		x.d.Machine,
+		state.KindSchedule,
+		state.ScheduleBody{Entries: []state.ScheduleEntry{e}},
+		0,
+	); err != nil {
 		t.Fatal(err)
 	}
 	x.serve()
@@ -342,7 +386,10 @@ func TestStatusWaitStreamsThenAnswersBlockedWithTheQuestion(t *testing.T) {
 			defer close(e.out)
 			for c := range e.cmds {
 				if c.Kind == task.CmdStart {
-					e.send(task.Message{Kind: task.MsgEscalate, Escalation: &task.Escalation{ID: "e", Group: e.spec.ID, Kind: task.EscBlocked, Reason: "setup"}})
+					e.send(task.Message{
+						Kind:       task.MsgEscalate,
+						Escalation: &task.Escalation{ID: "e", Group: e.spec.ID, Kind: task.EscBlocked, Reason: "setup"},
+					})
 				}
 			}
 		}
@@ -383,21 +430,22 @@ func TestStatusWaitTimesOutOnAHealthyRun(t *testing.T) {
 	}
 }
 
-// fakeReader serves a canned replay.
-type fakeReader struct{ log bus.ReplayLog }
-
-// Replay returns the canned log.
-func (f fakeReader) Replay(context.Context, bus.ID, bus.ID) (bus.ReplayLog, error) { return f.log, nil }
-
-// Explain returns nothing.
-func (fakeReader) Explain(context.Context, bus.ID, int) ([]bus.Event, error) { return nil, nil }
-
 func TestReplayStreamsEachEventThenTheGapCount(t *testing.T) {
 	evs := []bus.Event{
-		{Type: bus.TypeRunComplete, Subtype: "done", Run: "run-9", Time: t0, Data: &bus.RunDone{Done: []bus.ID{"g"}, Blocked: []bus.ID{}}},
+		{
+			Type:    bus.TypeRunComplete,
+			Subtype: "done",
+			Run:     "run-9",
+			Time:    t0,
+			Data:    &bus.RunDone{Done: []bus.ID{"g"}, Blocked: []bus.ID{}},
+		},
 		{Type: bus.TypeRunComplete, Subtype: "stopped", Run: "run-9", Time: t0, Data: &bus.RunStopped{Saved: []bus.ID{}}},
 	}
-	x := newEng(t, [][]string{{"tg-1"}}, func(r *rig) { r.d.Reader = fakeReader{bus.ReplayLog{Events: evs, Gaps: []bus.Gap{{}}}} })
+	x := newEng(
+		t,
+		[][]string{{"tg-1"}},
+		func(r *rig) { r.d.Reader = fakeReader{bus.ReplayLog{Events: evs, Gaps: []bus.Gap{{}}}} },
+	)
 	x.serve()
 	reps := x.ask(Request{ID: "r1", Verb: VerbReplay, Target: "run-9"})
 	if len(reps) != 3 || reps[0].Status != StatusEvent || reps[1].Event == nil || reps[2].Status != StatusOK {
@@ -410,21 +458,6 @@ func TestReplayStreamsEachEventThenTheGapCount(t *testing.T) {
 	if d.Gaps != 1 {
 		t.Fatalf("gaps %d", d.Gaps)
 	}
-}
-
-// fakeJanitor records the clean request.
-type fakeJanitor struct {
-	mu   sync.Mutex
-	dry  bool
-	open map[string]bool
-}
-
-// Clean records its arguments.
-func (j *fakeJanitor) Clean(_ context.Context, dry bool, _ string, open map[string]bool) ([]CleanItem, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.dry, j.open = dry, open
-	return []CleanItem{{Kind: "worktree", Name: "old"}}, nil
 }
 
 func TestCleanPassesDryRunAndTheRepositoriesWithAnOpenRun(t *testing.T) {
@@ -451,14 +484,22 @@ func TestApproveOnAGroupThatIsNotBlockedIsRefusedNotBlocked(t *testing.T) {
 	x.ask(x.runReq("q1", "run-1", "tg-1"))
 	x.waitStage("tg-1", StageBuild)
 	req := Request{ID: "a1", Verb: VerbRun, Target: "tg-1", Flags: Flags{Approve: true},
-		Event: &Event{Type: bus.TypeRunContinue, Time: t0, Data: &bus.RunContinue{Target: "tg-1", Answer: "approve", Request: "a1"}}}
+		Event: &Event{
+			Type: bus.TypeRunContinue,
+			Time: t0,
+			Data: &bus.RunContinue{Target: "tg-1", Answer: "approve", Request: "a1"},
+		}}
 	reps := x.ask(req)
 	last := reps[len(reps)-1]
 	if last.Status != StatusRefused || last.Code != CodeNotBlocked {
 		t.Fatalf("reply %+v", last)
 	}
 	reps = x.ask(Request{ID: "a2", Verb: VerbRun, Target: "nope", Flags: Flags{Deny: true},
-		Event: &Event{Type: bus.TypeRunContinue, Time: t0, Data: &bus.RunContinue{Target: "nope", Answer: "deny", Request: "a2"}}})
+		Event: &Event{
+			Type: bus.TypeRunContinue,
+			Time: t0,
+			Data: &bus.RunContinue{Target: "nope", Answer: "deny", Request: "a2"},
+		}})
 	if last := reps[len(reps)-1]; last.Code != CodeUnknownTarget {
 		t.Fatalf("reply %+v", last)
 	}
@@ -556,5 +597,24 @@ func TestSignalStopsEveryRunAndSavesBeforeTheEngineExits(t *testing.T) {
 	}
 	if got := x.stageOf("tg-1"); got != StageBuild {
 		t.Fatalf("stage after the stop %q", got)
+	}
+}
+
+// roundTrip sends a request and reads replies until the final one.
+func roundTrip(t *testing.T, c *Conn, req Request) []Reply {
+	t.Helper()
+	if err := c.Send(req); err != nil {
+		t.Fatal(err)
+	}
+	var out []Reply
+	for {
+		rep, err := c.Recv()
+		if err != nil {
+			t.Fatalf("read reply: %v", err)
+		}
+		out = append(out, rep)
+		if rep.Final {
+			return out
+		}
 	}
 }

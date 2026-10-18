@@ -56,7 +56,8 @@ func TestLimitErrorLeavesFileUnchanged(t *testing.T) {
 func TestSetErrorKinds(t *testing.T) {
 	m, _ := newTestManager(t)
 	var uk UnknownKeyError
-	if _, err := m.SetConfigItem(Change{Key: "limits.retruns", New: 1}); !errors.As(err, &uk) || uk.Closest != "limits.returns" {
+	if _, err := m.SetConfigItem(Change{Key: "limits.retruns", New: 1}); !errors.As(err, &uk) ||
+		uk.Closest != "limits.returns" {
 		t.Fatalf("unknown key: %v", err)
 	}
 	var bv BadValueError
@@ -97,7 +98,8 @@ func TestAllOrNone(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error")
 	}
-	if readFile(t, home, "settings.json") != "" || readFile(t, home, "state/config.log") != "" || readFile(t, home, "state/config.sha") != "" {
+	if readFile(t, home, "settings.json") != "" || readFile(t, home, "state/config.log") != "" ||
+		readFile(t, home, "state/config.sha") != "" {
 		t.Fatal("a refused call wrote something")
 	}
 	b := mustSet(t, m, "limits.returns", 4, "cache.max_mb", 512, "output.profile", "standard")
@@ -168,7 +170,8 @@ func TestLayerOrderForWallTime(t *testing.T) {
 		t.Fatalf("item %+v", it)
 	}
 	var le LimitError
-	if _, err := m.SetConfigItem(Change{Key: "agents.builder.session_wall_min", New: 121}); !errors.As(err, &le) || le.Limit != 120 {
+	if _, err := m.SetConfigItem(Change{Key: "agents.builder.session_wall_min", New: 121}); !errors.As(err, &le) ||
+		le.Limit != 120 {
 		t.Fatalf("over the hard limit: %v", err)
 	}
 	if _, err := m.SetConfigItem(Change{Key: "agents.builder.retries", New: 4}); !errors.As(err, &le) || le.Limit != 3 {
@@ -272,14 +275,28 @@ func TestRoleFilesAreChecked(t *testing.T) {
 	// Two roles sharing one result id.
 	fsys := embedCopy(t)
 	p := "agents/tester/agent.json"
-	fsys[p].Data = []byte(strings.Replace(string(fsys[p].Data), `komodo:agent/tester/result/1`, `komodo:agent/builder/result/1`, 1))
+	fsys[p].Data = []byte(
+		strings.Replace(string(fsys[p].Data), `komodo:agent/tester/result/1`, `komodo:agent/builder/result/1`, 1),
+	)
 	if _, err := newManager(t.TempDir(), fsys, Known{}, probeAll); err == nil {
 		t.Error("shared result id: want a load error")
 	}
 	// Known tables: a guard row or tool outside the table fails; an empty table skips the check.
 	known := Known{
 		GuardRows: map[string]bool{"R1": true},
-		Tools:     map[string]bool{"read": true, "search": true, "edit": true, "write": true, "run": true, "skill": true, "task_done": true, "diff": true, "git_read": true, "submit_finding": true, "lint_backlog": true},
+		Tools: map[string]bool{
+			"read":           true,
+			"search":         true,
+			"edit":           true,
+			"write":          true,
+			"run":            true,
+			"skill":          true,
+			"task_done":      true,
+			"diff":           true,
+			"git_read":       true,
+			"submit_finding": true,
+			"lint_backlog":   true,
+		},
 	}
 	if _, err := New(t.TempDir(), known, probeAll); err == nil || !strings.Contains(err.Error(), "B1") {
 		t.Errorf("guard row outside known: %v", err)
@@ -327,7 +344,18 @@ func TestEmbeddedDataIsValid(t *testing.T) {
 
 func TestResetPlans(t *testing.T) {
 	m, home := newTestManager(t)
-	mustSet(t, m, "limits.returns", 4, "agents.builder.retries", 3, "agents.builder.session_idle_min", 20, "agents.tester.retries", 1)
+	mustSet(
+		t,
+		m,
+		"limits.returns",
+		4,
+		"agents.builder.retries",
+		3,
+		"agents.builder.session_idle_min",
+		20,
+		"agents.tester.retries",
+		1,
+	)
 	cs, err := m.PlanReset("limits.returns")
 	if err != nil || len(cs) != 1 || cs[0].New != 3 || cs[0].Old != 4 {
 		t.Fatalf("key reset: %+v %v", cs, err)

@@ -105,8 +105,10 @@ func (g *EpicGates) enter(ctx context.Context, epic string, w *waiter) (*Turn, e
 	g.mu.Lock()
 	e := g.gate(epic)
 
-	free := !e.held && ((w.anyPause && (len(e.queue) == 0 || e.pausedBy != "")) ||
-		(!w.anyPause && ((e.pausedBy == "" && len(e.queue) == 0) || e.pausedBy == w.group)))
+	free := !e.held &&
+		((w.anyPause && (len(e.queue) == 0 || e.pausedBy != "")) ||
+			(!w.anyPause && ((e.pausedBy == "" && len(e.queue) == 0) || e.pausedBy == w.group)))
+
 	if free {
 		t := g.grant(epic, e, w)
 		g.mu.Unlock()
@@ -148,7 +150,6 @@ func (g *EpicGates) enter(ctx context.Context, epic string, w *waiter) (*Turn, e
 func (g *EpicGates) queued(epic string) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-
 	return len(g.gate(epic).queue)
 }
 

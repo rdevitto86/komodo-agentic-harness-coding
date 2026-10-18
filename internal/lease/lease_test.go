@@ -11,7 +11,6 @@ func TestLive(t *testing.T) {
 	start := testStart
 	alive := func(pid int, s time.Time) bool { return pid == 7 && s.Equal(start) }
 	held := Lease{State: StateHeld, Host: "h1", PID: 7, ProcStart: start, RenewedAt: testStart}
-
 	t.Run("this host, process alive, last renewal 3 hours old", func(t *testing.T) {
 		l := held
 		l.RenewedAt = now.Add(-3 * time.Hour)

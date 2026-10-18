@@ -21,6 +21,72 @@ type chatWire struct {
 	schema json.RawMessage
 }
 
+// turn sends the history, reads the streamed reply and assembles it.
+func (w *chatWire) turn(ctx context.Context, req turnRequest, h turnHooks) (turnResult, error) {
+	body, err := w.buildRequest(req)
+	if err != nil {
+		return turnResult{}, err
+	}
+
+	hr, err := w.p.request(ctx, http.MethodPost, w.p.base+"/chat/completions", body)
+	if err != nil {
+		return turnResult{}, err
+	}
+
+	acc := &chatAcc{}
+	resp, err := w.p.hc.Stream(ctx, w.p.ep, hr, core.StreamHooks{
+		Activity: h.Activity, Event: acc.event, Restart: acc.reset,
+		Final: func(e core.SSEEvent) bool { return strings.TrimSpace(e.Data) == "[DONE]" },
+	})
+	if err != nil {
+		return turnResult{}, err
+	}
+
+	res := acc.result()
+	for _, x := range resp.Headroom {
+		res.Headroom = append(res.Headroom, Headroom{
+			Name:      x.Name,
+			Limit:     x.Limit,
+			Remaining: x.Remaining,
+			Reset:     x.Reset,
+		})
+	}
+
+	return res, nil
+}
+
+// buildRequest assembles the body; the final call sends no tools and asks for the schema as the response format.
+func (w *chatWire) buildRequest(req turnRequest) ([]byte, error) {
+	r := chatRequest{
+		Model:         w.model,
+		Messages:      toChat(w.system, req.Messages),
+		Stream:        true,
+		StreamOptions: map[string]any{"include_usage": true},
+	}
+	if req.Final {
+		if len(w.schema) > 0 {
+			r.ResponseFormat = map[string]any{
+				"type": "json_schema",
+				"json_schema": map[string]any{
+					"name":   "result",
+					"strict": true,
+					"schema": w.schema,
+				},
+			}
+		}
+	} else {
+		for _, t := range w.tools {
+			ct := chatTool{Type: "function"}
+			ct.Function.Name = t.Name
+			ct.Function.Description = t.Description
+			ct.Function.Parameters = t.InputSchema
+			r.Tools = append(r.Tools, ct)
+		}
+	}
+
+	return json.Marshal(r)
+}
+
 // chatMessage is one message of the chat interface.
 type chatMessage struct {
 	Role       string     `json:"role"`
@@ -67,74 +133,6 @@ type chatAcc struct {
 	usage  Usage
 }
 
-// buildRequest assembles the body; the final call sends no tools and asks for the schema as the
-// response format.
-func (w *chatWire) buildRequest(req turnRequest) ([]byte, error) {
-	r := chatRequest{
-		Model:         w.model,
-		Messages:      toChat(w.system, req.Messages),
-		Stream:        true,
-		StreamOptions: map[string]any{"include_usage": true},
-	}
-	if req.Final {
-		if len(w.schema) > 0 {
-			r.ResponseFormat = map[string]any{
-				"type": "json_schema",
-				"json_schema": map[string]any{
-					"name":   "result",
-					"strict": true,
-					"schema": w.schema,
-				},
-			}
-		}
-	} else {
-		for _, t := range w.tools {
-			ct := chatTool{Type: "function"}
-			ct.Function.Name = t.Name
-			ct.Function.Description = t.Description
-			ct.Function.Parameters = t.InputSchema
-			r.Tools = append(r.Tools, ct)
-		}
-	}
-
-	return json.Marshal(r)
-}
-
-// turn sends the history, reads the streamed reply and assembles it.
-func (w *chatWire) turn(ctx context.Context, req turnRequest, h turnHooks) (turnResult, error) {
-	body, err := w.buildRequest(req)
-	if err != nil {
-		return turnResult{}, err
-	}
-
-	hr, err := w.p.request(ctx, http.MethodPost, w.p.base+"/chat/completions", body)
-	if err != nil {
-		return turnResult{}, err
-	}
-
-	acc := &chatAcc{}
-
-	resp, err := w.p.hc.Stream(ctx, w.p.ep, hr, core.StreamHooks{
-		Activity: h.Activity, Event: acc.event, Restart: acc.reset,
-		Final: func(e core.SSEEvent) bool { return strings.TrimSpace(e.Data) == "[DONE]" },
-	})
-	if err != nil {
-		return turnResult{}, err
-	}
-
-	res := acc.result()
-	for _, x := range resp.Headroom {
-		res.Headroom = append(res.Headroom, Headroom{
-			Name:      x.Name,
-			Limit:     x.Limit,
-			Remaining: x.Remaining,
-			Reset:     x.Reset,
-		})
-	}
-
-	return res, nil
-}
-
 // reset drops partial output before a retry.
 func (a *chatAcc) reset() { *a = chatAcc{} }
 
@@ -167,7 +165,6 @@ func (a *chatAcc) event(e core.SSEEvent) error {
 	if json.Unmarshal([]byte(e.Data), &c) != nil {
 		return nil
 	}
-
 	if c.Usage != nil {
 		a.usage = Usage{TokensIn: c.Usage.Prompt, TokensOut: c.Usage.Completion}
 	}
@@ -185,7 +182,6 @@ func (a *chatAcc) event(e core.SSEEvent) error {
 				call = &chatCall{Type: "function"}
 				a.calls[tc.Index] = call
 			}
-
 			if tc.ID != "" {
 				call.ID = tc.ID
 			}
@@ -218,7 +214,6 @@ func (a *chatAcc) result() turnResult {
 
 	for _, i := range idx {
 		c := a.calls[i]
-
 		in := strings.TrimSpace(c.Function.Arguments)
 		if in == "" {
 			in = "{}"
@@ -259,9 +254,7 @@ func (p *LocalProvider) newWire(s Session) *chatWire {
 	if b, err := os.ReadFile(filepath.Join(s.Dir, "system.md")); err == nil {
 		w.system = string(b)
 	}
-
 	w.tools = toolDefs(s.Tools)
-
 	return w
 }
 
@@ -278,7 +271,6 @@ func toChat(system string, msgs []message) []chatMessage {
 			cm := chatMessage{Role: "assistant"}
 
 			var text []string
-
 			for _, b := range m.Content {
 				switch b.Type {
 				case "text":
@@ -294,20 +286,14 @@ func toChat(system string, msgs []message) []chatMessage {
 			out = append(out, cm)
 		default:
 			var text []string
-
 			for _, b := range m.Content {
 				switch b.Type {
 				case "tool_result":
-					out = append(out, chatMessage{
-						Role:       "tool",
-						ToolCallID: b.ToolUseID,
-						Content:    b.Content,
-					})
+					out = append(out, chatMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: b.Content})
 				case "text":
 					text = append(text, b.Text)
 				}
 			}
-
 			if len(text) > 0 {
 				out = append(out, chatMessage{Role: "user", Content: strings.Join(text, "\n\n")})
 			}

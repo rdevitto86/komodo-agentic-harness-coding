@@ -25,7 +25,10 @@ func goldenReplies(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
 		}})
 		send(okReply(map[string]any{}))
 	case engine.VerbReplay:
-		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{Type: bus.TypeRunComplete, Subtype: "stopped", Run: sampleRun, Data: &bus.RunStopped{}}})
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event:  &bus.Event{Type: bus.TypeRunComplete, Subtype: "stopped", Run: sampleRun, Data: &bus.RunStopped{}},
+		})
 		send(okReply(map[string]any{"gaps": 0}))
 	case engine.VerbStatus:
 		send(okReply(statusFixture()))
@@ -88,7 +91,11 @@ func TestGoldenEnvelopes(t *testing.T) {
 				t.Fatalf("stderr = %q", errOut)
 			}
 			got := uuidPattern.ReplaceAllString(out, "<uuid>")
-			got = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(got, repo, "<repo>"), h.home, "<home>"), h.userHome, "<user>")
+			got = strings.ReplaceAll(
+				strings.ReplaceAll(strings.ReplaceAll(got, repo, "<repo>"), h.home, "<home>"),
+				h.userHome,
+				"<user>",
+			)
 			got = "exit " + string(rune('0'+code)) + "\n" + got
 			path := filepath.Join("testdata", "golden", c.name+".txt")
 			if *update {

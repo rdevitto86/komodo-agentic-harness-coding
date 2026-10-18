@@ -71,7 +71,6 @@ func (r CheckResult) Clean() bool {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -83,6 +82,5 @@ func (r CheckResult) Done(head string) CheckDone {
 			d.Regression = true
 		}
 	}
-
 	return d
 }

@@ -14,17 +14,14 @@ import (
 // lineNumber matches the :line and :line:column suffixes of a file reference.
 var lineNumber = regexp.MustCompile(`:\d+(?::\d+)?`)
 
-// Fingerprint hashes a sorted list of failing items into 64 lower-case hexadecimal characters; line
-// numbers do not count.
+// Fingerprint hashes a sorted list of failing items into 64 lower-case hexadecimal characters; line numbers do not count.
 func Fingerprint(items []string) string {
 	norm := make([]string, len(items))
 	for i, it := range items {
 		norm[i] = strings.TrimSpace(lineNumber.ReplaceAllString(it, ""))
 	}
-
 	sort.Strings(norm)
 	sum := sha256.Sum256([]byte(strings.Join(norm, "\n")))
-
 	return hex.EncodeToString(sum[:])
 }
 
@@ -48,7 +45,6 @@ func LoadLimits(cfg ConfigReader, agents AgentLimits) (Limits, error) {
 		if err != nil {
 			return Limits{}, err
 		}
-
 		*k.dst = int(n)
 	}
 
@@ -70,7 +66,6 @@ func LoadLimits(cfg ConfigReader, agents AgentLimits) (Limits, error) {
 		if err != nil {
 			return Limits{}, fmt.Errorf("%s retries: %w", a.name, err)
 		}
-
 		*a.dst = n
 	}
 
@@ -93,14 +88,12 @@ func readNumber(cfg ConfigReader, key string) (float64, error) {
 		if v != math.Trunc(v) && key != "sandbox.max_mem_gb" {
 			return 0, fmt.Errorf("read %s: %v is not a whole number", key, v)
 		}
-
 		return v, nil
 	case json.Number:
 		f, err := v.Float64()
 		if err != nil {
 			return 0, fmt.Errorf("read %s: %w", key, err)
 		}
-
 		return f, nil
 	}
 

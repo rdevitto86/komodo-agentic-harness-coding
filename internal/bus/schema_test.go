@@ -128,7 +128,10 @@ func TestSchemaMatchesGoTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatal("embed/event.schema.json disagrees with the Go types; run: go test ./internal/bus -run TestSchemaMatchesGoTypes -update")
+		t.Fatal(
+			"embed/event.schema.json disagrees with the Go types; run: go test ./internal/bus -run " +
+				"TestSchemaMatchesGoTypes -update",
+		)
 	}
 }
 

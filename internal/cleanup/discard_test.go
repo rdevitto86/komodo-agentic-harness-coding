@@ -43,7 +43,8 @@ func TestDiscardDropsUnpublishedWork(t *testing.T) {
 	if !exists(state) {
 		t.Fatal("the group's state record was removed")
 	}
-	if got := e.log.names("container.", "git.Discard", "task."); len(got) != 4 || got[0] != "container.Remove g1" || got[3] != "task.Close" {
+	if got := e.log.names("container.", "git.Discard", "task."); len(got) != 4 || got[0] != "container.Remove g1" ||
+		got[3] != "task.Close" {
 		t.Fatalf("calls = %v", got)
 	}
 	if got := e.rep.subtypes(); len(got) != 1 || got[0] != "group.discarded" {

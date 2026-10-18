@@ -46,19 +46,20 @@ type FindingSink interface {
 	Submit(f Submitted)
 }
 
-// GateError is a rejected result: Text goes back into the live session, Schema marks a result that
-// broke its schema.
+// GateError is a rejected result: Text goes back into the live session, Schema marks a result that broke its schema.
 type GateError struct {
 	Text   string
 	Schema bool
 }
 
+// Error returns the text sent back to the session.
+func (e *GateError) Error() string { return e.Text }
+
 // Outcome is what a role's Judge decides.
 type Outcome struct {
-	Kind   OutcomeKind
-	Reason string // for Block, and the builder's reason for Scope
-	// for Return: verified findings the builder receives; for Restart: Go's output
-	Findings []string
+	Kind     OutcomeKind
+	Reason   string   // for Block, and the builder's reason for Scope
+	Findings []string // for Return: verified findings the builder receives; for Restart: Go's output
 	Paths    []string // for Scope: the paths the builder asked for
 	Summary  []string // for Pass: the result lines the pull request body prints
 }
@@ -86,8 +87,7 @@ type Git interface {
 	) error // creates l.Branch and checks it out at l.Worktree
 }
 
-// PointerRecorder is implemented by a Git that records the worktree's .git pointer when the group
-// starts.
+// PointerRecorder is implemented by a Git that records the worktree's .git pointer when the group starts.
 type PointerRecorder interface {
 	// RecordPointer keeps the exact text of the worktree's .git file for the later checks.
 	RecordPointer(l LeaseRef) error
@@ -105,8 +105,7 @@ type LimitStore interface {
 
 // SandboxPlan holds the folders a sandbox instance is built from.
 type SandboxPlan struct {
-	// folder that holds each instance's temporary folder; a system temporary folder when empty
-	Temp       string
+	Temp       string   // folder that holds each instance's temporary folder; a system temporary folder when empty
 	Build      string   // the group's private build cache; writable
 	Modules    string   // module and registry caches; read-only
 	Toolchains []string // toolchain folders; read-only
@@ -116,48 +115,40 @@ type SandboxPlan struct {
 
 // Collaborators are the parts a Manager calls.
 type Collaborators struct {
-	// the Runtime Manager; when nil, Serve supplies one over the reply channel
-	Runtime   Runtime
-	Briefs    Briefer         // the Context Manager, through the Runtime Manager
-	Roles     map[string]Role // the builder, tester and reviewer
-	Git       Git             // the shared git wrapper
-	Commit    Committer       // the Commit Handler
-	Router    *Router
-	Client    *llm.Client
-	Sandboxes *sandbox.Manager
-	Limits    LimitStore
-	Cache     cache.Handle // the cache handle; only the Runtime Manager creates or closes the cache
-
-	// the mechanical checks run before the Tester and Reviewer start
-	Checks      agent.Checker
+	Runtime     Runtime         // the Runtime Manager; when nil, Serve supplies one over the reply channel
+	Briefs      Briefer         // the Context Manager, through the Runtime Manager
+	Roles       map[string]Role // the builder, tester and reviewer
+	Git         Git             // the shared git wrapper
+	Commit      Committer       // the Commit Handler
+	Router      *Router
+	Client      *llm.Client
+	Sandboxes   *sandbox.Manager
+	Limits      LimitStore
+	Cache       cache.Handle        // the cache handle; only the Runtime Manager creates or closes the cache
+	Checks      agent.Checker       // the mechanical checks run before the Tester and Reviewer start
 	Commands    map[string][]string // command class to argv: setup, build, test, lint, format
 	Base        string              // the commit the group's checks diff against
 	Language    string              // decides the impact set of the checks
 	Meta        GroupMeta           // what the Commit Handler needs besides the spec
 	Plan        SandboxPlan         // where the sandbox instances keep their files
 	SessionsDir string              // folder that holds one folder per session
-	// the komodo program, which the subscription link starts as its tool server
-	Exe   string
-	Skill func(ref string) (string, error)
-	// environment of outside tool servers; os.Getenv when nil
-	Getenv    func(string) string
-	OnRecheck func(pass bool, output string) // receives the result of the recheck command
-	Now       func() time.Time               // clock; time.Now when nil
-	Tick      time.Duration                  // session timer period; TickEvery when zero
-	// stop ladder waits (to SIGTERM, to kill); TermAfter and KillAfter when zero
-	Ladder [2]time.Duration
-	// backoff after a refused resume; 15, 30, 60 minutes when nil
-	ResumeWait func(try int) time.Duration
+	Exe         string              // the komodo program, which the subscription link starts as its tool server
+	Skill       func(ref string) (string, error)
+	Getenv      func(string) string            // environment of outside tool servers; os.Getenv when nil
+	OnRecheck   func(pass bool, output string) // receives the result of the recheck command
+	Now         func() time.Time               // clock; time.Now when nil
+	Tick        time.Duration                  // session timer period; TickEvery when zero
+	Ladder      [2]time.Duration               // stop ladder waits (to SIGTERM, to kill); TermAfter and KillAfter when zero
+	ResumeWait  func(try int) time.Duration    // backoff after a refused resume; 15, 30, 60 minutes when nil
 }
 
 // The outcome kinds.
 const (
-	OutcomePass   OutcomeKind = "pass"   // this role approves
-	OutcomeReturn OutcomeKind = "return" // back to Build with Findings
-	// start the same role once more (a disputed tester result)
-	OutcomeRestart OutcomeKind = "restart"
-	OutcomeBlock   OutcomeKind = "block" // escalate with Reason
-	OutcomeScope   OutcomeKind = "scope" // the builder asks for files outside its list
+	OutcomePass    OutcomeKind = "pass"    // this role approves
+	OutcomeReturn  OutcomeKind = "return"  // back to Build with Findings
+	OutcomeRestart OutcomeKind = "restart" // start the same role once more (a disputed tester result)
+	OutcomeBlock   OutcomeKind = "block"   // escalate with Reason
+	OutcomeScope   OutcomeKind = "scope"   // the builder asks for files outside its list
 )
 
 // Errors Run, Resume and Continue return.
@@ -167,6 +158,3 @@ var (
 	ErrNoEscalation = errors.New("no open escalation matches the answer")
 	ErrNotPaused    = errors.New("the group is not paused")
 )
-
-// Error returns the text sent back to the session.
-func (e *GateError) Error() string { return e.Text }

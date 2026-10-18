@@ -29,8 +29,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
-// stack holds the parts the engine process shares: the bus, the settings, the models and the
-// stores.
+// stack holds the parts the engine process shares: the bus, the settings, the models and the stores.
 type stack struct {
 	home    string
 	cfg     *config.Manager
@@ -69,11 +68,7 @@ func newStack(home string, stderr io.Writer) (*stack, error) {
 		return nil, fmt.Errorf("load the model catalog: %w", err)
 	}
 
-	cfg, err := config.New(
-		home,
-		config.Known{GuardRows: task.KnownRows(), Tools: task.KnownTools()},
-		llm.NewModelCheck(cat),
-	)
+	cfg, err := config.New(home, config.Known{GuardRows: task.KnownRows(), Tools: task.KnownTools()}, llm.NewModelCheck(cat))
 	if err != nil {
 		return nil, fmt.Errorf("open settings: %w", err)
 	}
@@ -98,7 +93,6 @@ func newStack(home string, stderr io.Writer) (*stack, error) {
 	s.caches = &cacheStore{home: home, version: version, open: map[string]*cache.Cache{}}
 	s.kits, s.byID, s.refs = map[string]*repoKit{}, map[string]*repoKit{}, map[string]*groupRef{}
 	s.closers = append(s.closers, func() { _ = s.caches.Close(context.Background()) })
-
 	return s, nil
 }
 
@@ -108,9 +102,6 @@ func (s *stack) close() {
 		s.closers[i]()
 	}
 }
-
-// spawn starts a goroutine whose panic the fault handler reports.
-func (s *stack) spawn(fn func()) { s.faults.Go(fault.Source{Component: "engine"}, fn, nil) }
 
 // dumpOnSignal writes every goroutine stack to the engine log when the process gets SIGUSR1.
 func (s *stack) dumpOnSignal() {
@@ -122,6 +113,9 @@ func (s *stack) dumpOnSignal() {
 		}
 	})
 }
+
+// spawn starts a goroutine whose panic the fault handler reports.
+func (s *stack) spawn(fn func()) { s.faults.Go(fault.Source{Component: "engine"}, fn, nil) }
 
 // logf writes one line to the engine log; a failed write is dropped.
 func (s *stack) logf(format string, a ...any) { _, _ = fmt.Fprintf(s.stderr, format, a...) }
@@ -138,15 +132,14 @@ func registerEvents() {
 	registerHandlerEvents()
 }
 
-// buildLinks builds the model client from the settings: the paid interface when its key is set and
-// the subscription program. Local endpoints are not built, because how their model names are
+// buildLinks builds the model client from the settings: the paid interface when its key is set and the subscription program.
+// Local endpoints are not built, because how their model names are
 // written is an open decision.
 func buildLinks(cfg *config.Manager, cat *llm.Catalog, faults llm.Recoverer) *llm.Client {
 	links := map[llm.Link]llm.Provider{}
 
 	if it, err := cfg.GetConfigItem("providers.keys.anthropic"); err == nil {
-		if name, ok := strings.CutPrefix(fmt.Sprint(it.Value), "env:"); ok &&
-			os.Getenv(name) != "" {
+		if name, ok := strings.CutPrefix(fmt.Sprint(it.Value), "env:"); ok && os.Getenv(name) != "" {
 			a, err := llm.NewAnthropic(llm.AnthropicOptions{
 				BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
 				Key:     os.Getenv(name),
@@ -160,7 +153,6 @@ func buildLinks(cfg *config.Manager, cat *llm.Catalog, faults llm.Recoverer) *ll
 	}
 
 	links[llm.ClaudeCLI] = llm.NewClaude(llm.ClaudeOptions{Catalog: cat, Faults: faults})
-
 	return llm.New(links)
 }
 
@@ -172,19 +164,16 @@ func buildBackends(home string) map[string]sandbox.Backend {
 	} else {
 		b = sandbox.NewBubblewrap(sandbox.BubblewrapOptions{Home: home})
 	}
-
 	return map[string]sandbox.Backend{"builder": b, "tester": b}
 }
 
 // gitOut runs the host git in the working directory and returns its trimmed output.
 func gitOut(args ...string) (string, error) {
 	out, err := exec.Command("git", args...).Output()
-
 	return strings.TrimSpace(string(out)), err
 }
 
-// runEngine builds the harness and serves the control socket in the foreground until the exit rule
-// holds or ctx ends.
+// runEngine builds the harness and serves the control socket in the foreground until the exit rule holds or ctx ends.
 func runEngine(ctx context.Context, home string, stderr io.Writer) error {
 	s, err := newStack(home, stderr)
 	if err != nil {

@@ -53,7 +53,6 @@ func (s *State) markPaused(p PauseOrder) {
 			if s.Spend.RunCeiling[p.Run] == nil {
 				s.Spend.RunCeiling[p.Run] = map[string]bool{}
 			}
-
 			s.Spend.RunCeiling[p.Run][g] = true
 		case reasonSpendCeilingDay:
 			s.Spend.DayCeiling[g] = true

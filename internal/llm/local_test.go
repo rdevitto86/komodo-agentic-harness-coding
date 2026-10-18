@@ -40,7 +40,11 @@ func (f *fakeOllama) server(t *testing.T) *httptest.Server {
 			_, _ = io.WriteString(w, `{"version":"0.12.0"}`)
 		case "/api/ps":
 			if f.loaded {
-				_, _ = fmt.Fprintf(w, `{"models":[{"name":"Qwen3.6-27B","model":"Qwen3.6-27B","context_length":%d}]}`, f.ctxLen)
+				_, _ = fmt.Fprintf(
+					w,
+					`{"models":[{"name":"Qwen3.6-27B","model":"Qwen3.6-27B","context_length":%d}]}`,
+					f.ctxLen,
+				)
 			} else {
 				_, _ = io.WriteString(w, `{"models":[]}`)
 			}
@@ -63,31 +67,6 @@ func (f *fakeOllama) server(t *testing.T) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-// chatText is a streamed text reply with usage.
-func chatText(text string) string {
-	return fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
-		mustJSON(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": text}, "finish_reason": "stop"}}}),
-		`{"choices":[],"usage":{"prompt_tokens":40,"completion_tokens":6}}`)
-}
-
-// chatTool is a streamed reply that calls a tool, arguments split across chunks.
-func chatToolCall(id, name string) string {
-	return fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
-		mustJSON(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": id, "function": map[string]any{"name": name, "arguments": `{"path":`}}}}}}}),
-		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a.go\"}"}}]},"finish_reason":"tool_calls"}]}`,
-		`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}`)
-}
-
-func localAdapter(t *testing.T, srv *httptest.Server, ep LocalEndpoint) *LocalProvider {
-	t.Helper()
-	ep.URL = srv.URL + "/v1"
-	p, err := NewLocal(LocalOptions{Endpoint: ep})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
 }
 
 func TestLocalProbeMeasuresOllamaContext(t *testing.T) {
@@ -150,7 +129,9 @@ func TestLocalUnreachableIsUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
-	p, _ := NewLocal(LocalOptions{Endpoint: LocalEndpoint{URL: url + "/v1", Models: map[Weight]string{Standard: "m"}, Ctx: 1}})
+	p, _ := NewLocal(LocalOptions{
+		Endpoint: LocalEndpoint{URL: url + "/v1", Models: map[Weight]string{Standard: "m"}, Ctx: 1},
+	})
 	if _, err := p.Probe(context.Background()); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("Probe = %v", err)
 	}
@@ -180,9 +161,18 @@ func TestLocalSessionRunsToolLoopThenSchemaCall(t *testing.T) {
 	f := &fakeOllama{replies: []string{chatToolCall("c1", "read"), chatText("done"), chatText(`{"done":true}`)}}
 	srv := f.server(t)
 	t.Setenv("LOCAL_KEY", "local-secret-key")
-	p, _ := NewLocal(LocalOptions{Endpoint: LocalEndpoint{URL: srv.URL + "/v1", Models: map[Weight]string{Standard: "m"}, Ctx: 100000, Key: "env:LOCAL_KEY"}})
+	p, _ := NewLocal(LocalOptions{
+		Endpoint: LocalEndpoint{
+			URL:    srv.URL + "/v1",
+			Models: map[Weight]string{Standard: "m"},
+			Ctx:    100000,
+			Key:    "env:LOCAL_KEY",
+		},
+	})
 	host := &fakeHost{}
-	s := Session{ID: "sid", Dir: t.TempDir(), Agent: "tester", Link: Local, Model: "m", Schema: json.RawMessage(resultSchema),
+	s := Session{ID: "sid", Dir: t.TempDir(), Agent: "tester", Link: Local, Model: "m", Schema: json.RawMessage(
+		resultSchema,
+	),
 		Tools: host, Profile: CapacityProfile{Ctx: 100000}, Parts: [5]string{"", "role", "", "", "the task"}}
 	st, err := p.Start(context.Background(), s)
 	if err != nil {
@@ -210,7 +200,8 @@ func TestLocalSessionRunsToolLoopThenSchemaCall(t *testing.T) {
 	if _, ok := last["tools"]; ok {
 		t.Error("the final call sends no tools")
 	}
-	if !strings.Contains(string(last["response_format"]), `"type":"json_schema"`) || !strings.Contains(string(last["response_format"]), `"strict":true`) {
+	if !strings.Contains(string(last["response_format"]), `"type":"json_schema"`) ||
+		!strings.Contains(string(last["response_format"]), `"strict":true`) {
 		t.Errorf("final response_format = %s", last["response_format"])
 	}
 	var msgs []chatMessage
@@ -222,4 +213,46 @@ func TestLocalSessionRunsToolLoopThenSchemaCall(t *testing.T) {
 	if !sawTool {
 		t.Errorf("tool result missing from the second request: %+v", msgs)
 	}
+}
+
+// chatText is a streamed text reply with usage.
+func chatText(text string) string {
+	return fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
+		mustJSON(map[string]any{
+			"choices": []any{map[string]any{"delta": map[string]any{"content": text}, "finish_reason": "stop"}},
+		}),
+		`{"choices":[],"usage":{"prompt_tokens":40,"completion_tokens":6}}`)
+}
+
+// chatTool is a streamed reply that calls a tool, arguments split across chunks.
+func chatToolCall(id, name string) string {
+	return fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
+		mustJSON(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"delta": map[string]any{
+						"tool_calls": []any{
+							map[string]any{
+								"index":    0,
+								"id":       id,
+								"function": map[string]any{"name": name, "arguments": `{"path":`},
+							},
+						},
+					},
+				},
+			},
+		}),
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a.go\"}"}}]},`+
+			`"finish_reason":"tool_calls"}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}`)
+}
+
+func localAdapter(t *testing.T, srv *httptest.Server, ep LocalEndpoint) *LocalProvider {
+	t.Helper()
+	ep.URL = srv.URL + "/v1"
+	p, err := NewLocal(LocalOptions{Endpoint: ep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

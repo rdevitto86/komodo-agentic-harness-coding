@@ -13,16 +13,15 @@ import (
 
 // ScoreRow is one agent-and-model line of the scorecard.
 type ScoreRow struct {
-	Agent            string  `json:"agent"`
-	Model            string  `json:"model"`
-	FirstPassRate    float64 `json:"first_pass_rate"`   // share of tasks done on the first attempt
-	ReturnsPerGroup  float64 `json:"returns_per_group"` // returns to Build per group
-	FindingPrecision float64 `json:"finding_precision"` // share of findings Go verified
-	// share of tester failures the reruns passed
-	TesterFalseFail float64  `json:"tester_false_fail"`
-	CacheReadShare  float64  `json:"cache_read_share"` // cache-read tokens over input tokens
-	TokensPerGroup  *int64   `json:"tokens_per_group"` // nil when no usage was reported
-	USDPerGroup     *float64 `json:"usd_per_group"`    // nil when no usage was reported
+	Agent            string   `json:"agent"`
+	Model            string   `json:"model"`
+	FirstPassRate    float64  `json:"first_pass_rate"`   // share of tasks done on the first attempt
+	ReturnsPerGroup  float64  `json:"returns_per_group"` // returns to Build per group
+	FindingPrecision float64  `json:"finding_precision"` // share of findings Go verified
+	TesterFalseFail  float64  `json:"tester_false_fail"` // share of tester failures the reruns passed
+	CacheReadShare   float64  `json:"cache_read_share"`  // cache-read tokens over input tokens
+	TokensPerGroup   *int64   `json:"tokens_per_group"`  // nil when no usage was reported
+	USDPerGroup      *float64 `json:"usd_per_group"`     // nil when no usage was reported
 }
 
 // Scorecard is the whole report: one row per agent and model.
@@ -76,8 +75,7 @@ func (tl *tally) row(k rowKey) ScoreRow {
 	return r
 }
 
-// scorecard works out the scorecard of a folder from the session records and the bus store's run
-// logs inside the window.
+// scorecard works out the scorecard of a folder from the session records and the bus store's run logs inside the window.
 func scorecard(
 	ctx context.Context,
 	dir string,
@@ -104,7 +102,6 @@ func scorecard(
 
 		byID[r.Session] = r
 		tl := tallyOf(rows, rowKey{r.Agent, r.Model})
-
 		tl.groups[groupKey{r.Run, r.Group}] = true
 		if r.Usage != nil {
 			tl.tokensIn += r.Usage.TokensIn
@@ -113,10 +110,8 @@ func scorecard(
 	}
 
 	doneGroups := map[groupKey]bool{}
-
 	err = bus.ReadFolder(ctx, eventsDirOf(dir), func(_ bus.ID, l bus.ReplayLog) error {
 		countEvents(l.Events, cutoff, byID, rows, doneGroups)
-
 		return nil
 	})
 	if err != nil {
@@ -159,8 +154,7 @@ func tallyOf(rows map[rowKey]*tally, k rowKey) *tally {
 	return tl
 }
 
-// countEvents adds one run log's events to the row tallies; sessions it cannot place are not
-// counted.
+// countEvents adds one run log's events to the row tallies; sessions it cannot place are not counted.
 func countEvents(
 	evs []bus.Event,
 	cutoff time.Time,
@@ -180,9 +174,7 @@ func countEvents(
 		if !ok {
 			return nil, rowKey{}, false
 		}
-
 		k := rowKey{r.Agent, r.Model}
-
 		return rows[k], k, true
 	}
 
@@ -206,11 +198,9 @@ func countEvents(
 			if !ok {
 				continue
 			}
-
 			if k.agent == "builder" {
 				lastBuilder[groupKey{e.Run, e.Group}] = k
 			}
-
 			if k.agent == "tester" && d.Verify != nil {
 				tl.failed += len(d.Verify.Failed)
 				tl.disputed += len(d.Verify.Disputed)
@@ -240,6 +230,5 @@ func ratio(a, b int) float64 {
 	if b == 0 {
 		return 0
 	}
-
 	return float64(a) / float64(b)
 }

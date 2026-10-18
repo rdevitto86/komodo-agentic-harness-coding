@@ -86,20 +86,19 @@ func TestParseSemVerInvalid(t *testing.T) {
 	}
 }
 
-// mustParse parses s or fails the test.
-func mustParse(t *testing.T, s string) SemVer {
-	t.Helper()
-	v, err := ParseSemVer(s)
-	if err != nil {
-		t.Fatalf("ParseSemVer(%q): %v", s, err)
-	}
-	return v
-}
-
 func TestCompareChain(t *testing.T) {
 	chains := [][]string{
 		// the example chain in the SemVer 2.0.0 precedence section
-		{"1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0"},
+		{
+			"1.0.0-alpha",
+			"1.0.0-alpha.1",
+			"1.0.0-alpha.beta",
+			"1.0.0-beta",
+			"1.0.0-beta.2",
+			"1.0.0-beta.11",
+			"1.0.0-rc.1",
+			"1.0.0",
+		},
 		// core fields compare numerically, not as text
 		{"0.9.9", "1.0.0", "1.0.1", "1.1.0", "1.9.0", "1.10.0", "2.0.0", "10.0.0"},
 		// the release line
@@ -192,4 +191,14 @@ func TestBinaryVersion(t *testing.T) {
 	if ok, _ := BinaryMeetsPin("1.0.0-beta.7"); ok {
 		t.Error("dev build must not meet a pin above it")
 	}
+}
+
+// mustParse parses s or fails the test.
+func mustParse(t *testing.T, s string) SemVer {
+	t.Helper()
+	v, err := ParseSemVer(s)
+	if err != nil {
+		t.Fatalf("ParseSemVer(%q): %v", s, err)
+	}
+	return v
 }

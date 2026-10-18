@@ -7,7 +7,16 @@ import (
 
 // saveReq builds a save request for the group.
 func saveReq(g group, task string) SaveRequest {
-	return SaveRequest{Run: "run-1", Group: bindID(g.id), Repo: "repo", Label: g.label, Task: task, Worktree: g.wt, Branch: g.branch, Fence: g.fence}
+	return SaveRequest{
+		Run:      "run-1",
+		Group:    bindID(g.id),
+		Repo:     "repo",
+		Label:    g.label,
+		Task:     task,
+		Worktree: g.wt,
+		Branch:   g.branch,
+		Fence:    g.fence,
+	}
 }
 
 // Save commits the worktree on the group branch, pushes nothing and leaves the remote unchanged.

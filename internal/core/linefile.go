@@ -13,29 +13,6 @@ type LineFile struct {
 	f    *os.File
 }
 
-// OpenLineFile opens the file at path for appending, creating its folder and the file.
-// A file that ends mid-line, as a dead process leaves it, gets that line ended first.
-func OpenLineFile(path string) (*LineFile, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create folder of %s: %w", path, err)
-	}
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-
-	if endsMidLine(f) {
-		if _, err := f.Write([]byte{'\n'}); err != nil {
-			_ = f.Close()
-
-			return nil, fmt.Errorf("end torn line of %s: %w", path, err)
-		}
-	}
-
-	return &LineFile{path: path, f: f}, nil
-}
-
 // Path returns the file's path.
 func (l *LineFile) Path() string { return l.path }
 
@@ -46,7 +23,6 @@ func (l *LineFile) Append(line []byte) error {
 	}
 
 	buf := make([]byte, 0, len(line)+1)
-
 	buf = append(append(buf, line...), '\n')
 	if _, err := l.f.Write(buf); err != nil {
 		return fmt.Errorf("append to %s: %w", l.path, err)
@@ -69,6 +45,27 @@ func (l *LineFile) Close() error {
 	}
 
 	return nil
+}
+
+// OpenLineFile opens the file at path for appending, creating its folder and the file.
+// A file that ends mid-line, as a dead process leaves it, gets that line ended first.
+func OpenLineFile(path string) (*LineFile, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create folder of %s: %w", path, err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	if endsMidLine(f) {
+		if _, err := f.Write([]byte{'\n'}); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("end torn line of %s: %w", path, err)
+		}
+	}
+
+	return &LineFile{path: path, f: f}, nil
 }
 
 // endsMidLine reports whether a non-empty file's last byte is not a newline.

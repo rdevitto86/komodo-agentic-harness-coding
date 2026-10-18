@@ -15,64 +15,8 @@ type SemVer struct {
 }
 
 // version is the release this binary reports; a release build overrides it with -ldflags "-X".
-// An unstamped build keeps the +dev marker, so it meets the current pin and only a newer release
-// replaces it.
+// An unstamped build keeps the +dev marker, so it meets the current pin and only a newer release replaces it.
 var version = "1.0.0-beta.6+dev"
-
-// ParseSemVer parses a strict SemVer 2.0.0 string; a leading "v", spaces and leading zeros are
-// errors.
-func ParseSemVer(s string) (SemVer, error) {
-	var v SemVer
-
-	rest, build, hasBuild := strings.Cut(s, "+")
-	core, pre, hasPre := strings.Cut(rest, "-")
-
-	nums := strings.Split(core, ".")
-	if len(nums) != 3 {
-		return v, parseErr(s, "want major.minor.patch")
-	}
-
-	var fields [3]uint64
-
-	for i, n := range nums {
-		if !isDigits(n) {
-			return v, parseErr(s, "core field "+strconv.Quote(n)+" is not a number")
-		}
-
-		if len(n) > 1 && n[0] == '0' {
-			return v, parseErr(s, "core field "+strconv.Quote(n)+" has a leading zero")
-		}
-
-		u, err := strconv.ParseUint(n, 10, 64)
-		if err != nil {
-			return v, parseErr(s, "core field "+strconv.Quote(n)+" is out of range")
-		}
-
-		fields[i] = u
-	}
-
-	v.Major, v.Minor, v.Patch = fields[0], fields[1], fields[2]
-
-	if hasPre {
-		ids, err := splitIdentifiers(pre, true)
-		if err != nil {
-			return SemVer{}, parseErr(s, "prerelease "+err.Error())
-		}
-
-		v.Pre = ids
-	}
-
-	if hasBuild {
-		ids, err := splitIdentifiers(build, false)
-		if err != nil {
-			return SemVer{}, parseErr(s, "build metadata "+err.Error())
-		}
-
-		v.Build = ids
-	}
-
-	return v, nil
-}
 
 // String renders the version in canonical SemVer form, build metadata included.
 func (v SemVer) String() string {
@@ -80,11 +24,9 @@ func (v SemVer) String() string {
 	if len(v.Pre) > 0 {
 		s += "-" + strings.Join(v.Pre, ".")
 	}
-
 	if len(v.Build) > 0 {
 		s += "+" + strings.Join(v.Build, ".")
 	}
-
 	return s
 }
 
@@ -93,11 +35,9 @@ func (v SemVer) Compare(o SemVer) int {
 	if c := cmpUint(v.Major, o.Major); c != 0 {
 		return c
 	}
-
 	if c := cmpUint(v.Minor, o.Minor); c != 0 {
 		return c
 	}
-
 	if c := cmpUint(v.Patch, o.Patch); c != 0 {
 		return c
 	}
@@ -121,14 +61,10 @@ func (v SemVer) Compare(o SemVer) int {
 }
 
 // BinaryVersion returns the version string embedded in this binary.
-func BinaryVersion() string {
-	return version
-}
+func BinaryVersion() string { return version }
 
 // BinaryMeetsPin reports whether this binary's version is at or above pin.
-func BinaryMeetsPin(pin string) (bool, error) {
-	return MeetsPin(version, pin)
-}
+func BinaryMeetsPin(pin string) (bool, error) { return MeetsPin(version, pin) }
 
 // MeetsPin reports whether have is at or above pin by SemVer precedence; both must parse.
 func MeetsPin(have, pin string) (bool, error) {
@@ -145,17 +81,63 @@ func MeetsPin(have, pin string) (bool, error) {
 	return h.Compare(p) >= 0, nil
 }
 
+// ParseSemVer parses a strict SemVer 2.0.0 string; a leading "v", spaces and leading zeros are errors.
+func ParseSemVer(s string) (SemVer, error) {
+	var v SemVer
+
+	rest, build, hasBuild := strings.Cut(s, "+")
+	core, pre, hasPre := strings.Cut(rest, "-")
+	nums := strings.Split(core, ".")
+	if len(nums) != 3 {
+		return v, parseErr(s, "want major.minor.patch")
+	}
+
+	var fields [3]uint64
+
+	for i, n := range nums {
+		if !isDigits(n) {
+			return v, parseErr(s, "core field "+strconv.Quote(n)+" is not a number")
+		}
+		if len(n) > 1 && n[0] == '0' {
+			return v, parseErr(s, "core field "+strconv.Quote(n)+" has a leading zero")
+		}
+
+		u, err := strconv.ParseUint(n, 10, 64)
+		if err != nil {
+			return v, parseErr(s, "core field "+strconv.Quote(n)+" is out of range")
+		}
+
+		fields[i] = u
+	}
+
+	v.Major, v.Minor, v.Patch = fields[0], fields[1], fields[2]
+	if hasPre {
+		ids, err := splitIdentifiers(pre, true)
+		if err != nil {
+			return SemVer{}, parseErr(s, "prerelease "+err.Error())
+		}
+		v.Pre = ids
+	}
+	if hasBuild {
+		ids, err := splitIdentifiers(build, false)
+		if err != nil {
+			return SemVer{}, parseErr(s, "build metadata "+err.Error())
+		}
+		v.Build = ids
+	}
+
+	return v, nil
+}
+
 // cmpIdentifier orders two prerelease identifiers: numbers by value and below text, text by ASCII.
 func cmpIdentifier(a, b string) int {
 	an, bn := isDigits(a), isDigits(b)
 	switch {
 	case an && bn:
-		// Digit strings have no leading zeros, so length then text is numeric order without
-		// overflow.
+		// Digit strings have no leading zeros, so length then text is numeric order without overflow.
 		if c := cmpUint(uint64(len(a)), uint64(len(b))); c != 0 {
 			return c
 		}
-
 		return strings.Compare(a, b)
 	case an:
 		return -1
@@ -164,42 +146,6 @@ func cmpIdentifier(a, b string) int {
 	}
 
 	return strings.Compare(a, b)
-}
-
-// cmpUint returns -1, 0 or 1 as a is less than, equal to or greater than b.
-func cmpUint(a, b uint64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-
-	return 0
-}
-
-// splitIdentifiers splits a dot-separated identifier list, rejecting empty or non-[0-9A-Za-z-]
-// ones. With noLeadingZero set, a numeric identifier with a leading zero is also rejected.
-func splitIdentifiers(s string, noLeadingZero bool) ([]string, error) {
-	ids := strings.Split(s, ".")
-	for _, id := range ids {
-		if id == "" {
-			return nil, fmt.Errorf("has an empty identifier")
-		}
-
-		for i := 0; i < len(id); i++ {
-			c := id[i]
-			if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '-' {
-				return nil, fmt.Errorf("identifier %q has an invalid character", id)
-			}
-		}
-
-		if noLeadingZero && len(id) > 1 && id[0] == '0' && isDigits(id) {
-			return nil, fmt.Errorf("identifier %q has a leading zero", id)
-		}
-	}
-
-	return ids, nil
 }
 
 // isDigits reports whether s is non-empty and made only of ASCII digits.
@@ -217,7 +163,39 @@ func isDigits(s string) bool {
 	return true
 }
 
-// parseErr builds the error for a version string that fails to parse.
-func parseErr(s, reason string) error {
-	return fmt.Errorf("parse version %q: %s", s, reason)
+// cmpUint returns -1, 0 or 1 as a is less than, equal to or greater than b.
+func cmpUint(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }
+
+// splitIdentifiers splits a dot-separated identifier list, rejecting empty or non-[0-9A-Za-z-] ones. With noLeadingZero set,
+// a numeric identifier with a leading zero is also rejected.
+func splitIdentifiers(s string, noLeadingZero bool) ([]string, error) {
+	ids := strings.Split(s, ".")
+	for _, id := range ids {
+		if id == "" {
+			return nil, fmt.Errorf("has an empty identifier")
+		}
+
+		for i := 0; i < len(id); i++ {
+			c := id[i]
+			if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '-' {
+				return nil, fmt.Errorf("identifier %q has an invalid character", id)
+			}
+		}
+		if noLeadingZero && len(id) > 1 && id[0] == '0' && isDigits(id) {
+			return nil, fmt.Errorf("identifier %q has a leading zero", id)
+		}
+	}
+
+	return ids, nil
+}
+
+// parseErr builds the error for a version string that fails to parse.
+func parseErr(s, reason string) error { return fmt.Errorf("parse version %q: %s", s, reason) }

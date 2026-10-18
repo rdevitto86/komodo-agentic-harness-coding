@@ -29,69 +29,12 @@ type RoleConfig struct {
 	Reviewer agent.Reviewer
 }
 
-// builderRole is the builder over agent.ParseBuilderResult.
-type builderRole struct {
-	cfg RoleConfig
-	mu  sync.Mutex
-	ans string
-}
-
-// testerRole is the tester over agent.Tester.
-type testerRole struct {
-	cfg RoleConfig
-	mu  sync.Mutex
-	was string // Go's output after a disputed result; the restart's brief carries it
-}
-
-// reviewerRole is the reviewer over agent.Reviewer.
-type reviewerRole struct {
-	cfg  RoleConfig
-	cats []agent.Catalog
-	mu   sync.Mutex
-	subs []Submitted
-	diff string
-}
-
-// worktreeLines reads lines of the files in the worktree.
-type worktreeLines struct{ root string }
-
-// addedLines holds the added lines of a unified diff by file and new line number.
-type addedLines map[string]map[int]string
-
-// NewRoles builds the builder, tester and reviewer over the agent package's pure functions.
-func NewRoles(cfg RoleConfig) (map[string]Role, error) {
-	if cfg.Tester == nil {
-		cfg.Tester = agent.NewTester()
-	}
-
-	if cfg.Reviewer == nil {
-		r, err := agent.NewReviewer(nil)
-		if err != nil {
-			return nil, fmt.Errorf("build the reviewer: %w", err)
-		}
-
-		cfg.Reviewer = r
-	}
-
-	cats, err := agent.LoadCatalogs()
-	if err != nil {
-		return nil, fmt.Errorf("load the lens catalogs: %w", err)
-	}
-
-	return map[string]Role{
-		"builder":  &builderRole{cfg: cfg},
-		"tester":   &testerRole{cfg: cfg},
-		"reviewer": &reviewerRole{cfg: cfg, cats: cats},
-	}, nil
-}
-
 // taskIDs lists the identifiers of the group's tasks.
 func (c RoleConfig) taskIDs() []string {
 	ids := make([]string, len(c.Tasks))
 	for i, t := range c.Tasks {
 		ids[i] = t.ID
 	}
-
 	return ids
 }
 
@@ -101,8 +44,14 @@ func (c RoleConfig) taskList() string {
 	for _, t := range c.Tasks {
 		fmt.Fprintf(&b, "- %s: %s (done when: %s)\n", t.ID, t.Title, t.DoneWhen)
 	}
-
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// builderRole is the builder over agent.ParseBuilderResult.
+type builderRole struct {
+	cfg RoleConfig
+	mu  sync.Mutex
+	ans string
 }
 
 // SetScopeAnswer stores the text of the scope answer for the builder's next brief.
@@ -115,7 +64,6 @@ func (b *builderRole) SetScopeAnswer(s string) {
 // Slots fills the builder's brief values for this trip.
 func (b *builderRole) Slots(_ context.Context, in RoleInput) (map[string]string, error) {
 	files := b.cfg.Files()
-
 	contents, err := fileContents(b.cfg.Worktree, files)
 	if err != nil {
 		return nil, err
@@ -130,7 +78,6 @@ func (b *builderRole) Slots(_ context.Context, in RoleInput) (map[string]string,
 	if in.Diff != "" {
 		s["diff"] = in.Diff
 	}
-
 	if len(in.Findings) > 0 {
 		s["findings"] = bullets(in.Findings)
 	}
@@ -140,23 +87,26 @@ func (b *builderRole) Slots(_ context.Context, in RoleInput) (map[string]string,
 		s["scope_answer"], b.ans = b.ans, ""
 	}
 	b.mu.Unlock()
-
 	return s, nil
 }
 
-// Judge parses the builder's final call; a request for files outside the list becomes a scope
-// outcome.
+// Judge parses the builder's final call; a request for files outside the list becomes a scope outcome.
 func (b *builderRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 	res, err := agent.ParseBuilderResult(r.Output)
 	if err != nil {
 		return Outcome{}, &GateError{Text: err.Error(), Schema: true}
 	}
-
 	if res.Status == agent.BuilderNeedsScope {
 		return Outcome{Kind: OutcomeScope, Paths: res.Paths, Reason: res.Reason}, nil
 	}
-
 	return Outcome{Kind: OutcomePass, Summary: []string{res.Summary}}, nil
+}
+
+// testerRole is the tester over agent.Tester.
+type testerRole struct {
+	cfg RoleConfig
+	mu  sync.Mutex
+	was string // Go's output after a disputed result; the restart's brief carries it
 }
 
 // Slots fills the tester's brief values for this trip.
@@ -164,11 +114,9 @@ func (t *testerRole) Slots(_ context.Context, in RoleInput) (map[string]string, 
 	var acc strings.Builder
 	for _, it := range t.cfg.Items {
 		fmt.Fprintf(&acc, "- %s: %s", it.ID, it.Text)
-
 		if it.Cmd != "" {
 			fmt.Fprintf(&acc, " (command: %s)", it.Cmd)
 		}
-
 		acc.WriteString("\n")
 	}
 
@@ -204,7 +152,6 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 	for i, it := range t.cfg.Items {
 		items[i], byID[it.ID] = it.ID, it
 	}
-
 	if err := t.cfg.Tester.AcceptResult(t.cfg.taskIDs(), items, res); err != nil {
 		return Outcome{}, &GateError{Text: "the result was rejected: " + err.Error()}
 	}
@@ -217,25 +164,10 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		case ir.Pass:
 			continue
 		case len(it.Needs) > 0:
-			listed = append(
-				listed,
-				fmt.Sprintf(
-					"tester: item %s skipped, it needs %s",
-					it.ID,
-					strings.Join(it.Needs, ", "),
-				),
-			)
-
+			listed = append(listed, fmt.Sprintf("tester: item %s skipped, it needs %s", it.ID, strings.Join(it.Needs, ", ")))
 			continue
 		case strings.TrimSpace(it.Cmd) == "":
-			listed = append(
-				listed,
-				fmt.Sprintf(
-					"tester: item %s unconfirmed, it has no command for Go to rerun",
-					it.ID,
-				),
-			)
-
+			listed = append(listed, fmt.Sprintf("tester: item %s unconfirmed, it has no command for Go to rerun", it.ID))
 			continue
 		case t.cfg.Runner == nil:
 			continue
@@ -248,10 +180,7 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 
 		switch out {
 		case agent.RerunConfirmed:
-			failed = append(
-				failed,
-				fmt.Sprintf("acceptance item %s failed: %s\n%s", it.ID, ir.Evidence, text),
-			)
+			failed = append(failed, fmt.Sprintf("acceptance item %s failed: %s\n%s", it.ID, ir.Evidence, text))
 		case agent.RerunDisputed:
 			disputed = append(disputed, it.ID)
 			goOut = append(
@@ -285,13 +214,11 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		t.mu.Lock()
 		t.was = strings.Join(goOut, "\n")
 		t.mu.Unlock()
-
 		return Outcome{Kind: OutcomeRestart, Findings: goOut}, nil
 	case len(failed) > 0 || len(notMet) > 0:
 		for _, id := range notMet {
 			failed = append(failed, "the tester did not confirm task "+id)
 		}
-
 		return Outcome{Kind: OutcomeReturn, Findings: failed}, nil
 	}
 
@@ -303,6 +230,15 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 			},
 			listed...),
 	}, nil
+}
+
+// reviewerRole is the reviewer over agent.Reviewer.
+type reviewerRole struct {
+	cfg  RoleConfig
+	cats []agent.Catalog
+	mu   sync.Mutex
+	subs []Submitted
+	diff string
 }
 
 // Submit receives one finding filed through submit_finding.
@@ -322,12 +258,10 @@ func (r *reviewerRole) Slots(_ context.Context, in RoleInput) (map[string]string
 	lenses := r.cfg.Reviewer.Lenses(d, agent.ProfileThorough)
 
 	var rules strings.Builder
-
 	for _, c := range r.cats {
 		if !slices.Contains(lenses, c.Lens) {
 			continue
 		}
-
 		for _, rule := range c.Rules {
 			fmt.Fprintf(&rules, "- %s (%s): %s\n", rule.ID, rule.Severity, c.Text[rule.ID])
 		}
@@ -360,7 +294,6 @@ func (r *reviewerRole) Judge(_ context.Context, res llm.Result) (Outcome, error)
 	if err != nil {
 		return Outcome{}, &GateError{Text: err.Error(), Schema: true}
 	}
-
 	if err := r.cfg.Reviewer.AcceptResult(r.cfg.taskIDs(), out); err != nil {
 		return Outcome{}, &GateError{Text: "the result was rejected: " + err.Error()}
 	}
@@ -371,17 +304,12 @@ func (r *reviewerRole) Judge(_ context.Context, res llm.Result) (Outcome, error)
 	head, added := worktreeLines{root: r.cfg.Worktree}, parseAdded(diff)
 
 	var findings []string
-
 	for _, s := range subs {
 		sev, ok, aerr := r.cfg.Reviewer.AcceptFinding(s.Finding, head, added)
 		if aerr != nil || !ok || (sev != agent.SeverityBlocker && sev != agent.SeverityMajor) {
 			continue
 		}
-
-		findings = append(
-			findings,
-			fmt.Sprintf("%s (%s) at %s:%d: %s -- %s", s.Rule, sev, s.File, s.Line, s.Quote, s.Note),
-		)
+		findings = append(findings, fmt.Sprintf("%s (%s) at %s:%d: %s -- %s", s.Rule, sev, s.File, s.Line, s.Quote, s.Note))
 	}
 
 	var notMet []string
@@ -413,6 +341,9 @@ func (r *reviewerRole) Judge(_ context.Context, res llm.Result) (Outcome, error)
 	}, nil
 }
 
+// worktreeLines reads lines of the files in the worktree.
+type worktreeLines struct{ root string }
+
 // Line returns line n of a file in the worktree.
 func (w worktreeLines) Line(file string, n int) (string, bool) {
 	f, err := os.Open(filepath.Join(w.root, filepath.FromSlash(file)))
@@ -433,11 +364,38 @@ func (w worktreeLines) Line(file string, n int) (string, bool) {
 	return "", false
 }
 
+// addedLines holds the added lines of a unified diff by file and new line number.
+type addedLines map[string]map[int]string
+
 // Line returns the added line n of a file.
 func (a addedLines) Line(file string, n int) (string, bool) {
 	s, ok := a[file][n]
-
 	return s, ok
+}
+
+// NewRoles builds the builder, tester and reviewer over the agent package's pure functions.
+func NewRoles(cfg RoleConfig) (map[string]Role, error) {
+	if cfg.Tester == nil {
+		cfg.Tester = agent.NewTester()
+	}
+	if cfg.Reviewer == nil {
+		r, err := agent.NewReviewer(nil)
+		if err != nil {
+			return nil, fmt.Errorf("build the reviewer: %w", err)
+		}
+		cfg.Reviewer = r
+	}
+
+	cats, err := agent.LoadCatalogs()
+	if err != nil {
+		return nil, fmt.Errorf("load the lens catalogs: %w", err)
+	}
+
+	return map[string]Role{
+		"builder":  &builderRole{cfg: cfg},
+		"tester":   &testerRole{cfg: cfg},
+		"reviewer": &reviewerRole{cfg: cfg, cats: cats},
+	}, nil
 }
 
 // bullets renders findings as a list.
@@ -446,7 +404,6 @@ func bullets(items []string) string {
 	for _, s := range items {
 		b.WriteString("- " + strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n  ") + "\n")
 	}
-
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -466,18 +423,14 @@ func fileContents(root string, globs []string) (string, error) {
 		if rerr != nil {
 			return rerr
 		}
-
 		if d.IsDir() {
-			if d.Name() == ".git" ||
-				(rel != "." && strings.HasPrefix(d.Name(), ".") && d.Name() != ".github") {
+			if d.Name() == ".git" || (rel != "." && strings.HasPrefix(d.Name(), ".") && d.Name() != ".github") {
 				return filepath.SkipDir
 			}
-
 			return nil
 		}
 
 		rel = filepath.ToSlash(rel)
-
 		if !d.Type().IsRegular() ||
 			!slices.ContainsFunc(globs, func(g string) bool { return agent.MatchPath(g, rel) }) {
 			return nil
@@ -489,13 +442,11 @@ func fileContents(root string, globs []string) (string, error) {
 		}
 
 		fmt.Fprintf(&b, "%s\n```\n%s\n```\n\n", rel, strings.TrimRight(string(data), "\n"))
-
 		return nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("read the group's files: %w", err)
 	}
-
 	if b.Len() == 0 {
 		return "(no file of the list exists yet)", nil
 	}
@@ -511,7 +462,6 @@ func diffPaths(diff string) []string {
 			out = append(out, rest)
 		}
 	}
-
 	return out
 }
 
@@ -537,7 +487,6 @@ func parseAdded(diff string) addedLines {
 			if out[file] == nil {
 				out[file] = map[int]string{}
 			}
-
 			out[file][n] = l[1:]
 			n++
 		case strings.HasPrefix(l, " "):

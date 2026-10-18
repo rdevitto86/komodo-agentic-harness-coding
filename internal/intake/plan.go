@@ -53,8 +53,18 @@ type PlanBlockedError struct {
 	DraftPath string    // folder that holds the last failing draft for inspection
 }
 
+// Error returns the failure with the finding count.
+func (e PlanBlockedError) Error() string {
+	return fmt.Sprintf("plan blocked: the third draft failed lint with %d findings", len(failing(e.Findings)))
+}
+
 // LockedError is returned when a group is in a run; Run names that run.
 type LockedError struct{ Run string }
+
+// Error names the run that holds the group.
+func (e LockedError) Error() string {
+	return fmt.Sprintf("a group of the plan is in run %s; it is left unchanged", e.Run)
+}
 
 // writeError marks a failure to write the task-list folders.
 type writeError struct{ err error }
@@ -62,36 +72,20 @@ type writeError struct{ err error }
 // draftPathEpic matches the epic folder at the start of a draft path.
 var draftPathEpic = regexp.MustCompile(`^epic-(\d+)/`)
 
-// Error returns the failure with the finding count.
-func (e PlanBlockedError) Error() string {
-	return fmt.Sprintf(
-		"plan blocked: the third draft failed lint with %d findings",
-		len(failing(e.Findings)),
-	)
-}
-
-// Error names the run that holds the group.
-func (e LockedError) Error() string {
-	return fmt.Sprintf("a group of the plan is in run %s; it is left unchanged", e.Run)
-}
-
 // Error returns the wrapped failure.
 func (e writeError) Error() string { return e.err.Error() }
 
 // Unwrap returns the wrapped failure.
 func (e writeError) Unwrap() error { return e.err }
 
-// LintBacklog lints a draft against the stored task lists of the plan in progress; it is the
-// planner's lint_backlog tool.
+// LintBacklog lints a draft against the stored task lists of the plan in progress; it is the planner's lint_backlog tool.
 func (h *Handler) LintBacklog(d PlanDraft) []Finding {
 	h.stateMu.Lock()
 	cur := h.current
 	h.stateMu.Unlock()
-
 	if cur == nil {
 		return LintDraft(d, nil, h.protected(), nil)
 	}
-
 	return LintDraft(d, cur.existing, h.protected(), cur.tracked)
 }
 
@@ -116,7 +110,6 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 	if err != nil {
 		return PlanResult{}, err
 	}
-
 	if err := restoreOrphans(h.d.Root); err != nil {
 		return PlanResult{}, writeError{fmt.Errorf("restore interrupted plan: %w", err)}
 	}
@@ -141,7 +134,6 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 
 	if h.d.Limits.WallMin > 0 {
 		var cancel context.CancelFunc
-
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(h.d.Limits.WallMin)*h.wallUnit)
 		defer cancel()
 	}
@@ -173,17 +165,7 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 	return h.lintLoop(ctx, sess, c.Brief.Text(), r, pl, locked)
 }
 
-// protected returns the protected paths, or none when no source is wired.
-func (h *Handler) protected() []string {
-	if h.d.Protected == nil {
-		return nil
-	}
-
-	return h.d.Protected()
-}
-
-// lockedGroups maps each group of the amended epic that is in a run to that run; a new epic has
-// none.
+// lockedGroups maps each group of the amended epic that is in a run to that run; a new epic has none.
 func (h *Handler) lockedGroups(existing []Epic, epic int) (map[string]string, error) {
 	locked := map[string]string{}
 	if epic == 0 {
@@ -200,7 +182,6 @@ func (h *Handler) lockedGroups(existing []Epic, epic int) (map[string]string, er
 		if err != nil {
 			return nil, fmt.Errorf("check whether %s is in a run: %w", g.Name, err)
 		}
-
 		if in {
 			locked[g.Name] = run
 		}
@@ -209,25 +190,7 @@ func (h *Handler) lockedGroups(existing []Epic, epic int) (map[string]string, er
 	return locked, nil
 }
 
-// sessionError turns a planner session failure into the deadline error when the wall clock ended,
-// else a wrapped failure.
-func (h *Handler) sessionError(ctx context.Context, err error) error {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf(
-			"planner wall clock of %d minutes ended: %w",
-			h.d.Limits.WallMin, context.DeadlineExceeded,
-		)
-	}
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	return fmt.Errorf("planner session: %w", err)
-}
-
-// lintLoop sends the brief, lints each draft and sends failures back until a draft passes or the
-// third fails.
+// lintLoop sends the brief, lints each draft and sends failures back until a draft passes or the third fails.
 func (h *Handler) lintLoop(
 	ctx context.Context,
 	sess PlannerSession,
@@ -236,8 +199,7 @@ func (h *Handler) lintLoop(
 	pl *planState,
 	locked map[string]string,
 ) (PlanResult, error) {
-	// maxDrafts is how many drafts a plan may fail lint with before it is blocked: the first plus 2
-	// returns.
+	// maxDrafts is how many drafts a plan may fail lint with before it is blocked: the first plus 2 returns.
 	const maxDrafts = 3
 
 	protected := h.protected()
@@ -248,7 +210,6 @@ func (h *Handler) lintLoop(
 		if err != nil {
 			return PlanResult{}, h.sessionError(ctx, err)
 		}
-
 		if run := lockedInDraft(draft, locked, r.Epic); run != "" {
 			return PlanResult{}, LockedError{Run: run}
 		}
@@ -262,7 +223,6 @@ func (h *Handler) lintLoop(
 		if len(failing(found)) == 0 {
 			return h.write(draft, pl, r.Epic)
 		}
-
 		if attempt == maxDrafts {
 			return PlanResult{}, PlanBlockedError{Findings: found, DraftPath: h.saveFailed(draft)}
 		}
@@ -271,8 +231,27 @@ func (h *Handler) lintLoop(
 	}
 }
 
-// saveFailed writes a failing draft under docs/backlog/.plan-failed-<random>/ and returns that
-// folder, or "" when it cannot be written.
+// protected returns the protected paths, or none when no source is wired.
+func (h *Handler) protected() []string {
+	if h.d.Protected == nil {
+		return nil
+	}
+	return h.d.Protected()
+}
+
+// sessionError turns a planner session failure into the deadline error when the wall clock ended, else a wrapped failure.
+func (h *Handler) sessionError(ctx context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("planner wall clock of %d minutes ended: %w", h.d.Limits.WallMin, context.DeadlineExceeded)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("planner session: %w", err)
+}
+
+// saveFailed writes a failing draft under docs/backlog/.plan-failed-<random>/ and returns that folder, or "" when it cannot
+// be written.
 func (h *Handler) saveFailed(d PlanDraft) string {
 	base := filepath.Join(h.d.Root, filepath.FromSlash(backlogDir))
 	if err := os.MkdirAll(base, 0o755); err != nil {
@@ -289,7 +268,6 @@ func (h *Handler) saveFailed(d PlanDraft) string {
 		if safe == "" {
 			continue
 		}
-
 		p := filepath.Join(dir, filepath.FromSlash(safe))
 		if os.MkdirAll(filepath.Dir(p), 0o755) == nil {
 			_ = os.WriteFile(p, []byte(f.Content), 0o644)
@@ -305,7 +283,6 @@ func DraftFromResult(r agent.PlannerResult) PlanDraft {
 	for i, f := range r.Files {
 		d.Files[i] = DraftFile{Path: f.Path, Content: f.Content}
 	}
-
 	return d
 }
 
@@ -316,7 +293,6 @@ func lockedInDraft(d PlanDraft, locked map[string]string, epic int) string {
 			if n, _ := strconv.Atoi(m[1]); n != epic {
 				continue
 			}
-
 			if run, ok := locked[m[2]]; ok {
 				return run
 			}
@@ -326,8 +302,8 @@ func lockedInDraft(d PlanDraft, locked map[string]string, epic int) string {
 	return ""
 }
 
-// epicNumberFindings fails a draft whose epic is not the one the request allows: highest plus 1 for
-// a new epic, the named epic for an amendment.
+// epicNumberFindings fails a draft whose epic is not the one the request allows: highest plus 1 for a new epic, the named
+// epic for an amendment.
 func epicNumberFindings(d PlanDraft, existing []Epic, epic int) []Finding {
 	highest := 0
 	for _, e := range existing {
@@ -340,18 +316,13 @@ func epicNumberFindings(d PlanDraft, existing []Epic, epic int) []Finding {
 	}
 
 	var found []Finding
-
 	for _, f := range d.Files {
 		m := draftPathEpic.FindStringSubmatch(f.Path)
 		if m == nil {
 			continue
 		}
-
 		if n, _ := strconv.Atoi(m[1]); n != want {
-			found = append(found, grammar(
-				f.Path,
-				fmt.Sprintf("this plan may write epic-%d only", want),
-			))
+			found = append(found, grammar(f.Path, fmt.Sprintf("this plan may write epic-%d only", want)))
 		}
 	}
 
@@ -377,12 +348,10 @@ func failureText(found []Finding) string {
 // fails returns the failing findings.
 func failing(found []Finding) []Finding {
 	var out []Finding
-
 	for _, f := range found {
 		if f.Severity == SeverityFail {
 			out = append(out, f)
 		}
 	}
-
 	return out
 }

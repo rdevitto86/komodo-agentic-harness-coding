@@ -14,27 +14,9 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// rec builds a held record for the registry tests.
-func rec(group string) Lease {
-	return Lease{
-		Repo: testRepo, Group: group, Run: "run-" + group, Branch: "komodo/ep-1-" + group, Worktree: "/wt/" + group,
-		PID: 1, Host: "h1", Fence: 1, State: StateHeld, TakenAt: testStart, RenewedAt: testStart,
-	}
-}
-
-// age sets a file's modification time to d ago.
-func age(t *testing.T, path string, d time.Duration) {
-	t.Helper()
-	old := time.Now().Add(-d)
-	if err := os.Chtimes(path, old, old); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestRegistryCreateGetSwapDelete(t *testing.T) {
 	ctx := context.Background()
 	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), DefaultLockTimeout)
-
 	if _, err := r.Get(ctx, testRepo, "g1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get on empty: %v", err)
 	}
@@ -64,7 +46,6 @@ func TestRegistryCreateGetSwapDelete(t *testing.T) {
 	if _, err := r.Swap(ctx, rec("none"), 1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Swap on absent: %v", err)
 	}
-
 	if err := r.Delete(ctx, testRepo, "g1", 1); !errors.Is(err, ErrStaleRev) {
 		t.Fatalf("Delete with a stale rev: %v", err)
 	}
@@ -160,20 +141,6 @@ func TestRegistryCorruptRecord(t *testing.T) {
 	if _, err := r.Get(ctx, testRepo, "g1"); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("a corrupt record must be an error, not absence: %v", err)
 	}
-}
-
-// holdLock takes the operating-system lock a registry writer would take and ages the lock file.
-func holdLock(t *testing.T, lock string) func() error {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	unlock, err := core.FileLock(context.Background(), lock, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	age(t, lock, 48*time.Hour)
-	return unlock
 }
 
 // A held lock keeps a writer waiting however old the lock file looks, and the writer goes ahead once it is freed.
@@ -327,5 +294,36 @@ func TestWriteCrash(t *testing.T) {
 				t.Fatalf("the next writer waited %v", d)
 			}
 		})
+	}
+}
+
+// rec builds a held record for the registry tests.
+func rec(group string) Lease {
+	return Lease{
+		Repo: testRepo, Group: group, Run: "run-" + group, Branch: "komodo/ep-1-" + group, Worktree: "/wt/" + group,
+		PID: 1, Host: "h1", Fence: 1, State: StateHeld, TakenAt: testStart, RenewedAt: testStart,
+	}
+}
+
+// holdLock takes the operating-system lock a registry writer would take and ages the lock file.
+func holdLock(t *testing.T, lock string) func() error {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := core.FileLock(context.Background(), lock, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	age(t, lock, 48*time.Hour)
+	return unlock
+}
+
+// age sets a file's modification time to d ago.
+func age(t *testing.T, path string, d time.Duration) {
+	t.Helper()
+	old := time.Now().Add(-d)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
 	}
 }

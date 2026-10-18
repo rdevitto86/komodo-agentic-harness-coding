@@ -7,15 +7,11 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// resumed builds a group.resumed event.
-func resumed(sec int, run, group bus.ID, stage string) bus.Event {
-	return ev(sec, bus.TypeRunStatus, "group.resumed", run, group, &bus.GroupResumed{From: stage, To: stage})
-}
+// stalled stands in for the data of run-failure / stalled, which another package owns.
+type stalled struct{}
 
-// blocked builds a group.blocked event.
-func blocked(sec int, run, group bus.ID) bus.Event {
-	return ev(sec, bus.TypeRunFailure, "group.blocked", run, group, &bus.GroupBlocked{})
-}
+// EventKey binds the stand-in to run-failure / stalled.
+func (stalled) EventKey() bus.Key { return bus.Key{Type: bus.TypeRunFailure, Subtype: "stalled"} }
 
 // TestResumedStopsTheHoldClock checks group.resumed ends the blocked clock before any stage.enter.
 func TestResumedStopsTheHoldClock(t *testing.T) {
@@ -78,12 +74,6 @@ func TestStalledEndsTheRun(t *testing.T) {
 	}
 }
 
-// stalled stands in for the data of run-failure / stalled, which another package owns.
-type stalled struct{}
-
-// EventKey binds the stand-in to run-failure / stalled.
-func (stalled) EventKey() bus.Key { return bus.Key{Type: bus.TypeRunFailure, Subtype: "stalled"} }
-
 // TestGroupDoneOutcomes checks group.done maps complete, abandoned and lost to done, abandoned and failed.
 func TestGroupDoneOutcomes(t *testing.T) {
 	f := newFigures()
@@ -142,4 +132,14 @@ func TestSessionRecordCarriesEndTime(t *testing.T) {
 	if rec.EndedAt != t0.Add(10*time.Second) || !rec.StartedAt.IsZero() {
 		t.Fatalf("record = %+v", rec)
 	}
+}
+
+// resumed builds a group.resumed event.
+func resumed(sec int, run, group bus.ID, stage string) bus.Event {
+	return ev(sec, bus.TypeRunStatus, "group.resumed", run, group, &bus.GroupResumed{From: stage, To: stage})
+}
+
+// blocked builds a group.blocked event.
+func blocked(sec int, run, group bus.ID) bus.Event {
+	return ev(sec, bus.TypeRunFailure, "group.blocked", run, group, &bus.GroupBlocked{})
 }

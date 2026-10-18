@@ -35,13 +35,6 @@ func (l *callLog) add(s string) {
 	l.calls = append(l.calls, s)
 }
 
-// all returns a copy of the calls.
-func (l *callLog) all() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([]string(nil), l.calls...)
-}
-
 // names returns the calls that start with one of the prefixes, in order.
 func (l *callLog) names(prefixes ...string) []string {
 	var out []string
@@ -54,6 +47,13 @@ func (l *callLog) names(prefixes ...string) []string {
 		}
 	}
 	return out
+}
+
+// all returns a copy of the calls.
+func (l *callLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.calls...)
 }
 
 // fakeBoxes is a Containers that logs and can fail.
@@ -183,11 +183,6 @@ func (r refusal) Refused() bool { return true }
 // execGit is a Git over the real git program, for temporary repositories only.
 type execGit struct{ t *testing.T }
 
-// git runs git in dir with a clean configuration and returns its trimmed output.
-func (g execGit) git(dir string, args ...string) (string, error) {
-	return runGit(dir, args...)
-}
-
 // RemoveWorktree removes a clean worktree and refuses one that holds files.
 func (g execGit) RemoveWorktree(_ context.Context, clone, path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
@@ -216,15 +211,6 @@ func (g execGit) DiscardWorktree(_ context.Context, clone, path string) error {
 	return err
 }
 
-// BranchTip returns the commit a local branch points at.
-func (g execGit) BranchTip(_ context.Context, clone, branch string) (string, bool, error) {
-	out, err := g.git(clone, "rev-parse", "--verify", "-q", "refs/heads/"+branch)
-	if err != nil {
-		return "", false, nil
-	}
-	return out, true, nil
-}
-
 // DeleteBranch deletes a branch that still points at expectTip and is contained in containedIn.
 func (g execGit) DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error {
 	tip, ok, _ := g.BranchTip(ctx, clone, branch)
@@ -239,6 +225,15 @@ func (g execGit) DeleteBranch(ctx context.Context, clone, branch, expectTip, con
 	}
 	_, err := g.git(clone, "update-ref", "-d", "refs/heads/"+branch, expectTip)
 	return err
+}
+
+// BranchTip returns the commit a local branch points at.
+func (g execGit) BranchTip(_ context.Context, clone, branch string) (string, bool, error) {
+	out, err := g.git(clone, "rev-parse", "--verify", "-q", "refs/heads/"+branch)
+	if err != nil {
+		return "", false, nil
+	}
+	return out, true, nil
 }
 
 // DiscardBranch deletes a branch that still points at expectTip.
@@ -281,21 +276,16 @@ func (g execGit) Holds(_ context.Context, clone, remote, contains, tip string) (
 	return "", false, nil
 }
 
+// git runs git in dir with a clean configuration and returns its trimmed output.
+func (g execGit) git(dir string, args ...string) (string, error) {
+	return runGit(dir, args...)
+}
+
 // recGit logs the mutating calls of a Git and can fail chosen ones.
 type recGit struct {
 	Git
 	log    *callLog
 	failOn map[string]error // call name to the error it returns once
-}
-
-// hit logs a call and returns the one-shot failure planned for it.
-func (r *recGit) hit(name, detail string) error {
-	r.log.add(name + " " + detail)
-	if err, ok := r.failOn[name]; ok {
-		delete(r.failOn, name)
-		return err
-	}
-	return nil
 }
 
 // Fetch logs and forwards.
@@ -338,21 +328,14 @@ func (r *recGit) DiscardBranch(ctx context.Context, clone, branch, tip string) e
 	return r.Git.DiscardBranch(ctx, clone, branch, tip)
 }
 
-// runGit runs git in dir with the user's configuration and hooks out of the way.
-func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
-		"GIT_TERMINAL_PROMPT=0",
+// hit logs a call and returns the one-shot failure planned for it.
+func (r *recGit) hit(name, detail string) error {
+	r.log.add(name + " " + detail)
+	if err, ok := r.failOn[name]; ok {
+		delete(r.failOn, name)
+		return err
 	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return "", errors.New("git " + strings.Join(args, " ") + ": " + err.Error() + ": " + errb.String())
-	}
-	return strings.TrimSpace(out.String()), nil
+	return nil
 }
 
 // grp is one group the fixture created.
@@ -391,7 +374,15 @@ func newEnv(t *testing.T) *env {
 		Temp:      filepath.Join(base, "home", "tmp"),
 		Versions:  filepath.Join(base, "home", "versions"),
 	}
-	for _, d := range []string{e.remote, e.clone, e.roots.Worktrees, e.roots.Landings, e.roots.Testers, e.roots.Temp, e.roots.Versions} {
+	for _, d := range []string{
+		e.remote,
+		e.clone,
+		e.roots.Worktrees,
+		e.roots.Landings,
+		e.roots.Testers,
+		e.roots.Temp,
+		e.roots.Versions,
+	} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -420,6 +411,17 @@ func newEnv(t *testing.T) *env {
 	return e
 }
 
+// addGroup creates a group's worktree and branch with one commit of work.
+func (e *env) addGroup(id, branch string) grp {
+	e.t.Helper()
+	wt := filepath.Join(e.roots.Worktrees, id)
+	e.must(e.clone, "worktree", "add", "-b", branch, wt, "main")
+	e.write(filepath.Join(wt, "work-"+id+".txt"), "work\n")
+	e.must(wt, "add", "-A")
+	e.must(wt, "commit", "-m", "work "+id)
+	return grp{id: id, branch: branch, wt: wt, tip: e.must(wt, "rev-parse", "HEAD")}
+}
+
 // must runs git in dir and fails the test on error.
 func (e *env) must(dir string, args ...string) string {
 	e.t.Helper()
@@ -441,17 +443,6 @@ func (e *env) write(path, body string) {
 	}
 }
 
-// addGroup creates a group's worktree and branch with one commit of work.
-func (e *env) addGroup(id, branch string) grp {
-	e.t.Helper()
-	wt := filepath.Join(e.roots.Worktrees, id)
-	e.must(e.clone, "worktree", "add", "-b", branch, wt, "main")
-	e.write(filepath.Join(wt, "work-"+id+".txt"), "work\n")
-	e.must(wt, "add", "-A")
-	e.must(wt, "commit", "-m", "work "+id)
-	return grp{id: id, branch: branch, wt: wt, tip: e.must(wt, "rev-parse", "HEAD")}
-}
-
 // land puts the group's tip on the remote's epic branch, as the Commit Handler's push does.
 func (e *env) land(g grp) {
 	e.t.Helper()
@@ -468,7 +459,14 @@ func (e *env) published(g grp) Published {
 
 // holdLease records a lease for the group, live or dead as the fixture's Live check says.
 func (e *env) holdLease(g grp, state lease.LeaseState) {
-	e.leases.recs[g.id] = lease.Lease{Repo: testRepo, Group: g.id, Run: "run-1", Branch: g.branch, Worktree: g.wt, State: state}
+	e.leases.recs[g.id] = lease.Lease{
+		Repo:     testRepo,
+		Group:    g.id,
+		Run:      "run-1",
+		Branch:   g.branch,
+		Worktree: g.wt,
+		State:    state,
+	}
 }
 
 // remoteRefs lists the refs the remote holds.
@@ -480,4 +478,21 @@ func (e *env) remoteRefs() string {
 func (e *env) hasBranch(b string) bool {
 	_, ok, _ := execGit{e.t}.BranchTip(context.Background(), e.clone, b)
 	return ok
+}
+
+// runGit runs git in dir with the user's configuration and hooks out of the way.
+func runGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		"GIT_TERMINAL_PROMPT=0",
+	}
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return "", errors.New("git " + strings.Join(args, " ") + ": " + err.Error() + ": " + errb.String())
+	}
+	return strings.TrimSpace(out.String()), nil
 }

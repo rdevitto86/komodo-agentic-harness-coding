@@ -32,11 +32,42 @@ type Clocks struct {
 	NudgedAt     time.Time     // zero until the nudge was sent
 }
 
+// Tick decides what one timer tick does; it reads the clocks and touches nothing else.
+func (c *Clocks) Tick(now time.Time, lim SessionLimits) TickAction {
+	if lim.Wall > 0 {
+		used := now.Sub(c.Started) - c.PausedFor
+		if used >= lim.Wall {
+			return TickStopTimeout
+		}
+		if !c.Warned && used*100 >= lim.Wall*WarnPercent {
+			return TickWarn
+		}
+	}
+	if lim.Idle <= 0 || c.ToolsRunning > 0 || now.Before(c.RetryUntil) {
+		return TickNone
+	}
+
+	silent := now.Sub(laterOf(c.LastLine, c.RetryUntil))
+	switch {
+	case c.NudgedAt.IsZero():
+		if silent >= lim.Idle {
+			return TickNudge
+		}
+	case c.LastLine.After(c.NudgedAt):
+		if silent >= lim.Idle {
+			return TickStopIdle
+		}
+	case now.Sub(c.NudgedAt) >= cmpOrDur(lim.Grace, IdleGrace):
+		return TickStopIdle
+	}
+
+	return TickNone
+}
+
 // TickAction is what one timer tick decides.
 type TickAction int
 
-// Hooks are the parts of a supervised session that live outside the stream; every field is
-// optional.
+// Hooks are the parts of a supervised session that live outside the stream; every field is optional.
 type Hooks struct {
 	Now func() time.Time
 	// timer period; TickEvery when zero
@@ -65,8 +96,7 @@ type next struct {
 	err error
 }
 
-// superviseState is the loop's mutable part: the reason a stop was started for and how far up the
-// ladder it is.
+// superviseState is the loop's mutable part: the reason a stop was started for and how far up the ladder it is.
 type superviseState struct {
 	stop   Reason
 	rung   int
@@ -96,60 +126,13 @@ const (
 	TickStopIdle               // climb the stop ladder, exit reason idle
 )
 
-// Tick decides what one timer tick does; it reads the clocks and touches nothing else.
-func (c *Clocks) Tick(now time.Time, lim SessionLimits) TickAction {
-	if lim.Wall > 0 {
-		used := now.Sub(c.Started) - c.PausedFor
-		if used >= lim.Wall {
-			return TickStopTimeout
-		}
-
-		if !c.Warned && used*100 >= lim.Wall*WarnPercent {
-			return TickWarn
-		}
-	}
-
-	if lim.Idle <= 0 || c.ToolsRunning > 0 || now.Before(c.RetryUntil) {
-		return TickNone
-	}
-
-	silent := now.Sub(laterOf(c.LastLine, c.RetryUntil))
-	switch {
-	case c.NudgedAt.IsZero():
-		if silent >= lim.Idle {
-			return TickNudge
-		}
-	case c.LastLine.After(c.NudgedAt):
-		if silent >= lim.Idle {
-			return TickStopIdle
-		}
-	case now.Sub(c.NudgedAt) >= cmpOrDur(lim.Grace, IdleGrace):
-		return TickStopIdle
-	}
-
-	return TickNone
-}
-
-// Supervise reads one stream to its Result, injecting lines and stopping the session as the clocks
-// decide.
-func Supervise(
-	ctx context.Context,
-	s llm.Stream,
-	lim SessionLimits,
-	c *Clocks,
-) (llm.Result, Reason, error) {
+// Supervise reads one stream to its Result, injecting lines and stopping the session as the clocks decide.
+func Supervise(ctx context.Context, s llm.Stream, lim SessionLimits, c *Clocks) (llm.Result, Reason, error) {
 	return SuperviseWith(ctx, s, lim, c, Hooks{})
 }
 
-// SuperviseWith is Supervise with hooks for the Runtime Manager's calls, the facts and the raw
-// stream.
-func SuperviseWith(
-	ctx context.Context,
-	s llm.Stream,
-	lim SessionLimits,
-	c *Clocks,
-	h Hooks,
-) (llm.Result, Reason, error) {
+// SuperviseWith is Supervise with hooks for the Runtime Manager's calls, the facts and the raw stream.
+func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Clocks, h Hooks) (llm.Result, Reason, error) {
 	// killGrace is how long the supervisor waits for a stream to end after the whole-tree kill.
 	const killGrace = 5 * time.Second
 
@@ -163,16 +146,7 @@ func SuperviseWith(
 		now = time.Now
 	}
 
-	every, term, kill := cmpOrDur(
-		h.Every,
-		TickEvery,
-	), cmpOrDur(
-		h.TermAfter,
-		TermAfter,
-	), cmpOrDur(
-		h.KillAfter,
-		KillAfter,
-	)
+	every, term, kill := cmpOrDur(h.Every, TickEvery), cmpOrDur(h.TermAfter, TermAfter), cmpOrDur(h.KillAfter, KillAfter)
 	fact := func(sub string, d map[string]any) {
 		if h.Fact != nil {
 			h.Fact(sub, d)
@@ -194,7 +168,6 @@ func SuperviseWith(
 			case <-rctx.Done():
 				return
 			}
-
 			if err != nil || ev.Kind == llm.KindResult {
 				return
 			}
@@ -206,7 +179,6 @@ func SuperviseWith(
 
 	grants := make(chan time.Duration, 1)
 	st := &superviseState{ladder: time.NewTimer(time.Hour)}
-
 	st.ladder.Stop()
 	defer st.ladder.Stop()
 
@@ -218,15 +190,12 @@ func SuperviseWith(
 		switch st.rung {
 		case 0:
 			_ = s.Stop(llm.Interrupt)
-
 			st.ladder.Reset(term)
 		case 1:
 			_ = s.Stop(llm.Terminate)
-
 			st.ladder.Reset(kill)
 		case 2:
 			_ = s.Stop(llm.Kill)
-
 			st.ladder.Reset(killGrace)
 		}
 
@@ -243,7 +212,6 @@ func SuperviseWith(
 			}
 
 			c.LastLine = now()
-
 			if h.Raw != nil && len(n.ev.Raw) > 0 {
 				h.Raw(n.ev.Raw)
 			}
@@ -257,14 +225,12 @@ func SuperviseWith(
 			case llm.KindRateLimit:
 				if n.ev.RateLimit != nil && n.ev.RateLimit.IsUsingOverage && !overage {
 					overage = true
-
 					fact("limit.warn", map[string]any{"kind": "overage"})
 				}
 			case llm.KindResult:
 				if n.ev.Result == nil {
 					return finish(st, llm.Result{}, io.ErrUnexpectedEOF)
 				}
-
 				return finish(st, *n.ev.Result, nil)
 			}
 
@@ -274,18 +240,14 @@ func SuperviseWith(
 		case <-ticker.C:
 			if h.Tools != nil {
 				var last time.Time
-
 				c.ToolsRunning, last = h.Tools()
 				c.LastLine = laterOf(c.LastLine, last)
 			}
-
 			if st.stop != "" {
 				continue
 			}
-
 			if halted(h, st) {
 				climb(h.Halt())
-
 				continue
 			}
 
@@ -309,9 +271,7 @@ func SuperviseWith(
 				}(rctx)
 			case TickNudge:
 				c.NudgedAt = now()
-
 				fact("session.idle", map[string]any{"minutes": int(lim.Idle / time.Minute)})
-
 				_ = s.Inject(nudgeLine)
 			case TickStopTimeout:
 				climb(state.ReasonTimeout)
@@ -322,7 +282,6 @@ func SuperviseWith(
 			if extra > 0 {
 				lim.Wall += extra
 			}
-
 			left := lim.Wall - (now().Sub(c.Started) - c.PausedFor)
 			mins := int((left + time.Minute - 1) / time.Minute)
 			fact("session.timewarn", map[string]any{"minutes": mins})
@@ -331,19 +290,13 @@ func SuperviseWith(
 			_ = s.Inject(line)
 		case <-st.ladder.C:
 			if st.rung >= 3 {
-				return finish(
-					st,
-					llm.Result{},
-					errors.New("the session did not stop after the whole-tree kill"),
-				)
+				return finish(st, llm.Result{}, errors.New("the session did not stop after the whole-tree kill"))
 			}
-
 			climb(st.stop)
 		case <-ctx.Done():
 			if st.stop == "" {
 				climb(state.ReasonCancelled)
 			}
-
 			ctx = context.WithoutCancel(ctx)
 		}
 	}
@@ -354,7 +307,6 @@ func laterOf(a, b time.Time) time.Time {
 	if b.After(a) {
 		return b
 	}
-
 	return a
 }
 
@@ -369,7 +321,6 @@ func finish(st *superviseState, res llm.Result, err error) (llm.Result, Reason, 
 		if st.stop != "" {
 			return res, st.stop, nil
 		}
-
 		return res, state.ReasonDone, nil
 	}
 
@@ -394,6 +345,5 @@ func cmpOrDur(d, def time.Duration) time.Duration {
 	if d != 0 {
 		return d
 	}
-
 	return def
 }

@@ -46,12 +46,19 @@ func TestPlannerRole(t *testing.T) {
 }
 
 func TestParsePlannerResult(t *testing.T) {
-	raw := `{"files": [{"path": "epic-2/tg-2.1/TG.md", "content": "id: 0192e4c5-...\ngoal: x\n"}, {"path": "epic-2/tg-2.1/tsk-add-lock.md", "content": "files: a.go\n"}]}`
+	raw := `{"files": [{"path": "epic-2/tg-2.1/TG.md", "content": "id: 0192e4c5-...\ngoal: x\n"}, {"path": ` +
+		`"epic-2/tg-2.1/tsk-add-lock.md", "content": "files: a.go\n"}]}`
 	r, err := ParsePlannerResult([]byte(raw))
 	if err != nil || len(r.Files) != 2 || r.Files[0].Path != "epic-2/tg-2.1/TG.md" {
 		t.Fatalf("parse: %+v %v", r, err)
 	}
-	for _, bad := range []string{`{"files": []}`, `{}`, `{"files": [{"path": " ", "content": "x"}]}`, `{"files": [{"path": "a", "content": "x", "extra": 1}]}`, raw + " x"} {
+	for _, bad := range []string{
+		`{"files": []}`,
+		`{}`,
+		`{"files": [{"path": " ", "content": "x"}]}`,
+		`{"files": [{"path": "a", "content": "x", "extra": 1}]}`,
+		raw + " x",
+	} {
 		if _, err := ParsePlannerResult([]byte(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
@@ -78,7 +85,8 @@ func TestCompiledRolesMatchTheEmbeddedRegistry(t *testing.T) {
 		if err := json.Unmarshal(raw, &e); err != nil {
 			t.Fatalf("%s: %v", r.Name, err)
 		}
-		if !slices.Equal(e.Tools, r.Tools) || !slices.Equal(e.RunClasses, r.RunClasses) || !slices.Equal(e.Guard, r.Guard) || e.PoolSlot != r.PoolSlot {
+		if !slices.Equal(e.Tools, r.Tools) || !slices.Equal(e.RunClasses, r.RunClasses) || !slices.Equal(e.Guard, r.Guard) ||
+			e.PoolSlot != r.PoolSlot {
 			t.Errorf("%s: powers differ from the registry: %+v vs %+v", r.Name, e, r)
 		}
 		if !slices.Equal(e.Slots.Optional, r.Slots.Optional) {
@@ -95,7 +103,21 @@ func TestCompiledRolesMatchTheEmbeddedRegistry(t *testing.T) {
 }
 
 // importOrder lists the packages to the right of agent: the only internal packages it may import.
-var importOrder = []string{"contextmgr", "llm", "sandbox", "resource", "metrics", "fault", "lease", "cache", "state", "config", "format", "bus", "core"}
+var importOrder = []string{
+	"contextmgr",
+	"llm",
+	"sandbox",
+	"resource",
+	"metrics",
+	"fault",
+	"lease",
+	"cache",
+	"state",
+	"config",
+	"format",
+	"bus",
+	"core",
+}
 
 func TestImportsPointOnlyToTheRight(t *testing.T) {
 	files, err := filepath.Glob("*.go")

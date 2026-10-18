@@ -159,8 +159,7 @@ type shapeInfo struct {
 // shapes is the registry of every shape a message may name.
 var shapes = buildShapes()
 
-// buildShapes fills the registry: the fixed reply and event shapes, then error.<code> and
-// needs.<reason>.
+// buildShapes fills the registry: the fixed reply and event shapes, then error.<code> and needs.<reason>.
 func buildShapes() map[string]shapeInfo {
 	m := map[string]shapeInfo{
 		"reply.install":      {facts: func() any { return new(InstallFacts) }},
@@ -209,8 +208,6 @@ func shapeNames() []string {
 	for n := range shapes {
 		names = append(names, n)
 	}
-
 	slices.Sort(names)
-
 	return names
 }

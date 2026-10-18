@@ -35,17 +35,25 @@ const (
 type Key string
 
 const (
-	DefaultMaxBytes int64 = 256 << 20        // DefaultMaxBytes is the entry store cap used when none is given (256 MB).
-	rescanInterval        = 30 * time.Second // rescanInterval bounds how stale a Put's view of other processes' writes can be, so overshoot stays small without a walk per Put.
+	// DefaultMaxBytes is the entry store cap used when none is given (256 MB).
+	DefaultMaxBytes int64 = 256 << 20
+	// rescanInterval bounds how stale a Put's view of other processes' writes can be, so overshoot stays small without a
+	// walk per Put.
+	rescanInterval = 30 * time.Second
 )
 
 var (
-	ErrEntryTooLarge = errors.New("cache entry larger than the cache cap") // ErrEntryTooLarge reports a Put whose entry alone exceeds the cache cap.
-	ErrClosed        = errors.New("cache is closed")                       // ErrClosed reports a Put on a cache that the Runtime Manager has closed.
+	// ErrEntryTooLarge reports a Put whose entry alone exceeds the cache cap.
+	ErrEntryTooLarge = errors.New("cache entry larger than the cache cap")
+	// ErrClosed reports a Put on a cache that the Runtime Manager has closed.
+	ErrClosed = errors.New("cache is closed")
 
-	renameFile    = os.Rename                                  // renameFile moves the temp file into place; tests replace it to simulate rename failures.
-	syncFile      = func(f *os.File) error { return f.Sync() } // syncFile flushes the temp file before it is renamed; tests replace it to watch the order of steps.
-	syncDirHandle = func(d *os.File) error { return d.Sync() } // syncDirHandle flushes an open directory after a rename; tests replace it to watch the order of steps.
+	// renameFile moves the temp file into place; tests replace it to simulate rename failures.
+	renameFile = os.Rename
+	// syncFile flushes the temp file before it is renamed; tests replace it to watch the order of steps.
+	syncFile = func(f *os.File) error { return f.Sync() }
+	// syncDirHandle flushes an open directory after a rename; tests replace it to watch the order of steps.
+	syncDirHandle = func(d *os.File) error { return d.Sync() }
 )
 
 // Limits are the size caps the Runtime Manager passes in from the Configuration Manager.
@@ -97,30 +105,6 @@ type Cache struct {
 	total        int64                 // sum of sizes in index
 	scanned      time.Time             // when index last came from a disk scan
 }
-
-// counters holds one atomic count per namespace; the map is built once and never changes.
-type counters map[Namespace]*atomic.Int64
-
-// newCounters returns a zero count for every namespace.
-func newCounters() counters {
-	c := counters{}
-	for _, ns := range namespaces {
-		c[ns] = new(atomic.Int64)
-	}
-	return c
-}
-
-// handle is the Key, Get and Put view of a Cache; it has no Stats, Clear or Close.
-type handle struct{ c *Cache }
-
-// Key hashes the version and inputs into an entry key.
-func (h handle) Key(inputs ...string) Key { return h.c.Key(inputs...) }
-
-// Get returns the payload under key, or false on a miss.
-func (h handle) Get(ns Namespace, key Key) ([]byte, bool) { return h.c.Get(ns, key) }
-
-// Put stores data under key and evicts if the cache is over its cap.
-func (h handle) Put(ns Namespace, key Key, data []byte) error { return h.c.Put(ns, key, data) }
 
 // New opens the cache of one repository at root for a binary version, creating root if needed.
 // A cap of zero or less selects its default; only the Runtime Manager calls it.
@@ -180,27 +164,6 @@ func (c *Cache) Get(ns Namespace, key Key) ([]byte, bool) {
 	return payload, ok
 }
 
-// read loads and checks the entry file at path, deleting it when the check fails and stamping its last-read time when it holds.
-func (c *Cache) read(ns Namespace, path string) ([]byte, bool) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false
-	}
-
-	payload, ok := decodeEntry(raw)
-	if !ok {
-		_ = os.Remove(path)
-		c.forget(path)
-		return nil, false
-	}
-
-	now := c.now()
-	if os.Chtimes(path, now, now) == nil {
-		c.track(cacheEntry{ns: ns, path: path, size: int64(len(raw)), used: now}, false)
-	}
-	return payload, true
-}
-
 // Put stores data under key atomically, then evicts least recently read entries until the cache fits its cap.
 // Concurrent Puts of one key from any number of processes leave one complete entry.
 func (c *Cache) Put(ns Namespace, key Key, data []byte) error {
@@ -241,70 +204,6 @@ func (c *Cache) Put(ns Namespace, key Key, data []byte) error {
 
 	c.track(cacheEntry{ns: ns, path: path, size: size, used: now}, true)
 	return c.evict(path)
-}
-
-// writeEntry writes data to a temp file beside path, then renames it over path.
-// It reports whether the failure was the final rename; a failure removes the temp file.
-func writeEntry(path string, data []byte) (renameFailed bool, err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return false, fmt.Errorf("create temp file: %w", err)
-	}
-
-	name := tmp.Name()
-
-	if _, err = tmp.Write(data); err == nil {
-		err = tmp.Chmod(0o644)
-	}
-	if err == nil {
-		err = syncFile(tmp)
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		_ = os.Remove(name)
-		return false, fmt.Errorf("write temp file: %w", err)
-	}
-	if err = renameFile(name, path); err != nil {
-		_ = os.Remove(name)
-		return true, fmt.Errorf("rename onto %s: %w", path, err)
-	}
-	if err = syncDir(filepath.Dir(path)); err != nil {
-		return false, fmt.Errorf("sync directory of %s: %w", path, err)
-	}
-	return false, nil
-}
-
-// syncDir flushes a directory entry to disk; it is a no-op where the OS cannot sync directories.
-func syncDir(dir string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = d.Close() }()
-
-	if err := syncDirHandle(d); err != nil && !errors.Is(err, syscall.EINVAL) {
-		return err
-	}
-	return nil
-}
-
-// validEntrySize returns the on-disk size of the entry file at path, or false when it is missing or fails its check.
-func validEntrySize(path string) (int64, bool) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	if _, ok := decodeEntry(raw); !ok {
-		return 0, false
-	}
-	return int64(len(raw)), true
 }
 
 // Stats counts the entries on disk under this cache's root and the lookups served since it opened.
@@ -370,15 +269,36 @@ func (c *Cache) Close() error {
 	return nil
 }
 
-// entryPath maps a namespace and key to its file under a 2-level fan-out, refusing anything that is not a known namespace and a hex hash.
-func (c *Cache) entryPath(ns Namespace, key Key) (string, error) {
-	if !validNamespace(ns) {
-		return "", fmt.Errorf("unknown cache namespace %q", ns)
+// read loads and checks the entry file at path, deleting it when the check fails and stamping its last-read time when it
+// holds.
+func (c *Cache) read(ns Namespace, path string) ([]byte, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
 	}
-	if !validKey(key) {
-		return "", errors.New("cache key is not a sha256 hex string")
+
+	payload, ok := decodeEntry(raw)
+	if !ok {
+		_ = os.Remove(path)
+		c.forget(path)
+		return nil, false
 	}
-	return filepath.Join(c.root, string(ns), string(key[0:2]), string(key[2:4]), string(key)+".json"), nil
+
+	now := c.now()
+	if os.Chtimes(path, now, now) == nil {
+		c.track(cacheEntry{ns: ns, path: path, size: int64(len(raw)), used: now}, false)
+	}
+	return payload, true
+}
+
+// forget drops a path from the in-memory index.
+func (c *Cache) forget(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old, ok := c.index[path]; ok {
+		c.total -= old.size
+		delete(c.index, path)
+	}
 }
 
 // track records an entry in the in-memory index, loading the index from disk first if needed.
@@ -403,16 +323,6 @@ func (c *Cache) track(e cacheEntry, write bool) {
 	c.total += e.size
 }
 
-// forget drops a path from the in-memory index.
-func (c *Cache) forget(path string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if old, ok := c.index[path]; ok {
-		c.total -= old.size
-		delete(c.index, path)
-	}
-}
-
 // loadLocked rebuilds the index from disk; the caller holds c.mu.
 // On a scan error the index stays nil so the next call retries.
 func (c *Cache) loadLocked() error {
@@ -428,6 +338,18 @@ func (c *Cache) loadLocked() error {
 	}
 	c.scanned = c.now()
 	return nil
+}
+
+// entryPath maps a namespace and key to its file under a 2-level fan-out, refusing anything that is not a known namespace
+// and a hex hash.
+func (c *Cache) entryPath(ns Namespace, key Key) (string, error) {
+	if !validNamespace(ns) {
+		return "", fmt.Errorf("unknown cache namespace %q", ns)
+	}
+	if !validKey(key) {
+		return "", errors.New("cache key is not a sha256 hex string")
+	}
+	return filepath.Join(c.root, string(ns), string(key[0:2]), string(key[2:4]), string(key)+".json"), nil
 }
 
 // evict deletes least recently read entries, never keep, until the total fits the cap.
@@ -468,4 +390,92 @@ func (c *Cache) evict(keep string) error {
 		delete(c.index, v.path)
 	}
 	return nil
+}
+
+// counters holds one atomic count per namespace; the map is built once and never changes.
+type counters map[Namespace]*atomic.Int64
+
+// newCounters returns a zero count for every namespace.
+func newCounters() counters {
+	c := counters{}
+	for _, ns := range namespaces {
+		c[ns] = new(atomic.Int64)
+	}
+	return c
+}
+
+// handle is the Key, Get and Put view of a Cache; it has no Stats, Clear or Close.
+type handle struct{ c *Cache }
+
+// Key hashes the version and inputs into an entry key.
+func (h handle) Key(inputs ...string) Key { return h.c.Key(inputs...) }
+
+// Get returns the payload under key, or false on a miss.
+func (h handle) Get(ns Namespace, key Key) ([]byte, bool) { return h.c.Get(ns, key) }
+
+// Put stores data under key and evicts if the cache is over its cap.
+func (h handle) Put(ns Namespace, key Key, data []byte) error { return h.c.Put(ns, key, data) }
+
+// writeEntry writes data to a temp file beside path, then renames it over path.
+// It reports whether the failure was the final rename; a failure removes the temp file.
+func writeEntry(path string, data []byte) (renameFailed bool, err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return false, fmt.Errorf("create temp file: %w", err)
+	}
+
+	name := tmp.Name()
+
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Chmod(0o644)
+	}
+	if err == nil {
+		err = syncFile(tmp)
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(name)
+		return false, fmt.Errorf("write temp file: %w", err)
+	}
+	if err = renameFile(name, path); err != nil {
+		_ = os.Remove(name)
+		return true, fmt.Errorf("rename onto %s: %w", path, err)
+	}
+	if err = syncDir(filepath.Dir(path)); err != nil {
+		return false, fmt.Errorf("sync directory of %s: %w", path, err)
+	}
+	return false, nil
+}
+
+// syncDir flushes a directory entry to disk; it is a no-op where the OS cannot sync directories.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = d.Close() }()
+
+	if err := syncDirHandle(d); err != nil && !errors.Is(err, syscall.EINVAL) {
+		return err
+	}
+	return nil
+}
+
+// validEntrySize returns the on-disk size of the entry file at path, or false when it is missing or fails its check.
+func validEntrySize(path string) (int64, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	if _, ok := decodeEntry(raw); !ok {
+		return 0, false
+	}
+	return int64(len(raw)), true
 }

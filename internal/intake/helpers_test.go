@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// uid returns a version 7 identifier that differs per n.
-func uid(n int) string { return fmt.Sprintf("0192e4c5-7a10-7d3e-9b2f-%012x", n) }
-
 // tgSpec is the fields of one TG.md; a zero field takes a valid default.
 type tgSpec struct {
 	id, goal, touches, points, status string
@@ -64,6 +61,21 @@ func (s tgSpec) text(n int) string {
 	return b.String()
 }
 
+// uid returns a version 7 identifier that differs per n.
+func uid(n int) string { return fmt.Sprintf("0192e4c5-7a10-7d3e-9b2f-%012x", n) }
+
+// goodGroup returns the draft files of group tg-epic.n with one task over its first file.
+func goodGroup(epic, n int, spec tgSpec) []DraftFile {
+	name := fmt.Sprintf("tg-%d.%d", epic, n)
+	if spec.files == nil {
+		spec.files = []string{fmt.Sprintf("pkg%d_%d/a.go", epic, n)}
+	}
+	return []DraftFile{
+		{Path: fmt.Sprintf("epic-%d/%s/TG.md", epic, name), Content: spec.text(epic*100 + n)},
+		{Path: fmt.Sprintf("epic-%d/%s/tsk-one.md", epic, name), Content: taskText(100, "go test ./...", spec.files[0])},
+	}
+}
+
 // taskText renders a task file naming the given files.
 func taskText(est int, doneWhen string, files ...string) string {
 	var b strings.Builder
@@ -76,18 +88,6 @@ func taskText(est int, doneWhen string, files ...string) string {
 	}
 	fmt.Fprintf(&b, "estimate_lines: %d\n\nWrite the thing.\n", est)
 	return b.String()
-}
-
-// goodGroup returns the draft files of group tg-epic.n with one task over its first file.
-func goodGroup(epic, n int, spec tgSpec) []DraftFile {
-	name := fmt.Sprintf("tg-%d.%d", epic, n)
-	if spec.files == nil {
-		spec.files = []string{fmt.Sprintf("pkg%d_%d/a.go", epic, n)}
-	}
-	return []DraftFile{
-		{Path: fmt.Sprintf("epic-%d/%s/TG.md", epic, name), Content: spec.text(epic*100 + n)},
-		{Path: fmt.Sprintf("epic-%d/%s/tsk-one.md", epic, name), Content: taskText(100, "go test ./...", spec.files[0])},
-	}
 }
 
 // writeBacklog writes draft-style files under root/docs/backlog.
@@ -136,6 +136,9 @@ func mustLoad(t *testing.T, root string) ([]Epic, []Finding) {
 	return e, f
 }
 
+// cat joins draft file lists.
+func cat(parts ...[]DraftFile) []DraftFile { return draftOf(parts...).Files }
+
 // draftOf collects files from several groups into one draft.
 func draftOf(parts ...[]DraftFile) PlanDraft {
 	var d PlanDraft
@@ -144,6 +147,3 @@ func draftOf(parts ...[]DraftFile) PlanDraft {
 	}
 	return d
 }
-
-// cat joins draft file lists.
-func cat(parts ...[]DraftFile) []DraftFile { return draftOf(parts...).Files }

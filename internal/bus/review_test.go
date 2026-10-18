@@ -163,7 +163,8 @@ func TestSlowSyncDoesNotBlockOtherPublishes(t *testing.T) {
 	<-done
 }
 
-// A corrupt runs.json is moved aside, the bus starts empty and publishes one warning; later saves keep rows they did not know.
+// A corrupt runs.json is moved aside, the bus starts empty and publishes one warning; later saves keep rows they did not
+// know.
 func TestCorruptRunsJSONIsMovedAside(t *testing.T) {
 	f := newStoreFixture(t)
 	if err := os.MkdirAll(f.home, 0o755); err != nil {
@@ -179,7 +180,8 @@ func TestCorruptRunsJSONIsMovedAside(t *testing.T) {
 	if len(moved) != 1 {
 		t.Fatalf("moved files %v, want one runs.json.bad-<unix>", moved)
 	}
-	if got := fileLines(t, filepath.Join(f.home, "engine.jsonl")); len(got) != 1 || !strings.Contains(got[0], `"subtype":"bus.store_failed"`) {
+	if got := fileLines(t, filepath.Join(f.home, "engine.jsonl")); len(got) != 1 ||
+		!strings.Contains(got[0], `"subtype":"bus.store_failed"`) {
 		t.Fatalf("engine.jsonl = %v, want one bus.store_failed", got)
 	}
 	// A row another writer added after the start survives this bus's save.
@@ -229,14 +231,22 @@ func TestRunsJSONSaveFailuresAreAnnouncedPerBurst(t *testing.T) {
 // engine.jsonl is trimmed by the daily trigger: lines past retention go, and the oldest go first past the size bound.
 func TestMachineLogIsTrimmed(t *testing.T) {
 	line := func(d time.Duration, n int) string {
-		return fmt.Sprintf(`{"type":"run-stop","subtype":"","run":"","group":"","time":%q,"data":{"target":"l%d"}}`, time.Now().UTC().Add(-d).Format(time.RFC3339), n)
+		return fmt.Sprintf(
+			`{"type":"run-stop","subtype":"","run":"","group":"","time":%q,"data":{"target":"l%d"}}`,
+			time.Now().UTC().Add(-d).Format(time.RFC3339),
+			n,
+		)
 	}
 	f := newStoreBus(t, 10, func(o *Options) { o.RetentionDays = 30 })
 	if err := os.MkdirAll(f.home, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p := filepath.Join(f.home, "engine.jsonl")
-	if err := os.WriteFile(p, []byte(joinLines(line(40*24*time.Hour, 1), line(35*24*time.Hour, 2), line(time.Hour, 3))), 0o644); err != nil {
+	if err := os.WriteFile(
+		p,
+		[]byte(joinLines(line(40*24*time.Hour, 1), line(35*24*time.Hour, 2), line(time.Hour, 3))),
+		0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 	f.publish(f.runStart("run-a"))

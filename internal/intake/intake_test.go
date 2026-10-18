@@ -24,45 +24,6 @@ func (b readyBus) Subscribe(name string, types ...bus.Type) (*bus.Subscription, 
 	return s, err
 }
 
-// runRig starts Run on the rig's handler and returns a subscription to run-start and error events.
-func runRig(t *testing.T, r *rig) (*bus.Subscription, func(PlanRequest, bus.ID)) {
-	t.Helper()
-	ready := make(chan struct{})
-	r.h.d.Bus = readyBus{Bus: r.bus, ready: ready}
-	out, err := r.bus.Subscribe("test", bus.TypeRunStart, bus.TypeError)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- r.h.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("Run: %v", err)
-		}
-	})
-	<-ready
-	return out, func(req PlanRequest, run bus.ID) {
-		t.Helper()
-		if err := r.bus.Publish(bus.Event{Type: bus.TypePlan, Subtype: "request", Run: run, Data: &req}); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// next returns the next event on the subscription or fails after a wait.
-func next(t *testing.T, s *bus.Subscription) bus.Event {
-	t.Helper()
-	select {
-	case e := <-s.Events:
-		return e
-	case <-time.After(5 * time.Second):
-		t.Fatal("no event")
-	}
-	return bus.Event{}
-}
-
 func TestRunPublishesOneRunStartWithItsOwnRunID(t *testing.T) {
 	r := newRig(t, twoGroupDraft())
 	out, plan := runRig(t, r)
@@ -104,7 +65,8 @@ func TestRunPublishesPlanBlockedAndNoRunStart(t *testing.T) {
 	plan(PlanRequest{Goal: "g"}, run)
 	e := next(t, out)
 	pb, ok := e.Data.(*PlanBlocked)
-	if e.Type != bus.TypeError || e.Subtype != "plan-blocked" || !ok || len(pb.Findings) == 0 || pb.DraftPath == "" || e.Run != run {
+	if e.Type != bus.TypeError || e.Subtype != "plan-blocked" || !ok || len(pb.Findings) == 0 || pb.DraftPath == "" ||
+		e.Run != run {
 		t.Fatalf("event: %+v", e)
 	}
 }
@@ -154,4 +116,43 @@ func TestRegisterEventsBindsEveryPair(t *testing.T) {
 		}
 		_ = b.Close()
 	}
+}
+
+// runRig starts Run on the rig's handler and returns a subscription to run-start and error events.
+func runRig(t *testing.T, r *rig) (*bus.Subscription, func(PlanRequest, bus.ID)) {
+	t.Helper()
+	ready := make(chan struct{})
+	r.h.d.Bus = readyBus{Bus: r.bus, ready: ready}
+	out, err := r.bus.Subscribe("test", bus.TypeRunStart, bus.TypeError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.h.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run: %v", err)
+		}
+	})
+	<-ready
+	return out, func(req PlanRequest, run bus.ID) {
+		t.Helper()
+		if err := r.bus.Publish(bus.Event{Type: bus.TypePlan, Subtype: "request", Run: run, Data: &req}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// next returns the next event on the subscription or fails after a wait.
+func next(t *testing.T, s *bus.Subscription) bus.Event {
+	t.Helper()
+	select {
+	case e := <-s.Events:
+		return e
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event")
+	}
+	return bus.Event{}
 }

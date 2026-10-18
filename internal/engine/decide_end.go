@@ -23,12 +23,10 @@ var retryReasons = []string{
 func (c *calc) sessionEnd() bool {
 	s := &c.s
 	d := decode[SessionEndData](c.in.Data)
-
 	e := d.SessionEnd
 	if e.Stage == "" {
 		e.Stage = string(s.Stage)
 	}
-
 	if s.Stage == NoStage || s.Stage == StageIntake {
 		return false
 	}
@@ -43,12 +41,7 @@ func (c *calc) sessionEnd() bool {
 	s.Counters.TokensUsed += tokens
 
 	c.emitStatus(&e)
-	ref := &state.ResumeRef{
-		Agent:   e.Agent,
-		Session: string(e.Session),
-		Handle:  e.Handle,
-		Link:    e.Link,
-	}
+	ref := &state.ResumeRef{Agent: e.Agent, Session: string(e.Session), Handle: e.Handle, Link: e.Link}
 
 	keep := reason == "paused" || reason == "provider" || reason == "needs_scope"
 	switch {
@@ -60,7 +53,6 @@ func (c *calc) sessionEnd() bool {
 	}
 
 	holds := s.Stage == StagePaused || s.Stage == StageBlocked || s.Stage == StageDone
-
 	switch e.Agent {
 	case "builder":
 		return c.builderEnd(e, d.Unfinished, holds)
@@ -77,19 +69,15 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 	if t := c.taskByID(e.Task, string(e.Session)); t != nil && t.State == "claimed" {
 		t.State, t.Session = "queued", ""
 	}
-
 	if unfinished != nil && e.Reason != "done" {
 		s.Unfinished = unfinished
 	}
-
 	if holds {
 		if s.Stage == StagePaused && e.Reason == "paused" {
 			c.pauseAgain(e)
 		}
-
 		return true
 	}
-
 	if s.Stage != StageBuild {
 		return false
 	}
@@ -100,7 +88,6 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 	case "crash":
 		s.Counters.Crashes++
 	}
-
 	if s.Pause.After {
 		return true
 	}
@@ -125,6 +112,21 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 	return true
 }
 
+// pauseAgain records that a sibling session of a paused group halted too.
+func (c *calc) pauseAgain(e bus.SessionEnd) {
+	p := &c.s.Pause
+	if until := e.ResetAt.Add(time.Minute); !e.ResetAt.IsZero() && until.After(p.Until) {
+		p.Until = until
+	}
+	p.Refused++
+}
+
+// builderBlocked reports whether the retry the exit asks for is already over a bound.
+func (c *calc) builderBlocked(reason string) bool {
+	_, _, ok := c.blockReason(c.in)
+	return ok
+}
+
 // taskIndex returns the index of a task, or 0 when the identifier is unknown.
 func (c *calc) taskIndex(id string) int {
 	for i, t := range c.s.Tasks {
@@ -132,25 +134,38 @@ func (c *calc) taskIndex(id string) int {
 			return i
 		}
 	}
-
 	return 0
 }
 
-// builderBlocked reports whether the retry the exit asks for is already over a bound.
-func (c *calc) builderBlocked(reason string) bool {
-	_, _, ok := c.blockReason(c.in)
-
-	return ok
-}
-
-// pauseAgain records that a sibling session of a paused group halted too.
-func (c *calc) pauseAgain(e bus.SessionEnd) {
-	p := &c.s.Pause
-	if until := e.ResetAt.Add(time.Minute); !e.ResetAt.IsZero() && until.After(p.Until) {
-		p.Until = until
+// scopeRules denies a request that is protected, belongs to another group or repeats the task's one request; otherwise it
+// blocks the group.
+func (c *calc) scopeRules(a ScopeAsk) {
+	s := &c.s
+	i := c.taskIndex(a.Task)
+	if len(s.Tasks) == 0 {
+		return
 	}
 
-	p.Refused++
+	t := &s.Tasks[i]
+	spent := t.ScopeAsked
+	t.ScopeAsked = true
+
+	if spent || a.Deny != "" {
+		why := a.Deny
+		if spent {
+			why = "spent"
+		}
+
+		o := c.order(OrderScope, StageBuild, ScopeAnswer{Answer: "deny", Paths: a.Paths, Reason: why})
+		o.Re = a.Escalation
+		if o.Re == "" {
+			o.Re = c.in.Request
+		}
+
+		return
+	}
+
+	c.scopeBlock = &a
 }
 
 // verifierEnd records a tester or reviewer that ended and restarts it when it gave no result.
@@ -162,7 +177,6 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 	if e.Agent == "reviewer" {
 		round, retries = &s.TestReview.Reviewer, c.l.ReviewerRetries
 	}
-
 	if s.Stage == StageDone || (s.Stage != StageTestReview && !holds) {
 		return s.Stage == StageDone
 	}
@@ -189,7 +203,6 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 	case e.Reason == "billing" || e.Reason == "paused" || e.Reason == "needs_scope":
 	case e.Reason == "crash":
 		s.Counters.Crashes++
-
 		c.restartAgent(e.Agent)
 	case e.Reason == "provider":
 		c.restartAgent(e.Agent)
@@ -198,7 +211,6 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 		if round.Restarts > retries {
 			return true
 		}
-
 		if s.Stage == StagePaused || s.Pause.After {
 			s.Owed = appendNew(s.Owed, e.Agent)
 		} else {
@@ -209,25 +221,12 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 	return true
 }
 
-// restartAgent orders a fresh session of one agent on the group's tree, or owes it while the group
-// is paused.
-func (c *calc) restartAgent(agent string) {
-	if c.s.Stage == StagePaused || c.s.Pause.After {
-		c.s.Owed = appendNew(c.s.Owed, agent)
-
-		return
-	}
-
-	c.enterStage(StageTestReview, stageData{Agent: agent})
-}
-
 // settleRound makes the stage-move rows read the round's outcome once both agents have a result.
 func (c *calc) settleRound() {
 	t, r := c.s.TestReview.Tester.Result, c.s.TestReview.Reviewer.Result
 	if t == "" || r == "" || t == "cancelled" || r == "cancelled" {
 		return
 	}
-
 	if t == "pass" && r == "pass" {
 		c.eff = Input{
 			Kind:  InStageDone,
@@ -235,23 +234,25 @@ func (c *calc) settleRound() {
 			Time:  c.in.Time,
 			Data:  mustJSON(StageDoneData{Stage: StageTestReview}),
 		}
-
 		return
 	}
 
 	items := slices.Clone(c.s.TestReview.Failed)
-
 	items = appendNew(items, c.s.TestReview.NotMet...)
 	for _, f := range c.s.TestReview.Findings {
 		items = appendNew(items, f.Rule+" "+f.File)
 	}
 
-	c.eff = Input{
-		Kind:  InResultFail,
-		Group: c.in.Group,
-		Time:  c.in.Time,
-		Data:  mustJSON(ResultFail{Items: items}),
+	c.eff = Input{Kind: InResultFail, Group: c.in.Group, Time: c.in.Time, Data: mustJSON(ResultFail{Items: items})}
+}
+
+// restartAgent orders a fresh session of one agent on the group's tree, or owes it while the group is paused.
+func (c *calc) restartAgent(agent string) {
+	if c.s.Stage == StagePaused || c.s.Pause.After {
+		c.s.Owed = appendNew(c.s.Owed, agent)
+		return
 	}
+	c.enterStage(StageTestReview, stageData{Agent: agent})
 }
 
 // scopeAsk applies the scope rules to a builder's request for more files.
@@ -259,47 +260,8 @@ func (c *calc) scopeAsk() bool {
 	if c.s.Stage != StageBuild {
 		return false
 	}
-
 	c.scopeRules(decode[ScopeAsk](c.in.Data))
-
 	return true
-}
-
-// scopeRules denies a request that is protected, belongs to another group or repeats the task's one
-// request; otherwise it blocks the group.
-func (c *calc) scopeRules(a ScopeAsk) {
-	s := &c.s
-	i := c.taskIndex(a.Task)
-
-	if len(s.Tasks) == 0 {
-		return
-	}
-
-	t := &s.Tasks[i]
-	spent := t.ScopeAsked
-	t.ScopeAsked = true
-
-	if spent || a.Deny != "" {
-		why := a.Deny
-		if spent {
-			why = "spent"
-		}
-
-		o := c.order(
-			OrderScope,
-			StageBuild,
-			ScopeAnswer{Answer: "deny", Paths: a.Paths, Reason: why},
-		)
-
-		o.Re = a.Escalation
-		if o.Re == "" {
-			o.Re = c.in.Request
-		}
-
-		return
-	}
-
-	c.scopeBlock = &a
 }
 
 // appendNew appends the values that the list does not hold yet.
@@ -309,6 +271,5 @@ func appendNew(list []string, vals ...string) []string {
 			list = append(list, v)
 		}
 	}
-
 	return list
 }

@@ -13,7 +13,12 @@ import (
 const fakeDockerScript = `
 { for a in "$@"; do printf '%s\n' "$a"; done; echo "--END--"; } >> "$FAKE_DOCKER_LOG"
 case "$1" in
-  version) if [ -n "$FAKE_DOCKER_DOWN" ]; then echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2; exit 1; fi; echo 29.0.0 ;;
+  version)
+    if [ -n "$FAKE_DOCKER_DOWN" ]; then
+      echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2
+      exit 1
+    fi
+    echo 29.0.0 ;;
   create) if [ -n "$FAKE_DOCKER_CREATE_FAIL" ]; then echo "no such image" >&2; exit 1; fi; echo abc123 ;;
   start) if [ -n "$FAKE_DOCKER_START_FAIL" ]; then echo "cannot start" >&2; exit 1; fi ;;
   ps) printf '%s\n' "$FAKE_DOCKER_PS" ;;
@@ -25,31 +30,6 @@ exit 0
 // dockerCalls is the logged calls of a fake docker, one argument list each.
 type dockerCalls [][]string
 
-// fakeDocker installs the fake docker and returns a reader of its calls.
-func fakeDocker(t *testing.T) func() dockerCalls {
-	t.Helper()
-	putFake(t, "docker", fakeDockerScript)
-	log := filepath.Join(t.TempDir(), "docker.log")
-	t.Setenv("FAKE_DOCKER_LOG", log)
-	return func() dockerCalls {
-		raw, err := os.ReadFile(log)
-		if err != nil {
-			return nil
-		}
-		var calls dockerCalls
-		var cur []string
-		for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
-			if line == "--END--" {
-				calls = append(calls, cur)
-				cur = nil
-				continue
-			}
-			cur = append(cur, line)
-		}
-		return calls
-	}
-}
-
 // verb returns the calls whose first argument is verb.
 func (c dockerCalls) verb(v string) dockerCalls {
 	var out dockerCalls
@@ -59,14 +39,6 @@ func (c dockerCalls) verb(v string) dockerCalls {
 		}
 	}
 	return out
-}
-
-// goRepo writes a go.mod into the worktree so the image can be detected.
-func goRepo(t *testing.T, s Spec) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(s.Worktree, "go.mod"), []byte("module x\n\ngo 1.27.2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestDockerCheckNamesTheFix(t *testing.T) {
@@ -211,14 +183,17 @@ func TestDockerCommandIsADockerExecWithTheCleanEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd, err := d.Command(context.Background(), inst, s, Command{
-		Argv: []string{"go", "test", "./..."}, Env: []string{"GOCACHE=" + s.Writable[1], "TOKEN=secret"}, Timeout: 90 * time.Second,
+		Argv:    []string{"go", "test", "./..."},
+		Env:     []string{"GOCACHE=" + s.Writable[1], "TOKEN=secret"},
+		Timeout: 90 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := cmd.Args[1:]
 	name := "komodo-g1-" + inst.ID[:8]
-	if a[0] != "exec" || indexOf(a, "-w", "/work") < 0 || indexOf(a, "-e", "HOME="+s.Writable[0]) < 0 || indexOf(a, "-e", "GOCACHE="+s.Writable[1]) < 0 {
+	if a[0] != "exec" || indexOf(a, "-w", "/work") < 0 || indexOf(a, "-e", "HOME="+s.Writable[0]) < 0 ||
+		indexOf(a, "-e", "GOCACHE="+s.Writable[1]) < 0 {
 		t.Fatalf("exec args %v", a)
 	}
 	if strings.Contains(strings.Join(a, " "), "TOKEN") || strings.Contains(strings.Join(a, " "), "PATH=") {
@@ -255,7 +230,8 @@ func TestDockerRefusesAMaskedFileItCouldNotCover(t *testing.T) {
 	if err := os.WriteFile(late, []byte("K=v"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err == nil || !strings.Contains(err.Error(), ".env.local") {
+	if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err == nil ||
+		!strings.Contains(err.Error(), ".env.local") {
 		t.Fatalf("a mask that appeared after the container was made must stop the command: %v", err)
 	}
 }
@@ -302,7 +278,8 @@ func TestDockerRefusesAMaskedFileThatWasReplacedOnTheHost(t *testing.T) {
 	if err := os.Rename(tmp, env); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err == nil || !strings.Contains(err.Error(), "replaced") {
+	if _, err := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}}); err == nil ||
+		!strings.Contains(err.Error(), "replaced") {
 		t.Fatalf("a replaced masked file is no longer covered by the mount: %v", err)
 	}
 }
@@ -341,7 +318,8 @@ func TestDockerPrepareFailureLeavesNoContainer(t *testing.T) {
 	s := testSpec(t, RoleTester)
 	goRepo(t, s)
 	t.Setenv("FAKE_DOCKER_START_FAIL", "1")
-	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil || !strings.Contains(err.Error(), "cannot start") {
+	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil ||
+		!strings.Contains(err.Error(), "cannot start") {
 		t.Fatalf("got %v", err)
 	}
 	if len(calls().verb("rm")) != 1 {
@@ -349,7 +327,8 @@ func TestDockerPrepareFailureLeavesNoContainer(t *testing.T) {
 	}
 	t.Setenv("FAKE_DOCKER_START_FAIL", "")
 	t.Setenv("FAKE_DOCKER_CREATE_FAIL", "1")
-	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil || !strings.Contains(err.Error(), "no such image") {
+	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil ||
+		!strings.Contains(err.Error(), "no such image") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -376,7 +355,11 @@ func TestDockerAddsRustComponentsAsRoot(t *testing.T) {
 	calls := fakeDocker(t)
 	s := testSpec(t, RoleTester)
 	s.Network = true
-	if err := os.WriteFile(filepath.Join(s.Worktree, "Cargo.toml"), []byte("[package]\nname=\"x\"\nrust-version = \"1.78\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(s.Worktree, "Cargo.toml"),
+		[]byte("[package]\nname=\"x\"\nrust-version = \"1.78\"\n"),
+		0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 	inst, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s)
@@ -399,7 +382,8 @@ func TestDockerAdditionsNeedTheNetwork(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.Worktree, "Cargo.toml"), []byte("rust-version = \"1.78\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil || !strings.Contains(err.Error(), "network") {
+	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil ||
+		!strings.Contains(err.Error(), "network") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -448,13 +432,43 @@ func TestDetectImage(t *testing.T) {
 		{"go", map[string]string{"go.mod": "module x\n\ngo 1.27.2\ntoolchain go1.27.3\n"}, "golang:1.27", "go", ""},
 		{"node nvmrc", map[string]string{"package.json": "{}", ".nvmrc": "v20.11.0\n"}, "node:20.11.0", "node", ""},
 		{"node engines", map[string]string{"package.json": `{"engines":{"node":">=18.17"}}`}, "node:18.17", "node", ""},
-		{"rust toolchain file", map[string]string{"Cargo.toml": "", "rust-toolchain.toml": "[toolchain]\nchannel = \"1.78.0\"\n"}, "rust:1.78.0", "rust", ""},
-		{"python", map[string]string{"pyproject.toml": "[project]\nrequires-python = \">=3.11\"\n"}, "python:3.11", "python", ""},
-		{"python version file", map[string]string{"pyproject.toml": "", ".python-version": "3.12.1\n"}, "python:3.12.1", "python", ""},
+		{
+			"rust toolchain file",
+			map[string]string{"Cargo.toml": "", "rust-toolchain.toml": "[toolchain]\nchannel = \"1.78.0\"\n"},
+			"rust:1.78.0",
+			"rust",
+			"",
+		},
+		{
+			"python",
+			map[string]string{"pyproject.toml": "[project]\nrequires-python = \">=3.11\"\n"},
+			"python:3.11",
+			"python",
+			"",
+		},
+		{
+			"python version file",
+			map[string]string{"pyproject.toml": "", ".python-version": "3.12.1\n"},
+			"python:3.12.1",
+			"python",
+			"",
+		},
 		{"makefile only", map[string]string{"Makefile": "all:\n"}, "", "", "sandbox.image"},
-		{"two languages", map[string]string{"go.mod": "go 1.27\n", "package.json": "{}", ".nvmrc": "20"}, "", "", "sandbox.image"},
+		{
+			"two languages",
+			map[string]string{"go.mod": "go 1.27\n", "package.json": "{}", ".nvmrc": "20"},
+			"",
+			"",
+			"sandbox.image",
+		},
 		{"no version file", map[string]string{"package.json": "{}"}, "", "", "sandbox.image"},
-		{"stable rust has no tag", map[string]string{"Cargo.toml": "", "rust-toolchain.toml": "[toolchain]\nchannel = \"stable\"\n"}, "", "", "sandbox.image"},
+		{
+			"stable rust has no tag",
+			map[string]string{"Cargo.toml": "", "rust-toolchain.toml": "[toolchain]\nchannel = \"stable\"\n"},
+			"",
+			"",
+			"sandbox.image",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -469,5 +483,38 @@ func TestDetectImage(t *testing.T) {
 				t.Fatalf("got %q %q %v", image, lang, err)
 			}
 		})
+	}
+}
+
+// fakeDocker installs the fake docker and returns a reader of its calls.
+func fakeDocker(t *testing.T) func() dockerCalls {
+	t.Helper()
+	putFake(t, "docker", fakeDockerScript)
+	log := filepath.Join(t.TempDir(), "docker.log")
+	t.Setenv("FAKE_DOCKER_LOG", log)
+	return func() dockerCalls {
+		raw, err := os.ReadFile(log)
+		if err != nil {
+			return nil
+		}
+		var calls dockerCalls
+		var cur []string
+		for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+			if line == "--END--" {
+				calls = append(calls, cur)
+				cur = nil
+				continue
+			}
+			cur = append(cur, line)
+		}
+		return calls
+	}
+}
+
+// goRepo writes a go.mod into the worktree so the image can be detected.
+func goRepo(t *testing.T, s Spec) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(s.Worktree, "go.mod"), []byte("module x\n\ngo 1.27.2\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

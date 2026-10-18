@@ -4,14 +4,23 @@ import "time"
 
 // RunStart is the data of run-start: a request to the Runtime Manager to run a target.
 type RunStart struct {
-	Target    string    `json:"target"`            // the label the command named, such as ep-1 or tg-1.2; "all" for run --all; the epic label when the Intake Handler starts the run
-	Groups    []string  `json:"groups"`            // the group labels to run, such as tg-1.2
-	Source    string    `json:"source"`            // "cli" or "intake": who published the request
-	Schedule  time.Time `json:"schedule,omitzero"` // RFC 3339 start time of a scheduled run; absent otherwise
-	Repo      string    `json:"repo"`              // the repository id the run belongs to
-	Root      string    `json:"root"`              // the repository root on this machine
-	CommonDir string    `json:"common_dir"`        // the repository's git common directory, which holds its Komodo files
-	Request   ID        `json:"request,omitempty"` // the control socket Request.ID of the command
+	// the label the command named, such as ep-1 or tg-1.2; "all" for run --all; the epic label when the Intake Handler
+	// starts the run
+	Target string `json:"target"`
+	// the group labels to run, such as tg-1.2
+	Groups []string `json:"groups"`
+	// "cli" or "intake": who published the request
+	Source string `json:"source"`
+	// RFC 3339 start time of a scheduled run; absent otherwise
+	Schedule time.Time `json:"schedule,omitzero"`
+	// the repository id the run belongs to
+	Repo string `json:"repo"`
+	// the repository root on this machine
+	Root string `json:"root"`
+	// the repository's git common directory, which holds its Komodo files
+	CommonDir string `json:"common_dir"`
+	// the control socket Request.ID of the command
+	Request ID `json:"request,omitempty"`
 }
 
 // EventKey binds RunStart to run-start.
@@ -19,8 +28,10 @@ func (RunStart) EventKey() Key { return Key{TypeRunStart, ""} }
 
 // RunStop is the data of run-stop: a request to stop a run, or to remove a queued scheduled run.
 type RunStop struct {
-	Target  string `json:"target"`            // an epic or group label, or a run id when one attempt is meant; a label means the latest attempt
-	Request ID     `json:"request,omitempty"` // the control socket Request.ID of the command
+	// an epic or group label, or a run id when one attempt is meant; a label means the latest attempt
+	Target string `json:"target"`
+	// the control socket Request.ID of the command
+	Request ID `json:"request,omitempty"`
 }
 
 // EventKey binds RunStop to run-stop.
@@ -424,7 +435,8 @@ func (BusStoreFailed) EventKey() Key { return Key{TypeError, "bus.store_failed"}
 
 // RequestRef names the command that a request outcome answers.
 type RequestRef struct {
-	Request ID `json:"request"` // the control socket Request.ID of the command, copied into the command event's data as request
+	// the control socket Request.ID of the command, copied into the command event's data as request
+	Request ID `json:"request"`
 }
 
 // RequestAccepted is the data of run-status / request.accepted.

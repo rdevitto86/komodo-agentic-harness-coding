@@ -7,7 +7,6 @@ func faultsOf(h *fault.Handler) *fault.Handler {
 	if h == nil {
 		return fault.New(nil, nil)
 	}
-
 	return h
 }
 
@@ -15,7 +14,6 @@ func faultsOf(h *fault.Handler) *fault.Handler {
 func guarded(h *fault.Handler, fn func()) {
 	go func() {
 		defer h.Recover(fault.Source{Component: "engine"}, nil)
-
 		fn()
 	}()
 }

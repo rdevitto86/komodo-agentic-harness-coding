@@ -14,76 +14,6 @@ var base = time.Date(2026, 10, 14, 10, 0, 0, 0, time.Local)
 // defaults are the shipped thresholds with no ceilings and no daily amount.
 var defaults = Thresholds{QuotaPct: 80, USDPerRun: 5, GroupTokens: 2_000_000}
 
-// ev builds a resource event for a run and group.
-func ev(sub bus.Subtype, run, group string, data bus.Payload) bus.Event {
-	return bus.Event{Type: bus.TypeResource, Subtype: sub, Run: bus.ID(run), Group: bus.ID(group), Data: data}
-}
-
-// head builds a headroom event whose window is pct percent used.
-func head(link, run, group string, pct int, reset time.Time) bus.Event {
-	return ev(subtypeHeadroom, run, group, &Headroom{Link: link, Window: "five_hour", Limit: 100, Remaining: int64(100 - pct), ResetAt: reset})
-}
-
-// paid builds a usage event that spent usd on link.
-func paid(link, run, group string, usd float64) bus.Event {
-	return ev(subtypeUsage, run, group, &Usage{Link: link, USD: usd})
-}
-
-// toks builds a usage event of n input tokens on link.
-func toks(link, run, group string, n int64) bus.Event {
-	return ev(subtypeUsage, run, group, &Usage{Link: link, TokensIn: n})
-}
-
-// drive applies e, evaluates the rules and marks every order delivered, as a run with no failing calls would.
-func drive(t *testing.T, s *State, th Thresholds, e bus.Event, now time.Time) Result {
-	t.Helper()
-	if err := check(e); err != nil {
-		t.Fatal(err)
-	}
-	o, _, ok := s.apply(e, now)
-	if !ok {
-		return Result{}
-	}
-	res := Evaluate(s, th, o)
-	for i, er := range res.Errors {
-		s.markRaised(o, res.keys[i], er)
-	}
-	for _, p := range res.Pauses {
-		if s.errorRaised(p) {
-			s.markPaused(p)
-		}
-	}
-	for _, n := range res.Nudges {
-		s.markNudged(n)
-	}
-	return res
-}
-
-// kinds lists the kinds of the errors in r.
-func kinds(r Result) []string {
-	var out []string
-	for _, e := range r.Errors {
-		out = append(out, e.Kind)
-	}
-	return out
-}
-
-// wantNone fails unless r holds nothing.
-func wantNone(t *testing.T, r Result) {
-	t.Helper()
-	if len(r.Errors) != 0 || len(r.Pauses) != 0 || len(r.Nudges) != 0 {
-		t.Fatalf("want nothing, got %+v", r)
-	}
-}
-
-// wantKinds fails unless r holds exactly the given error kinds, in order.
-func wantKinds(t *testing.T, r Result, want ...string) {
-	t.Helper()
-	if got := kinds(r); !reflect.DeepEqual(got, want) && (len(got) != 0 || len(want) != 0) {
-		t.Fatalf("error kinds %v, want %v", got, want)
-	}
-}
-
 // TestWindowWarnOnce: 79 percent is quiet, 80 warns once, 90 does not warn again.
 func TestWindowWarnOnce(t *testing.T) {
 	s, reset := NewState(), base.Add(2*time.Hour)
@@ -91,7 +21,8 @@ func TestWindowWarnOnce(t *testing.T) {
 	r := drive(t, s, defaults, head("claude-cli", "r1", "g1", 80, reset), base)
 	wantKinds(t, r, "window")
 	e := r.Errors[0]
-	if e.Severity != "warn" || e.Value != 80 || e.Threshold != 80 || e.Link != "claude-cli" || e.Run != "r1" || !e.ResetAt.Equal(reset) {
+	if e.Severity != "warn" || e.Value != 80 || e.Threshold != 80 || e.Link != "claude-cli" || e.Run != "r1" ||
+		!e.ResetAt.Equal(reset) {
 		t.Fatalf("warning %+v", e)
 	}
 	if len(r.Pauses) != 0 {
@@ -111,7 +42,13 @@ func TestWindowFullPausesOnce(t *testing.T) {
 	if r.Errors[0].Severity != "warn" || r.Errors[0].Threshold != 100 {
 		t.Fatalf("window_full %+v", r.Errors[0])
 	}
-	want := PauseOrder{Reason: "window_full", Link: "claude-cli", Window: "five_hour", Groups: []string{"g1", "g2"}, Until: reset}
+	want := PauseOrder{
+		Reason: "window_full",
+		Link:   "claude-cli",
+		Window: "five_hour",
+		Groups: []string{"g1", "g2"},
+		Until:  reset,
+	}
 	if len(r.Pauses) != 1 || !reflect.DeepEqual(r.Pauses[0], want) {
 		t.Fatalf("pauses %+v, want %+v", r.Pauses, want)
 	}
@@ -139,7 +76,9 @@ func TestResetClearsWindowGroups(t *testing.T) {
 	drive(t, s, defaults, head("claude-cli", "r1", "gold", 10, reset), base)
 	later := base.Add(2 * time.Hour)
 	drive(t, s, defaults, head("claude-cli", "r1", "gnew", 100, later.Add(time.Hour)), later)
-	if got := names(s.Windows[WindowKey{Link: "claude-cli", Window: "five_hour"}].Groups); !reflect.DeepEqual(got, []string{"gnew"}) {
+	if got := names(
+		s.Windows[WindowKey{Link: "claude-cli", Window: "five_hour"}].Groups,
+	); !reflect.DeepEqual(got, []string{"gnew"}) {
 		t.Fatalf("window groups %v, want [gnew]", got)
 	}
 }
@@ -147,7 +86,13 @@ func TestResetClearsWindowGroups(t *testing.T) {
 // TestHeadroomLimitZero: a reading with no window total is ignored and raises nothing.
 func TestHeadroomLimitZero(t *testing.T) {
 	s := NewState()
-	e := ev(subtypeHeadroom, "r1", "g1", &Headroom{Link: "claude-cli", Window: "five_hour", Limit: 0, Remaining: 0, ResetAt: base.Add(time.Hour)})
+	e := ev(subtypeHeadroom, "r1", "g1", &Headroom{
+		Link:      "claude-cli",
+		Window:    "five_hour",
+		Limit:     0,
+		Remaining: 0,
+		ResetAt:   base.Add(time.Hour),
+	})
 	wantNone(t, drive(t, s, defaults, e, base))
 	if len(s.Windows) != 0 || len(s.LinkGroups) != 0 {
 		t.Fatalf("an ignored reading changed the state: %+v", s)
@@ -238,7 +183,8 @@ func TestGroupTokenLadder(t *testing.T) {
 	if e.Group != "g1" || e.Value != 2_000_000 || e.Threshold != 2_000_000 || e.Severity != "warn" {
 		t.Fatalf("group_tokens %+v", e)
 	}
-	if len(r.Pauses) != 1 || r.Pauses[0].Reason != "group_tokens" || !reflect.DeepEqual(r.Pauses[0].Groups, []string{"g1"}) || len(r.Nudges) != 0 {
+	if len(r.Pauses) != 1 || r.Pauses[0].Reason != "group_tokens" ||
+		!reflect.DeepEqual(r.Pauses[0].Groups, []string{"g1"}) || len(r.Nudges) != 0 {
 		t.Fatalf("at the cap: %+v", r)
 	}
 	wantNone(t, drive(t, s, defaults, toks("claude-cli", "r1", "g1", 5), base))
@@ -257,7 +203,13 @@ func TestGroupTokensOffAtZero(t *testing.T) {
 // TestCacheReadNotCounted: cache reads do not count toward a group's tokens.
 func TestCacheReadNotCounted(t *testing.T) {
 	s := NewState()
-	e := ev(subtypeUsage, "r1", "g1", &Usage{Link: "claude-cli", TokensIn: 10, TokensOut: 20, CacheWrite: 30, CacheRead: 5_000_000})
+	e := ev(subtypeUsage, "r1", "g1", &Usage{
+		Link:       "claude-cli",
+		TokensIn:   10,
+		TokensOut:  20,
+		CacheWrite: 30,
+		CacheRead:  5_000_000,
+	})
 	wantNone(t, drive(t, s, defaults, e, base))
 	if s.Spend.GroupTokens["g1"] != 60 {
 		t.Fatalf("group tokens %d, want 60", s.Spend.GroupTokens["g1"])
@@ -313,7 +265,17 @@ func TestOverageAndLimitOnce(t *testing.T) {
 	}
 	wantNone(t, drive(t, s, defaults, over, base))
 	later := base.Add(2 * time.Hour)
-	wantKinds(t, drive(t, s, defaults, ev(subtypeOverage, "r1", "g1", &Overage{Link: "claude-cli", ResetAt: later.Add(time.Hour)}), later), "overage")
+	wantKinds(
+		t,
+		drive(
+			t,
+			s,
+			defaults,
+			ev(subtypeOverage, "r1", "g1", &Overage{Link: "claude-cli", ResetAt: later.Add(time.Hour)}),
+			later,
+		),
+		"overage",
+	)
 
 	lim := ev(subtypeLimit, "r1", "g1", &Limit{Link: "claude-cli", Kind: "window", ResetAt: reset})
 	r = drive(t, s, defaults, lim, base)
@@ -344,4 +306,80 @@ func TestEvaluateIsPure(t *testing.T) {
 	if len(a.Errors) != 1 || len(a.Pauses) != 1 || !reflect.DeepEqual(a, b) {
 		t.Fatalf("first %+v second %+v", a, b)
 	}
+}
+
+// head builds a headroom event whose window is pct percent used.
+func head(link, run, group string, pct int, reset time.Time) bus.Event {
+	return ev(subtypeHeadroom, run, group, &Headroom{
+		Link:      link,
+		Window:    "five_hour",
+		Limit:     100,
+		Remaining: int64(100 - pct),
+		ResetAt:   reset,
+	})
+}
+
+// ev builds a resource event for a run and group.
+func ev(sub bus.Subtype, run, group string, data bus.Payload) bus.Event {
+	return bus.Event{Type: bus.TypeResource, Subtype: sub, Run: bus.ID(run), Group: bus.ID(group), Data: data}
+}
+
+// paid builds a usage event that spent usd on link.
+func paid(link, run, group string, usd float64) bus.Event {
+	return ev(subtypeUsage, run, group, &Usage{Link: link, USD: usd})
+}
+
+// toks builds a usage event of n input tokens on link.
+func toks(link, run, group string, n int64) bus.Event {
+	return ev(subtypeUsage, run, group, &Usage{Link: link, TokensIn: n})
+}
+
+// drive applies e, evaluates the rules and marks every order delivered, as a run with no failing calls would.
+func drive(t *testing.T, s *State, th Thresholds, e bus.Event, now time.Time) Result {
+	t.Helper()
+	if err := check(e); err != nil {
+		t.Fatal(err)
+	}
+	o, _, ok := s.apply(e, now)
+	if !ok {
+		return Result{}
+	}
+	res := Evaluate(s, th, o)
+	for i, er := range res.Errors {
+		s.markRaised(o, res.keys[i], er)
+	}
+	for _, p := range res.Pauses {
+		if s.errorRaised(p) {
+			s.markPaused(p)
+		}
+	}
+	for _, n := range res.Nudges {
+		s.markNudged(n)
+	}
+	return res
+}
+
+// wantNone fails unless r holds nothing.
+func wantNone(t *testing.T, r Result) {
+	t.Helper()
+	if len(r.Errors) != 0 || len(r.Pauses) != 0 || len(r.Nudges) != 0 {
+		t.Fatalf("want nothing, got %+v", r)
+	}
+}
+
+// wantKinds fails unless r holds exactly the given error kinds, in order.
+func wantKinds(t *testing.T, r Result, want ...string) {
+	t.Helper()
+	if got := kinds(r); !reflect.DeepEqual(got, want) && (len(got) != 0 || len(want) != 0) {
+		t.Fatalf("error kinds %v, want %v", got, want)
+	}
+}
+
+// kinds lists the kinds of the errors in r.
+func kinds(r Result) []string {
+	var out []string
+	for _, e := range r.Errors {
+		out = append(out, e.Kind)
+	}
+	return out
 }

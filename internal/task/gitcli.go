@@ -25,8 +25,7 @@ var (
 	_ PointerRecorder = (*GitCLI)(nil)
 )
 
-// RecordPointer keeps the exact text of the worktree's .git file for the checks before every host
-// git call.
+// RecordPointer keeps the exact text of the worktree's .git file for the checks before every host git call.
 func (g *GitCLI) RecordPointer(l LeaseRef) error {
 	p, err := RecordPointer(l.Worktree)
 	if err != nil {
@@ -42,7 +41,6 @@ func (g *GitCLI) RecordPointer(l LeaseRef) error {
 
 	g.ptrs[l.Worktree] = p
 	delete(g.hosts, l.Worktree)
-
 	return nil
 }
 
@@ -52,7 +50,6 @@ func (g *GitCLI) TreeHash(ctx context.Context, l LeaseRef) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	return h.TreeHash(ctx)
 }
 
@@ -62,22 +59,15 @@ func (g *GitCLI) Diff(ctx context.Context, l LeaseRef, paths []string) (string, 
 	if err != nil {
 		return "", err
 	}
-
 	return h.Diff(ctx, paths)
 }
 
 // ReadOnly runs log, show, blame or status.
-func (g *GitCLI) ReadOnly(
-	ctx context.Context,
-	l LeaseRef,
-	command string,
-	args []string,
-) (string, error) {
+func (g *GitCLI) ReadOnly(ctx context.Context, l LeaseRef, command string, args []string) (string, error) {
 	h, err := g.host(l)
 	if err != nil {
 		return "", err
 	}
-
 	return h.ReadOnly(ctx, command, args)
 }
 
@@ -87,18 +77,15 @@ func (g *GitCLI) ResetTracked(ctx context.Context, l LeaseRef) error {
 	if err != nil {
 		return err
 	}
-
 	if _, err := h.Run(ctx, "reset", "--hard", "-q"); err != nil {
 		return err
 	}
-
 	_, err = h.Run(ctx, "clean", "-fdq")
-
 	return err
 }
 
-// AddWorktree creates the lease's branch at the start point and checks it out at the lease's
-// worktree, unless the worktree exists.
+// AddWorktree creates the lease's branch at the start point and checks it out at the lease's worktree, unless the worktree
+// exists.
 func (g *GitCLI) AddWorktree(ctx context.Context, l LeaseRef) error {
 	if _, err := os.Stat(filepath.Join(l.Worktree, ".git")); err == nil {
 		return nil
@@ -143,7 +130,6 @@ func (g *GitCLI) AddWorktree(ctx context.Context, l LeaseRef) error {
 	if g.Start != "" {
 		argv = append(argv, g.Start)
 	}
-
 	if _, err := hostOutput(ctx, g.Repo, env, "git add worktree", argv...); err != nil {
 		return fmt.Errorf("add the worktree of %s: %w", l.Branch, err)
 	}
@@ -164,7 +150,6 @@ func (g *GitCLI) Close() error {
 	}
 
 	g.hosts = nil
-
 	return first
 }
 
@@ -183,11 +168,9 @@ func (g *GitCLI) host(l LeaseRef) (*HostGit, error) {
 		if p, err = RecordPointer(l.Worktree); err != nil {
 			return nil, err
 		}
-
 		if g.ptrs == nil {
 			g.ptrs = map[string]*Pointer{}
 		}
-
 		g.ptrs[l.Worktree] = p
 	}
 
@@ -195,26 +178,21 @@ func (g *GitCLI) host(l LeaseRef) (*HostGit, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if g.hosts == nil {
 		g.hosts = map[string]*HostGit{}
 	}
 
 	g.hosts[l.Worktree] = h
-
 	return h, nil
 }
 
-// changedPaths lists the files a unified diff changes, as the status lines of a tracked edit do
-// not.
+// changedPaths lists the files a unified diff changes, as the status lines of a tracked edit do not.
 func trackedEdits(status string) []string {
 	var out []string
-
 	for _, l := range strings.Split(status, "\n") {
 		if len(l) > 3 && !strings.HasPrefix(l, "??") && !strings.HasPrefix(l, "!!") {
 			out = append(out, strings.TrimSpace(l[3:]))
 		}
 	}
-
 	return out
 }

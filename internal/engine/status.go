@@ -10,8 +10,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// StatusData is the data of a status reply; the Metrics Service figures are merged in beside these
-// fields.
+// StatusData is the data of a status reply; the Metrics Service figures are merged in beside these fields.
 type StatusData struct {
 	Runs    []RunRow     `json:"runs"`
 	Queued  []QueuedRow  `json:"queued"`
@@ -50,8 +49,8 @@ type BlockedRow struct {
 	Question string `json:"question"` // what the group asks, in plain words
 }
 
-// Snapshot returns the live runs of one repository root (every root when it is empty) with their
-// groups and the groups that wait for an answer.
+// Snapshot returns the live runs of one repository root (every root when it is empty) with their groups and the groups that
+// wait for an answer.
 func (m *Manager) Snapshot(root string) ([]RunRow, []BlockedRow) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -73,9 +72,7 @@ func (m *Manager) Snapshot(root string) ([]RunRow, []BlockedRow) {
 				if r.finished[id] {
 					stage, st = string(StageDone), "done"
 				}
-
 				row.Groups = append(row.Groups, GroupRow{Group: s.Label, Stage: stage, State: st})
-
 				continue
 			}
 
@@ -113,7 +110,6 @@ func (m *Manager) Snapshot(root string) ([]RunRow, []BlockedRow) {
 
 	slices.SortFunc(rows, func(a, b RunRow) int { return strings.Compare(a.RunID, b.RunID) })
 	slices.SortFunc(blocked, func(a, b BlockedRow) int { return strings.Compare(a.Group, b.Group) })
-
 	return rows, blocked
 }
 
@@ -136,7 +132,6 @@ func (m *Manager) StopAll(ctx context.Context) {
 	for _, id := range ids {
 		m.spawn(func() {
 			_ = m.Stop(ctx, id)
-
 			done <- struct{}{}
 		})
 	}
@@ -146,19 +141,16 @@ func (m *Manager) StopAll(ctx context.Context) {
 	}
 }
 
-// firstSaved returns a channel that closes when the run's first group record is saved; it is closed
-// for a run that is not live.
+// firstSaved returns a channel that closes when the run's first group record is saved; it is closed for a run that is not
+// live.
 func (m *Manager) firstSaved(runID string) <-chan struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	if r := m.runs[runID]; r != nil {
 		return r.firstCh
 	}
-
 	c := make(chan struct{})
 	close(c)
-
 	return c
 }
 
@@ -179,7 +171,6 @@ func (m *Manager) closeAllCaches() {
 	}
 
 	clear(m.repos)
-
 	if m.d.Caches != nil {
 		_ = m.d.Caches.Close(context.Background())
 	}
@@ -209,7 +200,6 @@ func (g *group) question(s State) string {
 				ask.Reason,
 			)
 		}
-
 		return label + " asks to change files outside its list. Approve or deny?"
 	case state.ReasonWall:
 		return label + " used twice its working time. Approve more time or leave it blocked?"

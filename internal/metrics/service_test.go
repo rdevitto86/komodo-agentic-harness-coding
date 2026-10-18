@@ -11,32 +11,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// session builds a session.start and session.end pair for one session.
-func session(sec int, run, group, id bus.ID, agent string, u *bus.SessionUsage) []bus.Event {
-	return []bus.Event{
-		ev(sec, bus.TypeRunStatus, "session.start", run, group, &bus.SessionStart{GroupFacts: facts("build", id), Agent: agent, Task: "t-" + string(id), Link: "claude-cli", Model: "m1"}),
-		ev(sec+10, bus.TypeRunStatus, "session.end", run, group, &bus.SessionEnd{GroupFacts: bus.GroupFacts{Stage: "build", Session: id, Reason: "done"}, Agent: agent, Link: "claude-cli", WallS: 10, Usage: u}),
-	}
-}
-
-// dirNames lists the file names of a folder, or none when it is missing.
-func dirNames(t *testing.T, dir string) []string {
-	t.Helper()
-	ents, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []string
-	for _, e := range ents {
-		out = append(out, e.Name())
-	}
-	return out
-}
-
-// TestFiguresFollowTheEvents covers a run with 2 groups and 3 sessions: sessions.jsonl holds 3 records, the figures count the groups, and the bus, not the Service, holds the run's event log.
+// TestFiguresFollowTheEvents covers a run with 2 groups and 3 sessions: sessions.jsonl holds 3 records, the figures count
+// the groups, and the bus, not the Service, holds the run's event log.
 func TestFiguresFollowTheEvents(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	run := bus.ID("run-a")
@@ -47,11 +23,15 @@ func TestFiguresFollowTheEvents(t *testing.T) {
 	evs = append(evs, session(0, run, "g1", "s1", "builder", nil)...)
 	evs = append(evs, session(0, run, "g1", "s2", "tester", nil)...)
 	evs = append(evs, session(0, run, "g2", "s3", "builder", nil)...)
-	evs = append(evs, bus.Event{Type: bus.TypeRunComplete, Subtype: "done", Run: run, Data: &bus.RunDone{Done: []bus.ID{"g1", "g2"}}})
+	evs = append(evs, bus.Event{
+		Type:    bus.TypeRunComplete,
+		Subtype: "done",
+		Run:     run,
+		Data:    &bus.RunDone{Done: []bus.ID{"g1", "g2"}},
+	})
 	stop := f.start()
 	f.publish(evs...)
 	stop()
-
 	if n := len(lines(t, filepath.Join(f.repoDir, "sessions.jsonl"))); n != 3 {
 		t.Fatalf("sessions.jsonl has %d records, want 3", n)
 	}
@@ -83,7 +63,8 @@ func TestServiceWritesNoEventLog(t *testing.T) {
 	}
 }
 
-// TestFailedRecordWriteIsRecordedOnce checks a failing sessions.jsonl gives one failure record in the run's figures and the loop keeps reading.
+// TestFailedRecordWriteIsRecordedOnce checks a failing sessions.jsonl gives one failure record in the run's figures and the
+// loop keeps reading.
 func TestFailedRecordWriteIsRecordedOnce(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	ctx := context.Background()
@@ -92,7 +73,10 @@ func TestFailedRecordWriteIsRecordedOnce(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(f.repoDir, "sessions.jsonl"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range append(session(0, "run-bad", "g1", "s1", "builder", nil), session(20, "run-bad", "g1", "s2", "builder", nil)...) {
+	for _, e := range append(
+		session(0, "run-bad", "g1", "s1", "builder", nil),
+		session(20, "run-bad", "g1", "s2", "builder", nil)...,
+	) {
 		f.svc.handle(ctx, e)
 	}
 	f.svc.flush()
@@ -113,7 +97,12 @@ func TestRebuildRewritesFigures(t *testing.T) {
 	f := newFixture(t, 100, nil)
 	stop := f.start()
 	f.publish(f.runStart("run-a", "g1"),
-		bus.Event{Type: bus.TypeRunStatus, Subtype: "run.start", Run: "run-a", Data: &bus.RunStartedFact{Groups: []bus.ID{"g1"}}})
+		bus.Event{
+			Type:    bus.TypeRunStatus,
+			Subtype: "run.start",
+			Run:     "run-a",
+			Data:    &bus.RunStartedFact{Groups: []bus.ID{"g1"}},
+		})
 	stop()
 	for _, n := range []string{"groups.json", "runs.json"} {
 		if err := os.Remove(filepath.Join(f.repoDir, n)); err != nil {
@@ -127,4 +116,41 @@ func TestRebuildRewritesFigures(t *testing.T) {
 	if err != nil || len(gs) != 1 || gs[0].Group != "g1" {
 		t.Fatalf("Groups = %+v, %v", gs, err)
 	}
+}
+
+// session builds a session.start and session.end pair for one session.
+func session(sec int, run, group, id bus.ID, agent string, u *bus.SessionUsage) []bus.Event {
+	return []bus.Event{
+		ev(sec, bus.TypeRunStatus, "session.start", run, group, &bus.SessionStart{
+			GroupFacts: facts("build", id),
+			Agent:      agent,
+			Task:       "t-" + string(id),
+			Link:       "claude-cli",
+			Model:      "m1",
+		}),
+		ev(sec+10, bus.TypeRunStatus, "session.end", run, group, &bus.SessionEnd{
+			GroupFacts: bus.GroupFacts{Stage: "build", Session: id, Reason: "done"},
+			Agent:      agent,
+			Link:       "claude-cli",
+			WallS:      10,
+			Usage:      u,
+		}),
+	}
+}
+
+// dirNames lists the file names of a folder, or none when it is missing.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range ents {
+		out = append(out, e.Name())
+	}
+	return out
 }

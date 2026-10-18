@@ -9,20 +9,17 @@ import (
 )
 
 // hookNames are the hooks a harness command could trigger.
-var hookNames = []string{"pre-commit", "commit-msg", "post-commit", "pre-merge-commit", "post-merge", "pre-push", "reference-transaction", "post-checkout", "post-rewrite", "pre-auto-gc"}
-
-// plantHooks writes a hook of every name into dir; each one appends to marker when it runs.
-func plantHooks(t *testing.T, dir, marker string) {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, h := range hookNames {
-		body := "#!/bin/sh\necho " + h + " >> '" + marker + "'\nexit 0\n"
-		if err := os.WriteFile(filepath.Join(dir, h), []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+var hookNames = []string{
+	"pre-commit",
+	"commit-msg",
+	"post-commit",
+	"pre-merge-commit",
+	"post-merge",
+	"pre-push",
+	"reference-transaction",
+	"post-checkout",
+	"post-rewrite",
+	"pre-auto-gc",
 }
 
 // An edited hook, in the default folder or in a folder the repository configuration names, never runs.
@@ -44,7 +41,6 @@ func TestHooksNeverRun(t *testing.T) {
 	plantHooks(t, filepath.Join(w.clone, ".git", "hooks"), marker)
 	plantHooks(t, filepath.Join(w.clone, ".husky"), marker)
 	git(t, w.clone, "config", "core.hooksPath", filepath.Join(w.clone, ".husky"))
-
 	if err := w.git.FetchBranch(w.ctx, g.wt, "origin", "komodo/ep-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +73,8 @@ func TestHooksNeverRun(t *testing.T) {
 	}
 }
 
-// Git receives only the variables it needs: the login variables go to a command that talks to the remote, and secrets go nowhere.
+// Git receives only the variables it needs: the login variables go to a command that talks to the remote, and secrets go
+// nowhere.
 func TestGitEnvironmentScrubbed(t *testing.T) {
 	w := newWorld(t)
 	g := w.newGroup("tg-1.1")
@@ -150,7 +147,12 @@ func TestFetchFollowsRewrittenBranch(t *testing.T) {
 	if err := w.git.FetchBranch(w.ctx, w.clone, "origin", "komodo/ep-1"); err != nil {
 		t.Fatalf("fetch after a rewrite: %v", err)
 	}
-	if got, want := git(t, w.clone, "rev-parse", "refs/remotes/origin/komodo/ep-1"), w.remoteTip("komodo/ep-1"); got != want {
+	if got, want := git(
+		t,
+		w.clone,
+		"rev-parse",
+		"refs/remotes/origin/komodo/ep-1",
+	), w.remoteTip("komodo/ep-1"); got != want {
 		t.Fatalf("tracking ref = %s, remote = %s", got, want)
 	}
 	if err := w.git.Fetch(w.ctx, w.clone, "origin"); err != nil {
@@ -226,7 +228,8 @@ func TestCleanupMethods(t *testing.T) {
 	if err := w.git.Fetch(w.ctx, w.clone, "origin"); err != nil {
 		t.Fatal(err)
 	}
-	if ref, ok, err := w.git.Holds(w.ctx, w.clone, "origin", "origin/komodo/ep-1", newTip); err != nil || !ok || ref != "origin/komodo/ep-1" {
+	if ref, ok, err := w.git.Holds(w.ctx, w.clone, "origin", "origin/komodo/ep-1", newTip); err != nil || !ok ||
+		ref != "origin/komodo/ep-1" {
 		t.Fatalf("holds = %q %v %v", ref, ok, err)
 	}
 	if ref, ok, err := w.git.Holds(w.ctx, w.clone, "origin", "", newTip); err != nil || !ok || ref != "origin/komodo/ep-1" {
@@ -276,5 +279,19 @@ func TestCleanupMethods(t *testing.T) {
 	}
 	if ok, err := w.git.IsAncestor(w.ctx, w.clone, "refs/remotes/origin/main", "main"); err != nil || !ok {
 		t.Fatalf("ancestor = %v, %v", ok, err)
+	}
+}
+
+// plantHooks writes a hook of every name into dir; each one appends to marker when it runs.
+func plantHooks(t *testing.T, dir, marker string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hookNames {
+		body := "#!/bin/sh\necho " + h + " >> '" + marker + "'\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(dir, h), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

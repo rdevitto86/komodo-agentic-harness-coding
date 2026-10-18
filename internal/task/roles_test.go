@@ -12,31 +12,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
-// testRoles builds the three roles over a runner that answers each rerun from a script of exit codes.
-func testRoles(t *testing.T, exits ...int) map[string]Role {
-	t.Helper()
-	wt := t.TempDir()
-	n := 0
-	roles, err := NewRoles(RoleConfig{
-		Group: "tg-1", Tasks: []TaskSpec{{ID: "t1", Title: "x", DoneWhen: "build"}}, Worktree: wt,
-		Items: []agent.Item{{ID: "a1", Text: "works", Cmd: "test"}},
-		Files: func() []string { return []string{"*.go"} },
-		Runner: func() agent.CommandRunner {
-			return func(context.Context, string) (int, string, error) {
-				e := exits[n%len(exits)]
-				n++
-				return e, "out", nil
-			}
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return roles
-}
-
-func result(s string) llm.Result { return llm.Result{Output: json.RawMessage(s)} }
-
 func TestBuilderJudgeRejectsABrokenResultAndTurnsNeedsScopeIntoAnOutcome(t *testing.T) {
 	b := testRoles(t)["builder"]
 	var ge *GateError
@@ -50,7 +25,9 @@ func TestBuilderJudgeRejectsABrokenResultAndTurnsNeedsScopeIntoAnOutcome(t *test
 }
 
 func TestTesterJudgeDecidesFromGosRerunsOfAFailedItem(t *testing.T) {
-	failed := result(`{"items":[{"item":"a1","pass":false,"evidence":"no"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`)
+	failed := result(
+		`{"items":[{"item":"a1","pass":false,"evidence":"no"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
+	)
 	for _, tc := range []struct {
 		name  string
 		exits []int
@@ -79,7 +56,9 @@ func TestReviewerJudgeKeepsOnlyFindingsVerifiedAgainstTheWork(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, "a.go"), []byte("package a\nvar x = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rv.Slots(context.Background(), RoleInput{Diff: "+++ b/a.go\n@@ -0,0 +1,2 @@\n+package a\n+var x = 1\n"}); err != nil {
+	if _, err := rv.Slots(context.Background(), RoleInput{
+		Diff: "+++ b/a.go\n@@ -0,0 +1,2 @@\n+package a\n+var x = 1\n",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	rv.(FindingSink).Submit(Submitted{})
@@ -92,3 +71,28 @@ func TestReviewerJudgeKeepsOnlyFindingsVerifiedAgainstTheWork(t *testing.T) {
 		t.Fatalf("brief_incomplete: %+v, %v", out, err)
 	}
 }
+
+// testRoles builds the three roles over a runner that answers each rerun from a script of exit codes.
+func testRoles(t *testing.T, exits ...int) map[string]Role {
+	t.Helper()
+	wt := t.TempDir()
+	n := 0
+	roles, err := NewRoles(RoleConfig{
+		Group: "tg-1", Tasks: []TaskSpec{{ID: "t1", Title: "x", DoneWhen: "build"}}, Worktree: wt,
+		Items: []agent.Item{{ID: "a1", Text: "works", Cmd: "test"}},
+		Files: func() []string { return []string{"*.go"} },
+		Runner: func() agent.CommandRunner {
+			return func(context.Context, string) (int, string, error) {
+				e := exits[n%len(exits)]
+				n++
+				return e, "out", nil
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return roles
+}
+
+func result(s string) llm.Result { return llm.Result{Output: json.RawMessage(s)} }

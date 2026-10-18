@@ -12,40 +12,6 @@ import (
 
 const testToken = "t0k"
 
-func newTestServer(t *testing.T) *Server {
-	t.Helper()
-	return New(testToken, "testdata/groups.json", false)
-}
-
-func do(s *Server, method, target, host string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, target, nil)
-	req.Host = host
-	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, req)
-	return rec
-}
-
-// stream reads the event stream for 200 milliseconds and returns the recorder.
-func stream(s *Server) *httptest.ResponseRecorder {
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/events?t="+testToken, nil).WithContext(ctx)
-	req.Host = "127.0.0.1:9000"
-	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, req)
-	return rec
-}
-
-func post(s *Server, target, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
-	req.Host = "127.0.0.1:9000"
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Datastar-Request", "true")
-	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, req)
-	return rec
-}
-
 func TestRefusesMissingToken(t *testing.T) {
 	rec := do(newTestServer(t), http.MethodGet, "/events", "127.0.0.1:9000")
 	if rec.Code != http.StatusForbidden {
@@ -129,10 +95,11 @@ func TestEventsPatchCardsAndDiagram(t *testing.T) {
 	if n := strings.Count(body, "event: datastar-patch-elements\n"); n != 2 {
 		t.Errorf("patch events = %d, want 2 (html parts and diagram)", n)
 	}
-	for _, want := range []string{`data: elements <div id="groups" class="cards">`, "data: namespace svg",
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(body, "\ndata: elements ", " ")), " ")
+	for _, want := range []string{`<div id="groups" class="cards">`, "data: namespace svg",
 		`id="ptr-tg-1.2" class="pointer active"`, `id="ptr-tg-1.3" class="pointer blocked"`,
 		`id="ptr-tg-1.4" class="pointer paused"`, `id="ptr-tg-1.0" class="pointer done"`} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(flat, want) {
 			t.Errorf("stream missing %q", want)
 		}
 	}
@@ -203,7 +170,11 @@ func TestSetModelRecordsOnlyTheNamedAgent(t *testing.T) {
 
 func TestSetModelRefusesUnknownModelOrAgent(t *testing.T) {
 	s := newTestServer(t)
-	if rec := post(s, "/agents/reviewer/model?t="+testToken, `{"reviewer":"gpt-unknown"}`); rec.Code != http.StatusBadRequest {
+	if rec := post(
+		s,
+		"/agents/reviewer/model?t="+testToken,
+		`{"reviewer":"gpt-unknown"}`,
+	); rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown model status = %d, want 400", rec.Code)
 	}
 	if rec := post(s, "/agents/nobody/model?t="+testToken, `{"nobody":"haiku"}`); rec.Code != http.StatusNotFound {
@@ -243,16 +214,6 @@ func TestUsageShownWhenTrackingOn(t *testing.T) {
 	}
 }
 
-// view loads the mock view the tests share.
-func view(t *testing.T) View {
-	t.Helper()
-	v, err := New(testToken, "testdata/groups.json", true).readView()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return v
-}
-
 func TestKPICountsRunningBlockedDoneAndUsage(t *testing.T) {
 	k := kpis(view(t))
 	if k.Running != 2 || k.Blocked != 1 || k.Done != 1 {
@@ -265,7 +226,11 @@ func TestKPICountsRunningBlockedDoneAndUsage(t *testing.T) {
 
 func TestKPITilesOnTheStream(t *testing.T) {
 	body := stream(New(testToken, "testdata/groups.json", true)).Body.String()
-	for _, want := range []string{`<div class="kpi running"><b>2</b>`, `<div class="kpi blocked"><b>1</b>`, `<div class="kpi done"><b>1</b>`} {
+	for _, want := range []string{
+		`<div class="kpi running"><b>2</b>`,
+		`<div class="kpi blocked"><b>1</b>`,
+		`<div class="kpi done"><b>1</b>`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("stream missing %q", want)
 		}
@@ -296,7 +261,11 @@ func TestRecentEventsNewestFirstAndCapped(t *testing.T) {
 	var es []Event
 	base := time.Date(2026, 10, 14, 15, 0, 0, 0, time.UTC)
 	for i := range 20 {
-		es = append(es, Event{Type: "run-status", Subtype: fmt.Sprint("e", i), At: base.Add(time.Duration(i%7) * time.Minute)})
+		es = append(es, Event{
+			Type:    "run-status",
+			Subtype: fmt.Sprint("e", i),
+			At:      base.Add(time.Duration(i%7) * time.Minute),
+		})
 	}
 	got := recentEvents(es)
 	if len(got) != 15 {
@@ -312,7 +281,14 @@ func TestRecentEventsNewestFirstAndCapped(t *testing.T) {
 func TestEventFeedOrderOnTheStream(t *testing.T) {
 	body := stream(newTestServer(t)).Body.String()
 	last := -1
-	for _, sub := range []string{"paused<", "resource-limit<", "window-warn<", "stage-entered<", "tester-fail<", "group-done<"} {
+	for _, sub := range []string{
+		"paused<",
+		"resource-limit<",
+		"window-warn<",
+		"stage-entered<",
+		"tester-fail<",
+		"group-done<",
+	} {
 		i := strings.Index(body[strings.Index(body, `id="events"`):], sub)
 		if i < 0 || i < last {
 			t.Fatalf("event %q at %d, after previous at %d: want newest first", sub, i, last)
@@ -374,4 +350,48 @@ func TestRunHeaderShowsRunRepoAndEpic(t *testing.T) {
 			t.Errorf("stream missing %q", want)
 		}
 	}
+}
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	return New(testToken, "testdata/groups.json", false)
+}
+
+func do(s *Server, method, target, host string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, nil)
+	req.Host = host
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	return rec
+}
+
+// stream reads the event stream for 200 milliseconds and returns the recorder.
+func stream(s *Server) *httptest.ResponseRecorder {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/events?t="+testToken, nil).WithContext(ctx)
+	req.Host = "127.0.0.1:9000"
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	return rec
+}
+
+func post(s *Server, target, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Host = "127.0.0.1:9000"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Datastar-Request", "true")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	return rec
+}
+
+// view loads the mock view the tests share.
+func view(t *testing.T) View {
+	t.Helper()
+	v, err := New(testToken, "testdata/groups.json", true).readView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }

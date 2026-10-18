@@ -98,7 +98,6 @@ var frontmatterKeys = map[string]bool{
 func (m *Manager) Select(agent string, files []string, t Tree) ([]Selected, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
 	return m.selectLocked(agent, files, t)
 }
 
@@ -113,7 +112,6 @@ func (m *Manager) Get(agent, ref string) (string, error) {
 	if it == nil {
 		return "", fmt.Errorf("skill %q: %w", name, ErrSkillUnknown)
 	}
-
 	if !it.reaches(agent) {
 		return "", fmt.Errorf("skill %q: %w", name, ErrSkillNotAllowed)
 	}
@@ -153,7 +151,6 @@ func (m *Manager) List(agent string) []IndexEntry {
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-
 	return out
 }
 
@@ -164,9 +161,7 @@ func (m *Manager) selectLocked(agent string, files []string, t Tree) ([]Selected
 	}
 
 	var picked []*item
-
 	chosen := map[SkillName]bool{}
-
 	for _, it := range m.items {
 		if it.reaches(agent) && slices.Contains(it.state.Always, agent) {
 			picked = append(picked, it)
@@ -175,20 +170,17 @@ func (m *Manager) selectLocked(agent string, files []string, t Tree) ([]Selected
 	}
 
 	var matched []*item
-
 	for _, it := range m.items {
 		if chosen[it.state.Name] || !it.reaches(agent) ||
 			!anyGlob(it.entry.Globs, files) || !markersMet(t, it.entry.Markers) {
 			continue
 		}
-
 		matched = append(matched, it)
 	}
 
 	sort.Slice(matched, func(i, j int) bool {
 		return matched[i].state.Name < matched[j].state.Name
 	})
-
 	out := make([]Selected, 0, len(picked)+len(matched))
 
 	for _, it := range append(picked, matched...) {
@@ -196,7 +188,6 @@ func (m *Manager) selectLocked(agent string, files []string, t Tree) ([]Selected
 		if err != nil {
 			return nil, err
 		}
-
 		out = append(out, Selected{
 			Name:   it.state.Name,
 			Origin: it.state.Origin,
@@ -215,7 +206,6 @@ func (m *Manager) find(name SkillName) *item {
 			return it
 		}
 	}
-
 	return nil
 }
 
@@ -224,7 +214,6 @@ func (m *Manager) verifiedBody(it *item) (string, error) {
 	fp, c := it.entry.SHA256, m.deps.Cache
 
 	var key cache.Key
-
 	if c != nil {
 		key = c.Key("skill-body", fp)
 		if b, ok := c.Get(cache.NSSkills, key); ok {
@@ -237,7 +226,6 @@ func (m *Manager) verifiedBody(it *item) (string, error) {
 	}
 
 	var raw []byte
-
 	var err error
 
 	if it.path != "" {
@@ -245,15 +233,12 @@ func (m *Manager) verifiedBody(it *item) (string, error) {
 	} else {
 		raw, err = fs.ReadFile(m.fsys, "embed/skills/"+string(it.state.Name)+"/SKILL.md")
 	}
-
 	if err != nil {
 		return "", fmt.Errorf("read skill %s: %w", it.state.Name, err)
 	}
-
 	if fingerprint(raw) != fp {
 		return "", fmt.Errorf("skill %s: %w", it.state.Name, ErrSkillHash)
 	}
-
 	if c != nil {
 		_ = c.Put(cache.NSSkills, key, raw)
 	}
@@ -269,23 +254,17 @@ func (it *item) reaches(agent string) bool {
 // CompileRules returns the reviewer rules of one standards skill body.
 func CompileRules(skill SkillName, body string) []Rule {
 	short := strings.TrimPrefix(string(skill), "standards-")
-
 	var out []Rule
-
 	fence := false
 
 	for _, line := range strings.Split(body, "\n") {
 		if isFence(line) {
 			fence = !fence
-
 			continue
 		}
-
-		if fence ||
-			(!strings.HasPrefix(line, "- **Never") && !strings.HasPrefix(line, "- **Always")) {
+		if fence || (!strings.HasPrefix(line, "- **Never") && !strings.HasPrefix(line, "- **Always")) {
 			continue
 		}
-
 		text := strings.TrimSpace(strings.ReplaceAll(strings.TrimPrefix(line, "- "), "**", ""))
 		out = append(out, Rule{
 			ID:    "std." + short + "." + strconv.Itoa(len(out)+1),
@@ -300,7 +279,6 @@ func CompileRules(skill SkillName, body string) []Rule {
 // fingerprint returns the SHA-256 of b as 64 lowercase hex characters.
 func fingerprint(b []byte) string {
 	s := sha256.Sum256(b)
-
 	return hex.EncodeToString(s[:])
 }
 
@@ -317,13 +295,11 @@ func splitFrontmatter(text string) ([]string, string, error) {
 	if len(lines) == 0 || strings.TrimRight(lines[0], "\r") != "---" {
 		return nil, "", errors.New("file does not open with ---")
 	}
-
 	for i := 1; i < len(lines); i++ {
 		if strings.TrimRight(lines[i], "\r") == "---" {
 			return lines[1:i], strings.Join(lines[i+1:], "\n"), nil
 		}
 	}
-
 	return nil, "", errors.New("frontmatter has no closing ---")
 }
 
@@ -334,14 +310,11 @@ func parseScalar(raw string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("bad quoted value %s", raw)
 		}
-
 		return s, nil
 	}
-
 	if raw == "" || strings.ContainsAny(raw[:1], "[{&*!|>'%@`") {
 		return "", fmt.Errorf("bad value %q", raw)
 	}
-
 	return raw, nil
 }
 
@@ -385,7 +358,6 @@ func parseFrontmatter(lines []string) (Frontmatter, error) {
 		if !ok || !known {
 			return fm, fmt.Errorf("unknown or malformed line: %q", line)
 		}
-
 		if seen[key] {
 			return fm, fmt.Errorf("duplicate key %q", key)
 		}
@@ -412,7 +384,6 @@ func parseFrontmatter(lines []string) (Frontmatter, error) {
 				if err != nil {
 					return fm, fmt.Errorf("key v: %w", err)
 				}
-
 				fm.V = n
 			case "name":
 				fm.Name = SkillName(s)
@@ -434,7 +405,6 @@ func parseFrontmatter(lines []string) (Frontmatter, error) {
 // headingsOf returns the level-2 headings of a body in order, outside code fences.
 func headingsOf(body string) []string {
 	var out []string
-
 	fence := false
 
 	for _, line := range strings.Split(body, "\n") {
@@ -443,7 +413,6 @@ func headingsOf(body string) []string {
 
 			continue
 		}
-
 		if !fence {
 			if h, ok := strings.CutPrefix(line, "## "); ok {
 				out = append(out, strings.TrimRight(h, " \t\r"))
@@ -483,9 +452,7 @@ func parseSkill(text string) (Frontmatter, error) {
 		if seen[h] {
 			return fm, fmt.Errorf("duplicate heading %q", h)
 		}
-
 		seen[h] = true
-
 		if !slices.Contains(fm.Sections, h) {
 			return fm, fmt.Errorf("heading %q is not in sections", h)
 		}
@@ -504,8 +471,7 @@ func parseSkill(text string) (Frontmatter, error) {
 	return fm, nil
 }
 
-// matchGlob reports whether a path matches a pattern; a pattern without a slash matches any path
-// segment.
+// matchGlob reports whether a path matches a pattern; a pattern without a slash matches any path segment.
 func matchGlob(pattern, p string) bool {
 	segs := strings.Split(p, "/")
 	if !strings.Contains(pattern, "/") {
@@ -514,36 +480,30 @@ func matchGlob(pattern, p string) bool {
 				return true
 			}
 		}
-
 		return false
 	}
 
 	return matchSegments(strings.Split(pattern, "/"), segs)
 }
 
-// matchSegments matches pattern segments against path segments, where ** takes any number of
-// segments.
+// matchSegments matches pattern segments against path segments, where ** takes any number of segments.
 func matchSegments(pat, segs []string) bool {
 	if len(pat) == 0 {
 		return len(segs) == 0
 	}
-
 	if pat[0] == "**" {
 		for i := 0; i <= len(segs); i++ {
 			if matchSegments(pat[1:], segs[i:]) {
 				return true
 			}
 		}
-
 		return false
 	}
-
 	if len(segs) == 0 {
 		return false
 	}
 
 	ok, _ := path.Match(pat[0], segs[0])
-
 	return ok && matchSegments(pat[1:], segs[1:])
 }
 
@@ -552,7 +512,6 @@ func markersMet(t Tree, markers []string) bool {
 	if len(markers) == 0 {
 		return true
 	}
-
 	if t == nil {
 		return false
 	}
@@ -564,11 +523,9 @@ func markersMet(t Tree, markers []string) bool {
 			if !matchGlob(glob, p) {
 				continue
 			}
-
 			if !withText {
 				return true
 			}
-
 			if b, err := t.ReadFile(p); err == nil && strings.Contains(string(b), text) {
 				return true
 			}
@@ -581,7 +538,6 @@ func markersMet(t Tree, markers []string) bool {
 // sectionOf returns the text of one level-2 section, heading line included.
 func sectionOf(body, section string) (string, bool) {
 	var out []string
-
 	fence, in := false, false
 
 	for _, line := range strings.SplitAfter(body, "\n") {
@@ -592,12 +548,10 @@ func sectionOf(body, section string) (string, bool) {
 			if in && (strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "## ")) {
 				break
 			}
-
 			if !in && strings.HasPrefix(bare, "## ") && strings.TrimPrefix(bare, "## ") == section {
 				in = true
 			}
 		}
-
 		if in {
 			out = append(out, line)
 		}
@@ -611,7 +565,6 @@ func checkSkillSize(count Counter, body string) error {
 	if n := counterOr(count)(body); n > SkillTokenLimit {
 		return fmt.Errorf("skill body is %d tokens, over the limit of %d", n, SkillTokenLimit)
 	}
-
 	return nil
 }
 
@@ -624,6 +577,5 @@ func anyGlob(globs, files []string) bool {
 			}
 		}
 	}
-
 	return false
 }

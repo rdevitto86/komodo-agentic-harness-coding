@@ -35,12 +35,17 @@ func TestCheckMessage(t *testing.T) {
 
 // RenderBody fills the group template from the facts and the two verdicts.
 func TestRenderBody(t *testing.T) {
-	got, err := RenderBody(PRFacts{DiffStat: "6 files changed", TasksClosed: []string{"tsk-1", "tsk-2"}, FindingCodes: []string{"F-1"}},
+	got, err := RenderBody(PRFacts{
+		DiffStat:     "6 files changed",
+		TasksClosed:  []string{"tsk-1", "tsk-2"},
+		FindingCodes: []string{"F-1"},
+	},
 		Verdict{Summary: []string{"14 tests pass"}}, Verdict{Summary: []string{"0 blocking findings"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "## Summary\n6 files changed\n\n## Tasks closed\n- tsk-1\n- tsk-2\n\n## Findings resolved\n- F-1\n\n## Tester\n- 14 tests pass\n\n## Reviewer\n- 0 blocking findings\n"
+	want := "## Summary\n6 files changed\n\n## Tasks closed\n- tsk-1\n- tsk-2\n\n## Findings resolved\n- F-1\n\n## " +
+		"Tester\n- 14 tests pass\n\n## Reviewer\n- 0 blocking findings\n"
 	if got != want {
 		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
 	}
@@ -52,7 +57,8 @@ func TestRenderEpicBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(got, "## Summary\n9 files changed\n\n") || strings.Index(got, "## one") > strings.Index(got, "## two") || !strings.Contains(got, "- b") {
+	if !strings.HasPrefix(got, "## Summary\n9 files changed\n\n") ||
+		strings.Index(got, "## one") > strings.Index(got, "## two") || !strings.Contains(got, "- b") {
 		t.Fatalf("got %q", got)
 	}
 }

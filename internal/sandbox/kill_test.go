@@ -13,7 +13,8 @@ import (
 func TestParseProcs(t *testing.T) {
 	out := "  101   100   100 /bin/sh -c sleep 5 KOMODO_SANDBOX_CMD=abc HOME=/x\n\n 7 1 7 launchd\nnot a row\n"
 	got := parseProcs(out)
-	if len(got) != 2 || got[0].pid != 101 || got[0].ppid != 100 || got[0].pgid != 100 || !strings.Contains(got[0].line, "KOMODO_SANDBOX_CMD=abc") || got[1].pid != 7 {
+	if len(got) != 2 || got[0].pid != 101 || got[0].ppid != 100 || got[0].pgid != 100 ||
+		!strings.Contains(got[0].line, "KOMODO_SANDBOX_CMD=abc") || got[1].pid != 7 {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -102,7 +103,8 @@ func TestDockerCancelKillsTheProcessInsideTheContainer(t *testing.T) {
 	}
 	name := "komodo-g1-" + inst.ID[:8]
 	for _, call := range calls().verb("exec") {
-		if len(call) >= 5 && call[1] == name && call[2] == "sh" && call[3] == "-c" && strings.Contains(call[4], token) && strings.Contains(call[4], "kill") {
+		if len(call) >= 5 && call[1] == name && call[2] == "sh" && call[3] == "-c" && strings.Contains(call[4], token) &&
+			strings.Contains(call[4], "kill") {
 			return
 		}
 	}

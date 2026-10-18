@@ -14,47 +14,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 )
 
-// isolate points git at a throwaway home so no test reads or writes the person's configuration.
-func isolate(t *testing.T) {
-	t.Helper()
-	home := t.TempDir()
-	cfg := filepath.Join(home, "gitconfig")
-	body := "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[protocol \"file\"]\n\tallow = always\n"
-	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	t.Setenv("KOMODO_HOME", filepath.Join(home, ".komodo"))
-	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"} {
-		t.Setenv(k, "")
-		_ = os.Unsetenv(k)
-	}
-}
-
-// git runs plain git in dir for test setup and checks, and returns trimmed output.
-func git(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// write creates a file under dir, with parents.
-func write(t *testing.T, dir, name, body string) {
-	t.Helper()
-	p := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // world is a bare remote, a clone on main and the epic branch komodo/ep-1 on both.
 type world struct {
 	t      *testing.T
@@ -116,16 +75,16 @@ func (w *world) handler() *Handler {
 	}
 }
 
-// group is one group's identity and checkout.
-type group struct {
-	id, label, branch, wt string
-	fence                 lease.Fence
-}
-
 // newGroup cuts the group branch from the epic tip, adds its worktree and takes its lease.
 func (w *world) newGroup(label string) group {
 	w.t.Helper()
-	g := group{id: "g-" + label, label: label, branch: "komodo/ep-1-" + label, wt: filepath.Join(w.root, "wt", label), fence: 3}
+	g := group{
+		id:     "g-" + label,
+		label:  label,
+		branch: "komodo/ep-1-" + label,
+		wt:     filepath.Join(w.root, "wt", label),
+		fence:  3,
+	}
 	if err := w.git.AddWorktree(w.ctx, w.clone, g.wt, g.branch, "origin/komodo/ep-1"); err != nil {
 		w.t.Fatal(err)
 	}
@@ -157,6 +116,12 @@ func (w *world) remoteTip(branch string) string {
 	return git(w.t, w.remote, "rev-parse", "refs/heads/"+branch)
 }
 
+// group is one group's identity and checkout.
+type group struct {
+	id, label, branch, wt string
+	fence                 lease.Fence
+}
+
 // fakeLeases serves leases from a map.
 type fakeLeases struct {
 	mu sync.Mutex
@@ -164,22 +129,6 @@ type fakeLeases struct {
 	// onRead runs before each read, so a test can change the lease between reads.
 	onRead func(n int)
 	reads  int
-}
-
-// set records a held lease for the group.
-func (f *fakeLeases) set(g group, run, clone string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.m[g.id] = lease.Lease{Repo: "repo", Group: g.id, Run: run, Fence: g.fence, State: lease.StateHeld, ClonePath: clone, Worktree: g.wt, Branch: g.branch}
-}
-
-// bump raises the stored fence of a group.
-func (f *fakeLeases) bump(id string, fence lease.Fence) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	l := f.m[id]
-	l.Fence = fence
-	f.m[id] = l
 }
 
 // Holder runs the hook, then returns the stored lease.
@@ -196,6 +145,31 @@ func (f *fakeLeases) Holder(_ context.Context, _, group string) (lease.Lease, bo
 	defer f.mu.Unlock()
 	l, ok := f.m[group]
 	return l, ok, nil
+}
+
+// set records a held lease for the group.
+func (f *fakeLeases) set(g group, run, clone string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.m[g.id] = lease.Lease{
+		Repo:      "repo",
+		Group:     g.id,
+		Run:       run,
+		Fence:     g.fence,
+		State:     lease.StateHeld,
+		ClonePath: clone,
+		Worktree:  g.wt,
+		Branch:    g.branch,
+	}
+}
+
+// bump raises the stored fence of a group.
+func (f *fakeLeases) bump(id string, fence lease.Fence) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l := f.m[id]
+	l.Fence = fence
+	f.m[id] = l
 }
 
 // report is one recorded Reporter call.
@@ -309,15 +283,6 @@ esac
 	return &fakeGH{dir: dir}
 }
 
-// calls returns the recorded argument lines.
-func (f *fakeGH) calls() []string {
-	b, err := os.ReadFile(filepath.Join(f.dir, "calls.log"))
-	if err != nil {
-		return nil
-	}
-	return strings.Split(strings.TrimSpace(string(b)), "\n")
-}
-
 // count returns how many recorded calls start with the prefix.
 func (f *fakeGH) count(prefix string) int {
 	n := 0
@@ -329,10 +294,61 @@ func (f *fakeGH) count(prefix string) int {
 	return n
 }
 
+// calls returns the recorded argument lines.
+func (f *fakeGH) calls() []string {
+	b, err := os.ReadFile(filepath.Join(f.dir, "calls.log"))
+	if err != nil {
+		return nil
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
 // file reads one file the script wrote.
 func (f *fakeGH) file(name string) string {
 	b, _ := os.ReadFile(filepath.Join(f.dir, name))
 	return string(b)
+}
+
+// isolate points git at a throwaway home so no test reads or writes the person's configuration.
+func isolate(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	cfg := filepath.Join(home, "gitconfig")
+	body := "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[protocol " +
+		"\"file\"]\n\tallow = always\n"
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("KOMODO_HOME", filepath.Join(home, ".komodo"))
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"} {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
+	}
+}
+
+// git runs plain git in dir for test setup and checks, and returns trimmed output.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// write creates a file under dir, with parents.
+func write(t *testing.T, dir, name, body string) {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // execOut runs plain git in dir and returns its output and error.

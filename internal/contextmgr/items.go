@@ -54,8 +54,7 @@ type MCPSet struct {
 // MCPReload is the data of mcp / reload: it rereads connections.json.
 type MCPReload struct{}
 
-// ContextRefused is the data of error / context-refused: a skill or mcp event that failed
-// validation.
+// ContextRefused is the data of error / context-refused: a skill or mcp event that failed validation.
 type ContextRefused struct {
 	Event  string `json:"event"`  // the refused event as type/subtype
 	Field  string `json:"field"`  // the field that failed
@@ -79,8 +78,7 @@ func (ContextRefused) EventKey() bus.Key {
 	return bus.Key{Type: bus.TypeError, Subtype: "context-refused"}
 }
 
-// startItems builds the item table: shipped rows, local rows, then the harness's starting state in
-// its order.
+// startItems builds the item table: shipped rows, local rows, then the harness's starting state in its order.
 func (m *Manager) startItems(idx Index) error {
 	shipped := map[SkillName]bool{}
 
@@ -112,7 +110,6 @@ func (m *Manager) startItems(idx Index) error {
 		if slices.Contains(first, it) {
 			return fmt.Errorf("starting state names %q twice", st.Name)
 		}
-
 		if field, reason := checkAccess(st.Allow, st.Always); field != "" {
 			return fmt.Errorf("starting state for %q: %s %s", st.Name, field, reason)
 		}
@@ -129,7 +126,6 @@ func (m *Manager) startItems(idx Index) error {
 	}
 
 	m.items = first
-
 	return nil
 }
 
@@ -159,7 +155,6 @@ func (m *Manager) reloadLocal() {
 		} else if f, ok := fresh[it.state.Name]; ok {
 			f.state = it.state
 			out = append(out, f)
-
 			delete(fresh, it.state.Name)
 		}
 	}
@@ -178,7 +173,6 @@ func (m *Manager) phrases() []string {
 	if m.deps.Phrases == nil {
 		return nil
 	}
-
 	return m.deps.Phrases()
 }
 
@@ -206,6 +200,7 @@ func (m *Manager) apply(ev bus.Event) {
 func (m *Manager) applyLocked(ev bus.Event) *ContextRefused {
 	name := string(ev.Type) + "/" + string(ev.Subtype)
 
+	// refuse builds the refusal record for this event, naming the field that failed and why.
 	refuse := func(field, reason string) *ContextRefused {
 		return &ContextRefused{Event: name, Field: field, Reason: reason}
 	}
@@ -216,16 +211,13 @@ func (m *Manager) applyLocked(ev bus.Event) *ContextRefused {
 		if err := decodeData(ev.Data, &d); err != nil {
 			return refuse("data", err.Error())
 		}
-
 		it := m.find(SkillName(d.Name))
 		if it == nil {
 			return refuse("name", fmt.Sprintf("%q is not a skill in the table", d.Name))
 		}
-
 		if field, reason := checkAccess(d.Allow, d.Always); field != "" {
 			return refuse(field, reason)
 		}
-
 		it.state.Enabled = d.Enabled
 		it.state.Allow, it.state.Always = nonNil(d.Allow), nonNil(d.Always)
 	case ev.Type == bus.TypeSkill && ev.Subtype == "reload":
@@ -235,7 +227,6 @@ func (m *Manager) applyLocked(ev bus.Event) *ContextRefused {
 		if err := decodeData(ev.Data, &d); err != nil {
 			return refuse("data", err.Error())
 		}
-
 		i := m.connAt(d.Name)
 
 		switch {
@@ -246,7 +237,6 @@ func (m *Manager) applyLocked(ev bus.Event) *ContextRefused {
 		case badAgent(d.Allow) != "":
 			return refuse("allow", fmt.Sprintf("%q is not one of the 4 agents", badAgent(d.Allow)))
 		}
-
 		m.conns[i].Enabled, m.conns[i].Allow = d.Enabled, nonNil(d.Allow)
 	case ev.Type == bus.TypeMCP && ev.Subtype == "reload":
 		m.reloadConnections()
@@ -269,13 +259,11 @@ func checkAccess(allow, always []string) (field, reason string) {
 	if bad := badAgent(allow); bad != "" {
 		return "allow", fmt.Sprintf("%q is not one of the 4 agents", bad)
 	}
-
 	for _, a := range always {
 		if !slices.Contains(allow, a) {
 			return "always", fmt.Sprintf("%q is not in allow", a)
 		}
 	}
-
 	return "", ""
 }
 
@@ -284,14 +272,11 @@ func checkAccess(allow, always []string) (field, reason string) {
 func decodeData[T any](p bus.Payload, dst *T) error {
 	if v, ok := any(p).(*T); ok && v != nil {
 		*dst = *v
-
 		return nil
 	}
-
 	b, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-
 	return decodeStrict(b, dst)
 }

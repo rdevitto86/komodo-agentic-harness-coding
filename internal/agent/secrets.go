@@ -24,6 +24,7 @@ func diffLines(diff string) []diffLine {
 	file := ""
 	oldLeft, newLeft, newLine := 0, 0, 0
 
+	// Walk the diff by line: inside a hunk the header's counts mark content, outside it only headers.
 	for _, ln := range strings.Split(diff, "\n") {
 		if oldLeft > 0 || newLeft > 0 {
 			switch {

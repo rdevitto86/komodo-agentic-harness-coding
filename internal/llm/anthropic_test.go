@@ -32,7 +32,12 @@ type fakeAPI struct {
 
 // newFakeAPI starts the server; replies are consumed one per /v1/messages call.
 func newFakeAPI(t *testing.T, replies ...func(w http.ResponseWriter, n int)) *fakeAPI {
-	f := &fakeAPI{t: t, replies: replies, models: `{"data":[{"id":"claude-opus-5-5","max_input_tokens":1000000},{"id":"claude-sonnet-5","max_input_tokens":900000},{"id":"claude-haiku-5-5","max_input_tokens":800000}]}`}
+	f := &fakeAPI{
+		t:       t,
+		replies: replies,
+		models: `{"data":[{"id":"claude-opus-5-5","max_input_tokens":1000000},{"id":"claude-sonnet-5",` +
+			`"max_input_tokens":900000},{"id":"claude-haiku-5-5","max_input_tokens":800000}]}`,
+	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -79,65 +84,36 @@ func (f *fakeAPI) adapter() *Anthropic {
 func (f *fakeAPI) session(host ToolHost, gate Gate) Session {
 	dir := f.t.TempDir()
 	return Session{ID: "sid", Dir: dir, Agent: "builder", Link: AnthropicAPI, Model: "claude-sonnet-5-5",
-		Profile: CapacityProfile{Ctx: 1000000, Effort: "medium"}, Schema: json.RawMessage(resultSchema), Tools: host, Gate: gate,
-		Parts: [5]string{"tool text", "role text", "repo guidance", "standards", "the task"}}
+		Profile: CapacityProfile{Ctx: 1000000, Effort: "medium"},
+		Schema:  json.RawMessage(resultSchema),
+		Tools:   host,
+		Gate:    gate,
+		Parts:   [5]string{"tool text", "role text", "repo guidance", "standards", "the task"}}
 }
 
-// sse writes server-sent events.
-func sse(w http.ResponseWriter, events ...[2]string) {
-	w.Header().Set("content-type", "text/event-stream")
-	for _, e := range events {
-		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e[0], e[1])
+// memCache is an in-memory cache handle.
+type memCache struct {
+	mu   sync.Mutex
+	puts map[string][]byte
+}
+
+func (m *memCache) Key(in ...string) cache.Key { return cache.Key(strings.Join(in, "|")) }
+
+func (m *memCache) Get(ns cache.Namespace, k cache.Key) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.puts[string(ns)+"/"+string(k)]
+	return b, ok
+}
+
+func (m *memCache) Put(ns cache.Namespace, k cache.Key, d []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.puts == nil {
+		m.puts = map[string][]byte{}
 	}
-}
-
-func start(in int) [2]string {
-	return [2]string{"message_start", fmt.Sprintf(`{"type":"message_start","message":{"usage":{"input_tokens":%d,"output_tokens":1,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}}}`, in)}
-}
-
-func stop() [2]string { return [2]string{"message_stop", `{"type":"message_stop"}`} }
-
-// textReply is a streamed text-only reply.
-func textReply(text string) func(http.ResponseWriter, int) {
-	return func(w http.ResponseWriter, _ int) {
-		w.Header().Set("Anthropic-Ratelimit-Requests-Limit", "100")
-		w.Header().Set("Anthropic-Ratelimit-Requests-Remaining", "40")
-		w.Header().Set("Anthropic-Ratelimit-Requests-Reset", "2030-01-01T00:00:00Z")
-		half := len(text) / 2
-		sse(w, start(30),
-			[2]string{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
-			[2]string{"content_block_delta", mustJSON(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text[:half]}})},
-			[2]string{"content_block_delta", mustJSON(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text[half:]}})},
-			[2]string{"content_block_stop", `{"type":"content_block_stop","index":0}`},
-			[2]string{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}`},
-			stop())
-	}
-}
-
-// toolReply is a streamed reply that calls one tool with split arguments.
-func toolReply(id, name string) func(http.ResponseWriter, int) {
-	return func(w http.ResponseWriter, _ int) {
-		sse(w, start(30),
-			[2]string{"content_block_start", mustJSON(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{}}})},
-			[2]string{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}`},
-			[2]string{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"a.go\"}"}}`},
-			[2]string{"content_block_stop", `{"type":"content_block_stop","index":0}`},
-			[2]string{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}`},
-			stop())
-	}
-}
-
-func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
-
-// failWith replies with a status and JSON body.
-func failWith(status int, body string, hdr ...string) func(http.ResponseWriter, int) {
-	return func(w http.ResponseWriter, _ int) {
-		for i := 0; i+1 < len(hdr); i += 2 {
-			w.Header().Set(hdr[i], hdr[i+1])
-		}
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, body)
-	}
+	m.puts[string(ns)+"/"+string(k)] = d
+	return nil
 }
 
 func TestAnthropicSessionEndToEnd(t *testing.T) {
@@ -160,7 +136,8 @@ func TestAnthropicSessionEndToEnd(t *testing.T) {
 	if len(host.calls) != 1 || host.calls[0] != `read {"path":"a.go"}` {
 		t.Errorf("tool calls = %v", host.calls)
 	}
-	if r.Usage.TokensIn != 90 || r.Usage.CacheRead != 9 || r.Usage.CacheWrite != 12 || r.Usage.USD <= 0 || r.Usage.USDEquiv != 0 {
+	if r.Usage.TokensIn != 90 || r.Usage.CacheRead != 9 || r.Usage.CacheWrite != 12 || r.Usage.USD <= 0 ||
+		r.Usage.USDEquiv != 0 {
 		t.Errorf("usage = %+v", r.Usage)
 	}
 	var hr *Headroom
@@ -180,10 +157,12 @@ func TestAnthropicSessionEndToEnd(t *testing.T) {
 	b0 := f.bodies[0]
 	var model string
 	_ = json.Unmarshal(b0["model"], &model)
-	if model != "claude-sonnet-5-5" || string(b0["stream"]) != "true" || string(b0["cache_control"]) != `{"type":"ephemeral"}` {
+	if model != "claude-sonnet-5-5" || string(b0["stream"]) != "true" ||
+		string(b0["cache_control"]) != `{"type":"ephemeral"}` {
 		t.Errorf("body model %q stream %s cache_control %s", model, b0["stream"], b0["cache_control"])
 	}
-	if !strings.Contains(string(b0["output_config"]), `"effort":"medium"`) || strings.Contains(string(b0["output_config"]), "format") {
+	if !strings.Contains(string(b0["output_config"]), `"effort":"medium"`) ||
+		strings.Contains(string(b0["output_config"]), "format") {
 		t.Errorf("work-turn output_config = %s", b0["output_config"])
 	}
 	for _, k := range []string{"tool_choice", "thinking"} {
@@ -199,7 +178,8 @@ func TestAnthropicSessionEndToEnd(t *testing.T) {
 	var msgs []message
 	_ = json.Unmarshal(b0["messages"], &msgs)
 	blocks := msgs[0].Content
-	if len(blocks) != 5 || blocks[2].CacheControl == nil || blocks[2].CacheControl.TTL != "1h" || blocks[4].CacheControl == nil || blocks[4].CacheControl.TTL != "" {
+	if len(blocks) != 5 || blocks[2].CacheControl == nil || blocks[2].CacheControl.TTL != "1h" ||
+		blocks[4].CacheControl == nil || blocks[4].CacheControl.TTL != "" {
 		t.Errorf("markers = %+v", blocks)
 	}
 	if n := strings.Count(string(f.raw[0]), `"cache_control"`); n != 3 {
@@ -208,29 +188,6 @@ func TestAnthropicSessionEndToEnd(t *testing.T) {
 	if !strings.Contains(string(f.bodies[2]["output_config"]), `"format":{"type":"json_schema","schema":`) {
 		t.Errorf("final call output_config = %s", f.bodies[2]["output_config"])
 	}
-}
-
-// memCache is an in-memory cache handle.
-type memCache struct {
-	mu   sync.Mutex
-	puts map[string][]byte
-}
-
-func (m *memCache) Key(in ...string) cache.Key { return cache.Key(strings.Join(in, "|")) }
-func (m *memCache) Get(ns cache.Namespace, k cache.Key) ([]byte, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	b, ok := m.puts[string(ns)+"/"+string(k)]
-	return b, ok
-}
-func (m *memCache) Put(ns cache.Namespace, k cache.Key, d []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.puts == nil {
-		m.puts = map[string][]byte{}
-	}
-	m.puts[string(ns)+"/"+string(k)] = d
-	return nil
 }
 
 func TestAnthropicStoresMarkerPlanAndKeepsPrefixStable(t *testing.T) {
@@ -257,7 +214,8 @@ func TestAnthropicStoresMarkerPlanAndKeepsPrefixStable(t *testing.T) {
 	for k, raw := range mc.puts {
 		var plan cache.MarkerPlan
 		_ = json.Unmarshal(raw, &plan)
-		if !strings.HasPrefix(k, "prompt/") || strings.Join(plan.Fixed, ",") != "repo,brief" || !plan.Auto || len(plan.Layers) != 5 {
+		if !strings.HasPrefix(k, "prompt/") || strings.Join(plan.Fixed, ",") != "repo,brief" || !plan.Auto ||
+			len(plan.Layers) != 5 {
 			t.Errorf("plan %s = %+v", k, plan)
 		}
 	}
@@ -297,25 +255,40 @@ func TestAnthropicStartErrors(t *testing.T) {
 				t.Errorf("err = %v", err)
 			}
 		}},
-		{"spend 429", failWith(429, `{"error":{"type":"x","code":"enforced_spend_limit_reached"}}`), func(t *testing.T, err error) {
+		{"spend 429", failWith(
+			429,
+			`{"error":{"type":"x","code":"enforced_spend_limit_reached"}}`,
+		), func(t *testing.T, err error) {
 			var pl *ProviderLimit
 			if !errors.As(err, &pl) || pl.Cap != CapSpend || pl.Link != AnthropicAPI {
 				t.Errorf("err = %v", err)
 			}
 		}},
-		{"spend 400", failWith(400, `{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2030-01-01"}}`), func(t *testing.T, err error) {
+		{"spend 400", failWith(
+			400,
+			`{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage `+
+				`limits. You will regain access on 2030-01-01"}}`,
+		), func(t *testing.T, err error) {
 			var pl *ProviderLimit
 			if !errors.As(err, &pl) || pl.Cap != CapSpend {
 				t.Errorf("err = %v", err)
 			}
 		}},
-		{"other 400 stays final", failWith(400, `{"error":{"type":"invalid_request_error","message":"bad"}}`), func(t *testing.T, err error) {
+		{"other 400 stays final", failWith(
+			400,
+			`{"error":{"type":"invalid_request_error","message":"bad"}}`,
+		), func(t *testing.T, err error) {
 			var pl *ProviderLimit
 			if err == nil || errors.As(err, &pl) {
 				t.Errorf("err = %v", err)
 			}
 		}},
-		{"retry-after over a minute", failWith(429, `{"error":{"type":"rate_limit_error"}}`, "Retry-After", "3600"), func(t *testing.T, err error) {
+		{"retry-after over a minute", failWith(
+			429,
+			`{"error":{"type":"rate_limit_error"}}`,
+			"Retry-After",
+			"3600",
+		), func(t *testing.T, err error) {
 			var pl *ProviderLimit
 			if !errors.As(err, &pl) || pl.Cap != CapWindow || pl.ResetAt.Before(now.Add(55*time.Minute)) {
 				t.Errorf("err = %v limit %+v", err, pl)
@@ -348,8 +321,17 @@ func TestAnthropicKeyNeverInErrors(t *testing.T) {
 
 func TestAnthropicStreamDropRetriesFromStart(t *testing.T) {
 	drop := func(w http.ResponseWriter, _ int) {
-		sse(w, start(30), [2]string{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
-			[2]string{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PARTIAL-"}}`})
+		sse(w, start(
+			30,
+		),
+			[2]string{
+				"content_block_start",
+				`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			},
+			[2]string{
+				"content_block_delta",
+				`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PARTIAL-"}}`,
+			})
 	}
 	f := newFakeAPI(t, drop, textReply("clean"), textReply(`{"done":true}`))
 	st, err := f.adapter().Start(context.Background(), f.session(&fakeHost{}, nil))
@@ -400,7 +382,8 @@ func TestAnthropicProbeAndProfile(t *testing.T) {
 	if err != nil || !res.OK {
 		t.Fatalf("Probe = %+v %v", res, err)
 	}
-	if res.Models[Heavy] != "claude-opus-5-5" || res.Models[Standard] != "claude-sonnet-5" || res.Models[Light] != "claude-haiku-5-5" {
+	if res.Models[Heavy] != "claude-opus-5-5" || res.Models[Standard] != "claude-sonnet-5" ||
+		res.Models[Light] != "claude-haiku-5-5" {
 		t.Errorf("models = %v (a missing latest falls back to the prior model)", res.Models)
 	}
 	if res.Ctx != 800000 || res.CtxSource != "models_api" {
@@ -426,10 +409,114 @@ func TestAnthropicProbeAndProfile(t *testing.T) {
 }
 
 func TestAnthropicProbeRefusedKey(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, `{"error":{}}`, http.StatusUnauthorized) }))
+	srv := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) { http.Error(w, `{"error":{}}`, http.StatusUnauthorized) },
+		),
+	)
 	defer srv.Close()
 	a, _ := NewAnthropic(AnthropicOptions{BaseURL: srv.URL, Key: apiKey})
 	if _, err := a.Probe(context.Background()); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("401 = %v", err)
+	}
+}
+
+// textReply is a streamed text-only reply.
+func textReply(text string) func(http.ResponseWriter, int) {
+	return func(w http.ResponseWriter, _ int) {
+		w.Header().Set("Anthropic-Ratelimit-Requests-Limit", "100")
+		w.Header().Set("Anthropic-Ratelimit-Requests-Remaining", "40")
+		w.Header().Set("Anthropic-Ratelimit-Requests-Reset", "2030-01-01T00:00:00Z")
+		half := len(text) / 2
+		sse(w, start(30),
+			[2]string{
+				"content_block_start",
+				`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			},
+			[2]string{
+				"content_block_delta",
+				mustJSON(map[string]any{
+					"type":  "content_block_delta",
+					"index": 0,
+					"delta": map[string]any{"type": "text_delta", "text": text[:half]},
+				}),
+			},
+			[2]string{
+				"content_block_delta",
+				mustJSON(map[string]any{
+					"type":  "content_block_delta",
+					"index": 0,
+					"delta": map[string]any{"type": "text_delta", "text": text[half:]},
+				}),
+			},
+			[2]string{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			[2]string{
+				"message_delta",
+				`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}`,
+			},
+			stop())
+	}
+}
+
+// sse writes server-sent events.
+func sse(w http.ResponseWriter, events ...[2]string) {
+	w.Header().Set("content-type", "text/event-stream")
+	for _, e := range events {
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e[0], e[1])
+	}
+}
+
+func start(in int) [2]string {
+	return [2]string{
+		"message_start",
+		fmt.Sprintf(
+			`{"type":"message_start","message":{"usage":{"input_tokens":%d,"output_tokens":1,"cache_read_input_tokens":3,`+
+				`"cache_creation_input_tokens":4}}}`,
+			in,
+		),
+	}
+}
+
+func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func stop() [2]string { return [2]string{"message_stop", `{"type":"message_stop"}`} }
+
+// toolReply is a streamed reply that calls one tool with split arguments.
+func toolReply(id, name string) func(http.ResponseWriter, int) {
+	return func(w http.ResponseWriter, _ int) {
+		sse(w, start(30),
+			[2]string{
+				"content_block_start",
+				mustJSON(map[string]any{
+					"type":          "content_block_start",
+					"index":         0,
+					"content_block": map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{}},
+				}),
+			},
+			[2]string{
+				"content_block_delta",
+				`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}`,
+			},
+			[2]string{
+				"content_block_delta",
+				`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"a.go\"}"}}`,
+			},
+			[2]string{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			[2]string{
+				"message_delta",
+				`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}`,
+			},
+			stop())
+	}
+}
+
+// failWith replies with a status and JSON body.
+func failWith(status int, body string, hdr ...string) func(http.ResponseWriter, int) {
+	return func(w http.ResponseWriter, _ int) {
+		for i := 0; i+1 < len(hdr); i += 2 {
+			w.Header().Set(hdr[i], hdr[i+1])
+		}
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
 	}
 }

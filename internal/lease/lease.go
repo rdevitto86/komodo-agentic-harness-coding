@@ -35,6 +35,19 @@ type Lease struct {
 	RenewedAt time.Time  `json:"renewed_at"` // when the holder last renewed it
 }
 
+// Live reports whether a lease still has a working holder as seen from host.
+// A holder on this host is live while its process lives; one elsewhere, or one whose start time
+// is unknown, while its last renewal is young.
+func (l Lease) Live(now time.Time, host string, alive ProcessCheck) bool {
+	if l.State != StateHeld {
+		return false
+	}
+	if l.Host == host && !l.ProcStart.IsZero() {
+		return alive != nil && alive(l.PID, l.ProcStart)
+	}
+	return now.Sub(l.RenewedAt) <= LeaseExpiry
+}
+
 // ProcessCheck reports whether a process with this id exists and started at the given time.
 type ProcessCheck func(pid int, start time.Time) bool
 
@@ -42,14 +55,9 @@ type ProcessCheck func(pid int, start time.Time) bool
 type HeldError struct{ Holder Lease }
 
 const (
-	// age of the last renewal after which a lease on another host counts as dead
-	LeaseExpiry = 2 * time.Hour
-
-	// longest wait for a lock; the key lease.lock_timeout_s overrides it
-	DefaultLockTimeout = 30 * time.Second
-
-	// a lease's lock file is <group-id>.lock beside its record
-	LockSuffix = ".lock"
+	LeaseExpiry        = 2 * time.Hour    // age of the last renewal after which a lease on another host counts as dead
+	DefaultLockTimeout = 30 * time.Second // longest wait for a lock; the key lease.lock_timeout_s overrides it
+	LockSuffix         = ".lock"          // a lease's lock file is <group-id>.lock beside its record
 )
 
 var (
@@ -77,18 +85,3 @@ func (e HeldError) Error() string { return "group is leased by run " + e.Holder.
 
 // Unwrap lets errors.Is match ErrLeased.
 func (e HeldError) Unwrap() error { return ErrLeased }
-
-// Live reports whether a lease still has a working holder as seen from host.
-// A holder on this host is live while its process lives; one elsewhere, or one whose start time
-// is unknown, while its last renewal is young.
-func (l Lease) Live(now time.Time, host string, alive ProcessCheck) bool {
-	if l.State != StateHeld {
-		return false
-	}
-
-	if l.Host == host && !l.ProcStart.IsZero() {
-		return alive != nil && alive(l.PID, l.ProcStart)
-	}
-
-	return now.Sub(l.RenewedAt) <= LeaseExpiry
-}

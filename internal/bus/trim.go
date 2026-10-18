@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	defaultRetentionDays = 30       // defaultRetentionDays is the retention used when TrimOptions.RetentionDays is not positive.
-	tailBytes            = 64 << 10 // tailBytes is how much of the end of a log is read to find its last line's time.
+	// defaultRetentionDays is the retention used when TrimOptions.RetentionDays is not positive.
+	defaultRetentionDays = 30
+	// tailBytes is how much of the end of a log is read to find its last line's time.
+	tailBytes = 64 << 10
 )
 
 // sizeBound is the most bytes a repository's events folder may hold; the trim brings it to 80% of this.
@@ -118,7 +120,13 @@ func listLogs(dir string, open func(ID) bool) ([]logFile, error) {
 		if !ok {
 			last = st.ModTime()
 		}
-		out = append(out, logFile{path: p, run: run, size: st.Size(), last: last, protected: open == nil || open(run) || now().Sub(st.ModTime()) < recentWrite})
+		out = append(out, logFile{
+			path:      p,
+			run:       run,
+			size:      st.Size(),
+			last:      last,
+			protected: open == nil || open(run) || now().Sub(st.ModTime()) < recentWrite,
+		})
 	}
 	return out, nil
 }
@@ -185,7 +193,8 @@ func (b *memBus) dueLocked(key string) bool {
 	return true
 }
 
-// startTrimLocked marks dir, and the machine log, for a trim unless each was trimmed within the last day; the caller holds the lock.
+// startTrimLocked marks dir, and the machine log, for a trim unless each was trimmed within the last day; the caller holds
+// the lock.
 func (b *memBus) startTrimLocked(dir string) {
 	if b.closed {
 		return
@@ -259,7 +268,8 @@ func (b *memBus) forget(dir string, runs []ID) {
 	b.saveRuns(nil, gone)
 }
 
-// trimMachineLog rewrites engine.jsonl keeping the lines within retention and under the size bound, oldest lines dropped first.
+// trimMachineLog rewrites engine.jsonl keeping the lines within retention and under the size bound, oldest lines dropped
+// first.
 // It reads a snapshot outside the lock, then under the lock adds the lines appended since and swaps the file in.
 func (b *memBus) trimMachineLog() error {
 	path := filepath.Join(b.dir, machineLogName)
@@ -346,5 +356,6 @@ func (b *memBus) swapMachineLogLocked(path, tmp string, offset int64) error {
 	if err := dst.Close(); err != nil {
 		return err
 	}
+
 	return os.Rename(tmp, path)
 }

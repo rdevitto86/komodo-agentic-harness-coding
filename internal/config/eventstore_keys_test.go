@@ -8,7 +8,11 @@ import (
 // events.retention_days defaults to 30 and refuses 0; limits.usd_ceiling_per_day defaults to 0, meaning off.
 func TestEventStoreKeys(t *testing.T) {
 	m, _ := newTestManager(t)
-	for key, want := range map[string]int{"events.retention_days": 30, "limits.usd_ceiling_per_day": 0, "metrics.retention_days": 30} {
+	for key, want := range map[string]int{
+		"events.retention_days":      30,
+		"limits.usd_ceiling_per_day": 0,
+		"metrics.retention_days":     30,
+	} {
 		it, err := m.GetConfigItem(key)
 		if err != nil || it.Value != want {
 			t.Fatalf("%s = %+v, %v, want %d", key, it, err, want)

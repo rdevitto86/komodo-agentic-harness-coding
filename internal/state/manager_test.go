@@ -208,14 +208,16 @@ func TestNilRefusedAbsentDecoded(t *testing.T) {
 	wantInvalid(t, err, "state.test_review.findings")
 
 	writeRaw(t, statePath(root, "g2"), `{"v":1,"group":"g2","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"engine/r/1",
-	 "state":{"run":"r","group":"g2","stage":"build","fence":1,"config_hash":"`+testHash+`","counters":{"returns":0},"tasks":null}}`)
+	 "state":{"run":"r","group":"g2","stage":"build","fence":1,"config_hash":"`+testHash+`",
+	 "counters":{"returns":0},"tasks":null}}`)
 	r, err := m.Load("g2")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := r.State
 	if s.Tasks == nil || s.Owed == nil || s.Requests == nil || s.ScopeAdded == nil || s.Resume == nil ||
-		s.ActionsOpen == nil || s.Counters.Blocks == nil || s.TestReview.Findings == nil || s.TestReview.NotMet == nil || s.TestReview.Failed == nil {
+		s.ActionsOpen == nil || s.Counters.Blocks == nil || s.TestReview.Findings == nil || s.TestReview.NotMet == nil ||
+		s.TestReview.Failed == nil {
 		t.Fatalf("absent values must decode to empty: %+v", s)
 	}
 }
@@ -228,7 +230,8 @@ func TestRequestsTrimmed(t *testing.T) {
 		g.Requests = append(g.Requests, "req-"+string(rune('A'+i%26))+string(rune('a'+i/26)))
 	}
 	r, err := m.Create(testGroup, g)
-	if err != nil || len(r.State.Requests) != 64 || r.State.Requests[63] != g.Requests[69] || r.State.Requests[0] != g.Requests[6] {
+	if err != nil || len(r.State.Requests) != 64 || r.State.Requests[63] != g.Requests[69] ||
+		r.State.Requests[0] != g.Requests[6] {
 		t.Fatalf("Requests: %d %v", len(r.State.Requests), err)
 	}
 }
@@ -285,7 +288,8 @@ func TestReadChecks(t *testing.T) {
 	m, root := newMgr(t)
 	hdr := `"v":1,"group":"` + testGroup + `","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"engine/r/1"`
 	st := func(extra string) string {
-		return `{` + hdr + `,"state":{"run":"r","group":"` + testGroup + `","stage":"build","fence":1,"config_hash":"` + testHash + `"` + extra + `}}`
+		return `{` + hdr + `,"state":{"run":"r","group":"` + testGroup + `","stage":"build","fence":1,"config_hash":"` +
+			testHash + `"` + extra + `}}`
 	}
 	cases := map[string]string{
 		"unknown field": st(`,"surprise":1`),
@@ -412,7 +416,11 @@ func TestCountersReadsOnlyCounters(t *testing.T) {
 	if err != nil || c.Returns != 1 || c.Blocks == nil {
 		t.Fatalf("Counters: %+v %v", c, err)
 	}
-	writeRaw(t, statePath(root, "unreadable"), `{"v":1,"state":{"counters":{"returns":2,"blocks":null},"tasks":"not a list"}}`)
+	writeRaw(
+		t,
+		statePath(root, "unreadable"),
+		`{"v":1,"state":{"counters":{"returns":2,"blocks":null},"tasks":"not a list"}}`,
+	)
 	if c, err := m.Counters("unreadable"); !errors.Is(err, ErrCorrupt) || c.Returns != 0 {
 		t.Fatalf("unreadable: %+v %v", c, err)
 	}

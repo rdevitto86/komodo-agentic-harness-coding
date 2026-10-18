@@ -292,7 +292,8 @@ func TestLiveModelReachesNextSessionOnly(t *testing.T) {
 
 func TestOnlyAllowedPackagesImportConfig(t *testing.T) {
 	root := filepath.Join("..", "..")
-	allowed := []string{"internal/cli", "internal/engine", "cmd/komodo", "internal/config", "internal/integration"} // integration holds only cross-package tests
+	// integration holds only cross-package tests
+	allowed := []string{"internal/cli", "internal/engine", "cmd/komodo", "internal/config", "internal/integration"}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

@@ -13,8 +13,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
-// PauseGroups pauses each group a PauseOrder names after its current step; the Resource Manager
-// calls it.
+// PauseGroups pauses each group a PauseOrder names after its current step; the Resource Manager calls it.
 func (m *Manager) PauseGroups(ctx context.Context, o resource.PauseOrder) error {
 	gs, missing := m.groupsNamed(o.Groups)
 	now := m.clk.Now()
@@ -23,7 +22,6 @@ func (m *Manager) PauseGroups(ctx context.Context, o resource.PauseOrder) error 
 		g.mu.Lock()
 		st := g.snap
 		g.mu.Unlock()
-
 		if st.Stage != StageBuild && st.Stage != StageTestReview {
 			continue
 		}
@@ -34,7 +32,6 @@ func (m *Manager) PauseGroups(ctx context.Context, o resource.PauseOrder) error 
 			if m.otherLinkUsable(g, o.Link, now) {
 				continue
 			}
-
 			lp.Cause, lp.Until = "plan_window", o.Until.Add(time.Minute)
 		case "spend_ceiling":
 			lp.Cause = "spending"
@@ -59,18 +56,15 @@ func (m *Manager) PauseGroups(ctx context.Context, o resource.PauseOrder) error 
 	return nil
 }
 
-// NudgeGroups sends the token-cap nudge to the running agents of each named group; it changes no
-// state.
+// NudgeGroups sends the token-cap nudge to the running agents of each named group; it changes no state.
 func (m *Manager) NudgeGroups(ctx context.Context, o resource.NudgeOrder) error {
 	gs, missing := m.groupsNamed(o.Groups)
 	for _, g := range gs {
 		g.send(task.Command{Kind: task.CmdNudge})
 	}
-
 	if len(missing) > 0 {
 		return fmt.Errorf("the engine does not host group %s", strings.Join(missing, ", "))
 	}
-
 	return nil
 }
 
@@ -98,18 +92,12 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 		if ask != nil {
 			sa.Paths, sa.Reason = ask.Paths, ask.Reason
 		}
-
 		g.enqueue(Input{Kind: InScopeAnswer, Request: request, Data: mustJSON(sa)})
 	case st.Stage == StagePaused && st.Pause.Cause == "group_tokens" && approve:
 		if m.d.Resource != nil {
 			m.d.Resource.GrantGroupTokens(g.spec.ID)
 		}
-
-		g.enqueue(Input{
-			Kind:    InContinue,
-			Request: request,
-			Data:    mustJSON(ContinueData{Answer: answer}),
-		})
+		g.enqueue(Input{Kind: InContinue, Request: request, Data: mustJSON(ContinueData{Answer: answer})})
 	default:
 		return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an answer"}
 	}
@@ -117,8 +105,7 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	return nil
 }
 
-// Abandon drops a group for good: it is stopped, Done with outcome abandoned, discarded, and each
-// dependent blocks.
+// Abandon drops a group for good: it is stopped, Done with outcome abandoned, discarded, and each dependent blocks.
 func (m *Manager) Abandon(ctx context.Context, target string) (string, error) {
 	gs := m.byTarget(target)
 	if len(gs) == 0 {
@@ -140,19 +127,16 @@ func (m *Manager) Abandon(ctx context.Context, target string) (string, error) {
 	r := g.r
 
 	var dependents []*group
-
 	for id, s := range r.specs {
 		if !slices.Contains(s.Depends, g.spec.ID) {
 			continue
 		}
-
 		if d := r.groups[id]; d != nil && !r.finished[id] {
 			dependents = append(dependents, d)
 		} else if d == nil && !r.finished[id] {
 			r.depBlocked[id] = g.spec.Label
 		}
 	}
-
 	if p, ok := r.landing[g.spec.Epic]; ok {
 		p.Order = slices.DeleteFunc(slices.Clone(p.Order), func(l string) bool {
 			return l == g.spec.Label
@@ -166,7 +150,6 @@ func (m *Manager) Abandon(ctx context.Context, target string) (string, error) {
 	}
 
 	m.groupChanged(g)
-
 	return r.id, nil
 }
 
@@ -176,10 +159,8 @@ func (m *Manager) LandingPlan(group string) (LandingPlan, bool) {
 	if len(gs) == 0 {
 		return LandingPlan{}, false
 	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	return gs[0].r.landingFor(gs[0].spec.Epic)
 }
 
@@ -195,16 +176,13 @@ func (m *Manager) groupsNamed(names []string) ([]*group, []string) {
 
 	for _, n := range names {
 		var found *group
-
 		for _, g := range m.groups {
 			if g.spec.ID == n || g.spec.Label == n {
 				found = g
 			}
 		}
-
 		if found == nil {
 			missing = append(missing, n)
-
 			continue
 		}
 
@@ -214,20 +192,15 @@ func (m *Manager) groupsNamed(names []string) ([]*group, []string) {
 	return out, missing
 }
 
-// otherLinkUsable reports whether the group's current agent has another link in its chain that is
-// not limited.
+// otherLinkUsable reports whether the group's current agent has another link in its chain that is not limited.
 func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool {
 	if m.d.Chain == nil {
 		return false
 	}
 
 	var providers map[string]state.LinkRecord
-
 	if m.d.Machine != nil {
-		if rec, err := state.LoadMachine[state.ProvidersBody](
-			m.d.Machine,
-			state.KindProviders,
-		); err == nil {
+		if rec, err := state.LoadMachine[state.ProvidersBody](m.d.Machine, state.KindProviders); err == nil {
 			providers = rec.Body.Links
 		}
 	}
@@ -236,19 +209,16 @@ func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool 
 		if l == limited {
 			continue
 		}
-
 		if p, ok := providers[l]; ok && p.ResetAt.After(now) {
 			continue
 		}
-
 		return true
 	}
 
 	return false
 }
 
-// continueTarget handles a run-continue event: an answer, or a plain continue of every held group
-// the target names.
+// continueTarget handles a run-continue event: an answer, or a plain continue of every held group the target names.
 func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run string) error {
 	if rc.Answer != "" {
 		return m.Answer(rc.Target, rc.Answer == "approve", string(rc.Request))
@@ -264,7 +234,6 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 		}
 		m.mu.Unlock()
 	}
-
 	if len(gs) == 0 {
 		return &codeError{CodeUnknownTarget, "no live group or run named " + rc.Target}
 	}
@@ -273,15 +242,12 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 		g.mu.Lock()
 		st := g.snap
 		g.mu.Unlock()
-
 		if st.Stage != StagePaused && st.Stage != StageBlocked {
 			continue
 		}
-
 		if st.Stage == StageBlocked && st.Block.Reason == state.ReasonDependency {
 			if dep := m.undoneDep(g); dep != "" {
 				m.publishRefusal(g, string(rc.Request), "dependency "+dep+" is not Done")
-
 				continue
 			}
 		}
@@ -296,7 +262,6 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 func (m *Manager) undoneDep(g *group) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	return m.firstUnfinishedDep(g.r, g.spec.ID)
 }
 
@@ -326,17 +291,13 @@ func stopCommand(cause string) task.Command {
 	return task.Command{Kind: task.CmdStop, Cause: cause}
 }
 
-// sessionCrash is the session.end the dead-session rule saves for a session found live after a
-// crash.
+// sessionCrash is the session.end the dead-session rule saves for a session found live after a crash.
 func sessionCrash(agent, session, taskID string, stage Stage) SessionEndData {
 	d := SessionEndData{}
-
 	d.Agent, d.Task, d.Reason = agent, taskID, string(state.ReasonCrash)
-
 	d.Stage, d.Session = string(stage), busID(session)
 	if agent == "builder" && taskID != "" {
 		d.Unfinished = &state.UnfinishedEdits{Task: taskID, Files: []string{}}
 	}
-
 	return d
 }

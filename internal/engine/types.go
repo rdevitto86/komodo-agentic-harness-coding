@@ -29,55 +29,33 @@ type InputKind string
 
 // The input kinds.
 const (
-	// the group is ready and a pool slot is free
-	InGroupStart InputKind = "group.start"
-	// data: LeaseGrant
-	InLeaseGranted InputKind = "lease.granted"
-	// the Task Manager is running and its sandbox is wired
-	InReady InputKind = "ready"
-	// data: StageDoneData
-	InStageDone InputKind = "stage.done"
-	// data: ResultFail
-	InResultFail InputKind = "result.fail"
-	// data: SessionStartData
-	InSessionStart InputKind = "session.start"
-	// data: SessionEndData
-	InSessionEnd InputKind = "session.end"
-	// data: bus.TaskDone
-	InTaskDone InputKind = "task.done"
-	// data: bus.TaskDone
-	InGateFail InputKind = "gate.fail"
-	// data: ScopeAsk
-	InScopeAsk InputKind = "scope.ask"
-	// data: ScopeAnswer
-	InScopeAnswer InputKind = "scope.answer"
-	// data: task.TimerRequest
-	InTimerExtend InputKind = "timer.extend"
-	// data: TimerDue
-	InTimerDue InputKind = "timer.due"
-	// data: ContinueData
-	InContinue  InputKind = "continue"
-	InLeaseLost InputKind = "lease.lost"
-	// data: FaultData
-	InFault InputKind = "fault"
-	// the Task Manager finished CloseTaskGroup
-	InGroupClosed InputKind = "group.closed"
-	// the panic-catching helper
-	InGroupCrash InputKind = "group.crash"
-	// data: LimitPause
-	InLimitPause InputKind = "limit.pause"
-	// data: AbandonData
-	InAbandon InputKind = "abandon"
-	// data: ProgressData; the live session handles of a state report
-	InProgress InputKind = "progress"
-	// data: FactData; a fact that is published and changes nothing
-	InFact InputKind = "fact"
-	// a silent Task Manager was restarted; counts as one retry
-	InLoopRestart InputKind = "loop.restart"
+	InGroupStart   InputKind = "group.start"   // the group is ready and a pool slot is free
+	InLeaseGranted InputKind = "lease.granted" // data: LeaseGrant
+	InReady        InputKind = "ready"         // the Task Manager is running and its sandbox is wired
+	InStageDone    InputKind = "stage.done"    // data: StageDoneData
+	InResultFail   InputKind = "result.fail"   // data: ResultFail
+	InSessionStart InputKind = "session.start" // data: SessionStartData
+	InSessionEnd   InputKind = "session.end"   // data: SessionEndData
+	InTaskDone     InputKind = "task.done"     // data: bus.TaskDone
+	InGateFail     InputKind = "gate.fail"     // data: bus.TaskDone
+	InScopeAsk     InputKind = "scope.ask"     // data: ScopeAsk
+	InScopeAnswer  InputKind = "scope.answer"  // data: ScopeAnswer
+	InTimerExtend  InputKind = "timer.extend"  // data: task.TimerRequest
+	InTimerDue     InputKind = "timer.due"     // data: TimerDue
+	InContinue     InputKind = "continue"      // data: ContinueData
+	InLeaseLost    InputKind = "lease.lost"
+	InFault        InputKind = "fault"        // data: FaultData
+	InGroupClosed  InputKind = "group.closed" // the Task Manager finished CloseTaskGroup
+	InGroupCrash   InputKind = "group.crash"  // the panic-catching helper
+	InLimitPause   InputKind = "limit.pause"  // data: LimitPause
+	InAbandon      InputKind = "abandon"      // data: AbandonData
+	InProgress     InputKind = "progress"     // data: ProgressData; the live session handles of a state report
+	InFact         InputKind = "fact"         // data: FactData; a fact that is published and changes nothing
+	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; counts as one retry
 )
 
-// Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a
-// timer, a lease call or a PauseGroups call.
+// Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a
+// PauseGroups call.
 type Input struct {
 	Kind  InputKind `json:"kind"`
 	Group string    `json:"group"`
@@ -92,8 +70,7 @@ type Input struct {
 // OrderKind names an instruction.
 type OrderKind string
 
-// The order kinds; the last three are performed by the Runtime Manager itself and never reach a
-// Task Manager.
+// The order kinds; the last three are performed by the Runtime Manager itself and never reach a Task Manager.
 const (
 	OrderStartGroup OrderKind = "start_group" // create the Task Manager
 	OrderEnterStage OrderKind = "enter_stage" // run a stage, resuming the listed sessions
@@ -143,14 +120,10 @@ type (
 	}
 	// ResultFail is the data of result.fail.
 	ResultFail struct {
-		// the failing items, as findings and test names
-		Items []string `json:"items"`
-		// the tree hash that was tested
-		Tree string `json:"tree,omitempty"`
-		// a test that passed at the base fails
-		Regression bool `json:"regression,omitempty"`
-		// the exact output the builder receives
-		Findings string `json:"findings,omitempty"`
+		Items      []string `json:"items"`                // the failing items, as findings and test names
+		Tree       string   `json:"tree,omitempty"`       // the tree hash that was tested
+		Regression bool     `json:"regression,omitempty"` // a test that passed at the base fails
+		Findings   string   `json:"findings,omitempty"`   // the exact output the builder receives
 	}
 	// SessionStartData is the data of session.start.
 	SessionStartData struct {
@@ -162,8 +135,8 @@ type (
 		bus.SessionEnd
 		Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"`
 	}
-	// ScopeAsk is the data of scope.ask; Deny is set by the Runtime Manager when a path is
-	// protected or in another live group's files.
+	// ScopeAsk is the data of scope.ask; Deny is set by the Runtime Manager when a path is protected or in another live
+	// group's files.
 	ScopeAsk struct {
 		Task   string   `json:"task"`
 		Paths  []string `json:"paths"`
@@ -243,21 +216,16 @@ type GroupSpec struct {
 
 // Candidate is a ready group with the three facts the tie-break rules read.
 type Candidate struct {
-	Spec GroupSpec
-	// the sum of task counts along the heaviest path of unfinished groups starting here
-	ChainWeight int
-	// groups whose only unfinished dependency is this group
-	Unblocks int
+	Spec        GroupSpec
+	ChainWeight int // the sum of task counts along the heaviest path of unfinished groups starting here
+	Unblocks    int // groups whose only unfinished dependency is this group
 }
 
 // LandingPlan is what the Runtime Manager hands the Commit Handler for one epic.
 type LandingPlan struct {
-	// the epic label, such as ep-1
-	Epic string `json:"epic"`
-	// the epic's shared branch, komodo/ep-1
-	Branch string `json:"branch"`
-	// the epic's group labels in the run, every group after its dependencies
-	Order []string `json:"order"`
+	Epic   string   `json:"epic"`   // the epic label, such as ep-1
+	Branch string   `json:"branch"` // the epic's shared branch, komodo/ep-1
+	Order  []string `json:"order"`  // the epic's group labels in the run, every group after its dependencies
 }
 
 // Limits are the bounds Next enforces, read once at run start through the Configuration Manager.
@@ -277,32 +245,19 @@ type Limits struct {
 
 // Timings and bounds of the engine.
 const (
-	// capacity of a group's input channel
-	GroupBuffer = 256
-	// how often a live group renews its lease
-	LeaseRenewEvery = 5 * time.Minute
-	// time a stop allows each session before the terminate signal
-	AgentStopGrace = 30 * time.Second
-	// from the stop's start to the whole-tree kill
-	ShutdownDeadline = 90 * time.Second
-	// after a halving, further signals are ignored for this long
-	PoolHalveCooldown = 5 * time.Minute
-	// blocks for one reason before a group is flagged needs redesign
-	BlocksBeforeRedesign = 3
-	// how long the CLI retries the socket after starting the engine
-	EngineStartWait = 5 * time.Second
-	// capacity of a Task Manager's command channel and reply channel
-	CommandBuffer = 16
-	// how often each core loop beats to the Runtime Manager
-	HeartbeatEvery = 5 * time.Second
-	// silence after which a core loop is stopped and restarted
-	LoopSilentFor = 60 * time.Second
-	// how often the engine rewrites engine.beat
-	EngineBeatEvery = 5 * time.Second
-	// beat file age after which the CLI treats an unanswering engine as hung
-	HungBeatAge = 30 * time.Second
-	// how long the CLI waits for a socket reply before it checks the beat file
-	HungReplyWait = 10 * time.Second
+	GroupBuffer          = 256              // capacity of a group's input channel
+	LeaseRenewEvery      = 5 * time.Minute  // how often a live group renews its lease
+	AgentStopGrace       = 30 * time.Second // time a stop allows each session before the terminate signal
+	ShutdownDeadline     = 90 * time.Second // from the stop's start to the whole-tree kill
+	PoolHalveCooldown    = 5 * time.Minute  // after a halving, further signals are ignored for this long
+	BlocksBeforeRedesign = 3                // blocks for one reason before a group is flagged needs redesign
+	EngineStartWait      = 5 * time.Second  // how long the CLI retries the socket after starting the engine
+	CommandBuffer        = 16               // capacity of a Task Manager's command channel and reply channel
+	HeartbeatEvery       = 5 * time.Second  // how often each core loop beats to the Runtime Manager
+	LoopSilentFor        = 60 * time.Second // silence after which a core loop is stopped and restarted
+	EngineBeatEvery      = 5 * time.Second  // how often the engine rewrites engine.beat
+	HungBeatAge          = 30 * time.Second // beat file age after which the CLI treats an unanswering engine as hung
+	HungReplyWait        = 10 * time.Second // how long the CLI waits for a socket reply before it checks the beat file
 )
 
 // SocketName is the control socket's file name inside the state folder.

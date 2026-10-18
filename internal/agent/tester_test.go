@@ -67,7 +67,10 @@ func TestTesterRerun(t *testing.T) {
 	}
 	for _, c := range cases {
 		var ran []string
-		got, out, err := NewTester().Rerun(context.Background(), scripted(c.exits, &ran), Item{ID: "ac-1", Cmd: "go test ./x"})
+		got, out, err := NewTester().Rerun(context.Background(), scripted(c.exits, &ran), Item{
+			ID:  "ac-1",
+			Cmd: "go test ./x",
+		})
 		if err != nil || got != c.want || len(ran) != FlakeReruns || ran[0] != "go test ./x" || out != "out1" {
 			t.Errorf("%s: %s %q %v ran %v", c.name, got, out, err, ran)
 		}
@@ -81,7 +84,11 @@ func TestTesterRerunNoCommandAndRunnerError(t *testing.T) {
 		t.Fatalf("no command: %s %v ran %v", got, err, ran)
 	}
 	boom := errors.New("cannot start")
-	_, _, err = NewTester().Rerun(context.Background(), func(context.Context, string) (int, string, error) { return 0, "", boom }, Item{ID: "ac-3", Cmd: "x"})
+	_, _, err = NewTester().Rerun(
+		context.Background(),
+		func(context.Context, string) (int, string, error) { return 0, "", boom },
+		Item{ID: "ac-3", Cmd: "x"},
+	)
 	if !errors.Is(err, boom) {
 		t.Fatalf("runner error = %v", err)
 	}
@@ -120,7 +127,8 @@ func TestTesterAcceptResult(t *testing.T) {
 }
 
 func TestParseTesterResult(t *testing.T) {
-	raw := `{"items": [{"item": "ac-1", "pass": true, "evidence": "ok"}], "tasks": [{"task": "t", "confirmation": "confirmed"}]}`
+	raw := `{"items": [{"item": "ac-1", "pass": true, "evidence": "ok"}], "tasks": [{"task": "t", "confirmation": ` +
+		`"confirmed"}]}`
 	if r, err := ParseTesterResult([]byte(raw)); err != nil || len(r.Items) != 1 || r.Tasks[0].Confirmation != Confirmed {
 		t.Fatalf("parse: %+v %v", r, err)
 	}

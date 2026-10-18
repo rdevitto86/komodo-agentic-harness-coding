@@ -10,8 +10,9 @@ sections:
   - "Banned"
 ---
 ## Where
-- **Always** comment every function, public or private, in at most 2 lines.
+- **Always** comment every function, public or private, in at most 3 lines.
 - **Always** comment a type, constant, variable or field in at most 1 line.
+- **Always** put a one-line comment above a loop of 16 lines or more, and above a named function literal of 5 lines or more.
 
 ## Shape
 - **Always** say what the code does; never restate the name.

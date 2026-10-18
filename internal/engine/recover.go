@@ -9,8 +9,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// recoverInit continues a group from its saved state: lease, open orders, dead sessions and timers.
-// It reports whether the loop should run.
+// recoverInit continues a group from its saved state: lease, open orders, dead sessions and timers. It reports whether the
+// loop should run.
 func (g *group) recoverInit(rec state.Record) bool {
 	g.st, g.rev, g.created = rec.State, rec.Header.Rev, true
 	g.mu.Lock()
@@ -20,7 +20,6 @@ func (g *group) recoverInit(rec state.Record) bool {
 		g.epochs[workingOf(g.st)] = g.st.Epoch
 	}
 	g.mu.Unlock()
-
 	if g.st.Stage == StageDone {
 		return false
 	}
@@ -39,18 +38,15 @@ func (g *group) recoverInit(rec state.Record) bool {
 		} else {
 			g.m.leaseRefused(g, err)
 		}
-
 		return false
 	}
 
 	g.l = l
 	ns := cloneState(g.st)
-
 	ns.Run, ns.Fence, ns.LastEventAt = g.r.id, uint64(l.Fence), g.now()
 	if err := g.save(ns); err != nil {
 		g.m.report(g, fmt.Errorf("save recovered %s: %w", g.spec.Label, err))
 		_ = g.m.d.Leases.Release(g.ctx, l)
-
 		return false
 	}
 
@@ -81,29 +77,24 @@ func (g *group) endLost() {
 	if res.Refused || g.save(res.State) != nil {
 		return
 	}
-
 	g.publish(res.Emit)
 	g.after()
 }
 
-// dropOpenOrders marks every open order done without running it; a held group has nothing running
-// to order.
+// dropOpenOrders marks every open order done without running it; a held group has nothing running to order.
 func (g *group) dropOpenOrders() {
 	ns := cloneState(g.st)
-
 	ns.ActionsOpen = []state.OpenAction{}
 	if err := g.save(ns); err != nil {
 		g.m.report(g, fmt.Errorf("clear open orders of %s: %w", g.spec.Label, err))
 	}
 }
 
-// resumeWork applies the dead-session rule and reruns the open orders of a group in a working
-// stage.
+// resumeWork applies the dead-session rule and reruns the open orders of a group in a working stage.
 func (g *group) resumeWork() {
 	dead := g.deadSessions()
 	if len(dead) > 0 {
 		ns := cloneState(g.st)
-
 		ns.ActionsOpen = slices.DeleteFunc(ns.ActionsOpen, func(a state.OpenAction) bool {
 			return a.Kind == string(OrderEnterStage) || a.Kind == string(OrderStartGroup)
 		})
@@ -120,7 +111,6 @@ func (g *group) resumeWork() {
 	for _, a := range g.st.ActionsOpen {
 		open = append(open, rawOrder(a))
 	}
-
 	if !slices.ContainsFunc(open, func(o Order) bool {
 		return o.Kind == OrderEnterStage || o.Kind == OrderStartGroup
 	}) &&
@@ -172,6 +162,5 @@ func workingOf(s State) Stage {
 	if s.Stage == StagePaused || s.Stage == StageBlocked {
 		return s.Prior
 	}
-
 	return s.Stage
 }

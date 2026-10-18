@@ -127,7 +127,7 @@ func originURL(path string) string {
 
 	defer func() { _ = f.Close() }()
 	in := false
-	sc := bufio.NewScanner(f) // TODO - linter error "bufio.Scanner "sc" is used in Scan loop at line 129 without final check of sc.Err()"
+	sc := bufio.NewScanner(f)
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -138,6 +138,9 @@ func originURL(path string) string {
 		if k, v, ok := strings.Cut(line, "="); ok && in && strings.TrimSpace(k) == "url" {
 			return strings.TrimSpace(v)
 		}
+	}
+	if sc.Err() != nil {
+		return ""
 	}
 	return ""
 }

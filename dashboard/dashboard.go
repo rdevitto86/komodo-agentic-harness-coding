@@ -1,6 +1,6 @@
 // Package dashboard is a proof of concept for a local browser view of a run.
-// One server-sent event stream patches the tiles, group cards, stage diagram, event feed and
-// meters; the embedded Datastar library applies it.
+// One server-sent event stream patches the tiles, group cards, stage diagram, event feed and meters; the embedded Datastar
+// library applies it.
 package dashboard
 
 import (
@@ -51,7 +51,6 @@ func New(token, viewsPath string, usage bool) *Server {
 	s.mux.HandleFunc("GET /events", s.guard(s.events))
 	s.mux.HandleFunc("POST /groups/{group}/resume", s.guard(s.resume))
 	s.mux.HandleFunc("POST /agents/{agent}/model", s.guard(s.setModel))
-
 	return s
 }
 
@@ -62,7 +61,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.Serve
 func (s *Server) Actions() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	return append([]string(nil), s.actions...)
 }
 
@@ -72,10 +70,8 @@ func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
 		host, _, _ := net.SplitHostPort(r.Host)
 		if host != "127.0.0.1" || r.URL.Query().Get("t") != s.token {
 			http.Error(w, "refused", http.StatusForbidden)
-
 			return
 		}
-
 		h(w, r)
 	}
 }
@@ -90,7 +86,6 @@ func (s *Server) page(w http.ResponseWriter, _ *http.Request) {
 		"Models":  Models,
 		"Actions": len(s.Actions()),
 	}
-
 	if err := pageTmpl.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -104,11 +99,9 @@ func (s *Server) readView() (View, error) {
 	if err != nil {
 		return v, fmt.Errorf("read dashboard view: %w", err)
 	}
-
 	if err := json.Unmarshal(data, &v); err != nil {
 		return v, fmt.Errorf("decode dashboard view: %w", err)
 	}
-
 	if !s.usage {
 		for i := range v.Groups {
 			ss := &v.Groups[i].Sessions
@@ -135,7 +128,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		v, err := s.readView()
-
 		frame, _ := json.Marshal(v)
 		if err != nil {
 			frame = []byte(err.Error())
@@ -149,11 +141,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			} else if werr = patch(w, page, ""); werr == nil {
 				werr = patch(w, svg, "svg")
 			}
-
 			if werr != nil {
 				return
 			}
-
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -167,6 +157,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// resume records a resume request for the group; the real verb call waits on the engine.
+func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
+	s.record(w, "resume "+r.PathValue("group"))
 }
 
 // record appends an action and answers with a patch of the action log.
@@ -187,36 +182,24 @@ func (s *Server) record(w http.ResponseWriter, action string) {
 	)
 }
 
-// resume records a resume request for the group; the real verb call waits on the engine.
-func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
-	s.record(w, "resume "+r.PathValue("group"))
-}
-
 // setModel records a model change for the agent in the path, read from the page's signals.
 // Applying it waits on the design.
 func (s *Server) setModel(w http.ResponseWriter, r *http.Request) {
 	agent := r.PathValue("agent")
 	if !slices.Contains(Agents, agent) {
 		http.Error(w, "unknown agent "+agent, http.StatusNotFound)
-
 		return
 	}
 
 	var signals map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(
-		w,
-		r.Body,
-		maxSignals,
-	)).Decode(&signals); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSignals)).Decode(&signals); err != nil {
 		http.Error(w, fmt.Sprintf("decode signals: %v", err), http.StatusBadRequest)
-
 		return
 	}
 
 	model, _ := signals[agent].(string)
 	if !slices.Contains(Models, model) {
 		http.Error(w, "unknown model "+model, http.StatusBadRequest)
-
 		return
 	}
 
@@ -230,9 +213,7 @@ func Serve(s *Server, port int) error {
 	if err != nil {
 		return fmt.Errorf("listen on loopback: %w", err)
 	}
-
 	fmt.Printf("http://%s/?t=%s\n", ln.Addr(), s.token)
-
 	return http.Serve(ln, s)
 }
 
@@ -241,7 +222,6 @@ func Serve(s *Server, port int) error {
 func patch(w io.Writer, html, namespace string) error {
 	var b strings.Builder
 	b.WriteString("event: datastar-patch-elements\n")
-
 	if namespace != "" {
 		b.WriteString("data: namespace " + namespace + "\n")
 	}
@@ -252,12 +232,10 @@ func patch(w io.Writer, html, namespace string) error {
 
 	b.WriteString("\n")
 	_, err := io.WriteString(w, b.String())
-
 	return err
 }
 
-// render returns the HTML parts and the diagram parts of the view, or the first read or template
-// error.
+// render returns the HTML parts and the diagram parts of the view, or the first read or template error.
 func render(v View, readErr error, usage bool) (page, svg string, err error) {
 	if readErr != nil {
 		return "", "", readErr
@@ -276,7 +254,6 @@ func render(v View, readErr error, usage bool) (page, svg string, err error) {
 		if err := viewTmpl.ExecuteTemplate(&pb, name, m); err != nil {
 			return "", "", fmt.Errorf("render %s: %w", name, err)
 		}
-
 		pb.WriteByte('\n')
 	}
 

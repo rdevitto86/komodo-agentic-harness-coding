@@ -150,7 +150,8 @@ func TestPushRejectedLeavesRemote(t *testing.T) {
 	}
 }
 
-// Across a whole workflow no push holds a force flag, a plus refspec or an empty-source refspec; only a fetch into refs/remotes/ may carry a plus.
+// Across a whole workflow no push holds a force flag, a plus refspec or an empty-source refspec; only a fetch into
+// refs/remotes/ may carry a plus.
 func TestNoForceInAnyArgument(t *testing.T) {
 	w := newWorld(t)
 	g := w.newGroup("tg-1.1")
@@ -171,8 +172,10 @@ func TestNoForceInAnyArgument(t *testing.T) {
 	}
 	for _, a := range w.traced {
 		for i, s := range a {
-			plusOK := subcommand(a) == "fetch" && strings.HasPrefix(s, "+refs/heads/") && strings.Contains(s, ":refs/remotes/")
-			bad := s == "-f" || strings.HasPrefix(s, "--force") || (strings.HasPrefix(s, "+") && !plusOK) || strings.HasPrefix(s, ":") || s == "--delete" || s == "-D"
+			plusOK := subcommand(a) == "fetch" && strings.HasPrefix(s, "+refs/heads/") &&
+				strings.Contains(s, ":refs/remotes/")
+			bad := s == "-f" || strings.HasPrefix(s, "--force") || (strings.HasPrefix(s, "+") && !plusOK) ||
+				strings.HasPrefix(s, ":") || s == "--delete" || s == "-D"
 			if bad {
 				t.Fatalf("argument %d of %v forbids force or delete", i, a)
 			}
@@ -183,7 +186,13 @@ func TestNoForceInAnyArgument(t *testing.T) {
 // The wrapper itself refuses an argument list that would force or delete.
 func TestRunRefusesForceArguments(t *testing.T) {
 	w := newWorld(t)
-	for _, a := range [][]string{{"push", "--force"}, {"push", "-f"}, {"push", "--force-with-lease"}, {"push", "origin", "+refs/heads/x:refs/heads/x"}, {"push", "origin", ":refs/heads/x"}} {
+	for _, a := range [][]string{
+		{"push", "--force"},
+		{"push", "-f"},
+		{"push", "--force-with-lease"},
+		{"push", "origin", "+refs/heads/x:refs/heads/x"},
+		{"push", "origin", ":refs/heads/x"},
+	} {
 		if err := checkArgs(a); !errors.Is(err, ErrForce) {
 			t.Fatalf("%v: err = %v, want ErrForce", a, err)
 		}
@@ -200,7 +209,11 @@ func TestPointerFileIgnored(t *testing.T) {
 	g := w.newGroup("tg-1.1")
 	bait := filepath.Join(w.root, "bait.git")
 	git(t, w.root, "init", "-b", "main", bait)
-	if err := os.WriteFile(filepath.Join(g.wt, ".git"), []byte("gitdir: "+filepath.Join(bait, ".git")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(g.wt, ".git"),
+		[]byte("gitdir: "+filepath.Join(bait, ".git")+"\n"),
+		0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 	w.work(g, "a.txt", "a")
@@ -373,7 +386,13 @@ func TestAddWorktreeIdempotent(t *testing.T) {
 	if err := w.git.AddWorktree(w.ctx, w.clone, g.wt, g.branch, "origin/komodo/ep-1"); err != nil {
 		t.Fatalf("repeat add: %v", err)
 	}
-	if err := w.git.AddWorktree(w.ctx, w.clone, filepath.Join(w.root, "bad"), "main", "origin/main"); !errors.Is(err, ErrCriticalRef) {
+	if err := w.git.AddWorktree(
+		w.ctx,
+		w.clone,
+		filepath.Join(w.root, "bad"),
+		"main",
+		"origin/main",
+	); !errors.Is(err, ErrCriticalRef) {
 		t.Fatalf("err = %v, want ErrCriticalRef", err)
 	}
 }

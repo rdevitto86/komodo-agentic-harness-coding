@@ -36,5 +36,6 @@ func VerifyFinding(f Finding, head, diff LineSource) (in string, ok bool) {
 			return src.name, true
 		}
 	}
+
 	return "", false
 }

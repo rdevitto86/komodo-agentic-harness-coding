@@ -12,7 +12,12 @@ func TestParseCoverage(t *testing.T) {
 		{"javascript", "tests ok\n{\"total\":{\"lines\":{\"total\":10,\"covered\":9,\"pct\":90}}}\n", 90},
 		{"typescript", "{\"total\":{\"lines\":{\"pct\":77.5}}}", 77.5},
 		{"rust", "{\"data\":[{\"totals\":{\"lines\":{\"percent\":64.5}}}],\"type\":\"llvm.coverage.json.export\"}\n", 64.5},
-		{"java", "<report><counter type=\"LINE\" missed=\"5\" covered=\"15\"/><package><counter type=\"LINE\" missed=\"1\" covered=\"1\"/></package><counter type=\"LINE\" missed=\"10\" covered=\"90\"/></report>", 90},
+		{
+			"java",
+			"<report><counter type=\"LINE\" missed=\"5\" covered=\"15\"/><package><counter type=\"LINE\" missed=\"1\" " +
+				"covered=\"1\"/></package><counter type=\"LINE\" missed=\"10\" covered=\"90\"/></report>",
+			90,
+		},
 		{"kotlin", "<counter type=\"LINE\" missed=\"0\" covered=\"4\"/>", 100},
 	}
 	for _, c := range cases {

@@ -72,16 +72,6 @@ func (f *fakeStream) stopped() []llm.StopLevel {
 	return append([]llm.StopLevel(nil), f.stops...)
 }
 
-// resultEvent is the final stream event with a small output.
-func resultEvent(out string) llm.StreamEvent {
-	return llm.StreamEvent{Kind: llm.KindResult, Result: &llm.Result{Output: json.RawMessage(out)}}
-}
-
-// fastHooks ticks every few milliseconds and leaves the rest empty.
-func fastHooks() Hooks {
-	return Hooks{Every: 5 * time.Millisecond, TermAfter: 20 * time.Millisecond, KillAfter: 20 * time.Millisecond}
-}
-
 func TestSuperviseReturnsTheResultAsDone(t *testing.T) {
 	s := newFakeStream()
 	s.ev <- llm.StreamEvent{Kind: llm.KindOutput, Raw: json.RawMessage(`{"a":1}`)}
@@ -89,7 +79,13 @@ func TestSuperviseReturnsTheResultAsDone(t *testing.T) {
 	var raw []string
 	h := fastHooks()
 	h.Raw = func(b []byte) { raw = append(raw, string(b)) }
-	res, reason, err := SuperviseWith(context.Background(), s, SessionLimits{Wall: time.Hour, Idle: time.Hour}, &Clocks{Started: time.Now(), LastLine: time.Now()}, h)
+	res, reason, err := SuperviseWith(
+		context.Background(),
+		s,
+		SessionLimits{Wall: time.Hour, Idle: time.Hour},
+		&Clocks{Started: time.Now(), LastLine: time.Now()},
+		h,
+	)
 	if err != nil || reason != state.ReasonDone || string(res.Output) != `{"status":"done"}` {
 		t.Fatalf("got %s, %s, %v", res.Output, reason, err)
 	}
@@ -103,7 +99,10 @@ func TestSuperviseAsksForTimeAtTheWarningAndInjectsTheNewLimit(t *testing.T) {
 		name  string
 		extra time.Duration
 		want  string
-	}{{"grant", 10 * time.Minute, "Finish the current task and stop; 21 minutes remain"}, {"zero grant", 0, "Finish the current task and stop; 11 minutes remain"}} {
+	}{
+		{"grant", 10 * time.Minute, "Finish the current task and stop; 21 minutes remain"},
+		{"zero grant", 0, "Finish the current task and stop; 11 minutes remain"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newFakeStream()
 			var asked []time.Duration
@@ -122,7 +121,13 @@ func TestSuperviseAsksForTimeAtTheWarningAndInjectsTheNewLimit(t *testing.T) {
 				}
 				s.ev <- resultEvent(`{}`)
 			}()
-			_, reason, err := SuperviseWith(context.Background(), s, SessionLimits{Wall: time.Hour, Idle: 2 * time.Hour}, clk, h)
+			_, reason, err := SuperviseWith(
+				context.Background(),
+				s,
+				SessionLimits{Wall: time.Hour, Idle: 2 * time.Hour},
+				clk,
+				h,
+			)
 			if err != nil || reason != state.ReasonDone {
 				t.Fatalf("got %s, %v", reason, err)
 			}
@@ -151,7 +156,13 @@ func TestSuperviseNudgesASilentSessionOnceThenClimbsTheLadder(t *testing.T) {
 	}
 	now := time.Now()
 	clk := &Clocks{Started: now, LastLine: now, Warned: true}
-	_, reason, err := SuperviseWith(context.Background(), s, SessionLimits{Wall: time.Hour, Idle: 10 * time.Millisecond, Grace: 20 * time.Millisecond}, clk, fastHooks())
+	_, reason, err := SuperviseWith(
+		context.Background(),
+		s,
+		SessionLimits{Wall: time.Hour, Idle: 10 * time.Millisecond, Grace: 20 * time.Millisecond},
+		clk,
+		fastHooks(),
+	)
 	if err != nil || reason != state.ReasonIdle {
 		t.Fatalf("got %s, %v", reason, err)
 	}
@@ -172,7 +183,13 @@ func TestSuperviseKeepsThePartialResultOfAnInterruptedTurn(t *testing.T) {
 		}
 	}
 	clk := &Clocks{Started: time.Now().Add(-2 * time.Hour), LastLine: time.Now(), Warned: true}
-	res, reason, err := SuperviseWith(context.Background(), s, SessionLimits{Wall: time.Hour, Idle: time.Hour}, clk, fastHooks())
+	res, reason, err := SuperviseWith(
+		context.Background(),
+		s,
+		SessionLimits{Wall: time.Hour, Idle: time.Hour},
+		clk,
+		fastHooks(),
+	)
 	if err != nil || reason != state.ReasonTimeout || string(res.Output) != `{"partial":true}` {
 		t.Fatalf("got %s, %s, %v", res.Output, reason, err)
 	}
@@ -186,7 +203,13 @@ func TestSuperviseCancelClimbsTheLadderAndEndsCancelled(t *testing.T) {
 	s.onStop = func(f *fakeStream, level llm.StopLevel) { f.errs <- io.ErrClosedPipe }
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(10 * time.Millisecond); cancel() }()
-	_, reason, err := SuperviseWith(ctx, s, SessionLimits{Wall: time.Hour, Idle: time.Hour}, &Clocks{Started: time.Now(), LastLine: time.Now()}, fastHooks())
+	_, reason, err := SuperviseWith(
+		ctx,
+		s,
+		SessionLimits{Wall: time.Hour, Idle: time.Hour},
+		&Clocks{Started: time.Now(), LastLine: time.Now()},
+		fastHooks(),
+	)
 	if err != nil || reason != state.ReasonCancelled {
 		t.Fatalf("got %s, %v", reason, err)
 	}
@@ -205,7 +228,13 @@ func TestSuperviseMapsStreamErrorsToExitReasons(t *testing.T) {
 	} {
 		s := newFakeStream()
 		s.errs <- tc.err
-		_, reason, _ := SuperviseWith(context.Background(), s, SessionLimits{Wall: time.Hour, Idle: time.Hour}, &Clocks{Started: time.Now(), LastLine: time.Now()}, fastHooks())
+		_, reason, _ := SuperviseWith(
+			context.Background(),
+			s,
+			SessionLimits{Wall: time.Hour, Idle: time.Hour},
+			&Clocks{Started: time.Now(), LastLine: time.Now()},
+			fastHooks(),
+		)
 		if reason != tc.want {
 			t.Fatalf("%v ended %s, want %s", tc.err, reason, tc.want)
 		}
@@ -221,7 +250,13 @@ func TestSuperviseRaisesOneLimitWarnOnOverage(t *testing.T) {
 	var facts []string
 	h := fastHooks()
 	h.Fact = func(sub string, _ map[string]any) { facts = append(facts, sub) }
-	_, reason, err := SuperviseWith(context.Background(), s, SessionLimits{Wall: time.Hour, Idle: time.Hour}, &Clocks{Started: time.Now(), LastLine: time.Now()}, h)
+	_, reason, err := SuperviseWith(
+		context.Background(),
+		s,
+		SessionLimits{Wall: time.Hour, Idle: time.Hour},
+		&Clocks{Started: time.Now(), LastLine: time.Now()},
+		h,
+	)
 	if err != nil || reason != state.ReasonDone || len(facts) != 1 || facts[0] != "limit.warn" {
 		t.Fatalf("got %s, %v, facts %v", reason, err, facts)
 	}
@@ -239,10 +274,26 @@ func TestSuperviseInjectsTheTokenCapNudge(t *testing.T) {
 		}
 		s.ev <- resultEvent(`{}`)
 	}()
-	if _, _, err := SuperviseWith(context.Background(), s, SessionLimits{Wall: time.Hour, Idle: time.Hour}, &Clocks{Started: time.Now(), LastLine: time.Now()}, h); err != nil {
+	if _, _, err := SuperviseWith(
+		context.Background(),
+		s,
+		SessionLimits{Wall: time.Hour, Idle: time.Hour},
+		&Clocks{Started: time.Now(), LastLine: time.Now()},
+		h,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.injected(); len(got) != 1 || got[0] != capNudgeBuilder {
 		t.Fatalf("injected %q", got)
 	}
+}
+
+// resultEvent is the final stream event with a small output.
+func resultEvent(out string) llm.StreamEvent {
+	return llm.StreamEvent{Kind: llm.KindResult, Result: &llm.Result{Output: json.RawMessage(out)}}
+}
+
+// fastHooks ticks every few milliseconds and leaves the rest empty.
+func fastHooks() Hooks {
+	return Hooks{Every: 5 * time.Millisecond, TermAfter: 20 * time.Millisecond, KillAfter: 20 * time.Millisecond}
 }

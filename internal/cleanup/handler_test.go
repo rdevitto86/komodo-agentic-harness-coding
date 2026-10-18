@@ -43,7 +43,13 @@ func TestCompleteRemovesInOrderAndClosesLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"container.Remove g1", "git.RemoveWorktree " + g.wt, "git.DeleteBranch " + testBranch, "task.Close"}
-	if got := e.log.names("container.", "git.RemoveWorktree", "git.DeleteBranch", "git.Discard", "task."); !reflect.DeepEqual(got, want) {
+	if got := e.log.names(
+		"container.",
+		"git.RemoveWorktree",
+		"git.DeleteBranch",
+		"git.Discard",
+		"task.",
+	); !reflect.DeepEqual(got, want) {
 		t.Fatalf("calls = %v, want %v", got, want)
 	}
 	for _, p := range []string{g.wt, tester, temp} {

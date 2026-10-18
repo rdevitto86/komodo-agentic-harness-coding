@@ -47,10 +47,8 @@ type checksums struct {
 var (
 	// ErrTampered reports a machine file that no longer matches its recorded checksum.
 	ErrTampered = errors.New("a settings file was edited outside komodo config")
-
 	// crashHook is called at named points of a write; tests replace it to kill the process there.
 	crashHook = func(stage string) {}
-
 	// machineFiles lists the machine file names in checksum order.
 	machineFiles = []string{"settings.json", "agents.json"}
 )
@@ -85,8 +83,8 @@ func newUUIDv7() string {
 	}
 
 	var b [16]byte
-
 	_, _ = rand.Read(b[:])
+
 	b[0], b[1], b[2] = byte(ms>>40), byte(ms>>32), byte(ms>>24)
 	b[3], b[4], b[5] = byte(ms>>16), byte(ms>>8), byte(ms)
 	b[6] = 0x70 | byte(uuidSeq>>8)
@@ -110,11 +108,9 @@ func (m *Manager) Verify() error {
 
 		bad, err = m.tamperedNow()
 	}
-
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrTampered, err)
 	}
-
 	if bad {
 		return ErrTampered
 	}
@@ -140,7 +136,6 @@ func (m *Manager) Accept() (Batch, error) {
 		if err := os.Remove(m.shaPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return Batch{}, fmt.Errorf("delete config.sha: %w", err)
 		}
-
 		return Batch{}, nil
 	}
 
@@ -155,11 +150,9 @@ func (m *Manager) Accept() (Batch, error) {
 	} else if err := m.appendRows(b); err != nil {
 		return Batch{}, err
 	}
-
 	if err := m.writeSums(); err != nil {
 		return Batch{}, err
 	}
-
 	if len(b.Changes) == 0 {
 		return Batch{}, nil
 	}
@@ -174,13 +167,11 @@ func (m *Manager) AcceptPlan() ([]Change, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if cur == (checksums{}) {
 		return nil, nil
 	}
 
 	rec, _, _ := m.recordedSums()
-
 	return drift(rec, cur), nil
 }
 
@@ -196,13 +187,11 @@ func (m *Manager) fileHash(name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("hash %s: %w", name, err)
 	}
-
 	if b == nil {
 		return "", nil
 	}
 
 	sum := sha256.Sum256(b)
-
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -212,9 +201,7 @@ func (m *Manager) currentSums() (checksums, error) {
 	if err != nil {
 		return checksums{}, err
 	}
-
 	a, err := m.fileHash("agents.json")
-
 	return checksums{Settings: s, Agents: a}, err
 }
 
@@ -225,15 +212,12 @@ func (m *Manager) recordedSums() (sums checksums, exists, valid bool) {
 	if err != nil {
 		return checksums{}, true, false
 	}
-
 	if b == nil {
 		return checksums{}, false, false
 	}
-
 	if json.Unmarshal(b, &sums) != nil {
 		return checksums{}, true, false
 	}
-
 	return sums, true, true
 }
 
@@ -281,13 +265,11 @@ func (m *Manager) appendRows(b Batch) error {
 
 	if _, err := f.WriteString(sb.String()); err != nil {
 		_ = f.Close()
-
 		return fmt.Errorf("append to config.log: %w", err)
 	}
 
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-
 		return fmt.Errorf("sync config.log: %w", err)
 	}
 
@@ -312,13 +294,11 @@ func (m *Manager) writeSums() error {
 // drift returns one change per machine file whose recorded checksum differs from the current one.
 func drift(rec, cur checksums) []Change {
 	var out []Change
-
 	for i, name := range machineFiles {
 		if oldSum, newSum := pick(rec, i), pick(cur, i); oldSum != newSum {
 			out = append(out, Change{Key: name, Old: oldSum, New: newSum})
 		}
 	}
-
 	return out
 }
 
@@ -327,6 +307,5 @@ func pick(c checksums, i int) string {
 	if i == 0 {
 		return c.Settings
 	}
-
 	return c.Agents
 }

@@ -22,19 +22,34 @@ func renderBlock(pin, bin, rules, style string) string {
 
 	fmt.Fprintf(&b, BlockBegin+"\n", pin)
 	b.WriteString("#### Komodo harness\n\n")
-	b.WriteString("- **You are the orchestrator.** Drive the harness only through `komodo <command>`; with no terminal, every reply is the JSON envelope.\n")
+	b.WriteString(
+		"- **You are the orchestrator.** Drive the harness only through `komodo <command>`; with no terminal, every reply " +
+			"is the JSON envelope.\n",
+	)
 	fmt.Fprintf(&b, "- **Installed at:** `%s`.\n", bin)
-	b.WriteString("- **Find your commands:** run `komodo --help --json` first. It lists every command, flag and result schema, and marks the terminal-only ones.\n")
-	b.WriteString("- **Not yours:** the terminal-only commands (`install`, `update`, `config set`). They refuse without a terminal. Hand the person the command.\n")
-	b.WriteString("- **Wait without polling:** run `komodo status --wait` in the background. It returns when a group is blocked or done, with the blocked group's question.\n")
-	b.WriteString("- **Answer a blocked group:** `komodo run <id> --approve` grants what it asked for; `komodo run <id> --deny` refuses it.\n")
+	b.WriteString(
+		"- **Find your commands:** run `komodo --help --json` first. It lists every command, flag and result schema, and " +
+			"marks the terminal-only ones.\n",
+	)
+	b.WriteString(
+		"- **Not yours:** the terminal-only commands (`install`, `update`, `config set`). They refuse without a terminal. " +
+			"Hand the person the command.\n",
+	)
+	b.WriteString(
+		"- **Wait without polling:** run `komodo status --wait` in the background. It returns when a group is blocked or " +
+			"done, with the blocked group's question.\n",
+	)
+	b.WriteString(
+		"- **Answer a blocked group:** `komodo run <id> --approve` grants what it asked for; `komodo run <id> --deny` " +
+			"refuses it.\n",
+	)
 	b.WriteString("- **Report:** relay the envelope's `report` field verbatim.\n")
 
 	if r := strings.TrimSpace(rules); r != "" {
 		fmt.Fprintf(&b, "- **Rules:** %s\n", r)
 	}
 	if s := strings.TrimSpace(style); s != "" {
-		b.WriteString(s + "\n") // TODO - linter error "Inefficient string concatenation in call to WriteString"
+		fmt.Fprintf(&b, "%s\n", s)
 	}
 
 	b.WriteString(BlockEnd)
@@ -65,7 +80,8 @@ func findBlock(text string) (Block, bool, error) {
 		return Block{}, false, nil
 	case len(begins) != 1 || len(ends) != 1 || begins[0] > ends[0]:
 		return Block{}, false, fmt.Errorf(
-			"AGENTS.md has %d begin markers (lines %v) and %d end markers (lines %v): keep one begin marker before one end marker",
+			"AGENTS.md has %d begin markers (lines %v) and %d end markers (lines %v): keep one begin marker before one "+
+				"end marker",
 			len(begins),
 			begins,
 			len(ends),

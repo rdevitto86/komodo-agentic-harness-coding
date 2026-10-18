@@ -48,7 +48,10 @@ func TestSetRefusals(t *testing.T) {
 	}{
 		"unknown name": {SkillSet{Name: "standards-none", Enabled: true, Allow: workers}, "name"},
 		"bad agent":    {SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder", "janitor"}}, "allow"},
-		"always out":   {SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder"}, Always: []string{"tester"}}, "always"},
+		"always out": {
+			SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder"}, Always: []string{"tester"}},
+			"always",
+		},
 	}
 	for name, c := range cases {
 		m, got := refusals(t, setEvent(c.set))
@@ -63,7 +66,10 @@ func TestSetRefusals(t *testing.T) {
 }
 
 func TestSetAccepted(t *testing.T) {
-	m, got := refusals(t, setEvent(SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder"}, Always: []string{"builder"}}))
+	m, got := refusals(
+		t,
+		setEvent(SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder"}, Always: []string{"builder"}}),
+	)
 	if len(got) != 0 {
 		t.Fatalf("refused: %+v", got)
 	}
@@ -99,7 +105,11 @@ func TestRunAppliesEvents(t *testing.T) {
 
 func TestConnectionsUnknownKey(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "connections.json"), []byte(`{"v":1,"connections":[{"name":"docs","command":"docs-mcp","color":"red"}]}`), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(home, "connections.json"),
+		[]byte(`{"v":1,"connections":[{"name":"docs","command":"docs-mcp","color":"red"}]}`),
+		0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 	conns, warns := loadConnections(home)
@@ -120,7 +130,8 @@ func writeConnections(t *testing.T, home, body string) {
 	}
 }
 
-const docsConn = `{"v":1,"connections":[{"name":"docs","command":"docs-mcp","args":["--stdio"],"env":["DOCS_TOKEN"],"enabled":true,"allow":["planner"],"hosts":[]}]}`
+const docsConn = `{"v":1,"connections":[{"name":"docs","command":"docs-mcp","args":["--stdio"],"env":["DOCS_TOKEN"],` +
+	`"enabled":true,"allow":["planner"],"hosts":[]}]}`
 
 func TestConnectionsOffByDefault(t *testing.T) {
 	home := t.TempDir()
@@ -129,7 +140,11 @@ func TestConnectionsOffByDefault(t *testing.T) {
 	if c := get(t, m, "planner", goTree()); len(c.Tools) != 1 {
 		t.Fatalf("an entry from the file is off until a set event: %+v", c.Tools)
 	}
-	m.apply(bus.Event{Type: bus.TypeMCP, Subtype: "set", Data: &MCPSet{Name: "docs", Enabled: true, Allow: []string{"planner"}}})
+	m.apply(bus.Event{
+		Type:    bus.TypeMCP,
+		Subtype: "set",
+		Data:    &MCPSet{Name: "docs", Enabled: true, Allow: []string{"planner"}},
+	})
 	c := get(t, m, "planner", goTree())
 	if len(c.Tools) != 2 || c.Tools[0].Name != "komodo" || c.Tools[1].Name != "docs" || c.Tools[1].Origin != OriginLocal {
 		t.Fatalf("tools %+v", c.Tools)
@@ -144,7 +159,11 @@ func TestConnectionsOffByDefault(t *testing.T) {
 	if c := get(t, m, "planner", goTree()); c.Tools[0].Name != "komodo" || !c.Tools[0].Enabled {
 		t.Fatal("the embedded entry cannot be switched off")
 	}
-	m.apply(bus.Event{Type: bus.TypeMCP, Subtype: "set", Data: &MCPSet{Name: "docs", Enabled: true, Allow: []string{"janitor"}}})
+	m.apply(bus.Event{
+		Type:    bus.TypeMCP,
+		Subtype: "set",
+		Data:    &MCPSet{Name: "docs", Enabled: true, Allow: []string{"janitor"}},
+	})
 	if c := get(t, m, "planner", goTree()); len(c.Tools) != 2 {
 		t.Fatal("a refused mcp event must leave the table unchanged")
 	}
@@ -155,7 +174,11 @@ func TestReloadEvents(t *testing.T) {
 	m := newManager(t, func(d *Deps) { d.Home = home })
 	writeConnections(t, home, docsConn)
 	m.apply(bus.Event{Type: bus.TypeMCP, Subtype: "reload", Data: &MCPReload{}})
-	m.apply(bus.Event{Type: bus.TypeMCP, Subtype: "set", Data: &MCPSet{Name: "docs", Enabled: true, Allow: []string{"planner"}}})
+	m.apply(bus.Event{
+		Type:    bus.TypeMCP,
+		Subtype: "set",
+		Data:    &MCPSet{Name: "docs", Enabled: true, Allow: []string{"planner"}},
+	})
 	if c := get(t, m, "planner", goTree()); len(c.Tools) != 2 {
 		t.Fatalf("tools after reload %+v", c.Tools)
 	}

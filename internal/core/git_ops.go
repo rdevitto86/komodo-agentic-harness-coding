@@ -11,47 +11,48 @@ import (
 )
 
 var (
-	// trailerLine matches one Name: value line.
-	trailerLine = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*:[ \t]+\S`)
-	// paragraphBreak splits a message at blank lines.
-	paragraphBreak = regexp.MustCompile(`\n[ \t]*\n+`)
+	trailerLine    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*:[ \t]+\S`) // trailerLine matches one Name: value line.
+	paragraphBreak = regexp.MustCompile(`\n[ \t]*\n+`)                     // paragraphBreak splits a message at blank lines.
 )
 
-// TreeOf hashes the worktree's content, tracked and untracked with ignored files skipped, through a
-// throwaway index.
-func (g *Git) TreeOf(ctx context.Context, worktree string) (string, error) {
+// Commit records the worktree's content as one commit on the checked-out komodo/ branch and returns its id. Content equal to
+// the tip's returns the tip with no new commit.
+func (g *Git) Commit(ctx context.Context, worktree, message string) (string, error) {
+	if err := CheckMessage(message); err != nil {
+		return "", err
+	}
+
 	t, err := g.locate(worktree)
 	if err != nil {
 		return "", err
 	}
-
-	tmp, err := os.MkdirTemp("", "komodo-index-")
-	if err != nil {
-		return "", fmt.Errorf("create temporary index folder: %w", err)
+	if _, err := g.currentBranch(ctx, t); err != nil {
+		return "", err
 	}
-
-	defer func() { _ = os.RemoveAll(tmp) }()
-
-	env := []string{"GIT_INDEX_FILE=" + filepath.Join(tmp, "index")}
-	if g.hasHead(ctx, t) {
-		if _, err := g.run(ctx, t, "", env, "read-tree", "HEAD"); err != nil {
-			return "", err
-		}
-	}
-
-	if _, err := g.run(ctx, t, "", env, "add", "-A"); err != nil {
+	if _, err := g.run(ctx, t, "", nil, "add", "-A"); err != nil {
 		return "", err
 	}
 
-	out, err := g.run(ctx, t, "", env, "write-tree")
+	out, err := g.run(ctx, t, "", nil, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	if g.hasHead(ctx, t) {
+		if id, tree, err := g.Head(ctx, worktree); err == nil && tree == strings.TrimSpace(out) {
+			return id, nil
+		}
+	}
+	if _, err := g.run(ctx, t, message, nil, "commit", "-q", "--no-verify", "-F", "-"); err != nil {
+		return "", err
+	}
 
-	return strings.TrimSpace(out), err
+	id, _, err := g.Head(ctx, worktree)
+	return id, err
 }
 
 // Head returns the checked-out commit and its tree.
 func (g *Git) Head(ctx context.Context, worktree string) (string, string, error) {
 	i, err := g.Info(ctx, worktree, "HEAD")
-
 	return i.ID, i.Tree, err
 }
 
@@ -82,7 +83,6 @@ func (g *Git) Info(ctx context.Context, worktree, rev string) (CommitInfo, error
 	if len(parents) > 0 {
 		info.Parent = parents[0]
 	}
-
 	if len(parents) > 1 {
 		info.Second = parents[1]
 	}
@@ -90,52 +90,11 @@ func (g *Git) Info(ctx context.Context, worktree, rev string) (CommitInfo, error
 	return info, nil
 }
 
-// Commit records the worktree's content as one commit on the checked-out komodo/ branch and returns
-// its id. Content equal to the tip's returns the tip with no new commit.
-func (g *Git) Commit(ctx context.Context, worktree, message string) (string, error) {
-	if err := CheckMessage(message); err != nil {
-		return "", err
-	}
-
-	t, err := g.locate(worktree)
-	if err != nil {
-		return "", err
-	}
-
-	if _, err := g.currentBranch(ctx, t); err != nil {
-		return "", err
-	}
-
-	if _, err := g.run(ctx, t, "", nil, "add", "-A"); err != nil {
-		return "", err
-	}
-
-	out, err := g.run(ctx, t, "", nil, "write-tree")
-	if err != nil {
-		return "", err
-	}
-
-	if g.hasHead(ctx, t) {
-		if id, tree, err := g.Head(ctx, worktree); err == nil && tree == strings.TrimSpace(out) {
-			return id, nil
-		}
-	}
-
-	if _, err := g.run(ctx, t, message, nil, "commit", "-q", "--no-verify", "-F", "-"); err != nil {
-		return "", err
-	}
-
-	id, _, err := g.Head(ctx, worktree)
-
-	return id, err
-}
-
 // Push sends one komodo/ branch to its own name on the remote with a plain refspec.
 func (g *Git) Push(ctx context.Context, worktree, remote, branch string) error {
 	if !ValidBranch(branch) {
 		return fmt.Errorf("push %q: %w", branch, ErrCriticalRef)
 	}
-
 	if !safeName(remote) {
 		return fmt.Errorf("remote name %q is not usable", remote)
 	}
@@ -145,13 +104,10 @@ func (g *Git) Push(ctx context.Context, worktree, remote, branch string) error {
 		return err
 	}
 
-	_, err = g.runNet(
-		ctx, t, "push", "--no-verify", remote, "refs/heads/"+branch+":refs/heads/"+branch,
-	)
+	_, err = g.runNet(ctx, t, "push", "--no-verify", remote, "refs/heads/"+branch+":refs/heads/"+branch)
 	if err == nil {
 		return nil
 	}
-
 	if s := stderrOf(err); strings.Contains(s, "[rejected]") ||
 		strings.Contains(s, "[remote rejected]") ||
 		strings.Contains(s, "non-fast-forward") {
@@ -162,14 +118,10 @@ func (g *Git) Push(ctx context.Context, worktree, remote, branch string) error {
 }
 
 // RemoteTip reads the commit the remote holds for a branch with ls-remote.
-func (g *Git) RemoteTip(
-	ctx context.Context,
-	worktree, remote, branch string,
-) (string, bool, error) {
+func (g *Git) RemoteTip(ctx context.Context, worktree, remote, branch string) (string, bool, error) {
 	if !ValidBranch(branch) {
 		return "", false, fmt.Errorf("branch %q: %w", branch, ErrCriticalRef)
 	}
-
 	if !safeName(remote) {
 		return "", false, fmt.Errorf("remote name %q is not usable", remote)
 	}
@@ -200,10 +152,8 @@ func (g *Git) RemoveWorktree(ctx context.Context, clone, path string) error {
 	if err != nil {
 		return err
 	}
-
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		_, err = g.run(ctx, ct, "", nil, "worktree", "prune")
-
 		return err
 	}
 
@@ -216,22 +166,46 @@ func (g *Git) RemoveWorktree(ctx context.Context, clone, path string) error {
 	if err != nil {
 		return err
 	}
-
 	if tree != headTree {
 		return fmt.Errorf("%s: %w", path, ErrDirty)
 	}
-
 	if _, err := g.run(ctx, ct, "", nil, "worktree", "remove", "--", path); err != nil {
 		return err
 	}
 
 	_, err = g.run(ctx, ct, "", nil, "worktree", "prune")
-
 	return err
 }
 
-// DiscardWorktree removes a worktree and its files even when they hold work the tip lacks; a link
-// in its place is unlinked.
+// TreeOf hashes the worktree's content, tracked and untracked with ignored files skipped, through a throwaway index.
+func (g *Git) TreeOf(ctx context.Context, worktree string) (string, error) {
+	t, err := g.locate(worktree)
+	if err != nil {
+		return "", err
+	}
+
+	tmp, err := os.MkdirTemp("", "komodo-index-")
+	if err != nil {
+		return "", fmt.Errorf("create temporary index folder: %w", err)
+	}
+
+	defer func() { _ = os.RemoveAll(tmp) }()
+
+	env := []string{"GIT_INDEX_FILE=" + filepath.Join(tmp, "index")}
+	if g.hasHead(ctx, t) {
+		if _, err := g.run(ctx, t, "", env, "read-tree", "HEAD"); err != nil {
+			return "", err
+		}
+	}
+	if _, err := g.run(ctx, t, "", env, "add", "-A"); err != nil {
+		return "", err
+	}
+
+	out, err := g.run(ctx, t, "", env, "write-tree")
+	return strings.TrimSpace(out), err
+}
+
+// DiscardWorktree removes a worktree and its files even when they hold work the tip lacks; a link in its place is unlinked.
 func (g *Git) DiscardWorktree(ctx context.Context, clone, path string) error {
 	ct, err := g.ofClone(clone)
 	if err != nil {
@@ -252,46 +226,35 @@ func (g *Git) DiscardWorktree(ctx context.Context, clone, path string) error {
 		if lerr != nil {
 			return lerr
 		}
-
 		if t.work == "" || realPath(path) == realPath(filepath.Dir(ct.gitDir)) {
 			return fmt.Errorf("%s: %w", path, ErrCriticalRef)
 		}
-
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
 	}
 
 	_, err = g.run(ctx, ct, "", nil, "worktree", "prune")
-
 	return err
 }
 
-// BranchTip returns the commit a local komodo/ branch points at; the bool is false when the branch
-// does not exist.
+// BranchTip returns the commit a local komodo/ branch points at; the bool is false when the branch does not exist.
 func (g *Git) BranchTip(ctx context.Context, clone, branch string) (string, bool, error) {
 	if !ValidBranch(branch) {
 		return "", false, fmt.Errorf("branch %q: %w", branch, ErrCriticalRef)
 	}
-
 	t, err := g.ofClone(clone)
 	if err != nil {
 		return "", false, err
 	}
-
 	return g.branchTip(ctx, t, branch)
 }
 
-// DeleteBranch deletes a local komodo/ branch at expectTip whose commit is in the history of
-// containedIn.
-func (g *Git) DeleteBranch(
-	ctx context.Context,
-	clone, branch, expectTip, containedIn string,
-) error {
+// DeleteBranch deletes a local komodo/ branch at expectTip whose commit is in the history of containedIn.
+func (g *Git) DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error {
 	if !ValidBranch(branch) {
 		return fmt.Errorf("delete %q: %w", branch, ErrCriticalRef)
 	}
-
 	if !safeRev(expectTip) || !safeRev(containedIn) {
 		return fmt.Errorf("revision for %q is not usable", branch)
 	}
@@ -305,23 +268,17 @@ func (g *Git) DeleteBranch(
 	if err != nil || !ok {
 		return err
 	}
-
 	if tip != expectTip {
 		return fmt.Errorf("%s is at %s, expected %s: %w", branch, tip, expectTip, ErrTipMoved)
 	}
-
-	if _, err := g.run(
-		ctx, t, "", nil, "merge-base", "--is-ancestor", expectTip, containedIn,
-	); err != nil {
+	if _, err := g.run(ctx, t, "", nil, "merge-base", "--is-ancestor", expectTip, containedIn); err != nil {
 		if exitCode(err) == 1 {
 			return fmt.Errorf("%s in %s: %w", expectTip, containedIn, ErrNotContained)
 		}
-
 		return err
 	}
 
 	_, err = g.run(ctx, t, "", nil, "update-ref", "-d", "refs/heads/"+branch, expectTip)
-
 	return err
 }
 
@@ -330,7 +287,6 @@ func (g *Git) DiscardBranch(ctx context.Context, clone, branch, expectTip string
 	if !ValidBranch(branch) {
 		return fmt.Errorf("discard %q: %w", branch, ErrCriticalRef)
 	}
-
 	if !safeRev(expectTip) {
 		return fmt.Errorf("commit %q is not usable", expectTip)
 	}
@@ -344,23 +300,19 @@ func (g *Git) DiscardBranch(ctx context.Context, clone, branch, expectTip string
 	if err != nil || !ok {
 		return err
 	}
-
 	if tip != expectTip {
 		return fmt.Errorf("%s is at %s, expected %s: %w", branch, tip, expectTip, ErrTipMoved)
 	}
 
 	_, err = g.run(ctx, t, "", nil, "update-ref", "-d", "refs/heads/"+branch, expectTip)
-
 	return err
 }
 
-// Merge merges ref into the komodo/ branch checked out in dir; a conflict aborts the merge and is
-// ErrConflict.
+// Merge merges ref into the komodo/ branch checked out in dir; a conflict aborts the merge and is ErrConflict.
 func (g *Git) Merge(ctx context.Context, dir, ref, message string, noFF bool) (string, error) {
 	if !safeRev(ref) {
 		return "", fmt.Errorf("merge ref %q is not usable", ref)
 	}
-
 	if err := CheckMessage(message); err != nil {
 		return "", err
 	}
@@ -369,7 +321,6 @@ func (g *Git) Merge(ctx context.Context, dir, ref, message string, noFF bool) (s
 	if err != nil {
 		return "", err
 	}
-
 	if _, err := g.currentBranch(ctx, t); err != nil {
 		return "", err
 	}
@@ -385,7 +336,6 @@ func (g *Git) Merge(ctx context.Context, dir, ref, message string, noFF bool) (s
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
-
 	if werr != nil {
 		return "", fmt.Errorf("write merge message: %w", werr)
 	}
@@ -397,21 +347,16 @@ func (g *Git) Merge(ctx context.Context, dir, ref, message string, noFF bool) (s
 
 	_, err = g.run(ctx, t, "", nil, "merge", "--no-edit", "--no-verify", ff, "-F", f.Name(), ref)
 	if err != nil {
-		if _, herr := g.run(
-			ctx, t, "", nil, "rev-parse", "-q", "--verify", "MERGE_HEAD",
-		); herr == nil {
+		if _, herr := g.run(ctx, t, "", nil, "rev-parse", "-q", "--verify", "MERGE_HEAD"); herr == nil {
 			if _, aerr := g.run(ctx, t, "", nil, "merge", "--abort"); aerr != nil {
 				return "", errors.Join(ErrConflict, aerr)
 			}
-
 			return "", fmt.Errorf("%s into %s: %w", ref, dir, ErrConflict)
 		}
-
 		return "", err
 	}
 
 	id, _, err := g.Head(ctx, dir)
-
 	return id, err
 }
 
@@ -425,20 +370,17 @@ func (g *Git) IsAncestor(ctx context.Context, dir, anc, desc string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-
 	if _, err := g.run(ctx, t, "", nil, "merge-base", "--is-ancestor", anc, desc); err != nil {
 		if exitCode(err) == 1 {
 			return false, nil
 		}
-
 		return false, err
 	}
 
 	return true, nil
 }
 
-// AddWorktree adds a worktree on a komodo/ branch, cutting the branch from base when it does not
-// exist; a repeat is a no-op.
+// AddWorktree adds a worktree on a komodo/ branch, cutting the branch from base when it does not exist; a repeat is a no-op.
 func (g *Git) AddWorktree(ctx context.Context, clone, path, branch, base string) error {
 	if !ValidBranch(branch) {
 		return fmt.Errorf("worktree branch %q: %w", branch, ErrCriticalRef)
@@ -453,12 +395,10 @@ func (g *Git) AddWorktree(ctx context.Context, clone, path, branch, base string)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", path, err)
 	}
-
 	if t, lerr := g.locate(abs); lerr == nil {
 		if cur, err := g.currentBranch(ctx, t); err == nil && cur == branch {
 			return nil
 		}
-
 		return fmt.Errorf("%s is a worktree of another branch", abs)
 	}
 
@@ -466,24 +406,20 @@ func (g *Git) AddWorktree(ctx context.Context, clone, path, branch, base string)
 	if err != nil {
 		return err
 	}
-
 	if exists {
 		_, err = g.run(ctx, ct, "", nil, "worktree", "add", "--", abs, branch)
-
 		return err
 	}
-
 	if !safeRev(base) {
 		return fmt.Errorf("base %q is not usable", base)
 	}
 
 	_, err = g.run(ctx, ct, "", nil, "worktree", "add", "--no-track", "-b", branch, "--", abs, base)
-
 	return err
 }
 
-// WorktreeOf returns the path of a linked worktree that has the komodo/ branch checked out; the
-// main checkout is never named.
+// WorktreeOf returns the path of a linked worktree that has the komodo/ branch checked out; the main checkout is never
+// named.
 func (g *Git) WorktreeOf(ctx context.Context, clone, branch string) (string, bool, error) {
 	if !ValidBranch(branch) {
 		return "", false, fmt.Errorf("branch %q: %w", branch, ErrCriticalRef)
@@ -505,12 +441,10 @@ func (g *Git) WorktreeOf(ctx context.Context, clone, branch string) (string, boo
 		}
 
 		var path string
-
 		for _, line := range strings.Split(block, "\n") {
 			if p, ok := strings.CutPrefix(line, "worktree "); ok {
 				path = p
 			}
-
 			if line == "branch refs/heads/"+branch && path != "" {
 				return path, true, nil
 			}
@@ -520,8 +454,8 @@ func (g *Git) WorktreeOf(ctx context.Context, clone, branch string) (string, boo
 	return "", false, nil
 }
 
-// FetchBranch fetches one branch of the remote into its remote-tracking reference; a missing branch
-// is ErrBranchMissing. The tracking reference follows the remote even when its history was
+// FetchBranch fetches one branch of the remote into its remote-tracking reference; a missing branch is ErrBranchMissing. The
+// tracking reference follows the remote even when its history was
 // rewritten.
 func (g *Git) FetchBranch(ctx context.Context, dir, remote, branch string) error {
 	if !safeName(branch) || strings.Contains(branch, "..") || !safeName(remote) {
@@ -533,10 +467,7 @@ func (g *Git) FetchBranch(ctx context.Context, dir, remote, branch string) error
 		return err
 	}
 
-	_, err = g.runNet(
-		ctx, t, "fetch", "--no-tags", remote,
-		"+refs/heads/"+branch+":refs/remotes/"+remote+"/"+branch,
-	)
+	_, err = g.runNet(ctx, t, "fetch", "--no-tags", remote, "+refs/heads/"+branch+":refs/remotes/"+remote+"/"+branch)
 	if err != nil && strings.Contains(stderrOf(err), "couldn't find remote ref") {
 		return fmt.Errorf("%s/%s: %w", remote, branch, ErrBranchMissing)
 	}
@@ -555,20 +486,13 @@ func (g *Git) Fetch(ctx context.Context, clone, remote string) error {
 		return err
 	}
 
-	_, err = g.runNet(
-		ctx, t, "fetch", "--no-tags", "--no-prune", remote,
-		"+refs/heads/*:refs/remotes/"+remote+"/*",
-	)
-
+	_, err = g.runNet(ctx, t, "fetch", "--no-tags", "--no-prune", remote, "+refs/heads/*:refs/remotes/"+remote+"/*")
 	return err
 }
 
-// Holds reads the remote-tracking references and reports whether tip is in the history of contains,
-// or of any branch of the remote when contains is empty; it returns the reference that holds it.
-func (g *Git) Holds(
-	ctx context.Context,
-	clone, remote, contains, tip string,
-) (string, bool, error) {
+// Holds reads the remote-tracking references and reports whether tip is in the history of contains, or of any branch of the
+// remote when contains is empty; it returns the reference that holds it.
+func (g *Git) Holds(ctx context.Context, clone, remote, contains, tip string) (string, bool, error) {
 	if !safeName(remote) || !safeRev(tip) {
 		return "", false, fmt.Errorf("remote %q or commit %q is not usable", remote, tip)
 	}
@@ -580,14 +504,10 @@ func (g *Git) Holds(
 
 	refs := []string{contains}
 	if contains == "" {
-		out, err := g.run(
-			ctx, t, "", nil, "for-each-ref", "--format=%(refname:short)",
-			"refs/remotes/"+remote+"/",
-		)
+		out, err := g.run(ctx, t, "", nil, "for-each-ref", "--format=%(refname:short)", "refs/remotes/"+remote+"/")
 		if err != nil {
 			return "", false, err
 		}
-
 		refs = strings.Fields(out)
 	}
 
@@ -597,14 +517,10 @@ func (g *Git) Holds(
 		}
 
 		full := strings.TrimPrefix(name, "refs/remotes/")
-
 		full = "refs/remotes/" + full
-		if _, err := g.run(
-			ctx, t, "", nil, "rev-parse", "-q", "--verify", full+"^{commit}",
-		); err != nil {
+		if _, err := g.run(ctx, t, "", nil, "rev-parse", "-q", "--verify", full+"^{commit}"); err != nil {
 			continue
 		}
-
 		if _, err := g.run(ctx, t, "", nil, "merge-base", "--is-ancestor", tip, full); err == nil {
 			return name, true, nil
 		}
@@ -613,8 +529,8 @@ func (g *Git) Holds(
 	return "", false, nil
 }
 
-// Landed lists the group landings on head since base, newest first: merge commits on head's
-// first-parent line with two parents and a body that starts with the group section.
+// Landed lists the group landings on head since base, newest first: merge commits on head's first-parent line with two
+// parents and a body that starts with the group section.
 func (g *Git) Landed(ctx context.Context, dir, base, head string) ([]Landing, error) {
 	if !safeRev(base) || !safeRev(head) {
 		return nil, fmt.Errorf("range %q..%q is not usable", base, head)
@@ -666,12 +582,10 @@ func (g *Git) DiffStat(ctx context.Context, dir, base, head string) (string, err
 	}
 
 	out, err := g.run(ctx, t, "", nil, "diff", "--shortstat", base+"..."+head, "--")
-
 	return strings.TrimSpace(out), err
 }
 
-// BranchExists reports whether a komodo/ branch exists locally or among the remote-tracking
-// references.
+// BranchExists reports whether a komodo/ branch exists locally or among the remote-tracking references.
 func (g *Git) BranchExists(ctx context.Context, clone, branch string) (bool, error) {
 	if !ValidBranch(branch) {
 		return false, fmt.Errorf("branch %q: %w", branch, ErrCriticalRef)
@@ -681,7 +595,6 @@ func (g *Git) BranchExists(ctx context.Context, clone, branch string) (bool, err
 	if err != nil {
 		return false, err
 	}
-
 	if _, ok, err := g.branchTip(ctx, t, branch); err != nil || ok {
 		return ok, err
 	}
@@ -706,7 +619,6 @@ func (g *Git) CreateBranch(ctx context.Context, clone, branch, base string) erro
 	if !ValidBranch(branch) {
 		return fmt.Errorf("create %q: %w", branch, ErrCriticalRef)
 	}
-
 	if !safeRev(base) {
 		return fmt.Errorf("base %q is not usable", base)
 	}
@@ -717,12 +629,10 @@ func (g *Git) CreateBranch(ctx context.Context, clone, branch, base string) erro
 	}
 
 	_, err = g.run(ctx, t, "", nil, "branch", "--no-track", "--", branch, base)
-
 	return err
 }
 
-// DefaultBranch returns the branch the remote's HEAD names, from the fetched reference or else from
-// the remote itself.
+// DefaultBranch returns the branch the remote's HEAD names, from the fetched reference or else from the remote itself.
 func (g *Git) DefaultBranch(ctx context.Context, dir, remote string) (string, error) {
 	if !safeName(remote) {
 		return "", fmt.Errorf("remote name %q is not usable", remote)
@@ -748,7 +658,6 @@ func (g *Git) DefaultBranch(ctx context.Context, dir, remote string) (string, er
 	for _, line := range strings.Split(out, "\n") {
 		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
 			name, _, _ := strings.Cut(ref, "\t")
-
 			return name, nil
 		}
 	}
@@ -772,7 +681,6 @@ func (g *Git) UpstreamRemote(ctx context.Context, dir, branch string) (string, b
 		if exitCode(err) == 1 {
 			return "", false, nil
 		}
-
 		return "", false, err
 	}
 
@@ -787,24 +695,18 @@ func (g *Git) UpstreamRemote(ctx context.Context, dir, branch string) (string, b
 // hasHead reports whether the target's HEAD names a commit.
 func (g *Git) hasHead(ctx context.Context, t target) bool {
 	_, err := g.run(ctx, t, "", nil, "rev-parse", "-q", "--verify", "HEAD")
-
 	return err == nil
 }
 
-// branchTip returns the commit a local branch points at; the bool is false when the branch is
-// absent.
+// branchTip returns the commit a local branch points at; the bool is false when the branch is absent.
 func (g *Git) branchTip(ctx context.Context, t target, branch string) (string, bool, error) {
-	out, err := g.run(
-		ctx, t, "", nil, "rev-parse", "-q", "--verify", "refs/heads/"+branch+"^{commit}",
-	)
+	out, err := g.run(ctx, t, "", nil, "rev-parse", "-q", "--verify", "refs/heads/"+branch+"^{commit}")
 	if err != nil {
 		if exitCode(err) == 1 {
 			return "", false, nil
 		}
-
 		return "", false, err
 	}
-
 	return strings.TrimSpace(out), true, nil
 }
 

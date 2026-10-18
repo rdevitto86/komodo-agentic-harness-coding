@@ -11,18 +11,16 @@ import (
 )
 
 // validateSchema checks data against the JSON Schema subset the result schemas use.
-// It supports type, enum, const, required, properties, additionalProperties, items, anyOf, oneOf,
-// allOf, string and number bounds, and local $ref.
+// It supports type, enum, const, required, properties, additionalProperties, items, anyOf, oneOf, allOf, string and number
+// bounds, and local $ref.
 func validateSchema(schema, data json.RawMessage) error {
 	var root, v any
 	if err := json.Unmarshal(schema, &root); err != nil {
 		return fmt.Errorf("the result schema is not valid JSON: %w", err)
 	}
-
 	if err := json.Unmarshal(data, &v); err != nil {
 		return fmt.Errorf("the result is not valid JSON: %w", err)
 	}
-
 	return checkNode(root, root, v, "result")
 }
 
@@ -32,29 +30,23 @@ func checkNode(root, node, v any, path string) error {
 	if !ok {
 		return nil // true and unknown nodes accept anything
 	}
-
 	if ref, ok := s["$ref"].(string); ok {
 		target, err := resolveRef(root, ref)
 		if err != nil {
 			return err
 		}
-
 		return checkNode(root, target, v, path)
 	}
-
 	if err := checkType(s, v, path); err != nil {
 		return err
 	}
-
 	if e, ok := s["enum"].([]any); ok &&
 		!slices.ContainsFunc(e, func(x any) bool { return jsonEqual(x, v) }) {
 		return fmt.Errorf("%s is not one of the allowed values", path)
 	}
-
 	if c, ok := s["const"]; ok && !jsonEqual(c, v) {
 		return fmt.Errorf("%s is not the required constant", path)
 	}
-
 	if err := checkCombinators(root, s, v, path); err != nil {
 		return err
 	}
@@ -102,32 +94,9 @@ func resolveRef(root any, ref string) (any, error) {
 	return cur, nil
 }
 
-// typeOf names the JSON type of a decoded value.
-func typeOf(v any) string {
-	switch x := v.(type) {
-	case nil:
-		return "null"
-	case bool:
-		return "boolean"
-	case float64:
-		if x == math.Trunc(x) {
-			return "integer"
-		}
-
-		return "number"
-	case string:
-		return "string"
-	case []any:
-		return "array"
-	}
-
-	return "object"
-}
-
 // checkType validates the type keyword.
 func checkType(s map[string]any, v any, path string) error {
 	var want []string
-
 	switch t := s["type"].(type) {
 	case string:
 		want = []string{t}
@@ -138,7 +107,6 @@ func checkType(s map[string]any, v any, path string) error {
 			}
 		}
 	}
-
 	if len(want) == 0 {
 		return nil
 	}
@@ -151,6 +119,34 @@ func checkType(s map[string]any, v any, path string) error {
 	}
 
 	return fmt.Errorf("%s is %s, want %s", path, got, strings.Join(want, " or "))
+}
+
+// typeOf names the JSON type of a decoded value.
+func typeOf(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case float64:
+		if x == math.Trunc(x) {
+			return "integer"
+		}
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	}
+
+	return "object"
+}
+
+// jsonEqual compares two decoded values.
+func jsonEqual(a, b any) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
 }
 
 // checkCombinators validates anyOf, oneOf and allOf.
@@ -170,13 +166,11 @@ func checkCombinators(root any, s map[string]any, v any, path string) error {
 		}
 
 		matches := 0
-
 		for _, sub := range subs {
 			if checkNode(root, sub, v, path) == nil {
 				matches++
 			}
 		}
-
 		if matches == 0 || (key == "oneOf" && matches > 1) {
 			return fmt.Errorf("%s does not match %s of the allowed shapes", path, key)
 		}
@@ -211,7 +205,6 @@ func checkObject(root any, s map[string]any, val map[string]any, path string) er
 			if err := checkNode(root, sub, val[k], path+"."+k); err != nil {
 				return err
 			}
-
 			continue
 		}
 
@@ -235,11 +228,9 @@ func checkArray(root any, s map[string]any, val []any, path string) error {
 	if n, ok := s["minItems"].(float64); ok && float64(len(val)) < n {
 		return fmt.Errorf("%s has %d items, want at least %v", path, len(val), n)
 	}
-
 	if n, ok := s["maxItems"].(float64); ok && float64(len(val)) > n {
 		return fmt.Errorf("%s has %d items, want at most %v", path, len(val), n)
 	}
-
 	if items, ok := s["items"]; ok {
 		for i, x := range val {
 			if err := checkNode(root, items, x, fmt.Sprintf("%s[%d]", path, i)); err != nil {
@@ -257,11 +248,9 @@ func checkString(s map[string]any, val, path string) error {
 	if m, ok := s["minLength"].(float64); ok && n < m {
 		return fmt.Errorf("%s is shorter than %v", path, m)
 	}
-
 	if m, ok := s["maxLength"].(float64); ok && n > m {
 		return fmt.Errorf("%s is longer than %v", path, m)
 	}
-
 	if p, ok := s["pattern"].(string); ok {
 		if re, err := regexp.Compile(p); err == nil && !re.MatchString(val) {
 			return fmt.Errorf("%s does not match the pattern %q", path, p)
@@ -276,18 +265,8 @@ func checkNumber(s map[string]any, val float64, path string) error {
 	if m, ok := s["minimum"].(float64); ok && val < m {
 		return fmt.Errorf("%s is below %v", path, m)
 	}
-
 	if m, ok := s["maximum"].(float64); ok && val > m {
 		return fmt.Errorf("%s is above %v", path, m)
 	}
-
 	return nil
-}
-
-// jsonEqual compares two decoded values.
-func jsonEqual(a, b any) bool {
-	x, _ := json.Marshal(a)
-	y, _ := json.Marshal(b)
-
-	return string(x) == string(y)
 }

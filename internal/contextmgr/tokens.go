@@ -14,6 +14,5 @@ func counterOr(c Counter) Counter {
 	if c == nil {
 		return CountTokens
 	}
-
 	return c
 }

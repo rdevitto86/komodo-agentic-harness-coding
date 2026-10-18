@@ -7,14 +7,22 @@ import (
 	"testing"
 )
 
-const goodSkill = "---\nv: 1\nname: standards-demo\ndescription: \"Demo\"\nglobs:\n  - \"*.go\"\nmarkers: []\nsections:\n  - \"Errors\"\n  - \"Tests\"\n---\n## Errors\n- **Never** ignore errors.\n\n## Tests\n- **Always** test.\n"
+const goodSkill = "---\nv: 1\nname: standards-demo\ndescription: \"Demo\"\nglobs:\n  - \"*.go\"\nmarkers: []\nsections:\n " +
+	" - \"Errors\"\n  - \"Tests\"\n---\n## Errors\n- **Never** ignore errors.\n\n## Tests\n- **Always** test.\n"
 
 func TestParseSkill(t *testing.T) {
 	fm, err := parseSkill(goodSkill)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	want := Frontmatter{V: 1, Name: "standards-demo", Description: "Demo", Globs: []string{"*.go"}, Markers: []string{}, Sections: []string{"Errors", "Tests"}}
+	want := Frontmatter{
+		V:           1,
+		Name:        "standards-demo",
+		Description: "Demo",
+		Globs:       []string{"*.go"},
+		Markers:     []string{},
+		Sections:    []string{"Errors", "Tests"},
+	}
 	if !reflect.DeepEqual(fm, want) {
 		t.Fatalf("got %+v want %+v", fm, want)
 	}
@@ -56,7 +64,8 @@ func TestMatchGlob(t *testing.T) {
 }
 
 func TestSectionOf(t *testing.T) {
-	body := "---\nsections: x\n---\n## Errors\n- one\n### Detail\n- two\n```\n## Errors\n# fenced\n```\n## Tests  \n- three\n# Top\n- four\n"
+	body := "---\nsections: x\n---\n## Errors\n- one\n### Detail\n- two\n```\n## Errors\n# fenced\n```\n## Tests  \n- " +
+		"three\n# Top\n- four\n"
 	got, ok := sectionOf(body, "Errors")
 	if !ok || got != "## Errors\n- one\n### Detail\n- two\n```\n## Errors\n# fenced\n```\n" {
 		t.Fatalf("Errors: %v %q", ok, got)
@@ -70,9 +79,11 @@ func TestSectionOf(t *testing.T) {
 }
 
 func TestCompileRules(t *testing.T) {
-	body := "## Errors\n- **Never** discard an error.\n- Plain line.\n```\n- **Never** inside a fence\n```\n- **Always** wrap with %w.\n- **Never** log and return.\n"
+	body := "## Errors\n- **Never** discard an error.\n- Plain line.\n```\n- **Never** inside a fence\n```\n- **Always** " +
+		"wrap with %w.\n- **Never** log and return.\n"
 	got := CompileRules("standards-go", body)
-	if len(got) != 3 || got[2].ID != "std.go.3" || got[2].Line != "Never log and return." || got[0].Line != "Never discard an error." {
+	if len(got) != 3 || got[2].ID != "std.go.3" || got[2].Line != "Never log and return." ||
+		got[0].Line != "Never discard an error." {
 		t.Fatalf("got %+v", got)
 	}
 	if got[1].ID != "std.go.2" || got[1].Skill != "standards-go" {
@@ -112,7 +123,9 @@ func TestSelectKotlinMarkers(t *testing.T) {
 	app := newTree(map[string]string{"app/AndroidManifest.xml": "", "src/Svc.kt": "class Svc"})
 	first, _ := m.Select("builder", []string{"src/Svc.kt"}, app)
 	second, _ := m.Select("builder", []string{"src/Svc.kt"}, app)
-	if got := names(first); !reflect.DeepEqual(got, []string{"standards-comments", "standards-kotlin", "standards-ui-mobile"}) {
+	if got := names(
+		first,
+	); !reflect.DeepEqual(got, []string{"standards-comments", "standards-kotlin", "standards-ui-mobile"}) {
 		t.Fatalf("android kotlin: %v", got)
 	}
 	if !reflect.DeepEqual(first, second) {
@@ -160,7 +173,12 @@ func TestTamperedBodyRefused(t *testing.T) {
 	if _, err := m.Get("builder", "standards-go"); !errors.Is(err, ErrSkillHash) {
 		t.Fatalf("Get: %v", err)
 	}
-	if _, err := m.GetContext(t.Context(), Request{Agent: "builder", Tree: goTree(), Files: []string{"a.go"}, Slots: slotsFor("builder")}); !errors.Is(err, ErrSkillHash) {
+	if _, err := m.GetContext(t.Context(), Request{
+		Agent: "builder",
+		Tree:  goTree(),
+		Files: []string{"a.go"},
+		Slots: slotsFor("builder"),
+	}); !errors.Is(err, ErrSkillHash) {
 		t.Fatalf("GetContext: %v", err)
 	}
 }
@@ -194,7 +212,8 @@ func TestGetSections(t *testing.T) {
 	if err != nil || !strings.HasPrefix(sec, "## Errors\n") || strings.Contains(sec, "## Naming") {
 		t.Fatalf("section: %v %q", err, sec)
 	}
-	if _, err := m.Get("builder", "standards-go#Nope"); !errors.Is(err, ErrSectionUnknown) || !strings.Contains(err.Error(), "Errors") {
+	if _, err := m.Get("builder", "standards-go#Nope"); !errors.Is(err, ErrSectionUnknown) ||
+		!strings.Contains(err.Error(), "Errors") {
 		t.Fatalf("unknown section must list the sections: %v", err)
 	}
 	if _, err := m.Get("builder", "standards-none"); !errors.Is(err, ErrSkillUnknown) {

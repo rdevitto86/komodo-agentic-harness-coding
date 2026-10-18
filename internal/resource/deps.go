@@ -25,8 +25,7 @@ type Thrower interface {
 
 // Pauser is the Runtime Manager as the Resource Manager uses it.
 type Pauser interface {
-	// PauseGroups pauses each named group after its current step; the Runtime Manager resumes them
-	// at Until.
+	// PauseGroups pauses each named group after its current step; the Runtime Manager resumes them at Until.
 	PauseGroups(ctx context.Context, o PauseOrder) error
 	// NudgeGroups sends the token-cap nudge to the running agents of each named group.
 	NudgeGroups(ctx context.Context, o NudgeOrder) error

@@ -17,9 +17,6 @@ type WindowRecord struct {
 // machineRecords adapts the State Manager's machine-wide record to Records.
 type machineRecords struct{ m *state.Machine }
 
-// NewRecords returns the Records that reads and writes window records through m.
-func NewRecords(m *state.Machine) Records { return machineRecords{m} }
-
 // LoadWindows returns every stored window record.
 func (r machineRecords) LoadWindows(ctx context.Context) (map[WindowKey]WindowRecord, error) {
 	stored, err := r.m.LoadWindows(ctx)
@@ -52,9 +49,10 @@ func (r machineRecords) SaveWindow(ctx context.Context, k WindowKey, rec WindowR
 	)
 }
 
+// NewRecords returns the Records that reads and writes window records through m.
+func NewRecords(m *state.Machine) Records { return machineRecords{m} }
+
 // sameRecord reports whether two records hold the same figures and the same instant.
 func sameRecord(a, b WindowRecord) bool {
-	return a.PercentUsed == b.PercentUsed &&
-		a.Sessions == b.Sessions &&
-		a.ResetAt.Equal(b.ResetAt)
+	return a.PercentUsed == b.PercentUsed && a.Sessions == b.Sessions && a.ResetAt.Equal(b.ResetAt)
 }

@@ -1,5 +1,4 @@
-// Package format turns the harness's structured messages into the text a person reads, from
-// templates and facts alone.
+// Package format turns the harness's structured messages into the text a person reads, from templates and facts alone.
 package format
 
 import (
@@ -18,8 +17,7 @@ import (
 
 // Message is the JSON that FormatJSON reads.
 type Message struct {
-	// reply.run, error.over_limit, event.run-status, ...
-	Shape string          `json:"shape"`
+	Shape string          `json:"shape"`          // reply.run, error.over_limit, event.run-status, ...
 	Code  string          `json:"code,omitempty"` // set for error.* and needs.* shapes
 	Facts json.RawMessage `json:"facts"`          // decoded strictly into the shape's fact struct
 }
@@ -74,17 +72,14 @@ func New(o Options) (*Formatter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open embedded output files: %w", err)
 	}
-
 	return newFromFS(sub, o)
 }
 
-// newFromFS parses the templates of the profile found under fsys, which is rooted at the output
-// folder.
+// newFromFS parses the templates of the profile found under fsys, which is rooted at the output folder.
 func newFromFS(fsys fs.FS, o Options) (*Formatter, error) {
 	if o.Profile != ProfileAdhd && o.Profile != ProfileStandard {
 		return nil, fmt.Errorf("unknown profile %q", o.Profile)
 	}
-
 	if o.Color != "" && o.Color != ColorOn && o.Color != ColorOff {
 		return nil, fmt.Errorf("unresolved colour mode %q", o.Color)
 	}
@@ -92,7 +87,6 @@ func newFromFS(fsys fs.FS, o Options) (*Formatter, error) {
 	f := &Formatter{opts: o, tmpls: make(map[string]*template.Template, len(shapes))}
 	for _, shape := range shapeNames() {
 		name := string(o.Profile) + "/" + shape + ".tmpl"
-
 		text, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			return nil, fmt.Errorf("read template %s: %w", name, err)
@@ -102,7 +96,6 @@ func newFromFS(fsys fs.FS, o Options) (*Formatter, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse template %s: %w", name, err)
 		}
-
 		if err := checkFuncs(tm); err != nil {
 			return nil, fmt.Errorf("template %s: %w", name, err)
 		}
@@ -124,7 +117,6 @@ func (f *Formatter) FormatJSON(msg []byte) (Rendered, error) {
 	if !ok {
 		return Rendered{}, fmt.Errorf("%w: %q", ErrShapeUnknown, m.Shape)
 	}
-
 	if err := checkCode(m, info.coded); err != nil {
 		return Rendered{}, err
 	}
@@ -133,7 +125,6 @@ func (f *Formatter) FormatJSON(msg []byte) (Rendered, error) {
 	if err := decodeFacts(m.Facts, facts); err != nil {
 		return Rendered{}, fmt.Errorf("%w: %v", ErrFactsInvalid, err)
 	}
-
 	if err := checkFactsCode(m, facts); err != nil {
 		return Rendered{}, err
 	}
@@ -146,7 +137,6 @@ func (f *Formatter) FormatJSON(msg []byte) (Rendered, error) {
 	}
 
 	wrapped := wrap(tidy(text), wrapWidth)
-
 	r := Rendered{Verdict: verdictOf(wrapped), Report: wrapped}
 	if f.opts.Color == ColorOn {
 		r.Report = colorize(wrapped)
@@ -166,13 +156,11 @@ func (f *Formatter) execute(shape string, facts any) (string, error) {
 	if err := tm.Execute(&buf, facts); err != nil {
 		return "", fmt.Errorf("render %s: %w", shape, err)
 	}
-
 	if end := tm.Lookup(turnEndName); end != nil && f.opts.TurnEnd {
 		var eb bytes.Buffer
 		if err := end.Execute(&eb, facts); err != nil {
 			return "", fmt.Errorf("render %s closing headings: %w", shape, err)
 		}
-
 		if strings.TrimSpace(eb.String()) != "" {
 			buf.WriteString("\n\n" + eb.String())
 		}
@@ -186,12 +174,10 @@ func OutputStyle(p Profile) (string, error) {
 	if p != ProfileAdhd && p != ProfileStandard {
 		return "", fmt.Errorf("unknown profile %q", p)
 	}
-
 	b, err := komodo.Embedded.ReadFile("embed/output/" + string(p) + ".md")
 	if err != nil {
 		return "", fmt.Errorf("read style text: %w", err)
 	}
-
 	return string(b), nil
 }
 
@@ -272,30 +258,22 @@ func checkCode(m Message, coded bool) error {
 	if strings.HasPrefix(m.Shape, "needs.") {
 		known = IsBlockReason(m.Code)
 	}
-
 	if (coded || m.Code != "") && !known {
 		return fmt.Errorf("%w: %q", ErrCodeUnknown, m.Code)
 	}
 
 	for _, prefix := range []string{"error.", "needs.", "code."} {
 		if want, ok := strings.CutPrefix(m.Shape, prefix); ok && m.Code != want {
-			return fmt.Errorf(
-				"%w: code %q does not match shape %q",
-				ErrCodeUnknown,
-				m.Code,
-				m.Shape,
-			)
+			return fmt.Errorf("%w: code %q does not match shape %q", ErrCodeUnknown, m.Code, m.Shape)
 		}
 	}
 
 	return nil
 }
 
-// checkFactsCode fills an absent facts.code from the message code and refuses one that differs from
-// it.
+// checkFactsCode fills an absent facts.code from the message code and refuses one that differs from it.
 func checkFactsCode(m Message, facts any) error {
 	var code *string
-
 	switch f := facts.(type) {
 	case *ErrorFacts:
 		code = &f.Code
@@ -304,33 +282,23 @@ func checkFactsCode(m Message, facts any) error {
 	default:
 		return nil
 	}
-
 	if *code == "" {
 		*code = m.Code
 	}
-
 	if *code != m.Code {
-		return fmt.Errorf(
-			"%w: facts code %q does not match message code %q",
-			ErrCodeUnknown,
-			*code,
-			m.Code,
-		)
+		return fmt.Errorf("%w: facts code %q does not match message code %q", ErrCodeUnknown, *code, m.Code)
 	}
 
 	return nil
 }
 
-// decodeFacts decodes the facts object into dst, refusing unknown fields; absent facts decode as an
-// empty object.
+// decodeFacts decodes the facts object into dst, refusing unknown fields; absent facts decode as an empty object.
 func decodeFacts(raw json.RawMessage, dst any) error {
 	if t := bytes.TrimSpace(raw); len(t) == 0 || string(t) == "null" {
 		raw = []byte("{}")
 	}
-
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
-
 	return dec.Decode(dst)
 }

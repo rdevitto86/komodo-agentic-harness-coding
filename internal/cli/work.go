@@ -71,9 +71,12 @@ func newID() string {
 	}
 	_, _ = rand.Read(b[6:])
 
-	b[6] = b[6]&0x0f | 0x70                                                       // TODO - we need a small comment here
-	b[8] = b[8]&0x3f | 0x80                                                       // TODO - we need a small comment here
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]) // TODO - we need a small comment here
+	// Set the version field to 7 and the variant field to 10.
+	b[6] = b[6]&0x0f | 0x70
+	b[8] = b[8]&0x3f | 0x80
+
+	// Write the bytes as 8-4-4-4-12 hex digits.
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
 // now returns the current UTC time to the second, as an event carries it.

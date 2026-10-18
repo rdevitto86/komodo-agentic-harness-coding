@@ -19,7 +19,12 @@ type serveRig struct {
 // newServeRig starts Serve on a Manager with no collaborators beyond the worktree.
 func newServeRig(t *testing.T, stage state.Stage) *serveRig {
 	t.Helper()
-	spec := GroupSpec{Run: "run-1", Group: "tg-1", Lease: LeaseRef{Branch: "b", Worktree: t.TempDir()}, Saved: &Progress{Stage: stage}}
+	spec := GroupSpec{
+		Run:   "run-1",
+		Group: "tg-1",
+		Lease: LeaseRef{Branch: "b", Worktree: t.TempDir()},
+		Saved: &Progress{Stage: stage},
+	}
 	m, err := New(spec, Collaborators{})
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +100,11 @@ func TestServeReturnsATimerGrantToTheWaitingCall(t *testing.T) {
 	r.next(t, MsgState)
 	got := make(chan TimerGrant, 1)
 	go func() {
-		g, _ := r.m.runtime().ExtendTimer(context.Background(), TimerRequest{Session: "s1", Used: time.Minute, Limit: time.Hour})
+		g, _ := r.m.runtime().ExtendTimer(context.Background(), TimerRequest{
+			Session: "s1",
+			Used:    time.Minute,
+			Limit:   time.Hour,
+		})
 		got <- g
 	}()
 	msg := r.next(t, MsgTimer)

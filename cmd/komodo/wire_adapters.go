@@ -23,44 +23,6 @@ import (
 // stateStore adds a context to the State Manager's calls.
 type stateStore struct{ m *state.Manager }
 
-// agentRetries reads each role's retry count from the agent registry.
-type agentRetries struct{ cfg *config.Manager }
-
-// ctxAdapter gives the Runtime Manager the Context Manager's cache hook and a per-agent context.
-type ctxAdapter struct{}
-
-// planSource reads the groups of a run from the task lists under the repository root.
-type planSource struct{}
-
-// epicGit adopts a clone before the branch calls the Runtime Manager makes in it.
-type epicGit struct{ g *core.Git }
-
-// janitor runs the machine-wide clean through the Cleanup Handler.
-type janitor struct{ h *cleanup.Handler }
-
-// publishedAdapter drops the report the Cleanup Handler returns, which the Commit Handler does not
-// read.
-type publishedAdapter struct {
-	h       *cleanup.Handler
-	landing func(epic string) string
-}
-
-// noContainers is the container list when Docker is not in use.
-type noContainers struct{}
-
-// unfinished lists the groups whose records are not done, for the cleanup sweep; the records pin no
-// binary version, so each names the running one.
-type unfinished struct{ st *state.Manager }
-
-// groupLocks answers whether a group is in a run from the repository's group records.
-type groupLocks struct{ st *state.Manager }
-
-// Compile-time proof that the host git wrapper serves the Commit and Cleanup handlers.
-var (
-	_ cleanup.Git = (*core.Git)(nil)
-	_ commit.Git  = (*core.Git)(nil)
-)
-
 // Load returns a group's record.
 func (s stateStore) Load(_ context.Context, g string) (state.Record, error) { return s.m.Load(g) }
 
@@ -70,14 +32,12 @@ func (s stateStore) Create(_ context.Context, g string, st engine.State) (state.
 }
 
 // Save writes a group's record at the revision after rev.
-func (s stateStore) Save(
-	_ context.Context,
-	g string,
-	st engine.State,
-	rev int,
-) (state.Record, error) {
+func (s stateStore) Save(_ context.Context, g string, st engine.State, rev int) (state.Record, error) {
 	return s.m.Save(g, st, rev)
 }
+
+// agentRetries reads each role's retry count from the agent registry.
+type agentRetries struct{ cfg *config.Manager }
 
 // Retries returns the retries of an agent role.
 func (a agentRetries) Retries(name string) (int, error) {
@@ -85,9 +45,11 @@ func (a agentRetries) Retries(name string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("no agent %s", name)
 	}
-
 	return ag.Limits.Retries, nil
 }
+
+// ctxAdapter gives the Runtime Manager the Context Manager's cache hook and a per-agent context.
+type ctxAdapter struct{}
 
 // UseCache hands the repository's cache handle to the Context Manager.
 func (c ctxAdapter) UseCache(string, cache.Handle) {}
@@ -97,19 +59,17 @@ func (c ctxAdapter) GetContext(context.Context, string, string) (json.RawMessage
 	return json.RawMessage("{}"), nil
 }
 
+// planSource reads the groups of a run from the task lists under the repository root.
+type planSource struct{}
+
 // Specs returns the group specs for the labels, in task-list order.
-func (p planSource) Specs(
-	_ context.Context,
-	root string,
-	labels []string,
-) ([]engine.GroupSpec, error) {
+func (p planSource) Specs(_ context.Context, root string, labels []string) ([]engine.GroupSpec, error) {
 	epics, _, err := intake.Load(root)
 	if err != nil {
 		return nil, fmt.Errorf("read the task lists: %w", err)
 	}
 
 	ids := map[string]string{}
-
 	for _, e := range epics {
 		for _, g := range e.Groups {
 			ids[g.Name] = g.ID
@@ -123,7 +83,6 @@ func (p planSource) Specs(
 	for _, e := range epics {
 		for _, g := range e.Groups {
 			order++
-
 			if !slices.Contains(labels, g.Name) {
 				continue
 			}
@@ -157,26 +116,26 @@ func (p planSource) Specs(
 	return out, nil
 }
 
+// epicGit adopts a clone before the branch calls the Runtime Manager makes in it.
+type epicGit struct{ g *core.Git }
+
 // BranchExists reports whether the epic branch exists in the clone.
 func (e epicGit) BranchExists(ctx context.Context, clone, branch string) (bool, error) {
 	e.g.Adopt(clone)
-
 	return e.g.BranchExists(ctx, clone, branch)
 }
 
 // CreateBranch cuts the epic branch from base in the clone.
 func (e epicGit) CreateBranch(ctx context.Context, clone, branch, base string) error {
 	e.g.Adopt(clone)
-
 	return e.g.CreateBranch(ctx, clone, branch, base)
 }
 
+// janitor runs the machine-wide clean through the Cleanup Handler.
+type janitor struct{ h *cleanup.Handler }
+
 // Clean removes, or with dryRun lists, what belongs to no open run.
-func (j janitor) Clean(
-	ctx context.Context,
-	dryRun bool,
-	_ map[string]bool,
-) ([]engine.CleanItem, error) {
+func (j janitor) Clean(ctx context.Context, dryRun bool, _ map[string]bool) ([]engine.CleanItem, error) {
 	var (
 		rep cleanup.Report
 		err error
@@ -186,12 +145,17 @@ func (j janitor) Clean(
 	} else {
 		rep, err = j.h.Sweep(ctx)
 	}
-
 	if err != nil {
 		return nil, err
 	}
 
 	return cleanItems(rep), nil
+}
+
+// publishedAdapter drops the report the Cleanup Handler returns, which the Commit Handler does not read.
+type publishedAdapter struct {
+	h       *cleanup.Handler
+	landing func(epic string) string
 }
 
 // Complete cleans up one published group.
@@ -213,11 +177,18 @@ func (p publishedAdapter) Complete(ctx context.Context, pub commit.Published) er
 	return err
 }
 
+// noContainers is the container list when Docker is not in use.
+type noContainers struct{}
+
 // Remove removes nothing.
 func (noContainers) Remove(context.Context, string) error { return nil }
 
 // List lists nothing.
 func (noContainers) List(context.Context) ([]string, error) { return nil, nil }
+
+// unfinished lists the groups whose records are not done, for the cleanup sweep; the records pin no binary version, so each
+// names the running one.
+type unfinished struct{ st *state.Manager }
 
 // Unfinished returns the groups a `run` could still continue.
 func (u unfinished) Unfinished(context.Context) ([]cleanup.GroupRef, error) {
@@ -227,7 +198,6 @@ func (u unfinished) Unfinished(context.Context) ([]cleanup.GroupRef, error) {
 	}
 
 	var out []cleanup.GroupRef
-
 	for _, r := range recs {
 		if r.State.Stage != state.StageDone {
 			out = append(out, cleanup.GroupRef{Group: r.Header.Group, Version: version})
@@ -237,17 +207,24 @@ func (u unfinished) Unfinished(context.Context) ([]cleanup.GroupRef, error) {
 	return out, nil
 }
 
+// groupLocks answers whether a group is in a run from the repository's group records.
+type groupLocks struct{ st *state.Manager }
+
+// Compile-time proof that the host git wrapper serves the Commit and Cleanup handlers.
+var (
+	_ cleanup.Git = (*core.Git)(nil)
+	_ commit.Git  = (*core.Git)(nil)
+)
+
 // InRun reports the run that holds a group whose record is not done.
 func (g groupLocks) InRun(group string) (string, bool, error) {
 	rec, err := g.st.Peek(group)
 	if errors.Is(err, state.ErrNotFound) {
 		return "", false, nil
 	}
-
 	if err != nil {
 		return "", false, err
 	}
-
 	return rec.State.Run, rec.State.Stage != state.StageDone, nil
 }
 
@@ -256,7 +233,6 @@ func (s *stack) containers() cleanup.Containers {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return noContainers{}
 	}
-
 	return sandbox.NewDocker(sandbox.DockerOptions{})
 }
 
@@ -265,14 +241,12 @@ func jsonOf(v any) (json.RawMessage, error) {
 	if v == nil {
 		return nil, nil
 	}
-
 	return json.Marshal(v)
 }
 
 // jsonRaw encodes a value that cannot fail to encode.
 func jsonRaw(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
-
 	return b
 }
 
@@ -282,6 +256,5 @@ func cleanItems(r cleanup.Report) []engine.CleanItem {
 	for _, it := range r.Removed {
 		out = append(out, engine.CleanItem{Kind: it.Kind, Name: it.Name})
 	}
-
 	return out
 }

@@ -15,7 +15,14 @@ var t0 = time.Date(2026, 10, 14, 15, 20, 0, 0, time.UTC)
 
 // doneEvent builds a task.done event of run-a, sec seconds after t0.
 func doneEvent(sec int, group ID, task string) Event {
-	return Event{Type: TypeRunStatus, Subtype: "task.done", Run: "run-a", Group: group, Time: t0.Add(time.Duration(sec) * time.Second), Data: &TaskDone{Task: task}}
+	return Event{
+		Type:    TypeRunStatus,
+		Subtype: "task.done",
+		Run:     "run-a",
+		Group:   group,
+		Time:    t0.Add(time.Duration(sec) * time.Second),
+		Data:    &TaskDone{Task: task},
+	}
 }
 
 // jsonLine marshals an event as one log line.
@@ -70,7 +77,8 @@ func TestReplayTornLastLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Events) != 2 || len(got.Gaps) != 1 || got.Gaps[0].Kind != "torn" || got.Gaps[0].After != 2 || got.Skipped != 0 {
+	if len(got.Events) != 2 || len(got.Gaps) != 1 || got.Gaps[0].Kind != "torn" || got.Gaps[0].After != 2 ||
+		got.Skipped != 0 {
 		t.Fatalf("replay = %+v", got)
 	}
 }
@@ -78,7 +86,12 @@ func TestReplayTornLastLine(t *testing.T) {
 // An unparseable line before the last is skipped and counted.
 func TestReplaySkipsUnparseableMiddleLine(t *testing.T) {
 	dir := t.TempDir()
-	writeLog(t, dir, "run-a", joinLines(jsonLine(t, doneEvent(1, "g1", "a")), "{not json", jsonLine(t, doneEvent(2, "g1", "b"))))
+	writeLog(
+		t,
+		dir,
+		"run-a",
+		joinLines(jsonLine(t, doneEvent(1, "g1", "a")), "{not json", jsonLine(t, doneEvent(2, "g1", "b"))),
+	)
 	got, err := readerOver(t, dir).Replay(context.Background(), "run-a", "")
 	if err != nil || len(got.Events) != 2 || got.Skipped != 1 || len(got.Gaps) != 0 {
 		t.Fatalf("replay = %+v, %v", got, err)
@@ -123,7 +136,8 @@ func TestReplayMissingLog(t *testing.T) {
 		"no file":    {readerOver(t, t.TempDir()), "run-a"},
 	}
 	for name, c := range cases {
-		if _, err := c.r.Replay(context.Background(), c.run, ""); err == nil || !strings.Contains(err.Error(), string(c.run)) {
+		if _, err := c.r.Replay(context.Background(), c.run, ""); err == nil ||
+			!strings.Contains(err.Error(), string(c.run)) {
 			t.Errorf("%s: err = %v, want one naming the run", name, err)
 		}
 	}
@@ -175,7 +189,11 @@ func TestReadFolderVisitsEveryRunLog(t *testing.T) {
 	if err != nil || len(runs) != 2 || runs[0] != "run-a" || runs[1] != "run-b" || n != 3 {
 		t.Fatalf("runs %v events %d err %v", runs, n, err)
 	}
-	if err := ReadFolder(context.Background(), filepath.Join(dir, "none"), func(ID, ReplayLog) error { return nil }); err != nil {
+	if err := ReadFolder(
+		context.Background(),
+		filepath.Join(dir, "none"),
+		func(ID, ReplayLog) error { return nil },
+	); err != nil {
 		t.Fatalf("a missing folder reads as empty, got %v", err)
 	}
 }

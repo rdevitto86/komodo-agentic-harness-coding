@@ -27,7 +27,18 @@ func TestCatalogsPassTheFormatChecks(t *testing.T) {
 	if len(cats) != len(lensOrder) {
 		t.Fatalf("%d catalogs, want %d", len(cats), len(lensOrder))
 	}
-	minRules := map[string]int{"correctness": 4, "security": 5, "spec": 1, "contract": 2, "concurrency": 4, "platform": 4, "config": 3, "readiness": 2, "quality": 3, "economy": 7}
+	minRules := map[string]int{
+		"correctness": 4,
+		"security":    5,
+		"spec":        1,
+		"contract":    2,
+		"concurrency": 4,
+		"platform":    4,
+		"config":      3,
+		"readiness":   2,
+		"quality":     3,
+		"economy":     7,
+	}
 	for _, c := range cats {
 		if len(c.Rules) < minRules[c.Lens] {
 			t.Errorf("%s has %d rules, want at least %d", c.Lens, len(c.Rules), minRules[c.Lens])
@@ -41,7 +52,21 @@ func TestCatalogsPassTheFormatChecks(t *testing.T) {
 }
 
 func TestCatalogValidateRefusesBadCatalogs(t *testing.T) {
-	good := Catalog{Lens: "x", When: WhenAlways, Rules: []Rule{{ID: "x.1", Severity: SeverityMajor, Applies: Applies{Globs: []string{"**"}}, Check: "c", Evidence: "e", Source: "s"}}, Text: map[string]string{"x.1": "t"}}
+	good := Catalog{
+		Lens: "x",
+		When: WhenAlways,
+		Rules: []Rule{
+			{
+				ID:       "x.1",
+				Severity: SeverityMajor,
+				Applies:  Applies{Globs: []string{"**"}},
+				Check:    "c",
+				Evidence: "e",
+				Source:   "s",
+			},
+		},
+		Text: map[string]string{"x.1": "t"},
+	}
 	if err := good.validate(); err != nil {
 		t.Fatalf("good catalog: %v", err)
 	}
@@ -97,7 +122,14 @@ func TestLensesSelectByCondition(t *testing.T) {
 		d    Diff
 		lens string
 	}{
-		{"exported func", Diff{Paths: []string{"a.go"}, Text: "-func (g TaskGate) Complete(a int) {\n+func (g TaskGate) Complete(a, b int) {\n"}, "contract"},
+		{
+			"exported func",
+			Diff{
+				Paths: []string{"a.go"},
+				Text:  "-func (g TaskGate) Complete(a int) {\n+func (g TaskGate) Complete(a, b int) {\n",
+			},
+			"contract",
+		},
 		{"exported type", Diff{Paths: []string{"a.go"}, Text: "+type Role struct {\n"}, "contract"},
 		{"goroutine", Diff{Paths: []string{"a.go"}, Text: "+\tgo func() {\n"}, "concurrency"},
 		{"channel", Diff{Paths: []string{"a.go"}, Text: "+\tch := make(chan int)\n"}, "concurrency"},
@@ -118,7 +150,10 @@ func TestLensesSelectByCondition(t *testing.T) {
 			t.Errorf("plain diff selected %s", other)
 		}
 	}
-	if got := r.Lenses(Diff{Paths: []string{"a.go"}, Text: "+++ b/a.go\n--- a/a.go\n+x\n"}, ProfileThorough); slices.Contains(got, "contract") {
+	if got := r.Lenses(
+		Diff{Paths: []string{"a.go"}, Text: "+++ b/a.go\n--- a/a.go\n+x\n"},
+		ProfileThorough,
+	); slices.Contains(got, "contract") {
 		t.Error("a file header line counted as an exported symbol")
 	}
 }
@@ -185,20 +220,29 @@ func TestAcceptFinding(t *testing.T) {
 	if sev, verified, err := r.AcceptFinding(ok, head, lines{}); err != nil || !verified || sev != SeverityMajor {
 		t.Errorf("verified finding: %q %v %v", sev, verified, err)
 	}
-	if sev, verified, err := r.AcceptFinding(Finding{Rule: "quality.1", File: "a.go", Line: 2, Quote: "bad()"}, head, lines{}); err != nil || !verified || sev != SeverityMinor {
+	minor := Finding{Rule: "quality.1", File: "a.go", Line: 2, Quote: "bad()"}
+	if sev, verified, err := r.AcceptFinding(minor, head, lines{}); err != nil || !verified || sev != SeverityMinor {
 		t.Errorf("minor finding: %q %v %v", sev, verified, err)
 	}
 	fake := Finding{Rule: "correctness.1", File: "a.go", Line: 2, Quote: "made up"}
 	if _, verified, err := r.AcceptFinding(fake, head, lines{}); err != nil || verified {
 		t.Errorf("fake quote: %v %v", verified, err)
 	}
-	if _, _, err := r.AcceptFinding(Finding{Rule: "x.99", File: "a.go", Line: 1, Quote: "x := 1"}, head, lines{}); err == nil {
+	unknown := Finding{Rule: "x.99", File: "a.go", Line: 1, Quote: "x := 1"}
+	if _, _, err := r.AcceptFinding(unknown, head, lines{}); err == nil {
 		t.Error("unknown rule accepted")
 	}
-	if _, verified, err := r.AcceptFinding(Finding{Rule: "std.comments.1", File: "a.go", Line: 1, Quote: "x := 1"}, head, lines{}); err != nil || !verified {
+	if _, verified, err := r.AcceptFinding(
+		Finding{Rule: "std.comments.1", File: "a.go", Line: 1, Quote: "x := 1"},
+		head,
+		lines{},
+	); err != nil || !verified {
 		t.Errorf("standards rule: %v %v", verified, err)
 	}
-	for _, shape := range []Finding{{Rule: "correctness.1", Line: 1, Quote: "q"}, {Rule: "correctness.1", File: "a.go", Line: 0, Quote: "q"}} {
+	for _, shape := range []Finding{
+		{Rule: "correctness.1", Line: 1, Quote: "q"},
+		{Rule: "correctness.1", File: "a.go", Line: 0, Quote: "q"},
+	} {
 		if _, _, err := r.AcceptFinding(shape, head, lines{}); err == nil {
 			t.Errorf("bad shape accepted: %+v", shape)
 		}
@@ -212,7 +256,8 @@ func TestExactlyOnce(t *testing.T) {
 	if err := ExactlyOnce([]string{"a", "b"}, []string{"a"}); err == nil || !strings.Contains(err.Error(), "b") {
 		t.Errorf("skipped: %v", err)
 	}
-	if err := ExactlyOnce([]string{"a", "b"}, []string{"a", "b", "a"}); err == nil || !strings.Contains(err.Error(), "a has 2") {
+	if err := ExactlyOnce([]string{"a", "b"}, []string{"a", "b", "a"}); err == nil ||
+		!strings.Contains(err.Error(), "a has 2") {
 		t.Errorf("repeated: %v", err)
 	}
 }
@@ -234,7 +279,11 @@ func TestReviewerResult(t *testing.T) {
 	if err := rv.AcceptResult([]string{"tsk-add-lock", "tsk-add-scope"}, r); err == nil {
 		t.Error("repeated task accepted")
 	}
-	for _, bad := range []string{`{"verdicts": [{"task": "t", "verdict": "ok"}]}`, `{"verdicts": [], "x": 1}`, `{"verdicts": [{"task": "", "verdict": "met"}]}`} {
+	for _, bad := range []string{
+		`{"verdicts": [{"task": "t", "verdict": "ok"}]}`,
+		`{"verdicts": [], "x": 1}`,
+		`{"verdicts": [{"task": "", "verdict": "met"}]}`,
+	} {
 		if _, err := ParseReviewerResult([]byte(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
@@ -264,17 +313,53 @@ func TestDecide(t *testing.T) {
 		{"both pass", pass, rpass, DecisionApprove, ""},
 		{"reviewer still running", pass, ReviewerVerdict{}, DecisionWait, ""},
 		{"tester still running", TesterVerdict{}, rpass, DecisionWait, ""},
-		{"reviewer fails first, tester cancelled", TesterVerdict{}, ReviewerVerdict{Ended: true, Blocking: blocking}, DecisionReturn, ""},
+		{
+			"reviewer fails first, tester cancelled",
+			TesterVerdict{},
+			ReviewerVerdict{Ended: true, Blocking: blocking},
+			DecisionReturn,
+			"",
+		},
 		{"reviewer not_met", pass, ReviewerVerdict{Ended: true, NotMet: []string{"t1"}}, DecisionReturn, ""},
-		{"tester item failed, reviewer done", TesterVerdict{Ended: true, Failed: []string{"ac-1"}}, rpass, DecisionReturn, ""},
-		{"tester item failed, reviewer running", TesterVerdict{Ended: true, Failed: []string{"ac-1"}}, ReviewerVerdict{}, DecisionWait, ""},
+		{
+			"tester item failed, reviewer done",
+			TesterVerdict{Ended: true, Failed: []string{"ac-1"}},
+			rpass,
+			DecisionReturn,
+			"",
+		},
+		{
+			"tester item failed, reviewer running",
+			TesterVerdict{Ended: true, Failed: []string{"ac-1"}},
+			ReviewerVerdict{},
+			DecisionWait,
+			"",
+		},
 		{"tester task not confirmed", TesterVerdict{Ended: true, NotMet: []string{"t1"}}, rpass, DecisionReturn, ""},
 		{"first dispute", TesterVerdict{Ended: true, Disputed: []string{"ac-1"}}, rpass, DecisionWait, ""},
-		{"first dispute while reviewer fails", TesterVerdict{Ended: true, Disputed: []string{"ac-1"}}, ReviewerVerdict{Ended: true, Blocking: blocking}, DecisionReturn, ""},
-		{"second dispute", TesterVerdict{Ended: true, Restarts: 1, Disputed: []string{"ac-1"}}, ReviewerVerdict{}, DecisionBlock, BlockTester},
+		{
+			"first dispute while reviewer fails",
+			TesterVerdict{Ended: true, Disputed: []string{"ac-1"}},
+			ReviewerVerdict{Ended: true, Blocking: blocking},
+			DecisionReturn,
+			"",
+		},
+		{
+			"second dispute",
+			TesterVerdict{Ended: true, Restarts: 1, Disputed: []string{"ac-1"}},
+			ReviewerVerdict{},
+			DecisionBlock,
+			BlockTester,
+		},
 		{"split", TesterVerdict{Ended: true, Split: []string{"ac-1"}}, ReviewerVerdict{}, DecisionBlock, BlockFlaky},
 		{"brief incomplete", pass, ReviewerVerdict{Ended: true, BriefIncomplete: true}, DecisionBlock, BlockBrief},
-		{"unconfirmed item never blocks", TesterVerdict{Ended: true, Pass: true, Skipped: []string{"ac-9"}}, rpass, DecisionApprove, ""},
+		{
+			"unconfirmed item never blocks",
+			TesterVerdict{Ended: true, Pass: true, Skipped: []string{"ac-9"}},
+			rpass,
+			DecisionApprove,
+			"",
+		},
 		{"tester not passed with no detail", TesterVerdict{Ended: true}, rpass, DecisionReturn, ""},
 	}
 	for _, c := range cases {
@@ -283,8 +368,13 @@ func TestDecide(t *testing.T) {
 			t.Errorf("%s: %s %q, want %s %q", c.name, got.Decision, got.Reason, c.want, c.reason)
 		}
 	}
-	out := Decide(TesterVerdict{Ended: true, Failed: []string{"ac-1"}, NotMet: []string{"t2", "t1"}}, ReviewerVerdict{Ended: true, Blocking: blocking, NotMet: []string{"t1"}})
-	if out.Decision != DecisionReturn || len(out.Findings) != 1 || !slices.Equal(out.Items, []string{"ac-1"}) || !slices.Equal(out.NotMet, []string{"t1", "t2"}) {
+	out := Decide(TesterVerdict{Ended: true, Failed: []string{"ac-1"}, NotMet: []string{"t2", "t1"}}, ReviewerVerdict{
+		Ended:    true,
+		Blocking: blocking,
+		NotMet:   []string{"t1"},
+	})
+	if out.Decision != DecisionReturn || len(out.Findings) != 1 || !slices.Equal(out.Items, []string{"ac-1"}) ||
+		!slices.Equal(out.NotMet, []string{"t1", "t2"}) {
 		t.Errorf("both fail in one tick: %+v", out)
 	}
 }

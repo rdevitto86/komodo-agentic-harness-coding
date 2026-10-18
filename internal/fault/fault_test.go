@@ -21,7 +21,11 @@ func TestKindExitCode(t *testing.T) {
 
 // TestEventKeys checks each fault struct binds the type and subtype.
 func TestEventKeys(t *testing.T) {
-	cases := map[string]bus.Payload{"fault.error": ErrorFault{}, "fault.panic": PanicFault{}, "fault.resource": ResourceFault{}}
+	cases := map[string]bus.Payload{
+		"fault.error":    ErrorFault{},
+		"fault.panic":    PanicFault{},
+		"fault.resource": ResourceFault{},
+	}
 	for st, p := range cases {
 		if k := p.EventKey(); k.Type != bus.TypeError || string(k.Subtype) != st {
 			t.Errorf("%T: key %+v, want error/%s", p, k, st)
@@ -31,8 +35,13 @@ func TestEventKeys(t *testing.T) {
 
 // TestDecodeContractLines decodes the two event lines through the bus registry.
 func TestDecodeContractLines(t *testing.T) {
-	panicLine := `{"type":"error","subtype":"fault.panic","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","time":"2026-10-14T16:02:45Z","data":{"component":"task","code":"internal","kind":"internal","severity":"error","reason":"index out of range [3] with length 3","panic":true,"stack":"goroutine 41 [running]:\n..."}}`
-	resLine := `{"type":"error","subtype":"fault.resource","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T16:10:00Z","data":{"component":"resource","code":"over_limit","kind":"refused","severity":"warn","reason":"plan window 82% used on claude-cli","fix":"wait for the window reset"}}`
+	panicLine := `{"type":"error","subtype":"fault.panic","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",` +
+		`"group":"0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30","time":"2026-10-14T16:02:45Z","data":{"component":"task",` +
+		`"code":"internal","kind":"internal","severity":"error","reason":"index out of range [3] with length 3",` +
+		`"panic":true,"stack":"goroutine 41 [running]:\n..."}}`
+	resLine := `{"type":"error","subtype":"fault.resource","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"",` +
+		`"time":"2026-10-14T16:10:00Z","data":{"component":"resource","code":"over_limit","kind":"refused",` +
+		`"severity":"warn","reason":"plan window 82% used on claude-cli","fix":"wait for the window reset"}}`
 	for _, line := range []string{panicLine, resLine} {
 		var e bus.Event
 		if err := json.Unmarshal([]byte(line), &e); err != nil {

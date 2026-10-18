@@ -88,7 +88,6 @@ func (m *Manager) roleLimits(role string, flat map[string]Setting, over AgentOve
 	if s := flat["limits.session_wall_min"]; s.Source == LayerMachine {
 		l.WallMin = s.Value.(int)
 	}
-
 	if s := flat["limits.session_idle_min"]; s.Source == LayerMachine {
 		l.IdleMin = s.Value.(int)
 	}
@@ -96,11 +95,9 @@ func (m *Manager) roleLimits(role string, flat map[string]Setting, over AgentOve
 	if over.SessionWallMin != nil {
 		l.WallMin = *over.SessionWallMin
 	}
-
 	if over.SessionIdleMin != nil {
 		l.IdleMin = *over.SessionIdleMin
 	}
-
 	if over.Retries != nil {
 		l.Retries = *over.Retries
 	}
@@ -216,11 +213,9 @@ func checkRoles(roles map[string]Agent, known Known) error {
 		if a.V != 1 {
 			return fmt.Errorf("role %s: schema version %d; want 1", role, a.V)
 		}
-
 		if !slices.Contains([]Weight{Heavy, Standard, Light}, a.Weight) {
 			return fmt.Errorf("role %s: weight %q is not heavy, standard or light", role, a.Weight)
 		}
-
 		if len(a.Chain) == 0 {
 			return fmt.Errorf("role %s: chain is empty", role)
 		}
@@ -241,7 +236,6 @@ func checkRoles(roles map[string]Agent, known Known) error {
 		if err := json.Unmarshal(a.Result, &res); err != nil {
 			return fmt.Errorf("role %s: result schema: %w", role, err)
 		}
-
 		if want := fmt.Sprintf("komodo:agent/%s/result/%d", role, a.V); res.ID != want {
 			return fmt.Errorf("role %s: result $id %q; want %q", role, res.ID, want)
 		}
@@ -309,7 +303,6 @@ func cloneAgent(a Agent) Agent {
 	a.Slots.Required = slices.Clone(a.Slots.Required)
 	a.Slots.Optional = slices.Clone(a.Slots.Optional)
 	a.Result = slices.Clone(a.Result)
-
 	return a
 }
 
@@ -319,9 +312,7 @@ func splitAgentKey(key string) (role, field string, ok bool) {
 	if !found {
 		return "", "", false
 	}
-
 	role, field, ok = strings.Cut(rest, ".")
-
 	return role, field, ok
 }
 
@@ -329,7 +320,6 @@ func splitAgentKey(key string) (role, field string, ok bool) {
 func agentSpec(role, field string) KeySpec {
 	s := agentFields[field]
 	s.Name = "agents." + role + "." + field
-
 	return s
 }
 
@@ -363,9 +353,7 @@ func withOverride(o AgentOverride, field string, v any) AgentOverride {
 		if v == nil {
 			return nil
 		}
-
 		i := v.(int)
-
 		return &i
 	}
 

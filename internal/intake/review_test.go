@@ -9,12 +9,6 @@ import (
 	"testing"
 )
 
-// stored writes files as the stored task lists and returns the loaded epics.
-func stored(t *testing.T, files ...[]DraftFile) (string, []Epic) {
-	t.Helper()
-	return loadFiles(t, cat(files...))
-}
-
 func TestAmendmentClosingACycleThroughAStoredGroupFails(t *testing.T) {
 	_, epics := stored(t, goodGroup(1, 1, tgSpec{deps: []string{"tg-1.2"}}), goodGroup(1, 2, tgSpec{}))
 	draft := draftOf(goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}))
@@ -105,7 +99,9 @@ func TestZeroPaddedEpicCannotBypassTheLock(t *testing.T) {
 	if err == nil {
 		t.Fatal("a zero-padded epic path must not pass")
 	}
-	if b, _ := os.ReadFile(filepath.Join(r.root, "docs", "backlog", "epic-1", "tg-1.1", "TG.md")); string(b) != old[0].Content {
+	if b, _ := os.ReadFile(
+		filepath.Join(r.root, "docs", "backlog", "epic-1", "tg-1.1", "TG.md"),
+	); string(b) != old[0].Content {
 		t.Fatal("a locked group changed")
 	}
 }
@@ -150,4 +146,10 @@ func TestPlanWritesStatusTodoOnly(t *testing.T) {
 			t.Errorf("%s: %+v", st, fs)
 		}
 	}
+}
+
+// stored writes files as the stored task lists and returns the loaded epics.
+func stored(t *testing.T, files ...[]DraftFile) (string, []Epic) {
+	t.Helper()
+	return loadFiles(t, cat(files...))
 }

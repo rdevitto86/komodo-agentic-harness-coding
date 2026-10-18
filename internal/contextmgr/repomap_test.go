@@ -48,7 +48,8 @@ func TestRepoMapRankAndRender(t *testing.T) {
 		t.Fatalf("order %v", order)
 	}
 	out := rm.Render()
-	if !strings.HasPrefix(out, "a.go (2)\n  function Alpha\n  type Thing\n  function Run\n") || !strings.Contains(out, "d.py (1)\n  function delta\n  class Echo\n") || !strings.HasSuffix(out, "README.md (0)") {
+	if !strings.HasPrefix(out, "a.go (2)\n  function Alpha\n  type Thing\n  function Run\n") ||
+		!strings.Contains(out, "d.py (1)\n  function delta\n  class Echo\n") || !strings.HasSuffix(out, "README.md (0)") {
 		t.Fatalf("render:\n%s", out)
 	}
 	if again := buildRepoMap(mapFixture(), "", shippedLangs(t)).Render(); again != out {

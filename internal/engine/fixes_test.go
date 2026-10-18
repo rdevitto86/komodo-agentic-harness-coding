@@ -13,28 +13,17 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
-func TestStopReturnsEveryActiveGroupsPoolSlot(t *testing.T) {
-	r := newRig(t, [][]string{{"tg-1"}}, onlyIdle)
-	if err := r.startRun("run-1", "tg-1"); err != nil {
-		t.Fatal(err)
-	}
-	r.waitStage("tg-1", StageBuild)
-	t.Logf("before stop: used=%d", r.m.pool.Used())
-	if err := r.m.Stop(context.Background(), "run-1"); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(200 * time.Millisecond)
-	t.Logf("after stop: used=%d size=%d", r.m.pool.Used(), r.m.pool.Size())
-	if r.m.pool.Used() != 0 {
-		t.Fatalf("pool slot leaked after Stop: used=%d", r.m.pool.Used())
-	}
-}
-
 type holdLeases struct {
 	*fakeLeases
 	hmu  sync.Mutex
 	runs map[string]string
 }
+
+var _ = sync.Mutex{}
+
+var _ = context.Background
+
+var _ = lease.ErrLeased
 
 func (h *holdLeases) Grant(ctx context.Context, req lease.GrantRequest) (lease.Lease, error) {
 	h.hmu.Lock()
@@ -54,11 +43,32 @@ func (h *holdLeases) Release(ctx context.Context, x lease.Lease) error {
 	return h.fakeLeases.Release(ctx, x)
 }
 
+func TestStopReturnsEveryActiveGroupsPoolSlot(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1"}}, onlyIdle)
+	if err := r.startRun("run-1", "tg-1"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitStage("tg-1", StageBuild)
+	t.Logf("before stop: used=%d", r.m.pool.Used())
+	if err := r.m.Stop(context.Background(), "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	t.Logf("after stop: used=%d size=%d", r.m.pool.Used(), r.m.pool.Size())
+	if r.m.pool.Used() != 0 {
+		t.Fatalf("pool slot leaked after Stop: used=%d", r.m.pool.Used())
+	}
+}
+
 func TestRunLosingTheLeaseNeverReplacesTheLiveGroup(t *testing.T) {
 	var hl *holdLeases
 	r := newRig(t, [][]string{{"tg-1"}, {"tg-2"}, {"tg-3"}}, onlyIdle, func(r *rig) {
-		r.d.Config = rigConfig{"limits.returns": 2, "limits.group_attempts": 2, "limits.pause_max_min": 360, "limits.group_wall_min": 60,
-			"limits.group_tokens": 0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
+		r.d.Config = rigConfig{
+			"limits.returns":        2,
+			"limits.group_attempts": 2,
+			"limits.pause_max_min":  360,
+			"limits.group_wall_min": 60,
+			"limits.group_tokens":   0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
 		hl = &holdLeases{fakeLeases: r.leases, runs: map[string]string{}}
 		r.d.Leases = hl
 	})
@@ -346,7 +356,3 @@ func TestBeatEntryOfAFinishedGroupIsDropped(t *testing.T) {
 		return !ok
 	})
 }
-
-var _ = sync.Mutex{}
-var _ = context.Background
-var _ = lease.ErrLeased

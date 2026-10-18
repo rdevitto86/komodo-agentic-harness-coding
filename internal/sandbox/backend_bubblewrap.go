@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// BubblewrapOptions override where Bubblewrap finds its program, the person's home folder and the
-// operating system; zero values use the host's.
+// BubblewrapOptions override where Bubblewrap finds its program, the person's home folder and the operating system; zero
+// values use the host's.
 type BubblewrapOptions struct {
 	Binary string // bwrap
 	Home   string // replaced by an empty temporary file system
@@ -30,7 +30,6 @@ func NewBubblewrap(o BubblewrapOptions) *Bubblewrap {
 	if o.Binary == "" {
 		o.Binary = "bwrap"
 	}
-
 	if o.GOOS == "" {
 		o.GOOS = runtime.GOOS
 	}
@@ -43,15 +42,11 @@ func NewBubblewrap(o BubblewrapOptions) *Bubblewrap {
 	return &Bubblewrap{opt: o, homeErr: homeErr}
 }
 
-// Name returns the mechanism name.
-func (b *Bubblewrap) Name() string { return "bubblewrap" }
-
 // Check reports whether bwrap can start a sandbox here, which needs user namespaces.
 func (b *Bubblewrap) Check() error {
 	if b.opt.GOOS != "linux" {
 		return errors.New("Bubblewrap runs on Linux and Windows Subsystem for Linux only")
 	}
-
 	if err := homeProblem(b.opt.Home, b.homeErr); err != nil {
 		return err
 	}
@@ -67,7 +62,6 @@ func (b *Bubblewrap) Check() error {
 	var stderr bytes.Buffer
 
 	cmd := exec.CommandContext(ctx, bin, "--ro-bind", "/", "/", "--unshare-pid", "true")
-
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf(
@@ -85,21 +79,17 @@ func (b *Bubblewrap) Prepare(_ context.Context, s Spec) (Instance, error) {
 	if err := homeProblem(b.opt.Home, b.homeErr); err != nil {
 		return Instance{}, err
 	}
-
 	if _, err := newRules(s); err != nil {
 		return Instance{}, err
 	}
-
 	return newInstance(s.Group, b.Name())
 }
 
+// Name returns the mechanism name.
+func (b *Bubblewrap) Name() string { return "bubblewrap" }
+
 // Command wraps the argv in bwrap; folders that are not on the host are left out of the mounts.
-func (b *Bubblewrap) Command(
-	ctx context.Context,
-	_ Instance,
-	s Spec,
-	c Command,
-) (*exec.Cmd, error) {
+func (b *Bubblewrap) Command(ctx context.Context, _ Instance, s Spec, c Command) (*exec.Cmd, error) {
 	if err := homeProblem(b.opt.Home, b.homeErr); err != nil {
 		return nil, err
 	}
@@ -117,7 +107,6 @@ func (b *Bubblewrap) Command(
 	fi, lerr := os.Lstat("/var/run")
 	varRunDir := lerr == nil && fi.IsDir()
 	args := append(bwrapArgs(r.existing(), b.opt.Home, varRunDir), "--")
-
 	return confined(ctx, launch{
 		Timeout: c.Timeout, Bin: bin, Args: append(args, c.Argv...),
 		Env: buildEnv(r, c, false), Marker: newMarker(),

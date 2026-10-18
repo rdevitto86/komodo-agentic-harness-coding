@@ -51,13 +51,11 @@ func extractAddendum(md string, phrases []string) (string, []Warning) {
 				"the addendum is dropped",
 		}}
 	}
-
 	if nb == 1 {
 		lines = append(append([]string(nil), lines[:begin]...), lines[end+1:]...)
 	}
 
 	var kept []string
-
 	var warns []Warning
 
 	for _, p := range paragraphs(lines) {
@@ -81,9 +79,9 @@ func extractAddendum(md string, phrases []string) (string, []Warning) {
 // paragraph.
 func paragraphs(lines []string) []string {
 	var out, cur []string
-
 	fence := false
 
+	// flush joins the lines gathered for the current paragraph into out, then clears them.
 	flush := func() {
 		if len(cur) > 0 {
 			out = append(out, strings.Join(cur, "\n"))
@@ -95,18 +93,14 @@ func paragraphs(lines []string) []string {
 		if isFence(l) {
 			fence = !fence
 		}
-
 		if !fence && strings.TrimSpace(l) == "" {
 			flush()
-
 			continue
 		}
-
 		cur = append(cur, strings.TrimRight(l, "\r"))
 	}
 
 	flush()
-
 	return out
 }
 
@@ -142,11 +136,9 @@ func findPhrase(text string, phrases []string) (string, bool) {
 			if i > 0 {
 				before, _ = utf8.DecodeLastRuneInString(norm[:i])
 			}
-
 			if j < len(norm) {
 				after, _ = utf8.DecodeRuneInString(norm[j:])
 			}
-
 			if !isWordRune(before) && !isWordRune(after) {
 				return p, true
 			}

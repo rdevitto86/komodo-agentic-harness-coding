@@ -73,8 +73,10 @@ func (f *uiFake) Send(ctx context.Context, r engine.Request) (<-chan engine.Repl
 				}},
 				{RunID: uiRunB, Target: "tg-2.1", Groups: []GroupRow{{Group: "tg-2.1", Stage: f.stage(), State: "paused"}}},
 			},
-			"queued":  []QueuedRow{{Target: "ep-3", RunID: "q1", At: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}},
-			"blocked": []BlockedRow{{Group: "tg-1.2", RunID: uiRunA, Reason: "needs_scope", Question: "Approve a change outside the files?"}},
+			"queued": []QueuedRow{{Target: "ep-3", RunID: "q1", At: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}},
+			"blocked": []BlockedRow{
+				{Group: "tg-1.2", RunID: uiRunA, Reason: "needs_scope", Question: "Approve a change outside the files?"},
+			},
 		}
 		switch r.Target {
 		case uiRunA:
@@ -140,7 +142,10 @@ func newUIFake() *uiFake {
 func uiFixture(t *testing.T, eng Engine, assets fs.FS) (*httptest.Server, *uiServer) {
 	t.Helper()
 	ts := httptest.NewUnstartedServer(nil)
-	s := newUIServer(uiDeps{Engine: eng, Root: "/repo", Assets: assets, Every: 10 * time.Millisecond}, ts.Listener.Addr().String())
+	s := newUIServer(
+		uiDeps{Engine: eng, Root: "/repo", Assets: assets, Every: 10 * time.Millisecond},
+		ts.Listener.Addr().String(),
+	)
 	ts.Config.Handler = s.Handler()
 	ts.Start()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -357,7 +362,10 @@ func TestUIServeStopsWhenTheContextEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := newUIServer(uiDeps{Engine: newUIFake(), Assets: fstest.MapFS{"index.html": {Data: []byte("x")}}, Every: 10 * time.Millisecond}, ln.Addr().String())
+	s := newUIServer(
+		uiDeps{Engine: newUIFake(), Assets: fstest.MapFS{"index.html": {Data: []byte("x")}}, Every: 10 * time.Millisecond},
+		ln.Addr().String(),
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- s.Serve(ctx, ln) }()
@@ -423,7 +431,11 @@ func TestUIStartsTheEngineOnceAcrossManyPolls(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		starts++
-		fakeSrv = startFake(t, home, func(_ *fakeServer, req engine.Request, send func(engine.Reply)) { emptyReply(req, send) })
+		fakeSrv = startFake(
+			t,
+			home,
+			func(_ *fakeServer, req engine.Request, send func(engine.Reply)) { emptyReply(req, send) },
+		)
 		return nil
 	}
 	h := newHarness(t)

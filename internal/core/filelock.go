@@ -12,17 +12,12 @@ import (
 // ErrLockWait reports that another holder kept the lock for the whole wait.
 var ErrLockWait = errors.New("lock is held by another process")
 
-// FileLock takes an exclusive operating-system lock on the file at path, creating the file when it
-// is absent. It retries until the context ends or wait passes (then ErrLockWait); the kernel frees
+// FileLock takes an exclusive operating-system lock on the file at path, creating the file when it is absent. It retries
+// until the context ends or wait passes (then ErrLockWait); the kernel frees
 // the lock when its holder dies.
-func FileLock(
-	ctx context.Context,
-	path string,
-	wait time.Duration,
-) (unlock func() error, err error) {
+func FileLock(ctx context.Context, path string, wait time.Duration) (unlock func() error, err error) {
 	// lockPoll is the pause between attempts to take a held lock.
 	const lockPoll = 10 * time.Millisecond
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -39,22 +34,16 @@ func FileLock(
 		if err == nil {
 			return func() error { return releaseLock(f) }, nil
 		}
-
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
 			_ = f.Close()
-
 			return nil, fmt.Errorf("lock %s: %w", path, err)
 		}
-
 		if cerr := ctx.Err(); cerr != nil {
 			_ = f.Close()
-
 			return nil, cerr
 		}
-
 		if !time.Now().Before(deadline) {
 			_ = f.Close()
-
 			return nil, ErrLockWait
 		}
 
@@ -65,15 +54,14 @@ func FileLock(
 	}
 }
 
-// LockHeld reports whether another holder has the lock on path, opening the file read-only and
-// never creating it. A missing file is not held; any other failure counts as held, so a caller errs
+// LockHeld reports whether another holder has the lock on path, opening the file read-only and never creating it. A missing
+// file is not held; any other failure counts as held, so a caller errs
 // toward waiting.
 func LockHeld(path string) bool {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false
 	}
-
 	if err != nil {
 		return true
 	}
@@ -86,13 +74,11 @@ func LockHeld(path string) bool {
 			break
 		}
 	}
-
 	if err != nil {
 		return true
 	}
 
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-
 	return false
 }
 
@@ -100,6 +86,5 @@ func LockHeld(path string) bool {
 func releaseLock(f *os.File) error {
 	uerr := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	cerr := f.Close()
-
 	return errors.Join(uerr, cerr)
 }

@@ -45,8 +45,7 @@ type LeaseStore interface {
 	Release(ctx context.Context, l lease.Lease) error
 }
 
-// CacheStore is the Cache Manager as the Runtime Manager uses it; only the engine opens and closes
-// a repository's cache.
+// CacheStore is the Cache Manager as the Runtime Manager uses it; only the engine opens and closes a repository's cache.
 type CacheStore interface {
 	Open(ctx context.Context, repo string) (*cache.Cache, error)
 	Close(ctx context.Context) error
@@ -70,8 +69,7 @@ type PlanSource interface {
 	Specs(ctx context.Context, root string, labels []string) ([]GroupSpec, error)
 }
 
-// EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's
-// branch.
+// EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's branch.
 type EpicGit interface {
 	BranchExists(ctx context.Context, clone, branch string) (bool, error)
 	CreateBranch(ctx context.Context, clone, branch, base string) error
@@ -106,8 +104,7 @@ type Janitor interface {
 	Clean(ctx context.Context, dryRun bool, root string, open map[string]bool) ([]CleanItem, error)
 }
 
-// Extras adds the Metrics Service figures to a status answer; the keys are the StatusData JSON
-// fields.
+// Extras adds the Metrics Service figures to a status answer; the keys are the StatusData JSON fields.
 type Extras func(ctx context.Context, target string, all bool) map[string]any
 
 // Printer is where the engine sends the faults that belong to a connection.
@@ -122,6 +119,23 @@ type Timing struct {
 	HeartbeatEvery    time.Duration
 	LoopSilentFor     time.Duration
 	EngineBeatEvery   time.Duration
+}
+
+// filled returns t with every zero field replaced by its constant.
+func (t Timing) filled() Timing {
+	def := func(v *time.Duration, d time.Duration) {
+		if *v <= 0 {
+			*v = d
+		}
+	}
+	def(&t.LeaseRenewEvery, LeaseRenewEvery)
+	def(&t.AgentStopGrace, AgentStopGrace)
+	def(&t.ShutdownDeadline, ShutdownDeadline)
+	def(&t.PoolHalveCooldown, PoolHalveCooldown)
+	def(&t.HeartbeatEvery, HeartbeatEvery)
+	def(&t.LoopSilentFor, LoopSilentFor)
+	def(&t.EngineBeatEvery, EngineBeatEvery)
+	return t
 }
 
 // Deps are the managers the Runtime Manager and the engine call.
@@ -165,22 +179,4 @@ type Deps struct {
 	Chain func(group string) []string
 	// reports a panic of a goroutine the engine starts; nil reports nothing
 	Faults *fault.Handler
-}
-
-// filled returns t with every zero field replaced by its constant.
-func (t Timing) filled() Timing {
-	def := func(v *time.Duration, d time.Duration) {
-		if *v <= 0 {
-			*v = d
-		}
-	}
-	def(&t.LeaseRenewEvery, LeaseRenewEvery)
-	def(&t.AgentStopGrace, AgentStopGrace)
-	def(&t.ShutdownDeadline, ShutdownDeadline)
-	def(&t.PoolHalveCooldown, PoolHalveCooldown)
-	def(&t.HeartbeatEvery, HeartbeatEvery)
-	def(&t.LoopSilentFor, LoopSilentFor)
-	def(&t.EngineBeatEvery, EngineBeatEvery)
-
-	return t
 }

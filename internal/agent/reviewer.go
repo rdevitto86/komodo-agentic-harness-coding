@@ -83,6 +83,7 @@ func onceOf(kind string, want, got []string) error {
 	for _, g := range got {
 		seen[g]++
 	}
+
 	for _, w := range want {
 		switch seen[w] {
 		case 0:

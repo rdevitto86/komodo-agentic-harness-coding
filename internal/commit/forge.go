@@ -100,8 +100,8 @@ func (f *GH) run(ctx context.Context, stdin string, args ...string) (string, err
 
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = f.Dir
-
 	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "NO_COLOR=1")
+
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}

@@ -8,12 +8,6 @@ import (
 // openAIStub is the place for an OpenAI link; every call returns ErrNotYet.
 type openAIStub struct{ link Link }
 
-// NewOpenAISubscription returns the place for OpenAI's subscription link.
-func NewOpenAISubscription() Provider { return openAIStub{link: OpenAISubscription} }
-
-// NewOpenAIAPI returns the place for OpenAI's paid interface link.
-func NewOpenAIAPI() Provider { return openAIStub{link: OpenAIAPI} }
-
 // Link returns the link the stub names.
 func (o openAIStub) Link() Link { return o.link }
 
@@ -37,3 +31,9 @@ func (o openAIStub) Resume(context.Context, Session, Input) (Stream, error) {
 
 // notYet is the error every call of the stub returns.
 func (o openAIStub) notYet() error { return fmt.Errorf("%s: %w", o.link, ErrNotYet) }
+
+// NewOpenAISubscription returns the place for OpenAI's subscription link.
+func NewOpenAISubscription() Provider { return openAIStub{link: OpenAISubscription} }
+
+// NewOpenAIAPI returns the place for OpenAI's paid interface link.
+func NewOpenAIAPI() Provider { return openAIStub{link: OpenAIAPI} }

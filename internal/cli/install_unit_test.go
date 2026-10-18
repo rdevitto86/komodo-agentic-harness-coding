@@ -132,7 +132,8 @@ func TestBlockNamesOnlyCommandsTheTableHolds(t *testing.T) {
 
 func TestSettingsMergeLeavesOtherKeysAndRemoveRestoresThem(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	orig := `{"permissions":{"allow":["Bash(ls)"],"ask":["Bash(rm *)"]},"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"x"}]}]},"model":"opus"}`
+	orig := `{"permissions":{"allow":["Bash(ls)"],"ask":["Bash(rm *)"]},"hooks":{"PreToolUse":[{"matcher":"Edit",` +
+		`"hooks":[{"type":"command","command":"x"}]}]},"model":"opus"}`
 	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,8 @@ func TestSettingsMergeLeavesOtherKeysAndRemoveRestoresThem(t *testing.T) {
 		}
 	}
 	got, _ := os.ReadFile(path)
-	if strings.Join(strings.Fields(string(got)), "") != strings.ReplaceAll(orig, " ", "") && !strings.Contains(string(got), `"ask"`) {
+	if strings.Join(strings.Fields(string(got)), "") != strings.ReplaceAll(orig, " ", "") &&
+		!strings.Contains(string(got), `"ask"`) {
 		t.Fatalf("after remove: %s", got)
 	}
 	doc, _ = loadSettings(path)
@@ -190,7 +192,12 @@ func TestUpdateMachineRereadsAfterAStaleRevision(t *testing.T) {
 		calls++
 		if calls == 1 {
 			// A second writer saves between this read and this save.
-			if _, serr := state.SaveMachine(m, state.KindInstall, state.InstallBody{Entries: []state.InstallEntry{}}, 0); serr != nil {
+			if _, serr := state.SaveMachine(
+				m,
+				state.KindInstall,
+				state.InstallBody{Entries: []state.InstallEntry{}},
+				0,
+			); serr != nil {
 				t.Fatal(serr)
 			}
 		}

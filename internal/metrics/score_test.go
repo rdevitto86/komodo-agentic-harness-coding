@@ -12,10 +12,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// near reports whether two floats agree to four places.
-func near(a, b float64) bool { return math.Abs(a-b) < 1e-4 }
-
-// TestScorecardMatchesHandCount checks first-pass rate, returns per group, finding precision, tester false fails, cache share and per-group cost against hand-counted values.
+// TestScorecardMatchesHandCount checks first-pass rate, returns per group, finding precision, tester false fails, cache
+// share and per-group cost against hand-counted values.
 func TestScorecardMatchesHandCount(t *testing.T) {
 	common := t.TempDir()
 	dir := RepoDir(common)
@@ -28,7 +26,12 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 	task := func(sub bus.Subtype, group, session bus.ID, id string) bus.Event {
 		g := bus.GroupFacts{Session: session}
 		if sub == "task.retry" {
-			return bus.Event{Type: bus.TypeRunStatus, Subtype: sub, Group: group, Data: &bus.TaskRetry{GroupFacts: g, Task: id, Attempt: 2}}
+			return bus.Event{
+				Type:    bus.TypeRunStatus,
+				Subtype: sub,
+				Group:   group,
+				Data:    &bus.TaskRetry{GroupFacts: g, Task: id, Attempt: 2},
+			}
 		}
 		return bus.Event{Type: bus.TypeRunStatus, Subtype: sub, Group: group, Data: &bus.TaskDone{GroupFacts: g, Task: id}}
 	}
@@ -37,10 +40,19 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 	u2 := &bus.SessionUsage{TokensIn: 100, TokensOut: 20, CacheRead: 30, USDEquiv: 0.3}
 	end := func(group, session bus.ID, agent string, u *bus.SessionUsage, v *bus.VerifyOutcome) bus.Event {
 		return bus.Event{Type: bus.TypeRunStatus, Subtype: "session.end", Group: group,
-			Data: &bus.SessionEnd{GroupFacts: bus.GroupFacts{Session: session, Reason: "done"}, Agent: agent, Usage: u, Verify: v}}
+			Data: &bus.SessionEnd{
+				GroupFacts: bus.GroupFacts{Session: session, Reason: "done"},
+				Agent:      agent,
+				Usage:      u,
+				Verify:     v,
+			}}
 	}
 	ls := []string{
-		at(0, bus.Event{Type: bus.TypeRunStatus, Subtype: "run.start", Data: &bus.RunStartedFact{Groups: []bus.ID{"G1", "G2"}}}),
+		at(0, bus.Event{
+			Type:    bus.TypeRunStatus,
+			Subtype: "run.start",
+			Data:    &bus.RunStartedFact{Groups: []bus.ID{"G1", "G2"}},
+		}),
 		at(1, task("task.retry", "G1", "b1", "t1")),
 		at(2, task("task.done", "G1", "b1", "t1")),
 		at(3, task("task.done", "G1", "b1", "t2")),
@@ -48,7 +60,12 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 		at(5, task("task.done", "G2", "b2", "t4")),
 		at(6, end("G1", "b1", "builder", u1, nil)),
 		at(7, end("G2", "b2", "builder", u2, nil)),
-		at(8, bus.Event{Type: bus.TypeRunStatus, Subtype: "stage.enter", Group: "G1", Data: &bus.StageEnter{To: "build", Return: true}}),
+		at(8, bus.Event{
+			Type:    bus.TypeRunStatus,
+			Subtype: "stage.enter",
+			Group:   "G1",
+			Data:    &bus.StageEnter{To: "build", Return: true},
+		}),
 	}
 	for range 4 {
 		ls = append(ls, at(9, bus.Event{Type: bus.TypeRunStatus, Subtype: "finding.submit", Group: "G1", Data: &finding}))
@@ -84,7 +101,8 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 		t.Fatalf("Scorecard = %+v, %v", sc, err)
 	}
 	b, r, tt := sc.Rows[0], sc.Rows[1], sc.Rows[2]
-	if b.Agent != "builder" || b.Model != "m1" || !near(b.FirstPassRate, 0.75) || !near(b.ReturnsPerGroup, 0.5) || !near(b.CacheReadShare, 0.4) {
+	if b.Agent != "builder" || b.Model != "m1" || !near(b.FirstPassRate, 0.75) || !near(b.ReturnsPerGroup, 0.5) ||
+		!near(b.CacheReadShare, 0.4) {
 		t.Errorf("builder row = %+v", b)
 	}
 	if b.TokensPerGroup == nil || *b.TokensPerGroup != 115 || b.USDPerGroup == nil || !near(*b.USDPerGroup, 0.4) {
@@ -97,3 +115,6 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 		t.Errorf("tester row = %+v", tt)
 	}
 }
+
+// near reports whether two floats agree to four places.
+func near(a, b float64) bool { return math.Abs(a-b) < 1e-4 }

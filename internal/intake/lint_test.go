@@ -6,15 +6,6 @@ import (
 	"testing"
 )
 
-// lintFiles loads files as stored task lists and lints them with the load findings.
-func lintFiles(t *testing.T, files []DraftFile, protected, tracked []string) []Finding {
-	t.Helper()
-	root := t.TempDir()
-	writeBacklog(t, root, files)
-	epics, load := mustLoad(t, root)
-	return sortFindings(append(load, Lint(epics, protected, tracked)...))
-}
-
 func TestLintPassesAGoodEpic(t *testing.T) {
 	files := cat(goodGroup(1, 1, tgSpec{}), goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}))
 	if fs := lintFiles(t, files, []string{".github/**"}, []string{"README.md"}); len(fails(fs)) != 0 {
@@ -109,7 +100,11 @@ func TestLintManyDependenciesWarns(t *testing.T) {
 }
 
 func TestLintGroupEveryoneWaitsOnWarns(t *testing.T) {
-	files := cat(goodGroup(1, 1, tgSpec{}), goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}), goodGroup(1, 3, tgSpec{deps: []string{"tg-1.1"}}))
+	files := cat(
+		goodGroup(1, 1, tgSpec{}),
+		goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}),
+		goodGroup(1, 3, tgSpec{deps: []string{"tg-1.1"}}),
+	)
 	fs := rulesOf(lintFiles(t, files, nil, nil), RuleGraph, SeverityWarn)
 	if len(fs) != 1 || fs[0].Path != "epic-1/tg-1.1/TG.md" {
 		t.Fatalf("findings: %+v", fs)
@@ -153,7 +148,8 @@ func TestLintGroupWithoutAcceptanceFailsRequired(t *testing.T) {
 func TestLintSizing(t *testing.T) {
 	big := goodGroup(1, 1, tgSpec{files: []string{"a", "b", "c", "d", "e", "f"}})
 	big[1].Content = taskText(100, "x", "a", "b", "c", "d", "e", "f")
-	if fs := rulesOf(lintFiles(t, big, nil, nil), RuleSizing, SeverityFail); len(fs) != 1 || fs[0].Path != "epic-1/tg-1.1/tsk-one.md" {
+	if fs := rulesOf(lintFiles(t, big, nil, nil), RuleSizing, SeverityFail); len(fs) != 1 ||
+		fs[0].Path != "epic-1/tg-1.1/tsk-one.md" {
 		t.Fatalf("6 files: %+v", fs)
 	}
 	for _, est := range []int{300, 301} {
@@ -166,9 +162,13 @@ func TestLintSizing(t *testing.T) {
 	}
 	nine := goodGroup(1, 1, tgSpec{})
 	for i := 2; i <= 9; i++ {
-		nine = append(nine, DraftFile{Path: fmt.Sprintf("epic-1/tg-1.1/tsk-t%d.md", i), Content: taskText(10, "x", "pkg1_1/a.go")})
+		nine = append(nine, DraftFile{
+			Path:    fmt.Sprintf("epic-1/tg-1.1/tsk-t%d.md", i),
+			Content: taskText(10, "x", "pkg1_1/a.go"),
+		})
 	}
-	if fs := rulesOf(lintFiles(t, nine, nil, nil), RuleSizing, SeverityFail); len(fs) != 1 || fs[0].Path != "epic-1/tg-1.1/TG.md" {
+	if fs := rulesOf(lintFiles(t, nine, nil, nil), RuleSizing, SeverityFail); len(fs) != 1 ||
+		fs[0].Path != "epic-1/tg-1.1/TG.md" {
 		t.Fatalf("9 tasks: %+v", fs)
 	}
 	if fs := rulesOf(lintFiles(t, nine[:9], nil, nil), RuleSizing, SeverityFail); len(fs) != 0 {
@@ -231,7 +231,11 @@ func TestLintCaseCollision(t *testing.T) {
 		t.Fatalf("two groups: %+v", fs)
 	}
 	// A collision between two tracked files alone is not the plan's doing.
-	if fs := rulesOf(lintFiles(t, goodGroup(1, 1, tgSpec{}), nil, []string{"A.md", "a.md"}), RuleCaseCollision, SeverityFail); len(fs) != 0 {
+	if fs := rulesOf(
+		lintFiles(t, goodGroup(1, 1, tgSpec{}), nil, []string{"A.md", "a.md"}),
+		RuleCaseCollision,
+		SeverityFail,
+	); len(fs) != 0 {
 		t.Fatalf("tracked pair: %+v", fs)
 	}
 }
@@ -274,4 +278,13 @@ func TestOverEstimate(t *testing.T) {
 	if _, ok := OverEstimate(tk, 200); ok {
 		t.Fatal("exactly 2 times must not warn")
 	}
+}
+
+// lintFiles loads files as stored task lists and lints them with the load findings.
+func lintFiles(t *testing.T, files []DraftFile, protected, tracked []string) []Finding {
+	t.Helper()
+	root := t.TempDir()
+	writeBacklog(t, root, files)
+	epics, load := mustLoad(t, root)
+	return sortFindings(append(load, Lint(epics, protected, tracked)...))
 }

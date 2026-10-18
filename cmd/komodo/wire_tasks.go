@@ -32,46 +32,14 @@ type groupRef struct {
 	slot      recheckSlot
 }
 
-// landingCommitter fills the approval with the landing plan the Runtime Manager holds at publish
-// time.
-type landingCommitter struct {
-	h    *commit.Handler
-	k    *repoKit
-	spec engine.GroupSpec
-}
-
-// commitReporter relays progress facts of the Commit Handler.
-type commitReporter struct{ s *stack }
-
-// reporter relays progress facts of the Cleanup Handler.
-type reporter struct{ s *stack }
-
-// gitRunner runs the host git in a repository for the base tree view.
-type gitRunner struct{ dir string }
-
-// limits adapts the machine records to the Task Manager's limit store by link name.
-type limits struct{ m *state.Machine }
-
-// markerLanguage names the language a marker file stands for; the checks use it to pick their
-// impact set.
-var markerLanguage = map[string]string{
-	"go.mod":           "go",
-	"Cargo.toml":       "rust",
-	"package.json":     "node",
-	"pyproject.toml":   "python",
-	"requirements.txt": "python",
-}
-
 // CloseTaskGroup closes the group's Task Manager, which ends its sandbox and the group.
 func (g *groupRef) CloseTaskGroup(ctx context.Context) error {
 	g.mu.Lock()
 	tm := g.tm
 	g.mu.Unlock()
-
 	if tm == nil {
 		return nil
 	}
-
 	if err := tm.CloseTaskGroup(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -83,17 +51,19 @@ func (g *groupRef) CloseTaskGroup(ctx context.Context) error {
 func (g *groupRef) manager() *task.Manager {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-
 	return g.tm
 }
 
-// Save makes a local commit of one finished task.
-func (l landingCommitter) Save(
-	ctx context.Context,
-	r commit.SaveRequest,
-) (commit.SaveResult, error) {
-	r.Group = bus.ID(l.spec.ID)
+// landingCommitter fills the approval with the landing plan the Runtime Manager holds at publish time.
+type landingCommitter struct {
+	h    *commit.Handler
+	k    *repoKit
+	spec engine.GroupSpec
+}
 
+// Save makes a local commit of one finished task.
+func (l landingCommitter) Save(ctx context.Context, r commit.SaveRequest) (commit.SaveResult, error) {
+	r.Group = bus.ID(l.spec.ID)
 	return l.h.Save(ctx, r)
 }
 
@@ -101,25 +71,44 @@ func (l landingCommitter) Save(
 func (l landingCommitter) Publish(ctx context.Context, a commit.Approval) (commit.Result, error) {
 	a.Group = bus.ID(l.spec.ID)
 	a.EpicGroups = l.k.epicGroups(l.spec)
-
 	return l.h.Publish(ctx, a)
 }
+
+// commitReporter relays progress facts of the Commit Handler.
+type commitReporter struct{ s *stack }
 
 // Report relays a progress fact to the Runtime Manager.
 func (r commitReporter) Report(ctx context.Context, group bus.ID, subtype string, data any) error {
 	return reportFact(ctx, r.s.mgr, string(group), subtype, data)
 }
 
+// reporter relays progress facts of the Cleanup Handler.
+type reporter struct{ s *stack }
+
 // Report relays a progress fact to the Runtime Manager.
 func (r reporter) Report(ctx context.Context, group, subtype string, data any) error {
 	return reportFact(ctx, r.s.mgr, group, subtype, data)
 }
 
+// gitRunner runs the host git in a repository for the base tree view.
+type gitRunner struct{ dir string }
+
 // Run runs git with the arguments in the repository.
 func (g gitRunner) Run(ctx context.Context, rest ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", g.dir}, rest...)...).Output()
-
 	return strings.TrimSpace(string(out)), err
+}
+
+// limits adapts the machine records to the Task Manager's limit store by link name.
+type limits struct{ m *state.Machine }
+
+// markerLanguage names the language a marker file stands for; the checks use it to pick their impact set.
+var markerLanguage = map[string]string{
+	"go.mod":           "go",
+	"Cargo.toml":       "rust",
+	"package.json":     "node",
+	"pyproject.toml":   "python",
+	"requirements.txt": "python",
 }
 
 // ResetAt returns when the link's limit lifts.
@@ -131,23 +120,15 @@ func (l limits) Record(k llm.Link, reset time.Time, c llm.CapKind) error {
 }
 
 // TakeSlot counts one more live session on the link.
-func (l limits) TakeSlot(
-	k llm.Link,
-	most int,
-) (bool, error) {
+func (l limits) TakeSlot(k llm.Link, most int) (bool, error) {
 	return l.m.TakeSlot(string(k), most)
 }
 
 // ReleaseSlot counts one session fewer on the link.
 func (l limits) ReleaseSlot(k llm.Link) error { return l.m.ReleaseSlot(string(k)) }
 
-// Start builds the group's Task Manager, serves it on a goroutine and returns the engine's end of
-// its channels.
-func (k *repoKit) start(
-	ctx context.Context,
-	spec engine.GroupSpec,
-	h cache.Handle,
-) (engine.Channels, error) {
+// Start builds the group's Task Manager, serves it on a goroutine and returns the engine's end of its channels.
+func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Handle) (engine.Channels, error) {
 	s := k.s
 
 	epics, _, err := intake.Load(k.root)
@@ -161,7 +142,6 @@ func (k *repoKit) start(
 	}
 
 	epicBranch := "komodo/" + spec.Epic
-
 	base, err := gitOut("-C", k.root, "rev-parse", epicBranch)
 	if err != nil {
 		return engine.Channels{}, fmt.Errorf("find the tip of %s: %w", epicBranch, err)
@@ -212,7 +192,6 @@ func (k *repoKit) start(
 	}
 
 	var m *task.Manager
-
 	secrets, sibling, err := task.CheckerPolicy(
 		func() []string { return m.Files() },
 		tspec.Lease.Worktree,
@@ -252,22 +231,15 @@ func (k *repoKit) start(
 	cmdCh := make(chan task.Command, engine.CommandBuffer)
 	repCh := make(chan task.Message, engine.CommandBuffer)
 	inner := make(chan task.Message, engine.CommandBuffer)
-
 	k.s.spawn(func() { _ = m.Serve(ctx, task.Channels{Commands: cmdCh, Replies: inner}) })
 	k.s.spawn(func() { k.s.relay(spec.Label, inner, repCh) })
-
 	return engine.Channels{Commands: cmdCh, Replies: repCh}, nil
 }
 
-// taskSpec converts the engine's group spec and the task list into the Task Manager's spec, its
-// acceptance items and its command table.
-func (k *repoKit) taskSpec(
-	spec engine.GroupSpec,
-	g intake.Group,
-	cmds map[string][]string,
-) (task.GroupSpec, []agent.Item) {
+// taskSpec converts the engine's group spec and the task list into the Task Manager's spec, its acceptance items and its
+// command table.
+func (k *repoKit) taskSpec(spec engine.GroupSpec, g intake.Group, cmds map[string][]string) (task.GroupSpec, []agent.Item) {
 	var tasks []task.TaskSpec
-
 	for _, t := range g.Tasks {
 		class := "task:" + t.Name
 		cmds[class] = []string{"sh", "-c", t.DoneWhen}
@@ -276,17 +248,13 @@ func (k *repoKit) taskSpec(
 
 	var items []agent.Item
 	for i, a := range g.Acceptance {
-		items = append(
-			items,
-			agent.Item{ID: fmt.Sprintf("acc-%d", i+1), Text: a.Text, Cmd: a.Cmd, Needs: a.Needs},
-		)
+		items = append(items, agent.Item{ID: fmt.Sprintf("acc-%d", i+1), Text: a.Text, Cmd: a.Cmd, Needs: a.Needs})
 	}
 
 	perms := map[string]task.Permissions{}
 
 	for _, name := range []string{"builder", "tester", "reviewer"} {
 		a, _ := k.s.cfg.GetAgent(name)
-
 		rows := make([]task.RowID, len(a.Guard))
 		for i, r := range a.Guard {
 			rows[i] = task.RowID(r)
@@ -331,6 +299,16 @@ func (k *repoKit) taskSpec(
 	return ts, items
 }
 
+// committer returns the Commit Handler of one group: the shared handler with the group's Task Manager as the closer.
+func (k *repoKit) committer(ref *groupRef, spec engine.GroupSpec) task.Committer {
+	h := *k.commit
+	cl := *k.cleanup
+	cl.Task = ref
+	h.Cleanup = publishedAdapter{h: &cl, landing: k.landingPath}
+	h.Check = groupChecker{ref: ref, worktree: spec.Lease.Worktree}
+	return landingCommitter{h: &h, k: k, spec: spec}
+}
+
 // epicGroups returns the labels of the epic's groups in landing order.
 func (k *repoKit) epicGroups(spec engine.GroupSpec) []string {
 	if k.s.mgr != nil {
@@ -338,20 +316,7 @@ func (k *repoKit) epicGroups(spec engine.GroupSpec) []string {
 			return p.Order
 		}
 	}
-
 	return []string{spec.Label}
-}
-
-// committer returns the Commit Handler of one group: the shared handler with the group's Task
-// Manager as the closer.
-func (k *repoKit) committer(ref *groupRef, spec engine.GroupSpec) task.Committer {
-	h := *k.commit
-	cl := *k.cleanup
-	cl.Task = ref
-	h.Cleanup = publishedAdapter{h: &cl, landing: k.landingPath}
-	h.Check = groupChecker{ref: ref, worktree: spec.Lease.Worktree}
-
-	return landingCommitter{h: &h, k: k, spec: spec}
 }
 
 // str reads a string setting.
@@ -360,12 +325,29 @@ func (s *stack) str(key, def string) string {
 	if err != nil {
 		return def
 	}
-
 	if v, ok := it.Value.(string); ok {
 		return v
 	}
-
 	return def
+}
+
+// sandboxPlan names the folders a group's sandbox instances use: private temp and build folders, and the Go toolchain and
+// module cache read-only.
+func (s *stack) sandboxPlan(group string) task.SandboxPlan {
+	p := task.SandboxPlan{Temp: filepath.Join(
+		s.home,
+		"tmp",
+		group,
+	), Build: filepath.Join(s.home, "build", group),
+		MaxProcs: int(s.num("sandbox.max_procs")), MaxMemGB: int(s.num("sandbox.max_mem_gb"))}
+	if out, err := exec.Command("go", "env", "GOROOT", "GOMODCACHE").Output(); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(lines) == 2 {
+			p.Toolchains, p.Modules = []string{lines[0]}, lines[1]
+		}
+	}
+
+	return p
 }
 
 // num reads a numeric setting.
@@ -387,28 +369,7 @@ func (s *stack) num(key string) float64 {
 	return 0
 }
 
-// sandboxPlan names the folders a group's sandbox instances use: private temp and build folders,
-// and the Go toolchain and module cache read-only.
-func (s *stack) sandboxPlan(group string) task.SandboxPlan {
-	p := task.SandboxPlan{Temp: filepath.Join(
-		s.home,
-		"tmp",
-		group,
-	), Build: filepath.Join(s.home, "build", group),
-		MaxProcs: int(s.num("sandbox.max_procs")), MaxMemGB: int(s.num("sandbox.max_mem_gb"))}
-
-	if out, err := exec.Command("go", "env", "GOROOT", "GOMODCACHE").Output(); err == nil {
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		if len(lines) == 2 {
-			p.Toolchains, p.Modules = []string{lines[0]}, lines[1]
-		}
-	}
-
-	return p
-}
-
-// relay passes a Task Manager's messages to the Runtime Manager and logs escalations and endings to
-// the engine log.
+// relay passes a Task Manager's messages to the Runtime Manager and logs escalations and endings to the engine log.
 func (s *stack) relay(label string, in <-chan task.Message, out chan<- task.Message) {
 	defer close(out)
 
@@ -439,14 +400,12 @@ func findGroup(epics []intake.Epic, id string) (intake.Group, bool) {
 			}
 		}
 	}
-
 	return intake.Group{}, false
 }
 
 // progressOf converts a saved group record into the Task Manager's counters.
 func progressOf(st engine.State) *task.Progress {
 	p := &task.Progress{Stage: st.Stage, Widened: slices.Clone(st.ScopeAdded)}
-
 	return p
 }
 
@@ -455,25 +414,21 @@ func reportFact(ctx context.Context, m *engine.Manager, group, subtype string, d
 	if m == nil {
 		return nil
 	}
-
 	raw, _ := jsonOf(data)
 	err := m.Report(ctx, engine.Input{Kind: engine.InFact, Group: group, Time: time.Now(),
 		Data: jsonRaw(engine.FactData{Subtype: subtype, Data: raw})})
-
 	return err
 }
 
-// commandTable turns the commands detected in the group's tree into the Task Manager's command
-// classes and names the tree's language.
+// commandTable turns the commands detected in the group's tree into the Task Manager's command classes and names the tree's
+// language.
 func commandTable(cs contextmgr.CommandSet) (map[string][]string, string) {
 	cmds := map[string][]string{}
 	lang := ""
-
 	for _, c := range cs.Commands {
 		if c.Class == contextmgr.ClassGitRead {
 			continue
 		}
-
 		cmds[string(c.Class)] = slices.Clone(c.Argv)
 		if l := markerLanguage[c.Marker]; l != "" && lang == "" {
 			lang = l

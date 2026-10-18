@@ -86,7 +86,8 @@ func (h *Handler) lockGroup(ctx context.Context, group string) (func(), error) {
 	return func() {}, nil
 }
 
-// proceed reports whether the next removal may run; with the guard on it re-reads the lease first and stops the call for good on a live holder.
+// proceed reports whether the next removal may run; with the guard on it re-reads the lease first and stops the call for
+// good on a live holder.
 func (r *run) proceed() bool {
 	if r.stopped {
 		return false
@@ -144,24 +145,24 @@ func (r *run) container() {
 // checkouts removes the group's tester checkout and session temporary folder.
 func (r *run) checkouts() {
 	type checkoutKind struct{ kind, root string }
-
-	for _, c := range []checkoutKind{{
-		KindTester, r.h.Roots.Testers}, {KindTemp, r.h.Roots.Temp},
-	} {
+	for _, c := range []checkoutKind{{KindTester, r.h.Roots.Testers}, {KindTemp, r.h.Roots.Temp}} {
 		if c.root == "" || !r.proceed() {
 			continue
 		}
+
 		p, err := child(c.root, r.group)
 		if err != nil {
 			r.fail(c.kind, r.group, err)
 			continue
 		}
+
 		if r.dry {
 			if exists(p) {
 				r.removed(c.kind, p)
 			}
 			continue
 		}
+
 		gone, err := removeInside(c.root, p)
 		if err != nil {
 			r.fail(c.kind, p, err)
@@ -258,6 +259,7 @@ func (r *run) branch(name, tip, in string) {
 		r.fail(KindBranch, name, err)
 		return
 	}
+
 	r.removed(KindBranch, name)
 }
 

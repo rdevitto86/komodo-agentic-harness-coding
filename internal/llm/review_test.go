@@ -24,48 +24,24 @@ type scrubbedErr struct {
 }
 
 func (e *scrubbedErr) Error() string { return e.msg }
+
 func (e *scrubbedErr) Unwrap() error { return e.err }
 
 func TestReviewStatusErrorsKeepCoreRedaction(t *testing.T) {
 	for _, status := range []int{401, 403, 404} {
 		raw := &core.StatusError{Status: status, Body: []byte("proxy says: bad key " + apiKey)}
-		fail := &scrubbedErr{msg: fmt.Sprintf("unexpected status %d after 1 attempts: proxy says: bad key [redacted]", status), err: raw}
-		w := &fakeWire{script: []func(turnRequest) (turnResult, error){func(turnRequest) (turnResult, error) { return turnResult{}, fail }}}
+		fail := &scrubbedErr{
+			msg: fmt.Sprintf("unexpected status %d after 1 attempts: proxy says: bad key [redacted]", status),
+			err: raw,
+		}
+		w := &fakeWire{
+			script: []func(
+				turnRequest,
+			) (turnResult, error){func(turnRequest) (turnResult, error) { return turnResult{}, fail }},
+		}
 		_, err := startLoop(context.Background(), loopSession(t, w, &fakeHost{}, nil, 100000))
 		if err == nil || strings.Contains(err.Error(), apiKey) {
 			t.Errorf("status %d: error text leaks the key: %v", status, err)
-		}
-	}
-}
-
-// readLines parses messages.jsonl.
-func readLines(t *testing.T, path string) []messageLine {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []messageLine
-	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-		var ml messageLine
-		if err := json.Unmarshal([]byte(l), &ml); err != nil {
-			t.Fatalf("line %q: %v", l, err)
-		}
-		out = append(out, ml)
-	}
-	return out
-}
-
-// checkAlternating fails unless the saved conversation alternates user and assistant with non-empty content.
-func checkAlternating(t *testing.T, msgs []message) {
-	t.Helper()
-	for i, m := range msgs {
-		want := "user"
-		if i%2 == 1 {
-			want = "assistant"
-		}
-		if m.Role != want || len(m.Content) == 0 {
-			t.Fatalf("message %d is %s with %d blocks, want %s with content", i, m.Role, len(m.Content), want)
 		}
 	}
 }
@@ -142,9 +118,28 @@ func TestReviewResumeAfterInterruptWithToolResult(t *testing.T) {
 func TestReviewCutToolCallIsAnsweredNotRunAnthropic(t *testing.T) {
 	cutTool := func(w http.ResponseWriter, _ int) {
 		sse(w, start(30),
-			[2]string{"content_block_start", mustJSON(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "tu1", "name": "run", "input": map[string]any{}}})},
-			[2]string{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"rm -r"}}`},
-			[2]string{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":9}}`},
+			[2]string{
+				"content_block_start",
+				mustJSON(map[string]any{
+					"type":  "content_block_start",
+					"index": 0,
+					"content_block": map[string]any{
+						"type":  "tool_use",
+						"id":    "tu1",
+						"name":  "run",
+						"input": map[string]any{},
+					},
+				}),
+			},
+			[2]string{
+				"content_block_delta",
+				`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta",` +
+					`"partial_json":"{\"command\":\"rm -r"}}`,
+			},
+			[2]string{
+				"message_delta",
+				`{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":9}}`,
+			},
 			stop())
 	}
 	f := newFakeAPI(t, cutTool, textReply("ok"), textReply(`{"done":true}`))
@@ -161,20 +156,39 @@ func TestReviewCutToolCallIsAnsweredNotRunAnthropic(t *testing.T) {
 		t.Fatalf("a cut tool call was dispatched: %v", host.calls)
 	}
 	second := string(f.raw[1])
-	if !strings.Contains(second, `"tool_use_id":"tu1"`) || !strings.Contains(second, "error: the tool call was cut off") || !strings.Contains(second, "continue") {
+	if !strings.Contains(second, `"tool_use_id":"tu1"`) || !strings.Contains(second, "error: the tool call was cut off") ||
+		!strings.Contains(second, "continue") {
 		t.Errorf("the cut call must get an error tool_result: %s", second)
 	}
 }
 
 func TestReviewCutToolCallIsAnsweredNotRunLocal(t *testing.T) {
 	cut := fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
-		mustJSON(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": "c1", "function": map[string]any{"name": "run", "arguments": `{"command":"rm -r`}}}}}}}),
+		mustJSON(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"delta": map[string]any{
+						"tool_calls": []any{
+							map[string]any{
+								"index":    0,
+								"id":       "c1",
+								"function": map[string]any{"name": "run", "arguments": `{"command":"rm -r`},
+							},
+						},
+					},
+				},
+			},
+		}),
 		`{"choices":[{"delta":{},"finish_reason":"length"}]}`)
 	f := &fakeOllama{replies: []string{cut, chatText("ok"), chatText(`{"done":true}`)}}
 	srv := f.server(t)
-	p, _ := NewLocal(LocalOptions{Endpoint: LocalEndpoint{URL: srv.URL + "/v1", Models: map[Weight]string{Standard: "m"}, Ctx: 100000}})
+	p, _ := NewLocal(LocalOptions{
+		Endpoint: LocalEndpoint{URL: srv.URL + "/v1", Models: map[Weight]string{Standard: "m"}, Ctx: 100000},
+	})
 	host := &fakeHost{}
-	s := Session{ID: "sid", Dir: t.TempDir(), Agent: "tester", Link: Local, Model: "m", Schema: json.RawMessage(resultSchema),
+	s := Session{ID: "sid", Dir: t.TempDir(), Agent: "tester", Link: Local, Model: "m", Schema: json.RawMessage(
+		resultSchema,
+	),
 		Tools: host, Profile: CapacityProfile{Ctx: 100000}, Parts: [5]string{"", "", "", "", "the task"}}
 	st, err := p.Start(context.Background(), s)
 	if err != nil {
@@ -195,8 +209,16 @@ func TestReviewClaudeErrorAndInvalidResults(t *testing.T) {
 		line string
 		want state.Reason
 	}{
-		{"error result", `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the cap"}`, state.ReasonNoResult},
-		{"is_error on success subtype", `{"type":"result","subtype":"success","is_error":true,"result":"API Error"}`, state.ReasonNoResult},
+		{
+			"error result",
+			`{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the cap"}`,
+			state.ReasonNoResult,
+		},
+		{
+			"is_error on success subtype",
+			`{"type":"result","subtype":"success","is_error":true,"result":"API Error"}`,
+			state.ReasonNoResult,
+		},
 		{"schema break", `{"type":"result","subtype":"success","structured_output":{"done":"yes"}}`, state.ReasonSchemaFail},
 		{"no structured output", `{"type":"result","subtype":"success","result":"plain words"}`, state.ReasonSchemaFail},
 	}
@@ -248,17 +270,6 @@ func TestReviewLoginCheckUsesTheSessionEnvironment(t *testing.T) {
 	_ = st.Close()
 }
 
-// usageReply is a text reply whose first-turn usage holds 100,000 one-hour cache writes.
-func usageReply(text string) func(w http.ResponseWriter, n int) {
-	return func(w http.ResponseWriter, _ int) {
-		sse(w, [2]string{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":0,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":100000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":100000}}}}`},
-			[2]string{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
-			[2]string{"content_block_delta", mustJSON(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})},
-			[2]string{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}`},
-			stop())
-	}
-}
-
 func TestReviewOneHourCacheWritesCostTwiceTheInputPrice(t *testing.T) {
 	f := newFakeAPI(t, usageReply("done"), usageReply(`{"done":true}`))
 	st, err := f.adapter().Start(context.Background(), f.session(&fakeHost{}, nil))
@@ -270,7 +281,8 @@ func TestReviewOneHourCacheWritesCostTwiceTheInputPrice(t *testing.T) {
 	if !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
-	// Sonnet 5.5: 2 USD per million input tokens; a 1 hour write costs 2x, so 0.4 USD a turn for 100,000 tokens, plus 12 output tokens at 10 USD per million.
+	// Sonnet 5.5: 2 USD per million input tokens; a 1 hour write costs 2x, so 0.4 USD a turn for 100,000 tokens, plus 12
+	// output tokens at 10 USD per million.
 	want := 2 * (0.4 + 12*10.0/1e6)
 	if got := lastResult(t, evs).Usage.USD; math.Abs(got-want) > 1e-6 {
 		t.Errorf("USD = %v, want %v", got, want)
@@ -323,7 +335,11 @@ func TestReviewStubNamesTheHostLogOrSaysNotSaved(t *testing.T) {
 }
 
 func TestReviewResumeKeepsToolCallNumbering(t *testing.T) {
-	w := &fakeWire{script: []func(turnRequest) (turnResult, error){callTool("t1", "read", `{}`), callTool("t2", "run", `{}`), say("d"), say(`{"done":true}`)}}
+	w := &fakeWire{
+		script: []func(
+			turnRequest,
+		) (turnResult, error){callTool("t1", "read", `{}`), callTool("t2", "run", `{}`), say("d"), say(`{"done":true}`)},
+	}
 	cfg := loopSession(t, w, &fakeHost{}, nil, 100000)
 	if _, err := run(t, cfg); !errors.Is(err, io.EOF) {
 		t.Fatal(err)
@@ -380,5 +396,66 @@ func TestReviewRequiredEmptyFieldsSurviveReplay(t *testing.T) {
 	got := acc.result().Content
 	if len(got) != 2 || got[0].Type != "thinking" || got[0].Signature != "sig" || got[1].Text != "hi" {
 		t.Errorf("assembled content = %+v", got)
+	}
+}
+
+// readLines parses messages.jsonl.
+func readLines(t *testing.T, path string) []messageLine {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []messageLine
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var ml messageLine
+		if err := json.Unmarshal([]byte(l), &ml); err != nil {
+			t.Fatalf("line %q: %v", l, err)
+		}
+		out = append(out, ml)
+	}
+	return out
+}
+
+// checkAlternating fails unless the saved conversation alternates user and assistant with non-empty content.
+func checkAlternating(t *testing.T, msgs []message) {
+	t.Helper()
+	for i, m := range msgs {
+		want := "user"
+		if i%2 == 1 {
+			want = "assistant"
+		}
+		if m.Role != want || len(m.Content) == 0 {
+			t.Fatalf("message %d is %s with %d blocks, want %s with content", i, m.Role, len(m.Content), want)
+		}
+	}
+}
+
+// usageReply is a text reply whose first-turn usage holds 100,000 one-hour cache writes.
+func usageReply(text string) func(w http.ResponseWriter, n int) {
+	return func(w http.ResponseWriter, _ int) {
+		sse(w, [2]string{
+			"message_start",
+			`{"type":"message_start","message":{"usage":{"input_tokens":0,"output_tokens":1,"cache_read_input_tokens":0,` +
+				`"cache_creation_input_tokens":100000,"cache_creation":{"ephemeral_5m_input_tokens":0,` +
+				`"ephemeral_1h_input_tokens":100000}}}}`,
+		},
+			[2]string{
+				"content_block_start",
+				`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			},
+			[2]string{
+				"content_block_delta",
+				mustJSON(map[string]any{
+					"type":  "content_block_delta",
+					"index": 0,
+					"delta": map[string]any{"type": "text_delta", "text": text},
+				}),
+			},
+			[2]string{
+				"message_delta",
+				`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}`,
+			},
+			stop())
 	}
 }

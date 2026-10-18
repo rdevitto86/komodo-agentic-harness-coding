@@ -1,5 +1,5 @@
-// Package fault is the Error Handler: it catches errors and panics, publishes them as error events
-// and prints them to the caller.
+// Package fault is the Error Handler: it catches errors and panics, publishes them as error events and prints them to the
+// caller.
 package fault
 
 import (
@@ -29,6 +29,20 @@ const (
 	KindInternal Kind = "internal" // exit 4: Komodo itself failed
 )
 
+// ExitCode returns the process exit code the kind selects; an unknown kind is an internal failure.
+func (k Kind) ExitCode() int {
+	switch k {
+	case KindRefused:
+		return 1
+	case KindUsage:
+		return 2
+	case KindBlocked:
+		return 3
+	default:
+		return 4
+	}
+}
+
 // Source says where a fault came from.
 type Source struct {
 	Component string // the package, such as "task" or "metrics"
@@ -49,6 +63,17 @@ type Fault struct {
 	Stack    string // set for a panic
 }
 
+// ExitCode returns the exit code of the command the fault ends; a warn fault never changes it.
+func (f Fault) ExitCode() int {
+	if f.Severity == SeverityWarn {
+		return 0
+	}
+	return f.Kind.ExitCode()
+}
+
+// Error returns the reason, so a Fault can travel as an error.
+func (f Fault) Error() string { return f.Reason }
+
 // FaultData holds the fields every fault event carries; each fault subtype embeds it.
 type FaultData struct {
 	Component string `json:"component"`       // the package the fault came from
@@ -62,14 +87,28 @@ type FaultData struct {
 	Final     bool   `json:"final,omitempty"` // true for the last event before the program exits
 }
 
+// IsFinal reports whether this is the last event before the program exits; the bus syncs its logs for it.
+func (d FaultData) IsFinal() bool { return d.Final }
+
 // ErrorFault is the data of error / fault.error, a returned error.
 type ErrorFault struct{ FaultData }
+
+// EventKey binds ErrorFault to its type and subtype.
+func (ErrorFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: subtypeError} }
 
 // PanicFault is the data of error / fault.panic, a recovered panic.
 type PanicFault struct{ FaultData }
 
+// EventKey binds PanicFault to its type and subtype.
+func (PanicFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: subtypePanic} }
+
 // ResourceFault is the data of error / fault.resource, from the Resource Manager.
 type ResourceFault struct{ FaultData }
+
+// EventKey binds ResourceFault to its type and subtype.
+func (ResourceFault) EventKey() bus.Key {
+	return bus.Key{Type: bus.TypeError, Subtype: subtypeResource}
+}
 
 // otherRow is the fault built from an error event that another package owns.
 type otherRow struct {
@@ -80,8 +119,7 @@ type otherRow struct {
 	reason    string
 }
 
-// otherErrors maps each error subtype that is not a fault event to the fault the Run loop prints
-// for it.
+// otherErrors maps each error subtype that is not a fault event to the fault the Run loop prints for it.
 var otherErrors = map[bus.Subtype]otherRow{
 	"plan-blocked": {
 		"intake", format.PlanBlocked, KindBlocked, SeverityError,
@@ -115,47 +153,6 @@ const (
 	subtypePanic    bus.Subtype = "fault.panic"
 	subtypeResource bus.Subtype = "fault.resource"
 )
-
-// ExitCode returns the process exit code the kind selects; an unknown kind is an internal failure.
-func (k Kind) ExitCode() int {
-	switch k {
-	case KindRefused:
-		return 1
-	case KindUsage:
-		return 2
-	case KindBlocked:
-		return 3
-	default:
-		return 4
-	}
-}
-
-// ExitCode returns the exit code of the command the fault ends; a warn fault never changes it.
-func (f Fault) ExitCode() int {
-	if f.Severity == SeverityWarn {
-		return 0
-	}
-
-	return f.Kind.ExitCode()
-}
-
-// Error returns the reason, so a Fault can travel as an error.
-func (f Fault) Error() string { return f.Reason }
-
-// IsFinal reports whether this is the last event before the program exits; the bus syncs its logs
-// for it.
-func (d FaultData) IsFinal() bool { return d.Final }
-
-// EventKey binds ErrorFault to its type and subtype.
-func (ErrorFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: subtypeError} }
-
-// EventKey binds PanicFault to its type and subtype.
-func (PanicFault) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: subtypePanic} }
-
-// EventKey binds ResourceFault to its type and subtype.
-func (ResourceFault) EventKey() bus.Key {
-	return bus.Key{Type: bus.TypeError, Subtype: subtypeResource}
-}
 
 // RegisterEvents binds the three fault subtypes to their data structs; it panics if called twice.
 func RegisterEvents() {
@@ -191,7 +188,6 @@ func toData(f Fault) FaultData {
 func capStack(s string) string {
 	// stackCap is the most bytes of a stack an event keeps, the cap of a block's detail.
 	const stackCap = 4096
-
 	if len(s) <= stackCap {
 		return s
 	}
@@ -204,20 +200,6 @@ func capStack(s string) string {
 	return s[:n]
 }
 
-// fromData builds a fault from event data and the run and group of its event.
-func fromData(d FaultData, run, group bus.ID) Fault {
-	return Fault{
-		Source:   Source{Component: d.Component, Run: run, Group: group},
-		Code:     d.Code,
-		Kind:     Kind(d.Kind),
-		Severity: Severity(d.Severity),
-		Reason:   d.Reason,
-		Fix:      d.Fix,
-		Panic:    d.Panic,
-		Stack:    d.Stack,
-	}
-}
-
 // panicReason turns a recovered value into plain words, dropping the runtime's own prefix.
 func panicReason(r any) string {
 	var s string
@@ -226,12 +208,10 @@ func panicReason(r any) string {
 	} else {
 		s = fmt.Sprint(r)
 	}
-
 	return strings.TrimPrefix(s, "runtime error: ")
 }
 
-// faultFromEvent builds the fault to print for an error event; ok is false for a subtype it does
-// not know.
+// faultFromEvent builds the fault to print for an error event; ok is false for a subtype it does not know.
 func faultFromEvent(e bus.Event) (f Fault, ok bool) {
 	switch d := e.Data.(type) {
 	case *ErrorFault:
@@ -272,6 +252,20 @@ func faultFromEvent(e bus.Event) (f Fault, ok bool) {
 	}, true
 }
 
+// fromData builds a fault from event data and the run and group of its event.
+func fromData(d FaultData, run, group bus.ID) Fault {
+	return Fault{
+		Source:   Source{Component: d.Component, Run: run, Group: group},
+		Code:     d.Code,
+		Kind:     Kind(d.Kind),
+		Severity: Severity(d.Severity),
+		Reason:   d.Reason,
+		Fix:      d.Fix,
+		Panic:    d.Panic,
+		Stack:    d.Stack,
+	}
+}
+
 // finalOf reports whether an error event is the last one its process publishes.
 func finalOf(e bus.Event) bool {
 	switch d := e.Data.(type) {
@@ -282,6 +276,5 @@ func finalOf(e bus.Event) bool {
 	case *ResourceFault:
 		return d.Final
 	}
-
 	return false
 }

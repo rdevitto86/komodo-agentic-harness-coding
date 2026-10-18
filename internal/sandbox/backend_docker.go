@@ -18,8 +18,8 @@ import (
 	"time"
 )
 
-// DockerOptions set the docker program and the Tester's image; zero values use docker on PATH and
-// an image detected from the repository.
+// DockerOptions set the docker program and the Tester's image; zero values use docker on PATH and an image detected from the
+// repository.
 type DockerOptions struct {
 	Binary string // docker
 	Image  string // sandbox.image
@@ -32,39 +32,13 @@ type Docker struct {
 	state map[string]*containerState
 }
 
-// containerState is what Docker remembers about one container between calls.
-type containerState struct {
-	online bool              // true while the bridge network is connected
-	masked map[string]fileID // masked files covered by a mount, with the file each mount hides
-}
-
-// fileID identifies a file on the host by device and inode.
-type fileID struct{ dev, ino uint64 }
-
-// workDir is where the worktree is mounted inside the container.
-const workDir = "/work"
-
-var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
-
-var (
-	goVersion     = regexp.MustCompile(`(?m)^go\s+(\d+\.\d+)`)
-	leadingNumber = regexp.MustCompile(`\d+(\.\d+)*`)
-	channelLine   = regexp.MustCompile(`(?m)^\s*channel\s*=\s*"([^"]+)"`)
-	rustVersion   = regexp.MustCompile(`(?m)^\s*rust-version\s*=\s*"([^"]+)"`)
-	pythonReq     = regexp.MustCompile(`(?m)^\s*requires-python\s*=\s*"([^"]+)"`)
-)
-
 // NewDocker returns the Docker backend.
 func NewDocker(o DockerOptions) *Docker {
 	if o.Binary == "" {
 		o.Binary = "docker"
 	}
-
 	return &Docker{opt: o, state: map[string]*containerState{}}
 }
-
-// Name returns the mechanism name.
-func (d *Docker) Name() string { return "docker" }
 
 // Check reports whether docker is installed and its daemon answers.
 func (d *Docker) Check() error {
@@ -72,12 +46,8 @@ func (d *Docker) Check() error {
 	defer cancel()
 
 	if _, err := exec.LookPath(d.opt.Binary); err != nil {
-		return errors.New(
-			"docker is not installed: install Docker, " +
-				"or the Tester runs in the operating-system sandbox",
-		)
+		return errors.New("docker is not installed: install Docker, " + "or the Tester runs in the operating-system sandbox")
 	}
-
 	if _, err := d.run(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
 		return fmt.Errorf("the docker daemon does not answer: start Docker (%w)", err)
 	}
@@ -85,8 +55,7 @@ func (d *Docker) Check() error {
 	return nil
 }
 
-// Prepare creates and starts the group's container: network on only when the Spec asks for it, and
-// the language tools added.
+// Prepare creates and starts the group's container: network on only when the Spec asks for it, and the language tools added.
 func (d *Docker) Prepare(ctx context.Context, s Spec) (Instance, error) {
 	r, err := newRules(s)
 	if err != nil {
@@ -113,7 +82,6 @@ func (d *Docker) Prepare(ctx context.Context, s Spec) (Instance, error) {
 	}
 
 	name := containerName(s.Group, inst.ID)
-
 	args, covered := d.createArgs(r.existing(), inst, name, image)
 	if _, err := d.run(ctx, args...); err != nil {
 		return Instance{}, fmt.Errorf("create the container: %w", err)
@@ -121,7 +89,6 @@ func (d *Docker) Prepare(ctx context.Context, s Spec) (Instance, error) {
 
 	fail := func(what string, err error) (Instance, error) {
 		_, _ = d.run(context.WithoutCancel(ctx), "rm", "-f", name)
-
 		return Instance{}, fmt.Errorf("%s: %w", what, err)
 	}
 	if _, err := d.run(ctx, "start", name); err != nil {
@@ -137,12 +104,14 @@ func (d *Docker) Prepare(ctx context.Context, s Spec) (Instance, error) {
 	d.mu.Lock()
 	d.state[inst.ID] = &containerState{online: s.Network, masked: covered}
 	d.mu.Unlock()
-
 	return inst, nil
 }
 
-// Command wraps the argv in docker exec with the allowed environment; a timeout runs the command
-// under timeout, which kills its process group.
+// Name returns the mechanism name.
+func (d *Docker) Name() string { return "docker" }
+
+// Command wraps the argv in docker exec with the allowed environment; a timeout runs the command under timeout, which kills
+// its process group.
 func (d *Docker) Command(ctx context.Context, i Instance, s Spec, c Command) (*exec.Cmd, error) {
 	r, err := newRules(s)
 	if err != nil {
@@ -152,11 +121,9 @@ func (d *Docker) Command(ctx context.Context, i Instance, s Spec, c Command) (*e
 	d.mu.Lock()
 	st, ok := d.state[i.ID]
 	d.mu.Unlock()
-
 	if !ok {
 		return nil, fmt.Errorf("container of instance %s was not prepared", i.ID)
 	}
-
 	if err := d.guard(st, r); err != nil {
 		return nil, err
 	}
@@ -175,7 +142,6 @@ func (d *Docker) Command(ctx context.Context, i Instance, s Spec, c Command) (*e
 	}
 
 	args = append(args, name)
-
 	if c.Timeout > 0 {
 		secs := int((c.Timeout + time.Second - 1) / time.Second)
 		args = append(args, "timeout", "-k", "5", strconv.Itoa(secs))
@@ -192,21 +158,16 @@ func (d *Docker) CutNetwork(ctx context.Context, i Instance) error {
 	d.mu.Lock()
 	st, ok := d.state[i.ID]
 	d.mu.Unlock()
-
 	if !ok || !st.online {
 		return nil
 	}
-
-	if _, err := d.run(
-		ctx, "network", "disconnect", "bridge", containerName(i.Group, i.ID),
-	); err != nil {
+	if _, err := d.run(ctx, "network", "disconnect", "bridge", containerName(i.Group, i.ID)); err != nil {
 		return err
 	}
 
 	d.mu.Lock()
 	st.online = false
 	d.mu.Unlock()
-
 	return nil
 }
 
@@ -216,15 +177,13 @@ func (d *Docker) Release(ctx context.Context, i Instance) error {
 	delete(d.state, i.ID)
 	d.mu.Unlock()
 	_, err := d.run(ctx, "rm", "-f", containerName(i.Group, i.ID))
-
 	return err
 }
 
 // Caveats is empty: a container enforces both limits.
 func (d *Docker) Caveats(Spec) []string { return nil }
 
-// Sweep removes every Komodo container whose group the keep function does not claim, and returns
-// how many it removed.
+// Sweep removes every Komodo container whose group the keep function does not claim, and returns how many it removed.
 func (d *Docker) Sweep(ctx context.Context, keep func(group string) bool) (int, error) {
 	out, err := d.run(
 		ctx, "ps", "-a", "--filter", "label=komodo.sandbox=1",
@@ -235,17 +194,14 @@ func (d *Docker) Sweep(ctx context.Context, keep func(group string) bool) (int, 
 	}
 
 	n := 0
-
 	for _, line := range strings.Split(out, "\n") {
 		name, group, ok := strings.Cut(strings.TrimSpace(line), "\t")
 		if !ok || name == "" || keep(group) {
 			continue
 		}
-
 		if _, err := d.run(ctx, "rm", "-f", name); err != nil {
 			return n, err
 		}
-
 		n++
 	}
 
@@ -260,13 +216,11 @@ func (d *Docker) List(ctx context.Context) ([]string, error) {
 	}
 
 	var groups []string
-
 	for _, n := range strings.Fields(out) {
 		g := strings.TrimPrefix(n, "komodo-")
 		if i := strings.LastIndex(g, "-"); i > 0 {
 			g = g[:i]
 		}
-
 		if !slices.Contains(groups, g) {
 			groups = append(groups, g)
 		}
@@ -287,11 +241,9 @@ func (d *Docker) Remove(ctx context.Context, group string) error {
 	}
 
 	for _, n := range strings.Fields(out) {
-		if i := strings.LastIndex(n, "-"); i < 0 ||
-			n[:i] != "komodo-"+unsafeName.ReplaceAllString(group, "_") {
+		if i := strings.LastIndex(n, "-"); i < 0 || n[:i] != "komodo-"+unsafeName.ReplaceAllString(group, "_") {
 			continue
 		}
-
 		if _, err := d.run(ctx, "rm", "-f", n); err != nil {
 			return err
 		}
@@ -300,13 +252,8 @@ func (d *Docker) Remove(ctx context.Context, group string) error {
 	return nil
 }
 
-// createArgs returns the docker create arguments and the masked files they cover, each with its
-// identity on the host.
-func (d *Docker) createArgs(
-	r rules,
-	inst Instance,
-	name, image string,
-) ([]string, map[string]fileID) {
+// createArgs returns the docker create arguments and the masked files they cover, each with its identity on the host.
+func (d *Docker) createArgs(r rules, inst Instance, name, image string) ([]string, map[string]fileID) {
 	a := []string{"create", "--name", name, "--init",
 		"--label", "komodo.sandbox=1",
 		"--label", "komodo.group=" + inst.Group,
@@ -318,11 +265,9 @@ func (d *Docker) createArgs(
 	} else {
 		a = append(a, "--network", "none")
 	}
-
 	if r.MaxProcs > 0 {
 		a = append(a, "--pids-limit", strconv.Itoa(r.MaxProcs))
 	}
-
 	if r.MaxMemGB > 0 {
 		a = append(a, "--memory", strconv.Itoa(r.MaxMemGB)+"g")
 	}
@@ -333,7 +278,6 @@ func (d *Docker) createArgs(
 	}
 
 	covered := map[string]fileID{}
-
 	for _, p := range r.Masked {
 		a = append(a, "-v", "/dev/null:"+inContainer(r.Worktree, p)+":ro")
 		if id, ok := identify(p); ok {
@@ -361,9 +305,7 @@ func (d *Docker) guard(st *containerState, r rules) error {
 
 	switch {
 	case r.Network && !st.online:
-		return errors.New(
-			"the container was made without a network, so it cannot run the setup command online",
-		)
+		return errors.New("the container was made without a network, so it cannot run the setup command online")
 	case !r.Network && st.online:
 		return errors.New("the container's network is still connected: end setup first")
 	}
@@ -377,10 +319,7 @@ func (d *Docker) guard(st *containerState, r rules) error {
 		covered, ok := st.masked[m]
 		switch {
 		case !ok:
-			return fmt.Errorf(
-				"masked file %s appeared after the container was made and cannot be hidden from it",
-				m,
-			)
+			return fmt.Errorf("masked file %s appeared after the container was made and cannot be hidden from it", m)
 		case covered != now:
 			return fmt.Errorf(
 				"masked file %s was replaced after the container was made, "+
@@ -393,22 +332,19 @@ func (d *Docker) guard(st *containerState, r rules) error {
 	return nil
 }
 
-// killMarked kills inside the container every process that carries the marker, because ending the
-// docker client leaves them running.
+// killMarked kills inside the container every process that carries the marker, because ending the docker client leaves them
+// running.
 func (d *Docker) killMarked(name, marker string) {
 	// killScript kills every process of the container that carries the marker.
 	const killScript = `for p in /proc/[0-9]*; do ` +
 		`if tr '\0' '\n' < "$p/environ" 2>/dev/null | grep -qx '%s'; then ` +
 		`kill -9 "${p#/proc/}" 2>/dev/null; fi; done`
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
 	_, _ = d.run(ctx, "exec", name, "sh", "-c", fmt.Sprintf(killScript, marker))
 }
 
-// run starts the docker program and returns its output; an error carries the first line it printed
-// to stderr.
+// run starts the docker program and returns its output; an error carries the first line it printed to stderr.
 func (d *Docker) run(ctx context.Context, args ...string) (string, error) {
 	bin, err := exec.LookPath(d.opt.Binary)
 	if err != nil {
@@ -418,7 +354,6 @@ func (d *Docker) run(ctx context.Context, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 
 	cmd := exec.CommandContext(ctx, bin, args...)
-
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return stdout.String(), errors.New(firstLine(stderr.String(), err))
@@ -427,24 +362,43 @@ func (d *Docker) run(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// image returns the container image and the language whose tools it needs added; a configured image
-// is used as it is.
+// image returns the container image and the language whose tools it needs added; a configured image is used as it is.
 func (d *Docker) image(worktree string) (image, lang string, err error) {
 	if d.opt.Image == "" {
 		return detectImage(worktree)
 	}
-
 	return d.opt.Image, "", nil
 }
 
-// inContainer maps a host path to where the container sees it: under the worktree it moves to
-// /work, elsewhere it keeps its path.
+// containerState is what Docker remembers about one container between calls.
+type containerState struct {
+	online bool              // true while the bridge network is connected
+	masked map[string]fileID // masked files covered by a mount, with the file each mount hides
+}
+
+// fileID identifies a file on the host by device and inode.
+type fileID struct{ dev, ino uint64 }
+
+// workDir is where the worktree is mounted inside the container.
+const workDir = "/work"
+
+var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
+
+var (
+	goVersion     = regexp.MustCompile(`(?m)^go\s+(\d+\.\d+)`)
+	leadingNumber = regexp.MustCompile(`\d+(\.\d+)*`)
+	channelLine   = regexp.MustCompile(`(?m)^\s*channel\s*=\s*"([^"]+)"`)
+	rustVersion   = regexp.MustCompile(`(?m)^\s*rust-version\s*=\s*"([^"]+)"`)
+	pythonReq     = regexp.MustCompile(`(?m)^\s*requires-python\s*=\s*"([^"]+)"`)
+)
+
+// inContainer maps a host path to where the container sees it: under the worktree it moves to /work, elsewhere it keeps its
+// path.
 func inContainer(worktree, p string) string {
 	if rel, err := filepath.Rel(worktree, p); err == nil && rel != ".." &&
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return filepath.ToSlash(filepath.Join(workDir, rel))
 	}
-
 	return p
 }
 
@@ -471,7 +425,6 @@ func toolAdditions(lang string) [][]string {
 	case "python":
 		return [][]string{{"pip", "install", "uv"}}
 	}
-
 	return nil
 }
 
@@ -480,21 +433,17 @@ func containerName(group, id string) string {
 	return "komodo-" + unsafeName.ReplaceAllString(group, "_") + "-" + id[:min(8, len(id))]
 }
 
-// detectImage picks the official image from the repository's version files; a repository it cannot
-// decide for needs sandbox.image.
+// detectImage picks the official image from the repository's version files; a repository it cannot decide for needs
+// sandbox.image.
 func detectImage(dir string) (image, lang string, err error) {
 	langs := codeLanguages(dir)
 	if len(langs) != 1 {
-		return "", "", fmt.Errorf(
-			"the repository has %d languages, so no single image fits: set sandbox.image",
-			len(langs),
-		)
+		return "", "", fmt.Errorf("the repository has %d languages, so no single image fits: set sandbox.image", len(langs))
 	}
 
 	lang = langs[0]
 
 	var tag, repo string
-
 	switch lang {
 	case "go":
 		repo, tag = "golang", firstMatch(goVersion, readText(dir, "go.mod"))
@@ -505,22 +454,11 @@ func detectImage(dir string) (image, lang string, err error) {
 	case "python":
 		repo, tag = "python", pythonTag(dir)
 	}
-
 	if tag == "" {
-		return "", "", fmt.Errorf(
-			"no %s version file names a version, so no image fits: set sandbox.image",
-			lang,
-		)
+		return "", "", fmt.Errorf("no %s version file names a version, so no image fits: set sandbox.image", lang)
 	}
 
 	return repo + ":" + tag, lang, nil
-}
-
-// readText returns a file of the folder, or an empty string.
-func readText(dir, name string) string {
-	b, _ := os.ReadFile(filepath.Join(dir, name))
-
-	return string(b)
 }
 
 // firstMatch returns the first group of the first match, or an empty string.
@@ -528,12 +466,14 @@ func firstMatch(re *regexp.Regexp, text string) string {
 	if m := re.FindStringSubmatch(text); m != nil {
 		return m[1]
 	}
-
 	return ""
 }
 
-// versionIn returns the first dotted number in a version requirement such as ">=18.17".
-func versionIn(s string) string { return leadingNumber.FindString(s) }
+// readText returns a file of the folder, or an empty string.
+func readText(dir, name string) string {
+	b, _ := os.ReadFile(filepath.Join(dir, name))
+	return string(b)
+}
 
 // nodeVersion reads .nvmrc, then .node-version, then the engines field of package.json.
 func nodeVersion(dir string) string {
@@ -553,17 +493,18 @@ func nodeVersion(dir string) string {
 	return ""
 }
 
-// rustTag reads a numeric channel from the toolchain file, then rust-version from Cargo.toml;
-// stable and nightly name no tag.
+// versionIn returns the first dotted number in a version requirement such as ">=18.17".
+func versionIn(s string) string { return leadingNumber.FindString(s) }
+
+// rustTag reads a numeric channel from the toolchain file, then rust-version from Cargo.toml; stable and nightly name no
+// tag.
 func rustTag(dir string) string {
 	for _, f := range []string{"rust-toolchain.toml", "rust-toolchain"} {
 		text := readText(dir, f)
-
 		ch := firstMatch(channelLine, text)
 		if ch == "" && !strings.Contains(text, "=") {
 			ch = strings.TrimSpace(text)
 		}
-
 		if len(ch) > 0 && ch[0] >= '0' && ch[0] <= '9' {
 			return versionIn(ch)
 		}
@@ -577,6 +518,5 @@ func pythonTag(dir string) string {
 	if v := versionIn(strings.TrimSpace(readText(dir, ".python-version"))); v != "" {
 		return v
 	}
-
 	return versionIn(firstMatch(pythonReq, readText(dir, "pyproject.toml")))
 }

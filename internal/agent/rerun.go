@@ -15,6 +15,7 @@ func (goTester) Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOut
 
 	var passed [2]bool
 	var last string
+
 	for i := range passed {
 		exit, out, err := run(ctx, it.Cmd)
 		if err != nil {
@@ -22,6 +23,7 @@ func (goTester) Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOut
 		}
 		passed[i], last = exit == 0, out
 	}
+
 	return AdjudicateItem(passed), CapOutput(last, GateOutputCap), nil
 }
 

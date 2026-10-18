@@ -19,10 +19,14 @@ import (
 )
 
 const (
-	defaultReleases = "https://github.com/rdevitto86/komodo-agentic-harness-coding/releases" // defaultReleases is the address of the project's GitHub releases.
-	manifestTimeout = time.Second                                                            // manifestTimeout is the longest the release manifest fetch may take.
-	downloadTimeout = 5 * time.Minute                                                        // downloadTimeout is the longest a binary download may take.
-	maxBinary       = 512 << 20                                                              // maxBinary caps the size of a downloaded binary.
+	// defaultReleases is the address of the project's GitHub releases.
+	defaultReleases = "https://github.com/rdevitto86/komodo-agentic-harness-coding/releases"
+	// manifestTimeout is the longest the release manifest fetch may take.
+	manifestTimeout = time.Second
+	// downloadTimeout is the longest a binary download may take.
+	downloadTimeout = 5 * time.Minute
+	// maxBinary caps the size of a downloaded binary.
+	maxBinary = 512 << 20
 )
 
 // cdnHosts are the hosts GitHub redirects release downloads to.

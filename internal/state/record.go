@@ -42,8 +42,7 @@ const (
 	// the group is closed
 	StageDone Stage = "done"
 
-	// a plan window or a spending ceiling is reached; the lease is kept and the group resumes when
-	// the window resets
+	// a plan window or a spending ceiling is reached; the lease is kept and the group resumes when the window resets
 	StagePaused Stage = "paused"
 
 	// needs a person or the orchestrator
@@ -127,29 +126,14 @@ type UnfinishedEdits struct {
 
 // Counters are the numbers that bound a group; only the Runtime Manager changes them.
 type Counters struct {
-	// returns to build after a failed test or review
-	Returns int `json:"returns"`
-
-	// fresh builder sessions for the group
-	Attempts int `json:"attempts"`
-
-	// builder restarts after a timeout or idle stop
-	Retries int `json:"retries"`
-
-	// sessions lost to a crash; never charged to attempts or retries
-	Crashes int `json:"crashes"`
-
-	// blocks per reason
-	Blocks map[string]int `json:"blocks"`
-
-	// seconds worked, excluding paused and blocked time
-	WallUsedS int64 `json:"wall_used_s"`
-
-	// the one wall-time extension was granted
-	WallExtended bool `json:"wall_extended"`
-
-	// tokens used by the group
-	TokensUsed int64 `json:"tokens_used"`
+	Returns      int            `json:"returns"`       // returns to build after a failed test or review
+	Attempts     int            `json:"attempts"`      // fresh builder sessions for the group
+	Retries      int            `json:"retries"`       // builder restarts after a timeout or idle stop
+	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to attempts or retries
+	Blocks       map[string]int `json:"blocks"`        // blocks per reason
+	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time
+	WallExtended bool           `json:"wall_extended"` // the one wall-time extension was granted
+	TokensUsed   int64          `json:"tokens_used"`   // tokens used by the group
 }
 
 // TaskState is one task's progress.
@@ -185,17 +169,10 @@ type Finding struct {
 
 // OpenAction is a side effect the Runtime Manager ordered that has not finished.
 type OpenAction struct {
-	// fingerprint of the order, so a rerun is recognised
-	ID string `json:"id"`
-
-	// the kind of action
-	Kind string `json:"kind"`
-
-	// arguments of that kind
-	Args json.RawMessage `json:"args"`
-
-	// the action began; a rerun after a crash skips an action whose id is done
-	Started bool `json:"started"`
+	ID      string          `json:"id"`      // fingerprint of the order, so a rerun is recognised
+	Kind    string          `json:"kind"`    // the kind of action
+	Args    json.RawMessage `json:"args"`    // arguments of that kind
+	Started bool            `json:"started"` // the action began; a rerun after a crash skips an action whose id is done
 }
 
 // ResumeRef is how an interrupted session can be continued.
@@ -208,23 +185,12 @@ type ResumeRef struct {
 
 // PauseState holds a paused group's wait.
 type PauseState struct {
-	// when the limit resets, plus a margin
-	Until time.Time `json:"until,omitzero"`
-
-	// when the group paused
-	Since time.Time `json:"since,omitzero"`
-
-	// the limited link
-	Link string `json:"link,omitempty"`
-
-	// resume attempts the provider refused, for the backoff
-	Refused int `json:"refused"`
-
-	// provider, plan_window, spending or group_tokens
-	Cause string `json:"cause,omitempty"`
-
-	// a limit pause waits for the live session to end
-	After bool `json:"after,omitempty"`
+	Until   time.Time `json:"until,omitzero"`  // when the limit resets, plus a margin
+	Since   time.Time `json:"since,omitzero"`  // when the group paused
+	Link    string    `json:"link,omitempty"`  // the limited link
+	Refused int       `json:"refused"`         // resume attempts the provider refused, for the backoff
+	Cause   string    `json:"cause,omitempty"` // provider, plan_window, spending or group_tokens
+	After   bool      `json:"after,omitempty"` // a limit pause waits for the live session to end
 }
 
 // BlockState names why and when a blocked group stopped.

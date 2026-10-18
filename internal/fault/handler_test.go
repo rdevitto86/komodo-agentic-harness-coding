@@ -15,10 +15,28 @@ import (
 // failBus is a bus whose Publish always fails.
 type failBus struct{ bus.Bus }
 
+var srcTask = Source{Component: "task", Run: "run-1", Group: "grp-1"}
+
 // Publish refuses every event.
 func (failBus) Publish(bus.Event) error { return errors.New("bus down") }
 
-var srcTask = Source{Component: "task", Run: "run-1", Group: "grp-1"}
+// panicPrinter panics on its first call and records the rest.
+type panicPrinter struct {
+	fakePrinter
+	first sync.Once
+}
+
+// PrintError panics once, then records.
+func (p *panicPrinter) PrintError(f Fault) error {
+	p.first.Do(func() { panic("printer bug") })
+	return p.fakePrinter.PrintError(f)
+}
+
+// panicOnPrint is a printer that always panics.
+type panicOnPrint struct{}
+
+// PrintError panics.
+func (panicOnPrint) PrintError(Fault) error { panic("printer exploded") }
 
 // TestGoPanic: a panic is published once, onPanic runs once and other goroutines run on.
 func TestGoPanic(t *testing.T) {
@@ -36,7 +54,8 @@ func TestGoPanic(t *testing.T) {
 		t.Fatalf("event %s/%s, want error/fault.panic", e.Type, e.Subtype)
 	}
 	d := e.Data.(*PanicFault)
-	if d.Component != "task" || d.Code != "internal" || d.Kind != "internal" || d.Severity != "error" || !d.Panic || d.Reason != "boom" || d.Final {
+	if d.Component != "task" || d.Code != "internal" || d.Kind != "internal" || d.Severity != "error" || !d.Panic ||
+		d.Reason != "boom" || d.Final {
 		t.Fatalf("data %+v", d.FaultData)
 	}
 	if e.Run != "run-1" || e.Group != "grp-1" {
@@ -111,13 +130,19 @@ func TestGoPanicsConcurrently(t *testing.T) {
 // TestReportRefused: a refused error is one fault.error event and one print.
 func TestReportRefused(t *testing.T) {
 	r := newRig(t, true)
-	r.h.Report(Source{Component: "config", Run: "run-1"}, "over_limit", KindRefused, errors.New("limits.returns is above 20"))
+	r.h.Report(
+		Source{Component: "config", Run: "run-1"},
+		"over_limit",
+		KindRefused,
+		errors.New("limits.returns is above 20"),
+	)
 	e := r.next(t)
 	if e.Subtype != "fault.error" {
 		t.Fatalf("subtype %s", e.Subtype)
 	}
 	d := e.Data.(*ErrorFault)
-	if d.Kind != "refused" || d.Severity != "error" || d.Code != "over_limit" || d.Component != "config" || d.Reason != "limits.returns is above 20" || d.Panic {
+	if d.Kind != "refused" || d.Severity != "error" || d.Code != "over_limit" || d.Component != "config" ||
+		d.Reason != "limits.returns is above 20" || d.Panic {
 		t.Fatalf("data %+v", d.FaultData)
 	}
 	got := r.p.waitCalls(t, 1)
@@ -140,7 +165,14 @@ func TestReportNilError(t *testing.T) {
 // TestThrowResourceWarn: a warn is one fault.resource event and one print.
 func TestThrowResourceWarn(t *testing.T) {
 	r := newRig(t, true)
-	err := r.h.ThrowResourceError(context.Background(), ResourceError{Kind: "window", Severity: SeverityWarn, Link: "claude-cli", Run: "run-1", Value: 82, Threshold: 80})
+	err := r.h.ThrowResourceError(context.Background(), ResourceError{
+		Kind:      "window",
+		Severity:  SeverityWarn,
+		Link:      "claude-cli",
+		Run:       "run-1",
+		Value:     82,
+		Threshold: 80,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +181,8 @@ func TestThrowResourceWarn(t *testing.T) {
 		t.Fatalf("event %s run %q group %q", e.Subtype, e.Run, e.Group)
 	}
 	d := e.Data.(*ResourceFault)
-	if d.Severity != "warn" || d.Component != "resource" || d.Code != "over_limit" || d.Kind != "refused" || d.Reason != "plan window 82% used on claude-cli" || d.Fix != "wait for the window reset" {
+	if d.Severity != "warn" || d.Component != "resource" || d.Code != "over_limit" || d.Kind != "refused" ||
+		d.Reason != "plan window 82% used on claude-cli" || d.Fix != "wait for the window reset" {
 		t.Fatalf("data %+v", d.FaultData)
 	}
 	got := r.p.waitCalls(t, 1)
@@ -161,7 +194,12 @@ func TestThrowResourceWarn(t *testing.T) {
 // TestThrowResourceOtherKind checks a non-window kind gets a reason built from its fields.
 func TestThrowResourceOtherKind(t *testing.T) {
 	r := newRig(t, true)
-	if err := r.h.ThrowResourceError(context.Background(), ResourceError{Kind: "spend_run", Severity: SeverityError, Value: 5, Threshold: 4}); err != nil {
+	if err := r.h.ThrowResourceError(context.Background(), ResourceError{
+		Kind:      "spend_run",
+		Severity:  SeverityError,
+		Value:     5,
+		Threshold: 4,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	d := r.next(t).Data.(*ResourceFault)
@@ -203,18 +241,6 @@ func TestPrintErrorFails(t *testing.T) {
 	mustContain(t, r.err.String(), "pipe closed")
 	mustContain(t, r.err.String(), "dependency not done")
 	r.none(t)
-}
-
-// panicPrinter panics on its first call and records the rest.
-type panicPrinter struct {
-	fakePrinter
-	first sync.Once
-}
-
-// PrintError panics once, then records.
-func (p *panicPrinter) PrintError(f Fault) error {
-	p.first.Do(func() { panic("printer bug") })
-	return p.fakePrinter.PrintError(f)
 }
 
 // TestPanicInsideRunLoop checks a panic in the printer goes to standard error and the loop keeps running.
@@ -297,12 +323,6 @@ func TestFinalNilBusPrintFails(t *testing.T) {
 	mustContain(t, errBuf.String(), "no tty")
 }
 
-// panicOnPrint is a printer that always panics.
-type panicOnPrint struct{}
-
-// PrintError panics.
-func (panicOnPrint) PrintError(Fault) error { panic("printer exploded") }
-
 // TestFinalPrinterPanics checks a panicking printer becomes standard error text and exit 4, with and without a bus.
 func TestFinalPrinterPanics(t *testing.T) {
 	refused := Fault{Code: "pinned", Kind: KindRefused, Severity: SeverityError, Reason: "pinned above"}
@@ -333,7 +353,8 @@ func TestRecoverOnPanicPanics(t *testing.T) {
 	<-done
 	e1, e2 := r.next(t), r.next(t)
 	d1, d2 := e1.Data.(*PanicFault), e2.Data.(*PanicFault)
-	if d1.Reason != "first" || !strings.Contains(d2.Reason, "onPanic") || !strings.Contains(d2.Reason, "second") || d2.Code != "internal" || d2.Kind != "internal" {
+	if d1.Reason != "first" || !strings.Contains(d2.Reason, "onPanic") || !strings.Contains(d2.Reason, "second") ||
+		d2.Code != "internal" || d2.Kind != "internal" {
 		t.Fatalf("events %+v / %+v", d1.FaultData, d2.FaultData)
 	}
 	r.none(t)
@@ -398,7 +419,13 @@ func TestNilBusReport(t *testing.T) {
 // TestFinalRefused: one final event, one print before Final returns, exit 1.
 func TestFinalRefused(t *testing.T) {
 	r := newRig(t, true)
-	f := Fault{Source: Source{Component: "config", Run: "run-1"}, Code: "over_limit", Kind: KindRefused, Severity: SeverityError, Reason: "too big"}
+	f := Fault{
+		Source:   Source{Component: "config", Run: "run-1"},
+		Code:     "over_limit",
+		Kind:     KindRefused,
+		Severity: SeverityError,
+		Reason:   "too big",
+	}
 	code := r.h.Final(context.Background(), f.Source, f)
 	if code != 1 {
 		t.Fatalf("exit %d, want 1", code)
@@ -431,7 +458,12 @@ func TestFinalPanicSubtype(t *testing.T) {
 func TestFinalClosedBus(t *testing.T) {
 	r := newRig(t, false)
 	_ = r.b.Close()
-	code := r.h.Final(context.Background(), srcTask, Fault{Code: "plan_blocked", Kind: KindBlocked, Severity: SeverityError, Reason: "lint failed"})
+	code := r.h.Final(context.Background(), srcTask, Fault{
+		Code:     "plan_blocked",
+		Kind:     KindBlocked,
+		Severity: SeverityError,
+		Reason:   "lint failed",
+	})
 	if code != 3 {
 		t.Fatalf("exit %d, want 3", code)
 	}
@@ -444,7 +476,12 @@ func TestFinalNilBus(t *testing.T) {
 	h := New(nil, p)
 	errBuf := &syncBuf{}
 	h.stderr = errBuf
-	code := h.Final(context.Background(), Source{Component: "cli"}, Fault{Code: "usage", Kind: KindUsage, Severity: SeverityError, Reason: "unknown flag"})
+	code := h.Final(context.Background(), Source{Component: "cli"}, Fault{
+		Code:     "usage",
+		Kind:     KindUsage,
+		Severity: SeverityError,
+		Reason:   "unknown flag",
+	})
 	if code != 2 || len(p.calls()) != 1 || errBuf.String() != "" {
 		t.Fatalf("exit %d, prints %d, stderr %q", code, len(p.calls()), errBuf.String())
 	}
@@ -454,7 +491,12 @@ func TestFinalNilBus(t *testing.T) {
 func TestFinalNoRunLoop(t *testing.T) {
 	r := newRig(t, false)
 	start := time.Now()
-	code := r.h.Final(context.Background(), srcTask, Fault{Code: "pinned", Kind: KindRefused, Severity: SeverityError, Reason: "x"})
+	code := r.h.Final(context.Background(), srcTask, Fault{
+		Code:     "pinned",
+		Kind:     KindRefused,
+		Severity: SeverityError,
+		Reason:   "x",
+	})
 	if code != 1 || time.Since(start) > time.Second {
 		t.Fatalf("exit %d after %v", code, time.Since(start))
 	}
@@ -469,7 +511,12 @@ func TestFinalNoRunLoop(t *testing.T) {
 // TestFinalDroppedEvent checks a final event the full queue dropped is printed directly after the wait, exactly once.
 func TestFinalDroppedEvent(t *testing.T) {
 	h, p, _ := newFullRig(t)
-	code := h.Final(context.Background(), srcTask, Fault{Code: "pinned", Kind: KindRefused, Severity: SeverityError, Reason: "final one"})
+	code := h.Final(context.Background(), srcTask, Fault{
+		Code:     "pinned",
+		Kind:     KindRefused,
+		Severity: SeverityError,
+		Reason:   "final one",
+	})
 	if code != 1 {
 		t.Fatalf("exit %d", code)
 	}
@@ -524,7 +571,11 @@ func TestFaultExitCode(t *testing.T) {
 		}
 	}
 	h := New(nil, &fakePrinter{})
-	if code := h.Final(context.Background(), Source{Component: "bus"}, Fault{Kind: KindInternal, Severity: SeverityWarn, Reason: "w"}); code != 0 {
+	if code := h.Final(context.Background(), Source{Component: "bus"}, Fault{
+		Kind:     KindInternal,
+		Severity: SeverityWarn,
+		Reason:   "w",
+	}); code != 0 {
 		t.Fatalf("Final of a warn: exit %d, want 0", code)
 	}
 }
@@ -562,11 +613,13 @@ func TestThrowResourceDropped(t *testing.T) {
 // TestResourceSeverity checks the kinds that pause a run are always warn, and others keep the caller's severity.
 func TestResourceSeverity(t *testing.T) {
 	for _, k := range []string{"window_full", "spend_ceiling"} {
-		if f := resourceFault(ResourceError{Kind: k, Severity: SeverityError}); f.Severity != SeverityWarn || f.ExitCode() != 0 {
+		if f := resourceFault(ResourceError{Kind: k, Severity: SeverityError}); f.Severity != SeverityWarn ||
+			f.ExitCode() != 0 {
 			t.Errorf("%s: %+v", k, f)
 		}
 	}
-	if f := resourceFault(ResourceError{Kind: "limit", Severity: SeverityError}); f.Severity != SeverityError || f.ExitCode() != 1 {
+	if f := resourceFault(ResourceError{Kind: "limit", Severity: SeverityError}); f.Severity != SeverityError ||
+		f.ExitCode() != 1 {
 		t.Errorf("limit: %+v", f)
 	}
 }
@@ -574,12 +627,22 @@ func TestResourceSeverity(t *testing.T) {
 // TestNoEventAfterFinal: after Final nothing else leaves the process.
 func TestNoEventAfterFinal(t *testing.T) {
 	r := newRig(t, true)
-	r.h.Final(context.Background(), srcTask, Fault{Code: "internal", Kind: KindInternal, Severity: SeverityError, Reason: "last"})
+	r.h.Final(context.Background(), srcTask, Fault{
+		Code:     "internal",
+		Kind:     KindInternal,
+		Severity: SeverityError,
+		Reason:   "last",
+	})
 	r.next(t)
 	r.h.Report(srcTask, "internal", KindInternal, errors.New("after"))
 	r.h.Go(srcTask, func() { panic("after panic") }, nil)
 	_ = r.h.ThrowResourceError(context.Background(), ResourceError{Kind: "window", Severity: SeverityWarn})
-	if code := r.h.Final(context.Background(), srcTask, Fault{Code: "internal", Kind: KindInternal, Severity: SeverityError, Reason: "second"}); code != 4 {
+	if code := r.h.Final(context.Background(), srcTask, Fault{
+		Code:     "internal",
+		Kind:     KindInternal,
+		Severity: SeverityError,
+		Reason:   "second",
+	}); code != 4 {
 		t.Fatalf("second Final exit %d", code)
 	}
 	r.none(t)
@@ -598,14 +661,24 @@ func TestNoEventAfterFinal(t *testing.T) {
 // TestRunBusOverflow checks a bus.overflow event is printed as the warning of the table.
 func TestRunBusOverflow(t *testing.T) {
 	r := newRig(t, true)
-	if err := r.b.Publish(bus.Event{Type: bus.TypeError, Run: "run-1", Data: &bus.BusOverflow{Subscription: "metrics", Dropped: 7}}); err == nil {
+	if err := r.b.Publish(bus.Event{
+		Type: bus.TypeError,
+		Run:  "run-1",
+		Data: &bus.BusOverflow{Subscription: "metrics", Dropped: 7},
+	}); err == nil {
 		t.Fatal("empty subtype accepted")
 	}
-	if err := r.b.Publish(bus.Event{Type: bus.TypeError, Subtype: "bus.overflow", Run: "run-1", Data: &bus.BusOverflow{Subscription: "metrics", Dropped: 7}}); err != nil {
+	if err := r.b.Publish(bus.Event{
+		Type:    bus.TypeError,
+		Subtype: "bus.overflow",
+		Run:     "run-1",
+		Data:    &bus.BusOverflow{Subscription: "metrics", Dropped: 7},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	f := r.p.waitCalls(t, 1)[0]
-	if f.Code != "bus_overflow" || f.Kind != KindInternal || f.Severity != SeverityWarn || f.Source.Component != "bus" || f.Fix != "" || f.Source.Run != "run-1" {
+	if f.Code != "bus_overflow" || f.Kind != KindInternal || f.Severity != SeverityWarn || f.Source.Component != "bus" ||
+		f.Fix != "" || f.Source.Run != "run-1" {
 		t.Fatalf("fault %+v", f)
 	}
 	mustContain(t, f.Reason, "metrics")
@@ -616,7 +689,13 @@ func TestRunBusOverflow(t *testing.T) {
 func TestRunOtherErrorSubtypes(t *testing.T) {
 	r := newRig(t, true)
 	for st, m := range otherErrors {
-		if err := r.b.Publish(bus.Event{Type: bus.TypeError, Subtype: st, Run: "run-1", Group: "g1", Data: &otherBody{st: st}}); err != nil {
+		if err := r.b.Publish(bus.Event{
+			Type:    bus.TypeError,
+			Subtype: st,
+			Run:     "run-1",
+			Group:   "g1",
+			Data:    &otherBody{st: st},
+		}); err != nil {
 			t.Fatal(err)
 		}
 		_ = m
@@ -632,7 +711,8 @@ func TestRunOtherErrorSubtypes(t *testing.T) {
 			t.Errorf("%s not printed", m.code)
 			continue
 		}
-		if f.Kind != m.kind || f.Severity != m.severity || f.Source.Component != m.component || f.Fix != "" || f.Source.Group != "g1" || f.Reason == "" {
+		if f.Kind != m.kind || f.Severity != m.severity || f.Source.Component != m.component || f.Fix != "" ||
+			f.Source.Group != "g1" || f.Reason == "" {
 			t.Errorf("%s: %+v", m.code, f)
 		}
 	}
@@ -641,11 +721,35 @@ func TestRunOtherErrorSubtypes(t *testing.T) {
 // TestRunFlattensFaultData checks a fault event becomes a Fault field for field.
 func TestRunFlattensFaultData(t *testing.T) {
 	r := newRig(t, true)
-	d := FaultData{Component: "task", Code: "internal", Kind: "internal", Severity: "error", Reason: "r", Fix: "f", Panic: true, Stack: "s"}
-	if err := r.b.Publish(bus.Event{Type: bus.TypeError, Subtype: "fault.panic", Run: "run-1", Group: "g1", Data: &PanicFault{d}}); err != nil {
+	d := FaultData{
+		Component: "task",
+		Code:      "internal",
+		Kind:      "internal",
+		Severity:  "error",
+		Reason:    "r",
+		Fix:       "f",
+		Panic:     true,
+		Stack:     "s",
+	}
+	if err := r.b.Publish(bus.Event{
+		Type:    bus.TypeError,
+		Subtype: "fault.panic",
+		Run:     "run-1",
+		Group:   "g1",
+		Data:    &PanicFault{d},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	want := Fault{Source: Source{Component: "task", Run: "run-1", Group: "g1"}, Code: "internal", Kind: KindInternal, Severity: SeverityError, Reason: "r", Fix: "f", Panic: true, Stack: "s"}
+	want := Fault{
+		Source:   Source{Component: "task", Run: "run-1", Group: "g1"},
+		Code:     "internal",
+		Kind:     KindInternal,
+		Severity: SeverityError,
+		Reason:   "r",
+		Fix:      "f",
+		Panic:    true,
+		Stack:    "s",
+	}
 	if got := r.p.waitCalls(t, 1)[0]; got != want {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
@@ -695,7 +799,12 @@ func TestRunEnds(t *testing.T) {
 // TestRunBusStoreFailed checks a bus.store_failed event is printed as a warning that keeps the exit code.
 func TestRunBusStoreFailed(t *testing.T) {
 	r := newRig(t, true)
-	if err := r.b.Publish(bus.Event{Type: bus.TypeError, Subtype: "bus.store_failed", Run: "run-1", Data: &bus.BusStoreFailed{Run: "run-1", Path: "/x/run-1.jsonl", Reason: "disk full"}}); err != nil {
+	if err := r.b.Publish(bus.Event{
+		Type:    bus.TypeError,
+		Subtype: "bus.store_failed",
+		Run:     "run-1",
+		Data:    &bus.BusStoreFailed{Run: "run-1", Path: "/x/run-1.jsonl", Reason: "disk full"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	f := r.p.waitCalls(t, 1)[0]

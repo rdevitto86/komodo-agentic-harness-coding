@@ -7,8 +7,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 )
 
-// Recoverer is the part of the fault handler that guards a goroutine; every goroutine here defers
-// it first.
+// Recoverer is the part of the fault handler that guards a goroutine; every goroutine here defers it first.
 type Recoverer interface {
 	// Recover turns a panic of the goroutine into a published fault.
 	Recover(src fault.Source, onPanic func(fault.Fault))
@@ -26,7 +25,6 @@ var llmSource = fault.Source{Component: "llm"}
 // PrintError writes the fault's reason on one line.
 func (stderrPrinter) PrintError(f fault.Fault) error {
 	_, err := fmt.Fprintf(os.Stderr, "komodo: %s\n", f.Reason)
-
 	return err
 }
 
@@ -35,6 +33,5 @@ func recoverer(r Recoverer) Recoverer {
 	if r != nil {
 		return r
 	}
-
 	return defaultRecoverer
 }

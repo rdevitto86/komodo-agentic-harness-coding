@@ -60,7 +60,6 @@ func ParseTemplate(agent, text string) (Template, error) {
 	if err != nil {
 		return Template{}, err
 	}
-
 	if slotRe.MatchString(role) {
 		return Template{}, fmt.Errorf("%w: the role text holds a slot", ErrTemplate)
 	}
@@ -108,7 +107,6 @@ func ParseTemplate(agent, text string) (Template, error) {
 // code fences.
 func splitTemplate(text string) (role, brief string, err error) {
 	var role2, brief2 strings.Builder
-
 	mode, fence := 0, false
 
 	for _, line := range strings.SplitAfter(text, "\n") {

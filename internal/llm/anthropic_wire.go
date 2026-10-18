@@ -26,6 +26,81 @@ type anthropicWire struct {
 	max    int
 }
 
+// turn sends the history, reads the streamed reply and assembles it.
+func (w *anthropicWire) turn(ctx context.Context, req turnRequest, h turnHooks) (turnResult, error) {
+	body, err := w.buildRequest(req)
+	if err != nil {
+		return turnResult{}, err
+	}
+
+	hr, err := w.a.request(ctx, http.MethodPost, "/v1/messages", body)
+	if err != nil {
+		return turnResult{}, err
+	}
+
+	acc := &sseAcc{}
+	resp, err := w.a.hc.Stream(ctx, w.a.ep, hr, core.StreamHooks{
+		Activity: h.Activity, Event: acc.event, Restart: acc.reset,
+		Final: func(e core.SSEEvent) bool { return e.Event == "message_stop" },
+	})
+	if err != nil {
+		return turnResult{}, normalizeAPIErr(err)
+	}
+
+	res := acc.result()
+	for _, x := range resp.Headroom {
+		res.Headroom = append(res.Headroom, Headroom{
+			Name:      x.Name,
+			Limit:     x.Limit,
+			Remaining: x.Remaining,
+			Reset:     x.Reset,
+		})
+	}
+
+	return res, nil
+}
+
+// buildRequest assembles the request body; it fails before sending when the markers would not fit.
+func (w *anthropicWire) buildRequest(req turnRequest) ([]byte, error) {
+	// maxExplicitMarkers is how many explicit cache markers fit beside the automatic one.
+	const maxExplicitMarkers = 3
+
+	r := apiRequest{
+		Model:        w.model,
+		MaxTokens:    w.max,
+		Stream:       true,
+		Tools:        w.tools,
+		Messages:     req.Messages,
+		CacheControl: &cacheControl{Type: "ephemeral"},
+	}
+	if w.system != "" {
+		r.System = []block{{Type: "text", Text: w.system}}
+	}
+	if takesEffort(w.model) {
+		r.OutputConfig = &apiOutputCfg{Effort: w.effort}
+	}
+	if req.Final && len(w.schema) > 0 {
+		if r.OutputConfig == nil {
+			r.OutputConfig = &apiOutputCfg{}
+		}
+		r.OutputConfig.Format = &apiFormat{Type: "json_schema", Schema: w.schema}
+	}
+	if n := countMarkers(r); n > maxExplicitMarkers {
+		return nil, fmt.Errorf(
+			"request carries %d explicit cache markers; at most %d fit beside the automatic one",
+			n,
+			maxExplicitMarkers,
+		)
+	}
+
+	b, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+
+	return b, nil
+}
+
 // apiRequest is the body of POST /v1/messages.
 type apiRequest struct {
 	Model        string        `json:"model"`
@@ -58,101 +133,6 @@ type sseAcc struct {
 	write1h int          // cache tokens written with the one-hour lifetime
 	usage   Usage
 	stop    string
-}
-
-// apiUsage is the usage object of the Messages interface.
-type apiUsage struct {
-	Input      int `json:"input_tokens"`
-	Output     int `json:"output_tokens"`
-	CacheRead  int `json:"cache_read_input_tokens"`
-	CacheWrite int `json:"cache_creation_input_tokens"`
-	Created    struct {
-		Hour1 int `json:"ephemeral_1h_input_tokens"`
-	} `json:"cache_creation"`
-}
-
-// buildRequest assembles the request body; it fails before sending when the markers would not fit.
-func (w *anthropicWire) buildRequest(req turnRequest) ([]byte, error) {
-	// maxExplicitMarkers is how many explicit cache markers fit beside the automatic one.
-	const maxExplicitMarkers = 3
-
-	r := apiRequest{
-		Model:        w.model,
-		MaxTokens:    w.max,
-		Stream:       true,
-		Tools:        w.tools,
-		Messages:     req.Messages,
-		CacheControl: &cacheControl{Type: "ephemeral"},
-	}
-	if w.system != "" {
-		r.System = []block{{Type: "text", Text: w.system}}
-	}
-
-	if takesEffort(w.model) {
-		r.OutputConfig = &apiOutputCfg{Effort: w.effort}
-	}
-
-	if req.Final && len(w.schema) > 0 {
-		if r.OutputConfig == nil {
-			r.OutputConfig = &apiOutputCfg{}
-		}
-
-		r.OutputConfig.Format = &apiFormat{Type: "json_schema", Schema: w.schema}
-	}
-
-	if n := countMarkers(r); n > maxExplicitMarkers {
-		return nil, fmt.Errorf(
-			"request carries %d explicit cache markers; at most %d fit beside the automatic one",
-			n,
-			maxExplicitMarkers,
-		)
-	}
-
-	b, err := json.Marshal(r)
-	if err != nil {
-		return nil, fmt.Errorf("encode request: %w", err)
-	}
-
-	return b, nil
-}
-
-// turn sends the history, reads the streamed reply and assembles it.
-func (w *anthropicWire) turn(
-	ctx context.Context,
-	req turnRequest,
-	h turnHooks,
-) (turnResult, error) {
-	body, err := w.buildRequest(req)
-	if err != nil {
-		return turnResult{}, err
-	}
-
-	hr, err := w.a.request(ctx, http.MethodPost, "/v1/messages", body)
-	if err != nil {
-		return turnResult{}, err
-	}
-
-	acc := &sseAcc{}
-
-	resp, err := w.a.hc.Stream(ctx, w.a.ep, hr, core.StreamHooks{
-		Activity: h.Activity, Event: acc.event, Restart: acc.reset,
-		Final: func(e core.SSEEvent) bool { return e.Event == "message_stop" },
-	})
-	if err != nil {
-		return turnResult{}, normalizeAPIErr(err)
-	}
-
-	res := acc.result()
-	for _, x := range resp.Headroom {
-		res.Headroom = append(res.Headroom, Headroom{
-			Name:      x.Name,
-			Limit:     x.Limit,
-			Remaining: x.Remaining,
-			Reset:     x.Reset,
-		})
-	}
-
-	return res, nil
 }
 
 // reset drops partial output before a retry.
@@ -192,12 +172,7 @@ func (a *sseAcc) event(e core.SSEEvent) error {
 	switch p.Type {
 	case "message_start":
 		u := p.Message.Usage
-		a.usage = Usage{
-			TokensIn:   u.Input,
-			TokensOut:  u.Output,
-			CacheRead:  u.CacheRead,
-			CacheWrite: u.CacheWrite,
-		}
+		a.usage = Usage{TokensIn: u.Input, TokensOut: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
 		a.write1h = u.Created.Hour1
 	case "content_block_stop":
 		a.closed[p.Index] = true
@@ -227,7 +202,6 @@ func (a *sseAcc) event(e core.SSEEvent) error {
 		if p.Delta.StopReason != "" {
 			a.stop = p.Delta.StopReason
 		}
-
 		if p.Usage.Output > 0 {
 			a.usage.TokensOut = p.Usage.Output
 		}
@@ -260,11 +234,9 @@ func (a *sseAcc) result() turnResult {
 			if len(in) == 0 {
 				in = []byte("{}")
 			}
-
 			if !a.closed[i] || !json.Valid(in) {
 				in, b.Invalid = []byte("{}"), true
 			}
-
 			b.Input = json.RawMessage(append([]byte(nil), in...))
 		}
 
@@ -281,8 +253,18 @@ func (a *sseAcc) result() turnResult {
 	return res
 }
 
-// newWire gathers what every request of one session repeats: model, system text, tool definitions
-// and effort.
+// apiUsage is the usage object of the Messages interface.
+type apiUsage struct {
+	Input      int `json:"input_tokens"`
+	Output     int `json:"output_tokens"`
+	CacheRead  int `json:"cache_read_input_tokens"`
+	CacheWrite int `json:"cache_creation_input_tokens"`
+	Created    struct {
+		Hour1 int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
+}
+
+// newWire gathers what every request of one session repeats: model, system text, tool definitions and effort.
 func (a *Anthropic) newWire(s Session) (*anthropicWire, error) {
 	// Defaults of the paid Anthropic link.
 	const defaultMaxOut = 64000
@@ -297,20 +279,17 @@ func (a *Anthropic) newWire(s Session) (*anthropicWire, error) {
 	if w.effort == "" {
 		w.effort = "medium"
 	}
-
 	if w.max <= 0 {
 		w.max = defaultMaxOut
 		if e, ok := a.cat.Lookup(s.Model); ok && e.MaxOut > 0 {
 			w.max = min(w.max, e.MaxOut)
 		}
 	}
-
 	if b, err := os.ReadFile(filepath.Join(s.Dir, "system.md")); err == nil {
 		w.system = string(b)
 	}
 
 	w.tools = toolDefs(s.Tools)
-
 	return w, nil
 }
 
@@ -320,7 +299,6 @@ func takesEffort(model string) bool { return !strings.HasPrefix(model, "claude-h
 // countMarkers counts the explicit cache markers in a request.
 func countMarkers(r apiRequest) int {
 	n := 0
-
 	for _, b := range r.System {
 		if b.CacheControl != nil {
 			n++
@@ -338,11 +316,9 @@ func countMarkers(r apiRequest) int {
 	return n
 }
 
-// normalizeAPIErr turns a 400 spend-limit reply into the limit error the loop maps to a provider
-// limit.
+// normalizeAPIErr turns a 400 spend-limit reply into the limit error the loop maps to a provider limit.
 func normalizeAPIErr(err error) error {
-	// specLimitPrefix begins the message of a 400 that reports a spend limit set by the account
-	// owner.
+	// specLimitPrefix begins the message of a 400 that reports a spend limit set by the account owner.
 	const specLimitPrefix = "You have reached your specified API usage limits"
 
 	var se *core.StatusError
@@ -352,8 +328,7 @@ func normalizeAPIErr(err error) error {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		if json.Unmarshal(se.Body, &v) == nil &&
-			strings.HasPrefix(v.Error.Message, specLimitPrefix) {
+		if json.Unmarshal(se.Body, &v) == nil && strings.HasPrefix(v.Error.Message, specLimitPrefix) {
 			return &core.LimitError{Kind: core.LimitSpend, Status: 400}
 		}
 	}
@@ -382,7 +357,6 @@ func toolDefs(host ToolHost) []ToolDef {
 				d.Name = n
 			}
 		}
-
 		if len(d.InputSchema) == 0 {
 			d.InputSchema = json.RawMessage(`{"type":"object"}`)
 		}

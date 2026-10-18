@@ -18,27 +18,11 @@ type errBody struct {
 	Severity string `json:"severity"`
 }
 
-// EventKey binds the stand-in to error / fault.error.
-func (errBody) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "fault.error"} }
-
-// TestMain binds the stand-in error event once, as the program binds the real ones before its first publish.
-func TestMain(m *testing.M) {
-	bus.Register(errBody{}.EventKey(), func() bus.Payload { return &errBody{} })
-	os.Exit(m.Run())
-}
-
 // t0 is the fixed start time of the hand-built events.
 var t0 = time.Date(2026, 10, 14, 15, 20, 0, 0, time.UTC)
 
-// ev builds an event stamped sec seconds after t0.
-func ev(sec int, typ bus.Type, sub bus.Subtype, run, group bus.ID, data bus.Payload) bus.Event {
-	return bus.Event{Type: typ, Subtype: sub, Run: run, Group: group, Time: t0.Add(time.Duration(sec) * time.Second), Data: data}
-}
-
-// facts builds the group facts of a session event.
-func facts(stage string, session bus.ID) bus.GroupFacts {
-	return bus.GroupFacts{Stage: stage, Session: session}
-}
+// EventKey binds the stand-in to error / fault.error.
+func (errBody) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "fault.error"} }
 
 // fixture is a temporary repository and home folder with a bus, a fault handler and a Service.
 type fixture struct {
@@ -66,7 +50,16 @@ func newFixture(t *testing.T, buffer int, mask func(string) string) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{t: t, root: root, common: common, repoDir: RepoDir(common), events: bus.EventsDir(common), homeDir: hd, bus: b, svc: svc}
+	return &fixture{
+		t:       t,
+		root:    root,
+		common:  common,
+		repoDir: RepoDir(common),
+		events:  bus.EventsDir(common),
+		homeDir: hd,
+		bus:     b,
+		svc:     svc,
+	}
 }
 
 // publish puts events on the bus and fails the test on a refusal.
@@ -100,7 +93,34 @@ func (f *fixture) start() (stop func()) {
 
 // runStart builds the run-start command of a run in the fixture repository.
 func (f *fixture) runStart(run bus.ID, groups ...string) bus.Event {
-	return bus.Event{Type: bus.TypeRunStart, Run: run, Data: &bus.RunStart{Target: "ep-1", Groups: groups, Source: "cli", Repo: "r", Root: f.root, CommonDir: f.common}}
+	return bus.Event{
+		Type: bus.TypeRunStart,
+		Run:  run,
+		Data: &bus.RunStart{Target: "ep-1", Groups: groups, Source: "cli", Repo: "r", Root: f.root, CommonDir: f.common},
+	}
+}
+
+// TestMain binds the stand-in error event once, as the program binds the real ones before its first publish.
+func TestMain(m *testing.M) {
+	bus.Register(errBody{}.EventKey(), func() bus.Payload { return &errBody{} })
+	os.Exit(m.Run())
+}
+
+// ev builds an event stamped sec seconds after t0.
+func ev(sec int, typ bus.Type, sub bus.Subtype, run, group bus.ID, data bus.Payload) bus.Event {
+	return bus.Event{
+		Type:    typ,
+		Subtype: sub,
+		Run:     run,
+		Group:   group,
+		Time:    t0.Add(time.Duration(sec) * time.Second),
+		Data:    data,
+	}
+}
+
+// facts builds the group facts of a session event.
+func facts(stage string, session bus.ID) bus.GroupFacts {
+	return bus.GroupFacts{Stage: stage, Session: session}
 }
 
 // lines returns the non-empty lines of a file, or none when it is missing.

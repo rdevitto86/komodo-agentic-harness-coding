@@ -12,15 +12,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
-// limitStep is a step whose stream ends at once with a provider limit that lifts at reset.
-func limitStep(reset time.Time) func(llm.Session) (llm.Stream, error) {
-	return func(llm.Session) (llm.Stream, error) {
-		st := newFakeStream()
-		st.errs <- &llm.ProviderLimit{Link: llm.AnthropicAPI, Cap: llm.CapWindow, ResetAt: reset}
-		return st, nil
-	}
-}
-
 // wake is the Runtime Manager's timer wake-up.
 var wake = Wake{Reason: "timer"}
 
@@ -31,7 +22,8 @@ func TestGroupStartedWithEveryLinkLimitedPausesAndMakesNoModelCall(t *testing.T)
 		t.Fatalf("Run returned %v", err)
 	}
 	p := r.rt.progress().Pause
-	if p == nil || p.Since.IsZero() || !p.WaitUntil.Equal(t0.Add(time.Hour+time.Minute)) || p.WaitLink != string(llm.AnthropicAPI) {
+	if p == nil || p.Since.IsZero() || !p.WaitUntil.Equal(t0.Add(time.Hour+time.Minute)) ||
+		p.WaitLink != string(llm.AnthropicAPI) {
 		t.Fatalf("pause %+v", p)
 	}
 	if r.model.total() != 0 || r.m.Progress().Attempts != 0 {
@@ -108,8 +100,10 @@ func TestResumeContinuesTheSavedSessionAndChargesNoAttempt(t *testing.T) {
 func TestSavedHandleResumesAndAFailingHandleStartsFreshWithResumeLost(t *testing.T) {
 	for _, fails := range []bool{false, true} {
 		r := newPipeRig(t, rigOpts{mut: func(s *GroupSpec, c *Collaborators) {
-			s.Saved = &Progress{Stage: "build", Handles: map[string]llm.ResumeHandle{"builder": {Link: llm.AnthropicAPI, Kind: "messages_file",
-				Value: filepath.Join(c.SessionsDir, "sid-1", "messages.jsonl")}}}
+			s.Saved = &Progress{
+				Stage: "build",
+				Handles: map[string]llm.ResumeHandle{"builder": {Link: llm.AnthropicAPI, Kind: "messages_file",
+					Value: filepath.Join(c.SessionsDir, "sid-1", "messages.jsonl")}}}
 		}})
 		resumed := 0
 		r.model.resume = func(llm.Session, llm.Input) (llm.Stream, error) {
@@ -130,13 +124,22 @@ func TestSavedHandleResumesAndAFailingHandleStartsFreshWithResumeLost(t *testing
 			wantStarts = 1
 		}
 		if resumed != 1 || r.model.started("builder") != wantStarts || (r.rt.factCount("resume_lost") == 1) != fails {
-			t.Fatalf("fails=%v: resumed %d, starts %v, resume_lost %d", fails, resumed, r.model.starts, r.rt.factCount("resume_lost"))
+			t.Fatalf(
+				"fails=%v: resumed %d, starts %v, resume_lost %d",
+				fails,
+				resumed,
+				r.model.starts,
+				r.rt.factCount("resume_lost"),
+			)
 		}
 	}
 }
 
 func TestFailoverToTheNextLinkChargesNoAttempt(t *testing.T) {
-	r := newPipeRig(t, rigOpts{chain: []string{string(llm.ClaudeCLI), string(llm.AnthropicAPI)}, starts: map[llm.Link]func(llm.Session) (llm.Stream, error){
+	r := newPipeRig(t, rigOpts{chain: []string{
+		string(llm.ClaudeCLI),
+		string(llm.AnthropicAPI),
+	}, starts: map[llm.Link]func(llm.Session) (llm.Stream, error){
 		llm.ClaudeCLI: func(llm.Session) (llm.Stream, error) {
 			return nil, &llm.ProviderLimit{Link: llm.ClaudeCLI, Cap: llm.CapWindow, ResetAt: t0.Add(5 * time.Hour)}
 		}}})
@@ -267,10 +270,20 @@ func TestRecheckReportsTheChecksOfTheEpicTip(t *testing.T) {
 	}
 	r.m.Recheck(context.Background())
 	r.m.Recheck(context.Background())
-	if len(got) != 2 || !strings.HasPrefix(got[0], "fail:") || !strings.Contains(got[0], "FAIL: exact output") || got[1] != "pass" {
+	if len(got) != 2 || !strings.HasPrefix(got[0], "fail:") || !strings.Contains(got[0], "FAIL: exact output") ||
+		got[1] != "pass" {
 		t.Fatalf("recheck results %v", got)
 	}
 	if _, err := os.Stat(r.wt); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// limitStep is a step whose stream ends at once with a provider limit that lifts at reset.
+func limitStep(reset time.Time) func(llm.Session) (llm.Stream, error) {
+	return func(llm.Session) (llm.Stream, error) {
+		st := newFakeStream()
+		st.errs <- &llm.ProviderLimit{Link: llm.AnthropicAPI, Cap: llm.CapWindow, ResetAt: reset}
+		return st, nil
 	}
 }

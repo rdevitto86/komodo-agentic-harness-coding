@@ -37,7 +37,6 @@ func New(home string, known Known, modelOK func(model string) bool) (*Manager, e
 	if err != nil {
 		return nil, fmt.Errorf("open embedded files: %w", err)
 	}
-
 	return newManager(home, embedded, known, modelOK)
 }
 
@@ -134,7 +133,6 @@ func (m *Manager) ListConfigItems(prefix string) []Item {
 // GetAgent returns one role's definition with its overrides applied.
 func (m *Manager) GetAgent(role string) (Agent, bool) {
 	a, ok := m.resolve().eff.Agents[role]
-
 	return a, ok
 }
 
@@ -154,10 +152,9 @@ func (m *Manager) Snapshot() (Snapshot, error) {
 	return Snapshot{Effective: r.eff, Hash: h}, nil
 }
 
-// PlanReset returns the changes that put a key, a role or a whole file back to its built-in value.
-// A target is a key, a role name, agents.<role>, settings.json or agents.json.
-// A target in a file that failed strict reading plans one change for the file, which rewrites it to
-// built-in values.
+// PlanReset returns the changes that put a key, a role or a whole file back to its built-in value. A target is a key, a role
+// name, agents.<role>, settings.json or agents.json. A target in a file that failed strict reading plans one change for the
+// file, which rewrites it to built-in values.
 func (m *Manager) PlanReset(target string) ([]Change, error) {
 	r := m.resolve()
 	role := strings.TrimPrefix(target, "agents.")
@@ -177,7 +174,6 @@ func (m *Manager) PlanReset(target string) ([]Change, error) {
 
 			return []Change{{Key: file}}, nil
 		}
-
 		r.ms, r.eff = r.partial, m.effective(r.partial)
 	}
 
@@ -207,16 +203,13 @@ func (m *Manager) PlanReset(target string) ([]Change, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		if equalValues(it.Value, it.Default) {
 			continue
 		}
-
 		want := it.Default
 		if strings.HasSuffix(k, ".model") && strings.HasPrefix(k, "agents.") {
 			want = nil // a model reset removes the override; the weight is not a value to write
 		}
-
 		out = append(out, Change{Key: k, Old: it.Value, New: want})
 	}
 
@@ -240,13 +233,11 @@ func DefaultHome() (string, error) {
 // overrideKeys lists the dotted keys a role's override sets.
 func overrideKeys(role string, o AgentOverride) []string {
 	var keys []string
-
 	for _, f := range agentFieldNames {
 		if overrideValue(o, f) != nil {
 			keys = append(keys, "agents."+role+"."+f)
 		}
 	}
-
 	return keys
 }
 
@@ -256,6 +247,5 @@ func marshalFile(v any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode machine file: %w", err)
 	}
-
 	return append(b, '\n'), nil
 }

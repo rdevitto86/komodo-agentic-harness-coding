@@ -9,7 +9,6 @@ import (
 	"path"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode"
 )
@@ -98,13 +97,10 @@ func (rm RepoMap) Fit(budgetTokens int) RepoMap {
 // entry renders one file of the map: its path and rank, then each symbol on its own line.
 func (f MapFile) entry() string {
 	var b strings.Builder
-
-	b.WriteString(f.Path + " (" + strconv.Itoa(f.Rank) + ")")
-
+	fmt.Fprintf(&b, "%s (%d)", f.Path, f.Rank)
 	for _, s := range f.Symbols {
-		b.WriteString("\n  " + s.Kind + " " + s.Name)
+		fmt.Fprintf(&b, "\n  %s %s", s.Kind, s.Name)
 	}
-
 	return b.String()
 }
 
@@ -139,11 +135,9 @@ func loadLangs(fsys fs.FS) ([]langPattern, error) {
 			if err != nil {
 				return nil, fmt.Errorf("pattern in %s: %w", e.Name(), err)
 			}
-
 			if re.NumSubexp() < 1 {
 				return nil, fmt.Errorf("pattern %q in %s has no group", s.Pattern, e.Name())
 			}
-
 			lp.Symbols = append(lp.Symbols, symbolPattern{Kind: s.Kind, Re: re})
 		}
 
@@ -206,17 +200,14 @@ func goSymbols(p string, src []byte) []Symbol {
 // patternSymbols lists the definitions a language's patterns find, matched line by line.
 func patternSymbols(src []byte, lp *langPattern) []Symbol {
 	var out []Symbol
-
 	for _, line := range strings.Split(string(src), "\n") {
 		for _, sp := range lp.Symbols {
 			if m := sp.Re.FindStringSubmatch(line); len(m) > 1 && m[1] != "" {
 				out = append(out, Symbol{Name: m[1], Kind: sp.Kind})
-
 				break
 			}
 		}
 	}
-
 	return out
 }
 
@@ -226,20 +217,17 @@ func wordSet(text string) map[string]struct{} {
 	for _, w := range strings.FieldsFunc(text, func(r rune) bool { return !isWordRune(r) }) {
 		out[w] = struct{}{}
 	}
-
 	return out
 }
 
 // goalFields returns the goal split at spaces and quotes, so a path or file name stays whole.
 func goalFields(goal string) map[string]struct{} {
 	out := map[string]struct{}{}
-
 	for _, f := range strings.FieldsFunc(goal, func(r rune) bool {
 		return unicode.IsSpace(r) || strings.ContainsRune(",;:()[]{}\"'`", r)
 	}) {
 		out[strings.TrimRight(f, ".!?")] = struct{}{}
 	}
-
 	return out
 }
 
@@ -254,14 +242,12 @@ func buildRepoMap(t Tree, goal string, langs []langPattern) RepoMap {
 	}
 
 	var all []scanned
-
 	df := map[string]int{}
 
 	for _, p := range t.Paths() {
 		lang, lp := languageOf(p, langs)
 		if lang == "" {
 			all = append(all, scanned{file: MapFile{Path: p}})
-
 			continue
 		}
 
@@ -291,6 +277,7 @@ func buildRepoMap(t Tree, goal string, langs []langPattern) RepoMap {
 	gf, gw := goalFields(goal), wordSet(goal)
 	rm := RepoMap{TreeHash: t.Hash(), Files: make([]MapFile, 0, len(all))}
 
+	// Rank each file by how many other files use its symbols, and boost the ones the goal names.
 	for _, s := range all {
 		named := map[string]bool{}
 
@@ -305,7 +292,6 @@ func buildRepoMap(t Tree, goal string, langs []langPattern) RepoMap {
 			if _, own := s.words[sym.Name]; own {
 				n--
 			}
-
 			s.file.Rank += n
 		}
 
@@ -321,13 +307,11 @@ func buildRepoMap(t Tree, goal string, langs []langPattern) RepoMap {
 		if f.Source || f.Named {
 			return 0
 		}
-
 		return 1
 	}
 
 	sort.SliceStable(rm.Files, func(i, j int) bool {
 		a, b := rm.Files[i], rm.Files[j]
-
 		switch {
 		case tier(a) != tier(b):
 			return tier(a) < tier(b)
@@ -336,7 +320,6 @@ func buildRepoMap(t Tree, goal string, langs []langPattern) RepoMap {
 		case a.Named != b.Named:
 			return a.Named
 		}
-
 		return a.Path < b.Path
 	})
 
@@ -365,17 +348,14 @@ func goalNames(f MapFile, fields, words map[string]struct{}) bool {
 	if _, ok := fields[f.Path]; ok {
 		return true
 	}
-
 	if _, ok := fields[path.Base(f.Path)]; ok {
 		return true
 	}
-
 	for _, s := range f.Symbols {
 		if _, ok := words[s.Name]; ok {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -412,22 +392,18 @@ func collapseLayout(paths []string, depth int) string {
 	counts := map[string]int{}
 
 	var keys []string
-
 	for _, p := range paths {
 		key := p
 		if segs := strings.SplitN(p, "/", depth+1); len(segs) > depth {
 			key = strings.Join(segs[:depth], "/") + "/"
 		}
-
 		if counts[key] == 0 {
 			keys = append(keys, key)
 		}
-
 		counts[key]++
 	}
 
 	sort.Strings(keys)
-
 	lines := make([]string, len(keys))
 
 	for i, k := range keys {

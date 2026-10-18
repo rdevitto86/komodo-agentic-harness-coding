@@ -35,10 +35,12 @@ func TestPipelineRunsOneGroupThroughBuildTestReviewAndCommit(t *testing.T) {
 		t.Fatalf("Publish called %d times", len(pubs))
 	}
 	tree, _ := r.git.TreeHash(context.Background(), r.m.spec.Lease)
-	if pubs[0].Tree != tree || pubs[0].Tester.Tree != tree || pubs[0].Reviewer.Tree != tree || pubs[0].Fence != 3 || pubs[0].Branch != "komodo/tg-1" {
+	if pubs[0].Tree != tree || pubs[0].Tester.Tree != tree || pubs[0].Reviewer.Tree != tree || pubs[0].Fence != 3 ||
+		pubs[0].Branch != "komodo/tg-1" {
 		t.Fatalf("approval %+v, tree %s", pubs[0], tree)
 	}
-	if !slices.Equal(pubs[0].Facts.TasksClosed, []string{"t1"}) || len(pubs[0].Tester.Summary) == 0 || len(pubs[0].Reviewer.Summary) == 0 {
+	if !slices.Equal(pubs[0].Facts.TasksClosed, []string{"t1"}) || len(pubs[0].Tester.Summary) == 0 ||
+		len(pubs[0].Reviewer.Summary) == 0 {
 		t.Fatalf("approval facts %+v", pubs[0])
 	}
 	if len(r.be.released) != 2 {
@@ -75,7 +77,9 @@ func TestSessionFolderHoldsTheBriefOnceAndTheRequest(t *testing.T) {
 }
 
 func TestNewGroupAddsTheWorktreeOnceAndAContinuedOneNever(t *testing.T) {
-	r := newPipeRig(t, rigOpts{mut: func(s *GroupSpec, _ *Collaborators) { s.Lease.Worktree = filepath.Join(t.TempDir(), "wt") }})
+	r := newPipeRig(t, rigOpts{
+		mut: func(s *GroupSpec, _ *Collaborators) { s.Lease.Worktree = filepath.Join(t.TempDir(), "wt") },
+	})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
 	r.model.on("tester", sayResult(testerPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
@@ -117,7 +121,8 @@ func TestFailedMechanicalCheckReturnsToBuildWithoutAModelCall(t *testing.T) {
 	if got := r.slot("builder", 1, "findings"); !strings.Contains(got, "FAIL: exact output") {
 		t.Fatalf("the second builder brief lacks the exact check output: %q", got)
 	}
-	if r.checks.calls != 2 || r.model.started("builder") != 2 || r.model.started("tester") != 1 || r.model.started("reviewer") != 1 {
+	if r.checks.calls != 2 || r.model.started("builder") != 2 || r.model.started("tester") != 1 ||
+		r.model.started("reviewer") != 1 {
 		t.Fatalf("checks %d, sessions %v", r.checks.calls, r.model.starts)
 	}
 	if r.rt.progress().Returns != 1 {
@@ -189,7 +194,11 @@ func TestReturnWithAnUnchangedTreeEscalatesFlap(t *testing.T) {
 
 func TestReturnsAtTheLimitEscalateReturns(t *testing.T) {
 	r := newPipeRig(t, rigOpts{limits: Limits{Returns: 1}})
-	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone), building(r.wt, "b.go", "package b\n", builderDone))
+	r.model.on(
+		"builder",
+		building(r.wt, "a.go", "package a\n", builderDone),
+		building(r.wt, "b.go", "package b\n", builderDone),
+	)
 	r.model.on("tester", sayResult(testerPass), sayResult(testerPass))
 	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerNot))
 	if err := r.run(); err != ErrHeld {
@@ -202,7 +211,8 @@ func TestReturnsAtTheLimitEscalateReturns(t *testing.T) {
 
 func TestDisputedTesterResultRestartsTheTesterOnceAndASecondEscalatesFlaky(t *testing.T) {
 	items := []agent.Item{{ID: "a1", Text: "it works", Cmd: "test"}}
-	failed := `{"items":[{"item":"a1","pass":false,"evidence":"it failed"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
+	failed := `{"items":[{"item":"a1","pass":false,"evidence":"it failed"}],"tasks":[{"task":"t1",` +
+		`"confirmation":"confirmed"}]}`
 	passed := `{"items":[{"item":"a1","pass":true,"evidence":"ok"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
 
 	r := newPipeRig(t, rigOpts{items: items})
@@ -291,7 +301,10 @@ func TestFailingCompletionCommandKeepsTheTaskOpenAndEndsTheSessionAfterThree(t *
 }
 
 func TestBuilderSessionsEndTheGroupAfterTheAttemptLimit(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Attempts: 2}, mut: func(s *GroupSpec, _ *Collaborators) { s.Tasks[0].DoneWhen = "fail" }})
+	r := newPipeRig(t, rigOpts{
+		limits: Limits{Attempts: 2},
+		mut:    func(s *GroupSpec, _ *Collaborators) { s.Tasks[0].DoneWhen = "fail" },
+	})
 	r.model.on("builder", sayResult(builderDone), sayResult(builderDone))
 	if err := r.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)
@@ -314,7 +327,8 @@ func TestUnfinishedBuilderSessionReportsTheChangedFiles(t *testing.T) {
 	var found bool
 	r.rt.mu.Lock()
 	for _, f := range r.rt.facts {
-		if f.Subtype == "session.end" && strings.Contains(string(f.Data), `"unfinished"`) && strings.Contains(string(f.Data), "b.go") {
+		if f.Subtype == "session.end" && strings.Contains(string(f.Data), `"unfinished"`) &&
+			strings.Contains(string(f.Data), "b.go") {
 			found = true
 		}
 	}

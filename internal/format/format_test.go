@@ -13,28 +13,6 @@ import (
 // ansi matches one colour escape code.
 var ansi = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-// mustNew builds a Formatter from the embedded templates.
-func mustNew(t *testing.T, o Options) *Formatter {
-	t.Helper()
-	f, err := New(o)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	return f
-}
-
-// msg builds a message string from a shape, a code and a facts object.
-func msg(shape, code, facts string) []byte {
-	m := `{"shape":"` + shape + `"`
-	if code != "" {
-		m += `,"code":"` + code + `"`
-	}
-	if facts != "" {
-		m += `,"facts":` + facts
-	}
-	return []byte(m + `}`)
-}
-
 const runFacts = `{"group":"tg-1.2","run_id":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"}`
 
 func TestSameBytes(t *testing.T) {
@@ -356,6 +334,28 @@ func TestStructAgainstTemplate(t *testing.T) {
 			}
 		}
 	}
+}
+
+// mustNew builds a Formatter from the embedded templates.
+func mustNew(t *testing.T, o Options) *Formatter {
+	t.Helper()
+	f, err := New(o)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return f
+}
+
+// msg builds a message string from a shape, a code and a facts object.
+func msg(shape, code, facts string) []byte {
+	m := `{"shape":"` + shape + `"`
+	if code != "" {
+		m += `,"code":"` + code + `"`
+	}
+	if facts != "" {
+		m += `,"facts":` + facts
+	}
+	return []byte(m + `}`)
 }
 
 // withTemplate copies the embedded output files and replaces one of them.

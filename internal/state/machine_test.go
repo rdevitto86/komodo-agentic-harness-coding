@@ -16,49 +16,9 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// newMach opens a machine manager over a temporary home folder.
-func newMach(t *testing.T, writer string) (*Machine, string) {
-	t.Helper()
-	home := t.TempDir()
-	m, err := NewMachine(home, writer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m, home
-}
-
-// machPath returns where a machine-wide record lives.
-func machPath(home string, k MachineKind) string {
-	return filepath.Join(home, "state", string(k)+".json")
-}
-
 var t0 = time.Date(2026, 10, 14, 16, 1, 40, 0, time.UTC)
 
 const hash64 = "1a9509c4c1d09512211b773b90b562dc6e5a2fbbb344ccd72c2a230a51a86353"
-
-// sampleSchedule returns a valid queue with one entry.
-func sampleSchedule() ScheduleBody {
-	return ScheduleBody{Entries: []ScheduleEntry{{
-		Target: "ep-1", Root: "/Users/dev/src/shop", RunID: "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72",
-		At: t0.Add(17 * time.Hour), QueuedAt: t0,
-		Start: bus.RunStart{Target: "ep-1", Groups: []string{"tg-1.1", "tg-1.2"}, Source: "cli", Schedule: t0.Add(17 * time.Hour),
-			Repo: "github.com/acme/shop", Root: "/Users/dev/src/shop", CommonDir: "/Users/dev/src/shop/.git"},
-	}}}
-}
-
-// roundTrip saves a body at rev 0, loads it and returns both records.
-func roundTrip[T any](t *testing.T, m *Machine, k MachineKind, body T) (MachineRecord[T], MachineRecord[T]) {
-	t.Helper()
-	saved, err := SaveMachine(m, k, body, 0)
-	if err != nil {
-		t.Fatalf("SaveMachine %s: %v", k, err)
-	}
-	got, err := LoadMachine[T](m, k)
-	if err != nil {
-		t.Fatalf("LoadMachine %s: %v", k, err)
-	}
-	return saved, got
-}
 
 // Each of the four records round-trips through SaveMachine and LoadMachine and comes back equal.
 func TestMachineRecordsRoundTrip(t *testing.T) {
@@ -66,12 +26,17 @@ func TestMachineRecordsRoundTrip(t *testing.T) {
 	probe := json.RawMessage(`{"OK":true,"Path":"/usr/local/bin/claude","Ctx":1000000}`)
 	providers := ProvidersBody{Links: map[string]LinkRecord{
 		"claude-cli": {Probe: probe, ResetAt: t0.Add(5 * time.Hour), Cap: "window", Sessions: 2,
-			Windows: map[string]WindowRecord{"five_hour": {PercentUsed: 83.2, ResetAt: t0.Add(5 * time.Hour), Sessions: 14}}},
+			Windows: map[string]WindowRecord{
+				"five_hour": {PercentUsed: 83.2, ResetAt: t0.Add(5 * time.Hour), Sessions: 14},
+			}},
 		"anthropic-api": {Probe: json.RawMessage(`{"OK":false,"Reason":"no key"}`)},
 	}}
 	update := UpdateBody{Latest: "1.0.1", CheckedAt: t0, Previous: "1.0.0"}
 	install := InstallBody{
-		Entries:    []InstallEntry{{Target: "/Users/dev/.komodo/bin/komodo", Hash: hash64, Step: 1}, {Target: "/Users/dev/.claude/settings.json", Entry: "hooks.PreToolUse", Hash: hash64, Step: 4}},
+		Entries: []InstallEntry{
+			{Target: "/Users/dev/.komodo/bin/komodo", Hash: hash64, Step: 1},
+			{Target: "/Users/dev/.claude/settings.json", Entry: "hooks.PreToolUse", Hash: hash64, Step: 4},
+		},
 		Selections: InstallSelections{Hosts: []string{"claude"}},
 	}
 	schedule := sampleSchedule()
@@ -143,7 +108,6 @@ func TestSaveMachineRefusals(t *testing.T) {
 	noAt.Entries[0].At = time.Time{}
 	_, err = SaveMachine(m, KindSchedule, noAt, r.Header.Rev)
 	wantInvalid(t, err, "body.entries[0].at")
-
 	if !bytes.Equal(before, readBytes(t, machPath(home, KindSchedule))) {
 		t.Fatal("a refused write changed the file")
 	}
@@ -152,7 +116,12 @@ func TestSaveMachineRefusals(t *testing.T) {
 	wantInvalid(t, err, "body.links.a.sessions")
 	_, err = SaveMachine(m, KindProviders, ProvidersBody{Links: map[string]LinkRecord{"a": {Cap: "huge"}}}, 0)
 	wantInvalid(t, err, "body.links.a.cap")
-	_, err = SaveMachine(m, KindProviders, ProvidersBody{Links: map[string]LinkRecord{"a": {Probe: json.RawMessage(`[1]`)}}}, 0)
+	_, err = SaveMachine(
+		m,
+		KindProviders,
+		ProvidersBody{Links: map[string]LinkRecord{"a": {Probe: json.RawMessage(`[1]`)}}},
+		0,
+	)
 	wantInvalid(t, err, "body.links.a.probe")
 	_, err = SaveMachine(m, KindProviders, ProvidersBody{}, 0)
 	wantInvalid(t, err, "body.links")
@@ -185,7 +154,8 @@ func TestSaveMachineNotWriter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r, err := SaveMachine(w, KindUpdate, UpdateBody{Latest: "1.0.0", CheckedAt: t0}, 0); err != nil || !strings.HasPrefix(r.Header.Writer, c+"/") {
+		if r, err := SaveMachine(w, KindUpdate, UpdateBody{Latest: "1.0.0", CheckedAt: t0}, 0); err != nil ||
+			!strings.HasPrefix(r.Header.Writer, c+"/") {
 			t.Fatalf("%s: %+v %v", c, r.Header, err)
 		}
 	}
@@ -233,7 +203,12 @@ func TestMachineTwoWritersStale(t *testing.T) {
 	if _, err := SaveMachine(eng, KindUpdate, UpdateBody{Latest: "1.0.1", CheckedAt: t0}, r.Header.Rev); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SaveMachine(cli, KindUpdate, UpdateBody{Latest: "1.0.2", CheckedAt: t0}, read.Header.Rev); !errors.Is(err, ErrStaleRev) {
+	if _, err := SaveMachine(
+		cli,
+		KindUpdate,
+		UpdateBody{Latest: "1.0.2", CheckedAt: t0},
+		read.Header.Rev,
+	); !errors.Is(err, ErrStaleRev) {
 		t.Fatalf("want ErrStaleRev, got %v", err)
 	}
 	again, _ := LoadMachine[UpdateBody](cli, KindUpdate)
@@ -265,7 +240,11 @@ func TestLoadMachineCorrupt(t *testing.T) {
 	if _, err := LoadMachine[ScheduleBody](m, KindSchedule); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("kind mismatch: %v", err)
 	}
-	writeRaw(t, p, `{"v":1,"kind":"schedule","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"engine/1","body":{"entries":[],"extra":1}}`)
+	writeRaw(
+		t,
+		p,
+		`{"v":1,"kind":"schedule","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"engine/1","body":{"entries":[],"extra":1}}`,
+	)
 	if _, err := LoadMachine[ScheduleBody](m, KindSchedule); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("unknown field: %v", err)
 	}
@@ -348,7 +327,8 @@ func TestResetSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, _ := LoadMachine[ProvidersBody](m, KindProviders)
-	if r.Body.Links["a"].Sessions != 0 || r.Body.Links["b"].Sessions != 0 || r.Body.Links["a"].Cap != "window" || r.Header.Rev != 2 {
+	if r.Body.Links["a"].Sessions != 0 || r.Body.Links["b"].Sessions != 0 || r.Body.Links["a"].Cap != "window" ||
+		r.Header.Rev != 2 {
 		t.Fatalf("after reset: %+v rev %d", r.Body, r.Header.Rev)
 	}
 	if err := m.ResetSessions(); err != nil {
@@ -456,4 +436,47 @@ func TestWindows(t *testing.T) {
 	if err := m.SaveWindow(cancelled, k, rec); err == nil {
 		t.Fatal("SaveWindow ignored a cancelled context")
 	}
+}
+
+// newMach opens a machine manager over a temporary home folder.
+func newMach(t *testing.T, writer string) (*Machine, string) {
+	t.Helper()
+	home := t.TempDir()
+	m, err := NewMachine(home, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, home
+}
+
+// machPath returns where a machine-wide record lives.
+func machPath(home string, k MachineKind) string {
+	return filepath.Join(home, "state", string(k)+".json")
+}
+
+// sampleSchedule returns a valid queue with one entry.
+func sampleSchedule() ScheduleBody {
+	return ScheduleBody{Entries: []ScheduleEntry{{
+		Target: "ep-1", Root: "/Users/dev/src/shop", RunID: "0192e5a0-2a10-7c52-9e0b-3d4f8a1b6c72",
+		At: t0.Add(17 * time.Hour), QueuedAt: t0,
+		Start: bus.RunStart{Target: "ep-1", Groups: []string{
+			"tg-1.1",
+			"tg-1.2",
+		}, Source: "cli", Schedule: t0.Add(17 * time.Hour),
+			Repo: "github.com/acme/shop", Root: "/Users/dev/src/shop", CommonDir: "/Users/dev/src/shop/.git"},
+	}}}
+}
+
+// roundTrip saves a body at rev 0, loads it and returns both records.
+func roundTrip[T any](t *testing.T, m *Machine, k MachineKind, body T) (MachineRecord[T], MachineRecord[T]) {
+	t.Helper()
+	saved, err := SaveMachine(m, k, body, 0)
+	if err != nil {
+		t.Fatalf("SaveMachine %s: %v", k, err)
+	}
+	got, err := LoadMachine[T](m, k)
+	if err != nil {
+		t.Fatalf("LoadMachine %s: %v", k, err)
+	}
+	return saved, got
 }

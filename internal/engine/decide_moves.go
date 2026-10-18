@@ -53,8 +53,113 @@ var faultStages = map[state.Reason][]Stage{
 	},
 }
 
-// blockReason applies the block rows to an input; it reports the reason, a sentence for a person
-// and whether a row matched.
+// move applies the stage-move rows: the first row that matches the input and the state.
+func (c *calc) move() bool {
+	in, s := c.eff, &c.s
+	if r, d, ok := c.blockReason(in); ok {
+		c.block(r, d)
+		return true
+	}
+
+	switch in.Kind {
+	case InGroupStart:
+		if c.from == NoStage {
+			s.Epoch = 1
+			s.Stage = StageIntake
+			c.emitStatus(&bus.StageEnter{To: string(StageIntake)})
+			c.order(OrderGrantLease, StageIntake, nil)
+			return true
+		}
+	case InLeaseGranted:
+		if c.from == StageIntake {
+			if g := decode[LeaseGrant](in.Data); g.Fence != 0 {
+				s.Fence = g.Fence
+				c.order(OrderStartGroup, StageIntake, nil)
+				return true
+			}
+		}
+	case InReady:
+		if c.from == StageIntake {
+			c.advance(StageBuild, stageData{Task: c.firstOpenTask()})
+			return true
+		}
+	case InStageDone:
+		return c.stageDone(in)
+	case InResultFail:
+		if c.from == StageTestReview {
+			c.returnToBuild(in)
+			return true
+		}
+	case InSessionEnd:
+		return c.pauseOnEnd(in)
+	case InLimitPause:
+		if (c.from == StageBuild || c.from == StageTestReview) && !c.anyLive() {
+			d := decode[LimitPause](in.Data)
+			s.Prior, s.Stage = c.from, StagePaused
+			s.Pause = state.PauseState{
+				Cause:   d.Cause,
+				Link:    d.Link,
+				Until:   d.Until,
+				Since:   in.Time,
+				Refused: s.Pause.Refused,
+			}
+			c.emitStatus(&bus.GroupPaused{
+				GroupFacts: bus.GroupFacts{Stage: string(c.from)},
+				Until:      d.Until,
+				Link:       d.Link,
+			})
+			c.order(OrderHold, StagePaused, nil)
+			return true
+		}
+	case InTimerDue:
+		if c.from == StagePaused && decode[TimerDue](in.Data).Reason != "pause_timeout" {
+			c.leavePause(decode[TimerDue](in.Data).Reason)
+			return true
+		}
+	case InContinue:
+		return c.continueGroup(in)
+	case InScopeAnswer:
+		return c.scopeAnswer(in)
+	case InLeaseLost:
+		if c.from != StageDone && c.from != NoStage {
+			c.emit = append(
+				c.emit,
+				c.event(
+					bus.TypeRunFailure,
+					&bus.LeaseLost{
+						GroupFacts: bus.GroupFacts{Stage: string(c.from)},
+						Fence:      s.Fence,
+						Where:      "renew",
+					},
+				),
+			)
+			c.order(OrderCancel, c.from, map[string]string{"cause": "lease_lost"})
+			c.finish("lost")
+			return true
+		}
+	case InAbandon:
+		if g := decode[AbandonData](in.Data).Group; (g == "" || g == s.Group) && c.from != StageDone && c.from != NoStage {
+			c.order(OrderCancel, c.from, map[string]string{"cause": "abandon"})
+			c.order(OrderDiscard, StageDone, nil)
+			c.finish("abandoned")
+			c.order(OrderRelease, StageDone, nil)
+			return true
+		}
+	case InGroupClosed:
+		switch c.from {
+		case StageCleanup:
+			c.finish("complete")
+			c.order(OrderRelease, StageDone, nil)
+			return true
+		case StageBlocked, StageDone:
+			return true
+		}
+	}
+
+	return false
+}
+
+// blockReason applies the block rows to an input; it reports the reason, a sentence for a person and whether a row matched.
 func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 	s, st := &c.s, c.from
 	if st == NoStage || st == StageBlocked || st == StageDone {
@@ -70,19 +175,12 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		d := decode[ResultFail](in.Data)
 		if s.Counters.Returns >= c.l.Returns {
 			if d.Regression {
-				return state.ReasonRegression,
-					"a test that passed at the base fails and the returns are spent",
-					true
+				return state.ReasonRegression, "a test that passed at the base fails and the returns are spent", true
 			}
-
 			return state.ReasonReturns, "the returns to Build are spent", true
 		}
-
-		if (s.FailureHash != "" && Fingerprint(d.Items) == s.FailureHash) ||
-			(d.Tree != "" && d.Tree == s.ReturnTree) {
-			return state.ReasonFlap,
-				"the same failure came back, or the return changed nothing",
-				true
+		if (s.FailureHash != "" && Fingerprint(d.Items) == s.FailureHash) || (d.Tree != "" && d.Tree == s.ReturnTree) {
+			return state.ReasonFlap, "the same failure came back, or the return changed nothing", true
 		}
 	case InSessionEnd:
 		if r, d, ok := c.endBlock(decode[SessionEndData](in.Data).SessionEnd); ok {
@@ -94,25 +192,20 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		}
 	case InFault:
 		d := decode[FaultData](in.Data)
-
 		r := state.Reason(d.Reason)
 		if r == "commit" {
 			r = state.ReasonPublish
 		}
-
 		if slices.Contains(faultStages[r], st) {
 			return r, d.Detail, true
 		}
-
 		return "", "", false
 	case InGroupCrash:
 		if working(st) || st == StagePaused {
 			return state.ReasonCrash, "the group's goroutine panicked", true
 		}
 	case InAbandon:
-		if g := decode[AbandonData](in.Data).Group; g != "" &&
-			g != s.Group &&
-			(working(st) || st == StagePaused) {
+		if g := decode[AbandonData](in.Data).Group; g != "" && g != s.Group && (working(st) || st == StagePaused) {
 			return state.ReasonDependency, "dependency " + g + " was abandoned", true
 		}
 	case InTimerDue:
@@ -121,9 +214,7 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 			s.Pause.Cause == "provider" &&
 			c.l.PauseMaxMin > 0 &&
 			!in.Time.Before(s.Pause.Since.Add(time.Duration(c.l.PauseMaxMin)*time.Minute)) {
-			return state.ReasonPauseTimeout,
-				"the provider limit outlasted limits.pause_max_min",
-				true
+			return state.ReasonPauseTimeout, "the provider limit outlasted limits.pause_max_min", true
 		}
 	}
 
@@ -147,21 +238,15 @@ func (c *calc) endBlock(e bus.SessionEnd) (state.Reason, string, bool) {
 	if st != StageBuild && st != StageTestReview {
 		return "", "", false
 	}
-
 	if e.Reason == "billing" {
 		return state.ReasonPaidRefused, "the first stream line showed a paid key", true
 	}
 
 	if e.Agent == "builder" && st == StageBuild {
 		open := !c.allTasksDone()
-		if (e.Reason == "timeout" || e.Reason == "idle") &&
-			open &&
-			s.Counters.Retries > c.l.BuilderRetries {
-			return state.ReasonRetries,
-				"the builder timed out or went idle more often than its retries",
-				true
+		if (e.Reason == "timeout" || e.Reason == "idle") && open && s.Counters.Retries > c.l.BuilderRetries {
+			return state.ReasonRetries, "the builder timed out or went idle more often than its retries", true
 		}
-
 		if slices.Contains(retryReasons, e.Reason) &&
 			(e.Reason != "done" || open) &&
 			s.Counters.Attempts >= c.l.GroupAttempts {
@@ -190,9 +275,7 @@ func (c *calc) endBlock(e bus.SessionEnd) (state.Reason, string, bool) {
 			e.Reason,
 		) && (e.Reason != "done" || e.Verify == nil)
 		if silent && round.Restarts > retries {
-			return state.ReasonRetries,
-				"the " + e.Agent + " ended without a result more often than its retries",
-				true
+			return state.ReasonRetries, "the " + e.Agent + " ended without a result more often than its retries", true
 		}
 	}
 
@@ -220,131 +303,11 @@ func (c *calc) block(r state.Reason, detail string) {
 	if c.scopeBlock != nil && r == state.ReasonNeedsScope {
 		b.Paths = c.scopeBlock.Paths
 	}
-
 	if s.Counters.Blocks[string(r)] >= BlocksBeforeRedesign {
 		b.Detail = strings.TrimSpace(b.Detail + " (needs redesign)")
 	}
 
 	c.emit = append(c.emit, c.event(bus.TypeRunFailure, b))
-}
-
-// move applies the stage-move rows: the first row that matches the input and the state.
-func (c *calc) move() bool {
-	in, s := c.eff, &c.s
-	if r, d, ok := c.blockReason(in); ok {
-		c.block(r, d)
-
-		return true
-	}
-
-	switch in.Kind {
-	case InGroupStart:
-		if c.from == NoStage {
-			s.Epoch = 1
-			s.Stage = StageIntake
-			c.emitStatus(&bus.StageEnter{To: string(StageIntake)})
-			c.order(OrderGrantLease, StageIntake, nil)
-
-			return true
-		}
-	case InLeaseGranted:
-		if c.from == StageIntake {
-			if g := decode[LeaseGrant](in.Data); g.Fence != 0 {
-				s.Fence = g.Fence
-
-				c.order(OrderStartGroup, StageIntake, nil)
-
-				return true
-			}
-		}
-	case InReady:
-		if c.from == StageIntake {
-			c.advance(StageBuild, stageData{Task: c.firstOpenTask()})
-
-			return true
-		}
-	case InStageDone:
-		return c.stageDone(in)
-	case InResultFail:
-		if c.from == StageTestReview {
-			c.returnToBuild(in)
-
-			return true
-		}
-	case InSessionEnd:
-		return c.pauseOnEnd(in)
-	case InLimitPause:
-		if (c.from == StageBuild || c.from == StageTestReview) && !c.anyLive() {
-			d := decode[LimitPause](in.Data)
-			s.Prior, s.Stage = c.from, StagePaused
-			s.Pause = state.PauseState{
-				Cause:   d.Cause,
-				Link:    d.Link,
-				Until:   d.Until,
-				Since:   in.Time,
-				Refused: s.Pause.Refused,
-			}
-			c.emitStatus(&bus.GroupPaused{
-				GroupFacts: bus.GroupFacts{Stage: string(c.from)},
-				Until:      d.Until,
-				Link:       d.Link,
-			})
-			c.order(OrderHold, StagePaused, nil)
-
-			return true
-		}
-	case InTimerDue:
-		if c.from == StagePaused && decode[TimerDue](in.Data).Reason != "pause_timeout" {
-			c.leavePause(decode[TimerDue](in.Data).Reason)
-
-			return true
-		}
-	case InContinue:
-		return c.continueGroup(in)
-	case InScopeAnswer:
-		return c.scopeAnswer(in)
-	case InLeaseLost:
-		if c.from != StageDone && c.from != NoStage {
-			c.emit = append(
-				c.emit,
-				c.event(
-					bus.TypeRunFailure,
-					&bus.LeaseLost{
-						GroupFacts: bus.GroupFacts{Stage: string(c.from)},
-						Fence:      s.Fence,
-						Where:      "renew",
-					},
-				),
-			)
-			c.order(OrderCancel, c.from, map[string]string{"cause": "lease_lost"})
-			c.finish("lost")
-
-			return true
-		}
-	case InAbandon:
-		if g := decode[AbandonData](in.Data).Group; (g == "" || g == s.Group) &&
-			c.from != StageDone &&
-			c.from != NoStage {
-			c.order(OrderCancel, c.from, map[string]string{"cause": "abandon"})
-			c.order(OrderDiscard, StageDone, nil)
-			c.finish("abandoned")
-			c.order(OrderRelease, StageDone, nil)
-
-			return true
-		}
-	case InGroupClosed:
-		switch c.from {
-		case StageCleanup:
-			c.finish("complete")
-			c.order(OrderRelease, StageDone, nil)
-
-			return true
-		case StageBlocked, StageDone:
-			return true
-		}
-	}
-
-	return false
 }
 
 // advance enters a working stage: the epoch rises and the stage's order goes out.
@@ -363,15 +326,6 @@ func (c *calc) advance(to Stage, d stageData) {
 	c.enterStage(to, d)
 }
 
-// finish ends the group in Done with an outcome.
-func (c *calc) finish(outcome string) {
-	s := &c.s
-	s.Stage, s.Outcome, s.Prior = StageDone, outcome, ""
-	s.Pause, s.Block = state.PauseState{}, state.BlockState{}
-
-	c.emitStatus(&bus.GroupDone{Outcome: outcome})
-}
-
 // stageDone moves a group on when its stage finished: rows 4, 5 and 7.
 func (c *calc) stageDone(in Input) bool {
 	d := decode[StageDoneData](in.Data)
@@ -383,16 +337,13 @@ func (c *calc) stageDone(in Input) bool {
 	case StageBuild:
 		if c.allTasksDone() {
 			c.advance(StageTestReview, stageData{})
-
 			return true
 		}
 	case StageTestReview:
 		c.advance(StageCommit, stageData{})
-
 		return true
 	case StageCommit:
 		c.advance(StageCleanup, stageData{})
-
 		return true
 	}
 
@@ -405,7 +356,6 @@ func (c *calc) returnToBuild(in Input) {
 	d := decode[ResultFail](in.Data)
 	s.Counters.Returns++
 	s.FailureHash, s.ReturnTree = Fingerprint(d.Items), d.Tree
-
 	if c.anyLive() {
 		c.order(OrderCancel, StageTestReview, map[string]string{"cause": "return"})
 	}
@@ -417,11 +367,7 @@ func (c *calc) returnToBuild(in Input) {
 
 	s.TestReview.Failed = slices.Clone(d.Items)
 
-	c.emitStatus(&bus.StageEnter{
-		From:   string(StageTestReview),
-		To:     string(StageBuild),
-		Return: true,
-	})
+	c.emitStatus(&bus.StageEnter{From: string(StageTestReview), To: string(StageBuild), Return: true})
 
 	s.Epoch++
 	s.Stage = StageBuild
@@ -453,7 +399,6 @@ func (c *calc) pauseOnEnd(in Input) bool {
 			Link:       s.Pause.Link,
 		})
 		c.order(OrderHold, StagePaused, nil)
-
 		return true
 	case e.Reason == "paused":
 		p := &s.Pause
@@ -488,11 +433,9 @@ func (c *calc) pauseOnEnd(in Input) bool {
 func (c *calc) leavePause(wake string) {
 	s := &c.s
 	to := s.Prior
-
 	if wake == "" {
 		wake = "timer"
 	}
-
 	if s.Pause.Cause != "provider" {
 		s.Pause = state.PauseState{}
 	} else {
@@ -517,17 +460,13 @@ func (c *calc) continueGroup(in Input) bool {
 	case StagePaused:
 		if s.Prior == StageCommit {
 			c.resumeAt(StageTestReview)
-
 			return true
 		}
-
 		c.leavePause("run-continue")
-
 		return true
 	case StageBlocked:
 		if why := c.resetFor(s.Block.Reason); why != "" {
 			c.refuseRequest(in, why)
-
 			return false
 		}
 
@@ -537,41 +476,18 @@ func (c *calc) continueGroup(in Input) bool {
 		}
 
 		c.resumeAt(to)
-
 		return true
 	case StageCommit:
 		c.dropCommitOrders()
 		c.advance(StageTestReview, stageData{})
-
 		return true
 	}
 
 	c.refuseRequest(in, "the group is running")
-
 	return false
 }
 
-// refuseRequest queues the request.refused fact for a command that matched no row.
-func (c *calc) refuseRequest(in Input, why string) {
-	if in.Request != "" {
-		c.refuse = &bus.RequestRefused{
-			RequestRef: bus.RequestRef{Request: bus.ID(in.Request)},
-			Why:        why,
-		}
-	}
-}
-
-// dropCommitOrders removes the open orders of the Commit stage; Commit runs again after approval.
-func (c *calc) dropCommitOrders() {
-	c.s.ActionsOpen = slices.DeleteFunc(c.s.ActionsOpen, func(a state.OpenAction) bool {
-		var o Order
-
-		return json.Unmarshal(a.Args, &o) == nil && o.Stage == StageCommit
-	})
-}
-
-// resumeAt leaves Paused or Blocked into a working stage with the epoch raised (rows 13, 14 and
-// 19).
+// resumeAt leaves Paused or Blocked into a working stage with the epoch raised (rows 13, 14 and 19).
 func (c *calc) resumeAt(to Stage) {
 	s := &c.s
 
@@ -589,8 +505,15 @@ func (c *calc) resumeAt(to Stage) {
 	c.enterStage(to, stageData{Task: c.firstOpenTask()})
 }
 
-// resetFor clears the counters a block reason names; it returns a sentence when the continue must
-// be refused.
+// dropCommitOrders removes the open orders of the Commit stage; Commit runs again after approval.
+func (c *calc) dropCommitOrders() {
+	c.s.ActionsOpen = slices.DeleteFunc(c.s.ActionsOpen, func(a state.OpenAction) bool {
+		var o Order
+		return json.Unmarshal(a.Args, &o) == nil && o.Stage == StageCommit
+	})
+}
+
+// resetFor clears the counters a block reason names; it returns a sentence when the continue must be refused.
 func (c *calc) resetFor(r state.Reason) string {
 	s := &c.s
 
@@ -615,6 +538,13 @@ func (c *calc) resetFor(r state.Reason) string {
 	return ""
 }
 
+// refuseRequest queues the request.refused fact for a command that matched no row.
+func (c *calc) refuseRequest(in Input, why string) {
+	if in.Request != "" {
+		c.refuse = &bus.RequestRefused{RequestRef: bus.RequestRef{Request: bus.ID(in.Request)}, Why: why}
+	}
+}
+
 // scopeAnswer applies the answer to a scope request or a wall block (row 14).
 func (c *calc) scopeAnswer(in Input) bool {
 	s := &c.s
@@ -629,28 +559,31 @@ func (c *calc) scopeAnswer(in Input) bool {
 		if d.Answer == "approve" {
 			s.ScopeAdded = appendNew(s.ScopeAdded, d.Paths...)
 		}
-
 		c.order(OrderScope, StageBuild, d)
 		c.resumeAt(s.Prior)
-
 		return true
 	case state.ReasonWall:
 		if d.Answer != "approve" {
 			return false
 		}
-
 		s.Counters.WallUsedS, s.Counters.WallExtended = 0, false
 		c.resumeAt(s.Prior)
-
 		return true
 	}
 
 	return false
 }
 
+// finish ends the group in Done with an outcome.
+func (c *calc) finish(outcome string) {
+	s := &c.s
+	s.Stage, s.Outcome, s.Prior = StageDone, outcome, ""
+	s.Pause, s.Block = state.PauseState{}, state.BlockState{}
+	c.emitStatus(&bus.GroupDone{Outcome: outcome})
+}
+
 // mustJSON encodes v; the types it is given always encode.
 func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
-
 	return b
 }

@@ -219,7 +219,7 @@ func (c *CLI) applyInput(call *Call, fs *flag.FlagSet, pos *[]string) *Result {
 
 	slices.Sort(keys)
 
-	// TODO - need a short decsitpion of this
+	// Apply the --input keys in order: args fill the positionals, the rest set flags not typed.
 	for _, k := range keys {
 		v := obj[k]
 		if k == "args" {

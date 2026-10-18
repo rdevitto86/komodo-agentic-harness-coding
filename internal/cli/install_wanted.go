@@ -55,7 +55,8 @@ func (in *installer) hostsWanted() []string {
 	var out []string
 	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
 
-	if exists(filepath.Join(in.root, "CLAUDE.md")) || exists(filepath.Join(in.root, ".claude")) || exists(filepath.Join(in.user, ".claude")) {
+	if exists(filepath.Join(in.root, "CLAUDE.md")) || exists(filepath.Join(in.root, ".claude")) ||
+		exists(filepath.Join(in.user, ".claude")) {
 		out = append(out, "claude")
 	} else if _, err := in.host.lookPath("claude"); err == nil {
 		out = append(out, "claude")

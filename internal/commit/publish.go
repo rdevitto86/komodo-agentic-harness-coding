@@ -41,11 +41,9 @@ func (h *Handler) Publish(ctx context.Context, a Approval) (Result, error) {
 	if err := p.settle(ctx); err != nil {
 		return Result{}, err
 	}
-
 	if err := p.commit(ctx); err != nil {
 		return Result{}, err
 	}
-
 	return p.land(ctx)
 }
 
@@ -143,11 +141,9 @@ func (p *publication) commit(ctx context.Context) error {
 		if _, err := g.Commit(ctx, a.Worktree, a.Label+": "+oneLine(a.Goal)); err != nil {
 			return gitFail(err)
 		}
-
 		if _, tree, err := g.Head(ctx, a.Worktree); err != nil || tree != a.Tree {
 			return notApproved
 		}
-
 		return nil
 	case wtTree == head.Tree && p.holdsApproved(ctx, head):
 		return nil
@@ -170,7 +166,6 @@ func (p *publication) onGroupBranch(ctx context.Context) error {
 			fmt.Errorf("worktree is on %s, approved %s: %w", cur, p.a.Branch, ErrNotApproved),
 		)
 	}
-
 	return nil
 }
 
@@ -188,7 +183,6 @@ func (p *publication) holdsApproved(ctx context.Context, cur CommitInfo) bool {
 		if cur.Tree == p.a.Tree {
 			return true
 		}
-
 		if cur.Subject != syncSubject || cur.Parent == "" || cur.Second == "" {
 			return false
 		}
@@ -202,10 +196,8 @@ func (p *publication) holdsApproved(ctx context.Context, cur CommitInfo) bool {
 		if err != nil {
 			return false
 		}
-
 		cur = next
 	}
-
 	return false
 }
 
@@ -219,7 +211,6 @@ func (p *publication) fetchBranch(ctx context.Context, dir, branch string) error
 	case errors.Is(err, ErrBranchMissing):
 		return fail(KindBaseMissing, false, err)
 	}
-
 	return fail(KindPush, true, err)
 }
 
@@ -229,7 +220,6 @@ func (p *publication) recheck(ctx context.Context, turn *Turn) error {
 	res, err := p.h.Check.Recheck(ctx, p.a.Epic, p.wt)
 	if err != nil {
 		turn.Release()
-
 		return fail(KindRecheck, true, fmt.Errorf("run the checks: %w", err))
 	}
 
@@ -256,11 +246,9 @@ func (p *publication) report(ctx context.Context, subtype string, data any) erro
 	if p.h.Report == nil {
 		return nil
 	}
-
 	if err := p.h.Report.Report(ctx, p.a.Group, subtype, data); err != nil {
 		return fail(KindReport, true, fmt.Errorf("report %s: %w", subtype, err))
 	}
-
 	return nil
 }
 
@@ -283,11 +271,9 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	if err := p.fetchBranch(ctx, a.Worktree, p.base); err != nil {
 		return Result{}, err
 	}
-
 	if err := p.fetchBranch(ctx, a.Worktree, p.epic); err != nil {
 		return Result{}, err
 	}
-
 	if err := h.Git.AddWorktree(ctx, p.clone, p.wt, p.epic, p.remote+"/"+p.epic); err != nil {
 		return Result{}, gitFail(err)
 	}
@@ -314,7 +300,6 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 		if ls, err = h.Git.Landed(ctx, p.wt, p.tracking(p.base), "HEAD"); err != nil {
 			return Result{}, gitFail(err)
 		}
-
 		if already = p.hasLanded(ls); !already {
 			ls = nil
 		}
@@ -323,7 +308,6 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	if turn.First() && !already {
 		if err := p.recheck(ctx, turn); err != nil {
 			freed = true
-
 			return Result{}, err
 		}
 	}
@@ -357,12 +341,10 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	wasPaused := turn.Paused()
 	if err := p.recheck(ctx, turn); err != nil {
 		freed = true
-
 		return Result{}, err
 	}
 
 	turn.Finish(true)
-
 	freed = true
 
 	if wasPaused {
@@ -439,7 +421,6 @@ func (p *publication) push(ctx context.Context) (string, error) {
 			if errors.Is(err, ErrPushRejected) {
 				return "", gitFail(err)
 			}
-
 			return "", fail(KindPush, true, err)
 		}
 
@@ -457,7 +438,6 @@ func (p *publication) push(ctx context.Context) (string, error) {
 	if err := p.fetchBranch(ctx, p.wt, p.epic); err != nil {
 		return "", err
 	}
-
 	return local, nil
 }
 
@@ -527,7 +507,6 @@ func (p *publication) pullRequest(
 	}
 
 	res.PRURL = pr.URL
-
 	return nil
 }
 
@@ -600,11 +579,9 @@ func resolveRemote(ctx context.Context, g Git, dir string, base, remote *string)
 		if err != nil {
 			return gitFail(err)
 		}
-
 		if !ok {
 			r = "origin"
 		}
-
 		*remote = r
 	}
 

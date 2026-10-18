@@ -13,14 +13,20 @@ import (
 
 // StatusData is the data of reply.status.
 type StatusData struct {
-	Runs      []RunRow             `json:"runs"`
-	Queued    []QueuedRow          `json:"queued"`
-	Blocked   []BlockedRow         `json:"blocked"`             // groups that wait for an answer
-	Waited    string               `json:"waited,omitempty"`    // with --wait: blocked, done or timeout
-	Figures   *Figures             `json:"figures,omitempty"`   // status (id): the run's or group's time, tokens and cost
-	Explain   []bus.Event          `json:"explain,omitempty"`   // status (id) of a failed or blocked group: the run's last events
-	Recent    []metrics.RunMetrics `json:"recent,omitempty"`    // status --all: the 20 most recent runs with their totals
-	Scorecard *metrics.Scorecard   `json:"scorecard,omitempty"` // status --all: one row per agent and model over the last 30 days
+	Runs   []RunRow    `json:"runs"`
+	Queued []QueuedRow `json:"queued"`
+	// groups that wait for an answer
+	Blocked []BlockedRow `json:"blocked"`
+	// with --wait: blocked, done or timeout
+	Waited string `json:"waited,omitempty"`
+	// status (id): the run's or group's time, tokens and cost
+	Figures *Figures `json:"figures,omitempty"`
+	// status (id) of a failed or blocked group: the run's last events
+	Explain []bus.Event `json:"explain,omitempty"`
+	// status --all: the 20 most recent runs with their totals
+	Recent []metrics.RunMetrics `json:"recent,omitempty"`
+	// status --all: one row per agent and model over the last 30 days
+	Scorecard *metrics.Scorecard `json:"scorecard,omitempty"`
 }
 
 // Figures are the time, tokens and cost of one run or group, from the Metrics Service.

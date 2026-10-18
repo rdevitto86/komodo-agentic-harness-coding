@@ -80,8 +80,7 @@ var (
 	// Agents lists the 4 agents in a fixed order.
 	Agents = []string{"planner", "builder", "tester", "reviewer"}
 
-	// slotTable names the slots each agent receives; an agent not named in a slot's row never gets
-	// it.
+	// slotTable names the slots each agent receives; an agent not named in a slot's row never gets it.
 	slotTable = map[string]slotRow{
 		"planner": {
 			required: []Slot{RepoProfile, SlotRepoMap, Layout, Goal},
@@ -109,11 +108,9 @@ func (e EmptySlotError) Error() string { return "required slot " + string(e.Slot
 func (br Brief) Tokens(count Counter) int {
 	count = counterOr(count)
 	n := 0
-
 	for _, p := range br.Parts {
 		n += count(p)
 	}
-
 	return n
 }
 
@@ -133,13 +130,11 @@ func (br Brief) Text() string {
 // Place returns the first candidate, in chain order, whose ceiling holds the brief.
 func (br Brief) Place(chain []Candidate, count Counter) (Candidate, error) {
 	size := br.Tokens(count)
-
 	for _, c := range chain {
 		if size <= Ceiling(c.Ctx) {
 			return c, nil
 		}
 	}
-
 	return Candidate{}, fmt.Errorf("%d tokens: %w", size, ErrContext)
 }
 
@@ -178,11 +173,18 @@ func buildBrief(
 		if strings.TrimSpace(v) == "" {
 			return "none"
 		}
-
 		return v
 	})
 
-	return Brief{Agent: agent, Parts: [5]string{tools, tpl.Role, repoCtx, standards, task}}, nil
+	return Brief{
+		Agent: agent,
+		Parts: [5]string{
+			tools,
+			tpl.Role,
+			repoCtx,
+			standards,
+			task,
+		}}, nil
 }
 
 // validAgent reports whether the name is one of the 4 agents.

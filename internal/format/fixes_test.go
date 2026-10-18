@@ -78,7 +78,15 @@ func TestBlockReasonsAreTheNeedsCodes(t *testing.T) {
 			t.Errorf("needs.%s: %v", r, err)
 		}
 	}
-	for _, c := range []string{"card_changed", "locked", "plan_blocked", "plan_input", "plan_timeout", "plan_write", "context_refused"} {
+	for _, c := range []string{
+		"card_changed",
+		"locked",
+		"plan_blocked",
+		"plan_input",
+		"plan_timeout",
+		"plan_write",
+		"context_refused",
+	} {
 		if _, ok := shapes["needs."+c]; ok {
 			t.Errorf("needs.%s is a block reason?", c)
 		}

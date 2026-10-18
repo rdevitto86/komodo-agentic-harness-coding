@@ -14,35 +14,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
-// withClock runs the rig on its fake clock.
-func withClock(r *rig) {
-	r.d.Clock = r.clock
-	r.d.Timing.LoopSilentFor = 10000 * time.Hour // a test that jumps the clock is not a silent loop
-}
-
-// idleScript is a Task Manager that reports ready, then does nothing until it is stopped.
-func idleScript(e *tmEnv) {
-	defer close(e.out)
-	first := true
-	for {
-		select {
-		case c := <-e.cmds:
-			if c.Kind == task.CmdStop {
-				return
-			}
-			if c.Kind == task.CmdStart && first && e.store.get(e.spec.ID).Stage == StageIntake {
-				first = false
-				e.say(fact("ready", nil))
-			}
-		case <-e.ctx.Done():
-			return
-		}
-	}
-}
-
-// onlyIdle makes every group's Task Manager idle after ready.
-func onlyIdle(r *rig) { r.tasks.script = func(string) func(*tmEnv) { return idleScript } }
-
 func TestFixtureGroupPassesEveryStageAndEndsDone(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1.1"}})
 	if err := r.startRun("run-1", "tg-1.1"); err != nil {
@@ -135,8 +106,12 @@ func TestCacheOpensOnceAndClosesWithTheLastRun(t *testing.T) {
 
 func TestPoolLimitsActiveGroupsAndDependentsWait(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1"}, {"tg-2"}, {"tg-3"}, {"tg-4", "tg-1"}}, onlyIdle, func(r *rig) {
-		r.d.Config = rigConfig{"limits.returns": 2, "limits.group_attempts": 2, "limits.pause_max_min": 360, "limits.group_wall_min": 60,
-			"limits.group_tokens": 0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
+		r.d.Config = rigConfig{
+			"limits.returns":        2,
+			"limits.group_attempts": 2,
+			"limits.pause_max_min":  360,
+			"limits.group_wall_min": 60,
+			"limits.group_tokens":   0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
 	})
 	if err := r.startRun("run-1", "tg-1", "tg-2", "tg-3", "tg-4"); err != nil {
 		t.Fatal(err)
@@ -165,7 +140,10 @@ func TestBlockedDependencyKeepsDependentWaitingWhileUnrelatedGroupRuns(t *testin
 			defer close(e.out)
 			for c := range e.cmds {
 				if c.Kind == task.CmdStart {
-					e.send(task.Message{Kind: task.MsgEscalate, Escalation: &task.Escalation{ID: "e1", Group: e.spec.ID, Kind: task.EscBlocked, Reason: "setup"}})
+					e.send(task.Message{
+						Kind:       task.MsgEscalate,
+						Escalation: &task.Escalation{ID: "e1", Group: e.spec.ID, Kind: task.EscBlocked, Reason: "setup"},
+					})
 				}
 			}
 		}
@@ -221,8 +199,19 @@ func TestScopeRequestOnAnotherGroupsFileIsDeniedWithoutAsking(t *testing.T) {
 							e.say(fact("ready", nil))
 						case StageBuild:
 							asked++
-							e.send(task.Message{ID: "esc", Kind: task.MsgEscalate, Escalation: &task.Escalation{ID: "esc", Group: e.spec.ID, Kind: task.EscScope, Reason: "needs_scope",
-								Detail: mustJSON(ScopeAsk{Task: "t-tg-1-1", Paths: []string{"tg-2/file.go"}, Reason: "shared helper"})}})
+							e.send(task.Message{
+								ID:   "esc",
+								Kind: task.MsgEscalate,
+								Escalation: &task.Escalation{
+									ID:     "esc",
+									Group:  e.spec.ID,
+									Kind:   task.EscScope,
+									Reason: "needs_scope",
+									Detail: mustJSON(ScopeAsk{
+										Task:   "t-tg-1-1",
+										Paths:  []string{"tg-2/file.go"},
+										Reason: "shared helper",
+									})}})
 						}
 					}
 				case <-e.ctx.Done():
@@ -359,9 +348,20 @@ func TestReaderGoroutineMapsEachMessageToItsInput(t *testing.T) {
 		{ID: "b", Kind: task.MsgEnded, Ended: &task.Ended{Result: "closed"}},
 		{ID: "c", Kind: task.MsgEnded, Ended: &task.Ended{Result: "failed", Error: "boom"}},
 		{ID: "d", Kind: task.MsgEnded, Ended: &task.Ended{Result: "held"}},
-		{ID: "e", Kind: task.MsgEscalate, Escalation: &task.Escalation{ID: "x", Kind: task.EscScope, Detail: mustJSON(ScopeAsk{Task: "t"})}},
+		{
+			ID:         "e",
+			Kind:       task.MsgEscalate,
+			Escalation: &task.Escalation{ID: "x", Kind: task.EscScope, Detail: mustJSON(ScopeAsk{Task: "t"})},
+		},
 		{ID: "f", Kind: task.MsgEscalate, Escalation: &task.Escalation{ID: "y", Kind: task.EscFailed, Reason: "setup"}},
-		{ID: "g", Kind: task.MsgState, State: &task.StateReport{Progress: task.Progress{Stage: StageBuild}, Facts: []task.Fact{{Subtype: "ready"}, {Subtype: "stage.done"}, {Subtype: "tool.denied"}}}},
+		{
+			ID:   "g",
+			Kind: task.MsgState,
+			State: &task.StateReport{
+				Progress: task.Progress{Stage: StageBuild},
+				Facts:    []task.Fact{{Subtype: "ready"}, {Subtype: "stage.done"}, {Subtype: "tool.denied"}},
+			},
+		},
 	}
 	for _, m := range msgs {
 		for _, in := range inputsFromMessage("g1", m, epoch, now) {
@@ -395,3 +395,32 @@ func TestEachCommandKindReachesTheTaskManagerAndItsMessageComesBack(t *testing.T
 		t.Fatal("release became a command")
 	}
 }
+
+// withClock runs the rig on its fake clock.
+func withClock(r *rig) {
+	r.d.Clock = r.clock
+	r.d.Timing.LoopSilentFor = 10000 * time.Hour // a test that jumps the clock is not a silent loop
+}
+
+// idleScript is a Task Manager that reports ready, then does nothing until it is stopped.
+func idleScript(e *tmEnv) {
+	defer close(e.out)
+	first := true
+	for {
+		select {
+		case c := <-e.cmds:
+			if c.Kind == task.CmdStop {
+				return
+			}
+			if c.Kind == task.CmdStart && first && e.store.get(e.spec.ID).Stage == StageIntake {
+				first = false
+				e.say(fact("ready", nil))
+			}
+		case <-e.ctx.Done():
+			return
+		}
+	}
+}
+
+// onlyIdle makes every group's Task Manager idle after ready.
+func onlyIdle(r *rig) { r.tasks.script = func(string) func(*tmEnv) { return idleScript } }

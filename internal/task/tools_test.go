@@ -67,7 +67,19 @@ type rig struct {
 }
 
 // allTools lists every built-in tool.
-var allTools = []string{"read", "search", "edit", "write", "run", "diff", "git_read", "skill", "submit_finding", "task_done", "lint_backlog"}
+var allTools = []string{
+	"read",
+	"search",
+	"edit",
+	"write",
+	"run",
+	"diff",
+	"git_read",
+	"skill",
+	"submit_finding",
+	"task_done",
+	"lint_backlog",
+}
 
 // newRig binds every tool to a builder-like guard whose files list covers the whole tree.
 func newRig(t *testing.T, mutate func(*Env)) *rig {
@@ -75,7 +87,9 @@ func newRig(t *testing.T, mutate func(*Env)) *rig {
 	f := newFixture(t)
 	r := &rig{f: f, conf: &fakeConfiner{dir: f.Root}}
 	r.env = &Env{Worktree: f.Root, Dir: filepath.Join(t.TempDir(), "session"), Confiner: r.conf, Instance: "i1",
-		Commands: map[string][]string{"build": {"true"}}, OnFact: func(x Fact) { r.mu.Lock(); r.facts = append(r.facts, x); r.mu.Unlock() }}
+		Commands: map[string][]string{
+			"build": {"true"},
+		}, OnFact: func(x Fact) { r.mu.Lock(); r.facts = append(r.facts, x); r.mu.Unlock() }}
 	if err := os.MkdirAll(r.env.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +115,8 @@ func (r *rig) call(tool string, args any) Reply {
 func TestBindFailsOnAnUnregisteredTool(t *testing.T) {
 	f := newFixture(t)
 	g := newTestGuard(t, f, "builder", builderPerms(), nil, 3)
-	if _, err := NewRegistry(&Env{Worktree: f.Root}).Bind([]string{"read", "teleport"}, g); err == nil || !strings.Contains(err.Error(), "teleport") {
+	if _, err := NewRegistry(&Env{Worktree: f.Root}).Bind([]string{"read", "teleport"}, g); err == nil ||
+		!strings.Contains(err.Error(), "teleport") {
 		t.Fatalf("Bind error = %v, want one naming teleport", err)
 	}
 }
@@ -163,24 +178,6 @@ func TestDispatchRefusalIsAReplyAndAFact(t *testing.T) {
 	}
 }
 
-// toolLines reads tools.jsonl of a session folder.
-func toolLines(t *testing.T, dir string) []ToolLine {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(dir, "tools.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []ToolLine
-	for _, ln := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-		var l ToolLine
-		if err := json.Unmarshal([]byte(ln), &l); err != nil {
-			t.Fatalf("bad line %q: %v", ln, err)
-		}
-		out = append(out, l)
-	}
-	return out
-}
-
 func TestReadNumbersLinesAndIsNotCapped(t *testing.T) {
 	r := newRig(t, nil)
 	var b strings.Builder
@@ -189,7 +186,8 @@ func TestReadNumbersLinesAndIsNotCapped(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(r.f.Root, "big.txt"), b.String())
 	got := r.call("read", map[string]any{"path": "big.txt"})
-	if !strings.HasPrefix(got.Text, "1\tline of text number\n") || !strings.Contains(got.Text, "2000\tline") || strings.Contains(got.Text, "2001\tline") {
+	if !strings.HasPrefix(got.Text, "1\tline of text number\n") || !strings.Contains(got.Text, "2000\tline") ||
+		strings.Contains(got.Text, "2001\tline") {
 		t.Fatalf("read start = %.60q ...", got.Text)
 	}
 	if len(got.Text) <= replyCap || got.LogPath != "" || !strings.Contains(got.Text, "start=2001") {
@@ -231,7 +229,8 @@ func TestEditReplacesOnceAndShowsContext(t *testing.T) {
 	r := newRig(t, nil)
 	writeFile(t, filepath.Join(r.f.Root, "e.go"), "l1\nl2\nl3\nTARGET\nl5\nl6\nl7\nl8\n")
 	got := r.call("edit", map[string]any{"path": "e.go", "old": "TARGET", "new": "CHANGED"})
-	if !strings.Contains(got.Text, "4\tCHANGED") || !strings.Contains(got.Text, "1\tl1") || !strings.Contains(got.Text, "7\tl7") || strings.Contains(got.Text, "8\tl8") {
+	if !strings.Contains(got.Text, "4\tCHANGED") || !strings.Contains(got.Text, "1\tl1") ||
+		!strings.Contains(got.Text, "7\tl7") || strings.Contains(got.Text, "8\tl8") {
 		t.Fatalf("edit reply = %q", got.Text)
 	}
 	if b, _ := os.ReadFile(filepath.Join(r.f.Root, "e.go")); !strings.Contains(string(b), "CHANGED") {
@@ -242,10 +241,18 @@ func TestEditReplacesOnceAndShowsContext(t *testing.T) {
 		t.Fatalf("missing text reply = %q", nf.Text)
 	}
 	writeFile(t, filepath.Join(r.f.Root, "dup.go"), "same\nsame\n")
-	if d := r.call("edit", map[string]any{"path": "dup.go", "old": "same", "new": "x"}); !strings.Contains(d.Text, "2 times") {
+	if d := r.call("edit", map[string]any{
+		"path": "dup.go",
+		"old":  "same",
+		"new":  "x",
+	}); !strings.Contains(d.Text, "2 times") {
 		t.Fatalf("duplicate reply = %q", d.Text)
 	}
-	if n := r.call("edit", map[string]any{"path": "absent.go", "old": "a", "new": "b"}); !strings.Contains(n.Text, "does not exist") {
+	if n := r.call("edit", map[string]any{
+		"path": "absent.go",
+		"old":  "a",
+		"new":  "b",
+	}); !strings.Contains(n.Text, "does not exist") {
 		t.Fatalf("absent file reply = %q", n.Text)
 	}
 }
@@ -275,7 +282,8 @@ func TestEditKeepsTheEditWhenFormatFails(t *testing.T) {
 	r := newRig(t, func(e *Env) { e.Format = []string{"sh", "-c", "echo boom >&2; exit 3", "fmt"} })
 	writeFile(t, filepath.Join(r.f.Root, "f.go"), "a\n")
 	got := r.call("edit", map[string]any{"path": "f.go", "old": "a", "new": "b"})
-	if !strings.Contains(got.Text, "not formatted") || !strings.Contains(got.Text, "boom") || !strings.Contains(got.Text, "1\tb") {
+	if !strings.Contains(got.Text, "not formatted") || !strings.Contains(got.Text, "boom") ||
+		!strings.Contains(got.Text, "1\tb") {
 		t.Fatalf("reply = %q", got.Text)
 	}
 	if b, _ := os.ReadFile(filepath.Join(r.f.Root, "f.go")); string(b) != "b\n" {
@@ -344,7 +352,8 @@ func TestRunKillsACommandPastTheTimeout(t *testing.T) {
 	})
 	t0 := time.Now()
 	got := r.call("run", map[string]any{"class": "build"})
-	if time.Since(t0) > 10*time.Second || !strings.HasPrefix(got.Text, timeoutLine) || !strings.Contains(got.Text, "started") {
+	if time.Since(t0) > 10*time.Second || !strings.HasPrefix(got.Text, timeoutLine) ||
+		!strings.Contains(got.Text, "started") {
 		t.Fatalf("after %s: %q", time.Since(t0), got.Text)
 	}
 	lines := toolLines(t, r.env.Dir)
@@ -387,14 +396,26 @@ func TestLongReplyOfAnyOtherToolIsCappedToALog(t *testing.T) {
 func TestSubmitFindingFilesAFact(t *testing.T) {
 	var got []Submitted
 	r := newRig(t, func(e *Env) { e.OnFinding = func(s Submitted) { got = append(got, s) } })
-	reply := r.call("submit_finding", map[string]any{"rule": "E1", "file": "cmd/main.go", "line": 1, "quote": "package main", "note": "n"})
+	reply := r.call("submit_finding", map[string]any{
+		"rule":  "E1",
+		"file":  "cmd/main.go",
+		"line":  1,
+		"quote": "package main",
+		"note":  "n",
+	})
 	if reply.Text != "filed E1 at cmd/main.go:1" || len(got) != 1 || got[0].Line != 1 {
 		t.Fatalf("reply %q findings %+v", reply.Text, got)
 	}
 	if f := r.facts[len(r.facts)-1]; f.Subtype != "finding.submit" || !strings.Contains(string(f.Data), `"rule":"E1"`) {
 		t.Fatalf("fact = %+v", f)
 	}
-	if bad := r.call("submit_finding", map[string]any{"rule": "", "file": "cmd/main.go", "line": 0, "quote": "", "note": ""}); !strings.HasPrefix(bad.Text, "error:") {
+	if bad := r.call("submit_finding", map[string]any{
+		"rule":  "",
+		"file":  "cmd/main.go",
+		"line":  0,
+		"quote": "",
+		"note":  "",
+	}); !strings.HasPrefix(bad.Text, "error:") {
 		t.Errorf("empty finding = %q", bad.Text)
 	}
 }
@@ -436,7 +457,8 @@ func TestDiffAndGitReadHideSecretFiles(t *testing.T) {
 	patch := "diff --git a/.env b/.env\nnew file mode 100644\n+TOKEN=hunter2\ndiff --git a/a.go b/a.go\n+func A() {}\n"
 	r := newRig(t, func(e *Env) { e.Git = fakeGit{diff: patch, read: patch} })
 	for _, got := range []Reply{r.call("diff", map[string]any{}), r.call("git_read", map[string]any{"command": "show"})} {
-		if strings.Contains(got.Text, "hunter2") || !strings.Contains(got.Text, "diff --git a/.env b/.env") || !strings.Contains(got.Text, secretNote) || !strings.Contains(got.Text, "+func A() {}") {
+		if strings.Contains(got.Text, "hunter2") || !strings.Contains(got.Text, "diff --git a/.env b/.env") ||
+			!strings.Contains(got.Text, secretNote) || !strings.Contains(got.Text, "+func A() {}") {
 			t.Fatalf("reply = %q", got.Text)
 		}
 	}
@@ -478,4 +500,22 @@ func TestCapTextKeepsHeadAndTailWithinTheCap(t *testing.T) {
 	if short := capText("short", "x"); short != "short" {
 		t.Fatalf("short text changed: %q", short)
 	}
+}
+
+// toolLines reads tools.jsonl of a session folder.
+func toolLines(t *testing.T, dir string) []ToolLine {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "tools.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []ToolLine
+	for _, ln := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var l ToolLine
+		if err := json.Unmarshal([]byte(ln), &l); err != nil {
+			t.Fatalf("bad line %q: %v", ln, err)
+		}
+		out = append(out, l)
+	}
+	return out
 }

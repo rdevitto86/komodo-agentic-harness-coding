@@ -128,7 +128,13 @@ var (
 // defaultItems returns a starting table that enables every shipped skill for the workers.
 func defaultItems() []ItemState {
 	var out []ItemState
-	for _, n := range []SkillName{"standards-comments", "standards-go", "standards-kotlin", "standards-ui-mobile", "standards-aws"} {
+	for _, n := range []SkillName{
+		"standards-comments",
+		"standards-go",
+		"standards-kotlin",
+		"standards-ui-mobile",
+		"standards-aws",
+	} {
 		st := ItemState{Name: n, Origin: OriginEmbedded, Enabled: true, Allow: append([]string(nil), workers...)}
 		if n == "standards-comments" {
 			st.Always = []string{"builder"}
@@ -231,13 +237,23 @@ func writeLocalSkill(t *testing.T, home, name, text string) string {
 
 // localSkillText returns a valid SKILL.md with one section and the given extra body line.
 func localSkillText(name, extra string) string {
-	return "---\nv: 1\nname: " + name + "\ndescription: \"A local skill\"\nglobs:\n  - \"*.go\"\nmarkers: []\nsections:\n  - \"Rules\"\n---\n## Rules\n- **Always** keep it short.\n" + extra + "\n"
+	return "---\nv: 1\nname: " + name +
+		"\ndescription: \"A local skill\"\nglobs:\n  - \"*.go\"\nmarkers: []\nsections:\n  - \"Rules\"\n---\n## Rules\n- " +
+		"**Always** keep it short.\n" +
+		extra + "\n"
 }
 
 // get runs GetContext with the tree and files and fails the test on error.
 func get(t *testing.T, m *Manager, agent string, tree Tree, files ...string) Context {
 	t.Helper()
-	c, err := m.GetContext(context.Background(), Request{Agent: agent, Run: "r", Group: "g", Tree: tree, Files: files, Slots: slotsFor(agent)})
+	c, err := m.GetContext(context.Background(), Request{
+		Agent: agent,
+		Run:   "r",
+		Group: "g",
+		Tree:  tree,
+		Files: files,
+		Slots: slotsFor(agent),
+	})
 	if err != nil {
 		t.Fatalf("GetContext(%s): %v", agent, err)
 	}

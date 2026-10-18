@@ -27,8 +27,14 @@ type blockErr struct {
 	detail any
 }
 
+// Error describes the escalation.
+func (e *blockErr) Error() string { return string(e.kind) + " " + e.reason }
+
 // failedErr is the end of a group that cannot continue.
 type failedErr struct{ reason string }
+
+// Error describes the failure.
+func (e *failedErr) Error() string { return "the group failed: " + e.reason }
 
 // liveSession is one running session as the Manager tracks it.
 type liveSession struct {
@@ -83,16 +89,6 @@ type Manager struct {
 	closing    atomic.Bool
 }
 
-// scopeWait is a builder's open scope request.
-type scopeWait struct {
-	task  string
-	paths []string
-}
-
-// ErrStopped is returned inside the pipeline when a stop command ended the work; Run turns it into
-// a nil return.
-var ErrStopped = errors.New("the group was stopped")
-
 // New builds a Manager from the group's spec and the collaborators it calls.
 func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 	// Defaults the Task Manager applies to a limit the Runtime Manager left at zero.
@@ -101,19 +97,15 @@ func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 		defaultAttempts = 6
 		defaultRefusals = 3
 	)
-
 	if spec.Lease.Worktree == "" {
 		return nil, errors.New("the group spec has no worktree")
 	}
-
 	if spec.Limits.Returns == 0 {
 		spec.Limits.Returns = defaultReturns
 	}
-
 	if spec.Limits.Attempts == 0 {
 		spec.Limits.Attempts = defaultAttempts
 	}
-
 	if spec.Limits.RefusalLimit == 0 {
 		spec.Limits.RefusalLimit = defaultRefusals
 	}
@@ -147,7 +139,6 @@ func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 	default:
 		m.prog.Stage = state.StageBuild
 	}
-
 	if m.prog.Refusals == nil {
 		m.prog.Refusals = map[string]int{}
 	}
@@ -155,29 +146,20 @@ func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 	return m, nil
 }
 
-// Error describes the escalation.
-func (e *blockErr) Error() string { return string(e.kind) + " " + e.reason }
-
-// Error describes the failure.
-func (e *failedErr) Error() string { return "the group failed: " + e.reason }
-
 // Progress returns a copy of the group's counters.
 func (m *Manager) Progress() Progress {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	return cloneProgress(m.prog)
 }
 
-// Run runs the pipeline from the saved stage, or from build for a new group, and returns when the
-// group is closed, held or stopped.
+// Run runs the pipeline from the saved stage, or from build for a new group, and returns when the group is closed, held or
+// stopped.
 func (m *Manager) Run(ctx context.Context) error {
 	m.runMu.Lock()
 	defer m.runMu.Unlock()
-
 	ctx, done := m.workCtx(ctx)
 	defer done()
-
 	return m.finish(ctx, m.drive(ctx))
 }
 
@@ -191,7 +173,6 @@ func (m *Manager) Resume(ctx context.Context, w Wake) error {
 	p := m.prog.Pause
 	if p == nil {
 		m.mu.Unlock()
-
 		return ErrNotPaused
 	}
 
@@ -217,7 +198,6 @@ func (m *Manager) Continue(ctx context.Context, a Answer) error {
 	esc := m.open
 	if esc == nil || esc.ID != a.Escalation {
 		m.mu.Unlock()
-
 		return ErrNoEscalation
 	}
 
@@ -229,7 +209,6 @@ func (m *Manager) Continue(ctx context.Context, a Answer) error {
 
 	if esc.Kind == EscScope {
 		m.fact("scope.answer", map[string]any{"action": a.Action, "approved": a.Approved})
-
 		if err := m.applyScopeAnswer(ctx, a); err != nil {
 			return m.finish(ctx, err)
 		}
@@ -245,18 +224,15 @@ func (m *Manager) Pause(ctx context.Context, link string, until time.Time) error
 	m.mu.Lock()
 	if m.prog.Pause != nil || m.pauseReq != nil {
 		m.mu.Unlock()
-
 		return nil
 	}
 
 	m.pauseReq = &pauseCmd{link: link, until: until}
 	running := m.running
 	m.mu.Unlock()
-
 	if running {
 		return nil
 	}
-
 	if err := m.checkpoint(ctx); err != nil && !errors.Is(err, ErrGroupPaused) {
 		return err
 	}
@@ -269,7 +245,6 @@ func (m *Manager) Stop(ctx context.Context, cause string) error {
 	m.mu.Lock()
 	if m.stopped {
 		m.mu.Unlock()
-
 		return nil
 	}
 
@@ -278,10 +253,8 @@ func (m *Manager) Stop(ctx context.Context, cause string) error {
 	m.mu.Unlock()
 	m.stopCancel(ErrStopped)
 	m.fact("group.stop", map[string]string{"cause": cause})
-
 	if cause == string(state.ReasonPauseTimeout) && !running {
-		if err := m.escalate(ctx, &blockErr{kind: EscBlocked, reason: cause}); err != nil &&
-			!errors.Is(err, ErrHeld) {
+		if err := m.escalate(ctx, &blockErr{kind: EscBlocked, reason: cause}); err != nil && !errors.Is(err, ErrHeld) {
 			return err
 		}
 	}
@@ -301,7 +274,6 @@ func (m *Manager) Nudge() {
 		if ls.agent == "builder" {
 			line = capNudgeBuilder
 		}
-
 		select {
 		case ls.inject <- line:
 		default:
@@ -316,7 +288,6 @@ func (m *Manager) CloseTaskGroup(ctx context.Context) error {
 		m.mu.Lock()
 		liveNow := len(m.live) > 0
 		m.mu.Unlock()
-
 		if liveNow {
 			m.stopCancel(ErrStopped)
 		}
@@ -333,7 +304,6 @@ func (m *Manager) CloseTaskGroup(ctx context.Context) error {
 		m.instances = map[string]string{}
 		m.prog.Stage = state.StageDone
 		m.mu.Unlock()
-
 		if m.c.Sandboxes != nil {
 			for _, id := range ids {
 				if err := m.c.Sandboxes.DestroySandboxInstance(ctx, id); err != nil {
@@ -343,7 +313,6 @@ func (m *Manager) CloseTaskGroup(ctx context.Context) error {
 		}
 
 		m.fact("group.closed", nil)
-
 		if m.rt != nil {
 			if err := m.report(ctx); err != nil {
 				errs = append(errs, err)
@@ -357,50 +326,11 @@ func (m *Manager) CloseTaskGroup(ctx context.Context) error {
 	return m.closeErr
 }
 
-// Runner returns the command runner bound to the sandbox instance of a role, for the role adapters
-// built before the Manager.
+// Runner returns the command runner bound to the sandbox instance of a role, for the role adapters built before the Manager.
 func (m *Manager) Runner(role string) agent.CommandRunner { return m.runner(role) }
 
 // Files returns the group's file list including what scope answers added.
 func (m *Manager) Files() []string { return m.effectiveFiles() }
-
-// now returns the current time.
-func (m *Manager) now() time.Time {
-	if m.c.Now != nil {
-		return m.c.Now()
-	}
-
-	return time.Now()
-}
-
-// fact queues one fact for the next state report.
-func (m *Manager) fact(subtype string, data any) {
-	f := Fact{Subtype: subtype, At: m.now()}
-
-	if data != nil {
-		if raw, err := json.Marshal(data); err == nil {
-			f.Data = raw
-		}
-	}
-
-	m.mu.Lock()
-	m.facts = append(m.facts, f)
-	m.mu.Unlock()
-}
-
-// report hands the counters and the queued facts to the Runtime Manager.
-func (m *Manager) report(ctx context.Context) error {
-	m.mu.Lock()
-	s := StateReport{Group: m.spec.Group, Progress: cloneProgress(m.prog), Facts: m.facts}
-	m.facts = nil
-	m.mu.Unlock()
-
-	if m.rt == nil {
-		return errors.New("the manager has no runtime to report to")
-	}
-
-	return m.rt.ReportState(ctx, s)
-}
 
 // setStage moves the group to a stage and reports it.
 func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
@@ -423,70 +353,54 @@ func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
 			},
 		)
 	default:
-		// The Cleanup Handler closes the group inside the publish, which sets the stage to done
-		// before cleanup is entered.
+		// The Cleanup Handler closes the group inside the publish, which sets the stage to done before cleanup is entered.
 		if prev == state.StageDone && st == state.StageCleanup {
 			prev = state.StageCommit
 		}
-
 		m.fact("stage.done", map[string]any{"stage": prev})
 	}
 
 	return m.report(ctx)
 }
 
-// nextID returns a unique identifier with a prefix.
-func (m *Manager) nextID(prefix string) string {
-	return prefix + "-" + strconv.FormatInt(m.ids.Add(1), 10)
-}
-
-// escalate hands an escalation to the Runtime Manager and holds the group.
-func (m *Manager) escalate(ctx context.Context, e *blockErr) error {
-	var raw json.RawMessage
-	if e.detail != nil {
-		raw, _ = json.Marshal(e.detail)
-	}
-
-	esc := Escalation{
-		ID:     m.nextID("esc"),
-		Group:  m.spec.Group,
-		Kind:   e.kind,
-		Reason: e.reason,
-		Detail: raw,
+// fact queues one fact for the next state report.
+func (m *Manager) fact(subtype string, data any) {
+	f := Fact{Subtype: subtype, At: m.now()}
+	if data != nil {
+		if raw, err := json.Marshal(data); err == nil {
+			f.Data = raw
+		}
 	}
 	m.mu.Lock()
-	m.open = &esc
+	m.facts = append(m.facts, f)
 	m.mu.Unlock()
+}
 
-	if err := m.report(ctx); err != nil {
-		return err
+// now returns the current time.
+func (m *Manager) now() time.Time {
+	if m.c.Now != nil {
+		return m.c.Now()
 	}
+	return time.Now()
+}
 
-	if err := m.rt.Escalate(ctx, esc); err != nil {
-		return fmt.Errorf("escalate %s: %w", e.reason, err)
+// report hands the counters and the queued facts to the Runtime Manager.
+func (m *Manager) report(ctx context.Context) error {
+	m.mu.Lock()
+	s := StateReport{Group: m.spec.Group, Progress: cloneProgress(m.prog), Facts: m.facts}
+	m.facts = nil
+	m.mu.Unlock()
+	if m.rt == nil {
+		return errors.New("the manager has no runtime to report to")
 	}
-
-	if e.kind == EscFailed {
-		return &failedErr{reason: e.reason}
-	}
-
-	return ErrHeld
+	return m.rt.ReportState(ctx, s)
 }
 
 // workCtx returns a context that ends when the caller's does or when a stop command arrives.
 func (m *Manager) workCtx(ctx context.Context) (context.Context, func()) {
 	c, cancel := context.WithCancelCause(ctx)
 	stop := context.AfterFunc(m.stopCtx, func() { cancel(ErrStopped) })
-
 	return c, func() { stop(); cancel(nil) }
-}
-
-// isStopped reports whether a stop command arrived.
-func (m *Manager) isStopped() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.stopped
 }
 
 // drive starts the group once and runs the stages until one ends the call.
@@ -509,7 +423,6 @@ func (m *Manager) drive(ctx context.Context) error {
 		if m.isStopped() || ctx.Err() != nil {
 			return ErrStopped
 		}
-
 		if err := m.checkpoint(ctx); err != nil {
 			return err
 		}
@@ -535,53 +448,31 @@ func (m *Manager) drive(ctx context.Context) error {
 	}
 }
 
-// finish turns the end of a call into its return value: an escalation holds the group, a stop
-// returns nil.
-func (m *Manager) finish(ctx context.Context, err error) error {
-	var be *blockErr
-	switch {
-	case err == nil:
-		return nil
-	case errors.As(err, &be):
-		return m.escalate(context.WithoutCancel(ctx), be)
-	case errors.Is(err, ErrStopped) || errors.Is(context.Cause(ctx), ErrStopped):
-		return nil
-	}
-
-	return err
-}
-
 // begin creates the worktree for a new group, records the .git pointer and reports the first state.
 func (m *Manager) begin(ctx context.Context) error {
 	m.mu.Lock()
 	done := m.begun
 	m.begun = true
 	m.mu.Unlock()
-
 	if done {
 		return nil
 	}
-
 	if m.rt == nil {
 		return errors.New("the manager has no runtime")
 	}
-
 	if _, err := os.Stat(m.spec.Lease.Worktree); err != nil {
 		if m.c.Git == nil {
 			return errors.New("the manager has no git to create the worktree")
 		}
-
 		if err := m.c.Git.AddWorktree(ctx, m.spec.Lease); err != nil {
 			return block("setup", map[string]string{"error": err.Error()})
 		}
 	}
-
 	if pr, ok := m.c.Git.(PointerRecorder); ok {
 		if err := pr.RecordPointer(m.spec.Lease); err != nil {
 			return block("contract", map[string]string{"error": err.Error()})
 		}
 	}
-
 	if m.spec.Saved == nil {
 		m.fact("ready", nil)
 	}
@@ -595,6 +486,13 @@ func (m *Manager) begin(ctx context.Context) error {
 	return m.report(ctx)
 }
 
+// isStopped reports whether a stop command arrived.
+func (m *Manager) isStopped() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopped
+}
+
 // checkpoint holds the group when a pause command arrived.
 func (m *Manager) checkpoint(ctx context.Context) error {
 	m.mu.Lock()
@@ -602,13 +500,10 @@ func (m *Manager) checkpoint(ctx context.Context) error {
 	req := m.pauseReq
 	if m.prog.Pause != nil {
 		m.mu.Unlock()
-
 		return ErrGroupPaused
 	}
-
 	if req == nil {
 		m.mu.Unlock()
-
 		return nil
 	}
 
@@ -626,7 +521,6 @@ func (m *Manager) checkpoint(ctx context.Context) error {
 
 	m.prog.Pause = &PauseState{Since: since, WaitUntil: until, WaitLink: req.link}
 	m.mu.Unlock()
-
 	if err := m.report(ctx); err != nil {
 		return err
 	}
@@ -644,27 +538,72 @@ func (m *Manager) awaitClose(ctx context.Context) error {
 	}
 }
 
-// instance returns the sandbox instance of a role, creating it and running the setup command on
-// first use.
+// finish turns the end of a call into its return value: an escalation holds the group, a stop returns nil.
+func (m *Manager) finish(ctx context.Context, err error) error {
+	var be *blockErr
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &be):
+		return m.escalate(context.WithoutCancel(ctx), be)
+	case errors.Is(err, ErrStopped) || errors.Is(context.Cause(ctx), ErrStopped):
+		return nil
+	}
+
+	return err
+}
+
+// escalate hands an escalation to the Runtime Manager and holds the group.
+func (m *Manager) escalate(ctx context.Context, e *blockErr) error {
+	var raw json.RawMessage
+	if e.detail != nil {
+		raw, _ = json.Marshal(e.detail)
+	}
+
+	esc := Escalation{
+		ID:     m.nextID("esc"),
+		Group:  m.spec.Group,
+		Kind:   e.kind,
+		Reason: e.reason,
+		Detail: raw,
+	}
+	m.mu.Lock()
+	m.open = &esc
+	m.mu.Unlock()
+	if err := m.report(ctx); err != nil {
+		return err
+	}
+	if err := m.rt.Escalate(ctx, esc); err != nil {
+		return fmt.Errorf("escalate %s: %w", e.reason, err)
+	}
+	if e.kind == EscFailed {
+		return &failedErr{reason: e.reason}
+	}
+
+	return ErrHeld
+}
+
+// nextID returns a unique identifier with a prefix.
+func (m *Manager) nextID(prefix string) string {
+	return prefix + "-" + strconv.FormatInt(m.ids.Add(1), 10)
+}
+
+// instance returns the sandbox instance of a role, creating it and running the setup command on first use.
 func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 	m.mu.Lock()
 	if id := m.instances[role]; id != "" {
 		m.mu.Unlock()
-
 		return id, nil
 	}
 	m.mu.Unlock()
-
 	if m.c.Sandboxes == nil {
 		return "", block("setup", map[string]string{"error": "no sandbox manager is set"})
 	}
-
 	if m.tmp == "" {
 		dir, err := os.MkdirTemp(m.c.Plan.Temp, "komodo-sandbox-")
 		if err != nil {
 			return "", fmt.Errorf("make the sandbox folder: %w", err)
 		}
-
 		m.tmp = dir
 	}
 
@@ -723,10 +662,8 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 			if err != nil {
 				detail["error"] = err.Error()
 			}
-
 			return "", block("setup", detail)
 		}
-
 		if err := m.c.Sandboxes.EndSetup(ctx, inst.ID); err != nil {
 			return "", block("setup", map[string]string{"error": err.Error(), "role": role})
 		}
@@ -736,12 +673,7 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 }
 
 // runIn runs one command in an instance and returns its capped output and exit code.
-func (m *Manager) runIn(
-	ctx context.Context,
-	id string,
-	argv []string,
-	logDir string,
-) (string, int, error) {
+func (m *Manager) runIn(ctx context.Context, id string, argv []string, logDir string) (string, int, error) {
 	if g, err := m.scopeGuard(); err == nil {
 		if err := m.c.Sandboxes.SetMasked(id, g.SecretFiles()); err != nil {
 			return "", -1, err
@@ -753,11 +685,7 @@ func (m *Manager) runIn(
 		return "", -1, err
 	}
 
-	res := runConfined(
-		ctx,
-		cmd,
-		filepath.Join(logDir, "run-"+strconv.FormatInt(m.ids.Add(1), 10)+".log"),
-	)
+	res := runConfined(ctx, cmd, filepath.Join(logDir, "run-"+strconv.FormatInt(m.ids.Add(1), 10)+".log"))
 	if res.StartErr != nil {
 		return "", -1, res.StartErr
 	}
@@ -765,14 +693,12 @@ func (m *Manager) runIn(
 	return res.Reply.Text, res.Exit, nil
 }
 
-// runner returns the command runner bound to the instance of a role; a class name stands for its
-// command.
+// runner returns the command runner bound to the instance of a role; a class name stands for its command.
 func (m *Manager) runner(role string) agent.CommandRunner {
 	return func(ctx context.Context, command string) (int, string, error) {
 		m.mu.Lock()
 		id := m.instances[role]
 		m.mu.Unlock()
-
 		if id == "" {
 			return -1, "", fmt.Errorf("the %s has no sandbox instance", role)
 		}
@@ -781,19 +707,16 @@ func (m *Manager) runner(role string) agent.CommandRunner {
 		if !ok {
 			argv = []string{"sh", "-c", command}
 		}
-
 		if len(argv) == 0 {
 			return -1, "", errors.New("the command is empty")
 		}
 
 		out, exit, err := m.runIn(ctx, id, argv, filepath.Join(m.sessionsRoot(), "runs"))
-
 		return exit, out, err
 	}
 }
 
-// sessionsRoot returns the folder that holds the session folders, making a temporary one when none
-// is set.
+// sessionsRoot returns the folder that holds the session folders, making a temporary one when none is set.
 func (m *Manager) sessionsRoot() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -803,12 +726,20 @@ func (m *Manager) sessionsRoot() string {
 		if err != nil {
 			return os.TempDir()
 		}
-
 		m.c.SessionsDir = dir
 	}
 
 	return m.c.SessionsDir
 }
+
+// scopeWait is a builder's open scope request.
+type scopeWait struct {
+	task  string
+	paths []string
+}
+
+// ErrStopped is returned inside the pipeline when a stop command ended the work; Run turns it into a nil return.
+var ErrStopped = errors.New("the group was stopped")
 
 // cloneProgress copies a Progress so a report never shares its maps and slices with the live one.
 func cloneProgress(p Progress) Progress {
@@ -821,28 +752,22 @@ func cloneProgress(p Progress) Progress {
 		for k, v := range p.Refusals {
 			r[k] = v
 		}
-
 		p.Refusals = r
 	}
-
 	if p.Handles != nil {
 		h := make(map[string]llm.ResumeHandle, len(p.Handles))
 		for k, v := range p.Handles {
 			h[k] = v
 		}
-
 		p.Handles = h
 	}
-
 	if p.Pause != nil {
 		q := *p.Pause
-
 		q.Owed = slices.Clone(q.Owed)
 		if q.Handle != nil {
 			hh := *q.Handle
 			q.Handle = &hh
 		}
-
 		p.Pause = &q
 	}
 

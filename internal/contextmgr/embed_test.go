@@ -62,7 +62,14 @@ func buildIndex(t *testing.T, root string) (indexJSON, rulesJSON []byte) {
 			t.Fatalf("%s: %v", d.Name(), err)
 		}
 		sum := sha256.Sum256(raw)
-		idx.Skills = append(idx.Skills, IndexEntry{Name: fm.Name, Description: fm.Description, Globs: fm.Globs, Markers: fm.Markers, Sections: fm.Sections, SHA256: hex.EncodeToString(sum[:])})
+		idx.Skills = append(idx.Skills, IndexEntry{
+			Name:        fm.Name,
+			Description: fm.Description,
+			Globs:       fm.Globs,
+			Markers:     fm.Markers,
+			Sections:    fm.Sections,
+			SHA256:      hex.EncodeToString(sum[:]),
+		})
 		rules = append(rules, CompileRules(fm.Name, string(raw))...)
 	}
 	sort.Slice(idx.Skills, func(i, j int) bool { return idx.Skills[i].Name < idx.Skills[j].Name })
@@ -193,7 +200,8 @@ func TestSlotTableMatchesRegistry(t *testing.T) {
 		sort.Strings(opt)
 		sort.Strings(r.Slots.Required)
 		sort.Strings(r.Slots.Optional)
-		if strings.Join(req, ",") != strings.Join(r.Slots.Required, ",") || strings.Join(opt, ",") != strings.Join(r.Slots.Optional, ",") {
+		if strings.Join(req, ",") != strings.Join(r.Slots.Required, ",") ||
+			strings.Join(opt, ",") != strings.Join(r.Slots.Optional, ",") {
 			t.Errorf("%s: slot row differs from agent.json: %v %v", a, req, opt)
 		}
 	}

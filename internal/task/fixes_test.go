@@ -126,9 +126,11 @@ func TestHideSecretDiffsFailsClosed(t *testing.T) {
 		})
 	}
 	t.Run("log keeps the commit lines after a hidden section", func(t *testing.T) {
-		patch := "commit aaa\n\n    first\n\ndiff --git a/.env b/.env\n+TOKEN=hunter2\ncommit bbb\n\n    second message\n\ndiff --git a/a.go b/a.go\n+func A() {}\n"
+		patch := "commit aaa\n\n    first\n\ndiff --git a/.env b/.env\n+TOKEN=hunter2\ncommit bbb\n\n    second " +
+			"message\n\ndiff --git a/a.go b/a.go\n+func A() {}\n"
 		out := hideSecretDiffs(patch, g)
-		if strings.Contains(out, "hunter2") || !strings.Contains(out, "second message") || !strings.Contains(out, "+func A() {}") || !strings.Contains(out, "commit bbb") {
+		if strings.Contains(out, "hunter2") || !strings.Contains(out, "second message") ||
+			!strings.Contains(out, "+func A() {}") || !strings.Contains(out, "commit bbb") {
 			t.Fatalf("out:\n%s", out)
 		}
 	})

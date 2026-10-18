@@ -25,12 +25,11 @@ type Reader interface {
 	Scorecard(ctx context.Context, window time.Duration) (Scorecard, error)
 }
 
-// fileReader is the file-backed Reader over one repository's metrics folder; it rebuilds missing
-// figures from the bus store.
-type fileReader struct{ dir string }
-
 // NewReader returns a Reader over the metrics folder of one repository.
 func NewReader(dir string) Reader { return &fileReader{dir: dir} }
+
+// fileReader is the file-backed Reader over one repository's metrics folder; it rebuilds missing figures from the bus store.
+type fileReader struct{ dir string }
 
 // Runs returns the figures of every run, oldest first.
 func (r *fileReader) Runs(ctx context.Context) ([]RunMetrics, error) {
@@ -75,32 +74,9 @@ func (r *fileReader) Scorecard(ctx context.Context, window time.Duration) (Score
 	return scorecard(ctx, r.dir, window, now())
 }
 
-// rebuildFigures recomputes the figures of a folder from the run logs in the bus's event store
-// beside it.
-func rebuildFigures(ctx context.Context, dir string) (*figures, error) {
-	f := newFigures()
-	f.dir = dir
-
-	err := bus.ReadFolder(ctx, eventsDirOf(dir), func(_ bus.ID, l bus.ReplayLog) error {
-		for _, e := range l.Events {
-			f.apply(e)
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return f, nil
-}
-
-// readFigures reads groups.json and runs.json; a missing file reads as empty and an unreadable one
-// is rebuilt in memory from the bus store.
-func readFigures(
-	ctx context.Context,
-	dir string,
-) (map[bus.ID]map[bus.ID]GroupMetrics, map[bus.ID]RunMetrics, error) {
+// readFigures reads groups.json and runs.json; a missing file reads as empty and an unreadable one is rebuilt in memory from
+// the bus store.
+func readFigures(ctx context.Context, dir string) (map[bus.ID]map[bus.ID]GroupMetrics, map[bus.ID]RunMetrics, error) {
 	groups, runs := map[bus.ID]map[bus.ID]GroupMetrics{}, map[bus.ID]RunMetrics{}
 	e1 := readJSON(filepath.Join(dir, "groups.json"), &groups)
 
@@ -115,7 +91,6 @@ func readFigures(
 	}
 
 	g, r := f.snapshot()
-
 	return g, r, nil
 }
 
@@ -125,12 +100,28 @@ func readJSON(path string, v any) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-
 	if err != nil {
 		return err
 	}
-
 	return json.Unmarshal(b, v)
+}
+
+// rebuildFigures recomputes the figures of a folder from the run logs in the bus's event store beside it.
+func rebuildFigures(ctx context.Context, dir string) (*figures, error) {
+	f := newFigures()
+	f.dir = dir
+
+	err := bus.ReadFolder(ctx, eventsDirOf(dir), func(_ bus.ID, l bus.ReplayLog) error {
+		for _, e := range l.Events {
+			f.apply(e)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return f, nil
 }
 
 // readSessions reads sessions.jsonl, skipping lines that do not parse.
@@ -139,7 +130,6 @@ func readSessions(path string) ([]SessionRecord, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-
 	if err != nil {
 		return nil, err
 	}
@@ -157,12 +147,10 @@ func readSessions(path string) ([]SessionRecord, error) {
 				out = append(out, r)
 			}
 		}
-
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return out, nil
 			}
-
 			return nil, err
 		}
 	}

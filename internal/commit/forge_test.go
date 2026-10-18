@@ -19,7 +19,14 @@ func TestForgeOpenFindUpdate(t *testing.T) {
 		t.Fatalf("open = %+v, %v", pr, err)
 	}
 	calls := strings.Join(fg.calls(), "\n")
-	for _, want := range []string{"label create komodo --force", "pr create", "--base main", "--head komodo/ep-1", "--title ep-1: 2 task groups", "--label komodo"} {
+	for _, want := range []string{
+		"label create komodo --force",
+		"pr create",
+		"--base main",
+		"--head komodo/ep-1",
+		"--title ep-1: 2 task groups",
+		"--label komodo",
+	} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("calls lack %q:\n%s", want, calls)
 		}

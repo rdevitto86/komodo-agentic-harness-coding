@@ -14,7 +14,10 @@ const sessionEndLine = `{
   "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
   "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "time": "2026-10-14T15:31:12Z",
-  "data": {"stage": "build", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "reason": "schema_fail", "agent": "builder", "task": "tsk-add-lock", "link": "claude-cli", "tokens": 0, "wall_s": 1140}
+  "data": {
+    "stage": "build", "session": "0192e4c6-1d40-7b85-a2f3-8c6e1d0b9a47", "reason": "schema_fail", "agent": "builder",
+    "task": "tsk-add-lock", "link": "claude-cli", "tokens": 0, "wall_s": 1140
+  }
 }`
 
 const runStartLine = `{
@@ -36,7 +39,8 @@ func TestDecodeSessionEndExample(t *testing.T) {
 	if !ok {
 		t.Fatalf("data is %T, want *SessionEnd", e.Data)
 	}
-	if e.Type != TypeRunStatus || e.Subtype != "session.end" || se.Agent != "builder" || se.Reason != "schema_fail" || se.WallS != 1140 || se.Stage != "build" {
+	if e.Type != TypeRunStatus || e.Subtype != "session.end" || se.Agent != "builder" || se.Reason != "schema_fail" ||
+		se.WallS != 1140 || se.Stage != "build" {
 		t.Fatalf("decoded wrong: %+v %+v", e, se)
 	}
 	if want := time.Date(2026, 10, 14, 15, 31, 12, 0, time.UTC); !e.Time.Equal(want) {
@@ -108,7 +112,14 @@ func TestEncodeOmitsZeroSchedule(t *testing.T) {
 func TestRoundTripEveryRegisteredPair(t *testing.T) {
 	for _, k := range registeredKeys() {
 		newData, _ := lookup(k)
-		in := Event{Type: k.Type, Subtype: k.Subtype, Run: "r", Group: "g", Time: time.Date(2026, 10, 14, 1, 2, 3, 0, time.UTC), Data: newData()}
+		in := Event{
+			Type:    k.Type,
+			Subtype: k.Subtype,
+			Run:     "r",
+			Group:   "g",
+			Time:    time.Date(2026, 10, 14, 1, 2, 3, 0, time.UTC),
+			Data:    newData(),
+		}
 		b, err := json.Marshal(in)
 		if err != nil {
 			t.Fatalf("%v: %v", k, err)

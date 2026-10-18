@@ -50,6 +50,5 @@ func (m *Manager) writeAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create folder for %s: %w", filepath.Base(path), err)
 	}
-
 	return core.WriteFileAtomic(path, data, 0o644)
 }

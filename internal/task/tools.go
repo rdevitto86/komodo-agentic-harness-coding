@@ -32,8 +32,7 @@ type Confiner interface {
 
 // GitReader is the host git as the diff and git_read tools use it.
 type GitReader interface {
-	// Diff returns the unified diff of the group's change against its base commit, for the paths
-	// given or for all.
+	// Diff returns the unified diff of the group's change against its base commit, for the paths given or for all.
 	Diff(ctx context.Context, paths []string) (string, error)
 	// ReadOnly runs log, show, blame or status and returns its output.
 	ReadOnly(ctx context.Context, command string, args []string) (string, error)
@@ -78,6 +77,14 @@ type Env struct {
 	Now func() time.Time
 }
 
+// now returns the current time.
+func (e *Env) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
+}
+
 // toolCall is what one tool function receives besides its arguments.
 type toolCall struct {
 	env   *Env
@@ -93,8 +100,7 @@ type tool struct {
 	run func(ctx context.Context, tc *toolCall, args json.RawMessage) Reply
 }
 
-// outsideTool is one tool of an outside server; it returns the reply text and the outcome (ok,
-// error or timeout).
+// outsideTool is one tool of an outside server; it returns the reply text and the outcome (ok, error or timeout).
 type outsideTool struct {
 	def llm.ToolDef
 	run func(ctx context.Context, args json.RawMessage) (string, string)
@@ -107,6 +113,37 @@ type Registry struct {
 	outside map[string]outsideTool
 }
 
+// NewRegistry registers the built-in tools over env.
+func NewRegistry(env *Env) *Registry {
+	r := &Registry{env: env, tools: map[string]tool{}, outside: map[string]outsideTool{}}
+	for _, t := range builtinTools() {
+		r.tools[t.def.Name] = t
+	}
+	return r
+}
+
+// AddOutside registers one tool of an outside server under "<server>.<tool>".
+func (r *Registry) AddOutside(def llm.ToolDef, run func(ctx context.Context, args json.RawMessage) (string, string)) {
+	r.outside[def.Name] = outsideTool{def: def, run: run}
+}
+
+// Bind attaches the permitted tools to one session and fails on a permitted tool that is not registered.
+func (r *Registry) Bind(permitted []string, g *Guard) (*Bound, error) {
+	if g == nil {
+		return nil, fmt.Errorf("bind tools: no guard")
+	}
+
+	for _, n := range permitted {
+		_, built := r.tools[n]
+		_, out := r.outside[n]
+		if !built && !out {
+			return nil, fmt.Errorf("the permitted tool %q is not registered", n)
+		}
+	}
+
+	return &Bound{reg: r, names: slices.Clone(permitted), guard: g}, nil
+}
+
 // Bound is the registry narrowed to one session's tools and guard.
 type Bound struct {
 	reg     *Registry
@@ -117,72 +154,6 @@ type Bound struct {
 	logMu   sync.Mutex
 }
 
-// ToolLine is one line of tools.jsonl.
-type ToolLine struct {
-	Kind string `json:"kind"` // start, end, denied or finding
-	// the tool call identifier, shared by its start and end lines
-	Call    string    `json:"call"`
-	Tool    string    `json:"tool"`              // the tool name, such as edit
-	At      time.Time `json:"at"`                // when the tool server saw it, whole seconds
-	Outcome string    `json:"outcome,omitempty"` // end only: ok, error or timeout
-	// denied: the tool, the row, the target and the count; finding: rule, file, line, quote, note
-	Data json.RawMessage `json:"data,omitempty"`
-}
-
-// Bound satisfies the host the model client's tool loop calls, and describes its tools to it.
-var (
-	_ llm.ToolHost    = (*Bound)(nil)
-	_ llm.ToolDefiner = (*Bound)(nil)
-)
-
-var _ Confiner = (*sandbox.Manager)(nil)
-
-// NewRegistry registers the built-in tools over env.
-func NewRegistry(env *Env) *Registry {
-	r := &Registry{env: env, tools: map[string]tool{}, outside: map[string]outsideTool{}}
-	for _, t := range builtinTools() {
-		r.tools[t.def.Name] = t
-	}
-
-	return r
-}
-
-// now returns the current time.
-func (e *Env) now() time.Time {
-	if e.Now != nil {
-		return e.Now()
-	}
-
-	return time.Now()
-}
-
-// AddOutside registers one tool of an outside server under "<server>.<tool>".
-func (r *Registry) AddOutside(
-	def llm.ToolDef,
-	run func(ctx context.Context, args json.RawMessage) (string, string),
-) {
-	r.outside[def.Name] = outsideTool{def: def, run: run}
-}
-
-// Bind attaches the permitted tools to one session and fails on a permitted tool that is not
-// registered.
-func (r *Registry) Bind(permitted []string, g *Guard) (*Bound, error) {
-	if g == nil {
-		return nil, fmt.Errorf("bind tools: no guard")
-	}
-
-	for _, n := range permitted {
-		_, built := r.tools[n]
-
-		_, out := r.outside[n]
-		if !built && !out {
-			return nil, fmt.Errorf("the permitted tool %q is not registered", n)
-		}
-	}
-
-	return &Bound{reg: r, names: slices.Clone(permitted), guard: g}, nil
-}
-
 // Advertised returns the names of the tools the session may see.
 func (b *Bound) Advertised() []string { return slices.Clone(b.names) }
 
@@ -191,11 +162,9 @@ func (b *Bound) Definition(name string) (llm.ToolDef, bool) {
 	if !slices.Contains(b.names, name) {
 		return llm.ToolDef{}, false
 	}
-
 	if t, ok := b.reg.tools[name]; ok {
 		return t.def, true
 	}
-
 	if o, ok := b.reg.outside[name]; ok {
 		return o.def, true
 	}
@@ -214,17 +183,13 @@ func (b *Bound) Dispatch(ctx context.Context, name string, args json.RawMessage)
 
 	v := b.guard.Check(Call{Tool: name, Args: args})
 	if !v.Allowed {
-		data, _ := json.Marshal(
-			map[string]any{"tool": name, "row": v.Row, "target": v.Target, "count": v.Count},
-		)
+		data, _ := json.Marshal(map[string]any{"tool": name, "row": v.Row, "target": v.Target, "count": v.Count})
 		b.line(ToolLine{Kind: "denied", Call: id, Tool: name, Data: data})
 		b.fact(Fact{Subtype: "tool.denied", At: env.now(), Data: data})
-
 		text := v.Message + " " + v.Alternative
 		if v.EndSession {
 			text += " This session is over."
 		}
-
 		return Reply{Text: text}
 	}
 
@@ -232,11 +197,8 @@ func (b *Bound) Dispatch(ctx context.Context, name string, args json.RawMessage)
 
 	defer func() {
 		if r := recover(); r != nil {
-			reply, outcome = Reply{
-				Text: fmt.Sprintf("error: the tool failed unexpectedly: %v", r),
-			}, "error"
+			reply, outcome = Reply{Text: fmt.Sprintf("error: the tool failed unexpectedly: %v", r)}, "error"
 		}
-
 		if strings.HasPrefix(reply.Text, timeoutLine) {
 			outcome = "timeout"
 		} else if strings.HasPrefix(reply.Text, "error:") {
@@ -250,14 +212,12 @@ func (b *Bound) Dispatch(ctx context.Context, name string, args json.RawMessage)
 	if t, ok := b.reg.tools[name]; ok {
 		return t.run(ctx, &toolCall{env: env, guard: b.guard, bound: b, id: id, res: v.res}, args)
 	}
-
 	if o, ok := b.reg.outside[name]; ok {
 		text, res := o.run(ctx, args)
 		outcome = res
 		server, tn, _ := strings.Cut(name, ".")
 		data, _ := json.Marshal(map[string]string{"server": server, "tool": tn, "outcome": res})
 		b.fact(Fact{Subtype: "tool.outside", At: env.now(), Data: data})
-
 		return Reply{Text: text}
 	}
 
@@ -272,7 +232,6 @@ func (b *Bound) Close() error {
 			first = err
 		}
 	}
-
 	return first
 }
 
@@ -285,7 +244,6 @@ func (b *Bound) cap(id, name string, r Reply) Reply {
 	dir := b.reg.env.Dir
 	if dir == "" {
 		r.Text = capText(r.Text, "(not kept)")
-
 		return r
 	}
 
@@ -316,11 +274,7 @@ func (b *Bound) line(l ToolLine) {
 	b.logMu.Lock()
 	defer b.logMu.Unlock()
 
-	f, err := os.OpenFile(
-		filepath.Join(env.Dir, "tools.jsonl"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
-		0o644,
-	)
+	f, err := os.OpenFile(filepath.Join(env.Dir, "tools.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
@@ -337,20 +291,33 @@ func (b *Bound) fact(f Fact) {
 	}
 }
 
-// KnownTools returns the names of the built-in tools, the engine hands it to the Configuration
-// Manager as the known tools.
+// ToolLine is one line of tools.jsonl.
+type ToolLine struct {
+	Kind string `json:"kind"` // start, end, denied or finding
+	// the tool call identifier, shared by its start and end lines
+	Call    string    `json:"call"`
+	Tool    string    `json:"tool"`              // the tool name, such as edit
+	At      time.Time `json:"at"`                // when the tool server saw it, whole seconds
+	Outcome string    `json:"outcome,omitempty"` // end only: ok, error or timeout
+	// denied: the tool, the row, the target and the count; finding: rule, file, line, quote, note
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
+// Bound satisfies the host the model client's tool loop calls, and describes its tools to it.
+var (
+	_ llm.ToolHost    = (*Bound)(nil)
+	_ llm.ToolDefiner = (*Bound)(nil)
+)
+
+var _ Confiner = (*sandbox.Manager)(nil)
+
+// KnownTools returns the names of the built-in tools, the engine hands it to the Configuration Manager as the known tools.
 func KnownTools() map[string]bool {
 	out := map[string]bool{}
 	for _, t := range builtinTools() {
 		out[t.def.Name] = true
 	}
-
 	return out
-}
-
-// def builds a tool definition from a schema written as JSON text.
-func def(name, desc, schema string) llm.ToolDef {
-	return llm.ToolDef{Name: name, Description: desc, InputSchema: json.RawMessage(schema)}
 }
 
 // builtinTools lists the tools every session can be given.
@@ -471,4 +438,9 @@ func builtinTools() []tool {
 			toolLintBacklog,
 		},
 	}
+}
+
+// def builds a tool definition from a schema written as JSON text.
+func def(name, desc, schema string) llm.ToolDef {
+	return llm.ToolDef{Name: name, Description: desc, InputSchema: json.RawMessage(schema)}
 }

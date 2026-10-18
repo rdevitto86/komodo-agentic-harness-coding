@@ -15,6 +15,8 @@ var _ func(*task.Manager, context.Context, task.Channels) error = (*task.Manager
 // realTasks starts the real Task Manager behind the engine's TaskGroups interface.
 type realTasks struct{}
 
+var _ TaskGroups = realTasks{}
+
 // Start builds a real task.Manager, serves it on a goroutine and returns the engine's end of its channels.
 func (realTasks) Start(ctx context.Context, spec GroupSpec, h cache.Handle) (Channels, error) {
 	tasks := make([]task.TaskSpec, 0, len(spec.Tasks))
@@ -33,8 +35,6 @@ func (realTasks) Start(ctx context.Context, spec GroupSpec, h cache.Handle) (Cha
 	go func() { _ = m.Serve(ctx, task.Channels{Commands: cmds, Replies: replies}) }()
 	return Channels{Commands: cmds, Replies: replies}, nil
 }
-
-var _ TaskGroups = realTasks{}
 
 func TestRealTaskManagerEndsAndClosesItsReplyChannelOnAStopCommand(t *testing.T) {
 	spec := GroupSpec{ID: "g1", Label: "tg-1", Run: "run-1", Tasks: []string{"t1"}}

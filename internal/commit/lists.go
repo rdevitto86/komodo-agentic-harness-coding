@@ -99,10 +99,7 @@ func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 
 // listsWorktree returns a worktree with the epic branch checked out and a function that releases
 // it: the landing worktree when it exists, which stays, otherwise a temporary one that is removed.
-func (h *Handler) listsWorktree(
-	ctx context.Context,
-	common, epic, remote string,
-) (string, func(), error) {
+func (h *Handler) listsWorktree(ctx context.Context, common, epic, remote string) (string, func(), error) {
 	if path, ok, err := h.Git.WorktreeOf(ctx, common, epic); err != nil {
 		return "", nil, gitFail(err)
 	} else if ok {
@@ -121,7 +118,6 @@ func (h *Handler) listsWorktree(
 	wt := filepath.Join(tmp, "wt")
 	if err := h.Git.AddWorktree(ctx, common, wt, epic, remote+"/"+epic); err != nil {
 		_ = os.RemoveAll(tmp)
-
 		return "", nil, gitFail(err)
 	}
 
@@ -173,7 +169,6 @@ func copyLists(src, dest string) error {
 			if strings.HasPrefix(d.Name(), ".plan-") {
 				return fs.SkipDir
 			}
-
 			return os.MkdirAll(filepath.Join(dest, rel), 0o755)
 		}
 

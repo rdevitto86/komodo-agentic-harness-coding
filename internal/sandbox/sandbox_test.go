@@ -75,7 +75,8 @@ func TestTesterFailsWhenBothBackendsFail(t *testing.T) {
 	d.checkErr = errors.New("docker is not installed")
 	fb.checkErr = errors.New("user namespaces are blocked")
 	_, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleTester))
-	if err == nil || !strings.Contains(err.Error(), "user namespaces are blocked") || !strings.Contains(err.Error(), "docker is not installed") {
+	if err == nil || !strings.Contains(err.Error(), "user namespaces are blocked") ||
+		!strings.Contains(err.Error(), "docker is not installed") {
 		t.Fatalf("error must name both failures: %v", err)
 	}
 }
@@ -224,7 +225,8 @@ func TestEndSetupWorksWithoutACutter(t *testing.T) {
 	if err := m.EndSetup(context.Background(), inst.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Command(context.Background(), inst.ID, Command{Argv: []string{"true"}}); err != nil || f.commanded[0].Network {
+	if _, err := m.Command(context.Background(), inst.ID, Command{Argv: []string{"true"}}); err != nil ||
+		f.commanded[0].Network {
 		t.Fatalf("err %v", err)
 	}
 	if len(f.cut) != 0 {

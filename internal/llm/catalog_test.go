@@ -14,7 +14,11 @@ func TestCatalogLoads(t *testing.T) {
 	if len(c.Entries()) == 0 {
 		t.Fatal("no entries")
 	}
-	for w, want := range map[Weight]string{Heavy: "claude-opus-5-5", Standard: "claude-sonnet-5-5", Light: "claude-haiku-5-5"} {
+	for w, want := range map[Weight]string{
+		Heavy:    "claude-opus-5-5",
+		Standard: "claude-sonnet-5-5",
+		Light:    "claude-haiku-5-5",
+	} {
 		e, ok := c.Default(w)
 		if !ok || e.ID != want || e.Tier != "latest" {
 			t.Errorf("Default(%s) = %+v %v, want %s", w, e, ok, want)
@@ -58,7 +62,9 @@ func TestCatalogNoAliasesAndLocalFree(t *testing.T) {
 }
 
 func TestLocalModelNearestWeight(t *testing.T) {
-	c, err := ParseCatalog([]byte(`[{"id":"only-light","weight":"light","tier":"local","price_in_usd_per_m":0,"price_out_usd_per_m":0}]`))
+	c, err := ParseCatalog(
+		[]byte(`[{"id":"only-light","weight":"light","tier":"local","price_in_usd_per_m":0,"price_out_usd_per_m":0}]`),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

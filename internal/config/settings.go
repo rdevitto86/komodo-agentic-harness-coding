@@ -68,7 +68,6 @@ func (e ReadError) Error() string {
 			e.Err,
 		)
 	}
-
 	return fmt.Sprintf("read %s: %v", e.File, e.Err)
 }
 
@@ -88,7 +87,6 @@ func (m *Manager) resolve() resolved {
 			readErr: err,
 		}
 	}
-
 	return resolved{ms: ms, eff: eff}
 }
 
@@ -96,15 +94,14 @@ func (m *Manager) resolve() resolved {
 // It returns what the readable files hold, their effective settings and the first read failure.
 func (m *Manager) readMachine() (machine, Effective, error) {
 	ms := emptyMachine()
-
 	var first error
-
 	fail := func(file string, err error) {
 		ms.bad[file] = true
 		if first == nil {
 			first = ReadError{File: file, Err: err}
 		}
 	}
+
 	if b, err := readIfExists(filepath.Join(m.home, "settings.json")); err != nil {
 		fail("settings.json", err)
 	} else if b != nil {
@@ -156,7 +153,6 @@ func (m *Manager) decodeFlat(b []byte) (map[string]any, error) {
 	for k := range raw {
 		keys = append(keys, k)
 	}
-
 	sort.Strings(keys)
 
 	out := make(map[string]any, len(raw))
@@ -171,7 +167,6 @@ func (m *Manager) decodeFlat(b []byte) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		out[k] = v
 	}
 
@@ -235,7 +230,6 @@ func (m *Manager) item(key string, r resolved) (Item, error) {
 	} else {
 		it.Value, it.Source = spec.Default, LayerBuiltIn
 	}
-
 	if it.Limit == nil && spec.MaxKey != "" {
 		it.Limit = r.eff.Flat[spec.MaxKey].Value
 	}
@@ -260,12 +254,10 @@ func (m *Manager) agentItem(it Item, role, field string, r resolved) (Item, erro
 	it.Source = LayerBuiltIn
 	if field == "model" {
 		it.Default = "weight:" + string(m.roles[role].Weight)
-
 		it.Value = it.Default
 		if v := overrideValue(over, field); v != nil {
 			it.Value, it.Source = v, LayerMachine
 		}
-
 		return it, nil
 	}
 
@@ -284,7 +276,11 @@ func (m *Manager) agentItem(it Item, role, field string, r resolved) (Item, erro
 
 // emptyMachine returns a machine state with no values.
 func emptyMachine() machine {
-	return machine{flat: map[string]any{}, over: map[string]AgentOverride{}, bad: map[string]bool{}}
+	return machine{
+		flat: map[string]any{},
+		over: map[string]AgentOverride{},
+		bad:  map[string]bool{},
+	}
 }
 
 // readIfExists returns a file's bytes, or nil when it does not exist.
@@ -293,11 +289,9 @@ func readIfExists(path string) ([]byte, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-
 	if err == nil && b == nil {
 		b = []byte{}
 	}
-
 	return b, err
 }
 
@@ -312,12 +306,12 @@ func hashEffective(e Effective) (string, error) {
 		Flat   map[string]any
 		Agents map[string]Agent
 	}{flat, e.Agents})
+
 	if err != nil {
 		return "", fmt.Errorf("encode settings for hashing: %w", err)
 	}
 
 	sum := sha256.Sum256(b)
-
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -329,6 +323,5 @@ func limitField(l Limits, field string) any {
 	case "session_idle_min":
 		return l.IdleMin
 	}
-
 	return l.Retries
 }

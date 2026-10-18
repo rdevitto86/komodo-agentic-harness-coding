@@ -38,7 +38,6 @@ func ParsePlannerResult(raw []byte) (PlannerResult, error) {
 	if err := core.DecodeStrict(raw, &r); err != nil {
 		return PlannerResult{}, fmt.Errorf("decode planner result: %w", err)
 	}
-
 	if len(r.Files) == 0 {
 		return PlannerResult{}, errors.New("planner result has no files")
 	}

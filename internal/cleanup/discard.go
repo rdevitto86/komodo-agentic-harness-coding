@@ -6,7 +6,8 @@ import (
 	"fmt"
 )
 
-// Discard drops one group's resources for good, including unpublished work; the worktree and its files are deleted unless KeepWorktree is set.
+// Discard drops one group's resources for good, including unpublished work;
+// the worktree and its files are deleted unless KeepWorktree is set.
 func (h *Handler) Discard(ctx context.Context, group string, o DiscardOptions) (Report, error) {
 	rep := Report{Group: group}
 	if h.Task == nil {
@@ -60,7 +61,8 @@ func (h *Handler) Discard(ctx context.Context, group string, o DiscardOptions) (
 	return rep, nil
 }
 
-// discardBranch deletes the group's branch whether or not the remote holds its tip; with no lease record it cannot name the branch.
+// discardBranch deletes the group's branch whether or not the remote holds its tip;
+// with no lease record it cannot name the branch.
 func (h *Handler) discardBranch(r *run, branch string, have bool) {
 	if !have || branch == "" {
 		r.kept(KindBranch, "", "no lease record names the group's branch")

@@ -11,41 +11,6 @@ import (
 	"testing"
 )
 
-// bareGoStatements returns the position of every go statement in src that does not defer a Recover first.
-func bareGoStatements(t *testing.T, name string, src any) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, name, src, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", name, err)
-	}
-	var bare []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		g, ok := n.(*ast.GoStmt)
-		if !ok {
-			return true
-		}
-		if lit, ok := g.Call.Fun.(*ast.FuncLit); !ok || !defersRecover(lit.Body) {
-			bare = append(bare, fset.Position(g.Pos()).String())
-		}
-		return true
-	})
-	return bare
-}
-
-// defersRecover reports whether the first statement of body defers a call to a method named Recover.
-func defersRecover(body *ast.BlockStmt) bool {
-	if len(body.List) == 0 {
-		return false
-	}
-	d, ok := body.List[0].(*ast.DeferStmt)
-	if !ok {
-		return false
-	}
-	sel, ok := d.Call.Fun.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "Recover"
-}
-
 // TestBareGoStatementDetector checks the scanner flags a bare go statement and accepts a deferred Recover.
 func TestBareGoStatementDetector(t *testing.T) {
 	bare := "package x\nfunc f() { go g() }\nfunc g() {}\n"
@@ -105,4 +70,39 @@ func TestNoBareGoStatements(t *testing.T) {
 	if len(bare) > 0 {
 		t.Fatalf("go statements without Go or a deferred Recover:\n%s", strings.Join(bare, "\n"))
 	}
+}
+
+// bareGoStatements returns the position of every go statement in src that does not defer a Recover first.
+func bareGoStatements(t *testing.T, name string, src any) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	var bare []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		g, ok := n.(*ast.GoStmt)
+		if !ok {
+			return true
+		}
+		if lit, ok := g.Call.Fun.(*ast.FuncLit); !ok || !defersRecover(lit.Body) {
+			bare = append(bare, fset.Position(g.Pos()).String())
+		}
+		return true
+	})
+	return bare
+}
+
+// defersRecover reports whether the first statement of body defers a call to a method named Recover.
+func defersRecover(body *ast.BlockStmt) bool {
+	if len(body.List) == 0 {
+		return false
+	}
+	d, ok := body.List[0].(*ast.DeferStmt)
+	if !ok {
+		return false
+	}
+	sel, ok := d.Call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "Recover"
 }

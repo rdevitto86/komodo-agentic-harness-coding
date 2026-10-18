@@ -45,7 +45,8 @@ const (
 	SeverityMinor   Severity = "minor"
 )
 
-// Applies is the file scope of a rule or a lens: changed-file globs, and regular expressions matched against changed diff lines.
+// Applies is the file scope of a rule or a lens: changed-file globs, and regular expressions matched against changed diff
+// lines.
 type Applies struct {
 	Globs   []string `json:"globs"`
 	Markers []string `json:"markers"`
@@ -69,6 +70,25 @@ const (
 	WhenEconomy = "economy_only" // the economy profile only
 )
 
+// validate checks one rule's fields.
+func (r Rule) validate() error {
+	switch r.Severity {
+	case SeverityBlocker, SeverityMajor, SeverityMinor:
+	default:
+		return fmt.Errorf("unknown severity %q", r.Severity)
+	}
+
+	if r.Check == "" || r.Evidence == "" || r.Source == "" {
+		return fmt.Errorf("check, evidence and source are all required")
+	}
+	if len(r.Applies.Globs) == 0 {
+		return fmt.Errorf("no file globs")
+	}
+
+	_, err := compileMarkers(r.Applies.Markers)
+	return err
+}
+
 // Catalog is one lens: when it applies, its rules and the text of each rule.
 type Catalog struct {
 	Lens    string            `json:"lens"`
@@ -77,6 +97,65 @@ type Catalog struct {
 	Rules   []Rule            `json:"rules"`
 	Text    map[string]string `json:"-"` // rule identifier to the text in the Markdown file
 	markers []*regexp.Regexp
+}
+
+// validate checks the catalog format and compiles its lens markers.
+func (c *Catalog) validate() error {
+	switch c.When {
+	case WhenAlways, WhenSpec, WhenEconomy:
+	case WhenFilter:
+		if len(c.Applies.Globs)+len(c.Applies.Markers) == 0 {
+			return fmt.Errorf("filter lens %s has no globs or markers", c.Lens)
+		}
+	default:
+		return fmt.Errorf("lens %s has unknown when %q", c.Lens, c.When)
+	}
+
+	var err error
+	if c.markers, err = compileMarkers(c.Applies.Markers); err != nil {
+		return err
+	}
+	if len(c.Rules) == 0 {
+		return fmt.Errorf("lens %s has no rules", c.Lens)
+	}
+
+	for i, r := range c.Rules {
+		if want := fmt.Sprintf("%s.%d", c.Lens, i+1); r.ID != want {
+			return fmt.Errorf("rule %d is %q, want %q", i+1, r.ID, want)
+		}
+		if err := r.validate(); err != nil {
+			return fmt.Errorf("rule %s: %w", r.ID, err)
+		}
+		if c.Text[r.ID] == "" {
+			return fmt.Errorf("rule %s has no text", r.ID)
+		}
+	}
+
+	if len(c.Text) != len(c.Rules) {
+		return fmt.Errorf(
+			"lens %s has text for %d rules but %d rules",
+			c.Lens,
+			len(c.Text),
+			len(c.Rules),
+		)
+	}
+	return nil
+}
+
+// matchesFilter reports whether a changed path matches a glob
+// or a changed line matches a marker.
+func (c Catalog) matchesFilter(d Diff, lines []string) bool {
+	for _, g := range c.Applies.Globs {
+		if slices.ContainsFunc(d.Paths, func(p string) bool { return MatchGlob(g, p) }) {
+			return true
+		}
+	}
+	for _, m := range c.markers {
+		if slices.ContainsFunc(lines, m.MatchString) {
+			return true
+		}
+	}
+	return false
 }
 
 // Profile is the review depth.
@@ -104,13 +183,6 @@ type Reviewer interface {
 	AcceptResult(tasks []string, r ReviewerResult) error
 }
 
-// reviewer holds the catalogs and the standards rule lookup.
-type reviewer struct {
-	cats  []Catalog
-	rules map[string]Severity
-	std   func(id string) (Severity, bool)
-}
-
 // NewReviewer returns the Go side of a Reviewer session over the compiled catalogs.
 // standards reports the severity of a rule compiled from a standards skill; it may be nil.
 func NewReviewer(standards func(id string) (Severity, bool)) (Reviewer, error) {
@@ -119,6 +191,13 @@ func NewReviewer(standards func(id string) (Severity, bool)) (Reviewer, error) {
 		return nil, err
 	}
 	return newReviewer(cats, standards), nil
+}
+
+// reviewer holds the catalogs and the standards rule lookup.
+type reviewer struct {
+	cats  []Catalog
+	rules map[string]Severity
+	std   func(id string) (Severity, bool)
 }
 
 // newReviewer indexes the rules of the given catalogs.
@@ -130,6 +209,61 @@ func newReviewer(cats []Catalog, standards func(string) (Severity, bool)) review
 		}
 	}
 	return r
+}
+
+// AcceptFinding refuses an unknown rule or a malformed finding, and reports whether Go found the quoted line.
+func (r reviewer) AcceptFinding(f Finding, head, diff LineSource) (Severity, bool, error) {
+	sev, ok := r.severity(f.Rule)
+	if !ok {
+		return "", false, fmt.Errorf("unknown rule %q", f.Rule)
+	}
+	if strings.TrimSpace(f.File) == "" || f.Line < 1 {
+		return "", false, fmt.Errorf("finding needs a file and a line from 1")
+	}
+	_, found := VerifyFinding(f, head, diff)
+	return sev, found, nil
+}
+
+// Lenses returns the lens names to run for a diff under a profile, in catalog order.
+// A diff of only Markdown files runs 3 lenses. The economy profile runs the merged lens,
+// plus security wherever security applies.
+func (r reviewer) Lenses(d Diff, p Profile) []string {
+	if markdownOnly(d.Paths) {
+		return slices.Clone(markdownLenses)
+	}
+
+	lines := changedLines(d.Text)
+	var out []string
+
+	for _, c := range r.cats {
+		var on bool
+		switch c.When {
+		case WhenAlways:
+			on = p != ProfileEconomy
+		case WhenSpec:
+			on = p != ProfileEconomy && d.Specs
+		case WhenFilter:
+			on = (p != ProfileEconomy || c.Lens == "security") && c.matchesFilter(d, lines)
+		case WhenEconomy:
+			on = p == ProfileEconomy
+		}
+		if on {
+			out = append(out, c.Lens)
+		}
+	}
+
+	return out
+}
+
+// severity returns the severity of a known rule, from a lens catalog or the standards rule list.
+func (r reviewer) severity(id string) (Severity, bool) {
+	if s, ok := r.rules[id]; ok {
+		return s, true
+	}
+	if r.std != nil {
+		return r.std(id)
+	}
+	return "", false
 }
 
 // LoadCatalogs reads and checks the compiled lens catalogs, in lens order.
@@ -185,6 +319,8 @@ func ruleText(md string) map[string]string {
 	text := map[string]string{}
 	id := ""
 	var body []string
+
+	// flush stores the text gathered for the current rule id, then clears it.
 	flush := func() {
 		if id != "" {
 			text[id] = strings.TrimSpace(strings.Join(body, "\n"))
@@ -205,63 +341,6 @@ func ruleText(md string) map[string]string {
 	return text
 }
 
-// validate checks the catalog format and compiles its lens markers.
-func (c *Catalog) validate() error {
-	switch c.When {
-	case WhenAlways, WhenSpec, WhenEconomy:
-	case WhenFilter:
-		if len(c.Applies.Globs)+len(c.Applies.Markers) == 0 {
-			return fmt.Errorf("filter lens %s has no globs or markers", c.Lens)
-		}
-	default:
-		return fmt.Errorf("lens %s has unknown when %q", c.Lens, c.When)
-	}
-
-	var err error
-	if c.markers, err = compileMarkers(c.Applies.Markers); err != nil {
-		return err
-	}
-	if len(c.Rules) == 0 {
-		return fmt.Errorf("lens %s has no rules", c.Lens)
-	}
-
-	for i, r := range c.Rules {
-		if want := fmt.Sprintf("%s.%d", c.Lens, i+1); r.ID != want {
-			return fmt.Errorf("rule %d is %q, want %q", i+1, r.ID, want)
-		}
-		if err := r.validate(); err != nil {
-			return fmt.Errorf("rule %s: %w", r.ID, err)
-		}
-		if c.Text[r.ID] == "" {
-			return fmt.Errorf("rule %s has no text", r.ID)
-		}
-	}
-
-	if len(c.Text) != len(c.Rules) {
-		return fmt.Errorf("lens %s has text for %d rules but %d rules", c.Lens, len(c.Text), len(c.Rules))
-	}
-	return nil
-}
-
-// validate checks one rule's fields.
-func (r Rule) validate() error {
-	switch r.Severity {
-	case SeverityBlocker, SeverityMajor, SeverityMinor:
-	default:
-		return fmt.Errorf("unknown severity %q", r.Severity)
-	}
-
-	if r.Check == "" || r.Evidence == "" || r.Source == "" {
-		return fmt.Errorf("check, evidence and source are all required")
-	}
-	if len(r.Applies.Globs) == 0 {
-		return fmt.Errorf("no file globs")
-	}
-
-	_, err := compileMarkers(r.Applies.Markers)
-	return err
-}
-
 // compileMarkers compiles marker expressions.
 func compileMarkers(ms []string) ([]*regexp.Regexp, error) {
 	out := make([]*regexp.Regexp, 0, len(ms))
@@ -275,32 +354,8 @@ func compileMarkers(ms []string) ([]*regexp.Regexp, error) {
 	return out, nil
 }
 
-// severity returns the severity of a known rule, from a lens catalog or the standards rule list.
-func (r reviewer) severity(id string) (Severity, bool) {
-	if s, ok := r.rules[id]; ok {
-		return s, true
-	}
-	if r.std != nil {
-		return r.std(id)
-	}
-	return "", false
-}
-
-// AcceptFinding refuses an unknown rule or a malformed finding, and reports whether Go found the quoted line.
-func (r reviewer) AcceptFinding(f Finding, head, diff LineSource) (Severity, bool, error) {
-	sev, ok := r.severity(f.Rule)
-	if !ok {
-		return "", false, fmt.Errorf("unknown rule %q", f.Rule)
-	}
-	if strings.TrimSpace(f.File) == "" || f.Line < 1 {
-		return "", false, fmt.Errorf("finding needs a file and a line from 1")
-	}
-
-	_, found := VerifyFinding(f, head, diff)
-	return sev, found, nil
-}
-
-// changedLines returns the added and removed lines of a unified diff, without their marker or the file headers.
+// changedLines returns the added and removed lines of a unified diff,
+// without their marker or the file headers.
 func changedLines(text string) []string {
 	var out []string
 	for _, d := range diffLines(text) {
@@ -309,50 +364,10 @@ func changedLines(text string) []string {
 	return out
 }
 
-// matchesFilter reports whether a changed path matches a glob or a changed line matches a marker.
-func (c Catalog) matchesFilter(d Diff, lines []string) bool {
-	for _, g := range c.Applies.Globs {
-		if slices.ContainsFunc(d.Paths, func(p string) bool { return MatchGlob(g, p) }) {
-			return true
-		}
-	}
-	for _, m := range c.markers {
-		if slices.ContainsFunc(lines, m.MatchString) {
-			return true
-		}
-	}
-	return false
-}
-
-// Lenses returns the lens names to run for a diff under a profile, in catalog order.
-// A diff of only Markdown files runs 3 lenses. The economy profile runs the merged lens, plus security wherever security applies.
-func (r reviewer) Lenses(d Diff, p Profile) []string {
-	if markdownOnly(d.Paths) {
-		return slices.Clone(markdownLenses)
-	}
-
-	lines := changedLines(d.Text)
-	var out []string
-	for _, c := range r.cats {
-		var on bool
-		switch c.When {
-		case WhenAlways:
-			on = p != ProfileEconomy
-		case WhenSpec:
-			on = p != ProfileEconomy && d.Specs
-		case WhenFilter:
-			on = (p != ProfileEconomy || c.Lens == "security") && c.matchesFilter(d, lines)
-		case WhenEconomy:
-			on = p == ProfileEconomy
-		}
-		if on {
-			out = append(out, c.Lens)
-		}
-	}
-	return out
-}
-
 // markdownOnly reports whether every path is a Markdown file and there is at least one.
 func markdownOnly(paths []string) bool {
-	return len(paths) > 0 && !slices.ContainsFunc(paths, func(p string) bool { return !strings.HasSuffix(p, ".md") })
+	return len(paths) > 0 && !slices.ContainsFunc(
+		paths,
+		func(p string) bool { return !strings.HasSuffix(p, ".md") },
+	)
 }

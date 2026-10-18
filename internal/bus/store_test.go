@@ -37,7 +37,11 @@ func newStoreBus(t *testing.T, buf int, adjust func(*Options)) *storeFixture {
 
 // runStart builds the run-start command of a run in the fixture repository.
 func (f *storeFixture) runStart(run ID) Event {
-	return Event{Type: TypeRunStart, Run: run, Data: &RunStart{Target: "ep-1", Source: "cli", Repo: "r", Root: filepath.Dir(f.common), CommonDir: f.common}}
+	return Event{
+		Type: TypeRunStart,
+		Run:  run,
+		Data: &RunStart{Target: "ep-1", Source: "cli", Repo: "r", Root: filepath.Dir(f.common), CommonDir: f.common},
+	}
 }
 
 // publish puts events on the bus and fails the test on a refusal.
@@ -87,7 +91,8 @@ func (f *storeFixture) blockLog(run ID) string {
 	return p
 }
 
-// A run-start names the git directory; the run's events then go to <common_dir>/komodo/events/<run>.jsonl, one JSON line each.
+// A run-start names the git directory; the run's events then go to <common_dir>/komodo/events/<run>.jsonl, one JSON line
+// each.
 func TestRunEventsGoToTheRunLog(t *testing.T) {
 	f := newStoreFixture(t)
 	f.publish(f.runStart("run-a"), runStop("run-a", "x"))
@@ -198,7 +203,8 @@ func TestOverflowEventIsLogged(t *testing.T) {
 	if got := fileLines(t, filepath.Join(f.repo, LogName("run-a"))); len(got) != 4 {
 		t.Fatalf("run log = %v, want 4 lines", got)
 	}
-	if got := fileLines(t, filepath.Join(f.home, "engine.jsonl")); len(got) != 1 || !strings.Contains(got[0], `"subtype":"bus.overflow"`) {
+	if got := fileLines(t, filepath.Join(f.home, "engine.jsonl")); len(got) != 1 ||
+		!strings.Contains(got[0], `"subtype":"bus.overflow"`) {
 		t.Fatalf("engine.jsonl = %v, want the overflow event", got)
 	}
 }
@@ -282,7 +288,8 @@ func (d finalFault) IsFinal() bool { return d.Final }
 // init binds the stand-in once for the test binary.
 func init() { Register(finalFault{}.EventKey(), func() Payload { return &finalFault{} }) }
 
-// A failed append still broadcasts; the bus publishes one bus.store_failed for the burst, then a gap line when appends work again.
+// A failed append still broadcasts; the bus publishes one bus.store_failed for the burst, then a gap line when appends work
+// again.
 func TestStoreFailureBroadcastsAndMarksAGap(t *testing.T) {
 	f := newStoreFixture(t)
 	s := sub(t, f.b, "s")

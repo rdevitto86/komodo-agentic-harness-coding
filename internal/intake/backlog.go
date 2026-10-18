@@ -1,5 +1,5 @@
-// Package intake turns a request to plan into task lists: it reads the task-list files, lints them,
-// runs the planner session and writes a plan that passed lint.
+// Package intake turns a request to plan into task lists: it reads the task-list files, lints them, runs the planner session
+// and writes a plan that passed lint.
 package intake
 
 import (
@@ -63,8 +63,7 @@ type Task struct {
 	Card          string   // the task's own write-up after the field block
 }
 
-// pathShape matches a task-list path under docs/backlog/: epic folder, group folder, then TG.md or
-// a task file.
+// pathShape matches a task-list path under docs/backlog/: epic folder, group folder, then TG.md or a task file.
 var pathShape = regexp.MustCompile(
 	`^epic-([1-9]\d*)/(tg-([1-9]\d*)\.([1-9]\d*))/(TG\.md|(tsk-[^/]+)\.md)$`,
 )
@@ -83,12 +82,10 @@ type groupParts struct {
 // Load reads docs/backlog under root; grammar problems come back as findings, not errors.
 func Load(root string) ([]Epic, []Finding, error) {
 	base := filepath.Join(root, "docs", "backlog")
-
 	entries, err := os.ReadDir(base)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil, nil
 	}
-
 	if err != nil {
 		return nil, nil, fmt.Errorf("read %s: %w", base, err)
 	}
@@ -118,7 +115,6 @@ func Load(root string) ([]Epic, []Finding, error) {
 				}
 
 				files = append(files, DraftFile{Path: filepath.ToSlash(rel), Content: string(b)})
-
 				return nil
 			},
 		)
@@ -128,12 +124,10 @@ func Load(root string) ([]Epic, []Finding, error) {
 	}
 
 	epics, found := parseFiles(files)
-
 	return epics, append(found, strip(duplicateIDs(epics))...), nil
 }
 
-// parseFiles groups task-list files by group folder and parses each group; paths are relative to
-// docs/backlog.
+// parseFiles groups task-list files by group folder and parses each group; paths are relative to docs/backlog.
 func parseFiles(files []DraftFile) ([]Epic, []Finding) {
 	var found []Finding
 
@@ -143,24 +137,18 @@ func parseFiles(files []DraftFile) ([]Epic, []Finding) {
 	for _, f := range files {
 		if seen[f.Path] {
 			found = append(found, grammar(f.Path, "path appears twice in the draft"))
-
 			continue
 		}
 
 		seen[f.Path] = true
 		if msg := badPath(f.Path); msg != "" {
 			found = append(found, grammar(f.Path, msg))
-
 			continue
 		}
 
 		m := pathShape.FindStringSubmatch(f.Path)
 		if m == nil {
-			found = append(found, grammar(
-				f.Path,
-				"path is not epic-N/tg-N.M/TG.md or epic-N/tg-N.M/tsk-*.md",
-			))
-
+			found = append(found, grammar(f.Path, "path is not epic-N/tg-N.M/TG.md or epic-N/tg-N.M/tsk-*.md"))
 			continue
 		}
 
@@ -169,16 +157,11 @@ func parseFiles(files []DraftFile) ([]Epic, []Finding) {
 
 		idx, _ := strconv.Atoi(m[4])
 		if epic != groupEpic {
-			found = append(found, grammar(
-				f.Path,
-				fmt.Sprintf("group %s does not belong to epic-%d", m[2], epic),
-			))
-
+			found = append(found, grammar(f.Path, fmt.Sprintf("group %s does not belong to epic-%d", m[2], epic)))
 			continue
 		}
 
 		key := fmt.Sprintf("%d/%s", epic, m[2])
-
 		g := groups[key]
 		if g == nil {
 			g = &groupParts{epic: epic, index: idx, name: m[2]}
@@ -202,25 +185,26 @@ func parseFiles(files []DraftFile) ([]Epic, []Finding) {
 		if parts[i].epic != parts[j].epic {
 			return parts[i].epic < parts[j].epic
 		}
-
 		return parts[i].index < parts[j].index
 	})
 
 	var epics []Epic
-
 	for _, p := range parts {
 		g, gf := parseGroup(p)
-
 		found = append(found, gf...)
 		if len(epics) == 0 || epics[len(epics)-1].Number != p.epic {
 			epics = append(epics, Epic{Number: p.epic})
 		}
-
 		e := &epics[len(epics)-1]
 		e.Groups = append(e.Groups, g)
 	}
 
 	return epics, found
+}
+
+// grammar returns a failing grammar finding.
+func grammar(path, msg string) Finding {
+	return Finding{Rule: RuleGrammar, Severity: SeverityFail, Path: path, Message: msg}
 }
 
 // badPath names what is wrong with a draft path before its shape is matched, or returns "".
@@ -237,11 +221,6 @@ func badPath(p string) string {
 	}
 
 	return ""
-}
-
-// grammar returns a failing grammar finding.
-func grammar(path, msg string) Finding {
-	return Finding{Rule: RuleGrammar, Severity: SeverityFail, Path: path, Message: msg}
 }
 
 // parseGroup parses one group folder: its TG.md and its task files.
@@ -263,7 +242,6 @@ func parseGroup(p *groupParts) (Group, []Finding) {
 		g.Tasks = append(g.Tasks, task)
 		found = append(found, tf...)
 	}
-
 	if len(p.tasks) == 0 {
 		found = append(found, grammar(tgPath, "group has no task file"))
 	}
@@ -271,8 +249,10 @@ func parseGroup(p *groupParts) (Group, []Finding) {
 	return g, found
 }
 
-// duplicateIDs reports each group whose id repeats an earlier group's id; the finding names both
-// groups.
+// groupPath returns the TG.md path of a group, relative to docs/backlog.
+func groupPath(epic int, name string) string { return fmt.Sprintf("epic-%d/%s/TG.md", epic, name) }
+
+// duplicateIDs reports each group whose id repeats an earlier group's id; the finding names both groups.
 func duplicateIDs(epics []Epic) []scoped {
 	var found []scoped
 
@@ -283,7 +263,6 @@ func duplicateIDs(epics []Epic) []scoped {
 			if g.ID == "" {
 				continue
 			}
-
 			if prev, ok := first[g.ID]; ok {
 				found = append(found, scoped{
 					grammar(
@@ -292,7 +271,6 @@ func duplicateIDs(epics []Epic) []scoped {
 					),
 					[]string{g.Name, prev},
 				})
-
 				continue
 			}
 
@@ -301,9 +279,4 @@ func duplicateIDs(epics []Epic) []scoped {
 	}
 
 	return found
-}
-
-// groupPath returns the TG.md path of a group, relative to docs/backlog.
-func groupPath(epic int, name string) string {
-	return fmt.Sprintf("epic-%d/%s/TG.md", epic, name)
 }

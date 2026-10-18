@@ -14,15 +14,13 @@ type PauseOrder struct {
 	Window string `json:"window,omitempty"`
 	// the run whose ceiling was reached
 	Run string `json:"run,omitempty"`
-	// groups seen on the link or in the run, on a paid link for spend_ceiling_day, or the capped
-	// group
+	// groups seen on the link or in the run, on a paid link for spend_ceiling_day, or the capped group
 	Groups []string `json:"groups"`
 	// the window's reset time, or the next local midnight for spend_ceiling_day; zero otherwise
 	Until time.Time `json:"until,omitzero"`
 }
 
-// NudgeOrder asks the Runtime Manager to nudge the running agents of groups at 90% of the token
-// cap.
+// NudgeOrder asks the Runtime Manager to nudge the running agents of groups at 90% of the token cap.
 type NudgeOrder struct {
 	Groups []string `json:"groups"`
 }
@@ -35,16 +33,13 @@ const (
 	reasonGroupTokens     = "group_tokens"
 )
 
-// seen adds group to the group lists of its link, its run and each window of its link; an empty
-// group adds nothing.
+// seen adds group to the group lists of its link, its run and each window of its link; an empty group adds nothing.
 func (s *State) seen(link, run, group string) {
 	if group == "" {
 		return
 	}
-
 	add(s.LinkGroups, link, group)
 	add(s.RunGroups, run, group)
-
 	for _, k := range s.windowKeys(link) {
 		s.Windows[k].Groups[group] = true
 	}
@@ -53,13 +48,11 @@ func (s *State) seen(link, run, group string) {
 // without returns the groups that are not in done.
 func without(groups []string, done map[string]bool) []string {
 	var out []string
-
 	for _, g := range groups {
 		if !done[g] {
 			out = append(out, g)
 		}
 	}
-
 	return out
 }
 
@@ -68,21 +61,17 @@ func add(m map[string]map[string]bool, key, group string) {
 	if m[key] == nil {
 		m[key] = map[string]bool{}
 	}
-
 	m[key][group] = true
 }
 
 // names returns the members of the given sets, once each and in order.
 func names(sets ...map[string]bool) []string {
 	var out []string
-
 	for _, set := range sets {
 		for g := range set {
 			out = append(out, g)
 		}
 	}
-
 	slices.Sort(out)
-
 	return slices.Compact(out)
 }

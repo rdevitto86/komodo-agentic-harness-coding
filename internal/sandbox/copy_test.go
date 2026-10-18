@@ -9,20 +9,6 @@ import (
 	"testing"
 )
 
-// writeTree creates the files (relative path to body) under dir.
-func writeTree(t *testing.T, dir string, files map[string]string) {
-	t.Helper()
-	for name, body := range files {
-		p := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestDetectLanguages(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"go.mod": "", "package.json": "", "Cargo.toml": "", "uv.lock": "", "Makefile": ""})
@@ -41,7 +27,14 @@ func TestDetectLanguages(t *testing.T) {
 
 func TestPlanDepsPerLanguage(t *testing.T) {
 	dir := t.TempDir()
-	writeTree(t, dir, map[string]string{"go.mod": "", "package.json": "", "node_modules/a/index.js": "x", "Cargo.toml": "", "pyproject.toml": "", ".venv/bin/python": "x"})
+	writeTree(t, dir, map[string]string{
+		"go.mod":                  "",
+		"package.json":            "",
+		"node_modules/a/index.js": "x",
+		"Cargo.toml":              "",
+		"pyproject.toml":          "",
+		".venv/bin/python":        "x",
+	})
 	plans := PlanDeps(dir, PlanOptions{CargoTarget: "/cache/lang/shop/g1-target"})
 	by := map[string]Plan{}
 	for _, p := range plans {
@@ -56,7 +49,8 @@ func TestPlanDepsPerLanguage(t *testing.T) {
 	if p := by["node"]; !reflect.DeepEqual(p.Copy, []string{"node_modules"}) || p.RerunSetup {
 		t.Fatalf("node: %+v", p)
 	}
-	if p := by["rust"]; len(p.Copy) != 0 || !reflect.DeepEqual(p.Env, []string{"CARGO_TARGET_DIR=/cache/lang/shop/g1-target"}) {
+	if p := by["rust"]; len(p.Copy) != 0 ||
+		!reflect.DeepEqual(p.Env, []string{"CARGO_TARGET_DIR=/cache/lang/shop/g1-target"}) {
 		t.Fatalf("rust shares one target: %+v", p)
 	}
 	if p := by["python"]; !reflect.DeepEqual(p.Setup, []string{"uv", "sync"}) || len(p.Copy) != 0 {
@@ -100,7 +94,11 @@ func TestCopyCommandPerPlatform(t *testing.T) {
 
 func TestCopyDepsKeepsLinksAndDropsEscapingOnes(t *testing.T) {
 	from, to := t.TempDir(), t.TempDir()
-	writeTree(t, from, map[string]string{"node_modules/a/index.js": "code", "node_modules/b/real.js": "real", "outside.txt": "o"})
+	writeTree(t, from, map[string]string{
+		"node_modules/a/index.js": "code",
+		"node_modules/b/real.js":  "real",
+		"outside.txt":             "o",
+	})
 	nm := filepath.Join(from, "node_modules")
 	mustLink := func(target, name string) {
 		if err := os.Symlink(target, filepath.Join(nm, name)); err != nil {
@@ -175,6 +173,20 @@ func TestByteCopyKeepsSymlinksAsLinks(t *testing.T) {
 	}
 	if tgt, err := os.Readlink(filepath.Join(to, "d", "l")); err != nil || tgt != "f.txt" {
 		t.Fatalf("link %q %v", tgt, err)
+	}
+}
+
+// writeTree creates the files (relative path to body) under dir.
+func writeTree(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, body := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

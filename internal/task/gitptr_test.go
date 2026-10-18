@@ -16,19 +16,6 @@ type gitRepo struct {
 	Lease LeaseRef
 }
 
-// git runs a plain git command in dir for test setup, with no user or system configuration.
-func git(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
-	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return string(out)
-}
-
 // newGitRepo makes a repository with one commit and a linked worktree on its own branch.
 func newGitRepo(t *testing.T) gitRepo {
 	t.Helper()
@@ -52,32 +39,6 @@ func newGitRepo(t *testing.T) gitRepo {
 	git(t, r.Main, "worktree", "add", "-q", "-b", "komodo/ep-1-tg-1", wt)
 	r.Lease = LeaseRef{Branch: "komodo/ep-1-tg-1", Worktree: wt, GitDir: filepath.Join(r.Main, ".git", "worktrees", "wt")}
 	return r
-}
-
-// writeFile writes a test file, making its folder.
-func writeFile(t *testing.T, p, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(content), 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// newHostGit builds the runner for a repository's worktree.
-func newHostGit(t *testing.T, r gitRepo) *HostGit {
-	t.Helper()
-	ptr, err := RecordPointer(r.Lease.Worktree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := NewHostGit(r.Lease, "", ptr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = h.Close() })
-	return h
 }
 
 func TestHostGitRefusesAChangedPointer(t *testing.T) {
@@ -187,7 +148,8 @@ func TestHostGitDiffAndTreeHash(t *testing.T) {
 func TestHostGitReadOnlyRunsOnlyReads(t *testing.T) {
 	r := newGitRepo(t)
 	h := newHostGit(t, r)
-	if out, err := h.ReadOnly(context.Background(), "log", []string{"--oneline"}); err != nil || !strings.Contains(out, "first") {
+	if out, err := h.ReadOnly(context.Background(), "log", []string{"--oneline"}); err != nil ||
+		!strings.Contains(out, "first") {
 		t.Fatalf("log: %q %v", out, err)
 	}
 	for _, c := range []string{"commit", "push", "reset", "checkout", "config", "add"} {
@@ -195,4 +157,51 @@ func TestHostGitReadOnlyRunsOnlyReads(t *testing.T) {
 			t.Errorf("git %s ran through ReadOnly", c)
 		}
 	}
+}
+
+// git runs a plain git command in dir for test setup, with no user or system configuration.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(
+		"git",
+		append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...,
+	)
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + dir,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
+// writeFile writes a test file, making its folder.
+func writeFile(t *testing.T, p, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newHostGit builds the runner for a repository's worktree.
+func newHostGit(t *testing.T, r gitRepo) *HostGit {
+	t.Helper()
+	ptr, err := RecordPointer(r.Lease.Worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHostGit(r.Lease, "", ptr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	return h
 }

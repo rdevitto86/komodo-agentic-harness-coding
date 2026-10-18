@@ -6,14 +6,16 @@ import (
 	"testing"
 )
 
-const builderTpl = "# Role\n\nYou are the builder.\n\n```\n# Brief\n## Errors\n```\n\n# Brief\n\n{{repo_profile}}\n{{group}}\n{{tasks}}\n{{files}}\n{{file_contents}}\n{{diff}}\n{{findings}}\n"
+const builderTpl = "# Role\n\nYou are the builder.\n\n```\n# Brief\n## Errors\n```\n\n# " +
+	"Brief\n\n{{repo_profile}}\n{{group}}\n{{tasks}}\n{{files}}\n{{file_contents}}\n{{diff}}\n{{findings}}\n"
 
 func TestParseTemplate(t *testing.T) {
 	tpl, err := ParseTemplate("builder", builderTpl)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if !strings.HasPrefix(tpl.Role, "# Role\n") || !strings.Contains(tpl.Role, "# Brief\n## Errors") || strings.Contains(tpl.Role, "{{") {
+	if !strings.HasPrefix(tpl.Role, "# Role\n") || !strings.Contains(tpl.Role, "# Brief\n## Errors") ||
+		strings.Contains(tpl.Role, "{{") {
 		t.Fatalf("role: %q", tpl.Role)
 	}
 	if !strings.HasPrefix(tpl.Brief, "# Brief\n") || len(tpl.Slots) != 7 || tpl.Slots[0] != RepoProfile {

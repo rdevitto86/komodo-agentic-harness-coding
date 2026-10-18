@@ -19,21 +19,6 @@ type mcpClient struct {
 	done chan error
 }
 
-// startMCP serves the bound tools on pipes.
-func startMCP(t *testing.T, b *Bound) *mcpClient {
-	t.Helper()
-	inR, inW := io.Pipe()
-	outR, outW := io.Pipe()
-	c := &mcpClient{t: t, in: inW, out: bufio.NewReader(outR), done: make(chan error, 1)}
-	go func() {
-		err := ServeMCP(context.Background(), inR, outW, b)
-		_ = outW.Close()
-		c.done <- err
-	}()
-	t.Cleanup(func() { _ = inW.Close() })
-	return c
-}
-
 // send writes one line.
 func (c *mcpClient) send(line string) {
 	c.t.Helper()
@@ -59,8 +44,10 @@ func (c *mcpClient) recv() map[string]any {
 func TestToolServerSpeaksMCP(t *testing.T) {
 	r := newRig(t, nil)
 	c := startMCP(t, r.b)
-
-	c.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"claude"}}}`)
+	c.send(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},` +
+			`"clientInfo":{"name":"claude"}}}`,
+	)
 	init := c.recv()["result"].(map[string]any)
 	if init["protocolVersion"] != "2025-03-26" || init["capabilities"].(map[string]any)["tools"] == nil {
 		t.Fatalf("initialize = %v", init)
@@ -76,17 +63,24 @@ func TestToolServerSpeaksMCP(t *testing.T) {
 	if len(tools) != len(allTools) {
 		t.Fatalf("tools/list = %d tools", len(tools))
 	}
-	if first := tools[0].(map[string]any); first["name"] != "read" || first["inputSchema"] == nil || first["description"] == "" {
+	if first := tools[0].(map[string]any); first["name"] != "read" || first["inputSchema"] == nil ||
+		first["description"] == "" {
 		t.Fatalf("first tool = %v", first)
 	}
 
-	c.send(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write","arguments":{"path":"made/x.go","content":"a\n"}}}`)
+	c.send(
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write","arguments":{"path":"made/x.go",` +
+			`"content":"a\n"}}}`,
+	)
 	res := c.recv()["result"].(map[string]any)
 	if res["isError"] != false || res["content"].([]any)[0].(map[string]any)["text"] != "created made/x.go, 1 lines" {
 		t.Fatalf("write call = %v", res)
 	}
 
-	c.send(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read","arguments":{"path":"../outside/secret.txt"}}}`)
+	c.send(
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read",` +
+			`"arguments":{"path":"../outside/secret.txt"}}}`,
+	)
 	res = c.recv()["result"].(map[string]any)
 	if res["isError"] != true || !strings.Contains(res["content"].([]any)[0].(map[string]any)["text"].(string), "G2") {
 		t.Fatalf("refused call = %v", res)
@@ -121,7 +115,11 @@ func TestToolServerRunsCallsInParallel(t *testing.T) {
 	c := startMCP(t, r.b)
 	t0 := time.Now()
 	for i := 1; i <= 4; i++ {
-		c.send(`{"jsonrpc":"2.0","id":` + string(rune('0'+i)) + `,"method":"tools/call","params":{"name":"run","arguments":{"class":"build"}}}`)
+		c.send(
+			`{"jsonrpc":"2.0","id":` + string(
+				rune('0'+i),
+			) + `,"method":"tools/call","params":{"name":"run","arguments":{"class":"build"}}}`,
+		)
 	}
 	seen := map[float64]bool{}
 	for range 4 {
@@ -136,8 +134,19 @@ func TestToolServerRunsCallsInParallel(t *testing.T) {
 func TestToolServerInputsRoundTripThroughMCPConfig(t *testing.T) {
 	want := ToolServerConfig{
 		Agent: "builder", Session: "s-1", Worktree: "/wt", Dir: "/sess", Files: []string{"a/**", "b.go"},
-		Permissions: builderPerms(), Commands: map[string][]string{"test": {"go", "test", "./..."}}, Format: []string{"gofmt", "-w"}, RefusalLimit: 3,
-		Servers: []OutsideServer{{Name: "docs", Command: "docs-server", Args: []string{"--stdio"}, Env: []string{"TOKEN"}, Hosts: []string{"example.com"}}},
+		Permissions:  builderPerms(),
+		Commands:     map[string][]string{"test": {"go", "test", "./..."}},
+		Format:       []string{"gofmt", "-w"},
+		RefusalLimit: 3,
+		Servers: []OutsideServer{
+			{
+				Name:    "docs",
+				Command: "docs-server",
+				Args:    []string{"--stdio"},
+				Env:     []string{"TOKEN"},
+				Hosts:   []string{"example.com"},
+			},
+		},
 	}
 	raw, err := MCPConfig("/bin/komodo", want)
 	if err != nil {
@@ -168,21 +177,46 @@ func TestToolServerInputsRoundTripThroughMCPConfig(t *testing.T) {
 
 func TestToolServerConfigBindsTheGuard(t *testing.T) {
 	f := newFixture(t)
-	cfg := ToolServerConfig{Agent: "builder", Session: "s", Worktree: f.Root, Dir: t.TempDir(), Files: []string{"internal/lease/**"},
+	cfg := ToolServerConfig{Agent: "builder", Session: "s", Worktree: f.Root, Dir: t.TempDir(), Files: []string{
+		"internal/lease/**",
+	},
 		Permissions: builderPerms(), Commands: map[string][]string{}, RefusalLimit: 3}
 	b, err := cfg.Bind(f.Home, Env{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if got := b.Dispatch(ctx, "write", json.RawMessage(`{"path":"cmd/x.go","content":"x"}`)); !strings.Contains(got.Text, "B1") {
+	if got := b.Dispatch(
+		ctx,
+		"write",
+		json.RawMessage(`{"path":"cmd/x.go","content":"x"}`),
+	); !strings.Contains(got.Text, "B1") {
 		t.Fatalf("write outside the files = %q", got.Text)
 	}
-	if got := b.Dispatch(ctx, "write", json.RawMessage(`{"path":"internal/lease/x.go","content":"x"}`)); !strings.HasPrefix(got.Text, "created") {
+	if got := b.Dispatch(
+		ctx,
+		"write",
+		json.RawMessage(`{"path":"internal/lease/x.go","content":"x"}`),
+	); !strings.HasPrefix(got.Text, "created") {
 		t.Fatalf("write inside the files = %q", got.Text)
 	}
 	cfg.Permissions.Tools = append(cfg.Permissions.Tools, "teleport")
 	if _, err := cfg.Bind(f.Home, Env{}); err == nil {
 		t.Error("a permitted tool that is not registered must fail the bind")
 	}
+}
+
+// startMCP serves the bound tools on pipes.
+func startMCP(t *testing.T, b *Bound) *mcpClient {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	c := &mcpClient{t: t, in: inW, out: bufio.NewReader(outR), done: make(chan error, 1)}
+	go func() {
+		err := ServeMCP(context.Background(), inR, outW, b)
+		_ = outW.Close()
+		c.done <- err
+	}()
+	t.Cleanup(func() { _ = inW.Close() })
+	return c
 }

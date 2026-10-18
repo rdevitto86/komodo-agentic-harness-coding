@@ -258,7 +258,8 @@ func TestSlowSubscriberDoesNotDelayFastOne(t *testing.T) {
 	}
 }
 
-// runCatching runs fn in a goroutine that publishes an error event when fn panics and then closes the subscription, as the Error Handler's helper does.
+// runCatching runs fn in a goroutine that publishes an error event when fn panics and then closes the subscription, as the
+// Error Handler's helper does.
 func runCatching(b Bus, s *Subscription, fn func(), done chan<- struct{}) {
 	registerPanicFaultOnce.Do(func() {
 		Register(Key{TypeError, "test.panic"}, func() Payload { return &panicFault{} })
@@ -521,7 +522,11 @@ func TestRunStartBroadcastOnce(t *testing.T) {
 	b := newBus(t, 10)
 	rt := sub(t, b, "runtime", TypeRunStart)
 	at := time.Date(2026, 10, 16, 2, 0, 0, 0, time.FixedZone("", -7*3600))
-	err := b.Publish(Event{Type: TypeRunStart, Run: "r1", Data: &RunStart{Target: "tg-1.2", Groups: []string{"tg-1.2"}, Source: "cli", Schedule: at}})
+	err := b.Publish(Event{
+		Type: TypeRunStart,
+		Run:  "r1",
+		Data: &RunStart{Target: "tg-1.2", Groups: []string{"tg-1.2"}, Source: "cli", Schedule: at},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

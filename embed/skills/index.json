@@ -27,11 +27,11 @@
         "Shape",
         "Banned"
       ],
-      "sha256": "d7a7717b53a818ac6123789734ffab5763fe90e9c2eeed590c26878a9692d07b"
+      "sha256": "f465a96f28140002cb71475ddfab14776071b0f2b81d03226fde8ed48b37402e"
     },
     {
       "name": "standards-go",
-      "description": "Go standards: errors, naming, tests, formatting and file layout",
+      "description": "Go standards: errors, naming, tests, line width, wrapping, blank lines, declarations and file layout",
       "globs": [
         "*.go"
       ],
@@ -40,10 +40,13 @@
         "Errors",
         "Naming",
         "Tests",
-        "Formatting",
+        "Line width",
+        "Wrapping",
+        "Blank lines",
+        "Declarations",
         "File layout"
       ],
-      "sha256": "4f2bb58b556399d34aa5eb20dce2c7e96e7d7388d803175a1b1c8829ab2faa90"
+      "sha256": "c3de3e10eac65f082ba09d4c3adc52296170e32411d8367f16dfbe137a132e44"
     },
     {
       "name": "standards-kotlin",

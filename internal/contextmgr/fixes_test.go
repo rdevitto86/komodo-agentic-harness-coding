@@ -38,8 +38,18 @@ func TestDetectFormatPerFile(t *testing.T) {
 		{"go", map[string]string{"go.mod": "module x\n"}, []string{"gofmt", "-w"}, true},
 		{"rust", map[string]string{"Cargo.toml": "[package]\n"}, []string{"cargo", "fmt", "--"}, true},
 		{"python", map[string]string{"pyproject.toml": "[project]\n"}, []string{"ruff", "format"}, true},
-		{"prettier", map[string]string{"package.json": `{"devDependencies":{"prettier":"3.0.0"}}`}, []string{"npx", "prettier", "--write"}, true},
-		{"script", map[string]string{"package.json": `{"scripts":{"format":"prettier ."}}`}, []string{"npm", "run", "format", "--"}, true},
+		{
+			"prettier",
+			map[string]string{"package.json": `{"devDependencies":{"prettier":"3.0.0"}}`},
+			[]string{"npx", "prettier", "--write"},
+			true,
+		},
+		{
+			"script",
+			map[string]string{"package.json": `{"scripts":{"format":"prettier ."}}`},
+			[]string{"npm", "run", "format", "--"},
+			true,
+		},
 		{"make", map[string]string{"Makefile": "fmt:\n\tgofmt -w .\n"}, []string{"make", "fmt"}, false},
 	}
 	for _, c := range cases {
@@ -52,7 +62,8 @@ func TestDetectFormatPerFile(t *testing.T) {
 
 func TestDetectPackageScripts(t *testing.T) {
 	only := Detect(newTree(map[string]string{"package.json": `{"scripts":{"test":"jest"}}`}))
-	if commandOf(only, ClassTest) == nil || commandOf(only, ClassBuild) != nil || commandOf(only, ClassLint) != nil || commandOf(only, ClassFormat) != nil {
+	if commandOf(only, ClassTest) == nil || commandOf(only, ClassBuild) != nil || commandOf(only, ClassLint) != nil ||
+		commandOf(only, ClassFormat) != nil {
 		t.Fatalf("only the test script is defined: %+v", only.Commands)
 	}
 	if commandOf(only, ClassSetup) == nil {
@@ -115,7 +126,12 @@ func TestEventDoesNotWaitForSlowReads(t *testing.T) {
 	}
 	out := make(chan res, 1)
 	go func() {
-		c, err := m.GetContext(context.Background(), Request{Agent: "builder", Tree: tree, Files: []string{"a.go"}, Slots: slotsFor("builder")})
+		c, err := m.GetContext(context.Background(), Request{
+			Agent: "builder",
+			Tree:  tree,
+			Files: []string{"a.go"},
+			Slots: slotsFor("builder"),
+		})
 		out <- res{c, err}
 	}()
 	<-entered
@@ -157,7 +173,8 @@ func TestMarkersUseSharedGlob(t *testing.T) {
 	m := newManager(t)
 	tree := wholePathTree{newTree(map[string]string{"app/AndroidManifest.xml": "", "src/Svc.kt": "class Svc"})}
 	sel, err := m.Select("builder", []string{"src/Svc.kt"}, tree)
-	if err != nil || !reflect.DeepEqual(names(sel), []string{"standards-comments", "standards-kotlin", "standards-ui-mobile"}) {
+	if err != nil ||
+		!reflect.DeepEqual(names(sel), []string{"standards-comments", "standards-kotlin", "standards-ui-mobile"}) {
 		t.Fatalf("got %v %v", names(sel), err)
 	}
 }

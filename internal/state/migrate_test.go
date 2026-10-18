@@ -27,7 +27,12 @@ func TestVersionZeroReadsAsOne(t *testing.T) {
 	}
 
 	mm, home := newMach(t, "engine/1")
-	writeRaw(t, machPath(home, KindUpdate), `{"v":0,"kind":"update","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"cli/1","body":{"latest":"1.0.0","checked_at":"2026-10-14T16:01:40Z","previous":""}}`)
+	writeRaw(
+		t,
+		machPath(home, KindUpdate),
+		`{"v":0,"kind":"update","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"cli/1","body":{"latest":"1.0.0",`+
+			`"checked_at":"2026-10-14T16:01:40Z","previous":""}}`,
+	)
 	u, err := LoadMachine[UpdateBody](mm, KindUpdate)
 	if err != nil || u.Header.V != 1 || u.Body.Latest != "1.0.0" {
 		t.Fatalf("LoadMachine: %+v %v", u, err)
@@ -53,8 +58,14 @@ func TestNewerVersionUntouched(t *testing.T) {
 // A step chain runs from the stored version to the current one, and a gap is a failed read.
 func TestMigrateChain(t *testing.T) {
 	reg := map[migrationKey]Migration{
-		{"", 1}: {From: 1, Step: func(b []byte) ([]byte, error) { return []byte(strings.Replace(string(b), "a", "b", 1)), nil }},
-		{"", 2}: {From: 2, Step: func(b []byte) ([]byte, error) { return []byte(strings.Replace(string(b), "b", "c", 1)), nil }},
+		{
+			"",
+			1,
+		}: {From: 1, Step: func(b []byte) ([]byte, error) { return []byte(strings.Replace(string(b), "a", "b", 1)), nil }},
+		{
+			"",
+			2,
+		}: {From: 2, Step: func(b []byte) ([]byte, error) { return []byte(strings.Replace(string(b), "b", "c", 1)), nil }},
 	}
 	out, v, err := runMigrations(reg, "", 3, 1, []byte(`{"v":1,"x":"a"}`))
 	if err != nil || v != 3 || !strings.Contains(string(out), `"v":3`) || !strings.Contains(string(out), `"x":"c"`) {

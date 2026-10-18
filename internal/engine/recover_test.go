@@ -22,17 +22,6 @@ func (r *rig) savedGroup(label string, stage Stage, edit func(*State)) {
 	r.store.put(spec.ID, s, 5)
 }
 
-// countCmd counts the commands of a kind a group's Task Managers received.
-func countCmd(cs []task.Command, k task.CommandKind) int {
-	n := 0
-	for _, c := range cs {
-		if c.Kind == k {
-			n++
-		}
-	}
-	return n
-}
-
 func TestRecoveryAfterKillChargesNoAttemptAndOrdersTheStageAgain(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1"}}, onlyIdle)
 	r.savedGroup("tg-1", StageBuild, func(s *State) {
@@ -151,4 +140,15 @@ func TestDoneGroupIsSkippedAndAGroupAnotherRunHoldsEndsLost(t *testing.T) {
 	if r.tasks.startedCount("g-tg-1") != 0 || r.tasks.startedCount("g-tg-2") != 0 {
 		t.Fatal("a Task Manager started for a Done or lost group")
 	}
+}
+
+// countCmd counts the commands of a kind a group's Task Managers received.
+func countCmd(cs []task.Command, k task.CommandKind) int {
+	n := 0
+	for _, c := range cs {
+		if c.Kind == k {
+			n++
+		}
+	}
+	return n
 }

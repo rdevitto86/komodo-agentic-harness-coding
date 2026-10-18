@@ -24,7 +24,8 @@ func TestSeatbeltCheck(t *testing.T) {
 	if err := NewSeatbelt(SeatbeltOptions{GOOS: "linux"}).Check(); err == nil || !strings.Contains(err.Error(), "macOS") {
 		t.Fatalf("other system: %v", err)
 	}
-	if err := NewSeatbelt(SeatbeltOptions{GOOS: "darwin"}).Check(); err == nil || !strings.Contains(err.Error(), "sandbox-exec") {
+	if err := NewSeatbelt(SeatbeltOptions{GOOS: "darwin"}).Check(); err == nil ||
+		!strings.Contains(err.Error(), "sandbox-exec") {
 		t.Fatalf("missing program: %v", err)
 	}
 	putFake(t, "sandbox-exec", "exit 0\n")
@@ -47,7 +48,8 @@ func TestSeatbeltPrepareValidatesTheProfileOnce(t *testing.T) {
 		t.Fatalf("instance %+v", inst)
 	}
 	raw, _ := os.ReadFile(log)
-	if !strings.HasPrefix(string(raw), "-p\n(version 1)\n(deny default)") || !strings.Contains(string(raw), "/usr/bin/true") {
+	if !strings.HasPrefix(string(raw), "-p\n(version 1)\n(deny default)") ||
+		!strings.Contains(string(raw), "/usr/bin/true") {
 		t.Fatalf("validation call %q", raw)
 	}
 	t.Setenv("FAKE_SBX_FAIL", "1")
@@ -64,7 +66,8 @@ func TestSeatbeltFailsClosedWithoutAHomeFolder(t *testing.T) {
 	if err := sb.Check(); err == nil || !strings.Contains(err.Error(), "home") {
 		t.Fatalf("Check: %v", err)
 	}
-	if _, err := sb.Prepare(context.Background(), testSpec(t, RoleBuilder)); err == nil || !strings.Contains(err.Error(), "home") {
+	if _, err := sb.Prepare(context.Background(), testSpec(t, RoleBuilder)); err == nil ||
+		!strings.Contains(err.Error(), "home") {
 		t.Fatalf("Prepare: %v", err)
 	}
 }
@@ -75,14 +78,18 @@ func TestSeatbeltCommandWrapsTheArgv(t *testing.T) {
 	sb := NewSeatbelt(SeatbeltOptions{GOOS: "darwin", Home: "/Users/dev"})
 	s := testSpec(t, RoleBuilder)
 	inst, _ := sb.Prepare(context.Background(), s)
-	cmd, err := sb.Command(context.Background(), inst, s, Command{Argv: []string{"go", "build", "./..."}, Env: []string{"GOCACHE=" + s.Writable[1], "TOKEN=x"}})
+	cmd, err := sb.Command(context.Background(), inst, s, Command{
+		Argv: []string{"go", "build", "./..."},
+		Env:  []string{"GOCACHE=" + s.Writable[1], "TOKEN=x"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if filepath.Base(cmd.Path) != "sandbox-exec" || cmd.Args[1] != "-p" || !strings.HasPrefix(cmd.Args[2], "(version 1)") {
 		t.Fatalf("args %.80v", cmd.Args)
 	}
-	if got := strings.Join(cmd.Args[3:], " "); !strings.HasSuffix(got, " sh go build ./...") || !strings.Contains(got, "kill -9 -1") {
+	if got := strings.Join(cmd.Args[3:], " "); !strings.HasSuffix(got, " sh go build ./...") ||
+		!strings.Contains(got, "kill -9 -1") {
 		t.Fatalf("wrapped argv %q", got)
 	}
 	if cmd.Dir != s.Worktree || !contains(cmd.Env, "HOME="+s.Writable[0]) || contains(cmd.Env, "TOKEN=x") {
@@ -103,7 +110,8 @@ func TestSeatbeltProfileFollowsTheNetworkSwitch(t *testing.T) {
 	on, _ := sb.Command(context.Background(), inst, s, Command{Argv: []string{"true"}})
 	s.Network = false
 	off, _ := sb.Command(context.Background(), inst, s, Command{Argv: []string{"true"}})
-	if !strings.Contains(on.Args[2], "(allow network-outbound (remote ip))\n") || strings.Contains(off.Args[2], "(allow network-outbound (remote ip))\n") {
+	if !strings.Contains(on.Args[2], "(allow network-outbound (remote ip))\n") ||
+		strings.Contains(off.Args[2], "(allow network-outbound (remote ip))\n") {
 		t.Fatal("the profile must follow Spec.Network")
 	}
 }
@@ -160,7 +168,10 @@ func TestSeatbeltLive(t *testing.T) {
 	t.Cleanup(func() { _ = m.DestroySandboxInstance(context.Background(), inst.ID) })
 
 	run := func(script string) (string, error) {
-		cmd, err := m.Command(context.Background(), inst.ID, Command{Argv: []string{"/bin/sh", "-c", script}, Timeout: 20 * time.Second})
+		cmd, err := m.Command(context.Background(), inst.ID, Command{
+			Argv:    []string{"/bin/sh", "-c", script},
+			Timeout: 20 * time.Second,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,8 +220,18 @@ func TestSeatbeltLive(t *testing.T) {
 		{"signal a host process", "kill -9 " + strconv.Itoa(hostProc.Process.Pid), false},
 		{"signal its own child", "sleep 30 & kill -9 $!", true},
 		{"connect to a host unix socket", unixConnect(hostSock), false},
-		{"serve and use a unix socket in the worktree", `/usr/bin/perl -MIO::Socket::UNIX -e '$s = IO::Socket::UNIX->new(Local => "s.sock", Listen => 1) or die "bind: $!\n"; IO::Socket::UNIX->new(Peer => "s.sock") or die "connect: $!\n"'; r=$?; rm -f s.sock; exit $r`, true},
-		{"common tools run", "ls >/dev/null && /usr/bin/awk 'BEGIN{print 1}' >/dev/null && /usr/bin/perl -e 'print 1' >/dev/null && /usr/bin/grep -q . ok.txt && /usr/bin/git --version >/dev/null", true},
+		{
+			"serve and use a unix socket in the worktree",
+			`/usr/bin/perl -MIO::Socket::UNIX -e '$s = IO::Socket::UNIX->new(Local => "s.sock", Listen => 1) or die ` +
+				`"bind: $!\n"; IO::Socket::UNIX->new(Peer => "s.sock") or die "connect: $!\n"'; r=$?; rm -f s.sock; exit $r`,
+			true,
+		},
+		{
+			"common tools run",
+			"ls >/dev/null && /usr/bin/awk 'BEGIN{print 1}' >/dev/null && /usr/bin/perl -e 'print 1' >/dev/null && " +
+				"/usr/bin/grep -q . ok.txt && /usr/bin/git --version >/dev/null",
+			true,
+		},
 		{"write the module cache", "echo hi > " + filepath.Join(s.Modules, "x"), false},
 		{"read a system file", "cat /etc/hosts", true},
 		{"connect to loopback", "/usr/bin/nc -z -w 2 127.0.0.1 " + loop, true},
@@ -225,8 +246,15 @@ func TestSeatbeltLive(t *testing.T) {
 		}
 	}
 	if len(s.Toolchains) > 0 {
-		writeTree(t, s.Worktree, map[string]string{"go.mod": "module live\n\ngo 1.21\n", "main.go": "package main\n\nfunc main() {}\n"})
-		cmd, err := m.Command(context.Background(), inst.ID, Command{Argv: []string{"go", "build", "-buildvcs=false", "./..."}, Env: []string{"GOCACHE=" + s.Writable[1]}, Timeout: 120 * time.Second})
+		writeTree(t, s.Worktree, map[string]string{
+			"go.mod":  "module live\n\ngo 1.21\n",
+			"main.go": "package main\n\nfunc main() {}\n",
+		})
+		cmd, err := m.Command(context.Background(), inst.ID, Command{
+			Argv:    []string{"go", "build", "-buildvcs=false", "./..."},
+			Env:     []string{"GOCACHE=" + s.Writable[1]},
+			Timeout: 120 * time.Second,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -235,7 +263,10 @@ func TestSeatbeltLive(t *testing.T) {
 		}
 	}
 	start := time.Now()
-	cmd, err := m.Command(context.Background(), inst.ID, Command{Argv: []string{"/bin/sh", "-c", "sleep 30 & sleep 30"}, Timeout: time.Second})
+	cmd, err := m.Command(context.Background(), inst.ID, Command{
+		Argv:    []string{"/bin/sh", "-c", "sleep 30 & sleep 30"},
+		Timeout: time.Second,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,8 +282,12 @@ func TestSeatbeltLive(t *testing.T) {
 
 	// A descendant that starts its own session must still die with the command's timeout.
 	pidFile := filepath.Join(s.Writable[0], "escapee.pid")
-	script := `/usr/bin/perl -e 'use POSIX qw(setsid); if (fork) { exit 0 } setsid(); open(F, ">", $ARGV[0]); print F $$; close F; exec("sleep", "30")' ` + pidFile + `; sleep 30`
-	cmd, err = m.Command(context.Background(), inst.ID, Command{Argv: []string{"/bin/sh", "-c", script}, Timeout: 2 * time.Second})
+	script := `/usr/bin/perl -e 'use POSIX qw(setsid); if (fork) { exit 0 } setsid(); open(F, ">", $ARGV[0]); print F $$; ` +
+		`close F; exec("sleep", "30")' ` + pidFile + `; sleep 30`
+	cmd, err = m.Command(context.Background(), inst.ID, Command{
+		Argv:    []string{"/bin/sh", "-c", script},
+		Timeout: 2 * time.Second,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +320,10 @@ func TestSeatbeltLive(t *testing.T) {
 		{"online: connect to loopback", "/usr/bin/nc -z -w 2 127.0.0.1 " + loop, true},
 		{"online: read a masked file", "cat .env", false},
 	} {
-		cmd, err := m.Command(context.Background(), oi.ID, Command{Argv: []string{"/bin/sh", "-c", tc.script}, Timeout: 20 * time.Second})
+		cmd, err := m.Command(context.Background(), oi.ID, Command{
+			Argv:    []string{"/bin/sh", "-c", tc.script},
+			Timeout: 20 * time.Second,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

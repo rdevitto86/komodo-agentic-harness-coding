@@ -1,5 +1,5 @@
-// Package sandbox seals the commands the agents run: a Docker container per group for the Tester,
-// and Seatbelt or Bubblewrap for the Builder. A Manager hands out instances, wraps each command so
+// Package sandbox seals the commands the agents run: a Docker container per group for the Tester, and Seatbelt or Bubblewrap
+// for the Builder. A Manager hands out instances, wraps each command so
 // it starts inside one, and never runs a command unwrapped.
 package sandbox
 
@@ -20,8 +20,8 @@ const (
 	RoleTester  = "tester"
 )
 
-// Spec says what one sandbox instance may read, write and reach. Writable[0] is the instance's
-// temporary folder (HOME and TMPDIR); the rest are its private build caches.
+// Spec says what one sandbox instance may read, write and reach. Writable[0] is the instance's temporary folder (HOME and
+// TMPDIR); the rest are its private build caches.
 type Spec struct {
 	Group      string   // task group identifier
 	Worktree   string   // working directory; writable except the .git entry
@@ -49,6 +49,21 @@ type Instance struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// newInstance returns an Instance with a fresh random id.
+func newInstance(group, backend string) (Instance, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return Instance{}, fmt.Errorf("make an instance id: %w", err)
+	}
+
+	return Instance{
+		ID:        hex.EncodeToString(b[:]),
+		Group:     group,
+		Backend:   backend,
+		CreatedAt: time.Now().UTC(),
+	}, nil
+}
+
 // Command is one process to start: the class's command plus the model's arguments.
 type Command struct {
 	Argv    []string
@@ -62,8 +77,7 @@ type Backend interface {
 	Name() string
 	// Check returns an error that names the fix when the mechanism cannot run here.
 	Check() error
-	// Prepare renders the rules once per instance; a container mechanism also creates the
-	// container.
+	// Prepare renders the rules once per instance; a container mechanism also creates the container.
 	Prepare(ctx context.Context, s Spec) (Instance, error)
 	// Command wraps one command so that it starts inside the instance.
 	Command(ctx context.Context, i Instance, s Spec, c Command) (*exec.Cmd, error)
@@ -71,8 +85,7 @@ type Backend interface {
 	Release(ctx context.Context, i Instance) error
 }
 
-// NetworkCutter is implemented by a backend whose network is fixed at creation and must be cut once
-// setup ends.
+// NetworkCutter is implemented by a backend whose network is fixed at creation and must be cut once setup ends.
 type NetworkCutter interface {
 	CutNetwork(ctx context.Context, i Instance) error
 }
@@ -88,6 +101,14 @@ type StartError struct {
 	Reason string
 	Err    error
 }
+
+// Error returns the reply for a command the sandbox could not start.
+func (e *StartError) Error() string {
+	return "error: the sandbox could not start the command: " + e.Reason
+}
+
+// Unwrap returns the backend's own error.
+func (e *StartError) Unwrap() error { return e.Err }
 
 // live is one created instance with its current Spec; its lock guards the Spec.
 type live struct {
@@ -105,34 +126,11 @@ type Manager struct {
 	live     map[string]*live
 }
 
-// NewManager builds a Manager over the backends, keyed by role ("builder" or "tester"), and the
-// operating-system backend the tester falls back to without Docker.
+// NewManager builds a Manager over the backends, keyed by role ("builder" or "tester"), and the operating-system backend the
+// tester falls back to without Docker.
 func NewManager(byRole map[string]Backend, testerFallback Backend) *Manager {
 	return &Manager{byRole: byRole, fallback: testerFallback, live: map[string]*live{}}
 }
-
-// newInstance returns an Instance with a fresh random id.
-func newInstance(group, backend string) (Instance, error) {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return Instance{}, fmt.Errorf("make an instance id: %w", err)
-	}
-
-	return Instance{
-		ID:        hex.EncodeToString(b[:]),
-		Group:     group,
-		Backend:   backend,
-		CreatedAt: time.Now().UTC(),
-	}, nil
-}
-
-// Error returns the reply for a command the sandbox could not start.
-func (e *StartError) Error() string {
-	return "error: the sandbox could not start the command: " + e.Reason
-}
-
-// Unwrap returns the backend's own error.
-func (e *StartError) Unwrap() error { return e.Err }
 
 // CreateSandboxInstance prepares one instance for a group and role.
 // A tester whose first backend fails its check runs on the fallback and the instance says so.
@@ -153,19 +151,13 @@ func (m *Manager) CreateSandboxInstance(ctx context.Context, s Spec) (Instance, 
 		fallback bool
 		reason   string
 	)
-
 	if cerr := primary.Check(); cerr != nil {
 		if s.Role != RoleTester || m.fallback == nil {
 			return Instance{}, cerr
 		}
-
 		if ferr := m.fallback.Check(); ferr != nil {
-			return Instance{}, fmt.Errorf(
-				"%s; the operating-system sandbox cannot run either: %w",
-				cerr, ferr,
-			)
+			return Instance{}, fmt.Errorf("%s; the operating-system sandbox cannot run either: %w", cerr, ferr)
 		}
-
 		be, fallback, reason = m.fallback, true, cerr.Error()
 	}
 
@@ -179,46 +171,33 @@ func (m *Manager) CreateSandboxInstance(ctx context.Context, s Spec) (Instance, 
 	m.mu.Lock()
 	if _, dup := m.live[inst.ID]; inst.ID == "" || dup {
 		m.mu.Unlock()
-
 		_ = be.Release(ctx, inst)
-
-		return Instance{}, fmt.Errorf(
-			"the %s mechanism returned the instance id %q twice or empty",
-			be.Name(), inst.ID,
-		)
+		return Instance{}, fmt.Errorf("the %s mechanism returned the instance id %q twice or empty", be.Name(), inst.ID)
 	}
 
 	m.live[inst.ID] = &live{inst: inst, spec: s, backend: be}
 	m.mu.Unlock()
-
 	return inst, nil
 }
 
-// DestroySandboxInstance releases an instance; destroying an unknown or destroyed instance does
-// nothing.
+// DestroySandboxInstance releases an instance; destroying an unknown or destroyed instance does nothing.
 func (m *Manager) DestroySandboxInstance(ctx context.Context, id string) error {
 	m.mu.Lock()
 	li, ok := m.live[id]
 	delete(m.live, id)
 	m.mu.Unlock()
-
 	if !ok {
 		return nil
 	}
-
 	return li.backend.Release(ctx, li.inst)
 }
 
-// Command wraps one command so that it starts inside the instance; the command never runs
-// unwrapped.
+// Command wraps one command so that it starts inside the instance; the command never runs unwrapped.
 func (m *Manager) Command(ctx context.Context, id string, c Command) (*exec.Cmd, error) {
 	li, ok := m.get(id)
 	if !ok {
-		return nil, &StartError{
-			Reason: fmt.Sprintf("instance %s does not exist or was destroyed", id),
-		}
+		return nil, &StartError{Reason: fmt.Sprintf("instance %s does not exist or was destroyed", id)}
 	}
-
 	if len(c.Argv) == 0 {
 		return nil, &StartError{Reason: "the command is empty"}
 	}
@@ -235,8 +214,7 @@ func (m *Manager) Command(ctx context.Context, id string, c Command) (*exec.Cmd,
 	return cmd, nil
 }
 
-// EndSetup turns the network off for every later command; the group's setup command is the only one
-// that runs before it.
+// EndSetup turns the network off for every later command; the group's setup command is the only one that runs before it.
 func (m *Manager) EndSetup(ctx context.Context, id string) error {
 	li, ok := m.get(id)
 	if !ok {
@@ -249,7 +227,6 @@ func (m *Manager) EndSetup(ctx context.Context, id string) error {
 	if !li.spec.Network {
 		return nil
 	}
-
 	if cutter, ok := li.backend.(NetworkCutter); ok {
 		if err := cutter.CutNetwork(ctx, li.inst); err != nil {
 			return fmt.Errorf("cut the network of instance %s: %w", id, err)
@@ -257,7 +234,6 @@ func (m *Manager) EndSetup(ctx context.Context, id string) error {
 	}
 
 	li.spec.Network = false
-
 	return nil
 }
 
@@ -276,7 +252,6 @@ func (m *Manager) SetMasked(id string, masked []string) error {
 	li.mu.Lock()
 	li.spec.Masked = cleaned
 	li.mu.Unlock()
-
 	return nil
 }
 
@@ -295,7 +270,6 @@ func (m *Manager) Caveats(id string) []string {
 	li.mu.Lock()
 	spec := cloneSpec(li.spec)
 	li.mu.Unlock()
-
 	return cv.Caveats(spec)
 }
 
@@ -303,23 +277,18 @@ func (m *Manager) Caveats(id string) []string {
 func (m *Manager) get(id string) (*live, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	li, ok := m.live[id]
-
 	return li, ok
 }
 
 // normalise validates a Spec and returns a copy that holds the git pointer read-only.
 func normalise(s Spec) (Spec, error) {
 	s = cloneSpec(s)
-
 	r, err := newRules(s)
 	if err != nil {
 		return Spec{}, err
 	}
-
 	s.ReadOnly = r.ReadOnly
-
 	return s, nil
 }
 
@@ -329,6 +298,5 @@ func cloneSpec(s Spec) Spec {
 	s.Writable = slices.Clone(s.Writable)
 	s.Toolchains = slices.Clone(s.Toolchains)
 	s.Masked = slices.Clone(s.Masked)
-
 	return s
 }

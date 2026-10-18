@@ -130,7 +130,12 @@ var settingsEntries = []settingsEntry{
 	{"permissions.deny Bash(komodo config set*)", "permissions.deny", `"Bash(komodo config set*)"`, false},
 	{"permissions.deny Bash(komodo install*)", "permissions.deny", `"Bash(komodo install*)"`, false},
 	{"permissions.deny Bash(komodo update*)", "permissions.deny", `"Bash(komodo update*)"`, false},
-	{"hooks.PreToolUse " + guardCommand, "hooks.PreToolUse", `{"type":"command","command":"` + guardCommand + `","onFailure":"block"}`, true},
+	{
+		"hooks.PreToolUse " + guardCommand,
+		"hooks.PreToolUse",
+		`{"type":"command","command":"` + guardCommand + `","onFailure":"block"}`,
+		true,
+	},
 }
 
 // guardMatcher is the matcher of the group install adds when no group runs the guard.
@@ -232,7 +237,8 @@ func hookCommand(h json.RawMessage) string {
 	return x.Command
 }
 
-// matcherCovers reports whether a hook matcher runs for every tool the guard matcher names; an empty or * matcher runs for all.
+// matcherCovers reports whether a hook matcher runs for every tool the guard matcher names; an empty or * matcher runs for
+// all.
 func matcherCovers(m string) bool {
 	if m == "" || m == "*" {
 		return true
@@ -325,7 +331,8 @@ func saveSettings(path string, doc *obj) error {
 	return writeText(path, out.String()+"\n")
 }
 
-// putSettings adds the entry to the settings file. The guard command is set inside the group that already runs it, or in a group of its own.
+// putSettings adds the entry to the settings file. The guard command is set inside the group that already runs it, or in a
+// group of its own.
 func putSettings(path, id string) error {
 	e, ok := settingsEntryOf(id)
 	if !ok {

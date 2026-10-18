@@ -42,20 +42,6 @@ func (f *fakeWire) turn(_ context.Context, req turnRequest, h turnHooks) (turnRe
 	return res, err
 }
 
-// say scripts a text-only reply.
-func say(text string) func(turnRequest) (turnResult, error) {
-	return func(turnRequest) (turnResult, error) {
-		return turnResult{Content: []block{{Type: "text", Text: text}}, Stop: stopEnd, Usage: Usage{TokensIn: 10, TokensOut: 5}}, nil
-	}
-}
-
-// callTool scripts a reply that calls one tool.
-func callTool(id, name, args string) func(turnRequest) (turnResult, error) {
-	return func(turnRequest) (turnResult, error) {
-		return turnResult{Content: []block{{Type: "tool_use", ID: id, Name: name, Input: json.RawMessage(args)}}, Stop: stopToolUse, Usage: Usage{TokensIn: 10, TokensOut: 5}}, nil
-	}
-}
-
 // fakeHost is a tool host that records calls.
 type fakeHost struct {
 	mu    sync.Mutex
@@ -83,39 +69,10 @@ func (h *fakeHost) Dispatch(_ context.Context, name string, args json.RawMessage
 // gateFunc adapts a function to Gate.
 type gateFunc func(json.RawMessage) string
 
+const resultSchema = `{"type":"object","required":["done"],"properties":{"done":{"type":"boolean"}},` +
+	`"additionalProperties":false}`
+
 func (g gateFunc) Check(_ context.Context, out json.RawMessage) (string, error) { return g(out), nil }
-
-const resultSchema = `{"type":"object","required":["done"],"properties":{"done":{"type":"boolean"}},"additionalProperties":false}`
-
-// loopSession returns a session folder and a config over the wire.
-func loopSession(t *testing.T, w wire, host ToolHost, gate Gate, ctxTokens int) loopConfig {
-	t.Helper()
-	return loopConfig{
-		Session: Session{ID: "sid", Dir: t.TempDir(), Agent: "builder", Link: AnthropicAPI, Model: "m", Schema: json.RawMessage(resultSchema),
-			Tools: host, Gate: gate, Profile: CapacityProfile{Ctx: ctxTokens, Effort: "medium"}},
-		Wire: w, Link: AnthropicAPI,
-		Messages: []message{{Role: "user", Content: []block{{Type: "text", Text: "do the task"}}}},
-	}
-}
-
-// run starts the loop and drains the stream.
-func run(t *testing.T, cfg loopConfig) ([]StreamEvent, error) {
-	t.Helper()
-	st, err := startLoop(context.Background(), cfg)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = st.Close() }()
-	return drain(t, st)
-}
-
-func lastResult(t *testing.T, evs []StreamEvent) *Result {
-	t.Helper()
-	if len(evs) == 0 || evs[len(evs)-1].Kind != KindResult {
-		t.Fatalf("no result event in %d events", len(evs))
-	}
-	return evs[len(evs)-1].Result
-}
 
 func TestLoopTextStopGetsOneFinalCall(t *testing.T) {
 	w := &fakeWire{script: []func(turnRequest) (turnResult, error){say("all work is complete"), say(`{"done":true}`)}}
@@ -131,7 +88,8 @@ func TestLoopTextStopGetsOneFinalCall(t *testing.T) {
 	if len(w.reqs) != 2 || w.reqs[0].Final || !w.reqs[1].Final {
 		t.Fatalf("requests: %d, final flags %v %v", len(w.reqs), w.reqs[0].Final, w.reqs[len(w.reqs)-1].Final)
 	}
-	if r.Handle.Kind != "messages_file" || r.Handle.Link != AnthropicAPI || r.Handle.Value != filepath.Join(cfg.Session.Dir, "messages.jsonl") {
+	if r.Handle.Kind != "messages_file" || r.Handle.Link != AnthropicAPI ||
+		r.Handle.Value != filepath.Join(cfg.Session.Dir, "messages.jsonl") {
 		t.Errorf("handle = %+v", r.Handle)
 	}
 	if r.Usage.TokensIn != 20 || r.Usage.TokensOut != 10 {
@@ -145,7 +103,8 @@ func TestLoopTextStopGetsOneFinalCall(t *testing.T) {
 		Ts   time.Time       `json:"ts"`
 		C    json.RawMessage `json:"content"`
 	}
-	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil || first.Role != "user" || len(first.C) == 0 || first.Ts.IsZero() {
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil || first.Role != "user" || len(first.C) == 0 ||
+		first.Ts.IsZero() {
 		t.Errorf("messages.jsonl first line %q: %v", lines[0], err)
 	}
 	if len(lines) != 4 {
@@ -155,7 +114,11 @@ func TestLoopTextStopGetsOneFinalCall(t *testing.T) {
 
 func TestLoopToolCallsGoThroughHost(t *testing.T) {
 	host := &fakeHost{}
-	w := &fakeWire{script: []func(turnRequest) (turnResult, error){callTool("t1", "read", `{"path":"a.go"}`), say("done"), say(`{"done":true}`)}}
+	w := &fakeWire{
+		script: []func(
+			turnRequest,
+		) (turnResult, error){callTool("t1", "read", `{"path":"a.go"}`), say("done"), say(`{"done":true}`)},
+	}
 	evs, err := run(t, loopSession(t, w, host, nil, 100000))
 	if !errors.Is(err, io.EOF) || lastResult(t, evs) == nil {
 		t.Fatalf("err %v", err)
@@ -165,7 +128,8 @@ func TestLoopToolCallsGoThroughHost(t *testing.T) {
 	}
 	msgs := w.reqs[1].Messages
 	last := msgs[len(msgs)-1]
-	if last.Role != "user" || last.Content[0].Type != "tool_result" || last.Content[0].ToolUseID != "t1" || last.Content[0].Content != "ok from read" {
+	if last.Role != "user" || last.Content[0].Type != "tool_result" || last.Content[0].ToolUseID != "t1" ||
+		last.Content[0].Content != "ok from read" {
 		t.Errorf("tool result message = %+v", last)
 	}
 }
@@ -179,7 +143,11 @@ func TestLoopGateFailureContinuesSameSession(t *testing.T) {
 		}
 		return ""
 	})
-	w := &fakeWire{script: []func(turnRequest) (turnResult, error){say("done"), say(`{"done":true}`), say("fixed it"), say(`{"done":true}`)}}
+	w := &fakeWire{
+		script: []func(
+			turnRequest,
+		) (turnResult, error){say("done"), say(`{"done":true}`), say("fixed it"), say(`{"done":true}`)},
+	}
 	evs, err := run(t, loopSession(t, w, &fakeHost{}, gate, 100000))
 	if !errors.Is(err, io.EOF) || lastResult(t, evs) == nil {
 		t.Fatalf("err %v", err)
@@ -198,7 +166,9 @@ func TestLoopGateFailureContinuesSameSession(t *testing.T) {
 
 func TestLoopTwoRejectedResultsEndCheckFail(t *testing.T) {
 	gate := gateFunc(func(json.RawMessage) string { return "no" })
-	w := &fakeWire{script: []func(turnRequest) (turnResult, error){say("d"), say(`{"done":true}`), say("d"), say(`{"done":true}`)}}
+	w := &fakeWire{
+		script: []func(turnRequest) (turnResult, error){say("d"), say(`{"done":true}`), say("d"), say(`{"done":true}`)},
+	}
 	_, err := run(t, loopSession(t, w, &fakeHost{}, gate, 100000))
 	var end *EndError
 	if !errors.As(err, &end) || end.Reason != state.ReasonCheckFail {
@@ -347,7 +317,11 @@ func TestLoopInjectedLineReachesNextRequest(t *testing.T) {
 func TestLoopLimitMapping(t *testing.T) {
 	limit := &core.LimitError{Kind: core.LimitRetryAfter, Status: 429, RetryAfter: 2 * time.Hour}
 	// A limit on the first request is a refused start.
-	w := &fakeWire{script: []func(turnRequest) (turnResult, error){func(turnRequest) (turnResult, error) { return turnResult{}, limit }}}
+	w := &fakeWire{
+		script: []func(
+			turnRequest,
+		) (turnResult, error){func(turnRequest) (turnResult, error) { return turnResult{}, limit }},
+	}
 	_, err := startLoop(context.Background(), loopSession(t, w, &fakeHost{}, nil, 100000))
 	var pl *ProviderLimit
 	if !errors.As(err, &pl) || pl.Cap != CapWindow || pl.Handle != nil || pl.ResetAt.IsZero() {
@@ -359,7 +333,8 @@ func TestLoopLimitMapping(t *testing.T) {
 			return turnResult{}, &core.LimitError{Kind: core.LimitSpend, Status: 429, Code: "enforced_spend_limit_reached"}
 		}}}
 	_, err = run(t, loopSession(t, w2, &fakeHost{}, nil, 100000))
-	if !errors.As(err, &pl) || pl.Cap != CapSpend || pl.Handle == nil || pl.Handle.Kind != "messages_file" || pl.Link != AnthropicAPI {
+	if !errors.As(err, &pl) || pl.Cap != CapSpend || pl.Handle == nil || pl.Handle.Kind != "messages_file" ||
+		pl.Link != AnthropicAPI {
 		t.Fatalf("mid-session err = %v, limit %+v", err, pl)
 	}
 	w3 := &fakeWire{script: []func(turnRequest) (turnResult, error){func(turnRequest) (turnResult, error) {
@@ -381,7 +356,11 @@ func TestLoopStartErrorMapping(t *testing.T) {
 		"403":  {&core.StatusError{Status: 403}, ErrUnauthorized},
 		"idle": {core.ErrStreamIdle, core.ErrStreamIdle},
 	} {
-		w := &fakeWire{script: []func(turnRequest) (turnResult, error){func(turnRequest) (turnResult, error) { return turnResult{}, tc.err }}}
+		w := &fakeWire{
+			script: []func(
+				turnRequest,
+			) (turnResult, error){func(turnRequest) (turnResult, error) { return turnResult{}, tc.err }},
+		}
 		_, err := startLoop(context.Background(), loopSession(t, w, &fakeHost{}, nil, 100000))
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
@@ -432,4 +411,64 @@ func TestLoopKillStopsSession(t *testing.T) {
 	if err := st.Stop(Kill); !errors.Is(err, ErrStreamClosed) {
 		t.Errorf("Stop after Close = %v, want ErrStreamClosed", err)
 	}
+}
+
+// say scripts a text-only reply.
+func say(text string) func(turnRequest) (turnResult, error) {
+	return func(turnRequest) (turnResult, error) {
+		return turnResult{
+			Content: []block{{Type: "text", Text: text}},
+			Stop:    stopEnd,
+			Usage:   Usage{TokensIn: 10, TokensOut: 5},
+		}, nil
+	}
+}
+
+// callTool scripts a reply that calls one tool.
+func callTool(id, name, args string) func(turnRequest) (turnResult, error) {
+	return func(turnRequest) (turnResult, error) {
+		return turnResult{
+			Content: []block{{Type: "tool_use", ID: id, Name: name, Input: json.RawMessage(args)}},
+			Stop:    stopToolUse,
+			Usage:   Usage{TokensIn: 10, TokensOut: 5},
+		}, nil
+	}
+}
+
+// loopSession returns a session folder and a config over the wire.
+func loopSession(t *testing.T, w wire, host ToolHost, gate Gate, ctxTokens int) loopConfig {
+	t.Helper()
+	return loopConfig{
+		Session: Session{
+			ID:    "sid",
+			Dir:   t.TempDir(),
+			Agent: "builder",
+			Link:  AnthropicAPI,
+			Model: "m",
+			Schema: json.RawMessage(
+				resultSchema,
+			),
+			Tools: host, Gate: gate, Profile: CapacityProfile{Ctx: ctxTokens, Effort: "medium"}},
+		Wire: w, Link: AnthropicAPI,
+		Messages: []message{{Role: "user", Content: []block{{Type: "text", Text: "do the task"}}}},
+	}
+}
+
+// run starts the loop and drains the stream.
+func run(t *testing.T, cfg loopConfig) ([]StreamEvent, error) {
+	t.Helper()
+	st, err := startLoop(context.Background(), cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = st.Close() }()
+	return drain(t, st)
+}
+
+func lastResult(t *testing.T, evs []StreamEvent) *Result {
+	t.Helper()
+	if len(evs) == 0 || evs[len(evs)-1].Kind != KindResult {
+		t.Fatalf("no result event in %d events", len(evs))
+	}
+	return evs[len(evs)-1].Result
 }

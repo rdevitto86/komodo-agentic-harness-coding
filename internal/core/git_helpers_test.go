@@ -10,52 +10,6 @@ import (
 	"testing"
 )
 
-// isolate points git at a throwaway home so no test reads or writes the person's configuration.
-func isolate(t *testing.T) {
-	t.Helper()
-	home := t.TempDir()
-	cfg := filepath.Join(home, "gitconfig")
-	body := "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[protocol \"file\"]\n\tallow = always\n"
-	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"} {
-		t.Setenv(k, "")
-		_ = os.Unsetenv(k)
-	}
-}
-
-// git runs plain git in dir for test setup and checks, and returns trimmed output.
-func git(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// execOut runs plain git in dir and returns its output and error.
-func execOut(dir string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
-// write creates a file under dir, with parents.
-func write(t *testing.T, dir, name, body string) {
-	t.Helper()
-	p := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // world is a bare remote, a clone on main and the epic branch komodo/ep-1 on both.
 type world struct {
 	t      *testing.T
@@ -97,9 +51,6 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
-// group is one group's branch and checkout.
-type group struct{ label, branch, wt string }
-
 // newGroup cuts the group branch from the epic tip and adds its worktree.
 func (w *world) newGroup(label string) group {
 	w.t.Helper()
@@ -116,4 +67,54 @@ func (w *world) work(g group, name, body string) { write(w.t, g.wt, name, body) 
 // remoteTip returns the commit the bare remote holds for a branch.
 func (w *world) remoteTip(branch string) string {
 	return git(w.t, w.remote, "rev-parse", "refs/heads/"+branch)
+}
+
+// group is one group's branch and checkout.
+type group struct{ label, branch, wt string }
+
+// isolate points git at a throwaway home so no test reads or writes the person's configuration.
+func isolate(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	cfg := filepath.Join(home, "gitconfig")
+	body := "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[protocol " +
+		"\"file\"]\n\tallow = always\n"
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"} {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
+	}
+}
+
+// git runs plain git in dir for test setup and checks, and returns trimmed output.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// execOut runs plain git in dir and returns its output and error.
+func execOut(dir string, args ...string) (string, error) {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// write creates a file under dir, with parents.
+func write(t *testing.T, dir, name, body string) {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

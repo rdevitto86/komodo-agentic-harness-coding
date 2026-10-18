@@ -61,8 +61,7 @@ var (
 		ReasonCancelled,
 	}
 
-	// fieldEnums lists the allowed strings of a field by "Type.Field"; the checks and the schema
-	// files share it.
+	// fieldEnums lists the allowed strings of a field by "Type.Field"; the checks and the schema files share it.
 	fieldEnums = map[string][]string{
 		"TaskState.State":    {"queued", "claimed", "done"},
 		"RoundState.Result":  {"", "pass", "fail", "cancelled"},
@@ -73,35 +72,24 @@ var (
 	}
 )
 
-// oneOf reports whether s is in the list.
-func oneOf(s string, list []string) bool { return slices.Contains(list, s) }
-
 // validKey reports whether a group id is safe as a folder name.
 func validKey(k string) bool {
-	return k != "" &&
-		k != "." &&
-		k != ".." &&
-		!strings.ContainsAny(k, `/\`) &&
-		!strings.ContainsRune(k, 0)
+	return k != "" && k != "." && k != ".." && !strings.ContainsAny(k, `/\`) && !strings.ContainsRune(k, 0)
 }
 
-// isHash reports whether s is 64 lowercase hexadecimal characters.
-func isHash(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
+// normalizeGroup puts a decoded group state in its stored form: empty open-action arguments become {}.
+func normalizeGroup(g *GroupState) {
+	for i := range g.ActionsOpen {
+		if a, ok := objectOrEmpty(g.ActionsOpen[i].Args); ok {
+			g.ActionsOpen[i].Args = a
 		}
 	}
-
-	return true
+	if len(g.Requests) > maxRequests {
+		g.Requests = slices.Clone(g.Requests[len(g.Requests)-maxRequests:])
+	}
 }
 
-// objectOrEmpty returns the raw value compacted, "{}" for none, and false when it is not a JSON
-// object.
+// objectOrEmpty returns the raw value compacted, "{}" for none, and false when it is not a JSON object.
 func objectOrEmpty(raw json.RawMessage) (json.RawMessage, bool) {
 	t := bytes.TrimSpace(raw)
 	if len(t) == 0 || string(t) == "null" {
@@ -116,34 +104,6 @@ func objectOrEmpty(raw json.RawMessage) (json.RawMessage, bool) {
 	return buf.Bytes(), true
 }
 
-// normalizeGroup puts a decoded group state in its stored form: empty open-action arguments become
-// {}.
-func normalizeGroup(g *GroupState) {
-	for i := range g.ActionsOpen {
-		if a, ok := objectOrEmpty(g.ActionsOpen[i].Args); ok {
-			g.ActionsOpen[i].Args = a
-		}
-	}
-
-	if len(g.Requests) > maxRequests {
-		g.Requests = slices.Clone(g.Requests[len(g.Requests)-maxRequests:])
-	}
-}
-
-// invalid builds the refusal for one field of a group state.
-func invalid(key, field, why string) error {
-	return &InvalidError{Group: key, Field: field, Why: why}
-}
-
-// checkNilFields refuses a nil slice or map anywhere in v.
-func checkNilFields(key, root string, v any) error {
-	if p := walkNil(reflect.ValueOf(v), root, false); p != "" {
-		return invalid(key, p, "must be [] or {}, not null")
-	}
-
-	return nil
-}
-
 // validateGroup runs the schema checks of a group state decoded under the record key.
 func validateGroup(key string, g *GroupState) error {
 	if err := checkNilFields(key, "state", g); err != nil {
@@ -154,40 +114,45 @@ func validateGroup(key string, g *GroupState) error {
 	if g.Run == "" {
 		return f("run", "empty")
 	}
-
 	if g.Group != key {
 		return f("group", "differs from the record's group")
 	}
-
 	if !slices.Contains(stageValues, g.Stage) {
 		return f("stage", fmt.Sprintf("%q is not a stage", g.Stage))
 	}
-
 	if err := validateStageFields(g, f); err != nil {
 		return err
 	}
-
 	if g.Fence == 0 {
 		return f("fence", "zero")
 	}
-
 	if !isHash(g.ConfigHash) {
 		return f("config_hash", "not 64 lowercase hexadecimal characters")
 	}
-
 	if err := validateCounters(&g.Counters, f); err != nil {
 		return err
 	}
-
 	if err := validateParts(g, f); err != nil {
 		return err
 	}
-
 	if len(g.Requests) > maxRequests {
 		return f("requests", "more than 64 ids")
 	}
 
 	return nil
+}
+
+// checkNilFields refuses a nil slice or map anywhere in v.
+func checkNilFields(key, root string, v any) error {
+	if p := walkNil(reflect.ValueOf(v), root, false); p != "" {
+		return invalid(key, p, "must be [] or {}, not null")
+	}
+	return nil
+}
+
+// invalid builds the refusal for one field of a group state.
+func invalid(key, field, why string) error {
+	return &InvalidError{Group: key, Field: field, Why: why}
 }
 
 // validateStageFields checks prior, outcome, pause and block against the stage.
@@ -213,6 +178,24 @@ func validateStageFields(g *GroupState, f func(field, why string) error) error {
 	}
 
 	return nil
+}
+
+// oneOf reports whether s is in the list.
+func oneOf(s string, list []string) bool { return slices.Contains(list, s) }
+
+// isHash reports whether s is 64 lowercase hexadecimal characters.
+func isHash(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // validateCounters refuses a negative counter.
@@ -242,12 +225,10 @@ func validateCounters(c *Counters, f func(field, why string) error) error {
 	return nil
 }
 
-// validateParts checks the tasks, the test and review results, the open actions and the unfinished
-// edits.
+// validateParts checks the tasks, the test and review results, the open actions and the unfinished edits.
 func validateParts(g *GroupState, f func(field, why string) error) error {
 	for i, t := range g.Tasks {
 		p := fmt.Sprintf("tasks[%d].", i)
-
 		switch {
 		case t.ID == "":
 			return f(p+"id", "empty")
@@ -263,12 +244,8 @@ func validateParts(g *GroupState, f func(field, why string) error) error {
 		round RoundState
 	}{{"tester", g.TestReview.Tester}, {"reviewer", g.TestReview.Reviewer}} {
 		if !oneOf(r.round.Result, fieldEnums["RoundState.Result"]) {
-			return f(
-				"test_review."+r.name+".result",
-				fmt.Sprintf("%q is not pass, fail or cancelled", r.round.Result),
-			)
+			return f("test_review."+r.name+".result", fmt.Sprintf("%q is not pass, fail or cancelled", r.round.Result))
 		}
-
 		if r.round.Restarts < 0 {
 			return f("test_review."+r.name+".restarts", "negative")
 		}
@@ -279,11 +256,9 @@ func validateParts(g *GroupState, f func(field, why string) error) error {
 		if a.ID == "" {
 			return f(p+"id", "empty")
 		}
-
 		if a.Kind == "" {
 			return f(p+"kind", "empty")
 		}
-
 		if _, ok := objectOrEmpty(a.Args); !ok {
 			return f(p+"args", "not a JSON object")
 		}
@@ -301,7 +276,6 @@ func checkMonotone(key string, old, now *GroupState) error {
 	f := func(field string) error {
 		return invalid(key, "state."+field, "lower than the stored value")
 	}
-
 	if now.Fence < old.Fence {
 		return f("fence")
 	}

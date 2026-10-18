@@ -15,114 +15,6 @@ type Graph struct {
 	Touches map[string][]string // group name -> its touches globs
 }
 
-// BuildGraph builds the dependency graph; a cycle is a failing graph finding. An unknown
-// dependency, two groups with overlapping touches and no order, and a long chain, a group all
-// others wait on or a group with many dependencies are findings too.
-func BuildGraph(epics []Epic, tracked []string) (Graph, []Finding) {
-	g, found := buildGraph(epics, tracked)
-
-	return g, strip(found)
-}
-
-// Pending returns the labels of every group under target whose status is not done, in dependency
-// order; target is all, an epic label or a group label.
-func Pending(epics []Epic, g Graph, target string) []string {
-	inScope := map[string]bool{}
-
-	for _, e := range epics {
-		for _, gr := range e.Groups {
-			if gr.Status == "done" {
-				continue
-			}
-
-			if target == "all" || target == gr.Name || target == fmt.Sprintf("ep-%d", e.Number) {
-				inScope[gr.Name] = true
-			}
-		}
-	}
-
-	out := []string{}
-
-	for _, n := range g.ordered() {
-		if inScope[n] {
-			out = append(out, n)
-		}
-	}
-
-	return out
-}
-
-// buildGraph builds the graph and returns each finding with every group it names.
-func buildGraph(epics []Epic, tracked []string) (Graph, []scoped) {
-	const maxDependencies = 5 // dependencies of one group before lint warns
-
-	g := Graph{Deps: map[string][]string{}, Touches: map[string][]string{}}
-	paths := map[string]string{}
-
-	var files []string
-
-	files = append(files, tracked...)
-
-	for _, e := range epics {
-		for _, gr := range e.Groups {
-			g.Groups = append(g.Groups, gr.Name)
-			paths[gr.Name] = groupPath(e.Number, gr.Name)
-			g.Touches[gr.Name] = gr.Touches
-			files = append(files, gr.Files...)
-		}
-	}
-
-	var found []scoped
-
-	for _, e := range epics {
-		for _, gr := range e.Groups {
-			g.Deps[gr.Name] = []string{}
-			for _, d := range gr.Dependencies {
-				if _, ok := paths[d]; !ok {
-					found = append(found, graphFinding(
-						SeverityFail,
-						paths[gr.Name],
-						fmt.Sprintf("%s depends on %s, which is not a group", gr.Name, d),
-						gr.Name,
-					))
-
-					continue
-				}
-
-				g.Deps[gr.Name] = append(g.Deps[gr.Name], d)
-			}
-
-			if n := len(gr.Dependencies); n > maxDependencies {
-				found = append(found, graphFinding(
-					SeverityWarn,
-					paths[gr.Name],
-					fmt.Sprintf(
-						"%s has %d dependencies; more than %d",
-						gr.Name, n, maxDependencies,
-					),
-					gr.Name,
-				))
-			}
-		}
-	}
-
-	if cycle := g.cycle(); cycle != nil {
-		found = append(found, graphFinding(
-			SeverityFail,
-			paths[cycle[0]],
-			"dependency cycle: "+strings.Join(cycle, " -> "),
-			cycle...,
-		))
-
-		return g, found
-	}
-
-	found = append(found, g.unordered(paths, files)...)
-	found = append(found, g.shape(paths)...)
-
-	return g, found
-}
-
 // Waves returns the groups that can run together; wave 1 holds the groups with no dependency.
 func (g Graph) Waves() [][]string {
 	wave := g.waveOf()
@@ -132,7 +24,6 @@ func (g Graph) Waves() [][]string {
 		for len(out) < wave[n] {
 			out = append(out, []string{})
 		}
-
 		out[wave[n]-1] = append(out[wave[n]-1], n)
 	}
 
@@ -145,7 +36,6 @@ func (g Graph) LongestChain() int {
 	for _, w := range g.waveOf() {
 		n = max(n, w)
 	}
-
 	return n
 }
 
@@ -165,10 +55,8 @@ func (g Graph) cycle() []string {
 		for _, d := range g.Deps[n] {
 			if state[d] == 1 {
 				i := slices.Index(stack, d)
-
 				return append(slices.Clone(stack[i:]), d)
 			}
-
 			if state[d] == 0 {
 				if c := walk(d); c != nil {
 					return c
@@ -178,7 +66,6 @@ func (g Graph) cycle() []string {
 
 		state[n] = 2
 		stack = stack[:len(stack)-1]
-
 		return nil
 	}
 	for _, n := range g.Groups {
@@ -192,29 +79,7 @@ func (g Graph) cycle() []string {
 	return nil
 }
 
-// reaches reports whether group from waits, directly or through other groups, on group to.
-func (g Graph) reaches(from, to string) bool {
-	seen := map[string]bool{}
-
-	var walk func(n string) bool
-
-	walk = func(n string) bool {
-		for _, d := range g.Deps[n] {
-			if d == to || (!seen[d] && walk(d)) {
-				return true
-			}
-
-			seen[d] = true
-		}
-
-		return false
-	}
-
-	return walk(from)
-}
-
-// unordered fails each pair of groups whose touches globs match one file when neither waits on the
-// other.
+// unordered fails each pair of groups whose touches globs match one file when neither waits on the other.
 func (g Graph) unordered(paths map[string]string, files []string) []scoped {
 	files = slices.Clone(files)
 	slices.Sort(files)
@@ -245,6 +110,24 @@ func (g Graph) unordered(paths map[string]string, files []string) []scoped {
 	return found
 }
 
+// reaches reports whether group from waits, directly or through other groups, on group to.
+func (g Graph) reaches(from, to string) bool {
+	seen := map[string]bool{}
+
+	var walk func(n string) bool
+	walk = func(n string) bool {
+		for _, d := range g.Deps[n] {
+			if d == to || (!seen[d] && walk(d)) {
+				return true
+			}
+			seen[d] = true
+		}
+		return false
+	}
+
+	return walk(from)
+}
+
 // shape warns about a chain over 4 groups and about a group every other group waits on directly.
 func (g Graph) shape(paths map[string]string) []scoped {
 	// Limits that make a graph finding.
@@ -271,13 +154,11 @@ func (g Graph) shape(paths map[string]string) []scoped {
 	if len(g.Groups) >= minForWaitedOn {
 		for _, n := range g.Groups {
 			waiting := 0
-
 			for _, m := range g.Groups {
 				if slices.Contains(g.Deps[m], n) {
 					waiting++
 				}
 			}
-
 			if waiting == len(g.Groups)-1 {
 				found = append(found, graphFinding(
 					SeverityWarn,
@@ -290,6 +171,33 @@ func (g Graph) shape(paths map[string]string) []scoped {
 	}
 
 	return found
+}
+
+// longestPath returns the groups of one longest chain, first to last.
+func (g Graph) longestPath() []string {
+	wave := g.waveOf()
+
+	end := ""
+	for _, n := range g.Groups {
+		if end == "" || wave[n] > wave[end] {
+			end = n
+		}
+	}
+
+	var chain []string
+	for n := end; n != ""; {
+		chain = append([]string{n}, chain...)
+		next := ""
+		for _, d := range g.Deps[n] {
+			if wave[d] == wave[n]-1 {
+				next = d
+				break
+			}
+		}
+		n = next
+	}
+
+	return chain
 }
 
 // waveOf returns each group's wave: 1 with no dependency, else 1 plus the highest wave it waits on.
@@ -311,7 +219,6 @@ func (g Graph) waveOf() map[string]int {
 		}
 
 		wave[n] = w
-
 		return w
 	}
 	for _, n := range g.Groups {
@@ -321,44 +228,113 @@ func (g Graph) waveOf() map[string]int {
 	return wave
 }
 
-// longestPath returns the groups of one longest chain, first to last.
-func (g Graph) longestPath() []string {
-	wave := g.waveOf()
-
-	end := ""
-	for _, n := range g.Groups {
-		if end == "" || wave[n] > wave[end] {
-			end = n
-		}
-	}
-
-	var chain []string
-	for n := end; n != ""; {
-		chain = append([]string{n}, chain...)
-		next := ""
-
-		for _, d := range g.Deps[n] {
-			if wave[d] == wave[n]-1 {
-				next = d
-
-				break
-			}
-		}
-
-		n = next
-	}
-
-	return chain
-}
-
 // ordered returns every group, wave first and then folder-name order.
 func (g Graph) ordered() []string {
 	var out []string
 	for _, w := range g.Waves() {
 		out = append(out, w...)
 	}
+	return out
+}
+
+// BuildGraph builds the dependency graph; a cycle is a failing graph finding. An unknown dependency, two groups with
+// overlapping touches and no order, and a long chain, a group all
+// others wait on or a group with many dependencies are findings too.
+func BuildGraph(epics []Epic, tracked []string) (Graph, []Finding) {
+	g, found := buildGraph(epics, tracked)
+	return g, strip(found)
+}
+
+// Pending returns the labels of every group under target whose status is not done, in dependency order; target is all, an
+// epic label or a group label.
+func Pending(epics []Epic, g Graph, target string) []string {
+	inScope := map[string]bool{}
+	for _, e := range epics {
+		for _, gr := range e.Groups {
+			if gr.Status == "done" {
+				continue
+			}
+			if target == "all" || target == gr.Name || target == fmt.Sprintf("ep-%d", e.Number) {
+				inScope[gr.Name] = true
+			}
+		}
+	}
+
+	out := []string{}
+	for _, n := range g.ordered() {
+		if inScope[n] {
+			out = append(out, n)
+		}
+	}
 
 	return out
+}
+
+// buildGraph builds the graph and returns each finding with every group it names.
+func buildGraph(epics []Epic, tracked []string) (Graph, []scoped) {
+	const maxDependencies = 5 // dependencies of one group before lint warns
+
+	g := Graph{Deps: map[string][]string{}, Touches: map[string][]string{}}
+	paths := map[string]string{}
+
+	var files []string
+	files = append(files, tracked...)
+
+	for _, e := range epics {
+		for _, gr := range e.Groups {
+			g.Groups = append(g.Groups, gr.Name)
+			paths[gr.Name] = groupPath(e.Number, gr.Name)
+			g.Touches[gr.Name] = gr.Touches
+			files = append(files, gr.Files...)
+		}
+	}
+
+	var found []scoped
+
+	for _, e := range epics {
+		for _, gr := range e.Groups {
+			g.Deps[gr.Name] = []string{}
+			for _, d := range gr.Dependencies {
+				if _, ok := paths[d]; !ok {
+					found = append(found, graphFinding(
+						SeverityFail,
+						paths[gr.Name],
+						fmt.Sprintf("%s depends on %s, which is not a group", gr.Name, d),
+						gr.Name,
+					))
+					continue
+				}
+
+				g.Deps[gr.Name] = append(g.Deps[gr.Name], d)
+			}
+
+			if n := len(gr.Dependencies); n > maxDependencies {
+				found = append(found, graphFinding(
+					SeverityWarn,
+					paths[gr.Name],
+					fmt.Sprintf(
+						"%s has %d dependencies; more than %d",
+						gr.Name, n, maxDependencies,
+					),
+					gr.Name,
+				))
+			}
+		}
+	}
+
+	if cycle := g.cycle(); cycle != nil {
+		found = append(found, graphFinding(
+			SeverityFail,
+			paths[cycle[0]],
+			"dependency cycle: "+strings.Join(cycle, " -> "),
+			cycle...,
+		))
+		return g, found
+	}
+
+	found = append(found, g.unordered(paths, files)...)
+	found = append(found, g.shape(paths)...)
+	return g, found
 }
 
 // graphFinding returns a graph finding of the given severity that names the given groups.
@@ -373,7 +349,6 @@ func sharedFile(as, bs, files []string) string {
 			return f
 		}
 	}
-
 	return ""
 }
 

@@ -26,6 +26,21 @@ func newMgr(t *testing.T) (*Manager, string) {
 	return m, root
 }
 
+// statePath returns where the manager keeps a group's record.
+func statePath(root, group string) string {
+	return filepath.Join(root, "runs", group, "state.json")
+}
+
+// mustCreate creates the test group's record and returns it.
+func mustCreate(t *testing.T, m *Manager) Record {
+	t.Helper()
+	r, err := m.Create(testGroup, goodState())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return r
+}
+
 // goodState returns a valid group state for the test group, with no nil slice or map.
 func goodState() GroupState {
 	return GroupState{
@@ -47,21 +62,6 @@ func goodState() GroupState {
 		ScopeAdded:  []string{},
 		LastEventAt: time.Date(2026, 10, 14, 16, 1, 40, 0, time.UTC),
 	}
-}
-
-// statePath returns where the manager keeps a group's record.
-func statePath(root, group string) string {
-	return filepath.Join(root, "runs", group, "state.json")
-}
-
-// mustCreate creates the test group's record and returns it.
-func mustCreate(t *testing.T, m *Manager) Record {
-	t.Helper()
-	r, err := m.Create(testGroup, goodState())
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	return r
 }
 
 // readBytes returns a file's content or fails the test.

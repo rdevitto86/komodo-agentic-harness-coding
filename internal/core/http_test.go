@@ -49,33 +49,20 @@ func newHarness(t *testing.T, opts Options) *harness {
 	return h
 }
 
-// epFor allows exactly the host of a test server URL.
-func epFor(t *testing.T, raw string) Endpoint {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return Endpoint{Hosts: []string{u.Host}}
+// collector gathers stream output and drops it on restart.
+type collector struct {
+	events   []SSEEvent
+	restarts int
+	activity int
 }
 
-// get builds a GET request for raw.
-func get(t *testing.T, raw string) *http.Request {
-	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, raw, nil)
-	if err != nil {
-		t.Fatal(err)
+// hooks wires the collector into StreamHooks.
+func (c *collector) hooks() StreamHooks {
+	return StreamHooks{
+		Activity: func() { c.activity++ },
+		Event:    func(e SSEEvent) error { c.events = append(c.events, e); return nil },
+		Restart:  func() { c.restarts++; c.events = nil },
 	}
-	return req
-}
-
-// status429 answers a rate-limit response with an optional retry-after.
-func status429(w http.ResponseWriter, retryAfter, body string) {
-	if retryAfter != "" {
-		w.Header().Set("Retry-After", retryAfter)
-	}
-	w.WriteHeader(http.StatusTooManyRequests)
-	_, _ = w.Write([]byte(body))
 }
 
 func TestRetry429ThenOKSucceedsOnAttempt2(t *testing.T) {
@@ -121,7 +108,11 @@ func TestSpendLimit429ReturnsLimitAfterOneAttempt(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		status429(w, "", `{"type":"error","error":{"type":"rate_limit_error","details":{"error_code":"enforced_spend_limit_reached"}}}`)
+		status429(
+			w,
+			"",
+			`{"type":"error","error":{"type":"rate_limit_error","details":{"error_code":"enforced_spend_limit_reached"}}}`,
+		)
 	}))
 	defer srv.Close()
 	h := newHarness(t, Options{})
@@ -277,39 +268,6 @@ func TestConnectionResetIsRetried(t *testing.T) {
 	}
 }
 
-// sseHandler streams events, aborting after cutAfter events on the first cuts requests.
-func sseHandler(cuts int32, hits *atomic.Int32) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		n := hits.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		fl := w.(http.Flusher)
-		_, _ = w.Write([]byte("event: a\ndata: one\n\n"))
-		fl.Flush()
-		if n <= cuts {
-			_, _ = w.Write([]byte("data: par"))
-			fl.Flush()
-			panic(http.ErrAbortHandler)
-		}
-		_, _ = w.Write([]byte(": keepalive\n\ndata: two\ndata: lines\nid: 9\n\n"))
-	}
-}
-
-// collector gathers stream output and drops it on restart.
-type collector struct {
-	events   []SSEEvent
-	restarts int
-	activity int
-}
-
-// hooks wires the collector into StreamHooks.
-func (c *collector) hooks() StreamHooks {
-	return StreamHooks{
-		Activity: func() { c.activity++ },
-		Event:    func(e SSEEvent) error { c.events = append(c.events, e); return nil },
-		Restart:  func() { c.restarts++; c.events = nil },
-	}
-}
-
 func TestStreamParsesEventsAndReportsActivity(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(sseHandler(0, &hits))
@@ -393,24 +351,6 @@ func TestPlantedKeyNeverReachesLogsOrErrors(t *testing.T) {
 	}
 }
 
-// req2 builds a request carrying the planted key as a header.
-func req2(t *testing.T, raw string) *http.Request {
-	r := get(t, raw)
-	r.Header.Set("X-Api-Key", plantedKey)
-	return r
-}
-
-// writeCA writes the server certificate of srv as a PEM bundle.
-func writeCA(t *testing.T, srv *httptest.Server) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "ca.pem")
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
-	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func TestTestCAFailsWithoutBundleAndPassesWith(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("secure"))
@@ -465,7 +405,11 @@ func TestHostAndMethodAllowlists(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 	h := newHarness(t, Options{})
-	if _, err := h.c.Do(context.Background(), Endpoint{Hosts: []string{"other.example.com"}}, get(t, srv.URL)); !errors.Is(err, ErrRefused) {
+	if _, err := h.c.Do(
+		context.Background(),
+		Endpoint{Hosts: []string{"other.example.com"}},
+		get(t, srv.URL),
+	); !errors.Is(err, ErrRefused) {
 		t.Errorf("host outside allowlist: %v", err)
 	}
 	if _, err := h.c.Do(context.Background(), Endpoint{}, get(t, srv.URL)); !errors.Is(err, ErrRefused) {
@@ -501,7 +445,8 @@ func TestRedirects(t *testing.T) {
 	defer srv.Close()
 	h := newHarness(t, Options{})
 	ep := epFor(t, srv.URL)
-	if _, err := h.c.Do(context.Background(), ep, get(t, srv.URL+"/away")); !errors.Is(err, ErrRefused) || otherHits.Load() != 0 {
+	if _, err := h.c.Do(context.Background(), ep, get(t, srv.URL+"/away")); !errors.Is(err, ErrRefused) ||
+		otherHits.Load() != 0 {
 		t.Fatalf("cross-host redirect: err=%v hits=%d", err, otherHits.Load())
 	}
 	resp, err := h.c.Do(context.Background(), ep, get(t, srv.URL+"/local"))
@@ -549,7 +494,9 @@ func TestLoopbackIsNeverProxied(t *testing.T) {
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxyHits.Add(1) }))
 	defer proxy.Close()
 	pu, _ := url.Parse(proxy.URL)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("direct")) }))
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("direct")) }),
+	)
 	defer srv.Close()
 	h := newHarness(t, Options{Proxy: func(*http.Request) (*url.URL, error) { return pu, nil }})
 	resp, err := h.c.Do(context.Background(), epFor(t, srv.URL), get(t, srv.URL))
@@ -609,7 +556,8 @@ func TestTimeoutDefaults(t *testing.T) {
 	local, _ := url.Parse("http://localhost:11434/")
 	hosted := Endpoint{}
 	self := Endpoint{SelfHosted: true}
-	if hosted.StreamIdle(remote) != 90*time.Second || hosted.StreamIdle(local) != 300*time.Second || self.StreamIdle(remote) != 300*time.Second {
+	if hosted.StreamIdle(remote) != 90*time.Second || hosted.StreamIdle(local) != 300*time.Second ||
+		self.StreamIdle(remote) != 300*time.Second {
 		t.Error("stream idle defaults wrong")
 	}
 	if hosted.FirstByteTimeout(remote) != 60*time.Second || hosted.FirstByteTimeout(local) != 300*time.Second {
@@ -618,4 +566,68 @@ func TestTimeoutDefaults(t *testing.T) {
 	if (Endpoint{FirstByte: 5 * time.Second}).FirstByteTimeout(remote) != 5*time.Second {
 		t.Error("per-endpoint override ignored")
 	}
+}
+
+// epFor allows exactly the host of a test server URL.
+func epFor(t *testing.T, raw string) Endpoint {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Endpoint{Hosts: []string{u.Host}}
+}
+
+// status429 answers a rate-limit response with an optional retry-after.
+func status429(w http.ResponseWriter, retryAfter, body string) {
+	if retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = w.Write([]byte(body))
+}
+
+// sseHandler streams events, aborting after cutAfter events on the first cuts requests.
+func sseHandler(cuts int32, hits *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		_, _ = w.Write([]byte("event: a\ndata: one\n\n"))
+		fl.Flush()
+		if n <= cuts {
+			_, _ = w.Write([]byte("data: par"))
+			fl.Flush()
+			panic(http.ErrAbortHandler)
+		}
+		_, _ = w.Write([]byte(": keepalive\n\ndata: two\ndata: lines\nid: 9\n\n"))
+	}
+}
+
+// req2 builds a request carrying the planted key as a header.
+func req2(t *testing.T, raw string) *http.Request {
+	r := get(t, raw)
+	r.Header.Set("X-Api-Key", plantedKey)
+	return r
+}
+
+// get builds a GET request for raw.
+func get(t *testing.T, raw string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return req
+}
+
+// writeCA writes the server certificate of srv as a PEM bundle.
+func writeCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

@@ -198,7 +198,12 @@ func TestSaveListsWaitsForLandingTurn(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- h.SaveLists(w.ctx, ListsRequest{Repo: "repo", Root: w.clone, CommonDir: filepath.Join(w.clone, ".git"), Epic: "ep-1"})
+		done <- h.SaveLists(w.ctx, ListsRequest{
+			Repo:      "repo",
+			Root:      w.clone,
+			CommonDir: filepath.Join(w.clone, ".git"),
+			Epic:      "ep-1",
+		})
 	}()
 	select {
 	case err := <-done:
@@ -236,7 +241,12 @@ func TestBaseBranchEqualRefused(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
 	h.Config.BaseBranch = "komodo/ep-1"
-	err := h.SaveLists(w.ctx, ListsRequest{Repo: "repo", Root: w.clone, CommonDir: filepath.Join(w.clone, ".git"), Epic: "ep-1"})
+	err := h.SaveLists(w.ctx, ListsRequest{
+		Repo:      "repo",
+		Root:      w.clone,
+		CommonDir: filepath.Join(w.clone, ".git"),
+		Epic:      "ep-1",
+	})
 	if !errors.Is(err, ErrCriticalRef) {
 		t.Fatalf("SaveLists err = %v", err)
 	}

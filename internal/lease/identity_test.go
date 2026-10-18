@@ -15,32 +15,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// exitErr returns the error of a shell that wrote stderr and exited with code, or was killed when code is -1.
-func exitErr(t *testing.T, stderr string, code int) error {
-	t.Helper()
-	script := fmt.Sprintf("echo %q >&2; exit %d", stderr, code)
-	if stderr == "" {
-		script = fmt.Sprintf("exit %d", code)
-	}
-	if code < 0 {
-		script = "kill -9 $$"
-	}
-	_, err := exec.Command("sh", "-c", script).Output()
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("shell did not fail: %v", err)
-	}
-	return err
-}
-
-// stubPS replaces the ps call for one test.
-func stubPS(t *testing.T, out string, err error) {
-	t.Helper()
-	old := runPS
-	runPS = func(context.Context, int) ([]byte, error) { return []byte(out), err }
-	t.Cleanup(func() { runPS = old })
-}
-
 // A ps that timed out, was killed or rejected its flags says nothing about the process, so it is unknown and not dead.
 func TestPSFailureIsUnknownNotDead(t *testing.T) {
 	child := exec.Command("sleep", "30")
@@ -150,14 +124,6 @@ func TestNewNeedsHome(t *testing.T) {
 	}
 }
 
-// noOSMachineID makes the operating system give no machine id, so the home-folder file is the source.
-func noOSMachineID(t *testing.T) {
-	t.Helper()
-	old := osMachineID
-	osMachineID = func() string { return "" }
-	t.Cleanup(func() { osMachineID = old })
-}
-
 // The operating system's id wins over the home folder, and the home folder then holds no id file.
 func TestMachineIDComesFromTheOperatingSystem(t *testing.T) {
 	old := osMachineID
@@ -195,7 +161,10 @@ func TestReadOSMachineIDSources(t *testing.T) {
 	if got := firstFileID([]string{missing}); got != "" {
 		t.Fatalf("firstFileID of nothing = %q", got)
 	}
-	dump := []byte("+-o Root  <class IORegistryEntry>\n    {\n      \"IOPlatformUUID\" = \"9ABCDEF0-1234-5678-9ABC-DEF012345678\"\n      \"IOPlatformSerialNumber\" = \"X\"\n    }\n")
+	dump := []byte(
+		"+-o Root  <class IORegistryEntry>\n    {\n      \"IOPlatformUUID\" = \"9ABCDEF0-1234-5678-9ABC-DEF012345678\"\n  " +
+			"    \"IOPlatformSerialNumber\" = \"X\"\n    }\n",
+	)
 	if got := parseIOPlatformUUID(dump); got != "9abcdef0-1234-5678-9abc-def012345678" {
 		t.Fatalf("parseIOPlatformUUID = %q", got)
 	}
@@ -289,4 +258,38 @@ func TestGrantWaitHonoursContext(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 3*time.Second {
 		t.Fatalf("other-process holder: want the context error, got %v after %v", err, time.Since(start))
 	}
+}
+
+// exitErr returns the error of a shell that wrote stderr and exited with code, or was killed when code is -1.
+func exitErr(t *testing.T, stderr string, code int) error {
+	t.Helper()
+	script := fmt.Sprintf("echo %q >&2; exit %d", stderr, code)
+	if stderr == "" {
+		script = fmt.Sprintf("exit %d", code)
+	}
+	if code < 0 {
+		script = "kill -9 $$"
+	}
+	_, err := exec.Command("sh", "-c", script).Output()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("shell did not fail: %v", err)
+	}
+	return err
+}
+
+// stubPS replaces the ps call for one test.
+func stubPS(t *testing.T, out string, err error) {
+	t.Helper()
+	old := runPS
+	runPS = func(context.Context, int) ([]byte, error) { return []byte(out), err }
+	t.Cleanup(func() { runPS = old })
+}
+
+// noOSMachineID makes the operating system give no machine id, so the home-folder file is the source.
+func noOSMachineID(t *testing.T) {
+	t.Helper()
+	old := osMachineID
+	osMachineID = func() string { return "" }
+	t.Cleanup(func() { osMachineID = old })
 }

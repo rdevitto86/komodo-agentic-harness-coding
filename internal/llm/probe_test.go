@@ -8,12 +8,16 @@ import (
 // stubProvider answers Probe with a fixed result.
 type stubProvider struct{ res ProbeResult }
 
-func (s stubProvider) Link() Link                                 { return s.res.Link }
+func (s stubProvider) Link() Link { return s.res.Link }
+
 func (s stubProvider) Probe(context.Context) (ProbeResult, error) { return s.res, nil }
+
 func (s stubProvider) Profile(context.Context, Weight) (CapacityProfile, error) {
 	return CapacityProfile{}, nil
 }
+
 func (s stubProvider) Start(context.Context, Session) (Stream, error) { return nil, ErrNotYet }
+
 func (s stubProvider) Resume(context.Context, Session, Input) (Stream, error) {
 	return nil, ErrNotYet
 }

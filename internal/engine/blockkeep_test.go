@@ -27,8 +27,19 @@ func TestBlockedScopeGroupKeepsItsTaskManagerForTheAnswer(t *testing.T) {
 						case StageIntake:
 							e.say(fact("ready", nil))
 						case StageBuild:
-							e.send(task.Message{ID: "esc", Kind: task.MsgEscalate, Escalation: &task.Escalation{ID: "esc", Group: e.spec.ID, Kind: task.EscScope, Reason: "needs_scope",
-								Detail: mustJSON(ScopeAsk{Task: e.spec.Tasks[0], Paths: []string{"shared/util.go"}, Reason: "helper"})}})
+							e.send(task.Message{
+								ID:   "esc",
+								Kind: task.MsgEscalate,
+								Escalation: &task.Escalation{
+									ID:     "esc",
+									Group:  e.spec.ID,
+									Kind:   task.EscScope,
+									Reason: "needs_scope",
+									Detail: mustJSON(ScopeAsk{
+										Task:   e.spec.Tasks[0],
+										Paths:  []string{"shared/util.go"},
+										Reason: "helper",
+									})}})
 						}
 					}
 				case <-e.ctx.Done():

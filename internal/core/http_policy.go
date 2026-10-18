@@ -32,12 +32,32 @@ type LimitError struct {
 	Code       string
 }
 
+// Error describes the limit that stopped the call.
+func (e *LimitError) Error() string {
+	switch e.Kind {
+	case LimitSpend:
+		return fmt.Sprintf("spend limit reached (HTTP %d)", e.Status)
+	case LimitQuota:
+		return fmt.Sprintf("quota exhausted: %s (HTTP %d)", e.Code, e.Status)
+	}
+	return fmt.Sprintf("rate limited for %s (HTTP %d)", e.RetryAfter, e.Status)
+}
+
 // StatusError is a final non-2xx response with its redacted body.
 type StatusError struct {
 	Status   int
 	Header   http.Header
 	Body     []byte
 	Attempts int
+}
+
+// Error describes the status and how many attempts were made.
+func (e *StatusError) Error() string {
+	snippet := string(e.Body)
+	if len(snippet) > 200 {
+		snippet = snippet[:200]
+	}
+	return fmt.Sprintf("unexpected status %d after %d attempts: %s", e.Status, e.Attempts, snippet)
 }
 
 // Headroom is one rate-limit bucket read from response headers.
@@ -64,32 +84,32 @@ type redactor struct {
 	vals []string
 }
 
+// add registers values, longest first so overlaps scrub whole.
+func (r *redactor) add(vals ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, v := range vals {
+		if v != "" && !slices.Contains(r.vals, v) {
+			r.vals = append(r.vals, v)
+		}
+	}
+	sort.Slice(r.vals, func(i, j int) bool { return len(r.vals[i]) > len(r.vals[j]) })
+}
+
+// apply replaces every registered value in s.
+func (r *redactor) apply(s string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, v := range r.vals {
+		s = strings.ReplaceAll(s, v, "[REDACTED]")
+	}
+	return s
+}
+
 // redactedError keeps the wrapped chain but prints scrubbed text.
 type redactedError struct {
 	msg string
 	err error
-}
-
-// Error describes the limit that stopped the call.
-func (e *LimitError) Error() string {
-	switch e.Kind {
-	case LimitSpend:
-		return fmt.Sprintf("spend limit reached (HTTP %d)", e.Status)
-	case LimitQuota:
-		return fmt.Sprintf("quota exhausted: %s (HTTP %d)", e.Code, e.Status)
-	}
-
-	return fmt.Sprintf("rate limited for %s (HTTP %d)", e.RetryAfter, e.Status)
-}
-
-// Error describes the status and how many attempts were made.
-func (e *StatusError) Error() string {
-	snippet := string(e.Body)
-	if len(snippet) > 200 {
-		snippet = snippet[:200]
-	}
-
-	return fmt.Sprintf("unexpected status %d after %d attempts: %s", e.Status, e.Attempts, snippet)
 }
 
 // Error returns the scrubbed message.
@@ -103,32 +123,6 @@ func (c *Client) Redact(s string) string { return c.red.apply(s) }
 
 // AddSecrets registers more values to scrub, such as env: sourced keys.
 func (c *Client) AddSecrets(vals ...string) { c.red.add(vals...) }
-
-// add registers values, longest first so overlaps scrub whole.
-func (r *redactor) add(vals ...string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for _, v := range vals {
-		if v != "" && !slices.Contains(r.vals, v) {
-			r.vals = append(r.vals, v)
-		}
-	}
-
-	sort.Slice(r.vals, func(i, j int) bool { return len(r.vals[i]) > len(r.vals[j]) })
-}
-
-// apply replaces every registered value in s.
-func (r *redactor) apply(s string) string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, v := range r.vals {
-		s = strings.ReplaceAll(s, v, "[REDACTED]")
-	}
-
-	return s
-}
 
 // classify decides whether a non-2xx response is a limit, a retry or final.
 func (c *Client) classify(status int, h http.Header, body []byte) verdict {
@@ -144,9 +138,7 @@ func (c *Client) classify(status int, h http.Header, body []byte) verdict {
 		case strings.Contains(code, "quota"):
 			return verdict{limit: &LimitError{Kind: LimitQuota, Status: status, Code: code}}
 		case hasRA && ra > maxRetryAfter:
-			return verdict{limit: &LimitError{
-				Kind: LimitRetryAfter, Status: status, RetryAfter: ra,
-			}}
+			return verdict{limit: &LimitError{Kind: LimitRetryAfter, Status: status, RetryAfter: ra}}
 		}
 
 		return verdict{retry: true, wait: ra, hasWait: hasRA}
@@ -185,11 +177,9 @@ func (c *Client) headroom(h http.Header) []Headroom {
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-
 	if c.opts.WarnQuotaPct > 0 && c.opts.OnWarn != nil {
 		for _, hr := range out {
-			if hr.Limit > 0 &&
-				float64(hr.Remaining)*100 < (100-c.opts.WarnQuotaPct)*float64(hr.Limit) {
+			if hr.Limit > 0 && float64(hr.Remaining)*100 < (100-c.opts.WarnQuotaPct)*float64(hr.Limit) {
 				c.opts.OnWarn(hr)
 			}
 		}
@@ -207,17 +197,9 @@ func (c *Client) vet(ep Endpoint, u *url.URL, method string) (string, error) {
 	case "http":
 		if !isLoopback(u.Hostname()) {
 			if !ep.SelfHosted {
-				return "", fmt.Errorf(
-					"%w: plain http to %s needs a loopback or self_hosted endpoint",
-					ErrRefused,
-					u.Host,
-				)
+				return "", fmt.Errorf("%w: plain http to %s needs a loopback or self_hosted endpoint", ErrRefused, u.Host)
 			}
-
-			warn = fmt.Sprintf(
-				"⚠️ plain http to self-hosted endpoint %s: traffic is not encrypted",
-				u.Host,
-			)
+			warn = fmt.Sprintf("⚠️ plain http to self-hosted endpoint %s: traffic is not encrypted", u.Host)
 		}
 	default:
 		return "", fmt.Errorf("%w: scheme %q is not http or https", ErrRefused, u.Scheme)
@@ -226,7 +208,6 @@ func (c *Client) vet(ep Endpoint, u *url.URL, method string) (string, error) {
 	if !hostAllowed(ep.Hosts, u) {
 		return "", fmt.Errorf("%w: host %s is not on the endpoint allowlist", ErrRefused, u.Host)
 	}
-
 	if len(ep.Methods) > 0 && !slices.ContainsFunc(
 		ep.Methods,
 		func(m string) bool { return strings.EqualFold(m, method) },
@@ -242,7 +223,6 @@ func (c *Client) learn(req *http.Request) {
 	for _, name := range []string{"Authorization", "Proxy-Authorization", "X-Api-Key", "Api-Key"} {
 		for _, v := range req.Header.Values(name) {
 			c.red.add(v)
-
 			if i := strings.LastIndexByte(v, ' '); i >= 0 {
 				c.red.add(v[i+1:])
 			}
@@ -255,7 +235,6 @@ func (c *Client) wrapErr(err error) error {
 	if err == nil {
 		return nil
 	}
-
 	return &redactedError{msg: c.Redact(err.Error()), err: err}
 }
 
@@ -299,15 +278,12 @@ func parseRetryAfter(v string, now time.Time) (time.Duration, bool) {
 	if v == "" {
 		return 0, false
 	}
-
 	if secs, err := strconv.ParseInt(v, 10, 64); err == nil && secs >= 0 {
 		if secs > int64(24*time.Hour/time.Second) {
 			secs = int64(24 * time.Hour / time.Second)
 		}
-
 		return time.Duration(secs) * time.Second, true
 	}
-
 	if t, err := http.ParseTime(v); err == nil {
 		return max(t.Sub(now), 0), true
 	}
@@ -324,34 +300,14 @@ func hostAllowed(hosts []string, u *url.URL) bool {
 			if canonicalEntry(host, port, u.Scheme) == full || e == strings.ToLower(u.Host) {
 				return true
 			}
-
 			continue
 		}
-
 		if strings.Trim(e, "[]") == name {
 			return true
 		}
 	}
 
 	return false
-}
-
-// canonicalEntry joins an allowlist host and port the way canonicalHost prints a URL host.
-func canonicalEntry(host, port, scheme string) string {
-	if scheme == "http" && port == "80" || scheme == "https" && port == "443" {
-		return bracketV6(host)
-	}
-
-	return net.JoinHostPort(host, port)
-}
-
-// bracketV6 wraps an IPv6 literal in brackets and leaves other hosts alone.
-func bracketV6(host string) string {
-	if strings.Contains(host, ":") {
-		return "[" + host + "]"
-	}
-
-	return host
 }
 
 // canonicalHost lowercases the host and drops the scheme's default port.
@@ -361,8 +317,23 @@ func canonicalHost(u *url.URL) string {
 	case u.Scheme == "http" && u.Port() == "80", u.Scheme == "https" && u.Port() == "443":
 		return bracketV6(strings.ToLower(u.Hostname()))
 	}
-
 	return host
+}
+
+// bracketV6 wraps an IPv6 literal in brackets and leaves other hosts alone.
+func bracketV6(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
+// canonicalEntry joins an allowlist host and port the way canonicalHost prints a URL host.
+func canonicalEntry(host, port, scheme string) string {
+	if scheme == "http" && port == "80" || scheme == "https" && port == "443" {
+		return bracketV6(host)
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // isLoopback reports whether host is localhost or a loopback address.
@@ -371,8 +342,6 @@ func isLoopback(host string) bool {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
-
 	ip := net.ParseIP(host)
-
 	return ip != nil && ip.IsLoopback()
 }

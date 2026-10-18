@@ -1,5 +1,5 @@
-// Package task is the Task Manager: it guards every agent action, runs the agents' tools and
-// carries the calls between one task group and the Runtime Manager.
+// Package task is the Task Manager: it guards every agent action, runs the agents' tools and carries the calls between one
+// task group and the Runtime Manager.
 package task
 
 import (
@@ -13,17 +13,16 @@ import (
 
 // GroupSpec is everything one Task Manager needs to run its group.
 type GroupSpec struct {
-	Run     string                 // run identifier, a version 7 UUID
-	Group   string                 // task group label, such as tg-1.2
-	Tasks   []TaskSpec             // tasks in order
-	Files   []string               // the group's file globs; the builder writes only here
-	Lease   LeaseRef               // branch, worktree and git folder the lease records
-	Agents  map[string]Permissions // permissions per agent role
-	Servers []OutsideServer        // outside tool servers switched on for at least one agent
-	Limits  Limits                 // session clocks, returns, refusals, attempts
-	// the group's saved state when `run` continues it; nil for a new group
-	Saved      *Progress
-	OtherFiles []string // file globs of the other groups in the run
+	Run        string                 // run identifier, a version 7 UUID
+	Group      string                 // task group label, such as tg-1.2
+	Tasks      []TaskSpec             // tasks in order
+	Files      []string               // the group's file globs; the builder writes only here
+	Lease      LeaseRef               // branch, worktree and git folder the lease records
+	Agents     map[string]Permissions // permissions per agent role
+	Servers    []OutsideServer        // outside tool servers switched on for at least one agent
+	Limits     Limits                 // session clocks, returns, refusals, attempts
+	Saved      *Progress              // the group's saved state when `run` continues it; nil for a new group
+	OtherFiles []string               // file globs of the other groups in the run
 }
 
 // TaskSpec is one task of the group.
@@ -61,19 +60,16 @@ type Limits struct {
 	RefusalLimit   int // refusals under one guard row before the session ends
 }
 
-// OutsideServer is one outside tool server from the Context Manager's list, switched on for at
-// least one agent.
+// OutsideServer is one outside tool server from the Context Manager's list, switched on for at least one agent.
 type OutsideServer struct {
 	Name    string   `json:"name"`
 	Command string   `json:"command"` // started without a shell
 	Args    []string `json:"args,omitempty"`
-	// variable names only; the values come from the harness environment
-	Env   []string `json:"env,omitempty"`
-	Hosts []string `json:"hosts,omitempty"` // hosts the server may reach; empty means no network
+	Env     []string `json:"env,omitempty"`   // variable names only; the values come from the harness environment
+	Hosts   []string `json:"hosts,omitempty"` // hosts the server may reach; empty means no network
 }
 
-// Progress is the Task Manager's own counters; the Runtime Manager persists them through
-// ReportState.
+// Progress is the Task Manager's own counters; the Runtime Manager persists them through ReportState.
 type Progress struct {
 	Stage     state.Stage `json:"stage"`
 	TasksDone []string    `json:"tasks_done"`
@@ -97,26 +93,20 @@ type Progress struct {
 
 // PauseState is a group waiting out a provider limit.
 type PauseState struct {
-	// first pause of this wait; kept across re-pauses
-	Since time.Time `json:"since"`
-	// latest reset time among halted sessions, plus 1 minute
-	WaitUntil time.Time `json:"wait_until"`
-	// the link whose reset the group waits for
-	WaitLink string `json:"wait_link"`
-	// resumes the provider refused at 0 turns
-	RefusedResumes int `json:"refused_resumes"`
-	// agents to start at the timer, instead of starting now
-	Owed   []string          `json:"owed"`
-	Handle *llm.ResumeHandle `json:"handle,omitempty"`
+	Since          time.Time         `json:"since"`           // first pause of this wait; kept across re-pauses
+	WaitUntil      time.Time         `json:"wait_until"`      // latest reset time among halted sessions, plus 1 minute
+	WaitLink       string            `json:"wait_link"`       // the link whose reset the group waits for
+	RefusedResumes int               `json:"refused_resumes"` // resumes the provider refused at 0 turns
+	Owed           []string          `json:"owed"`            // agents to start at the timer, instead of starting now
+	Handle         *llm.ResumeHandle `json:"handle,omitempty"`
 }
 
 // Escalation is a blocker or a request the Task Manager cannot settle alone.
 type Escalation struct {
-	ID    string         `json:"id"` // unique; an Answer names it
-	Group string         `json:"group"`
-	Kind  EscalationKind `json:"kind"` // scope, blocked or failed
-	// needs_scope, returns, flap, attempts, refusals and the other reasons
-	Reason string          `json:"reason"`
+	ID     string          `json:"id"` // unique; an Answer names it
+	Group  string          `json:"group"`
+	Kind   EscalationKind  `json:"kind"`   // scope, blocked or failed
+	Reason string          `json:"reason"` // needs_scope, returns, flap, attempts, refusals and the other reasons
 	Detail json.RawMessage `json:"detail,omitempty"`
 }
 
@@ -125,10 +115,9 @@ type EscalationKind string
 
 // Answer is the one reply to an Escalation, delivered through Manager.Continue.
 type Answer struct {
-	Escalation string `json:"escalation"` // the Escalation.ID
-	// approve (komodo run --approve) or deny (--deny)
-	Action   string   `json:"action"`
-	Approved []string `json:"approved,omitempty"` // scope: paths added to the group's files
+	Escalation string   `json:"escalation"`         // the Escalation.ID
+	Action     string   `json:"action"`             // approve (komodo run --approve) or deny (--deny)
+	Approved   []string `json:"approved,omitempty"` // scope: paths added to the group's files
 }
 
 // TimerRequest asks the Runtime Manager for more wall time for one session.
@@ -169,9 +158,7 @@ type Runtime interface {
 
 // The escalation kinds.
 const (
-	// a builder asked for files outside its list; waits for an answer
-	EscScope EscalationKind = "scope"
-	// work stopped; the Runtime Manager decides retry, hold or end
-	EscBlocked EscalationKind = "blocked"
-	EscFailed  EscalationKind = "failed" // work cannot continue; the group ends
+	EscScope   EscalationKind = "scope"   // a builder asked for files outside its list; waits for an answer
+	EscBlocked EscalationKind = "blocked" // work stopped; the Runtime Manager decides retry, hold or end
+	EscFailed  EscalationKind = "failed"  // work cannot continue; the group ends
 )

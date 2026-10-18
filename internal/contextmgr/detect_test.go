@@ -62,7 +62,10 @@ func TestDetectMakefileTargetWins(t *testing.T) {
 	if got := argvOf(cs, ClassTest); !reflect.DeepEqual(got, []string{"make", "test"}) {
 		t.Fatalf("test: %v", got)
 	}
-	if got := argvOf(Detect(newTree(map[string]string{"Makefile": "fmt:\n"})), ClassFormat); !reflect.DeepEqual(got, []string{"make", "fmt"}) {
+	if got := argvOf(
+		Detect(newTree(map[string]string{"Makefile": "fmt:\n"})),
+		ClassFormat,
+	); !reflect.DeepEqual(got, []string{"make", "fmt"}) {
 		t.Fatalf("format target is fmt: %v", got)
 	}
 }
@@ -88,7 +91,12 @@ func TestDetectMarkerHash(t *testing.T) {
 
 func TestRenderProfile(t *testing.T) {
 	out := renderProfile([]string{"go", "python"}, Detect(goTree()))
-	for _, want := range []string{"Languages: go, python", "setup: go mod download", "test: go test ./...", "git-read: git status, git diff, git log, git show"} {
+	for _, want := range []string{
+		"Languages: go, python",
+		"setup: go mod download",
+		"test: go test ./...",
+		"git-read: git status, git diff, git log, git show",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}

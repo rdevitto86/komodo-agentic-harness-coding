@@ -47,10 +47,27 @@ type Group struct {
 	Sessions   Sessions `json:"sessions"`    // builder, tester and reviewer
 }
 
+// sessions lists a group's sessions in display order.
+func (g Group) sessions() []namedSession {
+	return []namedSession{{"builder", g.Sessions.Builder}, {"tester", g.Sessions.Tester}, {"reviewer", g.Sessions.Reviewer}}
+}
+
+// tone is the semantic colour of a group: blocked, paused, done or active.
+func (g Group) tone() string {
+	switch {
+	case g.Hold == "blocked":
+		return "blocked"
+	case g.Hold == "paused":
+		return "paused"
+	case g.Stage == "done":
+		return "done"
+	}
+	return "active"
+}
+
 // Event is one entry of the event feed, with the bus event's type and subtype.
 type Event struct {
-	// run-status, run-complete, run-failure, resource, error and others
-	Type    string    `json:"type"`
+	Type    string    `json:"type"`    // run-status, run-complete, run-failure, resource, error and others
 	Subtype string    `json:"subtype"` // what happened within the type
 	Group   string    `json:"group"`   // group the event is about, empty for the run
 	At      time.Time `json:"at"`      // when it happened
@@ -151,29 +168,6 @@ var (
 	slugChars = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
-// sessions lists a group's sessions in display order.
-func (g Group) sessions() []namedSession {
-	return []namedSession{
-		{"builder", g.Sessions.Builder},
-		{"tester", g.Sessions.Tester},
-		{"reviewer", g.Sessions.Reviewer},
-	}
-}
-
-// tone is the semantic colour of a group: blocked, paused, done or active.
-func (g Group) tone() string {
-	switch {
-	case g.Hold == "blocked":
-		return "blocked"
-	case g.Hold == "paused":
-		return "paused"
-	case g.Stage == "done":
-		return "done"
-	}
-
-	return "active"
-}
-
 // kpis counts running, blocked and done groups and sums usage over every session.
 func kpis(v View) KPIs {
 	var k KPIs
@@ -197,33 +191,17 @@ func kpis(v View) KPIs {
 	return k
 }
 
-// stageIndex is the position of a stage in Stages, Intake when the stage is unknown.
-func stageIndex(stage string) int { return max(slices.Index(Stages, stage), 0) }
-
 // stageCounts returns how many groups sit at each stage, held ones included.
 func stageCounts(gs []Group) []int {
 	counts := make([]int, len(Stages))
 	for _, g := range gs {
 		counts[stageIndex(g.Stage)]++
 	}
-
 	return counts
 }
 
-// recentEvents returns the newest maxEvents events, newest first.
-func recentEvents(es []Event) []Event {
-	out := slices.Clone(es)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
-
-	if len(out) > maxEvents {
-		out = out[:maxEvents]
-	}
-
-	return out
-}
-
-// stageX is the left edge of stage box i; boxes are 88 wide with 22 between.
-func stageX(i int) int { return 1 + i*110 }
+// stageIndex is the position of a stage in Stages, Intake when the stage is unknown.
+func stageIndex(stage string) int { return max(slices.Index(Stages, stage), 0) }
 
 // boxes places one box per stage with its live count.
 func boxes(counts []int) []stageBox {
@@ -242,20 +220,18 @@ func boxes(counts []int) []stageBox {
 	return out
 }
 
+// stageX is the left edge of stage box i; boxes are 88 wide with 22 between.
+func stageX(i int) int { return 1 + i*110 }
+
 // pointers places each group's dot under its stage box, stacking the dots of one stage 26 apart.
 func pointers(gs []Group) []pointer {
 	ps := make([]pointer, 0, len(gs))
 	stacked := make([]int, len(Stages))
-
 	for _, g := range gs {
 		i := stageIndex(g.Stage)
-		ps = append(
-			ps,
-			pointer{ID: g.Group, Tone: g.tone(), X: stageX(i) + 44, Y: 122 + stacked[i]*26},
-		)
+		ps = append(ps, pointer{ID: g.Group, Tone: g.tone(), X: stageX(i) + 44, Y: 122 + stacked[i]*26})
 		stacked[i]++
 	}
-
 	return ps
 }
 
@@ -278,7 +254,6 @@ func cards(gs []Group) []card {
 		case "paused":
 			c.Chip = "Paused"
 		}
-
 		if g.TasksTotal > 0 {
 			c.Pct = min(max(g.TasksDone*100/g.TasksTotal, 0), 100)
 		}
@@ -299,7 +274,6 @@ func eventRows(es []Event) []eventRow {
 
 	for _, e := range recentEvents(es) {
 		tone := "plain"
-
 		switch e.Type {
 		case "run-status":
 			tone = "status"
@@ -317,19 +291,27 @@ func eventRows(es []Event) []eventRow {
 	return rows
 }
 
+// recentEvents returns the newest maxEvents events, newest first.
+func recentEvents(es []Event) []Event {
+	out := slices.Clone(es)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	if len(out) > maxEvents {
+		out = out[:maxEvents]
+	}
+	return out
+}
+
 // linkRows colours each meter by how much of the window is used.
 func linkRows(ls []Link) []linkRow {
 	rows := make([]linkRow, 0, len(ls))
 	for _, l := range ls {
 		tone := "ok"
-
 		switch {
 		case l.Percent >= 90:
 			tone = "hot"
 		case l.Percent >= 75:
 			tone = "warn"
 		}
-
 		rows = append(rows, linkRow{Link: l, Width: min(max(l.Percent, 0), 100), Tone: tone})
 	}
 
@@ -342,7 +324,6 @@ func num(n int) string {
 	for i := len(s) - 3; i > 0 && s[i-1] != '-'; i -= 3 {
 		s = s[:i] + "," + s[i:]
 	}
-
 	return s
 }
 

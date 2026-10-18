@@ -15,6 +15,34 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
+// ctxBriefs blocks the tester's brief until its context ends, as a slow Context Manager would.
+type ctxBriefs struct {
+	inner Briefer
+	n     *atomic.Int32
+}
+
+func (b ctxBriefs) Brief(ctx context.Context, name string, slots map[string]string) (Brief, error) {
+	if name == "tester" && b.n.Add(1) == 1 {
+		<-ctx.Done()
+		return Brief{}, ctx.Err()
+	}
+	return b.inner.Brief(ctx, name, slots)
+}
+
+// panicRole panics when its brief values are asked for.
+type panicRole struct{ Role }
+
+func (panicRole) Slots(context.Context, RoleInput) (map[string]string, error) { panic("boom") }
+
+// blockingChecks blocks until its context ends.
+type blockingChecks struct{ started chan struct{} }
+
+func (b blockingChecks) Check(ctx context.Context, _ agent.CommandRunner, _ agent.CheckInput) (agent.CheckResult, error) {
+	close(b.started)
+	<-ctx.Done()
+	return agent.CheckResult{}, ctx.Err()
+}
+
 func TestBuilderPauseDoesNotSkipTheChecksOfTestReview(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", limitStep(t0.Add(time.Hour)))
@@ -46,23 +74,15 @@ func TestPauseRecordedBeforeRunHoldsTheGroup(t *testing.T) {
 	}
 }
 
-// ctxBriefs blocks the tester's brief until its context ends, as a slow Context Manager would.
-type ctxBriefs struct {
-	inner Briefer
-	n     *atomic.Int32
-}
-
-func (b ctxBriefs) Brief(ctx context.Context, name string, slots map[string]string) (Brief, error) {
-	if name == "tester" && b.n.Add(1) == 1 {
-		<-ctx.Done()
-		return Brief{}, ctx.Err()
-	}
-	return b.inner.Brief(ctx, name, slots)
-}
-
 func TestReviewerReturnWhileTheTesterBriefsDoesNotFailTheGroup(t *testing.T) {
-	r := newPipeRig(t, rigOpts{mut: func(_ *GroupSpec, c *Collaborators) { c.Briefs = ctxBriefs{c.Briefs, new(atomic.Int32)} }})
-	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone), building(r.wt, "a.go", "package a\n// fixed\n", builderDone))
+	r := newPipeRig(t, rigOpts{
+		mut: func(_ *GroupSpec, c *Collaborators) { c.Briefs = ctxBriefs{c.Briefs, new(atomic.Int32)} },
+	})
+	r.model.on(
+		"builder",
+		building(r.wt, "a.go", "package a\n", builderDone),
+		building(r.wt, "a.go", "package a\n// fixed\n", builderDone),
+	)
 	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerMet))
 	r.model.on("tester", sayResult(testerPass))
 	r.reachCleanup()
@@ -70,11 +90,6 @@ func TestReviewerReturnWhileTheTesterBriefsDoesNotFailTheGroup(t *testing.T) {
 		t.Fatalf("progress %+v", r.rt.progress())
 	}
 }
-
-// panicRole panics when its brief values are asked for.
-type panicRole struct{ Role }
-
-func (panicRole) Slots(context.Context, RoleInput) (map[string]string, error) { panic("boom") }
 
 func TestPanickingJudgeNeverPublishes(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
@@ -120,15 +135,6 @@ func TestPanicInAServedCallEndsItAndAStopStillReturns(t *testing.T) {
 	}
 }
 
-// blockingChecks blocks until its context ends.
-type blockingChecks struct{ started chan struct{} }
-
-func (b blockingChecks) Check(ctx context.Context, _ agent.CommandRunner, _ agent.CheckInput) (agent.CheckResult, error) {
-	close(b.started)
-	<-ctx.Done()
-	return agent.CheckResult{}, ctx.Err()
-}
-
 func TestStopCancelsARunningRecheckBeforeServeWaitsForIt(t *testing.T) {
 	started := make(chan struct{})
 	r := newPipeRig(t, rigOpts{mut: func(_ *GroupSpec, c *Collaborators) {
@@ -151,8 +157,10 @@ func TestStopCancelsARunningRecheckBeforeServeWaitsForIt(t *testing.T) {
 
 func TestLostResumeStartsFreshWithTheBriefAndTheInputWritten(t *testing.T) {
 	r := newPipeRig(t, rigOpts{mut: func(s *GroupSpec, c *Collaborators) {
-		s.Saved = &Progress{Stage: state.StageBuild, Handles: map[string]llm.ResumeHandle{"builder": {Link: llm.AnthropicAPI, Kind: "messages_file",
-			Value: filepath.Join(c.SessionsDir, "sid-1", "messages.jsonl")}}}
+		s.Saved = &Progress{
+			Stage: state.StageBuild,
+			Handles: map[string]llm.ResumeHandle{"builder": {Link: llm.AnthropicAPI, Kind: "messages_file",
+				Value: filepath.Join(c.SessionsDir, "sid-1", "messages.jsonl")}}}
 	}})
 	r.model.resume = func(llm.Session, llm.Input) (llm.Stream, error) { return nil, errors.New("gone") }
 	var fresh llm.Session
@@ -169,7 +177,8 @@ func TestLostResumeStartsFreshWithTheBriefAndTheInputWritten(t *testing.T) {
 		}
 	}
 	b, _ := os.ReadFile(filepath.Join(fresh.Dir, "brief.md"))
-	if !strings.Contains(string(b), "Continue where you stopped.") || !strings.Contains(fresh.Parts[4], "Continue where you stopped.") {
+	if !strings.Contains(string(b), "Continue where you stopped.") ||
+		!strings.Contains(fresh.Parts[4], "Continue where you stopped.") {
 		t.Fatalf("the fresh brief dropped the resume input: %q", b)
 	}
 }
@@ -185,8 +194,13 @@ func TestScopeAnswerReachesOnlyTheNextBrief(t *testing.T) {
 }
 
 func TestTesterSummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
-	roles, err := NewRoles(RoleConfig{Group: "tg-1", Tasks: []TaskSpec{{ID: "t1", Title: "x", DoneWhen: "build"}}, Worktree: t.TempDir(),
-		Items: []agent.Item{{ID: "a1", Text: "looks right"}, {ID: "a2", Text: "reaches the net", Cmd: "test", Needs: []string{"network"}}},
+	roles, err := NewRoles(RoleConfig{Group: "tg-1", Tasks: []TaskSpec{
+		{ID: "t1", Title: "x", DoneWhen: "build"},
+	}, Worktree: t.TempDir(),
+		Items: []agent.Item{
+			{ID: "a1", Text: "looks right"},
+			{ID: "a2", Text: "reaches the net", Cmd: "test", Needs: []string{"network"}},
+		},
 		Files: func() []string { return []string{"*.go"} },
 		Runner: func() agent.CommandRunner {
 			return func(context.Context, string) (int, string, error) { return 1, "", nil }
@@ -194,12 +208,19 @@ func TestTesterSummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := roles["tester"].Judge(context.Background(), result(`{"items":[{"item":"a1","pass":false,"evidence":"no"},{"item":"a2","pass":false,"evidence":"no"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`))
+	out, err := roles["tester"].Judge(
+		context.Background(),
+		result(
+			`{"items":[{"item":"a1","pass":false,"evidence":"no"},{"item":"a2","pass":false,"evidence":"no"}],`+
+				`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
+		),
+	)
 	if err != nil || out.Kind != OutcomePass {
 		t.Fatalf("outcome %+v, %v", out, err)
 	}
 	all := strings.Join(out.Summary, "\n")
-	if !strings.Contains(all, "unconfirmed") || !strings.Contains(all, "a1") || !strings.Contains(all, "a2") || !strings.Contains(all, "network") {
+	if !strings.Contains(all, "unconfirmed") || !strings.Contains(all, "a1") || !strings.Contains(all, "a2") ||
+		!strings.Contains(all, "network") {
 		t.Fatalf("summary %q", all)
 	}
 }

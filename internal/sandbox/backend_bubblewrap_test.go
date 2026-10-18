@@ -10,10 +10,12 @@ import (
 
 func TestBubblewrapCheck(t *testing.T) {
 	emptyPath(t)
-	if err := NewBubblewrap(BubblewrapOptions{GOOS: "darwin"}).Check(); err == nil || !strings.Contains(err.Error(), "Linux") {
+	if err := NewBubblewrap(BubblewrapOptions{GOOS: "darwin"}).Check(); err == nil ||
+		!strings.Contains(err.Error(), "Linux") {
 		t.Fatalf("other system: %v", err)
 	}
-	if err := NewBubblewrap(BubblewrapOptions{GOOS: "linux"}).Check(); err == nil || !strings.Contains(err.Error(), "bwrap") || !strings.Contains(err.Error(), "install") {
+	if err := NewBubblewrap(BubblewrapOptions{GOOS: "linux"}).Check(); err == nil ||
+		!strings.Contains(err.Error(), "bwrap") || !strings.Contains(err.Error(), "install") {
 		t.Fatalf("missing program: %v", err)
 	}
 	putFake(t, "bwrap", `echo "bwrap: No permissions to create new namespace" >&2; exit 1`+"\n")
@@ -34,7 +36,8 @@ func TestBubblewrapFailsClosedWithoutAHomeFolder(t *testing.T) {
 	if err := bw.Check(); err == nil || !strings.Contains(err.Error(), "home") {
 		t.Fatalf("Check: %v", err)
 	}
-	if _, err := bw.Prepare(context.Background(), testSpec(t, RoleBuilder)); err == nil || !strings.Contains(err.Error(), "home") {
+	if _, err := bw.Prepare(context.Background(), testSpec(t, RoleBuilder)); err == nil ||
+		!strings.Contains(err.Error(), "home") {
 		t.Fatalf("Prepare: %v", err)
 	}
 }
@@ -50,7 +53,10 @@ func TestBubblewrapCommandWrapsTheArgv(t *testing.T) {
 	if inst.Backend != "bubblewrap" || inst.ID == "" {
 		t.Fatalf("instance %+v", inst)
 	}
-	cmd, err := bw.Command(context.Background(), inst, s, Command{Argv: []string{"go", "vet", "./..."}, Env: []string{"GOCACHE=" + s.Writable[1], "TOKEN=x"}})
+	cmd, err := bw.Command(context.Background(), inst, s, Command{
+		Argv: []string{"go", "vet", "./..."},
+		Env:  []string{"GOCACHE=" + s.Writable[1], "TOKEN=x"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +71,8 @@ func TestBubblewrapCommandWrapsTheArgv(t *testing.T) {
 	if indexOf(args, "--unshare-net") < 0 || indexOf(args, "--chdir", s.Worktree) < 0 {
 		t.Fatalf("args %v", args)
 	}
-	if !contains(cmd.Env, "HOME="+s.Writable[0]) || contains(cmd.Env, "TOKEN=x") || cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+	if !contains(cmd.Env, "HOME="+s.Writable[0]) || contains(cmd.Env, "TOKEN=x") || cmd.SysProcAttr == nil ||
+		!cmd.SysProcAttr.Setpgid {
 		t.Fatalf("env %v", cmd.Env)
 	}
 }

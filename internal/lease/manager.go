@@ -44,19 +44,15 @@ type Manager struct {
 // retries bounds how often a call rereads after losing a race on a record's rev.
 const retries = 8
 
-// New opens the lease manager over a registry and a process check; lockTimeoutS is the value of
-// lease.lock_timeout_s.
-// A nil registry is the file registry under home/leases with that wait; a nil check is
-// OSProcessCheck.
+// New opens the lease manager over a registry and a process check; lockTimeoutS is the value of lease.lock_timeout_s.
+// A nil registry is the file registry under home/leases with that wait; a nil check is OSProcessCheck.
 func New(home string, lockTimeoutS any, reg Registry, alive ProcessCheck) (*Manager, error) {
 	if home == "" {
 		return nil, errors.New("lease manager needs a home folder")
 	}
-
 	if reg == nil {
 		reg = NewFileRegistry(filepath.Join(home, "leases"), LockTimeout(lockTimeoutS))
 	}
-
 	if alive == nil {
 		alive = OSProcessCheck
 	}
@@ -83,7 +79,6 @@ func (m *Manager) Grant(ctx context.Context, req GrantRequest) (Lease, error) {
 	if err := checkRequest(req); err != nil {
 		return Lease{}, err
 	}
-
 	if err := ctx.Err(); err != nil {
 		return Lease{}, err
 	}
@@ -116,11 +111,9 @@ func (m *Manager) Renew(ctx context.Context, l Lease) (Lease, error) {
 		if errors.Is(err, ErrNotFound) {
 			return Lease{}, ErrLeaseLost
 		}
-
 		if err != nil {
 			return Lease{}, err
 		}
-
 		if !owns(cur, l) {
 			return Lease{}, ErrLeaseLost
 		}
@@ -131,17 +124,14 @@ func (m *Manager) Renew(ctx context.Context, l Lease) (Lease, error) {
 		if errors.Is(err, ErrStaleRev) {
 			continue
 		}
-
 		if errors.Is(err, ErrNotFound) {
 			return Lease{}, ErrLeaseLost
 		}
-
 		if err != nil {
 			return Lease{}, err
 		}
 
 		cur.Rev = rev
-
 		return cur, nil
 	}
 
@@ -170,7 +160,6 @@ func (m *Manager) Revoke(ctx context.Context, repo, group string, why RevokeReas
 		if err != nil {
 			return err
 		}
-
 		if cur.State == StateRevoked {
 			return nil
 		}
@@ -181,11 +170,9 @@ func (m *Manager) Revoke(ctx context.Context, repo, group string, why RevokeReas
 		}
 
 		cur.State, cur.Fence = StateRevoked, max(cur.Fence, high)+1
-
 		if err := m.raiseFence(ctx, repo, group, cur.Fence); err != nil {
 			return err
 		}
-
 		if _, err := m.reg.Swap(ctx, cur, cur.Rev); !errors.Is(err, ErrStaleRev) {
 			return err
 		}
@@ -200,7 +187,6 @@ func (m *Manager) Holder(ctx context.Context, repo, group string) (Lease, bool, 
 	if errors.Is(err, ErrNotFound) {
 		return Lease{}, false, nil
 	}
-
 	return l, err == nil, err
 }
 
@@ -212,7 +198,6 @@ func (m *Manager) IsOwner(ctx context.Context, l Lease) (bool, error) {
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
-
 	if err != nil {
 		return false, err
 	}
@@ -229,11 +214,9 @@ func (m *Manager) Release(ctx context.Context, l Lease) error {
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
-
 		if err != nil {
 			return err
 		}
-
 		if cur.Run != l.Run || (cur.State == StateHeld && cur.Fence != l.Fence) {
 			return ErrLeaseLost
 		}
@@ -242,7 +225,6 @@ func (m *Manager) Release(ctx context.Context, l Lease) error {
 		if errors.Is(err, ErrStaleRev) {
 			continue
 		}
-
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
@@ -253,33 +235,20 @@ func (m *Manager) Release(ctx context.Context, l Lease) error {
 	return fmt.Errorf("release %s: %w", l.Group, ErrStaleRev)
 }
 
-// Live reports whether a lease still has a working holder: a running process on this machine, or a
-// recent renewal elsewhere.
+// Live reports whether a lease still has a working holder: a running process on this machine, or a recent renewal elsewhere.
 func (m *Manager) Live(l Lease) bool { return l.Live(time.Now(), m.machine, m.alive) }
-
-// mutex returns the in-process lock for a key, creating it on first use.
-func (m *Manager) mutex(key string) *sync.Mutex {
-	mu, _ := m.locks.LoadOrStore(key, &sync.Mutex{})
-
-	return mu.(*sync.Mutex)
-}
 
 // groupLock locks one group inside this process and returns the unlock.
 func (m *Manager) groupLock(repo, group string) func() {
 	mu := m.mutex("g\x00" + repo + "\x00" + group)
 	mu.Lock()
-
 	return mu.Unlock
 }
 
-// stamp returns the current time in UTC to the second, the form the records hold.
-func (m *Manager) stamp() time.Time { return m.now().UTC().Truncate(time.Second) }
-
-// repoSem returns the in-process semaphore of a repository, creating it on first use.
-func (m *Manager) repoSem(repo string) chan struct{} {
-	sem, _ := m.sems.LoadOrStore(repo, make(chan struct{}, 1))
-
-	return sem.(chan struct{})
+// mutex returns the in-process lock for a key, creating it on first use.
+func (m *Manager) mutex(key string) *sync.Mutex {
+	mu, _ := m.locks.LoadOrStore(key, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }
 
 // lockRepo holds one repository's lock inside this process and, when the registry offers it,
@@ -287,7 +256,6 @@ func (m *Manager) repoSem(repo string) chan struct{} {
 // Waiting for either ends when the context does.
 func (m *Manager) lockRepo(ctx context.Context, repo string) (func(), error) {
 	sem := m.repoSem(repo)
-
 	select {
 	case sem <- struct{}{}:
 	case <-ctx.Done():
@@ -302,34 +270,19 @@ func (m *Manager) lockRepo(ctx context.Context, repo string) (func(), error) {
 	unlock, err := rl.LockRepo(ctx, repo)
 	if err != nil {
 		<-sem
-
 		return nil, err
 	}
 
 	return func() { unlock(); <-sem }, nil
 }
 
-// highFence returns the highest fence a group ever had, or 0 when the registry keeps none.
-func (m *Manager) highFence(ctx context.Context, repo, group string) (Fence, error) {
-	if fk, ok := m.reg.(FenceKeeper); ok {
-		return fk.HighFence(ctx, repo, group)
-	}
-
-	return 0, nil
+// repoSem returns the in-process semaphore of a repository, creating it on first use.
+func (m *Manager) repoSem(repo string) chan struct{} {
+	sem, _ := m.sems.LoadOrStore(repo, make(chan struct{}, 1))
+	return sem.(chan struct{})
 }
 
-// raiseFence records a fence in the registry's high-water mark before the record that carries it
-// is written.
-func (m *Manager) raiseFence(ctx context.Context, repo, group string, f Fence) error {
-	if fk, ok := m.reg.(FenceKeeper); ok {
-		return fk.RaiseFence(ctx, repo, group, f)
-	}
-
-	return nil
-}
-
-// grantOnce tries one grant; the bool is true when a lost race means the caller should reread and
-// try again.
+// grantOnce tries one grant; the bool is true when a lost race means the caller should reread and try again.
 func (m *Manager) grantOnce(ctx context.Context, req GrantRequest) (Lease, bool, error) {
 	now := m.stamp()
 
@@ -370,26 +323,20 @@ func (m *Manager) grantOnce(ctx context.Context, req GrantRequest) (Lease, bool,
 	cur, err := m.reg.Get(ctx, req.Repo, req.Group)
 	if errors.Is(err, ErrNotFound) {
 		next.Rev = 1
-
 		if err := m.raiseFence(ctx, req.Repo, req.Group, next.Fence); err != nil {
 			return Lease{}, false, err
 		}
-
 		err = m.reg.Create(ctx, next)
-
 		return next, errors.Is(err, ErrExists), exceptExists(err)
 	}
-
 	if err != nil {
 		return Lease{}, false, err
 	}
-
 	if cur.Live(now, m.machine, m.alive) {
 		return Lease{}, false, HeldError{Holder: cur}
 	}
 
 	next.Fence = max(cur.Fence, high) + 1
-
 	if err := m.raiseFence(ctx, req.Repo, req.Group, next.Fence); err != nil {
 		return Lease{}, false, err
 	}
@@ -400,8 +347,27 @@ func (m *Manager) grantOnce(ctx context.Context, req GrantRequest) (Lease, bool,
 	}
 
 	next.Rev = rev
-
 	return next, false, err
+}
+
+// stamp returns the current time in UTC to the second, the form the records hold.
+func (m *Manager) stamp() time.Time { return m.now().UTC().Truncate(time.Second) }
+
+// highFence returns the highest fence a group ever had, or 0 when the registry keeps none.
+func (m *Manager) highFence(ctx context.Context, repo, group string) (Fence, error) {
+	if fk, ok := m.reg.(FenceKeeper); ok {
+		return fk.HighFence(ctx, repo, group)
+	}
+	return 0, nil
+}
+
+// raiseFence records a fence in the registry's high-water mark before the record that carries it
+// is written.
+func (m *Manager) raiseFence(ctx context.Context, repo, group string, f Fence) error {
+	if fk, ok := m.reg.(FenceKeeper); ok {
+		return fk.RaiseFence(ctx, repo, group, f)
+	}
+	return nil
 }
 
 // checkRequest refuses a grant request that cannot be recorded.
@@ -425,7 +391,6 @@ func exceptExists(err error) error {
 	if errors.Is(err, ErrExists) {
 		return nil
 	}
-
 	return err
 }
 

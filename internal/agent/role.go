@@ -1,4 +1,5 @@
-// Package agent holds the role definitions, result schemas and pure decision functions of the Builder, Tester, Reviewer and Planner.
+// Package agent holds the role definitions, result schemas and pure decision functions of the Builder, Tester, Reviewer and
+// Planner.
 package agent
 
 import (
@@ -46,7 +47,11 @@ func newRole(
 	resultRequired []string,
 	pool bool,
 ) Role {
-	schema, err := json.Marshal(map[string]any{"$id": resultID, "type": "object", "required": resultRequired})
+	schema, err := json.Marshal(map[string]any{
+		"$id":      resultID,
+		"type":     "object",
+		"required": resultRequired,
+	})
 	if err != nil {
 		panic("marshal result schema: " + err.Error())
 	}

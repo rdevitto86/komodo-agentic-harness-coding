@@ -15,7 +15,8 @@ type Leases interface {
 	Holder(ctx context.Context, repo, group string) (lease.Lease, bool, error)
 }
 
-// GroupLocker is implemented by a Leases that can hold a group still against a grant while the handler removes its resources.
+// GroupLocker is implemented by a Leases that can hold a group still against a grant while the handler removes its
+// resources.
 type GroupLocker interface {
 	LockGroup(ctx context.Context, repo, group string) (unlock func(), err error)
 }
@@ -25,9 +26,11 @@ type GroupLocker interface {
 type Git interface {
 	// RemoveWorktree removes a worktree and refuses when it holds files the tip lacks.
 	RemoveWorktree(ctx context.Context, clone, path string) error
-	// DeleteBranch deletes a local branch only when it still points at expectTip and that commit is in the history of containedIn.
+	// DeleteBranch deletes a local branch only when it still points at expectTip and
+	// that commit is in the history of containedIn.
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
-	// DiscardBranch deletes a local branch that still points at expectTip, whether or not the remote holds that commit; only Discard calls it.
+	// DiscardBranch deletes a local branch that still points at expectTip, whether or not
+	// the remote holds that commit; only Discard calls it.
 	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
 	// DiscardWorktree removes a worktree and its files even when they hold work the tip lacks; only Discard calls it.
 	DiscardWorktree(ctx context.Context, clone, path string) error
@@ -35,11 +38,13 @@ type Git interface {
 	BranchTip(ctx context.Context, clone, branch string) (tip string, ok bool, err error)
 	// Fetch brings the remote's branches into their remote-tracking references; it never prunes.
 	Fetch(ctx context.Context, clone, remote string) error
-	// Holds reads the remote-tracking references, which Fetch refreshes, and reports whether the remote holds tip in the history of contains, or of any of its branches when contains is empty.
+	// Holds reads the remote-tracking references, which Fetch refreshes, and reports whether the
+	// remote holds tip in the history of contains, or of any of its branches when contains is empty.
 	Holds(ctx context.Context, clone, remote, contains, tip string) (ref string, ok bool, err error)
 }
 
-// Containers removes a group's Docker container; the sandbox backend that created it implements it, and it succeeds when Docker is absent or the container is gone.
+// Containers removes a group's Docker container; the sandbox backend that created it implements it,
+// and it succeeds when Docker is absent or the container is gone.
 type Containers interface {
 	Remove(ctx context.Context, group string) error
 	// List returns the group of every Komodo container, running or stopped.

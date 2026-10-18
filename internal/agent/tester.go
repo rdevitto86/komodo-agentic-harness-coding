@@ -129,6 +129,7 @@ func (goTester) AcceptResult(tasks, items []string, r TesterResult) error {
 	if err := ExactlyOnce(tasks, got); err != nil {
 		return err
 	}
+
 	if len(got) != len(tasks) {
 		return errors.New("result names a task that is not in the group")
 	}

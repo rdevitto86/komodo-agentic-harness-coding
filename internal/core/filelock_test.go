@@ -24,43 +24,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// holdLockChild locks path, prints "locked", and waits for its standard input to close.
-func holdLockChild(path string) int {
-	unlock, err := FileLock(context.Background(), path, time.Second)
-	if err != nil {
-		println("child lock failed:", err.Error())
-		return 2
-	}
-	println("locked")
-	_, _ = bufio.NewReader(os.Stdin).ReadByte()
-	_ = unlock()
-	return 0
-}
-
-// startHolder starts a child process that holds the lock on path and returns it with a function that releases it.
-func startHolder(t *testing.T, path string) (*exec.Cmd, func()) {
-	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	cmd.Env = append(os.Environ(), lockChildEnv+"="+path)
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	errOut, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	line, _ := bufio.NewReader(errOut).ReadString('\n')
-	if line != "locked\n" {
-		t.Fatalf("child did not take the lock: %q", line)
-	}
-	return cmd, func() { _ = in.Close() }
-}
-
 func TestFileLockExcludesAndReleases(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.lock")
 	unlock, err := FileLock(context.Background(), path, time.Second)
@@ -229,4 +192,41 @@ func TestLockHeld(t *testing.T) {
 	if os.Geteuid() != 0 && !LockHeld(path) {
 		t.Fatal("a file that cannot be opened must count as held, so callers reread")
 	}
+}
+
+// holdLockChild locks path, prints "locked", and waits for its standard input to close.
+func holdLockChild(path string) int {
+	unlock, err := FileLock(context.Background(), path, time.Second)
+	if err != nil {
+		println("child lock failed:", err.Error())
+		return 2
+	}
+	println("locked")
+	_, _ = bufio.NewReader(os.Stdin).ReadByte()
+	_ = unlock()
+	return 0
+}
+
+// startHolder starts a child process that holds the lock on path and returns it with a function that releases it.
+func startHolder(t *testing.T, path string) (*exec.Cmd, func()) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), lockChildEnv+"="+path)
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errOut, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	line, _ := bufio.NewReader(errOut).ReadString('\n')
+	if line != "locked\n" {
+		t.Fatalf("child did not take the lock: %q", line)
+	}
+	return cmd, func() { _ = in.Close() }
 }

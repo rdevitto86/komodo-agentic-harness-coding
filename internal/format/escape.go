@@ -28,141 +28,7 @@ const (
 // timeType is the one struct type the escaper leaves alone.
 var timeType = reflect.TypeOf(time.Time{})
 
-// span returns s as a Markdown code span: newlines and control bytes escaped, fenced one backtick
-// longer than its longest run.
-func span(s string) string {
-	if s == "" {
-		return ""
-	}
-
-	s = escapeControls(strings.NewReplacer("\r", `\n`, "\n", `\n`).Replace(s))
-	longest, run := 0, 0
-
-	for i := 0; i < len(s); i++ {
-		if s[i] == '`' {
-			run++
-			longest = max(longest, run)
-		} else {
-			run = 0
-		}
-	}
-
-	fence := strings.Repeat("`", longest+1)
-
-	pad := s[0] == '`' || s[len(s)-1] == '`' ||
-		(s[0] == ' ' && s[len(s)-1] == ' ' && strings.Trim(s, " ") != "")
-	if pad {
-		s = " " + s + " "
-	}
-
-	return fence + s + fence
-}
-
-// escapeControls writes every C0 control byte except tab as a visible \xNN, so no terminal sequence
-// survives.
-func escapeControls(s string) string {
-	var b strings.Builder
-
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c < 0x20 && c != '\t' {
-			fmt.Fprintf(&b, `\x%02x`, c)
-		} else {
-			b.WriteByte(c)
-		}
-	}
-
-	return b.String()
-}
-
-// unspan returns the text inside a code span, or s unchanged when s is not one whole span.
-func unspan(s string) string {
-	k := runLen(s, 0)
-	if k == 0 ||
-		len(s) < 2*k+1 ||
-		runLen(s, len(s)-k) != k ||
-		(len(s)-k > 0 && s[len(s)-k-1] == '`') {
-		return s
-	}
-
-	inner := s[k : len(s)-k]
-	if len(inner) >= 2 &&
-		inner[0] == ' ' &&
-		inner[len(inner)-1] == ' ' &&
-		strings.Trim(inner, " ") != "" {
-		inner = inner[1 : len(inner)-1]
-	}
-
-	return inner
-}
-
-// runLen returns the length of the backtick run that starts at s[i], 0 when s[i] is not a backtick.
-func runLen(s string, i int) int {
-	n := 0
-	for i+n < len(s) && s[i+n] == '`' {
-		n++
-	}
-
-	return n
-}
-
-// splitSpans cuts a line into plain text and whole code spans; an unclosed backtick run stays text.
-func splitSpans(s string) []segment {
-	var out []segment
-
-	start, i := 0, 0
-	for i < len(s) {
-		if s[i] != '`' {
-			i++
-
-			continue
-		}
-
-		k := runLen(s, i)
-
-		end := closeRun(s, i+k, k)
-		if end < 0 {
-			i += k
-
-			continue
-		}
-
-		if i > start {
-			out = append(out, segment{s[start:i], false})
-		}
-
-		out = append(out, segment{s[i : end+k], true})
-		i, start = end+k, end+k
-	}
-
-	if start < len(s) {
-		out = append(out, segment{s[start:], false})
-	}
-
-	return out
-}
-
-// closeRun returns the index of the next backtick run of exactly k from `from`, or -1.
-func closeRun(s string, from, k int) int {
-	for p := from; p < len(s); {
-		if s[p] != '`' {
-			p++
-
-			continue
-		}
-
-		r := runLen(s, p)
-		if r == k {
-			return p
-		}
-
-		p += r
-	}
-
-	return -1
-}
-
-// escapeFacts replaces every string reachable from v with its code-span form, keys of string maps
-// included.
+// escapeFacts replaces every string reachable from v with its code-span form, keys of string maps included.
 func escapeFacts(v reflect.Value) {
 	switch v.Kind() {
 	case reflect.Pointer, reflect.Interface:
@@ -181,7 +47,6 @@ func escapeFacts(v reflect.Value) {
 		if v.Type() == timeType {
 			return
 		}
-
 		for i := 0; i < v.NumField(); i++ {
 			if v.Type().Field(i).IsExported() {
 				escapeFacts(v.Field(i))
@@ -196,13 +61,11 @@ func escapeFacts(v reflect.Value) {
 		for it := v.MapRange(); it.Next(); {
 			val := reflect.New(v.Type().Elem()).Elem()
 			val.Set(it.Value())
-
 			if val.Kind() == reflect.Interface && !val.IsNil() {
 				val.Set(reflect.ValueOf(escapeAny(val.Interface())))
 			} else if val.Kind() == reflect.String {
 				val.SetString(span(val.String()))
 			}
-
 			key := reflect.ValueOf(span(it.Key().String())).Convert(v.Type().Key())
 			out.SetMapIndex(key, val)
 		}
@@ -211,8 +74,48 @@ func escapeFacts(v reflect.Value) {
 	}
 }
 
-// escapeAny returns a decoded JSON value with every string, and every key of a nested object, in
-// code-span form.
+// span returns s as a Markdown code span: newlines and control bytes escaped, fenced one backtick longer than its longest
+// run.
+func span(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	s = escapeControls(strings.NewReplacer("\r", `\n`, "\n", `\n`).Replace(s))
+	longest, run := 0, 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+
+	fence := strings.Repeat("`", longest+1)
+
+	pad := s[0] == '`' || s[len(s)-1] == '`' || (s[0] == ' ' && s[len(s)-1] == ' ' && strings.Trim(s, " ") != "")
+	if pad {
+		s = " " + s + " "
+	}
+
+	return fence + s + fence
+}
+
+// escapeControls writes every C0 control byte except tab as a visible \xNN, so no terminal sequence survives.
+func escapeControls(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 && c != '\t' {
+			fmt.Fprintf(&b, `\x%02x`, c)
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// escapeAny returns a decoded JSON value with every string, and every key of a nested object, in code-span form.
 func escapeAny(x any) any {
 	switch t := x.(type) {
 	case string:
@@ -224,34 +127,20 @@ func escapeAny(x any) any {
 		for i, e := range t {
 			out[i] = escapeAny(e)
 		}
-
 		return out
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, e := range t {
 			out[span(k)] = escapeAny(e)
 		}
-
 		return out
 	}
 
 	return x
 }
 
-// isFence reports whether a line opens or closes a fenced block.
-func isFence(line string) bool {
-	t := strings.TrimLeft(line, " ")
-
-	return len(line)-len(t) <= 3 &&
-		strings.HasPrefix(t, "```") &&
-		!strings.Contains(strings.TrimLeft(t, "`"), "`")
-}
-
-// isTableLine reports whether a line belongs to a Markdown table.
-func isTableLine(line string) bool { return strings.HasPrefix(strings.TrimLeft(line, " "), "|") }
-
-// tidy trims trailing spaces, collapses blank runs to one blank line and ends the text with one
-// newline; fenced blocks stay as written.
+// tidy trims trailing spaces, collapses blank runs to one blank line and ends the text with one newline; fenced blocks stay
+// as written.
 func tidy(text string) string {
 	var out []string
 
@@ -261,17 +150,14 @@ func tidy(text string) string {
 			fenced = !fenced
 		} else if fenced {
 			out = append(out, line)
-
 			continue
 		}
 
 		line = strings.TrimRight(line, " \t")
 		if line == "" {
 			blank = true
-
 			continue
 		}
-
 		if blank && len(out) > 0 {
 			out = append(out, "")
 		}
@@ -284,8 +170,13 @@ func tidy(text string) string {
 	return strings.Join(out, "\n") + "\n"
 }
 
-// wrap breaks lines over width columns at spaces outside code spans; tables and fenced blocks are
-// left whole.
+// isFence reports whether a line opens or closes a fenced block.
+func isFence(line string) bool {
+	t := strings.TrimLeft(line, " ")
+	return len(line)-len(t) <= 3 && strings.HasPrefix(t, "```") && !strings.Contains(strings.TrimLeft(t, "`"), "`")
+}
+
+// wrap breaks lines over width columns at spaces outside code spans; tables and fenced blocks are left whole.
 func wrap(text string, width int) string {
 	lines := strings.Split(text, "\n")
 
@@ -296,15 +187,11 @@ func wrap(text string, width int) string {
 	for _, line := range lines {
 		if isFence(line) {
 			fenced = !fenced
-
 			out = append(out, line)
-
 			continue
 		}
-
 		if fenced || isTableLine(line) || utf8.RuneCountInString(line) <= width {
 			out = append(out, line)
-
 			continue
 		}
 
@@ -314,11 +201,12 @@ func wrap(text string, width int) string {
 	return strings.Join(out, "\n")
 }
 
-// wrapLine fills one long line greedily; a continuation line keeps the indent and the width of a
-// list marker.
+// isTableLine reports whether a line belongs to a Markdown table.
+func isTableLine(line string) bool { return strings.HasPrefix(strings.TrimLeft(line, " "), "|") }
+
+// wrapLine fills one long line greedily; a continuation line keeps the indent and the width of a list marker.
 func wrapLine(line string, width int) []string {
 	body := strings.TrimLeft(line, " ")
-
 	prefix := line[:len(line)-len(body)]
 	if m := listMarker(body); m != "" {
 		prefix += m
@@ -339,7 +227,6 @@ func wrapLine(line string, width int) []string {
 			out = append(out, cur)
 			cur, curLen, empty = indent, len(indent), true
 		}
-
 		if !empty {
 			cur += " "
 			curLen++
@@ -363,7 +250,6 @@ func listMarker(s string) string {
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 		i++
 	}
-
 	if i > 0 && strings.HasPrefix(s[i:], ". ") {
 		return s[:i+2]
 	}
@@ -381,7 +267,6 @@ func splitWords(s string) []string {
 	for _, seg := range splitSpans(s) {
 		if seg.isSpan {
 			cur.WriteString(seg.text)
-
 			continue
 		}
 
@@ -391,10 +276,8 @@ func splitWords(s string) []string {
 					words = append(words, cur.String())
 					cur.Reset()
 				}
-
 				continue
 			}
-
 			cur.WriteRune(r)
 		}
 	}
@@ -406,8 +289,67 @@ func splitWords(s string) []string {
 	return words
 }
 
-// colorize makes line one bold and every code span dim; removing the escape codes returns the text
-// unchanged.
+// splitSpans cuts a line into plain text and whole code spans; an unclosed backtick run stays text.
+func splitSpans(s string) []segment {
+	var out []segment
+
+	start, i := 0, 0
+	for i < len(s) {
+		if s[i] != '`' {
+			i++
+			continue
+		}
+
+		k := runLen(s, i)
+		end := closeRun(s, i+k, k)
+		if end < 0 {
+			i += k
+			continue
+		}
+		if i > start {
+			out = append(out, segment{s[start:i], false})
+		}
+
+		out = append(out, segment{s[i : end+k], true})
+		i, start = end+k, end+k
+	}
+
+	if start < len(s) {
+		out = append(out, segment{s[start:], false})
+	}
+
+	return out
+}
+
+// runLen returns the length of the backtick run that starts at s[i], 0 when s[i] is not a backtick.
+func runLen(s string, i int) int {
+	n := 0
+	for i+n < len(s) && s[i+n] == '`' {
+		n++
+	}
+	return n
+}
+
+// closeRun returns the index of the next backtick run of exactly k from `from`, or -1.
+func closeRun(s string, from, k int) int {
+	for p := from; p < len(s); {
+		if s[p] != '`' {
+			p++
+			continue
+		}
+
+		r := runLen(s, p)
+		if r == k {
+			return p
+		}
+
+		p += r
+	}
+
+	return -1
+}
+
+// colorize makes line one bold and every code span dim; removing the escape codes returns the text unchanged.
 func colorize(text string) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
@@ -421,17 +363,13 @@ func colorize(text string) string {
 		for _, seg := range splitSpans(line) {
 			if !seg.isSpan {
 				b.WriteString(seg.text)
-
 				continue
 			}
-
 			b.WriteString(dimOn + seg.text + styleOff)
-
 			if bold {
 				b.WriteString(boldOn)
 			}
 		}
-
 		if bold {
 			b.WriteString(styleOff)
 		}
@@ -447,7 +385,6 @@ func verdictOf(text string) string {
 	line, _, _ := strings.Cut(text, "\n")
 
 	var b strings.Builder
-
 	for _, seg := range splitSpans(line) {
 		if seg.isSpan {
 			b.WriteString(unspan(seg.text))
@@ -457,4 +394,19 @@ func verdictOf(text string) string {
 	}
 
 	return b.String()
+}
+
+// unspan returns the text inside a code span, or s unchanged when s is not one whole span.
+func unspan(s string) string {
+	k := runLen(s, 0)
+	if k == 0 || len(s) < 2*k+1 || runLen(s, len(s)-k) != k || (len(s)-k > 0 && s[len(s)-k-1] == '`') {
+		return s
+	}
+
+	inner := s[k : len(s)-k]
+	if len(inner) >= 2 && inner[0] == ' ' && inner[len(inner)-1] == ' ' && strings.Trim(inner, " ") != "" {
+		inner = inner[1 : len(inner)-1]
+	}
+
+	return inner
 }

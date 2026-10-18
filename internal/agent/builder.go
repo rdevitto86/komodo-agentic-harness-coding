@@ -73,5 +73,6 @@ func ParseBuilderResult(raw []byte) (BuilderResult, error) {
 			return BuilderResult{}, fmt.Errorf("disputed entry %q is not file:line", d)
 		}
 	}
+
 	return r, nil
 }

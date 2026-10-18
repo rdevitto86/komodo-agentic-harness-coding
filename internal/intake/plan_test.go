@@ -24,6 +24,18 @@ var registerOnce sync.Once
 type fakeTree map[string]string
 
 func (f fakeTree) Hash() string { return "tree" }
+
+func (f fakeTree) ReadFile(p string) ([]byte, error) {
+	if s, ok := f[p]; ok {
+		return []byte(s), nil
+	}
+	return nil, os.ErrNotExist
+}
+
+func (f fakeTree) Exists(pattern string) bool {
+	return slices.ContainsFunc(f.Paths(), func(p string) bool { return agent.MatchPath(pattern, p) })
+}
+
 func (f fakeTree) Paths() []string {
 	var p []string
 	for k := range f {
@@ -31,15 +43,6 @@ func (f fakeTree) Paths() []string {
 	}
 	sort.Strings(p)
 	return p
-}
-func (f fakeTree) ReadFile(p string) ([]byte, error) {
-	if s, ok := f[p]; ok {
-		return []byte(s), nil
-	}
-	return nil, os.ErrNotExist
-}
-func (f fakeTree) Exists(pattern string) bool {
-	return slices.ContainsFunc(f.Paths(), func(p string) bool { return agent.MatchPath(pattern, p) })
 }
 
 // fakeContext returns a canned brief and records the request.
@@ -53,7 +56,12 @@ func (f *fakeContext) GetContext(_ context.Context, req contextmgr.Request) (con
 	if f.err != nil {
 		return contextmgr.Context{}, f.err
 	}
-	return contextmgr.Context{Brief: contextmgr.Brief{Agent: "planner", Parts: [5]string{"", "ROLE", "", "", "BRIEF " + req.Slots[contextmgr.Goal]}}}, nil
+	return contextmgr.Context{
+		Brief: contextmgr.Brief{
+			Agent: "planner",
+			Parts: [5]string{"", "ROLE", "", "", "BRIEF " + req.Slots[contextmgr.Goal]},
+		},
+	}, nil
 }
 
 // fakeLocks answers InRun from a map of group id to run.
@@ -74,13 +82,6 @@ type scripted struct {
 	texts   []string
 	started int
 	closed  int
-}
-
-func (s *scripted) start(context.Context) (PlannerSession, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.started++
-	return s, nil
 }
 
 func (s *scripted) Send(ctx context.Context, text string) (PlanDraft, error) {
@@ -106,6 +107,13 @@ func (s *scripted) Send(ctx context.Context, text string) (PlanDraft, error) {
 
 func (s *scripted) Close() error { s.mu.Lock(); s.closed++; s.mu.Unlock(); return nil }
 
+func (s *scripted) start(context.Context) (PlannerSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.started++
+	return s, nil
+}
+
 // rig is a handler wired to fakes over a temporary repository.
 type rig struct {
 	t    *testing.T
@@ -123,19 +131,22 @@ func newRig(t *testing.T, steps ...any) *rig {
 	t.Helper()
 	registerOnce.Do(RegisterEvents)
 	r := &rig{t: t, root: t.TempDir(), bus: bus.New(bus.Options{}), ctx: &fakeContext{},
-		sess: &scripted{steps: steps}, tree: fakeTree{"README.md": "readme", "docs/hld.md": "the design"}, lock: fakeLocks{runs: map[string]string{}}}
+		sess: &scripted{
+			steps: steps,
+		}, tree: fakeTree{"README.md": "readme", "docs/hld.md": "the design"}, lock: fakeLocks{runs: map[string]string{}}}
 	t.Cleanup(func() { _ = r.bus.Close() })
 	r.h = New(Deps{
-		Bus: r.bus, Context: r.ctx, Start: r.sess.start, Locks: r.lock, Protected: func() []string { return []string{".github/**"} },
-		Limits: PlannerLimits{WallMin: 1}, Root: r.root, Tree: func(context.Context) (contextmgr.Tree, error) { return r.tree, nil },
-		Repo: "github.com/acme/shop", CommonDir: filepath.Join(r.root, ".git"),
+		Bus:       r.bus,
+		Context:   r.ctx,
+		Start:     r.sess.start,
+		Locks:     r.lock,
+		Protected: func() []string { return []string{".github/**"} },
+		Limits:    PlannerLimits{WallMin: 1},
+		Root:      r.root,
+		Tree:      func(context.Context) (contextmgr.Tree, error) { return r.tree, nil },
+		Repo:      "github.com/acme/shop", CommonDir: filepath.Join(r.root, ".git"),
 	})
 	return r
-}
-
-// backlog returns the path of a file under docs/backlog.
-func (r *rig) backlog(rel string) string {
-	return filepath.Join(r.root, "docs", "backlog", filepath.FromSlash(rel))
 }
 
 // entries lists the names directly under docs/backlog.
@@ -148,12 +159,9 @@ func (r *rig) entries() []string {
 	return out
 }
 
-func twoGroupDraft() PlanDraft {
-	return draftOf(goodGroup(1, 1, tgSpec{}), goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}))
-}
-
-func badDraft() PlanDraft {
-	return draftOf(goodGroup(1, 1, tgSpec{items: []string{"the system should work"}}))
+// backlog returns the path of a file under docs/backlog.
+func (r *rig) backlog(rel string) string {
+	return filepath.Join(r.root, "docs", "backlog", filepath.FromSlash(rel))
 }
 
 func TestPlanWritesAPassingDraft(t *testing.T) {
@@ -184,7 +192,8 @@ func TestPlanWritesAPassingDraft(t *testing.T) {
 	if got := r.entries(); !slices.Equal(got, []string{"epic-1"}) {
 		t.Fatalf("leftovers: %v", got)
 	}
-	if r.ctx.req.Agent != "planner" || r.ctx.req.Slots[contextmgr.Goal] != "Add revocation" || !strings.Contains(r.ctx.req.Slots[contextmgr.Specs], "the design") {
+	if r.ctx.req.Agent != "planner" || r.ctx.req.Slots[contextmgr.Goal] != "Add revocation" ||
+		!strings.Contains(r.ctx.req.Slots[contextmgr.Specs], "the design") {
 		t.Fatalf("request: %+v", r.ctx.req)
 	}
 	if len(r.sess.texts) != 1 || !strings.Contains(r.sess.texts[0], "BRIEF Add revocation") || r.sess.closed != 1 {
@@ -197,7 +206,8 @@ func TestFailingDraftWritesNothingAndPassingRetryGetsTheText(t *testing.T) {
 	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.sess.texts) != 2 || !strings.Contains(r.sess.texts[1], "epic-1/tg-1.1/TG.md") || !strings.Contains(r.sess.texts[1], "ears") {
+	if len(r.sess.texts) != 2 || !strings.Contains(r.sess.texts[1], "epic-1/tg-1.1/TG.md") ||
+		!strings.Contains(r.sess.texts[1], "ears") {
 		t.Fatalf("texts: %q", r.sess.texts)
 	}
 	if r.sess.started != 1 {
@@ -345,9 +355,21 @@ func TestEpicNumberRules(t *testing.T) {
 		have []DraftFile
 		draf PlanDraft
 	}{
-		"new epic must be highest plus one": {PlanRequest{Goal: "g"}, goodGroup(1, 1, tgSpec{}), draftOf(goodGroup(3, 1, tgSpec{}))},
-		"new epic may not reuse a number":   {PlanRequest{Goal: "g"}, goodGroup(1, 1, tgSpec{}), draftOf(goodGroup(1, 2, tgSpec{}))},
-		"amend stays in its epic":           {PlanRequest{Goal: "g", Epic: 1}, goodGroup(1, 1, tgSpec{}), draftOf(goodGroup(2, 1, tgSpec{}))},
+		"new epic must be highest plus one": {
+			PlanRequest{Goal: "g"},
+			goodGroup(1, 1, tgSpec{}),
+			draftOf(goodGroup(3, 1, tgSpec{})),
+		},
+		"new epic may not reuse a number": {
+			PlanRequest{Goal: "g"},
+			goodGroup(1, 1, tgSpec{}),
+			draftOf(goodGroup(1, 2, tgSpec{})),
+		},
+		"amend stays in its epic": {
+			PlanRequest{Goal: "g", Epic: 1},
+			goodGroup(1, 1, tgSpec{}),
+			draftOf(goodGroup(2, 1, tgSpec{})),
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -390,7 +412,10 @@ func TestNextPlanRestoresAnOrphanedOldFolder(t *testing.T) {
 	old := goodGroup(1, 1, tgSpec{})
 	r := newRig(t, draftOf(goodGroup(2, 1, tgSpec{})))
 	// A crash between the two renames: the old group sits aside, its place is empty.
-	aside := []DraftFile{{Path: ".plan-old-x/" + old[0].Path, Content: old[0].Content}, {Path: ".plan-old-x/" + old[1].Path, Content: old[1].Content}}
+	aside := []DraftFile{
+		{Path: ".plan-old-x/" + old[0].Path, Content: old[0].Content},
+		{Path: ".plan-old-x/" + old[1].Path, Content: old[1].Content},
+	}
 	writeBacklog(t, r.root, aside)
 	// A second crash after the new group went into place: the old copy is dropped.
 	writeBacklog(t, r.root, goodGroup(1, 2, tgSpec{goal: "New"}))
@@ -450,8 +475,18 @@ func TestPlannerRoleHoldsNoWriteTool(t *testing.T) {
 }
 
 func TestDraftFromResultCopiesEveryFile(t *testing.T) {
-	d := DraftFromResult(agent.PlannerResult{Files: []agent.PlannerFile{{Path: "a", Content: "1"}, {Path: "b", Content: "2"}}})
+	d := DraftFromResult(agent.PlannerResult{
+		Files: []agent.PlannerFile{{Path: "a", Content: "1"}, {Path: "b", Content: "2"}},
+	})
 	if len(d.Files) != 2 || d.Files[1] != (DraftFile{Path: "b", Content: "2"}) {
 		t.Fatalf("draft: %+v", d)
 	}
+}
+
+func twoGroupDraft() PlanDraft {
+	return draftOf(goodGroup(1, 1, tgSpec{}), goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}))
+}
+
+func badDraft() PlanDraft {
+	return draftOf(goodGroup(1, 1, tgSpec{items: []string{"the system should work"}}))
 }

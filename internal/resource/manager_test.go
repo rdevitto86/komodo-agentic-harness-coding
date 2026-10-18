@@ -147,10 +147,22 @@ type rig struct {
 	clock time.Time
 }
 
+// The real Error Handler and Event Bus satisfy the interfaces the manager asks for.
+var (
+	_ Thrower    = (*fault.Handler)(nil)
+	_ Subscriber = bus.Bus(nil)
+)
+
 // newRig builds a rig over the given thresholds.
 func newRig(th Thresholds) *rig {
 	c := &calls{}
-	r := &rig{th: &fakeThrower{c: c}, rt: &fakePauser{c: c}, st: &fakeRecords{recs: map[WindowKey]WindowRecord{}}, c: c, clock: base}
+	r := &rig{
+		th:    &fakeThrower{c: c},
+		rt:    &fakePauser{c: c},
+		st:    &fakeRecords{recs: map[WindowKey]WindowRecord{}},
+		c:     c,
+		clock: base,
+	}
 	r.m = New(th, Deps{Errors: r.th, Runtime: r.rt, State: r.st, Now: func() time.Time { return r.clock }})
 	return r
 }
@@ -162,7 +174,9 @@ func (r *rig) observe(e bus.Event) error { return r.m.Observe(context.Background
 func TestLimitEventThrowsErrorOnly(t *testing.T) {
 	r := newRig(defaults)
 	reset := base.Add(time.Hour)
-	if err := r.observe(ev(subtypeLimit, "r1", "g1", &Limit{Link: "claude-cli", Kind: "window", ResetAt: reset})); err != nil {
+	if err := r.observe(
+		ev(subtypeLimit, "r1", "g1", &Limit{Link: "claude-cli", Kind: "window", ResetAt: reset}),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.th.thrown) != 1 || r.th.thrown[0].Severity != fault.SeverityError || !r.th.thrown[0].ResetAt.Equal(reset) {
@@ -188,7 +202,13 @@ func TestFullWindowThrowsThenPauses(t *testing.T) {
 	if want := []string{"throw:window_full", "pause:window_full"}; !reflect.DeepEqual(r.c.all(), want) {
 		t.Fatalf("calls %v, want %v", r.c.all(), want)
 	}
-	want := PauseOrder{Reason: "window_full", Link: "claude-cli", Window: "five_hour", Groups: []string{"g1", "g2"}, Until: reset}
+	want := PauseOrder{
+		Reason: "window_full",
+		Link:   "claude-cli",
+		Window: "five_hour",
+		Groups: []string{"g1", "g2"},
+		Until:  reset,
+	}
 	if !reflect.DeepEqual(r.rt.pauses, []PauseOrder{want}) {
 		t.Fatalf("pauses %+v, want %+v", r.rt.pauses, want)
 	}
@@ -197,7 +217,8 @@ func TestFullWindowThrowsThenPauses(t *testing.T) {
 	}
 }
 
-// TestThrowFailureRetried: a failed throw is tried again on the next event, then never again, and no pause goes out before it.
+// TestThrowFailureRetried: a failed throw is tried again on the next event, then never again, and no pause goes out before
+// it.
 func TestThrowFailureRetried(t *testing.T) {
 	r := newRig(defaults)
 	r.th.failN = 1
@@ -218,7 +239,8 @@ func TestThrowFailureRetried(t *testing.T) {
 	}
 }
 
-// TestPauseFailureRetried: a failed pause is sent again on the next event, the error is not thrown twice, and it stops after success.
+// TestPauseFailureRetried: a failed pause is sent again on the next event, the error is not thrown twice, and it stops after
+// success.
 func TestPauseFailureRetried(t *testing.T) {
 	r := newRig(defaults)
 	r.rt.failPause = 1
@@ -271,7 +293,8 @@ func TestGroupCapThroughManager(t *testing.T) {
 	}
 }
 
-// TestWindowSavedAndReloaded: a reading saves the window, usage raises its session count, and a restart keeps only unreset windows.
+// TestWindowSavedAndReloaded: a reading saves the window, usage raises its session count, and a restart keeps only unreset
+// windows.
 func TestWindowSavedAndReloaded(t *testing.T) {
 	r := newRig(defaults)
 	reset := base.Add(time.Hour)
@@ -295,7 +318,10 @@ func TestWindowSavedAndReloaded(t *testing.T) {
 		t.Fatalf("an unchanged window was saved again: err %v saves %d, was %d", err, r.st.saves, saves)
 	}
 
-	r.st.recs[WindowKey{Link: "claude-cli", Window: "weekly"}] = WindowRecord{PercentUsed: 9, ResetAt: base.Add(-time.Minute)}
+	r.st.recs[WindowKey{Link: "claude-cli", Window: "weekly"}] = WindowRecord{
+		PercentUsed: 9,
+		ResetAt:     base.Add(-time.Minute),
+	}
 	again := newRig(defaults)
 	again.st.recs = r.st.recs
 	again.m.load(context.Background())
@@ -339,7 +365,9 @@ func TestOverageOnceThroughManager(t *testing.T) {
 		t.Fatalf("calls %v, want %v", r.c.all(), want)
 	}
 	r.clock = base.Add(2 * time.Hour)
-	if err := r.observe(ev(subtypeOverage, "r1", "g1", &Overage{Link: "claude-cli", ResetAt: r.clock.Add(time.Hour)})); err != nil {
+	if err := r.observe(
+		ev(subtypeOverage, "r1", "g1", &Overage{Link: "claude-cli", ResetAt: r.clock.Add(time.Hour)}),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.c.all()) != 2 {
@@ -380,7 +408,8 @@ func TestUnknownSubtypeIgnored(t *testing.T) {
 	}
 }
 
-// TestRunServesTheBus: Run reads resource events from a real bus, survives a malformed event, orders the pause and ends with the context.
+// TestRunServesTheBus: Run reads resource events from a real bus, survives a malformed event, orders the pause and ends with
+// the context.
 func TestRunServesTheBus(t *testing.T) {
 	b := bus.New(bus.Options{})
 	defer func() { _ = b.Close() }()
@@ -433,7 +462,9 @@ func TestRunServesTheBus(t *testing.T) {
 
 // TestEventsDecode: the example events decode through the bus registry into the four data structs.
 func TestEventsDecode(t *testing.T) {
-	line := `{"type":"resource","subtype":"usage","run":"r1","group":"g1","time":"2026-10-14T16:42:09Z","data":{"link":"anthropic-api","agent":"builder","session":"s1","model":"m","tokens_in":51200,"tokens_out":4300,"cache_read":40960,"cache_write":8192,"usd":0.31,"usd_equiv":0}}`
+	line := `{"type":"resource","subtype":"usage","run":"r1","group":"g1","time":"2026-10-14T16:42:09Z",` +
+		`"data":{"link":"anthropic-api","agent":"builder","session":"s1","model":"m","tokens_in":51200,"tokens_out":4300,` +
+		`"cache_read":40960,"cache_write":8192,"usd":0.31,"usd_equiv":0}}`
 	var e bus.Event
 	if err := e.UnmarshalJSON([]byte(line)); err != nil {
 		t.Fatal(err)
@@ -448,9 +479,3 @@ func TestEventsDecode(t *testing.T) {
 		}
 	}
 }
-
-// The real Error Handler and Event Bus satisfy the interfaces the manager asks for.
-var (
-	_ Thrower    = (*fault.Handler)(nil)
-	_ Subscriber = bus.Bus(nil)
-)

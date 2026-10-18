@@ -129,23 +129,18 @@ func (m *Manager) lookup(key string) (KeySpec, bool) {
 
 	for _, i := range m.famIdx {
 		s := m.specs[i]
-
 		member, ok := familyMember(s.Name, key)
 		if !ok {
 			continue
 		}
-
 		if s.Members != nil {
 			def, known := s.Members[member]
 			if !known {
 				continue
 			}
-
 			s.Default = def
 		}
-
 		s.Name = key
-
 		return s, true
 	}
 
@@ -170,7 +165,6 @@ func (m *Manager) allKeyNames() []string {
 	}
 
 	sort.Strings(names)
-
 	return names
 }
 
@@ -198,8 +192,8 @@ func loadSpecs(fsys fs.FS) ([]KeySpec, error) {
 	}
 
 	seen := map[string]bool{}
-
 	specs := make([]KeySpec, 0, len(file.Keys))
+
 	for _, r := range file.Keys {
 		kind, ok := kindNames[r.Kind]
 		if !ok || r.Name == "" || seen[r.Name] {
@@ -223,15 +217,12 @@ func loadSpecs(fsys fs.FS) ([]KeySpec, error) {
 		if s.Default, err = specBound(kind, r.Default); err != nil {
 			return nil, fmt.Errorf("defaults.json: default of %s: %w", r.Name, err)
 		}
-
 		if s.Min, err = specBound(kind, r.Min); err != nil {
 			return nil, fmt.Errorf("defaults.json: min of %s: %w", r.Name, err)
 		}
-
 		if s.Max, err = specBound(kind, r.Max); err != nil {
 			return nil, fmt.Errorf("defaults.json: max of %s: %w", r.Name, err)
 		}
-
 		if s.Default != nil {
 			if _, err := checkValue(s, s.Default, false); err != nil {
 				return nil, fmt.Errorf("defaults.json: %w", err)
@@ -247,15 +238,12 @@ func loadSpecs(fsys fs.FS) ([]KeySpec, error) {
 			if err == nil {
 				_, err = checkValue(s, def, false)
 			}
-
 			if err != nil {
 				return nil, fmt.Errorf("defaults.json: member %s of %s: %w", name, r.Name, err)
 			}
-
 			if s.Members == nil {
 				s.Members = map[string]any{}
 			}
-
 			s.Members[name] = def
 		}
 
@@ -295,7 +283,9 @@ func specBound(kind Kind, v any) (any, error) {
 // checkValue converts v to the Go type of the key's kind and checks it against the kind and the
 // hard limits. With fromText set, a string is parsed as the command line would give it.
 func checkValue(s KeySpec, v any, fromText bool) (any, error) {
-	bad := func(detail string) error { return BadValueError{Key: s.Name, Value: v, Detail: detail} }
+	bad := func(detail string) error {
+		return BadValueError{Key: s.Name, Value: v, Detail: detail}
+	}
 
 	switch s.Kind {
 	case KindString, KindPath:
@@ -303,14 +293,12 @@ func checkValue(s KeySpec, v any, fromText bool) (any, error) {
 		if !ok {
 			return nil, bad("want a string")
 		}
-
 		return str, nil
 	case KindEnum:
 		str, ok := v.(string)
 		if !ok || !slices.Contains(s.Enum, str) {
 			return nil, bad("want one of " + strings.Join(s.Enum, ", "))
 		}
-
 		return str, nil
 	case KindBool:
 		switch x := v.(type) {
@@ -321,7 +309,6 @@ func checkValue(s KeySpec, v any, fromText bool) (any, error) {
 				return x == "true", nil
 			}
 		}
-
 		return nil, bad("want true or false")
 	case KindInt, KindNumber:
 		return checkNumber(s, v, fromText, bad)
@@ -330,14 +317,12 @@ func checkValue(s KeySpec, v any, fromText bool) (any, error) {
 		if _, err := time.ParseDuration(str); !ok || err != nil {
 			return nil, bad("want a duration such as 10m or 1h")
 		}
-
 		return str, nil
 	case KindEnvRef:
 		str, ok := v.(string)
 		if !ok || !envRefPattern.MatchString(str) {
 			return nil, bad("want env:NAME; a secret value is never stored")
 		}
-
 		return str, nil
 	}
 
@@ -349,7 +334,6 @@ func checkNumber(s KeySpec, v any, fromText bool, bad func(string) error) (any, 
 	f, ok := toFloat(v)
 	if str, isStr := v.(string); isStr && fromText {
 		var err error
-
 		f, err = strconv.ParseFloat(str, 64)
 		ok = err == nil
 	}
@@ -363,14 +347,11 @@ func checkNumber(s KeySpec, v any, fromText bool, bad func(string) error) (any, 
 		if f != math.Trunc(f) {
 			return nil, bad("want a whole number")
 		}
-
 		out = int(f)
 	}
-
 	if s.Min != nil && f < mustFloat(s.Min) {
 		return nil, LimitError{Key: s.Name, Value: out, Limit: s.Min}
 	}
-
 	if s.Max != nil && f > mustFloat(s.Max) {
 		return nil, LimitError{Key: s.Name, Value: out, Limit: s.Max}
 	}
@@ -389,17 +370,14 @@ func toFloat(v any) (float64, bool) {
 		return x, true
 	case json.Number:
 		f, err := x.Float64()
-
 		return f, err == nil
 	}
-
 	return 0, false
 }
 
 // mustFloat reads a table bound, which loadSpecs already typed as a number.
 func mustFloat(v any) float64 {
 	f, _ := toFloat(v)
-
 	return f
 }
 
@@ -422,7 +400,6 @@ func familyMember(family, key string) (string, bool) {
 	}
 
 	member := key[len(prefix) : len(key)-len(tail)]
-
 	return member, !strings.Contains(member, ".")
 }
 
@@ -441,7 +418,6 @@ func familyKeys(s KeySpec) []string {
 	}
 
 	sort.Strings(keys)
-
 	return keys
 }
 
@@ -453,7 +429,6 @@ func closest(key string, names []string) string {
 			best, bestD = n, d
 		}
 	}
-
 	return best
 }
 
@@ -473,7 +448,6 @@ func editDistance(a, b string) int {
 			if a[i-1] == b[j-1] {
 				cost = 0
 			}
-
 			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
 		}
 

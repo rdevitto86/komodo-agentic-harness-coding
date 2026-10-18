@@ -7,8 +7,10 @@ import (
 )
 
 const (
-	ScopeRequestsPerTask  = 1                            // ScopeRequestsPerTask is the number of scope requests one task may make.
-	ReasonOneScopeRequest = "one scope request per task" // ReasonOneScopeRequest is the denial reason for a second scope request in one task.
+	// ScopeRequestsPerTask is the number of scope requests one task may make.
+	ScopeRequestsPerTask = 1
+	// ReasonOneScopeRequest is the denial reason for a second scope request in one task.
+	ReasonOneScopeRequest = "one scope request per task"
 )
 
 // ScopeRequest is a Builder's request for paths outside its file list.
@@ -73,7 +75,8 @@ func AutoDeny(
 	return "", "", false
 }
 
-// MatchGlob matches a slash path against a guard pattern: * within one segment, ** across segments, ? one character, [abc] a set.
+// MatchGlob matches a slash path against a guard pattern: * within one segment, ** across segments, ? one character, [abc] a
+// set.
 // A pattern with no slash matches the base name at any depth; a group's file list uses MatchPath instead.
 func MatchGlob(glob, p string) bool {
 	if !strings.Contains(glob, "/") {

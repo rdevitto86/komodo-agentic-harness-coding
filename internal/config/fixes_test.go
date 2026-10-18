@@ -48,7 +48,8 @@ func TestSetRepairsAnUnreadableFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustSet(t, m, "limits.returns", 4)
-	if got := readFile(t, home, "settings.json"); strings.Contains(got, "nope") || !strings.Contains(got, `"limits.returns": 4`) {
+	if got := readFile(t, home, "settings.json"); strings.Contains(got, "nope") ||
+		!strings.Contains(got, `"limits.returns": 4`) {
 		t.Fatalf("settings.json = %s", got)
 	}
 	it, _ := m.GetConfigItem("limits.returns")
@@ -72,7 +73,8 @@ func TestFamilyMemberMustBeKnown(t *testing.T) {
 	}
 	m2, _ := newTestManager(t)
 	for link, want := range map[string]int{"claude-cli": 3, "anthropic-api": 3, "local": 1} {
-		if it, err := m2.GetConfigItem("limits.link_sessions." + link); err != nil || it.Default != want || it.Value != want {
+		if it, err := m2.GetConfigItem("limits.link_sessions." + link); err != nil || it.Default != want ||
+			it.Value != want {
 			t.Errorf("%s: %+v %v", link, it, err)
 		}
 	}
@@ -103,7 +105,16 @@ func TestLinkMembersMatchValidLinks(t *testing.T) {
 
 func TestProvidersLocalKeys(t *testing.T) {
 	m, home := newTestManager(t)
-	mustSet(t, m, "providers.local.ollama.url", "http://127.0.0.1:11434", "providers.local.ollama.ctx", 32768, "providers.local.ollama.self_hosted", true)
+	mustSet(
+		t,
+		m,
+		"providers.local.ollama.url",
+		"http://127.0.0.1:11434",
+		"providers.local.ollama.ctx",
+		32768,
+		"providers.local.ollama.self_hosted",
+		true,
+	)
 	it, err := m.GetConfigItem("providers.local.ollama.url")
 	if err != nil || it.Value != "http://127.0.0.1:11434" || it.Source != LayerMachine {
 		t.Fatalf("%+v %v", it, err)
@@ -145,7 +156,8 @@ func TestAgentModelWithoutOverrideNamesTheWeight(t *testing.T) {
 	m, _ := newTestManager(t)
 	for role, a := range m.roles {
 		it, err := m.GetConfigItem("agents." + role + ".model")
-		if err != nil || it.Value != "weight:"+string(a.Weight) || it.Source != LayerBuiltIn || it.Default != "weight:"+string(a.Weight) {
+		if err != nil || it.Value != "weight:"+string(a.Weight) || it.Source != LayerBuiltIn ||
+			it.Default != "weight:"+string(a.Weight) {
 			t.Errorf("%s: %+v %v", role, it, err)
 		}
 	}
@@ -161,7 +173,8 @@ func TestAgentModelWithoutOverrideNamesTheWeight(t *testing.T) {
 	if _, err := m.SetConfigItem(cs...); err != nil {
 		t.Fatal(err)
 	}
-	if it, _ := m.GetConfigItem("agents.builder.model"); it.Value != "weight:"+string(m.roles["builder"].Weight) || it.Source != LayerBuiltIn {
+	if it, _ := m.GetConfigItem("agents.builder.model"); it.Value != "weight:"+string(m.roles["builder"].Weight) ||
+		it.Source != LayerBuiltIn {
 		t.Fatalf("after reset: %+v", it)
 	}
 }
