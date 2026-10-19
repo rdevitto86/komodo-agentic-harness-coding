@@ -9253,6 +9253,13 @@ type StreamEvent struct {
 	RateLimit *RateLimit
 	Headroom  *Headroom
 	Result    *Result
+	Msg       *MsgUsage // the usage one model message reported, on an output event
+}
+
+// MsgUsage is the usage one model message reported, keyed by the message identifier.
+type MsgUsage struct {
+	ID    string // the provider's message identifier; empty when the line has none
+	Usage Usage
 }
 
 // Init carries the field the billing check reads from the first line.
@@ -9288,7 +9295,9 @@ How the `claude` program's lines map to kinds:
 - `system` with subtype `init` is `init`; subtype `api_retry` is `retry`.
 - `rate_limit_event` is `rate_limit`; its reset time is `rate_limit_info.resetsAt`, in Unix seconds.
 - `result` is `result`; the structured answer is its `structured_output` field, which `--json-schema` fills.
-- Every other line, such as `assistant` and `user`, is `output`.
+- Every other line, such as `assistant` and `user`, is `output`. An `assistant` line also carries `Msg`, read from `message.id` and `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`). The tool loop sets `Msg` on the event of each model turn, with the turn's metered cost in `USD`.
+
+**Usage of a session that ends without a result.** The supervisor keeps a running total of the `Msg` of every event, counting each message identifier once: a repeated identifier replaces its earlier count, because the program can write several `assistant` lines for one message. When the session ends, the supervisor reports the `Result.Usage` of the `result` line if it holds any tokens or cost. Otherwise it reports the running total, whatever the exit reason: `timeout`, `idle`, `crash`, `cancelled`, `provider`, `no_result` and the rest. A killed session therefore keeps the tokens it streamed, and they reach `session.end`, the `usage` fact, `result.json` and the metrics totals. The program gives its cost in dollars only on the `result` line, so a session killed before it reports `usd_equiv` 0; the harness derives no price of its own. The Codex link reports usage only on its closing line, so a Codex session killed before it still records 0.
 
 On the paid link the window total is the `anthropic-ratelimit-*-limit` header beside `-remaining` and `-reset`; the lowest `PercentLeft` across the windows is the one compared. Verified by [G-71](#g-71) and [G-72](#g-72).
 
@@ -14227,7 +14236,7 @@ type FaultRecord struct {
 | Time per stage | Seconds from a group's `stage.enter` to its next `stage.enter`, `group.blocked`, `group.paused` or the end of the run |
 | Time per group | `ended_at` minus `started_at`; `paused_s` and `blocked_s` are shown apart |
 | Time per run | `ended_at` minus `started_at` of the run |
-| Tokens and cost | The sum of `usage` over the sessions of the group or run |
+| Tokens and cost | The sum of `usage` over the sessions of the group or run; a session killed before its result still counts the usage it streamed |
 | Performance | Session `wall_s`, stage seconds, `retries`, `returns` |
 
 `groups.json` holds `{"<run id>": {"<group id>": GroupMetrics}}`, because a later run that attempts a group again adds its own entry. One group entry:
