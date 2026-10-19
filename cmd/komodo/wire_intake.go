@@ -189,12 +189,6 @@ func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 	h := &intakeHolder{k: k}
 	ag, _ := s.cfg.GetAgent("planner")
 
-	for _, name := range ag.Skills.Always {
-		if err := cm.AllowSkill("planner", contextmgr.SkillName(name), true); err != nil {
-			s.logf("komodo: planner skill %s: %v\n", name, err)
-		}
-	}
-
 	d := intake.Deps{
 		Bus: s.bus, Context: cm, Start: h.start, Locks: groupLocks{k.st},
 		Protected: protectedPaths,

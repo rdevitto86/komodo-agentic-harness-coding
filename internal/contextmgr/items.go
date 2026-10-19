@@ -3,8 +3,11 @@ package contextmgr
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"slices"
+	"strings"
 
+	komodo "github.com/rdevitto86/komodo-agentic-harness-coding"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
@@ -24,6 +27,12 @@ type ItemState struct {
 	Enabled bool     // a disabled skill is never selected and cannot be pulled
 	Allow   []string // agents that may be given or pull it
 	Always  []string // agents whose every brief carries it
+}
+
+// Access is one agent's skill names from the Agent Registry; a trailing * names every skill with that prefix.
+type Access struct {
+	Allow  []string
+	Always []string
 }
 
 // item is one row of the item table: its state, index row and fingerprint.
@@ -168,32 +177,6 @@ func (m *Manager) reloadLocal() {
 	m.items, m.skillWarns = out, warns
 }
 
-// AllowSkill turns a skill on for one agent, and with always puts it in every brief of that agent. Other agents keep the
-// access they have.
-func (m *Manager) AllowSkill(agent string, name SkillName, always bool) error {
-	if !validAgent(agent) {
-		return fmt.Errorf("agent %q: %w", agent, ErrAgentUnknown)
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	it := m.find(name)
-	if it == nil {
-		return fmt.Errorf("skill %q: %w", name, ErrSkillUnknown)
-	}
-
-	it.state.Enabled = true
-	if !slices.Contains(it.state.Allow, agent) {
-		it.state.Allow = append(it.state.Allow, agent)
-	}
-	if always && !slices.Contains(it.state.Always, agent) {
-		it.state.Always = append(it.state.Always, agent)
-	}
-
-	return nil
-}
-
 // phrases returns the current steering phrases.
 func (m *Manager) phrases() []string {
 	if m.deps.Phrases == nil {
@@ -305,4 +288,52 @@ func decodeData[T any](p bus.Payload, dst *T) error {
 		return err
 	}
 	return decodeStrict(b, dst)
+}
+
+// StartItems expands each agent's access patterns against the shipped skills and returns the starting state: a skill
+// is enabled when some agent allows it. A name that matches no shipped skill is left for the local skills.
+func StartItems(fsys fs.FS, access map[string]Access) ([]ItemState, error) {
+	if fsys == nil {
+		fsys = komodo.Embedded
+	}
+
+	idx, err := loadIndex(fsys)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []ItemState
+
+	for _, e := range idx.Skills {
+		st := ItemState{Name: e.Name, Origin: OriginEmbedded, Allow: []string{}, Always: []string{}}
+
+		for _, agent := range Agents {
+			if matchesAny(access[agent].Allow, e.Name) {
+				st.Allow = append(st.Allow, agent)
+			}
+			if matchesAny(access[agent].Always, e.Name) {
+				st.Always = append(st.Always, agent)
+			}
+		}
+
+		st.Enabled = len(st.Allow) > 0
+		out = append(out, st)
+	}
+
+	return out, nil
+}
+
+// matchesAny reports whether the skill name equals a pattern or starts with the prefix of a pattern ending in *.
+func matchesAny(patterns []string, name SkillName) bool {
+	for _, p := range patterns {
+		if prefix, ok := strings.CutSuffix(p, "*"); ok {
+			if strings.HasPrefix(string(name), prefix) {
+				return true
+			}
+		} else if p == string(name) {
+			return true
+		}
+	}
+
+	return false
 }
