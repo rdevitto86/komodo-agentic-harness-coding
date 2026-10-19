@@ -183,4 +183,6 @@ type Deps struct {
 	Chain func(group string) []string
 	// reports a panic of a goroutine the engine starts; nil reports nothing
 	Faults *fault.Handler
+	// checks that the process behind a socket connection has a controlling terminal; nil uses the platform check
+	PeerTerminal PeerChecker
 }
