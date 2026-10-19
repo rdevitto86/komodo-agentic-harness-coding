@@ -25,19 +25,19 @@ func TestHandEditTripsTheGuard(t *testing.T) {
 	if err := m.Verify(); err != nil {
 		t.Fatalf("Defaults state: %v", err)
 	}
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 	if err := m.Verify(); err != nil {
 		t.Fatalf("Guarded state: %v", err)
 	}
-	writeFile(t, home, "settings.json", `{"limits.returns": 2}`)
+	writeFile(t, home, "settings.json", `{"limits.group_retries": 2}`)
 	if err := m.Verify(); !errors.Is(err, ErrTampered) {
 		t.Fatalf("want ErrTampered, got %v", err)
 	}
-	it, err := m.GetConfigItem("limits.returns")
+	it, err := m.GetConfigItem("limits.group_retries")
 	if err != nil || it.Value != 2 {
 		t.Fatalf("reads must keep working: %+v %v", it, err)
 	}
-	if _, err := m.SetConfigItem(Change{Key: "limits.returns", New: 1}); !errors.Is(err, ErrTampered) {
+	if _, err := m.SetConfigItem(Change{Key: "limits.group_retries", New: 1}); !errors.Is(err, ErrTampered) {
 		t.Fatalf("a write must be refused: %v", err)
 	}
 	before := len(logRows(t, home))
@@ -80,7 +80,7 @@ func TestTamperStates(t *testing.T) {
 		t.Fatalf("Defaults after Accept: %v", err)
 	}
 	// A checksum that names a file that is gone is Tampered.
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 	if err := os.Remove(filepath.Join(home, "settings.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestCrashHelper(t *testing.T) {
 			os.Exit(7)
 		}
 	}
-	_, _ = m.SetConfigItem(Change{Key: "limits.returns", New: 4})
+	_, _ = m.SetConfigItem(Change{Key: "limits.group_retries", New: 4})
 	t.Fatal("the crash hook did not fire")
 }
 
@@ -125,20 +125,20 @@ func crashAt(t *testing.T, stage string) (*Manager, string) {
 func TestCrashPoints(t *testing.T) {
 	t.Run("after the audit rows, before the file", func(t *testing.T) {
 		m, home := crashAt(t, "after_audit")
-		if rows := logRows(t, home); len(rows) != 1 || rows[0]["key"] != "limits.returns" {
+		if rows := logRows(t, home); len(rows) != 1 || rows[0]["key"] != "limits.group_retries" {
 			t.Fatalf("log %v", rows)
 		}
 		if readFile(t, home, "settings.json") != "" {
 			t.Fatal("the file was written")
 		}
-		if it, _ := m.GetConfigItem("limits.returns"); it.Value != 3 {
+		if it, _ := m.GetConfigItem("limits.group_retries"); it.Value != 3 {
 			t.Fatalf("settings as before: %+v", it)
 		}
 		if err := m.Verify(); err != nil {
 			t.Fatalf("Verify: %v", err)
 		}
 		// The dead writer left its lock file, which holds nothing once the process is gone.
-		mustSet(t, m, "limits.returns", 5)
+		mustSet(t, m, "limits.group_retries", 5)
 		rows := logRows(t, home)
 		if len(rows) != 2 || rows[1]["old"].(float64) != 3 {
 			t.Fatalf("the next row's old value should show the batch never applied: %v", rows)
@@ -146,7 +146,7 @@ func TestCrashPoints(t *testing.T) {
 	})
 	t.Run("after the file, before the checksum", func(t *testing.T) {
 		m, home := crashAt(t, "after_files")
-		if it, _ := m.GetConfigItem("limits.returns"); it.Value != 4 {
+		if it, _ := m.GetConfigItem("limits.group_retries"); it.Value != 4 {
 			t.Fatalf("settings as written: %+v", it)
 		}
 		if err := m.Verify(); !errors.Is(err, ErrTampered) {
@@ -167,7 +167,7 @@ func TestCrashPoints(t *testing.T) {
 func TestWritersNeverInterleave(t *testing.T) {
 	_, home := newTestManager(t)
 	pairs := [][2]string{
-		{"limits.returns", "limits.group_attempts"}, {"cache.max_mb", "bus.buffer_events"},
+		{"limits.group_retries", "limits.override_retries"}, {"cache.max_mb", "bus.buffer_events"},
 		{"metrics.retention_days", "check.coverage"}, {"lease.lock_timeout_s", "warn.quota_pct"},
 		{"guard.refusal_limit", "limits.pause_max_min"}, {"sandbox.max_procs", "sandbox.lang_cache_gb"},
 	}
@@ -232,14 +232,14 @@ func TestLockIsHeldByTheKernelNotTheFileAge(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	_, err = m.SetConfigItem(Change{Key: "limits.returns", New: 4})
+	_, err = m.SetConfigItem(Change{Key: "limits.group_retries", New: 4})
 	if !errors.Is(err, ErrLocked) || time.Since(start) < lockWait {
 		t.Fatalf("want ErrLocked after the wait despite the old file, got %v", err)
 	}
 	if err := hold(); err != nil {
 		t.Fatal(err)
 	}
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 }
 
 func TestModelCheck(t *testing.T) {
@@ -284,8 +284,8 @@ func TestLiveModelReachesNextSessionOnly(t *testing.T) {
 	if after.Hash != snap.Hash {
 		t.Fatal("the run's pinned settings moved")
 	}
-	mustSet(t, m, "limits.returns", 4)
-	if after2, _ := m.Snapshot(); after2.Hash == snap.Hash || snap.Flat["limits.returns"].Value != 3 {
+	mustSet(t, m, "limits.group_retries", 4)
+	if after2, _ := m.Snapshot(); after2.Hash == snap.Hash || snap.Flat["limits.group_retries"].Value != 3 {
 		t.Fatal("the held snapshot must keep its own copy")
 	}
 }
@@ -376,20 +376,20 @@ func TestDiscoveryListsEveryKey(t *testing.T) {
 		}
 	}
 	for _, role := range roleNames {
-		for _, f := range []string{"model", "session_wall_min", "session_idle_min", "retries"} {
+		for _, f := range []string{"model", "session_wall_min", "session_idle_min"} {
 			if _, ok := seen["agents."+role+"."+f]; !ok {
 				t.Errorf("agents.%s.%s not listed", role, f)
 			}
 		}
 	}
-	if got := len(m.ListConfigItems("agents.reviewer.")); got != 4 {
+	if got := len(m.ListConfigItems("agents.reviewer.")); got != 3 {
 		t.Errorf("prefix listing: %d", got)
 	}
 	if !slices.IsSortedFunc(items, func(a, b Item) int { return strings.Compare(a.Key, b.Key) }) {
 		t.Error("items are not sorted")
 	}
-	if it := seen["limits.returns"]; it.Default != 3 || it.Limit != 5 || it.Source != LayerBuiltIn {
-		t.Errorf("limits.returns %+v", it)
+	if it := seen["limits.group_retries"]; it.Default != 3 || it.Limit != 5 || it.Source != LayerBuiltIn {
+		t.Errorf("limits.group_retries %+v", it)
 	}
 }
 

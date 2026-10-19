@@ -20,8 +20,8 @@ import (
 type RunData struct {
 	RunID  string     `json:"run_id,omitempty"`
 	Queued *QueuedRow `json:"queued,omitempty"` // with --schedule
-	Group  string     `json:"group,omitempty"`  // with --approve or --deny
-	Answer string     `json:"answer,omitempty"` // approve or deny
+	Group  string     `json:"group,omitempty"`  // with --approve, --deny or --override
+	Answer string     `json:"answer,omitempty"` // approve, deny or override
 }
 
 // StopData is the data of reply.stop.
@@ -124,7 +124,7 @@ var codeKinds = map[string]fault.Kind{
 	"no_repo": fault.KindRefused, "over_limit": fault.KindRefused, "card_changed": fault.KindRefused,
 	"locked": fault.KindRefused, "plan_timeout": fault.KindRefused, "context_refused": fault.KindRefused,
 	"unknown_target": fault.KindRefused, "run_refused": fault.KindRefused, "not_blocked": fault.KindRefused,
-	"engine_stopping": fault.KindRefused, "plan_blocked": fault.KindBlocked,
+	"engine_stopping": fault.KindRefused, "group_failed": fault.KindRefused, "plan_blocked": fault.KindBlocked,
 	"usage": fault.KindUsage, "plan_input": fault.KindUsage, "unknown_key": fault.KindUsage, "bad_value": fault.KindUsage,
 	"plan_write": fault.KindInternal, "bad_frame": fault.KindInternal, "internal": fault.KindInternal,
 }
@@ -165,7 +165,7 @@ func typedRunID(s string) bus.ID {
 
 // handleRun starts, schedules or answers a run.
 func handleRun(c *Call) Result {
-	if flagBool(c, "approve") || flagBool(c, "deny") {
+	if flagBool(c, "approve") || flagBool(c, "deny") || flagBool(c, "override") {
 		return runAnswer(c)
 	}
 
@@ -271,16 +271,19 @@ func runSchedule(c *Call, req engine.Request, target string) Result {
 	}
 }
 
-// runAnswer sends a run-continue event that answers a blocked group.
+// runAnswer sends a run-continue event that answers a blocked group; --override needs a terminal.
 func runAnswer(c *Call) Result {
 	answer := "approve"
-	if flagBool(c, "deny") {
+	switch {
+	case flagBool(c, "deny"):
 		answer = "deny"
+	case flagBool(c, "override"):
+		answer = "override"
 	}
 
 	target := c.Args[0]
 	req := c.request(engine.VerbRun, target)
-	req.Flags = engine.Flags{Approve: answer == "approve", Deny: answer == "deny"}
+	req.Flags = engine.Flags{Approve: answer == "approve", Deny: answer == "deny", Override: answer == "override"}
 	req.Event = &engine.Event{
 		Type: bus.TypeRunContinue, Run: typedRunID(target), Time: now(),
 		Data: &bus.RunContinue{Target: target, Answer: answer, Request: bus.ID(req.ID)},

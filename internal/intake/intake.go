@@ -100,9 +100,9 @@ type PlannerLimits struct {
 
 // BaseRunner runs commands on the untouched base commit in a sandbox that has no network.
 type BaseRunner interface {
-	// Run runs one shell command from the root of the base checkout and returns its exit code.
+	// Run runs one shell command from the root of a fresh base checkout and returns its exit code.
 	Run(ctx context.Context, command string) (exit int, err error)
-	// Close removes the checkout's sandbox.
+	// Close removes every checkout the runner made.
 	Close() error
 }
 

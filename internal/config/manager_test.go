@@ -10,13 +10,13 @@ import (
 
 func TestStrictReadingNamesClosestKey(t *testing.T) {
 	m, home := newTestManager(t)
-	writeFile(t, home, "settings.json", `{"limit.returns": 2}`)
+	writeFile(t, home, "settings.json", `{"limit.group_retries": 2}`)
 	_, err := m.Snapshot()
 	var uk UnknownKeyError
 	if !errors.As(err, &uk) {
 		t.Fatalf("want UnknownKeyError, got %v", err)
 	}
-	if uk.Key != "limit.returns" || uk.Closest != "limits.returns" {
+	if uk.Key != "limit.group_retries" || uk.Closest != "limits.group_retries" {
 		t.Fatalf("got key %q closest %q", uk.Key, uk.Closest)
 	}
 	if !strings.Contains(err.Error(), "komodo update") {
@@ -26,26 +26,26 @@ func TestStrictReadingNamesClosestKey(t *testing.T) {
 
 func TestStrictReadingRefusesBadTypeAndLimit(t *testing.T) {
 	m, home := newTestManager(t)
-	writeFile(t, home, "settings.json", `{"limits.returns": "three"}`)
+	writeFile(t, home, "settings.json", `{"limits.group_retries": "three"}`)
 	var bv BadValueError
 	if _, err := m.Snapshot(); !errors.As(err, &bv) {
 		t.Fatalf("want BadValueError, got %v", err)
 	}
-	writeFile(t, home, "settings.json", `{"limits.returns": 9}`)
+	writeFile(t, home, "settings.json", `{"limits.group_retries": 9}`)
 	var le LimitError
-	if _, err := m.Snapshot(); !errors.As(err, &le) || le.Key != "limits.returns" {
-		t.Fatalf("want LimitError on limits.returns, got %v", err)
+	if _, err := m.Snapshot(); !errors.As(err, &le) || le.Key != "limits.group_retries" {
+		t.Fatalf("want LimitError on limits.group_retries, got %v", err)
 	}
 }
 
 func TestLimitErrorLeavesFileUnchanged(t *testing.T) {
 	m, home := newTestManager(t)
-	_, err := m.SetConfigItem(Change{Key: "limits.returns", New: 9})
+	_, err := m.SetConfigItem(Change{Key: "limits.group_retries", New: 9})
 	var le LimitError
 	if !errors.As(err, &le) {
 		t.Fatalf("want LimitError, got %v", err)
 	}
-	if le.Key != "limits.returns" || le.Limit != 5 || le.Value != 9 {
+	if le.Key != "limits.group_retries" || le.Limit != 5 || le.Value != 9 {
 		t.Fatalf("got %+v", le)
 	}
 	if readFile(t, home, "settings.json") != "" || readFile(t, home, "state/config.log") != "" {
@@ -57,14 +57,14 @@ func TestSetErrorKinds(t *testing.T) {
 	m, _ := newTestManager(t)
 	var uk UnknownKeyError
 	if _, err := m.SetConfigItem(Change{Key: "limits.retruns", New: 1}); !errors.As(err, &uk) ||
-		uk.Closest != "limits.returns" {
+		uk.Closest != "limits.group_retries" {
 		t.Fatalf("unknown key: %v", err)
 	}
 	var bv BadValueError
 	for _, c := range []Change{
 		{Key: "output.profile", New: "loud"},
 		{Key: "output.turn_end_summary", New: "maybe"},
-		{Key: "limits.returns", New: "x"},
+		{Key: "limits.group_retries", New: "x"},
 		{Key: "providers.keys.anthropic", New: "sk-secret-value"},
 		{Key: "limits.usd_ceiling_per_run", New: "lots"},
 	} {
@@ -73,7 +73,7 @@ func TestSetErrorKinds(t *testing.T) {
 		}
 	}
 	// Text values from the command line parse to the key's kind.
-	b := mustSet(t, m, "limits.returns", "4", "output.turn_end_summary", "false", "warn.usd_per_run", "2.5")
+	b := mustSet(t, m, "limits.group_retries", "4", "output.turn_end_summary", "false", "warn.usd_per_run", "2.5")
 	if len(b.Changes) != 3 {
 		t.Fatalf("want 3 changes, got %d", len(b.Changes))
 	}
@@ -91,7 +91,7 @@ func TestSetErrorKinds(t *testing.T) {
 func TestAllOrNone(t *testing.T) {
 	m, home := newTestManager(t)
 	_, err := m.SetConfigItem(
-		Change{Key: "limits.returns", New: 4},
+		Change{Key: "limits.group_retries", New: 4},
 		Change{Key: "cache.max_mb", New: 9999},
 		Change{Key: "output.profile", New: "standard"},
 	)
@@ -102,7 +102,7 @@ func TestAllOrNone(t *testing.T) {
 		readFile(t, home, "state/config.sha") != "" {
 		t.Fatal("a refused call wrote something")
 	}
-	b := mustSet(t, m, "limits.returns", 4, "cache.max_mb", 512, "output.profile", "standard")
+	b := mustSet(t, m, "limits.group_retries", 4, "cache.max_mb", 512, "output.profile", "standard")
 	if len(b.Changes) != 3 || b.ID == "" {
 		t.Fatalf("batch %+v", b)
 	}
@@ -115,7 +115,7 @@ func TestAllOrNone(t *testing.T) {
 			t.Fatalf("row %v is not in batch %s", r, b.ID)
 		}
 	}
-	it, _ := m.GetConfigItem("limits.returns")
+	it, _ := m.GetConfigItem("limits.group_retries")
 	if it.Value != 4 || it.Source != LayerMachine || it.Default != 3 || it.Limit != 5 {
 		t.Fatalf("item %+v", it)
 	}
@@ -123,9 +123,9 @@ func TestAllOrNone(t *testing.T) {
 
 func TestIdempotence(t *testing.T) {
 	m, home := newTestManager(t)
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 	before := readFile(t, home, "state/config.log")
-	b := mustSet(t, m, "limits.returns", 4)
+	b := mustSet(t, m, "limits.group_retries", 4)
 	if len(b.Changes) != 0 {
 		t.Fatalf("want 0 changes, got %d", len(b.Changes))
 	}
@@ -134,7 +134,7 @@ func TestIdempotence(t *testing.T) {
 	}
 	// A value equal to the built-in one when nothing is set is also a no-op.
 	m2, home2 := newTestManager(t)
-	if b := mustSet(t, m2, "limits.returns", 3); len(b.Changes) != 0 {
+	if b := mustSet(t, m2, "limits.group_retries", 3); len(b.Changes) != 0 {
 		t.Fatal("default value counted as a change")
 	}
 	if readFile(t, home2, "settings.json") != "" {
@@ -174,14 +174,14 @@ func TestLayerOrderForWallTime(t *testing.T) {
 		le.Limit != 120 {
 		t.Fatalf("over the hard limit: %v", err)
 	}
-	if _, err := m.SetConfigItem(Change{Key: "agents.builder.retries", New: 4}); !errors.As(err, &le) || le.Limit != 3 {
-		t.Fatalf("retries over 3: %v", err)
+	if _, err := m.SetConfigItem(Change{Key: "agents.builder.session_idle_min", New: 31}); !errors.As(err, &le) || le.Limit != 30 {
+		t.Fatalf("idle over 30: %v", err)
 	}
 	if _, ok := m.GetAgent("janitor"); ok {
 		t.Fatal("a fifth role exists")
 	}
 	var uk UnknownKeyError
-	if _, err := m.SetConfigItem(Change{Key: "agents.janitor.retries", New: 1}); !errors.As(err, &uk) {
+	if _, err := m.SetConfigItem(Change{Key: "agents.janitor.session_idle_min", New: 1}); !errors.As(err, &uk) {
 		t.Fatalf("unknown role: %v", err)
 	}
 	if _, err := m.GetConfigItem("agents.builder.weight"); !errors.As(err, &uk) {
@@ -192,7 +192,7 @@ func TestLayerOrderForWallTime(t *testing.T) {
 func TestFallbackServesBuiltIn(t *testing.T) {
 	m, home := newTestManager(t)
 	writeFile(t, home, "settings.json", `{"nope": 1}`)
-	it, err := m.GetConfigItem("limits.returns")
+	it, err := m.GetConfigItem("limits.group_retries")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,13 +225,13 @@ func TestSnapshotHashIsStable(t *testing.T) {
 	if s1.Hash != s2.Hash || len(s1.Hash) != 64 {
 		t.Fatalf("hashes %q %q", s1.Hash, s2.Hash)
 	}
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 	s3, _ := m.Snapshot()
 	if s3.Hash == s1.Hash {
 		t.Fatal("a changed value kept the hash")
 	}
-	if s3.Flat["limits.returns"].Value != 4 || s3.Flat["limits.returns"].Source != LayerMachine {
-		t.Fatalf("snapshot %+v", s3.Flat["limits.returns"])
+	if s3.Flat["limits.group_retries"].Value != 4 || s3.Flat["limits.group_retries"].Source != LayerMachine {
+		t.Fatalf("snapshot %+v", s3.Flat["limits.group_retries"])
 	}
 	// The model is read live, so it is not part of the pinned hash.
 	mustSet(t, m, "agents.reviewer.model", "sonnet")
@@ -239,10 +239,10 @@ func TestSnapshotHashIsStable(t *testing.T) {
 	if s4.Hash != s3.Hash {
 		t.Fatal("a model change moved the hash")
 	}
-	mustSet(t, m, "agents.reviewer.retries", 3)
+	mustSet(t, m, "agents.reviewer.session_idle_min", 20)
 	s5, _ := m.Snapshot()
-	if s5.Hash == s4.Hash || s5.Agents["reviewer"].Limits.Retries != 3 {
-		t.Fatal("retries override missing from the snapshot")
+	if s5.Hash == s4.Hash || s5.Agents["reviewer"].Limits.IdleMin != 20 {
+		t.Fatal("idle override missing from the snapshot")
 	}
 }
 
@@ -358,16 +358,16 @@ func TestResetPlans(t *testing.T) {
 	mustSet(
 		t,
 		m,
-		"limits.returns",
+		"limits.group_retries",
 		4,
-		"agents.builder.retries",
-		3,
+		"agents.builder.session_wall_min",
+		30,
 		"agents.builder.session_idle_min",
 		20,
-		"agents.tester.retries",
-		1,
+		"agents.tester.session_wall_min",
+		30,
 	)
-	cs, err := m.PlanReset("limits.returns")
+	cs, err := m.PlanReset("limits.group_retries")
 	if err != nil || len(cs) != 1 || cs[0].New != 3 || cs[0].Old != 4 {
 		t.Fatalf("key reset: %+v %v", cs, err)
 	}
@@ -381,7 +381,7 @@ func TestResetPlans(t *testing.T) {
 	if _, err := m.SetConfigItem(cs...); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(readFile(t, home, "agents.json"), "retries") {
+	if strings.Contains(readFile(t, home, "agents.json"), "session_wall_min") {
 		t.Fatalf("reset left overrides: %s", readFile(t, home, "agents.json"))
 	}
 	var uk UnknownKeyError
@@ -404,7 +404,7 @@ func TestHomeFollowsKomodoHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 	if readFile(t, home, "settings.json") == "" {
 		t.Fatal("an empty home did not resolve to KOMODO_HOME")
 	}

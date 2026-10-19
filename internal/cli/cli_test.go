@@ -76,11 +76,23 @@ func TestEnvelopeShapeAndEmptyData(t *testing.T) {
 
 func TestNoTerminalRefusesTerminalOnly(t *testing.T) {
 	h := newHarness(t)
-	for _, args := range [][]string{{"install"}, {"update"}, {"config", "set", "limits.returns=4"}} {
+	for _, args := range [][]string{{"install"}, {"update"}, {"config", "set", "limits.group_retries=4"}} {
 		code, e := h.envelope(args...)
 		if code != 1 || e.Error == nil || e.Error.Code != "no_terminal" {
 			t.Errorf("%v: exit %d, %+v", args, code, e.Error)
 		}
+	}
+}
+
+// The orchestrator has no terminal, so it cannot give a spent group an override; approve and deny stay open to it.
+func TestOverrideNeedsATerminal(t *testing.T) {
+	h := newHarness(t)
+	code, e := h.envelope("run", "tg-1.2", "--override")
+	if code != 1 || e.Error == nil || e.Error.Code != "no_terminal" {
+		t.Fatalf("exit %d, %+v", code, e.Error)
+	}
+	if _, e := h.envelope("run", "tg-1.2", "--override", "--approve"); e.Error == nil || e.Error.Code != "usage" {
+		t.Fatalf("--override with --approve: %+v", e.Error)
 	}
 }
 
@@ -116,7 +128,7 @@ func TestTamperPolicy(t *testing.T) {
 	h.engine = &scriptEngine{fn: func(engine.Request) []engine.Reply {
 		return []engine.Reply{okReply(map[string]any{"run_id": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"})}
 	}}
-	if err := os.WriteFile(filepath.Join(h.home, "settings.json"), []byte(`{"limits.returns": 2}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(h.home, "settings.json"), []byte(`{"limits.group_retries": 2}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	repo := repoDir(t, "")

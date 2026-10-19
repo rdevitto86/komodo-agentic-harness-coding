@@ -40,13 +40,18 @@ var tableRows = []Command{
 		NeedsRepo: needsRepo, NeedsEngine: true, TamperPolicy: TamperRefuse, Run: handlePlan,
 	},
 	{
-		Name: "run", Summary: "Start, schedule or continue a run, or answer a blocked group", Tier: TierShared,
+		Name: "run", Summary: "Start, schedule or continue a run, answer a blocked group, or override a spent one", Tier: TierShared,
 		Flags: []FlagSpec{
 			{Name: "schedule", Kind: "time", Help: "Queue the run for this RFC 3339 time"},
 			{Name: "approve", Kind: "bool", Help: "Grant what the blocked group asked for"},
 			{Name: "deny", Kind: "bool", Help: "Refuse what the blocked group asked for"},
+			{
+				Name: "override", Kind: "bool", TerminalOnly: true,
+				Help: "Give a group with no retries left more retries, once; needs a terminal",
+			},
 		},
-		NeedsRepo: needsRepo, NeedsEngine: true, TamperPolicy: TamperRefuse, Run: handleRun,
+		NeedsTerminal: func(c *Call) bool { return flagBool(c, "override") },
+		NeedsRepo:     needsRepo, NeedsEngine: true, TamperPolicy: TamperRefuse, Run: handleRun,
 	},
 	{
 		Name: "stop", Summary: "Stop a run or remove a queued run", Tier: TierShared,
@@ -195,14 +200,14 @@ func oneTarget(c *Call, want string, ok func(string) bool) string {
 
 // checkRunArgs checks the flag combinations and the id of run.
 func checkRunArgs(c *Call) string {
-	approve, deny := flagBool(c, "approve"), flagBool(c, "deny")
+	approve, deny, override := flagBool(c, "approve"), flagBool(c, "deny"), flagBool(c, "override")
 	scheduled := !flagTime(c, "schedule").IsZero()
 
 	switch {
-	case approve && deny:
-		return "--approve and --deny cannot combine"
-	case (approve || deny) && (c.Global.All || scheduled):
-		return "--approve and --deny take an id and cannot combine with --all or --schedule"
+	case approve && deny, override && (approve || deny):
+		return "--approve, --deny and --override cannot combine"
+	case (approve || deny || override) && (c.Global.All || scheduled):
+		return "--approve, --deny and --override take an id and cannot combine with --all or --schedule"
 	case c.Global.All && len(c.Args) > 0:
 		return "--all takes no id"
 	case c.Global.All:

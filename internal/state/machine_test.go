@@ -57,7 +57,7 @@ func TestMachineRecordsRoundTrip(t *testing.T) {
 	check("schedule", s4, g4)
 	check("schedule body", g4.Body, schedule)
 	h := g4.Header
-	if h.V != 1 || h.Kind != KindSchedule || h.Rev != 1 || h.Writer != "engine/48301" || h.TS.Location() != time.UTC {
+	if h.V != Version || h.Kind != KindSchedule || h.Rev != 1 || h.Writer != "engine/48301" || h.TS.Location() != time.UTC {
 		t.Errorf("header: %+v", h)
 	}
 	for _, k := range []MachineKind{KindProviders, KindUpdate, KindInstall, KindSchedule} {

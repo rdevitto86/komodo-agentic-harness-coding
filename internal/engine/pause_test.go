@@ -276,8 +276,8 @@ func TestRefusedResumeRepausesKeepsSinceAndCountsTheRefusal(t *testing.T) {
 	if !second.Pause.Since.Equal(first.Pause.Since) {
 		t.Fatalf("Since moved from %v to %v", first.Pause.Since, second.Pause.Since)
 	}
-	if second.Counters.Attempts != first.Counters.Attempts {
-		t.Fatalf("a refused resume spent attempts: %d to %d", first.Counters.Attempts, second.Counters.Attempts)
+	if second.Counters.RetriesLeft != first.Counters.RetriesLeft {
+		t.Fatalf("a refused resume spent retries: %d to %d", first.Counters.RetriesLeft, second.Counters.RetriesLeft)
 	}
 }
 
@@ -298,7 +298,7 @@ func TestProviderPausePastTheMaximumBlocksPauseTimeoutAndKeepsTheWork(t *testing
 	}
 }
 
-func TestSilentLoopsAreRestartedAndATaskManagerRestartAddsOneRetry(t *testing.T) {
+func TestSilentLoopsAreRestartedAndATaskManagerRestartCostsNoRetry(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1"}}, withClock, onlyIdle, func(r *rig) { r.d.Timing.LoopSilentFor = 0 })
 	if err := r.startRun("run-1", "tg-1"); err != nil {
 		t.Fatal(err)
@@ -315,8 +315,8 @@ func TestSilentLoopsAreRestartedAndATaskManagerRestartAddsOneRetry(t *testing.T)
 		t.Fatalf("restarted watcher loops %v", got)
 	}
 	waitUntil(t, "a new Task Manager", func() bool { return r.tasks.startedCount("g-tg-1") == 2 })
-	if got := r.store.get("g-tg-1").Counters.Retries; got != 1 {
-		t.Fatalf("retries %d, want 1", got)
+	if got := r.store.get("g-tg-1").Counters.RetriesLeft; got != 2 {
+		t.Fatalf("retries left %d, want the full 2: a restart is Komodo's own fault", got)
 	}
 }
 

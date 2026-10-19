@@ -51,7 +51,8 @@ const (
 	InAbandon      InputKind = "abandon"      // data: AbandonData
 	InProgress     InputKind = "progress"     // data: ProgressData; the live session handles of a state report
 	InFact         InputKind = "fact"         // data: FactData; a fact that is published and changes nothing
-	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; counts as one retry
+	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; costs no retry
+	InOverride     InputKind = "override"     // a person at a terminal gave an empty group more retries
 )
 
 // Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a
@@ -231,17 +232,15 @@ type LandingPlan struct {
 
 // Limits are the bounds Next enforces, read once at run start through the Configuration Manager.
 type Limits struct {
-	Returns         int // limits.returns
-	GroupAttempts   int // limits.group_attempts
-	PauseMaxMin     int // limits.pause_max_min
-	GroupWallMin    int // limits.group_wall_min
-	GroupTokens     int // limits.group_tokens, enforced by the Resource Manager
-	BuilderRetries  int // the builder's retries in the agent registry
-	ReviewerRetries int // the reviewer's retries
-	TesterRetries   int // the tester's retries
-	PoolMin         int // limits.pool_min
-	PoolMax         int // limits.pool_max
-	SessionMemGB    float64
+	GroupRetries      int // limits.group_retries
+	OverrideWindowMin int // limits.override_window_min
+	OverrideRetries   int // limits.override_retries
+	PauseMaxMin       int // limits.pause_max_min
+	GroupWallMin      int // limits.group_wall_min
+	GroupTokens       int // limits.group_tokens, enforced by the Resource Manager
+	PoolMin           int // limits.pool_min
+	PoolMax           int // limits.pool_max
+	SessionMemGB      float64
 }
 
 // Timings and bounds of the engine.

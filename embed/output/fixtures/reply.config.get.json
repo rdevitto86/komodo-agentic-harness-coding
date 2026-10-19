@@ -12,7 +12,7 @@
         "built-in"
       ],
       [
-        "limits.returns",
+        "limits.group_retries",
         "3",
         "machine"
       ]

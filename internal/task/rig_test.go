@@ -403,8 +403,11 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 		},
 		Limits: o.limits,
 	}
-	if spec.Limits.SessionRetries == 0 {
-		spec.Limits.SessionRetries = 1
+	switch {
+	case spec.Limits.GroupRetries == 0:
+		spec.Limits.GroupRetries = 3
+	case spec.Limits.GroupRetries < 0: // a test that wants no retries at all
+		spec.Limits.GroupRetries = 0
 	}
 	mdl := &model{steps: map[string][]func(llm.Session) (llm.Stream, error){}, starts: map[string]int{}, t: t}
 	links := map[llm.Link]llm.Provider{}

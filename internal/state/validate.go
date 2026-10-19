@@ -30,11 +30,8 @@ var (
 		ReasonNoProvider,
 		ReasonPauseTimeout,
 		ReasonPaidRefused,
-		ReasonRegression,
-		ReasonReturns,
 		ReasonFlap,
 		ReasonRetries,
-		ReasonAttempts,
 		ReasonNeedsScope,
 		ReasonContext,
 		ReasonSetup,
@@ -65,7 +62,7 @@ var (
 	fieldEnums = map[string][]string{
 		"TaskState.State":    {"queued", "claimed", "done"},
 		"RoundState.Result":  {"", "pass", "fail", "cancelled"},
-		"GroupState.Outcome": {"", "complete", "lost", "abandoned"},
+		"GroupState.Outcome": {"", "complete", "lost", "abandoned", "failed"},
 		"GroupState.Prior":   {"", "intake", "build", "test_review", "commit", "cleanup"},
 		"PauseState.Cause":   {"provider", "plan_window", "spending", "group_tokens"},
 		"LinkRecord.Cap":     {"", "window", "weekly", "model", "spend", "quota"},
@@ -204,9 +201,8 @@ func validateCounters(c *Counters, f func(field, why string) error) error {
 		name string
 		v    int64
 	}{
-		{"returns", int64(c.Returns)},
-		{"attempts", int64(c.Attempts)},
-		{"retries", int64(c.Retries)},
+		{"retries_left", int64(c.RetriesLeft)},
+		{"overrides", int64(c.Overrides)},
 		{"crashes", int64(c.Crashes)},
 		{"wall_used_s", c.WallUsedS},
 		{"tokens_used", c.TokensUsed},
@@ -246,9 +242,6 @@ func validateParts(g *GroupState, f func(field, why string) error) error {
 		if !oneOf(r.round.Result, fieldEnums["RoundState.Result"]) {
 			return f("test_review."+r.name+".result", fmt.Sprintf("%q is not pass, fail or cancelled", r.round.Result))
 		}
-		if r.round.Restarts < 0 {
-			return f("test_review."+r.name+".restarts", "negative")
-		}
 	}
 
 	for i, a := range g.ActionsOpen {
@@ -271,7 +264,8 @@ func validateParts(g *GroupState, f func(field, why string) error) error {
 	return nil
 }
 
-// checkMonotone refuses a write that lowers the fence or a counter below the stored record.
+// checkMonotone refuses a write that lowers the fence or a counter below the stored record, or that raises retries_left
+// without a new approved override.
 func checkMonotone(key string, old, now *GroupState) error {
 	f := func(field string) error {
 		return invalid(key, "state."+field, "lower than the stored value")
@@ -285,9 +279,7 @@ func checkMonotone(key string, old, now *GroupState) error {
 		name     string
 		old, now int64
 	}{
-		{"returns", int64(oc.Returns), int64(nc.Returns)},
-		{"attempts", int64(oc.Attempts), int64(nc.Attempts)},
-		{"retries", int64(oc.Retries), int64(nc.Retries)},
+		{"overrides", int64(oc.Overrides), int64(nc.Overrides)},
 		{"crashes", int64(oc.Crashes), int64(nc.Crashes)},
 		{"wall_used_s", oc.WallUsedS, nc.WallUsedS},
 		{"tokens_used", oc.TokensUsed, nc.TokensUsed},
@@ -295,6 +287,10 @@ func checkMonotone(key string, old, now *GroupState) error {
 		if n.now < n.old {
 			return f("counters." + n.name)
 		}
+	}
+
+	if nc.RetriesLeft > oc.RetriesLeft && nc.Overrides <= oc.Overrides {
+		return invalid(key, "state.counters.retries_left", "higher than the stored value with no approved override")
 	}
 
 	for k, v := range oc.Blocks {

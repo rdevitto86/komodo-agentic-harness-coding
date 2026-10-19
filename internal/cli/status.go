@@ -156,7 +156,7 @@ func blockedResult(sd StatusData) Result {
 
 	facts := format.NeedsFacts{
 		Code: b.Reason, Group: b.Group, Question: b.Question,
-		Fix: "komodo run " + b.Group + " --approve or --deny",
+		Fix: blockedFix(b.Group, b.Reason),
 	}
 
 	return Result{
@@ -166,6 +166,18 @@ func blockedResult(sd StatusData) Result {
 		Facts:   facts,
 		Data:    sd,
 	}
+}
+
+// blockedFix is the command that answers a block: --approve or --deny for needs_scope and wall, a plain run otherwise.
+func blockedFix(group, reason string) string {
+	if reason == "retries" {
+		return "komodo run " + group + " --override in a terminal, before the window ends"
+	}
+	if reason == "needs_scope" || reason == "wall" {
+		return "komodo run " + group + " --approve or --deny"
+	}
+
+	return "komodo run " + group
 }
 
 // statusFacts turns the status into the tables reply.status prints.

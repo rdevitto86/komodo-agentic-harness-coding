@@ -52,12 +52,10 @@ type Permissions struct {
 
 // Limits are the numbers the Task Manager enforces, resolved by the Runtime Manager from settings.
 type Limits struct {
-	SessionWall    time.Duration
-	SessionIdle    time.Duration
-	SessionRetries int // fresh sessions after a timeout or idle stop, per agent
-	Returns        int // trips back to Build before the group is escalated
-	Attempts       int // fresh builder sessions for the group
-	RefusalLimit   int // refusals under one guard row before the session ends
+	SessionWall  time.Duration
+	SessionIdle  time.Duration
+	GroupRetries int // the group's retry budget at its start: failures it may still retry
+	RefusalLimit int // refusals under one guard row before the session ends
 }
 
 // OutsideServer is one outside tool server from the Context Manager's list, switched on for at least one agent.
@@ -73,11 +71,11 @@ type OutsideServer struct {
 type Progress struct {
 	Stage     state.Stage `json:"stage"`
 	TasksDone []string    `json:"tasks_done"`
-	Returns   int         `json:"returns"` // trips back to Build so far
+	Returns   int         `json:"returns"` // trips back to Build so far, for the brief; not a limit
 	// tester restarts after a disputed result
 	Disputes int `json:"disputes"`
-	// fresh builder sessions so far
-	Attempts int `json:"attempts"`
+	// retries the group may still spend; mirrors the engine's budget and only falls
+	RetriesLeft int `json:"retries_left"`
 	// tree hash when the group last went back to Build
 	TreeAtReturn string `json:"tree_at_return"`
 	// task identifiers that already made their one scope request

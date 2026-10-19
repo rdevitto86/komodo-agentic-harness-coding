@@ -134,7 +134,7 @@ func TestReportRefused(t *testing.T) {
 		Source{Component: "config", Run: "run-1"},
 		"over_limit",
 		KindRefused,
-		errors.New("limits.returns is above 20"),
+		errors.New("limits.group_retries is above 20"),
 	)
 	e := r.next(t)
 	if e.Subtype != "fault.error" {
@@ -142,7 +142,7 @@ func TestReportRefused(t *testing.T) {
 	}
 	d := e.Data.(*ErrorFault)
 	if d.Kind != "refused" || d.Severity != "error" || d.Code != "over_limit" || d.Component != "config" ||
-		d.Reason != "limits.returns is above 20" || d.Panic {
+		d.Reason != "limits.group_retries is above 20" || d.Panic {
 		t.Fatalf("data %+v", d.FaultData)
 	}
 	got := r.p.waitCalls(t, 1)

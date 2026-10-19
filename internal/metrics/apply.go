@@ -478,7 +478,7 @@ func (f *figures) applyError(e bus.Event) {
 // secondsBetween returns whole seconds from a to b, never negative.
 func secondsBetween(a, b time.Time) int64 { return max(int64(b.Sub(a)/time.Second), 0) }
 
-// groupOutcome maps a group.done body to a group outcome: complete is done, abandoned stays, lost is failed.
+// groupOutcome maps a group.done body to a group outcome: complete is done, abandoned stays, lost and failed are failed.
 func groupOutcome(p bus.Payload) string {
 	d, ok := p.(*bus.GroupDone)
 	if !ok {
@@ -488,7 +488,7 @@ func groupOutcome(p bus.Payload) string {
 	switch d.Outcome {
 	case "abandoned":
 		return outcomeAbandoned
-	case "lost":
+	case "lost", "failed":
 		return outcomeFailed
 	default:
 		return outcomeDone

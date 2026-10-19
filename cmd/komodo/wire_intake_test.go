@@ -82,12 +82,107 @@ func TestBaseRunnerRunsCommandsOnTheBaseCommit(t *testing.T) {
 	if code, err := r.Run(context.Background(), "grep -q head a.txt"); err != nil || code == 0 {
 		t.Fatalf("a command that holds only on the working tree: exit %d err %v", code, err)
 	}
-	if be.spec.Role != sandbox.RoleBuilder || be.spec.Network || !strings.Contains(be.spec.Worktree, "base-") {
+	if be.spec.Role != sandbox.RoleBuilder || be.spec.Network || !strings.HasPrefix(be.spec.Worktree, plan.Temp) {
 		t.Fatalf("sandbox spec: %+v", be.spec)
 	}
 
-	if err := r.Close(); err != nil || be.release != 1 {
-		t.Fatalf("close: %v released %d", err, be.release)
+	if err := r.Close(); err != nil || be.release != be.prepare {
+		t.Fatalf("close: %v released %d of %d", err, be.release, be.prepare)
+	}
+}
+
+// A command that writes into the base checkout does not change what the next command sees, and a closed runner leaves no
+// folder behind.
+func TestBaseRunnerGivesEveryCommandAFreshCheckout(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"},
+	} {
+		pre := append([]string{"-C", repo}, args...)
+		if out, err := exec.Command("git", pre...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+
+	boxes := sandbox.NewManager(map[string]sandbox.Backend{sandbox.RoleBuilder: &hostBackend{}}, nil)
+	home := t.TempDir()
+	plan := task.SandboxPlan{Temp: filepath.Join(home, "tmp"), Build: filepath.Join(home, "build")}
+
+	r, err := openBaseRunner(context.Background(), boxes, repo, "plan-x", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, err := r.Run(context.Background(), "touch built.out"); err != nil || code != 0 {
+		t.Fatalf("a command that writes a file: exit %d err %v", code, err)
+	}
+	if code, err := r.Run(context.Background(), "test ! -e built.out"); err != nil || code != 0 {
+		t.Fatalf("the next command saw the first command's file: exit %d err %v", code, err)
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range []string{plan.Temp, plan.Build} {
+		left, _ := os.ReadDir(d)
+		if len(left) != 0 {
+			t.Fatalf("%s holds %d entries after close", d, len(left))
+		}
+	}
+}
+
+// The fail-first check writes only into its own folders: never the shared build cache folder that holds the tester's cached
+// base checkout. Its own build cache folder lives under the plan's temporary folder and goes at Close.
+func TestBaseRunnerHasItsOwnBuildCacheFolder(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"},
+	} {
+		pre := append([]string{"-C", repo}, args...)
+		if out, err := exec.Command("git", pre...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+
+	be := &hostBackend{}
+	boxes := sandbox.NewManager(map[string]sandbox.Backend{sandbox.RoleBuilder: be}, nil)
+	home := t.TempDir()
+	plan := task.SandboxPlan{Temp: filepath.Join(home, "tmp"), Build: filepath.Join(home, "build")}
+
+	r, err := openBaseRunner(context.Background(), boxes, repo, "plan-x", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, err := r.Run(context.Background(), "true"); err != nil || code != 0 {
+		t.Fatalf("exit %d err %v", code, err)
+	}
+
+	var own []string
+
+	for _, w := range be.spec.Writable {
+		if w == plan.Build {
+			t.Fatalf("the shared build cache folder %s is writable: %v", plan.Build, be.spec.Writable)
+		}
+		if strings.HasPrefix(w, plan.Temp+string(filepath.Separator)) {
+			own = append(own, w)
+		}
+	}
+	if len(own) != len(be.spec.Writable) || len(own) < 2 {
+		t.Fatalf("writable %v, want the run's temporary folder and a build cache folder under %s", be.spec.Writable, plan.Temp)
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := os.ReadDir(plan.Temp); len(left) != 0 {
+		t.Fatalf("%s holds %d entries after close", plan.Temp, len(left))
+	}
+	if _, err := os.Stat(plan.Build); err == nil {
+		t.Fatalf("the runner created the shared build cache folder %s", plan.Build)
 	}
 }
 

@@ -15,6 +15,8 @@ type helpFlag struct {
 	Kind    string `json:"kind"`
 	Default string `json:"default,omitempty"`
 	Help    string `json:"help"`
+	// TerminalOnly is true for a flag only a person at a terminal may use.
+	TerminalOnly bool `json:"terminal_only,omitempty"`
 }
 
 // helpDoc is one command in the machine-readable help.

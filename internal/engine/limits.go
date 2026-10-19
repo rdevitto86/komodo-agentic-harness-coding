@@ -26,17 +26,15 @@ func Fingerprint(items []string) string {
 }
 
 // LoadLimits reads every bound once through the Configuration Manager.
-func LoadLimits(cfg ConfigReader, agents AgentLimits) (Limits, error) {
+func LoadLimits(cfg ConfigReader) (Limits, error) {
 	var l Limits
 
 	ints := []struct {
 		key string
 		dst *int
 	}{
-		{
-			"limits.returns",
-			&l.Returns,
-		}, {"limits.group_attempts", &l.GroupAttempts}, {"limits.pause_max_min", &l.PauseMaxMin},
+		{"limits.group_retries", &l.GroupRetries}, {"limits.override_window_min", &l.OverrideWindowMin},
+		{"limits.override_retries", &l.OverrideRetries}, {"limits.pause_max_min", &l.PauseMaxMin},
 		{"limits.group_wall_min", &l.GroupWallMin}, {"limits.group_tokens", &l.GroupTokens},
 		{"limits.pool_min", &l.PoolMin}, {"limits.pool_max", &l.PoolMax},
 	}
@@ -54,20 +52,6 @@ func LoadLimits(cfg ConfigReader, agents AgentLimits) (Limits, error) {
 	}
 
 	l.SessionMemGB = mem
-	for _, a := range []struct {
-		name string
-		dst  *int
-	}{
-		{"builder", &l.BuilderRetries},
-		{"reviewer", &l.ReviewerRetries},
-		{"tester", &l.TesterRetries},
-	} {
-		n, err := agents.Retries(a.name)
-		if err != nil {
-			return Limits{}, fmt.Errorf("%s retries: %w", a.name, err)
-		}
-		*a.dst = n
-	}
 
 	return l, nil
 }

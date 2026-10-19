@@ -45,7 +45,7 @@ func (e *Engine) handle(ctx context.Context, w *connWriter, req Request) {
 // verbRun starts, queues or answers a run.
 func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	ev := req.Event
-	if req.Flags.Approve || req.Flags.Deny {
+	if req.Flags.Approve || req.Flags.Deny || req.Flags.Override {
 		if rc, ok := dataOf[*bus.RunContinue](ev); ok {
 			rc.Request = bus.ID(req.ID)
 			if err := e.await(ctx, req, *ev); err != nil {

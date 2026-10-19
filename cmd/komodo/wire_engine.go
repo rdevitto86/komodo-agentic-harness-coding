@@ -221,7 +221,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		},
 	)
 	d := engine.Deps{
-		Bus: s.bus, Reader: s.reader, Config: s.cfg, Agents: agentRetries{s.cfg},
+		Bus: s.bus, Reader: s.reader, Config: s.cfg,
 		States:   stateOpener,
 		Machine:  s.machine,
 		Leases:   s.leases,

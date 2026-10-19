@@ -10,6 +10,7 @@ const (
 	Pinned         Code = "pinned"
 	NoTerminal     Code = "no_terminal"
 	NotBlocked     Code = "not_blocked"
+	GroupFailed    Code = "group_failed"
 	NoRepo         Code = "no_repo"
 	Usage          Code = "usage"
 	UnknownKey     Code = "unknown_key"
@@ -34,7 +35,7 @@ const (
 
 // allCodes lists every code on the closed list, in list order.
 var allCodes = []Code{
-	ConfigTampered, Pinned, NoTerminal, NotBlocked, NoRepo, Usage, UnknownKey, BadValue, OverLimit,
+	ConfigTampered, Pinned, NoTerminal, NotBlocked, GroupFailed, NoRepo, Usage, UnknownKey, BadValue, OverLimit,
 	UnknownTarget, RunRefused, EngineStopping, BadFrame, CardChanged, Locked, BusOverflow,
 	StoreFailed, PlanBlocked, PlanTimeout, PlanInput, PlanWrite, ContextRefused, Internal, Other,
 }
@@ -44,11 +45,8 @@ var blockReasons = []string{
 	"no_provider",
 	"pause_timeout",
 	"paid_refused",
-	"regression",
-	"returns",
 	"flap",
 	"retries",
-	"attempts",
 	"needs_scope",
 	"context",
 	"setup",

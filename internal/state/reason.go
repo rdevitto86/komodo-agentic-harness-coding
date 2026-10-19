@@ -14,20 +14,11 @@ const (
 	// the billing check refused a paid link
 	ReasonPaidRefused Reason = "paid_refused"
 
-	// a test that passed at the base fails and returns are spent
-	ReasonRegression Reason = "regression"
-
-	// returns are spent
-	ReasonReturns Reason = "returns"
-
 	// the same failure, or a return that changed nothing
 	ReasonFlap Reason = "flap"
 
-	// an agent's timeouts or idle stops passed its retries
+	// the group's retries are spent; a person may override until the window lapses
 	ReasonRetries Reason = "retries"
-
-	// every fresh builder session was used
-	ReasonAttempts Reason = "attempts"
 
 	// the builder needs a file outside its group's files
 	ReasonNeedsScope Reason = "needs_scope"

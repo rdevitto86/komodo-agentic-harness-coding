@@ -60,8 +60,8 @@ func TestMismatchedCodeRefused(t *testing.T) {
 }
 
 func TestBlockReasonsAreTheNeedsCodes(t *testing.T) {
-	if len(BlockReasons()) != 22 {
-		t.Fatalf("block reasons: %d, want 22", len(BlockReasons()))
+	if len(BlockReasons()) != 19 {
+		t.Fatalf("block reasons: %d, want 19", len(BlockReasons()))
 	}
 	for _, r := range BlockReasons() {
 		if _, ok := shapes["needs."+r]; !ok {
@@ -195,13 +195,13 @@ func TestOverLimitFixtureHoldsTheRealLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range table.Keys {
-		if k.Name == "limits.returns" {
+		if k.Name == "limits.group_retries" {
 			want := "hard limit of " + string(rune('0'+k.Max))
 			if !strings.Contains(fx.Reason, want) || !strings.HasSuffix(fx.Fix, "="+string(rune('0'+k.Max))) {
-				t.Fatalf("fixture %+v does not hold the limit %d of limits.returns", fx, k.Max)
+				t.Fatalf("fixture %+v does not hold the limit %d of limits.group_retries", fx, k.Max)
 			}
 			return
 		}
 	}
-	t.Fatal("limits.returns not in defaults.json")
+	t.Fatal("limits.group_retries not in defaults.json")
 }
