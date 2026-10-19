@@ -274,6 +274,7 @@ func (g *group) after() {
 	g.armTimers()
 	if stage == StagePaused || stage == StageBlocked || stage == StageDone {
 		g.m.brk.ended(g.spec.ID)
+		g.m.brk.drop(g.spec.ID)
 	}
 	if stage == StageDone {
 		g.m.groupDone(g)
