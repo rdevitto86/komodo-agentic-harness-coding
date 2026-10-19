@@ -1,5 +1,5 @@
 {
   "code": "over_limit",
-  "reason": "limits.returns is over its hard limit of 5",
-  "fix": "komodo config set limits.returns=5"
+  "reason": "limits.group_retries is over its hard limit of 5",
+  "fix": "komodo config set limits.group_retries=5"
 }

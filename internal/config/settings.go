@@ -265,7 +265,7 @@ func (m *Manager) agentItem(it Item, role, field string, r resolved) (Item, erro
 	val := limitField(m.roleLimits(role, r.eff.Flat, over), field)
 
 	it.Default, it.Value = def, val
-	fromMachine := field != "retries" && r.eff.Flat["limits."+field].Source == LayerMachine
+	fromMachine := r.eff.Flat["limits."+field].Source == LayerMachine
 
 	if overrideValue(over, field) != nil || fromMachine {
 		it.Source = LayerMachine
@@ -323,5 +323,5 @@ func limitField(l Limits, field string) any {
 	case "session_idle_min":
 		return l.IdleMin
 	}
-	return l.Retries
+	return nil
 }

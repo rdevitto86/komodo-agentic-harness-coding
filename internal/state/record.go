@@ -66,7 +66,7 @@ type GroupState struct {
 	// rises each time the group enters a stage; an input from an older epoch is stale
 	Epoch uint32 `json:"epoch"`
 
-	// set in done: complete, lost or abandoned
+	// set in done: complete, lost, abandoned or failed
 	Outcome string `json:"outcome"`
 
 	// the Lease Manager's fence for this holder; never zero
@@ -126,10 +126,9 @@ type UnfinishedEdits struct {
 
 // Counters are the numbers that bound a group; only the Runtime Manager changes them.
 type Counters struct {
-	Returns      int            `json:"returns"`       // returns to build after a failed test or review
-	Attempts     int            `json:"attempts"`      // fresh builder sessions for the group
-	Retries      int            `json:"retries"`       // builder restarts after a timeout or idle stop
-	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to attempts or retries
+	RetriesLeft  int            `json:"retries_left"`  // retries the group may still spend; only an override raises it
+	Overrides    int            `json:"overrides"`     // overrides a person approved; the only way retries_left rises
+	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to the retries
 	Blocks       map[string]int `json:"blocks"`        // blocks per reason
 	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time
 	WallExtended bool           `json:"wall_extended"` // the one wall-time extension was granted
@@ -156,9 +155,8 @@ type TestReview struct {
 
 // RoundState is one agent's progress in the current round.
 type RoundState struct {
-	Session  string `json:"session,omitempty"` // live or last session of the agent
-	Result   string `json:"result"`            // empty until it ends, then pass, fail or cancelled
-	Restarts int    `json:"restarts"`          // fresh sessions after an end without a result
+	Session string `json:"session,omitempty"` // live or last session of the agent
+	Result  string `json:"result"`            // empty until it ends, then pass, fail or cancelled
 }
 
 // Finding names one verified blocking finding by rule and file.
@@ -198,4 +196,5 @@ type BlockState struct {
 	Reason  Reason    `json:"reason,omitempty"`
 	Counter string    `json:"counter,omitempty"` // the spent counter of an unnamed block
 	At      time.Time `json:"at,omitzero"`
+	Until   time.Time `json:"until,omitzero"` // retries only: when the override window lapses and the group fails
 }

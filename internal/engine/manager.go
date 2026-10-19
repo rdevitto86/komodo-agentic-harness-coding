@@ -41,6 +41,7 @@ type run struct {
 	done       map[string]bool   // groups that ended with outcome complete
 	finished   map[string]bool   // groups that are Done with any outcome
 	lost       map[string]bool   // groups whose lease another run holds, which never started
+	failed     map[string]bool   // groups that failed for good, which no run continues
 	depBlocked map[string]string // groups that wait on an abandoned dependency
 	landing    map[string]LandingPlan
 	first      sync.Once
@@ -316,7 +317,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		return fail("the run names no groups")
 	}
 
-	l, err := LoadLimits(m.d.Config, m.d.Agents)
+	l, err := LoadLimits(m.d.Config)
 	if err != nil {
 		return fail("read the limits: %v", err)
 	}
@@ -358,6 +359,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		done:       map[string]bool{},
 		finished:   map[string]bool{},
 		lost:       map[string]bool{},
+		failed:     map[string]bool{},
 		depBlocked: map[string]string{},
 		landing:    map[string]LandingPlan{},
 		firstCh:    make(chan struct{}),
@@ -386,6 +388,14 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		case rec.State.Stage == StageDone:
 			r.finished[s.ID] = true
 			r.done[s.ID] = rec.State.Outcome == "complete"
+			if rec.State.Outcome == "failed" {
+				r.failed[s.ID] = true
+				if rs.Target == s.Label {
+					why := s.Label + " failed for good: plan it again to run it fresh"
+					m.publishRefused(id, rs.Target, req, why)
+					return &codeError{CodeGroupFailed, why}
+				}
+			}
 		default:
 			saved[s.ID] = rec
 		}
@@ -682,6 +692,9 @@ func (m *Manager) checkLocked(r *run) {
 				doneIDs = append(doneIDs, bus.ID(id))
 			} else {
 				otherIDs = append(otherIDs, bus.ID(id))
+				if r.failed[id] {
+					stuck = append(stuck, StalledGroup{Group: s.Label, Reason: "failed"})
+				}
 			}
 			continue
 		}
@@ -854,6 +867,7 @@ func (m *Manager) groupDone(g *group) {
 	delete(m.beats, "task:"+g.spec.ID)
 	r.finished[g.spec.ID] = true
 	r.done[g.spec.ID] = g.st.Outcome == "complete"
+	r.failed[g.spec.ID] = g.st.Outcome == "failed"
 }
 
 // leaseRefused records a group that never started because another run holds its lease.

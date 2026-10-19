@@ -105,6 +105,29 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	return nil
 }
 
+// Override gives a group whose retries ran out more retries, for `run (id) --override`; it is the person's answer only.
+func (m *Manager) Override(target, request string) error {
+	gs := m.byTarget(target)
+	if len(gs) == 0 {
+		return &codeError{CodeUnknownTarget, "no live group named " + target}
+	}
+
+	g := gs[0]
+	g.mu.Lock()
+	st := g.snap
+	g.mu.Unlock()
+
+	switch {
+	case st.Stage == StageDone && st.Outcome == "failed":
+		return &codeError{CodeGroupFailed, g.spec.Label + " failed for good: plan it again to run it fresh"}
+	case st.Stage == StageBlocked && st.Block.Reason == state.ReasonRetries:
+		g.enqueue(Input{Kind: InOverride, Request: request})
+		return nil
+	}
+
+	return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an override"}
+}
+
 // Abandon drops a group for good: it is stopped, Done with outcome abandoned, discarded, and each dependent blocks.
 func (m *Manager) Abandon(ctx context.Context, target string) (string, error) {
 	gs := m.byTarget(target)
@@ -220,6 +243,9 @@ func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool 
 
 // continueTarget handles a run-continue event: an answer, or a plain continue of every held group the target names.
 func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run string) error {
+	if rc.Answer == "override" {
+		return m.Override(rc.Target, string(rc.Request))
+	}
 	if rc.Answer != "" {
 		return m.Answer(rc.Target, rc.Answer == "approve", string(rc.Request))
 	}

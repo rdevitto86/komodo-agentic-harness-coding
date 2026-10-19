@@ -14,8 +14,7 @@
   "guard": [],
   "limits": {
     "wall_min": 60,
-    "idle_min": 10,
-    "retries": 2
+    "idle_min": 10
   },
   "skills": {
     "allow": [

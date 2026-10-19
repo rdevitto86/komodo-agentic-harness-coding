@@ -309,11 +309,9 @@ func (k *repoKit) taskSpec(spec engine.GroupSpec, g intake.Group, cmds map[strin
 			Fence:    int64(spec.Lease.Fence),
 		},
 		Limits: task.Limits{
-			Returns:        l.Returns,
-			Attempts:       l.GroupAttempts,
-			SessionWall:    time.Duration(k.s.num("limits.session_wall_min")) * time.Minute,
-			SessionIdle:    time.Duration(k.s.num("limits.session_idle_min")) * time.Minute,
-			SessionRetries: l.BuilderRetries,
+			GroupRetries: l.GroupRetries,
+			SessionWall:  time.Duration(k.s.num("limits.session_wall_min")) * time.Minute,
+			SessionIdle:  time.Duration(k.s.num("limits.session_idle_min")) * time.Minute,
 		},
 	}
 	if spec.Saved != nil {
@@ -448,7 +446,7 @@ func findGroup(epics []intake.Epic, id string) (intake.Group, bool) {
 
 // progressOf converts a saved group record into the Task Manager's counters.
 func progressOf(st engine.State) *task.Progress {
-	p := &task.Progress{Stage: st.Stage, Widened: slices.Clone(st.ScopeAdded)}
+	p := &task.Progress{Stage: st.Stage, RetriesLeft: st.Counters.RetriesLeft, Widened: slices.Clone(st.ScopeAdded)}
 	if u := st.Unfinished; u != nil {
 		p.Unfinished = &state.UnfinishedEdits{Task: u.Task, Files: slices.Clone(u.Files)}
 	}

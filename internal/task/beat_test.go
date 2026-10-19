@@ -55,7 +55,7 @@ func holdingStream(started chan<- struct{}, release <-chan struct{}) func(llm.Se
 func TestServeBeatsWhileAModelSessionRuns(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	r := newPipeRig(t, rigOpts{
-		limits: Limits{Attempts: 1},
+		limits: Limits{GroupRetries: -1},
 		mut:    func(_ *GroupSpec, c *Collaborators) { c.BeatEvery = beatEvery },
 	})
 	r.model.on("builder", holdingStream(started, release))

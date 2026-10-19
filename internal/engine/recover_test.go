@@ -17,6 +17,7 @@ func (r *rig) savedGroup(label string, stage Stage, edit func(*State)) {
 	spec := r.plans.specs[label]
 	s := NewState("old-run", spec, "hash")
 	s.Stage, s.Epoch, s.Fence = stage, 2, 1
+	s.Counters.RetriesLeft = 2
 	s.LastEventAt = t0
 	if edit != nil {
 		edit(&s)
@@ -35,8 +36,8 @@ func TestRecoveryAfterKillChargesNoAttemptAndOrdersTheStageAgain(t *testing.T) {
 	waitUntil(t, "the stage ordered again", func() bool { return countCmd(r.tasks.commands("g-tg-1"), task.CmdStart) == 1 })
 	until(t, "the crash session end", func() bool { return r.ev.count(bus.TypeRunStatus, "session.end") == 1 })
 	s := r.store.get("g-tg-1")
-	if s.Counters.Attempts != 0 || s.Counters.Retries != 0 {
-		t.Fatalf("the crash was charged: attempts %d retries %d", s.Counters.Attempts, s.Counters.Retries)
+	if s.Counters.RetriesLeft != 2 {
+		t.Fatalf("the crash was charged: retries left %d", s.Counters.RetriesLeft)
 	}
 	if s.Tasks[0].State == "claimed" {
 		t.Fatal("the dead session still holds its task")
@@ -155,14 +156,14 @@ func countCmd(cs []task.Command, k task.CommandKind) int {
 	return n
 }
 
-// blockedAttempts plants a Blocked attempts group whose continue the State Manager refuses to save.
+// blockedAttempts plants a Blocked wall group whose continue the State Manager refuses to save.
 func blockedAttempts(t *testing.T) *rig {
 	t.Helper()
 	r := newRig(t, [][]string{{"tg-1"}}, onlyIdle)
 	r.store.monotone.Store(true)
 	r.savedGroup("tg-1", StageBlocked, func(s *State) {
-		s.Prior, s.Block = StageBuild, state.BlockState{Reason: state.ReasonAttempts}
-		s.Counters.Attempts = 2
+		s.Prior, s.Block = StageBuild, state.BlockState{Reason: state.ReasonWall}
+		s.Counters.WallUsedS = 7200
 	})
 	return r
 }
@@ -178,8 +179,8 @@ func wantRefusedContinue(t *testing.T, r *rig, err error, refusals int) {
 	if r.ev.count(bus.TypeRunStatus, "request.accepted") != 0 {
 		t.Fatal("request.accepted published for a continue that was not saved")
 	}
-	if st := r.store.get("g-tg-1"); st.Stage != StageBlocked || st.Block.Reason != state.ReasonAttempts {
-		t.Fatalf("group %s %s, want it held Blocked attempts", st.Stage, st.Block.Reason)
+	if st := r.store.get("g-tg-1"); st.Stage != StageBlocked || st.Block.Reason != state.ReasonWall {
+		t.Fatalf("group %s %s, want it held Blocked wall", st.Stage, st.Block.Reason)
 	}
 	r.m.mu.Lock()
 	defer r.m.mu.Unlock()
@@ -214,5 +215,19 @@ func TestRefusedSaveOfARunContinueRefusesIt(t *testing.T) {
 		wantRefusedContinue(t, r, err, 2)
 	case <-time.After(5 * time.Second):
 		t.Fatal("the continue was not settled")
+	}
+}
+
+func TestRunOnAFailedGroupIsRefusedAndTellsThePersonToPlanAgain(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1"}}, onlyIdle)
+	r.savedGroup("tg-1", StageDone, func(s *State) { s.Outcome = "failed" })
+
+	var ce *codeError
+	if err := r.startRun("run-2", "tg-1"); !errors.As(err, &ce) || ce.code != CodeGroupFailed ||
+		!strings.Contains(ce.detail, "plan it again") {
+		t.Fatalf("reply %v, want a group_failed refusal", err)
+	}
+	if got := r.store.get("g-tg-1"); got.Stage != StageDone || got.Outcome != "failed" {
+		t.Fatalf("the failed group was changed: %s %s", got.Stage, got.Outcome)
 	}
 }

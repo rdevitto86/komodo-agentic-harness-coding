@@ -33,12 +33,6 @@ func (c rigConfig) GetConfigItem(key string) (config.Item, error) {
 	return config.Item{Key: key, Value: v}, nil
 }
 
-// rigAgents gives every agent one retry.
-type rigAgents struct{}
-
-// Retries returns 1.
-func (rigAgents) Retries(string) (int, error) { return 1, nil }
-
 // fakeStore is an in-memory State Manager.
 type fakeStore struct {
 	mu       sync.Mutex
@@ -78,9 +72,9 @@ func (s *fakeStore) Save(_ context.Context, g string, st State, rev int) (state.
 		s.mu.Unlock()
 		return state.Record{}, fmt.Errorf("revision %d is stale", rev)
 	}
-	if s.monotone.Load() && st.Counters.Attempts < cur.State.Counters.Attempts {
+	if s.monotone.Load() && st.Counters.WallUsedS < cur.State.Counters.WallUsedS {
 		s.mu.Unlock()
-		return state.Record{}, &state.InvalidError{Group: g, Field: "state.counters.attempts", Why: "lower than the stored value"}
+		return state.Record{}, &state.InvalidError{Group: g, Field: "state.counters.wall_used_s", Why: "lower than the stored value"}
 	}
 	r := state.Record{Header: state.Header{Group: g, Rev: rev + 1}, State: st}
 	s.recs[g] = r
@@ -503,12 +497,12 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 		failFor: map[string]error{},
 	}
 	cfg := rigConfig{
-		"limits.returns":        2,
-		"limits.group_attempts": 2,
-		"limits.pause_max_min":  360,
-		"limits.group_wall_min": 60,
-		"limits.group_tokens":   0, "limits.pool_min": 1, "limits.pool_max": 4, "sandbox.max_mem_gb": 2}
-	r.d = Deps{Bus: r.bus, Config: cfg, Agents: rigAgents{}, States: func(
+		"limits.group_retries": 2, "limits.override_window_min": 30,
+		"limits.override_retries": 2,
+		"limits.pause_max_min":    360,
+		"limits.group_wall_min":   60,
+		"limits.group_tokens":     0, "limits.pool_min": 1, "limits.pool_max": 4, "sandbox.max_mem_gb": 2}
+	r.d = Deps{Bus: r.bus, Config: cfg, States: func(
 		string,
 	) (StateStore, error) {
 		return r.store, nil

@@ -170,6 +170,9 @@ func blockedResult(sd StatusData) Result {
 
 // blockedFix is the command that answers a block: --approve or --deny for needs_scope and wall, a plain run otherwise.
 func blockedFix(group, reason string) string {
+	if reason == "retries" {
+		return "komodo run " + group + " --override in a terminal, before the window ends"
+	}
 	if reason == "needs_scope" || reason == "wall" {
 		return "komodo run " + group + " --approve or --deny"
 	}

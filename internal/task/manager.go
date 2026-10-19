@@ -94,19 +94,9 @@ type Manager struct {
 // New builds a Manager from the group's spec and the collaborators it calls.
 func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 	// Defaults the Task Manager applies to a limit the Runtime Manager left at zero.
-	const (
-		defaultReturns  = 3
-		defaultAttempts = 6
-		defaultRefusals = 3
-	)
+	const defaultRefusals = 3
 	if spec.Lease.Worktree == "" {
 		return nil, errors.New("the group spec has no worktree")
-	}
-	if spec.Limits.Returns == 0 {
-		spec.Limits.Returns = defaultReturns
-	}
-	if spec.Limits.Attempts == 0 {
-		spec.Limits.Attempts = defaultAttempts
 	}
 	if spec.Limits.RefusalLimit == 0 {
 		spec.Limits.RefusalLimit = defaultRefusals
@@ -128,6 +118,7 @@ func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 	}
 
 	m.stopCtx, m.stopCancel = context.WithCancelCause(context.Background())
+	m.prog.RetriesLeft = spec.Limits.GroupRetries
 	if sv := spec.Saved; sv != nil {
 		m.prog = cloneProgress(*sv)
 		for _, w := range sv.Widened {

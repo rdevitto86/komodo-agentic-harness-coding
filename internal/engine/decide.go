@@ -26,6 +26,8 @@ type calc struct {
 	refuse  *bus.RequestRefused
 	// scopeBlock is set when the scope rules did not deny a request, so the block rows block the group.
 	scopeBlock *ScopeAsk
+	// exhausted names the failure that found the retry budget empty; the block rows then hold the group for an override.
+	exhausted string
 }
 
 // allTasksDone reports whether every task is done.
@@ -87,7 +89,7 @@ func (c *calc) inStage() bool {
 		return true
 	case InLoopRestart:
 		if s.Stage == StageBuild || s.Stage == StageTestReview {
-			s.Counters.Retries++
+			c.waive("restart")
 			c.enterStage(s.Stage, stageData{Task: c.firstOpenTask(), Retry: "loop"})
 			return true
 		}
@@ -176,9 +178,6 @@ func (c *calc) sessionStart() bool {
 				break
 			}
 		}
-		if !d.Resumed && !d.Restart {
-			s.Counters.Attempts++
-		}
 	case "tester":
 		s.TestReview.Tester.Session, s.TestReview.Tester.Result = string(d.Session), ""
 	case "reviewer":
@@ -187,6 +186,31 @@ func (c *calc) sessionStart() bool {
 
 	c.emitSession(d.SessionStart)
 	return true
+}
+
+// charge spends one retry for a true failure; with none left it marks the budget empty for the block rows.
+func (c *calc) charge(cause string) bool {
+	s := &c.s
+	if s.Counters.RetriesLeft <= 0 {
+		c.exhausted = cause
+		return false
+	}
+
+	s.Counters.RetriesLeft--
+	c.emitStatus(&bus.RetrySpent{
+		GroupFacts: bus.GroupFacts{Stage: string(s.Stage), Reason: cause},
+		Left:       s.Counters.RetriesLeft,
+	})
+
+	return true
+}
+
+// waive records a failure that is Komodo's own fault: it costs the group no retry.
+func (c *calc) waive(cause string) {
+	c.emitStatus(&bus.RetryWaived{
+		GroupFacts: bus.GroupFacts{Stage: string(c.s.Stage), Reason: cause},
+		Left:       c.s.Counters.RetriesLeft,
+	})
 }
 
 // emitSession queues a session.start event with the stage filled in.
@@ -279,7 +303,7 @@ func (c *calc) gateFail() bool {
 				Reason: string(state.ReasonCheckFail),
 			},
 			Task:    t.ID,
-			Attempt: s.Counters.Attempts + 1,
+			Attempt: max(c.l.GroupRetries-s.Counters.RetriesLeft, 0) + 1,
 		})
 		t.GateFailures = 0
 	}

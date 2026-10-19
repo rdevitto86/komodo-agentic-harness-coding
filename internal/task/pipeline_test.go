@@ -305,7 +305,7 @@ func awaitEnded(t *testing.T, root, name string) {
 }
 
 func TestReturnWithAnUnchangedTreeEscalatesFlap(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Returns: 4}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 4}})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone), sayResult(builderDone))
 	r.model.on("tester", sayResult(testerPass), sayResult(testerPass))
 	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerNot))
@@ -319,8 +319,8 @@ func TestReturnWithAnUnchangedTreeEscalatesFlap(t *testing.T) {
 	}
 }
 
-func TestReturnsAtTheLimitEscalateReturns(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Returns: 1}})
+func TestAFailureWithNoRetriesLeftEscalatesRetries(t *testing.T) {
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 1}})
 	r.model.on(
 		"builder",
 		building(r.wt, "a.go", "package a\n", builderDone),
@@ -331,13 +331,13 @@ func TestReturnsAtTheLimitEscalateReturns(t *testing.T) {
 	if err := r.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)
 	}
-	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "returns" {
+	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "retries" {
 		t.Fatalf("escalations %+v", escs)
 	}
 }
 
-func TestRegressionAtTheReturnLimitEscalatesRegression(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Returns: 1}})
+func TestRegressionWithNoRetriesLeftEscalatesRetries(t *testing.T) {
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 1}})
 	r.checks.fail, r.checks.regress = []bool{true, true}, true
 	r.model.on(
 		"builder",
@@ -347,13 +347,13 @@ func TestRegressionAtTheReturnLimitEscalatesRegression(t *testing.T) {
 	if err := r.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)
 	}
-	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "regression" || escs[0].Kind != EscBlocked {
+	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "retries" || escs[0].Kind != EscBlocked {
 		t.Fatalf("escalations %+v", escs)
 	}
 }
 
 func TestCheckDoneFactMatchesTheEventSchemaAndResultFailFlagsARegression(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Returns: 2}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 2}})
 	r.checks.fail, r.checks.regress = []bool{true, true, true}, true
 	r.model.on(
 		"builder",
@@ -489,25 +489,25 @@ func TestFailingCompletionCommandKeepsTheTaskOpenAndEndsTheSessionAfterThree(t *
 	}
 }
 
-func TestBuilderSessionsEndTheGroupAfterTheAttemptLimit(t *testing.T) {
+func TestBuilderSessionsEndTheGroupWhenTheRetriesAreSpent(t *testing.T) {
 	r := newPipeRig(t, rigOpts{
-		limits: Limits{Attempts: 2},
+		limits: Limits{GroupRetries: 1},
 		mut:    func(s *GroupSpec, _ *Collaborators) { s.Tasks[0].DoneWhen = "fail" },
 	})
 	r.model.on("builder", sayResult(builderDone), sayResult(builderDone))
 	if err := r.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)
 	}
-	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "attempts" {
+	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "retries" {
 		t.Fatalf("escalations %+v", escs)
 	}
-	if r.rt.progress().Attempts != 2 || r.cm.saveCount() != 0 {
+	if r.rt.progress().RetriesLeft != 0 || r.cm.saveCount() != 0 {
 		t.Fatalf("progress %+v", r.rt.progress())
 	}
 }
 
 func TestUnfinishedBuilderSessionReportsTheChangedFiles(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Attempts: 1}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: -1}})
 	r.git.status = " M a.go\n?? b.go\n"
 	r.model.on("builder", sayResult(`{"items":[]}`))
 	if err := r.run(); err != ErrHeld {
@@ -531,7 +531,7 @@ func TestUnfinishedBuilderSessionReportsTheChangedFiles(t *testing.T) {
 }
 
 func TestSessionEndFactCarriesTheReportedTokens(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Attempts: 1}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: -1}})
 	r.model.on("builder", func(llm.Session) (llm.Stream, error) {
 		st := newFakeStream()
 		ev := resultEvent(`{"items":[]}`)

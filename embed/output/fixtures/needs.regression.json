@@ -1,7 +1,0 @@
-{
-  "code": "regression",
-  "group": "tg-1.3",
-  "task": "amend docs/lld.md",
-  "question": "A test that passed at the base now fails and the returns are spent. Continue?",
-  "fix": "komodo run tg-1.3"
-}

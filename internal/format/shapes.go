@@ -70,7 +70,7 @@ type ScheduleFacts struct {
 // AnswerFacts feeds reply.answer.
 type AnswerFacts struct {
 	Group  string `json:"group"`
-	Answer string `json:"answer"` // approve or deny
+	Answer string `json:"answer"` // approve, deny or override
 }
 
 // AbandonFacts feeds reply.abandon.

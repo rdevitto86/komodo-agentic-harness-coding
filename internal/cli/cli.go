@@ -80,6 +80,8 @@ type FlagSpec struct {
 	Kind    string // bool, string, int, duration or time (an RFC 3339 timestamp)
 	Default string // text form of the default; empty when none
 	Help    string // one line shown by help
+	// TerminalOnly marks a flag that needs a controlling terminal although its command is shared
+	TerminalOnly bool
 }
 
 // Command is one row of the command table.

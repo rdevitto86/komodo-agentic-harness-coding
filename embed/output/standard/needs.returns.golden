@@ -1,6 +1,0 @@
-Group `tg-1.3` needs a decision: `returns`. The task is `amend docs/lld.md`. It
-asks: `The returns are spent. Allow more returns?` To resolve it, run
-`komodo run tg-1.3`.
-
-❌ Blocked Changes
-Group `tg-1.3` waits for a person.

@@ -1,7 +1,0 @@
-{
-  "code": "attempts",
-  "group": "tg-1.3",
-  "task": "amend docs/lld.md",
-  "question": "Every fresh builder session was used. Allow more attempts?",
-  "fix": "komodo run tg-1.3"
-}

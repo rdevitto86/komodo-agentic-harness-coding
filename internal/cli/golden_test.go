@@ -53,8 +53,8 @@ func TestGoldenEnvelopes(t *testing.T) {
 		args     []string
 	}{
 		{"install", true, []string{"install", "--repo-only", "--hosts", "claude"}},
-		{"config-get", false, []string{"config", "get", "limits.returns"}},
-		{"config-set", true, []string{"config", "set", "limits.returns=2"}},
+		{"config-get", false, []string{"config", "get", "limits.group_retries"}},
+		{"config-set", true, []string{"config", "set", "limits.group_retries=2"}},
 		{"plan", false, []string{"plan", "Add lease revocation"}},
 		{"run", false, []string{"run", "tg-1.2"}},
 		{"stop", false, []string{"stop", "tg-1.2"}},
@@ -65,7 +65,7 @@ func TestGoldenEnvelopes(t *testing.T) {
 		{"doctor", false, []string{"doctor"}},
 		{"update", true, []string{"update", "--check"}},
 		{"clean", false, []string{"clean"}},
-		{"refusal-no-terminal", false, []string{"config", "set", "limits.returns=4"}},
+		{"refusal-no-terminal", false, []string{"config", "set", "limits.group_retries=4"}},
 		{"usage-unknown-command", false, []string{"rnu"}},
 	}
 	for _, c := range cases {
