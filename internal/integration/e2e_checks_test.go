@@ -684,11 +684,12 @@ func TestFreeCheckFailureReturnsOutputToBuilder(t *testing.T) {
 // Cache: an identical request takes its context pieces from the cache, and still makes a new model call.
 func TestCacheServesContextAndStillCallsTheModel(t *testing.T) {
 	r := newFixtureRig(t, false, nil)
-	cacheFiles := func() map[string]time.Time {
-		out := map[string]time.Time{}
+	// A write replaces the file through a rename, so its inode changes; a read keeps the inode and stamps the modified time.
+	cacheFiles := func() map[string]os.FileInfo {
+		out := map[string]os.FileInfo{}
 		_ = filepath.Walk(filepath.Join(r.home, "cache"), func(p string, fi os.FileInfo, err error) error {
 			if err == nil && fi.Mode().IsRegular() {
-				out[p] = fi.ModTime()
+				out[p] = fi
 			}
 			return nil
 		})
@@ -710,15 +711,26 @@ func TestCacheServesContextAndStillCallsTheModel(t *testing.T) {
 	if got := r.model.callCounts()["planner"]; got <= calls {
 		t.Fatalf("the repeated request made no new model call: %d then %d", calls, got)
 	}
-	rewritten := 0
-	for p, mt := range cacheFiles() {
-		if old, ok := first[p]; ok && !mt.Equal(old) {
-			rewritten++
+	after := cacheFiles()
+	read := 0
+	for p, old := range first {
+		now, ok := after[p]
+		switch {
+		case !ok:
+			t.Errorf("the repeated request removed cache entry %s", p)
+		case !os.SameFile(old, now):
+			t.Errorf("the repeated request rewrote cache entry %s instead of reading it", p)
+		case now.ModTime().After(old.ModTime()):
+			read++
 		}
 	}
-	if rewritten > 0 {
-		t.Skipf("blocked: an identical plan request rewrote %d cache entries instead of reading them; "+
-			"which pieces the design expects cached is [NOT CHECKED] against internal/cache", rewritten)
+	for p := range after {
+		if _, ok := first[p]; !ok {
+			t.Errorf("the repeated request wrote a new cache entry %s", p)
+		}
+	}
+	if read == 0 {
+		t.Fatalf("the repeated request read none of the %d cache entries", len(first))
 	}
 }
 
