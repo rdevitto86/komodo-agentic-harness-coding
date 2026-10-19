@@ -51,6 +51,7 @@ type sessCtx struct {
 	closers []func()
 	handle  llm.ResumeHandle
 	resumed bool
+	started time.Time // when the session was started, for the seconds it ran
 }
 
 // close releases what the session opened.
@@ -291,6 +292,8 @@ func (m *Manager) oneSession(
 
 	m.prog.Handles[req.agent] = sc.handle
 	m.mu.Unlock()
+
+	sc.started = m.now()
 	m.fact(
 		"session.start",
 		map[string]any{
@@ -677,6 +680,7 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 		"reason":  out.reason,
 		"link":    sc.sess.Link,
 		"model":   sc.sess.Model,
+		"wall_s":  int64(m.now().Sub(sc.started) / time.Second),
 	}
 	if out.reason == state.ReasonDone && out.outcome.Kind == OutcomeScope {
 		data["scope_paths"] = out.outcome.Paths

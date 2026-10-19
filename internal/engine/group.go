@@ -476,6 +476,10 @@ func (g *group) read(replies <-chan task.Message, done chan struct{}) {
 
 			g.m.beat("task:" + g.spec.ID)
 
+			if m.Kind == task.MsgBeat {
+				continue
+			}
+
 			epochOf := func(st Stage) uint32 {
 				g.mu.Lock()
 				defer g.mu.Unlock()
