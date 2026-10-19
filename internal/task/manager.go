@@ -655,7 +655,7 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 				"role":   role,
 				"wanted": "docker",
 				"used":   inst.Backend,
-				"reason": inst.Reason,
+				"why":    inst.Reason,
 			},
 		)
 	}

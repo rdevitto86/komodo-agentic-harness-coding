@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
@@ -236,6 +238,46 @@ func TestJudgeSessionEndsAreReportedInTheStageTheyBelongTo(t *testing.T) {
 	if judgeEnds == 0 {
 		t.Fatal("no report carried a judge session.end")
 	}
+}
+
+// dockerDown is a tester mechanism whose check fails, so the tester runs on the fallback.
+type dockerDown struct{ *hostBackend }
+
+func (dockerDown) Name() string { return "docker" }
+
+func (dockerDown) Check() error { return errors.New("the docker daemon does not answer: start Docker") }
+
+func TestSandboxFallbackFactCarriesTheWhyTheEventDeclares(t *testing.T) {
+	r := newPipeRig(t, rigOpts{mut: func(_ *GroupSpec, c *Collaborators) {
+		host := &hostBackend{}
+		c.Sandboxes = sandbox.NewManager(map[string]sandbox.Backend{"builder": host, "tester": dockerDown{host}}, host)
+	}})
+	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
+	r.model.on("tester", sayResult(testerPass))
+	r.model.on("reviewer", sayResult(reviewerMet))
+	r.reachCleanup()
+
+	r.rt.mu.Lock()
+	facts := slices.Clone(r.rt.facts)
+	r.rt.mu.Unlock()
+
+	for _, f := range facts {
+		if f.Subtype != "sandbox.fallback" {
+			continue
+		}
+
+		var d bus.SandboxFallback
+		if err := json.Unmarshal(f.Data, &d); err != nil {
+			t.Fatalf("sandbox.fallback does not decode: %v\n%s", err, f.Data)
+		}
+		if !strings.Contains(d.Why, "start Docker") || d.Role != "tester" || d.Wanted != "docker" {
+			t.Fatalf("sandbox.fallback decoded as %+v from %s", d, f.Data)
+		}
+
+		return
+	}
+
+	t.Fatal("no sandbox.fallback fact was reported")
 }
 
 // awaitEnded blocks until a session of the agent has written its result file, the last step of a session.
