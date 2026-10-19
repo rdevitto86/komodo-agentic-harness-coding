@@ -417,8 +417,8 @@ func inContainer(worktree, p string) string {
 	return p
 }
 
-// gitShared returns the folder to mount read-only for a worktree's own git folder: the shared folder its commondir file names,
-// which holds the history and contains the worktree's folder. It is empty when no such folder is on disk.
+// gitShared returns the folder to mount read-only for a worktree's own git folder: the shared folder its commondir file
+// names, which holds the history and contains the worktree's folder. It is empty when no such folder is on disk.
 func gitShared(gitDir string) string {
 	if gitDir == "" {
 		return ""

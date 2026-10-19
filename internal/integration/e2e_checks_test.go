@@ -682,7 +682,7 @@ func TestFreeCheckFailureReturnsOutputToBuilder(t *testing.T) {
 	_, backlog := fixtureFiles(t)
 	backlog["docs/backlog/epic-1/tg-1.1/tsk-sub.md"] = strings.Replace(
 		backlog["docs/backlog/epic-1/tg-1.1/tsk-sub.md"],
-		"done_when: go test ./calc/ -run TestSub",
+		"done_when: test -f calc/sub.go && go test ./calc/ -run TestSub",
 		"done_when: echo FREE-CHECK-OUTPUT-42 && false",
 		1,
 	)
@@ -775,7 +775,7 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 	_, backlog := fixtureFiles(t)
 	backlog["docs/backlog/epic-1/tg-1.1/tsk-mul.md"] = strings.Replace(
 		backlog["docs/backlog/epic-1/tg-1.1/tsk-mul.md"],
-		"done_when: go test ./calc/ -run TestMul",
+		"done_when: test -f calc/mul.go && go test ./calc/ -run TestMul",
 		"done_when: go test ./calc/ -run TestMul && { ! git cat-file -e komodo/ep-1:calc/mul.go || "+
 			"git rev-parse -q --verify "+recheckFlagRef+"; }",
 		1,
