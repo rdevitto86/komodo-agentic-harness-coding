@@ -2059,7 +2059,7 @@ Go package `internal/config`. It imports the Go standard library and the package
 {
   "keys": [
     { "name": "limits.group_retries", "kind": "int", "default": 3, "min": 0, "max": 5 },
-    { "name": "limits.override_window_min", "kind": "int", "default": 60, "min": 0, "max": 1440 },
+    { "name": "limits.override_window_min", "kind": "int", "default": 60, "min": 30, "max": 120 },
     { "name": "limits.override_retries", "kind": "int", "default": 3, "min": 1, "max": 5 },
     { "name": "limits.pool_min", "kind": "int", "default": 1, "min": 1, "max_key": "limits.pool_max" }
   ]
