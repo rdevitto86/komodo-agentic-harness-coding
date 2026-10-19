@@ -168,6 +168,32 @@ func (m *Manager) reloadLocal() {
 	m.items, m.skillWarns = out, warns
 }
 
+// AllowSkill turns a skill on for one agent, and with always puts it in every brief of that agent. Other agents keep the
+// access they have.
+func (m *Manager) AllowSkill(agent string, name SkillName, always bool) error {
+	if !validAgent(agent) {
+		return fmt.Errorf("agent %q: %w", agent, ErrAgentUnknown)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	it := m.find(name)
+	if it == nil {
+		return fmt.Errorf("skill %q: %w", name, ErrSkillUnknown)
+	}
+
+	it.state.Enabled = true
+	if !slices.Contains(it.state.Allow, agent) {
+		it.state.Allow = append(it.state.Allow, agent)
+	}
+	if always && !slices.Contains(it.state.Always, agent) {
+		it.state.Always = append(it.state.Always, agent)
+	}
+
+	return nil
+}
+
 // phrases returns the current steering phrases.
 func (m *Manager) phrases() []string {
 	if m.deps.Phrases == nil {

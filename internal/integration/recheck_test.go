@@ -31,7 +31,7 @@ func TestRecheckFailureStopsTheLanding(t *testing.T) {
 	files := planFiles()
 	files["docs/backlog/epic-1/tg-1.1/tsk-add.md"] = strings.Replace(
 		files["docs/backlog/epic-1/tg-1.1/tsk-add.md"],
-		"done_when: go test ./...",
+		"done_when: test -f tiny/add.go",
 		"done_when: "+epicLacksFile,
 		1,
 	)

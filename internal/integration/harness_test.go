@@ -414,7 +414,7 @@ func planFiles() map[string]string {
 			"tiny package\nsubsystem: none\n" +
 			"priority: normal\npoints: 3\nstatus: todo\nfiles:\n- tiny/add.go\ndependencies:\n\n" +
 			"- WHEN Add is called THE SYSTEM SHALL return the sum of its arguments\n  cmd: go test ./...\n",
-		"docs/backlog/epic-1/tg-1.1/tsk-add.md": "files:\n- tiny/add.go\ndone_when: go test ./...\nestimate_lines: " +
+		"docs/backlog/epic-1/tg-1.1/tsk-add.md": "files:\n- tiny/add.go\ndone_when: test -f tiny/add.go\nestimate_lines: " +
 			"10\n\nAdd func Add(a, b int) int to the tiny package.\n",
 	}
 }

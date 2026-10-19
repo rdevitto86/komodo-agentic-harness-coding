@@ -3836,7 +3836,7 @@ dependencies: tg-1.1
 
 | Field | Type | Rule |
 |---|---|---|
-| `id:` | string | Universally unique identifier, version 7, written when the group is created |
+| `id:` | string | Universally unique identifier, version 7, written by Komodo when the plan is saved; a draft leaves it out |
 | `goal:` | string | One line: what the group delivers; the pull request title and the builder's brief read it |
 | `subsystem:` | string | A component name from the component map, or `none` |
 | `touches:` | globs | File patterns the group expects to change; overlap between two groups decides which must run first |
@@ -4019,7 +4019,7 @@ type DraftFile struct {
 ```json
 {
   "files": [
-    {"path": "epic-2/tg-2.1/TG.md", "content": "id: 0192e4c5-...\ngoal: ...\n"},
+    {"path": "epic-2/tg-2.1/TG.md", "content": "goal: ...\n"},
     {"path": "epic-2/tg-2.1/tsk-add-lock.md", "content": "files: internal/lease/lock.go\n..."}
   ]
 }
@@ -4325,7 +4325,7 @@ flowchart TB
 ```
 
 1. `LintDraft` returns all findings. A draft passes when no finding has severity `fail`.
-2. On a pass, write the files.
+2. On a pass, run each task's `done_when` once on the untouched base commit, in a builder sandbox with no network; a command runs once per plan. A command that exits 0 is a failing `fail_first` finding, and the draft goes back like a lint failure. With no failing finding, write the files; a new group's `TG.md` without `id:` gets a version 7 id, and a stored group keeps its stored id.
 3. On a failure with fewer than 3 failing drafts so far, send the finding text into the same session.
 4. The session returns its next draft, and the loop runs again.
 5. The third failing draft ends the plan with `PlanBlockedError`; 0 task-list files exist.
@@ -4356,7 +4356,7 @@ Each finding names its rule and its file. Lint never stops at the first finding;
 - **Case collision inputs:** every tracked file of the base commit plus every group's `files`. Task file names within one group are checked too.
 - **Draft numbers and status:** a draft group that is new must take the next `tg-N.M` of its epic, a draft group must write `status: todo`, and a path number has no leading zero. Each is a failed draft.
 - **Protected list:** it comes from the caller, never from a file this package reads.
-- **Guidance first:** precision comes from the planner template and a planning skill, not from more checks. The template sets boundaries: what every group must contain, size limits, and how to write a definition of done and acceptance items. The skill carries project-management practice for ordering dependent groups. Lint keeps only the checks a program can count exactly, such as a cycle, two groups editing the same file with no order, and a group that is too large. No check judges completeness. [TODO: the planner template's boundaries and the planning skill's text ([G-284](#g-284))]
+- **Guidance first:** precision comes from the planner template and a planning skill, not from more checks. The template sets boundaries: what every group must contain, size limits, and how to write a definition of done and acceptance items. The skill carries project-management practice for ordering dependent groups. Lint keeps only the checks a program can count exactly, such as a cycle, two groups editing the same file with no order, and a group that is too large. No check judges completeness. The shipped texts are `embed/templates/planner.md` and `embed/skills/planning/SKILL.md`; the Context Manager puts the planning skill in every planner brief. The fail-first check is exact too: it counts only an exit code.
 
 **Building the dependency graph**
 
@@ -15323,7 +15323,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-266"></a>G-266 | Builder | Whether `--deny` carries a reason text for the Builder | Phase 2, with the CLI | [12](#12-builder), [1](#1-cli) |
 | <a id="g-273"></a>G-273 | Config | How `providers.local.<name>.models` writes several model names in one string | Phase 4, with the model client | [11](#11-task-manager), [3](#3-configuration-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
-| <a id="g-284"></a>G-284 | Planning | The planner template's boundaries (what every group must contain, size limits, how to write a definition of done and acceptance items) and the text of the planning skill | Authoring task, phase 7 | [5](#5-intake-handler), [6](#6-context-manager) |
 | <a id="g-286"></a>G-286 | Update | The poll interval's setting name and default, and which process polls when no engine runs | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |
 | <a id="g-287"></a>G-287 | Login | What each provider's login does and which providers `login --all` lists | Phase 7, with the installer | [1](#1-cli), [11](#11-task-manager) |
 | <a id="g-288"></a>G-288 | Install | The orchestrator rules text the Komodo block in `AGENTS.md` carries on its `Rules` line; the text is undefined and the line is left out until it is written | Authoring task, phase 7 | [1](#1-cli), [6](#6-context-manager) |

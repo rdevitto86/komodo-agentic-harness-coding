@@ -16,7 +16,9 @@ import (
 // epic is then renamed into place whole, and an amended group is
 // swapped in with its old folder set aside and put back on any failure.
 func (h *Handler) write(d PlanDraft, pl *planState, reqEpic int) (PlanResult, error) {
-	epics, _ := parseFiles(d.Files)
+	d = stampIDs(d, pl.existing)
+
+	epics, _ := parseFiles(d.Files, false)
 	if len(epics) != 1 {
 		return PlanResult{}, writeError{fmt.Errorf("draft holds %d epics; a plan writes one", len(epics))}
 	}
@@ -194,4 +196,68 @@ func restoreAside(base, aside string) error {
 	}
 
 	return nil
+}
+
+// stampIDs returns the draft with an id in every TG.md: a stored group keeps its stored id, a new group keeps the id it
+// names or gets a fresh version 7 id.
+func stampIDs(d PlanDraft, existing []Epic) PlanDraft {
+	epics, _ := parseFiles(d.Files, true)
+
+	want := map[string]string{}
+
+	for _, e := range epics {
+		for _, g := range e.Groups {
+			id := storedID(existing, e.Number, g.Name)
+			if id == "" {
+				id = g.ID
+			}
+			if id == "" {
+				id = string(newID())
+			}
+			if id != g.ID {
+				want[groupPath(e.Number, g.Name)] = id
+			}
+		}
+	}
+
+	out := PlanDraft{Files: slices.Clone(d.Files)}
+	for i, f := range out.Files {
+		if id, ok := want[f.Path]; ok {
+			out.Files[i].Content = withID(f.Content, id)
+		}
+	}
+
+	return out
+}
+
+// storedID returns the id of a stored group, or "" when the group is new.
+func storedID(existing []Epic, epic int, name string) string {
+	for _, e := range existing {
+		if e.Number != epic {
+			continue
+		}
+		for _, g := range e.Groups {
+			if g.Name == name {
+				return g.ID
+			}
+		}
+	}
+
+	return ""
+}
+
+// withID sets the id line of a TG.md's field block, replacing a present one or adding it as the first line.
+func withID(content, id string) string {
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			break
+		}
+		if strings.HasPrefix(l, "id:") {
+			lines[i] = "id: " + id
+			return strings.Join(lines, "\n")
+		}
+	}
+
+	return "id: " + id + "\n" + content
 }

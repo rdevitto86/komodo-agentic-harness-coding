@@ -18,8 +18,12 @@
     "retries": 2
   },
   "skills": {
-    "allow": [],
-    "always": []
+    "allow": [
+      "planning"
+    ],
+    "always": [
+      "planning"
+    ]
   },
   "slots": {
     "required": [

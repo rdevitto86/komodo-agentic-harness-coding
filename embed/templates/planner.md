@@ -16,7 +16,6 @@ You write task-list files under `docs/backlog/`. Nothing is written until the wh
 
 A `TG.md` holds these fields, then its acceptance items after a blank line.
 
-- `id:` a version 7 universally unique identifier.
 - `goal:` one line saying what the group delivers; the pull request title and the builder's brief read it.
 - `subsystem:` a component name, or `none`.
 - `touches:` the file patterns the group expects to change.

@@ -118,7 +118,6 @@ func TestGrammarFindingsNameTheFile(t *testing.T) {
 		{"upper case key", func(s string) string { return strings.Replace(s, "goal:", "Goal:", 1) }, "Goal"},
 		{"bad line", func(s string) string { return strings.Replace(s, "subsystem: none", "not a field", 1) }, "line 3"},
 		{"missing goal", func(s string) string { return strings.Replace(s, "goal: Group goal\n", "", 1) }, "goal"},
-		{"missing id", func(s string) string { return strings.Replace(s, "id: "+uid(101)+"\n", "", 1) }, "id"},
 		{"bad id", func(s string) string { return strings.Replace(s, uid(101), "0192e4c5-...", 1) }, "id"},
 		{"missing points", func(s string) string { return strings.Replace(s, "points: 3\n", "", 1) }, "points"},
 		{
