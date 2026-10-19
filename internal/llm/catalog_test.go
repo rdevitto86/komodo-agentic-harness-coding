@@ -63,7 +63,8 @@ func TestCatalogNoAliasesAndLocalFree(t *testing.T) {
 
 func TestLocalModelNearestWeight(t *testing.T) {
 	c, err := ParseCatalog(
-		[]byte(`[{"id":"only-light","provider":"local","weight":"light","tier":"local","price_in_usd_per_m":0,"price_out_usd_per_m":0}]`),
+		[]byte(`[{"id":"only-light","provider":"local","weight":"light","tier":"local",`+
+			`"price_in_usd_per_m":0,"price_out_usd_per_m":0}]`),
 	)
 	if err != nil {
 		t.Fatal(err)

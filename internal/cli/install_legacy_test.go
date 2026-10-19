@@ -22,7 +22,10 @@ func seedLegacyHook(t *testing.T, repo, settings, hook string) {
 		}
 	}
 	m.Entries = append(m.Entries, Entry{
-		Target: filepath.Join(".claude", "settings.json"), Entry: legacyHookEntry, Hash: sha([]byte(hook)), Step: stepSettings,
+		Target: filepath.Join(".claude", "settings.json"),
+		Entry:  legacyHookEntry,
+		Hash:   sha([]byte(hook)),
+		Step:   stepSettings,
 	})
 	b, err := json.Marshal(m)
 	if err != nil {

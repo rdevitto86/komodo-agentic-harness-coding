@@ -132,9 +132,12 @@ var settingsEntries = []settingsEntry{
 }
 
 const (
-	legacyHookList    = "hooks.PreToolUse"                       // legacyHookList is the list an earlier install wrote a hook to.
-	legacyHookCommand = "komodo internal guard"                  // legacyHookCommand is the command of that hook.
-	legacyHookEntry   = legacyHookList + " " + legacyHookCommand // legacyHookEntry is its manifest name.
+	// The settings list an earlier install wrote its guard hook to.
+	legacyHookList = "hooks.PreToolUse"
+	// The command of that hook, whose verb no longer exists.
+	legacyHookCommand = "komodo internal guard"
+	// The manifest name of that hook entry.
+	legacyHookEntry = legacyHookList + " " + legacyHookCommand
 )
 
 // settingsEntryOf returns the owned entry with the manifest name id.
