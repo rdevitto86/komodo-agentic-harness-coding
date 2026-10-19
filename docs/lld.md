@@ -206,6 +206,8 @@ Go package `internal/cli`, plus the program entry point.
 |---|---|
 | `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned; also runs the hidden `internal engine` verb in the foreground |
 | `cmd/komodo/wire.go` | The engine process's shared parts: event registration, settings, bus, model links, sandbox backends, the lease and machine records, and one kit per repository |
+| `cmd/komodo/tools.go` | The hidden `internal tools` verb: loads one session's tool server inputs, binds the tools and serves them over standard input and output |
+| `cmd/komodo/wire_dump_unix.go`, `wire_dump_windows.go` | The goroutine dump on a signal, on Unix only |
 | `cmd/komodo/wire_engine.go` | `buildEngine`: the Runtime Manager's dependencies, the hub that routes its calls to the repository they name, the per-repository kit and the plan router |
 | `cmd/komodo/wire_tasks.go` | Builds each group's Task Manager from the group spec and the task lists, serves it over the command and reply channels, and adapts the Commit Handler to the group |
 | `cmd/komodo/wire_intake.go` | The Intake Handler's dependencies: the planner session over the model client, its tool host and the group-record lock reader |
@@ -2675,6 +2677,7 @@ Go package `internal/bus` ([HLD Appendix A](hld.md#appendix-a-traceability)). It
 |---|---|
 | `internal/bus/event.go` | `Event`, `Type`, `Subtype`, `ID`, `Payload`, JSON encoding and decoding |
 | `internal/bus/types.go` | The `Type` constants and the registry that binds each type and subtype to its data struct |
+| `internal/bus/schema.go` | `Schema` and `EventKeys`: the export format generated from the registry |
 | `internal/bus/data.go` | The data struct of every subtype whose body this chapter defines ([4.3](#43-data-model)); the other owning packages declare their own |
 | `internal/bus/bus.go` | `Bus`, `New`, `Publish`, `Subscribe`, `Close` |
 | `internal/bus/subscription.go` | `Subscription`, its bounded queue, `Close`, `Dropped` |
@@ -5404,6 +5407,7 @@ The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceabi
 | `proto.go` | `Request`, `Reply`, `Flags` and the reply codes |
 | `socket.go` | `ConnPrinter`, `Dial`, `Conn`, the listener's connection loop, one goroutine per connection |
 | `verbs.go` | `Engine.handle` and what each verb does |
+| `replay.go` | Resolves a replay target: a live group, a finished group's latest run from its saved record, or a run id |
 | `status.go` | `StatusData`, `Manager.Snapshot`, and the small views the engine reads from the Runtime Manager |
 | `schedule.go` | The schedule queue loop over `state.ScheduleEntry` |
 | `command.go` | The mapping from `Order` to `task.Command` and from `task.Message` to `Input`; `Channels` |
@@ -8450,6 +8454,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `session.go` | The session supervisor: spawn, clocks, time warning, nudge and the stop ladder |
 | `links.go` | `Router`: link choice, failover, the billing decision, provider-limit hand-off |
 | `guard.go` | `Guard.Check`: allow or refuse; fail closed; the refusal limit |
+| `hookguard.go` | `ReadHookInput` and `CheckHook`: one Claude Code tool call from the repository's guard hook, checked against the guard rows |
 | `rows.go` | Loads the guard rows from `policy.json` |
 | `paths.go` | Path containment, symlinks and secret files |
 | `tools.go` | `Registry`, `Bound`, `Dispatch`: binds an agent's permitted tools to one session |
@@ -8465,7 +8470,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `roles.go`, `briefer.go` | The builder, tester and reviewer over `internal/agent`; the briefer and base-commit tree over `internal/contextmgr` |
 | `gitcli.go` | `GitCLI`: the `Git` over the host git rules, including `AddWorktree` |
 | `toolwatch.go` | Counts tool calls in flight, activity and refusals for the supervisor |
-| `proc.go`, `proc_unix.go` | Process groups, the 10-minute timeout, the output cap and the whole-tree kill |
+| `proc.go`, `proc_unix.go`, `proc_windows.go` | Process groups, the 10-minute timeout, the output cap and the whole-tree kill, per platform |
 | `policy.json` | The guard rows with scopes, the secret patterns and the test-sibling rules, compiled into the binary |
 
 **`internal/llm`: the model client**
@@ -8497,6 +8502,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `backend_seatbelt.go` | Seatbelt on macOS, for the Builder's quick commands and the Tester without Docker |
 | `backend_bubblewrap.go` | Bubblewrap on Linux and Windows Subsystem for Linux, for the same two jobs |
 | `copy.go` | The tester's dependency copy and the plan that says, per language, what to copy, what to rerun and what to share |
+| `kill.go`, `proc_unix.go`, `proc_windows.go` | Process groups, the whole-tree kill and file identity, per platform |
 
 Import rule: `task` imports `llm` and `sandbox`. `llm` and `sandbox` import neither `task` nor each other (both import `internal/core`), and every package uses the Go standard library only. `task` and `llm` also import `internal/cache` for the type of the cache handle, and `task` imports the value types `Approval`, `SaveRequest`, `SaveResult` and `Result` from `internal/commit`, which imports neither `task` nor `engine`. The Runtime Manager, the Context Manager, the Commit Handler, the Cleanup Handler and git reach `task` through the narrow interfaces in [11.4](#114-interfaces), so `task` imports none of their other packages. The role adapters import `internal/agent` for the pure role functions, the briefer imports `internal/contextmgr` for its `Tree` and `Request` types, and the group's lease, event and fault types come from `internal/lease`, `internal/bus` and `internal/fault`.
 
