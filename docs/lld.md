@@ -1002,7 +1002,7 @@ Anyone runs `doctor`, including the orchestrator. It prints each check's result 
 - **Home folder:** the Komodo home folder is on a local file system and honours file locks; a network file system or a lock that lets two holders in fails the check. The engine runs the same two tests (the disk type and a test lock) at every start and does not start when either fails; the command prints the same fix, which points at a local folder. `doctor` keeps running on such a folder, so the person can see why.
 - **Review rules:** each review rule whose findings Go verified under 50% of the time, with at least one finding submitted, is listed as a note with its model and percentage, and the check passes. Exit 3 stays for problems the person on this machine can fix.
 
-The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check is skipped, with the detail "not wired", when this build has no model client. It passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
+The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check is skipped, with the detail "not wired", when this build has no model client. It passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. When `providers.anthropic.url` is refused (see the key's row in the configuration keys table), the check names the paid link as off with the refused address and the reason, and its fix is `komodo config set providers.anthropic.url`; the check fails only when no other link works. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
 
 ```go
 // internal/cli/doctor.go
@@ -10393,7 +10393,7 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `sandbox.image` | string | detected | Image of the Tester's container; required for a Makefile-only or 2-language repository |
 | `providers.paid` | enum | `never` | `never`, `fallback` or `allowed`; see the billing check |
 | `providers.keys.anthropic` | env ref | `env:ANTHROPIC_API_KEY` | Names the environment variable holding the key; the value is never stored or logged |
-| `providers.anthropic.url` | string | the public interface | Address of the server the paid Anthropic link calls; empty means the public interface |
+| `providers.anthropic.url` | string | the public interface | Address of the server the paid Anthropic link calls; empty means the public interface. `config set` refuses a value that is not an absolute address with a host. The paid link is off for plain `http` to any host except `127.0.0.1`, `::1` and `localhost`, and for any scheme other than `http` or `https` |
 | `providers.local.<name>.url` | string | none | Address of one local endpoint; the local link is off while no endpoint has a `url` |
 | `providers.local.<name>.models` | string | none | The model names that endpoint serves; [TODO: how several model names are written in the one string ([G-273](#g-273))] |
 | `providers.local.<name>.ctx` | int | none | Context size of the endpoint in tokens; the link is refused below `providers.ctx_floor` |

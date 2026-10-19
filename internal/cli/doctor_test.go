@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
@@ -128,6 +129,47 @@ func TestDoctorLocalLinkThatIsConfiguredMustWork(t *testing.T) {
 	code, checks := h.doctor(repo)
 	if code != 3 || checks["links"].Result != "fail" || !strings.Contains(checks["links"].Detail, "ollama") {
 		t.Fatalf("exit %d, links = %+v", code, checks["links"])
+	}
+}
+
+func TestDoctorNamesThePaidRouteThatTheAddressTurnsOff(t *testing.T) {
+	h := newHarness(t)
+	repo := installed(t, h)
+
+	if _, err := h.cfg.SetConfigItem(
+		config.Change{Key: "providers.anthropic.url", New: "http://api.example.com"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	code, checks := h.doctor(repo)
+	d := checks["links"].Detail
+	if code != 0 || checks["links"].Result != "pass" || !strings.Contains(d, "anthropic-api: off") ||
+		!strings.Contains(d, "http://api.example.com") || !strings.Contains(d, "https") {
+		t.Fatalf("exit %d, links = %+v", code, checks["links"])
+	}
+
+	h.host.Links = fakeLinks{{Link: llm.AnthropicAPI, Reason: "no key"}}
+	code, checks = h.doctor(repo)
+	c := checks["links"]
+	if code != 3 || c.Result != "fail" || !strings.Contains(c.Detail, "anthropic-api: off") ||
+		!strings.Contains(c.Fix, "komodo config set providers.anthropic.url") {
+		t.Fatalf("exit %d, links = %+v", code, c)
+	}
+}
+
+func TestDoctorSaysNothingAboutTheAddressWhenItIsFine(t *testing.T) {
+	h := newHarness(t)
+	repo := installed(t, h)
+
+	if _, err := h.cfg.SetConfigItem(
+		config.Change{Key: "providers.anthropic.url", New: "http://127.0.0.1:8080"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, checks := h.doctor(repo); strings.Contains(checks["links"].Detail, "anthropic-api") {
+		t.Fatalf("links = %+v", checks["links"])
 	}
 }
 

@@ -89,10 +89,15 @@ func (in *installer) checkLinks(ctx context.Context) Check {
 	}
 
 	_, results, err := probeLinks(ctx, in.host, in.machine)
+	addrErr := in.paidAddressProblem()
 	var parts []string
 	required, localBad := false, false
 
 	for _, r := range results {
+		if r.Link == llm.AnthropicAPI && addrErr != nil {
+			continue
+		}
+
 		res := "ok"
 		if !r.OK {
 			if res = r.Reason; res == "" {
@@ -108,11 +113,21 @@ func (in *installer) checkLinks(ctx context.Context) Check {
 		}
 	}
 
+	if addrErr != nil {
+		parts = append(parts, "anthropic-api: off, "+addrErr.Error())
+	}
+
 	detail := strings.Join(parts, "; ")
 
 	switch {
 	case err != nil:
 		return fail("links", "record the probe: "+err.Error(), "komodo doctor")
+	case !required && addrErr != nil:
+		return fail(
+			"links",
+			"no model link works. "+detail,
+			"komodo config set providers.anthropic.url https://api.anthropic.com, or log in with claude auth login",
+		)
 	case !required:
 		return fail(
 			"links",
@@ -128,6 +143,25 @@ func (in *installer) checkLinks(ctx context.Context) Check {
 	}
 
 	return pass("links", detail)
+}
+
+// paidAddressProblem returns why the paid Anthropic address is refused, or nil when it is empty, fine or unreadable.
+func (in *installer) paidAddressProblem() error {
+	if in.cli.deps.Config == nil {
+		return nil
+	}
+
+	it, err := in.cli.deps.Config.GetConfigItem("providers.anthropic.url")
+	if err != nil {
+		return nil
+	}
+
+	addr, _ := it.Value.(string)
+	if addr == "" {
+		return nil
+	}
+
+	return llm.CheckBaseURL(addr)
 }
 
 // checkBlock looks for exactly one begin marker and one end marker in the repository's AGENTS.md.
