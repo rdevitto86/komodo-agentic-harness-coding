@@ -159,7 +159,7 @@ The `embed/` folder holds every text and data file the harness reads from its ow
 | `event.schema.json`, `state.schema.json`, `machine.schema.json` | The export formats of events, group state and machine records | [4](#4-event-bus), [10](#10-state-manager) |
 | `ui/` | The dashboard page and its one script | [1](#1-cli) |
 
-Nothing under `embed/` is copied into a host. `install` writes only the Komodo block, the `@AGENTS.md` import and the guard hook entry ([1.3](#13-data-model)); the agents, skills and templates stay inside the binary.
+Nothing under `embed/` is copied into a host. `install` writes only the Komodo block, the `@AGENTS.md` import and the permission entries ([1.3](#13-data-model)); the agents, skills and templates stay inside the binary.
 
 ## 1. CLI
 
@@ -231,7 +231,6 @@ Go package `internal/cli`, plus the program entry point.
 | `internal/cli/ui.go`, `ui_view.go` | `ui`: the dashboard server (routes, the event stream, the host check) and the state it draws, read from the engine with `status` and `replay` |
 | `embed/ui/` | `index.html` and `ui.js`, the dashboard page and its one script, compiled into the binary |
 | `internal/cli/stubs.go` | The hidden `internal engine` verb's handler and the not-built-yet `login` |
-| `internal/cli/guard.go` | The hidden `internal guard` verb: reads Claude Code's tool call on standard input, allows with exit 0 and refuses with exit 2 |
 | `internal/cli/tools.go` | The hook that runs the hidden `internal tools` verb, the session's tool server |
 | `internal/cli/print.go` | The line printed for a recorded event, and the fault built from an error event |
 | `internal/cli/terminal.go` | `HasControllingTerminal`: opens `/dev/tty` |
@@ -509,8 +508,7 @@ type Manifest struct {
 
 // Selections are the optional parts chosen at install; a rerun without a flag keeps them.
 type Selections struct {
-	Hosts   []string `json:"hosts,omitempty"` // "claude", "codex"
-	Project bool     `json:"project"`         // the --project files are owned
+	Hosts []string `json:"hosts,omitempty"` // "claude", "codex"
 }
 
 // Entry records one owned file or settings entry and the content install wrote.
@@ -525,7 +523,7 @@ type Entry struct {
 | Field | Rule |
 |---|---|
 | `target` | The file, relative to the repository root in the repository manifest |
-| `entry` | Present only for `.claude/settings.json`: names the allow rule or the hook, by its JSON path and value |
+| `entry` | Present only for `.claude/settings.json`: names the allow or deny rule, by its JSON path and value |
 | `hash` | The full SHA-256 (a 256-bit checksum), in lowercase hexadecimal, of the bytes install wrote; compared with the file's current content to tell a hand edit from install's own text |
 | `step` | The install step that owns the entry, so `clean` and a rerun find it |
 
@@ -537,10 +535,9 @@ type Entry struct {
     { "target": ".claude/settings.json", "entry": "permissions.allow Bash(komodo *)", "hash": "c3e8920f…", "step": 6 },
     { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo config set*)", "hash": "7a1d4e52…", "step": 6 },
     { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo install*)", "hash": "5b60c9d1…", "step": 6 },
-    { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo update*)", "hash": "0e83f2a6…", "step": 6 },
-    { "target": ".claude/settings.json", "entry": "hooks.PreToolUse komodo internal guard", "hash": "e19a3b07…", "step": 6 }
+    { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo update*)", "hash": "0e83f2a6…", "step": 6 }
   ],
-  "selections": { "hosts": ["claude"], "project": false }
+  "selections": { "hosts": ["claude"] }
 }
 ```
 
@@ -557,7 +554,7 @@ The same manifest as the machine-wide record `~/.komodo/state/install.json`, wit
     "entries": [
       { "target": "/Users/dev/.komodo/bin/komodo", "hash": "1a9509c4…", "step": 1 }
     ],
-    "selections": { "hosts": ["claude"], "project": false }
+    "selections": { "hosts": ["claude"] }
   }
 }
 ```
@@ -617,12 +614,6 @@ Step 6 of `install` adds exactly these entries to the repository's `.claude/sett
   "permissions": {
     "allow": ["Bash(komodo *)"],
     "deny": ["Bash(komodo config set*)", "Bash(komodo install*)", "Bash(komodo update*)"]
-  },
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Bash|Edit|Write",
-        "hooks": [ { "type": "command", "command": "komodo internal guard", "onFailure": "block" } ] }
-    ]
   }
 }
 ```
@@ -630,11 +621,8 @@ Step 6 of `install` adds exactly these entries to the repository's `.claude/sett
 | Entry | Rule |
 |---|---|
 | `allow`, `deny` | Deny rules are evaluated before allow rules. A rule matches only a command that starts with the text, so a wrapper is caught by the terminal check instead |
-| `PreToolUse` matcher | `Bash|Edit|Write`, so the guard also sees file edits, not only shell commands |
-| `onFailure` | `block`: when the guard hook crashes, times out or errors, Claude Code refuses the tool call instead of letting it through. This needs a Claude Code release that supports `onFailure` |
-| Guard exit codes | Every internal error of the guard command exits 2, the code Claude Code reads as "block" |
 
-The guard command is `komodo internal guard`, a hidden verb outside the 13 commands. The engine and the private tool server start the same way, as the hidden verbs `komodo internal engine` and `komodo internal tools`. The entry carries `onFailure: block`, the wider matcher and exit 2 on every guard error. `install` writes no other hook: there is no session-start hook, and no agent or skill is copied into any host.
+`install` writes no hook: there is no guard hook and no session-start hook, and no agent or skill is copied into any host. The engine and the private tool server start as the hidden verbs `komodo internal engine` and `komodo internal tools`. A Claude Code session of the person's own runs under the person's own settings; the permission entries above are the only change. The harness's own worker sessions are guarded inside the private tool server.
 
 #### Update records
 
@@ -819,14 +807,12 @@ A person at a terminal runs `install`, in a repository for the repository steps 
 | `--hosts claude,codex` | Override host detection |
 | `--no-path` | Skip the path step |
 | `--from <file>` | Install that binary file, with no network |
-| `--project` | Recorded in the manifest, adds no files yet and prints a warning saying so ([G-285](#g-285)) |
-| `--no-project` | Stop owning the `--project` files; they stay on disk |
 | `--force` | Overwrite hand-edited owned files |
 | `--remove` | Undo the install: prune every entry `install.json` lists |
 
-`install` writes the `AGENTS.md` block, the `@AGENTS.md` line and the settings entries as 7 manifest entries: the block, the import line, the allow rule, the three deny rules and the hook. A dry run prints one row per file, so a fresh repository with Claude Code lists 4 writes: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and the manifest. With no `AGENTS.md` the full template is the block alone. `--project` and `--no-project` record the choice in the manifest selections and add no file, because no project file template is defined. The hosts are kept in the selections only when `--hosts` named them; a rerun without the flag reuses them, else detects.
+`install` writes only the binary, the path entry, the Komodo block in `AGENTS.md`, the `@AGENTS.md` line and the harness permission entries. In a repository these are 6 manifest entries: the block, the import line, the allow rule and the three deny rules. A dry run prints one row per file, so a fresh repository with Claude Code lists 4 writes: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and the manifest. With no `AGENTS.md` the file is the Komodo block alone. The hosts are kept in the selections only when `--hosts` named them; a rerun without the flag reuses them, else detects.
 
-`install` does 3 things for a host: it places the binary, writes the short Komodo block into the repository's `AGENTS.md` (the harness is installed, here is its path, drive it only through `komodo` commands), and keeps the guard hook and the `@AGENTS.md` import. It starts no session-start hook and copies no agent or skill into any host. With `--remove` the wanted set is empty, so the diff prunes each owned entry: the Komodo block between its markers, the `@AGENTS.md` line, the owned settings entries and the placed binary version. A hand-edited owned file stays and is reported unless `--force` is given.
+`install` does 3 things for a host: it places the binary, writes the short Komodo block into the repository's `AGENTS.md` (the harness is installed, here is its path, drive it only through `komodo` commands), and adds the `@AGENTS.md` import. It starts no session-start hook and copies no agent or skill into any host. With `--remove` the wanted set is empty, so the diff prunes each owned entry: the Komodo block between its markers, the `@AGENTS.md` line, the owned settings entries and the placed binary version. A hand-edited owned file stays and is reported unless `--force` is given.
 
 ##### `config get` and `config set`
 
@@ -1170,13 +1156,12 @@ flowchart TD
 | 6 | `.claude/settings.json` | The entries of Claude Code settings entries, merged; other keys untouched | Claude detected |
 | 7 | Manifest | `<git-common-dir>/komodo/install.json` | Inside a git repository |
 
-- **Step 1, binary source.** `--from <file>` uses that file with no network; its version is what it prints for `--version`. Otherwise the running binary is copied. `install` makes no network call (invariant 12), so a newer release arrives through `update`, and an install from an older binary leaves `bin/` on the older version.
+- **Step 1, binary source.** `--from <file>` uses that file with no network; its version is what it prints for `--version`. Otherwise the running binary is copied. `install` makes no network call (invariant 11), so a newer release arrives through `update`, and an install from an older binary leaves `bin/` on the older version.
 - **Shared files.** Content of `CLAUDE.md` or `.claude/settings.json` that is already there and equal to what step 5 or 6 would write stays the person's: install does not record it, and `--remove` never deletes it.
-- **Step 6, the guard.** The hook entry is the guard command, not a whole group. When a `PreToolUse` group whose matcher covers every tool of `Bash|Edit|Write` (or is empty or `*`) already runs `komodo internal guard`, install sets only that command inside the group and keeps the group's matcher and other hooks. A group with a narrower matcher is left untouched, so the guard may run twice for some tools, and install adds a group of its own with the full matcher. `--remove` deletes only the guard command, and its group only when no other hook is left. A rewrite keeps the file's key order and every value as written, with no escaping of `&`, `<` or `>`, and indents with 2 spaces.
+- **Step 6, a hook from an earlier install.** Install writes no hook. When the manifest records the `komodo internal guard` hook entry of an earlier install, a rerun and `--remove` delete only that command from whichever group holds it, and the group only when no other hook is left; a hand-edited entry stays and is reported. A rewrite keeps the file's key order and every value as written, with no escaping of `&`, `<` or `>`, and indents with 2 spaces.
 - **Step 1, the lock.** The binary step takes `update.lock` like `update`, so an install and an update never write `bin/komodo` together; a held lock stops the install with a message.
 - **Step 2, kept entry.** A path entry install recorded stays wanted on a rerun even though `komodo` is now on `PATH`, so a rerun never prunes its own symlink or shell line; `--no-path` leaves a recorded entry as it is.
-- **Step 4.** With no `AGENTS.md`, a new one is written holding only the Komodo block; the design's full template is [TODO: the full `AGENTS.md` template and the files `--project` adds ([G-285](#g-285))]. With one, only the block is written or replaced; text outside the markers is never touched. A begin marker without an end marker, or two of either, stops the step and names the lines to fix by hand.
-- **Step 6.** A hook that fails prints an error; `onFailure: block` makes the guard fail closed.
+- **Step 4.** With no `AGENTS.md`, a new one is written holding only the Komodo block. With one, only the block is written or replaced; text outside the markers is never touched. A begin marker without an end marker, or two of either, stops the step and names the lines to fix by hand.
 - **Never written:** a repository configuration folder, git hooks, `.codex/`, anything under `~/.claude` or `~/.codex`, or anything under `.claude/` beyond step 6. The settings files appear on the first `config set`, not at install.
 
 The pin rises only. A rerun with nothing to change makes 0 writes.
@@ -1306,17 +1291,16 @@ An install manifest entry is Absent, Owned or Edited. `install` moves Absent to 
 2. A command that fails in steps 1 to 3 has made 0 writes.
 3. Every writing command is idempotent: a repeat with the same arguments reports `0 changes`.
 4. A model session cannot change settings: `config set` needs a terminal, and on Claude Code the deny rules refuse it first.
-5. The guard hook fails closed: an error in it blocks the tool call.
-6. `stop`, `abandon` and every read run even when the settings guard has tripped.
-7. A binary is renamed into `versions/<v>/komodo` only after its checksum and signature match; a `.part` file is never run.
-8. `bin/komodo` is replaced atomically, so it always names a complete, verified binary.
-9. A running process starts every child from the version folder it started with, never from `bin/`.
-10. Cleanup never deletes the current version, the previous version, or a version an unfinished task group names.
-11. The repository pin only rises.
-12. Only `update` makes a network call to fetch a release.
-13. The CLI reaches the work only through the engine's control socket, never a Task Manager, a lease, the state or the cache.
-14. Only the user who owns `engine.sock` can open it.
-15. `status` and `replay` change nothing and make no model call.
+5. `stop`, `abandon` and every read run even when the settings guard has tripped.
+6. A binary is renamed into `versions/<v>/komodo` only after its checksum and signature match; a `.part` file is never run.
+7. `bin/komodo` is replaced atomically, so it always names a complete, verified binary.
+8. A running process starts every child from the version folder it started with, never from `bin/`.
+9. Cleanup never deletes the current version, the previous version, or a version an unfinished task group names.
+10. The repository pin only rises.
+11. Only `update` makes a network call to fetch a release.
+12. The CLI reaches the work only through the engine's control socket, never a Task Manager, a lease, the state or the cache.
+13. Only the user who owns `engine.sock` can open it.
+14. `status` and `replay` change nothing and make no model call.
 
 **Failures**
 
@@ -1333,7 +1317,6 @@ An install manifest entry is Absent, Owned or Edited. `install` moves Absent to 
 | Update crashes holding the lock | Lock age over 10 minutes | The next `update` takes over | Lock replaced |
 | An owned file hand-edited | Hash comparison | File left alone and listed; `--force` overwrites | File as edited |
 | A write fails during install | `Apply` | Stops at that step and reports it; the manifest is written after steps 4 to 6, so a rerun recomputes the diff | Earlier steps kept |
-| Guard hook errors or times out | Claude Code with `onFailure: block` | The tool call is refused | Nothing ran |
 | No engine answers and none can be started | `Engine.Ensure` waits 5 seconds | Exit 4 with `internal`, naming the socket path | Nothing started |
 | The engine answers nothing for 10 seconds and its beat file is over 30 seconds old | `Engine.Send` and `engine.beat` | Stop the engine's process tree, start a fresh engine, retry the request once | One retry | A new engine recovered from saved state |
 | `engine.sock` left behind by a crashed engine | The dial is refused | The CLI starts an engine | One engine |
@@ -1367,7 +1350,7 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 - **Tamper policy:** with a tripped guard, `stop` runs and warns, `run` exits 1 with `config_tampered`.
 - **Manifest plan:** a rerun of the planner on an unchanged repository returns 0 `write` and 0 `prune`; a hand-edited owned file plans `keep`, and `write` with `--force`.
 - **Pin:** the pin written is the higher of the existing one and the running version, with a development suffix removed, never lower.
-- **Settings merge:** step 6 adds the allow rule, the deny rules and the hook, and leaves a pre-existing key unchanged.
+- **Settings merge:** step 6 adds the allow rule and the deny rules, and leaves a pre-existing key unchanged.
 - **Cleanup:** the current, previous and in-use versions survive; the rest go.
 - **Lock age:** a lock older than 10 minutes is stale; a younger one is not.
 
@@ -8021,8 +8004,7 @@ type InstallEntry struct {
 
 // InstallSelections are the optional parts chosen at install.
 type InstallSelections struct {
-	Hosts   []string `json:"hosts,omitempty"` // "claude", "codex"
-	Project bool     `json:"project"`         // the --project files are owned
+	Hosts []string `json:"hosts,omitempty"` // "claude", "codex"
 }
 ```
 
@@ -8037,7 +8019,7 @@ type InstallSelections struct {
     "entries": [
       {"target": "/Users/dev/.komodo/bin/komodo", "hash": "1a9509c4c1d09512211b773b90b562dc6e5a2fbbb344ccd72c2a230a51a86353", "step": 1}
     ],
-    "selections": {"hosts": ["claude"], "project": false}
+    "selections": {"hosts": ["claude"]}
   }
 }
 ```
@@ -8454,7 +8436,6 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `session.go` | The session supervisor: spawn, clocks, time warning, nudge and the stop ladder |
 | `links.go` | `Router`: link choice, failover, the billing decision, provider-limit hand-off |
 | `guard.go` | `Guard.Check`: allow or refuse; fail closed; the refusal limit |
-| `hookguard.go` | `ReadHookInput` and `CheckHook`: one Claude Code tool call from the repository's guard hook, checked against the guard rows |
 | `rows.go` | Loads the guard rows from `policy.json` |
 | `paths.go` | Path containment, symlinks and secret files |
 | `tools.go` | `Registry`, `Bound`, `Dispatch`: binds an agent's permitted tools to one session |
@@ -15021,7 +15002,7 @@ The cleanup reads the person's file first. It finds each entry in the table belo
 | Line | Stale entry | Before phase 2 |
 |---|---|---|
 | 26 | `Bash(python -m komodo:*)` | Removed; nothing in the harness runs Python |
-| 114 | `komodo guard` (`PreToolUse`) | Removed; from phase 8 the repository `PreToolUse` hook runs `komodo internal guard` instead |
+| 114 | `komodo guard` (`PreToolUse`) | Removed; `install` writes no hook |
 | 124 | `komodo hook status --host claude` | Removed; `install` registers no session-start hook |
 | 128 | `komodo hook prune --host claude` | Removed; the Cleanup Handler's sweep at each engine start removes a dead run's leftovers |
 | `skillOverrides` | 36 entries: `backlog`, `komodo`, `review` and 33 `standards-*` | Removed; the harness embeds its skills in the binary |
@@ -15162,7 +15143,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-273"></a>G-273 | Config | How `providers.local.<name>.models` writes several model names in one string | Phase 4, with the model client | [11](#11-task-manager), [3](#3-configuration-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
 | <a id="g-284"></a>G-284 | Planning | The planner template's boundaries (what every group must contain, size limits, how to write a definition of done and acceptance items) and the text of the planning skill | Authoring task, phase 7 | [5](#5-intake-handler), [6](#6-context-manager) |
-| <a id="g-285"></a>G-285 | Install | The full `AGENTS.md` template and the files `--project` adds; until written, install writes only the Komodo block and `--project` adds nothing | Authoring task, phase 7 | [1](#1-cli) |
 | <a id="g-286"></a>G-286 | Update | The poll interval's setting name and default, and which process polls when no engine runs | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |
 | <a id="g-287"></a>G-287 | Login | What each provider's login does and which providers `login --all` lists | Phase 7, with the installer | [1](#1-cli), [11](#11-task-manager) |
 
@@ -15274,7 +15254,6 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | Atlassian story points, https://www.atlassian.com/agile/project-management/estimation | A story sized in points; Komodo caps a group at 8 |
 | OpenHands, https://github.com/All-Hands-AI/OpenHands | Tool actions and observations as one append-only event stream: the per-session `tools.jsonl` the supervisor tails |
 | SWE-agent, https://github.com/SWE-agent/SWE-agent | Lint and format on edit inside the agent-computer interface: `tool.post` runs the rewriting format command on the edited file |
-| Claude Code hooks, https://code.claude.com/docs/en/hooks | A `PreToolUse` command hook whose exit code 2 blocks the call: the orchestrator guard |
 | Claude Code permissions, https://code.claude.com/docs/en/permissions | Deny rules evaluated before allow rules, `*` anywhere: the human-only verb deny list |
 | Temporal activities, https://docs.temporal.io/activities | Side effects as idempotent activities ordered by deterministic code: the session-end commit as the `wip_commit` action |
 | gitleaks, https://github.com/gitleaks/gitleaks | The secret content pattern families in `secret_content` |

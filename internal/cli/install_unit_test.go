@@ -149,7 +149,7 @@ func TestSettingsMergeLeavesOtherKeysAndRemoveRestoresThem(t *testing.T) {
 	if allow, _ := doc.list("permissions.allow"); len(allow) != 2 {
 		t.Fatalf("allow = %v", allow)
 	}
-	if pre, _ := doc.list("hooks.PreToolUse"); len(pre) != 2 {
+	if pre, _ := doc.list("hooks.PreToolUse"); len(pre) != 1 {
 		t.Fatalf("PreToolUse = %v", pre)
 	}
 	for _, e := range settingsEntries {
@@ -202,14 +202,14 @@ func TestUpdateMachineRereadsAfterAStaleRevision(t *testing.T) {
 			}
 		}
 		b.Entries = []state.InstallEntry{}
-		b.Selections.Project = true
+		b.Selections.Hosts = []string{"claude"}
 		return true
 	})
 	if err != nil || !changed || calls != 2 {
 		t.Fatalf("changed %v, calls %d, err %v", changed, calls, err)
 	}
 	rec, _ := state.LoadMachine[state.InstallBody](m, state.KindInstall)
-	if rec.Header.Rev != 2 || !rec.Body.Selections.Project {
+	if rec.Header.Rev != 2 || len(rec.Body.Selections.Hosts) != 1 {
 		t.Fatalf("record = %+v", rec)
 	}
 }

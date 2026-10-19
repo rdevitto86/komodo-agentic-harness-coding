@@ -11,9 +11,8 @@ import (
 )
 
 const (
-	beginPrefix  = "<!-- komodo:begin min=" // beginPrefix starts the begin marker line of the Komodo block.
-	importLine   = "@AGENTS.md"             // importLine is the single line install owns in CLAUDE.md.
-	guardCommand = "komodo internal guard"  // guardCommand is the command of the hook entry install owns.
+	beginPrefix = "<!-- komodo:begin min=" // beginPrefix starts the begin marker line of the Komodo block.
+	importLine  = "@AGENTS.md"             // importLine is the single line install owns in CLAUDE.md.
 )
 
 // renderBlock builds the Komodo block text; an empty rules text leaves out the rules line.
