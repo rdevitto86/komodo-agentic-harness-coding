@@ -89,6 +89,8 @@ type Progress struct {
 	Pause    *PauseState    `json:"pause,omitempty"`
 	// handle of each agent's live session, reported before the session starts
 	Handles map[string]llm.ResumeHandle `json:"handles,omitempty"`
+	// the task whose edits a builder session left uncommitted in the worktree
+	Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"`
 }
 
 // PauseState is a group waiting out a provider limit.

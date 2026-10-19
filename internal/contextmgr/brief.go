@@ -23,6 +23,7 @@ const (
 	Checks       Slot = "checks"
 	Findings     Slot = "findings"
 	ScopeAnswer  Slot = "scope_answer"
+	Unfinished   Slot = "unfinished"
 	Lens         Slot = "lens"
 	LensRules    Slot = "lens_rules"
 	Callers      Slot = "callers"
@@ -88,7 +89,7 @@ var (
 		},
 		"builder": {
 			required: []Slot{RepoProfile, Group, Tasks, Files, FileContents},
-			optional: []Slot{RepoContext, Standards, Diff, Checks, Findings, ScopeAnswer, Specs},
+			optional: []Slot{RepoContext, Standards, Diff, Checks, Findings, ScopeAnswer, Unfinished, Specs},
 		},
 		"tester": {
 			required: []Slot{RepoProfile, Group, Tasks, Acceptance},

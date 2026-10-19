@@ -406,6 +406,10 @@ func findGroup(epics []intake.Epic, id string) (intake.Group, bool) {
 // progressOf converts a saved group record into the Task Manager's counters.
 func progressOf(st engine.State) *task.Progress {
 	p := &task.Progress{Stage: st.Stage, Widened: slices.Clone(st.ScopeAdded)}
+	if u := st.Unfinished; u != nil {
+		p.Unfinished = &state.UnfinishedEdits{Task: u.Task, Files: slices.Clone(u.Files)}
+	}
+
 	return p
 }
 

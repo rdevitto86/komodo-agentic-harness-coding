@@ -82,6 +82,11 @@ func (b *builderRole) Slots(_ context.Context, in RoleInput) (map[string]string,
 		s["findings"] = bullets(in.Findings)
 	}
 
+	if u := in.Unfinished; u != nil && len(u.Files) > 0 {
+		s["unfinished"] = fmt.Sprintf("Task %s left these changed files uncommitted in the worktree:\n%s", u.Task,
+			strings.Join(u.Files, "\n"))
+	}
+
 	b.mu.Lock()
 	if b.ans != "" {
 		s["scope_answer"], b.ans = b.ans, ""

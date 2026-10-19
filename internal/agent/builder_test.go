@@ -20,7 +20,7 @@ func TestBuilderRole(t *testing.T) {
 		!reflect.DeepEqual(r.Guard, []string{"R1", "B1"}) {
 		t.Errorf("classes %v guard %v", r.RunClasses, r.Guard)
 	}
-	if len(r.Slots.Required) != 5 || len(r.Slots.Optional) != 7 {
+	if len(r.Slots.Required) != 5 || len(r.Slots.Optional) != 8 {
 		t.Errorf("slots = %+v", r.Slots)
 	}
 	if !strings.Contains(string(r.Result), "komodo:agent/builder/result/1") {

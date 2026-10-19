@@ -9,6 +9,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
 // Brief is the assembled prompt, one text per part, and its size in tokens.
@@ -30,6 +31,8 @@ type RoleInput struct {
 	Diff     string
 	Trip     int
 	Findings []string
+	// the task whose edits an earlier builder session left in the worktree; nil when none
+	Unfinished *state.UnfinishedEdits
 }
 
 // Role is the agent-specific half of a stage.

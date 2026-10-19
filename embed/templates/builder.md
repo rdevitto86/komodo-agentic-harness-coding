@@ -40,6 +40,10 @@ You are the builder. Read neighbouring code, make the smallest change, test what
 
 {{scope_answer}}
 
+## Unfinished edits
+
+{{unfinished}}
+
 ## Specs
 
 {{specs}}
