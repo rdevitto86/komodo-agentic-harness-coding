@@ -2,8 +2,8 @@
 
 ## contract.1
 
-Search for callers of each changed exported symbol. A caller the diff leaves broken is a finding; quote the call.
+Every caller of a changed exported symbol still compiles and behaves as before. The brief lists the callers of Go symbols; for other languages, search for them. Quote the call site that no longer matches the changed symbol.
 
 ## contract.2
 
-An exported name, signature or field changes only when a task card calls for it. Quote the declaration.
+A task intends each changed exported symbol. Quote the changed declaration that no task names.

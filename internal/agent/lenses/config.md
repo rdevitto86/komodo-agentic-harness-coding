@@ -2,12 +2,12 @@
 
 ## config.1
 
-No change widens or removes a hard limit. Quote the line that does.
+Hard limits stay at their stated values. Quote the line that changes a hard limit.
 
 ## config.2
 
-A change to the shape of an embedded file raises its version. Quote the changed field.
+The schema version is raised when the shape of the data changes. Quote the changed field whose version line is unchanged.
 
 ## config.3
 
-A changed guard row has a fixture case that proves it. Quote the row.
+The gate fixture matches the changed policy. A changed guard row has a fixture case that proves it. Quote the policy row that has no matching fixture case.

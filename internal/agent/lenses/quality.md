@@ -2,12 +2,12 @@
 
 ## quality.1
 
-Names of functions, types and variables describe their purpose. Quote the line that declares a vague or misleading one.
+Names say what the thing is or does. Quote the line that declares a vague, empty or misleading name.
 
 ## quality.2
 
-Repeated blocks are shared. Quote the first line of the second copy.
+The same code is not written twice. Quote the first line of the second copy.
 
 ## quality.3
 
-Functions carry a short comment saying what they do, and comments describe code only. Quote the declaration that breaks the standard.
+Comments follow the comments standard of the brief. Test files and test helpers may go without a comment. Quote the function or field that lacks the comment or breaks the standard.

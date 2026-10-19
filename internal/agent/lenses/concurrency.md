@@ -2,16 +2,16 @@
 
 ## concurrency.1
 
-Each variable used by two goroutines or threads is guarded. Quote the unguarded access.
+Shared data is read and written under one lock or through one channel. Quote the line that touches shared data without the lock.
 
 ## concurrency.2
 
-Quote the line that takes locks in a different order or blocks while a lock is held.
+Locks are taken in one fixed order and never held across a blocking call. Quote the line that takes the second lock out of order, or blocks while holding one.
 
 ## concurrency.3
 
-Each loop and blocking call in changed code watches the context or a stop signal. Quote the one that does not.
+Long work stops when its context is cancelled. Check each loop and blocking call in the changed code. Quote the loop or call that ignores cancellation.
 
 ## concurrency.4
 
-Each started goroutine ends when its work ends or its context is cancelled. Quote the line that starts one that cannot end.
+Every goroutine started has a way to end. Quote the line that starts a goroutine with no exit path.

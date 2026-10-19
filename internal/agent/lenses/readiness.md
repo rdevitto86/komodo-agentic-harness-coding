@@ -2,8 +2,8 @@
 
 ## readiness.1
 
-Each behaviour the diff changes has a test in the diff or beside it. Quote the changed function that has none.
+Changed behaviour has a test that fails without the change. The test is in the diff or beside it; a test that passes with or without the change does not count. Quote the changed function that no test covers.
 
 ## readiness.2
 
-When a task card names a document or the changelog, the diff changes it. Quote the card line that is unmet.
+Documents and the changelog are touched when a task says so. Quote the task line that names the document the diff leaves unchanged.
