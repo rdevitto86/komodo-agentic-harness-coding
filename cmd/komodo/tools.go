@@ -32,7 +32,8 @@ func toolsVerb(args []string, in io.Reader, out io.Writer) error {
 	}
 
 	// This process holds no sandbox instance, lease or callbacks: run, diff, git_read, skill and task_done report that.
-	env := task.Env{Confiner: sandbox.NewManager(buildBackends(home), nil)}
+	byRole, osBackend := buildBackends("", home)
+	env := task.Env{Confiner: sandbox.NewManager(byRole, osBackend)}
 
 	bound, err := cfg.Bind(userHome, env)
 	if err != nil {

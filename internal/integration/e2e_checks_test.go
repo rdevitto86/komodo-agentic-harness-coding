@@ -614,8 +614,7 @@ func TestSandboxFallsBackWithoutDocker(t *testing.T) {
 	r.mustRun("run", "ep-1")
 	evs := r.waitDone(120 * time.Second)
 	if !has(evs, "run-status", "sandbox.fallback", "") {
-		t.Skip("blocked: a run without Docker publishes no sandbox.fallback event, so the report cannot say so " +
-			"(bus.SandboxFallback, internal/bus/types.go:126)")
+		t.Fatalf("a run without Docker published no sandbox.fallback event\n%s", r.evidence(evs))
 	}
 	t.Skip("blocked: the Docker half needs a real container runtime; the fake docker on PATH cannot run the validation")
 }
