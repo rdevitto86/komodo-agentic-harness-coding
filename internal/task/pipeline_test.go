@@ -2,11 +2,13 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
@@ -176,12 +178,19 @@ func TestReviewerReturnCancelsTheTesterAndSendsTheBuilderTheFindings(t *testing.
 }
 
 func TestTesterAndReviewerReturnsReachTheBuilderInOneTrip(t *testing.T) {
-	r := newPipeRig(t, rigOpts{})
+	var sessions string
+	r := newPipeRig(t, rigOpts{mut: func(_ *GroupSpec, c *Collaborators) { sessions = c.SessionsDir }})
 	r.model.on("builder",
 		building(r.wt, "a.go", "package a\n", builderDone),
 		building(r.wt, "b.go", "package b\n", builderDone))
 	r.model.on("tester", sayResult(testerNoTask), sayResult(testerPass))
-	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerMet))
+	// A reviewer return that lands first cancels the tester, so the reviewer waits for the tester to end.
+	r.model.on("reviewer",
+		func(s llm.Session) (llm.Stream, error) {
+			awaitEnded(t, sessions, "tester")
+			return sayResult(reviewerNot)(s)
+		},
+		sayResult(reviewerMet))
 	r.reachCleanup()
 	got := r.slot("builder", 1, "findings")
 	if !strings.Contains(got, "the tester did not confirm task t1") || !strings.Contains(got, "task t1 not met") {
@@ -190,6 +199,30 @@ func TestTesterAndReviewerReturnsReachTheBuilderInOneTrip(t *testing.T) {
 	if r.rt.progress().Returns != 1 {
 		t.Fatalf("returns %d, want 1", r.rt.progress().Returns)
 	}
+}
+
+// awaitEnded blocks until a session of the agent has written its result file, the last step of a session.
+func awaitEnded(t *testing.T, root, name string) {
+	t.Helper()
+
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		dirs, _ := os.ReadDir(root)
+		for _, d := range dirs {
+			raw, err := os.ReadFile(filepath.Join(root, d.Name(), "request.json"))
+
+			var req struct {
+				Agent string `json:"agent"`
+			}
+			if err != nil || json.Unmarshal(raw, &req) != nil || req.Agent != name {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, d.Name(), "result.json")); err == nil {
+				return
+			}
+		}
+	}
+
+	t.Errorf("no %s session ended in 10 seconds", name)
 }
 
 func TestReturnWithAnUnchangedTreeEscalatesFlap(t *testing.T) {
