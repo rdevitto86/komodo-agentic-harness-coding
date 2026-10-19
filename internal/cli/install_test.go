@@ -57,6 +57,22 @@ func TestInstallDryRunListsFourWritesAndWritesNothing(t *testing.T) {
 	}
 }
 
+func TestInstallDryRunReportsWhatItWouldDoAndAppliedNone(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	_, e := h.install(repo, "--repo-only", "--hosts", "claude", "--dry-run")
+	for _, want := range []string{"would make 4 changes", "applied none"} {
+		if !strings.Contains(e.Report, want) {
+			t.Errorf("report lacks %q:\n%s", want, e.Report)
+		}
+	}
+	for _, bad := range []string{"Install finished", "Successful Changes", "changes applied"} {
+		if strings.Contains(e.Report, bad) {
+			t.Errorf("report claims %q on a dry run:\n%s", bad, e.Report)
+		}
+	}
+}
+
 func TestInstallWritesOnlyTheOwnedParts(t *testing.T) {
 	h := newHarness(t)
 	repo := repoDir(t, "")

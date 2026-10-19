@@ -2,4 +2,4 @@ Refused: `limits.returns is over its hard limit of 5`.
 
 **Code:** `over_limit`
 
-**Fix:** `komodo config set limits.returns 5`
+**Fix:** `komodo config set limits.returns=5`

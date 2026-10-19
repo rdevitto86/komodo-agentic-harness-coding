@@ -116,6 +116,19 @@ func TestPutAndDropBlockRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBlockSetsTheStyleApartUnderTheBlockHeading(t *testing.T) {
+	style := "# Komodo output style: adhd\n\nRelay the report.\n\n- Line one.\n"
+	block := renderBlock("1.0.0", "/h/bin/komodo", "", style)
+	if !strings.Contains(block, "- **Report:** relay the envelope's `report` field verbatim.\n\n##### Komodo output style: adhd\n") {
+		t.Errorf("the style does not follow a blank line as a heading under the block heading:\n%s", block)
+	}
+	for _, line := range strings.Split(block, "\n") {
+		if strings.HasPrefix(line, "# ") {
+			t.Errorf("a top-level heading sits inside the block: %q", line)
+		}
+	}
+}
+
 func TestBlockNamesOnlyCommandsTheTableHolds(t *testing.T) {
 	block := renderBlock("1.0.0", "/h/bin/komodo", "", "")
 	words := regexp.MustCompile("`komodo ([a-z-]+)(?: ([a-z]+))?").FindAllStringSubmatch(block, -1)
