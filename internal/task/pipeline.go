@@ -643,7 +643,11 @@ func (m *Manager) runChecks(ctx context.Context) ([]string, error) {
 		return nil, block("setup", map[string]string{"error": err.Error(), "step": "mechanical checks"})
 	}
 
-	m.fact("check.done", res.Done(tree))
+	verdict := res.Done(tree)
+	m.mu.Lock()
+	m.regression = verdict.Regression
+	m.mu.Unlock()
+	m.fact("check.done", verdict)
 	if res.Clean() {
 		return nil, nil
 	}
@@ -656,9 +660,15 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 	m.mu.Lock()
 	returns := m.prog.Returns
 	last := m.prog.TreeAtReturn
+	regression := m.regression
+	m.regression = false
 	m.mu.Unlock()
 	if returns >= m.spec.Limits.Returns {
-		return block("returns", map[string]any{"returns": returns, "findings": findings})
+		reason := "returns"
+		if regression {
+			reason = "regression"
+		}
+		return block(reason, map[string]any{"returns": returns, "findings": findings})
 	}
 
 	tree, err := m.c.Git.TreeHash(ctx, m.spec.Lease)

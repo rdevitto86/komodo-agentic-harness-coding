@@ -257,6 +257,22 @@ func TestReturnsAtTheLimitEscalateReturns(t *testing.T) {
 	}
 }
 
+func TestRegressionAtTheReturnLimitEscalatesRegression(t *testing.T) {
+	r := newPipeRig(t, rigOpts{limits: Limits{Returns: 1}})
+	r.checks.fail, r.checks.regress = []bool{true, true}, true
+	r.model.on(
+		"builder",
+		building(r.wt, "a.go", "package a\n", builderDone),
+		building(r.wt, "b.go", "package b\n", builderDone),
+	)
+	if err := r.run(); err != ErrHeld {
+		t.Fatalf("Run returned %v", err)
+	}
+	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "regression" || escs[0].Kind != EscBlocked {
+		t.Fatalf("escalations %+v", escs)
+	}
+}
+
 func TestDisputedTesterResultRestartsTheTesterOnceAndASecondEscalatesFlaky(t *testing.T) {
 	items := []agent.Item{{ID: "a1", Text: "it works", Cmd: "test"}}
 	failed := `{"items":[{"item":"a1","pass":false,"evidence":"it failed"}],"tasks":[{"task":"t1",` +

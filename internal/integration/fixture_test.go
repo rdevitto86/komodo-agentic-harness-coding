@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -80,12 +81,14 @@ const (
 		"\tfor _, c := range []struct{ a, b, want int }{{3, 2, 6}, {0, 5, 0}, {-1, 3, -3}} {\n" +
 		"\t\tif got := Mul(c.a, c.b); got != c.want {\n\t\t\tt.Fatalf(\"Mul(%d, %d) = %d, want %d\", c.a, c.b, got, c.want)\n" +
 		"\t\t}\n\t}\n}\n"
-	// breakAdd is fixture B's builder change: Add subtracts, so TestAdd breaks.
-	breakAdd = "package calc\n\n// Add returns the sum of a and b.\nfunc Add(a, b int) int { return a - b }\n"
+	// breakAddOld and breakAddNew are fixture B's first builder edit: Add subtracts, so TestAdd breaks.
+	breakAddOld = "return a + b"
+	breakAddNew = "return a - b"
 )
 
 // fixtureBuilder scripts the fake builder for tg-fixture: Sub, then Mul, each with its table test and a task_done. With
-// broken set, the builder first rewrites Add so that it subtracts (fixture B).
+// broken set, the builder first edits Add so that it subtracts (fixture B); in each later session it changes the tree
+// without fixing Add, so the return is not a flap.
 func fixtureBuilder(broken bool) func(brief string, turn int) (string, map[string]any) {
 	return fixtureBuilderGated(broken, nil)
 }
@@ -93,7 +96,23 @@ func fixtureBuilder(broken bool) func(brief string, turn int) (string, map[strin
 // fixtureBuilderGated is fixtureBuilder with a gate that runs before the builder's first step of every task after the first;
 // it may block. Tasks other than sub and mul get a source file named after the task.
 func fixtureBuilderGated(broken bool, gate func(task string)) func(brief string, turn int) (string, map[string]any) {
+	// A return resumes the builder's session, so its turn count continues; rounds counts the turns that ended with no
+	// further tool call, and first is the turn at which the current round began.
+	var mu sync.Mutex
+	rounds, first, begun := 0, 0, false
 	return func(brief string, turn int) (string, map[string]any) {
+		mu.Lock()
+		if !begun {
+			first, begun = turn, true
+		}
+		n, turn := rounds+1, turn-first
+		mu.Unlock()
+		endRound := func() (string, map[string]any) {
+			mu.Lock()
+			rounds, begun = rounds+1, false
+			mu.Unlock()
+			return "", nil
+		}
 		write := func(p, c string) [2]any { return [2]any{"write", map[string]any{"path": p, "content": c}} }
 		var steps [][2]any
 		var starts []int
@@ -102,7 +121,11 @@ func fixtureBuilderGated(broken bool, gate func(task string)) func(brief string,
 			ids = append(ids, m[1])
 		}
 		if broken {
-			steps = append(steps, write("calc/calc.go", breakAdd))
+			old, repl := breakAddOld, breakAddNew
+			if n > 1 {
+				old, repl = breakAddNew, breakAddNew+" + 0"
+			}
+			steps = append(steps, [2]any{"edit", map[string]any{"path": "calc/calc.go", "old": old, "new": repl}})
 		}
 		for _, id := range ids {
 			starts = append(starts, len(steps))
@@ -123,8 +146,11 @@ func fixtureBuilderGated(broken bool, gate func(task string)) func(brief string,
 				gate(ids[i])
 			}
 		}
+		if n > 1 && broken {
+			steps = steps[:1]
+		}
 		if turn >= len(steps) {
-			return "", nil
+			return endRound()
 		}
 		return steps[turn][0].(string), steps[turn][1].(map[string]any)
 	}

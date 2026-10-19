@@ -162,6 +162,8 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 			t.Fatalf("the group neither blocked nor finished\n%s", r.evidence(evs))
 		}
 	}
+	time.Sleep(3 * time.Second) // the status events flush after the failure event
+	evs = r.events()
 	if !has(evs, "run-failure", "group.blocked", "regression") {
 		t.Fatalf("the group blocked without reason regression\n%s", r.evidence(evs))
 	}

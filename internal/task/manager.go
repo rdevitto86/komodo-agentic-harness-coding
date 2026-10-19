@@ -73,6 +73,7 @@ type Manager struct {
 	insts      map[string]sandbox.Instance
 	verdicts   map[string]Outcome
 	pending    []string
+	regression bool // the last failed checks found a test that passed at the base
 	scopeWait  *scopeWait
 	builderH   *llm.ResumeHandle
 	gateFails  map[string]int

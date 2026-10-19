@@ -262,6 +262,8 @@ type fakeChecks struct {
 	mu    sync.Mutex
 	calls int
 	fail  []bool // call n fails when fail[n] is true
+	// a failing call fails the baseline step, a test that passed at the base
+	regress bool
 }
 
 func (c *fakeChecks) Check(context.Context, agent.CommandRunner, agent.CheckInput) (agent.CheckResult, error) {
@@ -269,6 +271,13 @@ func (c *fakeChecks) Check(context.Context, agent.CommandRunner, agent.CheckInpu
 	defer c.mu.Unlock()
 	n := c.calls
 	c.calls++
+	if n < len(c.fail) && c.fail[n] && c.regress {
+		return agent.CheckResult{
+			Steps: []agent.StepResult{
+				{Step: agent.StepBaseline, Level: agent.LevelFail, Detail: []string{"pkg.TestAdd"}, Output: "FAIL: TestAdd"},
+			},
+		}, nil
+	}
 	if n < len(c.fail) && c.fail[n] {
 		return agent.CheckResult{
 			Steps: []agent.StepResult{
