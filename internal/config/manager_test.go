@@ -348,8 +348,8 @@ func TestEmbeddedDataIsValid(t *testing.T) {
 	}
 	for _, r := range []string{"planner", "builder", "tester", "reviewer"} {
 		b, err := os.ReadFile(filepath.Join("..", "..", "embed", "agents", r, "prompt.md"))
-		if err != nil || !strings.Contains(string(b), "placeholder") {
-			t.Errorf("prompt.md of %s: %v", r, err)
+		if isPlaceholder := strings.Contains(string(b), "placeholder"); err != nil || isPlaceholder == (r == "reviewer") {
+			t.Errorf("prompt.md of %s: %v (placeholder %v)", r, err, isPlaceholder)
 		}
 	}
 }
