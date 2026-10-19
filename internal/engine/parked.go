@@ -1,10 +1,15 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"time"
 
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
@@ -14,6 +19,13 @@ type ParkedGroup struct {
 	Root      string // the repository root on this machine
 	CommonDir string // the repository's git common directory
 	Group     string // the group id
+	Label     string // the group label, such as tg-1.2; empty when the source does not know it
+}
+
+// parkedRow is a parked group the engine waits on, with its record as read at start.
+type parkedRow struct {
+	p  ParkedGroup
+	st State
 }
 
 // ParkedSource lists the saved groups the engine could not have loaded through a run, such as those a lease still names.
@@ -47,6 +59,7 @@ func (m *Manager) RearmOverrides(ctx context.Context) {
 
 		m.mu.Lock()
 		m.parked[p.Group] = m.clk.AfterFunc(wait, func() { m.lapseParked(m.runCtx(), p) })
+		m.parkedBy[p.Group] = parkedRow{p: p, st: rec.State}
 		m.signalLocked()
 		m.mu.Unlock()
 	}
@@ -78,6 +91,7 @@ func (m *Manager) runCtx() context.Context {
 func (m *Manager) lapseParked(ctx context.Context, p ParkedGroup) {
 	m.mu.Lock()
 	delete(m.parked, p.Group)
+	delete(m.parkedBy, p.Group)
 	live := m.groups[p.Group] != nil
 	m.signalLocked()
 	m.mu.Unlock()
@@ -145,4 +159,84 @@ func (m *Manager) stopParkedLocked(group string) {
 		t.Stop()
 		delete(m.parked, group)
 	}
+
+	delete(m.parkedBy, group)
+}
+
+// wakeParked loads the parked group a label or id names, by starting a run for it that does not ask it to continue, and
+// returns the group; it reports unknown_target when no parked group matches.
+func (m *Manager) wakeParked(ctx context.Context, target string) ([]*group, error) {
+	row, ok := m.findParked(ctx, target)
+	if !ok {
+		return nil, &codeError{CodeUnknownTarget, "no live group named " + target}
+	}
+
+	label := cmp.Or(row.p.Label, target)
+	rs := &bus.RunStart{
+		Target: label, Groups: []string{label}, Source: "cli",
+		Repo: row.p.Repo, Root: row.p.Root, CommonDir: row.p.CommonDir,
+	}
+	e := bus.Event{Type: bus.TypeRunStart, Run: bus.ID(cmp.Or(row.st.Run, "run-"+row.p.Group)), Data: rs}
+	if err := m.launchRun(ctx, e, rs, false); err != nil {
+		return nil, err
+	}
+
+	gs := m.byTarget(label)
+	if len(gs) == 0 {
+		return nil, &codeError{CodeUnknownTarget, "no live group named " + target}
+	}
+
+	return gs, nil
+}
+
+// findParked returns the parked group whose id or label is the target; a target the plan maps to a parked group's id
+// counts as its label.
+func (m *Manager) findParked(ctx context.Context, target string) (parkedRow, bool) {
+	m.mu.Lock()
+	rows := slices.Collect(maps.Values(m.parkedBy))
+	m.mu.Unlock()
+
+	for _, r := range rows {
+		if r.p.Group == target || r.p.Label == target {
+			return r, true
+		}
+	}
+	if m.d.Plans == nil {
+		return parkedRow{}, false
+	}
+
+	for _, r := range rows {
+		specs, err := m.d.Plans.Specs(ctx, r.p.Root, []string{target})
+		if err == nil && len(specs) == 1 && specs[0].ID == r.p.Group {
+			r.p.Label = target
+			return r, true
+		}
+	}
+
+	return parkedRow{}, false
+}
+
+// parkedBlockedLocked lists the parked groups of a repository root (every root when it is empty) as groups blocked on
+// retries; the caller holds the lock.
+func (m *Manager) parkedBlockedLocked(root string) []BlockedRow {
+	var out []BlockedRow
+	for _, r := range m.parkedBy {
+		if root != "" && r.p.Root != root {
+			continue
+		}
+
+		name := cmp.Or(r.p.Label, r.p.Group)
+		out = append(out, BlockedRow{
+			Group:  name,
+			RunID:  r.st.Run,
+			Reason: string(state.ReasonRetries),
+			Question: fmt.Sprintf(
+				"%s has no retries left. A person may override in a terminal until %s.",
+				name,
+				r.st.Block.Until.Format(time.RFC3339),
+			),
+		})
+	}
+
+	return out
 }
