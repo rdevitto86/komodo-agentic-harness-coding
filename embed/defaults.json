@@ -22,6 +22,7 @@
     {"name": "sandbox.lang_cache_gb", "kind": "int", "default": 10, "min": 0, "max": 50},
     {"name": "providers.paid", "kind": "enum", "default": "never", "enum": ["never", "fallback", "allowed"]},
     {"name": "providers.keys.anthropic", "kind": "env_ref", "default": "env:ANTHROPIC_API_KEY"},
+    {"name": "providers.keys.openai", "kind": "env_ref", "default": "env:OPENAI_API_KEY"},
     {"name": "providers.anthropic.url", "kind": "string", "default": "https://api.anthropic.com"},
     {"name": "providers.local.<name>.url","kind": "string", "family": true},
     {"name": "providers.local.<name>.models", "kind": "string", "family": true},

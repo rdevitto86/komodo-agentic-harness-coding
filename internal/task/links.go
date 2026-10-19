@@ -158,7 +158,7 @@ func (r *Router) try(ctx context.Context, w *walk, l llm.Link, req SelectRequest
 		model = probe.Models[req.Weight]
 	}
 	if model == "" && r.Catalog != nil {
-		if e, ok := r.Catalog.Default(req.Weight); ok {
+		if e, ok := r.Catalog.DefaultFor(llm.ProviderOf(l), req.Weight); ok {
 			model = e.ID
 		}
 	}
