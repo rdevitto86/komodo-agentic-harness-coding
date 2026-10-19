@@ -29,7 +29,7 @@ func CoverageCommand(language, testCmd string) (string, bool) {
 		}
 		return "c8 --reporter=json-summary " + testCmd + "; cat coverage/coverage-summary.json", true
 	case "rust":
-		return "cargo llvm-cov --json --summary-only", true
+		return "cargo llvm-cov --ignore-run-fail --json --summary-only", true
 	}
 	return "", false
 }
