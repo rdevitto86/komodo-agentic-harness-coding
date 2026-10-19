@@ -272,10 +272,15 @@ func (m *Manager) dispatch(ctx context.Context, e bus.Event) {
 	var h func()
 	switch d := e.Data.(type) {
 	case *bus.RunStart:
+		if d.Source == "cli" {
+			m.errs.person()
+		}
+
 		h = func() { m.settle(string(d.Request), m.startRun(ctx, e, d)) }
 	case *bus.RunStop:
 		h = func() { m.settle(string(d.Request), m.stopTarget(ctx, d.Target)) }
 	case *bus.RunContinue:
+		m.errs.person()
 		h = func() { m.settle(string(d.Request), m.continueTarget(ctx, d, string(e.Run))) }
 	default:
 		return
@@ -675,7 +680,7 @@ func (m *Manager) spawn(fn func()) {
 		return
 	}
 
-	guarded(m.faults, run)
+	guarded(m.faults, run, func(f fault.Fault) { m.errs.engineFailed("a goroutine panicked", f) })
 }
 
 // wait waits up to d for every spawned goroutine to end; it reports false when some are still running.
@@ -684,7 +689,7 @@ func (m *Manager) wait(d time.Duration) bool {
 	guarded(m.faults, func() {
 		m.live.Wait()
 		close(done)
-	})
+	}, nil)
 
 	t := time.NewTimer(d)
 	defer t.Stop()
