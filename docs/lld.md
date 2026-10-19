@@ -151,9 +151,12 @@ The `embed/` folder holds every text and data file the harness reads from its ow
 |---|---|---|
 | `agents/<name>/{agent.json, prompt.md}` | The default agent registry: planner, builder, tester and reviewer | [3](#3-configuration-manager) |
 | `skills/` | Skills, documents of standards placed in an agent's context | [6](#6-context-manager) |
+| `skills/index.json`, `skills/rules.json` | The skill index with each file's hash, and every standards rule line with its identifier | [6](#6-context-manager) |
+| `langs/` | One profile per language: its commands and file patterns | [13](#13-tester) |
 | `templates/` | Agent prompt templates | [6](#6-context-manager) |
 | `output/` | Output Formatter templates and their golden test files | [2](#2-output-formatter) |
 | `defaults.json` | Built-in settings and hard limits | [3](#3-configuration-manager) |
+| `event.schema.json`, `state.schema.json`, `machine.schema.json` | The export formats of events, group state and machine records | [4](#4-event-bus), [10](#10-state-manager) |
 | `ui/` | The dashboard page and its one script | [1](#1-cli) |
 
 Nothing under `embed/` is copied into a host. `install` writes only the Komodo block, the `@AGENTS.md` import and the guard hook entry ([1.3](#13-data-model)); the agents, skills and templates stay inside the binary.
@@ -1393,6 +1396,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 |---|---|
 | [G-19](#g-19) | The 50 ms short-command budget is a target until measured |
 | [G-21](#g-21) | Enterprise signing: key management service and refusal of an older manifest |
+| [G-121](#g-121) | Whether native Windows needs its own console check in `validate`; applies only if native Windows returns |
 
 ## 2. Output Formatter
 
@@ -10532,6 +10536,8 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-72](#g-72) | Request and response mapping of the API interfaces and the cache markers | API links |
 | [G-03](#g-03), [G-04](#g-04) | A local model at the context floor, and parallel requests | Only the optional local link |
 | [G-07](#g-07) | The real 5-hour window against `limits.link_sessions` for the subscription link | Slots |
+| [G-22](#g-22) | A central gateway for model identifiers, retirement dates and quotas, for several machines or people | Model choice |
+| [G-23](#g-23) | Path ownership rows in `policy.json` for repositories shared by several teams | Guard rows |
 
 ## 12. Builder
 
@@ -14793,6 +14799,7 @@ Komodo keeps its files in two places and never inside the repository's working t
 | `events/runs.json` | The run-to-folder map: where each run's event log lives | [4. Event Bus](#4-event-bus) |
 | `metrics/repos.json`, `metrics/failures.jsonl` | The metrics folder of every repository the Metrics Service opened, and its failures that belong to no run | [18. Metrics Service](#18-metrics-service) |
 | `state/engine.beat` | The engine's heartbeat: its process id and the time, rewritten every 5 seconds | [7. Runtime Manager](#7-runtime-manager) |
+| `state/engine.log` | The engine's own error output, appended while it runs; never trimmed | [7. Runtime Manager](#7-runtime-manager) |
 | `state/schedule.json` | The schedule queue: one entry per queued run, with `target`, `root`, `run_id`, `at`, `queued_at` and `start` | [10. State Manager](#10-state-manager) keeps it; the Runtime Manager reads and writes it through the State Manager |
 | `state/providers.json`, `state/update.json`, `state/install.json`, `state/update.lock` | Machine-wide records: provider reset times and link session counts, update state, install state, and the update writer lock | [10. State Manager](#10-state-manager); the Resource Manager, the model client and the CLI's installer read and write them only through it |
 | `bin/komodo`, `versions/<v>/komodo` | The current binary and every installed version | [1. CLI](#1-cli) |
@@ -14856,13 +14863,13 @@ This chapter holds what no single subsystem owns: the end-to-end checks of the w
 
 ### 21.1 End-to-End Verification Plan
 
-Every subsystem can pass its own proof cases while the whole still fails on a real repository, so these checks run the built binary against a fixture. They are Go tests behind the `e2e` build tag in `cmd/komodo/e2e_test.go`; a person or the orchestrator runs `go test -tags e2e ./cmd/komodo/` at the end of each delivery phase.
+Every subsystem can pass its own proof cases while the whole still fails on a real repository, so these checks run the built binary against a fixture. They are Go tests in `internal/integration`, beside the checks that already run there; the slow ones sit behind the `e2e` build tag, and a person or the orchestrator runs `go test -tags e2e ./internal/integration/` at the end of each delivery phase.
 
 Three of these checks already run in `internal/integration`, without the build tag, against the built binary, a temporary Komodo home, a local bare remote, a fake `gh` and a fake Messages server that picks its reply by agent role: `TestPhase5OneGroupPassesBuildTestAndReview` (one group passes build, test and review and ends done), `TestPhase6PlannedGroupIsPublishedAndCleanedUp` (`komodo plan`, then the run, a `publish.done` fact, the epic branch on the remote, and no worktree, group branch or lease left) and `TestOneEngineRunsGroupsFromTwoRepositories` (one engine, two repositories). `TestBinaryEngineServesStatus` proves the hidden engine verb binds the socket.
 
 #### Fixtures
 
-- **`testdata/fixture-repo/`:** a small Go module with `calc/calc.go`, holding `Add`, and `calc/calc_test.go`.
+- **`internal/integration/testdata/fixture-repo/`:** a small Go module with `calc/calc.go`, holding `Add`, and `calc/calc_test.go`.
 - **`tg-fixture`:** a task group with 2 tasks, add `Sub` and then `Mul`, each with a table test.
 - **Broken fixtures:** fixture A adds a test that already fails at the base commit; in fixture B a fake model returns a builder change that makes `Add` subtract, breaking `TestAdd`.
 - **Model:** a fake model client that replays recorded replies, so the checks spend nothing and run the same every time.
@@ -15154,8 +15161,8 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-215"></a>G-215 | Cache | The Cache Manager owns the language and build caches, which the design names no owner for; each session gets its own build cache (review S6) | Confirmed when the Cache Manager is built, phase 3 | [8](#8-cache-manager) |
 | <a id="g-219"></a>G-219 | Spending | A default for `warn.usd_per_day`, set from measured daily paid spend; off until then | Metrics measurement over the first 20 paid groups | [19](#19-resource-manager) |
 | <a id="g-02"></a>G-02 | Provider probe | Capturing the `system/init` line at probe time without a model turn | Spike, phase 4 | [11](#11-task-manager), [1](#1-cli) |
-| <a id="g-03"></a>G-03 | Local models | A 24 GB machine running Qwen3.6-27B at 262,144 context | Spike, phase 4 | [11](#11-task-manager) |
-| <a id="g-04"></a>G-04 | Pool | `OLLAMA_NUM_PARALLEL` above 1 on one machine, deciding whether `limits.link_sessions.local` can exceed 1 | Spike, phase 4 | [7](#7-runtime-manager), [11](#11-task-manager) |
+| <a id="g-03"></a>G-03 | Local models | A 24 GB machine running Qwen3.6-27B at 262,144 context | Later minor, deferred by owner decision 2026-10-18 | [11](#11-task-manager) |
+| <a id="g-04"></a>G-04 | Pool | `OLLAMA_NUM_PARALLEL` above 1 on one machine, deciding whether `limits.link_sessions.local` can exceed 1 | Later minor, deferred by owner decision 2026-10-18 | [7](#7-runtime-manager), [11](#11-task-manager) |
 | <a id="g-07"></a>G-07 | Limits | The real Max 5-hour window against `limits.link_sessions.claude-cli` 3 | Metrics measurement over the first 20 groups, phase 7 | [11](#11-task-manager) |
 | <a id="g-08"></a>G-08 | Sandbox | `bwrap --unshare-net` gives each session a private loopback | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
 | <a id="g-09"></a>G-09 | Sandbox | `cp --reflink=auto` behaviour on ext4 and btrfs, symlinks kept | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
@@ -15169,12 +15176,12 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-19"></a>G-19 | Timing | The 10,000-event replay under 1 s and the 50 ms short-verb budget | Gate timing, phase 6 | [0](#0-front-matter-and-code-structure), [1](#1-cli), [4](#4-event-bus), [6](#6-context-manager), [18](#18-metrics-service), [10](#10-state-manager) |
 | <a id="g-20"></a>G-20 | OpenAI | The `codex-cli` link, `openai-api` chain and `.codex/` install | Later minor, by design | [11](#11-task-manager), [6](#6-context-manager), [1](#1-cli) |
 | <a id="g-21"></a>G-21 | Release signing, enterprise | Private key in a KMS or keyless signing; `update` refuses a manifest older than the last accepted | Later minor; trigger: the first machine the owner does not own runs `update` | [1](#1-cli) |
-| <a id="g-22"></a>G-22 | Model registry, enterprise | A central gateway owning IDs, `retired_on` dates, quotas; `doctor` warns 30 days ahead | Later minor; trigger: 3 or more machines, or 2 people sharing one cap | No text site |
-| <a id="g-23"></a>G-23 | Scope, enterprise | Path ownership rows in `policy.json`; a named human for other teams' paths; a widening digest in the metrics view of `komodo status --all` | Later minor; trigger: the first repo with 2 teams or customer data | No text site |
+| <a id="g-22"></a>G-22 | Model registry, enterprise | A central gateway owning IDs, `retired_on` dates, quotas; `doctor` warns 30 days ahead | Later minor; trigger: 3 or more machines, or 2 people sharing one cap | [11](#11-task-manager) |
+| <a id="g-23"></a>G-23 | Scope, enterprise | Path ownership rows in `policy.json`; a named human for other teams' paths; a widening digest in the metrics view of `komodo status --all` | Later minor; trigger: the first repo with 2 teams or customer data | [11](#11-task-manager) |
 | <a id="g-25"></a>G-25 | Sandbox | Whether a Docker volume per worktree beats the bind mount on copy time | Spike with G-11, phase 2 | [11](#11-task-manager) |
 | <a id="g-26"></a>G-26 | Usage metrics | Splitting tokens and USD by provider family: Claude, GPT and local models | Later minor, deferred by owner decision 2026-10-12 | No text site |
 | <a id="g-71"></a>G-71 | Providers | Confirming the `claude-cli` wire defaults stated in 5.3 and 7.5: working directory of the `claude` process, which stream line type is `output`, which field of the result line carries the structured answer, which field of `rate_limit_event` carries the reset time, what `--verbose` switches on, how `claude auth status --json` reports a logged-out user, and the signature of the tool host the API-link loop calls. | Spike against Claude Code 2.1.295, phase 4 | [11](#11-task-manager) |
-| <a id="g-72"></a>G-72 | Providers | Confirming the `anthropic.go` and `openai.go` wire defaults stated in 5.3 and 7.5: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and the `-limit` header that gives the window total. | Spike against both interfaces, phase 4 | [11](#11-task-manager) |
+| <a id="g-72"></a>G-72 | Providers | Confirming the `anthropic.go` and `openai.go` wire defaults stated in 5.3 and 7.5: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and the `-limit` header that gives the window total. | Later minor, deferred by owner decision 2026-10-18 | [11](#11-task-manager) |
 | <a id="g-121"></a>G-121 | CLI validate | Whether a `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix; applies only if native Windows returns | Not planned; Windows runs through Windows Subsystem for Linux 2 | [1](#1-cli) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-tester) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file at the cleanup, phase 1; then 15.3 | [21](#21-verification-operations-and-cutover) |
