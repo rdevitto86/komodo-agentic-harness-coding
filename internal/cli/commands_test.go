@@ -17,6 +17,7 @@ import (
 )
 
 func init() {
+	engine.RegisterEvents()
 	bus.Register(bus.Key{Type: bus.TypePlan, Subtype: "request"}, func() bus.Payload { return &planRequest{} })
 	bus.Register(intake.PlanBlocked{}.EventKey(), func() bus.Payload { return &intake.PlanBlocked{} })
 	bus.Register(intake.PlanTimeout{}.EventKey(), func() bus.Payload { return &intake.PlanTimeout{} })
@@ -347,6 +348,34 @@ func TestPlanFailureIsTheIntakeErrorEvent(t *testing.T) {
 					code, e.OK, e.Error, c.exit, c.code, c.reason)
 			}
 		})
+	}
+}
+
+// The engine refuses the run the plan started: plan fails with the refusal and still carries the written groups.
+func TestPlanFailsWhenTheRunItStartedIsRefused(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	why := "commit the task lists of ep-1: push: Authentication failed"
+	h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{
+			Type: bus.TypeRunStart, Run: "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25",
+			Data: &bus.RunStart{Target: "ep-1", Groups: []string{"tg-1.1"}, Source: "intake"},
+		}})
+		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{
+			Type: bus.TypeError, Subtype: "run-refused", Run: "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25",
+			Data: &engine.RunRefused{Target: "ep-1", Why: why},
+		}})
+		send(okReply(map[string]any{}))
+	})
+
+	code, e := h.envelope("-C", repo, "plan", "goal text")
+	if code != 1 || e.OK || e.Error == nil || e.Error.Code != "run_refused" ||
+		!strings.Contains(e.Error.Reason, "Authentication failed") || !strings.Contains(e.Error.Fix, "komodo run ep-1") {
+		t.Fatalf("exit %d, ok %v, error %+v", code, e.OK, e.Error)
+	}
+	if d := dataOf[PlanData](t, e); d.Target != "ep-1" || strings.Join(d.Groups, ",") != "tg-1.1" ||
+		d.RunID != "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25" {
+		t.Fatalf("data = %+v", d)
 	}
 }
 

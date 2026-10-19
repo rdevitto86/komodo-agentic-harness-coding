@@ -367,7 +367,7 @@ func handleReplay(c *Call) Result {
 	}
 }
 
-// handlePlan sends a plan event and waits for the run-start that ends planning, or for an error event.
+// handlePlan sends a plan event and waits until the run it started is accepted or refused, or for an error event.
 func handlePlan(c *Call) Result {
 	pr := &planRequest{
 		Goal:      strings.Join(c.Args, " "),
@@ -417,6 +417,7 @@ func handlePlan(c *Call) Result {
 		}
 		if ok {
 			if r, failed := c.cli.faultResult(fl); failed {
+				r.Data = d
 				return r
 			}
 		}
@@ -429,8 +430,8 @@ func handlePlan(c *Call) Result {
 	}
 }
 
-// planFault turns an error event the Intake Handler published into a fault carrying its own reason; ok is false for any
-// other event.
+// planFault turns an error event of the plan, or the refusal of the run it started, into a fault carrying its own reason;
+// ok is false for any other event.
 func planFault(e bus.Event) (fault.Fault, bool) {
 	f := fault.Fault{
 		Source:   fault.Source{Component: "intake", Run: e.Run, Group: e.Group},
@@ -448,6 +449,10 @@ func planFault(e bus.Event) (fault.Fault, bool) {
 	case *intake.PlanLocked:
 		f.Code, f.Kind = string(format.Locked), fault.KindRefused
 		f.Reason = "The plan tried to rewrite a group that run " + d.Run + " holds"
+	case *engine.RunRefused:
+		f.Code, f.Kind, f.Reason = string(format.RunRefused), fault.KindRefused, d.Why
+		f.Source.Component = "engine"
+		f.Fix = "Fix the cause, then run `komodo run " + d.Target + "`"
 	case *intake.PlanBlocked:
 		f.Code, f.Kind = string(format.PlanBlocked), fault.KindBlocked
 		f.Reason = fmt.Sprintf("The third planner draft failed lint with %d findings", len(d.Findings))
