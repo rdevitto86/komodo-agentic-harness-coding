@@ -82,17 +82,19 @@ type GroupMetrics struct {
 
 // RunMetrics is one entry of runs.json: the figures for one run.
 type RunMetrics struct {
-	Run       bus.ID           `json:"run"`
-	StartedAt time.Time        `json:"started_at"`
-	EndedAt   time.Time        `json:"ended_at,omitzero"`
-	WallS     int64            `json:"wall_s"`
-	Groups    int              `json:"groups"`
-	Done      int              `json:"done"`
-	Blocked   int              `json:"blocked"`
-	Faults    int              `json:"faults"`   // error events with severity error
-	Warnings  int              `json:"warnings"` // error events with severity warn
-	Usage     bus.SessionUsage `json:"usage"`
-	Dir       string           `json:"dir"` // the metrics folder of the run's repository
+	Run       bus.ID    `json:"run"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
+	WallS     int64     `json:"wall_s"`
+	Groups    int       `json:"groups"`
+	Done      int       `json:"done"`
+	Blocked   int       `json:"blocked"`
+	Faults    int       `json:"faults"`   // error events with severity error
+	Warnings  int       `json:"warnings"` // error events with severity warn
+	// how often the engine's error handler recorded each error type in this run
+	Errors map[string]int   `json:"errors,omitempty"`
+	Usage  bus.SessionUsage `json:"usage"`
+	Dir    string           `json:"dir"` // the metrics folder of the run's repository
 	// the Service's own failures that touched this run, each once
 	Failures []FaultRecord `json:"failures"`
 }

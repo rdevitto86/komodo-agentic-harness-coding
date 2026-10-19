@@ -2,11 +2,14 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
 func TestAStateStoreFailureIsSevereStopsStartsAndOnlyAPersonResumes(t *testing.T) {
@@ -42,6 +45,24 @@ func TestAStateStoreFailureIsSevereStopsStartsAndOnlyAPersonResumes(t *testing.T
 
 	if got := r.m.errs.alert(); got != "" {
 		t.Fatalf("a person's run left the alert %q", got)
+	}
+}
+
+func TestStatusShowsErrorCountsByType(t *testing.T) {
+	x := newEng(t, [][]string{{"tg-1"}})
+	x.serve()
+	x.m.errs.record("run-1", "g-tg-1", state.ReasonCrash, 1)
+	x.m.errs.record("run-1", "g-tg-1", state.ReasonCrash, 2)
+	x.m.errs.record("run-1", "g-tg-1", state.ReasonTimeout, 0)
+
+	reps := x.ask(Request{ID: "st", Verb: VerbStatus, Root: x.root})
+
+	var sd StatusData
+	_ = json.Unmarshal(reps[len(reps)-1].Data, &sd)
+
+	want := []ErrorCount{{Type: "crash", Tier: "blocker", Count: 2}, {Type: "timeout", Tier: "work", Count: 1}}
+	if !slices.Equal(sd.Errors, want) {
+		t.Fatalf("status errors %+v, want %+v", sd.Errors, want)
 	}
 }
 

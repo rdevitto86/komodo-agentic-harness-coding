@@ -289,7 +289,7 @@ func (e *Engine) statusData(ctx context.Context, req Request) StatusData {
 	}
 
 	runs, blocked := e.m.Snapshot(root)
-	d := StatusData{Runs: runs, Queued: []QueuedRow{}, Blocked: blocked, Alert: e.m.errs.alert()}
+	d := StatusData{Runs: runs, Queued: []QueuedRow{}, Blocked: blocked, Alert: e.m.errs.alert(), Errors: e.m.errs.counted()}
 
 	es, _, _ := e.q.load()
 	for _, ent := range es {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,8 +20,10 @@ type StatusData struct {
 	Blocked []BlockedRow `json:"blocked"`
 	// with --wait: blocked, done or timeout
 	Waited string `json:"waited,omitempty"`
-	// one line while the breaker holds new sessions back
+	// one line while the error handler holds new sessions back
 	Alert string `json:"alert,omitempty"`
+	// error counts by type since the engine started
+	Errors []ErrorRow `json:"errors,omitempty"`
 	// status (id): the run's or group's time, tokens and cost
 	Figures *Figures `json:"figures,omitempty"`
 	// status (id) of a failed or blocked group: the run's last events
@@ -61,6 +64,13 @@ type QueuedRow struct {
 	Root     string    `json:"root"`   // the repository root the target belongs to
 	At       time.Time `json:"at"`
 	QueuedAt time.Time `json:"queued_at"`
+}
+
+// ErrorRow is how often one error type was recorded.
+type ErrorRow struct {
+	Type  string `json:"type"`  // the error type: a block reason, or engine for an engine failure
+	Tier  string `json:"tier"`  // blocker, fault, minor, work or severe
+	Count int    `json:"count"` // how often it was recorded
 }
 
 // BlockedRow is a group that waits for an answer.
@@ -134,7 +144,7 @@ func statusFrames(frames []engine.Reply, wait bool) StatusData {
 		if len(fin.Blocked) > 0 {
 			sd.Runs, sd.Blocked = fin.Runs, fin.Blocked
 		}
-		sd.Waited, sd.Alert = fin.Waited, fin.Alert
+		sd.Waited, sd.Alert, sd.Errors = fin.Waited, fin.Alert, fin.Errors
 	}
 
 	if sd.Runs == nil {
@@ -189,6 +199,7 @@ func statusFacts(sd StatusData) format.StatusFacts {
 		Runs:    format.Table{Head: []string{"Run id", "Label", "Groups"}, What: "runs"},
 		Queued:  format.Table{Head: []string{"Label", "Start"}, What: "queued runs"},
 		Blocked: format.Table{Head: []string{"Group", "Reason", "Question"}, What: "blocked groups"},
+		Errors:  format.Table{Head: []string{"Type", "Tier", "Count"}, What: "error types"},
 		Waited:  sd.Waited,
 		Alert:   sd.Alert,
 	}
@@ -205,6 +216,9 @@ func statusFacts(sd StatusData) format.StatusFacts {
 	}
 	for _, b := range sd.Blocked {
 		f.Blocked.Rows = append(f.Blocked.Rows, []string{b.Group, b.Reason, b.Question})
+	}
+	for _, e := range sd.Errors {
+		f.Errors.Rows = append(f.Errors.Rows, []string{e.Type, e.Tier, strconv.Itoa(e.Count)})
 	}
 
 	return f
