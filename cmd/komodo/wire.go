@@ -153,6 +153,15 @@ func buildLinks(cfg *config.Manager, cat *llm.Catalog, faults llm.Recoverer) *ll
 	}
 
 	links[llm.ClaudeCLI] = llm.NewClaude(llm.ClaudeOptions{Catalog: cat, Faults: faults})
+	links[llm.OpenAISubscription] = llm.NewOpenAISubscription(llm.OpenAISubscriptionOptions{Faults: faults})
+
+	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+		a, err := llm.NewOpenAIAPI(llm.OpenAIAPIOptions{BaseURL: os.Getenv("OPENAI_BASE_URL"), Key: key, Faults: faults})
+		if err == nil {
+			links[llm.OpenAIAPI] = a
+		}
+	}
+
 	return llm.New(links)
 }
 
