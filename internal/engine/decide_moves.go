@@ -500,6 +500,7 @@ func (c *calc) continueGroup(in Input) bool {
 			return false
 		}
 
+		s.Counters.FaultStreak = 0
 		to := s.Prior
 		if to == StageCommit {
 			to = StageTestReview

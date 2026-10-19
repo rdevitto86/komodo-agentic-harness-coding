@@ -48,6 +48,17 @@ func TestAStateStoreFailureIsSevereStopsStartsAndOnlyAPersonResumes(t *testing.T
 	}
 }
 
+func TestAGoroutinePanicInTheEngineIsSevere(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1"}}, withClock, onlyIdle)
+	r.m.spawn(func() { panic("planted") })
+
+	until(t, "the severe alert", func() bool { return strings.Contains(r.m.errs.alert(), "SEVERE") })
+
+	if r.m.errs.allow("g-tg-1") {
+		t.Fatal("a session start went through after a goroutine panic")
+	}
+}
+
 func TestStatusShowsErrorCountsByType(t *testing.T) {
 	x := newEng(t, [][]string{{"tg-1"}})
 	x.serve()

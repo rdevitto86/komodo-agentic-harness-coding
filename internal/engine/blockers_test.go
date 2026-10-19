@@ -44,6 +44,18 @@ func TestAStepAfterTheWorkBreakingIsNoBlocker(t *testing.T) {
 	}
 }
 
+func TestAPlainRunOnAnyBlockResetsTheBlockerCount(t *testing.T) {
+	r := apply(t, claimed(), in(InFault, FaultData{Reason: "setup", Detail: "x"}))
+	if r.State.Stage != StageBlocked || r.State.Counters.FaultStreak != 1 {
+		t.Fatalf("stage %q streak %d", r.State.Stage, r.State.Counters.FaultStreak)
+	}
+
+	cont := apply(t, r.State, in(InContinue, nil))
+	if cont.State.Counters.FaultStreak != 0 {
+		t.Fatalf("a plain run left streak %d", cont.State.Counters.FaultStreak)
+	}
+}
+
 func TestASessionCrashCountsAsABlocker(t *testing.T) {
 	r := apply(t, claimed(), crashEnd("builder"))
 	if r.Err != state.ReasonCrash || r.State.Counters.FaultStreak != 1 {

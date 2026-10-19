@@ -2879,8 +2879,10 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `retry.waived` | `run-status` / `retry.waived` | `left`, `reason` (the fault of Komodo's own), `stage` |
 | `override.approved` | `run-status` / `override.approved` | `granted`, `left`, `minutes` (the final try's working time) |
 | `override.lapsed` | `run-status` / `override.lapsed` | `window_min` |
-| `breaker.opened` | `run-failure` / `breaker.opened` | `reason`, `groups` |
-| `breaker.closed` | `run-status` / `breaker.closed` | `reason` |
+| `error.recorded` | `run-status` / `error.recorded` | `reason` (the error type), `tier`, `wait_s` (the group's wait before its next session start) |
+| `starts.paused` | `run-failure` / `starts.paused` | `reason`, `groups`, `wait_s` (0 when only a person ends the pause) |
+| `starts.resumed` | `run-status` / `starts.resumed` | `reason`, `by` (`wait` or `person`) |
+| `engine.failed` | `run-failure` / `engine.failed` | `where`, `detail` |
 | `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` |
 | `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` |
 | `stage.exit` | `run-status` / `stage.exit` | `from` |
@@ -5582,8 +5584,9 @@ The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceabi
 | `status.go` | `StatusData`, `Manager.Snapshot`, and the small views the engine reads from the Runtime Manager |
 | `schedule.go` | The schedule queue loop over `state.ScheduleEntry` |
 | `command.go` | The mapping from `Order` to `task.Command` and from `task.Message` to `Input`; `Channels` |
-| `events.go` | The data of the events only this package publishes (`stalled`, `run-refused`, `session.resume-lost`, `breaker.opened`, `breaker.closed`) |
-| `breaker.go` | The engine-wide breaker: trip rule, probe timing, the held-group list |
+| `events.go` | The data of the events only this package publishes (`stalled`, `run-refused`, `session.resume-lost`, `error.recorded`, `starts.paused`, `starts.resumed`, `engine.failed`, and the retired `breaker.opened` and `breaker.closed`, kept so old logs read) |
+| `errors.go` | The error handler: tiers, counts by type, the global pause with its waits, the engine failure state, the held-group list |
+| `groupwait.go` | The group breaker: the 1, 2 and 4 minute waits and the hold on a group's session starts |
 | `parked.go` | `ParkedSource` and `RearmOverrides`: override timers of saved groups no run holds |
 | `peer.go`, `peer_darwin.go`, `peer_linux.go`, `peer_other.go` | The socket peer's controlling-terminal check behind `run --override` |
 | `manager.go` | `Manager`, `New`, `Run`: subscriptions, the run loop, the group goroutines |
@@ -5668,7 +5671,7 @@ type Limits struct {
 | `Tries` | The current try, from 1. It rises by 1 each time a retry is spent and each time an override is approved, and never falls |
 | `WallBaseS` | The value `WallUsedS` had when the current try began; it only rises |
 | `WallExtTry` | The try on which the one wall-time extension was granted; it only rises. The current try has had its extension when `WallExtTry` equals `Tries` |
-| `FaultStreak` | Komodo faults in a row on this group with no session result between them ([Komodo faults](#komodo-faults)); it is the one counter that may fall, so the saved-state check does not hold it to a rise |
+| `FaultStreak` | Blocker errors in a row on this group with no session result between them ([Komodo faults](#komodo-faults)); it is the one counter that may fall, so the saved-state check does not hold it to a rise |
 | `LastFindings` | The exact output of the last failed Test and Review round; an approved override puts it in the Builder's brief |
 | `RetriesLeft` | The tries the group has, the current one included. It starts at `limits.group_retries` at `group.start` and only falls: one per true failure ([The retry budget](#the-retry-budget)). The failure that finds it at 1 sets it to 0 and holds the group for the override window. No automatic path and no `run (id)` raises it; only an approved override sets it to 1 |
 | `Overrides` | Overrides a person approved; never falls, and the group is offered one only while it is 0. It is the only reason `RetriesLeft` may rise |
@@ -6624,22 +6627,26 @@ There is no `wall` block and no `--approve` for time. A group saved blocked on `
 
 #### Komodo faults
 
-One table, `state.Classify`, ranks every reason; `Reason.Severity()` reads it. A tool-call error inside a session, such as a failing command or a bad regular expression, is not a reason and reaches no counter.
+One table, `state.Classify`, ranks every reason; `Reason.Severity()` reads it. The error handler (below) is the one place that classifies errors and counts them by type. A tool-call error inside a session, such as a failing command or a bad regular expression, is not a reason and reaches no counter.
 
 | Tier | Reasons | Counts toward |
 |---|---|---|
-| panic (Komodo itself is broken) | `crash` from a goroutine panic, `state_invalid`, `contract`, `setup` (lease, worktree, sandbox, guard rules not loading) | The group cap and the breaker |
-| fault (one session or step broke) | `crash` of a session process, `publish`, `cleanup` | The group cap only |
+| blocker (an error stops an agent session from working on its tasks) | `crash` (a session process lost, or a goroutine panic), `setup` (lease, worktree, sandbox, guard rules not loading), `state_invalid`, `contract` | The group's breaker and the global pause |
+| fault (a step after the work broke) | `publish`, `cleanup` | Nothing; recorded by type |
 | minor (expected, self-healing) | `cancelled`, an engine or Task Manager restart, `provider`, `paused`, `billing` | Nothing |
-| work failure | `timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals` | A retry; not a fault |
+| work failure | `timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals` | A retry; not a blocker |
 
-The block-only reasons about the work, not Komodo (`flap`, `needs_scope`, `context`, `merge_conflict`, `dependency`, `tester`, `flaky`, `retries`, `no_provider`, `pause_timeout`, `paid_refused`) have no tier. Rate limits stay with the pool halving.
+The block-only reasons about the work, not Komodo (`flap`, `needs_scope`, `context`, `merge_conflict`, `dependency`, `tester`, `flaky`, `retries`, `no_provider`, `pause_timeout`, `paid_refused`) have no tier. Rate limits stay with the pool halving. A lint, test or review failure is a work outcome and never a blocker.
 
-**Group cap.** `FaultStreak` counts panic-tier and fault-tier events on one group, from any agent, with no work outcome between them. A session that ends `done`, or for a reason that spends a retry (`timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals`), resets it, so only consecutive Komodo faults count. When a session crash makes it 3, the group blocks `crash` for a person: no retry is spent, the group does not fail, and a plain `run (id)` after the fix clears the streak and continues. A fault that already blocks the group under its own reason, such as `setup`, keeps that reason; it still adds to the streak. A crash found when the engine restarts is not a fault.
+**Error handler.** One instance in the Runtime Manager takes every error of a group and of the engine. It records the type (the `Reason`), the tier and the group in an `error.recorded` event, and keeps a count by type since the engine started. `status` shows that count as the table of errors by type, and the run metrics keep it per run. It keeps no file: after an engine restart its counts start at zero, and its events are the record.
 
-**Breaker.** One engine-wide instance counts panic-tier faults only. It opens when 3 faults of the same reason hit 3 different groups inside 10 minutes. While open, no group starts a new Build or Test and Review stage; running sessions continue, one `breaker.opened` event carries the reason and the groups, and status shows one alert line. Every 5 minutes it lets one held stage start as a probe. If the probe's session ends, or its group stops working, with no panic-tier fault, the breaker closes (`breaker.closed`) and every held group resumes. A panic-tier fault on the probe's group keeps it open for another 5 minutes. It spends no retry and changes no group's block state. It keeps no file: after an engine restart it starts closed, and its events are the record. The trip count, the window and the wait are constants in the engine: `[TODO: make the breaker trip count, window and probe wait configurable (G-289)]`.
+**Group breaker.** `FaultStreak` counts blocker errors on one group, from any agent, with no work outcome between them. A session that ends `done`, or for a reason that spends a retry (`timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals`), resets it, as does a plain `run (id)` on a blocked group. After the 1st blocker error the group waits 1 minute before its next session start, after the 2nd 2 minutes, after the 3rd 4 minutes. The 4th blocks the group `crash` for a person: no retry is spent and the group does not fail. A blocker that already blocks the group under its own reason, such as `setup`, keeps that reason; it still adds to the streak. A crash found when the engine restarts is not an error. The waits are engine constants held in memory: `[TODO: tune the per-group waits from error counts (G-294)]`.
 
-`[TODO: confirm that every spent retry, not only a wall failure, starts a new try with fresh wall time (G-290)]`. `[TODO: confirm that the probe is one stage order, which may start the tester and the reviewer together (G-291)]`. `[TODO: the engine's terminal check for --override on native Windows, untested (G-292)]`.
+**Global pause.** When one error type reaches 3 different groups inside 10 minutes, the handler pauses new Build and Test and Review session starts everywhere; running sessions continue. It publishes `starts.paused` with the type, the groups and the wait. It uses the same waits: after 1 minute held groups may start again (`starts.resumed`). If the same type reaches 3 groups again within 10 minutes of that resume, the next wait applies, 2 minutes and then 4. After the 4-minute wait fails the pause stays, status shows an alert, and only a person running `komodo run` ends it. A pause spends no retry and changes no group's block state.
+
+**Engine failure.** A failure of the engine itself is severe: a panic of a goroutine the engine started, a state store that refuses both a write and the `state_invalid` write after it, or an Event Bus that fails while the engine runs. It is counted under the type `engine`, published as `engine.failed`, stops every new session start at once and shows a severe alert in status. It never ends by itself; only a person running `komodo run` does.
+
+`[TODO: confirm that every spent retry, not only a wall failure, starts a new try with fresh wall time (G-290)]`. `[TODO: the engine's terminal check for --override on native Windows, untested (G-292)]`.
 
 #### Block rows
 
@@ -6657,7 +6664,7 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | `fault` | Build, Test and Review | Every link is unavailable or unauthorized, none limited | `no_provider` |
 | `fault` | Intake, Build, Test and Review | The brief exceeds half the context of every link | `context` |
 | `fault` | Intake, Build, Test and Review | The lease, branch, worktree or sandbox could not be set up, or the guard rules did not load; the detail names the rules file `internal/task/policy.json` | `setup`; no retry is spent |
-| `session.end` reason `crash` | Build, Test and Review | `FaultStreak` reached 3 | `crash`; no retry is spent and the group does not fail |
+| `session.end` reason `crash` | Build, Test and Review | `FaultStreak` reached 4 | `crash`; no retry is spent and the group does not fail |
 | `fault` | Commit | A push or pull request failed 3 times | `commit` |
 | `fault` | Commit | The branch conflicts with its base and one automatic merge did not resolve it | `merge_conflict` |
 | `fault` | Cleanup | Removal failed | `cleanup` |
@@ -6789,9 +6796,14 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A slot wait, a Paused interval and a downtime gap add 0 to `WallUsedS`.
 - An approved override returns the group to Build with `LastFindings` in the brief and orders no judge; a `continue` on any other block resumes at `Prior`.
 - A guard that fails to load blocks `setup` with the rules file named, spends no retry and adds 1 to `FaultStreak`.
-- Three session crashes in a row on one group block it `crash` with no retry spent and no failure; a session that ends `done` or in a charged failure of the work resets the streak, so a crash, a timeout and two more crashes do not block the group `crash`; a `continue` on that block clears it.
-- A tool-call error inside a session (a failing command, a bad regular expression) is not a reason: it reaches neither `FaultStreak` nor the breaker.
-- The breaker opens on 3 panic-tier faults of one reason on 3 groups inside 10 minutes; fault and minor tiers, one group alone, mixed reasons and faults more than 10 minutes apart never open it; a probe that ends clean closes it and a probe that hits a panic-tier fault keeps it open another 5 minutes.
+- Four session crashes in a row on one group block it `crash` with no retry spent and no failure; a session that ends `done` or in a charged failure of the work resets the streak, so a crash, a timeout and two more crashes do not block the group `crash`; a `continue` on that block clears it.
+- A tool-call error inside a session (a failing command, a bad regular expression) is not a reason: it reaches neither `FaultStreak` nor the error handler's blocker count.
+- A lint, test or review failure, a timeout, a rate limit and a restart are never blockers: `FaultStreak` stays 0 and no breaker counts them.
+- A table in the state package's tests lists every `Reason` and its tier; adding a reason without a tier fails it.
+- A group waits 1 minute after its 1st blocker error, 2 after its 2nd and 4 after its 3rd before its next session start; the 4th blocks it `crash` with no retry spent; a session that ends `done` or in a charged failure resets the count.
+- The global pause starts when one error type reaches 3 different groups inside 10 minutes; different types, one group alone and errors more than 10 minutes apart never start it. Its waits are 1, 2 and 4 minutes, a recurrence on 3 groups takes the next wait, and after the 4-minute wait fails it stays until a person runs `komodo run`.
+- A panic of a goroutine the engine started, a state store that fails twice and an Event Bus that fails while the engine runs are severe: starts stop at once, status shows the severe alert, a day of clock time does not resume them, and only a person running `komodo run` does.
+- `status` lists the error counts by type, and the run metrics keep them per run.
 - At engine start a saved group blocked on `retries` with a `Block.Until` gets its override timer from that deadline; a deadline already past lapses at once.
 - `run (id) --override` from a process with no controlling terminal is refused by the engine with `no_terminal`; with an unavailable peer check it is refused too.
 - For each reason in the continue table, `Next` on `continue` resets exactly the named fields and never `RetriesLeft`, and a second block of the same reason follows only when the cause remains.
@@ -7995,7 +8007,7 @@ type Counters struct {
 	Tries        int            `json:"tries"`         // the current try, from 1; rises on a spent retry or an override
 	WallBaseS    int64          `json:"wall_base_s"`   // wall_used_s when the current try began; only rises
 	WallExtTry   int            `json:"wall_ext_try"`  // the try the one wall-time extension was granted on; only rises
-	FaultStreak  int            `json:"fault_streak"`  // Komodo faults in a row with no session result between them
+	FaultStreak  int            `json:"fault_streak"`  // blocker errors in a row with no session result between them
 
 	FinalWallMin int `json:"final_wall_min,omitempty"` // the final try's minutes; 0 until an override; only rises
 	TokensUsed   int64          `json:"tokens_used"`   // tokens used by the group
@@ -15471,11 +15483,10 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-121"></a>G-121 | CLI validate | Whether a `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix; applies only if native Windows returns | Not planned; Windows runs through Windows Subsystem for Linux 2 | [1](#1-cli) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-tester) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file at the cleanup, phase 1; then 15.3 | [21](#21-verification-operations-and-cutover) |
-| <a id="g-289"></a>G-289 | Breaker | Whether the trip count (3), the window (10 minutes) and the probe wait (5 minutes) are settings | Owner decision; constants until then | [7](#7-runtime-manager) |
 | <a id="g-290"></a>G-290 | Retry budget | Whether every spent retry starts a new try with fresh wall time, as built, or only a wall failure does | Owner decision | [7](#7-runtime-manager) |
-| <a id="g-291"></a>G-291 | Breaker | Whether a probe may be one stage order, which starts the tester and the reviewer together, or must be one session | Owner decision | [7](#7-runtime-manager) |
 | <a id="g-292"></a>G-292 | CLI validate | Whether native Windows has a peer check for the engine's terminal rule on `run --override`; until then the engine refuses it there. Untested; same ground as [G-121](#g-121) | Applies only if native Windows returns | [7](#7-runtime-manager) |
 | <a id="g-293"></a>G-293 | CLI validate | The range of the final try's working time on `run --override`: `limits.group_wall_min` has no maximum to borrow, so 1 to 480 minutes is used until the owner sets it | Owner decision | [1](#1-cli) |
+| <a id="g-294"></a>G-294 | Error handling | Whether the per-group waits (1, 2 and 4 minutes) and the global pause waits should be tuned from the error counts by type; they are engine constants until then | Owner decision after counts are collected | [7](#7-runtime-manager) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
