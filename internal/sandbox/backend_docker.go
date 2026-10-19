@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -400,21 +399,6 @@ func inContainer(worktree, p string) string {
 		return filepath.ToSlash(filepath.Join(workDir, rel))
 	}
 	return p
-}
-
-// identify returns the identity of the file at a path, or false when it is not there.
-func identify(path string) (fileID, bool) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return fileID{}, false
-	}
-
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fileID{}, false
-	}
-
-	return fileID{dev: uint64(st.Dev), ino: uint64(st.Ino)}, true
 }
 
 // toolAdditions returns the commands that add the tools the official image of a language lacks.

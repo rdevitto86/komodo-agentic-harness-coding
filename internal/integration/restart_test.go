@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package integration holds tests that cross several subsystems.
 package integration
 

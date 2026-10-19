@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"weak"
 )
@@ -89,11 +88,11 @@ func confined(ctx context.Context, l launch) *exec.Cmd {
 	}
 
 	cmd.Env = append(slices.Clone(env), l.Marker)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = ownGroup()
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
 			if l.Reap {
-				_ = cmd.Process.Signal(syscall.SIGTERM)
+				terminate(cmd.Process)
 				time.Sleep(reapWait)
 			}
 			killTree(cmd.Process.Pid, l.Marker)
@@ -118,19 +117,19 @@ func confined(ctx context.Context, l launch) *exec.Cmd {
 // killTree kills the command's process group and then, in rounds, every process that descends from it or carries its marker,
 // so a child that started its own session dies too.
 func killTree(root int, marker string) {
-	_ = syscall.Kill(-root, syscall.SIGKILL)
+	killGroup(root)
 	self := os.Getpid()
 
 	for round := 0; round < 5; round++ {
 		out, err := psTable()
 		if err != nil {
-			_ = syscall.Kill(root, syscall.SIGKILL)
+			killPID(root)
 			return
 		}
 
 		killed := 0
 		for _, pid := range selectVictims(parseProcs(out), root, marker) {
-			if pid != self && pid > 1 && syscall.Kill(pid, syscall.SIGKILL) == nil {
+			if pid != self && pid > 1 && killPID(pid) {
 				killed++
 			}
 		}

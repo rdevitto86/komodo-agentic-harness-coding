@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -203,7 +204,7 @@ func TestDockerCommandIsADockerExecWithTheCleanEnvironment(t *testing.T) {
 	if strings.Join(tail, " ") != name+" timeout -k 5 90 go test ./..." {
 		t.Fatalf("command tail %v", tail)
 	}
-	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+	if !reflect.DeepEqual(cmd.SysProcAttr, ownGroup()) {
 		t.Fatal("the docker client must lead its own process group")
 	}
 	// No timeout means no timeout wrapper.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -71,8 +72,7 @@ func TestBubblewrapCommandWrapsTheArgv(t *testing.T) {
 	if indexOf(args, "--unshare-net") < 0 || indexOf(args, "--chdir", s.Worktree) < 0 {
 		t.Fatalf("args %v", args)
 	}
-	if !contains(cmd.Env, "HOME="+s.Writable[0]) || contains(cmd.Env, "TOKEN=x") || cmd.SysProcAttr == nil ||
-		!cmd.SysProcAttr.Setpgid {
+	if !contains(cmd.Env, "HOME="+s.Writable[0]) || contains(cmd.Env, "TOKEN=x") || !reflect.DeepEqual(cmd.SysProcAttr, ownGroup()) {
 		t.Fatalf("env %v", cmd.Env)
 	}
 }
