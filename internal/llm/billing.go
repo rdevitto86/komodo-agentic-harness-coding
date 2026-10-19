@@ -14,6 +14,9 @@ func Classify(l Link, auth AuthStatus) string {
 	if l == ClaudeCLI && auth.AuthMethod == "claude.ai" && subscriptionTypes[auth.SubscriptionType] {
 		return CostSubscription
 	}
+	if l == OpenAISubscription && auth.AuthMethod == "chatgpt" {
+		return CostSubscription
+	}
 	return CostPaid
 }
 

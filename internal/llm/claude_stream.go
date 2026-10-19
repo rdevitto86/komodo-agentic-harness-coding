@@ -20,6 +20,8 @@ type claudeStream struct {
 	now func() time.Time
 	// the agent's result schema; the structured output is checked against it
 	schema  json.RawMessage
+	parse   func(line []byte) StreamEvent    // maps one output line to an event
+	limit   func(StreamEvent) *ProviderLimit // decides whether an event ends the session on a provider limit
 	events  chan StreamEvent
 	quit    chan struct{}
 	pending []StreamEvent
@@ -31,7 +33,7 @@ type claudeStream struct {
 	once    sync.Once
 }
 
-// newClaudeStream starts the reader goroutine over the program's output.
+// newClaudeStream starts the reader goroutine over the claude program's output.
 func newClaudeStream(
 	p *proc,
 	id string,
@@ -39,14 +41,29 @@ func newClaudeStream(
 	rec Recoverer,
 	schema json.RawMessage,
 ) *claudeStream {
-	s := &claudeStream{
-		p:      p,
-		id:     id,
-		now:    now,
-		schema: schema,
-		events: make(chan StreamEvent, 64),
-		quit:   make(chan struct{}),
+	s := &claudeStream{}
+	parse := func(line []byte) StreamEvent {
+		ev, _ := parseClaudeLine(line, id)
+		return ev
 	}
+
+	return startProcStream(s, p, id, now, rec, schema, parse, s.limitOf)
+}
+
+// startProcStream fills s and starts the reader goroutine over a program's output lines.
+func startProcStream(
+	s *claudeStream,
+	p *proc,
+	id string,
+	now func() time.Time,
+	rec Recoverer,
+	schema json.RawMessage,
+	parse func(line []byte) StreamEvent,
+	limit func(StreamEvent) *ProviderLimit,
+) *claudeStream {
+	s.p, s.id, s.now, s.schema, s.parse, s.limit = p, id, now, schema, parse, limit
+	s.events = make(chan StreamEvent, 64)
+	s.quit = make(chan struct{})
 
 	go func() {
 		defer rec.Recover(llmSource, nil)
@@ -85,7 +102,7 @@ func (s *claudeStream) Next(ctx context.Context) (StreamEvent, error) {
 				io.ErrUnexpectedEOF,
 			)
 		}
-		if pl := s.limitOf(ev); pl != nil {
+		if pl := s.limit(ev); pl != nil {
 			s.mu.Lock()
 			s.limited = true
 			s.mu.Unlock()
@@ -163,7 +180,7 @@ func (s *claudeStream) read() {
 	for {
 		line, err := s.p.out.ReadBytes('\n')
 		if t := bytes.TrimSpace(line); len(t) > 0 {
-			ev, _ := parseClaudeLine(t, s.id)
+			ev := s.parse(t)
 			select {
 			case s.events <- ev:
 			case <-s.quit:

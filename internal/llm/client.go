@@ -22,12 +22,12 @@ const (
 // Link names one way to reach a model.
 type Link string
 
-// The links; the two OpenAI links are named in the interface and not built.
+// The links.
 const (
 	ClaudeCLI          Link = "claude-cli"          // the Claude subscription, through the claude program
 	AnthropicAPI       Link = "anthropic-api"       // the paid Anthropic HTTP interface
-	OpenAISubscription Link = "openai-subscription" // OpenAI's subscription; in the interface, not built
-	OpenAIAPI          Link = "openai-api"          // OpenAI's paid HTTP interface; in the interface, not built
+	OpenAISubscription Link = "openai-subscription" // OpenAI's subscription, through the codex program
+	OpenAIAPI          Link = "openai-api"          // OpenAI's paid HTTP interface
 	Local              Link = "local"               // the optional free model on this machine
 )
 
@@ -164,14 +164,10 @@ func (c *Client) Resume(ctx context.Context, s Session, in Input) (Stream, error
 	return p.Resume(ctx, s, in)
 }
 
-// provider returns the adapter of a link, ErrNotYet for an OpenAI link and ErrUnavailable for any other missing one.
+// provider returns the adapter of a link, or ErrUnavailable when this machine registered none.
 func (c *Client) provider(l Link) (Provider, error) {
 	if p, ok := c.providers[l]; ok {
 		return p, nil
-	}
-	switch l {
-	case OpenAISubscription, OpenAIAPI:
-		return nil, fmt.Errorf("%s: %w", l, ErrNotYet)
 	}
 	return nil, fmt.Errorf("%s: %w", l, ErrUnavailable)
 }

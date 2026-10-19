@@ -377,7 +377,10 @@ func (p *LocalProvider) load(ctx context.Context, model string) error {
 }
 
 // plainBlocks returns the brief as one text block, with no cache markers.
-func (p *LocalProvider) plainBlocks(s Session) ([]block, error) {
+func (p *LocalProvider) plainBlocks(s Session) ([]block, error) { return plainBlocks(s) }
+
+// plainBlocks returns a session's brief as one text block, with no cache markers.
+func plainBlocks(s Session) ([]block, error) {
 	var parts []string
 	for _, x := range s.Parts {
 		if x != "" {

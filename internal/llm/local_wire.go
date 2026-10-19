@@ -12,9 +12,27 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
+// chatSender reaches one OpenAI-compatible server; the local and the paid OpenAI adapters each fill one.
+type chatSender struct {
+	hc      *core.Client
+	ep      core.Endpoint
+	base    string // the /v1 base without a trailing slash
+	request func(ctx context.Context, method, target string, body []byte) (*http.Request, error)
+	fail    func(error) error            // maps a failed call to the loop's errors; nil keeps the error
+	rates   func(http.Header) []Headroom // reads rate-limit headers off a response; nil reads none
+}
+
+// chatTuning holds the request fields that differ between servers; the zero value is the local server's.
+type chatTuning struct {
+	systemRole string // role of the system message; empty means "system"
+	maxTokens  int    // max_completion_tokens; 0 leaves the server's default
+	effort     string // reasoning_effort; empty sends none
+}
+
 // chatWire sends one turn over the OpenAI-compatible chat interface.
 type chatWire struct {
-	p      *LocalProvider
+	send   chatSender
+	tune   chatTuning
 	model  string
 	system string
 	tools  []ToolDef
@@ -28,17 +46,20 @@ func (w *chatWire) turn(ctx context.Context, req turnRequest, h turnHooks) (turn
 		return turnResult{}, err
 	}
 
-	hr, err := w.p.request(ctx, http.MethodPost, w.p.base+"/chat/completions", body)
+	hr, err := w.send.request(ctx, http.MethodPost, w.send.base+"/chat/completions", body)
 	if err != nil {
 		return turnResult{}, err
 	}
 
 	acc := &chatAcc{}
-	resp, err := w.p.hc.Stream(ctx, w.p.ep, hr, core.StreamHooks{
+	resp, err := w.send.hc.Stream(ctx, w.send.ep, hr, core.StreamHooks{
 		Activity: h.Activity, Event: acc.event, Restart: acc.reset,
 		Final: func(e core.SSEEvent) bool { return strings.TrimSpace(e.Data) == "[DONE]" },
 	})
 	if err != nil {
+		if w.send.fail != nil {
+			err = w.send.fail(err)
+		}
 		return turnResult{}, err
 	}
 
@@ -52,6 +73,10 @@ func (w *chatWire) turn(ctx context.Context, req turnRequest, h turnHooks) (turn
 		})
 	}
 
+	if w.send.rates != nil {
+		res.Headroom = append(res.Headroom, w.send.rates(resp.Header)...)
+	}
+
 	return res, nil
 }
 
@@ -59,9 +84,12 @@ func (w *chatWire) turn(ctx context.Context, req turnRequest, h turnHooks) (turn
 func (w *chatWire) buildRequest(req turnRequest) ([]byte, error) {
 	r := chatRequest{
 		Model:         w.model,
-		Messages:      toChat(w.system, req.Messages),
+		Messages:      toChat(w.tune.systemRole, w.system, req.Messages),
 		Stream:        true,
 		StreamOptions: map[string]any{"include_usage": true},
+
+		MaxCompletionTokens: w.tune.maxTokens,
+		ReasoningEffort:     w.tune.effort,
 	}
 	if req.Final {
 		if len(w.schema) > 0 {
@@ -113,6 +141,9 @@ type chatRequest struct {
 	StreamOptions  map[string]any `json:"stream_options,omitempty"`
 	Tools          []chatTool     `json:"tools,omitempty"`
 	ResponseFormat map[string]any `json:"response_format,omitempty"`
+
+	MaxCompletionTokens int    `json:"max_completion_tokens,omitempty"`
+	ReasoningEffort     string `json:"reasoning_effort,omitempty"`
 }
 
 // chatTool is one tool definition of the chat interface.
@@ -146,6 +177,7 @@ func (a *chatAcc) event(e core.SSEEvent) error {
 		Choices []struct {
 			Delta struct {
 				Content   string `json:"content"`
+				Refusal   string `json:"refusal"`
 				ToolCalls []struct {
 					Index    int    `json:"index"`
 					ID       string `json:"id"`
@@ -160,6 +192,9 @@ func (a *chatAcc) event(e core.SSEEvent) error {
 		Usage *struct {
 			Prompt     int `json:"prompt_tokens"`
 			Completion int `json:"completion_tokens"`
+			Details    struct {
+				Cached int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal([]byte(e.Data), &c) != nil {
@@ -167,10 +202,14 @@ func (a *chatAcc) event(e core.SSEEvent) error {
 	}
 	if c.Usage != nil {
 		a.usage = Usage{TokensIn: c.Usage.Prompt, TokensOut: c.Usage.Completion}
+		if cached := c.Usage.Details.Cached; cached > 0 && cached <= c.Usage.Prompt {
+			a.usage.TokensIn, a.usage.CacheRead = c.Usage.Prompt-cached, cached
+		}
 	}
 
 	for _, ch := range c.Choices {
 		a.text.WriteString(ch.Delta.Content)
+		a.text.WriteString(ch.Delta.Refusal)
 
 		for _, tc := range ch.Delta.ToolCalls {
 			if a.calls == nil {
@@ -250,7 +289,13 @@ func (a *chatAcc) result() turnResult {
 
 // newWire gathers what every request of one session repeats.
 func (p *LocalProvider) newWire(s Session) *chatWire {
-	w := &chatWire{p: p, model: s.Model, schema: s.Schema}
+	send := chatSender{hc: p.hc, ep: p.ep, base: p.base, request: p.request}
+	return newChatWire(send, chatTuning{}, s)
+}
+
+// newChatWire reads the session's system text and tools into a wire over the given server.
+func newChatWire(send chatSender, tune chatTuning, s Session) *chatWire {
+	w := &chatWire{send: send, tune: tune, model: s.Model, schema: s.Schema}
 	if b, err := os.ReadFile(filepath.Join(s.Dir, "system.md")); err == nil {
 		w.system = string(b)
 	}
@@ -259,10 +304,13 @@ func (p *LocalProvider) newWire(s Session) *chatWire {
 }
 
 // toChat maps the loop's messages to the chat interface's.
-func toChat(system string, msgs []message) []chatMessage {
+func toChat(systemRole, system string, msgs []message) []chatMessage {
 	var out []chatMessage
 	if system != "" {
-		out = append(out, chatMessage{Role: "system", Content: system})
+		if systemRole == "" {
+			systemRole = "system"
+		}
+		out = append(out, chatMessage{Role: systemRole, Content: system})
 	}
 
 	for _, m := range msgs {
