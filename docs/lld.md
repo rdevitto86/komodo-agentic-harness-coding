@@ -11741,7 +11741,7 @@ The checks are the first step of the Tester's turn. They cost no model tokens: G
 | `done_when` | Every task's completion command is rerun in the sandbox on the work under test. |
 | `scope` | Every changed file is in the effective file list or is a test sibling (`OutOfScope`). |
 | `secrets` | The diff's added lines are scanned with the guard's secret-content patterns, the list guard row G4 uses ([Task Manager](#11-task-manager)). |
-| `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. |
+| `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. It also fails when the change adds executable lines and none is covered; the added lines no test ran, as `file:line-range`, go to the Reviewer's `checks` slot. |
 | `baseline` | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns. |
 | `impact_set` | The affected tests. Go: the tests of every package that imports a changed package. Other languages: the full `test` class. |
 | `flake` | Any failing test is rerun twice alone; see the flake rule below. |
@@ -11864,9 +11864,15 @@ func CaseCollisions(paths []string) [][]string {
 
 Each default tool reports a whole-repository line percent in the field named. Verified by [G-169](#g-169).
 
+Go, Python and Java and Kotlin also report which lines ran: the Go profile blocks, the `files.*.executed_lines` and `missing_lines` of the Python report, and the `line` entries of the JaCoCo report. The coverage step intersects those lines with the lines the diff adds.
+
+[TODO: changed-line coverage for JavaScript and TypeScript, whose `json-summary` report holds totals only ([G-293](#g-293))]
+
+[TODO: changed-line coverage for Rust, whose `--summary-only` report holds totals only ([G-294](#g-294))]
+
 | Language | Command | Percent read from |
 |---|---|---|
-| Go | `go test -coverpkg=./... -coverprofile=c.out ./...` | `go tool cover -func=c.out`, `total:` |
+| Go | `go test -coverpkg=./... -coverprofile=c.out ./...`, then `cat c.out` | `go tool cover -func=c.out`, `total:` |
 | Python | `coverage run -m pytest`, then `coverage json` | `totals.percent_covered` |
 | JavaScript, TypeScript | `c8 --reporter=json-summary` around `test` | `total.lines.pct` |
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
@@ -12067,7 +12073,7 @@ The Reviewer has no write tool; `diff` and `git_read` are read-only git. Its `ru
 | `findings` | Open findings, on a re-review | Optional |
 | `callers` | Go callers of changed symbols, found with `go/packages`; other languages use `search` | Optional |
 | `repo_context`, `standards`, `specs`, `repo_map` | Repository guidance, standards skills, spec anchors, ranked symbol graph | Optional |
-| `checks` | The clean mechanical check result, one line per step, with its warnings and flaky tests | Required |
+| `checks` | The clean mechanical check result, one line per step, with its warnings and flaky tests, and the added lines no test ran as `file:line-range` | Required |
 
 A Reviewer brief holds 0 bytes of the Builder's prose.
 
@@ -12111,7 +12117,7 @@ type Applies struct {
 | `check` | One sentence stating what must hold. |
 | `evidence` | The line a finding must quote. |
 
-A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a severity is unknown or a field is empty. The catalogs ship with one short rule per item of the Checks column in 14.5; the full rule text is still to author ([G-16](#g-16)).
+A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a severity is unknown or a field is empty. Each rule's section holds its full text: what to look for, how to check it and what to quote. New rules take the next number in their lens; a released number is never reused.
 
 The values below are illustrative:
 
@@ -12334,17 +12340,18 @@ sequenceDiagram
 
 #### Lens selection and profiles
 
-`correctness`, `readiness` and `quality` always apply; each other lens applies when the diff meets the condition in its `applies` filter.
+`correctness`, `security`, `performance`, `readiness` and `quality` always apply; each other lens applies when the diff meets the condition in its `applies` filter.
 
 | Lens | Applies when | Checks |
 |---|---|---|
-| `correctness` | Always | Logic, error paths, nil and bounds, resource release |
-| `security` | Always for the install and update commands, the model client, the Task Manager's guard and tools, the sandbox and the Commit Handler; else on auth, crypto, exec, net, path or environment code | Injection, secrets, path escape, unsafe exec, TLS |
+| `correctness` | Always | Logic, error paths, nil and bounds, resource release, boundary values, partial failure |
+| `security` | Always | Injection, secrets, path escape, unsafe exec, TLS |
 | `spec` | A task cites a spec anchor | The diff matches the cited section, which is in the brief; a mismatch is `not_met`, not a finding |
 | `contract` | An exported symbol changed (Go through `go/ast`; other languages by export-line diff) | Every caller still compiles and a task intends the change |
 | `concurrency` | The diff adds `go`, `chan`, `sync`, `atomic`, threads or async | Data races, lock order, cancellation, goroutine leaks |
+| `performance` | Always | Unbounded growth, whole-file or whole-table input and output per call, repeated work in loops, missing limits |
 | `platform` | `_darwin.go`, `_linux.go`, path or shell handling | Separators, case, line endings, signals |
-| `config` | Embedded JSON defaults or the guard policy file | Hard limits kept, schema version bumped, gate fixture updated |
+| `config` | A changed JSON, YAML or TOML file | Hard limits kept, schema version bumped, gate fixture updated |
 | `readiness` | Always | Tests for changed behaviour; docs and changelog touched when the task says so |
 | `quality` | Always | Naming, duplication, comment rules from the comments standard |
 | `economy` | Economy profile only | The merged checklist of the rows above at reduced depth |
@@ -12514,7 +12521,11 @@ const (
 - A quote that differs only in leading whitespace verifies; one that differs in letter case does not.
 - `ExactlyOnce` refuses a skipped and a repeated task identifier.
 - `Decide` returns `approve` only for two passing verdicts, and `block` with `flaky` for a split.
-- `review.mode: economy` selects the merged `economy` lens and the full `security` lens where it applies.
+- `review.mode: economy` selects the merged `economy` lens and the `security` lens.
+- `security` and `performance` are selected for a diff in any path.
+- A `performance` finding is accepted; no lens names a path of one repository.
+- A diff whose added branch no test runs puts its `file:line` in the `checks` slot.
+- A change that adds executable lines and covers none of them fails the coverage step.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
 - A seeded bug in the fixture is found and verified.
@@ -12529,9 +12540,7 @@ const (
 
 ### 14.10 Open Gaps
 
-| Gap | Question | Used in |
-|---|---|---|
-| [G-16](#g-16) | The rule text of each lens catalog | 14.3 |
+No open gaps.
 
 The Reviewer's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 15. Commit Handler
@@ -15455,7 +15464,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-11"></a>G-11 | Sandbox | Docker Desktop bind-mount copy time for a 1 GB `node_modules` | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
 | <a id="g-12"></a>G-12 | Sandbox | Whether a copied Rust `target/` would be reused or rebuilt; until the spike reports, the design shares one `CARGO_TARGET_DIR` per group | Spike, phase 2 | [11](#11-task-manager) |
 | <a id="g-13"></a>G-13 | Guard, skills, steering phrases | The steering-phrase list is 6 entries by judgment | Tune the list from `doctor` warnings and dropped-paragraph warnings, phase 3 | [11](#11-task-manager), [6](#6-context-manager) |
-| <a id="g-16"></a>G-16 | Review | The rule text of each lens catalog; the identifier format, the field meanings and the outline are in 9.3 | Authoring task, phase 7; security lens reviewed by the owner | [6](#6-context-manager), [13](#13-tester) |
 | <a id="g-17"></a>G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with usage metrics on | Measured in phase 7 | [13](#13-tester) |
 | <a id="g-18"></a>G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 | [5](#5-intake-handler) |
 | <a id="g-19"></a>G-19 | Timing | The 10,000-event replay under 1 s and the 50 ms short-verb budget | Gate timing, phase 6 | [0](#0-front-matter-and-code-structure), [1](#1-cli), [4](#4-event-bus), [6](#6-context-manager), [18](#18-metrics-service), [10](#10-state-manager) |
@@ -15469,6 +15477,8 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-72"></a>G-72 | Providers | Confirming the `anthropic.go` and `openai.go` wire defaults stated in 5.3 and 7.5: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and the `-limit` header that gives the window total. | Later minor, deferred by owner decision 2026-10-18 | [11](#11-task-manager) |
 | <a id="g-121"></a>G-121 | CLI validate | Whether a `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix; applies only if native Windows returns | Not planned; Windows runs through Windows Subsystem for Linux 2 | [1](#1-cli) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-tester) |
+| <a id="g-293"></a>G-293 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 9.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
+| <a id="g-294"></a>G-294 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file at the cleanup, phase 1; then 15.3 | [21](#21-verification-operations-and-cutover) |
 | <a id="g-289"></a>G-289 | Breaker | Whether the trip count (3), the window (10 minutes) and the probe wait (5 minutes) are settings | Owner decision; constants until then | [7](#7-runtime-manager) |
 | <a id="g-290"></a>G-290 | Retry budget | Whether every spent retry starts a new try with fresh wall time, as built, or only a wall failure does | Owner decision | [7](#7-runtime-manager) |
