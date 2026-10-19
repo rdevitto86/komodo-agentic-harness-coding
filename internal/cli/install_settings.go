@@ -121,25 +121,24 @@ type settingsEntry struct {
 	id    string // the manifest name of the entry
 	list  string // the dotted path of the list that holds it
 	value string // the entry as compact JSON
-	hook  bool   // the entry is the guard command, wherever its group sits in the list
 }
 
 // settingsEntries are the entries step 6 owns, in write order.
 var settingsEntries = []settingsEntry{
-	{"permissions.allow Bash(komodo *)", "permissions.allow", `"Bash(komodo *)"`, false},
-	{"permissions.deny Bash(komodo config set*)", "permissions.deny", `"Bash(komodo config set*)"`, false},
-	{"permissions.deny Bash(komodo install*)", "permissions.deny", `"Bash(komodo install*)"`, false},
-	{"permissions.deny Bash(komodo update*)", "permissions.deny", `"Bash(komodo update*)"`, false},
-	{
-		"hooks.PreToolUse " + guardCommand,
-		"hooks.PreToolUse",
-		`{"type":"command","command":"` + guardCommand + `","onFailure":"block"}`,
-		true,
-	},
+	{"permissions.allow Bash(komodo *)", "permissions.allow", `"Bash(komodo *)"`},
+	{"permissions.deny Bash(komodo config set*)", "permissions.deny", `"Bash(komodo config set*)"`},
+	{"permissions.deny Bash(komodo install*)", "permissions.deny", `"Bash(komodo install*)"`},
+	{"permissions.deny Bash(komodo update*)", "permissions.deny", `"Bash(komodo update*)"`},
 }
 
-// guardMatcher is the matcher of the group install adds when no group runs the guard.
-const guardMatcher = "Bash|Edit|Write"
+const (
+	// The settings list an earlier install wrote its guard hook to.
+	legacyHookList = "hooks.PreToolUse"
+	// The command of that hook, whose verb no longer exists.
+	legacyHookCommand = "komodo internal guard"
+	// The manifest name of that hook entry.
+	legacyHookEntry = legacyHookList + " " + legacyHookCommand
+)
 
 // settingsEntryOf returns the owned entry with the manifest name id.
 func settingsEntryOf(id string) (settingsEntry, bool) {
@@ -218,7 +217,7 @@ func (o *obj) setList(path string, l []json.RawMessage) error {
 	return nil
 }
 
-// find returns the index of the list element equal to the entry's value, or -1; the hook entry is found by findGuard.
+// find returns the index of the list element equal to the entry's value, or -1.
 func (e settingsEntry) find(l []json.RawMessage) int {
 	for i, el := range l {
 		if compact(el) == e.value {
@@ -237,37 +236,16 @@ func hookCommand(h json.RawMessage) string {
 	return x.Command
 }
 
-// matcherCovers reports whether a hook matcher runs for every tool the guard matcher names; an empty or * matcher runs for
-// all.
-func matcherCovers(m string) bool {
-	if m == "" || m == "*" {
-		return true
-	}
-
-	have := strings.Split(m, "|")
-	for _, want := range strings.Split(guardMatcher, "|") {
-		if !slices.Contains(have, want) {
-			return false
-		}
-	}
-	return true
-}
-
-// findGuard locates the guard command inside a group of a PreToolUse list whose matcher covers the guard matcher.
-func findGuard(l []json.RawMessage) (gi, hi int, group *obj, hooks []json.RawMessage) {
+// findLegacyHook locates the hook an earlier install wrote, inside whichever group of the list now holds it.
+func findLegacyHook(l []json.RawMessage) (gi, hi int, group *obj, hooks []json.RawMessage) {
 	for gi, el := range l {
 		g, err := parseObj(el)
 		if err != nil {
 			continue
 		}
 
-		var matcher string
-		if m, ok := g.get("matcher"); ok {
-			_ = json.Unmarshal(m, &matcher)
-		}
-
 		raw, ok := g.get("hooks")
-		if !ok || !matcherCovers(matcher) {
+		if !ok {
 			continue
 		}
 
@@ -277,7 +255,7 @@ func findGuard(l []json.RawMessage) (gi, hi int, group *obj, hooks []json.RawMes
 		}
 
 		for hi, h := range hs {
-			if hookCommand(h) == guardCommand {
+			if hookCommand(h) == legacyHookCommand {
 				return gi, hi, g, hs
 			}
 		}
@@ -287,25 +265,29 @@ func findGuard(l []json.RawMessage) (gi, hi int, group *obj, hooks []json.RawMes
 
 // settingsState reports whether the entry is in the file and the fingerprint of what is there.
 func settingsState(path, id string) diskState {
-	e, ok := settingsEntryOf(id)
-	if !ok {
-		return diskState{}
-	}
-
 	doc, err := loadSettings(path)
 	if err != nil {
 		return diskState{}
 	}
 
-	l, err := doc.list(e.list)
-	if err != nil {
+	if id == legacyHookEntry {
+		l, err := doc.list(legacyHookList)
+		if err != nil {
+			return diskState{}
+		}
+		if gi, hi, _, hs := findLegacyHook(l); gi >= 0 {
+			return diskState{exists: true, hash: sha([]byte(compact(hs[hi])))}
+		}
 		return diskState{}
 	}
 
-	if e.hook {
-		if gi, hi, _, hs := findGuard(l); gi >= 0 {
-			return diskState{exists: true, hash: sha([]byte(compact(hs[hi])))}
-		}
+	e, ok := settingsEntryOf(id)
+	if !ok {
+		return diskState{}
+	}
+
+	l, err := doc.list(e.list)
+	if err != nil {
 		return diskState{}
 	}
 	if i := e.find(l); i >= 0 {
@@ -331,8 +313,7 @@ func saveSettings(path string, doc *obj) error {
 	return writeText(path, out.String()+"\n")
 }
 
-// putSettings adds the entry to the settings file. The guard command is set inside the group that already runs it, or in a
-// group of its own.
+// putSettings adds the entry to the settings file.
 func putSettings(path, id string) error {
 	e, ok := settingsEntryOf(id)
 	if !ok {
@@ -349,20 +330,8 @@ func putSettings(path, id string) error {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 
-	switch gi, hi, g, hs := findGuard(l); {
-	case e.hook && gi >= 0:
-		hs[hi] = json.RawMessage(e.value)
-		g.set("hooks", joinList(hs))
-		l[gi] = g.bytes()
-	case e.hook:
-		g := newObj()
-		g.set("matcher", quote(guardMatcher))
-		g.set("hooks", joinList([]json.RawMessage{json.RawMessage(e.value)}))
-		l = append(l, g.bytes())
-	default:
-		if i := e.find(l); i < 0 {
-			l = append(l, json.RawMessage(e.value))
-		}
+	if e.find(l) < 0 {
+		l = append(l, json.RawMessage(e.value))
 	}
 
 	if err := doc.setList(e.list, l); err != nil {
@@ -371,9 +340,13 @@ func putSettings(path, id string) error {
 	return saveSettings(path, doc)
 }
 
-// dropSettings removes the entry from the settings file. For the guard it removes only that command,
+// dropSettings removes the entry from the settings file. The hook an earlier install wrote loses only its command,
 // and its group only when no other hook is left.
 func dropSettings(path, id string) error {
+	if id == legacyHookEntry {
+		return dropLegacyHook(path)
+	}
+
 	e, ok := settingsEntryOf(id)
 	if !ok {
 		return fmt.Errorf("unknown settings entry %q", id)
@@ -389,26 +362,44 @@ func dropSettings(path, id string) error {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 
-	if e.hook {
-		gi, hi, g, hs := findGuard(l)
+	i := e.find(l)
+	if i < 0 {
+		return nil
+	}
+
+	if err := doc.setList(e.list, slices.Delete(slices.Clone(l), i, i+1)); err != nil {
+		return err
+	}
+	return saveSettings(path, doc)
+}
+
+// dropLegacyHook removes every copy of the command an earlier install wrote, and a group only when no other hook is left.
+func dropLegacyHook(path string) error {
+	doc, err := loadSettings(path)
+	if err != nil {
+		return err
+	}
+
+	l, err := doc.list(legacyHookList)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+
+	for {
+		gi, hi, g, hs := findLegacyHook(l)
 		if gi < 0 {
-			return nil
+			break
 		}
+
 		if hs = slices.Delete(slices.Clone(hs), hi, hi+1); len(hs) == 0 {
 			l = slices.Delete(slices.Clone(l), gi, gi+1)
 		} else {
 			g.set("hooks", joinList(hs))
 			l[gi] = g.bytes()
 		}
-	} else {
-		i := e.find(l)
-		if i < 0 {
-			return nil
-		}
-		l = slices.Delete(slices.Clone(l), i, i+1)
 	}
 
-	if err := doc.setList(e.list, l); err != nil {
+	if err := doc.setList(legacyHookList, l); err != nil {
 		return err
 	}
 	return saveSettings(path, doc)

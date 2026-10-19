@@ -969,7 +969,7 @@ func (m *Manager) runCommit(ctx context.Context) error {
 		},
 		Facts: commit.PRFacts{TasksClosed: m.Progress().TasksDone},
 	}
-	m.fact("group.approved", bus.GroupApproved{Tree: tree})
+	m.fact("group.approved", bus.GroupApproved{})
 	if err := m.report(ctx); err != nil {
 		return err
 	}

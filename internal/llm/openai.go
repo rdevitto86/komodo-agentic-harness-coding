@@ -1,6 +1,6 @@
 package llm
 
-// OpenAIModel is one OpenAI model a link runs. The catalog lists no OpenAI model, so the caller names each one.
+// OpenAIModel is one OpenAI model a link runs; Catalog.OpenAIModels builds the set from the catalog's OpenAI rows.
 type OpenAIModel struct {
 	ID        string  // exact model identifier, such as the one the Models interface lists
 	Window    int     // context window in tokens; 0 means DefaultWindow

@@ -159,7 +159,7 @@ The `embed/` folder holds every text and data file the harness reads from its ow
 | `event.schema.json`, `state.schema.json`, `machine.schema.json` | The export formats of events, group state and machine records | [4](#4-event-bus), [10](#10-state-manager) |
 | `ui/` | The dashboard page and its one script | [1](#1-cli) |
 
-Nothing under `embed/` is copied into a host. `install` writes only the Komodo block, the `@AGENTS.md` import and the guard hook entry ([1.3](#13-data-model)); the agents, skills and templates stay inside the binary.
+Nothing under `embed/` is copied into a host. `install` writes only the Komodo block, the `@AGENTS.md` import and the permission entries ([1.3](#13-data-model)); the agents, skills and templates stay inside the binary.
 
 ## 1. CLI
 
@@ -206,7 +206,7 @@ Go package `internal/cli`, plus the program entry point.
 |---|---|
 | `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned; also runs the hidden `internal engine` verb in the foreground |
 | `cmd/komodo/wire.go` | The engine process's shared parts: event registration, settings, bus, model links, sandbox backends, the lease and machine records, and one kit per repository |
-| `cmd/komodo/tools.go` | The hidden `internal tools` verb: loads one session's tool server inputs, binds the tools and serves them over standard input and output |
+| `cmd/komodo/tools.go` | The hidden `internal tools` verb: serves the Model Context Protocol over standard input and output and relays every request to the engine's control socket, holding no state |
 | `cmd/komodo/wire_dump_unix.go`, `wire_dump_windows.go` | The goroutine dump on a signal, on Unix only |
 | `cmd/komodo/wire_engine.go` | `buildEngine`: the Runtime Manager's dependencies, the hub that routes its calls to the repository they name, the per-repository kit and the plan router |
 | `cmd/komodo/wire_tasks.go` | Builds each group's Task Manager from the group spec and the task lists, serves it over the command and reply channels, and adapts the Commit Handler to the group |
@@ -231,7 +231,6 @@ Go package `internal/cli`, plus the program entry point.
 | `internal/cli/ui.go`, `ui_view.go` | `ui`: the dashboard server (routes, the event stream, the host check) and the state it draws, read from the engine with `status` and `replay` |
 | `embed/ui/` | `index.html` and `ui.js`, the dashboard page and its one script, compiled into the binary |
 | `internal/cli/stubs.go` | The hidden `internal engine` verb's handler and the not-built-yet `login` |
-| `internal/cli/guard.go` | The hidden `internal guard` verb: reads Claude Code's tool call on standard input, allows with exit 0 and refuses with exit 2 |
 | `internal/cli/tools.go` | The hook that runs the hidden `internal tools` verb, the session's tool server |
 | `internal/cli/print.go` | The line printed for a recorded event, and the fault built from an error event |
 | `internal/cli/terminal.go` | `HasControllingTerminal`: opens `/dev/tty` |
@@ -509,8 +508,7 @@ type Manifest struct {
 
 // Selections are the optional parts chosen at install; a rerun without a flag keeps them.
 type Selections struct {
-	Hosts   []string `json:"hosts,omitempty"` // "claude", "codex"
-	Project bool     `json:"project"`         // the --project files are owned
+	Hosts []string `json:"hosts,omitempty"` // "claude", "codex"
 }
 
 // Entry records one owned file or settings entry and the content install wrote.
@@ -525,7 +523,7 @@ type Entry struct {
 | Field | Rule |
 |---|---|
 | `target` | The file, relative to the repository root in the repository manifest |
-| `entry` | Present only for `.claude/settings.json`: names the allow rule or the hook, by its JSON path and value |
+| `entry` | Present only for `.claude/settings.json`: names the allow or deny rule, by its JSON path and value |
 | `hash` | The full SHA-256 (a 256-bit checksum), in lowercase hexadecimal, of the bytes install wrote; compared with the file's current content to tell a hand edit from install's own text |
 | `step` | The install step that owns the entry, so `clean` and a rerun find it |
 
@@ -537,10 +535,9 @@ type Entry struct {
     { "target": ".claude/settings.json", "entry": "permissions.allow Bash(komodo *)", "hash": "c3e8920f…", "step": 6 },
     { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo config set*)", "hash": "7a1d4e52…", "step": 6 },
     { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo install*)", "hash": "5b60c9d1…", "step": 6 },
-    { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo update*)", "hash": "0e83f2a6…", "step": 6 },
-    { "target": ".claude/settings.json", "entry": "hooks.PreToolUse komodo internal guard", "hash": "e19a3b07…", "step": 6 }
+    { "target": ".claude/settings.json", "entry": "permissions.deny Bash(komodo update*)", "hash": "0e83f2a6…", "step": 6 }
   ],
-  "selections": { "hosts": ["claude"], "project": false }
+  "selections": { "hosts": ["claude"] }
 }
 ```
 
@@ -557,7 +554,7 @@ The same manifest as the machine-wide record `~/.komodo/state/install.json`, wit
     "entries": [
       { "target": "/Users/dev/.komodo/bin/komodo", "hash": "1a9509c4…", "step": 1 }
     ],
-    "selections": { "hosts": ["claude"], "project": false }
+    "selections": { "hosts": ["claude"] }
   }
 }
 ```
@@ -617,12 +614,6 @@ Step 6 of `install` adds exactly these entries to the repository's `.claude/sett
   "permissions": {
     "allow": ["Bash(komodo *)"],
     "deny": ["Bash(komodo config set*)", "Bash(komodo install*)", "Bash(komodo update*)"]
-  },
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Bash|Edit|Write",
-        "hooks": [ { "type": "command", "command": "komodo internal guard", "onFailure": "block" } ] }
-    ]
   }
 }
 ```
@@ -630,11 +621,8 @@ Step 6 of `install` adds exactly these entries to the repository's `.claude/sett
 | Entry | Rule |
 |---|---|
 | `allow`, `deny` | Deny rules are evaluated before allow rules. A rule matches only a command that starts with the text, so a wrapper is caught by the terminal check instead |
-| `PreToolUse` matcher | `Bash|Edit|Write`, so the guard also sees file edits, not only shell commands |
-| `onFailure` | `block`: when the guard hook crashes, times out or errors, Claude Code refuses the tool call instead of letting it through. This needs a Claude Code release that supports `onFailure` |
-| Guard exit codes | Every internal error of the guard command exits 2, the code Claude Code reads as "block" |
 
-The guard command is `komodo internal guard`, a hidden verb outside the 13 commands. The engine and the private tool server start the same way, as the hidden verbs `komodo internal engine` and `komodo internal tools`. The entry carries `onFailure: block`, the wider matcher and exit 2 on every guard error. `install` writes no other hook: there is no session-start hook, and no agent or skill is copied into any host.
+`install` writes no hook: there is no guard hook and no session-start hook, and no agent or skill is copied into any host. The engine and the private tool server start as the hidden verbs `komodo internal engine` and `komodo internal tools`. A Claude Code session of the person's own runs under the person's own settings; the permission entries above are the only change. The harness's own worker sessions are guarded inside the private tool server.
 
 #### Update records
 
@@ -819,14 +807,12 @@ A person at a terminal runs `install`, in a repository for the repository steps 
 | `--hosts claude,codex` | Override host detection |
 | `--no-path` | Skip the path step |
 | `--from <file>` | Install that binary file, with no network |
-| `--project` | Recorded in the manifest, adds no files yet and prints a warning saying so ([G-285](#g-285)) |
-| `--no-project` | Stop owning the `--project` files; they stay on disk |
 | `--force` | Overwrite hand-edited owned files |
 | `--remove` | Undo the install: prune every entry `install.json` lists |
 
-`install` writes the `AGENTS.md` block, the `@AGENTS.md` line and the settings entries as 7 manifest entries: the block, the import line, the allow rule, the three deny rules and the hook. A dry run prints one row per file, so a fresh repository with Claude Code lists 4 writes: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and the manifest. With no `AGENTS.md` the full template is the block alone. `--project` and `--no-project` record the choice in the manifest selections and add no file, because no project file template is defined. The hosts are kept in the selections only when `--hosts` named them; a rerun without the flag reuses them, else detects.
+`install` writes only the binary, the path entry, the Komodo block in `AGENTS.md`, the `@AGENTS.md` line and the harness permission entries. In a repository these are 6 manifest entries: the block, the import line, the allow rule and the three deny rules. A dry run prints one row per file, so a fresh repository with Claude Code lists 4 writes: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and the manifest. With no `AGENTS.md` the file is the Komodo block alone. The hosts are kept in the selections only when `--hosts` named them; a rerun without the flag reuses them, else detects.
 
-`install` does 3 things for a host: it places the binary, writes the short Komodo block into the repository's `AGENTS.md` (the harness is installed, here is its path, drive it only through `komodo` commands), and keeps the guard hook and the `@AGENTS.md` import. It starts no session-start hook and copies no agent or skill into any host. With `--remove` the wanted set is empty, so the diff prunes each owned entry: the Komodo block between its markers, the `@AGENTS.md` line, the owned settings entries and the placed binary version. A hand-edited owned file stays and is reported unless `--force` is given.
+`install` does 3 things for a host: it places the binary, writes the short Komodo block into the repository's `AGENTS.md` (the harness is installed, here is its path, drive it only through `komodo` commands), and adds the `@AGENTS.md` import. It starts no session-start hook and copies no agent or skill into any host. With `--remove` the wanted set is empty, so the diff prunes each owned entry: the Komodo block between its markers, the `@AGENTS.md` line, the owned settings entries and the placed binary version. A hand-edited owned file stays and is reported unless `--force` is given.
 
 ##### `config get` and `config set`
 
@@ -1002,7 +988,7 @@ Anyone runs `doctor`, including the orchestrator. It prints each check's result 
 - **Home folder:** the Komodo home folder is on a local file system and honours file locks; a network file system or a lock that lets two holders in fails the check. The engine runs the same two tests (the disk type and a test lock) at every start and does not start when either fails; the command prints the same fix, which points at a local folder. `doctor` keeps running on such a folder, so the person can see why.
 - **Review rules:** each review rule whose findings Go verified under 50% of the time, with at least one finding submitted, is listed as a note with its model and percentage, and the check passes. Exit 3 stays for problems the person on this machine can fix.
 
-The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check is skipped, with the detail "not wired", when this build has no model client. It passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
+The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check is skipped, with the detail "not wired", when this build has no model client. It passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. When `providers.anthropic.url` is refused (see the key's row in the configuration keys table), the check names the paid link as off with the refused address and the reason, and its fix is `komodo config set providers.anthropic.url`; the check fails only when no other link works. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
 
 ```go
 // internal/cli/doctor.go
@@ -1170,13 +1156,12 @@ flowchart TD
 | 6 | `.claude/settings.json` | The entries of Claude Code settings entries, merged; other keys untouched | Claude detected |
 | 7 | Manifest | `<git-common-dir>/komodo/install.json` | Inside a git repository |
 
-- **Step 1, binary source.** `--from <file>` uses that file with no network; its version is what it prints for `--version`. Otherwise the running binary is copied. `install` makes no network call (invariant 12), so a newer release arrives through `update`, and an install from an older binary leaves `bin/` on the older version.
+- **Step 1, binary source.** `--from <file>` uses that file with no network; its version is what it prints for `--version`. Otherwise the running binary is copied. `install` makes no network call (invariant 11), so a newer release arrives through `update`, and an install from an older binary leaves `bin/` on the older version.
 - **Shared files.** Content of `CLAUDE.md` or `.claude/settings.json` that is already there and equal to what step 5 or 6 would write stays the person's: install does not record it, and `--remove` never deletes it.
-- **Step 6, the guard.** The hook entry is the guard command, not a whole group. When a `PreToolUse` group whose matcher covers every tool of `Bash|Edit|Write` (or is empty or `*`) already runs `komodo internal guard`, install sets only that command inside the group and keeps the group's matcher and other hooks. A group with a narrower matcher is left untouched, so the guard may run twice for some tools, and install adds a group of its own with the full matcher. `--remove` deletes only the guard command, and its group only when no other hook is left. A rewrite keeps the file's key order and every value as written, with no escaping of `&`, `<` or `>`, and indents with 2 spaces.
+- **Step 6, a hook from an earlier install.** Install writes no hook. When the manifest records the `komodo internal guard` hook entry of an earlier install, a rerun and `--remove` delete only that command from whichever group holds it, and the group only when no other hook is left; a hand-edited entry stays and is reported. A rewrite keeps the file's key order and every value as written, with no escaping of `&`, `<` or `>`, and indents with 2 spaces.
 - **Step 1, the lock.** The binary step takes `update.lock` like `update`, so an install and an update never write `bin/komodo` together; a held lock stops the install with a message.
 - **Step 2, kept entry.** A path entry install recorded stays wanted on a rerun even though `komodo` is now on `PATH`, so a rerun never prunes its own symlink or shell line; `--no-path` leaves a recorded entry as it is.
-- **Step 4.** With no `AGENTS.md`, a new one is written holding only the Komodo block; the design's full template is [TODO: the full `AGENTS.md` template and the files `--project` adds ([G-285](#g-285))]. With one, only the block is written or replaced; text outside the markers is never touched. A begin marker without an end marker, or two of either, stops the step and names the lines to fix by hand.
-- **Step 6.** A hook that fails prints an error; `onFailure: block` makes the guard fail closed.
+- **Step 4.** With no `AGENTS.md`, a new one is written holding only the Komodo block. With one, only the block is written or replaced; text outside the markers is never touched. A begin marker without an end marker, or two of either, stops the step and names the lines to fix by hand.
 - **Never written:** a repository configuration folder, git hooks, `.codex/`, anything under `~/.claude` or `~/.codex`, or anything under `.claude/` beyond step 6. The settings files appear on the first `config set`, not at install.
 
 The pin rises only. A rerun with nothing to change makes 0 writes.
@@ -1306,17 +1291,16 @@ An install manifest entry is Absent, Owned or Edited. `install` moves Absent to 
 2. A command that fails in steps 1 to 3 has made 0 writes.
 3. Every writing command is idempotent: a repeat with the same arguments reports `0 changes`.
 4. A model session cannot change settings: `config set` needs a terminal, and on Claude Code the deny rules refuse it first.
-5. The guard hook fails closed: an error in it blocks the tool call.
-6. `stop`, `abandon` and every read run even when the settings guard has tripped.
-7. A binary is renamed into `versions/<v>/komodo` only after its checksum and signature match; a `.part` file is never run.
-8. `bin/komodo` is replaced atomically, so it always names a complete, verified binary.
-9. A running process starts every child from the version folder it started with, never from `bin/`.
-10. Cleanup never deletes the current version, the previous version, or a version an unfinished task group names.
-11. The repository pin only rises.
-12. Only `update` makes a network call to fetch a release.
-13. The CLI reaches the work only through the engine's control socket, never a Task Manager, a lease, the state or the cache.
-14. Only the user who owns `engine.sock` can open it.
-15. `status` and `replay` change nothing and make no model call.
+5. `stop`, `abandon` and every read run even when the settings guard has tripped.
+6. A binary is renamed into `versions/<v>/komodo` only after its checksum and signature match; a `.part` file is never run.
+7. `bin/komodo` is replaced atomically, so it always names a complete, verified binary.
+8. A running process starts every child from the version folder it started with, never from `bin/`.
+9. Cleanup never deletes the current version, the previous version, or a version an unfinished task group names.
+10. The repository pin only rises.
+11. Only `update` makes a network call to fetch a release.
+12. The CLI reaches the work only through the engine's control socket, never a Task Manager, a lease, the state or the cache.
+13. Only the user who owns `engine.sock` can open it.
+14. `status` and `replay` change nothing and make no model call.
 
 **Failures**
 
@@ -1333,7 +1317,6 @@ An install manifest entry is Absent, Owned or Edited. `install` moves Absent to 
 | Update crashes holding the lock | Lock age over 10 minutes | The next `update` takes over | Lock replaced |
 | An owned file hand-edited | Hash comparison | File left alone and listed; `--force` overwrites | File as edited |
 | A write fails during install | `Apply` | Stops at that step and reports it; the manifest is written after steps 4 to 6, so a rerun recomputes the diff | Earlier steps kept |
-| Guard hook errors or times out | Claude Code with `onFailure: block` | The tool call is refused | Nothing ran |
 | No engine answers and none can be started | `Engine.Ensure` waits 5 seconds | Exit 4 with `internal`, naming the socket path | Nothing started |
 | The engine answers nothing for 10 seconds and its beat file is over 30 seconds old | `Engine.Send` and `engine.beat` | Stop the engine's process tree, start a fresh engine, retry the request once | One retry | A new engine recovered from saved state |
 | `engine.sock` left behind by a crashed engine | The dial is refused | The CLI starts an engine | One engine |
@@ -1367,7 +1350,7 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 - **Tamper policy:** with a tripped guard, `stop` runs and warns, `run` exits 1 with `config_tampered`.
 - **Manifest plan:** a rerun of the planner on an unchanged repository returns 0 `write` and 0 `prune`; a hand-edited owned file plans `keep`, and `write` with `--force`.
 - **Pin:** the pin written is the higher of the existing one and the running version, with a development suffix removed, never lower.
-- **Settings merge:** step 6 adds the allow rule, the deny rules and the hook, and leaves a pre-existing key unchanged.
+- **Settings merge:** step 6 adds the allow rule and the deny rules, and leaves a pre-existing key unchanged.
 - **Cleanup:** the current, previous and in-use versions survive; the rest go.
 - **Lock age:** a lock older than 10 minutes is stale; a younger one is not.
 
@@ -2842,7 +2825,7 @@ Subtypes that other chapters define, with the chapter that owns the data body.
 |---|---|---|
 | `run-status` | `group.approved`, `publish.done`, `pr.opened` | [15. Commit Handler](#15-commit-handler) |
 | `run-status` | `cleanup.start`, `cleanup.done`, `group.discarded` | [16. Cleanup Handler](#16-cleanup-handler) |
-| `run-status` | `group.done`, `group.closed`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
+| `run-status` | `group.done`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
 | `run-status` | `sandbox.fallback`, `tool.outside` | [11. Task Manager](#11-task-manager) |
 | `run-status` | `epic.paused`, `epic.resumed` | [15. Commit Handler](#15-commit-handler) |
 | `run-failure` | `stalled` | [7. Runtime Manager](#7-runtime-manager) |
@@ -2879,6 +2862,7 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `run.stopped` | `run-complete` / `stopped` | `signal`, `saved` |
 | `group.paused` | `run-status` / `group.paused` | `until`, `link` |
 | `group.resumed` | `run-status` / `group.resumed` | `from`, `to` |
+| `group.approved` | `run-status` / `group.approved` | None; the Tester and the Reviewer approved the group, and the commit in git is the record of the code |
 | `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail`, `reason`, `prior`, `paths` |
 | `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` |
 | `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` |
@@ -2892,7 +2876,7 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `task.done` | `run-status` / `task.done` | `task` |
 | `task.retry` | `run-status` / `task.retry` | `task`, `attempt` |
 | `check.done` | `run-status` / `check.done` | `pass`, `tip`, `head`, `regression`, `steps`; the free mechanical checks that open the Tester's turn |
-| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote` |
+| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note` |
 | `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `severity`, `in` |
 | `tool.denied` | `run-status` / `tool.denied` | `tool`, `row`, `target`, `count` |
 | `sandbox.fallback` | `run-status` / `sandbox.fallback` | `role`, `wanted`, `used`, `why`; the Tester ran in the operating-system sandbox because Docker was missing |
@@ -2906,12 +2890,24 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `state.truncated` | none | A torn last line of the event log is dropped when read, and replay marks the gap ([4.5](#45-behaviour)) |
 | `bus.store_failed` | `error` / `bus.store_failed` | `run`, `path`, `reason`; an append to the event store or a trim failed |
 | `provider.skip` | `run-status` / `provider.skip` | `from`, `to`: link names, `claude-cli` or `anthropic-api` |
-| `limit.warn` | `resource` / `limit.warn` | `link`, `kind`, `pct`, `usd` |
+| `limit.warn` | `resource` / `limit.warn` | `link`, `kind`, `pct`, `usd`, and the `session` that saw it |
 | `lease.taken` | `run-status` / `lease.taken` | `fence`, `pid` |
+| `command.dropped` | `run-status` / `command.dropped` | `kind`, `re`, `why`; the Task Manager ignored a command it could not act on |
+| `sandbox.warning` | `run-status` / `sandbox.warning` | `warning`; an outside tool server started with a warning |
+| `scope.request` | `run-status` / `scope.request` | `task`, `paths`; a Builder asked to edit files outside its list |
+| `scope.answer` | `run-status` / `scope.answer` | `action`, `approved`, `auto`; the answer to a scope request, `auto` when the scope rules denied it |
+| `group.pause` | `run-status` / `group.pause` | `link`, `wait_until`, `agent`; the Task Manager parked a session on a provider limit |
+| `group.resume` | `run-status` / `group.resume` | `reason`, `owed`; the Task Manager left a parked session's wait |
+| `group.stop` | `run-status` / `group.stop` | `cause`; the Task Manager was told to stop |
+| `group.closed` | `run-status` / `group.closed` | None; the Task Manager finished closing the group |
+| `judge.reset` | `run-status` / `judge.reset` | `edited`; a judge's command edited tracked files and the round was discarded |
+| `cleanup.swept` | `run-status` / `cleanup.swept` | `group`, `removed`, `kept`; what one sweep removed and kept |
 | `pool.slot.taken`, `queue.enqueued` | none | Link session counts and the schedule queue are machine-wide records in the State Manager ([10](#10-state-manager)), not events |
 | `request.resume` | `run-continue` | The command event above |
 | `request.timer` | none | The schedule queue and the `schedule` field of `run-start` carry a scheduled start; the engine stays up while a run is queued |
 | `request.accepted`, `request.refused` | `run-status` / `request.accepted`, `request.refused` | `request` (the command's id), `why` on refusal |
+
+Every fact that the Task Manager, the Commit Handler or the Cleanup Handler reports has a row above or a row in [More subtypes](#43-data-model), and its body decodes as that row's data struct. A fact with no row, or a body the struct does not declare, is not published, so `cmd/komodo`'s schema test lists every fact name the code reports and fails for one with no slot.
 
 #### Data structs
 
@@ -2973,6 +2969,31 @@ type GroupDone struct {
 
 // EventKey binds GroupDone to run-status / group.done.
 func (GroupDone) EventKey() Key { return Key{TypeRunStatus, "group.done"} }
+
+// GroupApproved is the data of run-status / group.approved: the Tester and the Reviewer approved a group's work.
+// It has no body; the commit in git is the record of the code.
+type GroupApproved struct{}
+
+// GroupPause is the data of run-status / group.pause: the Task Manager parked a session on a provider limit.
+type GroupPause struct {
+	Link      string    `json:"link"`       // the link whose limit stopped the session
+	WaitUntil time.Time `json:"wait_until"` // when the Task Manager next tries to resume
+	Agent     string    `json:"agent"`      // the agent whose session was parked
+}
+
+// GroupResume is the data of run-status / group.resume: the Task Manager left a parked session's wait.
+type GroupResume struct {
+	Reason string   `json:"reason"` // timer or run-continue
+	Owed   []string `json:"owed"`   // the agents whose sessions were parked and now restart
+}
+
+// GroupStop is the data of run-status / group.stop: the Task Manager was told to stop.
+type GroupStop struct {
+	Cause string `json:"cause"` // why it was stopped, such as a block reason
+}
+
+// GroupClosed is the data of run-status / group.closed: the Task Manager finished closing a group; it has no body.
+type GroupClosed struct{}
 
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
@@ -3107,6 +3128,7 @@ type FindingSubmit struct {
 	File  string `json:"file"`  // path from the worktree root
 	Line  int    `json:"line"`  // line number from 1 in the head tree
 	Quote string `json:"quote"` // the quoted evidence line
+	Note  string `json:"note,omitempty"` // the agent's note on the finding
 }
 
 // FindingVerified is the data of run-status / finding.verified.
@@ -3202,10 +3224,57 @@ type LeaseTaken struct {
 	PID   int    `json:"pid"`   // the holder's process identifier
 }
 
+// --- Task Manager and handler facts
+
+// CommandDropped is the data of run-status / command.dropped: the Task Manager ignored a command.
+type CommandDropped struct {
+	Kind string `json:"kind"` // the command kind that was ignored
+	Re   string `json:"re"`   // the request the command answered; empty when none
+	Why  string `json:"why"`  // why the Task Manager ignored it
+}
+
+// SandboxWarning is the data of run-status / sandbox.warning: an outside tool server started with a warning.
+type SandboxWarning struct {
+	Warning string `json:"warning"` // the warning text the server connection reported
+}
+
+// ScopeRequest is the data of run-status / scope.request: a Builder asked to edit files outside its list.
+type ScopeRequest struct {
+	Task  string   `json:"task"`  // the task the Builder was working on
+	Paths []string `json:"paths"` // the paths it asked for
+}
+
+// ScopeAnswer is the data of run-status / scope.answer: the answer to a scope request.
+type ScopeAnswer struct {
+	Action   string   `json:"action"`             // approve or deny
+	Approved []string `json:"approved,omitempty"` // the paths added to the group's files
+	Auto     bool     `json:"auto,omitempty"`     // true when the scope rules denied the request without asking a person
+}
+
+// JudgeReset is the data of run-status / judge.reset: a judge's command edited tracked files and the round was discarded.
+type JudgeReset struct {
+	Edited []string `json:"edited"` // the tracked files the judges' commands changed
+}
+
+// CleanupSwept is the data of run-status / cleanup.swept: what one sweep removed and kept.
+type CleanupSwept struct {
+	Group   string        `json:"group"` // empty: a sweep covers no single group
+	Removed []CleanupItem `json:"removed"`
+	Kept    []CleanupItem `json:"kept"`
+}
+
+// CleanupItem is one thing a sweep removed or kept.
+type CleanupItem struct {
+	Kind   string `json:"kind"`   // worktree, tester_worktree, container, branch, temp or version
+	Name   string `json:"name"`   // the path, branch, reference or version
+	Reason string `json:"reason"` // why it was kept; empty for a removed item
+}
+
 // --- Resource
 
 // LimitWarn is the data of resource / limit.warn.
 type LimitWarn struct {
+	GroupFacts
 	Link string  `json:"link"`
 	Kind string  `json:"kind"`          // quota, overage or spend
 	Pct  int     `json:"pct,omitempty"` // quota only: percent of the window used
@@ -3247,6 +3316,33 @@ type RequestRefused struct {
 ```
 
 Each field is a fact its publisher saw, never a model's claim.
+
+**The facts of the Task Manager and the handlers.** Each is published as one line, shown here with its `data`. `group.approved` and `group.closed` have an empty body, `{}`.
+
+```json
+{"type": "run-status", "subtype": "command.dropped", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:31:12Z",
+ "data": {"kind": "continue", "re": "req-7", "why": "the group is not paused"}}
+{"type": "run-status", "subtype": "sandbox.warning", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:31:12Z",
+ "data": {"warning": "the server asked for network access; it stays off"}}
+{"type": "run-status", "subtype": "scope.request", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:40:02Z",
+ "data": {"task": "tsk-add-lock", "paths": ["internal/lock/lock.go"]}}
+{"type": "run-status", "subtype": "scope.answer", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:42:30Z",
+ "data": {"action": "approve", "approved": ["internal/lock/lock.go"]}}
+{"type": "run-status", "subtype": "group.pause", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T16:02:00Z",
+ "data": {"link": "claude-cli", "wait_until": "2026-10-14T18:01:00Z", "agent": "builder"}}
+{"type": "run-status", "subtype": "group.resume", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T18:01:05Z",
+ "data": {"reason": "timer", "owed": ["builder"]}}
+{"type": "run-status", "subtype": "group.stop", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T18:30:00Z",
+ "data": {"cause": "pause_timeout"}}
+{"type": "run-status", "subtype": "group.closed", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T19:00:00Z",
+ "data": {}}
+{"type": "run-status", "subtype": "judge.reset", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T16:50:00Z",
+ "data": {"edited": ["internal/lock/lock.go"]}}
+{"type": "run-status", "subtype": "cleanup.swept", "run": "", "group": "", "time": "2026-10-14T20:00:00Z",
+ "data": {"group": "", "removed": [{"kind": "worktree", "name": "/Users/rad/.komodo/wt/r1/tg-1.2", "reason": ""}], "kept": []}}
+{"type": "run-status", "subtype": "group.approved", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T17:10:00Z",
+ "data": {}}
+```
 
 #### The event store
 
@@ -3580,6 +3676,8 @@ Component tests with fake subscribers; no live provider tests.
 | Logs of open runs past 100 MB | `Trim` deletes none and publishes one `bus.store_failed` naming the folder |
 | `Trim` with `dry` set | Returns the paths that would go and deletes none |
 | 10,000 appends | The mean cost is near the measured 4.3 µs per append |
+| A fact name the Task Manager, the Commit Handler or the Cleanup Handler reports, with no row in the event table | The schema test fails and names the fact |
+| Each fact with a body of its own, sent as the code builds it | One event of the same subtype is published and none is dropped |
 
 ### 4.10 Open Gaps
 
@@ -5404,9 +5502,10 @@ The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceabi
 | File | Holds |
 |---|---|
 | `engine.go` | `Engine`, `NewEngine`, `Serve`: process lifetime, the exit rule, the engine heartbeat file |
-| `proto.go` | `Request`, `Reply`, `Flags` and the reply codes |
+| `proto.go` | `Request`, `Reply`, `Flags`, `ToolRequest` and the reply codes |
 | `socket.go` | `ConnPrinter`, `Dial`, `Conn`, the listener's connection loop, one goroutine per connection |
 | `verbs.go` | `Engine.handle` and what each verb does |
+| `tools.go` | The `tool_list` and `tool_call` verbs: they pass a session's tool requests to the `ToolHub` |
 | `replay.go` | Resolves a replay target: a live group, a finished group's latest run from its saved record, or a run id |
 | `status.go` | `StatusData`, `Manager.Snapshot`, and the small views the engine reads from the Runtime Manager |
 | `schedule.go` | The schedule queue loop over `state.ScheduleEntry` |
@@ -5614,11 +5713,12 @@ The CLI and the engine exchange newline-delimited JSON on `~/.komodo/state/engin
 // Request is one frame from the CLI to the engine.
 type Request struct {
 	ID     string `json:"id"`               // minted by the CLI; every reply repeats it
-	Verb   string `json:"verb"`             // run, stop, status, abandon, replay, plan or clean
+	Verb   string `json:"verb"`             // run, stop, status, abandon, replay, plan, clean, tool_list or tool_call
 	Target string `json:"target,omitempty"` // an epic label, a group label or a run id
 	Root   string `json:"root,omitempty"`   // the repository root the command ran in; status covers this repository unless Flags.All is set
 	Flags  Flags  `json:"flags"`
 	Event  *Event `json:"event,omitempty"`  // the run-start, run-stop, run-continue or plan event the CLI publishes
+	Tool   *ToolRequest `json:"tool,omitempty"` // the session and call of a tool_list or tool_call request
 }
 
 // Flags are the flags a verb may carry.
@@ -5656,6 +5756,29 @@ type Reply struct {
 | `run_refused` | The run was refused, such as a dependency cycle or a dependency outside the run that is not Done |
 | `not_blocked` | `--approve` or `--deny` named a group that is not waiting for an answer |
 | `engine_stopping` | The engine is past its exit check; the CLI starts a new engine and sends the request again |
+| `unknown_session` | A `tool_list` or `tool_call` named a model session that is not running, or has ended |
+
+A subscription session's tool server sends two more verbs over the same socket, each on a connection of its own so a long `run` never holds up the next call. `tool_list` returns the tools the session may see. `tool_call` runs one call behind the session's guard, with the same tool functions the API link's loop uses, and returns the reply text. The engine ends the call when the connection closes. The `ToolHub` interface in `deps.go` is what the engine calls; the Task Manager's route table implements it ([11.2](#112-package-layout)).
+
+```go
+// ToolRequest names the model session a tool request is for and, for a call, the tool and its arguments as JSON text.
+type ToolRequest struct {
+	Session string          `json:"session"`
+	Name    string          `json:"name,omitempty"`
+	Args    json.RawMessage `json:"args,omitempty"`
+}
+
+// ToolList is the data of a tool_list reply: the tools the session may see.
+type ToolList struct{ Tools []llm.ToolDef `json:"tools"` }
+
+// ToolAnswer is the data of a tool_call reply: the text the model receives, a refusal included.
+type ToolAnswer struct{ Text string `json:"text"` }
+```
+
+```json
+{"id":"s-1-4","verb":"tool_call","tool":{"session":"s-1","name":"run","args":{"class":"test"}}}
+{"id":"s-1-4","status":"ok","data":{"text":"exit code 0\nok"},"final":true}
+```
 
 `ConnPrinter` is the engine's `fault.Printer`:
 
@@ -8021,8 +8144,7 @@ type InstallEntry struct {
 
 // InstallSelections are the optional parts chosen at install.
 type InstallSelections struct {
-	Hosts   []string `json:"hosts,omitempty"` // "claude", "codex"
-	Project bool     `json:"project"`         // the --project files are owned
+	Hosts []string `json:"hosts,omitempty"` // "claude", "codex"
 }
 ```
 
@@ -8037,7 +8159,7 @@ type InstallSelections struct {
     "entries": [
       {"target": "/Users/dev/.komodo/bin/komodo", "hash": "1a9509c4c1d09512211b773b90b562dc6e5a2fbbb344ccd72c2a230a51a86353", "step": 1}
     ],
-    "selections": {"hosts": ["claude"], "project": false}
+    "selections": {"hosts": ["claude"]}
   }
 }
 ```
@@ -8454,7 +8576,6 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `session.go` | The session supervisor: spawn, clocks, time warning, nudge and the stop ladder |
 | `links.go` | `Router`: link choice, failover, the billing decision, provider-limit hand-off |
 | `guard.go` | `Guard.Check`: allow or refuse; fail closed; the refusal limit |
-| `hookguard.go` | `ReadHookInput` and `CheckHook`: one Claude Code tool call from the repository's guard hook, checked against the guard rows |
 | `rows.go` | Loads the guard rows from `policy.json` |
 | `paths.go` | Path containment, symlinks and secret files |
 | `tools.go` | `Registry`, `Bound`, `Dispatch`: binds an agent's permitted tools to one session |
@@ -8462,14 +8583,15 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `tools_run.go` | `run` |
 | `tools_git.go` | `diff`, `git_read` |
 | `tools_submit.go` | `submit_finding`, `task_done`, `skill`, `lint_backlog` |
-| `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output; it also fronts the enabled outside tool servers |
+| `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output; it sends each request to a `ToolBackend`, which is the relay to the engine |
+| `toolroutes.go` | `ToolRoutes`: the bound tools of each running subscription session, which the engine's `tool_list` and `tool_call` verbs run |
 | `outside.go` | Starts each enabled outside tool server inside the sandbox and forwards its guarded calls |
 | `gitptr.go` | Records the worktree's `.git` pointer and checks it before any host git call |
 | `collab.go`, `commitseam.go` | `Collaborators`, `Role`, `Outcome`, `Git`, `LimitStore`, `Committer` and `GroupMeta` |
 | `sessrun.go` | Runs one agent's session: brief, link choice, slot, tools, supervisor, judge and `result.json` |
 | `roles.go`, `briefer.go` | The builder, tester and reviewer over `internal/agent`; the briefer and base-commit tree over `internal/contextmgr` |
 | `gitcli.go` | `GitCLI`: the `Git` over the host git rules, including `AddWorktree` |
-| `toolwatch.go` | Counts tool calls in flight, activity and refusals for the supervisor |
+| `toolwatch.go` | Counts tool calls in flight, activity and refusals for the supervisor, on either link |
 | `proc.go`, `proc_unix.go`, `proc_windows.go` | Process groups, the 10-minute timeout, the output cap and the whole-tree kill, per platform |
 | `policy.json` | The guard rows with scopes, the secret patterns and the test-sibling rules, compiled into the binary |
 
@@ -8483,7 +8605,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `billing.go` | Cost class per link, the environment scrub, the first-line check; fails closed |
 | `claude.go` | The subscription link: launch line, stream parsing, resume, `claude` path search |
 | `anthropic.go` | The paid Anthropic link: Messages requests, cache markers from the cache handle, structured output, effort |
-| `openai.go` | `OpenAIModel`: the model entry both OpenAI links take |
+| `openai.go` | `OpenAIModel`: the model entry both OpenAI links take, built from the catalog's OpenAI rows |
 | `openai_api.go` | OpenAI's paid interface link: Chat Completions through the shared HTTP client, structured steps with `response_format`, and its error and limit mapping |
 | `openai_codex.go`, `openai_codex_stream.go` | OpenAI's subscription link: the `codex exec --json` launch line, resume by thread, the login check, and the reader of its event stream |
 | `local.go` | The optional local link: an OpenAI-compatible server on this machine, and its context-size probe |
@@ -8763,7 +8885,7 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | Subtype | Data |
 |---|---|
 | `session.start`, `session.end` | Session, agent, link, model, measured context and its source; the exit reason on end |
-| `session.idle`, `session.timewarn` | Session, minutes of silence or minutes left |
+| `session.idle`, `session.timewarn` | Session; seconds of silence and whether the nudge went, or seconds used and the wall limit |
 | `tool.denied` | Tool, guard row, refused target, count under that row |
 | `finding.submit` | Rule, file, line, quote, note |
 | `provider.skip` | `from`, `to`, `reason` |
@@ -8771,6 +8893,13 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | `scope.request`, `scope.answer` | Task, paths; the answer's action and approved paths |
 | `sandbox.fallback` | Role, the mechanism wanted, the mechanism used, the reason; the run report says so |
 | `tool.outside` | Server, tool, outcome (`ok`, `error` or `timeout`) of one outside tool server call |
+| `command.dropped` | Command kind, the request it answered, why it was ignored |
+| `sandbox.warning` | The warning an outside tool server connection reported |
+| `session.resume-lost` | Session, agent, the error that stopped the resume |
+| `group.pause`, `group.resume` | Link, wait time and agent on pause; reason and owed agents on resume |
+| `group.stop`, `group.closed` | The stop cause; `group.closed` has no body |
+| `judge.reset` | The tracked files the judges' commands edited |
+| `group.approved` | None; it has no body |
 
 #### The guard
 
@@ -9114,6 +9243,7 @@ type AuthStatus struct {
 // CatalogEntry is one model in models.json.
 type CatalogEntry struct {
 	ID       string  `json:"id"`
+	Provider string  `json:"provider"`         // anthropic, openai or local
 	Weight   string  `json:"weight"`           // heavy, standard or light
 	Tier     string  `json:"tier"`             // latest, prior or local
 	Window   int     `json:"window,omitempty"` // context tokens; absent for local models, which are measured
@@ -9124,7 +9254,9 @@ type CatalogEntry struct {
 ```
 
 - **Weights:** planner and reviewer are heavy, builder is standard, tester is light; heavy runs the Opus line, standard the Sonnet line, light the Haiku line. The registry holds the weight per agent.
-- **Catalog rules:** only the latest and prior version of a line are used; every identifier is an exact pinned snapshot, never an alias. The probe writes the identifiers a run uses to a State Manager record, and no identifier changes mid-run.
+- **Providers:** every row names its provider, `anthropic`, `openai` or `local`. A link runs only the rows of its own provider: `claude-cli` and `anthropic-api` the Anthropic rows, `openai-subscription` and `openai-api` the OpenAI rows, `local` the local rows. One list holds every model.
+- **OpenAI models:** heavy is `gpt-6-astra` at $10 input and $50 output per million tokens, standard is `gpt-6.1-sol` at $2 and $10, and light is `gpt-6-luna` at $0.10 and $0.50. All three have a 1,050,000-token window and a 128,000-token output cap, and the codex program accepts the same identifiers, so one set of rows serves both OpenAI links. The paid interface link prices a turn from the row; the subscription link bills plan credits, so it records no dollar figure.
+- **Catalog rules:** only the latest and prior version of a line are used; every identifier is an exact pinned snapshot, never an alias. The catalog holds one latest row per provider and weight. The OpenAI rows list no prior model, because the windows of older OpenAI models are not verified. The probe writes the identifiers a run uses to a State Manager record, and no identifier changes mid-run.
 - **Local models (optional link):** the catalog lists no window or price for them. Gemma 4 31B serves heavy, Qwen3.6-27B standard and Nemotron 3 Nano light, all free. A weight with no model listed uses the nearest listed one.
 
 **The optional local link**
@@ -9154,6 +9286,7 @@ The link's cost class is `free` on loopback, or when `SelfHosted` is true. A non
 | Link | Source of the context |
 |---|---|
 | `claude-cli`, `anthropic-api` | The Models API `max_input_tokens`, else the catalog entry, else the default window 262,144 |
+| `openai-subscription`, `openai-api` | The catalog row's window, else the default window 262,144 |
 | Local, Ollama | `/api/ps` `context_length` for the loaded model; an unloaded model is first loaded with an empty request; a typed `Ctx` only lowers it |
 | Local, any other server | The entry's `Ctx`, which is required |
 
@@ -9328,14 +9461,14 @@ One folder per session. The supervisor writes the brief, the request and the res
 |---|---|---|
 | `brief.md` | Supervisor, once | The prompt the model received |
 | `system.md` | Supervisor, once | The output format only; never role or rule text |
-| `mcp.json` | Supervisor, once, for the subscription link | The one tool server entry, with its start-up inputs in the environment |
+| `mcp.json` | Supervisor, once, for the subscription link | The one tool server entry: the agent and the session in its arguments, and the control socket path in `KOMODO_TOOLS_SOCKET` |
 | `scope.json` | Supervisor, on every start and resume | The group's effective file list, including paths a scope answer added |
 | `request.json` | Supervisor | How the session was launched: `session`, `group`, `task`, `agent`, `link`, `model`, `cost_class`, `effort`, `ctx`, `brief_tokens`, `resume` |
 | `stream.jsonl` | Task Manager | The model's raw output stream |
 | `messages.jsonl` | The tool loop | One JSON object per turn on API links: `turn`, `role`, `content`, `ts` |
 | `result.json` | Supervisor | `session`, `exit_reason`, `result`, `usage`, `handle` |
 | `out/` | The tool runtime | One `<call>.log` per capped call: the command's combined output exactly as produced |
-| `tools.jsonl` | The tool server or the tool loop | One `ToolLine` per tool start, tool end, refusal and finding |
+| `tools.jsonl` | The engine's bound tools, for either link | One `ToolLine` per tool start, tool end, refusal and finding |
 
 ```go
 // ToolLine is one line of tools.jsonl.
@@ -9349,7 +9482,7 @@ type ToolLine struct {
 }
 ```
 
-Only `denied` and `finding` lines become facts; `start` and `end` lines stay in the folder and feed the running-tool count that keeps a long command from counting as silence.
+The file is a record only: refusals and findings become facts when the call is dispatched, and the running-tool count that keeps a long command from counting as silence comes from the same dispatch.
 
 #### Exit reasons
 
@@ -10165,8 +10298,8 @@ An agent's rows compile into a matcher once per session. A check is a map lookup
 #### Tool call and run
 
 1. At session start the registry binds the permitted tools to the session. A tool not in the list is neither advertised nor callable (row G1).
-2. On the subscription link the tool server talks to the program over standard input and output. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. The supervisor passes its inputs in `mcp.json`: the arguments name the agent and the session, and the environment carries the worktree, the file list and the permitted classes as JSON text. The tool server starts as the hidden verb `komodo internal tools` of the same binary, outside the 13 commands.
-3. On an API link, the tool loop calls the same tool functions in the harness process.
+2. On the subscription link the tool server talks to the program over standard input and output, and holds no state: it relays every request to the engine over the control socket ([7.3](#73-data-model)), one connection per request. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. The supervisor passes its inputs in `mcp.json`: the arguments name the agent and the session, and the environment names the socket. The tool server starts as the hidden verb `komodo internal tools` of the same binary, outside the 13 commands. When no engine answers, or the session has ended, the call returns an error reply and no tool runs.
+3. The engine runs a relayed call on the session's bound tools, the same tool functions and guard the API link's tool loop uses, so every tool behaves the same on both links. The guard, the refusal count and the task record live only in the engine; `task_done` reruns the task's `done_when` command there.
 4. The guard runs before the tool. A refusal returns a reply naming the row and the allowed alternative.
 5. The reply is capped; the full output goes to `out/<call>.log`, and the capped reply names the path.
 6. A validated `submit_finding` becomes the fact `finding.submit`. The role judges its evidence; a finding whose quote is not at its `file:line` is dropped and logged, and does not block.
@@ -10209,7 +10342,7 @@ The tool server answers `initialize` inside the program's 30 s `MCP_TIMEOUT` (it
 Outside tool servers are off by default. A server is on for an agent only when a person adds it to the Context Manager's list and switches it on for that agent by name.
 
 1. The Runtime Manager copies only the enabled entries into `GroupSpec.Servers`, and names each one in the `Servers` list of the agents allowed to use it.
-2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Seatbelt, Bubblewrap and Docker offer only network on or off for a sandbox (Seatbelt can also filter by port); none limits traffic to named hosts. A server that lists `Hosts` therefore gets no network and a warning says so. Whether an egress proxy outside the sandbox should limit it to those hosts is [TODO: an egress proxy that limits an outside server to the hosts its entry lists ([G-264](#g-264))].
+2. At session start, for an agent with servers, the Task Manager starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Seatbelt, Bubblewrap and Docker offer only network on or off for a sandbox (Seatbelt can also filter by port); none limits traffic to named hosts. A server that lists `Hosts` therefore gets no network and a warning says so. Whether an egress proxy outside the sandbox should limit it to those hosts is [TODO: an egress proxy that limits an outside server to the hosts its entry lists ([G-264](#g-264))].
 3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call. The variables named in an entry's `Env` reach the server only when the entry also lists `Hosts`, because a secret is useful only for calling a remote service; the values come from the harness environment and are never put in the brief or shown to the model. An entry with `Env` and no `Hosts` receives none, and the start warns once per variable. Until the host limits above are settled, no server gets network, so none receives a variable yet.
 4. Every call passes the guard first, exactly like a built-in tool: row G1 refuses a name not in the permissions, and a refusal counts toward `guard.refusal_limit` (row G6).
 5. Every call, allowed or refused, is recorded: a `tool.outside` fact for an allowed call, and `tool.denied` for a refusal.
@@ -10385,7 +10518,7 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `limits.group_attempts` | int | 6 | Fresh builder sessions per group before the group is escalated |
 | `limits.group_tokens` | int | 2,000,000 | Token cap per group; the Resource Manager owns it ([chapter 19](#19-resource-manager)) |
 | `limits.pause_max_min` | int | 360 | Read by the Runtime Manager: longest a session stays paused; hard limit 1,440 |
-| `limits.link_sessions.<link>` | int | 3 for `claude-cli` and `anthropic-api`, 1 for `local` (most 8) | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
+| `limits.link_sessions.<link>` | int | 3 for `claude-cli`, `anthropic-api`, `openai-subscription` and `openai-api`, 1 for `local` (most 8) | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
 | `agents.<name>.retries` | int | per agent | Fresh sessions after a timeout or idle stop, inside `limits.group_attempts` |
 | `guard.refusal_limit` | int | 3 | Refusals under one row before the session ends; hard limit 5; the only guard tunable |
 | `sandbox.max_procs` | int | 512 | Processes per instance, where the platform can cap them |
@@ -10393,7 +10526,8 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `sandbox.image` | string | detected | Image of the Tester's container; required for a Makefile-only or 2-language repository |
 | `providers.paid` | enum | `never` | `never`, `fallback` or `allowed`; see the billing check |
 | `providers.keys.anthropic` | env ref | `env:ANTHROPIC_API_KEY` | Names the environment variable holding the key; the value is never stored or logged |
-| `providers.anthropic.url` | string | the public interface | Address of the server the paid Anthropic link calls; empty means the public interface |
+| `providers.keys.openai` | env ref | `env:OPENAI_API_KEY` | Names the environment variable holding the key of the paid OpenAI link; the value is never stored or logged |
+| `providers.anthropic.url` | string | the public interface | Address of the server the paid Anthropic link calls; empty means the public interface. `config set` refuses a value that is not an absolute address with a host. The paid link is off for plain `http` to any host except `127.0.0.1`, `::1` and `localhost`, and for any scheme other than `http` or `https` |
 | `providers.local.<name>.url` | string | none | Address of one local endpoint; the local link is off while no endpoint has a `url` |
 | `providers.local.<name>.models` | string | none | The model names that endpoint serves; [TODO: how several model names are written in the one string ([G-273](#g-273))] |
 | `providers.local.<name>.ctx` | int | none | Context size of the endpoint in tokens; the link is refused below `providers.ctx_floor` |
@@ -12773,7 +12907,7 @@ flowchart TB
   G -->|"7 fails"| X
 ```
 
-1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one.
+1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one. The event has no body; the commit in git is the record of the code.
 2. `Publish` refuses with `ErrNotApproved` unless `tree`, `tester.tree` and `reviewer.tree` are equal. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`. It refuses with `ErrCriticalRef` when the group branch or the epic branch is the base branch.
 3. `Publish` requires the worktree to have `branch` checked out (`CurrentBranch`; any other branch is `ErrNotApproved`). It takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`, except on a repeat: a clean worktree whose tip is a merge commit with the subject `<label>: merge <epic>` and a second parent the remote epic branch holds, over a commit with the tree `tree`, is accepted as the group's own sync with the epic. When the checked-out commit already has that tree, because `Save` recorded it, nothing is committed. Otherwise `Commit` records the content with the message `<label>: <goal>`.
 4. `Epics.Enter` waits for the epic's turn. The next steps run inside the turn, so one group at a time lands on an epic. The first turn on an epic after the engine starts runs the recheck (step 7) before the merge, so a pause the restart forgot is found again; a group that has already landed skips it, because step 7 then runs on the same tip.
@@ -15016,7 +15150,7 @@ The cleanup reads the person's file first. It finds each entry in the table belo
 | Line | Stale entry | Before phase 2 |
 |---|---|---|
 | 26 | `Bash(python -m komodo:*)` | Removed; nothing in the harness runs Python |
-| 114 | `komodo guard` (`PreToolUse`) | Removed; from phase 8 the repository `PreToolUse` hook runs `komodo internal guard` instead |
+| 114 | `komodo guard` (`PreToolUse`) | Removed; `install` writes no hook |
 | 124 | `komodo hook status --host claude` | Removed; `install` registers no session-start hook |
 | 128 | `komodo hook prune --host claude` | Removed; the Cleanup Handler's sweep at each engine start removes a dead run's leftovers |
 | `skillOverrides` | 36 entries: `backlog`, `komodo`, `review` and 33 `standards-*` | Removed; the harness embeds its skills in the binary |
@@ -15157,7 +15291,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-273"></a>G-273 | Config | How `providers.local.<name>.models` writes several model names in one string | Phase 4, with the model client | [11](#11-task-manager), [3](#3-configuration-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
 | <a id="g-284"></a>G-284 | Planning | The planner template's boundaries (what every group must contain, size limits, how to write a definition of done and acceptance items) and the text of the planning skill | Authoring task, phase 7 | [5](#5-intake-handler), [6](#6-context-manager) |
-| <a id="g-285"></a>G-285 | Install | The full `AGENTS.md` template and the files `--project` adds; until written, install writes only the Komodo block and `--project` adds nothing | Authoring task, phase 7 | [1](#1-cli) |
 | <a id="g-286"></a>G-286 | Update | The poll interval's setting name and default, and which process polls when no engine runs | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |
 | <a id="g-287"></a>G-287 | Login | What each provider's login does and which providers `login --all` lists | Phase 7, with the installer | [1](#1-cli), [11](#11-task-manager) |
 
@@ -15267,9 +15400,8 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | SWE-agent agent-computer interface, https://swe-agent.com/latest/background/aci/ | Lint before a write lands: a failing planner draft writes nothing |
 | Git objects, https://git-scm.com/book/en/v2/Git-Internals-Git-Objects | Content-addressed entries under a two-hex-digit folder fan-out |
 | Atlassian story points, https://www.atlassian.com/agile/project-management/estimation | A story sized in points; Komodo caps a group at 8 |
-| OpenHands, https://github.com/All-Hands-AI/OpenHands | Tool actions and observations as one append-only event stream: the per-session `tools.jsonl` the supervisor tails |
+| OpenHands, https://github.com/All-Hands-AI/OpenHands | Tool actions and observations as one append-only event stream: the per-session `tools.jsonl` record of every call |
 | SWE-agent, https://github.com/SWE-agent/SWE-agent | Lint and format on edit inside the agent-computer interface: `tool.post` runs the rewriting format command on the edited file |
-| Claude Code hooks, https://code.claude.com/docs/en/hooks | A `PreToolUse` command hook whose exit code 2 blocks the call: the orchestrator guard |
 | Claude Code permissions, https://code.claude.com/docs/en/permissions | Deny rules evaluated before allow rules, `*` anywhere: the human-only verb deny list |
 | Temporal activities, https://docs.temporal.io/activities | Side effects as idempotent activities ordered by deterministic code: the session-end commit as the `wip_commit` action |
 | gitleaks, https://github.com/gitleaks/gitleaks | The secret content pattern families in `secret_content` |

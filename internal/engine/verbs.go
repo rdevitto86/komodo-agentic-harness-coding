@@ -27,6 +27,10 @@ func (e *Engine) handle(ctx context.Context, w *connWriter, req Request) {
 		e.verbPlan(ctx, w, req)
 	case VerbClean:
 		e.verbClean(ctx, w, req)
+	case VerbToolList:
+		e.verbToolList(w, req)
+	case VerbToolCall:
+		e.verbToolCall(ctx, w, req)
 	default:
 		_ = w.send(Reply{
 			ID:     req.ID,

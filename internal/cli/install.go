@@ -48,8 +48,7 @@ type Manifest struct {
 
 // Selections are the optional parts chosen at install; a rerun without a flag keeps them.
 type Selections struct {
-	Hosts   []string `json:"hosts,omitempty"` // "claude", "codex"
-	Project bool     `json:"project"`         // the --project files are owned
+	Hosts []string `json:"hosts,omitempty"` // "claude", "codex"
 }
 
 // Entry records one owned file or settings entry and the content install wrote.
@@ -114,7 +113,6 @@ type installer struct {
 	machine                       *state.Machine
 	repoOnly, machineOnly, noPath bool
 	force, remove, dry            bool
-	project, noProject            bool
 	from                          string
 	hosts                         []string
 	errOut                        func(f string, a ...any)
@@ -141,15 +139,11 @@ func newInstaller(c *Call) (*installer, *Result) {
 	in := &installer{cli: c.cli, host: c.cli.deps.Host, root: c.Repo.Root, common: c.CommonDir}
 	in.repoOnly, in.machineOnly = flagBool(c, "repo-only"), flagBool(c, "machine-only")
 	in.noPath, in.force, in.remove = flagBool(c, "no-path"), flagBool(c, "force"), flagBool(c, "remove")
-	in.project, in.noProject = flagBool(c, "project"), flagBool(c, "no-project")
 	in.from, in.dry = flagString(c, "from"), c.Global.DryRun
 	in.errOut = func(f string, a ...any) { _, _ = fmt.Fprintf(c.cli.errOut, f, a...) }
 
-	if in.repoOnly && in.machineOnly || in.project && in.noProject {
-		r := usageErr(
-			"--repo-only and --machine-only cannot combine, and neither can --project and --no-project",
-			helpFix("install"),
-		)
+	if in.repoOnly && in.machineOnly {
+		r := usageErr("--repo-only and --machine-only cannot combine", helpFix("install"))
 		return nil, &r
 	}
 
@@ -256,9 +250,6 @@ func (in *installer) run() Result {
 		in.errOut("Warning: %s was edited by hand and was left alone. Fix: komodo install --force\n", f)
 	}
 
-	if in.project {
-		in.errOut("Warning: --project adds no files: no project file templates exist yet\n")
-	}
 	return installResult(data)
 }
 
@@ -294,7 +285,7 @@ func (in *installer) load() error {
 			in.machineRec = append(in.machineRec, Entry(e))
 		}
 
-		in.machineSel = Selections{Hosts: rec.Body.Selections.Hosts, Project: rec.Body.Selections.Project}
+		in.machineSel = Selections{Hosts: rec.Body.Selections.Hosts}
 		in.sel = in.machineSel
 	}
 
@@ -310,12 +301,6 @@ func (in *installer) load() error {
 	}
 	if len(in.hosts) > 0 {
 		in.sel.Hosts = in.hosts
-	}
-	if in.project {
-		in.sel.Project = true
-	}
-	if in.noProject {
-		in.sel.Project = false
 	}
 	return nil
 }
@@ -446,11 +431,8 @@ func (in *installer) writeManifests(mrows, rrows []planRow) (machineChanged, rep
 		keys, after := rowKeys(mrows), recordedAfter(mrows)
 		if in.dry {
 			cur := state.InstallBody{
-				Entries: toInstallEntries(in.machineRec),
-				Selections: state.InstallSelections{
-					Hosts:   in.machineSel.Hosts,
-					Project: in.machineSel.Project,
-				},
+				Entries:    toInstallEntries(in.machineRec),
+				Selections: state.InstallSelections{Hosts: in.machineSel.Hosts},
 			}
 			machineChanged = in.machineRev == 0 && len(after) > 0 || mergeInstallBody(&cur, keys, after, in.sel)
 		} else if machineChanged, err = updateMachine(in.machine, state.KindInstall, func(b *state.InstallBody) bool {
@@ -484,7 +466,7 @@ func (in *installer) writeManifests(mrows, rrows []planRow) (machineChanged, rep
 
 // sameSelections compares two selections, treating no hosts and an empty list alike.
 func sameSelections(a, b Selections) bool {
-	return a.Project == b.Project && slices.Equal(a.Hosts, b.Hosts)
+	return slices.Equal(a.Hosts, b.Hosts)
 }
 
 // toInstallEntries converts manifest entries to the State Manager's form.
@@ -537,9 +519,9 @@ func mergeInstallBody(b *state.InstallBody, keys map[string]bool, after []Entry,
 	})
 
 	b.Entries = next
-	b.Selections = state.InstallSelections{Hosts: sel.Hosts, Project: sel.Project}
+	b.Selections = state.InstallSelections{Hosts: sel.Hosts}
 
-	return !slices.Equal(old, next) || !sameSelections(Selections{Hosts: oldSel.Hosts, Project: oldSel.Project}, sel)
+	return !slices.Equal(old, next) || !sameSelections(Selections{Hosts: oldSel.Hosts}, sel)
 }
 
 // recordedAfter returns the entries the manifest holds once the rows are applied, sorted by step.

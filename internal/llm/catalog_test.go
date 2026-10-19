@@ -63,7 +63,8 @@ func TestCatalogNoAliasesAndLocalFree(t *testing.T) {
 
 func TestLocalModelNearestWeight(t *testing.T) {
 	c, err := ParseCatalog(
-		[]byte(`[{"id":"only-light","weight":"light","tier":"local","price_in_usd_per_m":0,"price_out_usd_per_m":0}]`),
+		[]byte(`[{"id":"only-light","provider":"local","weight":"light","tier":"local",` +
+			`"price_in_usd_per_m":0,"price_out_usd_per_m":0}]`),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -79,13 +80,16 @@ func TestLocalModelNearestWeight(t *testing.T) {
 }
 
 func TestParseCatalogRejects(t *testing.T) {
+	const p = `"provider":"anthropic",`
 	for name, in := range map[string]string{
-		"bad json":    `[`,
-		"bad weight":  `[{"id":"a","weight":"huge","tier":"latest"}]`,
-		"bad tier":    `[{"id":"a","weight":"heavy","tier":"old"}]`,
-		"empty id":    `[{"id":"","weight":"heavy","tier":"latest"}]`,
-		"duplicate":   `[{"id":"a","weight":"heavy","tier":"latest"},{"id":"a","weight":"light","tier":"prior"}]`,
-		"two latests": `[{"id":"a","weight":"heavy","tier":"latest"},{"id":"b","weight":"heavy","tier":"latest"}]`,
+		"bad json":   `[`,
+		"bad weight": `[{"id":"a",` + p + `"weight":"huge","tier":"latest"}]`,
+		"bad tier":   `[{"id":"a",` + p + `"weight":"heavy","tier":"old"}]`,
+		"empty id":   `[{"id":"",` + p + `"weight":"heavy","tier":"latest"}]`,
+		"duplicate": `[{"id":"a",` + p + `"weight":"heavy","tier":"latest"},` +
+			`{"id":"a",` + p + `"weight":"light","tier":"prior"}]`,
+		"two latests": `[{"id":"a",` + p + `"weight":"heavy","tier":"latest"},` +
+			`{"id":"b",` + p + `"weight":"heavy","tier":"latest"}]`,
 	} {
 		if _, err := ParseCatalog([]byte(in)); err == nil {
 			t.Errorf("%s: want an error", name)

@@ -110,9 +110,8 @@ type GroupDone struct {
 func (GroupDone) EventKey() Key { return Key{TypeRunStatus, "group.done"} }
 
 // GroupApproved is the data of run-status / group.approved: the Tester and the Reviewer approved a group's work.
-type GroupApproved struct {
-	Tree string `json:"tree"` // the tree hash both judges approved, which the Commit Handler publishes
-}
+// It has no body; the commit in git is the record of the code.
+type GroupApproved struct{}
 
 // EventKey binds GroupApproved to run-status / group.approved.
 func (GroupApproved) EventKey() Key { return Key{TypeRunStatus, "group.approved"} }
@@ -271,10 +270,11 @@ func (TaskRetry) EventKey() Key { return Key{TypeRunStatus, "task.retry"} }
 // FindingSubmit is the data of run-status / finding.submit.
 type FindingSubmit struct {
 	GroupFacts
-	Rule  string `json:"rule"`  // a rule identifier from a lens catalog
-	File  string `json:"file"`  // path from the worktree root
-	Line  int    `json:"line"`  // line number from 1 in the head tree
-	Quote string `json:"quote"` // the quoted evidence line
+	Rule  string `json:"rule"`           // a rule identifier from a lens catalog
+	File  string `json:"file"`           // path from the worktree root
+	Line  int    `json:"line"`           // line number from 1 in the head tree
+	Quote string `json:"quote"`          // the quoted evidence line
+	Note  string `json:"note,omitempty"` // the agent's note on the finding
 }
 
 // EventKey binds FindingSubmit to run-status / finding.submit.
@@ -409,8 +409,104 @@ type LeaseTaken struct {
 // EventKey binds LeaseTaken to run-status / lease.taken.
 func (LeaseTaken) EventKey() Key { return Key{TypeRunStatus, "lease.taken"} }
 
+// CommandDropped is the data of run-status / command.dropped: the Task Manager ignored a command.
+type CommandDropped struct {
+	Kind string `json:"kind"` // the command kind that was ignored
+	Re   string `json:"re"`   // the request the command answered; empty when none
+	Why  string `json:"why"`  // why the Task Manager ignored it
+}
+
+// EventKey binds CommandDropped to run-status / command.dropped.
+func (CommandDropped) EventKey() Key { return Key{TypeRunStatus, "command.dropped"} }
+
+// SandboxWarning is the data of run-status / sandbox.warning: an outside tool server started with a warning.
+type SandboxWarning struct {
+	Warning string `json:"warning"` // the warning text the server connection reported
+}
+
+// EventKey binds SandboxWarning to run-status / sandbox.warning.
+func (SandboxWarning) EventKey() Key { return Key{TypeRunStatus, "sandbox.warning"} }
+
+// ScopeRequest is the data of run-status / scope.request: a Builder asked to edit files outside its list.
+type ScopeRequest struct {
+	Task  string   `json:"task"`  // the task the Builder was working on
+	Paths []string `json:"paths"` // the paths it asked for
+}
+
+// EventKey binds ScopeRequest to run-status / scope.request.
+func (ScopeRequest) EventKey() Key { return Key{TypeRunStatus, "scope.request"} }
+
+// ScopeAnswer is the data of run-status / scope.answer: the answer to a scope request.
+type ScopeAnswer struct {
+	Action   string   `json:"action"`             // approve or deny
+	Approved []string `json:"approved,omitempty"` // the paths added to the group's files
+	Auto     bool     `json:"auto,omitempty"`     // true when the scope rules denied the request without asking a person
+}
+
+// EventKey binds ScopeAnswer to run-status / scope.answer.
+func (ScopeAnswer) EventKey() Key { return Key{TypeRunStatus, "scope.answer"} }
+
+// GroupPause is the data of run-status / group.pause: the Task Manager parked a session on a provider limit.
+type GroupPause struct {
+	Link      string    `json:"link"`       // the link whose limit stopped the session
+	WaitUntil time.Time `json:"wait_until"` // when the Task Manager next tries to resume
+	Agent     string    `json:"agent"`      // the agent whose session was parked
+}
+
+// EventKey binds GroupPause to run-status / group.pause.
+func (GroupPause) EventKey() Key { return Key{TypeRunStatus, "group.pause"} }
+
+// GroupResume is the data of run-status / group.resume: the Task Manager left a parked session's wait.
+type GroupResume struct {
+	Reason string   `json:"reason"` // timer or run-continue
+	Owed   []string `json:"owed"`   // the agents whose sessions were parked and now restart
+}
+
+// EventKey binds GroupResume to run-status / group.resume.
+func (GroupResume) EventKey() Key { return Key{TypeRunStatus, "group.resume"} }
+
+// GroupStop is the data of run-status / group.stop: the Task Manager was told to stop.
+type GroupStop struct {
+	Cause string `json:"cause"` // why it was stopped, such as a block reason
+}
+
+// EventKey binds GroupStop to run-status / group.stop.
+func (GroupStop) EventKey() Key { return Key{TypeRunStatus, "group.stop"} }
+
+// GroupClosed is the data of run-status / group.closed: the Task Manager finished closing a group; it has no body.
+type GroupClosed struct{}
+
+// EventKey binds GroupClosed to run-status / group.closed.
+func (GroupClosed) EventKey() Key { return Key{TypeRunStatus, "group.closed"} }
+
+// JudgeReset is the data of run-status / judge.reset: a judge's command edited tracked files and the round was discarded.
+type JudgeReset struct {
+	Edited []string `json:"edited"` // the tracked files the judges' commands changed
+}
+
+// EventKey binds JudgeReset to run-status / judge.reset.
+func (JudgeReset) EventKey() Key { return Key{TypeRunStatus, "judge.reset"} }
+
+// CleanupSwept is the data of run-status / cleanup.swept: what one sweep removed and kept.
+type CleanupSwept struct {
+	Group   string        `json:"group"` // empty: a sweep covers no single group
+	Removed []CleanupItem `json:"removed"`
+	Kept    []CleanupItem `json:"kept"`
+}
+
+// CleanupItem is one thing a sweep removed or kept.
+type CleanupItem struct {
+	Kind   string `json:"kind"`   // worktree, tester_worktree, container, branch, temp or version
+	Name   string `json:"name"`   // the path, branch, reference or version
+	Reason string `json:"reason"` // why it was kept; empty for a removed item
+}
+
+// EventKey binds CleanupSwept to run-status / cleanup.swept.
+func (CleanupSwept) EventKey() Key { return Key{TypeRunStatus, "cleanup.swept"} }
+
 // LimitWarn is the data of resource / limit.warn.
 type LimitWarn struct {
+	GroupFacts
 	Link string  `json:"link"`
 	Kind string  `json:"kind"`          // quota, overage or spend
 	Pct  int     `json:"pct,omitempty"` // quota only: percent of the window used

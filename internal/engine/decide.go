@@ -446,6 +446,16 @@ func working(st Stage) bool {
 	return false
 }
 
+// FactSlot reports whether a Task Manager fact has a place in the event history: it is an input of its own name, or it
+// builds a registered event. It returns the reason when the fact would be dropped.
+func FactSlot(subtype string) error {
+	if _, ok := stateFacts[subtype]; ok {
+		return nil
+	}
+	_, err := factEvent("", "", subtype, nil)
+	return err
+}
+
 // factEvent builds the event a Task Manager fact stands for; it fails when the fact has no registered shape or its data does
 // not decode as that shape.
 func factEvent(run, group, subtype string, data json.RawMessage) (Event, error) {

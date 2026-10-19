@@ -435,8 +435,8 @@ func (m *Manager) effectiveFiles() []string {
 	return slices.Clone(m.files)
 }
 
-// bindTools gives the session its tools: the bound registry on an API link, the tool server's entry on the subscription
-// link.
+// bindTools binds the session's tools and guard in this process; an API link calls them in its loop, and a subscription
+// link's tool server relays to them through the engine.
 func (m *Manager) bindTools(
 	ctx context.Context,
 	sc *sessCtx,
@@ -451,47 +451,11 @@ func (m *Manager) bindTools(
 	inst := m.instances[irole]
 	m.mu.Unlock()
 	files := m.effectiveFiles()
-	cfg := ToolServerConfig{
-		Agent:        req.agent,
-		Session:      sc.id,
-		Worktree:     m.spec.Lease.Worktree,
-		Dir:          sc.dir,
-		Files:        files,
-		Permissions:  perm,
-		Commands:     m.c.Commands,
-		Format:       m.c.Commands["format"],
-		RefusalLimit: m.spec.Limits.RefusalLimit,
-	}
 	onFact := func(f Fact) { m.mu.Lock(); m.facts = append(m.facts, f); m.mu.Unlock() }
 	onFind := func(s Submitted) {
 		if sink != nil {
 			sink.Submit(s)
 		}
-	}
-
-	if programLink(sc.sess.Link) {
-		exe := m.c.Exe
-		if exe == "" {
-			exe, _ = os.Executable()
-		}
-
-		raw, err := MCPConfig(exe, cfg)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(sc.dir, "mcp.json"), raw, 0o644); err != nil {
-			return fmt.Errorf("write mcp.json: %w", err)
-		}
-
-		sc.watch = &toolWatch{
-			dir:    sc.dir,
-			limit:  m.spec.Limits.RefusalLimit,
-			now:    m.now,
-			onFact: onFact,
-			onFind: onFind,
-		}
-
-		return nil
 	}
 
 	home, _ := os.UserHomeDir()
@@ -560,12 +524,39 @@ func (m *Manager) bindTools(
 
 	sc.guard = g
 	sc.watch = &toolWatch{inner: b, limit: m.spec.Limits.RefusalLimit, now: m.now}
-	sc.sess.Tools = sc.watch
-	sc.sess.Gate = sc.memo
 
 	m.mu.Lock()
 	m.guards[sc.id] = g
 	m.mu.Unlock()
+
+	if programLink(sc.sess.Link) {
+		return m.routeTools(sc, req.agent)
+	}
+
+	sc.sess.Tools = sc.watch
+	sc.sess.Gate = sc.memo
+	return nil
+}
+
+// routeTools makes the session's bound tools reachable by the engine and writes the mcp.json whose tool server relays to
+// them; the route ends with the session.
+func (m *Manager) routeTools(sc *sessCtx, agentName string) error {
+	exe := m.c.Exe
+	if exe == "" {
+		exe, _ = os.Executable()
+	}
+
+	raw, err := MCPConfig(exe, ToolServerConfig{Agent: agentName, Session: sc.id, Socket: m.c.Socket})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(sc.dir, "mcp.json"), raw, 0o644); err != nil {
+		return fmt.Errorf("write mcp.json: %w", err)
+	}
+	if m.c.Tools != nil {
+		sc.closers = append(sc.closers, m.c.Tools.Add(sc.id, sc.watch))
+	}
+
 	return nil
 }
 
@@ -583,7 +574,7 @@ func (m *Manager) start(ctx context.Context, sc *sessCtx, req sessReq, sel Selec
 			return nil, true, err
 		}
 
-		m.fact("resume_lost", map[string]string{"session": sc.id, "error": err.Error()})
+		m.fact("session.resume-lost", map[string]string{"session": sc.id, "agent": req.agent, "error": err.Error()})
 
 		id, uerr := newUUID()
 		if uerr != nil {
@@ -803,7 +794,6 @@ func (m *Manager) supervise(ctx context.Context, sc *sessCtx, req sessReq, st ll
 			if raw != nil {
 				_, _ = raw.Write(append(append([]byte{}, line...), '\n'))
 			}
-			sc.watch.poll()
 		},
 		Tools: sc.watch.Tools, Halt: sc.watch.Halt,
 	}

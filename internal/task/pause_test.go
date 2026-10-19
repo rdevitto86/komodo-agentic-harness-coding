@@ -123,13 +123,14 @@ func TestSavedHandleResumesAndAFailingHandleStartsFreshWithResumeLost(t *testing
 		if fails {
 			wantStarts = 1
 		}
-		if resumed != 1 || r.model.started("builder") != wantStarts || (r.rt.factCount("resume_lost") == 1) != fails {
+		lost := r.rt.factCount("session.resume-lost") == 1
+		if resumed != 1 || r.model.started("builder") != wantStarts || lost != fails {
 			t.Fatalf(
 				"fails=%v: resumed %d, starts %v, resume_lost %d",
 				fails,
 				resumed,
 				r.model.starts,
-				r.rt.factCount("resume_lost"),
+				r.rt.factCount("session.resume-lost"),
 			)
 		}
 	}

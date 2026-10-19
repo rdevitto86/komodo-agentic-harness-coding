@@ -136,6 +136,8 @@ type Collaborators struct {
 	Plan        SandboxPlan         // where the sandbox instances keep their files
 	SessionsDir string              // folder that holds one folder per session
 	Exe         string              // the komodo program, which the subscription link starts as its tool server
+	Socket      string              // the engine's control socket, which that tool server relays every call to
+	Tools       *ToolRoutes         // where each subscription session's bound tools are reachable by the engine
 	Skill       func(ref string) (string, error)
 	Getenv      func(string) string            // environment of outside tool servers; os.Getenv when nil
 	OnRecheck   func(pass bool, output string) // receives the result of the recheck command

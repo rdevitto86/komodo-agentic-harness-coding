@@ -37,14 +37,9 @@
                 "type": "string"
               },
               "type": "array"
-            },
-            "project": {
-              "type": "boolean"
             }
           },
-          "required": [
-            "project"
-          ],
+          "required": [],
           "type": "object"
         }
       },

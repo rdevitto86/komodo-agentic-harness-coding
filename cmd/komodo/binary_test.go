@@ -74,102 +74,11 @@ func runChild(t *testing.T, cmd *exec.Cmd) (int, string, string) {
 	return code, out.String(), errOut.String()
 }
 
-// hookRepo makes a repository folder the guard hook runs in.
-func hookRepo(t *testing.T) string {
-	t.Helper()
-
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	return dir
-}
-
-// hookPayload is the JSON Claude Code writes to a PreToolUse hook.
-func hookPayload(t *testing.T, cwd, tool string, input map[string]any) string {
-	t.Helper()
-
-	raw, err := json.Marshal(map[string]any{
-		"hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": tool, "tool_input": input,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return string(raw)
-}
-
-func TestGuardBinaryAnswersLikeClaudeCodeExpects(t *testing.T) {
-	repo := hookRepo(t)
-	cases := []struct {
-		name  string
-		tool  string
-		input map[string]any
-		code  int
-		row   string
-	}{
-		{"write inside the repository", "Write", map[string]any{
-			"file_path": filepath.Join(repo, "x.go"), "content": "package x\n",
-		}, 0, ""},
-		{"edit of the settings file", "Edit", map[string]any{
-			"file_path": filepath.Join(repo, ".claude", "settings.json"), "old_string": "a", "new_string": "b",
-		}, 2, "G3"},
-		{"write outside the repository", "Write", map[string]any{"file_path": "/etc/passwd", "content": "x"}, 2, "G2"},
-		{"shell command that signs as Claude", "Bash", map[string]any{
-			"command": "git commit -m 'x\n\nCo-Authored-By: Claude <noreply@anthropic.com>'",
-		}, 2, "G5"},
-		{"plain shell command", "Bash", map[string]any{"command": "go test ./..."}, 0, ""},
-		{"tool the hook is not for", "Read", map[string]any{"file_path": "/etc/passwd"}, 0, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			cmd := child(t, hookPayload(t, repo, c.tool, c.input), nil, "internal", "guard")
-			code, out, errOut := runChild(t, cmd)
-			if code != c.code {
-				t.Fatalf("exit %d, want %d\nstdout=%q\nstderr=%q", code, c.code, out, errOut)
-			}
-			if c.code == 0 && strings.TrimSpace(out) != "{}" {
-				t.Errorf("an allowed call must print {}, got %q", out)
-			}
-			if c.code == 2 && (out != "" || !strings.Contains(errOut, "Refused by "+c.row)) {
-				t.Errorf("a refusal prints its row on stderr only: stdout=%q stderr=%q", out, errOut)
-			}
-		})
-	}
-}
-
-func TestGuardBinaryFailsClosed(t *testing.T) {
-	for name, stdin := range map[string]string{
-		"empty object":    `{}`,
-		"empty input":     ``,
-		"not json":        `edit the file`,
-		"edit with no id": `{"tool_name":"Edit","tool_input":null}`,
-		"write no path":   `{"tool_name":"Write","tool_input":{"content":"x"}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			code, out, errOut := runChild(t, child(t, stdin, nil, "internal", "guard", "--json"))
-			if code != 2 || out != "" || !strings.Contains(errOut, "komodo guard:") {
-				t.Fatalf("exit %d, want 2\nstdout=%q\nstderr=%q", code, out, errOut)
-			}
-		})
-	}
-}
-
 // mcpEntry renders the mcp.json of a session and returns the command line and environment it holds.
-func mcpEntry(t *testing.T, worktree string) (args, env []string) {
+func mcpEntry(t *testing.T, socket string) (args, env []string) {
 	t.Helper()
 
-	cfg := task.ToolServerConfig{
-		Agent: "reviewer", Session: "s-1", Worktree: worktree, Dir: t.TempDir(), Commands: map[string][]string{},
-		Permissions:  task.Permissions{Tools: []string{"read", "search"}},
-		RefusalLimit: 3,
-	}
-
-	raw, err := task.MCPConfig(binaryPath, cfg)
+	raw, err := task.MCPConfig(binaryPath, task.ToolServerConfig{Agent: "builder", Session: "s-1", Socket: socket})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,15 +103,8 @@ func mcpEntry(t *testing.T, worktree string) (args, env []string) {
 }
 
 func TestToolsBinaryAnswersInitializeAndToolsList(t *testing.T) {
-	worktree, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(worktree, "a.txt"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	args, env := mcpEntry(t, worktree)
+	x := newToolEngine(t)
+	args, env := mcpEntry(t, x.socket)
 	cmd := child(t, "", env, args...)
 	cmd.Stdin = nil
 
@@ -261,7 +163,7 @@ func TestToolsBinaryAnswersInitializeAndToolsList(t *testing.T) {
 	for _, tl := range tools {
 		names = append(names, tl.(map[string]any)["name"].(string))
 	}
-	if strings.Join(names, ",") != "read,search" {
+	if len(names) != 11 || names[0] != "read" {
 		t.Fatalf("tools/list = %v", names)
 	}
 
@@ -292,7 +194,7 @@ func TestToolsBinaryWithoutAgentFails(t *testing.T) {
 }
 
 func TestHiddenVerbsAnswerHelpJSON(t *testing.T) {
-	for _, verb := range []string{"engine", "guard", "tools"} {
+	for _, verb := range []string{"engine", "tools"} {
 		code, out, errOut := runChild(t, child(t, "", nil, "internal", verb, "--help", "--json"))
 		if code != 0 || !strings.Contains(out, `"name": "internal `+verb+`"`) {
 			t.Errorf("internal %s --help --json: exit %d\nstdout=%q\nstderr=%q", verb, code, out, errOut)

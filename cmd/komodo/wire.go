@@ -46,6 +46,7 @@ type stack struct {
 	kits    map[string]*repoKit
 	byID    map[string]*repoKit
 	refs    map[string]*groupRef
+	tools   *task.ToolRoutes
 	stderr  io.Writer
 	closers []func()
 }
@@ -70,7 +71,7 @@ func newStack(home string, stderr io.Writer) (*stack, error) {
 		return nil, fmt.Errorf("open settings: %w", err)
 	}
 
-	s := &stack{home: home, cfg: cfg, catalog: cat, stderr: stderr}
+	s := &stack{home: home, cfg: cfg, catalog: cat, stderr: stderr, tools: task.NewToolRoutes()}
 	s.bus = bus.New(bus.Options{EventsDir: filepath.Join(home, "events")})
 
 	s.reader = bus.NewReader(filepath.Join(home, "events"))
@@ -130,36 +131,53 @@ func registerEvents() {
 func buildLinks(cfg *config.Manager, cat *llm.Catalog, faults llm.Recoverer) *llm.Client {
 	links := map[llm.Link]llm.Provider{}
 
-	if it, err := cfg.GetConfigItem("providers.keys.anthropic"); err == nil {
-		if name, ok := strings.CutPrefix(fmt.Sprint(it.Value), "env:"); ok && os.Getenv(name) != "" {
-			var base string
-			if u, err := cfg.GetConfigItem("providers.anthropic.url"); err == nil {
-				base, _ = u.Value.(string)
-			}
+	if key := providerKey(cfg, "providers.keys.anthropic"); key != "" {
+		var base string
+		if u, err := cfg.GetConfigItem("providers.anthropic.url"); err == nil {
+			base, _ = u.Value.(string)
+		}
 
-			a, err := llm.NewAnthropic(llm.AnthropicOptions{
-				BaseURL: base,
-				Key:     os.Getenv(name),
-				Catalog: cat,
-				Faults:  faults,
-			})
-			if err == nil {
-				links[llm.AnthropicAPI] = a
-			}
+		a, err := llm.NewAnthropic(llm.AnthropicOptions{BaseURL: base, Key: key, Catalog: cat, Faults: faults})
+		if err == nil {
+			links[llm.AnthropicAPI] = a
 		}
 	}
 
-	links[llm.ClaudeCLI] = llm.NewClaude(llm.ClaudeOptions{Catalog: cat, Faults: faults})
-	links[llm.OpenAISubscription] = llm.NewOpenAISubscription(llm.OpenAISubscriptionOptions{Faults: faults})
+	openAIModels := cat.OpenAIModels()
 
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		a, err := llm.NewOpenAIAPI(llm.OpenAIAPIOptions{BaseURL: os.Getenv("OPENAI_BASE_URL"), Key: key, Faults: faults})
+	links[llm.ClaudeCLI] = llm.NewClaude(llm.ClaudeOptions{Catalog: cat, Faults: faults})
+	links[llm.OpenAISubscription] = llm.NewOpenAISubscription(llm.OpenAISubscriptionOptions{
+		Models: openAIModels,
+		Faults: faults,
+	})
+
+	if key := providerKey(cfg, "providers.keys.openai"); key != "" {
+		a, err := llm.NewOpenAIAPI(llm.OpenAIAPIOptions{
+			BaseURL: os.Getenv("OPENAI_BASE_URL"),
+			Key:     key,
+			Models:  openAIModels,
+			Faults:  faults,
+		})
 		if err == nil {
 			links[llm.OpenAIAPI] = a
 		}
 	}
 
 	return llm.New(links)
+}
+
+// providerKey reads the key setting's env: reference and returns the value of that variable; empty when unset.
+func providerKey(cfg *config.Manager, setting string) string {
+	it, err := cfg.GetConfigItem(setting)
+	if err != nil {
+		return ""
+	}
+
+	name, ok := strings.CutPrefix(fmt.Sprint(it.Value), "env:")
+	if !ok {
+		return ""
+	}
+	return os.Getenv(name)
 }
 
 // buildBackends picks the mechanism of each role: Docker for the Tester and the operating-system sandbox for the Builder.

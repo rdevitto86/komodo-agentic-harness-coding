@@ -271,7 +271,7 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 				}(rctx)
 			case TickNudge:
 				c.NudgedAt = now()
-				fact("session.idle", map[string]any{"minutes": int(lim.Idle / time.Minute)})
+				fact("session.idle", map[string]any{"idle_s": int64(lim.Idle / time.Second), "nudged": true})
 				_ = s.Inject(nudgeLine)
 			case TickStopTimeout:
 				climb(state.ReasonTimeout)
@@ -284,7 +284,11 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 			}
 			left := lim.Wall - (now().Sub(c.Started) - c.PausedFor)
 			mins := int((left + time.Minute - 1) / time.Minute)
-			fact("session.timewarn", map[string]any{"minutes": mins})
+			used := now().Sub(c.Started) - c.PausedFor
+			fact(
+				"session.timewarn",
+				map[string]any{"used_s": int64(used / time.Second), "wall_s": int64(lim.Wall / time.Second)},
+			)
 			_ = s.Inject(fmt.Sprintf(warnLineFormat, mins))
 		case line := <-h.Inject:
 			_ = s.Inject(line)

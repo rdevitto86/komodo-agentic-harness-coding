@@ -17,8 +17,6 @@ var tableRows = []Command{
 			{Name: "hosts", Kind: "string", Help: "Override host detection, such as claude,codex"},
 			{Name: "no-path", Kind: "bool", Help: "Skip the path step"},
 			{Name: "from", Kind: "string", Help: "Install that binary file, with no network"},
-			{Name: "project", Kind: "bool", Help: "Also add the project documents and a pull request template"},
-			{Name: "no-project", Kind: "bool", Help: "Stop owning the project files; they stay on disk"},
 			{Name: "force", Kind: "bool", Help: "Overwrite hand-edited owned files"},
 			{Name: "remove", Kind: "bool", Help: "Undo the install"},
 		},
@@ -99,10 +97,6 @@ var tableRows = []Command{
 	{
 		Name: "internal engine", Summary: "Run the engine process", Tier: TierShared, Hidden: true,
 		PinExempt: true, TamperPolicy: TamperWarn, Run: handleEngine,
-	},
-	{
-		Name: "internal guard", Summary: "Decide one Claude Code tool call for the repository hook", Tier: TierShared,
-		Hidden: true, PinExempt: true, TamperPolicy: TamperSkip, Run: handleGuard,
 	},
 	{
 		Name: "internal tools", Summary: "Run the tool server of one model session", Tier: TierShared,

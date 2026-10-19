@@ -227,7 +227,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		Leases:   s.leases,
 		Caches:   s.caches,
 		Contexts: ctxAdapter{},
-		Tasks:    h, Plans: planSource{}, Git: epicGit{s.git}, Commits: h, Resource: res,
+		Tasks:    h, Tools: s.tools, Plans: planSource{}, Git: epicGit{s.git}, Commits: h, Resource: res,
 		Version: version, Home: s.home, BaseBranch: s.baseBranch(), Faults: s.faults,
 		Cleaner: h, Janitor: h,
 		Errors: func(run, group string, err error) { s.logln("komodo engine:", run, group, err) },
