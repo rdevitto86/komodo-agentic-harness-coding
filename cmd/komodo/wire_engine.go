@@ -326,12 +326,23 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 		landings: filepath.Join(s.home, "landing", hex.EncodeToString(sum[:4])),
 	}
 
-	tools := map[string][]string{}
+	tools, skills := map[string][]string{}, map[string]contextmgr.Access{}
 	for _, r := range agent.Roles() {
 		tools[r.Name] = r.Tools
+
+		if ag, ok := s.cfg.GetAgent(r.Name); ok {
+			skills[r.Name] = contextmgr.Access{Allow: ag.Skills.Allow, Always: ag.Skills.Always}
+		}
 	}
 
-	cm, err := contextmgr.New(contextmgr.Deps{Bus: s.bus, Cache: lazyCache{s.caches, id}, Home: s.home, Tools: tools})
+	items, err := contextmgr.StartItems(nil, skills)
+	if err != nil {
+		return nil, fmt.Errorf("expand the agent skills: %w", err)
+	}
+
+	cm, err := contextmgr.New(contextmgr.Deps{
+		Bus: s.bus, Cache: lazyCache{s.caches, id}, Items: items, Home: s.home, Tools: tools,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open the context manager: %w", err)
 	}

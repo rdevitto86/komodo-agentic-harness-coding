@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,12 +11,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/contextmgr"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
@@ -185,6 +188,7 @@ func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 	s := k.s
 	h := &intakeHolder{k: k}
 	ag, _ := s.cfg.GetAgent("planner")
+
 	d := intake.Deps{
 		Bus: s.bus, Context: cm, Start: h.start, Locks: groupLocks{k.st},
 		Protected: protectedPaths,
@@ -193,9 +197,96 @@ func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 			return task.NewBaseTree(gitRunner{k.root}, "HEAD"), nil
 		},
 		Repo: k.id, CommonDir: k.common,
+		OpenBase: k.openBase,
 	}
 
 	return d
+}
+
+// baseRunner runs shell commands on the checked-out base commit inside one builder sandbox instance.
+type baseRunner struct {
+	boxes *sandbox.Manager
+	id    string
+}
+
+// openBaseRunner checks out the repository's HEAD commit and opens a builder sandbox with no network over the checkout.
+func openBaseRunner(
+	ctx context.Context,
+	boxes *sandbox.Manager,
+	root, group string,
+	plan task.SandboxPlan,
+) (intake.BaseRunner, error) {
+	base, err := gitOut("-C", root, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("read the base commit: %w", err)
+	}
+	for _, d := range []string{plan.Temp, plan.Build} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return nil, fmt.Errorf("create %s: %w", d, err)
+		}
+	}
+
+	dir, err := checkoutBase(ctx, root, base, plan.Build)
+	if err != nil {
+		return nil, fmt.Errorf("check out the base commit: %w", err)
+	}
+
+	tmp, err := os.MkdirTemp(plan.Temp, "komodo-sandbox-")
+	if err != nil {
+		return nil, fmt.Errorf("make the sandbox folder: %w", err)
+	}
+
+	inst, err := boxes.CreateSandboxInstance(ctx, sandbox.Spec{
+		Group:      group,
+		Worktree:   dir,
+		Writable:   []string{tmp, plan.Build},
+		Modules:    plan.Modules,
+		Toolchains: plan.Toolchains,
+		MaxProcs:   plan.MaxProcs,
+		MaxMemGB:   plan.MaxMemGB,
+		Role:       sandbox.RoleBuilder,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create the sandbox: %w", err)
+	}
+
+	return &baseRunner{boxes: boxes, id: inst.ID}, nil
+}
+
+// Run runs one shell command from the root of the base checkout and returns its exit code; a killed command is not 0.
+func (b *baseRunner) Run(ctx context.Context, command string) (int, error) {
+	// baseTimeout is the longest one command may run before the sandbox kills it.
+	const baseTimeout = 10 * time.Minute
+
+	cmd, err := b.boxes.Command(ctx, b.id, sandbox.Command{Argv: []string{"sh", "-c", command}, Timeout: baseTimeout})
+	if err != nil {
+		return -1, err
+	}
+
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err := cmd.Start(); err != nil {
+		return -1, err
+	}
+
+	_ = sandbox.Wait(cmd)
+	if cmd.ProcessState == nil {
+		return -1, errors.New("the command did not finish")
+	}
+
+	return cmd.ProcessState.ExitCode(), nil
+}
+
+// Close removes the sandbox instance.
+func (b *baseRunner) Close() error {
+	return b.boxes.DestroySandboxInstance(context.Background(), b.id)
+}
+
+// openBase opens the planner's base-commit runner: one sandbox over a checkout of HEAD per plan.
+func (k *repoKit) openBase(ctx context.Context) (intake.BaseRunner, error) {
+	sum := sha256.Sum256([]byte(k.root))
+	group := "plan-" + hex.EncodeToString(sum[:4])
+
+	return openBaseRunner(ctx, k.s.boxes, k.root, group, k.s.sandboxPlan(group))
 }
 
 // newSessionID returns a random session identifier in the UUID shape the claude program requires.

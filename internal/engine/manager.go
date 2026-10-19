@@ -308,7 +308,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 
 	req := string(rs.Request)
 	fail := func(format string, a ...any) error {
-		return m.refuse(rs.Target, req, fmt.Sprintf(format, a...))
+		return m.refuse(id, rs.Target, req, fmt.Sprintf(format, a...))
 	}
 	if len(rs.Groups) == 0 {
 		return fail("the run names no groups")
@@ -331,7 +331,9 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 
 	for _, label := range rs.Groups {
 		if _, ok := byLabel[label]; !ok {
-			return &codeError{CodeUnknownTarget, fmt.Sprintf("no task group %s in the plan", label)}
+			why := fmt.Sprintf("no task group %s in the plan", label)
+			m.publishRefused(id, rs.Target, req, why)
+			return &codeError{CodeUnknownTarget, why}
 		}
 	}
 	if err := CheckPlan(specs); err != nil {
@@ -473,14 +475,20 @@ func (m *Manager) signalLocked() {
 	m.chg = make(chan struct{})
 }
 
-// refuse publishes an error / run-refused event and returns the refusal.
-func (m *Manager) refuse(target, request, why string) error {
+// refuse publishes an error / run-refused event for the run and returns the refusal.
+func (m *Manager) refuse(run, target, request, why string) error {
+	m.publishRefused(run, target, request, why)
+	return &codeError{CodeRunRefused, why}
+}
+
+// publishRefused publishes the error / run-refused event of a run, so a plan waiting on that run learns it did not start.
+func (m *Manager) publishRefused(run, target, request, why string) {
 	_ = m.d.Bus.Publish(Event{
 		Type:    bus.TypeError,
 		Subtype: "run-refused",
+		Run:     bus.ID(run),
 		Data:    &RunRefused{Target: target, Why: why, Request: request},
 	})
-	return &codeError{CodeRunRefused, why}
 }
 
 // prepareEpics makes sure each epic's branch exists and holds the task lists before any group branch is cut.
@@ -497,7 +505,7 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 		branch := "komodo/" + s.Epic
 		ok, err := m.d.Git.BranchExists(ctx, rs.Root, branch)
 		if err != nil {
-			return m.refuse(rs.Target, string(rs.Request), fmt.Sprintf("look for branch %s: %v", branch, err))
+			return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("look for branch %s: %v", branch, err))
 		}
 		if ok {
 			continue
@@ -513,7 +521,7 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 				continue
 			}
 
-			return m.refuse(rs.Target, string(rs.Request), fmt.Sprintf("create branch %s: %v", branch, err))
+			return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("create branch %s: %v", branch, err))
 		}
 
 		if err := m.d.Commits.SaveLists(
@@ -525,7 +533,7 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 				Epic:      s.Epic,
 			},
 		); err != nil {
-			return m.refuse(rs.Target, string(rs.Request), fmt.Sprintf("commit the task lists of %s: %v", s.Epic, err))
+			return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("commit the task lists of %s: %v", s.Epic, err))
 		}
 	}
 

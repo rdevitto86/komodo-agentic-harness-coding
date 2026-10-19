@@ -98,6 +98,14 @@ type PlannerLimits struct {
 	IdleMin int // minutes of silence before the session is stopped; the session adapter enforces it
 }
 
+// BaseRunner runs commands on the untouched base commit in a sandbox that has no network.
+type BaseRunner interface {
+	// Run runs one shell command from the root of the base checkout and returns its exit code.
+	Run(ctx context.Context, command string) (exit int, err error)
+	// Close removes the checkout's sandbox.
+	Close() error
+}
+
 // Deps are the collaborators the harness passes in at construction.
 type Deps struct {
 	// publishes events and subscribes by type
@@ -122,6 +130,8 @@ type Deps struct {
 	Repo string
 	// git common directory for run-start
 	CommonDir string
+	// opens the base commit's runner for one plan; nil skips the fail-first check
+	OpenBase func(ctx context.Context) (BaseRunner, error)
 }
 
 // Handler turns plan requests into task lists and a run-start event.

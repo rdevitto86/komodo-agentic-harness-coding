@@ -89,6 +89,104 @@ func TestDetectMarkerHash(t *testing.T) {
 	}
 }
 
+// withGolangci stubs the golangci-lint lookup for one test: found true puts the tool on PATH.
+func withGolangci(t *testing.T, found bool) {
+	t.Helper()
+
+	old := lookPath
+	lookPath = func(name string) (string, error) {
+		if found && name == "golangci-lint" {
+			return "/usr/local/bin/golangci-lint", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { lookPath = old })
+}
+
+func TestDetectGoLintGolangci(t *testing.T) {
+	vet := []string{"go", "vet", "./..."}
+	run := []string{"golangci-lint", "run"}
+
+	for _, tc := range []struct {
+		name   string
+		config string
+		found  bool
+		want   []string
+	}{
+		{"yml and tool", ".golangci.yml", true, run},
+		{"yaml and tool", ".golangci.yaml", true, run},
+		{"toml and tool", ".golangci.toml", true, run},
+		{"json and tool", ".golangci.json", true, run},
+		{"config without tool", ".golangci.yml", false, vet},
+		{"tool without config", "", true, vet},
+		{"neither", "", false, vet},
+		{"config in a folder", "sub/.golangci.yml", true, vet},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withGolangci(t, tc.found)
+
+			files := map[string]string{"go.mod": "module x\n"}
+			if tc.config != "" {
+				files[tc.config] = "version: \"2\"\n"
+			}
+
+			cs := Detect(newTree(files))
+			if got := argvOf(cs, ClassLint); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("lint: %v, want %v", got, tc.want)
+			}
+			for _, c := range cs.Commands {
+				if c.Class == ClassLint && (c.Marker != "go.mod" || c.PerFile) {
+					t.Fatalf("lint command: %+v", c)
+				}
+			}
+		})
+	}
+}
+
+func TestDetectGoLintMakefileWins(t *testing.T) {
+	withGolangci(t, true)
+
+	cs := Detect(newTree(map[string]string{
+		"go.mod": "module x\n", ".golangci.yml": "version: \"2\"\n", "Makefile": "lint:\n\techo\n",
+	}))
+	if got := argvOf(cs, ClassLint); !reflect.DeepEqual(got, []string{"make", "lint"}) {
+		t.Fatalf("lint: %v", got)
+	}
+}
+
+func TestDetectGoLintOnlyForGo(t *testing.T) {
+	withGolangci(t, true)
+
+	cs := Detect(newTree(map[string]string{"pyproject.toml": "[project]\n", ".golangci.yml": "version: \"2\"\n"}))
+	if got := argvOf(cs, ClassLint); !reflect.DeepEqual(got, []string{"ruff", "check"}) {
+		t.Fatalf("lint: %v", got)
+	}
+}
+
+func TestDetectGoLintHashFollowsConfigAndTool(t *testing.T) {
+	files := func(config string) *fakeTree {
+		f := map[string]string{"go.mod": "module x\n"}
+		if config != "" {
+			f[".golangci.yml"] = config
+		}
+		return newTree(f)
+	}
+
+	withGolangci(t, false)
+	without := Detect(files("a")).MarkerHash
+	other := Detect(files("b")).MarkerHash
+
+	withGolangci(t, true)
+	with := Detect(files("a")).MarkerHash
+
+	if without == other || without == with {
+		t.Fatal("the hash must follow the config file's content and the tool's presence")
+	}
+	if Detect(files("")).MarkerHash != Detect(newTree(map[string]string{"go.mod": "module x\n"})).MarkerHash {
+		t.Fatal("a repository with no config must hash as before")
+	}
+}
+
 func TestRenderProfile(t *testing.T) {
 	out := renderProfile([]string{"go", "python"}, Detect(goTree()))
 	for _, want := range []string{

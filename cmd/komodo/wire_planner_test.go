@@ -109,7 +109,8 @@ func newPlannerFixture(t *testing.T, out ...string) *plannerFixture {
 	return &plannerFixture{home: home, fake: fake, kit: k}
 }
 
-// planFolder returns the planner session folder, waiting until the session wrote its tool config.
+// planFolder returns the planner session folder, waiting until the session wrote its tool config, brief and system text.
+// The tool config is written when the session starts and the brief on its first send, so mcp.json alone is too early.
 func (f *plannerFixture) planFolder(t *testing.T) string {
 	t.Helper()
 
@@ -117,7 +118,7 @@ func (f *plannerFixture) planFolder(t *testing.T) string {
 
 	for time.Now().Before(deadline) {
 		m, _ := filepath.Glob(filepath.Join(f.home, "sessions", "planner-*", "mcp.json"))
-		if len(m) == 1 {
+		if len(m) == 1 && written(filepath.Dir(m[0]), "brief.md", "system.md") {
 			return filepath.Dir(m[0])
 		}
 
@@ -214,4 +215,15 @@ func TestPlannerSessionGetsItsBriefToolConfigAndLiveToolRoute(t *testing.T) {
 	if !uuidShape.MatchString(id) {
 		t.Fatalf("session id %q is not a UUID, which claude --session-id requires", id)
 	}
+}
+
+// written reports whether every named file in dir exists and is not empty.
+func written(dir string, names ...string) bool {
+	for _, n := range names {
+		if fi, err := os.Stat(filepath.Join(dir, n)); err != nil || fi.Size() == 0 {
+			return false
+		}
+	}
+
+	return true
 }

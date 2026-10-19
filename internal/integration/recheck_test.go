@@ -31,13 +31,11 @@ func TestRecheckFailureStopsTheLanding(t *testing.T) {
 	files := planFiles()
 	files["docs/backlog/epic-1/tg-1.1/tsk-add.md"] = strings.Replace(
 		files["docs/backlog/epic-1/tg-1.1/tsk-add.md"],
-		"done_when: go test ./...",
+		"done_when: test -f tiny/add.go",
 		"done_when: "+epicLacksFile,
 		1,
 	)
 	r := newBinRig(t, files)
-	// The check needs git, which a Tester container never holds, so this run uses the operating-system sandbox.
-	r.env = append(r.env, noDocker)
 	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
 		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}

@@ -123,12 +123,13 @@ func Load(root string) ([]Epic, []Finding, error) {
 		}
 	}
 
-	epics, found := parseFiles(files)
+	epics, found := parseFiles(files, false)
 	return epics, append(found, strip(duplicateIDs(epics))...), nil
 }
 
-// parseFiles groups task-list files by group folder and parses each group; paths are relative to docs/backlog.
-func parseFiles(files []DraftFile) ([]Epic, []Finding) {
+// parseFiles groups task-list files by group folder and parses each group; paths are relative to docs/backlog. With
+// idOptional a TG.md may leave id out.
+func parseFiles(files []DraftFile, idOptional bool) ([]Epic, []Finding) {
 	var found []Finding
 
 	groups := map[string]*groupParts{}
@@ -190,7 +191,7 @@ func parseFiles(files []DraftFile) ([]Epic, []Finding) {
 
 	var epics []Epic
 	for _, p := range parts {
-		g, gf := parseGroup(p)
+		g, gf := parseGroup(p, idOptional)
 		found = append(found, gf...)
 		if len(epics) == 0 || epics[len(epics)-1].Number != p.epic {
 			epics = append(epics, Epic{Number: p.epic})
@@ -224,7 +225,7 @@ func badPath(p string) string {
 }
 
 // parseGroup parses one group folder: its TG.md and its task files.
-func parseGroup(p *groupParts) (Group, []Finding) {
+func parseGroup(p *groupParts, idOptional bool) (Group, []Finding) {
 	g := Group{Name: p.name, Status: "todo", Subsystem: "none", Priority: PriorityNormal}
 	tgPath := groupPath(p.epic, p.name)
 
@@ -232,7 +233,7 @@ func parseGroup(p *groupParts) (Group, []Finding) {
 	if p.tg == nil {
 		found = append(found, grammar(tgPath, "group has no TG.md"))
 	} else {
-		found = append(found, parseTG(tgPath, p.tg.Content, &g)...)
+		found = append(found, parseTG(tgPath, p.tg.Content, &g, idOptional)...)
 	}
 
 	sort.Slice(p.tasks, func(i, j int) bool { return p.tasks[i].Path < p.tasks[j].Path })

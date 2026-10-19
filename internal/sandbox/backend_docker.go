@@ -66,7 +66,10 @@ func (d *Docker) Prepare(ctx context.Context, s Spec) (Instance, error) {
 		return Instance{}, err
 	}
 
-	adds := toolAdditions(lang)
+	adds, err := toolAdditions(ctx, lang, r.Worktree)
+	if err != nil {
+		return Instance{}, err
+	}
 	if len(adds) > 0 && !s.Network {
 		return Instance{}, fmt.Errorf(
 			"the %s tools need the network when the container is made: "+
@@ -136,7 +139,7 @@ func (d *Docker) Command(ctx context.Context, i Instance, s Spec, c Command) (*e
 	name := containerName(i.Group, i.ID)
 
 	args := []string{"exec", "-i", "-w", workDir}
-	for _, kv := range append(buildEnv(r, c, true), marker) {
+	for _, kv := range append(append(buildEnv(r, c, true), gitEnv...), marker) {
 		args = append(args, "-e", kv)
 	}
 
@@ -285,9 +288,12 @@ func (d *Docker) createArgs(r rules, inst Instance, name, image string) ([]strin
 	}
 
 	for _, p := range r.Readable {
-		if !slices.Contains(r.Toolchains, p) {
+		if !slices.Contains(r.Toolchains, p) && p != r.GitDir {
 			a = append(a, "-v", p+":"+p+":ro")
 		}
+	}
+	if g := gitShared(r.GitDir); g != "" {
+		a = append(a, "-v", g+":"+g+":ro")
 	}
 
 	for _, p := range r.Writable {
@@ -381,7 +387,17 @@ type fileID struct{ dev, ino uint64 }
 // workDir is where the worktree is mounted inside the container.
 const workDir = "/work"
 
+// gitEnv trusts every folder for git inside the container, where the worktree's owner may differ; it is command-scope
+// config, so nothing is written.
+var gitEnv = []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=*"}
+
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
+
+// golangciConfigs lists the golangci-lint configuration file names, looked up at the repository root.
+var golangciConfigs = []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"}
+
+// golangciVersion matches the output of golangci-lint version --short.
+var golangciVersion = regexp.MustCompile(`^v?(\d+\.\d+\.\d+)$`)
 
 var (
 	goVersion     = regexp.MustCompile(`(?m)^go\s+(\d+\.\d+)`)
@@ -401,15 +417,78 @@ func inContainer(worktree, p string) string {
 	return p
 }
 
-// toolAdditions returns the commands that add the tools the official image of a language lacks.
-func toolAdditions(lang string) [][]string {
+// gitShared returns the folder to mount read-only for a worktree's own git folder: the shared folder its commondir file
+// names, which holds the history and contains the worktree's folder. It is empty when no such folder is on disk.
+func gitShared(gitDir string) string {
+	if gitDir == "" {
+		return ""
+	}
+
+	common := gitDir
+	if b, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		common = strings.TrimSpace(string(b))
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitDir, common)
+		}
+	}
+	// git writes the pointer file with real paths, so the mount takes the real path too.
+	real, err := filepath.EvalSymlinks(common)
+	if err != nil {
+		return ""
+	}
+
+	return real
+}
+
+// toolAdditions returns the commands that add the tools the official image of a language lacks; a Go repository that lints
+// with golangci-lint gets the host's version.
+func toolAdditions(ctx context.Context, lang, worktree string) ([][]string, error) {
 	switch lang {
 	case "rust":
-		return [][]string{{"rustup", "component", "add", "clippy", "rustfmt"}}
+		return [][]string{{"rustup", "component", "add", "clippy", "rustfmt"}}, nil
 	case "python":
-		return [][]string{{"pip", "install", "uv"}}
+		return [][]string{{"pip", "install", "uv"}}, nil
+	case "go":
+		return golangciAddition(ctx, worktree)
 	}
-	return nil
+	return nil, nil
+}
+
+// golangciAddition returns the command that installs the host's golangci-lint, when the worktree configures it and the host
+// has it on PATH; it fails when the host version cannot be read.
+func golangciAddition(ctx context.Context, worktree string) ([][]string, error) {
+	if !slices.ContainsFunc(golangciConfigs, func(f string) bool {
+		_, err := os.Stat(filepath.Join(worktree, f))
+		return err == nil
+	}) {
+		return nil, nil
+	}
+
+	bin, err := exec.LookPath("golangci-lint")
+	if err != nil {
+		return nil, nil
+	}
+
+	out, err := exec.CommandContext(ctx, bin, "version", "--short").Output()
+	m := golangciVersion.FindStringSubmatch(strings.TrimSpace(string(out)))
+	if err != nil || m == nil {
+		return nil, errors.New(
+			"cannot read the host's golangci-lint version, so the container cannot install the same one: " +
+				"set sandbox.image to an image that holds golangci-lint",
+		)
+	}
+
+	return [][]string{{"env", "GOBIN=/usr/local/bin", "go", "install", golangciModule(m[1])}}, nil
+}
+
+// golangciModule returns the module path and version of golangci-lint's command; version 2 and later carry the major
+// version in the path.
+func golangciModule(version string) string {
+	path := "github.com/golangci/golangci-lint"
+	if major, _, _ := strings.Cut(version, "."); major != "1" {
+		path += "/v" + major
+	}
+	return path + "/cmd/golangci-lint@v" + version
 }
 
 // containerName returns the container's name for a group and instance.

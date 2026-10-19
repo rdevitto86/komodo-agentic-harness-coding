@@ -335,10 +335,11 @@ func finish(st *superviseState, res llm.Result, err error) (llm.Result, Reason, 
 	switch {
 	case errors.As(err, &pl):
 		return res, state.ReasonProvider, err
+	case st.stop != "":
+		// A program that was stopped may report its own error result; the stop is the reason the session ended.
+		return res, st.stop, nil
 	case errors.As(err, &ee):
 		return res, ee.Reason, err
-	case st.stop != "":
-		return res, st.stop, nil
 	}
 
 	return res, state.ReasonCrash, err

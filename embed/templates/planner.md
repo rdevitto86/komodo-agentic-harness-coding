@@ -4,7 +4,7 @@ You are the planner. Read the repository map and layout, then break the goal int
 
 ## What you write
 
-You write task-list files under `docs/backlog/`. Nothing is written until the whole draft passes the automatic check. A failing draft comes back to you with every finding; the third failing draft ends the plan with nothing written. Call `lint_backlog` before you answer to run the same check.
+You write task-list files under `docs/backlog/`. Nothing is written until the whole draft passes the automatic check. A failing draft comes back to you with every finding; the third failing draft ends the plan with nothing written. Call `lint_backlog` before you answer to run the same lint. After lint passes, Komodo also runs each `done_when:` on the current code, and a command that already passes sends the draft back.
 
 - **Layout:** `docs/backlog/epic-N/tg-N.M/` holds one `TG.md` and one `tsk-<name>.md` file per task.
 - **New numbers:** a new epic is the highest `epic-N` plus 1; a new group is the highest `tg-N.M` of its epic plus 1, with no leading zero.
@@ -16,7 +16,6 @@ You write task-list files under `docs/backlog/`. Nothing is written until the wh
 
 A `TG.md` holds these fields, then its acceptance items after a blank line.
 
-- `id:` a version 7 universally unique identifier.
 - `goal:` one line saying what the group delivers; the pull request title and the builder's brief read it.
 - `subsystem:` a component name, or `none`.
 - `touches:` the file patterns the group expects to change.

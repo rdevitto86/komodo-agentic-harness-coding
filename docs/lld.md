@@ -479,7 +479,7 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 | `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; `Event` run-start with no run id and `data.schedule` set | One final `ok` whose `data` holds the run id the engine minted and the queued time |
 | `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
 | `stop (id)` | `Verb` `stop`; `Event` run-stop | One final `ok`, or `refused` with `unknown_target` |
-| `plan` | `Verb` `plan`; `Event` plan | `event` replies for the `error` events of the plan and for the `run-start` the Intake Handler publishes, which ends planning, then one final `ok` |
+| `plan` | `Verb` `plan`; `Event` plan | `event` replies for the `error` events of the plan and for the `run-start` the Intake Handler publishes; planning ends when that run's first `run-status` `run.start` arrives, or its `error` `run-refused`, which is sent as a last `event` reply; then one final `ok` |
 | `status`, `status (id)` | `Verb` `status`; `Target` for `(id)`; `Root`; `Flags.All`, `Flags.Wait`, `Flags.TimeoutS` | One final `ok` holding `StatusData`, with `figures` for `(id)`, `explain` for a failed or blocked group, and `recent` and `scorecard` for `--all`. With `--wait`, an `ok` holding `StatusData` after each change, then a final `ok` with `{"waited": "blocked"}`, `"done"` or `"timeout"` |
 | `replay (id)` | `Verb` `replay`; `Target` | One `event` reply per recorded event, then a final `ok` with `{"gaps": 0}` |
 | `abandon (id)` | `Verb` `abandon`; `Target` | One final `ok`, or `refused` with `unknown_target` |
@@ -1253,7 +1253,7 @@ A `run-continue` for `komodo run tg-1.2 --approve`:
 - `run` holds the run id the CLI generated for `run-start`; for a scheduled run it holds the run id the engine minted when it queued the entry. For `run-stop` and `run-continue` it holds the run id the caller typed, or is empty when a label was typed; the Runtime Manager then takes the label's latest attempt and returns the run id in its `accepted` reply.
 - `answer` is `approve` or `deny`, and is present only on `run-continue` sent by `--approve` or `--deny`.
 - `repo` and `root` are the repository id and root the engine needs because it hosts runs of several repositories. The full payload per event type is in [Event Bus](#4-event-bus).
-- While a command waits, the CLI receives over its socket connection the `run-status`, `run-complete`, `run-failure` and `error` events of the run it waits on; while `plan` waits, it also receives the run's `run-start`. The CLI starts work directly: it sends `plan`, which goes to the Intake Handler, or `run-start`, `run-stop` and `run-continue`, which go to the Runtime Manager.
+- While a command waits, the CLI receives over its socket connection the `run-status`, `run-complete`, `run-failure` and `error` events of the run it waits on; while `plan` waits, it also receives the run's `run-start` and then its `run-refused`, when the Runtime Manager refuses the run. The CLI starts work directly: it sends `plan`, which goes to the Intake Handler, or `run-start`, `run-stop` and `run-continue`, which go to the Runtime Manager.
 
 #### Short commands
 
@@ -3836,7 +3836,7 @@ dependencies: tg-1.1
 
 | Field | Type | Rule |
 |---|---|---|
-| `id:` | string | Universally unique identifier, version 7, written when the group is created |
+| `id:` | string | Universally unique identifier, version 7, written by Komodo when the plan is saved; a draft leaves it out |
 | `goal:` | string | One line: what the group delivers; the pull request title and the builder's brief read it |
 | `subsystem:` | string | A component name from the component map, or `none` |
 | `touches:` | globs | File patterns the group expects to change; overlap between two groups decides which must run first |
@@ -4019,7 +4019,7 @@ type DraftFile struct {
 ```json
 {
   "files": [
-    {"path": "epic-2/tg-2.1/TG.md", "content": "id: 0192e4c5-...\ngoal: ...\n"},
+    {"path": "epic-2/tg-2.1/TG.md", "content": "goal: ...\n"},
     {"path": "epic-2/tg-2.1/tsk-add-lock.md", "content": "files: internal/lease/lock.go\n..."}
   ]
 }
@@ -4325,7 +4325,7 @@ flowchart TB
 ```
 
 1. `LintDraft` returns all findings. A draft passes when no finding has severity `fail`.
-2. On a pass, write the files.
+2. On a pass, run each task's `done_when` once on the untouched base commit, in a builder sandbox with no network; a command runs once per plan. A command that exits 0 is a failing `fail_first` finding, and the draft goes back like a lint failure. With no failing finding, write the files; a new group's `TG.md` without `id:` gets a version 7 id, and a stored group keeps its stored id.
 3. On a failure with fewer than 3 failing drafts so far, send the finding text into the same session.
 4. The session returns its next draft, and the loop runs again.
 5. The third failing draft ends the plan with `PlanBlockedError`; 0 task-list files exist.
@@ -4356,7 +4356,7 @@ Each finding names its rule and its file. Lint never stops at the first finding;
 - **Case collision inputs:** every tracked file of the base commit plus every group's `files`. Task file names within one group are checked too.
 - **Draft numbers and status:** a draft group that is new must take the next `tg-N.M` of its epic, a draft group must write `status: todo`, and a path number has no leading zero. Each is a failed draft.
 - **Protected list:** it comes from the caller, never from a file this package reads.
-- **Guidance first:** precision comes from the planner template and a planning skill, not from more checks. The template sets boundaries: what every group must contain, size limits, and how to write a definition of done and acceptance items. The skill carries project-management practice for ordering dependent groups. Lint keeps only the checks a program can count exactly, such as a cycle, two groups editing the same file with no order, and a group that is too large. No check judges completeness. [TODO: the planner template's boundaries and the planning skill's text ([G-284](#g-284))]
+- **Guidance first:** precision comes from the planner template and a planning skill, not from more checks. The template sets boundaries: what every group must contain, size limits, and how to write a definition of done and acceptance items. The skill carries project-management practice for ordering dependent groups. Lint keeps only the checks a program can count exactly, such as a cycle, two groups editing the same file with no order, and a group that is too large. No check judges completeness. The shipped texts are `embed/templates/planner.md` and `embed/skills/planning/SKILL.md`; the Context Manager puts the planning skill in every planner brief. The fail-first check is exact too: it counts only an exit code.
 
 **Building the dependency graph**
 
@@ -5039,13 +5039,13 @@ type CommandSet struct {
 
 | Marker | `setup` | `build` | `test` | `lint` | `format` |
 |---|---|---|---|---|---|
-| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...` | `gofmt -w` |
+| `go.mod` | `go mod download` | `go build ./...` | `go test ./...` | `go vet ./...`, or `golangci-lint run` | `gofmt -w` |
 | `package.json` | `npm ci` | `npm run build` | `npm test` | `npm run lint` | `npx prettier --write` |
 | `Cargo.toml` | `cargo fetch` | `cargo build` | `cargo test` | `cargo clippy` | `cargo fmt --` |
 | `pyproject.toml` | none | none | `pytest` | `ruff check` | `ruff format` |
 | `Makefile` | `make setup` | `make build` | `make test` | `make lint` | `make fmt` |
 
-A marker with no entry for a class leaves that class empty. For `package.json`, `build`, `test` and `lint` are filled only when `scripts` defines `build`, `test` or `lint`, and `format` is `npx prettier --write` when `prettier` is a dependency, else `npm run format --` when `scripts` defines `format`, else empty; `setup` needs no script. **The format class rewrites files:** its command runs on each edited file after an edit, the caller appends the file path as the last argument, and `PerFile` is true; a `Makefile` `fmt` target takes no path, runs on the whole repository, and has `PerFile` false. A `Makefile` target named like the class (`setup`, `build`, `test`, `lint`, or `fmt` for `format`) beats the language marker for that class. Markers are looked up at the repository root; the `git-read` class holds `git status`, `git diff`, `git log` and `git show`. `MarkerHash` is the SHA-256 of the marker file names and contents. The `repo_profile` slot renders `Languages: <names by extension>` and one `  <class>: <commands>` line per class found.
+For `go.mod`, `lint` is `golangci-lint run` when the repository root holds `.golangci.yml`, `.golangci.yaml`, `.golangci.toml` or `.golangci.json` and `golangci-lint` is on `PATH`, so that style rules can fail a check; otherwise it is `go vet ./...`. `MarkerHash` also covers those files and whether the tool was found. The operating-system sandbox finds the program because the folder that holds it, with symlinks resolved, joins the toolchain folders; the Docker container gets the host's version installed when it is made. A marker with no entry for a class leaves that class empty. For `package.json`, `build`, `test` and `lint` are filled only when `scripts` defines `build`, `test` or `lint`, and `format` is `npx prettier --write` when `prettier` is a dependency, else `npm run format --` when `scripts` defines `format`, else empty; `setup` needs no script. **The format class rewrites files:** its command runs on each edited file after an edit, the caller appends the file path as the last argument, and `PerFile` is true; a `Makefile` `fmt` target takes no path, runs on the whole repository, and has `PerFile` false. A `Makefile` target named like the class (`setup`, `build`, `test`, `lint`, or `fmt` for `format`) beats the language marker for that class. Markers are looked up at the repository root; the `git-read` class holds `git status`, `git diff`, `git log` and `git show`. `MarkerHash` is the SHA-256 of the marker file names and contents. The `repo_profile` slot renders `Languages: <names by extension>` and one `  <class>: <commands>` line per class found.
 
 ### 6.4 Interfaces
 
@@ -6061,8 +6061,8 @@ type TokenCaps interface {
 | CLI | `Request` frames on `engine.sock`; the engine publishes `run-start`, `run-stop` and `run-continue` | A person or the orchestrator types the command |
 | Intake Handler | `run-start` event, `source` `intake` | After planning, for the groups it just wrote |
 | Resource Manager | `Manager.PauseGroups`, `Manager.NudgeGroups` | A plan window reaches 100%, a spending ceiling is reached, or a group reaches 100% or 90% of its token cap |
-| Task Managers, Error Handler, Metrics Service, Resource Manager | `Manager.Beat` | Every `HeartbeatEvery` |
-| Task Manager | `Replies` channel, read into `Manager.Report` | Any state report, escalation, timer request or end of a call |
+| Error Handler, Metrics Service, Resource Manager | `Manager.Beat` | Every `HeartbeatEvery` |
+| Task Manager | `Replies` channel, read into `Manager.Report`; every message read also calls `Manager.Beat` | Any state report, escalation, timer request or end of a call; a `beat` message every `HeartbeatEvery` |
 | Cleanup Handler | `CloseTaskGroup` on the Task Manager, which reports `group.closed` | Work is pushed and cleaned |
 | Runtime Manager | `LeaseStore.Grant`, `Renew`, `Revoke`, `Release` | A group starts, every `LeaseRenewEvery`, a stop, a group closes |
 | Runtime Manager | `StateStore.Load`, `Save` | After every applied input; at recovery |
@@ -6297,7 +6297,7 @@ sequenceDiagram
 
 Two watches cover a loop that stops answering and an engine that stops answering.
 
-**Inside the engine.** Every core loop calls `Manager.Beat` every `HeartbeatEvery`, 5 seconds. The core loops are each Task Manager, the Error Handler loop, the Metrics Service loop and the Resource Manager loop.
+**Inside the engine.** Every core loop beats every `HeartbeatEvery`, 5 seconds. The core loops are each Task Manager, the Error Handler loop, the Metrics Service loop and the Resource Manager loop. The watcher loops call `Manager.Beat`. A Task Manager sends a `beat` message from its command loop, and the Runtime Manager calls `Beat` for every message it reads from it. A Task Manager busy in a long model session still beats; one whose command loop hangs does not.
 
 ```go
 // Beat records that a core loop is alive; loop is "task:<group id>", "fault", "metrics" or "resource".
@@ -8817,6 +8817,7 @@ const (
 	MsgTimer    MessageKind = "timer"    // a request for more wall time
 	MsgState    MessageKind = "state"    // progress and the facts since the last report
 	MsgEnded    MessageKind = "ended"    // Run, Resume or Continue returned
+	MsgBeat     MessageKind = "beat"     // the command loop is alive; sent every HeartbeatEvery
 )
 
 // Message is one item the Task Manager sends to the Runtime Manager.
@@ -9393,7 +9394,7 @@ type Backend interface {
 }
 ```
 
-Notes on `Spec`: `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable; the Task Manager refreshes the list through `SetMasked` before each command, and a container hides only the files that existed when it was made. `Command` refuses a masked file that exists now and was not mounted over, or whose file on the host was replaced since the mount (a different device or inode); a listed file that does not exist is ignored. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed.
+Notes on `Spec`: every mechanism exposes the git folder read-only (Seatbelt and Bubblewrap allow reads and no writes, and a container mounts it read-only), so a check can read history and only the Commit Handler writes git. `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable; the Task Manager refreshes the list through `SetMasked` before each command, and a container hides only the files that existed when it was made. `Command` refuses a masked file that exists now and was not mounted over, or whose file on the host was replaced since the mount (a different device or inode); a listed file that does not exist is ignored. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed.
 
 The command environment holds only `PATH`, `HOME` (the instance's temporary folder), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables, plus the tag `KOMODO_SANDBOX_CMD` that names the command to the sandbox. `PATH` is the detected toolchain folders in detection order, then the system folders.
 
@@ -9479,7 +9480,7 @@ bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /home/dev --tmp
 
 For the group's setup command alone, `Spec.Network` is true: the Seatbelt profile then allows network access, and the Bubblewrap line leaves out `--unshare-net`.
 
-A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt` and `uv` where the language needs them, makes one container per instance with the worktree at `/work`, runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
+A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt`, `uv` and `golangci-lint` where the language needs them, makes one container per instance with the worktree at `/work` and the repository's shared git folder mounted read-only at its host path, so the worktree's `.git` pointer file resolves and a check can read history but never write it (git's `safe.directory` is set through environment variables, never a config file), runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. For Go, when the worktree holds a `golangci-lint` configuration file and the host has `golangci-lint` on `PATH`, it is `env GOBIN=/usr/local/bin go install <module>@v<version>`, where the version is the host's `golangci-lint version --short` and the module path carries `/v<major>` from major version 2 on; when the host version cannot be read, the container is not made and the error names `sandbox.image` as the fix, and the latest version is never installed. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
 
 **Language caches.** The caches are the harness's own, under a per-repository folder: never the person's `~/.npm`, `~/.cargo/registry` or Go cache. The Cache Manager keeps them and their size rules ([chapter 8](#8-cache-manager)); the sandbox only mounts them, with the toolchain folders read-only. The per-user process limit is never used, because it counts every process the person runs.
 
@@ -11088,7 +11089,7 @@ The Builder keeps no state of its own. The runtime state of the group ([State Ma
 
 **Invariants**
 1. A task is `done` only after Go ran its completion command and saw exit 0; the Builder's claim is never enough.
-2. The Builder holds no git path: only the Commit Handler commits and pushes.
+2. The Builder's sandbox reads git and never writes it: only the Commit Handler commits and pushes.
 3. The Builder writes only inside the effective file list and its test siblings.
 4. Any single failure loses at most one model turn.
 5. Every rework loop has a counter and a bound.
@@ -11788,7 +11789,7 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 1. A Tester failure counts only after Go's two reruns of its command also fail.
 2. The Tester's confirmation list holds every task identifier exactly once.
 3. The mechanical checks start no model session, and a failed check returns the group to the Builder before the Tester or the Reviewer starts.
-4. No command of the Tester can change the Builder's worktree or its `.git` entry; the sandbox receives the work under test and the Tester never holds a git path.
+4. No command of the Tester can change the Builder's worktree or its `.git` entry; the sandbox receives the work under test and the Tester's sandbox holds the git folder read-only, so a check reads history and no command writes it.
 5. A Tester brief holds 0 bytes of the Builder's prose.
 6. A failed item with no command never blocks.
 
@@ -15322,7 +15323,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-266"></a>G-266 | Builder | Whether `--deny` carries a reason text for the Builder | Phase 2, with the CLI | [12](#12-builder), [1](#1-cli) |
 | <a id="g-273"></a>G-273 | Config | How `providers.local.<name>.models` writes several model names in one string | Phase 4, with the model client | [11](#11-task-manager), [3](#3-configuration-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
-| <a id="g-284"></a>G-284 | Planning | The planner template's boundaries (what every group must contain, size limits, how to write a definition of done and acceptance items) and the text of the planning skill | Authoring task, phase 7 | [5](#5-intake-handler), [6](#6-context-manager) |
 | <a id="g-286"></a>G-286 | Update | The poll interval's setting name and default, and which process polls when no engine runs | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |
 | <a id="g-287"></a>G-287 | Login | What each provider's login does and which providers `login --all` lists | Phase 7, with the installer | [1](#1-cli), [11](#11-task-manager) |
 | <a id="g-288"></a>G-288 | Install | The orchestrator rules text the Komodo block in `AGENTS.md` carries on its `Rules` line; the text is undefined and the line is left out until it is written | Authoring task, phase 7 | [1](#1-cli), [6](#6-context-manager) |

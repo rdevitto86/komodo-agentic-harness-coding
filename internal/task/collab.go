@@ -143,6 +143,7 @@ type Collaborators struct {
 	OnRecheck   func(pass bool, output string) // receives the result of the recheck command
 	Now         func() time.Time               // clock; time.Now when nil
 	Tick        time.Duration                  // session timer period; TickEvery when zero
+	BeatEvery   time.Duration                  // how often Serve sends a beat message; the package BeatEvery when zero
 	Ladder      [2]time.Duration               // stop ladder waits (to SIGTERM, to kill); TermAfter and KillAfter when zero
 	ResumeWait  func(try int) time.Duration    // backoff after a refused resume; 15, 30, 60 minutes when nil
 }

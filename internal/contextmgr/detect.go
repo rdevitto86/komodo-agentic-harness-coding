@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"slices"
 	"sort"
@@ -51,17 +52,13 @@ type markerRow struct {
 }
 
 var (
+	// lookPath finds a program on PATH; tests replace it.
+	lookPath = exec.LookPath
 	// classOrder lists the detected classes in rendering order.
 	classOrder = []Class{ClassSetup, ClassBuild, ClassTest, ClassLint, ClassFormat}
 	// markerRows lists the language markers in priority order.
 	markerRows = []markerRow{
-		{"go.mod", fixedCmds(map[Class]cmdSpec{
-			ClassSetup:  {argv: []string{"go", "mod", "download"}},
-			ClassBuild:  {argv: []string{"go", "build", "./..."}},
-			ClassTest:   {argv: []string{"go", "test", "./..."}},
-			ClassLint:   {argv: []string{"go", "vet", "./..."}},
-			ClassFormat: {argv: []string{"gofmt", "-w"}, perFile: true},
-		})},
+		{"go.mod", goCmds},
 		{"package.json", nodeCmds},
 		{"Cargo.toml", fixedCmds(map[Class]cmdSpec{
 			ClassSetup:  {argv: []string{"cargo", "fetch"}},
@@ -76,6 +73,8 @@ var (
 			ClassFormat: {argv: []string{"ruff", "format"}, perFile: true},
 		})},
 	}
+	// golangciConfigs lists the golangci-lint configuration file names, looked up at the repository root.
+	golangciConfigs = []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"}
 	// makeTargets names the Makefile target of each class.
 	makeTargets = map[Class]string{
 		ClassSetup:  "setup",
@@ -109,6 +108,49 @@ func Detect(t Tree) CommandSet { return detectWith(t, markerHash(t)) }
 // fixedCmds returns a command table that does not depend on the tree.
 func fixedCmds(m map[Class]cmdSpec) func(Tree) map[Class]cmdSpec {
 	return func(Tree) map[Class]cmdSpec { return m }
+}
+
+// goCmds returns the Go commands; lint is golangci-lint when the tree has its configuration file and the tool is on PATH.
+func goCmds(t Tree) map[Class]cmdSpec {
+	lint := []string{"go", "vet", "./..."}
+	if golangciReady(t) {
+		lint = []string{"golangci-lint", "run"}
+	}
+
+	return map[Class]cmdSpec{
+		ClassSetup:  {argv: []string{"go", "mod", "download"}},
+		ClassBuild:  {argv: []string{"go", "build", "./..."}},
+		ClassTest:   {argv: []string{"go", "test", "./..."}},
+		ClassLint:   {argv: lint},
+		ClassFormat: {argv: []string{"gofmt", "-w"}, perFile: true},
+	}
+}
+
+// golangciReady reports whether the tree has a golangci-lint configuration file and the tool is on PATH.
+func golangciReady(t Tree) bool {
+	if len(golangciFiles(t)) == 0 {
+		return false
+	}
+
+	_, err := lookPath("golangci-lint")
+	return err == nil
+}
+
+// golangciFiles returns the golangci-lint configuration files the tree holds at its root.
+func golangciFiles(t Tree) []string {
+	have := map[string]bool{}
+	for _, p := range t.Paths() {
+		have[p] = true
+	}
+
+	var out []string
+	for _, f := range golangciConfigs {
+		if have[f] {
+			out = append(out, f)
+		}
+	}
+
+	return out
 }
 
 // nodeCmds fills a class only when package.json defines its script; setup needs none.
@@ -148,7 +190,7 @@ func nodeCmds(t Tree) map[Class]cmdSpec {
 }
 
 // markerFiles returns the marker files the tree holds at its root, Makefile first, then in table
-// order.
+// order, then the golangci-lint configuration files.
 func markerFiles(t Tree) []string {
 	have := map[string]bool{}
 	for _, p := range t.Paths() {
@@ -156,7 +198,7 @@ func markerFiles(t Tree) []string {
 	}
 
 	var out []string
-	for _, f := range append([]string{"Makefile"}, rowFiles()...) {
+	for _, f := range slices.Concat([]string{"Makefile"}, rowFiles(), golangciConfigs) {
 		if have[f] {
 			out = append(out, f)
 		}
@@ -174,7 +216,8 @@ func rowFiles() []string {
 	return out
 }
 
-// markerHash hashes the names and contents of the marker files.
+// markerHash hashes the names and contents of the marker files, and whether golangci-lint is on PATH when the tree
+// configures it.
 func markerHash(t Tree) string {
 	h := sha256.New()
 
@@ -183,6 +226,13 @@ func markerHash(t Tree) string {
 		h.Write([]byte(f + "\x00"))
 		h.Write(b)
 		h.Write([]byte{0})
+	}
+
+	if len(golangciFiles(t)) > 0 {
+		h.Write([]byte("golangci-lint\x00"))
+		if golangciReady(t) {
+			h.Write([]byte{1})
+		}
 	}
 
 	return hex.EncodeToString(h.Sum(nil))

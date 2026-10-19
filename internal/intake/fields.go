@@ -59,14 +59,17 @@ var validStatus = map[string]bool{
 	"done":             true,
 }
 
-// parseTG reads a TG.md into g; every problem is a finding and the fields that read well still fill g.
-func parseTG(path, text string, g *Group) []Finding {
+// parseTG reads a TG.md into g; every problem is a finding and the fields that read well still fill g. A draft may leave
+// id out, because Komodo assigns it when the plan is saved.
+func parseTG(path, text string, g *Group, idOptional bool) []Finding {
 	b, found := parseBlock(path, text, tgKeys)
 	fail := func(msg string, a ...any) {
 		found = append(found, grammar(path, fmt.Sprintf(msg, a...)))
 	}
 	if id := b.one("id"); id == "" {
-		fail("id is missing")
+		if !idOptional {
+			fail("id is missing")
+		}
 	} else if !uuid7.MatchString(id) {
 		fail("id %q is not a version 7 identifier", id)
 	} else {

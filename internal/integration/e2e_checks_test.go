@@ -682,7 +682,7 @@ func TestFreeCheckFailureReturnsOutputToBuilder(t *testing.T) {
 	_, backlog := fixtureFiles(t)
 	backlog["docs/backlog/epic-1/tg-1.1/tsk-sub.md"] = strings.Replace(
 		backlog["docs/backlog/epic-1/tg-1.1/tsk-sub.md"],
-		"done_when: go test ./calc/ -run TestSub",
+		"done_when: test -f calc/sub.go && go test ./calc/ -run TestSub",
 		"done_when: echo FREE-CHECK-OUTPUT-42 && false",
 		1,
 	)
@@ -765,16 +765,19 @@ func TestCacheServesContextAndStillCallsTheModel(t *testing.T) {
 	}
 }
 
+// recheckFlagRef is the git reference the test creates to let the recheck pass; the check reads it through git, which every
+// sandbox backend exposes read-only.
+const recheckFlagRef = "refs/komodo-test/recheck-ok"
+
 // Epic landing: an epic of 2 groups lands them one at a time; a failing recheck after the first landing pauses the epic, the
 // second group lands only after a recheck passes, and 1 pull request opens after the last landing.
 func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 	_, backlog := fixtureFiles(t)
-	r0 := t.TempDir()
-	flag := filepath.Join(r0, "recheck-ok")
 	backlog["docs/backlog/epic-1/tg-1.1/tsk-mul.md"] = strings.Replace(
 		backlog["docs/backlog/epic-1/tg-1.1/tsk-mul.md"],
-		"done_when: go test ./calc/ -run TestMul",
-		"done_when: go test ./calc/ -run TestMul && { ! git cat-file -e komodo/ep-1:calc/mul.go || test -e "+flag+"; }",
+		"done_when: test -f calc/mul.go && go test ./calc/ -run TestMul",
+		"done_when: go test ./calc/ -run TestMul && { ! git cat-file -e komodo/ep-1:calc/mul.go || "+
+			"git rev-parse -q --verify "+recheckFlagRef+"; }",
 		1,
 	)
 	backlog["docs/backlog/epic-1/tg-1.2/TG.md"] = "id: 0192e4c5-7a10-7d3e-9b2f-000000000302\ngoal: Add gamma\n" +
@@ -784,8 +787,6 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 		"estimate_lines: 5\n\nAdd the function.\n"
 	repoFiles, _ := fixtureFiles(t)
 	r := newBinRig(t, merged(repoFiles, backlog))
-	// The recheck needs git, which a Tester container never holds.
-	r.env = append(r.env, noDocker)
 	r.model.builder = fixtureBuilder(false)
 	r.mustRun("run", "ep-1")
 	evs := r.waitFor(150*time.Second, "run-status", "epic.paused")
@@ -795,9 +796,7 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 	if strings.Contains(r.ghCalls(), "pr create") {
 		t.Fatalf("a pull request opened before the last landing")
 	}
-	if err := os.WriteFile(flag, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	r.git(r.repo, "update-ref", recheckFlagRef, "HEAD")
 	// A paused epic admits only the group that paused it; its next landing rechecks the epic branch.
 	r.mustRun("run", "tg-1.1")
 	r.waitFor(150*time.Second, "run-status", "epic.resumed")
