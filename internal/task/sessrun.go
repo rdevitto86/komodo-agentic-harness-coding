@@ -16,6 +16,7 @@ import (
 
 	komodo "github.com/rdevitto86/komodo-agentic-harness-coding"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
@@ -694,6 +695,17 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 		"link":    sc.sess.Link,
 		"model":   sc.sess.Model,
 	}
+	if u := out.result.Usage; u != nil {
+		data["tokens"] = int64(u.TokensIn + u.TokensOut)
+		data["usage"] = bus.SessionUsage{
+			TokensIn:   u.TokensIn,
+			TokensOut:  u.TokensOut,
+			CacheRead:  u.CacheRead,
+			CacheWrite: u.CacheWrite,
+			USD:        u.USD,
+			USDEquiv:   u.USDEquiv,
+		}
+	}
 	if req.agent == "builder" && out.reason != state.ReasonDone && m.c.Git != nil {
 		st, err := m.c.Git.ReadOnly(ctx, m.spec.Lease, "status", []string{"--porcelain"})
 		if files := changedPaths(st); err == nil && len(files) > 0 {
@@ -706,6 +718,24 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 	}
 
 	m.fact("session.end", data)
+
+	if u := out.result.Usage; u != nil {
+		m.fact(
+			"usage",
+			map[string]any{
+				"link":        sc.sess.Link,
+				"agent":       req.agent,
+				"session":     sc.id,
+				"model":       sc.sess.Model,
+				"tokens_in":   u.TokensIn,
+				"tokens_out":  u.TokensOut,
+				"cache_read":  u.CacheRead,
+				"cache_write": u.CacheWrite,
+				"usd":         u.USD,
+				"usd_equiv":   u.USDEquiv,
+			},
+		)
+	}
 
 	_ = writeJSON(
 		sc.dir,
@@ -783,6 +813,7 @@ func (m *Manager) judgeResult(
 	res llm.Result,
 	out sessOut,
 ) (sessOut, error) {
+	out.result = res
 	oc, err := sc.memo.judge(ctx, res)
 
 	var ge *GateError
@@ -796,7 +827,8 @@ func (m *Manager) judgeResult(
 				return out, nil
 			}
 			_ = serr
-			res = res2
+			res2.Usage = addUsage(res.Usage, res2.Usage)
+			res, out.result = res2, res2
 			oc, err = sc.memo.judge(ctx, res)
 		}
 	}
@@ -812,12 +844,31 @@ func (m *Manager) judgeResult(
 		return out, fmt.Errorf("judge the %s result: %w", req.agent, err)
 	}
 
-	out.outcome, out.result = oc, res
+	out.outcome = oc
 	if res.Handle.Value != "" {
 		out.handle = res.Handle
 	}
 
 	return out, nil
+}
+
+// addUsage returns the sum of two usage counts; either may be nil.
+func addUsage(a, b *llm.Usage) *llm.Usage {
+	if a == nil || b == nil {
+		if a == nil {
+			return b
+		}
+		return a
+	}
+
+	return &llm.Usage{
+		TokensIn:   a.TokensIn + b.TokensIn,
+		TokensOut:  a.TokensOut + b.TokensOut,
+		CacheRead:  a.CacheRead + b.CacheRead,
+		CacheWrite: a.CacheWrite + b.CacheWrite,
+		USD:        a.USD + b.USD,
+		USDEquiv:   a.USDEquiv + b.USDEquiv,
+	}
 }
 
 // newUUID returns a random version 4 identifier.

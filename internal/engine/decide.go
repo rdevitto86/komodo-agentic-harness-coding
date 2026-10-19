@@ -445,7 +445,7 @@ func working(st Stage) bool {
 // factEvent builds the event a Task Manager fact stands for; it reports false when the fact has no registered shape.
 func factEvent(run, group, subtype string, data json.RawMessage) (Event, bool) {
 	typ := bus.TypeRunStatus
-	if subtype == "limit.warn" {
+	if subtype == "limit.warn" || subtype == "usage" {
 		typ = bus.TypeResource
 	}
 	if len(data) == 0 {

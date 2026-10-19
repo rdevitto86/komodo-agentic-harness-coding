@@ -236,6 +236,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 	s.mgr = eng.Manager()
 	px.m = eng.Manager()
 
+	s.spawn(func() { _ = s.faults.Run(ctx) })
 	s.spawn(func() { _ = res.Run(ctx) })
 	if ms, err := metrics.New(s.bus, filepath.Join(s.home, "metrics"), metrics.Options{}, nil); err == nil {
 		s.spawn(func() { _ = ms.Run(ctx) })
