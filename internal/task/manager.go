@@ -747,6 +747,11 @@ func cloneProgress(p Progress) Progress {
 	p.ScopeAsked = slices.Clone(p.ScopeAsked)
 
 	p.Widened = slices.Clone(p.Widened)
+	if p.Unfinished != nil {
+		u := *p.Unfinished
+		u.Files = slices.Clone(u.Files)
+		p.Unfinished = &u
+	}
 	if p.Refusals != nil {
 		r := make(map[string]int, len(p.Refusals))
 		for k, v := range p.Refusals {

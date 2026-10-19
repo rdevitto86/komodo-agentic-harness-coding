@@ -109,6 +109,14 @@ type GroupDone struct {
 // EventKey binds GroupDone to run-status / group.done.
 func (GroupDone) EventKey() Key { return Key{TypeRunStatus, "group.done"} }
 
+// GroupApproved is the data of run-status / group.approved: the Tester and the Reviewer approved a group's work.
+type GroupApproved struct {
+	Tree string `json:"tree"` // the tree hash both judges approved, which the Commit Handler publishes
+}
+
+// EventKey binds GroupApproved to run-status / group.approved.
+func (GroupApproved) EventKey() Key { return Key{TypeRunStatus, "group.approved"} }
+
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
 	GroupFacts

@@ -36,7 +36,7 @@ func BuilderRole() Role {
 		[]string{"build", "test", "lint", "format"},
 		[]string{"R1", "B1"},
 		[]string{"repo_profile", "group", "tasks", "files", "file_contents"},
-		[]string{"repo_context", "standards", "diff", "checks", "findings", "scope_answer", "specs"},
+		[]string{"repo_context", "standards", "diff", "checks", "findings", "scope_answer", "unfinished", "specs"},
 		"komodo:agent/builder/result/1", []string{"status", "summary"}, true)
 }
 

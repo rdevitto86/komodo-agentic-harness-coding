@@ -60,6 +60,14 @@ type PlanInput struct {
 // EventKey binds PlanInput to error / plan-input.
 func (PlanInput) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "plan-input"} }
 
+// PlanLocked is the data of error / plan-locked: the plan tried to rewrite a group that a live run holds.
+type PlanLocked struct {
+	Run string `json:"run"` // the run that holds the group the plan tried to rewrite
+}
+
+// EventKey binds PlanLocked to error / plan-locked.
+func (PlanLocked) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subtype: "plan-locked"} }
+
 // PlanWrite is the data of error / plan-write: the task-list folders could not be written.
 type PlanWrite struct {
 	Reason string `json:"reason"` // what failed, in one sentence
@@ -181,12 +189,13 @@ type planState struct {
 	tracked  []string
 }
 
-// RegisterEvents binds the plan request and the four plan error subtypes to their data structs.
+// RegisterEvents binds the plan request and the five plan error subtypes to their data structs.
 func RegisterEvents() {
 	bus.Register(PlanRequest{}.EventKey(), func() bus.Payload { return &PlanRequest{} })
 	bus.Register(PlanBlocked{}.EventKey(), func() bus.Payload { return &PlanBlocked{} })
 	bus.Register(PlanTimeout{}.EventKey(), func() bus.Payload { return &PlanTimeout{} })
 	bus.Register(PlanInput{}.EventKey(), func() bus.Payload { return &PlanInput{} })
+	bus.Register(PlanLocked{}.EventKey(), func() bus.Payload { return &PlanLocked{} })
 	bus.Register(PlanWrite{}.EventKey(), func() bus.Payload { return &PlanWrite{} })
 }
 
@@ -210,11 +219,14 @@ func newID() bus.ID {
 func faultData(err error, wallMin int) bus.Payload {
 	var (
 		blocked PlanBlockedError
+		locked  LockedError
 		write   writeError
 	)
 	switch {
 	case errors.As(err, &blocked):
 		return &PlanBlocked{Findings: blocked.Findings, DraftPath: blocked.DraftPath}
+	case errors.As(err, &locked):
+		return &PlanLocked{Run: locked.Run}
 	case errors.Is(err, context.DeadlineExceeded):
 		return &PlanTimeout{WallMin: wallMin}
 	case errors.As(err, &write):

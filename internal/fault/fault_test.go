@@ -124,6 +124,7 @@ func TestOtherErrorTable(t *testing.T) {
 		"plan-blocked":    {"plan_blocked", "blocked", "error", "intake"},
 		"plan-timeout":    {"plan_timeout", "refused", "error", "intake"},
 		"plan-input":      {"plan_input", "usage", "error", "intake"},
+		"plan-locked":     {"locked", "refused", "error", "intake"},
 		"plan-write":      {"plan_write", "internal", "error", "intake"},
 		"context-refused": {"context_refused", "refused", "error", "contextmgr"},
 		"run-refused":     {"run_refused", "refused", "error", "engine"},

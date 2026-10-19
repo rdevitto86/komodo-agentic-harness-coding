@@ -72,7 +72,7 @@ func (m *Manager) runBuild(ctx context.Context) error {
 			return err
 		}
 
-		in := RoleInput{Tasks: m.pendingTasks(), Findings: findings}
+		in := RoleInput{Tasks: m.pendingTasks(), Findings: findings, Unfinished: m.Progress().Unfinished}
 		if m.Progress().Returns > 0 && m.c.Git != nil {
 			in.Diff, _ = m.c.Git.Diff(ctx, m.spec.Lease, nil)
 		}
@@ -333,6 +333,9 @@ func (m *Manager) finishTask(ctx context.Context, id string) (int, string, error
 
 	m.mu.Lock()
 	m.prog.TasksDone = append(m.prog.TasksDone, id)
+	if u := m.prog.Unfinished; u != nil && u.Task == id {
+		m.prog.Unfinished = nil
+	}
 	m.mu.Unlock()
 	m.fact("task.done", map[string]string{"task": id})
 	if err := m.report(ctx); err != nil {
@@ -919,6 +922,11 @@ func (m *Manager) runCommit(ctx context.Context) error {
 		},
 		Facts: commit.PRFacts{TasksClosed: m.Progress().TasksDone},
 	}
+	m.fact("group.approved", bus.GroupApproved{Tree: tree})
+	if err := m.report(ctx); err != nil {
+		return err
+	}
+
 	if _, err := m.c.Commit.Publish(ctx, a); err != nil {
 		return block("publish", map[string]string{"error": err.Error()})
 	}

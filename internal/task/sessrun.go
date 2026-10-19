@@ -691,8 +691,12 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 	}
 	if req.agent == "builder" && out.reason != state.ReasonDone && m.c.Git != nil {
 		st, err := m.c.Git.ReadOnly(ctx, m.spec.Lease, "status", []string{"--porcelain"})
-		if err == nil && strings.TrimSpace(st) != "" {
-			data["unfinished"] = map[string]any{"task": req.task, "files": strings.Split(strings.TrimSpace(st), "\n")}
+		if files := changedPaths(st); err == nil && len(files) > 0 {
+			data["unfinished"] = map[string]any{"task": req.task, "files": files}
+
+			m.mu.Lock()
+			m.prog.Unfinished = &state.UnfinishedEdits{Task: req.task, Files: files}
+			m.mu.Unlock()
 		}
 	}
 
@@ -877,6 +881,22 @@ func instanceRole(agentName string) string {
 		return "builder"
 	}
 	return "tester"
+}
+
+// changedPaths lists the paths of a porcelain status, dropping the two status letters; a rename gives its new path.
+func changedPaths(status string) []string {
+	var out []string
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		p := line[3:]
+		if _, to, ok := strings.Cut(p, " -> "); ok {
+			p = to
+		}
+		out = append(out, strings.Trim(p, `"`))
+	}
+	return out
 }
 
 // orNull returns raw, or JSON null when it is empty.

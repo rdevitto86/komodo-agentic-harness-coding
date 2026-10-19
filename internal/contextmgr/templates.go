@@ -36,6 +36,7 @@ var (
 		Checks:       true,
 		Findings:     true,
 		ScopeAnswer:  true,
+		Unfinished:   true,
 		Lens:         true,
 		LensRules:    true,
 		Callers:      true,

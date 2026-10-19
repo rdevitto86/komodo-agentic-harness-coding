@@ -168,6 +168,7 @@ func TestMain(m *testing.M) {
 		"plan-blocked",
 		"plan-timeout",
 		"plan-input",
+		"plan-locked",
 		"plan-write",
 		"context-refused",
 		"run-refused",

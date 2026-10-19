@@ -57,6 +57,21 @@ func TestPipelineRunsOneGroupThroughBuildTestReviewAndCommit(t *testing.T) {
 	}
 }
 
+func TestApprovedGroupIsReportedBeforePublish(t *testing.T) {
+	r := newPipeRig(t, rigOpts{})
+	var atPublish int
+	r.cm.seen = func() { atPublish = r.rt.factCount("group.approved") }
+	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
+	r.model.on("tester", sayResult(testerPass))
+	r.model.on("reviewer", sayResult(reviewerMet))
+	r.reachCleanup()
+
+	if atPublish != 1 || r.rt.factCount("group.approved") != 1 {
+		t.Fatalf("group.approved reported %d times before Publish, %d in all, want 1 and 1", atPublish,
+			r.rt.factCount("group.approved"))
+	}
+}
+
 func TestSessionFolderHoldsTheBriefOnceAndTheRequest(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))

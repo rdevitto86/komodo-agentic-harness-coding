@@ -101,14 +101,14 @@ func TestFaultDataMapsAWriteFailure(t *testing.T) {
 	if pw, ok := faultData(writeError{errors.New("disk")}, 1).(*PlanWrite); !ok || pw.Reason != "disk" {
 		t.Fatalf("write: %+v", pw)
 	}
-	if pi, ok := faultData(LockedError{Run: "r1"}, 1).(*PlanInput); !ok || pi.Reason == "" {
-		t.Fatalf("locked: %+v", pi)
+	if pl, ok := faultData(LockedError{Run: "r1"}, 1).(*PlanLocked); !ok || pl.Run != "r1" {
+		t.Fatalf("locked: %+v", pl)
 	}
 }
 
 func TestRegisterEventsBindsEveryPair(t *testing.T) {
 	registerOnce.Do(RegisterEvents)
-	for _, p := range []bus.Payload{&PlanRequest{}, &PlanBlocked{}, &PlanTimeout{}, &PlanInput{}, &PlanWrite{}} {
+	for _, p := range []bus.Payload{&PlanRequest{}, &PlanBlocked{}, &PlanTimeout{}, &PlanInput{}, &PlanLocked{}, &PlanWrite{}} {
 		b := bus.New(bus.Options{})
 		k := p.EventKey()
 		if err := b.Publish(bus.Event{Type: k.Type, Subtype: k.Subtype, Run: newID(), Data: p}); err != nil {

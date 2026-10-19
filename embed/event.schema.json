@@ -101,6 +101,26 @@
       ],
       "type": "object"
     },
+    "ContextRefused": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "field",
+        "reason"
+      ],
+      "type": "object"
+    },
     "EpicPaused": {
       "additionalProperties": false,
       "properties": {
@@ -134,6 +154,46 @@
       "required": [
         "epic",
         "group"
+      ],
+      "type": "object"
+    },
+    "ErrorFault": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "fix": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "panic": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "code",
+        "kind",
+        "severity",
+        "reason"
       ],
       "type": "object"
     },
@@ -208,6 +268,18 @@
         "quote",
         "severity",
         "in"
+      ],
+      "type": "object"
+    },
+    "GroupApproved": {
+      "additionalProperties": false,
+      "properties": {
+        "tree": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tree"
       ],
       "type": "object"
     },
@@ -299,6 +371,35 @@
       ],
       "type": "object"
     },
+    "Headroom": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "type": "integer"
+        },
+        "link": {
+          "type": "string"
+        },
+        "remaining": {
+          "type": "integer"
+        },
+        "reset_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "window": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "link",
+        "window",
+        "limit",
+        "remaining",
+        "reset_at"
+      ],
+      "type": "object"
+    },
     "LeaseLost": {
       "additionalProperties": false,
       "properties": {
@@ -340,6 +441,27 @@
       "required": [
         "fence",
         "pid"
+      ],
+      "type": "object"
+    },
+    "Limit": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "link": {
+          "type": "string"
+        },
+        "reset_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "link",
+        "kind",
+        "reset_at"
       ],
       "type": "object"
     },
@@ -399,6 +521,224 @@
       ],
       "type": "object"
     },
+    "MCPReload": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "MCPSet": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "enabled",
+        "allow"
+      ],
+      "type": "object"
+    },
+    "Overage": {
+      "additionalProperties": false,
+      "properties": {
+        "link": {
+          "type": "string"
+        },
+        "reset_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "link",
+        "reset_at"
+      ],
+      "type": "object"
+    },
+    "PanicFault": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "fix": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "panic": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "code",
+        "kind",
+        "severity",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "PlanBlocked": {
+      "additionalProperties": false,
+      "properties": {
+        "draft_path": {
+          "type": "string"
+        },
+        "findings": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "rule": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "rule",
+              "severity",
+              "path",
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "findings",
+        "draft_path"
+      ],
+      "type": "object"
+    },
+    "PlanInput": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "PlanLocked": {
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "type": "object"
+    },
+    "PlanRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "common_dir": {
+          "type": "string"
+        },
+        "docs": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "epic": {
+          "type": "integer"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal",
+        "docs",
+        "epic",
+        "repo",
+        "root",
+        "common_dir"
+      ],
+      "type": "object"
+    },
+    "PlanTimeout": {
+      "additionalProperties": false,
+      "properties": {
+        "wall_min": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "wall_min"
+      ],
+      "type": "object"
+    },
+    "PlanWrite": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
     "ProviderSkip": {
       "additionalProperties": false,
       "properties": {
@@ -452,6 +792,67 @@
       ],
       "type": "object"
     },
+    "ResourceFault": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "fix": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "panic": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "code",
+        "kind",
+        "severity",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ResumeLost": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "type": "object"
+    },
     "RunContinue": {
       "additionalProperties": false,
       "properties": {
@@ -495,6 +896,25 @@
       "required": [
         "done",
         "blocked"
+      ],
+      "type": "object"
+    },
+    "RunRefused": {
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "why"
       ],
       "type": "object"
     },
@@ -866,6 +1286,48 @@
       ],
       "type": "object"
     },
+    "SkillReload": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "SkillSet": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "always": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "enabled",
+        "allow",
+        "always"
+      ],
+      "type": "object"
+    },
     "StageEnter": {
       "additionalProperties": false,
       "properties": {
@@ -895,6 +1357,40 @@
       },
       "required": [
         "from"
+      ],
+      "type": "object"
+    },
+    "Stalled": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "group": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "group",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "groups"
       ],
       "type": "object"
     },
@@ -1068,6 +1564,204 @@
         "outcome"
       ],
       "type": "object"
+    },
+    "Usage": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "cache_read": {
+          "type": "integer"
+        },
+        "cache_write": {
+          "type": "integer"
+        },
+        "link": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "tokens_in": {
+          "type": "integer"
+        },
+        "tokens_out": {
+          "type": "integer"
+        },
+        "usd": {
+          "type": "number"
+        },
+        "usd_equiv": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "link",
+        "agent",
+        "session",
+        "model",
+        "tokens_in",
+        "tokens_out",
+        "cache_read",
+        "cache_write",
+        "usd",
+        "usd_equiv"
+      ],
+      "type": "object"
+    },
+    "cleanupDoneEvt": {
+      "additionalProperties": false,
+      "properties": {
+        "group": {
+          "type": "string"
+        },
+        "kept": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "removed": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "group",
+        "removed",
+        "kept"
+      ],
+      "type": "object"
+    },
+    "cleanupStartEvt": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "tip": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch",
+        "tip"
+      ],
+      "type": "object"
+    },
+    "discardedEvt": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "prOpenedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "last": {
+          "type": "boolean"
+        },
+        "pr_new": {
+          "type": "boolean"
+        },
+        "pr_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch",
+        "head",
+        "last",
+        "pr_url",
+        "pr_new"
+      ],
+      "type": "object"
+    },
+    "publishDoneEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "last": {
+          "type": "boolean"
+        },
+        "pr_new": {
+          "type": "boolean"
+        },
+        "pr_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch",
+        "head",
+        "last",
+        "pr_url",
+        "pr_new"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1102,10 +1796,231 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/ContextRefused"
+        },
+        "subtype": {
+          "const": "context-refused"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ErrorFault"
+        },
+        "subtype": {
+          "const": "fault.error"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PanicFault"
+        },
+        "subtype": {
+          "const": "fault.panic"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ResourceFault"
+        },
+        "subtype": {
+          "const": "fault.resource"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PlanBlocked"
+        },
+        "subtype": {
+          "const": "plan-blocked"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PlanInput"
+        },
+        "subtype": {
+          "const": "plan-input"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PlanLocked"
+        },
+        "subtype": {
+          "const": "plan-locked"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PlanTimeout"
+        },
+        "subtype": {
+          "const": "plan-timeout"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PlanWrite"
+        },
+        "subtype": {
+          "const": "plan-write"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/RunRefused"
+        },
+        "subtype": {
+          "const": "run-refused"
+        },
+        "type": {
+          "const": "error"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/MCPReload"
+        },
+        "subtype": {
+          "const": "reload"
+        },
+        "type": {
+          "const": "mcp"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/MCPSet"
+        },
+        "subtype": {
+          "const": "set"
+        },
+        "type": {
+          "const": "mcp"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PlanRequest"
+        },
+        "subtype": {
+          "const": "request"
+        },
+        "type": {
+          "const": "plan"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/Headroom"
+        },
+        "subtype": {
+          "const": "headroom"
+        },
+        "type": {
+          "const": "resource"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/Limit"
+        },
+        "subtype": {
+          "const": "limit"
+        },
+        "type": {
+          "const": "resource"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/LimitWarn"
         },
         "subtype": {
           "const": "limit.warn"
+        },
+        "type": {
+          "const": "resource"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/Overage"
+        },
+        "subtype": {
+          "const": "overage"
+        },
+        "type": {
+          "const": "resource"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/Usage"
+        },
+        "subtype": {
+          "const": "usage"
         },
         "type": {
           "const": "resource"
@@ -1180,6 +2095,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/Stalled"
+        },
+        "subtype": {
+          "const": "stalled"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/RunStart"
         },
         "subtype": {
@@ -1197,6 +2125,32 @@
         },
         "subtype": {
           "const": "check.done"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/cleanupDoneEvt"
+        },
+        "subtype": {
+          "const": "cleanup.done"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/cleanupStartEvt"
+        },
+        "subtype": {
+          "const": "cleanup.start"
         },
         "type": {
           "const": "run-status"
@@ -1249,6 +2203,32 @@
         },
         "subtype": {
           "const": "finding.verified"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/GroupApproved"
+        },
+        "subtype": {
+          "const": "group.approved"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/discardedEvt"
+        },
+        "subtype": {
+          "const": "group.discarded"
         },
         "type": {
           "const": "run-status"
@@ -1336,10 +2316,36 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/prOpenedEvent"
+        },
+        "subtype": {
+          "const": "pr.opened"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/ProviderSkip"
         },
         "subtype": {
           "const": "provider.skip"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/publishDoneEvent"
+        },
+        "subtype": {
+          "const": "publish.done"
         },
         "type": {
           "const": "run-status"
@@ -1418,6 +2424,19 @@
         },
         "subtype": {
           "const": "session.idle"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ResumeLost"
+        },
+        "subtype": {
+          "const": "session.resume-lost"
         },
         "type": {
           "const": "run-status"
@@ -1577,6 +2596,32 @@
         },
         "type": {
           "const": "run-stop"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/SkillReload"
+        },
+        "subtype": {
+          "const": "reload"
+        },
+        "type": {
+          "const": "skill"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/SkillSet"
+        },
+        "subtype": {
+          "const": "set"
+        },
+        "type": {
+          "const": "skill"
         }
       }
     }

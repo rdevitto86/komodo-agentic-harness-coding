@@ -162,6 +162,8 @@ type fakeCommit struct {
 	saves []commit.SaveRequest
 	pubs  []commit.Approval
 	err   error
+	// seen runs inside Publish, before it returns, so a test sees what was reported by then
+	seen func()
 }
 
 func (c *fakeCommit) Save(_ context.Context, r commit.SaveRequest) (commit.SaveResult, error) {
@@ -175,6 +177,9 @@ func (c *fakeCommit) Publish(_ context.Context, a commit.Approval) (commit.Resul
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pubs = append(c.pubs, a)
+	if c.seen != nil {
+		c.seen()
+	}
 	return commit.Result{}, c.err
 }
 
