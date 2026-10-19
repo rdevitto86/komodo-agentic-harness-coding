@@ -174,7 +174,7 @@ func blockedResult(sd StatusData) Result {
 // a plain run otherwise.
 func blockedFix(group, reason string) string {
 	if reason == "retries" {
-		return "komodo run " + group + " --override in a terminal, before the window ends"
+		return "komodo run " + group + " --override in a terminal, within 60 minutes"
 	}
 	if reason == "needs_scope" {
 		return "komodo run " + group + " --approve or --deny"

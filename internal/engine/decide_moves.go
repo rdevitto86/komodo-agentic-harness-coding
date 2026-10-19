@@ -120,8 +120,9 @@ func (c *calc) move() bool {
 	case InTimerDue:
 		if c.from == StageBlocked && s.Block.Reason == state.ReasonRetries &&
 			decode[TimerDue](in.Data).Reason == "override_lapse" && !in.Time.Before(s.Block.Until) {
-			c.emitStatus(&bus.OverrideLapsed{WindowMin: c.l.OverrideWindowMin})
-			c.failGroup("retries were spent and no override came within " + strconv.Itoa(c.l.OverrideWindowMin) + " minutes")
+			mins := int(OverrideWindow / time.Minute)
+			c.emitStatus(&bus.OverrideLapsed{WindowMin: mins})
+			c.failGroup("tries were spent and no override came within " + strconv.Itoa(mins) + " minutes")
 			return true
 		}
 		if c.from == StagePaused && decode[TimerDue](in.Data).Reason != "pause_timeout" {
@@ -185,7 +186,7 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		}
 
 		d := decode[ResultFail](in.Data)
-		if s.Counters.RetriesLeft <= 0 {
+		if c.onLastTry() {
 			c.exhausted = "test_review"
 			s.LastFindings = cmp.Or(d.Findings, strings.Join(d.Items, "\n"))
 			if d.Regression {
@@ -302,7 +303,7 @@ func (c *calc) block(r state.Reason, detail string) {
 	}
 	if r == state.ReasonRetries {
 		s.Counters.RetriesLeft = 0
-		if c.l.OverrideWindowMin <= 0 || s.Counters.Overrides >= 1 { // an override is offered once per group
+		if s.Counters.Overrides >= 1 { // an override is offered once per group
 			s.Counters.Blocks[string(r)]++
 			c.failGroup(detail)
 			return
@@ -313,7 +314,7 @@ func (c *calc) block(r state.Reason, detail string) {
 	s.Block = state.BlockState{Reason: r, At: c.in.Time}
 	if r == state.ReasonRetries {
 		s.Block.Counter = c.exhausted
-		s.Block.Until = c.in.Time.Add(time.Duration(c.l.OverrideWindowMin) * time.Minute)
+		s.Block.Until = c.in.Time.Add(OverrideWindow)
 	}
 	s.Pause.After = false
 	s.Counters.Blocks[string(r)]++
@@ -599,10 +600,14 @@ func (c *calc) scopeAnswer(in Input) bool {
 	return false
 }
 
-// override gives a group whose retries ran out more retries when a person approves inside the window.
+// override gives a group whose tries ran out one final try, with the working time the person chose, when they approve
+// inside the window.
 func (c *calc) override(in Input) bool {
 	s := &c.s
 	switch {
+	case s.Counters.Overrides >= 1:
+		c.refuseRequest(in, "the group's override was already used")
+		return false
 	case c.from != StageBlocked || s.Block.Reason != state.ReasonRetries:
 		c.refuseRequest(in, "the group is not waiting for an override")
 		return false
@@ -611,10 +616,17 @@ func (c *calc) override(in Input) bool {
 		return false
 	}
 
-	s.Counters.RetriesLeft += c.l.OverrideRetries
+	d := decode[OverrideData](in.Data)
+	if d.Minutes < 0 || d.Minutes > FinalWallMaxMin {
+		c.refuseRequest(in, "the final try's working time is 1 to "+strconv.Itoa(FinalWallMaxMin)+" minutes")
+		return false
+	}
+
+	s.Counters.RetriesLeft = 1
 	s.Counters.Overrides++
+	s.Counters.FinalWallMin = cmp.Or(d.Minutes, c.l.GroupWallMin)
 	c.newTry()
-	c.emitStatus(&bus.OverrideApproved{Granted: c.l.OverrideRetries, Left: s.Counters.RetriesLeft})
+	c.emitStatus(&bus.OverrideApproved{Granted: 1, Left: s.Counters.RetriesLeft, Minutes: s.Counters.FinalWallMin})
 
 	s.TestReview.Tester, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
 	c.resumeWith(StageBuild, stageData{Task: c.firstOpenTask(), Findings: s.LastFindings, Items: s.TestReview.Failed})

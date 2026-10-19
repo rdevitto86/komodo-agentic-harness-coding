@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -281,12 +283,20 @@ func runAnswer(c *Call) Result {
 		answer = "override"
 	}
 
+	minutes := 0
+	if answer == "override" {
+		var res *Result
+		if minutes, res = finalTryMinutes(c); res != nil {
+			return *res
+		}
+	}
+
 	target := c.Args[0]
 	req := c.request(engine.VerbRun, target)
 	req.Flags = engine.Flags{Approve: answer == "approve", Deny: answer == "deny", Override: answer == "override"}
 	req.Event = &engine.Event{
 		Type: bus.TypeRunContinue, Run: typedRunID(target), Time: now(),
-		Data: &bus.RunContinue{Target: target, Answer: answer, Request: bus.ID(req.ID)},
+		Data: &bus.RunContinue{Target: target, Answer: answer, Minutes: minutes, Request: bus.ID(req.ID)},
 	}
 
 	if _, res := c.ask(req); res != nil {
@@ -297,6 +307,42 @@ func runAnswer(c *Call) Result {
 		Facts: format.AnswerFacts{Group: target, Answer: answer},
 		Data:  RunData{Group: target, Answer: answer},
 	}
+}
+
+// finalTryMinutes returns the final try's working time: --minutes, else the person's answer to the prompt, whose default
+// is limits.group_wall_min.
+func finalTryMinutes(c *Call) (int, *Result) {
+	if n, set := flagInt(c, "minutes"); set {
+		return n, nil
+	}
+
+	def := 60
+	if it, err := c.cli.deps.Config.GetConfigItem("limits.group_wall_min"); err == nil {
+		if v, ok := it.Value.(int); ok {
+			def = v
+		} else if v, ok := it.Value.(float64); ok {
+			def = int(v)
+		}
+	}
+
+	_, _ = fmt.Fprintf(c.cli.errOut, "Working time for the final try, in minutes [%d]: ", def)
+	line, _ := bufio.NewReader(c.cli.in).ReadString('\n')
+
+	text := strings.TrimSpace(line)
+	if text == "" {
+		return def, nil
+	}
+
+	n, err := strconv.Atoi(text)
+	if err != nil || n < 1 || n > engine.FinalWallMaxMin {
+		r := usageErr(
+			fmt.Sprintf("the final try's working time must be 1 to %d minutes", engine.FinalWallMaxMin),
+			"komodo run "+c.Args[0]+" --override --minutes 60",
+		)
+		return 0, &r
+	}
+
+	return n, nil
 }
 
 // handleStop sends a run-stop event for a label or a run id.

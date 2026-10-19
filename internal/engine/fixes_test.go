@@ -64,11 +64,10 @@ func TestRunLosingTheLeaseNeverReplacesTheLiveGroup(t *testing.T) {
 	var hl *holdLeases
 	r := newRig(t, [][]string{{"tg-1"}, {"tg-2"}, {"tg-3"}}, onlyIdle, func(r *rig) {
 		r.d.Config = rigConfig{
-			"limits.group_retries": 2, "limits.override_window_min": 30,
-			"limits.override_retries": 2,
-			"limits.pause_max_min":    360,
-			"limits.group_wall_min":   60,
-			"limits.group_tokens":     0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
+			"limits.group_retries":  2,
+			"limits.pause_max_min":  360,
+			"limits.group_wall_min": 60,
+			"limits.group_tokens":   0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
 		hl = &holdLeases{fakeLeases: r.leases, runs: map[string]string{}}
 		r.d.Leases = hl
 	})

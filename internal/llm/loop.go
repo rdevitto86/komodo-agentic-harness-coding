@@ -144,12 +144,6 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 		}
 
 		turn := l.account(res)
-		if len(res.Content) == 0 {
-			return nil, &EndError{Reason: state.ReasonNoResult, Detail: "the model returned no content"}
-		}
-		if err := l.add("assistant", res.Content); err != nil {
-			return nil, err
-		}
 
 		raw, _ := json.Marshal(map[string]any{"type": "assistant", "message": res.Content})
 		st.push(loopItem{ev: StreamEvent{
@@ -157,6 +151,13 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 			Raw:  raw,
 			Msg:  &MsgUsage{ID: "turn-" + strconv.Itoa(l.turns), Usage: turn},
 		}})
+
+		if len(res.Content) == 0 {
+			return nil, &EndError{Reason: state.ReasonNoResult, Detail: "the model returned no content"}
+		}
+		if err := l.add("assistant", res.Content); err != nil {
+			return nil, err
+		}
 
 		for i := range res.Headroom {
 			h := res.Headroom[i]

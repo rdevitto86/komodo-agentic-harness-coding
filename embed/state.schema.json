@@ -108,6 +108,9 @@
             "fault_streak": {
               "type": "integer"
             },
+            "final_wall_min": {
+              "type": "integer"
+            },
             "overrides": {
               "type": "integer"
             },

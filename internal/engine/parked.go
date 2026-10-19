@@ -166,6 +166,13 @@ func (m *Manager) stopParkedLocked(group string) {
 // wakeParked loads the parked group a label or id names, by starting a run for it that does not ask it to continue, and
 // returns the group; it reports unknown_target when no parked group matches.
 func (m *Manager) wakeParked(ctx context.Context, target string) ([]*group, error) {
+	m.wakeMu.Lock()
+	defer m.wakeMu.Unlock()
+
+	if gs := m.byTarget(target); len(gs) > 0 {
+		return gs, nil
+	}
+
 	row, ok := m.findParked(ctx, target)
 	if !ok {
 		return nil, &codeError{CodeUnknownTarget, "no live group named " + target}
@@ -231,7 +238,7 @@ func (m *Manager) parkedBlockedLocked(root string) []BlockedRow {
 			RunID:  r.st.Run,
 			Reason: string(state.ReasonRetries),
 			Question: fmt.Sprintf(
-				"%s has no retries left. A person may override in a terminal until %s.",
+				"%s has no tries left. A person may override in a terminal until %s to give it one final try.",
 				name,
 				r.st.Block.Until.Format(time.RFC3339),
 			),

@@ -501,11 +501,10 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 		failFor: map[string]error{},
 	}
 	cfg := rigConfig{
-		"limits.group_retries": 2, "limits.override_window_min": 30,
-		"limits.override_retries": 2,
-		"limits.pause_max_min":    360,
-		"limits.group_wall_min":   60,
-		"limits.group_tokens":     0, "limits.pool_min": 1, "limits.pool_max": 4, "sandbox.max_mem_gb": 2}
+		"limits.group_retries":  2,
+		"limits.pause_max_min":  360,
+		"limits.group_wall_min": 60,
+		"limits.group_tokens":   0, "limits.pool_min": 1, "limits.pool_max": 4, "sandbox.max_mem_gb": 2}
 	r.d = Deps{Bus: r.bus, Config: cfg, States: func(
 		string,
 	) (StateStore, error) {

@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 )
 
 // tableRows is the command table: the one place parse, validate, help and the drift test read.
@@ -49,7 +51,11 @@ var tableRows = []Command{
 			{Name: "deny", Kind: "bool", Help: "Refuse what the blocked group asked for"},
 			{
 				Name: "override", Kind: "bool", TerminalOnly: true,
-				Help: "Give a group with no retries left more retries, once; needs a terminal",
+				Help: "Give a group with no tries left one final try, once; needs a terminal",
+			},
+			{
+				Name: "minutes", Kind: "int", TerminalOnly: true,
+				Help: "With --override: the final try's working time in minutes; skips the prompt",
 			},
 		},
 		NeedsTerminal: func(c *Call) bool { return flagBool(c, "override") },
@@ -204,8 +210,13 @@ func oneTarget(c *Call, want string, ok func(string) bool) string {
 func checkRunArgs(c *Call) string {
 	approve, deny, override := flagBool(c, "approve"), flagBool(c, "deny"), flagBool(c, "override")
 	scheduled := !flagTime(c, "schedule").IsZero()
+	mins, minutesSet := flagInt(c, "minutes")
 
 	switch {
+	case minutesSet && !override:
+		return "--minutes goes with --override"
+	case minutesSet && (mins < 1 || mins > engine.FinalWallMaxMin):
+		return fmt.Sprintf("--minutes must be 1 to %d", engine.FinalWallMaxMin)
 	case approve && deny, override && (approve || deny):
 		return "--approve, --deny and --override cannot combine"
 	case (approve || deny || override) && (c.Global.All || scheduled):

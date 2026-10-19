@@ -57,6 +57,10 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 		e.badFrame(w, req.ID, "the override flag and the run-continue answer disagree")
 		return
 	}
+	if isAnswer && ev.Type != bus.TypeRunContinue {
+		e.badFrame(w, req.ID, "a run answer needs a run-continue event")
+		return
+	}
 	if req.Flags.Approve || req.Flags.Deny || req.Flags.Override {
 		if isAnswer {
 			rc.Request = bus.ID(req.ID)
@@ -73,7 +77,7 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	}
 
 	rs, ok := dataOf[*bus.RunStart](ev)
-	if !ok {
+	if !ok || ev.Type != bus.TypeRunStart {
 		e.badFrame(w, req.ID, "run needs a run-start event")
 		return
 	}
@@ -356,7 +360,7 @@ func (e *Engine) verbReplay(ctx context.Context, w *connWriter, req Request) {
 // verbPlan publishes the plan event and streams the planning run's events until the Intake Handler reports an error, or the
 // run it started is accepted (run.start) or refused (run-refused).
 func (e *Engine) verbPlan(ctx context.Context, w *connWriter, req Request) {
-	if req.Event == nil {
+	if req.Event == nil || req.Event.Type != bus.TypePlan {
 		e.badFrame(w, req.ID, "plan needs a plan event")
 		return
 	}

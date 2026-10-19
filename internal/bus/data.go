@@ -41,6 +41,7 @@ func (RunStop) EventKey() Key { return Key{TypeRunStop, ""} }
 type RunContinue struct {
 	Target  string `json:"target"`            // an epic or group label
 	Answer  string `json:"answer,omitempty"`  // "approve", "deny" or "override"; empty for a plain continue
+	Minutes int    `json:"minutes,omitempty"` // override only: the final try's working time in minutes
 	Request ID     `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 
@@ -158,10 +159,11 @@ type RetryWaived struct {
 // EventKey binds RetryWaived to run-status / retry.waived.
 func (RetryWaived) EventKey() Key { return Key{TypeRunStatus, "retry.waived"} }
 
-// OverrideApproved is the data of run-status / override.approved: a person gave an empty group more retries.
+// OverrideApproved is the data of run-status / override.approved: a person gave an empty group its final try.
 type OverrideApproved struct {
-	Granted int `json:"granted"` // retries added
-	Left    int `json:"left"`    // retries the group has now
+	Granted int `json:"granted"` // tries added: always 1
+	Left    int `json:"left"`    // tries the group has now
+	Minutes int `json:"minutes"` // the working time the person gave the final try
 }
 
 // EventKey binds OverrideApproved to run-status / override.approved.

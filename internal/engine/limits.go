@@ -33,8 +33,7 @@ func LoadLimits(cfg ConfigReader) (Limits, error) {
 		key string
 		dst *int
 	}{
-		{"limits.group_retries", &l.GroupRetries}, {"limits.override_window_min", &l.OverrideWindowMin},
-		{"limits.override_retries", &l.OverrideRetries}, {"limits.pause_max_min", &l.PauseMaxMin},
+		{"limits.group_retries", &l.GroupRetries}, {"limits.pause_max_min", &l.PauseMaxMin},
 		{"limits.group_wall_min", &l.GroupWallMin}, {"limits.group_tokens", &l.GroupTokens},
 		{"limits.pool_min", &l.PoolMin}, {"limits.pool_max", &l.PoolMax},
 	}

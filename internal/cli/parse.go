@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -386,6 +387,21 @@ func unknownCommand(name string) Result {
 func flagBool(c *Call, name string) bool {
 	f := c.Flags.Lookup(name)
 	return f != nil && f.Value.String() == "true"
+}
+
+// flagInt reads an integer flag by long name and reports whether the command line set it.
+func flagInt(c *Call, name string) (int, bool) {
+	var n int
+
+	set := false
+	c.Flags.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			n, _ = strconv.Atoi(f.Value.String())
+			set = true
+		}
+	})
+
+	return n, set
 }
 
 // flagString reads a string flag by long name.

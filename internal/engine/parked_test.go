@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,5 +113,81 @@ func TestAnOverrideAfterARestartLoadsTheParkedGroupAndSendsItToTheBuilder(t *tes
 	x.clock.Advance(time.Hour)
 	if st := x.store.get("g-tg-1"); st.Stage == StageDone {
 		t.Fatal("the old override timer still lapsed the group")
+	}
+}
+
+// parkedPair returns an engine whose store holds two groups of one saved run, both waiting for an override.
+func parkedPair(t *testing.T) *eng {
+	t.Helper()
+	x := newEng(t, [][]string{{"tg-1"}, {"tg-2"}}, onlyIdle, withClock)
+
+	var rows []ParkedGroup
+
+	for _, label := range []string{"tg-1", "tg-2"} {
+		x.savedGroup(label, StageBlocked, func(s *State) {
+			s.Prior, s.Counters.RetriesLeft = StageTestReview, 0
+			s.Block = state.BlockState{
+				Reason: state.ReasonRetries, At: t0, Until: t0.Add(30 * time.Minute), Counter: "test_review",
+			}
+		})
+		rows = append(rows, ParkedGroup{
+			Repo: "github.com/acme/shop", Root: x.root, CommonDir: x.root + "/.git", Group: "g-" + label, Label: label,
+		})
+	}
+
+	x.e.m.d.Parked = func(context.Context) []ParkedGroup { return rows }
+	x.e.peer = func(net.Conn) (bool, error) { return true, nil }
+
+	return x
+}
+
+func TestTwoParkedGroupsOfOneRunCanEachBeOverriddenAfterARestart(t *testing.T) {
+	x := parkedPair(t)
+	x.serve()
+	until(t, "both timers to be armed", func() bool { return x.e.m.Live() == 2 })
+
+	for _, label := range []string{"tg-1", "tg-2"} {
+		req := overrideReq("o-" + label)
+		req.Target = label
+		req.Event.Data = &bus.RunContinue{Target: label, Answer: "override", Request: bus.ID(req.ID)}
+
+		reps := x.ask(req)
+		if last := reps[len(reps)-1]; last.Status != StatusOK {
+			t.Fatalf("%s: reply %+v", label, last)
+		}
+		x.waitStage(label, StageBuild)
+	}
+}
+
+func TestTwoOverridesAtOnceOnOneParkedGroupAcceptOneAndRefuseTheOtherAsUsed(t *testing.T) {
+	x := parkedPair(t)
+	x.serve()
+	until(t, "both timers to be armed", func() bool { return x.e.m.Live() == 2 })
+
+	errs := make(chan error, 2)
+
+	for i := range 2 {
+		go func() {
+			errs <- x.e.m.Override(context.Background(), "tg-1", "ov-"+string(rune('a'+i)), 30)
+		}()
+	}
+
+	var ok, refused int
+
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			ok++
+		case strings.Contains(err.Error(), "already used") && !strings.Contains(err.Error(), "no live group"):
+			refused++
+		default:
+			t.Errorf("unexpected refusal: %v", err)
+		}
+	}
+	if ok != 1 || refused != 1 {
+		t.Fatalf("accepted %d, refused as used %d", ok, refused)
+	}
+	if st := x.store.get("g-tg-1"); st.Counters.Overrides != 1 {
+		t.Fatalf("overrides %d", st.Counters.Overrides)
 	}
 }

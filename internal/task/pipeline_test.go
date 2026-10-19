@@ -320,7 +320,7 @@ func TestReturnWithAnUnchangedTreeEscalatesFlap(t *testing.T) {
 }
 
 func TestAFailureWithNoRetriesLeftEscalatesRetries(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 1}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 2}})
 	r.model.on(
 		"builder",
 		building(r.wt, "a.go", "package a\n", builderDone),
@@ -337,7 +337,7 @@ func TestAFailureWithNoRetriesLeftEscalatesRetries(t *testing.T) {
 }
 
 func TestRegressionWithNoRetriesLeftEscalatesRetries(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 1}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 2}})
 	r.checks.fail, r.checks.regress = []bool{true, true}, true
 	r.model.on(
 		"builder",
@@ -353,7 +353,7 @@ func TestRegressionWithNoRetriesLeftEscalatesRetries(t *testing.T) {
 }
 
 func TestCheckDoneFactMatchesTheEventSchemaAndResultFailFlagsARegression(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 2}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 3}})
 	r.checks.fail, r.checks.regress = []bool{true, true, true}, true
 	r.model.on(
 		"builder",
@@ -491,7 +491,7 @@ func TestFailingCompletionCommandKeepsTheTaskOpenAndEndsTheSessionAfterThree(t *
 
 func TestBuilderSessionsEndTheGroupWhenTheRetriesAreSpent(t *testing.T) {
 	r := newPipeRig(t, rigOpts{
-		limits: Limits{GroupRetries: 1},
+		limits: Limits{GroupRetries: 2},
 		mut:    func(s *GroupSpec, _ *Collaborators) { s.Tasks[0].DoneWhen = "fail" },
 	})
 	r.model.on("builder", sayResult(builderDone), sayResult(builderDone))
