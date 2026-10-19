@@ -167,7 +167,7 @@ func TestCrashPoints(t *testing.T) {
 func TestWritersNeverInterleave(t *testing.T) {
 	_, home := newTestManager(t)
 	pairs := [][2]string{
-		{"limits.group_retries", "limits.override_retries"}, {"cache.max_mb", "bus.buffer_events"},
+		{"limits.group_retries", "limits.pool_max"}, {"cache.max_mb", "bus.buffer_events"},
 		{"metrics.retention_days", "check.coverage"}, {"lease.lock_timeout_s", "warn.quota_pct"},
 		{"guard.refusal_limit", "limits.pause_max_min"}, {"sandbox.max_procs", "sandbox.lang_cache_gb"},
 	}

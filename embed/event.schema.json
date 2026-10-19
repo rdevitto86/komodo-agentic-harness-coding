@@ -817,11 +817,15 @@
         },
         "left": {
           "type": "integer"
+        },
+        "minutes": {
+          "type": "integer"
         }
       },
       "required": [
         "granted",
-        "left"
+        "left",
+        "minutes"
       ],
       "type": "object"
     },
@@ -1170,6 +1174,9 @@
       "properties": {
         "answer": {
           "type": "string"
+        },
+        "minutes": {
+          "type": "integer"
         },
         "request": {
           "type": "string"

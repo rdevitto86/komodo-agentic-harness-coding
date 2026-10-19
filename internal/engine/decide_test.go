@@ -178,7 +178,7 @@ func TestAFailureWithNoRetriesLeftHoldsTheGroupForAnOverride(t *testing.T) {
 		if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonRetries || r.State.Prior != StageTestReview {
 			t.Fatalf("stage %q reason %q prior %q", r.State.Stage, r.State.Block.Reason, r.State.Prior)
 		}
-		if want := r.State.Block.At.Add(30 * time.Minute); !r.State.Block.Until.Equal(want) {
+		if want := r.State.Block.At.Add(60 * time.Minute); !r.State.Block.Until.Equal(want) {
 			t.Fatalf("window ends %v, want %v", r.State.Block.Until, want)
 		}
 		if r.State.Counters.Blocks["retries"] != 1 || !slices.Contains(subtypes(r), "group.blocked") ||
@@ -190,6 +190,7 @@ func TestAFailureWithNoRetriesLeftHoldsTheGroupForAnOverride(t *testing.T) {
 
 func TestFlapOnTheSameTreeBlocks(t *testing.T) {
 	s := mk(StageTestReview)
+	s.Counters.RetriesLeft = 3
 	r := apply(t, s, in(InResultFail, ResultFail{Items: []string{"a"}, Tree: "tree-1"}))
 	if r.State.Stage != StageBuild || r.State.ReturnTree != "tree-1" {
 		t.Fatalf("first return: %q tree %q", r.State.Stage, r.State.ReturnTree)
@@ -238,9 +239,9 @@ func TestBuilderTimeoutSpendsOneRetryAndBlocksWhenNoneIsLeft(t *testing.T) {
 	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonRetries {
 		t.Fatalf("stage %q reason %q", r.State.Stage, r.State.Block.Reason)
 	}
-	s.Counters.RetriesLeft = 1
+	s.Counters.RetriesLeft = 2
 	r = apply(t, s, builderEnd("timeout"))
-	if r.State.Stage != StageBuild || r.State.Counters.RetriesLeft != 0 || !slices.Contains(kinds(r), OrderEnterStage) {
+	if r.State.Stage != StageBuild || r.State.Counters.RetriesLeft != 1 || !slices.Contains(kinds(r), OrderEnterStage) {
 		t.Fatalf("within the budget: stage %q left %d orders %v", r.State.Stage, r.State.Counters.RetriesLeft, kinds(r))
 	}
 	if !slices.Contains(subtypes(r), "retry.spent") {
@@ -753,13 +754,11 @@ func apply(t *testing.T, s State, i Input) Result {
 // fixtureLimits are the limits every proof case uses.
 func fixtureLimits() Limits {
 	return Limits{
-		GroupRetries:      2,
-		OverrideWindowMin: 30,
-		OverrideRetries:   2,
-		PauseMaxMin:       360,
-		GroupWallMin:      60,
-		PoolMin:           1,
-		PoolMax:           2,
+		GroupRetries: 2,
+		PauseMaxMin:  360,
+		GroupWallMin: 60,
+		PoolMin:      1,
+		PoolMax:      2,
 	}
 }
 

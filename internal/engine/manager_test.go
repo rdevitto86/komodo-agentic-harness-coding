@@ -107,11 +107,10 @@ func TestCacheOpensOnceAndClosesWithTheLastRun(t *testing.T) {
 func TestPoolLimitsActiveGroupsAndDependentsWait(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1"}, {"tg-2"}, {"tg-3"}, {"tg-4", "tg-1"}}, onlyIdle, func(r *rig) {
 		r.d.Config = rigConfig{
-			"limits.group_retries": 2, "limits.override_window_min": 30,
-			"limits.override_retries": 2,
-			"limits.pause_max_min":    360,
-			"limits.group_wall_min":   60,
-			"limits.group_tokens":     0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
+			"limits.group_retries":  2,
+			"limits.pause_max_min":  360,
+			"limits.group_wall_min": 60,
+			"limits.group_tokens":   0, "limits.pool_min": 1, "limits.pool_max": 2, "sandbox.max_mem_gb": 2}
 	})
 	if err := r.startRun("run-1", "tg-1", "tg-2", "tg-3", "tg-4"); err != nil {
 		t.Fatal(err)

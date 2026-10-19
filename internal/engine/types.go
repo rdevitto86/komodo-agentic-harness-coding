@@ -52,7 +52,7 @@ const (
 	InProgress      InputKind = "progress"       // data: ProgressData; the live session handles of a state report
 	InFact          InputKind = "fact"           // data: FactData; a fact that is published and changes nothing
 	InLoopRestart   InputKind = "loop.restart"   // a silent Task Manager was restarted; costs no retry
-	InOverride      InputKind = "override"       // a person at a terminal gave an empty group more retries
+	InOverride      InputKind = "override"       // data: OverrideData; a person at a terminal gave an empty group a final try
 	InBreakerResume InputKind = "breaker.resume" // the breaker lets the group perform the session starts it held back
 )
 
@@ -162,6 +162,10 @@ type (
 	TimerDue struct {
 		Reason string `json:"reason"`
 	}
+	// OverrideData is the data of override.
+	OverrideData struct {
+		Minutes int `json:"minutes,omitempty"` // the final try's working time; 0 keeps limits.group_wall_min
+	}
 	// ContinueData is the data of continue.
 	ContinueData struct {
 		Answer   string `json:"answer,omitempty"`   // approve or deny
@@ -237,19 +241,19 @@ type LandingPlan struct {
 
 // Limits are the bounds Next enforces, read once at run start through the Configuration Manager.
 type Limits struct {
-	GroupRetries      int // limits.group_retries
-	OverrideWindowMin int // limits.override_window_min
-	OverrideRetries   int // limits.override_retries
-	PauseMaxMin       int // limits.pause_max_min
-	GroupWallMin      int // limits.group_wall_min
-	GroupTokens       int // limits.group_tokens, enforced by the Resource Manager
-	PoolMin           int // limits.pool_min
-	PoolMax           int // limits.pool_max
-	SessionMemGB      float64
+	GroupRetries int // limits.group_retries
+	PauseMaxMin  int // limits.pause_max_min
+	GroupWallMin int // limits.group_wall_min
+	GroupTokens  int // limits.group_tokens, enforced by the Resource Manager
+	PoolMin      int // limits.pool_min
+	PoolMax      int // limits.pool_max
+	SessionMemGB float64
 }
 
 // Timings and bounds of the engine.
 const (
+	OverrideWindow       = 60 * time.Minute // how long a group with no tries left waits for a person's override
+	FinalWallMaxMin      = 480              // the most minutes a person may give the final try
 	GroupBuffer          = 256              // capacity of a group's input channel
 	LeaseRenewEvery      = 5 * time.Minute  // how often a live group renews its lease
 	AgentStopGrace       = 30 * time.Second // time a stop allows each session before the terminate signal

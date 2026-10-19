@@ -135,11 +135,11 @@ func TestAnOverrideSendsTheGroupBackToTheBuilderWithTheLastFindings(t *testing.T
 
 func TestAnOverrideAfterABuilderSideExhaustionStillCarriesTheLastReturnedFindings(t *testing.T) {
 	s := failedRound()
-	s.Counters.RetriesLeft = 1
+	s.Counters.RetriesLeft = 2
 	fail := in(InResultFail, ResultFail{Items: []string{"a"}, Tree: "t1", Findings: "FINDING: a.go:3 nil dereference"})
 
 	back := apply(t, s, fail).State
-	if back.Stage != StageBuild || back.Counters.RetriesLeft != 0 {
+	if back.Stage != StageBuild || back.Counters.RetriesLeft != 1 {
 		t.Fatalf("stage %q retries %d", back.Stage, back.Counters.RetriesLeft)
 	}
 

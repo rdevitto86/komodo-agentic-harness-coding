@@ -56,12 +56,12 @@ func TestRunOnAGroupWaitingForAnOverrideIsRefusedNotAnswered(t *testing.T) {
 func TestOverrideInsideTheWindowIsAppliedBeforeItReplies(t *testing.T) {
 	r := spentGroup(t, t0.Add(30*time.Minute))
 	_ = r.startRun("run-2", "tg-1")
-	if err := r.m.Override(context.Background(), "tg-1", "ov-1"); err != nil {
+	if err := r.m.Override(context.Background(), "tg-1", "ov-1", 45); err != nil {
 		t.Fatal(err)
 	}
 	st := r.store.get("g-tg-1")
-	if st.Stage != StageBuild || st.Counters.RetriesLeft != 2 || st.Counters.Overrides != 1 {
-		t.Fatalf("group %s, %d retries left, %d overrides", st.Stage, st.Counters.RetriesLeft, st.Counters.Overrides)
+	if st.Stage != StageBuild || st.Counters.RetriesLeft != 1 || st.Counters.Overrides != 1 || st.Counters.FinalWallMin != 45 {
+		t.Fatalf("group %s, counters %+v", st.Stage, st.Counters)
 	}
 }
 
@@ -90,7 +90,7 @@ func TestJudgeSessionsThatEndDoneNeverSpendARetry(t *testing.T) {
 func TestOverrideAfterTheWindowIsRefusedBeforeItIsQueued(t *testing.T) {
 	r := spentGroup(t, t0)
 	_ = r.startRun("run-2", "tg-1")
-	wantRefused(t, r.m.Override(context.Background(), "tg-1", "ov-1"), CodeRunRefused, "window has passed")
+	wantRefused(t, r.m.Override(context.Background(), "tg-1", "ov-1", 0), CodeRunRefused, "window has passed")
 	if st := r.store.get("g-tg-1"); st.Stage != StageBlocked || st.Counters.Overrides != 0 {
 		t.Fatalf("group %s, %d overrides", st.Stage, st.Counters.Overrides)
 	}

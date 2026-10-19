@@ -129,7 +129,7 @@ type UnfinishedEdits struct {
 
 // Counters are the numbers that bound a group; only the Runtime Manager changes them.
 type Counters struct {
-	RetriesLeft int            `json:"retries_left"` // retries the group may still spend; only an override raises it
+	RetriesLeft int            `json:"retries_left"` // tries left, the current one included; only an override raises it
 	Overrides   int            `json:"overrides"`    // overrides a person approved; the only way retries_left rises
 	Crashes     int            `json:"crashes"`      // sessions lost to a crash; never charged to the retries
 	Blocks      map[string]int `json:"blocks"`       // blocks per reason
@@ -139,6 +139,8 @@ type Counters struct {
 	WallBaseS   int64          `json:"wall_base_s"`  // wall_used_s when the current try began; only rises
 	WallExtTry  int            `json:"wall_ext_try"` // the try the one wall-time extension was granted on; only rises
 	FaultStreak int            `json:"fault_streak"` // Komodo faults in a row with no session result between them
+
+	FinalWallMin int `json:"final_wall_min,omitempty"` // the final try's minutes; 0 until an override; only rises
 }
 
 // TaskState is one task's progress.

@@ -32,7 +32,7 @@ type calc struct {
 	panicked state.Reason
 }
 
-// wallExtension is the one automatic extension a try gets after limits.group_wall_min.
+// wallExtension is the one automatic extension a try gets after its working-time limit.
 const wallExtension = 60 * time.Minute
 
 // faultCap is the Komodo faults in a row, with no session result between them, that block a group for a person.
@@ -49,8 +49,19 @@ func (c *calc) extended() bool { return c.s.Counters.WallExtTry == c.try() }
 
 // wallOver reports whether the current try ran past its limit and the fixed extension.
 func (c *calc) wallOver() bool {
-	return c.from == StageBuild && c.l.GroupWallMin > 0 && c.extended() &&
-		c.tryWallS() >= int64(c.l.GroupWallMin)*60+int64(wallExtension/time.Second)
+	return c.from == StageBuild && c.wallMin() > 0 && c.extended() &&
+		c.tryWallS() >= int64(c.wallMin())*60+int64(wallExtension/time.Second)
+}
+
+// onLastTry reports whether the current try is the group's last: a failure now leaves no try to start.
+func (c *calc) onLastTry() bool { return c.s.Counters.RetriesLeft <= 1 }
+
+// wallMin returns the current try's working-time limit in minutes: the final try's own, else limits.group_wall_min.
+func (c *calc) wallMin() int {
+	if m := c.s.Counters.FinalWallMin; m > 0 {
+		return m
+	}
+	return c.l.GroupWallMin
 }
 
 // newTry starts the next try: its wall time begins at the time used so far.
@@ -127,7 +138,7 @@ func (c *calc) tick() {
 	if c.builderLive() && !s.LastEventAt.IsZero() && c.in.Time.After(s.LastEventAt) {
 		s.Counters.WallUsedS += int64(c.in.Time.Sub(s.LastEventAt) / time.Second)
 	}
-	if c.l.GroupWallMin > 0 && c.tryWallS() >= int64(c.l.GroupWallMin)*60 {
+	if c.wallMin() > 0 && c.tryWallS() >= int64(c.wallMin())*60 {
 		s.Counters.WallExtTry = c.try()
 	}
 }
@@ -263,10 +274,10 @@ func (c *calc) sessionStart() bool {
 	return true
 }
 
-// charge spends one retry for a true failure and starts a new try; with none left it marks the budget empty.
+// charge spends one try for a true failure and starts the next; a failure on the last try marks the budget empty.
 func (c *calc) charge(cause string) bool {
 	s := &c.s
-	if s.Counters.RetriesLeft <= 0 {
+	if c.onLastTry() {
 		c.exhausted = cause
 		return false
 	}

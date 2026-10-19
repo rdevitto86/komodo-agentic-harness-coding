@@ -36,14 +36,14 @@ func TestReachingZeroEntersTheOverrideWaitAndRunNeverRaisesTheBudget(t *testing.
 	}
 }
 
-func TestOverrideInsideTheWindowGrantsRetriesAndContinues(t *testing.T) {
+func TestOverrideInsideTheWindowGrantsTheFinalTryAndContinues(t *testing.T) {
 	s := emptyBudget(t)
 	ov := in(InOverride, nil)
 	ov.Time = s.Block.Until.Add(-time.Minute)
 
 	r := apply(t, s, ov)
 	c := r.State.Counters
-	if r.State.Stage != StageBuild || c.RetriesLeft != 2 || c.Overrides != 1 || !r.State.Block.Until.IsZero() {
+	if r.State.Stage != StageBuild || c.RetriesLeft != 1 || c.Overrides != 1 || !r.State.Block.Until.IsZero() {
 		t.Fatalf("stage %q counters %+v block %+v", r.State.Stage, c, r.State.Block)
 	}
 	if !slices.Contains(subtypes(r), "override.approved") || !slices.Contains(subtypes(r), "group.resumed") ||
@@ -100,20 +100,6 @@ func TestTheWindowLapsingFailsTheGroupAndHandsItToCleanup(t *testing.T) {
 	early := Next(s, in(InTimerDue, TimerDue{Reason: "override_lapse"}), fixtureLimits())
 	if early.State.Stage == StageDone {
 		t.Fatal("the window lapsed before it ended")
-	}
-}
-
-func TestNoWindowFailsTheGroupAtOnce(t *testing.T) {
-	l := fixtureLimits()
-	l.OverrideWindowMin = 0
-	s := mk(StageBuild)
-	s.Tasks[0].State, s.Tasks[0].Session = "claimed", "s1"
-	s.Counters.RetriesLeft = 0
-
-	r := Next(s, builderEnd("idle"), l)
-	if r.Refused || r.State.Stage != StageDone || r.State.Outcome != "failed" ||
-		!slices.Contains(subtypes(r), "group.failed") {
-		t.Fatalf("stage %q outcome %q emits %v", r.State.Stage, r.State.Outcome, subtypes(r))
 	}
 }
 

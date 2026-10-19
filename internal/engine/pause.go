@@ -105,9 +105,9 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	return nil
 }
 
-// Override gives a group whose retries ran out more retries, for `run (id) --override`; it returns once the group
-// has applied or refused it.
-func (m *Manager) Override(ctx context.Context, target, request string) error {
+// Override gives a group whose tries ran out one final try of the given minutes, for `run (id) --override`; it returns
+// once the group has applied or refused it.
+func (m *Manager) Override(ctx context.Context, target, request string, minutes int) error {
 	gs := m.byTarget(target)
 	loaded := len(gs) > 0
 	if !loaded {
@@ -126,7 +126,9 @@ func (m *Manager) Override(ctx context.Context, target, request string) error {
 
 	request = cmp.Or(request, fmt.Sprintf("override-%s-%d", g.spec.ID, g.now().UnixNano()))
 
-	return m.awaitContinues(ctx, []pendingContinue{m.queueInput(g, Input{Kind: InOverride, Request: request})})
+	return m.awaitContinues(ctx, []pendingContinue{m.queueInput(g, Input{
+		Kind: InOverride, Request: request, Data: mustJSON(OverrideData{Minutes: minutes}),
+	})})
 }
 
 // overridable returns the refusal for a live group that cannot take an override now, or nil.
@@ -265,7 +267,7 @@ func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool 
 // continueTarget handles a run-continue event: an answer, or a plain continue of every held group the target names.
 func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run string) error {
 	if rc.Answer == "override" {
-		return m.Override(ctx, rc.Target, string(rc.Request))
+		return m.Override(ctx, rc.Target, string(rc.Request), rc.Minutes)
 	}
 	if rc.Answer != "" {
 		return m.Answer(rc.Target, rc.Answer == "approve", string(rc.Request))

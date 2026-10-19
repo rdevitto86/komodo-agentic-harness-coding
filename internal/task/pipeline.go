@@ -355,10 +355,11 @@ func (m *Manager) finishTask(ctx context.Context, id string) (int, string, error
 	return 0, o.Output, nil
 }
 
-// spend charges one retry of the group's budget for a true failure; with none left it escalates retries.
+// spend charges one try of the group's budget for a true failure; a failure on the last try escalates retries.
 func (m *Manager) spend(ctx context.Context, cause string) error {
 	m.mu.Lock()
-	if m.prog.RetriesLeft <= 0 {
+	if m.prog.RetriesLeft <= 1 {
+		m.prog.RetriesLeft = 0
 		m.mu.Unlock()
 		return block("retries", map[string]string{"last": cause})
 	}
@@ -684,8 +685,11 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 	left := m.prog.RetriesLeft
 	last := m.prog.TreeAtReturn
 	regression := m.regression
+	if left <= 1 {
+		m.prog.RetriesLeft = 0
+	}
 	m.mu.Unlock()
-	if left <= 0 {
+	if left <= 1 {
 		m.clearRegression()
 		return block("retries", map[string]any{"last": "test_review", "regression": regression, "findings": findings})
 	}
