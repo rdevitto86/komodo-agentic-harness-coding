@@ -111,9 +111,19 @@ func TestFailedKitStartsNoGoroutine(t *testing.T) {
 	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	cfg, err := config.New(
+		t.TempDir(),
+		config.Known{GuardRows: task.KnownRows(), Tools: task.KnownTools()},
+		func(string) bool { return true },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	b := bus.New(bus.Options{})
 	s := &stack{
 		home:   home,
+		cfg:    cfg,
 		bus:    b,
 		ctx:    context.Background(),
 		stderr: io.Discard,
