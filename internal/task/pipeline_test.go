@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
@@ -270,6 +271,52 @@ func TestRegressionAtTheReturnLimitEscalatesRegression(t *testing.T) {
 	}
 	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "regression" || escs[0].Kind != EscBlocked {
 		t.Fatalf("escalations %+v", escs)
+	}
+}
+
+func TestCheckDoneFactMatchesTheEventSchemaAndResultFailFlagsARegression(t *testing.T) {
+	r := newPipeRig(t, rigOpts{limits: Limits{Returns: 2}})
+	r.checks.fail, r.checks.regress = []bool{true, true, true}, true
+	r.model.on(
+		"builder",
+		building(r.wt, "a.go", "package a\n", builderDone),
+		building(r.wt, "b.go", "package b\n", builderDone),
+		building(r.wt, "c.go", "package c\n", builderDone),
+	)
+	if err := r.run(); err != ErrHeld {
+		t.Fatalf("Run returned %v", err)
+	}
+
+	r.rt.mu.Lock()
+	facts := slices.Clone(r.rt.facts)
+	r.rt.mu.Unlock()
+
+	checks, fails := 0, 0
+	for _, f := range facts {
+		switch f.Subtype {
+		case "check.done":
+			checks++
+			line := `{"type":"run-status","subtype":"check.done","run":"r","group":"g","time":"2026-10-15T12:00:00Z","data":` +
+				string(f.Data) + `}`
+
+			var e bus.Event
+			if err := json.Unmarshal([]byte(line), &e); err != nil {
+				t.Fatalf("check.done does not decode as the event: %v\n%s", err, f.Data)
+			}
+		case "result.fail":
+			fails++
+
+			var d struct {
+				Regression bool `json:"regression"`
+			}
+			_ = json.Unmarshal(f.Data, &d)
+			if !d.Regression {
+				t.Fatalf("result.fail lacks the regression flag: %s", f.Data)
+			}
+		}
+	}
+	if checks != 3 || fails != 2 {
+		t.Fatalf("check.done %d result.fail %d", checks, fails)
 	}
 }
 

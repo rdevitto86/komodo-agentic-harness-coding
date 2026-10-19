@@ -60,7 +60,13 @@ func inputsFromMessage(group string, m task.Message, epochOf func(Stage) uint32,
 
 			req := m.ID + "#" + strconv.Itoa(i)
 			if k, ok := stateFacts[f.Subtype]; ok {
-				in := mk(k, ep, req, nil)
+				fep := ep
+				if k == InResultFail {
+					// The Task Manager has already moved its progress to Build, but the failure belongs to Test and Review.
+					fep = epochOf(StageTestReview)
+				}
+
+				in := mk(k, fep, req, nil)
 				in.Data, in.Time = f.Data, at
 				out = append(out, in)
 				continue

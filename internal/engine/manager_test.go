@@ -374,6 +374,30 @@ func TestReaderGoroutineMapsEachMessageToItsInput(t *testing.T) {
 	}
 }
 
+// A result.fail is reported after the Task Manager has moved its progress to Build, yet it belongs to Test and Review.
+func TestResultFailIsStampedWithTheTestReviewEpochAndReturnsTheGroup(t *testing.T) {
+	epochs := map[Stage]uint32{StageBuild: 2, StageTestReview: 3}
+	m := task.Message{
+		ID:   "r",
+		Kind: task.MsgState,
+		State: &task.StateReport{
+			Progress: task.Progress{Stage: StageBuild},
+			Facts: []task.Fact{
+				{Subtype: "result.fail", Data: mustJSON(ResultFail{Items: []string{"TestAdd"}, Regression: true})},
+			},
+		},
+	}
+	ins := inputsFromMessage("g1", m, func(st Stage) uint32 { return epochs[st] }, t0)
+	if len(ins) != 1 || ins[0].Kind != InResultFail || ins[0].Epoch != 3 {
+		t.Fatalf("inputs %+v", ins)
+	}
+
+	r := Next(mk(StageTestReview), ins[0], fixtureLimits())
+	if r.Stale || r.State.Stage != StageBuild || r.State.Counters.Returns != 1 {
+		t.Fatalf("stale %v stage %q returns %d", r.Stale, r.State.Stage, r.State.Counters.Returns)
+	}
+}
+
 func TestEachCommandKindReachesTheTaskManagerAndItsMessageComesBack(t *testing.T) {
 	cases := []struct {
 		order Order

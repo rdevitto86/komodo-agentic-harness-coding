@@ -165,9 +165,21 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 	if !has(evs, "run-failure", "group.blocked", "regression") {
 		t.Fatalf("the group blocked without reason regression\n%s", r.evidence(evs))
 	}
-	// The block detail carries the returns spent; the status log does not record the returns' builder sessions.
-	if !has(evs, "run-failure", "group.blocked", `\"returns\":3`) {
-		t.Fatalf("the group did not go back to the builder 3 times\n%s", r.evidence(evs))
+	// The event log holds every round: 1 build and 3 rework builds, each return, and a check result per test round.
+	builds, returns, checks := 0, 0, 0
+	for _, e := range evs {
+		switch {
+		case e.Type == "run-status" && e.Subtype == "session.start" && strings.Contains(string(e.Data), `"agent":"builder"`):
+			builds++
+		case e.Type == "run-status" && e.Subtype == "stage.enter" && strings.Contains(string(e.Data), `"return":true`):
+			returns++
+		case e.Type == "run-status" && e.Subtype == "check.done":
+			checks++
+		}
+	}
+	if builds != 4 || returns != 3 || checks != 4 {
+		t.Fatalf("the log holds %d builder sessions, %d returns, %d check results; want 4, 3, 4\n%s",
+			builds, returns, checks, r.evidence(evs))
 	}
 }
 

@@ -342,6 +342,7 @@ func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
 	m.prog.Stage = st
 	findings := slices.Clone(m.pending)
 	tree := m.prog.TreeAtReturn
+	regression := m.regression
 	m.mu.Unlock()
 
 	switch {
@@ -350,9 +351,10 @@ func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
 		m.fact(
 			"result.fail",
 			map[string]any{
-				"items":    findings,
-				"tree":     tree,
-				"findings": strings.Join(findings, "\n"),
+				"items":      findings,
+				"tree":       tree,
+				"regression": regression,
+				"findings":   strings.Join(findings, "\n"),
 			},
 		)
 	default:

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -87,8 +88,8 @@ const (
 )
 
 // fixtureBuilder scripts the fake builder for tg-fixture: Sub, then Mul, each with its table test and a task_done. With
-// broken set, the builder first edits Add so that it subtracts (fixture B); in each later session it changes the tree
-// without fixing Add, so the return is not a flap.
+// broken set, the builder first edits Add so that it subtracts (fixture B); in each later session it breaks Add
+// further, so the tree and the failure both differ and the return is not a flap.
 func fixtureBuilder(broken bool) func(brief string, turn int) (string, map[string]any) {
 	return fixtureBuilderGated(broken, nil)
 }
@@ -123,7 +124,11 @@ func fixtureBuilderGated(broken bool, gate func(task string)) func(brief string,
 		if broken {
 			old, repl := breakAddOld, breakAddNew
 			if n > 1 {
-				old, repl = breakAddNew, breakAddNew+" + 0"
+				// Each return breaks Add further, so the failure differs from the last one and is not a flap.
+				old, repl = breakAddNew, breakAddNew+" - "+strconv.Itoa(n-1)
+				if n > 2 {
+					old = breakAddNew + " - " + strconv.Itoa(n-2)
+				}
 			}
 			steps = append(steps, [2]any{"edit", map[string]any{"path": "calc/calc.go", "old": old, "new": repl}})
 		}

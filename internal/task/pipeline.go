@@ -647,6 +647,11 @@ func (m *Manager) runChecks(ctx context.Context) ([]string, error) {
 	m.mu.Lock()
 	m.regression = verdict.Regression
 	m.mu.Unlock()
+	// The event schema has no step output; the output reaches the builder as findings.
+	verdict.Steps = slices.Clone(verdict.Steps)
+	for i := range verdict.Steps {
+		verdict.Steps[i].Output = ""
+	}
 	m.fact("check.done", verdict)
 	if res.Clean() {
 		return nil, nil
@@ -661,9 +666,9 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 	returns := m.prog.Returns
 	last := m.prog.TreeAtReturn
 	regression := m.regression
-	m.regression = false
 	m.mu.Unlock()
 	if returns >= m.spec.Limits.Returns {
+		m.clearRegression()
 		reason := "returns"
 		if regression {
 			reason = "regression"
@@ -676,6 +681,7 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 		return err
 	}
 	if tree == last {
+		m.clearRegression()
 		return block("flap", map[string]any{"tree": tree, "findings": findings})
 	}
 
@@ -684,7 +690,16 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 	m.pending, m.contract = findings, 0
 	m.verdicts = map[string]Outcome{}
 	m.mu.Unlock()
+	// The regression flag stays set until the result.fail fact has read it.
+	defer m.clearRegression()
 	return m.setStage(ctx, state.StageBuild)
+}
+
+// clearRegression forgets the regression the last failed checks found.
+func (m *Manager) clearRegression() {
+	m.mu.Lock()
+	m.regression = false
+	m.mu.Unlock()
 }
 
 // round runs the judges that are due, then decides: pass, return with findings, block, or run again after a tracked edit.
