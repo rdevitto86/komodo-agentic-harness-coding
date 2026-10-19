@@ -150,7 +150,7 @@ func containers(dir string) []string {
 // the bare remote with 1 pull request, and cleanup leaves 0 worktrees, 0 containers and no lease.
 func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 	r := newFixtureRig(t, false, nil)
-	boxes := r.writeDocker()
+	boxes, made := r.writeLiveDocker()
 	if res := r.terminal(60*time.Second, "install", "--hosts", "claude", "--no-path"); res.code != 0 {
 		t.Fatalf("komodo install exited %d\n%s", res.code, res.stdout)
 	}
@@ -179,6 +179,9 @@ func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 	}
 	if wt := r.worktrees(); len(wt) != 0 {
 		t.Errorf("worktrees remain: %v", wt)
+	}
+	if b, _ := os.ReadFile(made); strings.Count(string(b), "create ") != 1 {
+		t.Errorf("the run made containers %q, want exactly 1", b)
 	}
 	if c := containers(boxes); len(c) != 0 {
 		t.Errorf("containers remain: %v", c)

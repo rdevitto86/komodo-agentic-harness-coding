@@ -714,3 +714,54 @@ func (r *binRig) writeDocker() string {
 	}
 	return dir
 }
+
+// writeLiveDocker puts a fake docker on PATH whose daemon answers: create makes one file per container, exec runs the command
+// on the host in the container's worktree, and rm and ps work as in writeDocker. It returns the container folder and a log of
+// every create.
+func (r *binRig) writeLiveDocker() (dir, made string) {
+	dir = filepath.Join(r.root, "containers")
+	made = filepath.Join(r.root, "docker-created.log")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	script := `#!/bin/sh
+D=` + dir + `
+case "$1" in
+version|start|network) exit 0;;
+create)
+  shift; name=""; wt=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) shift; name=$1;;
+      -v) shift; case "$1" in *:/work) wt=${1%:/work};; esac;;
+    esac
+    shift
+  done
+  echo "$wt" > "$D/$name"; echo "create $name" >> '` + made + `'; echo "$name";;
+exec)
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -i) shift;;
+      -w|-u) shift 2;;
+      -e) export "$2"; shift 2;;
+      *) break;;
+    esac
+  done
+  name=$1; shift
+  if [ "$1" = timeout ]; then shift 4; fi
+  wt=$(cat "$D/$name") || exit 1
+  cd "$wt" && exec "$@";;
+ps)
+  pat=""
+  while [ $# -gt 0 ]; do case "$1" in --filter) shift; pat=${1#name=};; esac; shift; done
+  for f in "$D"/*; do [ -e "$f" ] || continue; n=$(basename "$f"); echo "$n" | grep -Eq "$pat" && echo "$n"; done;;
+rm) shift; [ "$1" = -f ] && shift; rm -f "$D/$1";;
+esac
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(r.root, "bin", "docker"), []byte(script), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	return dir, made
+}
