@@ -103,3 +103,73 @@ func TestAWorkOutcomeResetsTheGroupsWaits(t *testing.T) {
 		t.Fatalf("the next blocker waits %s, want 1m", got)
 	}
 }
+
+// judgeEndScript is a Task Manager that builds cleanly; its first Test and Review start ends the tester crash and then the
+// reviewer with reason, and later ones only count; starts counts the Test and Review starts.
+func judgeEndScript(starts *atomic.Int64, reason string) func(string) func(*tmEnv) {
+	return func(string) func(*tmEnv) {
+		return func(e *tmEnv) {
+			defer close(e.out)
+			for {
+				select {
+				case c := <-e.cmds:
+					if c.Kind == task.CmdStop {
+						return
+					}
+					if c.Kind != task.CmdStart {
+						continue
+					}
+
+					st := e.store.get(e.spec.ID)
+					switch st.Stage {
+					case StageIntake:
+						e.say(fact("ready", nil))
+					case StageBuild:
+						var fs []task.Fact
+						for _, t := range st.Tasks {
+							fs = append(fs, sessionFacts(t.ID)...)
+						}
+						e.say(append(fs, fact("stage.done", StageDoneData{Stage: StageBuild}))...)
+					case StageTestReview:
+						if starts.Add(1) != 1 {
+							continue
+						}
+
+						e.say(fact("session.end", map[string]any{
+							"agent": "tester", "session": "s-tester", "link": "claude-cli", "reason": "crash", "stage": "test_review",
+						}))
+						e.say(fact("session.end", map[string]any{
+							"agent": "reviewer", "session": "s-reviewer", "link": "claude-cli", "reason": reason,
+							"stage": "test_review",
+						}))
+					}
+				case <-e.ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+func TestANonBlockerErrorLeavesTheGroupsRunningWaitArmed(t *testing.T) {
+	for _, reason := range []string{"provider", "timeout", "cancelled"} {
+		t.Run(reason, func(t *testing.T) {
+			var starts atomic.Int64
+
+			r := newRig(t, [][]string{{"tg-1"}}, withClock, func(r *rig) { r.tasks.script = judgeEndScript(&starts, reason) })
+			if err := r.startRun("run-1", "tg-1"); err != nil {
+				t.Fatal(err)
+			}
+
+			until(t, "the first Test and Review start", func() bool { return starts.Load() >= 1 })
+			time.Sleep(150 * time.Millisecond)
+
+			if got := starts.Load(); got != 1 {
+				t.Fatalf("%d Test and Review starts before the tester's wait ended, want 1", got)
+			}
+
+			r.clock.Advance(time.Minute)
+			until(t, "the held start after its wait", func() bool { return starts.Load() > 1 })
+		})
+	}
+}
