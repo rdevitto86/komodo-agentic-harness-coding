@@ -8483,7 +8483,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `billing.go` | Cost class per link, the environment scrub, the first-line check; fails closed |
 | `claude.go` | The subscription link: launch line, stream parsing, resume, `claude` path search |
 | `anthropic.go` | The paid Anthropic link: Messages requests, cache markers from the cache handle, structured output, effort |
-| `openai.go` | `OpenAIModel`: the model entry both OpenAI links take |
+| `openai.go` | `OpenAIModel`: the model entry both OpenAI links take, built from the catalog's OpenAI rows |
 | `openai_api.go` | OpenAI's paid interface link: Chat Completions through the shared HTTP client, structured steps with `response_format`, and its error and limit mapping |
 | `openai_codex.go`, `openai_codex_stream.go` | OpenAI's subscription link: the `codex exec --json` launch line, resume by thread, the login check, and the reader of its event stream |
 | `local.go` | The optional local link: an OpenAI-compatible server on this machine, and its context-size probe |
@@ -9114,6 +9114,7 @@ type AuthStatus struct {
 // CatalogEntry is one model in models.json.
 type CatalogEntry struct {
 	ID       string  `json:"id"`
+	Provider string  `json:"provider"`         // anthropic, openai or local
 	Weight   string  `json:"weight"`           // heavy, standard or light
 	Tier     string  `json:"tier"`             // latest, prior or local
 	Window   int     `json:"window,omitempty"` // context tokens; absent for local models, which are measured
@@ -9124,7 +9125,9 @@ type CatalogEntry struct {
 ```
 
 - **Weights:** planner and reviewer are heavy, builder is standard, tester is light; heavy runs the Opus line, standard the Sonnet line, light the Haiku line. The registry holds the weight per agent.
-- **Catalog rules:** only the latest and prior version of a line are used; every identifier is an exact pinned snapshot, never an alias. The probe writes the identifiers a run uses to a State Manager record, and no identifier changes mid-run.
+- **Providers:** every row names its provider, `anthropic`, `openai` or `local`. A link runs only the rows of its own provider: `claude-cli` and `anthropic-api` the Anthropic rows, `openai-subscription` and `openai-api` the OpenAI rows, `local` the local rows. One list holds every model.
+- **OpenAI models:** heavy is `gpt-6-astra` at $10 input and $50 output per million tokens, standard is `gpt-6.1-sol` at $2 and $10, and light is `gpt-6-luna` at $0.10 and $0.50. All three have a 1,050,000-token window and a 128,000-token output cap, and the codex program accepts the same identifiers, so one set of rows serves both OpenAI links. The paid interface link prices a turn from the row; the subscription link bills plan credits, so it records no dollar figure.
+- **Catalog rules:** only the latest and prior version of a line are used; every identifier is an exact pinned snapshot, never an alias. The catalog holds one latest row per provider and weight. The OpenAI rows list no prior model, because the windows of older OpenAI models are not verified. The probe writes the identifiers a run uses to a State Manager record, and no identifier changes mid-run.
 - **Local models (optional link):** the catalog lists no window or price for them. Gemma 4 31B serves heavy, Qwen3.6-27B standard and Nemotron 3 Nano light, all free. A weight with no model listed uses the nearest listed one.
 
 **The optional local link**
@@ -9154,6 +9157,7 @@ The link's cost class is `free` on loopback, or when `SelfHosted` is true. A non
 | Link | Source of the context |
 |---|---|
 | `claude-cli`, `anthropic-api` | The Models API `max_input_tokens`, else the catalog entry, else the default window 262,144 |
+| `openai-subscription`, `openai-api` | The catalog row's window, else the default window 262,144 |
 | Local, Ollama | `/api/ps` `context_length` for the loaded model; an unloaded model is first loaded with an empty request; a typed `Ctx` only lowers it |
 | Local, any other server | The entry's `Ctx`, which is required |
 
@@ -10385,7 +10389,7 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `limits.group_attempts` | int | 6 | Fresh builder sessions per group before the group is escalated |
 | `limits.group_tokens` | int | 2,000,000 | Token cap per group; the Resource Manager owns it ([chapter 19](#19-resource-manager)) |
 | `limits.pause_max_min` | int | 360 | Read by the Runtime Manager: longest a session stays paused; hard limit 1,440 |
-| `limits.link_sessions.<link>` | int | 3 for `claude-cli` and `anthropic-api`, 1 for `local` (most 8) | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
+| `limits.link_sessions.<link>` | int | 3 for `claude-cli`, `anthropic-api`, `openai-subscription` and `openai-api`, 1 for `local` (most 8) | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
 | `agents.<name>.retries` | int | per agent | Fresh sessions after a timeout or idle stop, inside `limits.group_attempts` |
 | `guard.refusal_limit` | int | 3 | Refusals under one row before the session ends; hard limit 5; the only guard tunable |
 | `sandbox.max_procs` | int | 512 | Processes per instance, where the platform can cap them |
@@ -10393,6 +10397,7 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 | `sandbox.image` | string | detected | Image of the Tester's container; required for a Makefile-only or 2-language repository |
 | `providers.paid` | enum | `never` | `never`, `fallback` or `allowed`; see the billing check |
 | `providers.keys.anthropic` | env ref | `env:ANTHROPIC_API_KEY` | Names the environment variable holding the key; the value is never stored or logged |
+| `providers.keys.openai` | env ref | `env:OPENAI_API_KEY` | Names the environment variable holding the key of the paid OpenAI link; the value is never stored or logged |
 | `providers.anthropic.url` | string | the public interface | Address of the server the paid Anthropic link calls; empty means the public interface. `config set` refuses a value that is not an absolute address with a host. The paid link is off for plain `http` to any host except `127.0.0.1`, `::1` and `localhost`, and for any scheme other than `http` or `https` |
 | `providers.local.<name>.url` | string | none | Address of one local endpoint; the local link is off while no endpoint has a `url` |
 | `providers.local.<name>.models` | string | none | The model names that endpoint serves; [TODO: how several model names are written in the one string ([G-273](#g-273))] |

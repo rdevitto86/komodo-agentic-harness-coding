@@ -301,6 +301,28 @@ func TestRecordLimitStoresTheResetAndDefaultsAnUnknownOne(t *testing.T) {
 	}
 }
 
+func TestSelectCatalogFallbackStaysInTheLinksProvider(t *testing.T) {
+	cat, err := llm.LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for l, want := range map[llm.Link]string{
+		llm.OpenAIAPI: "gpt-6.1-sol", llm.OpenAISubscription: "gpt-6.1-sol",
+		llm.ClaudeCLI: "claude-sonnet-5-5", llm.AnthropicAPI: "claude-sonnet-5-5",
+	} {
+		p := subLink(l)
+		p.probe.Models = nil
+		r := newRouter("allowed", newLimits(), p)
+		r.Catalog = cat
+
+		sel, err := r.Select(context.Background(), SelectRequest{Chain: []llm.Link{l}, Weight: llm.Standard})
+		if err != nil || sel.Model != want {
+			t.Errorf("%s: got %+v, %v, want model %s", l, sel, err, want)
+		}
+	}
+}
+
 // paidLink is a healthy paid link.
 func paidLink(l llm.Link) *fakeProvider {
 	p := subLink(l)
