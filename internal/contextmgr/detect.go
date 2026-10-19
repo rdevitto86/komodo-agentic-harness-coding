@@ -5,11 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 // Class is one kind of command the Task Manager and the agents' run tool execute.
@@ -52,8 +53,8 @@ type markerRow struct {
 }
 
 var (
-	// lookPath finds a program on PATH; tests replace it.
-	lookPath = exec.LookPath
+	// lookGolangci finds golangci-lint on PATH; tests replace it.
+	lookGolangci = core.LookGolangci
 	// classOrder lists the detected classes in rendering order.
 	classOrder = []Class{ClassSetup, ClassBuild, ClassTest, ClassLint, ClassFormat}
 	// markerRows lists the language markers in priority order.
@@ -73,8 +74,6 @@ var (
 			ClassFormat: {argv: []string{"ruff", "format"}, perFile: true},
 		})},
 	}
-	// golangciConfigs lists the golangci-lint configuration file names, looked up at the repository root.
-	golangciConfigs = []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"}
 	// makeTargets names the Makefile target of each class.
 	makeTargets = map[Class]string{
 		ClassSetup:  "setup",
@@ -132,7 +131,7 @@ func golangciReady(t Tree) bool {
 		return false
 	}
 
-	_, err := lookPath("golangci-lint")
+	_, err := lookGolangci()
 	return err == nil
 }
 
@@ -144,7 +143,7 @@ func golangciFiles(t Tree) []string {
 	}
 
 	var out []string
-	for _, f := range golangciConfigs {
+	for _, f := range core.GolangciConfigs() {
 		if have[f] {
 			out = append(out, f)
 		}
@@ -198,7 +197,7 @@ func markerFiles(t Tree) []string {
 	}
 
 	var out []string
-	for _, f := range slices.Concat([]string{"Makefile"}, rowFiles(), golangciConfigs) {
+	for _, f := range slices.Concat([]string{"Makefile"}, rowFiles(), core.GolangciConfigs()) {
 		if have[f] {
 			out = append(out, f)
 		}

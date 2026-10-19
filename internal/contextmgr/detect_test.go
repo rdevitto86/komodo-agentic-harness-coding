@@ -93,14 +93,14 @@ func TestDetectMarkerHash(t *testing.T) {
 func withGolangci(t *testing.T, found bool) {
 	t.Helper()
 
-	old := lookPath
-	lookPath = func(name string) (string, error) {
-		if found && name == "golangci-lint" {
+	old := lookGolangci
+	lookGolangci = func() (string, error) {
+		if found {
 			return "/usr/local/bin/golangci-lint", nil
 		}
 		return "", errors.New("not found")
 	}
-	t.Cleanup(func() { lookPath = old })
+	t.Cleanup(func() { lookGolangci = old })
 }
 
 func TestDetectGoLintGolangci(t *testing.T) {

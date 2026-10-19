@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
 // DockerOptions set the docker program and the Tester's image; zero values use docker on PATH and an image detected from the
@@ -393,11 +395,12 @@ var gitEnv = []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 
-// golangciConfigs lists the golangci-lint configuration file names, looked up at the repository root.
-var golangciConfigs = []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"}
-
-// golangciVersion matches the output of golangci-lint version --short.
-var golangciVersion = regexp.MustCompile(`^v?(\d+\.\d+\.\d+)$`)
+var (
+	// golangciVersion matches a bare version number, the output of the short version flags.
+	golangciVersion = regexp.MustCompile(`^v?(\d+\.\d+\.\d+)$`)
+	// golangciBanner finds the version in the line that --version prints.
+	golangciBanner = regexp.MustCompile(`has version v?(\d+\.\d+\.\d+)`)
+)
 
 var (
 	goVersion     = regexp.MustCompile(`(?m)^go\s+(\d+\.\d+)`)
@@ -457,28 +460,46 @@ func toolAdditions(ctx context.Context, lang, worktree string) ([][]string, erro
 // golangciAddition returns the command that installs the host's golangci-lint, when the worktree configures it and the host
 // has it on PATH; it fails when the host version cannot be read.
 func golangciAddition(ctx context.Context, worktree string) ([][]string, error) {
-	if !slices.ContainsFunc(golangciConfigs, func(f string) bool {
+	if !slices.ContainsFunc(core.GolangciConfigs(), func(f string) bool {
 		_, err := os.Stat(filepath.Join(worktree, f))
 		return err == nil
 	}) {
 		return nil, nil
 	}
 
-	bin, err := exec.LookPath("golangci-lint")
+	bin, err := core.LookGolangci()
 	if err != nil {
 		return nil, nil
 	}
 
-	out, err := exec.CommandContext(ctx, bin, "version", "--short").Output()
-	m := golangciVersion.FindStringSubmatch(strings.TrimSpace(string(out)))
-	if err != nil || m == nil {
+	version := golangciHostVersion(ctx, bin)
+	if version == "" {
 		return nil, errors.New(
 			"cannot read the host's golangci-lint version, so the container cannot install the same one: " +
 				"set sandbox.image to an image that holds golangci-lint",
 		)
 	}
 
-	return [][]string{{"env", "GOBIN=/usr/local/bin", "go", "install", golangciModule(m[1])}}, nil
+	return [][]string{{"env", "GOBIN=/usr/local/bin", "go", "install", golangciModule(version)}}, nil
+}
+
+// golangciHostVersion returns the version number of the golangci-lint program, or an empty string when none of its version
+// commands answers. Version 2 reads "version --short", version 1 "version --format short", and both print a banner for
+// --version.
+func golangciHostVersion(ctx context.Context, bin string) string {
+	for _, args := range [][]string{{"version", "--short"}, {"version", "--format", "short"}} {
+		out, err := exec.CommandContext(ctx, bin, args...).Output()
+		if m := golangciVersion.FindStringSubmatch(strings.TrimSpace(string(out))); err == nil && m != nil {
+			return m[1]
+		}
+	}
+
+	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	if m := golangciBanner.FindStringSubmatch(string(out)); err == nil && m != nil {
+		return m[1]
+	}
+
+	return ""
 }
 
 // golangciModule returns the module path and version of golangci-lint's command; version 2 and later carry the major

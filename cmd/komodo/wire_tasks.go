@@ -19,6 +19,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
@@ -379,7 +380,7 @@ func (s *stack) sandboxPlan(group string) task.SandboxPlan {
 // golangciFolder returns the folder that holds the golangci-lint program on PATH, with symlinks resolved, or an empty string
 // when it is not installed.
 func golangciFolder() string {
-	bin, err := exec.LookPath("golangci-lint")
+	bin, err := core.LookGolangci()
 	if err != nil {
 		return ""
 	}
@@ -566,8 +567,17 @@ func checkoutBase(ctx context.Context, root, base, buildDir string) (string, err
 	if err := os.RemoveAll(dir); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := extractBase(ctx, root, base, dir); err != nil {
 		return "", err
+	}
+
+	return dir, os.WriteFile(filepath.Join(dir, doneMark), nil, 0o644)
+}
+
+// extractBase writes the base commit's files into the folder, which it makes if it is missing.
+func extractBase(ctx context.Context, root, base, dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
 
 	archive := exec.CommandContext(ctx, "git", "-C", root, "archive", base)
@@ -575,25 +585,25 @@ func checkoutBase(ctx context.Context, root, base, buildDir string) (string, err
 
 	pipe, err := archive.StdoutPipe()
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	untar.Stdin = pipe
 	if err := untar.Start(); err != nil {
-		return "", fmt.Errorf("start tar: %w", err)
+		return fmt.Errorf("start tar: %w", err)
 	}
 	if err := archive.Start(); err != nil {
 		_ = untar.Process.Kill()
 		_ = untar.Wait()
-		return "", fmt.Errorf("start git archive: %w", err)
+		return fmt.Errorf("start git archive: %w", err)
 	}
 
 	aerr := archive.Wait()
 	if err := untar.Wait(); err != nil || aerr != nil {
-		return "", fmt.Errorf("extract %s: %w", base, errors.Join(aerr, err))
+		return fmt.Errorf("extract %s: %w", base, errors.Join(aerr, err))
 	}
 
-	return dir, os.WriteFile(filepath.Join(dir, doneMark), nil, 0o644)
+	return nil
 }
 
 // permissionsOf turns an agent's configuration into the permissions its guard and tool registry enforce.

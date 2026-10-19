@@ -203,13 +203,19 @@ func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 	return d
 }
 
-// baseRunner runs shell commands on the checked-out base commit inside one builder sandbox instance.
+// baseRunner runs each shell command on its own fresh checkout of the base commit, in its own builder sandbox instance.
 type baseRunner struct {
-	boxes *sandbox.Manager
-	id    string
+	boxes  *sandbox.Manager
+	root   string
+	base   string
+	group  string
+	plan   task.SandboxPlan
+	folder string // holds every checkout and temporary folder of this plan; Close deletes it
+	runs   int
 }
 
-// openBaseRunner checks out the repository's HEAD commit and opens a builder sandbox with no network over the checkout.
+// openBaseRunner reads the repository's HEAD commit and makes the plan's folder; each command then gets its own checkout and
+// a builder sandbox with no network over it.
 func openBaseRunner(
 	ctx context.Context,
 	boxes *sandbox.Manager,
@@ -226,39 +232,50 @@ func openBaseRunner(
 		}
 	}
 
-	dir, err := checkoutBase(ctx, root, base, plan.Build)
+	folder, err := os.MkdirTemp(plan.Temp, "komodo-base-")
 	if err != nil {
-		return nil, fmt.Errorf("check out the base commit: %w", err)
+		return nil, fmt.Errorf("make the plan folder: %w", err)
 	}
 
-	tmp, err := os.MkdirTemp(plan.Temp, "komodo-sandbox-")
-	if err != nil {
-		return nil, fmt.Errorf("make the sandbox folder: %w", err)
-	}
-
-	inst, err := boxes.CreateSandboxInstance(ctx, sandbox.Spec{
-		Group:      group,
-		Worktree:   dir,
-		Writable:   []string{tmp, plan.Build},
-		Modules:    plan.Modules,
-		Toolchains: plan.Toolchains,
-		MaxProcs:   plan.MaxProcs,
-		MaxMemGB:   plan.MaxMemGB,
-		Role:       sandbox.RoleBuilder,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create the sandbox: %w", err)
-	}
-
-	return &baseRunner{boxes: boxes, id: inst.ID}, nil
+	return &baseRunner{boxes: boxes, root: root, base: base, group: group, plan: plan, folder: folder}, nil
 }
 
-// Run runs one shell command from the root of the base checkout and returns its exit code; a killed command is not 0.
+// Run checks out the base commit afresh, runs one shell command from its root and returns the exit code; a killed command is
+// not 0. The checkout and its sandbox are removed afterwards.
 func (b *baseRunner) Run(ctx context.Context, command string) (int, error) {
 	// baseTimeout is the longest one command may run before the sandbox kills it.
 	const baseTimeout = 10 * time.Minute
 
-	cmd, err := b.boxes.Command(ctx, b.id, sandbox.Command{Argv: []string{"sh", "-c", command}, Timeout: baseTimeout})
+	b.runs++
+	run := filepath.Join(b.folder, fmt.Sprintf("run-%d", b.runs))
+	dir, tmp := filepath.Join(run, "base"), filepath.Join(run, "tmp")
+
+	defer func() { _ = os.RemoveAll(run) }()
+
+	if err := extractBase(ctx, b.root, b.base, dir); err != nil {
+		return -1, fmt.Errorf("check out the base commit: %w", err)
+	}
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		return -1, fmt.Errorf("make the sandbox folder: %w", err)
+	}
+
+	inst, err := b.boxes.CreateSandboxInstance(ctx, sandbox.Spec{
+		Group:      b.group,
+		Worktree:   dir,
+		Writable:   []string{tmp, b.plan.Build},
+		Modules:    b.plan.Modules,
+		Toolchains: b.plan.Toolchains,
+		MaxProcs:   b.plan.MaxProcs,
+		MaxMemGB:   b.plan.MaxMemGB,
+		Role:       sandbox.RoleBuilder,
+	})
+	if err != nil {
+		return -1, fmt.Errorf("create the sandbox: %w", err)
+	}
+
+	defer func() { _ = b.boxes.DestroySandboxInstance(context.Background(), inst.ID) }()
+
+	cmd, err := b.boxes.Command(ctx, inst.ID, sandbox.Command{Argv: []string{"sh", "-c", command}, Timeout: baseTimeout})
 	if err != nil {
 		return -1, err
 	}
@@ -276,12 +293,12 @@ func (b *baseRunner) Run(ctx context.Context, command string) (int, error) {
 	return cmd.ProcessState.ExitCode(), nil
 }
 
-// Close removes the sandbox instance.
+// Close deletes the plan's folder with every checkout in it.
 func (b *baseRunner) Close() error {
-	return b.boxes.DestroySandboxInstance(context.Background(), b.id)
+	return os.RemoveAll(b.folder)
 }
 
-// openBase opens the planner's base-commit runner: one sandbox over a checkout of HEAD per plan.
+// openBase opens the planner's base-commit runner: a fresh checkout of HEAD and sandbox per command.
 func (k *repoKit) openBase(ctx context.Context) (intake.BaseRunner, error) {
 	sum := sha256.Sum256([]byte(k.root))
 	group := "plan-" + hex.EncodeToString(sum[:4])

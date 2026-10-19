@@ -82,12 +82,54 @@ func TestBaseRunnerRunsCommandsOnTheBaseCommit(t *testing.T) {
 	if code, err := r.Run(context.Background(), "grep -q head a.txt"); err != nil || code == 0 {
 		t.Fatalf("a command that holds only on the working tree: exit %d err %v", code, err)
 	}
-	if be.spec.Role != sandbox.RoleBuilder || be.spec.Network || !strings.Contains(be.spec.Worktree, "base-") {
+	if be.spec.Role != sandbox.RoleBuilder || be.spec.Network || !strings.HasPrefix(be.spec.Worktree, plan.Temp) {
 		t.Fatalf("sandbox spec: %+v", be.spec)
 	}
 
-	if err := r.Close(); err != nil || be.release != 1 {
-		t.Fatalf("close: %v released %d", err, be.release)
+	if err := r.Close(); err != nil || be.release != be.prepare {
+		t.Fatalf("close: %v released %d of %d", err, be.release, be.prepare)
+	}
+}
+
+// A command that writes into the base checkout does not change what the next command sees, and a closed runner leaves no
+// folder behind.
+func TestBaseRunnerGivesEveryCommandAFreshCheckout(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"},
+	} {
+		pre := append([]string{"-C", repo}, args...)
+		if out, err := exec.Command("git", pre...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+
+	boxes := sandbox.NewManager(map[string]sandbox.Backend{sandbox.RoleBuilder: &hostBackend{}}, nil)
+	home := t.TempDir()
+	plan := task.SandboxPlan{Temp: filepath.Join(home, "tmp"), Build: filepath.Join(home, "build")}
+
+	r, err := openBaseRunner(context.Background(), boxes, repo, "plan-x", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, err := r.Run(context.Background(), "touch built.out"); err != nil || code != 0 {
+		t.Fatalf("a command that writes a file: exit %d err %v", code, err)
+	}
+	if code, err := r.Run(context.Background(), "test ! -e built.out"); err != nil || code != 0 {
+		t.Fatalf("the next command saw the first command's file: exit %d err %v", code, err)
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range []string{plan.Temp, plan.Build} {
+		left, _ := os.ReadDir(d)
+		if len(left) != 0 {
+			t.Fatalf("%s holds %d entries after close", d, len(left))
+		}
 	}
 }
 

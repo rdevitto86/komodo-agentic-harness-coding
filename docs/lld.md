@@ -3957,6 +3957,9 @@ const (
 	RuleCaseCollision Rule = "case_collision"
 )
 
+// RuleFailFirst names the finding of a done_when command that already passes on the base commit. Plan raises it, never Lint.
+const RuleFailFirst Rule = "fail_first"
+
 // Finding is one failed or warned check, naming the rule and the file.
 type Finding struct {
 	Rule     Rule     `json:"rule"`
@@ -4120,6 +4123,15 @@ type Deps struct {
 	Chain     []contextmgr.Candidate                             // the planner's link chain with measured contexts; sizes the repo map
 	Repo      string                                             // repository id, copied into run-start
 	CommonDir string                                             // git common directory, copied into run-start
+	OpenBase  func(ctx context.Context) (BaseRunner, error)     // opens the base commit's runner for one plan; nil skips the fail-first check
+}
+
+// BaseRunner runs commands on the untouched base commit in a sandbox that has no network.
+type BaseRunner interface {
+	// Run runs one shell command from the root of a fresh base checkout and returns its exit code.
+	Run(ctx context.Context, command string) (exit int, err error)
+	// Close removes every checkout the runner made.
+	Close() error
 }
 
 // New returns a Handler; it does not subscribe until Run is called.
@@ -4325,7 +4337,7 @@ flowchart TB
 ```
 
 1. `LintDraft` returns all findings. A draft passes when no finding has severity `fail`.
-2. On a pass, run each task's `done_when` once on the untouched base commit, in a builder sandbox with no network; a command runs once per plan. A command that exits 0 is a failing `fail_first` finding, and the draft goes back like a lint failure. With no failing finding, write the files; a new group's `TG.md` without `id:` gets a version 7 id, and a stored group keeps its stored id.
+2. On a pass, run each task's `done_when` once on the untouched base commit, in a builder sandbox with no network; a command runs once per plan, each on its own fresh checkout in a folder that is deleted when the plan ends. A command that exits 0 is a failing `fail_first` finding, and the draft goes back like a lint failure. With no failing finding, write the files; a new group's `TG.md` without `id:` gets a version 7 id, and a stored group keeps its stored id.
 3. On a failure with fewer than 3 failing drafts so far, send the finding text into the same session.
 4. The session returns its next draft, and the loop runs again.
 5. The third failing draft ends the plan with `PlanBlockedError`; 0 task-list files exist.
@@ -5078,6 +5090,20 @@ type Deps struct {
 
 // The Context Manager reads and writes the skills, context, map and setup namespaces through
 // cache.Handle; it never creates or closes the cache.
+```
+
+The starting `Deps.Items` come from `StartItems`, which program startup calls with the Agent Registry's skill access:
+
+```go
+// Access is one agent's skill names from the Agent Registry; a trailing * names every skill with that prefix.
+type Access struct {
+	Allow  []string
+	Always []string
+}
+
+// StartItems expands each agent's access patterns against the shipped skills and returns the starting state: a skill
+// is enabled when some agent allows it. A name that matches no shipped skill is left for the local skills.
+func StartItems(fsys fs.FS, access map[string]Access) ([]ItemState, error)
 ```
 
 | Error | Meaning and what the caller does |
@@ -9480,7 +9506,7 @@ bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /home/dev --tmp
 
 For the group's setup command alone, `Spec.Network` is true: the Seatbelt profile then allows network access, and the Bubblewrap line leaves out `--unshare-net`.
 
-A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt`, `uv` and `golangci-lint` where the language needs them, makes one container per instance with the worktree at `/work` and the repository's shared git folder mounted read-only at its host path, so the worktree's `.git` pointer file resolves and a check can read history but never write it (git's `safe.directory` is set through environment variables, never a config file), runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. For Go, when the worktree holds a `golangci-lint` configuration file and the host has `golangci-lint` on `PATH`, it is `env GOBIN=/usr/local/bin go install <module>@v<version>`, where the version is the host's `golangci-lint version --short` and the module path carries `/v<major>` from major version 2 on; when the host version cannot be read, the container is not made and the error names `sandbox.image` as the fix, and the latest version is never installed. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
+A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt`, `uv` and `golangci-lint` where the language needs them, makes one container per instance with the worktree at `/work` and the repository's shared git folder mounted read-only at its host path, so the worktree's `.git` pointer file resolves and a check can read history but never write it (git's `safe.directory` is set through environment variables, never a config file), runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. For Go, when the worktree holds a `golangci-lint` configuration file and the host has `golangci-lint` on `PATH`, it is `env GOBIN=/usr/local/bin go install <module>@v<version>`, where the version is the host's, read with `golangci-lint version --short` (version 2), then `version --format short` (version 1), then the banner of `--version`, and the module path carries `/v<major>` from major version 2 on; when the host version cannot be read, the container is not made and the error names `sandbox.image` as the fix, and the latest version is never installed. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
 
 **Language caches.** The caches are the harness's own, under a per-repository folder: never the person's `~/.npm`, `~/.cargo/registry` or Go cache. The Cache Manager keeps them and their size rules ([chapter 8](#8-cache-manager)); the sandbox only mounts them, with the toolchain folders read-only. The per-user process limit is never used, because it counts every process the person runs.
 
@@ -9646,6 +9672,7 @@ type Collaborators struct {
 	OnRecheck   func(pass bool, output string) // receives the result of a recheck command
 	Now         func() time.Time    // clock; time.Now when nil
 	Tick        time.Duration       // session timer period; 15 s when zero
+	BeatEvery   time.Duration       // how often Serve sends a beat message; the package BeatEvery when zero
 	Ladder      [2]time.Duration    // stop ladder waits; 30 s and 60 s when zero
 	ResumeWait  func(try int) time.Duration // backoff after a refused resume; 15, 30, 60 minutes when nil
 }
