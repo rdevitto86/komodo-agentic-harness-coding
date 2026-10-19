@@ -38,13 +38,13 @@ const (
 	// cleanup could not remove what it must
 	ReasonCleanup Reason = "cleanup"
 
-	// working time reached twice limits.group_wall_min
+	// legacy: a group saved before wall time was charged per try; a plain run continues it
 	ReasonWall Reason = "wall"
 
 	// a dependency was removed from the run
 	ReasonDependency Reason = "dependency"
 
-	// the group's goroutine panicked, or an action failed past its retry
+	// the group's goroutine panicked, or a person must look after three Komodo faults in a row
 	ReasonCrash Reason = "crash"
 
 	// a decision result broke the event's declared shape
@@ -101,4 +101,49 @@ func (r Reason) Charged() bool {
 	}
 
 	return false
+}
+
+// Severity ranks how serious a reason is for Komodo itself.
+type Severity string
+
+const (
+	// SeverityPanic means Komodo itself is broken; it counts toward the group cap and the engine-wide breaker
+	SeverityPanic Severity = "panic"
+
+	// SeverityFault means one session or step broke; it counts toward the group cap only
+	SeverityFault Severity = "fault"
+
+	// SeverityMinor means expected and self-healing; it counts nowhere
+	SeverityMinor Severity = "minor"
+
+	// SeverityWork means the work failed; it spends a retry and is no fault
+	SeverityWork Severity = "work"
+
+	// SeverityNone means the reason says nothing about Komodo's health
+	SeverityNone Severity = ""
+)
+
+// Severity returns the tier of a reason as a group fault or block; crash stands for a goroutine panic here.
+func (r Reason) Severity() Severity { return Classify(r, false) }
+
+// Classify is the one table of tiers; session is true for a session-exit reason, where crash is a lost session process.
+func Classify(r Reason, session bool) Severity {
+	switch r {
+	case ReasonCrash:
+		if session {
+			return SeverityFault
+		}
+		return SeverityPanic
+	case ReasonStateInvalid, ReasonContract, ReasonSetup:
+		return SeverityPanic
+	case ReasonPublish, ReasonCleanup:
+		return SeverityFault
+	case ReasonCancelled, ReasonProvider, ReasonPaused, ReasonBilling:
+		return SeverityMinor
+	}
+	if r.Charged() {
+		return SeverityWork
+	}
+
+	return SeverityNone
 }

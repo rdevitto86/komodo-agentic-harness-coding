@@ -107,6 +107,8 @@ type Result struct {
 	Stale   bool     // the input's epoch is older than the group's; State is unchanged
 	Dup     bool     // the input's request was applied before; State is unchanged
 	Dropped []string // facts that stood for no event, each with the kind and the reason, for the error output
+	// the panic-tier reason the input stood for, which the engine-wide breaker counts; empty for none
+	Panic state.Reason
 }
 
 // The data of each input kind.
@@ -137,6 +139,7 @@ type (
 	SessionEndData struct {
 		bus.SessionEnd
 		Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"`
+		Restart    bool                   `json:"restart,omitempty"` // the engine ended the session by dying; no fault
 	}
 	// ScopeAsk is the data of scope.ask; Deny is set by the Runtime Manager when a path is protected or in another live
 	// group's files.

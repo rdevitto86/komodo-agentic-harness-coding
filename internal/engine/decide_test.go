@@ -287,56 +287,6 @@ func TestEveryTrueFailureSpendsOneRetryAndNothingElseDoes(t *testing.T) {
 	}
 }
 
-func TestWallTimeExtendsThenBlocks(t *testing.T) {
-	s := claimed()
-	s.LastEventAt = t0
-	i := in(InFact, FactData{Subtype: "tool.denied"})
-	i.Time = t0.Add(60 * time.Minute)
-	r := apply(t, s, i)
-	if r.State.Counters.WallUsedS != 3600 || !r.State.Counters.WallExtended || r.State.Stage != StageBuild {
-		t.Fatalf(
-			"at the limit: used %d extended %v stage %q",
-			r.State.Counters.WallUsedS,
-			r.State.Counters.WallExtended,
-			r.State.Stage,
-		)
-	}
-	i.Time = t0.Add(120 * time.Minute)
-	r = apply(t, r.State, i)
-	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonWall {
-		t.Fatalf("at twice: stage %q reason %q", r.State.Stage, r.State.Block.Reason)
-	}
-}
-
-func TestIdleTimeAddsNoWallTime(t *testing.T) {
-	long := t0.Add(10 * time.Hour)
-	cases := map[string]State{
-		"no live session": mk(StageBuild),
-		"paused": func() State {
-			s := claimed()
-			s.Stage, s.Prior = StagePaused, StageBuild
-			s.Pause = state.PauseState{Cause: "provider", Since: t0}
-			return s
-		}(),
-		"blocked":         func() State { s := claimed(); s.Stage, s.Prior = StageBlocked, StageBuild; return s }(),
-		"test and review": mk(StageTestReview),
-	}
-	for name, s := range cases {
-		i := in(InFact, FactData{Subtype: "tool.denied"})
-		i.Time = long
-		r := Next(s, i, fixtureLimits())
-		if r.State.Counters.WallUsedS != 0 {
-			t.Errorf("%s: wall used %d", name, r.State.Counters.WallUsedS)
-		}
-	}
-	s := claimed()
-	i := in(InFact, FactData{Subtype: "tool.denied"})
-	i.Time = t0.Add(90 * time.Second)
-	if r := apply(t, s, i); r.State.Counters.WallUsedS != 90 {
-		t.Fatalf("live builder: wall used %d", r.State.Counters.WallUsedS)
-	}
-}
-
 func TestContinueResetsExactlyTheNamedCounters(t *testing.T) {
 	cases := []struct {
 		reason state.Reason
@@ -352,12 +302,17 @@ func TestContinueResetsExactlyTheNamedCounters(t *testing.T) {
 		},
 		{
 			state.ReasonWall,
-			func(s *State) { s.Counters.WallUsedS = 7200; s.Counters.WallExtended = true },
-			func(s State) bool { return s.Counters.WallUsedS == 0 && !s.Counters.WallExtended },
+			func(s *State) { s.Counters.WallUsedS = 7200 },
+			func(s State) bool { return s.Counters.WallBaseS == 7200 },
 			StageBuild,
 		},
 		{state.ReasonNoProvider, func(s *State) {}, func(s State) bool { return true }, StageBuild},
-		{state.ReasonCrash, func(s *State) {}, func(s State) bool { return true }, StageBuild},
+		{
+			state.ReasonCrash,
+			func(s *State) { s.Counters.FaultStreak = 3 },
+			func(s State) bool { return s.Counters.FaultStreak == 0 },
+			StageBuild,
+		},
 	}
 	for _, c := range cases {
 		s := mk(StageBlocked)
@@ -644,35 +599,20 @@ func TestScopeRules(t *testing.T) {
 	}
 }
 
-func TestWallBlockAnswers(t *testing.T) {
-	s := mk(StageBlocked)
-	s.Prior = StageBuild
-	s.Block = state.BlockState{Reason: state.ReasonWall}
-	s.Counters.WallUsedS, s.Counters.WallExtended = 7200, true
-	a := apply(t, s, in(InScopeAnswer, ScopeAnswer{Answer: "approve"}))
-	if a.State.Stage != StageBuild || a.State.Counters.WallUsedS != 0 || a.State.Counters.WallExtended {
-		t.Fatalf("approve: %q %+v", a.State.Stage, a.State.Counters)
-	}
-	d := Next(s, in(InScopeAnswer, ScopeAnswer{Answer: "deny"}), fixtureLimits())
-	if d.State.Stage != StageBlocked {
-		t.Fatalf("deny left stage %q", d.State.Stage)
-	}
-}
-
 func TestTimerExtensionGrantedOnce(t *testing.T) {
 	req := in(InTimerExtend, map[string]any{"session": "s1", "used": 1, "limit": int64(30 * time.Minute)})
 	req.Request = "m1"
 	r := apply(t, claimed(), req)
-	if !r.State.Counters.WallExtended || len(r.Orders) != 1 || r.Orders[0].Kind != OrderExtend || r.Orders[0].Re != "m1" {
+	if r.State.Counters.WallExtTry != 1 || len(r.Orders) != 1 || r.Orders[0].Kind != OrderExtend || r.Orders[0].Re != "m1" {
 		t.Fatalf("first: %+v", r.Orders)
 	}
-	if !strings.Contains(string(r.Orders[0].Data), "1800000000000") {
+	if !strings.Contains(string(r.Orders[0].Data), "3600000000000") {
 		t.Fatalf("extension data %s", r.Orders[0].Data)
 	}
 	req2 := req
 	req2.Request = "m2"
 	r2 := apply(t, r.State, req2)
-	if strings.Contains(string(r2.Orders[0].Data), "1800000000000") {
+	if strings.Contains(string(r2.Orders[0].Data), "3600000000000") {
 		t.Fatalf("a second extension was granted: %s", r2.Orders[0].Data)
 	}
 }

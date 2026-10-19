@@ -43,7 +43,7 @@ func TestOverrideInsideTheWindowGrantsRetriesAndContinues(t *testing.T) {
 
 	r := apply(t, s, ov)
 	c := r.State.Counters
-	if r.State.Stage != StageTestReview || c.RetriesLeft != 2 || c.Overrides != 1 || !r.State.Block.Until.IsZero() {
+	if r.State.Stage != StageBuild || c.RetriesLeft != 2 || c.Overrides != 1 || !r.State.Block.Until.IsZero() {
 		t.Fatalf("stage %q counters %+v block %+v", r.State.Stage, c, r.State.Block)
 	}
 	if !slices.Contains(subtypes(r), "override.approved") || !slices.Contains(subtypes(r), "group.resumed") ||
@@ -158,7 +158,8 @@ func TestASecondExhaustionAfterAnApprovedOverrideFailsAtOnceWithNoPrompt(t *test
 	granted := apply(t, s, ov).State
 
 	granted.Counters.RetriesLeft = 0
-	r := apply(t, granted, in(InResultFail, ResultFail{Items: []string{"b"}, Tree: "t2"}))
+	granted.Tasks[0].State, granted.Tasks[0].Session = "claimed", "s1"
+	r := apply(t, granted, builderEnd("idle"))
 	if r.State.Stage != StageDone || r.State.Outcome != "failed" || r.State.Counters.Overrides != 1 {
 		t.Fatalf("stage %q outcome %q overrides %d", r.State.Stage, r.State.Outcome, r.State.Counters.Overrides)
 	}

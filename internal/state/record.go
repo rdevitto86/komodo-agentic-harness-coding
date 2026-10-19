@@ -99,6 +99,9 @@ type GroupState struct {
 	// fingerprint of the failure behind the last return to build
 	FailureHash string `json:"failure_hash"`
 
+	// the output of the last failed test and review round, for the builder after an override
+	LastFindings string `json:"last_findings,omitempty"`
+
 	// tree hash tested at the last return; the same tree again is a flap
 	ReturnTree string `json:"return_tree"`
 

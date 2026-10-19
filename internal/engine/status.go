@@ -201,8 +201,6 @@ func (g *group) question(s State) string {
 			)
 		}
 		return label + " asks to change files outside its list. Approve or deny?"
-	case state.ReasonWall:
-		return label + " used twice its working time. Approve more time or leave it blocked?"
 	}
 
 	return fmt.Sprintf("%s is blocked: %s. Fix the cause and run it again.", label, s.Block.Reason)

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/json"
 	"slices"
 	"strconv"
@@ -16,7 +17,7 @@ var faultStages = map[state.Reason][]Stage{
 	state.ReasonNoProvider:    {StageBuild, StageTestReview},
 	state.ReasonPaidRefused:   {StageBuild, StageTestReview},
 	state.ReasonContext:       {StageIntake, StageBuild, StageTestReview},
-	state.ReasonSetup:         {StageIntake},
+	state.ReasonSetup:         {StageIntake, StageBuild, StageTestReview},
 	state.ReasonPublish:       {StageCommit},
 	state.ReasonMergeConflict: {StageCommit},
 	state.ReasonCleanup:       {StageCleanup},
@@ -24,7 +25,6 @@ var faultStages = map[state.Reason][]Stage{
 	state.ReasonTester:        {StageTestReview},
 	state.ReasonFlap:          {StageTestReview},
 	state.ReasonRetries:       {StageBuild, StageTestReview},
-	state.ReasonWall:          {StageBuild},
 	state.ReasonCrash: {
 		StageIntake,
 		StageBuild,
@@ -54,6 +54,10 @@ var faultStages = map[state.Reason][]Stage{
 // move applies the stage-move rows: the first row that matches the input and the state.
 func (c *calc) move() bool {
 	in, s := c.eff, &c.s
+	if c.wallOver() && len(c.orders) == 0 && wallEnds(in.Kind) {
+		c.wallFail()
+		return true
+	}
 	if r, d, ok := c.blockReason(in); ok {
 		c.block(r, d)
 		return true
@@ -63,6 +67,7 @@ func (c *calc) move() bool {
 	case InGroupStart:
 		if c.from == NoStage {
 			s.Epoch = 1
+			s.Counters.Tries = 1
 			s.Counters.RetriesLeft = c.l.GroupRetries
 			s.Stage = StageIntake
 			c.emitStatus(&bus.StageEnter{To: string(StageIntake)})
@@ -182,6 +187,7 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		d := decode[ResultFail](in.Data)
 		if s.Counters.RetriesLeft <= 0 {
 			c.exhausted = "test_review"
+			s.LastFindings = cmp.Or(d.Findings, strings.Join(d.Items, "\n"))
 			if d.Regression {
 				return state.ReasonRetries, "a test that passed at the base fails and no retries are left", true
 			}
@@ -232,18 +238,39 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		}
 	}
 
-	if st == StageBuild &&
-		s.Counters.WallExtended &&
-		c.l.GroupWallMin > 0 &&
-		s.Counters.WallUsedS >= 2*int64(c.l.GroupWallMin)*60 {
-		switch in.Kind {
-		case InAbandon, InLeaseLost, InGroupCrash, InContinue, InScopeAnswer:
-		default:
-			return state.ReasonWall, "working time reached twice limits.group_wall_min", true
-		}
+	return "", "", false
+}
+
+// wallEnds reports whether an input of this kind may end a try that ran past its wall time.
+func wallEnds(k InputKind) bool {
+	switch k {
+	case InAbandon, InLeaseLost, InGroupCrash, InContinue, InScopeAnswer:
+		return false
+	}
+	return true
+}
+
+// wallFail ends a try that ran past limits.group_wall_min and its extension: one retry is spent and the next try starts
+// with fresh time; with none left the group waits for an override.
+func (c *calc) wallFail() {
+	s := &c.s
+	if !c.charge("wall") {
+		c.block(state.ReasonRetries, "working time ran past its extension and no retries are left")
+		return
 	}
 
-	return "", "", false
+	live := c.anyLive()
+	for i := range s.Tasks {
+		if s.Tasks[i].State == "claimed" {
+			s.Tasks[i].State, s.Tasks[i].Session = "queued", ""
+		}
+	}
+	if live {
+		c.order(OrderCancel, StageBuild, map[string]string{"cause": "wall"})
+	}
+
+	s.Epoch++
+	c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: "wall"})
 }
 
 // endBlock applies the block rows that read a session end.
@@ -254,6 +281,10 @@ func (c *calc) endBlock(e bus.SessionEnd) (state.Reason, string, bool) {
 	}
 	if e.Reason == "billing" {
 		return state.ReasonPaidRefused, "the first stream line showed a paid key", true
+	}
+
+	if e.Reason == string(state.ReasonCrash) && c.faultCapped() {
+		return state.ReasonCrash, "3 Komodo faults in a row with no session result between them; look at the cause", true
 	}
 
 	if c.exhausted != "" && (e.Agent == "builder" || e.Agent == "tester" || e.Agent == "reviewer") {
@@ -485,7 +516,10 @@ func (c *calc) continueGroup(in Input) bool {
 }
 
 // resumeAt leaves Paused or Blocked into a working stage with the epoch raised (rows 13, 14 and 19).
-func (c *calc) resumeAt(to Stage) {
+func (c *calc) resumeAt(to Stage) { c.resumeWith(to, stageData{Task: c.firstOpenTask()}) }
+
+// resumeWith is resumeAt with the detail the stage order carries.
+func (c *calc) resumeWith(to Stage, d stageData) {
 	s := &c.s
 
 	held := string(c.from)
@@ -499,7 +533,7 @@ func (c *calc) resumeAt(to Stage) {
 
 	c.emitStatus(&bus.GroupResumed{From: held, To: string(to)})
 	c.emitStatus(&bus.StageEnter{From: held, To: string(to)})
-	c.enterStage(to, stageData{Task: c.firstOpenTask()})
+	c.enterStage(to, d)
 }
 
 // dropCommitOrders removes the open orders of the Commit stage; Commit runs again after approval.
@@ -523,7 +557,9 @@ func (c *calc) resetFor(r state.Reason) string {
 			return "the group's retries are spent: a person may override in a terminal with run --override"
 		}
 	case state.ReasonWall:
-		s.Counters.WallUsedS, s.Counters.WallExtended = 0, false
+		s.Counters.WallBaseS = s.Counters.WallUsedS
+	case state.ReasonCrash:
+		s.Counters.FaultStreak = 0
 	case state.ReasonPauseTimeout:
 		s.Pause.Since, s.Pause.Refused = time.Time{}, 0
 	case state.ReasonNeedsScope:
@@ -540,7 +576,7 @@ func (c *calc) refuseRequest(in Input, why string) {
 	}
 }
 
-// scopeAnswer applies the answer to a scope request or a wall block (row 14).
+// scopeAnswer applies the answer to a scope request (row 14).
 func (c *calc) scopeAnswer(in Input) bool {
 	s := &c.s
 	if c.from != StageBlocked {
@@ -555,13 +591,6 @@ func (c *calc) scopeAnswer(in Input) bool {
 			s.ScopeAdded = appendNew(s.ScopeAdded, d.Paths...)
 		}
 		c.order(OrderScope, StageBuild, d)
-		c.resumeAt(s.Prior)
-		return true
-	case state.ReasonWall:
-		if d.Answer != "approve" {
-			return false
-		}
-		s.Counters.WallUsedS, s.Counters.WallExtended = 0, false
 		c.resumeAt(s.Prior)
 		return true
 	}
@@ -583,14 +612,11 @@ func (c *calc) override(in Input) bool {
 
 	s.Counters.RetriesLeft += c.l.OverrideRetries
 	s.Counters.Overrides++
+	c.newTry()
 	c.emitStatus(&bus.OverrideApproved{Granted: c.l.OverrideRetries, Left: s.Counters.RetriesLeft})
 
-	to := s.Prior
-	if to == StageCommit {
-		to = StageTestReview
-	}
-
-	c.resumeAt(to)
+	s.TestReview.Tester, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
+	c.resumeWith(StageBuild, stageData{Task: c.firstOpenTask(), Findings: s.LastFindings, Items: s.TestReview.Failed})
 	return true
 }
 

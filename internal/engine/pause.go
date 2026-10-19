@@ -87,8 +87,7 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	}
 
 	switch {
-	case st.Stage == StageBlocked &&
-		(st.Block.Reason == state.ReasonNeedsScope || st.Block.Reason == state.ReasonWall):
+	case st.Stage == StageBlocked && st.Block.Reason == state.ReasonNeedsScope:
 		sa := ScopeAnswer{Answer: answer}
 		if ask != nil {
 			sa.Paths, sa.Reason = ask.Paths, ask.Reason
@@ -330,6 +329,7 @@ func stopCommand(cause string) task.Command {
 func sessionCrash(agent, session, taskID string, stage Stage) SessionEndData {
 	d := SessionEndData{}
 	d.Agent, d.Task, d.Reason = agent, taskID, string(state.ReasonCrash)
+	d.Restart = true
 	d.Stage, d.Session = string(stage), busID(session)
 	if agent == "builder" && taskID != "" {
 		d.Unfinished = &state.UnfinishedEdits{Task: taskID, Files: []string{}}
