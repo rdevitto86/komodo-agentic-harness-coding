@@ -586,7 +586,10 @@ func (g *group) handle(in Input) {
 	case res.Dup || res.Stale:
 		return
 	case res.Refused:
-		told = errors.New(cmp.Or(res.Why, "the group did not take it"))
+		// A group that is already running has nothing to continue: the person's goal holds, so it is no refusal.
+		if in.Kind != InContinue || !working(g.st.Stage) {
+			told = errors.New(cmp.Or(res.Why, "the group did not take it"))
+		}
 		g.publish(res.Emit)
 		return
 	}
