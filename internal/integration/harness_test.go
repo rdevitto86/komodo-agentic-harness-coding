@@ -173,7 +173,7 @@ func (r *binRig) git(dir string, args ...string) string {
 
 // baseFiles is the tiny Go module every fixture starts from.
 var baseFiles = map[string]string{
-	"go.mod":       "module example.com/tiny\n\ngo 1.21\n",
+	"go.mod":       "module example.com/tiny\n\ngo 1.27\n",
 	"tiny/tiny.go": "// Package tiny is a fixture.\npackage tiny\n\n// One returns 1.\nfunc One() int { return 1 }\n",
 	"tiny/tiny_test.go": "package tiny\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 " +
 		"{\n\t\tt.Fatal(\"one\")\n\t}\n}\n",
