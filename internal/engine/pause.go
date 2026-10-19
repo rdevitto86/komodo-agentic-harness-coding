@@ -109,11 +109,28 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 // has applied or refused it.
 func (m *Manager) Override(ctx context.Context, target, request string) error {
 	gs := m.byTarget(target)
-	if len(gs) == 0 {
-		return &codeError{CodeUnknownTarget, "no live group named " + target}
+	loaded := len(gs) > 0
+	if !loaded {
+		var err error
+		if gs, err = m.wakeParked(ctx, target); err != nil {
+			return err
+		}
 	}
 
 	g := gs[0]
+	if loaded {
+		if err := overridable(g); err != nil {
+			return err
+		}
+	}
+
+	request = cmp.Or(request, fmt.Sprintf("override-%s-%d", g.spec.ID, g.now().UnixNano()))
+
+	return m.awaitContinues(ctx, []pendingContinue{m.queueInput(g, Input{Kind: InOverride, Request: request})})
+}
+
+// overridable returns the refusal for a live group that cannot take an override now, or nil.
+func overridable(g *group) error {
 	g.mu.Lock()
 	st := g.snap
 	g.mu.Unlock()
@@ -126,9 +143,7 @@ func (m *Manager) Override(ctx context.Context, target, request string) error {
 			return &codeError{CodeRunRefused, g.spec.Label + " was not continued: the override window has passed"}
 		}
 
-		request = cmp.Or(request, fmt.Sprintf("override-%s-%d", g.spec.ID, g.now().UnixNano()))
-
-		return m.awaitContinues(ctx, []pendingContinue{m.queueInput(g, Input{Kind: InOverride, Request: request})})
+		return nil
 	}
 
 	return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an override"}

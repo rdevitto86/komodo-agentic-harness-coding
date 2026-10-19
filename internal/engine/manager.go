@@ -89,8 +89,9 @@ type Manager struct {
 	groups   map[string]*group
 	starting map[string]bool
 	repos    map[string]*repoCache
-	brk      *breaker         // holds new sessions back while Komodo itself keeps breaking
-	parked   map[string]Timer // override timers of saved groups no run holds, by group id
+	brk      *breaker             // holds new sessions back while Komodo itself keeps breaking
+	parked   map[string]Timer     // override timers of saved groups no run holds, by group id
+	parkedBy map[string]parkedRow // those groups and their records, by group id
 	expect   map[string]chan error
 	conts    map[string]chan error
 	beats    map[string]time.Time
@@ -132,6 +133,7 @@ func New(d Deps) *Manager {
 		starting: map[string]bool{},
 		repos:    map[string]*repoCache{},
 		parked:   map[string]Timer{},
+		parkedBy: map[string]parkedRow{},
 		expect:   map[string]chan error{},
 		conts:    map[string]chan error{},
 		beats:    map[string]time.Time{},
@@ -304,6 +306,11 @@ func (m *Manager) settle(request string, err error) {
 
 // startRun reads the plan, makes ready the epic branches and the cache, and starts the run's groups.
 func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) error {
+	return m.launchRun(ctx, e, rs, true)
+}
+
+// launchRun is startRun; with resume false, a saved paused or blocked group is loaded but not asked to continue.
+func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, resume bool) error {
 	id := string(e.Run)
 
 	m.mu.Lock()
@@ -485,7 +492,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		m.groups[gid] = g
 		m.stopParkedLocked(gid)
 		m.spawn(func() { g.main(&rec) })
-		if rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked {
+		if resume && (rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked) {
 			req := "run-" + id + "-" + gid
 			ch := make(chan error, 1)
 			m.conts[req] = ch

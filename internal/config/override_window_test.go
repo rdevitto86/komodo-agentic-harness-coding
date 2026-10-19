@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestOverrideWindowRangeIsThirtyToOneTwenty(t *testing.T) {
 	m, _ := newTestManager(t)
@@ -14,6 +17,29 @@ func TestOverrideWindowRangeIsThirtyToOneTwenty(t *testing.T) {
 	}
 	if it, _ := m.GetConfigItem("limits.override_window_min"); it.Value != 120 {
 		t.Fatalf("value %v", it.Value)
+	}
+}
+
+func TestASavedOverrideWindowOutsideTheRangeFallsBackLikeAnyOtherSavedLimit(t *testing.T) {
+	for _, saved := range []int{0, 29, 121, 1440} {
+		m, home := newTestManager(t)
+		writeFile(t, home, "settings.json", fmt.Sprintf(`{"limits.override_window_min": %d}`, saved))
+
+		it, err := m.GetConfigItem("limits.override_window_min")
+		if err != nil || it.Value != 60 || !it.Fallback {
+			t.Errorf("saved %d: item %+v err %v", saved, it, err)
+		}
+		if err := m.Verify(); err == nil {
+			t.Errorf("saved %d: the file passed strict reading", saved)
+		}
+	}
+
+	m, home := newTestManager(t)
+	writeFile(t, home, "settings.json", `{"limits.group_retries": 99999}`)
+
+	it, err := m.GetConfigItem("limits.group_retries")
+	if err != nil || !it.Fallback {
+		t.Errorf("the precedent, an out-of-range group_retries: item %+v err %v", it, err)
 	}
 }
 

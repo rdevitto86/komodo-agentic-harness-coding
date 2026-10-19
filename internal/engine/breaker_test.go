@@ -190,6 +190,50 @@ func TestAProbeThatHitsAPanicFaultKeepsTheBreakerOpenForAnotherWait(t *testing.T
 	}
 }
 
+func TestAHeldGroupThatStopsWorkingIsDroppedSoTheNextHeldGroupGetsTheProbe(t *testing.T) {
+	r := newBrkRig()
+	r.trip()
+	if r.b.allow("g4") || r.b.allow("g5") {
+		t.Fatal("open breaker allowed")
+	}
+
+	r.b.drop("g4") // g4 was abandoned, blocked or done while it waited
+	r.clk.Advance(breakerProbeEvery)
+
+	if _, resumed := r.log(); !slices.Equal(resumed, []string{"g5"}) {
+		t.Fatalf("resumed %v, want only g5", resumed)
+	}
+}
+
+func TestAProbeTurnThatStartsNoProbeHandsTheNextWaitToTheNextHeldGroup(t *testing.T) {
+	r := newBrkRig()
+	r.trip()
+	if r.b.allow("g4") || r.b.allow("g5") {
+		t.Fatal("open breaker allowed")
+	}
+
+	// The rig's resume never calls allow, as the resume of a group with nothing to start does not.
+	r.clk.Advance(breakerProbeEvery)
+	r.clk.Advance(breakerProbeEvery)
+
+	if _, resumed := r.log(); !slices.Equal(resumed, []string{"g4", "g5"}) {
+		t.Fatalf("resumed %v, want g4 then g5", resumed)
+	}
+}
+
+func TestAResumedGroupThatAsksForTheProbeGetsIt(t *testing.T) {
+	r := newBrkRig()
+	r.trip()
+	if r.b.allow("g4") {
+		t.Fatal("open breaker allowed")
+	}
+
+	r.clk.Advance(breakerProbeEvery)
+	if !r.b.allow("g4") {
+		t.Fatal("the resumed group was not let through as the probe")
+	}
+}
+
 func TestAnOpenBreakerHoldsBackSessionStartsAndLetsOneThroughAfterTheWait(t *testing.T) {
 	x := newRig(t, [][]string{{"tg-1"}}, onlyIdle, withClock)
 	for _, g := range []string{"g1", "g2", "g3"} {

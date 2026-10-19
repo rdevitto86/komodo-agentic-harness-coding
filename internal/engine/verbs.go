@@ -45,14 +45,20 @@ func (e *Engine) handle(ctx context.Context, w *connWriter, req Request) {
 // verbRun starts, queues or answers a run.
 func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	ev := req.Event
-	if req.Flags.Override {
+	rc, isAnswer := dataOf[*bus.RunContinue](ev)
+	overrideAnswer := isAnswer && rc.Answer == "override"
+	if req.Flags.Override || overrideAnswer {
 		if ok, err := e.peer(w.c); err != nil || !ok {
 			e.fail(w, req.ID, &codeError{CodeNoTerminal, "--override needs a terminal: the requesting process has none"})
 			return
 		}
 	}
+	if overrideAnswer != req.Flags.Override && (overrideAnswer || isAnswer) {
+		e.badFrame(w, req.ID, "the override flag and the run-continue answer disagree")
+		return
+	}
 	if req.Flags.Approve || req.Flags.Deny || req.Flags.Override {
-		if rc, ok := dataOf[*bus.RunContinue](ev); ok {
+		if isAnswer {
 			rc.Request = bus.ID(req.ID)
 			if err := e.await(ctx, req, *ev); err != nil {
 				e.fail(w, req.ID, err)

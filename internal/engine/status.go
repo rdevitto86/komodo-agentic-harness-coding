@@ -109,6 +109,7 @@ func (m *Manager) Snapshot(root string) ([]RunRow, []BlockedRow) {
 		rows = append(rows, row)
 	}
 
+	blocked = append(blocked, m.parkedBlockedLocked(root)...)
 	slices.SortFunc(rows, func(a, b RunRow) int { return strings.Compare(a.RunID, b.RunID) })
 	slices.SortFunc(blocked, func(a, b BlockedRow) int { return strings.Compare(a.Group, b.Group) })
 	return rows, blocked

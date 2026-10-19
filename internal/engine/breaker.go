@@ -114,7 +114,8 @@ func (b *breaker) wait(now time.Time) {
 	b.timer = b.clk.AfterFunc(breakerProbeEvery, b.tick)
 }
 
-// tick lets one held group try a session start as the probe; with none held, the next group to ask becomes the probe.
+// tick lets one held group try a session start as the probe and arms the next turn, which a started probe cancels or
+// replaces; with none held, the next group to ask becomes the probe.
 func (b *breaker) tick() {
 	b.mu.Lock()
 	if !b.open || b.probing || len(b.held) == 0 {
@@ -124,6 +125,7 @@ func (b *breaker) tick() {
 
 	g := b.held[0]
 	b.held = b.held[1:]
+	b.timer = b.clk.AfterFunc(breakerProbeEvery, b.tick)
 	b.mu.Unlock()
 	b.resume(g)
 }
@@ -175,6 +177,13 @@ func (b *breaker) ended(group string) {
 	for _, g := range held {
 		b.resume(g)
 	}
+}
+
+// drop forgets a held group that stopped working, so it does not spend a probe turn.
+func (b *breaker) drop(group string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.held = slices.DeleteFunc(b.held, func(g string) bool { return g == group })
 }
 
 // alert returns the one status line that says the breaker is open; empty when it is closed.
