@@ -3,5 +3,5 @@
   "group": "tg-1.3",
   "task": "amend docs/lld.md",
   "question": "Cleanup could not remove what it must. Retry?",
-  "fix": "komodo run --approve tg-1.3"
+  "fix": "komodo run tg-1.3"
 }

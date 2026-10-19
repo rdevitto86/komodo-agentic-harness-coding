@@ -4,7 +4,7 @@ Group `tg-1.3` needs a decision: `budget`.
 
 **Question:** `The group reached its token cap. Allow more tokens?`
 
-**Fix:** `komodo run --approve tg-1.3`
+**Fix:** `komodo run tg-1.3`
 
 **❌ Blocked Changes**
 - Group `tg-1.3` waits for a person

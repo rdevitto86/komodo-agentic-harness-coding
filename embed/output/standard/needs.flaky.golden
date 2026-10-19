@@ -1,7 +1,7 @@
 Group `tg-1.3` needs a decision: `flaky`. The task is `amend docs/lld.md`. It
 asks:
 `The Tester's reruns split and a role reported results it cannot confirm. Continue?`
-To resolve it, run `komodo run --approve tg-1.3`.
+To resolve it, run `komodo run tg-1.3`.
 
 ❌ Blocked Changes
 Group `tg-1.3` waits for a person.
