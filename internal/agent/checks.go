@@ -37,6 +37,8 @@ type StepResult struct {
 type CheckResult struct {
 	Steps []StepResult `json:"steps"`
 	Flaky []string     `json:"flaky,omitempty"` // tests reported flaky
+	// added executable lines no test ran, as file:line-range
+	Uncovered []string `json:"uncovered,omitempty"`
 }
 
 // CheckInput is everything one run reads.
