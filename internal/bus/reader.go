@@ -65,12 +65,12 @@ func (r *fileReader) Replay(ctx context.Context, run, group ID) (ReplayLog, erro
 
 	dir, ok := runs[run]
 	if !ok {
-		return ReplayLog{}, fmt.Errorf("no event log for run %s", run)
+		return ReplayLog{}, fmt.Errorf("no event log for run %s: %w", run, os.ErrNotExist)
 	}
 
 	log, err := readLog(filepath.Join(dir, LogName(run)), group)
 	if errors.Is(err, os.ErrNotExist) {
-		return ReplayLog{}, fmt.Errorf("no event log for run %s", run)
+		return ReplayLog{}, fmt.Errorf("no event log for run %s: %w", run, os.ErrNotExist)
 	}
 	if err != nil {
 		return ReplayLog{}, fmt.Errorf("read event log of run %s: %w", run, err)

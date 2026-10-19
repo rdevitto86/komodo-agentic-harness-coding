@@ -167,7 +167,6 @@ func (e *Engine) accept(ctx context.Context, ln net.Listener) {
 			continue
 		}
 
-		e.seen = true
 		e.conns[c] = struct{}{}
 		e.mu.Unlock()
 		e.m.spawn(func() { e.serveConn(ctx, c) })

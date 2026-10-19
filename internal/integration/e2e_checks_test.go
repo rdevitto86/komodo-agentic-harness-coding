@@ -200,9 +200,7 @@ func TestOldFailurePassesWithAWarningNamingTheTest(t *testing.T) {
 // Race: two `komodo run tg-1.1` at once get 1 lease; the other is refused and only 1 push reaches the remote.
 func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
-	// A run queued an hour out keeps the engine alive, so both commands race on the lease, not on starting the engine
-	// (two cold starts at once both fail to reach the engine: see the report).
-	r.mustRun("run", "ep-1", "--schedule", time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	// No engine runs yet, so both commands start one at the same moment and each must reach the engine that wins.
 	var wg sync.WaitGroup
 	codes := make([]int, 2)
 	outs := make([]string, 2)
@@ -382,7 +380,9 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 	_, _ = f.WriteString(`{"type":"run-status","subtype":"stage.en`)
 	_ = f.Close()
 	calls := r.model.callCounts()
-	labelBroken := r.komodo(60*time.Second, "replay", "tg-1.1").code != 0
+	if lab := r.komodo(60*time.Second, "replay", "tg-1.1"); lab.code != 0 {
+		t.Errorf("replay of the finished group label exited %d\n%s", lab.code, lab.stdout)
+	}
 	rep := r.mustRun("replay", runID)
 	d := dataOf(t, rep)
 	steps, _ := d["steps"].([]any)
@@ -396,10 +396,6 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 	if got := r.model.callCounts(); len(got) != len(calls) || got["builder"] != calls["builder"] ||
 		got["tester"] != calls["tester"] || got["reviewer"] != calls["reviewer"] {
 		t.Errorf("replay called the model: %v then %v", calls, got)
-	}
-	if labelBroken && !t.Failed() {
-		t.Skip("blocked: production bug, replay of a finished group's label is sent to the store as a run id " +
-			"and fails as an internal error (internal/engine/verbs.go:310-321); the run-id replay passed")
 	}
 }
 
@@ -554,8 +550,7 @@ func TestLabelsAndRunIDsReplayUsesLatest(t *testing.T) {
 	}
 	rep := r.komodo(60*time.Second, "replay", "tg-1.1")
 	if rep.code != 0 {
-		t.Skip("blocked: production bug, replay of a finished group's label fails as an internal error " +
-			"(internal/engine/verbs.go:310-321): " + rep.stdout)
+		t.Fatalf("replay tg-1.1 exited %d\n%s", rep.code, rep.stdout)
 	}
 	if got, _ := dataOf(t, rep)["run_id"].(string); got != ids[1] {
 		t.Fatalf("replay used run %s, want the latest %s", got, ids[1])

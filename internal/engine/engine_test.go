@@ -600,6 +600,22 @@ func TestSignalStopsEveryRunAndSavesBeforeTheEngineExits(t *testing.T) {
 	}
 }
 
+// A second engine probes the socket and a CLI may dial and leave; neither sends a request, so neither starts the exit rule.
+func TestAConnectionThatSendsNoRequestDoesNotStartTheExitRule(t *testing.T) {
+	x := newEng(t, [][]string{{"tg-1"}})
+	x.serve()
+	x.release()
+	select {
+	case err := <-x.served:
+		t.Fatalf("a probe that sent no request ended the engine: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	x.ask(Request{ID: "s1", Verb: VerbStatus, Root: x.root})
+	if err := x.exited(); err != nil {
+		t.Fatalf("the engine did not exit after its first request: %v", err)
+	}
+}
+
 // roundTrip sends a request and reads replies until the final one.
 func roundTrip(t *testing.T, c *Conn, req Request) []Reply {
 	t.Helper()

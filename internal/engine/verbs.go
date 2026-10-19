@@ -307,9 +307,10 @@ func (e *Engine) verbReplay(ctx context.Context, w *connWriter, req Request) {
 		return
 	}
 
-	run, group := bus.ID(req.Target), bus.ID("")
-	if gs := e.m.byTarget(req.Target); len(gs) > 0 {
-		run, group = bus.ID(gs[0].r.id), bus.ID(gs[0].spec.ID)
+	run, group, err := e.replayTarget(ctx, req)
+	if err != nil {
+		e.fail(w, req.ID, err)
+		return
 	}
 
 	log, err := e.d.Reader.Replay(ctx, run, group)

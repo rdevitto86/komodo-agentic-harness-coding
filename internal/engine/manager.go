@@ -95,6 +95,7 @@ type Manager struct {
 	stopped  bool
 	faults   *fault.Handler // reports a panic of a goroutine the package starts
 	openMu   sync.Mutex     // makes the check and the open of a repository cache one step
+	startMu  sync.Mutex     // makes the live-group check and the group registration of a run start one step
 	ready    chan struct{}  // closed once Run has subscribed to the command events
 	readyOne sync.Once
 }
@@ -301,6 +302,9 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		m.mu.Unlock()
 	}()
 
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+
 	req := string(rs.Request)
 	fail := func(format string, a ...any) error {
 		return m.refuse(rs.Target, req, fmt.Sprintf(format, a...))
@@ -503,6 +507,11 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 			base = "main"
 		}
 		if err := m.d.Git.CreateBranch(ctx, rs.Root, branch, base); err != nil {
+			// Another writer created the branch since the check above; it is there, which is all this step needs.
+			if again, _ := m.d.Git.BranchExists(ctx, rs.Root, branch); again {
+				continue
+			}
+
 			return m.refuse(rs.Target, string(rs.Request), fmt.Sprintf("create branch %s: %v", branch, err))
 		}
 

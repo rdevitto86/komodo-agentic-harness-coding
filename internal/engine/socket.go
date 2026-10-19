@@ -174,6 +174,9 @@ func (e *Engine) serveConn(ctx context.Context, c net.Conn) {
 
 		b := f.b
 
+		// A request, not a bare connection, turns the exit rule on: a second engine's probe must not end the winner.
+		e.markSeen()
+
 		var req Request
 		if err := json.Unmarshal(b, &req); err != nil {
 			_ = w.send(Reply{
