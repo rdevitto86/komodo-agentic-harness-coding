@@ -72,6 +72,7 @@ type fakeRT struct {
 	last   Progress
 	facts  []Fact
 	escs   []Escalation
+	sent   []StateReport
 }
 
 func (r *fakeRT) Escalate(_ context.Context, e Escalation) error {
@@ -93,6 +94,7 @@ func (r *fakeRT) ReportState(_ context.Context, s StateReport) error {
 	}
 	r.last = s.Progress
 	r.facts = append(r.facts, s.Facts...)
+	r.sent = append(r.sent, s)
 	return nil
 }
 

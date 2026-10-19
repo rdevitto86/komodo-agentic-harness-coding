@@ -398,6 +398,44 @@ func TestResultFailIsStampedWithTheTestReviewEpochAndReturnsTheGroup(t *testing.
 	}
 }
 
+// The judges' session ends go out while the stage is Test and Review; the rework then reports the result.fail from Build.
+func TestReworkRoundCountsTheJudgesTokensAndEmitsTheirSessionEnds(t *testing.T) {
+	epochs := map[Stage]uint32{StageBuild: 2, StageTestReview: 3}
+	end := func(agent string) task.Fact {
+		return task.Fact{Subtype: "session.end", Data: []byte(`{"session":"` + agent + `1","agent":"` + agent +
+			`","reason":"done","tokens":5000}`)}
+	}
+	msgs := []task.Message{
+		{ID: "j", Kind: task.MsgState, State: &task.StateReport{
+			Progress: task.Progress{Stage: StageTestReview},
+			Facts:    []task.Fact{end("tester"), end("reviewer")},
+		}},
+		{ID: "r", Kind: task.MsgState, State: &task.StateReport{
+			Progress: task.Progress{Stage: StageBuild},
+			Facts:    []task.Fact{{Subtype: "result.fail", Data: mustJSON(ResultFail{Items: []string{"x"}})}},
+		}},
+	}
+
+	s, ends := mk(StageTestReview), 0
+	for _, m := range msgs {
+		for _, in := range inputsFromMessage("g1", m, func(st Stage) uint32 { return epochs[st] }, t0) {
+			r := Next(s, in, fixtureLimits())
+			if r.Stale {
+				t.Fatalf("%s at epoch %d is stale", in.Kind, in.Epoch)
+			}
+			for _, e := range r.Emit {
+				if e.Subtype == "session.end" {
+					ends++
+				}
+			}
+			s = r.State
+		}
+	}
+	if s.Counters.TokensUsed != 10000 || ends != 2 || s.Stage != StageBuild {
+		t.Fatalf("tokens %d, session.end events %d, stage %s", s.Counters.TokensUsed, ends, s.Stage)
+	}
+}
+
 func TestEachCommandKindReachesTheTaskManagerAndItsMessageComesBack(t *testing.T) {
 	cases := []struct {
 		order Order

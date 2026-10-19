@@ -662,6 +662,11 @@ func (m *Manager) runChecks(ctx context.Context) ([]string, error) {
 
 // rework sends the group back to Build with findings, inside the bounds on returns and unchanged trees.
 func (m *Manager) rework(ctx context.Context, findings []string) error {
+	// The judges' facts go out while the stage is still Test and Review, so the engine stamps them with its epoch.
+	if err := m.report(ctx); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	returns := m.prog.Returns
 	last := m.prog.TreeAtReturn

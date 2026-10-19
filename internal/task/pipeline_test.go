@@ -202,6 +202,42 @@ func TestTesterAndReviewerReturnsReachTheBuilderInOneTrip(t *testing.T) {
 	}
 }
 
+func TestJudgeSessionEndsAreReportedInTheStageTheyBelongTo(t *testing.T) {
+	r := newPipeRig(t, rigOpts{})
+	r.model.on("builder",
+		building(r.wt, "a.go", "package a\n", builderDone),
+		building(r.wt, "b.go", "package b\n", builderDone))
+	r.model.on("tester", sayResult(testerPass), sayResult(testerPass))
+	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerMet))
+	r.reachCleanup()
+
+	r.rt.mu.Lock()
+	sent := slices.Clone(r.rt.sent)
+	r.rt.mu.Unlock()
+
+	judgeEnds := 0
+	for _, s := range sent {
+		var judges, fail bool
+		for _, f := range s.Facts {
+			var d struct {
+				Agent string `json:"agent"`
+			}
+			_ = json.Unmarshal(f.Data, &d)
+			judges = judges || f.Subtype == "session.end" && (d.Agent == "tester" || d.Agent == "reviewer")
+			fail = fail || f.Subtype == "result.fail"
+		}
+		if judges {
+			judgeEnds++
+			if s.Progress.Stage == state.StageBuild || fail {
+				t.Fatalf("judge session.end sent with stage %s and result.fail %v", s.Progress.Stage, fail)
+			}
+		}
+	}
+	if judgeEnds == 0 {
+		t.Fatal("no report carried a judge session.end")
+	}
+}
+
 // awaitEnded blocks until a session of the agent has written its result file, the last step of a session.
 func awaitEnded(t *testing.T, root, name string) {
 	t.Helper()
