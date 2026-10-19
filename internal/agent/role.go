@@ -4,6 +4,7 @@ package agent
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 )
 
@@ -44,17 +45,10 @@ func newRole(
 	name string,
 	tools, classes, guard, required, optional []string,
 	resultID string,
-	resultRequired []string,
+	result any,
 	pool bool,
 ) Role {
-	schema, err := json.Marshal(map[string]any{
-		"$id":      resultID,
-		"type":     "object",
-		"required": resultRequired,
-	})
-	if err != nil {
-		panic("marshal result schema: " + err.Error())
-	}
+	schema := resultSchema(resultID, reflect.TypeOf(result))
 	return Role{
 		Name:       name,
 		Tools:      slices.Clone(tools),

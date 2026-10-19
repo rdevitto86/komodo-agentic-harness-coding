@@ -42,22 +42,24 @@ type Item struct {
 
 // ItemResult is the Tester's pass or fail for one item.
 type ItemResult struct {
-	Item     string        `json:"item"`
-	Pass     bool          `json:"pass"`
-	Evidence string        `json:"evidence"`         // the output or observation behind the answer
-	Reason   DisputeReason `json:"reason,omitempty"` // after a restart with Go's output: why the item failed for the Tester
+	Item string `json:"item" desc:"The acceptance item identifier from the brief."`
+	Pass bool   `json:"pass" desc:"True when the item holds."`
+	// the output or observation behind the answer
+	Evidence string `json:"evidence" desc:"The command output or observation behind the answer; never empty."`
+	// after a restart with Go's output: why the item failed for the Tester
+	Reason DisputeReason `json:"reason,omitempty" desc:"Only after a restart that shows rerun output: why the item failed."`
 }
 
 // TaskConfirmation is the Tester's answer for one task identifier.
 type TaskConfirmation struct {
-	Task         string       `json:"task"`
-	Confirmation Confirmation `json:"confirmation"`
+	Task         string       `json:"task" desc:"The task identifier from the brief."`
+	Confirmation Confirmation `json:"confirmation" desc:"confirmed when its acceptance holds, else not_confirmed."`
 }
 
 // TesterResult is the Tester's whole final call.
 type TesterResult struct {
-	Items []ItemResult       `json:"items"`
-	Tasks []TaskConfirmation `json:"tasks"`
+	Items []ItemResult       `json:"items" desc:"Exactly one entry per acceptance item, as an array of objects."`
+	Tasks []TaskConfirmation `json:"tasks" desc:"Exactly one entry per task identifier, as an array of objects."`
 }
 
 // RerunOutcome is Go's judgement of a failed item after two reruns.
@@ -98,7 +100,7 @@ func TesterRole() Role {
 		[]string{"R1"},
 		[]string{"repo_profile", "group", "tasks", "acceptance"},
 		[]string{"repo_context", "standards", "diff", "checks", "baseline"},
-		"komodo:agent/tester/result/1", []string{"items", "tasks"}, true)
+		"komodo:agent/tester/result/1", TesterResult{}, true)
 }
 
 // NewTester returns the Go side of a Tester session.

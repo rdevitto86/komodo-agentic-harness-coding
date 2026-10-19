@@ -58,11 +58,44 @@
   },
   "result": {
     "$id": "komodo:agent/builder/result/1",
-    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "disputed": {
+        "description": "The file:line of each review finding you reject as wrong.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "paths": {
+        "description": "Only with needs_scope: the paths the work needs.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reason": {
+        "description": "Only with needs_scope: why those paths are needed.",
+        "type": "string"
+      },
+      "status": {
+        "description": "done when the work is finished, needs_scope when it needs more paths.",
+        "enum": [
+          "done",
+          "needs_scope"
+        ],
+        "type": "string"
+      },
+      "summary": {
+        "description": "What changed, in a few plain sentences.",
+        "type": "string"
+      }
+    },
     "required": [
       "status",
       "summary"
-    ]
+    ],
+    "type": "object"
   },
   "pool_slot": true
 }

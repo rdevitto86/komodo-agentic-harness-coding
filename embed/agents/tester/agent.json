@@ -45,11 +45,77 @@
   },
   "result": {
     "$id": "komodo:agent/tester/result/1",
-    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "items": {
+        "description": "Exactly one entry per acceptance item, as an array of objects.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "description": "The command output or observation behind the answer; never empty.",
+              "type": "string"
+            },
+            "item": {
+              "description": "The acceptance item identifier from the brief.",
+              "type": "string"
+            },
+            "pass": {
+              "description": "True when the item holds.",
+              "type": "boolean"
+            },
+            "reason": {
+              "description": "Only after a restart that shows rerun output: why the item failed.",
+              "enum": [
+                "env",
+                "wrong_command",
+                "flaky",
+                "real_failure"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "item",
+            "pass",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "tasks": {
+        "description": "Exactly one entry per task identifier, as an array of objects.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "confirmation": {
+              "description": "confirmed when its acceptance holds, else not_confirmed.",
+              "enum": [
+                "confirmed",
+                "not_confirmed"
+              ],
+              "type": "string"
+            },
+            "task": {
+              "description": "The task identifier from the brief.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "confirmation"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
     "required": [
       "items",
       "tasks"
-    ]
+    ],
+    "type": "object"
   },
   "pool_slot": true
 }

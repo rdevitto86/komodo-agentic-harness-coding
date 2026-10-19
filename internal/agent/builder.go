@@ -19,11 +19,15 @@ const (
 
 // BuilderResult is the Builder's final call.
 type BuilderResult struct {
-	Status   BuilderStatus `json:"status"`
-	Summary  string        `json:"summary"`            // what changed, in the Builder's words
-	Paths    []string      `json:"paths,omitempty"`    // needs_scope only: the paths asked for
-	Reason   string        `json:"reason,omitempty"`   // needs_scope only: why they are needed
-	Disputed []string      `json:"disputed,omitempty"` // file:line of each finding the Builder rejects
+	Status BuilderStatus `json:"status" desc:"done when the work is finished, needs_scope when it needs more paths."`
+	// what changed, in the Builder's words
+	Summary string `json:"summary" desc:"What changed, in a few plain sentences."`
+	// needs_scope only: the paths asked for
+	Paths []string `json:"paths,omitempty" desc:"Only with needs_scope: the paths the work needs."`
+	// needs_scope only: why they are needed
+	Reason string `json:"reason,omitempty" desc:"Only with needs_scope: why those paths are needed."`
+	// file:line of each finding the Builder rejects
+	Disputed []string `json:"disputed,omitempty" desc:"The file:line of each review finding you reject as wrong."`
 }
 
 // disputedRef matches a finding reference of the form file:line.
@@ -37,7 +41,7 @@ func BuilderRole() Role {
 		[]string{"R1", "B1"},
 		[]string{"repo_profile", "group", "tasks", "files", "file_contents"},
 		[]string{"repo_context", "standards", "diff", "checks", "findings", "scope_answer", "unfinished", "specs"},
-		"komodo:agent/builder/result/1", []string{"status", "summary"}, true)
+		"komodo:agent/builder/result/1", BuilderResult{}, true)
 }
 
 // ParseBuilderResult decodes and validates a Builder final call.

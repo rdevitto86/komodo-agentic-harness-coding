@@ -55,10 +55,40 @@
   },
   "result": {
     "$id": "komodo:agent/reviewer/result/1",
-    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "verdicts": {
+        "description": "Exactly one verdict per task identifier, as an array of objects.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "task": {
+              "description": "The task identifier from the brief.",
+              "type": "string"
+            },
+            "verdict": {
+              "description": "Use brief_incomplete when the brief lacks what you need.",
+              "enum": [
+                "met",
+                "not_met",
+                "brief_incomplete"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "verdict"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
     "required": [
       "verdicts"
-    ]
+    ],
+    "type": "object"
   },
   "pool_slot": true
 }
