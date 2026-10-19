@@ -11867,9 +11867,9 @@ Each default tool reports a whole-repository line percent in the field named. Ve
 
 Go, Python and Java and Kotlin also report which lines ran: the Go profile blocks, the `files.*.executed_lines` and `missing_lines` of the Python report, and the `line` entries of the JaCoCo report. The coverage step intersects those lines with the lines the diff adds.
 
-[TODO: changed-line coverage for JavaScript and TypeScript, whose `json-summary` report holds totals only ([G-293](#g-293))]
+[TODO: changed-line coverage for JavaScript and TypeScript, whose `json-summary` report holds totals only ([G-295](#g-295))]
 
-[TODO: changed-line coverage for Rust, whose `--summary-only` report holds totals only ([G-294](#g-294))]
+[TODO: changed-line coverage for Rust, whose `--summary-only` report holds totals only ([G-296](#g-296))]
 
 | Language | Command | Percent read from |
 |---|---|---|
@@ -15478,14 +15478,14 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-72"></a>G-72 | Providers | Confirming the `anthropic.go` and `openai.go` wire defaults stated in 5.3 and 7.5: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and the `-limit` header that gives the window total. | Later minor, deferred by owner decision 2026-10-18 | [11](#11-task-manager) |
 | <a id="g-121"></a>G-121 | CLI validate | Whether a `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix; applies only if native Windows returns | Not planned; Windows runs through Windows Subsystem for Linux 2 | [1](#1-cli) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-tester) |
-| <a id="g-293"></a>G-293 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 9.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
-| <a id="g-294"></a>G-294 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file at the cleanup, phase 1; then 15.3 | [21](#21-verification-operations-and-cutover) |
 | <a id="g-289"></a>G-289 | Breaker | Whether the trip count (3), the window (10 minutes) and the probe wait (5 minutes) are settings | Owner decision; constants until then | [7](#7-runtime-manager) |
 | <a id="g-290"></a>G-290 | Retry budget | Whether every spent retry starts a new try with fresh wall time, as built, or only a wall failure does | Owner decision | [7](#7-runtime-manager) |
 | <a id="g-291"></a>G-291 | Breaker | Whether a probe may be one stage order, which starts the tester and the reviewer together, or must be one session | Owner decision | [7](#7-runtime-manager) |
 | <a id="g-292"></a>G-292 | CLI validate | Whether native Windows has a peer check for the engine's terminal rule on `run --override`; until then the engine refuses it there. Untested; same ground as [G-121](#g-121) | Applies only if native Windows returns | [7](#7-runtime-manager) |
 | <a id="g-293"></a>G-293 | CLI validate | The range of the final try's working time on `run --override`: `limits.group_wall_min` has no maximum to borrow, so 1 to 480 minutes is used until the owner sets it | Owner decision | [1](#1-cli) |
+| <a id="g-295"></a>G-295 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 9.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
+| <a id="g-296"></a>G-296 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
