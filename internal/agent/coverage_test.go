@@ -1,6 +1,12 @@
 package agent
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseCoverage(t *testing.T) {
 	cases := []struct {
@@ -70,5 +76,40 @@ func TestCoverageCommand(t *testing.T) {
 	}
 	if _, ok := CoverageCommand("cobol", "x"); ok {
 		t.Error("unknown language has a coverage command")
+	}
+}
+
+func TestTheGoCoverageCommandLeavesNoFileInTheTree(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go is not installed")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":    "module m\n\ngo 1.21\n",
+		"a.go":      "package m\n\nfunc A() int { return 1 }\n",
+		"a_test.go": "package m\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) { _ = A() }\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmdText, _ := CoverageCommand("go", "")
+	cmd := exec.Command("sh", "-c", cmdText)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("coverage command: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "a.go:3.") {
+		t.Fatalf("the profile is not in the output:\n%s", out)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != len(files) {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("the tree holds %v after the coverage command, want only the module files", names)
 	}
 }

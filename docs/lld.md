@@ -11873,13 +11873,15 @@ Go, Python and Java and Kotlin also report which lines ran: the Go profile block
 
 | Language | Command | Percent read from |
 |---|---|---|
-| Go | `go test -coverpkg=./... -coverprofile=c.out ./...`, then `cat c.out` | `go tool cover -func=c.out`, `total:` |
-| Python | `coverage run -m pytest`, then `coverage json` | `totals.percent_covered` |
-| JavaScript, TypeScript | `c8 --reporter=json-summary` around `test` | `total.lines.pct` |
+| Go | `go test -coverpkg=./... -coverprofile=<temp file> ./...`, then `cat` of that file | `go tool cover -func`, `total:` |
+| Python | `coverage run -m pytest` with `COVERAGE_FILE` in a temp file, then `coverage json` | `totals.percent_covered` |
+| JavaScript, TypeScript | `c8 --reporter=json-summary` around `test`, report in a temp folder | `total.lines.pct` |
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
 | Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
 
 JavaScript and TypeScript wrap the repository's own `test` command. Java and Kotlin get their coverage command from the language profile, chosen by build file: Gradle runs `jacocoTestReport` and reads `build/reports/jacoco/test/jacocoTestReport.xml`; Maven runs `jacoco:report` and reads `target/site/jacoco/jacoco.xml`. The repository must configure JaCoCo; otherwise the coverage step fails with the tool's output.
+
+The default commands write their data files to a temporary place and remove them, so the tree stays as the Builder left it and the next round's scope check sees only the Builder's changes. Gradle and Maven write under their own build folders.
 
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 

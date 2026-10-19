@@ -20,21 +20,24 @@ var (
 	)
 )
 
-// CoverageCommand returns the default command that prints a whole-repository line coverage report.
-// The Go command also prints the raw profile, which holds the line data.
+// CoverageCommand returns the default command that prints a whole-repository line coverage report; its files go to a
+// temporary place, never the tree. The Go command also prints the raw profile, which holds the line data.
 // JavaScript and TypeScript wrap the repository's own test command, so they need it.
 // Java and Kotlin have no default: their command comes from the configuration.
 func CoverageCommand(language, testCmd string) (string, bool) {
 	switch language {
 	case "go":
-		return "go test -coverpkg=./... -coverprofile=c.out ./...; go tool cover -func=c.out; cat c.out", true
+		return `p=$(mktemp); go test -coverpkg=./... -coverprofile="$p" ./...; go tool cover -func="$p"; ` +
+			`cat "$p"; s=$?; rm -f "$p"; exit $s`, true
 	case "python":
-		return "coverage run -m pytest; coverage json -o -", true
+		return `export COVERAGE_FILE="$(mktemp)"; coverage run -m pytest; coverage json -o -; s=$?; ` +
+			`rm -f "$COVERAGE_FILE"; exit $s`, true
 	case "javascript", "typescript":
 		if testCmd == "" {
 			return "", false
 		}
-		return "c8 --reporter=json-summary " + testCmd + "; cat coverage/coverage-summary.json", true
+		return `d=$(mktemp -d); c8 --reporter=json-summary --report-dir "$d" --temp-directory "$d/tmp" ` + testCmd +
+			`; cat "$d/coverage-summary.json"; s=$?; rm -rf "$d"; exit $s`, true
 	case "rust":
 		return "cargo llvm-cov --ignore-run-fail --json --summary-only", true
 	}
