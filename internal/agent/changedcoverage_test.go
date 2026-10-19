@@ -47,6 +47,28 @@ func TestChangedCoverageListsUncoveredAddedLines(t *testing.T) {
 	}
 }
 
+func TestChangedCoverageGivesTwoFilesWithOneBaseNameTheirOwnLines(t *testing.T) {
+	lc, _ := ParseLineCoverage("go", "mode: set\nm/config.go:2.1,3.2 1 1\nm/api/config.go:2.1,3.2 1 0\n")
+	diff := "+++ b/api/config.go\n@@ -0,0 +2,1 @@\n+a\n+++ b/config.go\n@@ -0,0 +2,1 @@\n+b\n"
+
+	got := ChangedCoverage(diff, lc)
+	if !slices.Equal(got.Uncovered, []string{"api/config.go:2"}) || got.Executable != 2 || got.Covered != 1 {
+		t.Errorf("changed coverage = %+v", got)
+	}
+
+	// Each path alone finds its own file, in either order, and a nested module prefix does not mislead the match.
+	for file, want := range map[string]string{"config.go": "m/config.go", "api/config.go": "m/api/config.go"} {
+		if got := lc.find(file); got != want {
+			t.Errorf("find(%q) = %q, want %q", file, got, want)
+		}
+	}
+
+	nested := LineCoverage{"m/svc/a/x.go": {1: true}, "m/svc/b/x.go": {1: false}}
+	if got := nested.find("a/x.go"); got != "m/svc/a/x.go" {
+		t.Errorf("find(a/x.go) = %q", got)
+	}
+}
+
 func TestParseLineCoveragePython(t *testing.T) {
 	out := "...\n{\"files\": {\"pkg/a.py\": {\"executed_lines\": [1, 2], \"missing_lines\": [3, 4]}}, " +
 		"\"totals\": {\"percent_covered\": 50.0}}\n"

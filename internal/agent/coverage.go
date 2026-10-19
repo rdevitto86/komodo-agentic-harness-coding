@@ -214,8 +214,8 @@ func ChangedCoverage(diff string, lc LineCoverage) ChangedLines {
 	return res
 }
 
-// find returns the coverage key of a repository path: the same path, or one that ends the other after a slash.
-// The Go profile names files by import path and JaCoCo by package, so they are shorter or longer than the diff path.
+// find returns the coverage key of a repository path: the same path, the path under the keys' shared directory (the Go
+// module path), or else the key sharing the longest path suffix with it, ending on a slash. JaCoCo names files by package.
 func (lc LineCoverage) find(file string) string {
 	if _, ok := lc[file]; ok {
 		return file
@@ -227,12 +227,39 @@ func (lc LineCoverage) find(file string) string {
 	}
 	sort.Strings(keys)
 
+	if _, ok := lc[commonDir(keys)+file]; ok {
+		return commonDir(keys) + file
+	}
+
+	best, shared := "", 0
 	for _, k := range keys {
-		if strings.HasSuffix(k, "/"+file) || strings.HasSuffix(file, "/"+k) {
-			return k
+		n := 0
+		switch {
+		case strings.HasSuffix(k, "/"+file):
+			n = len(file)
+		case strings.HasSuffix(file, "/"+k):
+			n = len(k)
+		}
+		if n > shared {
+			best, shared = k, n
 		}
 	}
-	return ""
+	return best
+}
+
+// commonDir returns the directory, with its trailing slash, that every key starts with; empty when they share none.
+func commonDir(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+
+	first, last := keys[0], keys[len(keys)-1]
+	n := 0
+	for n < len(first) && n < len(last) && first[n] == last[n] {
+		n++
+	}
+
+	return first[:strings.LastIndex(first[:n], "/")+1]
 }
 
 // lineRanges formats sorted-or-not line numbers of one file as file:line and file:first-last entries.
