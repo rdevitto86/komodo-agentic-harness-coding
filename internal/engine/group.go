@@ -40,15 +40,17 @@ type group struct {
 	dead       bool // the loop ended without a Done state
 
 	// The fields below belong to the loop goroutine.
-	st       State
-	rev      int
-	created  bool
-	l        lease.Lease
-	hasSlot  bool
-	renewT   Timer
-	timers   []Timer
-	armed    pauseKey
-	stopping atomic.Bool
+	st        State
+	rev       int
+	created   bool
+	l         lease.Lease
+	hasSlot   bool
+	renewT    Timer
+	timers    []Timer
+	armed     pauseKey
+	holdUntil time.Time // the end of the group's breaker wait; zero for none
+	holdT     Timer
+	stopping  atomic.Bool
 }
 
 // main is the group's goroutine: it starts or recovers the group, then takes one input at a time.
@@ -91,6 +93,7 @@ func (g *group) main(rec *state.Record) {
 
 // stopTimers cancels every timer of the group.
 func (g *group) stopTimers() {
+	g.clearHold()
 	if g.renewT != nil {
 		g.renewT.Stop()
 	}
@@ -273,6 +276,7 @@ func (g *group) after() {
 
 	g.armTimers()
 	if stage == StagePaused || stage == StageBlocked || stage == StageDone {
+		g.clearHold()
 		g.m.brk.ended(g.spec.ID)
 		g.m.brk.drop(g.spec.ID)
 	}
@@ -289,8 +293,8 @@ func (g *group) perform(orders []Order) {
 		if g.stopping.Load() {
 			return
 		}
-		if o.Kind == OrderEnterStage && startsSessions(o.Stage) && !g.m.brk.allow(g.spec.ID) {
-			continue // held by the breaker; the order stays open until the breaker lets it through
+		if o.Kind == OrderEnterStage && startsSessions(o.Stage) && (g.holding() || !g.m.brk.allow(g.spec.ID)) {
+			continue // held by a breaker; the order stays open until the hold lets it through
 		}
 		if o.Kind == OrderEnterStage {
 			g.fillContext(&o)
@@ -637,6 +641,7 @@ func (g *group) handle(in Input) {
 	g.sessionSignals(in)
 	if res.Blocker != "" {
 		g.m.brk.note(g.spec.ID, res.Blocker)
+		g.holdFor(groupWait(g.st.Counters.FaultStreak))
 	}
 	if in.Kind == InSessionEnd {
 		g.m.brk.ended(g.spec.ID)
