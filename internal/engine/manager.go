@@ -89,6 +89,7 @@ type Manager struct {
 	groups   map[string]*group
 	starting map[string]bool
 	repos    map[string]*repoCache
+	brk      *breaker         // holds new sessions back while Komodo itself keeps breaking
 	parked   map[string]Timer // override timers of saved groups no run holds, by group id
 	expect   map[string]chan error
 	conts    map[string]chan error
@@ -124,7 +125,7 @@ var protectedPaths = []string{
 
 // New wires a Runtime Manager from the managers it needs.
 func New(d Deps) *Manager {
-	return &Manager{
+	m := &Manager{
 		d: d, clk: clockOf(d.Clock), t: d.Timing.filled(), ctx: context.Background(),
 		runs:     map[string]*run{},
 		groups:   map[string]*group{},
@@ -137,6 +138,19 @@ func New(d Deps) *Manager {
 		chg:      make(chan struct{}),
 		ready:    make(chan struct{}),
 		faults:   faultsOf(d.Faults),
+	}
+	m.brk = newBreaker(m.clk, func(e Event) { _ = m.d.Bus.Publish(e) }, m.resumeGroup)
+
+	return m
+}
+
+// resumeGroup asks a live group to perform the session starts the breaker held back.
+func (m *Manager) resumeGroup(id string) {
+	m.mu.Lock()
+	g := m.groups[id]
+	m.mu.Unlock()
+	if g != nil {
+		g.enqueue(Input{Kind: InBreakerResume, Group: id, Time: m.clk.Now()})
 	}
 }
 

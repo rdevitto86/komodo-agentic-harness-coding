@@ -16,6 +16,7 @@ type StatusData struct {
 	Queued  []QueuedRow  `json:"queued"`
 	Blocked []BlockedRow `json:"blocked"`          // groups that wait for an answer
 	Waited  string       `json:"waited,omitempty"` // with --wait: blocked, done or timeout
+	Alert   string       `json:"alert,omitempty"`  // one line while the breaker holds new sessions back
 }
 
 // RunRow is one live run and its groups.

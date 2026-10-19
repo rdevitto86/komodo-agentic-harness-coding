@@ -19,6 +19,8 @@ type StatusData struct {
 	Blocked []BlockedRow `json:"blocked"`
 	// with --wait: blocked, done or timeout
 	Waited string `json:"waited,omitempty"`
+	// one line while the breaker holds new sessions back
+	Alert string `json:"alert,omitempty"`
 	// status (id): the run's or group's time, tokens and cost
 	Figures *Figures `json:"figures,omitempty"`
 	// status (id) of a failed or blocked group: the run's last events
@@ -132,7 +134,7 @@ func statusFrames(frames []engine.Reply, wait bool) StatusData {
 		if len(fin.Blocked) > 0 {
 			sd.Runs, sd.Blocked = fin.Runs, fin.Blocked
 		}
-		sd.Waited = fin.Waited
+		sd.Waited, sd.Alert = fin.Waited, fin.Alert
 	}
 
 	if sd.Runs == nil {
@@ -187,6 +189,7 @@ func statusFacts(sd StatusData) format.StatusFacts {
 		Queued:  format.Table{Head: []string{"Label", "Start"}, What: "queued runs"},
 		Blocked: format.Table{Head: []string{"Group", "Reason", "Question"}, What: "blocked groups"},
 		Waited:  sd.Waited,
+		Alert:   sd.Alert,
 	}
 
 	for _, r := range sd.Runs {

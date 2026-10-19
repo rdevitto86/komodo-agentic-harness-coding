@@ -1,5 +1,7 @@
 There {{plural (len .Runs.Rows) "is" "are"}} {{n (len .Runs.Rows)}} active {{plural (len .Runs.Rows) "run" "runs"}}, {{n (len .Queued.Rows)}} queued and {{n (len .Blocked.Rows)}} blocked.
-{{if .Waited}}
+{{if .Alert}}
+Alert: {{.Alert}}
+{{end}}{{if .Waited}}
 The wait ended with {{.Waited}}.
 {{end}}{{if .Runs.Rows}}
 The active runs are:

@@ -42,5 +42,6 @@
     ],
     "what": "groups"
   },
-  "waited": "blocked"
+  "waited": "blocked",
+  "alert": "No new sessions start: setup faults hit several groups. One probe session runs every 5 minutes."
 }
