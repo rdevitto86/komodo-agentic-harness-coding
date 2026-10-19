@@ -101,6 +101,7 @@ type superviseState struct {
 	stop   Reason
 	rung   int
 	ladder *time.Timer
+	tally  llm.UsageTally // the usage of the messages streamed so far
 }
 
 // Timer and ladder constants of one session.
@@ -216,6 +217,8 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 				h.Raw(n.ev.Raw)
 			}
 
+			st.tally.Add(n.ev.Msg)
+
 			switch n.ev.Kind {
 			case llm.KindRetry:
 				if n.ev.Retry != nil {
@@ -319,8 +322,14 @@ func halted(h Hooks, st *superviseState) bool {
 	return h.Halt != nil && st.stop == "" && h.Halt() != ""
 }
 
-// finish turns the end of the stream into the supervisor's answer.
+// finish turns the end of the stream into the supervisor's answer; a result without usage gets the streamed total.
 func finish(st *superviseState, res llm.Result, err error) (llm.Result, Reason, error) {
+	if res.Usage == nil || res.Usage.IsZero() {
+		if total := st.tally.Total(); total != nil {
+			res.Usage = total
+		}
+	}
+
 	if err == nil {
 		if st.stop != "" {
 			return res, st.stop, nil
