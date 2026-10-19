@@ -14,6 +14,9 @@ const addedDiff = "diff --git a/a/a.go b/a/a.go\n--- a/a/a.go\n+++ b/a/a.go\n@@ 
 const goProfile = "mode: set\nm/a/a.go:2.20,3.12 2 1\nm/a/a.go:3.12,5.3 1 0\nm/a/a.go:6.2,7.2 1 1\n" +
 	"m/b/b.go:1.1,9.2 3 0\n"
 
+// addedDiffSource returns addedDiff for any range.
+func addedDiffSource(context.Context, string, string) (string, error) { return addedDiff, nil }
+
 func TestParseLineCoverageGo(t *testing.T) {
 	lc, ok := ParseLineCoverage("go", "ok\ntotal:\t(statements)\t50.0%\n"+goProfile)
 	if !ok {
@@ -58,8 +61,10 @@ func TestParseLineCoveragePython(t *testing.T) {
 }
 
 func TestParseLineCoverageJaCoCo(t *testing.T) {
-	out := "<report><package name=\"com/x\"><sourcefile name=\"Foo.java\"><line nr=\"3\" mi=\"0\" ci=\"2\" mb=\"0\" cb=\"0\"/>" +
-		"<line nr=\"4\" mi=\"2\" ci=\"0\" mb=\"0\" cb=\"0\"/><counter type=\"LINE\" missed=\"1\" covered=\"1\"/></sourcefile>" +
+	out := "<report><package name=\"com/x\"><sourcefile name=\"Foo.java\">" +
+		"<line nr=\"3\" mi=\"0\" ci=\"2\" mb=\"0\" cb=\"0\"/>" +
+		"<line nr=\"4\" mi=\"2\" ci=\"0\" mb=\"0\" cb=\"0\"/>" +
+		"<counter type=\"LINE\" missed=\"1\" covered=\"1\"/></sourcefile>" +
 		"</package></report>"
 	lc, ok := ParseLineCoverage("java", out)
 	if !ok || !lc["com/x/Foo.java"][3] || lc["com/x/Foo.java"][4] {
@@ -80,7 +85,7 @@ func TestParseLineCoverageHasNoDataForTheRest(t *testing.T) {
 }
 
 func TestCheckCoverageStepListsUncoveredAddedLines(t *testing.T) {
-	cfg := CheckerConfig{CoverageFloor: 80, Diff: func(context.Context, string, string) (string, error) { return addedDiff, nil }}
+	cfg := CheckerConfig{CoverageFloor: 80, Diff: addedDiffSource}
 	out := "total:\t(statements)\t90.0%\n" + goProfile
 	sb := goSandbox().on("-coverprofile", reply{0, out})
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())
@@ -96,7 +101,7 @@ func TestCheckCoverageStepListsUncoveredAddedLines(t *testing.T) {
 }
 
 func TestCheckCoverageStepFailsWhenNoAddedLineIsCovered(t *testing.T) {
-	cfg := CheckerConfig{CoverageFloor: 80, Diff: func(context.Context, string, string) (string, error) { return addedDiff, nil }}
+	cfg := CheckerConfig{CoverageFloor: 80, Diff: addedDiffSource}
 	out := "total:\t(statements)\t95.0%\nmode: set\nm/a/a.go:2.1,7.2 5 0\n"
 	sb := goSandbox().on("-coverprofile", reply{0, out})
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())
