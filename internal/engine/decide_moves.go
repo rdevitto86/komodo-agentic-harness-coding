@@ -393,6 +393,7 @@ func (c *calc) returnToBuild(in Input) {
 		findings = strings.Join(d.Items, "\n")
 	}
 
+	s.LastFindings = findings
 	s.TestReview.Failed = slices.Clone(d.Items)
 
 	c.emitStatus(&bus.StageEnter{From: string(StageTestReview), To: string(StageBuild), Return: true})

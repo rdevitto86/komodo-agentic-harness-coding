@@ -133,6 +133,36 @@ func TestAnOverrideSendsTheGroupBackToTheBuilderWithTheLastFindings(t *testing.T
 	}
 }
 
+func TestAnOverrideAfterABuilderSideExhaustionStillCarriesTheLastReturnedFindings(t *testing.T) {
+	s := failedRound()
+	s.Counters.RetriesLeft = 1
+	fail := in(InResultFail, ResultFail{Items: []string{"a"}, Tree: "t1", Findings: "FINDING: a.go:3 nil dereference"})
+
+	back := apply(t, s, fail).State
+	if back.Stage != StageBuild || back.Counters.RetriesLeft != 0 {
+		t.Fatalf("stage %q retries %d", back.Stage, back.Counters.RetriesLeft)
+	}
+
+	back.Tasks[0].State, back.Tasks[0].Session = "claimed", "s2"
+	back.LastEventAt = t0
+
+	blocked := apply(t, apply(t, back, at(60)).State, at(120)).State
+	if blocked.Stage != StageBlocked || blocked.Block.Counter != "wall" {
+		t.Fatalf("stage %q block %+v", blocked.Stage, blocked.Block)
+	}
+
+	ov := in(InOverride, nil)
+	ov.Time = blocked.Block.Until.Add(-time.Minute)
+
+	for _, o := range apply(t, blocked, ov).Orders {
+		if o.Kind == OrderEnterStage && o.Stage == StageBuild && strings.Contains(string(o.Data), "nil dereference") {
+			return
+		}
+	}
+
+	t.Fatal("the builder brief lacks the findings of the last returned round")
+}
+
 func TestOtherBlocksResumeWhereTheyStopped(t *testing.T) {
 	s := mk(StageBlocked)
 	s.Prior, s.Block = StageTestReview, state.BlockState{Reason: state.ReasonFlap}
