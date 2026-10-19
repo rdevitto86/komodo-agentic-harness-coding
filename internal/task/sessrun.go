@@ -696,9 +696,13 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 		"model":   sc.sess.Model,
 	}
 	if out.reason == state.ReasonDone && out.outcome.Kind == OutcomeScope {
-		data["reason"] = state.ReasonNeedsScope
 		data["scope_paths"] = out.outcome.Paths
 		data["scope_reason"] = out.outcome.Reason
+
+		// A request the Task Manager denies itself ends the session done: nobody is asked, so the group is not blocked.
+		if _, why, err := m.scopeVerdict(req.task, out.outcome.Paths); err != nil || why == "" {
+			data["reason"] = state.ReasonNeedsScope
+		}
 	}
 	if u := out.result.Usage; u != nil {
 		data["tokens"] = int64(u.TokensIn + u.TokensOut)

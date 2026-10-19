@@ -43,7 +43,8 @@ func (c *calc) sessionEnd() bool {
 	c.emitStatus(&e)
 	ref := &state.ResumeRef{Agent: e.Agent, Session: string(e.Session), Handle: e.Handle, Link: e.Link}
 
-	keep := reason == "paused" || reason == "provider" || reason == "needs_scope"
+	keep := reason == "paused" || reason == "provider" || reason == "needs_scope" ||
+		(reason == "done" && len(e.ScopePaths) > 0)
 	switch {
 	case keep && e.Handle != "":
 		c.setResume(e.Agent, ref)
@@ -94,7 +95,12 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 
 	switch e.Reason {
 	case "done":
-		if !c.allTasksDone() {
+		if len(e.ScopePaths) > 0 {
+			// The Task Manager denied this request itself and resumed the builder; the task's one ask is spent.
+			if len(s.Tasks) > 0 {
+				s.Tasks[c.taskIndex(e.Task)].ScopeAsked = true
+			}
+		} else if !c.allTasksDone() {
 			c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
 		}
 	case "check_fail", "no_result", "schema_fail", "refusals", "timeout", "idle":

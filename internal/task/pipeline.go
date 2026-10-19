@@ -164,39 +164,28 @@ func (m *Manager) pendingTasks() []TaskSpec {
 
 // handleScope answers a builder's needs_scope result: it denies at once or escalates the request.
 func (m *Manager) handleScope(ctx context.Context, out sessOut) (*llm.ResumeHandle, string, error) {
-	task := ""
-	if p := m.pendingTasks(); len(p) > 0 {
-		task = p[0].ID
+	task := m.firstPending()
+	m.fact("scope.request", map[string]any{"task": task, "paths": out.outcome.Paths})
+
+	keep, why, err := m.scopeVerdict(task, out.outcome.Paths)
+	if err != nil {
+		return nil, "", err
 	}
 
-	m.fact("scope.request", map[string]any{"task": task, "paths": out.outcome.Paths})
 	m.mu.Lock()
-
-	asked := slices.Contains(m.prog.ScopeAsked, task)
-	if !asked {
+	if !slices.Contains(m.prog.ScopeAsked, task) {
 		m.prog.ScopeAsked = append(m.prog.ScopeAsked, task)
 	}
 	m.mu.Unlock()
 
 	h := out.handle
-	deny := func(why string) (*llm.ResumeHandle, string, error) {
+	if why != "" {
 		m.fact("scope.answer", map[string]any{"action": "deny", "auto": true})
 		text := "scope request denied: " + why
 		if r, ok := m.c.Roles["builder"].(scopeAnswerer); ok {
 			r.SetScopeAnswer(text)
 		}
 		return &h, text, m.report(ctx)
-	}
-	if asked {
-		return deny("one scope request per task")
-	}
-
-	keep, err := m.scopeAllowed(out.outcome.Paths)
-	if err != nil {
-		return nil, "", err
-	}
-	if len(keep) == 0 {
-		return deny("every path is protected, secret or belongs to another group")
 	}
 
 	m.mu.Lock()
@@ -208,6 +197,34 @@ func (m *Manager) handleScope(ctx context.Context, out sessOut) (*llm.ResumeHand
 		reason: "needs_scope",
 		detail: map[string]any{"task": task, "paths": keep, "reason": out.outcome.Reason},
 	}
+}
+
+// firstPending returns the first task whose completion command has not passed yet, or "" when none is left.
+func (m *Manager) firstPending() string {
+	if p := m.pendingTasks(); len(p) > 0 {
+		return p[0].ID
+	}
+	return ""
+}
+
+// scopeVerdict returns the paths to escalate, or the reason the Task Manager denies the request itself.
+func (m *Manager) scopeVerdict(task string, paths []string) (keep []string, why string, err error) {
+	m.mu.Lock()
+	asked := slices.Contains(m.prog.ScopeAsked, task)
+	m.mu.Unlock()
+	if asked {
+		return nil, "one scope request per task", nil
+	}
+
+	keep, err = m.scopeAllowed(paths)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(keep) == 0 {
+		return nil, "every path is protected, secret or belongs to another group", nil
+	}
+
+	return keep, "", nil
 }
 
 // scopeAllowed returns the paths the Task Manager would itself allow: not protected, not secret, not another group's.
