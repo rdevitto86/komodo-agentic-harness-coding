@@ -101,6 +101,92 @@
       ],
       "type": "object"
     },
+    "CleanupSwept": {
+      "additionalProperties": false,
+      "properties": {
+        "group": {
+          "type": "string"
+        },
+        "kept": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "removed": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "group",
+        "removed",
+        "kept"
+      ],
+      "type": "object"
+    },
+    "CommandDropped": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "re": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "re",
+        "why"
+      ],
+      "type": "object"
+    },
     "ContextRefused": {
       "additionalProperties": false,
       "properties": {
@@ -206,6 +292,9 @@
         "line": {
           "type": "integer"
         },
+        "note": {
+          "type": "string"
+        },
         "quote": {
           "type": "string"
         },
@@ -242,6 +331,9 @@
         "line": {
           "type": "integer"
         },
+        "note": {
+          "type": "string"
+        },
         "quote": {
           "type": "string"
         },
@@ -273,14 +365,8 @@
     },
     "GroupApproved": {
       "additionalProperties": false,
-      "properties": {
-        "tree": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "tree"
-      ],
+      "properties": {},
+      "required": [],
       "type": "object"
     },
     "GroupBlocked": {
@@ -317,6 +403,12 @@
       "required": [],
       "type": "object"
     },
+    "GroupClosed": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
     "GroupDone": {
       "additionalProperties": false,
       "properties": {
@@ -326,6 +418,27 @@
       },
       "required": [
         "outcome"
+      ],
+      "type": "object"
+    },
+    "GroupPause": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "link": {
+          "type": "string"
+        },
+        "wait_until": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "link",
+        "wait_until",
+        "agent"
       ],
       "type": "object"
     },
@@ -355,6 +468,28 @@
       ],
       "type": "object"
     },
+    "GroupResume": {
+      "additionalProperties": false,
+      "properties": {
+        "owed": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "owed"
+      ],
+      "type": "object"
+    },
     "GroupResumed": {
       "additionalProperties": false,
       "properties": {
@@ -368,6 +503,18 @@
       "required": [
         "from",
         "to"
+      ],
+      "type": "object"
+    },
+    "GroupStop": {
+      "additionalProperties": false,
+      "properties": {
+        "cause": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cause"
       ],
       "type": "object"
     },
@@ -397,6 +544,24 @@
         "limit",
         "remaining",
         "reset_at"
+      ],
+      "type": "object"
+    },
+    "JudgeReset": {
+      "additionalProperties": false,
+      "properties": {
+        "edited": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "edited"
       ],
       "type": "object"
     },
@@ -476,6 +641,15 @@
         },
         "pct": {
           "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
         },
         "usd": {
           "type": "number"
@@ -838,6 +1012,9 @@
         "agent": {
           "type": "string"
         },
+        "error": {
+          "type": "string"
+        },
         "reason": {
           "type": "string"
         },
@@ -1055,6 +1232,64 @@
         "wanted",
         "used",
         "why"
+      ],
+      "type": "object"
+    },
+    "SandboxWarning": {
+      "additionalProperties": false,
+      "properties": {
+        "warning": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "warning"
+      ],
+      "type": "object"
+    },
+    "ScopeAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "approved": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "auto": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "ScopeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task",
+        "paths"
       ],
       "type": "object"
     },
@@ -2160,6 +2395,32 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/CleanupSwept"
+        },
+        "subtype": {
+          "const": "cleanup.swept"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/CommandDropped"
+        },
+        "subtype": {
+          "const": "command.dropped"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/EpicPaused"
         },
         "subtype": {
@@ -2225,6 +2486,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/GroupClosed"
+        },
+        "subtype": {
+          "const": "group.closed"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/discardedEvt"
         },
         "subtype": {
@@ -2251,6 +2525,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/GroupPause"
+        },
+        "subtype": {
+          "const": "group.pause"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/GroupPaused"
         },
         "subtype": {
@@ -2264,10 +2551,49 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/GroupResume"
+        },
+        "subtype": {
+          "const": "group.resume"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/GroupResumed"
         },
         "subtype": {
           "const": "group.resumed"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/GroupStop"
+        },
+        "subtype": {
+          "const": "group.stop"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/JudgeReset"
+        },
+        "subtype": {
+          "const": "judge.reset"
         },
         "type": {
           "const": "run-status"
@@ -2398,6 +2724,45 @@
         },
         "subtype": {
           "const": "sandbox.fallback"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/SandboxWarning"
+        },
+        "subtype": {
+          "const": "sandbox.warning"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ScopeAnswer"
+        },
+        "subtype": {
+          "const": "scope.answer"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ScopeRequest"
+        },
+        "subtype": {
+          "const": "scope.request"
         },
         "type": {
           "const": "run-status"

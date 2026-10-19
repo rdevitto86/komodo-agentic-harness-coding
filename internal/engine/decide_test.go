@@ -585,6 +585,51 @@ func TestUnregisteredFactIsReportedAsDropped(t *testing.T) {
 	}
 }
 
+// Each fact the Task Manager and the handlers report with a body of its own becomes one event; a body that the slot does
+// not declare is dropped.
+func TestFactBodiesFitTheirSlots(t *testing.T) {
+	RegisterEvents()
+	wake := time.Unix(1_800_000_000, 0).UTC()
+	item := map[string]string{"kind": "temp", "name": "/tmp/x", "reason": ""}
+	usage := map[string]any{
+		"link": "claude-cli", "agent": "builder", "session": "s-1", "model": "m",
+		"tokens_in": 1, "tokens_out": 2, "cache_read": 0, "cache_write": 0, "usd": 0.1, "usd_equiv": 0.1,
+	}
+	facts := map[string]any{
+		"command.dropped":     map[string]string{"kind": "continue", "re": "req-1", "why": "no pause to leave"},
+		"sandbox.warning":     map[string]string{"warning": "server started without a network filter"},
+		"session.resume-lost": map[string]string{"session": "s-1", "agent": "builder", "error": "session expired"},
+		"scope.request":       map[string]any{"task": "t1", "paths": []string{"a/b.go"}},
+		"scope.answer":        map[string]any{"action": "approve", "approved": []string{"a/b.go"}},
+		"group.pause":         map[string]any{"link": "claude-cli", "wait_until": wake, "agent": "builder"},
+		"group.resume":        map[string]any{"reason": "timer", "owed": []string{"builder"}},
+		"group.stop":          map[string]string{"cause": "pause_timeout"},
+		"group.closed":        nil,
+		"group.approved":      map[string]string{},
+		"provider.skip":       map[string]string{"from": "claude-cli", "to": "anthropic-api", "reason": "unavailable"},
+		"session.idle":        map[string]any{"idle_s": 600, "nudged": true, "session": "s-1"},
+		"session.timewarn":    map[string]any{"used_s": 3300, "wall_s": 3600, "session": "s-1"},
+		"limit.warn":          map[string]any{"kind": "overage", "session": "s-1"},
+		"finding.submit":      map[string]any{"rule": "r1", "file": "a.go", "line": 3, "quote": "q", "note": "n"},
+		"tool.denied":         map[string]any{"tool": "edit", "row": "B1", "target": "a.go", "count": 1},
+		"tool.outside":        map[string]string{"server": "docs", "tool": "search", "outcome": "ok"},
+		"sandbox.fallback":    map[string]string{"role": "tester", "wanted": "docker", "used": "seatbelt", "why": "none"},
+		"usage":               usage,
+		"judge.reset":         map[string]any{"edited": []string{"a/b.go"}},
+		"cleanup.swept":       map[string]any{"group": "", "removed": []map[string]string{item}, "kept": nil},
+	}
+	for sub, body := range facts {
+		var raw json.RawMessage
+		if body != nil {
+			raw = mustJSON(body)
+		}
+		r := apply(t, mk(StageBuild), in(InFact, FactData{Subtype: sub, Data: raw}))
+		if len(r.Emit) != 1 || len(r.Dropped) != 0 || string(r.Emit[0].Subtype) != sub {
+			t.Errorf("%s: emitted %d, dropped %q", sub, len(r.Emit), r.Dropped)
+		}
+	}
+}
+
 func TestScopeRules(t *testing.T) {
 	ask := func(deny string) Input {
 		return in(InScopeAsk, ScopeAsk{Task: "t1", Paths: []string{"a/b.go"}, Reason: "need it", Deny: deny})
