@@ -59,7 +59,8 @@ func (c *calc) newTry() {
 	c.s.Counters.WallBaseS = c.s.Counters.WallUsedS
 }
 
-// tally counts the Komodo faults of an input in the group's streak; a session that ended with a result clears it.
+// tally counts the Komodo faults of an input in the group's streak; a session that ends done or in a charged failure of
+// the work clears it.
 func (c *calc) tally() {
 	s := &c.s
 	if c.from == NoStage || c.from == StageDone {
@@ -76,7 +77,7 @@ func (c *calc) tally() {
 		if d.Restart {
 			return
 		}
-		if d.Reason == string(state.ReasonDone) {
+		if d.Reason == string(state.ReasonDone) || state.Reason(d.Reason).Charged() {
 			s.Counters.FaultStreak = 0
 			return
 		}

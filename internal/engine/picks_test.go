@@ -178,6 +178,22 @@ func crashEnd(agent string) Input {
 	})
 }
 
+func TestASessionThatEndsWithAWorkOutcomeBreaksTheRunOfKomodoFaults(t *testing.T) {
+	s := claimed()
+	for i, end := range []Input{crashEnd("builder"), builderEnd("timeout"), crashEnd("builder"), crashEnd("builder")} {
+		r := apply(t, s, end)
+		if r.State.Stage != StageBuild || r.State.Block.Reason == state.ReasonCrash {
+			t.Fatalf("end %d blocked the group: stage %q block %+v", i+1, r.State.Stage, r.State.Block)
+		}
+
+		s = r.State
+		s.Tasks[0].State, s.Tasks[0].Session = "claimed", "s1"
+	}
+	if got := s.Counters.FaultStreak; got != 2 {
+		t.Fatalf("fault streak %d, want 2", got)
+	}
+}
+
 func TestThreeKomodoFaultsInARowBlockTheGroupForAPersonAndSpendNoRetry(t *testing.T) {
 	s := claimed()
 	for i := 1; i <= 2; i++ {
