@@ -126,7 +126,7 @@ func (in *installer) checkLinks(ctx context.Context) Check {
 		return fail(
 			"links",
 			"no model link works. "+detail,
-			"komodo config set providers.anthropic.url https://api.anthropic.com, or log in with claude auth login",
+			"komodo config set providers.anthropic.url=https://api.anthropic.com, or log in with claude auth login",
 		)
 	case !required:
 		return fail(

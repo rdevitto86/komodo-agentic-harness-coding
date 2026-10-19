@@ -13,6 +13,7 @@ import (
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/contextmgr"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
@@ -24,7 +25,7 @@ type intakeHolder struct {
 }
 
 // start opens a planner session over the first link of the planner's chain that can serve it.
-func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error) {
+func (h *intakeHolder) start(ctx context.Context) (_ intake.PlannerSession, err error) {
 	s, k := h.k.s, h.k
 	ag, ok := s.cfg.GetAgent("planner")
 	if !ok {
@@ -51,9 +52,14 @@ func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error)
 
 	id := newSessionID()
 	dir := filepath.Join(s.home, "sessions", "planner-"+id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
+		return nil, fmt.Errorf("make the planner session folder: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 
 	uh, _ := os.UserHomeDir()
 	rows, err := task.LoadRows(uh)
@@ -61,7 +67,7 @@ func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error)
 		return nil, fmt.Errorf("load the guard rows: %w", err)
 	}
 
-	g, err := task.NewGuard(rows, task.Binding{Agent: "planner", Worktree: k.root}, 3)
+	g, err := task.NewGuard(rows, task.Binding{Agent: "planner", Permissions: permissionsOf(ag), Worktree: k.root}, 3)
 	if err != nil {
 		return nil, fmt.Errorf("build the planner guard: %w", err)
 	}
@@ -80,10 +86,24 @@ func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error)
 		Model:   sel.Model,
 		Profile: sel.Profile,
 		Schema:  ag.Result,
-		Tools:   b,
+	}
+	ps := &plannerSession{c: s.llm, sess: sess}
+
+	if !task.ProgramLink(sel.Link) {
+		ps.sess.Tools = b
+		return ps, nil
 	}
 
-	return &plannerSession{c: s.llm, sess: sess}, nil
+	exe, _ := os.Executable()
+	cfg := task.ToolServerConfig{Agent: "planner", Session: id, Socket: filepath.Join(s.home, "state", engine.SocketName)}
+
+	if err := task.WriteMCPConfig(dir, exe, cfg); err != nil {
+		return nil, err
+	}
+
+	ps.closers = append(ps.closers, s.tools.Add(id, b))
+
+	return ps, nil
 }
 
 // lint runs the planner's lint_backlog tool on a draft given as text.
@@ -106,9 +126,10 @@ type plannerSession struct {
 	c       *llm.Client
 	sess    llm.Session
 	started bool
+	closers []func() // end the session's tool route
 }
 
-// Send runs one planner turn and returns the draft it filed.
+// Send runs one planner turn and returns the draft it filed; the first text is the brief and is written to the folder.
 func (p *plannerSession) Send(ctx context.Context, text string) (intake.PlanDraft, error) {
 	var (
 		st  llm.Stream
@@ -116,15 +137,10 @@ func (p *plannerSession) Send(ctx context.Context, text string) (intake.PlanDraf
 	)
 
 	if !p.started {
-		p.sess.Parts = [5]string{
-			"planner tools",
-			"planner role",
-			"repository guidance",
-			"standards",
-			text,
-		}
-		st, err = p.c.Start(ctx, p.sess)
 		p.started = true
+		if err = task.WriteBriefFiles(p.sess.Dir, [5]string{4: text}); err == nil {
+			st, err = p.c.Start(ctx, p.sess)
+		}
 	} else {
 		st, err = p.c.Resume(ctx, p.sess, llm.Input{Text: text})
 	}
@@ -153,8 +169,16 @@ func (p *plannerSession) Send(ctx context.Context, text string) (intake.PlanDraf
 	}
 }
 
-// Close ends the session.
-func (p *plannerSession) Close() error { return nil }
+// Close ends the session's tool route.
+func (p *plannerSession) Close() error {
+	for _, c := range p.closers {
+		c()
+	}
+
+	p.closers = nil
+
+	return nil
+}
 
 // intakeDeps wires the Intake Handler to the repository the engine serves.
 func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
@@ -174,11 +198,15 @@ func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 	return d
 }
 
-// newSessionID returns a random session identifier.
+// newSessionID returns a random session identifier in the UUID shape the claude program requires.
 func newSessionID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	h := hex.EncodeToString(b[:])
+
+	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
 
 // protectedPaths lists the paths no agent may write: the guard policy's protected-path and secret-file rows.

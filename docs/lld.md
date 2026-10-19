@@ -590,8 +590,11 @@ type Block struct {
 - **Wait without polling:** run `komodo status --wait` in the background. It returns when a group is blocked or done, with the blocked group's question.
 - **Answer a blocked group:** `komodo run <id> --approve` grants what it asked for; `komodo run <id> --deny` refuses it.
 - **Report:** relay the envelope's `report` field verbatim.
-- **Rules:** <orchestrator rules text, supplied by the Context Manager>
-<output style for output.profile>
+- **Rules:** [TODO: the orchestrator rules text the block carries ([G-288](#g-288))]
+
+##### Komodo output style: <output.profile>
+
+<rest of the output style for output.profile>
 <!-- komodo:end -->
 ```
 
@@ -600,7 +603,8 @@ type Block struct {
 | Begin marker | The running binary | `min=` is the higher of the existing pin and the running version, with any development-build suffix removed and never above the newest release the machine has seen; install never lowers it |
 | Install path | Step 1 of `install` | The absolute path of `bin/komodo` under the Komodo home folder |
 | Commands | The command table | The block names only commands the table holds; the drift test fails when it names another |
-| Rules, output style | The [Context Manager](#6-context-manager) and the [Output Formatter](#2-output-formatter) | Pasted as supplied |
+| Rules | The [Context Manager](#6-context-manager) | Pasted as supplied; the line is left out until the text exists ([G-288](#g-288)) |
+| Output style | The [Output Formatter](#2-output-formatter) | Pasted after a blank line as supplied, with each heading moved 4 levels down so it sits below the block's `####` heading |
 | End marker | The template | A missing or damaged marker drops the whole block from every brief |
 
 The block names only commands the table holds. Among the shared commands it names `status --wait`, `run --approve` and `run --deny`.
@@ -810,7 +814,7 @@ A person at a terminal runs `install`, in a repository for the repository steps 
 | `--force` | Overwrite hand-edited owned files |
 | `--remove` | Undo the install: prune every entry `install.json` lists |
 
-`install` writes only the binary, the path entry, the Komodo block in `AGENTS.md`, the `@AGENTS.md` line and the harness permission entries. In a repository these are 6 manifest entries: the block, the import line, the allow rule and the three deny rules. A dry run prints one row per file, so a fresh repository with Claude Code lists 4 writes: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and the manifest. With no `AGENTS.md` the file is the Komodo block alone. The hosts are kept in the selections only when `--hosts` named them; a rerun without the flag reuses them, else detects.
+`install` writes only the binary, the path entry, the Komodo block in `AGENTS.md`, the `@AGENTS.md` line and the harness permission entries. In a repository these are 6 manifest entries: the block, the import line, the allow rule and the three deny rules. A dry run prints one row per file and its report says how many changes it would make and that it applied none, so a fresh repository with Claude Code lists 4 writes: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and the manifest. With no `AGENTS.md` the file is the Komodo block alone. The hosts are kept in the selections only when `--hosts` named them; a rerun without the flag reuses them, else detects.
 
 `install` does 3 things for a host: it places the binary, writes the short Komodo block into the repository's `AGENTS.md` (the harness is installed, here is its path, drive it only through `komodo` commands), and adds the `@AGENTS.md` import. It starts no session-start hook and copies no agent or skill into any host. With `--remove` the wanted set is empty, so the diff prunes each owned entry: the Komodo block between its markers, the `@AGENTS.md` line, the owned settings entries and the placed binary version. A hand-edited owned file stays and is reported unless `--force` is given.
 
@@ -988,7 +992,7 @@ Anyone runs `doctor`, including the orchestrator. It prints each check's result 
 - **Home folder:** the Komodo home folder is on a local file system and honours file locks; a network file system or a lock that lets two holders in fails the check. The engine runs the same two tests (the disk type and a test lock) at every start and does not start when either fails; the command prints the same fix, which points at a local folder. `doctor` keeps running on such a folder, so the person can see why.
 - **Review rules:** each review rule whose findings Go verified under 50% of the time, with at least one finding submitted, is listed as a note with its model and percentage, and the check passes. Exit 3 stays for problems the person on this machine can fix.
 
-The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check is skipped, with the detail "not wired", when this build has no model client. It passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. When `providers.anthropic.url` is refused (see the key's row in the configuration keys table), the check names the paid link as off with the refused address and the reason, and its fix is `komodo config set providers.anthropic.url`; the check fails only when no other link works. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
+The `install` check compares every recorded entry with its disk fingerprint and looks for `komodo` on `PATH`. The `links` check is skipped, with the detail "not wired", when this build has no model client. It passes when the Claude subscription link or the paid Anthropic interface works and fails when a configured local link does not. When `providers.anthropic.url` is refused (see the key's row in the configuration keys table), the check names the paid link as off with the refused address and the reason, and its fix is `komodo config set providers.anthropic.url=https://api.anthropic.com`; the check fails only when no other link works. A missing Docker passes with a note that the Tester uses the operating-system sandbox; Docker present with a silent daemon fails.
 
 ```go
 // internal/cli/doctor.go
@@ -4064,7 +4068,9 @@ type PlanWrite struct {
 }
 ```
 
-Each `error` event carries the run id of the `plan` event it answers. A planner session that fails for any other reason, such as an unreachable model, ends the plan with `error` / `plan-input` and its reason.
+Each `error` event carries the run id of the `plan` event it answers. A planner session that fails for any other reason, such as an unreachable model, ends the plan with `error` / `plan-input` and its reason. The CLI reads each of these five payloads and fails `plan` with the event's code and reason.
+
+The planner session folder holds `brief.md` (the Context Manager's planner brief), `system.md` and, on a subscription link, `mcp.json`. On such a link the session's tools are routed to the engine for as long as the session lives, so `read`, `search` and `lint_backlog` work as they do for a builder.
 
 #### Card hash
 
@@ -15293,6 +15299,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-284"></a>G-284 | Planning | The planner template's boundaries (what every group must contain, size limits, how to write a definition of done and acceptance items) and the text of the planning skill | Authoring task, phase 7 | [5](#5-intake-handler), [6](#6-context-manager) |
 | <a id="g-286"></a>G-286 | Update | The poll interval's setting name and default, and which process polls when no engine runs | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |
 | <a id="g-287"></a>G-287 | Login | What each provider's login does and which providers `login --all` lists | Phase 7, with the installer | [1](#1-cli), [11](#11-task-manager) |
+| <a id="g-288"></a>G-288 | Install | The orchestrator rules text the Komodo block in `AGENTS.md` carries on its `Rules` line; the text is undefined and the line is left out until it is written | Authoring task, phase 7 | [1](#1-cli), [6](#6-context-manager) |
 
 #### Spikes, measurements and later-minor items
 

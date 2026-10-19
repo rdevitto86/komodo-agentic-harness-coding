@@ -197,7 +197,7 @@ func TestOverLimitFixtureHoldsTheRealLimit(t *testing.T) {
 	for _, k := range table.Keys {
 		if k.Name == "limits.returns" {
 			want := "hard limit of " + string(rune('0'+k.Max))
-			if !strings.Contains(fx.Reason, want) || !strings.HasSuffix(fx.Fix, " "+string(rune('0'+k.Max))) {
+			if !strings.Contains(fx.Reason, want) || !strings.HasSuffix(fx.Fix, "="+string(rune('0'+k.Max))) {
 				t.Fatalf("fixture %+v does not hold the limit %d of limits.returns", fx, k.Max)
 			}
 			return

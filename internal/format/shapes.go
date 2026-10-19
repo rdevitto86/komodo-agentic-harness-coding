@@ -42,6 +42,8 @@ type ConfigSetFacts struct {
 
 // InstallFacts feeds reply.install.
 type InstallFacts struct {
+	DryRun  bool  `json:"dry_run"` // nothing was written
+	Writes  int   `json:"writes"`  // rows whose action is not keep; what a dry run would change
 	Changes Table `json:"changes"` // file, action, reason
 	Probe   Table `json:"probe"`   // one row per model link checked
 }

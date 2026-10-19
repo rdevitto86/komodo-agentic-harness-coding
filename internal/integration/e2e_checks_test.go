@@ -667,6 +667,7 @@ func TestRunAllRunsOnlyOpenGroupsInDependencyOrder(t *testing.T) {
 // validation runs in a per-group container that cleanup destroys.
 func TestSandboxFallsBackWithoutDocker(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
+	r.env = append(r.env, noDocker)
 	r.mustRun("run", "ep-1")
 	evs := r.waitDone(120 * time.Second)
 	if !has(evs, "run-status", "sandbox.fallback", "") {
@@ -783,6 +784,8 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 		"estimate_lines: 5\n\nAdd the function.\n"
 	repoFiles, _ := fixtureFiles(t)
 	r := newBinRig(t, merged(repoFiles, backlog))
+	// The recheck needs git, which a Tester container never holds.
+	r.env = append(r.env, noDocker)
 	r.model.builder = fixtureBuilder(false)
 	r.mustRun("run", "ep-1")
 	evs := r.waitFor(150*time.Second, "run-status", "epic.paused")
