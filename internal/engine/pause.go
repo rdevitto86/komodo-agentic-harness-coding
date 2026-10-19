@@ -238,6 +238,8 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 		return &codeError{CodeUnknownTarget, "no live group or run named " + rc.Target}
 	}
 
+	var pending []pendingContinue
+
 	for _, g := range gs {
 		g.mu.Lock()
 		st := g.snap
@@ -252,10 +254,10 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 			}
 		}
 
-		g.enqueue(Input{Kind: InContinue, Request: string(rc.Request) + "/" + g.spec.ID})
+		pending = append(pending, m.queueContinue(g, string(rc.Request)+"/"+g.spec.ID))
 	}
 
-	return nil
+	return m.awaitContinues(ctx, pending)
 }
 
 // undoneDep returns the label of a dependency of the group that is not Done.

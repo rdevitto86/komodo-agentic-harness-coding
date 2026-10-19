@@ -555,6 +555,10 @@ func (g *group) armRenew() {
 
 // handle takes one input: decide, save, publish, then perform the orders.
 func (g *group) handle(in Input) {
+	var saveErr error
+	if in.Kind == InContinue && in.Request != "" {
+		defer func() { g.m.continued(in.Request, saveErr) }()
+	}
 	if g.stopping.Load() || g.st.Stage == StageDone {
 		return
 	}
@@ -583,6 +587,7 @@ func (g *group) handle(in Input) {
 		g.m.report(g, errors.New(d))
 	}
 	if err := g.save(res.State); err != nil {
+		saveErr = err
 		g.saveFailed(err)
 		return
 	}
@@ -596,6 +601,10 @@ func (g *group) handle(in Input) {
 // saveFailed blocks the group state_invalid after the State Manager refused a write.
 func (g *group) saveFailed(err error) {
 	g.m.report(g, fmt.Errorf("save %s: %w", g.spec.Label, err))
+	if g.st.Stage == StageBlocked {
+		g.after() // the stored record is unchanged and the group stays held; the failed command is told
+		return
+	}
 
 	res := Next(
 		g.st,

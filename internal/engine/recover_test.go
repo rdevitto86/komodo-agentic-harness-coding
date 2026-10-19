@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,4 +153,66 @@ func countCmd(cs []task.Command, k task.CommandKind) int {
 		}
 	}
 	return n
+}
+
+// blockedAttempts plants a Blocked attempts group whose continue the State Manager refuses to save.
+func blockedAttempts(t *testing.T) *rig {
+	t.Helper()
+	r := newRig(t, [][]string{{"tg-1"}}, onlyIdle)
+	r.store.monotone.Store(true)
+	r.savedGroup("tg-1", StageBlocked, func(s *State) {
+		s.Prior, s.Block = StageBuild, state.BlockState{Reason: state.ReasonAttempts}
+		s.Counters.Attempts = 2
+	})
+	return r
+}
+
+// wantRefusedContinue checks the failed save of a continue came back as a refusal, was published and left the group held.
+func wantRefusedContinue(t *testing.T, r *rig, err error, refusals int) {
+	t.Helper()
+	var ce *codeError
+	if !errors.As(err, &ce) || ce.code != CodeRunRefused || !strings.Contains(ce.detail, "lower than the stored value") {
+		t.Fatalf("reply %v, want a run_refused naming the refused save", err)
+	}
+	until(t, "request.refused published", func() bool { return r.ev.count(bus.TypeRunStatus, "request.refused") == refusals })
+	if r.ev.count(bus.TypeRunStatus, "request.accepted") != 0 {
+		t.Fatal("request.accepted published for a continue that was not saved")
+	}
+	if st := r.store.get("g-tg-1"); st.Stage != StageBlocked || st.Block.Reason != state.ReasonAttempts {
+		t.Fatalf("group %s %s, want it held Blocked attempts", st.Stage, st.Block.Reason)
+	}
+	r.m.mu.Lock()
+	defer r.m.mu.Unlock()
+	if r.m.groups["g-tg-1"].dead {
+		t.Fatal("a held group was marked dead by the refused continue")
+	}
+}
+
+func TestRefusedSaveOfAFirstContinueRefusesTheRunStart(t *testing.T) {
+	r := blockedAttempts(t)
+	wantRefusedContinue(t, r, r.startRun("run-2", "tg-1"), 1)
+}
+
+func TestRefusedSaveOfASecondRunStartRefusesIt(t *testing.T) {
+	r := blockedAttempts(t)
+	wantRefusedContinue(t, r, r.startRun("run-2", "tg-1"), 1)
+	wantRefusedContinue(t, r, r.startRun("run-3", "tg-1"), 2)
+}
+
+func TestRefusedSaveOfARunContinueRefusesIt(t *testing.T) {
+	r := blockedAttempts(t)
+	wantRefusedContinue(t, r, r.startRun("run-2", "tg-1"), 1)
+
+	ch := r.m.Expect("req-cont")
+	rc := &bus.RunContinue{Target: "tg-1", Request: "req-cont"}
+	if err := r.bus.Publish(Event{Type: bus.TypeRunContinue, Run: "run-2", Data: rc}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-ch:
+		wantRefusedContinue(t, r, err, 2)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the continue was not settled")
+	}
 }

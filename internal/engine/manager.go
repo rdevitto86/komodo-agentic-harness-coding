@@ -89,6 +89,7 @@ type Manager struct {
 	starting map[string]bool
 	repos    map[string]*repoCache
 	expect   map[string]chan error
+	conts    map[string]chan error
 	beats    map[string]time.Time
 	pool     *Pool
 	chg      chan struct{}
@@ -128,6 +129,7 @@ func New(d Deps) *Manager {
 		starting: map[string]bool{},
 		repos:    map[string]*repoCache{},
 		expect:   map[string]chan error{},
+		conts:    map[string]chan error{},
 		beats:    map[string]time.Time{},
 		chg:      make(chan struct{}),
 		ready:    make(chan struct{}),
@@ -389,11 +391,13 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		}
 	}
 
+	var pending []pendingContinue
+
 	for _, g := range forward {
-		g.enqueue(Input{Kind: InContinue, Request: "run-" + id + "-" + g.spec.ID})
+		pending = append(pending, m.queueContinue(g, "run-"+id+"-"+g.spec.ID))
 	}
 	if len(r.specs) == 0 {
-		return nil
+		return m.awaitContinues(ctx, pending)
 	}
 
 	for _, s := range r.specs {
@@ -455,7 +459,11 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		m.groups[gid] = g
 		m.spawn(func() { g.main(&rec) })
 		if rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked {
-			g.enqueue(Input{Kind: InContinue, Request: "run-" + id + "-" + gid})
+			req := "run-" + id + "-" + gid
+			ch := make(chan error, 1)
+			m.conts[req] = ch
+			pending = append(pending, pendingContinue{g: g, ch: ch, req: req})
+			g.enqueue(Input{Kind: InContinue, Request: req})
 		}
 	}
 	if len(saved) == 0 && len(r.finished) == 0 {
@@ -466,7 +474,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 	m.mu.Lock()
 	m.checkLocked(r)
 	m.mu.Unlock()
-	return nil
+	return m.awaitContinues(ctx, pending)
 }
 
 // signalLocked wakes everything that waits on Changes.

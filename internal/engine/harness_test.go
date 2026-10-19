@@ -45,6 +45,7 @@ type fakeStore struct {
 	recs     map[string]state.Record
 	onSave   func(group string, s State)
 	failSave atomic.Bool // makes every Save fail
+	monotone atomic.Bool // makes a Save that lowers the attempts counter fail as the State Manager does
 	saves    atomic.Int64
 }
 
@@ -76,6 +77,10 @@ func (s *fakeStore) Save(_ context.Context, g string, st State, rev int) (state.
 	if !ok || cur.Header.Rev != rev {
 		s.mu.Unlock()
 		return state.Record{}, fmt.Errorf("revision %d is stale", rev)
+	}
+	if s.monotone.Load() && st.Counters.Attempts < cur.State.Counters.Attempts {
+		s.mu.Unlock()
+		return state.Record{}, &state.InvalidError{Group: g, Field: "state.counters.attempts", Why: "lower than the stored value"}
 	}
 	r := state.Record{Header: state.Header{Group: g, Rev: rev + 1}, State: st}
 	s.recs[g] = r
