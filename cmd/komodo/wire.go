@@ -200,6 +200,14 @@ func runEngine(ctx context.Context, home string, stderr io.Writer) error {
 	if errors.Is(err, engine.ErrEngineRunning) {
 		return nil
 	}
+	if err != nil && ctx.Err() == nil {
+		src := fault.Source{Component: "engine"}
+		s.faults.Final(
+			context.Background(),
+			src,
+			fault.Fault{Source: src, Code: "internal", Kind: fault.KindInternal, Severity: fault.SeverityError, Reason: err.Error()},
+		)
+	}
 
 	return err
 }

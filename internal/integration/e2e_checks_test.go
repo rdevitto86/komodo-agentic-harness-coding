@@ -426,8 +426,9 @@ func TestFinalErrorEventAndExitCode(t *testing.T) {
 		}
 	}
 	if last == nil || !strings.Contains(string(last.Data), `"final":true`) {
-		t.Skip("blocked: a caught fault leaves no error event with final true in the event store " +
-			"(fault.FaultData.Final, internal/fault/fault.go:87); seen " + res.stdout)
+		t.Skip("blocked: the seed (replay of an unknown run id) is a refused request, not an error that ends a process; " +
+			"the CLI process publishes no event and the engine publishes the final event only when it exits on an error " +
+			"(covered by cmd/komodo TestEngineThatCannotServePublishesTheFinalErrorEvent); seen " + res.stdout)
 	}
 }
 
