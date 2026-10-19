@@ -202,8 +202,8 @@ type SessionEnd struct {
 	Tokens      int64          `json:"tokens"`                 // input plus output tokens
 	Usage       *SessionUsage  `json:"usage,omitempty"`        // token and cost detail the model client reported
 	WallS       int64          `json:"wall_s"`                 // seconds the session ran
-	ScopePaths  []string       `json:"scope_paths,omitempty"`  // needs_scope only: the paths asked for
-	ScopeReason string         `json:"scope_reason,omitempty"` // needs_scope only: the builder's reason
+	ScopePaths  []string       `json:"scope_paths,omitempty"`  // needs_scope, or a self-denied done: the paths asked for
+	ScopeReason string         `json:"scope_reason,omitempty"` // needs_scope, or a self-denied done: the builder's reason
 	Verify      *VerifyOutcome `json:"verify,omitempty"`       // reviewer or tester with reason done
 }
 
