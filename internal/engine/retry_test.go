@@ -97,7 +97,8 @@ func TestTheWindowLapsingFailsTheGroupAndHandsItToCleanup(t *testing.T) {
 	if !again.Refused || again.State.Stage != StageDone || again.State.Outcome != "failed" {
 		t.Fatalf("a failed group was continued: %q", again.State.Stage)
 	}
-	if early := Next(s, in(InTimerDue, TimerDue{Reason: "override_lapse"}), fixtureLimits()); early.State.Stage == StageDone {
+	early := Next(s, in(InTimerDue, TimerDue{Reason: "override_lapse"}), fixtureLimits())
+	if early.State.Stage == StageDone {
 		t.Fatal("the window lapsed before it ended")
 	}
 }
@@ -110,7 +111,8 @@ func TestNoWindowFailsTheGroupAtOnce(t *testing.T) {
 	s.Counters.RetriesLeft = 0
 
 	r := Next(s, builderEnd("idle"), l)
-	if r.Refused || r.State.Stage != StageDone || r.State.Outcome != "failed" || !slices.Contains(subtypes(r), "group.failed") {
+	if r.Refused || r.State.Stage != StageDone || r.State.Outcome != "failed" ||
+		!slices.Contains(subtypes(r), "group.failed") {
 		t.Fatalf("stage %q outcome %q emits %v", r.State.Stage, r.State.Outcome, subtypes(r))
 	}
 }

@@ -172,7 +172,11 @@ func TestBaseRunnerHasItsOwnBuildCacheFolder(t *testing.T) {
 		}
 	}
 	if len(own) != len(be.spec.Writable) || len(own) < 2 {
-		t.Fatalf("writable %v, want the run's temporary folder and a build cache folder under %s", be.spec.Writable, plan.Temp)
+		t.Fatalf(
+			"writable %v, want the run's temporary folder and a build cache folder under %s",
+			be.spec.Writable,
+			plan.Temp,
+		)
 	}
 
 	if err := r.Close(); err != nil {

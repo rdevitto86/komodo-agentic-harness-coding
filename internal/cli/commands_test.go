@@ -550,7 +550,8 @@ func TestWritingCommandsHonourGuardOnStop(t *testing.T) {
 	h := newHarness(t)
 	h.fake(answerRunID)
 	repo := repoDir(t, "")
-	if err := os.WriteFile(filepath.Join(h.home, "settings.json"), []byte(`{"limits.group_retries": 2}`), 0o644); err != nil {
+	settings := filepath.Join(h.home, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"limits.group_retries": 2}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"stop", "tg-1.2"}, {"status"}, {"abandon", "tg-1.2"}, {"replay", "tg-1.2"}, {"clean"}} {

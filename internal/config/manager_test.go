@@ -174,7 +174,8 @@ func TestLayerOrderForWallTime(t *testing.T) {
 		le.Limit != 120 {
 		t.Fatalf("over the hard limit: %v", err)
 	}
-	if _, err := m.SetConfigItem(Change{Key: "agents.builder.session_idle_min", New: 31}); !errors.As(err, &le) || le.Limit != 30 {
+	_, err := m.SetConfigItem(Change{Key: "agents.builder.session_idle_min", New: 31})
+	if !errors.As(err, &le) || le.Limit != 30 {
 		t.Fatalf("idle over 30: %v", err)
 	}
 	if _, ok := m.GetAgent("janitor"); ok {

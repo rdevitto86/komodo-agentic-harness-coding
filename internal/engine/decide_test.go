@@ -156,7 +156,13 @@ func TestTesterFailsThenReviewerApprovesReturnsOnce(t *testing.T) {
 		}
 		r = apply(t, r.State, verifyEnd(order[1], order[1] != "tester", "TestA"))
 		if r.State.Stage != StageBuild || r.State.Counters.RetriesLeft != 1 || r.State.FailureHash == "" {
-			t.Fatalf("%v: stage %q retries left %d hash %q", order, r.State.Stage, r.State.Counters.RetriesLeft, r.State.FailureHash)
+			t.Fatalf(
+				"%v: stage %q retries left %d hash %q",
+				order,
+				r.State.Stage,
+				r.State.Counters.RetriesLeft,
+				r.State.FailureHash,
+			)
 		}
 		if got := kinds(r); !slices.Contains(got, OrderEnterStage) {
 			t.Fatalf("%v: orders %v", order, got)

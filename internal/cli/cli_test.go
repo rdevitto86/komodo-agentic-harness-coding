@@ -128,7 +128,8 @@ func TestTamperPolicy(t *testing.T) {
 	h.engine = &scriptEngine{fn: func(engine.Request) []engine.Reply {
 		return []engine.Reply{okReply(map[string]any{"run_id": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"})}
 	}}
-	if err := os.WriteFile(filepath.Join(h.home, "settings.json"), []byte(`{"limits.group_retries": 2}`), 0o644); err != nil {
+	settings := filepath.Join(h.home, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"limits.group_retries": 2}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	repo := repoDir(t, "")

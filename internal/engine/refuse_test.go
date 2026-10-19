@@ -58,7 +58,8 @@ func TestOverrideInsideTheWindowIsAppliedBeforeItReplies(t *testing.T) {
 	if err := r.m.Override(context.Background(), "tg-1", "ov-1"); err != nil {
 		t.Fatal(err)
 	}
-	if st := r.store.get("g-tg-1"); st.Stage != StageTestReview || st.Counters.RetriesLeft != 2 || st.Counters.Overrides != 1 {
+	st := r.store.get("g-tg-1")
+	if st.Stage != StageTestReview || st.Counters.RetriesLeft != 2 || st.Counters.Overrides != 1 {
 		t.Fatalf("group %s, %d retries left, %d overrides", st.Stage, st.Counters.RetriesLeft, st.Counters.Overrides)
 	}
 }
@@ -95,6 +96,7 @@ func TestOverrideOnAGroupThatFailedInTheMeantimeIsToldItFailed(t *testing.T) {
 	})
 	<-g.done
 
-	err := r.m.awaitContinues(context.Background(), []pendingContinue{r.m.queueInput(g, Input{Kind: InOverride, Request: "ov-2"})})
+	p := r.m.queueInput(g, Input{Kind: InOverride, Request: "ov-2"})
+	err := r.m.awaitContinues(context.Background(), []pendingContinue{p})
 	wantRefused(t, err, CodeGroupFailed, "failed for good")
 }

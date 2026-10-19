@@ -510,7 +510,8 @@ func (c *calc) dropCommitOrders() {
 	})
 }
 
-// resetFor clears what a block reason names, never the retry budget; it returns a sentence when the continue must be refused.
+// resetFor clears what a block reason names, never the retry budget; it returns a sentence when the continue must be
+// refused.
 func (c *calc) resetFor(r state.Reason) string {
 	s := &c.s
 

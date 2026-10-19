@@ -175,7 +175,9 @@ func wantRefusedContinue(t *testing.T, r *rig, err error, refusals int) {
 	if !errors.As(err, &ce) || ce.code != CodeRunRefused || !strings.Contains(ce.detail, "lower than the stored value") {
 		t.Fatalf("reply %v, want a run_refused naming the refused save", err)
 	}
-	until(t, "request.refused published", func() bool { return r.ev.count(bus.TypeRunStatus, "request.refused") == refusals })
+	until(t, "request.refused published", func() bool {
+		return r.ev.count(bus.TypeRunStatus, "request.refused") == refusals
+	})
 	if r.ev.count(bus.TypeRunStatus, "request.accepted") != 0 {
 		t.Fatal("request.accepted published for a continue that was not saved")
 	}

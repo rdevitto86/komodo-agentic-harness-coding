@@ -87,7 +87,8 @@ func TestAcceptDryRunWritesNothing(t *testing.T) {
 	h := newHarness(t)
 	h.terminal = true
 	h.envelope("config", "set", "limits.group_retries=2")
-	if err := os.WriteFile(filepath.Join(h.home, "settings.json"), []byte(`{"limits.group_retries": 4}`), 0o644); err != nil {
+	settings := filepath.Join(h.home, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"limits.group_retries": 4}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sha := filepath.Join(h.home, "state", "config.sha")

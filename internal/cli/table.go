@@ -40,7 +40,9 @@ var tableRows = []Command{
 		NeedsRepo: needsRepo, NeedsEngine: true, TamperPolicy: TamperRefuse, Run: handlePlan,
 	},
 	{
-		Name: "run", Summary: "Start, schedule or continue a run, answer a blocked group, or override a spent one", Tier: TierShared,
+		Name:    "run",
+		Summary: "Start, schedule or continue a run, answer a blocked group, or override a spent one",
+		Tier:    TierShared,
 		Flags: []FlagSpec{
 			{Name: "schedule", Kind: "time", Help: "Queue the run for this RFC 3339 time"},
 			{Name: "approve", Kind: "bool", Help: "Grant what the blocked group asked for"},

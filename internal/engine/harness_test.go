@@ -74,7 +74,11 @@ func (s *fakeStore) Save(_ context.Context, g string, st State, rev int) (state.
 	}
 	if s.monotone.Load() && st.Counters.WallUsedS < cur.State.Counters.WallUsedS {
 		s.mu.Unlock()
-		return state.Record{}, &state.InvalidError{Group: g, Field: "state.counters.wall_used_s", Why: "lower than the stored value"}
+		return state.Record{}, &state.InvalidError{
+			Group: g,
+			Field: "state.counters.wall_used_s",
+			Why:   "lower than the stored value",
+		}
 	}
 	r := state.Record{Header: state.Header{Group: g, Rev: rev + 1}, State: st}
 	s.recs[g] = r

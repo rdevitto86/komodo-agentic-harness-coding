@@ -5979,7 +5979,7 @@ func HalvePool(size, floor int) int
 func Fingerprint(items []string) string
 
 // LoadLimits reads every bound once through the Configuration Manager.
-func LoadLimits(cfg ConfigReader, agents AgentLimits) (Limits, error)
+func LoadLimits(cfg ConfigReader) (Limits, error)
 
 // Result is everything one input decides.
 type Result struct {
@@ -12434,7 +12434,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 | `review.mode` | enum | `thorough` | `economy` runs one merged lens plus `security` where it applies; `thorough` runs every applicable lens at full depth. It sets review depth only. Owned here. |
 | Registry entry `weight` | enum | `heavy` | Model size for the Reviewer |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
-| `limits.group_retries` | int | 3 | Returns to the Builder before the group is blocked; owned by [Runtime Manager](#7-runtime-manager) |
+| `limits.group_retries` | int | 3 | The group's retry budget: true failures it may spend before it is held for an override; owned by [Runtime Manager](#7-runtime-manager) |
 
 ```go
 const (

@@ -150,7 +150,7 @@ Besides these hand-offs, a subsystem calls another directly when it needs an ans
 
 #### 5.2 CLI
 
-The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, config get and set, login, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it, and running a group that has no retries left with override, which only a person at a terminal may do, gives it more retries once, replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
+The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, config get and set, login, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it. Running a group that has no retries left with override gives it more retries once, and only a person at a terminal may do that. Replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
 
 #### 5.3 Output Formatter
 

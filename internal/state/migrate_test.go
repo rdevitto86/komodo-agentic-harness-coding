@@ -84,7 +84,8 @@ func TestMigrationSwapsTheCountingUpLimitsForTheBudget(t *testing.T) {
 	m, root := newMgr(t)
 	p := statePath(root, testGroup)
 	writeRaw(t, p, `{"v":1,"group":"`+testGroup+`","rev":4,"ts":"2026-10-14T16:01:40Z","writer":"engine/r/1",
-	 "state":{"run":"r","group":"`+testGroup+`","stage":"blocked","prior":"test_review","fence":1,"config_hash":"`+testHash+`",
+	 "state":{"run":"r","group":"`+testGroup+`","stage":"blocked","prior":"test_review","fence":1,
+	 "config_hash":"`+testHash+`",
 	 "block":{"reason":"returns"},
 	 "counters":{"returns":3,"attempts":5,"retries":2,"crashes":1,"blocks":{"returns":2,"attempts":1,"flap":1},
 	  "wall_used_s":60,"wall_extended":false,"tokens_used":10},
@@ -127,7 +128,8 @@ func TestMigrationSwapsTheCountingUpLimitsForTheBudget(t *testing.T) {
 // A version 1 group that never blocked on a counter keeps its block reason and an unmapped stage.
 func TestMigrationLeavesOtherBlocksAlone(t *testing.T) {
 	m, root := newMgr(t)
-	writeRaw(t, statePath(root, testGroup), `{"v":1,"group":"`+testGroup+`","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"engine/r/1",
+	writeRaw(t, statePath(root, testGroup), `{"v":1,"group":"`+testGroup+`","rev":1,"ts":"2026-10-14T16:01:40Z",
+	 "writer":"engine/r/1",
 	 "state":{"run":"r","group":"`+testGroup+`","stage":"blocked","prior":"build","fence":1,"config_hash":"`+testHash+`",
 	 "block":{"reason":"flap"},"counters":{"blocks":{"flap":1}}}}`)
 

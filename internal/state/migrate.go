@@ -90,7 +90,8 @@ func retryBudget(old []byte) ([]byte, error) {
 // spentReasons are the version 1 block reasons that stood for a spent counter, as stored.
 var spentReasons = []string{`"returns"`, `"attempts"`, `"retries"`, `"regression"`}
 
-// migrateCounters drops the old counters, starts the budget at the limit and folds the blocks of the old reasons into retries.
+// migrateCounters drops the old counters, starts the budget at the limit and folds the blocks of the old reasons into
+// retries.
 func migrateCounters(c map[string]json.RawMessage) {
 	for _, k := range []string{"returns", "attempts", "retries"} {
 		delete(c, k)
