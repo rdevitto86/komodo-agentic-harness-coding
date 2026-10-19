@@ -203,6 +203,9 @@ func (h *Handler) lintLoop(
 	const maxDrafts = 3
 
 	protected := h.protected()
+	base := &baseCheck{open: h.d.OpenBase}
+
+	defer base.close()
 
 	text := brief
 	for attempt := 1; ; attempt++ {
@@ -220,6 +223,17 @@ func (h *Handler) lintLoop(
 		)
 
 		found = sortFindings(found)
+		if len(failing(found)) == 0 {
+			more, err := base.findings(ctx, draft)
+			if err != nil && ctx.Err() != nil {
+				return PlanResult{}, h.sessionError(ctx, err)
+			}
+			if err != nil {
+				return PlanResult{}, err
+			}
+
+			found = append(found, more...)
+		}
 		if len(failing(found)) == 0 {
 			return h.write(draft, pl, r.Epic)
 		}

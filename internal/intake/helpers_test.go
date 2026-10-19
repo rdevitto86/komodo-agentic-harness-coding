@@ -13,6 +13,7 @@ type tgSpec struct {
 	id, goal, touches, points, status string
 	files, deps, items                []string
 	noDeps                            bool   // omit the dependencies key
+	noID                              bool   // omit the id key, as a planner draft does
 	extra                             string // an extra field line
 }
 
@@ -37,7 +38,10 @@ func (s tgSpec) text(n int) string {
 		s.items = []string{"WHEN a thing happens THE SYSTEM SHALL respond"}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "id: %s\ngoal: %s\nsubsystem: none\n", s.id, s.goal)
+	if !s.noID {
+		fmt.Fprintf(&b, "id: %s\n", s.id)
+	}
+	fmt.Fprintf(&b, "goal: %s\nsubsystem: none\n", s.goal)
 	if s.touches != "" {
 		fmt.Fprintf(&b, "touches: %s\n", s.touches)
 	}
@@ -63,6 +67,13 @@ func (s tgSpec) text(n int) string {
 
 // uid returns a version 7 identifier that differs per n.
 func uid(n int) string { return fmt.Sprintf("0192e4c5-7a10-7d3e-9b2f-%012x", n) }
+
+// groupWithCheck returns the draft files of group tg-epic.n whose one task has the given done_when command.
+func groupWithCheck(epic, n int, spec tgSpec, doneWhen string) []DraftFile {
+	g := goodGroup(epic, n, spec)
+	g[1].Content = taskText(100, doneWhen, fmt.Sprintf("pkg%d_%d/a.go", epic, n))
+	return g
+}
 
 // goodGroup returns the draft files of group tg-epic.n with one task over its first file.
 func goodGroup(epic, n int, spec tgSpec) []DraftFile {

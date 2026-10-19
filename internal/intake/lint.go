@@ -32,6 +32,9 @@ const (
 	RuleCaseCollision Rule = "case_collision"
 )
 
+// RuleFailFirst names the finding of a done_when command that already passes on the base commit; Plan raises it, Lint never.
+const RuleFailFirst Rule = "fail_first"
+
 // Finding is one failed or warned check, naming the rule and the file.
 type Finding struct {
 	Rule     Rule     `json:"rule"`
@@ -73,7 +76,7 @@ func LintDraft(d PlanDraft, existing []Epic, protected, tracked []string) []Find
 		return []Finding{grammar("", "draft has no files")}
 	}
 
-	epics, found := parseFiles(d.Files)
+	epics, found := parseFiles(d.Files, true)
 	drafted := map[string]bool{}
 	for _, e := range epics {
 		for _, g := range e.Groups {
