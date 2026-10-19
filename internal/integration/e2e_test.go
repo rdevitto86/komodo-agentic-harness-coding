@@ -154,7 +154,7 @@ func TestEventRoundTripOnTheFixtureGroup(t *testing.T) {
 		t.Errorf("check.done arrived %d times, want 2", n)
 	}
 	// No live subscriber is reachable through the binary: plan streams only run-start, error and plan events, and ui streams
-	// state snapshots, not events. So the store, which the bus appends to before it broadcasts, is the one record checked here.
+	// state snapshots, not events. So the store, which the bus appends to before it broadcasts, is the record checked.
 }
 
 // countWith counts the events of the subtype whose data contains want.

@@ -207,6 +207,8 @@ func TestOldFailurePassesWithAWarningNamingTheTest(t *testing.T) {
 // Race: two `komodo run tg-1.1` at once get 1 lease; the other is refused and only 1 push reaches the remote.
 func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
+	reached, release := r.gateSecondTask()
+	t.Cleanup(release)
 	// No engine runs yet, so both commands start one at the same moment and each must reach the engine that wins.
 	var wg sync.WaitGroup
 	codes := make([]int, 2)
@@ -227,18 +229,46 @@ func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	t.Logf("exit codes %v\n%s\n%s", codes, outs[0], outs[1])
-	r.waitFor(120*time.Second, "run-status", "group.done")
-	time.Sleep(2 * time.Second)
-	evs := r.events()
-	refused := countOf(keys(evs), "run-status/request.refused")
-	for _, c := range codes {
-		if c != 0 {
-			refused++
+	// While the winner's builder waits, the group holds exactly 1 lease, and it names the run of only one of the commands.
+	r.waitChan(reached, "the builder's second task")
+	leases := r.leaseFiles()
+	if len(leases) != 1 {
+		t.Fatalf("%d leases granted, want 1: %v\n%v", len(leases), leases, outs)
+	}
+	rec, _ := os.ReadFile(leases[0])
+	holders := 0
+	for _, out := range outs {
+		var reply struct {
+			Data struct {
+				RunID string `json:"run_id"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &reply); err != nil || reply.Data.RunID == "" {
+			t.Fatalf("a command's reply holds no run id: %v\n%s", err, out)
+		}
+		if bytes.Contains(rec, []byte(reply.Data.RunID)) {
+			holders++
 		}
 	}
-	if refused < 1 {
-		t.Fatalf("neither command was refused: codes %v\n%v\n%s", codes, outs, r.evidence(evs))
+	if holders != 1 {
+		t.Fatalf("the lease names the run of %d commands, want 1\n%s\n%v", holders, rec, outs)
+	}
+	release()
+	r.waitFor(120*time.Second, "run-status", "group.done")
+	evs := r.events()
+	for end := time.Now().Add(10 * time.Second); countOf(keys(evs), "run-status/request.refused") < 1; {
+		time.Sleep(200 * time.Millisecond)
+		if time.Now().After(end) {
+			t.Fatalf("neither command was refused: codes %v\n%v\n%s", codes, outs, r.evidence(evs))
+		}
+		evs = r.events()
+	}
+	// The command that lost is refused because the group is already running, not for another reason.
+	if n := countWith(evs, "request.refused", "the group is running"); n != 1 {
+		t.Errorf("%d refusals say the group is running, want 1\n%s", n, r.evidence(evs))
+	}
+	if n := countOf(keys(evs), "run-status/request.refused"); n != 1 {
+		t.Errorf("%d commands were refused, want 1", n)
 	}
 	if n := countOf(keys(evs), "run-status/run.start"); n != 1 {
 		t.Errorf("%d runs started, want 1\n%v", n, outs)
@@ -410,7 +440,7 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 // code matches the fault's kind.
 func TestFinalErrorEventAndExitCode(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
-	// Seed: an engine whose home makes the control socket path longer than the operating system allows cannot bind, which ends
+	// Seed: an engine whose home makes the control socket path longer than the system allows cannot bind, which ends
 	// the engine on an internal fault.
 	home := filepath.Join(r.root, strings.Repeat("x", 120))
 	if err := os.MkdirAll(home, 0o755); err != nil {

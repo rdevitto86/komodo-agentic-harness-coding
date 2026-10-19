@@ -66,8 +66,8 @@ func TestAgentRegistryHoldsFourRoles(t *testing.T) {
 	}
 }
 
-// Storage: a half-written lease record is never read, the locks of a killed process free instead of blocking, and go.mod lists no
-// modules.
+// Storage: a half-written lease record is never read, the locks of a killed process free instead of blocking, and go.mod
+// lists no modules.
 func TestStorageHalfRecordNeverReadAndStaleLockExpires(t *testing.T) {
 	home := t.TempDir()
 	ls, err := lease.New(home, 1, nil, nil)
