@@ -46,6 +46,7 @@ type stack struct {
 	kits    map[string]*repoKit
 	byID    map[string]*repoKit
 	refs    map[string]*groupRef
+	tools   *task.ToolRoutes
 	stderr  io.Writer
 	closers []func()
 }
@@ -70,7 +71,7 @@ func newStack(home string, stderr io.Writer) (*stack, error) {
 		return nil, fmt.Errorf("open settings: %w", err)
 	}
 
-	s := &stack{home: home, cfg: cfg, catalog: cat, stderr: stderr}
+	s := &stack{home: home, cfg: cfg, catalog: cat, stderr: stderr, tools: task.NewToolRoutes()}
 	s.bus = bus.New(bus.Options{EventsDir: filepath.Join(home, "events")})
 
 	s.reader = bus.NewReader(filepath.Join(home, "events"))

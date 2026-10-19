@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
 // mcpClient talks to ServeMCP over pipes.
@@ -131,27 +133,91 @@ func TestToolServerRunsCallsInParallel(t *testing.T) {
 	}
 }
 
-func TestToolServerInputsRoundTripThroughMCPConfig(t *testing.T) {
-	want := ToolServerConfig{
-		Agent: "builder", Session: "s-1", Worktree: "/wt", Dir: "/sess", Files: []string{"a/**", "b.go"},
-		Permissions:  builderPerms(),
-		Commands:     map[string][]string{"test": {"go", "test", "./..."}},
-		Format:       []string{"gofmt", "-w"},
-		RefusalLimit: 3,
-		Servers: []OutsideServer{
-			{
-				Name:    "docs",
-				Command: "docs-server",
-				Args:    []string{"--stdio"},
-				Env:     []string{"TOKEN"},
-				Hosts:   []string{"example.com"},
-			},
-		},
+// startMCP serves the bound tools on pipes.
+func startMCP(t *testing.T, b *Bound) *mcpClient {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	c := &mcpClient{t: t, in: inW, out: bufio.NewReader(outR), done: make(chan error, 1)}
+	go func() {
+		err := ServeMCP(context.Background(), inR, outW, boundBackend{b})
+		_ = outW.Close()
+		c.done <- err
+	}()
+	t.Cleanup(func() { _ = inW.Close() })
+	return c
+}
+
+// boundBackend answers ServeMCP straight from bound tools, with no engine between.
+type boundBackend struct{ b *Bound }
+
+// List describes the advertised tools.
+func (c boundBackend) List(context.Context) ([]llm.ToolDef, error) {
+	var defs []llm.ToolDef
+
+	for _, n := range c.b.Advertised() {
+		if d, ok := c.b.Definition(n); ok {
+			defs = append(defs, d)
+		}
 	}
+
+	return defs, nil
+}
+
+// Call runs the call on the bound tools.
+func (c boundBackend) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	return c.b.Dispatch(ctx, name, args).Text, nil
+}
+
+func TestToolServerReportsABackendFailureAsAToolError(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	c := &mcpClient{t: t, in: inW, out: bufio.NewReader(outR), done: make(chan error, 1)}
+
+	go func() {
+		c.done <- ServeMCP(context.Background(), inR, outW, failingBackend{})
+		_ = outW.Close()
+	}()
+
+	t.Cleanup(func() { _ = inW.Close() })
+
+	c.send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"class":"build"}}}`)
+
+	res := c.recv()["result"].(map[string]any)
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+
+	if res["isError"] != true || text != "error: the engine is gone" {
+		t.Fatalf("call = %v", res)
+	}
+
+	c.send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+
+	if e := c.recv()["error"].(map[string]any); e["code"].(float64) != -32603 {
+		t.Fatalf("list = %v", e)
+	}
+}
+
+// failingBackend fails every request.
+type failingBackend struct{}
+
+// List fails.
+func (failingBackend) List(context.Context) ([]llm.ToolDef, error) {
+	return nil, errors.New("the engine is gone")
+}
+
+// Call fails.
+func (failingBackend) Call(context.Context, string, json.RawMessage) (string, error) {
+	return "", errors.New("the engine is gone")
+}
+
+func TestMCPConfigCarriesOnlyTheSessionAndTheSocket(t *testing.T) {
+	want := ToolServerConfig{Agent: "builder", Session: "s-1", Socket: "/h/state/engine.sock"}
+
 	raw, err := MCPConfig("/bin/komodo", want)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var doc struct {
 		MCPServers map[string]struct {
 			Command string
@@ -162,61 +228,43 @@ func TestToolServerInputsRoundTripThroughMCPConfig(t *testing.T) {
 	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.MCPServers) != 1 {
 		t.Fatalf("mcp.json = %s (%v)", raw, err)
 	}
+
 	e := doc.MCPServers["komodo"]
-	if e.Command != "/bin/komodo" || strings.Join(e.Args[:2], " ") != "internal tools" {
+	if e.Command != "/bin/komodo" || strings.Join(e.Args[:2], " ") != "internal tools" || len(e.Env) != 1 {
 		t.Fatalf("entry = %+v", e)
 	}
+
 	got, err := LoadToolServer(e.Args[2:], func(n string) string { return e.Env[n] })
-	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Fatalf("round trip:\n got %+v\nwant %+v\nerr %v", got, want, err)
+	if err != nil || got != want {
+		t.Fatalf("round trip: got %+v, want %+v, err %v", got, want, err)
 	}
 	if _, err := LoadToolServer(nil, func(string) string { return "" }); err == nil {
 		t.Error("a start with no agent and session must fail")
 	}
 }
 
-func TestToolServerConfigBindsTheGuard(t *testing.T) {
-	f := newFixture(t)
-	cfg := ToolServerConfig{Agent: "builder", Session: "s", Worktree: f.Root, Dir: t.TempDir(), Files: []string{
-		"internal/lease/**",
-	},
-		Permissions: builderPerms(), Commands: map[string][]string{}, RefusalLimit: 3}
-	b, err := cfg.Bind(f.Home, Env{})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestToolRoutesRunACallOnTheSessionsBoundTools(t *testing.T) {
+	r := newRig(t, nil)
+	routes := NewToolRoutes()
+	remove := routes.Add("s-1", &toolWatch{inner: r.b, now: time.Now})
 	ctx := context.Background()
-	if got := b.Dispatch(
-		ctx,
-		"write",
-		json.RawMessage(`{"path":"cmd/x.go","content":"x"}`),
-	); !strings.Contains(got.Text, "B1") {
-		t.Fatalf("write outside the files = %q", got.Text)
-	}
-	if got := b.Dispatch(
-		ctx,
-		"write",
-		json.RawMessage(`{"path":"internal/lease/x.go","content":"x"}`),
-	); !strings.HasPrefix(got.Text, "created") {
-		t.Fatalf("write inside the files = %q", got.Text)
-	}
-	cfg.Permissions.Tools = append(cfg.Permissions.Tools, "teleport")
-	if _, err := cfg.Bind(f.Home, Env{}); err == nil {
-		t.Error("a permitted tool that is not registered must fail the bind")
-	}
-}
 
-// startMCP serves the bound tools on pipes.
-func startMCP(t *testing.T, b *Bound) *mcpClient {
-	t.Helper()
-	inR, inW := io.Pipe()
-	outR, outW := io.Pipe()
-	c := &mcpClient{t: t, in: inW, out: bufio.NewReader(outR), done: make(chan error, 1)}
-	go func() {
-		err := ServeMCP(context.Background(), inR, outW, b)
-		_ = outW.Close()
-		c.done <- err
-	}()
-	t.Cleanup(func() { _ = inW.Close() })
-	return c
+	defs, ok := routes.Definitions("s-1")
+	if !ok || len(defs) != len(allTools) || defs[0].Name != "read" {
+		t.Fatalf("definitions = %v, %v", defs, ok)
+	}
+
+	text, ok := routes.Call(ctx, "s-1", "write", json.RawMessage(`{"path":"made/x.go","content":"a\n"}`))
+	if !ok || text != "created made/x.go, 1 lines" {
+		t.Fatalf("call = %q, %v", text, ok)
+	}
+	if _, ok := routes.Call(ctx, "other", "read", nil); ok {
+		t.Error("a session with no route must not be found")
+	}
+
+	remove()
+
+	if _, ok := routes.Definitions("s-1"); ok {
+		t.Error("a removed route must not be found")
+	}
 }

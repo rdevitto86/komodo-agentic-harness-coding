@@ -200,18 +200,30 @@ func TestOutsideServerWarnsOfDroppedEnv(t *testing.T) {
 	}
 }
 
-// Fix 8: the tool server starts the outside servers its permissions name and binds their tools.
-func TestToolServerBindStartsOutsideServers(t *testing.T) {
+// Fix 8: a session starts the outside servers its permissions name and binds their tools.
+func TestBindStartsOutsideServers(t *testing.T) {
 	f := newFixture(t)
 	conf := &fakeConfiner{dir: t.TempDir(), env: []string{"KOMODO_FAKE_MCP=1"}}
-	cfg := ToolServerConfig{Agent: "reviewer", Session: "s", Worktree: f.Root, Dir: t.TempDir(), RefusalLimit: 3,
-		Permissions: Permissions{Tools: []string{"read", "fake.echo"}, Servers: []string{"fake"}},
-		Servers:     []OutsideServer{fakeServer()}}
-	b, err := cfg.Bind(f.Home, Env{Confiner: conf, Instance: "i1"})
+	perm := Permissions{Tools: []string{"read", "fake.echo"}, Servers: []string{"fake"}}
+	ctx := context.Background()
+
+	conns, err := StartAllowed(ctx, conf, "i1", perm, []OutsideServer{fakeServer()}, os.Getenv)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	reg := NewRegistry(&Env{Worktree: f.Root, Confiner: conf, Instance: "i1"})
+	for _, c := range conns {
+		defer func() { _ = c.Close() }()
+		if err := reg.AddOutsideConn(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	b, err := reg.Bind(perm.Tools, newTestGuard(t, f, "reviewer", perm, nil, 3))
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
-	defer func() { _ = b.Close() }()
 	if got := b.Dispatch(context.Background(), "fake.echo", json.RawMessage(`{"q":"x"}`)); got.Text != "echo:x" {
 		t.Fatalf("outside call = %q", got.Text)
 	}
