@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -105,8 +106,9 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	return nil
 }
 
-// Override gives a group whose retries ran out more retries, for `run (id) --override`; it is the person's answer only.
-func (m *Manager) Override(target, request string) error {
+// Override gives a group whose retries ran out more retries, for `run (id) --override`; it returns once the group
+// has applied or refused it.
+func (m *Manager) Override(ctx context.Context, target, request string) error {
 	gs := m.byTarget(target)
 	if len(gs) == 0 {
 		return &codeError{CodeUnknownTarget, "no live group named " + target}
@@ -121,8 +123,13 @@ func (m *Manager) Override(target, request string) error {
 	case st.Stage == StageDone && st.Outcome == "failed":
 		return &codeError{CodeGroupFailed, g.spec.Label + " failed for good: plan it again to run it fresh"}
 	case st.Stage == StageBlocked && st.Block.Reason == state.ReasonRetries:
-		g.enqueue(Input{Kind: InOverride, Request: request})
-		return nil
+		if st.Block.Until.IsZero() || !g.now().Before(st.Block.Until) {
+			return &codeError{CodeRunRefused, g.spec.Label + " was not continued: the override window has passed"}
+		}
+
+		request = cmp.Or(request, fmt.Sprintf("override-%s-%d", g.spec.ID, g.now().UnixNano()))
+
+		return m.awaitContinues(ctx, []pendingContinue{m.queueInput(g, Input{Kind: InOverride, Request: request})})
 	}
 
 	return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an override"}
@@ -244,7 +251,7 @@ func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool 
 // continueTarget handles a run-continue event: an answer, or a plain continue of every held group the target names.
 func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run string) error {
 	if rc.Answer == "override" {
-		return m.Override(rc.Target, string(rc.Request))
+		return m.Override(ctx, rc.Target, string(rc.Request))
 	}
 	if rc.Answer != "" {
 		return m.Answer(rc.Target, rc.Answer == "approve", string(rc.Request))

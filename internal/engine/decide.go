@@ -393,6 +393,7 @@ func Next(s0 State, in Input, l Limits) Result {
 	if !a && !b {
 		r := Result{State: s0, Refused: true}
 		if c.refuse != nil {
+			r.Why = c.refuse.Why
 			r.Emit = []Event{c.event(bus.TypeRunStatus, c.refuse)}
 		}
 		return r

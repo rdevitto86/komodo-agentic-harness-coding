@@ -885,6 +885,10 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 		case state.ReasonBilling:
 			return branch{err: block("paid_refused", map[string]string{"setting": "providers.paid"})}
 		default:
+			// A crash or any other fault of Komodo's own runs the judge again and costs no retry.
+			if !out.reason.Charged() {
+				continue
+			}
 			if err := m.spend(ctx, string(out.reason)); err != nil {
 				return branch{err: err}
 			}

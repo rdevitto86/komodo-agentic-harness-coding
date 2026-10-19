@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -553,13 +554,18 @@ func (g *group) armRenew() {
 	})
 }
 
-// handle takes one input: decide, save, publish, then perform the orders.
+// handle takes one input: decide, save, publish, then perform the orders; a waiting continue is told the outcome.
 func (g *group) handle(in Input) {
-	var saveErr error
-	if in.Kind == InContinue && in.Request != "" {
-		defer func() { g.m.continued(in.Request, saveErr) }()
+	var told error
+	if (in.Kind == InContinue || in.Kind == InOverride) && in.Request != "" {
+		defer func() { g.m.continued(in.Request, told) }()
 	}
-	if g.stopping.Load() || g.st.Stage == StageDone {
+	if g.stopping.Load() {
+		told = errors.New("the group is stopping")
+		return
+	}
+	if g.st.Stage == StageDone {
+		told = endedError(g.spec.Label, g.st)
 		return
 	}
 
@@ -580,6 +586,7 @@ func (g *group) handle(in Input) {
 	case res.Dup || res.Stale:
 		return
 	case res.Refused:
+		told = errors.New(cmp.Or(res.Why, "the group did not take it"))
 		g.publish(res.Emit)
 		return
 	}
@@ -587,7 +594,7 @@ func (g *group) handle(in Input) {
 		g.m.report(g, errors.New(d))
 	}
 	if err := g.save(res.State); err != nil {
-		saveErr = err
+		told = err
 		g.saveFailed(err)
 		return
 	}

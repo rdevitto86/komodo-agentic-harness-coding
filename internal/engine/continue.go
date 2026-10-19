@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -23,8 +24,13 @@ func (m *Manager) expectContinue(request string) <-chan error {
 
 // queueContinue registers interest in a continue's outcome, then puts the input on the group's channel.
 func (m *Manager) queueContinue(g *group, request string) pendingContinue {
-	p := pendingContinue{g: g, ch: m.expectContinue(request), req: request}
-	g.enqueue(Input{Kind: InContinue, Request: request})
+	return m.queueInput(g, Input{Kind: InContinue, Request: request})
+}
+
+// queueInput registers interest in the outcome of an input that carries a request, then queues it.
+func (m *Manager) queueInput(g *group, in Input) pendingContinue {
+	p := pendingContinue{g: g, ch: m.expectContinue(in.Request), req: in.Request}
+	g.enqueue(in)
 	return p
 }
 
@@ -47,18 +53,49 @@ func (m *Manager) awaitContinues(ctx context.Context, ps []pendingContinue) erro
 	for _, p := range ps {
 		defer m.forgetContinue(p.req)
 
+		var err error
+
 		select {
-		case err := <-p.ch:
-			if err != nil && first == nil {
-				first = &codeError{CodeRunRefused, fmt.Sprintf("%s was not continued: %v", p.g.spec.Label, err)}
-			}
+		case err = <-p.ch:
 		case <-p.g.done:
+			select {
+			case err = <-p.ch:
+			default:
+				// The group ended before it took the command: a person is never told it worked.
+				p.g.mu.Lock()
+				st := p.g.snap
+				p.g.mu.Unlock()
+				err = endedError(p.g.spec.Label, st)
+			}
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+
+		if err != nil && first == nil {
+			first = refusalOf(p.g.spec.Label, err)
 		}
 	}
 
 	return first
+}
+
+// refusalOf keeps a coded error and turns any other outcome into a refused command.
+func refusalOf(label string, err error) error {
+	var ce *codeError
+	if errors.As(err, &ce) {
+		return ce
+	}
+
+	return &codeError{CodeRunRefused, fmt.Sprintf("%s was not continued: %v", label, err)}
+}
+
+// endedError is the refusal for a command that reached a group that already ended: failed groups name the failure.
+func endedError(label string, st State) error {
+	if st.Stage == StageDone && st.Outcome == "failed" {
+		return &codeError{CodeGroupFailed, label + " failed for good: plan it again to run it fresh"}
+	}
+
+	return errors.New("the group ended before it took the command")
 }
 
 // forgetContinue drops the waiter of a continue input that was settled or whose group ended.

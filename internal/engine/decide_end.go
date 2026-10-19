@@ -72,13 +72,13 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 		return false
 	}
 
-	switch e.Reason {
-	case "timeout", "idle", "check_fail", "no_result", "schema_fail", "refusals":
+	switch {
+	case state.Reason(e.Reason).Charged():
 		c.charge(e.Reason)
-	case "crash":
+	case e.Reason == "crash":
 		s.Counters.Crashes++
 		c.waive(e.Reason)
-	case "provider", "cancelled":
+	case e.Reason == "provider", e.Reason == "cancelled":
 		c.waive(e.Reason)
 	}
 	if s.Pause.After {
