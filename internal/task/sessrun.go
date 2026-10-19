@@ -318,6 +318,7 @@ func (m *Manager) oneSession(
 	_ = stream.Close()
 
 	out = sessOut{id: sc.id, reason: reason, handle: sc.handle}
+	out.result.Usage = res.Usage
 	if res.Handle.Value != "" {
 		out.handle = res.Handle
 	}
@@ -812,6 +813,7 @@ func (m *Manager) judgeResult(
 			_ = retry.Close()
 			if reason != state.ReasonDone {
 				out.reason = reason
+				out.result.Usage = addUsage(res.Usage, res2.Usage)
 				return out, nil
 			}
 			_ = serr

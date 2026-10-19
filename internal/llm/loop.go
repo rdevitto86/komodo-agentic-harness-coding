@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,7 +143,7 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 			return nil, err
 		}
 
-		l.account(res)
+		turn := l.account(res)
 		if len(res.Content) == 0 {
 			return nil, &EndError{Reason: state.ReasonNoResult, Detail: "the model returned no content"}
 		}
@@ -150,7 +151,12 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 			return nil, err
 		}
 
-		st.emit(KindOutput, map[string]any{"type": "assistant", "message": res.Content})
+		raw, _ := json.Marshal(map[string]any{"type": "assistant", "message": res.Content})
+		st.push(loopItem{ev: StreamEvent{
+			Kind: KindOutput,
+			Raw:  raw,
+			Msg:  &MsgUsage{ID: "turn-" + strconv.Itoa(l.turns), Usage: turn},
+		}})
 
 		for i := range res.Headroom {
 			h := res.Headroom[i]
@@ -253,13 +259,14 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 // signalReady reports the first outcome of the session once.
 func (l *loopState) signalReady(err error) { l.readyOnce.Do(func() { l.ready <- err }) }
 
-// account adds a turn's usage and remembers the size the provider reported.
-func (l *loopState) account(res turnResult) {
+// account adds a turn's usage, remembers the size the provider reported and returns the turn's own usage with its cost.
+func (l *loopState) account(res turnResult) Usage {
 	l.turns++
 
 	u := res.Usage
 	if l.cfg.Price != nil {
-		l.usage.USD += l.cfg.Price(u, res.CacheWrite1h)
+		u.USD = l.cfg.Price(u, res.CacheWrite1h)
+		l.usage.USD += u.USD
 	}
 
 	l.usage.TokensIn += u.TokensIn
@@ -268,6 +275,8 @@ func (l *loopState) account(res turnResult) {
 	l.usage.CacheWrite += u.CacheWrite
 	l.lastIn = u.TokensIn + u.CacheRead + u.CacheWrite
 	l.sentLen = len(l.msgs)
+
+	return u
 }
 
 // add appends one message to the history and to messages.jsonl.
