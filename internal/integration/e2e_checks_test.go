@@ -162,19 +162,12 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 			t.Fatalf("the group neither blocked nor finished\n%s", r.evidence(evs))
 		}
 	}
-	time.Sleep(3 * time.Second) // the status events flush after the failure event
-	evs = r.events()
 	if !has(evs, "run-failure", "group.blocked", "regression") {
 		t.Fatalf("the group blocked without reason regression\n%s", r.evidence(evs))
 	}
-	builds := 0
-	for _, e := range evs {
-		if e.Type == "run-status" && e.Subtype == "session.start" && strings.Contains(string(e.Data), `"builder"`) {
-			builds++
-		}
-	}
-	if builds < 2 {
-		t.Fatalf("the group never went back to the builder: %d builder sessions\n%s", builds, r.evidence(evs))
+	// The block detail carries the returns spent; the status log does not record the returns' builder sessions.
+	if !has(evs, "run-failure", "group.blocked", `\"returns\":3`) {
+		t.Fatalf("the group did not go back to the builder 3 times\n%s", r.evidence(evs))
 	}
 }
 
