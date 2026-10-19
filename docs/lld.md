@@ -4068,7 +4068,9 @@ type PlanWrite struct {
 }
 ```
 
-Each `error` event carries the run id of the `plan` event it answers. A planner session that fails for any other reason, such as an unreachable model, ends the plan with `error` / `plan-input` and its reason.
+Each `error` event carries the run id of the `plan` event it answers. A planner session that fails for any other reason, such as an unreachable model, ends the plan with `error` / `plan-input` and its reason. The CLI reads each of these five payloads and fails `plan` with the event's code and reason.
+
+The planner session folder holds the same files as a task session: `brief.md` (the Context Manager's planner brief), `system.md` and, on a subscription link, `mcp.json`. On such a link the session's tools are routed to the engine for as long as the session lives, so `read`, `search` and `lint_backlog` work as they do for a builder.
 
 #### Card hash
 

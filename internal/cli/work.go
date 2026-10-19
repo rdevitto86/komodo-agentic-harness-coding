@@ -13,6 +13,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/format"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
 
 // RunData is the data of reply.run, reply.schedule and reply.answer.
@@ -410,7 +411,11 @@ func handlePlan(c *Call) Result {
 		if rs, ok := f.Event.Data.(*bus.RunStart); ok && rs.Source == "intake" {
 			d = PlanData{RunID: string(f.Event.Run), Target: rs.Target, Groups: rs.Groups}
 		}
-		if fl, ok := faultOfEvent(*f.Event); ok {
+		fl, ok := faultOfEvent(*f.Event)
+		if !ok {
+			fl, ok = planFault(*f.Event)
+		}
+		if ok {
 			if r, failed := c.cli.faultResult(fl); failed {
 				return r
 			}
@@ -422,4 +427,36 @@ func handlePlan(c *Call) Result {
 		Facts: format.PlanFacts{Goal: pr.Goal},
 		Data:  d,
 	}
+}
+
+// planFault turns an error event the Intake Handler published into a fault carrying its own reason; ok is false for any
+// other event.
+func planFault(e bus.Event) (fault.Fault, bool) {
+	f := fault.Fault{
+		Source:   fault.Source{Component: "intake", Run: e.Run, Group: e.Group},
+		Severity: fault.SeverityError,
+	}
+
+	switch d := e.Data.(type) {
+	case *intake.PlanInput:
+		f.Code, f.Kind, f.Reason = string(format.PlanInput), fault.KindUsage, d.Reason
+	case *intake.PlanWrite:
+		f.Code, f.Kind, f.Reason = string(format.PlanWrite), fault.KindInternal, d.Reason
+	case *intake.PlanTimeout:
+		f.Code, f.Kind = string(format.PlanTimeout), fault.KindRefused
+		f.Reason = fmt.Sprintf("The planner's wall clock of %d minutes ran out", d.WallMin)
+	case *intake.PlanLocked:
+		f.Code, f.Kind = string(format.Locked), fault.KindRefused
+		f.Reason = "The plan tried to rewrite a group that run " + d.Run + " holds"
+	case *intake.PlanBlocked:
+		f.Code, f.Kind = string(format.PlanBlocked), fault.KindBlocked
+		f.Reason = fmt.Sprintf("The third planner draft failed lint with %d findings", len(d.Findings))
+		if d.DraftPath != "" {
+			f.Reason += "; the last draft is saved in " + d.DraftPath
+		}
+	default:
+		return fault.Fault{}, false
+	}
+
+	return f, true
 }
