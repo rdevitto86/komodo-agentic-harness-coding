@@ -183,6 +183,7 @@ func (m *Manager) closeAllCaches() {
 func (m *Manager) forget(request string) {
 	m.mu.Lock()
 	delete(m.expect, request)
+	delete(m.persons, request)
 	m.mu.Unlock()
 }
 

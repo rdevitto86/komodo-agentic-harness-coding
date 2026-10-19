@@ -184,7 +184,7 @@ func (h *errorHandler) lift() {
 	}
 }
 
-// person ends every pause and the severe state, as a person running komodo run does.
+// person ends every pause and the severe state, as a person running komodo run from a terminal does.
 func (h *errorHandler) person() {
 	h.mu.Lock()
 	if !h.paused && h.severe == "" {
@@ -266,10 +266,11 @@ func (h *errorHandler) alert() string {
 
 	switch {
 	case h.severe != "":
-		return "SEVERE: the engine failed (" + h.severe + "). No new sessions start until a person runs komodo run."
+		return "SEVERE: the engine failed (" + h.severe + "). " +
+			"No new sessions start until a person runs komodo run from a terminal."
 	case h.stuck:
 		return "No new sessions start: " + string(h.reason) + " errors keep hitting several groups. " +
-			"A person must run komodo run."
+			"A person must run komodo run from a terminal."
 	case h.paused:
 		return "New sessions are paused until " + h.until.UTC().Format("15:04:05") + " UTC: " + string(h.reason) +
 			" errors hit several groups."

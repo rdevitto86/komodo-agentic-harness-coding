@@ -41,6 +41,7 @@ func TestAStateStoreFailureIsSevereStopsStartsAndOnlyAPersonResumes(t *testing.T
 	}
 
 	r.store.failSave.Store(false)
+	r.m.Person("req-run-2")
 	_ = r.startRun("run-2", "tg-2")
 
 	if got := r.m.errs.alert(); got != "" {
