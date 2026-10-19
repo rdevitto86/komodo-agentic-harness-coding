@@ -151,12 +151,12 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 		}
 		if has(evs, "run-status", "group.done", "") {
 			if strings.Contains(r.git(r.origin, "show", "komodo/ep-1:calc/calc.go"), "a - b") {
-				t.Skip("blocked: production bug, the broken Add landed on komodo/ep-1 and the group ended complete; " +
-					"check.done reported baseline pass and regression false (internal/agent/checks.go:79-83)")
+				t.Fatalf("production bug: the broken Add landed on komodo/ep-1 and the group ended complete; "+
+					"check.done reported baseline pass and regression false (internal/agent/checks.go:79-83)\n%s",
+					r.evidence(evs))
 			}
-			t.Skip("blocked: fixture B's Add change never reaches komodo/ep-1 (calc.go still adds), check.done " +
-				"reports regression false and the group completes, so the rework loop is never entered; " +
-				"root cause [NOT CHECKED]")
+			t.Fatalf("the group ended complete without entering the rework loop, and the broken Add never reached "+
+				"komodo/ep-1 (calc.go still adds): fixture B's change did not land\n%s", r.evidence(evs))
 		}
 		if time.Now().After(end) {
 			t.Fatalf("the group neither blocked nor finished\n%s", r.evidence(evs))
@@ -410,28 +410,51 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 // code matches the fault's kind.
 func TestFinalErrorEventAndExitCode(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
-	// Seed: replay of a run id the store does not hold makes the engine fail; the Error Handler turns it into a fault.
-	res := r.komodo(60*time.Second, "replay", "0192e4c5-0000-7000-8000-000000000999")
-	env := envelope(t, res)
-	e, _ := env["error"].(map[string]any)
-	if res.code == 0 || e == nil {
-		t.Fatalf("the seeded error did not fail the command: %d\n%s", res.code, res.stdout)
+	// Seed: an engine whose home makes the control socket path longer than the operating system allows cannot bind, which ends
+	// the engine on an internal fault.
+	home := filepath.Join(r.root, strings.Repeat("x", 120))
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	want := map[string]int{"usage": 2, "internal": 4}
-	if c, ok := want[e["code"].(string)]; ok && c != res.code {
-		t.Errorf("fault %v exited %d, want %d", e["code"], res.code, c)
-	}
-	evs := r.events()
-	var last *event
-	for i := range evs {
-		if evs[i].Type == "error" {
-			last = &evs[i]
+	cmd := exec.Command(r.bin, "internal", "engine")
+	cmd.Dir = r.repo
+	for _, kv := range r.env {
+		if !strings.HasPrefix(kv, "KOMODO_HOME=") {
+			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	if last == nil || !strings.Contains(string(last.Data), `"final":true`) {
-		t.Skip("blocked: the seed (replay of an unknown run id) is a refused request, not an error that ends a process; " +
-			"the CLI process publishes no event and the engine publishes the final event only when it exits on an error " +
-			"(covered by cmd/komodo TestEngineThatCannotServePublishesTheFinalErrorEvent); seen " + res.stdout)
+	cmd.Env = append(cmd.Env, "KOMODO_HOME="+home)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	code := 0
+	if err := cmd.Run(); err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatal(err)
+		}
+		code = ee.ExitCode()
+	}
+	body, err := os.ReadFile(filepath.Join(home, "events", "engine.jsonl"))
+	if err != nil {
+		t.Fatalf("the engine wrote no event log: %v\n%s", err, out.String())
+	}
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	var last struct {
+		Type string `json:"type"`
+		Data struct {
+			Kind  string `json:"kind"`
+			Final bool   `json:"final"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatalf("the last event line is not JSON: %v\n%s", err, body)
+	}
+	if last.Type != "error" || !last.Data.Final {
+		t.Fatalf("the process's last event is not a final error event: %s", lines[len(lines)-1])
+	}
+	want := map[string]int{"refused": 1, "usage": 2, "blocked": 3, "internal": 4}[last.Data.Kind]
+	if want == 0 || code != want {
+		t.Fatalf("a %q fault exited %d, want %d\n%s", last.Data.Kind, code, want, out.String())
 	}
 }
 
