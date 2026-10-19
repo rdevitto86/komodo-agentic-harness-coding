@@ -919,6 +919,11 @@ func (m *Manager) runCommit(ctx context.Context) error {
 		},
 		Facts: commit.PRFacts{TasksClosed: m.Progress().TasksDone},
 	}
+	m.fact("group.approved", bus.GroupApproved{Tree: tree})
+	if err := m.report(ctx); err != nil {
+		return err
+	}
+
 	if _, err := m.c.Commit.Publish(ctx, a); err != nil {
 		return block("publish", map[string]string{"error": err.Error()})
 	}

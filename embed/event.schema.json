@@ -211,6 +211,18 @@
       ],
       "type": "object"
     },
+    "GroupApproved": {
+      "additionalProperties": false,
+      "properties": {
+        "tree": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tree"
+      ],
+      "type": "object"
+    },
     "GroupBlocked": {
       "additionalProperties": false,
       "properties": {
@@ -1249,6 +1261,19 @@
         },
         "subtype": {
           "const": "finding.verified"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/GroupApproved"
+        },
+        "subtype": {
+          "const": "group.approved"
         },
         "type": {
           "const": "run-status"
