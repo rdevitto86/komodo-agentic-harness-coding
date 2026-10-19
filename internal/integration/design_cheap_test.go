@@ -3,10 +3,13 @@
 package integration
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 )
 
@@ -62,7 +66,7 @@ func TestAgentRegistryHoldsFourRoles(t *testing.T) {
 	}
 }
 
-// Storage: a half-written lease record is never read, a leftover lock file expires instead of blocking, and go.mod lists no
+// Storage: a half-written lease record is never read, the locks of a killed process free instead of blocking, and go.mod lists no
 // modules.
 func TestStorageHalfRecordNeverReadAndStaleLockExpires(t *testing.T) {
 	home := t.TempDir()
@@ -77,12 +81,11 @@ func TestStorageHalfRecordNeverReadAndStaleLockExpires(t *testing.T) {
 	if _, err := ls.Grant(ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	var record, lock string
+	var record string
 	_ = filepath.WalkDir(filepath.Join(home, "leases"), func(p string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil || !d.Type().IsRegular():
 		case strings.HasSuffix(p, ".lock"):
-			lock = p
 		case filepath.Base(p) != ".fences.json" && strings.Contains(p, group):
 			record = p
 		}
@@ -112,29 +115,52 @@ func TestStorageHalfRecordNeverReadAndStaleLockExpires(t *testing.T) {
 	if l, ok, err := ls.Holder(ctx, repo, group); err != nil || !ok || l.Run != run {
 		t.Fatalf("the intact record was not read beside a partial file: %+v %v %v", l, ok, err)
 	}
-	if lock == "" {
-		lock = record + ".lock"
-	}
-	if err := os.WriteFile(lock, []byte("stale"), 0o644); err != nil {
+	// A process that holds the repository's grant lock and the second group's lock is killed mid-hold, as a crash would.
+	second := "0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f31"
+	dir := filepath.Dir(record)
+	held := []string{filepath.Join(dir, ".repo.lock"), filepath.Join(dir, second+lease.LockSuffix)}
+	child := exec.Command(os.Args[0], "-test.run=^TestLockHolderProcess$")
+	child.Env = append(os.Environ(), lockHoldEnv+"="+strings.Join(held, string(os.PathListSeparator)))
+	out, err := child.StdoutPipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-time.Hour)
-	_ = os.Chtimes(lock, old, old)
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
+	sc := bufio.NewScanner(out)
+	for locked := false; !locked; {
+		if !sc.Scan() {
+			t.Fatalf("the child never reported holding the locks: %v", sc.Err())
+		}
+		locked = sc.Text() == "locked"
+	}
+	next := lease.GrantRequest{
+		Repo: repo, Group: second, Run: run, Branch: "komodo/ep-1-tg-1.3", Worktree: "/wt/tg-1.3", ClonePath: "/src/shop",
+	}
+	if !core.LockHeld(held[0]) || !core.LockHeld(held[1]) {
+		t.Fatal("the child does not hold the lock files")
+	}
+	if _, err := ls.Grant(ctx, next); !errors.Is(err, lease.ErrLocked) {
+		t.Fatalf("a grant while another process held the locks returned %v, want ErrLocked", err)
+	}
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = child.Wait()
 	done := make(chan error, 1)
 	go func() {
-		_, err := ls.Grant(ctx, lease.GrantRequest{
-			Repo: repo, Group: "0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f31", Run: run, Branch: "komodo/ep-1-tg-1.3",
-			Worktree: "/wt/tg-1.3", ClonePath: "/src/shop",
-		})
+		_, err := ls.Grant(ctx, next)
 		done <- err
 	}()
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("a stale lock file blocked a grant: %v", err)
+			t.Fatalf("the locks of a killed process blocked a grant: %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("a stale lock file blocked a grant for 10 seconds")
+		t.Fatal("the locks of a killed process blocked a grant for 10 seconds")
 	}
 	mod, err := os.ReadFile(filepath.Join(mustWd(), "..", "..", "go.mod"))
 	if err != nil {
@@ -143,6 +169,25 @@ func TestStorageHalfRecordNeverReadAndStaleLockExpires(t *testing.T) {
 	if strings.Contains(string(mod), "require") {
 		t.Fatalf("go.mod lists modules:\n%s", mod)
 	}
+}
+
+// lockHoldEnv names the lock files, joined by the path list separator, that TestLockHolderProcess holds.
+const lockHoldEnv = "KOMODO_TEST_HOLD_LOCKS"
+
+// TestLockHolderProcess is the child of the storage check: it takes the locks named in the environment, reports it holds
+// them and waits to be killed. Without the environment variable it does nothing.
+func TestLockHolderProcess(t *testing.T) {
+	paths := os.Getenv(lockHoldEnv)
+	if paths == "" {
+		return
+	}
+	for _, p := range strings.Split(paths, string(os.PathListSeparator)) {
+		if _, err := core.FileLock(context.Background(), p, 5*time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fmt.Println("locked")
+	time.Sleep(time.Minute)
 }
 
 // Machine-wide records: only the State Manager (internal/state) writes providers.json, update.json, install.json and
