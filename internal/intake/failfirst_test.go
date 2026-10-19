@@ -56,7 +56,8 @@ func TestDoneWhenThatPassesOnTheBaseSendsTheDraftBack(t *testing.T) {
 	if len(r.sess.texts) != 2 {
 		t.Fatalf("sends: %d", len(r.sess.texts))
 	}
-	for _, want := range []string{"fail_first", "epic-1/tg-1.1/tsk-one.md", "go vet ./...", "fails until the change is made"} {
+	wants := []string{"fail_first", "epic-1/tg-1.1/tsk-one.md", "go vet ./...", "fails until the change is made"}
+	for _, want := range wants {
 		if !strings.Contains(r.sess.texts[1], want) {
 			t.Fatalf("finding text lacks %q: %q", want, r.sess.texts[1])
 		}

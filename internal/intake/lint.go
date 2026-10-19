@@ -32,7 +32,7 @@ const (
 	RuleCaseCollision Rule = "case_collision"
 )
 
-// RuleFailFirst names the finding of a done_when command that already passes on the base commit; Plan raises it, Lint never.
+// RuleFailFirst names the finding of a done_when command that already passes on the base commit. Plan raises it, never Lint.
 const RuleFailFirst Rule = "fail_first"
 
 // Finding is one failed or warned check, naming the rule and the file.

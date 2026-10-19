@@ -43,13 +43,13 @@ func (h *hostBackend) Command(
 
 func (h *hostBackend) Release(context.Context, sandbox.Instance) error { h.release++; return nil }
 
-// The fail-first runner runs a command on the base commit's files in a networkless builder sandbox and reports its exit code.
+// The fail-first runner runs a command on the base commit's files in a networkless builder sandbox and returns its exit.
 func TestBaseRunnerRunsCommandsOnTheBaseCommit(t *testing.T) {
 	repo := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
-		if out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...).
-			CombinedOutput(); err != nil {
+		pre := []string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"}
+		if out, err := exec.Command("git", append(pre, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}
