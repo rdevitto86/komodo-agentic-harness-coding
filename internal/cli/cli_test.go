@@ -187,8 +187,8 @@ func TestHelpMatchesTable(t *testing.T) {
 	for _, d := range docs {
 		names[strings.Fields(d.Name)[0]] = true
 	}
-	if len(names) != 12 {
-		t.Errorf("help names %d commands, want 12: %v", len(names), names)
+	if len(names) != 13 {
+		t.Errorf("help names %d commands, want 13: %v", len(names), names)
 	}
 }
 

@@ -16,3 +16,7 @@ func handleEngine(c *Call) Result {
 
 	return Result{Outcome: OutcomeOK, Raw: "engine stopped\n"}
 }
+
+// handleLogin is the terminal-only login command; what a provider's login does is still open, so it returns the
+// not-built-yet reply.
+func handleLogin(*Call) Result { return notBuilt("login") }

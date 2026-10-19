@@ -24,6 +24,7 @@ func main() { os.Exit(run(os.Args, os.Stdout, os.Stderr)) }
 func run(args []string, stdout, stderr io.Writer) int {
 	registerAllEvents.Do(registerEvents)
 	cli.EngineMain = func(c *cli.Call) error { return engineVerb(c, stderr) }
+	cli.ToolsMain = toolsVerb
 	deps, err := buildDeps(stdout, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "komodo:", err)

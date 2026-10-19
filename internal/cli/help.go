@@ -30,10 +30,11 @@ type helpDoc struct {
 var resultTypes = map[string]any{
 	"install": InstallData{}, "config get": ConfigGetData{}, "config set": ConfigSetData{}, "plan": PlanData{},
 	"run": RunData{}, "stop": StopData{}, "replay": ReplayData{}, "status": StatusData{}, "abandon": AbandonData{},
-	"ui": EmptyData{}, "doctor": DoctorData{}, "update": UpdateData{}, "clean": CleanData{},
+	"ui": EmptyData{}, "doctor": DoctorData{}, "update": UpdateData{}, "login": EmptyData{}, "clean": CleanData{},
+	"internal engine": EmptyData{}, "internal guard": EmptyData{}, "internal tools": EmptyData{},
 }
 
-// EmptyData is the data of a command whose result is not built yet.
+// EmptyData is the data of a command that returns none: one not built yet, or a hidden verb.
 type EmptyData struct{}
 
 // helpResult builds the help reply for the command, or for the whole table when words is empty.

@@ -61,6 +61,8 @@ type Result struct {
 	Reason  string // set when Outcome is not OutcomeOK
 	Fix     string // the command or change that resolves it
 	Raw     string // text printed as is, for help; the formatter is skipped
+	Silent  bool   // nothing is printed on standard output: the verb owns the stream or the caller reads the exit code
+	Stderr  string // a line for standard error, printed instead of the envelope when Silent
 }
 
 // Tier says who may call a command.
@@ -89,7 +91,7 @@ type Command struct {
 	NeedsTerminal func(c *Call) bool // nil when the command never needs a terminal
 	NeedsRepo     func(c *Call) bool // nil when the command works outside a repository
 	NeedsEngine   bool               // connects to the engine, starting it when none answers
-	Hidden        bool               // a verb the harness starts itself; left out of help and the 12 commands
+	Hidden        bool               // a verb the harness starts itself; left out of help and the 13 commands
 	PinExempt     bool               // runs even when the repository pin is above this binary
 	TamperPolicy  TamperPolicy       // what the command does when the settings guard has tripped
 	Run           Handler
@@ -101,6 +103,7 @@ type TamperPolicy int
 const (
 	TamperRefuse TamperPolicy = iota // refuse with config_tampered
 	TamperWarn                       // run, and print one warning line
+	TamperSkip                       // run with no settings check: a hook or tool server that must not read the disk
 )
 
 // GlobalFlags holds the flags every command accepts.
@@ -284,7 +287,7 @@ func (c *CLI) validate(call *Call) *Result {
 
 // checkTamper applies the command's tamper policy when the settings guard has tripped.
 func (c *CLI) checkTamper(call *Call) *Result {
-	if c.deps.Config == nil {
+	if c.deps.Config == nil || call.Command.TamperPolicy == TamperSkip {
 		return nil
 	}
 
@@ -352,6 +355,13 @@ func (c *CLI) render(res Result) int {
 
 // print formats res and writes the envelope or the text; it returns the exit code.
 func (c *CLI) print(res Result) (int, error) {
+	if res.Silent {
+		if res.Stderr == "" {
+			return int(res.Outcome), nil
+		}
+		_, err := fmt.Fprintln(c.errOut, strings.TrimRight(res.Stderr, "\n"))
+		return int(res.Outcome), err
+	}
 	if res.Raw != "" {
 		_, err := fmt.Fprintln(c.out, strings.TrimRight(res.Raw, "\n"))
 		return int(res.Outcome), err

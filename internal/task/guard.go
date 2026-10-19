@@ -152,20 +152,7 @@ func (g *Guard) Refusals() map[RowID]int {
 
 // Check decides one call; unparsable input, an unknown tool or an internal error is a refusal, never an allow.
 func (g *Guard) Check(c Call) (v Verdict) {
-	defer func() {
-		if r := recover(); r != nil {
-			v = g.finish(
-				refuse(
-					"G1",
-					c.Tool,
-					map[string]string{
-						"why":   "the guard failed on this call",
-						"tools": g.toolList(),
-					},
-				),
-			)
-		}
-	}()
+	defer g.refuseOnPanic(c.Tool, &v)
 
 	g.mu.Lock()
 	ended, files := g.ended, slices.Clone(g.files)
@@ -180,6 +167,28 @@ func (g *Guard) Check(c Call) (v Verdict) {
 	}
 
 	return Verdict{Allowed: true, res: res}
+}
+
+// CheckText decides a call that only carries text, such as a shell command, against the text rows G4 and G5.
+func (g *Guard) CheckText(tool, text string) (v Verdict) {
+	defer g.refuseOnPanic(tool, &v)
+
+	for _, row := range g.order {
+		var r *refusal
+
+		switch row.ID {
+		case "G4":
+			r = g.checkSecrets(row, parsed{texts: []string{text}}, nil, nil)
+		case "G5":
+			r = g.checkText([]string{text})
+		}
+
+		if r != nil {
+			return g.finish(r)
+		}
+	}
+
+	return Verdict{Allowed: true}
 }
 
 // ScopeDenied reports the row that forbids a scope request for p: G2 outside the worktree, G3 protected, G4 secret.
@@ -210,6 +219,22 @@ func (g *Guard) IsSecretFile(rel string) bool {
 
 // SecretFiles lists the absolute paths of the secret files in the worktree, for the sandbox to mask.
 func (g *Guard) SecretFiles() []string { return secretFiles(g.b.Worktree, g.byID["G4"].Pattern) }
+
+// refuseOnPanic turns a panic inside a check into a refusal under G1; it runs deferred and sets the named verdict.
+func (g *Guard) refuseOnPanic(tool string, v *Verdict) {
+	if r := recover(); r != nil {
+		*v = g.finish(
+			refuse(
+				"G1",
+				tool,
+				map[string]string{
+					"why":   "the guard failed on this call",
+					"tools": g.toolList(),
+				},
+			),
+		)
+	}
+}
 
 // finish counts a refusal against its row and builds the verdict.
 func (g *Guard) finish(r *refusal) Verdict {

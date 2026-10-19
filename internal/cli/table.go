@@ -88,12 +88,29 @@ var tableRows = []Command{
 		NeedsTerminal: alwaysTerminal, PinExempt: true, TamperPolicy: TamperWarn, Run: handleUpdate,
 	},
 	{
+		Name: "login", Summary: "Set up model access for one provider", Tier: TierTerminal,
+		Flags:         []FlagSpec{{Name: "claude", Kind: "bool", Help: "Set up the Claude subscription link"}},
+		NeedsTerminal: alwaysTerminal, TamperPolicy: TamperWarn, Run: handleLogin,
+	},
+	{
 		Name: "clean", Summary: "Remove everything that belongs to no open run", Tier: TierShared,
 		NeedsEngine: true, TamperPolicy: TamperWarn, Run: handleClean,
 	},
 	{
 		Name: "internal engine", Summary: "Run the engine process", Tier: TierShared, Hidden: true,
 		PinExempt: true, TamperPolicy: TamperWarn, Run: handleEngine,
+	},
+	{
+		Name: "internal guard", Summary: "Decide one Claude Code tool call for the repository hook", Tier: TierShared,
+		Hidden: true, PinExempt: true, TamperPolicy: TamperSkip, Run: handleGuard,
+	},
+	{
+		Name: "internal tools", Summary: "Run the tool server of one model session", Tier: TierShared,
+		Flags: []FlagSpec{
+			{Name: "agent", Kind: "string", Help: "The agent the session runs"},
+			{Name: "session", Kind: "string", Help: "The session identifier"},
+		},
+		Hidden: true, PinExempt: true, TamperPolicy: TamperSkip, Run: handleTools,
 	},
 }
 
@@ -106,7 +123,7 @@ func needsRepo(*Call) bool { return true }
 // needsRepoUnlessAll marks a command that covers the current repository unless --all widens it.
 func needsRepoUnlessAll(c *Call) bool { return !c.Global.All }
 
-// commands returns the 12 commands of the table; hidden verbs are left out.
+// commands returns the rows of the 13 commands (config get and config set are two rows); hidden verbs are left out.
 func commands() []Command {
 	var out []Command
 	for _, c := range tableRows {
