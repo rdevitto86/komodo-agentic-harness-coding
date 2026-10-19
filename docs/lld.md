@@ -6061,8 +6061,8 @@ type TokenCaps interface {
 | CLI | `Request` frames on `engine.sock`; the engine publishes `run-start`, `run-stop` and `run-continue` | A person or the orchestrator types the command |
 | Intake Handler | `run-start` event, `source` `intake` | After planning, for the groups it just wrote |
 | Resource Manager | `Manager.PauseGroups`, `Manager.NudgeGroups` | A plan window reaches 100%, a spending ceiling is reached, or a group reaches 100% or 90% of its token cap |
-| Task Managers, Error Handler, Metrics Service, Resource Manager | `Manager.Beat` | Every `HeartbeatEvery` |
-| Task Manager | `Replies` channel, read into `Manager.Report` | Any state report, escalation, timer request or end of a call |
+| Error Handler, Metrics Service, Resource Manager | `Manager.Beat` | Every `HeartbeatEvery` |
+| Task Manager | `Replies` channel, read into `Manager.Report`; every message read also calls `Manager.Beat` | Any state report, escalation, timer request or end of a call; a `beat` message every `HeartbeatEvery` |
 | Cleanup Handler | `CloseTaskGroup` on the Task Manager, which reports `group.closed` | Work is pushed and cleaned |
 | Runtime Manager | `LeaseStore.Grant`, `Renew`, `Revoke`, `Release` | A group starts, every `LeaseRenewEvery`, a stop, a group closes |
 | Runtime Manager | `StateStore.Load`, `Save` | After every applied input; at recovery |
@@ -6297,7 +6297,7 @@ sequenceDiagram
 
 Two watches cover a loop that stops answering and an engine that stops answering.
 
-**Inside the engine.** Every core loop calls `Manager.Beat` every `HeartbeatEvery`, 5 seconds. The core loops are each Task Manager, the Error Handler loop, the Metrics Service loop and the Resource Manager loop.
+**Inside the engine.** Every core loop beats every `HeartbeatEvery`, 5 seconds. The core loops are each Task Manager, the Error Handler loop, the Metrics Service loop and the Resource Manager loop. The watcher loops call `Manager.Beat`. A Task Manager sends a `beat` message from its command loop, and the Runtime Manager calls `Beat` for every message it reads from it. A Task Manager busy in a long model session still beats; one whose command loop hangs does not.
 
 ```go
 // Beat records that a core loop is alive; loop is "task:<group id>", "fault", "metrics" or "resource".
@@ -8817,6 +8817,7 @@ const (
 	MsgTimer    MessageKind = "timer"    // a request for more wall time
 	MsgState    MessageKind = "state"    // progress and the facts since the last report
 	MsgEnded    MessageKind = "ended"    // Run, Resume or Continue returned
+	MsgBeat     MessageKind = "beat"     // the command loop is alive; sent every HeartbeatEvery
 )
 
 // Message is one item the Task Manager sends to the Runtime Manager.

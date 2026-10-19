@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// BeatEvery is how often the command loop sends a beat message to the Runtime Manager.
+const BeatEvery = 5 * time.Second
+
 // Channels connect a Task Manager goroutine to the Runtime Manager that started it.
 type Channels struct {
 	Commands <-chan Command // from the Runtime Manager
@@ -65,6 +68,7 @@ type chanRuntime struct {
 	out   chan<- Message
 	tag   string // makes the identifiers differ from those of an earlier start of the same group
 	seq   atomic.Int64
+	beats atomic.Int64
 	mu    sync.Mutex
 	waits map[string]chan TimerGrant
 	sendM sync.RWMutex // held while a send is in flight; shut takes it to close the channel
@@ -139,6 +143,21 @@ func (c *chanRuntime) send(m Message) error {
 	}
 }
 
+// beat puts a beat on the reply channel without waiting; a full channel drops it, since unread messages show the loop lives.
+func (c *chanRuntime) beat() {
+	c.sendM.RLock()
+	defer c.sendM.RUnlock()
+
+	if c.shut {
+		return
+	}
+
+	select {
+	case c.out <- Message{ID: fmt.Sprintf("beat-%s-%d", c.tag, c.beats.Add(1)), Kind: MsgBeat}:
+	default:
+	}
+}
+
 // close ends the reply channel once no send is in flight; later sends fail.
 func (c *chanRuntime) close() {
 	c.sendM.Lock()
@@ -190,6 +209,7 @@ const (
 	MsgTimer    MessageKind = "timer"    // a request for more wall time
 	MsgState    MessageKind = "state"    // progress and the facts since the last report
 	MsgEnded    MessageKind = "ended"    // Run, Resume or Continue returned
+	MsgBeat     MessageKind = "beat"     // the command loop is alive
 )
 
 // dispatch acts on one command; it returns true when the loop ends.
@@ -318,11 +338,19 @@ func (m *Manager) Serve(ctx context.Context, ch Channels) error {
 		l.cr.close()
 	}()
 
+	// The loop beats from its own select, so a pipeline call in a long session still beats and a hung loop does not.
+	ticker := time.NewTicker(cmpOrDur(m.c.BeatEvery, BeatEvery))
+	defer ticker.Stop()
+
+	l.cr.beat()
+
 	for {
 		select {
 		case <-ctx.Done():
 			m.stopCancel(ErrStopped)
 			return ctx.Err()
+		case <-ticker.C:
+			l.cr.beat()
 		case err := <-l.calls:
 			if l.ended(err) {
 				return nil

@@ -188,6 +188,7 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		Plan:        s.sandboxPlan(spec.ID),
 		OnRecheck:   ref.slot.deliver,
 		SessionsDir: filepath.Join(s.home, "sessions", spec.ID),
+		BeatEvery:   engine.HeartbeatEvery,
 	}
 
 	c.Briefs = &task.ContextBriefer{
