@@ -390,7 +390,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 			r.done[s.ID] = rec.State.Outcome == "complete"
 			if rec.State.Outcome == "failed" {
 				r.failed[s.ID] = true
-				if rs.Target == s.Label {
+				if len(rs.Groups) == 1 && rs.Groups[0] == s.Label {
 					why := s.Label + " failed for good: plan it again to run it fresh"
 					m.publishRefused(id, rs.Target, req, why)
 					return &codeError{CodeGroupFailed, why}
