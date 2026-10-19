@@ -33,7 +33,8 @@ func crashScript(builds *atomic.Int64) func(string) func(*tmEnv) {
 						id := st.Tasks[0].ID
 						e.say(
 							fact("session.start", map[string]any{
-								"agent": "builder", "task": id, "session": "s-" + id, "link": "claude-cli", "model": "m", "stage": "build",
+								"agent": "builder", "task": id, "session": "s-" + id, "link": "claude-cli",
+								"model": "m", "stage": "build",
 							}),
 							fact("session.end", map[string]any{
 								"agent": "builder", "task": id, "session": "s-" + id, "link": "claude-cli", "reason": "crash",
@@ -78,7 +79,7 @@ func TestAGroupWaitsOneTwoThenFourMinutesAfterBlockerErrorsAndTheFourthBlocksIt(
 
 	s := r.store.get("g-tg-1")
 	if s.Block.Reason != state.ReasonCrash || s.Counters.RetriesLeft != 2 {
-		t.Fatalf("block %+v, retries left %d: the fourth blocker must block with no retry spent", s.Block, s.Counters.RetriesLeft)
+		t.Fatalf("block %+v, retries left %d: the 4th blocker spends no retry", s.Block, s.Counters.RetriesLeft)
 	}
 
 	r.clock.Advance(10 * time.Minute)
