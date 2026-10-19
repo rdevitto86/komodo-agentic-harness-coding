@@ -52,6 +52,7 @@ type StreamEvent struct {
 	RateLimit *RateLimit
 	Headroom  *Headroom
 	Result    *Result
+	Msg       *MsgUsage // the usage one model message reported, on an output event
 }
 
 // Init carries the field the billing check reads from the first line.
