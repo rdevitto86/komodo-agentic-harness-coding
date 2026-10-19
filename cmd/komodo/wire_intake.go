@@ -25,7 +25,7 @@ type intakeHolder struct {
 }
 
 // start opens a planner session over the first link of the planner's chain that can serve it.
-func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error) {
+func (h *intakeHolder) start(ctx context.Context) (_ intake.PlannerSession, err error) {
 	s, k := h.k.s, h.k
 	ag, ok := s.cfg.GetAgent("planner")
 	if !ok {
@@ -55,6 +55,11 @@ func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error)
 	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
 		return nil, fmt.Errorf("make the planner session folder: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 
 	uh, _ := os.UserHomeDir()
 	rows, err := task.LoadRows(uh)
@@ -62,20 +67,7 @@ func (h *intakeHolder) start(ctx context.Context) (intake.PlannerSession, error)
 		return nil, fmt.Errorf("load the guard rows: %w", err)
 	}
 
-	rowIDs := make([]task.RowID, len(ag.Guard))
-	for i, r := range ag.Guard {
-		rowIDs[i] = task.RowID(r)
-	}
-
-	perm := task.Permissions{
-		Tools:      ag.Tools,
-		RunClasses: ag.RunClasses,
-		Guard:      rowIDs,
-		Weight:     string(ag.Weight),
-		Chain:      ag.Chain,
-	}
-
-	g, err := task.NewGuard(rows, task.Binding{Agent: "planner", Permissions: perm, Worktree: k.root}, 3)
+	g, err := task.NewGuard(rows, task.Binding{Agent: "planner", Permissions: permissionsOf(ag), Worktree: k.root}, 3)
 	if err != nil {
 		return nil, fmt.Errorf("build the planner guard: %w", err)
 	}

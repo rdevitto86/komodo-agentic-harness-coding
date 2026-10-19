@@ -18,6 +18,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
@@ -287,18 +288,7 @@ func (k *repoKit) taskSpec(spec engine.GroupSpec, g intake.Group, cmds map[strin
 
 	for _, name := range []string{"builder", "tester", "reviewer"} {
 		a, _ := k.s.cfg.GetAgent(name)
-		rows := make([]task.RowID, len(a.Guard))
-		for i, r := range a.Guard {
-			rows[i] = task.RowID(r)
-		}
-
-		perms[name] = task.Permissions{
-			Tools:      a.Tools,
-			RunClasses: a.RunClasses,
-			Guard:      rows,
-			Weight:     string(a.Weight),
-			Chain:      a.Chain,
-		}
+		perms[name] = permissionsOf(a)
 	}
 
 	l := spec.Limits
@@ -584,4 +574,20 @@ func checkoutBase(ctx context.Context, root, base, buildDir string) (string, err
 	}
 
 	return dir, os.WriteFile(filepath.Join(dir, doneMark), nil, 0o644)
+}
+
+// permissionsOf turns an agent's configuration into the permissions its guard and tool registry enforce.
+func permissionsOf(a config.Agent) task.Permissions {
+	rows := make([]task.RowID, len(a.Guard))
+	for i, r := range a.Guard {
+		rows[i] = task.RowID(r)
+	}
+
+	return task.Permissions{
+		Tools:      a.Tools,
+		RunClasses: a.RunClasses,
+		Guard:      rows,
+		Weight:     string(a.Weight),
+		Chain:      a.Chain,
+	}
 }
