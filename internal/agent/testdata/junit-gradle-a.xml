@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.CartTest" tests="3" skipped="1" failures="1" errors="0" timestamp="2026-10-18T09:00:00" hostname="ci" time="0.042">
+  <properties/>
+  <testcase name="addsItem()" classname="com.example.CartTest" time="0.010"/>
+  <testcase name="rejectsNegativeQuantity()" classname="com.example.CartTest" time="0.020">
+    <failure message="org.opentest4j.AssertionFailedError: expected: &lt;400&gt; but was: &lt;200&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected: &lt;400&gt; but was: &lt;200&gt;
+	at com.example.CartTest.rejectsNegativeQuantity(CartTest.java:31)</failure>
+  </testcase>
+  <testcase name="slowPath()" classname="com.example.CartTest" time="0.000">
+    <skipped/>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

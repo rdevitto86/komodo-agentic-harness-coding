@@ -82,13 +82,8 @@ func ParseCoverage(language, output string) (float64, error) {
 			return *v.Data[0].Totals.Lines.Percent, nil
 		}
 	case "java", "kotlin":
-		if all := jacocoLine.FindAllStringSubmatch(output, -1); len(all) > 0 {
-			m := all[len(all)-1]
-			missed, _ := strconv.Atoi(m[1])
-			covered, _ := strconv.Atoi(m[2])
-			if missed+covered > 0 {
-				return float64(covered) * 100 / float64(missed+covered), nil
-			}
+		if v, ok := jacocoPercent(output); ok {
+			return v, nil
 		}
 	default:
 		return 0, fmt.Errorf("no coverage tool for language %s", language)
@@ -118,4 +113,26 @@ func CoverageLevel(floor int, base float64, haveBase bool, head float64) Level {
 		return LevelPass
 	}
 	return LevelFail
+}
+
+// jacocoPercent adds up the report-level LINE counters of every JaCoCo report in the output, one report per module.
+// The report-level counter is the last LINE counter of its report; package and class counters come first.
+func jacocoPercent(out string) (float64, bool) {
+	var missed, covered int
+	for _, doc := range strings.Split(out, "<report") {
+		all := jacocoLine.FindAllStringSubmatch(doc, -1)
+		if len(all) == 0 {
+			continue
+		}
+
+		m := all[len(all)-1]
+		a, _ := strconv.Atoi(m[1])
+		b, _ := strconv.Atoi(m[2])
+		missed, covered = missed+a, covered+b
+	}
+
+	if missed+covered == 0 {
+		return 0, false
+	}
+	return float64(covered) * 100 / float64(missed+covered), true
 }
