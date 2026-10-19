@@ -156,3 +156,32 @@ func TestTheEngineTakesAnOverrideFromAProcessWithATerminal(t *testing.T) {
 		t.Fatalf("overrides %d", st.Counters.Overrides)
 	}
 }
+
+func TestTheEngineRefusesAnOverrideCarriedByAnotherVerb(t *testing.T) {
+	x := waitingForOverride(t, func(net.Conn) (bool, error) { return false, nil })
+
+	for verb, code := range map[string]string{VerbPlan: CodeBadFrame, VerbRun: CodeNoTerminal} {
+		req := overrideReq("o-" + verb)
+		req.Verb, req.Flags = verb, Flags{}
+
+		reps := x.ask(req)
+		if last := reps[len(reps)-1]; last.Status == StatusOK || last.Code != code {
+			t.Fatalf("%s: reply %+v", verb, last)
+		}
+		if st := x.store.get("g-tg-1"); st.Stage != StageBlocked || st.Counters.Overrides != 0 {
+			t.Fatalf("%s granted an override with no terminal check: %s %+v", verb, st.Stage, st.Counters)
+		}
+	}
+}
+
+func TestTheEngineRefusesAnEventOfAnotherTypeOnEachVerb(t *testing.T) {
+	x := waitingForOverride(t, func(net.Conn) (bool, error) { return true, nil })
+
+	start := &bus.RunStart{Target: "tg-1"}
+	req := Request{ID: "m1", Verb: VerbRun, Target: "tg-1", Event: &Event{Type: bus.TypeRunContinue, Time: t0, Data: start}}
+
+	reps := x.ask(req)
+	if last := reps[len(reps)-1]; last.Status == StatusOK || last.Code != CodeBadFrame {
+		t.Fatalf("a run-start body under a run-continue type: reply %+v", last)
+	}
+}
