@@ -572,6 +572,19 @@ func TestBuilderNeedsScopeEndBlocksAndTheFollowingAskIsNotSpentTwice(t *testing.
 	}
 }
 
+func TestUnregisteredFactIsReportedAsDropped(t *testing.T) {
+	r := apply(t, mk(StageBuild), in(InFact, FactData{Subtype: "bogus.fact", Data: mustJSON(map[string]string{"a": "b"})}))
+	if len(r.Emit) != 0 || len(r.Dropped) != 1 || !strings.Contains(r.Dropped[0], "bogus.fact") ||
+		!strings.Contains(r.Dropped[0], "unknown") {
+		t.Fatalf("emit %d dropped %q", len(r.Emit), r.Dropped)
+	}
+
+	ok := apply(t, mk(StageBuild), in(InFact, FactData{Subtype: "tool.denied"}))
+	if len(ok.Dropped) != 0 {
+		t.Fatalf("a registered fact was reported as dropped: %q", ok.Dropped)
+	}
+}
+
 func TestScopeRules(t *testing.T) {
 	ask := func(deny string) Input {
 		return in(InScopeAsk, ScopeAsk{Task: "t1", Paths: []string{"a/b.go"}, Reason: "need it", Deny: deny})

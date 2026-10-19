@@ -99,11 +99,12 @@ type Order struct {
 // Result is everything one input decides.
 type Result struct {
 	State   State
-	Orders  []Order // performed by the group loop, each wrapped in start and done records
-	Emit    []Event // events to publish after the write is saved
-	Refused bool    // no row matched; State is unchanged
-	Stale   bool    // the input's epoch is older than the group's; State is unchanged
-	Dup     bool    // the input's request was applied before; State is unchanged
+	Orders  []Order  // performed by the group loop, each wrapped in start and done records
+	Emit    []Event  // events to publish after the write is saved
+	Refused bool     // no row matched; State is unchanged
+	Stale   bool     // the input's epoch is older than the group's; State is unchanged
+	Dup     bool     // the input's request was applied before; State is unchanged
+	Dropped []string // facts that stood for no event, each with the kind and the reason, for the error output
 }
 
 // The data of each input kind.

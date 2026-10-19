@@ -575,6 +575,9 @@ func (g *group) handle(in Input) {
 		g.publish(res.Emit)
 		return
 	}
+	for _, d := range res.Dropped {
+		g.m.report(g, errors.New(d))
+	}
 	if err := g.save(res.State); err != nil {
 		g.saveFailed(err)
 		return

@@ -21,7 +21,9 @@ type calc struct {
 	from   Stage // the stage when the input arrived
 	orders []Order
 	emit   []Event
-	refuse *bus.RequestRefused
+	// dropped holds a line for each fact that stood for no event.
+	dropped []string
+	refuse  *bus.RequestRefused
 	// scopeBlock is set when the scope rules did not deny a request, so the block rows block the group.
 	scopeBlock *ScopeAsk
 }
@@ -69,8 +71,10 @@ func (c *calc) inStage() bool {
 	switch c.in.Kind {
 	case InFact:
 		d := decode[FactData](c.in.Data)
-		if e, ok := factEvent(s.Run, s.Group, d.Subtype, d.Data); ok {
+		if e, err := factEvent(s.Run, s.Group, d.Subtype, d.Data); err == nil {
 			c.emit = append(c.emit, e)
+		} else {
+			c.dropped = append(c.dropped, fmt.Sprintf("fact %q dropped: %v", d.Subtype, err))
 		}
 		return true
 	case InProgress:
@@ -378,7 +382,7 @@ func Next(s0 State, in Input, l Limits) Result {
 		c.s.ActionsOpen = append(c.s.ActionsOpen, state.OpenAction{ID: o.Key, Kind: string(o.Kind), Args: args})
 	}
 
-	return Result{State: c.s, Orders: c.orders, Emit: c.emit}
+	return Result{State: c.s, Orders: c.orders, Emit: c.emit, Dropped: c.dropped}
 }
 
 // cloneState returns a deep copy of s with no nil slice or map.
@@ -442,8 +446,9 @@ func working(st Stage) bool {
 	return false
 }
 
-// factEvent builds the event a Task Manager fact stands for; it reports false when the fact has no registered shape.
-func factEvent(run, group, subtype string, data json.RawMessage) (Event, bool) {
+// factEvent builds the event a Task Manager fact stands for; it fails when the fact has no registered shape or its data does
+// not decode as that shape.
+func factEvent(run, group, subtype string, data json.RawMessage) (Event, error) {
 	typ := bus.TypeRunStatus
 	if subtype == "limit.warn" || subtype == "usage" {
 		typ = bus.TypeResource
@@ -461,13 +466,13 @@ func factEvent(run, group, subtype string, data json.RawMessage) (Event, bool) {
 		"data":    data,
 	})
 	if err != nil {
-		return Event{}, false
+		return Event{}, fmt.Errorf("encode the fact: %w", err)
 	}
 
 	var e Event
 	if err := json.Unmarshal(b, &e); err != nil {
-		return Event{}, false
+		return Event{}, err
 	}
 
-	return e, true
+	return e, nil
 }

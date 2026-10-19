@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,4 +83,40 @@ func blockedScopeKeepsItsTaskManager(t *testing.T, endFirst bool) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the scope answer never reached a Task Manager: the block's stop ended the one that held the request")
 	}
+}
+
+// A fact with no registered event reaches the error reporter, which writes the engine log.
+func TestDroppedFactIsWrittenToTheErrorOutput(t *testing.T) {
+	var mu sync.Mutex
+	var errs []string
+	r := newRig(t, [][]string{{"tg-1"}}, func(r *rig) {
+		r.d.Errors = func(_, _ string, err error) {
+			mu.Lock()
+			errs = append(errs, err.Error())
+			mu.Unlock()
+		}
+	})
+	r.tasks.script = func(string) func(*tmEnv) {
+		return func(e *tmEnv) {
+			defer close(e.out)
+			for {
+				select {
+				case c := <-e.cmds:
+					if c.Kind == task.CmdStart && e.store.get(e.spec.ID).Stage == StageIntake {
+						e.say(fact("ready", nil), fact("bogus.fact", map[string]string{"a": "b"}))
+					}
+				case <-e.ctx.Done():
+					return
+				}
+			}
+		}
+	}
+	if err := r.startRun("run-1", "tg-1"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "the dropped fact in the error output", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(errs) == 1 && strings.Contains(errs[0], "bogus.fact")
+	})
 }
