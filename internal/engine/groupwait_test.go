@@ -136,7 +136,8 @@ func judgeEndScript(starts *atomic.Int64, reason string) func(string) func(*tmEn
 						}
 
 						e.say(fact("session.end", map[string]any{
-							"agent": "tester", "session": "s-tester", "link": "claude-cli", "reason": "crash", "stage": "test_review",
+							"agent": "tester", "session": "s-tester", "link": "claude-cli", "reason": "crash",
+							"stage": "test_review",
 						}))
 						e.say(fact("session.end", map[string]any{
 							"agent": "reviewer", "session": "s-reviewer", "link": "claude-cli", "reason": reason,
@@ -156,7 +157,9 @@ func TestANonBlockerErrorLeavesTheGroupsRunningWaitArmed(t *testing.T) {
 		t.Run(reason, func(t *testing.T) {
 			var starts atomic.Int64
 
-			r := newRig(t, [][]string{{"tg-1"}}, withClock, func(r *rig) { r.tasks.script = judgeEndScript(&starts, reason) })
+			script := judgeEndScript(&starts, reason)
+
+			r := newRig(t, [][]string{{"tg-1"}}, withClock, func(r *rig) { r.tasks.script = script })
 			if err := r.startRun("run-1", "tg-1"); err != nil {
 				t.Fatal(err)
 			}

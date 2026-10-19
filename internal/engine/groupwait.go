@@ -25,7 +25,7 @@ func groupWait(streak int) time.Duration {
 	return 0
 }
 
-// holdFor holds the group's session starts back for wait and asks for them again when it ends; 0 leaves a hold in force alone.
+// holdFor holds the group's session starts back for wait and asks for them again when it ends; 0 leaves a hold alone.
 func (g *group) holdFor(wait time.Duration) {
 	if wait <= 0 {
 		return
