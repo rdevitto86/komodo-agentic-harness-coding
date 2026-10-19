@@ -544,10 +544,13 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 	r.m = New(r.d)
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
-	go func() { _ = r.m.Run(ctx) }()
+	ran := make(chan struct{})
+	go func() { defer close(ran); _ = r.m.Run(ctx) }()
 	<-r.m.Ready()
 	t.Cleanup(func() {
 		cancel()
+		<-ran
+		r.m.wait(5 * time.Second)
 		_ = r.bus.Close()
 	})
 	return r

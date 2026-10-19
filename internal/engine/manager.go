@@ -98,6 +98,7 @@ type Manager struct {
 	startMu  sync.Mutex     // makes the live-group check and the group registration of a run start one step
 	ready    chan struct{}  // closed once Run has subscribed to the command events
 	readyOne sync.Once
+	live     sync.WaitGroup // goroutines started through spawn
 }
 
 // killGrace is how long a stop waits for a Task Manager after its process tree was killed.
@@ -561,13 +562,39 @@ func (m *Manager) openCache(ctx context.Context, r *run) error {
 	return nil
 }
 
-// spawn runs fn on a guarded goroutine.
+// spawn runs fn on a guarded goroutine that wait can wait for.
 func (m *Manager) spawn(fn func()) {
+	m.live.Add(1)
+
+	run := func() {
+		defer m.live.Done()
+		fn()
+	}
 	if m.d.Go != nil {
-		m.d.Go(fn)
+		m.d.Go(run)
 		return
 	}
-	guarded(m.faults, fn)
+
+	guarded(m.faults, run)
+}
+
+// wait waits up to d for every spawned goroutine to end; it reports false when some are still running.
+func (m *Manager) wait(d time.Duration) bool {
+	done := make(chan struct{})
+	guarded(m.faults, func() {
+		m.live.Wait()
+		close(done)
+	})
+
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // schedule starts ready groups, best first, while the pool has a free slot.
