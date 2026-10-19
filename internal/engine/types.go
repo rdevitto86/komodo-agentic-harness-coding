@@ -52,7 +52,7 @@ const (
 	InProgress      InputKind = "progress"       // data: ProgressData; the live session handles of a state report
 	InFact          InputKind = "fact"           // data: FactData; a fact that is published and changes nothing
 	InLoopRestart   InputKind = "loop.restart"   // a silent Task Manager was restarted; costs no retry
-	InOverride      InputKind = "override"       // data: OverrideData; a person at a terminal gave an empty group a final try
+	InOverride      InputKind = "override"       // data: OverrideData; a person gave an empty group a final try
 	InBreakerResume InputKind = "breaker.resume" // the breaker lets the group perform the session starts it held back
 )
 

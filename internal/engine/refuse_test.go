@@ -60,7 +60,8 @@ func TestOverrideInsideTheWindowIsAppliedBeforeItReplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := r.store.get("g-tg-1")
-	if st.Stage != StageBuild || st.Counters.RetriesLeft != 1 || st.Counters.Overrides != 1 || st.Counters.FinalWallMin != 45 {
+	c := st.Counters
+	if st.Stage != StageBuild || c.RetriesLeft != 1 || c.Overrides != 1 || c.FinalWallMin != 45 {
 		t.Fatalf("group %s, counters %+v", st.Stage, st.Counters)
 	}
 }

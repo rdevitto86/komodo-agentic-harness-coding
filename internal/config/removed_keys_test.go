@@ -4,7 +4,10 @@ import "testing"
 
 func TestASettingsFileWithRemovedKeysStillLoads(t *testing.T) {
 	m, home := newTestManager(t)
-	writeFile(t, home, "settings.json", `{"limits.override_window_min": 45, "limits.override_retries": 2, "limits.group_retries": 2}`)
+	writeFile(
+		t, home, "settings.json",
+		`{"limits.override_window_min": 45, "limits.override_retries": 2, "limits.group_retries": 2}`,
+	)
 
 	if err := m.resolve().readErr; err != nil {
 		t.Fatalf("a file holding removed keys failed strict reading: %v", err)
