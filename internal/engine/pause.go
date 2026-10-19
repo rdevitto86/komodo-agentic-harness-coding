@@ -140,6 +140,8 @@ func overridable(g *group) error {
 	switch {
 	case st.Stage == StageDone && st.Outcome == "failed":
 		return &codeError{CodeGroupFailed, g.spec.Label + " failed for good: plan it again to run it fresh"}
+	case st.Counters.Overrides >= 1:
+		return &codeError{CodeRunRefused, g.spec.Label + " was not continued: its override was already used"}
 	case st.Stage == StageBlocked && st.Block.Reason == state.ReasonRetries:
 		if st.Block.Until.IsZero() || !g.now().Before(st.Block.Until) {
 			return &codeError{CodeRunRefused, g.spec.Label + " was not continued: the override window has passed"}

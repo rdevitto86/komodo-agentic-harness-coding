@@ -100,6 +100,7 @@ type Manager struct {
 	stopped  bool
 	faults   *fault.Handler // reports a panic of a goroutine the package starts
 	openMu   sync.Mutex     // makes the check and the open of a repository cache one step
+	wakeMu   sync.Mutex     // lets one override wake a parked group at a time
 	startMu  sync.Mutex     // makes the live-group check and the group registration of a run start one step
 	ready    chan struct{}  // closed once Run has subscribed to the command events
 	readyOne sync.Once
@@ -314,6 +315,10 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 	id := string(e.Run)
 
 	m.mu.Lock()
+	if live := m.runs[id]; live != nil && !resume {
+		m.mu.Unlock()
+		return m.joinRun(ctx, live, rs)
+	}
 	if m.runs[id] != nil || m.starting[id] {
 		m.mu.Unlock()
 		return nil
@@ -509,6 +514,51 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 	m.checkLocked(r)
 	m.mu.Unlock()
 	return m.awaitContinues(ctx, pending)
+}
+
+// joinRun loads the saved groups a wake names into a run that is already live, so a second parked group of the same saved
+// run is not left unloaded; a group already live, or Done, is skipped.
+func (m *Manager) joinRun(ctx context.Context, r *run, rs *bus.RunStart) error {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+
+	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Groups)
+	if err != nil {
+		return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("read the task lists: %v", err))
+	}
+
+	for _, s := range specs {
+		m.mu.Lock()
+		live := m.groups[s.ID]
+		m.mu.Unlock()
+		if live != nil {
+			continue
+		}
+
+		rec, err := r.store.Load(ctx, s.ID)
+		if err != nil || rec.State.Stage == StageDone {
+			continue
+		}
+
+		m.mu.Lock()
+		r.specs[s.ID] = s
+		r.order = append(r.order, s.ID)
+		if _, ok := r.landing[s.Epic]; !ok {
+			for _, p := range BuildLanding([]GroupSpec{s}) {
+				r.landing[p.Epic] = p
+			}
+		}
+
+		g := m.newGroup(r, s)
+		r.groups[s.ID] = g
+		m.groups[s.ID] = g
+		m.stopParkedLocked(s.ID)
+		m.spawn(func() { g.main(&rec) })
+		m.signalLocked()
+		m.mu.Unlock()
+	}
+
+	return nil
 }
 
 // signalLocked wakes everything that waits on Changes.

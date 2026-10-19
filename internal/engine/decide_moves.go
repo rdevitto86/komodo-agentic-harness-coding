@@ -605,6 +605,9 @@ func (c *calc) scopeAnswer(in Input) bool {
 func (c *calc) override(in Input) bool {
 	s := &c.s
 	switch {
+	case s.Counters.Overrides >= 1:
+		c.refuseRequest(in, "the group's override was already used")
+		return false
 	case c.from != StageBlocked || s.Block.Reason != state.ReasonRetries:
 		c.refuseRequest(in, "the group is not waiting for an override")
 		return false
