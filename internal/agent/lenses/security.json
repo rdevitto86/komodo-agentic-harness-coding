@@ -1,24 +1,9 @@
 {
   "lens": "security",
-  "when": "filter",
+  "when": "always",
   "applies": {
-    "globs": [
-      "internal/cli/install*.go",
-      "internal/cli/update*.go",
-      "internal/llm/**",
-      "internal/task/guard*.go",
-      "internal/task/tools*.go",
-      "internal/sandbox/**",
-      "internal/commit/**"
-    ],
-    "markers": [
-      "crypto/",
-      "os/exec",
-      "net/http",
-      "os\\.Getenv|os\\.Environ",
-      "filepath\\.(Join|Clean|Abs)",
-      "(?i)\\b(auth|token|password|secret)"
-    ]
+    "globs": [],
+    "markers": []
   },
   "rules": [
     {

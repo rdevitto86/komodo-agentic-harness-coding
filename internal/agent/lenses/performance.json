@@ -1,0 +1,62 @@
+{
+  "lens": "performance",
+  "when": "always",
+  "applies": {
+    "globs": [],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "performance.1",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "maps, slices and queues that grow with use also shrink, or are bounded",
+      "evidence": "the line that adds to the collection with no removal or cap",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "performance.2",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "a request or call does not read or write a whole file or table when it needs a part",
+      "evidence": "the line that loads the whole file or table inside the per-request or per-call path",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "performance.3",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "expensive work is not repeated inside a loop when it can be done once outside it",
+      "evidence": "the line inside the loop that parses, queries, reads or scans again on each pass",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "performance.4",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "work driven by a request has limits on size, time and concurrency",
+      "evidence": "the line that reads, waits or fans out with no size, timeout or concurrency cap",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

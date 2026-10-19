@@ -23,6 +23,7 @@ var lensOrder = []string{
 	"spec",
 	"contract",
 	"concurrency",
+	"performance",
 	"platform",
 	"config",
 	"readiness",
@@ -239,7 +240,7 @@ func (r reviewer) Lenses(d Diff, p Profile) []string {
 		var on bool
 		switch c.When {
 		case WhenAlways:
-			on = p != ProfileEconomy
+			on = p != ProfileEconomy || c.Lens == "security"
 		case WhenSpec:
 			on = p != ProfileEconomy && d.Specs
 		case WhenFilter:

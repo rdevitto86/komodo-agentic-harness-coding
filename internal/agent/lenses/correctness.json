@@ -57,6 +57,32 @@
       "check": "files, connections, locks and processes opened by the changed code are released on every path",
       "evidence": "the line that opens the resource with no matching release",
       "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.5",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "limits and boundary values are exact: no off-by-one, and inclusive and exclusive checks are the intended ones",
+      "evidence": "the comparison line at the boundary",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.6",
+      "severity": "major",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "a retry or requeue after a partial write does not duplicate or lose data",
+      "evidence": "the retry or requeue line that repeats or skips a step",
+      "source": "Komodo minimal catalog"
     }
   ]
 }
