@@ -3,7 +3,7 @@ package engine
 import "time"
 
 // The per-group breaker's waits: the nth blocker error in a row holds the group's next session start back by one of these.
-// [TODO: tune the per-group waits from error counts (G-293)]
+// [TODO: tune the per-group waits from error counts (G-294)]
 const (
 	groupWaitFirst  = time.Minute
 	groupWaitSecond = 2 * time.Minute
