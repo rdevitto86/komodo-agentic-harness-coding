@@ -3,7 +3,8 @@
 package llm
 
 // The fake program follows OpenAI's published codex exec behaviour; no test starts the real program or calls the service.
-//   - exec flags (--json, --output-schema, resume, the prompt on standard input): https://learn.chatgpt.com/docs/non-interactive-mode
+//   - exec flags (--json, --output-schema, resume, the prompt on standard input):
+//     https://learn.chatgpt.com/docs/non-interactive-mode
 //   - JSON line shapes (thread.started, turn.started, item.completed, turn.completed, turn.failed, error):
 //     https://github.com/openai/codex/blob/main/codex-rs/exec/src/exec_events.rs
 //   - exec options and the resume arguments: https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs
@@ -44,10 +45,12 @@ if [ -f "$d/hold" ]; then sleep 30; fi
 `
 
 const (
-	codexThread   = `{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}`
+	codexThreadID = "0199a213-81c0-7800-8aa1-bbab2a035a53"
+	codexThread   = `{"type":"thread.started","thread_id":"` + codexThreadID + `"}`
 	codexTurn     = `{"type":"turn.started"}`
 	codexAnswer   = `{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"{\"done\":true}"}}`
-	codexDone     = `{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"reasoning_output_tokens":10}}`
+	codexDone     = `{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":400,` +
+		`"output_tokens":50,"reasoning_output_tokens":10}}`
 	codexLoggedIn = "Logged in using ChatGPT\n"
 )
 
@@ -216,7 +219,8 @@ func TestCodexEnvironmentScrub(t *testing.T) {
 
 func TestCodexResultMapsUsageAndHandle(t *testing.T) {
 	f := newFakeCodex(t, codexThread, codexTurn,
-		`{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","status":"in_progress"}}`,
+		`{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls",`+
+			`"status":"in_progress"}}`,
 		`{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"thinking"}}`,
 		codexAnswer, codexDone)
 	s := f.session()
@@ -238,7 +242,7 @@ func TestCodexResultMapsUsageAndHandle(t *testing.T) {
 	if u := r.Usage; u.TokensIn != 600 || u.CacheRead != 400 || u.TokensOut != 50 || u.USD != 0 || u.USDEquiv != 0 {
 		t.Errorf("usage = %+v", u)
 	}
-	if h := r.Handle; h.Link != OpenAISubscription || h.Kind != "session_id" || h.Value != "0199a213-81c0-7800-8aa1-bbab2a035a53" {
+	if h := r.Handle; h.Link != OpenAISubscription || h.Kind != "session_id" || h.Value != codexThreadID {
 		t.Errorf("handle = %+v", h)
 	}
 	if len(evs) != 6 {
@@ -256,11 +260,12 @@ func TestCodexResultFailures(t *testing.T) {
 		reason state.Reason
 	}{
 		{"answer is not JSON", []string{codexThread,
-			`{"type":"item.completed","item":{"type":"agent_message","text":"all finished"}}`, codexDone}, state.ReasonSchemaFail},
+			codexMessage("all finished"), codexDone}, state.ReasonSchemaFail},
 		{"answer breaks the schema", []string{codexThread,
-			`{"type":"item.completed","item":{"type":"agent_message","text":"{\"done\":\"yes\"}"}}`, codexDone}, state.ReasonSchemaFail},
+			codexMessage(`{"done":"yes"}`), codexDone}, state.ReasonSchemaFail},
 		{"no answer", []string{codexThread, codexDone}, state.ReasonSchemaFail},
-		{"turn failed", []string{codexThread, `{"type":"turn.failed","error":{"message":"model refused"}}`}, state.ReasonNoResult},
+		{"turn failed", []string{codexThread, `{"type":"turn.failed","error":{"message":"model refused"}}`},
+			state.ReasonNoResult},
 	}
 	for _, c := range cases {
 		f := newFakeCodex(t, c.out...)
@@ -286,14 +291,17 @@ func TestCodexLimitMessages(t *testing.T) {
 		cap  CapKind
 	}{
 		{"usage limit error event", []string{codexThread,
-			`{"type":"error","message":"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage or try again at 3:05 PM."}`},
+			`{"type":"error","message":"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), ` +
+				`visit https://chatgpt.com/settings/usage or try again at 3:05 PM."}`},
 			CapWindow},
 		{"usage limit as a failed turn", []string{codexThread,
 			`{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Try again later."}}`}, CapWindow},
 		{"spend cap", []string{codexThread,
-			`{"type":"error","message":"You hit your spend cap set in your workspace. Increase your spend cap to continue."}`}, CapSpend},
+			`{"type":"error","message":"You hit your spend cap set in your workspace. ` +
+				`Increase your spend cap to continue."}`}, CapSpend},
 		{"out of credits", []string{codexThread,
-			`{"type":"turn.failed","error":{"message":"Your workspace is out of credits. Add credits to continue."}}`}, CapSpend},
+			`{"type":"turn.failed","error":{"message":"Your workspace is out of credits. ` +
+				`Add credits to continue."}}`}, CapSpend},
 		{"quota", []string{codexThread,
 			`{"type":"error","message":"Quota exceeded. Check your plan and billing details."}`}, CapQuota},
 	}
@@ -311,7 +319,7 @@ func TestCodexLimitMessages(t *testing.T) {
 		if !errors.As(err, &pl) || pl.Cap != c.cap || pl.Link != OpenAISubscription {
 			t.Fatalf("%s: err = %v, want a %s limit", c.name, err, c.cap)
 		}
-		if pl.Handle == nil || pl.Handle.Kind != "session_id" || pl.Handle.Value != "0199a213-81c0-7800-8aa1-bbab2a035a53" {
+		if pl.Handle == nil || pl.Handle.Kind != "session_id" || pl.Handle.Value != codexThreadID {
 			t.Errorf("%s: handle = %+v", c.name, pl.Handle)
 		}
 	}
@@ -319,7 +327,7 @@ func TestCodexLimitMessages(t *testing.T) {
 
 func TestCodexAnswerTextNeverReadAsLimit(t *testing.T) {
 	f := newFakeCodex(t, codexThread,
-		`{"type":"item.completed","item":{"type":"agent_message","text":"{\"done\":true,\"note\":\"you hit your usage limit\"}"}}`,
+		codexMessage(`{"done":true,"note":"you hit your usage limit"}`),
 		codexDone)
 	s := f.session()
 	s.Schema = json.RawMessage(`{"type":"object"}`)
@@ -462,7 +470,8 @@ func TestCodexProbe(t *testing.T) {
 	if res.Path != filepath.Join(f.bin, "codex") || res.Version != "0.130.0" || res.Auth.AuthMethod != "chatgpt" {
 		t.Errorf("path %q version %q auth %+v", res.Path, res.Version, res.Auth)
 	}
-	if res.Models[Heavy] != "gpt-big" || res.Models[Light] != "gpt-small" || res.Ctx != 128000 || res.CtxSource != "endpoint" {
+	if res.Models[Heavy] != "gpt-big" || res.Models[Light] != "gpt-small" || res.Ctx != 128000 ||
+		res.CtxSource != "endpoint" {
 		t.Errorf("models %v ctx %d (%s)", res.Models, res.Ctx, res.CtxSource)
 	}
 	if f.read("runs.txt") != "" {
@@ -589,4 +598,13 @@ func TestClassifyOpenAISubscription(t *testing.T) {
 		Classify(ClaudeCLI, AuthStatus{AuthMethod: "chatgpt"}) != CostPaid {
 		t.Error("only a ChatGPT login on the OpenAI subscription link is a subscription")
 	}
+}
+
+// codexMessage is the line of a finished agent message.
+func codexMessage(text string) string {
+	b, _ := json.Marshal(map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{"id": "item_9", "type": "agent_message", "text": text},
+	})
+	return string(b)
 }

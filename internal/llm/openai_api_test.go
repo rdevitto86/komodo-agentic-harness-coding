@@ -6,7 +6,8 @@ package llm
 //   - 401 and 429 error bodies (type insufficient_quota, the credit and spend-limit codes):
 //     https://developers.openai.com/api/docs/guides/error-codes
 //   - x-ratelimit-* response headers and their duration values: https://developers.openai.com/api/docs/guides/rate-limits
-//   - the models list, which carries no context window: https://developers.openai.com/api/reference/resources/models/methods/list
+//   - the models list, which carries no context window:
+//     https://developers.openai.com/api/reference/resources/models/methods/list
 
 import (
 	"context"
@@ -283,7 +284,7 @@ func TestOpenAIAPIStartErrors(t *testing.T) {
 		reply func(http.ResponseWriter, int)
 		check func(t *testing.T, err error)
 	}{
-		{"404", failWith(404, `{"error":{"message":"The model `+"`gpt-big`"+` does not exist","type":"invalid_request_error",`+
+		{"404", failWith(404, `{"error":{"message":"The model does not exist","type":"invalid_request_error",`+
 			`"code":"model_not_found"}}`), func(t *testing.T, err error) {
 			if !errors.Is(err, ErrModelGone) {
 				t.Errorf("err = %v", err)
@@ -325,7 +326,8 @@ func TestOpenAIAPIStartErrors(t *testing.T) {
 			}
 		}},
 		{"retry-after over a minute", failWith(429, `{"error":{"message":"Rate limit reached for requests",`+
-			`"type":"rate_limit_error","code":"rate_limit_exceeded"}}`, "Retry-After", "3600"), func(t *testing.T, err error) {
+			`"type":"rate_limit_error","code":"rate_limit_exceeded"}}`, "Retry-After", "3600",
+		), func(t *testing.T, err error) {
 			var pl *ProviderLimit
 			if !errors.As(err, &pl) || pl.Cap != CapWindow || pl.ResetAt.Before(now.Add(55*time.Minute)) {
 				t.Errorf("err = %v limit %+v", err, pl)
@@ -527,7 +529,9 @@ func TestNewOpenAIAPIRejectsBadURL(t *testing.T) {
 
 func TestChatAccKeepsRefusalAsText(t *testing.T) {
 	acc := &chatAcc{}
-	_ = acc.event(core.SSEEvent{Data: `{"choices":[{"delta":{"refusal":"I cannot help with that."},"finish_reason":"stop"}]}`})
+	_ = acc.event(core.SSEEvent{
+		Data: `{"choices":[{"delta":{"refusal":"I cannot help with that."},"finish_reason":"stop"}]}`,
+	})
 	got := acc.result()
 	if len(got.Content) != 1 || got.Content[0].Text != "I cannot help with that." {
 		t.Errorf("refusal result = %+v", got.Content)

@@ -184,13 +184,43 @@ func TestSelectSkipsLimitedLinksAndPausesWhenNoneIsLeft(t *testing.T) {
 	}
 }
 
+func TestSelectChoosesBuiltOpenAILinks(t *testing.T) {
+	ctx := context.Background()
+	sub := subLink(llm.OpenAISubscription)
+	sub.probe.Models = map[llm.Weight]string{llm.Standard: "gpt-small"}
+	paid := paidLink(llm.OpenAIAPI)
+	paid.probe.Models = map[llm.Weight]string{llm.Standard: "gpt-small"}
+
+	r := newRouter("allowed", newLimits(), sub, paid)
+	sel, err := r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.OpenAISubscription, llm.OpenAIAPI}, Weight: llm.Standard})
+	if err != nil || sel.Link != llm.OpenAISubscription || sel.Model != "gpt-small" || len(sel.Skips) != 0 {
+		t.Fatalf("subscription first: %+v, %v", sel, err)
+	}
+
+	lim := newLimits()
+	lim.resets[llm.OpenAISubscription] = t0.Add(time.Hour)
+	r = newRouter("allowed", lim, sub, paid)
+	sel, err = r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.OpenAISubscription, llm.OpenAIAPI}, Weight: llm.Standard})
+	if err != nil || sel.Link != llm.OpenAIAPI || sel.Profile.CostClass != llm.CostPaid {
+		t.Fatalf("limited subscription falls to the paid link: %+v, %v", sel, err)
+	}
+
+	r = newRouter("never", newLimits(), paid)
+	_, err = r.Select(ctx, SelectRequest{Chain: []llm.Link{llm.OpenAIAPI}, Weight: llm.Standard})
+	if !errors.Is(err, ErrPaidRefused) {
+		t.Fatalf("the paid OpenAI link follows providers.paid: %v", err)
+	}
+}
+
 func TestSelectSkipsUnbuiltUnavailableAndUnauthorizedLinks(t *testing.T) {
 	ctx := context.Background()
 	down := subLink(llm.AnthropicAPI)
 	down.perr = llm.ErrUnavailable
 	out := subLink(llm.Local)
 	out.perr = llm.ErrUnauthorized
-	r := newRouter("allowed", newLimits(), down, out, subLink(llm.ClaudeCLI))
+	unbuilt := subLink(llm.OpenAIAPI)
+	unbuilt.perr = llm.ErrNotYet
+	r := newRouter("allowed", newLimits(), down, out, unbuilt, subLink(llm.ClaudeCLI))
 	sel, err := r.Select(ctx, SelectRequest{
 		Chain:  []llm.Link{llm.OpenAISubscription, llm.OpenAIAPI, llm.AnthropicAPI, llm.Local, llm.ClaudeCLI},
 		Weight: llm.Standard,
@@ -198,7 +228,8 @@ func TestSelectSkipsUnbuiltUnavailableAndUnauthorizedLinks(t *testing.T) {
 	if err != nil || sel.Link != llm.ClaudeCLI {
 		t.Fatalf("got %+v, %v", sel, err)
 	}
-	want := []string{"not_built", "not_built", "unavailable", "unauthorized"}
+	// the subscription link has no adapter on this machine; the other OpenAI link reports itself unbuilt
+	want := []string{"unavailable", "not_built", "unavailable", "unauthorized"}
 	if len(sel.Skips) != len(want) {
 		t.Fatalf("skips %+v", sel.Skips)
 	}
