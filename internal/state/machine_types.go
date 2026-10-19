@@ -90,8 +90,7 @@ type InstallEntry struct {
 
 // InstallSelections are the optional parts chosen at install.
 type InstallSelections struct {
-	Hosts   []string `json:"hosts,omitempty"` // "claude", "codex"
-	Project bool     `json:"project"`         // the --project files are owned
+	Hosts []string `json:"hosts,omitempty"` // "claude", "codex"
 }
 
 // ScheduleBody is the body of schedule.json.

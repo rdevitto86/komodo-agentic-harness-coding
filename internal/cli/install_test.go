@@ -79,16 +79,16 @@ func TestInstallWritesOnlyTheOwnedParts(t *testing.T) {
 	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".claude", "settings.json"))), &settings); err != nil {
 		t.Fatal(err)
 	}
-	text := string(settings["permissions"]) + string(settings["hooks"])
+	if _, ok := settings["hooks"]; ok {
+		t.Errorf("install wrote a hooks entry: %s", settings["hooks"])
+	}
+	text := string(settings["permissions"])
 	for _, want := range []string{
 		"Bash(ls)",
 		"Bash(komodo *)",
 		"Bash(komodo config set*)",
 		"Bash(komodo install*)",
 		"Bash(komodo update*)",
-		"komodo internal guard",
-		`"onFailure":"block"`,
-		"Bash|Edit|Write",
 	} {
 		if !strings.Contains(
 			strings.ReplaceAll(strings.ReplaceAll(text, " ", ""), "\n", ""),
@@ -102,7 +102,7 @@ func TestInstallWritesOnlyTheOwnedParts(t *testing.T) {
 	}
 	var m Manifest
 	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".git", "komodo", "install.json"))), &m); err != nil ||
-		len(m.Entries) != 7 {
+		len(m.Entries) != 6 {
 		t.Fatalf("manifest = %+v, %v", m, err)
 	}
 }

@@ -37,9 +37,9 @@ func TestInstallNeverOwnsWhatWasAlreadyThere(t *testing.T) {
 	}
 	var m Manifest
 	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(repo, ".git", "komodo", "install.json"))), &m); err != nil ||
-		len(m.Entries) != 5 {
+		len(m.Entries) != 4 {
 		t.Fatalf(
-			"manifest holds %d entries, want 5 (the pre-existing import and allow rule are not owned): %+v, %v",
+			"manifest holds %d entries, want 4 (the pre-existing import and allow rule are not owned): %+v, %v",
 			len(m.Entries),
 			m,
 			err,
@@ -54,34 +54,6 @@ func TestInstallNeverOwnsWhatWasAlreadyThere(t *testing.T) {
 	if got := string(settingsOf(t, repo)["permissions"]); !strings.Contains(got, "Bash(komodo *)") ||
 		!strings.Contains(got, "npm test") {
 		t.Errorf("permissions after remove = %s", got)
-	}
-}
-
-func TestInstallEditsOnlyTheGuardInsideAForeignHookGroup(t *testing.T) {
-	h := newHarness(t)
-	repo := repoDir(t, "")
-	mustWrite(t, filepath.Join(repo, ".claude", "settings.json"),
-		`{"hooks":{"PreToolUse":[{"matcher":"Read|Bash|Edit|Write","hooks":[{"type":"command","command":"my-linter"},`+
-			`{"type":"command","command":"komodo internal guard"}]}]}}`)
-	if code, e := h.install(repo, "--repo-only", "--hosts", "claude"); code != 0 {
-		t.Fatalf("install: exit %d, %+v", code, e.Error)
-	}
-	flat := strings.Join(strings.Fields(string(settingsOf(t, repo)["hooks"])), "")
-	for _, want := range []string{`"matcher":"Read|Bash|Edit|Write"`, `"command":"my-linter"`, `"onFailure":"block"`} {
-		if !strings.Contains(flat, want) {
-			t.Errorf("after install the hooks lack %s: %s", want, flat)
-		}
-	}
-	if strings.Count(flat, "komodointernalguard") != 1 {
-		t.Errorf("the guard is listed %d times: %s", strings.Count(flat, "komodointernalguard"), flat)
-	}
-	if code, e := h.install(repo, "--repo-only", "--remove"); code != 0 {
-		t.Fatalf("remove: exit %d, %+v", code, e.Error)
-	}
-	flat = strings.Join(strings.Fields(string(settingsOf(t, repo)["hooks"])), "")
-	if !strings.Contains(flat, `"command":"my-linter"`) || !strings.Contains(flat, `"matcher":"Read|Bash|Edit|Write"`) ||
-		strings.Contains(flat, "komodointernalguard") {
-		t.Errorf("after remove: %s", flat)
 	}
 }
 
