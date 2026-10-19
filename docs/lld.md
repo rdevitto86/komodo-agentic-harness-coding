@@ -2212,7 +2212,7 @@ type AgentOverride struct {
 | `result` | The final call's schema; its `$id` is `komodo:agent/<role>/result/<v>` and its `code` fields draw on the [code list](#23-data-model) |
 | `pool_slot` | `true` when the role takes a session slot; the slot rules are in [7. Runtime Manager](#7-runtime-manager) |
 
-The builder's `agent.json`:
+The builder's `agent.json`; `properties` in `result` is elided here, and [5.2](#52-package-layout) shows how a result schema is generated from its Go type:
 
 ```json
 {
@@ -2231,7 +2231,7 @@ The builder's `agent.json`:
     "required": ["repo_profile", "group", "tasks", "files", "file_contents"],
     "optional": ["repo_context", "standards", "diff", "checks", "findings", "scope_answer", "unfinished", "specs"]
   },
-  "result": {"$id": "komodo:agent/builder/result/1", "type": "object", "required": ["status", "summary"]},
+  "result": {"$id": "komodo:agent/builder/result/1", "type": "object", "additionalProperties": false, "properties": {…}, "required": ["status", "summary"]},
   "pool_slot": true
 }
 ```
@@ -3746,6 +3746,32 @@ The package is `internal/intake`.
 | `internal/intake/write.go` | Staging, the folder swap with rollback and the restore of `.plan-old-*` folders |
 
 The planner's role definition and result decoder are in `internal/agent/planner.go`: `PlannerRole`, `PlannerResult` and `ParsePlannerResult`. A `PlannerResult` has the shape of a `PlanDraft`; the handler copies one into the other.
+
+The result schema of every agent is generated from its Go result type, so a model's final call has the shape the decoder reads. A field's `json` tag gives its name and, without `omitempty`, marks it required; its `desc` tag becomes the `description` the model reads; a named string type with fixed words becomes an `enum`; every object is closed with `additionalProperties: false`. `go test ./internal/agent -run TestResultSchemasMatchGoTypes -update` rewrites the `result` of each `embed/agents/<role>/agent.json`, and the same test fails when a checked-in schema differs from its Go type. The planner's schema:
+
+```json
+{
+  "$id": "komodo:agent/planner/result/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["files"],
+  "properties": {
+    "files": {
+      "type": "array",
+      "description": "Every task-list file of the plan, as an array of objects, never a string.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "content"],
+        "properties": {
+          "path": {"type": "string", "description": "File path under docs/backlog/, such as epic-2/tg-2.1/TG.md."},
+          "content": {"type": "string", "description": "The whole file as text, front matter included."}
+        }
+      }
+    }
+  }
+}
+```
 
 ### 5.3 Data Model
 
@@ -10792,7 +10818,7 @@ The Builder's role as compiled:
     "required": ["repo_profile", "group", "tasks", "files", "file_contents"],
     "optional": ["repo_context", "standards", "diff", "checks", "findings", "scope_answer", "unfinished", "specs"]
   },
-  "result": {"$id": "komodo:agent/builder/result/1", "type": "object", "required": ["status", "summary"]},
+  "result": {"$id": "komodo:agent/builder/result/1", "type": "object", "additionalProperties": false, "properties": {…}, "required": ["status", "summary"]},
   "pool_slot": true
 }
 ```
@@ -11212,7 +11238,7 @@ Files this chapter calls but does not own:
     "required": ["repo_profile", "group", "tasks", "acceptance"],
     "optional": ["repo_context", "standards", "diff", "checks", "baseline"]
   },
-  "result": {"$id": "komodo:agent/tester/result/1", "type": "object", "required": ["items", "tasks"]},
+  "result": {"$id": "komodo:agent/tester/result/1", "type": "object", "additionalProperties": false, "properties": {…}, "required": ["items", "tasks"]},
   "pool_slot": true
 }
 ```
@@ -11912,7 +11938,7 @@ The catalogs are compiled into the binary, so a reader never sees an older or ne
     "required": ["repo_profile", "group", "tasks", "files", "diff", "lens", "lens_rules", "checks"],
     "optional": ["repo_context", "standards", "findings", "callers", "specs", "repo_map"]
   },
-  "result": {"$id": "komodo:agent/reviewer/result/1", "type": "object", "required": ["verdicts"]},
+  "result": {"$id": "komodo:agent/reviewer/result/1", "type": "object", "additionalProperties": false, "properties": {…}, "required": ["verdicts"]},
   "pool_slot": true
 }
 ```

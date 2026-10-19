@@ -10,13 +10,15 @@ import (
 
 // PlannerFile is one task-list file of the planner's draft.
 type PlannerFile struct {
-	Path    string `json:"path"`    // path under docs/backlog/, such as epic-2/tg-2.1/TG.md
-	Content string `json:"content"` // the whole file
+	// path under docs/backlog/, such as epic-2/tg-2.1/TG.md
+	Path string `json:"path" desc:"File path under docs/backlog/, such as epic-2/tg-2.1/TG.md."`
+	// the whole file
+	Content string `json:"content" desc:"The whole file as text, front matter included."`
 }
 
 // PlannerResult is the planner's final call: every task-list file of the plan.
 type PlannerResult struct {
-	Files []PlannerFile `json:"files"`
+	Files []PlannerFile `json:"files" desc:"Every task-list file of the plan, as an array of objects, never a string."`
 }
 
 // PlannerRole returns the compiled planner role. It has no run tool, no write tool and no pool
@@ -28,7 +30,7 @@ func PlannerRole() Role {
 		[]string{},
 		[]string{"repo_profile", "repo_map", "layout", "goal"},
 		[]string{"repo_context", "specs", "backlog"},
-		"komodo:agent/planner/result/1", []string{"files"}, false)
+		"komodo:agent/planner/result/1", PlannerResult{}, false)
 }
 
 // ParsePlannerResult decodes a planner final call, refusing unknown fields, an empty plan and a

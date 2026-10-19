@@ -36,10 +36,35 @@
   },
   "result": {
     "$id": "komodo:agent/planner/result/1",
-    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "files": {
+        "description": "Every task-list file of the plan, as an array of objects, never a string.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "description": "The whole file as text, front matter included.",
+              "type": "string"
+            },
+            "path": {
+              "description": "File path under docs/backlog/, such as epic-2/tg-2.1/TG.md.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
     "required": [
       "files"
-    ]
+    ],
+    "type": "object"
   },
   "pool_slot": false
 }

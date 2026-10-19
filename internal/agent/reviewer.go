@@ -19,13 +19,13 @@ const (
 
 // TaskVerdict is the Reviewer's verdict on one task.
 type TaskVerdict struct {
-	Task    string  `json:"task"`
-	Verdict Verdict `json:"verdict"`
+	Task    string  `json:"task" desc:"The task identifier from the brief."`
+	Verdict Verdict `json:"verdict" desc:"Use brief_incomplete when the brief lacks what you need."`
 }
 
 // ReviewerResult is the Reviewer's whole final call: one verdict per task identifier.
 type ReviewerResult struct {
-	Verdicts []TaskVerdict `json:"verdicts"`
+	Verdicts []TaskVerdict `json:"verdicts" desc:"Exactly one verdict per task identifier, as an array of objects."`
 }
 
 // ReviewerRole returns the compiled Reviewer role.
@@ -36,7 +36,7 @@ func ReviewerRole() Role {
 		[]string{"R1"},
 		[]string{"repo_profile", "group", "tasks", "files", "diff", "lens", "lens_rules", "checks"},
 		[]string{"repo_context", "standards", "findings", "callers", "specs", "repo_map"},
-		"komodo:agent/reviewer/result/1", []string{"verdicts"}, true)
+		"komodo:agent/reviewer/result/1", ReviewerResult{}, true)
 }
 
 // ParseReviewerResult decodes a Reviewer final call, refusing unknown fields and verdict words.
