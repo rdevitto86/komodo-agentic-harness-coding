@@ -26,8 +26,8 @@ func TestGroupStartedWithEveryLinkLimitedPausesAndMakesNoModelCall(t *testing.T)
 		p.WaitLink != string(llm.AnthropicAPI) {
 		t.Fatalf("pause %+v", p)
 	}
-	if r.model.total() != 0 || r.m.Progress().Attempts != 0 {
-		t.Fatalf("model calls %d, attempts %d", r.model.total(), r.m.Progress().Attempts)
+	if r.model.total() != 0 || r.m.Progress().RetriesLeft != 3 {
+		t.Fatalf("model calls %d, retries left %d", r.model.total(), r.m.Progress().RetriesLeft)
 	}
 	if err := r.m.Stop(context.Background(), "pause_timeout"); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestProviderLimitMidSessionPausesAndRefusedResumeKeepsSinceAndCountsTheRefu
 		t.Fatalf("Run returned %v", err)
 	}
 	first := r.rt.progress().Pause
-	if first == nil || len(first.Owed) != 1 || first.Owed[0] != "builder" || r.rt.progress().Attempts != 0 {
+	if first == nil || len(first.Owed) != 1 || first.Owed[0] != "builder" || r.rt.progress().RetriesLeft != 3 {
 		t.Fatalf("pause %+v, progress %+v", first, r.rt.progress())
 	}
 	if _, ok := r.rt.progress().Handles["builder"]; !ok {
@@ -72,8 +72,8 @@ func TestProviderLimitMidSessionPausesAndRefusedResumeKeepsSinceAndCountsTheRefu
 	if again == nil || !again.Since.Equal(first.Since) || again.RefusedResumes != 1 {
 		t.Fatalf("re-pause %+v, first %+v", again, first)
 	}
-	if r.model.started("builder") != 1 || r.rt.progress().Attempts != 0 {
-		t.Fatalf("sessions %v, attempts %d", r.model.starts, r.rt.progress().Attempts)
+	if r.model.started("builder") != 1 || r.rt.progress().RetriesLeft != 3 {
+		t.Fatalf("sessions %v, retries left %d", r.model.starts, r.rt.progress().RetriesLeft)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestResumeContinuesTheSavedSessionAndChargesNoAttempt(t *testing.T) {
 	r.model.on("tester", sayResult(testerPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanupWith(func(ctx context.Context) error { return r.m.Resume(ctx, wake) })
-	if in.Text != "Continue where you stopped." || r.model.started("builder") != 1 || r.rt.progress().Attempts != 0 {
+	if in.Text != "Continue where you stopped." || r.model.started("builder") != 1 || r.rt.progress().RetriesLeft != 3 {
 		t.Fatalf("resume input %q, sessions %v", in.Text, r.model.starts)
 	}
 }
@@ -148,8 +148,8 @@ func TestFailoverToTheNextLinkChargesNoAttempt(t *testing.T) {
 	r.model.on("tester", sayResult(testerPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
-	if r.rt.progress().Attempts != 0 || r.model.started("builder") != 1 {
-		t.Fatalf("attempts %d, sessions %v", r.rt.progress().Attempts, r.model.starts)
+	if r.rt.progress().RetriesLeft != 3 || r.model.started("builder") != 1 {
+		t.Fatalf("retries left %d, sessions %v", r.rt.progress().RetriesLeft, r.model.starts)
 	}
 	if at, ok := r.lim.resets[llm.ClaudeCLI]; !ok || !at.Equal(t0.Add(5*time.Hour)) {
 		t.Fatalf("the limit was not recorded: %v", r.lim.resets)

@@ -26,7 +26,94 @@ type calc struct {
 	refuse  *bus.RequestRefused
 	// scopeBlock is set when the scope rules did not deny a request, so the block rows block the group.
 	scopeBlock *ScopeAsk
+	// exhausted names the failure that found the retry budget empty; the block rows then hold the group for an override.
+	exhausted string
+	// err is the error type this input stood for, which the error handler records; empty for none.
+	err state.Reason
 }
+
+// wallExtension is the one automatic extension a try gets after its working-time limit.
+const wallExtension = 60 * time.Minute
+
+// faultCap is the blocker errors in a row, with no session result between them, that block a group for a person.
+const faultCap = 4
+
+// try returns the group's current try, from 1.
+func (c *calc) try() int { return max(c.s.Counters.Tries, 1) }
+
+// tryWallS returns the seconds worked in the current try.
+func (c *calc) tryWallS() int64 { return c.s.Counters.WallUsedS - c.s.Counters.WallBaseS }
+
+// extended reports whether the current try has had its wall-time extension.
+func (c *calc) extended() bool { return c.s.Counters.WallExtTry == c.try() }
+
+// wallOver reports whether the current try ran past its limit and the fixed extension.
+func (c *calc) wallOver() bool {
+	return c.from == StageBuild && c.wallMin() > 0 && c.extended() &&
+		c.tryWallS() >= int64(c.wallMin())*60+int64(wallExtension/time.Second)
+}
+
+// onLastTry reports whether the current try is the group's last: a failure now leaves no try to start.
+func (c *calc) onLastTry() bool { return c.s.Counters.RetriesLeft <= 1 }
+
+// wallMin returns the current try's working-time limit in minutes: the final try's own, else limits.group_wall_min.
+func (c *calc) wallMin() int {
+	if m := c.s.Counters.FinalWallMin; m > 0 {
+		return m
+	}
+	return c.l.GroupWallMin
+}
+
+// newTry starts the next try: its wall time begins at the time used so far.
+func (c *calc) newTry() {
+	c.s.Counters.Tries = c.try() + 1
+	c.s.Counters.WallBaseS = c.s.Counters.WallUsedS
+}
+
+// tally names the error an input stood for, for the error handler, and keeps the group's streak of blocker errors; a
+// session that ends done or in a charged failure of the work clears the streak.
+func (c *calc) tally() {
+	s := &c.s
+	if c.from == NoStage || c.from == StageDone {
+		return
+	}
+
+	var r state.Reason
+
+	switch c.in.Kind {
+	case InSessionEnd:
+		d := decode[SessionEndData](c.in.Data)
+		if d.Restart {
+			return
+		}
+		if d.Reason == string(state.ReasonDone) {
+			s.Counters.FaultStreak = 0
+			return
+		}
+
+		r = state.Reason(d.Reason)
+		if r.Charged() {
+			s.Counters.FaultStreak = 0
+		}
+	case InGroupCrash:
+		r = state.ReasonCrash
+	case InFault:
+		r = state.Reason(decode[FaultData](c.in.Data).Reason)
+		if r == "commit" {
+			r = state.ReasonPublish
+		}
+	default:
+		return
+	}
+
+	c.err = r
+	if state.Classify(r) == state.SeverityBlocker {
+		s.Counters.FaultStreak++
+	}
+}
+
+// faultCapped reports whether the streak of blocker errors reached the cap.
+func (c *calc) faultCapped() bool { return c.s.Counters.FaultStreak >= faultCap }
 
 // allTasksDone reports whether every task is done.
 func (c *calc) allTasksDone() bool { return c.firstOpenTask() == "" }
@@ -41,7 +128,7 @@ func (c *calc) firstOpenTask() string {
 	return ""
 }
 
-// tick adds working time and raises the wall extension; only a live builder in Build counts.
+// tick adds working time and grants the try's wall extension; only a live builder in Build counts.
 func (c *calc) tick() {
 	s := &c.s
 	if s.Stage != StageBuild {
@@ -50,8 +137,8 @@ func (c *calc) tick() {
 	if c.builderLive() && !s.LastEventAt.IsZero() && c.in.Time.After(s.LastEventAt) {
 		s.Counters.WallUsedS += int64(c.in.Time.Sub(s.LastEventAt) / time.Second)
 	}
-	if c.l.GroupWallMin > 0 && s.Counters.WallUsedS >= int64(c.l.GroupWallMin)*60 {
-		s.Counters.WallExtended = true
+	if c.wallMin() > 0 && c.tryWallS() >= int64(c.wallMin())*60 {
+		s.Counters.WallExtTry = c.try()
 	}
 }
 
@@ -87,7 +174,7 @@ func (c *calc) inStage() bool {
 		return true
 	case InLoopRestart:
 		if s.Stage == StageBuild || s.Stage == StageTestReview {
-			s.Counters.Retries++
+			c.waive("restart")
 			c.enterStage(s.Stage, stageData{Task: c.firstOpenTask(), Retry: "loop"})
 			return true
 		}
@@ -176,9 +263,6 @@ func (c *calc) sessionStart() bool {
 				break
 			}
 		}
-		if !d.Resumed && !d.Restart {
-			s.Counters.Attempts++
-		}
 	case "tester":
 		s.TestReview.Tester.Session, s.TestReview.Tester.Result = string(d.Session), ""
 	case "reviewer":
@@ -187,6 +271,32 @@ func (c *calc) sessionStart() bool {
 
 	c.emitSession(d.SessionStart)
 	return true
+}
+
+// charge spends one try for a true failure and starts the next; a failure on the last try marks the budget empty.
+func (c *calc) charge(cause string) bool {
+	s := &c.s
+	if c.onLastTry() {
+		c.exhausted = cause
+		return false
+	}
+
+	s.Counters.RetriesLeft--
+	c.newTry()
+	c.emitStatus(&bus.RetrySpent{
+		GroupFacts: bus.GroupFacts{Stage: string(s.Stage), Reason: cause},
+		Left:       s.Counters.RetriesLeft,
+	})
+
+	return true
+}
+
+// waive records a failure that is Komodo's own fault: it costs the group no retry.
+func (c *calc) waive(cause string) {
+	c.emitStatus(&bus.RetryWaived{
+		GroupFacts: bus.GroupFacts{Stage: string(c.s.Stage), Reason: cause},
+		Left:       c.s.Counters.RetriesLeft,
+	})
 }
 
 // emitSession queues a session.start event with the stage filled in.
@@ -279,7 +389,7 @@ func (c *calc) gateFail() bool {
 				Reason: string(state.ReasonCheckFail),
 			},
 			Task:    t.ID,
-			Attempt: s.Counters.Attempts + 1,
+			Attempt: max(c.l.GroupRetries-s.Counters.RetriesLeft, 0) + 1,
 		})
 		t.GateFailures = 0
 	}
@@ -287,22 +397,19 @@ func (c *calc) gateFail() bool {
 	return true
 }
 
-// timerExtend grants the one wall-time extension of the group, or denies it.
+// timerExtend grants the try's one wall-time extension of 60 minutes, or denies it.
 func (c *calc) timerExtend() bool {
 	s := &c.s
 	if s.Stage != StageBuild {
 		return false
 	}
 
-	req := decode[struct {
-		Limit time.Duration `json:"limit"`
-	}](c.in.Data)
 	grant := struct {
 		Extra time.Duration `json:"extra"`
 	}{}
-	if !s.Counters.WallExtended {
-		s.Counters.WallExtended = true
-		grant.Extra = req.Limit
+	if !c.extended() {
+		s.Counters.WallExtTry = c.try()
+		grant.Extra = wallExtension
 	}
 
 	o := c.order(OrderExtend, StageBuild, grant)
@@ -363,12 +470,14 @@ func Next(s0 State, in Input, l Limits) Result {
 	}
 
 	c.tick()
+	c.tally()
 	a := c.inStage()
 
 	b := c.move()
 	if !a && !b {
 		r := Result{State: s0, Refused: true}
 		if c.refuse != nil {
+			r.Why = c.refuse.Why
 			r.Emit = []Event{c.event(bus.TypeRunStatus, c.refuse)}
 		}
 		return r
@@ -382,7 +491,7 @@ func Next(s0 State, in Input, l Limits) Result {
 		c.s.ActionsOpen = append(c.s.ActionsOpen, state.OpenAction{ID: o.Key, Kind: string(o.Kind), Args: args})
 	}
 
-	return Result{State: c.s, Orders: c.orders, Emit: c.emit, Dropped: c.dropped}
+	return Result{State: c.s, Orders: c.orders, Emit: c.emit, Dropped: c.dropped, Err: c.err}
 }
 
 // cloneState returns a deep copy of s with no nil slice or map.

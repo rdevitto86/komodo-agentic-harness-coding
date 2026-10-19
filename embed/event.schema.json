@@ -1,5 +1,39 @@
 {
   "$defs": {
+    "BreakerClosed": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "BreakerOpened": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "groups"
+      ],
+      "type": "object"
+    },
     "BusOverflow": {
       "additionalProperties": false,
       "properties": {
@@ -207,6 +241,22 @@
       ],
       "type": "object"
     },
+    "EngineFailed": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "where",
+        "detail"
+      ],
+      "type": "object"
+    },
     "EpicPaused": {
       "additionalProperties": false,
       "properties": {
@@ -280,6 +330,25 @@
         "kind",
         "severity",
         "reason"
+      ],
+      "type": "object"
+    },
+    "ErrorRecorded": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "wait_s": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reason",
+        "tier"
       ],
       "type": "object"
     },
@@ -398,6 +467,10 @@
         },
         "stage": {
           "type": "string"
+        },
+        "until": {
+          "format": "date-time",
+          "type": "string"
         }
       },
       "required": [],
@@ -418,6 +491,33 @@
       },
       "required": [
         "outcome"
+      ],
+      "type": "object"
+    },
+    "GroupFailed": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "prior": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "last"
       ],
       "type": "object"
     },
@@ -744,6 +844,38 @@
       ],
       "type": "object"
     },
+    "OverrideApproved": {
+      "additionalProperties": false,
+      "properties": {
+        "granted": {
+          "type": "integer"
+        },
+        "left": {
+          "type": "integer"
+        },
+        "minutes": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "granted",
+        "left",
+        "minutes"
+      ],
+      "type": "object"
+    },
+    "OverrideLapsed": {
+      "additionalProperties": false,
+      "properties": {
+        "window_min": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window_min"
+      ],
+      "type": "object"
+    },
     "PanicFault": {
       "additionalProperties": false,
       "properties": {
@@ -1030,11 +1162,56 @@
       ],
       "type": "object"
     },
+    "RetrySpent": {
+      "additionalProperties": false,
+      "properties": {
+        "left": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "left"
+      ],
+      "type": "object"
+    },
+    "RetryWaived": {
+      "additionalProperties": false,
+      "properties": {
+        "left": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "left"
+      ],
+      "type": "object"
+    },
     "RunContinue": {
       "additionalProperties": false,
       "properties": {
         "answer": {
           "type": "string"
+        },
+        "minutes": {
+          "type": "integer"
         },
         "request": {
           "type": "string"
@@ -1626,6 +1803,46 @@
       },
       "required": [
         "groups"
+      ],
+      "type": "object"
+    },
+    "StartsPaused": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "wait_s": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reason",
+        "groups"
+      ],
+      "type": "object"
+    },
+    "StartsResumed": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "by"
       ],
       "type": "object"
     },
@@ -2304,10 +2521,49 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/BreakerOpened"
+        },
+        "subtype": {
+          "const": "breaker.opened"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/EngineFailed"
+        },
+        "subtype": {
+          "const": "engine.failed"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/GroupBlocked"
         },
         "subtype": {
           "const": "group.blocked"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/GroupFailed"
+        },
+        "subtype": {
+          "const": "group.failed"
         },
         "type": {
           "const": "run-failure"
@@ -2343,6 +2599,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/StartsPaused"
+        },
+        "subtype": {
+          "const": "starts.paused"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/RunStart"
         },
         "subtype": {
@@ -2350,6 +2619,19 @@
         },
         "type": {
           "const": "run-start"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/BreakerClosed"
+        },
+        "subtype": {
+          "const": "breaker.closed"
+        },
+        "type": {
+          "const": "run-status"
         }
       }
     },
@@ -2438,6 +2720,19 @@
         },
         "subtype": {
           "const": "epic.resumed"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ErrorRecorded"
+        },
+        "subtype": {
+          "const": "error.recorded"
         },
         "type": {
           "const": "run-status"
@@ -2642,6 +2937,32 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/OverrideApproved"
+        },
+        "subtype": {
+          "const": "override.approved"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/OverrideLapsed"
+        },
+        "subtype": {
+          "const": "override.lapsed"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/prOpenedEvent"
         },
         "subtype": {
@@ -2698,6 +3019,32 @@
         },
         "subtype": {
           "const": "request.refused"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/RetrySpent"
+        },
+        "subtype": {
+          "const": "retry.spent"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/RetryWaived"
+        },
+        "subtype": {
+          "const": "retry.waived"
         },
         "type": {
           "const": "run-status"
@@ -2854,6 +3201,19 @@
         },
         "subtype": {
           "const": "stage.exit"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/StartsResumed"
+        },
+        "subtype": {
+          "const": "starts.resumed"
         },
         "type": {
           "const": "run-status"

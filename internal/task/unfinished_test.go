@@ -41,7 +41,7 @@ func TestResumedBuilderIsToldWhichEditsAreInTheWorktree(t *testing.T) {
 }
 
 func TestNextBuilderSessionIsToldWhatTheLastOneLeftBehind(t *testing.T) {
-	r := newPipeRig(t, rigOpts{limits: Limits{Attempts: 2}})
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 2}})
 	r.git.statuses = []string{" M a.go\n?? dir/b.go\n"}
 	r.model.on("builder", sayResult(`{"items":[]}`), building(r.wt, "a.go", "package a\n", builderDone))
 	r.model.on("tester", sayResult(testerPass))

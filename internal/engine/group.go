@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,15 +40,17 @@ type group struct {
 	dead       bool // the loop ended without a Done state
 
 	// The fields below belong to the loop goroutine.
-	st       State
-	rev      int
-	created  bool
-	l        lease.Lease
-	hasSlot  bool
-	renewT   Timer
-	timers   []Timer
-	armed    pauseKey
-	stopping atomic.Bool
+	st        State
+	rev       int
+	created   bool
+	l         lease.Lease
+	hasSlot   bool
+	renewT    Timer
+	timers    []Timer
+	armed     pauseKey
+	holdUntil time.Time // the end of the group's breaker wait; zero for none
+	holdT     Timer
+	stopping  atomic.Bool
 }
 
 // main is the group's goroutine: it starts or recovers the group, then takes one input at a time.
@@ -90,6 +93,7 @@ func (g *group) main(rec *state.Record) {
 
 // stopTimers cancels every timer of the group.
 func (g *group) stopTimers() {
+	g.clearHold()
 	if g.renewT != nil {
 		g.renewT.Stop()
 	}
@@ -247,12 +251,23 @@ func (g *group) save(ns State) error {
 // publish sends events to the Event Bus after the write that produced them.
 func (g *group) publish(es []Event) {
 	for _, e := range es {
-		if err := g.m.d.Bus.Publish(e); err != nil &&
-			!errors.Is(err, bus.ErrBusSealed) &&
-			!errors.Is(err, bus.ErrBusClosed) {
+		if err := g.m.d.Bus.Publish(e); err != nil && g.busFailed(err) {
 			g.m.report(g, err)
+			g.m.errs.engineFailed("the event bus", err)
 		}
 	}
+}
+
+// busFailed reports whether a publish error means the Event Bus failed, not that the engine is shutting down.
+func (g *group) busFailed(err error) bool {
+	switch {
+	case errors.Is(err, bus.ErrBusSealed):
+		return false
+	case errors.Is(err, bus.ErrBusClosed):
+		return g.ctx.Err() == nil && !g.stopping.Load()
+	}
+
+	return true
 }
 
 // after applies what the saved state asks of the engine around the group: the pool slot, the timers and the run's view.
@@ -271,6 +286,10 @@ func (g *group) after() {
 	}
 
 	g.armTimers()
+	if stage == StagePaused || stage == StageBlocked || stage == StageDone {
+		g.clearHold()
+		g.m.errs.drop(g.spec.ID)
+	}
 	if stage == StageDone {
 		g.m.groupDone(g)
 	}
@@ -284,12 +303,34 @@ func (g *group) perform(orders []Order) {
 		if g.stopping.Load() {
 			return
 		}
+		if o.Kind == OrderEnterStage && startsSessions(o.Stage) && (g.holding() || !g.m.errs.allow(g.spec.ID)) {
+			continue // held by a breaker; the order stays open until the hold lets it through
+		}
 		if o.Kind == OrderEnterStage {
 			g.fillContext(&o)
 		}
 		g.do(o)
 		g.complete(o.Key)
 	}
+}
+
+// startsSessions reports whether entering a stage starts model sessions.
+func startsSessions(st Stage) bool { return st == StageBuild || st == StageTestReview }
+
+// resumeHeld performs the stage orders the breaker held back.
+func (g *group) resumeHeld() {
+	if !working(g.st.Stage) {
+		return
+	}
+
+	var open []Order
+	for _, a := range g.st.ActionsOpen {
+		if a.Kind == string(OrderEnterStage) {
+			open = append(open, rawOrder(a))
+		}
+	}
+
+	g.perform(open)
 }
 
 // fillContext adds the Context Manager's answer for the stage's agents to a stage order.
@@ -553,9 +594,23 @@ func (g *group) armRenew() {
 	})
 }
 
-// handle takes one input: decide, save, publish, then perform the orders.
+// handle takes one input: decide, save, publish, then perform the orders; a waiting continue is told the outcome.
 func (g *group) handle(in Input) {
-	if g.stopping.Load() || g.st.Stage == StageDone {
+	var told error
+	if (in.Kind == InContinue || in.Kind == InOverride) && in.Request != "" {
+		defer func() { g.m.continued(in.Request, told) }()
+	}
+	if g.stopping.Load() {
+		told = errors.New("the group is stopping")
+		return
+	}
+	if g.st.Stage == StageDone {
+		told = endedError(g.spec.Label, g.st)
+		return
+	}
+
+	if in.Kind == InHoldDue {
+		g.resumeHeld()
 		return
 	}
 
@@ -576,6 +631,10 @@ func (g *group) handle(in Input) {
 	case res.Dup || res.Stale:
 		return
 	case res.Refused:
+		// A group that is already running has nothing to continue: the person's goal holds, so it is no refusal.
+		if in.Kind != InContinue || !working(g.st.Stage) {
+			told = errors.New(cmp.Or(res.Why, "the group did not take it"))
+		}
 		g.publish(res.Emit)
 		return
 	}
@@ -583,12 +642,17 @@ func (g *group) handle(in Input) {
 		g.m.report(g, errors.New(d))
 	}
 	if err := g.save(res.State); err != nil {
+		told = err
 		g.saveFailed(err)
 		return
 	}
 
 	g.publish(res.Emit)
 	g.sessionSignals(in)
+	if res.Err != "" {
+		g.holdFor(g.m.errs.record(g.r.id, g.spec.ID, res.Err, g.st.Counters.FaultStreak))
+	}
+
 	g.after()
 	g.perform(res.Orders)
 }
@@ -596,6 +660,10 @@ func (g *group) handle(in Input) {
 // saveFailed blocks the group state_invalid after the State Manager refused a write.
 func (g *group) saveFailed(err error) {
 	g.m.report(g, fmt.Errorf("save %s: %w", g.spec.Label, err))
+	if g.st.Stage == StageBlocked {
+		g.after() // the stored record is unchanged and the group stays held; the failed command is told
+		return
+	}
 
 	res := Next(
 		g.st,
@@ -610,7 +678,15 @@ func (g *group) saveFailed(err error) {
 		},
 		g.r.limits,
 	)
-	if res.Refused || g.save(res.State) != nil {
+	var serr error
+	if !res.Refused {
+		serr = g.save(res.State)
+	}
+	if res.Refused || serr != nil {
+		if serr != nil {
+			g.m.errs.engineFailed("the state store", serr)
+		}
+
 		g.mu.Lock()
 		g.dead = true
 		g.mu.Unlock()
@@ -618,6 +694,10 @@ func (g *group) saveFailed(err error) {
 	}
 
 	g.publish(res.Emit)
+	if res.Err != "" {
+		g.holdFor(g.m.errs.record(g.r.id, g.spec.ID, res.Err, g.st.Counters.FaultStreak))
+	}
+
 	g.after()
 	g.perform(res.Orders)
 }

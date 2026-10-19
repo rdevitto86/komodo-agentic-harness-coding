@@ -135,7 +135,11 @@ func (m *Manager) readMachine() (machine, Effective, error) {
 	return ms, eff, first
 }
 
-// decodeFlat decodes settings.json: every top-level key must be a table key or a family member.
+// removedKeys are settings an older komodo wrote and this one no longer has; a file that holds them still loads.
+var removedKeys = map[string]bool{"limits.override_window_min": true, "limits.override_retries": true}
+
+// decodeFlat decodes settings.json: every top-level key must be a table key, a family member or a removed key, which is
+// ignored.
 func (m *Manager) decodeFlat(b []byte) (map[string]any, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
@@ -158,6 +162,10 @@ func (m *Manager) decodeFlat(b []byte) (map[string]any, error) {
 	out := make(map[string]any, len(raw))
 
 	for _, k := range keys {
+		if removedKeys[k] {
+			continue
+		}
+
 		spec, ok := m.lookup(k)
 		if !ok {
 			return nil, m.unknownKey(k)
@@ -265,7 +273,7 @@ func (m *Manager) agentItem(it Item, role, field string, r resolved) (Item, erro
 	val := limitField(m.roleLimits(role, r.eff.Flat, over), field)
 
 	it.Default, it.Value = def, val
-	fromMachine := field != "retries" && r.eff.Flat["limits."+field].Source == LayerMachine
+	fromMachine := r.eff.Flat["limits."+field].Source == LayerMachine
 
 	if overrideValue(over, field) != nil || fromMachine {
 		it.Source = LayerMachine
@@ -323,5 +331,5 @@ func limitField(l Limits, field string) any {
 	case "session_idle_min":
 		return l.IdleMin
 	}
-	return l.Retries
+	return nil
 }

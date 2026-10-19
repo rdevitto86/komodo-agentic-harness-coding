@@ -10,12 +10,12 @@ import (
 func TestResetRepairsAnUnreadableFile(t *testing.T) {
 	for _, tc := range []struct{ file, target, body string }{
 		{"settings.json", "settings.json", `{"nope": 1}`},
-		{"settings.json", "limits.returns", `{"nope": 1}`},
+		{"settings.json", "limits.group_retries", `{"nope": 1}`},
 		{"agents.json", "agents.json", `{"builder": {"bogus": 1}}`},
 		{"agents.json", "builder", `{"builder": {"bogus": 1}}`},
 	} {
 		m, home := newTestManager(t)
-		mustSet(t, m, "limits.returns", 4, "agents.tester.retries", 2)
+		mustSet(t, m, "limits.group_retries", 4, "agents.tester.session_idle_min", 20)
 		other := map[string]string{"settings.json": "agents.json", "agents.json": "settings.json"}[tc.file]
 		keep := readFile(t, home, other)
 		writeFile(t, home, tc.file, tc.body)
@@ -47,12 +47,12 @@ func TestSetRepairsAnUnreadableFile(t *testing.T) {
 	if _, err := m.Accept(); err != nil {
 		t.Fatal(err)
 	}
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 	if got := readFile(t, home, "settings.json"); strings.Contains(got, "nope") ||
-		!strings.Contains(got, `"limits.returns": 4`) {
+		!strings.Contains(got, `"limits.group_retries": 4`) {
 		t.Fatalf("settings.json = %s", got)
 	}
-	it, _ := m.GetConfigItem("limits.returns")
+	it, _ := m.GetConfigItem("limits.group_retries")
 	if it.Value != 4 || it.Fallback {
 		t.Fatalf("item %+v", it)
 	}

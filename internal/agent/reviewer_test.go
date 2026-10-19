@@ -28,11 +28,12 @@ func TestCatalogsPassTheFormatChecks(t *testing.T) {
 		t.Fatalf("%d catalogs, want %d", len(cats), len(lensOrder))
 	}
 	minRules := map[string]int{
-		"correctness": 4,
+		"correctness": 6,
 		"security":    5,
 		"spec":        1,
 		"contract":    2,
 		"concurrency": 4,
+		"performance": 4,
 		"platform":    4,
 		"config":      3,
 		"readiness":   2,
@@ -114,7 +115,8 @@ func TestLensesMarkdownOnlyDiff(t *testing.T) {
 func TestLensesSelectByCondition(t *testing.T) {
 	r := newTestReviewer(t)
 	plain := Diff{Paths: []string{"internal/lease/lock.go"}, Text: "+++ b/internal/lease/lock.go\n+x := 1\n"}
-	if got := r.Lenses(plain, ProfileThorough); !slices.Equal(got, []string{"correctness", "readiness", "quality"}) {
+	always := []string{"correctness", "security", "performance", "readiness", "quality"}
+	if got := r.Lenses(plain, ProfileThorough); !slices.Equal(got, always) {
 		t.Errorf("plain go diff = %v", got)
 	}
 	cases := []struct {
@@ -145,7 +147,7 @@ func TestLensesSelectByCondition(t *testing.T) {
 			t.Errorf("%s: lenses %v lack %s", c.name, got, c.lens)
 		}
 	}
-	for _, other := range []string{"contract", "concurrency", "platform", "config", "security", "spec", "economy"} {
+	for _, other := range []string{"contract", "concurrency", "platform", "config", "spec", "economy"} {
 		if slices.Contains(r.Lenses(plain, ProfileThorough), other) {
 			t.Errorf("plain diff selected %s", other)
 		}
@@ -161,7 +163,7 @@ func TestLensesSelectByCondition(t *testing.T) {
 func TestLensesEconomyProfile(t *testing.T) {
 	r := newTestReviewer(t)
 	plain := Diff{Paths: []string{"internal/lease/lock.go"}, Text: "+x := 1\n"}
-	if got := r.Lenses(plain, ProfileEconomy); !slices.Equal(got, []string{"economy"}) {
+	if got := r.Lenses(plain, ProfileEconomy); !slices.Equal(got, []string{"security", "economy"}) {
 		t.Errorf("economy plain = %v", got)
 	}
 	sec := Diff{Paths: []string{"internal/sandbox/run.go"}, Text: "+x\n"}
@@ -376,5 +378,80 @@ func TestDecide(t *testing.T) {
 	if out.Decision != DecisionReturn || len(out.Findings) != 1 || !slices.Equal(out.Items, []string{"ac-1"}) ||
 		!slices.Equal(out.NotMet, []string{"t1", "t2"}) {
 		t.Errorf("both fail in one tick: %+v", out)
+	}
+}
+
+func TestAcceptFindingTakesAPerformanceRule(t *testing.T) {
+	r := newTestReviewer(t)
+	head := lines{"a.go": {"for _, id := range ids {", "\tb, _ := os.ReadFile(path)"}}
+	f := Finding{Rule: "performance.2", File: "a.go", Line: 2, Quote: "b, _ := os.ReadFile(path)"}
+	if sev, verified, err := r.AcceptFinding(f, head, lines{}); err != nil || !verified || sev != SeverityMajor {
+		t.Errorf("performance finding: %q %v %v", sev, verified, err)
+	}
+}
+
+func TestSecurityAppliesToADiffInAnyPath(t *testing.T) {
+	r := newTestReviewer(t)
+	for _, p := range []string{"a.go", "src/main/App.java", "pkg/deep/er/x.py", "internal/lease/lock.go"} {
+		d := Diff{Paths: []string{p}, Text: "+++ b/" + p + "\n+x := 1\n"}
+		for _, prof := range []Profile{ProfileThorough, ProfileEconomy} {
+			if got := r.Lenses(d, prof); !slices.Contains(got, "security") {
+				t.Errorf("%s under %s: lenses %v lack security", p, prof, got)
+			}
+		}
+	}
+}
+
+func TestLensGlobsNameNoRepositoryPath(t *testing.T) {
+	cats, err := LoadCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cats {
+		for _, g := range c.Applies.Globs {
+			if !strings.HasPrefix(g, "**/") && !strings.HasPrefix(g, "*") {
+				t.Errorf("lens %s glob %q is anchored to a repository path", c.Lens, g)
+			}
+		}
+	}
+}
+
+func TestCatalogsCarryTheNewRules(t *testing.T) {
+	cats, err := LoadCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]Severity{}
+	for _, c := range cats {
+		for _, r := range c.Rules {
+			ids[r.ID] = r.Severity
+		}
+		if c.Lens == "performance" && c.When != WhenAlways {
+			t.Errorf("performance applies %q, want always", c.When)
+		}
+		if c.Lens == "security" && c.When != WhenAlways {
+			t.Errorf("security applies %q, want always", c.When)
+		}
+	}
+	for _, id := range []string{
+		"performance.1", "performance.2", "performance.3", "performance.4", "correctness.5", "correctness.6",
+	} {
+		if _, ok := ids[id]; !ok {
+			t.Errorf("rule %s is missing", id)
+		}
+	}
+}
+
+func TestEveryRuleHasFullText(t *testing.T) {
+	cats, err := LoadCatalogs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cats {
+		for _, r := range c.Rules {
+			if n := len(strings.Fields(c.Text[r.ID])); n < 20 {
+				t.Errorf("%s text has %d words, want at least 20", r.ID, n)
+			}
+		}
 	}
 }

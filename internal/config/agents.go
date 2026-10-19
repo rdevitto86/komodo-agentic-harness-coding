@@ -19,11 +19,10 @@ const (
 	Light    Weight = "light"
 )
 
-// Limits are one agent's session clocks in minutes and its restart count.
+// Limits are one agent's session clocks in minutes.
 type Limits struct {
 	WallMin int `json:"wall_min"` // most minutes a session may run
 	IdleMin int `json:"idle_min"` // minutes of silence before the nudge
-	Retries int `json:"retries"`  // fresh sessions after a timeout or idle stop
 }
 
 // Skills lists the skills an agent may pull and the ones injected into every brief.
@@ -59,7 +58,6 @@ type AgentOverride struct {
 	Model          string `json:"model,omitempty"`
 	SessionWallMin *int   `json:"session_wall_min,omitempty"`
 	SessionIdleMin *int   `json:"session_idle_min,omitempty"`
-	Retries        *int   `json:"retries,omitempty"`
 }
 
 var (
@@ -70,14 +68,13 @@ var (
 	validLinks = []string{"claude-cli", "anthropic-api", "openai-subscription", "openai-api", "local"}
 
 	// agentFieldNames lists the four override keys a person may set per role.
-	agentFieldNames = []string{"model", "session_wall_min", "session_idle_min", "retries"}
+	agentFieldNames = []string{"model", "session_wall_min", "session_idle_min"}
 
 	// agentFields holds the kind and hard limits of each override key.
 	agentFields = map[string]KeySpec{
 		"model":            {Kind: KindString},
 		"session_wall_min": {Kind: KindInt, Min: 1, Max: 120},
 		"session_idle_min": {Kind: KindInt, Min: 1, Max: 30},
-		"retries":          {Kind: KindInt, Min: 0, Max: 3},
 	}
 )
 
@@ -98,13 +95,9 @@ func (m *Manager) roleLimits(role string, flat map[string]Setting, over AgentOve
 	if over.SessionIdleMin != nil {
 		l.IdleMin = *over.SessionIdleMin
 	}
-	if over.Retries != nil {
-		l.Retries = *over.Retries
-	}
 
 	l.WallMin = min(l.WallMin, agentFields["session_wall_min"].Max.(int))
 	l.IdleMin = min(l.IdleMin, agentFields["session_idle_min"].Max.(int))
-	l.Retries = min(l.Retries, agentFields["retries"].Max.(int))
 
 	return l
 }
@@ -136,7 +129,6 @@ func (m *Manager) readOverrides(b []byte) (map[string]AgentOverride, error) {
 			"model":            o.Model,
 			"session_wall_min": o.SessionWallMin,
 			"session_idle_min": o.SessionIdleMin,
-			"retries":          o.Retries,
 		}
 
 		for field, v := range fields {
@@ -258,7 +250,6 @@ func checkLimits(role string, l Limits) error {
 	limits := map[string]int{
 		"session_wall_min": l.WallMin,
 		"session_idle_min": l.IdleMin,
-		"retries":          l.Retries,
 	}
 
 	for field, v := range limits {
@@ -338,10 +329,6 @@ func overrideValue(o AgentOverride, field string) any {
 		if o.SessionIdleMin != nil {
 			return *o.SessionIdleMin
 		}
-	case "retries":
-		if o.Retries != nil {
-			return *o.Retries
-		}
 	}
 
 	return nil
@@ -364,8 +351,6 @@ func withOverride(o AgentOverride, field string, v any) AgentOverride {
 		o.SessionWallMin = ptr()
 	case "session_idle_min":
 		o.SessionIdleMin = ptr()
-	case "retries":
-		o.Retries = ptr()
 	}
 
 	return o

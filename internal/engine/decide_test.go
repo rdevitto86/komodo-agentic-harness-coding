@@ -155,8 +155,14 @@ func TestTesterFailsThenReviewerApprovesReturnsOnce(t *testing.T) {
 			t.Fatalf("%v: moved at the first end to %q", order, r.State.Stage)
 		}
 		r = apply(t, r.State, verifyEnd(order[1], order[1] != "tester", "TestA"))
-		if r.State.Stage != StageBuild || r.State.Counters.Returns != 1 || r.State.FailureHash == "" {
-			t.Fatalf("%v: stage %q returns %d hash %q", order, r.State.Stage, r.State.Counters.Returns, r.State.FailureHash)
+		if r.State.Stage != StageBuild || r.State.Counters.RetriesLeft != 1 || r.State.FailureHash == "" {
+			t.Fatalf(
+				"%v: stage %q retries left %d hash %q",
+				order,
+				r.State.Stage,
+				r.State.Counters.RetriesLeft,
+				r.State.FailureHash,
+			)
 		}
 		if got := kinds(r); !slices.Contains(got, OrderEnterStage) {
 			t.Fatalf("%v: orders %v", order, got)
@@ -164,25 +170,27 @@ func TestTesterFailsThenReviewerApprovesReturnsOnce(t *testing.T) {
 	}
 }
 
-func TestReturnsBlockAtTheLimitAndRegressionNamesItself(t *testing.T) {
+func TestAFailureWithNoRetriesLeftHoldsTheGroupForAnOverride(t *testing.T) {
 	s := mk(StageTestReview)
-	s.Counters.Returns = 2
-	r := apply(t, s, in(InResultFail, ResultFail{Items: []string{"a"}, Tree: "t1"}))
-	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonReturns || r.State.Prior != StageTestReview {
-		t.Fatalf("stage %q reason %q prior %q", r.State.Stage, r.State.Block.Reason, r.State.Prior)
-	}
-	r = apply(t, s, in(InResultFail, ResultFail{Items: []string{"a"}, Tree: "t1", Regression: true}))
-	if r.State.Block.Reason != state.ReasonRegression {
-		t.Fatalf("reason %q", r.State.Block.Reason)
-	}
-	if r.State.Counters.Blocks["regression"] != 1 || !slices.Contains(subtypes(r), "group.blocked") ||
-		!slices.Contains(kinds(r), OrderCancel) {
-		t.Fatalf("blocks %v emits %v orders %v", r.State.Counters.Blocks, subtypes(r), kinds(r))
+	s.Counters.RetriesLeft = 0
+	for _, regression := range []bool{false, true} {
+		r := apply(t, s, in(InResultFail, ResultFail{Items: []string{"a"}, Tree: "t1", Regression: regression}))
+		if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonRetries || r.State.Prior != StageTestReview {
+			t.Fatalf("stage %q reason %q prior %q", r.State.Stage, r.State.Block.Reason, r.State.Prior)
+		}
+		if want := r.State.Block.At.Add(60 * time.Minute); !r.State.Block.Until.Equal(want) {
+			t.Fatalf("window ends %v, want %v", r.State.Block.Until, want)
+		}
+		if r.State.Counters.Blocks["retries"] != 1 || !slices.Contains(subtypes(r), "group.blocked") ||
+			!slices.Contains(kinds(r), OrderCancel) || r.State.Counters.RetriesLeft != 0 {
+			t.Fatalf("blocks %v emits %v orders %v", r.State.Counters.Blocks, subtypes(r), kinds(r))
+		}
 	}
 }
 
 func TestFlapOnTheSameTreeBlocks(t *testing.T) {
 	s := mk(StageTestReview)
+	s.Counters.RetriesLeft = 3
 	r := apply(t, s, in(InResultFail, ResultFail{Items: []string{"a"}, Tree: "tree-1"}))
 	if r.State.Stage != StageBuild || r.State.ReturnTree != "tree-1" {
 		t.Fatalf("first return: %q tree %q", r.State.Stage, r.State.ReturnTree)
@@ -224,99 +232,59 @@ func TestMechanicalCheckFailureReturnsToBuildWithTheOutput(t *testing.T) {
 	}
 }
 
-func TestBuilderTimeoutBlocksRetriesPastTheLimit(t *testing.T) {
+func TestBuilderTimeoutSpendsOneRetryAndBlocksWhenNoneIsLeft(t *testing.T) {
 	s := claimed()
-	s.Counters.Retries = 1
-	s.Counters.Attempts = 1
+	s.Counters.RetriesLeft = 0
 	r := apply(t, s, builderEnd("timeout"))
 	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonRetries {
 		t.Fatalf("stage %q reason %q", r.State.Stage, r.State.Block.Reason)
 	}
-	s.Counters.Retries = 0
+	s.Counters.RetriesLeft = 2
 	r = apply(t, s, builderEnd("timeout"))
-	if r.State.Stage != StageBuild || r.State.Counters.Retries != 1 || !slices.Contains(kinds(r), OrderEnterStage) {
-		t.Fatalf("within retries: stage %q retries %d orders %v", r.State.Stage, r.State.Counters.Retries, kinds(r))
+	if r.State.Stage != StageBuild || r.State.Counters.RetriesLeft != 1 || !slices.Contains(kinds(r), OrderEnterStage) {
+		t.Fatalf("within the budget: stage %q left %d orders %v", r.State.Stage, r.State.Counters.RetriesLeft, kinds(r))
+	}
+	if !slices.Contains(subtypes(r), "retry.spent") {
+		t.Fatalf("no retry.spent event: %v", subtypes(r))
 	}
 	if r.State.Counters.TokensUsed != 100 || r.State.Tasks[0].Session != "" {
 		t.Fatalf("tokens %d session %q", r.State.Counters.TokensUsed, r.State.Tasks[0].Session)
 	}
 }
 
-func TestAttemptsCountFreshSessionsOnly(t *testing.T) {
-	s := mk(StageBuild)
-	start := func(resumed, restart bool) Input {
-		return in(InSessionStart, SessionStartData{
-			SessionStart: bus.SessionStart{
-				Agent:      "builder",
-				Task:       "t1",
-				GroupFacts: bus.GroupFacts{Session: "s1"},
-				Resumed:    resumed,
-			},
-			Restart: restart,
-		})
-	}
-	r := apply(t, s, start(false, false))
-	if r.State.Counters.Attempts != 1 || r.State.Tasks[0].State != "claimed" || r.State.Tasks[0].Session != "s1" {
-		t.Fatalf("fresh start: attempts %d task %+v", r.State.Counters.Attempts, r.State.Tasks[0])
-	}
-	if r := apply(t, s, start(false, true)); r.State.Counters.Attempts != 0 {
-		t.Fatalf("crash restart charged an attempt")
-	}
-	s2 := claimed()
-	s2.Counters.Attempts = 2
-	r = apply(t, s2, builderEnd("idle"))
-	if r.State.Block.Reason != state.ReasonAttempts {
-		t.Fatalf("reason %q", r.State.Block.Reason)
-	}
-}
-
-func TestWallTimeExtendsThenBlocks(t *testing.T) {
-	s := claimed()
-	s.LastEventAt = t0
-	i := in(InFact, FactData{Subtype: "tool.denied"})
-	i.Time = t0.Add(60 * time.Minute)
-	r := apply(t, s, i)
-	if r.State.Counters.WallUsedS != 3600 || !r.State.Counters.WallExtended || r.State.Stage != StageBuild {
-		t.Fatalf(
-			"at the limit: used %d extended %v stage %q",
-			r.State.Counters.WallUsedS,
-			r.State.Counters.WallExtended,
-			r.State.Stage,
-		)
-	}
-	i.Time = t0.Add(120 * time.Minute)
-	r = apply(t, r.State, i)
-	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonWall {
-		t.Fatalf("at twice: stage %q reason %q", r.State.Stage, r.State.Block.Reason)
-	}
-}
-
-func TestIdleTimeAddsNoWallTime(t *testing.T) {
-	long := t0.Add(10 * time.Hour)
-	cases := map[string]State{
-		"no live session": mk(StageBuild),
-		"paused": func() State {
-			s := claimed()
-			s.Stage, s.Prior = StagePaused, StageBuild
-			s.Pause = state.PauseState{Cause: "provider", Since: t0}
-			return s
-		}(),
-		"blocked":         func() State { s := claimed(); s.Stage, s.Prior = StageBlocked, StageBuild; return s }(),
-		"test and review": mk(StageTestReview),
-	}
-	for name, s := range cases {
-		i := in(InFact, FactData{Subtype: "tool.denied"})
-		i.Time = long
-		r := Next(s, i, fixtureLimits())
-		if r.State.Counters.WallUsedS != 0 {
-			t.Errorf("%s: wall used %d", name, r.State.Counters.WallUsedS)
+func TestEveryTrueFailureSpendsOneRetryAndNothingElseDoes(t *testing.T) {
+	spend := []string{"timeout", "idle", "no_result", "check_fail", "schema_fail", "refusals"}
+	free := []string{"crash", "cancelled", "provider"}
+	for _, reason := range spend {
+		r := apply(t, claimed(), builderEnd(reason))
+		if r.State.Counters.RetriesLeft != 1 || !slices.Contains(subtypes(r), "retry.spent") {
+			t.Errorf("%s: left %d emits %v", reason, r.State.Counters.RetriesLeft, subtypes(r))
 		}
 	}
-	s := claimed()
-	i := in(InFact, FactData{Subtype: "tool.denied"})
-	i.Time = t0.Add(90 * time.Second)
-	if r := apply(t, s, i); r.State.Counters.WallUsedS != 90 {
-		t.Fatalf("live builder: wall used %d", r.State.Counters.WallUsedS)
+	for _, reason := range free {
+		r := apply(t, claimed(), builderEnd(reason))
+		if r.State.Counters.RetriesLeft != 2 || !slices.Contains(subtypes(r), "retry.waived") ||
+			slices.Contains(subtypes(r), "retry.spent") {
+			t.Errorf("%s: left %d emits %v", reason, r.State.Counters.RetriesLeft, subtypes(r))
+		}
+	}
+	// A builder that says done with a task still open failed; one that finished every task did not.
+	if r := apply(t, claimed(), builderEnd("done")); r.State.Counters.RetriesLeft != 1 {
+		t.Errorf("done with a task open spent %d", 2-r.State.Counters.RetriesLeft)
+	}
+	all := claimed()
+	for i := range all.Tasks {
+		all.Tasks[i].State = "done"
+	}
+	if r := apply(t, all, builderEnd("done")); r.State.Counters.RetriesLeft != 2 {
+		t.Errorf("done with every task done spent a retry")
+	}
+	// A fresh session start is not a failure.
+	start := in(InSessionStart, SessionStartData{SessionStart: bus.SessionStart{
+		Agent: "builder", Task: "t1", GroupFacts: bus.GroupFacts{Session: "s1"},
+	}})
+	if r := apply(t, mk(StageBuild), start); r.State.Counters.RetriesLeft != 2 || r.State.Tasks[0].State != "claimed" {
+		t.Errorf("a fresh start: left %d task %+v", r.State.Counters.RetriesLeft, r.State.Tasks[0])
 	}
 }
 
@@ -328,43 +296,24 @@ func TestContinueResetsExactlyTheNamedCounters(t *testing.T) {
 		prior  Stage
 	}{
 		{
-			state.ReasonReturns,
-			func(s *State) { s.Counters.Returns = 2; s.FailureHash = "h"; s.ReturnTree = "t" },
-			func(s State) bool { return s.Counters.Returns == 0 && s.FailureHash == "" && s.ReturnTree == "" },
-			StageTestReview,
-		},
-		{
-			state.ReasonRegression,
-			func(s *State) { s.Counters.Returns = 2; s.FailureHash = "h" },
-			func(s State) bool { return s.Counters.Returns == 0 && s.FailureHash == "" },
-			StageTestReview,
-		},
-		{
 			state.ReasonFlap,
-			func(s *State) { s.Counters.Returns = 1; s.FailureHash = "h"; s.ReturnTree = "t" },
-			func(s State) bool { return s.Counters.Returns == 1 && s.FailureHash == "" && s.ReturnTree == "" },
+			func(s *State) { s.FailureHash = "h"; s.ReturnTree = "t" },
+			func(s State) bool { return s.Counters.RetriesLeft == 2 && s.FailureHash == "" && s.ReturnTree == "" },
 			StageTestReview,
-		},
-		{
-			state.ReasonRetries,
-			func(s *State) { s.Counters.Retries = 2; s.Counters.Attempts = 1 },
-			func(s State) bool { return s.Counters.Retries == 0 && s.Counters.Attempts == 1 },
-			StageBuild,
-		},
-		{
-			state.ReasonAttempts,
-			func(s *State) { s.Counters.Attempts = 2; s.Counters.Retries = 1 },
-			func(s State) bool { return s.Counters.Attempts == 0 && s.Counters.Retries == 1 },
-			StageBuild,
 		},
 		{
 			state.ReasonWall,
-			func(s *State) { s.Counters.WallUsedS = 7200; s.Counters.WallExtended = true },
-			func(s State) bool { return s.Counters.WallUsedS == 0 && !s.Counters.WallExtended },
+			func(s *State) { s.Counters.WallUsedS = 7200 },
+			func(s State) bool { return s.Counters.WallBaseS == 7200 },
 			StageBuild,
 		},
 		{state.ReasonNoProvider, func(s *State) {}, func(s State) bool { return true }, StageBuild},
-		{state.ReasonCrash, func(s *State) {}, func(s State) bool { return true }, StageBuild},
+		{
+			state.ReasonCrash,
+			func(s *State) { s.Counters.FaultStreak = 3 },
+			func(s State) bool { return s.Counters.FaultStreak == 0 },
+			StageBuild,
+		},
 	}
 	for _, c := range cases {
 		s := mk(StageBlocked)
@@ -386,12 +335,6 @@ func TestContinueResetsExactlyTheNamedCounters(t *testing.T) {
 		if r.State.Block.Reason != "" || r.State.Prior != "" {
 			t.Errorf("%s: block %+v prior %q survive", c.reason, r.State.Block, r.State.Prior)
 		}
-	}
-	// A second block of the same reason follows only when the cause remains.
-	s := claimed()
-	s.Counters.Retries, s.Counters.Attempts = 0, 1
-	if r := apply(t, s, builderEnd("timeout")); r.State.Stage != StageBuild {
-		t.Fatalf("after a reset the group blocked again at once: %q", r.State.Stage)
 	}
 }
 
@@ -657,35 +600,20 @@ func TestScopeRules(t *testing.T) {
 	}
 }
 
-func TestWallBlockAnswers(t *testing.T) {
-	s := mk(StageBlocked)
-	s.Prior = StageBuild
-	s.Block = state.BlockState{Reason: state.ReasonWall}
-	s.Counters.WallUsedS, s.Counters.WallExtended = 7200, true
-	a := apply(t, s, in(InScopeAnswer, ScopeAnswer{Answer: "approve"}))
-	if a.State.Stage != StageBuild || a.State.Counters.WallUsedS != 0 || a.State.Counters.WallExtended {
-		t.Fatalf("approve: %q %+v", a.State.Stage, a.State.Counters)
-	}
-	d := Next(s, in(InScopeAnswer, ScopeAnswer{Answer: "deny"}), fixtureLimits())
-	if d.State.Stage != StageBlocked {
-		t.Fatalf("deny left stage %q", d.State.Stage)
-	}
-}
-
 func TestTimerExtensionGrantedOnce(t *testing.T) {
 	req := in(InTimerExtend, map[string]any{"session": "s1", "used": 1, "limit": int64(30 * time.Minute)})
 	req.Request = "m1"
 	r := apply(t, claimed(), req)
-	if !r.State.Counters.WallExtended || len(r.Orders) != 1 || r.Orders[0].Kind != OrderExtend || r.Orders[0].Re != "m1" {
+	if r.State.Counters.WallExtTry != 1 || len(r.Orders) != 1 || r.Orders[0].Kind != OrderExtend || r.Orders[0].Re != "m1" {
 		t.Fatalf("first: %+v", r.Orders)
 	}
-	if !strings.Contains(string(r.Orders[0].Data), "1800000000000") {
+	if !strings.Contains(string(r.Orders[0].Data), "3600000000000") {
 		t.Fatalf("extension data %s", r.Orders[0].Data)
 	}
 	req2 := req
 	req2.Request = "m2"
 	r2 := apply(t, r.State, req2)
-	if strings.Contains(string(r2.Orders[0].Data), "1800000000000") {
+	if strings.Contains(string(r2.Orders[0].Data), "3600000000000") {
 		t.Fatalf("a second extension was granted: %s", r2.Orders[0].Data)
 	}
 }
@@ -722,16 +650,16 @@ func TestFaultRows(t *testing.T) {
 	}
 }
 
-func TestTesterWithoutAResultRestartsWithinItsRetries(t *testing.T) {
+func TestTesterWithoutAResultSpendsARetryAndRestartsUntilNoneIsLeft(t *testing.T) {
 	s := failedRound()
 	end := in(InSessionEnd, SessionEndData{
 		SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: "no_result"}, Agent: "tester"},
 	})
 	r := apply(t, s, end)
-	if r.State.TestReview.Tester.Restarts != 1 || r.State.Stage != StageTestReview ||
-		!slices.Contains(kinds(r), OrderEnterStage) || r.State.Counters.Returns != 0 {
-		t.Fatalf("restarts %d stage %q orders %v", r.State.TestReview.Tester.Restarts, r.State.Stage, kinds(r))
+	if r.State.Counters.RetriesLeft != 1 || r.State.Stage != StageTestReview || !slices.Contains(kinds(r), OrderEnterStage) {
+		t.Fatalf("left %d stage %q orders %v", r.State.Counters.RetriesLeft, r.State.Stage, kinds(r))
 	}
+	r.State.Counters.RetriesLeft = 0
 	r = apply(t, r.State, end)
 	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonRetries {
 		t.Fatalf("stage %q reason %q", r.State.Stage, r.State.Block.Reason)
@@ -764,13 +692,12 @@ func TestUnfinishedEditsAreRecordedAndClearedAtTaskDone(t *testing.T) {
 	}
 }
 
-func TestCrashSessionEndChargesNoAttemptAndOrdersTheStageAgain(t *testing.T) {
+func TestCrashSessionEndChargesNoRetryAndOrdersTheStageAgain(t *testing.T) {
 	s := claimed()
-	s.Counters.Attempts = 1
 	s.Resume = []state.ResumeRef{{Agent: "builder", Session: "s1", Handle: "h9"}}
 	r := apply(t, s, builderEnd("crash"))
 	c := r.State.Counters
-	if c.Attempts != 1 || c.Retries != 0 || c.Crashes != 1 || r.State.Stage != StageBuild || r.State.Tasks[0].Session != "" {
+	if c.RetriesLeft != 2 || c.Crashes != 1 || r.State.Stage != StageBuild || r.State.Tasks[0].Session != "" {
 		t.Fatalf("counters %+v stage %q", c, r.State.Stage)
 	}
 	if len(r.Orders) != 1 || r.Orders[0].Kind != OrderEnterStage || len(r.Orders[0].Resume) != 1 ||
@@ -827,15 +754,11 @@ func apply(t *testing.T, s State, i Input) Result {
 // fixtureLimits are the limits every proof case uses.
 func fixtureLimits() Limits {
 	return Limits{
-		Returns:         2,
-		GroupAttempts:   2,
-		PauseMaxMin:     360,
-		GroupWallMin:    60,
-		BuilderRetries:  1,
-		ReviewerRetries: 1,
-		TesterRetries:   1,
-		PoolMin:         1,
-		PoolMax:         2,
+		GroupRetries: 2,
+		PauseMaxMin:  360,
+		GroupWallMin: 60,
+		PoolMin:      1,
+		PoolMax:      2,
 	}
 }
 
@@ -893,7 +816,7 @@ func claimed() State {
 func mk(stage Stage) State {
 	s := State{
 		Run: "r1", Group: "g1", Stage: stage, Epoch: 3, Fence: 7, ConfigHash: strings.Repeat("a", 64),
-		Counters:    state.Counters{Blocks: map[string]int{}},
+		Counters:    state.Counters{RetriesLeft: 2, Blocks: map[string]int{}},
 		Tasks:       []state.TaskState{{ID: "t1", State: "queued"}, {ID: "t2", State: "queued"}},
 		TestReview:  state.TestReview{Findings: []state.Finding{}, NotMet: []string{}, Failed: []string{}},
 		ActionsOpen: []state.OpenAction{},

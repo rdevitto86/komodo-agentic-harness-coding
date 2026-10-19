@@ -1,7 +1,0 @@
-{
-  "code": "returns",
-  "group": "tg-1.3",
-  "task": "amend docs/lld.md",
-  "question": "The returns are spent. Allow more returns?",
-  "fix": "komodo run --approve tg-1.3"
-}

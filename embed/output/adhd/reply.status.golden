@@ -1,5 +1,8 @@
 1 run active, 1 queued, 1 blocked.
 
+**Alert:**
+`New sessions are paused until 02:01:00 UTC: setup errors hit several groups.`
+
 **Wait ended:** `blocked`
 
 **Runs:**
@@ -19,6 +22,13 @@
 | `group` | `reason` | `question` |
 |---|---|---|
 | `tg-1.2` | `needs_scope` | `May the builder edit docs/lld.md?` |
+
+**Errors by type:**
+
+| `type` | `tier` | `count` |
+|---|---|---|
+| `setup` | `blocker` | `3` |
+| `timeout` | `work` | `1` |
 
 **❌ Blocked Changes**
 - 1 group waits for a person

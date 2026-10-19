@@ -18,7 +18,7 @@ func TestCreateAndLoadRoundTrip(t *testing.T) {
 	m, _ := newMgr(t)
 	r := mustCreate(t, m)
 	h := r.Header
-	if h.V != 1 || h.Rev != 1 || h.Group != testGroup || h.Writer != testWriter {
+	if h.V != Version || h.Rev != 1 || h.Group != testGroup || h.Writer != testWriter {
 		t.Fatalf("header: %+v", h)
 	}
 	if h.TS.Location() != time.UTC || h.TS.Nanosecond() != 0 {
@@ -124,13 +124,12 @@ func TestMonotoneFenceAndCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]func(g *GroupState){
-		"state.fence":                func(g *GroupState) { g.Fence = 2 },
-		"state.counters.returns":     func(g *GroupState) { g.Counters.Returns = 0 },
-		"state.counters.attempts":    func(g *GroupState) { g.Counters.Attempts = 0 },
-		"state.counters.retries":     func(g *GroupState) { g.Counters.Retries = -1 },
-		"state.counters.crashes":     func(g *GroupState) { g.Counters.Crashes = -1 },
-		"state.counters.wall_used_s": func(g *GroupState) { g.Counters.WallUsedS = 1 },
-		"state.counters.tokens_used": func(g *GroupState) { g.Counters.TokensUsed = -1 },
+		"state.fence":                 func(g *GroupState) { g.Fence = 2 },
+		"state.counters.overrides":    func(g *GroupState) { g.Counters.Overrides = 0 },
+		"state.counters.retries_left": func(g *GroupState) { g.Counters.RetriesLeft = -1 },
+		"state.counters.crashes":      func(g *GroupState) { g.Counters.Crashes = -1 },
+		"state.counters.wall_used_s":  func(g *GroupState) { g.Counters.WallUsedS = 1 },
+		"state.counters.tokens_used":  func(g *GroupState) { g.Counters.TokensUsed = -1 },
 		"state.counters.blocks.returns": func(g *GroupState) {
 			g.Counters.Blocks = map[string]int{"returns": 1}
 		},
@@ -150,7 +149,47 @@ func TestMonotoneFenceAndCounters(t *testing.T) {
 	}
 }
 
-// Saving a crash adds to crashes and leaves attempts and retries as they were.
+// retries_left never rises unless the same write raises overrides, and a falling budget is always accepted.
+func TestRetriesLeftRisesOnlyWithAnOverride(t *testing.T) {
+	m, _ := newMgr(t)
+	r := mustCreate(t, m)
+
+	up := goodState()
+	up.Counters.RetriesLeft = 3
+	_, err := m.Save(testGroup, up, r.Header.Rev)
+	wantInvalid(t, err, "state.counters.retries_left")
+
+	down := goodState()
+	down.Counters.RetriesLeft = 1
+	r, err = m.Save(testGroup, down, r.Header.Rev)
+	if err != nil {
+		t.Fatalf("a spent retry was refused: %v", err)
+	}
+
+	granted := goodState()
+	granted.Counters.RetriesLeft, granted.Counters.Overrides = 4, 2
+	if _, err := m.Save(testGroup, granted, r.Header.Rev); err != nil {
+		t.Fatalf("an approved override was refused: %v", err)
+	}
+}
+
+// A group that failed is Done with outcome failed, and no other stage may carry that outcome.
+func TestFailedOutcomeBelongsToDone(t *testing.T) {
+	m, _ := newMgr(t)
+	g := goodState()
+	g.Stage, g.Outcome = StageDone, "failed"
+	if _, err := m.Create(testGroup, g); err != nil {
+		t.Fatalf("a done group with outcome failed: %v", err)
+	}
+
+	m2, _ := newMgr(t)
+	g2 := goodState()
+	g2.Outcome = "failed"
+	_, err := m2.Create(testGroup, g2)
+	wantInvalid(t, err, "state.outcome")
+}
+
+// Saving a crash adds to crashes and leaves the retry budget as it was.
 func TestCrashCounter(t *testing.T) {
 	m, _ := newMgr(t)
 	r := mustCreate(t, m)
@@ -160,7 +199,7 @@ func TestCrashCounter(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := m.Counters(testGroup)
-	if err != nil || c.Crashes != 1 || c.Attempts != 1 || c.Retries != 0 {
+	if err != nil || c.Crashes != 1 || c.RetriesLeft != 2 || c.Overrides != 1 {
 		t.Fatalf("Counters: %+v %v", c, err)
 	}
 }
@@ -209,7 +248,7 @@ func TestNilRefusedAbsentDecoded(t *testing.T) {
 
 	writeRaw(t, statePath(root, "g2"), `{"v":1,"group":"g2","rev":1,"ts":"2026-10-14T16:01:40Z","writer":"engine/r/1",
 	 "state":{"run":"r","group":"g2","stage":"build","fence":1,"config_hash":"`+testHash+`",
-	 "counters":{"returns":0},"tasks":null}}`)
+	 "counters":{"retries_left":0},"tasks":null}}`)
 	r, err := m.Load("g2")
 	if err != nil {
 		t.Fatal(err)
@@ -413,15 +452,15 @@ func TestCountersReadsOnlyCounters(t *testing.T) {
 	m, root := newMgr(t)
 	mustCreate(t, m)
 	c, err := m.Counters(testGroup)
-	if err != nil || c.Returns != 1 || c.Blocks == nil {
+	if err != nil || c.RetriesLeft != 2 || c.Blocks == nil {
 		t.Fatalf("Counters: %+v %v", c, err)
 	}
 	writeRaw(
 		t,
 		statePath(root, "unreadable"),
-		`{"v":1,"state":{"counters":{"returns":2,"blocks":null},"tasks":"not a list"}}`,
+		`{"v":2,"state":{"counters":{"retries_left":2,"blocks":null},"tasks":"not a list"}}`,
 	)
-	if c, err := m.Counters("unreadable"); !errors.Is(err, ErrCorrupt) || c.Returns != 0 {
+	if c, err := m.Counters("unreadable"); !errors.Is(err, ErrCorrupt) || c.RetriesLeft != 0 {
 		t.Fatalf("unreadable: %+v %v", c, err)
 	}
 	if _, err := m.Counters("absent"); !errors.Is(err, ErrNotFound) {

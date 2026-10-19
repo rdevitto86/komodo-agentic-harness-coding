@@ -40,7 +40,8 @@ func (RunStop) EventKey() Key { return Key{TypeRunStop, ""} }
 // RunContinue is the data of run-continue: a request for a blocked or paused group to go on.
 type RunContinue struct {
 	Target  string `json:"target"`            // an epic or group label
-	Answer  string `json:"answer,omitempty"`  // "approve" or "deny" from --approve or --deny; empty for a plain continue
+	Answer  string `json:"answer,omitempty"`  // "approve", "deny" or "override"; empty for a plain continue
+	Minutes int    `json:"minutes,omitempty"` // override only: the final try's working time in minutes
 	Request ID     `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 
@@ -103,7 +104,7 @@ func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} 
 
 // GroupDone is the data of run-status / group.done: how a group ended.
 type GroupDone struct {
-	Outcome string `json:"outcome"` // complete, abandoned or lost
+	Outcome string `json:"outcome"` // complete, abandoned, lost or failed
 }
 
 // EventKey binds GroupDone to run-status / group.done.
@@ -119,14 +120,62 @@ func (GroupApproved) EventKey() Key { return Key{TypeRunStatus, "group.approved"
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
 	GroupFacts
-	Prior   string   `json:"prior,omitempty"`   // the working stage the group left
-	Paths   []string `json:"paths,omitempty"`   // needs_scope only: the paths asked for
-	Counter string   `json:"counter,omitempty"` // unnamed block only: retries, returns or flap
-	Detail  string   `json:"detail,omitempty"`  // what the CLI shows, at most 4 KB
+	Prior   string    `json:"prior,omitempty"`   // the working stage the group left
+	Paths   []string  `json:"paths,omitempty"`   // needs_scope only: the paths asked for
+	Counter string    `json:"counter,omitempty"` // unnamed block only: retries, returns or flap
+	Detail  string    `json:"detail,omitempty"`  // what the CLI shows, at most 4 KB
+	Until   time.Time `json:"until,omitzero"`    // retries only: when the override window lapses
 }
 
 // EventKey binds GroupBlocked to run-failure / group.blocked.
 func (GroupBlocked) EventKey() Key { return Key{TypeRunFailure, "group.blocked"} }
+
+// GroupFailed is the data of run-failure / group.failed: the group ran out of retries and no override came in time.
+type GroupFailed struct {
+	GroupFacts
+	Prior  string `json:"prior,omitempty"` // the working stage the group left
+	Last   string `json:"last"`            // the last failure: the exit reason or check that found the budget empty
+	Detail string `json:"detail,omitempty"`
+}
+
+// EventKey binds GroupFailed to run-failure / group.failed.
+func (GroupFailed) EventKey() Key { return Key{TypeRunFailure, "group.failed"} }
+
+// RetrySpent is the data of run-status / retry.spent: a true failure cost the group one retry.
+type RetrySpent struct {
+	GroupFacts
+	Left int `json:"left"` // retries the group has left
+}
+
+// EventKey binds RetrySpent to run-status / retry.spent.
+func (RetrySpent) EventKey() Key { return Key{TypeRunStatus, "retry.spent"} }
+
+// RetryWaived is the data of run-status / retry.waived: Komodo's own fault cost the group no retry.
+type RetryWaived struct {
+	GroupFacts
+	Left int `json:"left"` // retries the group has left, unchanged
+}
+
+// EventKey binds RetryWaived to run-status / retry.waived.
+func (RetryWaived) EventKey() Key { return Key{TypeRunStatus, "retry.waived"} }
+
+// OverrideApproved is the data of run-status / override.approved: a person gave an empty group its final try.
+type OverrideApproved struct {
+	Granted int `json:"granted"` // tries added: always 1
+	Left    int `json:"left"`    // tries the group has now
+	Minutes int `json:"minutes"` // the working time the person gave the final try
+}
+
+// EventKey binds OverrideApproved to run-status / override.approved.
+func (OverrideApproved) EventKey() Key { return Key{TypeRunStatus, "override.approved"} }
+
+// OverrideLapsed is the data of run-status / override.lapsed: the window passed with no approval.
+type OverrideLapsed struct {
+	WindowMin int `json:"window_min"` // the window that passed, in minutes
+}
+
+// EventKey binds OverrideLapsed to run-status / override.lapsed.
+func (OverrideLapsed) EventKey() Key { return Key{TypeRunStatus, "override.lapsed"} }
 
 // LeaseLost is the data of run-failure / lease.lost.
 type LeaseLost struct {

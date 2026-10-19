@@ -1,6 +1,6 @@
 Group `tg-1.3` needs a decision: `cleanup`. The task is `amend docs/lld.md`. It
 asks: `Cleanup could not remove what it must. Retry?` To resolve it, run
-`komodo run --approve tg-1.3`.
+`komodo run tg-1.3`.
 
 ❌ Blocked Changes
 Group `tg-1.3` waits for a person.

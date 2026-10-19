@@ -42,5 +42,26 @@
     ],
     "what": "groups"
   },
-  "waited": "blocked"
+  "errors": {
+    "head": [
+      "type",
+      "tier",
+      "count"
+    ],
+    "rows": [
+      [
+        "setup",
+        "blocker",
+        "3"
+      ],
+      [
+        "timeout",
+        "work",
+        "1"
+      ]
+    ],
+    "what": "error types"
+  },
+  "waited": "blocked",
+  "alert": "New sessions are paused until 02:01:00 UTC: setup errors hit several groups."
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
@@ -45,9 +46,34 @@ func (e *Engine) handle(ctx context.Context, w *connWriter, req Request) {
 // verbRun starts, queues or answers a run.
 func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	ev := req.Event
-	if req.Flags.Approve || req.Flags.Deny {
-		if rc, ok := dataOf[*bus.RunContinue](ev); ok {
+	rc, isAnswer := dataOf[*bus.RunContinue](ev)
+	overrideAnswer := isAnswer && rc.Answer == "override"
+
+	// The peer is checked once; a process whose terminal cannot be confirmed counts as having none.
+	terminal := sync.OnceValue(func() bool {
+		ok, err := e.peer(w.c)
+		return err == nil && ok
+	})
+	if req.Flags.Override || overrideAnswer {
+		if !terminal() {
+			e.fail(w, req.ID, &codeError{CodeNoTerminal, "--override needs a terminal: the requesting process has none"})
+			return
+		}
+	}
+	if overrideAnswer != req.Flags.Override && (overrideAnswer || isAnswer) {
+		e.badFrame(w, req.ID, "the override flag and the run-continue answer disagree")
+		return
+	}
+	if isAnswer && ev.Type != bus.TypeRunContinue {
+		e.badFrame(w, req.ID, "a run answer needs a run-continue event")
+		return
+	}
+	if req.Flags.Approve || req.Flags.Deny || req.Flags.Override {
+		if isAnswer {
 			rc.Request = bus.ID(req.ID)
+			if terminal() {
+				e.m.Person(req.ID)
+			}
 			if err := e.await(ctx, req, *ev); err != nil {
 				e.fail(w, req.ID, err)
 				return
@@ -61,7 +87,7 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	}
 
 	rs, ok := dataOf[*bus.RunStart](ev)
-	if !ok {
+	if !ok || ev.Type != bus.TypeRunStart {
 		e.badFrame(w, req.ID, "run needs a run-start event")
 		return
 	}
@@ -98,6 +124,9 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 
 	if ev.Run == "" {
 		ev.Run = bus.ID(newID(e.clk.Now()))
+	}
+	if rs.Source == "cli" && terminal() {
+		e.m.Person(req.ID)
 	}
 	if err := e.await(ctx, req, *ev); err != nil {
 		e.fail(w, req.ID, err)
@@ -273,7 +302,7 @@ func (e *Engine) statusData(ctx context.Context, req Request) StatusData {
 	}
 
 	runs, blocked := e.m.Snapshot(root)
-	d := StatusData{Runs: runs, Queued: []QueuedRow{}, Blocked: blocked}
+	d := StatusData{Runs: runs, Queued: []QueuedRow{}, Blocked: blocked, Alert: e.m.errs.alert(), Errors: e.m.errs.counted()}
 
 	es, _, _ := e.q.load()
 	for _, ent := range es {
@@ -344,7 +373,7 @@ func (e *Engine) verbReplay(ctx context.Context, w *connWriter, req Request) {
 // verbPlan publishes the plan event and streams the planning run's events until the Intake Handler reports an error, or the
 // run it started is accepted (run.start) or refused (run-refused).
 func (e *Engine) verbPlan(ctx context.Context, w *connWriter, req Request) {
-	if req.Event == nil {
+	if req.Event == nil || req.Event.Type != bus.TypePlan {
 		e.badFrame(w, req.ID, "plan needs a plan event")
 		return
 	}

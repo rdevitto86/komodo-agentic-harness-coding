@@ -13,7 +13,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cleanup"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
@@ -34,18 +33,6 @@ func (s stateStore) Create(_ context.Context, g string, st engine.State) (state.
 // Save writes a group's record at the revision after rev.
 func (s stateStore) Save(_ context.Context, g string, st engine.State, rev int) (state.Record, error) {
 	return s.m.Save(g, st, rev)
-}
-
-// agentRetries reads each role's retry count from the agent registry.
-type agentRetries struct{ cfg *config.Manager }
-
-// Retries returns the retries of an agent role.
-func (a agentRetries) Retries(name string) (int, error) {
-	ag, ok := a.cfg.GetAgent(name)
-	if !ok {
-		return 0, fmt.Errorf("no agent %s", name)
-	}
-	return ag.Limits.Retries, nil
 }
 
 // ctxAdapter gives the Runtime Manager the Context Manager's cache hook and a per-agent context.

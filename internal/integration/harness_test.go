@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -47,12 +48,26 @@ func komodoBinary(t *testing.T) string {
 		cmd.Dir = filepath.Join(mustWd(), "..", "..")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			binErr = fmt.Errorf("go build ./cmd/komodo: %v\n%s", err, out)
+			return
 		}
+		binErr = startWatchdog(os.Getpid(), binPath)
 	})
 	if binErr != nil {
 		t.Fatal(binErr)
 	}
 	return binPath
+}
+
+// startWatchdog starts a detached shell that waits for process pid to end, then kills every engine started from bin and
+// removes bin's folder. Cleanups do not run when a test run times out or is killed, so they cannot stop the engines.
+func startWatchdog(pid int, bin string) error {
+	const script = `while kill -0 "$1" 2>/dev/null; do sleep 1; done; pkill -f -- "$2 internal engine"; rm -rf "$3"`
+	cmd := exec.Command("sh", "-c", script, "sh", strconv.Itoa(pid), bin, filepath.Dir(bin))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start the engine watchdog: %w", err)
+	}
+	return cmd.Process.Release()
 }
 
 // mustWd returns the test's working folder, which is the package folder.
@@ -569,6 +584,11 @@ func (f *fakeModel) messages(w http.ResponseWriter, raw []byte) {
 				"content": "package tiny\n\n// Add returns the sum of a and b.\nfunc Add(a, b int) int { return a + b }\n"})
 			return
 		case 1:
+			sseTool(w, "tu-test", "write", map[string]any{"path": "tiny/add_test.go",
+				"content": "package tiny\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 " +
+					"{\n\t\tt.Fatal(\"add\")\n\t}\n}\n"})
+			return
+		case 2:
 			sseTool(w, "tu-done", "task_done", map[string]any{"task": firstMatch(taskLine, brief)})
 			return
 		}

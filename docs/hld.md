@@ -150,7 +150,7 @@ Besides these hand-offs, a subsystem calls another directly when it needs an ans
 
 #### 5.2 CLI
 
-The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, config get and set, login, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it, replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
+The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, config get and set, login, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it. Running a group that has no tries left with override gives it one final try once, with the working time the person types; only a person at a terminal may do that. Replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
 
 #### 5.3 Output Formatter
 
@@ -174,7 +174,7 @@ The Context Manager guards everything an agent may see beyond the code: skills (
 
 #### 5.8 Runtime Manager
 
-The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, retries, timeouts and blocks. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand and stopped when no run is live or scheduled. Each Task Manager runs inside it with a direct command channel and a heartbeat; a silent part is restarted. Before any group starts it creates the epic's branch, and the Commit Handler commits the task lists onto it. Detail: [chapter 7](lld.md#7-runtime-manager).
+The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, timeouts and blocks, and each group's retry budget. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand and stopped when no run is live or scheduled. Each Task Manager runs inside it with a direct command channel and a heartbeat; a silent part is restarted. Before any group starts it creates the epic's branch, and the Commit Handler commits the task lists onto it. Detail: [chapter 7](lld.md#7-runtime-manager).
 
 #### 5.9 Cache Manager
 
@@ -296,7 +296,7 @@ sequenceDiagram
 
 1. Any part that fails publishes an error event; the Error Handler records it and prints it to the caller through the CLI.
 2. The Resource Manager raises a resource event before a plan window or spending limit is reached.
-3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`.
+3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has one try budget, three tries by default, that only true failures spend and only falls; the failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant it one final try once, and the person chooses that try's working time. A failed final try fails the group with no second wait. Without that approval the group fails for good: its history is kept, its worktree and caches are left to cleanup, and it is run again only from a fresh plan. Komodo's own errors, such as a crash or a restart, spend no retry. Only a true blocker, an error that stops an agent session from working, counts toward a breaker: a group waits 1, 2 and then 4 minutes after its first three blocker errors in a row and is blocked for a person on the fourth, and one error type on three groups pauses new sessions with the same waits. One error handler records every error by type, and a failure of the engine itself is severe and stops new sessions until a person runs `komodo run` from a terminal.
 4. After a crash, `komodo run` continues each group from its saved state.
 
 ## 7. Deployment

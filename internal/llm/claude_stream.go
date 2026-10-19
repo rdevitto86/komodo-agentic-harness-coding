@@ -338,9 +338,36 @@ func parseClaudeLine(line []byte, sessionID string) (StreamEvent, error) {
 		ev.Kind, ev.RateLimit = KindRateLimit, rl
 	case head.Type == "result":
 		ev.Kind, ev.Result = KindResult, parseClaudeResult(line, sessionID)
+	case head.Type == "assistant":
+		ev.Msg = parseClaudeMessageUsage(line)
 	}
 
 	return ev, nil
+}
+
+// parseClaudeMessageUsage reads the message identifier and usage off an assistant line; nil when the line has no usage.
+func parseClaudeMessageUsage(line []byte) *MsgUsage {
+	var v struct {
+		Message struct {
+			ID    string `json:"id"`
+			Usage *struct {
+				In         int `json:"input_tokens"`
+				Out        int `json:"output_tokens"`
+				CacheRead  int `json:"cache_read_input_tokens"`
+				CacheWrite int `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+	}
+
+	if err := json.Unmarshal(line, &v); err != nil || v.Message.Usage == nil {
+		return nil
+	}
+
+	u := v.Message.Usage
+	return &MsgUsage{
+		ID:    v.Message.ID,
+		Usage: Usage{TokensIn: u.In, TokensOut: u.Out, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite},
+	}
 }
 
 // parseClaudeResult reads the answer, usage and handle out of a result line.

@@ -26,7 +26,7 @@ func TestAgentModelShowsItsWeight(t *testing.T) {
 	if it.Value != "weight:standard" || it.Source != "built-in" {
 		t.Fatalf("item = %+v", it)
 	}
-	if code, e := h.envelope("config", "set", "agents.builder.model=m-1", "agents.builder.retries=1"); code != 0 {
+	if code, e := h.envelope("config", "set", "agents.builder.model=m-1", "agents.builder.session_idle_min=5"); code != 0 {
 		t.Fatalf("set: exit %d, %+v", code, e.Error)
 	}
 	h.stdin = "n\n"
@@ -50,7 +50,7 @@ func TestUnreadableSettingsAreNotATamper(t *testing.T) {
 	h.fake(answerRunID)
 	const warn = "settings file settings.json is unreadable; built-in values are served. Fix: komodo config set --default " +
 		"settings.json"
-	for _, args := range [][]string{{"config", "get", "limits.returns"}, {"stop", "tg-1.2"}, {"run", "tg-1.2"}} {
+	for _, args := range [][]string{{"config", "get", "limits.group_retries"}, {"stop", "tg-1.2"}, {"run", "tg-1.2"}} {
 		code, out, errOut := h.run(append([]string{"--json", "-C", repo}, args...)...)
 		if code != 0 || strings.Count(errOut, warn) != 1 || strings.Count(out, `"v"`) != 1 {
 			t.Errorf("%v: exit %d\nstdout=%s\nstderr=%s", args, code, out, errOut)
@@ -59,7 +59,7 @@ func TestUnreadableSettingsAreNotATamper(t *testing.T) {
 	if code, out, errOut := h.run("--json", "config", "set", "--default", "settings.json"); code != 0 {
 		t.Fatalf("repair: exit %d\n%s\n%s", code, out, errOut)
 	}
-	if _, _, errOut := h.run("--json", "config", "get", "limits.returns"); errOut != "" {
+	if _, _, errOut := h.run("--json", "config", "get", "limits.group_retries"); errOut != "" {
 		t.Fatalf("still warns after repair: %s", errOut)
 	}
 }
@@ -86,8 +86,9 @@ func TestEngineCodeSetsKindAndExit(t *testing.T) {
 func TestAcceptDryRunWritesNothing(t *testing.T) {
 	h := newHarness(t)
 	h.terminal = true
-	h.envelope("config", "set", "limits.returns=2")
-	if err := os.WriteFile(filepath.Join(h.home, "settings.json"), []byte(`{"limits.returns": 4}`), 0o644); err != nil {
+	h.envelope("config", "set", "limits.group_retries=2")
+	settings := filepath.Join(h.home, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"limits.group_retries": 4}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sha := filepath.Join(h.home, "state", "config.sha")
@@ -104,7 +105,7 @@ func TestAcceptDryRunWritesNothing(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatal("--dry-run rewrote config.sha")
 	}
-	if _, _, errOut := h.run("--json", "config", "get", "limits.returns"); !strings.Contains(errOut, "--accept") {
+	if _, _, errOut := h.run("--json", "config", "get", "limits.group_retries"); !strings.Contains(errOut, "--accept") {
 		t.Fatal("the dry run accepted the edit")
 	}
 }

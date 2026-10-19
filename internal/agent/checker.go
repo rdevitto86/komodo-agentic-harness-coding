@@ -91,11 +91,12 @@ func (c checker) Check(ctx context.Context, run CommandRunner, in CheckInput) (C
 	}
 
 	got[StepBaseline], got[StepFlake] = base, flake
-	if got[StepCoverage], err = c.coverageStep(ctx, run, in, blocked); err != nil {
+	var uncovered []string
+	if got[StepCoverage], uncovered, err = c.coverageStep(ctx, run, in, blocked); err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepCoverage, err)
 	}
 
-	res := CheckResult{Flaky: flaky}
+	res := CheckResult{Flaky: flaky, Uncovered: uncovered}
 	for _, s := range stepOrder {
 		res.Steps = append(res.Steps, got[s])
 	}
@@ -415,16 +416,18 @@ func (c checker) judgeFailures(
 }
 
 // coverageStep runs the coverage command last, unless a confirmed regression already blocks the group.
+// It judges the whole-repository percent, then the lines the change adds: it fails when none of them ran, and returns
+// the added lines no test ran.
 func (c checker) coverageStep(
 	ctx context.Context,
 	run CommandRunner,
 	in CheckInput,
 	blocked bool,
-) (StepResult, error) {
+) (StepResult, []string, error) {
 	s := StepResult{Step: StepCoverage, Level: LevelPass}
 	if blocked {
 		s.Detail = []string{"skipped: a regression is confirmed"}
-		return s, nil
+		return s, nil, nil
 	}
 
 	cmd, ok := c.cfg.CoverageCommands[in.Language]
@@ -433,33 +436,58 @@ func (c checker) coverageStep(
 	}
 	if !ok {
 		s.Level, s.Detail = LevelFail, []string{in.Language}
-		return s, nil
+		return s, nil, nil
 	}
 
 	exit, out, err := run(ctx, cmd)
 	if err != nil {
-		return StepResult{}, fmt.Errorf("run coverage command: %w", err)
+		return StepResult{}, nil, fmt.Errorf("run coverage command: %w", err)
 	}
 
 	head, err := ParseCoverage(in.Language, out)
 	if err != nil {
 		if exit != 0 {
 			s.Level, s.Output = LevelFail, CapOutput(out, GateOutputCap)
-			return s, nil
+			return s, nil, nil
 		}
-		return StepResult{}, err
+		return StepResult{}, nil, err
 	}
 
 	var baseCov float64
 	var haveBase bool
 	if head < float64(c.cfg.CoverageFloor) && c.cfg.BaseCoverage != nil {
 		if baseCov, haveBase, err = c.cfg.BaseCoverage(ctx, in.Base); err != nil {
-			return StepResult{}, fmt.Errorf("read base coverage: %w", err)
+			return StepResult{}, nil, fmt.Errorf("read base coverage: %w", err)
 		}
 	}
 	if s.Level = CoverageLevel(c.cfg.CoverageFloor, baseCov, haveBase, head); s.Level == LevelFail {
 		s.Detail = []string{fmt.Sprintf("%.1f%% is under the floor of %d%%", head, c.cfg.CoverageFloor)}
 	}
 
-	return s, nil
+	changed, err := c.changedCoverage(ctx, in, out)
+	if err != nil {
+		return StepResult{}, nil, err
+	}
+	if changed.Executable > 0 && changed.Covered == 0 {
+		s.Level = LevelFail
+		s.Detail = append(s.Detail, "no line this change adds is covered by a test:")
+		s.Detail = append(s.Detail, changed.Uncovered...)
+	}
+
+	return s, changed.Uncovered, nil
+}
+
+// changedCoverage intersects the coverage command's line data with the added lines of the diff; no line data gives an
+// empty result.
+func (c checker) changedCoverage(ctx context.Context, in CheckInput, out string) (ChangedLines, error) {
+	lc, ok := ParseLineCoverage(in.Language, out)
+	if !ok || c.cfg.Diff == nil {
+		return ChangedLines{}, nil
+	}
+
+	diff, err := c.cfg.Diff(ctx, in.Base, in.Head)
+	if err != nil {
+		return ChangedLines{}, fmt.Errorf("read diff: %w", err)
+	}
+	return ChangedCoverage(diff, lc), nil
 }

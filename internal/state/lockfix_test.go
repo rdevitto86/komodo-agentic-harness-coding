@@ -164,7 +164,7 @@ func TestNewFolderSyncsItsParent(t *testing.T) {
 func TestCountersUsesTheLoadChecks(t *testing.T) {
 	m, root := newMgr(t)
 	mustCreate(t, m)
-	if c, err := m.Counters(testGroup); err != nil || c.Returns != 1 || c.Blocks == nil {
+	if c, err := m.Counters(testGroup); err != nil || c.RetriesLeft != 2 || c.Blocks == nil {
 		t.Fatalf("a good record: %+v %v", c, err)
 	}
 	p := statePath(root, testGroup)
@@ -177,7 +177,7 @@ func TestCountersUsesTheLoadChecks(t *testing.T) {
 			t.Fatalf("%s: the edit changed nothing", name)
 		}
 		writeRaw(t, p, bad)
-		if c, err := m.Counters(testGroup); !errors.Is(err, ErrCorrupt) || c.Returns != 0 {
+		if c, err := m.Counters(testGroup); !errors.Is(err, ErrCorrupt) || c.RetriesLeft != 0 {
 			t.Errorf("%s: want ErrCorrupt and no counters, got %+v %v", name, c, err)
 		}
 	}

@@ -284,7 +284,7 @@ func (r *reviewerRole) Slots(_ context.Context, in RoleInput) (map[string]string
 		"diff":       diff,
 		"lens":       strings.Join(lenses, ", "),
 		"lens_rules": strings.TrimRight(rules.String(), "\n"),
-		"checks":     "Every mechanical check passed before this review.",
+		"checks":     checksText(in.Uncovered),
 	}
 	if len(in.Findings) > 0 {
 		s["findings"] = bullets(in.Findings)
@@ -401,6 +401,15 @@ func NewRoles(cfg RoleConfig) (map[string]Role, error) {
 		"tester":   &testerRole{cfg: cfg},
 		"reviewer": &reviewerRole{cfg: cfg, cats: cats},
 	}, nil
+}
+
+// checksText is the reviewer's checks slot: the clean check result, then any added lines no test covers.
+func checksText(uncovered []string) string {
+	const clean = "Every mechanical check passed before this review."
+	if len(uncovered) == 0 {
+		return clean
+	}
+	return clean + "\nAdded lines no test covers:\n" + bullets(uncovered)
 }
 
 // bullets renders findings as a list.

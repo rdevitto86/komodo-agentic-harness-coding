@@ -105,11 +105,23 @@ type judged struct {
 	err error
 }
 
-// guardFailure is a guard that could not be compiled; the session ends no_result and the task retries.
-type guardFailure struct{ err error }
+// loadGuard compiles the guard rules for a binding; a rules file that does not load blocks the group under setup, names the
+// file to fix, and spends no retry.
+func loadGuard(home string, b Binding, refusalLimit int) (*Guard, error) {
+	rows, err := LoadRows(home)
+	if err == nil {
+		var g *Guard
+		if g, err = NewGuard(rows, b, refusalLimit); err == nil {
+			return g, nil
+		}
+	}
 
-// Error describes the failure.
-func (g *guardFailure) Error() string { return "compile the guard: " + g.err.Error() }
+	return nil, block("setup", map[string]string{
+		"error": "compile the guard: " + err.Error(),
+		"file":  "internal/task/policy.json",
+		"fix":   "correct the guard rules file named in file, then run the group again",
+	})
+}
 
 // gitReader adapts the Git to the diff and git_read tools of one lease.
 type gitReader struct {
@@ -261,21 +273,6 @@ func (m *Manager) oneSession(
 
 	sink, _ := role.(FindingSink)
 	if err := m.bindTools(ctx, sc, req, role, perm, sink); err != nil {
-		var gf *guardFailure
-		if errors.As(err, &gf) {
-			m.fact(
-				"session.end",
-				map[string]any{
-					"session": sc.id,
-					"agent":   req.agent,
-					"reason":  state.ReasonNoResult,
-					"error":   err.Error(),
-				},
-			)
-
-			return sessOut{id: sc.id, reason: state.ReasonNoResult}, false, nil
-		}
-
 		return sessOut{}, false, err
 	}
 
@@ -321,6 +318,7 @@ func (m *Manager) oneSession(
 	_ = stream.Close()
 
 	out = sessOut{id: sc.id, reason: reason, handle: sc.handle}
+	out.result.Usage = res.Usage
 	if res.Handle.Value != "" {
 		out.handle = res.Handle
 	}
@@ -462,19 +460,15 @@ func (m *Manager) bindTools(
 	}
 
 	home, _ := os.UserHomeDir()
-	rows, err := LoadRows(home)
-	if err != nil {
-		return err
-	}
 
 	bind := Binding{Agent: req.agent, Permissions: perm, Worktree: m.spec.Lease.Worktree}
 	if req.agent == "builder" {
 		bind.Files = files
 	}
 
-	g, err := NewGuard(rows, bind, m.spec.Limits.RefusalLimit)
+	g, err := loadGuard(home, bind, m.spec.Limits.RefusalLimit)
 	if err != nil {
-		return &guardFailure{err}
+		return err
 	}
 
 	env := &Env{
@@ -819,6 +813,7 @@ func (m *Manager) judgeResult(
 			_ = retry.Close()
 			if reason != state.ReasonDone {
 				out.reason = reason
+				out.result.Usage = addUsage(res.Usage, res2.Usage)
 				return out, nil
 			}
 			_ = serr

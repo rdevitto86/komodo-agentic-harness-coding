@@ -221,7 +221,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		},
 	)
 	d := engine.Deps{
-		Bus: s.bus, Reader: s.reader, Config: s.cfg, Agents: agentRetries{s.cfg},
+		Bus: s.bus, Reader: s.reader, Config: s.cfg,
 		States:   stateOpener,
 		Machine:  s.machine,
 		Leases:   s.leases,
@@ -229,7 +229,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		Contexts: ctxAdapter{},
 		Tasks:    h, Tools: s.tools, Plans: planSource{}, Git: epicGit{s.git}, Commits: h, Resource: res,
 		Version: version, Home: s.home, BaseBranch: s.baseBranch(), Faults: s.faults,
-		Cleaner: h, Janitor: h,
+		Cleaner: h, Janitor: h, Parked: s.parkedGroups,
 		Errors: func(run, group string, err error) { s.logln("komodo engine:", run, group, err) },
 	}
 	eng := engine.NewEngine(d, filepath.Join(s.home, "state", engine.SocketName))
@@ -419,6 +419,63 @@ func (s *stack) leaseRepos() map[string]string {
 			if _, err := os.Stat(l.ClonePath); err == nil {
 				out[l.ClonePath] = l.Repo
 			}
+		}
+	}
+
+	return out
+}
+
+// parkedGroups lists the groups the lease registry still names, with the clone, repository folder and backlog label of
+// each, so the engine can re-arm the override timers of those saved blocked.
+func (s *stack) parkedGroups(context.Context) []engine.ParkedGroup {
+	var out []engine.ParkedGroup
+
+	labels := map[string]map[string]string{} // group labels by id, per clone
+
+	files, _ := filepath.Glob(filepath.Join(s.home, "leases", "*", "*.json"))
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+
+		var l lease.Lease
+		if json.Unmarshal(b, &l) != nil || l.ClonePath == "" || l.Group == "" {
+			continue
+		}
+
+		common, err := gitOut("-C", l.ClonePath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			continue
+		}
+
+		if labels[l.ClonePath] == nil {
+			labels[l.ClonePath] = backlogLabels(l.ClonePath)
+		}
+
+		out = append(out, engine.ParkedGroup{
+			Repo:      l.Repo,
+			Root:      l.ClonePath,
+			CommonDir: common,
+			Group:     l.Group,
+			Label:     labels[l.ClonePath][l.Group],
+		})
+	}
+
+	return out
+}
+
+// backlogLabels maps each group id in root's backlog to its folder name, such as tg-1.2; a backlog that fails to load
+// gives an empty map.
+func backlogLabels(root string) map[string]string {
+	out := map[string]string{}
+	epics, _, err := intake.Load(root)
+	if err != nil {
+		return out
+	}
+	for _, e := range epics {
+		for _, g := range e.Groups {
+			out[g.ID] = g.Name
 		}
 	}
 

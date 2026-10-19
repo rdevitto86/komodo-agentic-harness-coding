@@ -14,7 +14,7 @@ import (
 func TestSessionEndFactCarriesTheSecondsTheSessionRan(t *testing.T) {
 	var offset atomic.Int64
 	r := newPipeRig(t, rigOpts{
-		limits: Limits{Attempts: 1},
+		limits: Limits{GroupRetries: -1},
 		mut: func(_ *GroupSpec, c *Collaborators) {
 			c.Now = func() time.Time { return t0.Add(time.Duration(offset.Load())) }
 		},

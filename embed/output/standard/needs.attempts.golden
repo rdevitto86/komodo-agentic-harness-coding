@@ -1,6 +1,0 @@
-Group `tg-1.3` needs a decision: `attempts`. The task is `amend docs/lld.md`. It
-asks: `Every fresh builder session was used. Allow more attempts?` To resolve
-it, run `komodo run --approve tg-1.3`.
-
-❌ Blocked Changes
-Group `tg-1.3` waits for a person.

@@ -171,6 +171,32 @@ func TestShippedTemplates(t *testing.T) {
 	}
 }
 
+func TestReviewerPromptSetsTheMethod(t *testing.T) {
+	prompt, err := fs.ReadFile(komodo.Embedded, "embed/agents/reviewer/prompt.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := fs.ReadFile(komodo.Embedded, "embed/templates/reviewer.md")
+	if err != nil || !bytes.Equal(prompt, active) {
+		t.Fatalf("the reviewer prompt and the shipped template differ: %v", err)
+	}
+	tpl, err := ParseTemplate("reviewer", string(prompt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"task cards", "acceptance", "every branch", "readiness.1", "Checks", "`run`", "missing",
+		"each rule", "submit_finding", "quote", "one verdict per task",
+	} {
+		if !strings.Contains(strings.ToLower(tpl.Role), strings.ToLower(want)) {
+			t.Errorf("reviewer role text lacks %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(tpl.Role), "placeholder") {
+		t.Error("reviewer role text is still a placeholder")
+	}
+}
+
 func TestSlotTableMatchesRegistry(t *testing.T) {
 	type reg struct {
 		Slots struct {

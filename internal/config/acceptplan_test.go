@@ -10,11 +10,11 @@ import (
 // AcceptPlan names the machine files whose checksum differs and writes nothing.
 func TestAcceptPlanListsDriftWithoutWriting(t *testing.T) {
 	m, home := newTestManager(t)
-	mustSet(t, m, "limits.returns", 4)
+	mustSet(t, m, "limits.group_retries", 4)
 	if got, err := m.AcceptPlan(); err != nil || len(got) != 0 {
 		t.Fatalf("clean files: %v %v", got, err)
 	}
-	writeFile(t, home, "settings.json", `{"limits.returns": 2}`)
+	writeFile(t, home, "settings.json", `{"limits.group_retries": 2}`)
 	shaBefore, _ := os.ReadFile(filepath.Join(home, "state", "config.sha"))
 	got, err := m.AcceptPlan()
 	if err != nil || len(got) != 1 || got[0].Key != "settings.json" || got[0].Old == got[0].New || got[0].New == "" {

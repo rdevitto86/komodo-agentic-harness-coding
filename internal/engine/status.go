@@ -16,6 +16,8 @@ type StatusData struct {
 	Queued  []QueuedRow  `json:"queued"`
 	Blocked []BlockedRow `json:"blocked"`          // groups that wait for an answer
 	Waited  string       `json:"waited,omitempty"` // with --wait: blocked, done or timeout
+	Alert   string       `json:"alert,omitempty"`  // one line while the error handler holds new sessions back
+	Errors  []ErrorCount `json:"errors,omitempty"` // error counts by type since the engine started
 }
 
 // RunRow is one live run and its groups.
@@ -108,6 +110,7 @@ func (m *Manager) Snapshot(root string) ([]RunRow, []BlockedRow) {
 		rows = append(rows, row)
 	}
 
+	blocked = append(blocked, m.parkedBlockedLocked(root)...)
 	slices.SortFunc(rows, func(a, b RunRow) int { return strings.Compare(a.RunID, b.RunID) })
 	slices.SortFunc(blocked, func(a, b BlockedRow) int { return strings.Compare(a.Group, b.Group) })
 	return rows, blocked
@@ -180,6 +183,7 @@ func (m *Manager) closeAllCaches() {
 func (m *Manager) forget(request string) {
 	m.mu.Lock()
 	delete(m.expect, request)
+	delete(m.persons, request)
 	m.mu.Unlock()
 }
 
@@ -201,8 +205,6 @@ func (g *group) question(s State) string {
 			)
 		}
 		return label + " asks to change files outside its list. Approve or deny?"
-	case state.ReasonWall:
-		return label + " used twice its working time. Approve more time or leave it blocked?"
 	}
 
 	return fmt.Sprintf("%s is blocked: %s. Fix the cause and run it again.", label, s.Block.Reason)

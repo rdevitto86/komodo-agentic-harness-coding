@@ -66,7 +66,7 @@ type GroupState struct {
 	// rises each time the group enters a stage; an input from an older epoch is stale
 	Epoch uint32 `json:"epoch"`
 
-	// set in done: complete, lost or abandoned
+	// set in done: complete, lost, abandoned or failed
 	Outcome string `json:"outcome"`
 
 	// the Lease Manager's fence for this holder; never zero
@@ -99,6 +99,9 @@ type GroupState struct {
 	// fingerprint of the failure behind the last return to build
 	FailureHash string `json:"failure_hash"`
 
+	// the output of the last failed test and review round, for the builder after an override
+	LastFindings string `json:"last_findings,omitempty"`
+
 	// tree hash tested at the last return; the same tree again is a flap
 	ReturnTree string `json:"return_tree"`
 
@@ -126,14 +129,18 @@ type UnfinishedEdits struct {
 
 // Counters are the numbers that bound a group; only the Runtime Manager changes them.
 type Counters struct {
-	Returns      int            `json:"returns"`       // returns to build after a failed test or review
-	Attempts     int            `json:"attempts"`      // fresh builder sessions for the group
-	Retries      int            `json:"retries"`       // builder restarts after a timeout or idle stop
-	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to attempts or retries
-	Blocks       map[string]int `json:"blocks"`        // blocks per reason
-	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time
-	WallExtended bool           `json:"wall_extended"` // the one wall-time extension was granted
-	TokensUsed   int64          `json:"tokens_used"`   // tokens used by the group
+	RetriesLeft int            `json:"retries_left"` // tries left, the current one included; only an override raises it
+	Overrides   int            `json:"overrides"`    // overrides a person approved; the only way retries_left rises
+	Crashes     int            `json:"crashes"`      // sessions lost to a crash; never charged to the retries
+	Blocks      map[string]int `json:"blocks"`       // blocks per reason
+	WallUsedS   int64          `json:"wall_used_s"`  // seconds worked, excluding paused and blocked time; never falls
+	TokensUsed  int64          `json:"tokens_used"`  // tokens used by the group
+	Tries       int            `json:"tries"`        // the current try, from 1; rises with a spent retry or override
+	WallBaseS   int64          `json:"wall_base_s"`  // wall_used_s when the current try began; only rises
+	WallExtTry  int            `json:"wall_ext_try"` // the try the one wall-time extension was granted on; only rises
+	FaultStreak int            `json:"fault_streak"` // Komodo faults in a row with no session result between them
+
+	FinalWallMin int `json:"final_wall_min,omitempty"` // the final try's minutes; 0 until an override; only rises
 }
 
 // TaskState is one task's progress.
@@ -156,9 +163,8 @@ type TestReview struct {
 
 // RoundState is one agent's progress in the current round.
 type RoundState struct {
-	Session  string `json:"session,omitempty"` // live or last session of the agent
-	Result   string `json:"result"`            // empty until it ends, then pass, fail or cancelled
-	Restarts int    `json:"restarts"`          // fresh sessions after an end without a result
+	Session string `json:"session,omitempty"` // live or last session of the agent
+	Result  string `json:"result"`            // empty until it ends, then pass, fail or cancelled
 }
 
 // Finding names one verified blocking finding by rule and file.
@@ -198,4 +204,5 @@ type BlockState struct {
 	Reason  Reason    `json:"reason,omitempty"`
 	Counter string    `json:"counter,omitempty"` // the spent counter of an unnamed block
 	At      time.Time `json:"at,omitzero"`
+	Until   time.Time `json:"until,omitzero"` // retries only: when the override window lapses and the group fails
 }

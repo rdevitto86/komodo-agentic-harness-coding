@@ -50,7 +50,7 @@ func goodState() GroupState {
 		Epoch:      4,
 		Fence:      3,
 		ConfigHash: testHash,
-		Counters:   Counters{Returns: 1, Attempts: 1, Blocks: map[string]int{}, WallUsedS: 2460},
+		Counters:   Counters{RetriesLeft: 2, Overrides: 1, Blocks: map[string]int{}, WallUsedS: 2460},
 		Tasks: []TaskState{
 			{ID: "tsk-add-lock", State: "claimed", Session: "s1"},
 		},

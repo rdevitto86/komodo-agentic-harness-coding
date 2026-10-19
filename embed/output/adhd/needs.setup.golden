@@ -4,7 +4,7 @@ Group `tg-1.3` needs a decision: `setup`.
 
 **Question:** `The group could not start: lease, worktree or sandbox. Retry?`
 
-**Fix:** `komodo run --approve tg-1.3`
+**Fix:** `komodo run tg-1.3`
 
 **❌ Blocked Changes**
 - Group `tg-1.3` waits for a person

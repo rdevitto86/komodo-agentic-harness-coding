@@ -51,7 +51,9 @@ const (
 	InAbandon      InputKind = "abandon"      // data: AbandonData
 	InProgress     InputKind = "progress"     // data: ProgressData; the live session handles of a state report
 	InFact         InputKind = "fact"         // data: FactData; a fact that is published and changes nothing
-	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; counts as one retry
+	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; costs no retry
+	InOverride     InputKind = "override"     // data: OverrideData; a person gave an empty group a final try
+	InHoldDue      InputKind = "hold.due"     // a hold on the group's session starts ended; it performs the ones held back
 )
 
 // Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a
@@ -102,9 +104,12 @@ type Result struct {
 	Orders  []Order  // performed by the group loop, each wrapped in start and done records
 	Emit    []Event  // events to publish after the write is saved
 	Refused bool     // no row matched; State is unchanged
+	Why     string   // the sentence for a person when Refused, from the request.refused fact
 	Stale   bool     // the input's epoch is older than the group's; State is unchanged
 	Dup     bool     // the input's request was applied before; State is unchanged
 	Dropped []string // facts that stood for no event, each with the kind and the reason, for the error output
+	// the error type the input stood for, which the error handler records; empty for none
+	Err state.Reason
 }
 
 // The data of each input kind.
@@ -135,6 +140,7 @@ type (
 	SessionEndData struct {
 		bus.SessionEnd
 		Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"`
+		Restart    bool                   `json:"restart,omitempty"` // the engine ended the session by dying; no fault
 	}
 	// ScopeAsk is the data of scope.ask; Deny is set by the Runtime Manager when a path is protected or in another live
 	// group's files.
@@ -155,6 +161,10 @@ type (
 	// TimerDue is the data of timer.due; Reason is timer, pause_timeout or run-continue.
 	TimerDue struct {
 		Reason string `json:"reason"`
+	}
+	// OverrideData is the data of override.
+	OverrideData struct {
+		Minutes int `json:"minutes,omitempty"` // the final try's working time, 1 to 480 minutes
 	}
 	// ContinueData is the data of continue.
 	ContinueData struct {
@@ -231,21 +241,19 @@ type LandingPlan struct {
 
 // Limits are the bounds Next enforces, read once at run start through the Configuration Manager.
 type Limits struct {
-	Returns         int // limits.returns
-	GroupAttempts   int // limits.group_attempts
-	PauseMaxMin     int // limits.pause_max_min
-	GroupWallMin    int // limits.group_wall_min
-	GroupTokens     int // limits.group_tokens, enforced by the Resource Manager
-	BuilderRetries  int // the builder's retries in the agent registry
-	ReviewerRetries int // the reviewer's retries
-	TesterRetries   int // the tester's retries
-	PoolMin         int // limits.pool_min
-	PoolMax         int // limits.pool_max
-	SessionMemGB    float64
+	GroupRetries int // limits.group_retries
+	PauseMaxMin  int // limits.pause_max_min
+	GroupWallMin int // limits.group_wall_min
+	GroupTokens  int // limits.group_tokens, enforced by the Resource Manager
+	PoolMin      int // limits.pool_min
+	PoolMax      int // limits.pool_max
+	SessionMemGB float64
 }
 
 // Timings and bounds of the engine.
 const (
+	OverrideWindow       = 60 * time.Minute // how long a group with no tries left waits for a person's override
+	FinalWallMaxMin      = 480              // the most minutes a person may give the final try
 	GroupBuffer          = 256              // capacity of a group's input channel
 	LeaseRenewEvery      = 5 * time.Minute  // how often a live group renews its lease
 	AgentStopGrace       = 30 * time.Second // time a stop allows each session before the terminate signal

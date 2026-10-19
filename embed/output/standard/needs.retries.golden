@@ -1,6 +1,7 @@
 Group `tg-1.3` needs a decision: `retries`. The task is `amend docs/lld.md`. It
-asks: `An agent's timeouts or idle stops passed its retries. Continue?` To
-resolve it, run `komodo run --approve tg-1.3`.
+asks:
+`The group has no tries left. Override within 60 minutes for one final try, or it fails.`
+To resolve it, run `komodo run tg-1.3 --override`.
 
 ❌ Blocked Changes
 Group `tg-1.3` waits for a person.

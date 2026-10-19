@@ -184,31 +184,27 @@ func TestPlanRefusesACycleAndAnUnknownDependencyOutsideTheRun(t *testing.T) {
 }
 
 func TestLoadLimitsReadsEveryKeyOnce(t *testing.T) {
-	cfg := fakeConfig{"limits.returns": 3, "limits.group_attempts": 6, "limits.pause_max_min": float64(
-		360,
-	), "limits.group_wall_min": 60,
+	cfg := fakeConfig{
+		"limits.group_retries": 3,
+		"limits.pause_max_min": float64(360), "limits.group_wall_min": 60,
 		"limits.group_tokens": 0, "limits.pool_min": 1, "limits.pool_max": 6, "sandbox.max_mem_gb": 4}
-	l, err := LoadLimits(cfg, fakeAgents{"builder": 2, "reviewer": 1, "tester": 3})
+	l, err := LoadLimits(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Limits{
-		Returns:         3,
-		GroupAttempts:   6,
-		PauseMaxMin:     360,
-		GroupWallMin:    60,
-		BuilderRetries:  2,
-		ReviewerRetries: 1,
-		TesterRetries:   3,
-		PoolMin:         1,
-		PoolMax:         6,
-		SessionMemGB:    4,
+		GroupRetries: 3,
+		PauseMaxMin:  360,
+		GroupWallMin: 60,
+		PoolMin:      1,
+		PoolMax:      6,
+		SessionMemGB: 4,
 	}
 	if l != want {
 		t.Fatalf("limits = %+v", l)
 	}
-	delete(cfg, "limits.returns")
-	if _, err := LoadLimits(cfg, fakeAgents{}); err == nil || !strings.Contains(err.Error(), "limits.returns") {
+	delete(cfg, "limits.group_retries")
+	if _, err := LoadLimits(cfg); err == nil || !strings.Contains(err.Error(), "limits.group_retries") {
 		t.Fatalf("error = %v", err)
 	}
 }

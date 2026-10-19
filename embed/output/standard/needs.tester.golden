@@ -1,6 +1,6 @@
 Group `tg-1.3` needs a decision: `tester`. The task is `amend docs/lld.md`. It
 asks: `The Tester's results were disputed twice. Decide the result?` To resolve
-it, run `komodo run --approve tg-1.3`.
+it, run `komodo run tg-1.3`.
 
 ❌ Blocked Changes
 Group `tg-1.3` waits for a person.

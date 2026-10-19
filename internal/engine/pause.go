@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -86,8 +87,7 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	}
 
 	switch {
-	case st.Stage == StageBlocked &&
-		(st.Block.Reason == state.ReasonNeedsScope || st.Block.Reason == state.ReasonWall):
+	case st.Stage == StageBlocked && st.Block.Reason == state.ReasonNeedsScope:
 		sa := ScopeAnswer{Answer: answer}
 		if ask != nil {
 			sa.Paths, sa.Reason = ask.Paths, ask.Reason
@@ -103,6 +103,54 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 	}
 
 	return nil
+}
+
+// Override gives a group whose tries ran out one final try of the given minutes, for `run (id) --override`; it returns
+// once the group has applied or refused it.
+func (m *Manager) Override(ctx context.Context, target, request string, minutes int) error {
+	gs := m.byTarget(target)
+	loaded := len(gs) > 0
+	if !loaded {
+		var err error
+		if gs, err = m.wakeParked(ctx, target); err != nil {
+			return err
+		}
+	}
+
+	g := gs[0]
+	if loaded {
+		if err := overridable(g); err != nil {
+			return err
+		}
+	}
+
+	request = cmp.Or(request, fmt.Sprintf("override-%s-%d", g.spec.ID, g.now().UnixNano()))
+
+	return m.awaitContinues(ctx, []pendingContinue{m.queueInput(g, Input{
+		Kind: InOverride, Request: request, Data: mustJSON(OverrideData{Minutes: minutes}),
+	})})
+}
+
+// overridable returns the refusal for a live group that cannot take an override now, or nil.
+func overridable(g *group) error {
+	g.mu.Lock()
+	st := g.snap
+	g.mu.Unlock()
+
+	switch {
+	case st.Stage == StageDone && st.Outcome == "failed":
+		return &codeError{CodeGroupFailed, g.spec.Label + " failed for good: plan it again to run it fresh"}
+	case st.Counters.Overrides >= 1:
+		return &codeError{CodeRunRefused, g.spec.Label + " was not continued: its override was already used"}
+	case st.Stage == StageBlocked && st.Block.Reason == state.ReasonRetries:
+		if st.Block.Until.IsZero() || !g.now().Before(st.Block.Until) {
+			return &codeError{CodeRunRefused, g.spec.Label + " was not continued: the override window has passed"}
+		}
+
+		return nil
+	}
+
+	return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an override"}
 }
 
 // Abandon drops a group for good: it is stopped, Done with outcome abandoned, discarded, and each dependent blocks.
@@ -220,6 +268,9 @@ func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool 
 
 // continueTarget handles a run-continue event: an answer, or a plain continue of every held group the target names.
 func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run string) error {
+	if rc.Answer == "override" {
+		return m.Override(ctx, rc.Target, string(rc.Request), rc.Minutes)
+	}
 	if rc.Answer != "" {
 		return m.Answer(rc.Target, rc.Answer == "approve", string(rc.Request))
 	}
@@ -238,6 +289,8 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 		return &codeError{CodeUnknownTarget, "no live group or run named " + rc.Target}
 	}
 
+	var pending []pendingContinue
+
 	for _, g := range gs {
 		g.mu.Lock()
 		st := g.snap
@@ -252,10 +305,10 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 			}
 		}
 
-		g.enqueue(Input{Kind: InContinue, Request: string(rc.Request) + "/" + g.spec.ID})
+		pending = append(pending, m.queueContinue(g, string(rc.Request)+"/"+g.spec.ID))
 	}
 
-	return nil
+	return m.awaitContinues(ctx, pending)
 }
 
 // undoneDep returns the label of a dependency of the group that is not Done.
@@ -295,6 +348,7 @@ func stopCommand(cause string) task.Command {
 func sessionCrash(agent, session, taskID string, stage Stage) SessionEndData {
 	d := SessionEndData{}
 	d.Agent, d.Task, d.Reason = agent, taskID, string(state.ReasonCrash)
+	d.Restart = true
 	d.Stage, d.Session = string(stage), busID(session)
 	if agent == "builder" && taskID != "" {
 		d.Unfinished = &state.UnfinishedEdits{Task: taskID, Files: []string{}}

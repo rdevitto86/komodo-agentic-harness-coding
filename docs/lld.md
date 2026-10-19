@@ -66,7 +66,7 @@ Every subsystem chapter has the same child pages, numbered `N.1` to `N.10`. A pa
 
 | Item | Convention | Notes |
 |---|---|---|
-| Config keys | Dotted, lower case: `limits.returns`; agent entries as `agents.<name>` | The names typed in `komodo config get` and `set` |
+| Config keys | Dotted, lower case: `limits.group_retries`; agent entries as `agents.<name>` | The names typed in `komodo config get` and `set` |
 | Event types and subtypes | Type in kebab case from the diagram (`run-status`); subtype in `family.name` form (`session.end`) | [4. Event Bus](#4-event-bus) holds the full list |
 | Result and reason codes | Snake case from one enum (a fixed list of allowed values): `needs_scope`, `time_out` | A result, an event subtype's reason and a status line share the one list |
 | Runs, groups, sessions | A version 7 universally unique identifier (UUID) made by the binary; it starts with its creation time, so ids sort by age | A group keeps its readable label, such as `tg-1.2`, and an epic has one, such as `ep-1`; commands take labels, and a label is never reused after a plan is rewritten |
@@ -456,13 +456,16 @@ The row of `run`, as the table holds it:
 
 var runCommand = Command{
 	Name:    "run",
-	Summary: "Start, schedule or continue a run, or answer a blocked group",
+	Summary: "Start, schedule or continue a run, or answer a blocked group, or override a spent one",
 	Tier:    TierShared,
 	Flags: []FlagSpec{ // --all is the global flag
 		{Name: "schedule", Kind: "time", Help: "Queue the run for this RFC 3339 time"},
 		{Name: "approve", Kind: "bool", Help: "Grant what the blocked group asked for"},
 		{Name: "deny", Kind: "bool", Help: "Refuse what the blocked group asked for"},
+		{Name: "override", Kind: "bool", TerminalOnly: true, Help: "Give a group with no tries left one final try, once; needs a terminal"},
+		{Name: "minutes", Kind: "int", TerminalOnly: true, Help: "With --override: the final try's working time in minutes; skips the prompt"},
 	},
+	NeedsTerminal: func(c *Call) bool { return flagBool(c, "override") }, // only --override needs a terminal
 	NeedsEngine:  true,
 	TamperPolicy: TamperRefuse,
 	Run:          handleRun,
@@ -478,6 +481,7 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 | `run (id)`, `run --all` | `Verb` `run`; `Event` run-start; `Flags.All` | One final `ok` whose `data` holds the run id, or `refused` with a `Code` |
 | `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; `Event` run-start with no run id and `data.schedule` set | One final `ok` whose `data` holds the run id the engine minted and the queued time |
 | `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
+| `run (id) --override` | `Verb` `run`; `Event` run-continue with `answer` `override`; `Flags.Override`; terminal only, checked by the CLI and again by the engine from the socket peer | One final `ok`, or `refused` with `no_terminal` (the requesting process has no controlling terminal), `not_blocked` (no override is waiting) or `group_failed` (the group already failed) |
 | `stop (id)` | `Verb` `stop`; `Event` run-stop | One final `ok`, or `refused` with `unknown_target` |
 | `plan` | `Verb` `plan`; `Event` plan | `event` replies for the `error` events of the plan and for the `run-start` the Intake Handler publishes; planning ends when that run's first `run-status` `run.start` arrives, or its `error` `run-refused`, which is sent as a last `event` reply; then one final `ok` |
 | `status`, `status (id)` | `Verb` `status`; `Target` for `(id)`; `Root`; `Flags.All`, `Flags.Wait`, `Flags.TimeoutS` | One final `ok` holding `StatusData`, with `figures` for `(id)`, `explain` for a failed or blocked group, and `recent` and `scorecard` for `--all`. With `--wait`, an `ok` holding `StatusData` after each change, then a final `ok` with `{"waited": "blocked"}`, `"done"` or `"timeout"` |
@@ -772,7 +776,7 @@ Each command is a *direct call* (the CLI makes the call and prints the result), 
 | `install` | Direct call | The installer in this package; no event |
 | `config get\|set (id)` | Direct call | `GetConfigItem()`, `SetConfigItem()` |
 | `plan` | Event `plan` | Intake Handler subscribes to `plan` |
-| `run (id)` | Event `run-start`; with `--approve` or `--deny`, event `run-continue` | Runtime Manager subscribes to both |
+| `run (id)` | Event `run-start`; with `--approve`, `--deny` or `--override`, event `run-continue` | Runtime Manager subscribes to both |
 | `stop (id)` | Event `run-stop` | Runtime Manager subscribes to `run-stop` |
 | `replay (id)` | Control request `replay` | Runtime Manager, which reads the Event Bus's event store through `bus.Reader` ([chapter 4](#4-event-bus)) |
 | `status (id)` | Control request `status` | Runtime Manager, which adds the Metrics Service's figures ([chapter 18](#18-metrics-service)) |
@@ -785,7 +789,7 @@ Each command is a *direct call* (the CLI makes the call and prints the result), 
 
 **Commands that start the engine:** `run`, `stop`, `status`, `ui`, `abandon`, `replay` and `clean`. Each connects to the engine and starts it first when none answers ([Reaching the engine](#reaching-the-engine)). `plan` sends its event the same way and starts the engine when none answers, because the Intake Handler runs inside the engine process.
 
-**Terminal-only commands:** `install`, `update`, `login` and `config set`. A refused call exits 1 with `no_terminal`, and the orchestrator hands the command to the person. On Claude Code the deny rules from step 6 refuse them first.
+**Terminal-only commands:** `install`, `update`, `login` and `config set`, and the flag `run (id) --override`. A refused call exits 1 with `no_terminal`, and the orchestrator hands the command to the person. `run --override` is a flag, not a fourteenth command, because `run` already answers a held group and the 13 commands stay as promised; a flag marked `terminal_only` in the help JSON needs the terminal although its command is shared. On Claude Code the deny rules from step 6 refuse the commands first; the terminal check is the gate for the flag.
 
 **Every other command is shared.** The orchestrator may call `plan`, `run`, `stop`, `replay`, `status`, `abandon`, `clean`, `ui`, `doctor`, `config get` and `--help`.
 
@@ -820,7 +824,7 @@ A person at a terminal runs `install`, in a repository for the repository steps 
 
 ##### `config get` and `config set`
 
-The id is a dotted settings key such as `limits.returns` or `agents.reviewer.model`; the [Configuration Manager](#3-configuration-manager) holds the key list.
+The id is a dotted settings key such as `limits.group_retries` or `agents.reviewer.model`; the [Configuration Manager](#3-configuration-manager) holds the key list.
 
 - **`config get [<key>…]`** prints each value and the layer that set it. With no key, `--list` prints every key. `--all` prints JSON of every key with value, default, limit and source. After a key, `--all` lists that key's valid values.
 - **`config set <key>=<value>…`** sets every pair or none. One call reads or writes, never both.
@@ -1360,7 +1364,8 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 
 **Component** (the real parts with a fake release server and a fixture repository)
 - **Golden envelope:** each of the 13 commands has a golden `--json` test that compares its output with a stored copy.
-- **Terminal check:** with no controlling terminal, `komodo install` and `komodo config set limits.returns=4` exit 1 with `no_terminal`.
+- **Final try's working time:** after the terminal check, `komodo run (id) --override` asks `Working time for the final try, in minutes [<limits.group_wall_min>]: `; Enter accepts the default, and `--minutes N` skips the prompt. A value outside 1 to 480 is refused with `usage` before any request is sent. [TODO: the final try's time window range, because `limits.group_wall_min` has no maximum to borrow ([G-293](#g-293))]
+- **Terminal check:** with no controlling terminal, `komodo run (id) --override`, `komodo install` and `komodo config set limits.group_retries=4` exit 1 with `no_terminal`.
 - **Pinned repository:** a repository whose `AGENTS.md` has `min=` above the binary refuses `run` with exit 1 and `run komodo update`, while `install`, `update`, `doctor`, `--help` and `--version` run.
 - **Idempotent install:** the second `install` makes 0 repository changes, and `--dry-run` on a fresh repository lists 4 writes.
 - **Install remove:** `install --remove` after `install` leaves 0 entries in `install.json` and no Komodo block in `AGENTS.md`; a hand-edited owned file stays and is reported.
@@ -1724,7 +1729,8 @@ const (
 | `config_tampered` | CLI, Configuration Manager | A settings file was hand-edited; the fix is `komodo config set --accept` |
 | `pinned` | CLI | The repository pin is above the running binary; the fix is `komodo update` |
 | `no_terminal` | CLI | A terminal-only command ran without a controlling terminal |
-| `not_blocked` | Runtime Manager, CLI | `--approve` or `--deny` named a group that is not blocked |
+| `not_blocked` | Runtime Manager, CLI | `--approve`, `--deny` or `--override` named a group that is not waiting for it |
+| `group_failed` | Runtime Manager | `run (id)` or `--override` named a group that failed for good; the fix is to plan it again |
 | `no_repo` | CLI | A command that needs a repository ran outside one |
 | `usage` | CLI | Unknown command or flag, bad flag value or unreadable `--input` |
 | `unknown_key` | Configuration Manager | A settings key or agent role outside the registry; names the closest one |
@@ -2007,7 +2013,7 @@ The Configuration Manager guards the harness settings and the agent registry, th
 
 | Term | Meaning |
 |---|---|
-| Key | A dotted setting name such as `limits.returns`. The key is the `(id)` of `config get` and `config set` |
+| Key | A dotted setting name such as `limits.group_retries`. The key is the `(id)` of `config get` and `config set` |
 | Layer | Where a value came from: 1 is the built-in table compiled into the binary, 2 is the machine files under `~/.komodo/` |
 | Hard limit | The largest or smallest value the built-in table allows for a key. A machine value cannot pass it |
 | Settings file | `~/.komodo/settings.json`: the flat keys a person has changed |
@@ -2054,7 +2060,7 @@ Go package `internal/config`. It imports the Go standard library and the package
 ```json
 {
   "keys": [
-    { "name": "limits.returns", "kind": "int", "default": 3, "min": 0, "max": 5 },
+    { "name": "limits.group_retries", "kind": "int", "default": 3, "min": 1, "max": 5 },
     { "name": "limits.pool_min", "kind": "int", "default": 1, "min": 1, "max_key": "limits.pool_max" }
   ]
 }
@@ -2311,7 +2317,7 @@ type Batch struct {
 `config.log` holds one JSON line per changed key: `time` in RFC 3339 UTC, `batch`, `key`, `old` and `new`. The batch id is a UUID version 7, so ids sort by time. `config.sha` holds the SHA-256 (a 256-bit checksum, 64 lowercase hexadecimal characters) of each machine file; a missing file records an empty string.
 
 ```json
-{"time":"2026-10-14T09:12:04Z","batch":"0192e5a1-3c00-7b10-8d2e-4f6a1b2c3d4e","key":"limits.returns","old":3,"new":4}
+{"time":"2026-10-14T09:12:04Z","batch":"0192e5a1-3c00-7b10-8d2e-4f6a1b2c3d4e","key":"limits.group_retries","old":3,"new":4}
 {"time":"2026-10-14T09:20:11Z","batch":"0192e5a8-9e00-7c42-9a1b-5e7f2c3d4e5f","key":"settings.json","old":"<64 hexadecimal characters>","new":"<64 hexadecimal characters>"}
 ```
 
@@ -2427,8 +2433,8 @@ If step 3 or 4 fails for a machine file, the manager serves layer 1 for every ke
 #### Per-agent limits
 
 A role's wall, idle and retry limits come from the highest layer that sets them:
-1. The override in `agents.json`: `session_wall_min`, `session_idle_min`, `retries`.
-2. The flat key `limits.session_wall_min` or `limits.session_idle_min` in `settings.json`; `retries` has no flat key.
+1. The override in `agents.json`: `session_wall_min`, `session_idle_min`.
+2. The flat key `limits.session_wall_min` or `limits.session_idle_min` in `settings.json`.
 3. The role file's `limits`.
 
 Each result is capped by its hard limit in [3.8](#38-config). The builder's wall time is the group's, which the Runtime Manager works out; no other part does.
@@ -2553,14 +2559,13 @@ The Configuration Manager owns the four per-role override keys. Every other key 
 | `agents.<role>.model` | string | The role weight's model | A probed model | The model the role starts on. With no override, `config get` shows `weight:<the role's weight>` as both the value and the default, such as `weight:heavy`, which the model client resolves to a model. A change reaches an open run at its next session start. The chain is not changed |
 | `agents.<role>.session_wall_min` | int | `limits.session_wall_min` | 120 | Wall-clock limit for this role's sessions; beats the flat key |
 | `agents.<role>.session_idle_min` | int | `limits.session_idle_min` | 30 | Silence limit before a nudge; beats the flat key |
-| `agents.<role>.retries` | int | 2 | 3 | Fresh sessions after a timeout or idle stop, counted per group and never reset while the group is open |
 
 Where the other keys are described:
 
 | Key group | Chapter |
 |---|---|
 | `output.*` | [Output Formatter](#28-config) |
-| `limits.pool_*`, `limits.group_*` except `limits.group_tokens`, `limits.returns`, `limits.pause_max_min` | [Runtime Manager](#78-config) |
+| `limits.pool_*`, `limits.group_*` except `limits.group_tokens`, `limits.override_*`, `limits.pause_max_min` | [Runtime Manager](#78-config) |
 | `limits.session_*`, `limits.link_sessions.<link>`, `guard.refusal_limit`, `sandbox.*`, `providers.*`, `http.*` | [Task Manager](#118-config) |
 | `cache.*` | [Cache Manager](#8-cache-manager) |
 | `bus.*`, `events.*` | [Event Bus](#48-config) |
@@ -2598,7 +2603,8 @@ Token and cost usage are always read; no key switches them off.
 
 **Unit**
 - **Strict reading:** a `settings.json` with an unknown key fails to load and names the closest known key.
-- **Limits:** `SetConfigItem(limits.returns=9)` returns a `LimitError` naming the key and the limit 5, and the file is unchanged.
+- **Removed keys:** `limits.override_window_min` and `limits.override_retries` are ignored when `settings.json` holds them, so a file an older version wrote still loads.
+- **Limits:** `SetConfigItem(limits.group_retries=9)` returns a `LimitError` naming the key and the limit 5, and the file is unchanged.
 - **All or none:** a call with 1 bad pair out of 3 writes nothing; a good call logs 1 audit row per changed key.
 - **Idempotence:** the same call twice reports `0 changes` the second time and appends no row.
 - **Layer order:** a role override beats the flat key, which beats the role file, for wall time.
@@ -2782,7 +2788,7 @@ A run-level event, the CLI's request to run one task group at a scheduled time (
 | `run-start`, `run-stop`, `run-continue` | A request to start, stop or continue a run. The CLI publishes all three; the Intake Handler also publishes `run-start`, which ends planning | `""` |
 | `run-status` | Progress facts of a run, group, stage, session or task | The `family.name` events of the table below, plus those in [More subtypes](#43-data-model) |
 | `run-complete` | A run ended with every group finished, or the stop sequence finished | `done`, `stopped` |
-| `run-failure` | A group or run cannot continue without a person | `group.blocked`, `lease.lost`, `stalled` |
+| `run-failure` | A group or run cannot continue without a person | `group.blocked`, `group.failed`, `lease.lost`, `stalled` |
 | `resource` | A usage or plan-limit fact for the Resource Manager | `usage`, `headroom`, `overage`, `limit`, `limit.warn` |
 | `error` | A fault for the Error Handler | `bus.overflow` and `bus.store_failed` (below); `fault.error`, `fault.panic`, `fault.resource` in [17. Error Handler](#17-error-handler); `plan-blocked`, `plan-timeout`, `plan-input`, `plan-locked`, `plan-write`, `context-refused`, `run-refused` |
 
@@ -2867,7 +2873,16 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `group.paused` | `run-status` / `group.paused` | `until`, `link` |
 | `group.resumed` | `run-status` / `group.resumed` | `from`, `to` |
 | `group.approved` | `run-status` / `group.approved` | None; the Tester and the Reviewer approved the group, and the commit in git is the record of the code |
-| `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail`, `reason`, `prior`, `paths` |
+| `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail`, `reason`, `prior`, `paths`, `until` (reason `retries`: when the override window lapses) |
+| `group.failed` | `run-failure` / `group.failed` | `prior`, `last` (the last failure), `detail`, `reason`, `stage` |
+| `retry.spent` | `run-status` / `retry.spent` | `left`, `reason` (the failure), `stage` |
+| `retry.waived` | `run-status` / `retry.waived` | `left`, `reason` (the fault of Komodo's own), `stage` |
+| `override.approved` | `run-status` / `override.approved` | `granted`, `left`, `minutes` (the final try's working time) |
+| `override.lapsed` | `run-status` / `override.lapsed` | `window_min` |
+| `error.recorded` | `run-status` / `error.recorded` | `reason` (the error type), `tier`, `wait_s` (the group's wait before its next session start) |
+| `starts.paused` | `run-failure` / `starts.paused` | `reason`, `groups`, `wait_s` (0 when only a person ends the pause) |
+| `starts.resumed` | `run-status` / `starts.resumed` | `reason`, `by` (`wait` or `person`) |
+| `engine.failed` | `run-failure` / `engine.failed` | `where`, `detail` |
 | `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` |
 | `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` |
 | `stage.exit` | `run-status` / `stage.exit` | `from` |
@@ -3957,6 +3972,9 @@ const (
 	RuleCaseCollision Rule = "case_collision"
 )
 
+// RuleFailFirst names the finding of a done_when command that already passes on the base commit. Plan raises it, never Lint.
+const RuleFailFirst Rule = "fail_first"
+
 // Finding is one failed or warned check, naming the rule and the file.
 type Finding struct {
 	Rule     Rule     `json:"rule"`
@@ -4120,6 +4138,15 @@ type Deps struct {
 	Chain     []contextmgr.Candidate                             // the planner's link chain with measured contexts; sizes the repo map
 	Repo      string                                             // repository id, copied into run-start
 	CommonDir string                                             // git common directory, copied into run-start
+	OpenBase  func(ctx context.Context) (BaseRunner, error)     // opens the base commit's runner for one plan; nil skips the fail-first check
+}
+
+// BaseRunner runs commands on the untouched base commit in a sandbox that has no network.
+type BaseRunner interface {
+	// Run runs one shell command from the root of a fresh base checkout and returns its exit code.
+	Run(ctx context.Context, command string) (exit int, err error)
+	// Close removes every checkout the runner made.
+	Close() error
 }
 
 // New returns a Handler; it does not subscribe until Run is called.
@@ -4325,7 +4352,7 @@ flowchart TB
 ```
 
 1. `LintDraft` returns all findings. A draft passes when no finding has severity `fail`.
-2. On a pass, run each task's `done_when` once on the untouched base commit, in a builder sandbox with no network; a command runs once per plan. A command that exits 0 is a failing `fail_first` finding, and the draft goes back like a lint failure. With no failing finding, write the files; a new group's `TG.md` without `id:` gets a version 7 id, and a stored group keeps its stored id.
+2. On a pass, run each task's `done_when` once on the untouched base commit, in a builder sandbox with no network; a command runs once per plan, each on its own fresh checkout, with its own build cache folder, in a folder that is deleted when the plan ends. The shared build cache folder, which holds the Tester's cached base checkout, is not writable to it. A command that exits 0 is a failing `fail_first` finding, and the draft goes back like a lint failure. With no failing finding, write the files; a new group's `TG.md` without `id:` gets a version 7 id, and a stored group keeps its stored id.
 3. On a failure with fewer than 3 failing drafts so far, send the finding text into the same session.
 4. The session returns its next draft, and the loop runs again.
 5. The third failing draft ends the plan with `PlanBlockedError`; 0 task-list files exist.
@@ -5080,6 +5107,20 @@ type Deps struct {
 // cache.Handle; it never creates or closes the cache.
 ```
 
+The starting `Deps.Items` come from `StartItems`, which program startup calls with the Agent Registry's skill access:
+
+```go
+// Access is one agent's skill names from the Agent Registry; a trailing * names every skill with that prefix.
+type Access struct {
+	Allow  []string
+	Always []string
+}
+
+// StartItems expands each agent's access patterns against the shipped skills and returns the starting state: a skill
+// is enabled when some agent allows it. A name that matches no shipped skill is left for the local skills.
+func StartItems(fsys fs.FS, access map[string]Access) ([]ItemState, error)
+```
+
 | Error | Meaning and what the caller does |
 |---|---|
 | `ErrAgentUnknown` | The agent is not one of the 4; a programming error |
@@ -5521,8 +5562,9 @@ The Runtime Manager runs a run: it reads the task groups named in the run-start 
 - **Epoch:** a number that rises each time a group enters a stage. An input stamped with an older epoch is stale and changes nothing.
 - **Input:** one fact the decision function reads: a Task Manager report, a command event, a timer or a lease loss.
 - **Order:** one instruction the Runtime Manager gives its Task Manager, such as "enter the Build stage".
-- **Return:** sending a group from Test and Review back to Build with findings. Each return spends one of `limits.returns`.
-- **Attempt:** one fresh builder session for the group, counted against `limits.group_attempts`.
+- **Return:** sending a group from Test and Review back to Build with findings. A return is a true failure and spends one try.
+- **Retry budget:** `RetriesLeft`, the one number that bounds a group's failures: the tries it has, the current one included. It starts at `limits.group_retries` (3) and only falls, except when a person approves an override.
+- **Override:** a person's one-time grant of one final try to a group whose tries ran out, given inside the fixed 60-minute window at a terminal, with the working time the person chooses for that try.
 - **Slot:** permission to run one active group (pool slot) or one model session on one link (link slot). The Runtime Manager keeps the one pool for the engine; the model client takes and releases link slots through the State Manager, which keeps the counts in `providers.json`.
 
 Group, epic and lease are defined in the [HLD glossary](hld.md#12-glossary).
@@ -5542,7 +5584,11 @@ The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceabi
 | `status.go` | `StatusData`, `Manager.Snapshot`, and the small views the engine reads from the Runtime Manager |
 | `schedule.go` | The schedule queue loop over `state.ScheduleEntry` |
 | `command.go` | The mapping from `Order` to `task.Command` and from `task.Message` to `Input`; `Channels` |
-| `events.go` | The data of the events only this package publishes (`stalled`, `run-refused`, `session.resume-lost`) |
+| `events.go` | The data of the events only this package publishes (`stalled`, `run-refused`, `session.resume-lost`, `error.recorded`, `starts.paused`, `starts.resumed`, `engine.failed`, and the retired `breaker.opened` and `breaker.closed`, kept so old logs read) |
+| `errors.go` | The error handler: tiers, counts by type, the global pause with its waits, the engine failure state, the held-group list |
+| `groupwait.go` | The group breaker: the 1, 2 and 4 minute waits and the hold on a group's session starts |
+| `parked.go` | `ParkedSource` and `RearmOverrides`: override timers of saved groups no run holds |
+| `peer.go`, `peer_darwin.go`, `peer_linux.go`, `peer_other.go` | The socket peer's controlling-terminal check behind `run --override` |
 | `manager.go` | `Manager`, `New`, `Run`: subscriptions, the run loop, the group goroutines |
 | `group.go` | The per-group loop: takes one input at a time, calls `Next`, saves, performs the actions |
 | `decide.go`, `decide_moves.go`, `decide_end.go` | `Next`, the transition rows, the block rows, the in-stage rows |
@@ -5608,14 +5654,10 @@ type State = state.GroupState
 
 // Limits are the bounds Next enforces, read once at run start through the Configuration Manager.
 type Limits struct {
-	Returns         int // limits.returns
-	GroupAttempts   int // limits.group_attempts
-	PauseMaxMin     int // limits.pause_max_min
-	GroupWallMin    int // limits.group_wall_min
-	GroupTokens     int // limits.group_tokens, enforced by the Resource Manager
-	BuilderRetries  int // the builder's retries in the agent registry
-	ReviewerRetries int // the reviewer's retries
-	TesterRetries   int // the tester's retries
+	GroupRetries      int // limits.group_retries
+	PauseMaxMin       int // limits.pause_max_min
+	GroupWallMin      int // limits.group_wall_min
+	GroupTokens       int // limits.group_tokens, enforced by the Resource Manager
 }
 ```
 
@@ -5625,9 +5667,15 @@ type Limits struct {
 | `Fence` | Copied from the `lease.granted` input in the same write that records the grant, so the group's first save carries the fence the Lease Manager expects |
 | `Limits` | A copy made at run start; a change to the settings does not alter a run in flight. `run-continue` keeps the copy |
 | `Requests` | `Next` appends an input's `request` identifier before its rows and drops the oldest past 64; an input whose identifier is listed is dropped, so a command replayed after a crash applies once |
-| `WallUsedS` | Grows only while the group is in Build with a live builder session or a running action. Slot waits, Paused, Blocked and time the Runtime Manager was down add nothing. At `limits.group_wall_min` `Next` sets `WallExtended`; the `wall` block applies at twice that value |
-| `Attempts` | Rises by 1 when a fresh builder session starts by a retry, a timeout or an idle stop. A session restarted after a crash is not an attempt |
-| `Retries` | Builder timeouts and idle stops; never reset while the group is open, except by `run-continue` on a `retries` block |
+| `WallUsedS` | Grows only while the group is in Build with a live builder session or a running action; it never falls. Slot waits, Paused, Blocked and time the Runtime Manager was down add nothing. Time used in the current try is `WallUsedS` - `WallBaseS` ([Wall time per try](#wall-time-per-try)) |
+| `Tries` | The current try, from 1. It rises by 1 each time a retry is spent and each time an override is approved, and never falls |
+| `WallBaseS` | The value `WallUsedS` had when the current try began; it only rises |
+| `WallExtTry` | The try on which the one wall-time extension was granted; it only rises. The current try has had its extension when `WallExtTry` equals `Tries` |
+| `FaultStreak` | Blocker errors in a row on this group with no session result between them ([Komodo faults](#komodo-faults)); it is the one counter that may fall, so the saved-state check does not hold it to a rise |
+| `LastFindings` | The exact output of the last failed Test and Review round; an approved override puts it in the Builder's brief |
+| `RetriesLeft` | The tries the group has, the current one included. It starts at `limits.group_retries` at `group.start` and only falls: one per true failure ([The retry budget](#the-retry-budget)). The failure that finds it at 1 sets it to 0 and holds the group for the override window. No automatic path and no `run (id)` raises it; only an approved override sets it to 1 |
+| `Overrides` | Overrides a person approved; never falls, and the group is offered one only while it is 0. It is the only reason `RetriesLeft` may rise |
+| `FinalWallMin` | The working minutes the person gave the final try at the override; 0 until then, and it only rises. While it is above 0 it replaces `limits.group_wall_min` as the try's limit, and the try keeps its one 60-minute extension |
 | `FailureHash` | `Fingerprint` of the sorted failing items of the last failed Test and Review; a repeat is a flap |
 | `ReturnTree` | The tree hash of the commit that was tested at the last return; a failed result on the same tree is a flap, which catches a return that changed nothing |
 | `TokensUsed` | Summed from each session's usage. The cap that bounds it is `limits.group_tokens`; reaching it pauses the group with cause `group_tokens` ([The group token cap](#the-group-token-cap)) |
@@ -5637,10 +5685,9 @@ The group record and its example are in [10.3](#103-data-model). This chapter's 
 
 | Name used here | Field of `state.GroupState` |
 |---|---|
-| `Returns`, `Attempts`, `Retries`, `Blocks`, `WallUsedS`, `WallExtended`, `TokensUsed` | `Counters.Returns`, `Counters.Attempts`, `Counters.Retries`, `Counters.Blocks`, `Counters.WallUsedS`, `Counters.WallExtended`, `Counters.TokensUsed` |
+| `RetriesLeft`, `Overrides`, `Blocks`, `WallUsedS`, `Tries`, `WallBaseS`, `WallExtTry`, `FaultStreak`, `TokensUsed` | `Counters.RetriesLeft`, `Counters.Overrides`, `Counters.Blocks`, `Counters.WallUsedS`, `Counters.Tries`, `Counters.WallBaseS`, `Counters.WallExtTry`, `Counters.FaultStreak`, `Counters.TokensUsed` |
 | `OrdersOpen` | `ActionsOpen` |
 | `GateFails` | `TaskState.GateFailures` |
-| `Restarts` | `TestReview.Tester.Restarts` and `TestReview.Reviewer.Restarts` |
 | `Epoch`, `Outcome`, `Prior`, `Fence`, `FailureHash`, `ReturnTree`, `Owed`, `Resume`, `Pause`, `Block`, `Requests`, `ScopeAdded`, `LastEventAt` | The field of the same name |
 
 #### Input
@@ -5945,7 +5992,7 @@ func HalvePool(size, floor int) int
 func Fingerprint(items []string) string
 
 // LoadLimits reads every bound once through the Configuration Manager.
-func LoadLimits(cfg ConfigReader, agents AgentLimits) (Limits, error)
+func LoadLimits(cfg ConfigReader) (Limits, error)
 
 // Result is everything one input decides.
 type Result struct {
@@ -6349,30 +6396,28 @@ A builder that needs a file outside its group's files stops its session with a r
 6. The same session resumes with the answer in its brief.
 7. The block's cancel order does not stop a Task Manager that holds the open scope request: that Task Manager stays up to take the `continue`. A Task Manager that ended, such as one lost to an engine restart, is started again from the saved State, which carries `ScopeAdded` as `Progress.Widened`.
 
-A `wall` block is answered the same way: `--approve` grants more time and resets the group's working time as `run (id)` does for that reason, and `--deny` leaves the group Blocked. `--approve` or `--deny` on a group blocked for any other reason is refused with code `not_blocked`.
+`--approve` or `--deny` on a group blocked for any reason but `needs_scope` is refused with code `not_blocked`.
 
 #### Continuing a blocked group
 
-`komodo run (id)` on a Paused or Blocked group is a request to try again, so it must undo what stopped the group; otherwise the next input blocks it again at once. Each reason below names what the continue resets. A reset counter starts a full new round and never touches `Blocks`, so a group blocked 3 times for one reason is still flagged `needs redesign`.
+`komodo run (id)` on a Paused or Blocked group is a request to try again, so it must undo what stopped the group; otherwise the next input blocks it again at once. Each reason below names what the continue resets. A reset counter starts a full new round and never touches `Blocks` or `RetriesLeft`, so a group blocked 3 times for one reason is still flagged `needs redesign`.
 
 | Reason | `run-continue` resets | Refused when |
 |---|---|---|
-| `returns`, `regression` | `Returns` to 0; `FailureHash` and `ReturnTree` cleared | Never |
-| `flap` | `FailureHash` and `ReturnTree` cleared; `Returns` kept | Never |
-| `retries` | `Retries` to 0, or the stage's `Restarts` to 0 | Never |
-| `attempts` | `Attempts` to 0 | Never |
-| `wall` | `WallUsedS` to 0 and `WallExtended` cleared | Never |
+| `flap` | `FailureHash` and `ReturnTree` cleared; `RetriesLeft` kept | Never |
+| `retries` | Nothing; `run (id)` never raises `RetriesLeft` | While `RetriesLeft` is 0: refused, naming `run (id) --override` in a terminal |
+| `wall` (only a group saved before wall time was charged per try) | `WallBaseS` set to `WallUsedS`, so the group starts a try with fresh time | Never |
 | `pause_timeout` | `Pause.Since` cleared, a new window starts | Never |
 | `no_provider`, `paid_refused`, `context` | Nothing; link selection and the billing check run again against the current settings | Never; the group blocks again if the cause remains |
 | `needs_scope` | Nothing | No answer yet: the request is refused, naming the answer needed |
 | `dependency` | Nothing | A dependency is still not Done or was abandoned: refused, naming it |
 | `setup`, `publish`, `merge_conflict`, `cleanup`, `contract` | The failed stage's own retry count in the handler | Never |
-| `crash` | Nothing; the recovery pass replays the State | Never |
+| `crash` | `FaultStreak` cleared; the recovery pass replays the State | Never |
 | `state_invalid` | Nothing | The State Manager still reports the record invalid |
 | a `spending` pause | `Pause` cleared | Never; the group returns to `Prior` and the Resource Manager pauses it again if the ceiling still holds |
 | a `group_tokens` pause | `Pause` cleared; with `--approve`, one more cap is granted to the group first | `--deny` is refused with `not_blocked`; without `--approve` the Resource Manager pauses the group again at its next observation |
 
-A continue that is accepted returns the group to `Prior`, raises the epoch, enters the stage and publishes `group.resumed`. A continue that matches nothing publishes `request.refused` with the reason, which wakes a waiting orchestrator.
+A continue that is accepted returns the group to `Prior`, raises the epoch, enters the stage and publishes `group.resumed`. A continue that matches nothing publishes `request.refused` with the reason, which wakes a waiting orchestrator. A continue whose new State the State Manager refuses to save also publishes `request.refused` with the reason and the `komodo run (id)` reply is refused with it; the group stays Blocked with its stored record unchanged.
 
 `run-continue` with no group continues every Paused and Blocked group of the run. A group in a working stage ignores it.
 
@@ -6411,7 +6456,7 @@ flowchart TB
 7. It hands each recovered group's used-token count to the Resource Manager, so the group's token cap continues from where it was ([19](#19-resource-manager)).
 8. It asks the Cleanup Handler for one sweep, which clears the leftovers of groups that no live lease holds ([16](#16-cleanup-handler)).
 
-**The dead-session rule.** One rule covers every session that was live at the crash, and the crash is never charged to `Attempts` or `Retries`:
+**The dead-session rule.** One rule covers every session that was live at the crash, and the crash is never charged to `RetriesLeft`:
 1. For each session the State shows as claimed with no `session.end`, the Runtime Manager saves `session.end` with reason `crash`, which releases its task.
 2. It records the task that holds unfinished edits in `Unfinished` with its changed files, commits nothing, and orders the stage again with the session's `ResumeRef`.
 3. The Task Manager continues the same conversation from the handle. If the handle fails, it starts a fresh session with the brief, the diff of the work so far and the last summary, and the Runtime Manager publishes `session.resume-lost`.
@@ -6450,7 +6495,7 @@ A group keeps the stage it was in. A later `komodo run (id)` for the run starts 
 
 #### Timer extensions
 
-A Task Manager sends `timer.extend` when a session nears its wall limit and its task is not done. The Runtime Manager grants one 100% extension per group: it sets `WallExtended` and answers `OrderExtend` with the new limit. A second request is denied, and the `wall` block applies at twice `limits.group_wall_min` of counted working time.
+A Task Manager sends `timer.extend` when a session nears its wall limit and its task is not done. The Runtime Manager grants one extension per try, always 60 minutes whatever `limits.group_wall_min` is: it sets `WallExtTry` to `Tries` and answers `OrderExtend` with the extra time. A second request in the same try is denied. `Next` also grants the extension by itself when the try reaches `limits.group_wall_min`.
 
 #### Dependents, completion and the run's end
 
@@ -6526,23 +6571,82 @@ type Transition struct {
 | 1 | `NoStage` | `group.start` | The group is ready and a slot is free | Intake | Epoch 1; orders the lease grant; emits `stage.enter` |
 | 2 | Intake | `lease.granted` | | Intake | `Fence` set from the grant; orders `start_group` |
 | 3 | Intake | `ready` | | Build | Epoch + 1; orders `enter_stage` Build at the first task not done; emits `stage.enter` |
-| 4 | Build | `stage.done` Build | Every task is done | Test and Review | Epoch + 1; `Restarts` cleared; orders `enter_stage` Test and Review on the group's tree; emits `stage.enter` |
+| 4 | Build | `stage.done` Build | Every task is done | Test and Review | Epoch + 1; orders `enter_stage` Test and Review on the group's tree; emits `stage.enter` |
 | 5 | Test and Review | `stage.done` | Tester and Reviewer both approved | Commit | Epoch + 1; orders `enter_stage` Commit; emits `stage.enter` |
-| 6 | Test and Review | `result.fail` | `Returns` under the limit; fingerprint and tree both differ from the last return | Build | `Returns` + 1; `FailureHash` and `ReturnTree` set; orders `cancel` for a live sibling, then `enter_stage` Build with the findings; emits `stage.enter`. A failed mechanical check arrives here too, with its exact output as the findings |
+| 6 | Test and Review | `result.fail` | `RetriesLeft` above 1; fingerprint and tree both differ from the last return | Build | `RetriesLeft` - 1 and `retry.spent` emitted; `FailureHash` and `ReturnTree` set; orders `cancel` for a live sibling, then `enter_stage` Build with the findings; emits `stage.enter`. A failed mechanical check arrives here too, with its exact output as the findings |
 | 7 | Commit | `stage.done` | Published | Cleanup | Epoch + 1; orders `enter_stage` Cleanup; emits `stage.enter` |
 | 8 | Cleanup | `group.closed` | | Done | `Outcome` complete; returns the slot; calls `LeaseStore.Release`; emits `group.done` |
 | 9 | Build, Test and Review | `session.end` reason `paused` | No allowed link left | Paused | `Prior` = stage; `Resume` added; `Pause` set; emits `group.paused` |
 | 10 | Paused | `timer.due` | Reason is not `pause_timeout` | `Prior` | Same epoch; orders `enter_stage` from `Resume` and orders owed restarts; emits `group.resumed` |
 | 11 | Paused | `timer.due` reason `pause_timeout` | `Pause.Since` plus `limits.pause_max_min` reached, and `Pause.Cause` is `provider` | Blocked | Orders `cancel` for a live sibling; the saved work is kept; emits `group.blocked` |
 | 12 | Paused | `continue` | Before the timer | `Prior` | As row 10, with `group.resumed`; a refused attempt re-pauses by row 9 with `Since` kept |
-| 13 | Blocked | `continue` | The reason's reset rule is satisfied | `Prior` | Reset per the table in 7.5; Epoch + 1; emits `group.resumed`, `stage.enter` |
-| 14 | Blocked | `scope.answer` | `Block.Reason` is `needs_scope`, or `wall` with approval | Build | Approve adds paths to `ScopeAdded`, or resets the working time for `wall`; orders `scope` and `enter_stage` from `Resume`; Epoch + 1; emits `group.resumed` |
+| 13 | Blocked | `continue` | The reason's reset rule is satisfied; never for a `retries` block at 0 | `Prior` | Reset per the table in 7.5; Epoch + 1; emits `group.resumed`, `stage.enter` |
+| 14 | Blocked | `scope.answer` | `Block.Reason` is `needs_scope` | Build | Approve adds paths to `ScopeAdded`; orders `scope` and `enter_stage` from `Resume`; Epoch + 1; emits `group.resumed` |
 | 15 | Any working stage, Paused | Any input in the block rows | See Block rows | Blocked | `Prior` = stage; orders `cancel` for every live session; `Blocks[reason]` + 1; emits `group.blocked` |
 | 16 | Any stage but Done | `lease.lost` | Another process holds the group | Done | `Outcome` lost; orders `cancel`; frees nothing, because the lease belongs to the other holder |
 | 17 | Build, Test and Review | `limit.pause` | No live session or running action | Paused | `Prior` = stage; `Pause` set from the input with `Until` = `reset_at` + 1 minute, and no `Until` for cause `spending`; orders `hold`; emits `group.paused` |
 | 18 | Build, Test and Review | `session.end` | `Pause.After` is set | Paused | `Prior` = stage; `Resume` added; `After` cleared; orders `hold`; emits `group.paused` |
 | 19 | Commit; Paused or Blocked with `Prior` Commit | `continue`, or the recovery pass | | Test and Review | Epoch + 1; open Commit orders dropped; orders `enter_stage` Test and Review on the group's tree; emits `group.resumed` when the group was Paused or Blocked, then `stage.enter` |
 | 20 | Any stage but Done | `abandon` | | Done | `Outcome` abandoned; orders `cancel`; the Cleanup Handler's `Discard` frees the branch, worktree and sandbox; `LeaseStore.Release` ends the lease; dependents block `dependency`; emits `group.done` |
+| 21 | Blocked on `retries` | `override` | Before `Block.Until` | Build | `RetriesLeft` set to 1; `FinalWallMin` set to the minutes in the request (`limits.group_wall_min` when it carries none; a value outside 1 to 480 is refused); `Overrides` + 1; `Tries` + 1; Test and Review results cleared; orders `enter_stage` Build with `LastFindings` and the failing items; judges run again only after the Builder's next change; Epoch + 1; emits `override.approved`, `group.resumed`, `stage.enter` |
+| 22 | Blocked on `retries` | `timer.due` reason `override_lapse` | `Block.Until` reached | Done | `Outcome` failed; orders `cancel` and `release`; emits `override.lapsed`, `group.failed`, `group.done`; the history stays and the Cleanup Handler may free the worktree, caches and branches |
+
+#### The retry budget
+
+A group has one budget, `RetriesLeft`: the tries it has, the current one included. It starts at `limits.group_retries` (3 tries in all) and only falls. `komodo run (id)` and every automatic path leave it alone. It replaces the old separate limits that counted up: returns, fresh builder sessions and per-agent retries.
+
+A **try** is the span between spent tries: the first try, then one more after each try spent or override approved. A **true failure** spends one try and starts the next while another remains; the failure on the last try starts the override wait. The true failures are:
+
+| Failure | Spends one try |
+|---|---|
+| A Test and Review round fails and the group returns to Build | Yes |
+| A builder session ends `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail` or `refusals` | Yes |
+| A builder ends `done` while a task is not done | Yes |
+| A tester or reviewer session ends without a result | Yes |
+| A try ran past `limits.group_wall_min` plus its 60-minute extension | Yes, with reason `wall` |
+
+**Komodo's own faults** never spend a retry ([Komodo faults](#komodo-faults));
+
+A true failure that finds `RetriesLeft` at 1 is the group's last: it sets `RetriesLeft` to 0 and the group enters the **override wait**: Blocked with reason `retries`, `Block.Until` set to the failure time plus the engine constant `OverrideWindow`, a static 60 minutes that no setting changes, live sessions cancelled and the lease kept. Three things can follow:
+
+1. A person at a terminal runs `komodo run (id) --override` before `Block.Until`. The CLI checks for a terminal, and the engine checks again from the socket peer: the peer process id (`LOCAL_PEERPID` on macOS, `SO_PEERCRED` on Linux) and that process's controlling terminal; a request from a process without one is refused with `no_terminal`, and so is every override over the socket on a platform with no peer check. The request carries the working time the person typed for the final try (the CLI prompt, or `--minutes`); the engine refuses a value outside 1 to 480. The group gets exactly one final try with that working time as its limit in place of `limits.group_wall_min` (`FinalWallMin`, with the usual 60-minute extension), `RetriesLeft` becomes 1, `Overrides` becomes 1, a new try starts, and the group goes back to the Builder with the last Test and Review findings in its brief; the judges run again only after the Builder's next change. Any other block, on `run (id)`, resumes where the group stopped. The orchestrator has no terminal and cannot answer; `run (id)` alone is refused.
+2. The window passes with no approval. The timer `override_lapse` fires, the override lapses by itself and the group fails (below). A group whose `Overrides` is already 1 fails at once: an override is offered one time per group, so the final try's failure fails the group with no second wait.
+3. At engine start the engine reads every saved group blocked on `retries` with a `Block.Until` (found through the lease registry, which survives a killed engine) and arms its timer from that deadline. A deadline that passed while the engine was down lapses at once: `override.lapsed`, then `group.failed`. While such a timer is armed the engine does not exit.
+
+A **failed** group is Done with `Outcome` failed. `Next` orders `cancel` and `release`, so the lease is released and no pool slot is held; it emits `override.lapsed` (when an override was offered), `group.failed` and `group.done`. The group's event history is kept. Its worktree, caches and branches are no longer held by any run, so the Cleanup Handler's sweep may delete them. A failed group is never continued: `run (id)` and `--override` on it are refused with code `group_failed`, which says to plan it again. The only way back is a fresh pipeline run with a new plan, context, cache and worktree. The run lists the group as stalled with reason `failed`, and the groups that depend on it do not start.
+
+#### Wall time per try
+
+Each try has `limits.group_wall_min` of Build working time (the final try has `FinalWallMin` instead), counted by `WallUsedS` less `WallBaseS`. `WallUsedS` never falls, so the saved-state check stays strict; the two values that mark a try, `WallBaseS` and `WallExtTry`, only rise.
+
+1. The try reaches `limits.group_wall_min`: `Next` sets `WallExtTry` to `Tries`. This is the try's one extension, a fixed 60 minutes whatever the limit is.
+2. The try reaches the limit plus 60 minutes: the try ends as a failure. `Next` spends one retry (`retry.spent` naming `wall`), cancels the live Builder, raises `Tries`, sets `WallBaseS` to `WallUsedS` and orders a fresh Builder session. The next try has its own time and its own extension.
+3. With no tries left the failure enters the override wait like any other; the final try's failure fails the group.
+
+There is no `wall` block and no `--approve` for time. A group saved blocked on `wall` before this rule loads with `WallBaseS` equal to `WallUsedS`, and a plain `run (id)` continues it with fresh try time.
+
+#### Komodo faults
+
+One table, `state.Classify`, ranks every reason; `Reason.Severity()` reads it. The error handler (below) is the one place that classifies errors and counts them by type. A tool-call error inside a session, such as a failing command or a bad regular expression, is not a reason and reaches no counter.
+
+| Tier | Reasons | Counts toward |
+|---|---|---|
+| blocker (an error stops an agent session from working on its tasks) | `crash` (a session process lost, or a goroutine panic), `setup` (lease, worktree, sandbox, guard rules not loading), `state_invalid`, `contract` | The group's breaker and the global pause |
+| fault (a step after the work broke) | `publish`, `cleanup` | Nothing; recorded by type |
+| minor (expected, self-healing) | `cancelled`, an engine or Task Manager restart, `provider`, `paused`, `billing` | Nothing |
+| work failure | `timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals` | A retry; not a blocker |
+
+The block-only reasons about the work, not Komodo (`flap`, `needs_scope`, `context`, `merge_conflict`, `dependency`, `tester`, `flaky`, `retries`, `no_provider`, `pause_timeout`, `paid_refused`) have no tier. Rate limits stay with the pool halving. A lint, test or review failure is a work outcome and never a blocker.
+
+**Error handler.** One instance in the Runtime Manager takes every error of a group and of the engine. It records the type (the `Reason`), the tier and the group in an `error.recorded` event, and keeps a count by type since the engine started. `status` shows that count as the table of errors by type, and the run metrics keep it per run. It keeps no file: after an engine restart its counts start at zero, and its events are the record.
+
+**Group breaker.** `FaultStreak` counts blocker errors on one group, from any agent, with no work outcome between them. A session that ends `done`, or for a reason that spends a retry (`timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals`), resets it, as does a plain `run (id)` on a blocked group. After the 1st blocker error the group waits 1 minute before its next session start, after the 2nd 2 minutes, after the 3rd 4 minutes. The 4th blocks the group `crash` for a person: no retry is spent and the group does not fail. A blocker that already blocks the group under its own reason, such as `setup`, keeps that reason; it still adds to the streak. A crash found when the engine restarts is not an error. The waits are engine constants held in memory: `[TODO: tune the per-group waits from error counts (G-294)]`.
+
+**Global pause.** When one error type reaches 3 different groups inside 10 minutes, the handler pauses new Build and Test and Review session starts everywhere; running sessions continue. It publishes `starts.paused` with the type, the groups and the wait. It uses the same waits: after 1 minute held groups may start again (`starts.resumed`). If the same type reaches 3 groups again within 10 minutes of that resume, the next wait applies, 2 minutes and then 4. After the 4-minute wait fails the pause stays, status shows an alert, and only a person running `komodo run` from a terminal ends it, when the engine accepts that command. A pause spends no retry and changes no group's block state.
+
+**Engine failure.** A failure of the engine itself is severe: a panic of a goroutine the engine started, a state store that refuses both a write and the `state_invalid` write after it, or an Event Bus that fails while the engine runs. It is counted under the type `engine`, published as `engine.failed`, stops every new session start at once and shows a severe alert in status. It never ends by itself; only a person running `komodo run` from a terminal does, when the engine accepts that command. The engine checks the terminal the way `--override` does, so an orchestrator's command, a refused command and a command with no terminal leave the state in place.
+
+`[TODO: confirm that every spent retry, not only a wall failure, starts a new try with fresh wall time (G-290)]`. `[TODO: the engine's terminal check for --override on native Windows, untested (G-292)]`.
 
 #### Block rows
 
@@ -6550,20 +6654,21 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 
 | Input | Stages | Condition | Reason |
 |---|---|---|---|
-| `result.fail` | Test and Review | `Returns` at the limit | `regression` when the data flags a test that passed at the base; else `returns` |
+| `result.fail` | Test and Review | `RetriesLeft` is 1 or 0 | `retries`; the detail names a regression when the data flags a test that passed at the base |
 | `result.fail` | Test and Review | Fingerprint equals `FailureHash`, or tree equals `ReturnTree` | `flap` |
-| `session.end` builder, reason `timeout` or `idle` | Build | A task is not done and `Retries` passes the builder's retries | `retries` |
-| `session.end` builder, reason `timeout`, `idle`, or a retry request | Build | `Attempts` is at `limits.group_attempts` | `attempts` |
-| `session.end` tester or reviewer without a result | Test and Review | The agent's `Restarts` passes its retries | `retries` |
+| `session.end` builder, reason `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, or `done` with a task open | Build | `RetriesLeft` is 1 or 0 | `retries` |
+| `session.end` tester or reviewer without a result | Test and Review | `RetriesLeft` is 1 or 0 | `retries` |
+| `fault` reason `retries` from the Task Manager | Build, Test and Review | | `retries`; `RetriesLeft` is set to 0 |
 | `session.end` reason `billing` | Build, Test and Review | | `paid_refused` |
 | `session.end` reason `needs_scope`, or `scope.ask` | Build | The scope rules in 7.5 did not deny it | `needs_scope` |
 | `fault` | Build, Test and Review | Every link is unavailable or unauthorized, none limited | `no_provider` |
 | `fault` | Intake, Build, Test and Review | The brief exceeds half the context of every link | `context` |
-| `fault` | Intake | The lease, branch, worktree or sandbox could not be set up | `setup` |
+| `fault` | Intake, Build, Test and Review | The lease, branch, worktree or sandbox could not be set up, or the guard rules did not load; the detail names the rules file `internal/task/policy.json` | `setup`; no retry is spent |
+| `session.end` reason `crash` | Build, Test and Review | `FaultStreak` reached 4 | `crash`; no retry is spent and the group does not fail |
 | `fault` | Commit | A push or pull request failed 3 times | `commit` |
 | `fault` | Commit | The branch conflicts with its base and one automatic merge did not resolve it | `merge_conflict` |
 | `fault` | Cleanup | Removal failed | `cleanup` |
-| Any input in Build | Build | `WallExtended` is set and `WallUsedS` reaches twice `limits.group_wall_min` | `wall` |
+| Any input in Build | Build | The current try used `limits.group_wall_min` + 60 minutes | not a block: the try fails as a retry ([Wall time per try](#wall-time-per-try)) |
 | `abandon` of another group | Any working stage, Paused | A dependency group was abandoned | `dependency` |
 | `fault` | Test and Review | The Tester's reruns split once, or its second dispute stands | `flaky`, or `tester` |
 | `group.crash` | Any working stage, Paused | The group's goroutine panicked | `crash` |
@@ -6574,14 +6679,14 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 
 | Input | Stages | Sets; orders; emits |
 |---|---|---|
-| `session.start` | Build, Test and Review | Task `claimed` with its session; a fresh builder session started by a retry, timeout or idle stop adds 1 to `Attempts`; a restart after a crash adds nothing |
+| `session.start` | Build, Test and Review | Task `claimed` with its session; a session start costs nothing |
 | `session.end` builder | Build | Clears the task's session; `TokensUsed` grows by the session's usage; then the exit row below |
 | `task.done` | Build | Task `done`; `GateFails` reset |
-| `gate.fail` | Build | `GateFails` + 1 for the task; the third failure ends the session with reason `check_fail` and orders a retry |
-| `session.end` tester or reviewer, no result | Test and Review | `Restarts` + 1; orders a fresh session of the same agent on the group's tree while within its retries, or records the restart in `Owed` when the group is Paused; never a return |
+| `gate.fail` | Build | `GateFails` + 1 for the task; the third failure ends the session with reason `check_fail` and the session end then spends one retry |
+| `session.end` tester or reviewer, no result | Test and Review | `RetriesLeft` - 1; orders a fresh session of the same agent on the group's tree, or records the restart in `Owed` when the group is Paused; never a return |
 | `session.end` reason `paused` | Paused | Adds a `Resume` entry; `Pause.Until` takes the later time; `Pause.Refused` + 1 when the same session paused before |
 | `limit.pause` | Build, Test and Review | With a live session or running action: `Pause.After`, `Pause.Cause`, `Pause.Until` and `Pause.Link` set; no stage move until row 18 |
-| `timer.extend` | Build | Grants once per group: `WallExtended` set, orders `extend` |
+| `timer.extend` | Build | Grants once per try: `WallExtTry` set to `Tries`, orders `extend` for exactly 60 minutes |
 | `scope.ask` | Build | Denial rules of 7.5; sets `ScopeAsked` |
 | `request` identifiers | Any | Appended to `Requests`; an already-listed identifier is dropped |
 | `session.start`, `session.end`, `task.done`, `group.closed` | Blocked, Done | Recorded only; the sessions were cancelled when the group blocked or ended |
@@ -6590,9 +6695,9 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 
 | Exit reason | Sets; orders; emits |
 |---|---|
-| `done` | With every task done, row 4 moves the group; with a task not done, a retry |
-| `check_fail`, `no_result`, `schema_fail`, `refusals` | A retry, which adds an attempt |
-| `timeout`, `idle` | `Retries` + 1; a fresh session while within the builder's retries |
+| `done` | With every task done, row 4 moves the group; with a task not done, `RetriesLeft` - 1 and a retry |
+| `check_fail`, `no_result`, `schema_fail`, `refusals` | `RetriesLeft` - 1 and `retry.spent`; a fresh session while retries remain |
+| `timeout`, `idle` | The same, with a fresh session resuming at the open task |
 | `provider` | `Resume` set; orders the stage again on the next allowed link |
 | `paused` | `Resume` set; row 9 |
 | `needs_scope` | `Resume` set from the handle; the scope rules |
@@ -6619,7 +6724,7 @@ A group in a holding state still has its goroutine: it renews its lease every `L
 5. A lease is revoked at a stop only after every session is stopped and the State is saved.
 6. A stale input never moves a stage.
 7. The pool never exceeds `limits.pool_max` or falls below `limits.pool_min`.
-8. A crash is never charged to `Attempts` or `Retries`.
+8. A crash, an engine restart and every other fault of Komodo's own are never charged to `RetriesLeft`, and `RetriesLeft` rises only by an approved override.
 9. Waiting for a slot, a pause, a block and downtime never add to `WallUsedS`.
 10. Every loop has a counter, and only `Next` changes a counter.
 11. The engine exits only with no run live, no entry queued and no connection open.
@@ -6640,7 +6745,7 @@ A group in a holding state still has its goroutine: it renews its lease every `L
 | Lease renewal write fails | `Renew` returns an error | Retry at the next interval, inside the lease's life | Unchanged |
 | Provider limit with no link left | `session.end` reason `paused` | Pause until the reset; at `limits.pause_max_min` | Paused, then Blocked `pause_timeout` |
 | Return that changes nothing | Tree equals `ReturnTree` | Stop; 0 more | Blocked `flap` |
-| Returns spent | `Returns` at the limit | Stop | Blocked `returns` or `regression` |
+| Tries spent | A failure with `RetriesLeft` at 1 or 0 | Stop | Blocked `retries`, the override wait |
 | Working time over twice the group wall | `WallUsedS` | Stop; the one extension is used | Blocked `wall` |
 | Session found dead after a crash | Recovery pass | The dead-session rule; 0 attempts charged | Group continues |
 | Sessions alive 90 seconds into a stop | The stop sequence | Whole-tree kill | Run stopped |
@@ -6661,19 +6766,17 @@ The Runtime Manager asks the Configuration Manager for these keys once, at run s
 |---|---|---|---|
 | `limits.pool_min` | integer | 1 | Active groups kept open after a rate-limit error shrinks the pool; cannot exceed `limits.pool_max` |
 | `limits.pool_max` | integer | 6 (most 16) | Most groups active at once; 1 runs groups in sequence |
-| `limits.returns` | integer | 3 (most 5) | Returns from Test and Review to Build before the group blocks |
-| `limits.group_attempts` | integer | 6 (most 10) | Fresh builder sessions per group before the group blocks `attempts` |
-| `limits.group_wall_min` | integer | 60 | Minutes of counted Build working time; one 100% extension; `wall` at twice |
+| `limits.group_retries` | integer | 3 (1 to 5) | The tries a group has in all ([The retry budget](#the-retry-budget)) |
+| `limits.group_wall_min` | integer | 60 | Minutes of Build working time one try gets; then one extension of 60 minutes, and a try past that fails as a retry |
 | `limits.pause_max_min` | integer | 360 (most 1,440) | Longest a group stays Paused before it blocks `pause_timeout` |
 | `limits.link_sessions.<link>` | integer | Default and limit in [11.8](#118-config) | Most concurrent sessions on one link; the Task Manager's link choice enforces it |
 | `sandbox.max_mem_gb` | integer | Set by the Configuration Manager | Read here: the pool grows only while free memory covers one more |
-| agent `retries` | integer | Per agent in the registry | Read for the builder, reviewer and tester through `GetConfigItem` |
 
 The state folder holds `engine.sock` and `schedule.json`; neither has a setting. `limits.group_tokens` is read here into `Limits` but owned by the [Resource Manager](#19-resource-manager). The defaults hold until the first measured runs show the Max five-hour window draining sooner ([G-07](#g-07)).
 
 ### 7.9 Proof Cases
 
-Each case is a table test on `Next`, a component test on the run loop with fake managers, or a recovery test. Fixture limits: `limits.returns` 2, `limits.group_attempts` 2, agent `retries` 1.
+Each case is a table test on `Next`, a component test on the run loop with fake managers, or a recovery test. Fixture limits: `limits.group_retries` 2.
 
 **Unit** (pure functions, no files)
 - Every stage with every input kind, including Paused, Blocked and Done: each pair applies its row or returns `Refused`; none panics.
@@ -6682,10 +6785,28 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - `Startable` is false while any dependency is not Done.
 - Tester fails then reviewer approves, and the reverse: one return to Build at the second end.
 - A return on the same tree as `ReturnTree` blocks `flap`.
-- Builder `session.end` reason `timeout` with `Retries` at 1 blocks `retries`.
-- `WallUsedS` reaching `limits.group_wall_min`, then twice it: `WallExtended` set, then Blocked `wall`.
+- Each true failure (a failed Test and Review round, builder `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, a `done` with a task open, a tester or reviewer without a result) spends one retry and emits `retry.spent`; a crash, `cancelled`, `provider` and a Task Manager restart spend none and emit `retry.waived`.
+- With `limits.group_retries` 3, the third true failure sets `RetriesLeft` to 0 and enters the override wait (Blocked `retries`, `Block.Until` 60 minutes on); `run (id)` on it is refused and `RetriesLeft` stays 0.
+- `override` before `Block.Until` sets `RetriesLeft` to 1, stores the request's minutes in `FinalWallMin`, sets `Overrides` to 1 and resumes; after it, or on any other block, it is refused; minutes outside 1 to 480 are refused.
+- The final try reaching `FinalWallMin` gets the 60-minute extension, and reaching the limit plus 60 minutes fails the group.
+- `timer.due` `override_lapse` at `Block.Until` ends the group Done with `Outcome` failed, releases the lease, orders no discard and emits `override.lapsed`, `group.failed` and `group.done`.
+- The failure of the final try fails the group at once, with no override wait.
+- `run (id)` on a failed group is refused with `group_failed`; `run (id) --override` without a terminal exits 1 with `no_terminal`, checked in the CLI and again by the engine from the socket peer.
+- A try reaching `limits.group_wall_min` gets one 60-minute extension; reaching the limit plus 60 minutes spends one retry (`retry.spent` naming `wall`), starts the next try with fresh time and its own extension, and with no tries left enters the override wait.
 - A slot wait, a Paused interval and a downtime gap add 0 to `WallUsedS`.
-- For each reason in the continue table, `Next` on `continue` resets exactly the named counters, and a second block of the same reason follows only when the cause remains.
+- An approved override returns the group to Build with `LastFindings` in the brief and orders no judge; a `continue` on any other block resumes at `Prior`.
+- A guard that fails to load blocks `setup` with the rules file named, spends no retry and adds 1 to `FaultStreak`.
+- Four session crashes in a row on one group block it `crash` with no retry spent and no failure; a session that ends `done` or in a charged failure of the work resets the streak, so a crash, a timeout and two more crashes do not block the group `crash`; a `continue` on that block clears it.
+- A tool-call error inside a session (a failing command, a bad regular expression) is not a reason: it reaches neither `FaultStreak` nor the error handler's blocker count.
+- A lint, test or review failure, a timeout, a rate limit and a restart are never blockers: `FaultStreak` stays 0 and no breaker counts them.
+- A table in the state package's tests lists every `Reason` and its tier; adding a reason without a tier fails it.
+- A group waits 1 minute after its 1st blocker error, 2 after its 2nd and 4 after its 3rd before its next session start; the 4th blocks it `crash` with no retry spent; a session that ends `done` or in a charged failure resets the count.
+- The global pause starts when one error type reaches 3 different groups inside 10 minutes; different types, one group alone and errors more than 10 minutes apart never start it. Its waits are 1, 2 and 4 minutes, a recurrence on 3 groups takes the next wait, and after the 4-minute wait fails it stays until a person runs `komodo run` from a terminal.
+- A panic of a goroutine the engine started, a state store that fails twice and an Event Bus that fails while the engine runs are severe: starts stop at once, status shows the severe alert, a day of clock time does not resume them, and only a person running `komodo run` does.
+- `status` lists the error counts by type, and the run metrics keep them per run.
+- At engine start a saved group blocked on `retries` with a `Block.Until` gets its override timer from that deadline; a deadline already past lapses at once.
+- `run (id) --override` from a process with no controlling terminal is refused by the engine with `no_terminal`; with an unavailable peer check it is refused too.
+- For each reason in the continue table, `Next` on `continue` resets exactly the named fields and never `RetriesLeft`, and a second block of the same reason follows only when the cause remains.
 - A `continue` on `needs_scope` with no answer is refused and publishes `request.refused`.
 - `limit.pause` with no live session gives Paused with `Pause.Until` at `Until` plus 1 minute; with a live session it sets `Pause.After` and Paused follows at the session's end.
 - A Paused group with cause `plan_window` or `spending` ignores `limits.pause_max_min`; a `provider` pause blocks `pause_timeout` at it.
@@ -6703,7 +6824,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A pause past `limits.pause_max_min` blocks `pause_timeout` and keeps the saved work.
 - With `limits.pool_max` 2 and 4 ready groups, 2 groups run and the rest wait; a group whose dependency is Blocked waits while an unrelated group runs.
 - A panic in one group blocks only that group `crash`; a second group keeps running.
-- `kill -9` with a builder live, then `run (id)`: one `session.end` reason `crash`, `Attempts` unchanged, the stage ordered again with the handle; with a failing handle, a fresh session and one `session.resume-lost`.
+- `kill -9` with a builder live, then `run (id)`: one `session.end` reason `crash`, `RetriesLeft` unchanged, the stage ordered again with the handle; with a failing handle, a fresh session and one `session.resume-lost`.
 - `kill -9` between an order's start and done: the order runs again once by its key.
 - A run with all groups Blocked publishes one `run-failure` / `stalled` listing every reason.
 - A stop with a session that ignores the interrupt: the whole-tree kill lands at 90 seconds, the work is saved, and `run-complete` / `stopped` is published after the leases are revoked.
@@ -7878,13 +7999,17 @@ type UnfinishedEdits struct {
 
 // Counters are the numbers that bound a group; only the Runtime Manager changes them.
 type Counters struct {
-	Returns      int            `json:"returns"`       // returns to build after a failed test or review
-	Attempts     int            `json:"attempts"`      // fresh builder sessions for the group
-	Retries      int            `json:"retries"`       // builder restarts after a timeout or idle stop
-	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to attempts or retries
+	RetriesLeft  int            `json:"retries_left"`  // tries left, the current one included; only an override raises it
+	Overrides    int            `json:"overrides"`     // overrides a person approved; the only way retries_left rises
+	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to the retries
 	Blocks       map[string]int `json:"blocks"`        // blocks per reason
-	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time
-	WallExtended bool           `json:"wall_extended"` // the one wall-time extension was granted
+	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time; never falls
+	Tries        int            `json:"tries"`         // the current try, from 1; rises on a spent retry or an override
+	WallBaseS    int64          `json:"wall_base_s"`   // wall_used_s when the current try began; only rises
+	WallExtTry   int            `json:"wall_ext_try"`  // the try the one wall-time extension was granted on; only rises
+	FaultStreak  int            `json:"fault_streak"`  // blocker errors in a row with no session result between them
+
+	FinalWallMin int `json:"final_wall_min,omitempty"` // the final try's minutes; 0 until an override; only rises
 	TokensUsed   int64          `json:"tokens_used"`   // tokens used by the group
 }
 
@@ -7910,7 +8035,6 @@ type TestReview struct {
 type RoundState struct {
 	Session  string `json:"session,omitempty"` // live or last session of the agent
 	Result   string `json:"result"`            // empty until it ends, then pass, fail or cancelled
-	Restarts int    `json:"restarts"`          // fresh sessions after an end without a result
 }
 
 // Finding names one verified blocking finding by rule and file.
@@ -7960,10 +8084,8 @@ const (
 	ReasonPauseTimeout  Reason = "pause_timeout"  // paused for limits.pause_max_min
 	ReasonPaidRefused   Reason = "paid_refused"   // the billing check refused a paid link
 	ReasonRegression    Reason = "regression"     // a test that passed at the base fails and returns are spent
-	ReasonReturns       Reason = "returns"        // returns are spent
 	ReasonFlap          Reason = "flap"           // the same failure, or a return that changed nothing
-	ReasonRetries       Reason = "retries"        // an agent's timeouts or idle stops passed its retries
-	ReasonAttempts      Reason = "attempts"       // every fresh builder session was used
+	ReasonRetries       Reason = "retries"        // the group's retries are spent; a person may override until the window lapses
 	ReasonNeedsScope    Reason = "needs_scope"    // the builder needs a file outside its group's files
 	ReasonContext       Reason = "context"        // the brief exceeds half the context of every link
 	ReasonSetup         Reason = "setup"          // the group could not start: lease, worktree or sandbox
@@ -8010,8 +8132,8 @@ The record holds no progress of the free mechanical checks, which run as the fir
     "fence": 3,
     "config_hash": "023c648e364af6cf885bc15be12621607595a7ef64533179971d9e8d0603cb2c",
     "counters": {
-      "returns": 1, "attempts": 1, "retries": 0, "crashes": 0, "blocks": {},
-      "wall_used_s": 2460, "wall_extended": false, "tokens_used": 0
+      "retries_left": 3, "overrides": 0, "crashes": 0, "blocks": {},
+      "wall_used_s": 2460, "tries": 1, "wall_base_s": 0, "wall_ext_try": 0, "fault_streak": 0, "tokens_used": 0
     },
     "tasks": [
       {"id": "tsk-add-lock", "state": "claimed", "session": "0198f3a3-1d40-7b85-a2f3-8c6e1d0b9a47", "scope_asked": false, "gate_failures": 0}
@@ -8038,7 +8160,7 @@ The record holds no progress of the free mechanical checks, which run as the fir
 | Field | Rule |
 |---|---|
 | `fence` | Copied from the `Lease` that the Lease Manager granted; zero is refused; never falls |
-| `counters` | `returns`, `attempts`, `retries`, `crashes`, `wall_used_s`, `tokens_used` and every value in `blocks` never fall; only the Runtime Manager changes them |
+| `counters` | `overrides`, `crashes`, `wall_used_s`, `tokens_used`, `final_wall_min` and every value in `blocks` never fall; `retries_left` never rises unless the same write raises `overrides`; only the Runtime Manager changes them |
 | `stage`, `prior` | One of the stage values; `prior` is set only when `stage` is `paused` or `blocked` |
 | `block.reason` | One of the reason values; the Runtime Manager chapter adds a reason by adding it here |
 | `tasks[].state` | `queued`, `claimed` or `done` |
@@ -8387,7 +8509,7 @@ sequenceDiagram
 1. The writer check: only `engine` may write.
 2. The revision check: the named `rev` must equal the stored one, or `ErrStaleRev`. `Create` instead requires that no record exists.
 3. The schema check: types, required fields, enum values (stage, reason, task state, result), no null slices or maps.
-4. The invariants: `fence` is not zero and not lower than the stored one, and no counter is lower than the stored one. `outcome` is set exactly when the stage is `done`, and `prior` only while the group is paused or blocked.
+4. The invariants: `fence` is not zero and not lower than the stored one, and no counter is lower than the stored one, except `retries_left`, which may only fall unless the same write raises `overrides` (an approved override). `outcome` is set exactly when the stage is `done`, and `prior` only while the group is paused or blocked.
 5. The manager fills the header (`v`, `rev + 1`, `ts`, `writer`). It keeps the 64 newest `requests`, and an open action with no `args` is stored with `{}`.
 6. It writes the record to a temporary file named `.state.json.tmp-<number>` in the same folder and syncs the file. A failed write is tried once more; a second failure is a `*DiskError`.
 7. It renames the temporary file over `state.json`, which is atomic, then syncs the folder.
@@ -8480,7 +8602,7 @@ A `Save` with a stale `rev` is refused and the record is unchanged.
 
 1. Invalid state never reaches disk: a refused write leaves the file byte-identical.
 2. A record is whole or absent: the rename is atomic.
-3. `rev` rises by 1 per write; `fence` and every counter never fall.
+3. `rev` rises by 1 per write; `fence` and every counter never fall; `retries_left` never rises without an approved override.
 4. A group record never has a zero fence.
 5. Only the Runtime Manager writes a group record; the lease keeps other runs out.
 6. A damaged record is set aside and never repaired automatically.
@@ -8529,7 +8651,7 @@ Tests use a temporary directory; no network and no live provider.
 - Two goroutines saving one group with the same `rev`: exactly one succeeds.
 - A group created with the fence from `Lease.Grant` accepts its first `Save` with that fence ([chapter 9](#9-lease-manager)).
 - `Counters` returns the stored counters without decoding the rest.
-- Saving a crash adds to `crashes` and leaves `attempts` and `retries` unchanged.
+- Saving a crash adds to `crashes` and leaves `retries_left` unchanged.
 - After a simulated crash, `Load` returns the last saved record, and the engine continues the group from it with no event log present.
 - Each of `providers.json`, `update.json`, `install.json` and `schedule.json` round-trips through `SaveMachine` and `LoadMachine` and comes back equal.
 - A `SaveMachine` with a null `entries` slice, an empty schedule `target` or a negative `sessions` is refused with its field path.
@@ -8712,7 +8834,7 @@ type Limits struct {
 	SessionIdle    time.Duration
 	SessionRetries int // fresh sessions after a timeout or idle stop, per agent
 	Returns        int // trips back to Build before the group is escalated
-	Attempts       int // fresh builder sessions for the group
+	GroupRetries   int // the retry budget at the start (limits.group_retries)
 	RefusalLimit   int // refusals under one guard row before the session ends
 }
 
@@ -8754,7 +8876,7 @@ type Progress struct {
 	TasksDone      []string `json:"tasks_done"`
 	Returns        int      `json:"returns"`          // trips back to Build so far
 	Disputes       int      `json:"disputes"`         // tester restarts after a disputed result
-	Attempts       int      `json:"attempts"`         // fresh builder sessions so far
+	RetriesLeft    int      `json:"retries_left"`    // tries the group has left; mirrors the engine's budget
 	TreeAtReturn   string   `json:"tree_at_return"`   // tree hash when the group last went back to Build
 	ScopeAsked     []string `json:"scope_asked"`      // task identifiers that already made their one scope request
 	Widened        []string `json:"widened"`          // paths a scope answer added to the group's files
@@ -8900,9 +9022,8 @@ type Fact struct {
 | Reason | Kind | Raised when |
 |---|---|---|
 | `needs_scope` | `scope` | A builder stopped because a write fell outside its files |
-| `returns` | `blocked` | The group went back to Build more often than `limits.returns` |
+| `retries` | `blocked` | A true failure found the retry budget empty; the Runtime Manager holds the group for an override |
 | `flap` | `blocked` | A return left the tree unchanged |
-| `attempts` | `blocked` | Fresh builder sessions reached `limits.group_attempts` |
 | `refusals` | `blocked` | The same guard row refused the same session `guard.refusal_limit` times, and the retries ran out |
 | `no_provider`, `paid_refused`, `context` | `blocked` | Link choice found no allowed link ([11.4](#114-interfaces)) |
 | `contract` | `blocked` | A reviewer's or tester's commands changed a tracked file twice in one trip |
@@ -9145,6 +9266,13 @@ type StreamEvent struct {
 	RateLimit *RateLimit
 	Headroom  *Headroom
 	Result    *Result
+	Msg       *MsgUsage // the usage one model message reported, on an output event
+}
+
+// MsgUsage is the usage one model message reported, keyed by the message identifier.
+type MsgUsage struct {
+	ID    string // the provider's message identifier; empty when the line has none
+	Usage Usage
 }
 
 // Init carries the field the billing check reads from the first line.
@@ -9180,7 +9308,9 @@ How the `claude` program's lines map to kinds:
 - `system` with subtype `init` is `init`; subtype `api_retry` is `retry`.
 - `rate_limit_event` is `rate_limit`; its reset time is `rate_limit_info.resetsAt`, in Unix seconds.
 - `result` is `result`; the structured answer is its `structured_output` field, which `--json-schema` fills.
-- Every other line, such as `assistant` and `user`, is `output`.
+- Every other line, such as `assistant` and `user`, is `output`. An `assistant` line also carries `Msg`, read from `message.id` and `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`). The tool loop sets `Msg` on the event of each model turn, with the turn's metered cost in `USD`.
+
+**Usage of a session that ends without a result.** The supervisor keeps a running total of the `Msg` of every event, counting each message identifier once: a repeated identifier replaces its earlier count, because the program can write several `assistant` lines for one message. When the session ends, the supervisor reports the `Result.Usage` of the `result` line if it holds any tokens or cost. Otherwise it reports the running total, whatever the exit reason: `timeout`, `idle`, `crash`, `cancelled`, `provider`, `no_result` and the rest. A killed session therefore keeps the tokens it streamed, and they reach `session.end`, the `usage` fact, `result.json` and the metrics totals. The program gives its cost in dollars only on the `result` line, so a session killed before it reports `usd_equiv` 0; the harness derives no price of its own. The Codex link reports usage only on its closing line, so a Codex session killed before it still records 0.
 
 On the paid link the window total is the `anthropic-ratelimit-*-limit` header beside `-remaining` and `-reset`; the lowest `PercentLeft` across the windows is the one compared. Verified by [G-71](#g-71) and [G-72](#g-72).
 
@@ -9480,7 +9610,7 @@ bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /run --tmpfs /home/dev --tmp
 
 For the group's setup command alone, `Spec.Network` is true: the Seatbelt profile then allows network access, and the Bubblewrap line leaves out `--unshare-net`.
 
-A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt`, `uv` and `golangci-lint` where the language needs them, makes one container per instance with the worktree at `/work` and the repository's shared git folder mounted read-only at its host path, so the worktree's `.git` pointer file resolves and a check can read history but never write it (git's `safe.directory` is set through environment variables, never a config file), runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. For Go, when the worktree holds a `golangci-lint` configuration file and the host has `golangci-lint` on `PATH`, it is `env GOBIN=/usr/local/bin go install <module>@v<version>`, where the version is the host's `golangci-lint version --short` and the module path carries `/v<major>` from major version 2 on; when the host version cannot be read, the container is not made and the error names `sandbox.image` as the fix, and the latest version is never installed. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
+A container mechanism uses the full official image per detected language (`golang`, `node`, `rust`, `python`, tagged from the repository's version files), adds `clippy`, `rustfmt`, `uv` and `golangci-lint` where the language needs them, makes one container per instance with the worktree at `/work` and the repository's shared git folder mounted read-only at its host path, so the worktree's `.git` pointer file resolves and a check can read history but never write it (git's `safe.directory` is set through environment variables, never a config file), runs setup with network on and then disconnected (`Manager.EndSetup` disconnects the bridge network), and runs each command as `docker exec`; a timeout runs the command under `timeout -k 5`, which kills its process group inside the container, and a cancel runs a second `docker exec` that kills every process of the container carrying the command's `KOMODO_SANDBOX_CMD` tag, because ending the `docker exec` client leaves the command running. A configured `sandbox.image` is used as it is: no tool is added to it. The tools are added by `docker exec -u 0` while the network is on: `rustup component add clippy rustfmt` for Rust and `pip install uv` for Python. For Go, when the worktree holds a `golangci-lint` configuration file and the host has `golangci-lint` on `PATH`, it is `env GOBIN=/usr/local/bin go install <module>@v<version>`, where the version is the host's, read with `golangci-lint version --short` (version 2), then `version --format short` (version 1), then the banner of `--version`, and the module path carries `/v<major>` from major version 2 on; when the host version cannot be read, the container is not made and the error names `sandbox.image` as the fix, and the latest version is never installed. The image tag is the Go minor version from `go.mod`, the version in `.nvmrc`, `.node-version` or `engines.node`, a numeric `channel` in `rust-toolchain.toml` or `rust-version` in `Cargo.toml`, and the version in `.python-version` or `requires-python`; any other repository sets `sandbox.image`. A Makefile-only or 2-language repository sets `sandbox.image`.
 
 **Language caches.** The caches are the harness's own, under a per-repository folder: never the person's `~/.npm`, `~/.cargo/registry` or Go cache. The Cache Manager keeps them and their size rules ([chapter 8](#8-cache-manager)); the sandbox only mounts them, with the toolchain folders read-only. The per-user process limit is never used, because it counts every process the person runs.
 
@@ -9646,6 +9776,7 @@ type Collaborators struct {
 	OnRecheck   func(pass bool, output string) // receives the result of a recheck command
 	Now         func() time.Time    // clock; time.Now when nil
 	Tick        time.Duration       // session timer period; 15 s when zero
+	BeatEvery   time.Duration       // how often Serve sends a beat message; the package BeatEvery when zero
 	Ladder      [2]time.Duration    // stop ladder waits; 30 s and 60 s when zero
 	ResumeWait  func(try int) time.Duration // backoff after a refused resume; 15, 30, 60 minutes when nil
 }
@@ -9996,7 +10127,7 @@ The reviewer and the tester start together and run side by side. The reviewer is
 
 A return counts one in `Progress.Returns`. The rework check runs these steps in order:
 
-1. If `Returns` has reached `limits.returns`, escalate `blocked`, reason `returns`.
+1. If `RetriesLeft` is 1 or 0, set it to 0 and escalate `blocked`, reason `retries`; otherwise spend one.
 2. Take the tree hash of the group's worktree through `Git.TreeHash`. If it equals `TreeAtReturn`, the builder changed nothing since the last return: escalate `blocked`, reason `flap`.
 3. Store the hash in `TreeAtReturn`, raise `Returns`, and enter Build with the findings in the builder's brief.
 
@@ -10051,7 +10182,7 @@ Rules that hold on every walk:
 - A model retired mid-run returns HTTP 404. The start fails with `ErrModelGone`; the task's next session takes the prior identifier. The cost is one failed start per retirement.
 - Any Claude limit (the 5-hour window, the weekly cap or a per-model cap) moves the next session to the next allowed link. After the recorded reset time, new sessions return to the subscription link; a task already on another link finishes there.
 - An agent set to a prior model never falls forward to the latest model.
-- A failover is not an attempt: `Progress.Attempts` counts only fresh builder sessions that a timeout, an idle stop, a failed gate or a schema failure caused.
+- A failover is not an attempt: `Progress.RetriesLeft` falls only for a true failure: a timeout, an idle stop, a failed gate, a schema failure or a return.
 - A link is skipped only because it is limited, unavailable, unauthorized, paid and refused, or too small for the brief.
 
 #### Billing check
@@ -10299,7 +10430,7 @@ sequenceDiagram
 **Resume a session.** One rule covers every resume (a timer, a scope answer, a crash):
 1. Try the saved handle. On the subscription link run `--resume <uuid>`; on API links replay `messages.jsonl`.
 2. If it fails, start a fresh session with the brief, the work-in-progress diff and the last builder `summary`, and report the fact `resume_lost`.
-3. A resume never charges `Attempts`, and a crash is never an attempt. After a crash the Runtime Manager reads only the State Manager, builds a new Task Manager and passes the group's saved state as `GroupSpec.Saved`. The saved `Progress.Handles` hold each live session's handle, so the new Task Manager resumes from them. The supervisor reports the handle, and writes it to `request.json` in the session folder, before the session starts.
+3. A resume never charges `RetriesLeft`, and a crash is never an attempt. After a crash the Runtime Manager reads only the State Manager, builds a new Task Manager and passes the group's saved state as `GroupSpec.Saved`. The saved `Progress.Handles` hold each live session's handle, so the new Task Manager resumes from them. The supervisor reports the handle, and writes it to `request.json` in the session folder, before the session starts.
 
 The rewriting of `scope.json` happens before either step, so a resumed session sees the paths a scope answer added.
 
@@ -10486,9 +10617,8 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 | Provider limit, no link left, or at session start | `ProviderLimit`, `*PausedError` | Group pauses; timer through the Runtime Manager; resume from the handle |
 | Resume handle fails | Resume error | Fresh session with the brief, the diff and the last `summary`; `resume_lost` |
 | Session died without a report | Runtime Manager's restart | Reason `crash`; the task runs again; no attempt charged |
-| Returns reach `limits.returns` | Rework check | Escalate `blocked`, reason `returns` |
+| A failure with `RetriesLeft` at 1 or 0 | Rework check, pipeline | Escalate `blocked`, reason `retries` |
 | Return leaves the tree unchanged | Rework check | Escalate `blocked`, reason `flap` |
-| Attempts reach `limits.group_attempts` | Pipeline | Escalate `blocked`, reason `attempts` |
 | Scope request for a protected or other-group path | Scope step 3 | Denied at once; the builder resumes with a denial |
 | Second scope request in one task | `ScopeAsked` | Denied at once |
 | `.git` pointer text changed | Pointer check | The host git call is refused; escalate `blocked`, reason `contract` |
@@ -10547,12 +10677,10 @@ The Runtime Manager reads these values from the Configuration Manager and passes
 |---|---|---|---|
 | `limits.session_wall_min` | int | 60 | Most minutes one session runs; warning at 80% |
 | `limits.session_idle_min` | int | 10 | Minutes of silence before the nudge; a 5-minute grace follows |
-| `limits.returns` | int | 3 | Trips from Test and Review back to Build before the group is escalated; hard limit 5 |
-| `limits.group_attempts` | int | 6 | Fresh builder sessions per group before the group is escalated |
+| `limits.group_retries` | int | 3 | The retry budget a group starts with; hard limit 5 |
 | `limits.group_tokens` | int | 2,000,000 | Token cap per group; the Resource Manager owns it ([chapter 19](#19-resource-manager)) |
 | `limits.pause_max_min` | int | 360 | Read by the Runtime Manager: longest a session stays paused; hard limit 1,440 |
 | `limits.link_sessions.<link>` | int | 3 for `claude-cli`, `anthropic-api`, `openai-subscription` and `openai-api`, 1 for `local` (most 8) | Most concurrent sessions per link across all groups; counted in `providers.json` through `LimitStore` |
-| `agents.<name>.retries` | int | per agent | Fresh sessions after a timeout or idle stop, inside `limits.group_attempts` |
 | `guard.refusal_limit` | int | 3 | Refusals under one row before the session ends; hard limit 5; the only guard tunable |
 | `sandbox.max_procs` | int | 512 | Processes per instance, where the platform can cap them |
 | `sandbox.max_mem_gb` | int | 8 | Memory per instance in gigabytes |
@@ -10597,11 +10725,11 @@ Component cases run real commands in the confinement of the platform. Unit cases
 - A fake Runtime Manager that grants 10 minutes at the 80% mark raises the wall limit by 10 minutes; a zero grant leaves it.
 - A reviewer `return` while the tester runs cancels the tester and sends the builder the findings.
 - A tester `restart` with `Disputes` 0 restarts the tester once and does not return to Build; with `Disputes` 1 it escalates `tester`.
-- A return whose tree hash equals `TreeAtReturn` escalates `flap`; `Returns` at the limit escalates `returns`.
+- A return whose tree hash equals `TreeAtReturn` escalates `flap`; `RetriesLeft` at 1 or 0 escalates `retries`.
 - A tester restart that comes due while the group is paused is added to `Owed` and starts at the timer.
 - A group started while every link is limited pauses, reports a `Pause` with `Since` set, and makes 0 model calls.
 - A re-pause keeps `Since` and raises `RefusedResumes`.
-- A failover changes `Attempts` by 0.
+- A failover changes `RetriesLeft` by 0.
 - A `Select` that meets `LimitStore.TakeSlot` returning false for every link pauses the group; a slot taken is released when the session ends.
 
 **Command loop and git**
@@ -11100,15 +11228,15 @@ The Builder keeps no state of its own. The runtime state of the group ([State Ma
 |---|---|---|---|
 | Completion command fails | `TaskGate.Complete` | Back to the live session as a gate result; 2 per task | The third failure ends the session `check_fail`; task retry |
 | Final call breaks the schema | `ParseBuilderResult` | One re-prompt; 1 | The session ends `schema_fail`; task retry |
-| `done` with a task not `done` | Task Manager | Fresh task retry; counts an attempt | Retry, then blocked `attempts` |
+| `done` with a task not `done` | Task Manager | Fresh task retry; spends one retry | Blocked `retries` when none is left |
 | Edit outside the file list | Guard row B1 | Refuse; tell the Builder to stop with `needs_scope` | Scope request |
 | Request for a protected path or another group's file | `AutoDeny` | Deny without asking; 0 asks | The Builder continues inside the list |
 | Second scope request in one task | `ScopeAsked` flag | Deny without asking; 1 request per task | The Builder continues inside the list |
 | Approved scope missing after a resume | Task Manager | Rewrite the effective file list on every resume | The Builder sees the approved paths |
 | Return changed nothing | Tree hash at hand-off equals the last return's | Stop the loop; 1 | Blocked, naming the unchanged findings |
 | Returns spent | Runtime Manager | Stop; the limit of 12.8 | Blocked with the reason of the last failing finding |
-| Fresh sessions spent | Runtime Manager | Stop; the attempt limit of 12.8 | Blocked `attempts` |
-| Timeout or idle stop | Task Manager | Fresh session resuming at the open task; the agent's `retries` | Blocked when spent |
+| Fresh sessions spent | Runtime Manager | Stop; the retry budget | Blocked `retries` |
+| Timeout or idle stop | Task Manager | Fresh session resuming at the open task; spends one retry | Blocked `retries` when none is left |
 | Provider plan window reaches its limit | Task Manager | Reported to the Runtime Manager, which pauses the group after its current step; the lease stays held | The group resumes when the window resets |
 | Engine killed mid-session | Recovery | Reads only the State Manager; `komodo run (id)` continues the group from its saved state | A fresh session resumes at the first task not `done` |
 | The `.git` entry of the worktree is writable from the sandbox | Task Manager, at sandbox start | Refuse to start the command | Error event |
@@ -11123,9 +11251,8 @@ Only the Configuration Manager reads settings; the Task Manager and Runtime Mana
 |---|---|---|---|
 | Registry entry `weight` | enum | `standard` | Model size for the Builder; the model per link is chosen by the model client |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
-| Registry entry wall, idle and `retries` | int | 60 min, 10 min, 2 | Session wall limit, silence before the nudge, fresh sessions after a timeout or idle stop |
-| `limits.returns` | int | 3 | Returns to the Builder before the group is blocked; owned by [Runtime Manager](#7-runtime-manager) |
-| `limits.group_attempts` | int | 6 | Fresh Builder sessions per group; owned by [Runtime Manager](#7-runtime-manager) |
+| Registry entry wall and idle | int | 60 min, 10 min | Session wall limit and silence before the nudge |
+| `limits.group_retries` | int | 3 | The group's retry budget; owned by [Runtime Manager](#7-runtime-manager) |
 | `guard.refusal_limit` | int | 3 | Refusals under one guard row before the session ends; owned by [Task Manager](#11-task-manager) |
 
 Constants:
@@ -11627,7 +11754,7 @@ The checks are the first step of the Tester's turn. They cost no model tokens: G
 | `done_when` | Every task's completion command is rerun in the sandbox on the work under test. |
 | `scope` | Every changed file is in the effective file list or is a test sibling (`OutOfScope`). |
 | `secrets` | The diff's added lines are scanned with the guard's secret-content patterns, the list guard row G4 uses ([Task Manager](#11-task-manager)). |
-| `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. |
+| `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. It also fails when the change adds executable lines and none is covered; the added lines no test ran, as `file:line-range`, go to the Reviewer's `checks` slot. |
 | `baseline` | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns. |
 | `impact_set` | The affected tests. Go: the tests of every package that imports a changed package. Other languages: the full `test` class. |
 | `flake` | Any failing test is rerun twice alone; see the flake rule below. |
@@ -11750,15 +11877,23 @@ func CaseCollisions(paths []string) [][]string {
 
 Each default tool reports a whole-repository line percent in the field named. Verified by [G-169](#g-169).
 
+Go, Python and Java and Kotlin also report which lines ran: the Go profile blocks, the `files.*.executed_lines` and `missing_lines` of the Python report, and the `line` entries of the JaCoCo report. The coverage step intersects those lines with the lines the diff adds.
+
+[TODO: changed-line coverage for JavaScript and TypeScript, whose `json-summary` report holds totals only ([G-295](#g-295))]
+
+[TODO: changed-line coverage for Rust, whose `--summary-only` report holds totals only ([G-296](#g-296))]
+
 | Language | Command | Percent read from |
 |---|---|---|
-| Go | `go test -coverpkg=./... -coverprofile=c.out ./...` | `go tool cover -func=c.out`, `total:` |
-| Python | `coverage run -m pytest`, then `coverage json` | `totals.percent_covered` |
-| JavaScript, TypeScript | `c8 --reporter=json-summary` around `test` | `total.lines.pct` |
+| Go | `go test -coverpkg=./... -coverprofile=<temp file> ./...`, then `cat` of that file | `go tool cover -func`, `total:` |
+| Python | `coverage run -m pytest` with `COVERAGE_FILE` in a temp file, then `coverage json` | `totals.percent_covered` |
+| JavaScript, TypeScript | `c8 --reporter=json-summary` around `test`, report in a temp folder | `total.lines.pct` |
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
 | Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
 
 JavaScript and TypeScript wrap the repository's own `test` command. Java and Kotlin get their coverage command from the language profile, chosen by build file: Gradle runs `jacocoTestReport` and reads `build/reports/jacoco/test/jacocoTestReport.xml`; Maven runs `jacoco:report` and reads `target/site/jacoco/jacoco.xml`. The repository must configure JaCoCo; otherwise the coverage step fails with the tool's output.
+
+The default commands write their data files to a temporary place and remove them, so the tree stays as the Builder left it and the next round's scope check sees only the Builder's changes. Gradle and Maven write under their own build folders.
 
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
@@ -11804,11 +11939,11 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 | Item has no command | `Tester.Rerun` | List as unconfirmed; 0 | Never blocks |
 | Item needs a network, Docker or service | Task Manager | Skip with reason `env` and a warning; 0 | Never blocks |
 | Result skips or repeats a task | `AcceptResult` | One re-prompt; 1 | Session ends `schema_fail`; task retry |
-| Session ends without a result | Task Manager | Fresh Tester session; the agent's `retries` | Blocked when spent |
+| Session ends without a result | Task Manager | Fresh Tester session; spends one retry | Blocked `retries` when none is left |
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
 | A completion command fails in the checks | `Checker.Check` | Return to the Builder with the exact output; no model call; the return limit | Blocked when returns are spent |
 | A scope, secret scan or case-collision step fails | `Checker.Check` | Return to the Builder naming the file or location; the return limit | Blocked when returns are spent |
-| Regression against the baseline | `Baseline.Classify` | Return to the Builder with the test's output; the return limit | Blocked `regression` when spent |
+| Regression against the baseline | `Baseline.Classify` | Return to the Builder with the test's output; spends one retry | Blocked `retries` when none is left |
 | A check step cannot run | `Checker.Check` | Stop naming the step; 0 | Blocked `setup` |
 | Coverage tool missing for the language | Coverage step | Fail naming the language; 0 | Return to the Builder |
 | Docker is not available | Task Manager | Use the operating-system sandbox; the run report says so; 0 | The checks and the Tester run there |
@@ -11826,8 +11961,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 | `check.coverage` | int | 80 | Percent of the repository's lines tests must cover, in every language; hard limit 100. Owned here. |
 | Registry entry `weight` | enum | `light` | Model size for the Tester |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
-| Registry entry `retries` | int | set by the registry | Fresh Tester sessions after an end without a result, per round |
-| `limits.returns` | int | 3 | Returns to the Builder before the group is blocked; owned by [Runtime Manager](#7-runtime-manager) |
+| `limits.group_retries` | int | 3 | The group's retry budget; owned by [Runtime Manager](#7-runtime-manager) |
 | `sandbox.max_procs`, `sandbox.max_mem_gb` | int | 512, 8 | Process and memory caps for one session's commands; owned by [Task Manager](#11-task-manager) |
 
 ```go
@@ -11954,7 +12088,7 @@ The Reviewer has no write tool; `diff` and `git_read` are read-only git. Its `ru
 | `findings` | Open findings, on a re-review | Optional |
 | `callers` | Go callers of changed symbols, found with `go/packages`; other languages use `search` | Optional |
 | `repo_context`, `standards`, `specs`, `repo_map` | Repository guidance, standards skills, spec anchors, ranked symbol graph | Optional |
-| `checks` | The clean mechanical check result, one line per step, with its warnings and flaky tests | Required |
+| `checks` | The clean mechanical check result, one line per step, with its warnings and flaky tests, and the added lines no test ran as `file:line-range` | Required |
 
 A Reviewer brief holds 0 bytes of the Builder's prose.
 
@@ -11998,7 +12132,7 @@ type Applies struct {
 | `check` | One sentence stating what must hold. |
 | `evidence` | The line a finding must quote. |
 
-A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a severity is unknown or a field is empty. The catalogs ship with one short rule per item of the Checks column in 14.5; the full rule text is still to author ([G-16](#g-16)).
+A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a severity is unknown or a field is empty. Each rule's section holds its full text: what to look for, how to check it and what to quote. New rules take the next number in their lens; a released number is never reused.
 
 The values below are illustrative:
 
@@ -12221,17 +12355,18 @@ sequenceDiagram
 
 #### Lens selection and profiles
 
-`correctness`, `readiness` and `quality` always apply; each other lens applies when the diff meets the condition in its `applies` filter.
+`correctness`, `security`, `performance`, `readiness` and `quality` always apply; each other lens applies when the diff meets the condition in its `applies` filter.
 
 | Lens | Applies when | Checks |
 |---|---|---|
-| `correctness` | Always | Logic, error paths, nil and bounds, resource release |
-| `security` | Always for the install and update commands, the model client, the Task Manager's guard and tools, the sandbox and the Commit Handler; else on auth, crypto, exec, net, path or environment code | Injection, secrets, path escape, unsafe exec, TLS |
+| `correctness` | Always | Logic, error paths, nil and bounds, resource release, boundary values, partial failure |
+| `security` | Always | Injection, secrets, path escape, unsafe exec, TLS |
 | `spec` | A task cites a spec anchor | The diff matches the cited section, which is in the brief; a mismatch is `not_met`, not a finding |
 | `contract` | An exported symbol changed (Go through `go/ast`; other languages by export-line diff) | Every caller still compiles and a task intends the change |
 | `concurrency` | The diff adds `go`, `chan`, `sync`, `atomic`, threads or async | Data races, lock order, cancellation, goroutine leaks |
+| `performance` | Always | Unbounded growth, whole-file or whole-table input and output per call, repeated work in loops, missing limits |
 | `platform` | `_darwin.go`, `_linux.go`, path or shell handling | Separators, case, line endings, signals |
-| `config` | Embedded JSON defaults or the guard policy file | Hard limits kept, schema version bumped, gate fixture updated |
+| `config` | A changed JSON, YAML or TOML file | Hard limits kept, schema version bumped, gate fixture updated |
 | `readiness` | Always | Tests for changed behaviour; docs and changelog touched when the task says so |
 | `quality` | Always | Naming, duplication, comment rules from the comments standard |
 | `economy` | Economy profile only | The merged checklist of the rows above at reduced depth |
@@ -12364,7 +12499,7 @@ The Reviewer keeps no state of its own. The group's runtime state ([State Manage
 | Quote not at `file:line` | `VerifyFinding` | Drop and log; 0 | The finding cannot block |
 | Result skips or repeats a task | `AcceptResult` | One re-prompt; 1 | Session ends `schema_fail`; task retry |
 | `brief_incomplete` | `Decide` | Stop; 0 | Blocked `brief` |
-| Session ends without a result | Task Manager | Fresh Reviewer session on the same work under test; the agent's `retries` per round | Blocked when spent |
+| Session ends without a result | Task Manager | Fresh Reviewer session on the same work under test; spends one retry | Blocked `retries` when none is left |
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
 | A verdict depends on a command whose rerun disagrees | Go | Use Go's result; 0 | The verdict rests on Go's result |
 | Verified blocking finding or `not_met` | `Decide` | Return to the Builder; the return limit | Blocked when returns are spent |
@@ -12381,8 +12516,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 | `review.mode` | enum | `thorough` | `economy` runs one merged lens plus `security` where it applies; `thorough` runs every applicable lens at full depth. It sets review depth only. Owned here. |
 | Registry entry `weight` | enum | `heavy` | Model size for the Reviewer |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
-| Registry entry `retries` | int | set by the registry | Fresh Reviewer sessions after an end without a result, per round |
-| `limits.returns` | int | 3 | Returns to the Builder before the group is blocked; owned by [Runtime Manager](#7-runtime-manager) |
+| `limits.group_retries` | int | 3 | The group's retry budget: the tries it has before the group is held for an override; owned by [Runtime Manager](#7-runtime-manager) |
 
 ```go
 const (
@@ -12402,7 +12536,11 @@ const (
 - A quote that differs only in leading whitespace verifies; one that differs in letter case does not.
 - `ExactlyOnce` refuses a skipped and a repeated task identifier.
 - `Decide` returns `approve` only for two passing verdicts, and `block` with `flaky` for a split.
-- `review.mode: economy` selects the merged `economy` lens and the full `security` lens where it applies.
+- `review.mode: economy` selects the merged `economy` lens and the `security` lens.
+- `security` and `performance` are selected for a diff in any path.
+- A `performance` finding is accepted; no lens names a path of one repository.
+- A diff whose added branch no test runs puts its `file:line` in the `checks` slot.
+- A change that adds executable lines and covers none of them fails the coverage step.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
 - A seeded bug in the fixture is found and verified.
@@ -12417,9 +12555,7 @@ const (
 
 ### 14.10 Open Gaps
 
-| Gap | Question | Used in |
-|---|---|---|
-| [G-16](#g-16) | The rule text of each lens catalog | 14.3 |
+No open gaps.
 
 The Reviewer's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 15. Commit Handler
@@ -12806,7 +12942,7 @@ var (
 | `recheck` (a check that failed) | No | `Check.Recheck` returned `Pass` false |
 | `git` | Yes, except a refused message or an unknown worktree | Any other git failure |
 
-The Task Manager passes a `PublishError` to the Runtime Manager, which owns retries and blocks ([chapter 7](#7-runtime-manager)). A retryable error is repeated with the same `Approval`. After `ErrRecheck` the group returns to Build as one return, like a Tester or Reviewer return, so `limits.returns` still stops endless loops. The Builder's next brief carries the exact failing check output in `checks` and the epic tip it must now build on, and the epic stays paused until this group lands cleanly.
+The Task Manager passes a `PublishError` to the Runtime Manager, which owns retries and blocks ([chapter 7](#7-runtime-manager)). A retryable error is repeated with the same `Approval`. After `ErrRecheck` the group returns to Build as one return, like a Tester or Reviewer return, so the retry budget still stops endless loops. The Builder's next brief carries the exact failing check output in `checks` and the epic tip it must now build on, and the epic stays paused until this group lands cleanly.
 
 #### The git wrapper
 
@@ -14124,7 +14260,7 @@ type FaultRecord struct {
 | Time per stage | Seconds from a group's `stage.enter` to its next `stage.enter`, `group.blocked`, `group.paused` or the end of the run |
 | Time per group | `ended_at` minus `started_at`; `paused_s` and `blocked_s` are shown apart |
 | Time per run | `ended_at` minus `started_at` of the run |
-| Tokens and cost | The sum of `usage` over the sessions of the group or run |
+| Tokens and cost | The sum of `usage` over the sessions of the group or run; a session killed before its result still counts the usage it streamed |
 | Performance | Session `wall_s`, stage seconds, `retries`, `returns` |
 
 `groups.json` holds `{"<run id>": {"<group id>": GroupMetrics}}`, because a later run that attempts a group again adds its own entry. One group entry:
@@ -15058,7 +15194,7 @@ Three of these checks already run in `internal/integration`, without the build t
 | Every phase | `go vet ./...`, `go test ./...`, then a build for each of the 3 operating systems | All pass, and all 3 builds succeed |
 | Event round trip | Start a run on `tg-fixture` with a subscriber that records every event | Every type the [Event Bus](#4-event-bus) lists for a group's life arrives once, in order, and the event store holds a line for each |
 | Full run | `komodo install`, `komodo plan` on the fixture's goal, then `komodo run ep-1` | The group passes build, test and review, the Commit Handler lands it on `komodo/ep-1` of a local bare remote and opens 1 pull request for the epic, the Cleanup Handler leaves 0 worktrees and 0 containers, and the Runtime Manager releases the lease through the Lease Manager when the group closes |
-| Rework | Fixture B | The Tester or Reviewer returns the group to the Builder; after the bound it ends Blocked with reason `regression` |
+| Rework | Fixture B | The Tester or Reviewer returns the group to the Builder; after the retries are spent it ends Blocked with reason `retries` |
 | Old failure | Fixture A | The group passes with a warning naming the test that already failed at the base |
 | Race | Two `komodo run tg-1.1` commands target the same group | The Lease Manager grants 1 lease; the other command is refused, and only 1 push reaches the remote |
 | Stop | `komodo stop tg-1.1` during Build, after the first task is finished | The finished task is a local commit on the group branch, nothing is pushed, the lease is revoked, and a later `komodo run tg-1.1` continues the group |
@@ -15343,7 +15479,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-11"></a>G-11 | Sandbox | Docker Desktop bind-mount copy time for a 1 GB `node_modules` | Spike, phase 2 | [11](#11-task-manager), [1](#1-cli) |
 | <a id="g-12"></a>G-12 | Sandbox | Whether a copied Rust `target/` would be reused or rebuilt; until the spike reports, the design shares one `CARGO_TARGET_DIR` per group | Spike, phase 2 | [11](#11-task-manager) |
 | <a id="g-13"></a>G-13 | Guard, skills, steering phrases | The steering-phrase list is 6 entries by judgment | Tune the list from `doctor` warnings and dropped-paragraph warnings, phase 3 | [11](#11-task-manager), [6](#6-context-manager) |
-| <a id="g-16"></a>G-16 | Review | The rule text of each lens catalog; the identifier format, the field meanings and the outline are in 9.3 | Authoring task, phase 7; security lens reviewed by the owner | [6](#6-context-manager), [13](#13-tester) |
 | <a id="g-17"></a>G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with usage metrics on | Measured in phase 7 | [13](#13-tester) |
 | <a id="g-18"></a>G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 | [5](#5-intake-handler) |
 | <a id="g-19"></a>G-19 | Timing | The 10,000-event replay under 1 s and the 50 ms short-verb budget | Gate timing, phase 6 | [0](#0-front-matter-and-code-structure), [1](#1-cli), [4](#4-event-bus), [6](#6-context-manager), [18](#18-metrics-service), [10](#10-state-manager) |
@@ -15358,6 +15493,12 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-121"></a>G-121 | CLI validate | Whether a `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix; applies only if native Windows returns | Not planned; Windows runs through Windows Subsystem for Linux 2 | [1](#1-cli) |
 | <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-tester) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file at the cleanup, phase 1; then 15.3 | [21](#21-verification-operations-and-cutover) |
+| <a id="g-290"></a>G-290 | Retry budget | Whether every spent retry starts a new try with fresh wall time, as built, or only a wall failure does | Owner decision | [7](#7-runtime-manager) |
+| <a id="g-292"></a>G-292 | CLI validate | Whether native Windows has a peer check for the engine's terminal rule on `run --override`; until then the engine refuses it there. Untested; same ground as [G-121](#g-121) | Applies only if native Windows returns | [7](#7-runtime-manager) |
+| <a id="g-293"></a>G-293 | CLI validate | The range of the final try's working time on `run --override`: `limits.group_wall_min` has no maximum to borrow, so 1 to 480 minutes is used until the owner sets it | Owner decision | [1](#1-cli) |
+| <a id="g-294"></a>G-294 | Error handling | Whether the per-group waits (1, 2 and 4 minutes) and the global pause waits should be tuned from the error counts by type; they are engine constants until then | Owner decision after counts are collected | [7](#7-runtime-manager) |
+| <a id="g-295"></a>G-295 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 9.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
+| <a id="g-296"></a>G-296 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 

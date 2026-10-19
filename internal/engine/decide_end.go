@@ -8,17 +8,6 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// retryReasons are the builder exits that ask for a fresh session.
-var retryReasons = []string{
-	"done",
-	"check_fail",
-	"no_result",
-	"schema_fail",
-	"refusals",
-	"timeout",
-	"idle",
-}
-
 // sessionEnd records a session that ended and applies the exit row of its agent.
 func (c *calc) sessionEnd() bool {
 	s := &c.s
@@ -83,11 +72,14 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 		return false
 	}
 
-	switch e.Reason {
-	case "timeout", "idle":
-		s.Counters.Retries++
-	case "crash":
+	switch {
+	case state.Reason(e.Reason).Charged():
+		c.charge(e.Reason)
+	case e.Reason == "crash":
 		s.Counters.Crashes++
+		c.waive(e.Reason)
+	case e.Reason == "provider", e.Reason == "cancelled":
+		c.waive(e.Reason)
 	}
 	if s.Pause.After {
 		return true
@@ -100,7 +92,7 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 			if len(s.Tasks) > 0 {
 				s.Tasks[c.taskIndex(e.Task)].ScopeAsked = true
 			}
-		} else if !c.allTasksDone() {
+		} else if !c.allTasksDone() && c.charge("unfinished") {
 			c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
 		}
 	case "check_fail", "no_result", "schema_fail", "refusals", "timeout", "idle":
@@ -108,7 +100,9 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 			c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
 		}
 	case "provider", "crash":
-		c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
+		if !c.builderBlocked(e.Reason) {
+			c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
+		}
 	case "needs_scope":
 		// The block rows block the group; the scope.ask that follows finds the ask spent and attaches to that block.
 		c.scopeRules(ScopeAsk{Task: e.Task, Paths: e.ScopePaths, Reason: e.ScopeReason})
@@ -177,10 +171,8 @@ func (c *calc) scopeRules(a ScopeAsk) {
 func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 	s := &c.s
 	round := &s.TestReview.Tester
-
-	retries := c.l.TesterRetries
 	if e.Agent == "reviewer" {
-		round, retries = &s.TestReview.Reviewer, c.l.ReviewerRetries
+		round = &s.TestReview.Reviewer
 	}
 	if s.Stage == StageDone || (s.Stage != StageTestReview && !holds) {
 		return s.Stage == StageDone
@@ -205,15 +197,20 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 		round.Result = "cancelled"
 	case e.Reason == "paused" && s.Stage == StagePaused:
 		c.pauseAgain(e)
+	case e.Reason == "done":
+		// A judge that ended done gave its result; the Task Manager reports the round, so nothing is charged or restarted.
 	case e.Reason == "billing" || e.Reason == "paused" || e.Reason == "needs_scope":
 	case e.Reason == "crash":
 		s.Counters.Crashes++
-		c.restartAgent(e.Agent)
+		c.waive(e.Reason)
+		if !c.faultCapped() {
+			c.restartAgent(e.Agent)
+		}
 	case e.Reason == "provider":
+		c.waive(e.Reason)
 		c.restartAgent(e.Agent)
 	default:
-		round.Restarts++
-		if round.Restarts > retries {
+		if !c.charge(e.Reason) {
 			return true
 		}
 		if s.Stage == StagePaused || s.Pause.After {

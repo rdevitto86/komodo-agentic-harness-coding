@@ -31,6 +31,8 @@ type RoleInput struct {
 	Diff     string
 	Trip     int
 	Findings []string
+	// added lines no test ran, as file:line-range
+	Uncovered []string
 	// the task whose edits an earlier builder session left in the worktree; nil when none
 	Unfinished *state.UnfinishedEdits
 }

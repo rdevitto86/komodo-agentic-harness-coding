@@ -70,7 +70,7 @@ type ScheduleFacts struct {
 // AnswerFacts feeds reply.answer.
 type AnswerFacts struct {
 	Group  string `json:"group"`
-	Answer string `json:"answer"` // approve or deny
+	Answer string `json:"answer"` // approve, deny or override
 }
 
 // AbandonFacts feeds reply.abandon.
@@ -92,6 +92,8 @@ type StatusFacts struct {
 	Queued  Table  `json:"queued"`           // label, start time
 	Blocked Table  `json:"blocked"`          // group, reason, question
 	Waited  string `json:"waited,omitempty"` // with --wait: blocked, done or timeout
+	Alert   string `json:"alert,omitempty"`  // one line while the error handler holds new sessions back
+	Errors  Table  `json:"errors"`           // error type, tier, count
 }
 
 // DoctorFacts feeds reply.doctor.

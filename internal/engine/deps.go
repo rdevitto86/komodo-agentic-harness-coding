@@ -20,11 +20,6 @@ type ConfigReader interface {
 	GetConfigItem(key string) (config.Item, error)
 }
 
-// AgentLimits gives the retry count of each agent role in the registry.
-type AgentLimits interface {
-	Retries(agent string) (int, error)
-}
-
 // StateStore is the State Manager of one repository as the Runtime Manager uses it.
 type StateStore interface {
 	Load(ctx context.Context, group string) (state.Record, error)
@@ -152,7 +147,6 @@ type Deps struct {
 	Bus      bus.Bus
 	Reader   bus.Reader
 	Config   ConfigReader
-	Agents   AgentLimits
 	States   StateOpener
 	Machine  *state.Machine
 	Leases   LeaseStore
@@ -189,4 +183,8 @@ type Deps struct {
 	Chain func(group string) []string
 	// reports a panic of a goroutine the engine starts; nil reports nothing
 	Faults *fault.Handler
+	// lists saved groups no run holds, so the engine re-arms their override timers at start; nil lists none
+	Parked ParkedSource
+	// checks that the process behind a socket connection has a controlling terminal; nil uses the platform check
+	PeerTerminal PeerChecker
 }

@@ -51,6 +51,7 @@ type Flags struct {
 	All      bool      `json:"all,omitempty"`       // run --all, or status --all
 	Approve  bool      `json:"approve,omitempty"`   // run (id) --approve
 	Deny     bool      `json:"deny,omitempty"`      // run (id) --deny
+	Override bool      `json:"override,omitempty"`  // run (id) --override
 	Wait     bool      `json:"wait,omitempty"`      // status --wait
 	TimeoutS int       `json:"timeout_s,omitempty"` // status --wait: the longest wait, in seconds
 	Schedule time.Time `json:"schedule,omitzero"`   // run (id) --schedule, an RFC 3339 timestamp
@@ -103,6 +104,8 @@ const (
 	CodeUnknownTarget  = "unknown_target"  // the label or run id names nothing in the plan or the saved state
 	CodeRunRefused     = "run_refused"     // the run was refused, such as a dependency cycle
 	CodeNotBlocked     = "not_blocked"     // --approve or --deny named a group that is not waiting for an answer
+	CodeGroupFailed    = "group_failed"    // the group failed for good; plan it again to run it
+	CodeNoTerminal     = "no_terminal"     // --override came from a process with no controlling terminal
 	CodeEngineStopping = "engine_stopping" // the engine is past its exit check; the CLI starts a new engine and resends
 	CodeUnknownSession = "unknown_session" // no running model session has this id, or it has ended
 )

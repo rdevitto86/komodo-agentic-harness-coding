@@ -220,6 +220,8 @@ func (f *figures) apply(e bus.Event) *SessionRecord {
 		f.ensureGroup(e.Group, e.Run, e.Time).finish(outcomeFailed, e.Time)
 	case bus.Key{Type: bus.TypeRunFailure, Subtype: "stalled"}:
 		f.applyStalled(e)
+	case bus.Key{Type: bus.TypeRunStatus, Subtype: "error.recorded"}:
+		f.applyRecorded(e)
 	case bus.Key{Type: bus.TypeRunComplete, Subtype: "done"}:
 		f.applyRunDone(e)
 	case bus.Key{Type: bus.TypeRunComplete, Subtype: "stopped"}:
@@ -475,10 +477,34 @@ func (f *figures) applyError(e bus.Event) {
 	}
 }
 
+// applyRecorded counts one error of the engine's error handler under its type in the run's figures.
+func (f *figures) applyRecorded(e bus.Event) {
+	b, err := json.Marshal(e.Data)
+	if err != nil {
+		return
+	}
+
+	var body struct {
+		Reason string `json:"reason"`
+	}
+
+	_ = json.Unmarshal(b, &body)
+	if body.Reason == "" {
+		return
+	}
+
+	r := f.runs[e.Run]
+	if r.Errors == nil {
+		r.Errors = map[string]int{}
+	}
+
+	r.Errors[body.Reason]++
+}
+
 // secondsBetween returns whole seconds from a to b, never negative.
 func secondsBetween(a, b time.Time) int64 { return max(int64(b.Sub(a)/time.Second), 0) }
 
-// groupOutcome maps a group.done body to a group outcome: complete is done, abandoned stays, lost is failed.
+// groupOutcome maps a group.done body to a group outcome: complete is done, abandoned stays, lost and failed are failed.
 func groupOutcome(p bus.Payload) string {
 	d, ok := p.(*bus.GroupDone)
 	if !ok {
@@ -488,7 +514,7 @@ func groupOutcome(p bus.Payload) string {
 	switch d.Outcome {
 	case "abandoned":
 		return outcomeAbandoned
-	case "lost":
+	case "lost", "failed":
 		return outcomeFailed
 	default:
 		return outcomeDone

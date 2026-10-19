@@ -62,7 +62,7 @@ func (m *Manager) runBuild(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
-	var timeouts, crashes, refusals int
+	var crashes int
 
 	for {
 		if err := m.checkpoint(ctx); err != nil {
@@ -110,7 +110,7 @@ func (m *Manager) runBuild(ctx context.Context) error {
 			}
 			if len(left) > 0 {
 				findings = left
-				if err := m.noteFailure(ctx); err != nil {
+				if err := m.spend(ctx, "unfinished"); err != nil {
 					return err
 				}
 				continue
@@ -118,25 +118,15 @@ func (m *Manager) runBuild(ctx context.Context) error {
 
 			return m.setStage(ctx, state.StageTestReview)
 		case state.ReasonTimeout, state.ReasonIdle:
-			if timeouts++; timeouts > m.spec.Limits.SessionRetries {
-				return block("retries", map[string]string{"last": string(out.reason)})
-			}
-			if err := m.noteFailure(ctx); err != nil {
+			if err := m.spend(ctx, string(out.reason)); err != nil {
 				return err
 			}
-		case state.ReasonCheckFail, state.ReasonSchemaFail, state.ReasonNoResult:
-			if err := m.noteFailure(ctx); err != nil {
-				return err
-			}
-		case state.ReasonRefusals:
-			if refusals++; refusals > m.spec.Limits.SessionRetries {
-				return block("refusals", map[string]any{"row": out.refusedRow(m)})
-			}
-			if err := m.noteFailure(ctx); err != nil {
+		case state.ReasonCheckFail, state.ReasonSchemaFail, state.ReasonNoResult, state.ReasonRefusals:
+			if err := m.spend(ctx, string(out.reason)); err != nil {
 				return err
 			}
 		case state.ReasonCrash:
-			if crashes++; crashes > max(m.spec.Limits.SessionRetries, 1) {
+			if crashes++; crashes > crashLimit {
 				return &blockErr{kind: EscFailed, reason: "crash"}
 			}
 		case state.ReasonBilling:
@@ -146,6 +136,9 @@ func (m *Manager) runBuild(ctx context.Context) error {
 		}
 	}
 }
+
+// crashLimit is the crashes of the builder one Task Manager survives before it ends the group; a crash costs no retry.
+const crashLimit = 2
 
 // pendingTasks lists the tasks whose completion command has not passed yet.
 func (m *Manager) pendingTasks() []TaskSpec {
@@ -362,15 +355,18 @@ func (m *Manager) finishTask(ctx context.Context, id string) (int, string, error
 	return 0, o.Output, nil
 }
 
-// noteFailure charges a failed builder session to the group and escalates when the attempts are spent.
-func (m *Manager) noteFailure(ctx context.Context) error {
+// spend charges one try of the group's budget for a true failure; a failure on the last try escalates retries.
+func (m *Manager) spend(ctx context.Context, cause string) error {
 	m.mu.Lock()
-	m.prog.Attempts++
-	n := m.prog.Attempts
-	m.mu.Unlock()
-	if n >= m.spec.Limits.Attempts {
-		return block("attempts", map[string]int{"attempts": n})
+	if m.prog.RetriesLeft <= 1 {
+		m.prog.RetriesLeft = 0
+		m.mu.Unlock()
+		return block("retries", map[string]string{"last": cause})
 	}
+
+	m.prog.RetriesLeft--
+	m.mu.Unlock()
+
 	return m.report(ctx)
 }
 
@@ -663,6 +659,7 @@ func (m *Manager) runChecks(ctx context.Context) ([]string, error) {
 	verdict := res.Done(tree)
 	m.mu.Lock()
 	m.regression = verdict.Regression
+	m.uncovered = slices.Clone(res.Uncovered)
 	m.mu.Unlock()
 	// The event schema has no step output; the output reaches the builder as findings.
 	verdict.Steps = slices.Clone(verdict.Steps)
@@ -686,16 +683,16 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 
 	m.mu.Lock()
 	returns := m.prog.Returns
+	left := m.prog.RetriesLeft
 	last := m.prog.TreeAtReturn
 	regression := m.regression
+	if left <= 1 {
+		m.prog.RetriesLeft = 0
+	}
 	m.mu.Unlock()
-	if returns >= m.spec.Limits.Returns {
+	if left <= 1 {
 		m.clearRegression()
-		reason := "returns"
-		if regression {
-			reason = "regression"
-		}
-		return block(reason, map[string]any{"returns": returns, "findings": findings})
+		return block("retries", map[string]any{"last": "test_review", "regression": regression, "findings": findings})
 	}
 
 	tree, err := m.c.Git.TreeHash(ctx, m.spec.Lease)
@@ -709,6 +706,7 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 
 	m.mu.Lock()
 	m.prog.TreeAtReturn, m.prog.Returns, m.prog.Disputes = tree, returns+1, 0
+	m.prog.RetriesLeft--
 	m.pending, m.contract = findings, 0
 	m.verdicts = map[string]Outcome{}
 	m.mu.Unlock()
@@ -731,7 +729,11 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 		diff, _ = m.c.Git.Diff(ctx, m.spec.Lease, nil)
 	}
 
-	in := RoleInput{Diff: diff, Trip: m.Progress().Returns}
+	m.mu.Lock()
+	uncovered := slices.Clone(m.uncovered)
+	m.mu.Unlock()
+
+	in := RoleInput{Diff: diff, Trip: m.Progress().Returns, Uncovered: uncovered}
 	judges := []string{"tester", "reviewer"}
 	res := map[string]*branch{}
 
@@ -858,8 +860,6 @@ func (m *Manager) verdictOf(name string) (Outcome, bool) {
 
 // judgeBranch runs one judge to a decided outcome; a disputed tester result restarts the tester once.
 func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) branch {
-	var retries int
-
 	for {
 		if err := m.checkpoint(ctx); err != nil {
 			return branch{err: err}
@@ -894,8 +894,12 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 		case state.ReasonBilling:
 			return branch{err: block("paid_refused", map[string]string{"setting": "providers.paid"})}
 		default:
-			if retries++; retries > m.spec.Limits.SessionRetries {
-				return branch{err: block("retries", map[string]string{"agent": name, "last": string(out.reason)})}
+			// A crash or any other fault of Komodo's own runs the judge again and costs no retry.
+			if !out.reason.Charged() {
+				continue
+			}
+			if err := m.spend(ctx, string(out.reason)); err != nil {
+				return branch{err: err}
 			}
 		}
 	}

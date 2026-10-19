@@ -5,4 +5,4 @@ They are:
 | `key` | `value` | `source` |
 |---|---|---|
 | `output.profile` | `adhd` | `built-in` |
-| `limits.returns` | `3` | `machine` |
+| `limits.group_retries` | `3` | `machine` |

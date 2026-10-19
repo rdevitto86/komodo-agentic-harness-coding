@@ -5,7 +5,7 @@ Group `tg-1.3` needs a decision: `flap`.
 **Question:**
 `The same failure came back, or a return changed nothing. Continue?`
 
-**Fix:** `komodo run --approve tg-1.3`
+**Fix:** `komodo run tg-1.3`
 
 **❌ Blocked Changes**
 - Group `tg-1.3` waits for a person

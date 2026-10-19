@@ -160,7 +160,7 @@ func normalizeRemote(url string) string {
 
 // resolveRun validates the label of run and expands it to the group labels under docs/backlog/.
 func resolveRun(c *Call) *Result {
-	if c.Global.List || flagBool(c, "approve") || flagBool(c, "deny") {
+	if c.Global.List || flagBool(c, "approve") || flagBool(c, "deny") || flagBool(c, "override") {
 		return nil
 	}
 

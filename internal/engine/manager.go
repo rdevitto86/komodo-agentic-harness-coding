@@ -41,6 +41,7 @@ type run struct {
 	done       map[string]bool   // groups that ended with outcome complete
 	finished   map[string]bool   // groups that are Done with any outcome
 	lost       map[string]bool   // groups whose lease another run holds, which never started
+	failed     map[string]bool   // groups that failed for good, which no run continues
 	depBlocked map[string]string // groups that wait on an abandoned dependency
 	landing    map[string]LandingPlan
 	first      sync.Once
@@ -88,13 +89,19 @@ type Manager struct {
 	groups   map[string]*group
 	starting map[string]bool
 	repos    map[string]*repoCache
+	errs     *errorHandler        // the catch-all for errors: counts them and holds session starts back
+	parked   map[string]Timer     // override timers of saved groups no run holds, by group id
+	parkedBy map[string]parkedRow // those groups and their records, by group id
 	expect   map[string]chan error
+	persons  map[string]bool // requests sent from a process with a controlling terminal
+	conts   map[string]chan error
 	beats    map[string]time.Time
 	pool     *Pool
 	chg      chan struct{}
 	stopped  bool
 	faults   *fault.Handler // reports a panic of a goroutine the package starts
 	openMu   sync.Mutex     // makes the check and the open of a repository cache one step
+	wakeMu   sync.Mutex     // lets one override wake a parked group at a time
 	startMu  sync.Mutex     // makes the live-group check and the group registration of a run start one step
 	ready    chan struct{}  // closed once Run has subscribed to the command events
 	readyOne sync.Once
@@ -121,18 +128,25 @@ var protectedPaths = []string{
 
 // New wires a Runtime Manager from the managers it needs.
 func New(d Deps) *Manager {
-	return &Manager{
+	m := &Manager{
 		d: d, clk: clockOf(d.Clock), t: d.Timing.filled(), ctx: context.Background(),
 		runs:     map[string]*run{},
 		groups:   map[string]*group{},
 		starting: map[string]bool{},
 		repos:    map[string]*repoCache{},
+		parked:   map[string]Timer{},
+		parkedBy: map[string]parkedRow{},
 		expect:   map[string]chan error{},
+		persons:  map[string]bool{},
+		conts:    map[string]chan error{},
 		beats:    map[string]time.Time{},
 		chg:      make(chan struct{}),
 		ready:    make(chan struct{}),
 		faults:   faultsOf(d.Faults),
 	}
+	m.errs = newErrorHandler(m.clk, func(e Event) { _ = m.d.Bus.Publish(e) }, m.resumeGroup)
+
+	return m
 }
 
 // Run subscribes to run-start, run-stop and run-continue and serves them until ctx ends.
@@ -172,6 +186,14 @@ func (m *Manager) Expect(request string) <-chan error {
 	return ch
 }
 
+// Person marks a request as sent from a process with a controlling terminal; once the command is accepted, that person
+// ends every pause and the severe state.
+func (m *Manager) Person(request string) {
+	m.mu.Lock()
+	m.persons[request] = true
+	m.mu.Unlock()
+}
+
 // Changes returns a channel that closes at the next change to a run or a group.
 func (m *Manager) Changes() <-chan struct{} {
 	m.mu.Lock()
@@ -179,11 +201,11 @@ func (m *Manager) Changes() <-chan struct{} {
 	return m.chg
 }
 
-// Live returns the number of runs that are live or starting.
+// Live returns the number of runs that are live or starting, plus saved groups whose override timer is armed.
 func (m *Manager) Live() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.runs) + len(m.starting)
+	return len(m.runs) + len(m.starting) + len(m.parked)
 }
 
 // OpenRepos returns the repositories that have an open run.
@@ -245,6 +267,16 @@ func (m *Manager) CheckBeats() {
 	}
 }
 
+// resumeGroup asks a live group to perform the session starts a hold kept back.
+func (m *Manager) resumeGroup(id string) {
+	m.mu.Lock()
+	g := m.groups[id]
+	m.mu.Unlock()
+	if g != nil {
+		g.enqueue(Input{Kind: InHoldDue, Group: id, Time: m.clk.Now()})
+	}
+}
+
 // dispatch hands one command event to its handler on its own goroutine.
 func (m *Manager) dispatch(ctx context.Context, e bus.Event) {
 	var h func()
@@ -262,10 +294,20 @@ func (m *Manager) dispatch(ctx context.Context, e bus.Event) {
 	m.spawn(h)
 }
 
-// settle reports a command's outcome to its waiter and, for a refusal, to the event bus.
+// settle reports a command's outcome to its waiter and, for a refusal, to the event bus; an accepted command from a
+// person at a terminal ends every pause and the severe state.
 func (m *Manager) settle(request string, err error) {
 	if request == "" {
 		return
+	}
+
+	m.mu.Lock()
+	person := m.persons[request]
+	delete(m.persons, request)
+	m.mu.Unlock()
+
+	if person && err == nil {
+		m.errs.person()
 	}
 
 	var ev bus.Payload = &bus.RequestAccepted{RequestRef: bus.RequestRef{Request: bus.ID(request)}}
@@ -285,9 +327,18 @@ func (m *Manager) settle(request string, err error) {
 
 // startRun reads the plan, makes ready the epic branches and the cache, and starts the run's groups.
 func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) error {
+	return m.launchRun(ctx, e, rs, true)
+}
+
+// launchRun is startRun; with resume false, a saved paused or blocked group is loaded but not asked to continue.
+func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, resume bool) error {
 	id := string(e.Run)
 
 	m.mu.Lock()
+	if live := m.runs[id]; live != nil && !resume {
+		m.mu.Unlock()
+		return m.joinRun(ctx, live, rs)
+	}
 	if m.runs[id] != nil || m.starting[id] {
 		m.mu.Unlock()
 		return nil
@@ -314,7 +365,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		return fail("the run names no groups")
 	}
 
-	l, err := LoadLimits(m.d.Config, m.d.Agents)
+	l, err := LoadLimits(m.d.Config)
 	if err != nil {
 		return fail("read the limits: %v", err)
 	}
@@ -356,6 +407,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		done:       map[string]bool{},
 		finished:   map[string]bool{},
 		lost:       map[string]bool{},
+		failed:     map[string]bool{},
 		depBlocked: map[string]string{},
 		landing:    map[string]LandingPlan{},
 		firstCh:    make(chan struct{}),
@@ -384,16 +436,26 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		case rec.State.Stage == StageDone:
 			r.finished[s.ID] = true
 			r.done[s.ID] = rec.State.Outcome == "complete"
+			if rec.State.Outcome == "failed" {
+				r.failed[s.ID] = true
+				if len(rs.Groups) == 1 && rs.Groups[0] == s.Label {
+					why := s.Label + " failed for good: plan it again to run it fresh"
+					m.publishRefused(id, rs.Target, req, why)
+					return &codeError{CodeGroupFailed, why}
+				}
+			}
 		default:
 			saved[s.ID] = rec
 		}
 	}
 
+	var pending []pendingContinue
+
 	for _, g := range forward {
-		g.enqueue(Input{Kind: InContinue, Request: "run-" + id + "-" + g.spec.ID})
+		pending = append(pending, m.queueContinue(g, "run-"+id+"-"+g.spec.ID))
 	}
 	if len(r.specs) == 0 {
-		return nil
+		return m.awaitContinues(ctx, pending)
 	}
 
 	for _, s := range r.specs {
@@ -453,9 +515,14 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		g := m.newGroup(r, r.specs[gid])
 		r.groups[gid] = g
 		m.groups[gid] = g
+		m.stopParkedLocked(gid)
 		m.spawn(func() { g.main(&rec) })
-		if rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked {
-			g.enqueue(Input{Kind: InContinue, Request: "run-" + id + "-" + gid})
+		if resume && (rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked) {
+			req := "run-" + id + "-" + gid
+			ch := make(chan error, 1)
+			m.conts[req] = ch
+			pending = append(pending, pendingContinue{g: g, ch: ch, req: req})
+			g.enqueue(Input{Kind: InContinue, Request: req})
 		}
 	}
 	if len(saved) == 0 && len(r.finished) == 0 {
@@ -466,6 +533,51 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 	m.mu.Lock()
 	m.checkLocked(r)
 	m.mu.Unlock()
+	return m.awaitContinues(ctx, pending)
+}
+
+// joinRun loads the saved groups a wake names into a run that is already live, so a second parked group of the same saved
+// run is not left unloaded; a group already live, or Done, is skipped.
+func (m *Manager) joinRun(ctx context.Context, r *run, rs *bus.RunStart) error {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+
+	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Groups)
+	if err != nil {
+		return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("read the task lists: %v", err))
+	}
+
+	for _, s := range specs {
+		m.mu.Lock()
+		live := m.groups[s.ID]
+		m.mu.Unlock()
+		if live != nil {
+			continue
+		}
+
+		rec, err := r.store.Load(ctx, s.ID)
+		if err != nil || rec.State.Stage == StageDone {
+			continue
+		}
+
+		m.mu.Lock()
+		r.specs[s.ID] = s
+		r.order = append(r.order, s.ID)
+		if _, ok := r.landing[s.Epic]; !ok {
+			for _, p := range BuildLanding([]GroupSpec{s}) {
+				r.landing[p.Epic] = p
+			}
+		}
+
+		g := m.newGroup(r, s)
+		r.groups[s.ID] = g
+		m.groups[s.ID] = g
+		m.stopParkedLocked(s.ID)
+		m.spawn(func() { g.main(&rec) })
+		m.signalLocked()
+		m.mu.Unlock()
+	}
+
 	return nil
 }
 
@@ -583,7 +695,7 @@ func (m *Manager) spawn(fn func()) {
 		return
 	}
 
-	guarded(m.faults, run)
+	guarded(m.faults, run, func(f fault.Fault) { m.errs.engineFailed("a goroutine panicked", f) })
 }
 
 // wait waits up to d for every spawned goroutine to end; it reports false when some are still running.
@@ -592,7 +704,7 @@ func (m *Manager) wait(d time.Duration) bool {
 	guarded(m.faults, func() {
 		m.live.Wait()
 		close(done)
-	})
+	}, nil)
 
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -674,6 +786,9 @@ func (m *Manager) checkLocked(r *run) {
 				doneIDs = append(doneIDs, bus.ID(id))
 			} else {
 				otherIDs = append(otherIDs, bus.ID(id))
+				if r.failed[id] {
+					stuck = append(stuck, StalledGroup{Group: s.Label, Reason: "failed"})
+				}
 			}
 			continue
 		}
@@ -846,6 +961,7 @@ func (m *Manager) groupDone(g *group) {
 	delete(m.beats, "task:"+g.spec.ID)
 	r.finished[g.spec.ID] = true
 	r.done[g.spec.ID] = g.st.Outcome == "complete"
+	r.failed[g.spec.ID] = g.st.Outcome == "failed"
 }
 
 // leaseRefused records a group that never started because another run holds its lease.

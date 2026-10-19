@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,18 +17,14 @@ var faultStages = map[state.Reason][]Stage{
 	state.ReasonNoProvider:    {StageBuild, StageTestReview},
 	state.ReasonPaidRefused:   {StageBuild, StageTestReview},
 	state.ReasonContext:       {StageIntake, StageBuild, StageTestReview},
-	state.ReasonSetup:         {StageIntake},
+	state.ReasonSetup:         {StageIntake, StageBuild, StageTestReview},
 	state.ReasonPublish:       {StageCommit},
 	state.ReasonMergeConflict: {StageCommit},
 	state.ReasonCleanup:       {StageCleanup},
 	state.ReasonFlaky:         {StageTestReview},
 	state.ReasonTester:        {StageTestReview},
-	state.ReasonRegression:    {StageTestReview},
-	state.ReasonReturns:       {StageTestReview},
 	state.ReasonFlap:          {StageTestReview},
-	state.ReasonAttempts:      {StageBuild},
 	state.ReasonRetries:       {StageBuild, StageTestReview},
-	state.ReasonWall:          {StageBuild},
 	state.ReasonCrash: {
 		StageIntake,
 		StageBuild,
@@ -56,6 +54,10 @@ var faultStages = map[state.Reason][]Stage{
 // move applies the stage-move rows: the first row that matches the input and the state.
 func (c *calc) move() bool {
 	in, s := c.eff, &c.s
+	if c.wallOver() && len(c.orders) == 0 && wallEnds(in.Kind) {
+		c.wallFail()
+		return true
+	}
 	if r, d, ok := c.blockReason(in); ok {
 		c.block(r, d)
 		return true
@@ -65,6 +67,8 @@ func (c *calc) move() bool {
 	case InGroupStart:
 		if c.from == NoStage {
 			s.Epoch = 1
+			s.Counters.Tries = 1
+			s.Counters.RetriesLeft = c.l.GroupRetries
 			s.Stage = StageIntake
 			c.emitStatus(&bus.StageEnter{To: string(StageIntake)})
 			c.order(OrderGrantLease, StageIntake, nil)
@@ -111,7 +115,16 @@ func (c *calc) move() bool {
 			c.order(OrderHold, StagePaused, nil)
 			return true
 		}
+	case InOverride:
+		return c.override(in)
 	case InTimerDue:
+		if c.from == StageBlocked && s.Block.Reason == state.ReasonRetries &&
+			decode[TimerDue](in.Data).Reason == "override_lapse" && !in.Time.Before(s.Block.Until) {
+			mins := int(OverrideWindow / time.Minute)
+			c.emitStatus(&bus.OverrideLapsed{WindowMin: mins})
+			c.failGroup("tries were spent and no override came within " + strconv.Itoa(mins) + " minutes")
+			return true
+		}
 		if c.from == StagePaused && decode[TimerDue](in.Data).Reason != "pause_timeout" {
 			c.leavePause(decode[TimerDue](in.Data).Reason)
 			return true
@@ -173,11 +186,13 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		}
 
 		d := decode[ResultFail](in.Data)
-		if s.Counters.Returns >= c.l.Returns {
+		if c.onLastTry() {
+			c.exhausted = "test_review"
+			s.LastFindings = cmp.Or(d.Findings, strings.Join(d.Items, "\n"))
 			if d.Regression {
-				return state.ReasonRegression, "a test that passed at the base fails and the returns are spent", true
+				return state.ReasonRetries, "a test that passed at the base fails and no retries are left", true
 			}
-			return state.ReasonReturns, "the returns to Build are spent", true
+			return state.ReasonRetries, "a Test or Review failure came with no retries left", true
 		}
 		if (s.FailureHash != "" && Fingerprint(d.Items) == s.FailureHash) || (d.Tree != "" && d.Tree == s.ReturnTree) {
 			return state.ReasonFlap, "the same failure came back, or the return changed nothing", true
@@ -198,6 +213,9 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		r := state.Reason(d.Reason)
 		if r == "commit" {
 			r = state.ReasonPublish
+		}
+		if r == state.ReasonRetries {
+			c.exhausted = "task_manager"
 		}
 		if slices.Contains(faultStages[r], st) {
 			return r, d.Detail, true
@@ -221,23 +239,44 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		}
 	}
 
-	if st == StageBuild &&
-		s.Counters.WallExtended &&
-		c.l.GroupWallMin > 0 &&
-		s.Counters.WallUsedS >= 2*int64(c.l.GroupWallMin)*60 {
-		switch in.Kind {
-		case InAbandon, InLeaseLost, InGroupCrash, InContinue, InScopeAnswer:
-		default:
-			return state.ReasonWall, "working time reached twice limits.group_wall_min", true
-		}
+	return "", "", false
+}
+
+// wallEnds reports whether an input of this kind may end a try that ran past its wall time.
+func wallEnds(k InputKind) bool {
+	switch k {
+	case InAbandon, InLeaseLost, InGroupCrash, InContinue, InScopeAnswer:
+		return false
+	}
+	return true
+}
+
+// wallFail ends a try that ran past limits.group_wall_min and its extension: one retry is spent and the next try starts
+// with fresh time; with none left the group waits for an override.
+func (c *calc) wallFail() {
+	s := &c.s
+	if !c.charge("wall") {
+		c.block(state.ReasonRetries, "working time ran past its extension and no retries are left")
+		return
 	}
 
-	return "", "", false
+	live := c.anyLive()
+	for i := range s.Tasks {
+		if s.Tasks[i].State == "claimed" {
+			s.Tasks[i].State, s.Tasks[i].Session = "queued", ""
+		}
+	}
+	if live {
+		c.order(OrderCancel, StageBuild, map[string]string{"cause": "wall"})
+	}
+
+	s.Epoch++
+	c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: "wall"})
 }
 
 // endBlock applies the block rows that read a session end.
 func (c *calc) endBlock(e bus.SessionEnd) (state.Reason, string, bool) {
-	s, st := &c.s, c.from
+	st := c.from
 	if st != StageBuild && st != StageTestReview {
 		return "", "", false
 	}
@@ -245,41 +284,12 @@ func (c *calc) endBlock(e bus.SessionEnd) (state.Reason, string, bool) {
 		return state.ReasonPaidRefused, "the first stream line showed a paid key", true
 	}
 
-	if e.Agent == "builder" && st == StageBuild {
-		open := !c.allTasksDone()
-		if (e.Reason == "timeout" || e.Reason == "idle") && open && s.Counters.Retries > c.l.BuilderRetries {
-			return state.ReasonRetries, "the builder timed out or went idle more often than its retries", true
-		}
-		if slices.Contains(retryReasons, e.Reason) &&
-			(e.Reason != "done" || open) &&
-			s.Counters.Attempts >= c.l.GroupAttempts {
-			return state.ReasonAttempts, "every fresh builder session was used", true
-		}
-
-		return "", "", false
+	if e.Reason == string(state.ReasonCrash) && c.faultCapped() {
+		return state.ReasonCrash, "4 blocker errors in a row with no session result between them; look at the cause", true
 	}
 
-	if e.Agent == "tester" || e.Agent == "reviewer" {
-		round, retries := s.TestReview.Tester, c.l.TesterRetries
-		if e.Agent == "reviewer" {
-			round, retries = s.TestReview.Reviewer, c.l.ReviewerRetries
-		}
-
-		silent := !slices.Contains(
-			[]string{
-				"cancelled",
-				"pause_timeout",
-				"crash",
-				"provider",
-				"paused",
-				"needs_scope",
-				"billing",
-			},
-			e.Reason,
-		) && (e.Reason != "done" || e.Verify == nil)
-		if silent && round.Restarts > retries {
-			return state.ReasonRetries, "the " + e.Agent + " ended without a result more often than its retries", true
-		}
+	if c.exhausted != "" && (e.Agent == "builder" || e.Agent == "tester" || e.Agent == "reviewer") {
+		return state.ReasonRetries, "the " + e.Agent + " ended " + e.Reason + " and no retries are left", true
 	}
 
 	return "", "", false
@@ -291,9 +301,21 @@ func (c *calc) block(r state.Reason, detail string) {
 	if working(c.from) {
 		s.Prior = c.from
 	}
+	if r == state.ReasonRetries {
+		s.Counters.RetriesLeft = 0
+		if s.Counters.Overrides >= 1 { // an override is offered once per group
+			s.Counters.Blocks[string(r)]++
+			c.failGroup(detail)
+			return
+		}
+	}
 
 	s.Stage = StageBlocked
 	s.Block = state.BlockState{Reason: r, At: c.in.Time}
+	if r == state.ReasonRetries {
+		s.Block.Counter = c.exhausted
+		s.Block.Until = c.in.Time.Add(OverrideWindow)
+	}
 	s.Pause.After = false
 	s.Counters.Blocks[string(r)]++
 	c.order(OrderCancel, s.Stage, map[string]string{"cause": "block"})
@@ -305,6 +327,10 @@ func (c *calc) block(r state.Reason, detail string) {
 	}
 	if c.scopeBlock != nil && r == state.ReasonNeedsScope {
 		b.Paths = c.scopeBlock.Paths
+	}
+	if r == state.ReasonRetries {
+		b.Until = s.Block.Until
+		b.Detail += " (a person may override until " + s.Block.Until.Format(time.RFC3339) + ")"
 	}
 	if s.Counters.Blocks[string(r)] >= BlocksBeforeRedesign {
 		b.Detail = strings.TrimSpace(b.Detail + " (needs redesign)")
@@ -357,7 +383,7 @@ func (c *calc) stageDone(in Input) bool {
 func (c *calc) returnToBuild(in Input) {
 	s := &c.s
 	d := decode[ResultFail](in.Data)
-	s.Counters.Returns++
+	c.charge("test_review")
 	s.FailureHash, s.ReturnTree = Fingerprint(d.Items), d.Tree
 	if c.anyLive() {
 		c.order(OrderCancel, StageTestReview, map[string]string{"cause": "return"})
@@ -368,6 +394,7 @@ func (c *calc) returnToBuild(in Input) {
 		findings = strings.Join(d.Items, "\n")
 	}
 
+	s.LastFindings = findings
 	s.TestReview.Failed = slices.Clone(d.Items)
 
 	c.emitStatus(&bus.StageEnter{From: string(StageTestReview), To: string(StageBuild), Return: true})
@@ -473,6 +500,7 @@ func (c *calc) continueGroup(in Input) bool {
 			return false
 		}
 
+		s.Counters.FaultStreak = 0
 		to := s.Prior
 		if to == StageCommit {
 			to = StageTestReview
@@ -491,7 +519,10 @@ func (c *calc) continueGroup(in Input) bool {
 }
 
 // resumeAt leaves Paused or Blocked into a working stage with the epoch raised (rows 13, 14 and 19).
-func (c *calc) resumeAt(to Stage) {
+func (c *calc) resumeAt(to Stage) { c.resumeWith(to, stageData{Task: c.firstOpenTask()}) }
+
+// resumeWith is resumeAt with the detail the stage order carries.
+func (c *calc) resumeWith(to Stage, d stageData) {
 	s := &c.s
 
 	held := string(c.from)
@@ -505,7 +536,7 @@ func (c *calc) resumeAt(to Stage) {
 
 	c.emitStatus(&bus.GroupResumed{From: held, To: string(to)})
 	c.emitStatus(&bus.StageEnter{From: held, To: string(to)})
-	c.enterStage(to, stageData{Task: c.firstOpenTask()})
+	c.enterStage(to, d)
 }
 
 // dropCommitOrders removes the open orders of the Commit stage; Commit runs again after approval.
@@ -516,22 +547,22 @@ func (c *calc) dropCommitOrders() {
 	})
 }
 
-// resetFor clears the counters a block reason names; it returns a sentence when the continue must be refused.
+// resetFor clears what a block reason names, never the retry budget; it returns a sentence when the continue must be
+// refused.
 func (c *calc) resetFor(r state.Reason) string {
 	s := &c.s
 
 	switch r {
-	case state.ReasonReturns, state.ReasonRegression:
-		s.Counters.Returns, s.FailureHash, s.ReturnTree = 0, "", ""
 	case state.ReasonFlap:
 		s.FailureHash, s.ReturnTree = "", ""
 	case state.ReasonRetries:
-		s.Counters.Retries = 0
-		s.TestReview.Tester.Restarts, s.TestReview.Reviewer.Restarts = 0, 0
-	case state.ReasonAttempts:
-		s.Counters.Attempts = 0
+		if s.Counters.RetriesLeft <= 0 {
+			return "the group's retries are spent: a person may override in a terminal with run --override"
+		}
 	case state.ReasonWall:
-		s.Counters.WallUsedS, s.Counters.WallExtended = 0, false
+		s.Counters.WallBaseS = s.Counters.WallUsedS
+	case state.ReasonCrash:
+		s.Counters.FaultStreak = 0
 	case state.ReasonPauseTimeout:
 		s.Pause.Since, s.Pause.Refused = time.Time{}, 0
 	case state.ReasonNeedsScope:
@@ -548,7 +579,7 @@ func (c *calc) refuseRequest(in Input, why string) {
 	}
 }
 
-// scopeAnswer applies the answer to a scope request or a wall block (row 14).
+// scopeAnswer applies the answer to a scope request (row 14).
 func (c *calc) scopeAnswer(in Input) bool {
 	s := &c.s
 	if c.from != StageBlocked {
@@ -565,16 +596,65 @@ func (c *calc) scopeAnswer(in Input) bool {
 		c.order(OrderScope, StageBuild, d)
 		c.resumeAt(s.Prior)
 		return true
-	case state.ReasonWall:
-		if d.Answer != "approve" {
-			return false
-		}
-		s.Counters.WallUsedS, s.Counters.WallExtended = 0, false
-		c.resumeAt(s.Prior)
-		return true
 	}
 
 	return false
+}
+
+// override gives a group whose tries ran out one final try, with the working time the person chose, when they approve
+// inside the window.
+func (c *calc) override(in Input) bool {
+	s := &c.s
+	switch {
+	case s.Counters.Overrides >= 1:
+		c.refuseRequest(in, "the group's override was already used")
+		return false
+	case c.from != StageBlocked || s.Block.Reason != state.ReasonRetries:
+		c.refuseRequest(in, "the group is not waiting for an override")
+		return false
+	case s.Block.Until.IsZero() || !in.Time.Before(s.Block.Until):
+		c.refuseRequest(in, "the override window has passed")
+		return false
+	}
+
+	d := decode[OverrideData](in.Data)
+	if d.Minutes < 1 || d.Minutes > FinalWallMaxMin {
+		c.refuseRequest(in, "the final try's working time is 1 to "+strconv.Itoa(FinalWallMaxMin)+" minutes")
+		return false
+	}
+
+	s.Counters.RetriesLeft = 1
+	s.Counters.Overrides++
+	s.Counters.FinalWallMin = d.Minutes
+	c.newTry()
+	c.emitStatus(&bus.OverrideApproved{Granted: 1, Left: s.Counters.RetriesLeft, Minutes: s.Counters.FinalWallMin})
+
+	s.TestReview.Tester, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
+	c.resumeWith(StageBuild, stageData{Task: c.firstOpenTask(), Findings: s.LastFindings, Items: s.TestReview.Failed})
+	return true
+}
+
+// failGroup ends a group whose retries ran out with no override: Done with outcome failed, its lease released and its
+// history kept; the Cleanup Handler may then free its worktree, caches and branches.
+func (c *calc) failGroup(detail string) {
+	s := &c.s
+	prior, last := s.Prior, s.Block.Counter
+	if working(c.from) {
+		prior = c.from
+	}
+	if last == "" {
+		last = c.exhausted
+	}
+
+	c.order(OrderCancel, c.from, map[string]string{"cause": "failed"})
+	c.emit = append(c.emit, c.event(bus.TypeRunFailure, &bus.GroupFailed{
+		GroupFacts: bus.GroupFacts{Stage: string(c.from), Reason: string(state.ReasonRetries)},
+		Prior:      string(prior),
+		Last:       last,
+		Detail:     detail,
+	}))
+	c.finish("failed")
+	c.order(OrderRelease, StageDone, nil)
 }
 
 // finish ends the group in Done with an outcome.

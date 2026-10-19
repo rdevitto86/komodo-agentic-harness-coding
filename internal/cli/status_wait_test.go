@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/format"
 )
 
 func TestStatusWaitKeepsTheBlockedRowsOfTheFinalFrame(t *testing.T) {
@@ -21,5 +22,21 @@ func TestStatusWaitKeepsTheBlockedRowsOfTheFinalFrame(t *testing.T) {
 	sd := statusFrames(frames, true)
 	if sd.Waited != "blocked" || len(sd.Blocked) != 1 || sd.Blocked[0].Question == "" {
 		t.Fatalf("status %+v, want waited blocked with the question of the blocked group", sd)
+	}
+}
+
+func TestBlockedFixNamesAnAnswerOnlyForScopeAndRetries(t *testing.T) {
+	cases := map[string]string{
+		"retries":       "komodo run tg-1.1 --override in a terminal, within 60 minutes",
+		"state_invalid": "komodo run tg-1.1",
+		"needs_scope":   "komodo run tg-1.1 --approve or --deny",
+		"wall":          "komodo run tg-1.1",
+	}
+	for reason, want := range cases {
+		res := blockedResult(StatusData{Blocked: []BlockedRow{{Group: "tg-1.1", Reason: reason}}})
+		facts, ok := res.Facts.(format.NeedsFacts)
+		if !ok || facts.Fix != want {
+			t.Errorf("%s: fix %+v, want %q", reason, res.Facts, want)
+		}
 	}
 }
