@@ -108,8 +108,8 @@ type Result struct {
 	Stale   bool     // the input's epoch is older than the group's; State is unchanged
 	Dup     bool     // the input's request was applied before; State is unchanged
 	Dropped []string // facts that stood for no event, each with the kind and the reason, for the error output
-	// the panic-tier reason the input stood for, which the engine-wide breaker counts; empty for none
-	Panic state.Reason
+	// the blocker-tier reason the input stood for, which the group's breaker counts; empty for none
+	Blocker state.Reason
 }
 
 // The data of each input kind.

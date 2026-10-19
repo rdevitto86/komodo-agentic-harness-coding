@@ -68,18 +68,17 @@ func TestFaultAndMinorTiersNeverTripTheBreaker(t *testing.T) {
 	r := newBrkRig()
 	for range 4 {
 		ends := []Input{
-			crashEnd("builder"),
 			builderEnd("provider"),
 			builderEnd("cancelled"),
 			in(InFault, FaultData{Reason: "publish"}),
 		}
 		for _, end := range ends {
 			res := Next(claimed(), end, fixtureLimits())
-			if res.Panic != "" {
-				t.Fatalf("%s was counted as a panic: %q", end.Kind, res.Panic)
+			if res.Blocker != "" {
+				t.Fatalf("%s was counted as a panic: %q", end.Kind, res.Blocker)
 			}
-			if res.Panic != "" {
-				r.b.note("g", res.Panic)
+			if res.Blocker != "" {
+				r.b.note("g", res.Blocker)
 			}
 		}
 	}
@@ -124,7 +123,7 @@ func TestAPanicTierFaultFromARealInputIsWhatTheBreakerCounts(t *testing.T) {
 		{in(InGroupCrash, nil), state.ReasonCrash},
 		{in(InFault, FaultData{Reason: "publish"}), ""},
 	} {
-		if got := Next(claimed(), tc.in, fixtureLimits()).Panic; got != tc.want {
+		if got := Next(claimed(), tc.in, fixtureLimits()).Blocker; got != tc.want {
 			t.Errorf("%s: panic %q, want %q", tc.in.Kind, got, tc.want)
 		}
 	}

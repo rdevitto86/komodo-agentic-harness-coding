@@ -28,15 +28,15 @@ type calc struct {
 	scopeBlock *ScopeAsk
 	// exhausted names the failure that found the retry budget empty; the block rows then hold the group for an override.
 	exhausted string
-	// panicked is the panic-tier reason this input stood for, which the engine-wide breaker counts.
-	panicked state.Reason
+	// blocker is the blocker-tier reason this input stood for, which the group's breaker counts.
+	blocker state.Reason
 }
 
 // wallExtension is the one automatic extension a try gets after its working-time limit.
 const wallExtension = 60 * time.Minute
 
-// faultCap is the Komodo faults in a row, with no session result between them, that block a group for a person.
-const faultCap = 3
+// faultCap is the blocker errors in a row, with no session result between them, that block a group for a person.
+const faultCap = 4
 
 // try returns the group's current try, from 1.
 func (c *calc) try() int { return max(c.s.Counters.Tries, 1) }
@@ -70,7 +70,7 @@ func (c *calc) newTry() {
 	c.s.Counters.WallBaseS = c.s.Counters.WallUsedS
 }
 
-// tally counts the Komodo faults of an input in the group's streak; a session that ends done or in a charged failure of
+// tally counts the blocker errors of an input in the group's streak; a session that ends done or in a charged failure of
 // the work clears it.
 func (c *calc) tally() {
 	s := &c.s
@@ -79,8 +79,6 @@ func (c *calc) tally() {
 	}
 
 	var r state.Reason
-
-	session := false
 
 	switch c.in.Kind {
 	case InSessionEnd:
@@ -92,7 +90,7 @@ func (c *calc) tally() {
 			s.Counters.FaultStreak = 0
 			return
 		}
-		r, session = state.Reason(d.Reason), true
+		r = state.Reason(d.Reason)
 	case InGroupCrash:
 		r = state.ReasonCrash
 	case InFault:
@@ -104,16 +102,13 @@ func (c *calc) tally() {
 		return
 	}
 
-	switch state.Classify(r, session) {
-	case state.SeverityPanic:
-		c.panicked = r
-		s.Counters.FaultStreak++
-	case state.SeverityFault:
+	if state.Classify(r) == state.SeverityBlocker {
+		c.blocker = r
 		s.Counters.FaultStreak++
 	}
 }
 
-// faultCapped reports whether the streak of Komodo faults reached the cap.
+// faultCapped reports whether the streak of blocker errors reached the cap.
 func (c *calc) faultCapped() bool { return c.s.Counters.FaultStreak >= faultCap }
 
 // allTasksDone reports whether every task is done.
@@ -492,7 +487,7 @@ func Next(s0 State, in Input, l Limits) Result {
 		c.s.ActionsOpen = append(c.s.ActionsOpen, state.OpenAction{ID: o.Key, Kind: string(o.Kind), Args: args})
 	}
 
-	return Result{State: c.s, Orders: c.orders, Emit: c.emit, Dropped: c.dropped, Panic: c.panicked}
+	return Result{State: c.s, Orders: c.orders, Emit: c.emit, Dropped: c.dropped, Blocker: c.blocker}
 }
 
 // cloneState returns a deep copy of s with no nil slice or map.

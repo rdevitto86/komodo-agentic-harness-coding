@@ -635,8 +635,8 @@ func (g *group) handle(in Input) {
 
 	g.publish(res.Emit)
 	g.sessionSignals(in)
-	if res.Panic != "" {
-		g.m.brk.note(g.spec.ID, res.Panic)
+	if res.Blocker != "" {
+		g.m.brk.note(g.spec.ID, res.Blocker)
 	}
 	if in.Kind == InSessionEnd {
 		g.m.brk.ended(g.spec.ID)
@@ -675,8 +675,8 @@ func (g *group) saveFailed(err error) {
 	}
 
 	g.publish(res.Emit)
-	if res.Panic != "" {
-		g.m.brk.note(g.spec.ID, res.Panic)
+	if res.Blocker != "" {
+		g.m.brk.note(g.spec.ID, res.Blocker)
 	}
 
 	g.after()

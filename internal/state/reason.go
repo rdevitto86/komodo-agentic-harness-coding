@@ -44,7 +44,7 @@ const (
 	// a dependency was removed from the run
 	ReasonDependency Reason = "dependency"
 
-	// the group's goroutine panicked, or a person must look after three Komodo faults in a row
+	// the group's goroutine panicked, or a person must look after four blocker errors in a row
 	ReasonCrash Reason = "crash"
 
 	// a decision result broke the event's declared shape
@@ -107,10 +107,10 @@ func (r Reason) Charged() bool {
 type Severity string
 
 const (
-	// SeverityPanic means Komodo itself is broken; it counts toward the group cap and the engine-wide breaker
-	SeverityPanic Severity = "panic"
+	// SeverityBlocker means an error stops an agent session from working on its tasks; only this tier counts toward a breaker
+	SeverityBlocker Severity = "blocker"
 
-	// SeverityFault means one session or step broke; it counts toward the group cap only
+	// SeverityFault means a step after the work broke; it is recorded by type and counts toward no breaker
 	SeverityFault Severity = "fault"
 
 	// SeverityMinor means expected and self-healing; it counts nowhere
@@ -123,19 +123,14 @@ const (
 	SeverityNone Severity = ""
 )
 
-// Severity returns the tier of a reason as a group fault or block; crash stands for a goroutine panic here.
-func (r Reason) Severity() Severity { return Classify(r, false) }
+// Severity returns the tier of a reason; Classify is the one table.
+func (r Reason) Severity() Severity { return Classify(r) }
 
-// Classify is the one table of tiers; session is true for a session-exit reason, where crash is a lost session process.
-func Classify(r Reason, session bool) Severity {
+// Classify is the one table of tiers; a session crash and a goroutine panic are both blockers.
+func Classify(r Reason) Severity {
 	switch r {
-	case ReasonCrash:
-		if session {
-			return SeverityFault
-		}
-		return SeverityPanic
-	case ReasonStateInvalid, ReasonContract, ReasonSetup:
-		return SeverityPanic
+	case ReasonCrash, ReasonStateInvalid, ReasonContract, ReasonSetup:
+		return SeverityBlocker
 	case ReasonPublish, ReasonCleanup:
 		return SeverityFault
 	case ReasonCancelled, ReasonProvider, ReasonPaused, ReasonBilling:

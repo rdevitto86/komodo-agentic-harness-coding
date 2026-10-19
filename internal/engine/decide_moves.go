@@ -285,7 +285,7 @@ func (c *calc) endBlock(e bus.SessionEnd) (state.Reason, string, bool) {
 	}
 
 	if e.Reason == string(state.ReasonCrash) && c.faultCapped() {
-		return state.ReasonCrash, "3 Komodo faults in a row with no session result between them; look at the cause", true
+		return state.ReasonCrash, "4 blocker errors in a row with no session result between them; look at the cause", true
 	}
 
 	if c.exhausted != "" && (e.Agent == "builder" || e.Agent == "tester" || e.Agent == "reviewer") {
