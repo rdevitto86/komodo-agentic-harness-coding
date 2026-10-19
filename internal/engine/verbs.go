@@ -45,6 +45,12 @@ func (e *Engine) handle(ctx context.Context, w *connWriter, req Request) {
 // verbRun starts, queues or answers a run.
 func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	ev := req.Event
+	if req.Flags.Override {
+		if ok, err := e.peer(w.c); err != nil || !ok {
+			e.fail(w, req.ID, &codeError{CodeNoTerminal, "--override needs a terminal: the requesting process has none"})
+			return
+		}
+	}
 	if req.Flags.Approve || req.Flags.Deny || req.Flags.Override {
 		if rc, ok := dataOf[*bus.RunContinue](ev); ok {
 			rc.Request = bus.ID(req.ID)
@@ -273,7 +279,7 @@ func (e *Engine) statusData(ctx context.Context, req Request) StatusData {
 	}
 
 	runs, blocked := e.m.Snapshot(root)
-	d := StatusData{Runs: runs, Queued: []QueuedRow{}, Blocked: blocked}
+	d := StatusData{Runs: runs, Queued: []QueuedRow{}, Blocked: blocked, Alert: e.m.brk.alert()}
 
 	es, _, _ := e.q.load()
 	for _, ent := range es {

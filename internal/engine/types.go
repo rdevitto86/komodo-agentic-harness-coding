@@ -29,30 +29,31 @@ type InputKind string
 
 // The input kinds.
 const (
-	InGroupStart   InputKind = "group.start"   // the group is ready and a pool slot is free
-	InLeaseGranted InputKind = "lease.granted" // data: LeaseGrant
-	InReady        InputKind = "ready"         // the Task Manager is running and its sandbox is wired
-	InStageDone    InputKind = "stage.done"    // data: StageDoneData
-	InResultFail   InputKind = "result.fail"   // data: ResultFail
-	InSessionStart InputKind = "session.start" // data: SessionStartData
-	InSessionEnd   InputKind = "session.end"   // data: SessionEndData
-	InTaskDone     InputKind = "task.done"     // data: bus.TaskDone
-	InGateFail     InputKind = "gate.fail"     // data: bus.TaskDone
-	InScopeAsk     InputKind = "scope.ask"     // data: ScopeAsk
-	InScopeAnswer  InputKind = "scope.answer"  // data: ScopeAnswer
-	InTimerExtend  InputKind = "timer.extend"  // data: task.TimerRequest
-	InTimerDue     InputKind = "timer.due"     // data: TimerDue
-	InContinue     InputKind = "continue"      // data: ContinueData
-	InLeaseLost    InputKind = "lease.lost"
-	InFault        InputKind = "fault"        // data: FaultData
-	InGroupClosed  InputKind = "group.closed" // the Task Manager finished CloseTaskGroup
-	InGroupCrash   InputKind = "group.crash"  // the panic-catching helper
-	InLimitPause   InputKind = "limit.pause"  // data: LimitPause
-	InAbandon      InputKind = "abandon"      // data: AbandonData
-	InProgress     InputKind = "progress"     // data: ProgressData; the live session handles of a state report
-	InFact         InputKind = "fact"         // data: FactData; a fact that is published and changes nothing
-	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; costs no retry
-	InOverride     InputKind = "override"     // a person at a terminal gave an empty group more retries
+	InGroupStart    InputKind = "group.start"   // the group is ready and a pool slot is free
+	InLeaseGranted  InputKind = "lease.granted" // data: LeaseGrant
+	InReady         InputKind = "ready"         // the Task Manager is running and its sandbox is wired
+	InStageDone     InputKind = "stage.done"    // data: StageDoneData
+	InResultFail    InputKind = "result.fail"   // data: ResultFail
+	InSessionStart  InputKind = "session.start" // data: SessionStartData
+	InSessionEnd    InputKind = "session.end"   // data: SessionEndData
+	InTaskDone      InputKind = "task.done"     // data: bus.TaskDone
+	InGateFail      InputKind = "gate.fail"     // data: bus.TaskDone
+	InScopeAsk      InputKind = "scope.ask"     // data: ScopeAsk
+	InScopeAnswer   InputKind = "scope.answer"  // data: ScopeAnswer
+	InTimerExtend   InputKind = "timer.extend"  // data: task.TimerRequest
+	InTimerDue      InputKind = "timer.due"     // data: TimerDue
+	InContinue      InputKind = "continue"      // data: ContinueData
+	InLeaseLost     InputKind = "lease.lost"
+	InFault         InputKind = "fault"          // data: FaultData
+	InGroupClosed   InputKind = "group.closed"   // the Task Manager finished CloseTaskGroup
+	InGroupCrash    InputKind = "group.crash"    // the panic-catching helper
+	InLimitPause    InputKind = "limit.pause"    // data: LimitPause
+	InAbandon       InputKind = "abandon"        // data: AbandonData
+	InProgress      InputKind = "progress"       // data: ProgressData; the live session handles of a state report
+	InFact          InputKind = "fact"           // data: FactData; a fact that is published and changes nothing
+	InLoopRestart   InputKind = "loop.restart"   // a silent Task Manager was restarted; costs no retry
+	InOverride      InputKind = "override"       // a person at a terminal gave an empty group more retries
+	InBreakerResume InputKind = "breaker.resume" // the breaker lets the group perform the session starts it held back
 )
 
 // Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a
@@ -107,6 +108,8 @@ type Result struct {
 	Stale   bool     // the input's epoch is older than the group's; State is unchanged
 	Dup     bool     // the input's request was applied before; State is unchanged
 	Dropped []string // facts that stood for no event, each with the kind and the reason, for the error output
+	// the panic-tier reason the input stood for, which the engine-wide breaker counts; empty for none
+	Panic state.Reason
 }
 
 // The data of each input kind.
@@ -137,6 +140,7 @@ type (
 	SessionEndData struct {
 		bus.SessionEnd
 		Unfinished *state.UnfinishedEdits `json:"unfinished,omitempty"`
+		Restart    bool                   `json:"restart,omitempty"` // the engine ended the session by dying; no fault
 	}
 	// ScopeAsk is the data of scope.ask; Deny is set by the Runtime Manager when a path is protected or in another live
 	// group's files.

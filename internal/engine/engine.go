@@ -23,6 +23,7 @@ type Engine struct {
 	sock    string
 	printer *ConnPrinter
 	q       *queue
+	peer    PeerChecker
 
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
@@ -48,6 +49,10 @@ func NewEngine(d Deps, socketPath string) *Engine {
 		printer: &ConnPrinter{},
 		conns:   map[net.Conn]struct{}{},
 		exit:    make(chan struct{}),
+		peer:    d.PeerTerminal,
+	}
+	if e.peer == nil {
+		e.peer = peerHasTerminal
 	}
 	e.q = &queue{e: e, kick: make(chan struct{}, 1), firing: map[string]bool{}}
 	return e
@@ -87,6 +92,7 @@ func (e *Engine) Serve(ctx context.Context) error {
 		e.markSeen()
 	}
 
+	e.m.RearmOverrides(runCtx)
 	e.m.spawn(func() { e.beatLoop(runCtx) })
 	e.m.spawn(func() { e.q.loop(runCtx) })
 	e.m.spawn(func() { e.watchChanges(runCtx) })

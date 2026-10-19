@@ -105,6 +105,9 @@
             "crashes": {
               "type": "integer"
             },
+            "fault_streak": {
+              "type": "integer"
+            },
             "overrides": {
               "type": "integer"
             },
@@ -114,8 +117,14 @@
             "tokens_used": {
               "type": "integer"
             },
-            "wall_extended": {
-              "type": "boolean"
+            "tries": {
+              "type": "integer"
+            },
+            "wall_base_s": {
+              "type": "integer"
+            },
+            "wall_ext_try": {
+              "type": "integer"
             },
             "wall_used_s": {
               "type": "integer"
@@ -127,8 +136,11 @@
             "crashes",
             "blocks",
             "wall_used_s",
-            "wall_extended",
-            "tokens_used"
+            "tokens_used",
+            "tries",
+            "wall_base_s",
+            "wall_ext_try",
+            "fault_streak"
           ],
           "type": "object"
         },
@@ -146,6 +158,9 @@
         },
         "last_event_at": {
           "format": "date-time",
+          "type": "string"
+        },
+        "last_findings": {
           "type": "string"
         },
         "outcome": {

@@ -51,5 +51,7 @@ func RegisterEvents() {
 		bus.Register(Stalled{}.EventKey(), func() bus.Payload { return &Stalled{} })
 		bus.Register(RunRefused{}.EventKey(), func() bus.Payload { return &RunRefused{} })
 		bus.Register(ResumeLost{}.EventKey(), func() bus.Payload { return &ResumeLost{} })
+		bus.Register(BreakerOpened{}.EventKey(), func() bus.Payload { return &BreakerOpened{} })
+		bus.Register(BreakerClosed{}.EventKey(), func() bus.Payload { return &BreakerClosed{} })
 	})
 }

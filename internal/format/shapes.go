@@ -92,6 +92,7 @@ type StatusFacts struct {
 	Queued  Table  `json:"queued"`           // label, start time
 	Blocked Table  `json:"blocked"`          // group, reason, question
 	Waited  string `json:"waited,omitempty"` // with --wait: blocked, done or timeout
+	Alert   string `json:"alert,omitempty"`  // one line while the breaker holds new sessions back
 }
 
 // DoctorFacts feeds reply.doctor.

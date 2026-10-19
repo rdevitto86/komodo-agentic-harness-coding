@@ -22,7 +22,7 @@ type migrationKey struct {
 }
 
 // Version is the schema version this binary writes.
-const Version = 2
+const Version = 3
 
 // migratedRetries is the retries a group saved before the retry budget starts with: the shipped limits.group_retries.
 const migratedRetries = 3
@@ -39,15 +39,18 @@ func RegisterMigration(m Migration) {
 	migrations[migrationKey{string(m.Kind), m.From}] = m
 }
 
-// Version 0 has the same shape as version 1, and a machine record has the same shape in version 2, so those steps change
-// nothing; a group record from version 1 swaps its three counting-up limits for the retry budget.
+// Version 0 has the same shape as version 1, and a machine record has the same shape in versions 2 and 3, so those steps
+// change nothing; a group record from version 1 swaps its three counting-up limits for the retry budget, and one from
+// version 2 moves its wall time to a per-try base.
 func init() {
 	identity := func(old []byte) ([]byte, error) { return old, nil }
 	RegisterMigration(Migration{From: 0, Step: identity})
 	RegisterMigration(Migration{From: 1, Step: retryBudget})
+	RegisterMigration(Migration{From: 2, Step: wallPerTry})
 	for _, k := range machineKinds {
 		RegisterMigration(Migration{From: 0, Kind: k, Step: identity})
 		RegisterMigration(Migration{From: 1, Kind: k, Step: identity})
+		RegisterMigration(Migration{From: 2, Kind: k, Step: identity})
 	}
 }
 
@@ -83,6 +86,45 @@ func retryBudget(old []byte) ([]byte, error) {
 		st["test_review"] = encodeObject(tr)
 	}
 
+	rec["state"] = encodeObject(st)
+	return json.Marshal(rec)
+}
+
+// wallPerTry upgrades a version 2 group record: wall_extended becomes the try it was granted on, and a group blocked on
+// wall starts a fresh try so a plain run continues it.
+func wallPerTry(old []byte) ([]byte, error) {
+	rec, ok := objectOf(old)
+	if !ok {
+		return old, nil
+	}
+
+	st, ok := objectOf(rec["state"])
+	if !ok {
+		return old, nil
+	}
+
+	c, ok := objectOf(st["counters"])
+	if !ok {
+		return old, nil
+	}
+
+	extended := string(c["wall_extended"]) == "true"
+	delete(c, "wall_extended")
+	c["tries"] = json.RawMessage("1")
+	c["wall_base_s"] = json.RawMessage("0")
+	c["wall_ext_try"] = json.RawMessage("0")
+	c["fault_streak"] = json.RawMessage("0")
+	if extended {
+		c["wall_ext_try"] = json.RawMessage("1")
+	}
+	if b, ok := objectOf(st["block"]); ok && string(b["reason"]) == `"wall"` {
+		if used, ok := c["wall_used_s"]; ok {
+			c["wall_base_s"] = used
+		}
+		c["wall_ext_try"] = json.RawMessage("0")
+	}
+
+	st["counters"] = encodeObject(c)
 	rec["state"] = encodeObject(st)
 	return json.Marshal(rec)
 }

@@ -1,5 +1,7 @@
 {{n (len .Runs.Rows)}} {{plural (len .Runs.Rows) "run" "runs"}} active, {{n (len .Queued.Rows)}} queued, {{n (len .Blocked.Rows)}} blocked.
-{{if .Waited}}
+{{if .Alert}}
+**Alert:** {{.Alert}}
+{{end}}{{if .Waited}}
 **Wait ended:** {{.Waited}}
 {{end}}{{if .Runs.Rows}}
 **Runs:**

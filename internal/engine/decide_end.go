@@ -100,7 +100,9 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 			c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
 		}
 	case "provider", "crash":
-		c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
+		if !c.builderBlocked(e.Reason) {
+			c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
+		}
 	case "needs_scope":
 		// The block rows block the group; the scope.ask that follows finds the ask spent and attaches to that block.
 		c.scopeRules(ScopeAsk{Task: e.Task, Paths: e.ScopePaths, Reason: e.ScopeReason})
@@ -201,7 +203,9 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 	case e.Reason == "crash":
 		s.Counters.Crashes++
 		c.waive(e.Reason)
-		c.restartAgent(e.Agent)
+		if !c.faultCapped() {
+			c.restartAgent(e.Agent)
+		}
 	case e.Reason == "provider":
 		c.waive(e.Reason)
 		c.restartAgent(e.Agent)

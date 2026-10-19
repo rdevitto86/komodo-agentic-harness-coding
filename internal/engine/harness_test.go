@@ -39,7 +39,7 @@ type fakeStore struct {
 	recs     map[string]state.Record
 	onSave   func(group string, s State)
 	failSave atomic.Bool // makes every Save fail
-	monotone atomic.Bool // makes a Save that lowers the attempts counter fail as the State Manager does
+	monotone atomic.Bool // makes a Save that lowers the fault streak fail, standing in for a counter that must not fall
 	saves    atomic.Int64
 }
 
@@ -72,11 +72,11 @@ func (s *fakeStore) Save(_ context.Context, g string, st State, rev int) (state.
 		s.mu.Unlock()
 		return state.Record{}, fmt.Errorf("revision %d is stale", rev)
 	}
-	if s.monotone.Load() && st.Counters.WallUsedS < cur.State.Counters.WallUsedS {
+	if s.monotone.Load() && st.Counters.FaultStreak < cur.State.Counters.FaultStreak {
 		s.mu.Unlock()
 		return state.Record{}, &state.InvalidError{
 			Group: g,
-			Field: "state.counters.wall_used_s",
+			Field: "state.counters.fault_streak",
 			Why:   "lower than the stored value",
 		}
 	}

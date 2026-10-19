@@ -206,10 +206,18 @@ func validateCounters(c *Counters, f func(field, why string) error) error {
 		{"crashes", int64(c.Crashes)},
 		{"wall_used_s", c.WallUsedS},
 		{"tokens_used", c.TokensUsed},
+		{"tries", int64(c.Tries)},
+		{"wall_base_s", c.WallBaseS},
+		{"wall_ext_try", int64(c.WallExtTry)},
+		{"fault_streak", int64(c.FaultStreak)},
 	} {
 		if n.v < 0 {
 			return f("counters."+n.name, "negative")
 		}
+	}
+
+	if c.WallBaseS > c.WallUsedS {
+		return f("counters.wall_base_s", "higher than wall_used_s")
 	}
 
 	for k, v := range c.Blocks {
@@ -283,6 +291,9 @@ func checkMonotone(key string, old, now *GroupState) error {
 		{"crashes", int64(oc.Crashes), int64(nc.Crashes)},
 		{"wall_used_s", oc.WallUsedS, nc.WallUsedS},
 		{"tokens_used", oc.TokensUsed, nc.TokensUsed},
+		{"tries", int64(oc.Tries), int64(nc.Tries)},
+		{"wall_base_s", oc.WallBaseS, nc.WallBaseS},
+		{"wall_ext_try", int64(oc.WallExtTry), int64(nc.WallExtTry)},
 	} {
 		if n.now < n.old {
 			return f("counters." + n.name)

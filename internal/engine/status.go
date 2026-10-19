@@ -16,6 +16,7 @@ type StatusData struct {
 	Queued  []QueuedRow  `json:"queued"`
 	Blocked []BlockedRow `json:"blocked"`          // groups that wait for an answer
 	Waited  string       `json:"waited,omitempty"` // with --wait: blocked, done or timeout
+	Alert   string       `json:"alert,omitempty"`  // one line while the breaker holds new sessions back
 }
 
 // RunRow is one live run and its groups.
@@ -201,8 +202,6 @@ func (g *group) question(s State) string {
 			)
 		}
 		return label + " asks to change files outside its list. Approve or deny?"
-	case state.ReasonWall:
-		return label + " used twice its working time. Approve more time or leave it blocked?"
 	}
 
 	return fmt.Sprintf("%s is blocked: %s. Fix the cause and run it again.", label, s.Block.Reason)

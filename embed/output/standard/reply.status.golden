@@ -1,5 +1,8 @@
 There is 1 active run, 1 queued and 1 blocked.
 
+Alert:
+`No new sessions start: setup faults hit several groups. One probe session runs every 5 minutes.`
+
 The wait ended with `blocked`.
 
 The active runs are:

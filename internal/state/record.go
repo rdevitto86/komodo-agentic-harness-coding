@@ -99,6 +99,9 @@ type GroupState struct {
 	// fingerprint of the failure behind the last return to build
 	FailureHash string `json:"failure_hash"`
 
+	// the output of the last failed test and review round, for the builder after an override
+	LastFindings string `json:"last_findings,omitempty"`
+
 	// tree hash tested at the last return; the same tree again is a flap
 	ReturnTree string `json:"return_tree"`
 
@@ -126,13 +129,16 @@ type UnfinishedEdits struct {
 
 // Counters are the numbers that bound a group; only the Runtime Manager changes them.
 type Counters struct {
-	RetriesLeft  int            `json:"retries_left"`  // retries the group may still spend; only an override raises it
-	Overrides    int            `json:"overrides"`     // overrides a person approved; the only way retries_left rises
-	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to the retries
-	Blocks       map[string]int `json:"blocks"`        // blocks per reason
-	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time
-	WallExtended bool           `json:"wall_extended"` // the one wall-time extension was granted
-	TokensUsed   int64          `json:"tokens_used"`   // tokens used by the group
+	RetriesLeft int            `json:"retries_left"` // retries the group may still spend; only an override raises it
+	Overrides   int            `json:"overrides"`    // overrides a person approved; the only way retries_left rises
+	Crashes     int            `json:"crashes"`      // sessions lost to a crash; never charged to the retries
+	Blocks      map[string]int `json:"blocks"`       // blocks per reason
+	WallUsedS   int64          `json:"wall_used_s"`  // seconds worked, excluding paused and blocked time; never falls
+	TokensUsed  int64          `json:"tokens_used"`  // tokens used by the group
+	Tries       int            `json:"tries"`        // the current try, from 1; rises with a spent retry or override
+	WallBaseS   int64          `json:"wall_base_s"`  // wall_used_s when the current try began; only rises
+	WallExtTry  int            `json:"wall_ext_try"` // the try the one wall-time extension was granted on; only rises
+	FaultStreak int            `json:"fault_streak"` // Komodo faults in a row with no session result between them
 }
 
 // TaskState is one task's progress.

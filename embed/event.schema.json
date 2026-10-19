@@ -1,5 +1,39 @@
 {
   "$defs": {
+    "BreakerClosed": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "BreakerOpened": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "groups"
+      ],
+      "type": "object"
+    },
     "BusOverflow": {
       "additionalProperties": false,
       "properties": {
@@ -2405,6 +2439,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/BreakerOpened"
+        },
+        "subtype": {
+          "const": "breaker.opened"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/GroupBlocked"
         },
         "subtype": {
@@ -2464,6 +2511,19 @@
         },
         "type": {
           "const": "run-start"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/BreakerClosed"
+        },
+        "subtype": {
+          "const": "breaker.closed"
+        },
+        "type": {
+          "const": "run-status"
         }
       }
     },

@@ -272,6 +272,9 @@ func (g *group) after() {
 	}
 
 	g.armTimers()
+	if stage == StagePaused || stage == StageBlocked || stage == StageDone {
+		g.m.brk.ended(g.spec.ID)
+	}
 	if stage == StageDone {
 		g.m.groupDone(g)
 	}
@@ -285,12 +288,34 @@ func (g *group) perform(orders []Order) {
 		if g.stopping.Load() {
 			return
 		}
+		if o.Kind == OrderEnterStage && startsSessions(o.Stage) && !g.m.brk.allow(g.spec.ID) {
+			continue // held by the breaker; the order stays open until the breaker lets it through
+		}
 		if o.Kind == OrderEnterStage {
 			g.fillContext(&o)
 		}
 		g.do(o)
 		g.complete(o.Key)
 	}
+}
+
+// startsSessions reports whether entering a stage starts model sessions.
+func startsSessions(st Stage) bool { return st == StageBuild || st == StageTestReview }
+
+// resumeHeld performs the stage orders the breaker held back.
+func (g *group) resumeHeld() {
+	if !working(g.st.Stage) {
+		return
+	}
+
+	var open []Order
+	for _, a := range g.st.ActionsOpen {
+		if a.Kind == string(OrderEnterStage) {
+			open = append(open, rawOrder(a))
+		}
+	}
+
+	g.perform(open)
 }
 
 // fillContext adds the Context Manager's answer for the stage's agents to a stage order.
@@ -569,6 +594,11 @@ func (g *group) handle(in Input) {
 		return
 	}
 
+	if in.Kind == InBreakerResume {
+		g.resumeHeld()
+		return
+	}
+
 	if len(in.Data) > 0 && !json.Valid(in.Data) {
 		in = Input{
 			Kind:  InFault,
@@ -604,6 +634,13 @@ func (g *group) handle(in Input) {
 
 	g.publish(res.Emit)
 	g.sessionSignals(in)
+	if res.Panic != "" {
+		g.m.brk.note(g.spec.ID, res.Panic)
+	}
+	if in.Kind == InSessionEnd {
+		g.m.brk.ended(g.spec.ID)
+	}
+
 	g.after()
 	g.perform(res.Orders)
 }
@@ -637,6 +674,10 @@ func (g *group) saveFailed(err error) {
 	}
 
 	g.publish(res.Emit)
+	if res.Panic != "" {
+		g.m.brk.note(g.spec.ID, res.Panic)
+	}
+
 	g.after()
 	g.perform(res.Orders)
 }

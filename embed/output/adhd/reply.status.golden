@@ -1,5 +1,8 @@
 1 run active, 1 queued, 1 blocked.
 
+**Alert:**
+`No new sessions start: setup faults hit several groups. One probe session runs every 5 minutes.`
+
 **Wait ended:** `blocked`
 
 **Runs:**

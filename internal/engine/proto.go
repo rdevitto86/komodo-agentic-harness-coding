@@ -105,6 +105,7 @@ const (
 	CodeRunRefused     = "run_refused"     // the run was refused, such as a dependency cycle
 	CodeNotBlocked     = "not_blocked"     // --approve or --deny named a group that is not waiting for an answer
 	CodeGroupFailed    = "group_failed"    // the group failed for good; plan it again to run it
+	CodeNoTerminal     = "no_terminal"     // --override came from a process with no controlling terminal
 	CodeEngineStopping = "engine_stopping" // the engine is past its exit check; the CLI starts a new engine and resends
 	CodeUnknownSession = "unknown_session" // no running model session has this id, or it has ended
 )
