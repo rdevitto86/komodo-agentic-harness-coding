@@ -2603,6 +2603,7 @@ Token and cost usage are always read; no key switches them off.
 
 **Unit**
 - **Strict reading:** a `settings.json` with an unknown key fails to load and names the closest known key.
+- **Removed keys:** `limits.override_window_min` and `limits.override_retries` are ignored when `settings.json` holds them, so a file an older version wrote still loads.
 - **Limits:** `SetConfigItem(limits.group_retries=9)` returns a `LimitError` naming the key and the limit 5, and the file is unchanged.
 - **All or none:** a call with 1 bad pair out of 3 writes nothing; a good call logs 1 audit row per changed key.
 - **Idempotence:** the same call twice reports `0 changes` the second time and appends no row.
