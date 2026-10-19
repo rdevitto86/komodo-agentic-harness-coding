@@ -472,9 +472,7 @@ func TestAnsweringABlockApproveAndDeny(t *testing.T) {
 			r.mustRun("run", "tg-1.1")
 			st := r.komodo(120*time.Second, "status", "--wait", "--timeout", "90s")
 			if st.code != 3 || !strings.Contains(st.stdout, "outside.go") {
-				t.Skip("blocked: status --wait returns waited=blocked with 0 blocked rows for a needs_scope group, " +
-					"so no question comes back (internal/cli/status.go:96-99); reply: " +
-					st.stdout)
+				t.Fatalf("status --wait did not return the question (exit %d): %s\n%s", st.code, st.stdout, r.evidence(r.events()))
 			}
 			r.mustRun("run", "tg-1.1", "--"+answer)
 			evs := r.waitFor(120*time.Second, "run-status", "group.done")

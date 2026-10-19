@@ -104,9 +104,7 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 	case "provider", "crash":
 		c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
 	case "needs_scope":
-		if !s.Tasks[c.taskIndex(e.Task)].ScopeAsked {
-			c.scopeRules(ScopeAsk{Task: e.Task, Paths: e.ScopePaths, Reason: e.ScopeReason})
-		}
+		// The scope.ask escalation that follows carries the request; applying the rules here would spend the ask first.
 	}
 
 	return true

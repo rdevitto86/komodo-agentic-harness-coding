@@ -695,6 +695,11 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 		"link":    sc.sess.Link,
 		"model":   sc.sess.Model,
 	}
+	if out.reason == state.ReasonDone && out.outcome.Kind == OutcomeScope {
+		data["reason"] = state.ReasonNeedsScope
+		data["scope_paths"] = out.outcome.Paths
+		data["scope_reason"] = out.outcome.Reason
+	}
 	if u := out.result.Usage; u != nil {
 		data["tokens"] = int64(u.TokensIn + u.TokensOut)
 		data["usage"] = bus.SessionUsage{

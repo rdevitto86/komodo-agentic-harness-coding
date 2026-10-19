@@ -128,6 +128,10 @@ func statusFrames(frames []engine.Reply, wait bool) StatusData {
 		if len(final.Data) > 0 {
 			_ = json.Unmarshal(final.Data, &fin)
 		}
+		// The final frame is the state at the moment the wait ended, so its blocked rows win over an earlier frame's.
+		if len(fin.Blocked) > 0 {
+			sd.Runs, sd.Blocked = fin.Runs, fin.Blocked
+		}
 		sd.Waited = fin.Waited
 	}
 
