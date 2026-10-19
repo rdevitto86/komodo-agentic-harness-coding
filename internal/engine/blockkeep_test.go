@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,6 +10,13 @@ import (
 
 // A Task Manager that holds a scope request must still be up to take the answer after the block's cancel order.
 func TestBlockedScopeGroupKeepsItsTaskManagerForTheAnswer(t *testing.T) {
+	for _, endFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("session_end_first_%v", endFirst), func(t *testing.T) { blockedScopeKeepsItsTaskManager(t, endFirst) })
+	}
+}
+
+// blockedScopeKeepsItsTaskManager runs the scenario with the builder's needs_scope session.end before the ask or without it.
+func blockedScopeKeepsItsTaskManager(t *testing.T, endFirst bool) {
 	r := newRig(t, [][]string{{"tg-1"}})
 	answered := make(chan task.Command, 4)
 	r.tasks.script = func(string) func(*tmEnv) {
@@ -27,6 +35,16 @@ func TestBlockedScopeGroupKeepsItsTaskManagerForTheAnswer(t *testing.T) {
 						case StageIntake:
 							e.say(fact("ready", nil))
 						case StageBuild:
+							if endFirst {
+								e.say(fact("session.end", map[string]any{
+									"session":      "s1",
+									"agent":        "builder",
+									"task":         e.spec.Tasks[0],
+									"reason":       "needs_scope",
+									"scope_paths":  []string{"shared/util.go"},
+									"scope_reason": "helper",
+								}))
+							}
 							e.send(task.Message{
 								ID:   "esc",
 								Kind: task.MsgEscalate,

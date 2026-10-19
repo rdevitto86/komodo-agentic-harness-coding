@@ -104,7 +104,8 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 	case "provider", "crash":
 		c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
 	case "needs_scope":
-		// The scope.ask escalation that follows carries the request; applying the rules here would spend the ask first.
+		// The block rows block the group; the scope.ask that follows finds the ask spent and attaches to that block.
+		c.scopeRules(ScopeAsk{Task: e.Task, Paths: e.ScopePaths, Reason: e.ScopeReason})
 	}
 
 	return true
@@ -255,6 +256,10 @@ func (c *calc) restartAgent(agent string) {
 
 // scopeAsk applies the scope rules to a builder's request for more files.
 func (c *calc) scopeAsk() bool {
+	// A builder's session end already blocked the group and spent the ask; this ask carries the escalation the answer replies to.
+	if c.s.Stage == StageBlocked && c.s.Block.Reason == state.ReasonNeedsScope {
+		return true
+	}
 	if c.s.Stage != StageBuild {
 		return false
 	}

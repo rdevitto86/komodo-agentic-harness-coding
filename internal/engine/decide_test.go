@@ -550,6 +550,28 @@ func TestLeaseLostEndsTheGroupAndReleasesNothing(t *testing.T) {
 	}
 }
 
+func TestBuilderNeedsScopeEndBlocksAndTheFollowingAskIsNotSpentTwice(t *testing.T) {
+	end := in(InSessionEnd, SessionEndData{SessionEnd: bus.SessionEnd{
+		GroupFacts:  bus.GroupFacts{Reason: "needs_scope"},
+		Agent:       "builder",
+		Task:        "t1",
+		ScopePaths:  []string{"a/b.go"},
+		ScopeReason: "need it",
+	}})
+	r := apply(t, claimed(), end)
+	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonNeedsScope || !r.State.Tasks[0].ScopeAsked ||
+		slices.Contains(kinds(r), OrderScope) {
+		t.Fatalf("session.end: stage %q reason %q asked %v orders %v", r.State.Stage, r.State.Block.Reason,
+			r.State.Tasks[0].ScopeAsked, kinds(r))
+	}
+
+	ask := in(InScopeAsk, ScopeAsk{Task: "t1", Paths: []string{"a/b.go"}, Reason: "need it", Escalation: "esc-1"})
+	a := apply(t, r.State, ask)
+	if a.State.Stage != StageBlocked || a.State.Block.Reason != state.ReasonNeedsScope || slices.Contains(kinds(a), OrderScope) {
+		t.Fatalf("scope.ask: stage %q reason %q orders %v", a.State.Stage, a.State.Block.Reason, kinds(a))
+	}
+}
+
 func TestScopeRules(t *testing.T) {
 	ask := func(deny string) Input {
 		return in(InScopeAsk, ScopeAsk{Task: "t1", Paths: []string{"a/b.go"}, Reason: "need it", Deny: deny})

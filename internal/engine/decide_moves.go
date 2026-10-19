@@ -186,6 +186,9 @@ func (c *calc) blockReason(in Input) (state.Reason, string, bool) {
 		if r, d, ok := c.endBlock(decode[SessionEndData](in.Data).SessionEnd); ok {
 			return r, d, true
 		}
+		if c.scopeBlock != nil {
+			return state.ReasonNeedsScope, c.scopeBlock.Reason, true
+		}
 	case InScopeAsk:
 		if c.scopeBlock != nil {
 			return state.ReasonNeedsScope, c.scopeBlock.Reason, true

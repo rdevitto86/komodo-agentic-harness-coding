@@ -403,15 +403,15 @@ func (g *group) tmUp() bool {
 	return g.cmds != nil
 }
 
-// holdsScopeRequest reports whether a block's cancel meets a Task Manager that holds the group's open scope request; it
-// stays up for the answer.
+// holdsScopeRequest reports whether a block's cancel meets a Task Manager that holds the group's open scope request, or is
+// about to raise it after the session end that blocked the group; it stays up for the answer.
 func (g *group) holdsScopeRequest(o Order) bool {
 	if decode[map[string]string](o.Data)["cause"] != "block" {
 		return false
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.pendingEsc != ""
+	return g.pendingEsc != "" || (g.snap.Stage == StageBlocked && g.snap.Block.Reason == state.ReasonNeedsScope)
 }
 
 // attachLanding records the epic's landing plan in a Commit order's data.
