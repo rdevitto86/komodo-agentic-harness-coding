@@ -195,6 +195,8 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 		round.Result = "cancelled"
 	case e.Reason == "paused" && s.Stage == StagePaused:
 		c.pauseAgain(e)
+	case e.Reason == "done":
+		// A judge that ended done gave its result; the Task Manager reports the round, so nothing is charged or restarted.
 	case e.Reason == "billing" || e.Reason == "paused" || e.Reason == "needs_scope":
 	case e.Reason == "crash":
 		s.Counters.Crashes++

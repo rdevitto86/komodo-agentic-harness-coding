@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,28 @@ func TestOverrideInsideTheWindowIsAppliedBeforeItReplies(t *testing.T) {
 	st := r.store.get("g-tg-1")
 	if st.Stage != StageTestReview || st.Counters.RetriesLeft != 2 || st.Counters.Overrides != 1 {
 		t.Fatalf("group %s, %d retries left, %d overrides", st.Stage, st.Counters.RetriesLeft, st.Counters.Overrides)
+	}
+}
+
+func TestJudgeSessionsThatEndDoneNeverSpendARetry(t *testing.T) {
+	for _, agent := range []string{"tester", "reviewer"} {
+		end := in(InSessionEnd, SessionEndData{SessionEnd: bus.SessionEnd{
+			GroupFacts: bus.GroupFacts{Reason: "done"},
+			Agent:      agent,
+		}})
+		r := apply(t, failedRound(), end)
+		if r.State.Counters.RetriesLeft != 2 || slices.Contains(subtypes(r), "retry.spent") || len(r.Orders) != 0 {
+			t.Errorf("%s: left %d emits %v orders %v", agent, r.State.Counters.RetriesLeft, subtypes(r), kinds(r))
+		}
+	}
+	for _, reason := range []string{"no_result", "schema_fail", "timeout", "idle"} {
+		end := in(InSessionEnd, SessionEndData{SessionEnd: bus.SessionEnd{
+			GroupFacts: bus.GroupFacts{Reason: reason},
+			Agent:      "tester",
+		}})
+		if r := apply(t, failedRound(), end); r.State.Counters.RetriesLeft != 1 {
+			t.Errorf("%s spent %d, want 1", reason, 2-r.State.Counters.RetriesLeft)
+		}
 	}
 }
 
