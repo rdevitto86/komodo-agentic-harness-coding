@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
@@ -47,8 +48,14 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	ev := req.Event
 	rc, isAnswer := dataOf[*bus.RunContinue](ev)
 	overrideAnswer := isAnswer && rc.Answer == "override"
+
+	// The peer is checked once; a process whose terminal cannot be confirmed counts as having none.
+	terminal := sync.OnceValue(func() bool {
+		ok, err := e.peer(w.c)
+		return err == nil && ok
+	})
 	if req.Flags.Override || overrideAnswer {
-		if ok, err := e.peer(w.c); err != nil || !ok {
+		if !terminal() {
 			e.fail(w, req.ID, &codeError{CodeNoTerminal, "--override needs a terminal: the requesting process has none"})
 			return
 		}
@@ -64,6 +71,9 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	if req.Flags.Approve || req.Flags.Deny || req.Flags.Override {
 		if isAnswer {
 			rc.Request = bus.ID(req.ID)
+			if terminal() {
+				e.m.Person(req.ID)
+			}
 			if err := e.await(ctx, req, *ev); err != nil {
 				e.fail(w, req.ID, err)
 				return
@@ -114,6 +124,9 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 
 	if ev.Run == "" {
 		ev.Run = bus.ID(newID(e.clk.Now()))
+	}
+	if rs.Source == "cli" && terminal() {
+		e.m.Person(req.ID)
 	}
 	if err := e.await(ctx, req, *ev); err != nil {
 		e.fail(w, req.ID, err)

@@ -25,12 +25,13 @@ func groupWait(streak int) time.Duration {
 	return 0
 }
 
-// holdFor holds the group's session starts back for wait and asks for them again when it ends; 0 holds nothing.
+// holdFor holds the group's session starts back for wait and asks for them again when it ends; 0 leaves a hold alone.
 func (g *group) holdFor(wait time.Duration) {
-	g.clearHold()
 	if wait <= 0 {
 		return
 	}
+
+	g.clearHold()
 
 	g.holdUntil = g.now().Add(wait)
 	g.holdT = g.m.clk.AfterFunc(wait, func() { g.enqueue(Input{Kind: InHoldDue, Group: g.spec.ID}) })

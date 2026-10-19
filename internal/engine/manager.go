@@ -93,7 +93,8 @@ type Manager struct {
 	parked   map[string]Timer     // override timers of saved groups no run holds, by group id
 	parkedBy map[string]parkedRow // those groups and their records, by group id
 	expect   map[string]chan error
-	conts    map[string]chan error
+	persons  map[string]bool // requests sent from a process with a controlling terminal
+	conts   map[string]chan error
 	beats    map[string]time.Time
 	pool     *Pool
 	chg      chan struct{}
@@ -136,6 +137,7 @@ func New(d Deps) *Manager {
 		parked:   map[string]Timer{},
 		parkedBy: map[string]parkedRow{},
 		expect:   map[string]chan error{},
+		persons:  map[string]bool{},
 		conts:    map[string]chan error{},
 		beats:    map[string]time.Time{},
 		chg:      make(chan struct{}),
@@ -182,6 +184,14 @@ func (m *Manager) Expect(request string) <-chan error {
 	m.expect[request] = ch
 	m.mu.Unlock()
 	return ch
+}
+
+// Person marks a request as sent from a process with a controlling terminal; once the command is accepted, that person
+// ends every pause and the severe state.
+func (m *Manager) Person(request string) {
+	m.mu.Lock()
+	m.persons[request] = true
+	m.mu.Unlock()
 }
 
 // Changes returns a channel that closes at the next change to a run or a group.
@@ -272,15 +282,10 @@ func (m *Manager) dispatch(ctx context.Context, e bus.Event) {
 	var h func()
 	switch d := e.Data.(type) {
 	case *bus.RunStart:
-		if d.Source == "cli" {
-			m.errs.person()
-		}
-
 		h = func() { m.settle(string(d.Request), m.startRun(ctx, e, d)) }
 	case *bus.RunStop:
 		h = func() { m.settle(string(d.Request), m.stopTarget(ctx, d.Target)) }
 	case *bus.RunContinue:
-		m.errs.person()
 		h = func() { m.settle(string(d.Request), m.continueTarget(ctx, d, string(e.Run))) }
 	default:
 		return
@@ -289,10 +294,20 @@ func (m *Manager) dispatch(ctx context.Context, e bus.Event) {
 	m.spawn(h)
 }
 
-// settle reports a command's outcome to its waiter and, for a refusal, to the event bus.
+// settle reports a command's outcome to its waiter and, for a refusal, to the event bus; an accepted command from a
+// person at a terminal ends every pause and the severe state.
 func (m *Manager) settle(request string, err error) {
 	if request == "" {
 		return
+	}
+
+	m.mu.Lock()
+	person := m.persons[request]
+	delete(m.persons, request)
+	m.mu.Unlock()
+
+	if person && err == nil {
+		m.errs.person()
 	}
 
 	var ev bus.Payload = &bus.RequestAccepted{RequestRef: bus.RequestRef{Request: bus.ID(request)}}
