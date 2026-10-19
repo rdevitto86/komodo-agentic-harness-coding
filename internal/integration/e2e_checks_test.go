@@ -397,8 +397,8 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 	if gaps < 1 {
 		t.Errorf("replay marked %v gaps, want at least 1", gaps)
 	}
-	if len(steps) == 0 || len(steps) > lines {
-		t.Errorf("replay listed %d events; the log holds %d whole lines", len(steps), lines)
+	if len(steps) != lines {
+		t.Errorf("replay listed %d events; the log holds %d whole lines, and replay must list every one", len(steps), lines)
 	}
 	if got := r.model.callCounts(); len(got) != len(calls) || got["builder"] != calls["builder"] ||
 		got["tester"] != calls["tester"] || got["reviewer"] != calls["reviewer"] {
