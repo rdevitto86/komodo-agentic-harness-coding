@@ -11,6 +11,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
@@ -61,6 +62,14 @@ type Contexts interface {
 type TaskGroups interface {
 	// Start runs one Task Manager goroutine for the group and returns its channels.
 	Start(ctx context.Context, spec GroupSpec, h cache.Handle) (Channels, error)
+}
+
+// ToolHub holds the bound tools of every running model session; the tool verbs call into it.
+type ToolHub interface {
+	// Definitions describes the tools the session may see; false when no such session runs.
+	Definitions(session string) ([]llm.ToolDef, bool)
+	// Call runs one tool call behind the session's guard and returns the reply text; false when no such session runs.
+	Call(ctx context.Context, session, name string, args json.RawMessage) (string, bool)
 }
 
 // PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
@@ -150,6 +159,7 @@ type Deps struct {
 	Caches   CacheStore
 	Contexts Contexts
 	Tasks    TaskGroups
+	Tools    ToolHub
 	Plans    PlanSource
 	Git      EpicGit
 	Commits  EpicCommitter

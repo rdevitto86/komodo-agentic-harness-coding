@@ -1,8 +1,11 @@
 package task
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
@@ -66,5 +69,55 @@ func TestRejectedResultIsSentBackAsAResumeOnProgramLinks(t *testing.T) {
 		if resumed != tc.wantResume {
 			t.Errorf("%s: %d resumes, want %d", tc.link, resumed, tc.wantResume)
 		}
+	}
+}
+
+func TestProgramSessionToolsAreRoutedToTheEngineAndEndWithTheSession(t *testing.T) {
+	r := linkRig(t, llm.ClaudeCLI)
+	routes := NewToolRoutes()
+	r.m.c.Tools, r.m.c.Socket = routes, "/h/state/engine.sock"
+
+	var (
+		session, wrote, done string
+		advertised           int
+	)
+
+	r.model.on("builder", func(s llm.Session) (llm.Stream, error) {
+		raw, err := os.ReadFile(filepath.Join(s.Dir, "mcp.json"))
+		if err != nil {
+			return nil, err
+		}
+
+		var doc struct {
+			MCPServers map[string]struct {
+				Args []string
+				Env  map[string]string
+			} `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return nil, err
+		}
+
+		e := doc.MCPServers["komodo"]
+		session = e.Args[len(e.Args)-1]
+		if e.Env[EnvSocket] != "/h/state/engine.sock" {
+			t.Errorf("mcp.json socket = %q", e.Env[EnvSocket])
+		}
+
+		ctx := context.Background()
+		defs, _ := routes.Definitions(session)
+		advertised = len(defs)
+		wrote, _ = routes.Call(ctx, session, "write", json.RawMessage(`{"path":"src/a.go","content":"a\n"}`))
+		done, _ = routes.Call(ctx, session, "task_done", json.RawMessage(`{"task":"t1"}`))
+
+		return sayResult(builderDone)(s)
+	})
+	r.reachCleanup()
+
+	if advertised == 0 || !strings.HasPrefix(wrote, "created src/a.go") || !strings.HasPrefix(done, "exit code 0") {
+		t.Errorf("advertised %d tools, write = %q, task_done = %q", advertised, wrote, done)
+	}
+	if _, ok := routes.Definitions(session); ok {
+		t.Error("the route must end with the session")
 	}
 }

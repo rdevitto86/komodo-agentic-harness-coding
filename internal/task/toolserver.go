@@ -7,82 +7,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
-// ToolServerConfig is what the tool server process of one session starts from.
+// ToolServerConfig is what the tool server process of one session starts from: who it serves and where the engine listens.
 type ToolServerConfig struct {
-	Agent        string
-	Session      string
-	Worktree     string
-	Dir          string              // the session folder
-	Files        []string            // the group's effective file list
-	Permissions  Permissions         // tools, run classes, guard rows and outside servers
-	Commands     map[string][]string // command class to argv
-	Format       []string            // format command argv, or none
-	RefusalLimit int
-	Servers      []OutsideServer // the enabled outside tool servers
+	Agent   string
+	Session string
+	Socket  string // the engine's control socket; empty means the one under the Komodo home folder
 }
 
-// Bind compiles the guard for the session, registers the tools over env and binds the permitted ones. The caller sets the
-// environment's sandbox, host git and callbacks; the rest comes from the
-// configuration.
-func (c ToolServerConfig) Bind(home string, env Env) (*Bound, error) {
-	env.Worktree, env.Dir, env.Commands, env.Format = c.Worktree, c.Dir, c.Commands, c.Format
-
-	rows, err := LoadRows(home)
-	if err != nil {
-		return nil, err
-	}
-
-	g, err := NewGuard(
-		rows,
-		Binding{Agent: c.Agent, Permissions: c.Permissions, Worktree: c.Worktree, Files: c.Files},
-		c.RefusalLimit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("compile the guard: %w", err)
-	}
-
-	reg := NewRegistry(&env)
-
-	var conns []*OutsideConn
-	if len(c.Servers) > 0 {
-		conns, err = StartAllowed(
-			context.Background(),
-			env.Confiner,
-			env.Instance,
-			c.Permissions,
-			c.Servers,
-			os.Getenv,
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	for _, o := range conns {
-		if err = reg.AddOutsideConn(context.Background(), o); err != nil {
-			break
-		}
-	}
-
-	var b *Bound
-	if err == nil {
-		b, err = reg.Bind(c.Permissions.Tools, g)
-	}
-	if err != nil {
-		for _, o := range conns {
-			_ = o.Close()
-		}
-		return nil, err
-	}
-
-	b.outside = conns
-	return b, nil
+// ToolBackend is where the tool server sends what the program asks; the engine's tools answer it through a relay.
+type ToolBackend interface {
+	// List returns the definitions of the tools the session may see.
+	List(ctx context.Context) ([]llm.ToolDef, error)
+	// Call runs one tool call and returns the text the model receives.
+	Call(ctx context.Context, name string, args json.RawMessage) (string, error)
 }
 
 // rpcRequest is one JSON-RPC message from the client.
@@ -112,48 +55,14 @@ const mcpVersion = "2024-11-05"
 // maxRPCLine is the longest request line the tool server reads.
 const maxRPCLine = 16 << 20
 
-// The variables the tool server process reads its inputs from; the files and permissions travel as JSON text.
-const (
-	EnvWorktree     = "KOMODO_TOOLS_WORKTREE"
-	EnvSessionDir   = "KOMODO_TOOLS_SESSION_DIR"
-	EnvFiles        = "KOMODO_TOOLS_FILES"
-	EnvPermissions  = "KOMODO_TOOLS_PERMISSIONS"
-	EnvCommands     = "KOMODO_TOOLS_COMMANDS"
-	EnvFormat       = "KOMODO_TOOLS_FORMAT"
-	EnvRefusalLimit = "KOMODO_TOOLS_REFUSAL_LIMIT"
-	EnvServers      = "KOMODO_TOOLS_SERVERS"
-)
+// EnvSocket is the variable that names the engine's control socket for the tool server process.
+const EnvSocket = "KOMODO_TOOLS_SOCKET"
 
 // toolServerVerb is the hidden verb of the same binary that runs the tool server.
 var toolServerVerb = []string{"internal", "tools"}
 
-// MCPConfig renders the mcp.json of a session: the one tool server entry, with its inputs in arguments and environment.
+// MCPConfig renders the mcp.json of a session: the one tool server entry, with the session and the socket it relays to.
 func MCPConfig(exe string, c ToolServerConfig) ([]byte, error) {
-	files, err := json.Marshal(c.Files)
-	if err != nil {
-		return nil, fmt.Errorf("encode the file list: %w", err)
-	}
-
-	perms, err := json.Marshal(c.Permissions)
-	if err != nil {
-		return nil, fmt.Errorf("encode the permissions: %w", err)
-	}
-
-	cmds, err := json.Marshal(c.Commands)
-	if err != nil {
-		return nil, fmt.Errorf("encode the commands: %w", err)
-	}
-
-	servers, err := json.Marshal(c.Servers)
-	if err != nil {
-		return nil, fmt.Errorf("encode the outside servers: %w", err)
-	}
-
-	format, err := json.Marshal(c.Format)
-	if err != nil {
-		return nil, fmt.Errorf("encode the format command: %w", err)
-	}
-
 	entry := map[string]any{
 		"command": exe,
 		"args": append(
@@ -163,16 +72,7 @@ func MCPConfig(exe string, c ToolServerConfig) ([]byte, error) {
 			"--session",
 			c.Session,
 		),
-		"env": map[string]string{
-			EnvWorktree:     c.Worktree,
-			EnvSessionDir:   c.Dir,
-			EnvFiles:        string(files),
-			EnvPermissions:  string(perms),
-			EnvCommands:     string(cmds),
-			EnvFormat:       string(format),
-			EnvRefusalLimit: strconv.Itoa(c.RefusalLimit),
-			EnvServers:      string(servers),
-		},
+		"env": map[string]string{EnvSocket: c.Socket},
 	}
 
 	return json.MarshalIndent(
@@ -199,36 +99,14 @@ func LoadToolServer(args []string, getenv func(string) string) (ToolServerConfig
 		return c, errors.New("the tool server needs --agent and --session")
 	}
 
-	c.Worktree, c.Dir = getenv(EnvWorktree), getenv(EnvSessionDir)
-	targets := map[string]any{
-		EnvFiles:       &c.Files,
-		EnvPermissions: &c.Permissions,
-		EnvCommands:    &c.Commands,
-		EnvFormat:      &c.Format,
-		EnvServers:     &c.Servers,
-	}
-
-	for name, dst := range targets {
-		if v := getenv(name); v != "" {
-			if err := json.Unmarshal([]byte(v), dst); err != nil {
-				return c, fmt.Errorf("read %s: %w", name, err)
-			}
-		}
-	}
-
-	n, err := strconv.Atoi(getenv(EnvRefusalLimit))
-	if err != nil {
-		return c, fmt.Errorf("read %s: %w", EnvRefusalLimit, err)
-	}
-
-	c.RefusalLimit = n
+	c.Socket = getenv(EnvSocket)
 	return c, nil
 }
 
 // ServeMCP answers the Model Context Protocol on in and out until in ends: initialize, ping, tools/list and tools/call. Tool
 // calls run in their own goroutines so one long command does not
 // hold up the next call.
-func ServeMCP(ctx context.Context, in io.Reader, out io.Writer, b *Bound) error {
+func ServeMCP(ctx context.Context, in io.Reader, out io.Writer, b ToolBackend) error {
 	var (
 		wmu sync.Mutex
 		wg  sync.WaitGroup
@@ -279,7 +157,7 @@ func ServeMCP(ctx context.Context, in io.Reader, out io.Writer, b *Bound) error 
 			continue
 		}
 
-		send(answer(b, req))
+		send(answer(ctx, b, req))
 	}
 
 	wg.Wait()
@@ -291,7 +169,7 @@ func ServeMCP(ctx context.Context, in io.Reader, out io.Writer, b *Bound) error 
 }
 
 // answer replies to every method except tools/call.
-func answer(b *Bound, req rpcRequest) rpcReply {
+func answer(ctx context.Context, b ToolBackend, req rpcRequest) rpcReply {
 	r := rpcReply{ID: req.ID}
 	switch req.Method {
 	case "initialize":
@@ -307,19 +185,22 @@ func answer(b *Bound, req rpcRequest) rpcReply {
 	case "ping":
 		r.Result = map[string]any{}
 	case "tools/list":
-		tools := []map[string]any{}
+		defs, err := b.List(ctx)
+		if err != nil {
+			r.Error = &rpcError{Code: -32603, Message: "list the tools: " + err.Error()}
+			break
+		}
 
-		for _, n := range b.Advertised() {
-			if d, ok := b.Definition(n); ok {
-				tools = append(
-					tools,
-					map[string]any{
-						"name":        d.Name,
-						"description": d.Description,
-						"inputSchema": d.InputSchema,
-					},
-				)
-			}
+		tools := []map[string]any{}
+		for _, d := range defs {
+			tools = append(
+				tools,
+				map[string]any{
+					"name":        d.Name,
+					"description": d.Description,
+					"inputSchema": d.InputSchema,
+				},
+			)
 		}
 
 		r.Result = map[string]any{"tools": tools}
@@ -330,8 +211,8 @@ func answer(b *Bound, req rpcRequest) rpcReply {
 	return r
 }
 
-// callTool runs one tools/call through the bound tools, so the guard sees it first.
-func callTool(ctx context.Context, b *Bound, req rpcRequest) rpcReply {
+// callTool forwards one tools/call to the backend, where the guard sees it first.
+func callTool(ctx context.Context, b ToolBackend, req rpcRequest) rpcReply {
 	var p struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -343,12 +224,16 @@ func callTool(ctx context.Context, b *Bound, req rpcRequest) rpcReply {
 		}
 	}
 
-	reply := b.Dispatch(ctx, p.Name, p.Arguments)
-	failed := strings.HasPrefix(reply.Text, "error:") ||
-		strings.HasPrefix(reply.Text, "Refused by ")
+	text, err := b.Call(ctx, p.Name, p.Arguments)
+	if err != nil {
+		text = "error: " + err.Error()
+	}
+
+	failed := strings.HasPrefix(text, "error:") ||
+		strings.HasPrefix(text, "Refused by ")
 
 	return rpcReply{ID: req.ID, Result: map[string]any{
-		"content": []map[string]string{{"type": "text", "text": reply.Text}},
+		"content": []map[string]string{{"type": "text", "text": text}},
 		"isError": failed,
 	}}
 }

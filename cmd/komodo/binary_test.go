@@ -75,16 +75,10 @@ func runChild(t *testing.T, cmd *exec.Cmd) (int, string, string) {
 }
 
 // mcpEntry renders the mcp.json of a session and returns the command line and environment it holds.
-func mcpEntry(t *testing.T, worktree string) (args, env []string) {
+func mcpEntry(t *testing.T, socket string) (args, env []string) {
 	t.Helper()
 
-	cfg := task.ToolServerConfig{
-		Agent: "reviewer", Session: "s-1", Worktree: worktree, Dir: t.TempDir(), Commands: map[string][]string{},
-		Permissions:  task.Permissions{Tools: []string{"read", "search"}},
-		RefusalLimit: 3,
-	}
-
-	raw, err := task.MCPConfig(binaryPath, cfg)
+	raw, err := task.MCPConfig(binaryPath, task.ToolServerConfig{Agent: "builder", Session: "s-1", Socket: socket})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,15 +103,8 @@ func mcpEntry(t *testing.T, worktree string) (args, env []string) {
 }
 
 func TestToolsBinaryAnswersInitializeAndToolsList(t *testing.T) {
-	worktree, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(worktree, "a.txt"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	args, env := mcpEntry(t, worktree)
+	x := newToolEngine(t)
+	args, env := mcpEntry(t, x.socket)
 	cmd := child(t, "", env, args...)
 	cmd.Stdin = nil
 
@@ -176,7 +163,7 @@ func TestToolsBinaryAnswersInitializeAndToolsList(t *testing.T) {
 	for _, tl := range tools {
 		names = append(names, tl.(map[string]any)["name"].(string))
 	}
-	if strings.Join(names, ",") != "read,search" {
+	if len(names) != 11 || names[0] != "read" {
 		t.Fatalf("tools/list = %v", names)
 	}
 

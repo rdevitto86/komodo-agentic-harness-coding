@@ -176,6 +176,8 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		Limits:    limits{s.machine},
 		Cache:     h, Commands: cmds,
 		Base: base, Language: lang, Exe: exe,
+		Socket: filepath.Join(s.home, "state", engine.SocketName),
+		Tools:  s.tools,
 		Meta: task.GroupMeta{
 			Repo:       spec.Repo,
 			Epic:       spec.Epic,

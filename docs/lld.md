@@ -206,7 +206,7 @@ Go package `internal/cli`, plus the program entry point.
 |---|---|
 | `cmd/komodo/main.go` | Builds the harness parts, calls `cli.New(deps).Run(os.Args)` and exits with the code returned; also runs the hidden `internal engine` verb in the foreground |
 | `cmd/komodo/wire.go` | The engine process's shared parts: event registration, settings, bus, model links, sandbox backends, the lease and machine records, and one kit per repository |
-| `cmd/komodo/tools.go` | The hidden `internal tools` verb: loads one session's tool server inputs, binds the tools and serves them over standard input and output |
+| `cmd/komodo/tools.go` | The hidden `internal tools` verb: serves the Model Context Protocol over standard input and output and relays every request to the engine's control socket, holding no state |
 | `cmd/komodo/wire_dump_unix.go`, `wire_dump_windows.go` | The goroutine dump on a signal, on Unix only |
 | `cmd/komodo/wire_engine.go` | `buildEngine`: the Runtime Manager's dependencies, the hub that routes its calls to the repository they name, the per-repository kit and the plan router |
 | `cmd/komodo/wire_tasks.go` | Builds each group's Task Manager from the group spec and the task lists, serves it over the command and reply channels, and adapts the Commit Handler to the group |
@@ -5502,9 +5502,10 @@ The Go package is `internal/engine` ([HLD Appendix A](hld.md#appendix-a-traceabi
 | File | Holds |
 |---|---|
 | `engine.go` | `Engine`, `NewEngine`, `Serve`: process lifetime, the exit rule, the engine heartbeat file |
-| `proto.go` | `Request`, `Reply`, `Flags` and the reply codes |
+| `proto.go` | `Request`, `Reply`, `Flags`, `ToolRequest` and the reply codes |
 | `socket.go` | `ConnPrinter`, `Dial`, `Conn`, the listener's connection loop, one goroutine per connection |
 | `verbs.go` | `Engine.handle` and what each verb does |
+| `tools.go` | The `tool_list` and `tool_call` verbs: they pass a session's tool requests to the `ToolHub` |
 | `replay.go` | Resolves a replay target: a live group, a finished group's latest run from its saved record, or a run id |
 | `status.go` | `StatusData`, `Manager.Snapshot`, and the small views the engine reads from the Runtime Manager |
 | `schedule.go` | The schedule queue loop over `state.ScheduleEntry` |
@@ -5712,11 +5713,12 @@ The CLI and the engine exchange newline-delimited JSON on `~/.komodo/state/engin
 // Request is one frame from the CLI to the engine.
 type Request struct {
 	ID     string `json:"id"`               // minted by the CLI; every reply repeats it
-	Verb   string `json:"verb"`             // run, stop, status, abandon, replay, plan or clean
+	Verb   string `json:"verb"`             // run, stop, status, abandon, replay, plan, clean, tool_list or tool_call
 	Target string `json:"target,omitempty"` // an epic label, a group label or a run id
 	Root   string `json:"root,omitempty"`   // the repository root the command ran in; status covers this repository unless Flags.All is set
 	Flags  Flags  `json:"flags"`
 	Event  *Event `json:"event,omitempty"`  // the run-start, run-stop, run-continue or plan event the CLI publishes
+	Tool   *ToolRequest `json:"tool,omitempty"` // the session and call of a tool_list or tool_call request
 }
 
 // Flags are the flags a verb may carry.
@@ -5754,6 +5756,29 @@ type Reply struct {
 | `run_refused` | The run was refused, such as a dependency cycle or a dependency outside the run that is not Done |
 | `not_blocked` | `--approve` or `--deny` named a group that is not waiting for an answer |
 | `engine_stopping` | The engine is past its exit check; the CLI starts a new engine and sends the request again |
+| `unknown_session` | A `tool_list` or `tool_call` named a model session that is not running, or has ended |
+
+A subscription session's tool server sends two more verbs over the same socket, each on a connection of its own so a long `run` never holds up the next call. `tool_list` returns the tools the session may see. `tool_call` runs one call behind the session's guard, with the same tool functions the API link's loop uses, and returns the reply text. The engine ends the call when the connection closes. The `ToolHub` interface in `deps.go` is what the engine calls; the Task Manager's route table implements it ([11.2](#112-package-layout)).
+
+```go
+// ToolRequest names the model session a tool request is for and, for a call, the tool and its arguments as JSON text.
+type ToolRequest struct {
+	Session string          `json:"session"`
+	Name    string          `json:"name,omitempty"`
+	Args    json.RawMessage `json:"args,omitempty"`
+}
+
+// ToolList is the data of a tool_list reply: the tools the session may see.
+type ToolList struct{ Tools []llm.ToolDef `json:"tools"` }
+
+// ToolAnswer is the data of a tool_call reply: the text the model receives, a refusal included.
+type ToolAnswer struct{ Text string `json:"text"` }
+```
+
+```json
+{"id":"s-1-4","verb":"tool_call","tool":{"session":"s-1","name":"run","args":{"class":"test"}}}
+{"id":"s-1-4","status":"ok","data":{"text":"exit code 0\nok"},"final":true}
+```
 
 `ConnPrinter` is the engine's `fault.Printer`:
 
@@ -8558,14 +8583,15 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `tools_run.go` | `run` |
 | `tools_git.go` | `diff`, `git_read` |
 | `tools_submit.go` | `submit_finding`, `task_done`, `skill`, `lint_backlog` |
-| `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output; it also fronts the enabled outside tool servers |
+| `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output; it sends each request to a `ToolBackend`, which is the relay to the engine |
+| `toolroutes.go` | `ToolRoutes`: the bound tools of each running subscription session, which the engine's `tool_list` and `tool_call` verbs run |
 | `outside.go` | Starts each enabled outside tool server inside the sandbox and forwards its guarded calls |
 | `gitptr.go` | Records the worktree's `.git` pointer and checks it before any host git call |
 | `collab.go`, `commitseam.go` | `Collaborators`, `Role`, `Outcome`, `Git`, `LimitStore`, `Committer` and `GroupMeta` |
 | `sessrun.go` | Runs one agent's session: brief, link choice, slot, tools, supervisor, judge and `result.json` |
 | `roles.go`, `briefer.go` | The builder, tester and reviewer over `internal/agent`; the briefer and base-commit tree over `internal/contextmgr` |
 | `gitcli.go` | `GitCLI`: the `Git` over the host git rules, including `AddWorktree` |
-| `toolwatch.go` | Counts tool calls in flight, activity and refusals for the supervisor |
+| `toolwatch.go` | Counts tool calls in flight, activity and refusals for the supervisor, on either link |
 | `proc.go`, `proc_unix.go`, `proc_windows.go` | Process groups, the 10-minute timeout, the output cap and the whole-tree kill, per platform |
 | `policy.json` | The guard rows with scopes, the secret patterns and the test-sibling rules, compiled into the binary |
 
@@ -9435,14 +9461,14 @@ One folder per session. The supervisor writes the brief, the request and the res
 |---|---|---|
 | `brief.md` | Supervisor, once | The prompt the model received |
 | `system.md` | Supervisor, once | The output format only; never role or rule text |
-| `mcp.json` | Supervisor, once, for the subscription link | The one tool server entry, with its start-up inputs in the environment |
+| `mcp.json` | Supervisor, once, for the subscription link | The one tool server entry: the agent and the session in its arguments, and the control socket path in `KOMODO_TOOLS_SOCKET` |
 | `scope.json` | Supervisor, on every start and resume | The group's effective file list, including paths a scope answer added |
 | `request.json` | Supervisor | How the session was launched: `session`, `group`, `task`, `agent`, `link`, `model`, `cost_class`, `effort`, `ctx`, `brief_tokens`, `resume` |
 | `stream.jsonl` | Task Manager | The model's raw output stream |
 | `messages.jsonl` | The tool loop | One JSON object per turn on API links: `turn`, `role`, `content`, `ts` |
 | `result.json` | Supervisor | `session`, `exit_reason`, `result`, `usage`, `handle` |
 | `out/` | The tool runtime | One `<call>.log` per capped call: the command's combined output exactly as produced |
-| `tools.jsonl` | The tool server or the tool loop | One `ToolLine` per tool start, tool end, refusal and finding |
+| `tools.jsonl` | The engine's bound tools, for either link | One `ToolLine` per tool start, tool end, refusal and finding |
 
 ```go
 // ToolLine is one line of tools.jsonl.
@@ -10272,8 +10298,8 @@ An agent's rows compile into a matcher once per session. A check is a map lookup
 #### Tool call and run
 
 1. At session start the registry binds the permitted tools to the session. A tool not in the list is neither advertised nor callable (row G1).
-2. On the subscription link the tool server talks to the program over standard input and output. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. The supervisor passes its inputs in `mcp.json`: the arguments name the agent and the session, and the environment carries the worktree, the file list and the permitted classes as JSON text. The tool server starts as the hidden verb `komodo internal tools` of the same binary, outside the 13 commands.
-3. On an API link, the tool loop calls the same tool functions in the harness process.
+2. On the subscription link the tool server talks to the program over standard input and output, and holds no state: it relays every request to the engine over the control socket ([7.3](#73-data-model)), one connection per request. It starts in under 100 ms because it reads nothing from disk, and it dies with its session. The supervisor passes its inputs in `mcp.json`: the arguments name the agent and the session, and the environment names the socket. The tool server starts as the hidden verb `komodo internal tools` of the same binary, outside the 13 commands. When no engine answers, or the session has ended, the call returns an error reply and no tool runs.
+3. The engine runs a relayed call on the session's bound tools, the same tool functions and guard the API link's tool loop uses, so every tool behaves the same on both links. The guard, the refusal count and the task record live only in the engine; `task_done` reruns the task's `done_when` command there.
 4. The guard runs before the tool. A refusal returns a reply naming the row and the allowed alternative.
 5. The reply is capped; the full output goes to `out/<call>.log`, and the capped reply names the path.
 6. A validated `submit_finding` becomes the fact `finding.submit`. The role judges its evidence; a finding whose quote is not at its `file:line` is dropped and logged, and does not block.
@@ -10316,7 +10342,7 @@ The tool server answers `initialize` inside the program's 30 s `MCP_TIMEOUT` (it
 Outside tool servers are off by default. A server is on for an agent only when a person adds it to the Context Manager's list and switches it on for that agent by name.
 
 1. The Runtime Manager copies only the enabled entries into `GroupSpec.Servers`, and names each one in the `Servers` list of the agents allowed to use it.
-2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Seatbelt, Bubblewrap and Docker offer only network on or off for a sandbox (Seatbelt can also filter by port); none limits traffic to named hosts. A server that lists `Hosts` therefore gets no network and a warning says so. Whether an egress proxy outside the sandbox should limit it to those hosts is [TODO: an egress proxy that limits an outside server to the hosts its entry lists ([G-264](#g-264))].
+2. At session start, for an agent with servers, the Task Manager starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Seatbelt, Bubblewrap and Docker offer only network on or off for a sandbox (Seatbelt can also filter by port); none limits traffic to named hosts. A server that lists `Hosts` therefore gets no network and a warning says so. Whether an egress proxy outside the sandbox should limit it to those hosts is [TODO: an egress proxy that limits an outside server to the hosts its entry lists ([G-264](#g-264))].
 3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call. The variables named in an entry's `Env` reach the server only when the entry also lists `Hosts`, because a secret is useful only for calling a remote service; the values come from the harness environment and are never put in the brief or shown to the model. An entry with `Env` and no `Hosts` receives none, and the start warns once per variable. Until the host limits above are settled, no server gets network, so none receives a variable yet.
 4. Every call passes the guard first, exactly like a built-in tool: row G1 refuses a name not in the permissions, and a refusal counts toward `guard.refusal_limit` (row G6).
 5. Every call, allowed or refused, is recorded: a `tool.outside` fact for an allowed call, and `tool.denied` for a refusal.

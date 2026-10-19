@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
 // Event is the bus event a request or a reply carries.
@@ -15,7 +16,7 @@ type Event = bus.Event
 type Request struct {
 	// minted by the CLI; every reply repeats it
 	ID string `json:"id"`
-	// run, stop, status, abandon, replay, plan or clean
+	// run, stop, status, abandon, replay, plan, clean, tool_list or tool_call
 	Verb string `json:"verb"`
 	// an epic label, a group label or a run id
 	Target string `json:"target,omitempty"`
@@ -24,6 +25,25 @@ type Request struct {
 	Flags Flags  `json:"flags"`
 	// the run-start, run-stop, run-continue or plan event the CLI publishes
 	Event *Event `json:"event,omitempty"`
+	// the session and the call of a tool_list or tool_call request
+	Tool *ToolRequest `json:"tool,omitempty"`
+}
+
+// ToolRequest names the model session a tool request is for and, for a call, the tool and its arguments as JSON text.
+type ToolRequest struct {
+	Session string          `json:"session"`
+	Name    string          `json:"name,omitempty"`
+	Args    json.RawMessage `json:"args,omitempty"`
+}
+
+// ToolList is the data of a tool_list reply: the tools the session may see.
+type ToolList struct {
+	Tools []llm.ToolDef `json:"tools"`
+}
+
+// ToolAnswer is the data of a tool_call reply: the text the model receives, a refusal included.
+type ToolAnswer struct {
+	Text string `json:"text"`
 }
 
 // Flags are the flags a verb may carry.
@@ -64,6 +84,9 @@ const (
 	VerbReplay  = "replay"
 	VerbPlan    = "plan"
 	VerbClean   = "clean"
+	// the two verbs the per-session tool server sends; the CLI never does
+	VerbToolList = "tool_list"
+	VerbToolCall = "tool_call"
 )
 
 // The values of Reply.Status.
@@ -81,4 +104,5 @@ const (
 	CodeRunRefused     = "run_refused"     // the run was refused, such as a dependency cycle
 	CodeNotBlocked     = "not_blocked"     // --approve or --deny named a group that is not waiting for an answer
 	CodeEngineStopping = "engine_stopping" // the engine is past its exit check; the CLI starts a new engine and resends
+	CodeUnknownSession = "unknown_session" // no running model session has this id, or it has ended
 )
