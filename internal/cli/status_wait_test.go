@@ -27,7 +27,7 @@ func TestStatusWaitKeepsTheBlockedRowsOfTheFinalFrame(t *testing.T) {
 
 func TestBlockedFixNamesAnAnswerOnlyForScopeAndRetries(t *testing.T) {
 	cases := map[string]string{
-		"retries":       "komodo run tg-1.1 --override in a terminal, before the window ends",
+		"retries":       "komodo run tg-1.1 --override in a terminal, within 60 minutes",
 		"state_invalid": "komodo run tg-1.1",
 		"needs_scope":   "komodo run tg-1.1 --approve or --deny",
 		"wall":          "komodo run tg-1.1",

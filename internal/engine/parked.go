@@ -231,7 +231,7 @@ func (m *Manager) parkedBlockedLocked(root string) []BlockedRow {
 			RunID:  r.st.Run,
 			Reason: string(state.ReasonRetries),
 			Question: fmt.Sprintf(
-				"%s has no retries left. A person may override in a terminal until %s.",
+				"%s has no tries left. A person may override in a terminal until %s to give it one final try.",
 				name,
 				r.st.Block.Until.Format(time.RFC3339),
 			),
