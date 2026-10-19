@@ -9482,7 +9482,7 @@ type ToolLine struct {
 }
 ```
 
-Only `denied` and `finding` lines become facts; `start` and `end` lines stay in the folder and feed the running-tool count that keeps a long command from counting as silence.
+The file is a record only: refusals and findings become facts when the call is dispatched, and the running-tool count that keeps a long command from counting as silence comes from the same dispatch.
 
 #### Exit reasons
 
@@ -15400,7 +15400,7 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | SWE-agent agent-computer interface, https://swe-agent.com/latest/background/aci/ | Lint before a write lands: a failing planner draft writes nothing |
 | Git objects, https://git-scm.com/book/en/v2/Git-Internals-Git-Objects | Content-addressed entries under a two-hex-digit folder fan-out |
 | Atlassian story points, https://www.atlassian.com/agile/project-management/estimation | A story sized in points; Komodo caps a group at 8 |
-| OpenHands, https://github.com/All-Hands-AI/OpenHands | Tool actions and observations as one append-only event stream: the per-session `tools.jsonl` the supervisor tails |
+| OpenHands, https://github.com/All-Hands-AI/OpenHands | Tool actions and observations as one append-only event stream: the per-session `tools.jsonl` record of every call |
 | SWE-agent, https://github.com/SWE-agent/SWE-agent | Lint and format on edit inside the agent-computer interface: `tool.post` runs the rewriting format command on the edited file |
 | Claude Code permissions, https://code.claude.com/docs/en/permissions | Deny rules evaluated before allow rules, `*` anywhere: the human-only verb deny list |
 | Temporal activities, https://docs.temporal.io/activities | Side effects as idempotent activities ordered by deterministic code: the session-end commit as the `wip_commit` action |
