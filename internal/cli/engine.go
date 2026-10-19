@@ -96,7 +96,7 @@ func (e *SocketEngine) spawn(context.Context) error {
 
 	cmd := exec.Command(exe, e.Args...)
 	cmd.Env = append(os.Environ(), "KOMODO_HOME="+e.Home)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = detachedAttrs()
 
 	if err := cmd.Start(); err != nil {
 		return err
@@ -283,7 +283,7 @@ func (e *SocketEngine) killEngine() {
 
 	kill := e.Kill
 	if kill == nil {
-		kill = func(pid int) error { return syscall.Kill(-pid, syscall.SIGKILL) }
+		kill = killTree
 	}
 	_ = kill(h.PID)
 }

@@ -1,3 +1,5 @@
+//go:build !windows
+
 package integration
 
 import (
@@ -120,7 +122,7 @@ func newBinRig(t *testing.T, extra map[string]string) *binRig {
 	r.env = []string{
 		"KOMODO_HOME=" + r.home, "HOME=" + filepath.Join(root, "home"),
 		"PATH=" + filepath.Join(root, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"ANTHROPIC_API_KEY=test-key", "ANTHROPIC_BASE_URL=" + r.model.srv.URL,
+		"ANTHROPIC_API_KEY=test-key",
 		"GIT_AUTHOR_NAME=Test",
 		"GIT_AUTHOR_EMAIL=test@example.com",
 		"GIT_COMMITTER_NAME=Test",
@@ -139,6 +141,9 @@ func newBinRig(t *testing.T, extra map[string]string) *binRig {
 	}
 	if _, err := cfg.SetConfigItem(config.Change{Key: "providers.paid", Old: "never", New: "allowed"}); err != nil {
 		t.Fatalf("allow the paid link: %v", err)
+	}
+	if _, err := cfg.SetConfigItem(config.Change{Key: "providers.anthropic.url", New: r.model.srv.URL}); err != nil {
+		t.Fatalf("point the paid link at the fake model: %v", err)
 	}
 	return r
 }

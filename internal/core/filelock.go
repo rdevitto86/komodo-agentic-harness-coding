@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"syscall"
 	"time"
 )
 
@@ -30,11 +29,13 @@ func FileLock(ctx context.Context, path string, wait time.Duration) (unlock func
 	deadline := time.Now().Add(wait)
 
 	for {
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
+		var busy bool
+
+		busy, err = tryLock(f, false)
+		if err == nil && !busy {
 			return func() error { return releaseLock(f) }, nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+		if err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("lock %s: %w", path, err)
 		}
@@ -68,23 +69,18 @@ func LockHeld(path string) bool {
 
 	defer func() { _ = f.Close() }()
 
-	for {
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
-		if !errors.Is(err, syscall.EINTR) {
-			break
-		}
-	}
-	if err != nil {
+	busy, err := tryLock(f, true)
+	if err != nil || busy {
 		return true
 	}
 
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = unlockFile(f)
 	return false
 }
 
 // releaseLock unlocks and closes the lock file; closing alone would free the lock too.
 func releaseLock(f *os.File) error {
-	uerr := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	uerr := unlockFile(f)
 	cerr := f.Close()
 	return errors.Join(uerr, cerr)
 }
