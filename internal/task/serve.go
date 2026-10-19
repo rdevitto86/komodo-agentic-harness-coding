@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -61,11 +63,24 @@ type Ended struct {
 type chanRuntime struct {
 	ctx   context.Context
 	out   chan<- Message
+	tag   string // makes the identifiers differ from those of an earlier start of the same group
 	seq   atomic.Int64
 	mu    sync.Mutex
 	waits map[string]chan TimerGrant
 	sendM sync.RWMutex // held while a send is in flight; shut takes it to close the channel
 	shut  bool
+}
+
+// newChanRuntime returns the Runtime that sends its messages on out.
+func newChanRuntime(ctx context.Context, out chan<- Message) *chanRuntime {
+	return &chanRuntime{ctx: ctx, out: out, tag: newTag(), waits: map[string]chan TimerGrant{}}
+}
+
+// newTag returns 8 random hex characters.
+func newTag() string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // Escalate sends the escalation under its own identifier.
@@ -75,12 +90,12 @@ func (c *chanRuntime) Escalate(_ context.Context, e Escalation) error {
 
 // ReportState sends one state report.
 func (c *chanRuntime) ReportState(_ context.Context, s StateReport) error {
-	return c.send(Message{ID: fmt.Sprintf("state-%d", c.seq.Add(1)), Kind: MsgState, State: &s})
+	return c.send(Message{ID: fmt.Sprintf("state-%s-%d", c.tag, c.seq.Add(1)), Kind: MsgState, State: &s})
 }
 
 // ExtendTimer sends a timer message and blocks until the continue command that names it arrives.
 func (c *chanRuntime) ExtendTimer(ctx context.Context, r TimerRequest) (TimerGrant, error) {
-	id := fmt.Sprintf("tmr-%d", c.seq.Add(1))
+	id := fmt.Sprintf("tmr-%s-%d", c.tag, c.seq.Add(1))
 	ch := make(chan TimerGrant, 1)
 
 	c.mu.Lock()
@@ -286,7 +301,7 @@ func (l *serveLoop) deliver(cmd Command, drop func(string)) {
 func (m *Manager) Serve(ctx context.Context, ch Channels) error {
 	sctx, cancel := context.WithCancel(ctx)
 	l := &serveLoop{m: m, ctx: sctx, calls: make(chan error, 1),
-		cr: &chanRuntime{ctx: sctx, out: ch.Replies, waits: map[string]chan TimerGrant{}}}
+		cr: newChanRuntime(sctx, ch.Replies)}
 	m.mu.Lock()
 	if m.rt == nil {
 		m.rt = l.cr

@@ -735,8 +735,7 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 	r.waitFor(150*time.Second, "run-status", "epic.resumed")
 	time.Sleep(3 * time.Second)
 	if !groupDone(r.events(), groupID) {
-		t.Skip("blocked: after the recheck passed and tg-1.1 landed (epic.resumed, publish.done, cleanup.done), no " +
-			"group.done follows, so tg-1.2 never starts; the pause half passed")
+		t.Fatalf("no group.done after the recheck passed and tg-1.1 landed\n%s", r.evidence(r.events()))
 	}
 	if !strings.Contains(r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1"), "gamma.go") {
 		_ = r.komodo(60*time.Second, "run", "ep-1")

@@ -233,6 +233,11 @@ func (g *group) save(ns State) error {
 
 	g.snap = g.st
 	if working(g.st.Stage) {
+		// Entering a stage forgets the epochs of the later stages, so a message of a stage reached again is not stale.
+		for _, later := range pipelineStages[slices.Index(pipelineStages, g.st.Stage)+1:] {
+			delete(g.epochs, later)
+		}
+
 		g.epochs[g.st.Stage] = g.st.Epoch
 	}
 	g.mu.Unlock()

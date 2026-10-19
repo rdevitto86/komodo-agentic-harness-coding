@@ -78,6 +78,7 @@ type Manager struct {
 	gateFails  map[string]int
 	contract   int
 	ids        atomic.Int64
+	tag        string // makes the identifiers differ from those of an earlier Manager of the same group
 	stopCtx    context.Context
 	stopCancel context.CancelCauseFunc
 	closed     chan struct{}
@@ -122,6 +123,7 @@ func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 		gateFails: map[string]int{},
 		closed:    make(chan struct{}),
 		files:     slices.Clone(spec.Files),
+		tag:       newTag(),
 	}
 
 	m.stopCtx, m.stopCancel = context.WithCancelCause(context.Background())
@@ -585,7 +587,7 @@ func (m *Manager) escalate(ctx context.Context, e *blockErr) error {
 
 // nextID returns a unique identifier with a prefix.
 func (m *Manager) nextID(prefix string) string {
-	return prefix + "-" + strconv.FormatInt(m.ids.Add(1), 10)
+	return prefix + "-" + m.tag + "-" + strconv.FormatInt(m.ids.Add(1), 10)
 }
 
 // instance returns the sandbox instance of a role, creating it and running the setup command on first use.

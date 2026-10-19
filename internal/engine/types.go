@@ -260,6 +260,9 @@ const (
 	HungReplyWait        = 10 * time.Second // how long the CLI waits for a socket reply before it checks the beat file
 )
 
+// pipelineStages lists the working stages in the order a group passes through them.
+var pipelineStages = []Stage{StageIntake, StageBuild, StageTestReview, StageCommit, StageCleanup}
+
 // SocketName is the control socket's file name inside the state folder.
 const SocketName = "engine.sock"
 
