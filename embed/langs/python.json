@@ -3,5 +3,13 @@
   "symbols": [
     {"kind": "function", "pattern": "^(?:async )?def (\\w+)"},
     {"kind": "class", "pattern": "^class (\\w+)"}
+  ],
+  "tools": [
+    {
+      "name": "pytest",
+      "markers": ["pyproject.toml", "requirements.txt"],
+      "test": "pytest",
+      "junit": "f=$(mktemp) && pytest -q --junit-xml=\"$f\" >/dev/null 2>&1; cat \"$f\""
+    }
   ]
 }

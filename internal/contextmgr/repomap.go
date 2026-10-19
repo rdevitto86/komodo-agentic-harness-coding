@@ -50,6 +50,7 @@ type symbolPattern struct {
 // langFile is the JSON form of embed/langs/<lang>.json.
 type langFile struct {
 	Extensions []string `json:"extensions"`
+	Tools      any      `json:"tools"` // test and coverage commands; read by internal/agent, ignored here
 	Symbols    []struct {
 		Kind    string `json:"kind"`
 		Pattern string `json:"pattern"`

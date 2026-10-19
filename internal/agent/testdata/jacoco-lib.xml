@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
+<report name="lib">
+  <package name="com/example/lib">
+    <counter type="LINE" missed="0" covered="10"/>
+  </package>
+  <counter type="INSTRUCTION" missed="0" covered="30"/>
+  <counter type="LINE" missed="0" covered="10"/>
+</report>

@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -27,17 +28,12 @@ type junitProblem struct {
 	Text    string `xml:",chardata"`
 }
 
-// ParseJUnit reads a JUnit XML report into one run per test case; skipped cases pass.
-// Text before the report is ignored, and a report with no test case is an error.
+// ParseJUnit reads JUnit XML into one run per test case; skipped cases pass.
+// Text before a report is ignored, several reports one after another are all read, and no test case is an error.
 func ParseJUnit(report string) ([]TestRun, error) {
 	i := strings.Index(report, "<testsuite")
 	if i < 0 {
 		return nil, errors.New("no JUnit report in the output")
-	}
-
-	var root junitNode
-	if err := xml.Unmarshal([]byte(report[i:]), &root); err != nil {
-		return nil, fmt.Errorf("decode JUnit report: %w", err)
 	}
 
 	var runs []TestRun
@@ -56,7 +52,28 @@ func ParseJUnit(report string) ([]TestRun, error) {
 		}
 	}
 
-	walk(root)
+	dec := xml.NewDecoder(strings.NewReader(report[i:]))
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode JUnit report: %w", err)
+		}
+
+		start, ok := tok.(xml.StartElement)
+		if !ok || (start.Name.Local != "testsuite" && start.Name.Local != "testsuites") {
+			continue
+		}
+
+		var root junitNode
+		if err := dec.DecodeElement(&root, &start); err != nil {
+			return nil, fmt.Errorf("decode JUnit report: %w", err)
+		}
+		walk(root)
+	}
+
 	if len(runs) == 0 {
 		return nil, errors.New("JUnit report has no test case")
 	}

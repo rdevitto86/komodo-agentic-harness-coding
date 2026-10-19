@@ -1,0 +1,7 @@
+{
+  "extensions": [".kt", ".kts"],
+  "symbols": [
+    {"kind": "class", "pattern": "^\\s*(?:public\\s+|internal\\s+|private\\s+)?(?:abstract\\s+|open\\s+|data\\s+|sealed\\s+|enum\\s+)*(?:class|interface|object)\\s+(\\w+)"},
+    {"kind": "function", "pattern": "^\\s*(?:public\\s+|internal\\s+|private\\s+|protected\\s+)?(?:suspend\\s+|inline\\s+|override\\s+)*fun\\s+(?:<[^>]*>\\s*)?(?:[\\w.]+\\.)?(\\w+)\\s*\\("}
+  ]
+}

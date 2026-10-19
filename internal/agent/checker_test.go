@@ -188,7 +188,7 @@ func TestCheckRegressionBlocksPreExistingWarns(t *testing.T) {
 		TreeHash: "t",
 		Passed:   map[string]bool{"m/a.TestOld": false, "m/a.TestRegressed": true, "m/a.TestFine": true},
 	}
-	cfg := CheckerConfig{CoverageFloor: 80, BaseResult: func(context.Context, string) (Baseline, error) { return base, nil }}
+	cfg := CheckerConfig{CoverageFloor: 80, BaseResult: func(context.Context, CommandRunner, string) (Baseline, error) { return base, nil }}
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())
 	if err != nil || r.Clean() {
 		t.Fatalf("result: %+v %v", r, err)
@@ -210,7 +210,7 @@ func TestCheckPreExistingFailureOnlyWarns(t *testing.T) {
 	head := jsonTest("m/a", map[string]bool{"TestOld": false})
 	sb := goSandbox().on("-run", reply{1, "FAIL"}).on("go test -json", reply{1, head}).on("-coverprofile", okCoverage("95"))
 	base := Baseline{Passed: map[string]bool{"m/a.TestOld": false}}
-	cfg := CheckerConfig{CoverageFloor: 80, BaseResult: func(context.Context, string) (Baseline, error) { return base, nil }}
+	cfg := CheckerConfig{CoverageFloor: 80, BaseResult: func(context.Context, CommandRunner, string) (Baseline, error) { return base, nil }}
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())
 	if err != nil || !r.Clean() {
 		t.Fatalf("result: %+v %v", r, err)

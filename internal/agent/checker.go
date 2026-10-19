@@ -19,8 +19,8 @@ type CheckerConfig struct {
 	CoverageFloor int
 	// unified diff of the work under test
 	Diff func(ctx context.Context, base, head string) (string, error)
-	// test-class result at the base; nil means an empty baseline
-	BaseResult func(ctx context.Context, base string) (Baseline, error)
+	// test-class result at the base, produced in the Tester's sandbox; nil means an empty baseline
+	BaseResult func(ctx context.Context, run CommandRunner, base string) (Baseline, error)
 	// coverage at the base, when known
 	BaseCoverage func(ctx context.Context, base string) (float64, bool, error)
 	// content patterns of the guard's secret row
@@ -386,7 +386,7 @@ func (c checker) judgeFailures(
 		if !loaded {
 			loaded = true
 			if c.cfg.BaseResult != nil {
-				if bl, err = c.cfg.BaseResult(ctx, in.Base); err != nil {
+				if bl, err = c.cfg.BaseResult(ctx, run, in.Base); err != nil {
 					return base, flake, nil, false, fmt.Errorf("read baseline: %w", err)
 				}
 			}

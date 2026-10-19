@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" version="3.0" name="com.example.OrderTest" time="0.051" tests="2" errors="1" skipped="0" failures="0">
+  <properties>
+    <property name="java.version" value="21"/>
+  </properties>
+  <testcase name="totals" classname="com.example.OrderTest" time="0.012"/>
+  <testcase name="loadsFromDisk" classname="com.example.OrderTest" time="0.030">
+    <error message="/tmp/missing.json" type="java.io.FileNotFoundException">java.io.FileNotFoundException: /tmp/missing.json
+	at com.example.OrderTest.loadsFromDisk(OrderTest.java:22)</error>
+  </testcase>
+</testsuite>

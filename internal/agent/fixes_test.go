@@ -29,7 +29,7 @@ const junitMixed = `<?xml version="1.0"?><testsuites><testsuite name="p">
 
 func pyChecker(base Baseline, report bool) Checker {
 	cfg := CheckerConfig{CoverageFloor: 80, TestCommands: map[string]string{"python": "pytest -q"},
-		BaseResult: func(context.Context, string) (Baseline, error) { return base, nil }}
+		BaseResult: func(context.Context, CommandRunner, string) (Baseline, error) { return base, nil }}
 	if report {
 		cfg.ReportCommands = map[string]string{"python": "cat junit.xml"}
 	}
