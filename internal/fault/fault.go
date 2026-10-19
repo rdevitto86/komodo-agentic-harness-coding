@@ -133,6 +133,10 @@ var otherErrors = map[bus.Subtype]otherRow{
 		"intake", format.PlanInput, KindUsage, SeverityError,
 		"A named document or the lock check could not be read",
 	},
+	"plan-locked": {
+		"intake", format.Locked, KindRefused, SeverityError,
+		"A plan tried to rewrite a group that a live run holds",
+	},
 	"plan-write": {
 		"intake", format.PlanWrite, KindInternal, SeverityError,
 		"The new task-list folder could not be written",
