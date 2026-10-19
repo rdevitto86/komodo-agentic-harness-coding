@@ -210,7 +210,8 @@ type baseRunner struct {
 	base   string
 	group  string
 	plan   task.SandboxPlan
-	folder string // holds every checkout and temporary folder of this plan; Close deletes it
+	folder string // holds every checkout, temporary folder and the build cache folder of this plan; Close deletes it
+	build  string // the check's own build cache folder inside folder; never the shared one that holds the tester's checkout
 	runs   int
 }
 
@@ -226,10 +227,8 @@ func openBaseRunner(
 	if err != nil {
 		return nil, fmt.Errorf("read the base commit: %w", err)
 	}
-	for _, d := range []string{plan.Temp, plan.Build} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return nil, fmt.Errorf("create %s: %w", d, err)
-		}
+	if err := os.MkdirAll(plan.Temp, 0o755); err != nil {
+		return nil, fmt.Errorf("create %s: %w", plan.Temp, err)
 	}
 
 	folder, err := os.MkdirTemp(plan.Temp, "komodo-base-")
@@ -237,7 +236,13 @@ func openBaseRunner(
 		return nil, fmt.Errorf("make the plan folder: %w", err)
 	}
 
-	return &baseRunner{boxes: boxes, root: root, base: base, group: group, plan: plan, folder: folder}, nil
+	build := filepath.Join(folder, "build")
+	if err := os.Mkdir(build, 0o755); err != nil {
+		_ = os.RemoveAll(folder)
+		return nil, fmt.Errorf("make the build cache folder: %w", err)
+	}
+
+	return &baseRunner{boxes: boxes, root: root, base: base, group: group, plan: plan, folder: folder, build: build}, nil
 }
 
 // Run checks out the base commit afresh, runs one shell command from its root and returns the exit code; a killed command is
@@ -262,7 +267,7 @@ func (b *baseRunner) Run(ctx context.Context, command string) (int, error) {
 	inst, err := b.boxes.CreateSandboxInstance(ctx, sandbox.Spec{
 		Group:      b.group,
 		Worktree:   dir,
-		Writable:   []string{tmp, b.plan.Build},
+		Writable:   []string{tmp, b.build},
 		Modules:    b.plan.Modules,
 		Toolchains: b.plan.Toolchains,
 		MaxProcs:   b.plan.MaxProcs,
@@ -293,7 +298,7 @@ func (b *baseRunner) Run(ctx context.Context, command string) (int, error) {
 	return cmd.ProcessState.ExitCode(), nil
 }
 
-// Close deletes the plan's folder with every checkout in it.
+// Close deletes the plan's folder with every checkout and the build cache folder in it.
 func (b *baseRunner) Close() error {
 	return os.RemoveAll(b.folder)
 }
