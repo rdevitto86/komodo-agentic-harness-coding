@@ -2842,7 +2842,7 @@ Subtypes that other chapters define, with the chapter that owns the data body.
 |---|---|---|
 | `run-status` | `group.approved`, `publish.done`, `pr.opened` | [15. Commit Handler](#15-commit-handler) |
 | `run-status` | `cleanup.start`, `cleanup.done`, `group.discarded` | [16. Cleanup Handler](#16-cleanup-handler) |
-| `run-status` | `group.done`, `group.closed`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
+| `run-status` | `group.done`, `session.resume-lost` | [7. Runtime Manager](#7-runtime-manager) |
 | `run-status` | `sandbox.fallback`, `tool.outside` | [11. Task Manager](#11-task-manager) |
 | `run-status` | `epic.paused`, `epic.resumed` | [15. Commit Handler](#15-commit-handler) |
 | `run-failure` | `stalled` | [7. Runtime Manager](#7-runtime-manager) |
@@ -2879,6 +2879,7 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `run.stopped` | `run-complete` / `stopped` | `signal`, `saved` |
 | `group.paused` | `run-status` / `group.paused` | `until`, `link` |
 | `group.resumed` | `run-status` / `group.resumed` | `from`, `to` |
+| `group.approved` | `run-status` / `group.approved` | None; the Tester and the Reviewer approved the group, and the commit in git is the record of the code |
 | `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail`, `reason`, `prior`, `paths` |
 | `lease.lost` | `run-failure` / `lease.lost` | `fence`, `holder`, `where` |
 | `stage.enter` | `run-status` / `stage.enter` | `from`, `to`, `return` |
@@ -2892,7 +2893,7 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `task.done` | `run-status` / `task.done` | `task` |
 | `task.retry` | `run-status` / `task.retry` | `task`, `attempt` |
 | `check.done` | `run-status` / `check.done` | `pass`, `tip`, `head`, `regression`, `steps`; the free mechanical checks that open the Tester's turn |
-| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote` |
+| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note` |
 | `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `severity`, `in` |
 | `tool.denied` | `run-status` / `tool.denied` | `tool`, `row`, `target`, `count` |
 | `sandbox.fallback` | `run-status` / `sandbox.fallback` | `role`, `wanted`, `used`, `why`; the Tester ran in the operating-system sandbox because Docker was missing |
@@ -2906,12 +2907,24 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `state.truncated` | none | A torn last line of the event log is dropped when read, and replay marks the gap ([4.5](#45-behaviour)) |
 | `bus.store_failed` | `error` / `bus.store_failed` | `run`, `path`, `reason`; an append to the event store or a trim failed |
 | `provider.skip` | `run-status` / `provider.skip` | `from`, `to`: link names, `claude-cli` or `anthropic-api` |
-| `limit.warn` | `resource` / `limit.warn` | `link`, `kind`, `pct`, `usd` |
+| `limit.warn` | `resource` / `limit.warn` | `link`, `kind`, `pct`, `usd`, and the `session` that saw it |
 | `lease.taken` | `run-status` / `lease.taken` | `fence`, `pid` |
+| `command.dropped` | `run-status` / `command.dropped` | `kind`, `re`, `why`; the Task Manager ignored a command it could not act on |
+| `sandbox.warning` | `run-status` / `sandbox.warning` | `warning`; an outside tool server started with a warning |
+| `scope.request` | `run-status` / `scope.request` | `task`, `paths`; a Builder asked to edit files outside its list |
+| `scope.answer` | `run-status` / `scope.answer` | `action`, `approved`, `auto`; the answer to a scope request, `auto` when the scope rules denied it |
+| `group.pause` | `run-status` / `group.pause` | `link`, `wait_until`, `agent`; the Task Manager parked a session on a provider limit |
+| `group.resume` | `run-status` / `group.resume` | `reason`, `owed`; the Task Manager left a parked session's wait |
+| `group.stop` | `run-status` / `group.stop` | `cause`; the Task Manager was told to stop |
+| `group.closed` | `run-status` / `group.closed` | None; the Task Manager finished closing the group |
+| `judge.reset` | `run-status` / `judge.reset` | `edited`; a judge's command edited tracked files and the round was discarded |
+| `cleanup.swept` | `run-status` / `cleanup.swept` | `group`, `removed`, `kept`; what one sweep removed and kept |
 | `pool.slot.taken`, `queue.enqueued` | none | Link session counts and the schedule queue are machine-wide records in the State Manager ([10](#10-state-manager)), not events |
 | `request.resume` | `run-continue` | The command event above |
 | `request.timer` | none | The schedule queue and the `schedule` field of `run-start` carry a scheduled start; the engine stays up while a run is queued |
 | `request.accepted`, `request.refused` | `run-status` / `request.accepted`, `request.refused` | `request` (the command's id), `why` on refusal |
+
+Every fact that the Task Manager, the Commit Handler or the Cleanup Handler reports has a row above or a row in [More subtypes](#43-data-model), and its body decodes as that row's data struct. A fact with no row, or a body the struct does not declare, is not published, so `cmd/komodo`'s schema test lists every fact name the code reports and fails for one with no slot.
 
 #### Data structs
 
@@ -2973,6 +2986,31 @@ type GroupDone struct {
 
 // EventKey binds GroupDone to run-status / group.done.
 func (GroupDone) EventKey() Key { return Key{TypeRunStatus, "group.done"} }
+
+// GroupApproved is the data of run-status / group.approved: the Tester and the Reviewer approved a group's work.
+// It has no body; the commit in git is the record of the code.
+type GroupApproved struct{}
+
+// GroupPause is the data of run-status / group.pause: the Task Manager parked a session on a provider limit.
+type GroupPause struct {
+	Link      string    `json:"link"`       // the link whose limit stopped the session
+	WaitUntil time.Time `json:"wait_until"` // when the Task Manager next tries to resume
+	Agent     string    `json:"agent"`      // the agent whose session was parked
+}
+
+// GroupResume is the data of run-status / group.resume: the Task Manager left a parked session's wait.
+type GroupResume struct {
+	Reason string   `json:"reason"` // timer or run-continue
+	Owed   []string `json:"owed"`   // the agents whose sessions were parked and now restart
+}
+
+// GroupStop is the data of run-status / group.stop: the Task Manager was told to stop.
+type GroupStop struct {
+	Cause string `json:"cause"` // why it was stopped, such as a block reason
+}
+
+// GroupClosed is the data of run-status / group.closed: the Task Manager finished closing a group; it has no body.
+type GroupClosed struct{}
 
 // GroupBlocked is the data of run-failure / group.blocked; the reason is the block reason.
 type GroupBlocked struct {
@@ -3107,6 +3145,7 @@ type FindingSubmit struct {
 	File  string `json:"file"`  // path from the worktree root
 	Line  int    `json:"line"`  // line number from 1 in the head tree
 	Quote string `json:"quote"` // the quoted evidence line
+	Note  string `json:"note,omitempty"` // the agent's note on the finding
 }
 
 // FindingVerified is the data of run-status / finding.verified.
@@ -3202,10 +3241,57 @@ type LeaseTaken struct {
 	PID   int    `json:"pid"`   // the holder's process identifier
 }
 
+// --- Task Manager and handler facts
+
+// CommandDropped is the data of run-status / command.dropped: the Task Manager ignored a command.
+type CommandDropped struct {
+	Kind string `json:"kind"` // the command kind that was ignored
+	Re   string `json:"re"`   // the request the command answered; empty when none
+	Why  string `json:"why"`  // why the Task Manager ignored it
+}
+
+// SandboxWarning is the data of run-status / sandbox.warning: an outside tool server started with a warning.
+type SandboxWarning struct {
+	Warning string `json:"warning"` // the warning text the server connection reported
+}
+
+// ScopeRequest is the data of run-status / scope.request: a Builder asked to edit files outside its list.
+type ScopeRequest struct {
+	Task  string   `json:"task"`  // the task the Builder was working on
+	Paths []string `json:"paths"` // the paths it asked for
+}
+
+// ScopeAnswer is the data of run-status / scope.answer: the answer to a scope request.
+type ScopeAnswer struct {
+	Action   string   `json:"action"`             // approve or deny
+	Approved []string `json:"approved,omitempty"` // the paths added to the group's files
+	Auto     bool     `json:"auto,omitempty"`     // true when the scope rules denied the request without asking a person
+}
+
+// JudgeReset is the data of run-status / judge.reset: a judge's command edited tracked files and the round was discarded.
+type JudgeReset struct {
+	Edited []string `json:"edited"` // the tracked files the judges' commands changed
+}
+
+// CleanupSwept is the data of run-status / cleanup.swept: what one sweep removed and kept.
+type CleanupSwept struct {
+	Group   string        `json:"group"` // empty: a sweep covers no single group
+	Removed []CleanupItem `json:"removed"`
+	Kept    []CleanupItem `json:"kept"`
+}
+
+// CleanupItem is one thing a sweep removed or kept.
+type CleanupItem struct {
+	Kind   string `json:"kind"`   // worktree, tester_worktree, container, branch, temp or version
+	Name   string `json:"name"`   // the path, branch, reference or version
+	Reason string `json:"reason"` // why it was kept; empty for a removed item
+}
+
 // --- Resource
 
 // LimitWarn is the data of resource / limit.warn.
 type LimitWarn struct {
+	GroupFacts
 	Link string  `json:"link"`
 	Kind string  `json:"kind"`          // quota, overage or spend
 	Pct  int     `json:"pct,omitempty"` // quota only: percent of the window used
@@ -3247,6 +3333,33 @@ type RequestRefused struct {
 ```
 
 Each field is a fact its publisher saw, never a model's claim.
+
+**The facts of the Task Manager and the handlers.** Each is published as one line, shown here with its `data`. `group.approved` and `group.closed` have an empty body, `{}`.
+
+```json
+{"type": "run-status", "subtype": "command.dropped", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:31:12Z",
+ "data": {"kind": "continue", "re": "req-7", "why": "the group is not paused"}}
+{"type": "run-status", "subtype": "sandbox.warning", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:31:12Z",
+ "data": {"warning": "the server asked for network access; it stays off"}}
+{"type": "run-status", "subtype": "scope.request", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:40:02Z",
+ "data": {"task": "tsk-add-lock", "paths": ["internal/lock/lock.go"]}}
+{"type": "run-status", "subtype": "scope.answer", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T15:42:30Z",
+ "data": {"action": "approve", "approved": ["internal/lock/lock.go"]}}
+{"type": "run-status", "subtype": "group.pause", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T16:02:00Z",
+ "data": {"link": "claude-cli", "wait_until": "2026-10-14T18:01:00Z", "agent": "builder"}}
+{"type": "run-status", "subtype": "group.resume", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T18:01:05Z",
+ "data": {"reason": "timer", "owed": ["builder"]}}
+{"type": "run-status", "subtype": "group.stop", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T18:30:00Z",
+ "data": {"cause": "pause_timeout"}}
+{"type": "run-status", "subtype": "group.closed", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T19:00:00Z",
+ "data": {}}
+{"type": "run-status", "subtype": "judge.reset", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T16:50:00Z",
+ "data": {"edited": ["internal/lock/lock.go"]}}
+{"type": "run-status", "subtype": "cleanup.swept", "run": "", "group": "", "time": "2026-10-14T20:00:00Z",
+ "data": {"group": "", "removed": [{"kind": "worktree", "name": "/Users/rad/.komodo/wt/r1/tg-1.2", "reason": ""}], "kept": []}}
+{"type": "run-status", "subtype": "group.approved", "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57", "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30", "time": "2026-10-14T17:10:00Z",
+ "data": {}}
+```
 
 #### The event store
 
@@ -3580,6 +3693,8 @@ Component tests with fake subscribers; no live provider tests.
 | Logs of open runs past 100 MB | `Trim` deletes none and publishes one `bus.store_failed` naming the folder |
 | `Trim` with `dry` set | Returns the paths that would go and deletes none |
 | 10,000 appends | The mean cost is near the measured 4.3 µs per append |
+| A fact name the Task Manager, the Commit Handler or the Cleanup Handler reports, with no row in the event table | The schema test fails and names the fact |
+| Each fact with a body of its own, sent as the code builds it | One event of the same subtype is published and none is dropped |
 
 ### 4.10 Open Gaps
 
@@ -8763,7 +8878,7 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | Subtype | Data |
 |---|---|
 | `session.start`, `session.end` | Session, agent, link, model, measured context and its source; the exit reason on end |
-| `session.idle`, `session.timewarn` | Session, minutes of silence or minutes left |
+| `session.idle`, `session.timewarn` | Session; seconds of silence and whether the nudge went, or seconds used and the wall limit |
 | `tool.denied` | Tool, guard row, refused target, count under that row |
 | `finding.submit` | Rule, file, line, quote, note |
 | `provider.skip` | `from`, `to`, `reason` |
@@ -8771,6 +8886,13 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | `scope.request`, `scope.answer` | Task, paths; the answer's action and approved paths |
 | `sandbox.fallback` | Role, the mechanism wanted, the mechanism used, the reason; the run report says so |
 | `tool.outside` | Server, tool, outcome (`ok`, `error` or `timeout`) of one outside tool server call |
+| `command.dropped` | Command kind, the request it answered, why it was ignored |
+| `sandbox.warning` | The warning an outside tool server connection reported |
+| `session.resume-lost` | Session, agent, the error that stopped the resume |
+| `group.pause`, `group.resume` | Link, wait time and agent on pause; reason and owed agents on resume |
+| `group.stop`, `group.closed` | The stop cause; `group.closed` has no body |
+| `judge.reset` | The tracked files the judges' commands edited |
+| `group.approved` | None; it has no body |
 
 #### The guard
 
@@ -12773,7 +12895,7 @@ flowchart TB
   G -->|"7 fails"| X
 ```
 
-1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one.
+1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one. The event has no body; the commit in git is the record of the code.
 2. `Publish` refuses with `ErrNotApproved` unless `tree`, `tester.tree` and `reviewer.tree` are equal. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`. It refuses with `ErrCriticalRef` when the group branch or the epic branch is the base branch.
 3. `Publish` requires the worktree to have `branch` checked out (`CurrentBranch`; any other branch is `ErrNotApproved`). It takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`, except on a repeat: a clean worktree whose tip is a merge commit with the subject `<label>: merge <epic>` and a second parent the remote epic branch holds, over a commit with the tree `tree`, is accepted as the group's own sync with the epic. When the checked-out commit already has that tree, because `Save` recorded it, nothing is committed. Otherwise `Commit` records the content with the message `<label>: <goal>`.
 4. `Epics.Enter` waits for the epic's turn. The next steps run inside the turn, so one group at a time lands on an epic. The first turn on an epic after the engine starts runs the recheck (step 7) before the merge, so a pause the restart forgot is found again; a group that has already landed skips it, because step 7 then runs on the same tip.
