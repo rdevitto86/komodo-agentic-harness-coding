@@ -376,12 +376,12 @@ Each row names a decision, the alternative rejected and the reason.
 
 #### 11.1 Risks
 
-- About 3,900 lines of Go exist today: the network client, cache store, file helpers and the dashboard proof of concept.
+- About 104,500 lines of Go cover every subsystem today. Their tests run against a fake model, so no reply from a real model has been checked yet ([G-71](lld.md#g-71)).
 - One runtime hosts every run, so its crash stops them all until `komodo run` continues them.
 
 #### 11.2 Technical Debt
 
-The OpenAI path is scoped but not built (G-20).
+OpenAI's two links are built and tested against stand-ins; live calls wait for a later minor release ([G-20](lld.md#g-20)).
 
 #### 11.3 Delivery Roadmap
 

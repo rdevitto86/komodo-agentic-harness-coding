@@ -218,17 +218,19 @@ Go package `internal/cli`, plus the program entry point.
 | `internal/cli/repo.go` | The pin check, the repository id and root, and the expansion of a run label from `docs/backlog/` |
 | `internal/cli/help.go` | `--help` text and `--help --json`, built when the command runs from the table and the field tags of each data struct |
 | `internal/cli/work.go` | `plan`, `run`, `stop`, `replay`, `abandon`: each builds one event or one control request |
-| `internal/cli/engine.go` | The control socket client: dial, start the engine on demand, send a request, read the replies |
+| `internal/cli/engine.go`, `engine_unix.go`, `engine_windows.go` | The control socket client: dial, start the engine on demand, send a request, read the replies; starting the engine detached differs per platform |
 | `internal/cli/status.go` | `status`, with `--wait` |
 | `internal/cli/config.go` | `config get` and `config set`: thin calls into the Configuration Manager |
 | `internal/cli/clean.go` | `clean` |
-| `internal/cli/install.go`, `install_wanted.go`, `install_files.go` | `install`: the manifest types, the diff planner, the wanted targets of each step, and the edits to `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, the binary and the path entry |
-| `internal/cli/update.go`, `update_release.go` | `update`: the update steps, the release manifest, the signature check and the release fetch |
+| `internal/cli/install.go`, `install_wanted.go`, `install_files.go`, `install_settings.go` | `install`: the manifest types, the diff planner, the wanted targets of each step, and the edits to `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, the binary and the path entry |
+| `internal/cli/update.go`, `update_release.go`, `update_lock.go` | `update`: the update steps, the release manifest, the signature check, the release fetch and the writer lock |
 | `internal/cli/doctor.go`, `doctor_fs_*.go` | `doctor`: the seven checks and the file system type of the home folder, per platform |
 | `internal/cli/host.go` | `Host`: the machine probes and seams that `install`, `update` and `doctor` read, and the State Manager hookup |
 | `internal/cli/ui.go`, `ui_view.go` | `ui`: the dashboard server (routes, the event stream, the host check) and the state it draws, read from the engine with `status` and `replay` |
 | `embed/ui/` | `index.html` and `ui.js`, the dashboard page and its one script, compiled into the binary |
-| `internal/cli/stubs.go` | The handler of the hidden `internal engine` verb; it returns the not-built-yet fault until the engine part exists |
+| `internal/cli/stubs.go` | The hidden `internal engine` verb's handler and the not-built-yet `login` |
+| `internal/cli/guard.go` | The hidden `internal guard` verb: reads Claude Code's tool call on standard input, allows with exit 0 and refuses with exit 2 |
+| `internal/cli/tools.go` | The hook that runs the hidden `internal tools` verb, the session's tool server |
 | `internal/cli/print.go` | The line printed for a recorded event, and the fault built from an error event |
 | `internal/cli/terminal.go` | `HasControllingTerminal`: opens `/dev/tty` |
 
@@ -2245,7 +2247,7 @@ The builder's `agent.json`:
 }
 ```
 
-The `chain` names the 2 links beta 6 ships. OpenAI's subscription and interface links are designed into the model client's interface and built after beta 6.
+The `chain` names the 2 Claude links. OpenAI's subscription and interface links are built and tested against stand-ins; live calls wait for a later minor release ([G-20](#g-20)).
 
 | Role | Weight | Pool slot | Purpose |
 |---|---|---|---|
@@ -4991,7 +4993,7 @@ type EmptySlotError struct{ Slot Slot }
 func (e EmptySlotError) Error() string { return "required slot " + string(e.Slot) + " is empty" }
 ```
 
-The Task Manager calls `Place` with the chain from the Agent Registry and each link's measured context. Beta 6 ships two Claude links, the Claude subscription link first and then the paid Anthropic interface; links for OpenAI come after beta 6, and the free local model is an optional link ([chapter 11](#11-task-manager)). The rule holds for every link: the ceiling is half the measured context, and nothing is cut to fit.
+The Task Manager calls `Place` with the chain from the Agent Registry and each link's measured context. Beta 6 ships two Claude links, the Claude subscription link first and then the paid Anthropic interface; OpenAI's two links can follow once configured ([G-20](#g-20)), and the free local model is an optional link ([chapter 11](#11-task-manager)). The rule holds for every link: the ceiling is half the measured context, and nothing is cut to fit.
 
 The token counter is one bundled estimate for every link, so a size check is repeatable. The half-context ceiling is the margin that absorbs the difference between the estimate and a provider's own count.
 
@@ -8396,7 +8398,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 - The session supervisor: it starts, watches and stops each model session and records one exit reason.
 - The guard and the tool runtime: every agent action is checked against the agent's permissions, and refused by default.
 - Link choice and failover for each session: the chain, the billing decision and the hand-off of a provider limit.
-- The model client (`internal/llm`): the adapters for the Claude subscription command-line link, the paid Anthropic link and the optional local link, the places reserved for OpenAI's links, and the tool loop. The HTTP client they use stays in `internal/core`.
+- The model client (`internal/llm`): the adapters for the Claude subscription command-line link, the paid Anthropic link and the optional local link, OpenAI's subscription and interface links, and the tool loop. The HTTP client they use stays in `internal/core`.
 - The sandbox (`internal/sandbox`): a Docker container per group for the Tester, the operating-system sandbox for the Builder's quick commands, `CreateSandboxInstance()` and `DestroySandboxInstance()` (the second is called inside `CloseTaskGroup()`), and the confinement of every command. The language and build caches belong to the Cache Manager ([chapter 8](#8-cache-manager)); the sandbox mounts them.
 - Outside tool servers: starting each enabled server inside the sandbox and passing every call it receives through the guard.
 
@@ -8476,7 +8478,9 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `billing.go` | Cost class per link, the environment scrub, the first-line check; fails closed |
 | `claude.go` | The subscription link: launch line, stream parsing, resume, `claude` path search |
 | `anthropic.go` | The paid Anthropic link: Messages requests, cache markers from the cache handle, structured output, effort |
-| `openai.go` | The place for OpenAI's subscription and interface links. They implement `Provider` and are not built, so each returns `ErrNotYet` |
+| `openai.go` | `OpenAIModel`: the model entry both OpenAI links take |
+| `openai_api.go` | OpenAI's paid interface link: Chat Completions through the shared HTTP client, structured steps with `response_format`, and its error and limit mapping |
+| `openai_codex.go`, `openai_codex_stream.go` | OpenAI's subscription link: the `codex exec --json` launch line, resume by thread, the login check, and the reader of its event stream |
 | `local.go` | The optional local link: an OpenAI-compatible server on this machine, and its context-size probe |
 | `loop.go` | The tool loop for API links and the result re-validation |
 | `probe.go` | `Probe` and the measured context |
@@ -8885,8 +8889,8 @@ type Link string
 const (
 	ClaudeCLI          Link = "claude-cli"          // the Claude subscription, through the claude program
 	AnthropicAPI       Link = "anthropic-api"       // the paid Anthropic HTTP interface
-	OpenAISubscription Link = "openai-subscription" // OpenAI's subscription; in the interface, not built
-	OpenAIAPI          Link = "openai-api"          // OpenAI's paid HTTP interface; in the interface, not built
+	OpenAISubscription Link = "openai-subscription" // OpenAI's subscription, through the codex program
+	OpenAIAPI          Link = "openai-api"          // OpenAI's paid HTTP interface
 	Local              Link = "local"               // the optional free model on this machine
 )
 
@@ -9156,7 +9160,7 @@ The link's cost class is `free` on loopback, or when `SelfHosted` is true. A non
 
 #### The HTTP client
 
-The client is the existing code in `internal/core/http.go`, `http_policy.go` and `http_stream.go`. It stays in `internal/core`; `internal/llm` wraps it and uses its `Client` and `Options` without copying them. The paid Anthropic adapter, the optional local adapter and, once built, OpenAI's interface adapter all send through it.
+The client is the existing code in `internal/core/http.go`, `http_policy.go` and `http_stream.go`. It stays in `internal/core`; `internal/llm` wraps it and uses its `Client` and `Options` without copying them. The paid Anthropic adapter, the optional local adapter and OpenAI's interface adapter all send through it.
 
 | Type | Holds |
 |---|---|
@@ -9707,7 +9711,7 @@ func Scrub(env []string) []string
 func CheckInit(i Init) error
 ```
 
-`Probe` and `Profile` return `ErrUnavailable` or `ErrUnauthorized` for a missing program, a silent endpoint or a logged-out login, and `ErrNotYet` for one of OpenAI's links, which the interface names and no adapter yet serves; `Router.Select` skips the link. `Start` returns `ErrModelGone` on HTTP 404 (the task's next session takes the prior identifier), `ErrBilling` when the first line shows a paid key, `*ProviderLimit` for a provider cap, and `ErrNotYet` for a link named but not built. `Stream.Next` returns `io.EOF` after the result event; `Inject` and `Stop` return `ErrStreamClosed` on an ended session, which the caller ignores. A failed `Resume` gets a fresh session (resume).
+`Probe` and `Profile` return `ErrUnavailable` or `ErrUnauthorized` for a missing program, a silent endpoint or a logged-out login, and `ErrNotYet` for a link the interface names and no adapter yet serves; `Router.Select` skips the link. `Start` returns `ErrModelGone` on HTTP 404 (the task's next session takes the prior identifier), `ErrBilling` when the first line shows a paid key, `*ProviderLimit` for a provider cap, and `ErrNotYet` for a link named but not built. `Stream.Next` returns `io.EOF` after the result event; `Inject` and `Stop` return `ErrStreamClosed` on an ended session, which the caller ignores. A failed `Resume` gets a fresh session (resume).
 
 The API links add a few shapes beside `Provider`:
 
@@ -9733,7 +9737,7 @@ type EndError struct {
 
 #### HTTP client
 
-`NewHTTPClient(opts)` builds the client and loads the CA bundle. `Do(ctx, ep, req)` sends with retries and returns the whole body; `Stream(ctx, ep, req, hooks)` feeds SSE events to the hooks and retries a mid-answer drop once from the start; `Redact` and `AddSecrets` manage the redaction list. `Do` and `Stream` return `*LimitError`, `*StatusError`, `ErrRefused` (policy) or `ErrStreamIdle` (silent body). The paid Anthropic adapter, the optional local adapter and, once built, OpenAI's interface adapter call it on every request; any other subsystem builds its own client with its own `Endpoint`.
+`NewHTTPClient(opts)` builds the client and loads the CA bundle. `Do(ctx, ep, req)` sends with retries and returns the whole body; `Stream(ctx, ep, req, hooks)` feeds SSE events to the hooks and retries a mid-answer drop once from the start; `Redact` and `AddSecrets` manage the redaction list. `Do` and `Stream` return `*LimitError`, `*StatusError`, `ErrRefused` (policy) or `ErrStreamIdle` (silent body). The paid Anthropic adapter, the optional local adapter and OpenAI's interface adapter call it on every request; any other subsystem builds its own client with its own `Endpoint`.
 
 #### Test sandbox
 
@@ -9972,8 +9976,8 @@ On the paid Anthropic link, `Start` runs the tool loop in `loop.go` over the HTT
 |---|---|
 | Subscription | `--json-schema` on the launch line |
 | Paid Anthropic | Structured outputs (`output_config.format`) with thinking left on; the larger models refuse a forced `tool_choice` with HTTP 400, so none is sent |
-| OpenAI subscription | `--output-schema` on the launch line; in the interface, not built |
-| OpenAI interface | No tools, `response_format: json_schema` with `strict: true`; in the interface, not built |
+| OpenAI subscription | `--output-schema` on the launch line |
+| OpenAI interface | No tools, `response_format: json_schema` with `strict: true` |
 | Local | No tools, the schema as `response_format`; Ollama has no `tool_choice` |
 
 - Every link ends the same way: tools on `auto`, a text-only reply ends the work, one final call returns the result schema, and Go validates it again.
@@ -10199,7 +10203,7 @@ The tool server answers `initialize` inside the program's 30 s `MCP_TIMEOUT` (it
 Outside tool servers are off by default. A server is on for an agent only when a person adds it to the Context Manager's list and switches it on for that agent by name.
 
 1. The Runtime Manager copies only the enabled entries into `GroupSpec.Servers`, and names each one in the `Servers` list of the agents allowed to use it.
-2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Until the open gap below is settled, a server that lists `Hosts` still gets no network and a warning says so. How each mechanism limits a server to those hosts is [TODO: how each sandbox mechanism limits an outside server to the hosts its entry lists ([G-264](#g-264))].
+2. At session start, for an agent with servers, the tool server starts each listed server inside the sandbox of the agent's role, with no network unless the entry lists `Hosts`. Seatbelt, Bubblewrap and Docker offer only network on or off for a sandbox (Seatbelt can also filter by port); none limits traffic to named hosts. A server that lists `Hosts` therefore gets no network and a warning says so. Whether an egress proxy outside the sandbox should limit it to those hosts is [TODO: an egress proxy that limits an outside server to the hosts its entry lists ([G-264](#g-264))].
 3. The agent sees the server's tools as `<server>.<tool>`, and only when `Permissions.Tools` lists them. The launch line still holds one entry, the private tool server, which forwards the call. The variables named in an entry's `Env` reach the server only when the entry also lists `Hosts`, because a secret is useful only for calling a remote service; the values come from the harness environment and are never put in the brief or shown to the model. An entry with `Env` and no `Hosts` receives none, and the start warns once per variable. Until the host limits above are settled, no server gets network, so none receives a variable yet.
 4. Every call passes the guard first, exactly like a built-in tool: row G1 refuses a name not in the permissions, and a refusal counts toward `guard.refusal_limit` (row G6).
 5. Every call, allowed or refused, is recorded: a `tool.outside` fact for an allowed call, and `tool.denied` for a refusal.
@@ -10528,7 +10532,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Touches |
 |---|---|---|
-| [G-264](#g-264) | How each mechanism limits an outside server to its listed hosts | Outside tool servers |
+| [G-264](#g-264) | An egress proxy that limits an outside server to its listed hosts | Outside tool servers |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | Billing check |
 | [G-08](#g-08) | A private loopback per instance | Sandbox |
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Tester copy mechanisms and costs | Sandbox |
@@ -11035,6 +11039,9 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 | `internal/agent/secrets.go` | The diff reader (`diffLines`, which `Reviewer.Lenses` also uses) and the secret scan |
 | `internal/agent/junit.go` | `ParseJUnit`: per-test results from a JUnit XML report |
 | `internal/agent/baseline.go` | `Baseline`, `Classify`, `ClassifyFailure` |
+| `internal/agent/baselinesource.go` | `NewBaselineSource`: the stored baseline, or a run of the base commit's files in the Tester's sandbox |
+| `internal/agent/toolprofile.go` | `LoadToolProfiles` and `Resolve`: each language's test, JUnit report and coverage commands per build tool, from `embed/langs` |
+| `internal/state/baseline.go` | `SaveBaseline`, `LoadBaseline` and `FindBaseline`: the baseline beside the group's state record |
 | `internal/agent/impact.go` | `ImpactSet` |
 | `internal/agent/scope.go` | `OutOfScope`, shared with the Builder ([12.2](#122-package-layout)) |
 
@@ -11339,7 +11346,7 @@ func CaseCollisions(paths []string) [][]string
 
 `CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`.
 
-`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Where a language's JUnit report command comes from is [TODO: where each non-Go language's JUnit report command comes from ([G-282](#g-282))].
+`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Each language's profile file in `embed/langs` names, per build tool, the command that prints its JUnit XML report. Gradle, Maven and pytest ship one; a language or a test command with none leaves a failing test of that language blocking as unclassifiable.
 
 | Function | On failure |
 |---|---|
@@ -11476,7 +11483,7 @@ Edge N is the output of step N.
 
 ##### Baseline
 
-1. Go runs the `test` command class at the base commit and keeps the result by tree hash. One entry serves every group cut from the same base. Where the result is stored and which sandbox produces it is [TODO: where the baseline result is stored and which sandbox runs it ([G-267](#g-267))].
+1. Go runs the `test` command class at the base commit and keeps the result by tree hash. One entry serves every group cut from the same base. The result is stored in the group's run folder beside its state record, written through the State Manager, so it survives a restart. It is produced by running the `test` class on the base commit's files in the Tester's sandbox, and any group cut from the same base tree reuses the stored entry.
 2. `Classify` marks a test `regression` when it passed at base and fails at head, and `pre_existing` when it fails at both.
 3. A regression returns the group to the Builder with the failing test's output; a pre-existing failure only warns.
 4. Tests that need a database or a public host fail at both commits, so the baseline marks them pre-existing.
@@ -11578,7 +11585,7 @@ Each default tool reports a whole-repository line percent in the field named. Ve
 | Rust | `cargo llvm-cov --json --summary-only` | `data[0].totals.lines.percent` |
 | Java, Kotlin | JaCoCo through the Gradle or Maven `test` | The report's `LINE` counter |
 
-JavaScript and TypeScript wrap the repository's own `test` command. Java and Kotlin have no default command; the command that prints the JaCoCo report is [TODO: the command and report path for Java and Kotlin coverage ([G-281](#g-281))], so their coverage step fails naming the language until one is configured.
+JavaScript and TypeScript wrap the repository's own `test` command. Java and Kotlin get their coverage command from the language profile, chosen by build file: Gradle runs `jacocoTestReport` and reads `build/reports/jacoco/test/jacocoTestReport.xml`; Maven runs `jacoco:report` and reads `target/site/jacoco/jacoco.xml`. The repository must configure JaCoCo; otherwise the coverage step fails with the tool's output.
 
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
@@ -11686,10 +11693,7 @@ const (
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-267](#g-267) | Where the baseline result is stored and which sandbox runs it | 13.5 |
 | [G-169](#g-169) | Whether each default coverage tool yields a whole-repository line percent | 13.5 |
-| [G-281](#g-281) | The command and report path for Java and Kotlin coverage | 13.5 |
-| [G-282](#g-282) | Where each non-Go language's JUnit report command comes from | 13.4 |
 
 The Tester's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
@@ -15142,17 +15146,14 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 
 | ID | Area | Gap | Closes by | Affects |
 |---|---|---|---|---|
-| <a id="g-264"></a>G-264 | Sandbox | How Seatbelt, Bubblewrap and Docker limit an outside tool server to the hosts its entry lists | Spike in phase 5 | [6](#6-context-manager), [11](#11-task-manager) |
+| <a id="g-264"></a>G-264 | Sandbox | An egress proxy outside the sandbox that limits an outside tool server to the hosts its entry lists; the spike found Seatbelt, Bubblewrap and Docker offer only network on or off | Owner decision | [6](#6-context-manager), [11](#11-task-manager) |
 | <a id="g-266"></a>G-266 | Builder | Whether `--deny` carries a reason text for the Builder | Phase 2, with the CLI | [12](#12-builder), [1](#1-cli) |
-| <a id="g-267"></a>G-267 | Tester | Where the baseline test result is stored, and which sandbox runs it | Phase 5, with the Tester | [13](#13-tester) |
 | <a id="g-273"></a>G-273 | Config | How `providers.local.<name>.models` writes several model names in one string | Phase 4, with the model client | [11](#11-task-manager), [3](#3-configuration-manager) |
 | <a id="g-276"></a>G-276 | Limits | How a raised `limits.usd_ceiling_per_day` reaches the running Resource Manager and clears its delivered-order flag | Phase 6, with the Resource Manager | [19](#19-resource-manager), [3](#3-configuration-manager) |
-| <a id="g-281"></a>G-281 | Tester | The command and report path that print the JaCoCo line coverage of a Java or Kotlin repository, for Gradle and for Maven; no default is built in, so the coverage step fails naming the language | Phase 5, with the Task Manager | [13](#13-tester) |
 | <a id="g-284"></a>G-284 | Planning | The planner template's boundaries (what every group must contain, size limits, how to write a definition of done and acceptance items) and the text of the planning skill | Authoring task, phase 7 | [5](#5-intake-handler), [6](#6-context-manager) |
 | <a id="g-285"></a>G-285 | Install | The full `AGENTS.md` template and the files `--project` adds; until written, install writes only the Komodo block and `--project` adds nothing | Authoring task, phase 7 | [1](#1-cli) |
 | <a id="g-286"></a>G-286 | Update | The poll interval's setting name and default, and which process polls when no engine runs | Phase 7, with the installer | [1](#1-cli), [7](#7-runtime-manager) |
 | <a id="g-287"></a>G-287 | Login | What each provider's login does and which providers `login --all` lists | Phase 7, with the installer | [1](#1-cli), [11](#11-task-manager) |
-| <a id="g-282"></a>G-282 | Tester | Where the command that prints a non-Go language's JUnit XML report comes from (the repository profile or the configuration); until set, a failing test command of that language blocks as unclassifiable, so no default hides a failure | Phase 5, with the Task Manager | [13](#13-tester) |
 
 #### Spikes, measurements and later-minor items
 
@@ -15174,7 +15175,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-17"></a>G-17 | Budgets | The 50% cache-hit fixture needs real API sessions with usage metrics on | Measured in phase 7 | [13](#13-tester) |
 | <a id="g-18"></a>G-18 | Planning | `repo_map` patterns for TypeScript, Python and Rust against 3 real repos | Spike, phase 7 | [5](#5-intake-handler) |
 | <a id="g-19"></a>G-19 | Timing | The 10,000-event replay under 1 s and the 50 ms short-verb budget | Gate timing, phase 6 | [0](#0-front-matter-and-code-structure), [1](#1-cli), [4](#4-event-bus), [6](#6-context-manager), [18](#18-metrics-service), [10](#10-state-manager) |
-| <a id="g-20"></a>G-20 | OpenAI | The `codex-cli` link, `openai-api` chain and `.codex/` install | Later minor, by design | [11](#11-task-manager), [6](#6-context-manager), [1](#1-cli) |
+| <a id="g-20"></a>G-20 | OpenAI | Live calls on the two OpenAI links, which are built and tested against stand-ins, and the `.codex/` install | Later minor, deferred by owner decision 2026-10-18 | [11](#11-task-manager), [6](#6-context-manager), [1](#1-cli) |
 | <a id="g-21"></a>G-21 | Release signing, enterprise | Private key in a KMS or keyless signing; `update` refuses a manifest older than the last accepted | Later minor; trigger: the first machine the owner does not own runs `update` | [1](#1-cli) |
 | <a id="g-22"></a>G-22 | Model registry, enterprise | A central gateway owning IDs, `retired_on` dates, quotas; `doctor` warns 30 days ahead | Later minor; trigger: 3 or more machines, or 2 people sharing one cap | [11](#11-task-manager) |
 | <a id="g-23"></a>G-23 | Scope, enterprise | Path ownership rows in `policy.json`; a named human for other teams' paths; a widening digest in the metrics view of `komodo status --all` | Later minor; trigger: the first repo with 2 teams or customer data | [11](#11-task-manager) |
