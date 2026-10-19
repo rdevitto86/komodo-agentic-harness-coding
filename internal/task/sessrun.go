@@ -583,7 +583,7 @@ func (m *Manager) start(ctx context.Context, sc *sessCtx, req sessReq, sel Selec
 			return nil, true, err
 		}
 
-		m.fact("resume_lost", map[string]string{"session": sc.id, "error": err.Error()})
+		m.fact("session.resume-lost", map[string]string{"session": sc.id, "agent": req.agent, "error": err.Error()})
 
 		id, uerr := newUUID()
 		if uerr != nil {

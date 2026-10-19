@@ -35,6 +35,7 @@ func (RunRefused) EventKey() bus.Key { return bus.Key{Type: bus.TypeError, Subty
 type ResumeLost struct {
 	bus.GroupFacts
 	Agent string `json:"agent"`
+	Error string `json:"error,omitempty"` // why the saved session could not be resumed
 }
 
 var registerOnce sync.Once
