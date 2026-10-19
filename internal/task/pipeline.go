@@ -659,6 +659,7 @@ func (m *Manager) runChecks(ctx context.Context) ([]string, error) {
 	verdict := res.Done(tree)
 	m.mu.Lock()
 	m.regression = verdict.Regression
+	m.uncovered = slices.Clone(res.Uncovered)
 	m.mu.Unlock()
 	// The event schema has no step output; the output reaches the builder as findings.
 	verdict.Steps = slices.Clone(verdict.Steps)
@@ -728,7 +729,11 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 		diff, _ = m.c.Git.Diff(ctx, m.spec.Lease, nil)
 	}
 
-	in := RoleInput{Diff: diff, Trip: m.Progress().Returns}
+	m.mu.Lock()
+	uncovered := slices.Clone(m.uncovered)
+	m.mu.Unlock()
+
+	in := RoleInput{Diff: diff, Trip: m.Progress().Returns, Uncovered: uncovered}
 	judges := []string{"tester", "reviewer"}
 	res := map[string]*branch{}
 

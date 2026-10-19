@@ -3,7 +3,10 @@
   "when": "filter",
   "applies": {
     "globs": [
-      "embed/**/*.json"
+      "**/*.json",
+      "**/*.yaml",
+      "**/*.yml",
+      "**/*.toml"
     ],
     "markers": []
   },
