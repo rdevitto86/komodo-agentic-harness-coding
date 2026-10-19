@@ -437,6 +437,8 @@ type fakeModel struct {
 	verdict  func(task string) string                              // when set, the reviewer's verdict per task
 	testPass func(item string) bool                                // when set, the tester's pass flag per free item
 	bodies   []string                                              // every request body, in arrival order
+
+	builderFinal func() string // when set and not empty, the builder's final result
 }
 
 // newFakeModel starts the server and stops it with the test.
@@ -597,6 +599,11 @@ func (f *fakeModel) result(role, brief string) string {
 		b, _ := json.Marshal(map[string]any{"files": files})
 		return string(b)
 	case "builder":
+		if f.builderFinal != nil {
+			if s := f.builderFinal(); s != "" {
+				return s
+			}
+		}
 		return `{"status":"done","summary":"added the Add function"}`
 	case "tester":
 		items, tasks := []map[string]any{}, []map[string]string{}

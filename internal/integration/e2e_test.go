@@ -200,7 +200,6 @@ func TestRunRightAfterPlanIsRefusedCleanly(t *testing.T) {
 	r := newFixtureRig(t, false, nil)
 	r.mustRun("plan", "add Sub and Mul to the calc package")
 	res := r.komodo(60*time.Second, "run", "ep-1")
-	r.waitDone(90 * time.Second)
 	if strings.Contains(res.stdout, "fatal: a branch named") {
 		t.Skip("blocked: production bug, run races plan's run on the epic branch and fails with a raw git error " +
 			"(BranchExists then CreateBranch, internal/engine/manager.go:491-506)")

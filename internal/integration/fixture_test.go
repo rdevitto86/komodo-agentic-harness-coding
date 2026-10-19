@@ -129,13 +129,3 @@ func fixtureBuilderGated(broken bool, gate func(task string)) func(brief string,
 		return steps[turn][0].(string), steps[turn][1].(map[string]any)
 	}
 }
-
-// taskByName returns the task id holding name, or the first id.
-func taskByName(ids []string, name string) string {
-	for _, id := range ids {
-		if strings.Contains(id, name) {
-			return id
-		}
-	}
-	return ids[0]
-}
