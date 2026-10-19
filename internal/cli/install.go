@@ -260,6 +260,13 @@ func installResult(d InstallData) Result {
 		ch.Rows = append(ch.Rows, []string{c.File, c.Action, c.Reason})
 	}
 
+	writes := 0
+	for _, c := range d.Changes {
+		if c.Action != "keep" {
+			writes++
+		}
+	}
+
 	pr := format.Table{Head: []string{"link", "result"}, What: "links"}
 	for _, p := range d.Probe {
 		pr.Rows = append(pr.Rows, []string{p.Link, p.Result})
@@ -267,7 +274,7 @@ func installResult(d InstallData) Result {
 
 	return Result{
 		Shape: "reply.install",
-		Facts: format.InstallFacts{Changes: ch, Probe: pr},
+		Facts: format.InstallFacts{DryRun: d.DryRun, Writes: writes, Changes: ch, Probe: pr},
 		Data:  d,
 	}
 }

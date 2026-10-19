@@ -153,7 +153,7 @@ func TestDoctorNamesThePaidRouteThatTheAddressTurnsOff(t *testing.T) {
 	code, checks = h.doctor(repo)
 	c := checks["links"]
 	if code != 3 || c.Result != "fail" || !strings.Contains(c.Detail, "anthropic-api: off") ||
-		!strings.Contains(c.Fix, "komodo config set providers.anthropic.url") {
+		!strings.Contains(c.Fix, "komodo config set providers.anthropic.url=https://api.anthropic.com") {
 		t.Fatalf("exit %d, links = %+v", code, c)
 	}
 }

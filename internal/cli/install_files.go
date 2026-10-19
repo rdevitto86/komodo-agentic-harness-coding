@@ -48,11 +48,22 @@ func renderBlock(pin, bin, rules, style string) string {
 		fmt.Fprintf(&b, "- **Rules:** %s\n", r)
 	}
 	if s := strings.TrimSpace(style); s != "" {
-		fmt.Fprintf(&b, "%s\n", s)
+		fmt.Fprintf(&b, "\n%s\n", demoteHeadings(s))
 	}
 
 	b.WriteString(BlockEnd)
 	return b.String()
+}
+
+// demoteHeadings moves every heading line 4 levels down, so it sits below the block's `####` heading.
+func demoteHeadings(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if rest := strings.TrimLeft(l, "#"); rest != l && strings.HasPrefix(rest, " ") {
+			lines[i] = "####" + l
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // findBlock locates the Komodo block; a missing, repeated or misordered marker is an error that names the lines.
