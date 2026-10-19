@@ -3,10 +3,14 @@ package config
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
 )
+
+// anthropicURLKey is the setting that holds the address of the paid Anthropic server.
+const anthropicURLKey = "providers.anthropic.url"
 
 // target is one checked pair of a SetConfigItem call.
 type target struct {
@@ -153,6 +157,12 @@ func (m *Manager) target(c Change) (target, error) {
 		return t, err
 	}
 
+	if c.Key == anthropicURLKey {
+		if err := checkAbsoluteURL(c.Key, v.(string)); err != nil {
+			return t, err
+		}
+	}
+
 	if t.field == "model" {
 		// modelFix is the limit text of a model refused by the probe check.
 		const modelFix = "a model found by the probe; run komodo install --machine-only"
@@ -170,6 +180,19 @@ func (m *Manager) target(c Change) (target, error) {
 	t.val = v
 
 	return t, nil
+}
+
+// checkAbsoluteURL refuses a non-empty value that does not parse as an absolute URL with a host; empty means the default.
+func checkAbsoluteURL(key, v string) error {
+	if v == "" {
+		return nil
+	}
+
+	if u, err := url.Parse(v); err != nil || !u.IsAbs() || u.Host == "" {
+		return BadValueError{Key: key, Value: v, Detail: "want an absolute URL with a host, such as https://example.com"}
+	}
+
+	return nil
 }
 
 // applyFlat sets or removes one settings.json key; a value equal to the built-in one is removed.

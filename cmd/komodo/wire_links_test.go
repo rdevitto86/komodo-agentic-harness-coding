@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,5 +42,29 @@ func TestBuildLinksCallsTheConfiguredAnthropicURL(t *testing.T) {
 	case <-hits:
 	default:
 		t.Fatal("the paid adapter did not call providers.anthropic.url")
+	}
+}
+
+func TestBuildLinksLeavesOutThePaidRouteForPlainHTTPToAnotherHost(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	cfg, err := config.New(t.TempDir(), config.Known{}, func(string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.SetConfigItem(
+		config.Change{Key: "providers.anthropic.url", New: "http://api.example.com"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, err := llm.LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = buildLinks(cfg, cat, nil).Probe(context.Background(), llm.AnthropicAPI)
+	if !errors.Is(err, llm.ErrUnavailable) {
+		t.Fatalf("paid route probe = %v, want ErrUnavailable", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -50,10 +51,12 @@ func NewAnthropic(opts AnthropicOptions) (*Anthropic, error) {
 		base = anthropicBase
 	}
 
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("anthropic base URL %q is not a URL", opts.BaseURL)
+	if err := CheckBaseURL(base); err != nil {
+		return nil, err
 	}
+
+	u, _ := url.Parse(base)
+	var err error
 
 	a := &Anthropic{opts: opts, cat: opts.Catalog, hc: opts.HTTP, base: base}
 	if a.cat == nil {
@@ -69,6 +72,29 @@ func NewAnthropic(opts AnthropicOptions) (*Anthropic, error) {
 
 	a.ep = core.Endpoint{Hosts: []string{u.Host}, Methods: []string{http.MethodGet, http.MethodPost}}
 	return a, nil
+}
+
+// CheckBaseURL refuses an address that is not an absolute http or https URL with a host, and plain http to any host
+// other than this machine (127.0.0.1, ::1 or localhost). The paid key travels to this address.
+func CheckBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return fmt.Errorf("anthropic address %q is not an absolute URL with a host", raw)
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+
+		return fmt.Errorf("anthropic address %q is plain http to a host that is not this machine; use https", raw)
+	}
+
+	return fmt.Errorf("anthropic address %q must use https", raw)
 }
 
 // Link returns AnthropicAPI.
