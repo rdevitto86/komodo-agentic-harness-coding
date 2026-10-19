@@ -2,4 +2,4 @@
 
 ## spec.1
 
-Compare the diff with the cited section in the brief. A mismatch is reported as not_met on the task.
+The diff matches the spec section a task cites. Compare the diff with the cited section, which is in the brief. A mismatch is answered as `not_met` on the task; it is not filed as a finding.

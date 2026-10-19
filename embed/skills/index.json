@@ -2,6 +2,19 @@
   "v": 1,
   "skills": [
     {
+      "name": "planning",
+      "description": "Planning: ordering dependent task groups, waves, chain length and splitting a group",
+      "globs": [],
+      "markers": [],
+      "sections": [
+        "Dependencies",
+        "Waves",
+        "Chain",
+        "Splitting"
+      ],
+      "sha256": "ec85db7aa401b2bc0a98fdadcf17fcad367eec84ed4e707d22d04b3990d28048"
+    },
+    {
       "name": "standards-aws",
       "description": "AWS standards: identity, networking and data",
       "globs": [
