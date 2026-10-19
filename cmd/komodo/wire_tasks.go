@@ -354,8 +354,8 @@ func (s *stack) str(key, def string) string {
 	return def
 }
 
-// sandboxPlan names the folders a group's sandbox instances use: private temp and build folders, and the Go toolchain and
-// module cache read-only.
+// sandboxPlan names the folders a group's sandbox instances use: private temp and build folders, and the Go toolchain, the
+// golangci-lint folder and the module cache read-only.
 func (s *stack) sandboxPlan(group string) task.SandboxPlan {
 	p := task.SandboxPlan{Temp: filepath.Join(
 		s.home,
@@ -369,8 +369,27 @@ func (s *stack) sandboxPlan(group string) task.SandboxPlan {
 			p.Toolchains, p.Modules = []string{lines[0]}, lines[1]
 		}
 	}
+	if dir := golangciFolder(); dir != "" {
+		p.Toolchains = append(p.Toolchains, dir)
+	}
 
 	return p
+}
+
+// golangciFolder returns the folder that holds the golangci-lint program on PATH, with symlinks resolved, or an empty string
+// when it is not installed.
+func golangciFolder() string {
+	bin, err := exec.LookPath("golangci-lint")
+	if err != nil {
+		return ""
+	}
+
+	real, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		return ""
+	}
+
+	return filepath.Dir(real)
 }
 
 // num reads a numeric setting.
