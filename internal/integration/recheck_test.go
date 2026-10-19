@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// noDocker points the Docker client at a socket that does not exist, so the Tester uses the operating-system sandbox.
+const noDocker = "DOCKER_HOST=unix:///nonexistent/docker.sock"
+
 // epicLacksFile passes while the epic branch lacks the group's file and fails once the landing put it there.
 const epicLacksFile = `! git cat-file -e komodo/ep-1:tiny/add.go`
 
@@ -34,7 +37,7 @@ func TestRecheckFailureStopsTheLanding(t *testing.T) {
 	)
 	r := newBinRig(t, files)
 	// The check needs git, which a Tester container never holds, so this run uses the operating-system sandbox.
-	r.env = append(r.env, "DOCKER_HOST=unix:///nonexistent/docker.sock")
+	r.env = append(r.env, noDocker)
 	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
 		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}

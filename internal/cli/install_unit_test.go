@@ -119,7 +119,8 @@ func TestPutAndDropBlockRoundTrip(t *testing.T) {
 func TestBlockSetsTheStyleApartUnderTheBlockHeading(t *testing.T) {
 	style := "# Komodo output style: adhd\n\nRelay the report.\n\n- Line one.\n"
 	block := renderBlock("1.0.0", "/h/bin/komodo", "", style)
-	if !strings.Contains(block, "- **Report:** relay the envelope's `report` field verbatim.\n\n##### Komodo output style: adhd\n") {
+	want := "- **Report:** relay the envelope's `report` field verbatim.\n\n##### Komodo output style: adhd\n"
+	if !strings.Contains(block, want) {
 		t.Errorf("the style does not follow a blank line as a heading under the block heading:\n%s", block)
 	}
 	for _, line := range strings.Split(block, "\n") {
