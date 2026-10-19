@@ -33,7 +33,8 @@ func peerHasTerminal(c net.Conn) (bool, error) {
 		pid  int
 		serr error
 	)
-	if err := raw.Control(func(fd uintptr) { pid, serr = syscall.GetsockoptInt(int(fd), solLocal, localPeerPID) }); err != nil {
+	read := func(fd uintptr) { pid, serr = syscall.GetsockoptInt(int(fd), solLocal, localPeerPID) }
+	if err := raw.Control(read); err != nil {
 		return false, fmt.Errorf("read the peer socket: %w", err)
 	}
 	if serr != nil {

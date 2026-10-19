@@ -9,7 +9,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// parkedEng returns an engine whose store holds a group saved waiting for an override until the given time, with no run live.
+// parkedEng returns an engine whose store holds a group saved waiting for an override until the given time,
+// with no run live.
 func parkedEng(t *testing.T, until time.Time) *eng {
 	t.Helper()
 	x := newEng(t, [][]string{{"tg-1"}}, onlyIdle, withClock)

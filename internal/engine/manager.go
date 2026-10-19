@@ -144,16 +144,6 @@ func New(d Deps) *Manager {
 	return m
 }
 
-// resumeGroup asks a live group to perform the session starts the breaker held back.
-func (m *Manager) resumeGroup(id string) {
-	m.mu.Lock()
-	g := m.groups[id]
-	m.mu.Unlock()
-	if g != nil {
-		g.enqueue(Input{Kind: InBreakerResume, Group: id, Time: m.clk.Now()})
-	}
-}
-
 // Run subscribes to run-start, run-stop and run-continue and serves them until ctx ends.
 func (m *Manager) Run(ctx context.Context) error {
 	m.mu.Lock()
@@ -261,6 +251,16 @@ func (m *Manager) CheckBeats() {
 		} else if m.d.RestartLoop != nil {
 			m.d.RestartLoop(loop)
 		}
+	}
+}
+
+// resumeGroup asks a live group to perform the session starts the breaker held back.
+func (m *Manager) resumeGroup(id string) {
+	m.mu.Lock()
+	g := m.groups[id]
+	m.mu.Unlock()
+	if g != nil {
+		g.enqueue(Input{Kind: InBreakerResume, Group: id, Time: m.clk.Now()})
 	}
 }
 

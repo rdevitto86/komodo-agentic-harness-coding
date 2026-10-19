@@ -152,8 +152,8 @@ func (b *breaker) allow(group string) bool {
 	return false
 }
 
-// ended tells the breaker a group's session ended or the group stopped working; if that group was the probe and no panic-tier
-// fault came, the breaker closes and every held group resumes.
+// ended tells the breaker a group's session ended or the group stopped working; if that group was the probe and no
+// panic-tier fault came, the breaker closes and every held group resumes.
 func (b *breaker) ended(group string) {
 	b.mu.Lock()
 	if !b.open || !b.probing || b.probe != group {
@@ -186,7 +186,8 @@ func (b *breaker) alert() string {
 		return ""
 	}
 
-	return "No new sessions start: " + string(b.reason) + " faults hit several groups. One probe session runs every 5 minutes."
+	return "No new sessions start: " + string(b.reason) + " faults hit several groups. " +
+		"One probe session runs every 5 minutes."
 }
 
 // isOpen reports whether the breaker holds sessions back.

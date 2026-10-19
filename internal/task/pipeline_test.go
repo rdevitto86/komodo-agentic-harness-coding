@@ -374,8 +374,8 @@ func TestCheckDoneFactMatchesTheEventSchemaAndResultFailFlagsARegression(t *test
 		switch f.Subtype {
 		case "check.done":
 			checks++
-			line := `{"type":"run-status","subtype":"check.done","run":"r","group":"g","time":"2026-10-15T12:00:00Z","data":` +
-				string(f.Data) + `}`
+			line := `{"type":"run-status","subtype":"check.done","run":"r","group":"g",` +
+				`"time":"2026-10-15T12:00:00Z","data":` + string(f.Data) + `}`
 
 			var e bus.Event
 			if err := json.Unmarshal([]byte(line), &e); err != nil {

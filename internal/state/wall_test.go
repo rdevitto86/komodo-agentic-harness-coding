@@ -13,7 +13,8 @@ func v2Record(block, counters string) string {
 func TestMigrationGivesAWallBlockedGroupFreshTryTime(t *testing.T) {
 	m, root := newMgr(t)
 	writeRaw(t, statePath(root, testGroup), v2Record(`{"reason":"wall"}`,
-		`{"retries_left":2,"overrides":0,"crashes":0,"blocks":{"wall":1},"wall_used_s":7200,"wall_extended":true,"tokens_used":5}`))
+		`{"retries_left":2,"overrides":0,"crashes":0,"blocks":{"wall":1},`+
+			`"wall_used_s":7200,"wall_extended":true,"tokens_used":5}`))
 
 	r, err := m.Load(testGroup)
 	if err != nil {
@@ -33,7 +34,8 @@ func TestMigrationGivesAWallBlockedGroupFreshTryTime(t *testing.T) {
 func TestMigrationKeepsAGrantedExtensionOnTheFirstTry(t *testing.T) {
 	m, root := newMgr(t)
 	writeRaw(t, statePath(root, testGroup), v2Record(`{"reason":"flap"}`,
-		`{"retries_left":1,"overrides":1,"crashes":0,"blocks":{"flap":1},"wall_used_s":4000,"wall_extended":true,"tokens_used":0}`))
+		`{"retries_left":1,"overrides":1,"crashes":0,"blocks":{"flap":1},`+
+			`"wall_used_s":4000,"wall_extended":true,"tokens_used":0}`))
 
 	r, err := m.Load(testGroup)
 	if err != nil {

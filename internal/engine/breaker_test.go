@@ -67,7 +67,13 @@ func TestThreePanicFaultsOfOneReasonOnThreeGroupsOpenTheBreaker(t *testing.T) {
 func TestFaultAndMinorTiersNeverTripTheBreaker(t *testing.T) {
 	r := newBrkRig()
 	for range 4 {
-		for _, end := range []Input{crashEnd("builder"), builderEnd("provider"), builderEnd("cancelled"), in(InFault, FaultData{Reason: "publish"})} {
+		ends := []Input{
+			crashEnd("builder"),
+			builderEnd("provider"),
+			builderEnd("cancelled"),
+			in(InFault, FaultData{Reason: "publish"}),
+		}
+		for _, end := range ends {
 			res := Next(claimed(), end, fixtureLimits())
 			if res.Panic != "" {
 				t.Fatalf("%s was counted as a panic: %q", end.Kind, res.Panic)
