@@ -108,6 +108,8 @@ func (e *Engine) Serve(ctx context.Context) error {
 	_ = os.Remove(e.sock)
 	_ = os.Remove(e.beatPath())
 	e.closeConns()
+	stopRun()
+	e.m.wait(killGrace)
 	e.m.closeAllCaches()
 	return serveErr
 }

@@ -24,6 +24,7 @@ type eng struct {
 	sock   string
 	served chan error
 	stop   context.CancelFunc
+	over   bool     // Serve has returned and its result was taken
 	hold   net.Conn // keeps the exit rule from firing before the test asks for it
 }
 
@@ -48,6 +49,7 @@ func (x *eng) serve() {
 	ctx, cancel := context.WithCancel(context.Background())
 	x.stop = cancel
 	go func() { x.served <- x.e.Serve(ctx) }()
+	x.t.Cleanup(x.drain)
 	until(x.t, "the socket to answer", func() bool {
 		c, err := net.Dial("unix", x.sock)
 		if err != nil {
@@ -56,8 +58,6 @@ func (x *eng) serve() {
 		x.hold = c
 		return true
 	})
-	x.t.Cleanup(cancel)
-	x.t.Cleanup(x.release)
 }
 
 // exited waits for Serve to return and gives its error.
@@ -66,11 +66,27 @@ func (x *eng) exited() error {
 	x.release()
 	select {
 	case err := <-x.served:
+		x.over = true
 		return err
 	case <-time.After(5 * time.Second):
 		x.t.Fatal("the engine did not exit")
 	}
 	return nil
+}
+
+// drain stops Serve and waits for it, so no goroutine of the engine writes after the test folder goes.
+func (x *eng) drain() {
+	x.release()
+	x.stop()
+	if x.over {
+		return
+	}
+
+	select {
+	case <-x.served:
+	case <-time.After(5 * time.Second):
+		x.t.Error("the engine did not exit on cleanup")
+	}
 }
 
 // release closes the connection that holds the engine up.
