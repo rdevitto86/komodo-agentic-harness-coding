@@ -695,7 +695,7 @@ func (f *fakeModel) arm() (started <-chan struct{}, release func()) {
 	return f.started, func() { close(hold) }
 }
 
-// writeDocker puts a fake docker on PATH that keeps one file per container in a folder and understands ps and rm; it returns
+// writeDocker puts a fake docker on PATH that keeps one file per container in a folder and understands ps and rm and has no daemon, so the Tester falls back; it returns
 // the folder.
 func (r *binRig) writeDocker() string {
 	dir := filepath.Join(r.root, "containers")
@@ -703,7 +703,7 @@ func (r *binRig) writeDocker() string {
 		r.t.Fatal(err)
 	}
 	script := "#!/bin/sh\nD=" + dir +
-		"\ncase \"$1\" in\nps)\n  pat=\"\"\n  while [ $# -gt 0 ]; do case \"$1\" in --filter) shift; pat=${1#name=};; " +
+		"\ncase \"$1\" in\nversion) exit 1;;\nps)\n  pat=\"\"\n  while [ $# -gt 0 ]; do case \"$1\" in --filter) shift; pat=${1#name=};; " +
 		"esac; shift; done\n" +
 
 		"  for f in \"$D\"/*; do [ -e \"$f\" ] || continue; n=$(basename \"$f\"); echo \"$n\" | grep -Eq \"$pat\" && echo " +

@@ -388,3 +388,42 @@ func TestUnfinishedBuilderSessionReportsTheChangedFiles(t *testing.T) {
 		t.Fatal("the Task Manager committed unfinished work")
 	}
 }
+
+func TestSessionEndFactCarriesTheReportedTokens(t *testing.T) {
+	r := newPipeRig(t, rigOpts{limits: Limits{Attempts: 1}})
+	r.model.on("builder", func(llm.Session) (llm.Stream, error) {
+		st := newFakeStream()
+		ev := resultEvent(`{"items":[]}`)
+		ev.Result.Usage = &llm.Usage{TokensIn: 30, TokensOut: 9}
+		st.ev <- ev
+		return st, nil
+	})
+	if err := r.run(); err != ErrHeld {
+		t.Fatalf("Run returned %v", err)
+	}
+	if r.rt.factCount("usage") != 1 {
+		t.Fatalf("%d usage facts, want 1", r.rt.factCount("usage"))
+	}
+	r.rt.mu.Lock()
+	defer r.rt.mu.Unlock()
+	for _, f := range r.rt.facts {
+		if f.Subtype != "session.end" {
+			continue
+		}
+		var d struct {
+			Tokens int64 `json:"tokens"`
+			Usage  *struct {
+				In  int `json:"tokens_in"`
+				Out int `json:"tokens_out"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal(f.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d.Tokens != 39 || d.Usage == nil || d.Usage.In != 30 || d.Usage.Out != 9 {
+			t.Fatalf("session.end carries %s, want tokens 39 and usage 30 in, 9 out", f.Data)
+		}
+		return
+	}
+	t.Fatal("no session.end fact")
+}

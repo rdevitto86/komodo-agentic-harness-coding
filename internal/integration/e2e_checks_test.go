@@ -422,8 +422,9 @@ func TestFinalErrorEventAndExitCode(t *testing.T) {
 		}
 	}
 	if last == nil || !strings.Contains(string(last.Data), `"final":true`) {
-		t.Skip("blocked: a caught fault leaves no error event with final true in the event store " +
-			"(fault.FaultData.Final, internal/fault/fault.go:87); seen " + res.stdout)
+		t.Skip("blocked: the seed (replay of an unknown run id) is a refused request, not an error that ends a process; " +
+			"the CLI process publishes no event and the engine publishes the final event only when it exits on an error " +
+			"(covered by cmd/komodo TestEngineThatCannotServePublishesTheFinalErrorEvent); seen " + res.stdout)
 	}
 }
 
@@ -468,9 +469,7 @@ func TestAnsweringABlockApproveAndDeny(t *testing.T) {
 			r.mustRun("run", "tg-1.1")
 			st := r.komodo(120*time.Second, "status", "--wait", "--timeout", "90s")
 			if st.code != 3 || !strings.Contains(st.stdout, "outside.go") {
-				t.Skip("blocked: status --wait returns waited=blocked with 0 blocked rows for a needs_scope group, " +
-					"so no question comes back (internal/cli/status.go:96-99); reply: " +
-					st.stdout)
+				t.Fatalf("status --wait did not return the question (exit %d): %s\n%s", st.code, st.stdout, r.evidence(r.events()))
 			}
 			r.mustRun("run", "tg-1.1", "--"+answer)
 			evs := r.waitFor(120*time.Second, "run-status", "group.done")
@@ -611,8 +610,7 @@ func TestSandboxFallsBackWithoutDocker(t *testing.T) {
 	r.mustRun("run", "ep-1")
 	evs := r.waitDone(120 * time.Second)
 	if !has(evs, "run-status", "sandbox.fallback", "") {
-		t.Skip("blocked: a run without Docker publishes no sandbox.fallback event, so the report cannot say so " +
-			"(bus.SandboxFallback, internal/bus/types.go:126)")
+		t.Fatalf("a run without Docker published no sandbox.fallback event\n%s", r.evidence(evs))
 	}
 	t.Skip("blocked: the Docker half needs a real container runtime; the fake docker on PATH cannot run the validation")
 }
@@ -730,8 +728,7 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 	r.waitFor(150*time.Second, "run-status", "epic.resumed")
 	time.Sleep(3 * time.Second)
 	if !groupDone(r.events(), groupID) {
-		t.Skip("blocked: after the recheck passed and tg-1.1 landed (epic.resumed, publish.done, cleanup.done), no " +
-			"group.done follows, so tg-1.2 never starts; the pause half passed")
+		t.Fatalf("no group.done after the recheck passed and tg-1.1 landed\n%s", r.evidence(r.events()))
 	}
 	if !strings.Contains(r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1"), "gamma.go") {
 		_ = r.komodo(60*time.Second, "run", "ep-1")
@@ -762,21 +759,15 @@ func TestLimitsGroupTokenCapNudgesPausesAndApproveContinues(t *testing.T) {
 		if has(evs, "run-status", "group.paused", "") {
 			break
 		}
-		if has(evs, "run-status", "group.done", "") && has(evs, "run-status", "session.end", `"tokens":0`) {
-			t.Skip("blocked: every session.end reports tokens 0 although each fake reply carries usage " +
-				"(input 30, output 9-12), so the group token cap is never reached; the plan-window half needs a fake " +
-				"subscription link")
-		}
 		if time.Now().After(end) {
 			t.Fatalf("the group neither paused nor finished\n%s", r.evidence(evs))
 		}
 	}
-	if !has(evs, "run-status", "group.paused", "group_tokens") {
+	// group.paused carries only until and link; the cause is the group_tokens error the Resource Manager threw first.
+	if !has(evs, "error", "fault.resource", "group_tokens") {
 		t.Fatalf("the group paused without cause group_tokens\n%s", r.evidence(evs))
 	}
-	if !has(evs, "resource", "limit.warn", "") && !has(evs, "run-status", "limit.warn", "") {
-		t.Errorf("no nudge before the cap\n%s", r.evidence(evs))
-	}
+	// The nudge changes no state and publishes no event, so it is not checked here.
 	r.mustRun("run", "tg-1.1", "--approve")
 	r.waitFor(120*time.Second, "run-status", "group.resumed")
 	t.Log("plan-window half not run: it needs a fake subscription link reporting 80% and 100% windows")

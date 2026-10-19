@@ -85,7 +85,13 @@ func newStack(home string, stderr io.Writer) (*stack, error) {
 
 	s.faults = fault.New(s.bus, &engine.ConnPrinter{})
 	s.llm = buildLinks(cfg, cat, s.faults)
-	s.boxes = sandbox.NewManager(buildBackends(home), nil)
+	var image string
+	if it, err := cfg.GetConfigItem("sandbox.image"); err == nil {
+		image, _ = it.Value.(string)
+	}
+
+	byRole, osBackend := buildBackends(image, home)
+	s.boxes = sandbox.NewManager(byRole, osBackend)
 	s.git = core.NewGit()
 	s.caches = &cacheStore{home: home, version: version, open: map[string]*cache.Cache{}}
 	s.kits, s.byID, s.refs = map[string]*repoKit{}, map[string]*repoKit{}, map[string]*groupRef{}
@@ -156,15 +162,17 @@ func buildLinks(cfg *config.Manager, cat *llm.Catalog, faults llm.Recoverer) *ll
 	return llm.New(links)
 }
 
-// buildBackends picks the operating-system sandbox of each role by platform.
-func buildBackends(home string) map[string]sandbox.Backend {
+// buildBackends picks the mechanism of each role: Docker for the Tester and the operating-system sandbox for the Builder.
+// It also returns the operating-system sandbox, which the Tester falls back to when Docker is missing.
+func buildBackends(image, home string) (map[string]sandbox.Backend, sandbox.Backend) {
 	var b sandbox.Backend
 	if _, err := exec.LookPath("sandbox-exec"); err == nil {
 		b = sandbox.NewSeatbelt(sandbox.SeatbeltOptions{Home: home})
 	} else {
 		b = sandbox.NewBubblewrap(sandbox.BubblewrapOptions{Home: home})
 	}
-	return map[string]sandbox.Backend{"builder": b, "tester": b}
+
+	return map[string]sandbox.Backend{"builder": b, "tester": sandbox.NewDocker(sandbox.DockerOptions{Image: image})}, b
 }
 
 // gitOut runs the host git in the working directory and returns its trimmed output.
@@ -191,6 +199,14 @@ func runEngine(ctx context.Context, home string, stderr io.Writer) error {
 	err = eng.Serve(ctx)
 	if errors.Is(err, engine.ErrEngineRunning) {
 		return nil
+	}
+	if err != nil && ctx.Err() == nil {
+		src := fault.Source{Component: "engine"}
+		s.faults.Final(
+			context.Background(),
+			src,
+			fault.Fault{Source: src, Code: "internal", Kind: fault.KindInternal, Severity: fault.SeverityError, Reason: err.Error()},
+		)
 	}
 
 	return err
