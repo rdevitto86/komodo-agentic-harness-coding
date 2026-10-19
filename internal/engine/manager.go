@@ -89,7 +89,7 @@ type Manager struct {
 	groups   map[string]*group
 	starting map[string]bool
 	repos    map[string]*repoCache
-	brk      *breaker             // holds new sessions back while Komodo itself keeps breaking
+	errs     *errorHandler        // the catch-all for errors: counts them and holds session starts back
 	parked   map[string]Timer     // override timers of saved groups no run holds, by group id
 	parkedBy map[string]parkedRow // those groups and their records, by group id
 	expect   map[string]chan error
@@ -142,7 +142,7 @@ func New(d Deps) *Manager {
 		ready:    make(chan struct{}),
 		faults:   faultsOf(d.Faults),
 	}
-	m.brk = newBreaker(m.clk, func(e Event) { _ = m.d.Bus.Publish(e) }, m.resumeGroup)
+	m.errs = newErrorHandler(m.clk, func(e Event) { _ = m.d.Bus.Publish(e) }, m.resumeGroup)
 
 	return m
 }
@@ -257,13 +257,13 @@ func (m *Manager) CheckBeats() {
 	}
 }
 
-// resumeGroup asks a live group to perform the session starts the breaker held back.
+// resumeGroup asks a live group to perform the session starts a hold kept back.
 func (m *Manager) resumeGroup(id string) {
 	m.mu.Lock()
 	g := m.groups[id]
 	m.mu.Unlock()
 	if g != nil {
-		g.enqueue(Input{Kind: InBreakerResume, Group: id, Time: m.clk.Now()})
+		g.enqueue(Input{Kind: InHoldDue, Group: id, Time: m.clk.Now()})
 	}
 }
 

@@ -28,8 +28,8 @@ type calc struct {
 	scopeBlock *ScopeAsk
 	// exhausted names the failure that found the retry budget empty; the block rows then hold the group for an override.
 	exhausted string
-	// blocker is the blocker-tier reason this input stood for, which the group's breaker counts.
-	blocker state.Reason
+	// err is the error type this input stood for, which the error handler records; empty for none.
+	err state.Reason
 }
 
 // wallExtension is the one automatic extension a try gets after its working-time limit.
@@ -70,8 +70,8 @@ func (c *calc) newTry() {
 	c.s.Counters.WallBaseS = c.s.Counters.WallUsedS
 }
 
-// tally counts the blocker errors of an input in the group's streak; a session that ends done or in a charged failure of
-// the work clears it.
+// tally names the error an input stood for, for the error handler, and keeps the group's streak of blocker errors; a
+// session that ends done or in a charged failure of the work clears the streak.
 func (c *calc) tally() {
 	s := &c.s
 	if c.from == NoStage || c.from == StageDone {
@@ -86,11 +86,15 @@ func (c *calc) tally() {
 		if d.Restart {
 			return
 		}
-		if d.Reason == string(state.ReasonDone) || state.Reason(d.Reason).Charged() {
+		if d.Reason == string(state.ReasonDone) {
 			s.Counters.FaultStreak = 0
 			return
 		}
+
 		r = state.Reason(d.Reason)
+		if r.Charged() {
+			s.Counters.FaultStreak = 0
+		}
 	case InGroupCrash:
 		r = state.ReasonCrash
 	case InFault:
@@ -102,8 +106,8 @@ func (c *calc) tally() {
 		return
 	}
 
+	c.err = r
 	if state.Classify(r) == state.SeverityBlocker {
-		c.blocker = r
 		s.Counters.FaultStreak++
 	}
 }
@@ -487,7 +491,7 @@ func Next(s0 State, in Input, l Limits) Result {
 		c.s.ActionsOpen = append(c.s.ActionsOpen, state.OpenAction{ID: o.Key, Kind: string(o.Kind), Args: args})
 	}
 
-	return Result{State: c.s, Orders: c.orders, Emit: c.emit, Dropped: c.dropped, Blocker: c.blocker}
+	return Result{State: c.s, Orders: c.orders, Emit: c.emit, Dropped: c.dropped, Err: c.err}
 }
 
 // cloneState returns a deep copy of s with no nil slice or map.

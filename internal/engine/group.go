@@ -277,8 +277,7 @@ func (g *group) after() {
 	g.armTimers()
 	if stage == StagePaused || stage == StageBlocked || stage == StageDone {
 		g.clearHold()
-		g.m.brk.ended(g.spec.ID)
-		g.m.brk.drop(g.spec.ID)
+		g.m.errs.drop(g.spec.ID)
 	}
 	if stage == StageDone {
 		g.m.groupDone(g)
@@ -293,7 +292,7 @@ func (g *group) perform(orders []Order) {
 		if g.stopping.Load() {
 			return
 		}
-		if o.Kind == OrderEnterStage && startsSessions(o.Stage) && (g.holding() || !g.m.brk.allow(g.spec.ID)) {
+		if o.Kind == OrderEnterStage && startsSessions(o.Stage) && (g.holding() || !g.m.errs.allow(g.spec.ID)) {
 			continue // held by a breaker; the order stays open until the hold lets it through
 		}
 		if o.Kind == OrderEnterStage {
@@ -599,7 +598,7 @@ func (g *group) handle(in Input) {
 		return
 	}
 
-	if in.Kind == InBreakerResume {
+	if in.Kind == InHoldDue {
 		g.resumeHeld()
 		return
 	}
@@ -639,12 +638,8 @@ func (g *group) handle(in Input) {
 
 	g.publish(res.Emit)
 	g.sessionSignals(in)
-	if res.Blocker != "" {
-		g.m.brk.note(g.spec.ID, res.Blocker)
-		g.holdFor(groupWait(g.st.Counters.FaultStreak))
-	}
-	if in.Kind == InSessionEnd {
-		g.m.brk.ended(g.spec.ID)
+	if res.Err != "" {
+		g.holdFor(g.m.errs.record(g.r.id, g.spec.ID, res.Err, g.st.Counters.FaultStreak))
 	}
 
 	g.after()
@@ -680,8 +675,8 @@ func (g *group) saveFailed(err error) {
 	}
 
 	g.publish(res.Emit)
-	if res.Blocker != "" {
-		g.m.brk.note(g.spec.ID, res.Blocker)
+	if res.Err != "" {
+		g.holdFor(g.m.errs.record(g.r.id, g.spec.ID, res.Err, g.st.Counters.FaultStreak))
 	}
 
 	g.after()

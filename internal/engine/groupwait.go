@@ -33,7 +33,7 @@ func (g *group) holdFor(wait time.Duration) {
 	}
 
 	g.holdUntil = g.now().Add(wait)
-	g.holdT = g.m.clk.AfterFunc(wait, func() { g.enqueue(Input{Kind: InBreakerResume, Group: g.spec.ID}) })
+	g.holdT = g.m.clk.AfterFunc(wait, func() { g.enqueue(Input{Kind: InHoldDue, Group: g.spec.ID}) })
 }
 
 // holding reports whether the group's own wait still holds its session starts back.

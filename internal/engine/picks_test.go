@@ -239,8 +239,8 @@ func TestACrashFromTheEngineRestartingIsNoFault(t *testing.T) {
 	s := claimed()
 	end := sessionCrash("builder", "s1", "t1", StageBuild)
 	r := apply(t, s, in(InSessionEnd, end))
-	if r.State.Counters.FaultStreak != 0 || r.Blocker != "" {
-		t.Fatalf("streak %d panic %q", r.State.Counters.FaultStreak, r.Blocker)
+	if r.State.Counters.FaultStreak != 0 || r.Err != "" {
+		t.Fatalf("streak %d panic %q", r.State.Counters.FaultStreak, r.Err)
 	}
 }
 
@@ -251,8 +251,8 @@ func TestAGuardThatFailsToLoadBlocksUnderSetupSpendsNoRetryAndCountsAsAFault(t *
 	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonSetup || r.State.Counters.RetriesLeft != 2 {
 		t.Fatalf("stage %q block %+v left %d", r.State.Stage, r.State.Block, r.State.Counters.RetriesLeft)
 	}
-	if r.State.Counters.FaultStreak != 1 || r.Blocker != state.ReasonSetup {
-		t.Fatalf("streak %d panic %q", r.State.Counters.FaultStreak, r.Blocker)
+	if r.State.Counters.FaultStreak != 1 || r.Err != state.ReasonSetup {
+		t.Fatalf("streak %d panic %q", r.State.Counters.FaultStreak, r.Err)
 	}
 	for _, e := range r.Emit {
 		if b, ok := e.Data.(*bus.GroupBlocked); ok && !strings.Contains(b.Detail, "policy.json") {
@@ -269,8 +269,8 @@ func TestAToolErrorInsideASessionIsNoFault(t *testing.T) {
 		in(InGateFail, bus.TaskDone{Task: "t1"}),
 	} {
 		r := Next(s, i, fixtureLimits())
-		if r.Blocker != "" || r.State.Counters.FaultStreak != 0 || r.State.Counters.Crashes != 0 {
-			t.Errorf("%s counted: panic %q streak %d", i.Kind, r.Blocker, r.State.Counters.FaultStreak)
+		if r.Err != "" || r.State.Counters.FaultStreak != 0 || r.State.Counters.Crashes != 0 {
+			t.Errorf("%s counted: panic %q streak %d", i.Kind, r.Err, r.State.Counters.FaultStreak)
 		}
 	}
 }

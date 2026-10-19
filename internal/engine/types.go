@@ -53,7 +53,7 @@ const (
 	InFact          InputKind = "fact"           // data: FactData; a fact that is published and changes nothing
 	InLoopRestart   InputKind = "loop.restart"   // a silent Task Manager was restarted; costs no retry
 	InOverride      InputKind = "override"       // data: OverrideData; a person gave an empty group a final try
-	InBreakerResume InputKind = "breaker.resume" // the breaker lets the group perform the session starts it held back
+	InHoldDue InputKind = "hold.due" // a hold on the group's session starts ended; it performs the ones held back
 )
 
 // Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a
@@ -108,8 +108,8 @@ type Result struct {
 	Stale   bool     // the input's epoch is older than the group's; State is unchanged
 	Dup     bool     // the input's request was applied before; State is unchanged
 	Dropped []string // facts that stood for no event, each with the kind and the reason, for the error output
-	// the blocker-tier reason the input stood for, which the group's breaker counts; empty for none
-	Blocker state.Reason
+	// the error type the input stood for, which the error handler records; empty for none
+	Err state.Reason
 }
 
 // The data of each input kind.
