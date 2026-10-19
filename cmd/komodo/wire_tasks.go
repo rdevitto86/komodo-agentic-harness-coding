@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	komodo "github.com/rdevitto86/komodo-agentic-harness-coding"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
@@ -106,7 +107,7 @@ type limits struct{ m *state.Machine }
 var markerLanguage = map[string]string{
 	"go.mod":           "go",
 	"Cargo.toml":       "rust",
-	"package.json":     "node",
+	"package.json":     "typescript",
 	"pyproject.toml":   "python",
 	"requirements.txt": "python",
 }
@@ -147,7 +148,14 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		return engine.Channels{}, fmt.Errorf("find the tip of %s: %w", epicBranch, err)
 	}
 
-	cmds, lang := commandTable(contextmgr.Detect(task.NewBaseTree(gitRunner{k.root}, base)))
+	profiles, err := agent.LoadToolProfiles(komodo.Embedded)
+	if err != nil {
+		return engine.Channels{}, err
+	}
+
+	baseTree := task.NewBaseTree(gitRunner{k.root}, base)
+	cmds, lang := commandTable(contextmgr.Detect(baseTree))
+	lang, tools := resolveTools(profiles, baseTree, cmds, lang)
 	tspec, items := k.taskSpec(spec, grp, cmds)
 	gc := &task.GitCLI{Repo: k.root, Start: epicBranch, Base: base}
 	ref := s.refFor(spec.ID)
@@ -200,12 +208,34 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		return engine.Channels{}, err
 	}
 
-	c.Checks = agent.NewChecker(agent.CheckerConfig{
+	cc := agent.CheckerConfig{
 		TestCommands: map[string]string{lang: "test"}, SecretPatterns: secrets, Sibling: sibling,
 		Diff: func(ctx context.Context, base, head string) (string, error) {
 			return gitRunner{tspec.Lease.Worktree}.Run(ctx, "diff", base)
 		},
-	})
+	}
+	if tools.JUnit != "" {
+		cc.ReportCommands = map[string]string{lang: tools.JUnit}
+	}
+	if tools.Coverage != "" {
+		cc.CoverageCommands = map[string]string{lang: tools.Coverage}
+	}
+	if k.st != nil {
+		cc.BaseResult = agent.NewBaselineSource(agent.BaselineConfig{
+			Store: baselineStore{st: k.st, group: spec.ID},
+			Tree: func(_ context.Context, base string) (string, error) {
+				return gitOut("-C", k.root, "rev-parse", base+"^{tree}")
+			},
+			Checkout: func(ctx context.Context, base string) (string, error) {
+				return checkoutBase(ctx, k.root, base, c.Plan.Build)
+			},
+			Language: lang,
+			Test:     tools.Test,
+			JUnit:    tools.JUnit,
+		})
+	}
+
+	c.Checks = agent.NewChecker(cc)
 
 	roles, err := task.NewRoles(task.RoleConfig{
 		Group:    tspec.Group,
@@ -436,4 +466,116 @@ func commandTable(cs contextmgr.CommandSet) (map[string][]string, string) {
 	}
 
 	return cmds, lang
+}
+
+// toolSetup is the commands the checks and the baseline read for the group's language.
+type toolSetup struct {
+	Name     string // gradle, maven or pytest; empty when the language profile has no entry
+	Test     string // the test class as one shell line
+	JUnit    string // prints the JUnit XML reports of a finished test run; empty when none is confirmed
+	Coverage string // runs the tests and prints the coverage report; empty keeps the built-in default
+}
+
+// resolveTools names a Java or Kotlin tree's language from its build file, fills the test class the repository profile
+// found none for, and returns the language profile's commands that fit the test command.
+func resolveTools(p agent.ToolProfiles, t contextmgr.Tree, cmds map[string][]string, lang string) (string, toolSetup) {
+	if lang == "" {
+		switch {
+		case t.Exists("build.gradle.kts"):
+			lang = "kotlin"
+		case t.Exists("build.gradle"), t.Exists("settings.gradle"), t.Exists("settings.gradle.kts"), t.Exists("pom.xml"):
+			lang = "java"
+		}
+	}
+
+	var ts toolSetup
+	if r, ok := p.Resolve(lang, t.Exists, cmds["test"]); ok {
+		ts = toolSetup{Name: r.Name, JUnit: r.JUnit, Coverage: r.Coverage}
+		if r.Test != "" {
+			cmds["test"] = []string{"sh", "-c", r.Test}
+		}
+	}
+
+	ts.Test = shellLine(cmds["test"])
+	return lang, ts
+}
+
+// shellLine renders a command as one shell line; a command that is already `sh -c <line>` gives its line.
+func shellLine(argv []string) string {
+	if len(argv) == 3 && argv[0] == "sh" && argv[1] == "-c" {
+		return argv[2]
+	}
+
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = a
+		if a == "" || strings.ContainsAny(a, " \t\n'\"\\$&|;<>()*?[]#~`!{}") {
+			parts[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		}
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// baselineStore keeps the baseline in the State Manager, beside the group's record, and finds the entry of any group.
+type baselineStore struct {
+	st    *state.Manager
+	group string
+}
+
+// Load returns the baseline any group stored for the tree.
+func (b baselineStore) Load(_ context.Context, tree string) (agent.Baseline, bool, error) {
+	r, ok, err := b.st.FindBaseline(tree)
+	if err != nil || !ok {
+		return agent.Baseline{}, false, err
+	}
+	return agent.Baseline{TreeHash: r.Tree, Passed: r.Passed}, true, nil
+}
+
+// Save stores the baseline beside the group's record.
+func (b baselineStore) Save(_ context.Context, bl agent.Baseline) error {
+	return b.st.SaveBaseline(b.group, state.BaselineRecord{Tree: bl.TreeHash, Passed: bl.Passed})
+}
+
+// checkoutBase writes the base commit's files into a folder under the group's build folder, which the Tester's sandbox can
+// read and write, and returns the folder. A finished checkout is reused.
+func checkoutBase(ctx context.Context, root, base, buildDir string) (string, error) {
+	// doneMark is the file written last, so a half-written checkout is made again.
+	const doneMark = ".komodo-base"
+
+	dir := filepath.Join(buildDir, "base-"+base[:min(12, len(base))])
+	if _, err := os.Stat(filepath.Join(dir, doneMark)); err == nil {
+		return dir, nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+
+	archive := exec.CommandContext(ctx, "git", "-C", root, "archive", base)
+	untar := exec.CommandContext(ctx, "tar", "-x", "-C", dir)
+
+	pipe, err := archive.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+
+	untar.Stdin = pipe
+	if err := untar.Start(); err != nil {
+		return "", fmt.Errorf("start tar: %w", err)
+	}
+	if err := archive.Start(); err != nil {
+		_ = untar.Process.Kill()
+		_ = untar.Wait()
+		return "", fmt.Errorf("start git archive: %w", err)
+	}
+
+	aerr := archive.Wait()
+	if err := untar.Wait(); err != nil || aerr != nil {
+		return "", fmt.Errorf("extract %s: %w", base, errors.Join(aerr, err))
+	}
+
+	return dir, os.WriteFile(filepath.Join(dir, doneMark), nil, 0o644)
 }
