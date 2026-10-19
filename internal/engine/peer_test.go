@@ -114,6 +114,36 @@ func TestTheEngineRefusesAnOverrideWhenThePeerCannotBeChecked(t *testing.T) {
 	}
 }
 
+func TestTheEngineRefusesAnOverrideAnswerSentWithTheApproveFlag(t *testing.T) {
+	x := waitingForOverride(t, func(net.Conn) (bool, error) { return false, nil })
+
+	req := overrideReq("o1")
+	req.Flags = Flags{Approve: true}
+
+	reps := x.ask(req)
+	if last := reps[len(reps)-1]; last.Status != StatusRefused || last.Code != CodeNoTerminal {
+		t.Fatalf("reply %+v", last)
+	}
+	if st := x.store.get("g-tg-1"); st.Stage != StageBlocked || st.Counters.Overrides != 0 {
+		t.Fatalf("the bypass changed the group: %s %+v", st.Stage, st.Counters)
+	}
+}
+
+func TestTheEngineRefusesAnOverrideAnswerWhoseFlagsDisagree(t *testing.T) {
+	x := waitingForOverride(t, func(net.Conn) (bool, error) { return true, nil })
+
+	req := overrideReq("o1")
+	req.Flags = Flags{Approve: true}
+
+	reps := x.ask(req)
+	if last := reps[len(reps)-1]; last.Status != StatusError || last.Code != CodeBadFrame {
+		t.Fatalf("reply %+v", last)
+	}
+	if st := x.store.get("g-tg-1"); st.Stage != StageBlocked || st.Counters.Overrides != 0 {
+		t.Fatalf("the mismatched request changed the group: %s %+v", st.Stage, st.Counters)
+	}
+}
+
 func TestTheEngineTakesAnOverrideFromAProcessWithATerminal(t *testing.T) {
 	x := waitingForOverride(t, func(net.Conn) (bool, error) { return true, nil })
 
