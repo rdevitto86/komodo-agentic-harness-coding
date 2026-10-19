@@ -151,12 +151,12 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 		}
 		if has(evs, "run-status", "group.done", "") {
 			if strings.Contains(r.git(r.origin, "show", "komodo/ep-1:calc/calc.go"), "a - b") {
-				t.Skip("blocked: production bug, the broken Add landed on komodo/ep-1 and the group ended complete; " +
-					"check.done reported baseline pass and regression false (internal/agent/checks.go:79-83)")
+				t.Fatalf("production bug: the broken Add landed on komodo/ep-1 and the group ended complete; "+
+					"check.done reported baseline pass and regression false (internal/agent/checks.go:79-83)\n%s",
+					r.evidence(evs))
 			}
-			t.Skip("blocked: fixture B's Add change never reaches komodo/ep-1 (calc.go still adds), check.done " +
-				"reports regression false and the group completes, so the rework loop is never entered; " +
-				"root cause [NOT CHECKED]")
+			t.Fatalf("the group ended complete without entering the rework loop, and the broken Add never reached "+
+				"komodo/ep-1 (calc.go still adds): fixture B's change did not land\n%s", r.evidence(evs))
 		}
 		if time.Now().After(end) {
 			t.Fatalf("the group neither blocked nor finished\n%s", r.evidence(evs))
@@ -207,6 +207,8 @@ func TestOldFailurePassesWithAWarningNamingTheTest(t *testing.T) {
 // Race: two `komodo run tg-1.1` at once get 1 lease; the other is refused and only 1 push reaches the remote.
 func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
+	reached, release := r.gateSecondTask()
+	t.Cleanup(release)
 	// No engine runs yet, so both commands start one at the same moment and each must reach the engine that wins.
 	var wg sync.WaitGroup
 	codes := make([]int, 2)
@@ -227,18 +229,46 @@ func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	t.Logf("exit codes %v\n%s\n%s", codes, outs[0], outs[1])
-	r.waitFor(120*time.Second, "run-status", "group.done")
-	time.Sleep(2 * time.Second)
-	evs := r.events()
-	refused := countOf(keys(evs), "run-status/request.refused")
-	for _, c := range codes {
-		if c != 0 {
-			refused++
+	// While the winner's builder waits, the group holds exactly 1 lease, and it names the run of only one of the commands.
+	r.waitChan(reached, "the builder's second task")
+	leases := r.leaseFiles()
+	if len(leases) != 1 {
+		t.Fatalf("%d leases granted, want 1: %v\n%v", len(leases), leases, outs)
+	}
+	rec, _ := os.ReadFile(leases[0])
+	holders := 0
+	for _, out := range outs {
+		var reply struct {
+			Data struct {
+				RunID string `json:"run_id"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &reply); err != nil || reply.Data.RunID == "" {
+			t.Fatalf("a command's reply holds no run id: %v\n%s", err, out)
+		}
+		if bytes.Contains(rec, []byte(reply.Data.RunID)) {
+			holders++
 		}
 	}
-	if refused < 1 {
-		t.Fatalf("neither command was refused: codes %v\n%v\n%s", codes, outs, r.evidence(evs))
+	if holders != 1 {
+		t.Fatalf("the lease names the run of %d commands, want 1\n%s\n%v", holders, rec, outs)
+	}
+	release()
+	r.waitFor(120*time.Second, "run-status", "group.done")
+	evs := r.events()
+	for end := time.Now().Add(10 * time.Second); countOf(keys(evs), "run-status/request.refused") < 1; {
+		time.Sleep(200 * time.Millisecond)
+		if time.Now().After(end) {
+			t.Fatalf("neither command was refused: codes %v\n%v\n%s", codes, outs, r.evidence(evs))
+		}
+		evs = r.events()
+	}
+	// The command that lost is refused because the group is already running, not for another reason.
+	if n := countWith(evs, "request.refused", "the group is running"); n != 1 {
+		t.Errorf("%d refusals say the group is running, want 1\n%s", n, r.evidence(evs))
+	}
+	if n := countOf(keys(evs), "run-status/request.refused"); n != 1 {
+		t.Errorf("%d commands were refused, want 1", n)
 	}
 	if n := countOf(keys(evs), "run-status/run.start"); n != 1 {
 		t.Errorf("%d runs started, want 1\n%v", n, outs)
@@ -397,8 +427,8 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 	if gaps < 1 {
 		t.Errorf("replay marked %v gaps, want at least 1", gaps)
 	}
-	if len(steps) == 0 || len(steps) > lines {
-		t.Errorf("replay listed %d events; the log holds %d whole lines", len(steps), lines)
+	if len(steps) != lines {
+		t.Errorf("replay listed %d events; the log holds %d whole lines, and replay must list every one", len(steps), lines)
 	}
 	if got := r.model.callCounts(); len(got) != len(calls) || got["builder"] != calls["builder"] ||
 		got["tester"] != calls["tester"] || got["reviewer"] != calls["reviewer"] {
@@ -410,28 +440,51 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 // code matches the fault's kind.
 func TestFinalErrorEventAndExitCode(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
-	// Seed: replay of a run id the store does not hold makes the engine fail; the Error Handler turns it into a fault.
-	res := r.komodo(60*time.Second, "replay", "0192e4c5-0000-7000-8000-000000000999")
-	env := envelope(t, res)
-	e, _ := env["error"].(map[string]any)
-	if res.code == 0 || e == nil {
-		t.Fatalf("the seeded error did not fail the command: %d\n%s", res.code, res.stdout)
+	// Seed: an engine whose home makes the control socket path longer than the system allows cannot bind, which ends
+	// the engine on an internal fault.
+	home := filepath.Join(r.root, strings.Repeat("x", 120))
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	want := map[string]int{"usage": 2, "internal": 4}
-	if c, ok := want[e["code"].(string)]; ok && c != res.code {
-		t.Errorf("fault %v exited %d, want %d", e["code"], res.code, c)
-	}
-	evs := r.events()
-	var last *event
-	for i := range evs {
-		if evs[i].Type == "error" {
-			last = &evs[i]
+	cmd := exec.Command(r.bin, "internal", "engine")
+	cmd.Dir = r.repo
+	for _, kv := range r.env {
+		if !strings.HasPrefix(kv, "KOMODO_HOME=") {
+			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	if last == nil || !strings.Contains(string(last.Data), `"final":true`) {
-		t.Skip("blocked: the seed (replay of an unknown run id) is a refused request, not an error that ends a process; " +
-			"the CLI process publishes no event and the engine publishes the final event only when it exits on an error " +
-			"(covered by cmd/komodo TestEngineThatCannotServePublishesTheFinalErrorEvent); seen " + res.stdout)
+	cmd.Env = append(cmd.Env, "KOMODO_HOME="+home)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	code := 0
+	if err := cmd.Run(); err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatal(err)
+		}
+		code = ee.ExitCode()
+	}
+	body, err := os.ReadFile(filepath.Join(home, "events", "engine.jsonl"))
+	if err != nil {
+		t.Fatalf("the engine wrote no event log: %v\n%s", err, out.String())
+	}
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	var last struct {
+		Type string `json:"type"`
+		Data struct {
+			Kind  string `json:"kind"`
+			Final bool   `json:"final"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatalf("the last event line is not JSON: %v\n%s", err, body)
+	}
+	if last.Type != "error" || !last.Data.Final {
+		t.Fatalf("the process's last event is not a final error event: %s", lines[len(lines)-1])
+	}
+	want := map[string]int{"refused": 1, "usage": 2, "blocked": 3, "internal": 4}[last.Data.Kind]
+	if want == 0 || code != want {
+		t.Fatalf("a %q fault exited %d, want %d\n%s", last.Data.Kind, code, want, out.String())
 	}
 }
 
@@ -661,11 +714,12 @@ func TestFreeCheckFailureReturnsOutputToBuilder(t *testing.T) {
 // Cache: an identical request takes its context pieces from the cache, and still makes a new model call.
 func TestCacheServesContextAndStillCallsTheModel(t *testing.T) {
 	r := newFixtureRig(t, false, nil)
-	cacheFiles := func() map[string]time.Time {
-		out := map[string]time.Time{}
+	// A write replaces the file through a rename, so its inode changes; a read keeps the inode and stamps the modified time.
+	cacheFiles := func() map[string]os.FileInfo {
+		out := map[string]os.FileInfo{}
 		_ = filepath.Walk(filepath.Join(r.home, "cache"), func(p string, fi os.FileInfo, err error) error {
 			if err == nil && fi.Mode().IsRegular() {
-				out[p] = fi.ModTime()
+				out[p] = fi
 			}
 			return nil
 		})
@@ -687,15 +741,26 @@ func TestCacheServesContextAndStillCallsTheModel(t *testing.T) {
 	if got := r.model.callCounts()["planner"]; got <= calls {
 		t.Fatalf("the repeated request made no new model call: %d then %d", calls, got)
 	}
-	rewritten := 0
-	for p, mt := range cacheFiles() {
-		if old, ok := first[p]; ok && !mt.Equal(old) {
-			rewritten++
+	after := cacheFiles()
+	read := 0
+	for p, old := range first {
+		now, ok := after[p]
+		switch {
+		case !ok:
+			t.Errorf("the repeated request removed cache entry %s", p)
+		case !os.SameFile(old, now):
+			t.Errorf("the repeated request rewrote cache entry %s instead of reading it", p)
+		case now.ModTime().After(old.ModTime()):
+			read++
 		}
 	}
-	if rewritten > 0 {
-		t.Skipf("blocked: an identical plan request rewrote %d cache entries instead of reading them; "+
-			"which pieces the design expects cached is [NOT CHECKED] against internal/cache", rewritten)
+	for p := range after {
+		if _, ok := first[p]; !ok {
+			t.Errorf("the repeated request wrote a new cache entry %s", p)
+		}
+	}
+	if read == 0 {
+		t.Fatalf("the repeated request read none of the %d cache entries", len(first))
 	}
 }
 
@@ -777,7 +842,13 @@ func TestLimitsGroupTokenCapNudgesPausesAndApproveContinues(t *testing.T) {
 	// The nudge changes no state and publishes no event, so it is not checked here.
 	r.mustRun("run", "tg-1.1", "--approve")
 	r.waitFor(120*time.Second, "run-status", "group.resumed")
-	t.Log("plan-window half not run: it needs a fake subscription link reporting 80% and 100% windows")
+}
+
+// Limits, plan-window half: a fake provider reports a plan window at 80%, then 100%; the harness warns at 80% and pauses the
+// affected groups at 100%.
+func TestLimitsPlanWindowWarnsAndPauses(t *testing.T) {
+	t.Skip("blocked: needs a fake subscription link reporting 80% and 100% windows; the rig has only the paid Messages " +
+		"interface, and its claude program is logged out")
 }
 
 // Model links: with paid use off and the Claude window spent, the subscription link is tried first, the paid interface is
@@ -818,5 +889,10 @@ func TestToolServersNoneSwitchedOnStartsNone(t *testing.T) {
 			t.Fatalf("a tool server event with none switched on: %s %s", e.Subtype, e.Data)
 		}
 	}
-	t.Log("the added-server half (sandboxed, no network, one event per call) is not run: no fixture tool server exists")
+}
+
+// Tool servers, added-server half: a server added for a named agent runs inside the sandbox with no network, and each call is
+// an event.
+func TestToolServersAddedServerRunsSandboxedWithAnEventPerCall(t *testing.T) {
+	t.Skip("blocked: no fixture tool server exists to add for a named agent")
 }

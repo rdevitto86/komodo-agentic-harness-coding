@@ -121,19 +121,51 @@ func TestEventRoundTripOnTheFixtureGroup(t *testing.T) {
 	if miss, ok := subseq(got, groupLife); !ok {
 		t.Fatalf("event %s missing from the stored order\n%v", miss, got)
 	}
+	// Each fact that happens once in a group's life arrives once.
 	for _, once := range []string{
 		"run-status/run.start", "run-status/group.approved", "run-status/publish.done", "run-status/pr.opened",
-		"run-status/group.done", "run-complete/done", "run-status/cleanup.done",
+		"run-status/cleanup.start", "run-status/cleanup.done", "run-status/group.done", "run-complete/done",
 	} {
 		if n := countOf(got, once); n != 1 {
 			t.Errorf("%s arrived %d times, want 1", once, n)
 		}
 	}
+	// Each repeating event arrives once per cause: per task, per stage, per agent session and per check round.
 	for _, task := range []string{"tsk-sub", "tsk-mul"} {
-		if !has(evs, "run-status", "task.done", task) {
-			t.Errorf("no task.done for %s", task)
+		if n := countWith(evs, "task.done", `"task":"`+task+`"`); n != 1 {
+			t.Errorf("task.done for %s arrived %d times, want 1", task, n)
 		}
 	}
+	for _, to := range []string{"intake", "build", "test_review", "commit", "cleanup"} {
+		if n := countWith(evs, "stage.enter", `"to":"`+to+`"`); n != 1 {
+			t.Errorf("stage.enter to %s arrived %d times, want 1", to, n)
+		}
+	}
+	for _, agent := range []string{"builder", "tester", "reviewer"} {
+		if n := countWith(evs, "session.start", `"agent":"`+agent+`"`); n != 1 {
+			t.Errorf("session.start for the %s arrived %d times, want 1", agent, n)
+		}
+		if n := countWith(evs, "session.end", `"agent":"`+agent+`"`); n != 1 {
+			t.Errorf("session.end for the %s arrived %d times, want 1", agent, n)
+		}
+	}
+	// One check result follows Build and one follows Test and Review.
+	if n := countOf(got, "run-status/check.done"); n != 2 {
+		t.Errorf("check.done arrived %d times, want 2", n)
+	}
+	// No live subscriber is reachable through the binary: plan streams only run-start, error and plan events, and ui streams
+	// state snapshots, not events. So the store, which the bus appends to before it broadcasts, is the record checked.
+}
+
+// countWith counts the events of the subtype whose data contains want.
+func countWith(evs []event, sub, want string) int {
+	n := 0
+	for _, e := range evs {
+		if e.Subtype == sub && strings.Contains(string(e.Data), want) {
+			n++
+		}
+	}
+	return n
 }
 
 // containers lists the fake containers left in the fake docker's folder.
@@ -150,7 +182,7 @@ func containers(dir string) []string {
 // the bare remote with 1 pull request, and cleanup leaves 0 worktrees, 0 containers and no lease.
 func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 	r := newFixtureRig(t, false, nil)
-	boxes := r.writeDocker()
+	boxes, made := r.writeLiveDocker()
 	if res := r.terminal(60*time.Second, "install", "--hosts", "claude", "--no-path"); res.code != 0 {
 		t.Fatalf("komodo install exited %d\n%s", res.code, res.stdout)
 	}
@@ -179,6 +211,9 @@ func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 	}
 	if wt := r.worktrees(); len(wt) != 0 {
 		t.Errorf("worktrees remain: %v", wt)
+	}
+	if b, _ := os.ReadFile(made); strings.Count(string(b), "create ") != 1 {
+		t.Errorf("the run made containers %q, want exactly 1", b)
 	}
 	if c := containers(boxes); len(c) != 0 {
 		t.Errorf("containers remain: %v", c)
