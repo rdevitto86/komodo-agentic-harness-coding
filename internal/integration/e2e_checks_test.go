@@ -812,7 +812,13 @@ func TestLimitsGroupTokenCapNudgesPausesAndApproveContinues(t *testing.T) {
 	// The nudge changes no state and publishes no event, so it is not checked here.
 	r.mustRun("run", "tg-1.1", "--approve")
 	r.waitFor(120*time.Second, "run-status", "group.resumed")
-	t.Log("plan-window half not run: it needs a fake subscription link reporting 80% and 100% windows")
+}
+
+// Limits, plan-window half: a fake provider reports a plan window at 80%, then 100%; the harness warns at 80% and pauses the
+// affected groups at 100%.
+func TestLimitsPlanWindowWarnsAndPauses(t *testing.T) {
+	t.Skip("blocked: needs a fake subscription link reporting 80% and 100% windows; the rig has only the paid Messages " +
+		"interface, and its claude program is logged out")
 }
 
 // Model links: with paid use off and the Claude window spent, the subscription link is tried first, the paid interface is
@@ -853,5 +859,10 @@ func TestToolServersNoneSwitchedOnStartsNone(t *testing.T) {
 			t.Fatalf("a tool server event with none switched on: %s %s", e.Subtype, e.Data)
 		}
 	}
-	t.Log("the added-server half (sandboxed, no network, one event per call) is not run: no fixture tool server exists")
+}
+
+// Tool servers, added-server half: a server added for a named agent runs inside the sandbox with no network, and each call is
+// an event.
+func TestToolServersAddedServerRunsSandboxedWithAnEventPerCall(t *testing.T) {
+	t.Skip("blocked: no fixture tool server exists to add for a named agent")
 }
