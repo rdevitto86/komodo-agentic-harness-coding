@@ -87,24 +87,42 @@ const (
 // fixtureBuilder scripts the fake builder for tg-fixture: Sub, then Mul, each with its table test and a task_done. With
 // broken set, the builder first rewrites Add so that it subtracts (fixture B).
 func fixtureBuilder(broken bool) func(brief string, turn int) (string, map[string]any) {
+	return fixtureBuilderGated(broken, nil)
+}
+
+// fixtureBuilderGated is fixtureBuilder with a gate that runs before the builder's first step of every task after the first;
+// it may block. Tasks other than sub and mul get a source file named after the task.
+func fixtureBuilderGated(broken bool, gate func(task string)) func(brief string, turn int) (string, map[string]any) {
 	return func(brief string, turn int) (string, map[string]any) {
+		write := func(p, c string) [2]any { return [2]any{"write", map[string]any{"path": p, "content": c}} }
+		var steps [][2]any
+		var starts []int
 		var ids []string
 		for _, m := range taskLine.FindAllStringSubmatch(brief, -1) {
 			ids = append(ids, m[1])
 		}
-		if len(ids) < 2 {
-			return "", nil
-		}
-		write := func(p, c string) [2]any { return [2]any{"write", map[string]any{"path": p, "content": c}} }
-		done := func(name string) [2]any { return [2]any{"task_done", map[string]any{"task": taskByName(ids, name)}} }
-		var steps [][2]any
 		if broken {
 			steps = append(steps, write("calc/calc.go", breakAdd))
 		}
-		steps = append(steps,
-			write("calc/sub.go", subSource), write("calc/sub_test.go", subTest), done("sub"),
-			write("calc/mul.go", mulSource), write("calc/mul_test.go", mulTest), done("mul"),
-		)
+		for _, id := range ids {
+			starts = append(starts, len(steps))
+			name := strings.TrimPrefix(id, "tsk-")
+			switch name {
+			case "sub":
+				steps = append(steps, write("calc/sub.go", subSource), write("calc/sub_test.go", subTest))
+			case "mul":
+				steps = append(steps, write("calc/mul.go", mulSource), write("calc/mul_test.go", mulTest))
+			default:
+				steps = append(steps, write("calc/"+name+".go", "package calc\n\n// F"+name+" is a fixture function.\n"+
+					"func F"+name+"() int { return 1 }\n"))
+			}
+			steps = append(steps, [2]any{"task_done", map[string]any{"task": id}})
+		}
+		for i, s := range starts {
+			if s == turn && i > 0 && gate != nil {
+				gate(ids[i])
+			}
+		}
 		if turn >= len(steps) {
 			return "", nil
 		}
