@@ -584,6 +584,11 @@ func (f *fakeModel) messages(w http.ResponseWriter, raw []byte) {
 				"content": "package tiny\n\n// Add returns the sum of a and b.\nfunc Add(a, b int) int { return a + b }\n"})
 			return
 		case 1:
+			sseTool(w, "tu-test", "write", map[string]any{"path": "tiny/add_test.go",
+				"content": "package tiny\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 " +
+					"{\n\t\tt.Fatal(\"add\")\n\t}\n}\n"})
+			return
+		case 2:
 			sseTool(w, "tu-done", "task_done", map[string]any{"task": firstMatch(taskLine, brief)})
 			return
 		}
