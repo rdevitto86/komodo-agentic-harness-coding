@@ -7,12 +7,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"runtime/pprof"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
@@ -103,17 +100,6 @@ func (s *stack) close() {
 	}
 }
 
-// dumpOnSignal writes every goroutine stack to the engine log when the process gets SIGUSR1.
-func (s *stack) dumpOnSignal() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGUSR1)
-	s.spawn(func() {
-		for range ch {
-			_ = pprof.Lookup("goroutine").WriteTo(s.stderr, 1)
-		}
-	})
-}
-
 // spawn starts a goroutine whose panic the fault handler reports.
 func (s *stack) spawn(fn func()) { s.faults.Go(fault.Source{Component: "engine"}, fn, nil) }
 
@@ -140,8 +126,13 @@ func buildLinks(cfg *config.Manager, cat *llm.Catalog, faults llm.Recoverer) *ll
 
 	if it, err := cfg.GetConfigItem("providers.keys.anthropic"); err == nil {
 		if name, ok := strings.CutPrefix(fmt.Sprint(it.Value), "env:"); ok && os.Getenv(name) != "" {
+			var base string
+			if u, err := cfg.GetConfigItem("providers.anthropic.url"); err == nil {
+				base, _ = u.Value.(string)
+			}
+
 			a, err := llm.NewAnthropic(llm.AnthropicOptions{
-				BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
+				BaseURL: base,
 				Key:     os.Getenv(name),
 				Catalog: cat,
 				Faults:  faults,
