@@ -249,7 +249,7 @@ func TestSeatbeltLive(t *testing.T) {
 	}
 	if len(s.Toolchains) > 0 {
 		writeTree(t, s.Worktree, map[string]string{
-			"go.mod":  "module live\n\ngo 1.21\n",
+			"go.mod":  "module live\n\ngo 1.27\n",
 			"main.go": "package main\n\nfunc main() {}\n",
 		})
 		cmd, err := m.Command(context.Background(), inst.ID, Command{
