@@ -1,7 +1,7 @@
 There is 1 active run, 1 queued and 1 blocked.
 
 Alert:
-`No new sessions start: setup faults hit several groups. One probe session runs every 5 minutes.`
+`New sessions are paused until 02:01:00 UTC: setup errors hit several groups.`
 
 The wait ended with `blocked`.
 
@@ -22,6 +22,13 @@ The blocked groups are:
 | `group` | `reason` | `question` |
 |---|---|---|
 | `tg-1.2` | `needs_scope` | `May the builder edit docs/lld.md?` |
+
+The errors since the engine started, by type:
+
+| `type` | `tier` | `count` |
+|---|---|---|
+| `setup` | `blocker` | `3` |
+| `timeout` | `work` | `1` |
 
 ❌ Blocked Changes
 1 group waits for a person.

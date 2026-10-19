@@ -42,6 +42,26 @@
     ],
     "what": "groups"
   },
+  "errors": {
+    "head": [
+      "type",
+      "tier",
+      "count"
+    ],
+    "rows": [
+      [
+        "setup",
+        "blocker",
+        "3"
+      ],
+      [
+        "timeout",
+        "work",
+        "1"
+      ]
+    ],
+    "what": "error types"
+  },
   "waited": "blocked",
-  "alert": "No new sessions start: setup faults hit several groups. One probe session runs every 5 minutes."
+  "alert": "New sessions are paused until 02:01:00 UTC: setup errors hit several groups."
 }

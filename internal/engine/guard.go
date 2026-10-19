@@ -10,10 +10,10 @@ func faultsOf(h *fault.Handler) *fault.Handler {
 	return h
 }
 
-// guarded runs fn on a new goroutine and reports its panic through h instead of ending the process.
-func guarded(h *fault.Handler, fn func()) {
+// guarded runs fn on a new goroutine and reports its panic through h, then to onPanic, instead of ending the process.
+func guarded(h *fault.Handler, fn func(), onPanic func(fault.Fault)) {
 	go func() {
-		defer h.Recover(fault.Source{Component: "engine"}, nil)
+		defer h.Recover(fault.Source{Component: "engine"}, onPanic)
 		fn()
 	}()
 }

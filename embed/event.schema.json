@@ -241,6 +241,22 @@
       ],
       "type": "object"
     },
+    "EngineFailed": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "where",
+        "detail"
+      ],
+      "type": "object"
+    },
     "EpicPaused": {
       "additionalProperties": false,
       "properties": {
@@ -314,6 +330,25 @@
         "kind",
         "severity",
         "reason"
+      ],
+      "type": "object"
+    },
+    "ErrorRecorded": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "wait_s": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reason",
+        "tier"
       ],
       "type": "object"
     },
@@ -1771,6 +1806,46 @@
       ],
       "type": "object"
     },
+    "StartsPaused": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "wait_s": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reason",
+        "groups"
+      ],
+      "type": "object"
+    },
+    "StartsResumed": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "by"
+      ],
+      "type": "object"
+    },
     "TaskClaimed": {
       "additionalProperties": false,
       "properties": {
@@ -2459,6 +2534,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/EngineFailed"
+        },
+        "subtype": {
+          "const": "engine.failed"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/GroupBlocked"
         },
         "subtype": {
@@ -2502,6 +2590,19 @@
         },
         "subtype": {
           "const": "stalled"
+        },
+        "type": {
+          "const": "run-failure"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/StartsPaused"
+        },
+        "subtype": {
+          "const": "starts.paused"
         },
         "type": {
           "const": "run-failure"
@@ -2619,6 +2720,19 @@
         },
         "subtype": {
           "const": "epic.resumed"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ErrorRecorded"
+        },
+        "subtype": {
+          "const": "error.recorded"
         },
         "type": {
           "const": "run-status"
@@ -3087,6 +3201,19 @@
         },
         "subtype": {
           "const": "stage.exit"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/StartsResumed"
+        },
+        "subtype": {
+          "const": "starts.resumed"
         },
         "type": {
           "const": "run-status"
