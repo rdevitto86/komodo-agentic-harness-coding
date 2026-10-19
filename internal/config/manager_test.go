@@ -246,6 +246,17 @@ func TestSnapshotHashIsStable(t *testing.T) {
 	}
 }
 
+func TestChainsMayNameTheOpenAILinks(t *testing.T) {
+	for _, link := range []string{"openai-subscription", "openai-api"} {
+		fsys := embedCopy(t)
+		p := "agents/builder/agent.json"
+		fsys[p].Data = []byte(strings.Replace(string(fsys[p].Data), `"anthropic-api"`, `"`+link+`"`, 1))
+		if _, err := newManager(t.TempDir(), fsys, Known{}, probeAll); err != nil {
+			t.Errorf("%s: want the chain accepted, got %v", link, err)
+		}
+	}
+}
+
 func TestRoleFilesAreChecked(t *testing.T) {
 	edit := func(t *testing.T, role string, f func(string) string) error {
 		fsys := embedCopy(t)
@@ -261,7 +272,7 @@ func TestRoleFilesAreChecked(t *testing.T) {
 		"unknown field":   func(s string) string { return strings.Replace(s, `"v": 1,`, `"v": 1, "bogus": true,`, 1) },
 		"bad version":     func(s string) string { return strings.Replace(s, `"v": 1,`, `"v": 2,`, 1) },
 		"bad weight":      func(s string) string { return strings.Replace(s, `"standard"`, `"huge"`, 1) },
-		"bad chain":       func(s string) string { return strings.Replace(s, `"anthropic-api"`, `"openai-api"`, 1) },
+		"bad chain":       func(s string) string { return strings.Replace(s, `"anthropic-api"`, `"mystery-link"`, 1) },
 		"duplicate chain": func(s string) string { return strings.Replace(s, `"anthropic-api"`, `"claude-cli"`, 1) },
 		"foreign result": func(s string) string {
 			return strings.Replace(s, `komodo:agent/builder/result/1`, `komodo:agent/tester/result/1`, 1)
