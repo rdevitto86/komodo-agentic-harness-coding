@@ -77,7 +77,9 @@ func statusOf(x *eng) StatusData {
 func TestAParkedGroupIsListedInStatusAsBlockedOnRetries(t *testing.T) {
 	x := parkedEng(t, t0.Add(30*time.Minute))
 	x.e.m.d.Parked = func(context.Context) []ParkedGroup {
-		return []ParkedGroup{{Repo: "github.com/acme/shop", Root: x.root, CommonDir: x.root + "/.git", Group: "g-tg-1", Label: "tg-1"}}
+		return []ParkedGroup{{
+			Repo: "github.com/acme/shop", Root: x.root, CommonDir: x.root + "/.git", Group: "g-tg-1", Label: "tg-1",
+		}}
 	}
 	x.serve()
 	until(t, "the timer to be armed", func() bool { return x.e.m.Live() == 1 })
