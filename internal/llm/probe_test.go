@@ -23,8 +23,9 @@ func (s stubProvider) Resume(context.Context, Session, Input) (Stream, error) {
 }
 
 func TestProbeAllReportsEveryLinkAndFeedsModelCheck(t *testing.T) {
+	noKey, _ := NewOpenAIAPI(OpenAIAPIOptions{})
 	c := New(map[Link]Provider{
-		OpenAIAPI: NewOpenAIAPI(),
+		OpenAIAPI: noKey,
 		Local:     stubProvider{res: ProbeResult{Link: Local, OK: true, Models: map[Weight]string{Standard: "my-local"}}},
 	})
 	got := c.ProbeAll(context.Background())

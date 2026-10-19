@@ -125,20 +125,14 @@ func TestHeadroomPercentLeft(t *testing.T) {
 	}
 }
 
-func TestOpenAILinksAreNotYet(t *testing.T) {
-	c := New(map[Link]Provider{OpenAISubscription: NewOpenAISubscription(), OpenAIAPI: NewOpenAIAPI()})
+func TestUnregisteredOpenAILinksAreUnavailable(t *testing.T) {
+	c := New(nil)
 	for _, l := range []Link{OpenAISubscription, OpenAIAPI} {
-		if _, err := c.Probe(context.Background(), l); !errors.Is(err, ErrNotYet) {
-			t.Errorf("Probe(%s) = %v, want ErrNotYet", l, err)
+		if _, err := c.Probe(context.Background(), l); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("Probe(%s) = %v, want ErrUnavailable", l, err)
 		}
-		if _, err := c.Profile(context.Background(), l, Heavy); !errors.Is(err, ErrNotYet) {
-			t.Errorf("Profile(%s) = %v, want ErrNotYet", l, err)
-		}
-		if _, err := c.Start(context.Background(), Session{Link: l}); !errors.Is(err, ErrNotYet) {
-			t.Errorf("Start(%s) = %v, want ErrNotYet", l, err)
-		}
-		if _, err := c.Resume(context.Background(), Session{Link: l}, Input{}); !errors.Is(err, ErrNotYet) {
-			t.Errorf("Resume(%s) = %v, want ErrNotYet", l, err)
+		if _, err := c.Start(context.Background(), Session{Link: l}); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("Start(%s) = %v, want ErrUnavailable", l, err)
 		}
 	}
 }
@@ -147,8 +141,5 @@ func TestClientMissingLink(t *testing.T) {
 	c := New(nil)
 	if _, err := c.Start(context.Background(), Session{Link: ClaudeCLI}); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("missing adapter = %v, want ErrUnavailable", err)
-	}
-	if _, err := c.Probe(context.Background(), OpenAIAPI); !errors.Is(err, ErrNotYet) {
-		t.Errorf("unregistered openai = %v, want ErrNotYet", err)
 	}
 }
