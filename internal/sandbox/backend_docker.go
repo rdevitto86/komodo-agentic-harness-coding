@@ -136,7 +136,7 @@ func (d *Docker) Command(ctx context.Context, i Instance, s Spec, c Command) (*e
 	name := containerName(i.Group, i.ID)
 
 	args := []string{"exec", "-i", "-w", workDir}
-	for _, kv := range append(buildEnv(r, c, true), marker) {
+	for _, kv := range append(append(buildEnv(r, c, true), gitEnv...), marker) {
 		args = append(args, "-e", kv)
 	}
 
@@ -285,9 +285,12 @@ func (d *Docker) createArgs(r rules, inst Instance, name, image string) ([]strin
 	}
 
 	for _, p := range r.Readable {
-		if !slices.Contains(r.Toolchains, p) {
+		if !slices.Contains(r.Toolchains, p) && p != r.GitDir {
 			a = append(a, "-v", p+":"+p+":ro")
 		}
+	}
+	if g := gitShared(r.GitDir); g != "" {
+		a = append(a, "-v", g+":"+g+":ro")
 	}
 
 	for _, p := range r.Writable {
@@ -381,6 +384,10 @@ type fileID struct{ dev, ino uint64 }
 // workDir is where the worktree is mounted inside the container.
 const workDir = "/work"
 
+// gitEnv trusts every folder for git inside the container, where the worktree's owner may differ; it is command-scope
+// config, so nothing is written.
+var gitEnv = []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=*"}
+
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 
 var (
@@ -399,6 +406,29 @@ func inContainer(worktree, p string) string {
 		return filepath.ToSlash(filepath.Join(workDir, rel))
 	}
 	return p
+}
+
+// gitShared returns the folder to mount read-only for a worktree's own git folder: the shared folder its commondir file names,
+// which holds the history and contains the worktree's folder. It is empty when no such folder is on disk.
+func gitShared(gitDir string) string {
+	if gitDir == "" {
+		return ""
+	}
+
+	common := gitDir
+	if b, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		common = strings.TrimSpace(string(b))
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitDir, common)
+		}
+	}
+	// git writes the pointer file with real paths, so the mount takes the real path too.
+	real, err := filepath.EvalSymlinks(common)
+	if err != nil {
+		return ""
+	}
+
+	return real
 }
 
 // toolAdditions returns the commands that add the tools the official image of a language lacks.
