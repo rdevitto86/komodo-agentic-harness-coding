@@ -618,14 +618,14 @@ func (c *calc) override(in Input) bool {
 	}
 
 	d := decode[OverrideData](in.Data)
-	if d.Minutes < 0 || d.Minutes > FinalWallMaxMin {
+	if d.Minutes < 1 || d.Minutes > FinalWallMaxMin {
 		c.refuseRequest(in, "the final try's working time is 1 to "+strconv.Itoa(FinalWallMaxMin)+" minutes")
 		return false
 	}
 
 	s.Counters.RetriesLeft = 1
 	s.Counters.Overrides++
-	s.Counters.FinalWallMin = cmp.Or(d.Minutes, c.l.GroupWallMin)
+	s.Counters.FinalWallMin = d.Minutes
 	c.newTry()
 	c.emitStatus(&bus.OverrideApproved{Granted: 1, Left: s.Counters.RetriesLeft, Minutes: s.Counters.FinalWallMin})
 

@@ -164,7 +164,7 @@ type (
 	}
 	// OverrideData is the data of override.
 	OverrideData struct {
-		Minutes int `json:"minutes,omitempty"` // the final try's working time; 0 keeps limits.group_wall_min
+		Minutes int `json:"minutes,omitempty"` // the final try's working time, 1 to 480 minutes
 	}
 	// ContinueData is the data of continue.
 	ContinueData struct {

@@ -110,7 +110,7 @@ func TestAnOverrideSendsTheGroupBackToTheBuilderWithTheLastFindings(t *testing.T
 		t.Fatalf("stage %q block %+v", blocked.Stage, blocked.Block)
 	}
 
-	ov := in(InOverride, nil)
+	ov := in(InOverride, OverrideData{Minutes: 60})
 	ov.Time = blocked.Block.Until.Add(-time.Minute)
 
 	r := apply(t, blocked, ov)
@@ -151,7 +151,7 @@ func TestAnOverrideAfterABuilderSideExhaustionStillCarriesTheLastReturnedFinding
 		t.Fatalf("stage %q block %+v", blocked.Stage, blocked.Block)
 	}
 
-	ov := in(InOverride, nil)
+	ov := in(InOverride, OverrideData{Minutes: 60})
 	ov.Time = blocked.Block.Until.Add(-time.Minute)
 
 	for _, o := range apply(t, blocked, ov).Orders {

@@ -38,7 +38,7 @@ func TestReachingZeroEntersTheOverrideWaitAndRunNeverRaisesTheBudget(t *testing.
 
 func TestOverrideInsideTheWindowGrantsTheFinalTryAndContinues(t *testing.T) {
 	s := emptyBudget(t)
-	ov := in(InOverride, nil)
+	ov := in(InOverride, OverrideData{Minutes: 60})
 	ov.Time = s.Block.Until.Add(-time.Minute)
 
 	r := apply(t, s, ov)
@@ -139,7 +139,7 @@ func TestAMigratedGroupBlockedOnRetriesWithABudgetContinues(t *testing.T) {
 
 func TestASecondExhaustionAfterAnApprovedOverrideFailsAtOnceWithNoPrompt(t *testing.T) {
 	s := emptyBudget(t)
-	ov := in(InOverride, nil)
+	ov := in(InOverride, OverrideData{Minutes: 60})
 	ov.Time = s.Block.Until.Add(-time.Minute)
 	granted := apply(t, s, ov).State
 

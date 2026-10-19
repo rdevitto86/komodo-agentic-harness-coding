@@ -128,7 +128,7 @@ func TestTheChosenMinutesAreStoredAndLimitTheFinalTry(t *testing.T) {
 }
 
 func TestAnOutOfRangeFinalTryWindowIsRefused(t *testing.T) {
-	for _, bad := range []int{-1, FinalWallMaxMin + 1} {
+	for _, bad := range []int{-1, 0, FinalWallMaxMin + 1} {
 		s := waiting(t)
 		ov := in(InOverride, OverrideData{Minutes: bad})
 		ov.Time = s.Block.Until.Add(-time.Minute)
