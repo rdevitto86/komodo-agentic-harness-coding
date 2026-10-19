@@ -67,7 +67,7 @@ var (
 	roleNames = []string{"planner", "builder", "tester", "reviewer"}
 
 	// validLinks lists the model links a role chain may name.
-	validLinks = []string{"claude-cli", "anthropic-api", "local"}
+	validLinks = []string{"claude-cli", "anthropic-api", "openai-subscription", "openai-api", "local"}
 
 	// agentFieldNames lists the four override keys a person may set per role.
 	agentFieldNames = []string{"model", "session_wall_min", "session_idle_min", "retries"}

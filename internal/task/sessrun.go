@@ -390,7 +390,7 @@ func (m *Manager) prepare(req sessReq, role Role, perm Permissions, brief Brief,
 	}
 
 	kind, val := "session_id", id
-	if sel.Link != llm.ClaudeCLI {
+	if !programLink(sel.Link) {
 		kind, val = "messages_file", filepath.Join(dir, "messages.jsonl")
 	}
 
@@ -411,6 +411,11 @@ func (m *Manager) prepare(req sessReq, role Role, perm Permissions, brief Brief,
 	}
 
 	return sc, nil
+}
+
+// programLink reports whether a link runs a program that reads mcp.json and keeps its own session, so it resumes by id.
+func programLink(l llm.Link) bool {
+	return l == llm.ClaudeCLI || l == llm.OpenAISubscription
 }
 
 // sessionDir returns the folder of a session and makes it.
@@ -463,7 +468,7 @@ func (m *Manager) bindTools(
 		}
 	}
 
-	if sc.sess.Link == llm.ClaudeCLI {
+	if programLink(sc.sess.Link) {
 		exe := m.c.Exe
 		if exe == "" {
 			exe, _ = os.Executable()
@@ -587,7 +592,7 @@ func (m *Manager) start(ctx context.Context, sc *sessCtx, req sessReq, sel Selec
 		sc.id, sc.sess.ID = id, id
 
 		kind, val := "session_id", id
-		if sel.Link != llm.ClaudeCLI {
+		if !programLink(sel.Link) {
 			kind, val = "messages_file", filepath.Join(sc.dir, "messages.jsonl")
 			_ = os.Remove(val)
 		}
@@ -781,7 +786,7 @@ func (m *Manager) judgeResult(
 	oc, err := sc.memo.judge(ctx, res)
 
 	var ge *GateError
-	if errors.As(err, &ge) && sel.Link == llm.ClaudeCLI {
+	if errors.As(err, &ge) && programLink(sel.Link) {
 		retry, rerr := m.c.Client.Resume(ctx, sc.sess, llm.Input{Text: ge.Text})
 		if rerr == nil {
 			res2, reason, serr := m.supervise(ctx, sc, req, retry)

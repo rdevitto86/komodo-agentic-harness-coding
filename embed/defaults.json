@@ -14,7 +14,7 @@
     {"name": "limits.usd_ceiling_per_day", "kind": "int", "default": 0, "min": 0},
     {"name": "limits.session_wall_min", "kind": "int", "default": 60, "min": 1, "max": 120},
     {"name": "limits.session_idle_min", "kind": "int", "default": 10, "min": 1, "max": 30},
-    {"name": "limits.link_sessions.<link>", "kind": "int", "min": 0, "max": 8, "family": true, "members": {"claude-cli": 3, "anthropic-api": 3, "local": 1}},
+    {"name": "limits.link_sessions.<link>", "kind": "int", "min": 0, "max": 8, "family": true, "members": {"claude-cli": 3, "anthropic-api": 3, "openai-subscription": 3, "openai-api": 3, "local": 1}},
     {"name": "guard.refusal_limit", "kind": "int", "default": 3, "min": 1, "max": 5},
     {"name": "sandbox.max_procs", "kind": "int", "default": 512, "min": 0},
     {"name": "sandbox.max_mem_gb", "kind": "int", "default": 8, "min": 0},
