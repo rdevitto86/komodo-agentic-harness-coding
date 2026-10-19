@@ -2,6 +2,7 @@ package engine
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -35,7 +36,11 @@ func TestPsNamesATerminalOnlyWhenTheColumnHoldsOne(t *testing.T) {
 }
 
 func TestThePlatformCheckAnswersForAPeerOnAUnixSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "kp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "p.sock")
 
 	ln, err := net.Listen("unix", sock)

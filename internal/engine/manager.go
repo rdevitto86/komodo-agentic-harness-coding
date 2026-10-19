@@ -89,6 +89,7 @@ type Manager struct {
 	groups   map[string]*group
 	starting map[string]bool
 	repos    map[string]*repoCache
+	parked   map[string]Timer // override timers of saved groups no run holds, by group id
 	expect   map[string]chan error
 	conts    map[string]chan error
 	beats    map[string]time.Time
@@ -129,6 +130,7 @@ func New(d Deps) *Manager {
 		groups:   map[string]*group{},
 		starting: map[string]bool{},
 		repos:    map[string]*repoCache{},
+		parked:   map[string]Timer{},
 		expect:   map[string]chan error{},
 		conts:    map[string]chan error{},
 		beats:    map[string]time.Time{},
@@ -182,11 +184,11 @@ func (m *Manager) Changes() <-chan struct{} {
 	return m.chg
 }
 
-// Live returns the number of runs that are live or starting.
+// Live returns the number of runs that are live or starting, plus saved groups whose override timer is armed.
 func (m *Manager) Live() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.runs) + len(m.starting)
+	return len(m.runs) + len(m.starting) + len(m.parked)
 }
 
 // OpenRepos returns the repositories that have an open run.
@@ -467,6 +469,7 @@ func (m *Manager) startRun(ctx context.Context, e bus.Event, rs *bus.RunStart) e
 		g := m.newGroup(r, r.specs[gid])
 		r.groups[gid] = g
 		m.groups[gid] = g
+		m.stopParkedLocked(gid)
 		m.spawn(func() { g.main(&rec) })
 		if rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked {
 			req := "run-" + id + "-" + gid

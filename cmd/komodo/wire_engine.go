@@ -229,7 +229,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		Contexts: ctxAdapter{},
 		Tasks:    h, Tools: s.tools, Plans: planSource{}, Git: epicGit{s.git}, Commits: h, Resource: res,
 		Version: version, Home: s.home, BaseBranch: s.baseBranch(), Faults: s.faults,
-		Cleaner: h, Janitor: h,
+		Cleaner: h, Janitor: h, Parked: s.parkedGroups,
 		Errors: func(run, group string, err error) { s.logln("komodo engine:", run, group, err) },
 	}
 	eng := engine.NewEngine(d, filepath.Join(s.home, "state", engine.SocketName))
@@ -420,6 +420,34 @@ func (s *stack) leaseRepos() map[string]string {
 				out[l.ClonePath] = l.Repo
 			}
 		}
+	}
+
+	return out
+}
+
+// parkedGroups lists the groups the lease registry still names, with the clone and repository folder of each, so the engine
+// can re-arm the override timers of those saved blocked.
+func (s *stack) parkedGroups(context.Context) []engine.ParkedGroup {
+	var out []engine.ParkedGroup
+
+	files, _ := filepath.Glob(filepath.Join(s.home, "leases", "*", "*.json"))
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+
+		var l lease.Lease
+		if json.Unmarshal(b, &l) != nil || l.ClonePath == "" || l.Group == "" {
+			continue
+		}
+
+		common, err := gitOut("-C", l.ClonePath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			continue
+		}
+
+		out = append(out, engine.ParkedGroup{Repo: l.Repo, Root: l.ClonePath, CommonDir: common, Group: l.Group})
 	}
 
 	return out
