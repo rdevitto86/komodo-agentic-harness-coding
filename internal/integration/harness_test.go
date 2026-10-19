@@ -187,7 +187,11 @@ func (r *binRig) initRepo(extra map[string]string) {
 	r.git(r.repo, "config", "user.name", "Test")
 	r.git(r.repo, "config", "user.email", "test@example.com")
 	r.git(r.repo, "config", "commit.gpgsign", "false")
-	for _, files := range []map[string]string{baseFiles, extra} {
+	sets := []map[string]string{baseFiles, extra}
+	if _, own := extra["go.mod"]; own {
+		sets = sets[1:]
+	}
+	for _, files := range sets {
 		for p, body := range files {
 			full := filepath.Join(r.repo, filepath.FromSlash(p))
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -427,6 +431,12 @@ type fakeModel struct {
 	hold    chan struct{} // when set, the builder's model calls wait until it closes
 	started chan struct{} // closed at the first builder call while hold is set
 	once    sync.Once
+
+	plan     map[string]string                                     // when set, the planner returns these files
+	builder  func(brief string, turn int) (string, map[string]any) // when set, picks the builder's tool call; "" ends the turn
+	verdict  func(task string) string                              // when set, the reviewer's verdict per task
+	testPass func(item string) bool                                // when set, the tester's pass flag per free item
+	bodies   []string                                              // every request body, in arrival order
 }
 
 // newFakeModel starts the server and stops it with the test.
@@ -536,9 +546,18 @@ func (f *fakeModel) messages(w http.ResponseWriter, raw []byte) {
 	}
 	f.mu.Lock()
 	f.calls[role]++
+	f.bodies = append(f.bodies, string(raw))
 	f.mu.Unlock()
 	if final {
 		sseText(w, f.result(role, brief))
+		return
+	}
+	if role == "builder" && f.builder != nil {
+		if name, input := f.builder(brief, assistant); name != "" {
+			sseTool(w, fmt.Sprintf("tu-%d", assistant), name, input)
+			return
+		}
+		sseText(w, "the work is done")
 		return
 	}
 	if role == "builder" {
@@ -568,7 +587,11 @@ func (f *fakeModel) result(role, brief string) string {
 	switch role {
 	case "planner":
 		files := []map[string]string{}
-		for p, c := range planFiles() {
+		plan := f.plan
+		if plan == nil {
+			plan = planFiles()
+		}
+		for p, c := range plan {
 			files = append(files, map[string]string{"path": strings.TrimPrefix(p, "docs/backlog/"), "content": c})
 		}
 		b, _ := json.Marshal(map[string]any{"files": files})
@@ -578,7 +601,8 @@ func (f *fakeModel) result(role, brief string) string {
 	case "tester":
 		items, tasks := []map[string]any{}, []map[string]string{}
 		for _, m := range itemLine.FindAllStringSubmatch(brief, -1) {
-			items = append(items, map[string]any{"item": m[1], "pass": true, "evidence": "ok"})
+			pass := f.testPass == nil || f.testPass(m[1])
+			items = append(items, map[string]any{"item": m[1], "pass": pass, "evidence": "ok"})
 		}
 		for _, m := range taskLine.FindAllStringSubmatch(brief, -1) {
 			tasks = append(tasks, map[string]string{"task": m[1], "confirmation": "confirmed"})
@@ -588,7 +612,11 @@ func (f *fakeModel) result(role, brief string) string {
 	}
 	vs := []map[string]string{}
 	for _, m := range taskLine.FindAllStringSubmatch(brief, -1) {
-		vs = append(vs, map[string]string{"task": m[1], "verdict": "met"})
+		v := "met"
+		if f.verdict != nil {
+			v = f.verdict(m[1])
+		}
+		vs = append(vs, map[string]string{"task": m[1], "verdict": v})
 	}
 	b, _ := json.Marshal(map[string]any{"verdicts": vs})
 	return string(b)
