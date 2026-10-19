@@ -363,7 +363,7 @@ func (m *Manager) prepare(req sessReq, role Role, perm Permissions, brief Brief,
 
 	sc := &sessCtx{id: id, dir: dir, resumed: resumed, memo: &judgeMemo{role: role}}
 	if !resumed {
-		if err := writeBriefFiles(dir, brief.Parts); err != nil {
+		if err := WriteBriefFiles(dir, brief.Parts); err != nil {
 			return nil, err
 		}
 	}
@@ -391,7 +391,7 @@ func (m *Manager) prepare(req sessReq, role Role, perm Permissions, brief Brief,
 	}
 
 	kind, val := "session_id", id
-	if !programLink(sel.Link) {
+	if !ProgramLink(sel.Link) {
 		kind, val = "messages_file", filepath.Join(dir, "messages.jsonl")
 	}
 
@@ -414,8 +414,8 @@ func (m *Manager) prepare(req sessReq, role Role, perm Permissions, brief Brief,
 	return sc, nil
 }
 
-// programLink reports whether a link runs a program that reads mcp.json and keeps its own session, so it resumes by id.
-func programLink(l llm.Link) bool {
+// ProgramLink reports whether a link runs a program that reads mcp.json and keeps its own session, so it resumes by id.
+func ProgramLink(l llm.Link) bool {
 	return l == llm.ClaudeCLI || l == llm.OpenAISubscription
 }
 
@@ -529,7 +529,7 @@ func (m *Manager) bindTools(
 	m.guards[sc.id] = g
 	m.mu.Unlock()
 
-	if programLink(sc.sess.Link) {
+	if ProgramLink(sc.sess.Link) {
 		return m.routeTools(sc, req.agent)
 	}
 
@@ -541,17 +541,9 @@ func (m *Manager) bindTools(
 // routeTools makes the session's bound tools reachable by the engine and writes the mcp.json whose tool server relays to
 // them; the route ends with the session.
 func (m *Manager) routeTools(sc *sessCtx, agentName string) error {
-	exe := m.c.Exe
-	if exe == "" {
-		exe, _ = os.Executable()
-	}
-
-	raw, err := MCPConfig(exe, ToolServerConfig{Agent: agentName, Session: sc.id, Socket: m.c.Socket})
-	if err != nil {
+	cfg := ToolServerConfig{Agent: agentName, Session: sc.id, Socket: m.c.Socket}
+	if err := WriteMCPConfig(sc.dir, m.c.Exe, cfg); err != nil {
 		return err
-	}
-	if err := os.WriteFile(filepath.Join(sc.dir, "mcp.json"), raw, 0o644); err != nil {
-		return fmt.Errorf("write mcp.json: %w", err)
 	}
 	if m.c.Tools != nil {
 		sc.closers = append(sc.closers, m.c.Tools.Add(sc.id, sc.watch))
@@ -584,7 +576,7 @@ func (m *Manager) start(ctx context.Context, sc *sessCtx, req sessReq, sel Selec
 		sc.id, sc.sess.ID = id, id
 
 		kind, val := "session_id", id
-		if !programLink(sel.Link) {
+		if !ProgramLink(sel.Link) {
 			kind, val = "messages_file", filepath.Join(sc.dir, "messages.jsonl")
 			_ = os.Remove(val)
 		}
@@ -595,7 +587,7 @@ func (m *Manager) start(ctx context.Context, sc *sessCtx, req sessReq, sel Selec
 		if req.input != "" {
 			sc.sess.Parts[4] = strings.TrimSpace(sc.sess.Parts[4] + "\n\n" + req.input)
 		}
-		if err := writeBriefFiles(sc.dir, sc.sess.Parts); err != nil {
+		if err := WriteBriefFiles(sc.dir, sc.sess.Parts); err != nil {
 			return nil, false, err
 		}
 	}
@@ -816,7 +808,7 @@ func (m *Manager) judgeResult(
 	oc, err := sc.memo.judge(ctx, res)
 
 	var ge *GateError
-	if errors.As(err, &ge) && programLink(sel.Link) {
+	if errors.As(err, &ge) && ProgramLink(sel.Link) {
 		retry, rerr := m.c.Client.Resume(ctx, sc.sess, llm.Input{Text: ge.Text})
 		if rerr == nil {
 			res2, reason, serr := m.supervise(ctx, sc, req, retry)
@@ -902,8 +894,8 @@ func writeJSON(dir, name string, v any) error {
 	return nil
 }
 
-// writeBriefFiles writes brief.md and system.md into a session folder.
-func writeBriefFiles(dir string, parts [5]string) error {
+// WriteBriefFiles writes brief.md and system.md into a session folder; the brief is the non-empty parts joined.
+func WriteBriefFiles(dir string, parts [5]string) error {
 	sys, rerr := komodo.Embedded.ReadFile("embed/output/standard.md")
 	if rerr != nil {
 		sys = []byte("Reply with the final result in the requested shape.\n")

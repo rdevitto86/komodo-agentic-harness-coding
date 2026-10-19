@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -80,6 +82,23 @@ func MCPConfig(exe string, c ToolServerConfig) ([]byte, error) {
 		"",
 		"  ",
 	)
+}
+
+// WriteMCPConfig writes the mcp.json of a session into its folder; an empty exe names the running binary.
+func WriteMCPConfig(dir, exe string, c ToolServerConfig) error {
+	if exe == "" {
+		exe, _ = os.Executable()
+	}
+
+	raw, err := MCPConfig(exe, c)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mcp.json"), raw, 0o644); err != nil {
+		return fmt.Errorf("write mcp.json: %w", err)
+	}
+
+	return nil
 }
 
 // LoadToolServer reads the inputs of the tool server process from its arguments (after the verb) and environment.

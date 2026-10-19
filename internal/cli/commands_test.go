@@ -13,10 +13,16 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
 
 func init() {
 	bus.Register(bus.Key{Type: bus.TypePlan, Subtype: "request"}, func() bus.Payload { return &planRequest{} })
+	bus.Register(intake.PlanBlocked{}.EventKey(), func() bus.Payload { return &intake.PlanBlocked{} })
+	bus.Register(intake.PlanTimeout{}.EventKey(), func() bus.Payload { return &intake.PlanTimeout{} })
+	bus.Register(intake.PlanInput{}.EventKey(), func() bus.Payload { return &intake.PlanInput{} })
+	bus.Register(intake.PlanLocked{}.EventKey(), func() bus.Payload { return &intake.PlanLocked{} })
+	bus.Register(intake.PlanWrite{}.EventKey(), func() bus.Payload { return &intake.PlanWrite{} })
 }
 
 // fake starts a fake engine server on the harness home and points the CLI at it.
@@ -296,6 +302,51 @@ func TestPlanFailureIsTheErrorEvent(t *testing.T) {
 	code, e := h.envelope("-C", repo, "plan", "goal text")
 	if code != 3 || e.OK || e.Error == nil || e.Error.Code != "plan_blocked" {
 		t.Fatalf("exit %d, %+v", code, e)
+	}
+}
+
+// The Intake Handler publishes its own error payloads, not fault events; plan must fail with each one's code and reason.
+func TestPlanFailureIsTheIntakeErrorEvent(t *testing.T) {
+	cases := []struct {
+		name    string
+		data    bus.Payload
+		subtype bus.Subtype
+		exit    int
+		code    string
+		reason  string
+	}{
+		{
+			"planner session", &intake.PlanInput{Reason: "planner session: run the planner: read the brief"},
+			"plan-input", 2, "plan_input", "run the planner: read the brief",
+		},
+		{
+			"blocked", &intake.PlanBlocked{DraftPath: "docs/backlog/.plan-failed-1"},
+			"plan-blocked", 3, "plan_blocked", "docs/backlog/.plan-failed-1",
+		},
+		{"timeout", &intake.PlanTimeout{WallMin: 60}, "plan-timeout", 1, "plan_timeout", "60 minutes"},
+		{"locked", &intake.PlanLocked{Run: "run-9"}, "plan-locked", 1, "locked", "run-9"},
+		{"write", &intake.PlanWrite{Reason: "rename failed"}, "plan-write", 4, "plan_write", "rename failed"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			repo := repoDir(t, "")
+			h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+				send(engine.Reply{
+					Status: engine.StatusEvent,
+					Event:  &bus.Event{Type: bus.TypeError, Subtype: c.subtype, Data: c.data},
+				})
+				send(okReply(map[string]any{}))
+			})
+
+			code, e := h.envelope("-C", repo, "plan", "goal text")
+			if code != c.exit || e.OK || e.Error == nil || e.Error.Code != c.code ||
+				!strings.Contains(e.Error.Reason, c.reason) {
+				t.Fatalf("exit %d, ok %v, error %+v; want exit %d, code %s, reason with %q",
+					code, e.OK, e.Error, c.exit, c.code, c.reason)
+			}
+		})
 	}
 }
 
