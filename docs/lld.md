@@ -8735,7 +8735,7 @@ The Task Manager is the controller of one task group. It runs as one goroutine, 
 | `paths.go` | Path containment, symlinks and secret files |
 | `tools.go` | `Registry`, `Bound`, `Dispatch`: binds an agent's permitted tools to one session |
 | `tools_files.go` | `read`, `search`, `edit`, `write` |
-| `tools_run.go` | `run` |
+| `tools_run.go` | `run`, `run_check` |
 | `tools_git.go` | `diff`, `git_read` |
 | `tools_submit.go` | `submit_finding`, `task_done`, `skill`, `lint_backlog` |
 | `toolserver.go` | The Model Context Protocol (MCP) tool server for subscription sessions, over standard input and output; it sends each request to a `ToolBackend`, which is the relay to the engine |
@@ -9141,7 +9141,7 @@ type RunArgs struct {
 }
 ```
 
-A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The command is the class's detected argv with the arguments appended.
+A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The command is the class's detected argv with the arguments appended. The `class` property of the tool's schema carries an `enum` of the calling agent's `run_classes`, and the description lists them, so the model sees the allowed classes; row R1 still enforces them.
 
 | Tool | Arguments | Reply text |
 |---|---|---|
@@ -9155,6 +9155,7 @@ A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The comm
 | `skill` | `{name}`: `<skill>` or `<skill>#<section>` | The skill text |
 | `submit_finding` | `{rule, file, line, quote, note}` | `filed <rule> at <file>:<line>` |
 | `task_done` | `{task}` | The `done_when` exit code and capped output |
+| `run_check` | `{item}`: an acceptance item identifier; the schema's `enum` lists the group's identifiers; Tester only | The item's `cmd` run as written in the Tester's sandbox: its output, led by `exit status <n>` when the exit code is not 0; an error for an unknown identifier or an item with no `cmd` |
 | `lint_backlog` | `{draft}`: the planned task list as one text | `ok`, or one lint error per line |
 
 A reply is `Reply{Text, LogPath}`. When the output exceeds 4 KB, the first 1 KB and the last 3 KB are kept, joined by one line `[… <n> bytes cut; full output in <LogPath>]`, since errors usually sit at the end. `read` is not capped.
@@ -11396,7 +11397,7 @@ Files this chapter calls but does not own:
 ```json
 {
   "name": "tester",
-  "tools": ["read", "search", "run"],
+  "tools": ["read", "search", "run", "run_check"],
   "run_classes": ["build", "test"],
   "guard": ["R1"],
   "slots": {
@@ -11736,7 +11737,7 @@ sequenceDiagram
 3. Go runs the mechanical checks (below) in the container.
 4. A failure returns the result with each failing step's exact output. A clean result continues at edge 5.
 5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither the Tester nor the Reviewer starts. On a clean result it starts the Tester's session with the brief, and the Reviewer at the same moment ([14.5](#145-behaviour)).
-6. The Tester runs each acceptance item's command with `run` (classes `build` and `test`) and reads the diff and files as needed.
+6. The Tester runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in the Tester's sandbox, the same way as a rerun; the model never writes the command. `run` (classes `build` and `test`) stays for any other command.
 7. It ends with one final call: a pass or fail with evidence for every item, and `confirmed` or `not_confirmed` for every task identifier.
 8. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item.
 9. Go reruns every failed item that has a command, twice, in the same container, and judges it with `AdjudicateItem`.
@@ -12031,6 +12032,7 @@ const (
 - A seeded out-of-scope write fails the scope step, and a planted fake key fails the secrets step.
 - A test that fails once and passes twice is reported flaky and does not block.
 - An item with no command is listed unconfirmed and does not block.
+- A Tester's `run_check` for an item runs its `cmd` in the Tester's sandbox; an unknown identifier and an item with no `cmd` return an error.
 - The Docker container survives a Tester session that ended in `schema_fail`, and `CloseTaskGroup()` destroys it.
 
 ### 13.10 Open Gaps
