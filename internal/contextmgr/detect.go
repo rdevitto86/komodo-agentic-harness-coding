@@ -104,6 +104,24 @@ var (
 // default.
 func Detect(t Tree) CommandSet { return detectWith(t, markerHash(t)) }
 
+// LanguageCommand returns the command a language marker gives a class, ignoring Makefile targets; ok is false when no
+// marker file has one.
+func LanguageCommand(t Tree, c Class) (Command, bool) {
+	files := markerFiles(t)
+
+	for _, row := range markerRows {
+		if !slices.Contains(files, row.file) {
+			continue
+		}
+
+		if spec, ok := row.cmds(t)[c]; ok {
+			return Command{Class: c, Argv: slices.Clone(spec.argv), Marker: row.file, PerFile: spec.perFile}, true
+		}
+	}
+
+	return Command{}, false
+}
+
 // fixedCmds returns a command table that does not depend on the tree.
 func fixedCmds(m map[Class]cmdSpec) func(Tree) map[Class]cmdSpec {
 	return func(Tree) map[Class]cmdSpec { return m }

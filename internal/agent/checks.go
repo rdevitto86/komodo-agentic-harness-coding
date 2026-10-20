@@ -9,6 +9,8 @@ const (
 	StepDoneWhen      Step = "done_when"
 	StepScope         Step = "scope"
 	StepSecrets       Step = "secrets"
+	StepBuild         Step = "build"
+	StepLint          Step = "lint"
 	StepCoverage      Step = "coverage"
 	StepBaseline      Step = "baseline"
 	StepImpactSet     Step = "impact_set"

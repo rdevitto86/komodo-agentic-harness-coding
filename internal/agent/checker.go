@@ -35,12 +35,18 @@ type CheckerConfig struct {
 	ReportCommands map[string]string
 	// language to a coverage command that replaces the default
 	CoverageCommands map[string]string
+	// language to its own build command; Go builds with go build ./... when absent
+	BuildCommands map[string]string
+	// language to its lint command; Go chooses golangci-lint or go vet itself
+	LintCommands map[string]string
+	// folder with the base commit's files, reachable from inside the sandbox; nil means the base has no lint findings
+	BaseDir func(ctx context.Context, base string) (string, error)
 }
 
 // checker runs the mechanical checks with a fixed configuration.
 type checker struct{ cfg CheckerConfig }
 
-// NewChecker returns the Checker that runs the eight mechanical steps.
+// NewChecker returns the Checker that runs the ten mechanical steps.
 func NewChecker(cfg CheckerConfig) Checker {
 	if cfg.Match == nil {
 		cfg.Match = MatchPath
@@ -53,6 +59,8 @@ var stepOrder = []Step{
 	StepDoneWhen,
 	StepScope,
 	StepSecrets,
+	StepBuild,
+	StepLint,
 	StepCoverage,
 	StepBaseline,
 	StepImpactSet,
@@ -73,6 +81,13 @@ func (c checker) Check(ctx context.Context, run CommandRunner, in CheckInput) (C
 	got[StepSecrets] = sec
 	if got[StepDoneWhen], err = doneWhenStep(ctx, run, in); err != nil {
 		return CheckResult{}, fmt.Errorf("step %s: %w", StepDoneWhen, err)
+	}
+
+	if got[StepBuild], err = c.buildStep(ctx, run, in); err != nil {
+		return CheckResult{}, fmt.Errorf("step %s: %w", StepBuild, err)
+	}
+	if got[StepLint], err = c.lintStep(ctx, run, in, got[StepBuild].Level == LevelFail); err != nil {
+		return CheckResult{}, fmt.Errorf("step %s: %w", StepLint, err)
 	}
 
 	pkgs, notes, tests, solo, err := c.runImpact(ctx, run, in)

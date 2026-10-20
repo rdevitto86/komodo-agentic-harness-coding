@@ -128,7 +128,7 @@ func TestCheckAllCleanRunsEveryStep(t *testing.T) {
 		jsonTest("m/a", map[string]bool{"TestA": true}),
 	}).on("-coverprofile", okCoverage("91.2"))
 	r, err := newTestChecker(CheckerConfig{CoverageFloor: 80}).Check(context.Background(), sb.run, goInput())
-	if err != nil || !r.Clean() || len(r.Steps) != 8 {
+	if err != nil || !r.Clean() || len(r.Steps) != 10 {
 		t.Fatalf("clean run: %+v %v", r, err)
 	}
 	if got := step(t, r, StepImpactSet).Detail; !slices.Equal(got, []string{"m", "m/a", "m/b", "m/c"}) {
