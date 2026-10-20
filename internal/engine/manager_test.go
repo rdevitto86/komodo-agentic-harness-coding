@@ -54,8 +54,8 @@ func TestEpicBranchAndTaskListsComeBeforeTheFirstTaskManager(t *testing.T) {
 	}
 	r.waitStage("tg-1.2", StageDone)
 	got := r.log.get()
-	want := []string{"create komodo/ep-1 from main", "lists ep-1"}
-	if len(got) < 3 || !slices.Equal(got[:2], want) || got[2] != "start g-tg-1.1" {
+	want := []string{"fetch origin/main", "create komodo/ep-1 from refs/remotes/origin/main", "lists ep-1"}
+	if len(got) < 4 || !slices.Equal(got[:3], want) || got[3] != "start g-tg-1.1" {
 		t.Fatalf("order %v", got)
 	}
 	count := 0
@@ -66,6 +66,60 @@ func TestEpicBranchAndTaskListsComeBeforeTheFirstTaskManager(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("the epic branch was created %d times", count)
+	}
+}
+
+// The epic branch is cut from the fetched tip of the configured base on the configured remote.
+func TestEpicBranchIsCutFromTheFetchedRemoteBase(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1.1"}}, func(r *rig) {
+		r.d.BaseBranch, r.d.Remote = "komodo-first-run", "trial"
+	})
+	if err := r.startRun("run-1", "tg-1.1"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitStage("tg-1.1", StageDone)
+	want := []string{
+		"fetch trial/komodo-first-run",
+		"create komodo/ep-1 from refs/remotes/trial/komodo-first-run",
+		"lists ep-1",
+	}
+	if got := r.log.get(); len(got) < 3 || !slices.Equal(got[:3], want) {
+		t.Fatalf("order %v, want it to begin %v", got, want)
+	}
+}
+
+// An empty base is the remote's default branch, and an empty remote is the base branch's upstream.
+func TestEmptyBaseTakesTheRemoteDefaultBranch(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1.1"}}, func(r *rig) {
+		r.d.BaseBranch = ""
+		r.git.def, r.git.upstream = "develop", "upstream"
+	})
+	if err := r.startRun("run-1", "tg-1.1"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitStage("tg-1.1", StageDone)
+	want := []string{
+		"default origin",
+		"fetch upstream/develop",
+		"create komodo/ep-1 from refs/remotes/upstream/develop",
+		"lists ep-1",
+	}
+	if got := r.log.get(); len(got) < 4 || !slices.Equal(got[:4], want) {
+		t.Fatalf("order %v, want it to begin %v", got, want)
+	}
+}
+
+// A base that cannot be fetched refuses the run before any branch is cut.
+func TestRunIsRefusedWhenTheBaseCannotBeFetched(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1.1"}}, func(r *rig) { r.git.fetchErr = errors.New("no such remote") })
+	err := r.startRun("run-1", "tg-1.1")
+	if err == nil || !strings.Contains(err.Error(), "no such remote") {
+		t.Fatalf("run start returned %v, want a refusal that names the fetch failure", err)
+	}
+	for _, l := range r.log.get() {
+		if strings.HasPrefix(l, "create") || strings.HasPrefix(l, "lists") {
+			t.Fatalf("a branch was cut after a failed fetch: %v", r.log.get())
+		}
 	}
 }
 

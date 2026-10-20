@@ -280,9 +280,12 @@ func (p *fakePlans) Specs(_ context.Context, _ string, labels []string) ([]Group
 
 // fakeGit records branch calls in one shared log.
 type fakeGit struct {
-	mu     sync.Mutex
-	exists map[string]bool
-	log    *seqLog
+	mu       sync.Mutex
+	exists   map[string]bool
+	log      *seqLog
+	def      string
+	upstream string
+	fetchErr error
 }
 
 // BranchExists reports whether a branch was planted.
@@ -298,6 +301,32 @@ func (g *fakeGit) CreateBranch(_ context.Context, _, branch, base string) error 
 	defer g.mu.Unlock()
 	g.log.add("create " + branch + " from " + base)
 	return nil
+}
+
+// DefaultBranch returns the planted default branch of the remote, or main.
+func (g *fakeGit) DefaultBranch(_ context.Context, _, remote string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.log.add("default " + remote)
+	if g.def == "" {
+		return "main", nil
+	}
+	return g.def, nil
+}
+
+// UpstreamRemote returns the planted remote of the branch; false when none was planted.
+func (g *fakeGit) UpstreamRemote(_ context.Context, _, _ string) (string, bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.upstream, g.upstream != "", nil
+}
+
+// FetchBranch records the fetch, or fails with the planted error.
+func (g *fakeGit) FetchBranch(_ context.Context, _, remote, branch string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.log.add("fetch " + remote + "/" + branch)
+	return g.fetchErr
 }
 
 // fakeCommits records the task-list commit in the shared log.

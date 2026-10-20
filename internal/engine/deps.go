@@ -77,6 +77,12 @@ type PlanSource interface {
 type EpicGit interface {
 	BranchExists(ctx context.Context, clone, branch string) (bool, error)
 	CreateBranch(ctx context.Context, clone, branch, base string) error
+	// DefaultBranch names the branch the remote's HEAD points to.
+	DefaultBranch(ctx context.Context, dir, remote string) (string, error)
+	// UpstreamRemote names the remote a local branch tracks; false when it tracks none.
+	UpstreamRemote(ctx context.Context, dir, branch string) (string, bool, error)
+	// FetchBranch brings one remote branch into its remote-tracking reference.
+	FetchBranch(ctx context.Context, dir, remote, branch string) error
 }
 
 // EpicCommitter is the Commit Handler as the Runtime Manager uses it at run start.
@@ -167,8 +173,10 @@ type Deps struct {
 	Version string
 	// the Komodo home folder; the worktrees live under Home/wt
 	Home string
-	// the branch an epic's branch is cut from
+	// the branch an epic's branch is cut from; empty means the remote's default branch
 	BaseBranch string
+	// the remote the base branch is fetched from; empty means the base branch's upstream, origin when it has none
+	Remote string
 	// free memory, for growing the pool; nil means the pool never grows
 	FreeMemGB func() float64
 	// ends every process of a group; called when a stop passes its deadline

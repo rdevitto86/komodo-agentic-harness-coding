@@ -118,6 +118,24 @@ func (e epicGit) CreateBranch(ctx context.Context, clone, branch, base string) e
 	return e.g.CreateBranch(ctx, clone, branch, base)
 }
 
+// DefaultBranch names the branch the remote's HEAD points to.
+func (e epicGit) DefaultBranch(ctx context.Context, dir, remote string) (string, error) {
+	e.g.Adopt(dir)
+	return e.g.DefaultBranch(ctx, dir, remote)
+}
+
+// UpstreamRemote names the remote a local branch tracks; false when it tracks none.
+func (e epicGit) UpstreamRemote(ctx context.Context, dir, branch string) (string, bool, error) {
+	e.g.Adopt(dir)
+	return e.g.UpstreamRemote(ctx, dir, branch)
+}
+
+// FetchBranch brings one remote branch into its remote-tracking reference.
+func (e epicGit) FetchBranch(ctx context.Context, dir, remote, branch string) error {
+	e.g.Adopt(dir)
+	return e.g.FetchBranch(ctx, dir, remote, branch)
+}
+
 // janitor runs the machine-wide clean through the Cleanup Handler.
 type janitor struct{ h *cleanup.Handler }
 

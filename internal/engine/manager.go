@@ -623,11 +623,7 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 			continue
 		}
 
-		base := m.d.BaseBranch
-		if base == "" {
-			base = "main"
-		}
-		if err := m.d.Git.CreateBranch(ctx, rs.Root, branch, base); err != nil {
+		if err := m.cutEpicBranch(ctx, rs.Root, branch); err != nil {
 			// Another writer created the branch since the check above; it is there, which is all this step needs.
 			if again, _ := m.d.Git.BranchExists(ctx, rs.Root, branch); again {
 				continue
@@ -650,6 +646,43 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 	}
 
 	return nil
+}
+
+// cutEpicBranch fetches the base branch from its remote and cuts the epic branch from the fetched tip, leaving the clone's
+// own branches and checkout alone.
+func (m *Manager) cutEpicBranch(ctx context.Context, root, branch string) error {
+	g, base, remote := m.d.Git, m.d.BaseBranch, m.d.Remote
+	if base == "" {
+		r := remote
+		if r == "" {
+			r = "origin"
+		}
+
+		b, err := g.DefaultBranch(ctx, root, r)
+		if err != nil {
+			return fmt.Errorf("find the default branch of %s: %w", r, err)
+		}
+
+		base = b
+	}
+
+	if remote == "" {
+		r, ok, err := g.UpstreamRemote(ctx, root, base)
+		if err != nil {
+			return fmt.Errorf("find the remote of %s: %w", base, err)
+		}
+		if !ok {
+			r = "origin"
+		}
+
+		remote = r
+	}
+
+	if err := g.FetchBranch(ctx, root, remote, base); err != nil {
+		return fmt.Errorf("fetch the base branch: %w", err)
+	}
+
+	return g.CreateBranch(ctx, root, branch, "refs/remotes/"+remote+"/"+base)
 }
 
 // openCache opens the repository's cache at its first run and hands the handle to the Context Manager.

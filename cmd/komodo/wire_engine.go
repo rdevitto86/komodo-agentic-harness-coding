@@ -228,7 +228,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		Caches:   s.caches,
 		Contexts: ctxAdapter{},
 		Tasks:    h, Tools: s.tools, Plans: planSource{}, Git: epicGit{s.git}, Commits: h, Resource: res,
-		Version: version, Home: s.home, BaseBranch: s.baseBranch(), Faults: s.faults,
+		Version: version, Home: s.home, BaseBranch: s.baseBranch(), Remote: s.remote(), Faults: s.faults,
 		Cleaner: h, Janitor: h, Parked: s.parkedGroups,
 		Errors: func(run, group string, err error) { s.logln("komodo engine:", run, group, err) },
 	}
@@ -258,6 +258,9 @@ func (s *stack) thresholds() resource.Thresholds {
 
 // baseBranch reads commit.base_branch; empty lets the Commit Handler take the remote's default.
 func (s *stack) baseBranch() string { return s.str("commit.base_branch", "") }
+
+// remote reads commit.remote; empty lets the Commit Handler take the base branch's upstream remote.
+func (s *stack) remote() string { return s.str("commit.remote", "") }
 
 // routePlans hands each plan event to the Intake Handler of the repository it names.
 func (s *stack) routePlans(ctx context.Context) {
@@ -372,7 +375,12 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 		Check:   groupChecker{ref: &groupRef{}},
 		Report:  commitReporter{s},
 		Cleanup: publishedAdapter{h: k.cleanup, landing: k.landingPath},
-		Config:  commit.Settings{LandingRoot: k.landings},
+		Config: commit.Settings{
+			BaseBranch:  s.baseBranch(),
+			Remote:      s.remote(),
+			PRLabel:     s.str("commit.pr_label", "komodo"),
+			LandingRoot: k.landings,
+		},
 	}
 	k.intake = intake.New(k.intakeDeps(k.cm))
 	s.kits[root] = k
