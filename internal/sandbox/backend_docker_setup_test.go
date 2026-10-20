@@ -47,4 +47,7 @@ func TestDockerSetupSeesTheModuleCacheReadOnlyAndSetsTheProxy(t *testing.T) {
 	if args := exec(); strings.Contains(strings.Join(args, " "), "GOPROXY=") || indexOf(args, "-e", "GONOPROXY=") >= 0 {
 		t.Fatalf("a later exec keeps the proxy variables: %v", args)
 	}
+	if indexOf(exec(), "-e", "GOMODCACHE="+s.Modules) < 0 {
+		t.Fatalf("a later exec loses the module cache variable: %v", exec())
+	}
 }

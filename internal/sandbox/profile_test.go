@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -95,11 +96,20 @@ func TestEnvDefaultsLangAndLeavesPathToTheContainer(t *testing.T) {
 
 func TestEnvPointsGoAtTheReadOnlyModuleCache(t *testing.T) {
 	s := fakeSpec()
+	s.Modules = hostCache(t)
 	r := mustRules(t, s)
 	for _, container := range []bool{false, true} {
 		env := buildEnv(r, Command{Env: []string{"GOMODCACHE=/writable/mod"}}, container)
 		if !contains(env, "GOMODCACHE="+s.Modules) || contains(env, "GOMODCACHE=/writable/mod") {
 			t.Errorf("container %v: env %v lacks GOMODCACHE=%s", container, env, s.Modules)
+		}
+	}
+
+	s.Modules = filepath.Join(s.Modules, "absent")
+	for _, container := range []bool{false, true} {
+		env := buildEnv(mustRules(t, s), Command{}, container)
+		if strings.Contains(strings.Join(env, "\n"), "GOMODCACHE=") {
+			t.Errorf("container %v: a module cache that is not on disk must not be set: %v", container, env)
 		}
 	}
 
