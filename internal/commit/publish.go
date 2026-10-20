@@ -18,13 +18,12 @@ type publication struct {
 	clone  string
 	remote string
 	base   string
-	label  string // pull request label as settled; empty means komodo
 	epic   string // epic branch, komodo/<epic>
 	wt     string // landing worktree path
 }
 
-// Publish commits the approved tree, lands it on the epic branch, pushes, opens or updates the
-// epic's pull request after the last landing, then hands the group to the Cleanup Handler.
+// Publish commits the approved tree, lands the group as one commit on the local epic branch, then hands the group to the
+// Cleanup Handler. It never pushes and opens no pull request; PushEpic does both once the epic's groups have landed.
 func (h *Handler) Publish(ctx context.Context, a Approval) (Result, error) {
 	p := &publication{h: h, a: a, epic: "komodo/" + a.Epic}
 	if err := p.validate(); err != nil {
@@ -83,7 +82,7 @@ func (p *publication) validate() error {
 // branch, and picks the landing worktree path.
 func (p *publication) settle(ctx context.Context) error {
 	cfg := p.h.settings()
-	p.base, p.remote, p.label = cfg.BaseBranch, cfg.Remote, cfg.PRLabel
+	p.base, p.remote = cfg.BaseBranch, cfg.Remote
 
 	root := cfg.LandingRoot
 	if root == "" {
@@ -111,6 +110,9 @@ func (p *publication) settle(ctx context.Context) error {
 func (p *publication) tracking(branch string) string {
 	return "refs/remotes/" + p.remote + "/" + branch
 }
+
+// local names a local branch in full, so a tag of the same short name cannot win.
+func (p *publication) local(branch string) string { return "refs/heads/" + branch }
 
 // commit records the approved tree on the group branch unless a commit already holds it.
 func (p *publication) commit(ctx context.Context) error {
@@ -172,7 +174,7 @@ func (p *publication) onGroupBranch(ctx context.Context) error {
 
 // holdsApproved reports whether the approved commit lies behind HEAD through only this group's
 // merges of the epic branch. Each such merge must be a real merge commit whose second parent is a
-// commit the remote epic branch already holds.
+// commit the local epic branch already holds.
 func (p *publication) holdsApproved(ctx context.Context, cur CommitInfo) bool {
 	// maxSyncWalk bounds how many merge-from-epic commits Publish walks back to find the approved
 	// commit.
@@ -188,7 +190,7 @@ func (p *publication) holdsApproved(ctx context.Context, cur CommitInfo) bool {
 			return false
 		}
 
-		held, err := p.h.Git.IsAncestor(ctx, p.a.Worktree, cur.Second, p.tracking(p.epic))
+		held, err := p.h.Git.IsAncestor(ctx, p.a.Worktree, cur.Second, p.local(p.epic))
 		if err != nil || !held {
 			return false
 		}
@@ -253,7 +255,7 @@ func (p *publication) report(ctx context.Context, subtype string, data any) erro
 	return nil
 }
 
-// land runs the landing turn, the push, the recheck, the pull request, the report and the hand-off.
+// land runs the landing turn, the local landing, the recheck, the report and the hand-off.
 func (p *publication) land(ctx context.Context) (Result, error) {
 	h, a := p.h, p.a
 
@@ -272,40 +274,16 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	if err := p.fetchBranch(ctx, a.Worktree, p.base); err != nil {
 		return Result{}, err
 	}
-	if err := p.fetchBranch(ctx, a.Worktree, p.epic); err != nil {
+	if err := p.syncEpic(ctx); err != nil {
 		return Result{}, err
 	}
-	if err := h.Git.AddWorktree(ctx, p.clone, p.wt, p.epic, p.remote+"/"+p.epic); err != nil {
-		return Result{}, gitFail(err)
-	}
 
-	if _, err := h.Git.Merge(
-		ctx, p.wt, p.tracking(p.epic), a.Epic+": update from "+p.remote, false,
-	); err != nil {
-		return Result{}, gitFail(err)
-	}
-
-	tip, _, err := h.Git.Head(ctx, a.Worktree)
+	ls, err := h.Git.Landed(ctx, p.wt, p.tracking(p.base), "HEAD")
 	if err != nil {
 		return Result{}, gitFail(err)
 	}
 
-	var ls []Landing
-
-	already, err := h.Git.IsAncestor(ctx, p.wt, tip, "HEAD")
-	if err != nil {
-		return Result{}, gitFail(err)
-	}
-
-	if already {
-		if ls, err = h.Git.Landed(ctx, p.wt, p.tracking(p.base), "HEAD"); err != nil {
-			return Result{}, gitFail(err)
-		}
-		if already = p.hasLanded(ls); !already {
-			ls = nil
-		}
-	}
-
+	already := p.hasLanded(ls)
 	if turn.First() && !already {
 		if err := p.recheck(ctx, turn); err != nil {
 			freed = true
@@ -314,29 +292,17 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	}
 
 	if !already {
-		if err := p.merge(ctx); err != nil {
+		id, err := p.merge(ctx)
+		if err != nil {
 			return Result{}, err
 		}
+
+		ls = append([]Landing{{ID: id, Label: a.Label, Goal: oneLine(a.Goal)}}, ls...)
 	}
 
-	head, err := p.push(ctx)
+	head, _, err := h.Git.Head(ctx, p.wt)
 	if err != nil {
-		return Result{}, err
-	}
-
-	if ls == nil {
-		if ls, err = h.Git.Landed(ctx, p.wt, p.tracking(p.base), "HEAD"); err != nil {
-			return Result{}, gitFail(err)
-		}
-	}
-
-	last := p.isLast(ls)
-
-	var epicStat string
-	if last {
-		if epicStat, err = h.Git.DiffStat(ctx, p.wt, p.tracking(p.base), "HEAD"); err != nil {
-			return Result{}, gitFail(err)
-		}
+		return Result{}, gitFail(err)
 	}
 
 	wasPaused := turn.Paused()
@@ -356,42 +322,28 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 		}
 	}
 
-	res := Result{Branch: p.epic, Head: head, Last: last}
-	if last {
-		if err := p.pullRequest(ctx, ls, epicStat, &res); err != nil {
-			return Result{}, err
-		}
-	}
+	res := Result{Branch: p.epic, Head: head, Landed: p.landedID(ls), Last: p.isLast(ls)}
 
 	return p.finish(ctx, res)
 }
 
-// merge brings the epic branch into the group branch, then merges the verified group commit into
-// the epic branch in the landing worktree.
-func (p *publication) merge(ctx context.Context) error {
-	g, a := p.h.Git, p.a
-	if err := p.onGroupBranch(ctx); err != nil {
+// syncEpic fetches the remote epic branch and merges what the remote holds into the landing worktree's local epic branch;
+// a remote that has no epic branch yet leaves the local branch as it is.
+func (p *publication) syncEpic(ctx context.Context) error {
+	h := p.h
+	if err := h.Git.FetchBranch(ctx, p.a.Worktree, p.remote, p.epic); err != nil {
+		if !errors.Is(err, ErrBranchMissing) {
+			return fail(KindPush, true, err)
+		}
+		return p.addLanding(ctx, p.local(p.epic))
+	}
+
+	if err := p.addLanding(ctx, p.tracking(p.epic)); err != nil {
 		return err
 	}
 
-	if _, err := g.Merge(
-		ctx, a.Worktree, p.tracking(p.epic), a.Label+": merge "+a.Epic, false,
-	); err != nil {
-		return gitFail(err)
-	}
-
-	groupTip, _, err := g.Head(ctx, a.Worktree)
-	if err != nil {
-		return gitFail(err)
-	}
-
-	section, err := RenderBody(a.Facts, a.Tester, a.Reviewer)
-	if err != nil {
-		return fail(KindGit, false, err)
-	}
-
-	if _, err := g.Merge(
-		ctx, p.wt, groupTip, a.Label+": "+oneLine(a.Goal)+"\n\n"+section, true,
+	if _, err := h.Git.Merge(
+		ctx, p.wt, p.tracking(p.epic), p.a.Epic+": update from "+p.remote, false,
 	); err != nil {
 		return gitFail(err)
 	}
@@ -399,52 +351,67 @@ func (p *publication) merge(ctx context.Context) error {
 	return nil
 }
 
-// push re-reads the lease, then pushes the epic branch unless the remote already holds the local
-// tip, and returns that tip.
-func (p *publication) push(ctx context.Context) (string, error) {
+// addLanding makes sure the landing worktree has the local epic branch checked out, cutting it from base when the branch
+// does not exist yet.
+func (p *publication) addLanding(ctx context.Context, base string) error {
+	if err := p.h.Git.AddWorktree(ctx, p.clone, p.wt, p.epic, base); err != nil {
+		return gitFail(err)
+	}
+
+	return nil
+}
+
+// merge brings the local epic branch into the group branch, then squashes the verified group tip into the epic branch in the
+// landing worktree as one commit, and returns that commit's id. The lease is read again just before, so a stale holder never
+// lands.
+func (p *publication) merge(ctx context.Context) (string, error) {
 	g, a := p.h.Git, p.a
-	if _, err := p.h.owns(ctx, a.Repo, a.Group, a.Run, a.Fence); err != nil {
+	if err := p.onGroupBranch(ctx); err != nil {
 		return "", err
 	}
 
-	local, _, err := g.Head(ctx, p.wt)
+	if _, err := g.Merge(
+		ctx, a.Worktree, p.local(p.epic), a.Label+": merge "+a.Epic, false,
+	); err != nil {
+		return "", gitFail(err)
+	}
+
+	groupTip, _, err := g.Head(ctx, a.Worktree)
 	if err != nil {
 		return "", gitFail(err)
 	}
 
-	tip, ok, err := g.RemoteTip(ctx, p.wt, p.remote, p.epic)
+	section, err := RenderBody(a.Facts, a.Tester, a.Reviewer)
 	if err != nil {
-		return "", fail(KindPush, true, err)
+		return "", fail(KindGit, false, err)
 	}
 
-	if !ok || tip != local {
-		if err := g.Push(ctx, p.wt, p.remote, p.epic); err != nil {
-			if errors.Is(err, ErrPushRejected) {
-				return "", gitFail(err)
-			}
-			return "", fail(KindPush, true, err)
-		}
-
-		if tip, ok, err = g.RemoteTip(
-			ctx, p.wt, p.remote, p.epic,
-		); err != nil || !ok || tip != local {
-			return "", fail(
-				KindPush,
-				true,
-				fmt.Errorf("remote does not hold %s after the push", local),
-			)
-		}
-	}
-
-	if err := p.fetchBranch(ctx, p.wt, p.epic); err != nil {
+	if _, err := p.h.owns(ctx, a.Repo, a.Group, a.Run, a.Fence); err != nil {
 		return "", err
 	}
-	return local, nil
+
+	id, err := g.Squash(ctx, p.wt, groupTip, a.Label+": "+oneLine(a.Goal)+"\n\n"+section)
+	if err != nil {
+		return "", gitFail(err)
+	}
+
+	return id, nil
 }
 
 // hasLanded reports whether the list holds this group's landing.
 func (p *publication) hasLanded(ls []Landing) bool {
 	return slices.ContainsFunc(ls, func(l Landing) bool { return l.Label == p.a.Label })
+}
+
+// landedID returns the id of this group's landing commit, or empty when the list has none.
+func (p *publication) landedID(ls []Landing) string {
+	for _, l := range ls {
+		if l.Label == p.a.Label {
+			return l.ID
+		}
+	}
+
+	return ""
 }
 
 // isLast reports whether every group label of the epic has landed.
@@ -463,67 +430,12 @@ func (p *publication) isLast(ls []Landing) bool {
 	return true
 }
 
-// pullRequest opens the epic's pull request, or refreshes its body when one is open.
-func (p *publication) pullRequest(
-	ctx context.Context,
-	ls []Landing,
-	stat string,
-	res *Result,
-) error {
-	f := EpicFacts{DiffStat: stat}
-
-	for i := len(ls) - 1; i >= 0; i-- {
-		if slices.Contains(p.a.EpicGroups, ls[i].Label) {
-			f.Groups = append(f.Groups, ls[i].Section)
-		}
-	}
-
-	body, err := RenderEpicBody(f)
-	if err != nil {
-		return fail(KindForge, false, err)
-	}
-
-	title := fmt.Sprintf("%s: %d task groups", p.a.Epic, len(p.a.EpicGroups))
-
-	label := p.label
-	if label == "" {
-		label = "komodo"
-	}
-
-	pr, found, err := p.h.Forge.FindPR(ctx, p.epic)
-	if err != nil {
-		return fail(KindForge, true, err)
-	}
-
-	if found {
-		if err := p.h.Forge.UpdatePR(ctx, pr.URL, title, body); err != nil {
-			return fail(KindForge, true, err)
-		}
-	} else {
-		if pr, err = p.h.Forge.OpenPR(ctx, p.base, p.epic, title, body, label); err != nil {
-			return fail(KindForge, true, err)
-		}
-
-		res.PRNew = true
-	}
-
-	res.PRURL = pr.URL
-	return nil
-}
-
-// finish reports the result and hands the group to the Cleanup Handler; a cleanup error comes back
-// unchanged. pr.opened goes out on every publish that finds the epic complete and its pull request
-// open, so a lost report or a crash after the pull request cannot strand the run.
+// finish reports the landing and hands the group to the Cleanup Handler; a cleanup error comes back unchanged, and a repeat
+// of the same approval reaches the Cleanup Handler again.
 func (p *publication) finish(ctx context.Context, res Result) (Result, error) {
 	a := p.a
 	if err := p.report(ctx, "publish.done", res); err != nil {
 		return Result{}, err
-	}
-
-	if res.Last && res.PRURL != "" {
-		if err := p.report(ctx, "pr.opened", res); err != nil {
-			return Result{}, err
-		}
 	}
 
 	if p.h.Cleanup == nil {
@@ -541,11 +453,9 @@ func (p *publication) finish(ctx context.Context, res Result) (Result, error) {
 		Epic:     a.Epic,
 		Branch:   a.Branch,
 		Tip:      tip,
-		Remote:   p.remote,
-		Contains: p.remote + "/" + p.epic,
+		Landed:   res.Landed,
+		Into:     p.epic,
 		Worktree: a.Worktree,
-		EpicDone: res.Last,
-		PRURL:    res.PRURL,
 	})
 	if err != nil {
 		return Result{}, err

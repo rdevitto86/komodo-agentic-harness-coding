@@ -17,6 +17,19 @@ type Published struct {
 	Landing  string `json:"landing,omitempty"` // path of the epic's landing worktree; used when EpicDone is true
 	EpicDone bool   `json:"epic_done"`         // true when this was the epic's last group and its pull request is open
 	PRURL    string `json:"pr_url"`            // epic pull request address; empty before the last group lands
+	// Landed is set when the group was squashed into the local epic branch and nothing was pushed: the commit there that
+	// holds the group's tree. The remote is not consulted and Into names the local epic branch whose history must hold it.
+	Landed string `json:"landed,omitempty"`
+	Into   string `json:"into,omitempty"`
+}
+
+// PublishedEpic says that an epic's branch and pull request are on the remote, so its landing worktree and branch may go.
+type PublishedEpic struct {
+	Epic     string `json:"epic"`              // epic folder name, such as ep-1
+	Remote   string `json:"remote"`            // remote that received the push
+	Contains string `json:"contains"`          // remote reference whose history must hold the local epic tip
+	Landing  string `json:"landing,omitempty"` // path of the epic's landing worktree
+	PRURL    string `json:"pr_url"`            // epic pull request address
 }
 
 // Item is one thing the Cleanup Handler removed or kept.

@@ -85,9 +85,11 @@ type EpicGit interface {
 	FetchBranch(ctx context.Context, dir, remote, branch string) error
 }
 
-// EpicCommitter is the Commit Handler as the Runtime Manager uses it at run start.
+// EpicCommitter is the Commit Handler as the Runtime Manager uses it: it commits an epic's task lists at run start and
+// pushes the epic's landed groups once the epic has gone quiet.
 type EpicCommitter interface {
 	SaveLists(ctx context.Context, r commit.ListsRequest) error
+	PushEpic(ctx context.Context, r commit.EpicPush) (commit.EpicResult, error)
 }
 
 // TokenCaps is the Resource Manager as the Runtime Manager uses it.

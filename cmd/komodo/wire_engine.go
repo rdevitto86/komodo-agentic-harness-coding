@@ -111,6 +111,15 @@ func (h *hub) SaveLists(ctx context.Context, r commit.ListsRequest) error {
 	return k.commit.SaveLists(ctx, r)
 }
 
+// PushEpic pushes an epic's landed groups and settles its pull request in the run's repository.
+func (h *hub) PushEpic(ctx context.Context, r commit.EpicPush) (commit.EpicResult, error) {
+	k, err := h.s.kitFor(r.Root, r.CommonDir, r.Repo)
+	if err != nil {
+		return commit.EpicResult{}, err
+	}
+	return k.commit.PushEpic(ctx, r)
+}
+
 // Discard frees a group's resources in the repository that holds it; the engine's own lease on the group does not stop it.
 func (h *hub) Discard(ctx context.Context, repo, root, group string) error {
 	k, err := h.s.kitFor(root, "", repo)

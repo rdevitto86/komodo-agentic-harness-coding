@@ -101,7 +101,8 @@ func gitFail(err error) *PublishError {
 		return fail(KindPushRejected, false, err)
 	case errors.Is(err, ErrBranchMissing):
 		return fail(KindBaseMissing, false, err)
-	case errors.Is(err, ErrTrailer),
+	case errors.Is(err, ErrDiverged),
+		errors.Is(err, ErrTrailer),
 		errors.Is(err, ErrNoGitDir),
 		errors.Is(err, ErrForce),
 		errors.Is(err, core.ErrEmptyMessage):

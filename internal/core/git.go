@@ -31,14 +31,15 @@ type CommitInfo struct {
 	Subject string `json:"subject"` // first line of the message
 }
 
-// Landing is one group landing on an epic branch, read back from its merge commit.
+// Landing is one group landing on an epic branch, read back from its commit.
 type Landing struct {
+	ID      string `json:"id"`      // id of the landing commit
 	Label   string `json:"label"`   // group label, from the subject
 	Goal    string `json:"goal"`    // group goal, from the subject
 	Section string `json:"section"` // the group's section of the pull request body, from the message body
 }
 
-// SectionMarker is the first line of a group's section; only a merge commit whose body starts with it is a landing.
+// SectionMarker is the first line of a group's section; only a commit whose body starts with it is a landing.
 const SectionMarker = "## Summary"
 
 // Git runs every git command of the harness. It has no force option and no refspec argument: each command gets an explicit
@@ -269,6 +270,7 @@ var (
 	ErrNotContained  = &Refusal{"commit is not in the history of the other reference"}
 	ErrForce         = &Refusal{"git arguments would force or delete a remote reference"}
 	ErrConflict      = errors.New("merge conflict")
+	ErrDiverged      = errors.New("branch tip is not in the history of the squashed commit")
 	ErrPushRejected  = errors.New("remote rejected the push")
 	ErrTrailer       = errors.New("commit message ends in trailer lines")
 	ErrBranchMissing = errors.New("remote has no such branch")

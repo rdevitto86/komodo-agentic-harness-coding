@@ -31,9 +31,10 @@ type Reporter interface {
 	Report(ctx context.Context, group bus.ID, subtype string, data any) error
 }
 
-// Cleaner is the Cleanup Handler's entry for a published group.
+// Cleaner is the Cleanup Handler's entry for a landed group and for a pushed epic.
 type Cleaner interface {
 	Complete(ctx context.Context, p Published) error
+	CompleteEpic(ctx context.Context, p PublishedEpic) error
 }
 
 // CheckResult is the outcome of one recheck.

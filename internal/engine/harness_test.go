@@ -332,10 +332,27 @@ func (g *fakeGit) FetchBranch(_ context.Context, _, remote, branch string) error
 	return g.fetchErr
 }
 
-// fakeCommits records the task-list commit in the shared log.
+// fakeCommits records the task-list commit and the epic pushes in the shared log.
 type fakeCommits struct {
-	mu  sync.Mutex
-	log *seqLog
+	mu     sync.Mutex
+	log    *seqLog
+	pushed []commit.EpicPush
+	onPush func(r commit.EpicPush) // runs inside each PushEpic call
+	result commit.EpicResult       // what PushEpic returns
+	err    error                   // what PushEpic returns as its error
+}
+
+// PushEpic records the call and returns the planted result.
+func (c *fakeCommits) PushEpic(_ context.Context, r commit.EpicPush) (commit.EpicResult, error) {
+	c.mu.Lock()
+	c.pushed = append(c.pushed, r)
+	cb, res, err := c.onPush, c.result, c.err
+	c.mu.Unlock()
+	c.log.add("push " + r.Epic)
+	if cb != nil {
+		cb(r)
+	}
+	return res, err
 }
 
 // SaveLists records the call.
@@ -344,6 +361,13 @@ func (c *fakeCommits) SaveLists(_ context.Context, r commit.ListsRequest) error 
 	defer c.mu.Unlock()
 	c.log.add("lists " + r.Epic)
 	return nil
+}
+
+// pushes returns the recorded epic pushes.
+func (c *fakeCommits) pushes() []commit.EpicPush {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]commit.EpicPush(nil), c.pushed...)
 }
 
 // fakeResource records the Resource Manager calls.

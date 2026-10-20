@@ -357,7 +357,8 @@ func (r *binRig) waitDone(timeout time.Duration) []event {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		evs := r.events()
-		if has(evs, "run-status", "group.done", "") {
+		// The run ends only after each quiet epic's one push, so the pushed branch and the pull request exist by then.
+		if has(evs, "run-complete", "done", "") {
 			return evs
 		}
 		if has(evs, "error", "run-refused", "") {

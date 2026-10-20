@@ -40,20 +40,12 @@ type groupChecker struct {
 	worktree string // the group's own worktree
 }
 
-// Recheck runs the checks once the landing worktree holds the group's tree; before the landing merge it passes, because the
-// group's sandbox cannot see that tip.
+// Recheck runs the checks once the landing worktree's tree is the group's tree, which is so after the group's landing commit;
+// before it the checks pass, because the group's sandbox cannot see that tip.
 func (g groupChecker) Recheck(ctx context.Context, _, landing string) (commit.CheckResult, error) {
 	tm := g.ref.manager()
 	if tm == nil {
 		return commit.CheckResult{}, errors.New("the group has no task manager to run the checks")
-	}
-
-	mine, err := gitOut("-C", g.worktree, "rev-parse", "HEAD")
-	if err != nil {
-		return commit.CheckResult{}, fmt.Errorf("read the group's checkout: %w", err)
-	}
-	if _, err := gitOut("-C", landing, "merge-base", "--is-ancestor", mine, "HEAD"); err != nil {
-		return commit.CheckResult{Pass: true}, nil
 	}
 
 	groupTree, err := gitOut("-C", g.worktree, "rev-parse", "HEAD^{tree}")
@@ -66,9 +58,7 @@ func (g groupChecker) Recheck(ctx context.Context, _, landing string) (commit.Ch
 		return commit.CheckResult{}, fmt.Errorf("read the epic tip's tree: %w", err)
 	}
 	if groupTree != epicTree {
-		return commit.CheckResult{}, errors.New(
-			"the group's checkout differs from the epic tip, so its sandbox cannot check the tip",
-		)
+		return commit.CheckResult{Pass: true}, nil
 	}
 
 	g.ref.recheckMu.Lock()

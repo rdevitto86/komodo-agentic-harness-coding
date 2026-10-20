@@ -29,6 +29,9 @@ type Git interface {
 	// DeleteBranch deletes a local branch only when it still points at expectTip and
 	// that commit is in the history of containedIn.
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
+	// DeleteLanded deletes a local branch only when it still points at expectTip, and landed, a commit in the history of
+	// containedIn, holds its tree.
+	DeleteLanded(ctx context.Context, clone, branch, expectTip, landed, containedIn string) error
 	// DiscardBranch deletes a local branch that still points at expectTip, whether or not
 	// the remote holds that commit; only Discard calls it.
 	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
@@ -107,16 +110,18 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 	}
 
 	h.say(ctx, p.Group, "cleanup.start", StartedFact{Branch: p.Branch, Tip: p.Tip})
-	if err := h.Git.Fetch(ctx, h.Clone, p.Remote); err != nil {
-		return rep, fmt.Errorf("fetch %s: %w", p.Remote, err)
-	}
+	if p.Landed == "" {
+		if err := h.Git.Fetch(ctx, h.Clone, p.Remote); err != nil {
+			return rep, fmt.Errorf("fetch %s: %w", p.Remote, err)
+		}
 
-	_, held, err := h.Git.Holds(ctx, h.Clone, p.Remote, p.Contains, p.Tip)
-	if err != nil {
-		return rep, fmt.Errorf("check remote for tip %s: %w", p.Tip, err)
-	}
-	if !held {
-		return rep, ErrNotPublished
+		_, held, err := h.Git.Holds(ctx, h.Clone, p.Remote, p.Contains, p.Tip)
+		if err != nil {
+			return rep, fmt.Errorf("check remote for tip %s: %w", p.Tip, err)
+		}
+		if !held {
+			return rep, ErrNotPublished
+		}
 	}
 
 	r := &run{h: h, ctx: ctx, group: p.Group, rep: &rep}
@@ -124,7 +129,11 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 	r.checkouts()
 
 	if r.worktree(h.Roots.Worktrees, p.Worktree, false) {
-		r.branch(p.Branch, p.Tip, p.Contains)
+		if p.Landed != "" {
+			r.landedBranch(p.Branch, p.Tip, p.Landed, p.Into)
+		} else {
+			r.branch(p.Branch, p.Tip, p.Contains)
+		}
 	} else {
 		r.keepBranch(p.Branch)
 	}
@@ -137,6 +146,30 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 	}
 
 	h.say(ctx, p.Group, "cleanup.done", rep)
+	return rep, nil
+}
+
+// CompleteEpic cleans up a pushed epic: it removes the landing worktree and the local epic branch once the remote holds the
+// branch's tip. The Commit Handler calls it after the push and the pull request.
+func (h *Handler) CompleteEpic(ctx context.Context, p PublishedEpic) (Report, error) {
+	rep := Report{Group: p.Epic}
+	if !validName(p.Epic) {
+		return rep, fmt.Errorf("epic %q: %w", p.Epic, ErrOutsideRoots)
+	}
+	if p.Landing != "" {
+		if err := exactly(h.Roots.Landings, p.Epic, p.Landing); err != nil {
+			return rep, err
+		}
+	}
+
+	if err := h.Git.Fetch(ctx, h.Clone, p.Remote); err != nil {
+		return rep, fmt.Errorf("fetch %s: %w", p.Remote, err)
+	}
+
+	pub := Published{Epic: p.Epic, Remote: p.Remote, Contains: p.Contains, Landing: p.Landing}
+	r := &run{h: h, ctx: ctx, group: p.Epic, rep: &rep}
+	h.cleanEpic(r, pub)
+
 	return rep, nil
 }
 

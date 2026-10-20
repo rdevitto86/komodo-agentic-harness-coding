@@ -227,6 +227,27 @@ func (g execGit) DeleteBranch(ctx context.Context, clone, branch, expectTip, con
 	return err
 }
 
+// DeleteLanded deletes a branch at expectTip when landed holds its tree and is contained in containedIn.
+func (g execGit) DeleteLanded(ctx context.Context, clone, branch, expectTip, landed, containedIn string) error {
+	tip, ok, _ := g.BranchTip(ctx, clone, branch)
+	if !ok {
+		return nil
+	}
+	if tip != expectTip {
+		return refusal{"branch moved since publish"}
+	}
+	mine, _ := g.git(clone, "rev-parse", expectTip+"^{tree}")
+	held, _ := g.git(clone, "rev-parse", landed+"^{tree}")
+	if mine != held {
+		return refusal{"landed commit holds another tree"}
+	}
+	if _, err := g.git(clone, "merge-base", "--is-ancestor", landed, containedIn); err != nil {
+		return refusal{"epic history lacks the landed commit"}
+	}
+	_, err := g.git(clone, "update-ref", "-d", "refs/heads/"+branch, expectTip)
+	return err
+}
+
 // BranchTip returns the commit a local branch points at.
 func (g execGit) BranchTip(_ context.Context, clone, branch string) (string, bool, error) {
 	out, err := g.git(clone, "rev-parse", "--verify", "-q", "refs/heads/"+branch)
@@ -318,6 +339,14 @@ func (r *recGit) DeleteBranch(ctx context.Context, clone, branch, tip, in string
 		return err
 	}
 	return r.Git.DeleteBranch(ctx, clone, branch, tip, in)
+}
+
+// DeleteLanded logs and forwards.
+func (r *recGit) DeleteLanded(ctx context.Context, clone, branch, tip, landed, in string) error {
+	if err := r.hit("git.DeleteLanded", branch); err != nil {
+		return err
+	}
+	return r.Git.DeleteLanded(ctx, clone, branch, tip, landed, in)
 }
 
 // DiscardBranch logs and forwards.

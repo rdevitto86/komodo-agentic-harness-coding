@@ -65,12 +65,32 @@ type EpicFacts struct {
 	Groups []string `json:"groups"`
 }
 
-// Result is what a finished Publish returns and what the Task Manager reports.
+// Result is what a finished Publish returns and what the Task Manager reports: the group landed on the local epic branch,
+// and nothing was pushed.
 type Result struct {
-	Branch string `json:"branch"` // epic branch that was pushed
-	Head   string `json:"head"`   // commit id at the pushed epic tip
+	Branch string `json:"branch"` // epic branch the group landed on
+	Head   string `json:"head"`   // commit id at the local epic tip after the landing
+	Landed string `json:"landed"` // the one commit that holds the group's work on the epic branch
 	Last   bool   `json:"last"`   // true when this landing was the epic's last group
-	// epic pull request address; empty until the last group has landed
+}
+
+// EpicPush names the epic whose landed groups PushEpic pushes.
+type EpicPush struct {
+	Repo       string   `json:"repo"`        // repo id the epic's groups are keyed by
+	Root       string   `json:"root"`        // the repository root
+	CommonDir  string   `json:"common_dir"`  // the repository's git common directory
+	Epic       string   `json:"epic"`        // the epic label, such as ep-1
+	EpicGroups []string `json:"epic_groups"` // labels of every group of the epic
+}
+
+// EpicResult is what PushEpic returns: what the epic branch holds locally and what reached the remote.
+type EpicResult struct {
+	Branch string   `json:"branch"` // epic branch
+	Head   string   `json:"head"`   // commit id at the local epic tip
+	Landed []string `json:"landed"` // labels of the groups landed on the local epic branch, in landing order
+	Pushed bool     `json:"pushed"` // true when this call pushed the epic branch
+	Last   bool     `json:"last"`   // true when every group of the epic has landed
+	// epic pull request address; empty until every group has landed and the epic is not paused
 	PRURL string `json:"pr_url"`
 	PRNew bool   `json:"pr_new"` // true when this call opened the pull request
 }
@@ -83,20 +103,24 @@ type ListsRequest struct {
 	Epic      string `json:"epic"`       // the epic label, such as ep-1
 }
 
-// Published says that a group's work is on the remote and may be cleaned up.
+// Published says that a group's work is one commit on the local epic branch and the group may be cleaned up.
 type Published struct {
 	Run      bus.ID `json:"run"`
 	Group    bus.ID `json:"group"`
 	Epic     string `json:"epic"`     // epic label, such as ep-1
 	Branch   string `json:"branch"`   // group branch that was landed
-	Tip      string `json:"tip"`      // commit id the remote must hold
-	Remote   string `json:"remote"`   // remote that received the push
-	Contains string `json:"contains"` // remote reference whose history must hold Tip
+	Tip      string `json:"tip"`      // commit id at the group branch tip
+	Landed   string `json:"landed"`   // the commit on the epic branch that holds the same tree as Tip
+	Into     string `json:"into"`     // local epic branch whose history must hold Landed
 	Worktree string `json:"worktree"` // path of the group's checkout
-	// true when this was the epic's last group and its pull request is open
-	EpicDone bool `json:"epic_done"`
-	// epic pull request address; empty before the last group lands
-	PRURL string `json:"pr_url"`
+}
+
+// PublishedEpic says that an epic branch and its pull request are on the remote and the epic may be cleaned up.
+type PublishedEpic struct {
+	Epic     string `json:"epic"`     // epic label, such as ep-1
+	Remote   string `json:"remote"`   // remote that received the push
+	Contains string `json:"contains"` // remote reference whose history must hold the local epic tip
+	PRURL    string `json:"pr_url"`   // epic pull request address
 }
 
 // Kinds of PublishError; the Runtime Manager maps each to a retry or a block reason.

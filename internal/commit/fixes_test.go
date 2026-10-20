@@ -48,11 +48,11 @@ func TestPublishMergesVerifiedCommit(t *testing.T) {
 	if _, err := h.Publish(w.ctx, w.approval(g, "tg-1.1")); err != nil {
 		t.Fatal(err)
 	}
-	tip := w.remoteTip("komodo/ep-1")
-	if out, err := execOut(w.remote, "cat-file", "-e", tip+":evil.txt"); err == nil {
+	tip := w.localTip()
+	if out, err := execOut(w.clone, "cat-file", "-e", tip+":evil.txt"); err == nil {
 		t.Fatalf("the decoy landed: %s", out)
 	}
-	if out, err := execOut(w.remote, "cat-file", "-e", tip+":a.txt"); err != nil {
+	if out, err := execOut(w.clone, "cat-file", "-e", tip+":a.txt"); err != nil {
 		t.Fatalf("the verified work did not land: %s", out)
 	}
 }
@@ -91,11 +91,11 @@ func TestPublishRejectsSmuggledSyncCommit(t *testing.T) {
 		write(t, g.wt, "evil.txt", "evil")
 		git(t, g.wt, "add", "-A")
 		git(t, g.wt, "commit", "-q", "-m", "tg-1.1: merge ep-1")
-		tip := w.remoteTip("komodo/ep-1")
+		tip := w.localTip()
 		if _, err := h.Publish(w.ctx, a); !errors.Is(err, ErrNotApproved) {
 			t.Fatalf("err = %v", err)
 		}
-		if w.remoteTip("komodo/ep-1") != tip {
+		if w.localTip() != tip {
 			t.Fatal("the epic moved")
 		}
 	})
@@ -111,41 +111,14 @@ func TestPublishRejectsSmuggledSyncCommit(t *testing.T) {
 		w.sideBranch("komodo/side", "evil.txt")
 		git(t, g.wt, "fetch", "-q", "origin", "komodo/side")
 		git(t, g.wt, "merge", "-q", "--no-ff", "-m", "tg-1.1: merge ep-1", "FETCH_HEAD")
-		tip := w.remoteTip("komodo/ep-1")
+		tip := w.localTip()
 		if _, err := h.Publish(w.ctx, a); !errors.Is(err, ErrNotApproved) {
 			t.Fatalf("err = %v", err)
 		}
-		if w.remoteTip("komodo/ep-1") != tip {
+		if w.localTip() != tip {
 			t.Fatal("the epic moved")
 		}
 	})
-}
-
-// pr.opened is announced again on a repeat that finds the pull request, so a lost report or a crash cannot strand the run.
-func TestPublishResendsPROpened(t *testing.T) {
-	w := newWorld(t)
-	h := w.handler()
-	g := w.newGroup("tg-1.1")
-	w.work(g, "a.txt", "a")
-	a := w.approval(g, "tg-1.1")
-	w.rep.fail = map[string]error{"pr.opened": errors.New("bus down")}
-	_, err := h.Publish(w.ctx, a)
-	if k, r := peKind(err); k != KindReport || !r {
-		t.Fatalf("err = %v", err)
-	}
-	r, err := h.Publish(w.ctx, a)
-	if err != nil || r.PRNew {
-		t.Fatalf("repeat = %+v, %v", r, err)
-	}
-	var got int
-	for _, s := range w.rep.subtypes() {
-		if s == "pr.opened" {
-			got++
-		}
-	}
-	if got != 1 || w.gh.count("pr create") != 1 {
-		t.Fatalf("pr.opened delivered %d times; calls = %v", got, w.gh.calls())
-	}
 }
 
 // A failed epic.paused report does not change the recheck outcome.
@@ -175,15 +148,15 @@ func TestSaveListsReusesLandingWorktree(t *testing.T) {
 	if err := h.SaveLists(w.ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	tip := w.remoteTip("komodo/ep-1")
-	if got := git(t, w.remote, "show", tip+":docs/backlog/epic-1/tg-1.1/TG.md"); got != "# group" {
+	tip := w.localTip()
+	if got := git(t, w.clone, "show", tip+":docs/backlog/epic-1/tg-1.1/TG.md"); got != "# group" {
 		t.Fatalf("file = %q", got)
 	}
 	if st := git(t, land, "status", "--porcelain"); st != "" {
 		t.Fatalf("landing worktree left dirty: %q", st)
 	}
 	if git(t, land, "rev-parse", "HEAD") != tip {
-		t.Fatal("landing worktree is not at the pushed tip")
+		t.Fatal("landing worktree is not at the local tip")
 	}
 }
 
@@ -266,11 +239,11 @@ func TestNoRepeatedWork(t *testing.T) {
 		t.Fatalf("Save hashed the worktree %d times, want 1", got)
 	}
 	w.work(g, "b.txt", "b")
-	before := w.countCmd("--merges")
+	before := w.countCmd("--first-parent")
 	if _, err := h.Publish(w.ctx, w.approval(g, "tg-1.1")); err != nil {
 		t.Fatal(err)
 	}
-	if got := w.countCmd("--merges") - before; got != 1 {
+	if got := w.countCmd("--first-parent") - before; got != 1 {
 		t.Fatalf("Publish read the landings %d times, want 1", got)
 	}
 }

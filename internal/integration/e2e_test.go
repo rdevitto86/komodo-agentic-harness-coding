@@ -106,8 +106,8 @@ func TestEveryPhaseVetTestAndThreeBuilds(t *testing.T) {
 var groupLife = []string{
 	"run-status/run.start", "run-status/stage.enter", "run-status/session.start", "run-status/task.done",
 	"run-status/session.end", "run-status/check.done", "run-status/group.approved", "run-status/publish.done",
-	"run-status/pr.opened", "run-status/cleanup.start", "run-status/cleanup.done", "run-status/group.done",
-	"run-complete/done",
+	"run-status/cleanup.start", "run-status/cleanup.done", "run-status/group.done", "run-status/epic.pushed",
+	"run-status/pr.opened", "run-complete/done",
 }
 
 // Event round trip: every event of a group's life arrives once, in order, and the event store holds a line for each.
