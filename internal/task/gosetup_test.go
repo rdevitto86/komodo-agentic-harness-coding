@@ -91,7 +91,9 @@ func TestOnlyAGoRepoSetupGetsTheDownloadCache(t *testing.T) {
 }
 
 func TestAModuleFailureInSetupCarriesTheFixLine(t *testing.T) {
-	failing := []string{"sh", "-c", "echo \"could not read Username for 'https://github.com': terminal prompts disabled\"; exit 1"}
+	failing := []string{
+		"sh", "-c", "echo \"could not read Username for 'https://github.com': terminal prompts disabled\"; exit 1",
+	}
 	r, _ := goSetupRig(t, "go", failing, true)
 
 	_, err := r.m.instance(context.Background(), "builder")

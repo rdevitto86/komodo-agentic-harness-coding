@@ -8,7 +8,8 @@ import (
 )
 
 // GoSetupAccess returns what a Go setup command may read and the variables it gets so the person's download cache serves as
-// a file proxy ahead of the host proxy. Both are empty when the cache folder is missing or its path cannot be a proxy list item.
+// a file proxy ahead of the host proxy. Both are empty when the cache folder is missing or its path cannot be a proxy list
+// item.
 func GoSetupAccess(modules, hostProxy, hostPrivate string) ([]string, []string) {
 	if modules == "" || !filepath.IsAbs(modules) {
 		return nil, nil
