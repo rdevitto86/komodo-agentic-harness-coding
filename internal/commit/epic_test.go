@@ -142,6 +142,7 @@ func TestPushEpicAfterACrashLosesNothing(t *testing.T) {
 	if w.remoteTip("komodo/ep-1") == tip {
 		t.Fatal("the crash scenario needs unpushed work")
 	}
+	worktrees := countLines(git(t, w.clone, "worktree", "list"))
 
 	res, err := w.handler().PushEpic(w.ctx, w.epicReq(groups...))
 	if err != nil {
@@ -150,8 +151,8 @@ func TestPushEpicAfterACrashLosesNothing(t *testing.T) {
 	if !res.Pushed || !res.Last || w.remoteTip("komodo/ep-1") != tip || w.gh.count("pr create") != 1 {
 		t.Fatalf("result = %+v; remote %s, local %s", res, w.remoteTip("komodo/ep-1"), tip)
 	}
-	if n := countLines(git(t, w.clone, "worktree", "list")); n != 1 {
-		t.Fatalf("the temporary worktree was left behind: %d worktrees", n)
+	if n := countLines(git(t, w.clone, "worktree", "list")); n != worktrees {
+		t.Fatalf("the temporary worktree was left behind: %d worktrees, want %d", n, worktrees)
 	}
 }
 
@@ -185,13 +186,8 @@ func TestPushEpicRefreshesAnOpenPullRequest(t *testing.T) {
 	if _, err := h.PushEpic(w.ctx, w.epicReq("tg-1.1")); err != nil {
 		t.Fatal(err)
 	}
-	other := filepath.Join(w.root, "other")
-	git(t, w.root, "clone", w.remote, other)
-	git(t, other, "checkout", "komodo/ep-1")
-	write(t, other, "x.txt", "x")
-	git(t, other, "add", "-A")
-	git(t, other, "commit", "-m", "from another clone")
-	git(t, other, "push", "origin", "komodo/ep-1")
+	land := filepath.Join(w.root, "wt", "ep-1")
+	git(t, land, "commit", "--allow-empty", "-m", "ep-1: later work")
 
 	res, err := h.PushEpic(w.ctx, w.epicReq("tg-1.1"))
 	if err != nil {

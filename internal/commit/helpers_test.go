@@ -85,7 +85,7 @@ func (w *world) newGroup(label string) group {
 		wt:     filepath.Join(w.root, "wt", label),
 		fence:  3,
 	}
-	if err := w.git.AddWorktree(w.ctx, w.clone, g.wt, g.branch, "origin/komodo/ep-1"); err != nil {
+	if err := w.git.AddWorktree(w.ctx, w.clone, g.wt, g.branch, "komodo/ep-1"); err != nil {
 		w.t.Fatal(err)
 	}
 	w.leases.set(g, "run-1", w.clone)
