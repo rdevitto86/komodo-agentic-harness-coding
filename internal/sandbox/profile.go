@@ -174,7 +174,7 @@ func onDisk(ps []string) []string {
 }
 
 // buildEnv returns the only environment a command gets: the sandbox's own PATH, HOME, TMPDIR and LANG plus the allowed cache
-// variables. A container keeps the image's PATH.
+// variables. A container keeps the image's PATH. GOMODCACHE is always the spec's read-only module cache when it has one.
 func buildEnv(r rules, c Command, container bool) []string {
 	vars := map[string]string{}
 	for _, kv := range c.Env {
@@ -190,6 +190,10 @@ func buildEnv(r rules, c Command, container bool) []string {
 	}
 
 	vars["HOME"], vars["TMPDIR"] = r.Temp, r.Temp
+	if r.Modules != "" {
+		vars["GOMODCACHE"] = r.Modules
+	}
+
 	if _, ok := vars["LANG"]; !ok {
 		vars["LANG"] = "C.UTF-8"
 	}

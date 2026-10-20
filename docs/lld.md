@@ -10548,7 +10548,7 @@ Connection and safety rules:
 5. Every `run` calls `Manager.Command`. `DestroySandboxInstance` runs at `CloseTaskGroup` or when the group is stopped; it is safe to call twice.
 
 **Go setup.** The instance has no GitHub login, so `go mod download` cannot fetch a private module. For a Go repository the setup command, and only it, gets the variables that make the person's Go download cache a file proxy, with the public proxy behind it:
-- The cache is `$(go env GOMODCACHE)/cache/download`, inside `Spec.Modules`, which every command already reads read-only on all three mechanisms (Seatbelt and Bubblewrap allow reads only, and Docker mounts it `:ro`). Only the variables below and the network end with setup.
+- The cache is `$(go env GOMODCACHE)/cache/download`, inside `Spec.Modules`, which every command already reads read-only on all three mechanisms (Seatbelt and Bubblewrap allow reads only, and Docker mounts it `:ro`), and every command gets `GOMODCACHE` set to `Spec.Modules`, whatever the command brings, so Go finds the saved modules inside a container too. Only the variables below and the network end with setup.
 - When that folder does not exist, `SetupEnv` stays empty and setup runs as it did before.
 - The instance gets no token, no git credential helper and no `~/.gitconfig`; the repository's `go.sum` still verifies every module.
 
