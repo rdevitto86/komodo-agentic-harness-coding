@@ -65,6 +65,10 @@ func TestTheHostFillLeavesGoModAndGoSumAsItFoundThem(t *testing.T) {
 					t.Errorf("the go.sum copy holds %q, want %q", got, tc.sum)
 				}
 
+				if modfile == "" {
+					return errors.New("the fill got no -modfile")
+				}
+
 				sum := strings.TrimSuffix(modfile, ".mod") + ".sum"
 				if err := os.WriteFile(sum, []byte("written by the fill\n"), 0o644); err != nil {
 					return err
@@ -96,6 +100,16 @@ func TestTheHostFillLeavesGoModAndGoSumAsItFoundThem(t *testing.T) {
 			}
 		})
 	}
+}
+
+// writeBesideModfile writes a go.sum next to the fill's -modfile, as go mod download does; with no -modfile it fails
+// instead of writing into the current folder.
+func writeBesideModfile(env []string) error {
+	modfile := modfileOf(env)
+	if modfile == "" {
+		return errors.New("the fill got no -modfile")
+	}
+	return os.WriteFile(strings.TrimSuffix(modfile, ".mod")+".sum", []byte("written by the fill\n"), 0o644)
 }
 
 // modfileOf returns the -modfile path in the fill's GOFLAGS, or an empty string.
@@ -136,7 +150,7 @@ func TestAFillThatWroteGoSumDoesNotRunAgainForTheNextRole(t *testing.T) {
 
 	hostGoDownload = func(_ context.Context, dir string, env []string) error {
 		*calls = append(*calls, fillCall{dir: dir})
-		return os.WriteFile(strings.TrimSuffix(modfileOf(env), ".mod")+".sum", []byte("written by the fill\n"), 0o644)
+		return writeBesideModfile(env)
 	}
 
 	for _, role := range []string{"builder", "tester"} {
@@ -194,7 +208,7 @@ func TestTwoRolesFillingAtOnceDownloadOnce(t *testing.T) {
 		n.Add(1)
 		time.Sleep(50 * time.Millisecond)
 
-		return os.WriteFile(strings.TrimSuffix(modfileOf(env), ".mod")+".sum", []byte("written by the fill\n"), 0o644)
+		return writeBesideModfile(env)
 	}
 
 	var wg sync.WaitGroup
