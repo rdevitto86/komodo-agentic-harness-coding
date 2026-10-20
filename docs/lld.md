@@ -9708,7 +9708,8 @@ func (m *Manager) CloseTaskGroup(ctx context.Context) error
 func (m *Manager) Recheck(ctx context.Context)
 
 // Files returns the group's file list including what scope answers added; Runner returns the command runner bound to a role's sandbox instance.
-// The runner returns the whole output up to 16 MB and an error past it; tool replies keep their 4 KB cap.
+// The runner returns the whole output up to 16 MB; past it, the exit code, the head and tail in 4 KB and an error wrapping
+// ErrOutputOverLimit. Tool replies keep their 4 KB cap.
 // The Tester and Reviewer adapters are built before the Manager and read both through closures.
 func (m *Manager) Files() []string
 func (m *Manager) Runner(role string) agent.CommandRunner
@@ -10550,8 +10551,10 @@ Connection and safety rules:
 
 **Go setup.** The instance has no GitHub login, so `go mod download` cannot fetch a private module inside it. Before an instance is made, the Task Manager runs `go mod download` on the host instead, in the worktree, with the person's own Go and Git login, `GOTOOLCHAIN=local` (so a `go.mod` cannot make the host fetch another toolchain) and `GOFLAGS=-mod=mod`. The command fills `Spec.Modules`, the host's `GOMODCACHE`:
 - It runs only when the worktree root holds a `go.mod` and `Spec.Modules` is set.
+- It is killed with its process group after 10 minutes (`goFillTimeout`); a host git call keeps its own 2 minutes.
+- It writes no file in the worktree: `go.mod` and `go.sum` are saved before the fill and restored after it, whether it succeeds or fails, so the hash below is the same before and after. Agents fix `go.sum` inside the sandbox, which works offline because the cache holds the modules.
 - It runs once per group, before the first instance, and again when the hash of `go.mod` and `go.sum` differs from the last successful fill, because a builder may add a dependency.
-- A failure escalates `blocked`, reason `setup`, with the role, the capped output and the `fix` line below; no instance exists yet, so none is discarded.
+- A failure escalates `blocked`, reason `setup`, with the role, the output capped at 4 KB and the `fix` line below; no instance exists yet, so none is discarded.
 - A dependency a builder adds is fetched on the host with the person's login ([TODO: whether host fills are limited to modules already in `go.sum`, or to `GOPRIVATE` hosts ([G-298](#g-298))]).
 
 For a Go repository the setup command, and only it, gets the variables that make the person's Go download cache a file proxy, with the public proxy behind it:
@@ -10918,7 +10921,7 @@ Go package `internal/agent` (HLD Appendix A). It holds the role definitions and 
 |---|---|
 | `internal/agent/role.go` | `Role` and `Slots`, the compiled role definition every agent shares |
 | `internal/agent/builder.go` | The Builder's `Role`, `BuilderResult` and `ParseBuilderResult` |
-| `internal/agent/taskgate.go` | `CommandRunner`, `TaskGate` and `CapOutput`: run a command and return its whole output up to 16 MB; rerun a completion command and return its capped outcome |
+| `internal/agent/taskgate.go` | `CommandRunner`, `ErrOutputOverLimit`, `TaskGate` and `CapOutput`: run a command and return its whole output up to 16 MB; rerun a completion command and return its capped outcome |
 | `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` and `MatchGlob`, the guard's pattern matcher (a pattern with no slash matches the base name at any depth), and `MatchPath`, the matcher of a group's file list (a pattern with no slash matches only at the root, so `go.mod` never allows `tools/go.mod`) |
 
 Files this chapter calls but does not own:
@@ -11114,7 +11117,11 @@ func BuilderRole() Role
 // ParseBuilderResult decodes and validates a Builder final call.
 func ParseBuilderResult(raw []byte) (BuilderResult, error)
 
-// CommandRunner runs one command in the sandbox and returns its exit code and whole output, up to 16 MB; past that it errors.
+// ErrOutputOverLimit is wrapped by the error of a runner whose command printed more than its limit.
+var ErrOutputOverLimit = errors.New("the output of the command passed the limit")
+
+// CommandRunner runs one command in the sandbox and returns its exit code and whole output, up to 16 MB; past that it
+// returns the real exit code, the head and tail in 4 KB and an error that wraps ErrOutputOverLimit and names the log.
 type CommandRunner func(ctx context.Context, command string) (exit int, output string, err error)
 
 // TaskGate finishes a task: it reruns the completion command and returns its outcome.
@@ -11674,7 +11681,7 @@ func ImpactSet(deps map[string][]string, changed []string) []string
 func CaseCollisions(paths []string) [][]string
 ```
 
-`CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`.
+`CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`. A step that judges only by exit code, `done_when` and the task gate, treats `ErrOutputOverLimit` as no error and uses the exit code; every step that parses the output fails on it, and a Tester rerun that returns it leaves its item unconfirmed.
 
 `NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Each language's profile file in `embed/langs` names, per build tool, the command that prints its JUnit XML report. Gradle, Maven and pytest ship one; a language or a test command with none leaves a failing test of that language blocking as unclassifiable.
 
@@ -15531,7 +15538,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-296"></a>G-296 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 | <a id="g-297"></a>G-297 | Sandbox | Private registries for npm, cargo and Python: their setup commands have no credentials and no cache fallback, because only Go setup gets a file proxy on the person's download cache | Owner decision | [11](#11-task-manager) |
 | <a id="g-298"></a>G-298 | Sandbox | A builder-added Go dependency is fetched on the host with the person's login: the host fill runs `go mod download` again when `go.mod` or `go.sum` changes, so a module the builder names is downloaded outside the sandbox. The owner accepted this risk; open: whether to limit host fills to modules already in `go.sum`, or to `GOPRIVATE` hosts | Owner decision | [11](#11-task-manager) |
-| <a id="g-299"></a>G-299 | Task Manager | Check output limit: the runner the mechanical checks use returns a command's whole output up to 16 MB and an error past it, while tool replies keep 4 KB. The owner decided this; the 16 MB limit is unmeasured for very large repositories | Owner decision | [11](#11-task-manager) |
+| <a id="g-299"></a>G-299 | Task Manager | Check output limit: the runner the mechanical checks use returns a command's whole output up to 16 MB and, past it, the exit code, the head and tail in 4 KB and an over-limit error, while tool replies keep 4 KB. The owner decided this; the 16 MB limit is unmeasured for very large repositories | Owner decision | [11](#11-task-manager) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
