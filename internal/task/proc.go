@@ -18,8 +18,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
 )
 
-// capture collects a command's combined output: the first replyCap bytes in memory, and the whole output in a log file once
-// it is longer.
+// capture collects a command's combined output: the first limit bytes in memory, and the whole output in a log file once it
+// is longer.
 type capture struct {
 	mu      sync.Mutex
 	logPath string
@@ -113,10 +113,12 @@ type stderrPrinter struct{}
 
 // Limits on what a tool puts in front of the model.
 const (
-	replyCap    = 4096             // bytes of a reply, except read
-	headKeep    = 1024             // bytes kept from the start of a capped reply
-	maxLogBytes = 64 << 20         // bytes of one command's output kept in its log
-	runTimeout  = 10 * time.Minute // a run command is killed with its whole tree after this
+	replyCap       = 4096             // bytes of a reply, except read
+	exitRoom       = 64               // bytes of a run reply kept free for its exit line
+	headKeep       = 1024             // bytes kept from the start of a capped reply
+	checkOutputCap = 16 << 20         // bytes of a check command's output handed back whole
+	maxLogBytes    = 64 << 20         // bytes of one command's output kept in its log
+	runTimeout     = 10 * time.Minute // a run command is killed with its whole tree after this
 )
 
 // taskSource names this package in a fault.
@@ -165,16 +167,19 @@ func capParts(head, tail string, total int, logPath string, budget int) string {
 	return head + fmt.Sprintf("\n[… %d bytes cut; full output in %s]\n", cut, logPath) + tail
 }
 
-// runConfined starts a command from the sandbox, waits for it with the sandbox's own wait and collects its output. When the
-// command ends, whatever it left running in its process group is
-// killed.
+// runConfined runs a command from the sandbox and collects its output within the reply cap of a tool reply.
 func runConfined(ctx context.Context, cmd *exec.Cmd, logPath string) runResult {
-	const exitRoom = 64 // bytes of a run reply kept free for its exit line
+	return runConfinedWithin(ctx, cmd, logPath, replyCap-exitRoom)
+}
 
+// runConfinedWithin starts a command from the sandbox, waits for it with the sandbox's own wait and collects its output; the
+// reply keeps all of it up to limit bytes and is capped past that. When the command ends, whatever it left running in its
+// process group is killed.
+func runConfinedWithin(ctx context.Context, cmd *exec.Cmd, logPath string, limit int) runResult {
 	// how long output is read after a command ends, for a process that kept the pipe
 	const drainWait = 2 * time.Second
 
-	out := &capture{logPath: logPath, limit: replyCap - exitRoom}
+	out := &capture{logPath: logPath, limit: limit}
 
 	pr, pw, err := os.Pipe()
 	if err != nil {

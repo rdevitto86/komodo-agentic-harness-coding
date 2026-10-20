@@ -9708,6 +9708,7 @@ func (m *Manager) CloseTaskGroup(ctx context.Context) error
 func (m *Manager) Recheck(ctx context.Context)
 
 // Files returns the group's file list including what scope answers added; Runner returns the command runner bound to a role's sandbox instance.
+// The runner returns the whole output up to 16 MB and an error past it; tool replies keep their 4 KB cap.
 // The Tester and Reviewer adapters are built before the Manager and read both through closures.
 func (m *Manager) Files() []string
 func (m *Manager) Runner(role string) agent.CommandRunner
@@ -10865,6 +10866,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Tester copy mechanisms and costs | Sandbox |
 | [G-297](#g-297) | Private registries for npm, cargo and Python | Sandbox |
 | [G-298](#g-298) | A builder-added Go dependency is fetched on the host with the person's login | Sandbox |
+| [G-299](#g-299) | Check output limit | Task Manager |
 | [G-71](#g-71) | Details of the subscription link, including which environment variables the login needs | Subscription link |
 | [G-72](#g-72) | Request and response mapping of the API interfaces and the cache markers | API links |
 | [G-03](#g-03), [G-04](#g-04) | A local model at the context floor, and parallel requests | Only the optional local link |
@@ -10916,7 +10918,7 @@ Go package `internal/agent` (HLD Appendix A). It holds the role definitions and 
 |---|---|
 | `internal/agent/role.go` | `Role` and `Slots`, the compiled role definition every agent shares |
 | `internal/agent/builder.go` | The Builder's `Role`, `BuilderResult` and `ParseBuilderResult` |
-| `internal/agent/taskgate.go` | `CommandRunner`, `TaskGate` and `CapOutput`: rerun a completion command and return its capped outcome |
+| `internal/agent/taskgate.go` | `CommandRunner`, `TaskGate` and `CapOutput`: run a command and return its whole output up to 16 MB; rerun a completion command and return its capped outcome |
 | `internal/agent/scope.go` | `ScopeRequest`, `ScopeAnswer`, `OutOfScope`, `AutoDeny` and `MatchGlob`, the guard's pattern matcher (a pattern with no slash matches the base name at any depth), and `MatchPath`, the matcher of a group's file list (a pattern with no slash matches only at the root, so `go.mod` never allows `tools/go.mod`) |
 
 Files this chapter calls but does not own:
@@ -11112,7 +11114,7 @@ func BuilderRole() Role
 // ParseBuilderResult decodes and validates a Builder final call.
 func ParseBuilderResult(raw []byte) (BuilderResult, error)
 
-// CommandRunner runs one command in the sandbox and returns its exit code and capped output.
+// CommandRunner runs one command in the sandbox and returns its exit code and whole output, up to 16 MB; past that it errors.
 type CommandRunner func(ctx context.Context, command string) (exit int, output string, err error)
 
 // TaskGate finishes a task: it reruns the completion command and returns its outcome.
@@ -15529,6 +15531,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-296"></a>G-296 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 | <a id="g-297"></a>G-297 | Sandbox | Private registries for npm, cargo and Python: their setup commands have no credentials and no cache fallback, because only Go setup gets a file proxy on the person's download cache | Owner decision | [11](#11-task-manager) |
 | <a id="g-298"></a>G-298 | Sandbox | A builder-added Go dependency is fetched on the host with the person's login: the host fill runs `go mod download` again when `go.mod` or `go.sum` changes, so a module the builder names is downloaded outside the sandbox. The owner accepted this risk; open: whether to limit host fills to modules already in `go.sum`, or to `GOPRIVATE` hosts | Owner decision | [11](#11-task-manager) |
+| <a id="g-299"></a>G-299 | Task Manager | Check output limit: the runner the mechanical checks use returns a command's whole output up to 16 MB and an error past it, while tool replies keep 4 KB. The owner decided this; the 16 MB limit is unmeasured for very large repositories | Owner decision | [11](#11-task-manager) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
