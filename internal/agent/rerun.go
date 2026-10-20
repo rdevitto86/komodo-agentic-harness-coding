@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
 
-// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
+// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output; a run whose output passed
+// the runner's limit counts by its exit code.
 // An item with no command is never run; its failure stays unconfirmed.
 func (goTester) Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error) {
 	if strings.TrimSpace(it.Cmd) == "" {
@@ -18,7 +20,7 @@ func (goTester) Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOut
 
 	for i := range passed {
 		exit, out, err := run(ctx, it.Cmd)
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrOutputOverLimit) {
 			return "", "", fmt.Errorf("rerun item %s: %w", it.ID, err)
 		}
 		passed[i], last = exit == 0, out

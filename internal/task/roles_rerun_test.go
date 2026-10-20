@@ -48,7 +48,7 @@ func TestTesterJudgeListsAFailedItemWhoseRerunErroredAsUnconfirmed(t *testing.T)
 	}
 }
 
-func TestTesterJudgeListsAFailedItemWhoseRerunPassedTheOutputLimitAsUnconfirmed(t *testing.T) {
+func TestTesterJudgeConfirmsAFailedItemWhoseRerunPassedTheOutputLimitByItsExitCode(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	if _, err := r.m.instance(context.Background(), "tester"); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestTesterJudgeListsAFailedItemWhoseRerunPassedTheOutputLimitAsUnconfirmed(
 	run := r.m.Runner("tester")
 	out := judgeWithRunner(t, func(ctx context.Context, _ string) (int, string, error) { return run(ctx, big) })
 
-	if out.Kind != OutcomePass || len(out.Summary) != 2 || !strings.Contains(out.Summary[1], "item a1 unconfirmed") {
-		t.Fatalf("outcome %+v, want a pass with item a1 listed as unconfirmed", out)
+	if out.Kind != OutcomeReturn || len(out.Findings) != 1 || !strings.Contains(out.Findings[0], "acceptance item a1 failed") {
+		t.Fatalf("outcome %+v, want a return with item a1 failed", out)
 	}
 }
