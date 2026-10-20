@@ -40,8 +40,8 @@ type groupChecker struct {
 	worktree string // the group's own worktree
 }
 
-// Recheck runs the checks once the landing worktree's tree is the group's tree, which is so after the group's landing commit;
-// before it the checks pass, because the group's sandbox cannot see that tip.
+// Recheck runs the checks once the landing worktree's tree is the group's tree, which is so after the group's landing
+// commit; before it the checks pass, because the group's sandbox cannot see that tip.
 func (g groupChecker) Recheck(ctx context.Context, _, landing string) (commit.CheckResult, error) {
 	tm := g.ref.manager()
 	if tm == nil {
