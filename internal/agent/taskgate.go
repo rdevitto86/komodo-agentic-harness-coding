@@ -14,8 +14,12 @@ const (
 	truncMarker          = "\n... output cut ...\n" // truncMarker replaces the middle of an output that was cut.
 )
 
+// ErrOutputOverLimit is wrapped by the error of a runner whose command printed more than its limit; the runner still returns
+// the real exit code and the head and tail of the output.
+var ErrOutputOverLimit = errors.New("the output of the command passed the limit")
+
 // CommandRunner runs one command in the sandbox and returns its exit code and whole output; output past the runner's limit
-// is an error.
+// is an ErrOutputOverLimit error, with the exit code and a capped text.
 type CommandRunner func(ctx context.Context, command string) (exit int, output string, err error)
 
 // TaskRef names the task being finished.
@@ -46,7 +50,7 @@ func (g TaskGate) Complete(ctx context.Context, t TaskRef) (TaskOutcome, error) 
 	}
 
 	exit, out, err := g.Run(ctx, t.DoneCommand)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrOutputOverLimit) {
 		return TaskOutcome{}, fmt.Errorf("run completion command of %s: %w", t.Task, err)
 	}
 

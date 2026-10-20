@@ -140,7 +140,8 @@ func (c checker) secretsStep(ctx context.Context, in CheckInput) (StepResult, er
 	return s, nil
 }
 
-// doneWhenStep reruns every task's completion command and fails on any non-zero exit.
+// doneWhenStep reruns every task's completion command and fails on any non-zero exit; a command whose output passed the
+// runner's limit is judged by its exit code.
 func doneWhenStep(ctx context.Context, run CommandRunner, in CheckInput) (StepResult, error) {
 	s := StepResult{Step: StepDoneWhen, Level: LevelPass}
 
@@ -153,7 +154,7 @@ func doneWhenStep(ctx context.Context, run CommandRunner, in CheckInput) (StepRe
 	var outs []string
 	for _, id := range ids {
 		exit, out, err := run(ctx, in.DoneWhen[id])
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrOutputOverLimit) {
 			return StepResult{}, fmt.Errorf("run completion command of %s: %w", id, err)
 		}
 		if exit != 0 {

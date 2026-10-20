@@ -27,6 +27,7 @@ type capture struct {
 	buf     bytes.Buffer
 	f       *os.File
 	total   int64
+	over    bool // the output outgrew limit, whether or not the log could be made
 	failed  error
 }
 
@@ -37,11 +38,12 @@ func (c *capture) Write(p []byte) (int, error) {
 
 	n := len(p)
 	c.total += int64(n)
-	if c.f == nil && c.buf.Len()+n <= c.limit {
+	if !c.over && c.buf.Len()+n <= c.limit {
 		c.buf.Write(p)
 		return n, nil
 	}
-	if c.f == nil {
+	if !c.over {
+		c.over = true
 		if err := os.MkdirAll(filepath.Dir(c.logPath), 0o755); err == nil {
 			c.f, c.failed = os.Create(c.logPath)
 		} else {
@@ -49,6 +51,7 @@ func (c *capture) Write(p []byte) (int, error) {
 		}
 		if c.f != nil {
 			_, _ = c.f.Write(c.buf.Bytes())
+			c.buf = bytes.Buffer{}
 		}
 	}
 	if c.f != nil && c.total <= maxLogBytes {
@@ -58,7 +61,8 @@ func (c *capture) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// reply builds the capped reply of what was collected and closes the log.
+// reply builds the capped reply of what was collected and closes the log; past the limit the text is only the head and
+// the tail, at most replyCap bytes.
 func (c *capture) reply() Reply {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -68,10 +72,11 @@ func (c *capture) reply() Reply {
 	}
 	defer func() { _ = c.f.Close() }()
 
+	keep := min(c.limit, replyCap)
 	size := min(c.total, maxLogBytes)
 	head := make([]byte, headKeep)
 	nh, _ := c.f.ReadAt(head, 0)
-	tail := make([]byte, c.limit)
+	tail := make([]byte, keep)
 	off := max(size-int64(len(tail)), 0)
 	nt, _ := c.f.ReadAt(tail, off)
 	if c.total > maxLogBytes {
@@ -79,7 +84,7 @@ func (c *capture) reply() Reply {
 	}
 
 	return Reply{
-		Text:    capParts(string(head[:nh]), string(tail[:nt]), int(c.total), c.logPath, c.limit),
+		Text:    capParts(string(head[:nh]), string(tail[:nt]), int(c.total), c.logPath, keep),
 		LogPath: c.logPath,
 	}
 }
@@ -88,6 +93,7 @@ func (c *capture) reply() Reply {
 type runResult struct {
 	Reply    Reply
 	Exit     int
+	Over     bool // the output outgrew the limit given to runConfinedWithin
 	TimedOut bool
 	StartErr error
 }
@@ -213,7 +219,7 @@ func runConfinedWithin(ctx context.Context, cmd *exec.Cmd, logPath string, limit
 
 	<-copied
 
-	res := runResult{Reply: out.reply(), Exit: cmd.ProcessState.ExitCode()}
+	res := runResult{Reply: out.reply(), Exit: cmd.ProcessState.ExitCode(), Over: out.over}
 	res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	if err != nil && cmd.ProcessState == nil {
 		res.StartErr = err

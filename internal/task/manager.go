@@ -670,8 +670,8 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 
 // runSetup runs the setup command in a new instance and then turns its network off; a failure is a setup block.
 func (m *Manager) runSetup(ctx context.Context, role, id string, spec sandbox.Spec, setup []string) error {
-	rep, exit, err := m.runIn(ctx, id, setup, filepath.Join(m.tmp, role+"-setup"), replyCap-exitRoom)
-	out := rep.Text
+	res, err := m.runIn(ctx, id, setup, filepath.Join(m.tmp, role+"-setup"), replyCap-exitRoom)
+	out, exit := res.Reply.Text, res.Exit
 	if err != nil || exit != 0 {
 		detail := map[string]string{"role": role, "output": out}
 		if err != nil {
@@ -699,31 +699,28 @@ func (m *Manager) discardInstance(ctx context.Context, role, id string) {
 	_ = m.c.Sandboxes.DestroySandboxInstance(context.WithoutCancel(ctx), id) // the setup error is what the group is told
 }
 
-// runIn runs one command in an instance and returns its reply and exit code; the reply holds the output whole up to limit
-// bytes.
-func (m *Manager) runIn(ctx context.Context, id string, argv []string, logDir string, limit int) (Reply, int, error) {
+// runIn runs one command in an instance and returns its result; the reply holds the output whole up to limit bytes.
+func (m *Manager) runIn(ctx context.Context, id string, argv []string, logDir string, limit int) (runResult, error) {
 	if g, err := m.scopeGuard(); err == nil {
 		if err := m.c.Sandboxes.SetMasked(id, g.SecretFiles()); err != nil {
-			return Reply{}, -1, err
+			return runResult{}, err
 		}
 	}
 
 	cmd, err := m.c.Sandboxes.Command(ctx, id, sandbox.Command{Argv: argv, Timeout: runTimeout})
 	if err != nil {
-		return Reply{}, -1, err
+		return runResult{}, err
 	}
 
 	logPath := filepath.Join(logDir, "run-"+strconv.FormatInt(m.ids.Add(1), 10)+".log")
 	res := runConfinedWithin(ctx, cmd, logPath, limit)
-	if res.StartErr != nil {
-		return Reply{}, -1, res.StartErr
-	}
 
-	return res.Reply, res.Exit, nil
+	return res, res.StartErr
 }
 
 // runner returns the command runner bound to the instance of a role; a class name stands for its command. The runner returns
-// the whole output, and an error when the output passes the check output cap.
+// the whole output; past the check output cap it returns the exit code, the head and tail of the output and an error that
+// wraps agent.ErrOutputOverLimit.
 func (m *Manager) runner(role string) agent.CommandRunner {
 	return func(ctx context.Context, command string) (int, string, error) {
 		m.mu.Lock()
@@ -741,16 +738,25 @@ func (m *Manager) runner(role string) agent.CommandRunner {
 			return -1, "", errors.New("the command is empty")
 		}
 
-		rep, exit, err := m.runIn(ctx, id, argv, filepath.Join(m.sessionsRoot(), "runs"), checkOutputCap)
-		if err == nil && rep.LogPath != "" {
-			return exit, "", fmt.Errorf(
-				"the output of the command is longer than %d bytes; full output in %s",
-				checkOutputCap,
-				rep.LogPath,
-			)
+		res, err := m.runIn(ctx, id, argv, filepath.Join(m.sessionsRoot(), "runs"), checkOutputCap)
+		if err != nil {
+			return -1, "", err
+		}
+		if !res.Over {
+			return res.Exit, res.Reply.Text, nil
 		}
 
-		return exit, rep.Text, err
+		where := "full output in " + res.Reply.LogPath
+		if res.Reply.LogPath == "" {
+			where = "the log could not be kept"
+		}
+
+		return res.Exit, agent.CapOutput(res.Reply.Text, agent.GateOutputCap), fmt.Errorf(
+			"%w: more than %d bytes; %s",
+			agent.ErrOutputOverLimit,
+			checkOutputCap,
+			where,
+		)
 	}
 }
 
