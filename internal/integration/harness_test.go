@@ -145,6 +145,7 @@ func newBinRig(t *testing.T, extra map[string]string) *binRig {
 		"GIT_CONFIG_NOSYSTEM=1", "NO_COLOR=1",
 	}
 	r.initRepo(extra)
+	t.Cleanup(r.removeContainers)
 	t.Cleanup(r.killEngine)
 	cfg, err := config.New(
 		r.home,
@@ -267,6 +268,40 @@ func (r *binRig) komodo(timeout time.Duration, args ...string) result {
 
 // killEngine ends the engine the CLI started, found through its heartbeat file.
 func (r *binRig) killEngine() { r.signalEngine(syscall.SIGKILL) }
+
+// removeContainers removes the sandbox containers of this rig's engine. A killed engine cannot close a group that waits on
+// a paused epic, so the rig removes every Komodo container that mounts a folder under its temporary root.
+func (r *binRig) removeContainers() {
+	docker, err := exec.LookPath("docker")
+	if err != nil || strings.HasPrefix(docker, r.root) {
+		return
+	}
+
+	roots := []string{r.root}
+	if real, err := filepath.EvalSymlinks(r.root); err == nil {
+		roots = append(roots, real)
+	}
+
+	ids, err := exec.Command(docker, "ps", "-aq", "--filter", "label=komodo.sandbox=1").Output()
+	if err != nil {
+		return
+	}
+
+	for _, id := range strings.Fields(string(ids)) {
+		const format = `{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}`
+
+		mounts, err := exec.Command(docker, "inspect", "--format", format, id).Output()
+		if err != nil {
+			continue
+		}
+		for _, src := range strings.Fields(string(mounts)) {
+			if slices.ContainsFunc(roots, func(root string) bool { return strings.HasPrefix(src, root+"/") }) {
+				_ = exec.Command(docker, "rm", "-f", id).Run()
+				break
+			}
+		}
+	}
+}
 
 // signalEngine sends a signal to the engine process.
 func (r *binRig) signalEngine(sig syscall.Signal) {
