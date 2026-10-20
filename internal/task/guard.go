@@ -471,6 +471,9 @@ type (
 	lintArgs struct {
 		Draft string `json:"draft"`
 	}
+	checkArgs struct {
+		Item string `json:"item"`
+	}
 )
 
 // RunArgs is the argument object of the run tool.
@@ -592,6 +595,11 @@ func parseCall(c Call) (parsed, *refusal) {
 		p.reads = []string{a.File}
 	case "task_done":
 		var a doneArgs
+		if err := decode(c.Args, &a); err != nil {
+			return unreadable("G1", err)
+		}
+	case "run_check":
+		var a checkArgs
 		if err := decode(c.Args, &a); err != nil {
 			return unreadable("G1", err)
 		}

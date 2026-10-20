@@ -114,6 +114,9 @@ type testerRole struct {
 	was string // Go's output after a disputed result; the restart's brief carries it
 }
 
+// AcceptanceItems returns the group's acceptance items, which the tester's run_check tool may run.
+func (t *testerRole) AcceptanceItems() []agent.Item { return slices.Clone(t.cfg.Items) }
+
 // Slots fills the tester's brief values for this trip.
 func (t *testerRole) Slots(_ context.Context, in RoleInput) (map[string]string, error) {
 	var acc strings.Builder

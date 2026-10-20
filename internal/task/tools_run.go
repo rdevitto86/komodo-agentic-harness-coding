@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
 )
 
@@ -57,6 +58,51 @@ func toolRun(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	}
 
 	return res.Reply
+}
+
+// toolRunCheck runs the command of one acceptance item as written, in the Tester's sandbox, and reports its exit status and
+// output; the model never supplies the command.
+func toolRunCheck(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
+	var a checkArgs
+	if err := decode(raw, &a); err != nil {
+		return bad(err)
+	}
+	if tc.env.Check == nil {
+		return errReply("run_check is not available in this session")
+	}
+
+	ids := make([]string, len(tc.env.Items))
+	for i, it := range tc.env.Items {
+		ids[i] = it.ID
+		if it.ID != a.Item {
+			continue
+		}
+		if strings.TrimSpace(it.Cmd) == "" {
+			return errReply("the item %s has no command; judge it from the diff and the code", it.ID)
+		}
+
+		return checkReply(tc.env.Check(ctx, it.Cmd))
+	}
+
+	return errReply(
+		"the item %q is not an acceptance item of this group; the items are: %s",
+		a.Item,
+		strings.Join(ids, ", "),
+	)
+}
+
+// checkReply words the result of an item's command: the output alone on success, else the exit status and the output.
+func checkReply(exit int, out string, err error) Reply {
+	switch {
+	case errors.Is(err, agent.ErrOutputOverLimit):
+		return Reply{Text: fmt.Sprintf("exit status %d\n%s\n%v", exit, out, err)}
+	case err != nil:
+		return errReply("%v", err)
+	case exit != 0:
+		return Reply{Text: fmt.Sprintf("exit status %d\n%s", exit, out)}
+	}
+
+	return Reply{Text: out}
 }
 
 // confinedRun starts argv in the session's sandbox instance and collects its output; it never runs a command outside the

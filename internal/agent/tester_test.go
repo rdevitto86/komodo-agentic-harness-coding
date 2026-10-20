@@ -10,7 +10,7 @@ import (
 
 func TestTesterRole(t *testing.T) {
 	r := TesterRole()
-	if r.Name != "tester" || !r.PoolSlot || !slices.Equal(r.Tools, []string{"read", "search", "run"}) {
+	if r.Name != "tester" || !r.PoolSlot || !slices.Equal(r.Tools, []string{"read", "search", "run", "run_check"}) {
 		t.Fatalf("role = %+v", r)
 	}
 	if !slices.Equal(r.RunClasses, []string{"build", "test"}) || !slices.Equal(r.Guard, []string{"R1"}) {

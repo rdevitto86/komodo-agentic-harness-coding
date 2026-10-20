@@ -490,6 +490,11 @@ func (m *Manager) bindTools(
 		}
 	}
 
+	if src, ok := role.(ItemSource); ok && req.agent == "tester" {
+		env.Items = src.AcceptanceItems()
+		env.Check = m.runner(irole)
+	}
+
 	reg := NewRegistry(env)
 
 	if len(perm.Servers) > 0 && m.c.Sandboxes != nil {

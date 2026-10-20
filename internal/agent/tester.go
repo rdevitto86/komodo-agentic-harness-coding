@@ -95,7 +95,7 @@ type Tester interface {
 // TesterRole returns the compiled Tester role.
 func TesterRole() Role {
 	return newRole("tester",
-		[]string{"read", "search", "run"},
+		[]string{"read", "search", "run", "run_check"},
 		[]string{"build", "test"},
 		[]string{"R1"},
 		[]string{"repo_profile", "group", "tasks", "acceptance"},

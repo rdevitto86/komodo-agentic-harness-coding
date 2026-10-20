@@ -79,6 +79,7 @@ var allTools = []string{
 	"submit_finding",
 	"task_done",
 	"lint_backlog",
+	"run_check",
 }
 
 // newRig binds every tool to a builder-like guard whose files list covers the whole tree.

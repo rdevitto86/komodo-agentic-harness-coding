@@ -308,6 +308,7 @@ func TestRoleFilesAreChecked(t *testing.T) {
 			"git_read":       true,
 			"submit_finding": true,
 			"lint_backlog":   true,
+			"run_check":      true,
 		},
 	}
 	if _, err := New(t.TempDir(), known, probeAll); err == nil || !strings.Contains(err.Error(), "B1") {

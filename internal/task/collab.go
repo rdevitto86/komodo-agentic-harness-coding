@@ -51,6 +51,12 @@ type FindingSink interface {
 	Submit(f Submitted)
 }
 
+// ItemSource is implemented by a role that knows the group's acceptance items.
+type ItemSource interface {
+	// AcceptanceItems returns the acceptance items of the group's tasks.
+	AcceptanceItems() []agent.Item
+}
+
 // GateError is a rejected result: Text goes back into the live session, Schema marks a result that broke its schema.
 type GateError struct {
 	Text   string

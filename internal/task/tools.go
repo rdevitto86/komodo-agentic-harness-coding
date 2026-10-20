@@ -65,6 +65,10 @@ type Env struct {
 	Skill func(ref string) (string, error)
 	// reruns a task's done_when command and returns its exit code and output
 	Done func(ctx context.Context, task string) (int, string, error)
+	// the group's acceptance items, which run_check may run
+	Items []agent.Item
+	// runs one acceptance command in the Tester's sandbox and returns its exit code and output
+	Check func(ctx context.Context, command string) (int, string, error)
 	// lint errors of a planned task list; empty means clean
 	Lint func(draft string) []string
 	// receives each validated finding
@@ -163,13 +167,62 @@ func (b *Bound) Definition(name string) (llm.ToolDef, bool) {
 		return llm.ToolDef{}, false
 	}
 	if t, ok := b.reg.tools[name]; ok {
-		return t.def, true
+		return b.render(t.def), true
 	}
 	if o, ok := b.reg.outside[name]; ok {
 		return o.def, true
 	}
 
 	return llm.ToolDef{}, false
+}
+
+// render fills the parts of a definition that depend on the session: the agent's run classes and the group's items.
+func (b *Bound) render(d llm.ToolDef) llm.ToolDef {
+	switch d.Name {
+	case "run":
+		classes := b.guard.b.Permissions.RunClasses
+		d = withEnum(d, "class", classes)
+		if len(classes) > 0 {
+			d.Description += " The class is one of: " + strings.Join(classes, ", ") + "."
+		}
+	case "run_check":
+		ids := make([]string, len(b.reg.env.Items))
+		for i, it := range b.reg.env.Items {
+			ids[i] = it.ID
+		}
+		d = withEnum(d, "item", ids)
+	}
+
+	return d
+}
+
+// withEnum returns the definition with the allowed values of one string property; no values leave it unchanged.
+func withEnum(d llm.ToolDef, prop string, values []string) llm.ToolDef {
+	if len(values) == 0 {
+		return d
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal(d.InputSchema, &schema); err != nil {
+		return d
+	}
+
+	props, _ := schema["properties"].(map[string]any)
+	p, _ := props[prop].(map[string]any)
+	if p == nil {
+		return d
+	}
+
+	p["enum"] = values
+
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return d
+	}
+
+	d.InputSchema = raw
+
+	return d
 }
 
 // Guard returns the guard the tools run behind.
@@ -369,7 +422,7 @@ func builtinTools() []tool {
 			def(
 				"run",
 				"Run a command class with extra arguments, inside the sandbox. "+
-					"No shell is involved.",
+					"The args are appended to the class's own command; no shell is involved.",
 				`{"type":"object","properties":{"class":{"type":"string"},`+
 					`"args":{"type":"array","items":{"type":"string"}}},`+
 					`"required":["class"],"additionalProperties":false}`,
@@ -427,6 +480,16 @@ func builtinTools() []tool {
 					`"required":["task"],"additionalProperties":false}`,
 			),
 			toolTaskDone,
+		},
+		{
+			def(
+				"run_check",
+				"Run one acceptance item's own command by its identifier, inside the sandbox, "+
+					"and return its exit status and output.",
+				`{"type":"object","properties":{"item":{"type":"string"}},`+
+					`"required":["item"],"additionalProperties":false}`,
+			),
+			toolRunCheck,
 		},
 		{
 			def(
