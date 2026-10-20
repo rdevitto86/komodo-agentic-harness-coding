@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ type rules struct {
 	MaxProcs   int
 	MaxMemGB   int
 	Network    bool
+	Env        []string // variables beyond the allowed list; set only while Network is true
 }
 
 // runFolders are the host service-socket folders a shared-filesystem mechanism hides.
@@ -98,7 +100,18 @@ func newRules(s Spec) (rules, error) {
 		return rules{}, err
 	}
 
-	r.Readable = dedupe(append(r.Readable, r.Toolchains...))
+	r.Readable = append(r.Readable, r.Toolchains...)
+	if s.Network {
+		setup, err := cleanAll("setup read-only path", s.SetupReadable)
+		if err != nil {
+			return rules{}, err
+		}
+
+		r.Readable = append(r.Readable, setup...)
+		r.Env = slices.Clone(s.SetupEnv)
+	}
+
+	r.Readable = dedupe(r.Readable)
 	if r.Masked, err = cleanAll("masked file", s.Masked); err != nil {
 		return rules{}, err
 	}
@@ -172,6 +185,12 @@ func buildEnv(r rules, c Command, container bool) []string {
 	vars := map[string]string{}
 	for _, kv := range c.Env {
 		if k, v, ok := strings.Cut(kv, "="); ok && passEnv[k] {
+			vars[k] = v
+		}
+	}
+
+	for _, kv := range r.Env {
+		if k, v, ok := strings.Cut(kv, "="); ok {
 			vars[k] = v
 		}
 	}
