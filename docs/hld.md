@@ -8,7 +8,7 @@ This document is the high-level design of Komodo, a single Go program that runs 
 
 #### 1.1 Purpose
 
-Komodo is one Go binary that turns a goal into reviewed, published code. It plans the work into task groups, runs each group through a fixed pipeline of agents inside a private copy of the repository, and publishes only work that both a tester and a reviewer approved. A person merges the result.
+Komodo is one Go binary that turns a goal into reviewed, published code. It plans the work into task groups, runs each group through a fixed pipeline of agents inside a private copy of the repository, and publishes only work that passed the checks its risk level requires. A person merges the result.
 
 **📐 How work moves from a goal to published code**
 ```mermaid
@@ -198,15 +198,15 @@ The Builder is the engineering agent that writes the code for one task group, ta
 
 #### 5.14 Tester
 
-The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox, which its Task Manager creates. Its turn starts with free checks in Go code; a failure returns to the Builder with no model call. Detail: [chapter 13](lld.md#13-tester).
+The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. The Tester is a mandatory gate: Go accepts its pass only with evidence Go replays. It writes edge-case tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-tester).
 
 #### 5.15 Reviewer
 
-The Reviewer is the final code check. It reads the builder's change while the Tester runs, and the group moves to publishing only when both approve; otherwise the work returns to the Builder with their findings. Detail: [chapter 14](lld.md#14-reviewer).
+The Reviewer is the final code check. It reads the builder's change while the Tester runs, and the group moves to publishing only when both approve; otherwise the work returns to the Builder with their findings. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
 
 #### 5.16 Commit Handler
 
-The Commit Handler publishes approved work: it lands each approved group on its epic's shared branch, one at a time with a recheck after each, and opens one pull request per epic. It is the only part that pushes. Detail: [chapter 15](lld.md#15-commit-handler).
+The Commit Handler publishes approved work: it squashes each approved group onto its epic's branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per epic. A high or critical group gets its own quarantined draft pull request; groups that depend on it wait. It is the only part that pushes. Detail: [chapter 15](lld.md#15-commit-handler).
 
 #### 5.17 Cleanup Handler
 
@@ -341,7 +341,7 @@ Three fences hold every agent. The Task Manager checks every requested action ag
 
 #### 8.4 Quality Gates
 
-Work reaches publishing only when the Tester passes it and the Reviewer approves it. Free mechanical checks run first, so a failing test costs no model call.
+Go's free checks run first, so a failing build, lint or test costs no model call. Go then sets a risk level from the diff, which no agent can change: low levels land after free checks alone, middle levels also need the Tester and the Reviewer, and high levels are quarantined.
 
 ## 9. Architecture Decisions
 
@@ -360,8 +360,7 @@ Each row names a decision, the alternative rejected and the reason.
 | One runtime per machine, reached by a local socket | One per run, or none | Scheduled runs and every group share one owner |
 | Recovery reads saved state; the bus stores every event before delivering it | A log kept by the Metrics Service | Replay has no gaps, and each record has one owner |
 | Continue a group with `run` | Separate build, test and review commands | No stage runs out of order |
-| One pull request per epic | One per group | Groups land in order and are rechecked |
-
+| One pull request per epic, one push per pull request | One pull request and one CI run per group | Groups land in order and CI runs once |
 ## 10. Quality Requirements
 
 | Attribute | Scenario | Measure |
@@ -414,8 +413,7 @@ None are open. Build-time questions are [gap register](lld.md#appendix-b-gap-reg
 | Event | A fact with a type and a subtype, published on the Event Bus |
 | Subscriber | A part that listens for one or more event types |
 | Lease | The registry entry that names the one group owning a branch and worktree |
-| Worktree | A private git checkout where one group works |
-| Sandbox | A sealed environment where agent commands run |
+| Worktree | A private git checkout where one group works || Sandbox | A sealed environment where agent commands run |
 | Skill | A document of standards placed in an agent's context |
 | Gap | A decision not yet made or a fact not yet verified, tracked as G-NN |
 
