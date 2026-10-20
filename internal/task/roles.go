@@ -180,6 +180,7 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 
 		out, text, rerr := t.cfg.Tester.Rerun(ctx, t.cfg.Runner(), it)
 		if rerr != nil {
+			listed = append(listed, fmt.Sprintf("tester: item %s unconfirmed, its rerun failed: %v", it.ID, rerr))
 			continue
 		}
 
