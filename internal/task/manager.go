@@ -630,6 +630,7 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 		Role:       role,
 		Network:    len(setup) > 0,
 	}
+	spec = m.withGoSetupAccess(ctx, spec)
 
 	inst, err := m.c.Sandboxes.CreateSandboxInstance(ctx, spec)
 	if err != nil {
@@ -658,6 +659,9 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 			detail := map[string]string{"role": role, "output": out}
 			if err != nil {
 				detail["error"] = err.Error()
+			}
+			if fix := m.setupFix(spec, out); fix != "" {
+				detail["fix"] = fix
 			}
 			return "", block("setup", detail)
 		}
