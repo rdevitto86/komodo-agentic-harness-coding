@@ -202,7 +202,7 @@ The Tester checks the builder's new and changed code: test accuracy, that every 
 
 #### 5.15 Reviewer
 
-The Reviewer is the final code check. It reads the builder's change while the Tester runs, and the group moves to publishing only when both approve; otherwise the work returns to the Builder with their findings. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
+The Reviewer is the final code check. It reads the builder's change while the Tester runs, and a group of medium level or above moves to publishing only when both approve; otherwise the work returns to the Builder with their findings. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
 
 #### 5.16 Commit Handler
 
@@ -282,7 +282,7 @@ sequenceDiagram
 1. The Runtime Manager starts a Task Manager once the group's dependencies are met and its lease is granted.
 2. The Builder works through the tasks in the group's worktree.
 3. The Tester and Reviewer judge the same work at the same time; any failure returns the group to the Builder, a bounded number of times.
-4. With both approvals, the Commit Handler commits and pushes, then hands over to the Cleanup Handler. It removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
+4. With the approvals its level requires, the Commit Handler commits and pushes, then hands over to the Cleanup Handler. It removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
 
 #### 6.3 Planning
 
@@ -361,6 +361,7 @@ Each row names a decision, the alternative rejected and the reason.
 | Recovery reads saved state; the bus stores every event before delivering it | A log kept by the Metrics Service | Replay has no gaps, and each record has one owner |
 | Continue a group with `run` | Separate build, test and review commands | No stage runs out of order |
 | One pull request per epic, one push per pull request | One pull request and one CI run per group | Groups land in order and CI runs once |
+
 ## 10. Quality Requirements
 
 | Attribute | Scenario | Measure |
@@ -413,7 +414,8 @@ None are open. Build-time questions are [gap register](lld.md#appendix-b-gap-reg
 | Event | A fact with a type and a subtype, published on the Event Bus |
 | Subscriber | A part that listens for one or more event types |
 | Lease | The registry entry that names the one group owning a branch and worktree |
-| Worktree | A private git checkout where one group works || Sandbox | A sealed environment where agent commands run |
+| Worktree | A private git checkout where one group works |
+| Sandbox | A sealed environment where agent commands run |
 | Skill | A document of standards placed in an agent's context |
 | Gap | A decision not yet made or a fact not yet verified, tracked as G-NN |
 
