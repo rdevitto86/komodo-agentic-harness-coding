@@ -379,6 +379,45 @@ func TestPublishConcurrentGroupsLandInArrivalOrder(t *testing.T) {
 	}
 }
 
+// A group whose recheck failed returns to Build; its fixed second approval lands a new commit that holds the fix, and the
+// epic's pull request body names the group once.
+func TestPublishFixAfterAFailedRecheckLandsAgain(t *testing.T) {
+	w := newWorld(t)
+	h := w.handler()
+	w.check.results = []CheckResult{{Pass: true}, {Pass: false, Output: "FAIL"}, {Pass: true}}
+	g := w.newGroup("tg-1.1")
+	w.work(g, "a.txt", "broken")
+	if _, err := h.Publish(w.ctx, w.approval(g, "tg-1.1")); !errors.Is(err, ErrRecheck) {
+		t.Fatalf("first publish err = %v", err)
+	}
+	before := w.localTip()
+
+	w.work(g, "a.txt", "fixed")
+	a := w.approval(g, "tg-1.1")
+	res, err := h.Publish(w.ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.localTip() == before || res.Landed != w.localTip() || !res.Last {
+		t.Fatalf("result = %+v, epic tip %s, before %s", res, w.localTip(), before)
+	}
+	if got := git(t, w.clone, "show", "refs/heads/komodo/ep-1:a.txt"); got != "fixed" {
+		t.Fatalf("epic branch holds %q, want the fix", got)
+	}
+
+	again, err := h.Publish(w.ctx, a)
+	if err != nil || again.Landed != res.Landed || w.localTip() != res.Landed {
+		t.Fatalf("a repeat of the fixed approval = %+v, %v", again, err)
+	}
+
+	if _, err := h.PushEpic(w.ctx, w.epicReq("tg-1.1")); err != nil {
+		t.Fatal(err)
+	}
+	if body := w.gh.file("create-body.txt"); strings.Count(body, "## Summary") != 2 {
+		t.Fatalf("the body holds the group more than once:\n%s", body)
+	}
+}
+
 // A remote with no epic branch yet, as after a local task-list commit, still allows the landing; nothing is pushed.
 func TestPublishWithNoRemoteEpicBranch(t *testing.T) {
 	w := newWorld(t)

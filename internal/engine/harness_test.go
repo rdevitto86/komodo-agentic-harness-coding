@@ -339,14 +339,19 @@ type fakeCommits struct {
 	pushed []commit.EpicPush
 	onPush func(r commit.EpicPush) // runs inside each PushEpic call
 	result commit.EpicResult       // what PushEpic returns
-	err    error                   // what PushEpic returns as its error
+	errFor func(call int) error    // the error PushEpic returns on its nth call, counted from 1
 }
 
 // PushEpic records the call and returns the planted result.
 func (c *fakeCommits) PushEpic(_ context.Context, r commit.EpicPush) (commit.EpicResult, error) {
 	c.mu.Lock()
 	c.pushed = append(c.pushed, r)
-	cb, res, err := c.onPush, c.result, c.err
+	cb, res := c.onPush, c.result
+
+	var err error
+	if c.errFor != nil {
+		err = c.errFor(len(c.pushed))
+	}
 	c.mu.Unlock()
 	c.log.add("push " + r.Epic)
 	if cb != nil {
@@ -579,7 +584,7 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 		KillTree:    func(string, string) { r.killed.Add(1) },
 		RestartLoop: func(l string) { r.rmu.Lock(); r.restart = append(r.restart, l); r.rmu.Unlock() },
 		Chain:       func(string) []string { return []string{"claude-cli", "anthropic-api"} },
-		Timing:      Timing{ShutdownDeadline: 300 * time.Millisecond},
+		Timing:      Timing{ShutdownDeadline: 300 * time.Millisecond, PushRetryEvery: time.Second},
 	}
 	for _, o := range opts {
 		o(r)
