@@ -198,7 +198,7 @@ The Builder is the engineering agent that writes the code for one task group, ta
 
 #### 5.14 Tester
 
-The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. The Tester is a mandatory gate: Go accepts its pass only with evidence Go replays. It writes edge-case tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-tester).
+The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. The Tester approves every group before it lands: Go accepts its pass only with evidence Go replays. It writes edge-case tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-tester).
 
 #### 5.15 Reviewer
 
@@ -341,7 +341,7 @@ Three fences hold every agent. The Task Manager checks every requested action ag
 
 #### 8.4 Quality Gates
 
-Go's free checks run first, so a failing build, lint or test costs no model call. Go then sets a risk level from the diff, which no agent can change: low levels land after free checks alone, middle levels also need the Tester and the Reviewer, and high levels are quarantined.
+Go's free checks run first, so a failing build, lint or test costs no model call. Go then sets a risk level from the diff, which no agent can change. Every level needs the Tester; low levels skip the Reviewer, and high levels are quarantined.
 
 ## 9. Architecture Decisions
 

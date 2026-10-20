@@ -9159,7 +9159,7 @@ A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The comm
 | `diff` | `{paths}`, optional | The unified diff of the group's change against its base commit |
 | `git_read` | `{command, args}`; `command` is `log`, `show`, `blame` or `status` | The command's output |
 | `skill` | `{name}`: `<skill>` or `<skill>#<section>` | The skill text |
-| `submit_finding` | `{rule, file, line, quote, note, proof}`; `proof` is `{cmd, expect}` or `{test, expect}` (14.3) | `filed <rule> at <file>:<line>` |
+| `submit_finding` | `{rule, file, line, quote, note, proof}`; `proof` is `{cmd}` or `{test}` (14.3) | `filed <rule> at <file>:<line>` |
 | `task_done` | `{task}` | The `done_when` exit code and capped output |
 | `run_check` | `{item}`: an acceptance item identifier; the schema's `enum` lists the group's identifiers; Tester only | The item's `cmd` run as written in the Tester's sandbox: its output, led by `exit status <n>` when the exit code is not 0; an error for an unknown identifier or an item with no `cmd` |
 | `write_test` | `{path, content}`; Tester only; the path must be a test file (13.3) | `created <path>, <n> lines`; a path that is not a test file is refused |
@@ -10114,7 +10114,7 @@ flowchart TB
 2. Build ends with the builder's result judged `pass`. After each finished task the Task Manager has already asked the Commit Handler to save a local commit (`Committer.Save`), which does not push. The pipeline then runs the mechanical checks.
 3. The checks run as Go code in the Tester's sandbox. Only a clean result starts the tester and the reviewer together; each ends with an `Outcome`. The pipeline waits for both, unless the reviewer returns first (rework rules).
 4. A failed check goes straight back to Build with the exact output, and no model is called ([Checks before the sessions](#115-behaviour)).
-5. Both roles `pass`; a group of risk level `low` or `med_low` skips both roles and goes on after the free checks.
+5. Both roles `pass`; a group of risk level `low` or `med_low` skips the reviewer, and the tester alone must pass.
 6. The pipeline calls `Committer.Publish` (`Committer.Quarantine` for a group of risk level `high` or `critical`). The Commit Handler squashes the group onto its epic's branch locally, one group at a time per epic, and rechecks that branch. A failed recheck pauses landings on that epic until it passes. When the last group of the epic lands, the Commit Handler pushes once and opens one pull request for the epic, and a person merges it.
 7. The Commit Handler then calls the Cleanup Handler ([chapter 15](#15-commit-handler)). The Task Manager does not call it.
 8. The Cleanup Handler removes the group's branch and worktree and calls only `CloseTaskGroup()` on this Task Manager. Inside it the Task Manager calls `DestroySandboxInstance()`, reports stage `cleanup` closed, and `Run` returns. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
@@ -11337,7 +11337,7 @@ const (
 The Builder's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 13. Tester
 
-The Tester is the agent that proves the Builder's added and modified code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before fails. Its turn begins with free mechanical checks that Go runs in the Tester's sandbox; only a clean result wakes the Tester and the [Reviewer](#14-reviewer), which then run side by side. The Tester is a mandatory gate for every group of risk level medium or above ([14.5](#145-behaviour)): Go accepts its pass only with evidence Go replays, and Go adds deep checks that cost no tokens. The purpose and the interactions are in [HLD 5.14](hld.md#514-tester).
+The Tester is the agent that proves the Builder's added and modified code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before fails. Its turn begins with free mechanical checks that Go runs in the Tester's sandbox; only a clean result wakes the Tester and the [Reviewer](#14-reviewer), which then run side by side. The Tester is a mandatory approval before any group lands, at every risk level ([14.5](#145-behaviour)): Go accepts its pass only with evidence Go replays, and Go adds deep checks that cost no tokens. The purpose and the interactions are in [HLD 5.14](hld.md#514-tester).
 
 ### 13.1 Scope and Concepts
 
@@ -11392,7 +11392,7 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 | `internal/agent/deep.go` | `DeepKind`, `DeepPlan`, `DeepResult`, `Mutant` and `Deep.Run`: the race, fuzz, mutation and benchmark runs |
 | `internal/agent/checks.go` | `Checker`, the check steps, their results and `CheckDone` |
 | `internal/agent/checker.go` | `CheckerConfig`, `NewChecker` and the ten steps |
-| `internal/agent/lint.go` | `LintProblem` and `NewLintProblems`: the lint problems the change adds over the base commit |
+| `internal/agent/buildlint.go` | `buildStep`, `lintStep`, `lintFinding`, `parseLint`, `newLintFindings` and the Go lint helpers (`goLintDirs`, `goLintScript`, `golangciProbe`): the `build` and `lint` steps |
 | `internal/agent/coverage.go` | `CoverageCommand`, `ParseCoverage` and `CoverageLevel` |
 | `internal/agent/gotest.go` | `TestRun`, `ParseGoTestJSON` and `NewBaseline`: Go test and package-list output |
 | `internal/agent/secrets.go` | The diff reader (`diffLines`, which `Reviewer.Lenses` also uses) and the secret scan |
@@ -11686,22 +11686,39 @@ type CheckDone struct {
 
 #### Lint and build shapes
 
-The `build` step runs the language's own build command, `go build ./...` for Go, and never a Makefile target. The `lint` step runs `golangci-lint` when a `.golangci.*` file exists and the tool is found in the sandbox, otherwise `go vet`, on the packages that hold changed files, or on the whole module when `go.mod` or `go.sum` changed. Only the problems the base lacks fail the step, so lint problems that already exist never block. Base lint results are not stored: Go lints the base commit's files only when the lint of the work under test reports problems. These shapes are the design.
+The `build` step runs the language's own build command, `go build ./...` for Go, and never a Makefile target. The `lint` step runs `golangci-lint` when a `.golangci.*` file exists and the tool is found in the sandbox, otherwise `go vet`, on the packages that hold changed files, or on the whole module when `go.mod` or `go.sum` changed. Only the problems the base lacks fail the step, so lint problems that already exist never block. Base lint results are not stored: Go lints the base commit's files only when the lint of the work under test reports problems. Deleted folders and nested modules are skipped.
+
+`CheckerConfig` carries the commands and the base checkout, not `CheckInput`:
 
 ```go
-// LintProblem is one problem a lint run reported.
-type LintProblem struct {
-	File    string `json:"file"`
-	Rule    string `json:"rule"`    // the linter's rule name
-	Message string `json:"message"`
-	Line    int    `json:"line"`    // shown to the Builder; not part of the match, because lines move
+type CheckerConfig struct {
+	// …the fields `NewChecker` takes (below), and:
+	BuildCommands map[string]string // language to its own build command; Go builds with go build ./... when absent
+	LintCommands  map[string]string // language to its lint command; Go chooses golangci-lint or go vet itself
+	BaseDir       func(ctx context.Context, base string) (string, error) // folder with the base commit's files, reachable from the sandbox; nil means the base has no lint findings
 }
-
-// NewLintProblems returns the problems at head that base lacks, matched by file, rule and message.
-func NewLintProblems(base, head []LintProblem) []LintProblem
 ```
 
-A new problem makes the `lint` step `fail` with each problem as a detail line. A failing `build` step carries the compiler's exact output and skips the `lint` step. A language with no build or lint command reports that step as a `warn` with detail `skipped`, never a failure.
+The steps live in `internal/agent/buildlint.go`:
+
+```go
+// lintFinding is one lint problem; File, Rule and Message identify it, Line only locates it.
+type lintFinding struct{ File, Line, Rule, Message string }
+
+// buildStep runs the language's own build command and fails on a non-zero exit; a language without one is skipped.
+func (c checker) buildStep(ctx context.Context, run CommandRunner, in CheckInput) (StepResult, error)
+
+// lintStep lints the changed code and fails only on findings the base commit lacks; it is skipped when the build fails.
+func (c checker) lintStep(ctx context.Context, run CommandRunner, in CheckInput, buildFailed bool) (StepResult, error)
+
+// parseLint reads the findings from a lint tool's text output; lines that are not a file:line finding are ignored.
+func parseLint(out string) []lintFinding
+
+// newLintFindings returns the head findings the base lacks; a finding counts once per copy, so a second copy of an old problem is new.
+func newLintFindings(head, base []lintFinding) []lintFinding
+```
+
+`goLintDirs` and `goLintScript` pick the folders of the changed Go files, or `./...` when `go.mod` or `go.sum` changed; `golangciProbe` finds the tool and the configuration file. A new finding makes the `lint` step `fail` with up to 20 `file:line: message (rule)` detail lines and a count of the rest. A failing `build` step carries the compiler's exact output and skips the `lint` step with a `warn`. A language with no build or lint command reports that step as a `warn` with detail `skipped: no <class> command for language "<lang>"`, never a failure.
 
 #### Sign-off and the Tester's own tests
 
@@ -11749,7 +11766,7 @@ A test that returns an error is listed in `TesterVerdict.BadTests`. [TODO: wheth
 
 #### Deep checks
 
-Go runs the deep checks at the end of the group's turn, with no model call: after the Tester's sign-off, or after the mechanical checks for a group that gets no Tester. The race detector runs for every group; fuzzing, mutation and benchmarks run from `med_high` upward. These shapes are the design.
+Go runs the deep checks at the end of the group's turn, with no model call: after the Tester's sign-off. The race detector runs for every group; fuzzing, mutation and benchmarks run from `med_high` upward. These shapes are the design.
 
 ```go
 // DeepKind names one deep check.
@@ -11835,7 +11852,7 @@ func CaseCollisions(paths []string) [][]string
 
 `CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`. A step that judges only by exit code, `done_when`, the task gate and the Tester rerun, treats `ErrOutputOverLimit` as no error and uses the exit code; every step that parses the output fails on it.
 
-`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Each language's profile file in `embed/langs` names, per build tool, the command that prints its JUnit XML report. Gradle, Maven and pytest ship one; a language or a test command with none leaves a failing test of that language blocking as unclassifiable.
+`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command, the command that prints its JUnit XML report, its build command and its lint command, with a function that returns the base commit's files for the lint comparison. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Each language's profile file in `embed/langs` names, per build tool, the command that prints its JUnit XML report. Gradle, Maven and pytest ship one; a language or a test command with none leaves a failing test of that language blocking as unclassifiable.
 
 | Function | On failure |
 |---|---|
@@ -11953,7 +11970,7 @@ The checks are the first step of the Tester's turn. They cost no model tokens: G
 | `scope` | Every changed file is in the effective file list or is a test sibling (`OutOfScope`). |
 | `secrets` | The diff's added lines are scanned with the guard's secret-content patterns, the list guard row G4 uses ([Task Manager](#11-task-manager)). |
 | `build` | The language's own build command (`go build ./...` for Go, never a Makefile target) must succeed on the work under test; a failure carries the compiler's exact output. A language with no build command reports a skipped warning. |
-| `lint` | `golangci-lint` when a `.golangci.*` file exists and the tool is found in the sandbox, else `go vet`, on the packages with changed files (the whole module when `go.mod` or `go.sum` changed). Only findings the base lacks fail, matched by file, rule and message, so old lint debt never blocks; the base is linted only when the head's lint reports problems. Skipped when `build` fails; a language with no lint command reports a skipped warning. |
+| `lint` | `golangci-lint` when a `.golangci.*` file exists and the tool is found in the sandbox, else `go vet`, on the packages with changed files (the whole module when `go.mod` or `go.sum` change; deleted folders and nested modules are skipped). Only findings the base lacks fail, matched by file, rule and message, so old lint debt never blocks; the base is linted only when the head's lint reports problems. Skipped when `build` fails; a language with no lint command reports a skipped warning. |
 | `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. It also fails when the change adds executable lines and none is covered; the added lines no test ran, as `file:line-range`, go to the Reviewer's `checks` slot. |
 | `baseline` | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns. |
 | `impact_set` | The affected tests. Go: the tests of every package that imports a changed package. Other languages: the full `test` class. |
@@ -12257,7 +12274,8 @@ const (
 - `AcceptResult` refuses a repeated task identifier.
 - `CheckResult.Clean` is false when any step has level `fail` and true when only warnings remain.
 - A change that breaks `go build ./...` fails the `build` step with the compiler's output and skips `lint`; a change that adds a lint problem fails `lint`, and the same problem at the base does not.
-- `NewLintProblems` matches by file, rule and message, so a problem that only moved lines is not new.
+- `newLintFindings` matches by file, rule and message, so a problem that only moved lines is not new, and a second copy of an old problem is new.
+- A language with no build or lint command reports a `warn` with detail `skipped`, and the group is not blocked.
 - `CheckNewTest` accepts five failures on the base with five passes on the change, and returns `not_red`, `not_green` and `flaky` for the three broken shapes.
 - A passed item whose replay gives another exit code is `unreplayed` and the verdict is not `Pass`.
 - `Signoff.Voided` is true when one test file changed after the sign-off.
@@ -12289,7 +12307,7 @@ const (
 The Tester's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
 
-The Reviewer is the final code check on the Builder's work. It starts once the free mechanical checks pass, reads the change while the [Tester](#13-tester) runs, files findings that Go verifies, and gives one verdict per task. This chapter also holds the risk level that Go sets for each group, which decides how deep the review goes, and the approval rule: a group of level medium or above moves on only when both the Tester and the Reviewer pass. The purpose and the interactions are in [HLD 5.15](hld.md#515-reviewer).
+The Reviewer is the final code check on the Builder's work. It starts once the free mechanical checks pass, reads the change while the [Tester](#13-tester) runs, files findings that Go verifies, and gives one verdict per task. This chapter also holds the risk level that Go sets for each group, which decides how deep the review goes, and the approval rule: a group moves on only when the Tester passes and, at level medium or above, the Reviewer passes too. The purpose and the interactions are in [HLD 5.15](hld.md#515-reviewer).
 
 ### 14.1 Scope and Concepts
 
@@ -12487,9 +12505,8 @@ const (
 
 // Proof is the evidence a finding carries; exactly one of Cmd and Test is set.
 type Proof struct {
-	Cmd    string     `json:"cmd,omitempty"`  // an allowed command, run as written
-	Test   *ProofTest `json:"test,omitempty"` // a Reviewer-written test
-	Expect string     `json:"expect"`         // a line the failing output must contain
+	Cmd  string     `json:"cmd,omitempty"`  // an allowed command, run as written
+	Test *ProofTest `json:"test,omitempty"` // a Reviewer-written test
 }
 
 // ProofTest is a short test the Reviewer wrote to show the bug.
@@ -12501,9 +12518,8 @@ type ProofTest struct {
 
 // ProofResult is what Go saw when it ran a proof.
 type ProofResult struct {
-	Failed  bool   // the command exited non-zero
-	AsClaim bool   // and its output holds the Expect line
-	Output  string // exact output, capped like a gate result (12.3)
+	Failed bool   // the command exited non-zero
+	Output string // exact output, capped like a gate result (12.3)
 }
 ```
 
@@ -12514,7 +12530,7 @@ type ProofResult struct {
 | Static check | `go vet` | The profile's `lint` command |
 | Lint | The profile's `lint` command | The profile's `lint` command |
 
-A command outside this list is refused and the finding warns. The finding blocks when `Failed` and `AsClaim` are both true. [TODO: the allowed list for languages other than Go, and what counts as failing the way the Reviewer said ([G-302](#g-302))]
+A command outside this list is refused and the finding warns. The finding blocks only when the proof fails as claimed. [TODO: what output proves a proof failed as claimed ([G-302](#g-302))] [TODO: the allowed list for languages other than Go ([G-302](#g-302))]
 
 #### Risk levels
 
@@ -12575,7 +12591,7 @@ Each level takes one route:
 
 | Level | Route |
 |---|---|
-| `low`, `med_low` | Go's free checks only, with no Tester and no Reviewer; the group lands on the epic's branch |
+| `low`, `med_low` | Go's free checks and the Tester, with no Reviewer; the group lands on the epic's branch |
 | `medium` | The Tester and the Reviewer with proof-backed findings; itemized in the epic pull request |
 | `med_high` | As `medium`, plus the fuzz, mutation and benchmark checks of [13.5](#running-the-deep-checks) |
 | `high`, `critical` | As `med_high`, then quarantine: the group's own draft pull request, with no CI ([15.5](#155-behaviour)) |
@@ -12625,8 +12641,7 @@ A finding as `submit_finding` takes it, and the final call:
 
 ```json
 {"rule": "correctness.1", "file": "internal/agent/taskgate.go", "line": 41, "quote": "out, _ := g.Run(ctx, t.DoneCommand)",
- "proof": {"test": {"file": "internal/agent/taskgate_drop_test.go", "body": "package agent\n…", "run": "go test ./internal/agent/ -run TestDropsError"},
-           "expect": "TestDropsError: error was ignored"}}
+ "proof": {"test": {"file": "internal/agent/taskgate_drop_test.go", "body": "package agent\n…", "run": "go test ./internal/agent/ -run TestDropsError"}}}
 ```
 
 ```json
@@ -12861,7 +12876,7 @@ flowchart TD
 2. `VerifyFinding` looks for the quote at `File:Line`, first in the head tree and then in the diff. A line matches when it equals the quote after both are trimmed of leading and trailing whitespace; inner whitespace and letter case must match exactly. A quote holding a line break, or an empty quote, never matches.
 3. Edge 4: a quote not found drops the finding and logs it. The finding cannot block, and the precision counters record it as submitted, not verified.
 4. Edges 5 to 10: a verified finding publishes `finding.verified`. Go marks it pre-existing when its line is not an added or changed line of the diff. Its rule's level and the mark pick the bucket (14.3): `block`, `warn` or `record`.
-5. For a `block` level, `RunProof` copies the work under test into a throwaway folder in the Reviewer's sandbox, adds the proof's test file when it has one, runs the command, and discards the folder. The Builder's worktree is never touched. The finding blocks only when the command exits non-zero and its output holds the proof's `expect` line.
+5. For a `block` level, `RunProof` copies the work under test into a throwaway folder in the Reviewer's sandbox, adds the proof's test file when it has one, runs the command, and discards the folder. The Builder's worktree is never touched. The finding blocks only when the proof fails as claimed; the command exiting non-zero is the first condition, and what else proves the claim is [G-302](#g-302).
 6. A finding whose rule has proof kind `none`, whose command is not on the allowed list, which has no proof, or whose proof passes is accepted as a warning for the pull request. A proven finding also raises the group's risk level one step (14.3).
 
 ```go
@@ -12874,7 +12889,7 @@ func RunProof(ctx context.Context, run ProofRunner, p Proof) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if res.Failed && res.AsClaim {
+	if res.Failed { // [TODO: what output proves the failure is the one claimed (G-302)]
 		return "failed_as_claimed", nil
 	}
 	return "passed", nil
@@ -12928,7 +12943,7 @@ func ExactlyOnce(want, got []string) error {
 
 #### The approval rule
 
-`Decide` reads the verdicts the group's risk level requires for one round, and runs only after a clean mechanical check result. A group of level `low` or `med_low` gets no Tester and no Reviewer: `Decide` approves it once the free checks and the race detector pass. For every other level the group goes to the Commit Handler only on `approve`: the Reviewer's session ended with every task `met` and no verified blocking finding, and the Tester confirmed every task with no failed, disputed, split, unreplayed or bad item. The Tester is a mandatory gate: no verdict of its own means `wait`, never `approve`.
+`Decide` reads the verdicts the group's risk level requires for one round, and runs only after a clean mechanical check result. A group of level `low` or `med_low` gets no Reviewer: `Decide` approves it once the Tester passes and the free checks and the race detector pass. For every other level the group goes to the Commit Handler only on `approve`: the Reviewer's session ended with every task `met` and no verified blocking finding, and the Tester confirmed every task with no failed, disputed, split, unreplayed or bad item. The Tester is a mandatory approval at every level: no verdict of its own means `wait`, never `approve`.
 
 | Case | Outcome |
 |---|---|
@@ -13028,7 +13043,7 @@ No key lowers a level or sets one. [TODO: the key that lists a repository's sens
 - A diff whose added branch no test runs puts its `file:line` in the `checks` slot.
 - A change that adds executable lines and covers none of them fails the coverage step.
 - `Level.Bucket` returns `block` for `critical`, `high` and `med_high`, `warn` for `medium`, and `record` for `med_low`, `low` and any pre-existing finding.
-- `RunProof` returns `failed_as_claimed` only when the command fails and its output holds the `expect` line; a passing command returns `passed`.
+- `RunProof` returns `failed_as_claimed` for a failing command and `passed` for a passing one; a proof with no command and no test returns `none`.
 - `Classify` returns `critical` for a workflow file, a Makefile, a Dockerfile, a deploy folder and a migration folder, and `high` for a dependency file.
 - `Classify` returns `medium` for a path no rule matches, and the level of the riskiest file for a mixed diff.
 - A `medium` diff of 401 lines is `med_high`; a proven finding raises `medium` to `med_high`; neither ever lowers a level.
@@ -13046,7 +13061,7 @@ No key lowers a level or sets one. [TODO: the key that lists a repository's sens
 - An unchanged diff reviewed twice makes two model calls.
 - A finding whose proof passes becomes a warning on the pull request and does not return the group.
 - A finding about an untouched line is recorded as pre-existing and does not block.
-- A `low` group with passing free checks reaches the Commit Handler with 0 model calls.
+- A `low` group with passing free checks and a passing Tester reaches the Commit Handler with 0 Reviewer sessions; with no Tester verdict it waits.
 - A `critical` group reaches quarantine, not the epic branch.
 
 ### 14.10 Open Gaps
@@ -13085,7 +13100,7 @@ The Commit Handler owns four things: the local save of a finished task, the publ
 | Forge | The hosting service that holds the remote and the pull requests; GitHub |
 
 What the Commit Handler guarantees:
-- It publishes only content that the judges its risk level requires approved: the approved tree hash must equal the worktree's tree hash at commit time. A group of level `low` or `med_low` needs only Go's free checks.
+- It publishes only content that the judges its risk level requires approved: the approved tree hash must equal the worktree's tree hash at commit time. A group of level `low` or `med_low` skips only the Reviewer.
 - It pushes once per pull request, never per group.
 - `Save` only commits locally; nothing is pushed before approval.
 - Groups of one epic land one at a time, and a failed recheck pauses landings on that epic until a recheck passes.
@@ -13201,7 +13216,7 @@ type Approval struct {
 
 | Field | Rule |
 |---|---|
-| `tree` | Must equal `tester.tree` and `reviewer.tree`; a difference is `ErrNotApproved`. Must also equal the worktree's tree hash when the commit step runs. A group of level `low` or `med_low` has no verdicts, so only the worktree check applies |
+| `tree` | Must equal `tester.tree` and `reviewer.tree`; a difference is `ErrNotApproved`. Must also equal the worktree's tree hash when the commit step runs. A group of level `low` or `med_low` has no Reviewer verdict, so `reviewer.tree` is empty and not compared |
 | `level`, `reason` | Set by Go's `Classify`; `Publish` routes `low` to `high` by level and the Task Manager sends `high` and `critical` to `Quarantine` |
 | `fence` | Must equal the lease's fence when read just before the push |
 | `branch` | Must start with `komodo/`; the wrapper refuses any other name |
@@ -13684,9 +13699,9 @@ func (h *Handler) Quarantine(ctx context.Context, a Approval) (QuarantineResult,
 |---|---|---|---|
 | Epic | `komodo/<epic>`, once | Ready, into the base branch; lists every quarantine; a person merges | After the epic's last landing |
 | Quarantine | `komodo/<epic>-<group>`, once | Draft, into the epic branch; holds only that group; a person merges | When the group is approved |
-| Ad hoc group (no epic) | The group branch, once | Ready, into the base branch, titled `<label>: <goal>` | After the group is approved |
+| Ad hoc group (no epic) | The group branch, once | Ready, into the base branch | After the group is approved |
 
-[TODO: how a group with no epic comes to exist ([G-313](#g-313))]
+[TODO: how a group with no epic comes to exist, and that pull request's title and branch name ([G-313](#g-313))]
 
 #### Push budget
 
@@ -15791,7 +15806,7 @@ Each row proves one fact of the design that the full run does not reach. They us
 | Free checks | A fixture whose completion command fails | The failure returns to the Builder with the exact output, and the Tester and Reviewer make 0 model calls |
 | Cache | Repeat an identical request | Context pieces come from the cache, and every request still makes a new model call |
 | Epic landing | An epic of 2 groups, with a seeded failing recheck after the first landing | Landings go one at a time onto `komodo/ep-1` as one squashed commit each; the epic pauses; the second group lands only after a recheck passes; the remote receives 1 push and 1 pull request opens after the last landing |
-| Risk routing | A fixture with a docs-only group, an ordinary group and a group that edits a workflow file | The docs group lands with 0 model calls; the ordinary group gets the Tester and the Reviewer; the workflow group is `critical` and opens a draft pull request into `komodo/ep-1` |
+| Risk routing | A fixture with a docs-only group, an ordinary group and a group that edits a workflow file | The docs group lands with the Tester and 0 Reviewer sessions; the ordinary group gets the Tester and the Reviewer; the workflow group is `critical` and opens a draft pull request into `komodo/ep-1` |
 | Quarantine | A `critical` group with a dependent and an independent group | The independent group lands; the dependent is deferred, not blocked; after the draft is merged, `komodo run` builds the dependent |
 | Finding proof | A seeded blocking finding whose proof passes, and one whose proof fails as claimed | The first is a warning on the pull request; the second returns the group to the Builder |
 | Abandon | `komodo abandon tg-1.2` during Build | The branch, the worktree and the container are gone, the state record and events remain, and the lease is released when the group closes |
@@ -16076,7 +16091,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-298"></a>G-298 | Sandbox | A builder-added Go dependency is fetched on the host with the person's login: the host fill runs `go mod download` again when `go.mod` or `go.sum` changes, so a module the builder names is downloaded outside the sandbox. The owner accepted this risk; open: whether to limit host fills to modules already in `go.sum`, or to `GOPRIVATE` hosts | Owner decision | [11](#11-task-manager) |
 | <a id="g-299"></a>G-299 | Task Manager | Check output limit: the runner the mechanical checks use returns a command's whole output up to 16 MB and, past it, the exit code, the head and tail in 4 KB and an over-limit error, while tool replies keep 4 KB. The owner decided this; the 16 MB limit is unmeasured for very large repositories | Owner decision | [11](#11-task-manager) |
 | <a id="g-301"></a>G-301 | Review levels | The level of each rule in the lens catalogs and of each standards rule: today 6 rules are blocker, 27 major and 8 minor, and every standards rule is major | Owner decision | [14](#14-reviewer), [6](#6-context-manager) |
-| <a id="g-302"></a>G-302 | Finding proof | The allowed proof commands for languages other than Go, and what counts as a proof failing the way the Reviewer said | Owner decision | [14](#14-reviewer) |
+| <a id="g-302"></a>G-302 | Finding proof | The allowed proof commands for languages other than Go, and what output proves a proof failed as claimed; proposal, not decided: the Reviewer adds an `expect` line that the failing output must contain | Owner decision | [14](#14-reviewer) |
 | <a id="g-304"></a>G-304 | Risk levels | Which allow-listed changes are `low` and which `med_low`, which changes are `med_high`, and the level of a path a repository marks sensitive | Owner decision | [14](#14-reviewer) |
 | <a id="g-305"></a>G-305 | Risk levels | Where a repository lists its sensitive paths: no per-repository settings file exists and the settings have no list kind | Owner decision | [14](#14-reviewer), [3](#3-configuration-manager) |
 | <a id="g-306"></a>G-306 | Quarantine | A quarantine draft pull request starts no CI only when the repository's workflow skips drafts; that line is an edit to the target repository, not Komodo's | Owner decision | [15](#15-commit-handler) |
@@ -16086,7 +16101,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-310"></a>G-310 | Deep checks | The mutation tool for each language, how fuzz targets are chosen, the benchmark threshold, and what a failed race, fuzz or benchmark run does | Owner decision | [13](#13-tester) |
 | <a id="g-311"></a>G-311 | Tester tests | Whether the tests that pass `CheckNewTest` are kept in the landed commit, and in which folder | Owner decision | [13](#13-tester), [15](#15-commit-handler) |
 | <a id="g-312"></a>G-312 | Tester gate | What follows a passed item whose evidence does not replay, or a Tester-written test that is not red, not green or flaky: a restart of the Tester as after a dispute, or a return to the Builder | Owner decision | [13](#13-tester) |
-| <a id="g-313"></a>G-313 | Ad hoc group | How a one-group change with no epic comes to exist, since every plan writes groups under an epic | Owner decision | [15](#15-commit-handler), [5](#5-intake-handler) |
+| <a id="g-313"></a>G-313 | Ad hoc group | How a one-group change with no epic comes to exist, since every plan writes groups under an epic, and what its pull request is titled and which branch it pushes; proposal, not decided: the title `<label>: <goal>` | Owner decision | [15](#15-commit-handler), [5](#5-intake-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
