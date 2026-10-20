@@ -10547,7 +10547,13 @@ Connection and safety rules:
 4. Run `commands.setup` with `Network` true, then turn the network off. This is the only network time an instance has. A setup that fails destroys its instance, so the retry creates a new one and runs setup again.
 5. Every `run` calls `Manager.Command`. `DestroySandboxInstance` runs at `CloseTaskGroup` or when the group is stopped; it is safe to call twice.
 
-**Go setup.** The instance has no GitHub login, so `go mod download` cannot fetch a private module. For a Go repository the setup command, and only it, gets the variables that make the person's Go download cache a file proxy, with the public proxy behind it:
+**Go setup.** The instance has no GitHub login, so `go mod download` cannot fetch a private module inside it. Before an instance is made, the Task Manager runs `go mod download` on the host instead, in the worktree, with the person's own Go and Git login, `GOTOOLCHAIN=local` (so a `go.mod` cannot make the host fetch another toolchain) and `GOFLAGS=-mod=mod`. The command fills `Spec.Modules`, the host's `GOMODCACHE`:
+- It runs only when the worktree root holds a `go.mod` and `Spec.Modules` is set.
+- It runs once per group, before the first instance, and again when the hash of `go.mod` and `go.sum` differs from the last successful fill, because a builder may add a dependency.
+- A failure escalates `blocked`, reason `setup`, with the role, the capped output and the `fix` line below; no instance exists yet, so none is discarded.
+- A dependency a builder adds is fetched on the host with the person's login ([TODO: whether host fills are limited to modules already in `go.sum`, or to `GOPRIVATE` hosts ([G-298](#g-298))]).
+
+For a Go repository the setup command, and only it, gets the variables that make the person's Go download cache a file proxy, with the public proxy behind it:
 - The cache is `$(go env GOMODCACHE)/cache/download`, inside `Spec.Modules`, which every command already reads read-only on all three mechanisms (Seatbelt and Bubblewrap allow reads only, and Docker mounts it `:ro`), and every command gets `GOMODCACHE` set to `Spec.Modules` when that folder exists, whatever the command brings, so Go finds the saved modules inside a container too. Only the variables below and the network end with setup.
 - When that folder does not exist, `SetupEnv` stays empty and setup runs as it did before.
 - The instance gets no token, no git credential helper and no `~/.gitconfig`; the repository's `go.sum` still verifies every module.
@@ -10560,7 +10566,7 @@ GONOSUMDB=<host GOPRIVATE patterns>
 GIT_TERMINAL_PROMPT=0
 ```
 
-When setup fails on a module the cache does not hold (output with `terminal prompts disabled`, `could not read Username`, `404 Not Found`, `410 Gone` or `module lookup disabled`), the `setup` block detail carries a `fix` line: ``run `go mod download` in the repo on this machine, then `komodo run <group>` ``.
+When setup fails on a module the cache does not hold (output with `terminal prompts disabled`, `could not read Username`, `404 Not Found`, `410 Gone`, `module lookup disabled` or `read-only file system`), the `setup` block detail carries a `fix` line: ``run `go mod download` in the repo on this machine, then `komodo run <group>` ``.
 
 [TODO: private registries for npm, cargo and Python, which the Go download cache does not cover ([G-297](#g-297))]
 
@@ -10858,6 +10864,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-08](#g-08) | A private loopback per instance | Sandbox |
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Tester copy mechanisms and costs | Sandbox |
 | [G-297](#g-297) | Private registries for npm, cargo and Python | Sandbox |
+| [G-298](#g-298) | A builder-added Go dependency is fetched on the host with the person's login | Sandbox |
 | [G-71](#g-71) | Details of the subscription link, including which environment variables the login needs | Subscription link |
 | [G-72](#g-72) | Request and response mapping of the API interfaces and the cache markers | API links |
 | [G-03](#g-03), [G-04](#g-04) | A local model at the context floor, and parallel requests | Only the optional local link |
@@ -15127,7 +15134,7 @@ Komodo keeps its files in two places and never inside the repository's working t
 | `context/skills/`, `context/connections.json` | Local skills and tool-server connections a person added; the shipped ones are embedded | [6. Context Manager](#6-context-manager) |
 | `leases/<repo-id>/<group-id>.json`, `leases/<repo-id>/<group-id>.lock` | Which group owns each branch and worktree: one small JSON file per lease, written to a temporary name and renamed into place, plus a lock file that expires after a timeout if a crash leaves it | [9. Lease Manager](#9-lease-manager) |
 | `wt/<repo-id>/<group>/` | One worktree per group, outside every clone | [11. Task Manager](#11-task-manager) creates it; [16. Cleanup Handler](#16-cleanup-handler) removes it |
-| `cache/lang/<repo-id>/` | Komodo's own language and build caches per repository, never the person's; the one exception is the person's Go module cache, read-only for every command (11.5) | [8. Cache Manager](#8-cache-manager) ([G-215](#g-215)) |
+| `cache/lang/<repo-id>/` | Komodo's own language and build caches per repository, never the person's; the one exception is the person's Go module cache, which Komodo fills from the host with `go mod download` and every sandboxed command reads read-only (11.5) | [8. Cache Manager](#8-cache-manager) ([G-215](#g-215)) |
 | `state/engine.sock` | The engine's private control socket; only this user can open it, and it exists only while the engine runs | [7. Runtime Manager](#7-runtime-manager) |
 | `events/engine.jsonl` | The machine event log: events that name no run, one JSON line each, appended before the broadcast; never trimmed | [4. Event Bus](#4-event-bus) |
 | `events/runs.json` | The run-to-folder map: where each run's event log lives | [4. Event Bus](#4-event-bus) |
@@ -15521,6 +15528,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-295"></a>G-295 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 9.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 | <a id="g-296"></a>G-296 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 | <a id="g-297"></a>G-297 | Sandbox | Private registries for npm, cargo and Python: their setup commands have no credentials and no cache fallback, because only Go setup gets a file proxy on the person's download cache | Owner decision | [11](#11-task-manager) |
+| <a id="g-298"></a>G-298 | Sandbox | A builder-added Go dependency is fetched on the host with the person's login: the host fill runs `go mod download` again when `go.mod` or `go.sum` changes, so a module the builder names is downloaded outside the sandbox. The owner accepted this risk; open: whether to limit host fills to modules already in `go.sum`, or to `GOPRIVATE` hosts | Owner decision | [11](#11-task-manager) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
