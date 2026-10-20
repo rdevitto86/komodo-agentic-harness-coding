@@ -26,6 +26,7 @@ var hostGoEnv = func(ctx context.Context) (string, string) {
 // moduleMisses are the setup output fragments that say a Go module could not be fetched.
 var moduleMisses = []string{
 	"terminal prompts disabled", "could not read Username", "404 Not Found", "410 Gone", "module lookup disabled",
+	"read-only file system",
 }
 
 // withGoSetupAccess gives the spec of a Go repo's setup command the person's download cache as a read-only file proxy; any
@@ -49,7 +50,7 @@ func (m *Manager) setupFix(spec sandbox.Spec, output string) string {
 
 	for _, miss := range moduleMisses {
 		if strings.Contains(output, miss) {
-			return "run `go mod download` in the repo on this machine, then `komodo run " + m.spec.Group + "`"
+			return m.goModFix()
 		}
 	}
 

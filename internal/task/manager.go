@@ -87,6 +87,8 @@ type Manager struct {
 	closeOnce  sync.Once
 	closeErr   error
 	tmp        string
+	fillMu     sync.Mutex // one host module fill at a time
+	filled     string     // the go.mod and go.sum hash of the last successful host module fill
 	scopeInput string     // the scope answer text the builder's next session receives
 	taskMu     sync.Mutex // one completion command at a time
 	closing    atomic.Bool
@@ -631,6 +633,9 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 		Network:    len(setup) > 0,
 	}
 	spec = m.withGoSetupAccess(ctx, spec)
+	if err := m.fillGoModules(ctx, role, spec); err != nil {
+		return "", err
+	}
 
 	inst, err := m.c.Sandboxes.CreateSandboxInstance(ctx, spec)
 	if err != nil {

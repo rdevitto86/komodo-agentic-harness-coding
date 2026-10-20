@@ -130,11 +130,25 @@ func TestTheHostFillRunsOncePerGroupAndAgainWhenGoModChanges(t *testing.T) {
 		t.Fatalf("%d host downloads for two roles, want 1", len(*calls))
 	}
 
-	writeGoMod(t, r.wt, "module x\n\nrequire github.com/kr/text v0.1.0\n")
+	remake := func() {
+		r.m.mu.Lock()
+		delete(r.m.instances, "tester")
+		r.m.mu.Unlock()
 
-	if _, err := r.m.instance(context.Background(), "reviewer"); err != nil {
-		t.Fatal(err)
+		if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+			t.Fatal(err)
+		}
 	}
+
+	remake()
+
+	if len(*calls) != 1 {
+		t.Fatalf("%d host downloads when nothing changed, want 1", len(*calls))
+	}
+
+	writeGoMod(t, r.wt, "module x\n\nrequire github.com/kr/text v0.1.0\n")
+	remake()
+
 	if len(*calls) != 2 {
 		t.Fatalf("%d host downloads after go.mod changed, want 2", len(*calls))
 	}
@@ -143,13 +157,8 @@ func TestTheHostFillRunsOncePerGroupAndAgainWhenGoModChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r.m.mu.Lock()
-	delete(r.m.instances, "reviewer")
-	r.m.mu.Unlock()
+	remake()
 
-	if _, err := r.m.instance(context.Background(), "reviewer"); err != nil {
-		t.Fatal(err)
-	}
 	if len(*calls) != 3 {
 		t.Fatalf("%d host downloads after go.sum changed, want 3", len(*calls))
 	}
