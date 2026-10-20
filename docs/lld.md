@@ -2895,8 +2895,8 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `task.done` | `run-status` / `task.done` | `task` |
 | `task.retry` | `run-status` / `task.retry` | `task`, `attempt` |
 | `check.done` | `run-status` / `check.done` | `pass`, `tip`, `head`, `regression`, `steps`; the free mechanical checks that open the Tester's turn |
-| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note` |
-| `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `severity`, `in` |
+| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note`, `proof` |
+| `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `level`, `in`, `pre_existing`, `proof` (the proof's outcome) |
 | `tool.denied` | `run-status` / `tool.denied` | `tool`, `row`, `target`, `count` |
 | `sandbox.fallback` | `run-status` / `sandbox.fallback` | `role`, `wanted`, `used`, `why`; the Tester ran in the operating-system sandbox because Docker was missing |
 | `tool.outside` | `run-status` / `tool.outside` | `server`, `tool`, `outcome`; one call to an outside tool server |
@@ -3148,13 +3148,16 @@ type FindingSubmit struct {
 	Line  int    `json:"line"`  // line number from 1 in the head tree
 	Quote string `json:"quote"` // the quoted evidence line
 	Note  string `json:"note,omitempty"` // the agent's note on the finding
+	Proof string `json:"proof,omitempty"` // the proof's command, or "test" when the Reviewer wrote one (14.3)
 }
 
 // FindingVerified is the data of run-status / finding.verified.
 type FindingVerified struct {
 	FindingSubmit
-	Severity string `json:"severity"` // blocker, major or minor, from the rule
-	In       string `json:"in"`       // "head" or "diff", where the quote was found
+	Level       string `json:"level"`                 // critical, high, med_high, medium, med_low or low, from the rule
+	In          string `json:"in"`                    // "head" or "diff", where the quote was found
+	PreExisting bool   `json:"pre_existing,omitempty"` // the line is one the change did not touch
+	Proof       string `json:"proof,omitempty"`       // failed_as_claimed, passed or none (14.3)
 }
 
 // ToolDenied is the data of run-status / tool.denied.
@@ -4737,7 +4740,7 @@ type Rule struct {
 | `Rule.ID` | `std.<skill>.<n>`, the identifier a reviewer finding cites |
 | `Rule.Line` | The line without its leading `- ` and every `**`, trimmed |
 
-`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as a JSON array of `{id, skill, line}` rows, ordered by skill name and then by `n`; a Go test regenerates it and compares byte for byte, and `go test -run TestShippedIndexAndRules -update` rewrites both `rules.json` and `index.json`. A standards rule has severity `major`.
+`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as a JSON array of `{id, skill, line}` rows, ordered by skill name and then by `n`; a Go test regenerates it and compares byte for byte, and `go test -run TestShippedIndexAndRules -update` rewrites both `rules.json` and `index.json`. A standards rule's level is `[TODO: the level of each standards rule and of each rule a lens catalog holds today ([G-301](#g-301))]`.
 
 #### Item table
 
@@ -9045,7 +9048,7 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | `session.start`, `session.end` | Session, agent, link, model, measured context and its source; the exit reason on end |
 | `session.idle`, `session.timewarn` | Session; seconds of silence and whether the nudge went, or seconds used and the wall limit |
 | `tool.denied` | Tool, guard row, refused target, count under that row |
-| `finding.submit` | Rule, file, line, quote, note |
+| `finding.submit` | Rule, file, line, quote, note, proof |
 | `provider.skip` | `from`, `to`, `reason` |
 | `limit.warn` | Link, kind (window past `warn.quota_pct`, overage drawn) |
 | `scope.request`, `scope.answer` | Task, paths; the answer's action and approved paths |
@@ -9156,9 +9159,10 @@ A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The comm
 | `diff` | `{paths}`, optional | The unified diff of the group's change against its base commit |
 | `git_read` | `{command, args}`; `command` is `log`, `show`, `blame` or `status` | The command's output |
 | `skill` | `{name}`: `<skill>` or `<skill>#<section>` | The skill text |
-| `submit_finding` | `{rule, file, line, quote, note}` | `filed <rule> at <file>:<line>` |
+| `submit_finding` | `{rule, file, line, quote, note, proof}`; `proof` is `{cmd, expect}` or `{test, expect}` (14.3) | `filed <rule> at <file>:<line>` |
 | `task_done` | `{task}` | The `done_when` exit code and capped output |
 | `run_check` | `{item}`: an acceptance item identifier; the schema's `enum` lists the group's identifiers; Tester only | The item's `cmd` run as written in the Tester's sandbox: its output, led by `exit status <n>` when the exit code is not 0; an error for an unknown identifier or an item with no `cmd` |
+| `write_test` | `{path, content}`; Tester only; the path must be a test file (13.3) | `created <path>, <n> lines`; a path that is not a test file is refused |
 | `lint_backlog` | `{draft}`: the planned task list as one text | `ok`, or one lint error per line |
 
 A reply is `Reply{Text, LogPath}`. When the output exceeds 4 KB, the first 1 KB and the last 3 KB are kept, joined by one line `[… <n> bytes cut; full output in <LogPath>]`, since errors usually sit at the end. `read` is not capped.
@@ -10475,7 +10479,7 @@ An agent's rows compile into a matcher once per session. A check is a map lookup
 3. The engine runs a relayed call on the session's bound tools, the same tool functions and guard the API link's tool loop uses, so every tool behaves the same on both links. The guard, the refusal count and the task record live only in the engine; `task_done` reruns the task's `done_when` command there.
 4. The guard runs before the tool. A refusal returns a reply naming the row and the allowed alternative.
 5. The reply is capped; the full output goes to `out/<call>.log`, and the capped reply names the path.
-6. A validated `submit_finding` becomes the fact `finding.submit`. The role judges its evidence; a finding whose quote is not at its `file:line` is dropped and logged, and does not block.
+6. A validated `submit_finding` becomes the fact `finding.submit`. The role judges its evidence; a finding whose quote is not at its `file:line` is dropped and logged, and does not block. A finding at level `med_high` or above blocks only after Go runs its proof ([14.5](#145-behaviour)).
 7. After an `edit`, the repository's detected `format` command runs on the edited file inside the confinement. If it fails, the edit stays unformatted and the reply carries the error; a repository with no `format` command skips the step.
 8. When `task_done` reports a task's `done_when` command passing, the Task Manager adds the task to `Progress.TasksDone`, calls `Committer.Save` for it, and reports the state. The commit stays local.
 
@@ -11331,7 +11335,7 @@ const (
 The Builder's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 13. Tester
 
-The Tester is the agent that proves the Builder's added and modified code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before fails. Its turn begins with free mechanical checks that Go runs in the Tester's sandbox; only a clean result wakes the Tester and the [Reviewer](#14-reviewer), which then run side by side. The purpose and the interactions are in [HLD 5.14](hld.md#514-tester).
+The Tester is the agent that proves the Builder's added and modified code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before fails. Its turn begins with free mechanical checks that Go runs in the Tester's sandbox; only a clean result wakes the Tester and the [Reviewer](#14-reviewer), which then run side by side. The Tester is a mandatory gate for every group of risk level medium or above ([14.5](#145-behaviour)): Go accepts its pass only with evidence Go replays, and Go adds deep checks that cost no tokens. The purpose and the interactions are in [HLD 5.14](hld.md#514-tester).
 
 ### 13.1 Scope and Concepts
 
@@ -11339,7 +11343,10 @@ The Tester is the agent that proves the Builder's added and modified code works.
 - The Tester's role definition, brief slots and result.
 - Acceptance items, the Tester's blind pass over them, and Go's reruns of a failed item.
 - The per-task confirmation: one answer for every task identifier.
-- The mechanical checks, the first step of the Tester's turn, run by Go code in the Tester's sandbox with no model call: rerun of completion commands, scope, secret scan, affected tests (impact set, baseline comparison and flake rule), coverage and case collision (13.5).
+- The mechanical checks, the first step of the Tester's turn, run by Go code in the Tester's sandbox with no model call: build, lint on the changed packages, rerun of completion commands, scope, secret scan, affected tests (impact set, baseline comparison and flake rule), coverage and case collision (13.5).
+- The Tester's evidence for each item, which Go replays, and the tests the Tester writes (13.5).
+- The Tester's sign-off, after which the Builder cannot edit a test file (13.5).
+- The deep checks Go runs by risk level: the race detector, fuzzing, mutation and benchmarks (13.5).
 
 **Does not own:**
 - Creating the group's sandbox, the guard that checks every Tester action, the session clocks, and the reset of files a read-only session touched: [Task Manager](#11-task-manager). Destroying the sandbox when the group closes: [Cleanup Handler](#16-cleanup-handler), through the Task Manager.
@@ -11364,6 +11371,11 @@ The Tester is the agent that proves the Builder's added and modified code works.
 | Dispute | A failed item whose two reruns both pass. |
 | Flaky | A test whose two reruns disagree. |
 | Blind pass | The Tester sees the task list, acceptance items and diff, never the Builder's prose. |
+| Evidence run | One command the Tester ran for an item, with its exit code and an output excerpt; Go replays it before it accepts a pass. |
+| Sign-off | The Tester's accepted pass, stamped with the hash of every test file; a changed test file voids it. |
+| Deep checks | The race detector, fuzzing, mutation and benchmarks, which Go runs with no model call, chosen by risk level. |
+| Mutant | A copy of the change with one deliberate edit, such as a flipped comparison; a test suite that still passes has not killed it. |
+| Risk level | The level Go sets for a group from its diff: `low`, `med_low`, `medium`, `med_high`, `high` or `critical` ([14.3](#143-data-model)). |
 
 ### 13.2 Package Layout
 
@@ -11371,10 +11383,14 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 
 | File | Holds |
 |---|---|
-| `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `TesterResult`, `TesterVerdict`, `ParseTesterResult`, `NewTester` and `Tester.AcceptResult` |
-| `internal/agent/rerun.go` | `Tester.Rerun` and `AdjudicateItem` |
+| `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `EvidenceRun`, `TesterResult`, `TesterVerdict`, `ParseTesterResult`, `NewTester` and `Tester.AcceptResult` |
+| `internal/agent/rerun.go` | `Tester.Rerun`, `Tester.Replay` and `AdjudicateItem` |
+| `internal/agent/signoff.go` | `Signoff`, `TestsHash` and `Signoff.Voided`: the lock on test files after the Tester's pass |
+| `internal/agent/newtests.go` | `NewTest`, `NewTestOutcome` and `CheckNewTest`: the Tester's own tests against the base and the change |
+| `internal/agent/deep.go` | `DeepKind`, `DeepPlan`, `DeepResult`, `Mutant` and `Deep.Run`: the race, fuzz, mutation and benchmark runs |
 | `internal/agent/checks.go` | `Checker`, the check steps, their results and `CheckDone` |
-| `internal/agent/checker.go` | `CheckerConfig`, `NewChecker` and the eight steps |
+| `internal/agent/checker.go` | `CheckerConfig`, `NewChecker` and the ten steps |
+| `internal/agent/lint.go` | `LintProblem`, `LintBase` and `NewLintProblems`: the lint problems the change adds over the base commit |
 | `internal/agent/coverage.go` | `CoverageCommand`, `ParseCoverage` and `CoverageLevel` |
 | `internal/agent/gotest.go` | `TestRun`, `ParseGoTestJSON` and `NewBaseline`: Go test and package-list output |
 | `internal/agent/secrets.go` | The diff reader (`diffLines`, which `Reviewer.Lenses` also uses) and the secret scan |
@@ -11400,7 +11416,7 @@ Files this chapter calls but does not own:
 ```json
 {
   "name": "tester",
-  "tools": ["read", "search", "run", "run_check"],
+  "tools": ["read", "search", "run", "run_check", "write_test"],
   "run_classes": ["build", "test"],
   "guard": ["R1"],
   "slots": {
@@ -11412,7 +11428,7 @@ Files this chapter calls but does not own:
 }
 ```
 
-The Tester has no write tool. Its `run` may write files in the sandbox; the Task Manager resets the checkout afterwards. The Tester's default weight is `light`; its link chain names the Claude subscription link first and the paid Anthropic interface second, and the free local model is an optional link.
+The Tester has one write tool, `write_test`, which creates or replaces a test file and refuses any other path (the test-sibling matcher of `Checker`). It writes into the Tester's sandbox copy, never the Builder's worktree. Its `run` may write files in the sandbox; the Task Manager resets the checkout afterwards, keeping the files `write_test` made. The Tester's default weight is `light`; its link chain names the Claude subscription link first and the paid Anthropic interface second, and the free local model is an optional link.
 
 | Slot | Holds | Tester |
 |---|---|---|
@@ -11473,11 +11489,18 @@ const (
 	NotConfirmed Confirmation = "not_confirmed"
 )
 
+// EvidenceRun is one command the Tester ran for an item; Go replays it before it accepts the item.
+type EvidenceRun struct {
+	Cmd     string `json:"cmd"`     // the command as run
+	Exit    int    `json:"exit"`    // the exit code the Tester saw
+	Excerpt string `json:"excerpt"` // the output lines that show the result, at most 40
+}
+
 // ItemResult is the Tester's pass or fail for one item.
 type ItemResult struct {
 	Item     string        `json:"item"`
 	Pass     bool          `json:"pass"`
-	Evidence string        `json:"evidence"`         // the output or observation behind the answer
+	Evidence []EvidenceRun `json:"evidence"`         // the runs behind the answer; at least one for a pass
 	Reason   DisputeReason `json:"reason,omitempty"` // after a restart with Go's output: why the item failed for the Tester
 }
 
@@ -11497,15 +11520,17 @@ type TesterResult struct {
 | Field | Rule |
 |---|---|
 | `items[].pass` | True when the item's command or observation met the sentence. |
-| `items[].evidence` | Required, non-empty: the command output or file and line behind the answer. |
+| `items[].evidence` | Required, non-empty: one `{cmd, exit, excerpt}` per command run. Go replays each run and accepts a pass only when the replay gives the same exit code and the excerpt lines appear in its output (13.5). |
 | `items[].reason` | Set only on the restart that follows a dispute; one of the 4 words. |
 | `tasks[]` | Every task identifier of the group exactly once; judged from its completion command and acceptance items. |
 
 ```json
 {
   "items": [
-    {"item": "ac-1", "pass": true, "evidence": "go test ./internal/agent/ -run TestOutOfScope: ok"},
-    {"item": "ac-2", "pass": false, "evidence": "TestSibling/py: want sibling, got outside"}
+    {"item": "ac-1", "pass": true, "evidence": [
+      {"cmd": "go test ./internal/agent/ -run TestOutOfScope", "exit": 0, "excerpt": "ok  \tkomodo/internal/agent\t0.21s"}]},
+    {"item": "ac-2", "pass": false, "evidence": [
+      {"cmd": "go test ./internal/agent/ -run TestSibling", "exit": 1, "excerpt": "TestSibling/py: want sibling, got outside"}]}
   ],
   "tasks": [
     {"task": "tsk-add-scope", "confirmation": "not_confirmed"},
@@ -11531,14 +11556,16 @@ The Task Manager folds the validated result and the rerun outcomes into one verd
 ```go
 // TesterVerdict is the Tester's outcome as the approval rule reads it.
 type TesterVerdict struct {
-	Ended    bool     `json:"ended"`              // the Tester's session ended with a valid result and Go's reruns finished
-	Restarts int      `json:"restarts,omitempty"` // restarts spent after a dispute
-	Pass     bool     `json:"pass"`               // every task confirmed and every item passed or skipped
-	NotMet   []string `json:"not_met,omitempty"`  // task identifiers marked not_confirmed
-	Failed   []string `json:"failed,omitempty"`   // items Go's two reruns confirmed failed
-	Disputed []string `json:"disputed,omitempty"` // items Go's two reruns passed
-	Split    []string `json:"split,omitempty"`    // items whose two reruns disagreed
-	Skipped  []string `json:"skipped,omitempty"`  // items with needs: or no command, never blocking
+	Ended      bool     `json:"ended"`                // the Tester's session ended with a valid result and Go's reruns finished
+	Restarts   int      `json:"restarts,omitempty"`   // restarts spent after a dispute
+	Pass       bool     `json:"pass"`                 // every task confirmed, every item passed or skipped, nothing unreplayed or bad
+	NotMet     []string `json:"not_met,omitempty"`    // task identifiers marked not_confirmed
+	Failed     []string `json:"failed,omitempty"`     // items Go's two reruns confirmed failed
+	Disputed   []string `json:"disputed,omitempty"`   // items Go's two reruns passed
+	Split      []string `json:"split,omitempty"`      // items whose two reruns disagreed
+	Skipped    []string `json:"skipped,omitempty"`    // items with needs: or no command, never blocking
+	Unreplayed []string `json:"unreplayed,omitempty"` // passed items whose evidence Go's replay did not reproduce
+	BadTests   []string `json:"bad_tests,omitempty"`  // Tester-written tests that broke the rules of 13.5
 }
 ```
 
@@ -11551,6 +11578,8 @@ These shapes serve the mechanical checks of 13.5.
 type Step string
 
 const (
+	StepBuild         Step = "build"
+	StepLint          Step = "lint"
 	StepDoneWhen      Step = "done_when"
 	StepScope         Step = "scope"
 	StepSecrets       Step = "secrets"
@@ -11595,7 +11624,9 @@ type CheckInput struct {
 	Files    []string          // the group's effective file list
 	Changed  []string          // paths changed between Base and Head
 	DoneWhen map[string]string // task identifier to completion command
-	Language string            // decides the impact set
+	Language string            // decides the impact set and the lint scope
+	Build    []string          // the repository profile's build command
+	Lint     []string          // the repository profile's lint command; empty when the repository has none
 }
 
 // TestStatus classifies one test against the baseline.
@@ -11653,6 +11684,122 @@ type CheckDone struct {
 }
 ```
 
+#### Lint and build shapes
+
+The `build` step runs the repository profile's `build` command; the `lint` step runs the profile's `lint` command on the changed packages, and again on the base commit's files once per tree hash. Only the problems the change adds fail the step, so lint problems that already exist never block. These shapes are the design.
+
+```go
+// LintProblem is one problem a lint run reported.
+type LintProblem struct {
+	File    string `json:"file"`
+	Rule    string `json:"rule"`    // the linter's rule name
+	Message string `json:"message"`
+	Line    int    `json:"line"`    // shown to the Builder; not part of the match, because lines move
+}
+
+// LintBase is the lint result at one base commit, keyed by tree hash like a Baseline.
+type LintBase struct {
+	TreeHash string
+	Problems []LintProblem
+}
+
+// NewLintProblems returns the problems at head that the base lacks, matched by file, rule and message.
+func NewLintProblems(base LintBase, head []LintProblem) []LintProblem
+```
+
+A new problem makes the `lint` step `fail` with each problem as a detail line. A failing `build` step carries the compiler's exact output. [TODO: the match key for lint problems, the lint scope for languages other than Go, and what each step does when the profile has no command for its class ([G-303](#g-303))]
+
+#### Sign-off and the Tester's own tests
+
+The Tester writes tests from the acceptance items, blind, with `write_test`. Go runs every such test on the base commit and on the change, five times each, and keeps the Tester's pass as a sign-off stamped with the hash of every test file. These shapes are the design.
+
+```go
+// NewTest is a test the Tester wrote with write_test.
+type NewTest struct {
+	Path string // the test file
+	Name string // the test's name
+	For  string // the acceptance item or surviving mutant the test answers
+}
+
+// NewTestOutcome is what Go saw in five runs of one NewTest on each tree; true is a pass.
+type NewTestOutcome struct {
+	Test   NewTest
+	Base   [5]bool // every run must fail
+	Change [5]bool // every run must pass
+}
+
+// CheckNewTest rejects a test that passes on the base, fails on the change, or disagrees with itself across runs.
+func CheckNewTest(o NewTestOutcome) error
+
+// Signoff is the Tester's accepted pass.
+type Signoff struct {
+	Tree      string // tree hash of the work under test
+	TestsHash string // hash of every test file at that tree, the Tester's own included
+}
+
+// TestsHash hashes the path and content of every test file, in path order.
+func TestsHash(files map[string][]byte) string
+
+// Voided reports whether a test file changed since the sign-off, which reopens the Tester.
+func (s Signoff) Voided(testsHash string) bool
+```
+
+| Outcome of `CheckNewTest` | Meaning |
+|---|---|
+| nil | Five failures on the base and five passes on the change: the test proves the change. |
+| error `not_red` | A run passed on the base: the test proves nothing about the change. |
+| error `not_green` | A run failed on the change: the change breaks what the test states. |
+| error `flaky` | The five runs on one tree disagree: the test is unstable. |
+
+A test that returns an error is listed in `TesterVerdict.BadTests`. [TODO: whether the tests that pass `CheckNewTest` are kept in the landed commit, and in which folder ([G-311](#g-311))]
+
+#### Deep checks
+
+Go runs the deep checks at the end of the group's turn, with no model call: after the Tester's sign-off, or after the mechanical checks for a group that gets no Tester. The race detector runs for every group; fuzzing, mutation and benchmarks run from `med_high` upward. These shapes are the design.
+
+```go
+// DeepKind names one deep check.
+type DeepKind string
+
+const (
+	DeepRace     DeepKind = "race"     // the language's race detector over the impact set
+	DeepFuzz     DeepKind = "fuzz"     // random inputs against the changed functions
+	DeepMutation DeepKind = "mutation" // deliberate edits to the changed lines
+	DeepBench    DeepKind = "bench"    // the changed packages' benchmarks
+)
+
+// MutantStatus is what became of one mutant.
+type MutantStatus string
+
+const (
+	MutantKilled     MutantStatus = "killed"     // a test failed
+	MutantSurvived   MutantStatus = "survived"   // every test passed
+	MutantResolved   MutantStatus = "resolved"   // a Tester-written test killed it on the rerun
+	MutantUnresolved MutantStatus = "unresolved" // it survived the Tester's tests; Go records it
+)
+
+// Mutant is one deliberate edit to a changed line.
+type Mutant struct {
+	File   string       `json:"file"`
+	Line   int          `json:"line"`
+	Edit   string       `json:"edit"` // what changed, such as "< to <="
+	Status MutantStatus `json:"status"`
+}
+
+// DeepResult is the outcome of one deep check.
+type DeepResult struct {
+	Kind    DeepKind `json:"kind"`
+	Pass    bool     `json:"pass"`
+	Output  string   `json:"output,omitempty"`  // exact command output, capped like a gate result (12.3)
+	Mutants []Mutant `json:"mutants,omitempty"` // mutation only
+}
+
+// DeepPlan returns the deep checks that a risk level adds, in the order Go runs them.
+func DeepPlan(l RiskLevel) []DeepKind
+```
+
+`RiskLevel` is defined in [14.3](#143-data-model). A surviving mutant goes to the Tester as an item; the Tester writes a test for it, Go runs the test as a `NewTest`, and Go runs the mutation again. A mutant that survives the Tester's tests is `unresolved`: Go records it in the run record and the pull request body. The Tester never decides that a mutant is equivalent to the original. [TODO: the tool that makes mutants for each language, how fuzz targets are chosen, the benchmark threshold, and what a failed race, fuzz or benchmark run does ([G-310](#g-310))]
+
 ### 13.4 Interfaces
 
 ```go
@@ -11660,12 +11807,19 @@ type CheckDone struct {
 type Tester interface {
 	// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
 	Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error)
+	// Replay runs each evidence run of a passed item and reports those whose exit code or excerpt does not reproduce.
+	Replay(ctx context.Context, run CommandRunner, r ItemResult) ([]EvidenceRun, error)
 	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, or leaves evidence empty.
 	AcceptResult(tasks, items []string, r TesterResult) error
 }
 
 // AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
 func AdjudicateItem(reruns [2]bool) RerunOutcome
+
+// Deep runs the deep checks of a plan on the work under test and returns one result per check.
+type Deep interface {
+	Run(ctx context.Context, run CommandRunner, plan []DeepKind) ([]DeepResult, error)
+}
 
 // Checker runs the mechanical checks on the work under test.
 type Checker interface {
@@ -11687,12 +11841,14 @@ func CaseCollisions(paths []string) [][]string
 
 `CommandRunner` is defined in [12.4](#124-interfaces); for the checks and the Tester it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`. A step that judges only by exit code, `done_when`, the task gate and the Tester rerun, treats `ErrOutputOverLimit` as no error and uses the exit code; every step that parses the output fails on it.
 
-`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Each language's profile file in `embed/langs` names, per build tool, the command that prints its JUnit XML report. Gradle, Maven and pytest ship one; a language or a test command with none leaves a failing test of that language blocking as unclassifiable.
+`NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline, base coverage and lint base, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command and the command that prints its JUnit XML report. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Each language's profile file in `embed/langs` names, per build tool, the command that prints its JUnit XML report. Gradle, Maven and pytest ship one; a language or a test command with none leaves a failing test of that language blocking as unclassifiable.
 
 | Function | On failure |
 |---|---|
 | `Tester.Rerun` | An item with no `Cmd` is never rerun and its failure is never confirmed: `Rerun` returns `RerunUnconfirmed`. A command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking. |
 | `Tester.AcceptResult` | A skipped or repeated task identifier or acceptance item, or an item the group does not have, returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
+| `Tester.Replay` | Returns the evidence runs that did not reproduce; the item is listed in `Unreplayed` and the pass is not accepted. A command that cannot start returns the error and the item counts as `env`. |
+| `Deep.Run` | An error means a check could not run, such as a sandbox refusal; the group does not pass and is blocked `setup` naming the check. |
 | `AdjudicateItem`, `ClassifyFailure`, `Baseline.Classify`, `ImpactSet`, `CaseCollisions` | Cannot fail. A test absent from the baseline is `ok` when it passes and `new` when it fails. |
 | `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass and is blocked `setup` naming the step. |
 
@@ -11704,6 +11860,9 @@ func CaseCollisions(paths []string) [][]string
 | Task Manager | `Checker.Check` | First step of Test and Review, before any model session |
 | Task Manager | `Tester.AcceptResult` | The Tester's final call arrives |
 | Task Manager | `Tester.Rerun` | The result holds a failed item that has a command |
+| Task Manager | `Tester.Replay` | The result holds a passed item with evidence |
+| Task Manager | `CheckNewTest` | After the replays, for each test the Tester wrote |
+| Task Manager | `Deep.Run` | The end of the group's turn, with `DeepPlan` of its risk level |
 | Task Manager | `DestroySandboxInstance()` | The Cleanup Handler closes the group through `CloseTaskGroup()` |
 
 ### 13.5 Behaviour
@@ -11727,11 +11886,13 @@ sequenceDiagram
   else clean result
     G->>T: 4 clean
     T->>A: 5 start the session with the brief
-    A->>X: 6 run item commands
+    A->>X: 6 run item commands, write tests
     A->>T: 7 final call, items and tasks
     T->>G: 8 AcceptResult
     G->>X: 9 rerun each failed item twice
-    G->>T: 10 verdict
+    G->>X: 10 replay each pass, run the new tests
+    G->>X: 11 deep checks
+    G->>T: 12 verdict
   end
 ```
 
@@ -11740,11 +11901,13 @@ sequenceDiagram
 3. Go runs the mechanical checks (below) in the container.
 4. A failure returns the result with each failing step's exact output. A clean result continues at edge 5.
 5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither the Tester nor the Reviewer starts. On a clean result it starts the Tester's session with the brief, and the Reviewer at the same moment ([14.5](#145-behaviour)).
-6. The Tester runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in the Tester's sandbox, the same way as a rerun; the model never writes the command. `run` (classes `build` and `test`) stays for any other command.
-7. It ends with one final call: a pass or fail with evidence for every item, and `confirmed` or `not_confirmed` for every task identifier.
+6. The Tester runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in the Tester's sandbox, the same way as a rerun; the model never writes the command. `run` (classes `build` and `test`) stays for any other command. For an edge case the items do not cover, it writes a test with `write_test`.
+7. It ends with one final call: a pass or fail for every item, with one `{cmd, exit, excerpt}` run for each command behind the answer, and `confirmed` or `not_confirmed` for every task identifier.
 8. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item.
 9. Go reruns every failed item that has a command, twice, in the same container, and judges it with `AdjudicateItem`.
-10. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour).
+10. Go replays the evidence of every passed item with `Tester.Replay` and runs each test the Tester wrote through `CheckNewTest`. An item whose replay does not reproduce is `unreplayed`, and a test that breaks the rules is a bad test.
+11. Go runs the deep checks of the group's risk level ([Running the deep checks](#running-the-deep-checks)).
+12. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour). When `Pass` is true, it stamps the sign-off.
 
 After every return, the Builder's revised work passes through the checks again, and the Tester reruns every item. `test` is not a command: a group that needs another pass, for example after a hand fix in its worktree, continues with `komodo run (id)`, which picks up at the group's current stage.
 
@@ -11792,6 +11955,8 @@ The checks are the first step of the Tester's turn. They cost no model tokens: G
 
 | Step | Rule |
 |---|---|
+| `build` | The repository profile's `build` command (`go build ./...` for Go) must succeed on the work under test; a failure carries the compiler's exact output. |
+| `lint` | The profile's `lint` command runs on the changed packages and on the base commit's files, once per tree hash; only problems the base lacks fail (`NewLintProblems`), so old lint debt never blocks. |
 | `done_when` | Every task's completion command is rerun in the sandbox on the work under test. |
 | `scope` | Every changed file is in the effective file list or is a test sibling (`OutOfScope`). |
 | `secrets` | The diff's added lines are scanned with the guard's secret-content patterns, the list guard row G4 uses ([Task Manager](#11-task-manager)). |
@@ -11806,7 +11971,7 @@ Every step runs even after another fails, so one return names every failure. A s
 **📐 In what order do the checks run**
 ```mermaid
 flowchart LR
-  D["Read the diff: collision, scope, secrets"] -->|"1"| R["Run in the sandbox: completion commands, impact-set tests"]
+  D["Read the diff: collision, scope, secrets"] -->|"1"| R["Run in the sandbox: build, lint, completion commands, impact-set tests"]
   R -->|"2 failing tests"| B["Compare with the baseline"]
   B -->|"3 regressions"| F["Rerun each failure twice"]
   F -->|"4 verdicts"| C["Run the coverage command"]
@@ -11816,7 +11981,7 @@ flowchart LR
 Edge N is the output of step N.
 
 1. Case collision, scope and secrets read only the diff, inline in Go.
-2. The completion commands and the impact-set tests run in parallel inside the sandbox's process cap.
+2. The build, the lint, the completion commands and the impact-set tests run in parallel inside the sandbox's process cap.
 3. `Baseline.Classify` compares each test with the base.
 4. Each failing test is rerun twice alone; results are never read from a cache, so the second rerun is never a copy of the first.
 5. The coverage command runs last, once, and is skipped once a blocking regression is confirmed.
@@ -11938,6 +12103,71 @@ The default commands write their data files to a temporary place and remove them
 
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
 
+#### Evidence replay
+
+The Tester is a gate: Go accepts its pass only with evidence Go can run again. The Tester never gives Go a claim without a command.
+
+**📐 How Go accepts a Tester pass**
+```mermaid
+flowchart TD
+  P["Tester passes an item"] -->|"1"| E{"Evidence runs listed?"}
+  E -->|"2 no"| R["Result rejected"]
+  E -->|"3 yes"| G{"Go replays each run"}
+  G -->|"4 same exit and excerpt"| OK["Item accepted"]
+  G -->|"5 different"| U["Item unreplayed: no pass"]
+```
+
+1. A passed item must list at least one `{cmd, exit, excerpt}` run; an empty list fails `AcceptResult` like a missing item.
+2. Go replays each run's `cmd` through `sh -c` in the Tester's sandbox, the way `run_check` runs an item's command.
+3. A run reproduces when the replay's exit code equals `exit` and every line of `excerpt` appears in the replay's output.
+4. An item with a run that does not reproduce is listed in `TesterVerdict.Unreplayed`, and the verdict is not `Pass`. [TODO: what follows an unreplayed pass or a bad test: a restart of the Tester as after a dispute, or a return to the Builder ([G-312](#g-312))]
+
+```go
+// Replay runs each evidence run again and returns the runs that did not reproduce.
+func (t *tester) Replay(ctx context.Context, run CommandRunner, r ItemResult) ([]EvidenceRun, error) {
+	var bad []EvidenceRun
+	for _, e := range r.Evidence {
+		code, out, err := run(ctx, e.Cmd)
+		if err != nil && !errors.Is(err, ErrOutputOverLimit) {
+			return nil, err
+		}
+		if code != e.Exit || !hasLines(out, e.Excerpt) { // hasLines: every excerpt line is a line of out
+			bad = append(bad, e)
+		}
+	}
+	return bad, nil
+}
+```
+
+#### The Tester's own tests and the sign-off
+
+1. The Tester reads the acceptance items and the diff, blind, and writes edge-case tests that the Builder did not think of with `write_test`. Each test is listed in the final call with the item it answers.
+2. Go runs each test five times on the base commit and five times on the change. `CheckNewTest` accepts it only when all ten runs agree with its role: five failures on the base, five passes on the change. A flaky or one-sided test is a bad test.
+3. When the verdict passes, the Task Manager records a `Signoff`: the tree hash and `TestsHash` over every test file, the Tester's own included.
+4. After the sign-off the Builder cannot edit a test file. Go compares `TestsHash` of each later tree; a different value voids the sign-off, reopens the Tester and returns the group through the same path as a Tester return, so the retry budget bounds the loop.
+
+The Builder's fast checks run live while it works: the repository's build, lint and its own tests through `run`, and the task gate. Go runs them again in the mechanical checks, so the Tester and the Reviewer judge only what already builds, lints and passes.
+
+#### Running the deep checks
+
+`DeepPlan` maps a risk level to the checks: the race detector for every level, and fuzzing, mutation and benchmarks for `med_high`, `high` and `critical`. Go runs them in the Tester's sandbox with no model call.
+
+```go
+// DeepPlan returns the deep checks that a risk level adds, in the order Go runs them.
+func DeepPlan(l RiskLevel) []DeepKind {
+	plan := []DeepKind{DeepRace}
+	if l.Rank() >= RiskMedHigh.Rank() {
+		plan = append(plan, DeepFuzz, DeepMutation, DeepBench)
+	}
+	return plan
+}
+```
+
+1. Go runs each check of the plan and keeps its `DeepResult`.
+2. Mutation edits each changed line in a copy, runs the impact set against it and marks the mutant `killed` or `survived`.
+3. Every survivor goes to the Tester as an item. The Tester writes a test for it, `CheckNewTest` accepts the test, and Go repeats the mutation run. A mutant the new test kills is `resolved`.
+4. A mutant that still survives is `unresolved`. Go records it in the run record and the pull request body; the Tester never judges it equivalent.
+
 ### 13.6 State
 
 The Tester keeps no state of its own. The group's runtime state ([State Manager](#10-state-manager)) holds the Tester's restart count, its dispute count and each item's state.
@@ -11957,7 +12187,7 @@ stateDiagram-v2
   Confirmed --> [*]: 10 returns to the Builder
 ```
 
-After 4 the item reaches the Builder. After 8 the group is blocked `tester`; after 9, `flaky`. `Passed` and `Unconfirmed` end the item with nothing to do.
+After 4 the item reaches the Builder. After 8 the group is blocked `tester`; after 9, `flaky`. `Passed` and `Unconfirmed` end the item with nothing to do. A `Passed` item counts only once Go's replay reproduces its evidence, and the group's `Signoff` is saved in its runtime state with the verdict.
 
 ### 13.7 Invariants and Failures
 
@@ -11968,6 +12198,11 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 4. No command of the Tester can change the Builder's worktree or its `.git` entry; the sandbox receives the work under test and the Tester's sandbox holds the git folder read-only, so a check reads history and no command writes it.
 5. A Tester brief holds 0 bytes of the Builder's prose.
 6. A failed item with no command never blocks.
+7. A Tester pass counts only when Go's replay reproduces the evidence behind every passed item.
+8. A test the Tester wrote counts only when it failed on the base commit and passed on the change in all of its runs.
+9. After the Tester's sign-off no test file changes without voiding it and reopening the Tester.
+10. The Tester never sees the Builder's reasoning, and never decides that a mutant is equivalent.
+11. A `build` or `lint` failure returns the group to the Builder before the Tester or the Reviewer starts.
 
 **Failure rows**
 
@@ -11984,6 +12219,11 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
 | A completion command fails in the checks | `Checker.Check` | Return to the Builder with the exact output; no model call; the return limit | Blocked when returns are spent |
 | A scope, secret scan or case-collision step fails | `Checker.Check` | Return to the Builder naming the file or location; the return limit | Blocked when returns are spent |
+| The build fails, or the change adds a lint problem | `Checker.Check` | Return to the Builder with the compiler or lint output; no model call; the return limit | Blocked when returns are spent |
+| A passed item's evidence does not replay | `Tester.Replay` | The item is `unreplayed` and the verdict is not `Pass`; what follows is [G-312](#g-312) | Open |
+| A Tester-written test passes on the base, fails on the change or flakes | `CheckNewTest` | The test is a bad test and the verdict is not `Pass`; what follows is [G-312](#g-312) | Open |
+| A test file changes after the sign-off | `Signoff.Voided` | Void the sign-off and reopen the Tester; spends one retry | Blocked `retries` when none is left |
+| A mutant survives the Tester's tests | `Deep.Run` | Recorded `unresolved` in the run record and the pull request body; 0 | Never blocks |
 | Regression against the baseline | `Baseline.Classify` | Return to the Builder with the test's output; spends one retry | Blocked `retries` when none is left |
 | A check step cannot run | `Checker.Check` | Stop naming the step; 0 | Blocked `setup` |
 | Coverage tool missing for the language | Coverage step | Fail naming the language; 0 | Return to the Builder |
