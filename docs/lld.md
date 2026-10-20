@@ -6090,6 +6090,9 @@ type PlanSource interface {
 type EpicGit interface {
 	BranchExists(ctx context.Context, clone, branch string) (bool, error)  // true when the branch exists locally or on the remote
 	CreateBranch(ctx context.Context, clone, branch, base string) error    // cuts a komodo/ branch from the base branch's fetched tip
+	DefaultBranch(ctx context.Context, dir, remote string) (string, error) // the branch the remote's HEAD names
+	UpstreamRemote(ctx context.Context, dir, branch string) (string, bool, error) // the remote a local branch tracks; false when none
+	FetchBranch(ctx context.Context, dir, remote, branch string) error     // fetches one remote branch into its remote-tracking reference
 }
 
 // EpicCommitter is the Commit Handler as the Runtime Manager uses it at run start.
@@ -6378,7 +6381,7 @@ When the group continues, the next Builder session's brief says so and lists tho
 
 Before any Task Manager starts, the Runtime Manager makes sure the epic's branch holds the plan.
 1. At run start, the Runtime Manager checks whether `komodo/<epic>` exists, locally or on the remote, through `EpicGit.BranchExists`.
-2. When it is missing, the Runtime Manager creates it from the base branch through `EpicGit.CreateBranch`.
+2. When it is missing, the Runtime Manager resolves the base branch and remote as the Commit Handler does (15.5, Base branch), fetches the base branch with `EpicGit.FetchBranch`, and creates the epic branch from the remote-tracking reference `refs/remotes/<remote>/<base>` through `EpicGit.CreateBranch`. It never creates or moves the person's local base branch and checks nothing out; a failed fetch refuses the run.
 3. The Runtime Manager then asks the Commit Handler to commit the epic's task lists, from `docs/backlog/`, onto it as its first commit and to push it (`Commit.SaveLists`, [15.5](#155-behaviour)).
 4. Only then do Task Managers cut group branches from the epic tip.
 
@@ -13177,7 +13180,7 @@ flowchart TB
 
 #### Base branch
 
-The base branch is the value of `commit.base_branch`; when it is empty, it is the remote's default branch at its fetched tip. `Publish` runs a fetch of that branch before step 5 and fails with kind `base_missing` when the remote has no such branch. A group's branch starts from the tip of its epic's branch. When the epic branch is missing at run start, the Runtime Manager creates it from the base branch, and `SaveLists` commits the epic's task lists onto it as its first commit and pushes it ([7.5](#75-behaviour)), so every group starts with the plan and all landed work.
+The base branch is the value of `commit.base_branch`; when it is empty, it is the remote's default branch at its fetched tip. `Publish` runs a fetch of that branch before step 5 and fails with kind `base_missing` when the remote has no such branch. A group's branch starts from the tip of its epic's branch. When the epic branch is missing at run start, the Runtime Manager creates it from the fetched tip of the base branch on the remote, and `SaveLists` commits the epic's task lists onto it as its first commit and pushes it ([7.5](#75-behaviour)), so every group starts with the plan and all landed work.
 
 ### 15.6 State
 
