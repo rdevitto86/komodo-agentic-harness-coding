@@ -251,6 +251,63 @@ func TestASetupBlockerWaitsOneTwoThenFourMinutesAndTheFourthIsAStall(t *testing.
 	}
 }
 
+// A setup failure in the sandbox reaches the engine as a blocked escalation from a live Task Manager, not as a start error.
+func TestASandboxSetupFailureFromALiveTaskManagerWaitsAndTheGroupRetriesWithANewOne(t *testing.T) {
+	var tms atomic.Int64
+
+	r := newRig(t, [][]string{{"tg-1"}}, withClock, func(r *rig) {
+		r.tasks.script = func(string) func(*tmEnv) {
+			if tms.Add(1) > 1 {
+				return happy
+			}
+
+			return func(e *tmEnv) {
+				defer close(e.out)
+				for {
+					select {
+					case c := <-e.cmds:
+						switch c.Kind {
+						case task.CmdStop:
+							return
+						case task.CmdStart:
+							e.send(task.Message{
+								Kind: task.MsgEscalate,
+								Escalation: &task.Escalation{
+									ID:     "esc",
+									Group:  e.spec.ID,
+									Kind:   task.EscBlocked,
+									Reason: "setup",
+									Detail: mustJSON(map[string]string{"error": "go mod download: exit 1", "role": "builder"}),
+								},
+							})
+						}
+					case <-e.ctx.Done():
+						return
+					}
+				}
+			}
+		}
+	})
+
+	if err := r.startRun("run-1", "tg-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	until(t, "the setup block to wait", func() bool { return r.streakOf("tg-1") == 1 && r.stageOf("tg-1") == StageBlocked })
+	time.Sleep(100 * time.Millisecond)
+
+	if n := r.ev.count(bus.TypeRunFailure, "stalled"); n != 0 {
+		t.Fatalf("%d stalled events while the group waits its minute", n)
+	}
+	if got := r.tasks.startedCount("g-tg-1"); got != 1 {
+		t.Fatalf("%d Task Managers started before the wait ended, want 1", got)
+	}
+
+	r.clock.Advance(time.Minute)
+	until(t, "a second Task Manager after the wait", func() bool { return r.tasks.startedCount("g-tg-1") == 2 })
+	until(t, "the group past its block", func() bool { return r.stageOf("tg-1") != StageBlocked })
+}
+
 func TestAWaitEndingOnARefusedRetrySaveReportsTheStallAndCountsNoActiveGroup(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1"}}, withClock)
 	r.tasks.failFor["g-tg-1"] = errors.New("worktree: disk full")
