@@ -308,10 +308,13 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 		return Result{}, gitFail(err)
 	}
 
+	// A landing that later groups have built on was rechecked when it landed; the tip is no longer its tree.
 	wasPaused := turn.Paused()
-	if err := p.recheck(ctx, turn, true); err != nil {
-		freed = true
-		return Result{}, err
+	if !already || head == p.landedID(ls) {
+		if err := p.recheck(ctx, turn, true); err != nil {
+			freed = true
+			return Result{}, err
+		}
 	}
 
 	turn.Finish(true)
