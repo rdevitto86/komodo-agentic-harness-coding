@@ -14,8 +14,8 @@ type epicPush struct {
 }
 
 // settleEpicsLocked starts one push for each epic of the run that has gone quiet with more groups landed than its last push
-// covered, and reports whether a push is running, so the run does not end before it. An epic is quiet when none of its groups
-// works, waits for a start or can still start: each is done, failed, blocked or lost.
+// covered, and reports whether a push is running, so the run does not end before it. An epic is quiet when none of its
+// groups works, waits for a start or can still start: each is done, failed, blocked or lost.
 func (m *Manager) settleEpicsLocked(r *run) bool {
 	if m.d.Commits == nil {
 		return false

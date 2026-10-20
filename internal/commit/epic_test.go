@@ -41,7 +41,8 @@ func TestPushEpicAfterThreeGroupsPushesOnceAndOpensOnePullRequest(t *testing.T) 
 		t.Fatal(err)
 	}
 	if !res.Pushed || !res.Last || !res.PRNew || res.PRURL != "https://github.com/acme/shop/pull/41" ||
-		res.Branch != "komodo/ep-1" || res.Head != w.localTip() || strings.Join(res.Landed, ",") != strings.Join(groups, ",") {
+		res.Branch != "komodo/ep-1" || res.Head != w.localTip() ||
+		strings.Join(res.Landed, ",") != strings.Join(groups, ",") {
 		t.Fatalf("result = %+v", res)
 	}
 	if w.pushes() != 1 || w.gh.count("pr create") != 1 || w.gh.count("pr edit") != 0 {

@@ -10,7 +10,7 @@ import (
 // handler's own fact struct to its subtype.
 type (
 	publishDoneEvent struct{ commit.Result }
-	cleanupStartEvt struct{ cleanup.StartedFact }
+	cleanupStartEvt  struct{ cleanup.StartedFact }
 	cleanupDoneEvt   struct{ cleanup.Report }
 	discardedEvt     struct{ cleanup.DiscardedFact }
 )

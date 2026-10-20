@@ -50,6 +50,13 @@ func (g *EpicGates) Lock(ctx context.Context, epic string) (*Turn, error) {
 	return g.enter(ctx, epic, &waiter{anyPause: true, ready: make(chan struct{})})
 }
 
+// Paused reports whether a failed recheck holds the epic.
+func (g *EpicGates) Paused(epic string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gate(epic).pausedBy != ""
+}
+
 // gate returns the epic's gate, creating it; the caller holds the lock.
 func (g *EpicGates) gate(epic string) *epicGate {
 	if g.epics == nil {
@@ -144,13 +151,6 @@ func (g *EpicGates) enter(ctx context.Context, epic string, w *waiter) (*Turn, e
 	}
 
 	return nil, ctx.Err()
-}
-
-// Paused reports whether a failed recheck holds the epic.
-func (g *EpicGates) Paused(epic string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.gate(epic).pausedBy != ""
 }
 
 // queued returns how many groups wait for the epic's turn.

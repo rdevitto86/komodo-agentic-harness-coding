@@ -101,7 +101,8 @@ func TestPublishThreeGroupsLandLocallyWithoutAPush(t *testing.T) {
 	if len(w.clean.calls) != 3 || len(w.clean.epics) != 0 {
 		t.Fatalf("cleanup: %d group calls, %d epic calls", len(w.clean.calls), len(w.clean.epics))
 	}
-	if c := w.clean.calls[2]; c.Into != "komodo/ep-1" || c.Landed != w.localTip() || c.Branch != "komodo/ep-1-tg-1.3" || c.Tip == "" {
+	if c := w.clean.calls[2]; c.Into != "komodo/ep-1" || c.Landed != w.localTip() ||
+		c.Branch != "komodo/ep-1-tg-1.3" || c.Tip == "" {
 		t.Fatalf("published = %+v", c)
 	}
 	if git(t, w.clone, "rev-parse", w.clean.calls[0].Tip+"^{tree}") == "" {
@@ -378,7 +379,7 @@ func TestPublishConcurrentGroupsLandInArrivalOrder(t *testing.T) {
 	}
 }
 
-// A remote with no epic branch yet, as when the task lists were committed locally, still takes the landing; nothing is pushed.
+// A remote with no epic branch yet, as after a local task-list commit, still allows the landing; nothing is pushed.
 func TestPublishWithNoRemoteEpicBranch(t *testing.T) {
 	w := newWorld(t)
 	git(t, w.clone, "push", "origin", "--delete", "komodo/ep-1")

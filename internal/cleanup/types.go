@@ -23,7 +23,7 @@ type Published struct {
 	Into   string `json:"into,omitempty"`
 }
 
-// PublishedEpic says that an epic's branch and pull request are on the remote, so its landing worktree and local branch may go.
+// PublishedEpic says that an epic's branch and pull request are on the remote, so its landing worktree and branch may go.
 type PublishedEpic struct {
 	Epic     string `json:"epic"`              // epic folder name, such as ep-1
 	Remote   string `json:"remote"`            // remote that received the push

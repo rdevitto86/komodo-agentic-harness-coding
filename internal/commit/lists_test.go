@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// SaveLists commits the epic's task lists onto the local epic branch as a new commit and pushes nothing; a repeat adds nothing.
+// SaveLists commits the epic's task lists onto the local epic branch and pushes nothing; a repeat adds nothing.
 func TestSaveListsCommitsLocallyAndPushesNothing(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
