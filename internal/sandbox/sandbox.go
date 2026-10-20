@@ -35,6 +35,9 @@ type Spec struct {
 	MaxMemGB   int      // sandbox.max_mem_gb
 	Role       string   // builder or tester; picks the mechanism
 	Network    bool     // true only for the group's setup command
+
+	SetupReadable []string // host folders mounted or opened read-only while Network is true
+	SetupEnv      []string // NAME=value variables only a command with Network true gets
 }
 
 // Instance is one created sandbox.
@@ -298,5 +301,7 @@ func cloneSpec(s Spec) Spec {
 	s.Writable = slices.Clone(s.Writable)
 	s.Toolchains = slices.Clone(s.Toolchains)
 	s.Masked = slices.Clone(s.Masked)
+	s.SetupReadable = slices.Clone(s.SetupReadable)
+	s.SetupEnv = slices.Clone(s.SetupEnv)
 	return s
 }
