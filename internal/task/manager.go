@@ -654,23 +654,43 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 	}
 
 	if len(setup) > 0 {
-		out, exit, err := m.runIn(ctx, inst.ID, setup, filepath.Join(m.tmp, role+"-setup"))
-		if err != nil || exit != 0 {
-			detail := map[string]string{"role": role, "output": out}
-			if err != nil {
-				detail["error"] = err.Error()
-			}
-			if fix := m.setupFix(spec, out); fix != "" {
-				detail["fix"] = fix
-			}
-			return "", block("setup", detail)
-		}
-		if err := m.c.Sandboxes.EndSetup(ctx, inst.ID); err != nil {
-			return "", block("setup", map[string]string{"error": err.Error(), "role": role})
+		if err := m.runSetup(ctx, role, inst.ID, spec, setup); err != nil {
+			m.discardInstance(ctx, role, inst.ID)
+			return "", err
 		}
 	}
 
 	return inst.ID, nil
+}
+
+// runSetup runs the setup command in a new instance and then turns its network off; a failure is a setup block.
+func (m *Manager) runSetup(ctx context.Context, role, id string, spec sandbox.Spec, setup []string) error {
+	out, exit, err := m.runIn(ctx, id, setup, filepath.Join(m.tmp, role+"-setup"))
+	if err != nil || exit != 0 {
+		detail := map[string]string{"role": role, "output": out}
+		if err != nil {
+			detail["error"] = err.Error()
+		}
+		if fix := m.setupFix(spec, out); fix != "" {
+			detail["fix"] = fix
+		}
+		return block("setup", detail)
+	}
+	if err := m.c.Sandboxes.EndSetup(ctx, id); err != nil {
+		return block("setup", map[string]string{"error": err.Error(), "role": role})
+	}
+
+	return nil
+}
+
+// discardInstance destroys an instance whose setup failed and forgets it, so the next call makes a new one and reruns setup.
+func (m *Manager) discardInstance(ctx context.Context, role, id string) {
+	m.mu.Lock()
+	delete(m.instances, role)
+	delete(m.insts, role)
+	m.mu.Unlock()
+
+	_ = m.c.Sandboxes.DestroySandboxInstance(context.WithoutCancel(ctx), id) // the setup error is what the group is told
 }
 
 // runIn runs one command in an instance and returns its capped output and exit code.

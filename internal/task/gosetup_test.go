@@ -109,6 +109,37 @@ func TestAModuleFailureInSetupCarriesTheFixLine(t *testing.T) {
 	}
 }
 
+func TestAFailedSetupDestroysItsInstanceAndTheNextCallRunsSetupOnANewOne(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	flaky := []string{"sh", "-c", "if [ -e " + marker + " ]; then exit 0; fi; touch " + marker + "; exit 1"}
+	r, _ := goSetupRig(t, "go", flaky, true)
+
+	_, err := r.m.instance(context.Background(), "builder")
+
+	var be *blockErr
+	if !errors.As(err, &be) || be.reason != "setup" {
+		t.Fatalf("error %v, want a setup block", err)
+	}
+	if !slices.Equal(r.be.released, []string{"inst-1"}) {
+		t.Fatalf("destroyed instances %v after a failed setup, want [inst-1]", r.be.released)
+	}
+
+	id, err := r.m.instance(context.Background(), "builder")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if id != "inst-2" || len(r.be.prepared) != 2 {
+		t.Fatalf("instance %q and %d prepared, want a new instance inst-2 and 2 prepared", id, len(r.be.prepared))
+	}
+	if !r.be.prepared[1].Network {
+		t.Fatal("the retry's instance was made without the network its setup needs")
+	}
+	if again, _ := r.m.instance(context.Background(), "builder"); again != id {
+		t.Fatalf("a finished setup made %q on the next call, want %q reused", again, id)
+	}
+}
+
 func TestAnUnrelatedSetupFailureCarriesNoFixLine(t *testing.T) {
 	r, _ := goSetupRig(t, "go", []string{"sh", "-c", "echo out of disk; exit 1"}, true)
 

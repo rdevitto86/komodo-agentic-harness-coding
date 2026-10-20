@@ -277,7 +277,7 @@ func TestASandboxSetupFailureFromALiveTaskManagerWaitsAndTheGroupRetriesWithANew
 									Group:  e.spec.ID,
 									Kind:   task.EscBlocked,
 									Reason: "setup",
-									Detail: mustJSON(map[string]string{"error": "go mod download: exit 1", "role": "builder"}),
+									Detail: mustJSON(map[string]string{"error": "go mod download: exit 1"}),
 								},
 							})
 						}
