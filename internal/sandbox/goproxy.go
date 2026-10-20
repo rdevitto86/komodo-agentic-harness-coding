@@ -7,27 +7,27 @@ import (
 	"strings"
 )
 
-// GoSetupAccess returns what a Go setup command may read and the variables it gets so the person's download cache serves as
-// a file proxy ahead of the host proxy. Both are empty when the cache folder is missing or its path cannot be a proxy list
-// item.
-func GoSetupAccess(modules, hostProxy, hostPrivate string) ([]string, []string) {
+// GoSetupEnv returns the variables a Go setup command gets so the person's download cache, inside the module cache the spec
+// already makes readable, serves as a file proxy ahead of the host proxy. It is nil when the cache folder is missing or its
+// path cannot be a proxy list item.
+func GoSetupEnv(modules, hostProxy, hostPrivate string) []string {
 	if modules == "" || !filepath.IsAbs(modules) {
-		return nil, nil
+		return nil
 	}
 
 	dl := filepath.Join(modules, "cache", "download")
 	if fi, err := os.Stat(dl); err != nil || !fi.IsDir() {
-		return nil, nil
+		return nil
 	}
 	if strings.ContainsAny(dl, ",|:\n\r\x00") {
-		return nil, nil
+		return nil
 	}
 	if hostProxy == "" {
 		hostProxy = "https://proxy.golang.org"
 	}
 
 	// Private modules skip the public checksum database; the repo's go.sum still verifies them.
-	return []string{dl}, []string{
+	return []string{
 		"GOPROXY=" + fileURL(dl) + "," + hostProxy,
 		"GONOPROXY=",
 		"GOPRIVATE=",

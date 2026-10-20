@@ -14,27 +14,6 @@ import (
 	"time"
 )
 
-func TestSeatbeltProfileOpensTheDownloadCacheForReadsOnly(t *testing.T) {
-	s := fakeSpec()
-	s.Network = true
-	s.SetupReadable = []string{"/Users/dev/go/pkg/mod/cache/download"}
-
-	p := seatbeltProfile(mustRules(t, s), "/Users/dev")
-	reads := strings.Index(p, "(allow file-read* (subpath")
-	writes := strings.Index(p, `(allow file-write* (subpath "/dev/null")`)
-	if reads < 0 || writes < 0 || !strings.Contains(p[reads:writes], `"/Users/dev/go/pkg/mod/cache/download"`) {
-		t.Fatalf("the read list lacks the download cache:\n%s", p)
-	}
-	if strings.Contains(p[writes:], "cache/download") {
-		t.Fatalf("the write rules hold the download cache:\n%s", p)
-	}
-
-	s.Network = false
-	if strings.Contains(seatbeltProfile(mustRules(t, s), "/Users/dev"), "cache/download") {
-		t.Fatal("the download cache stays open after setup")
-	}
-}
-
 func TestSeatbeltSetupDownloadsFromTheHostCacheLive(t *testing.T) {
 	if os.Getenv("KOMODO_TEST_SANDBOX_EXEC") == "" {
 		t.Skip("set KOMODO_TEST_SANDBOX_EXEC=1 to run real sandbox-exec commands")
@@ -83,12 +62,12 @@ func TestSeatbeltSetupDownloadsFromTheHostCacheLive(t *testing.T) {
 	}
 
 	s.Toolchains = []string{strings.TrimSpace(string(goroot))}
-	s.Modules = ""
+	s.Modules = hostMod
 	s.Network = true
-	s.SetupReadable, s.SetupEnv = GoSetupAccess(hostMod, "off", "example.com/priv/*")
+	s.SetupEnv = GoSetupEnv(hostMod, "off", "example.com/priv/*")
 
-	if len(s.SetupReadable) != 1 {
-		t.Fatalf("no setup access for %s", hostMod)
+	if len(s.SetupEnv) == 0 {
+		t.Fatalf("no setup variables for %s", hostMod)
 	}
 
 	m := NewManager(map[string]Backend{RoleBuilder: NewSeatbelt(SeatbeltOptions{Home: root})}, nil)
@@ -116,7 +95,7 @@ func TestSeatbeltSetupDownloadsFromTheHostCacheLive(t *testing.T) {
 		return string(out), err
 	}
 
-	dl := s.SetupReadable[0]
+	dl := filepath.Join(hostMod, "cache", "download")
 	if out, err := run("/bin/sh", "-c", "ls "+dl); err != nil {
 		t.Errorf("the host download cache must be readable during setup: %v %s", err, out)
 	}
@@ -134,9 +113,6 @@ func TestSeatbeltSetupDownloadsFromTheHostCacheLive(t *testing.T) {
 	}
 	if out, err := run("go", "build", "-buildvcs=false", "./..."); err != nil {
 		t.Errorf("the build after setup must pass offline: %v\n%s", err, out)
-	}
-	if out, err := run("/bin/sh", "-c", "ls "+dl); err == nil {
-		t.Errorf("the host download cache must close after setup: %s", out)
 	}
 }
 

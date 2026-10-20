@@ -337,7 +337,7 @@ Each agent role in the registry names its model and its chain of links, subscrip
 
 #### 8.3 Security
 
-Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default. Commands run in a sandbox with no network except what the task needs; a Go repository's setup command also reads the person's module download cache read-only, so private modules need no credentials. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
+Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default. Commands run in a sandbox with no network except what the task needs; a Go repository's setup command also uses the person's module download cache as a file proxy, so private modules need no credentials. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
 
 #### 8.4 Quality Gates
 

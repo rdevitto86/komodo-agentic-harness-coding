@@ -102,12 +102,6 @@ func newRules(s Spec) (rules, error) {
 
 	r.Readable = append(r.Readable, r.Toolchains...)
 	if s.Network {
-		setup, err := cleanAll("setup read-only path", s.SetupReadable)
-		if err != nil {
-			return rules{}, err
-		}
-
-		r.Readable = append(r.Readable, setup...)
 		r.Env = slices.Clone(s.SetupEnv)
 	}
 

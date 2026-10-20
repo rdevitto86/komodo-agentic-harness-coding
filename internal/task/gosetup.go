@@ -36,14 +36,14 @@ func (m *Manager) withGoSetupAccess(ctx context.Context, spec sandbox.Spec) sand
 	}
 
 	proxy, private := hostGoEnv(ctx)
-	spec.SetupReadable, spec.SetupEnv = sandbox.GoSetupAccess(m.c.Plan.Modules, proxy, private)
+	spec.SetupEnv = sandbox.GoSetupEnv(m.c.Plan.Modules, proxy, private)
 	return spec
 }
 
 // setupFix returns the line that tells the person how to fill the download cache when a Go setup failed on a module it does
 // not hold, or an empty string otherwise.
 func (m *Manager) setupFix(spec sandbox.Spec, output string) string {
-	if len(spec.SetupReadable) == 0 {
+	if len(spec.SetupEnv) == 0 {
 		return ""
 	}
 

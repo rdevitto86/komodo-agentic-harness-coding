@@ -44,8 +44,8 @@ func TestAGoSetupCommandGetsTheHostDownloadCacheAsAFileProxy(t *testing.T) {
 
 	dl := filepath.Join(mod, "cache", "download")
 	got := r.be.prepared[0]
-	if !got.Network || !slices.Equal(got.SetupReadable, []string{dl}) {
-		t.Fatalf("spec network %v readable %v, want the download cache %s", got.Network, got.SetupReadable, dl)
+	if !got.Network || got.Modules != mod {
+		t.Fatalf("spec network %v modules %q, want the module cache %s that holds %s", got.Network, got.Modules, mod, dl)
 	}
 
 	for _, want := range []string{
@@ -65,7 +65,7 @@ func TestSetupWithoutAHostDownloadCacheRunsAsBefore(t *testing.T) {
 	}
 
 	got := r.be.prepared[0]
-	if !got.Network || len(got.SetupReadable) != 0 || len(got.SetupEnv) != 0 {
+	if !got.Network || len(got.SetupEnv) != 0 {
 		t.Fatalf("spec %+v", got)
 	}
 }
@@ -75,7 +75,7 @@ func TestOnlyAGoRepoSetupGetsTheDownloadCache(t *testing.T) {
 	if _, err := r.m.instance(context.Background(), "builder"); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.be.prepared[0]; len(got.SetupReadable) != 0 || len(got.SetupEnv) != 0 {
+	if got := r.be.prepared[0]; len(got.SetupEnv) != 0 {
 		t.Fatalf("a rust repo's spec %+v", got)
 	}
 
@@ -85,7 +85,7 @@ func TestOnlyAGoRepoSetupGetsTheDownloadCache(t *testing.T) {
 	if _, err := r.m.instance(context.Background(), "builder"); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.be.prepared[0]; got.Network || len(got.SetupReadable) != 0 || len(got.SetupEnv) != 0 {
+	if got := r.be.prepared[0]; got.Network || len(got.SetupEnv) != 0 {
 		t.Fatalf("a repo with no setup command has spec %+v", got)
 	}
 }

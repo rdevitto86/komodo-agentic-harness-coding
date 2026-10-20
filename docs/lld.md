@@ -9492,8 +9492,7 @@ type Spec struct {
 	Role       string   // builder or tester; picks the mechanism
 	Network    bool     // true only for the group's setup command
 
-	SetupReadable []string // host folders mounted or opened read-only while Network is true
-	SetupEnv      []string // NAME=value variables only a command with Network true gets
+	SetupEnv []string // NAME=value variables only a command with Network true gets
 }
 
 // Instance is one created sandbox.
@@ -9528,7 +9527,7 @@ type Backend interface {
 }
 ```
 
-Notes on `Spec`: every mechanism exposes the git folder read-only (Seatbelt and Bubblewrap allow reads and no writes, and a container mounts it read-only), so a check can read history and only the Commit Handler writes git. `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable; the Task Manager refreshes the list through `SetMasked` before each command, and a container hides only the files that existed when it was made. `Command` refuses a masked file that exists now and was not mounted over, or whose file on the host was replaced since the mount (a different device or inode); a listed file that does not exist is ignored. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed. `SetupReadable` and `SetupEnv` take effect only while `Network` is true: the mechanism opens each folder read-only (a container mounts it `:ro`) and adds each variable, and both are gone for every later command (Go setup, 11.5).
+Notes on `Spec`: every mechanism exposes the git folder read-only (Seatbelt and Bubblewrap allow reads and no writes, and a container mounts it read-only), so a check can read history and only the Commit Handler writes git. `ReadOnly` always holds `<Worktree>/.git`, so a confined command cannot rewrite the pointer to the git folder (11.5). Module and registry caches (`GOMODCACHE`, the cargo registry, the npm cache) are read-only so a test cannot patch a dependency a later step trusts, while build caches such as `GOCACHE` stay writable in the instance's private cache. `Masked` files are unreadable; the Task Manager refreshes the list through `SetMasked` before each command, and a container hides only the files that existed when it was made. `Command` refuses a masked file that exists now and was not mounted over, or whose file on the host was replaced since the mount (a different device or inode); a listed file that does not exist is ignored. `Network` is off for every command except the group's `commands.setup`; loopback is always allowed. `SetupEnv` takes effect only while `Network` is true: the mechanism adds each variable, and the variables are gone for every later command (Go setup, 11.5).
 
 The command environment holds only `PATH`, `HOME` (the instance's temporary folder), `TMPDIR`, `LANG`, `RUSTUP_HOME` and the cache variables, plus the tag `KOMODO_SANDBOX_CMD` that names the command to the sandbox. `PATH` is the detected toolchain folders in detection order, then the system folders.
 
@@ -10545,12 +10544,12 @@ Connection and safety rules:
 1. Check `Backend.Check`; on failure escalate `blocked`, reason `setup`, naming the fix. When the Tester's Docker check fails, use the operating-system backend, report `sandbox.fallback`, and escalate only if that backend fails too.
 2. Build the `Spec`: the worktree, `.git` read-only, the instance's private temporary folder and build cache, read-only module caches, toolchain folders, the masked secret files, and the process and memory caps.
 3. Call `Backend.Prepare`. A container mechanism creates the container with network on for the setup command only.
-4. Run `commands.setup` with `Network` true, then turn the network off. This is the only network time an instance has.
+4. Run `commands.setup` with `Network` true, then turn the network off. This is the only network time an instance has. A setup that fails destroys its instance, so the retry creates a new one and runs setup again.
 5. Every `run` calls `Manager.Command`. `DestroySandboxInstance` runs at `CloseTaskGroup` or when the group is stopped; it is safe to call twice.
 
-**Go setup.** The instance has no GitHub login, so `go mod download` cannot fetch a private module. For a Go repository the setup command, and only it, reads the person's Go download cache as a file proxy, with the public proxy behind it:
-- The Task Manager sets `SetupReadable` to `$(go env GOMODCACHE)/cache/download`: Seatbelt and Bubblewrap allow reads only, and Docker mounts it `:ro`. Docker cannot unmount it, so the folder stays visible, read-only, for the container's life; the network is cut and the variables below are gone after setup.
-- When that folder does not exist, `SetupReadable` and `SetupEnv` stay empty and setup runs as it did before.
+**Go setup.** The instance has no GitHub login, so `go mod download` cannot fetch a private module. For a Go repository the setup command, and only it, gets the variables that make the person's Go download cache a file proxy, with the public proxy behind it:
+- The cache is `$(go env GOMODCACHE)/cache/download`, inside `Spec.Modules`, which every command already reads read-only on all three mechanisms (Seatbelt and Bubblewrap allow reads only, and Docker mounts it `:ro`). Only the variables below and the network end with setup.
+- When that folder does not exist, `SetupEnv` stays empty and setup runs as it did before.
 - The instance gets no token, no git credential helper and no `~/.gitconfig`; the repository's `go.sum` still verifies every module.
 
 ```text
@@ -15128,7 +15127,7 @@ Komodo keeps its files in two places and never inside the repository's working t
 | `context/skills/`, `context/connections.json` | Local skills and tool-server connections a person added; the shipped ones are embedded | [6. Context Manager](#6-context-manager) |
 | `leases/<repo-id>/<group-id>.json`, `leases/<repo-id>/<group-id>.lock` | Which group owns each branch and worktree: one small JSON file per lease, written to a temporary name and renamed into place, plus a lock file that expires after a timeout if a crash leaves it | [9. Lease Manager](#9-lease-manager) |
 | `wt/<repo-id>/<group>/` | One worktree per group, outside every clone | [11. Task Manager](#11-task-manager) creates it; [16. Cleanup Handler](#16-cleanup-handler) removes it |
-| `cache/lang/<repo-id>/` | Komodo's own language and build caches per repository, never the person's; the one exception is the person's Go download cache, read-only during setup (11.5) | [8. Cache Manager](#8-cache-manager) ([G-215](#g-215)) |
+| `cache/lang/<repo-id>/` | Komodo's own language and build caches per repository, never the person's; the one exception is the person's Go module cache, read-only for every command (11.5) | [8. Cache Manager](#8-cache-manager) ([G-215](#g-215)) |
 | `state/engine.sock` | The engine's private control socket; only this user can open it, and it exists only while the engine runs | [7. Runtime Manager](#7-runtime-manager) |
 | `events/engine.jsonl` | The machine event log: events that name no run, one JSON line each, appended before the broadcast; never trimmed | [4. Event Bus](#4-event-bus) |
 | `events/runs.json` | The run-to-folder map: where each run's event log lives | [4. Event Bus](#4-event-bus) |
@@ -15521,7 +15520,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-294"></a>G-294 | Error handling | Whether the per-group waits (1, 2 and 4 minutes) and the global pause waits should be tuned from the error counts by type; they are engine constants until then | Owner decision after counts are collected | [7](#7-runtime-manager) |
 | <a id="g-295"></a>G-295 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 9.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
 | <a id="g-296"></a>G-296 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-tester), [14](#14-reviewer) |
-| <a id="g-297"></a>G-297 | Sandbox | Private registries for npm, cargo and Python: their setup commands have no credentials and no cache fallback, because only Go setup reads the person's download cache | Owner decision | [11](#11-task-manager) |
+| <a id="g-297"></a>G-297 | Sandbox | Private registries for npm, cargo and Python: their setup commands have no credentials and no cache fallback, because only Go setup gets a file proxy on the person's download cache | Owner decision | [11](#11-task-manager) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 

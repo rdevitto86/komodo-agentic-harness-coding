@@ -20,14 +20,10 @@ func hostCache(t *testing.T) string {
 	return mod
 }
 
-func TestGoSetupAccessPointsTheFileProxyAtTheDownloadCache(t *testing.T) {
+func TestGoSetupEnvPointsTheFileProxyAtTheDownloadCache(t *testing.T) {
 	mod := hostCache(t)
-	read, env := GoSetupAccess(mod, "https://proxy.golang.org,direct", "github.com/rdevitto86/*,example.com/x")
-
+	env := GoSetupEnv(mod, "https://proxy.golang.org,direct", "github.com/rdevitto86/*,example.com/x")
 	dl := filepath.Join(mod, "cache", "download")
-	if len(read) != 1 || read[0] != dl {
-		t.Fatalf("readable %v, want [%s]", read, dl)
-	}
 
 	want := []string{
 		"GOPROXY=file://" + dl + ",https://proxy.golang.org,direct",
@@ -41,9 +37,9 @@ func TestGoSetupAccessPointsTheFileProxyAtTheDownloadCache(t *testing.T) {
 	}
 }
 
-func TestGoSetupAccessDefaultsTheHostProxy(t *testing.T) {
+func TestGoSetupEnvDefaultsTheHostProxy(t *testing.T) {
 	mod := hostCache(t)
-	_, env := GoSetupAccess(mod, "", "")
+	env := GoSetupEnv(mod, "", "")
 	if !contains(env, "GOPROXY=file://"+filepath.Join(mod, "cache", "download")+",https://proxy.golang.org") {
 		t.Fatalf("env %v", env)
 	}
@@ -52,51 +48,40 @@ func TestGoSetupAccessDefaultsTheHostProxy(t *testing.T) {
 	}
 }
 
-func TestGoSetupAccessEscapesTheCachePath(t *testing.T) {
+func TestGoSetupEnvEscapesTheCachePath(t *testing.T) {
 	mod := filepath.Join(realPath(t, t.TempDir()), "my cache")
 	if err := os.MkdirAll(filepath.Join(mod, "cache", "download"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	_, env := GoSetupAccess(mod, "", "")
+	env := GoSetupEnv(mod, "", "")
 	if !strings.Contains(env[0], "my%20cache") {
 		t.Fatalf("GOPROXY %q does not escape the space", env[0])
 	}
 }
 
-func TestGoSetupAccessIsEmptyWithoutAHostCache(t *testing.T) {
+func TestGoSetupEnvIsEmptyWithoutAHostCache(t *testing.T) {
 	missing := filepath.Join(realPath(t, t.TempDir()), "nothing")
 	for _, mod := range []string{"", missing} {
-		if read, env := GoSetupAccess(mod, "", ""); read != nil || env != nil {
-			t.Errorf("module cache %q gave %v %v", mod, read, env)
+		if env := GoSetupEnv(mod, "", ""); env != nil {
+			t.Errorf("module cache %q gave %v", mod, env)
 		}
 	}
 }
 
-func TestNewRulesAddsSetupAccessOnlyWhileTheNetworkIsOn(t *testing.T) {
-	mod := hostCache(t)
-	read, env := GoSetupAccess(mod, "", "")
+func TestNewRulesAddsSetupEnvOnlyWhileTheNetworkIsOn(t *testing.T) {
+	env := GoSetupEnv(hostCache(t), "", "")
 	s := fakeSpec()
-	s.SetupReadable, s.SetupEnv = read, env
+	s.SetupEnv = env
 
-	off := mustRules(t, s)
-	if contains(off.Readable, read[0]) || len(off.Env) != 0 {
-		t.Fatalf("network off: readable %v env %v", off.Readable, off.Env)
+	if off := mustRules(t, s); len(off.Env) != 0 {
+		t.Fatalf("network off: env %v", off.Env)
 	}
 
 	s.Network = true
 
-	on := mustRules(t, s)
-	if !contains(on.Readable, read[0]) || len(on.Env) != len(env) {
-		t.Fatalf("network on: readable %v env %v", on.Readable, on.Env)
-	}
-}
-
-func TestSetupReadableFollowsTheSamePathChecks(t *testing.T) {
-	s := fakeSpec()
-	s.Network, s.SetupReadable = true, []string{"relative/cache"}
-	if _, err := newRules(s); err == nil {
-		t.Fatal("a relative setup path must be refused")
+	if on := mustRules(t, s); len(on.Env) != len(env) {
+		t.Fatalf("network on: env %v", on.Env)
 	}
 }
 
@@ -117,11 +102,11 @@ func TestEnvCarriesTheSetupVariablesOnlyOnline(t *testing.T) {
 	}
 }
 
-func TestSetupAccessEndsWithTheNetwork(t *testing.T) {
+func TestSetupEnvEndsWithTheNetwork(t *testing.T) {
 	m, be, _, _ := fakeManager()
 	s := testSpec(t, RoleBuilder)
 	s.Network = true
-	s.SetupReadable, s.SetupEnv = GoSetupAccess(hostCache(t), "", "")
+	s.SetupEnv = GoSetupEnv(hostCache(t), "", "")
 
 	inst, err := m.CreateSandboxInstance(context.Background(), s)
 	if err != nil {
@@ -130,7 +115,7 @@ func TestSetupAccessEndsWithTheNetwork(t *testing.T) {
 	if _, err := m.Command(context.Background(), inst.ID, Command{Argv: []string{"true"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := be.commanded[len(be.commanded)-1]; len(got.SetupReadable) != 1 || len(got.SetupEnv) == 0 || !got.Network {
+	if got := be.commanded[len(be.commanded)-1]; len(got.SetupEnv) == 0 || !got.Network {
 		t.Fatalf("the setup command's spec %+v", got)
 	}
 	if err := m.EndSetup(context.Background(), inst.ID); err != nil {
@@ -144,7 +129,7 @@ func TestSetupAccessEndsWithTheNetwork(t *testing.T) {
 	}
 
 	r := mustRules(t, be.commanded[len(be.commanded)-1])
-	if len(r.Env) != 0 || contains(r.Readable, s.SetupReadable[0]) {
-		t.Fatalf("a later command keeps the setup access: readable %v env %v", r.Readable, r.Env)
+	if len(r.Env) != 0 {
+		t.Fatalf("a later command keeps the setup variables: env %v", r.Env)
 	}
 }
