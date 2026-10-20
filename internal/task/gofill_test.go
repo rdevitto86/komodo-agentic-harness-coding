@@ -17,8 +17,8 @@ type fillCall struct {
 	instances int
 }
 
-// fillRig returns a rig whose host download is recorded and answers with fail; goMod and modules choose what the worktree and
-// the spec hold.
+// fillRig returns a rig whose host download is recorded and answers with fail; goMod and modules choose what the worktree
+// and the spec hold.
 func fillRig(t *testing.T, goMod, modules bool, fail error) (*pipeRig, *[]fillCall) {
 	t.Helper()
 

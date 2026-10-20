@@ -14,8 +14,8 @@ const (
 	truncMarker          = "\n... output cut ...\n" // truncMarker replaces the middle of an output that was cut.
 )
 
-// CommandRunner runs one command in the sandbox and returns its exit code and whole output; output past the runner's limit is
-// an error.
+// CommandRunner runs one command in the sandbox and returns its exit code and whole output; output past the runner's limit
+// is an error.
 type CommandRunner func(ctx context.Context, command string) (exit int, output string, err error)
 
 // TaskRef names the task being finished.
