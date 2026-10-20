@@ -307,8 +307,8 @@ func TestPushEpicCleanupErrorKeepsTheResult(t *testing.T) {
 	}
 }
 
-// After an engine restart forgets a pause, a group that landed but is not Done (its last recheck failed) keeps the pull request
-// from opening, though the branch is pushed.
+// After an engine restart forgets a pause, a group that landed but is not Done (its last recheck failed) keeps the pull
+// request from opening, though the branch is pushed.
 func TestPushEpicOpensNoPullRequestOverAGroupThatIsNotDone(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()

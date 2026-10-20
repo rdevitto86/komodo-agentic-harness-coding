@@ -12,7 +12,12 @@ import (
 func repoWith(t *testing.T, file, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "T"}} {
+	setup := [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "T"},
+	}
+	for _, args := range setup {
 		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}

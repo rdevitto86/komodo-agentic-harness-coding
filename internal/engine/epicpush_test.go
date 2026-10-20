@@ -41,6 +41,21 @@ func TestEpicIsPushedOnceAfterItsLastGroup(t *testing.T) {
 	}
 }
 
+// advanceUntilRunEnds moves the fake clock past each retry wait until the run publishes run-complete.
+func advanceUntilRunEnds(t *testing.T, r *rig) {
+	t.Helper()
+
+	end := time.Now().Add(20 * time.Second)
+	for r.ev.count(bus.TypeRunComplete, "done") == 0 {
+		r.clock.Advance(time.Minute)
+		time.Sleep(20 * time.Millisecond)
+
+		if time.Now().After(end) {
+			t.Fatal("the run never ended")
+		}
+	}
+}
+
 // retryable is a push error the Commit Handler marks as worth repeating.
 func retryable(call int) error {
 	return &commit.PublishError{Kind: commit.KindPush, Retryable: true, Err: errors.New("network down")}
@@ -60,12 +75,7 @@ func TestRetryablePushFailureIsRetriedBeforeTheRunEnds(t *testing.T) {
 	if err := r.startRun("run-1", "tg-1.1"); err != nil {
 		t.Fatal(err)
 	}
-	for end := time.Now().Add(20 * time.Second); r.ev.count(bus.TypeRunComplete, "done") == 0; time.Sleep(20 * time.Millisecond) {
-		r.clock.Advance(time.Minute)
-		if time.Now().After(end) {
-			t.Fatal("the run never ended")
-		}
-	}
+	advanceUntilRunEnds(t, r)
 
 	if n := len(r.commits.pushes()); n != 3 {
 		t.Fatalf("%d push tries, want 3", n)
@@ -84,12 +94,7 @@ func TestPushThatKeepsFailingEndsTheRunBlocked(t *testing.T) {
 	if err := r.startRun("run-1", "tg-1.1"); err != nil {
 		t.Fatal(err)
 	}
-	for end := time.Now().Add(20 * time.Second); r.ev.count(bus.TypeRunComplete, "done") == 0; time.Sleep(20 * time.Millisecond) {
-		r.clock.Advance(time.Minute)
-		if time.Now().After(end) {
-			t.Fatal("the run never ended")
-		}
-	}
+	advanceUntilRunEnds(t, r)
 
 	if n := len(r.commits.pushes()); n != PushTries {
 		t.Fatalf("%d push tries, want %d", n, PushTries)
@@ -121,7 +126,8 @@ func TestUnretryablePushFailureIsNotRetried(t *testing.T) {
 func TestEpicCleanupErrorStillPublishesThePush(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1.1"}})
 	r.commits.result = commit.EpicResult{
-		Branch: "komodo/ep-1", Pushed: true, Last: true, PRURL: "https://github.com/acme/shop/pull/41", CleanupError: "fetch failed",
+		Branch: "komodo/ep-1", Pushed: true, Last: true, CleanupError: "fetch failed",
+		PRURL: "https://github.com/acme/shop/pull/41",
 	}
 
 	if err := r.startRun("run-1", "tg-1.1"); err != nil {
@@ -129,7 +135,8 @@ func TestEpicCleanupErrorStillPublishesThePush(t *testing.T) {
 	}
 	until(t, "run-complete done", func() bool { return r.ev.count(bus.TypeRunComplete, "done") == 1 })
 
-	if r.ev.count(bus.TypeRunStatus, "epic.pushed") != 1 || r.ev.count(bus.TypeRunStatus, "pr.opened") != 1 || r.errs.Load() != 1 {
+	pushed, opened := r.ev.count(bus.TypeRunStatus, "epic.pushed"), r.ev.count(bus.TypeRunStatus, "pr.opened")
+	if pushed != 1 || opened != 1 || r.errs.Load() != 1 {
 		t.Fatalf("epic.pushed %d, pr.opened %d, errors %d", r.ev.count(bus.TypeRunStatus, "epic.pushed"),
 			r.ev.count(bus.TypeRunStatus, "pr.opened"), r.errs.Load())
 	}
