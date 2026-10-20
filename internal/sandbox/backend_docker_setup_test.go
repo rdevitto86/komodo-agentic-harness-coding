@@ -35,6 +35,9 @@ func TestDockerSetupSeesTheModuleCacheReadOnlyAndSetsTheProxy(t *testing.T) {
 		return cmd.Args
 	}
 
+	if indexOf(exec(), "-e", "GOMODCACHE="+s.Modules) < 0 {
+		t.Fatalf("the exec does not point Go at the mounted module cache: %v", exec())
+	}
 	if args := exec(); indexOf(args, "-e", "GONOPROXY=") < 0 || indexOf(args, "-e", "GIT_TERMINAL_PROMPT=0") < 0 {
 		t.Fatalf("the setup exec lacks the proxy variables: %v", args)
 	}

@@ -93,6 +93,23 @@ func TestEnvDefaultsLangAndLeavesPathToTheContainer(t *testing.T) {
 	}
 }
 
+func TestEnvPointsGoAtTheReadOnlyModuleCache(t *testing.T) {
+	s := fakeSpec()
+	r := mustRules(t, s)
+	for _, container := range []bool{false, true} {
+		env := buildEnv(r, Command{Env: []string{"GOMODCACHE=/writable/mod"}}, container)
+		if !contains(env, "GOMODCACHE="+s.Modules) || contains(env, "GOMODCACHE=/writable/mod") {
+			t.Errorf("container %v: env %v lacks GOMODCACHE=%s", container, env, s.Modules)
+		}
+	}
+
+	s.Modules = ""
+	env := buildEnv(mustRules(t, s), Command{Env: []string{"GOMODCACHE=/own/mod"}}, false)
+	if !contains(env, "GOMODCACHE=/own/mod") {
+		t.Errorf("without a module cache a command keeps its own GOMODCACHE: %v", env)
+	}
+}
+
 func TestSeatbeltProfileOrdersItsRules(t *testing.T) {
 	s := fakeSpec()
 	p := seatbeltProfile(mustRules(t, s), "/Users/dev")
