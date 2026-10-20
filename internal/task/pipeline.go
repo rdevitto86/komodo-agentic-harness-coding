@@ -556,7 +556,7 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 		if err := m.saveDirty(ctx); err != nil {
 			return err
 		}
-		if fails, err := m.runChecks(ctx); err != nil {
+		if fails, err := m.runChecks(ctx, m.runner("tester")); err != nil {
 			return err
 		} else if len(fails) > 0 {
 			return m.rework(ctx, fails)
@@ -618,8 +618,8 @@ func (m *Manager) dirtyWork(ctx context.Context) (string, error) {
 	return m.c.Git.ReadOnly(ctx, m.spec.Lease, "status", []string{"--porcelain"})
 }
 
-// runChecks runs the mechanical checks in the tester's sandbox and returns the failures, each with its exact output.
-func (m *Manager) runChecks(ctx context.Context) ([]string, error) {
+// runChecks runs the mechanical checks through a runner and returns the failures, each with its exact output.
+func (m *Manager) runChecks(ctx context.Context, run agent.CommandRunner) ([]string, error) {
 	if m.c.Checks == nil {
 		return nil, nil
 	}
@@ -641,7 +641,7 @@ func (m *Manager) runChecks(ctx context.Context) ([]string, error) {
 
 	res, err := m.c.Checks.Check(
 		ctx,
-		m.runner("tester"),
+		run,
 		agent.CheckInput{
 			Group:    m.spec.Group,
 			Base:     m.c.Base,

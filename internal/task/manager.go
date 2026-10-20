@@ -587,7 +587,8 @@ func (m *Manager) nextID(prefix string) string {
 	return prefix + "-" + m.tag + "-" + strconv.FormatInt(m.ids.Add(1), 10)
 }
 
-// instance returns the sandbox instance of a role, creating it and running the setup command on first use.
+// instance returns the sandbox instance of a role, creating it and running the setup command on first use. The group owns it
+// until CloseTaskGroup; a group that closed hands out none, so no instance outlives it.
 func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 	m.mu.Lock()
 	if id := m.instances[role]; id != "" {
@@ -595,25 +596,52 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 		return id, nil
 	}
 	m.mu.Unlock()
-	if m.c.Sandboxes == nil {
-		return "", block("setup", map[string]string{"error": "no sandbox manager is set"})
-	}
 
-	root, err := m.sandboxDir()
+	inst, err := m.newInstance(ctx, role, role)
 	if err != nil {
 		return "", err
 	}
 
-	tmp := filepath.Join(root, role)
+	m.mu.Lock()
+	if m.closing.Load() {
+		m.mu.Unlock()
+		m.destroyInstance(ctx, inst.ID)
+		return "", errors.New("the group is closed, so it makes no sandbox instance")
+	}
+	if id := m.instances[role]; id != "" { // a concurrent call made the instance first
+		m.mu.Unlock()
+		m.destroyInstance(ctx, inst.ID)
+		return id, nil
+	}
+
+	m.instances[role], m.insts[role] = inst.ID, inst
+	m.mu.Unlock()
+
+	return inst.ID, nil
+}
+
+// newInstance creates an instance for a role and runs the setup command in it; the caller owns the instance and must destroy
+// it. The slot names its temporary and setup log folders; a failed setup destroys the instance.
+func (m *Manager) newInstance(ctx context.Context, role, slot string) (sandbox.Instance, error) {
+	if m.c.Sandboxes == nil {
+		return sandbox.Instance{}, block("setup", map[string]string{"error": "no sandbox manager is set"})
+	}
+
+	root, err := m.sandboxDir()
+	if err != nil {
+		return sandbox.Instance{}, err
+	}
+
+	tmp := filepath.Join(root, slot)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return "", fmt.Errorf("make the sandbox temporary folder: %w", err)
+		return sandbox.Instance{}, fmt.Errorf("make the sandbox temporary folder: %w", err)
 	}
 
 	build := m.c.Plan.Build
 	if build == "" {
 		build = filepath.Join(root, role+"-build")
 		if err := os.MkdirAll(build, 0o755); err != nil {
-			return "", fmt.Errorf("make the build cache folder: %w", err)
+			return sandbox.Instance{}, fmt.Errorf("make the build cache folder: %w", err)
 		}
 	}
 
@@ -632,17 +660,13 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 	}
 	spec = m.withGoSetupAccess(ctx, spec)
 	if err := m.fillGoModules(ctx, role, spec); err != nil {
-		return "", err
+		return sandbox.Instance{}, err
 	}
 
 	inst, err := m.c.Sandboxes.CreateSandboxInstance(ctx, spec)
 	if err != nil {
-		return "", block("setup", map[string]string{"error": err.Error(), "role": role})
+		return sandbox.Instance{}, block("setup", map[string]string{"error": err.Error(), "role": role})
 	}
-
-	m.mu.Lock()
-	m.instances[role], m.insts[role] = inst.ID, inst
-	m.mu.Unlock()
 
 	if inst.Fallback {
 		m.fact(
@@ -658,12 +682,12 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 
 	if len(setup) > 0 {
 		if err := m.runSetup(ctx, role, inst.ID, spec, setup); err != nil {
-			m.discardInstance(ctx, role, inst.ID)
-			return "", err
+			m.destroyInstance(ctx, inst.ID)
+			return sandbox.Instance{}, err
 		}
 	}
 
-	return inst.ID, nil
+	return inst, nil
 }
 
 // sandboxDir returns the folder that holds the sandbox folders of every role, making it on first use.
@@ -704,14 +728,10 @@ func (m *Manager) runSetup(ctx context.Context, role, id string, spec sandbox.Sp
 	return nil
 }
 
-// discardInstance destroys an instance whose setup failed and forgets it, so the next call makes a new one and reruns setup.
-func (m *Manager) discardInstance(ctx context.Context, role, id string) {
-	m.mu.Lock()
-	delete(m.instances, role)
-	delete(m.insts, role)
-	m.mu.Unlock()
-
-	_ = m.c.Sandboxes.DestroySandboxInstance(context.WithoutCancel(ctx), id) // the setup error is what the group is told
+// destroyInstance destroys an instance the call that made it will not use; it ignores the error and the cancelled context,
+// because the caller already holds a more useful one.
+func (m *Manager) destroyInstance(ctx context.Context, id string) {
+	_ = m.c.Sandboxes.DestroySandboxInstance(context.WithoutCancel(ctx), id)
 }
 
 // runIn runs one command in an instance and returns its result; the reply holds the output whole up to limit bytes.
@@ -737,12 +757,27 @@ func (m *Manager) runIn(ctx context.Context, id string, argv []string, logDir st
 // the whole output; past the check output cap it returns the exit code, the head and tail of the output and an error that
 // wraps agent.ErrOutputOverLimit.
 func (m *Manager) runner(role string) agent.CommandRunner {
+	return m.runnerOf(
+		role,
+		func() string {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.instances[role]
+		},
+	)
+}
+
+// runnerOn returns a command runner bound to one instance the caller owns, outside the instances of the roles.
+func (m *Manager) runnerOn(name, id string) agent.CommandRunner {
+	return m.runnerOf(name, func() string { return id })
+}
+
+// runnerOf returns a command runner that looks the instance up on each command; name labels the missing-instance error.
+func (m *Manager) runnerOf(name string, find func() string) agent.CommandRunner {
 	return func(ctx context.Context, command string) (int, string, error) {
-		m.mu.Lock()
-		id := m.instances[role]
-		m.mu.Unlock()
+		id := find()
 		if id == "" {
-			return -1, "", fmt.Errorf("the %s has no sandbox instance", role)
+			return -1, "", fmt.Errorf("the %s has no sandbox instance", name)
 		}
 
 		argv, ok := m.c.Commands[command]

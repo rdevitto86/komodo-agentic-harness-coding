@@ -34,7 +34,7 @@ func (r *recheckSlot) take() (pass bool, out string, ok bool) {
 	return pass, out, ok
 }
 
-// groupChecker runs the free checks of a landing through the group's Task Manager, in the group's tester sandbox.
+// groupChecker runs the free checks of a landing through the group's Task Manager, in a sandbox made for the recheck.
 type groupChecker struct {
 	ref      *groupRef
 	worktree string // the group's own worktree

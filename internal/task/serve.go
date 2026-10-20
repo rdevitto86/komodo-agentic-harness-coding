@@ -200,7 +200,7 @@ const (
 	CmdContinue CommandKind = "continue" // an answer, a timer grant or a wake-up
 	CmdStop     CommandKind = "stop"     // cancel live sessions and end
 	CmdNudge    CommandKind = "nudge"    // add the token-cap nudge to each live session
-	CmdRecheck  CommandKind = "recheck"  // run the free checks on the epic tip in the group's container
+	CmdRecheck  CommandKind = "recheck"  // run the free checks on the epic tip in a fresh container
 )
 
 // The message kinds.
@@ -367,17 +367,22 @@ func (m *Manager) Serve(ctx context.Context, ch Channels) error {
 	}
 }
 
-// Recheck runs the mechanical checks in the group's tester sandbox and hands the verdict to OnRecheck.
+// Recheck runs the mechanical checks in a sandbox instance made now, after the landing, so its mounts show the epic tip, and
+// destroys the instance when the checks end. It hands the verdict to OnRecheck.
 func (m *Manager) Recheck(ctx context.Context) {
 	if m.c.OnRecheck == nil {
 		return
 	}
-	if _, err := m.instance(ctx, "tester"); err != nil {
+
+	inst, err := m.newInstance(ctx, "tester", "recheck")
+	if err != nil {
 		m.c.OnRecheck(false, err.Error())
 		return
 	}
 
-	fails, err := m.runChecks(ctx)
+	defer m.destroyInstance(ctx, inst.ID)
+
+	fails, err := m.runChecks(ctx, m.runnerOn("recheck", inst.ID))
 	switch {
 	case err != nil:
 		m.c.OnRecheck(false, err.Error())
