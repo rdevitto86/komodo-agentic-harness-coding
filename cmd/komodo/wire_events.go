@@ -10,8 +10,7 @@ import (
 // handler's own fact struct to its subtype.
 type (
 	publishDoneEvent struct{ commit.Result }
-	prOpenedEvent    struct{ commit.Result }
-	cleanupStartEvt  struct{ cleanup.StartedFact }
+	cleanupStartEvt struct{ cleanup.StartedFact }
 	cleanupDoneEvt   struct{ cleanup.Report }
 	discardedEvt     struct{ cleanup.DiscardedFact }
 )
@@ -19,11 +18,6 @@ type (
 // EventKey binds the wrapper to run-status / publish.done.
 func (publishDoneEvent) EventKey() bus.Key {
 	return bus.Key{Type: bus.TypeRunStatus, Subtype: "publish.done"}
-}
-
-// EventKey binds the wrapper to run-status / pr.opened.
-func (prOpenedEvent) EventKey() bus.Key {
-	return bus.Key{Type: bus.TypeRunStatus, Subtype: "pr.opened"}
 }
 
 // EventKey binds the wrapper to run-status / cleanup.start.
@@ -44,7 +38,6 @@ func (discardedEvt) EventKey() bus.Key {
 // registerHandlerEvents binds the handlers' progress facts to the event registry.
 func registerHandlerEvents() {
 	bus.Register(publishDoneEvent{}.EventKey(), func() bus.Payload { return &publishDoneEvent{} })
-	bus.Register(prOpenedEvent{}.EventKey(), func() bus.Payload { return &prOpenedEvent{} })
 	bus.Register(cleanupStartEvt{}.EventKey(), func() bus.Payload { return &cleanupStartEvt{} })
 	bus.Register(cleanupDoneEvt{}.EventKey(), func() bus.Payload { return &cleanupDoneEvt{} })
 	bus.Register(discardedEvt{}.EventKey(), func() bus.Payload { return &discardedEvt{} })

@@ -384,6 +384,31 @@ type EpicPaused struct {
 // EventKey binds EpicPaused to run-status / epic.paused.
 func (EpicPaused) EventKey() Key { return Key{TypeRunStatus, "epic.paused"} }
 
+// EpicPushed is the data of run-status / epic.pushed: the epic quiet, what its local branch holds and whether it was pushed.
+type EpicPushed struct {
+	Epic   string   `json:"epic"`   // the epic label, such as ep-1
+	Branch string   `json:"branch"` // the epic branch
+	Head   string   `json:"head"`   // commit id at the local epic tip
+	Landed []string `json:"landed"` // labels of the groups landed on the local epic branch, in landing order
+	Pushed bool     `json:"pushed"` // true when this push moved the remote branch
+	Last   bool     `json:"last"`   // true when every group of the epic has landed
+}
+
+// EventKey binds EpicPushed to run-status / epic.pushed.
+func (EpicPushed) EventKey() Key { return Key{TypeRunStatus, "epic.pushed"} }
+
+// PROpened is the data of run-status / pr.opened: the epic's pull request is open after a push.
+type PROpened struct {
+	Epic   string `json:"epic"`   // the epic label
+	Branch string `json:"branch"` // the epic branch
+	Head   string `json:"head"`   // commit id at the pushed epic tip
+	PRURL  string `json:"pr_url"` // the pull request address
+	PRNew  bool   `json:"pr_new"` // true when this push opened the pull request
+}
+
+// EventKey binds PROpened to run-status / pr.opened.
+func (PROpened) EventKey() Key { return Key{TypeRunStatus, "pr.opened"} }
+
 // EpicResumed is the data of run-status / epic.resumed.
 type EpicResumed struct {
 	Epic  string `json:"epic"`  // the epic label

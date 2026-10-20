@@ -40,6 +40,8 @@ var eventNameRows = []eventNameRow{
 	{"tool.outside", Key{TypeRunStatus, "tool.outside"}, false},
 	{"epic.paused", Key{TypeRunStatus, "epic.paused"}, false},
 	{"epic.resumed", Key{TypeRunStatus, "epic.resumed"}, false},
+	{"epic.pushed", Key{TypeRunStatus, "epic.pushed"}, false},
+	{"pr.opened", Key{TypeRunStatus, "pr.opened"}, false},
 	{"timer.due", Key{TypeRunStatus, "timer.due"}, false},
 	{"lock.taken", Key{TypeRunStatus, "lock.taken"}, false},
 	{"lock.released", Key{TypeRunStatus, "lock.released"}, false},

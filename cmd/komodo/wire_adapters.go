@@ -163,7 +163,7 @@ type publishedAdapter struct {
 	landing func(epic string) string
 }
 
-// Complete cleans up one published group.
+// Complete cleans up one group that landed on the local epic branch.
 func (p publishedAdapter) Complete(ctx context.Context, pub commit.Published) error {
 	_, err := p.h.Complete(ctx, cleanup.Published{
 		Run:      string(pub.Run),
@@ -171,11 +171,21 @@ func (p publishedAdapter) Complete(ctx context.Context, pub commit.Published) er
 		Epic:     pub.Epic,
 		Branch:   pub.Branch,
 		Tip:      pub.Tip,
+		Landed:   pub.Landed,
+		Into:     pub.Into,
+		Worktree: pub.Worktree,
+	})
+
+	return err
+}
+
+// CompleteEpic cleans up an epic whose branch and pull request are on the remote.
+func (p publishedAdapter) CompleteEpic(ctx context.Context, pub commit.PublishedEpic) error {
+	_, err := p.h.CompleteEpic(ctx, cleanup.PublishedEpic{
+		Epic:     pub.Epic,
 		Remote:   pub.Remote,
 		Contains: pub.Contains,
-		Worktree: pub.Worktree,
 		Landing:  p.landing(pub.Epic),
-		EpicDone: pub.EpicDone,
 		PRURL:    pub.PRURL,
 	})
 

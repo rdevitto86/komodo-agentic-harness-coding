@@ -44,6 +44,7 @@ type run struct {
 	failed     map[string]bool   // groups that failed for good, which no run continues
 	depBlocked map[string]string // groups that wait on an abandoned dependency
 	landing    map[string]LandingPlan
+	pushes     map[string]*epicPush // each epic's push state
 	first      sync.Once
 	firstCh    chan struct{}
 	ended      bool
@@ -410,6 +411,7 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 		failed:     map[string]bool{},
 		depBlocked: map[string]string{},
 		landing:    map[string]LandingPlan{},
+		pushes:     map[string]*epicPush{},
 		firstCh:    make(chan struct{}),
 	}
 	saved := map[string]state.Record{}
@@ -871,6 +873,9 @@ func (m *Manager) checkLocked(r *run) {
 		}
 	}
 
+	if m.settleEpicsLocked(r) {
+		return
+	}
 	if len(doneIDs)+len(otherIDs) == len(r.order) {
 		r.ended = true
 		m.endRunLocked(r, &bus.RunDone{Done: orEmpty(doneIDs), Blocked: orEmpty(otherIDs)}, "done")

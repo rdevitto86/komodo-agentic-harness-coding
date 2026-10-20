@@ -129,6 +129,8 @@ func init() {
 		func() Payload { return &ToolOutside{} },
 		func() Payload { return &EpicPaused{} },
 		func() Payload { return &EpicResumed{} },
+		func() Payload { return &EpicPushed{} },
+		func() Payload { return &PROpened{} },
 		func() Payload { return &TimerDue{} },
 		func() Payload { return &CheckDone{} },
 		func() Payload { return &ProviderSkip{} },
