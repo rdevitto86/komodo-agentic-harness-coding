@@ -37,12 +37,17 @@ func TestOneEngineRunsGroupsFromTwoRepositories(t *testing.T) {
 	want := map[string]bool{"0192e4c5-7a10-7d3e-9b2f-000000000101": false, "0192e4c5-7a10-7d3e-9b2f-000000000202": false}
 	for end := time.Now().Add(90 * time.Second); ; time.Sleep(300 * time.Millisecond) {
 		evs := a.events()
+		pushed := 0
 		for _, e := range evs {
 			if _, ok := want[e.Group]; ok && e.Type == "run-status" && e.Subtype == "group.done" {
 				want[e.Group] = true
 			}
+			if e.Type == "run-status" && e.Subtype == "epic.pushed" {
+				pushed++
+			}
 		}
-		if want["0192e4c5-7a10-7d3e-9b2f-000000000101"] && want["0192e4c5-7a10-7d3e-9b2f-000000000202"] {
+		// Each epic is pushed once after its group is done, so both branches exist once both pushes are published.
+		if want["0192e4c5-7a10-7d3e-9b2f-000000000101"] && want["0192e4c5-7a10-7d3e-9b2f-000000000202"] && pushed == 2 {
 			break
 		}
 		if time.Now().After(end) {

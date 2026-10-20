@@ -277,6 +277,44 @@
       ],
       "type": "object"
     },
+    "EpicPushed": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "epic": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "landed": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "last": {
+          "type": "boolean"
+        },
+        "pushed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "epic",
+        "branch",
+        "head",
+        "landed",
+        "pushed",
+        "last"
+      ],
+      "type": "object"
+    },
     "EpicResumed": {
       "additionalProperties": false,
       "properties": {
@@ -873,6 +911,34 @@
       },
       "required": [
         "window_min"
+      ],
+      "type": "object"
+    },
+    "PROpened": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "epic": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "pr_new": {
+          "type": "boolean"
+        },
+        "pr_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "epic",
+        "branch",
+        "head",
+        "pr_url",
+        "pr_new"
       ],
       "type": "object"
     },
@@ -2159,34 +2225,6 @@
       ],
       "type": "object"
     },
-    "prOpenedEvent": {
-      "additionalProperties": false,
-      "properties": {
-        "branch": {
-          "type": "string"
-        },
-        "head": {
-          "type": "string"
-        },
-        "last": {
-          "type": "boolean"
-        },
-        "pr_new": {
-          "type": "boolean"
-        },
-        "pr_url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "branch",
-        "head",
-        "last",
-        "pr_url",
-        "pr_new"
-      ],
-      "type": "object"
-    },
     "publishDoneEvent": {
       "additionalProperties": false,
       "properties": {
@@ -2196,22 +2234,18 @@
         "head": {
           "type": "string"
         },
+        "landed": {
+          "type": "string"
+        },
         "last": {
           "type": "boolean"
-        },
-        "pr_new": {
-          "type": "boolean"
-        },
-        "pr_url": {
-          "type": "string"
         }
       },
       "required": [
         "branch",
         "head",
-        "last",
-        "pr_url",
-        "pr_new"
+        "landed",
+        "last"
       ],
       "type": "object"
     }
@@ -2716,6 +2750,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/EpicPushed"
+        },
+        "subtype": {
+          "const": "epic.pushed"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/EpicResumed"
         },
         "subtype": {
@@ -2963,7 +3010,7 @@
     {
       "properties": {
         "data": {
-          "$ref": "#/$defs/prOpenedEvent"
+          "$ref": "#/$defs/PROpened"
         },
         "subtype": {
           "const": "pr.opened"
