@@ -131,6 +131,7 @@ type Timing struct {
 	HeartbeatEvery    time.Duration
 	LoopSilentFor     time.Duration
 	EngineBeatEvery   time.Duration
+	PushRetryEvery    time.Duration
 }
 
 // filled returns t with every zero field replaced by its constant.
@@ -147,6 +148,7 @@ func (t Timing) filled() Timing {
 	def(&t.HeartbeatEvery, HeartbeatEvery)
 	def(&t.LoopSilentFor, LoopSilentFor)
 	def(&t.EngineBeatEvery, EngineBeatEvery)
+	def(&t.PushRetryEvery, PushRetryEvery)
 	return t
 }
 

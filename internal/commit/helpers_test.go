@@ -130,6 +130,7 @@ func (w *world) epicReq(groups ...string) EpicPush {
 		CommonDir:  filepath.Join(w.clone, ".git"),
 		Epic:       "ep-1",
 		EpicGroups: groups,
+		Done:       groups,
 	}
 }
 
@@ -278,7 +279,7 @@ type fakeChecker struct {
 }
 
 // Recheck pops the next queued result.
-func (f *fakeChecker) Recheck(_ context.Context, epic, worktree string) (CheckResult, error) {
+func (f *fakeChecker) Recheck(_ context.Context, epic, worktree string, _ bool) (CheckResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, worktree)
 	cb := f.onCall

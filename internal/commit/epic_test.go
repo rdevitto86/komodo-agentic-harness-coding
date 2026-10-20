@@ -287,15 +287,16 @@ func TestPushEpicForgeFailureThenRepeat(t *testing.T) {
 	}
 }
 
-// A cleanup error after the pull request comes back unchanged, and a repeat reaches the epic cleanup again.
-func TestPushEpicCleanupErrorReturned(t *testing.T) {
+// A cleanup error after the pull request opened still returns the result, with the error named in it, so the push and the
+// pull request are published; a repeat reaches the epic cleanup again.
+func TestPushEpicCleanupErrorKeepsTheResult(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
 	w.land(h, "tg-1.1", "tg-1.1")
-	boom := errors.New("cleanup boom")
-	w.clean.err = boom
-	if _, err := h.PushEpic(w.ctx, w.epicReq("tg-1.1")); !errors.Is(err, boom) {
-		t.Fatalf("err = %v", err)
+	w.clean.err = errors.New("cleanup boom")
+	res, err := h.PushEpic(w.ctx, w.epicReq("tg-1.1"))
+	if err != nil || !res.Pushed || res.PRURL == "" || res.CleanupError != "cleanup boom" {
+		t.Fatalf("result = %+v, err = %v", res, err)
 	}
 	w.clean.err = nil
 	if _, err := h.PushEpic(w.ctx, w.epicReq("tg-1.1")); err != nil {
@@ -303,6 +304,31 @@ func TestPushEpicCleanupErrorReturned(t *testing.T) {
 	}
 	if len(w.clean.epics) != 2 || w.gh.count("pr create") != 1 {
 		t.Fatalf("epic cleanups %d, forge calls %v", len(w.clean.epics), w.gh.calls())
+	}
+}
+
+// After an engine restart forgets a pause, a group that landed but is not Done (its last recheck failed) keeps the pull request
+// from opening, though the branch is pushed.
+func TestPushEpicOpensNoPullRequestOverAGroupThatIsNotDone(t *testing.T) {
+	w := newWorld(t)
+	h := w.handler()
+	w.check.results = []CheckResult{{Pass: true}, {Pass: true}, {Pass: false, Output: "FAIL"}}
+	groups := []string{"tg-1.1", "tg-1.2"}
+	w.land(h, "tg-1.1", groups...)
+	g2 := w.newGroup("tg-1.2")
+	w.work(g2, "b.txt", "broken")
+	if _, err := h.Publish(w.ctx, w.approval(g2, groups...)); !errors.Is(err, ErrRecheck) {
+		t.Fatalf("publish tg-1.2 err = %v", err)
+	}
+
+	req := w.epicReq(groups...)
+	req.Done = []string{"tg-1.1"}
+	res, err := w.handler().PushEpic(w.ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PRURL != "" || w.gh.count("pr create") != 0 || !res.Pushed || len(w.clean.epics) != 0 {
+		t.Fatalf("result = %+v; forge calls %v", res, w.gh.calls())
 	}
 }
 

@@ -826,7 +826,7 @@ func (m *Manager) checkLocked(r *run) {
 	for _, id := range r.order {
 		s := r.specs[id]
 		if r.finished[id] {
-			if r.done[id] {
+			if st := r.pushes[s.Epic]; r.done[id] && (st == nil || st.err == "") {
 				doneIDs = append(doneIDs, bus.ID(id))
 			} else {
 				otherIDs = append(otherIDs, bus.ID(id))

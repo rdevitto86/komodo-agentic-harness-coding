@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
@@ -9,8 +10,9 @@ import (
 
 // epicPush is one epic's push state in a run: the done-group count its last push covered, and whether a push is running.
 type epicPush struct {
-	covered  int  // done groups of the epic when its last push finished; -1 before any push
-	inflight bool // a push of the epic is running now
+	covered  int    // done groups of the epic when its last push finished; -1 before any push
+	inflight bool   // a push of the epic is running now
+	err      string // why the last push failed for good; empty when it succeeded
 }
 
 // settleEpicsLocked starts one push for each epic of the run that has gone quiet with more groups landed than its last push
@@ -95,28 +97,80 @@ func (m *Manager) pushEpic(r *run, epic string, n int) {
 	if p, ok := r.landingFor(epic); ok {
 		req.EpicGroups = append(req.EpicGroups, p.Order...)
 	}
+	for _, id := range r.order {
+		if s := r.specs[id]; s.Epic == epic && r.done[id] {
+			req.Done = append(req.Done, s.Label)
+		}
+	}
 	m.mu.Unlock()
 
-	res, err := m.d.Commits.PushEpic(r.ctx, req)
+	res, err := m.tryPush(r, req)
 
 	m.mu.Lock()
 	st := r.pushes[epic]
-	st.inflight, st.covered = false, n
+	st.inflight, st.covered, st.err = false, n, ""
+
+	if err != nil {
+		st.err = err.Error()
+	}
 	m.mu.Unlock()
 
 	switch {
 	case err != nil:
-		if m.d.Errors != nil {
-			m.d.Errors(r.id, "", fmt.Errorf("push epic %s: %w", epic, err))
-		}
+		m.reportPushFailure(r, epic, err)
 	default:
 		m.publishEpicPush(r, epic, res)
+		if res.CleanupError != "" && m.d.Errors != nil {
+			m.d.Errors(r.id, "", fmt.Errorf("clean up epic %s: %s", epic, res.CleanupError))
+		}
 	}
 
 	m.mu.Lock()
 	m.signalLocked()
 	m.checkLocked(r)
 	m.mu.Unlock()
+}
+
+// tryPush asks for the push up to PushTries times, waiting twice as long after each try, and stops at a failure a repeat
+// cannot fix or when the run ends.
+func (m *Manager) tryPush(r *run, req commit.EpicPush) (commit.EpicResult, error) {
+	wait := m.t.PushRetryEvery
+
+	for try := 1; ; try++ {
+		res, err := m.d.Commits.PushEpic(r.ctx, req)
+
+		var pe *commit.PublishError
+		if err == nil || try >= PushTries || !errors.As(err, &pe) || !pe.Retryable {
+			return res, err
+		}
+
+		gone := make(chan struct{})
+		t := m.clk.AfterFunc(wait, func() { close(gone) })
+
+		select {
+		case <-gone:
+		case <-r.ctx.Done():
+			t.Stop()
+			return res, err
+		}
+
+		wait *= 2
+	}
+}
+
+// reportPushFailure reports a push that failed for good to the Error Handler and publishes a stalled fact naming the epic,
+// so the run ends with the epic's groups blocked and run-complete is never taken for a pull request.
+func (m *Manager) reportPushFailure(r *run, epic string, err error) {
+	if m.d.Errors != nil {
+		m.d.Errors(r.id, "", fmt.Errorf("push epic %s: %w", epic, err))
+	}
+
+	_ = m.d.Bus.Publish(Event{
+		Type:    bus.TypeRunFailure,
+		Subtype: "stalled",
+		Run:     bus.ID(r.id),
+		Data:    &Stalled{Groups: []StalledGroup{{Group: epic, Reason: "unpushed", On: err.Error()}}},
+	})
 }
 
 // publishEpicPush publishes the epic.pushed fact, and pr.opened when the epic's pull request is open.

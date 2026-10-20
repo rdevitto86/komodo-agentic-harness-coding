@@ -217,10 +217,10 @@ func (p *publication) fetchBranch(ctx context.Context, dir, branch string) error
 	return fail(KindPush, true, err)
 }
 
-// recheck runs the free checks on the landing worktree; a failure pauses the epic under this group.
-// The check result decides the outcome, whether or not the pause could be reported.
-func (p *publication) recheck(ctx context.Context, turn *Turn) error {
-	res, err := p.h.Check.Recheck(ctx, p.a.Epic, p.wt)
+// recheck runs the free checks on the landing worktree; a failure pauses the epic under this group. landed says the group's
+// landing commit is the epic tip. The check result decides the outcome, whether or not the pause could be reported.
+func (p *publication) recheck(ctx context.Context, turn *Turn, landed bool) error {
+	res, err := p.h.Check.Recheck(ctx, p.a.Epic, p.wt, landed)
 	if err != nil {
 		turn.Release()
 		return fail(KindRecheck, true, fmt.Errorf("run the checks: %w", err))
@@ -283,9 +283,12 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 		return Result{}, gitFail(err)
 	}
 
-	already := p.hasLanded(ls)
+	already, err := p.holdsLanding(ctx, ls)
+	if err != nil {
+		return Result{}, err
+	}
 	if turn.First() && !already {
-		if err := p.recheck(ctx, turn); err != nil {
+		if err := p.recheck(ctx, turn, false); err != nil {
 			freed = true
 			return Result{}, err
 		}
@@ -306,7 +309,7 @@ func (p *publication) land(ctx context.Context) (Result, error) {
 	}
 
 	wasPaused := turn.Paused()
-	if err := p.recheck(ctx, turn); err != nil {
+	if err := p.recheck(ctx, turn, true); err != nil {
 		freed = true
 		return Result{}, err
 	}
@@ -395,12 +398,33 @@ func (p *publication) merge(ctx context.Context) (string, error) {
 		return "", gitFail(err)
 	}
 
+	// Recording the landing in the group branch lets a later landing of the same group, after a fix, merge the epic cleanly.
+	if _, err := g.Merge(ctx, a.Worktree, id, a.Label+": merge "+a.Epic, false); err != nil {
+		return "", gitFail(err)
+	}
+
 	return id, nil
 }
 
-// hasLanded reports whether the list holds this group's landing.
-func (p *publication) hasLanded(ls []Landing) bool {
-	return slices.ContainsFunc(ls, func(l Landing) bool { return l.Label == p.a.Label })
+// holdsLanding reports whether the group's newest landing on the epic holds the tree of the group's checkout, so a group
+// approved again with a fix lands again.
+func (p *publication) holdsLanding(ctx context.Context, ls []Landing) (bool, error) {
+	id := p.landedID(ls)
+	if id == "" {
+		return false, nil
+	}
+
+	landed, err := p.h.Git.Info(ctx, p.wt, id)
+	if err != nil {
+		return false, gitFail(err)
+	}
+
+	_, tree, err := p.h.Git.Head(ctx, p.a.Worktree)
+	if err != nil {
+		return false, gitFail(err)
+	}
+
+	return landed.Tree == tree, nil
 }
 
 // landedID returns the id of this group's landing commit, or empty when the list has none.

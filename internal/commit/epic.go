@@ -58,7 +58,7 @@ func (h *Handler) PushEpic(ctx context.Context, r EpicPush) (EpicResult, error) 
 			PRURL:    res.PRURL,
 		})
 		if err != nil {
-			return EpicResult{}, err
+			res.CleanupError = err.Error()
 		}
 	}
 
@@ -111,7 +111,7 @@ func (e *epicPush) run(ctx context.Context) (EpicResult, error) {
 	if res.Pushed, err = e.push(ctx, head); err != nil {
 		return EpicResult{}, err
 	}
-	if res.Last && !h.Epics.Paused(r.Repo+"/"+r.Epic) {
+	if res.Last && e.allDone() && !h.Epics.Paused(r.Repo+"/"+r.Epic) {
 		if err := e.pullRequest(ctx, ls, &res); err != nil {
 			return EpicResult{}, err
 		}
@@ -152,6 +152,18 @@ func (e *epicPush) fetchBase(ctx context.Context) error {
 	}
 
 	return fail(KindPush, true, err)
+}
+
+// allDone reports whether the Runtime Manager holds every group of the epic Done, so a group whose last recheck failed and
+// is blocked never gets a pull request.
+func (e *epicPush) allDone() bool {
+	for _, label := range e.r.EpicGroups {
+		if !slices.Contains(e.r.Done, label) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // landedLabels returns the labels of the epic's groups the list holds, in landing order.
@@ -202,9 +214,13 @@ func (e *epicPush) pullRequest(ctx context.Context, ls []Landing, res *EpicResul
 
 	f := EpicFacts{DiffStat: stat}
 
-	for i := len(ls) - 1; i >= 0; i-- {
-		if slices.Contains(e.r.EpicGroups, ls[i].Label) {
-			f.Groups = append(f.Groups, ls[i].Section)
+	// A group landed again after a fix keeps only its newest section.
+	var seen []string
+
+	for _, l := range ls {
+		if slices.Contains(e.r.EpicGroups, l.Label) && !slices.Contains(seen, l.Label) {
+			seen = append(seen, l.Label)
+			f.Groups = append([]string{l.Section}, f.Groups...)
 		}
 	}
 

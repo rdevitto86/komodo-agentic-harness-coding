@@ -45,7 +45,8 @@ type CheckResult struct {
 
 // Rechecker runs the free checks on the epic branch checked out in a worktree and calls no model.
 type Rechecker interface {
-	Recheck(ctx context.Context, epic, worktree string) (CheckResult, error)
+	// landed is true when the worktree's tip is the group's landing commit; before it the checks pass without running.
+	Recheck(ctx context.Context, epic, worktree string, landed bool) (CheckResult, error)
 }
 
 // Handler saves and publishes work.

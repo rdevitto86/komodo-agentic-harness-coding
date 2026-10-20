@@ -81,6 +81,8 @@ type EpicPush struct {
 	CommonDir  string   `json:"common_dir"`  // the repository's git common directory
 	Epic       string   `json:"epic"`        // the epic label, such as ep-1
 	EpicGroups []string `json:"epic_groups"` // labels of every group of the epic
+	// labels of the groups the Runtime Manager holds Done; the pull request opens only when this names every group
+	Done []string `json:"done"`
 }
 
 // EpicResult is what PushEpic returns: what the epic branch holds locally and what reached the remote.
@@ -93,6 +95,8 @@ type EpicResult struct {
 	// epic pull request address; empty until every group has landed and the epic is not paused
 	PRURL string `json:"pr_url"`
 	PRNew bool   `json:"pr_new"` // true when this call opened the pull request
+	// why the epic's cleanup failed after the push and pull request succeeded; empty when it succeeded
+	CleanupError string `json:"cleanup_error,omitempty"`
 }
 
 // ListsRequest names the epic whose task lists SaveLists commits.

@@ -259,6 +259,8 @@ const (
 	AgentStopGrace       = 30 * time.Second // time a stop allows each session before the terminate signal
 	ShutdownDeadline     = 90 * time.Second // from the stop's start to the whole-tree kill
 	PoolHalveCooldown    = 5 * time.Minute  // after a halving, further signals are ignored for this long
+	PushRetryEvery       = 30 * time.Second // wait before the second try of an epic push, doubled before the third
+	PushTries            = 3                // tries of one epic push before the run ends with the epic unpushed
 	BlocksBeforeRedesign = 3                // blocks for one reason before a group is flagged needs redesign
 	EngineStartWait      = 5 * time.Second  // how long the CLI retries the socket after starting the engine
 	CommandBuffer        = 16               // capacity of a Task Manager's command channel and reply channel
