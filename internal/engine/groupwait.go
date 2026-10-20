@@ -1,6 +1,10 @@
 package engine
 
-import "time"
+import (
+	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
+)
 
 // The per-group breaker's waits: the nth blocker error in a row holds the group's next session start back by one of these.
 // [TODO: tune the per-group waits from error counts (G-294)]
@@ -34,6 +38,7 @@ func (g *group) holdFor(wait time.Duration) {
 	g.clearHold()
 
 	g.holdUntil = g.now().Add(wait)
+	g.blockWait = g.st.Stage == StageBlocked
 	g.holdT = g.m.clk.AfterFunc(wait, func() { g.enqueue(Input{Kind: InHoldDue, Group: g.spec.ID}) })
 }
 
@@ -48,4 +53,49 @@ func (g *group) clearHold() {
 	}
 
 	g.holdUntil = time.Time{}
+	g.blockWait = false
+}
+
+// waitingBlock reports whether a state is blocked by a blocker error that has not reached the cap: its wait ends and the
+// group retries, so no person is asked.
+func waitingBlock(s State) bool {
+	return s.Stage == StageBlocked &&
+		state.Classify(s.Block.Reason) == state.SeverityBlocker &&
+		s.Counters.FaultStreak < faultCap
+}
+
+// keepWait keeps the wait of a group blocked by a blocker error, ends the wait of a group that left that block or stopped
+// working, and tells the run whether the group retries by itself.
+func (g *group) keepWait(stage Stage) {
+	keep := stage == StageBlocked && g.holdT != nil && waitingBlock(g.st)
+	if !keep && (g.blockWait || stage == StagePaused || stage == StageBlocked || stage == StageDone) {
+		g.clearHold()
+	}
+
+	g.mu.Lock()
+	g.waits = keep
+	g.mu.Unlock()
+}
+
+// retryBlocked resumes a group blocked by a blocker error when its wait ends; the streak stays, so the next wait grows.
+func (g *group) retryBlocked() {
+	if !waitingBlock(g.st) || g.holding() {
+		return
+	}
+
+	streak := g.st.Counters.FaultStreak
+	res := Next(g.st, Input{Kind: InContinue, Group: g.spec.ID, Time: g.now()}, g.r.limits)
+	if res.Refused || res.Dup || res.Stale {
+		return
+	}
+
+	res.State.Counters.FaultStreak = streak
+	if err := g.save(res.State); err != nil {
+		g.saveFailed(err)
+		return
+	}
+
+	g.publish(res.Emit)
+	g.after()
+	g.perform(res.Orders)
 }

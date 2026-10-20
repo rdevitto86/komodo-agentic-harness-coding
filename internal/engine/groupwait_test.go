@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
@@ -174,5 +176,77 @@ func TestANonBlockerErrorLeavesTheGroupsRunningWaitArmed(t *testing.T) {
 			r.clock.Advance(time.Minute)
 			until(t, "the held start after its wait", func() bool { return starts.Load() > 1 })
 		})
+	}
+}
+
+func TestASetupBlockerWaitIsNoStallAndTheGroupRetriesAfterIt(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1"}}, withClock)
+	r.tasks.failFor["g-tg-1"] = errors.New("worktree: disk full")
+
+	if err := r.startRun("run-1", "tg-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	until(t, "the setup error", func() bool { return r.ev.count(bus.TypeRunStatus, "error.recorded") == 1 })
+	time.Sleep(100 * time.Millisecond)
+
+	if n := r.ev.count(bus.TypeRunFailure, "stalled"); n != 0 {
+		t.Fatalf("%d stalled events while the group waits its minute", n)
+	}
+	if n := r.ev.count(bus.TypeRunStatus, "group.stop"); n != 0 {
+		t.Fatalf("%d group.stop events while the group waits its minute", n)
+	}
+
+	r.tasks.mu.Lock()
+	delete(r.tasks.failFor, "g-tg-1")
+	r.tasks.mu.Unlock()
+
+	r.clock.Advance(time.Minute)
+	until(t, "the retry after the wait", func() bool { return r.tasks.startedCount("g-tg-1") >= 1 })
+}
+
+func TestASetupBlockerWaitsOneTwoThenFourMinutesAndTheFourthIsAStall(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1"}}, withClock)
+	r.tasks.failFor["g-tg-1"] = errors.New("worktree: disk full")
+
+	if err := r.startRun("run-1", "tg-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	for n, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		until(t, "the setup error", func() bool {
+			return r.ev.count(bus.TypeRunStatus, "error.recorded") == n+1 && r.streakOf("tg-1") == n+1
+		})
+
+		r.clock.Advance(wait - time.Second)
+		time.Sleep(60 * time.Millisecond)
+
+		if got := r.ev.count(bus.TypeRunStatus, "error.recorded"); got != n+1 {
+			t.Fatalf("setup error %d: the group retried before its wait of %s ended", n+1, wait)
+		}
+		if got := r.ev.count(bus.TypeRunFailure, "stalled"); got != 0 {
+			t.Fatalf("setup error %d: %d stalled events during the wait", n+1, got)
+		}
+
+		r.clock.Advance(time.Second)
+	}
+
+	until(t, "the stall of the fourth", func() bool { return r.ev.count(bus.TypeRunFailure, "stalled") == 1 })
+
+	if got := r.ev.count(bus.TypeRunStatus, "error.recorded"); got != 4 {
+		t.Fatalf("%d setup errors, want 4", got)
+	}
+
+	s := r.store.get("g-tg-1")
+	if s.Stage != StageBlocked || s.Block.Reason != state.ReasonSetup || s.Counters.RetriesLeft != 2 {
+		t.Fatalf("stage %q block %+v retries left %d: the 4th blocks for a person with no retry spent",
+			s.Stage, s.Block, s.Counters.RetriesLeft)
+	}
+
+	r.clock.Advance(10 * time.Minute)
+	time.Sleep(60 * time.Millisecond)
+
+	if got := r.ev.count(bus.TypeRunStatus, "error.recorded"); got != 4 {
+		t.Fatalf("a group blocked for a person retried: %d setup errors", got)
 	}
 }

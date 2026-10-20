@@ -94,7 +94,7 @@ type Manager struct {
 	parkedBy map[string]parkedRow // those groups and their records, by group id
 	expect   map[string]chan error
 	persons  map[string]bool // requests sent from a process with a controlling terminal
-	conts   map[string]chan error
+	conts    map[string]chan error
 	beats    map[string]time.Time
 	pool     *Pool
 	chg      chan struct{}
@@ -812,12 +812,14 @@ func (m *Manager) checkLocked(r *run) {
 		}
 
 		g.mu.Lock()
-		snap, dead := g.snap, g.dead
+		snap, dead, waits := g.snap, g.dead, g.waits
 		g.mu.Unlock()
 
 		switch {
 		case dead:
 			stuck = append(stuck, StalledGroup{Group: s.Label, Reason: string(state.ReasonCrash)})
+		case waits:
+			active++ // its breaker wait ends by itself and the group retries
 		case snap.Stage == StageBlocked:
 			stuck = append(stuck, StalledGroup{Group: s.Label, Reason: string(snap.Block.Reason)})
 		case snap.Stage == StagePaused:

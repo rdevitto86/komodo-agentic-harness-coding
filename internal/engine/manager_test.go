@@ -141,7 +141,7 @@ func TestBlockedDependencyKeepsDependentWaitingWhileUnrelatedGroupRuns(t *testin
 				if c.Kind == task.CmdStart {
 					e.send(task.Message{
 						Kind:       task.MsgEscalate,
-						Escalation: &task.Escalation{ID: "e1", Group: e.spec.ID, Kind: task.EscBlocked, Reason: "setup"},
+						Escalation: &task.Escalation{ID: "e1", Group: e.spec.ID, Kind: task.EscBlocked, Reason: "context"},
 					})
 				}
 			}
@@ -158,7 +158,7 @@ func TestBlockedDependencyKeepsDependentWaitingWhileUnrelatedGroupRuns(t *testin
 	until(t, "stalled event", func() bool { return r.ev.count(bus.TypeRunFailure, "stalled") == 1 })
 	for _, e := range r.ev.list() {
 		if s, ok := e.Data.(*Stalled); ok {
-			if len(s.Groups) != 2 || s.Groups[0].Reason != "setup" && s.Groups[1].Reason != "setup" {
+			if len(s.Groups) != 2 || s.Groups[0].Reason != "context" && s.Groups[1].Reason != "context" {
 				t.Fatalf("stalled data %+v", s.Groups)
 			}
 		}

@@ -38,6 +38,7 @@ type group struct {
 	cmds       chan<- task.Command
 	tmDone     chan struct{}
 	dead       bool // the loop ended without a Done state
+	waits      bool // blocked by a blocker error with its wait armed: the group retries by itself
 
 	// The fields below belong to the loop goroutine.
 	st        State
@@ -50,6 +51,7 @@ type group struct {
 	armed     pauseKey
 	holdUntil time.Time // the end of the group's breaker wait; zero for none
 	holdT     Timer
+	blockWait bool // the wait was armed by a blocking error, so a move out of Blocked ends it
 	stopping  atomic.Bool
 }
 
@@ -236,6 +238,7 @@ func (g *group) save(ns State) error {
 	g.mu.Lock()
 
 	g.snap = g.st
+	g.waits = waitingBlock(g.st)
 	if working(g.st.Stage) {
 		// Entering a stage forgets the epochs of the later stages, so a message of a stage reached again is not stale.
 		for _, later := range pipelineStages[slices.Index(pipelineStages, g.st.Stage)+1:] {
@@ -286,8 +289,8 @@ func (g *group) after() {
 	}
 
 	g.armTimers()
+	g.keepWait(stage)
 	if stage == StagePaused || stage == StageBlocked || stage == StageDone {
-		g.clearHold()
 		g.m.errs.drop(g.spec.ID)
 	}
 	if stage == StageDone {
@@ -610,6 +613,11 @@ func (g *group) handle(in Input) {
 	}
 
 	if in.Kind == InHoldDue {
+		if g.st.Stage == StageBlocked {
+			g.retryBlocked()
+			return
+		}
+
 		g.resumeHeld()
 		return
 	}
