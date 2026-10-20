@@ -155,7 +155,7 @@ func (h *HostGit) run(ctx context.Context, extraEnv []string, rest ...string) (s
 	if err := h.ptr.Check(); err != nil {
 		return "", err
 	}
-	out, err := hostOutput(ctx, h.lease.Worktree, h.env(extraEnv...), "git "+rest[0], h.args(rest...)...)
+	out, err := hostOutput(ctx, h.lease.Worktree, h.env(extraEnv...), "git "+rest[0], hostTimeout, h.args(rest...)...)
 	if err != nil {
 		return string(out), errors.New(h.scrub(err.Error(), extraEnv))
 	}

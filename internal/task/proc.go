@@ -125,6 +125,7 @@ const (
 	checkOutputCap = 16 << 20         // bytes of a check command's output handed back whole
 	maxLogBytes    = 64 << 20         // bytes of one command's output kept in its log
 	runTimeout     = 10 * time.Minute // a run command is killed with its whole tree after this
+	hostTimeout    = 2 * time.Minute  // a host version-control call is killed after this
 )
 
 // taskSource names this package in a fault.
@@ -228,12 +229,17 @@ func runConfinedWithin(ctx context.Context, cmd *exec.Cmd, logPath string, limit
 	return res
 }
 
-// hostOutput runs a host command in its own process group with a timeout and returns its standard output. The group is
-// killed whole when the time runs out or the context ends.
-func hostOutput(ctx context.Context, dir string, env []string, label string, argv ...string) ([]byte, error) {
-	const hostTimeout = 2 * time.Minute // a host git call is killed after this
-
-	ctx, cancel := context.WithTimeout(ctx, hostTimeout)
+// hostOutput runs a host command in its own process group and returns its standard output. The group is killed whole when
+// timeout passes or the context ends.
+func hostOutput(
+	ctx context.Context,
+	dir string,
+	env []string,
+	label string,
+	timeout time.Duration,
+	argv ...string,
+) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)

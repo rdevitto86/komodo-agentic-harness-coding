@@ -9,7 +9,9 @@ import (
 )
 
 // overLimit is the error a runner returns for a command whose output passed its limit.
-func overLimit() error { return fmt.Errorf("%w (16777216 bytes); full output in /x.log", ErrOutputOverLimit) }
+func overLimit() error {
+	return fmt.Errorf("%w (16777216 bytes); full output in /x.log", ErrOutputOverLimit)
+}
 
 func TestTaskGateUsesTheExitCodeOfACommandWhoseOutputPassedTheLimit(t *testing.T) {
 	ref := TaskRef{Group: "tg-1", Task: "tsk-a", DoneCommand: "go test ./..."}

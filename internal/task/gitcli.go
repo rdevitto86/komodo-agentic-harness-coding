@@ -130,7 +130,7 @@ func (g *GitCLI) AddWorktree(ctx context.Context, l LeaseRef) error {
 	if g.Start != "" {
 		argv = append(argv, g.Start)
 	}
-	if _, err := hostOutput(ctx, g.Repo, env, "git add worktree", argv...); err != nil {
+	if _, err := hostOutput(ctx, g.Repo, env, "git add worktree", hostTimeout, argv...); err != nil {
 		return fmt.Errorf("add the worktree of %s: %w", l.Branch, err)
 	}
 

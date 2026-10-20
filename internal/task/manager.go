@@ -598,22 +598,20 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 	if m.c.Sandboxes == nil {
 		return "", block("setup", map[string]string{"error": "no sandbox manager is set"})
 	}
-	if m.tmp == "" {
-		dir, err := os.MkdirTemp(m.c.Plan.Temp, "komodo-sandbox-")
-		if err != nil {
-			return "", fmt.Errorf("make the sandbox folder: %w", err)
-		}
-		m.tmp = dir
+
+	root, err := m.sandboxDir()
+	if err != nil {
+		return "", err
 	}
 
-	tmp := filepath.Join(m.tmp, role)
+	tmp := filepath.Join(root, role)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return "", fmt.Errorf("make the sandbox temporary folder: %w", err)
 	}
 
 	build := m.c.Plan.Build
 	if build == "" {
-		build = filepath.Join(m.tmp, role+"-build")
+		build = filepath.Join(root, role+"-build")
 		if err := os.MkdirAll(build, 0o755); err != nil {
 			return "", fmt.Errorf("make the build cache folder: %w", err)
 		}
@@ -668,9 +666,26 @@ func (m *Manager) instance(ctx context.Context, role string) (string, error) {
 	return inst.ID, nil
 }
 
+// sandboxDir returns the folder that holds the sandbox folders of every role, making it on first use.
+func (m *Manager) sandboxDir() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.tmp == "" {
+		dir, err := os.MkdirTemp(m.c.Plan.Temp, "komodo-sandbox-")
+		if err != nil {
+			return "", fmt.Errorf("make the sandbox folder: %w", err)
+		}
+		m.tmp = dir
+	}
+
+	return m.tmp, nil
+}
+
 // runSetup runs the setup command in a new instance and then turns its network off; a failure is a setup block.
 func (m *Manager) runSetup(ctx context.Context, role, id string, spec sandbox.Spec, setup []string) error {
-	res, err := m.runIn(ctx, id, setup, filepath.Join(m.tmp, role+"-setup"), replyCap-exitRoom)
+	root, _ := m.sandboxDir()
+	res, err := m.runIn(ctx, id, setup, filepath.Join(root, role+"-setup"), replyCap-exitRoom)
 	out, exit := res.Reply.Text, res.Exit
 	if err != nil || exit != 0 {
 		detail := map[string]string{"role": role, "output": out}
