@@ -263,6 +263,37 @@ func (r *run) branch(name, tip, in string) {
 	r.removed(KindBranch, name)
 }
 
+// landedBranch deletes a local group branch that still points at tip once landed, a commit in the history of into, holds its
+// tree; a branch already gone counts as done.
+func (r *run) landedBranch(name, tip, landed, into string) {
+	if !r.allowed(name) || !r.proceed() {
+		return
+	}
+
+	cur, ok, err := r.h.Git.BranchTip(r.ctx, r.h.Clone, name)
+	if err != nil {
+		r.fail(KindBranch, name, err)
+		return
+	}
+	if !ok {
+		return
+	}
+	if r.dry {
+		if cur == tip {
+			r.removed(KindBranch, name)
+		} else {
+			r.kept(KindBranch, name, "branch moved since the tip was read")
+		}
+		return
+	}
+	if err := r.h.Git.DeleteLanded(r.ctx, r.h.Clone, name, tip, landed, into); err != nil {
+		r.fail(KindBranch, name, err)
+		return
+	}
+
+	r.removed(KindBranch, name)
+}
+
 // redundantBranch deletes a group's branch when the remote holds its tip in any branch; otherwise it keeps the branch.
 func (r *run) redundantBranch(name string) {
 	if !r.allowed(name) {
