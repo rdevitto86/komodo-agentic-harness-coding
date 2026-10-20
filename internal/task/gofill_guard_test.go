@@ -50,24 +50,38 @@ func TestTheHostFillLeavesGoModAndGoSumAsItFoundThem(t *testing.T) {
 				}
 			}
 
-			hostGoDownload = func(_ context.Context, dir string, _ []string) error {
+			var modfile string
+
+			hostGoDownload = func(_ context.Context, dir string, env []string) error {
 				*calls = append(*calls, fillCall{dir: dir})
-				if err := os.WriteFile(filepath.Join(dir, "go.sum"), []byte("written by the fill\n"), 0o644); err != nil {
+				modfile = modfileOf(env)
+				if dir != r.wt || modfile == "" || strings.HasPrefix(modfile, r.wt) {
+					t.Errorf("fill in %q with modfile %q, want the worktree and a copy outside it", dir, modfile)
+				}
+				if mod, _ := os.ReadFile(modfile); string(mod) != "module x\n" {
+					t.Errorf("the modfile copy holds %q", mod)
+				}
+				if got, _ := os.ReadFile(strings.TrimSuffix(modfile, ".mod") + ".sum"); string(got) != tc.sum {
+					t.Errorf("the go.sum copy holds %q, want %q", got, tc.sum)
+				}
+
+				sum := strings.TrimSuffix(modfile, ".mod") + ".sum"
+				if err := os.WriteFile(sum, []byte("written by the fill\n"), 0o644); err != nil {
 					return err
 				}
-				return os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module changed\n"), 0o644)
-			}
-			if tc.fillErr != nil {
-				inner := hostGoDownload
-				hostGoDownload = func(ctx context.Context, dir string, env []string) error {
-					_ = inner(ctx, dir, env)
-					return tc.fillErr
+				if err := os.WriteFile(modfile, []byte("module changed\n"), 0o644); err != nil {
+					return err
 				}
+
+				return tc.fillErr
 			}
 
 			_, err := r.m.instance(context.Background(), "builder")
 			if (err != nil) != (tc.fillErr != nil) {
 				t.Fatalf("instance returned %v, fill error %v", err, tc.fillErr)
+			}
+			if _, statErr := os.Stat(filepath.Dir(modfile)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("the private copy %q was not removed: %v", filepath.Dir(modfile), statErr)
 			}
 
 			got, readErr := os.ReadFile(sumPath)
@@ -84,12 +98,45 @@ func TestTheHostFillLeavesGoModAndGoSumAsItFoundThem(t *testing.T) {
 	}
 }
 
+// modfileOf returns the -modfile path in the fill's GOFLAGS, or an empty string.
+func modfileOf(env []string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if flags, ok := strings.CutPrefix(env[i], "GOFLAGS="); ok {
+			for _, f := range strings.Fields(flags) {
+				if path, ok := strings.CutPrefix(f, "-modfile="); ok {
+					return path
+				}
+			}
+
+			return ""
+		}
+	}
+
+	return ""
+}
+
+func TestAnEditMadeInTheWorktreeWhileTheFillRunsIsKept(t *testing.T) {
+	r, _ := fillRig(t, true, true, nil)
+
+	sumPath := filepath.Join(r.wt, "go.sum")
+	hostGoDownload = func(context.Context, string, []string) error {
+		return os.WriteFile(sumPath, []byte("a builder's line\n"), 0o644)
+	}
+
+	if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(sumPath); string(got) != "a builder's line\n" {
+		t.Fatalf("go.sum is %q, want the edit kept", got)
+	}
+}
+
 func TestAFillThatWroteGoSumDoesNotRunAgainForTheNextRole(t *testing.T) {
 	r, calls := fillRig(t, true, true, nil)
 
-	hostGoDownload = func(_ context.Context, dir string, _ []string) error {
+	hostGoDownload = func(_ context.Context, dir string, env []string) error {
 		*calls = append(*calls, fillCall{dir: dir})
-		return os.WriteFile(filepath.Join(dir, "go.sum"), []byte("written by the fill\n"), 0o644)
+		return os.WriteFile(strings.TrimSuffix(modfileOf(env), ".mod")+".sum", []byte("written by the fill\n"), 0o644)
 	}
 
 	for _, role := range []string{"builder", "tester"} {
@@ -143,11 +190,11 @@ func TestTwoRolesFillingAtOnceDownloadOnce(t *testing.T) {
 
 	var n atomic.Int32
 
-	hostGoDownload = func(_ context.Context, dir string, _ []string) error {
+	hostGoDownload = func(_ context.Context, _ string, env []string) error {
 		n.Add(1)
 		time.Sleep(50 * time.Millisecond)
 
-		return os.WriteFile(filepath.Join(dir, "go.sum"), []byte("written by the fill\n"), 0o644)
+		return os.WriteFile(strings.TrimSuffix(modfileOf(env), ".mod")+".sum", []byte("written by the fill\n"), 0o644)
 	}
 
 	var wg sync.WaitGroup

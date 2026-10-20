@@ -40,13 +40,7 @@ func (m *Manager) fillGoModules(ctx context.Context, role string, spec sandbox.S
 		return nil
 	}
 
-	env := append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=-mod=mod")
-	saved := saveModFiles(spec.Worktree)
-
-	err := hostGoDownload(ctx, spec.Worktree, env)
-	if rerr := saved.restore(); err == nil {
-		err = rerr
-	}
+	err := fillWithCopy(ctx, spec.Worktree)
 	if err != nil {
 		return block("setup", map[string]string{
 			"role":   role,
@@ -59,58 +53,32 @@ func (m *Manager) fillGoModules(ctx context.Context, role string, spec sandbox.S
 	return nil
 }
 
-// modFiles holds go.mod and go.sum as a fill found them.
-type modFiles []modFile
+// fillWithCopy runs the host download in dir against a private copy of go.mod and go.sum, so the worktree's own files are
+// never written; the copy is removed afterwards.
+func fillWithCopy(ctx context.Context, dir string) error {
+	tmp, err := os.MkdirTemp("", "komodo-gofill-")
+	if err != nil {
+		return fmt.Errorf("make the go.mod copy folder: %w", err)
+	}
 
-// modFile is one file of a worktree before a fill: its bytes and mode, or its absence.
-type modFile struct {
-	path   string
-	data   []byte
-	mode   os.FileMode
-	exists bool
-}
-
-// saveModFiles reads go.mod and go.sum at the root of dir.
-func saveModFiles(dir string) modFiles {
-	var files modFiles
+	defer func() { _ = os.RemoveAll(tmp) }()
 
 	for _, name := range []string{"go.mod", "go.sum"} {
-		f := modFile{path: filepath.Join(dir, name)}
-		if info, err := os.Stat(f.path); err == nil {
-			f.data, _ = os.ReadFile(f.path)
-			f.mode, f.exists = info.Mode().Perm(), true
-		}
-
-		files = append(files, f)
-	}
-
-	return files
-}
-
-// restore writes every saved file back as it was and removes one that did not exist.
-func (files modFiles) restore() error {
-	var errs []error
-
-	for _, f := range files {
-		if !f.exists {
-			if err := os.Remove(f.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				errs = append(errs, err)
-			}
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-
-		if err := os.WriteFile(f.path, f.data, f.mode); err != nil {
-			errs = append(errs, err)
-		} else if err := os.Chmod(f.path, f.mode); err != nil {
-			errs = append(errs, err)
+		if err == nil {
+			err = os.WriteFile(filepath.Join(tmp, name), data, 0o600)
+		}
+		if err != nil {
+			return fmt.Errorf("copy %s: %w", name, err)
 		}
 	}
 
-	if err := errors.Join(errs...); err != nil {
-		return fmt.Errorf("restore go.mod and go.sum: %w", err)
-	}
+	env := append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=-mod=mod -modfile="+filepath.Join(tmp, "go.mod"))
 
-	return nil
+	return hostGoDownload(ctx, dir, env)
 }
 
 // goModFix returns the line that tells the person how to fill the module cache by hand.

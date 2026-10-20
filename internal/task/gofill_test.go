@@ -92,12 +92,17 @@ func TestTheHostFillKeepsTheToolchainLocalAndModulesMutable(t *testing.T) {
 	}
 
 	env := (*calls)[0].env
-	for _, want := range []string{"GOTOOLCHAIN=local", "GOFLAGS=-mod=mod", "KOMODO_FILL_PROBE=kept"} {
+	for _, want := range []string{"GOTOOLCHAIN=local", "KOMODO_FILL_PROBE=kept"} {
 		if !slices.Contains(env, want) {
 			t.Errorf("fill env lacks %q", want)
 		}
 	}
-	if i := slices.Index(env, "GOFLAGS=-mod=vendor"); i >= 0 && i > slices.Index(env, "GOFLAGS=-mod=mod") {
+
+	ours := slices.IndexFunc(env, func(e string) bool { return strings.HasPrefix(e, "GOFLAGS=-mod=mod -modfile=") })
+	if ours < 0 {
+		t.Fatalf("fill env has no mutable-modules GOFLAGS with a modfile")
+	}
+	if i := slices.Index(env, "GOFLAGS=-mod=vendor"); i >= 0 && i > ours {
 		t.Error("the host's GOFLAGS comes after the fill's, so it would win")
 	}
 }

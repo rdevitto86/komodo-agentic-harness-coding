@@ -58,7 +58,8 @@ func TestTesterJudgeConfirmsAFailedItemWhoseRerunPassedTheOutputLimitByItsExitCo
 	run := r.m.Runner("tester")
 	out := judgeWithRunner(t, func(ctx context.Context, _ string) (int, string, error) { return run(ctx, big) })
 
-	if out.Kind != OutcomeReturn || len(out.Findings) != 1 || !strings.Contains(out.Findings[0], "acceptance item a1 failed") {
+	if out.Kind != OutcomeReturn || len(out.Findings) != 1 ||
+		!strings.Contains(out.Findings[0], "acceptance item a1 failed") {
 		t.Fatalf("outcome %+v, want a return with item a1 failed", out)
 	}
 }
