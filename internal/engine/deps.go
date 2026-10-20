@@ -173,10 +173,11 @@ type Deps struct {
 	Version string
 	// the Komodo home folder; the worktrees live under Home/wt
 	Home string
-	// the branch an epic's branch is cut from; empty means the remote's default branch
-	BaseBranch string
-	// the remote the base branch is fetched from; empty means the base branch's upstream, origin when it has none
-	Remote string
+	// the branch an epic's branch is cut from, read at each run start; nil or empty means the remote's default branch
+	BaseBranch func() string
+	// the remote the base branch is fetched from, read at each run start; nil or empty means the base branch's upstream,
+	// origin when it has none
+	Remote func() string
 	// free memory, for growing the pool; nil means the pool never grows
 	FreeMemGB func() float64
 	// ends every process of a group; called when a stop passes its deadline

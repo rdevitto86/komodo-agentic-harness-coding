@@ -57,4 +57,15 @@ type Handler struct {
 	Report  Reporter   // the Task Manager, which relays to the Runtime Manager
 	Cleanup Cleaner    // the Cleanup Handler
 	Config  Settings   // values received from the Configuration Manager
+	// Live, when set, is read at each use in place of Config, so a changed setting reaches the next call
+	Live func() Settings
+}
+
+// settings returns the values to use now: Live's when set, otherwise Config.
+func (h *Handler) settings() Settings {
+	if h.Live != nil {
+		return h.Live()
+	}
+
+	return h.Config
 }

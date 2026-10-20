@@ -278,6 +278,9 @@ func (p *fakePlans) Specs(_ context.Context, _ string, labels []string) ([]Group
 	return out, nil
 }
 
+// constant returns a getter that always yields v.
+func constant(v string) func() string { return func() string { return v } }
+
 // fakeGit records branch calls in one shared log.
 type fakeGit struct {
 	mu       sync.Mutex
@@ -547,7 +550,7 @@ func newRig(t *testing.T, defs [][]string, opts ...rigOpt) *rig {
 		Git:      r.git,
 		Commits:  r.commits,
 		Resource: r.res,
-		Home:     home, BaseBranch: "main", Version: "test",
+		Home:     home, BaseBranch: constant("main"), Version: "test",
 		Errors:      func(string, string, error) { r.errs.Add(1) },
 		KillTree:    func(string, string) { r.killed.Add(1) },
 		RestartLoop: func(l string) { r.rmu.Lock(); r.restart = append(r.restart, l); r.rmu.Unlock() },

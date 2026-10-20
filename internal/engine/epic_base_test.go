@@ -55,7 +55,7 @@ func managerOver(clone, base, remote string) *Manager {
 	g := core.NewGit()
 	g.Adopt(clone)
 
-	return &Manager{d: Deps{Git: g, BaseBranch: base, Remote: remote}}
+	return &Manager{d: Deps{Git: g, BaseBranch: constant(base), Remote: constant(remote)}}
 }
 
 // With only a stale remote-tracking base, the epic branch lands on the remote's current tip and the clone is untouched.

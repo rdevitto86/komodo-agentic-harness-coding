@@ -18,6 +18,7 @@ type publication struct {
 	clone  string
 	remote string
 	base   string
+	label  string // pull request label as settled; empty means komodo
 	epic   string // epic branch, komodo/<epic>
 	wt     string // landing worktree path
 }
@@ -81,8 +82,8 @@ func (p *publication) validate() error {
 // settle resolves the base branch and the remote, refuses a group or epic branch that is the base
 // branch, and picks the landing worktree path.
 func (p *publication) settle(ctx context.Context) error {
-	cfg := p.h.Config
-	p.base, p.remote = cfg.BaseBranch, cfg.Remote
+	cfg := p.h.settings()
+	p.base, p.remote, p.label = cfg.BaseBranch, cfg.Remote, cfg.PRLabel
 
 	root := cfg.LandingRoot
 	if root == "" {
@@ -484,7 +485,7 @@ func (p *publication) pullRequest(
 
 	title := fmt.Sprintf("%s: %d task groups", p.a.Epic, len(p.a.EpicGroups))
 
-	label := p.h.Config.PRLabel
+	label := p.label
 	if label == "" {
 		label = "komodo"
 	}

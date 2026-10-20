@@ -228,7 +228,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		Caches:   s.caches,
 		Contexts: ctxAdapter{},
 		Tasks:    h, Tools: s.tools, Plans: planSource{}, Git: epicGit{s.git}, Commits: h, Resource: res,
-		Version: version, Home: s.home, BaseBranch: s.baseBranch(), Remote: s.remote(), Faults: s.faults,
+		Version: version, Home: s.home, BaseBranch: s.baseBranch, Remote: s.remote, Faults: s.faults,
 		Cleaner: h, Janitor: h, Parked: s.parkedGroups,
 		Errors: func(run, group string, err error) { s.logln("komodo engine:", run, group, err) },
 	}
@@ -375,18 +375,23 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 		Check:   groupChecker{ref: &groupRef{}},
 		Report:  commitReporter{s},
 		Cleanup: publishedAdapter{h: k.cleanup, landing: k.landingPath},
-		Config: commit.Settings{
-			BaseBranch:  s.baseBranch(),
-			Remote:      s.remote(),
-			PRLabel:     s.str("commit.pr_label", "komodo"),
-			LandingRoot: k.landings,
-		},
+		Live:    k.commitSettings,
 	}
 	k.intake = intake.New(k.intakeDeps(k.cm))
 	s.kits[root] = k
 	s.byID[id] = k
 	s.spawn(func() { _ = cm.Run(s.ctx) })
 	return k, nil
+}
+
+// commitSettings reads the commit settings now, so a changed value reaches the Commit Handler's next call.
+func (k *repoKit) commitSettings() commit.Settings {
+	return commit.Settings{
+		BaseBranch:  k.s.baseBranch(),
+		Remote:      k.s.remote(),
+		PRLabel:     k.s.str("commit.pr_label", "komodo"),
+		LandingRoot: k.landings,
+	}
 }
 
 // logErrors writes every error event to the engine log, so a failure with no open run still leaves a trace.

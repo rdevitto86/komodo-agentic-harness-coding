@@ -651,7 +651,7 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 // cutEpicBranch fetches the base branch from its remote and cuts the epic branch from the fetched tip, leaving the clone's
 // own branches and checkout alone.
 func (m *Manager) cutEpicBranch(ctx context.Context, root, branch string) error {
-	g, base, remote := m.d.Git, m.d.BaseBranch, m.d.Remote
+	g, base, remote := m.d.Git, read(m.d.BaseBranch), read(m.d.Remote)
 	if base == "" {
 		r := remote
 		if r == "" {
@@ -683,6 +683,15 @@ func (m *Manager) cutEpicBranch(ctx context.Context, root, branch string) error 
 	}
 
 	return g.CreateBranch(ctx, root, branch, "refs/remotes/"+remote+"/"+base)
+}
+
+// read returns what a setting getter yields now, or empty for a nil getter.
+func read(get func() string) string {
+	if get == nil {
+		return ""
+	}
+
+	return get()
 }
 
 // openCache opens the repository's cache at its first run and hands the handle to the Context Manager.

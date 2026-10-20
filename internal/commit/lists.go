@@ -22,7 +22,9 @@ func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 	h.adopt(r.CommonDir)
 	h.adopt(r.Root)
 
-	var base, remote = h.Config.BaseBranch, h.Config.Remote
+	cfg := h.settings()
+	base, remote := cfg.BaseBranch, cfg.Remote
+
 	if err := resolveRemote(ctx, h.Git, r.Root, &base, &remote); err != nil {
 		return err
 	}

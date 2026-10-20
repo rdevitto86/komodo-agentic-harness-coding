@@ -12,8 +12,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
 )
 
-// commitKitSettings opens a repository kit after applying the changes and returns its Commit Handler's settings.
-func commitKitSettings(t *testing.T, changes ...config.Change) (commit.Settings, string) {
+// commitKit opens a repository kit and returns it with the stack; the changes are applied before the kit opens.
+func commitKit(t *testing.T, changes ...config.Change) (*repoKit, *stack) {
 	t.Helper()
 
 	root := t.TempDir()
@@ -47,7 +47,16 @@ func commitKitSettings(t *testing.T, changes ...config.Change) (commit.Settings,
 		t.Fatal(err)
 	}
 
-	return k.commit.Config, k.landings
+	return k, s
+}
+
+// commitKitSettings returns the settings the kit's Commit Handler reads after the changes were applied before it opened.
+func commitKitSettings(t *testing.T, changes ...config.Change) (commit.Settings, string) {
+	t.Helper()
+
+	k, _ := commitKit(t, changes...)
+
+	return k.commit.Live(), k.landings
 }
 
 // The Commit Handler receives the base branch, remote and pull request label the person set.
@@ -67,6 +76,28 @@ func TestCommitHandlerReceivesTheCommitSettings(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("settings %+v, want %+v", got, want)
+	}
+}
+
+// A setting changed after the engine and the kit started reaches the next run's epic cut and the Commit Handler alike.
+func TestCommitSettingsAreReadLiveByTheEngineAndTheHandler(t *testing.T) {
+	k, s := commitKit(t)
+
+	if _, err := s.cfg.SetConfigItem(
+		config.Change{Key: "commit.base_branch", New: "late-base"},
+		config.Change{Key: "commit.remote", New: "late-remote"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := k.commit.Live(); got.BaseBranch != "late-base" || got.Remote != "late-remote" {
+		t.Fatalf("the Commit Handler reads %+v after the change", got)
+	}
+	if got, want := s.baseBranch(), "late-base"; got != want {
+		t.Fatalf("the engine reads base %q, want %q", got, want)
+	}
+	if got, want := s.remote(), "late-remote"; got != want {
+		t.Fatalf("the engine reads remote %q, want %q", got, want)
 	}
 }
 

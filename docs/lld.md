@@ -12851,6 +12851,7 @@ type Handler struct {
 	Report  Reporter   // the Task Manager, which relays to the Runtime Manager
 	Cleanup Cleaner    // the Cleanup Handler
 	Config  Settings   // values received from the Configuration Manager
+	Live    func() Settings // when set, read at each use in place of Config
 }
 
 // Save records a finished task's work as a local commit on the group branch; it never pushes.
@@ -13252,7 +13253,7 @@ The retry schedule and the block reasons belong to the Runtime Manager ([chapter
 
 ### 15.8 Config
 
-The Configuration Manager reads the settings file and passes these values in `Settings`.
+The Configuration Manager reads the settings file and passes these values in `Settings`. The binary sets `Live`, so `Publish` and `SaveLists` read the settings at each call, the same moment the Runtime Manager reads `commit.base_branch` and `commit.remote` to cut an epic branch; a change made during a run applies to the next call.
 
 | Key | Type | Default | Effect |
 |---|---|---|---|

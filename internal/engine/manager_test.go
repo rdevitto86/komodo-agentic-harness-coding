@@ -72,7 +72,7 @@ func TestEpicBranchAndTaskListsComeBeforeTheFirstTaskManager(t *testing.T) {
 // The epic branch is cut from the fetched tip of the configured base on the configured remote.
 func TestEpicBranchIsCutFromTheFetchedRemoteBase(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1.1"}}, func(r *rig) {
-		r.d.BaseBranch, r.d.Remote = "komodo-first-run", "trial"
+		r.d.BaseBranch, r.d.Remote = constant("komodo-first-run"), constant("trial")
 	})
 	if err := r.startRun("run-1", "tg-1.1"); err != nil {
 		t.Fatal(err)
@@ -88,10 +88,28 @@ func TestEpicBranchIsCutFromTheFetchedRemoteBase(t *testing.T) {
 	}
 }
 
+// A base and remote changed after the engine started are the ones the next run's epic branch is cut from.
+func TestEpicBranchUsesTheBaseSetAfterTheEngineStarted(t *testing.T) {
+	base, remote := "old-base", "old-remote"
+	r := newRig(t, [][]string{{"tg-1.1"}}, func(r *rig) {
+		r.d.BaseBranch = func() string { return base }
+		r.d.Remote = func() string { return remote }
+	})
+	base, remote = "new-base", "new-remote"
+	if err := r.startRun("run-1", "tg-1.1"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitStage("tg-1.1", StageDone)
+	want := []string{"fetch new-remote/new-base", "create komodo/ep-1 from refs/remotes/new-remote/new-base"}
+	if got := r.log.get(); len(got) < 2 || !slices.Equal(got[:2], want) {
+		t.Fatalf("order %v, want it to begin %v", got, want)
+	}
+}
+
 // An empty base is the remote's default branch, and an empty remote is the base branch's upstream.
 func TestEmptyBaseTakesTheRemoteDefaultBranch(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1.1"}}, func(r *rig) {
-		r.d.BaseBranch = ""
+		r.d.BaseBranch = constant("")
 		r.git.def, r.git.upstream = "develop", "upstream"
 	})
 	if err := r.startRun("run-1", "tg-1.1"); err != nil {

@@ -417,6 +417,29 @@ func TestPublishBaseBranch(t *testing.T) {
 	}
 }
 
+// Live settings win over Config, and each Publish reads them afresh: a changed base and label apply to the next call.
+func TestPublishReadsLiveSettings(t *testing.T) {
+	w := newWorld(t)
+	h := w.handler()
+	g := w.newGroup("tg-1.1")
+	w.work(g, "a.txt", "a")
+	a := w.approval(g, "tg-1.1")
+	live := Settings{BaseBranch: "nope", Remote: "origin"}
+	h.Live = func() Settings { return live }
+	_, err := h.Publish(w.ctx, a)
+	if k, r := peKind(err); k != KindBaseMissing || r {
+		t.Fatalf("err = %v", err)
+	}
+	live = Settings{BaseBranch: "main", Remote: "origin", PRLabel: "first-run"}
+	if _, err := h.Publish(w.ctx, a); err != nil {
+		t.Fatalf("changed settings: %v", err)
+	}
+	calls := strings.Join(w.gh.calls(), "\n")
+	if !strings.Contains(calls, "--base main") || !strings.Contains(calls, "first-run") {
+		t.Fatalf("calls = %v", w.gh.calls())
+	}
+}
+
 // Publish refuses a group branch outside komodo/ before any git runs.
 func TestPublishCriticalBranch(t *testing.T) {
 	w := newWorld(t)
