@@ -360,6 +360,96 @@ func (g *Git) Merge(ctx context.Context, dir, ref, message string, noFF bool) (s
 	return id, err
 }
 
+// Squash lands ref on the komodo/ branch checked out in dir as one new commit: its parent is the branch tip and its tree is
+// ref's. The tip must be in the history of ref, so the tree holds the branch's own content plus the squashed work.
+func (g *Git) Squash(ctx context.Context, dir, ref, message string) (string, error) {
+	if !safeRev(ref) {
+		return "", fmt.Errorf("squash ref %q is not usable", ref)
+	}
+	if err := CheckMessage(message); err != nil {
+		return "", err
+	}
+
+	t, err := g.locate(dir)
+	if err != nil {
+		return "", err
+	}
+	if _, err := g.currentBranch(ctx, t); err != nil {
+		return "", err
+	}
+
+	if _, err := g.run(ctx, t, "", nil, "merge-base", "--is-ancestor", "HEAD", ref); err != nil {
+		if exitCode(err) == 1 {
+			return "", fmt.Errorf("%s in %s: %w", dir, ref, ErrDiverged)
+		}
+		return "", err
+	}
+
+	tree, err := g.run(ctx, t, "", nil, "rev-parse", "--verify", ref+"^{tree}")
+	if err != nil {
+		return "", err
+	}
+
+	made, err := g.run(ctx, t, message, nil, "commit-tree", strings.TrimSpace(tree), "-p", "HEAD", "-F", "-")
+	if err != nil {
+		return "", err
+	}
+
+	id := strings.TrimSpace(made)
+	if _, err := g.run(ctx, t, "", nil, "merge", "--ff-only", "--no-verify", id); err != nil {
+		return "", err
+	}
+
+	return id, nil
+}
+
+// DeleteLanded deletes a local komodo/ branch at expectTip once landed, a commit in the history of containedIn, holds the
+// branch's tree.
+func (g *Git) DeleteLanded(ctx context.Context, clone, branch, expectTip, landed, containedIn string) error {
+	if !ValidBranch(branch) {
+		return fmt.Errorf("delete %q: %w", branch, ErrCriticalRef)
+	}
+	if !safeRev(expectTip) || !safeRev(landed) || !safeRev(containedIn) {
+		return fmt.Errorf("revision for %q is not usable", branch)
+	}
+
+	t, err := g.ofClone(clone)
+	if err != nil {
+		return err
+	}
+
+	tip, ok, err := g.branchTip(ctx, t, branch)
+	if err != nil || !ok {
+		return err
+	}
+	if tip != expectTip {
+		return fmt.Errorf("%s is at %s, expected %s: %w", branch, tip, expectTip, ErrTipMoved)
+	}
+
+	mine, err := g.run(ctx, t, "", nil, "rev-parse", "--verify", expectTip+"^{tree}")
+	if err != nil {
+		return err
+	}
+
+	held, err := g.run(ctx, t, "", nil, "rev-parse", "--verify", landed+"^{tree}")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(mine) != strings.TrimSpace(held) {
+		return fmt.Errorf("%s holds a different tree than %s: %w", landed, branch, ErrNotContained)
+	}
+
+	if _, err := g.run(ctx, t, "", nil, "merge-base", "--is-ancestor", landed, containedIn); err != nil {
+		if exitCode(err) == 1 {
+			return fmt.Errorf("%s in %s: %w", landed, containedIn, ErrNotContained)
+		}
+		return err
+	}
+
+	_, err = g.run(ctx, t, "", nil, "update-ref", "-d", "refs/heads/"+branch, expectTip)
+	return err
+}
+
 // IsAncestor reports whether commit anc is in the history of desc, or equal to it.
 func (g *Git) IsAncestor(ctx context.Context, dir, anc, desc string) (bool, error) {
 	if !safeRev(anc) || !safeRev(desc) {
@@ -529,8 +619,8 @@ func (g *Git) Holds(ctx context.Context, clone, remote, contains, tip string) (s
 	return "", false, nil
 }
 
-// Landed lists the group landings on head since base, newest first: merge commits on head's first-parent line with two
-// parents and a body that starts with the group section.
+// Landed lists the group landings on head since base, newest first: commits on head's first-parent line whose body starts
+// with the group section.
 func (g *Git) Landed(ctx context.Context, dir, base, head string) ([]Landing, error) {
 	if !safeRev(base) || !safeRev(head) {
 		return nil, fmt.Errorf("range %q..%q is not usable", base, head)
@@ -542,8 +632,7 @@ func (g *Git) Landed(ctx context.Context, dir, base, head string) ([]Landing, er
 	}
 
 	out, err := g.run(
-		ctx, t, "", nil, "log", "--first-parent", "--merges", "--format=%P%x1f%s%x1f%b%x1e",
-		base+".."+head, "--",
+		ctx, t, "", nil, "log", "--first-parent", "--format=%H%x1f%s%x1f%b%x1e", base+".."+head, "--",
 	)
 	if err != nil {
 		return nil, err
@@ -553,7 +642,7 @@ func (g *Git) Landed(ctx context.Context, dir, base, head string) ([]Landing, er
 
 	for _, rec := range strings.Split(out, "\x1e") {
 		f := strings.SplitN(strings.TrimLeft(rec, "\n"), "\x1f", 3)
-		if len(f) != 3 || len(strings.Fields(f[0])) != 2 {
+		if len(f) != 3 {
 			continue
 		}
 
@@ -564,7 +653,7 @@ func (g *Git) Landed(ctx context.Context, dir, base, head string) ([]Landing, er
 			continue
 		}
 
-		list = append(list, Landing{Label: label, Goal: goal, Section: section})
+		list = append(list, Landing{ID: f[0], Label: label, Goal: goal, Section: section})
 	}
 
 	return list, nil

@@ -10,9 +10,9 @@ import (
 	"strings"
 )
 
-// SaveLists commits the epic's task lists, from docs/backlog/, onto the epic branch as a commit and
-// pushes it. It holds the epic's landing turn, and works in the landing worktree when the epic
-// branch is checked out there.
+// SaveLists commits the epic's task lists, from docs/backlog/, onto the local epic branch as a commit and
+// pushes nothing; PushEpic sends it with the first landed group. It holds the epic's landing turn, and works
+// in the landing worktree when the epic branch is checked out there.
 func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 	epic := "komodo/" + r.Epic
 	if !validBranch(epic) || strings.ContainsAny(r.Epic, "/\\") {
@@ -48,7 +48,7 @@ func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 	}
 	defer turn.Release()
 
-	wt, release, err := h.listsWorktree(ctx, r.CommonDir, epic, remote)
+	wt, release, err := h.epicWorktree(ctx, r.CommonDir, epic, remote)
 	if err != nil {
 		return err
 	}
@@ -77,31 +77,12 @@ func (h *Handler) SaveLists(ctx context.Context, r ListsRequest) error {
 		return gitFail(err)
 	}
 
-	local, _, err := h.Git.Head(ctx, wt)
-	if err != nil {
-		return gitFail(err)
-	}
-
-	if tip, ok, err := h.Git.RemoteTip(ctx, wt, remote, epic); err != nil {
-		return fail(KindPush, true, err)
-	} else if ok && tip == local {
-		return nil
-	}
-
-	if err := h.Git.Push(ctx, wt, remote, epic); err != nil {
-		if errors.Is(err, ErrPushRejected) {
-			return gitFail(err)
-		}
-
-		return fail(KindPush, true, err)
-	}
-
 	return nil
 }
 
-// listsWorktree returns a worktree with the epic branch checked out and a function that releases
+// epicWorktree returns a worktree with the epic branch checked out and a function that releases
 // it: the landing worktree when it exists, which stays, otherwise a temporary one that is removed.
-func (h *Handler) listsWorktree(ctx context.Context, common, epic, remote string) (string, func(), error) {
+func (h *Handler) epicWorktree(ctx context.Context, common, epic, remote string) (string, func(), error) {
 	if path, ok, err := h.Git.WorktreeOf(ctx, common, epic); err != nil {
 		return "", nil, gitFail(err)
 	} else if ok {

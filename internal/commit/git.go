@@ -29,6 +29,9 @@ type Git interface {
 	// Merge merges ref into the branch checked out in dir with the given message; it never rebases,
 	// and a conflict aborts the merge.
 	Merge(ctx context.Context, dir, ref, message string, noFF bool) (head string, err error)
+	// Squash lands ref on the branch checked out in dir as one new commit with the branch tip as its only parent and ref's
+	// tree; the tip must be in the history of ref.
+	Squash(ctx context.Context, dir, ref, message string) (head string, err error)
 	// IsAncestor reports whether anc is in the history of desc, or equal to it.
 	IsAncestor(ctx context.Context, dir, anc, desc string) (bool, error)
 	// AddWorktree adds a worktree at path on a komodo/ branch cut from base, creating the branch
@@ -68,6 +71,7 @@ var _ Git = (*core.Git)(nil)
 var (
 	ErrCriticalRef   = core.ErrCriticalRef
 	ErrConflict      = core.ErrConflict
+	ErrDiverged      = core.ErrDiverged
 	ErrPushRejected  = core.ErrPushRejected
 	ErrTrailer       = core.ErrTrailer
 	ErrBranchMissing = core.ErrBranchMissing

@@ -116,6 +116,43 @@ func (w *world) remoteTip(branch string) string {
 	return git(w.t, w.remote, "rev-parse", "refs/heads/"+branch)
 }
 
+// localTip returns the commit the clone's local epic branch points at.
+func (w *world) localTip() string { return git(w.t, w.clone, "rev-parse", "refs/heads/komodo/ep-1") }
+
+// pushes counts the recorded git commands that push.
+func (w *world) pushes() int { return w.countCmd("push") }
+
+// epicReq builds a push request for the epic with the given group labels.
+func (w *world) epicReq(groups ...string) EpicPush {
+	return EpicPush{
+		Repo:       "repo",
+		Root:       w.clone,
+		CommonDir:  filepath.Join(w.clone, ".git"),
+		Epic:       "ep-1",
+		EpicGroups: groups,
+	}
+}
+
+// land saves the group's work as 2 commits, then publishes it, and returns the approval and result.
+func (w *world) land(h *Handler, label string, groups ...string) (Approval, Result) {
+	w.t.Helper()
+	g := w.newGroup(label)
+	w.work(g, label+"-a.txt", "a")
+	if _, err := h.Save(w.ctx, saveReq(g, "tsk-"+label+"-a")); err != nil {
+		w.t.Fatal(err)
+	}
+	w.work(g, label+"-b.txt", "b")
+	if _, err := h.Save(w.ctx, saveReq(g, "tsk-"+label+"-b")); err != nil {
+		w.t.Fatal(err)
+	}
+	a := w.approval(g, groups...)
+	r, err := h.Publish(w.ctx, a)
+	if err != nil {
+		w.t.Fatalf("publish %s: %v", label, err)
+	}
+	return a, r
+}
+
 // group is one group's identity and checkout.
 type group struct {
 	id, label, branch, wt string
@@ -208,10 +245,11 @@ func (f *fakeReporter) subtypes() []string {
 	return s
 }
 
-// fakeCleaner records every Complete call.
+// fakeCleaner records every Complete and CompleteEpic call.
 type fakeCleaner struct {
 	mu    sync.Mutex
 	calls []Published
+	epics []PublishedEpic
 	err   error
 }
 
@@ -220,6 +258,14 @@ func (f *fakeCleaner) Complete(_ context.Context, p Published) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
+	return f.err
+}
+
+// CompleteEpic records the call.
+func (f *fakeCleaner) CompleteEpic(_ context.Context, p PublishedEpic) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.epics = append(f.epics, p)
 	return f.err
 }
 

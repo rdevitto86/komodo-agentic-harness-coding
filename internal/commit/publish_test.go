@@ -1,7 +1,6 @@
 package commit
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -63,119 +62,84 @@ func TestPublishWorktreeEditedAfterApproval(t *testing.T) {
 	}
 }
 
-// The first group of 2 opens no pull request; the second opens exactly one, from the epic branch into the base, titled with
-// the group count.
-func TestPublishTwoGroupsOpensOnePullRequest(t *testing.T) {
+// 3 groups of 2 commits each land as 3 commits on the local epic branch with no push, no pull request call and no change on
+// the remote; the last landing says it is last.
+func TestPublishThreeGroupsLandLocallyWithoutAPush(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
-	g1 := w.newGroup("tg-1.1")
-	w.work(g1, "a.txt", "a")
-	r1, err := h.Publish(w.ctx, w.approval(g1, "tg-1.1", "tg-1.2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r1.Last || r1.PRURL != "" || r1.PRNew || r1.Branch != "komodo/ep-1" {
-		t.Fatalf("first = %+v", r1)
-	}
-	if w.gh.count("pr create") != 0 {
-		t.Fatal("pull request opened after the first group")
-	}
-	if r1.Head != w.remoteTip("komodo/ep-1") {
-		t.Fatalf("head %s, remote %s", r1.Head, w.remoteTip("komodo/ep-1"))
-	}
-	if n := w.clean.calls[0]; n.EpicDone || n.Tip == "" || n.Contains != "origin/komodo/ep-1" || n.Branch != g1.branch ||
-		n.Remote != "origin" {
-		t.Fatalf("published = %+v", n)
-	}
-	g2 := w.newGroup("tg-1.2")
-	w.work(g2, "b.txt", "b")
-	r2, err := h.Publish(w.ctx, w.approval(g2, "tg-1.1", "tg-1.2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !r2.Last || !r2.PRNew || r2.PRURL != "https://github.com/acme/shop/pull/41" {
-		t.Fatalf("second = %+v", r2)
-	}
-	if w.gh.count("pr create") != 1 {
-		t.Fatalf("calls = %v", w.gh.calls())
-	}
-	var create string
-	for _, c := range w.gh.calls() {
-		if strings.HasPrefix(c, "pr create") {
-			create = c
+	groups := []string{"tg-1.1", "tg-1.2", "tg-1.3"}
+	remote := w.remoteTip("komodo/ep-1")
+	before := w.localTip()
+
+	for i, label := range groups {
+		_, r := w.land(h, label, groups...)
+		if r.Last != (i == 2) || r.Branch != "komodo/ep-1" || r.Head != w.localTip() || r.Landed != r.Head {
+			t.Fatalf("%s result = %+v", label, r)
+		}
+		if got := git(t, w.clone, "rev-list", "--count", before+"..komodo/ep-1"); got != string(rune('1'+i)) {
+			t.Fatalf("after %s the epic gained %s commits, want %d", label, got, i+1)
+		}
+		if w.pushes() != 0 || len(w.gh.calls()) != 0 || w.remoteTip("komodo/ep-1") != remote {
+			t.Fatalf("after %s: pushes %d, forge calls %v, remote moved %v",
+				label, w.pushes(), w.gh.calls(), w.remoteTip("komodo/ep-1") != remote)
 		}
 	}
-	for _, want := range []string{"--base main", "--head komodo/ep-1", "--title ep-1: 2 task groups", "--label komodo"} {
-		if !strings.Contains(create, want) {
-			t.Fatalf("create %q lacks %q", create, want)
-		}
+
+	if got := git(t, w.clone, "rev-list", "--merges", "--count", before+"..komodo/ep-1"); got != "0" {
+		t.Fatalf("the epic gained %s merge commits, want 0", got)
 	}
-	if strings.Contains(create, "--draft") {
-		t.Fatal("pull request opened as a draft")
+	if got := git(t, w.clone, "log", "--format=%s", before+"..komodo/ep-1"); got !=
+		"tg-1.3: Goal of tg-1.3\ntg-1.2: Goal of tg-1.2\ntg-1.1: Goal of tg-1.1" {
+		t.Fatalf("epic subjects = %q", got)
 	}
-	body := w.gh.file("create-body.txt")
-	if !strings.Contains(body, "Goal") && !strings.Contains(body, "14 tests pass") ||
-		!strings.Contains(body, "tsk-tg-1.1") || !strings.Contains(body, "tsk-tg-1.2") {
-		t.Fatalf("body lacks both group sections:\n%s", body)
+	if tr := git(t, w.clone, "log", "--format=%(trailers:only)", before+"..komodo/ep-1"); strings.TrimSpace(tr) != "" {
+		t.Fatalf("trailers found: %q", tr)
 	}
-	if got := w.rep.subtypes(); strings.Join(got, ",") != "publish.done,publish.done,pr.opened" {
+	if got := w.rep.subtypes(); strings.Join(got, ",") != "publish.done,publish.done,publish.done" {
 		t.Fatalf("reports = %v", got)
 	}
-	if last := w.clean.calls[1]; !last.EpicDone || last.PRURL != r2.PRURL {
-		t.Fatalf("published = %+v", last)
+	if len(w.clean.calls) != 3 || len(w.clean.epics) != 0 {
+		t.Fatalf("cleanup: %d group calls, %d epic calls", len(w.clean.calls), len(w.clean.epics))
 	}
-	if out := git(t, w.remote, "branch", "--list", "komodo/ep-1-*"); out != "" {
-		t.Fatalf("group branches were pushed: %s", out)
+	if c := w.clean.calls[2]; c.Into != "komodo/ep-1" || c.Landed != w.localTip() || c.Branch != "komodo/ep-1-tg-1.3" || c.Tip == "" {
+		t.Fatalf("published = %+v", c)
 	}
-	if tr := git(t, w.remote, "log", "--format=%(trailers:only)", "komodo/ep-1"); strings.TrimSpace(tr) != "" {
-		t.Fatalf("trailers found: %q", tr)
+	if git(t, w.clone, "rev-parse", w.clean.calls[0].Tip+"^{tree}") == "" {
+		t.Fatal("group tip is gone")
 	}
 }
 
-// A second Publish with the same approval opens no second pull request and calls Complete again.
+// A second Publish with the same approval lands nothing again, pushes nothing and calls Complete again.
 func TestPublishRepeatIsIdempotent(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
-	g1 := w.newGroup("tg-1.1")
-	w.work(g1, "a.txt", "a")
-	if _, err := h.Publish(w.ctx, w.approval(g1, "tg-1.1", "tg-1.2")); err != nil {
-		t.Fatal(err)
-	}
-	g2 := w.newGroup("tg-1.2")
-	w.work(g2, "b.txt", "b")
-	a := w.approval(g2, "tg-1.1", "tg-1.2")
-	r1, err := h.Publish(w.ctx, a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tip := w.remoteTip("komodo/ep-1")
+	w.land(h, "tg-1.1", "tg-1.1", "tg-1.2")
+	a, r1 := w.land(h, "tg-1.2", "tg-1.1", "tg-1.2")
+	tip := w.localTip()
 	for i := 0; i < 2; i++ {
 		r, err := h.Publish(w.ctx, a)
 		if err != nil {
 			t.Fatalf("repeat %d: %v", i, err)
 		}
-		if r.PRNew || r.PRURL != r1.PRURL || r.Head != tip {
-			t.Fatalf("repeat %d = %+v", i, r)
+		if r.Landed != r1.Landed || r.Head != tip || !r.Last {
+			t.Fatalf("repeat %d = %+v, want landed %s", i, r, r1.Landed)
 		}
 	}
-	if w.gh.count("pr create") != 1 || w.gh.count("pr edit") != 2 {
-		t.Fatalf("calls = %v", w.gh.calls())
-	}
-	if w.remoteTip("komodo/ep-1") != tip {
-		t.Fatal("repeat moved the remote")
+	if w.localTip() != tip || w.pushes() != 0 || len(w.gh.calls()) != 0 {
+		t.Fatal("a repeat moved the epic or reached the remote")
 	}
 	if len(w.clean.calls) != 4 {
 		t.Fatalf("Complete called %d times, want 4", len(w.clean.calls))
 	}
 }
 
-// A stale fence read just before the push refuses the push.
-func TestPublishStaleFenceBeforePush(t *testing.T) {
+// A stale fence read just before the landing refuses it and leaves the epic branch as it was.
+func TestPublishStaleFenceBeforeLanding(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
 	g := w.newGroup("tg-1.1")
 	w.work(g, "a.txt", "a")
-	tip := w.remoteTip("komodo/ep-1")
+	tip := w.localTip()
 	w.leases.onRead = func(n int) {
 		if n == 2 {
 			w.leases.bump(g.id, 9)
@@ -185,42 +149,9 @@ func TestPublishStaleFenceBeforePush(t *testing.T) {
 	if k, r := peKind(err); !errors.Is(err, ErrLeaseLost) || k != KindLeaseLost || r {
 		t.Fatalf("err = %v", err)
 	}
-	if w.remoteTip("komodo/ep-1") != tip {
-		t.Fatal("remote moved")
+	if w.localTip() != tip {
+		t.Fatal("epic moved")
 	}
-}
-
-// A remote that gained commits after the fetch rejects the push; nothing is forced and the turn is freed.
-func TestPublishPushRejected(t *testing.T) {
-	w := newWorld(t)
-	h := w.handler()
-	g := w.newGroup("tg-1.1")
-	w.work(g, "a.txt", "a")
-	other := filepath.Join(w.root, "other")
-	git(t, w.root, "clone", w.remote, other)
-	git(t, other, "checkout", "komodo/ep-1")
-	write(t, other, "x.txt", "x")
-	git(t, other, "add", "-A")
-	git(t, other, "commit", "-m", "extra")
-	w.leases.onRead = func(n int) {
-		if n == 2 {
-			git(t, other, "push", "origin", "komodo/ep-1")
-		}
-	}
-	_, err := h.Publish(w.ctx, w.approval(g, "tg-1.1"))
-	if k, r := peKind(err); !errors.Is(err, ErrPushRejected) || k != KindPushRejected || r {
-		t.Fatalf("err = %v", err)
-	}
-	if got, want := w.remoteTip("komodo/ep-1"), git(t, other, "rev-parse", "HEAD"); got != want {
-		t.Fatalf("remote = %s, want the other clone's %s", got, want)
-	}
-	ctx, cancel := context.WithTimeout(w.ctx, 2*time.Second)
-	defer cancel()
-	turn, err := h.Epics.Enter(ctx, "repo/ep-1", "probe")
-	if err != nil {
-		t.Fatalf("turn still held: %v", err)
-	}
-	turn.Release()
 }
 
 // A seeded conflict returns ErrConflict on the group branch and leaves the epic branch unchanged.
@@ -235,13 +166,13 @@ func TestPublishConflict(t *testing.T) {
 	write(t, other, "README.md", "epic\n")
 	git(t, other, "commit", "-am", "epic edit")
 	git(t, other, "push", "origin", "komodo/ep-1")
-	tip := w.remoteTip("komodo/ep-1")
+	remote := w.remoteTip("komodo/ep-1")
 	_, err := h.Publish(w.ctx, w.approval(g, "tg-1.1"))
 	if k, r := peKind(err); !errors.Is(err, ErrConflict) || k != KindMergeConfl || r {
 		t.Fatalf("err = %v", err)
 	}
-	if w.remoteTip("komodo/ep-1") != tip {
-		t.Fatal("epic branch changed")
+	if w.remoteTip("komodo/ep-1") != remote || git(t, w.clone, "log", "-1", "--format=%s", "komodo/ep-1") != "epic edit" {
+		t.Fatal("epic branch changed beyond taking the remote's commit")
 	}
 	if st := git(t, g.wt, "status", "--porcelain"); st != "" {
 		t.Fatalf("group worktree left dirty: %q", st)
@@ -256,7 +187,7 @@ func TestPublishConflict(t *testing.T) {
 func TestPublishRecheckPausesAndResumes(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
-	// the first turn on an epic rechecks before the merge (passes), then the recheck after the push fails
+	// the first turn on an epic rechecks before the merge (passes), then the recheck after the landing fails
 	w.check.results = []CheckResult{{Pass: true}, {Pass: false, Output: "FAIL internal/lease 2 tests failed"}}
 	g1 := w.newGroup("tg-1.1")
 	w.work(g1, "a.txt", "a")
@@ -275,7 +206,7 @@ func TestPublishRecheckPausesAndResumes(t *testing.T) {
 	g2 := w.newGroup("tg-1.2")
 	w.work(g2, "b.txt", "b")
 	a2 := w.approval(g2, "tg-1.1", "tg-1.2")
-	tipAfterG1 := w.remoteTip("komodo/ep-1")
+	tipAfterG1 := w.localTip()
 	done := make(chan error, 1)
 	go func() { _, err := h.Publish(w.ctx, a2); done <- err }()
 	select {
@@ -283,7 +214,7 @@ func TestPublishRecheckPausesAndResumes(t *testing.T) {
 		t.Fatalf("second group landed while the epic was paused: %v", err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if w.remoteTip("komodo/ep-1") != tipAfterG1 {
+	if w.localTip() != tipAfterG1 {
 		t.Fatal("epic moved while paused")
 	}
 	if _, err := h.Publish(w.ctx, a1); err != nil {
@@ -322,56 +253,16 @@ func TestPublishFirstTurnRechecksBeforeMerge(t *testing.T) {
 	w.check.calls = nil
 	g2 := w.newGroup("tg-1.2")
 	w.work(g2, "b.txt", "b")
-	tip := w.remoteTip("komodo/ep-1")
+	tip := w.localTip()
 	_, err := h2.Publish(w.ctx, w.approval(g2, "tg-1.1", "tg-1.2"))
 	if !errors.Is(err, ErrRecheck) {
 		t.Fatalf("err = %v", err)
 	}
-	if len(w.check.calls) != 1 || w.remoteTip("komodo/ep-1") != tip {
-		t.Fatalf("recheck calls = %v; epic tip moved = %v", w.check.calls, w.remoteTip("komodo/ep-1") != tip)
+	if len(w.check.calls) != 1 || w.localTip() != tip {
+		t.Fatalf("recheck calls = %v; epic tip moved = %v", w.check.calls, w.localTip() != tip)
 	}
-	if ls, _ := w.git.Landed(w.ctx, w.clone, "origin/main", "origin/komodo/ep-1"); len(ls) != 1 {
+	if ls, _ := w.git.Landed(w.ctx, w.clone, "origin/main", "komodo/ep-1"); len(ls) != 1 {
 		t.Fatalf("landings = %+v", ls)
-	}
-}
-
-// flakyForge fails OpenPR a set number of times, then defers to the real forge.
-type flakyForge struct {
-	Forge
-	fail int
-}
-
-// OpenPR fails while fail is positive.
-func (f *flakyForge) OpenPR(ctx context.Context, base, head, title, body, label string) (PR, error) {
-	if f.fail > 0 {
-		f.fail--
-		return PR{}, errors.New("gh: network down")
-	}
-	return f.Forge.OpenPR(ctx, base, head, title, body, label)
-}
-
-// A crash between the push and the pull request opens the pull request on the repeat.
-func TestPublishCrashBetweenPushAndPullRequest(t *testing.T) {
-	w := newWorld(t)
-	h := w.handler()
-	h.Forge = &flakyForge{Forge: NewGH(w.clone), fail: 1}
-	g := w.newGroup("tg-1.1")
-	w.work(g, "a.txt", "a")
-	a := w.approval(g, "tg-1.1")
-	_, err := h.Publish(w.ctx, a)
-	if k, r := peKind(err); k != KindForge || !r {
-		t.Fatalf("err = %v", err)
-	}
-	tip := w.remoteTip("komodo/ep-1")
-	if len(w.clean.calls) != 0 {
-		t.Fatal("cleanup ran before the pull request")
-	}
-	r, err := h.Publish(w.ctx, a)
-	if err != nil || !r.PRNew || r.Head != tip {
-		t.Fatalf("repeat = %+v, %v", r, err)
-	}
-	if w.gh.count("pr create") != 1 || len(w.clean.calls) != 1 {
-		t.Fatalf("calls = %v, cleanup %d", w.gh.calls(), len(w.clean.calls))
 	}
 }
 
@@ -394,6 +285,9 @@ func TestPublishCleanupErrorReturned(t *testing.T) {
 	if len(w.clean.calls) != 2 {
 		t.Fatalf("Complete called %d times", len(w.clean.calls))
 	}
+	if got := git(t, w.clone, "rev-list", "--count", "origin/main..komodo/ep-1"); got != "1" {
+		t.Fatalf("the repeat landed again: %s commits", got)
+	}
 }
 
 // A base branch the remote lacks fails with kind base_missing; empty settings use the remote's default branch and origin.
@@ -412,12 +306,9 @@ func TestPublishBaseBranch(t *testing.T) {
 	if _, err := h.Publish(w.ctx, a); err != nil {
 		t.Fatalf("default settings: %v", err)
 	}
-	if w.gh.count("pr create") != 1 || !strings.Contains(strings.Join(w.gh.calls(), "\n"), "--base main") {
-		t.Fatalf("calls = %v", w.gh.calls())
-	}
 }
 
-// Live settings win over Config, and each Publish reads them afresh: a changed base and label apply to the next call.
+// Live settings win over Config, and each Publish reads them afresh: a changed base applies to the next call.
 func TestPublishReadsLiveSettings(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
@@ -430,13 +321,9 @@ func TestPublishReadsLiveSettings(t *testing.T) {
 	if k, r := peKind(err); k != KindBaseMissing || r {
 		t.Fatalf("err = %v", err)
 	}
-	live = Settings{BaseBranch: "main", Remote: "origin", PRLabel: "first-run"}
+	live = Settings{BaseBranch: "main", Remote: "origin"}
 	if _, err := h.Publish(w.ctx, a); err != nil {
 		t.Fatalf("changed settings: %v", err)
-	}
-	calls := strings.Join(w.gh.calls(), "\n")
-	if !strings.Contains(calls, "--base main") || !strings.Contains(calls, "first-run") {
-		t.Fatalf("calls = %v", w.gh.calls())
 	}
 }
 
@@ -458,7 +345,7 @@ func TestPublishCriticalBranch(t *testing.T) {
 	}
 }
 
-// Two groups of one epic landing at once merge one after the other, in the order they arrived.
+// Two groups of one epic landing at once land one after the other, in the order they arrived.
 func TestPublishConcurrentGroupsLandInArrivalOrder(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
@@ -482,11 +369,26 @@ func TestPublishConcurrentGroupsLandInArrivalOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ls, err := w.git.Landed(w.ctx, w.clone, "origin/main", "origin/komodo/ep-1")
+	ls, err := w.git.Landed(w.ctx, w.clone, "origin/main", "komodo/ep-1")
 	if err != nil || len(ls) != 2 {
 		t.Fatalf("landings = %+v, %v", ls, err)
 	}
 	if ls[1].Label != "tg-1.2" || ls[0].Label != "tg-1.1" {
 		t.Fatalf("landing order (oldest last) = %s, %s; want tg-1.2 then tg-1.1", ls[1].Label, ls[0].Label)
+	}
+}
+
+// A remote with no epic branch yet, as when the task lists were committed locally, still takes the landing; nothing is pushed.
+func TestPublishWithNoRemoteEpicBranch(t *testing.T) {
+	w := newWorld(t)
+	git(t, w.clone, "push", "origin", "--delete", "komodo/ep-1")
+	git(t, w.clone, "update-ref", "-d", "refs/remotes/origin/komodo/ep-1")
+	h := w.handler()
+	_, r := w.land(h, "tg-1.1", "tg-1.1")
+	if !r.Last || w.pushes() != 0 || r.Head != w.localTip() {
+		t.Fatalf("result = %+v, pushes %d", r, w.pushes())
+	}
+	if out, err := execOut(w.remote, "rev-parse", "--verify", "refs/heads/komodo/ep-1"); err == nil {
+		t.Fatalf("the remote has the epic branch: %s", out)
 	}
 }

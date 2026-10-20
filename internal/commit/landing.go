@@ -146,6 +146,13 @@ func (g *EpicGates) enter(ctx context.Context, epic string, w *waiter) (*Turn, e
 	return nil, ctx.Err()
 }
 
+// Paused reports whether a failed recheck holds the epic.
+func (g *EpicGates) Paused(epic string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gate(epic).pausedBy != ""
+}
+
 // queued returns how many groups wait for the epic's turn.
 func (g *EpicGates) queued(epic string) int {
 	g.mu.Lock()

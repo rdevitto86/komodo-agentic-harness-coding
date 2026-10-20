@@ -160,7 +160,7 @@ func TestFetchFollowsRewrittenBranch(t *testing.T) {
 	}
 }
 
-// Landed counts only two-parent merges whose body is a group section.
+// Landed counts only commits whose body is a group section.
 func TestLandedIgnoresOtherMerges(t *testing.T) {
 	w := newWorld(t)
 	land := filepath.Join(w.root, "land")
