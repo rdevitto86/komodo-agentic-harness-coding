@@ -219,6 +219,10 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 			return gitRunner{tspec.Lease.Worktree}.Run(ctx, "diff", base)
 		},
 	}
+	cc.BuildCommands, cc.LintCommands = languageChecks(baseTree, lang)
+	cc.BaseDir = func(ctx context.Context, base string) (string, error) {
+		return checkoutBase(ctx, k.root, base, c.Plan.Build)
+	}
 	if tools.JUnit != "" {
 		cc.ReportCommands = map[string]string{lang: tools.JUnit}
 	}
@@ -513,6 +517,24 @@ func resolveTools(p agent.ToolProfiles, t contextmgr.Tree, cmds map[string][]str
 
 	ts.Test = shellLine(cmds["test"])
 	return lang, ts
+}
+
+// languageChecks returns the build and lint shell lines of a non-Go language's own marker, never a Makefile target.
+// Go is left out because the checker builds and lints it itself.
+func languageChecks(t contextmgr.Tree, lang string) (build, lint map[string]string) {
+	build, lint = map[string]string{}, map[string]string{}
+	if lang == "go" {
+		return build, lint
+	}
+
+	targets := map[contextmgr.Class]map[string]string{contextmgr.ClassBuild: build, contextmgr.ClassLint: lint}
+	for class, into := range targets {
+		if cmd, ok := contextmgr.LanguageCommand(t, class); ok && markerLanguage[cmd.Marker] == lang {
+			into[lang] = shellLine(cmd.Argv)
+		}
+	}
+
+	return build, lint
 }
 
 // shellLine renders a command as one shell line; a command that is already `sh -c <line>` gives its line.
