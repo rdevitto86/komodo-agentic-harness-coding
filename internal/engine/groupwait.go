@@ -78,14 +78,18 @@ func (g *group) keepWait(stage Stage) {
 }
 
 // retryBlocked resumes a group blocked by a blocker error when its wait ends; the streak stays, so the next wait grows.
+// The fired wait is cleared first, so a retry that fails leaves a plain block and the stall is reported.
 func (g *group) retryBlocked() {
 	if !waitingBlock(g.st) || g.holding() {
 		return
 	}
 
+	g.clearHold()
+
 	streak := g.st.Counters.FaultStreak
 	res := Next(g.st, Input{Kind: InContinue, Group: g.spec.ID, Time: g.now()}, g.r.limits)
 	if res.Refused || res.Dup || res.Stale {
+		g.after()
 		return
 	}
 

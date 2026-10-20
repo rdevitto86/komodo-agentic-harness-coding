@@ -250,3 +250,31 @@ func TestASetupBlockerWaitsOneTwoThenFourMinutesAndTheFourthIsAStall(t *testing.
 		t.Fatalf("a group blocked for a person retried: %d setup errors", got)
 	}
 }
+
+func TestAWaitEndingOnARefusedRetrySaveReportsTheStallAndCountsNoActiveGroup(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1"}}, withClock)
+	r.tasks.failFor["g-tg-1"] = errors.New("worktree: disk full")
+
+	if err := r.startRun("run-1", "tg-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	until(t, "the setup error", func() bool { return r.streakOf("tg-1") == 1 })
+
+	r.store.failSave.Store(true)
+	r.clock.Advance(time.Minute)
+
+	until(t, "the stall after the refused retry", func() bool { return r.ev.count(bus.TypeRunFailure, "stalled") == 1 })
+
+	r.m.mu.Lock()
+	g := r.m.groups["g-tg-1"]
+	r.m.mu.Unlock()
+
+	g.mu.Lock()
+	waits := g.waits
+	g.mu.Unlock()
+
+	if waits {
+		t.Fatal("the group still counts as waiting after its wait ended and the retry was refused")
+	}
+}
