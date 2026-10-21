@@ -176,6 +176,24 @@ func TestLoopTwoRejectedResultsEndCheckFail(t *testing.T) {
 	}
 }
 
+// schemaGate is a gate whose rejections are schema failures.
+type schemaGate struct{ gateFunc }
+
+// CapReason names the end reason for a result the gate keeps rejecting.
+func (schemaGate) CapReason() state.Reason { return state.ReasonSchemaFail }
+
+func TestLoopGateThatRejectsSchemaEndsSchemaFailNotCheckFail(t *testing.T) {
+	gate := schemaGate{gateFunc(func(json.RawMessage) string { return "no" })}
+	w := &fakeWire{
+		script: []func(turnRequest) (turnResult, error){say("d"), say(`{"done":true}`), say("d"), say(`{"done":true}`)},
+	}
+	_, err := run(t, loopSession(t, w, &fakeHost{}, gate, 100000))
+	var end *EndError
+	if !errors.As(err, &end) || end.Reason != state.ReasonSchemaFail {
+		t.Fatalf("err = %v, want schema_fail", err)
+	}
+}
+
 func TestLoopSchemaRepromptOnceThenSchemaFail(t *testing.T) {
 	w := &fakeWire{script: []func(turnRequest) (turnResult, error){say("d"), say(`{"done":"yes"}`), say(`{"done":true}`)}}
 	evs, err := run(t, loopSession(t, w, &fakeHost{}, nil, 100000))

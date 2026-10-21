@@ -56,6 +56,28 @@ func TestThreeFailuresEnterTheOverrideWait(t *testing.T) {
 	}
 }
 
+func TestCrashIdleAndTimeoutTogetherSpendTheThreeTries(t *testing.T) {
+	l := threeTries()
+	s := mk(StageBuild)
+	s.Counters.RetriesLeft = l.GroupRetries
+
+	for i, reason := range []string{"crash", "idle", "timeout"} {
+		s.Tasks[0].State, s.Tasks[0].Session = "claimed", "s1"
+		r := Next(s, builderEnd(reason), l)
+		if r.Refused {
+			t.Fatalf("%s was refused", reason)
+		}
+		if got := r.State.Counters.RetriesLeft; got != 2-i {
+			t.Fatalf("after %s: left %d, want %d", reason, got, 2-i)
+		}
+		s = r.State
+	}
+
+	if s.Stage != StageBlocked || s.Block.Reason != state.ReasonRetries || s.Block.Until.IsZero() {
+		t.Fatalf("stage %q block %+v: want retries with an override window", s.Stage, s.Block)
+	}
+}
+
 func TestTheApprovalWindowIsSixtyMinutes(t *testing.T) {
 	s := waiting(t)
 	if got := s.Block.Until.Sub(s.Block.At); got != 60*time.Minute {

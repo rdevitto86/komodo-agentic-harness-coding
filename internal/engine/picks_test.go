@@ -180,6 +180,7 @@ func crashEnd(agent string) Input {
 
 func TestASessionThatEndsWithAWorkOutcomeBreaksTheRunOfKomodoFaults(t *testing.T) {
 	s := claimed()
+	s.Counters.RetriesLeft = 9
 	for i, end := range []Input{crashEnd("builder"), builderEnd("timeout"), crashEnd("builder"), crashEnd("builder")} {
 		r := apply(t, s, end)
 		if r.State.Stage != StageBuild || r.State.Block.Reason == state.ReasonCrash {
@@ -194,8 +195,9 @@ func TestASessionThatEndsWithAWorkOutcomeBreaksTheRunOfKomodoFaults(t *testing.T
 	}
 }
 
-func TestFourBlockerErrorsInARowBlockTheGroupForAPersonAndSpendNoRetry(t *testing.T) {
+func TestFourBlockerErrorsInARowBlockTheGroupForAPerson(t *testing.T) {
 	s := claimed()
+	s.Counters.RetriesLeft = 9
 	for i := 1; i <= 3; i++ {
 		r := apply(t, s, crashEnd("builder"))
 		if r.State.Stage != StageBuild || r.State.Counters.FaultStreak != i || !slices.Contains(kinds(r), OrderEnterStage) {
@@ -207,7 +209,7 @@ func TestFourBlockerErrorsInARowBlockTheGroupForAPersonAndSpendNoRetry(t *testin
 	}
 
 	r := apply(t, s, crashEnd("builder"))
-	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonCrash || r.State.Counters.RetriesLeft != 2 {
+	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonCrash || r.State.Counters.RetriesLeft != 5 {
 		t.Fatalf("stage %q block %+v left %d", r.State.Stage, r.State.Block, r.State.Counters.RetriesLeft)
 	}
 	if slices.Contains(subtypes(r), "group.failed") || slices.Contains(kinds(r), OrderEnterStage) {
@@ -258,6 +260,22 @@ func TestAGuardThatFailsToLoadBlocksUnderSetupSpendsNoRetryAndCountsAsAFault(t *
 		if b, ok := e.Data.(*bus.GroupBlocked); ok && !strings.Contains(b.Detail, "policy.json") {
 			t.Fatalf("the event does not name the rules file: %q", b.Detail)
 		}
+	}
+}
+
+func TestFailedCompletionChecksNeverEndTheSessionOrSpendATry(t *testing.T) {
+	s := claimed()
+	for n := 1; n <= 10; n++ {
+		r := Next(s, in(InGateFail, bus.TaskDone{Task: "t1"}), fixtureLimits())
+		for _, e := range r.Emit {
+			if _, ok := e.Data.(*bus.TaskRetry); ok {
+				t.Fatalf("check failure %d emitted a retry", n)
+			}
+		}
+		s = r.State
+	}
+	if s.Tasks[0].State != "claimed" || s.Tasks[0].GateFailures != 10 {
+		t.Errorf("task state %q, gate failures %d", s.Tasks[0].State, s.Tasks[0].GateFailures)
 	}
 }
 

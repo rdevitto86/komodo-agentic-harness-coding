@@ -87,7 +87,8 @@ const (
 	ReasonCancelled Reason = "cancelled"
 )
 
-// Charged reports whether a session that ended for r was a true failure of the work, the only kind that spends a retry.
+// Charged reports whether a session that ended for r was a true failure of the work, which spends a retry. A builder's
+// crash spends one too; a judge's crash does not.
 func (r Reason) Charged() bool {
 	switch r {
 	case ReasonTimeout, ReasonIdle, ReasonCheckFail, ReasonNoResult, ReasonSchemaFail, ReasonRefusals:

@@ -45,7 +45,7 @@ func (c *calc) sessionEnd() bool {
 	holds := s.Stage == StagePaused || s.Stage == StageBlocked || s.Stage == StageDone
 	switch e.Agent {
 	case "builder":
-		return c.builderEnd(e, d.Unfinished, holds)
+		return c.builderEnd(e, d.Unfinished, holds, d.Restart)
 	case "qa", "reviewer":
 		return c.verifierEnd(e, holds, d.Restart)
 	}
@@ -53,8 +53,9 @@ func (c *calc) sessionEnd() bool {
 	return true
 }
 
-// builderEnd clears the builder's task and applies the exit row of its reason.
-func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, holds bool) bool {
+// builderEnd clears the builder's task and applies the exit row of its reason. A crash costs a try unless Komodo's own
+// restart made it.
+func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, holds, restart bool) bool {
 	s := &c.s
 	if t := c.taskByID(e.Task, string(e.Session)); t != nil && t.State == "claimed" {
 		t.State, t.Session = "queued", ""
@@ -77,7 +78,11 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 		c.charge(e.Reason)
 	case e.Reason == "crash":
 		s.Counters.Crashes++
-		c.waive(e.Reason)
+		if restart {
+			c.waive(e.Reason)
+		} else {
+			c.charge(e.Reason)
+		}
 	case e.Reason == "provider", e.Reason == "cancelled":
 		c.waive(e.Reason)
 	}

@@ -239,7 +239,11 @@ func (l *loopState) run(ctx context.Context, st *loopStream) (*Result, error) {
 			if fb != "" {
 				rejected++
 				if rejected >= 2 {
-					return nil, &EndError{Reason: state.ReasonCheckFail, Detail: "two results failed the role's check"}
+					reason := state.ReasonCheckFail
+					if c, ok := g.(interface{ CapReason() state.Reason }); ok {
+						reason = c.CapReason()
+					}
+					return nil, &EndError{Reason: reason, Detail: "two results failed the role's check"}
 				}
 				l.wantFinal, schemaTries = false, 0
 				if err := l.addUser(block{Type: "text", Text: fb}); err != nil {

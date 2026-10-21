@@ -48,7 +48,6 @@ type sessCtx struct {
 	watch   *toolWatch
 	guard   *Guard
 	memo    *judgeMemo
-	checks  checkCap // the inner cap's count of this session's check runs
 	closers []func()
 	handle  llm.ResumeHandle
 	resumed bool
@@ -77,6 +76,15 @@ func (j *judgeMemo) Check(ctx context.Context, output json.RawMessage) (string, 
 		return ge.Text, nil
 	}
 	return "", err
+}
+
+// CapReason is the end reason when the loop gives up on rejected results: the builder's gate only rejects schema breaks,
+// since a failing check never ends its session.
+func (j *judgeMemo) CapReason() state.Reason {
+	if _, ok := j.role.(*builderRole); ok {
+		return state.ReasonSchemaFail
+	}
+	return state.ReasonCheckFail
 }
 
 // judge returns the judgement of a result, running the role's Judge the first time only.
@@ -800,8 +808,8 @@ func (m *Manager) supervise(ctx context.Context, sc *sessCtx, req sessReq, st ll
 	return SuperviseWith(ctx, st, lim, clk, h)
 }
 
-// judgeResult runs the role's Judge on a finished result; on the subscription link one rejected result is sent back as a
-// resume.
+// judgeResult runs the role's Judge on a finished result; on the subscription link a rejected result is sent back as a
+// resume. A builder's failed check is sent back until it passes or the session ends; any other rejection once.
 func (m *Manager) judgeResult(
 	ctx context.Context,
 	sc *sessCtx,
@@ -815,24 +823,34 @@ func (m *Manager) judgeResult(
 	oc, err := sc.memo.judge(ctx, res)
 
 	var ge *GateError
-	if errors.As(err, &ge) && ProgramLink(sel.Link) {
-		retry, rerr := m.c.Client.Resume(ctx, sc.sess, llm.Input{Text: ge.Text})
-		if rerr == nil {
-			res2, reason, serr := m.supervise(ctx, sc, req, retry)
-			_ = retry.Close()
-			if reason != state.ReasonDone {
-				out.reason = reason
-				out.result.Usage = addUsage(res.Usage, res2.Usage)
-				return out, nil
-			}
-			_ = serr
-			res2.Usage = addUsage(res.Usage, res2.Usage)
-			res, out.result = res2, res2
-			oc, err = sc.memo.judge(ctx, res)
+	for first := true; errors.As(err, &ge) && ProgramLink(sel.Link); first = false {
+		if !first && (req.agent != "builder" || ge.Schema) {
+			break
 		}
+
+		retry, rerr := m.c.Client.Resume(ctx, sc.sess, llm.Input{Text: ge.Text})
+		if rerr != nil {
+			break
+		}
+
+		res2, reason, _ := m.supervise(ctx, sc, req, retry)
+		_ = retry.Close()
+		if reason != state.ReasonDone {
+			out.reason = reason
+			out.result.Usage = addUsage(res.Usage, res2.Usage)
+			return out, nil
+		}
+
+		res2.Usage = addUsage(res.Usage, res2.Usage)
+		res, out.result = res2, res2
+		oc, err = sc.memo.judge(ctx, res)
 	}
 
 	if errors.As(err, &ge) {
+		if !ge.Schema && req.agent == "builder" {
+			return out, fmt.Errorf("send the failed check back to the builder: %s", ge.Text)
+		}
+
 		out.reason = state.ReasonCheckFail
 		if ge.Schema {
 			out.reason = state.ReasonSchemaFail

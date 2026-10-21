@@ -433,7 +433,7 @@ func TestPassingTaskDoneSavesOnceAndANewTaskNeverPushes(t *testing.T) {
 	}
 }
 
-func TestFailingCompletionCommandKeepsTheTaskOpenAndEndsTheSessionAfterThree(t *testing.T) {
+func TestFailingCompletionCommandKeepsTheTaskOpenAndTheSessionRunning(t *testing.T) {
 	r := newPipeRig(t, rigOpts{mut: func(s *GroupSpec, _ *Collaborators) { s.Tasks[0].DoneWhen = "fail" }})
 	if _, err := r.m.instance(context.Background(), "builder"); err != nil {
 		t.Fatal(err)
@@ -450,7 +450,7 @@ func TestFailingCompletionCommandKeepsTheTaskOpenAndEndsTheSessionAfterThree(t *
 	if r.cm.saveCount() != 0 || len(r.m.Progress().TasksDone) != 0 {
 		t.Fatal("a failing task was saved")
 	}
-	if got := sc.watch.Halt(); got != state.ReasonCheckFail {
+	if got := sc.watch.Halt(); got != "" {
 		t.Fatalf("after three failures the session halts with %q", got)
 	}
 }
