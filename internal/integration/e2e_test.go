@@ -212,17 +212,15 @@ func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 	if wt := r.worktrees(); len(wt) != 0 {
 		t.Errorf("worktrees remain: %v", wt)
 	}
-	if b, _ := os.ReadFile(made); strings.Count(string(b), "create ") != 1 {
-		t.Errorf("the run made containers %q, want exactly 1", b)
+	if b, _ := os.ReadFile(made); strings.Count(string(b), "create ") != 2 {
+		// Quality Assurance and the recheck after landing each run in a fresh sandbox instance, destroyed after.
+		t.Errorf("the run made containers %q, want exactly 2", b)
 	}
 	if c := containers(boxes); len(c) != 0 {
 		t.Errorf("containers remain: %v", c)
 	}
 	if ls := r.leaseFiles(); len(ls) != 0 {
 		t.Errorf("leases remain: %v", ls)
-	}
-	if !has(evs, "run-status", "lease.taken", "") {
-		t.Logf("no lease.taken event in the store")
 	}
 }
 

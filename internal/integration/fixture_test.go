@@ -142,7 +142,9 @@ func fixtureBuilderGated(broken bool, gate func(task string)) func(brief string,
 				steps = append(steps, write("calc/mul.go", mulSource), write("calc/mul_test.go", mulTest))
 			default:
 				steps = append(steps, write("calc/"+name+".go", "package calc\n\n// F"+name+" is a fixture function.\n"+
-					"func F"+name+"() int { return 1 }\n"))
+					"func F"+name+"() int { return 1 }\n"),
+					write("calc/"+name+"_test.go", "package calc\n\nimport \"testing\"\n\n"+
+						"func TestF"+name+"(t *testing.T) {\n\tif F"+name+"() != 1 {\n\t\tt.Fatal(\"F"+name+" is not 1\")\n\t}\n}\n"))
 			}
 			steps = append(steps, [2]any{"task_done", map[string]any{"task": id}})
 		}

@@ -165,7 +165,7 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 	if !has(evs, "run-failure", "group.blocked", "regression") {
 		t.Fatalf("the group blocked without reason regression\n%s", r.evidence(evs))
 	}
-	// The event log holds every round: 1 build and 3 rework builds, each return, and a check result per test round.
+	// The event log holds every round: 3 builds (3 tries total), a return after each failed try but the last, and a check result per try.
 	builds, returns, checks := 0, 0, 0
 	for _, e := range evs {
 		switch {
@@ -177,8 +177,8 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 			checks++
 		}
 	}
-	if builds != 4 || returns != 3 || checks != 4 {
-		t.Fatalf("the log holds %d builder sessions, %d returns, %d check results; want 4, 3, 4\n%s",
+	if builds != 3 || returns != 2 || checks != 3 {
+		t.Fatalf("the log holds %d builder sessions, %d returns, %d check results; want 3, 2, 3\n%s",
 			builds, returns, checks, r.evidence(evs))
 	}
 }
@@ -254,7 +254,8 @@ func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 		t.Fatalf("the lease names the run of %d commands, want 1\n%s\n%v", holders, rec, outs)
 	}
 	release()
-	r.waitFor(120*time.Second, "run-status", "group.done")
+	// The epic branch is pushed and the pull request opened once the epic goes quiet, after the group is done.
+	r.waitFor(60*time.Second, "run-complete", "done")
 	evs := r.events()
 	for end := time.Now().Add(10 * time.Second); countOf(keys(evs), "run-status/request.refused") < 1; {
 		time.Sleep(200 * time.Millisecond)
@@ -532,7 +533,9 @@ func TestAnsweringABlockApproveAndDeny(t *testing.T) {
 				t.Fatalf("status --wait did not return the question (exit %d): %s\n%s", st.code, st.stdout, r.evidence(r.events()))
 			}
 			r.mustRun("run", "tg-1.1", "--"+answer)
-			evs := r.waitFor(120*time.Second, "run-status", "group.done")
+			r.waitFor(120*time.Second, "run-status", "group.done")
+			// The epic branch reaches origin only after the epic goes quiet.
+			evs := r.waitFor(60*time.Second, "run-complete", "done")
 			ls := r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1")
 			if answer == "approve" && !strings.Contains(ls, "calc/outside.go") {
 				t.Fatalf("--approve did not continue with the file\n%s", r.evidence(evs))
@@ -790,8 +793,19 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 	r.model.builder = fixtureBuilder(false)
 	r.mustRun("run", "ep-1")
 	evs := r.waitFor(150*time.Second, "run-status", "epic.paused")
-	if ls := r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1"); strings.Contains(ls, "gamma.go") {
+	// Nothing is pushed while the epic is paused, so the epic branch exists only in the local repository.
+	if ls := r.git(r.repo, "ls-tree", "-r", "--name-only", "komodo/ep-1"); strings.Contains(ls, "gamma.go") {
 		t.Fatalf("the second group landed while the epic was paused")
+	}
+	if out := r.git(r.origin, "branch", "--list", "komodo/ep-1"); strings.TrimSpace(out) != "" {
+		t.Fatalf("the epic branch reached the remote while the epic was paused: %q", out)
+	}
+	// originTree lists the epic branch on the remote; it is empty until the epic is pushed.
+	originTree := func() string {
+		if strings.TrimSpace(r.git(r.origin, "branch", "--list", "komodo/ep-1")) == "" {
+			return ""
+		}
+		return r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1")
 	}
 	if strings.Contains(r.ghCalls(), "pr create") {
 		t.Fatalf("a pull request opened before the last landing")
@@ -804,12 +818,11 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 	if !groupDone(r.events(), groupID) {
 		t.Fatalf("no group.done after the recheck passed and tg-1.1 landed\n%s", r.evidence(r.events()))
 	}
-	if !strings.Contains(r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1"), "gamma.go") {
+	if !strings.Contains(originTree(), "gamma.go") {
 		_ = r.komodo(60*time.Second, "run", "ep-1")
 	}
 	for end := time.Now().Add(150 * time.Second); ; time.Sleep(time.Second) {
-		ls := r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1")
-		if strings.Contains(ls, "gamma.go") && strings.Contains(r.ghCalls(), "pr create") {
+		if strings.Contains(originTree(), "gamma.go") && strings.Contains(r.ghCalls(), "pr create") {
 			break
 		}
 		if time.Now().After(end) {
