@@ -11397,7 +11397,7 @@ Only the Configuration Manager reads settings; the Task Manager and Runtime Mana
 | Registry entry `weight` | enum | `standard` | Model size for the Builder; the model per link is chosen by the model client |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
 | Registry entry wall and idle | int | 60 min, 10 min | Session wall limit and silence before the nudge |
-| `limits.group_retries` | int | 3 | The group's retry budget; owned by [Runtime Manager](#7-runtime-manager) |
+| `limits.group_retries` | int | 3 | The tries a group has in all, any mix of causes; owned by [Runtime Manager](#7-runtime-manager) |
 | `guard.refusal_limit` | int | 3 | Refusals under one guard row before the session ends; owned by [Task Manager](#11-task-manager) |
 
 Constants:
@@ -11434,16 +11434,16 @@ const (
 The Builder's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 13. Quality Assurance
 
-Quality Assurance is the agent that proves the Builder's added and modified code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before fails. Its turn begins with free mechanical checks that Go runs in Quality Assurance's sandbox; only a clean result wakes Quality Assurance and the [Reviewer](#14-reviewer), which then run side by side. Quality Assurance is a mandatory approval before any group lands, at every risk level ([14.5](#145-behaviour)): Go accepts its pass only with evidence Go replays, and Go adds deep checks that cost no tokens. The purpose and the interactions are in [HLD 5.14](hld.md#514-quality-assurance).
+Quality Assurance is the agent that proves the Builder's added and modified code works. It checks that the tests are accurate, that every item of the task list is met, and that nothing that worked before fails. Its turn begins with free mechanical checks that Go runs in Quality Assurance's sandbox; only a clean result wakes Quality Assurance and the [Reviewer](#14-reviewer), which then run side by side. Quality Assurance is a mandatory approval before any group lands, at every risk level ([14.5](#145-behaviour)): Quality Assurance verifies each item with its own run tool and gives each a confidence from 0 to 100; Go records the evidence and never replays it, and a pass signs off only at confidence 80 or more. Go adds deep checks that cost no tokens. The purpose and the interactions are in [HLD 5.14](hld.md#514-quality-assurance).
 
 ### 13.1 Scope and Concepts
 
 **Owns:**
 - Quality Assurance's role definition, brief slots and result.
-- Acceptance items, Quality Assurance's blind pass over them, and Go's reruns of a failed item.
+- Acceptance items, Quality Assurance's blind pass over them, its confidence score for each, and its untestable and fail-open path.
 - The per-task confirmation: one answer for every task identifier.
 - The mechanical checks, the first step of Quality Assurance's turn, run by Go code in Quality Assurance's sandbox with no model call: build, lint on the changed packages, rerun of completion commands, scope, secret scan, affected tests (impact set, baseline comparison and flake rule), coverage and case collision (13.5).
-- Quality Assurance's evidence for each item, which Go replays (13.5).
+- Quality Assurance's evidence for each item, which Go records into the events and the pull request and never replays (13.5). The Builder's `done` evidence goes into Quality Assurance's brief.
 - Quality Assurance's sign-off, after which the Builder cannot edit a test file (13.5).
 - The deep checks Go runs by risk level: the race detector, fuzzing, mutation and benchmarks (13.5).
 
@@ -11466,11 +11466,12 @@ Quality Assurance is the agent that proves the Builder's added and modified code
 | Baseline | The result of the `test` command class at the base commit, keyed by the commit's tree hash (a hash of all file contents). |
 | Regression | A test that passed at the base commit and fails in the work under test. |
 | Impact set | The affected tests the mechanical checks run for a change: the changed packages and every package that imports one. |
-| Rerun | Go running a failed item's command again, twice, alone, in the sandbox. |
-| Dispute | A failed item whose two reruns both pass. |
-| Flaky | A test whose two reruns disagree. |
+| Flaky | A test whose two solo reruns disagree; the flake rule of the mechanical checks. |
+| Confidence | A score from 0 to 100 that Quality Assurance gives each item: 0, 25, 50, 75 or 100 as the scale, and 80 as the least that signs an item off. |
+| Untestable | Quality Assurance's report that it cannot test the group, with a cause. |
+| Fail open | The group goes on without Quality Assurance's sign-off and the pull request carries a warning. |
 | Blind pass | Quality Assurance sees the task list, acceptance items and diff, never the Builder's prose. |
-| Evidence run | One command Quality Assurance ran for an item, with its exit code and an output excerpt; Go replays it before it accepts a pass. |
+| Evidence run | One command Quality Assurance ran for an item, with its exit code and an output excerpt; Go records it. |
 | Sign-off | Quality Assurance's accepted pass, stamped with the hash of the test files; a changed test file voids it. |
 | Deep checks | The race detector, fuzzing, mutation and benchmarks, which Go runs with no model call, chosen by risk level. |
 | Mutant | A copy of the change with one deliberate edit, such as a flipped comparison; a test suite that still passes has not killed it. |
@@ -11482,8 +11483,7 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 
 | File | Holds |
 |---|---|
-| `internal/agent/qa.go` | Quality Assurance's `Role`, `Item`, `ItemResult`, `EvidenceRun`, `QAResult`, `QAVerdict`, `ParseQAResult`, `NewQA` and `QA.AcceptResult` |
-| `internal/agent/rerun.go` | `QA.Rerun`, `QA.Replay` and `AdjudicateItem` |
+| `internal/agent/qa.go` | Quality Assurance's `Role`, `Item`, `ItemResult`, `EvidenceRun`, `QAStatus`, `QAResult`, `QAVerdict`, `SignoffConfidence`, `ParseQAResult`, `NewQA` and `QA.AcceptResult` |
 | `internal/agent/signoff.go` | `Signoff`, `TestsHash` and `Signoff.Voided`: the lock on test files after Quality Assurance's pass |
 | `internal/agent/deep.go` | `DeepKind`, `DeepPlan`, `DeepResult`, `Mutant` and `Deep.Run`: the race, fuzz, mutation and benchmark runs |
 | `internal/agent/checks.go` | `Checker`, the check steps, their results and `CheckDone` |
@@ -11519,9 +11519,9 @@ Files this chapter calls but does not own:
   "guard": ["R1"],
   "slots": {
     "required": ["repo_profile", "group", "tasks", "acceptance"],
-    "optional": ["repo_context", "standards", "diff", "checks", "baseline"]
+    "optional": ["repo_context", "standards", "diff", "checks", "baseline", "builder_evidence"]
   },
-  "result": {"$id": "komodo:agent/qa/result/1", "type": "object", "additionalProperties": false, "properties": {…}, "required": ["items", "tasks"]},
+  "result": {"$id": "komodo:agent/qa/result/1", "type": "object", "additionalProperties": false, "properties": {…}, "required": ["status", "items", "tasks"]},
   "pool_slot": true
 }
 ```
@@ -11536,12 +11536,13 @@ Quality Assurance writes no tests: the Builder writes them, and Quality Assuranc
 | `baseline` | Tests failing at the base commit | Optional |
 | `acceptance` | The group's acceptance items at the base commit | Required |
 | `checks` | The clean mechanical check result, with its warnings and flaky tests; the checks always run before Quality Assurance starts | Optional |
+| `builder_evidence` | The commands the Builder ran for its `done` result and their output | Optional |
 
 The `acceptance` slot is defined in the slot table of [chapter 6](#6-context-manager). The brief holds 0 bytes of the Builder's prose.
 
 #### Acceptance item
 
-An item as written in the group's task list, with the command Go reruns:
+An item as written in the group's task list, with the command Quality Assurance runs:
 
 ```markdown
 - WHEN a changed file lies outside the group's file list
@@ -11555,7 +11556,7 @@ An item as written in the group's task list, with the command Go reruns:
 type Item struct {
 	ID    string
 	Text  string   // the acceptance sentence
-	Cmd   string   // the command Go can rerun; empty when the item has none
+	Cmd   string   // the command that checks the item; empty when the item has none
 	Needs []string // network, docker or service:<name>
 }
 ```
@@ -11563,20 +11564,18 @@ type Item struct {
 | Field | Meaning |
 |---|---|
 | `ID` | The item's identifier in the task list. |
-| `Cmd` | Empty means Go can never confirm a failure of this item. |
+| `Cmd` | The command Quality Assurance runs with `run_check`. An item with no `Cmd` is judged by observation, and an item marked failed blocks with or without a command. |
 | `Needs` | An item that needs a network, Docker or a service is skipped with reason `env` and a warning line. Whether the Docker container can satisfy a need is [UNKNOWN: not stated in the design]. |
 
 #### Result
 
 ```go
-// DisputeReason is why Quality Assurance failed an item that Go's reruns passed.
-type DisputeReason string
+// QAStatus says whether Quality Assurance could test the group.
+type QAStatus string
 
 const (
-	ReasonEnv          DisputeReason = "env"
-	ReasonWrongCommand DisputeReason = "wrong_command"
-	ReasonFlaky        DisputeReason = "flaky"
-	ReasonRealFailure  DisputeReason = "real_failure"
+	QATested     QAStatus = "tested"
+	QAUntestable QAStatus = "untestable"
 )
 
 // Confirmation is Quality Assurance's answer for one task identifier.
@@ -11587,7 +11586,7 @@ const (
 	NotConfirmed Confirmation = "not_confirmed"
 )
 
-// EvidenceRun is one command Quality Assurance ran for an item; Go replays it before it accepts the item.
+// EvidenceRun is one command Quality Assurance ran for an item, reported as data.
 type EvidenceRun struct {
 	Cmd     string `json:"cmd"`     // the command as run
 	Exit    int    `json:"exit"`    // the exit code Quality Assurance saw
@@ -11598,8 +11597,9 @@ type EvidenceRun struct {
 type ItemResult struct {
 	Item     string        `json:"item"`
 	Pass     bool          `json:"pass"`
-	Evidence []EvidenceRun `json:"evidence"`         // the runs behind the answer; at least one, also for a failed item
-	Reason   DisputeReason `json:"reason,omitempty"` // after a restart with Go's output: why the item failed for Quality Assurance
+	Evidence []EvidenceRun `json:"evidence"` // the runs behind the answer; at least one, also for a failed item
+	// how sure Quality Assurance is of the answer, after it checked the item itself
+	Confidence *int `json:"confidence"`
 }
 
 // TaskConfirmation is Quality Assurance's answer for one task identifier.
@@ -11610,25 +11610,29 @@ type TaskConfirmation struct {
 
 // QAResult is Quality Assurance's whole final call.
 type QAResult struct {
-	Items []ItemResult       `json:"items"`
-	Tasks []TaskConfirmation `json:"tasks"`
+	Status QAStatus           `json:"status"`          // tested when it judged the items, else untestable
+	Cause  string             `json:"cause,omitempty"` // only with untestable: what was not ready and what it tried
+	Items  []ItemResult       `json:"items"`
+	Tasks  []TaskConfirmation `json:"tasks"`
 }
 ```
 
 | Field | Rule |
 |---|---|
 | `items[].pass` | True when the item's command or observation met the sentence. |
-| `items[].evidence` | Required, non-empty: one `{cmd, exit, excerpt}` per command run. Go replays each run and accepts a pass only when the replay gives the same exit code and the excerpt lines appear in its output (13.5). An excerpt is up to 4096 bytes (`GateOutputCap`), head and tail, as in a tool reply; the full output stays in the run log. `AcceptResult` refuses an empty list, a run with a blank `cmd` and an excerpt over 4096 bytes, for a failed item as for a passed one. The brief template (`embed/templates/qa.md`) tells Quality Assurance to copy each excerpt exactly from the command's output, because Go replays it. |
-| `items[].reason` | Set only on the restart that follows a dispute; one of the 4 words. |
+| `items[].evidence` | Required, non-empty: one `{cmd, exit, excerpt}` per command run. Go records each run and never replays it (13.5). An excerpt is up to 4096 bytes (`GateOutputCap`), head and tail, as in a tool reply; the full output stays in the run log. `AcceptResult` refuses an empty list, a run with a blank `cmd` and an excerpt over 4096 bytes, for a failed item as for a passed one. The brief template (`embed/templates/qa.md`) tells Quality Assurance to verify each answer with a run of its own and to read the Builder's evidence section. |
+| `items[].confidence` | Required, 0 to 100. A passed item below 80 returns the group to Build; a failed item blocks at any confidence. `AcceptResult` refuses a missing score or one outside 0 to 100. |
+| `status`, `cause` | `status` is `tested` or `untestable`; `cause` is required with `untestable`. |
 | `tasks[]` | Every task identifier of the group exactly once; judged from its completion command and acceptance items. |
 
 ```json
 {
+  "status": "tested",
   "items": [
     {"item": "ac-1", "pass": true, "evidence": [
-      {"cmd": "go test ./internal/agent/ -run TestOutOfScope", "exit": 0, "excerpt": "ok  \tkomodo/internal/agent\t0.21s"}]},
+      {"cmd": "go test ./internal/agent/ -run TestOutOfScope", "exit": 0, "excerpt": "ok  \tkomodo/internal/agent\t0.21s"}], "confidence": 100},
     {"item": "ac-2", "pass": false, "evidence": [
-      {"cmd": "go test ./internal/agent/ -run TestSibling", "exit": 1, "excerpt": "TestSibling/py: want sibling, got outside"}]}
+      {"cmd": "go test ./internal/agent/ -run TestSibling", "exit": 1, "excerpt": "TestSibling/py: want sibling, got outside"}], "confidence": 90}
   ],
   "tasks": [
     {"task": "tsk-add-scope", "confirmation": "not_confirmed"},
@@ -11637,32 +11641,17 @@ type QAResult struct {
 }
 ```
 
-```go
-// RerunOutcome is Go's judgement of a failed item after two reruns.
-type RerunOutcome string
-
-const (
-	RerunConfirmed RerunOutcome = "confirmed" // both reruns failed
-	RerunDisputed  RerunOutcome = "disputed"  // both reruns passed
-	RerunSplit     RerunOutcome = "split"     // one passed, one failed
-	RerunUnconfirmed RerunOutcome = "unconfirmed" // the item has no command, so Go ran nothing
-)
-```
-
-The Task Manager folds the validated result and the rerun outcomes into one verdict for the approval rule of [14.5](#145-behaviour):
+The Task Manager folds the validated result into one verdict for the approval rule of [14.5](#145-behaviour):
 
 ```go
 // QAVerdict is Quality Assurance's outcome as the approval rule reads it.
 type QAVerdict struct {
-	Ended      bool     `json:"ended"`                // Quality Assurance's session ended with a valid result and Go's reruns finished
-	Restarts   int      `json:"restarts,omitempty"`   // restarts spent after a dispute or an unreplayed pass
-	Pass       bool     `json:"pass"`                 // every task confirmed, every item passed or skipped, nothing unreplayed
-	NotMet     []string `json:"not_met,omitempty"`    // task identifiers marked not_confirmed
-	Failed     []string `json:"failed,omitempty"`     // items Go's two reruns confirmed failed
-	Disputed   []string `json:"disputed,omitempty"`   // items Go's two reruns passed
-	Split      []string `json:"split,omitempty"`      // items whose two reruns disagreed
-	Skipped    []string `json:"skipped,omitempty"`    // items with needs: or no command, never blocking
-	Unreplayed []string `json:"unreplayed,omitempty"` // passed items whose evidence Go's replay did not reproduce
+	Ended      bool           `json:"ended"`                // Quality Assurance ended with a valid result
+	Pass       bool           `json:"pass"`                 // every task confirmed and every item passed at confidence 80 or more, or skipped
+	NotMet     []string       `json:"not_met,omitempty"`    // task identifiers marked not_confirmed
+	Failed     []string       `json:"failed,omitempty"`     // items Quality Assurance marked failed
+	Skipped    []string       `json:"skipped,omitempty"`    // items with needs:, never blocking
+	Confidence map[string]int `json:"confidence,omitempty"` // item identifier to the score Quality Assurance gave it
 }
 ```
 
@@ -11902,16 +11891,10 @@ A language other than Go skips each check with `Pass` true and the output `skipp
 ```go
 // QA is the Go side of a Quality Assurance agent session.
 type QA interface {
-	// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
-	Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error)
-	// Replay runs each evidence run of a passed item that is the item's own cmd or is in the tool log, and reports those that do not reproduce.
-	Replay(ctx context.Context, run CommandRunner, it Item, r ItemResult, logged []string) ([]EvidenceRun, error)
-	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, or leaves evidence empty.
+	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, leaves evidence empty,
+	// gives a confidence outside 0 to 100, or reports untestable with no cause.
 	AcceptResult(tasks, items []string, r QAResult) error
 }
-
-// AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
-func AdjudicateItem(reruns [2]bool) RerunOutcome
 
 // Deep runs the deep checks of a plan on the work under test and returns one result per check.
 type Deep interface {
@@ -11936,17 +11919,15 @@ func ImpactSet(deps map[string][]string, changed []string) []string
 func CaseCollisions(paths []string) [][]string
 ```
 
-`CommandRunner` is defined in [12.4](#124-interfaces); for the checks and Quality Assurance it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`. A step that judges only by exit code, `done_when`, the task gate and Quality Assurance rerun, treats `ErrOutputOverLimit` as no error and uses the exit code; every step that parses the output fails on it.
+`CommandRunner` is defined in [12.4](#124-interfaces); for the checks and Quality Assurance it is bound to the group's sandbox instance, which the Task Manager created with `CreateSandboxInstance()`. A step that judges only by exit code, `done_when`, the task gate, treats `ErrOutputOverLimit` as no error and uses the exit code; every step that parses the output fails on it.
 
 `NewChecker(CheckerConfig)` builds the `Checker`. The Task Manager passes in what the steps read besides the sandbox: the coverage floor, a reader of the diff, the stored baseline and base coverage, the secret patterns of guard row G4, the test-sibling matcher, the file-list matcher (`MatchPath` when none is given) and, per language, its test command, the command that prints its JUnit XML report, its build command and its lint command, with a function that returns the base commit's files for the lint comparison. A step that lacks its input, such as an empty secret pattern list, is a step that cannot run. Steps run one after another. A baseline names a Go test `<package>.<test name>` and any other test `<class>.<test name>` from its JUnit report. Each language's profile file in `embed/langs` names, per build tool, the command that prints its JUnit XML report. Gradle, Maven and pytest ship one; a language or a test command with none leaves a failing test of that language blocking as unclassifiable.
 
 | Function | On failure |
 |---|---|
-| `QA.Rerun` | An item with no `Cmd` is never rerun and its failure is never confirmed: `Rerun` returns `RerunUnconfirmed`. A command that cannot start returns the error and the item counts as `env`: skipped, reported, never blocking. |
-| `QA.AcceptResult` | A skipped or repeated task identifier or acceptance item, or an item the group does not have, returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
-| `QA.Replay` | Returns the evidence runs that did not reproduce, with Go's exit code and output; the pass is not accepted. A command that cannot start returns the error and the item is skipped and reported. |
+| `QA.AcceptResult` | A skipped or repeated task identifier or acceptance item, or an item the group does not have, a missing confidence or one outside 0 to 100, an empty evidence list, or an untestable result with no cause, returns an error; the Task Manager re-prompts once naming the problem, and a second rejection ends the session `schema_fail`. |
 | `Deep.Run` | An error means a check could not run, such as a sandbox refusal; the group does not pass and is blocked `setup` naming the check. |
-| `AdjudicateItem`, `ClassifyFailure`, `Baseline.Classify`, `ImpactSet`, `CaseCollisions` | Cannot fail. A test absent from the baseline is `ok` when it passes and `new` when it fails. |
+| `ClassifyFailure`, `Baseline.Classify`, `ImpactSet`, `CaseCollisions` | Cannot fail. A test absent from the baseline is `ok` when it passes and `new` when it fails. |
 | `Checker.Check` | An error means a step could not run, such as a sandbox refusal; the group does not pass and is blocked `setup` naming the step. |
 
 **Who calls each function**
@@ -11956,8 +11937,6 @@ func CaseCollisions(paths []string) [][]string
 | Task Manager | `CreateSandboxInstance()` | The group first enters Test and Review |
 | Task Manager | `Checker.Check` | First step of Test and Review, before any model session |
 | Task Manager | `QA.AcceptResult` | Quality Assurance's final call arrives |
-| Task Manager | `QA.Rerun` | The result holds a failed item that has a command |
-| Task Manager | `QA.Replay` | The result holds a passed item with evidence |
 | Task Manager | `Deep.Run` | After the clean mechanical result and before Quality Assurance starts, with `DeepPlan` of the risk level |
 | Task Manager | `DestroySandboxInstance()` | The Cleanup Handler closes the group through `CloseTaskGroup()` |
 
@@ -11983,12 +11962,11 @@ sequenceDiagram
     G->>T: 4 clean
     G->>X: 5 deep checks
     T->>A: 6 start the session with the brief
-    A->>X: 7 run item commands
-    A->>T: 8 final call, items and tasks
+    A->>X: 7 verify each item with its own run tool
+    A->>T: 8 final call, items, confidence and tasks
     T->>G: 9 AcceptResult
-    G->>X: 10 rerun each failed item twice
-    G->>X: 11 replay each pass
-    G->>T: 12 verdict, then sign-off
+    G->>T: 10 verdict from confidence and failed items, then sign-off
+    Note over T: untestable or 2 internal failures: qa.fail_open, no try spent
   end
 ```
 
@@ -11998,52 +11976,30 @@ sequenceDiagram
 4. A failure returns the result with each failing step's exact output. A clean result continues at edge 5.
 5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither Quality Assurance nor the Reviewer starts. On a clean result Go runs the deep checks of the group's risk level ([Running the deep checks](#running-the-deep-checks)), which cost no model call, and records each surviving mutant.
 6. The Task Manager then starts Quality Assurance's session with the brief, and the Reviewer at the same moment for a group of level medium or above ([14.5](#145-behaviour)).
-7. Quality Assurance runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in Quality Assurance's sandbox, the same way as a rerun; the model never writes the command. `run` (classes `build` and `test`) stays for any other command.
-8. It ends with one final call: a pass or fail for every item, with one `{cmd, exit, excerpt}` run for each command behind the answer, and `confirmed` or `not_confirmed` for every task identifier.
-9. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item.
-10. Go reruns every failed item that has a command, twice, in the same container, and judges it with `AdjudicateItem`.
-11. Go replays the evidence of every passed item with `QA.Replay`. An item whose replay does not reproduce is `unreplayed`; Quality Assurance restarts once with Go's output, and a second failure blocks the group with the existing `qa` reason. Neither costs a Builder try.
-12. The Task Manager builds the `QAVerdict` and gives it to the approval rule of [14.5](#145-behaviour). When `Pass` is true, it stamps the sign-off, which is the last step.
+7. Quality Assurance runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in Quality Assurance's sandbox; the model never writes the command. Quality Assurance verifies each of its own answers with a run tool and is prompted to recover from its own failures, such as starting Docker or the application. `run` (classes `build` and `test`) stays for any other command.
+8. It ends with one final call: a pass or fail and a confidence from 0 to 100 for every item, with one `{cmd, exit, excerpt}` run for each command behind the answer, and `confirmed` or `not_confirmed` for every task identifier. When it cannot test the group, it reports `untestable` with a cause; after 2 failed attempts in a row it must do so.
+9. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item, a missing or out-of-range confidence, or an untestable result with no cause.
+10. Go records the evidence and never runs it again. A passed item at confidence under 80 returns the group to Build; a failed item blocks with or without a command. Quality Assurance fails open on `untestable`, or after 2 Quality Assurance internal failures in a row: the Task Manager publishes `qa.fail_open`, the pull request carries the warning "not tested by Quality Assurance: (cause)", and no try is spent. The Reviewer never fails open: a Reviewer internal failure costs one Builder try.
+11. The Task Manager builds the `QAVerdict` and gives it to the approval rule of [14.5](#145-behaviour). When `Pass` is true, it stamps the sign-off, which is the last step.
 
-After every return, the Builder's revised work passes through the checks again, and Quality Assurance reruns every item. `test` is not a command: a group that needs another pass, for example after a hand fix in its worktree, continues with `komodo run (id)`, which picks up at the group's current stage.
+After every return, the Builder's revised work passes through the checks again, and Quality Assurance judges every item again. `test` is not a command: a group that needs another pass, for example after a hand fix in its worktree, continues with `komodo run (id)`, which picks up at the group's current stage.
 
-#### A failed item
+#### A failed or low-confidence item
 
-**📐 What happens when Quality Assurance fails an item**
+**📐 What happens to an item Quality Assurance judges**
 ```mermaid
 flowchart TD
-  F["Quality Assurance fails an item"] -->|"1"| C{"Has a cmd line?"}
-  C -->|"2 no"| U["Unconfirmed: reported, never blocks"]
-  C -->|"3 yes"| R{"Go reruns twice"}
-  R -->|"4 both fail"| OK["Confirmed: returns to the Builder"]
-  R -->|"5 both pass"| RS["Restart Quality Assurance once with Go's output"]
-  R -->|"6 one each"| FL["Blocked flaky"]
-  RS -->|"7 second dispute"| TB["Blocked qa"]
+  F["Quality Assurance judges an item"] -->|"1"| P{"Passed?"}
+  P -->|"2 no, with or without a cmd line"| B["Returns to the Builder"]
+  P -->|"3 yes"| C{"Confidence 80 or more?"}
+  C -->|"4 no"| B
+  C -->|"5 yes"| OK["Item signed off"]
 ```
 
-- **Edge 1:** a Quality Assurance agent-reported failure of an item enters the flow.
-- **Edge 2:** an item with no command cannot be rerun, so Go cannot confirm its failure. It is listed as unconfirmed in the run report and the pull request body.
-- **Edge 3:** an item with a command is rerun twice, alone, in the same sandbox.
-- **Edge 4:** the item reaches the Builder, together with the Reviewer's findings.
-- **Edge 5:** Quality Assurance restarts once with the item, its evidence, and Go's command and output; it returns a reason code (`env`, `wrong_command`, `flaky` or `real_failure`). The dispute is counted at its first occurrence, and disputed items are neither failures nor passes in the failure test.
-- **Edge 6:** a split blocks the group `flaky`.
-- **Edge 7:** a second dispute blocks the group `qa`; it is a harness fault and does not count against the Builder.
-
-```go
-// AdjudicateItem judges a failed item from Go's two reruns; true means the rerun passed.
-func AdjudicateItem(reruns [2]bool) RerunOutcome {
-	switch {
-	case !reruns[0] && !reruns[1]:
-		return RerunConfirmed
-	case reruns[0] && reruns[1]:
-		return RerunDisputed
-	default:
-		return RerunSplit
-	}
-}
-```
-
-Quality Assurance's split blocks the group, unlike a split of the flake rule below, which only reports.
+- **Edge 1:** the item's answer in Quality Assurance's final call enters the flow.
+- **Edge 2:** a failed item reaches the Builder, together with the Reviewer's findings, whether or not it has a command.
+- **Edge 4:** a passed item under confidence 80 returns the group to Build with the item and its evidence.
+- **Edge 5:** at confidence 80 or more the item counts as passed.
 
 #### Mechanical checks
 
@@ -12056,7 +12012,7 @@ The checks are the first step of Quality Assurance's turn. They cost no model to
 | `secrets` | The diff's added lines are scanned with the guard's secret-content patterns, the list guard row G4 uses ([Task Manager](#11-task-manager)). |
 | `build` | The language's own build command (`go build ./...` for Go, never a Makefile target) must succeed on the work under test; a failure carries the compiler's exact output. A language with no build command reports a skipped warning. |
 | `lint` | `golangci-lint` when a `.golangci.*` file exists and the tool is found in the sandbox, else `go vet`, on the packages with changed files (the whole module when `go.mod` or `go.sum` change; deleted folders and nested modules are skipped). Only findings the base lacks fail, matched by file, rule and message, so old lint debt never blocks; the base is linted only when the head's lint reports problems. Skipped when `build` fails; a language with no lint command reports a skipped warning. |
-| `coverage` | Whole-repository line coverage against `check.coverage`, blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. It also fails when the change adds executable lines and none is covered; the added lines no test ran, as `file:line-range`, go to the Reviewer's `checks` slot. |
+| `coverage` | Whole-repository line coverage against `check.coverage` (90 by default), blocking in every language. When the base is already under the floor, a group fails only if it lowers coverage below the base value. It also fails when fewer than `check.coverage` percent of the change's added executable lines are covered by tests; the check lists the uncovered added lines as `file:line-range`, and they go to the Reviewer's `checks` slot. Quality Assurance verifies the rule as one of its standing checks. [TODO: how the planner brings a whole repository to the 90 percent floor ([G-321](#g-321))] |
 | `baseline` | Passed at base and fails at head is a regression and blocks, naming the test; failing at both is pre-existing and warns. |
 | `impact_set` | The affected tests. Go: the tests of every package that imports a changed package. Other languages: the full `test` class. |
 | `flake` | Any failing test is rerun twice alone; see the flake rule below. |
@@ -12179,7 +12135,7 @@ func CaseCollisions(paths []string) [][]string {
 
 Each default tool reports a whole-repository line percent in the field named. Verified by [G-169](#g-169).
 
-Go, Python and Java and Kotlin also report which lines ran: the Go profile blocks, the `files.*.executed_lines` and `missing_lines` of the Python report, and the `line` entries of the JaCoCo report. The coverage step intersects those lines with the lines the diff adds.
+Go, Python and Java and Kotlin also report which lines ran: the Go profile blocks, the `files.*.executed_lines` and `missing_lines` of the Python report, and the `line` entries of the JaCoCo report. The coverage step intersects those lines with the lines the diff adds and compares the covered share with `check.coverage` (90 percent of the added executable lines).
 
 [TODO: changed-line coverage for JavaScript and TypeScript, whose `json-summary` report holds totals only ([G-295](#g-295))]
 
@@ -12198,54 +12154,6 @@ JavaScript and TypeScript wrap the repository's own `test` command. Java and Kot
 The default commands write their data files to a temporary place and remove them, so the tree stays as the Builder left it and the next round's scope check sees only the Builder's changes. Gradle and Maven write under their own build folders.
 
 A language with no default tool fails the coverage step, naming the language, because the floor holds in every language; `doctor` reports it before a run.
-
-#### Evidence replay
-
-Quality Assurance is a gate: Go accepts its pass only with evidence Go can run again. Quality Assurance never gives Go a claim without a command.
-
-**📐 How Go accepts a Quality Assurance agent pass**
-```mermaid
-flowchart TD
-  P["Quality Assurance passes an item"] -->|"1"| E{"Evidence runs listed?"}
-  E -->|"2 no"| R["Result rejected"]
-  E -->|"3 yes"| G{"Go replays each run"}
-  G -->|"4 same exit and excerpt"| OK["Item accepted"]
-  G -->|"5 different"| U["Item unreplayed: no pass"]
-```
-
-1. A passed item must list at least one `{cmd, exit, excerpt}` run; an empty list fails `AcceptResult` like a missing item.
-2. Go replays a run only when its `cmd` is the item's own `cmd`, run as `run_check` runs it, or a command the Task Manager recorded in the session's tool log, replayed under the same guard rows. The model never writes the text Go runs: a `cmd` in neither place is `unreplayed` without being run.
-3. A run reproduces when the replay's exit code equals `exit` and every line of `excerpt` appears in the replay's output. Both sides are normalised first: `NormalizeOutput` replaces a duration such as `0.21s`, `(0.00s)` or `12ms`, and the `(cached)` mark of `go test`, with one fixed token. The excerpt `ok  \tkomodo/internal/agent\t0.21s` therefore matches a later run that prints another duration.
-4. A passed item with a run that does not reproduce is not accepted, and the verdict is not `Pass`. In the built Task Manager the item joins the disputed list with Go's text, so Quality Assurance restarts once with Go's output; a second failure blocks the group with the `qa` reason, and neither costs a Builder try. `Decide` treats `QAVerdict.Unreplayed` like `Disputed`; no caller fills `Unreplayed` today. Replay runs only for a passed item with no `needs`.
-
-```go
-// Replay runs each evidence run again and returns the runs that did not reproduce; a run whose command is neither the item's
-// nor in the tool log is returned without being run (exit -1).
-func (goQA) Replay(ctx context.Context, run CommandRunner, it Item, r ItemResult, logged []string) ([]EvidenceRun, error) {
-	var bad []EvidenceRun
-
-	for _, e := range r.Evidence {
-		if e.Cmd != it.Cmd && !slices.Contains(logged, e.Cmd) {
-			bad = append(bad, EvidenceRun{Cmd: e.Cmd, Exit: -1})
-			continue
-		}
-
-		exit, out, err := run(ctx, e.Cmd)
-		if err != nil && !errors.Is(err, ErrOutputOverLimit) {
-			return nil, fmt.Errorf("replay item %s: %w", it.ID, err)
-		}
-		if exit != e.Exit || !hasLines(out, e.Excerpt) {
-			bad = append(bad, EvidenceRun{Cmd: e.Cmd, Exit: exit, Excerpt: CapOutput(out, GateOutputCap)})
-		}
-	}
-
-	return bad, nil
-}
-```
-
-A run that did not reproduce comes back with Go's exit code and Go's capped output. `hasLines` ignores the cut marker of a capped excerpt. A replay that errors lists the item in the report as skipped, with the error.
-
-**The run command log.** `Env.OnRun func(cmd string)` receives each command the `run` tool starts, as the argument vector written as a JSON array of strings (`["go","test","-run","TestA|TestB"]`), and the bare class name as well when the model gave no arguments. The tool's reply ends with a `logged as:` line holding that text, which Quality Assurance copies into the evidence `cmd`. The command runner reads a command of that form as an argument vector and starts it with no shell, so a `|`, `;` or `$()` in an argument stays text; any other command, such as an item's own `cmd`, still runs as `sh -c`. A role that implements `RunSink` (`Ran(cmd string)`) receives them for the `qa` agent only; `qaRole` keeps them as the log `Replay` reads, and clears the log when a session's brief is built.
 
 #### The sign-off
 
@@ -12278,56 +12186,51 @@ The order is fixed: the mechanical checks, then `runDeep`, then the judges, then
 
 ### 13.6 State
 
-Quality Assurance keeps no state of its own. The group's runtime state ([State Manager](#10-state-manager)) holds Quality Assurance's restart count, its dispute count and each item's state.
+Quality Assurance keeps no state of its own. The Task Manager counts Quality Assurance's internal failures in a row during a round, in memory, and the group's runtime state ([State Manager](#10-state-manager)) holds each item's result.
 
 **📐 Which states a Quality Assurance agent item reaches**
 ```mermaid
 stateDiagram-v2
-  [*] --> Passed: 1 Quality Assurance passes
-  [*] --> Failed: 2 Quality Assurance fails
-  Failed --> Unconfirmed: 3 no cmd line
-  Failed --> Confirmed: 4 both reruns fail
-  Failed --> Disputed: 5 both reruns pass
-  Failed --> Split: 6 one each
-  Disputed --> Failed: 7 Quality Assurance restarted once
-  Disputed --> Blocked: 8 second dispute
-  Split --> Blocked: 9 flaky
-  Confirmed --> [*]: 10 returns to the Builder
+  [*] --> Passed: 1 passed at confidence 80 or more
+  [*] --> LowConfidence: 2 passed below 80
+  [*] --> Failed: 3 marked failed
+  LowConfidence --> [*]: 4 returns to the Builder
+  Failed --> [*]: 5 returns to the Builder
+  [*] --> Untestable: 6 cannot be tested
+  Untestable --> [*]: 7 fail open
 ```
 
-After 4 the item reaches the Builder. After 8 the group is blocked `qa`; after 9, `flaky`. `Passed` and `Unconfirmed` end the item with nothing to do. A `Passed` item counts only once Go's replay reproduces its evidence, and the group's `Signoff` is saved in its runtime state with the verdict.
+After 4 and 5 the item reaches the Builder. After 7 the group goes on with the warning and no try spent. `Passed` ends the item with nothing to do, and the group's `Signoff` is saved in its runtime state with the verdict.
 
 ### 13.7 Invariants and Failures
 
 **Invariants**
-1. A Quality Assurance agent failure counts only after Go's two reruns of its command also fail.
-2. Quality Assurance's confirmation list holds every task identifier exactly once.
+1. Quality Assurance's confirmation list holds every task identifier exactly once.
 3. The mechanical checks start no model session, and a failed check returns the group to the Builder before Quality Assurance or the Reviewer starts.
 4. No command of Quality Assurance can change the Builder's worktree or its `.git` entry; the sandbox receives the work under test and Quality Assurance's sandbox holds the git folder read-only, so a check reads history and no command writes it.
 5. A Quality Assurance agent brief holds 0 bytes of the Builder's prose.
-6. A failed item with no command never blocks.
-7. A Quality Assurance agent pass counts only when Go's replay reproduces the evidence behind every passed item.
-8. After Quality Assurance's sign-off no test file changes without voiding it and reopening Quality Assurance.
-9. Quality Assurance never sees the Builder's reasoning, and never decides that a mutant is equivalent.
-10. A `build` or `lint` failure returns the group to the Builder before Quality Assurance or the Reviewer starts.
+6. A Quality Assurance item marked failed blocks, with or without a command.
+7. A passed item counts only at confidence 80 or more.
+8. Quality Assurance fails open only on `untestable` or after 2 internal failures in a row, and publishes `qa.fail_open`; the Reviewer never fails open.
+9. After Quality Assurance's sign-off no test file changes without voiding it and reopening Quality Assurance.
+10. Quality Assurance never sees the Builder's reasoning, and never decides that a mutant is equivalent.
+11. A `build` or `lint` failure returns the group to the Builder before Quality Assurance or the Reviewer starts.
 
 **Failure rows**
 
 | Failure | Detected by | Action; bound | Then |
 |---|---|---|---|
-| Item fails, both reruns fail | `AdjudicateItem` | Return to the Builder with the item; the return limit | Blocked when returns are spent |
-| Item fails, both reruns pass, dispute count 0 | `AdjudicateItem` | Restart Quality Assurance once with Go's output; 1 | The round continues |
-| Second dispute | Task Manager | Stop; 0 | Blocked `qa` |
-| Reruns split | `AdjudicateItem` | Stop; 0 | Blocked `flaky` |
-| Item has no command | `QA.Rerun` | List as unconfirmed; 0 | Never blocks |
+| Item marked failed, with or without a command | `QAVerdict` | Return to the Builder with the item; the try budget | Blocked when tries are spent |
+| Passed item under confidence 80 | `QAVerdict` | Return to the Builder; the try budget | Blocked when tries are spent |
+| Quality Assurance reports `untestable`, or fails twice in a row | Task Manager | `qa.fail_open` event, pull request warning "not tested by Quality Assurance: (cause)"; no try spent | The group goes on to Commit |
+| Reviewer internal failure | Task Manager | One Builder try; the Reviewer never fails open | Blocked `retries` when none is left |
 | Item needs a network, Docker or service | Task Manager | Skip with reason `env` and a warning; 0 | Never blocks |
 | Result skips or repeats a task | `AcceptResult` | One re-prompt; 1 | Session ends `schema_fail`; task retry |
-| Session ends without a result | Task Manager | Fresh Quality Assurance session; spends one retry | Blocked `retries` when none is left |
+| Session ends without a result | Task Manager | Fresh Quality Assurance session, no try spent; after 2 in a row, fail open | The group goes on with the warning |
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
 | A completion command fails in the checks | `Checker.Check` | Return to the Builder with the exact output; no model call; the return limit | Blocked when returns are spent |
 | A scope, secret scan or case-collision step fails | `Checker.Check` | Return to the Builder naming the file or location; the return limit | Blocked when returns are spent |
 | The build fails, or the change adds a lint problem | `Checker.Check` | Return to the Builder with the compiler or lint output; no model call; the return limit | Blocked when returns are spent |
-| A passed item's evidence does not replay | `QA.Replay` | The item joins the disputed list; restart Quality Assurance once with Go's output, at no Builder try; 1 | A second failure blocks `qa` |
 | A test file changes after the sign-off | `Signoff.Voided` | Void the sign-off and reopen Quality Assurance; whether it spends a retry is [G-312](#g-312) | Open |
 | A race, or a fuzz crash | `Deep.Run` | Return to the Builder with the output; the return limit | Blocked when returns are spent |
 | A mutant survives | `Deep.Run` | Recorded in the run record and the pull request body; what follows is [G-311](#g-311) | Open |
@@ -12346,23 +12249,22 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `check.coverage` | int | 90 | Percent of the repository's lines tests must cover, in every language; hard limit 100. Owned here. |
+| `check.coverage` | int | 90 | Percent of the repository's lines tests must cover, in every language, and percent of each change's added executable lines tests must cover; hard limit 100. Owned here. |
 | Registry entry `weight` | enum | `light` | Model size for Quality Assurance |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
-| `limits.group_retries` | int | 3 | The group's retry budget; owned by [Runtime Manager](#7-runtime-manager) |
+| `limits.group_retries` | int | 3 | The tries a group has in all, any mix of causes; owned by [Runtime Manager](#7-runtime-manager) |
 | `sandbox.max_procs`, `sandbox.max_mem_gb` | int | 512, 8 | Process and memory caps for one session's commands; owned by [Task Manager](#11-task-manager) |
 
 ```go
 const (
-	FlakeReruns    = 2 // solo reruns of a failing test or a failed Quality Assurance item
-	QARestarts = 1 // restarts of Quality Assurance after a dispute or an unreplayed pass
+	FlakeReruns       = 2  // solo reruns of a failing test
+	SignoffConfidence = 80 // the least confidence at which a passed item is signed off
 )
 ```
 
 ### 13.9 Proof Cases
 
 **Unit level**
-- `AdjudicateItem` returns confirmed, disputed and split for the 3 rerun pairs.
 - `ClassifyFailure` returns flaky when any rerun passes.
 - `ImpactSet` over a 3-package chain returns the changed package and both importers.
 - `CaseCollisions` groups `README.md` and `readme.md`.
@@ -12372,9 +12274,11 @@ const (
 - A change that breaks `go build ./...` fails the `build` step with the compiler's output and skips `lint`; a change that adds a lint problem fails `lint`, and the same problem at the base does not.
 - `newLintFindings` matches by file, rule and message, so a problem that only moved lines is not new, and a second copy of an old problem is new.
 - A language with no build or lint command reports a `warn` with detail `skipped`, and the group is not blocked.
-- A passed item whose replay gives another exit code is `unreplayed` and the verdict is not `Pass`.
+- A passed item with confidence 79 makes the verdict not `Pass`; at 80 it passes.
+- `AcceptResult` refuses a missing confidence, a confidence of 101 and an untestable result with no cause.
 - `Signoff.Voided` is true when one test file changed after the sign-off.
 - A coverage of 89 percent against a floor of 90 fails. With a base of 70, a head of 72 passes and a head of 68 fails.
+- A change whose added executable lines are 89 percent covered fails and lists the uncovered lines; at 90 percent it passes.
 - A language with no default coverage tool fails the coverage step and names the language.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
@@ -12382,11 +12286,13 @@ const (
 - A failing completion command returns the group to the Builder with the command's exact output, and the mock model records 0 calls.
 - A clean check result starts Quality Assurance and the Reviewer; a failed one starts neither.
 - With Docker absent, the checks and Quality Assurance run in the operating-system sandbox and the run report says so.
-- A fake Quality Assurance that fails an item the sandbox passes twice is restarted once; a second dispute blocks `qa`.
+- An untestable result with a cause fails open: `qa.fail_open` is published, no try is spent and the pull request carries the warning; 2 internal failures in a row do the same.
+- The Builder's done evidence appears in Quality Assurance's brief.
+- The coverage standing check runs in Quality Assurance's turn.
 - A fixture with one pre-existing failing test passes with a warning; the same fixture with a seeded regression names the test.
 - A seeded out-of-scope write fails the scope step, and a planted fake key fails the secrets step.
 - A test that fails once and passes twice is reported flaky and does not block.
-- An item with no command is listed unconfirmed and does not block.
+- A failed item with no command blocks.
 - Quality Assurance's `run_check` for an item runs its `cmd` in Quality Assurance's sandbox; an unknown identifier and an item with no `cmd` return an error.
 - The Docker container survives a Quality Assurance agent session that ended in `schema_fail`, and `CloseTaskGroup()` destroys it.
 
@@ -12398,6 +12304,7 @@ const (
 | [G-310](#g-310) | Which Go mutation tool | 13.3 |
 | [G-311](#g-311) | What a surviving mutant does now that Quality Assurance writes no tests | 13.3 |
 | [G-312](#g-312) | Whether a voided sign-off spends a retry | 13.5 |
+| [G-321](#g-321) | How the planner brings a whole repository to 90 percent line coverage | 13.5 |
 
 Quality Assurance's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
