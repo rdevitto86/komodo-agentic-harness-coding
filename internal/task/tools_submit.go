@@ -27,7 +27,8 @@ func toolSubmitFinding(_ context.Context, tc *toolCall, raw json.RawMessage) Rep
 	if a.Proof != nil && tc.env.CheckProof != nil {
 		if err := tc.env.CheckProof(*a.Proof); err != nil {
 			return errReply(
-				"%v; proof arguments are passed without shell quoting, such as -run ^TestX$; fix the proof and submit the finding again",
+				"%v; proof arguments are passed without shell quoting, such as -run ^TestX$; "+
+					"fix the proof and submit the finding again",
 				err,
 			)
 		}

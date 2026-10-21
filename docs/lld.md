@@ -6680,7 +6680,7 @@ The last output goes into the next try's brief. A check that alternates between 
 As built (`internal/task/checkcap.go`):
 - A check is a Builder `task_done` run; its name is the task identifier. `run_check` is Quality Assurance's tool and is uncapped.
 - `sameFailLimit` is 3 and `checkRunLimit` is 20. Each session counts its own runs.
-- The same error is the same task identifier, the same exit code and the same capped output. A pass clears the streak.
+- The same error is the same task identifier, the same exit code and the same capped output, compared after `NormalizeOutput` replaces durations and `(cached)` marks ([13.5](#135-behaviour)). A pass clears the streak.
 - A check that flips between pass and fail twice is flaky: the Builder's tool reply gets the note `this check alternates between pass and fail: it is flaky`, once, and no event is published.
 - When the cap is hit the session stops with reason `check_fail`, which spends one try. The check's last output goes into the next try's findings (`takeLastCheck`).
 - The old rule that counted failed completion commands across sessions in the Task Manager (`gateFails`) is removed.
@@ -12194,7 +12194,7 @@ flowchart TD
 
 1. A passed item must list at least one `{cmd, exit, excerpt}` run; an empty list fails `AcceptResult` like a missing item.
 2. Go replays a run only when its `cmd` is the item's own `cmd`, run as `run_check` runs it, or a command the Task Manager recorded in the session's tool log, replayed under the same guard rows. The model never writes the text Go runs: a `cmd` in neither place is `unreplayed` without being run.
-3. A run reproduces when the replay's exit code equals `exit` and every line of `excerpt` appears in the replay's output.
+3. A run reproduces when the replay's exit code equals `exit` and every line of `excerpt` appears in the replay's output. Both sides are normalised first: `NormalizeOutput` replaces a duration such as `0.21s`, `(0.00s)` or `12ms`, and the `(cached)` mark of `go test`, with one fixed token. The excerpt `ok  \tkomodo/internal/agent\t0.21s` therefore matches a later run that prints another duration.
 4. A passed item with a run that does not reproduce is not accepted, and the verdict is not `Pass`. In the built Task Manager the item joins the disputed list with Go's text, so Quality Assurance restarts once with Go's output; a second failure blocks the group with the `qa` reason, and neither costs a Builder try. `Decide` treats `QAVerdict.Unreplayed` like `Disputed`; no caller fills `Unreplayed` today. Replay runs only for a passed item with no `needs`.
 
 ```go
@@ -12224,7 +12224,7 @@ func (goQA) Replay(ctx context.Context, run CommandRunner, it Item, r ItemResult
 
 A run that did not reproduce comes back with Go's exit code and Go's capped output. `hasLines` ignores the cut marker of a capped excerpt. A replay that errors lists the item in the report as skipped, with the error.
 
-**The run command log.** `Env.OnRun func(cmd string)` receives each command the `run` tool starts, as the argument vector joined by spaces, and the bare class name as well when the model gave no arguments. A role that implements `RunSink` (`Ran(cmd string)`) receives them for the `qa` agent only; `qaRole` keeps them as the log `Replay` reads, and clears the log when a session's brief is built.
+**The run command log.** `Env.OnRun func(cmd string)` receives each command the `run` tool starts, as the argument vector written as a JSON array of strings (`["go","test","-run","TestA|TestB"]`), and the bare class name as well when the model gave no arguments. The tool's reply ends with a `logged as:` line holding that text, which Quality Assurance copies into the evidence `cmd`. The command runner reads a command of that form as an argument vector and starts it with no shell, so a `|`, `;` or `$()` in an argument stays text; any other command, such as an item's own `cmd`, still runs as `sh -c`. A role that implements `RunSink` (`Ran(cmd string)`) receives them for the `qa` agent only; `qaRole` keeps them as the log `Replay` reads, and clears the log when a session's brief is built.
 
 #### The sign-off
 
@@ -12618,6 +12618,8 @@ type ProofConfig struct {
 	Source string        // the worktree that holds the work under test
 	Root   string        // the folder that holds each throwaway copy; the sandbox must reach it
 	Cmds   ProofCommands // the repository's detected commands
+
+	Secrets func() ([]string, error) // the secret files the copy leaves out; nil copies every file
 }
 
 // ProofArgv checks a proof command against the allowed list and returns it as an argument list.
@@ -12667,6 +12669,7 @@ type ChangedFile struct {
 	Path    string
 	Added   int
 	Removed int
+	Binary  bool // the file is binary, so its lines are not counted
 }
 
 // RiskInput is everything Classify reads: facts about the diff, never an agent's opinion.
@@ -12695,9 +12698,12 @@ func Classify(in RiskInput) RiskDecision
 // Route returns the reviewer and deep-check route of a level; an unknown level gets the fullest route.
 func Route(l RiskLevel) RiskRoute
 
-// DiffFiles reads the changed files of a unified diff with their added and removed line counts, in diff order.
+// DiffFiles reads the changed files of a unified diff with their added and removed line counts, in diff order. A renamed
+// file is listed under both paths, a deleted file under its old path, and a binary file is marked Binary.
 func DiffFiles(diff string) []ChangedFile
 ```
+
+`Classify` rates a binary file at least `medium`, because its content cannot be read from the diff.
 
 The Task Manager classifies the judged tree once per round in `runDeep`: it passes `DiffFiles` of the group's diff as `Files`, keeps the decision (`Manager.Risk()`) and publishes `risk.set` with the level and reason. `riskSkipsReview` in `cmd/komodo/wire_tasks.go` classifies the round's diff the same way and is wired to `Collaborators.SkipReview`; when `Route(level).Reviewer` is false, the round starts no Reviewer session. Both go through `Manager.classify`, which sets `Proven` once a blocking finding's proof failed as claimed in an earlier round (`noteProven`); `skipsReview` then keeps the Reviewer. [TODO: how Go detects a comment-only change (`Verified`) and a change to a public interface (`PublicAPI`); no caller sets them yet ([G-318](#g-318))]
 
@@ -13057,7 +13063,7 @@ flowchart TD
 2. `VerifyFinding` looks for the quote at `File:Line`, first in the head tree and then in the diff. A line matches when it equals the quote after both are trimmed of leading and trailing whitespace; inner whitespace and letter case must match exactly. A quote holding a line break, or an empty quote, never matches.
 3. Edge 4: a quote not found drops the finding and logs it. The finding cannot block, and the precision counters record it as submitted, not verified.
 4. Edges 5 to 11: a verified finding publishes `finding.verified`. Go drops it instead (edge 11) when its line is not an added or changed line of the diff: the finding is not shown on the pull request and not recorded. Its rule's level picks the bucket (14.3): `block`, `warn` or `record`.
-5. For a `block` level, `RunProof` copies the work under test into a throwaway folder in the Reviewer's sandbox, adds the proof's test file when it has one, runs the command, and discards the folder. The Builder's worktree is never touched. The finding blocks only when the proof fails as claimed; the command exits non-zero and its output contains the `Expect` line the Reviewer supplied, such as the failing test's name.
+5. For a `block` level, `RunProof` copies the work under test into a throwaway folder in the Reviewer's sandbox, adds the proof's test file when it has one, runs the command, and discards the folder. The copy leaves out the files the guard masks (`ProofConfig.Secrets`). The Builder's worktree is never touched. `submit_finding` checks the proof with `ProofConfig.Check` and answers a refused proof with the reason, so the Reviewer can resubmit it; proof arguments are passed without shell quoting (`-run ^TestX$`). The finding blocks only when the proof fails as claimed; the command exits non-zero and its output contains the `Expect` line the Reviewer supplied, such as the failing test's name.
 6. A finding whose rule has proof kind `none`, whose command is not on the allowed list, which has no proof, or whose proof passes is accepted as a warning for the pull request. A proven finding raises the group's risk level to at least `med_high` (14.3).
 
 ```go

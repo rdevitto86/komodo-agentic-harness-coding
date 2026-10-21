@@ -4,9 +4,9 @@ import "strings"
 
 // diffEntry is one `diff --git` block while it is read.
 type diffEntry struct {
-	oldP, newP       string // the path before and after; empty for an added or a deleted file
-	added, removed   int
-	binary, hasPatch bool
+	oldP, newP     string // the path before and after; empty for an added or a deleted file
+	added, removed int
+	binary         bool
 }
 
 // DiffFiles reads the changed files of a unified diff with their added and removed line counts, in diff order. A renamed

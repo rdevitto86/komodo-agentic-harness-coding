@@ -10,8 +10,14 @@ func TestQAReplayIgnoresGoTestTimings(t *testing.T) {
 	it := Item{ID: "ac-1", Cmd: "go test ./..."}
 	excerpt := "ok  \tkomodo/internal/agent\t0.21s\n--- FAIL: TestX (0.00s)\nFAIL\tkomodo/internal/task\t1.5s"
 	cases := []struct{ name, out string }{
-		{"other durations", "ok  \tkomodo/internal/agent\t0.35s\n--- FAIL: TestX (0.02s)\nFAIL\tkomodo/internal/task\t12ms\n"},
-		{"cached", "ok  \tkomodo/internal/agent\t(cached)\n--- FAIL: TestX (0.00s)\nFAIL\tkomodo/internal/task\t(cached)\n"},
+		{
+			"other durations",
+			"ok  \tkomodo/internal/agent\t0.35s\n--- FAIL: TestX (0.02s)\nFAIL\tkomodo/internal/task\t12ms\n",
+		},
+		{
+			"cached",
+			"ok  \tkomodo/internal/agent\t(cached)\n--- FAIL: TestX (0.00s)\nFAIL\tkomodo/internal/task\t(cached)\n",
+		},
 	}
 	for _, c := range cases {
 		run := func(context.Context, string) (int, string, error) { return 0, c.out, nil }
