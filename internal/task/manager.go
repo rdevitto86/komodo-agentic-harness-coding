@@ -331,16 +331,6 @@ func (m *Manager) Runner(role string) agent.CommandRunner { return m.runner(role
 // Files returns the group's file list including what scope answers added.
 func (m *Manager) Files() []string { return m.effectiveFiles() }
 
-// SecretFiles lists the absolute paths of the secret files the guard masks in the group's worktree.
-func (m *Manager) SecretFiles() ([]string, error) {
-	g, err := m.scopeGuard()
-	if err != nil {
-		return nil, fmt.Errorf("load the guard rows: %w", err)
-	}
-
-	return g.SecretFiles(), nil
-}
-
 // setStage moves the group to a stage and reports it.
 func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
 	m.mu.Lock()
@@ -793,9 +783,6 @@ func (m *Manager) runnerOf(name string, find func() string) agent.CommandRunner 
 		}
 
 		argv, ok := m.c.Commands[command]
-		if !ok {
-			argv, ok = parseArgvForm(command)
-		}
 		if !ok {
 			argv = []string{"sh", "-c", command}
 		}

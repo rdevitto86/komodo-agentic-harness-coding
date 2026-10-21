@@ -189,7 +189,7 @@ func TestOldFailurePassesWithAWarningNamingTheTest(t *testing.T) {
 	r := newFixtureRig(t, true, map[string]string{
 		"calc/old_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAlreadyBroken(t *testing.T) { t.Fatal(\"broken at base\") }\n",
 	})
-	r.model.qaExit = 1 // the old failure makes go test ./... exit 1, and Quality Assurance reports it as Go will replay it
+	r.model.qaExit = 1 // the old failure makes go test ./... exit 1, and Quality Assurance reports that exit as evidence
 	r.mustRun("run", "ep-1")
 	evs := r.waitDone(120 * time.Second)
 	if !has(evs, "run-status", "group.done", "complete") {

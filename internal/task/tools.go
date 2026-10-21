@@ -69,12 +69,8 @@ type Env struct {
 	Items []agent.Item
 	// runs one acceptance command in Quality Assurance's sandbox and returns its exit code and output
 	Check func(ctx context.Context, command string) (int, string, error)
-	// receives each command the run tool starts, as the text Go can run again
-	OnRun func(cmd string)
 	// lint errors of a planned task list; empty means clean
 	Lint func(draft string) []string
-	// reports why a finding's proof would be refused; nil means it may run
-	CheckProof func(agent.Proof) error
 	// receives each validated finding
 	OnFinding func(Submitted)
 	// receives tool.denied, tool.outside and finding.submit
@@ -417,16 +413,16 @@ func builtinTools() []tool {
 		{
 			def(
 				"submit_finding",
-				"File one review finding with the rule, the file, the line and the quoted line. A finding of a blocking "+
-					"rule also carries a proof: an allowed command or a new test file, and the line its failure prints.",
+				"File one review finding with the rule, file, line, quoted line and a confidence from 0 to 100. "+
+					"A finding of a blocking rule also carries a proof: what you ran or checked with your run tool, and "+
+					"what you saw. It blocks only with a proof and confidence 80 or more.",
 				`{"type":"object","properties":{"rule":{"type":"string"},`+
 					`"file":{"type":"string"},"line":{"type":"integer"},`+
 					`"quote":{"type":"string"},"note":{"type":"string"},`+
-					`"proof":{"type":"object","properties":{"cmd":{"type":"string"},`+
-					`"test":{"type":"object","properties":{"file":{"type":"string"},"body":{"type":"string"},`+
-					`"run":{"type":"string"}},"required":["file","body","run"],"additionalProperties":false},`+
-					`"expect":{"type":"string"}},"required":["expect"],"additionalProperties":false}},`+
-					`"required":["rule","file","line","quote","note"],`+
+					`"confidence":{"type":"integer","minimum":0,"maximum":100},`+
+					`"proof":{"type":"object","properties":{"ran":{"type":"string"},"saw":{"type":"string"}},`+
+					`"required":["ran","saw"],"additionalProperties":false}},`+
+					`"required":["rule","file","line","quote","note","confidence"],`+
 					`"additionalProperties":false}`,
 			),
 			toolSubmitFinding,

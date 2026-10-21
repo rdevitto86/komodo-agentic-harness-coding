@@ -128,31 +128,6 @@ func TestDeepRunErrorBlocksSetup(t *testing.T) {
 	}
 }
 
-// A pass whose evidence never replays restarts Quality Assurance once, and a second one blocks qa without a Builder try.
-func TestUnreplayedPassRestartsOnceThenBlocksQA(t *testing.T) {
-	items := []agent.Item{{ID: "a1", Text: "it works", Cmd: "test"}}
-	bad := `{"items":[{"item":"a1","pass":true,"evidence":[{"cmd":"test","exit":1,"excerpt":""}]}],` +
-		`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
-
-	r := newPipeRig(t, rigOpts{items: items})
-	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("qa", sayResult(bad), sayResult(bad))
-	r.model.on("reviewer", sayResult(reviewerMet))
-
-	if err := r.run(); err != ErrHeld {
-		t.Fatalf("Run returned %v", err)
-	}
-	if escs := r.rt.escalations(); len(escs) != 1 || escs[0].Reason != "qa" {
-		t.Fatalf("escalations %+v", escs)
-	}
-	if r.model.started("qa") != 2 || r.model.started("builder") != 1 || r.rt.progress().Returns != 0 {
-		t.Fatalf("sessions %v progress %+v", r.model.starts, r.rt.progress())
-	}
-	if got := r.slot("qa", 1, "checks"); !strings.Contains(got, "did not reproduce") {
-		t.Errorf("the restart brief lacks Go's output: %q", got)
-	}
-}
-
 // An approved group is stamped with a sign-off over its tree and test files; a changed test file voids it.
 func TestSignoffIsStampedAndVoidedByATestEdit(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})

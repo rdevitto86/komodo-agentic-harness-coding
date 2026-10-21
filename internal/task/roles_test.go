@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
@@ -24,26 +26,38 @@ func TestBuilderJudgeRejectsABrokenResultAndTurnsNeedsScopeIntoAnOutcome(t *test
 	}
 }
 
-func TestQAJudgeDecidesFromGosRerunsOfAFailedItem(t *testing.T) {
-	failed := result(
-		`{"items":[{"item":"a1","pass":false,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],` +
+func qaResult(pass bool, confidence string) llm.Result {
+	return result(
+		`{"items":[{"item":"a1","pass":` + strconv.FormatBool(pass) + confidence +
+			`,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],` +
 			`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 	)
-	for _, tc := range []struct {
-		name  string
-		exits []int
-		want  OutcomeKind
-	}{
-		{"both reruns fail", []int{1, 1}, OutcomeReturn},
-		{"both reruns pass", []int{0, 0}, OutcomeRestart},
-		{"reruns split", []int{0, 1}, OutcomeBlock},
-	} {
-		out, err := testRoles(t, tc.exits...)["qa"].Judge(context.Background(), failed)
-		if err != nil || out.Kind != tc.want {
-			t.Fatalf("%s: %+v, %v", tc.name, out, err)
+}
+
+// An item Quality Assurance marks failed returns to Build whatever its confidence; Go reruns nothing.
+func TestQAJudgeReturnsAFailedItemWhateverItsConfidence(t *testing.T) {
+	for _, conf := range []string{`,"confidence":0`, `,"confidence":50`, `,"confidence":100`} {
+		out, err := testRoles(t)["qa"].Judge(context.Background(), qaResult(false, conf))
+		if err != nil || out.Kind != OutcomeReturn || len(out.Findings) != 1 {
+			t.Fatalf("%s: %+v, %v", conf, out, err)
 		}
 	}
+
+	out, err := testRoles(t)["qa"].Judge(context.Background(), qaResult(true, `,"confidence":90`))
+	if err != nil || out.Kind != OutcomePass || !strings.Contains(strings.Join(out.Summary, "\n"), "a1 90") {
+		t.Fatalf("a passed item: %+v, %v", out, err)
+	}
+}
+
+func TestQAJudgeRefusesAnItemWithoutAConfidence(t *testing.T) {
 	var ge *GateError
+	for _, conf := range []string{``, `,"confidence":101`, `,"confidence":-1`} {
+		_, err := testRoles(t)["qa"].Judge(context.Background(), qaResult(true, conf))
+		if !errors.As(err, &ge) {
+			t.Fatalf("%q: result accepted: %v", conf, err)
+		}
+	}
+
 	_, err := testRoles(t)["qa"].Judge(context.Background(), result(`{"items":[],"tasks":[]}`))
 	if !errors.As(err, &ge) {
 		t.Fatalf("an incomplete result passed: %v", err)
@@ -73,22 +87,14 @@ func TestReviewerJudgeKeepsOnlyFindingsVerifiedAgainstTheWork(t *testing.T) {
 	}
 }
 
-// testRoles builds the three roles over a runner that answers each rerun from a script of exit codes.
-func testRoles(t *testing.T, exits ...int) map[string]Role {
+// testRoles builds the three roles over a temporary worktree.
+func testRoles(t *testing.T) map[string]Role {
 	t.Helper()
 	wt := t.TempDir()
-	n := 0
 	roles, err := NewRoles(RoleConfig{
 		Group: "tg-1", Tasks: []TaskSpec{{ID: "t1", Title: "x", DoneWhen: "build"}}, Worktree: wt,
 		Items: []agent.Item{{ID: "a1", Text: "works", Cmd: "test"}},
 		Files: func() []string { return []string{"*.go"} },
-		Runner: func() agent.CommandRunner {
-			return func(context.Context, string) (int, string, error) {
-				e := exits[n%len(exits)]
-				n++
-				return e, "out", nil
-			}
-		},
 	})
 	if err != nil {
 		t.Fatal(err)

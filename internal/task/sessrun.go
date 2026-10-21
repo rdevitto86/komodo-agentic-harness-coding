@@ -495,12 +495,6 @@ func (m *Manager) bindTools(
 		env.Items = src.AcceptanceItems()
 		env.Check = m.runner(irole)
 	}
-	if pc, ok := role.(ProofChecker); ok && req.agent == "reviewer" {
-		env.CheckProof = pc.CheckProof
-	}
-	if src, ok := role.(RunSink); ok && req.agent == "qa" {
-		env.OnRun = src.Ran
-	}
 
 	reg := NewRegistry(env)
 

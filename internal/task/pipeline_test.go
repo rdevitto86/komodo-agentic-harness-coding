@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
@@ -395,41 +394,6 @@ func TestCheckDoneFactMatchesTheEventSchemaAndResultFailFlagsARegression(t *test
 	}
 	if checks != 3 || fails != 2 {
 		t.Fatalf("check.done %d result.fail %d", checks, fails)
-	}
-}
-
-func TestDisputedQAResultRestartsTheQAOnceAndASecondEscalatesFlaky(t *testing.T) {
-	items := []agent.Item{{ID: "a1", Text: "it works", Cmd: "test"}}
-	failed := `{"items":[{"item":"a1","pass":false,"evidence":[{"cmd":"test","exit":1,"excerpt":"it failed"}]}],` +
-		`"tasks":[{"task":"t1",` +
-		`"confirmation":"confirmed"}]}`
-	passed := `{"items":[{"item":"a1","pass":true,"evidence":[{"cmd":"test","exit":0,"excerpt":""}]}],` +
-		`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
-
-	r := newPipeRig(t, rigOpts{items: items})
-	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("qa", sayResult(failed), sayResult(passed))
-	r.model.on("reviewer", sayResult(reviewerMet))
-	r.reachCleanup()
-	if r.model.started("qa") != 2 || r.model.started("builder") != 1 || r.rt.progress().Disputes != 1 {
-		t.Fatalf("sessions %v, progress %+v", r.model.starts, r.rt.progress())
-	}
-	if got := r.slot("qa", 1, "checks"); !strings.Contains(got, "Go reran item a1") {
-		t.Fatalf("the restart brief lacks Go's output: %q", got)
-	}
-
-	f := newPipeRig(t, rigOpts{items: items})
-	f.model.on("builder", building(f.wt, "a.go", "package a\n", builderDone))
-	f.model.on("qa", sayResult(failed), sayResult(failed))
-	f.model.on("reviewer", sayResult(reviewerMet))
-	if err := f.run(); err != ErrHeld {
-		t.Fatalf("Run returned %v", err)
-	}
-	if escs := f.rt.escalations(); len(escs) != 1 || escs[0].Reason != "qa" {
-		t.Fatalf("escalations %+v", escs)
-	}
-	if f.model.started("builder") != 1 {
-		t.Fatal("a disputed result sent the group back to Build")
 	}
 }
 

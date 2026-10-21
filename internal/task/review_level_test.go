@@ -11,7 +11,7 @@ import (
 )
 
 // levelRig builds a reviewer role over a worktree holding a.go, with a diff that adds its lines 2 and 3 only.
-func levelRig(t *testing.T, run agent.ProofRunner) *reviewerRole {
+func levelRig(t *testing.T) *reviewerRole {
 	t.Helper()
 	std := func(id string) (agent.FindingLevel, bool) {
 		levels := map[string]agent.FindingLevel{"std.a.1": agent.LevelMedium, "std.a.2": agent.LevelMedLow}
@@ -30,7 +30,7 @@ func levelRig(t *testing.T, run agent.ProofRunner) *reviewerRole {
 
 	roles, err := NewRoles(RoleConfig{
 		Group: "tg-1", Tasks: []TaskSpec{{ID: "t1", Title: "x", DoneWhen: "build"}}, Worktree: wt,
-		Files: func() []string { return []string{"*.go"} }, Reviewer: rev, Proof: run,
+		Files: func() []string { return []string{"*.go"} }, Reviewer: rev,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,51 +57,57 @@ func judgeLevels(t *testing.T, rv *reviewerRole, fs ...Submitted) Outcome {
 	return out
 }
 
-func finding(rule string, line int, quote string, p *agent.Proof) Submitted {
-	return Submitted{Finding: agent.Finding{Rule: rule, File: "a.go", Line: line, Quote: quote, Proof: p}, Note: "n"}
-}
-
-func failing() agent.ProofRunner {
-	return func(context.Context, agent.Proof) (agent.ProofResult, error) {
-		return agent.ProofResult{Failed: true, Output: "--- FAIL: TestBad"}, nil
+func finding(rule string, line int, quote string, p *agent.Proof, confidence int) Submitted {
+	return Submitted{
+		Finding: agent.Finding{Rule: rule, File: "a.go", Line: line, Quote: quote, Proof: p, Confidence: confidence},
+		Note:    "n",
 	}
 }
 
-var claim = &agent.Proof{Cmd: "go test ./... -run TestBad", Expect: "--- FAIL: TestBad"}
+var claim = &agent.Proof{Ran: "go test ./... -run TestBad", Saw: "--- FAIL: TestBad"}
 
-func TestReviewerJudgeReturnsAFindingWhoseProofFailsAsClaimed(t *testing.T) {
-	rv := levelRig(t, failing())
-	out := judgeLevels(t, rv, finding("correctness.2", 2, "var x = bad()", claim))
+func TestReviewerJudgeReturnsAFindingWithAProofAtConfidence80(t *testing.T) {
+	rv := levelRig(t)
+	out := judgeLevels(t, rv, finding("correctness.2", 2, "var x = bad()", claim, 80))
 	if out.Kind != OutcomeReturn || len(out.Findings) != 1 || !strings.Contains(out.Findings[0], "correctness.2") {
 		t.Fatalf("outcome = %+v", out)
 	}
-	if len(out.Verified) != 1 || out.Verified[0].Level != agent.LevelMedHigh ||
-		out.Verified[0].Proof != "failed_as_claimed" {
-		t.Errorf("verified = %+v", out.Verified)
+	v := out.Verified
+	if len(v) != 1 || v[0].Level != agent.LevelMedHigh || v[0].Confidence != 80 || v[0].Proof == nil {
+		t.Errorf("verified = %+v", v)
 	}
 }
 
-func TestReviewerJudgeWarnsOnABlockingFindingWithoutAFailingProof(t *testing.T) {
-	passing := func(context.Context, agent.Proof) (agent.ProofResult, error) {
-		return agent.ProofResult{Output: "ok"}, nil
+// A rule no command could prove, such as readiness.1, blocks by its level like any other rule.
+func TestReviewerJudgeBlocksAFormerlyUnprovableRule(t *testing.T) {
+	rv := levelRig(t)
+	proof := &agent.Proof{Ran: "read the diff", Saw: "the failure is dropped"}
+	out := judgeLevels(t, rv, finding("readiness.1", 2, "var x = bad()", proof, 80))
+	if out.Kind != OutcomeReturn || len(out.Findings) != 1 {
+		t.Fatalf("outcome = %+v", out)
 	}
+}
+
+func TestReviewerJudgeWarnsOnABlockingFindingBelowConfidence80OrWithoutAProof(t *testing.T) {
 	cases := map[string]struct {
-		run agent.ProofRunner
-		p   *agent.Proof
+		p    *agent.Proof
+		conf int
 	}{
-		"proof passes": {passing, claim},
-		"no proof":     {failing(), nil},
-		"unlisted command": {func(context.Context, agent.Proof) (agent.ProofResult, error) {
-			return agent.ProofResult{}, agent.ErrProofRefused
-		}, claim},
-		"no proof runner": {nil, claim},
-		"other failure out": {func(context.Context, agent.Proof) (agent.ProofResult, error) {
-			return agent.ProofResult{Failed: true, Output: "boom"}, nil
-		}, claim},
+		"confidence 79":      {claim, 79},
+		"no proof":           {nil, 100},
+		"proof saw nothing":  {&agent.Proof{Ran: "go vet"}, 100},
+		"confidence 0":       {claim, 0},
+		"proof at 100 holds": {claim, 100},
 	}
 	for name, c := range cases {
-		rv := levelRig(t, c.run)
-		out := judgeLevels(t, rv, finding("correctness.2", 2, "var x = bad()", c.p))
+		rv := levelRig(t)
+		out := judgeLevels(t, rv, finding("correctness.2", 2, "var x = bad()", c.p, c.conf))
+		if name == "proof at 100 holds" {
+			if out.Kind != OutcomeReturn {
+				t.Errorf("%s: outcome = %+v", name, out)
+			}
+			continue
+		}
 		if out.Kind != OutcomePass || len(out.Findings) != 0 {
 			t.Errorf("%s: outcome = %+v", name, out)
 			continue
@@ -113,10 +119,10 @@ func TestReviewerJudgeWarnsOnABlockingFindingWithoutAFailingProof(t *testing.T) 
 }
 
 func TestReviewerJudgeWarnsOnAMediumAndRecordsALowerLevel(t *testing.T) {
-	rv := levelRig(t, failing())
+	rv := levelRig(t)
 	out := judgeLevels(t, rv,
-		finding("quality.1", 2, "var x = bad()", nil),
-		finding("std.a.2", 3, "var y = worse()", nil),
+		finding("quality.1", 2, "var x = bad()", claim, 100),
+		finding("std.a.2", 3, "var y = worse()", nil, 100),
 	)
 	if out.Kind != OutcomePass {
 		t.Fatalf("outcome = %+v", out)
@@ -134,14 +140,11 @@ func TestReviewerJudgeWarnsOnAMediumAndRecordsALowerLevel(t *testing.T) {
 }
 
 func TestReviewerJudgeDropsAFindingOnALineTheGroupDidNotChange(t *testing.T) {
-	rv := levelRig(t, func(context.Context, agent.Proof) (agent.ProofResult, error) {
-		t.Error("the proof of a dropped finding ran")
-		return agent.ProofResult{}, nil
-	})
+	rv := levelRig(t)
 	// line 1 is context in the diff; the quote is right, but the group did not change it
 	out := judgeLevels(t, rv,
-		finding("correctness.2", 1, "package a", claim),
-		finding("quality.1", 1, "package a", nil),
+		finding("correctness.2", 1, "package a", claim, 100),
+		finding("quality.1", 1, "package a", nil, 100),
 	)
 	if out.Kind != OutcomePass || len(out.Verified) != 0 || len(out.Recorded) != 0 {
 		t.Fatalf("outcome = %+v", out)

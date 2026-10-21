@@ -86,10 +86,10 @@ func (m *Manager) skipsReview(diff string) bool {
 	return !proven && m.c.SkipReview != nil && m.c.SkipReview(diff)
 }
 
-// noteProven marks the group once a blocking reviewer finding failed as its proof claimed.
+// noteProven marks the group once a reviewer finding blocks: it carries a proof and a confidence of 80 or more.
 func (m *Manager) noteProven(vs []VerifiedFinding) {
 	for _, v := range vs {
-		if v.Bucket == agent.BucketBlock && v.Proof == "failed_as_claimed" {
+		if v.Bucket == agent.BucketBlock {
 			m.mu.Lock()
 			m.proven = true
 			m.mu.Unlock()

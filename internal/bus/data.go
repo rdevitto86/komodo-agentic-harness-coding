@@ -274,9 +274,15 @@ type VerifyOutcome struct {
 	Pass            bool     `json:"pass"`                       // every task met or confirmed and every item passed
 	NotMet          []string `json:"not_met,omitempty"`          // task identifiers marked not_met or not_confirmed
 	BriefIncomplete bool     `json:"brief_incomplete,omitempty"` // the reviewer answered brief_incomplete
-	Failed          []string `json:"failed,omitempty"`           // Quality Assurance items the reruns confirmed failed
-	Disputed        []string `json:"disputed,omitempty"`         // Quality Assurance items the reruns passed
-	Split           []string `json:"split,omitempty"`            // Quality Assurance items whose two reruns disagreed
+	Failed          []string `json:"failed,omitempty"`           // Quality Assurance items marked failed
+	// the score from 0 to 100 Quality Assurance gave each item
+	Confidence []ItemConfidence `json:"confidence,omitempty"`
+}
+
+// ItemConfidence is the score Quality Assurance gave one acceptance item.
+type ItemConfidence struct {
+	Item       string `json:"item"`
+	Confidence int    `json:"confidence"`
 }
 
 // TaskClaimed is the data of run-status / task.claimed.
@@ -324,6 +330,15 @@ type FindingSubmit struct {
 	Line  int    `json:"line"`           // line number from 1 in the head tree
 	Quote string `json:"quote"`          // the quoted evidence line
 	Note  string `json:"note,omitempty"` // the agent's note on the finding
+	// the Reviewer's own validation of the finding; absent when it gave none
+	Proof      *FindingProof `json:"proof,omitempty"`
+	Confidence int           `json:"confidence"` // 0 to 100: how sure the Reviewer is
+}
+
+// FindingProof is what the Reviewer ran or checked to validate a finding, and what it saw.
+type FindingProof struct {
+	Ran string `json:"ran"`
+	Saw string `json:"saw"`
 }
 
 // EventKey binds FindingSubmit to run-status / finding.submit.
@@ -334,7 +349,6 @@ type FindingVerified struct {
 	FindingSubmit
 	Level string `json:"level"` // critical, high, med_high, medium, med_low or low, from the rule
 	In    string `json:"in"`    // "head" or "diff", where the quote was found
-	Proof string `json:"proof"` // failed_as_claimed, passed or none
 }
 
 // EventKey binds FindingVerified to run-status / finding.verified.

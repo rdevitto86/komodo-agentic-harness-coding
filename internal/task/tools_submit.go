@@ -20,33 +20,33 @@ func toolSubmitFinding(_ context.Context, tc *toolCall, raw json.RawMessage) Rep
 		return errReply("a finding needs a rule, a line from 1 and the quoted line")
 	}
 
+	if a.Confidence == nil || !agent.ValidConfidence(*a.Confidence) {
+		return errReply("a finding needs a confidence from 0 to 100")
+	}
+
 	r, e := locate(tc, a.File)
 	if e != nil {
 		return *e
 	}
-	if a.Proof != nil && tc.env.CheckProof != nil {
-		if err := tc.env.CheckProof(*a.Proof); err != nil {
-			return errReply(
-				"%v; proof arguments are passed without shell quoting, such as -run ^TestX$; "+
-					"fix the proof and submit the finding again",
-				err,
-			)
-		}
-	}
 
 	f := Submitted{
-		Finding: agent.Finding{Rule: a.Rule, File: r.Rel, Line: a.Line, Quote: a.Quote, Proof: a.Proof},
-		Note:    a.Note,
-	}
-	data, _ := json.Marshal(
-		map[string]any{
-			"rule":  f.Rule,
-			"file":  f.File,
-			"line":  f.Line,
-			"quote": f.Quote,
-			"note":  f.Note,
+		Finding: agent.Finding{
+			Rule: a.Rule, File: r.Rel, Line: a.Line, Quote: a.Quote, Proof: a.Proof, Confidence: *a.Confidence,
 		},
-	)
+		Note: a.Note,
+	}
+	fact := map[string]any{
+		"rule":       f.Rule,
+		"file":       f.File,
+		"line":       f.Line,
+		"quote":      f.Quote,
+		"note":       f.Note,
+		"confidence": f.Confidence,
+	}
+	if f.Proof != nil {
+		fact["proof"] = map[string]string{"ran": f.Proof.Ran, "saw": f.Proof.Saw}
+	}
+	data, _ := json.Marshal(fact)
 	tc.bound.line(ToolLine{Kind: "finding", Call: tc.id, Tool: "submit_finding", Data: data})
 	tc.bound.fact(Fact{Subtype: "finding.submit", At: tc.env.now(), Data: data})
 	if tc.env.OnFinding != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -403,8 +404,10 @@ func TestSubmitFindingFilesAFact(t *testing.T) {
 		"line":  1,
 		"quote": "package main",
 		"note":  "n",
+
+		"confidence": 90,
 	})
-	if reply.Text != "filed E1 at cmd/main.go:1" || len(got) != 1 || got[0].Line != 1 {
+	if reply.Text != "filed E1 at cmd/main.go:1" || len(got) != 1 || got[0].Line != 1 || got[0].Confidence != 90 {
 		t.Fatalf("reply %q findings %+v", reply.Text, got)
 	}
 	if f := r.facts[len(r.facts)-1]; f.Subtype != "finding.submit" || !strings.Contains(string(f.Data), `"rule":"E1"`) {
@@ -430,18 +433,44 @@ func TestSubmitFindingCarriesItsProof(t *testing.T) {
 		"line":  1,
 		"quote": "package main",
 		"note":  "n",
-		"proof": map[string]any{
-			"test": map[string]any{
-				"file": "cmd/drop_test.go",
-				"body": "package main\n",
-				"run":  "go test ./cmd/ -run TestDrop",
-			},
-			"expect": "--- FAIL: TestDrop",
-		},
+
+		"confidence": 85,
+		"proof":      map[string]any{"ran": "go test ./cmd/ -run TestDrop", "saw": "--- FAIL: TestDrop"},
 	})
-	if len(got) != 1 || got[0].Proof == nil || got[0].Proof.Expect != "--- FAIL: TestDrop" ||
-		got[0].Proof.Test == nil || got[0].Proof.Test.Run != "go test ./cmd/ -run TestDrop" {
+	if len(got) != 1 || !got[0].Proof.Present() || got[0].Proof.Saw != "--- FAIL: TestDrop" ||
+		got[0].Proof.Ran != "go test ./cmd/ -run TestDrop" {
 		t.Fatalf("findings %+v", got)
+	}
+	if f := r.facts[len(r.facts)-1]; !strings.Contains(string(f.Data), `"saw":"--- FAIL: TestDrop"`) ||
+		!strings.Contains(string(f.Data), `"confidence":85`) {
+		t.Errorf("fact = %s", f.Data)
+	}
+}
+
+func TestSubmitFindingRefusesAMissingOrOutOfRangeConfidence(t *testing.T) {
+	var got []Submitted
+	r := newRig(t, func(e *Env) { e.OnFinding = func(s Submitted) { got = append(got, s) } })
+	base := func(extra map[string]any) map[string]any {
+		m := map[string]any{"rule": "E1", "file": "cmd/main.go", "line": 1, "quote": "package main", "note": "n"}
+		maps.Copy(m, extra)
+		return m
+	}
+
+	for name, extra := range map[string]map[string]any{
+		"missing": nil, "above 100": {"confidence": 101}, "below 0": {"confidence": -1},
+	} {
+		if reply := r.call("submit_finding", base(extra)); !strings.HasPrefix(reply.Text, "error:") {
+			t.Errorf("%s: reply %q", name, reply.Text)
+		}
+	}
+	for _, n := range []int{0, 100} {
+		reply := r.call("submit_finding", base(map[string]any{"confidence": n}))
+		if strings.HasPrefix(reply.Text, "error:") {
+			t.Errorf("confidence %d: reply %q", n, reply.Text)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("filed %d findings, want 2", len(got))
 	}
 }
 

@@ -443,49 +443,10 @@
     "FindingSubmit": {
       "additionalProperties": false,
       "properties": {
-        "file": {
-          "type": "string"
-        },
-        "line": {
+        "confidence": {
           "type": "integer"
         },
-        "note": {
-          "type": "string"
-        },
-        "quote": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "rule": {
-          "type": "string"
-        },
-        "session": {
-          "type": "string"
-        },
-        "stage": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "rule",
-        "file",
-        "line",
-        "quote"
-      ],
-      "type": "object"
-    },
-    "FindingVerified": {
-      "additionalProperties": false,
-      "properties": {
         "file": {
-          "type": "string"
-        },
-        "in": {
-          "type": "string"
-        },
-        "level": {
           "type": "string"
         },
         "line": {
@@ -495,7 +456,20 @@
           "type": "string"
         },
         "proof": {
-          "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "ran": {
+              "type": "string"
+            },
+            "saw": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ran",
+            "saw"
+          ],
+          "type": "object"
         },
         "quote": {
           "type": "string"
@@ -518,9 +492,71 @@
         "file",
         "line",
         "quote",
+        "confidence"
+      ],
+      "type": "object"
+    },
+    "FindingVerified": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "type": "integer"
+        },
+        "file": {
+          "type": "string"
+        },
+        "in": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "note": {
+          "type": "string"
+        },
+        "proof": {
+          "additionalProperties": false,
+          "properties": {
+            "ran": {
+              "type": "string"
+            },
+            "saw": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ran",
+            "saw"
+          ],
+          "type": "object"
+        },
+        "quote": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "file",
+        "line",
+        "quote",
+        "confidence",
         "level",
-        "in",
-        "proof"
+        "in"
       ],
       "type": "object"
     },
@@ -1697,9 +1733,22 @@
             "brief_incomplete": {
               "type": "boolean"
             },
-            "disputed": {
+            "confidence": {
               "items": {
-                "type": "string"
+                "additionalProperties": false,
+                "properties": {
+                  "confidence": {
+                    "type": "integer"
+                  },
+                  "item": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "item",
+                  "confidence"
+                ],
+                "type": "object"
               },
               "type": [
                 "array",
@@ -1726,15 +1775,6 @@
             },
             "pass": {
               "type": "boolean"
-            },
-            "split": {
-              "items": {
-                "type": "string"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
             }
           },
           "required": [

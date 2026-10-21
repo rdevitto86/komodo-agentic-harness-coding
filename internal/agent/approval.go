@@ -11,7 +11,7 @@ const (
 type ReviewerVerdict struct {
 	Ended           bool      `json:"ended"`                      // the Reviewer's session ended with a valid result
 	NotMet          []string  `json:"not_met,omitempty"`          // task identifiers marked not_met
-	Blocking        []Finding `json:"blocking,omitempty"`         // findings of level critical, high or med_high with a proof
+	Blocking        []Finding `json:"blocking,omitempty"`         // critical, high or med_high findings with a proof
 	Warnings        []Finding `json:"warnings,omitempty"`         // pull request findings: medium, or below confidence 80
 	BriefIncomplete bool      `json:"brief_incomplete,omitempty"` // any task answered brief_incomplete
 }

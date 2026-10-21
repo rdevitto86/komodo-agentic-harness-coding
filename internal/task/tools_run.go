@@ -38,11 +38,7 @@ func toolRun(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	}
 
 	argv := append(append([]string{}, base...), a.Args...)
-	logRun(tc.env, a.Class, argv, len(a.Args) == 0)
 	res := confinedRun(ctx, tc, argv, runLogPath(tc))
-	if tc.env.OnRun != nil {
-		res.Reply.Text += "\nlogged as: " + argvForm(argv)
-	}
 
 	switch {
 	case res.StartErr != nil:
@@ -63,42 +59,6 @@ func toolRun(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	}
 
 	return res.Reply
-}
-
-// logRun tells the session's role which command the run tool started: the argument vector as text, and the bare class name
-// when the model gave no arguments.
-func logRun(e *Env, class string, argv []string, bare bool) {
-	if e.OnRun == nil {
-		return
-	}
-
-	e.OnRun(argvForm(argv))
-
-	if bare {
-		e.OnRun(class)
-	}
-}
-
-// argvForm writes an argument vector as a JSON array of strings; it is the logged form of a run and replays without a shell.
-func argvForm(argv []string) string {
-	var b strings.Builder
-
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(argv)
-
-	return strings.TrimSpace(b.String())
-}
-
-// parseArgvForm reads a command written by argvForm; any other text is not an argument vector.
-func parseArgvForm(cmd string) ([]string, bool) {
-	var argv []string
-
-	if !strings.HasPrefix(cmd, `["`) || json.Unmarshal([]byte(cmd), &argv) != nil || len(argv) == 0 {
-		return nil, false
-	}
-
-	return argv, true
 }
 
 // toolRunCheck runs the command of one acceptance item as written, in Quality Assurance's sandbox, and reports its exit

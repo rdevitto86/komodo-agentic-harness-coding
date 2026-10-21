@@ -23,14 +23,8 @@ type RoleConfig struct {
 	Items    []agent.Item    // acceptance items of the group's tasks
 	Worktree string          // absolute path of the group's worktree
 	Files    func() []string // the group's effective file list
-	// runs a command in Quality Assurance's sandbox; nil means no rerun
-	Runner   func() agent.CommandRunner
 	QA       agent.QA
 	Reviewer agent.Reviewer
-	// runs a blocking finding's proof in a throwaway copy of the change; nil means every such finding warns
-	Proof agent.ProofRunner
-	// reports why a proof would be refused, for submit_finding to tell the Reviewer; nil means no check at submit
-	CheckProof func(agent.Proof) error
 }
 
 // taskIDs lists the identifiers of the group's tasks.
@@ -114,17 +108,6 @@ func (b *builderRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 // qaRole is Quality Assurance over agent.QA.
 type qaRole struct {
 	cfg RoleConfig
-	mu  sync.Mutex
-	was string // Go's output after a disputed or unreplayed result; the restart's brief carries it
-	// commands the session ran with the run tool, which Go may replay as evidence
-	logged []string
-}
-
-// Ran records a command the session ran with the run tool.
-func (t *qaRole) Ran(cmd string) {
-	t.mu.Lock()
-	t.logged = append(t.logged, cmd)
-	t.mu.Unlock()
 }
 
 // AcceptanceItems returns the group's acceptance items, which Quality Assurance's run_check tool may run.
@@ -150,20 +133,16 @@ func (t *qaRole) Slots(_ context.Context, in RoleInput) (map[string]string, erro
 		s["diff"] = in.Diff
 	}
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.logged = nil
-
-	if len(in.Findings) > 0 || t.was != "" {
-		s["checks"] = strings.TrimSpace(bullets(in.Findings) + "\n" + t.was)
+	if len(in.Findings) > 0 {
+		s["checks"] = bullets(in.Findings)
 	}
 
 	return s, nil
 }
 
-// Judge accepts Quality Assurance's final call, reruns its failed items and decides what happens next.
-func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
+// Judge accepts Quality Assurance's final call and returns the items it marked failed; its confidence scores are
+// recorded in the verdict and never change a failed item.
+func (t *qaRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 	res, err := agent.ParseQAResult(r.Output)
 	if err != nil {
 		return Outcome{}, &GateError{Text: err.Error(), Schema: true}
@@ -179,28 +158,12 @@ func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		return Outcome{}, &GateError{Text: "the result was rejected: " + err.Error()}
 	}
 
-	var failed, disputed, split, goOut, notMet, listed []string
-
-	t.mu.Lock()
-	logged := slices.Clone(t.logged)
-	t.mu.Unlock()
+	var failed, notMet, listed []string
 
 	for _, ir := range res.Items {
 		it := byID[ir.Item]
+
 		switch {
-		case ir.Pass && len(it.Needs) == 0 && t.cfg.Runner != nil:
-			bad, rerr := t.cfg.QA.Replay(ctx, t.cfg.Runner(), it, ir, logged)
-			switch {
-			case rerr != nil:
-				listed = append(
-					listed,
-					fmt.Sprintf("Quality Assurance: item %s skipped, its replay failed: %v", it.ID, rerr),
-				)
-			case len(bad) > 0:
-				disputed = append(disputed, it.ID)
-				goOut = append(goOut, unreplayedText(it, bad))
-			}
-			continue
 		case ir.Pass:
 			continue
 		case len(it.Needs) > 0:
@@ -209,39 +172,17 @@ func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 				fmt.Sprintf("Quality Assurance: item %s skipped, it needs %s", it.ID, strings.Join(it.Needs, ", ")),
 			)
 			continue
-		case strings.TrimSpace(it.Cmd) == "":
-			listed = append(
-				listed,
-				fmt.Sprintf("Quality Assurance: item %s unconfirmed, it has no command for Go to rerun", it.ID),
-			)
-			continue
-		case t.cfg.Runner == nil:
-			continue
 		}
 
-		out, text, rerr := t.cfg.QA.Rerun(ctx, t.cfg.Runner(), it)
-		if rerr != nil {
-			listed = append(listed, fmt.Sprintf("Quality Assurance: item %s unconfirmed, its rerun failed: %v", it.ID, rerr))
-			continue
-		}
-
-		switch out {
-		case agent.RerunConfirmed:
-			failed = append(failed, fmt.Sprintf("acceptance item %s failed: %s\n%s", it.ID, evidenceText(ir.Evidence), text))
-		case agent.RerunDisputed:
-			disputed = append(disputed, it.ID)
-			goOut = append(
-				goOut,
-				fmt.Sprintf(
-					"Go reran item %s (%s) twice and it passed both times:\n%s",
-					it.ID,
-					it.Cmd,
-					text,
-				),
-			)
-		case agent.RerunSplit:
-			split = append(split, it.ID)
-		}
+		failed = append(
+			failed,
+			fmt.Sprintf(
+				"acceptance item %s failed (confidence %d): %s",
+				it.ID,
+				*ir.Confidence,
+				evidenceText(ir.Evidence),
+			),
+		)
 	}
 
 	for _, tc := range res.Tasks {
@@ -250,19 +191,7 @@ func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		}
 	}
 
-	t.mu.Lock()
-	t.was = ""
-	t.mu.Unlock()
-
-	switch {
-	case len(split) > 0:
-		return Outcome{Kind: OutcomeBlock, Reason: "flaky", Findings: split}, nil
-	case len(disputed) > 0:
-		t.mu.Lock()
-		t.was = strings.Join(goOut, "\n")
-		t.mu.Unlock()
-		return Outcome{Kind: OutcomeRestart, Findings: goOut}, nil
-	case len(failed) > 0 || len(notMet) > 0:
+	if len(failed) > 0 || len(notMet) > 0 {
 		for _, id := range notMet {
 			failed = append(failed, "Quality Assurance did not confirm task "+id)
 		}
@@ -274,27 +203,20 @@ func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		Summary: append(
 			[]string{
 				fmt.Sprintf("Quality Assurance: %d items, %d tasks confirmed", len(res.Items), len(res.Tasks)),
+				"Quality Assurance confidence: " + confidenceText(res.Items),
 			},
 			listed...),
 	}, nil
 }
 
-// unreplayedText words what Go saw when it replayed the evidence of a passed item and did not get the same result.
-func unreplayedText(it agent.Item, bad []agent.EvidenceRun) string {
-	var b strings.Builder
-
-	fmt.Fprintf(&b, "Go replayed the evidence of item %s and it did not reproduce:", it.ID)
-
-	for _, e := range bad {
-		if e.Exit == -1 && e.Excerpt == "" {
-			fmt.Fprintf(&b, "\n- %q was not run: it is neither the item's command nor one you ran with the run tool", e.Cmd)
-			continue
-		}
-
-		fmt.Fprintf(&b, "\n- %s gave exit %d:\n%s", e.Cmd, e.Exit, e.Excerpt)
+// confidenceText lists the score Quality Assurance gave each item, such as ac-1 90, ac-2 75.
+func confidenceText(items []agent.ItemResult) string {
+	parts := make([]string, len(items))
+	for i, it := range items {
+		parts[i] = fmt.Sprintf("%s %d", it.Item, *it.Confidence)
 	}
 
-	return b.String()
+	return strings.Join(parts, ", ")
 }
 
 // evidenceText renders the runs behind an answer, one per command.
@@ -323,15 +245,6 @@ func (r *reviewerRole) Submit(f Submitted) {
 	r.mu.Unlock()
 }
 
-// CheckProof returns why a proof would be refused; nil when no check is set.
-func (r *reviewerRole) CheckProof(p agent.Proof) error {
-	if r.cfg.CheckProof == nil {
-		return nil
-	}
-
-	return r.cfg.CheckProof(p)
-}
-
 // Slots fills the reviewer's brief values for this trip and forgets the findings of the last one.
 func (r *reviewerRole) Slots(_ context.Context, in RoleInput) (map[string]string, error) {
 	r.mu.Lock()
@@ -347,7 +260,7 @@ func (r *reviewerRole) Slots(_ context.Context, in RoleInput) (map[string]string
 			continue
 		}
 		for _, rule := range c.Rules {
-			fmt.Fprintf(&rules, "- %s (%s, proof %s): %s\n", rule.ID, rule.Level, rule.Proof, c.Text[rule.ID])
+			fmt.Fprintf(&rules, "- %s (%s): %s\n", rule.ID, rule.Level, c.Text[rule.ID])
 		}
 	}
 
@@ -393,14 +306,14 @@ func (r *reviewerRole) Judge(_ context.Context, res llm.Result) (Outcome, error)
 	var verified []VerifiedFinding
 
 	for _, s := range subs {
-		got, aerr := r.cfg.Reviewer.AcceptFinding(s.Finding, head, added, d, r.cfg.Proof)
+		got, aerr := r.cfg.Reviewer.AcceptFinding(s.Finding, head, added, d)
 		if aerr != nil || got.Dropped != "" {
 			continue
 		}
 
 		verified = append(verified, VerifiedFinding{
 			Rule: s.Rule, File: s.File, Line: s.Line, Quote: s.Quote, Note: s.Note,
-			Level: got.Level, In: got.In, Proof: got.Proof, Bucket: got.Bucket,
+			Proof: s.Proof, Confidence: s.Confidence, Level: got.Level, In: got.In, Bucket: got.Bucket,
 		})
 
 		line := fmt.Sprintf("%s (%s) at %s:%d: %s -- %s", s.Rule, got.Level, s.File, s.Line, s.Quote, s.Note)

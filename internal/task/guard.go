@@ -466,7 +466,8 @@ type (
 		Quote string `json:"quote"`
 		Note  string `json:"note"`
 
-		Proof *agent.Proof `json:"proof,omitempty"`
+		Proof      *agent.Proof `json:"proof,omitempty"`
+		Confidence *int         `json:"confidence"`
 	}
 	doneArgs struct {
 		Task string `json:"task"`

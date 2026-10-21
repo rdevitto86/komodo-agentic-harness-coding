@@ -202,17 +202,15 @@ func TestQASummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
 			{ID: "a2", Text: "reaches the net", Cmd: "test", Needs: []string{"network"}},
 		},
 		Files: func() []string { return []string{"*.go"} },
-		Runner: func() agent.CommandRunner {
-			return func(context.Context, string) (int, string, error) { return 1, "", nil }
-		}})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	out, err := roles["qa"].Judge(
 		context.Background(),
 		result(
-			`{"items":[{"item":"a1","pass":false,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]},`+
-				`{"item":"a2","pass":false,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],`+
+			`{"items":[{"item":"a1","pass":true,"confidence":90,"evidence":[{"cmd":"read","exit":0,"excerpt":"ok"}]},`+
+				`{"item":"a2","pass":false,"confidence":60,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],`+
 				`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 		),
 	)
@@ -220,8 +218,8 @@ func TestQASummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
 		t.Fatalf("outcome %+v, %v", out, err)
 	}
 	all := strings.Join(out.Summary, "\n")
-	if !strings.Contains(all, "unconfirmed") || !strings.Contains(all, "a1") || !strings.Contains(all, "a2") ||
-		!strings.Contains(all, "network") {
+	if !strings.Contains(all, "skipped") || !strings.Contains(all, "a2") || !strings.Contains(all, "network") ||
+		!strings.Contains(all, "a1 90") {
 		t.Fatalf("summary %q", all)
 	}
 }

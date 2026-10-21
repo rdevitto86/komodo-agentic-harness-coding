@@ -84,11 +84,14 @@ func TestAcceptFindingBuckets(t *testing.T) {
 		conf  int
 		want  Accepted
 	}{
-		{"critical with a proof at 80 blocks", "x.1", proof, 80, Accepted{Level: LevelCritical, Bucket: BucketBlock, In: "head"}},
+		{"critical with a proof at 80 blocks", "x.1", proof, 80,
+			Accepted{Level: LevelCritical, Bucket: BucketBlock, In: "head"}},
 		{"high with a proof at 100 blocks", "x.2", proof, 100, Accepted{Level: LevelHigh, Bucket: BucketBlock, In: "head"}},
-		{"med_high with a proof at 80 blocks", "x.3", proof, 80, Accepted{Level: LevelMedHigh, Bucket: BucketBlock, In: "head"}},
+		{"med_high with a proof at 80 blocks", "x.3", proof, 80,
+			Accepted{Level: LevelMedHigh, Bucket: BucketBlock, In: "head"}},
 		{"block level at 79 warns", "x.1", proof, 79, Accepted{Level: LevelCritical, Bucket: BucketWarn, In: "head"}},
-		{"block level without a proof warns", "x.1", nil, 100, Accepted{Level: LevelCritical, Bucket: BucketWarn, In: "head"}},
+		{"block level without a proof warns", "x.1", nil, 100,
+			Accepted{Level: LevelCritical, Bucket: BucketWarn, In: "head"}},
 		{"a proof naming nothing seen warns", "x.1", &Proof{Ran: "go vet"}, 100,
 			Accepted{Level: LevelCritical, Bucket: BucketWarn, In: "head"}},
 		{"medium warns at 100", "x.4", proof, 100, Accepted{Level: LevelMedium, Bucket: BucketWarn, In: "head"}},

@@ -72,10 +72,12 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 	}
 	for range 3 {
 		ls = append(ls, at(10, bus.Event{Type: bus.TypeRunStatus, Subtype: "finding.verified", Group: "G1",
-			Data: &bus.FindingVerified{FindingSubmit: finding, Level: "med_high", In: "head", Proof: "none"}}))
+			Data: &bus.FindingVerified{FindingSubmit: finding, Level: "med_high", In: "head"}}))
 	}
 	ls = append(ls,
-		at(11, end("G1", "tt1", "qa", nil, &bus.VerifyOutcome{Failed: []string{"a"}, Disputed: []string{"b"}})),
+		at(11, end("G1", "tt1", "qa", nil, &bus.VerifyOutcome{
+			Failed: []string{"a"}, Confidence: []bus.ItemConfidence{{Item: "a", Confidence: 90}},
+		})),
 		at(12, bus.Event{Type: bus.TypeRunComplete, Subtype: "done", Data: &bus.RunDone{Done: []bus.ID{"G1", "G2"}}}),
 	)
 	writeLog(t, bus.EventsDir(common), "run-a", joinLines(ls...))
@@ -111,7 +113,7 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 	if r.Agent != "reviewer" || !near(r.FindingPrecision, 0.75) || r.TokensPerGroup != nil || r.USDPerGroup != nil {
 		t.Errorf("reviewer row = %+v", r)
 	}
-	if tt.Agent != "qa" || !near(tt.QAFalseFail, 0.5) || tt.TokensPerGroup != nil {
+	if tt.Agent != "qa" || tt.TokensPerGroup != nil {
 		t.Errorf("qa row = %+v", tt)
 	}
 }

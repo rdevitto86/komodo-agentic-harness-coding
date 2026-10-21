@@ -262,7 +262,7 @@ func TestEveryToolKindRoundTripsThroughTheEngine(t *testing.T) {
 		{"task_done", map[string]any{"task": "T1"}, "exit code 0\nall checks passed"},
 		{
 			"submit_finding",
-			map[string]any{"rule": "G1", "file": "a.txt", "line": 1, "quote": "bye", "note": "n"},
+			map[string]any{"rule": "G1", "file": "a.txt", "line": 1, "quote": "bye", "note": "n", "confidence": 90},
 			"filed G1 at a.txt:1",
 		},
 		{"lint_backlog", map[string]any{"draft": "# x"}, "ok"},

@@ -721,7 +721,7 @@ func (m *Manager) rework(ctx context.Context, findings []string) error {
 	}
 
 	m.mu.Lock()
-	m.prog.TreeAtReturn, m.prog.Returns, m.prog.Disputes = tree, returns+1, 0
+	m.prog.TreeAtReturn, m.prog.Returns = tree, returns+1
 	m.prog.RetriesLeft--
 	m.pending, m.contract = findings, 0
 	m.verdicts = map[string]Outcome{}
@@ -878,7 +878,7 @@ func (m *Manager) verdictOf(name string) (Outcome, bool) {
 	return v, ok
 }
 
-// judgeBranch runs one judge to a decided outcome; a disputed Quality Assurance result restarts Quality Assurance once.
+// judgeBranch runs one judge to a decided outcome, running it again after a fault that costs no retry.
 func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) branch {
 	for {
 		if err := m.checkpoint(ctx); err != nil {
@@ -896,23 +896,8 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 				m.fact("finding.verified", v)
 			}
 			m.noteProven(out.outcome.Verified)
-			if out.outcome.Kind != OutcomeRestart {
-				return branch{out: out}
-			}
 
-			m.mu.Lock()
-			d := m.prog.Disputes
-			m.prog.Disputes = 1
-			m.mu.Unlock()
-			if d >= 1 {
-				out.outcome = Outcome{Kind: OutcomeBlock, Reason: agent.BlockQA, Findings: out.outcome.Findings}
-				return branch{out: out}
-			}
-
-			in.Findings = out.outcome.Findings
-			if err := m.report(ctx); err != nil {
-				return branch{err: err}
-			}
+			return branch{out: out}
 		case state.ReasonCancelled:
 			return branch{out: out}
 		case state.ReasonBilling:

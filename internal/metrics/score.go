@@ -18,7 +18,6 @@ type ScoreRow struct {
 	FirstPassRate    float64  `json:"first_pass_rate"`   // share of tasks done on the first attempt
 	ReturnsPerGroup  float64  `json:"returns_per_group"` // returns to Build per group
 	FindingPrecision float64  `json:"finding_precision"` // share of findings Go verified
-	QAFalseFail      float64  `json:"qa_false_fail"`     // share of Quality Assurance failures the reruns passed
 	CacheReadShare   float64  `json:"cache_read_share"`  // cache-read tokens over input tokens
 	TokensPerGroup   *int64   `json:"tokens_per_group"`  // nil when no usage was reported
 	USDPerGroup      *float64 `json:"usd_per_group"`     // nil when no usage was reported
@@ -41,7 +40,6 @@ type tally struct {
 	returns              int
 	groups               map[groupKey]bool // groups the row held a session in
 	submitted, verified  int
-	failed, disputed     int
 	tokensIn, cacheRead  int
 	groupTokens          map[groupKey]int64   // tokens per group that reached Done
 	groupUSD             map[groupKey]float64 // cost per group that reached Done
@@ -54,7 +52,6 @@ func (tl *tally) row(k rowKey) ScoreRow {
 		FirstPassRate:    ratio(tl.firstPass, tl.tasksDone),
 		ReturnsPerGroup:  ratio(tl.returns, len(tl.groups)),
 		FindingPrecision: ratio(tl.verified, tl.submitted),
-		QAFalseFail:      ratio(tl.disputed, tl.failed+tl.disputed),
 		CacheReadShare:   ratio(tl.cacheRead, tl.tokensIn),
 	}
 	if n := len(tl.groupTokens); n > 0 {
@@ -194,16 +191,12 @@ func countEvents(
 				}
 			}
 		case *bus.SessionEnd:
-			tl, k, ok := rowOf(d.Session)
+			_, k, ok := rowOf(d.Session)
 			if !ok {
 				continue
 			}
 			if k.agent == "builder" {
 				lastBuilder[groupKey{e.Run, e.Group}] = k
-			}
-			if k.agent == "qa" && d.Verify != nil {
-				tl.failed += len(d.Verify.Failed)
-				tl.disputed += len(d.Verify.Disputed)
 			}
 		case *bus.StageEnter:
 			if k, ok := lastBuilder[groupKey{e.Run, e.Group}]; ok && d.Return {

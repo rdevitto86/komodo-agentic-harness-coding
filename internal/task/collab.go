@@ -51,22 +51,10 @@ type FindingSink interface {
 	Submit(f Submitted)
 }
 
-// RunSink is implemented by a role that logs the commands its session ran with the run tool.
-type RunSink interface {
-	// Ran receives one command the session ran.
-	Ran(cmd string)
-}
-
 // ItemSource is implemented by a role that knows the group's acceptance items.
 type ItemSource interface {
 	// AcceptanceItems returns the acceptance items of the group's tasks.
 	AcceptanceItems() []agent.Item
-}
-
-// ProofChecker is implemented by a role that can tell, at submit, whether a finding's proof would be refused.
-type ProofChecker interface {
-	// CheckProof returns why a proof is refused, or nil when it may run.
-	CheckProof(p agent.Proof) error
 }
 
 // GateError is a rejected result: Text goes back into the live session, Schema marks a result that broke its schema.
@@ -82,25 +70,26 @@ func (e *GateError) Error() string { return e.Text }
 type Outcome struct {
 	Kind     OutcomeKind
 	Reason   string   // for Block, and the builder's reason for Scope
-	Findings []string // for Return: verified findings the builder receives; for Restart: Go's output
+	Findings []string // for Return: verified findings the builder receives
 	Paths    []string // for Scope: the paths the builder asked for
 	Summary  []string // for Pass: the result lines the pull request body prints
-	// for the reviewer: every finding Go kept, with its level and proof; Recorded holds the run-record-only lines
+	// for the reviewer: every finding Go kept, with its level, proof and confidence; Recorded holds the record-only lines
 	Verified []VerifiedFinding
 	Recorded []string
 }
 
-// VerifiedFinding is a reviewer finding Go kept, with the level and proof result Go gave it.
+// VerifiedFinding is a reviewer finding Go kept, with the level Go gave it and the proof and confidence the Reviewer gave.
 type VerifiedFinding struct {
-	Rule   string             `json:"rule"`
-	File   string             `json:"file"`
-	Line   int                `json:"line"`
-	Quote  string             `json:"quote"`
-	Note   string             `json:"note,omitempty"`
-	Level  agent.FindingLevel `json:"level"`
-	In     string             `json:"in"`    // head or diff, where the quote was found
-	Proof  string             `json:"proof"` // failed_as_claimed, passed or none
-	Bucket agent.Bucket       `json:"-"`
+	Rule       string             `json:"rule"`
+	File       string             `json:"file"`
+	Line       int                `json:"line"`
+	Quote      string             `json:"quote"`
+	Note       string             `json:"note,omitempty"`
+	Proof      *agent.Proof       `json:"proof,omitempty"` // the Reviewer's own validation; Go records it
+	Confidence int                `json:"confidence"`
+	Level      agent.FindingLevel `json:"level"`
+	In         string             `json:"in"` // head or diff, where the quote was found
+	Bucket     agent.Bucket       `json:"-"`
 }
 
 // OutcomeKind is the pipeline's next move for one role.
@@ -188,11 +177,10 @@ type Collaborators struct {
 
 // The outcome kinds.
 const (
-	OutcomePass    OutcomeKind = "pass"    // this role approves
-	OutcomeReturn  OutcomeKind = "return"  // back to Build with Findings
-	OutcomeRestart OutcomeKind = "restart" // start the same role once more (a disputed Quality Assurance result)
-	OutcomeBlock   OutcomeKind = "block"   // escalate with Reason
-	OutcomeScope   OutcomeKind = "scope"   // the builder asks for files outside its list
+	OutcomePass   OutcomeKind = "pass"   // this role approves
+	OutcomeReturn OutcomeKind = "return" // back to Build with Findings
+	OutcomeBlock  OutcomeKind = "block"  // escalate with Reason
+	OutcomeScope  OutcomeKind = "scope"  // the builder asks for files outside its list
 )
 
 // Errors Run, Resume and Continue return.

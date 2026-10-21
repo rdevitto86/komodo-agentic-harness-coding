@@ -451,7 +451,7 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 	}
 	var m *Manager
 	roles, err := NewRoles(RoleConfig{Group: "tg-1", Tasks: spec.Tasks, Items: o.items, Worktree: spec.Lease.Worktree,
-		Files: func() []string { return m.Files() }, Runner: func() agent.CommandRunner { return m.Runner("qa") }})
+		Files: func() []string { return m.Files() }})
 	if err != nil {
 		t.Fatal(err)
 	}
