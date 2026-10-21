@@ -44,6 +44,7 @@ type ChangedFile struct {
 	Path    string
 	Added   int
 	Removed int
+	Binary  bool // the file is binary, so its lines are not counted and its content cannot be judged
 }
 
 // RiskInput is everything Classify reads: facts about the diff, never an agent's opinion.
@@ -96,6 +97,9 @@ func Classify(in RiskInput) RiskDecision {
 	for _, f := range in.Files {
 		lines += f.Added + f.Removed
 		l, rule := fileRisk(f.Path, in.Verified)
+		if f.Binary && l.Rank() < RiskMedium.Rank() {
+			l, rule = RiskMedium, "binary file"
+		}
 		if l.Rank() > topRank {
 			topRank = l.Rank()
 			top = RiskDecision{Level: l, Reason: fmt.Sprintf("%s: %s", f.Path, rule)}

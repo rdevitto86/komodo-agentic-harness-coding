@@ -58,7 +58,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "cmd": {
-                    "description": "The command as run, copied from the item or from the `logged as:` line of a run you made.",
+                    "description": "The command as run, copied from the item or from a run you made.",
                     "type": "string"
                   },
                   "excerpt": {

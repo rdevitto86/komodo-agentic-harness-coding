@@ -266,12 +266,12 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 	}
 
 	roles, err := task.NewRoles(task.RoleConfig{
-		Group:    tspec.Group,
-		Tasks:    tspec.Tasks,
-		Items:    items,
-		Worktree: tspec.Lease.Worktree,
-		Files:    func() []string { return m.Files() },
-		Runner:   func() agent.CommandRunner { return m.Runner("qa") },
+		Group:      tspec.Group,
+		Tasks:      tspec.Tasks,
+		Items:      items,
+		Worktree:   tspec.Lease.Worktree,
+		Files:      func() []string { return m.Files() },
+		Runner:     func() agent.CommandRunner { return m.Runner("qa") },
 		Proof:      agent.NewProofRunner(proofCfg),
 		CheckProof: proofCfg.Check,
 	})

@@ -12,7 +12,7 @@ func TestDiffFiles(t *testing.T) {
 		"diff --git a/gone.go b/gone.go\ndeleted file mode 100644\n--- a/gone.go\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-bye\n"
 
 	got := DiffFiles(diff)
-	want := []ChangedFile{{"a.go", 2, 1}, {"n.md", 2, 0}, {"gone.go", 0, 1}}
+	want := []ChangedFile{{Path: "a.go", Added: 2, Removed: 1}, {Path: "n.md", Added: 2}, {Path: "gone.go", Removed: 1}}
 
 	if !slices.Equal(got, want) {
 		t.Errorf("DiffFiles = %+v, want %+v", got, want)
