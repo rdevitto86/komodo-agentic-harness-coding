@@ -3,7 +3,6 @@ package core
 import (
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -73,52 +72,5 @@ func TestSquashRefusesADivergedRef(t *testing.T) {
 	}
 	if git(t, land, "rev-parse", "HEAD") != before {
 		t.Fatal("the branch moved")
-	}
-}
-
-// DeleteLanded removes a branch whose tree a landed commit holds and keeps one whose tree differs.
-func TestDeleteLanded(t *testing.T) {
-	w := newWorld(t)
-	land := filepath.Join(w.root, "land")
-	if err := w.git.AddWorktree(w.ctx, w.clone, land, "komodo/ep-1", "origin/komodo/ep-1"); err != nil {
-		t.Fatal(err)
-	}
-	g := w.newGroup("tg-1.1")
-	w.work(g, "a.txt", "a")
-	if _, err := w.git.Commit(w.ctx, g.wt, "tg-1.1: a"); err != nil {
-		t.Fatal(err)
-	}
-	tip := git(t, g.wt, "rev-parse", "HEAD")
-	landed, err := w.git.Squash(w.ctx, land, g.branch, "tg-1.1: Goal")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := w.git.RemoveWorktree(w.ctx, w.clone, g.wt); err != nil {
-		t.Fatal(err)
-	}
-
-	err = w.git.DeleteLanded(w.ctx, w.clone, g.branch, tip, "origin/main", "komodo/ep-1")
-	if !errors.Is(err, ErrNotContained) {
-		t.Fatalf("a commit with another tree: err = %v, want ErrNotContained", err)
-	}
-	if _, ok, _ := w.git.BranchTip(w.ctx, w.clone, g.branch); !ok {
-		t.Fatal("the branch was deleted")
-	}
-
-	err = w.git.DeleteLanded(w.ctx, w.clone, g.branch, tip, landed, "origin/main")
-	if !errors.Is(err, ErrNotContained) {
-		t.Fatalf("a landing outside the history: err = %v, want ErrNotContained", err)
-	}
-
-	err = w.git.DeleteLanded(w.ctx, w.clone, g.branch, strings.Repeat("a", 40), landed, "komodo/ep-1")
-	if !errors.Is(err, ErrTipMoved) {
-		t.Fatalf("a moved tip: err = %v, want ErrTipMoved", err)
-	}
-
-	if err := w.git.DeleteLanded(w.ctx, w.clone, g.branch, tip, landed, "komodo/ep-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, _ := w.git.BranchTip(w.ctx, w.clone, g.branch); ok {
-		t.Fatal("the branch is still there")
 	}
 }

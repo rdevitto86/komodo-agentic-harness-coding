@@ -227,8 +227,8 @@ func (g execGit) DeleteBranch(ctx context.Context, clone, branch, expectTip, con
 	return err
 }
 
-// DeleteLanded deletes a branch at expectTip when landed holds its tree and is contained in containedIn.
-func (g execGit) DeleteLanded(ctx context.Context, clone, branch, expectTip, landed, containedIn string) error {
+// DeleteLanded deletes a branch at expectTip when containedIn holds it by ancestry or a commit with its identical diff.
+func (g execGit) DeleteLanded(ctx context.Context, clone, branch, expectTip, containedIn string) error {
 	tip, ok, _ := g.BranchTip(ctx, clone, branch)
 	if !ok {
 		return nil
@@ -236,13 +236,18 @@ func (g execGit) DeleteLanded(ctx context.Context, clone, branch, expectTip, lan
 	if tip != expectTip {
 		return refusal{"branch moved since publish"}
 	}
-	mine, _ := g.git(clone, "rev-parse", expectTip+"^{tree}")
-	held, _ := g.git(clone, "rev-parse", landed+"^{tree}")
-	if mine != held {
-		return refusal{"landed commit holds another tree"}
-	}
-	if _, err := g.git(clone, "merge-base", "--is-ancestor", landed, containedIn); err != nil {
-		return refusal{"epic history lacks the landed commit"}
+	if _, err := g.git(clone, "merge-base", "--is-ancestor", tip, containedIn); err != nil {
+		base, _ := g.git(clone, "merge-base", tip, containedIn)
+		mine, _ := g.git(clone, "diff", base, tip)
+		ids, _ := g.git(clone, "rev-list", "--no-merges", base+".."+containedIn)
+		same := mine == ""
+		for _, c := range strings.Fields(ids) {
+			theirs, _ := g.git(clone, "diff", c+"^", c)
+			same = same || theirs == mine
+		}
+		if !same {
+			return refusal{"epic history lacks a commit with the same change"}
+		}
 	}
 	_, err := g.git(clone, "update-ref", "-d", "refs/heads/"+branch, expectTip)
 	return err
@@ -342,11 +347,11 @@ func (r *recGit) DeleteBranch(ctx context.Context, clone, branch, tip, in string
 }
 
 // DeleteLanded logs and forwards.
-func (r *recGit) DeleteLanded(ctx context.Context, clone, branch, tip, landed, in string) error {
+func (r *recGit) DeleteLanded(ctx context.Context, clone, branch, tip, in string) error {
 	if err := r.hit("git.DeleteLanded", branch); err != nil {
 		return err
 	}
-	return r.Git.DeleteLanded(ctx, clone, branch, tip, landed, in)
+	return r.Git.DeleteLanded(ctx, clone, branch, tip, in)
 }
 
 // DiscardBranch logs and forwards.

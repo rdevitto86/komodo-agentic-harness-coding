@@ -18,7 +18,7 @@ type Published struct {
 	EpicDone bool   `json:"epic_done"`         // true when this was the epic's last group and its pull request is open
 	PRURL    string `json:"pr_url"`            // epic pull request address; empty before the last group lands
 	// Landed is set when the group was squashed into the local epic branch and nothing was pushed: the commit there that
-	// holds the group's tree. The remote is not consulted and Into names the local epic branch whose history must hold it.
+	// holds the group's work. The remote is not consulted and Into names the local epic branch that must hold that change.
 	Landed string `json:"landed,omitempty"`
 	Into   string `json:"into,omitempty"`
 }
