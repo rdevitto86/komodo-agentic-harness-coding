@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	GateFeedbacksPerTask = 2                        // gate results sent back to a live session before check_fail
-	GateOutputCap        = 4096                     // bytes of command output a gate result keeps, head and tail
-	truncMarker          = "\n... output cut ...\n" // truncMarker replaces the middle of an output that was cut.
+	GateOutputCap = 4096                     // bytes of command output a gate result keeps, head and tail
+	truncMarker   = "\n... output cut ...\n" // truncMarker replaces the middle of an output that was cut.
 )
 
 // ErrOutputOverLimit is wrapped by the error of a runner whose command printed more than its limit; the runner still returns

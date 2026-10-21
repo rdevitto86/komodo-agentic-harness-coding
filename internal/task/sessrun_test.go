@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
 // linkRig builds a rig whose only chain link is l, with a passing Quality Assurance and reviewer queued.
@@ -119,5 +120,45 @@ func TestProgramSessionToolsAreRoutedToTheEngineAndEndWithTheSession(t *testing.
 	}
 	if _, ok := routes.Definitions(session); ok {
 		t.Error("the route must end with the session")
+	}
+}
+
+// failingChecks makes a role's Judge reject its first n distinct results as failed checks.
+type failingChecks struct {
+	Role
+	n, seen int
+}
+
+// Judge rejects the first n results with a check failure, then defers to the role.
+func (f *failingChecks) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
+	f.seen++
+	if f.seen <= f.n {
+		return Outcome{}, &GateError{Text: "tests still fail"}
+	}
+	return f.Role.Judge(ctx, r)
+}
+
+func TestOnlyTheBuilderGateGivesUpAsSchemaFail(t *testing.T) {
+	if got := (&judgeMemo{role: &builderRole{}}).CapReason(); got != state.ReasonSchemaFail {
+		t.Errorf("builder gate reason = %s, want schema_fail", got)
+	}
+	if got := (&judgeMemo{role: &qaRole{}}).CapReason(); got != state.ReasonCheckFail {
+		t.Errorf("qa gate reason = %s, want check_fail", got)
+	}
+}
+
+func TestBuilderThatFailsItsChecksIsResumedUntilItPasses(t *testing.T) {
+	r := linkRig(t, llm.ClaudeCLI)
+	r.m.c.Roles["builder"] = &failingChecks{Role: r.m.c.Roles["builder"], n: 4}
+
+	resumed := 0
+	r.model.resume = func(llm.Session, llm.Input) (llm.Stream, error) {
+		resumed++
+		return sayResult(`{"status":"done","summary":"attempt ` + strings.Repeat("x", resumed) + `"}`)(llm.Session{})
+	}
+	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
+	r.reachCleanup()
+	if resumed != 4 {
+		t.Errorf("%d resumes, want 4: failed checks never end the session", resumed)
 	}
 }

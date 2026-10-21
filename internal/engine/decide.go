@@ -368,7 +368,7 @@ func (c *calc) taskByID(id, session string) *state.TaskState {
 	return nil
 }
 
-// gateFail counts a failed completion gate; the third failure is a retry the Task Manager ends the session for.
+// gateFail counts a failed completion gate; a failing check never ends the session or spends a try.
 func (c *calc) gateFail() bool {
 	s := &c.s
 	if s.Stage != StageBuild {
@@ -382,18 +382,6 @@ func (c *calc) gateFail() bool {
 	}
 
 	t.GateFailures++
-	if t.GateFailures >= 3 {
-		c.emitStatus(&bus.TaskRetry{
-			GroupFacts: bus.GroupFacts{
-				Stage:  string(s.Stage),
-				Reason: string(state.ReasonCheckFail),
-			},
-			Task:    t.ID,
-			Attempt: max(c.l.GroupRetries-s.Counters.RetriesLeft, 0) + 1,
-		})
-		t.GateFailures = 0
-	}
-
 	return true
 }
 

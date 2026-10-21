@@ -263,6 +263,22 @@ func TestAGuardThatFailsToLoadBlocksUnderSetupSpendsNoRetryAndCountsAsAFault(t *
 	}
 }
 
+func TestFailedCompletionChecksNeverEndTheSessionOrSpendATry(t *testing.T) {
+	s := claimed()
+	for n := 1; n <= 10; n++ {
+		r := Next(s, in(InGateFail, bus.TaskDone{Task: "t1"}), fixtureLimits())
+		for _, e := range r.Emit {
+			if _, ok := e.Data.(*bus.TaskRetry); ok {
+				t.Fatalf("check failure %d emitted a retry", n)
+			}
+		}
+		s = r.State
+	}
+	if s.Tasks[0].State != "claimed" || s.Tasks[0].GateFailures != 10 {
+		t.Errorf("task state %q, gate failures %d", s.Tasks[0].State, s.Tasks[0].GateFailures)
+	}
+}
+
 func TestAToolErrorInsideASessionIsNoFault(t *testing.T) {
 	s := claimed()
 	for _, i := range []Input{
