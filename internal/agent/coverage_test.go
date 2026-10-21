@@ -79,6 +79,44 @@ func TestCoverageCommand(t *testing.T) {
 	}
 }
 
+func TestCoverageCommandsNameTheirTempFilesUnderTMPDIR(t *testing.T) {
+	for _, lang := range []string{"go", "python", "javascript"} {
+		c, _ := CoverageCommand(lang, "npm test")
+		if !strings.Contains(c, `"${TMPDIR:-/tmp}/`) {
+			t.Errorf("%s: mktemp has no template under TMPDIR (macOS ignores TMPDIR without one): %s", lang, c)
+		}
+		if strings.Contains(c, "mktemp)") || strings.Contains(c, "mktemp -d)") || strings.Contains(c, `mktemp)"`) {
+			t.Errorf("%s: bare mktemp: %s", lang, c)
+		}
+	}
+}
+
+func TestTheGoCoverageCommandWritesItsProfileUnderTMPDIR(t *testing.T) {
+	bin, tmp := t.TempDir(), t.TempDir()
+	stub := "#!/bin/sh\nfor a; do case \"$a\" in -coverprofile=*) echo \"${a#-coverprofile=}\" > \"$SEEN\";; esac; done\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seen := filepath.Join(t.TempDir(), "seen")
+	cmdText, _ := CoverageCommand("go", "")
+	cmd := exec.Command("sh", "-c", cmdText)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "TMPDIR=" + tmp, "SEEN=" + seen}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("coverage command: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := strings.TrimSpace(string(got)); filepath.Dir(p) != filepath.Clean(tmp) {
+		// macOS resolves /var to /private/var, so compare the real folders.
+		real, _ := filepath.EvalSymlinks(tmp)
+		if rp, _ := filepath.EvalSymlinks(filepath.Dir(p)); rp != real {
+			t.Fatalf("the profile %s is not under TMPDIR %s", p, tmp)
+		}
+	}
+}
+
 func TestTheGoCoverageCommandLeavesNoFileInTheTree(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go is not installed")
