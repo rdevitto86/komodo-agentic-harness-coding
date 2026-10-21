@@ -253,8 +253,8 @@ func TestBuilderTimeoutSpendsOneRetryAndBlocksWhenNoneIsLeft(t *testing.T) {
 }
 
 func TestEveryTrueFailureSpendsOneRetryAndNothingElseDoes(t *testing.T) {
-	spend := []string{"timeout", "idle", "no_result", "check_fail", "schema_fail", "refusals"}
-	free := []string{"crash", "cancelled", "provider"}
+	spend := []string{"timeout", "idle", "no_result", "check_fail", "schema_fail", "refusals", "crash"}
+	free := []string{"cancelled", "provider"}
 	for _, reason := range spend {
 		r := apply(t, claimed(), builderEnd(reason))
 		if r.State.Counters.RetriesLeft != 1 || !slices.Contains(subtypes(r), "retry.spent") {
@@ -692,12 +692,12 @@ func TestUnfinishedEditsAreRecordedAndClearedAtTaskDone(t *testing.T) {
 	}
 }
 
-func TestCrashSessionEndChargesNoRetryAndOrdersTheStageAgain(t *testing.T) {
+func TestCrashSessionEndChargesOneRetryAndOrdersTheStageAgain(t *testing.T) {
 	s := claimed()
 	s.Resume = []state.ResumeRef{{Agent: "builder", Session: "s1", Handle: "h9"}}
 	r := apply(t, s, builderEnd("crash"))
 	c := r.State.Counters
-	if c.RetriesLeft != 2 || c.Crashes != 1 || r.State.Stage != StageBuild || r.State.Tasks[0].Session != "" {
+	if c.RetriesLeft != 1 || c.Crashes != 1 || r.State.Stage != StageBuild || r.State.Tasks[0].Session != "" {
 		t.Fatalf("counters %+v stage %q", c, r.State.Stage)
 	}
 	if len(r.Orders) != 1 || r.Orders[0].Kind != OrderEnterStage || len(r.Orders[0].Resume) != 1 ||

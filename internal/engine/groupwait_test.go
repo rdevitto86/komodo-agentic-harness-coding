@@ -58,7 +58,10 @@ func (r *rig) streakOf(label string) int { return r.store.get("g-" + label).Coun
 func TestAGroupWaitsOneTwoThenFourMinutesAfterBlockerErrorsAndTheFourthBlocksIt(t *testing.T) {
 	var builds atomic.Int64
 
-	r := newRig(t, [][]string{{"tg-1"}}, withClock, func(r *rig) { r.tasks.script = crashScript(&builds) })
+	r := newRig(t, [][]string{{"tg-1"}}, withClock, func(r *rig) {
+		r.tasks.script = crashScript(&builds)
+		r.d.Config.(rigConfig)["limits.group_retries"] = 9
+	})
 	if err := r.startRun("run-1", "tg-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +83,8 @@ func TestAGroupWaitsOneTwoThenFourMinutesAfterBlockerErrorsAndTheFourthBlocksIt(
 	r.waitStage("tg-1", StageBlocked)
 
 	s := r.store.get("g-tg-1")
-	if s.Block.Reason != state.ReasonCrash || s.Counters.RetriesLeft != 2 {
-		t.Fatalf("block %+v, retries left %d: the 4th blocker spends no retry", s.Block, s.Counters.RetriesLeft)
+	if s.Block.Reason != state.ReasonCrash || s.Counters.RetriesLeft != 5 {
+		t.Fatalf("block %+v, retries left %d: each crash spends a try", s.Block, s.Counters.RetriesLeft)
 	}
 
 	r.clock.Advance(10 * time.Minute)

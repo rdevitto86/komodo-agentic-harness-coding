@@ -180,6 +180,7 @@ func crashEnd(agent string) Input {
 
 func TestASessionThatEndsWithAWorkOutcomeBreaksTheRunOfKomodoFaults(t *testing.T) {
 	s := claimed()
+	s.Counters.RetriesLeft = 9
 	for i, end := range []Input{crashEnd("builder"), builderEnd("timeout"), crashEnd("builder"), crashEnd("builder")} {
 		r := apply(t, s, end)
 		if r.State.Stage != StageBuild || r.State.Block.Reason == state.ReasonCrash {
@@ -194,8 +195,9 @@ func TestASessionThatEndsWithAWorkOutcomeBreaksTheRunOfKomodoFaults(t *testing.T
 	}
 }
 
-func TestFourBlockerErrorsInARowBlockTheGroupForAPersonAndSpendNoRetry(t *testing.T) {
+func TestFourBlockerErrorsInARowBlockTheGroupForAPerson(t *testing.T) {
 	s := claimed()
+	s.Counters.RetriesLeft = 9
 	for i := 1; i <= 3; i++ {
 		r := apply(t, s, crashEnd("builder"))
 		if r.State.Stage != StageBuild || r.State.Counters.FaultStreak != i || !slices.Contains(kinds(r), OrderEnterStage) {
@@ -207,7 +209,7 @@ func TestFourBlockerErrorsInARowBlockTheGroupForAPersonAndSpendNoRetry(t *testin
 	}
 
 	r := apply(t, s, crashEnd("builder"))
-	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonCrash || r.State.Counters.RetriesLeft != 2 {
+	if r.State.Stage != StageBlocked || r.State.Block.Reason != state.ReasonCrash || r.State.Counters.RetriesLeft != 5 {
 		t.Fatalf("stage %q block %+v left %d", r.State.Stage, r.State.Block, r.State.Counters.RetriesLeft)
 	}
 	if slices.Contains(subtypes(r), "group.failed") || slices.Contains(kinds(r), OrderEnterStage) {
