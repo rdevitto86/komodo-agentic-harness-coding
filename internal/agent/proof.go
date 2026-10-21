@@ -243,6 +243,12 @@ func NewProofRunner(cfg ProofConfig) ProofRunner {
 	}
 }
 
+// Check reports why Go would refuse a proof, or nil when it may run; the Reviewer sees the reason at submit.
+func (cfg ProofConfig) Check(p Proof) error {
+	_, err := cfg.proofArgv(p)
+	return err
+}
+
 // proofArgv checks a whole proof: its expect line, its one command or test, and a test file that does not exist yet.
 func (cfg ProofConfig) proofArgv(p Proof) ([]string, error) {
 	switch {

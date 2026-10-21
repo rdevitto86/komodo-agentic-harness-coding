@@ -63,6 +63,12 @@ type ItemSource interface {
 	AcceptanceItems() []agent.Item
 }
 
+// ProofChecker is implemented by a role that can tell, at submit, whether a finding's proof would be refused.
+type ProofChecker interface {
+	// CheckProof returns why a proof is refused, or nil when it may run.
+	CheckProof(p agent.Proof) error
+}
+
 // GateError is a rejected result: Text goes back into the live session, Schema marks a result that broke its schema.
 type GateError struct {
 	Text   string

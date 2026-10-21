@@ -256,6 +256,15 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		},
 	})
 
+	proofCfg := agent.ProofConfig{
+		Run: func(ctx context.Context, command string) (int, string, error) {
+			return m.Runner("reviewer")(ctx, command)
+		},
+		Source: tspec.Lease.Worktree,
+		Root:   c.Plan.Build,
+		Cmds:   agent.ProofCommands{Build: cmds["build"], Test: cmds["test"], Lint: cmds["lint"]},
+	}
+
 	roles, err := task.NewRoles(task.RoleConfig{
 		Group:    tspec.Group,
 		Tasks:    tspec.Tasks,
@@ -263,14 +272,8 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		Worktree: tspec.Lease.Worktree,
 		Files:    func() []string { return m.Files() },
 		Runner:   func() agent.CommandRunner { return m.Runner("qa") },
-		Proof: agent.NewProofRunner(agent.ProofConfig{
-			Run: func(ctx context.Context, command string) (int, string, error) {
-				return m.Runner("reviewer")(ctx, command)
-			},
-			Source: tspec.Lease.Worktree,
-			Root:   c.Plan.Build,
-			Cmds:   agent.ProofCommands{Build: cmds["build"], Test: cmds["test"], Lint: cmds["lint"]},
-		}),
+		Proof:      agent.NewProofRunner(proofCfg),
+		CheckProof: proofCfg.Check,
 	})
 	if err != nil {
 		return engine.Channels{}, err

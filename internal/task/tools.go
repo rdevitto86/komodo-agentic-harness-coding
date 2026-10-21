@@ -73,6 +73,8 @@ type Env struct {
 	OnRun func(cmd string)
 	// lint errors of a planned task list; empty means clean
 	Lint func(draft string) []string
+	// reports why a finding's proof would be refused; nil means it may run
+	CheckProof func(agent.Proof) error
 	// receives each validated finding
 	OnFinding func(Submitted)
 	// receives tool.denied, tool.outside and finding.submit

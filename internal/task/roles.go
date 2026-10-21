@@ -29,6 +29,8 @@ type RoleConfig struct {
 	Reviewer agent.Reviewer
 	// runs a blocking finding's proof in a throwaway copy of the change; nil means every such finding warns
 	Proof agent.ProofRunner
+	// reports why a proof would be refused, for submit_finding to tell the Reviewer; nil means no check at submit
+	CheckProof func(agent.Proof) error
 }
 
 // taskIDs lists the identifiers of the group's tasks.
@@ -319,6 +321,15 @@ func (r *reviewerRole) Submit(f Submitted) {
 	r.mu.Lock()
 	r.subs = append(r.subs, f)
 	r.mu.Unlock()
+}
+
+// CheckProof returns why a proof would be refused; nil when no check is set.
+func (r *reviewerRole) CheckProof(p agent.Proof) error {
+	if r.cfg.CheckProof == nil {
+		return nil
+	}
+
+	return r.cfg.CheckProof(p)
 }
 
 // Slots fills the reviewer's brief values for this trip and forgets the findings of the last one.
