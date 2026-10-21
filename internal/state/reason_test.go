@@ -21,7 +21,6 @@ func TestEveryReasonHasOneSeverity(t *testing.T) {
 		ReasonCrash:         SeverityBlocker,
 		ReasonContract:      SeverityBlocker,
 		ReasonStateInvalid:  SeverityBlocker,
-		ReasonQA:            SeverityNone,
 		ReasonFlaky:         SeverityNone,
 		ReasonDone:          SeverityNone,
 		ReasonCheckFail:     SeverityWork,
@@ -55,7 +54,7 @@ func TestEveryReasonHasOneSeverity(t *testing.T) {
 func TestWorkOutcomesAndRateLimitsAreNeverBlockers(t *testing.T) {
 	for _, r := range []Reason{
 		ReasonTimeout, ReasonIdle, ReasonCheckFail, ReasonNoResult, ReasonSchemaFail, ReasonRefusals,
-		ReasonProvider, ReasonPaused, ReasonCancelled, ReasonBilling, ReasonFlap, ReasonRetries, ReasonQA, ReasonFlaky,
+		ReasonProvider, ReasonPaused, ReasonCancelled, ReasonBilling, ReasonFlap, ReasonRetries, ReasonFlaky,
 	} {
 		if Classify(r) == SeverityBlocker {
 			t.Errorf("%s is a blocker", r)

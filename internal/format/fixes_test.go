@@ -60,8 +60,8 @@ func TestMismatchedCodeRefused(t *testing.T) {
 }
 
 func TestBlockReasonsAreTheNeedsCodes(t *testing.T) {
-	if len(BlockReasons()) != 19 {
-		t.Fatalf("block reasons: %d, want 19", len(BlockReasons()))
+	if len(BlockReasons()) != 18 {
+		t.Fatalf("block reasons: %d, want 18", len(BlockReasons()))
 	}
 	for _, r := range BlockReasons() {
 		if _, ok := shapes["needs."+r]; !ok {

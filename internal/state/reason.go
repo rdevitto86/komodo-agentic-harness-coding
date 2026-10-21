@@ -53,9 +53,6 @@ const (
 	// a record or a write failed a check
 	ReasonStateInvalid Reason = "state_invalid"
 
-	// Quality Assurance's results were disputed twice
-	ReasonQA Reason = "qa"
-
 	// Quality Assurance's reruns split once and a role reported results it cannot confirm
 	ReasonFlaky Reason = "flaky"
 

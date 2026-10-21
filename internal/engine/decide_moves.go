@@ -22,7 +22,6 @@ var faultStages = map[state.Reason][]Stage{
 	state.ReasonMergeConflict: {StageCommit},
 	state.ReasonCleanup:       {StageCleanup},
 	state.ReasonFlaky:         {StageTestReview},
-	state.ReasonQA:            {StageTestReview},
 	state.ReasonFlap:          {StageTestReview},
 	state.ReasonRetries:       {StageBuild, StageTestReview},
 	state.ReasonCrash: {

@@ -22,7 +22,7 @@ type migrationKey struct {
 }
 
 // Version is the schema version this binary writes.
-const Version = 4
+const Version = 5
 
 // migratedRetries is the retries a group saved before the retry budget starts with: the shipped limits.group_retries.
 const migratedRetries = 3
@@ -39,20 +39,22 @@ func RegisterMigration(m Migration) {
 	migrations[migrationKey{string(m.Kind), m.From}] = m
 }
 
-// Version 0 has the same shape as version 1, and a machine record has the same shape in versions 2 to 4, so those steps
+// Version 0 has the same shape as version 1, and a machine record has the same shape in versions 2 to 5, so those steps
 // change nothing; a group record from version 1 swaps its three counting-up limits for the retry budget, one from
-// version 2 moves its wall time to a per-try base, and one from version 3 renames the tester to qa.
+// version 2 moves its wall time to a per-try base, one from version 3 renames the tester to qa, and one from version 4 moves a qa block to retries.
 func init() {
 	identity := func(old []byte) ([]byte, error) { return old, nil }
 	RegisterMigration(Migration{From: 0, Step: identity})
 	RegisterMigration(Migration{From: 1, Step: retryBudget})
 	RegisterMigration(Migration{From: 2, Step: wallPerTry})
 	RegisterMigration(Migration{From: 3, Step: qaRename})
+	RegisterMigration(Migration{From: 4, Step: qaBlockToRetries})
 	for _, k := range machineKinds {
 		RegisterMigration(Migration{From: 0, Kind: k, Step: identity})
 		RegisterMigration(Migration{From: 1, Kind: k, Step: identity})
 		RegisterMigration(Migration{From: 2, Kind: k, Step: identity})
 		RegisterMigration(Migration{From: 3, Kind: k, Step: identity})
+		RegisterMigration(Migration{From: 4, Kind: k, Step: identity})
 	}
 }
 
@@ -161,6 +163,38 @@ func qaRename(old []byte) ([]byte, error) {
 			if n, ok := blocks["tester"]; ok {
 				blocks["qa"] += n
 				delete(blocks, "tester")
+				c["blocks"], _ = json.Marshal(blocks)
+				st["counters"] = encodeObject(c)
+			}
+		}
+	}
+
+	rec["state"] = encodeObject(st)
+	return json.Marshal(rec)
+}
+
+// qaBlockToRetries upgrades a version 4 group record: the removed qa block reason becomes retries, and its block count
+// joins the retries count.
+func qaBlockToRetries(old []byte) ([]byte, error) {
+	rec, ok := objectOf(old)
+	if !ok {
+		return old, nil
+	}
+
+	st, ok := objectOf(rec["state"])
+	if !ok {
+		return old, nil
+	}
+	if b, ok := objectOf(st["block"]); ok && string(b["reason"]) == `"qa"` {
+		b["reason"] = json.RawMessage(`"retries"`)
+		st["block"] = encodeObject(b)
+	}
+	if c, ok := objectOf(st["counters"]); ok {
+		var blocks map[string]int
+		if json.Unmarshal(c["blocks"], &blocks) == nil && blocks != nil {
+			if n, ok := blocks["qa"]; ok {
+				blocks["retries"] += n
+				delete(blocks, "qa")
 				c["blocks"], _ = json.Marshal(blocks)
 				st["counters"] = encodeObject(c)
 			}

@@ -22,7 +22,7 @@ func TestVersionZeroReadsAsCurrent(t *testing.T) {
 		t.Fatal("the read rewrote the record")
 	}
 	next, err := m.Save(testGroup, r.State, r.Header.Rev)
-	if err != nil || next.Header.V != Version || !strings.Contains(string(readBytes(t, p)), `"v": 4`) {
+	if err != nil || next.Header.V != Version || !strings.Contains(string(readBytes(t, p)), `"v": 5`) {
 		t.Fatalf("Save after migration: %+v %v", next.Header, err)
 	}
 
@@ -43,7 +43,7 @@ func TestVersionZeroReadsAsCurrent(t *testing.T) {
 func TestNewerVersionUntouched(t *testing.T) {
 	m, root := newMgr(t)
 	p := statePath(root, testGroup)
-	writeRaw(t, p, `{"v":5,"anything":true}`)
+	writeRaw(t, p, `{"v":6,"anything":true}`)
 	if _, err := m.Load(testGroup); !errors.Is(err, ErrNewerVersion) {
 		t.Fatalf("Load: %v", err)
 	}
