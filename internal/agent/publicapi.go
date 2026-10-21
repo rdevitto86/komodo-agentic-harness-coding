@@ -40,13 +40,14 @@ func PublicAPIChanged(diff string) bool {
 		return isPublicGoFile(oldP) || isPublicGoFile(newP)
 	}
 
-	for _, l := range strings.Split(diff, "\n") {
+	lines := strings.Split(diff, "\n")
+	for i, l := range lines {
 		switch {
 		case strings.HasPrefix(l, "diff --git "):
 			oldP, newP = splitGitHeader(strings.TrimPrefix(l, "diff --git "))
 			inHunk = false
 		case inHunk && strings.HasPrefix(l, "@@"):
-			mode = hunkScope(l)
+			mode = hunkScopeAt(lines[i:])
 		case inHunk && (strings.HasPrefix(l, "+") || strings.HasPrefix(l, "-")):
 			if relevant() && publicLine(l[1:], mode) {
 				return true
@@ -56,7 +57,7 @@ func PublicAPIChanged(diff string) bool {
 			mode = enterScope(l[1:], mode)
 		case inHunk && l == "":
 		case strings.HasPrefix(l, "@@"):
-			inHunk, mode = true, hunkScope(l)
+			inHunk, mode = true, hunkScopeAt(lines[i:])
 		case strings.HasPrefix(l, "rename from "):
 			oldP = strings.TrimPrefix(l, "rename from ")
 		case strings.HasPrefix(l, "rename to "):
@@ -77,6 +78,32 @@ func PublicAPIChanged(diff string) bool {
 // isPublicGoFile reports whether p is a Go file that is not a test file.
 func isPublicGoFile(p string) bool {
 	return strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go")
+}
+
+// hunkScopeAt is hunkScope for the hunk whose header is rest[0]. A header naming an unfinished func line is signature scope
+// when the hunk holds a line that closes it (starts with ")" and ends with "{"), and body scope otherwise.
+func hunkScopeAt(rest []string) scopeMode {
+	mode := hunkScope(rest[0])
+	if mode != scopeBody {
+		return mode
+	}
+
+	i := strings.Index(rest[0][2:], "@@")
+	text := strings.TrimSpace(rest[0][i+4:])
+	if strings.HasSuffix(text, "{") {
+		return scopeBody
+	}
+
+	for _, l := range rest[1:] {
+		if strings.HasPrefix(l, "@@") || strings.HasPrefix(l, "diff --git ") {
+			break
+		}
+		if len(l) > 1 && strings.HasPrefix(l[1:], ")") && strings.HasSuffix(l, "{") {
+			return enterScope(text, scopeUnknown)
+		}
+	}
+
+	return scopeBody
 }
 
 // hunkScope reads the scope a hunk starts in from the function text git prints after its header.
