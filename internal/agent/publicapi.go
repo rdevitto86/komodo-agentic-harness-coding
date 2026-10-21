@@ -88,7 +88,7 @@ func hunkScope(header string) scopeMode {
 
 	text := strings.TrimSpace(header[i+4:])
 	if strings.HasPrefix(text, "func ") {
-		return enterScope(text, scopeUnknown)
+		return scopeBody
 	}
 
 	if m := enterScope(text, scopeUnknown); m == scopeBlock || m == scopeClosed {

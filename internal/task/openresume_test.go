@@ -1,6 +1,9 @@
 package task
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -113,5 +116,50 @@ func TestADoneResultThatCannotResumeSpendsOneTryAsBefore(t *testing.T) {
 
 	if got := r.rt.progress().RetriesLeft; got != 2 {
 		t.Errorf("retries left %d, want 2: no resume handle falls back to one spent try", got)
+	}
+}
+
+func TestAnExtendedWindowAndPausedTimeCarryAcrossResumes(t *testing.T) {
+	t0 := time.Unix(1_000_000, 0)
+	now := t0
+	r := openRig(t, Limits{SessionWall: time.Hour}, func(c *Collaborators) { c.Now = func() time.Time { return now } })
+	sc := &sessCtx{started: t0, clk: &Clocks{Started: t0, Extended: 30 * time.Minute, PausedFor: 10 * time.Minute}}
+
+	now = t0.Add(85 * time.Minute)
+	if r.m.windowEnded(sc) {
+		t.Error("the window ended at 85 minutes: base 60 + extra 30 + paused 10 is 100")
+	}
+	now = t0.Add(100 * time.Minute)
+	if !r.m.windowEnded(sc) {
+		t.Error("the window did not end at 100 minutes")
+	}
+}
+
+func TestReconcileKeepsTheFailingOutputForTheNextBrief(t *testing.T) {
+	r, _ := capRig(t)
+	setCheck(r, "boom-done-time", "1")
+	left, err := r.m.reconcile(context.Background())
+	if err != nil || len(left) != 1 {
+		t.Fatalf("reconcile: %v, %v", left, err)
+	}
+	if got := strings.Join(r.m.takeLastCheck(), "\n"); !strings.Contains(got, "boom-done-time") {
+		t.Fatalf("kept output = %q", got)
+	}
+}
+
+func TestADoneResultThatCannotResumeRunsTheOpenChecksOnce(t *testing.T) {
+	r := openRig(t, Limits{}, nil)
+	log := filepath.Join(t.TempDir(), "runs")
+	r.m.c.Commands["fail"] = []string{"sh", "-c", "echo x >> " + log + "; exit 1"}
+	r.model.on("builder",
+		building(r.wt, "a.go", "package a\n", builderDone),
+		func(s llm.Session) (llm.Stream, error) {
+			r.m.c.Commands["fail"] = []string{"true"}
+			return building(r.wt, "a.go", "package a\n", builderDone)(s)
+		})
+	r.reachCleanup()
+	b, _ := os.ReadFile(log)
+	if runs := strings.Count(string(b), "x"); runs != 1 {
+		t.Errorf("the open check ran %d times for one done result, want 1", runs)
 	}
 }

@@ -6696,7 +6696,8 @@ A failing check never ends a Builder session. A builder whose done result fails 
 As built (`internal/task/checkcap.go`):
 - A check is a Builder `task_done` run; its name is the task identifier. `run_check` is Quality Assurance's tool.
 - `judgeResult` reruns the open tasks' checks when a builder says done, and resumes the same session with their output while any fail.
-- The last failing `task_done` output is kept per task. A pass clears only that task's entry, and a new try clears them all.
+- A resume keeps the session's first start, its granted extra time and its paused time, so the window is not renewed or shortened.
+- The last failing check output, from `task_done` or from the done-time rerun, is kept per task. A pass clears only that task's entry, and a new try clears them all. The pipeline reuses the done-time findings and does not rerun the checks.
 - `takeLastCheck` returns the entries of the tasks still pending after a session that ended without finishing, and they go into the next try's findings.
 
 #### Wall time per try
@@ -12572,7 +12573,7 @@ func DiffFiles(diff string) []ChangedFile
 
 `Classify` rates a binary file at least `medium`, because its content cannot be read from the diff.
 
-The Task Manager classifies the judged tree once per round in `runDeep`: it passes `DiffFiles` of the group's diff as `Files`, keeps the decision (`Manager.Risk()`) and publishes `risk.set` with the level and reason. `riskSkipsReview` in `cmd/komodo/wire_tasks.go` classifies the round's diff the same way and is wired to `Collaborators.SkipReview`; when `Route(level).Reviewer` is false, the round starts no Reviewer session. Both go through `Manager.classify`, which sets `Proven` once a finding blocked in an earlier round, with a proof and confidence 80 or more (`noteProven`), and sets `PublicAPI` from `PublicAPIChanged(diff)`; `skipsReview` then keeps the Reviewer. `PublicAPIChanged` is a line scan of the diff for added or removed Go declarations of an exported name outside test files, including any line inside the wrapped signature of an exported function or method; it fails closed, so a line whose place the diff leaves unclear counts as a change. A public interface change raises the group's risk to `med_high`. [TODO: how Go detects a comment-only change (`Verified`); no caller sets it yet ([G-318](#g-318))]
+The Task Manager classifies the judged tree once per round in `runDeep`: it passes `DiffFiles` of the group's diff as `Files`, keeps the decision (`Manager.Risk()`) and publishes `risk.set` with the level and reason. `riskSkipsReview` in `cmd/komodo/wire_tasks.go` classifies the round's diff the same way and is wired to `Collaborators.SkipReview`; when `Route(level).Reviewer` is false, the round starts no Reviewer session. Both go through `Manager.classify`, which sets `Proven` once a finding blocked in an earlier round, with a proof and confidence 80 or more (`noteProven`), and sets `PublicAPI` from `PublicAPIChanged(diff)`; `skipsReview` then keeps the Reviewer. `PublicAPIChanged` is a line scan of the diff for added or removed Go declarations of an exported name outside test files, including any line inside the wrapped signature of an exported function or method, when the diff shows the `func` line (a hunk header naming a function is read as body); it fails closed, so a line whose place the diff leaves unclear counts as a change. A public interface change raises the group's risk to `med_high`. [TODO: how Go detects a comment-only change (`Verified`); no caller sets it yet ([G-318](#g-318))]
 
 The path rules below are the built tables (`internal/agent/risk.go`). A path is lower-cased and matched by folder names, base name and extension.
 

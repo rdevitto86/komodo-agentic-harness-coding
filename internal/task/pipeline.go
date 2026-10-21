@@ -109,9 +109,12 @@ func (m *Manager) runBuild(ctx context.Context) error {
 				return block("contract", map[string]string{"error": "the builder's result is not a pass"})
 			}
 
-			left, err := m.reconcile(ctx)
-			if err != nil {
-				return err
+			left := out.open
+			if !out.checked {
+				var err error
+				if left, err = m.reconcile(ctx); err != nil {
+					return err
+				}
 			}
 			if len(left) > 0 {
 				// Only a builder that cannot be resumed gets here: judgeResult resumes the rest without spending a try.
@@ -279,6 +282,7 @@ func (m *Manager) reconcile(ctx context.Context) ([]string, error) {
 		}
 		if exit != 0 {
 			left = append(left, fmt.Sprintf("task %s is not done: its completion command exited %d\n%s", t.ID, exit, out))
+			m.keepCheck(t.ID, exit, out)
 		}
 	}
 
@@ -377,17 +381,26 @@ func (m *Manager) taskDone(ctx context.Context, _ *sessCtx, task string) (int, s
 		return exit, out, err
 	}
 
-	m.mu.Lock()
-	delete(m.lastCheck, task)
 	if exit != 0 {
-		if m.lastCheck == nil {
-			m.lastCheck = map[string]string{}
-		}
-		m.lastCheck[task] = fmt.Sprintf("The last output of the check %s, exit code %d:\n%s", task, exit, out)
+		m.keepCheck(task, exit, out)
+	} else {
+		m.mu.Lock()
+		delete(m.lastCheck, task)
+		m.mu.Unlock()
 	}
-	m.mu.Unlock()
 
 	return exit, out, nil
+}
+
+// keepCheck records a task's failing check output for the next try's brief.
+func (m *Manager) keepCheck(task string, exit int, out string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.lastCheck == nil {
+		m.lastCheck = map[string]string{}
+	}
+	m.lastCheck[task] = fmt.Sprintf("The last output of the check %s, exit code %d:\n%s", task, exit, out)
 }
 
 // applyScopeAnswer widens the group's files by the approved paths the Task Manager would itself allow.

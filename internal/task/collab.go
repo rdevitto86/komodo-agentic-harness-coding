@@ -63,6 +63,7 @@ type ItemSource interface {
 type GateError struct {
 	Text   string
 	Schema bool
+	Open   []string // for a builder's open tasks: the failing check findings
 }
 
 // Error returns the text sent back to the session.

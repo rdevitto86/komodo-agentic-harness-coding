@@ -25,6 +25,7 @@ type SessionLimits struct {
 type Clocks struct {
 	Started      time.Time     // when the session was spawned
 	PausedFor    time.Duration // time this session spent paused, excluded from wall
+	Extended     time.Duration // wall time granted beyond the base limit
 	LastLine     time.Time     // last stream line or tool call
 	RetryUntil   time.Time     // end of a retry delay announced by a retry event
 	ToolsRunning int           // tool calls in flight
@@ -284,6 +285,7 @@ func SuperviseWith(ctx context.Context, s llm.Stream, lim SessionLimits, c *Cloc
 		case extra := <-grants:
 			if extra > 0 {
 				lim.Wall += extra
+				c.Extended += extra
 			}
 			left := lim.Wall - (now().Sub(c.Started) - c.PausedFor)
 			mins := int((left + time.Minute - 1) / time.Minute)

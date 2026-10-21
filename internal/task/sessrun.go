@@ -38,6 +38,8 @@ type sessOut struct {
 	handle  llm.ResumeHandle
 	limit   *llm.ProviderLimit
 	result  llm.Result
+	checked bool     // a builder's pass whose open tasks judgeResult already checked
+	open    []string // the findings of the checks that still failed then
 }
 
 // sessCtx is everything one running session owns.
@@ -48,6 +50,7 @@ type sessCtx struct {
 	watch   *toolWatch
 	guard   *Guard
 	memo    *judgeMemo
+	clk     *Clocks // the session's clocks, kept across resumes
 	closers []func()
 	handle  llm.ResumeHandle
 	resumed bool
@@ -760,9 +763,15 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 // supervise reads the stream to its end under the session clocks and the Runtime Manager's timer answers.
 func (m *Manager) supervise(ctx context.Context, sc *sessCtx, req sessReq, st llm.Stream) (llm.Result, Reason, error) {
 	now := m.now()
-	clk := &Clocks{Started: sc.started, LastLine: now} // a resume keeps the window of the session's first start
+	if sc.clk == nil {
+		sc.clk = &Clocks{Started: sc.started}
+	}
+
+	// A resume keeps the first start, the granted extra and the paused time; only the idle clocks begin again.
+	clk := sc.clk
+	clk.LastLine, clk.NudgedAt, clk.RetryUntil = now, time.Time{}, time.Time{}
 	lim := SessionLimits{
-		Wall: m.sessionWall(),
+		Wall: m.sessionWall() + clk.Extended,
 		Idle: cmpOrDur(m.spec.Limits.SessionIdle, 10*time.Minute),
 	}
 	inject := make(chan string, 4)
@@ -828,7 +837,7 @@ func (m *Manager) judgeResult(
 		if !first && (req.agent != "builder" || ge.Schema) {
 			break
 		}
-		if !ge.Schema && m.now().Sub(sc.started) >= m.sessionWall() {
+		if !ge.Schema && m.windowEnded(sc) {
 			out.reason = state.ReasonTimeout
 			return out, nil
 		}
@@ -855,7 +864,7 @@ func (m *Manager) judgeResult(
 		// A builder that cannot be resumed (no handle, or a link that cannot resume) ends done with its tasks still open;
 		// the pipeline then spends one try, as the engine does.
 		if !ge.Schema && req.agent == "builder" {
-			err = nil
+			err, out.open = nil, ge.Open
 		} else {
 			out.reason = state.ReasonCheckFail
 			if ge.Schema {
@@ -869,6 +878,7 @@ func (m *Manager) judgeResult(
 	}
 
 	out.outcome = oc
+	out.checked = req.agent == "builder" && oc.Kind == OutcomePass
 	if res.Handle.Value != "" {
 		out.handle = res.Handle
 	}
@@ -889,10 +899,20 @@ func (m *Manager) judgeBuilt(ctx context.Context, sc *sessCtx, req sessReq, res 
 		return oc, fmt.Errorf("run the open tasks' checks: %w", err)
 	}
 	if len(left) > 0 {
-		return oc, &GateError{Text: "Your result was rejected because tasks are still open:\n" + bullets(left)}
+		return oc, &GateError{Text: "Your result was rejected because tasks are still open:\n" + bullets(left), Open: left}
 	}
 
 	return oc, nil
+}
+
+// windowEnded reports whether the session has used its base window, its granted extra and its paused time.
+func (m *Manager) windowEnded(sc *sessCtx) bool {
+	var extra, paused time.Duration
+	if sc.clk != nil {
+		extra, paused = sc.clk.Extended, sc.clk.PausedFor
+	}
+
+	return m.now().Sub(sc.started)-paused >= m.sessionWall()+extra
 }
 
 // sessionWall returns the wall-time window of one session.
