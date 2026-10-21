@@ -245,6 +245,7 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 	}
 
 	c.Checks = agent.NewChecker(cc)
+	c.SkipReview = riskSkipsReview
 	c.Deep = agent.NewDeep(agent.DeepConfig{
 		Language: lang,
 		Base:     base,
@@ -657,4 +658,9 @@ func permissionsOf(a config.Agent) task.Permissions {
 		Weight:     string(a.Weight),
 		Chain:      a.Chain,
 	}
+}
+
+// riskSkipsReview reports whether the diff's Go-rule risk level is one the Reviewer does not judge.
+func riskSkipsReview(diff string) bool {
+	return !agent.Route(agent.Classify(agent.RiskInput{Files: agent.DiffFiles(diff)}).Level).Reviewer
 }
