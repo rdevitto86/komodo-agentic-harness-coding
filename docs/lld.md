@@ -11869,7 +11869,7 @@ func DeepPlan(l RiskLevel) []DeepKind
 
 `RiskLevel` is defined in [14.3](#143-data-model). The checks are:
 
-- **Race detector:** `go test -race -count=1` over the impact set (the changed packages and every package that imports one); with no affected package it passes with the note `no affected package`. A race sends the work back to the Builder.
+- **Race detector:** `go test -race -count=1` over the impact set (the changed packages and every package that imports one); with no affected package it passes with the note `no affected package`. Only a race report (`WARNING: DATA RACE`) fails it and sends the work back to the Builder; a test that fails without one is left to the baseline check.
 - **Fuzzing:** each `Fuzz*` target in a changed package runs for `DeepFuzzTime` (30 seconds); a crash sends the work back to the Builder.
 - **Mutation:** a seam that reports `Pass` true with the output `skipped: mutation testing is not built, its tool is not chosen yet`. [TODO: which Go mutation tool, picked by a quick proof of concept ([G-310](#g-310))]
 - **Benchmarks:** `go test -run '^$' -bench . -benchtime 200ms -count=3` over the changed packages, at the work under test and at the base; each benchmark's lowest ns/op of the 3 runs is compared. A benchmark more than `BenchSlowdown` (10%) slower than at the base is listed in the output of a result whose `Pass` is true; there is no separate warning flag.
@@ -12699,7 +12699,7 @@ func Route(l RiskLevel) RiskRoute
 func DiffFiles(diff string) []ChangedFile
 ```
 
-The Task Manager classifies the judged tree once per round in `runDeep`: it passes `DiffFiles` of the group's diff as `Files`, keeps the decision (`Manager.Risk()`) and publishes `risk.set` with the level and reason. `riskSkipsReview` in `cmd/komodo/wire_tasks.go` classifies the round's diff the same way and is wired to `Collaborators.SkipReview`; when `Route(level).Reviewer` is false, the round starts no Reviewer session. Both callers pass `Files` only, so no caller sets `Verified`, `Proven` or `PublicAPI` today.
+The Task Manager classifies the judged tree once per round in `runDeep`: it passes `DiffFiles` of the group's diff as `Files`, keeps the decision (`Manager.Risk()`) and publishes `risk.set` with the level and reason. `riskSkipsReview` in `cmd/komodo/wire_tasks.go` classifies the round's diff the same way and is wired to `Collaborators.SkipReview`; when `Route(level).Reviewer` is false, the round starts no Reviewer session. Both go through `Manager.classify`, which sets `Proven` once a blocking finding's proof failed as claimed in an earlier round (`noteProven`); `skipsReview` then keeps the Reviewer. [TODO: how Go detects a comment-only change (`Verified`) and a change to a public interface (`PublicAPI`); no caller sets them yet ([G-318](#g-318))]
 
 The path rules below are the built tables (`internal/agent/risk.go`). A path is lower-cased and matched by folder names, base name and extension.
 
@@ -13255,6 +13255,7 @@ No key lowers a level or sets one, and no key lists sensitive paths.
 | [G-305](#g-305) | Whether sensitivity is implied or set by a change-risk skill | 14.3 |
 | [G-314](#g-314) | Owner check: the risk path tables | 14.3 |
 | [G-315](#g-315) | Owner check: the review rules without a proof | 14.3 |
+| [G-318](#g-318) | How Go detects a comment-only change and a public interface change | 14.3 |
 
 The Reviewer's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 15. Commit Handler
@@ -16342,6 +16343,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-315"></a>G-315 | Owner check: review rules without a proof | Built in code without an owner decision, and the owner has not confirmed it: the 12 rules whose proof kind is `none` (listed in 14.3), so their findings only warn | Owner decision | [14](#14-reviewer) |
 | <a id="g-316"></a>G-316 | Owner check: the same error | Built in code without an owner decision, and the owner has not confirmed it: for the inner cap, the same error is the same task identifier, the same exit code and the same capped output | Owner decision | [7](#7-runtime-manager) |
 | <a id="g-317"></a>G-317 | Owner check: empty group branch | Built in code without an owner decision, and the owner has not confirmed it: a group branch whose change since the merge base is empty is deleted | Owner decision | [16](#16-cleanup-handler) |
+| <a id="g-318"></a>G-318 | Risk inputs with no detector | How Go detects a comment-only change (`Verified`) and a change to a public interface (`PublicAPI`); the risk rules name both, but no caller sets them | Owner decision | [14](#14-reviewer) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
