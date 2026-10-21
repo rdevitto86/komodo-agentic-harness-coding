@@ -101,17 +101,7 @@ Komodo is one Go program, the `komodo` binary. Each subsystem has one package un
 
 #### Code that exists today
 
-About 3,900 lines of Go exist on this branch. They move as follows when their subsystem is built.
-
-| File today | Lines | Moves to |
-|---|---|---|
-| `internal/core/cache.go` | 415 | `internal/cache` |
-| `internal/core/http.go`, `http_policy.go`, `http_stream.go` | 857 | Stay in `internal/core`; `internal/llm` builds on them |
-| `internal/core/fs.go` | 91 | Stays in `internal/core` |
-| `internal/core/filelock.go` | 58 | New: `FileLock`, the one operating-system file lock that the Configuration, State and Lease Managers share |
-| `internal/core/version.go` | 194 | Stays in `internal/core` |
-| `internal/cli/cli.go` | 40 | Grows into `internal/cli` |
-| `dashboard/` | 556 | `internal/cli/ui.go`, `internal/cli/ui_view.go` and `embed/ui/` |
+The tree holds 125,564 lines of Go, of which 65,471 are not test files (measured with `git ls-files '*.go' | xargs cat | wc -l`). Every package in the table above exists under `internal/`, with its tests beside its sources. The dashboard proof of concept sits in `dashboard/` ([Top-level layout](#top-level-layout)).
 
 #### Code rules
 
@@ -1756,9 +1746,9 @@ The block reasons are the `Reason` values of [10.3](#103-data-model) that end a 
 
 // blockReasons lists the reasons a group is blocked; each is the code of a needs.<reason> shape.
 var blockReasons = []string{
-	"no_provider", "pause_timeout", "paid_refused", "regression", "returns", "flap", "retries",
-	"attempts", "needs_scope", "context", "setup", "publish", "merge_conflict", "cleanup", "wall",
-	"dependency", "crash", "contract", "state_invalid", "qa", "flaky",
+	"no_provider", "pause_timeout", "paid_refused", "flap", "retries", "needs_scope", "context",
+	"setup", "publish", "merge_conflict", "cleanup", "wall", "dependency", "crash", "contract",
+	"state_invalid",
 }
 ```
 
@@ -2877,8 +2867,8 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `group.approved` | `run-status` / `group.approved` | None; Quality Assurance and the Reviewer approved the group, and the commit in git is the record of the code |
 | `group.blocked` | `run-failure` / `group.blocked` | `counter`, `detail`, `reason`, `prior`, `paths`, `until` (reason `retries`: when the override window lapses) |
 | `group.failed` | `run-failure` / `group.failed` | `prior`, `last` (the last failure), `detail`, `reason`, `stage` |
-| `retry.spent` | `run-status` / `retry.spent` | `left`, `reason` (the failure), `stage` |
-| `retry.waived` | `run-status` / `retry.waived` | `left`, `reason` (the fault of Komodo's own), `stage` |
+| `retry.spent` | `run-status` / `retry.spent` | `left`, `reason` (the failure, including `crash` for a builder crash that no Komodo restart caused), `stage` |
+| `retry.waived` | `run-status` / `retry.waived` | `left`, `reason` (a Komodo restart, a provider limit or a cancel), `stage` |
 | `override.approved` | `run-status` / `override.approved` | `granted`, `left`, `minutes` (the final try's working time) |
 | `override.lapsed` | `run-status` / `override.lapsed` | `window_min` |
 | `error.recorded` | `run-status` / `error.recorded` | `reason` (the error type), `tier`, `wait_s` (the group's wait before its next session start) |
@@ -2891,20 +2881,21 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `session.start` | `run-status` / `session.start` | `agent`, `task`, `link`, `model`, `resumed` |
 | `session.idle` | `run-status` / `session.idle` | `idle_s`, `nudged` |
 | `session.timewarn` | `run-status` / `session.timewarn` | `used_s`, `wall_s` |
-| `session.end` | `run-status` / `session.end` | The `SessionEnd` struct below, with `reason` and `usage` (token and cost detail) |
+| `session.end` | `run-status` / `session.end` | The `SessionEnd` struct below, with `reason`, `usage` (token and cost detail) and, for a builder that ended `done`, `evidence` (the commands it ran) |
 | `task.claimed` | `run-status` / `task.claimed` | `task` |
 | `task.released` | `run-status` / `task.released` | `task` |
 | `task.done` | `run-status` / `task.done` | `task` |
 | `task.retry` | `run-status` / `task.retry` | `task`, `attempt` |
 | `check.done` | `run-status` / `check.done` | `pass`, `tip`, `head`, `regression`, `steps`; the free mechanical checks that open Quality Assurance's turn |
-| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note` |
-| `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `level`, `in`, `proof` (the proof's outcome); one per finding Go kept, published when the Reviewer's session ends |
+| `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note`, `proof` (the Reviewer's own validation), `confidence` |
+| `finding.verified` | `run-status` / `finding.verified` | The submit fields, with the Reviewer's `proof` and `confidence`, plus `level` and `in`; one per finding Go kept, published when the Reviewer's session ends |
 | `risk.set` | `run-status` / `risk.set` | `level`, `reason`; the risk level Go set for the group from its diff, and the rule that set it |
 | `deep.done` | `run-status` / `deep.done` | `pass`, `results` (per check: `kind`, `pass`, `note`, `mutants`); the outcome of the deep checks of the group's risk level |
 | `epic.pushed` | `run-status` / `epic.pushed` | `epic`, `branch`, `head`, `landed`, `pushed`, `last`; the epic went quiet and its push call returned |
 | `pr.opened` | `run-status` / `pr.opened` | `epic`, `branch`, `head`, `pr_url`, `pr_new`; the epic's pull request is open after a push |
 | `tool.denied` | `run-status` / `tool.denied` | `tool`, `row`, `target`, `count` |
 | `sandbox.fallback` | `run-status` / `sandbox.fallback` | `role`, `wanted`, `used`, `why`; Quality Assurance ran in the operating-system sandbox because Docker was missing |
+| `qa.fail_open` | `run-status` / `qa.fail_open` | `causes` (why Quality Assurance could not test the group); the group went on with no Quality Assurance sign-off, the pull request carries "not tested by Quality Assurance: (cause)", and no try is spent |
 | `tool.outside` | `run-status` / `tool.outside` | `server`, `tool`, `outcome`; one call to an outside tool server |
 | `epic.paused` | `run-status` / `epic.paused` | `epic`, `group`, `output`; a recheck of the epic branch failed |
 | `epic.resumed` | `run-status` / `epic.resumed` | `epic`, `group`; a recheck passed on a paused epic |
@@ -3090,6 +3081,15 @@ type SessionEnd struct {
 	ScopeReason string         `json:"scope_reason,omitempty"` // needs_scope, or a self-denied done: the builder's reason
 	Verify      *VerifyOutcome `json:"verify,omitempty"`       // reviewer or Quality Assurance with reason done
 	Unfinished  *Unfinished    `json:"unfinished,omitempty"`   // builder only: the task left with uncommitted edits
+	// builder with reason done: the commands it ran to prove its work
+	Evidence []EvidenceRun `json:"evidence,omitempty"`
+}
+
+// EvidenceRun is one command an agent ran, its exit code and an excerpt of its output.
+type EvidenceRun struct {
+	Cmd     string `json:"cmd"`
+	Exit    int    `json:"exit"`
+	Excerpt string `json:"excerpt"`
 }
 
 // Unfinished names the task whose edits a Builder session left in the worktree and the files they changed.
@@ -3114,9 +3114,15 @@ type VerifyOutcome struct {
 	Pass            bool     `json:"pass"`                       // every task met or confirmed and every item passed
 	NotMet          []string `json:"not_met,omitempty"`          // task identifiers marked not_met or not_confirmed
 	BriefIncomplete bool     `json:"brief_incomplete,omitempty"` // the reviewer answered brief_incomplete
-	Failed          []string `json:"failed,omitempty"`           // Quality Assurance items the reruns confirmed failed
-	Disputed        []string `json:"disputed,omitempty"`         // Quality Assurance items the reruns passed
-	Split           []string `json:"split,omitempty"`            // Quality Assurance items whose two reruns disagreed
+	Failed          []string `json:"failed,omitempty"`           // Quality Assurance items marked failed
+	// the score from 0 to 100 Quality Assurance gave each item
+	Confidence []ItemConfidence `json:"confidence,omitempty"`
+}
+
+// ItemConfidence is the score Quality Assurance gave one acceptance item.
+type ItemConfidence struct {
+	Item       string `json:"item"`
+	Confidence int    `json:"confidence"`
 }
 
 // --- Work
@@ -3154,6 +3160,15 @@ type FindingSubmit struct {
 	Line  int    `json:"line"`           // line number from 1 in the head tree
 	Quote string `json:"quote"`          // the quoted evidence line
 	Note  string `json:"note,omitempty"` // the agent's note on the finding
+	// the Reviewer's own validation of the finding; absent when it gave none
+	Proof      *FindingProof `json:"proof,omitempty"`
+	Confidence int           `json:"confidence"` // 0 to 100: how sure the Reviewer is
+}
+
+// FindingProof is what the Reviewer ran or checked to validate a finding, and what it saw.
+type FindingProof struct {
+	Ran string `json:"ran"`
+	Saw string `json:"saw"`
 }
 
 // FindingVerified is the data of run-status / finding.verified.
@@ -3161,7 +3176,12 @@ type FindingVerified struct {
 	FindingSubmit
 	Level string `json:"level"` // critical, high, med_high, medium, med_low or low, from the rule
 	In    string `json:"in"`    // "head" or "diff", where the quote was found
-	Proof string `json:"proof"` // failed_as_claimed, passed or none
+}
+
+// QAFailOpen is the data of run-status / qa.fail_open: the group went on with no Quality Assurance sign-off.
+type QAFailOpen struct {
+	GroupFacts
+	Causes []string `json:"causes"` // why Quality Assurance could not test the group
 }
 
 // ToolDenied is the data of run-status / tool.denied.
@@ -3916,7 +3936,7 @@ An acceptance item has these parts:
 |---|---|
 | First word | `WHEN`, or the `IF` or `WHILE` form |
 | `SHALL` | Required; an item without it fails lint. Go checks the shape, never the meaning |
-| `cmd:` | Optional command Quality Assurance runs; without it Go cannot rerun the item |
+| `cmd:` | Optional command Quality Assurance runs to verify the item; without it Quality Assurance verifies the item by other means. An item marked failed blocks with or without a command |
 | `needs:` | Optional; `network`, `docker` or `service:<name>`; Quality Assurance skips the item with reason `env` in a sandbox that cannot satisfy it |
 
 Grammar of both files:
@@ -5690,7 +5710,7 @@ const SocketName = "engine.sock"
 
 The State Manager owns the `Stage` and `Reason` values ([10.3](#103-data-model)). This chapter uses the stage names `intake`, `build`, `test_review`, `commit` and `cleanup`, the holding states `paused` and `blocked`, and the end state `done`, written here as Intake, Build, Test and Review, Commit, Cleanup, Paused, Blocked and Done. A block reason in this chapter is one of the `Reason` values listed there.
 
-The block reasons `qa` and `flaky` come from Quality Assurance's rerun rule ([13. Quality Assurance](#13-quality-assurance)); the Task Manager reports them as a `fault`. The free mechanical checks are the first step of Quality Assurance's turn: a failed check returns the group to Build with the exact output and calls no model, and only a clean result starts Quality Assurance and Reviewer agents.
+The free mechanical checks are the first step of Quality Assurance's turn: a failed check returns the group to Build with the exact output and calls no model, and only a clean result starts Quality Assurance and Reviewer agents. The Builder's `evidence` (the commands it ran and their output) goes into Quality Assurance's brief.
 
 #### State
 
@@ -6403,7 +6423,7 @@ Two watches cover a loop that stops answering and an engine that stops answering
 func (m *Manager) Beat(loop string)
 ```
 
-A loop silent for `LoopSilentFor`, 60 seconds, is stopped and restarted. A Task Manager restarts from its saved state, which counts as one retry of the group. A watcher loop (the Error Handler, the Metrics Service or the Resource Manager) restarts in place.
+A loop silent for `LoopSilentFor`, 60 seconds, is stopped and restarted. A Task Manager restarts from its saved state, and the restart costs the group no try. A watcher loop (the Error Handler, the Metrics Service or the Resource Manager) restarts in place.
 
 **The engine's own heartbeat.** The engine writes `~/.komodo/state/engine.beat` every `EngineBeatEvery`, 5 seconds, from a goroutine of its own. The file holds the engine's process id and the time:
 
@@ -6508,7 +6528,7 @@ flowchart TB
 7. It hands each recovered group's used-token count to the Resource Manager, so the group's token cap continues from where it was ([19](#19-resource-manager)).
 8. It asks the Cleanup Handler for one sweep, which clears the leftovers of groups that no live lease holds ([16](#16-cleanup-handler)).
 
-**The dead-session rule.** One rule covers every session that was live at the crash, and the crash is never charged to `RetriesLeft`:
+**The dead-session rule.** One rule covers every session that was live at the crash, and a crash a Komodo restart caused is never charged to `RetriesLeft` (the `Restart` flag marks it):
 1. For each session the State shows as claimed with no `session.end`, the Runtime Manager saves `session.end` with reason `crash`, which releases its task.
 2. It records the task that holds unfinished edits in `Unfinished` with its changed files, commits nothing, and orders the stage again with the session's `ResumeRef`.
 3. The Task Manager continues the same conversation from the handle. If the handle fails, it starts a fresh session with the brief, the diff of the work so far and the last summary, and the Runtime Manager publishes `session.resume-lost`.
@@ -6653,12 +6673,13 @@ A **try** is the span between spent tries: the first try, then one more after ea
 | Failure | Spends one try |
 |---|---|
 | A Test and Review round fails and the group returns to Build | Yes |
-| A builder session ends `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail` or `refusals` | Yes |
+| A builder session ends `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail` or `refusals`; a builder session timeout is a failed try | Yes |
+| A builder session ends `crash`, unless a Komodo restart caused the crash | Yes |
 | A builder ends `done` while a task is not done | Yes |
-| A Quality Assurance agent or reviewer session ends without a result | Yes |
+| A reviewer session ends without a result, or crashes without a Komodo restart as the cause (the Reviewer never fails open) | Yes |
 | A try ran past `limits.group_wall_min` plus its 60-minute extension | Yes, with reason `wall` |
 
-**Komodo's own faults** never spend a retry ([Komodo faults](#komodo-faults));
+The causes can be any mix of these. A Quality Assurance session that ends without a result spends no try: Quality Assurance fails open instead ([13.5](#135-behaviour)). **Komodo's own faults** other than a builder or reviewer crash never spend a try: a crash that a Komodo restart caused, a provider limit, a cancel and a setup fault ([Komodo faults](#komodo-faults)).
 
 A true failure that finds `RetriesLeft` at 1 is the group's last: it sets `RetriesLeft` to 0 and the group enters the **override wait**: Blocked with reason `retries`, `Block.Until` set to the failure time plus the engine constant `OverrideWindow`, a static 60 minutes that no setting changes, live sessions cancelled and the lease kept. Three things can follow:
 
@@ -6668,24 +6689,13 @@ A true failure that finds `RetriesLeft` at 1 is the group's last: it sets `Retri
 
 A **failed** group is Done with `Outcome` failed. `Next` orders `cancel` and `release`, so the lease is released and no pool slot is held; it emits `override.lapsed` (when an override was offered), `group.failed` and `group.done`. The group's event history is kept. Its worktree, caches and branches are no longer held by any run, so the Cleanup Handler's sweep may delete them. A failed group is never continued: `run (id)` and `--override` on it are refused with code `group_failed`, which says to plan it again. The only way back is a fresh pipeline run with a new plan, context, cache and worktree. The run lists the group as stalled with reason `failed`, and the groups that depend on it do not start.
 
-#### The inner cap on a try
+#### Failing checks in a try
 
-Firm blocking failures end the try, so a run cannot go on without end. A session ends, and the try counts as a failed try, in either case:
-
-1. The same check fails 3 times in a row with the same error.
-2. The Builder runs checks 20 times in one session.
-
-The last output goes into the next try's brief. A check that alternates between pass and fail is reported flaky and does not count toward the 3. The outer rule above is unchanged: 3 tries, one override try and the 60-minute window.
+A failing check never ends a Builder session. The failure goes back to the live session, and the Builder works until its checks pass or its working time ends ([Wall time per try](#wall-time-per-try)). A Builder session that times out is a failed try. The outer rule above is unchanged: 3 tries, one override try and the 60-minute window.
 
 As built (`internal/task/checkcap.go`):
-- A check is a Builder `task_done` run; its name is the task identifier. `run_check` is Quality Assurance's tool and is uncapped.
-- `sameFailLimit` is 3 and `checkRunLimit` is 20. Each session counts its own runs.
-- The same error is the same task identifier, the same exit code and the same capped output, compared after `NormalizeOutput` replaces durations and `(cached)` marks ([13.5](#135-behaviour)). A pass clears the streak.
-- A check that flips between pass and fail twice is flaky: the Builder's tool reply gets the note `this check alternates between pass and fail: it is flaky`, once, and no event is published.
-- When the cap is hit the session stops with reason `check_fail`, which spends one try. The check's last output goes into the next try's findings (`takeLastCheck`).
-- The old rule that counted failed completion commands across sessions in the Task Manager (`gateFails`) is removed.
-
-[TODO: whether the owner confirms that "the same error" means the same task identifier, exit code and capped output ([G-316](#g-316))]
+- A check is a Builder `task_done` run; its name is the task identifier. `run_check` is Quality Assurance's tool.
+- `takeLastCheck` returns the last failing `task_done` output of a session that ended without a pass, and the output goes into the next try's findings. A pass clears it.
 
 #### Wall time per try
 
@@ -6708,17 +6718,17 @@ One table, `state.Classify`, ranks every reason; `Reason.Severity()` reads it. T
 | minor (expected, self-healing) | `cancelled`, an engine or Task Manager restart, `provider`, `paused`, `billing` | Nothing |
 | work failure | `timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals` | A retry; not a blocker |
 
-The block-only reasons about the work, not Komodo (`flap`, `needs_scope`, `context`, `merge_conflict`, `dependency`, `qa`, `flaky`, `retries`, `no_provider`, `pause_timeout`, `paid_refused`) have no tier. Rate limits stay with the pool halving. A lint, test or review failure is a work outcome and never a blocker.
+The block-only reasons about the work, not Komodo (`flap`, `needs_scope`, `context`, `merge_conflict`, `dependency`, `retries`, `no_provider`, `pause_timeout`, `paid_refused`) have no tier. Rate limits stay with the pool halving. A lint, test or review failure is a work outcome and never a blocker.
 
 **Error handler.** One instance in the Runtime Manager takes every error of a group and of the engine. It records the type (the `Reason`), the tier and the group in an `error.recorded` event, and keeps a count by type since the engine started. `status` shows that count as the table of errors by type, and the run metrics keep it per run. It keeps no file: after an engine restart its counts start at zero, and its events are the record.
 
-**Group breaker.** `FaultStreak` counts blocker errors on one group, from any agent, with no work outcome between them. A session that ends `done`, or for a reason that spends a retry (`timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals`), resets it, as does a plain `run (id)` on a blocked group. After the 1st blocker error the group waits 1 minute before its next session start, after the 2nd 2 minutes, after the 3rd 4 minutes. The 4th blocks the group `crash` for a person: no retry is spent and the group does not fail. A blocker that already blocks the group under its own reason, such as `setup`, keeps that reason and waits the same way: the run does not count the group as stalled, the group resumes by itself when its wait ends with the streak kept, and the 4th leaves it blocked for a person and reports the stall. A crash found when the engine restarts is not an error. The waits are engine constants held in memory: `[TODO: tune the per-group waits from error counts (G-294)]`.
+**Group breaker.** `FaultStreak` counts blocker errors on one group, from any agent, with no work outcome between them. A session that ends `done`, or for a reason that spends a retry (`timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals`), resets it, as does a plain `run (id)` on a blocked group. After the 1st blocker error the group waits 1 minute before its next session start, after the 2nd 2 minutes, after the 3rd 4 minutes. The 4th blocks the group `crash` for a person: the cap covers Komodo faults and judge crashes, and the block itself spends no try and does not fail the group. A builder crash is both a blocker error, which adds 1 to the streak, and a spent try, unless a Komodo restart caused it: that crash spends no try and adds nothing to the streak. A blocker that already blocks the group under its own reason, such as `setup`, keeps that reason and waits the same way: the run does not count the group as stalled, the group resumes by itself when its wait ends with the streak kept, and the 4th leaves it blocked for a person and reports the stall. A crash found when the engine restarts is not an error and spends no try. The waits are engine constants held in memory: `[TODO: tune the per-group waits from error counts (G-294)]`.
 
 **Global pause.** When one error type reaches 3 different groups inside 10 minutes, the handler pauses new Build and Test and Review session starts everywhere; running sessions continue. It publishes `starts.paused` with the type, the groups and the wait. It uses the same waits: after 1 minute held groups may start again (`starts.resumed`). If the same type reaches 3 groups again within 10 minutes of that resume, the next wait applies, 2 minutes and then 4. After the 4-minute wait fails the pause stays, status shows an alert, and only a person running `komodo run` from a terminal ends it, when the engine accepts that command. A pause spends no retry and changes no group's block state.
 
 **Engine failure.** A failure of the engine itself is severe: a panic of a goroutine the engine started, a state store that refuses both a write and the `state_invalid` write after it, or an Event Bus that fails while the engine runs. It is counted under the type `engine`, published as `engine.failed`, stops every new session start at once and shows a severe alert in status. It never ends by itself; only a person running `komodo run` from a terminal does, when the engine accepts that command. The engine checks the terminal the way `--override` does, so an orchestrator's command, a refused command and a command with no terminal leave the state in place.
 
-`[TODO: confirm that every spent retry, not only a wall failure, starts a new try with fresh wall time (G-290)]`. `[TODO: the engine's terminal check for --override on native Windows, untested (G-292)]`.
+Every spent try starts a new try with its own fresh working time and its own extension. `[TODO: the engine's terminal check for --override on native Windows, untested (G-292)]`.
 
 #### Block rows
 
@@ -6728,21 +6738,20 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 |---|---|---|---|
 | `result.fail` | Test and Review | `RetriesLeft` is 1 or 0 | `retries`; the detail names a regression when the data flags a test that passed at the base |
 | `result.fail` | Test and Review | Fingerprint equals `FailureHash`, or tree equals `ReturnTree` | `flap` |
-| `session.end` builder, reason `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, or `done` with a task open | Build | `RetriesLeft` is 1 or 0 | `retries` |
-| `session.end` Quality Assurance or reviewer without a result | Test and Review | `RetriesLeft` is 1 or 0 | `retries` |
+| `session.end` builder, reason `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, `crash` (no Komodo restart as the cause), or `done` with a task open | Build | `RetriesLeft` is 1 or 0 | `retries` |
+| `session.end` reviewer without a result, or a reviewer `crash` (no Komodo restart as the cause) | Test and Review | `RetriesLeft` is 1 or 0 | `retries` |
 | `fault` reason `retries` from the Task Manager | Build, Test and Review | | `retries`; `RetriesLeft` is set to 0 |
 | `session.end` reason `billing` | Build, Test and Review | | `paid_refused` |
 | `session.end` reason `needs_scope`, or `scope.ask` | Build | The scope rules in 7.5 did not deny it | `needs_scope` |
 | `fault` | Build, Test and Review | Every link is unavailable or unauthorized, none limited | `no_provider` |
 | `fault` | Intake, Build, Test and Review | The brief exceeds half the context of every link | `context` |
 | `fault` | Intake, Build, Test and Review | The lease, branch, worktree or sandbox could not be set up, or the guard rules did not load; the detail names the rules file `internal/task/policy.json` | `setup`; no retry is spent |
-| `session.end` reason `crash` | Build, Test and Review | `FaultStreak` reached 4 | `crash`; no retry is spent and the group does not fail |
+| `session.end` reason `crash` | Build, Test and Review | `FaultStreak` reached 4 (other Komodo faults and judge crashes) | `crash`; the block spends no try and the group does not fail; a builder crash that no Komodo restart caused spends a try by the builder row above |
 | `fault` | Commit | A push or pull request failed 3 times | `commit` |
 | `fault` | Commit | The branch conflicts with its base and one automatic merge did not resolve it | `merge_conflict` |
 | `fault` | Cleanup | Removal failed | `cleanup` |
 | Any input in Build | Build | The current try used `limits.group_wall_min` + 60 minutes | not a block: the try fails as a retry ([Wall time per try](#wall-time-per-try)) |
 | `abandon` of another group | Any working stage, Paused | A dependency group was abandoned | `dependency` |
-| `fault` | Test and Review | Quality Assurance's reruns split once, or its second dispute stands | `flaky`, or `qa` |
 | `group.crash` | Any working stage, Paused | The group's goroutine panicked | `crash` |
 | A result that breaks its declared shape | Any working stage, Paused | Found by the group loop before the write | `contract` |
 | A refused save or a bad record | Any working stage, Paused | The State Manager refused | `state_invalid` |
@@ -6754,8 +6763,9 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | `session.start` | Build, Test and Review | Task `claimed` with its session; a session start costs nothing |
 | `session.end` builder | Build | Clears the task's session; `TokensUsed` grows by the session's usage; then the exit row below |
 | `task.done` | Build | Task `done`; `GateFails` reset |
-| `gate.fail` | Build | `GateFails` + 1 for the task; the third failure ends the session with reason `check_fail` and the session end then spends one retry |
-| `session.end` Quality Assurance or reviewer, no result | Test and Review | `RetriesLeft` - 1; orders a fresh session of the same agent on the group's tree, or records the restart in `Owed` when the group is Paused; never a return |
+| `gate.fail` | Build | `GateFails` + 1 for the task, recorded only: a failing completion command never ends the session and spends nothing |
+| `session.end` reviewer, no result | Test and Review | `RetriesLeft` - 1; orders a fresh session of the reviewer on the group's tree, or records the restart in `Owed` when the group is Paused; never a return |
+| `session.end` Quality Assurance, no result | Test and Review | No try; orders a fresh Quality Assurance session; a second internal failure in a row fails open ([13.5](#135-behaviour)) |
 | `session.end` reason `paused` | Paused | Adds a `Resume` entry; `Pause.Until` takes the later time; `Pause.Refused` + 1 when the same session paused before |
 | `limit.pause` | Build, Test and Review | With a live session or running action: `Pause.After`, `Pause.Cause`, `Pause.Until` and `Pause.Link` set; no stage move until row 18 |
 | `timer.extend` | Build | Grants once per try: `WallExtTry` set to `Tries`, orders `extend` for exactly 60 minutes |
@@ -6768,14 +6778,14 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | Exit reason | Sets; orders; emits |
 |---|---|
 | `done` | With every task done, row 4 moves the group; with a task not done, `RetriesLeft` - 1 and a retry |
-| `check_fail`, `no_result`, `schema_fail`, `refusals` | `RetriesLeft` - 1 and `retry.spent`; a fresh session while retries remain |
+| `check_fail` (the result failed the agent's own gate twice), `no_result`, `schema_fail`, `refusals` | `RetriesLeft` - 1 and `retry.spent`; a fresh session while retries remain |
 | `timeout`, `idle` | The same, with a fresh session resuming at the open task |
 | `provider` | `Resume` set; orders the stage again on the next allowed link |
 | `paused` | `Resume` set; row 9 |
 | `needs_scope` | `Resume` set from the handle; the scope rules |
 | `billing` | The block rows |
 | `cancelled`, `pause_timeout` | None; the cause already moved the group |
-| `crash` | None of its own; the dead-session rule |
+| `crash` | `RetriesLeft` - 1 and `retry.spent` with reason `crash`, unless a Komodo restart caused it: then none, by the dead-session rule |
 
 The state of each holding state:
 
@@ -6796,7 +6806,7 @@ A group in a holding state still has its goroutine: it renews its lease every `L
 5. A lease is revoked at a stop only after every session is stopped and the State is saved.
 6. A stale input never moves a stage.
 7. The pool never exceeds `limits.pool_max` or falls below `limits.pool_min`.
-8. A crash, an engine restart and every other fault of Komodo's own are never charged to `RetriesLeft`, and `RetriesLeft` rises only by an approved override.
+8. An engine restart, a crash a Komodo restart caused and every Komodo fault other than a builder or reviewer crash are never charged to `RetriesLeft`; a builder or reviewer crash is charged, and `RetriesLeft` rises only by an approved override.
 9. Waiting for a slot, a pause, a block and downtime never add to `WallUsedS`.
 10. Every loop has a counter, and only `Next` changes a counter.
 11. The engine exits only with no run live, no entry queued and no connection open.
@@ -6819,7 +6829,7 @@ A group in a holding state still has its goroutine: it renews its lease every `L
 | Return that changes nothing | Tree equals `ReturnTree` | Stop; 0 more | Blocked `flap` |
 | Tries spent | A failure with `RetriesLeft` at 1 or 0 | Stop | Blocked `retries`, the override wait |
 | Working time over twice the group wall | `WallUsedS` | Stop; the one extension is used | Blocked `wall` |
-| Session found dead after a crash | Recovery pass | The dead-session rule; 0 attempts charged | Group continues |
+| Session found dead after a crash | Recovery pass | The dead-session rule; 0 tries charged (a crash found at engine restart is a Komodo restart; a builder crash while the engine runs spends a try) | Group continues |
 | Sessions alive 90 seconds into a stop | The stop sequence | Whole-tree kill | Run stopped |
 | Dependency Blocked or Paused | The run's view | Dependents wait; unrelated groups run | Dependents not started |
 | Engine killed without a stop | The next command that starts an engine | `run (id)` runs the recovery pass from saved State | Resumed |
@@ -6857,7 +6867,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - `Startable` is false while any dependency is not Done.
 - Quality Assurance fails then reviewer approves, and the reverse: one return to Build at the second end.
 - A return on the same tree as `ReturnTree` blocks `flap`.
-- Each true failure (a failed Test and Review round, builder `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, a `done` with a task open, a Quality Assurance agent or reviewer without a result) spends one retry and emits `retry.spent`; a crash, `cancelled`, `provider` and a Task Manager restart spend none and emit `retry.waived`.
+- Each true failure (a failed Test and Review round, builder `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, a builder `crash`, a `done` with a task open, a reviewer without a result) spends one retry and emits `retry.spent`; a crash a Komodo restart caused, `cancelled`, `provider`, a Task Manager restart and a Quality Assurance agent without a result spend none and emit `retry.waived`.
 - With `limits.group_retries` 3, the third true failure sets `RetriesLeft` to 0 and enters the override wait (Blocked `retries`, `Block.Until` 60 minutes on); `run (id)` on it is refused and `RetriesLeft` stays 0.
 - `override` before `Block.Until` sets `RetriesLeft` to 1, stores the request's minutes in `FinalWallMin`, sets `Overrides` to 1 and resumes; after it, or on any other block, it is refused; minutes outside 1 to 480 are refused.
 - The final try reaching `FinalWallMin` gets the 60-minute extension, and reaching the limit plus 60 minutes fails the group.
@@ -6868,11 +6878,13 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A slot wait, a Paused interval and a downtime gap add 0 to `WallUsedS`.
 - An approved override returns the group to Build with `LastFindings` in the brief and orders no judge; a `continue` on any other block resumes at `Prior`.
 - A guard that fails to load blocks `setup` with the rules file named, spends no retry and adds 1 to `FaultStreak`.
-- Four session crashes in a row on one group block it `crash` with no retry spent and no failure; a session that ends `done` or in a charged failure of the work resets the streak, so a crash, a timeout and two more crashes do not block the group `crash`; a `continue` on that block clears it.
+- Four blocker errors in a row on one group (other Komodo faults and judge crashes) block it `crash` with no retry spent and no failure; a session that ends `done` or in a charged failure of the work resets the streak; a `continue` on that block clears it. A builder crash spends a try and adds 1 to the streak; a crash a Komodo restart caused does neither.
+- A builder `session.end` with reason `crash` and no Komodo restart spends one try: `RetriesLeft` - 1 and `retry.spent` with reason `crash`.
+- A failing `gate.fail` input, repeated 3 or 20 times in a row, ends no session and changes no count that spends a try.
 - A tool-call error inside a session (a failing command, a bad regular expression) is not a reason: it reaches neither `FaultStreak` nor the error handler's blocker count.
 - A lint, test or review failure, a timeout, a rate limit and a restart are never blockers: `FaultStreak` stays 0 and no breaker counts them.
 - A table in the state package's tests lists every `Reason` and its tier; adding a reason without a tier fails it.
-- A group waits 1 minute after its 1st blocker error, 2 after its 2nd and 4 after its 3rd before its next session start; the 4th blocks it `crash` with no retry spent; a session that ends `done` or in a charged failure resets the count.
+- A group waits 1 minute after its 1st blocker error, 2 after its 2nd and 4 after its 3rd before its next session start; the 4th blocker error (a Komodo fault or a judge crash) blocks it `crash` with no retry spent; a session that ends `done` or in a charged failure resets the count.
 - A group blocked `setup` waits its 1, 2 or 4 minutes with no `stalled` event and retries when the wait ends; the 4th `setup` error leaves it blocked for a person and the run reports the stall.
 - The global pause starts when one error type reaches 3 different groups inside 10 minutes; different types, one group alone and errors more than 10 minutes apart never start it. Its waits are 1, 2 and 4 minutes, a recurrence on 3 groups takes the next wait, and after the 4-minute wait fails it stays until a person runs `komodo run` from a terminal.
 - A panic of a goroutine the engine started, a state store that fails twice and an Event Bus that fails while the engine runs are severe: starts stop at once, status shows the severe alert, a day of clock time does not resume them, and only a person running `komodo run` does.
@@ -6921,7 +6933,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - `NudgeGroups` sends one `nudge` command to a group's Task Manager and changes no State; with `limits.group_tokens` 0 it is never called.
 - `PauseGroups` with reason `group_tokens` pauses the group after its current step with cause `group_tokens`, no timer and the lease kept; `run (id) --approve` raises the group's cap by one and continues it; `--deny` is refused with `not_blocked`.
 - `PauseGroups` with reason `spend_ceiling_day` pauses only groups on a paid link, arms a timer for the next local midnight, and leaves a group on a subscription link running.
-- A fake core loop that stops beating for 60 seconds is restarted; a Task Manager restart continues from the saved state and adds one retry.
+- A fake core loop that stops beating for 60 seconds is restarted; a Task Manager restart continues from the saved state and costs no try.
 - A fake engine that does not reply for 10 seconds with a beat file 31 seconds old is killed as a process tree, a new engine starts, and the command is sent once more; with a beat file 20 seconds old the CLI keeps waiting.
 - A `session.end` input with `unfinished` sets `Unfinished`; a continued group's `enter_stage` order carries it, and the group record shows no commit for that task.
 - A run whose epic branch is missing gets it created from the base branch and one first commit of the task lists, pushed, before the first group branch is cut; an existing epic branch is left as it is.
@@ -6935,7 +6947,6 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 | [G-07](#g-07) | The real Max five-hour window against 3 sessions on one subscription link | Ledger measurement over the first 20 groups |
 | [G-307](#g-307) | Whether the run-start task-lists commit is pushed | Owner decision |
 | [G-308](#g-308) | The epic pull request while groups are deferred | Owner decision |
-| [G-316](#g-316) | Owner check: what "the same error" means for the inner cap | Owner decision |
 ## 8. Cache Manager
 
 The Cache Manager is the local cache for pieces of context and for prompt-cache markers. It keeps what is expensive to rebuild so the harness does not pay for it twice: pieces of context, and the plan that tells the model client which parts of a prompt the provider may remember. It never stores a model's answer, so a model call is always a real call. Every entry is found by a fingerprint of its inputs, so an entry is either exactly right or absent. The purpose of the subsystem and who it talks to are in [HLD 5.9](hld.md#59-cache-manager).
@@ -8077,7 +8088,7 @@ type UnfinishedEdits struct {
 type Counters struct {
 	RetriesLeft  int            `json:"retries_left"`  // tries left, the current one included; only an override raises it
 	Overrides    int            `json:"overrides"`     // overrides a person approved; the only way retries_left rises
-	Crashes      int            `json:"crashes"`       // sessions lost to a crash; never charged to the retries
+	Crashes      int            `json:"crashes"`       // sessions lost to a crash; charged to the retries unless a Komodo restart caused it
 	Blocks       map[string]int `json:"blocks"`        // blocks per reason
 	WallUsedS    int64          `json:"wall_used_s"`   // seconds worked, excluding paused and blocked time; never falls
 	Tries        int            `json:"tries"`         // the current try, from 1; rises on a spent retry or an override
@@ -9744,7 +9755,7 @@ Every session ends with exactly one `state.Reason` value ([10. State Manager](#1
 | `billing` | The first stream line showed a paid API key instead of the subscription login | The session is killed before turn 1; escalates `blocked`, reason `paid_refused` |
 | `paused` | A provider limit halted the session, no link is left, and a resume handle exists | Reports the pause; resumes at the timer |
 | `cancelled` | The Task Manager stopped it on purpose | Acts by cause |
-| `crash` | The session died without reporting | Recorded on restart; the task runs again, and a crash is never charged as an attempt |
+| `crash` | The session died without reporting | Recorded on restart; the task runs again; a builder crash spends one try unless a Komodo restart caused it |
 
 An agent's retry count and the group's attempt count are bounded by `Limits`; reaching either escalates.
 
@@ -10519,7 +10530,7 @@ sequenceDiagram
 **Resume a session.** One rule covers every resume (a timer, a scope answer, a crash):
 1. Try the saved handle. On the subscription link run `--resume <uuid>`; on API links replay `messages.jsonl`.
 2. If it fails, start a fresh session with the brief, the work-in-progress diff and the last builder `summary`, and report the fact `resume_lost`.
-3. A resume never charges `RetriesLeft`, and a crash is never an attempt. After a crash the Runtime Manager reads only the State Manager, builds a new Task Manager and passes the group's saved state as `GroupSpec.Saved`. The saved `Progress.Handles` hold each live session's handle, so the new Task Manager resumes from them. The supervisor reports the handle, and writes it to `request.json` in the session folder, before the session starts.
+3. A resume never charges `RetriesLeft`, and a crash found at a restart spends no try (a builder crash while the engine runs does). After a crash the Runtime Manager reads only the State Manager, builds a new Task Manager and passes the group's saved state as `GroupSpec.Saved`. The saved `Progress.Handles` hold each live session's handle, so the new Task Manager resumes from them. The supervisor reports the handle, and writes it to `request.json` in the session folder, before the session starts.
 
 The rewriting of `scope.json` happens before either step, so a resumed session sees the paths a scope answer added.
 
@@ -10730,7 +10741,7 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 | Provider limit with a link left | `ProviderLimit` | Reason `provider`; next session on the next allowed link |
 | Provider limit, no link left, or at session start | `ProviderLimit`, `*PausedError` | Group pauses; timer through the Runtime Manager; resume from the handle |
 | Resume handle fails | Resume error | Fresh session with the brief, the diff and the last `summary`; `resume_lost` |
-| Session died without a report | Runtime Manager's restart | Reason `crash`; the task runs again; no attempt charged |
+| Session died without a report | Runtime Manager's restart | Reason `crash`; the task runs again; no try is charged when a Komodo restart caused it, otherwise one |
 | A failure with `RetriesLeft` at 1 or 0 | Rework check, pipeline | Escalate `blocked`, reason `retries` |
 | Return leaves the tree unchanged | Rework check | Escalate `blocked`, reason `flap` |
 | Scope request for a protected or other-group path | Scope step 3 | Denied at once; the builder resumes with a denial |
