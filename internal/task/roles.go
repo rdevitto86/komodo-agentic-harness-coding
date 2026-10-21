@@ -102,7 +102,7 @@ func (b *builderRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 	if res.Status == agent.BuilderNeedsScope {
 		return Outcome{Kind: OutcomeScope, Paths: res.Paths, Reason: res.Reason}, nil
 	}
-	return Outcome{Kind: OutcomePass, Summary: []string{res.Summary}}, nil
+	return Outcome{Kind: OutcomePass, Summary: []string{res.Summary}, Evidence: res.Evidence}, nil
 }
 
 // qaRole is Quality Assurance over agent.QA.
@@ -131,6 +131,9 @@ func (t *qaRole) Slots(_ context.Context, in RoleInput) (map[string]string, erro
 	}
 	if in.Diff != "" {
 		s["diff"] = in.Diff
+	}
+	if in.Evidence != "" {
+		s["builder_evidence"] = in.Evidence
 	}
 
 	if len(in.Findings) > 0 {

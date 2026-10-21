@@ -35,6 +35,8 @@ type RoleInput struct {
 	Uncovered []string
 	// the task whose edits an earlier builder session left in the worktree; nil when none
 	Unfinished *state.UnfinishedEdits
+	// the commands the builder ran to prove its work, for Quality Assurance's brief
+	Evidence string
 }
 
 // Role is the agent-specific half of a stage.
@@ -73,6 +75,8 @@ type Outcome struct {
 	Findings []string // for Return: verified findings the builder receives
 	Paths    []string // for Scope: the paths the builder asked for
 	Summary  []string // for Pass: the result lines the pull request body prints
+	// for the builder's Pass: the commands it ran to prove its work
+	Evidence []agent.EvidenceRun
 	// for the reviewer: every finding Go kept, with its level, proof and confidence; Recorded holds the record-only lines
 	Verified []VerifiedFinding
 	Recorded []string

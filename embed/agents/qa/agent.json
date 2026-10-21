@@ -40,7 +40,8 @@
       "standards",
       "diff",
       "checks",
-      "baseline"
+      "baseline",
+      "builder_evidence"
     ]
   },
   "result": {

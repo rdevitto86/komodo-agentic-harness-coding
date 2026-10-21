@@ -34,6 +34,8 @@ const (
 	SlotRepoMap  Slot = "repo_map"
 	Baseline     Slot = "baseline"
 	Acceptance   Slot = "acceptance"
+
+	BuilderEvidence Slot = "builder_evidence"
 )
 
 // Values holds the filled text of each slot; a missing or empty entry is an empty slot.
@@ -93,7 +95,7 @@ var (
 		},
 		"qa": {
 			required: []Slot{RepoProfile, Group, Tasks, Acceptance},
-			optional: []Slot{RepoContext, Standards, Diff, Checks, Baseline},
+			optional: []Slot{RepoContext, Standards, Diff, Checks, Baseline, BuilderEvidence},
 		},
 		"reviewer": {
 			required: []Slot{RepoProfile, Group, Tasks, Files, Diff, Lens, LensRules, Checks},

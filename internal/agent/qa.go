@@ -80,7 +80,7 @@ func QARole() Role {
 		[]string{"build", "test"},
 		[]string{"R1"},
 		[]string{"repo_profile", "group", "tasks", "acceptance"},
-		[]string{"repo_context", "standards", "diff", "checks", "baseline"},
+		[]string{"repo_context", "standards", "diff", "checks", "baseline", "builder_evidence"},
 		"komodo:agent/qa/result/1", QAResult{}, true)
 }
 

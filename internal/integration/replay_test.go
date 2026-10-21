@@ -18,7 +18,8 @@ import (
 const (
 	apiKey    = "sk-ant-recorded-key-0001"
 	sessionID = "0198f3a2-9b10-7c21-8d44-1a2b3c4d5e6f"
-	finalJSON = `{"status":"done","summary":"Added Mul to calc and a test for it.","disputed":[]}`
+	finalJSON = `{"status":"done","summary":"Added Mul to calc and a test for it.","disputed":[],` +
+		`"evidence":[{"cmd":"go test ./calc/","exit":0,"excerpt":"ok"}]}`
 )
 
 // replayAPI is a recorded Messages interface: it replays scripted replies and keeps every request body.

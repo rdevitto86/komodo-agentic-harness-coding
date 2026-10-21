@@ -100,6 +100,9 @@ func (m *Manager) runBuild(ctx context.Context) error {
 				resume, input = h, text
 				continue
 			case OutcomePass:
+				m.mu.Lock()
+				m.evidence = out.outcome.Evidence
+				m.mu.Unlock()
 			default:
 				return block("contract", map[string]string{"error": "the builder's result is not a pass"})
 			}
@@ -749,7 +752,11 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 	uncovered := slices.Clone(m.uncovered)
 	m.mu.Unlock()
 
-	in := RoleInput{Diff: diff, Trip: m.Progress().Returns, Uncovered: uncovered}
+	m.mu.Lock()
+	evidence := evidenceText(m.evidence)
+	m.mu.Unlock()
+
+	in := RoleInput{Diff: diff, Trip: m.Progress().Returns, Uncovered: uncovered, Evidence: evidence}
 	judges := []string{"qa", "reviewer"}
 	if m.skipsReview(diff) {
 		judges = judges[:1] // a low or med_low change gets no Reviewer

@@ -253,6 +253,15 @@ type SessionEnd struct {
 	ScopePaths  []string       `json:"scope_paths,omitempty"`  // needs_scope, or a self-denied done: the paths asked for
 	ScopeReason string         `json:"scope_reason,omitempty"` // needs_scope, or a self-denied done: the builder's reason
 	Verify      *VerifyOutcome `json:"verify,omitempty"`       // reviewer or Quality Assurance with reason done
+	// builder with reason done: the commands it ran to prove its work
+	Evidence []EvidenceRun `json:"evidence,omitempty"`
+}
+
+// EvidenceRun is one command an agent ran, its exit code and an excerpt of its output.
+type EvidenceRun struct {
+	Cmd     string `json:"cmd"`
+	Exit    int    `json:"exit"`
+	Excerpt string `json:"excerpt"`
 }
 
 // EventKey binds SessionEnd to run-status / session.end.

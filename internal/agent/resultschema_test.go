@@ -193,7 +193,7 @@ func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"builder", "status", []string{"done", "needs_scope"}, func(v string) error {
 			raw := `{"status": %q, "summary": "s", "paths": ["a"], "reason": "r"}`
 			if v == "done" {
-				raw = `{"status": %q, "summary": "s"}`
+				raw = `{"status": %q, "summary": "s", ` + evidenceJSON + `}`
 			}
 
 			_, err := ParseBuilderResult([]byte(fmt.Sprintf(raw, v)))

@@ -66,6 +66,33 @@
         },
         "type": "array"
       },
+      "evidence": {
+        "description": "Required with done: the commands you ran to prove your work, such as its tests.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "cmd": {
+              "description": "The command as run.",
+              "type": "string"
+            },
+            "excerpt": {
+              "description": "The output lines that show the result, up to 4 KB, head and tail.",
+              "type": "string"
+            },
+            "exit": {
+              "description": "The exit code you saw.",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cmd",
+            "exit",
+            "excerpt"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
       "paths": {
         "description": "Only with needs_scope: the paths the work needs.",
         "items": {

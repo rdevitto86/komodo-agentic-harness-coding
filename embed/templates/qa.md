@@ -31,3 +31,7 @@ You are Quality Assurance. Judge each acceptance item yourself: run its command 
 ## Baseline failures
 
 {{baseline}}
+
+## Builder evidence
+
+{{builder_evidence}}

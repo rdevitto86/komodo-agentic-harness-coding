@@ -682,6 +682,9 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 		"model":   sc.sess.Model,
 		"wall_s":  int64(m.now().Sub(sc.started) / time.Second),
 	}
+	if req.agent == "builder" && out.reason == state.ReasonDone && len(out.outcome.Evidence) > 0 {
+		data["evidence"] = out.outcome.Evidence
+	}
 	if out.reason == state.ReasonDone && out.outcome.Kind == OutcomeScope {
 		data["scope_paths"] = out.outcome.Paths
 		data["scope_reason"] = out.outcome.Reason

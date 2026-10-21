@@ -1654,6 +1654,32 @@
         "agent": {
           "type": "string"
         },
+        "evidence": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "cmd": {
+                "type": "string"
+              },
+              "excerpt": {
+                "type": "string"
+              },
+              "exit": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cmd",
+              "exit",
+              "excerpt"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "handle": {
           "type": "string"
         },

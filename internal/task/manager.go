@@ -80,7 +80,8 @@ type Manager struct {
 	signoff    *agent.Signoff     // Quality Assurance's accepted pass, until a test file changes
 	scopeWait  *scopeWait
 	builderH   *llm.ResumeHandle
-	lastCheck  string // the output that ended a builder session by the inner cap, for the next try's brief
+	lastCheck  string              // the output that ended a builder session by the inner cap, for the next try's brief
+	evidence   []agent.EvidenceRun // what the builder's last done result gave as proof of its work
 	contract   int
 	ids        atomic.Int64
 	tag        string // makes the identifiers differ from those of an earlier Manager of the same group

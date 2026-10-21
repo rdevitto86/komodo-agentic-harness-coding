@@ -306,7 +306,8 @@ type model struct {
 
 // Results the scripted agents return.
 const (
-	builderDone = `{"status":"done","summary":"added the file"}`
+	builderDone = `{"status":"done","summary":"added the file",` +
+		`"evidence":[{"cmd":"go test ./a/...","exit":0,"excerpt":"ok  a 0.01s"}]}`
 	qaPass      = `{"items":[],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
 	qaNoTask    = `{"items":[],"tasks":[{"task":"t1","confirmation":"not_confirmed"}]}`
 	reviewerMet = `{"verdicts":[{"task":"t1","verdict":"met"}]}`

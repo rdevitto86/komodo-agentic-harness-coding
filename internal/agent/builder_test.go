@@ -36,18 +36,22 @@ func TestBuilderRoleIsACopy(t *testing.T) {
 	}
 }
 
+// evidenceJSON is a valid evidence member of a done result.
+const evidenceJSON = `"evidence": [{"cmd": "go test ./...", "exit": 0, "excerpt": "ok"}]`
+
 func TestParseBuilderResult(t *testing.T) {
 	ok := []struct{ name, raw string }{
 		{
 			"done",
-			`{"status": "done", "summary": "Added the lock file type and its tests; both tasks pass.", "disputed": []}`,
+			`{"status": "done", "summary": "Added the lock file type and its tests; both tasks pass.", "disputed": [], ` +
+				`"evidence": [{"cmd": "go test ./internal/lease/", "exit": 0, "excerpt": "ok"}]}`,
 		},
 		{
 			"scope",
 			`{"status": "needs_scope", "summary": "Stopped before tsk-add-lock.", "paths": ["internal/lease/lock.go"], ` +
 				`"reason": "The lock type must be read by the lease package."}`,
 		},
-		{"disputed", `{"status": "done", "summary": "s", "disputed": ["internal/agent/lock.go:42"]}`},
+		{"disputed", `{"status": "done", "summary": "s", "disputed": ["internal/agent/lock.go:42"], ` + evidenceJSON + `}`},
 	}
 	for _, c := range ok {
 		if _, err := ParseBuilderResult([]byte(c.raw)); err != nil {
@@ -57,14 +61,22 @@ func TestParseBuilderResult(t *testing.T) {
 	bad := []struct{ name, raw string }{
 		{"scope without paths", `{"status": "needs_scope", "summary": "s", "reason": "r"}`},
 		{"scope without reason", `{"status": "needs_scope", "summary": "s", "paths": ["a.go"]}`},
-		{"done with paths", `{"status": "done", "summary": "s", "paths": ["a.go"]}`},
-		{"done with reason", `{"status": "done", "summary": "s", "reason": "r"}`},
+		{"done with paths", `{"status": "done", "summary": "s", "paths": ["a.go"], ` + evidenceJSON + `}`},
+		{"done with reason", `{"status": "done", "summary": "s", "reason": "r", ` + evidenceJSON + `}`},
 		{"bad status", `{"status": "finished", "summary": "s"}`},
-		{"no summary", `{"status": "done", "summary": "  "}`},
-		{"unknown field", `{"status": "done", "summary": "s", "extra": 1}`},
-		{"bad disputed", `{"status": "done", "summary": "s", "disputed": ["no-line"]}`},
+		{"no summary", `{"status": "done", "summary": "  ", ` + evidenceJSON + `}`},
+		{"unknown field", `{"status": "done", "summary": "s", "extra": 1, ` + evidenceJSON + `}`},
+		{"bad disputed", `{"status": "done", "summary": "s", "disputed": ["no-line"], ` + evidenceJSON + `}`},
 		{"empty path", `{"status": "needs_scope", "summary": "s", "paths": [""], "reason": "r"}`},
-		{"trailing data", `{"status": "done", "summary": "s"} {}`},
+		{"trailing data", `{"status": "done", "summary": "s", ` + evidenceJSON + `} {}`},
+		{"done without evidence", `{"status": "done", "summary": "s"}`},
+		{"done with an empty evidence list", `{"status": "done", "summary": "s", "evidence": []}`},
+		{"evidence run with no command", `{"status": "done", "summary": "s", "evidence": [{"cmd": " ", "exit": 0, "excerpt": ""}]}`},
+		{
+			"evidence excerpt over 4 KB",
+			`{"status": "done", "summary": "s", "evidence": [{"cmd": "go test", "exit": 0, "excerpt": "` +
+				strings.Repeat("x", GateOutputCap+1) + `"}]}`,
+		},
 		{"not json", `done`},
 	}
 	for _, c := range bad {

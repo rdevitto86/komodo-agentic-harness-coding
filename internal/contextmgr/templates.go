@@ -47,6 +47,8 @@ var (
 		SlotRepoMap:  true,
 		Baseline:     true,
 		Acceptance:   true,
+
+		BuilderEvidence: true,
 	}
 )
 

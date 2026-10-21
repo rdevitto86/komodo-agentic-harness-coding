@@ -661,7 +661,8 @@ func (f *fakeModel) result(role, brief string) string {
 				return s
 			}
 		}
-		return `{"status":"done","summary":"added the Add function"}`
+		return `{"status":"done","summary":"added the Add function",` +
+			`"evidence":[{"cmd":"go test ./...","exit":0,"excerpt":"ok"}]}`
 	case "qa":
 		items, tasks := []map[string]any{}, []map[string]string{}
 		for _, m := range itemLine.FindAllStringSubmatch(brief, -1) {
