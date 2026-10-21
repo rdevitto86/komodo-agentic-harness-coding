@@ -87,7 +87,8 @@ func TestDeepFuzzNoTargets(t *testing.T) {
 
 // A benchmark more than 10% slower than the base warns; the check still passes.
 func TestDeepBenchSlowdownWarns(t *testing.T) {
-	head := "pkg: m/a\nBenchmarkEncode-8   1000   1200 ns/op\nBenchmarkParse-8   1000   105 ns/op\nBenchmarkNew-8 10 5 ns/op\n"
+	head := "pkg: m/a\nBenchmarkEncode-8   1000   1200 ns/op\nBenchmarkParse-8   1000   105 ns/op\n" +
+		"BenchmarkNew-8 10 5 ns/op\n"
 	base := "pkg: m/a\nBenchmarkEncode-8   1000   1000 ns/op\nBenchmarkParse-8   1000   100 ns/op\n"
 	s := basics().on("cd '/base'", reply{0, base}).on("-bench", reply{0, head})
 	cfg := DeepConfig{Base: "b0", BaseDir: func(context.Context, string) (string, error) { return "/base", nil }}

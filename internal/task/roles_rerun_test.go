@@ -25,7 +25,8 @@ func judgeWithRunner(t *testing.T, run agent.CommandRunner) Outcome {
 	}
 
 	failed := result(
-		`{"items":[{"item":"a1","pass":false,"evidence":"no"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
+		`{"items":[{"item":"a1","pass":false,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],` +
+			`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 	)
 	out, err := roles["qa"].Judge(context.Background(), failed)
 	if err != nil {

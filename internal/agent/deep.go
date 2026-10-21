@@ -115,7 +115,11 @@ func (d deep) Run(ctx context.Context, run CommandRunner, plan []DeepKind) ([]De
 		case scope == nil && d.cfg.Language == "go":
 			err = fmt.Errorf("no scope for the %s check", k)
 		case scope == nil:
-			r = DeepResult{Kind: k, Pass: true, Output: fmt.Sprintf("skipped: no %s check for language %q", k, d.cfg.Language)}
+			r = DeepResult{
+				Kind:   k,
+				Pass:   true,
+				Output: fmt.Sprintf("skipped: no %s check for language %q", k, d.cfg.Language),
+			}
 		case k == DeepRace:
 			r, err = d.race(ctx, run, scope)
 		case k == DeepFuzz:
@@ -220,7 +224,8 @@ func (d deep) fuzz(ctx context.Context, run CommandRunner, s *deepScope) (DeepRe
 		}
 
 		for _, name := range fuzzTargets(out) {
-			cmd := fmt.Sprintf("go test -run '^$' -fuzz %s -fuzztime %s %s", shQuote("^"+name+"$"), d.cfg.FuzzTime, shQuote(pkg))
+			target := shQuote("^" + name + "$")
+			cmd := fmt.Sprintf("go test -run '^$' -fuzz %s -fuzztime %s %s", target, d.cfg.FuzzTime, shQuote(pkg))
 
 			exit, fout, err := runJudged(ctx, run, cmd)
 			if err != nil {
@@ -318,7 +323,10 @@ func slowdowns(head, base map[string]float64) string {
 
 	for k, h := range head {
 		if b := base[k]; b > 0 && h > b*(1+BenchSlowdown) {
-			lines = append(lines, fmt.Sprintf("%s: %.0f ns/op against %.0f ns/op at the base (+%.0f%%)", k, h, b, (h/b-1)*100))
+			lines = append(
+				lines,
+				fmt.Sprintf("%s: %.0f ns/op against %.0f ns/op at the base (+%.0f%%)", k, h, b, (h/b-1)*100),
+			)
 		}
 	}
 

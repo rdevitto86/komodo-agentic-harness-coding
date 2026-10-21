@@ -38,6 +38,7 @@ func toolRun(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	}
 
 	argv := append(append([]string{}, base...), a.Args...)
+	logRun(tc.env, a.Class, argv, len(a.Args) == 0)
 	res := confinedRun(ctx, tc, argv, runLogPath(tc))
 	switch {
 	case res.StartErr != nil:
@@ -58,6 +59,20 @@ func toolRun(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	}
 
 	return res.Reply
+}
+
+// logRun tells the session's role which command the run tool started: the argument vector as text, and the bare class name
+// when the model gave no arguments.
+func logRun(e *Env, class string, argv []string, bare bool) {
+	if e.OnRun == nil {
+		return
+	}
+
+	e.OnRun(strings.Join(argv, " "))
+
+	if bare {
+		e.OnRun(class)
+	}
 }
 
 // toolRunCheck runs the command of one acceptance item as written, in Quality Assurance's sandbox, and reports its exit

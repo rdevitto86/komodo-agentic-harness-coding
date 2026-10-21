@@ -494,6 +494,9 @@ func (m *Manager) bindTools(
 		env.Items = src.AcceptanceItems()
 		env.Check = m.runner(irole)
 	}
+	if src, ok := role.(RunSink); ok && req.agent == "qa" {
+		env.OnRun = src.Ran
+	}
 
 	reg := NewRegistry(env)
 

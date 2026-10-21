@@ -73,8 +73,10 @@ type Manager struct {
 	insts      map[string]sandbox.Instance
 	verdicts   map[string]Outcome
 	pending    []string
-	regression bool     // the last failed checks found a test that passed at the base
-	uncovered  []string // added lines the last mechanical checks found no test ran
+	regression bool               // the last failed checks found a test that passed at the base
+	uncovered  []string           // added lines the last mechanical checks found no test ran
+	risk       agent.RiskDecision // the level and rule Go set in the last round
+	signoff    *agent.Signoff     // Quality Assurance's accepted pass, until a test file changes
 	scopeWait  *scopeWait
 	builderH   *llm.ResumeHandle
 	gateFails  map[string]int

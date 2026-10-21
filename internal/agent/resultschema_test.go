@@ -36,7 +36,8 @@ var resultCases = []struct {
 	},
 	{
 		"qa", reflect.TypeOf(QAResult{}),
-		`{"items": [{"item": "i1", "pass": false, "evidence": [{"cmd": "c", "exit": 1, "excerpt": "e"}], "reason": "flaky"}],` +
+		`{"items": [{"item": "i1", "pass": false, "evidence": [{"cmd": "c", "exit": 1, "excerpt": "e"}], ` +
+			`"reason": "flaky"}],` +
 			` "tasks": [{"task": "t1", "confirmation": "confirmed"}]}`,
 		func(b []byte) error { _, err := ParseQAResult(b); return err },
 	},

@@ -33,6 +33,8 @@ var eventNameRows = []eventNameRow{
 	{"task.done", Key{TypeRunStatus, "task.done"}, false},
 	{"task.retry", Key{TypeRunStatus, "task.retry"}, false},
 	{"check.done", Key{TypeRunStatus, "check.done"}, false},
+	{"risk.set", Key{TypeRunStatus, "risk.set"}, false},
+	{"deep.done", Key{TypeRunStatus, "deep.done"}, false},
 	{"finding.submit", Key{TypeRunStatus, "finding.submit"}, false},
 	{"finding.verified", Key{TypeRunStatus, "finding.verified"}, false},
 	{"tool.denied", Key{TypeRunStatus, "tool.denied"}, false},

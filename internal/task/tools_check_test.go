@@ -184,3 +184,19 @@ func TestRunCheckSchemaHasNoEnumWithoutItems(t *testing.T) {
 		t.Errorf("item schema = %v, want no enum", p)
 	}
 }
+
+func TestRunLogsTheCommandItStarted(t *testing.T) {
+	var logged []string
+	r := newRig(t, func(e *Env) {
+		e.Commands["build"] = []string{"printf", "[%s]\n"}
+		e.OnRun = func(cmd string) { logged = append(logged, cmd) }
+	})
+
+	r.call("run", map[string]any{"class": "build", "args": []string{"a", "b"}})
+	r.call("run", map[string]any{"class": "build"})
+
+	want := []string{"printf [%s]\n a b", "printf [%s]\n", "build"}
+	if strings.Join(logged, "|") != strings.Join(want, "|") {
+		t.Errorf("logged %q, want %q", logged, want)
+	}
+}

@@ -69,6 +69,8 @@ type Env struct {
 	Items []agent.Item
 	// runs one acceptance command in Quality Assurance's sandbox and returns its exit code and output
 	Check func(ctx context.Context, command string) (int, string, error)
+	// receives each command the run tool starts, as the text Go can run again
+	OnRun func(cmd string)
 	// lint errors of a planned task list; empty means clean
 	Lint func(draft string) []string
 	// receives each validated finding

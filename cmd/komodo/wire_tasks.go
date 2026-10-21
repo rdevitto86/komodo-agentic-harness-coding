@@ -245,6 +245,15 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 	}
 
 	c.Checks = agent.NewChecker(cc)
+	c.Deep = agent.NewDeep(agent.DeepConfig{
+		Language: lang,
+		Base:     base,
+		BaseDir:  cc.BaseDir,
+		Changed: func(ctx context.Context) ([]string, error) {
+			out, err := gitRunner{tspec.Lease.Worktree}.Run(ctx, "diff", "--name-only", base)
+			return strings.Split(out, "\n"), err
+		},
+	})
 
 	roles, err := task.NewRoles(task.RoleConfig{
 		Group:    tspec.Group,

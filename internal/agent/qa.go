@@ -83,7 +83,7 @@ const (
 type QAVerdict struct {
 	Ended      bool     `json:"ended"`                // Quality Assurance ended with a valid result and Go's reruns finished
 	Restarts   int      `json:"restarts,omitempty"`   // restarts spent after a dispute or an unreplayed pass
-	Pass       bool     `json:"pass"`                 // every task confirmed, every item passed or skipped, nothing unreplayed
+	Pass       bool     `json:"pass"`                 // every task confirmed, items passed or skipped, nothing unreplayed
 	NotMet     []string `json:"not_met,omitempty"`    // task identifiers marked not_confirmed
 	Failed     []string `json:"failed,omitempty"`     // items Go's two reruns confirmed failed
 	Disputed   []string `json:"disputed,omitempty"`   // items Go's two reruns passed

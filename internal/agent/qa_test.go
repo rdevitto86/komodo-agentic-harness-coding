@@ -134,7 +134,8 @@ func TestQAAcceptResult(t *testing.T) {
 }
 
 func TestParseQAResult(t *testing.T) {
-	raw := `{"items": [{"item": "ac-1", "pass": true, "evidence": [{"cmd": "go test", "exit": 0, "excerpt": "ok"}]}], "tasks": [{"task": "t", "confirmation": ` +
+	raw := `{"items": [{"item": "ac-1", "pass": true, "evidence": [{"cmd": "go test", "exit": 0, "excerpt": "ok"}]}], ` +
+		`"tasks": [{"task": "t", "confirmation": ` +
 		`"confirmed"}]}`
 	if r, err := ParseQAResult([]byte(raw)); err != nil || len(r.Items) != 1 || r.Tasks[0].Confirmation != Confirmed {
 		t.Fatalf("parse: %+v %v", r, err)
