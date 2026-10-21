@@ -11,9 +11,6 @@ var resultEnums = map[reflect.Type][]string{
 	reflect.TypeFor[BuilderStatus](): {string(BuilderDone), string(BuilderNeedsScope)},
 	reflect.TypeFor[Verdict]():       {string(VerdictMet), string(VerdictNotMet), string(VerdictBriefIncomplete)},
 	reflect.TypeFor[Confirmation]():  {string(Confirmed), string(NotConfirmed)},
-	reflect.TypeFor[DisputeReason](): {
-		string(ReasonEnv), string(ReasonWrongCommand), string(ReasonFlaky), string(ReasonRealFailure),
-	},
 }
 
 // resultSchema returns the JSON Schema a model's final call must match: the Go type's fields, closed.
@@ -39,6 +36,8 @@ func typeSchema(t reflect.Type) map[string]any {
 		return s
 	case reflect.Int:
 		return map[string]any{"type": "integer"}
+	case reflect.Pointer:
+		return typeSchema(t.Elem())
 	case reflect.Bool:
 		return map[string]any{"type": "boolean"}
 	case reflect.Slice:

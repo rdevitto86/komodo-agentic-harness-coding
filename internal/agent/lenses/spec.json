@@ -9,7 +9,6 @@
     {
       "id": "spec.1",
       "level": "med_high",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"

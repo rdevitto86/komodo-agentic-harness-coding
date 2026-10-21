@@ -9,7 +9,6 @@
     {
       "id": "security.1",
       "level": "critical",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -23,7 +22,6 @@
     {
       "id": "security.2",
       "level": "critical",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -37,7 +35,6 @@
     {
       "id": "security.3",
       "level": "critical",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -51,7 +48,6 @@
     {
       "id": "security.4",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -65,7 +61,6 @@
     {
       "id": "security.5",
       "level": "critical",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"

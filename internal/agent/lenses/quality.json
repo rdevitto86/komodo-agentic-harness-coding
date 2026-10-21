@@ -9,7 +9,6 @@
     {
       "id": "quality.1",
       "level": "medium",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -23,7 +22,6 @@
     {
       "id": "quality.2",
       "level": "medium",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -37,7 +35,6 @@
     {
       "id": "quality.3",
       "level": "medium",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"

@@ -9,7 +9,6 @@
     {
       "id": "performance.1",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -23,7 +22,6 @@
     {
       "id": "performance.2",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -37,7 +35,6 @@
     {
       "id": "performance.3",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -51,7 +48,6 @@
     {
       "id": "performance.4",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"

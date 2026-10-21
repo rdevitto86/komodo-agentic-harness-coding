@@ -9,7 +9,6 @@
     {
       "id": "readiness.1",
       "level": "med_high",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -23,7 +22,6 @@
     {
       "id": "readiness.2",
       "level": "medium",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"

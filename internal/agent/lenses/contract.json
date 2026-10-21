@@ -16,7 +16,6 @@
     {
       "id": "contract.1",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -30,7 +29,6 @@
     {
       "id": "contract.2",
       "level": "med_high",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"

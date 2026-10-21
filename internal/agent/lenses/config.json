@@ -14,7 +14,6 @@
     {
       "id": "config.1",
       "level": "critical",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -28,7 +27,6 @@
     {
       "id": "config.2",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -42,7 +40,6 @@
     {
       "id": "config.3",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"

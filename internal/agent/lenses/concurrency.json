@@ -17,7 +17,6 @@
     {
       "id": "concurrency.1",
       "level": "critical",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -31,7 +30,6 @@
     {
       "id": "concurrency.2",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -45,7 +43,6 @@
     {
       "id": "concurrency.3",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -59,7 +56,6 @@
     {
       "id": "concurrency.4",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"

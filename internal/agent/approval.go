@@ -4,8 +4,6 @@ import "slices"
 
 // Block reasons Decide returns.
 const (
-	BlockFlaky = "flaky" // Quality Assurance's two reruns of an item disagreed
-	BlockQA    = "qa"    // Quality Assurance disputed Go's reruns a second time
 	BlockBrief = "brief" // the Reviewer found the brief incomplete
 )
 
@@ -13,8 +11,8 @@ const (
 type ReviewerVerdict struct {
 	Ended           bool      `json:"ended"`                      // the Reviewer's session ended with a valid result
 	NotMet          []string  `json:"not_met,omitempty"`          // task identifiers marked not_met
-	Blocking        []Finding `json:"blocking,omitempty"`         // proven findings of level critical, high or med_high
-	Warnings        []Finding `json:"warnings,omitempty"`         // pull request findings: medium, unproven or passing
+	Blocking        []Finding `json:"blocking,omitempty"`         // findings of level critical, high or med_high with a proof
+	Warnings        []Finding `json:"warnings,omitempty"`         // pull request findings: medium, or below confidence 80
 	BriefIncomplete bool      `json:"brief_incomplete,omitempty"` // any task answered brief_incomplete
 }
 
@@ -22,7 +20,7 @@ type ReviewerVerdict struct {
 type Decision string
 
 const (
-	DecisionWait    Decision = "wait"    // a judge has not finished, or Quality Assurance is being restarted
+	DecisionWait    Decision = "wait"    // a judge has not finished
 	DecisionApprove Decision = "approve" // both passed: hand the approved work to the Commit Handler
 	DecisionReturn  Decision = "return"  // back to the Builder with findings
 	DecisionBlock   Decision = "block"   // a harness fault or a flaky item; a person is needed
@@ -43,10 +41,6 @@ func Decide(t QAVerdict, r ReviewerVerdict) Outcome {
 	switch {
 	case r.Ended && r.BriefIncomplete:
 		return Outcome{Decision: DecisionBlock, Reason: BlockBrief}
-	case len(t.Split) > 0:
-		return Outcome{Decision: DecisionBlock, Reason: BlockFlaky}
-	case (len(t.Disputed) > 0 || len(t.Unreplayed) > 0) && t.Restarts >= QARestarts:
-		return Outcome{Decision: DecisionBlock, Reason: BlockQA}
 	case !r.Ended:
 		return Outcome{Decision: DecisionWait}
 	}
@@ -59,7 +53,7 @@ func Decide(t QAVerdict, r ReviewerVerdict) Outcome {
 	switch {
 	case len(r.NotMet) > 0 || len(r.Blocking) > 0:
 		out.Decision = DecisionReturn
-	case !t.Ended || len(t.Disputed) > 0 || len(t.Unreplayed) > 0:
+	case !t.Ended:
 		return Outcome{Decision: DecisionWait}
 	case !t.Pass || len(t.NotMet) > 0 || len(t.Failed) > 0:
 		out.Decision = DecisionReturn

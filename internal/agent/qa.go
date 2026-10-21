@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,20 +8,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-const (
-	FlakeReruns = 2 // solo reruns of a failing test or a failed Quality Assurance item
-	QARestarts  = 1 // restarts of Quality Assurance after a dispute or an unreplayed pass
-)
-
-// DisputeReason is why Quality Assurance failed an item that Go's reruns passed.
-type DisputeReason string
-
-const (
-	ReasonEnv          DisputeReason = "env"
-	ReasonWrongCommand DisputeReason = "wrong_command"
-	ReasonFlaky        DisputeReason = "flaky"
-	ReasonRealFailure  DisputeReason = "real_failure"
-)
+// FlakeReruns is the solo reruns of a failing test.
+const FlakeReruns = 2
 
 // Confirmation is Quality Assurance's answer for one task identifier.
 type Confirmation string
@@ -36,13 +23,13 @@ const (
 type Item struct {
 	ID    string
 	Text  string   // the acceptance sentence
-	Cmd   string   // the command Go can rerun; empty when the item has none
+	Cmd   string   // the command that checks the item; empty when the item has none
 	Needs []string // network, docker or service:<name>
 }
 
-// EvidenceRun is one command Quality Assurance ran for an item; Go replays it before it accepts the item.
+// EvidenceRun is one command Quality Assurance ran for an item, reported as data.
 type EvidenceRun struct {
-	Cmd     string `json:"cmd" desc:"The command as run, copied from the item or from a run you made."`
+	Cmd     string `json:"cmd" desc:"The command as run."`
 	Exit    int    `json:"exit" desc:"The exit code you saw."`
 	Excerpt string `json:"excerpt" desc:"The output lines that show the result, up to 4 KB, head and tail."`
 }
@@ -53,8 +40,8 @@ type ItemResult struct {
 	Pass bool   `json:"pass" desc:"True when the item holds."`
 	// the runs behind the answer; at least one
 	Evidence []EvidenceRun `json:"evidence" desc:"One entry per command you ran for the item; never empty."`
-	// after a restart with Go's output: why the item failed for Quality Assurance
-	Reason DisputeReason `json:"reason,omitempty" desc:"Only after a restart that shows rerun output: why the item failed."`
+	// how sure Quality Assurance is of the answer, after it checked the item itself
+	Confidence *int `json:"confidence" desc:"0 to 100: how sure you are of this answer; 0 not confident, 100 certain."`
 }
 
 // TaskConfirmation is Quality Assurance's answer for one task identifier.
@@ -69,37 +56,20 @@ type QAResult struct {
 	Tasks []TaskConfirmation `json:"tasks" desc:"Exactly one entry per task identifier, as an array of objects."`
 }
 
-// RerunOutcome is Go's judgement of a failed item after two reruns.
-type RerunOutcome string
-
-const (
-	RerunConfirmed   RerunOutcome = "confirmed"   // both reruns failed
-	RerunDisputed    RerunOutcome = "disputed"    // both reruns passed
-	RerunSplit       RerunOutcome = "split"       // one passed, one failed
-	RerunUnconfirmed RerunOutcome = "unconfirmed" // the item has no command, so Go ran nothing
-)
-
 // QAVerdict is Quality Assurance's outcome as the approval rule reads it.
 type QAVerdict struct {
-	Ended      bool     `json:"ended"`                // Quality Assurance ended with a valid result and Go's reruns finished
-	Restarts   int      `json:"restarts,omitempty"`   // restarts spent after a dispute or an unreplayed pass
-	Pass       bool     `json:"pass"`                 // every task confirmed, items passed or skipped, nothing unreplayed
-	NotMet     []string `json:"not_met,omitempty"`    // task identifiers marked not_confirmed
-	Failed     []string `json:"failed,omitempty"`     // items Go's two reruns confirmed failed
-	Disputed   []string `json:"disputed,omitempty"`   // items Go's two reruns passed
-	Split      []string `json:"split,omitempty"`      // items whose two reruns disagreed
-	Skipped    []string `json:"skipped,omitempty"`    // items with needs: or no command, never blocking
-	Unreplayed []string `json:"unreplayed,omitempty"` // passed items whose evidence Go's replay did not reproduce
+	Ended      bool           `json:"ended"`                // Quality Assurance ended with a valid result
+	Pass       bool           `json:"pass"`                 // every task confirmed and items passed or skipped
+	NotMet     []string       `json:"not_met,omitempty"`    // task identifiers marked not_confirmed
+	Failed     []string       `json:"failed,omitempty"`     // items Quality Assurance marked failed
+	Skipped    []string       `json:"skipped,omitempty"`    // items with needs: or no command, never blocking
+	Confidence map[string]int `json:"confidence,omitempty"` // item identifier to the score Quality Assurance gave it
 }
 
 // Quality Assurance is the Go side of a Quality Assurance session.
 type QA interface {
-	// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
-	Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error)
-	// Replay runs each evidence run of a passed item that is the item's own cmd or is in the tool log, and returns those
-	// that do not reproduce, each with Go's exit code and output.
-	Replay(ctx context.Context, run CommandRunner, it Item, r ItemResult, logged []string) ([]EvidenceRun, error)
-	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, or leaves evidence empty.
+	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, leaves evidence empty,
+	// or gives a confidence outside 0 to 100.
 	AcceptResult(tasks, items []string, r QAResult) error
 }
 
@@ -130,7 +100,7 @@ func ParseQAResult(raw []byte) (QAResult, error) {
 }
 
 // AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item,
-// leaves evidence empty or uses a word outside the schema.
+// leaves evidence empty, or gives no confidence or one outside 0 to 100.
 func (goQA) AcceptResult(tasks, items []string, r QAResult) error {
 	got := make([]string, len(r.Tasks))
 	for i, t := range r.Tasks {
@@ -174,10 +144,11 @@ func (goQA) AcceptResult(tasks, items []string, r QAResult) error {
 					GateOutputCap)
 			}
 		}
-		switch it.Reason {
-		case "", ReasonEnv, ReasonWrongCommand, ReasonFlaky, ReasonRealFailure:
-		default:
-			return fmt.Errorf("item %s has unknown reason %q", it.Item, it.Reason)
+		if it.Confidence == nil {
+			return fmt.Errorf("item %s has no confidence; give a score from 0 to 100", it.Item)
+		}
+		if !ValidConfidence(*it.Confidence) {
+			return fmt.Errorf("item %s has confidence %d outside 0 to 100", it.Item, *it.Confidence)
 		}
 	}
 	return nil

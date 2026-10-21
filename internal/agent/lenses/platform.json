@@ -20,7 +20,6 @@
     {
       "id": "platform.1",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -34,7 +33,6 @@
     {
       "id": "platform.2",
       "level": "medium",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -48,7 +46,6 @@
     {
       "id": "platform.3",
       "level": "medium",
-      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -62,7 +59,6 @@
     {
       "id": "platform.4",
       "level": "med_high",
-      "proof": "command",
       "applies": {
         "globs": [
           "**"

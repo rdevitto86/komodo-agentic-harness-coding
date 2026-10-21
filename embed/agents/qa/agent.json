@@ -52,13 +52,17 @@
         "items": {
           "additionalProperties": false,
           "properties": {
+            "confidence": {
+              "description": "0 to 100: how sure you are of this answer; 0 not confident, 100 certain.",
+              "type": "integer"
+            },
             "evidence": {
               "description": "One entry per command you ran for the item; never empty.",
               "items": {
                 "additionalProperties": false,
                 "properties": {
                   "cmd": {
-                    "description": "The command as run, copied from the item or from a run you made.",
+                    "description": "The command as run.",
                     "type": "string"
                   },
                   "excerpt": {
@@ -86,22 +90,13 @@
             "pass": {
               "description": "True when the item holds.",
               "type": "boolean"
-            },
-            "reason": {
-              "description": "Only after a restart that shows rerun output: why the item failed.",
-              "enum": [
-                "env",
-                "wrong_command",
-                "flaky",
-                "real_failure"
-              ],
-              "type": "string"
             }
           },
           "required": [
             "item",
             "pass",
-            "evidence"
+            "evidence",
+            "confidence"
           ],
           "type": "object"
         },

@@ -37,7 +37,7 @@ var resultCases = []struct {
 	{
 		"qa", reflect.TypeOf(QAResult{}),
 		`{"items": [{"item": "i1", "pass": false, "evidence": [{"cmd": "c", "exit": 1, "excerpt": "e"}], ` +
-			`"reason": "flaky"}],` +
+			`"confidence": 70}],` +
 			` "tasks": [{"task": "t1", "confirmation": "confirmed"}]}`,
 		func(b []byte) error { _, err := ParseQAResult(b); return err },
 	},
@@ -171,11 +171,9 @@ func enumAt(t *testing.T, schema map[string]any, path string) []string {
 func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 	qa := func(field, v string) error {
 		ev := `[{"cmd": "c", "exit": 0, "excerpt": "e"}]`
-		item := `{"item": "i", "pass": true, "evidence": ` + ev + `}`
+		item := `{"item": "i", "pass": true, "evidence": ` + ev + `, "confidence": 90}`
 		task := `{"task": "t", "confirmation": "confirmed"}`
 		switch field {
-		case "reason":
-			item = fmt.Sprintf(`{"item": "i", "pass": false, "evidence": %s, "reason": %q}`, ev, v)
 		case "confirmation":
 			task = fmt.Sprintf(`{"task": "t", "confirmation": %q}`, v)
 		}
@@ -207,9 +205,6 @@ func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 		}},
 		{"qa", "tasks.confirmation", []string{"confirmed", "not_confirmed"}, func(v string) error {
 			return qa("confirmation", v)
-		}},
-		{"qa", "items.reason", []string{"env", "wrong_command", "flaky", "real_failure"}, func(v string) error {
-			return qa("reason", v)
 		}},
 	}
 	for _, c := range cases {

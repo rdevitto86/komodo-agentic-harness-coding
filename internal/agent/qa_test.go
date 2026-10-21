@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"context"
-	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -22,21 +20,6 @@ func TestQARole(t *testing.T) {
 	}
 }
 
-func TestAdjudicateItem(t *testing.T) {
-	cases := []struct {
-		in   [2]bool
-		want RerunOutcome
-	}{
-		{[2]bool{false, false}, RerunConfirmed}, {[2]bool{true, true}, RerunDisputed},
-		{[2]bool{true, false}, RerunSplit}, {[2]bool{false, true}, RerunSplit},
-	}
-	for _, c := range cases {
-		if got := AdjudicateItem(c.in); got != c.want {
-			t.Errorf("AdjudicateItem(%v) = %s, want %s", c.in, got, c.want)
-		}
-	}
-}
-
 func TestClassifyFailure(t *testing.T) {
 	if ClassifyFailure([2]bool{false, false}) != FlakeConfirmed {
 		t.Error("two failing reruns are not confirmed")
@@ -48,57 +31,15 @@ func TestClassifyFailure(t *testing.T) {
 	}
 }
 
-// scripted returns a runner that answers each call from a list of exit codes and records the commands.
-func scripted(exits []int, ran *[]string) CommandRunner {
-	return func(_ context.Context, c string) (int, string, error) {
-		i := len(*ran)
-		*ran = append(*ran, c)
-		return exits[i], "out" + string(rune('0'+i)), nil
-	}
-}
-
-func TestQARerun(t *testing.T) {
-	cases := []struct {
-		name  string
-		exits []int
-		want  RerunOutcome
-	}{
-		{"both fail", []int{1, 2}, RerunConfirmed}, {"both pass", []int{0, 0}, RerunDisputed},
-		{"split", []int{0, 1}, RerunSplit},
-	}
-	for _, c := range cases {
-		var ran []string
-		got, out, err := NewQA().Rerun(context.Background(), scripted(c.exits, &ran), Item{
-			ID:  "ac-1",
-			Cmd: "go test ./x",
-		})
-		if err != nil || got != c.want || len(ran) != FlakeReruns || ran[0] != "go test ./x" || out != "out1" {
-			t.Errorf("%s: %s %q %v ran %v", c.name, got, out, err, ran)
-		}
-	}
-}
-
-func TestQARerunNoCommandAndRunnerError(t *testing.T) {
-	var ran []string
-	got, _, err := NewQA().Rerun(context.Background(), scripted(nil, &ran), Item{ID: "ac-2"})
-	if err != nil || got != RerunUnconfirmed || len(ran) != 0 {
-		t.Fatalf("no command: %s %v ran %v", got, err, ran)
-	}
-	boom := errors.New("cannot start")
-	_, _, err = NewQA().Rerun(
-		context.Background(),
-		func(context.Context, string) (int, string, error) { return 0, "", boom },
-		Item{ID: "ac-3", Cmd: "x"},
-	)
-	if !errors.Is(err, boom) {
-		t.Fatalf("runner error = %v", err)
-	}
-}
+func intp(n int) *int { return &n }
 
 func TestQAAcceptResult(t *testing.T) {
 	tasks := []string{"tsk-a", "tsk-b"}
 	good := QAResult{
-		Items: []ItemResult{{Item: "ac-1", Pass: true, Evidence: []EvidenceRun{{Cmd: "go test", Excerpt: "ok"}}}},
+		Items: []ItemResult{{
+			Item: "ac-1", Pass: true, Confidence: intp(90),
+			Evidence: []EvidenceRun{{Cmd: "go test", Excerpt: "ok"}},
+		}},
 		Tasks: []TaskConfirmation{{Task: "tsk-a", Confirmation: Confirmed}, {Task: "tsk-b", Confirmation: NotConfirmed}},
 	}
 	tr := NewQA()
@@ -123,22 +64,36 @@ func TestQAAcceptResult(t *testing.T) {
 		"excerpt over 4 KB": mut(func(r *QAResult) {
 			r.Items[0].Evidence = []EvidenceRun{{Cmd: "go test", Excerpt: strings.Repeat("x", GateOutputCap+1)}}
 		}),
-		"bad word":   mut(func(r *QAResult) { r.Tasks[0].Confirmation = "yes" }),
-		"bad reason": mut(func(r *QAResult) { r.Items[0].Reason = "because" }),
+		"bad word":          mut(func(r *QAResult) { r.Tasks[0].Confirmation = "yes" }),
+		"no confidence":     mut(func(r *QAResult) { r.Items[0].Confidence = nil }),
+		"confidence over":   mut(func(r *QAResult) { r.Items[0].Confidence = intp(101) }),
+		"confidence negate": mut(func(r *QAResult) { r.Items[0].Confidence = intp(-1) }),
 	}
 	for name, r := range bad {
 		if err := tr.AcceptResult(tasks, []string{"ac-1"}, r); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+
+	for _, n := range []int{0, 100} {
+		r := mut(func(r *QAResult) { r.Items[0].Confidence = intp(n) })
+		if err := tr.AcceptResult(tasks, []string{"ac-1"}, r); err != nil {
+			t.Errorf("confidence %d refused: %v", n, err)
+		}
+	}
 }
 
 func TestParseQAResult(t *testing.T) {
-	raw := `{"items": [{"item": "ac-1", "pass": true, "evidence": [{"cmd": "go test", "exit": 0, "excerpt": "ok"}]}], ` +
+	raw := `{"items": [{"item": "ac-1", "pass": true, "confidence": 85, ` +
+		`"evidence": [{"cmd": "go test", "exit": 0, "excerpt": "ok"}]}], ` +
 		`"tasks": [{"task": "t", "confirmation": ` +
 		`"confirmed"}]}`
-	if r, err := ParseQAResult([]byte(raw)); err != nil || len(r.Items) != 1 || r.Tasks[0].Confirmation != Confirmed {
+	r, err := ParseQAResult([]byte(raw))
+	if err != nil || len(r.Items) != 1 || r.Tasks[0].Confirmation != Confirmed {
 		t.Fatalf("parse: %+v %v", r, err)
+	}
+	if r.Items[0].Confidence == nil || *r.Items[0].Confidence != 85 {
+		t.Errorf("confidence = %v", r.Items[0].Confidence)
 	}
 	if _, err := ParseQAResult([]byte(`{"items": [], "tasks": [], "x": 1}`)); err == nil {
 		t.Error("unknown field accepted")
@@ -203,80 +158,5 @@ func TestCheckResultClean(t *testing.T) {
 	}
 	if d := warn.Done("h"); !d.Pass || d.Regression {
 		t.Errorf("clean done = %+v", d)
-	}
-}
-
-// A pass is accepted only when the item's own command or a logged command reproduces its exit code and excerpt lines.
-func TestQAReplay(t *testing.T) {
-	it := Item{ID: "ac-1", Cmd: "go test ./a"}
-	ran := []string{}
-	run := func(exit int, out string) CommandRunner {
-		return func(_ context.Context, c string) (int, string, error) {
-			ran = append(ran, c)
-			return exit, out, nil
-		}
-	}
-	res := func(e ...EvidenceRun) ItemResult { return ItemResult{Item: "ac-1", Pass: true, Evidence: e} }
-	cases := []struct {
-		name   string
-		run    CommandRunner
-		r      ItemResult
-		logged []string
-		bad    int
-		ran    []string
-	}{
-		{"own command reproduces", run(0, "a\nok pkg\n"), res(EvidenceRun{Cmd: "go test ./a", Excerpt: "ok pkg"}), nil, 0,
-			[]string{"go test ./a"}},
-		{"other exit code", run(1, "ok pkg"), res(EvidenceRun{Cmd: "go test ./a", Excerpt: "ok pkg"}), nil, 1,
-			[]string{"go test ./a"}},
-		{"excerpt line missing", run(0, "ok pkg"), res(EvidenceRun{Cmd: "go test ./a", Excerpt: "ok other"}), nil, 1,
-			[]string{"go test ./a"}},
-		{"logged command reproduces", run(0, "fine"), res(EvidenceRun{Cmd: "go vet ./a", Excerpt: "fine"}),
-			[]string{"go vet ./a"}, 0, []string{"go vet ./a"}},
-		{"command in neither place is not run", run(0, "x"), res(EvidenceRun{Cmd: "rm -rf /", Excerpt: "x"}), nil, 1, nil},
-		{
-			"cut marker line is not required",
-			run(0, "head\nmiddle\ntail"),
-			res(EvidenceRun{Cmd: "go test ./a", Excerpt: "head" + truncMarker + "tail"}),
-			nil, 0, []string{"go test ./a"},
-		},
-		{"output over the limit keeps the exit code", func(context.Context, string) (int, string, error) {
-			return 0, "ok pkg", ErrOutputOverLimit
-		}, res(EvidenceRun{Cmd: "go test ./a", Excerpt: "ok pkg"}), nil, 0, nil},
-	}
-	for _, c := range cases {
-		ran = ran[:0]
-		bad, err := NewQA().Replay(context.Background(), c.run, it, c.r, c.logged)
-		if err != nil || len(bad) != c.bad {
-			t.Errorf("%s: bad %v err %v, want %d bad", c.name, bad, err, c.bad)
-		}
-		if c.ran != nil && !slices.Equal(ran, c.ran) {
-			t.Errorf("%s: ran %v, want %v", c.name, ran, c.ran)
-		}
-		if c.name == "command in neither place is not run" && len(ran) != 0 {
-			t.Errorf("%s: ran %v", c.name, ran)
-		}
-	}
-
-	boom := errors.New("cannot start")
-	_, err := NewQA().Replay(context.Background(),
-		func(context.Context, string) (int, string, error) { return -1, "", boom }, it,
-		res(EvidenceRun{Cmd: "go test ./a", Excerpt: "ok"}), nil)
-	if !errors.Is(err, boom) {
-		t.Errorf("runner error = %v", err)
-	}
-}
-
-// A run that does not reproduce comes back with Go's exit code and output, for the restart's brief.
-func TestQAReplayReturnsGoOutput(t *testing.T) {
-	bad, err := NewQA().Replay(
-		context.Background(),
-		func(context.Context, string) (int, string, error) { return 2, "FAIL pkg", nil },
-		Item{ID: "a", Cmd: "go test"},
-		ItemResult{Item: "a", Pass: true, Evidence: []EvidenceRun{{Cmd: "go test", Exit: 0, Excerpt: "ok pkg"}}},
-		nil,
-	)
-	if err != nil || len(bad) != 1 || bad[0].Exit != 2 || bad[0].Excerpt != "FAIL pkg" {
-		t.Fatalf("bad = %+v err %v", bad, err)
 	}
 }

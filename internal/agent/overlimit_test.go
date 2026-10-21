@@ -30,23 +30,6 @@ func TestTaskGateUsesTheExitCodeOfACommandWhoseOutputPassedTheLimit(t *testing.T
 	}
 }
 
-func TestRerunUsesTheExitCodeOfACommandWhoseOutputPassedTheLimit(t *testing.T) {
-	it := Item{ID: "a1", Cmd: "go test ./..."}
-	for exit, want := range map[int]RerunOutcome{1: RerunConfirmed, 0: RerunDisputed} {
-		run := func(context.Context, string) (int, string, error) { return exit, "head\ntail", overLimit() }
-
-		got, out, err := goQA{}.Rerun(context.Background(), run, it)
-		if err != nil || got != want || out != "head\ntail" {
-			t.Fatalf("exit %d: %q, %q, %v, want %q", exit, got, out, err, want)
-		}
-	}
-
-	other := func(context.Context, string) (int, string, error) { return -1, "", errors.New("no instance") }
-	if _, _, err := (goQA{}).Rerun(context.Background(), other, it); err == nil {
-		t.Error("another runner error passed")
-	}
-}
-
 func TestDoneWhenStepUsesTheExitCodeOfACommandWhoseOutputPassedTheLimit(t *testing.T) {
 	in := CheckInput{DoneWhen: map[string]string{"tsk-a": "go test ./a/..."}}
 	for exit, want := range map[int]Level{0: LevelPass, 3: LevelFail} {

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -79,15 +78,6 @@ func (l FindingLevel) known() bool {
 	return false
 }
 
-// ProofKind says how a rule's findings can be proven.
-type ProofKind string
-
-const (
-	ProofKindCommand ProofKind = "command" // a command from the allowed list
-	ProofKindTest    ProofKind = "test"    // a short test the Reviewer writes
-	ProofKindNone    ProofKind = "none"    // cannot be proven by a command: findings warn
-)
-
 // Applies is the file scope of a rule or a lens: changed-file globs, and regular expressions matched against changed diff
 // lines.
 type Applies struct {
@@ -99,7 +89,6 @@ type Applies struct {
 type Rule struct {
 	ID       string       `json:"id"`
 	Level    FindingLevel `json:"level"`
-	Proof    ProofKind    `json:"proof"` // how a finding of this rule can be proven; none caps it at a warning
 	Applies  Applies      `json:"applies"`
 	Check    string       `json:"check"`
 	Evidence string       `json:"evidence"`
@@ -118,12 +107,6 @@ const (
 func (r Rule) validate() error {
 	if !r.Level.known() {
 		return fmt.Errorf("unknown level %q", r.Level)
-	}
-
-	switch r.Proof {
-	case ProofKindCommand, ProofKindTest, ProofKindNone:
-	default:
-		return fmt.Errorf("unknown proof kind %q", r.Proof)
 	}
 
 	if r.Check == "" || r.Evidence == "" || r.Source == "" {
@@ -225,9 +208,9 @@ type Diff struct {
 type Reviewer interface {
 	// Lenses returns the lens names to run for a diff under a profile.
 	Lenses(d Diff, p Profile) []string
-	// AcceptFinding checks a submitted finding's quote and the line it names, runs a blocking finding's proof, and returns
-	// its level and bucket; a finding Go cannot verify or on a line the group did not change comes back dropped.
-	AcceptFinding(f Finding, head, diff LineSource, d Diff, run ProofRunner) (Accepted, error)
+	// AcceptFinding checks a submitted finding's quote and the line it names, and returns its level and bucket; a finding
+	// Go cannot verify or on a line the group did not change comes back dropped.
+	AcceptFinding(f Finding, head, diff LineSource, d Diff) (Accepted, error)
 	// AcceptResult rejects a result that skips or repeats a task identifier.
 	AcceptResult(tasks []string, r ReviewerResult) error
 }
@@ -236,7 +219,6 @@ type Reviewer interface {
 type Accepted struct {
 	Level   FindingLevel
 	Bucket  Bucket
-	Proof   string // failed_as_claimed, passed or none
 	In      string // head or diff, where Go found the quote
 	Dropped string // empty when kept; DropQuote or DropUnchanged when the finding is dropped
 }
@@ -276,14 +258,17 @@ func newReviewer(cats []Catalog, standards func(string) (FindingLevel, bool)) re
 }
 
 // AcceptFinding refuses an unknown rule or a malformed finding, drops one whose quote Go cannot find or whose line the
-// group did not change, and runs the proof of a blocking one; without a proof that fails as claimed it warns.
-func (r reviewer) AcceptFinding(f Finding, head, diff LineSource, d Diff, run ProofRunner) (Accepted, error) {
+// group did not change; a blocking level blocks only with a proof and confidence 80 or more, else it warns.
+func (r reviewer) AcceptFinding(f Finding, head, diff LineSource, d Diff) (Accepted, error) {
 	rule, ok := r.rule(f.Rule)
 	if !ok {
 		return Accepted{}, fmt.Errorf("unknown rule %q", f.Rule)
 	}
 	if strings.TrimSpace(f.File) == "" || f.Line < 1 {
 		return Accepted{}, fmt.Errorf("finding needs a file and a line from 1")
+	}
+	if !ValidConfidence(f.Confidence) {
+		return Accepted{}, fmt.Errorf("confidence %d is outside 0 to 100", f.Confidence)
 	}
 
 	in, found := VerifyFinding(f, head, diff)
@@ -294,25 +279,9 @@ func (r reviewer) AcceptFinding(f Finding, head, diff LineSource, d Diff, run Pr
 		return Accepted{Level: rule.Level, In: in, Dropped: DropUnchanged}, nil
 	}
 
-	got := Accepted{Level: rule.Level, Bucket: rule.Level.Bucket(), Proof: "none", In: in}
-	if got.Bucket != BucketBlock {
-		return got, nil
-	}
-
-	// A blocking level holds only when the proof fails as claimed; every other case is a warning.
-	got.Bucket = BucketWarn
-	if rule.Proof == ProofKindNone || f.Proof == nil || run == nil {
-		return got, nil
-	}
-
-	res, err := RunProof(context.Background(), run, *f.Proof)
-	if err != nil {
-		return got, nil
-	}
-
-	got.Proof = res
-	if res == "failed_as_claimed" {
-		got.Bucket = BucketBlock
+	got := Accepted{Level: rule.Level, Bucket: rule.Level.Bucket(), In: in}
+	if got.Bucket == BucketBlock && (!f.Proof.Present() || f.Confidence < BlockConfidence) {
+		got.Bucket = BucketWarn
 	}
 	return got, nil
 }
@@ -348,14 +317,14 @@ func (r reviewer) Lenses(d Diff, p Profile) []string {
 	return out
 }
 
-// rule returns a known rule, from a lens catalog or the standards rule list; a standards rule cannot be proven.
+// rule returns a known rule, from a lens catalog or the standards rule list; a standards rule has its level only.
 func (r reviewer) rule(id string) (Rule, bool) {
 	if rule, ok := r.rules[id]; ok {
 		return rule, true
 	}
 	if r.std != nil {
 		if l, ok := r.std(id); ok {
-			return Rule{ID: id, Level: l, Proof: ProofKindNone}, true
+			return Rule{ID: id, Level: l}, true
 		}
 	}
 	return Rule{}, false

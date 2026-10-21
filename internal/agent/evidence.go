@@ -9,8 +9,27 @@ type Finding struct {
 	Line  int    `json:"line"`  // line number from 1
 	Quote string `json:"quote"` // the quoted line of evidence
 
-	Proof *Proof `json:"proof,omitempty"` // required for a blocking level; see Proof
+	Proof      *Proof `json:"proof,omitempty"` // the Reviewer's own validation; a blocking finding needs one
+	Confidence int    `json:"confidence"`      // 0 to 100: how sure the Reviewer is, after it validated the claim
 }
+
+// Proof is the Reviewer's own validation of a finding: what it ran or checked with its run tool, and what it saw.
+// Go records a proof and never runs it.
+type Proof struct {
+	Ran string `json:"ran"` // the command run or the check made
+	Saw string `json:"saw"` // the output or result that shows the problem
+}
+
+// Present reports whether a proof names what was run and what was seen.
+func (p *Proof) Present() bool {
+	return p != nil && strings.TrimSpace(p.Ran) != "" && strings.TrimSpace(p.Saw) != ""
+}
+
+// BlockConfidence is the least confidence at which a finding of a blocking level blocks.
+const BlockConfidence = 80
+
+// ValidConfidence reports whether n is a score from 0 to 100.
+func ValidConfidence(n int) bool { return n >= 0 && n <= 100 }
 
 // LineSource returns line n of a file.
 type LineSource interface {
