@@ -2885,7 +2885,7 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `task.claimed` | `run-status` / `task.claimed` | `task` |
 | `task.released` | `run-status` / `task.released` | `task` |
 | `task.done` | `run-status` / `task.done` | `task` |
-| `task.retry` | `run-status` / `task.retry` | `task`, `attempt` |
+| `task.retry` | `run-status` / `task.retry` | `task`, `attempt`; registered, and no component publishes it now |
 | `check.done` | `run-status` / `check.done` | `pass`, `tip`, `head`, `regression`, `steps`; the free mechanical checks that open Quality Assurance's turn |
 | `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note`, `proof` (the Reviewer's own validation), `confidence` |
 | `finding.verified` | `run-status` / `finding.verified` | The submit fields, with the Reviewer's `proof` and `confidence`, plus `level` and `in`; one per finding Go kept, published when the Reviewer's session ends |
@@ -8202,7 +8202,7 @@ The record holds no progress of the free mechanical checks, which run as the fir
 
 ```json
 {
-  "v": 1,
+  "v": 5,
   "group": "0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "rev": 18,
   "ts": "2026-10-14T16:01:40Z",
@@ -8323,7 +8323,7 @@ type WindowRecord struct {
 
 ```json
 {
-  "v": 1,
+  "v": 5,
   "kind": "providers",
   "rev": 12,
   "ts": "2026-10-14T16:01:40Z",
@@ -8355,7 +8355,7 @@ type UpdateBody struct {
 
 ```json
 {
-  "v": 1,
+  "v": 5,
   "kind": "update",
   "rev": 4,
   "ts": "2026-10-14T09:00:00Z",
@@ -8389,7 +8389,7 @@ type InstallSelections struct {
 
 ```json
 {
-  "v": 1,
+  "v": 5,
   "kind": "install",
   "rev": 2,
   "ts": "2026-10-14T08:55:12Z",
@@ -8424,7 +8424,7 @@ type ScheduleEntry struct {
 
 ```json
 {
-  "v": 1,
+  "v": 5,
   "kind": "schedule",
   "rev": 3,
   "ts": "2026-10-15T20:41:09Z",
@@ -8662,7 +8662,7 @@ type Migration struct {
 func RegisterMigration(m Migration)
 ```
 
-A step receives the whole record as JSON and returns it upgraded; the runner sets `v` after each step. `Kind` is empty for a group record and names the record for a machine-wide one. Version 0 has the same shape as version 1, so its step returns the record unchanged. A fixture with `v: 0` reads as `v: 1`. A group record is written under the current version the next time the Runtime Manager saves it.
+A step receives the whole record as JSON and returns it upgraded; the runner sets `v` after each step. `Kind` is empty for a group record and names the record for a machine-wide one. Version 0 has the same shape as version 1, so its step returns the record unchanged. A fixture with `v: 0` reads as `v: 1`. The current version is 5. A machine-wide record has the same shape in versions 0 to 5, so its steps change nothing. A group record goes through four steps: from version 1 the three counting-up limits become the retry budget, from version 2 the wall time becomes a per-try base, from version 3 the tester's result, block reason and block count move to `qa`, and from version 4 a `qa` or `flaky` block reason becomes `retries` and the block counts of `qa` and `flaky` are added to the `retries` count. A group record is written under the current version the next time the Runtime Manager saves it.
 
 #### Concurrency and locking
 
@@ -8727,6 +8727,7 @@ Tests use a temporary directory; no network and no live provider.
 - A `Save` that lowers the fence or a counter is refused.
 - A `Save` from a component other than `engine` is refused.
 - A `v: 0` fixture reads as `v: 1`; a `v` above the current one returns `ErrNewerVersion` and is not moved.
+- A version 4 group saved blocked on `qa` or `flaky` loads blocked on `retries` with its block count added to the `retries` count, and no other block count changes.
 - A null slice or map in a write is refused; a decoded absent value comes back as `[]` or `{}`.
 
 #### Component
@@ -15893,6 +15894,15 @@ Each row proves one fact of the design that the full run does not reach. They us
 | Risk routing | A fixture with a docs-only group, an ordinary group and a group that edits a workflow file | The docs group lands with Quality Assurance and 0 Reviewer sessions; the ordinary group gets Quality Assurance and the Reviewer; the workflow group is `critical` and opens a draft pull request into `komodo/ep-1` |
 | Quarantine | A `critical` group with a dependent and an independent group | The independent group lands; the dependent is deferred, not blocked; after the draft is merged, `komodo run` builds the dependent |
 | Finding confidence | A seeded critical finding with a proof at confidence 79, one with no proof, and one with a proof at confidence 80 | The first two are warnings on the pull request; the third returns the group to the Builder |
+| Added lines at 90% | Go tests `TestCheckCoverageStepFailsWhenAddedLinesAreUnderTheFloor` and `TestNewLinesLevelHoldsAddedLinesToTheFloor`: a change whose added executable lines are 80% covered, then 90% covered, with `check.coverage` at 90 | At 80% the coverage step fails and lists the uncovered added lines; at 90% it passes |
+| Confidence 80 for the judges | Go tests `TestQAJudgeSignsOffAPassedItemOnlyAtConfidence80` and `TestReviewerJudgeWarnsOnABlockingFindingBelowConfidence80OrWithoutAProof`: a passed Quality Assurance item at confidence 79 and at 80; a blocking finding at 79 and at 80 | A passed item below 80 returns the group to the Builder; a blocking finding below 80 is a warning |
+| Quality Assurance fails open | Go tests `TestUntestableQAFailsOpenAtOnce` and `TestTwoQACrashesInARowFailOpen`, with `TestOneQACrashRerunsQAAndSpendsNoTry` as the single-crash case | An untestable report, or 2 crashes in a row, publishes `qa.fail_open` and spends no try; 1 crash publishes none |
+| Reviewer crash | Go test `TestReviewerCrashSpendsOneTry` | The Reviewer never fails open; its crash spends 1 try |
+| Builder evidence | Go tests `TestBuilderJudgeRefusesADoneResultWithoutEvidence` and `TestBuilderEvidenceReachesQAAndTheEvents` | A done result with no evidence is refused; one with evidence reaches Quality Assurance's brief and the `session.end` event |
+| Failing checks never end a session | Go tests `TestBuilderThatFailsItsChecksIsResumedUntilItPasses`, `TestFailedCompletionChecksNeverEndTheSessionOrSpendATry` and `TestFailingChecksNeverEndTheSessionOrSpendATry` | The failure goes back to the Builder, which keeps working; no session ends and no try is spent |
+| A crash spends a try | Go tests `TestACrashSpendsOneTry` and `TestCrashSessionEndChargesOneRetryAndOrdersTheStageAgain` | A builder crash spends 1 try and orders the stage again |
+| Public interface | Go tests `TestPublicAPIChanged` and `TestClassifyPublicAPIFromDiff` | A diff that changes an exported Go declaration raises the group's risk to `med_high`; an unexported change does not |
+| State migration to version 5 | Go tests `TestMigrationMovesAQABlockToRetries` and `TestMigrationMovesAFlakyBlockToRetries` | A group saved blocked on `qa` or `flaky` loads blocked on `retries`, with its block count added to the `retries` count |
 | Abandon | `komodo abandon tg-1.2` during Build | The branch, the worktree and the container are gone, the state record and events remain, and the lease is released when the group closes |
 | Limits | A fake provider reports a plan window at 80%, then 100%; a group reaches 90%, then 100% of its token cap | A warning at 80%; at 100% the affected groups pause after their current step, keep their leases and resume when the window resets; paid spending only warns without a ceiling; the capped group gets a nudge at 90% and pauses with cause `group_tokens` at 100%, and `--approve` continues it |
 | Storage | Kill the engine during a lease write, then leave a lock file behind | No half record is read, the stale lock expires after its timeout, and `go.mod` lists no modules |
