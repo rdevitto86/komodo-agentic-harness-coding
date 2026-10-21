@@ -41,7 +41,7 @@
     {"name": "commit.base_branch", "kind": "string", "default": ""},
     {"name": "commit.remote", "kind": "string", "default": ""},
     {"name": "commit.pr_label", "kind": "string", "default": "komodo"},
-    {"name": "check.coverage", "kind": "int", "default": 80, "min": 0, "max": 100},
+    {"name": "check.coverage", "kind": "int", "default": 90, "min": 0, "max": 100},
     {"name": "review.mode", "kind": "enum", "default": "thorough", "enum": ["economy", "thorough"]},
     {"name": "lease.lock_timeout_s", "kind": "int", "default": 30, "min": 1}
   ]
