@@ -8,8 +8,10 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// FlakeReruns is the solo reruns of a failing test.
-const FlakeReruns = 2
+const (
+	FlakeReruns       = 2  // solo reruns of a failing test
+	SignoffConfidence = 80 // the least confidence at which a passed item is signed off
+)
 
 // Confirmation is Quality Assurance's answer for one task identifier.
 type Confirmation string

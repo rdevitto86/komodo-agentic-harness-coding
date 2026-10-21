@@ -143,8 +143,8 @@ func (t *qaRole) Slots(_ context.Context, in RoleInput) (map[string]string, erro
 	return s, nil
 }
 
-// Judge accepts Quality Assurance's final call and returns the items it marked failed; its confidence scores are
-// recorded in the verdict and never change a failed item.
+// Judge accepts Quality Assurance's final call. A failed item, or a passed one below the sign-off confidence, returns
+// to Build; a failed item blocks at any confidence.
 func (t *qaRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 	res, err := agent.ParseQAResult(r.Output)
 	if err != nil {
@@ -167,7 +167,19 @@ func (t *qaRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 		it := byID[ir.Item]
 
 		switch {
+		case ir.Pass && *ir.Confidence >= agent.SignoffConfidence:
+			continue
 		case ir.Pass:
+			failed = append(
+				failed,
+				fmt.Sprintf(
+					"acceptance item %s passed with confidence %d, below the %d it needs to be signed off: %s",
+					it.ID,
+					*ir.Confidence,
+					agent.SignoffConfidence,
+					evidenceText(ir.Evidence),
+				),
+			)
 			continue
 		case len(it.Needs) > 0:
 			listed = append(

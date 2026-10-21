@@ -49,6 +49,20 @@ func TestQAJudgeReturnsAFailedItemWhateverItsConfidence(t *testing.T) {
 	}
 }
 
+// A passed item signs off only at confidence 80 or more; below that the group returns to Build as for a failed item.
+func TestQAJudgeSignsOffAPassedItemOnlyAtConfidence80(t *testing.T) {
+	out, err := testRoles(t)["qa"].Judge(context.Background(), qaResult(true, `,"confidence":79`))
+	if err != nil || out.Kind != OutcomeReturn || len(out.Findings) != 1 ||
+		!strings.Contains(out.Findings[0], "a1") || !strings.Contains(out.Findings[0], "79") {
+		t.Fatalf("a pass at 79: %+v, %v", out, err)
+	}
+
+	out, err = testRoles(t)["qa"].Judge(context.Background(), qaResult(true, `,"confidence":80`))
+	if err != nil || out.Kind != OutcomePass {
+		t.Fatalf("a pass at 80: %+v, %v", out, err)
+	}
+}
+
 func TestQAJudgeRefusesAnItemWithoutAConfidence(t *testing.T) {
 	var ge *GateError
 	for _, conf := range []string{``, `,"confidence":101`, `,"confidence":-1`} {
