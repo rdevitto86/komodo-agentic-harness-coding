@@ -127,6 +127,15 @@ func CoverageLevel(floor int, base float64, haveBase bool, head float64) Level {
 	return LevelFail
 }
 
+// NewLinesLevel fails a change when under floor percent of the executable lines it adds ran in a test; a change that
+// adds none passes.
+func NewLinesLevel(floor int, c ChangedLines) Level {
+	if c.Covered*100 >= floor*c.Executable {
+		return LevelPass
+	}
+	return LevelFail
+}
+
 // jacocoPercent adds up the report-level LINE counters of every JaCoCo report in the output, one report per module.
 // The report-level counter is the last LINE counter of its report; package and class counters come first.
 func jacocoPercent(out string) (float64, bool) {
