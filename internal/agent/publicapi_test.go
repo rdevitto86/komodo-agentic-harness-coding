@@ -42,6 +42,10 @@ func TestPublicAPIChanged(t *testing.T) {
 			goDiff("a/a.go", "", " func Run(", " \tctx context.Context,", "-\tn int,", "+\tn string,", " ) error {"), true},
 		{"body edit under a wrapped header",
 			goDiff("a/a.go", "func Run(", " \tx := 1", "-\ty := 2", "+\ty := 3", " \treturn nil"), false},
+		{"body edit before a later function's wrapped signature",
+			goDiff(
+				"a/a.go", "func Run(", "-\ty := 2", "+\ty := 3", " }", " ", " func helper(", " \tn int,", " ) error {",
+			), false},
 		{"wrapped exported result",
 			goDiff("a/a.go", "", " func Run(", " \tn int,", "-) error {", "+) (int, error) {"), true},
 		{"header-only wrapped param",

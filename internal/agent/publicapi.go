@@ -81,7 +81,8 @@ func isPublicGoFile(p string) bool {
 }
 
 // hunkScopeAt is hunkScope for the hunk whose header is rest[0]. A header naming an unfinished func line is signature scope
-// when the hunk holds a line that closes it (starts with ")" and ends with "{"), and body scope otherwise.
+// when the hunk holds a line that closes it (starts with ")" and ends with "{") before any column-zero "}" or "func ",
+// and body scope otherwise.
 func hunkScopeAt(rest []string) scopeMode {
 	mode := hunkScope(rest[0])
 	if mode != scopeBody {
@@ -96,6 +97,9 @@ func hunkScopeAt(rest []string) scopeMode {
 
 	for _, l := range rest[1:] {
 		if strings.HasPrefix(l, "@@") || strings.HasPrefix(l, "diff --git ") {
+			break
+		}
+		if len(l) > 1 && (strings.HasPrefix(l[1:], "}") || strings.HasPrefix(l[1:], "func ")) {
 			break
 		}
 		if len(l) > 1 && strings.HasPrefix(l[1:], ")") && strings.HasSuffix(l, "{") {
