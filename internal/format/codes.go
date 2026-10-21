@@ -59,7 +59,6 @@ var blockReasons = []string{
 	"crash",
 	"contract",
 	"state_invalid",
-	"flaky",
 }
 
 // AllCodes returns a copy of the closed code list.

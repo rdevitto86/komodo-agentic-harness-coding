@@ -30,6 +30,27 @@ func TestMigrationMovesAQABlockToRetries(t *testing.T) {
 	}
 }
 
+// A group saved blocked on the removed flaky reason loads blocked on retries, with its block count moved there.
+func TestMigrationMovesAFlakyBlockToRetries(t *testing.T) {
+	m, root := newMgr(t)
+	writeRaw(t, statePath(root, testGroup), `{"v":4,"group":"`+testGroup+`","rev":2,"ts":"2026-10-20T16:01:40Z",
+	 "writer":"engine/r/1","state":{"run":"r","group":"`+testGroup+`","stage":"blocked","prior":"test_review","fence":1,
+	 "config_hash":"`+testHash+`","block":{"reason":"flaky"},
+	 "counters":{"retries_left":2,"overrides":0,"crashes":0,"blocks":{"flaky":2},"wall_used_s":60,
+	  "tokens_used":10,"tries":1,"wall_base_s":0,"wall_ext_try":0,"fault_streak":0},
+	 "test_review":{"qa":{"result":"fail","session":"s1"},"reviewer":{"result":"pass"},
+	  "findings":[],"not_met":[],"failed":[]}}}`)
+
+	r, err := m.Load(testGroup)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if r.State.Block.Reason != ReasonRetries || r.State.Counters.Blocks["retries"] != 2 ||
+		len(r.State.Counters.Blocks) != 1 {
+		t.Fatalf("block after migration: %q %v", r.State.Block.Reason, r.State.Counters.Blocks)
+	}
+}
+
 // A group saved before the rename loads with its Quality Assurance result, block reason and block count under qa.
 func TestMigrationRenamesTheTesterToQA(t *testing.T) {
 	m, root := newMgr(t)

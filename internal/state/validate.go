@@ -43,7 +43,6 @@ var (
 		ReasonCrash,
 		ReasonContract,
 		ReasonStateInvalid,
-		ReasonFlaky,
 		ReasonDone,
 		ReasonCheckFail,
 		ReasonNoResult,

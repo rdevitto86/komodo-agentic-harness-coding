@@ -664,7 +664,6 @@ func TestFaultRows(t *testing.T) {
 		{StageCommit, "publish", state.ReasonPublish},
 		{StageCommit, "merge_conflict", state.ReasonMergeConflict},
 		{StageCleanup, "cleanup", state.ReasonCleanup},
-		{StageTestReview, "flaky", state.ReasonFlaky},
 		{StageBuild, "context", state.ReasonContext},
 	}
 	for _, c := range cases {

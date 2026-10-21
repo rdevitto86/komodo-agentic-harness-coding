@@ -174,8 +174,8 @@ func qaRename(old []byte) ([]byte, error) {
 	return json.Marshal(rec)
 }
 
-// qaBlockToRetries upgrades a version 4 group record: the removed qa block reason becomes retries, and its block count
-// joins the retries count.
+// qaBlockToRetries upgrades a version 4 group record: the removed qa and flaky block reasons become retries, and their
+// block counts join the retries count.
 func qaBlockToRetries(old []byte) ([]byte, error) {
 	rec, ok := objectOf(old)
 	if !ok {
@@ -186,19 +186,22 @@ func qaBlockToRetries(old []byte) ([]byte, error) {
 	if !ok {
 		return old, nil
 	}
-	if b, ok := objectOf(st["block"]); ok && string(b["reason"]) == `"qa"` {
+	if b, ok := objectOf(st["block"]); ok && slices.Contains([]string{`"qa"`, `"flaky"`}, string(b["reason"])) {
 		b["reason"] = json.RawMessage(`"retries"`)
 		st["block"] = encodeObject(b)
 	}
 	if c, ok := objectOf(st["counters"]); ok {
 		var blocks map[string]int
 		if json.Unmarshal(c["blocks"], &blocks) == nil && blocks != nil {
-			if n, ok := blocks["qa"]; ok {
-				blocks["retries"] += n
-				delete(blocks, "qa")
-				c["blocks"], _ = json.Marshal(blocks)
-				st["counters"] = encodeObject(c)
+			for _, k := range []string{"qa", "flaky"} {
+				if n, ok := blocks[k]; ok {
+					blocks["retries"] += n
+					delete(blocks, k)
+				}
 			}
+
+			c["blocks"], _ = json.Marshal(blocks)
+			st["counters"] = encodeObject(c)
 		}
 	}
 

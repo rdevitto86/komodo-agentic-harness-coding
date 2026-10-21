@@ -53,9 +53,6 @@ const (
 	// a record or a write failed a check
 	ReasonStateInvalid Reason = "state_invalid"
 
-	// Quality Assurance's reruns split once and a role reported results it cannot confirm
-	ReasonFlaky Reason = "flaky"
-
 	// session exit: the session returned a valid result
 	ReasonDone Reason = "done"
 

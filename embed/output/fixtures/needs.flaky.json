@@ -1,7 +1,0 @@
-{
-  "code": "flaky",
-  "group": "tg-1.3",
-  "task": "amend docs/lld.md",
-  "question": "Quality Assurance's reruns split and a role reported results it cannot confirm. Continue?",
-  "fix": "komodo run tg-1.3"
-}
