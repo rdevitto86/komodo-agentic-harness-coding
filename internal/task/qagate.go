@@ -74,7 +74,11 @@ func (m *Manager) classify(diff string) agent.RiskDecision {
 	proven := m.proven
 	m.mu.Unlock()
 
-	return agent.Classify(agent.RiskInput{Files: agent.DiffFiles(diff), Proven: proven})
+	return agent.Classify(agent.RiskInput{
+		Files:     agent.DiffFiles(diff),
+		Proven:    proven,
+		PublicAPI: agent.PublicAPIChanged(diff),
+	})
 }
 
 // skipsReview reports whether the round takes no Reviewer: the skip rule says so and no finding was proven yet.
