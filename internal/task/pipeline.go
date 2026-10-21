@@ -125,6 +125,9 @@ func (m *Manager) runBuild(ctx context.Context) error {
 			if err := m.spend(ctx, string(out.reason)); err != nil {
 				return err
 			}
+			if last := m.takeLastCheck(); last != "" {
+				findings = []string{last}
+			}
 		case state.ReasonCrash:
 			if crashes++; crashes > crashLimit {
 				return &blockErr{kind: EscFailed, reason: "crash"}
@@ -370,28 +373,30 @@ func (m *Manager) spend(ctx context.Context, cause string) error {
 	return m.report(ctx)
 }
 
-// taskDone is the builder's task_done tool: it reruns the task's completion command and ends the session after the third
-// failure.
+// taskDone is the builder's task_done tool: it reruns the task's completion command and applies the inner cap on a try. The
+// session ends on the third identical failure in a row or the twentieth check run; the last output goes to the next brief.
 func (m *Manager) taskDone(ctx context.Context, sc *sessCtx, task string) (int, string, error) {
-	// gateFailLimit is the number of failed completion commands of one task that ends the builder's session.
-	const gateFailLimit = 3
-
 	exit, out, err := m.finishTask(ctx, task)
 	if err != nil {
 		return exit, out, err
 	}
 
-	m.mu.Lock()
-	if exit == 0 {
-		delete(m.gateFails, task)
-	} else {
-		m.gateFails[task]++
+	v := sc.checks.record(task, exit, out)
+	if v.flaky {
+		out += "\nthis check alternates between pass and fail: it is flaky"
 	}
 
-	n := m.gateFails[task]
-	m.mu.Unlock()
-	if n >= gateFailLimit && sc.watch != nil {
-		sc.watch.stop(state.ReasonCheckFail)
+	if v.end != "" {
+		m.mu.Lock()
+		m.lastCheck = fmt.Sprintf(
+			"%s; the session ended. The last output of the check %s, exit code %d:\n%s",
+			v.end, task, exit, out,
+		)
+		m.mu.Unlock()
+
+		if sc.watch != nil {
+			sc.watch.stop(state.ReasonCheckFail)
+		}
 	}
 
 	return exit, out, nil

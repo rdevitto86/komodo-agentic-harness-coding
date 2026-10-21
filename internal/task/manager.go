@@ -77,7 +77,7 @@ type Manager struct {
 	uncovered  []string // added lines the last mechanical checks found no test ran
 	scopeWait  *scopeWait
 	builderH   *llm.ResumeHandle
-	gateFails  map[string]int
+	lastCheck  string // the output that ended a builder session by the inner cap, for the next try's brief
 	contract   int
 	ids        atomic.Int64
 	tag        string // makes the identifiers differ from those of an earlier Manager of the same group
@@ -114,7 +114,6 @@ func New(spec GroupSpec, c Collaborators) (*Manager, error) {
 		instances: map[string]string{},
 		insts:     map[string]sandbox.Instance{},
 		verdicts:  map[string]Outcome{},
-		gateFails: map[string]int{},
 		closed:    make(chan struct{}),
 		files:     slices.Clone(spec.Files),
 		tag:       newTag(),

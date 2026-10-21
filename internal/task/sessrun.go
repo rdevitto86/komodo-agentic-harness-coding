@@ -48,6 +48,7 @@ type sessCtx struct {
 	watch   *toolWatch
 	guard   *Guard
 	memo    *judgeMemo
+	checks  checkCap // the inner cap's count of this session's check runs
 	closers []func()
 	handle  llm.ResumeHandle
 	resumed bool
