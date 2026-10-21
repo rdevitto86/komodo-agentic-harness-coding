@@ -54,7 +54,7 @@ func onlyDockerOnPath(t *testing.T) {
 
 func TestDockerInstallsTheHostGolangciLintVersionAsRoot(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	s.Network = true
 	golangciRepo(t, s, ".golangci.yml", "2.14.0")
 
@@ -78,7 +78,7 @@ func TestDockerReadsTheHostVersionFromEveryReleaseLine(t *testing.T) {
 	} {
 		t.Run(tc.line, func(t *testing.T) {
 			calls := fakeDocker(t)
-			s := testSpec(t, RoleTester)
+			s := testSpec(t, RoleQA)
 			s.Network = true
 			golangciRepo(t, s, ".golangci.yml", "")
 			fakeGolangci(t, tc.line, tc.version)
@@ -98,7 +98,7 @@ func TestDockerReadsTheHostVersionFromEveryReleaseLine(t *testing.T) {
 
 func TestDockerInstallsNothingWithoutTheConfig(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	golangciRepo(t, s, "", "2.14.0")
 
 	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err != nil {
@@ -111,7 +111,7 @@ func TestDockerInstallsNothingWithoutTheConfig(t *testing.T) {
 
 func TestDockerInstallsNothingWithoutTheHostTool(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	golangciRepo(t, s, ".golangci.yml", "")
 	onlyDockerOnPath(t)
 
@@ -125,7 +125,7 @@ func TestDockerInstallsNothingWithoutTheHostTool(t *testing.T) {
 
 func TestDockerGolangciLintNeedsAReadableHostVersion(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	s.Network = true
 	golangciRepo(t, s, ".golangci.yml", "not-a-version")
 
@@ -140,7 +140,7 @@ func TestDockerGolangciLintNeedsAReadableHostVersion(t *testing.T) {
 
 func TestDockerGolangciLintNeedsTheNetwork(t *testing.T) {
 	fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	golangciRepo(t, s, ".golangci.yaml", "2.14.0")
 
 	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil ||
@@ -151,7 +151,7 @@ func TestDockerGolangciLintNeedsTheNetwork(t *testing.T) {
 
 func TestDockerCustomImageGetsNoGolangciLint(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	golangciRepo(t, s, ".golangci.yml", "2.14.0")
 
 	if _, err := NewDocker(DockerOptions{Image: "my/go:1"}).Prepare(context.Background(), s); err != nil {

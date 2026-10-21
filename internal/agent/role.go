@@ -1,5 +1,5 @@
-// Package agent holds the role definitions, result schemas and pure decision functions of the Builder, Tester, Reviewer and
-// Planner.
+// Package agent holds the role definitions, result schemas and pure decision functions of the Builder, Quality Assurance,
+// Reviewer and Planner.
 package agent
 
 import (
@@ -16,7 +16,7 @@ type Slots struct {
 
 // Role is the compiled definition of one agent role.
 type Role struct {
-	Name       string          `json:"name"`        // builder, tester, reviewer or planner
+	Name       string          `json:"name"`        // builder, Quality Assurance, reviewer or planner
 	Tools      []string        `json:"tools"`       // the only tools advertised to the session
 	RunClasses []string        `json:"run_classes"` // the only classes the run tool may execute
 	Guard      []string        `json:"guard"`       // guard rows beyond the inherited G1 to G6
@@ -25,9 +25,9 @@ type Role struct {
 	PoolSlot   bool            `json:"pool_slot"` // takes one of the machine-wide session slots
 }
 
-// Roles returns the four compiled roles in registry order: planner, builder, tester, reviewer.
+// Roles returns the four compiled roles in registry order: planner, builder, Quality Assurance, reviewer.
 func Roles() []Role {
-	return []Role{PlannerRole(), BuilderRole(), TesterRole(), ReviewerRole()}
+	return []Role{PlannerRole(), BuilderRole(), QARole(), ReviewerRole()}
 }
 
 // RoleByName returns the compiled role with the given name.

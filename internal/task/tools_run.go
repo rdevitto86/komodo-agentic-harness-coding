@@ -60,8 +60,8 @@ func toolRun(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	return res.Reply
 }
 
-// toolRunCheck runs the command of one acceptance item as written, in the Tester's sandbox, and reports its exit status and
-// output; the model never supplies the command.
+// toolRunCheck runs the command of one acceptance item as written, in Quality Assurance's sandbox, and reports its exit
+// status and output; the model never supplies the command.
 func toolRunCheck(ctx context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	var a checkArgs
 	if err := decode(raw, &a); err != nil {

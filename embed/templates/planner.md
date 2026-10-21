@@ -68,8 +68,8 @@ An acceptance item is one check of the group, written in one of three shapes:
 
 - Every item has `SHALL`; an item without it fails. Go checks the shape, never the meaning.
 - One item states one event and one observable response. Split an item that holds two.
-- Give each item an indented `cmd:` line. The tester runs it with a `build` or `test` command. Without a `cmd:`, Go cannot rerun the item, so a failure of it is reported but never returned to the builder.
-- Add a `needs:` line (`network`, `docker` or `service:<name>`) when the command cannot run without it. The tester skips the item in a sandbox that cannot satisfy it.
+- Give each item an indented `cmd:` line. Quality Assurance runs it with a `build` or `test` command. Without a `cmd:`, Go cannot rerun the item, so a failure of it is reported but never returned to the builder.
+- Add a `needs:` line (`network`, `docker` or `service:<name>`) when the command cannot run without it. Quality Assurance skips the item in a sandbox that cannot satisfy it.
 - Write the response as something the command can see: an exit code, an output line, a returned value or a file.
 
 ```text

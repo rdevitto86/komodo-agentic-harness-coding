@@ -65,13 +65,13 @@ func TestDockerCheckNamesTheFix(t *testing.T) {
 
 func TestDockerPrepareCreatesOneLabelledContainer(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	s.Masked = []string{filepath.Join(s.Worktree, ".env")}
 	if err := os.WriteFile(s.Masked[0], []byte("K=v"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(map[string]Backend{RoleTester: NewDocker(DockerOptions{})}, nil)
+	m := NewManager(map[string]Backend{RoleQA: NewDocker(DockerOptions{})}, nil)
 	inst, err := m.CreateSandboxInstance(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
@@ -117,10 +117,10 @@ func TestDockerPrepareCreatesOneLabelledContainer(t *testing.T) {
 
 func TestDockerPrepareWithNetworkUsesBridgeAndCutsItAfterSetup(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	s.Network = true
-	m := NewManager(map[string]Backend{RoleTester: NewDocker(DockerOptions{})}, nil)
+	m := NewManager(map[string]Backend{RoleQA: NewDocker(DockerOptions{})}, nil)
 	inst, err := m.CreateSandboxInstance(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestDockerPrepareWithNetworkUsesBridgeAndCutsItAfterSetup(t *testing.T) {
 func TestDockerRefusesANetworkCommandInAnOfflineContainer(t *testing.T) {
 	fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	inst, err := d.Prepare(context.Background(), s)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestDockerRefusesANetworkCommandInAnOfflineContainer(t *testing.T) {
 func TestDockerRefusesACommandWhileTheNetworkIsStillConnected(t *testing.T) {
 	fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	s.Network = true
 	inst, err := d.Prepare(context.Background(), s)
@@ -177,7 +177,7 @@ func TestDockerRefusesACommandWhileTheNetworkIsStillConnected(t *testing.T) {
 func TestDockerCommandIsADockerExecWithTheCleanEnvironment(t *testing.T) {
 	fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	inst, err := d.Prepare(context.Background(), s)
 	if err != nil {
@@ -217,7 +217,7 @@ func TestDockerCommandIsADockerExecWithTheCleanEnvironment(t *testing.T) {
 func TestDockerRefusesAMaskedFileItCouldNotCover(t *testing.T) {
 	fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	late := filepath.Join(s.Worktree, ".env.local")
 	s.Masked = []string{late}
@@ -240,7 +240,7 @@ func TestDockerRefusesAMaskedFileItCouldNotCover(t *testing.T) {
 func TestDockerKeepsAcceptingTheMasksItCovered(t *testing.T) {
 	fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	env := filepath.Join(s.Worktree, ".env")
 	if err := os.WriteFile(env, []byte("K=v"), 0o600); err != nil {
@@ -261,7 +261,7 @@ func TestDockerKeepsAcceptingTheMasksItCovered(t *testing.T) {
 func TestDockerRefusesAMaskedFileThatWasReplacedOnTheHost(t *testing.T) {
 	fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	env := filepath.Join(s.Worktree, ".env")
 	if err := os.WriteFile(env, []byte("K=v"), 0o600); err != nil {
@@ -287,7 +287,7 @@ func TestDockerRefusesAMaskedFileThatWasReplacedOnTheHost(t *testing.T) {
 
 func TestDockerCustomImageGetsNoToolAdditions(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	if err := os.WriteFile(filepath.Join(s.Worktree, "Cargo.toml"), []byte("rust-version = \"1.78\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestDockerCustomImageGetsNoToolAdditions(t *testing.T) {
 func TestDockerReleaseRemovesTheContainer(t *testing.T) {
 	calls := fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	inst, _ := d.Prepare(context.Background(), s)
 	if err := d.Release(context.Background(), inst); err != nil {
@@ -316,7 +316,7 @@ func TestDockerReleaseRemovesTheContainer(t *testing.T) {
 
 func TestDockerPrepareFailureLeavesNoContainer(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	t.Setenv("FAKE_DOCKER_START_FAIL", "1")
 	if _, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s); err == nil ||
@@ -336,7 +336,7 @@ func TestDockerPrepareFailureLeavesNoContainer(t *testing.T) {
 
 func TestDockerPrepareNeedsAnImage(t *testing.T) {
 	fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	_, err := NewDocker(DockerOptions{}).Prepare(context.Background(), s)
 	if err == nil || !strings.Contains(err.Error(), "sandbox.image") {
 		t.Fatalf("a repository with no language needs sandbox.image: %v", err)
@@ -354,7 +354,7 @@ func TestDockerPrepareNeedsAnImage(t *testing.T) {
 
 func TestDockerAddsRustComponentsAsRoot(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	s.Network = true
 	if err := os.WriteFile(
 		filepath.Join(s.Worktree, "Cargo.toml"),
@@ -379,7 +379,7 @@ func TestDockerAddsRustComponentsAsRoot(t *testing.T) {
 
 func TestDockerAdditionsNeedTheNetwork(t *testing.T) {
 	fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	if err := os.WriteFile(filepath.Join(s.Worktree, "Cargo.toml"), []byte("rust-version = \"1.78\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

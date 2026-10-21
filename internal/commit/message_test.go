@@ -18,7 +18,7 @@ func TestCheckMessage(t *testing.T) {
 		{"trailer", "tg-1.2: goal\n\nCo-Authored-By: A <a@b.c>", true},
 		{"two trailers", "tg-1.2: goal\n\nSigned-off-by: A\nCo-authored-by: B", true},
 		{"trailing newline", "tg-1.2: goal\n\nCo-Authored-By: A <a@b.c>\n", true},
-		{"body with summary", "tg-1.2: goal\n\n## Summary\n1 file changed\n\n## Tester\n- 14 tests pass\n", false},
+		{"body with summary", "tg-1.2: goal\n\n## Summary\n1 file changed\n\n## Quality Assurance\n- 14 pass\n", false},
 		{"mixed last paragraph", "tg-1.2: goal\n\nNote: x\nplain words", false},
 		{"empty", "", true},
 	}
@@ -45,7 +45,7 @@ func TestRenderBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "## Summary\n6 files changed\n\n## Tasks closed\n- tsk-1\n- tsk-2\n\n## Findings resolved\n- F-1\n\n## " +
-		"Tester\n- 14 tests pass\n\n## Reviewer\n- 0 blocking findings\n"
+		"Quality Assurance\n- 14 tests pass\n\n## Reviewer\n- 0 blocking findings\n"
 	if got != want {
 		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
 	}

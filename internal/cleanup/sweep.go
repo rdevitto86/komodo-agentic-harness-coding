@@ -61,10 +61,11 @@ func (h *Handler) sweep(ctx context.Context, dry bool) (Report, error) {
 	return rep, nil
 }
 
-// leftovers returns the sorted group ids found in the worktree, tester and temporary roots and among the containers.
+// leftovers returns the sorted group ids found in the worktree, Quality Assurance and temporary roots and among the
+// containers.
 func (h *Handler) leftovers(ctx context.Context, rep *Report) ([]string, error) {
 	set := map[string]bool{}
-	for _, root := range []string{h.Roots.Worktrees, h.Roots.Testers, h.Roots.Temp} {
+	for _, root := range []string{h.Roots.Worktrees, h.Roots.QA, h.Roots.Temp} {
 		names, err := folders(root)
 		if err != nil {
 			return nil, err

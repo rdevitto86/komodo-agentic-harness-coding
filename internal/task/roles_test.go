@@ -24,7 +24,7 @@ func TestBuilderJudgeRejectsABrokenResultAndTurnsNeedsScopeIntoAnOutcome(t *test
 	}
 }
 
-func TestTesterJudgeDecidesFromGosRerunsOfAFailedItem(t *testing.T) {
+func TestQAJudgeDecidesFromGosRerunsOfAFailedItem(t *testing.T) {
 	failed := result(
 		`{"items":[{"item":"a1","pass":false,"evidence":"no"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 	)
@@ -37,13 +37,13 @@ func TestTesterJudgeDecidesFromGosRerunsOfAFailedItem(t *testing.T) {
 		{"both reruns pass", []int{0, 0}, OutcomeRestart},
 		{"reruns split", []int{0, 1}, OutcomeBlock},
 	} {
-		out, err := testRoles(t, tc.exits...)["tester"].Judge(context.Background(), failed)
+		out, err := testRoles(t, tc.exits...)["qa"].Judge(context.Background(), failed)
 		if err != nil || out.Kind != tc.want {
 			t.Fatalf("%s: %+v, %v", tc.name, out, err)
 		}
 	}
 	var ge *GateError
-	_, err := testRoles(t)["tester"].Judge(context.Background(), result(`{"items":[],"tasks":[]}`))
+	_, err := testRoles(t)["qa"].Judge(context.Background(), result(`{"items":[],"tasks":[]}`))
 	if !errors.As(err, &ge) {
 		t.Fatalf("an incomplete result passed: %v", err)
 	}

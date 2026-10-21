@@ -30,7 +30,7 @@ const (
 	// the Builder works through the tasks
 	StageBuild Stage = "build"
 
-	// the Tester and Reviewer judge in parallel
+	// Quality Assurance and Reviewer judge in parallel
 	StageTestReview Stage = "test_review"
 
 	// the Commit Handler publishes
@@ -152,13 +152,13 @@ type TaskState struct {
 	GateFailures int    `json:"gate_failures"`     // failed completion checks for this task
 }
 
-// TestReview is the Tester's and Reviewer's progress in the current round.
+// TestReview is Quality Assurance's and Reviewer's progress in the current round.
 type TestReview struct {
-	Tester   RoundState `json:"tester"`
+	QA       RoundState `json:"qa"`
 	Reviewer RoundState `json:"reviewer"`
 	Findings []Finding  `json:"findings"` // blocking findings Go verified this round
-	NotMet   []string   `json:"not_met"`  // task ids the Tester marked not met
-	Failed   []string   `json:"failed"`   // tester items confirmed failed
+	NotMet   []string   `json:"not_met"`  // task ids Quality Assurance marked not met
+	Failed   []string   `json:"failed"`   // Quality Assurance items confirmed failed
 }
 
 // RoundState is one agent's progress in the current round.

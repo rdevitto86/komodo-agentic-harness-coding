@@ -89,7 +89,7 @@ func TestResumeContinuesTheSavedSessionAndChargesNoAttempt(t *testing.T) {
 		in = i
 		return building(r.wt, "a.go", "package a\n", builderDone)(llm.Session{})
 	}
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanupWith(func(ctx context.Context) error { return r.m.Resume(ctx, wake) })
 	if in.Text != "Continue where you stopped." || r.model.started("builder") != 1 || r.rt.progress().RetriesLeft != 3 {
@@ -116,7 +116,7 @@ func TestSavedHandleResumesAndAFailingHandleStartsFreshWithResumeLost(t *testing
 		if fails {
 			r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
 		}
-		r.model.on("tester", sayResult(testerPass))
+		r.model.on("qa", sayResult(qaPass))
 		r.model.on("reviewer", sayResult(reviewerMet))
 		r.reachCleanup()
 		wantStarts := 0
@@ -145,7 +145,7 @@ func TestFailoverToTheNextLinkChargesNoAttempt(t *testing.T) {
 			return nil, &llm.ProviderLimit{Link: llm.ClaudeCLI, Cap: llm.CapWindow, ResetAt: t0.Add(5 * time.Hour)}
 		}}})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 	if r.rt.progress().RetriesLeft != 3 || r.model.started("builder") != 1 {
@@ -176,10 +176,10 @@ func TestPauseCommandLetsTheSessionFinishThenHoldsUntilWake(t *testing.T) {
 		t.Fatalf("Run returned %v", err)
 	}
 	p := r.rt.progress().Pause
-	if p == nil || !p.WaitUntil.Equal(until) || r.model.started("tester") != 0 || r.cm.saveCount() != 1 {
+	if p == nil || !p.WaitUntil.Equal(until) || r.model.started("qa") != 0 || r.cm.saveCount() != 1 {
 		t.Fatalf("pause %+v, sessions %v", p, r.model.starts)
 	}
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanupWith(func(ctx context.Context) error { return r.m.Resume(ctx, wake) })
 	if r.rt.progress().Pause != nil {
@@ -187,16 +187,16 @@ func TestPauseCommandLetsTheSessionFinishThenHoldsUntilWake(t *testing.T) {
 	}
 }
 
-func TestTesterLimitedMidRoundIsOwedAtTheTimerAndTheReviewerIsNotRerun(t *testing.T) {
+func TestQALimitedMidRoundIsOwedAtTheTimerAndTheReviewerIsNotRerun(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", limitStep(t0.Add(time.Hour)), sayResult(testerPass))
+	r.model.on("qa", limitStep(t0.Add(time.Hour)), sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	if err := r.run(); !errors.Is(err, ErrGroupPaused) {
 		t.Fatalf("Run returned %v", err)
 	}
 	p := r.rt.progress().Pause
-	if p == nil || len(p.Owed) != 1 || p.Owed[0] != "tester" || r.model.started("tester") != 1 {
+	if p == nil || len(p.Owed) != 1 || p.Owed[0] != "qa" || r.model.started("qa") != 1 {
 		t.Fatalf("pause %+v, sessions %v", p, r.model.starts)
 	}
 	delete(r.lim.resets, llm.AnthropicAPI)

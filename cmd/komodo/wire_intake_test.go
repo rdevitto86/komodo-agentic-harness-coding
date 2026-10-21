@@ -133,8 +133,8 @@ func TestBaseRunnerGivesEveryCommandAFreshCheckout(t *testing.T) {
 	}
 }
 
-// The fail-first check writes only into its own folders: never the shared build cache folder that holds the tester's cached
-// base checkout. Its own build cache folder lives under the plan's temporary folder and goes at Close.
+// The fail-first check writes only into its own folders: never the shared build cache folder that holds Quality Assurance's
+// cached base checkout. Its own build cache folder lives under the plan's temporary folder and goes at Close.
 func TestBaseRunnerHasItsOwnBuildCacheFolder(t *testing.T) {
 	repo := t.TempDir()
 	for _, args := range [][]string{

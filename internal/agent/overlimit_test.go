@@ -35,14 +35,14 @@ func TestRerunUsesTheExitCodeOfACommandWhoseOutputPassedTheLimit(t *testing.T) {
 	for exit, want := range map[int]RerunOutcome{1: RerunConfirmed, 0: RerunDisputed} {
 		run := func(context.Context, string) (int, string, error) { return exit, "head\ntail", overLimit() }
 
-		got, out, err := goTester{}.Rerun(context.Background(), run, it)
+		got, out, err := goQA{}.Rerun(context.Background(), run, it)
 		if err != nil || got != want || out != "head\ntail" {
 			t.Fatalf("exit %d: %q, %q, %v, want %q", exit, got, out, err, want)
 		}
 	}
 
 	other := func(context.Context, string) (int, string, error) { return -1, "", errors.New("no instance") }
-	if _, _, err := (goTester{}).Rerun(context.Background(), other, it); err == nil {
+	if _, _, err := (goQA{}).Rerun(context.Background(), other, it); err == nil {
 		t.Error("another runner error passed")
 	}
 }

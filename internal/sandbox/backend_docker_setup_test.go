@@ -8,14 +8,14 @@ import (
 
 func TestDockerSetupSeesTheModuleCacheReadOnlyAndSetsTheProxy(t *testing.T) {
 	calls := fakeDocker(t)
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 
 	s.Network = true
 	s.Modules = hostCache(t)
 	s.SetupEnv = GoSetupEnv(s.Modules, "https://proxy.golang.org", "example.com/*")
 
-	m := NewManager(map[string]Backend{RoleTester: NewDocker(DockerOptions{})}, nil)
+	m := NewManager(map[string]Backend{RoleQA: NewDocker(DockerOptions{})}, nil)
 	inst, err := m.CreateSandboxInstance(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)

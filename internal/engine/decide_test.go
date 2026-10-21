@@ -147,14 +147,14 @@ func TestStaleInputAndDuplicateRequest(t *testing.T) {
 	}
 }
 
-func TestTesterFailsThenReviewerApprovesReturnsOnce(t *testing.T) {
-	for _, order := range [][2]string{{"tester", "reviewer"}, {"reviewer", "tester"}} {
+func TestQAFailsThenReviewerApprovesReturnsOnce(t *testing.T) {
+	for _, order := range [][2]string{{"qa", "reviewer"}, {"reviewer", "qa"}} {
 		s := failedRound()
-		r := apply(t, s, verifyEnd(order[0], order[0] != "tester", "TestA"))
+		r := apply(t, s, verifyEnd(order[0], order[0] != "qa", "TestA"))
 		if r.State.Stage != StageTestReview {
 			t.Fatalf("%v: moved at the first end to %q", order, r.State.Stage)
 		}
-		r = apply(t, r.State, verifyEnd(order[1], order[1] != "tester", "TestA"))
+		r = apply(t, r.State, verifyEnd(order[1], order[1] != "qa", "TestA"))
 		if r.State.Stage != StageBuild || r.State.Counters.RetriesLeft != 1 || r.State.FailureHash == "" {
 			t.Fatalf(
 				"%v: stage %q retries left %d hash %q",
@@ -556,7 +556,7 @@ func TestFactBodiesFitTheirSlots(t *testing.T) {
 		"finding.submit":      map[string]any{"rule": "r1", "file": "a.go", "line": 3, "quote": "q", "note": "n"},
 		"tool.denied":         map[string]any{"tool": "edit", "row": "B1", "target": "a.go", "count": 1},
 		"tool.outside":        map[string]string{"server": "docs", "tool": "search", "outcome": "ok"},
-		"sandbox.fallback":    map[string]string{"role": "tester", "wanted": "docker", "used": "seatbelt", "why": "none"},
+		"sandbox.fallback":    map[string]string{"role": "qa", "wanted": "docker", "used": "seatbelt", "why": "none"},
 		"usage":               usage,
 		"judge.reset":         map[string]any{"edited": []string{"a/b.go"}},
 		"cleanup.swept":       map[string]any{"group": "", "removed": []map[string]string{item}, "kept": nil},
@@ -637,7 +637,7 @@ func TestFaultRows(t *testing.T) {
 		{StageCommit, "merge_conflict", state.ReasonMergeConflict},
 		{StageCleanup, "cleanup", state.ReasonCleanup},
 		{StageTestReview, "flaky", state.ReasonFlaky},
-		{StageTestReview, "tester", state.ReasonTester}, {StageBuild, "context", state.ReasonContext},
+		{StageTestReview, "qa", state.ReasonQA}, {StageBuild, "context", state.ReasonContext},
 	}
 	for _, c := range cases {
 		r := apply(t, mk(c.stage), in(InFault, FaultData{Reason: c.reason, Detail: "d"}))
@@ -650,10 +650,10 @@ func TestFaultRows(t *testing.T) {
 	}
 }
 
-func TestTesterWithoutAResultSpendsARetryAndRestartsUntilNoneIsLeft(t *testing.T) {
+func TestQAWithoutAResultSpendsARetryAndRestartsUntilNoneIsLeft(t *testing.T) {
 	s := failedRound()
 	end := in(InSessionEnd, SessionEndData{
-		SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: "no_result"}, Agent: "tester"},
+		SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: "no_result"}, Agent: "qa"},
 	})
 	r := apply(t, s, end)
 	if r.State.Counters.RetriesLeft != 1 || r.State.Stage != StageTestReview || !slices.Contains(kinds(r), OrderEnterStage) {
@@ -835,11 +835,11 @@ func mk(stage Stage) State {
 // stateEqual compares two states by their JSON form.
 func stateEqual(a, b State) bool { return string(data(a)) == string(data(b)) }
 
-// failedRound returns a Test and Review state in which the tester has failed.
+// failedRound returns a Test and Review state in which Quality Assurance has failed.
 func failedRound() State {
 	s := mk(StageTestReview)
 	s.Tasks[0].State, s.Tasks[1].State = "done", "done"
-	s.TestReview.Tester = state.RoundState{Session: "st", Result: ""}
+	s.TestReview.QA = state.RoundState{Session: "st", Result: ""}
 	s.TestReview.Reviewer = state.RoundState{Session: "sr", Result: ""}
 	return s
 }

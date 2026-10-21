@@ -399,7 +399,7 @@ func newEnv(t *testing.T) *env {
 	e.roots = Roots{
 		Worktrees: filepath.Join(base, "home", "wt", "shop"),
 		Landings:  filepath.Join(base, "home", "landing", "shop"),
-		Testers:   filepath.Join(base, "home", "testers"),
+		QA:        filepath.Join(base, "home", "qa"),
 		Temp:      filepath.Join(base, "home", "tmp"),
 		Versions:  filepath.Join(base, "home", "versions"),
 	}
@@ -408,7 +408,7 @@ func newEnv(t *testing.T) *env {
 		e.clone,
 		e.roots.Worktrees,
 		e.roots.Landings,
-		e.roots.Testers,
+		e.roots.QA,
 		e.roots.Temp,
 		e.roots.Versions,
 	} {

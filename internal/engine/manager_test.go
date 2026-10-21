@@ -479,7 +479,7 @@ func TestReworkRoundCountsTheJudgesTokensAndEmitsTheirSessionEnds(t *testing.T) 
 	msgs := []task.Message{
 		{ID: "j", Kind: task.MsgState, State: &task.StateReport{
 			Progress: task.Progress{Stage: StageTestReview},
-			Facts:    []task.Fact{end("tester"), end("reviewer")},
+			Facts:    []task.Fact{end("qa"), end("reviewer")},
 		}},
 		{ID: "r", Kind: task.MsgState, State: &task.StateReport{
 			Progress: task.Progress{Stage: StageBuild},

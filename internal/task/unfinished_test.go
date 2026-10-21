@@ -28,7 +28,7 @@ func TestResumedBuilderIsToldWhichEditsAreInTheWorktree(t *testing.T) {
 	left := &state.UnfinishedEdits{Task: "t1", Files: []string{"a.go"}}
 	r := newPipeRig(t, rigOpts{saved: &Progress{Stage: state.StageBuild, Unfinished: left}})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 
@@ -44,7 +44,7 @@ func TestNextBuilderSessionIsToldWhatTheLastOneLeftBehind(t *testing.T) {
 	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 2}})
 	r.git.statuses = []string{" M a.go\n?? dir/b.go\n"}
 	r.model.on("builder", sayResult(`{"items":[]}`), building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 

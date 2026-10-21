@@ -17,7 +17,7 @@ func TestAWorkOutcomeNeverCountsAsABlocker(t *testing.T) {
 		}
 	}
 
-	for _, agent := range []string{"tester", "reviewer"} {
+	for _, agent := range []string{"qa", "reviewer"} {
 		r := apply(t, failedRound(), verifyEnd(agent, false, "TestAdd"))
 		if isBlocker(r) || r.State.Counters.FaultStreak != 0 {
 			t.Errorf("a failed %s round: blocker %q streak %d", agent, r.Err, r.State.Counters.FaultStreak)

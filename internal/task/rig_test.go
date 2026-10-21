@@ -306,11 +306,11 @@ type model struct {
 
 // Results the scripted agents return.
 const (
-	builderDone  = `{"status":"done","summary":"added the file"}`
-	testerPass   = `{"items":[],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
-	testerNoTask = `{"items":[],"tasks":[{"task":"t1","confirmation":"not_confirmed"}]}`
-	reviewerMet  = `{"verdicts":[{"task":"t1","verdict":"met"}]}`
-	reviewerNot  = `{"verdicts":[{"task":"t1","verdict":"not_met"}]}`
+	builderDone = `{"status":"done","summary":"added the file"}`
+	qaPass      = `{"items":[],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
+	qaNoTask    = `{"items":[],"tasks":[{"task":"t1","confirmation":"not_confirmed"}]}`
+	reviewerMet = `{"verdicts":[{"task":"t1","verdict":"met"}]}`
+	reviewerNot = `{"verdicts":[{"task":"t1","verdict":"not_met"}]}`
 )
 
 // on queues steps for an agent.
@@ -398,7 +398,7 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 		Lease: LeaseRef{Branch: "komodo/tg-1", Worktree: wt, GitDir: filepath.Join(wt, "gd"), Fence: 3},
 		Agents: map[string]Permissions{
 			"builder":  perms("builder"),
-			"tester":   perms("tester"),
+			"qa":       perms("qa"),
 			"reviewer": perms("reviewer"),
 		},
 		Limits: o.limits,
@@ -439,7 +439,7 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 	router := &Router{Client: llm.New(links), Quota: lim, Paid: "never", Now: func() time.Time { return t0 }}
 	c := Collaborators{
 		Runtime: r.rt, Briefs: r.briefs, Git: r.git, Commit: r.cm, Router: router, Client: router.Client, Limits: lim,
-		Sandboxes: sandbox.NewManager(map[string]sandbox.Backend{"builder": r.be, "tester": r.be}, nil),
+		Sandboxes: sandbox.NewManager(map[string]sandbox.Backend{"builder": r.be, "qa": r.be}, nil),
 		Checks:    r.checks, Commands: map[string][]string{"build": {"true"}, "test": {"true"}, "fail": {"false"}},
 		Meta: GroupMeta{Repo: "repo-1", Epic: "ep-1", EpicGroups: []string{"tg-1"}, Goal: "add the file"},
 		Plan: SandboxPlan{Temp: t.TempDir()}, SessionsDir: t.TempDir(), Base: "base0", Language: "go",
@@ -451,7 +451,7 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 	}
 	var m *Manager
 	roles, err := NewRoles(RoleConfig{Group: "tg-1", Tasks: spec.Tasks, Items: o.items, Worktree: spec.Lease.Worktree,
-		Files: func() []string { return m.Files() }, Runner: func() agent.CommandRunner { return m.Runner("tester") }})
+		Files: func() []string { return m.Files() }, Runner: func() agent.CommandRunner { return m.Runner("qa") }})
 	if err != nil {
 		t.Fatal(err)
 	}

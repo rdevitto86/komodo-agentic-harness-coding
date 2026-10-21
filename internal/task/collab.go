@@ -128,7 +128,7 @@ type SandboxPlan struct {
 type Collaborators struct {
 	Runtime     Runtime         // the Runtime Manager; when nil, Serve supplies one over the reply channel
 	Briefs      Briefer         // the Context Manager, through the Runtime Manager
-	Roles       map[string]Role // the builder, tester and reviewer
+	Roles       map[string]Role // the builder, Quality Assurance and reviewer
 	Git         Git             // the shared git wrapper
 	Commit      Committer       // the Commit Handler
 	Router      *Router
@@ -136,7 +136,7 @@ type Collaborators struct {
 	Sandboxes   *sandbox.Manager
 	Limits      LimitStore
 	Cache       cache.Handle        // the cache handle; only the Runtime Manager creates or closes the cache
-	Checks      agent.Checker       // the mechanical checks run before the Tester and Reviewer start
+	Checks      agent.Checker       // the mechanical checks run before Quality Assurance and Reviewer start
 	Commands    map[string][]string // command class to argv: setup, build, test, lint, format
 	Base        string              // the commit the group's checks diff against
 	Language    string              // decides the impact set of the checks
@@ -160,7 +160,7 @@ type Collaborators struct {
 const (
 	OutcomePass    OutcomeKind = "pass"    // this role approves
 	OutcomeReturn  OutcomeKind = "return"  // back to Build with Findings
-	OutcomeRestart OutcomeKind = "restart" // start the same role once more (a disputed tester result)
+	OutcomeRestart OutcomeKind = "restart" // start the same role once more (a disputed Quality Assurance result)
 	OutcomeBlock   OutcomeKind = "block"   // escalate with Reason
 	OutcomeScope   OutcomeKind = "scope"   // the builder asks for files outside its list
 )

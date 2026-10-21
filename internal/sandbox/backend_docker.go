@@ -19,14 +19,14 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// DockerOptions set the docker program and the Tester's image; zero values use docker on PATH and an image detected from the
-// repository.
+// DockerOptions set the docker program and Quality Assurance's image; zero values use docker on PATH and an image
+// detected from the repository.
 type DockerOptions struct {
 	Binary string // docker
 	Image  string // sandbox.image
 }
 
-// Docker runs the Tester's commands in one container per group.
+// Docker runs Quality Assurance's commands in one container per group.
 type Docker struct {
 	opt   DockerOptions
 	mu    sync.Mutex
@@ -47,7 +47,8 @@ func (d *Docker) Check() error {
 	defer cancel()
 
 	if _, err := exec.LookPath(d.opt.Binary); err != nil {
-		return errors.New("docker is not installed: install Docker, " + "or the Tester runs in the operating-system sandbox")
+		return errors.New("docker is not installed: install Docker, " +
+			"or Quality Assurance runs in the operating-system sandbox")
 	}
 	if _, err := d.run(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
 		return fmt.Errorf("the docker daemon does not answer: start Docker (%w)", err)

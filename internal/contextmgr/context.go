@@ -18,7 +18,7 @@ import (
 
 // Request is what a caller hands GetContext.
 type Request struct {
-	Agent string // planner, builder, tester or reviewer
+	Agent string // planner, builder, Quality Assurance or reviewer
 	Run   string
 	Group string      // empty for the planner
 	Tree  Tree        // read-only view of the base commit

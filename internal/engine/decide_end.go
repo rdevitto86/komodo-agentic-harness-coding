@@ -46,7 +46,7 @@ func (c *calc) sessionEnd() bool {
 	switch e.Agent {
 	case "builder":
 		return c.builderEnd(e, d.Unfinished, holds)
-	case "tester", "reviewer":
+	case "qa", "reviewer":
 		return c.verifierEnd(e, holds)
 	}
 
@@ -167,10 +167,10 @@ func (c *calc) scopeRules(a ScopeAsk) {
 	c.scopeBlock = &a
 }
 
-// verifierEnd records a tester or reviewer that ended and restarts it when it gave no result.
+// verifierEnd records a Quality Assurance or reviewer that ended and restarts it when it gave no result.
 func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 	s := &c.s
-	round := &s.TestReview.Tester
+	round := &s.TestReview.QA
 	if e.Agent == "reviewer" {
 		round = &s.TestReview.Reviewer
 	}
@@ -225,7 +225,7 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 
 // settleRound makes the stage-move rows read the round's outcome once both agents have a result.
 func (c *calc) settleRound() {
-	t, r := c.s.TestReview.Tester.Result, c.s.TestReview.Reviewer.Result
+	t, r := c.s.TestReview.QA.Result, c.s.TestReview.Reviewer.Result
 	if t == "" || r == "" || t == "cancelled" || r == "cancelled" {
 		return
 	}

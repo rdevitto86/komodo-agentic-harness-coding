@@ -1,0 +1,7 @@
+{
+  "code": "qa",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "Quality Assurance's results were disputed twice. Decide the result?",
+  "fix": "komodo run tg-1.3"
+}

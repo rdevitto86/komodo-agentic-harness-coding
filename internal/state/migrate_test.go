@@ -89,7 +89,7 @@ func TestMigrationSwapsTheCountingUpLimitsForTheBudget(t *testing.T) {
 	 "block":{"reason":"returns"},
 	 "counters":{"returns":3,"attempts":5,"retries":2,"crashes":1,"blocks":{"returns":2,"attempts":1,"flap":1},
 	  "wall_used_s":60,"wall_extended":false,"tokens_used":10},
-	 "test_review":{"tester":{"result":"","restarts":1},"reviewer":{"result":"","restarts":0},
+	 "test_review":{"qa":{"result":"","restarts":1},"reviewer":{"result":"","restarts":0},
 	  "findings":[],"not_met":[],"failed":[]},
 	 "tasks":[],"actions_open":[],"resume":[],"owed":[],"requests":[],"scope_added":[]}}`)
 

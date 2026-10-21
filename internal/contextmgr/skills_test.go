@@ -194,11 +194,11 @@ func TestSetEventDisablesAndAllow(t *testing.T) {
 		t.Fatalf("pull of a disabled skill: %v", err)
 	}
 	m.apply(setEvent(SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder"}}))
-	if sel, _ := m.Select("tester", []string{"a.go"}, goTree()); len(sel) != 0 {
-		t.Fatalf("tester got %v", names(sel))
+	if sel, _ := m.Select("qa", []string{"a.go"}, goTree()); len(sel) != 0 {
+		t.Fatalf("Quality Assurance got %v", names(sel))
 	}
-	if _, err := m.Get("tester", "standards-go"); !errors.Is(err, ErrSkillNotAllowed) {
-		t.Fatalf("tester pull: %v", err)
+	if _, err := m.Get("qa", "standards-go"); !errors.Is(err, ErrSkillNotAllowed) {
+		t.Fatalf("Quality Assurance pull: %v", err)
 	}
 }
 

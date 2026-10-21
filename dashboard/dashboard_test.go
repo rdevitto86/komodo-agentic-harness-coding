@@ -53,7 +53,7 @@ func TestPageDrawsEveryStageAndAgent(t *testing.T) {
 		}
 	}
 	if len(Agents) != 4 {
-		t.Errorf("agents = %v, want planner, builder, tester, reviewer", Agents)
+		t.Errorf("agents = %v, want planner, builder, Quality Assurance, reviewer", Agents)
 	}
 	if !strings.Contains(body, `name="viewport"`) {
 		t.Errorf("page has no viewport meta for phone width")
@@ -107,7 +107,7 @@ func TestEventsPatchCardsAndDiagram(t *testing.T) {
 
 func TestEventsRenderCardsAndResumeOnlyWhenHeld(t *testing.T) {
 	body := stream(newTestServer(t)).Body.String()
-	for _, want := range []string{"tg-1.2", "tg-1.3", "Audit log", "opus", "regression: tester failed 3 times",
+	for _, want := range []string{"tg-1.2", "tg-1.3", "Audit log", "opus", "regression: Quality Assurance failed 3 times",
 		"You are the builder.", "2 / 5 tasks", "18 min"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("stream missing %q", want)
@@ -286,7 +286,7 @@ func TestEventFeedOrderOnTheStream(t *testing.T) {
 		"resource-limit<",
 		"window-warn<",
 		"stage-entered<",
-		"tester-fail<",
+		"qa-fail<",
 		"group-done<",
 	} {
 		i := strings.Index(body[strings.Index(body, `id="events"`):], sub)

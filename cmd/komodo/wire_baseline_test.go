@@ -11,7 +11,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// The base commit's files, not the working tree's, land in the folder the Tester's sandbox runs the baseline in.
+// The base commit's files, not the working tree's, land in the folder Quality Assurance's sandbox runs the baseline in.
 func TestCheckoutBaseWritesTheBaseCommitsFiles(t *testing.T) {
 	repo := t.TempDir()
 	for _, args := range [][]string{

@@ -137,7 +137,7 @@ func TestAnEditMadeInTheWorktreeWhileTheFillRunsIsKept(t *testing.T) {
 		return os.WriteFile(sumPath, []byte("a builder's line\n"), 0o644)
 	}
 
-	if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+	if _, err := r.m.instance(context.Background(), "qa"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(sumPath); string(got) != "a builder's line\n" {
@@ -153,7 +153,7 @@ func TestAFillThatWroteGoSumDoesNotRunAgainForTheNextRole(t *testing.T) {
 		return writeBesideModfile(env)
 	}
 
-	for _, role := range []string{"builder", "tester"} {
+	for _, role := range []string{"builder", "qa"} {
 		if _, err := r.m.instance(context.Background(), role); err != nil {
 			t.Fatal(err)
 		}
@@ -212,7 +212,7 @@ func TestTwoRolesFillingAtOnceDownloadOnce(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for _, role := range []string{"builder", "tester"} {
+	for _, role := range []string{"builder", "qa"} {
 		wg.Add(1)
 
 		go func() {

@@ -129,12 +129,12 @@ func realPath(t *testing.T, p string) string {
 	return r
 }
 
-// fakeManager returns a Manager over a builder fake, a tester fake and a fallback fake.
+// fakeManager returns a Manager over a builder fake, a Quality Assurance fake and a fallback fake.
 func fakeManager() (*Manager, *fakeBackend, *fakeBackend, *fakeBackend) {
 	b := &fakeBackend{name: "seatbelt"}
 	d := &fakeBackend{name: "docker"}
 	fb := &fakeBackend{name: "seatbelt-fallback"}
-	return NewManager(map[string]Backend{RoleBuilder: b, RoleTester: d}, fb), b, d, fb
+	return NewManager(map[string]Backend{RoleBuilder: b, RoleQA: d}, fb), b, d, fb
 }
 
 // putFake writes an executable shell script named name into a new folder and puts the folder first on PATH.

@@ -21,7 +21,7 @@ import (
 func TestPipelineRunsOneGroupThroughBuildTestReviewAndCommit(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 
@@ -30,7 +30,7 @@ func TestPipelineRunsOneGroupThroughBuildTestReviewAndCommit(t *testing.T) {
 		t.Fatalf("stages %v, want %v", got, want)
 	}
 	if n := r.model.total(); n != 3 {
-		t.Fatalf("%d sessions, want 3 (builder, tester, reviewer)", n)
+		t.Fatalf("%d sessions, want 3 (builder, Quality Assurance, reviewer)", n)
 	}
 	if n := r.cm.saveCount(); n != 1 {
 		t.Fatalf("Save called %d times, want 1", n)
@@ -40,18 +40,18 @@ func TestPipelineRunsOneGroupThroughBuildTestReviewAndCommit(t *testing.T) {
 		t.Fatalf("Publish called %d times", len(pubs))
 	}
 	tree, _ := r.git.TreeHash(context.Background(), r.m.spec.Lease)
-	if pubs[0].Tree != tree || pubs[0].Tester.Tree != tree || pubs[0].Reviewer.Tree != tree || pubs[0].Fence != 3 ||
+	if pubs[0].Tree != tree || pubs[0].QA.Tree != tree || pubs[0].Reviewer.Tree != tree || pubs[0].Fence != 3 ||
 		pubs[0].Branch != "komodo/tg-1" {
 		t.Fatalf("approval %+v, tree %s", pubs[0], tree)
 	}
-	if !slices.Equal(pubs[0].Facts.TasksClosed, []string{"t1"}) || len(pubs[0].Tester.Summary) == 0 ||
+	if !slices.Equal(pubs[0].Facts.TasksClosed, []string{"t1"}) || len(pubs[0].QA.Summary) == 0 ||
 		len(pubs[0].Reviewer.Summary) == 0 {
 		t.Fatalf("approval facts %+v", pubs[0])
 	}
 	if len(r.be.released) != 2 {
 		t.Fatalf("closing destroyed %d sandbox instances, want 2", len(r.be.released))
 	}
-	if len(r.be.prepared) != 2 || r.be.prepared[0].Role != "builder" || r.be.prepared[1].Role != "tester" {
+	if len(r.be.prepared) != 2 || r.be.prepared[0].Role != "builder" || r.be.prepared[1].Role != "qa" {
 		t.Fatalf("instances %+v", r.be.prepared)
 	}
 	if r.rt.factCount("session.start") != 3 || r.rt.factCount("session.end") != 3 || r.rt.factCount("task.done") != 1 {
@@ -67,7 +67,7 @@ func TestApprovedGroupIsReportedBeforePublish(t *testing.T) {
 	var atPublish int
 	r.cm.seen = func() { atPublish = r.rt.factCount("group.approved") }
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 
@@ -80,7 +80,7 @@ func TestApprovedGroupIsReportedBeforePublish(t *testing.T) {
 func TestSessionFolderHoldsTheBriefOnceAndTheRequest(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 	dirs, _ := filepath.Glob(filepath.Join(r.m.c.SessionsDir, "*"))
@@ -101,7 +101,7 @@ func TestNewGroupAddsTheWorktreeOnceAndAContinuedOneNever(t *testing.T) {
 		mut: func(s *GroupSpec, _ *Collaborators) { s.Lease.Worktree = filepath.Join(t.TempDir(), "wt") },
 	})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 	if r.git.adds != 1 {
@@ -117,13 +117,13 @@ func TestNewGroupAddsTheWorktreeOnceAndAContinuedOneNever(t *testing.T) {
 func TestSavedGroupStartsAtItsStageAndRerunsTestAndReviewBeforeCommit(t *testing.T) {
 	for _, stage := range []state.Stage{state.StageTestReview, state.StageCommit} {
 		r := newPipeRig(t, rigOpts{saved: &Progress{Stage: stage, TasksDone: []string{"t1"}}})
-		r.model.on("tester", sayResult(testerPass))
+		r.model.on("qa", sayResult(qaPass))
 		r.model.on("reviewer", sayResult(reviewerMet))
 		r.reachCleanup()
 		if got := r.rt.stagesSeen()[0]; got != state.StageTestReview {
 			t.Fatalf("saved %s: first stage %s", stage, got)
 		}
-		if r.model.started("builder") != 0 || r.model.started("tester") != 1 || r.model.started("reviewer") != 1 {
+		if r.model.started("builder") != 0 || r.model.started("qa") != 1 || r.model.started("reviewer") != 1 {
 			t.Fatalf("saved %s: sessions %v", stage, r.model.starts)
 		}
 	}
@@ -135,13 +135,13 @@ func TestFailedMechanicalCheckReturnsToBuildWithoutAModelCall(t *testing.T) {
 	r.model.on("builder",
 		building(r.wt, "a.go", "package a\n", builderDone),
 		building(r.wt, "b.go", "package b\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 	if got := r.slot("builder", 1, "findings"); !strings.Contains(got, "FAIL: exact output") {
 		t.Fatalf("the second builder brief lacks the exact check output: %q", got)
 	}
-	if r.checks.calls != 2 || r.model.started("builder") != 2 || r.model.started("tester") != 1 ||
+	if r.checks.calls != 2 || r.model.started("builder") != 2 || r.model.started("qa") != 1 ||
 		r.model.started("reviewer") != 1 {
 		t.Fatalf("checks %d, sessions %v", r.checks.calls, r.model.starts)
 	}
@@ -150,53 +150,53 @@ func TestFailedMechanicalCheckReturnsToBuildWithoutAModelCall(t *testing.T) {
 	}
 }
 
-func TestReviewerReturnCancelsTheTesterAndSendsTheBuilderTheFindings(t *testing.T) {
+func TestReviewerReturnCancelsTheQAAndSendsTheBuilderTheFindings(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	started := make(chan struct{})
-	var tester *fakeStream
+	var qa *fakeStream
 	r.model.on("builder",
 		building(r.wt, "a.go", "package a\n", builderDone),
 		building(r.wt, "b.go", "package b\n", builderDone))
-	r.model.on("tester",
+	r.model.on("qa",
 		func(llm.Session) (llm.Stream, error) {
-			tester = newFakeStream()
-			tester.onStop = func(f *fakeStream, _ llm.StopLevel) { f.errs <- context.Canceled }
+			qa = newFakeStream()
+			qa.onStop = func(f *fakeStream, _ llm.StopLevel) { f.errs <- context.Canceled }
 			close(started)
-			return tester, nil
+			return qa, nil
 		},
-		sayResult(testerPass))
+		sayResult(qaPass))
 	r.model.on("reviewer",
 		func(s llm.Session) (llm.Stream, error) { <-started; return sayResult(reviewerNot)(s) },
 		sayResult(reviewerMet))
 	r.reachCleanup()
-	if got := tester.stopped(); len(got) == 0 || got[0] != llm.Interrupt {
-		t.Fatalf("the first tester was not interrupted: %v", got)
+	if got := qa.stopped(); len(got) == 0 || got[0] != llm.Interrupt {
+		t.Fatalf("the first Quality Assurance was not interrupted: %v", got)
 	}
 	if got := r.slot("builder", 1, "findings"); !strings.Contains(got, "task t1 not met") {
 		t.Fatalf("builder findings %q", got)
 	}
-	if r.rt.progress().Returns != 1 || r.model.started("tester") != 2 {
+	if r.rt.progress().Returns != 1 || r.model.started("qa") != 2 {
 		t.Fatalf("progress %+v, sessions %v", r.rt.progress(), r.model.starts)
 	}
 }
 
-func TestTesterAndReviewerReturnsReachTheBuilderInOneTrip(t *testing.T) {
+func TestQAAndReviewerReturnsReachTheBuilderInOneTrip(t *testing.T) {
 	var sessions string
 	r := newPipeRig(t, rigOpts{mut: func(_ *GroupSpec, c *Collaborators) { sessions = c.SessionsDir }})
 	r.model.on("builder",
 		building(r.wt, "a.go", "package a\n", builderDone),
 		building(r.wt, "b.go", "package b\n", builderDone))
-	r.model.on("tester", sayResult(testerNoTask), sayResult(testerPass))
-	// A reviewer return that lands first cancels the tester, so the reviewer waits for the tester to end.
+	r.model.on("qa", sayResult(qaNoTask), sayResult(qaPass))
+	// A reviewer return that lands first cancels Quality Assurance, so the reviewer waits for Quality Assurance to end.
 	r.model.on("reviewer",
 		func(s llm.Session) (llm.Stream, error) {
-			awaitEnded(t, sessions, "tester")
+			awaitEnded(t, sessions, "qa")
 			return sayResult(reviewerNot)(s)
 		},
 		sayResult(reviewerMet))
 	r.reachCleanup()
 	got := r.slot("builder", 1, "findings")
-	if !strings.Contains(got, "the tester did not confirm task t1") || !strings.Contains(got, "task t1 not met") {
+	if !strings.Contains(got, "Quality Assurance did not confirm task t1") || !strings.Contains(got, "task t1 not met") {
 		t.Fatalf("builder findings %q", got)
 	}
 	if r.rt.progress().Returns != 1 {
@@ -209,7 +209,7 @@ func TestJudgeSessionEndsAreReportedInTheStageTheyBelongTo(t *testing.T) {
 	r.model.on("builder",
 		building(r.wt, "a.go", "package a\n", builderDone),
 		building(r.wt, "b.go", "package b\n", builderDone))
-	r.model.on("tester", sayResult(testerPass), sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass), sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerMet))
 	r.reachCleanup()
 
@@ -225,7 +225,7 @@ func TestJudgeSessionEndsAreReportedInTheStageTheyBelongTo(t *testing.T) {
 				Agent string `json:"agent"`
 			}
 			_ = json.Unmarshal(f.Data, &d)
-			judges = judges || f.Subtype == "session.end" && (d.Agent == "tester" || d.Agent == "reviewer")
+			judges = judges || f.Subtype == "session.end" && (d.Agent == "qa" || d.Agent == "reviewer")
 			fail = fail || f.Subtype == "result.fail"
 		}
 		if judges {
@@ -240,7 +240,7 @@ func TestJudgeSessionEndsAreReportedInTheStageTheyBelongTo(t *testing.T) {
 	}
 }
 
-// dockerDown is a tester mechanism whose check fails, so the tester runs on the fallback.
+// dockerDown is a Quality Assurance mechanism whose check fails, so Quality Assurance runs on the fallback.
 type dockerDown struct{ *hostBackend }
 
 func (dockerDown) Name() string { return "docker" }
@@ -250,10 +250,10 @@ func (dockerDown) Check() error { return errors.New("the docker daemon does not 
 func TestSandboxFallbackFactCarriesTheWhyTheEventDeclares(t *testing.T) {
 	r := newPipeRig(t, rigOpts{mut: func(_ *GroupSpec, c *Collaborators) {
 		host := &hostBackend{}
-		c.Sandboxes = sandbox.NewManager(map[string]sandbox.Backend{"builder": host, "tester": dockerDown{host}}, host)
+		c.Sandboxes = sandbox.NewManager(map[string]sandbox.Backend{"builder": host, "qa": dockerDown{host}}, host)
 	}})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 
@@ -270,7 +270,7 @@ func TestSandboxFallbackFactCarriesTheWhyTheEventDeclares(t *testing.T) {
 		if err := json.Unmarshal(f.Data, &d); err != nil {
 			t.Fatalf("sandbox.fallback does not decode: %v\n%s", err, f.Data)
 		}
-		if !strings.Contains(d.Why, "start Docker") || d.Role != "tester" || d.Wanted != "docker" {
+		if !strings.Contains(d.Why, "start Docker") || d.Role != "qa" || d.Wanted != "docker" {
 			t.Fatalf("sandbox.fallback decoded as %+v from %s", d, f.Data)
 		}
 
@@ -307,7 +307,7 @@ func awaitEnded(t *testing.T, root, name string) {
 func TestReturnWithAnUnchangedTreeEscalatesFlap(t *testing.T) {
 	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 4}})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone), sayResult(builderDone))
-	r.model.on("tester", sayResult(testerPass), sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass), sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerNot))
 	err := r.run()
 	if err != ErrHeld {
@@ -326,7 +326,7 @@ func TestAFailureWithNoRetriesLeftEscalatesRetries(t *testing.T) {
 		building(r.wt, "a.go", "package a\n", builderDone),
 		building(r.wt, "b.go", "package b\n", builderDone),
 	)
-	r.model.on("tester", sayResult(testerPass), sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass), sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerNot))
 	if err := r.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)
@@ -398,7 +398,7 @@ func TestCheckDoneFactMatchesTheEventSchemaAndResultFailFlagsARegression(t *test
 	}
 }
 
-func TestDisputedTesterResultRestartsTheTesterOnceAndASecondEscalatesFlaky(t *testing.T) {
+func TestDisputedQAResultRestartsTheQAOnceAndASecondEscalatesFlaky(t *testing.T) {
 	items := []agent.Item{{ID: "a1", Text: "it works", Cmd: "test"}}
 	failed := `{"items":[{"item":"a1","pass":false,"evidence":"it failed"}],"tasks":[{"task":"t1",` +
 		`"confirmation":"confirmed"}]}`
@@ -406,24 +406,24 @@ func TestDisputedTesterResultRestartsTheTesterOnceAndASecondEscalatesFlaky(t *te
 
 	r := newPipeRig(t, rigOpts{items: items})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(failed), sayResult(passed))
+	r.model.on("qa", sayResult(failed), sayResult(passed))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
-	if r.model.started("tester") != 2 || r.model.started("builder") != 1 || r.rt.progress().Disputes != 1 {
+	if r.model.started("qa") != 2 || r.model.started("builder") != 1 || r.rt.progress().Disputes != 1 {
 		t.Fatalf("sessions %v, progress %+v", r.model.starts, r.rt.progress())
 	}
-	if got := r.slot("tester", 1, "checks"); !strings.Contains(got, "Go reran item a1") {
+	if got := r.slot("qa", 1, "checks"); !strings.Contains(got, "Go reran item a1") {
 		t.Fatalf("the restart brief lacks Go's output: %q", got)
 	}
 
 	f := newPipeRig(t, rigOpts{items: items})
 	f.model.on("builder", building(f.wt, "a.go", "package a\n", builderDone))
-	f.model.on("tester", sayResult(failed), sayResult(failed))
+	f.model.on("qa", sayResult(failed), sayResult(failed))
 	f.model.on("reviewer", sayResult(reviewerMet))
 	if err := f.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)
 	}
-	if escs := f.rt.escalations(); len(escs) != 1 || escs[0].Reason != "tester" {
+	if escs := f.rt.escalations(); len(escs) != 1 || escs[0].Reason != "qa" {
 		t.Fatalf("escalations %+v", escs)
 	}
 	if f.model.started("builder") != 1 {
@@ -435,7 +435,7 @@ func TestTrackedEditByAJudgeIsResetOnceAndTheSecondEscalatesContract(t *testing.
 	r := newPipeRig(t, rigOpts{})
 	r.git.statuses = []string{"", " M a.go\n", " M a.go\n"}
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass), sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass), sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet), sayResult(reviewerMet))
 	if err := r.run(); err != ErrHeld {
 		t.Fatalf("Run returned %v", err)

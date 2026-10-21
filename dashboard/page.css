@@ -461,7 +461,7 @@ aside {
   opacity: .5
 }
 
-.sessions.test-review .sess.tester,
+.sessions.test-review .sess.qa,
 .sessions.test-review .sess.reviewer {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft)

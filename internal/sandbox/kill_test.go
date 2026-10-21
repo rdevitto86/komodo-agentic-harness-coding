@@ -75,7 +75,7 @@ func TestDockerCancelKillsTheProcessInsideTheContainer(t *testing.T) {
 	calls := fakeDocker(t)
 	t.Setenv("FAKE_DOCKER_EXEC_SLEEP", "1")
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	inst, err := d.Prepare(context.Background(), s)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestDockerCancelKillsTheProcessInsideTheContainer(t *testing.T) {
 func TestDockerKillSkipsTheSweepWhenTheCommandEndedOnItsOwn(t *testing.T) {
 	calls := fakeDocker(t)
 	d := NewDocker(DockerOptions{})
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	goRepo(t, s)
 	inst, _ := d.Prepare(context.Background(), s)
 	cmd, _ := d.Command(context.Background(), inst, s, Command{Argv: []string{"true"}})

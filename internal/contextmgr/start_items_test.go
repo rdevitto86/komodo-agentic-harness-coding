@@ -12,7 +12,7 @@ func TestStartItemsExpandsPatternsAndEnablesOnlyAllowedSkills(t *testing.T) {
 	items, err := StartItems(nil, map[string]Access{
 		"planner": {Allow: []string{"planning"}, Always: []string{"planning"}},
 		"builder": {Allow: []string{"standards-*"}, Always: []string{"standards-comments"}},
-		"tester":  {Allow: []string{"standards-go", "no-such-skill"}},
+		"qa":      {Allow: []string{"standards-go", "no-such-skill"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestStartItemsExpandsPatternsAndEnablesOnlyAllowedSkills(t *testing.T) {
 		byName[it.Name] = it
 	}
 
-	if got := byName["standards-go"]; !got.Enabled || !slices.Equal(got.Allow, []string{"builder", "tester"}) ||
+	if got := byName["standards-go"]; !got.Enabled || !slices.Equal(got.Allow, []string{"builder", "qa"}) ||
 		len(got.Always) != 0 {
 		t.Errorf("standards-go = %+v", got)
 	}
@@ -49,7 +49,7 @@ func TestStartItemsNeverReachesAnAgentOutsideItsAllowList(t *testing.T) {
 	m := newManager(t, func(d *Deps) { d.Items = items })
 	tree := goTree()
 
-	for _, agent := range []string{"planner", "tester", "reviewer"} {
+	for _, agent := range []string{"planner", "qa", "reviewer"} {
 		got, err := m.GetContext(context.Background(), Request{
 			Agent: agent, Tree: tree, Files: []string{"internal/a/a.go"}, Slots: slotsFor(agent),
 		})

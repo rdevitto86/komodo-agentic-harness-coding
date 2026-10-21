@@ -55,7 +55,7 @@ func newRules(s Spec) (rules, error) {
 	if s.Group == "" {
 		return rules{}, errors.New("the sandbox spec has no group")
 	}
-	if s.Role != RoleBuilder && s.Role != RoleTester {
+	if s.Role != RoleBuilder && s.Role != RoleQA {
 		return rules{}, fmt.Errorf("unknown sandbox role %q", s.Role)
 	}
 	if s.MaxProcs < 0 || s.MaxMemGB < 0 {

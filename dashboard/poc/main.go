@@ -17,7 +17,9 @@ import (
 
 var (
 	// blockReasons are the reasons the simulator blocks a group for.
-	blockReasons = []string{"regression: tester failed 3 times", "merge conflict on the feature branch", "task list not met"}
+	blockReasons = []string{
+		"regression: Quality Assurance failed 3 times", "merge conflict on the feature branch", "task list not met",
+	}
 
 	// maxFeed is how many events the simulator keeps.
 	maxFeed = 30
@@ -181,13 +183,13 @@ func (s *sim) build(g *dashboard.Group, now time.Time) {
 		g.TasksDone = g.TasksTotal
 		s.enter(g, "test_review", now)
 		g.Sessions.Builder.Status = "pass"
-		g.Sessions.Tester.Status, g.Sessions.Reviewer.Status = "running", "running"
+		g.Sessions.QA.Status, g.Sessions.Reviewer.Status = "running", "running"
 	}
 }
 
-// testReview flips the tester and reviewer from running to pass or fail; a fail sends the group back to build.
+// testReview flips Quality Assurance and reviewer from running to pass or fail; a fail sends the group back to build.
 func (s *sim) testReview(g *dashboard.Group, now time.Time) {
-	for _, p := range []*dashboard.Session{&g.Sessions.Tester, &g.Sessions.Reviewer} {
+	for _, p := range []*dashboard.Session{&g.Sessions.QA, &g.Sessions.Reviewer} {
 		if p.Status != "running" {
 			continue
 		}
@@ -200,14 +202,14 @@ func (s *sim) testReview(g *dashboard.Group, now time.Time) {
 		}
 	}
 
-	t, r := g.Sessions.Tester.Status, g.Sessions.Reviewer.Status
+	t, r := g.Sessions.QA.Status, g.Sessions.Reviewer.Status
 	switch {
 	case t == "fail" || r == "fail":
 		g.TasksDone = max(g.TasksDone-1, 0)
 		g.Sessions.Builder.Status = "running"
-		g.Sessions.Tester.Status, g.Sessions.Reviewer.Status = "idle", "idle"
+		g.Sessions.QA.Status, g.Sessions.Reviewer.Status = "idle", "idle"
 		s.enter(g, "build", now)
-		s.emit(now, "run-failure", "tester-fail", g.Group)
+		s.emit(now, "run-failure", "qa-fail", g.Group)
 	case t == "pass" && r == "pass":
 		s.enter(g, "commit", now)
 	}
@@ -217,7 +219,7 @@ func (s *sim) testReview(g *dashboard.Group, now time.Time) {
 func (s *sim) restart(g *dashboard.Group, now time.Time) {
 	g.TasksDone, g.TasksTotal, g.ElapsedMin = 0, 0, 0
 	g.Sessions.Builder = dashboard.Session{Status: "idle", Model: g.Sessions.Builder.Model}
-	g.Sessions.Tester = dashboard.Session{Status: "idle", Model: g.Sessions.Tester.Model}
+	g.Sessions.QA = dashboard.Session{Status: "idle", Model: g.Sessions.QA.Model}
 	g.Sessions.Reviewer = dashboard.Session{Status: "idle", Model: g.Sessions.Reviewer.Model}
 	s.enter(g, "intake", now)
 }

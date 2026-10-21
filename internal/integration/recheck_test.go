@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// noDocker points the Docker client at a socket that does not exist, so the Tester uses the operating-system sandbox.
+// noDocker points the Docker client at a socket that does not exist, so Quality Assurance uses the operating-system sandbox.
 const noDocker = "DOCKER_HOST=unix:///nonexistent/docker.sock"
 
 // epicLacksFile passes while the epic branch lacks the group's file and fails once the landing put it there.

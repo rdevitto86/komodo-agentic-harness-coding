@@ -6,7 +6,7 @@ import "testing"
 func TestNewGroupReportsReadyOnce(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", building(r.wt, "src_a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 	if n := r.rt.factCount("ready"); n != 1 {
@@ -18,7 +18,7 @@ func TestNewGroupReportsReadyOnce(t *testing.T) {
 func TestForwardStagesReportStageDone(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", building(r.wt, "src_a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 	if n := r.rt.factCount("stage.done"); n != 3 {

@@ -18,8 +18,8 @@ const (
 ## Findings resolved
 {{range .Facts.FindingCodes}}- {{.}}
 {{end}}
-## Tester
-{{range .Tester.Summary}}- {{.}}
+## Quality Assurance
+{{range .QA.Summary}}- {{.}}
 {{end}}
 ## Reviewer
 {{range .Reviewer.Summary}}- {{.}}
@@ -39,13 +39,13 @@ var (
 )
 
 // RenderBody fills the Commit Handler's own pull request body template with the facts.
-func RenderBody(f PRFacts, tester, reviewer Verdict) (string, error) {
+func RenderBody(f PRFacts, qa, reviewer Verdict) (string, error) {
 	var b bytes.Buffer
 
 	data := struct {
-		Facts            PRFacts
-		Tester, Reviewer Verdict
-	}{f, tester, reviewer}
+		Facts        PRFacts
+		QA, Reviewer Verdict
+	}{f, qa, reviewer}
 
 	if err := groupBody.Execute(&b, data); err != nil {
 		return "", fmt.Errorf("render group body: %w", err)

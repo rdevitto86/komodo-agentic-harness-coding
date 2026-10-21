@@ -37,7 +37,7 @@ func baseSource(store BaselineStore, lang, junit string) func(context.Context, C
 	})
 }
 
-// The Go baseline runs the whole module's tests in the base checkout, inside the Tester's sandbox, and stores it.
+// The Go baseline runs the whole module's tests in the base checkout, inside Quality Assurance's sandbox, and stores it.
 func TestBaselineSourceRunsGoTestsAtTheBaseAndStoresThem(t *testing.T) {
 	store := &memStore{}
 	sb := newSandbox().on("go test -json", reply{1, jsonTest("m/a", map[string]bool{"TestOld": false, "TestOK": true})})

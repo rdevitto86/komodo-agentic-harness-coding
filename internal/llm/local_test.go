@@ -170,7 +170,7 @@ func TestLocalSessionRunsToolLoopThenSchemaCall(t *testing.T) {
 		},
 	})
 	host := &fakeHost{}
-	s := Session{ID: "sid", Dir: t.TempDir(), Agent: "tester", Link: Local, Model: "m", Schema: json.RawMessage(
+	s := Session{ID: "sid", Dir: t.TempDir(), Agent: "qa", Link: Local, Model: "m", Schema: json.RawMessage(
 		resultSchema,
 	),
 		Tools: host, Profile: CapacityProfile{Ctx: 100000}, Parts: [5]string{"", "role", "", "", "the task"}}

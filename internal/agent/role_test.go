@@ -23,7 +23,7 @@ func TestRolesAreTheFourRegistryRoles(t *testing.T) {
 			t.Errorf("RoleByName(%s) = %v", r.Name, ok)
 		}
 	}
-	if !slices.Equal(names, []string{"planner", "builder", "tester", "reviewer"}) {
+	if !slices.Equal(names, []string{"planner", "builder", "qa", "reviewer"}) {
 		t.Fatalf("roles = %v", names)
 	}
 	if _, ok := RoleByName("orchestrator"); ok {

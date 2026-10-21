@@ -72,7 +72,7 @@ type Progress struct {
 	Stage     state.Stage `json:"stage"`
 	TasksDone []string    `json:"tasks_done"`
 	Returns   int         `json:"returns"` // trips back to Build so far, for the brief; not a limit
-	// tester restarts after a disputed result
+	// Quality Assurance restarts after a disputed result
 	Disputes int `json:"disputes"`
 	// retries the group may still spend; mirrors the engine's budget and only falls
 	RetriesLeft int `json:"retries_left"`

@@ -4,9 +4,9 @@ import "slices"
 
 // Block reasons Decide returns.
 const (
-	BlockFlaky  = "flaky"  // the Tester's two reruns of an item disagreed
-	BlockTester = "tester" // the Tester disputed Go's reruns a second time
-	BlockBrief  = "brief"  // the Reviewer found the brief incomplete
+	BlockFlaky = "flaky" // Quality Assurance's two reruns of an item disagreed
+	BlockQA    = "qa"    // Quality Assurance disputed Go's reruns a second time
+	BlockBrief = "brief" // the Reviewer found the brief incomplete
 )
 
 // ReviewerVerdict is the Reviewer's outcome as the approval rule reads it.
@@ -21,7 +21,7 @@ type ReviewerVerdict struct {
 type Decision string
 
 const (
-	DecisionWait    Decision = "wait"    // a judge has not finished, or the Tester is being restarted
+	DecisionWait    Decision = "wait"    // a judge has not finished, or Quality Assurance is being restarted
 	DecisionApprove Decision = "approve" // both passed: hand the approved work to the Commit Handler
 	DecisionReturn  Decision = "return"  // back to the Builder with findings
 	DecisionBlock   Decision = "block"   // a harness fault or a flaky item; a person is needed
@@ -32,20 +32,20 @@ type Outcome struct {
 	Decision Decision  `json:"decision"`
 	Reason   string    `json:"reason,omitempty"`   // the block reason when Decision is block
 	Findings []Finding `json:"findings,omitempty"` // every verified blocking finding, for the Builder
-	Items    []string  `json:"items,omitempty"`    // Tester items Go confirmed failed
+	Items    []string  `json:"items,omitempty"`    // Quality Assurance items Go confirmed failed
 	NotMet   []string  `json:"not_met,omitempty"`  // tasks marked not_met or not_confirmed
 }
 
-// Decide joins the Tester's and the Reviewer's verdicts for one round.
+// Decide joins Quality Assurance's and the Reviewer's verdicts for one round.
 // Faults block at once; a round returns only after the Reviewer has ended, and approves only when both judges ended clean.
-func Decide(t TesterVerdict, r ReviewerVerdict) Outcome {
+func Decide(t QAVerdict, r ReviewerVerdict) Outcome {
 	switch {
 	case r.Ended && r.BriefIncomplete:
 		return Outcome{Decision: DecisionBlock, Reason: BlockBrief}
 	case len(t.Split) > 0:
 		return Outcome{Decision: DecisionBlock, Reason: BlockFlaky}
-	case len(t.Disputed) > 0 && t.Restarts >= TesterRestarts:
-		return Outcome{Decision: DecisionBlock, Reason: BlockTester}
+	case len(t.Disputed) > 0 && t.Restarts >= QARestarts:
+		return Outcome{Decision: DecisionBlock, Reason: BlockQA}
 	case !r.Ended:
 		return Outcome{Decision: DecisionWait}
 	}

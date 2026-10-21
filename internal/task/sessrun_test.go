@@ -11,11 +11,11 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
-// linkRig builds a rig whose only chain link is l, with a passing tester and reviewer queued.
+// linkRig builds a rig whose only chain link is l, with a passing Quality Assurance and reviewer queued.
 func linkRig(t *testing.T, l llm.Link) *pipeRig {
 	t.Helper()
 	r := newPipeRig(t, rigOpts{chain: []string{string(l)}})
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	return r
 }

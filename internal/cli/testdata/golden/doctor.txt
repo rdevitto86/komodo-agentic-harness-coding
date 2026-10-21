@@ -21,7 +21,7 @@ exit 3
       {
         "name": "docker",
         "result": "pass",
-        "detail": "Docker is not installed; the Tester uses the operating-system sandbox and the run report says so",
+        "detail": "Docker is not installed; Quality Assurance uses the operating-system sandbox and the report says so",
         "fix": ""
       },
       {

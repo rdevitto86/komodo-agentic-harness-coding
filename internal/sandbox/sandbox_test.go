@@ -35,21 +35,21 @@ func TestPrepareSpecAlwaysHoldsTheGitPointerReadOnly(t *testing.T) {
 	}
 }
 
-func TestTesterUsesDockerWhenItWorks(t *testing.T) {
+func TestQAUsesDockerWhenItWorks(t *testing.T) {
 	m, _, d, fb := fakeManager()
-	inst, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleTester))
+	inst, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleQA))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if inst.Backend != "docker" || inst.Fallback || len(d.prepared) != 1 || len(fb.prepared) != 0 {
-		t.Fatalf("tester went to the wrong backend: %+v", inst)
+		t.Fatalf("Quality Assurance went to the wrong backend: %+v", inst)
 	}
 }
 
-func TestTesterFallsBackWhenDockerCheckFails(t *testing.T) {
+func TestQAFallsBackWhenDockerCheckFails(t *testing.T) {
 	m, _, d, fb := fakeManager()
 	d.checkErr = errors.New("the docker daemon does not answer: start Docker")
-	inst, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleTester))
+	inst, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleQA))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,20 +61,20 @@ func TestTesterFallsBackWhenDockerCheckFails(t *testing.T) {
 	}
 }
 
-func TestTesterDoesNotFallBackWhenDockerPrepareFails(t *testing.T) {
+func TestQADoesNotFallBackWhenDockerPrepareFails(t *testing.T) {
 	m, _, d, fb := fakeManager()
 	d.prepareErr = errBoom
-	_, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleTester))
+	_, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleQA))
 	if !errors.Is(err, errBoom) || len(fb.prepared) != 0 {
 		t.Fatalf("only a failed Check falls back: %v", err)
 	}
 }
 
-func TestTesterFailsWhenBothBackendsFail(t *testing.T) {
+func TestQAFailsWhenBothBackendsFail(t *testing.T) {
 	m, _, d, fb := fakeManager()
 	d.checkErr = errors.New("docker is not installed")
 	fb.checkErr = errors.New("user namespaces are blocked")
-	_, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleTester))
+	_, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleQA))
 	if err == nil || !strings.Contains(err.Error(), "user namespaces are blocked") ||
 		!strings.Contains(err.Error(), "docker is not installed") {
 		t.Fatalf("error must name both failures: %v", err)
@@ -90,10 +90,10 @@ func TestBuilderCheckFailureNamesTheFixAndPreparesNothing(t *testing.T) {
 	}
 }
 
-func TestNoFallbackBackendMeansTesterFailsOnDockerError(t *testing.T) {
+func TestNoFallbackBackendMeansQAFailsOnDockerError(t *testing.T) {
 	d := &fakeBackend{name: "docker", checkErr: errBoom}
-	m := NewManager(map[string]Backend{RoleTester: d}, nil)
-	if _, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleTester)); err == nil {
+	m := NewManager(map[string]Backend{RoleQA: d}, nil)
+	if _, err := m.CreateSandboxInstance(context.Background(), testSpec(t, RoleQA)); err == nil {
 		t.Fatal("want an error with no fallback")
 	}
 }
@@ -183,7 +183,7 @@ func TestCommandNeverRunsUnwrapped(t *testing.T) {
 
 func TestEndSetupTurnsTheNetworkOffForTheNextCommand(t *testing.T) {
 	m, b, d, _ := fakeManager()
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	s.Network = true
 	inst, _ := m.CreateSandboxInstance(context.Background(), s)
 	run := Command{Argv: []string{"true"}}

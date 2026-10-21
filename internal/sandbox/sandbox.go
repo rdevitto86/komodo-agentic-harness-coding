@@ -1,6 +1,6 @@
-// Package sandbox seals the commands the agents run: a Docker container per group for the Tester, and Seatbelt or Bubblewrap
-// for the Builder. A Manager hands out instances, wraps each command so
-// it starts inside one, and never runs a command unwrapped.
+// Package sandbox seals the commands the agents run: a Docker container per group for Quality Assurance, and Seatbelt or
+// Bubblewrap for the Builder. A Manager hands out instances, wraps each command so it starts inside one, and never runs
+// a command unwrapped.
 package sandbox
 
 import (
@@ -17,7 +17,7 @@ import (
 // The two roles a sandbox instance serves.
 const (
 	RoleBuilder = "builder"
-	RoleTester  = "tester"
+	RoleQA      = "qa"
 )
 
 // Spec says what one sandbox instance may read, write and reach. Writable[0] is the instance's temporary folder (HOME and
@@ -33,7 +33,7 @@ type Spec struct {
 	Masked     []string // worktree files matching the secret list; unreadable
 	MaxProcs   int      // sandbox.max_procs
 	MaxMemGB   int      // sandbox.max_mem_gb
-	Role       string   // builder or tester; picks the mechanism
+	Role       string   // builder or Quality Assurance; picks the mechanism
 	Network    bool     // true only for the group's setup command
 
 	SetupEnv []string // NAME=value variables only a command with Network true gets
@@ -44,7 +44,7 @@ type Instance struct {
 	ID      string `json:"id"`
 	Group   string `json:"group"`
 	Backend string `json:"backend"` // the mechanism's name
-	// true when the Tester runs in the operating-system sandbox because Docker is missing
+	// true when Quality Assurance runs in the operating-system sandbox because Docker is missing
 	Fallback bool `json:"fallback,omitempty"`
 	// why the first choice failed, when Fallback is true
 	Reason    string    `json:"reason,omitempty"`
@@ -128,14 +128,14 @@ type Manager struct {
 	live     map[string]*live
 }
 
-// NewManager builds a Manager over the backends, keyed by role ("builder" or "tester"), and the operating-system backend the
-// tester falls back to without Docker.
-func NewManager(byRole map[string]Backend, testerFallback Backend) *Manager {
-	return &Manager{byRole: byRole, fallback: testerFallback, live: map[string]*live{}}
+// NewManager builds a Manager over the backends, keyed by role ("builder" or "qa"), and the operating-system backend the
+// Quality Assurance falls back to without Docker.
+func NewManager(byRole map[string]Backend, qaFallback Backend) *Manager {
+	return &Manager{byRole: byRole, fallback: qaFallback, live: map[string]*live{}}
 }
 
 // CreateSandboxInstance prepares one instance for a group and role.
-// A tester whose first backend fails its check runs on the fallback and the instance says so.
+// A Quality Assurance whose first backend fails its check runs on the fallback and the instance says so.
 func (m *Manager) CreateSandboxInstance(ctx context.Context, s Spec) (Instance, error) {
 	s, err := normalise(s)
 	if err != nil {
@@ -154,7 +154,7 @@ func (m *Manager) CreateSandboxInstance(ctx context.Context, s Spec) (Instance, 
 		reason   string
 	)
 	if cerr := primary.Check(); cerr != nil {
-		if s.Role != RoleTester || m.fallback == nil {
+		if s.Role != RoleQA || m.fallback == nil {
 			return Instance{}, cerr
 		}
 		if ferr := m.fallback.Check(); ferr != nil {

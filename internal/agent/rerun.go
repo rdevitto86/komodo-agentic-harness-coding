@@ -10,7 +10,7 @@ import (
 // Rerun runs an item's command twice in the sandbox and returns the outcome and the last output; a run whose output passed
 // the runner's limit counts by its exit code.
 // An item with no command is never run; its failure stays unconfirmed.
-func (goTester) Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error) {
+func (goQA) Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error) {
 	if strings.TrimSpace(it.Cmd) == "" {
 		return RerunUnconfirmed, "", nil
 	}

@@ -54,8 +54,9 @@ func init() {
 	}
 }
 
-// retryBudget upgrades a version 1 group record: the returns, attempts and retries counters and the tester and reviewer
-// restarts are dropped, retries_left starts at the limit, and a block on a spent counter becomes a block on retries.
+// retryBudget upgrades a version 1 group record: the returns, attempts and retries counters and Quality Assurance and
+// reviewer restarts are dropped, retries_left starts at the limit, and a block on a spent counter becomes a block on
+// retries.
 func retryBudget(old []byte) ([]byte, error) {
 	rec, ok := objectOf(old)
 	if !ok {
@@ -77,7 +78,7 @@ func retryBudget(old []byte) ([]byte, error) {
 		}
 	}
 	if tr, ok := objectOf(st["test_review"]); ok {
-		for _, role := range []string{"tester", "reviewer"} {
+		for _, role := range []string{"qa", "reviewer"} {
 			if r, ok := objectOf(tr[role]); ok {
 				delete(r, "restarts")
 				tr[role] = encodeObject(r)

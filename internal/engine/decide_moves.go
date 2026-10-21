@@ -22,7 +22,7 @@ var faultStages = map[state.Reason][]Stage{
 	state.ReasonMergeConflict: {StageCommit},
 	state.ReasonCleanup:       {StageCleanup},
 	state.ReasonFlaky:         {StageTestReview},
-	state.ReasonTester:        {StageTestReview},
+	state.ReasonQA:            {StageTestReview},
 	state.ReasonFlap:          {StageTestReview},
 	state.ReasonRetries:       {StageBuild, StageTestReview},
 	state.ReasonCrash: {
@@ -288,7 +288,7 @@ func (c *calc) endBlock(e bus.SessionEnd) (state.Reason, string, bool) {
 		return state.ReasonCrash, "4 blocker errors in a row with no session result between them; look at the cause", true
 	}
 
-	if c.exhausted != "" && (e.Agent == "builder" || e.Agent == "tester" || e.Agent == "reviewer") {
+	if c.exhausted != "" && (e.Agent == "builder" || e.Agent == "qa" || e.Agent == "reviewer") {
 		return state.ReasonRetries, "the " + e.Agent + " ended " + e.Reason + " and no retries are left", true
 	}
 
@@ -347,7 +347,7 @@ func (c *calc) advance(to Stage, d stageData) {
 
 	s.Pause = state.PauseState{}
 	if to == StageTestReview {
-		s.TestReview.Tester, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
+		s.TestReview.QA, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
 		s.TestReview.Failed, s.TestReview.NotMet = []string{}, []string{}
 	}
 
@@ -401,7 +401,7 @@ func (c *calc) returnToBuild(in Input) {
 
 	s.Epoch++
 	s.Stage = StageBuild
-	s.TestReview.Tester, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
+	s.TestReview.QA, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
 
 	c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Findings: findings, Items: d.Items})
 }
@@ -629,7 +629,7 @@ func (c *calc) override(in Input) bool {
 	c.newTry()
 	c.emitStatus(&bus.OverrideApproved{Granted: 1, Left: s.Counters.RetriesLeft, Minutes: s.Counters.FinalWallMin})
 
-	s.TestReview.Tester, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
+	s.TestReview.QA, s.TestReview.Reviewer = state.RoundState{}, state.RoundState{}
 	c.resumeWith(StageBuild, stageData{Task: c.firstOpenTask(), Findings: s.LastFindings, Items: s.TestReview.Failed})
 	return true
 }

@@ -114,7 +114,7 @@ func TestAnOverrideSendsTheGroupBackToTheBuilderWithTheLastFindings(t *testing.T
 	ov.Time = blocked.Block.Until.Add(-time.Minute)
 
 	r := apply(t, blocked, ov)
-	if r.State.Stage != StageBuild || r.State.TestReview.Tester.Session != "" || r.State.TestReview.Reviewer.Session != "" {
+	if r.State.Stage != StageBuild || r.State.TestReview.QA.Session != "" || r.State.TestReview.Reviewer.Session != "" {
 		t.Fatalf("stage %q round %+v", r.State.Stage, r.State.TestReview)
 	}
 
@@ -229,7 +229,7 @@ func TestAnyAgentsCrashCountsAndAResultResetsTheStreak(t *testing.T) {
 	}
 
 	s.Counters.FaultStreak = 3
-	r = apply(t, s, verifyEnd("tester", true))
+	r = apply(t, s, verifyEnd("qa", true))
 	if r.State.Counters.FaultStreak != 0 {
 		t.Fatalf("a session that ended with a result left streak %d", r.State.Counters.FaultStreak)
 	}

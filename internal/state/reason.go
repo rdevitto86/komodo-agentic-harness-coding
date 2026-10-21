@@ -53,10 +53,10 @@ const (
 	// a record or a write failed a check
 	ReasonStateInvalid Reason = "state_invalid"
 
-	// the Tester's results were disputed twice
-	ReasonTester Reason = "tester"
+	// Quality Assurance's results were disputed twice
+	ReasonQA Reason = "qa"
 
-	// the Tester's reruns split once and a role reported results it cannot confirm
+	// Quality Assurance's reruns split once and a role reported results it cannot confirm
 	ReasonFlaky Reason = "flaky"
 
 	// session exit: the session returned a valid result

@@ -15,12 +15,12 @@ import (
 	"strings"
 )
 
-// Plan says how one language's dependencies reach the Tester's tree.
+// Plan says how one language's dependencies reach Quality Assurance's tree.
 type Plan struct {
 	Language   string
 	Copy       []string // folders to copy from the Builder's tree, relative to the worktree
-	Setup      []string // a command to run in the Tester's sandbox instead of copying
-	Env        []string // variables the Tester's commands need, as NAME=value
+	Setup      []string // a command to run in Quality Assurance's sandbox instead of copying
+	Env        []string // variables Quality Assurance's commands need, as NAME=value
 	RerunSetup bool     // true when the group's own setup command must run because copying is not safe
 }
 

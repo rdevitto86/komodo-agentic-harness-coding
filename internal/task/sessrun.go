@@ -490,7 +490,7 @@ func (m *Manager) bindTools(
 		}
 	}
 
-	if src, ok := role.(ItemSource); ok && req.agent == "tester" {
+	if src, ok := role.(ItemSource); ok && req.agent == "qa" {
 		env.Items = src.AcceptanceItems()
 		env.Check = m.runner(irole)
 	}
@@ -931,7 +931,7 @@ func instanceRole(agentName string) string {
 	if agentName == "builder" {
 		return "builder"
 	}
-	return "tester"
+	return "qa"
 }
 
 // changedPaths lists the paths of a porcelain status, dropping the two status letters; a rename gives its new path.

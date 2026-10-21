@@ -472,7 +472,7 @@ func planFiles() map[string]string {
 
 // --- fake model
 
-// fakeModel replays the Messages interface for the planner, builder, tester and reviewer.
+// fakeModel replays the Messages interface for the planner, builder, Quality Assurance and reviewer.
 type fakeModel struct {
 	t     *testing.T
 	srv   *httptest.Server
@@ -486,7 +486,7 @@ type fakeModel struct {
 	plan     map[string]string                                     // when set, the planner returns these files
 	builder  func(brief string, turn int) (string, map[string]any) // when set, picks the builder's tool call; "" ends the turn
 	verdict  func(task string) string                              // when set, the reviewer's verdict per task
-	testPass func(item string) bool                                // when set, the tester's pass flag per free item
+	testPass func(item string) bool                                // when set, Quality Assurance's pass flag per free item
 	bodies   []string                                              // every request body, in arrival order
 
 	builderFinal func() string // when set and not empty, the builder's final result
@@ -572,7 +572,7 @@ func (f *fakeModel) messages(w http.ResponseWriter, raw []byte) {
 	case tools["submit_finding"] || tools["skill"]:
 		role = "reviewer"
 	case tools["run"]:
-		role = "tester"
+		role = "qa"
 	}
 	f.mu.Lock()
 	hold, started := f.hold, f.started
@@ -661,7 +661,7 @@ func (f *fakeModel) result(role, brief string) string {
 			}
 		}
 		return `{"status":"done","summary":"added the Add function"}`
-	case "tester":
+	case "qa":
 		items, tasks := []map[string]any{}, []map[string]string{}
 		for _, m := range itemLine.FindAllStringSubmatch(brief, -1) {
 			pass := f.testPass == nil || f.testPass(m[1])
@@ -751,8 +751,8 @@ func (f *fakeModel) arm() (started <-chan struct{}, release func()) {
 	return f.started, func() { close(hold) }
 }
 
-// writeDocker puts a fake docker on PATH that keeps one file per container in a folder and understands ps and rm and has no daemon, so the Tester falls back; it returns
-// the folder.
+// writeDocker puts a fake docker on PATH that keeps one file per container in a folder and understands ps and rm and has no
+// daemon, so Quality Assurance falls back; it returns the folder.
 func (r *binRig) writeDocker() string {
 	dir := filepath.Join(r.root, "containers")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

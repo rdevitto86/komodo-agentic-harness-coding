@@ -32,7 +32,7 @@ func TestBlockedSeconds(t *testing.T) {
 	f.apply(enter(0, "r", "g", "build", false))
 	f.apply(
 		ev(50, bus.TypeRunFailure, "group.blocked", "r", "g", &bus.GroupBlocked{
-			GroupFacts: bus.GroupFacts{Reason: "tester"},
+			GroupFacts: bus.GroupFacts{Reason: "qa"},
 		}),
 	)
 	if g, _ := f.group("r", "g"); g.Outcome != "blocked" {

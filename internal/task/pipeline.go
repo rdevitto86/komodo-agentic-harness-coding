@@ -532,12 +532,12 @@ func (m *Manager) resumeWait(try int) time.Duration {
 	return time.Hour
 }
 
-// runTestReview runs the free checks, then the tester and the reviewer side by side, and decides the round.
+// runTestReview runs the free checks, then Quality Assurance and the reviewer side by side, and decides the round.
 func (m *Manager) runTestReview(ctx context.Context) error {
 	if err := m.setStage(ctx, state.StageTestReview); err != nil {
 		return err
 	}
-	if _, err := m.instance(ctx, "tester"); err != nil {
+	if _, err := m.instance(ctx, "qa"); err != nil {
 		return err
 	}
 
@@ -545,7 +545,7 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 
 	var owed []string
 	for _, a := range m.lastPause.Owed {
-		if a == "tester" || a == "reviewer" {
+		if a == "qa" || a == "reviewer" {
 			owed = append(owed, a)
 		}
 	}
@@ -556,7 +556,7 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 		if err := m.saveDirty(ctx); err != nil {
 			return err
 		}
-		if fails, err := m.runChecks(ctx, m.runner("tester")); err != nil {
+		if fails, err := m.runChecks(ctx, m.runner("qa")); err != nil {
 			return err
 		} else if len(fails) > 0 {
 			return m.rework(ctx, fails)
@@ -734,7 +734,7 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 	m.mu.Unlock()
 
 	in := RoleInput{Diff: diff, Trip: m.Progress().Returns, Uncovered: uncovered}
-	judges := []string{"tester", "reviewer"}
+	judges := []string{"qa", "reviewer"}
 	res := map[string]*branch{}
 
 	tctx, tcancel := context.WithCancel(ctx)
@@ -771,7 +771,7 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 			}
 
 			*b = m.judgeBranch(c, name, in)
-			if name == "tester" && b.err != nil && tctx.Err() != nil && ctx.Err() == nil &&
+			if name == "qa" && b.err != nil && tctx.Err() != nil && ctx.Err() == nil &&
 				(errors.Is(b.err, context.Canceled) || errors.Is(b.err, ErrStopped)) {
 				*b = branch{out: sessOut{reason: state.ReasonCancelled}}
 			}
@@ -858,7 +858,7 @@ func (m *Manager) verdictOf(name string) (Outcome, bool) {
 	return v, ok
 }
 
-// judgeBranch runs one judge to a decided outcome; a disputed tester result restarts the tester once.
+// judgeBranch runs one judge to a decided outcome; a disputed Quality Assurance result restarts Quality Assurance once.
 func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) branch {
 	for {
 		if err := m.checkpoint(ctx); err != nil {
@@ -881,7 +881,7 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 			m.prog.Disputes = 1
 			m.mu.Unlock()
 			if d >= 1 {
-				out.outcome = Outcome{Kind: OutcomeBlock, Reason: agent.BlockTester, Findings: out.outcome.Findings}
+				out.outcome = Outcome{Kind: OutcomeBlock, Reason: agent.BlockQA, Findings: out.outcome.Findings}
 				return branch{out: out}
 			}
 
@@ -949,7 +949,7 @@ func (m *Manager) runCommit(ctx context.Context) error {
 		return err
 	}
 
-	t, _ := m.verdictOf("tester")
+	t, _ := m.verdictOf("qa")
 	r, _ := m.verdictOf("reviewer")
 
 	a := commit.Approval{
@@ -965,8 +965,8 @@ func (m *Manager) runCommit(ctx context.Context) error {
 		Fence: lease.Fence(
 			m.spec.Lease.Fence,
 		),
-		Tree:   tree,
-		Tester: commit.Verdict{Tree: tree, Summary: t.Summary},
+		Tree: tree,
+		QA:   commit.Verdict{Tree: tree, Summary: t.Summary},
 		Reviewer: commit.Verdict{
 			Tree:    tree,
 			Summary: r.Summary,

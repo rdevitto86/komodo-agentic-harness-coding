@@ -62,7 +62,7 @@ type AgentOverride struct {
 
 var (
 	// roleNames lists the four roles; the registry holds no others.
-	roleNames = []string{"planner", "builder", "tester", "reviewer"}
+	roleNames = []string{"planner", "builder", "qa", "reviewer"}
 
 	// validLinks lists the model links a role chain may name.
 	validLinks = []string{"claude-cli", "anthropic-api", "openai-subscription", "openai-api", "local"}

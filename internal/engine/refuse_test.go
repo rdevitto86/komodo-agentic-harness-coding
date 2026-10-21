@@ -67,7 +67,7 @@ func TestOverrideInsideTheWindowIsAppliedBeforeItReplies(t *testing.T) {
 }
 
 func TestJudgeSessionsThatEndDoneNeverSpendARetry(t *testing.T) {
-	for _, agent := range []string{"tester", "reviewer"} {
+	for _, agent := range []string{"qa", "reviewer"} {
 		end := in(InSessionEnd, SessionEndData{SessionEnd: bus.SessionEnd{
 			GroupFacts: bus.GroupFacts{Reason: "done"},
 			Agent:      agent,
@@ -80,7 +80,7 @@ func TestJudgeSessionsThatEndDoneNeverSpendARetry(t *testing.T) {
 	for _, reason := range []string{"no_result", "schema_fail", "timeout", "idle"} {
 		end := in(InSessionEnd, SessionEndData{SessionEnd: bus.SessionEnd{
 			GroupFacts: bus.GroupFacts{Reason: reason},
-			Agent:      "tester",
+			Agent:      "qa",
 		}})
 		if r := apply(t, failedRound(), end); r.State.Counters.RetriesLeft != 1 {
 			t.Errorf("%s spent %d, want 1", reason, 2-r.State.Counters.RetriesLeft)

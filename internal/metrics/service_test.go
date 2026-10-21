@@ -21,7 +21,7 @@ func TestFiguresFollowTheEvents(t *testing.T) {
 		{Type: bus.TypeRunStatus, Subtype: "run.start", Run: run, Data: &bus.RunStartedFact{Groups: []bus.ID{"g1", "g2"}}},
 	}
 	evs = append(evs, session(0, run, "g1", "s1", "builder", nil)...)
-	evs = append(evs, session(0, run, "g1", "s2", "tester", nil)...)
+	evs = append(evs, session(0, run, "g1", "s2", "qa", nil)...)
 	evs = append(evs, session(0, run, "g2", "s3", "builder", nil)...)
 	evs = append(evs, bus.Event{
 		Type:    bus.TypeRunComplete,

@@ -50,15 +50,15 @@ func TestInvalidWriteKeepsFileBytes(t *testing.T) {
 	r := mustCreate(t, m)
 	before := readBytes(t, statePath(root, testGroup))
 	cases := map[string]func(g *GroupState){
-		"state.run":                       func(g *GroupState) { g.Run = "" },
-		"state.stage":                     func(g *GroupState) { g.Stage = "nowhere" },
-		"state.config_hash":               func(g *GroupState) { g.ConfigHash = "abc" },
-		"state.tasks[0].state":            func(g *GroupState) { g.Tasks[0].State = "lost" },
-		"state.test_review.tester.result": func(g *GroupState) { g.TestReview.Tester.Result = "maybe" },
-		"state.block.reason":              func(g *GroupState) { g.Block.Reason = "bad_luck" },
-		"state.prior":                     func(g *GroupState) { g.Prior = StageBuild },
-		"state.outcome":                   func(g *GroupState) { g.Outcome = "complete" },
-		"state.group":                     func(g *GroupState) { g.Group = "other" },
+		"state.run":                   func(g *GroupState) { g.Run = "" },
+		"state.stage":                 func(g *GroupState) { g.Stage = "nowhere" },
+		"state.config_hash":           func(g *GroupState) { g.ConfigHash = "abc" },
+		"state.tasks[0].state":        func(g *GroupState) { g.Tasks[0].State = "lost" },
+		"state.test_review.qa.result": func(g *GroupState) { g.TestReview.QA.Result = "maybe" },
+		"state.block.reason":          func(g *GroupState) { g.Block.Reason = "bad_luck" },
+		"state.prior":                 func(g *GroupState) { g.Prior = StageBuild },
+		"state.outcome":               func(g *GroupState) { g.Outcome = "complete" },
+		"state.group":                 func(g *GroupState) { g.Group = "other" },
 	}
 	for field, mut := range cases {
 		g := goodState()

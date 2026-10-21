@@ -162,7 +162,7 @@ func TestLayerOrderForWallTime(t *testing.T) {
 	if wall() != 90 {
 		t.Fatalf("override should beat the flat key: %d", wall())
 	}
-	if a, _ := m.GetAgent("tester"); a.Limits.WallMin != 45 {
+	if a, _ := m.GetAgent("qa"); a.Limits.WallMin != 45 {
 		t.Fatalf("other roles keep the flat key: %d", a.Limits.WallMin)
 	}
 	it, _ := m.GetConfigItem("agents.builder.session_wall_min")
@@ -276,7 +276,7 @@ func TestRoleFilesAreChecked(t *testing.T) {
 		"bad chain":       func(s string) string { return strings.Replace(s, `"anthropic-api"`, `"mystery-link"`, 1) },
 		"duplicate chain": func(s string) string { return strings.Replace(s, `"anthropic-api"`, `"claude-cli"`, 1) },
 		"foreign result": func(s string) string {
-			return strings.Replace(s, `komodo:agent/builder/result/1`, `komodo:agent/tester/result/1`, 1)
+			return strings.Replace(s, `komodo:agent/builder/result/1`, `komodo:agent/qa/result/1`, 1)
 		},
 	}
 	for name, f := range cases {
@@ -286,9 +286,9 @@ func TestRoleFilesAreChecked(t *testing.T) {
 	}
 	// Two roles sharing one result id.
 	fsys := embedCopy(t)
-	p := "agents/tester/agent.json"
+	p := "agents/qa/agent.json"
 	fsys[p].Data = []byte(
-		strings.Replace(string(fsys[p].Data), `komodo:agent/tester/result/1`, `komodo:agent/builder/result/1`, 1),
+		strings.Replace(string(fsys[p].Data), `komodo:agent/qa/result/1`, `komodo:agent/builder/result/1`, 1),
 	)
 	if _, err := newManager(t.TempDir(), fsys, Known{}, probeAll); err == nil {
 		t.Error("shared result id: want a load error")
@@ -347,7 +347,7 @@ func TestEmbeddedDataIsValid(t *testing.T) {
 			t.Errorf("default of %s is not normalised: %v", s.Name, s.Default)
 		}
 	}
-	for _, r := range []string{"planner", "builder", "tester", "reviewer"} {
+	for _, r := range []string{"planner", "builder", "qa", "reviewer"} {
 		b, err := os.ReadFile(filepath.Join("..", "..", "embed", "agents", r, "prompt.md"))
 		if isPlaceholder := strings.Contains(string(b), "placeholder"); err != nil || isPlaceholder == (r == "reviewer") {
 			t.Errorf("prompt.md of %s: %v (placeholder %v)", r, err, isPlaceholder)
@@ -366,7 +366,7 @@ func TestResetPlans(t *testing.T) {
 		30,
 		"agents.builder.session_idle_min",
 		20,
-		"agents.tester.session_wall_min",
+		"agents.qa.session_wall_min",
 		30,
 	)
 	cs, err := m.PlanReset("limits.group_retries")

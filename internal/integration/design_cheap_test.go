@@ -59,14 +59,14 @@ func TestCommandListNamesThirteenAndOthersAreUnknown(t *testing.T) {
 	}
 }
 
-// Agent roles: the agent registry holds the 4 roles planner, builder, tester and reviewer.
+// Agent roles: the agent registry holds the 4 roles planner, builder, Quality Assurance and reviewer.
 func TestAgentRegistryHoldsFourRoles(t *testing.T) {
 	var got []string
 	for _, r := range agent.Roles() {
 		got = append(got, r.Name)
 	}
 	slices.Sort(got)
-	if want := []string{"builder", "planner", "reviewer", "tester"}; !slices.Equal(got, want) {
+	if want := []string{"builder", "planner", "qa", "reviewer"}; !slices.Equal(got, want) {
 		t.Fatalf("roles = %v, want %v", got, want)
 	}
 }

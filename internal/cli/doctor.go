@@ -379,17 +379,18 @@ func runHarmless(ctx context.Context, be sandbox.Backend) error {
 	return cmd.Run()
 }
 
-// checkDocker looks for the Docker tools and asks the daemon; without Docker the Tester uses the operating-system sandbox.
+// checkDocker looks for the Docker tools and asks the daemon; without Docker Quality Assurance uses the
+// operating-system sandbox.
 func checkDocker(_ context.Context, h Host) Check {
 	if _, err := h.lookPath("docker"); err != nil {
 		return pass(
-			"docker", "Docker is not installed; the Tester uses the operating-system sandbox and the run report says so",
+			"docker", "Docker is not installed; Quality Assurance uses the operating-system sandbox and the report says so",
 		)
 	}
 	be := h.docker()
 	if err := be.Check(); err != nil {
 		return fail(
-			"docker", err.Error(), "start Docker, or the Tester falls back to the operating-system sandbox",
+			"docker", err.Error(), "start Docker, or Quality Assurance falls back to the operating-system sandbox",
 		)
 	}
 	return pass("docker", "the Docker daemon answers")

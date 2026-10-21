@@ -106,8 +106,8 @@ func TestAWorkOutcomeResetsTheGroupsWaits(t *testing.T) {
 	}
 }
 
-// judgeEndScript is a Task Manager that builds cleanly; its first Test and Review start ends the tester crash and then the
-// reviewer with reason, and later ones only count; starts counts the Test and Review starts.
+// judgeEndScript is a Task Manager that builds cleanly; its first Test and Review start ends Quality Assurance crash and
+// then the reviewer with reason, and later ones only count; starts counts the Test and Review starts.
 func judgeEndScript(starts *atomic.Int64, reason string) func(string) func(*tmEnv) {
 	return func(string) func(*tmEnv) {
 		return func(e *tmEnv) {
@@ -138,7 +138,7 @@ func judgeEndScript(starts *atomic.Int64, reason string) func(string) func(*tmEn
 						}
 
 						e.say(fact("session.end", map[string]any{
-							"agent": "tester", "session": "s-tester", "link": "claude-cli", "reason": "crash",
+							"agent": "qa", "session": "s-qa", "link": "claude-cli", "reason": "crash",
 							"stage": "test_review",
 						}))
 						e.say(fact("session.end", map[string]any{
@@ -170,7 +170,7 @@ func TestANonBlockerErrorLeavesTheGroupsRunningWaitArmed(t *testing.T) {
 			time.Sleep(150 * time.Millisecond)
 
 			if got := starts.Load(); got != 1 {
-				t.Fatalf("%d Test and Review starts before the tester's wait ended, want 1", got)
+				t.Fatalf("%d Test and Review starts before Quality Assurance's wait ended, want 1", got)
 			}
 
 			r.clock.Advance(time.Minute)

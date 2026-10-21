@@ -27,7 +27,7 @@ func judgeWithRunner(t *testing.T, run agent.CommandRunner) Outcome {
 	failed := result(
 		`{"items":[{"item":"a1","pass":false,"evidence":"no"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 	)
-	out, err := roles["tester"].Judge(context.Background(), failed)
+	out, err := roles["qa"].Judge(context.Background(), failed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,9 +35,9 @@ func judgeWithRunner(t *testing.T, run agent.CommandRunner) Outcome {
 	return out
 }
 
-func TestTesterJudgeListsAFailedItemWhoseRerunErroredAsUnconfirmed(t *testing.T) {
+func TestQAJudgeListsAFailedItemWhoseRerunErroredAsUnconfirmed(t *testing.T) {
 	out := judgeWithRunner(t, func(context.Context, string) (int, string, error) {
-		return -1, "", errors.New("the tester has no sandbox instance")
+		return -1, "", errors.New("Quality Assurance has no sandbox instance")
 	})
 
 	if out.Kind != OutcomePass || len(out.Summary) != 2 {
@@ -48,14 +48,14 @@ func TestTesterJudgeListsAFailedItemWhoseRerunErroredAsUnconfirmed(t *testing.T)
 	}
 }
 
-func TestTesterJudgeConfirmsAFailedItemWhoseRerunPassedTheOutputLimitByItsExitCode(t *testing.T) {
+func TestQAJudgeConfirmsAFailedItemWhoseRerunPassedTheOutputLimitByItsExitCode(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
-	if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+	if _, err := r.m.instance(context.Background(), "qa"); err != nil {
 		t.Fatal(err)
 	}
 
 	big := fmt.Sprintf("head -c %d /dev/zero | tr '\\0' x; exit 1", checkOutputCap+1000)
-	run := r.m.Runner("tester")
+	run := r.m.Runner("qa")
 	out := judgeWithRunner(t, func(ctx context.Context, _ string) (int, string, error) { return run(ctx, big) })
 
 	if out.Kind != OutcomeReturn || len(out.Findings) != 1 ||

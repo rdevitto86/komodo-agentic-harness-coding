@@ -252,7 +252,7 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		Items:    items,
 		Worktree: tspec.Lease.Worktree,
 		Files:    func() []string { return m.Files() },
-		Runner:   func() agent.CommandRunner { return m.Runner("tester") },
+		Runner:   func() agent.CommandRunner { return m.Runner("qa") },
 	})
 	if err != nil {
 		return engine.Channels{}, err
@@ -292,7 +292,7 @@ func (k *repoKit) taskSpec(spec engine.GroupSpec, g intake.Group, cmds map[strin
 
 	perms := map[string]task.Permissions{}
 
-	for _, name := range []string{"builder", "tester", "reviewer"} {
+	for _, name := range []string{"builder", "qa", "reviewer"} {
 		a, _ := k.s.cfg.GetAgent(name)
 		perms[name] = permissionsOf(a)
 	}
@@ -574,8 +574,8 @@ func (b baselineStore) Save(_ context.Context, bl agent.Baseline) error {
 	return b.st.SaveBaseline(b.group, state.BaselineRecord{Tree: bl.TreeHash, Passed: bl.Passed})
 }
 
-// checkoutBase writes the base commit's files into a folder under the group's build folder, which the Tester's sandbox can
-// read and write, and returns the folder. A finished checkout is reused.
+// checkoutBase writes the base commit's files into a folder under the group's build folder, which Quality
+// Assurance's sandbox can read and write, and returns the folder. A finished checkout is reused.
 func checkoutBase(ctx context.Context, root, base, buildDir string) (string, error) {
 	// doneMark is the file written last, so a half-written checkout is made again.
 	const doneMark = ".komodo-base"

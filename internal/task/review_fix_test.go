@@ -15,14 +15,14 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// ctxBriefs blocks the tester's brief until its context ends, as a slow Context Manager would.
+// ctxBriefs blocks Quality Assurance's brief until its context ends, as a slow Context Manager would.
 type ctxBriefs struct {
 	inner Briefer
 	n     *atomic.Int32
 }
 
 func (b ctxBriefs) Brief(ctx context.Context, name string, slots map[string]string) (Brief, error) {
-	if name == "tester" && b.n.Add(1) == 1 {
+	if name == "qa" && b.n.Add(1) == 1 {
 		<-ctx.Done()
 		return Brief{}, ctx.Err()
 	}
@@ -53,7 +53,7 @@ func TestBuilderPauseDoesNotSkipTheChecksOfTestReview(t *testing.T) {
 	r.model.resume = func(llm.Session, llm.Input) (llm.Stream, error) {
 		return building(r.wt, "a.go", "package a\n", builderDone)(llm.Session{})
 	}
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanupWith(func(ctx context.Context) error { return r.m.Resume(ctx, wake) })
 	if r.checks.calls != 1 {
@@ -74,7 +74,7 @@ func TestPauseRecordedBeforeRunHoldsTheGroup(t *testing.T) {
 	}
 }
 
-func TestReviewerReturnWhileTheTesterBriefsDoesNotFailTheGroup(t *testing.T) {
+func TestReviewerReturnWhileTheQABriefsDoesNotFailTheGroup(t *testing.T) {
 	r := newPipeRig(t, rigOpts{
 		mut: func(_ *GroupSpec, c *Collaborators) { c.Briefs = ctxBriefs{c.Briefs, new(atomic.Int32)} },
 	})
@@ -84,7 +84,7 @@ func TestReviewerReturnWhileTheTesterBriefsDoesNotFailTheGroup(t *testing.T) {
 		building(r.wt, "a.go", "package a\n// fixed\n", builderDone),
 	)
 	r.model.on("reviewer", sayResult(reviewerNot), sayResult(reviewerMet))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.reachCleanup()
 	if r.rt.progress().Returns != 1 {
 		t.Fatalf("progress %+v", r.rt.progress())
@@ -95,7 +95,7 @@ func TestPanickingJudgeNeverPublishes(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.m.c.Roles["reviewer"] = panicRole{r.m.c.Roles["reviewer"]}
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	err := r.run()
 	if err == nil || len(r.cm.published()) != 0 {
 		t.Fatalf("Run returned %v, published %d", err, len(r.cm.published()))
@@ -168,7 +168,7 @@ func TestLostResumeStartsFreshWithTheBriefAndTheInputWritten(t *testing.T) {
 		fresh = s
 		return building(r.wt, "a.go", "package a\n", builderDone)(s)
 	})
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	r.reachCleanup()
 	for _, f := range []string{"brief.md", "system.md"} {
@@ -193,7 +193,7 @@ func TestScopeAnswerReachesOnlyTheNextBrief(t *testing.T) {
 	}
 }
 
-func TestTesterSummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
+func TestQASummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
 	roles, err := NewRoles(RoleConfig{Group: "tg-1", Tasks: []TaskSpec{
 		{ID: "t1", Title: "x", DoneWhen: "build"},
 	}, Worktree: t.TempDir(),
@@ -208,7 +208,7 @@ func TestTesterSummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := roles["tester"].Judge(
+	out, err := roles["qa"].Judge(
 		context.Background(),
 		result(
 			`{"items":[{"item":"a1","pass":false,"evidence":"no"},{"item":"a2","pass":false,"evidence":"no"}],`+

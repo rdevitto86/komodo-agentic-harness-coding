@@ -12,8 +12,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 )
 
-// TestScorecardMatchesHandCount checks first-pass rate, returns per group, finding precision, tester false fails, cache
-// share and per-group cost against hand-counted values.
+// TestScorecardMatchesHandCount checks first-pass rate, returns per group, finding precision, Quality Assurance false fails,
+// cache share and per-group cost against hand-counted values.
 func TestScorecardMatchesHandCount(t *testing.T) {
 	common := t.TempDir()
 	dir := RepoDir(common)
@@ -75,7 +75,7 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 			Data: &bus.FindingVerified{FindingSubmit: finding, Severity: "major", In: "head"}}))
 	}
 	ls = append(ls,
-		at(11, end("G1", "tt1", "tester", nil, &bus.VerifyOutcome{Failed: []string{"a"}, Disputed: []string{"b"}})),
+		at(11, end("G1", "tt1", "qa", nil, &bus.VerifyOutcome{Failed: []string{"a"}, Disputed: []string{"b"}})),
 		at(12, bus.Event{Type: bus.TypeRunComplete, Subtype: "done", Data: &bus.RunDone{Done: []bus.ID{"G1", "G2"}}}),
 	)
 	writeLog(t, bus.EventsDir(common), "run-a", joinLines(ls...))
@@ -87,7 +87,7 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 		{Session: "b1", Run: "run-a", Group: "G1", Agent: "builder", Model: "m1", StartedAt: base, Usage: u1},
 		{Session: "b2", Run: "run-a", Group: "G2", Agent: "builder", Model: "m1", StartedAt: base, Usage: u2},
 		{Session: "r1", Run: "run-a", Group: "G1", Agent: "reviewer", Model: "m2", StartedAt: base},
-		{Session: "tt1", Run: "run-a", Group: "G1", Agent: "tester", Model: "m3", StartedAt: base},
+		{Session: "tt1", Run: "run-a", Group: "G1", Agent: "qa", Model: "m3", StartedAt: base},
 	} {
 		b, _ := json.Marshal(r)
 		recs = append(recs, string(b))
@@ -100,7 +100,7 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 	if err != nil || len(sc.Rows) != 3 {
 		t.Fatalf("Scorecard = %+v, %v", sc, err)
 	}
-	b, r, tt := sc.Rows[0], sc.Rows[1], sc.Rows[2]
+	b, tt, r := sc.Rows[0], sc.Rows[1], sc.Rows[2]
 	if b.Agent != "builder" || b.Model != "m1" || !near(b.FirstPassRate, 0.75) || !near(b.ReturnsPerGroup, 0.5) ||
 		!near(b.CacheReadShare, 0.4) {
 		t.Errorf("builder row = %+v", b)
@@ -111,8 +111,8 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 	if r.Agent != "reviewer" || !near(r.FindingPrecision, 0.75) || r.TokensPerGroup != nil || r.USDPerGroup != nil {
 		t.Errorf("reviewer row = %+v", r)
 	}
-	if tt.Agent != "tester" || !near(tt.TesterFalseFail, 0.5) || tt.TokensPerGroup != nil {
-		t.Errorf("tester row = %+v", tt)
+	if tt.Agent != "qa" || !near(tt.QAFalseFail, 0.5) || tt.TokensPerGroup != nil {
+		t.Errorf("qa row = %+v", tt)
 	}
 }
 

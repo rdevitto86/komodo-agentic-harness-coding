@@ -186,21 +186,21 @@ func TestUnfinishedTestCountsAsFailed(t *testing.T) {
 	}
 }
 
-// Fix 4: the Tester answers every acceptance item exactly once.
-func TestTesterAcceptResultChecksItems(t *testing.T) {
+// Fix 4: Quality Assurance answers every acceptance item exactly once.
+func TestQAAcceptResultChecksItems(t *testing.T) {
 	tasks, items := []string{"t1"}, []string{"ac-1", "ac-2"}
-	mk := func(ids ...string) TesterResult {
-		r := TesterResult{Tasks: []TaskConfirmation{{Task: "t1", Confirmation: Confirmed}}}
+	mk := func(ids ...string) QAResult {
+		r := QAResult{Tasks: []TaskConfirmation{{Task: "t1", Confirmation: Confirmed}}}
 		for _, id := range ids {
 			r.Items = append(r.Items, ItemResult{Item: id, Pass: true, Evidence: "ok"})
 		}
 		return r
 	}
-	tr := NewTester()
+	tr := NewQA()
 	if err := tr.AcceptResult(tasks, items, mk("ac-2", "ac-1")); err != nil {
 		t.Errorf("exact items: %v", err)
 	}
-	for name, r := range map[string]TesterResult{
+	for name, r := range map[string]QAResult{
 		"missing":  mk("ac-1"),
 		"repeated": mk("ac-1", "ac-2", "ac-1"),
 		"unknown":  mk("ac-1", "ac-2", "ac-9"),

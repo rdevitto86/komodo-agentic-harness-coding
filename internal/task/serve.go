@@ -374,7 +374,7 @@ func (m *Manager) Recheck(ctx context.Context) {
 		return
 	}
 
-	inst, err := m.newInstance(ctx, "tester", "recheck")
+	inst, err := m.newInstance(ctx, "qa", "recheck")
 	if err != nil {
 		m.c.OnRecheck(false, err.Error())
 		return

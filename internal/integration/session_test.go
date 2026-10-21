@@ -90,7 +90,7 @@ func newRig(t *testing.T, claudeOut []string, apiReplies ...func(w http.Response
 		t.Fatalf("subscribe: %v", err)
 	}
 	tools := map[string][]string{}
-	for _, name := range []string{"planner", "builder", "tester", "reviewer"} {
+	for _, name := range []string{"planner", "builder", "qa", "reviewer"} {
 		a, _ := r.cfg.GetAgent(name)
 		tools[name] = a.Tools
 	}

@@ -180,8 +180,8 @@ func providerKey(cfg *config.Manager, setting string) string {
 	return os.Getenv(name)
 }
 
-// buildBackends picks the mechanism of each role: Docker for the Tester and the operating-system sandbox for the Builder.
-// It also returns the operating-system sandbox, which the Tester falls back to when Docker is missing.
+// buildBackends picks the mechanism of each role: Docker for Quality Assurance and the operating-system sandbox for the
+// Builder. It also returns the operating-system sandbox, which Quality Assurance falls back to when Docker is missing.
 func buildBackends(image, home string) (map[string]sandbox.Backend, sandbox.Backend) {
 	var b sandbox.Backend
 	if _, err := exec.LookPath("sandbox-exec"); err == nil {
@@ -190,7 +190,7 @@ func buildBackends(image, home string) (map[string]sandbox.Backend, sandbox.Back
 		b = sandbox.NewBubblewrap(sandbox.BubblewrapOptions{Home: home})
 	}
 
-	return map[string]sandbox.Backend{"builder": b, "tester": sandbox.NewDocker(sandbox.DockerOptions{Image: image})}, b
+	return map[string]sandbox.Backend{"builder": b, "qa": sandbox.NewDocker(sandbox.DockerOptions{Image: image})}, b
 }
 
 // gitOut runs the host git in the working directory and returns its trimmed output.

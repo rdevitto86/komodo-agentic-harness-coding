@@ -263,8 +263,8 @@ func (c *calc) sessionStart() bool {
 				break
 			}
 		}
-	case "tester":
-		s.TestReview.Tester.Session, s.TestReview.Tester.Result = string(d.Session), ""
+	case "qa":
+		s.TestReview.QA.Session, s.TestReview.QA.Result = string(d.Session), ""
 	case "reviewer":
 		s.TestReview.Reviewer.Session, s.TestReview.Reviewer.Result = string(d.Session), ""
 	}
@@ -419,7 +419,7 @@ func (c *calc) timerExtend() bool {
 
 // anyLive reports whether any session of the group is running.
 func (c *calc) anyLive() bool {
-	for _, r := range []state.RoundState{c.s.TestReview.Tester, c.s.TestReview.Reviewer} {
+	for _, r := range []state.RoundState{c.s.TestReview.QA, c.s.TestReview.Reviewer} {
 		if r.Session != "" && r.Result == "" {
 			return true
 		}

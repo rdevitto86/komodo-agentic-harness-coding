@@ -19,7 +19,7 @@ func TestScopeRequestForAProtectedSecretOrOtherGroupPathIsDeniedWithoutEscalatin
 		var inputs []string
 		resumeWith(r, &inputs, builderDone)
 		r.model.on("builder", sayResult(needsScope(p)))
-		r.model.on("tester", sayResult(testerPass))
+		r.model.on("qa", sayResult(qaPass))
 		r.model.on("reviewer", sayResult(reviewerMet))
 		r.reachCleanup()
 		if len(r.rt.escalations()) != 0 {
@@ -36,7 +36,7 @@ func TestSecondScopeRequestFromOneTaskIsDeniedAtOnce(t *testing.T) {
 	var inputs []string
 	resumeWith(r, &inputs, needsScope("lib/z.go"), builderDone)
 	r.model.on("builder", sayResult(needsScope("lib/y.go")))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	if err := r.run(); !errors.Is(err, ErrHeld) {
 		t.Fatalf("Run returned %v", err)
@@ -63,7 +63,7 @@ func TestApprovedProtectedPathIsNotAppliedAndAnApprovedOneReachesScopeJSONAndThe
 	var inputs []string
 	resumeWith(r, &inputs, builderDone)
 	r.model.on("builder", sayResult(needsScope("lib/y.go")))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	if err := r.run(); !errors.Is(err, ErrHeld) {
 		t.Fatalf("Run returned %v", err)
@@ -116,7 +116,7 @@ func TestDeniedScopeAnswerResumesTheBuilderWithADenial(t *testing.T) {
 	var inputs []string
 	resumeWith(r, &inputs, builderDone)
 	r.model.on("builder", sayResult(needsScope("lib/y.go")))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	if err := r.run(); !errors.Is(err, ErrHeld) {
 		t.Fatalf("Run returned %v", err)

@@ -128,12 +128,12 @@ func TestPreviewListsWithoutRemoving(t *testing.T) {
 	g := e.addGroup("g1", testBranch)
 	e.land(g)
 	e.holdLease(g, lease.StateRevoked)
-	tester, temp := e.addCheckouts(g)
+	qa, temp := e.addCheckouts(g)
 	rep, err := e.h.Preview(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{g.wt, tester, temp} {
+	for _, p := range []string{g.wt, qa, temp} {
 		if !exists(p) {
 			t.Fatalf("%s was removed", p)
 		}
@@ -145,7 +145,7 @@ func TestPreviewListsWithoutRemoving(t *testing.T) {
 	for _, it := range rep.Removed {
 		kinds[it.Kind] = true
 	}
-	for _, k := range []string{KindContainer, KindTester, KindTemp, KindWorktree, KindBranch} {
+	for _, k := range []string{KindContainer, KindQA, KindTemp, KindWorktree, KindBranch} {
 		if !kinds[k] {
 			t.Errorf("preview lacks kind %s: %+v", k, rep.Removed)
 		}

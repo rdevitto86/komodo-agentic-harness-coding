@@ -142,10 +142,10 @@ func (r *run) container() {
 	r.removed(KindContainer, r.group)
 }
 
-// checkouts removes the group's tester checkout and session temporary folder.
+// checkouts removes the group's Quality Assurance checkout and session temporary folder.
 func (r *run) checkouts() {
 	type checkoutKind struct{ kind, root string }
-	for _, c := range []checkoutKind{{KindTester, r.h.Roots.Testers}, {KindTemp, r.h.Roots.Temp}} {
+	for _, c := range []checkoutKind{{KindQA, r.h.Roots.QA}, {KindTemp, r.h.Roots.Temp}} {
 		if c.root == "" || !r.proceed() {
 			continue
 		}

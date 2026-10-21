@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	FlakeReruns    = 2 // solo reruns of a failing test or a failed Tester item
-	TesterRestarts = 1 // restarts of the Tester after a dispute
+	FlakeReruns = 2 // solo reruns of a failing test or a failed Quality Assurance item
+	QARestarts  = 1 // restarts of Quality Assurance after a dispute
 )
 
-// DisputeReason is why the Tester failed an item that Go's reruns passed.
+// DisputeReason is why Quality Assurance failed an item that Go's reruns passed.
 type DisputeReason string
 
 const (
@@ -24,7 +24,7 @@ const (
 	ReasonRealFailure  DisputeReason = "real_failure"
 )
 
-// Confirmation is the Tester's answer for one task identifier.
+// Confirmation is Quality Assurance's answer for one task identifier.
 type Confirmation string
 
 const (
@@ -40,24 +40,24 @@ type Item struct {
 	Needs []string // network, docker or service:<name>
 }
 
-// ItemResult is the Tester's pass or fail for one item.
+// ItemResult is Quality Assurance's pass or fail for one item.
 type ItemResult struct {
 	Item string `json:"item" desc:"The acceptance item identifier from the brief."`
 	Pass bool   `json:"pass" desc:"True when the item holds."`
 	// the output or observation behind the answer
 	Evidence string `json:"evidence" desc:"The command output or observation behind the answer; never empty."`
-	// after a restart with Go's output: why the item failed for the Tester
+	// after a restart with Go's output: why the item failed for Quality Assurance
 	Reason DisputeReason `json:"reason,omitempty" desc:"Only after a restart that shows rerun output: why the item failed."`
 }
 
-// TaskConfirmation is the Tester's answer for one task identifier.
+// TaskConfirmation is Quality Assurance's answer for one task identifier.
 type TaskConfirmation struct {
 	Task         string       `json:"task" desc:"The task identifier from the brief."`
 	Confirmation Confirmation `json:"confirmation" desc:"confirmed when its acceptance holds, else not_confirmed."`
 }
 
-// TesterResult is the Tester's whole final call.
-type TesterResult struct {
+// QAResult is Quality Assurance's whole final call.
+type QAResult struct {
 	Items []ItemResult       `json:"items" desc:"Exactly one entry per acceptance item, as an array of objects."`
 	Tasks []TaskConfirmation `json:"tasks" desc:"Exactly one entry per task identifier, as an array of objects."`
 }
@@ -72,9 +72,9 @@ const (
 	RerunUnconfirmed RerunOutcome = "unconfirmed" // the item has no command, so Go ran nothing
 )
 
-// TesterVerdict is the Tester's outcome as the approval rule reads it.
-type TesterVerdict struct {
-	Ended    bool     `json:"ended"`              // the Tester's session ended with a valid result and Go's reruns finished
+// QAVerdict is Quality Assurance's outcome as the approval rule reads it.
+type QAVerdict struct {
+	Ended    bool     `json:"ended"`              // Quality Assurance ended with a valid result and Go's reruns finished
 	Restarts int      `json:"restarts,omitempty"` // restarts spent after a dispute
 	Pass     bool     `json:"pass"`               // every task confirmed and every item passed or skipped
 	NotMet   []string `json:"not_met,omitempty"`  // task identifiers marked not_confirmed
@@ -84,43 +84,43 @@ type TesterVerdict struct {
 	Skipped  []string `json:"skipped,omitempty"`  // items with needs: or no command, never blocking
 }
 
-// Tester is the Go side of a Tester session.
-type Tester interface {
+// Quality Assurance is the Go side of a Quality Assurance session.
+type QA interface {
 	// Rerun runs an item's command twice in the sandbox and returns the outcome and the last output.
 	Rerun(ctx context.Context, run CommandRunner, it Item) (RerunOutcome, string, error)
 	// AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item, or leaves evidence empty.
-	AcceptResult(tasks, items []string, r TesterResult) error
+	AcceptResult(tasks, items []string, r QAResult) error
 }
 
-// TesterRole returns the compiled Tester role.
-func TesterRole() Role {
-	return newRole("tester",
+// QARole returns the compiled Quality Assurance role.
+func QARole() Role {
+	return newRole("qa",
 		[]string{"read", "search", "run", "run_check"},
 		[]string{"build", "test"},
 		[]string{"R1"},
 		[]string{"repo_profile", "group", "tasks", "acceptance"},
 		[]string{"repo_context", "standards", "diff", "checks", "baseline"},
-		"komodo:agent/tester/result/1", TesterResult{}, true)
+		"komodo:agent/qa/result/1", QAResult{}, true)
 }
 
-// NewTester returns the Go side of a Tester session.
-func NewTester() Tester { return goTester{} }
+// NewQA returns the Go side of a Quality Assurance session.
+func NewQA() QA { return goQA{} }
 
-// goTester is the Tester with no state of its own.
-type goTester struct{}
+// goQA is Quality Assurance with no state of its own.
+type goQA struct{}
 
-// ParseTesterResult decodes a Tester final call, refusing unknown fields.
-func ParseTesterResult(raw []byte) (TesterResult, error) {
-	var r TesterResult
+// ParseQAResult decodes a Quality Assurance final call, refusing unknown fields.
+func ParseQAResult(raw []byte) (QAResult, error) {
+	var r QAResult
 	if err := core.DecodeStrict(raw, &r); err != nil {
-		return TesterResult{}, fmt.Errorf("decode tester result: %w", err)
+		return QAResult{}, fmt.Errorf("decode Quality Assurance result: %w", err)
 	}
 	return r, nil
 }
 
 // AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item,
 // leaves evidence empty or uses a word outside the schema.
-func (goTester) AcceptResult(tasks, items []string, r TesterResult) error {
+func (goQA) AcceptResult(tasks, items []string, r QAResult) error {
 	got := make([]string, len(r.Tasks))
 	for i, t := range r.Tasks {
 		got[i] = t.Task

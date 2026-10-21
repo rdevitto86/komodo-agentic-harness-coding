@@ -121,7 +121,7 @@ func (c *fakeCache) Put(ns cache.Namespace, key cache.Key, data []byte) error {
 
 // workers and steerList are the allow list and the steering phrases the tests start from.
 var (
-	workers   = []string{"builder", "reviewer", "tester"}
+	workers   = []string{"builder", "reviewer", "qa"}
 	steerList = []string{"ignore previous instructions"}
 )
 
@@ -154,7 +154,7 @@ func testDeps(t *testing.T) Deps {
 		Home:    t.TempDir(),
 		Tools: map[string][]string{
 			"planner": {"read", "search"}, "builder": {"read", "edit", "run", "skill"},
-			"tester": {"read", "run"}, "reviewer": {"read", "search"},
+			"qa": {"read", "run"}, "reviewer": {"read", "search"},
 		},
 	}
 }
@@ -181,7 +181,7 @@ func slotsFor(agent string) Values {
 		v[Goal] = "add a lock"
 	case "builder":
 		v[Group], v[Tasks], v[Files], v[FileContents] = "tg-1", "task list", "a.go", "package a"
-	case "tester":
+	case "qa":
 		v[Group], v[Tasks], v[Acceptance] = "tg-1", "task list", "item 1"
 	case "reviewer":
 		v[Group], v[Tasks], v[Files], v[Diff] = "tg-1", "task list", "a.go", "diff text"

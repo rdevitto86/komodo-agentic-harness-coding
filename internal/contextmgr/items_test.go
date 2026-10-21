@@ -49,7 +49,7 @@ func TestSetRefusals(t *testing.T) {
 		"unknown name": {SkillSet{Name: "standards-none", Enabled: true, Allow: workers}, "name"},
 		"bad agent":    {SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder", "janitor"}}, "allow"},
 		"always out": {
-			SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder"}, Always: []string{"tester"}},
+			SkillSet{Name: "standards-go", Enabled: true, Allow: []string{"builder"}, Always: []string{"qa"}},
 			"always",
 		},
 	}

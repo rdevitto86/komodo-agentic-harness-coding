@@ -32,7 +32,7 @@ type Verdict struct {
 	Summary []string `json:"summary"` // result lines the pull request body prints
 }
 
-// Approval is what the Task Manager hands over when the Tester and Reviewer both approve.
+// Approval is what the Task Manager hands over when Quality Assurance and Reviewer both approve.
 type Approval struct {
 	Run        bus.ID      `json:"run"`
 	Group      bus.ID      `json:"group"`
@@ -45,7 +45,7 @@ type Approval struct {
 	Branch     string      `json:"branch"`      // group branch
 	Fence      lease.Fence `json:"fence"`       // fence of the lease the Task Manager holds
 	Tree       string      `json:"tree"`        // tree hash both agents approved
-	Tester     Verdict     `json:"tester"`
+	QA         Verdict     `json:"qa"`
 	Reviewer   Verdict     `json:"reviewer"`
 	Facts      PRFacts     `json:"facts"`
 }

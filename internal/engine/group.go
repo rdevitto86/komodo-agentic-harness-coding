@@ -343,7 +343,7 @@ func (g *group) fillContext(o *Order) {
 	case StageBuild:
 		agents = []string{"builder"}
 	case StageTestReview:
-		agents = []string{"tester", "reviewer"}
+		agents = []string{"qa", "reviewer"}
 	default:
 		return
 	}

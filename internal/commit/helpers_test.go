@@ -105,7 +105,7 @@ func (w *world) approval(g group, groups ...string) Approval {
 	return Approval{
 		Run: "run-1", Group: bus.ID(g.id), Repo: "repo", Epic: "ep-1", Label: g.label, EpicGroups: groups,
 		Goal: "Goal of " + g.label, Worktree: g.wt, Branch: g.branch, Fence: g.fence, Tree: tree,
-		Tester:   Verdict{Tree: tree, Summary: []string{"14 tests pass"}},
+		QA:       Verdict{Tree: tree, Summary: []string{"14 tests pass"}},
 		Reviewer: Verdict{Tree: tree, Summary: []string{"0 blocking findings"}},
 		Facts:    PRFacts{DiffStat: "1 file changed", TasksClosed: []string{"tsk-" + g.label}},
 	}

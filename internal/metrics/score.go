@@ -18,7 +18,7 @@ type ScoreRow struct {
 	FirstPassRate    float64  `json:"first_pass_rate"`   // share of tasks done on the first attempt
 	ReturnsPerGroup  float64  `json:"returns_per_group"` // returns to Build per group
 	FindingPrecision float64  `json:"finding_precision"` // share of findings Go verified
-	TesterFalseFail  float64  `json:"tester_false_fail"` // share of tester failures the reruns passed
+	QAFalseFail      float64  `json:"qa_false_fail"`     // share of Quality Assurance failures the reruns passed
 	CacheReadShare   float64  `json:"cache_read_share"`  // cache-read tokens over input tokens
 	TokensPerGroup   *int64   `json:"tokens_per_group"`  // nil when no usage was reported
 	USDPerGroup      *float64 `json:"usd_per_group"`     // nil when no usage was reported
@@ -54,7 +54,7 @@ func (tl *tally) row(k rowKey) ScoreRow {
 		FirstPassRate:    ratio(tl.firstPass, tl.tasksDone),
 		ReturnsPerGroup:  ratio(tl.returns, len(tl.groups)),
 		FindingPrecision: ratio(tl.verified, tl.submitted),
-		TesterFalseFail:  ratio(tl.disputed, tl.failed+tl.disputed),
+		QAFalseFail:      ratio(tl.disputed, tl.failed+tl.disputed),
 		CacheReadShare:   ratio(tl.cacheRead, tl.tokensIn),
 	}
 	if n := len(tl.groupTokens); n > 0 {
@@ -201,7 +201,7 @@ func countEvents(
 			if k.agent == "builder" {
 				lastBuilder[groupKey{e.Run, e.Group}] = k
 			}
-			if k.agent == "tester" && d.Verify != nil {
+			if k.agent == "qa" && d.Verify != nil {
 				tl.failed += len(d.Verify.Failed)
 				tl.disputed += len(d.Verify.Disputed)
 			}

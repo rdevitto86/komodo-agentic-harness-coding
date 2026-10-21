@@ -13,7 +13,7 @@ type BaselineStore interface {
 	Save(ctx context.Context, b Baseline) error
 }
 
-// BaselineConfig supplies what producing a baseline reads besides the Tester's sandbox runner.
+// BaselineConfig supplies what producing a baseline reads besides Quality Assurance's sandbox runner.
 type BaselineConfig struct {
 	// stored baselines
 	Store BaselineStore
@@ -30,7 +30,7 @@ type BaselineConfig struct {
 }
 
 // NewBaselineSource returns the function that gives a base commit's baseline: the stored entry of its tree, else the
-// test class run in the Tester's sandbox on the base files. A run with no per-test results is not stored.
+// test class run in Quality Assurance's sandbox on the base files. A run with no per-test results is not stored.
 func NewBaselineSource(cfg BaselineConfig) func(context.Context, CommandRunner, string) (Baseline, error) {
 	return func(ctx context.Context, run CommandRunner, base string) (Baseline, error) {
 		tree, err := cfg.Tree(ctx, base)

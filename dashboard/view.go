@@ -29,8 +29,8 @@ type Session struct {
 // Sessions are the three agent sessions a group runs; the planner works once per run, at intake.
 type Sessions struct {
 	Builder  Session `json:"builder"`  // writes the code
-	Tester   Session `json:"tester"`   // checks the delta, in parallel with the reviewer
-	Reviewer Session `json:"reviewer"` // approves the work, in parallel with the tester
+	QA       Session `json:"qa"`       // checks the delta, in parallel with the reviewer
+	Reviewer Session `json:"reviewer"` // approves the work, in parallel with Quality Assurance
 }
 
 // Group is one task group: where it is, how far along, and who works on it.
@@ -44,12 +44,12 @@ type Group struct {
 	TasksTotal int      `json:"tasks_total"` // tasks planned
 	ElapsedMin int      `json:"elapsed_min"` // minutes since the group started
 	Brief      string   `json:"brief"`       // prompt the live session got
-	Sessions   Sessions `json:"sessions"`    // builder, tester and reviewer
+	Sessions   Sessions `json:"sessions"`    // builder, Quality Assurance and reviewer
 }
 
 // sessions lists a group's sessions in display order.
 func (g Group) sessions() []namedSession {
-	return []namedSession{{"builder", g.Sessions.Builder}, {"tester", g.Sessions.Tester}, {"reviewer", g.Sessions.Reviewer}}
+	return []namedSession{{"builder", g.Sessions.Builder}, {"qa", g.Sessions.QA}, {"reviewer", g.Sessions.Reviewer}}
 }
 
 // tone is the semantic colour of a group: blocked, paused, done or active.
@@ -96,7 +96,7 @@ type KPIs struct {
 
 // namedSession pairs a session with its agent name.
 type namedSession struct {
-	Role string // builder, tester or reviewer
+	Role string // builder, Quality Assurance or reviewer
 	Session
 }
 
@@ -122,8 +122,8 @@ type card struct {
 	Chip   string         // stage chip text, or the hold
 	Held   bool           // paused or blocked, so the card offers a resume
 	Pct    int            // task progress, 0 to 100
-	InTest bool           // tester and reviewer run side by side
-	Rows   []namedSession // builder, tester and reviewer
+	InTest bool           // Quality Assurance and reviewer run side by side
+	Rows   []namedSession // builder, Quality Assurance and reviewer
 	ID     string         // element id suffix
 }
 
@@ -156,7 +156,7 @@ var (
 	}
 
 	// Agents are the four agents whose model the page offers to change.
-	Agents = []string{"planner", "builder", "tester", "reviewer"}
+	Agents = []string{"planner", "builder", "qa", "reviewer"}
 
 	// Models are the agent `model` values the page offers, as the config agent group names them.
 	Models = []string{"opus", "sonnet", "haiku", "opus-prev"}

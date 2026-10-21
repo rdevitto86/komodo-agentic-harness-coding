@@ -302,67 +302,67 @@ func TestPrecisionVerifiedPct(t *testing.T) {
 }
 
 func TestDecide(t *testing.T) {
-	pass := TesterVerdict{Ended: true, Pass: true}
+	pass := QAVerdict{Ended: true, Pass: true}
 	rpass := ReviewerVerdict{Ended: true}
 	blocking := []Finding{{Rule: "correctness.1", File: "a.go", Line: 2, Quote: "q"}}
 	cases := []struct {
 		name   string
-		t      TesterVerdict
+		t      QAVerdict
 		r      ReviewerVerdict
 		want   Decision
 		reason string
 	}{
 		{"both pass", pass, rpass, DecisionApprove, ""},
 		{"reviewer still running", pass, ReviewerVerdict{}, DecisionWait, ""},
-		{"tester still running", TesterVerdict{}, rpass, DecisionWait, ""},
+		{"Quality Assurance still running", QAVerdict{}, rpass, DecisionWait, ""},
 		{
-			"reviewer fails first, tester cancelled",
-			TesterVerdict{},
+			"reviewer fails first, Quality Assurance cancelled",
+			QAVerdict{},
 			ReviewerVerdict{Ended: true, Blocking: blocking},
 			DecisionReturn,
 			"",
 		},
 		{"reviewer not_met", pass, ReviewerVerdict{Ended: true, NotMet: []string{"t1"}}, DecisionReturn, ""},
 		{
-			"tester item failed, reviewer done",
-			TesterVerdict{Ended: true, Failed: []string{"ac-1"}},
+			"Quality Assurance item failed, reviewer done",
+			QAVerdict{Ended: true, Failed: []string{"ac-1"}},
 			rpass,
 			DecisionReturn,
 			"",
 		},
 		{
-			"tester item failed, reviewer running",
-			TesterVerdict{Ended: true, Failed: []string{"ac-1"}},
+			"Quality Assurance item failed, reviewer running",
+			QAVerdict{Ended: true, Failed: []string{"ac-1"}},
 			ReviewerVerdict{},
 			DecisionWait,
 			"",
 		},
-		{"tester task not confirmed", TesterVerdict{Ended: true, NotMet: []string{"t1"}}, rpass, DecisionReturn, ""},
-		{"first dispute", TesterVerdict{Ended: true, Disputed: []string{"ac-1"}}, rpass, DecisionWait, ""},
+		{"Quality Assurance task not confirmed", QAVerdict{Ended: true, NotMet: []string{"t1"}}, rpass, DecisionReturn, ""},
+		{"first dispute", QAVerdict{Ended: true, Disputed: []string{"ac-1"}}, rpass, DecisionWait, ""},
 		{
 			"first dispute while reviewer fails",
-			TesterVerdict{Ended: true, Disputed: []string{"ac-1"}},
+			QAVerdict{Ended: true, Disputed: []string{"ac-1"}},
 			ReviewerVerdict{Ended: true, Blocking: blocking},
 			DecisionReturn,
 			"",
 		},
 		{
 			"second dispute",
-			TesterVerdict{Ended: true, Restarts: 1, Disputed: []string{"ac-1"}},
+			QAVerdict{Ended: true, Restarts: 1, Disputed: []string{"ac-1"}},
 			ReviewerVerdict{},
 			DecisionBlock,
-			BlockTester,
+			BlockQA,
 		},
-		{"split", TesterVerdict{Ended: true, Split: []string{"ac-1"}}, ReviewerVerdict{}, DecisionBlock, BlockFlaky},
+		{"split", QAVerdict{Ended: true, Split: []string{"ac-1"}}, ReviewerVerdict{}, DecisionBlock, BlockFlaky},
 		{"brief incomplete", pass, ReviewerVerdict{Ended: true, BriefIncomplete: true}, DecisionBlock, BlockBrief},
 		{
 			"unconfirmed item never blocks",
-			TesterVerdict{Ended: true, Pass: true, Skipped: []string{"ac-9"}},
+			QAVerdict{Ended: true, Pass: true, Skipped: []string{"ac-9"}},
 			rpass,
 			DecisionApprove,
 			"",
 		},
-		{"tester not passed with no detail", TesterVerdict{Ended: true}, rpass, DecisionReturn, ""},
+		{"Quality Assurance not passed with no detail", QAVerdict{Ended: true}, rpass, DecisionReturn, ""},
 	}
 	for _, c := range cases {
 		got := Decide(c.t, c.r)
@@ -370,7 +370,7 @@ func TestDecide(t *testing.T) {
 			t.Errorf("%s: %s %q, want %s %q", c.name, got.Decision, got.Reason, c.want, c.reason)
 		}
 	}
-	out := Decide(TesterVerdict{Ended: true, Failed: []string{"ac-1"}, NotMet: []string{"t2", "t1"}}, ReviewerVerdict{
+	out := Decide(QAVerdict{Ended: true, Failed: []string{"ac-1"}, NotMet: []string{"t2", "t1"}}, ReviewerVerdict{
 		Ended:    true,
 		Blocking: blocking,
 		NotMet:   []string{"t1"},

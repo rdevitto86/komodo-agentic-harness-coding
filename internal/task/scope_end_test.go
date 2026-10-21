@@ -65,7 +65,7 @@ func TestAutoDeniedScopeRequestDoesNotEndTheSessionNeedsScope(t *testing.T) {
 		var inputs []string
 		resumeWith(r, &inputs, builderDone)
 		r.model.on("builder", sayResult(needsScope(p)))
-		r.model.on("tester", sayResult(testerPass))
+		r.model.on("qa", sayResult(qaPass))
 		r.model.on("reviewer", sayResult(reviewerMet))
 		r.reachCleanup()
 
@@ -81,7 +81,7 @@ func TestSecondScopeRequestEndsDoneWhileTheFirstEndsNeedsScope(t *testing.T) {
 	var inputs []string
 	resumeWith(r, &inputs, needsScope("lib/z.go"), builderDone)
 	r.model.on("builder", sayResult(needsScope("lib/y.go")))
-	r.model.on("tester", sayResult(testerPass))
+	r.model.on("qa", sayResult(qaPass))
 	r.model.on("reviewer", sayResult(reviewerMet))
 	if err := r.run(); !errors.Is(err, ErrHeld) {
 		t.Fatalf("Run returned %v", err)

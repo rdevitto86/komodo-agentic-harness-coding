@@ -128,7 +128,7 @@ func groupDone(evs []event, id string) bool {
 	return false
 }
 
-// Rework (fixture B): the builder breaks Add; the Tester or Reviewer returns the group to the Builder, and after the bound
+// Rework (fixture B): the builder breaks Add; Quality Assurance or Reviewer returns the group to the Builder, and after the bound
 // it ends Blocked with reason regression.
 func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 	// Fixture B: the group may touch calc.go, so the builder's change to Add passes the scope guard and breaks TestAdd.
@@ -431,7 +431,7 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 		t.Errorf("replay listed %d events; the log holds %d whole lines, and replay must list every one", len(steps), lines)
 	}
 	if got := r.model.callCounts(); len(got) != len(calls) || got["builder"] != calls["builder"] ||
-		got["tester"] != calls["tester"] || got["reviewer"] != calls["reviewer"] {
+		got["qa"] != calls["qa"] || got["reviewer"] != calls["reviewer"] {
 		t.Errorf("replay called the model: %v then %v", calls, got)
 	}
 }
@@ -663,7 +663,7 @@ func TestRunAllRunsOnlyOpenGroupsInDependencyOrder(t *testing.T) {
 	}
 }
 
-// Sandbox: without Docker the Tester uses the operating-system sandbox and the run report says so; with Docker the
+// Sandbox: without Docker Quality Assurance uses the operating-system sandbox and the run report says so; with Docker the
 // validation runs in a per-group container that cleanup destroys.
 func TestSandboxFallsBackWithoutDocker(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
@@ -676,7 +676,7 @@ func TestSandboxFallsBackWithoutDocker(t *testing.T) {
 	t.Skip("blocked: the Docker half needs a real container runtime; the fake docker on PATH cannot run the validation")
 }
 
-// Free checks: a failing completion command returns to the Builder with its exact output, and the Tester and Reviewer make
+// Free checks: a failing completion command returns to the Builder with its exact output, and Quality Assurance and Reviewer make
 // 0 model calls.
 func TestFreeCheckFailureReturnsOutputToBuilder(t *testing.T) {
 	_, backlog := fixtureFiles(t)
@@ -707,8 +707,8 @@ func TestFreeCheckFailureReturnsOutputToBuilder(t *testing.T) {
 		}
 	}
 	time.Sleep(3 * time.Second)
-	if c := r.model.callCounts(); c["tester"] != 0 || c["reviewer"] != 0 {
-		t.Fatalf("the tester or reviewer was called after a failed free check: %v", c)
+	if c := r.model.callCounts(); c["qa"] != 0 || c["reviewer"] != 0 {
+		t.Fatalf("Quality Assurance or reviewer was called after a failed free check: %v", c)
 	}
 }
 
@@ -869,7 +869,7 @@ func TestModelLinksPaidOffPausesInsteadOfPaying(t *testing.T) {
 			t.Fatalf("the group neither paused nor blocked\n%s", r.evidence(evs))
 		}
 	}
-	if c := r.model.callCounts(); c["builder"]+c["tester"]+c["reviewer"] != 0 {
+	if c := r.model.callCounts(); c["builder"]+c["qa"]+c["reviewer"] != 0 {
 		t.Fatalf("the paid interface was called with paid use off: %v", c)
 	}
 	if has(evs, "run-failure", "group.blocked", "paid_refused") {

@@ -71,7 +71,7 @@ type EmptySlotError struct{ Slot Slot }
 
 var (
 	// ErrAgentUnknown means the agent is not one of the 4.
-	ErrAgentUnknown = errors.New("agent is not one of planner, builder, tester or reviewer")
+	ErrAgentUnknown = errors.New("agent is not one of planner, builder, Quality Assurance or reviewer")
 
 	// ErrContext means no link in the chain has a ceiling that holds the brief.
 	ErrContext = errors.New("brief exceeds half the measured context of every link in the chain")
@@ -79,7 +79,7 @@ var (
 
 var (
 	// Agents lists the 4 agents in a fixed order.
-	Agents = []string{"planner", "builder", "tester", "reviewer"}
+	Agents = []string{"planner", "builder", "qa", "reviewer"}
 
 	// slotTable names the slots each agent receives; an agent not named in a slot's row never gets it.
 	slotTable = map[string]slotRow{
@@ -91,7 +91,7 @@ var (
 			required: []Slot{RepoProfile, Group, Tasks, Files, FileContents},
 			optional: []Slot{RepoContext, Standards, Diff, Checks, Findings, ScopeAnswer, Unfinished, Specs},
 		},
-		"tester": {
+		"qa": {
 			required: []Slot{RepoProfile, Group, Tasks, Acceptance},
 			optional: []Slot{RepoContext, Standards, Diff, Checks, Baseline},
 		},

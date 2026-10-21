@@ -141,7 +141,7 @@ func TestEventRoundTripOnTheFixtureGroup(t *testing.T) {
 			t.Errorf("stage.enter to %s arrived %d times, want 1", to, n)
 		}
 	}
-	for _, agent := range []string{"builder", "tester", "reviewer"} {
+	for _, agent := range []string{"builder", "qa", "reviewer"} {
 		if n := countWith(evs, "session.start", `"agent":"`+agent+`"`); n != 1 {
 			t.Errorf("session.start for the %s arrived %d times, want 1", agent, n)
 		}

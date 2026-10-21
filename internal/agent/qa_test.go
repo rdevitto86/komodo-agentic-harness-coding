@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func TestTesterRole(t *testing.T) {
-	r := TesterRole()
-	if r.Name != "tester" || !r.PoolSlot || !slices.Equal(r.Tools, []string{"read", "search", "run", "run_check"}) {
+func TestQARole(t *testing.T) {
+	r := QARole()
+	if r.Name != "qa" || !r.PoolSlot || !slices.Equal(r.Tools, []string{"read", "search", "run", "run_check"}) {
 		t.Fatalf("role = %+v", r)
 	}
 	if !slices.Equal(r.RunClasses, []string{"build", "test"}) || !slices.Equal(r.Guard, []string{"R1"}) {
@@ -56,7 +56,7 @@ func scripted(exits []int, ran *[]string) CommandRunner {
 	}
 }
 
-func TestTesterRerun(t *testing.T) {
+func TestQARerun(t *testing.T) {
 	cases := []struct {
 		name  string
 		exits []int
@@ -67,7 +67,7 @@ func TestTesterRerun(t *testing.T) {
 	}
 	for _, c := range cases {
 		var ran []string
-		got, out, err := NewTester().Rerun(context.Background(), scripted(c.exits, &ran), Item{
+		got, out, err := NewQA().Rerun(context.Background(), scripted(c.exits, &ran), Item{
 			ID:  "ac-1",
 			Cmd: "go test ./x",
 		})
@@ -77,14 +77,14 @@ func TestTesterRerun(t *testing.T) {
 	}
 }
 
-func TestTesterRerunNoCommandAndRunnerError(t *testing.T) {
+func TestQARerunNoCommandAndRunnerError(t *testing.T) {
 	var ran []string
-	got, _, err := NewTester().Rerun(context.Background(), scripted(nil, &ran), Item{ID: "ac-2"})
+	got, _, err := NewQA().Rerun(context.Background(), scripted(nil, &ran), Item{ID: "ac-2"})
 	if err != nil || got != RerunUnconfirmed || len(ran) != 0 {
 		t.Fatalf("no command: %s %v ran %v", got, err, ran)
 	}
 	boom := errors.New("cannot start")
-	_, _, err = NewTester().Rerun(
+	_, _, err = NewQA().Rerun(
 		context.Background(),
 		func(context.Context, string) (int, string, error) { return 0, "", boom },
 		Item{ID: "ac-3", Cmd: "x"},
@@ -94,30 +94,30 @@ func TestTesterRerunNoCommandAndRunnerError(t *testing.T) {
 	}
 }
 
-func TestTesterAcceptResult(t *testing.T) {
+func TestQAAcceptResult(t *testing.T) {
 	tasks := []string{"tsk-a", "tsk-b"}
-	good := TesterResult{
+	good := QAResult{
 		Items: []ItemResult{{Item: "ac-1", Pass: true, Evidence: "ok"}},
 		Tasks: []TaskConfirmation{{Task: "tsk-a", Confirmation: Confirmed}, {Task: "tsk-b", Confirmation: NotConfirmed}},
 	}
-	tr := NewTester()
+	tr := NewQA()
 	if err := tr.AcceptResult(tasks, []string{"ac-1"}, good); err != nil {
 		t.Fatalf("good result: %v", err)
 	}
-	mut := func(f func(r *TesterResult)) TesterResult {
-		r := TesterResult{Items: slices.Clone(good.Items), Tasks: slices.Clone(good.Tasks)}
+	mut := func(f func(r *QAResult)) QAResult {
+		r := QAResult{Items: slices.Clone(good.Items), Tasks: slices.Clone(good.Tasks)}
 		f(&r)
 		return r
 	}
-	bad := map[string]TesterResult{
-		"repeated task": mut(func(r *TesterResult) { r.Tasks[1].Task = "tsk-a" }),
-		"skipped task":  mut(func(r *TesterResult) { r.Tasks = r.Tasks[:1] }),
-		"extra task": mut(func(r *TesterResult) {
+	bad := map[string]QAResult{
+		"repeated task": mut(func(r *QAResult) { r.Tasks[1].Task = "tsk-a" }),
+		"skipped task":  mut(func(r *QAResult) { r.Tasks = r.Tasks[:1] }),
+		"extra task": mut(func(r *QAResult) {
 			r.Tasks = append(r.Tasks, TaskConfirmation{Task: "tsk-z", Confirmation: Confirmed})
 		}),
-		"empty evidence": mut(func(r *TesterResult) { r.Items[0].Evidence = "  " }),
-		"bad word":       mut(func(r *TesterResult) { r.Tasks[0].Confirmation = "yes" }),
-		"bad reason":     mut(func(r *TesterResult) { r.Items[0].Reason = "because" }),
+		"empty evidence": mut(func(r *QAResult) { r.Items[0].Evidence = "  " }),
+		"bad word":       mut(func(r *QAResult) { r.Tasks[0].Confirmation = "yes" }),
+		"bad reason":     mut(func(r *QAResult) { r.Items[0].Reason = "because" }),
 	}
 	for name, r := range bad {
 		if err := tr.AcceptResult(tasks, []string{"ac-1"}, r); err == nil {
@@ -126,13 +126,13 @@ func TestTesterAcceptResult(t *testing.T) {
 	}
 }
 
-func TestParseTesterResult(t *testing.T) {
+func TestParseQAResult(t *testing.T) {
 	raw := `{"items": [{"item": "ac-1", "pass": true, "evidence": "ok"}], "tasks": [{"task": "t", "confirmation": ` +
 		`"confirmed"}]}`
-	if r, err := ParseTesterResult([]byte(raw)); err != nil || len(r.Items) != 1 || r.Tasks[0].Confirmation != Confirmed {
+	if r, err := ParseQAResult([]byte(raw)); err != nil || len(r.Items) != 1 || r.Tasks[0].Confirmation != Confirmed {
 		t.Fatalf("parse: %+v %v", r, err)
 	}
-	if _, err := ParseTesterResult([]byte(`{"items": [], "tasks": [], "x": 1}`)); err == nil {
+	if _, err := ParseQAResult([]byte(`{"items": [], "tasks": [], "x": 1}`)); err == nil {
 		t.Error("unknown field accepted")
 	}
 }

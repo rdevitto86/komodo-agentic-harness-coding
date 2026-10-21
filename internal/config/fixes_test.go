@@ -15,7 +15,7 @@ func TestResetRepairsAnUnreadableFile(t *testing.T) {
 		{"agents.json", "builder", `{"builder": {"bogus": 1}}`},
 	} {
 		m, home := newTestManager(t)
-		mustSet(t, m, "limits.group_retries", 4, "agents.tester.session_idle_min", 20)
+		mustSet(t, m, "limits.group_retries", 4, "agents.qa.session_idle_min", 20)
 		other := map[string]string{"settings.json": "agents.json", "agents.json": "settings.json"}[tc.file]
 		keep := readFile(t, home, other)
 		writeFile(t, home, tc.file, tc.body)

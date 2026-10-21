@@ -60,8 +60,8 @@ func leaked(be *hostBackend) []string {
 	return left
 }
 
-// A recheck runs in an instance made after the group's cached tester instance and destroys it when it ends, whatever the
-// verdict.
+// A recheck runs in an instance made after the group's cached Quality Assurance instance and destroys it when it ends,
+// whatever the verdict.
 func TestRecheckRunsInAFreshInstanceAndDestroysItOnEveryOutcome(t *testing.T) {
 	for _, mode := range []string{"pass", "fail", "error"} {
 		t.Run(mode, func(t *testing.T) {
@@ -74,14 +74,15 @@ func TestRecheckRunsInAFreshInstanceAndDestroysItOnEveryOutcome(t *testing.T) {
 				verdict = map[bool]string{true: "pass", false: "fail"}[pass] + ":" + out
 			}
 
-			if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+			if _, err := r.m.instance(context.Background(), "qa"); err != nil {
 				t.Fatal(err)
 			}
 
 			r.m.Recheck(context.Background())
 
 			if r.be.n != 2 {
-				t.Fatalf("recheck prepared %d instances in total, want a second one besides the cached tester", r.be.n)
+				t.Fatalf("recheck prepared %d instances in total, want a second one besides the cached Quality Assurance",
+					r.be.n)
 			}
 			if probe.runErr != nil || probe.exit != 0 {
 				t.Fatalf("the check command did not run in the recheck instance: exit %d err %v", probe.exit, probe.runErr)
@@ -97,7 +98,7 @@ func TestRecheckRunsInAFreshInstanceAndDestroysItOnEveryOutcome(t *testing.T) {
 				t.Fatalf("verdict %q for mode %s, want prefix %q", verdict, mode, want)
 			}
 			if got := leaked(r.be); !slices.Equal(got, []string{"inst-1"}) {
-				t.Fatalf("after the recheck the live instances are %v, want only the cached tester inst-1", got)
+				t.Fatalf("after the recheck the live instances are %v, want only the cached Quality Assurance inst-1", got)
 			}
 		})
 	}
@@ -109,7 +110,7 @@ func TestCloseTaskGroupLeavesNoInstanceAfterRechecks(t *testing.T) {
 	r.m.c.Checks = &probeChecks{be: r.be, mode: "pass"}
 	r.m.c.OnRecheck = func(bool, string) {}
 
-	for _, role := range []string{"builder", "tester"} {
+	for _, role := range []string{"builder", "qa"} {
 		if _, err := r.m.instance(context.Background(), role); err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +130,7 @@ func TestCloseTaskGroupLeavesNoInstanceAfterRechecks(t *testing.T) {
 		t.Fatalf("instances left after close and rechecks: %v of %d prepared", got, r.be.n)
 	}
 	if r.be.n != 5 {
-		t.Fatalf("prepared %d instances, want 5 (builder, tester and three rechecks)", r.be.n)
+		t.Fatalf("prepared %d instances, want 5 (builder, Quality Assurance and three rechecks)", r.be.n)
 	}
 }
 
@@ -140,7 +141,7 @@ func TestInstanceAfterCloseIsRefusedAndLeavesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := r.m.instance(context.Background(), "tester"); err == nil {
+	if _, err := r.m.instance(context.Background(), "qa"); err == nil {
 		t.Fatal("an instance was handed out after the group closed")
 	}
 	if got := leaked(r.be); len(got) != 0 {

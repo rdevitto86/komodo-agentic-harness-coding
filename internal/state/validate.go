@@ -43,7 +43,7 @@ var (
 		ReasonCrash,
 		ReasonContract,
 		ReasonStateInvalid,
-		ReasonTester,
+		ReasonQA,
 		ReasonFlaky,
 		ReasonDone,
 		ReasonCheckFail,
@@ -247,7 +247,7 @@ func validateParts(g *GroupState, f func(field, why string) error) error {
 	for _, r := range []struct {
 		name  string
 		round RoundState
-	}{{"tester", g.TestReview.Tester}, {"reviewer", g.TestReview.Reviewer}} {
+	}{{"qa", g.TestReview.QA}, {"reviewer", g.TestReview.Reviewer}} {
 		if !oneOf(r.round.Result, fieldEnums["RoundState.Result"]) {
 			return f("test_review."+r.name+".result", fmt.Sprintf("%q is not pass, fail or cancelled", r.round.Result))
 		}

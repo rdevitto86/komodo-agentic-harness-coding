@@ -18,14 +18,14 @@ func TestSweepKeepsUnfinishedGroupWhole(t *testing.T) {
 	g := e.addGroup("g1", testBranch)
 	e.land(g)
 	e.holdLease(g, lease.StateRevoked)
-	tester, temp := e.addCheckouts(g)
+	qa, temp := e.addCheckouts(g)
 	e.boxes.groups = []string{"g1"}
 	e.groups.refs = []GroupRef{{Group: "g1", Version: "1.0.0"}}
 	rep, err := e.h.Sweep(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{g.wt, tester, temp} {
+	for _, p := range []string{g.wt, qa, temp} {
 		if !exists(p) {
 			t.Fatalf("%s of an unfinished group was removed", p)
 		}
@@ -272,7 +272,7 @@ func TestCompleteNeverDeletesBranchOutsideKomodo(t *testing.T) {
 func TestSweepClearsLeaksOfGroupsWithoutWorktree(t *testing.T) {
 	e := newEnv(t)
 	e.boxes.groups = []string{"c1"}
-	e.write(filepath.Join(e.roots.Testers, "t1", "x"), "x")
+	e.write(filepath.Join(e.roots.QA, "t1", "x"), "x")
 	e.write(filepath.Join(e.roots.Temp, "p1", "x"), "x")
 	if _, err := e.h.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
@@ -280,7 +280,7 @@ func TestSweepClearsLeaksOfGroupsWithoutWorktree(t *testing.T) {
 	if !e.sawCall("container.Remove c1") {
 		t.Fatalf("a leaked container was not removed: %v", e.log.all())
 	}
-	if exists(filepath.Join(e.roots.Testers, "t1")) || exists(filepath.Join(e.roots.Temp, "p1")) {
+	if exists(filepath.Join(e.roots.QA, "t1")) || exists(filepath.Join(e.roots.Temp, "p1")) {
 		t.Fatal("leaked checkouts survive")
 	}
 }

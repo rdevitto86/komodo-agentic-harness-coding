@@ -148,7 +148,7 @@ func (g *group) deadSessions() []Input {
 	for _, v := range []struct {
 		name  string
 		round state.RoundState
-	}{{"tester", g.st.TestReview.Tester}, {"reviewer", g.st.TestReview.Reviewer}} {
+	}{{"qa", g.st.TestReview.QA}, {"reviewer", g.st.TestReview.Reviewer}} {
 		if v.round.Session != "" && v.round.Result == "" {
 			mk(v.name, v.round.Session, "")
 		}

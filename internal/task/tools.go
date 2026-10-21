@@ -67,7 +67,7 @@ type Env struct {
 	Done func(ctx context.Context, task string) (int, string, error)
 	// the group's acceptance items, which run_check may run
 	Items []agent.Item
-	// runs one acceptance command in the Tester's sandbox and returns its exit code and output
+	// runs one acceptance command in Quality Assurance's sandbox and returns its exit code and output
 	Check func(ctx context.Context, command string) (int, string, error)
 	// lint errors of a planned task list; empty means clean
 	Lint func(draft string) []string

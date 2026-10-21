@@ -59,7 +59,7 @@ func (p *publication) validate() error {
 		)
 	}
 
-	if a.Tree == "" || a.Tree != a.Tester.Tree || a.Tree != a.Reviewer.Tree {
+	if a.Tree == "" || a.Tree != a.QA.Tree || a.Tree != a.Reviewer.Tree {
 		return fail(
 			KindNotApproved,
 			false,
@@ -387,7 +387,7 @@ func (p *publication) merge(ctx context.Context) (string, error) {
 		return "", gitFail(err)
 	}
 
-	section, err := RenderBody(a.Facts, a.Tester, a.Reviewer)
+	section, err := RenderBody(a.Facts, a.QA, a.Reviewer)
 	if err != nil {
 		return "", fail(KindGit, false, err)
 	}

@@ -35,10 +35,10 @@ var resultCases = []struct {
 		func(b []byte) error { _, err := ParseBuilderResult(b); return err },
 	},
 	{
-		"tester", reflect.TypeOf(TesterResult{}),
+		"qa", reflect.TypeOf(QAResult{}),
 		`{"items": [{"item": "i1", "pass": false, "evidence": "e", "reason": "flaky"}],` +
 			` "tasks": [{"task": "t1", "confirmation": "confirmed"}]}`,
-		func(b []byte) error { _, err := ParseTesterResult(b); return err },
+		func(b []byte) error { _, err := ParseQAResult(b); return err },
 	},
 	{
 		"reviewer", reflect.TypeOf(ReviewerResult{}),
@@ -168,7 +168,7 @@ func enumAt(t *testing.T, schema map[string]any, path string) []string {
 
 // Each enum in a result schema lists exactly the words the Go code accepts for that field.
 func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
-	tester := func(field, v string) error {
+	qa := func(field, v string) error {
 		item := `{"item": "i", "pass": true, "evidence": "e"}`
 		task := `{"task": "t", "confirmation": "confirmed"}`
 		switch field {
@@ -178,11 +178,11 @@ func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 			task = fmt.Sprintf(`{"task": "t", "confirmation": %q}`, v)
 		}
 
-		r, err := ParseTesterResult([]byte(`{"items": [` + item + `], "tasks": [` + task + `]}`))
+		r, err := ParseQAResult([]byte(`{"items": [` + item + `], "tasks": [` + task + `]}`))
 		if err != nil {
 			return err
 		}
-		return NewTester().AcceptResult([]string{"t"}, []string{"i"}, r)
+		return NewQA().AcceptResult([]string{"t"}, []string{"i"}, r)
 	}
 
 	cases := []struct {
@@ -203,11 +203,11 @@ func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 			_, err := ParseReviewerResult([]byte(fmt.Sprintf(`{"verdicts": [{"task": "t", "verdict": %q}]}`, v)))
 			return err
 		}},
-		{"tester", "tasks.confirmation", []string{"confirmed", "not_confirmed"}, func(v string) error {
-			return tester("confirmation", v)
+		{"qa", "tasks.confirmation", []string{"confirmed", "not_confirmed"}, func(v string) error {
+			return qa("confirmation", v)
 		}},
-		{"tester", "items.reason", []string{"env", "wrong_command", "flaky", "real_failure"}, func(v string) error {
-			return tester("reason", v)
+		{"qa", "items.reason", []string{"env", "wrong_command", "flaky", "real_failure"}, func(v string) error {
+			return qa("reason", v)
 		}},
 	}
 	for _, c := range cases {

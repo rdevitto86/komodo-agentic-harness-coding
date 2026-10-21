@@ -82,7 +82,7 @@ func skillSlots(agent string) contextmgr.Values {
 			contextmgr.Group: "tg-1", contextmgr.Tasks: "task list",
 			contextmgr.Files: "internal/a/a.go", contextmgr.FileContents: "package a",
 		}
-	case "tester":
+	case "qa":
 		return contextmgr.Values{contextmgr.Group: "tg-1", contextmgr.Tasks: "task list", contextmgr.Acceptance: "item 1"}
 	}
 
@@ -124,7 +124,7 @@ func TestEachAgentGetsOnlyTheSkillsItsRegistryEntryAllows(t *testing.T) {
 	want := map[string]string{
 		"planner":  "planning",
 		"builder":  "standards-comments standards-go",
-		"tester":   "standards-go",
+		"qa":       "standards-go",
 		"reviewer": "standards-go",
 	}
 

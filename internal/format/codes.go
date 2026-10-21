@@ -59,7 +59,7 @@ var blockReasons = []string{
 	"crash",
 	"contract",
 	"state_invalid",
-	"tester",
+	"qa",
 	"flaky",
 }
 

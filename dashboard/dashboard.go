@@ -105,7 +105,7 @@ func (s *Server) readView() (View, error) {
 	if !s.usage {
 		for i := range v.Groups {
 			ss := &v.Groups[i].Sessions
-			for _, p := range []*Session{&ss.Builder, &ss.Tester, &ss.Reviewer} {
+			for _, p := range []*Session{&ss.Builder, &ss.QA, &ss.Reviewer} {
 				p.Tokens, p.USD = 0, 0
 			}
 		}

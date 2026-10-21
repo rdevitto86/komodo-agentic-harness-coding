@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-// addCheckouts creates the tester checkout and temp folder of a group.
-func (e *env) addCheckouts(g grp) (tester, temp string) {
-	tester = filepath.Join(e.roots.Testers, g.id)
+// addCheckouts creates Quality Assurance checkout and temp folder of a group.
+func (e *env) addCheckouts(g grp) (qa, temp string) {
+	qa = filepath.Join(e.roots.QA, g.id)
 	temp = filepath.Join(e.roots.Temp, g.id)
-	e.write(filepath.Join(tester, "copy.txt"), "x")
+	e.write(filepath.Join(qa, "copy.txt"), "x")
 	e.write(filepath.Join(temp, "scratch.txt"), "x")
-	return tester, temp
+	return qa, temp
 }
 
 func TestCompleteNotPublishedRemovesNothing(t *testing.T) {
@@ -36,7 +36,7 @@ func TestCompleteNotPublishedRemovesNothing(t *testing.T) {
 func TestCompleteRemovesInOrderAndClosesLast(t *testing.T) {
 	e := newEnv(t)
 	g := e.addGroup("g1", testBranch)
-	tester, temp := e.addCheckouts(g)
+	qa, temp := e.addCheckouts(g)
 	e.land(g)
 	rep, err := e.h.Complete(context.Background(), e.published(g))
 	if err != nil {
@@ -52,7 +52,7 @@ func TestCompleteRemovesInOrderAndClosesLast(t *testing.T) {
 	); !reflect.DeepEqual(got, want) {
 		t.Fatalf("calls = %v, want %v", got, want)
 	}
-	for _, p := range []string{g.wt, tester, temp} {
+	for _, p := range []string{g.wt, qa, temp} {
 		if exists(p) {
 			t.Fatalf("%s still exists", p)
 		}
@@ -64,7 +64,7 @@ func TestCompleteRemovesInOrderAndClosesLast(t *testing.T) {
 	for _, it := range rep.Removed {
 		kinds = append(kinds, it.Kind)
 	}
-	if wantK := []string{KindContainer, KindTester, KindTemp, KindWorktree, KindBranch}; !reflect.DeepEqual(kinds, wantK) {
+	if wantK := []string{KindContainer, KindQA, KindTemp, KindWorktree, KindBranch}; !reflect.DeepEqual(kinds, wantK) {
 		t.Fatalf("removed kinds = %v, want %v", kinds, wantK)
 	}
 	if len(rep.Kept) != 0 {
@@ -277,7 +277,7 @@ func TestCompleteSymlinkedCheckoutIsUnlinkedNotFollowed(t *testing.T) {
 	e.land(g)
 	outside := filepath.Join(e.base, "precious")
 	e.write(filepath.Join(outside, "keep.txt"), "x")
-	if err := os.Symlink(outside, filepath.Join(e.roots.Testers, g.id)); err != nil {
+	if err := os.Symlink(outside, filepath.Join(e.roots.QA, g.id)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.h.Complete(context.Background(), e.published(g)); err != nil {
@@ -286,7 +286,7 @@ func TestCompleteSymlinkedCheckoutIsUnlinkedNotFollowed(t *testing.T) {
 	if !exists(filepath.Join(outside, "keep.txt")) {
 		t.Fatal("symlink target was deleted")
 	}
-	if exists(filepath.Join(e.roots.Testers, g.id)) {
+	if exists(filepath.Join(e.roots.QA, g.id)) {
 		t.Fatal("symlink survived")
 	}
 }

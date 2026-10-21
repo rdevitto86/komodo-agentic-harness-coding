@@ -23,9 +23,9 @@ type RoleConfig struct {
 	Items    []agent.Item    // acceptance items of the group's tasks
 	Worktree string          // absolute path of the group's worktree
 	Files    func() []string // the group's effective file list
-	// runs a command in the Tester's sandbox; nil means no rerun
+	// runs a command in Quality Assurance's sandbox; nil means no rerun
 	Runner   func() agent.CommandRunner
-	Tester   agent.Tester
+	QA       agent.QA
 	Reviewer agent.Reviewer
 }
 
@@ -107,18 +107,18 @@ func (b *builderRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 	return Outcome{Kind: OutcomePass, Summary: []string{res.Summary}}, nil
 }
 
-// testerRole is the tester over agent.Tester.
-type testerRole struct {
+// qaRole is Quality Assurance over agent.QA.
+type qaRole struct {
 	cfg RoleConfig
 	mu  sync.Mutex
 	was string // Go's output after a disputed result; the restart's brief carries it
 }
 
-// AcceptanceItems returns the group's acceptance items, which the tester's run_check tool may run.
-func (t *testerRole) AcceptanceItems() []agent.Item { return slices.Clone(t.cfg.Items) }
+// AcceptanceItems returns the group's acceptance items, which Quality Assurance's run_check tool may run.
+func (t *qaRole) AcceptanceItems() []agent.Item { return slices.Clone(t.cfg.Items) }
 
-// Slots fills the tester's brief values for this trip.
-func (t *testerRole) Slots(_ context.Context, in RoleInput) (map[string]string, error) {
+// Slots fills Quality Assurance's brief values for this trip.
+func (t *qaRole) Slots(_ context.Context, in RoleInput) (map[string]string, error) {
 	var acc strings.Builder
 	for _, it := range t.cfg.Items {
 		fmt.Fprintf(&acc, "- %s: %s", it.ID, it.Text)
@@ -147,9 +147,9 @@ func (t *testerRole) Slots(_ context.Context, in RoleInput) (map[string]string, 
 	return s, nil
 }
 
-// Judge accepts the tester's final call, reruns its failed items and decides what happens next.
-func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
-	res, err := agent.ParseTesterResult(r.Output)
+// Judge accepts Quality Assurance's final call, reruns its failed items and decides what happens next.
+func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
+	res, err := agent.ParseQAResult(r.Output)
 	if err != nil {
 		return Outcome{}, &GateError{Text: err.Error(), Schema: true}
 	}
@@ -160,7 +160,7 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 	for i, it := range t.cfg.Items {
 		items[i], byID[it.ID] = it.ID, it
 	}
-	if err := t.cfg.Tester.AcceptResult(t.cfg.taskIDs(), items, res); err != nil {
+	if err := t.cfg.QA.AcceptResult(t.cfg.taskIDs(), items, res); err != nil {
 		return Outcome{}, &GateError{Text: "the result was rejected: " + err.Error()}
 	}
 
@@ -172,18 +172,24 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		case ir.Pass:
 			continue
 		case len(it.Needs) > 0:
-			listed = append(listed, fmt.Sprintf("tester: item %s skipped, it needs %s", it.ID, strings.Join(it.Needs, ", ")))
+			listed = append(
+				listed,
+				fmt.Sprintf("Quality Assurance: item %s skipped, it needs %s", it.ID, strings.Join(it.Needs, ", ")),
+			)
 			continue
 		case strings.TrimSpace(it.Cmd) == "":
-			listed = append(listed, fmt.Sprintf("tester: item %s unconfirmed, it has no command for Go to rerun", it.ID))
+			listed = append(
+				listed,
+				fmt.Sprintf("Quality Assurance: item %s unconfirmed, it has no command for Go to rerun", it.ID),
+			)
 			continue
 		case t.cfg.Runner == nil:
 			continue
 		}
 
-		out, text, rerr := t.cfg.Tester.Rerun(ctx, t.cfg.Runner(), it)
+		out, text, rerr := t.cfg.QA.Rerun(ctx, t.cfg.Runner(), it)
 		if rerr != nil {
-			listed = append(listed, fmt.Sprintf("tester: item %s unconfirmed, its rerun failed: %v", it.ID, rerr))
+			listed = append(listed, fmt.Sprintf("Quality Assurance: item %s unconfirmed, its rerun failed: %v", it.ID, rerr))
 			continue
 		}
 
@@ -226,7 +232,7 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		return Outcome{Kind: OutcomeRestart, Findings: goOut}, nil
 	case len(failed) > 0 || len(notMet) > 0:
 		for _, id := range notMet {
-			failed = append(failed, "the tester did not confirm task "+id)
+			failed = append(failed, "Quality Assurance did not confirm task "+id)
 		}
 		return Outcome{Kind: OutcomeReturn, Findings: failed}, nil
 	}
@@ -235,7 +241,7 @@ func (t *testerRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 		Kind: OutcomePass,
 		Summary: append(
 			[]string{
-				fmt.Sprintf("tester: %d items, %d tasks confirmed", len(res.Items), len(res.Tasks)),
+				fmt.Sprintf("Quality Assurance: %d items, %d tasks confirmed", len(res.Items), len(res.Tasks)),
 			},
 			listed...),
 	}, nil
@@ -382,10 +388,10 @@ func (a addedLines) Line(file string, n int) (string, bool) {
 	return s, ok
 }
 
-// NewRoles builds the builder, tester and reviewer over the agent package's pure functions.
+// NewRoles builds the builder, Quality Assurance and reviewer over the agent package's pure functions.
 func NewRoles(cfg RoleConfig) (map[string]Role, error) {
-	if cfg.Tester == nil {
-		cfg.Tester = agent.NewTester()
+	if cfg.QA == nil {
+		cfg.QA = agent.NewQA()
 	}
 	if cfg.Reviewer == nil {
 		r, err := agent.NewReviewer(nil)
@@ -402,7 +408,7 @@ func NewRoles(cfg RoleConfig) (map[string]Role, error) {
 
 	return map[string]Role{
 		"builder":  &builderRole{cfg: cfg},
-		"tester":   &testerRole{cfg: cfg},
+		"qa":       &qaRole{cfg: cfg},
 		"reviewer": &reviewerRole{cfg: cfg, cats: cats},
 	}, nil
 }

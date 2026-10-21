@@ -110,7 +110,7 @@ type GroupDone struct {
 // EventKey binds GroupDone to run-status / group.done.
 func (GroupDone) EventKey() Key { return Key{TypeRunStatus, "group.done"} }
 
-// GroupApproved is the data of run-status / group.approved: the Tester and the Reviewer approved a group's work.
+// GroupApproved is the data of run-status / group.approved: Quality Assurance and the Reviewer approved a group's work.
 // It has no body; the commit in git is the record of the code.
 type GroupApproved struct{}
 
@@ -209,7 +209,7 @@ func (StageExit) EventKey() Key { return Key{TypeRunStatus, "stage.exit"} }
 // SessionStart is the data of run-status / session.start.
 type SessionStart struct {
 	GroupFacts
-	Agent   string `json:"agent"`          // builder, tester, reviewer or planner
+	Agent   string `json:"agent"`          // builder, Quality Assurance, reviewer or planner
 	Task    string `json:"task,omitempty"` // builder only: the task claimed with it
 	Link    string `json:"link"`           // the model link: claude-cli or anthropic-api
 	Model   string `json:"model"`          // the model identifier the link reported
@@ -252,7 +252,7 @@ type SessionEnd struct {
 	WallS       int64          `json:"wall_s"`                 // seconds the session ran
 	ScopePaths  []string       `json:"scope_paths,omitempty"`  // needs_scope, or a self-denied done: the paths asked for
 	ScopeReason string         `json:"scope_reason,omitempty"` // needs_scope, or a self-denied done: the builder's reason
-	Verify      *VerifyOutcome `json:"verify,omitempty"`       // reviewer or tester with reason done
+	Verify      *VerifyOutcome `json:"verify,omitempty"`       // reviewer or Quality Assurance with reason done
 }
 
 // EventKey binds SessionEnd to run-status / session.end.
@@ -269,14 +269,14 @@ type SessionUsage struct {
 	SkillTokens int     `json:"skill_tokens"` // tokens of the skills in the brief
 }
 
-// VerifyOutcome is a validated reviewer or tester result.
+// VerifyOutcome is a validated reviewer or Quality Assurance result.
 type VerifyOutcome struct {
 	Pass            bool     `json:"pass"`                       // every task met or confirmed and every item passed
 	NotMet          []string `json:"not_met,omitempty"`          // task identifiers marked not_met or not_confirmed
 	BriefIncomplete bool     `json:"brief_incomplete,omitempty"` // the reviewer answered brief_incomplete
-	Failed          []string `json:"failed,omitempty"`           // tester items the reruns confirmed failed
-	Disputed        []string `json:"disputed,omitempty"`         // tester items the reruns passed
-	Split           []string `json:"split,omitempty"`            // tester items whose two reruns disagreed
+	Failed          []string `json:"failed,omitempty"`           // Quality Assurance items the reruns confirmed failed
+	Disputed        []string `json:"disputed,omitempty"`         // Quality Assurance items the reruns passed
+	Split           []string `json:"split,omitempty"`            // Quality Assurance items whose two reruns disagreed
 }
 
 // TaskClaimed is the data of run-status / task.claimed.
@@ -354,7 +354,7 @@ func (ToolDenied) EventKey() Key { return Key{TypeRunStatus, "tool.denied"} }
 // SandboxFallback is the data of run-status / sandbox.fallback.
 type SandboxFallback struct {
 	GroupFacts
-	Role   string `json:"role"`   // the agent whose commands moved, such as tester
+	Role   string `json:"role"`   // the agent whose commands moved, such as Quality Assurance
 	Wanted string `json:"wanted"` // the mechanism the role should have used, such as docker
 	Used   string `json:"used"`   // the mechanism it ran in, such as seatbelt or bubblewrap
 	Why    string `json:"why"`    // why the wanted mechanism was not used
@@ -570,7 +570,7 @@ type CleanupSwept struct {
 
 // CleanupItem is one thing a sweep removed or kept.
 type CleanupItem struct {
-	Kind   string `json:"kind"`   // worktree, tester_worktree, container, branch, temp or version
+	Kind   string `json:"kind"`   // worktree, qa_worktree, container, branch, temp or version
 	Name   string `json:"name"`   // the path, branch, reference or version
 	Reason string `json:"reason"` // why it was kept; empty for a removed item
 }

@@ -43,9 +43,9 @@ func TestPhase5OneGroupPassesBuildTestAndReview(t *testing.T) {
 		t.Fatalf("the group did not end complete\n%s", r.evidence(evs))
 	}
 
-	// The model saw a builder, a tester and a reviewer session.
+	// The model saw a builder, a Quality Assurance and a reviewer session.
 	calls := r.model.callCounts()
-	for _, role := range []string{"builder", "tester", "reviewer"} {
+	for _, role := range []string{"builder", "qa", "reviewer"} {
 		if calls[role] == 0 {
 			t.Fatalf("no %s call reached the model: %v", role, calls)
 		}

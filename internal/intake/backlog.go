@@ -42,7 +42,7 @@ type Group struct {
 	Priority     Priority     // high or normal
 	Files        []string     // files the builder may write
 	Dependencies []string     // names of groups that must finish first
-	Acceptance   []Acceptance // checks the tester runs
+	Acceptance   []Acceptance // checks Quality Assurance runs
 	Tasks        []Task       // at most 8
 }
 
@@ -50,7 +50,7 @@ type Group struct {
 type Acceptance struct {
 	Keyword string   // WHEN, IF or WHILE
 	Text    string   // the item after the keyword, through its SHALL clause
-	Cmd     string   // optional command the tester runs
+	Cmd     string   // optional command Quality Assurance runs
 	Needs   []string // optional: network, docker or service:<name>
 }
 

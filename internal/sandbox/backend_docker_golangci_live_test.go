@@ -23,7 +23,7 @@ func TestDockerLiveGolangciLint(t *testing.T) {
 		t.Skipf("no docker daemon: %v", err)
 	}
 
-	s := testSpec(t, RoleTester)
+	s := testSpec(t, RoleQA)
 	s.Network = true
 	goRepo(t, s)
 

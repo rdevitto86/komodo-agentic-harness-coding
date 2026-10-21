@@ -14,15 +14,15 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 )
 
-// checkRunner returns the runner the checks get, bound to a started tester instance.
+// checkRunner returns the runner the checks get, bound to a started Quality Assurance instance.
 func checkRunner(t *testing.T) func(context.Context, string) (int, string, error) {
 	t.Helper()
 	r := newPipeRig(t, rigOpts{})
-	if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+	if _, err := r.m.instance(context.Background(), "qa"); err != nil {
 		t.Fatal(err)
 	}
 
-	return r.m.Runner("tester")
+	return r.m.Runner("qa")
 }
 
 func TestTheCheckRunnerReturnsTheWholeOutputOfALongCommand(t *testing.T) {
@@ -69,7 +69,7 @@ func TestTheCheckRunnerReportsTheExitCodeTheCutTextAndTheLogWhenTheOutputPassesT
 
 func TestTheCheckRunnerReportsTheLimitEvenWhenTheLogCannotBeKept(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
-	if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+	if _, err := r.m.instance(context.Background(), "qa"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,7 +80,7 @@ func TestTheCheckRunnerReportsTheLimitEvenWhenTheLogCannotBeKept(t *testing.T) {
 
 	r.m.c.SessionsDir = file
 
-	exit, out, err := r.m.Runner("tester")(context.Background(), bigOutput(checkOutputCap+1000, 0))
+	exit, out, err := r.m.Runner("qa")(context.Background(), bigOutput(checkOutputCap+1000, 0))
 	if !errors.Is(err, agent.ErrOutputOverLimit) || exit != 0 {
 		t.Fatalf("exit %d, error %v, want 0 and the over-limit error", exit, err)
 	}

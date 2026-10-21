@@ -211,7 +211,7 @@ type baseRunner struct {
 	group  string
 	plan   task.SandboxPlan
 	folder string // holds every checkout, temporary folder and the build cache folder of this plan; Close deletes it
-	build  string // the check's own build cache folder inside folder; never the shared one that holds the tester's checkout
+	build  string // the check's own build cache folder inside folder; never the shared one with Quality Assurance's checkout
 	runs   int
 }
 

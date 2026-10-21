@@ -44,7 +44,7 @@
     ]
   },
   "result": {
-    "$id": "komodo:agent/tester/result/1",
+    "$id": "komodo:agent/qa/result/1",
     "additionalProperties": false,
     "properties": {
       "items": {

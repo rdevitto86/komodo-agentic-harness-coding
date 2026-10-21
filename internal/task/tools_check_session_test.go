@@ -10,7 +10,7 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
 )
 
-func TestTesterSessionRunsAnItemsCommandInTheTestersSandbox(t *testing.T) {
+func TestQASessionRunsAnItemsCommandInTheQAsSandbox(t *testing.T) {
 	r := newPipeRig(t, rigOpts{
 		chain: []string{string(llm.ClaudeCLI)},
 		items: []agent.Item{
@@ -24,7 +24,7 @@ func TestTesterSessionRunsAnItemsCommandInTheTestersSandbox(t *testing.T) {
 	var pass, fail, unknown, runDef string
 
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("tester", func(s llm.Session) (llm.Stream, error) {
+	r.model.on("qa", func(s llm.Session) (llm.Stream, error) {
 		ctx := context.Background()
 		pass, _ = routes.Call(ctx, s.ID, "run_check", json.RawMessage(`{"item":"acc-1"}`))
 		fail, _ = routes.Call(ctx, s.ID, "run_check", json.RawMessage(`{"item":"acc-2"}`))

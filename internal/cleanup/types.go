@@ -34,7 +34,7 @@ type PublishedEpic struct {
 
 // Item is one thing the Cleanup Handler removed or kept.
 type Item struct {
-	Kind   string `json:"kind"`   // worktree, tester_worktree, container, branch, temp, version
+	Kind   string `json:"kind"`   // worktree, qa_worktree, container, branch, temp, version
 	Name   string `json:"name"`   // path, branch, reference or version
 	Reason string `json:"reason"` // why it was kept; empty for removed items
 }
@@ -56,7 +56,7 @@ type DiscardOptions struct {
 type Roots struct {
 	Worktrees string // holds one folder per group, such as ~/.komodo/wt/<repo-id>
 	Landings  string // holds one landing worktree per epic
-	Testers   string // holds one tester checkout per group; empty means none exist
+	QA        string // holds one Quality Assurance checkout per group; empty means none exist
 	Temp      string // holds one session temporary folder per group; empty means none exist
 	Versions  string // holds one folder per installed binary version
 }
@@ -64,7 +64,7 @@ type Roots struct {
 // The kinds of Item.
 const (
 	KindWorktree  = "worktree"
-	KindTester    = "tester_worktree"
+	KindQA        = "qa_worktree"
 	KindContainer = "container"
 	KindBranch    = "branch"
 	KindTemp      = "temp"

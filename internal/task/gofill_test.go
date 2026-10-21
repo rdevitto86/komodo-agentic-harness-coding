@@ -126,7 +126,7 @@ func TestTheHostFillIsSkippedWithoutAGoModOrAModuleCache(t *testing.T) {
 
 func TestTheHostFillRunsOncePerGroupAndAgainWhenGoModChanges(t *testing.T) {
 	r, calls := fillRig(t, true, true, nil)
-	for _, role := range []string{"builder", "tester"} {
+	for _, role := range []string{"builder", "qa"} {
 		if _, err := r.m.instance(context.Background(), role); err != nil {
 			t.Fatal(err)
 		}
@@ -137,10 +137,10 @@ func TestTheHostFillRunsOncePerGroupAndAgainWhenGoModChanges(t *testing.T) {
 
 	remake := func() {
 		r.m.mu.Lock()
-		delete(r.m.instances, "tester")
+		delete(r.m.instances, "qa")
 		r.m.mu.Unlock()
 
-		if _, err := r.m.instance(context.Background(), "tester"); err != nil {
+		if _, err := r.m.instance(context.Background(), "qa"); err != nil {
 			t.Fatal(err)
 		}
 	}

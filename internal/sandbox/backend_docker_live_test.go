@@ -53,9 +53,9 @@ func TestDockerLiveReadsGitAndCannotWriteIt(t *testing.T) {
 	}
 
 	worktree, gitDir := liveGitWorktree(t)
-	s := Spec{Group: "live", Worktree: worktree, GitDir: gitDir, Writable: []string{t.TempDir()}, Role: RoleTester}
+	s := Spec{Group: "live", Worktree: worktree, GitDir: gitDir, Writable: []string{t.TempDir()}, Role: RoleQA}
 
-	m := NewManager(map[string]Backend{RoleTester: d}, nil)
+	m := NewManager(map[string]Backend{RoleQA: d}, nil)
 	inst, err := m.CreateSandboxInstance(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
