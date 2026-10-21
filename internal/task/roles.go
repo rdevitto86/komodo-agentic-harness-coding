@@ -27,6 +27,8 @@ type RoleConfig struct {
 	Runner   func() agent.CommandRunner
 	QA       agent.QA
 	Reviewer agent.Reviewer
+	// runs a blocking finding's proof in a throwaway copy of the change; nil means every such finding warns
+	Proof agent.ProofRunner
 }
 
 // taskIDs lists the identifiers of the group's tasks.
@@ -278,7 +280,7 @@ func (r *reviewerRole) Slots(_ context.Context, in RoleInput) (map[string]string
 			continue
 		}
 		for _, rule := range c.Rules {
-			fmt.Fprintf(&rules, "- %s (%s): %s\n", rule.ID, rule.Severity, c.Text[rule.ID])
+			fmt.Fprintf(&rules, "- %s (%s, proof %s): %s\n", rule.ID, rule.Level, rule.Proof, c.Text[rule.ID])
 		}
 	}
 
@@ -317,14 +319,33 @@ func (r *reviewerRole) Judge(_ context.Context, res llm.Result) (Outcome, error)
 	subs, diff := slices.Clone(r.subs), r.diff
 	r.mu.Unlock()
 	head, added := worktreeLines{root: r.cfg.Worktree}, parseAdded(diff)
+	d := agent.Diff{Paths: diffPaths(diff), Text: diff}
 
-	var findings []string
+	var findings, warnings, recorded []string
+
+	var verified []VerifiedFinding
+
 	for _, s := range subs {
-		sev, ok, aerr := r.cfg.Reviewer.AcceptFinding(s.Finding, head, added)
-		if aerr != nil || !ok || (sev != agent.SeverityBlocker && sev != agent.SeverityMajor) {
+		got, aerr := r.cfg.Reviewer.AcceptFinding(s.Finding, head, added, d, r.cfg.Proof)
+		if aerr != nil || got.Dropped != "" {
 			continue
 		}
-		findings = append(findings, fmt.Sprintf("%s (%s) at %s:%d: %s -- %s", s.Rule, sev, s.File, s.Line, s.Quote, s.Note))
+
+		verified = append(verified, VerifiedFinding{
+			Rule: s.Rule, File: s.File, Line: s.Line, Quote: s.Quote, Note: s.Note,
+			Level: got.Level, In: got.In, Proof: got.Proof, Bucket: got.Bucket,
+		})
+
+		line := fmt.Sprintf("%s (%s) at %s:%d: %s -- %s", s.Rule, got.Level, s.File, s.Line, s.Quote, s.Note)
+
+		switch got.Bucket {
+		case agent.BucketBlock:
+			findings = append(findings, line)
+		case agent.BucketWarn:
+			warnings = append(warnings, "warning: "+line)
+		default:
+			recorded = append(recorded, line)
+		}
 	}
 
 	var notMet []string
@@ -345,14 +366,21 @@ func (r *reviewerRole) Judge(_ context.Context, res llm.Result) (Outcome, error)
 	}
 
 	if len(findings) > 0 || len(notMet) > 0 {
-		return Outcome{Kind: OutcomeReturn, Findings: append(findings, notMet...)}, nil
+		return Outcome{
+			Kind:     OutcomeReturn,
+			Findings: append(findings, notMet...),
+			Verified: verified,
+			Recorded: recorded,
+		}, nil
 	}
 
 	return Outcome{
 		Kind: OutcomePass,
-		Summary: []string{
-			fmt.Sprintf("reviewer: %d tasks met, %d findings filed", len(out.Verdicts), len(subs)),
-		},
+		Summary: append(
+			[]string{fmt.Sprintf("reviewer: %d tasks met, %d findings filed", len(out.Verdicts), len(subs))},
+			warnings...),
+		Verified: verified,
+		Recorded: recorded,
 	}, nil
 }
 

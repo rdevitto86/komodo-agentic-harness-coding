@@ -73,6 +73,22 @@ type Outcome struct {
 	Findings []string // for Return: verified findings the builder receives; for Restart: Go's output
 	Paths    []string // for Scope: the paths the builder asked for
 	Summary  []string // for Pass: the result lines the pull request body prints
+	// for the reviewer: every finding Go kept, with its level and proof; Recorded holds the run-record-only lines
+	Verified []VerifiedFinding
+	Recorded []string
+}
+
+// VerifiedFinding is a reviewer finding Go kept, with the level and proof result Go gave it.
+type VerifiedFinding struct {
+	Rule   string             `json:"rule"`
+	File   string             `json:"file"`
+	Line   int                `json:"line"`
+	Quote  string             `json:"quote"`
+	Note   string             `json:"note,omitempty"`
+	Level  agent.FindingLevel `json:"level"`
+	In     string             `json:"in"`    // head or diff, where the quote was found
+	Proof  string             `json:"proof"` // failed_as_claimed, passed or none
+	Bucket agent.Bucket       `json:"-"`
 }
 
 // OutcomeKind is the pipeline's next move for one role.
@@ -147,6 +163,7 @@ type Collaborators struct {
 	Socket      string              // the engine's control socket, which that tool server relays every call to
 	Tools       *ToolRoutes         // where each subscription session's bound tools are reachable by the engine
 	Skill       func(ref string) (string, error)
+	SkipReview  func(diff string) bool         // true when the group's risk level takes no Reviewer; nil never skips
 	Getenv      func(string) string            // environment of outside tool servers; os.Getenv when nil
 	OnRecheck   func(pass bool, output string) // receives the result of the recheck command
 	Now         func() time.Time               // clock; time.Now when nil

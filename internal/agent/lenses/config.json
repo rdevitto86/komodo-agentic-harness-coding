@@ -13,7 +13,8 @@
   "rules": [
     {
       "id": "config.1",
-      "severity": "blocker",
+      "level": "critical",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -26,7 +27,8 @@
     },
     {
       "id": "config.2",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -39,7 +41,8 @@
     },
     {
       "id": "config.3",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"

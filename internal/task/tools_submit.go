@@ -25,7 +25,10 @@ func toolSubmitFinding(_ context.Context, tc *toolCall, raw json.RawMessage) Rep
 		return *e
 	}
 
-	f := Submitted{Finding: agent.Finding{Rule: a.Rule, File: r.Rel, Line: a.Line, Quote: a.Quote}, Note: a.Note}
+	f := Submitted{
+		Finding: agent.Finding{Rule: a.Rule, File: r.Rel, Line: a.Line, Quote: a.Quote, Proof: a.Proof},
+		Note:    a.Note,
+	}
 	data, _ := json.Marshal(
 		map[string]any{
 			"rule":  f.Rule,

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
@@ -464,6 +465,8 @@ type (
 		Line  int    `json:"line"`
 		Quote string `json:"quote"`
 		Note  string `json:"note"`
+
+		Proof *agent.Proof `json:"proof,omitempty"`
 	}
 	doneArgs struct {
 		Task string `json:"task"`

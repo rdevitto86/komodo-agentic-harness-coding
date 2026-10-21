@@ -421,6 +421,30 @@ func TestSubmitFindingFilesAFact(t *testing.T) {
 	}
 }
 
+func TestSubmitFindingCarriesItsProof(t *testing.T) {
+	var got []Submitted
+	r := newRig(t, func(e *Env) { e.OnFinding = func(s Submitted) { got = append(got, s) } })
+	r.call("submit_finding", map[string]any{
+		"rule":  "correctness.2",
+		"file":  "cmd/main.go",
+		"line":  1,
+		"quote": "package main",
+		"note":  "n",
+		"proof": map[string]any{
+			"test": map[string]any{
+				"file": "cmd/drop_test.go",
+				"body": "package main\n",
+				"run":  "go test ./cmd/ -run TestDrop",
+			},
+			"expect": "--- FAIL: TestDrop",
+		},
+	})
+	if len(got) != 1 || got[0].Proof == nil || got[0].Proof.Expect != "--- FAIL: TestDrop" ||
+		got[0].Proof.Test == nil || got[0].Proof.Test.Run != "go test ./cmd/ -run TestDrop" {
+		t.Fatalf("findings %+v", got)
+	}
+}
+
 func TestTaskDoneLintAndSkill(t *testing.T) {
 	r := newRig(t, func(e *Env) {
 		e.Done = func(_ context.Context, task string) (int, string, error) { return 0, "ok " + task, nil }

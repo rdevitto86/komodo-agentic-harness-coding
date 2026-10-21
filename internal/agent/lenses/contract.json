@@ -15,7 +15,8 @@
   "rules": [
     {
       "id": "contract.1",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -28,7 +29,8 @@
     },
     {
       "id": "contract.2",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -37,13 +38,54 @@ const MarkdownOnlyLenses = 3
 // markdownLenses are the lenses a diff of only *.md files runs.
 var markdownLenses = []string{"correctness", "readiness", "quality"}
 
-// Severity ranks a finding; blocker and major stop the group, minor is counted.
-type Severity string
+// FindingLevel ranks a rule and a finding; it belongs to the rule, so the same mistake always gets the same level.
+type FindingLevel string
 
 const (
-	SeverityBlocker Severity = "blocker"
-	SeverityMajor   Severity = "major"
-	SeverityMinor   Severity = "minor"
+	LevelCritical FindingLevel = "critical"
+	LevelHigh     FindingLevel = "high"
+	LevelMedHigh  FindingLevel = "med_high"
+	LevelMedium   FindingLevel = "medium"
+	LevelMedLow   FindingLevel = "med_low"
+	LevelLow      FindingLevel = "low"
+)
+
+// Bucket is what a verified finding does.
+type Bucket string
+
+const (
+	BucketBlock  Bucket = "block"  // sends the group back to the Builder
+	BucketWarn   Bucket = "warn"   // a warning on the pull request
+	BucketRecord Bucket = "record" // written to the run record only
+)
+
+// Bucket maps a level to its bucket; an unknown level is recorded only.
+func (l FindingLevel) Bucket() Bucket {
+	switch l {
+	case LevelCritical, LevelHigh, LevelMedHigh:
+		return BucketBlock
+	case LevelMedium:
+		return BucketWarn
+	}
+	return BucketRecord
+}
+
+// known reports whether a level is one of the six.
+func (l FindingLevel) known() bool {
+	switch l {
+	case LevelCritical, LevelHigh, LevelMedHigh, LevelMedium, LevelMedLow, LevelLow:
+		return true
+	}
+	return false
+}
+
+// ProofKind says how a rule's findings can be proven.
+type ProofKind string
+
+const (
+	ProofKindCommand ProofKind = "command" // a command from the allowed list
+	ProofKindTest    ProofKind = "test"    // a short test the Reviewer writes
+	ProofKindNone    ProofKind = "none"    // cannot be proven by a command: findings warn
 )
 
 // Applies is the file scope of a rule or a lens: changed-file globs, and regular expressions matched against changed diff
@@ -55,12 +97,13 @@ type Applies struct {
 
 // Rule is one review rule in a lens catalog.
 type Rule struct {
-	ID       string   `json:"id"`
-	Severity Severity `json:"severity"`
-	Applies  Applies  `json:"applies"`
-	Check    string   `json:"check"`
-	Evidence string   `json:"evidence"`
-	Source   string   `json:"source"` // where the rule comes from
+	ID       string       `json:"id"`
+	Level    FindingLevel `json:"level"`
+	Proof    ProofKind    `json:"proof"` // how a finding of this rule can be proven; none caps it at a warning
+	Applies  Applies      `json:"applies"`
+	Check    string       `json:"check"`
+	Evidence string       `json:"evidence"`
+	Source   string       `json:"source"` // where the rule comes from
 }
 
 // When says how a lens is chosen for a diff.
@@ -73,10 +116,14 @@ const (
 
 // validate checks one rule's fields.
 func (r Rule) validate() error {
-	switch r.Severity {
-	case SeverityBlocker, SeverityMajor, SeverityMinor:
+	if !r.Level.known() {
+		return fmt.Errorf("unknown level %q", r.Level)
+	}
+
+	switch r.Proof {
+	case ProofKindCommand, ProofKindTest, ProofKindNone:
 	default:
-		return fmt.Errorf("unknown severity %q", r.Severity)
+		return fmt.Errorf("unknown proof kind %q", r.Proof)
 	}
 
 	if r.Check == "" || r.Evidence == "" || r.Source == "" {
@@ -178,15 +225,31 @@ type Diff struct {
 type Reviewer interface {
 	// Lenses returns the lens names to run for a diff under a profile.
 	Lenses(d Diff, p Profile) []string
-	// AcceptFinding reports whether a submitted finding is verified, and its severity.
-	AcceptFinding(f Finding, head, diff LineSource) (Severity, bool, error)
+	// AcceptFinding checks a submitted finding's quote and the line it names, runs a blocking finding's proof, and returns
+	// its level and bucket; a finding Go cannot verify or on a line the group did not change comes back dropped.
+	AcceptFinding(f Finding, head, diff LineSource, d Diff, run ProofRunner) (Accepted, error)
 	// AcceptResult rejects a result that skips or repeats a task identifier.
 	AcceptResult(tasks []string, r ReviewerResult) error
 }
 
+// Accepted is Go's verdict on one submitted finding.
+type Accepted struct {
+	Level   FindingLevel
+	Bucket  Bucket
+	Proof   string // failed_as_claimed, passed or none
+	In      string // head or diff, where Go found the quote
+	Dropped string // empty when kept; DropQuote or DropUnchanged when the finding is dropped
+}
+
+// Reasons AcceptFinding drops a finding.
+const (
+	DropQuote     = "quote_not_found" // Go did not find the quoted line at the stated file and line
+	DropUnchanged = "not_changed"     // the line is not an added line of the group's diff
+)
+
 // NewReviewer returns the Go side of a Reviewer session over the compiled catalogs.
-// standards reports the severity of a rule compiled from a standards skill; it may be nil.
-func NewReviewer(standards func(id string) (Severity, bool)) (Reviewer, error) {
+// standards reports the level of a rule compiled from a standards skill; it may be nil.
+func NewReviewer(standards func(id string) (FindingLevel, bool)) (Reviewer, error) {
 	cats, err := LoadCatalogs()
 	if err != nil {
 		return nil, err
@@ -197,32 +260,61 @@ func NewReviewer(standards func(id string) (Severity, bool)) (Reviewer, error) {
 // reviewer holds the catalogs and the standards rule lookup.
 type reviewer struct {
 	cats  []Catalog
-	rules map[string]Severity
-	std   func(id string) (Severity, bool)
+	rules map[string]Rule
+	std   func(id string) (FindingLevel, bool)
 }
 
 // newReviewer indexes the rules of the given catalogs.
-func newReviewer(cats []Catalog, standards func(string) (Severity, bool)) reviewer {
-	r := reviewer{cats: cats, rules: map[string]Severity{}, std: standards}
+func newReviewer(cats []Catalog, standards func(string) (FindingLevel, bool)) reviewer {
+	r := reviewer{cats: cats, rules: map[string]Rule{}, std: standards}
 	for _, c := range cats {
 		for _, rule := range c.Rules {
-			r.rules[rule.ID] = rule.Severity
+			r.rules[rule.ID] = rule
 		}
 	}
 	return r
 }
 
-// AcceptFinding refuses an unknown rule or a malformed finding, and reports whether Go found the quoted line.
-func (r reviewer) AcceptFinding(f Finding, head, diff LineSource) (Severity, bool, error) {
-	sev, ok := r.severity(f.Rule)
+// AcceptFinding refuses an unknown rule or a malformed finding, drops one whose quote Go cannot find or whose line the
+// group did not change, and runs the proof of a blocking one; without a proof that fails as claimed it warns.
+func (r reviewer) AcceptFinding(f Finding, head, diff LineSource, d Diff, run ProofRunner) (Accepted, error) {
+	rule, ok := r.rule(f.Rule)
 	if !ok {
-		return "", false, fmt.Errorf("unknown rule %q", f.Rule)
+		return Accepted{}, fmt.Errorf("unknown rule %q", f.Rule)
 	}
 	if strings.TrimSpace(f.File) == "" || f.Line < 1 {
-		return "", false, fmt.Errorf("finding needs a file and a line from 1")
+		return Accepted{}, fmt.Errorf("finding needs a file and a line from 1")
 	}
-	_, found := VerifyFinding(f, head, diff)
-	return sev, found, nil
+
+	in, found := VerifyFinding(f, head, diff)
+	if !found {
+		return Accepted{Level: rule.Level, Dropped: DropQuote}, nil
+	}
+	if !addedLine(d.Text, f.File, f.Line) {
+		return Accepted{Level: rule.Level, In: in, Dropped: DropUnchanged}, nil
+	}
+
+	got := Accepted{Level: rule.Level, Bucket: rule.Level.Bucket(), Proof: "none", In: in}
+	if got.Bucket != BucketBlock {
+		return got, nil
+	}
+
+	// A blocking level holds only when the proof fails as claimed; every other case is a warning.
+	got.Bucket = BucketWarn
+	if rule.Proof == ProofKindNone || f.Proof == nil || run == nil {
+		return got, nil
+	}
+
+	res, err := RunProof(context.Background(), run, *f.Proof)
+	if err != nil {
+		return got, nil
+	}
+
+	got.Proof = res
+	if res == "failed_as_claimed" {
+		got.Bucket = BucketBlock
+	}
+	return got, nil
 }
 
 // Lenses returns the lens names to run for a diff under a profile, in catalog order.
@@ -256,15 +348,24 @@ func (r reviewer) Lenses(d Diff, p Profile) []string {
 	return out
 }
 
-// severity returns the severity of a known rule, from a lens catalog or the standards rule list.
-func (r reviewer) severity(id string) (Severity, bool) {
-	if s, ok := r.rules[id]; ok {
-		return s, true
+// rule returns a known rule, from a lens catalog or the standards rule list; a standards rule cannot be proven.
+func (r reviewer) rule(id string) (Rule, bool) {
+	if rule, ok := r.rules[id]; ok {
+		return rule, true
 	}
 	if r.std != nil {
-		return r.std(id)
+		if l, ok := r.std(id); ok {
+			return Rule{ID: id, Level: l, Proof: ProofKindNone}, true
+		}
 	}
-	return "", false
+	return Rule{}, false
+}
+
+// addedLine reports whether line n of a file is an added line of a unified diff.
+func addedLine(diff, file string, n int) bool {
+	return slices.ContainsFunc(diffLines(diff), func(d diffLine) bool {
+		return d.Added && d.Line == n && d.File == file
+	})
 }
 
 // LoadCatalogs reads and checks the compiled lens catalogs, in lens order.
