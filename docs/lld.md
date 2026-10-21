@@ -12325,7 +12325,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `check.coverage` | int | 80 | Percent of the repository's lines tests must cover, in every language; hard limit 100. Owned here. |
+| `check.coverage` | int | 90 | Percent of the repository's lines tests must cover, in every language; hard limit 100. Owned here. |
 | Registry entry `weight` | enum | `light` | Model size for Quality Assurance |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
 | `limits.group_retries` | int | 3 | The group's retry budget; owned by [Runtime Manager](#7-runtime-manager) |
@@ -12353,7 +12353,7 @@ const (
 - A language with no build or lint command reports a `warn` with detail `skipped`, and the group is not blocked.
 - A passed item whose replay gives another exit code is `unreplayed` and the verdict is not `Pass`.
 - `Signoff.Voided` is true when one test file changed after the sign-off.
-- A coverage of 79 percent against a floor of 80 fails. With a base of 70, a head of 72 passes and a head of 68 fails.
+- A coverage of 89 percent against a floor of 90 fails. With a base of 70, a head of 72 passes and a head of 68 fails.
 - A language with no default coverage tool fails the coverage step and names the language.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)

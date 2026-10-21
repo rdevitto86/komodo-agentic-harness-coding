@@ -106,15 +106,15 @@ func TestParseLineCoverageHasNoDataForTheRest(t *testing.T) {
 	}
 }
 
-func TestCheckCoverageStepListsUncoveredAddedLines(t *testing.T) {
-	cfg := CheckerConfig{CoverageFloor: 80, Diff: addedDiffSource}
-	out := "total:\t(statements)\t90.0%\n" + goProfile
+func TestCheckCoverageStepFailsWhenAddedLinesAreUnderTheFloor(t *testing.T) {
+	cfg := CheckerConfig{CoverageFloor: 90, Diff: addedDiffSource}
+	out := "total:\t(statements)\t95.0%\n" + goProfile
 	sb := goSandbox().on("-coverprofile", reply{0, out})
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := step(t, r, StepCoverage); s.Level != LevelPass {
+	if s := step(t, r, StepCoverage); s.Level != LevelFail || !slices.Contains(s.Detail, "a/a.go:4-5") {
 		t.Errorf("coverage = %+v", s)
 	}
 	if !slices.Equal(r.Uncovered, []string{"a/a.go:4-5"}) {
@@ -122,8 +122,37 @@ func TestCheckCoverageStepListsUncoveredAddedLines(t *testing.T) {
 	}
 }
 
+func TestCheckCoverageStepPassesWhenEveryAddedLineIsCovered(t *testing.T) {
+	cfg := CheckerConfig{CoverageFloor: 90, Diff: addedDiffSource}
+	out := "total:\t(statements)\t95.0%\nmode: set\nm/a/a.go:2.1,7.2 5 1\n"
+	sb := goSandbox().on("-coverprofile", reply{0, out})
+	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())
+	if err != nil || step(t, r, StepCoverage).Level != LevelPass || len(r.Uncovered) != 0 {
+		t.Errorf("result: %+v %v", r, err)
+	}
+}
+
+func TestNewLinesLevelHoldsAddedLinesToTheFloor(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ChangedLines
+		want Level
+	}{
+		{"nothing executable added", ChangedLines{}, LevelPass},
+		{"9 of 10 on the floor", ChangedLines{Executable: 10, Covered: 9}, LevelPass},
+		{"8 of 10 under the floor", ChangedLines{Executable: 10, Covered: 8}, LevelFail},
+		{"none covered", ChangedLines{Executable: 6}, LevelFail},
+		{"all covered", ChangedLines{Executable: 6, Covered: 6}, LevelPass},
+	}
+	for _, tc := range cases {
+		if got := NewLinesLevel(90, tc.in); got != tc.want {
+			t.Errorf("%s: level = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestCheckCoverageStepFailsWhenNoAddedLineIsCovered(t *testing.T) {
-	cfg := CheckerConfig{CoverageFloor: 80, Diff: addedDiffSource}
+	cfg := CheckerConfig{CoverageFloor: 90, Diff: addedDiffSource}
 	out := "total:\t(statements)\t95.0%\nmode: set\nm/a/a.go:2.1,7.2 5 0\n"
 	sb := goSandbox().on("-coverprofile", reply{0, out})
 	r, err := newTestChecker(cfg).Check(context.Background(), sb.run, goInput())

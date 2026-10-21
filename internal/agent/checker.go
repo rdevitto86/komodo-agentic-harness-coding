@@ -432,8 +432,8 @@ func (c checker) judgeFailures(
 }
 
 // coverageStep runs the coverage command last, unless a confirmed regression already blocks the group.
-// It judges the whole-repository percent, then the lines the change adds: it fails when none of them ran, and returns
-// the added lines no test ran.
+// It judges the whole-repository percent, then the lines the change adds: it fails when under the floor of them ran,
+// and returns the added lines no test ran.
 func (c checker) coverageStep(
 	ctx context.Context,
 	run CommandRunner,
@@ -484,9 +484,10 @@ func (c checker) coverageStep(
 	if err != nil {
 		return StepResult{}, nil, err
 	}
-	if changed.Executable > 0 && changed.Covered == 0 {
+	if NewLinesLevel(c.cfg.CoverageFloor, changed) == LevelFail {
 		s.Level = LevelFail
-		s.Detail = append(s.Detail, "no line this change adds is covered by a test:")
+		s.Detail = append(s.Detail, fmt.Sprintf("%d of %d lines this change adds are covered, under the floor of %d%%:",
+			changed.Covered, changed.Executable, c.cfg.CoverageFloor))
 		s.Detail = append(s.Detail, changed.Uncovered...)
 	}
 

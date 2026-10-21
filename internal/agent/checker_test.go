@@ -252,8 +252,8 @@ func TestCheckCoverageFloor(t *testing.T) {
 		base func(context.Context, string) (float64, bool, error)
 		want Level
 	}{
-		{"79 under 80", "79.0", nil, LevelFail},
-		{"80 on the floor", "80.0", nil, LevelPass},
+		{"89 under 90", "89.0", nil, LevelFail},
+		{"90 on the floor", "90.0", nil, LevelPass},
 		{
 			"72 over a base of 70",
 			"72",
@@ -270,7 +270,7 @@ func TestCheckCoverageFloor(t *testing.T) {
 	for _, c := range cases {
 		sb := goSandbox().on("-coverprofile", okCoverage(c.pct))
 		r, err := newTestChecker(CheckerConfig{
-			CoverageFloor: 80,
+			CoverageFloor: 90,
 			BaseCoverage:  c.base,
 		}).Check(context.Background(), sb.run, goInput())
 		if err != nil || step(t, r, StepCoverage).Level != c.want {
