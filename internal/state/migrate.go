@@ -41,7 +41,8 @@ func RegisterMigration(m Migration) {
 
 // Version 0 has the same shape as version 1, and a machine record has the same shape in versions 2 to 5, so those steps
 // change nothing; a group record from version 1 swaps its three counting-up limits for the retry budget, one from
-// version 2 moves its wall time to a per-try base, one from version 3 renames the tester to qa, and one from version 4 moves a qa block to retries.
+// version 2 moves its wall time to a per-try base, one from version 3 renames the tester to qa, and one from version 4
+// moves a qa block to retries.
 func init() {
 	identity := func(old []byte) ([]byte, error) { return old, nil }
 	RegisterMigration(Migration{From: 0, Step: identity})
