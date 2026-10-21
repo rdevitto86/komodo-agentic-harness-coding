@@ -5235,7 +5235,7 @@ type EmptySlotError struct{ Slot Slot }
 func (e EmptySlotError) Error() string { return "required slot " + string(e.Slot) + " is empty" }
 ```
 
-The Task Manager calls `Place` with the chain from the Agent Registry and each link's measured context. Beta 6 ships two Claude links, the Claude subscription link first and then the paid Anthropic interface; OpenAI's two links can follow once configured ([G-20](#g-20)), and the free local model is an optional link ([chapter 11](#11-task-manager)). The rule holds for every link: the ceiling is half the measured context, and nothing is cut to fit.
+The Task Manager calls `Place` with the chain from the Agent Registry and each link's measured context. Two Claude links are built, the Claude subscription link first and then the paid Anthropic interface; OpenAI's two links can follow once configured ([G-20](#g-20)), and the free local model is an optional link ([chapter 11](#11-task-manager)). The rule holds for every link: the ceiling is half the measured context, and nothing is cut to fit.
 
 The token counter is one bundled estimate for every link, so a size check is repeatable. The half-context ceiling is the margin that absorbs the difference between the estimate and a provider's own count.
 
@@ -8116,7 +8116,7 @@ type TestReview struct {
 	Reviewer RoundState `json:"reviewer"`
 	Findings []Finding  `json:"findings"` // blocking findings the Reviewer proved with confidence 80 or more this round
 	NotMet   []string   `json:"not_met"`  // task ids Quality Assurance marked not met
-	Failed   []string   `json:"failed"`   // Quality Assurance items confirmed failed
+	Failed   []string   `json:"failed"`   // Quality Assurance items marked failed
 }
 
 // RoundState is one agent's progress in the current round.
@@ -9752,7 +9752,7 @@ Every session ends with exactly one `state.Reason` value ([10. State Manager](#1
 | `cancelled` | The Task Manager stopped it on purpose | Acts by cause |
 | `crash` | The session died without reporting | Recorded on restart; the task runs again; a builder crash spends one try unless a Komodo restart caused it |
 
-An agent's retry count and the group's attempt count are bounded by `Limits`; reaching either escalates.
+`Limits` holds only the group's retry budget (`GroupRetries`) and the refusals allowed under one guard row (`RefusalLimit`).
 
 ### 11.4 Interfaces
 
@@ -11978,8 +11978,8 @@ sequenceDiagram
 4. A failure returns the result with each failing step's exact output. A clean result continues at edge 5.
 5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither Quality Assurance nor the Reviewer starts. On a clean result Go runs the deep checks of the group's risk level ([Running the deep checks](#running-the-deep-checks)), which cost no model call, and records each surviving mutant.
 6. The Task Manager then starts Quality Assurance's session with the brief, and the Reviewer at the same moment for a group of level medium or above ([14.5](#145-behaviour)).
-7. Quality Assurance runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in Quality Assurance's sandbox; the model never writes the command. Quality Assurance verifies each of its own answers with a run tool and is prompted to recover from its own failures, such as starting Docker or the application. `run` (classes `build` and `test`) stays for any other command.
-8. It ends with one final call: a pass or fail and a confidence from 0 to 100 for every item, with one `{cmd, exit, excerpt}` run for each command behind the answer, and `confirmed` or `not_confirmed` for every task identifier. When it cannot test the group, it reports `untestable` with a cause; after 2 failed attempts in a row it must do so.
+7. Quality Assurance runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in Quality Assurance's sandbox; the model never writes the command. Quality Assurance verifies each of its own answers with a run tool and is prompted to recover from its own failures, such as starting Docker or the application with the repository's own commands, then runs the check again. `run` (classes `build` and `test`) stays for any other command.
+8. It ends with one final call: a pass or fail and a confidence from 0 to 100 for every item, with one `{cmd, exit, excerpt}` run for each command behind the answer, and `confirmed` or `not_confirmed` for every task identifier. When it cannot test the group, it reports `untestable` with a cause; after 2 failed recovery attempts in a row it must do so.
 9. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item, a missing or out-of-range confidence, or an untestable result with no cause.
 10. Go records the evidence and never runs it again. A passed item at confidence under 80 returns the group to Build; a failed item blocks with or without a command. Quality Assurance fails open on `untestable`, or after 2 Quality Assurance internal failures in a row: the Task Manager publishes `qa.fail_open`, the pull request carries the warning "not tested by Quality Assurance: (cause)", and no try is spent. The Reviewer never fails open: a Reviewer internal failure costs one Builder try.
 11. The Task Manager builds the `QAVerdict` and gives it to the approval rule of [14.5](#145-behaviour). When `Pass` is true, it stamps the sign-off, which is the last step.
@@ -15212,7 +15212,7 @@ The purpose of the subsystem and who it talks to are in [HLD 5.20](hld.md#520-re
 - Every error reaches the person through the Error Handler and the CLI.
 
 **Concepts**
-- **Link:** one way to reach a model, such as a subscription login or a paid interface. Beta 6 ships two: `claude-cli`, the Claude subscription, and `anthropic-api`, the paid Anthropic interface.
+- **Link:** one way to reach a model, such as a subscription login or a paid interface. Two are built: `claude-cli`, the Claude subscription, and `anthropic-api`, the paid Anthropic interface.
 - **Plan window:** a subscription's allowance of usage over a period, such as a five-hour window or a weekly window; it resets at a known time.
 - **Headroom:** the share of a window still left, as a percent.
 - **Overage:** a subscription session drawing paid credits beyond its plan.
@@ -15299,7 +15299,7 @@ type Limit struct {
 }
 ```
 
-The link names in the examples are the two beta 6 links, `claude-cli` and `anthropic-api`. Each struct has an `EventKey` method that binds it to its `resource` subtype, and the package binds all four to the bus at start, so the Runtime Manager publishes them without registering them again.
+The link names in the examples are the two built links, `claude-cli` and `anthropic-api`. Each struct has an `EventKey` method that binds it to its `resource` subtype, and the package binds all four to the bus at start, so the Runtime Manager publishes them without registering them again.
 
 | Number | Read from | Used for |
 |---|---|---|
@@ -15308,7 +15308,7 @@ The link names in the examples are the two beta 6 links, `claude-cli` and `anthr
 | Overage flag and reset time | The subscription program's rate-limit line | The overage warning; the line carries no percent used, and whether another field does is unverified ([G-71](#g-71)) |
 | Cap kind and reset time | A provider refusal | The limit error; the Runtime Manager sets the pause |
 
-Both beta 6 links send `usage`. `headroom` comes from whichever link sends rate-limit headers; whether `claude-cli` sends a percent used is unverified ([G-71](#g-71)).
+Both built links send `usage`. `headroom` comes from whichever link sends rate-limit headers; whether `claude-cli` sends a percent used is unverified ([G-71](#g-71)).
 
 #### State
 

@@ -8,7 +8,7 @@ This document is the high-level design of Komodo, a single Go program that runs 
 
 #### 1.1 Purpose
 
-Komodo is one Go binary that turns a goal into reviewed, published code. It plans the work into task groups, runs each group through a fixed pipeline of agents inside a private copy of the repository, and publishes only work that passed the checks its risk level requires. A person merges the result.
+Komodo is one Go binary that turns a goal into reviewed, published code. It plans the work into task groups, runs each group through a fixed pipeline of agents inside a private copy of the repository, and publishes only work that passed the checks its risk level requires.
 
 **📐 How work moves from a goal to published code**
 ```mermaid
@@ -36,10 +36,10 @@ flowchart LR
 #### 1.2 Goals and Non-Goals
 
 Goals:
-- One Go binary that uses only the standard library, with every part reachable through one command line.
+- One Go binary that uses only the standard library.
 - One event bus that every part publishes to and listens on, using one event shape with a type and a subtype.
 - One task manager per task group, which guards its agents and runs the pipeline from build to cleanup.
-- A Quality Assurance agent and a reviewer that judge the builder's work side by side, with tests run in a sandbox.
+- A Quality Assurance agent and a reviewer that judge the builder's work side by side.
 - One owner per kind of data: settings, context, cache, leases and runtime state each have exactly one manager.
 
 Non-goals: per-repository agent definitions, third-party Go dependencies, a hosted service, and agents that push to git themselves.
@@ -50,8 +50,8 @@ Non-goals: per-repository agent definitions, third-party Go dependencies, a host
 |---|---|---|
 | 1 | Safety | An agent never writes outside its worktree, pushes to git, reads a secret or spends money without permission |
 | 2 | Simplicity | Each component has one job, and each kind of data has one owner |
-| 3 | Durability | A crash loses no committed work; each finished task is saved as a local commit, and a crashed run continues from its saved state |
-| 4 | Cost control | Subscription links come first, every loop has a bound, and the Resource Manager watches spending |
+| 3 | Durability | A crash loses no committed work; each finished task is saved as a local commit |
+| 4 | Cost control | Subscription links come first, every loop has a bound |
 | 5 | Observability | Every event is recorded, so any run can be measured and explained |
 
 ## 2. Constraints
@@ -96,7 +96,7 @@ Each quality goal has a mechanism that code enforces. No model is trusted to beh
 
 | Goal | Strategy |
 |---|---|
-| Safety | The Task Manager checks every agent action against its permissions, and Quality Assurance validates inside a sandbox |
+| Safety | The Task Manager checks every agent action against its permissions |
 | Simplicity | 19 subsystems with one job each, joined by one event bus instead of point-to-point messages |
 | Durability | Leases name exactly one owner per branch and worktree; each finished task is saved as a local commit before approval |
 | Cost control | The Resource Manager watches plan windows and spending, and the Cache Manager reuses context instead of re-sending it |
@@ -130,7 +130,7 @@ flowchart LR
   WA -->|"7 errors to the caller"| IF
 ```
 
-1. The CLI sends each command to the Runtime Manager, which broadcasts it.
+1. The CLI sends each command to the Runtime Manager, which broadcasts it as plan, run-start, run-stop or run-continue.
 2. A plan command reaches the Intake Handler, which plans with context from the Context Manager.
 3. The Intake Handler publishes run-start for the task lists it wrote.
 4. The Runtime Manager starts one Task Manager per task group, with its lease, state and cache.
@@ -194,11 +194,11 @@ Quality Assurance checks the builder's new and changed code: test accuracy, that
 
 #### 5.15 Reviewer
 
-The Reviewer is the final code check of the group's own changes, skipped at `low` and `med_low`. It reads them while Quality Assurance runs, and a group moves to publishing only when every judge that ran approves; otherwise the work returns to the Builder. Only `critical`, `high` and `med_high` rules block, and only when the finding carries the Reviewer's own proof (the command it ran and what it saw) with confidence 80 or more; Go never runs it. The Reviewer never fails open: its failure costs one try. Detail: [chapter 14](lld.md#14-reviewer).
+The Reviewer is the final code check of the group's own changes, skipped at `low` and `med_low`. It reads them while Quality Assurance runs, and a group moves to publishing only when every judge that ran approves; otherwise the work returns to the Builder. Rules have six levels: `critical`, `high`, `med_high`, `medium`, `med_low` and `low`. Only the top three block, `medium` warns, and pre-existing issues never block; a block also needs the finding to carry the Reviewer's own proof (the command it ran and what it saw) with confidence 80 or more; Go never runs it. The Reviewer never fails open: its failure costs one try. Detail: [chapter 14](lld.md#14-reviewer).
 
 #### 5.16 Commit Handler
 
-The Commit Handler publishes approved work: it squashes each approved group onto its epic's branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per epic. A high or critical group gets its own quarantined draft pull request; groups that depend on it wait [TODO: quarantine and epic pull request details ([G-306](lld.md#g-306), [G-307](lld.md#g-307), [G-308](lld.md#g-308))]. It is the only part that pushes. Detail: [chapter 15](lld.md#15-commit-handler).
+The Commit Handler publishes approved work: it squashes each approved group onto its epic's branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per epic. A high or critical group gets its own quarantined draft pull request; groups that depend on it are deferred until it merges, and the run never waits for them [TODO: quarantine and epic pull request details ([G-306](lld.md#g-306), [G-307](lld.md#g-307), [G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
 
 #### 5.17 Cleanup Handler
 
@@ -233,7 +233,7 @@ sequenceDiagram
   participant S as Subscribers
   participant M as Metrics Service
   P->>B: event with type, subtype, run, group
-  B->>S: deliver to each subscriber of that type
+  B->>S: deliver to each subscriber of that type, in publish order
   B->>B: write the event to the store first
   B->>M: deliver a copy of every event
   S-->>P: reply only through a direct call, never through the bus
@@ -283,7 +283,7 @@ sequenceDiagram
 
 1. Any part that fails publishes an error event; the Error Handler records it and prints it to the caller through the CLI.
 2. The Resource Manager raises a resource event before a plan window or spending limit is reached.
-3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has 3 tries in total, any mix of causes. A critical blocker (tooling failure, container crash, agent stalling mid-run) or a builder session timeout fails a try; a builder crash spends one unless a Komodo restart caused it. Failing checks never end a builder session; the builder works until it passes or its window ends. The failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant one final try and enter its working time. Without that approval the group fails for good and is run again only from a fresh plan. A breaker waits and then blocks after 4 blocker errors in a row from other faults or judge crashes, and the engine's own failure stops new sessions until a person runs `komodo run` from a terminal. Detail: [chapter 7](lld.md#7-runtime-manager).
+3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has 3 tries in total, any mix of causes. A critical blocker (tooling failure, container crash, agent stalling mid-run) or a builder session timeout fails a try; a builder crash spends one unless a Komodo restart caused it. Failing checks never end a builder session; the builder works until it passes or its window ends. The failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant one final try and enter its working time. Without that approval the group fails for good and is run again only from a fresh plan. Komodo's own faults spend no try. A breaker waits and then blocks after 4 blocker errors in a row from those faults or judge crashes, and the engine's own failure stops new sessions until a person runs `komodo run` from a terminal. Detail: [chapter 7](lld.md#7-runtime-manager).
 4. After a crash, `komodo run` continues each group from its saved state.
 
 ## 7. Deployment
@@ -324,7 +324,7 @@ Each agent role in the registry names its model and its chain of links, subscrip
 
 #### 8.3 Security
 
-Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default. Commands run in a sandbox with no network except what the task needs. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
+Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default; a refused action records an error event. Commands run in a sandbox with no network except what the task needs. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
 
 #### 8.4 Quality Gates
 
