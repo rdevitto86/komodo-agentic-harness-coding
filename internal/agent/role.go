@@ -16,7 +16,7 @@ type Slots struct {
 
 // Role is the compiled definition of one agent role.
 type Role struct {
-	Name       string          `json:"name"`        // builder, Quality Assurance, reviewer or planner
+	Name       string          `json:"name"`        // builder, qa, reviewer or planner
 	Tools      []string        `json:"tools"`       // the only tools advertised to the session
 	RunClasses []string        `json:"run_classes"` // the only classes the run tool may execute
 	Guard      []string        `json:"guard"`       // guard rows beyond the inherited G1 to G6

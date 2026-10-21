@@ -33,7 +33,7 @@ type Spec struct {
 	Masked     []string // worktree files matching the secret list; unreadable
 	MaxProcs   int      // sandbox.max_procs
 	MaxMemGB   int      // sandbox.max_mem_gb
-	Role       string   // builder or Quality Assurance; picks the mechanism
+	Role       string   // builder or qa; picks the mechanism
 	Network    bool     // true only for the group's setup command
 
 	SetupEnv []string // NAME=value variables only a command with Network true gets

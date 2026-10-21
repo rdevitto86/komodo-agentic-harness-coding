@@ -4831,7 +4831,7 @@ Outside servers follow these rules:
 ```go
 // Request is what a caller hands GetContext.
 type Request struct {
-	Agent string // planner, builder, Quality Assurance or reviewer
+	Agent string // planner, builder, qa or reviewer
 	Run   string
 	Group string // empty for the planner
 	Tree  Tree   // read-only view of the base commit
@@ -12568,7 +12568,7 @@ func Classify(in RiskInput) RiskDecision
 | Fail closed | A path no rule matches is `medium`, never `low`. `low` and `med_low` come only from the explicit rules of the level table below. |
 | Highest file wins | A group's level is the level of its riskiest file, measured on the actual diff at landing, not on the plan. |
 | Fixed paths | CI workflow files, Makefiles, Dockerfiles, deploy and migration folders are always `critical`; dependency files are always `high`. |
-| Up, never down | A proven reviewer finding, or a change of more than 400 lines, raises the level one step; a change to a public interface is `med_high`. No agent and no setting lowers it. |
+| Up, never down | A proven reviewer finding, a change of more than 400 lines, or a change to a public interface raises the level to at least `med_high`. No agent and no setting lowers it. |
 | Every level shows its reason | `RiskDecision.Reason` is logged and shown on the pull request. |
 
 | Change | Level |
@@ -13264,7 +13264,7 @@ const bodyTemplate = `## Summary
 ## Findings resolved
 {{range .Facts.FindingCodes}}- {{.}}
 {{end}}
-## QA
+## Quality Assurance
 {{range .QA.Summary}}- {{.}}
 {{end}}
 ## Reviewer
@@ -16086,7 +16086,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-310"></a>G-310 | Deep checks | Which Go mutation tool; a quick proof of concept picks it. Other languages come later | Quick proof of concept | [13](#13-quality-assurance) |
 | <a id="g-311"></a>G-311 | Surviving mutants | What a surviving mutant does now that Quality Assurance writes no tests; Go records it | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-312"></a>G-312 | Quality Assurance gate | Whether a sign-off voided by a changed test file spends a retry | Owner decision | [13](#13-quality-assurance) |
-| <a id="g-313"></a>G-313 | Quarantine title | Removed: the harness has one path; every change goes through an epic. Open: the title of a quarantine pull request; proposal, not decided: `<label>: <goal>` | Owner decision | [15](#15-commit-handler) |
+| <a id="g-313"></a>G-313 | Quarantine title | The title of a quarantine pull request; proposal, not decided: `<label>: <goal>` | Owner decision | [15](#15-commit-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 

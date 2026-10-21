@@ -22,7 +22,7 @@ func TestVersionZeroReadsAsCurrent(t *testing.T) {
 		t.Fatal("the read rewrote the record")
 	}
 	next, err := m.Save(testGroup, r.State, r.Header.Rev)
-	if err != nil || next.Header.V != Version || !strings.Contains(string(readBytes(t, p)), `"v": 3`) {
+	if err != nil || next.Header.V != Version || !strings.Contains(string(readBytes(t, p)), `"v": 4`) {
 		t.Fatalf("Save after migration: %+v %v", next.Header, err)
 	}
 
@@ -43,7 +43,7 @@ func TestVersionZeroReadsAsCurrent(t *testing.T) {
 func TestNewerVersionUntouched(t *testing.T) {
 	m, root := newMgr(t)
 	p := statePath(root, testGroup)
-	writeRaw(t, p, `{"v":4,"anything":true}`)
+	writeRaw(t, p, `{"v":5,"anything":true}`)
 	if _, err := m.Load(testGroup); !errors.Is(err, ErrNewerVersion) {
 		t.Fatalf("Load: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestMigrationSwapsTheCountingUpLimitsForTheBudget(t *testing.T) {
 	 "block":{"reason":"returns"},
 	 "counters":{"returns":3,"attempts":5,"retries":2,"crashes":1,"blocks":{"returns":2,"attempts":1,"flap":1},
 	  "wall_used_s":60,"wall_extended":false,"tokens_used":10},
-	 "test_review":{"qa":{"result":"","restarts":1},"reviewer":{"result":"","restarts":0},
+	 "test_review":{"tester":{"result":"","restarts":1},"reviewer":{"result":"","restarts":0},
 	  "findings":[],"not_met":[],"failed":[]},
 	 "tasks":[],"actions_open":[],"resume":[],"owed":[],"requests":[],"scope_added":[]}}`)
 

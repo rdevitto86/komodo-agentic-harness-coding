@@ -22,7 +22,7 @@ type migrationKey struct {
 }
 
 // Version is the schema version this binary writes.
-const Version = 3
+const Version = 4
 
 // migratedRetries is the retries a group saved before the retry budget starts with: the shipped limits.group_retries.
 const migratedRetries = 3
@@ -39,23 +39,25 @@ func RegisterMigration(m Migration) {
 	migrations[migrationKey{string(m.Kind), m.From}] = m
 }
 
-// Version 0 has the same shape as version 1, and a machine record has the same shape in versions 2 and 3, so those steps
-// change nothing; a group record from version 1 swaps its three counting-up limits for the retry budget, and one from
-// version 2 moves its wall time to a per-try base.
+// Version 0 has the same shape as version 1, and a machine record has the same shape in versions 2 to 4, so those steps
+// change nothing; a group record from version 1 swaps its three counting-up limits for the retry budget, one from
+// version 2 moves its wall time to a per-try base, and one from version 3 renames the tester to qa.
 func init() {
 	identity := func(old []byte) ([]byte, error) { return old, nil }
 	RegisterMigration(Migration{From: 0, Step: identity})
 	RegisterMigration(Migration{From: 1, Step: retryBudget})
 	RegisterMigration(Migration{From: 2, Step: wallPerTry})
+	RegisterMigration(Migration{From: 3, Step: qaRename})
 	for _, k := range machineKinds {
 		RegisterMigration(Migration{From: 0, Kind: k, Step: identity})
 		RegisterMigration(Migration{From: 1, Kind: k, Step: identity})
 		RegisterMigration(Migration{From: 2, Kind: k, Step: identity})
+		RegisterMigration(Migration{From: 3, Kind: k, Step: identity})
 	}
 }
 
-// retryBudget upgrades a version 1 group record: the returns, attempts and retries counters and Quality Assurance and
-// reviewer restarts are dropped, retries_left starts at the limit, and a block on a spent counter becomes a block on
+// retryBudget upgrades a version 1 group record: the returns, attempts and retries counters and tester and reviewer
+// restarts are dropped, retries_left starts at the limit, and a block on a spent counter becomes a block on
 // retries.
 func retryBudget(old []byte) ([]byte, error) {
 	rec, ok := objectOf(old)
@@ -78,7 +80,7 @@ func retryBudget(old []byte) ([]byte, error) {
 		}
 	}
 	if tr, ok := objectOf(st["test_review"]); ok {
-		for _, role := range []string{"qa", "reviewer"} {
+		for _, role := range []string{"tester", "reviewer"} {
 			if r, ok := objectOf(tr[role]); ok {
 				delete(r, "restarts")
 				tr[role] = encodeObject(r)
@@ -126,6 +128,45 @@ func wallPerTry(old []byte) ([]byte, error) {
 	}
 
 	st["counters"] = encodeObject(c)
+	rec["state"] = encodeObject(st)
+	return json.Marshal(rec)
+}
+
+// qaRename upgrades a version 3 group record: the tester's test and review result, block reason and block count move
+// to qa.
+func qaRename(old []byte) ([]byte, error) {
+	rec, ok := objectOf(old)
+	if !ok {
+		return old, nil
+	}
+
+	st, ok := objectOf(rec["state"])
+	if !ok {
+		return old, nil
+	}
+	if tr, ok := objectOf(st["test_review"]); ok {
+		if r, ok := tr["tester"]; ok {
+			tr["qa"] = r
+			delete(tr, "tester")
+			st["test_review"] = encodeObject(tr)
+		}
+	}
+	if b, ok := objectOf(st["block"]); ok && string(b["reason"]) == `"tester"` {
+		b["reason"] = json.RawMessage(`"qa"`)
+		st["block"] = encodeObject(b)
+	}
+	if c, ok := objectOf(st["counters"]); ok {
+		var blocks map[string]int
+		if json.Unmarshal(c["blocks"], &blocks) == nil && blocks != nil {
+			if n, ok := blocks["tester"]; ok {
+				blocks["qa"] += n
+				delete(blocks, "tester")
+				c["blocks"], _ = json.Marshal(blocks)
+				st["counters"] = encodeObject(c)
+			}
+		}
+	}
+
 	rec["state"] = encodeObject(st)
 	return json.Marshal(rec)
 }

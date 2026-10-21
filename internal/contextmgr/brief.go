@@ -71,7 +71,7 @@ type EmptySlotError struct{ Slot Slot }
 
 var (
 	// ErrAgentUnknown means the agent is not one of the 4.
-	ErrAgentUnknown = errors.New("agent is not one of planner, builder, Quality Assurance or reviewer")
+	ErrAgentUnknown = errors.New("agent is not one of planner, builder, qa or reviewer")
 
 	// ErrContext means no link in the chain has a ceiling that holds the brief.
 	ErrContext = errors.New("brief exceeds half the measured context of every link in the chain")

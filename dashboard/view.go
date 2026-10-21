@@ -96,7 +96,7 @@ type KPIs struct {
 
 // namedSession pairs a session with its agent name.
 type namedSession struct {
-	Role string // builder, Quality Assurance or reviewer
+	Role string // builder, qa or reviewer
 	Session
 }
 

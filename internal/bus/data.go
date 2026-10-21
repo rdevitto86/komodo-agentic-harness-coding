@@ -209,7 +209,7 @@ func (StageExit) EventKey() Key { return Key{TypeRunStatus, "stage.exit"} }
 // SessionStart is the data of run-status / session.start.
 type SessionStart struct {
 	GroupFacts
-	Agent   string `json:"agent"`          // builder, Quality Assurance, reviewer or planner
+	Agent   string `json:"agent"`          // builder, qa, reviewer or planner
 	Task    string `json:"task,omitempty"` // builder only: the task claimed with it
 	Link    string `json:"link"`           // the model link: claude-cli or anthropic-api
 	Model   string `json:"model"`          // the model identifier the link reported
@@ -354,7 +354,7 @@ func (ToolDenied) EventKey() Key { return Key{TypeRunStatus, "tool.denied"} }
 // SandboxFallback is the data of run-status / sandbox.fallback.
 type SandboxFallback struct {
 	GroupFacts
-	Role   string `json:"role"`   // the agent whose commands moved, such as Quality Assurance
+	Role   string `json:"role"`   // the agent whose commands moved, such as qa
 	Wanted string `json:"wanted"` // the mechanism the role should have used, such as docker
 	Used   string `json:"used"`   // the mechanism it ran in, such as seatbelt or bubblewrap
 	Why    string `json:"why"`    // why the wanted mechanism was not used
