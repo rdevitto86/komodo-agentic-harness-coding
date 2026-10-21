@@ -6673,7 +6673,7 @@ A **try** is the span between spent tries: the first try, then one more after ea
 | Failure | Spends one try |
 |---|---|
 | A Test and Review round fails and the group returns to Build | Yes |
-| A builder session ends `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail` or `refusals`; a builder session timeout is a failed try | Yes |
+| A builder session ends `timeout`, `idle`, `no_result`, `schema_fail` or `refusals`; a builder session timeout is a failed try | Yes |
 | A builder session ends `crash`, unless a Komodo restart caused the crash | Yes |
 | A builder ends `done` while a task is not done | Yes |
 | A reviewer session ends without a result, or crashes without a Komodo restart as the cause (the Reviewer never fails open) | Yes |
@@ -6691,7 +6691,7 @@ A **failed** group is Done with `Outcome` failed. `Next` orders `cancel` and `re
 
 #### Failing checks in a try
 
-A failing check never ends a Builder session. The failure goes back to the live session, and the Builder works until its checks pass or its working time ends ([Wall time per try](#wall-time-per-try)). A Builder session that times out is a failed try. The outer rule above is unchanged: 3 tries, one override try and the 60-minute window.
+A failing check never ends a Builder session. A builder whose done result fails its checks gets the failure fed back and is resumed with no count limit, until its checks pass or the session ends ([Wall time per try](#wall-time-per-try)). A timeout, an idle stop or a crash then spends a try. A Builder session that times out is a failed try. The outer rule above is unchanged: 3 tries, one override try and the 60-minute window.
 
 As built (`internal/task/checkcap.go`):
 - A check is a Builder `task_done` run; its name is the task identifier. `run_check` is Quality Assurance's tool.
@@ -6716,13 +6716,13 @@ One table, `state.Classify`, ranks every reason; `Reason.Severity()` reads it. T
 | blocker (an error stops an agent session from working on its tasks) | `crash` (a session process lost, or a goroutine panic), `setup` (lease, worktree, sandbox, guard rules not loading), `state_invalid`, `contract` | The group's breaker and the global pause |
 | fault (a step after the work broke) | `publish`, `cleanup` | Nothing; recorded by type |
 | minor (expected, self-healing) | `cancelled`, an engine or Task Manager restart, `provider`, `paused`, `billing` | Nothing |
-| work failure | `timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals` | A retry; not a blocker |
+| work failure | `timeout`, `idle`, `no_result`, `schema_fail`, `refusals`, a builder `crash` that no Komodo restart caused | A retry; not a blocker |
 
 The block-only reasons about the work, not Komodo (`flap`, `needs_scope`, `context`, `merge_conflict`, `dependency`, `retries`, `no_provider`, `pause_timeout`, `paid_refused`) have no tier. Rate limits stay with the pool halving. A lint, test or review failure is a work outcome and never a blocker.
 
 **Error handler.** One instance in the Runtime Manager takes every error of a group and of the engine. It records the type (the `Reason`), the tier and the group in an `error.recorded` event, and keeps a count by type since the engine started. `status` shows that count as the table of errors by type, and the run metrics keep it per run. It keeps no file: after an engine restart its counts start at zero, and its events are the record.
 
-**Group breaker.** `FaultStreak` counts blocker errors on one group, from any agent, with no work outcome between them. A session that ends `done`, or for a reason that spends a retry (`timeout`, `idle`, `check_fail`, `no_result`, `schema_fail`, `refusals`), resets it, as does a plain `run (id)` on a blocked group. After the 1st blocker error the group waits 1 minute before its next session start, after the 2nd 2 minutes, after the 3rd 4 minutes. The 4th blocks the group `crash` for a person: the cap covers Komodo faults and judge crashes, and the block itself spends no try and does not fail the group. A builder crash is both a blocker error, which adds 1 to the streak, and a spent try, unless a Komodo restart caused it: that crash spends no try and adds nothing to the streak. A blocker that already blocks the group under its own reason, such as `setup`, keeps that reason and waits the same way: the run does not count the group as stalled, the group resumes by itself when its wait ends with the streak kept, and the 4th leaves it blocked for a person and reports the stall. A crash found when the engine restarts is not an error and spends no try. The waits are engine constants held in memory: `[TODO: tune the per-group waits from error counts (G-294)]`.
+**Group breaker.** `FaultStreak` counts blocker errors on one group, from any agent, with no work outcome between them. A session that ends `done`, or for a reason that spends a retry (`timeout`, `idle`, `no_result`, `schema_fail`, `refusals`), resets it, as does a plain `run (id)` on a blocked group. After the 1st blocker error the group waits 1 minute before its next session start, after the 2nd 2 minutes, after the 3rd 4 minutes. The 4th blocks the group `crash` for a person: the cap covers Komodo faults and judge crashes, and the block itself spends no try and does not fail the group. A builder crash is both a blocker error, which adds 1 to the streak, and a spent try, unless a Komodo restart caused it: that crash spends no try and adds nothing to the streak. A blocker that already blocks the group under its own reason, such as `setup`, keeps that reason and waits the same way: the run does not count the group as stalled, the group resumes by itself when its wait ends with the streak kept, and the 4th leaves it blocked for a person and reports the stall. A crash found when the engine restarts is not an error and spends no try. The waits are engine constants held in memory: `[TODO: tune the per-group waits from error counts (G-294)]`.
 
 **Global pause.** When one error type reaches 3 different groups inside 10 minutes, the handler pauses new Build and Test and Review session starts everywhere; running sessions continue. It publishes `starts.paused` with the type, the groups and the wait. It uses the same waits: after 1 minute held groups may start again (`starts.resumed`). If the same type reaches 3 groups again within 10 minutes of that resume, the next wait applies, 2 minutes and then 4. After the 4-minute wait fails the pause stays, status shows an alert, and only a person running `komodo run` from a terminal ends it, when the engine accepts that command. A pause spends no retry and changes no group's block state.
 
@@ -6738,7 +6738,7 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 |---|---|---|---|
 | `result.fail` | Test and Review | `RetriesLeft` is 1 or 0 | `retries`; the detail names a regression when the data flags a test that passed at the base |
 | `result.fail` | Test and Review | Fingerprint equals `FailureHash`, or tree equals `ReturnTree` | `flap` |
-| `session.end` builder, reason `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, `crash` (no Komodo restart as the cause), or `done` with a task open | Build | `RetriesLeft` is 1 or 0 | `retries` |
+| `session.end` builder, reason `timeout`, `idle`, `no_result`, `schema_fail`, `refusals`, `crash` (no Komodo restart as the cause), or `done` with a task open | Build | `RetriesLeft` is 1 or 0 | `retries` |
 | `session.end` reviewer without a result, or a reviewer `crash` (no Komodo restart as the cause) | Test and Review | `RetriesLeft` is 1 or 0 | `retries` |
 | `fault` reason `retries` from the Task Manager | Build, Test and Review | | `retries`; `RetriesLeft` is set to 0 |
 | `session.end` reason `billing` | Build, Test and Review | | `paid_refused` |
@@ -6763,7 +6763,7 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | `session.start` | Build, Test and Review | Task `claimed` with its session; a session start costs nothing |
 | `session.end` builder | Build | Clears the task's session; `TokensUsed` grows by the session's usage; then the exit row below |
 | `task.done` | Build | Task `done`; `GateFails` reset |
-| `gate.fail` | Build | `GateFails` + 1 for the task, recorded only: a failing completion command never ends the session and spends nothing |
+| `gate.fail` | Build | `GateFails` + 1 for the task, recorded only: a failing completion command never ends the session and spends nothing; the engine publishes no `task.retry` for it |
 | `session.end` reviewer, no result | Test and Review | `RetriesLeft` - 1; orders a fresh session of the reviewer on the group's tree, or records the restart in `Owed` when the group is Paused; never a return |
 | `session.end` Quality Assurance, no result | Test and Review | No try; orders a fresh Quality Assurance session; a second internal failure in a row fails open ([13.5](#135-behaviour)) |
 | `session.end` reason `paused` | Paused | Adds a `Resume` entry; `Pause.Until` takes the later time; `Pause.Refused` + 1 when the same session paused before |
@@ -6778,7 +6778,7 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | Exit reason | Sets; orders; emits |
 |---|---|
 | `done` | With every task done, row 4 moves the group; with a task not done, `RetriesLeft` - 1 and a retry |
-| `check_fail` (the result failed the agent's own gate twice), `no_result`, `schema_fail`, `refusals` | `RetriesLeft` - 1 and `retry.spent`; a fresh session while retries remain |
+| `no_result`, `schema_fail` (2 rejected results), `refusals` | `RetriesLeft` - 1 and `retry.spent`; a fresh session while retries remain |
 | `timeout`, `idle` | The same, with a fresh session resuming at the open task |
 | `provider` | `Resume` set; orders the stage again on the next allowed link |
 | `paused` | `Resume` set; row 9 |
@@ -6867,7 +6867,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - `Startable` is false while any dependency is not Done.
 - Quality Assurance fails then reviewer approves, and the reverse: one return to Build at the second end.
 - A return on the same tree as `ReturnTree` blocks `flap`.
-- Each true failure (a failed Test and Review round, builder `timeout`, `idle`, `no_result`, `check_fail`, `schema_fail`, `refusals`, a builder `crash`, a `done` with a task open, a reviewer without a result) spends one retry and emits `retry.spent`; a crash a Komodo restart caused, `cancelled`, `provider`, a Task Manager restart and a Quality Assurance agent without a result spend none and emit `retry.waived`.
+- Each true failure (a failed Test and Review round, builder `timeout`, `idle`, `no_result`, `schema_fail`, `refusals`, a builder `crash`, a `done` with a task open, a reviewer without a result) spends one retry and emits `retry.spent`; a crash a Komodo restart caused, `cancelled`, `provider`, a Task Manager restart and a Quality Assurance agent without a result spend none and emit `retry.waived`.
 - With `limits.group_retries` 3, the third true failure sets `RetriesLeft` to 0 and enters the override wait (Blocked `retries`, `Block.Until` 60 minutes on); `run (id)` on it is refused and `RetriesLeft` stays 0.
 - `override` before `Block.Until` sets `RetriesLeft` to 1, stores the request's minutes in `FinalWallMin`, sets `Overrides` to 1 and resumes; after it, or on any other block, it is refused; minutes outside 1 to 480 are refused.
 - The final try reaching `FinalWallMin` gets the 60-minute extension, and reaching the limit plus 60 minutes fails the group.
@@ -6909,7 +6909,8 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A pause past `limits.pause_max_min` blocks `pause_timeout` and keeps the saved work.
 - With `limits.pool_max` 2 and 4 ready groups, 2 groups run and the rest wait; a group whose dependency is Blocked waits while an unrelated group runs.
 - A panic in one group blocks only that group `crash`; a second group keeps running.
-- `kill -9` with a builder live, then `run (id)`: one `session.end` reason `crash`, `RetriesLeft` unchanged, the stage ordered again with the handle; with a failing handle, a fresh session and one `session.resume-lost`.
+- `kill -9` of the engine with a builder live, then `run (id)`: one `session.end` reason `crash` that a Komodo restart caused, `RetriesLeft` unchanged, the stage ordered again with the handle; with a failing handle, a fresh session and one `session.resume-lost`.
+- A builder process lost while the engine stays up: `session.end` reason `crash`, `RetriesLeft` - 1.
 - `kill -9` between an order's start and done: the order runs again once by its key.
 - A run with all groups Blocked publishes one `run-failure` / `stalled` listing every reason.
 - A stop with a session that ignores the interrupt: the whole-tree kill lands at 90 seconds, the work is saved, and `run-complete` / `stopped` is published after the leases are revoked.
@@ -8113,7 +8114,7 @@ type TaskState struct {
 type TestReview struct {
 	QA   RoundState `json:"qa"`
 	Reviewer RoundState `json:"reviewer"`
-	Findings []Finding  `json:"findings"` // blocking findings Go verified this round
+	Findings []Finding  `json:"findings"` // blocking findings the Reviewer proved with confidence 80 or more this round
 	NotMet   []string   `json:"not_met"`  // task ids Quality Assurance marked not met
 	Failed   []string   `json:"failed"`   // Quality Assurance items confirmed failed
 }
@@ -8124,7 +8125,7 @@ type RoundState struct {
 	Result   string `json:"result"`            // empty until it ends, then pass, fail or cancelled
 }
 
-// Finding names one verified blocking finding by rule and file.
+// Finding names one blocking finding by rule and file.
 type Finding struct {
 	Rule string `json:"rule"`
 	File string `json:"file"`
@@ -8170,7 +8171,6 @@ const (
 	ReasonNoProvider    Reason = "no_provider"    // every link in the chain was unavailable or unauthorized
 	ReasonPauseTimeout  Reason = "pause_timeout"  // paused for limits.pause_max_min
 	ReasonPaidRefused   Reason = "paid_refused"   // the billing check refused a paid link
-	ReasonRegression    Reason = "regression"     // a test that passed at the base fails and returns are spent
 	ReasonFlap          Reason = "flap"           // the same failure, or a return that changed nothing
 	ReasonRetries       Reason = "retries"        // the group's retries are spent; a person may override until the window lapses
 	ReasonNeedsScope    Reason = "needs_scope"    // the builder needs a file outside its group's files
@@ -8184,8 +8184,6 @@ const (
 	ReasonCrash         Reason = "crash"          // the group's goroutine panicked, or an action failed past its retry
 	ReasonContract      Reason = "contract"       // a decision result broke the event's declared shape
 	ReasonStateInvalid  Reason = "state_invalid"  // a record or a write failed a check
-	ReasonQA        Reason = "qa"         // Quality Assurance's results were disputed twice
-	ReasonFlaky         Reason = "flaky"          // Quality Assurance's reruns split once and a role reported results it cannot confirm
 	ReasonDone          Reason = "done"           // session exit: the session returned a valid result
 	ReasonCheckFail     Reason = "check_fail"     // session exit: the result failed the agent's own gate twice
 	ReasonNoResult      Reason = "no_result"      // session exit: the reply was cut off or the conversation outgrew the context
@@ -8919,8 +8917,6 @@ type Permissions struct {
 type Limits struct {
 	SessionWall    time.Duration
 	SessionIdle    time.Duration
-	SessionRetries int // fresh sessions after a timeout or idle stop, per agent
-	Returns        int // trips back to Build before the group is escalated
 	GroupRetries   int // the retry budget at the start (limits.group_retries)
 	RefusalLimit   int // refusals under one guard row before the session ends
 }
@@ -8962,7 +8958,6 @@ type Progress struct {
 	Stage          state.Stage `json:"stage"`
 	TasksDone      []string `json:"tasks_done"`
 	Returns        int      `json:"returns"`          // trips back to Build so far
-	Disputes       int      `json:"disputes"`         // Quality Assurance restarts after a disputed result
 	RetriesLeft    int      `json:"retries_left"`    // tries the group has left; mirrors the engine's budget
 	TreeAtReturn   string   `json:"tree_at_return"`   // tree hash when the group last went back to Build
 	ScopeAsked     []string `json:"scope_asked"`      // task identifiers that already made their one scope request
@@ -9114,8 +9109,6 @@ type Fact struct {
 | `refusals` | `blocked` | The same guard row refused the same session `guard.refusal_limit` times, and the retries ran out |
 | `no_provider`, `paid_refused`, `context` | `blocked` | Link choice found no allowed link ([11.4](#114-interfaces)) |
 | `contract` | `blocked` | A reviewer's or Quality Assurance's commands changed a tracked file twice in one trip |
-| `flaky` | `blocked` | Quality Assurance's two reruns of an item disagreed |
-| `qa` | `blocked` | Quality Assurance disputed Go's reruns a second time |
 | `setup` | `blocked` | The setup command or the sandbox instance failed |
 | `crash` | `failed` | A session died and its retries ran out |
 
@@ -9128,7 +9121,7 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | `session.start`, `session.end` | Session, agent, link, model, measured context and its source; the exit reason on end |
 | `session.idle`, `session.timewarn` | Session; seconds of silence and whether the nudge went, or seconds used and the wall limit |
 | `tool.denied` | Tool, guard row, refused target, count under that row |
-| `finding.submit` | Rule, file, line, quote, note, proof |
+| `finding.submit` | Rule, file, line, quote, note, confidence, proof (`ran`, `saw`) |
 | `provider.skip` | `from`, `to`, `reason` |
 | `limit.warn` | Link, kind (window past `warn.quota_pct`, overage drawn) |
 | `scope.request`, `scope.answer` | Task, paths; the answer's action and approved paths |
@@ -9239,9 +9232,9 @@ A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The comm
 | `diff` | `{paths}`, optional | The unified diff of the group's change against its base commit |
 | `git_read` | `{command, args}`; `command` is `log`, `show`, `blame` or `status` | The command's output |
 | `skill` | `{name}`: `<skill>` or `<skill>#<section>` | The skill text |
-| `submit_finding` | `{rule, file, line, quote, note, proof}`; `proof` is `{cmd, expect}` or `{test, expect}` (14.3) | `filed <rule> at <file>:<line>` |
+| `submit_finding` | `{rule, file, line, quote, note, confidence, proof}`; `confidence` is required, 0 to 100; `proof` is `{ran, saw}`, the command the Reviewer ran and what it saw; the Reviewer runs it and Go records it (14.3) | `filed <rule> at <file>:<line>` |
 | `task_done` | `{task}` | The `done_when` exit code and capped output |
-| `run_check` | `{item}`: an acceptance item identifier; the schema's `enum` lists the group's identifiers; Quality Assurance only | The item's `cmd` run as written in Quality Assurance's sandbox: its output, led by `exit status <n>` when the exit code is not 0; an error for an unknown identifier or an item with no `cmd` |
+| `run_check` | `{item}`: an acceptance item identifier; the schema's `enum` lists the group's identifiers; Quality Assurance only | Quality Assurance's own run tool: the item's `cmd` run as written in Quality Assurance's sandbox, which Go never replays: its output, led by `exit status <n>` when the exit code is not 0; an error for an unknown identifier or an item with no `cmd` |
 | `lint_backlog` | `{draft}`: the planned task list as one text | `ok`, or one lint error per line |
 
 A reply is `Reply{Text, LogPath}`. When the output exceeds 4 KB, the first 1 KB and the last 3 KB are kept, joined by one line `[… <n> bytes cut; full output in <LogPath>]`, since errors usually sit at the end. `read` is not capped.
@@ -9745,11 +9738,11 @@ Every session ends with exactly one `state.Reason` value ([10. State Manager](#1
 |---|---|---|
 | `done` | The session finished and returned a valid result | Records the result; the stage continues |
 | `needs_scope` | A builder asked for a file outside its list (row B1) | Holds and escalates `scope` |
-| `check_fail` | The result failed the agent's own gate twice | Counts an attempt and retries the task |
-| `no_result` | The reply was cut at the output limit and one "continue" did not finish it, or the conversation outgrew the context | Counts an attempt and retries the task |
-| `schema_fail` | The final result broke the schema after the one allowed re-prompt | Counts an attempt and retries the task |
-| `timeout` | The wall limit was hit and the ladder stopped the session | Starts a fresh session, up to the agent's retries |
-| `idle` | The session stayed silent past the nudge and 5 minutes of grace | Starts a fresh session, up to the agent's retries |
+| `check_fail` | A Quality Assurance or Reviewer result failed the agent's own gate twice | Ends the judge's session; the Builder never ends this way |
+| `no_result` | The reply was cut at the output limit and one "continue" did not finish it, or the conversation outgrew the context | Spends one try and starts a fresh session |
+| `schema_fail` | The final result broke the schema after the one allowed re-prompt (a builder's loop rejects only the schema, so 2 rejected results end it here) | Spends one try and starts a fresh session |
+| `timeout` | The wall limit was hit and the ladder stopped the session | A builder timeout is a failed try: spends one try and starts a fresh session |
+| `idle` | The session stayed silent past the nudge and 5 minutes of grace | Spends one try and starts a fresh session |
 | `refusals` | The guard refused the same row `guard.refusal_limit` times (row G6) | Retries the task |
 | `provider` | A usage limit ended the session and the chain has an allowed link | Keeps the resume handle; the next session starts on the next allowed link |
 | `billing` | The first stream line showed a paid API key instead of the subscription login | The session is killed before turn 1; escalates `blocked`, reason `paid_refused` |
@@ -9924,9 +9917,13 @@ type Role interface {
 type Outcome struct {
 	Kind     OutcomeKind
 	Reason   string   // for Block, and the builder's reason for Scope
-	Findings []string // for Return: verified findings the builder receives; for Restart: Go's output
+	Findings []string // for Return: findings the builder receives
 	Paths    []string // for Scope: the paths the builder asked for
 	Summary  []string // for Pass: the result lines the pull request body prints
+	// for the builder's Pass: the commands it ran to prove its work
+	Evidence []agent.EvidenceRun
+	// for Quality Assurance's Pass: why it could not test the group; the group goes on without its sign-off
+	FailOpen []string
 }
 
 // OutcomeKind is the pipeline's next move for one role.
@@ -9935,7 +9932,6 @@ type OutcomeKind string
 const (
 	OutcomePass    OutcomeKind = "pass"    // this role approves
 	OutcomeReturn  OutcomeKind = "return"  // back to Build with Findings
-	OutcomeRestart OutcomeKind = "restart" // start the same role once more (a disputed Quality Assurance result)
 	OutcomeBlock   OutcomeKind = "block"   // escalate with Reason
 	OutcomeScope   OutcomeKind = "scope"   // the builder asks for files outside its list
 )
@@ -10217,10 +10213,11 @@ The reviewer and Quality Assurance start together and run side by side. The revi
 | Case | Outcome |
 |---|---|
 | A mechanical check fails | No Quality Assurance or reviewer session starts; back to Build with the exact output |
-| Reviewer returns first | Quality Assurance is cancelled; the reviewer finishes; back to Build with all its verified findings |
+| Reviewer returns first | Quality Assurance is cancelled; the reviewer finishes; back to Build with all its blocking findings |
 | Quality Assurance returns | The reviewer finishes; back to Build with Quality Assurance's findings and the reviewer's |
-| Quality Assurance result is `restart` and `Disputes` is 0 | `Disputes` becomes 1; Quality Assurance restarts once with Go's output; the reviewer keeps going; the group does not go back to Build |
-| Quality Assurance result is `restart` and `Disputes` is 1 | Escalate `blocked`, reason `qa`; the group does not go back to Build |
+| Quality Assurance marks an item failed, with or without a command | Back to Build with the item and its evidence |
+| Quality Assurance passes an item with confidence under 80 | Back to Build |
+| Quality Assurance reports `untestable`, or fails internally twice in a row | The group goes on to Commit with the warning "not tested by Quality Assurance: (cause)"; `qa.fail_open` is published; no try is spent |
 | Both pass | The pipeline enters Commit |
 | Both return in one moment | Both reach the builder in the one return |
 | Either `block` | Escalate `blocked` with the role's reason |
@@ -10231,14 +10228,14 @@ A return counts one in `Progress.Returns`. The rework check runs these steps in 
 2. Take the tree hash of the group's worktree through `Git.TreeHash`. If it equals `TreeAtReturn`, the builder changed nothing since the last return: escalate `blocked`, reason `flap`.
 3. Store the hash in `TreeAtReturn`, raise `Returns`, and enter Build with the findings in the builder's brief.
 
-While the group is paused, a Quality Assurance agent or reviewer restart is added to `Pause.Owed` and started at the timer, never at once, so no session starts with no allowed link and the agent's retry budget is not spent.
+While the group is paused, a Quality Assurance agent or reviewer fresh session after a failure is added to `Pause.Owed` and started at the timer, never at once, so no session starts with no allowed link and the agent's retry budget is not spent.
 
 #### Checks before the sessions
 
 When the group enters `test_review`, Go code runs the free checks before any model is called.
 
 1. `CreateSandboxInstance` makes Quality Assurance's sandbox for the group: a Docker container, or the operating-system sandbox when Docker is missing.
-2. The checks run inside it as the first step of Quality Assurance's turn ([chapter 13](#13-quality-assurance)): the task's completion commands, the build, the lint, the affected tests, coverage and the secret scan.
+2. The checks run inside it as the first step of Quality Assurance's turn ([chapter 13](#13-quality-assurance)): the task's completion commands, the build, the lint, the affected tests, coverage (the 90 percent rule: whole-repository line coverage at 90, a base already under the floor failing only when the change lowers it, and at least 90 percent of the change's added executable lines covered) and the secret scan. Quality Assurance verifies the 90 percent rule as one of its standing checks.
 3. A failure becomes a `return` whose findings are the exact output. The rework check then runs, and the group re-enters Build. No session starts.
 4. A clean result starts Quality Assurance and the reviewer together.
 
@@ -10402,12 +10399,12 @@ The loop runs on API links. It is the harness's copy of what the `claude` progra
 1. Tools stay on `auto`: the model reasons and calls tools freely, and thinking stays on.
 2. A text-only reply ends the work. No nudge is sent.
 3. One final model call, not a tool, returns only the agent's result schema.
-4. The loop checks the result: the schema first (1 re-prompt), then the role's own gate through `Role.Judge`. A failure goes back into the same session with its output; 2 rejected results end it with `check_fail`.
+4. The loop checks the result: the schema first (1 re-prompt), then the role's own gate through `Role.Judge`. A failure goes back into the same session with its output; 2 rejected results end a judge's session with `check_fail` and a builder's with `schema_fail`. A Reviewer or Quality Assurance result with no `confidence`, and a Builder `done` with no `evidence`, is a rejected result. A builder whose done result fails its checks is resumed with no count limit.
 5. A reply cut off at the output limit gets "continue" once, then the session ends with `no_result`.
 
 No result tool exists mid-session: the result always comes from the final call, on every link.
 
-**Stop and inject.** `Inject` queues a line that rides on the next user message sent to the model. `Stop(Interrupt)` lets the current tool call finish and then makes the next call the final one; `Terminate` and `Kill` cancel at once. A loop that ends without a usable result returns `*EndError`, whose `Reason` is `check_fail`, `no_result` or `schema_fail`. `messages.jsonl` numbers each line `turn` by the message's position in the conversation.
+**Stop and inject.** `Inject` queues a line that rides on the next user message sent to the model. `Stop(Interrupt)` lets the current tool call finish and then makes the next call the final one; `Terminate` and `Kill` cancel at once. A loop that ends without a usable result returns `*EndError`, whose `Reason` is `check_fail` (Quality Assurance and the Reviewer only), `no_result` or `schema_fail`. `messages.jsonl` numbers each line `turn` by the message's position in the conversation.
 
 **Stubs and numbering.** The stub names the log path the tool host returned in `ToolReply.LogPath`; when the host saved no log, the stub ends `bytes, not saved]`. A call numbers from 1 in the session; a resumed session continues the numbering from the saved conversation, and the log paths of calls made before the resume are not kept, so their stubs say `not saved`.
 
@@ -10566,7 +10563,7 @@ An agent's rows compile into a matcher once per session. A check is a map lookup
 3. The engine runs a relayed call on the session's bound tools, the same tool functions and guard the API link's tool loop uses, so every tool behaves the same on both links. The guard, the refusal count and the task record live only in the engine; `task_done` reruns the task's `done_when` command there.
 4. The guard runs before the tool. A refusal returns a reply naming the row and the allowed alternative.
 5. The reply is capped; the full output goes to `out/<call>.log`, and the capped reply names the path.
-6. A validated `submit_finding` becomes the fact `finding.submit`. The role judges its evidence; a finding whose quote is not at its `file:line` is dropped and logged, and does not block. A finding at level `med_high` or above blocks only after Go runs its proof ([14.5](#145-behaviour)).
+6. A validated `submit_finding` becomes the fact `finding.submit`. The role judges its evidence; a finding whose quote is not at its `file:line` is dropped and logged, and does not block. A finding blocks only when its level is critical, high or med_high, it has a proof (`ran` and `saw`) and its confidence is 80 or more; otherwise it is a warning. Go never runs the proof ([14.5](#145-behaviour)).
 7. After an `edit`, the repository's detected `format` command runs on the edited file inside the confinement. If it fails, the edit stays unformatted and the reply carries the error; a repository with no `format` command skips the step.
 8. When `task_done` reports a task's `done_when` command passing, the Task Manager adds the task to `Progress.TasksDone`, calls `Committer.Save` for it, and reports the state. The commit stays local.
 
@@ -10691,7 +10688,7 @@ stateDiagram-v2
   Ended --> [*]: result.json written
 ```
 
-The steps in 11.5 and the stop ladder give each move; a session that ends `paused` is resumed from its handle, and one that ends `timeout` or `idle` gets a fresh session up to the agent's retries.
+The steps in 11.5 and the stop ladder give each move; a session that ends `paused` is resumed from its handle, and one that ends `timeout` or `idle` spends one try and gets a fresh session.
 
 **Group states.** The group's stage and counters are `Progress`; the Runtime Manager persists it.
 
@@ -10733,8 +10730,8 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 
 | Situation | Detected by | Behaviour |
 |---|---|---|
-| Session silent past the idle limit | Timer tick | Nudge, 5-minute grace, ladder, reason `idle`; fresh session up to the agent's retries |
-| Wall limit reached | Timer tick | Ladder, reason `timeout`; fresh session up to the agent's retries |
+| Session silent past the idle limit | Timer tick | Nudge, 5-minute grace, ladder, reason `idle`; spends one try and starts a fresh session |
+| Wall limit reached | Timer tick | Ladder, reason `timeout`; spends one try and starts a fresh session |
 | Timer extension denied | `TimerGrant.Extra` is 0 | The warning is injected as before; the limit stands |
 | Nudge to a turn stuck in a tool call | Best effort | May land late; accepted |
 | Orphan child processes | Process group kill | Killing the group ends every child |
@@ -10765,7 +10762,7 @@ A sandbox instance goes Created, SetupOnline (network on for the setup command o
 | `edit` search text not found | `edit` | The reply shows the 5 closest lines |
 | Reply cut off at the output limit | Tool loop | "continue" once, then the session ends `no_result` |
 | Conversation over the context after stubbing | Tool loop | The session ends `no_result`; nothing past the context is sent |
-| Two rejected results | Tool loop | The session ends `check_fail` |
+| Two rejected results | Tool loop | A judge's session ends `check_fail`; a builder's ends `schema_fail`, which spends one try |
 | `run` past 10 min | Process control | The whole process tree is killed |
 | A `run` argument of `&&` | By construction | Reaches the command as a literal string |
 | Platform cannot cap processes or memory | `Backend.Check` | The person is told; commands run uncapped |
@@ -10849,9 +10846,11 @@ Component cases run real commands in the confinement of the platform. Unit cases
 - `Tick` with a session that recovered after its nudge and goes silent again returns `TickStopIdle`, with no second nudge.
 - A fake Runtime Manager that grants 10 minutes at the 80% mark raises the wall limit by 10 minutes; a zero grant leaves it.
 - A reviewer `return` while Quality Assurance runs cancels Quality Assurance and sends the builder the findings.
-- A Quality Assurance agent `restart` with `Disputes` 0 restarts Quality Assurance once and does not return to Build; with `Disputes` 1 it escalates `qa`.
+- A Quality Assurance passed item at confidence 79 returns the group to Build; at 80 it signs off.
+- A Quality Assurance `untestable` result fails open: it publishes `qa.fail_open`, and the group goes on to Commit with the pull request warning and no try spent.
+- A reviewer finding with no proof, or with confidence under 80, warns and returns nothing.
 - A return whose tree hash equals `TreeAtReturn` escalates `flap`; `RetriesLeft` at 1 or 0 escalates `retries`.
-- A Quality Assurance agent restart that comes due while the group is paused is added to `Owed` and starts at the timer.
+- A fresh judge session that comes due while the group is paused is added to `Owed` and starts at the timer.
 - A group started while every link is limited pauses, reports a `Pause` with `Since` set, and makes 0 model calls.
 - A re-pause keeps `Since` and raises `RefusedResumes`.
 - A failover changes `RetriesLeft` by 0.
@@ -11095,7 +11094,7 @@ The [Context Manager](#6-context-manager) fills the slots through `GetContext()`
 | `file_contents` | Each file of the list at the base commit; `new file` when absent | Required |
 | `repo_context`, `standards`, `specs` | Repository guidance, standards skills, spec anchors the tasks cite | Optional |
 | `diff` | Base commit to the group's current files | Optional, on a return |
-| `checks` | Exact output of the failed mechanical check or Quality Assurance's failing command | Optional, on a return |
+| `checks` | Exact output of the failed mechanical check or Quality Assurance's failing command, and the last failing check output of the Builder's previous try | Optional, on a return or a new try |
 | `findings` | Open Reviewer findings | Optional, on a return |
 | `scope_answer` | `approved` or `denied`, the paths and the reason, one line each | Optional, on resume |
 | `unfinished` | The task that holds unfinished edits and its changed files, one path per line | Optional, on resume |
@@ -11120,6 +11119,15 @@ type BuilderResult struct {
 	Paths    []string      `json:"paths,omitempty"`    // needs_scope only: the paths asked for
 	Reason   string        `json:"reason,omitempty"`   // needs_scope only: why they are needed
 	Disputed []string      `json:"disputed,omitempty"` // file:line of each finding the Builder rejects
+	// done only: the commands the Builder ran to prove its work
+	Evidence []EvidenceRun `json:"evidence,omitempty"`
+}
+
+// EvidenceRun is one command an agent ran, its exit code and an excerpt of its output.
+type EvidenceRun struct {
+	Cmd     string `json:"cmd"`     // the command as run
+	Exit    int    `json:"exit"`    // the exit code seen
+	Excerpt string `json:"excerpt"` // the output lines that show the result, up to 4 KB
 }
 ```
 
@@ -11127,13 +11135,14 @@ type BuilderResult struct {
 |---|---|
 | `status` | `done` or `needs_scope`; any other value fails the schema. |
 | `summary` | Required. A fresh session after a crash receives the last summary in its brief. |
+| `evidence` | Required with `done`: the commands the Builder ran and their output. Each run needs a command and an excerpt of at most 4 KB. The evidence goes to `session.end` and into Quality Assurance's brief. |
 | `paths`, `reason` | Required when `status` is `needs_scope`; refused otherwise. |
 | `disputed` | Each entry is a finding's `<file>:<line>`, such as `internal/agent/lock.go:42`; it feeds the precision counters of 14.3. |
 
 A finished group:
 
 ```json
-{"status": "done", "summary": "Added the lock file type and its tests; both tasks pass.", "disputed": []}
+{"status": "done", "summary": "Added the lock file type and its tests; both tasks pass.", "disputed": [], "evidence": [{"cmd": "go test ./internal/lease/", "exit": 0, "excerpt": "ok  \tinternal/lease\t0.4s"}]}
 ```
 
 A scope request:
@@ -11236,7 +11245,7 @@ func AutoDeny(paths []string, protected func(string) bool, ownedByOther func(str
 
 | Function | On failure |
 |---|---|
-| `ParseBuilderResult` | Returns an error for unknown fields, a bad status or a `needs_scope` without paths and reason. The Task Manager re-prompts once, then ends the session `schema_fail`. |
+| `ParseBuilderResult` | Returns an error for unknown fields, a bad status, a `needs_scope` without paths and reason, a `done` with no evidence, an evidence run with no command or an excerpt over 4 KB. The Task Manager re-prompts once, then ends the session `schema_fail`. |
 | `TaskGate.Complete` | A non-zero exit returns the outcome and a nil error. An error means the command could not run; the Task Manager records an error event. |
 | `OutOfScope` | Cannot fail; used by the guard rule B1. |
 | `AutoDeny` | Cannot fail; `denied` is false when every path may go to the orchestrator. |
@@ -11262,7 +11271,7 @@ One group of 2 tasks goes from the Builder's start to the hand-off, and the Revi
 flowchart TD
   S["Task Manager starts the Builder"] -->|"1 brief"| W["Edit and test one task"]
   W -->|"2 task_done"| G{"Go reruns the completion command"}
-  G -->|"3 exit non-zero, under 3 tries"| W
+  G -->|"3 exit non-zero"| W
   G -->|"4 exit 0: task done, local commit"| N{"More tasks?"}
   N -->|"5 yes"| W
   N -->|"6 no: final call"| H["Mechanical checks, then Quality Assurance and Reviewer"]
@@ -11271,7 +11280,7 @@ flowchart TD
 
 1. The Task Manager builds the brief and starts the Builder's session in the group's worktree.
 2. The Builder edits and tests one task, then calls `task_done` with the task identifier.
-3. Go runs `TaskGate.Complete`. A non-zero exit goes back to the live session as a gate result; the inner cap ([7.5](#the-inner-cap-on-a-try)) ends the session `check_fail` on the third identical failure in a row or the twentieth check run.
+3. Go runs `TaskGate.Complete`. A non-zero exit goes back to the live session as a gate result; the Builder keeps working until the check passes or the session ends, and the last failing output is kept for the next try's brief.
 4. An exit of 0 publishes `task.done`. The Task Manager then asks the Commit Handler to save a local commit of the task, without pushing.
 5. The Builder starts the next task.
 6. After the last `task.done` the Builder makes its final call, `BuilderResult` with status `done`. The group enters Test and Review: Go runs the mechanical checks first ([Quality Assurance](#13-quality-assurance)), and only a clean result starts Quality Assurance and the Reviewer, at the same time.
@@ -11283,7 +11292,7 @@ flowchart TD
 1. The `task_done` call carries only a task identifier; Go looks up the completion command in the task list.
 2. `Complete` runs the command through `CommandRunner` in the sandbox and caps the output.
 3. It returns the exit code and the capped output; it makes no commit.
-4. The Task Manager records the run in the session's inner cap ([7.5](#the-inner-cap-on-a-try)); when the cap says so it ends the session `check_fail`.
+4. The Task Manager keeps a failing run's output as the last failing check, and clears it on a pass.
 5. On exit 0 the Task Manager publishes `task.done` and asks the Commit Handler to save a local commit of the task's files. Nothing is pushed.
 
 **Request a file outside the list**
@@ -11340,7 +11349,7 @@ The Builder keeps no state of its own. The runtime state of the group ([State Ma
 | State | Written when | Meaning |
 |---|---|---|
 | Task `queued`, `claimed`, `done` | The session claims a task; `task.done` | Which task the Builder holds; a fresh session resumes at the first task not `done` |
-| Inner cap, per session | Each `task_done` run | 3 identical failures in a row, or 20 runs, end the session `check_fail` ([7.5](#the-inner-cap-on-a-try)) |
+| Last failing check output | Each `task_done` run | Kept for the next try's brief; a pass clears it |
 | `ScopeAsked`, per task | A `needs_scope` result | 1 request per task |
 | Added-scope list | An approval | Paths added to the file list |
 | Last return's tree hash | Each return | Compared with the next hand-off's tree hash (12.7) |
@@ -11348,7 +11357,7 @@ The Builder keeps no state of its own. The runtime state of the group ([State Ma
 ### 12.7 Invariants and Failures
 
 **Invariants**
-1. A task is `done` only after Go ran its completion command and saw exit 0; the Builder's claim is never enough.
+1. A task is `done` only after Go ran its completion command and saw exit 0; the Builder's claim is never enough. A `done` result needs evidence, and failing checks never end a session.
 2. The Builder's sandbox reads git and never writes it: only the Commit Handler commits and pushes.
 3. The Builder writes only inside the effective file list and its test siblings.
 4. Any single failure loses at most one model turn.
@@ -11360,9 +11369,11 @@ The Builder keeps no state of its own. The runtime state of the group ([State Ma
 
 | Failure | Detected by | Action; bound | Then |
 |---|---|---|---|
-| Completion command fails | `TaskGate.Complete` | Back to the live session as a gate result | The inner cap ends the session `check_fail`; task retry |
+| Completion command fails | `TaskGate.Complete` | Back to the live session as a gate result | The Builder fixes it in the same session; when its window ends the session times out and the try fails |
 | Final call breaks the schema | `ParseBuilderResult` | One re-prompt; 1 | The session ends `schema_fail`; task retry |
 | `done` with a task not `done` | Task Manager | Fresh task retry; spends one retry | Blocked `retries` when none is left |
+| `done` with no evidence | `ParseBuilderResult` | Rejected result, re-prompted; 1 | The session ends `schema_fail` after 2 rejected results |
+| Builder crash | Task Manager | Fresh session; spends one try unless a Komodo restart caused the crash | Blocked `retries` when none is left |
 | Edit outside the file list | Guard row B1 | Refuse; tell the Builder to stop with `needs_scope` | Scope request |
 | Request for a protected path or another group's file | `AutoDeny` | Deny without asking; 0 asks | The Builder continues inside the list |
 | Second scope request in one task | `ScopeAsked` flag | Deny without asking; 1 request per task | The Builder continues inside the list |
@@ -11393,7 +11404,6 @@ Constants:
 
 ```go
 const (
-	GateFeedbacksPerTask = 2 // gate results sent back to a live session before check_fail
 	ScopeRequestsPerTask = 1 // scope requests one task may make
 )
 ```
@@ -11407,7 +11417,7 @@ const (
 - `TaskGate.Complete` with a fake runner returns the exit code and output for exit 0 and exit 1, and writes nothing to git.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
-- Failing gate runs reach the live session; the third identical failure in a row, or the twentieth check run, ends it `check_fail`.
+- Failing gate runs reach the live session and never end it; the 3rd, 4th or 20th failure in a row changes nothing, and the last failing output reaches the next try's brief.
 - A `needs_scope` result for an allowed path asks the orchestrator, and an approval resumes the same session with `scope_answer`.
 - After an approval and a resume, the guard still allows the approved path.
 - A session killed after its first `task.done` resumes at the second task.
