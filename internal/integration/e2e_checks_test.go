@@ -165,7 +165,8 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 	if !has(evs, "run-failure", "group.blocked", "regression") {
 		t.Fatalf("the group blocked without reason regression\n%s", r.evidence(evs))
 	}
-	// The event log holds every round: 3 builds (3 tries total), a return after each failed try but the last, and a check result per try.
+	// The event log holds every round: 3 builds (3 tries total), a return after each failed try but the last, and a
+	// check result per try.
 	builds, returns, checks := 0, 0, 0
 	for _, e := range evs {
 		switch {
