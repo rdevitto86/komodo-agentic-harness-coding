@@ -653,5 +653,7 @@ func permissionsOf(a config.Agent) task.Permissions {
 
 // riskSkipsReview reports whether the diff's Go-rule risk level is one the Reviewer does not judge.
 func riskSkipsReview(diff string) bool {
-	return !agent.Route(agent.Classify(agent.RiskInput{Files: agent.DiffFiles(diff)}).Level).Reviewer
+	in := agent.RiskInput{Files: agent.DiffFiles(diff), PublicAPI: agent.PublicAPIChanged(diff)}
+
+	return !agent.Route(agent.Classify(in).Level).Reviewer
 }
