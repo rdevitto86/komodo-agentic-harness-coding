@@ -192,10 +192,14 @@ func TestRunLogsTheCommandItStarted(t *testing.T) {
 		e.OnRun = func(cmd string) { logged = append(logged, cmd) }
 	})
 
-	r.call("run", map[string]any{"class": "build", "args": []string{"a", "b"}})
+	reply := r.call("run", map[string]any{"class": "build", "args": []string{"a", "b"}})
 	r.call("run", map[string]any{"class": "build"})
 
-	want := []string{"printf [%s]\n a b", "printf [%s]\n", "build"}
+	if !strings.Contains(reply.Text, argvForm([]string{"printf", "[%s]\n", "a", "b"})) {
+		t.Errorf("reply lacks the logged form: %q", reply.Text)
+	}
+
+	want := []string{argvForm([]string{"printf", "[%s]\n", "a", "b"}), argvForm([]string{"printf", "[%s]\n"}), "build"}
 	if strings.Join(logged, "|") != strings.Join(want, "|") {
 		t.Errorf("logged %q, want %q", logged, want)
 	}

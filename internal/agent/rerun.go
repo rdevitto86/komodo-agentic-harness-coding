@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -65,14 +66,24 @@ func (goQA) Replay(ctx context.Context, run CommandRunner, it Item, r ItemResult
 	return bad, nil
 }
 
-// hasLines reports whether every line of excerpt is a line of out; the cut marker of a capped excerpt is not a line.
+// volatileToken matches what changes between two runs of the same test: a duration such as 0.21s, (0.00s) or 12ms, and the
+// (cached) mark go test prints for a result served from its cache. A cached result is Go's own record of an earlier run
+// of the same inputs, so matching it is as sound as matching a fresh run.
+var volatileToken = regexp.MustCompile(`\(cached\)|\d+(?:\.\d+)?(?:ms|s)\b`)
+
+// NormalizeOutput replaces the durations and cached marks of go test output with one fixed token, so that two runs of the
+// same test compare equal.
+func NormalizeOutput(s string) string { return volatileToken.ReplaceAllString(s, "<time>") }
+
+// hasLines reports whether every line of excerpt is a line of out once timings are normalised; the cut marker of a capped
+// excerpt is not a line.
 func hasLines(out, excerpt string) bool {
 	have := map[string]bool{}
-	for _, l := range strings.Split(out, "\n") {
+	for _, l := range strings.Split(NormalizeOutput(out), "\n") {
 		have[strings.TrimSpace(l)] = true
 	}
 
-	for _, l := range strings.Split(strings.ReplaceAll(excerpt, truncMarker, "\n"), "\n") {
+	for _, l := range strings.Split(NormalizeOutput(strings.ReplaceAll(excerpt, truncMarker, "\n")), "\n") {
 		if l = strings.TrimSpace(l); l != "" && !have[l] {
 			return false
 		}

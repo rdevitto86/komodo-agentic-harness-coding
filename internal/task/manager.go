@@ -784,6 +784,9 @@ func (m *Manager) runnerOf(name string, find func() string) agent.CommandRunner 
 
 		argv, ok := m.c.Commands[command]
 		if !ok {
+			argv, ok = parseArgvForm(command)
+		}
+		if !ok {
 			argv = []string{"sh", "-c", command}
 		}
 		if len(argv) == 0 {

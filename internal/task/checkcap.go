@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 )
 
 const (
@@ -69,7 +71,7 @@ func (c *checkCap) record(check string, exit int, out string) capVerdict {
 
 	if exit == 0 {
 		t.streak, t.sig = 0, ""
-	} else if sig := strconv.Itoa(exit) + "\n" + out; sig == t.sig {
+	} else if sig := strconv.Itoa(exit) + "\n" + agent.NormalizeOutput(out); sig == t.sig {
 		t.streak++
 	} else {
 		t.sig, t.streak = sig, 1
