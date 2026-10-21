@@ -36,7 +36,8 @@ var resultCases = []struct {
 	},
 	{
 		"qa", reflect.TypeOf(QAResult{}),
-		`{"items": [{"item": "i1", "pass": false, "evidence": [{"cmd": "c", "exit": 1, "excerpt": "e"}], ` +
+		`{"status": "tested", "items": [{"item": "i1", "pass": false, ` +
+			`"evidence": [{"cmd": "c", "exit": 1, "excerpt": "e"}], ` +
 			`"confidence": 70}],` +
 			` "tasks": [{"task": "t1", "confirmation": "confirmed"}]}`,
 		func(b []byte) error { _, err := ParseQAResult(b); return err },
@@ -172,13 +173,16 @@ func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 	qa := func(field, v string) error {
 		ev := `[{"cmd": "c", "exit": 0, "excerpt": "e"}]`
 		item := `{"item": "i", "pass": true, "evidence": ` + ev + `, "confidence": 90}`
+		status := `"tested"`
 		task := `{"task": "t", "confirmation": "confirmed"}`
 		switch field {
 		case "confirmation":
 			task = fmt.Sprintf(`{"task": "t", "confirmation": %q}`, v)
+		case "status":
+			status = fmt.Sprintf(`%q, "cause": "docker did not start"`, v)
 		}
 
-		r, err := ParseQAResult([]byte(`{"items": [` + item + `], "tasks": [` + task + `]}`))
+		r, err := ParseQAResult([]byte(`{"status": ` + status + `, "items": [` + item + `], "tasks": [` + task + `]}`))
 		if err != nil {
 			return err
 		}
@@ -205,6 +209,9 @@ func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 		}},
 		{"qa", "tasks.confirmation", []string{"confirmed", "not_confirmed"}, func(v string) error {
 			return qa("confirmation", v)
+		}},
+		{"qa", "status", []string{"tested", "untestable"}, func(v string) error {
+			return qa("status", v)
 		}},
 	}
 	for _, c := range cases {

@@ -37,6 +37,7 @@ var eventNameRows = []eventNameRow{
 	{"deep.done", Key{TypeRunStatus, "deep.done"}, false},
 	{"finding.submit", Key{TypeRunStatus, "finding.submit"}, false},
 	{"finding.verified", Key{TypeRunStatus, "finding.verified"}, false},
+	{"qa.fail_open", Key{TypeRunStatus, "qa.fail_open"}, false},
 	{"tool.denied", Key{TypeRunStatus, "tool.denied"}, false},
 	{"sandbox.fallback", Key{TypeRunStatus, "sandbox.fallback"}, false},
 	{"tool.outside", Key{TypeRunStatus, "tool.outside"}, false},

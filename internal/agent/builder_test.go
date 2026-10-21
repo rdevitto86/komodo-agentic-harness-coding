@@ -71,7 +71,10 @@ func TestParseBuilderResult(t *testing.T) {
 		{"trailing data", `{"status": "done", "summary": "s", ` + evidenceJSON + `} {}`},
 		{"done without evidence", `{"status": "done", "summary": "s"}`},
 		{"done with an empty evidence list", `{"status": "done", "summary": "s", "evidence": []}`},
-		{"evidence run with no command", `{"status": "done", "summary": "s", "evidence": [{"cmd": " ", "exit": 0, "excerpt": ""}]}`},
+		{
+			"evidence run with no command",
+			`{"status": "done", "summary": "s", "evidence": [{"cmd": " ", "exit": 0, "excerpt": ""}]}`,
+		},
 		{
 			"evidence excerpt over 4 KB",
 			`{"status": "done", "summary": "s", "evidence": [{"cmd": "go test", "exit": 0, "excerpt": "` +

@@ -308,8 +308,8 @@ type model struct {
 const (
 	builderDone = `{"status":"done","summary":"added the file",` +
 		`"evidence":[{"cmd":"go test ./a/...","exit":0,"excerpt":"ok  a 0.01s"}]}`
-	qaPass      = `{"items":[],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
-	qaNoTask    = `{"items":[],"tasks":[{"task":"t1","confirmation":"not_confirmed"}]}`
+	qaPass      = `{"status":"tested","items":[],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
+	qaNoTask    = `{"status":"tested","items":[],"tasks":[{"task":"t1","confirmation":"not_confirmed"}]}`
 	reviewerMet = `{"verdicts":[{"task":"t1","verdict":"met"}]}`
 	reviewerNot = `{"verdicts":[{"task":"t1","verdict":"not_met"}]}`
 )

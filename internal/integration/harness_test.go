@@ -673,7 +673,7 @@ func (f *fakeModel) result(role, brief string) string {
 		for _, m := range taskLine.FindAllStringSubmatch(brief, -1) {
 			tasks = append(tasks, map[string]string{"task": m[1], "confirmation": "confirmed"})
 		}
-		b, _ := json.Marshal(map[string]any{"items": items, "tasks": tasks})
+		b, _ := json.Marshal(map[string]any{"status": "tested", "items": items, "tasks": tasks})
 		return string(b)
 	}
 	vs := []map[string]string{}

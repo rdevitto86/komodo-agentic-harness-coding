@@ -124,6 +124,7 @@ func init() {
 		func() Payload { return &TaskRetry{} },
 		func() Payload { return &FindingSubmit{} },
 		func() Payload { return &FindingVerified{} },
+		func() Payload { return &QAFailOpen{} },
 		func() Payload { return &ToolDenied{} },
 		func() Payload { return &SandboxFallback{} },
 		func() Payload { return &ToolOutside{} },

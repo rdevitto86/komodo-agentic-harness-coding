@@ -48,6 +48,10 @@
     "$id": "komodo:agent/qa/result/1",
     "additionalProperties": false,
     "properties": {
+      "cause": {
+        "description": "Only with untestable: what was not ready and what you tried.",
+        "type": "string"
+      },
       "items": {
         "description": "Exactly one entry per acceptance item, as an array of objects.",
         "items": {
@@ -103,6 +107,14 @@
         },
         "type": "array"
       },
+      "status": {
+        "description": "tested when you judged the items, else untestable.",
+        "enum": [
+          "tested",
+          "untestable"
+        ],
+        "type": "string"
+      },
       "tasks": {
         "description": "Exactly one entry per task identifier, as an array of objects.",
         "items": {
@@ -131,6 +143,7 @@
       }
     },
     "required": [
+      "status",
       "items",
       "tasks"
     ],

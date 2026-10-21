@@ -67,7 +67,7 @@
         "type": "array"
       },
       "evidence": {
-        "description": "Required with done: the commands you ran to prove your work, such as its tests.",
+        "description": "Required with done: the commands you ran to prove the work.",
         "items": {
           "additionalProperties": false,
           "properties": {

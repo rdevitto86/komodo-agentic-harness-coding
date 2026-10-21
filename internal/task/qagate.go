@@ -109,6 +109,10 @@ func (m *Manager) Risk() agent.RiskDecision {
 
 // stampSignoff records Quality Assurance's accepted pass over the tree and the test files it judged.
 func (m *Manager) stampSignoff(ctx context.Context) error {
+	if t, ok := m.verdictOf("qa"); ok && len(t.FailOpen) > 0 {
+		return nil
+	}
+
 	tree, err := m.c.Git.TreeHash(ctx, m.spec.Lease)
 	if err != nil {
 		return err

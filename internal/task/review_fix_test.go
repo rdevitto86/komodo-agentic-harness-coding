@@ -209,7 +209,8 @@ func TestQASummaryListsUnconfirmedAndSkippedItems(t *testing.T) {
 	out, err := roles["qa"].Judge(
 		context.Background(),
 		result(
-			`{"items":[{"item":"a1","pass":true,"confidence":90,"evidence":[{"cmd":"read","exit":0,"excerpt":"ok"}]},`+
+			`{"status":"tested","items":[`+
+				`{"item":"a1","pass":true,"confidence":90,"evidence":[{"cmd":"read","exit":0,"excerpt":"ok"}]},`+
 				`{"item":"a2","pass":false,"confidence":60,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],`+
 				`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 		),

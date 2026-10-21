@@ -190,7 +190,7 @@ func TestUnfinishedTestCountsAsFailed(t *testing.T) {
 func TestQAAcceptResultChecksItems(t *testing.T) {
 	tasks, items := []string{"t1"}, []string{"ac-1", "ac-2"}
 	mk := func(ids ...string) QAResult {
-		r := QAResult{Tasks: []TaskConfirmation{{Task: "t1", Confirmation: Confirmed}}}
+		r := QAResult{Status: QATested, Tasks: []TaskConfirmation{{Task: "t1", Confirmation: Confirmed}}}
 		for _, id := range ids {
 			ev := []EvidenceRun{{Cmd: "go test", Excerpt: "ok"}}
 			r.Items = append(r.Items, ItemResult{Item: id, Pass: true, Evidence: ev, Confidence: intp(90)})

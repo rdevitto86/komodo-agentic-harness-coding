@@ -36,6 +36,7 @@ func intp(n int) *int { return &n }
 func TestQAAcceptResult(t *testing.T) {
 	tasks := []string{"tsk-a", "tsk-b"}
 	good := QAResult{
+		Status: QATested,
 		Items: []ItemResult{{
 			Item: "ac-1", Pass: true, Confidence: intp(90),
 			Evidence: []EvidenceRun{{Cmd: "go test", Excerpt: "ok"}},
@@ -47,7 +48,7 @@ func TestQAAcceptResult(t *testing.T) {
 		t.Fatalf("good result: %v", err)
 	}
 	mut := func(f func(r *QAResult)) QAResult {
-		r := QAResult{Items: slices.Clone(good.Items), Tasks: slices.Clone(good.Tasks)}
+		r := QAResult{Status: QATested, Items: slices.Clone(good.Items), Tasks: slices.Clone(good.Tasks)}
 		f(&r)
 		return r
 	}
@@ -65,6 +66,8 @@ func TestQAAcceptResult(t *testing.T) {
 			r.Items[0].Evidence = []EvidenceRun{{Cmd: "go test", Excerpt: strings.Repeat("x", GateOutputCap+1)}}
 		}),
 		"bad word":          mut(func(r *QAResult) { r.Tasks[0].Confirmation = "yes" }),
+		"no status":         mut(func(r *QAResult) { r.Status = "" }),
+		"untestable no why": mut(func(r *QAResult) { r.Status, r.Cause = QAUntestable, " " }),
 		"no confidence":     mut(func(r *QAResult) { r.Items[0].Confidence = nil }),
 		"confidence over":   mut(func(r *QAResult) { r.Items[0].Confidence = intp(101) }),
 		"confidence negate": mut(func(r *QAResult) { r.Items[0].Confidence = intp(-1) }),
@@ -73,6 +76,11 @@ func TestQAAcceptResult(t *testing.T) {
 		if err := tr.AcceptResult(tasks, []string{"ac-1"}, r); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+
+	untestable := QAResult{Status: QAUntestable, Cause: "docker did not start after 2 attempts"}
+	if err := tr.AcceptResult(tasks, []string{"ac-1"}, untestable); err != nil {
+		t.Errorf("untestable result with a cause: %v", err)
 	}
 
 	for _, n := range []int{0, 100} {
@@ -84,7 +92,7 @@ func TestQAAcceptResult(t *testing.T) {
 }
 
 func TestParseQAResult(t *testing.T) {
-	raw := `{"items": [{"item": "ac-1", "pass": true, "confidence": 85, ` +
+	raw := `{"status": "tested", "items": [{"item": "ac-1", "pass": true, "confidence": 85, ` +
 		`"evidence": [{"cmd": "go test", "exit": 0, "excerpt": "ok"}]}], ` +
 		`"tasks": [{"task": "t", "confirmation": ` +
 		`"confirmed"}]}`

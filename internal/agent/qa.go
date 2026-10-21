@@ -21,6 +21,14 @@ const (
 	NotConfirmed Confirmation = "not_confirmed"
 )
 
+// QAStatus says whether Quality Assurance could test the group.
+type QAStatus string
+
+const (
+	QATested     QAStatus = "tested"
+	QAUntestable QAStatus = "untestable"
+)
+
 // Item is one acceptance item of a group's task list.
 type Item struct {
 	ID    string
@@ -54,8 +62,10 @@ type TaskConfirmation struct {
 
 // QAResult is Quality Assurance's whole final call.
 type QAResult struct {
-	Items []ItemResult       `json:"items" desc:"Exactly one entry per acceptance item, as an array of objects."`
-	Tasks []TaskConfirmation `json:"tasks" desc:"Exactly one entry per task identifier, as an array of objects."`
+	Status QAStatus           `json:"status" desc:"tested when you judged the items, else untestable."`
+	Cause  string             `json:"cause,omitempty" desc:"Only with untestable: what was not ready and what you tried."`
+	Items  []ItemResult       `json:"items" desc:"Exactly one entry per acceptance item, as an array of objects."`
+	Tasks  []TaskConfirmation `json:"tasks" desc:"Exactly one entry per task identifier, as an array of objects."`
 }
 
 // QAVerdict is Quality Assurance's outcome as the approval rule reads it.
@@ -104,6 +114,17 @@ func ParseQAResult(raw []byte) (QAResult, error) {
 // AcceptResult rejects a result that skips or repeats a task identifier or an acceptance item,
 // leaves evidence empty, or gives no confidence or one outside 0 to 100.
 func (goQA) AcceptResult(tasks, items []string, r QAResult) error {
+	switch r.Status {
+	case QAUntestable:
+		if strings.TrimSpace(r.Cause) == "" {
+			return errors.New("an untestable result needs a cause: what was not ready and what you tried")
+		}
+		return nil
+	case QATested:
+	default:
+		return fmt.Errorf("result has unknown status %q", r.Status)
+	}
+
 	got := make([]string, len(r.Tasks))
 	for i, t := range r.Tasks {
 		got[i] = t.Task

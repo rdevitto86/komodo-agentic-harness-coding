@@ -1226,6 +1226,33 @@
       ],
       "type": "object"
     },
+    "QAFailOpen": {
+      "additionalProperties": false,
+      "properties": {
+        "causes": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "causes"
+      ],
+      "type": "object"
+    },
     "RequestAccepted": {
       "additionalProperties": false,
       "properties": {
@@ -3195,6 +3222,19 @@
         },
         "subtype": {
           "const": "publish.done"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/QAFailOpen"
+        },
+        "subtype": {
+          "const": "qa.fail_open"
         },
         "type": {
           "const": "run-status"

@@ -887,6 +887,8 @@ func (m *Manager) verdictOf(name string) (Outcome, bool) {
 
 // judgeBranch runs one judge to a decided outcome, running it again after a fault that costs no retry.
 func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) branch {
+	var qaFails []string
+
 	for {
 		if err := m.checkpoint(ctx); err != nil {
 			return branch{err: err}
@@ -903,6 +905,7 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 				m.fact("finding.verified", v)
 			}
 			m.noteProven(out.outcome.Verified)
+			m.noteFailOpen(out.outcome)
 
 			return branch{out: out}
 		case state.ReasonCancelled:
@@ -910,14 +913,39 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 		case state.ReasonBilling:
 			return branch{err: block("paid_refused", map[string]string{"setting": "providers.paid"})}
 		default:
-			// A crash or any other fault of Komodo's own runs the judge again and costs no retry.
-			if !out.reason.Charged() {
+			// Quality Assurance runs again after one internal failure and fails open after two in a row; it spends no try.
+			if name == "qa" && judgeFailure(out.reason) {
+				if qaFails = append(qaFails, string(out.reason)); len(qaFails) < 2 {
+					continue
+				}
+
+				out.reason = state.ReasonDone
+				out.outcome = failOpenOutcome("Quality Assurance failed twice in a row: " + strings.Join(qaFails, ", "))
+				m.noteFailOpen(out.outcome)
+
+				return branch{out: out}
+			}
+
+			// The Reviewer's crash costs one try like its other failures; any other fault of Komodo's own costs none.
+			if !judgeFailure(out.reason) {
 				continue
 			}
 			if err := m.spend(ctx, string(out.reason)); err != nil {
 				return branch{err: err}
 			}
 		}
+	}
+}
+
+// judgeFailure reports whether a judge session ended for a failure inside the session: a crash, idle, timeout, schema
+// failure, no result or too many refusals.
+func judgeFailure(r state.Reason) bool { return r == state.ReasonCrash || r.Charged() }
+
+// noteFailOpen publishes qa.fail_open when Quality Assurance's outcome let the group go on untested.
+func (m *Manager) noteFailOpen(o Outcome) {
+	if len(o.FailOpen) > 0 {
+		facts := bus.GroupFacts{Stage: string(state.StageTestReview)}
+		m.fact("qa.fail_open", bus.QAFailOpen{GroupFacts: facts, Causes: o.FailOpen})
 	}
 }
 

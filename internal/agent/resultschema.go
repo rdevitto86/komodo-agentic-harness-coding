@@ -11,6 +11,7 @@ var resultEnums = map[reflect.Type][]string{
 	reflect.TypeFor[BuilderStatus](): {string(BuilderDone), string(BuilderNeedsScope)},
 	reflect.TypeFor[Verdict]():       {string(VerdictMet), string(VerdictNotMet), string(VerdictBriefIncomplete)},
 	reflect.TypeFor[Confirmation]():  {string(Confirmed), string(NotConfirmed)},
+	reflect.TypeFor[QAStatus]():      {string(QATested), string(QAUntestable)},
 }
 
 // resultSchema returns the JSON Schema a model's final call must match: the Go type's fields, closed.

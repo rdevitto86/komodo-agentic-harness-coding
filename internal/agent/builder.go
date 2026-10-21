@@ -29,7 +29,7 @@ type BuilderResult struct {
 	// file:line of each finding the Builder rejects
 	Disputed []string `json:"disputed,omitempty" desc:"The file:line of each review finding you reject as wrong."`
 	// done only: the commands the Builder ran to prove its work
-	Evidence []EvidenceRun `json:"evidence,omitempty" desc:"Required with done: the commands you ran to prove your work, such as its tests."`
+	Evidence []EvidenceRun `json:"evidence,omitempty" desc:"Required with done: the commands you ran to prove the work."`
 }
 
 // checkBuilderEvidence refuses a done result with no evidence run, a run with no command or an excerpt over 4 KB.
@@ -42,7 +42,7 @@ func checkBuilderEvidence(runs []EvidenceRun) error {
 			return errors.New("builder evidence has a run with no command")
 		}
 		if len(e.Excerpt) > GateOutputCap {
-			return fmt.Errorf("builder evidence has an excerpt over %d bytes; keep the lines that show the result", GateOutputCap)
+			return fmt.Errorf("builder evidence has an excerpt over %d bytes; keep the lines that show it", GateOutputCap)
 		}
 	}
 	return nil

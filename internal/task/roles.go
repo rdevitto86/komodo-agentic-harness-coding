@@ -161,6 +161,10 @@ func (t *qaRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 		return Outcome{}, &GateError{Text: "the result was rejected: " + err.Error()}
 	}
 
+	if res.Status == agent.QAUntestable {
+		return failOpenOutcome(res.Cause), nil
+	}
+
 	var failed, notMet, listed []string
 
 	for _, ir := range res.Items {
@@ -222,6 +226,15 @@ func (t *qaRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 			},
 			listed...),
 	}, nil
+}
+
+// failOpenOutcome is the pass of a group Quality Assurance could not test; its summary line is the pull request warning.
+func failOpenOutcome(causes ...string) Outcome {
+	return Outcome{
+		Kind:     OutcomePass,
+		FailOpen: causes,
+		Summary:  []string{"not tested by Quality Assurance: " + strings.Join(causes, "; ")},
+	}
 }
 
 // confidenceText lists the score Quality Assurance gave each item, such as ac-1 90, ac-2 75.

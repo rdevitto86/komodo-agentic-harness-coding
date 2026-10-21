@@ -363,6 +363,15 @@ type FindingVerified struct {
 // EventKey binds FindingVerified to run-status / finding.verified.
 func (FindingVerified) EventKey() Key { return Key{TypeRunStatus, "finding.verified"} }
 
+// QAFailOpen is the data of run-status / qa.fail_open: the group went on with no Quality Assurance sign-off.
+type QAFailOpen struct {
+	GroupFacts
+	Causes []string `json:"causes"` // why Quality Assurance could not test the group
+}
+
+// EventKey binds QAFailOpen to run-status / qa.fail_open.
+func (QAFailOpen) EventKey() Key { return Key{TypeRunStatus, "qa.fail_open"} }
+
 // ToolDenied is the data of run-status / tool.denied.
 type ToolDenied struct {
 	GroupFacts

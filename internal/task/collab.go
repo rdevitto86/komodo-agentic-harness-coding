@@ -77,6 +77,8 @@ type Outcome struct {
 	Summary  []string // for Pass: the result lines the pull request body prints
 	// for the builder's Pass: the commands it ran to prove its work
 	Evidence []agent.EvidenceRun
+	// for Quality Assurance's Pass: why it could not test the group; the group goes on without its sign-off
+	FailOpen []string
 	// for the reviewer: every finding Go kept, with its level, proof and confidence; Recorded holds the record-only lines
 	Verified []VerifiedFinding
 	Recorded []string

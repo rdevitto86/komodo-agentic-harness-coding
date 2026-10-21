@@ -28,7 +28,7 @@ func TestBuilderJudgeRejectsABrokenResultAndTurnsNeedsScopeIntoAnOutcome(t *test
 
 func qaResult(pass bool, confidence string) llm.Result {
 	return result(
-		`{"items":[{"item":"a1","pass":` + strconv.FormatBool(pass) + confidence +
+		`{"status":"tested","items":[{"item":"a1","pass":` + strconv.FormatBool(pass) + confidence +
 			`,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],` +
 			`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 	)
@@ -72,7 +72,7 @@ func TestQAJudgeRefusesAnItemWithoutAConfidence(t *testing.T) {
 		}
 	}
 
-	_, err := testRoles(t)["qa"].Judge(context.Background(), result(`{"items":[],"tasks":[]}`))
+	_, err := testRoles(t)["qa"].Judge(context.Background(), result(`{"status":"tested","items":[],"tasks":[]}`))
 	if !errors.As(err, &ge) {
 		t.Fatalf("an incomplete result passed: %v", err)
 	}
