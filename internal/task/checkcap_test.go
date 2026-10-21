@@ -64,10 +64,10 @@ func TestTheLastFailingOutputIsKeptForTheNextTry(t *testing.T) {
 	if _, _, err := r.m.taskDone(context.Background(), sc, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.m.takeLastCheck(); !strings.Contains(got, "boom") || !strings.Contains(got, "t1") {
+	if got := strings.Join(r.m.takeLastCheck(), "\n"); !strings.Contains(got, "boom") || !strings.Contains(got, "t1") {
 		t.Fatalf("last output = %q", got)
 	}
-	if got := r.m.takeLastCheck(); got != "" {
+	if got := r.m.takeLastCheck(); len(got) != 0 {
 		t.Fatalf("the last output was not cleared: %q", got)
 	}
 }
@@ -82,8 +82,49 @@ func TestAPassClearsTheKeptOutput(t *testing.T) {
 	if _, _, err := r.m.taskDone(context.Background(), sc, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.m.takeLastCheck(); got != "" {
+	if got := r.m.takeLastCheck(); len(got) != 0 {
 		t.Fatalf("a pass left %q", got)
+	}
+}
+
+func TestAPassClearsOnlyThatTasksKeptOutput(t *testing.T) {
+	r := newPipeRig(t, rigOpts{
+		limits: Limits{GroupRetries: 3},
+		mut: func(s *GroupSpec, c *Collaborators) {
+			s.Tasks[0].DoneWhen = "fail"
+			s.Tasks = append(s.Tasks, TaskSpec{ID: "t2", Title: "second", DoneWhen: "fail2"})
+			c.Commands["fail2"] = []string{"sh", "-c", "echo boom-two; exit 1"}
+		},
+	})
+	setCheck(r, "boom-one", "1")
+	if _, err := r.m.instance(context.Background(), "builder"); err != nil {
+		t.Fatal(err)
+	}
+	sc := &sessCtx{watch: &toolWatch{limit: 3, now: r.m.now}}
+	for _, id := range []string{"t1", "t2"} {
+		if _, _, err := r.m.taskDone(context.Background(), sc, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.m.c.Commands["fail"] = []string{"true"}
+	if _, _, err := r.m.taskDone(context.Background(), sc, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(r.m.takeLastCheck(), "\n")
+	if !strings.Contains(got, "boom-two") || strings.Contains(got, "boom-one") {
+		t.Fatalf("kept output = %q, want only the pending task t2", got)
+	}
+}
+
+func TestAStaleKeptOutputIsClearedWhenATryStarts(t *testing.T) {
+	r := newPipeRig(t, rigOpts{limits: Limits{GroupRetries: 3}})
+	r.m.lastCheck = map[string]string{"t1": "stale-output"}
+	r.model.on("builder", crashedBuilder, building(r.wt, "a.go", "package a\n", builderDone))
+	r.model.on("qa", sayResult(qaPass))
+	r.model.on("reviewer", sayResult(reviewerMet))
+	r.reachCleanup()
+	if got := r.slot("builder", 1, "findings"); strings.Contains(got, "stale-output") {
+		t.Fatalf("the next builder brief carries a stale check output: %q", got)
 	}
 }
 
@@ -92,7 +133,7 @@ func TestAKeptOutputGoesInTheNextBrief(t *testing.T) {
 	r.model.on("builder",
 		func(s llm.Session) (llm.Stream, error) {
 			r.m.mu.Lock()
-			r.m.lastCheck = "the check t1 failed\nboom-output"
+			r.m.lastCheck = map[string]string{"t1": "the check t1 failed\nboom-output"}
 			r.m.mu.Unlock()
 			return sayResult(`{"not":"a builder result"}`)(s)
 		},

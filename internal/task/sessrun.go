@@ -760,9 +760,9 @@ func (m *Manager) endSession(ctx context.Context, sc *sessCtx, req sessReq, out 
 // supervise reads the stream to its end under the session clocks and the Runtime Manager's timer answers.
 func (m *Manager) supervise(ctx context.Context, sc *sessCtx, req sessReq, st llm.Stream) (llm.Result, Reason, error) {
 	now := m.now()
-	clk := &Clocks{Started: now, LastLine: now}
+	clk := &Clocks{Started: sc.started, LastLine: now} // a resume keeps the window of the session's first start
 	lim := SessionLimits{
-		Wall: cmpOrDur(m.spec.Limits.SessionWall, time.Hour),
+		Wall: m.sessionWall(),
 		Idle: cmpOrDur(m.spec.Limits.SessionIdle, 10*time.Minute),
 	}
 	inject := make(chan string, 4)
@@ -808,8 +808,8 @@ func (m *Manager) supervise(ctx context.Context, sc *sessCtx, req sessReq, st ll
 	return SuperviseWith(ctx, st, lim, clk, h)
 }
 
-// judgeResult runs the role's Judge on a finished result; on the subscription link a rejected result is sent back as a
-// resume. A builder's failed check is sent back until it passes or the session ends; any other rejection once.
+// judgeResult runs the role's Judge on a finished result. On the subscription link a rejected result is sent back as a
+// resume; a builder's open tasks are sent back on any link until they pass or the original window ends, spending no try.
 func (m *Manager) judgeResult(
 	ctx context.Context,
 	sc *sessCtx,
@@ -820,12 +820,17 @@ func (m *Manager) judgeResult(
 	out sessOut,
 ) (sessOut, error) {
 	out.result = res
-	oc, err := sc.memo.judge(ctx, res)
+	oc, err := m.judgeBuilt(ctx, sc, req, res)
 
 	var ge *GateError
-	for first := true; errors.As(err, &ge) && ProgramLink(sel.Link); first = false {
+	resumable := func() bool { return ProgramLink(sel.Link) || !ge.Schema && req.agent == "builder" }
+	for first := true; errors.As(err, &ge) && resumable(); first = false {
 		if !first && (req.agent != "builder" || ge.Schema) {
 			break
+		}
+		if !ge.Schema && m.now().Sub(sc.started) >= m.sessionWall() {
+			out.reason = state.ReasonTimeout
+			return out, nil
 		}
 
 		retry, rerr := m.c.Client.Resume(ctx, sc.sess, llm.Input{Text: ge.Text})
@@ -843,19 +848,21 @@ func (m *Manager) judgeResult(
 
 		res2.Usage = addUsage(res.Usage, res2.Usage)
 		res, out.result = res2, res2
-		oc, err = sc.memo.judge(ctx, res)
+		oc, err = m.judgeBuilt(ctx, sc, req, res)
 	}
 
 	if errors.As(err, &ge) {
+		// A builder that cannot be resumed (no handle, or a link that cannot resume) ends done with its tasks still open;
+		// the pipeline then spends one try, as the engine does.
 		if !ge.Schema && req.agent == "builder" {
-			return out, fmt.Errorf("send the failed check back to the builder: %s", ge.Text)
+			err = nil
+		} else {
+			out.reason = state.ReasonCheckFail
+			if ge.Schema {
+				out.reason = state.ReasonSchemaFail
+			}
+			return out, nil
 		}
-
-		out.reason = state.ReasonCheckFail
-		if ge.Schema {
-			out.reason = state.ReasonSchemaFail
-		}
-		return out, nil
 	}
 	if err != nil {
 		return out, fmt.Errorf("judge the %s result: %w", req.agent, err)
@@ -867,6 +874,30 @@ func (m *Manager) judgeResult(
 	}
 
 	return out, nil
+}
+
+// judgeBuilt runs the role's Judge; a builder's passing result also reruns its open tasks' checks and is rejected with
+// their output while any still fail.
+func (m *Manager) judgeBuilt(ctx context.Context, sc *sessCtx, req sessReq, res llm.Result) (Outcome, error) {
+	oc, err := sc.memo.judge(ctx, res)
+	if err != nil || req.agent != "builder" || oc.Kind != OutcomePass {
+		return oc, err
+	}
+
+	left, err := m.reconcile(ctx)
+	if err != nil {
+		return oc, fmt.Errorf("run the open tasks' checks: %w", err)
+	}
+	if len(left) > 0 {
+		return oc, &GateError{Text: "Your result was rejected because tasks are still open:\n" + bullets(left)}
+	}
+
+	return oc, nil
+}
+
+// sessionWall returns the wall-time window of one session.
+func (m *Manager) sessionWall() time.Duration {
+	return cmpOrDur(m.spec.Limits.SessionWall, time.Hour)
 }
 
 // addUsage returns the sum of two usage counts; either may be nil.

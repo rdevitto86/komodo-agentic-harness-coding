@@ -98,6 +98,7 @@ func (c *calc) builderEnd(e bus.SessionEnd, unfinished *state.UnfinishedEdits, h
 				s.Tasks[c.taskIndex(e.Task)].ScopeAsked = true
 			}
 		} else if !c.allTasksDone() && c.charge("unfinished") {
+			// Reached only by a builder that could not be resumed: a resumed one ends done with every task done.
 			c.enterStage(StageBuild, stageData{Task: c.firstOpenTask(), Retry: e.Reason})
 		}
 	case "check_fail", "no_result", "schema_fail", "refusals", "timeout", "idle":

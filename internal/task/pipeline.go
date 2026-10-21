@@ -70,6 +70,10 @@ func (m *Manager) runBuild(ctx context.Context) error {
 			return err
 		}
 
+		m.mu.Lock()
+		m.lastCheck = nil
+		m.mu.Unlock()
+
 		in := RoleInput{Tasks: m.pendingTasks(), Findings: findings, Unfinished: m.Progress().Unfinished}
 		if m.Progress().Returns > 0 && m.c.Git != nil {
 			in.Diff, _ = m.c.Git.Diff(ctx, m.spec.Lease, nil)
@@ -110,6 +114,7 @@ func (m *Manager) runBuild(ctx context.Context) error {
 				return err
 			}
 			if len(left) > 0 {
+				// Only a builder that cannot be resumed gets here: judgeResult resumes the rest without spending a try.
 				findings = left
 				if err := m.spend(ctx, "unfinished"); err != nil {
 					return err
@@ -123,8 +128,8 @@ func (m *Manager) runBuild(ctx context.Context) error {
 			if err := m.spend(ctx, string(out.reason)); err != nil {
 				return err
 			}
-			if last := m.takeLastCheck(); last != "" {
-				findings = []string{last}
+			if last := m.takeLastCheck(); len(last) > 0 {
+				findings = last
 			}
 		case state.ReasonBilling:
 			return block("paid_refused", map[string]string{"setting": "providers.paid"})
@@ -373,9 +378,12 @@ func (m *Manager) taskDone(ctx context.Context, _ *sessCtx, task string) (int, s
 	}
 
 	m.mu.Lock()
-	m.lastCheck = ""
+	delete(m.lastCheck, task)
 	if exit != 0 {
-		m.lastCheck = fmt.Sprintf("The last output of the check %s, exit code %d:\n%s", task, exit, out)
+		if m.lastCheck == nil {
+			m.lastCheck = map[string]string{}
+		}
+		m.lastCheck[task] = fmt.Sprintf("The last output of the check %s, exit code %d:\n%s", task, exit, out)
 	}
 	m.mu.Unlock()
 

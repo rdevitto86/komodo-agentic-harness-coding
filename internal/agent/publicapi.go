@@ -11,11 +11,13 @@ import (
 type scopeMode int
 
 const (
-	scopeUnknown scopeMode = iota // the diff does not show it, so an exported-looking line counts as public
-	scopeTop                      // between declarations
-	scopeBody                     // inside a function body
-	scopeBlock                    // inside a var, const or type block, or an exported struct or interface
-	scopeClosed                   // inside an unexported type or var, or an import block
+	scopeUnknown    scopeMode = iota // the diff does not show it, so an exported-looking line counts as public
+	scopeTop                         // between declarations
+	scopeBody                        // inside a function body
+	scopeBlock                       // inside a var, const or type block, or an exported struct or interface
+	scopeClosed                      // inside an unexported type or var, or an import block
+	scopeSigPublic                   // inside the wrapped signature of an exported function or method
+	scopeSigPrivate                  // inside the wrapped signature of an unexported function or method
 )
 
 // memberLine matches an indented line that starts with an exported name, as a field, method, constant or embedded type.
@@ -86,7 +88,7 @@ func hunkScope(header string) scopeMode {
 
 	text := strings.TrimSpace(header[i+4:])
 	if strings.HasPrefix(text, "func ") {
-		return scopeBody
+		return enterScope(text, scopeUnknown)
 	}
 
 	if m := enterScope(text, scopeUnknown); m == scopeBlock || m == scopeClosed {
@@ -101,7 +103,18 @@ func enterScope(c string, cur scopeMode) scopeMode {
 	opens := strings.HasSuffix(c, "{") || strings.HasSuffix(c, "(")
 	switch {
 	case strings.HasPrefix(c, "func "):
-		return scopeBody
+		if strings.HasSuffix(c, "{") {
+			return scopeBody
+		}
+		if publicLine(c, scopeTop) {
+			return scopeSigPublic
+		}
+		return scopeSigPrivate
+	case cur == scopeSigPublic || cur == scopeSigPrivate:
+		if strings.HasPrefix(c, ")") && strings.HasSuffix(c, "{") {
+			return scopeBody
+		}
+		return cur
 	case strings.HasPrefix(c, "import ("):
 		return scopeClosed
 	case strings.HasPrefix(c, "}"), strings.HasPrefix(c, ")"):
@@ -143,6 +156,10 @@ func publicLine(c string, mode scopeMode) bool {
 		if rest, ok := strings.CutPrefix(c, kw); ok {
 			return exportedStart(rest)
 		}
+	}
+
+	if mode == scopeSigPublic {
+		return true
 	}
 
 	return (mode == scopeBlock || mode == scopeUnknown) && memberLine.MatchString(c)

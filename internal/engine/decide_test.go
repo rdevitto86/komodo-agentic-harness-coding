@@ -693,6 +693,22 @@ func TestReviewerWithoutAResultSpendsARetryAndRestartsUntilNoneIsLeft(t *testing
 	}
 }
 
+func TestAWindowEndingWithATaskOpenSpendsExactlyOneTry(t *testing.T) {
+	r := apply(t, claimed(), builderEnd("timeout"))
+	if r.State.Counters.RetriesLeft != 1 || slices.Contains(subtypes(r), "retry.waived") {
+		t.Errorf("timeout with a task open: left %d emits %v", r.State.Counters.RetriesLeft, subtypes(r))
+	}
+	n := 0
+	for _, s := range subtypes(r) {
+		if s == "retry.spent" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("timeout charged %d times, want 1", n)
+	}
+}
+
 func TestUnfinishedEditsAreRecordedAndClearedAtTaskDone(t *testing.T) {
 	end := in(InSessionEnd, SessionEndData{SessionEnd: bus.SessionEnd{
 		GroupFacts: bus.GroupFacts{Reason: "timeout"},
