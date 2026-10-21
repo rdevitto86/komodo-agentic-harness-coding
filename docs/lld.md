@@ -9126,6 +9126,7 @@ The facts the Task Manager hands over are listed below. [Chapter 4](#4-event-bus
 | `limit.warn` | Link, kind (window past `warn.quota_pct`, overage drawn) |
 | `scope.request`, `scope.answer` | Task, paths; the answer's action and approved paths |
 | `sandbox.fallback` | Role, the mechanism wanted, the mechanism used, the reason; the run report says so |
+| `qa.fail_open` | The causes Quality Assurance could not test the group; the pull request carries "not tested by Quality Assurance: (cause)" |
 | `tool.outside` | Server, tool, outcome (`ok`, `error` or `timeout`) of one outside tool server call |
 | `command.dropped` | Command kind, the request it answered, why it was ignored |
 | `sandbox.warning` | The warning an outside tool server connection reported |
@@ -12309,14 +12310,14 @@ const (
 Quality Assurance's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
 
-The Reviewer is the final code check on the Builder's work. It starts once the free mechanical checks pass, reads the change while the [Quality Assurance](#13-quality-assurance) runs, files findings that Go verifies, and gives one verdict per task. This chapter also holds the risk level that Go sets for each group, which decides how deep the review goes, and the approval rule: a group moves on only when Quality Assurance passes and, at level medium or above, the Reviewer passes too. The purpose and the interactions are in [HLD 5.15](hld.md#515-reviewer).
+The Reviewer is the final code check on the Builder's work. It starts once the free mechanical checks pass, reads the change while the [Quality Assurance](#13-quality-assurance) runs, files findings that carry its own proof and a confidence score, which Go checks against the quoted line and records, and gives one verdict per task. This chapter also holds the risk level that Go sets for each group, which decides how deep the review goes, and the approval rule: a group moves on only when Quality Assurance passes and, at level medium or above, the Reviewer passes too. The purpose and the interactions are in [HLD 5.15](hld.md#515-reviewer).
 
 ### 14.1 Scope and Concepts
 
 **Owns:**
 - The Reviewer's role definition, brief slots and result.
 - The lenses (catalogs of review rules), the review profiles and the choice of lenses for a diff.
-- The evidence check: a finding blocks only when Go finds the line it quotes and its proof fails as claimed.
+- The evidence check: a finding blocks only when Go finds the line it quotes, its level is critical, high or med_high, it carries the Reviewer's own proof and its confidence is 80 or more.
 - The six finding levels and the bucket of each.
 - The risk level of a group, the guardrails that set it and the route each level takes.
 - The per-task verdicts and the precision counters.
@@ -12336,9 +12337,10 @@ The Reviewer is the final code check on the Builder's work. It starts once the f
 |---|---|
 | Lens | A catalog of review rules for one kind of problem, with a condition that says when it applies. |
 | Rule | One testable sentence in a catalog, with an identifier such as `correctness.1`. |
-| Finding | A Reviewer claim: a rule identifier, a file and line, the quoted line of evidence and, for a blocking level, a proof. |
-| Evidence check | Go looking for the quoted line at the stated file and line, then running the finding's proof. |
-| Proof | A command from an allowed list, or a short test the Reviewer writes, that fails the way the finding claims. |
+| Finding | A Reviewer claim: a rule identifier, a file and line, the quoted line of evidence, a confidence from 0 to 100 and, for a blocking level, a proof. |
+| Evidence check | Go looking for the quoted line at the stated file and line and dropping a line the group did not change; Go never runs a proof. |
+| Proof | The Reviewer's own validation of its claim: the command it ran and what it saw (`ran`, `saw`). |
+| Confidence | The Reviewer's score for a finding, from 0 to 100; 80 is the least at which a blocking level blocks. |
 | Level | The rule's rank: `critical`, `high`, `med_high`, `medium`, `med_low` or `low`; its bucket decides what the finding does. |
 | Risk level | The level Go sets for a group from its diff, with the same six names; no agent sets or lowers it. |
 | Quarantine | The route of a `high` or `critical` group: its own draft pull request, built on by nothing until a person merges it ([15.5](#155-behaviour)). |
@@ -12355,9 +12357,9 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 |---|---|
 | `internal/agent/reviewer.go` | The Reviewer's `Role`, `ReviewerResult`, `ParseReviewerResult`, `Reviewer.AcceptResult` and `ExactlyOnce` |
 | `internal/agent/lens.go` | `Rule`, `Applies`, `Catalog`, `LoadCatalogs`, `NewReviewer`, `Profile` and `Reviewer.Lenses` |
-| `internal/agent/evidence.go` | `Finding`, `LineSource`, `VerifyFinding` and `Reviewer.AcceptFinding` |
-| `internal/agent/proof.go` | `Proof`, `ProofRunner`, `RunProof`, `ProofArgv`, `ProofCommands`, `ProofConfig` and `NewProofRunner`: check a finding's proof and run it in a throwaway copy of the change |
+| `internal/agent/evidence.go` | `Finding`, `Proof`, `BlockConfidence`, `ValidConfidence`, `LineSource`, `VerifyFinding` and `Reviewer.AcceptFinding` |
 | `internal/agent/risk.go` | `RiskLevel`, `RiskInput`, `Classify` and `Route`: the risk level, its guardrails and the route of each level |
+| `internal/agent/publicapi.go` | `PublicAPIChanged`: the line scan of a diff for changes to exported Go declarations |
 | `internal/agent/precision.go` | `Precision`, the per-rule counters |
 | `internal/agent/approval.go` | `ReviewerVerdict`, `Outcome` and `Decide`, the approval rule |
 | `internal/agent/lenses/<lens>.json`, `<lens>.md` | The catalogs: rule identifiers, severities and file scopes in the JSON file; rule text in the Markdown file |
@@ -12437,7 +12439,6 @@ func (l FindingLevel) Bucket() Bucket
 type Rule struct {
 	ID       string       `json:"id"`
 	Level    FindingLevel `json:"level"`
-	Proof    ProofKind    `json:"proof"` // how a finding of this rule can be proven; none caps it at a warning
 	Applies  Applies      `json:"applies"`
 	Check    string       `json:"check"`
 	Evidence string       `json:"evidence"`
@@ -12455,13 +12456,12 @@ type Applies struct {
 |---|---|
 | `id` | The identifier a finding cites; an unknown identifier is refused. The known set is every lens catalog plus the standards rule list. |
 | `level` | One of the six levels; the bucket table below says what each does. |
-| `proof` | `command`, `test` or `none`. A rule that names `none` can never block: its findings warn. The catalogs hold 29 rules with `command` and 12 with `none`; none names `test`. The `none` rules are listed under Proof. |
 | `applies.globs` | Changed-file patterns that make the rule apply. |
 | `applies.markers` | Text markers in the diff that make the rule apply. |
 | `check` | One sentence stating what must hold. |
 | `evidence` | The line a finding must quote. |
 
-A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a level or a proof kind is unknown or a field is empty. Each rule's section holds its full text: what to look for, how to check it and what to quote. New rules take the next number in their lens; a released number is never reused.
+A lens file `<lens>.json` holds `lens`, `when`, `applies` and `rules`. `when` is `always`, `filter`, `spec_cited` or `economy_only`. A `filter` lens applies when a changed path matches one of `applies.globs`, or a changed line of the diff (added or removed, without its marker) matches one of `applies.markers`, which are regular expressions. The Markdown file `<lens>.md` holds one `## <rule id>` section of text per rule. Loading fails when a rule identifier is out of order, a section is missing or extra, a level is unknown or a field is empty. Each rule's section holds its full text: what to look for, how to check it and what to quote. New rules take the next number in their lens; a released number is never reused.
 
 The values below are illustrative:
 
@@ -12469,7 +12469,6 @@ The values below are illustrative:
 {
   "id": "correctness.1",
   "level": "high",
-  "proof": "command",
   "applies": {"globs": ["**/*.go"], "markers": []},
   "check": "an error return is not ignored",
   "evidence": "the line that drops the error",
@@ -12483,7 +12482,7 @@ The level belongs to the rule, never to the agent. The Reviewer covers only the 
 
 | Level | Bucket | What a verified finding does |
 |---|---|---|
-| `critical`, `high`, `med_high` | `block` | Sends the group back to the Builder, once its proof fails as claimed |
+| `critical`, `high`, `med_high` | `block` | Sends the group back to the Builder, once it has a proof and confidence 80 or more; below that it is a warning |
 | `medium` | `warn` | A warning on the pull request |
 | `med_low`, `low` | `record` | Written to the run record only |
 
@@ -12491,83 +12490,20 @@ The three old severities map to levels: a `blocker` rule is `critical`, a `major
 
 #### Proof
 
-A finding at a blocking level carries a proof. Go runs it in a throwaway copy of the change, never the Builder's worktree, and the finding blocks only when the proof fails as claimed. A finding with no proof, or a proof that passes, becomes a warning on the pull request.
+A proof is the Reviewer's own validation of its finding: the command it ran or the check it made, and what it saw. The Reviewer's checklist of validation items is its proofs. The Reviewer runs the proof with its own run tool; Go records it and never runs it. Every finding also carries a confidence from 0 to 100, on the scale 0 (not confident, a false positive), 25 (somewhat), 50 (moderately), 75 (highly) and 100 (certain).
 
 ```go
-// ProofKind says how a rule's findings can be proven.
-type ProofKind string
-
-const (
-	ProofKindCommand ProofKind = "command" // a command from the allowed list
-	ProofKindTest    ProofKind = "test"    // a short test the Reviewer writes
-	ProofKindNone    ProofKind = "none"    // cannot be proven by a command: findings warn
-)
-
-// Proof is the evidence a finding carries; exactly one of Cmd and Test is set.
+// Proof is the Reviewer's own validation of a finding: what it ran or checked with its run tool, and what it saw.
 type Proof struct {
-	Cmd  string     `json:"cmd,omitempty"`  // an allowed command, run as written
-	Test *ProofTest `json:"test,omitempty"` // a Reviewer-written test
-
-	Expect string `json:"expect"` // a line the failing output must contain, such as the failing test's name
+	Ran string `json:"ran"` // the command run or the check made
+	Saw string `json:"saw"` // the output or result that shows the problem
 }
 
-// ProofTest is a short test the Reviewer wrote to show the bug.
-type ProofTest struct {
-	File string `json:"file"` // a new test file, never an existing path
-	Body string `json:"body"` // its whole text
-	Run  string `json:"run"`  // the allowed command that runs it
-}
-
-// ProofResult is what Go saw when it ran a proof.
-type ProofResult struct {
-	Failed bool   // the command exited non-zero
-	Output string // exact output, capped like a gate result (12.3)
-}
+// BlockConfidence is the least confidence at which a finding of a blocking level blocks.
+const BlockConfidence = 80
 ```
 
-A finding blocks only when its rule's proof kind is not `none`, it carries a proof, and `RunProof` returns `failed_as_claimed`. `RunProof` returns `none` for a proof with no command, no test or an empty `Expect`. The 12 rules whose proof kind is `none`, so whose findings only warn, are: `contract.2`, `economy.4`, `economy.6`, `economy.7`, `quality.1`, `quality.2`, `quality.3`, `readiness.1`, `readiness.2`, `platform.2`, `platform.3` and `spec.1`. The other 29 name `command`. [TODO: whether the owner confirms this list of `none` rules; it was chosen in code without an owner decision ([G-315](#g-315))]
-
-**The guarded proof form.** `ProofArgv` checks a proof command and returns it as an argument list; the shell never reads the command, and every token must match a fixed pattern. `ErrProofRefused` marks a proof Go will not run.
-
-```go
-// MaxProofBody is the most bytes a Reviewer-written proof test may hold.
-const MaxProofBody = 64 << 10
-
-// ProofCommands are the repository's own detected commands, as argument lists, that a proof may extend.
-type ProofCommands struct {
-	Build []string
-	Test  []string
-	Lint  []string
-}
-
-// ProofConfig is what the runner of a proof needs.
-type ProofConfig struct {
-	Run    CommandRunner // runs one shell line in the Reviewer's sandbox
-	Source string        // the worktree that holds the work under test
-	Root   string        // the folder that holds each throwaway copy; the sandbox must reach it
-	Cmds   ProofCommands // the repository's detected commands
-
-	Secrets func() ([]string, error) // the secret files the copy leaves out; nil copies every file
-}
-
-// ProofArgv checks a proof command against the allowed list and returns it as an argument list.
-func ProofArgv(cmd string, c ProofCommands) ([]string, error)
-
-// NewProofRunner returns the runner of a proof.
-func NewProofRunner(cfg ProofConfig) ProofRunner
-```
-
-| Allowed form | Rule |
-|---|---|
-| `go test` | Flags `-run` (value `[A-Za-z0-9_^$|().*/-]+`), `-race`, `-count` (digits), `-v`, `-short`, `-failfast`, `-timeout` (digits and `s`, `m` or `h`); package arguments |
-| `go vet`, `go build` | No flags; package arguments |
-| The repository's detected test, build or lint command | Extra arguments, each matching `[A-Za-z0-9_./=:,@^+-]+` |
-
-- **Refused:** any other `go` subcommand or flag; a flag given a value it takes none of; a package argument that is not a relative path or import path, or holds a `..` segment; a control character in the command; for a repository command, an extra argument holding a quote, space, redirect or expansion character, and the flags `exec`, `toolexec`, `overlay`, `modfile`, `c`, `o`, `config`, `rootdir` and `vettool`; an argument value that starts with `/` or holds a `..` segment; a proof with no `Expect`; a proof with both a command and a test.
-- **Test file:** the path matches `[A-Za-z0-9_./-]+`, is at most 200 characters, is clean and relative, has no `..` and no segment starting with `.`, and names no existing file; the body is at most `MaxProofBody` bytes; its `Run` command must pass `ProofArgv`. The file is created with `O_EXCL`, so it never replaces a file.
-- **Run:** `NewProofRunner` copies the worktree's regular files, without `.git`, into a new folder under `Root`, adds the test file, runs `cd <folder> && <argv>` with every token single-quoted, and removes the folder. A refusal is an error and the finding warns.
-
-The finding blocks only when the command exits non-zero and its output contains the `Expect` line the Reviewer supplied, such as the failing test's name.
+A finding blocks only when all three hold: its level is `critical`, `high` or `med_high`; it has a proof with both `ran` and `saw`; and its confidence is 80 or more. Otherwise it is a warning on the pull request. No rule has a proof kind and no flag makes a rule warn only: the level of the rule decides.
 
 #### Risk levels
 
@@ -12604,8 +12540,8 @@ type ChangedFile struct {
 type RiskInput struct {
 	Files     []ChangedFile // every changed path with its added and removed line counts
 	Verified  bool          // Go checked that every change in an allow-listed file is a comment
-	Proven    bool          // a reviewer finding was proven in a previous round
-	PublicAPI bool          // Go found a change to a public interface in the diff
+	Proven    bool          // a reviewer finding blocked in a previous round: a proof and confidence 80 or more
+	PublicAPI bool          // Go found a change to an exported Go declaration in the diff
 }
 
 // RiskDecision is the level and the rule that set it.
@@ -12633,7 +12569,7 @@ func DiffFiles(diff string) []ChangedFile
 
 `Classify` rates a binary file at least `medium`, because its content cannot be read from the diff.
 
-The Task Manager classifies the judged tree once per round in `runDeep`: it passes `DiffFiles` of the group's diff as `Files`, keeps the decision (`Manager.Risk()`) and publishes `risk.set` with the level and reason. `riskSkipsReview` in `cmd/komodo/wire_tasks.go` classifies the round's diff the same way and is wired to `Collaborators.SkipReview`; when `Route(level).Reviewer` is false, the round starts no Reviewer session. Both go through `Manager.classify`, which sets `Proven` once a blocking finding's proof failed as claimed in an earlier round (`noteProven`); `skipsReview` then keeps the Reviewer. [TODO: how Go detects a comment-only change (`Verified`) and a change to a public interface (`PublicAPI`); no caller sets them yet ([G-318](#g-318))]
+The Task Manager classifies the judged tree once per round in `runDeep`: it passes `DiffFiles` of the group's diff as `Files`, keeps the decision (`Manager.Risk()`) and publishes `risk.set` with the level and reason. `riskSkipsReview` in `cmd/komodo/wire_tasks.go` classifies the round's diff the same way and is wired to `Collaborators.SkipReview`; when `Route(level).Reviewer` is false, the round starts no Reviewer session. Both go through `Manager.classify`, which sets `Proven` once a finding blocked in an earlier round, with a proof and confidence 80 or more (`noteProven`), and sets `PublicAPI` from `PublicAPIChanged(diff)`; `skipsReview` then keeps the Reviewer. `PublicAPIChanged` is a line scan of the diff for added or removed Go declarations of an exported name outside test files; it fails closed, so a line whose place the diff leaves unclear counts as a change. A public interface change raises the group's risk to `med_high`. [TODO: how Go detects a comment-only change (`Verified`); no caller sets it yet ([G-318](#g-318))]
 
 The path rules below are the built tables (`internal/agent/risk.go`). A path is lower-cased and matched by folder names, base name and extension.
 
@@ -12645,14 +12581,14 @@ The path rules below are the built tables (`internal/agent/risk.go`). A path is 
 | `med_low` | A test file or a folder named `testdata`, `tests` or `__tests__` (Go `*_test.go`; Python `test_*.py` or `*_test.py`; others `*.test.*` or `*.spec.*`); config extensions `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.conf`, base names starting `.golangci`, `.editorconfig` |
 | `medium` | Everything else, and a diff with no changed file |
 
-[TODO: whether the owner confirms these path tables, including the migration folders and the extra CI files `.circleci`, `Jenkinsfile`, `.gitlab-ci.yml` and `azure-pipelines.yml` as `critical`; they were chosen in code without an owner decision ([G-314](#g-314))]
+[TODO: deferred with the CI/CD runner: whether `cicd.yaml` and compose files count as `critical`, and whether these path tables hold, including the migration folders and the extra CI files `.circleci`, `Jenkinsfile`, `.gitlab-ci.yml` and `azure-pipelines.yml` ([G-314](#g-314))]
 
 | Guardrail | Rule |
 |---|---|
 | Fail closed | A path no rule matches is `medium`, never `low`. `low` and `med_low` come only from the explicit rules of the level table below. |
 | Highest file wins | A group's level is the level of its riskiest file, measured on the actual diff at landing, not on the plan. |
 | Fixed paths | CI workflow files, Makefiles, Dockerfiles, deploy and migration folders are always `critical`; dependency files are always `high`. |
-| Up, never down | A proven reviewer finding, a change of more than 400 lines, or a change to a public interface raises the level to at least `med_high`. No agent and no setting lowers it. |
+| Up, never down | A blocking reviewer finding, a change of more than 400 lines, or a change to an exported Go declaration raises the level to at least `med_high`. No agent and no setting lowers it. |
 | Every level shows its reason | `RiskDecision.Reason` is logged and shown on the pull request. |
 
 | Change | Level |
@@ -12671,7 +12607,7 @@ Each level takes one route:
 | Level | Route |
 |---|---|
 | `low`, `med_low` | Go's free checks and Quality Assurance, with no Reviewer; the group lands on the epic's branch |
-| `medium` | Quality Assurance and the Reviewer with proof-backed findings; itemized in the epic pull request |
+| `medium` | Quality Assurance and the Reviewer with proof-backed, confidence-scored findings; itemized in the epic pull request |
 | `med_high` | As `medium`, plus the fuzz, mutation and benchmark checks of [13.5](#running-the-deep-checks) |
 | `high`, `critical` | As `med_high`, then quarantine: the group's own draft pull request, with no CI ([15.5](#155-behaviour)) |
 
@@ -12686,7 +12622,9 @@ type Finding struct {
 	File  string `json:"file"`  // path from the worktree root
 	Line  int    `json:"line"`  // line number from 1
 	Quote string `json:"quote"` // the quoted line of evidence
-	Proof *Proof `json:"proof,omitempty"` // required for a blocking level; see Proof
+
+	Proof      *Proof `json:"proof,omitempty"` // the Reviewer's own validation; a blocking finding needs one
+	Confidence int    `json:"confidence"`       // 0 to 100: how sure the Reviewer is, after it validated the claim
 }
 
 // Verdict is the Reviewer's answer for one task identifier.
@@ -12720,8 +12658,7 @@ A finding as `submit_finding` takes it, and the final call:
 
 ```json
 {"rule": "correctness.1", "file": "internal/agent/taskgate.go", "line": 41, "quote": "out, _ := g.Run(ctx, t.DoneCommand)",
- "proof": {"test": {"file": "internal/agent/taskgate_drop_test.go", "body": "package agent\n…", "run": "go test ./internal/agent/ -run TestDropsError"},
-           "expect": "--- FAIL: TestDropsError"}}
+ "proof": {"ran": "go test ./internal/agent/ -run TestDropsError", "saw": "--- FAIL: TestDropsError"}, "confidence": 90}
 ```
 
 ```json
@@ -12737,7 +12674,7 @@ The tool emits the claim as an event; Go's verdict on it is a second event. Both
   "run": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57",
   "group": "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "time": "2026-10-14T15:40:02Z",
-  "data": {"rule": "correctness.1", "file": "internal/agent/taskgate.go", "line": 41, "level": "high", "in": "head", "proof": "failed_as_claimed"}
+  "data": {"rule": "correctness.1", "file": "internal/agent/taskgate.go", "line": 41, "level": "high", "in": "head", "proof": {"ran": "go test ./internal/agent/ -run TestDropsError", "saw": "--- FAIL: TestDropsError"}, "confidence": 90}
 }
 ```
 
@@ -12766,8 +12703,8 @@ The counters are not stored apart: they are counted per rule from the recorded `
 type ReviewerVerdict struct {
 	Ended           bool      `json:"ended"`                      // the Reviewer's session ended with a valid result
 	NotMet          []string  `json:"not_met,omitempty"`          // task identifiers marked not_met
-	Blocking        []Finding `json:"blocking,omitempty"`         // verified, proven findings of level critical, high or med_high
-	Warnings        []Finding `json:"warnings,omitempty"`         // findings for the pull request: medium, unproven or passing proofs
+	Blocking        []Finding `json:"blocking,omitempty"`         // level critical, high or med_high, with a proof and confidence 80 or more
+	Warnings        []Finding `json:"warnings,omitempty"`         // findings for the pull request: medium, or below confidence 80, or without a proof
 	BriefIncomplete bool      `json:"brief_incomplete,omitempty"` // any task answered brief_incomplete
 }
 
@@ -12775,10 +12712,10 @@ type ReviewerVerdict struct {
 type Decision string
 
 const (
-	DecisionWait    Decision = "wait"    // a judge has not finished, or Quality Assurance is being restarted
+	DecisionWait    Decision = "wait"    // a judge has not finished
 	DecisionApprove Decision = "approve" // the required judges passed: hand the approved work to the Commit Handler
 	DecisionReturn  Decision = "return"  // back to the Builder with findings
-	DecisionBlock   Decision = "block"   // a harness fault or a flaky item; a person is needed
+	DecisionBlock   Decision = "block"   // a harness fault; a person is needed
 )
 
 // Outcome is the result of Decide.
@@ -12801,16 +12738,17 @@ type Outcome struct {
 	Recorded []string
 }
 
-// VerifiedFinding is a reviewer finding Go kept, with the level and proof result Go gave it.
+// VerifiedFinding is a reviewer finding Go kept, with the level Go gave it and the proof and confidence the Reviewer gave.
 type VerifiedFinding struct {
 	Rule   string             `json:"rule"`
 	File   string             `json:"file"`
 	Line   int                `json:"line"`
 	Quote  string             `json:"quote"`
 	Note   string             `json:"note,omitempty"`
+	Proof      *agent.Proof `json:"proof,omitempty"` // the Reviewer's own validation; Go records it
+	Confidence int          `json:"confidence"`
 	Level  agent.FindingLevel `json:"level"`
-	In     string             `json:"in"`    // head or diff, where the quote was found
-	Proof  string             `json:"proof"` // failed_as_claimed, passed or none
+	In     string             `json:"in"` // head or diff, where the quote was found
 	Bucket agent.Bucket       `json:"-"`
 }
 ```
@@ -12824,9 +12762,10 @@ type VerifiedFinding struct {
 type Reviewer interface {
 	// Lenses returns the lens names to run for a diff under a profile.
 	Lenses(d Diff, p Profile) []string
-	// AcceptFinding checks a submitted finding's quote and the line it names, runs a blocking finding's proof, and returns
-	// its level and bucket; a finding Go cannot verify or on a line the group did not change comes back dropped.
-	AcceptFinding(f Finding, head, diff LineSource, d Diff, run ProofRunner) (Accepted, error)
+	// AcceptFinding checks a submitted finding's quote, the line it names and its confidence, and returns its level and
+	// bucket; a blocking level without a proof or under confidence 80 is a warning, and a finding Go cannot verify or on a
+	// line the group did not change comes back dropped.
+	AcceptFinding(f Finding, head, diff LineSource, d Diff) (Accepted, error)
 	// AcceptResult rejects a result that skips or repeats a task identifier.
 	AcceptResult(tasks []string, r ReviewerResult) error
 }
@@ -12842,7 +12781,6 @@ type Diff struct {
 type Accepted struct {
 	Level   FindingLevel
 	Bucket  Bucket
-	Proof   string // failed_as_claimed, passed or none
 	In      string // head or diff, where Go found the quote
 	Dropped string // empty when kept; DropQuote or DropUnchanged when the finding is dropped
 }
@@ -12852,12 +12790,6 @@ const (
 	DropQuote     = "quote_not_found" // Go did not find the quoted line at the stated file and line
 	DropUnchanged = "not_changed"     // the line is not an added line of the group's diff
 )
-
-// ProofRunner copies the change into a throwaway folder, runs a proof there and discards the copy.
-type ProofRunner func(ctx context.Context, p Proof) (ProofResult, error)
-
-// RunProof runs one proof through a ProofRunner and applies the claim rule.
-func RunProof(ctx context.Context, run ProofRunner, p Proof) (string, error)
 
 // Profile is the review depth.
 type Profile string
@@ -12887,8 +12819,7 @@ func Decide(l RiskLevel, t QAVerdict, r ReviewerVerdict) Outcome
 | Function | On failure |
 |---|---|
 | `Lenses` | Cannot fail. |
-| `AcceptFinding` | A rule identifier in no catalog and not in the standards rule list returns an error and the finding is refused. A quote not found drops the finding and logs it. A blocking level with no proof, an unlisted command or a passing proof is accepted as `warn`. |
-| `RunProof` | A proof that cannot start returns the error; the finding warns. |
+| `AcceptFinding` | A rule identifier in no catalog and not in the standards rule list returns an error and the finding is refused. A quote not found drops the finding and logs it. A blocking level with no proof, or with confidence under 80, is accepted as `warn`; a confidence outside 0 to 100 returns an error. |
 | `Classify` | Cannot fail. |
 | `AcceptResult` | A skipped or repeated task identifier returns an error; the Task Manager re-prompts once naming the identifiers, and a second rejection ends the session `schema_fail`. |
 | `VerifyFinding`, `Decide` | Cannot fail. |
@@ -12901,7 +12832,7 @@ func Decide(l RiskLevel, t QAVerdict, r ReviewerVerdict) Outcome
 | Task Manager | `Reviewer.AcceptFinding` | The `submit_finding` tool emits a `finding.submit` event |
 | Task Manager | `Reviewer.AcceptResult` | The Reviewer's final call arrives |
 | Task Manager | `Classify` | Once per round in `runDeep`, after the mechanical checks, on the judged tree's diff; `riskSkipsReview` classifies the round's diff to choose the judges |
-| Task Manager | `Decide` | A judge's session ends, or Go's reruns of a Quality Assurance agent item finish |
+| Task Manager | `Decide` | A judge's session ends |
 
 ### 14.5 Behaviour
 
@@ -12931,8 +12862,8 @@ sequenceDiagram
 
 1. The Task Manager runs the mechanical checks ([13.5](#135-behaviour)). A failed check returns the group to the Builder with no model call and starts neither judge; a clean result continues.
 2. The Task Manager chooses the lenses with `Lenses` and starts the Reviewer and Quality Assurance on the same work under test at the same time.
-3. The Reviewer reads the diff and files, runs commands, and calls `submit_finding` for each problem.
-4. `AcceptFinding` runs the evidence check; when Go finds the quoted line and, for a blocking level, the proof fails as claimed, a `finding.verified` event is published.
+3. The Reviewer reads the diff and files, runs commands to validate each claim, and calls `submit_finding` for each problem with its proof and confidence.
+4. `AcceptFinding` runs the evidence check; when Go finds the quoted line on a changed line, a `finding.verified` event is published, and a blocking level blocks only with a proof and confidence 80 or more.
 5. The first verified blocking finding makes the Task Manager cancel Quality Assurance; Quality Assurance's session ends `cancelled`.
 6. The Reviewer ends with its final call. `AcceptResult` checks that every task has exactly one verdict.
 7. `Decide` returns `return` with every verified blocking finding.
@@ -12961,7 +12892,7 @@ sequenceDiagram
 | Profiles | `thorough`: every applicable lens at full depth. `economy`: the merged `economy` lens, plus the full `security` lens wherever that lens applies. |
 | Markdown-only diff | A diff touching only `*.md` runs 3 lenses: `correctness`, `readiness` and `quality`. |
 | One session | One Reviewer session applies every selected lens, so the lenses share one pool slot. Each finding carries its lens in its rule identifier. |
-| Added checks | The Reviewer may run build, test and lint with `run`; Go reruns any command a verdict depends on, so the verdict rests on Go's result. |
+| Added checks | The Reviewer may run build, test and lint with `run` and verifies each of its claims with its own run tool; Go never reruns a command a verdict depends on. |
 | Lint overlap | The Reviewer's own style rules that the repository's lint covers are dropped, because the `lint` check of [13.5](#135-behaviour) already blocks them. |
 | Re-review | Only the delta: `git diff` from the work last reviewed to the work under test, with the open findings. A re-review happens in the round after a return, and when `komodo run (id)` continues a group. |
 
@@ -12969,7 +12900,7 @@ A Reviewer result is never reused: every review is a model call, because the cac
 
 #### The evidence check
 
-A finding blocks only when Go finds its quoted line, the line is one the change touched, and its proof fails as claimed.
+A finding blocks only when Go finds its quoted line, the line is one the change touched, its level is critical, high or med_high, it has the Reviewer's proof and its confidence is 80 or more.
 
 **📐 When does a finding block**
 ```mermaid
@@ -12979,9 +12910,9 @@ flowchart TD
   K -->|"3 yes"| Q{"Quote at file:line?"}
   Q -->|"4 no"| DROP["Dropped and logged"]
   Q -->|"5 yes"| S{"Level and changed line"}
-  S -->|"6 med_high or above"| PR{"Go runs the proof"}
-  PR -->|"7 fails as claimed"| BLOCK["Blocks the group"]
-  PR -->|"8 none or passes"| WARN["Warning on the pull request"]
+  S -->|"6 med_high or above"| PR{"Proof present and confidence 80 or more?"}
+  PR -->|"7 yes"| BLOCK["Blocks the group"]
+  PR -->|"8 no"| WARN["Warning on the pull request"]
   S -->|"9 medium"| WARN
   S -->|"10 med_low or low"| REC["Written to the run record"]
   S -->|"11 line not changed by the group"| PRE["Dropped: not shown, not recorded"]
@@ -12991,25 +12922,8 @@ flowchart TD
 2. `VerifyFinding` looks for the quote at `File:Line`, first in the head tree and then in the diff. A line matches when it equals the quote after both are trimmed of leading and trailing whitespace; inner whitespace and letter case must match exactly. A quote holding a line break, or an empty quote, never matches.
 3. Edge 4: a quote not found drops the finding and logs it. The finding cannot block, and the precision counters record it as submitted, not verified.
 4. Edges 5 to 11: a verified finding publishes `finding.verified`. Go drops it instead (edge 11) when its line is not an added or changed line of the diff: the finding is not shown on the pull request and not recorded. Its rule's level picks the bucket (14.3): `block`, `warn` or `record`.
-5. For a `block` level, `RunProof` copies the work under test into a throwaway folder in the Reviewer's sandbox, adds the proof's test file when it has one, runs the command, and discards the folder. The copy leaves out the files the guard masks (`ProofConfig.Secrets`). The Builder's worktree is never touched. `submit_finding` checks the proof with `ProofConfig.Check` and answers a refused proof with the reason, so the Reviewer can resubmit it; proof arguments are passed without shell quoting (`-run ^TestX$`). The finding blocks only when the proof fails as claimed; the command exits non-zero and its output contains the `Expect` line the Reviewer supplied, such as the failing test's name.
-6. A finding whose rule has proof kind `none`, whose command is not on the allowed list, which has no proof, or whose proof passes is accepted as a warning for the pull request. A proven finding raises the group's risk level to at least `med_high` (14.3).
-
-```go
-// RunProof reports failed_as_claimed, passed or none after one run of the proof.
-func RunProof(ctx context.Context, run ProofRunner, p Proof) (string, error) {
-	if (p.Cmd == "" && p.Test == nil) || strings.TrimSpace(p.Expect) == "" {
-		return "none", nil
-	}
-	res, err := run(ctx, p)
-	if err != nil {
-		return "", err
-	}
-	if res.Failed && strings.Contains(res.Output, p.Expect) { // the failure is the one claimed
-		return "failed_as_claimed", nil
-	}
-	return "passed", nil
-}
-```
+5. For a `block` level, `AcceptFinding` checks that the finding has a proof with `ran` and `saw` and a confidence of 80 or more; Go never runs the proof.
+6. A finding with no proof, or with confidence under 80, is accepted as a warning for the pull request. A finding that blocks raises the group's risk level to at least `med_high` (14.3). A confidence outside 0 to 100 is an error.
 
 ```go
 // VerifyFinding reports where the quoted line is found, "head" or "diff", and whether it is.
@@ -13058,30 +12972,28 @@ func ExactlyOnce(want, got []string) error {
 
 #### The approval rule
 
-`Decide` reads the verdicts the group's risk level requires for one round, and runs only after a clean mechanical check result. A group of level `low` or `med_low` gets no Reviewer: `Decide` approves it once Quality Assurance passes, and a Quality Assurance agent failure returns the round as soon as Quality Assurance's session has ended. For every other level the group goes to the Commit Handler only on `approve`: the Reviewer's session ended with every task `met` and no verified blocking finding, and Quality Assurance confirmed every task with no failed, disputed, split, unreplayed or bad item. Quality Assurance is a mandatory approval at every level: no verdict of its own means `wait`, never `approve`.
+`Decide` reads the verdicts the group's risk level requires for one round, and runs only after a clean mechanical check result. A group of level `low` or `med_low` gets no Reviewer: `Decide` approves it once Quality Assurance passes, and a Quality Assurance agent failure returns the round as soon as Quality Assurance's session has ended. For every other level the group goes to the Commit Handler only on `approve`: the Reviewer's session ended with every task `met` and no verified blocking finding, and Quality Assurance confirmed every task with no failed item and every passed item at confidence 80 or more, or Quality Assurance failed open. Quality Assurance is a mandatory approval at every level: no verdict of its own means `wait`, never `approve`.
 
 | Case | Outcome |
 |---|---|
 | Both pass | `approve`; the Task Manager hands the approved work to the Commit Handler |
 | Level `low` or `med_low`, Quality Assurance passes | `approve`; there is no Reviewer to wait for |
-| Level `low` or `med_low`, Quality Assurance item confirmed failed | `return` with the item once Quality Assurance has ended |
+| Level `low` or `med_low`, Quality Assurance item failed | `return` with the item once Quality Assurance has ended |
 | One judge has not ended | `wait` |
 | Reviewer fails first | Quality Assurance is cancelled; the Reviewer finishes; `return` with all its verified findings |
-| Quality Assurance item confirmed failed | The Reviewer finishes; `return` with the item and the Reviewer's findings |
-| Quality Assurance item disputed, first time | `wait`; Quality Assurance restarts once with Go's output; the Reviewer keeps going |
-| Quality Assurance reruns split | `block` with reason `flaky` |
-| Quality Assurance disputes a second time | `block` with reason `qa` |
+| Quality Assurance item failed, or passed under confidence 80 | The Reviewer finishes; `return` with the item and the Reviewer's findings |
+| Quality Assurance fails open (`untestable`, or 2 internal failures in a row) | Counts as passed on Quality Assurance's side; `qa.fail_open` is published, the pull request carries the warning and no try is spent |
+| Reviewer internal failure | One Builder try; the Reviewer never fails open |
 | Reviewer answers `brief_incomplete` | `block` with reason `brief` |
 | Both fail in one tick | Handled in the order the events were published; both reach the Builder in one return |
-| Item has no command | Unconfirmed in the report; never blocks |
 
-`Decide` reads `QAVerdict.Ended` and `QAVerdict.Restarts`: a first dispute (`Restarts` 0) waits for the restart, and a second blocks `qa`. A fault blocks at once. Every other case waits until the Reviewer's session has ended; a Reviewer that ended with a failure then returns the round even while Quality Assurance is cancelled or awaits a restart.
+`Decide` reads `QAVerdict.Ended`. A fault blocks at once. Every other case waits until the Reviewer's session has ended; a Reviewer that ended with a failure then returns the round even while Quality Assurance is cancelled.
 
 A Quality Assurance agent failure never cancels the Reviewer. A round at level medium or above returns to the Builder only when the Reviewer's session has ended; a round at `low` or `med_low` has no Reviewer and returns when Quality Assurance's session has ended. The return counter is the Runtime Manager's ([Runtime Manager](#7-runtime-manager)).
 
 ### 14.6 State
 
-The Reviewer keeps no state of its own. The group's runtime state ([State Manager](#10-state-manager)) holds, per round, each judge's session, its restart count, the verified findings, the `not_met` tasks and the failed items.
+The Reviewer keeps no state of its own. The group's runtime state ([State Manager](#10-state-manager)) holds, per round, each judge's session, the verified findings, the `not_met` tasks and the failed items.
 
 | Situation | Event | True after |
 |---|---|---|
@@ -13094,7 +13006,7 @@ The Reviewer keeps no state of its own. The group's runtime state ([State Manage
 ### 14.7 Invariants and Failures
 
 **Invariants**
-1. A finding blocks only when Go found its quote at the stated file and line, in the head tree or the diff, the line is one the change touched, and its proof failed as claimed in a throwaway copy.
+1. A finding blocks only when Go found its quote at the stated file and line, in the head tree or the diff, the line is one the change touched, its level is critical, high or med_high, it carries the Reviewer's proof and its confidence is 80 or more.
 2. The Reviewer's verdict list holds every task identifier exactly once.
 3. The group reaches the Commit Handler only when Quality Assurance passes the work under test, and at level medium or above the Reviewer passes it too, in the same round.
 4. A Reviewer brief holds 0 bytes of the Builder's prose.
@@ -13110,13 +13022,12 @@ The Reviewer keeps no state of its own. The group's runtime state ([State Manage
 |---|---|---|---|
 | Rule identifier in no catalog | `AcceptFinding` | Refuse the finding; 0 | The Reviewer continues |
 | Quote not at `file:line` | `VerifyFinding` | Drop and log; 0 | The finding cannot block |
-| Blocking-level finding with no proof, an unlisted command or a proof that passes | `RunProof` | Accept as a warning for the pull request; 0 | The finding cannot block |
-| A proof cannot start | `RunProof` | Accept as a warning; 0 | The finding cannot block |
+| Blocking-level finding with no proof or confidence under 80 | `AcceptFinding` | Accept as a warning for the pull request; 0 | The finding cannot block |
+| Confidence outside 0 to 100 | `AcceptFinding` | Return an error; the finding is refused; 0 | The Reviewer continues |
 | Result skips or repeats a task | `AcceptResult` | One re-prompt; 1 | Session ends `schema_fail`; task retry |
 | `brief_incomplete` | `Decide` | Stop; 0 | Blocked `brief` |
-| Session ends without a result | Task Manager | Fresh Reviewer session on the same work under test; spends one retry | Blocked `retries` when none is left |
+| Session ends without a result, or the Reviewer crashes without a Komodo restart as the cause | Task Manager | Fresh Reviewer session on the same work under test; spends one try; the Reviewer never fails open | Blocked `retries` when none is left |
 | `run` edited a tracked file | Task Manager | Reset the file, discard the result, rerun in a fresh session; 1 | Blocked `contract` |
-| A verdict depends on a command whose rerun disagrees | Go | Use Go's result; 0 | The verdict rests on Go's result |
 | Verified blocking finding or `not_met` | `Decide` | Return to the Builder; the return limit | Blocked when returns are spent |
 | Provider plan window reaches its limit | Task Manager | Reported to the Runtime Manager, which pauses the group after its current step; the lease stays held | The group resumes when the window resets |
 
@@ -13131,7 +13042,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 | `review.mode` | enum | `thorough` | `economy` runs one merged lens plus `security` where it applies; `thorough` runs every applicable lens at full depth. It sets review depth only. Owned here. |
 | Registry entry `weight` | enum | `heavy` | Model size for the Reviewer |
 | Registry entry `chain` | list | Claude subscription link, then paid Anthropic interface | Links tried in order; the free local model is an optional link |
-| `limits.group_retries` | int | 3 | The group's retry budget: the tries it has before the group is held for an override; owned by [Runtime Manager](#7-runtime-manager) |
+| `limits.group_retries` | int | 3 | The tries a group has in all, any mix of causes, before the group is held for an override; owned by [Runtime Manager](#7-runtime-manager) |
 
 ```go
 const (
@@ -13154,17 +13065,18 @@ No key lowers a level or sets one, and no key lists sensitive paths.
 - A finding with a fake quote is dropped; a finding with identifier `x.99` is refused.
 - A quote that differs only in leading whitespace verifies; one that differs in letter case does not.
 - `ExactlyOnce` refuses a skipped and a repeated task identifier.
-- `Decide` returns `approve` only for two passing verdicts, and `block` with `flaky` for a split.
+- `Decide` returns `approve` only for two passing verdicts.
 - `review.mode: economy` selects the merged `economy` lens and the `security` lens.
 - `security` and `performance` are selected for a diff in any path.
 - A `performance` finding is accepted; no lens names a path of one repository.
 - A diff whose added branch no test runs puts its `file:line` in the `checks` slot.
-- A change that adds executable lines and covers none of them fails the coverage step.
+- A change whose added executable lines are under 90 percent covered fails the coverage step and lists the uncovered lines.
 - `FindingLevel.Bucket` returns `block` for `critical`, `high` and `med_high`, `warn` for `medium`, and `record` for `med_low` and `low`.
-- `RunProof` returns `failed_as_claimed` for a failing command and `passed` for a passing one; a proof with no command and no test returns `none`.
+- `AcceptFinding` downgrades a critical finding with no proof to a warning, and one with a proof at confidence 79 to a warning; at 80 it blocks; a confidence of 101 returns an error; a `med_low` finding is recorded whatever its confidence.
+- `PublicAPIChanged` is true for a diff that adds an exported Go declaration, false for a comment-only or unexported change, and true when a line's place is unclear.
 - `Classify` returns `critical` for a workflow file, a Makefile, a Dockerfile, a deploy folder and a migration folder, and `high` for a dependency file.
 - `Classify` returns `medium` for a path no rule matches, and the level of the riskiest file for a mixed diff.
-- A `medium` diff of 401 lines is `med_high`; a proven finding raises `medium` to `med_high`; neither ever lowers a level.
+- A `medium` diff of 401 lines is `med_high`; a blocking finding raises `medium` to `med_high`; neither ever lowers a level.
 - `DeepPlan` returns `race` alone for `low`, and all four checks for `med_high`, `high` and `critical`.
 
 **Component level** (Task Manager with mocks that match documented provider behaviour; no live provider tests)
@@ -13177,8 +13089,9 @@ No key lowers a level or sets one, and no key lists sensitive paths.
 - A failed mechanical check starts no Reviewer session.
 - `komodo run (id)` on a group that was fixed by hand sends the Reviewer only the lines changed since its last review.
 - An unchanged diff reviewed twice makes two model calls.
-- A finding whose proof passes becomes a warning on the pull request and does not return the group.
+- A finding with confidence 79 becomes a warning on the pull request and does not return the group.
 - A finding about a line the group did not change is dropped: it is not on the pull request and not in the run record.
+- A diff that adds an exported Go declaration raises a `medium` group to `med_high`, so the Reviewer runs.
 - A `low` group with passing free checks and a passing Quality Assurance reaches the Commit Handler with 0 Reviewer sessions; with no Quality Assurance verdict it waits.
 - A `critical` group reaches quarantine, not the epic branch.
 
@@ -13187,8 +13100,7 @@ No key lowers a level or sets one, and no key lists sensitive paths.
 | Gap | Question | Used in |
 |---|---|---|
 | [G-305](#g-305) | Whether sensitivity is implied or set by a change-risk skill | 14.3 |
-| [G-314](#g-314) | Owner check: the risk path tables | 14.3 |
-| [G-315](#g-315) | Owner check: the review rules without a proof | 14.3 |
+| [G-314](#g-314) | Deferred with the CI/CD runner: the risk path tables | 14.3 |
 | [G-318](#g-318) | How Go detects a comment-only change and a public interface change | 14.3 |
 
 The Reviewer's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
@@ -14308,7 +14220,7 @@ flowchart TB
 5. It deletes the group's local branch. For a group landed locally (`landed` set) it calls `DeleteLanded(ctx, clone, branch, expectTip, containedIn)` with `containedIn` the local epic branch (`into`); otherwise `DeleteBranch` with the remote reference. `DeleteLanded` deletes only if the branch tip equals `expectTip` (else `ErrTipMoved`), and then only if one of these holds:
    - `containedIn` holds the tip by ancestry;
    - `containedIn` holds a commit with the identical change, compared by `git patch-id --stable` between the group's whole change since the merge base and each non-merge commit since that merge base;
-   - the group's change since the merge base is empty. [TODO: whether the owner confirms that a branch with an empty change is deleted ([G-317](#g-317))]
+   - the group's change since the merge base is empty.
 
    Otherwise it returns `ErrNotContained`. A refusal is listed under `kept`. When the worktree was kept, the branch is kept with it.
 6. It calls `CloseTaskGroup()` on the group's Task Manager, which destroys the sandbox, then reports `cleanup.done` with the `Report`. The Runtime Manager calls the Lease Manager's `Release` when the group closes ([chapter 9](#9-lease-manager)).
@@ -14437,7 +14349,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Used in |
 |---|---|---|
 | [G-309](#g-309) | Whether `Sweep` uses the content-identical branch check | 16.5 |
-| [G-317](#g-317) | Owner check: a group branch whose change is empty is deleted | 16.5 |
 
 ## 17. Error Handler
 
@@ -15050,7 +14961,6 @@ type ScoreRow struct {
 	FirstPassRate    float64  `json:"first_pass_rate"`   // share of tasks done on the first attempt
 	ReturnsPerGroup  float64  `json:"returns_per_group"` // returns to Build per group
 	FindingPrecision float64  `json:"finding_precision"` // share of findings Go verified
-	QAFalseFail  float64  `json:"qa_false_fail"` // share of Quality Assurance failures the reruns passed
 	CacheReadShare   float64  `json:"cache_read_share"`  // cache-read tokens over input tokens
 	TokensPerGroup   *int64   `json:"tokens_per_group"`  // nil when no usage was reported
 	USDPerGroup      *float64 `json:"usd_per_group"`     // nil when no usage was reported
@@ -15067,11 +14977,10 @@ type Scorecard struct {
 | `first_pass_rate` | `task.done` events with no earlier `task.retry` for the task |
 | `returns_per_group` | `stage.enter` events with `return: true`, per group |
 | `finding_precision` | `finding.verified` events over `finding.submit` events, per reviewer |
-| `qa_false_fail` | `disputed` items over `failed` and `disputed` items in Quality Assurance's `session.end` |
 | `cache_read_share` | `cache_read` over `tokens_in` in the session records |
 | `tokens_per_group`, `usd_per_group` | Group `usage`, per group that reached Done |
 
-A count goes to the agent whose work it judges: a return to the builder and model of the session that built the returned work, a Quality Assurance agent false fail to Quality Assurance, finding precision to the reviewer. The scorecard holds no cache hit rate from the Cache Manager's own counters, because the Metrics Service holds no cache handle ([8. Cache Manager](#8-cache-manager)). `komodo status --all` shows the scorecard ([1. CLI](#1-cli)); whether it carries a light-model suggestion is not part of this release.
+A count goes to the agent whose work it judges: a return to the builder and model of the session that built the returned work, finding precision to the reviewer. The scorecard holds no cache hit rate from the Cache Manager's own counters, because the Metrics Service holds no cache handle ([8. Cache Manager](#8-cache-manager)). `komodo status --all` shows the scorecard ([1. CLI](#1-cli)); whether it carries a light-model suggestion is not part of this release.
 
 ### 18.4 Interfaces
 
@@ -15925,7 +15834,7 @@ flowchart LR
 4. The Runtime Manager makes sure the epic branch exists and holds the task lists ([7.5](#75-behaviour)), then starts one Task Manager goroutine per group whose dependencies are met, and passes it the cache handle the Runtime Manager opened. Commands go down each group's command channel, and replies come back on its reply channel.
 5. The Runtime Manager saves each group's state through the State Manager before it acts on a change, and reads and writes the lease and the schedule queue through their managers. Recovery reads only that saved state.
 6. The Task Manager creates the group's branch and worktree, runs build, then test and review, and asks the Commit Handler for a local commit after each finished task. It hands approved work to the Commit Handler.
-7. The Commit Handler pushes each approved group onto its epic's branch, one group at a time per epic, and rechecks that branch. When the last group lands, it opens one pull request for the epic, and a person merges it. Then it hands over to the Cleanup Handler.
+7. The Commit Handler lands each approved group on its epic's local branch as one squashed commit, one group at a time per epic, and rechecks that branch. It pushes the epic branch once, after the last landing, opens one pull request for the epic, and a person merges it. Then it hands over to the Cleanup Handler.
 8. The Cleanup Handler removes the group's branch and worktree and calls `CloseTaskGroup()`, and the Runtime Manager releases the lease through the Lease Manager.
 9. The Event Bus appends every event to `events/<run-id>.jsonl` before it broadcasts it, and the Metrics Service updates its figures from the live events. A crash can drop the lines not yet handed to the operating system, never anything from the saved state.
 ## 21. Verification, Operations and Cutover
@@ -15936,7 +15845,7 @@ This chapter holds what no single subsystem owns: the end-to-end checks of the w
 
 Every subsystem can pass its own proof cases while the whole still fails on a real repository, so these checks run the built binary against a fixture. They are Go tests in `internal/integration`, beside the checks that already run there; the slow ones sit behind the `e2e` build tag, and a person or the orchestrator runs `go test -tags e2e ./internal/integration/` at the end of each delivery phase.
 
-All the owner decisions on review severity, finding proof, build and lint, risk levels, quarantine, Quality Assurance gate, pull request shapes and the push budget are built before the beta 6 runs, so the runs test the whole review line.
+All the owner decisions on review severity, judge confidence, build and lint, risk levels, quarantine, Quality Assurance gate, pull request shapes and the push budget are built before the beta 6 runs, so the runs test the whole review line.
 
 Three of these checks already run in `internal/integration`, without the build tag, against the built binary, a temporary Komodo home, a local bare remote, a fake `gh` and a fake Messages server that picks its reply by agent role: `TestPhase5OneGroupPassesBuildTestAndReview` (one group passes build, test and review and ends done), `TestPhase6PlannedGroupIsPublishedAndCleanedUp` (`komodo plan`, then the run, a `publish.done` fact, the epic branch on the remote, and no worktree, group branch or lease left) and `TestOneEngineRunsGroupsFromTwoRepositories` (one engine, two repositories). `TestBinaryEngineServesStatus` proves the hidden engine verb binds the socket.
 
@@ -15954,7 +15863,7 @@ Three of these checks already run in `internal/integration`, without the build t
 | Every phase | `go vet ./...`, `go test ./...`, then a build for each of the 3 operating systems | All pass, and all 3 builds succeed |
 | Event round trip | Start a run on `tg-fixture` with a subscriber that records every event | Every type the [Event Bus](#4-event-bus) lists for a group's life arrives once, in order, and the event store holds a line for each |
 | Full run | `komodo install`, `komodo plan` on the fixture's goal, then `komodo run ep-1` | The group passes build, test and review, the Commit Handler lands it on `komodo/ep-1` of a local bare remote and opens 1 pull request for the epic, the Cleanup Handler leaves 0 worktrees and 0 containers, and the Runtime Manager releases the lease through the Lease Manager when the group closes |
-| Rework | Fixture B | Quality Assurance or Reviewer returns the group to the Builder; after the retries are spent it ends Blocked with reason `retries` |
+| Rework | Fixture B | Quality Assurance or Reviewer returns the group to the Builder; after 3 tries in all, any mix of causes, the group is held for the 60-minute final-try window and then fails; a builder session timeout counts as a failed try and a failing check never ends a builder session |
 | Old failure | Fixture A | The group passes with a warning naming the test that already failed at the base |
 | Race | Two `komodo run tg-1.1` commands target the same group | The Lease Manager grants 1 lease; the other command is refused, and only 1 push reaches the remote |
 | Stop | `komodo stop tg-1.1` during Build, after the first task is finished | The finished task is a local commit on the group branch, nothing is pushed, the lease is revoked, and a later `komodo run tg-1.1` continues the group |
@@ -15983,7 +15892,7 @@ Each row proves one fact of the design that the full run does not reach. They us
 | Epic landing | An epic of 2 groups, with a seeded failing recheck after the first landing | Landings go one at a time onto `komodo/ep-1` as one squashed commit each; the epic pauses; the second group lands only after a recheck passes; the remote receives 1 push and 1 pull request opens after the last landing |
 | Risk routing | A fixture with a docs-only group, an ordinary group and a group that edits a workflow file | The docs group lands with Quality Assurance and 0 Reviewer sessions; the ordinary group gets Quality Assurance and the Reviewer; the workflow group is `critical` and opens a draft pull request into `komodo/ep-1` |
 | Quarantine | A `critical` group with a dependent and an independent group | The independent group lands; the dependent is deferred, not blocked; after the draft is merged, `komodo run` builds the dependent |
-| Finding proof | A seeded blocking finding whose proof passes, and one whose proof fails as claimed | The first is a warning on the pull request; the second returns the group to the Builder |
+| Finding confidence | A seeded critical finding with a proof at confidence 79, one with no proof, and one with a proof at confidence 80 | The first two are warnings on the pull request; the third returns the group to the Builder |
 | Abandon | `komodo abandon tg-1.2` during Build | The branch, the worktree and the container are gone, the state record and events remain, and the lease is released when the group closes |
 | Limits | A fake provider reports a plan window at 80%, then 100%; a group reaches 90%, then 100% of its token cap | A warning at 80%; at 100% the affected groups pause after their current step, keep their leases and resume when the window resets; paid spending only warns without a ceiling; the capped group gets a nudge at 90% and pauses with cause `group_tokens` at 100%, and `--approve` continues it |
 | Storage | Kill the engine during a lease write, then leave a lock file behind | No half record is read, the stale lock expires after its timeout, and `go.mod` lists no modules |
@@ -16016,7 +15925,7 @@ Each check starts from a clean test home (`KOMODO_HOME`) and a fresh copy of its
 
 ### 21.2 Operations Runbook
 
-The orchestrator drives the normal path; a person steps in only for the situations below. Every command is one of the 12 in [1. CLI](#1-cli), and `<label>` is the readable name of an epic (`ep-1`) or a task group (`tg-1.2`).
+The orchestrator drives the normal path; a person steps in only for the situations below. Every command is one of the 13 in [1. CLI](#1-cli), and `<label>` is the readable name of an epic (`ep-1`) or a task group (`tg-1.2`).
 
 | Situation | What a person does | Where it is specified |
 |---|---|---|
@@ -16192,7 +16101,7 @@ Programming and operating-system terms used in this document. Architecture terms
 | `compare-and-swap` | An update that succeeds only if the value is still what the caller last saw. Komodo moves the hidden ref this way, on the old commit id. |
 | `create-only` | A file written only if it does not exist yet, so the first writer wins and any other is refused. Komodo's leases and queue items are create-only files. |
 | `regression` | A test that passed before a change and fails after it. Check compares against the base commit; a regression blocks the group, while a test failing both before and after only warns. |
-| `flaky` | A test that sometimes passes and sometimes fails with no code change. Komodo reruns a failing test twice alone; in Check a split result only warns; in Quality Assurance's reruns a split blocks the group as `flaky`. |
+| `flaky` | A test that sometimes passes and sometimes fails with no code change. Komodo reruns a failing test twice alone; in the mechanical checks a split result only warns. |
 | `baseline` | The starting measurement to compare against. Komodo's Check records the tests already failing at the base commit, so those failures are not blamed on the builder. |
 | `Ollama` | A program that runs open-source AI models on your own machine. Komodo reaches it through an http: link and measures its real context window, refusing one below the configured floor. |
 | `OpenAI-compatible` | A server that accepts requests in the same format as OpenAI's service, so one client fits many local and hosted models. Komodo's http: links all use that format. |
@@ -16253,13 +16162,12 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-71"></a>G-71 | Providers | Confirming the `claude-cli` wire defaults stated in 5.3 and 7.5: working directory of the `claude` process, which stream line type is `output`, which field of the result line carries the structured answer, which field of `rate_limit_event` carries the reset time, what `--verbose` switches on, how `claude auth status --json` reports a logged-out user, and the signature of the tool host the API-link loop calls. | Spike against Claude Code 2.1.295, phase 4 | [11](#11-task-manager) |
 | <a id="g-72"></a>G-72 | Providers | Confirming the `anthropic.go` and `openai.go` wire defaults stated in 5.3 and 7.5: request paths, authentication and version headers, message and tool-call encoding, server-sent event names, how the brief builder hands its cache breakpoints to the adapter, the `messages.jsonl` line layout, and the `-limit` header that gives the window total. | Later minor, deferred by owner decision 2026-10-18 | [11](#11-task-manager) |
 | <a id="g-121"></a>G-121 | CLI validate | Whether a `CONIN$` console check on native Windows refuses an agent shell as the terminal check does on Unix; applies only if native Windows returns | Not planned; Windows runs through Windows Subsystem for Linux 2 | [1](#1-cli) |
-| <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 9.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-quality-assurance) |
+| <a id="g-169"></a>G-169 | Quality | Whether each default coverage tool in 13.5 yields a whole-repository line percent on a real repository of its language | Spike, phase 6, then a design patch to 9.5 | [1](#1-cli), [13](#13-quality-assurance) |
 | <a id="g-187"></a>G-187 | Host cleanup | The hook event, matcher and timeout of the four hook entries as they sit in `~/.claude/settings.json`; the shape of one `skillOverrides` entry; the exact text of the 5 stale lines of `~/.claude/AGENTS.md` | Read from the person's file at the cleanup, phase 1; then 15.3 | [21](#21-verification-operations-and-cutover) |
-| <a id="g-290"></a>G-290 | Retry budget | Whether every spent retry starts a new try with fresh wall time, as built, or only a wall failure does | Owner decision | [7](#7-runtime-manager) |
 | <a id="g-292"></a>G-292 | CLI validate | Whether native Windows has a peer check for the engine's terminal rule on `run --override`; until then the engine refuses it there. Untested; same ground as [G-121](#g-121) | Applies only if native Windows returns | [7](#7-runtime-manager) |
 | <a id="g-293"></a>G-293 | CLI validate | The range of the final try's working time on `run --override`: `limits.group_wall_min` has no maximum to borrow, so 1 to 480 minutes is used until the owner sets it | Owner decision | [1](#1-cli) |
 | <a id="g-294"></a>G-294 | Error handling | Whether the per-group waits (1, 2 and 4 minutes) and the global pause waits should be tuned from the error counts by type; they are engine constants until then | Owner decision after counts are collected | [7](#7-runtime-manager) |
-| <a id="g-295"></a>G-295 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 9.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-quality-assurance), [14](#14-reviewer) |
+| <a id="g-295"></a>G-295 | Quality | Changed-line coverage for JavaScript and TypeScript: the `c8` report in 13.5 holds totals only, so a per-line report must be added to the coverage command | Spike, phase 6, then a design patch to 9.5 | [13](#13-quality-assurance), [14](#14-reviewer) |
 | <a id="g-296"></a>G-296 | Quality | Changed-line coverage for Rust: the `cargo llvm-cov --summary-only` report holds totals only, so a per-line export must replace it | Spike, phase 6, then a design patch to 9.5 | [13](#13-quality-assurance), [14](#14-reviewer) |
 | <a id="g-297"></a>G-297 | Sandbox | Private registries for npm, cargo and Python: their setup commands have no credentials and no cache fallback, because only Go setup gets a file proxy on the person's download cache | Owner decision | [11](#11-task-manager) |
 | <a id="g-298"></a>G-298 | Sandbox | A builder-added Go dependency is fetched on the host with the person's login: the host fill runs `go mod download` again when `go.mod` or `go.sum` changes, so a module the builder names is downloaded outside the sandbox. The owner accepted this risk; open: whether to limit host fills to modules already in `go.sum`, or to `GOPRIVATE` hosts | Owner decision | [11](#11-task-manager) |
@@ -16273,11 +16181,9 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-311"></a>G-311 | Surviving mutants | What a surviving mutant does now that Quality Assurance writes no tests; Go records it | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-312"></a>G-312 | Quality Assurance gate | Whether a sign-off voided by a changed test file spends a retry | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-313"></a>G-313 | Quarantine title | The title of a quarantine pull request; proposal, not decided: `<label>: <goal>` | Owner decision | [15](#15-commit-handler) |
-| <a id="g-314"></a>G-314 | Owner check: risk path tables | Built in code without an owner decision, and the owner has not confirmed it: the path tables of 14.3, including migration folders, and the extra CI files `.circleci`, `Jenkinsfile`, `.gitlab-ci.yml` and `azure-pipelines.yml` as `critical` | Owner decision | [14](#14-reviewer) |
-| <a id="g-315"></a>G-315 | Owner check: review rules without a proof | Built in code without an owner decision, and the owner has not confirmed it: the 12 rules whose proof kind is `none` (listed in 14.3), so their findings only warn | Owner decision | [14](#14-reviewer) |
-| <a id="g-316"></a>G-316 | Owner check: the same error | Built in code without an owner decision, and the owner has not confirmed it: for the inner cap, the same error is the same task identifier, the same exit code and the same capped output once test durations and cached marks are normalised | Owner decision | [7](#7-runtime-manager) |
-| <a id="g-317"></a>G-317 | Owner check: empty group branch | Built in code without an owner decision, and the owner has not confirmed it: a group branch whose change since the merge base is empty is deleted | Owner decision | [16](#16-cleanup-handler) |
-| <a id="g-318"></a>G-318 | Risk inputs with no detector | How Go detects a comment-only change (`Verified`) and a change to a public interface (`PublicAPI`); the risk rules name both, but no caller sets them | Owner decision | [14](#14-reviewer) |
+| <a id="g-314"></a>G-314 | Risk levels | Deferred until the CICD runner is refined. Whether `cicd.yaml` and compose files count as `critical`, and whether the path tables of 14.3 hold, including migration folders and the extra CI files `.circleci`, `Jenkinsfile`, `.gitlab-ci.yml` and `azure-pipelines.yml` | Deferred, until the CICD runner is refined | [14](#14-reviewer) |
+| <a id="g-318"></a>G-318 | Risk inputs with no detector | How Go detects a comment-only change (`Verified`); the risk rules name it, but no caller sets it. Public interface detection is built: a line scan of the diff for changes to exported Go declarations | After the trial runs | [14](#14-reviewer) |
+| <a id="g-321"></a>G-321 | Coverage | How the planner brings a whole repository to the 90 percent line coverage floor. Owner: "The entire repo has to meet 90%, but that's the job of the planner. Each builder focuses on getting its assigned tasks over 90% and not regression below 90% for the whole repo." | Owner decision | [13](#13-quality-assurance) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
@@ -16334,7 +16240,7 @@ The one map from each component of the owner's diagram to its chapter, HLD secti
 | LevelDB log format, https://github.com/google/leveldb/blob/main/doc/log_format.md | Dropping a torn last record when a log is read |
 | Kafka consumer position, https://kafka.apache.org/documentation/#design_consumerposition | Each subscriber keeps its own bookmark and rereads from it after a failure |
 | Git lock files, https://github.com/git/git/blob/master/Documentation/technical/api-lockfile.txt | A create-only `<path>.lock` beside a shared file, then write and rename |
-| Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | The 80% coverage bar |
+| Google Testing Blog on coverage, https://testing.googleblog.com/2020/08/code-coverage-best-practices.html | Coverage as a floor on the whole repository and on the lines a change adds |
 | Kiro spec-driven development, https://verdent.ai/guides/agents/kiro-spec-driven-development | EARS item grammar |
 | Aider repo map, https://github.com/pdavis68/RepoMapper | Repo map ranking |
 | Claude Code hooks, https://code.claude.com/docs/en/hooks | The `SessionStart` entry shape and its `timeout` |
