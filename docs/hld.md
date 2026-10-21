@@ -198,11 +198,11 @@ The Builder is the engineering agent that writes the code for one task group, ta
 
 #### 5.14 Tester
 
-The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. The Tester approves every group before it lands: Go accepts its pass only with evidence Go replays. It writes edge-case tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-tester).
+The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. The Tester approves every group before it lands: Go accepts its pass only with evidence Go replays. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-tester).
 
 #### 5.15 Reviewer
 
-The Reviewer is the final code check. It reads the builder's change while the Tester runs, and a group of medium level or above moves to publishing only when both approve; otherwise the work returns to the Builder with their findings. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
+The Reviewer is the final code check of the group's own changes. It reads them while the Tester runs, and a group of medium level or above moves to publishing only when both approve; otherwise the work returns to the Builder. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
 
 #### 5.16 Commit Handler
 

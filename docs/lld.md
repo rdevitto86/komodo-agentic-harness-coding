@@ -2896,7 +2896,7 @@ Each event name has the form `family.name`, such as `session.end`. The table giv
 | `task.retry` | `run-status` / `task.retry` | `task`, `attempt` |
 | `check.done` | `run-status` / `check.done` | `pass`, `tip`, `head`, `regression`, `steps`; the free mechanical checks that open the Tester's turn |
 | `finding.submit` | `run-status` / `finding.submit` | `rule`, `file`, `line`, `quote`, `note`, `proof` |
-| `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `level`, `in`, `pre_existing`, `proof` (the proof's outcome) |
+| `finding.verified` | `run-status` / `finding.verified` | The submit fields plus `level`, `in`, `proof` (the proof's outcome) |
 | `tool.denied` | `run-status` / `tool.denied` | `tool`, `row`, `target`, `count` |
 | `sandbox.fallback` | `run-status` / `sandbox.fallback` | `role`, `wanted`, `used`, `why`; the Tester ran in the operating-system sandbox because Docker was missing |
 | `tool.outside` | `run-status` / `tool.outside` | `server`, `tool`, `outcome`; one call to an outside tool server |
@@ -3156,7 +3156,6 @@ type FindingVerified struct {
 	FindingSubmit
 	Level       string `json:"level"`                 // critical, high, med_high, medium, med_low or low, from the rule
 	In          string `json:"in"`                    // "head" or "diff", where the quote was found
-	PreExisting bool   `json:"pre_existing,omitempty"` // the line is one the change did not touch
 	Proof       string `json:"proof,omitempty"`       // failed_as_claimed, passed or none (14.3)
 }
 
@@ -4740,7 +4739,7 @@ type Rule struct {
 | `Rule.ID` | `std.<skill>.<n>`, the identifier a reviewer finding cites |
 | `Rule.Line` | The line without its leading `- ` and every `**`, trimmed |
 
-`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as a JSON array of `{id, skill, line}` rows, ordered by skill name and then by `n`; a Go test regenerates it and compares byte for byte, and `go test -run TestShippedIndexAndRules -update` rewrites both `rules.json` and `index.json`. A standards rule's level is `[TODO: the level of each standards rule and of each rule a lens catalog holds today ([G-301](#g-301))]`.
+`n` counts the skill's `- **Never` and `- **Always` lines from 1 in body order, and `<skill>` is the skill name without `standards-`, so the third such line of `standards-go` is `std.go.3`. The build writes every shipped rule to `embed/skills/rules.json` as a JSON array of `{id, skill, line}` rows, ordered by skill name and then by `n`; a Go test regenerates it and compares byte for byte, and `go test -run TestShippedIndexAndRules -update` rewrites both `rules.json` and `index.json`. A standards rule's level is `medium`, a warning, because the lint check already blocks real style failures.
 
 #### Item table
 
@@ -5523,7 +5522,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 |---|---|
 | [G-13](#g-13) | Tuning the steering-phrase list |
 | [G-18](#g-18) | Repo map patterns for TypeScript, Python and Rust against 3 real repositories |
-| [G-301](#g-301) | The level of each standards rule |
 
 ## 7. Runtime Manager
 
@@ -6621,6 +6619,15 @@ A true failure that finds `RetriesLeft` at 1 is the group's last: it sets `Retri
 3. At engine start the engine reads every saved group blocked on `retries` with a `Block.Until` (found through the lease registry, which survives a killed engine) and arms its timer from that deadline. A deadline that passed while the engine was down lapses at once: `override.lapsed`, then `group.failed`. While such a timer is armed the engine does not exit.
 
 A **failed** group is Done with `Outcome` failed. `Next` orders `cancel` and `release`, so the lease is released and no pool slot is held; it emits `override.lapsed` (when an override was offered), `group.failed` and `group.done`. The group's event history is kept. Its worktree, caches and branches are no longer held by any run, so the Cleanup Handler's sweep may delete them. A failed group is never continued: `run (id)` and `--override` on it are refused with code `group_failed`, which says to plan it again. The only way back is a fresh pipeline run with a new plan, context, cache and worktree. The run lists the group as stalled with reason `failed`, and the groups that depend on it do not start.
+
+#### The inner cap on a try
+
+Firm blocking failures end the try, so a run cannot go on without end. A session ends, and the try counts as a failed try, in either case:
+
+1. The same check fails 3 times in a row with the same error.
+2. The Builder runs checks 20 times in one session.
+
+The last output goes into the next try's brief. A check that alternates between pass and fail is reported flaky and does not count toward the 3. The outer rule above is unchanged: 3 tries, one override try and the 60-minute window.
 
 #### Wall time per try
 
@@ -9162,10 +9169,9 @@ A `run` request: `{"class": "test", "args": ["./internal/lease/..."]}`. The comm
 | `diff` | `{paths}`, optional | The unified diff of the group's change against its base commit |
 | `git_read` | `{command, args}`; `command` is `log`, `show`, `blame` or `status` | The command's output |
 | `skill` | `{name}`: `<skill>` or `<skill>#<section>` | The skill text |
-| `submit_finding` | `{rule, file, line, quote, note, proof}`; `proof` is `{cmd}` or `{test}` (14.3) | `filed <rule> at <file>:<line>` |
+| `submit_finding` | `{rule, file, line, quote, note, proof}`; `proof` is `{cmd, expect}` or `{test, expect}` (14.3) | `filed <rule> at <file>:<line>` |
 | `task_done` | `{task}` | The `done_when` exit code and capped output |
 | `run_check` | `{item}`: an acceptance item identifier; the schema's `enum` lists the group's identifiers; Tester only | The item's `cmd` run as written in the Tester's sandbox: its output, led by `exit status <n>` when the exit code is not 0; an error for an unknown identifier or an item with no `cmd` |
-| `write_test` | `{path, content}`; Tester only; the path must be a test file (13.3) | `created <path>, <n> lines`; a path that is not a test file is refused |
 | `lint_backlog` | `{draft}`: the planned task list as one text | `ok`, or one lint error per line |
 
 A reply is `Reply{Text, LogPath}`. When the output exceeds 4 KB, the first 1 KB and the last 3 KB are kept, joined by one line `[… <n> bytes cut; full output in <LogPath>]`, since errors usually sit at the end. `read` is not capped.
@@ -11349,7 +11355,7 @@ The Tester is the agent that proves the Builder's added and modified code works.
 - Acceptance items, the Tester's blind pass over them, and Go's reruns of a failed item.
 - The per-task confirmation: one answer for every task identifier.
 - The mechanical checks, the first step of the Tester's turn, run by Go code in the Tester's sandbox with no model call: build, lint on the changed packages, rerun of completion commands, scope, secret scan, affected tests (impact set, baseline comparison and flake rule), coverage and case collision (13.5).
-- The Tester's evidence for each item, which Go replays, and the tests the Tester writes (13.5).
+- The Tester's evidence for each item, which Go replays (13.5).
 - The Tester's sign-off, after which the Builder cannot edit a test file (13.5).
 - The deep checks Go runs by risk level: the race detector, fuzzing, mutation and benchmarks (13.5).
 
@@ -11391,7 +11397,6 @@ Go package `internal/agent` (HLD Appendix A). `Role` and `Slots` are defined in 
 | `internal/agent/tester.go` | The Tester's `Role`, `Item`, `ItemResult`, `EvidenceRun`, `TesterResult`, `TesterVerdict`, `ParseTesterResult`, `NewTester` and `Tester.AcceptResult` |
 | `internal/agent/rerun.go` | `Tester.Rerun`, `Tester.Replay` and `AdjudicateItem` |
 | `internal/agent/signoff.go` | `Signoff`, `TestsHash` and `Signoff.Voided`: the lock on test files after the Tester's pass |
-| `internal/agent/newtests.go` | `NewTest`, `NewTestOutcome` and `CheckNewTest`: the Tester's own tests against the base and the change |
 | `internal/agent/deep.go` | `DeepKind`, `DeepPlan`, `DeepResult`, `Mutant` and `Deep.Run`: the race, fuzz, mutation and benchmark runs |
 | `internal/agent/checks.go` | `Checker`, the check steps, their results and `CheckDone` |
 | `internal/agent/checker.go` | `CheckerConfig`, `NewChecker` and the ten steps |
@@ -11421,7 +11426,7 @@ Files this chapter calls but does not own:
 ```json
 {
   "name": "tester",
-  "tools": ["read", "search", "run", "run_check", "write_test"],
+  "tools": ["read", "search", "run", "run_check"],
   "run_classes": ["build", "test"],
   "guard": ["R1"],
   "slots": {
@@ -11433,7 +11438,7 @@ Files this chapter calls but does not own:
 }
 ```
 
-The Tester has one write tool, `write_test`, which creates or replaces a test file and refuses any other path (the test-sibling matcher of `Checker`). It writes into the Tester's sandbox copy, never the Builder's worktree. Its `run` may write files in the sandbox; the Task Manager resets the checkout afterwards, keeping the files `write_test` made. The Tester's default weight is `light`; its link chain names the Claude subscription link first and the paid Anthropic interface second, and the free local model is an optional link.
+The Tester writes no tests: the Builder writes them, and the Tester validates them and the change. Its `run` may write files in the sandbox; the Task Manager resets the checkout afterwards. The Tester's default weight is `light`; its link chain names the Claude subscription link first and the paid Anthropic interface second, and the free local model is an optional link.
 
 | Slot | Holds | Tester |
 |---|---|---|
@@ -11498,7 +11503,7 @@ const (
 type EvidenceRun struct {
 	Cmd     string `json:"cmd"`     // the command as run
 	Exit    int    `json:"exit"`    // the exit code the Tester saw
-	Excerpt string `json:"excerpt"` // the output lines that show the result; the size limit is G-315
+	Excerpt string `json:"excerpt"` // the output lines that show the result; up to 4 KB, head and tail
 }
 
 // ItemResult is the Tester's pass or fail for one item.
@@ -11525,7 +11530,7 @@ type TesterResult struct {
 | Field | Rule |
 |---|---|
 | `items[].pass` | True when the item's command or observation met the sentence. |
-| `items[].evidence` | Required, non-empty: one `{cmd, exit, excerpt}` per command run. Go replays each run and accepts a pass only when the replay gives the same exit code and the excerpt lines appear in its output (13.5). |
+| `items[].evidence` | Required, non-empty: one `{cmd, exit, excerpt}` per command run. Go replays each run and accepts a pass only when the replay gives the same exit code and the excerpt lines appear in its output (13.5). An excerpt is up to 4 KB, head and tail, as in a tool reply; the full output stays in the run log. |
 | `items[].reason` | Set only on the restart that follows a dispute; one of the 4 words. |
 | `tasks[]` | Every task identifier of the group exactly once; judged from its completion command and acceptance items. |
 
@@ -11562,15 +11567,14 @@ The Task Manager folds the validated result and the rerun outcomes into one verd
 // TesterVerdict is the Tester's outcome as the approval rule reads it.
 type TesterVerdict struct {
 	Ended      bool     `json:"ended"`                // the Tester's session ended with a valid result and Go's reruns finished
-	Restarts   int      `json:"restarts,omitempty"`   // restarts spent after a dispute
-	Pass       bool     `json:"pass"`                 // every task confirmed, every item passed or skipped, nothing unreplayed or bad
+	Restarts   int      `json:"restarts,omitempty"`   // restarts spent after a dispute or an unreplayed pass
+	Pass       bool     `json:"pass"`                 // every task confirmed, every item passed or skipped, nothing unreplayed
 	NotMet     []string `json:"not_met,omitempty"`    // task identifiers marked not_confirmed
 	Failed     []string `json:"failed,omitempty"`     // items Go's two reruns confirmed failed
 	Disputed   []string `json:"disputed,omitempty"`   // items Go's two reruns passed
 	Split      []string `json:"split,omitempty"`      // items whose two reruns disagreed
 	Skipped    []string `json:"skipped,omitempty"`    // items with needs: or no command, never blocking
 	Unreplayed []string `json:"unreplayed,omitempty"` // passed items whose evidence Go's replay did not reproduce
-	BadTests   []string `json:"bad_tests,omitempty"`  // Tester-written tests that broke the rules of 13.5
 }
 ```
 
@@ -11723,32 +11727,15 @@ func newLintFindings(head, base []lintFinding) []lintFinding
 
 `goLintDirs` and `goLintScript` pick the folders of the changed Go files, or `./...` when `go.mod` or `go.sum` changed; `golangciProbe` finds the tool and the configuration file. A new finding makes the `lint` step `fail` with up to 20 `file:line: message (rule)` detail lines and a count of the rest. A failing `build` step carries the compiler's exact output and skips the `lint` step with a `warn`. A language with no build or lint command reports that step as a `warn` with detail `skipped: no <class> command for language "<lang>"`, never a failure.
 
-#### Sign-off and the Tester's own tests
+#### Sign-off
 
-The Tester writes tests from the acceptance items, blind, with `write_test`. Go runs every such test on the base commit and on the change, five times each, and keeps the Tester's pass as a sign-off stamped with the hash of the test files. These shapes are the design.
+The Builder writes the tests; the Tester validates them and the change. Go keeps the Tester's accepted pass as a sign-off stamped with the hash of the test files. These shapes are the design.
 
 ```go
-// NewTest is a test the Tester wrote with write_test.
-type NewTest struct {
-	Path string // the test file
-	Name string // the test's name
-	For  string // the acceptance item or surviving mutant the test answers
-}
-
-// NewTestOutcome is what Go saw in five runs of one NewTest on each tree; true is a pass.
-type NewTestOutcome struct {
-	Test   NewTest
-	Base   [5]bool // every run must fail
-	Change [5]bool // every run must pass
-}
-
-// CheckNewTest rejects a test that passes on the base, fails on the change, or disagrees with itself across runs.
-func CheckNewTest(o NewTestOutcome) error
-
 // Signoff is the Tester's accepted pass.
 type Signoff struct {
 	Tree      string // tree hash of the work under test
-	TestsHash string // hash of the test files at that tree; whether the Tester's own tests count is G-311
+	TestsHash string // hash of the test files at that tree
 }
 
 // TestsHash hashes the path and content of every test file, in path order.
@@ -11758,18 +11745,9 @@ func TestsHash(files map[string][]byte) string
 func (s Signoff) Voided(testsHash string) bool
 ```
 
-| Outcome of `CheckNewTest` | Meaning |
-|---|---|
-| nil | Five failures on the base and five passes on the change: the test proves the change. |
-| error `not_red` | A run passed on the base: the test proves nothing about the change. |
-| error `not_green` | A run failed on the change: the change breaks what the test states. |
-| error `flaky` | The five runs on one tree disagree: the test is unstable. |
-
-A test that returns an error is listed in `TesterVerdict.BadTests`. [TODO: whether the tests that pass `CheckNewTest` are kept in the landed commit, and in which folder ([G-311](#g-311))]
-
 #### Deep checks
 
-Go runs the deep checks with no model call, after the mechanical checks and before the Tester starts; mutation runs once more after the Tester's tests are accepted, and the sign-off comes last. The race detector runs for every group; fuzzing, mutation and benchmarks run from `med_high` upward. These shapes are the design.
+Go runs the deep checks with no model call, after the mechanical checks and before the Tester starts. The race detector runs for every group; fuzzing, mutation and benchmarks run from `med_high` upward. These shapes are the design.
 
 ```go
 // DeepKind names one deep check.
@@ -11778,7 +11756,7 @@ type DeepKind string
 const (
 	DeepRace     DeepKind = "race"     // the language's race detector over the impact set
 	DeepFuzz     DeepKind = "fuzz"     // random inputs against the changed functions
-	DeepMutation DeepKind = "mutation" // deliberate edits to the changed lines
+	DeepMutation DeepKind = "mutation" // deliberate edits to the changed functions
 	DeepBench    DeepKind = "bench"    // the changed packages' benchmarks
 )
 
@@ -11786,10 +11764,8 @@ const (
 type MutantStatus string
 
 const (
-	MutantKilled     MutantStatus = "killed"     // a test failed
-	MutantSurvived   MutantStatus = "survived"   // every test passed
-	MutantResolved   MutantStatus = "resolved"   // a Tester-written test killed it on the rerun
-	MutantUnresolved MutantStatus = "unresolved" // it survived the Tester's tests; Go records it
+	MutantKilled   MutantStatus = "killed"   // a test failed
+	MutantSurvived MutantStatus = "survived" // every test passed; Go records it
 )
 
 // Mutant is one deliberate edit to a changed line.
@@ -11812,7 +11788,14 @@ type DeepResult struct {
 func DeepPlan(l RiskLevel) []DeepKind
 ```
 
-`RiskLevel` is defined in [14.3](#143-data-model). A surviving mutant goes to the Tester as an item; the Tester writes a test for it, Go runs the test as a `NewTest`, and Go runs the mutation again. A mutant that survives the Tester's tests is `unresolved`: Go records it in the run record and the pull request body. The Tester never decides that a mutant is equivalent to the original. [TODO: the tool that makes mutants for each language, how fuzz targets are chosen, the benchmark threshold, and what a failed race, fuzz or benchmark run does ([G-310](#g-310))]
+`RiskLevel` is defined in [14.3](#143-data-model). The checks are:
+
+- **Race detector:** it runs on the affected tests every time, and a race sends the work back to the Builder.
+- **Fuzzing:** each existing fuzz target in a changed package runs for 30 seconds, and a crash sends the work back to the Builder.
+- **Mutation:** a Go mutation tool mutates the changed functions. [TODO: which Go mutation tool, picked by a quick proof of concept ([G-310](#g-310))]
+- **Benchmarks:** a slowdown of more than 10% warns.
+
+Other languages come later. Go records each surviving mutant. The Tester never decides that a mutant is equivalent to the original. [TODO: what a surviving mutant does now that the Tester writes no tests ([G-311](#g-311))]
 
 ### 13.4 Interfaces
 
@@ -11875,8 +11858,7 @@ func CaseCollisions(paths []string) [][]string
 | Task Manager | `Tester.AcceptResult` | The Tester's final call arrives |
 | Task Manager | `Tester.Rerun` | The result holds a failed item that has a command |
 | Task Manager | `Tester.Replay` | The result holds a passed item with evidence |
-| Task Manager | `CheckNewTest` | After the replays, for each test the Tester wrote |
-| Task Manager | `Deep.Run` | After the clean mechanical result and before the Tester starts, with `DeepPlan` of the risk level; again for mutation after the Tester's tests are accepted |
+| Task Manager | `Deep.Run` | After the clean mechanical result and before the Tester starts, with `DeepPlan` of the risk level |
 | Task Manager | `DestroySandboxInstance()` | The Cleanup Handler closes the group through `CloseTaskGroup()` |
 
 ### 13.5 Behaviour
@@ -11899,15 +11881,14 @@ sequenceDiagram
     T->>B: 5 return, no model call
   else clean result
     G->>T: 4 clean
-    G->>X: 5 deep checks, survivors listed
+    G->>X: 5 deep checks
     T->>A: 6 start the session with the brief
-    A->>X: 7 run item commands, write tests
+    A->>X: 7 run item commands
     A->>T: 8 final call, items and tasks
     T->>G: 9 AcceptResult
     G->>X: 10 rerun each failed item twice
-    G->>X: 11 replay each pass, run the new tests
-    G->>X: 12 mutation again with the new tests
-    G->>T: 13 verdict, then sign-off
+    G->>X: 11 replay each pass
+    G->>T: 12 verdict, then sign-off
   end
 ```
 
@@ -11915,15 +11896,14 @@ sequenceDiagram
 2. The Task Manager calls `Checker.Check`. These are the first step of the Tester's turn: Go code, no model call.
 3. Go runs the mechanical checks (below) in the container.
 4. A failure returns the result with each failing step's exact output. A clean result continues at edge 5.
-5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither the Tester nor the Reviewer starts. On a clean result Go runs the deep checks of the group's risk level ([Running the deep checks](#running-the-deep-checks)), which cost no model call, and lists each surviving mutant as an item for the Tester.
+5. On a failure the Task Manager returns the group to the Builder with that output and counts one return. Neither the Tester nor the Reviewer starts. On a clean result Go runs the deep checks of the group's risk level ([Running the deep checks](#running-the-deep-checks)), which cost no model call, and records each surviving mutant.
 6. The Task Manager then starts the Tester's session with the brief, and the Reviewer at the same moment for a group of level medium or above ([14.5](#145-behaviour)).
-7. The Tester runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in the Tester's sandbox, the same way as a rerun; the model never writes the command. `run` (classes `build` and `test`) stays for any other command. For an edge case the items do not cover, and for each surviving mutant, it writes a test with `write_test`.
+7. The Tester runs each acceptance item's command with `run_check` and the item's identifier, and reads the diff and files as needed. Go runs the item's `cmd` as written through `sh -c` in the Tester's sandbox, the same way as a rerun; the model never writes the command. `run` (classes `build` and `test`) stays for any other command.
 8. It ends with one final call: a pass or fail for every item, with one `{cmd, exit, excerpt}` run for each command behind the answer, and `confirmed` or `not_confirmed` for every task identifier.
 9. Go rejects a result that skips or repeats a task identifier, or that has no result, a repeated result or an unknown identifier for an acceptance item.
 10. Go reruns every failed item that has a command, twice, in the same container, and judges it with `AdjudicateItem`.
-11. Go replays the evidence of every passed item with `Tester.Replay` and runs each test the Tester wrote through `CheckNewTest`. An item whose replay does not reproduce is `unreplayed`, and a test that breaks the rules is a bad test.
-12. Go runs the mutation check again with the Tester's accepted tests; a survivor a test now kills is `resolved`, and the rest are `unresolved`.
-13. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour). When `Pass` is true, it stamps the sign-off, which is the last step.
+11. Go replays the evidence of every passed item with `Tester.Replay`. An item whose replay does not reproduce is `unreplayed`; the Tester restarts once with Go's output, and a second failure blocks the group with the existing `tester` reason. Neither costs a Builder try.
+12. The Task Manager builds the `TesterVerdict` and gives it to the approval rule of [14.5](#145-behaviour). When `Pass` is true, it stamps the sign-off, which is the last step.
 
 After every return, the Builder's revised work passes through the checks again, and the Tester reruns every item. `test` is not a command: a group that needs another pass, for example after a hand fix in its worktree, continues with `komodo run (id)`, which picks up at the group's current stage.
 
@@ -12136,7 +12116,7 @@ flowchart TD
 1. A passed item must list at least one `{cmd, exit, excerpt}` run; an empty list fails `AcceptResult` like a missing item.
 2. Go replays a run only when its `cmd` is the item's own `cmd`, run as `run_check` runs it, or a command the Task Manager recorded in the session's tool log, replayed under the same guard rows. The model never writes the text Go runs: a `cmd` in neither place is `unreplayed` without being run.
 3. A run reproduces when the replay's exit code equals `exit` and every line of `excerpt` appears in the replay's output.
-4. An item with a run that does not reproduce is listed in `TesterVerdict.Unreplayed`, and the verdict is not `Pass`. [TODO: what follows an unreplayed pass or a bad test: a restart of the Tester as after a dispute, or a return to the Builder ([G-312](#g-312))]
+4. An item with a run that does not reproduce is listed in `TesterVerdict.Unreplayed`, and the verdict is not `Pass`. The Tester restarts once with Go's output; a second failure blocks the group with the existing `tester` reason, and neither costs a Builder try.
 
 ```go
 // Replay runs each evidence run again and returns the runs that did not reproduce; logged holds the commands of the session's tool log.
@@ -12159,12 +12139,10 @@ func (t *tester) Replay(ctx context.Context, run CommandRunner, it Item, r ItemR
 }
 ```
 
-#### The Tester's own tests and the sign-off
+#### The sign-off
 
-1. The Tester reads the acceptance items and the diff, blind, and writes edge-case tests that the Builder did not think of with `write_test`. Each test is listed in the final call with the item it answers.
-2. Go runs each test five times on the base commit and five times on the change. `CheckNewTest` accepts it only when all ten runs agree with its role: five failures on the base, five passes on the change. A flaky or one-sided test is a bad test.
-3. When the verdict passes, the Task Manager records a `Signoff` as the last step of the Tester's turn: the tree hash and `TestsHash` over the test files of the tree. [TODO: whether `TestsHash` covers the Tester's own tests, which depends on whether they are kept in the landed commit ([G-311](#g-311))]
-4. After the sign-off the Builder cannot edit a test file. Go compares `TestsHash` of each later tree; a different value voids the sign-off and reopens the Tester. [TODO: whether a reopened Tester spends a retry ([G-312](#g-312))]
+1. When the verdict passes, the Task Manager records a `Signoff` as the last step of the Tester's turn: the tree hash and `TestsHash` over the test files of the tree.
+2. After the sign-off the Builder cannot edit a test file. Go compares `TestsHash` of each later tree; a different value voids the sign-off and reopens the Tester. [TODO: whether a reopened Tester spends a retry ([G-312](#g-312))]
 
 The Builder's fast checks run live while it works: the repository's build, lint and its own tests through `run`, and the task gate. Go runs them again in the mechanical checks, so the Tester and the Reviewer judge only what already builds, lints and passes.
 
@@ -12186,9 +12164,9 @@ func DeepPlan(l RiskLevel) []DeepKind {
 The order is fixed: the deep checks run after the mechanical checks and before the Tester starts, then the Tester's session, then the sign-off.
 
 1. Go runs each check of the plan and keeps its `DeepResult`.
-2. Mutation edits each changed line in a copy, runs the impact set against it and marks the mutant `killed` or `survived`.
-3. Every survivor goes into the Tester's brief as an item. Within its session the Tester writes a test for it, `CheckNewTest` accepts the test, and Go repeats the mutation run (walkthrough step 12). A mutant the new test kills is `resolved`.
-4. A mutant that still survives is `unresolved`. Go records it in the run record and the pull request body; the Tester never judges it equivalent.
+2. Mutation edits each changed function in a copy, runs the impact set against it and marks the mutant `killed` or `survived`.
+3. A race or a fuzz crash sends the work back to the Builder with the output. A benchmark more than 10% slower than before warns.
+4. Go records each surviving mutant in the run record and the pull request body; the Tester never judges one equivalent. [TODO: what a surviving mutant does now that the Tester writes no tests ([G-311](#g-311))]
 
 ### 13.6 State
 
@@ -12221,10 +12199,9 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 5. A Tester brief holds 0 bytes of the Builder's prose.
 6. A failed item with no command never blocks.
 7. A Tester pass counts only when Go's replay reproduces the evidence behind every passed item.
-8. A test the Tester wrote counts only when it failed on the base commit and passed on the change in all of its runs.
-9. After the Tester's sign-off no test file changes without voiding it and reopening the Tester.
-10. The Tester never sees the Builder's reasoning, and never decides that a mutant is equivalent.
-11. A `build` or `lint` failure returns the group to the Builder before the Tester or the Reviewer starts.
+8. After the Tester's sign-off no test file changes without voiding it and reopening the Tester.
+9. The Tester never sees the Builder's reasoning, and never decides that a mutant is equivalent.
+10. A `build` or `lint` failure returns the group to the Builder before the Tester or the Reviewer starts.
 
 **Failure rows**
 
@@ -12242,10 +12219,10 @@ After 4 the item reaches the Builder. After 8 the group is blocked `tester`; aft
 | A completion command fails in the checks | `Checker.Check` | Return to the Builder with the exact output; no model call; the return limit | Blocked when returns are spent |
 | A scope, secret scan or case-collision step fails | `Checker.Check` | Return to the Builder naming the file or location; the return limit | Blocked when returns are spent |
 | The build fails, or the change adds a lint problem | `Checker.Check` | Return to the Builder with the compiler or lint output; no model call; the return limit | Blocked when returns are spent |
-| A passed item's evidence does not replay | `Tester.Replay` | The item is `unreplayed` and the verdict is not `Pass`; what follows is [G-312](#g-312) | Open |
-| A Tester-written test passes on the base, fails on the change or flakes | `CheckNewTest` | The test is a bad test and the verdict is not `Pass`; what follows is [G-312](#g-312) | Open |
+| A passed item's evidence does not replay | `Tester.Replay` | The item is `unreplayed`; restart the Tester once with Go's output, at no Builder try; 1 | A second failure blocks `tester` |
 | A test file changes after the sign-off | `Signoff.Voided` | Void the sign-off and reopen the Tester; whether it spends a retry is [G-312](#g-312) | Open |
-| A mutant survives the Tester's tests | `Deep.Run` | Recorded `unresolved` in the run record and the pull request body; 0 | Never blocks |
+| A race, or a fuzz crash | `Deep.Run` | Return to the Builder with the output; the return limit | Blocked when returns are spent |
+| A mutant survives | `Deep.Run` | Recorded in the run record and the pull request body; what follows is [G-311](#g-311) | Open |
 | Regression against the baseline | `Baseline.Classify` | Return to the Builder with the test's output; spends one retry | Blocked `retries` when none is left |
 | A check step cannot run | `Checker.Check` | Stop naming the step; 0 | Blocked `setup` |
 | Coverage tool missing for the language | Coverage step | Fail naming the language; 0 | Return to the Builder |
@@ -12270,7 +12247,7 @@ Only the Configuration Manager reads settings; the Task Manager passes these val
 ```go
 const (
 	FlakeReruns    = 2 // solo reruns of a failing test or a failed Tester item
-	TesterRestarts = 1 // restarts of the Tester after a dispute
+	TesterRestarts = 1 // restarts of the Tester after a dispute or an unreplayed pass
 )
 ```
 
@@ -12287,7 +12264,6 @@ const (
 - A change that breaks `go build ./...` fails the `build` step with the compiler's output and skips `lint`; a change that adds a lint problem fails `lint`, and the same problem at the base does not.
 - `newLintFindings` matches by file, rule and message, so a problem that only moved lines is not new, and a second copy of an old problem is new.
 - A language with no build or lint command reports a `warn` with detail `skipped`, and the group is not blocked.
-- `CheckNewTest` accepts five failures on the base with five passes on the change, and returns `not_red`, `not_green` and `flaky` for the three broken shapes.
 - A passed item whose replay gives another exit code is `unreplayed` and the verdict is not `Pass`.
 - `Signoff.Voided` is true when one test file changed after the sign-off.
 - A coverage of 79 percent against a floor of 80 fails. With a base of 70, a head of 72 passes and a head of 68 fails.
@@ -12311,10 +12287,9 @@ const (
 | Gap | Question | Used in |
 |---|---|---|
 | [G-169](#g-169) | Whether each default coverage tool yields a whole-repository line percent | 13.5 |
-| [G-310](#g-310) | The mutation tool per language, fuzz targets, the benchmark threshold, and the effect of a failed deep check | 13.3 |
-| [G-311](#g-311) | Whether the Tester's own tests are kept in the landed commit | 13.3 |
-| [G-312](#g-312) | What follows an unreplayed pass or a bad Tester test, and whether a voided sign-off spends a retry | 13.5 |
-| [G-315](#g-315) | The size limit of an evidence excerpt | 13.3 |
+| [G-310](#g-310) | Which Go mutation tool | 13.3 |
+| [G-311](#g-311) | What a surviving mutant does now that the Tester writes no tests | 13.3 |
+| [G-312](#g-312) | Whether a voided sign-off spends a retry | 13.5 |
 
 The Tester's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 14. Reviewer
@@ -12327,7 +12302,7 @@ The Reviewer is the final code check on the Builder's work. It starts once the f
 - The Reviewer's role definition, brief slots and result.
 - The lenses (catalogs of review rules), the review profiles and the choice of lenses for a diff.
 - The evidence check: a finding blocks only when Go finds the line it quotes and its proof fails as claimed.
-- The six finding levels, the bucket of each, and the pre-existing mark.
+- The six finding levels and the bucket of each.
 - The risk level of a group, the guardrails that set it and the route each level takes.
 - The per-task verdicts and the precision counters.
 - The approval rule that joins the Tester's and the Reviewer's verdicts.
@@ -12350,7 +12325,6 @@ The Reviewer is the final code check on the Builder's work. It starts once the f
 | Evidence check | Go looking for the quoted line at the stated file and line, then running the finding's proof. |
 | Proof | A command from an allowed list, or a short test the Reviewer writes, that fails the way the finding claims. |
 | Level | The rule's rank: `critical`, `high`, `med_high`, `medium`, `med_low` or `low`; its bucket decides what the finding does. |
-| Pre-existing | A finding about a line the change did not touch; it never blocks. |
 | Risk level | The level Go sets for a group from its diff, with the same six names; no agent sets or lowers it. |
 | Quarantine | The route of a `high` or `critical` group: its own draft pull request, built on by nothing until a person merges it ([15.5](#155-behaviour)). |
 | Verdict | The Reviewer's answer for one task identifier: `met`, `not_met` or `brief_incomplete`. |
@@ -12441,8 +12415,8 @@ const (
 	BucketRecord Bucket = "record" // written to the run record only
 )
 
-// Bucket maps a level to its bucket; a pre-existing finding never gets BucketBlock (its bucket is G-314).
-func (l Level) Bucket(preExisting bool) Bucket
+// Bucket maps a level to its bucket.
+func (l Level) Bucket() Bucket
 
 // Rule is one review rule in a lens catalog.
 type Rule struct {
@@ -12490,16 +12464,15 @@ The values below are illustrative:
 
 #### Levels and buckets
 
-The level belongs to the rule, never to the agent. A finding about a line the change did not touch is marked pre-existing by Go and never blocks, whatever its level.
+The level belongs to the rule, never to the agent. The Reviewer covers only the current task group's changes: Go drops a finding about a line the group did not change, so it is not shown on the pull request and not recorded.
 
 | Level | Bucket | What a verified finding does |
 |---|---|---|
 | `critical`, `high`, `med_high` | `block` | Sends the group back to the Builder, once its proof fails as claimed |
 | `medium` | `warn` | A warning on the pull request |
 | `med_low`, `low` | `record` | Written to the run record only |
-| any level, pre-existing | never `block` | Never blocks; [TODO: whether it is a warning on the pull request or written to the run record only ([G-314](#g-314))] |
 
-[TODO: the level of each rule in the lens catalogs and of each standards rule, replacing the three old severities of 6 blocker, 27 major and 8 minor rules ([G-301](#g-301))]
+The three old severities map to levels: a `blocker` rule is `critical`, a `major` rule is `med_high` and a `minor` rule is `medium`. Every standards rule is `medium`, a warning, because the lint check already blocks real style failures.
 
 #### Proof
 
@@ -12519,6 +12492,8 @@ const (
 type Proof struct {
 	Cmd  string     `json:"cmd,omitempty"`  // an allowed command, run as written
 	Test *ProofTest `json:"test,omitempty"` // a Reviewer-written test
+
+	Expect string `json:"expect"` // a line the failing output must contain, such as the failing test's name
 }
 
 // ProofTest is a short test the Reviewer wrote to show the bug.
@@ -12538,11 +12513,11 @@ type ProofResult struct {
 | Allowed command | Go | Other languages |
 |---|---|---|
 | Tests | `go test` with `-run` | The profile's `test` command |
-| Race detector | `go test -race` | [TODO ([G-302](#g-302))] |
+| Race detector | `go test -race` | The profile's `test` command with extra arguments |
 | Static check | `go vet` | The profile's `lint` command |
 | Lint | The profile's `lint` command | The profile's `lint` command |
 
-A command outside this list is refused and the finding warns. The finding blocks only when the proof fails as claimed. [TODO: what output proves a proof failed as claimed ([G-302](#g-302))] [TODO: the allowed list for languages other than Go ([G-302](#g-302))]
+A proof is the repository's own detected test, build or lint command with extra arguments, or a test file the Reviewer writes. A command outside this list is refused and the finding warns. The finding blocks only when the command fails and its output contains the `Expect` line the Reviewer supplied, such as the failing test's name.
 
 #### Risk levels
 
@@ -12576,7 +12551,6 @@ type RiskInput struct {
 	Files     []ChangedFile // every changed path with its added and removed line counts
 	Verified  bool          // Go checked that every change in an allow-listed file is a comment
 	Proven    bool          // a reviewer finding was proven in a previous round
-	Sensitive []string      // path patterns the repository marks sensitive
 }
 
 // RiskDecision is the level and the rule that set it.
@@ -12591,13 +12565,22 @@ func Classify(in RiskInput) RiskDecision
 
 | Guardrail | Rule |
 |---|---|
-| Fail closed | A path no rule matches is `medium`, never `low`. `low` and `med_low` come only from an explicit allow-list: docs, config, and comment-only changes that Go verifies. |
+| Fail closed | A path no rule matches is `medium`, never `low`. `low` and `med_low` come only from the explicit rules of the level table below. |
 | Highest file wins | A group's level is the level of its riskiest file, measured on the actual diff at landing, not on the plan. |
-| Fixed paths | CI workflow files, Makefiles, Dockerfiles, deploy and migration folders are always `critical`; dependency files are always `high`. A repository may add paths and never remove these. |
-| Up, never down | A proven reviewer finding, or a change of more than 400 lines, raises the level one step. No agent and no setting lowers it. |
+| Fixed paths | CI workflow files, Makefiles, Dockerfiles, deploy and migration folders are always `critical`; dependency files are always `high`. |
+| Up, never down | A proven reviewer finding, or a change of more than 400 lines, raises the level one step; a change to a public interface is `med_high`. No agent and no setting lowers it. |
 | Every level shows its reason | `RiskDecision.Reason` is logged and shown on the pull request. |
 
-[TODO: which allow-listed changes are `low` and which `med_low`, which changes are `med_high`, and the level of a path a repository marks sensitive ([G-304](#g-304)). Where a repository lists its sensitive paths: no per-repository settings file exists ([G-305](#g-305))]
+| Change | Level |
+|---|---|
+| Docs or comment-only | `low` |
+| Config outside CI and build, and test-only changes | `med_low` |
+| Code | `medium` |
+| Sensitive code | `high` (quarantine) |
+| Dependency files | `high` |
+| CI, build and deploy files | `critical` |
+
+`med_high` comes from the size rule, from a proven Reviewer finding raising the level, and from a change to a public interface. No repository lists sensitive paths. [TODO: whether sensitivity is implied or set by a change-risk skill, and how that skill fits the Go-rule risk levels ([G-305](#g-305))]
 
 Each level takes one route:
 
@@ -12653,7 +12636,8 @@ A finding as `submit_finding` takes it, and the final call:
 
 ```json
 {"rule": "correctness.1", "file": "internal/agent/taskgate.go", "line": 41, "quote": "out, _ := g.Run(ctx, t.DoneCommand)",
- "proof": {"test": {"file": "internal/agent/taskgate_drop_test.go", "body": "package agent\n…", "run": "go test ./internal/agent/ -run TestDropsError"}}}
+ "proof": {"test": {"file": "internal/agent/taskgate_drop_test.go", "body": "package agent\n…", "run": "go test ./internal/agent/ -run TestDropsError"},
+           "expect": "--- FAIL: TestDropsError"}}
 ```
 
 ```json
@@ -12698,7 +12682,7 @@ The counters are not stored apart: they are counted per rule from the recorded `
 type ReviewerVerdict struct {
 	Ended           bool      `json:"ended"`                      // the Reviewer's session ended with a valid result
 	NotMet          []string  `json:"not_met,omitempty"`          // task identifiers marked not_met
-	Blocking        []Finding `json:"blocking,omitempty"`         // verified, proven, not pre-existing findings of level critical, high or med_high
+	Blocking        []Finding `json:"blocking,omitempty"`         // verified, proven findings of level critical, high or med_high
 	Warnings        []Finding `json:"warnings,omitempty"`         // findings for the pull request: medium, unproven or passing proofs
 	BriefIncomplete bool      `json:"brief_incomplete,omitempty"` // any task answered brief_incomplete
 }
@@ -12730,7 +12714,7 @@ type Outcome struct {
 type Reviewer interface {
 	// Lenses returns the lens names to run for a diff under a profile.
 	Lenses(d Diff, p Profile) []string
-	// AcceptFinding checks a submitted finding's quote and runs its proof, and returns its level, bucket and pre-existing mark.
+	// AcceptFinding checks a submitted finding's quote and runs its proof, and returns its level and bucket; a finding on a line the group did not change is dropped.
 	AcceptFinding(f Finding, head, diff LineSource, d Diff, run ProofRunner) (Accepted, error)
 	// AcceptResult rejects a result that skips or repeats a task identifier.
 	AcceptResult(tasks []string, r ReviewerResult) error
@@ -12745,10 +12729,9 @@ type Diff struct {
 
 // Accepted is Go's verdict on one submitted finding.
 type Accepted struct {
-	Level       Level
-	Bucket      Bucket
-	PreExisting bool   // the finding's line is not one the diff added or changed
-	Proof       string // failed_as_claimed, passed or none
+	Level  Level
+	Bucket Bucket
+	Proof  string // failed_as_claimed, passed or none
 }
 
 // ProofRunner copies the change into a throwaway folder, runs a proof there and discards the copy.
@@ -12876,20 +12859,20 @@ flowchart TD
   K -->|"2 no"| REF["Refused"]
   K -->|"3 yes"| Q{"Quote at file:line?"}
   Q -->|"4 no"| DROP["Dropped and logged"]
-  Q -->|"5 yes"| S{"Level and touched line"}
+  Q -->|"5 yes"| S{"Level and changed line"}
   S -->|"6 med_high or above"| PR{"Go runs the proof"}
   PR -->|"7 fails as claimed"| BLOCK["Blocks the group"]
   PR -->|"8 none or passes"| WARN["Warning on the pull request"]
   S -->|"9 medium"| WARN
   S -->|"10 med_low or low"| REC["Written to the run record"]
-  S -->|"11 pre-existing"| PRE["Never blocks: G-314"]
+  S -->|"11 line not changed by the group"| PRE["Dropped: not shown, not recorded"]
 ```
 
 1. The tool checks the argument shape and the rule identifier against every catalog and the standards rule list; edge 2 refuses an unknown identifier.
 2. `VerifyFinding` looks for the quote at `File:Line`, first in the head tree and then in the diff. A line matches when it equals the quote after both are trimmed of leading and trailing whitespace; inner whitespace and letter case must match exactly. A quote holding a line break, or an empty quote, never matches.
 3. Edge 4: a quote not found drops the finding and logs it. The finding cannot block, and the precision counters record it as submitted, not verified.
-4. Edges 5 to 11: a verified finding publishes `finding.verified`. Go marks it pre-existing when its line is not an added or changed line of the diff; a pre-existing finding never blocks. Its rule's level picks the bucket (14.3): `block`, `warn` or `record`.
-5. For a `block` level, `RunProof` copies the work under test into a throwaway folder in the Reviewer's sandbox, adds the proof's test file when it has one, runs the command, and discards the folder. The Builder's worktree is never touched. The finding blocks only when the proof fails as claimed; the command exiting non-zero is the first condition, and what else proves the claim is [G-302](#g-302).
+4. Edges 5 to 11: a verified finding publishes `finding.verified`. Go drops it instead (edge 11) when its line is not an added or changed line of the diff: the finding is not shown on the pull request and not recorded. Its rule's level picks the bucket (14.3): `block`, `warn` or `record`.
+5. For a `block` level, `RunProof` copies the work under test into a throwaway folder in the Reviewer's sandbox, adds the proof's test file when it has one, runs the command, and discards the folder. The Builder's worktree is never touched. The finding blocks only when the proof fails as claimed; the command exits non-zero and its output contains the `Expect` line the Reviewer supplied, such as the failing test's name.
 6. A finding whose rule has proof kind `none`, whose command is not on the allowed list, which has no proof, or whose proof passes is accepted as a warning for the pull request. A proven finding also raises the group's risk level one step (14.3).
 
 ```go
@@ -12902,7 +12885,7 @@ func RunProof(ctx context.Context, run ProofRunner, p Proof) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if res.Failed { // [TODO: what output proves the failure is the one claimed (G-302)]
+	if res.Failed && strings.Contains(res.Output, p.Expect) { // the failure is the one claimed
 		return "failed_as_claimed", nil
 	}
 	return "passed", nil
@@ -13000,7 +12983,7 @@ The Reviewer keeps no state of its own. The group's runtime state ([State Manage
 6. The Reviewer holds no git write path and cannot change the Builder's worktree.
 7. Any single failure loses at most one model turn and no finished task.
 8. No agent and no setting sets or lowers a risk level; a path no rule matches is `medium`.
-9. A pre-existing finding never blocks.
+9. Only the current task group's changes are reviewed; a finding on a line the group did not change is dropped.
 
 **Failure rows**
 
@@ -13040,7 +13023,7 @@ const (
 )
 ```
 
-No key lowers a level or sets one. [TODO: the key that lists a repository's sensitive paths ([G-305](#g-305))]
+No key lowers a level or sets one, and no key lists sensitive paths.
 
 `doctor`, the health check, lists each rule verified under 50% of the time, with its model and percentage, as a note and still passes. The 30%-for-60-days rule above stays the trigger for changing the rule list.
 
@@ -13057,7 +13040,7 @@ No key lowers a level or sets one. [TODO: the key that lists a repository's sens
 - A `performance` finding is accepted; no lens names a path of one repository.
 - A diff whose added branch no test runs puts its `file:line` in the `checks` slot.
 - A change that adds executable lines and covers none of them fails the coverage step.
-- `Level.Bucket` returns `block` for `critical`, `high` and `med_high`, `warn` for `medium`, and `record` for `med_low` and `low`; a pre-existing finding never returns `block`.
+- `Level.Bucket` returns `block` for `critical`, `high` and `med_high`, `warn` for `medium`, and `record` for `med_low` and `low`.
 - `RunProof` returns `failed_as_claimed` for a failing command and `passed` for a passing one; a proof with no command and no test returns `none`.
 - `Classify` returns `critical` for a workflow file, a Makefile, a Dockerfile, a deploy folder and a migration folder, and `high` for a dependency file.
 - `Classify` returns `medium` for a path no rule matches, and the level of the riskiest file for a mixed diff.
@@ -13075,7 +13058,7 @@ No key lowers a level or sets one. [TODO: the key that lists a repository's sens
 - `komodo run (id)` on a group that was fixed by hand sends the Reviewer only the lines changed since its last review.
 - An unchanged diff reviewed twice makes two model calls.
 - A finding whose proof passes becomes a warning on the pull request and does not return the group.
-- A finding about an untouched line is marked pre-existing and does not block.
+- A finding about a line the group did not change is dropped: it is not on the pull request and not in the run record.
 - A `low` group with passing free checks and a passing Tester reaches the Commit Handler with 0 Reviewer sessions; with no Tester verdict it waits.
 - A `critical` group reaches quarantine, not the epic branch.
 
@@ -13083,16 +13066,12 @@ No key lowers a level or sets one. [TODO: the key that lists a repository's sens
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-301](#g-301) | The level of each existing rule and standards rule | 14.3 |
-| [G-302](#g-302) | The allowed proof commands outside Go, and what failing as claimed means | 14.3 |
-| [G-304](#g-304) | Which changes are `low`, `med_low` and `med_high`, and the level of a sensitive path | 14.3 |
-| [G-305](#g-305) | Where a repository lists its sensitive paths | 14.3, 14.8 |
-| [G-314](#g-314) | Whether a pre-existing finding is a warning or only recorded | 14.3 |
+| [G-305](#g-305) | Whether sensitivity is implied or set by a change-risk skill | 14.3 |
 
 The Reviewer's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 15. Commit Handler
 
-The Commit Handler saves and publishes a task group's work. During the build it records each finished task as a local commit and pushes nothing. After the judges its risk level requires approve the same tree, it lands the group on its epic's shared branch as one squashed commit, locally. When the epic's last group has landed, it pushes that branch once and opens one pull request (the hosting service's page where a person reviews and merges a branch) for the whole epic. A group of risk level `high` or `critical` gets its own quarantined draft pull request instead, and a one-group change with no epic gets one pull request into the base branch. It is the only part of the harness that pushes, and it hands each landed group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
+The Commit Handler saves and publishes a task group's work. During the build it records each finished task as a local commit and pushes nothing. After the judges its risk level requires approve the same tree, it lands the group on its epic's shared branch as one squashed commit, locally. When the epic's last group has landed, it pushes that branch once and opens one pull request (the hosting service's page where a person reviews and merges a branch) for the whole epic. A group of risk level `high` or `critical` gets its own quarantined draft pull request instead. It is the only part of the harness that pushes, and it hands each landed group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
 
 ### 15.1 Scope and Concepts
 
@@ -13108,7 +13087,6 @@ The Commit Handler owns four things: the local save of a finished task, the publ
 | Landing | Squashing one approved group into the epic branch as one local commit; one group at a time per epic. Nothing is pushed by a landing |
 | Quarantine | The route of a group of risk level `high` or `critical`: its own branch from the epic branch, pushed once, with a draft pull request into the epic branch and no CI |
 | Deferred group | A group that waits on a quarantined group's work; it is not blocked and starts when the quarantine is merged |
-| Ad hoc group | A one-group change with no epic; its pull request goes straight into the base branch |
 | Push budget | One push per pull request: the epic branch once after its last landing, and each quarantine branch once |
 | Recheck | The checks that call no model, run on the epic branch after each landing |
 | Critical reference | Any git reference outside `refs/heads/komodo/` and `refs/komodo/`, such as `main` |
@@ -13214,7 +13192,7 @@ type Approval struct {
 	Run        bus.ID    `json:"run"`
 	Group      bus.ID    `json:"group"`
 	Repo       string      `json:"repo"`        // repo id the lease is keyed by
-	Epic       string      `json:"epic"`        // epic label, such as ep-1; empty for an ad hoc group
+	Epic       string      `json:"epic"`        // epic label, such as ep-1
 	Level      string      `json:"level"`       // risk level Go set: low, med_low, medium, med_high, high or critical (14.3)
 	Reason     string      `json:"reason"`      // the rule that set the level; shown on the pull request
 	Label      string      `json:"label"`       // group label, such as tg-1.2
@@ -13631,7 +13609,7 @@ flowchart TB
 7. When every label in `epic_groups` appears in `Git.Landed`, this landing was the epic's last. `Publish` reads the lease's fence again, refuses on a higher number, and pushes the epic branch once; it then reads `RemoteTip` and fails unless the remote holds the local tip, and skips the push when the remote already holds it. Any landing before the last pushes nothing.
 8. After the push, `Forge.FindPR` looks for a pull request on the epic branch. If none exists, `OpenPR` opens one; if one exists, `UpdatePR` refreshes its body from `RenderEpicBody`. The landing list and the epic's diff stat are read before step 6 frees the turn, because the next group then uses the landing worktree. [TODO: when the epic's last landing is reached while groups are quarantined or deferred, and whether a later run that lands deferred groups pushes again ([G-308](#g-308))]
 9. `Report` sends `publish.done` with a `Result`, and `pr.opened` whenever `last` is true and the pull request exists, not only when this call opened it; the receiver treats a repeat as the same fact. A report lost to a failure or a crash after `OpenPR` is thereby sent on the repeat. A person or the orchestrator waiting on a run wakes on `pr.opened`, so the epic's pull request is announced before the run can finish.
-10. `Publish` calls `Cleaner.Complete` with the group branch, its tip, the epic branch's reference, `epic_done` (true after the last group's landing opened the pull request) and the pull request address. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again. [TODO: how the Cleanup Handler proves a squashed group branch safe to delete, since its tip is no longer in the epic's history ([G-309](#g-309))]
+10. `Publish` calls `Cleaner.Complete` with the group branch, its tip, the epic branch's reference, `epic_done` (true after the last group's landing opened the pull request) and the pull request address. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again. The Cleanup Handler deletes the squashed group branch when the epic branch has a commit whose changes are identical by content to the group's whole change; otherwise it keeps the branch until the epic merges.
 
 Publish runs on the Task Manager's own goroutine for the group, never inside the Runtime Manager's event loop, so a slow network holds up one group only.
 
@@ -13715,9 +13693,6 @@ func (h *Handler) Quarantine(ctx context.Context, a Approval) (QuarantineResult,
 |---|---|---|---|
 | Epic | `komodo/<epic>`, once | Ready, into the base branch; lists every quarantine; a person merges | After the epic's last landing |
 | Quarantine | `komodo/<epic>-<group>`, once | Draft, into the epic branch; holds only that group; a person merges | When the group is approved |
-| Ad hoc group (no epic) | The group branch, once | Ready, into the base branch | After the group is approved |
-
-[TODO: how a group with no epic comes to exist, and that pull request's title and branch name ([G-313](#g-313))]
 
 #### Push budget
 
@@ -13830,7 +13805,6 @@ Component tests use a local bare repository as the remote and a mock `gh` that r
 - Each landed group is one single-parent commit on the epic branch, and `Landed` reads its label and section back.
 - A `critical` group opens a draft pull request from its own branch into the epic branch after one push, lands nothing on the epic branch, and its dependents are deferred, not blocked.
 - After the quarantine is merged, `Forge.Merged` is true and the next run starts the deferred groups from the new epic tip.
-- A one-group change with no epic opens one pull request into the base branch.
 - Over a run of 3 landed groups and 1 quarantine, the remote receives 2 pushes.
 - The epic's pull request is titled `<epic label>: <N> task groups`.
 - A second `Publish` with the same approval opens no second pull request and calls `Complete` again.
@@ -13847,9 +13821,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-306](#g-306) | The draft-skip line in a repository's workflow | 15.5 |
 | [G-307](#g-307) | How the epic branch reaches the remote when a quarantine needs it | 15.5 |
 | [G-308](#g-308) | The epic pull request while groups are quarantined or deferred | 15.5 |
-| [G-309](#g-309) | Proving a squashed group branch safe to delete | 15.5, 16.1 |
-| [G-311](#g-311) | Whether the Tester's own tests are kept in the landed commit | 13.3 |
-| [G-313](#g-313) | How a group with no epic comes to exist, and the titles of its and a quarantine's pull request | 15.5 |
+| [G-313](#g-313) | The title of a quarantine pull request | 15.5 |
 
 ## 16. Cleanup Handler
 
@@ -13885,7 +13857,7 @@ What lies beside it:
 - The Task Manager owns the sandbox and the group's closing; the Cleanup Handler calls only its `CloseTaskGroup()`, and the Task Manager destroys the sandbox inside it.
 - `komodo clean` removes everything that belongs to no open run, and any caller may run it, including the orchestrator. The worktrees, local group branches and containers go through `Sweep` and obey the guarantees above; the caches, event logs and metrics records belong to the Cache Manager, the Event Bus and the Metrics Service, which the Runtime Manager asks ([7.5](#75-behaviour)).
 - `komodo abandon (id)` drops a group for good through `Discard`.
-- Every group lands on its epic's branch ([chapter 15](#15-commit-handler)), so each group's local branch is redundant once its landing is on the remote; 16.5 lists the branches that go. [TODO: how a squashed, locally landed group branch is proven safe to delete before the epic's push ([G-309](#g-309))]
+- Every group lands on its epic's branch ([chapter 15](#15-commit-handler)), so each group's local branch is redundant once its landing is on the remote; 16.5 lists the branches that go. A squashed group branch is deleted when the epic branch has a commit whose changes are identical by content to the group's whole change; otherwise it is kept until the epic merges.
 
 ### 16.2 Package Layout
 
@@ -14280,7 +14252,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-309](#g-309) | Proving a squashed group branch safe to delete | 16.1 |
 
 
 ## 17. Error Handler
@@ -15933,11 +15904,11 @@ The cleanup reads the person's file first. It finds each entry in the table belo
 
 #### `~/.claude/skills/`
 
-Five skills are deleted, each written for verbs the new binary does not have. The folder `synced/` stays because it holds Anthropic's skills.
+Four skills are deleted, each written for verbs the new binary does not have. The folder `synced/` stays because it holds Anthropic's skills.
 
 ```sh
 rm -r ~/.claude/skills/komodo ~/.claude/skills/plan ~/.claude/skills/run \
-      ~/.claude/skills/respond ~/.claude/skills/adhoc
+      ~/.claude/skills/respond
 ```
 
 | Skill | Stale verbs it names | Replaced in phase 8 by |
@@ -15946,7 +15917,6 @@ rm -r ~/.claude/skills/komodo ~/.claude/skills/plan ~/.claude/skills/run \
 | `plan` | `komodo add EPIC-NN …`, `komodo lint`, `komodo migrate` | Embedded in the binary |
 | `run` | `komodo run <group>` in the background, `komodo resume <group>` | Embedded in the binary |
 | `respond` | `komodo threads`, `komodo gate` | Embedded in the binary |
-| `adhoc` | `komodo stage build\|review\|ship`, `komodo metrics` | None |
 
 #### `~/.claude/AGENTS.md`
 
@@ -16109,20 +16079,14 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-297"></a>G-297 | Sandbox | Private registries for npm, cargo and Python: their setup commands have no credentials and no cache fallback, because only Go setup gets a file proxy on the person's download cache | Owner decision | [11](#11-task-manager) |
 | <a id="g-298"></a>G-298 | Sandbox | A builder-added Go dependency is fetched on the host with the person's login: the host fill runs `go mod download` again when `go.mod` or `go.sum` changes, so a module the builder names is downloaded outside the sandbox. The owner accepted this risk; open: whether to limit host fills to modules already in `go.sum`, or to `GOPRIVATE` hosts | Owner decision | [11](#11-task-manager) |
 | <a id="g-299"></a>G-299 | Task Manager | Check output limit: the runner the mechanical checks use returns a command's whole output up to 16 MB and, past it, the exit code, the head and tail in 4 KB and an over-limit error, while tool replies keep 4 KB. The owner decided this; the 16 MB limit is unmeasured for very large repositories | Owner decision | [11](#11-task-manager) |
-| <a id="g-301"></a>G-301 | Review levels | The level of each rule in the lens catalogs and of each standards rule: today 6 rules are blocker, 27 major and 8 minor, and every standards rule is major | Owner decision | [14](#14-reviewer), [6](#6-context-manager) |
-| <a id="g-302"></a>G-302 | Finding proof | The allowed proof commands for languages other than Go, and what output proves a proof failed as claimed; proposal, not decided: the Reviewer adds an `expect` line that the failing output must contain | Owner decision | [14](#14-reviewer) |
-| <a id="g-304"></a>G-304 | Risk levels | Which allow-listed changes are `low` and which `med_low`, which changes are `med_high`, and the level of a path a repository marks sensitive | Owner decision | [14](#14-reviewer) |
-| <a id="g-305"></a>G-305 | Risk levels | Where a repository lists its sensitive paths: no per-repository settings file exists and the settings have no list kind | Owner decision | [14](#14-reviewer) |
-| <a id="g-306"></a>G-306 | Quarantine | A quarantine draft pull request starts no CI only when the repository's workflow skips drafts; that line is an edit to the target repository, not Komodo's | Owner decision | [15](#15-commit-handler) |
-| <a id="g-307"></a>G-307 | Push budget | Whether the task-lists commit is still pushed at run start, and how the epic branch reaches the remote when a quarantine pull request needs it as its base | Owner decision | [15](#15-commit-handler), [7](#7-runtime-manager) |
-| <a id="g-308"></a>G-308 | Epic pull request | When the epic's last landing is reached while groups are quarantined or deferred, and whether a later run that lands deferred groups pushes again | Owner decision | [15](#15-commit-handler), [7](#7-runtime-manager) |
-| <a id="g-309"></a>G-309 | Cleanup | How the Cleanup Handler proves a squashed group branch safe to delete, since its tip is not in the epic's history and nothing is pushed before the last landing | Owner decision | [16](#16-cleanup-handler), [15](#15-commit-handler) |
-| <a id="g-310"></a>G-310 | Deep checks | The mutation tool for each language, how fuzz targets are chosen, the benchmark threshold, and what a failed race, fuzz or benchmark run does, including whether a race failure blocks a `low` group | Owner decision | [13](#13-tester) |
-| <a id="g-311"></a>G-311 | Tester tests | Whether the tests that pass `CheckNewTest` are kept in the landed commit, and in which folder; the test-file hash of the sign-off depends on it | Owner decision | [13](#13-tester), [15](#15-commit-handler) |
-| <a id="g-312"></a>G-312 | Tester gate | What follows a passed item whose evidence does not replay, or a Tester-written test that is not red, not green or flaky: a restart of the Tester as after a dispute, or a return to the Builder; and whether a sign-off voided by a changed test file spends a retry | Owner decision | [13](#13-tester) |
-| <a id="g-313"></a>G-313 | Ad hoc group | How a one-group change with no epic comes to exist, since every plan writes groups under an epic, what its pull request is titled and which branch it pushes, and the title of a quarantine pull request; proposal, not decided: the title `<label>: <goal>` for both | Owner decision | [15](#15-commit-handler) |
-| <a id="g-314"></a>G-314 | Pre-existing findings | Whether a finding about a line the change did not touch is a warning on the pull request or is written to the run record only; the owner decided only that it never blocks | Owner decision | [14](#14-reviewer) |
-| <a id="g-315"></a>G-315 | Tester evidence | The size limit of the output excerpt in a Tester evidence run `{cmd, exit, excerpt}` | Owner decision | [13](#13-tester) |
+| <a id="g-305"></a>G-305 | Risk levels | Whether sensitivity is implied or set by a change-risk skill, and how that skill fits the Go-rule risk levels; the owner decided there is no list of sensitive paths | Owner decision | [14](#14-reviewer) |
+| <a id="g-306"></a>G-306 | Quarantine | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: whether a quarantine draft pull request skips CI | Deferred, until the CICD runner image is set | [15](#15-commit-handler) |
+| <a id="g-307"></a>G-307 | Push budget | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: whether the task-lists commit is still pushed at run start, and how the epic branch reaches the remote when a quarantine pull request needs it as its base | Deferred, until the CICD runner image is set | [15](#15-commit-handler), [7](#7-runtime-manager) |
+| <a id="g-308"></a>G-308 | Epic pull request | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: when the epic's last landing is reached while groups are quarantined or deferred, and whether a later run that lands deferred groups pushes again. Option A, a draft epic pull request at run end listing landed, quarantined and deferred groups and marked ready when all land, is close, pending CICD refinement | Deferred, until the CICD runner image is set | [15](#15-commit-handler), [7](#7-runtime-manager) |
+| <a id="g-310"></a>G-310 | Deep checks | Which Go mutation tool; a quick proof of concept picks it. Other languages come later | Quick proof of concept | [13](#13-tester) |
+| <a id="g-311"></a>G-311 | Surviving mutants | What a surviving mutant does now that the Tester writes no tests; Go records it | Owner decision | [13](#13-tester) |
+| <a id="g-312"></a>G-312 | Tester gate | Whether a sign-off voided by a changed test file spends a retry | Owner decision | [13](#13-tester) |
+| <a id="g-313"></a>G-313 | Quarantine title | Removed: the harness has one path; every change goes through an epic. Open: the title of a quarantine pull request; proposal, not decided: `<label>: <goal>` | Owner decision | [15](#15-commit-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
