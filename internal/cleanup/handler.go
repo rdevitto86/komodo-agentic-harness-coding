@@ -29,9 +29,9 @@ type Git interface {
 	// DeleteBranch deletes a local branch only when it still points at expectTip and
 	// that commit is in the history of containedIn.
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
-	// DeleteLanded deletes a local branch only when it still points at expectTip, and landed, a commit in the history of
-	// containedIn, holds its tree.
-	DeleteLanded(ctx context.Context, clone, branch, expectTip, landed, containedIn string) error
+	// DeleteLanded deletes a local branch only when it still points at expectTip and containedIn holds it by ancestry
+	// or has a commit whose change is identical to the branch's whole change.
+	DeleteLanded(ctx context.Context, clone, branch, expectTip, containedIn string) error
 	// DiscardBranch deletes a local branch that still points at expectTip, whether or not
 	// the remote holds that commit; only Discard calls it.
 	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
@@ -130,7 +130,7 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 
 	if r.worktree(h.Roots.Worktrees, p.Worktree, false) {
 		if p.Landed != "" {
-			r.landedBranch(p.Branch, p.Tip, p.Landed, p.Into)
+			r.landedBranch(p.Branch, p.Tip, p.Into)
 		} else {
 			r.branch(p.Branch, p.Tip, p.Contains)
 		}
