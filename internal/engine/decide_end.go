@@ -47,7 +47,7 @@ func (c *calc) sessionEnd() bool {
 	case "builder":
 		return c.builderEnd(e, d.Unfinished, holds)
 	case "qa", "reviewer":
-		return c.verifierEnd(e, holds)
+		return c.verifierEnd(e, holds, d.Restart)
 	}
 
 	return true
@@ -167,8 +167,10 @@ func (c *calc) scopeRules(a ScopeAsk) {
 	c.scopeBlock = &a
 }
 
-// verifierEnd records a Quality Assurance or reviewer that ended and restarts it when it gave no result.
-func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
+// verifierEnd records a Quality Assurance or reviewer that ended and restarts it when it gave no result. Quality Assurance
+// never costs a try: the Task Manager reruns it and fails it open. A Reviewer crash costs a try unless Komodo's own
+// restart made it.
+func (c *calc) verifierEnd(e bus.SessionEnd, holds, restart bool) bool {
 	s := &c.s
 	round := &s.TestReview.QA
 	if e.Agent == "reviewer" {
@@ -200,9 +202,17 @@ func (c *calc) verifierEnd(e bus.SessionEnd, holds bool) bool {
 	case e.Reason == "done":
 		// A judge that ended done gave its result; the Task Manager reports the round, so nothing is charged or restarted.
 	case e.Reason == "billing" || e.Reason == "paused" || e.Reason == "needs_scope":
+	case e.Agent == "qa" && state.Reason(e.Reason).Charged():
+		c.waive(e.Reason)
 	case e.Reason == "crash":
 		s.Counters.Crashes++
-		c.waive(e.Reason)
+		if e.Agent == "reviewer" && !restart {
+			if !c.charge(e.Reason) {
+				return true
+			}
+		} else {
+			c.waive(e.Reason)
+		}
 		if !c.faultCapped() {
 			c.restartAgent(e.Agent)
 		}

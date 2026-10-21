@@ -147,6 +147,34 @@ func TestStaleInputAndDuplicateRequest(t *testing.T) {
 	}
 }
 
+// judgeEnd builds a session.end of a judge that ended for a reason, with no result.
+func judgeEnd(agent, reason string, restart bool) Input {
+	return in(InSessionEnd, SessionEndData{
+		SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: reason}, Agent: agent},
+		Restart:    restart,
+	})
+}
+
+// A Reviewer crash spends one try unless Komodo's own restart made it; no Quality Assurance failure spends one.
+func TestReviewerCrashSpendsATryAndQAFailuresSpendNone(t *testing.T) {
+	r := apply(t, failedRound(), judgeEnd("reviewer", "crash", false))
+	if r.State.Counters.RetriesLeft != 1 || !slices.Contains(subtypes(r), "retry.spent") {
+		t.Errorf("reviewer crash: left %d emits %v", r.State.Counters.RetriesLeft, subtypes(r))
+	}
+
+	r = apply(t, failedRound(), judgeEnd("reviewer", "crash", true))
+	if r.State.Counters.RetriesLeft != 2 || !slices.Contains(subtypes(r), "retry.waived") {
+		t.Errorf("reviewer crash by a restart: left %d emits %v", r.State.Counters.RetriesLeft, subtypes(r))
+	}
+
+	for _, reason := range []string{"crash", "idle", "timeout", "schema_fail", "no_result", "refusals"} {
+		r = apply(t, failedRound(), judgeEnd("qa", reason, false))
+		if r.State.Counters.RetriesLeft != 2 || slices.Contains(subtypes(r), "retry.spent") {
+			t.Errorf("qa %s: left %d emits %v", reason, r.State.Counters.RetriesLeft, subtypes(r))
+		}
+	}
+}
+
 func TestQAFailsThenReviewerApprovesReturnsOnce(t *testing.T) {
 	for _, order := range [][2]string{{"qa", "reviewer"}, {"reviewer", "qa"}} {
 		s := failedRound()
@@ -637,7 +665,7 @@ func TestFaultRows(t *testing.T) {
 		{StageCommit, "merge_conflict", state.ReasonMergeConflict},
 		{StageCleanup, "cleanup", state.ReasonCleanup},
 		{StageTestReview, "flaky", state.ReasonFlaky},
-		{StageTestReview, "qa", state.ReasonQA}, {StageBuild, "context", state.ReasonContext},
+		{StageBuild, "context", state.ReasonContext},
 	}
 	for _, c := range cases {
 		r := apply(t, mk(c.stage), in(InFault, FaultData{Reason: c.reason, Detail: "d"}))
@@ -650,10 +678,10 @@ func TestFaultRows(t *testing.T) {
 	}
 }
 
-func TestQAWithoutAResultSpendsARetryAndRestartsUntilNoneIsLeft(t *testing.T) {
+func TestReviewerWithoutAResultSpendsARetryAndRestartsUntilNoneIsLeft(t *testing.T) {
 	s := failedRound()
 	end := in(InSessionEnd, SessionEndData{
-		SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: "no_result"}, Agent: "qa"},
+		SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: "no_result"}, Agent: "reviewer"},
 	})
 	r := apply(t, s, end)
 	if r.State.Counters.RetriesLeft != 1 || r.State.Stage != StageTestReview || !slices.Contains(kinds(r), OrderEnterStage) {

@@ -110,14 +110,22 @@ func TestWhatKomodoBreaksCostsNoRetryAndIsRecordedApart(t *testing.T) {
 	}
 
 	s := failedRound()
-	for _, reason := range []string{"crash", "provider"} {
+	for _, agent := range []string{"qa", "reviewer"} {
 		end := in(InSessionEnd, SessionEndData{
-			SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: reason}, Agent: "reviewer"},
+			SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: "provider"}, Agent: agent},
 		})
 		r := apply(t, s, end)
 		if r.State.Counters.RetriesLeft != 2 || !slices.Contains(subtypes(r), "retry.waived") {
-			t.Errorf("reviewer %s: left %d emits %v", reason, r.State.Counters.RetriesLeft, subtypes(r))
+			t.Errorf("%s provider: left %d emits %v", agent, r.State.Counters.RetriesLeft, subtypes(r))
 		}
+	}
+
+	restart := in(InSessionEnd, SessionEndData{
+		SessionEnd: bus.SessionEnd{GroupFacts: bus.GroupFacts{Reason: "crash"}, Agent: "reviewer"},
+		Restart:    true,
+	})
+	if r := apply(t, s, restart); r.State.Counters.RetriesLeft != 2 || !slices.Contains(subtypes(r), "retry.waived") {
+		t.Errorf("reviewer crash by a restart: left %d emits %v", r.State.Counters.RetriesLeft, subtypes(r))
 	}
 }
 

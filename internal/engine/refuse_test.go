@@ -82,8 +82,8 @@ func TestJudgeSessionsThatEndDoneNeverSpendARetry(t *testing.T) {
 			GroupFacts: bus.GroupFacts{Reason: reason},
 			Agent:      "qa",
 		}})
-		if r := apply(t, failedRound(), end); r.State.Counters.RetriesLeft != 1 {
-			t.Errorf("%s spent %d, want 1", reason, 2-r.State.Counters.RetriesLeft)
+		if r := apply(t, failedRound(), end); r.State.Counters.RetriesLeft != 2 {
+			t.Errorf("%s spent %d, want 0: Quality Assurance never costs a try", reason, 2-r.State.Counters.RetriesLeft)
 		}
 	}
 }
