@@ -53,8 +53,31 @@
           "additionalProperties": false,
           "properties": {
             "evidence": {
-              "description": "The command output or observation behind the answer; never empty.",
-              "type": "string"
+              "description": "One entry per command you ran for the item; never empty.",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "cmd": {
+                    "description": "The command as run, copied from the item or from a run you made.",
+                    "type": "string"
+                  },
+                  "excerpt": {
+                    "description": "The output lines that show the result, up to 4 KB, head and tail.",
+                    "type": "string"
+                  },
+                  "exit": {
+                    "description": "The exit code you saw.",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "cmd",
+                  "exit",
+                  "excerpt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
             },
             "item": {
               "description": "The acceptance item identifier from the brief.",

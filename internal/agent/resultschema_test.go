@@ -36,7 +36,7 @@ var resultCases = []struct {
 	},
 	{
 		"qa", reflect.TypeOf(QAResult{}),
-		`{"items": [{"item": "i1", "pass": false, "evidence": "e", "reason": "flaky"}],` +
+		`{"items": [{"item": "i1", "pass": false, "evidence": [{"cmd": "c", "exit": 1, "excerpt": "e"}], "reason": "flaky"}],` +
 			` "tasks": [{"task": "t1", "confirmation": "confirmed"}]}`,
 		func(b []byte) error { _, err := ParseQAResult(b); return err },
 	},
@@ -169,11 +169,12 @@ func enumAt(t *testing.T, schema map[string]any, path string) []string {
 // Each enum in a result schema lists exactly the words the Go code accepts for that field.
 func TestResultSchemaEnumsMatchTheValidators(t *testing.T) {
 	qa := func(field, v string) error {
-		item := `{"item": "i", "pass": true, "evidence": "e"}`
+		ev := `[{"cmd": "c", "exit": 0, "excerpt": "e"}]`
+		item := `{"item": "i", "pass": true, "evidence": ` + ev + `}`
 		task := `{"task": "t", "confirmation": "confirmed"}`
 		switch field {
 		case "reason":
-			item = fmt.Sprintf(`{"item": "i", "pass": false, "evidence": "e", "reason": %q}`, v)
+			item = fmt.Sprintf(`{"item": "i", "pass": false, "evidence": %s, "reason": %q}`, ev, v)
 		case "confirmation":
 			task = fmt.Sprintf(`{"task": "t", "confirmation": %q}`, v)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -39,4 +40,43 @@ func AdjudicateItem(reruns [2]bool) RerunOutcome {
 	default:
 		return RerunSplit
 	}
+}
+
+// Replay runs each evidence run of a passed item again and returns the runs that did not reproduce, each with Go's exit
+// code and output; a run whose command is neither the item's nor in the tool log is returned without being run (exit -1).
+func (goQA) Replay(ctx context.Context, run CommandRunner, it Item, r ItemResult, logged []string) ([]EvidenceRun, error) {
+	var bad []EvidenceRun
+
+	for _, e := range r.Evidence {
+		if e.Cmd != it.Cmd && !slices.Contains(logged, e.Cmd) {
+			bad = append(bad, EvidenceRun{Cmd: e.Cmd, Exit: -1})
+			continue
+		}
+
+		exit, out, err := run(ctx, e.Cmd)
+		if err != nil && !errors.Is(err, ErrOutputOverLimit) {
+			return nil, fmt.Errorf("replay item %s: %w", it.ID, err)
+		}
+		if exit != e.Exit || !hasLines(out, e.Excerpt) {
+			bad = append(bad, EvidenceRun{Cmd: e.Cmd, Exit: exit, Excerpt: CapOutput(out, GateOutputCap)})
+		}
+	}
+
+	return bad, nil
+}
+
+// hasLines reports whether every line of excerpt is a line of out; the cut marker of a capped excerpt is not a line.
+func hasLines(out, excerpt string) bool {
+	have := map[string]bool{}
+	for _, l := range strings.Split(out, "\n") {
+		have[strings.TrimSpace(l)] = true
+	}
+
+	for _, l := range strings.Split(strings.ReplaceAll(excerpt, truncMarker, "\n"), "\n") {
+		if l = strings.TrimSpace(l); l != "" && !have[l] {
+			return false
+		}
+	}
+
+	return true
 }
