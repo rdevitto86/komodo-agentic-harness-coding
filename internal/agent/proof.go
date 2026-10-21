@@ -202,6 +202,8 @@ type ProofConfig struct {
 	Source string        // the worktree that holds the work under test
 	Root   string        // the folder that holds each throwaway copy; the sandbox must reach it
 	Cmds   ProofCommands // the repository's detected commands
+	// lists the absolute paths of the secret files the copy leaves out; nil copies every file
+	Secrets func() ([]string, error)
 }
 
 // NewProofRunner returns the runner of a proof: it checks the proof, copies the worktree without .git into a new folder
@@ -220,7 +222,13 @@ func NewProofRunner(cfg ProofConfig) ProofRunner {
 		}
 		defer func() { _ = os.RemoveAll(dir) }()
 
-		if err := copyWorktree(cfg.Source, dir); err != nil {
+		var secrets []string
+		if cfg.Secrets != nil {
+			if secrets, err = cfg.Secrets(); err != nil {
+				return ProofResult{}, fmt.Errorf("list the secret files: %w", err)
+			}
+		}
+		if err := copyWorktree(cfg.Source, dir, secrets); err != nil {
 			return ProofResult{}, err
 		}
 		if p.Test != nil {
@@ -294,11 +302,15 @@ func writeProofTest(dir string, t ProofTest) error {
 	return f.Close()
 }
 
-// copyWorktree copies the regular files and folders of a worktree, but not .git, into an existing folder.
-func copyWorktree(src, dst string) error {
+// copyWorktree copies the regular files and folders of a worktree into an existing folder, but not .git and not the files
+// in skip (absolute paths).
+func copyWorktree(src, dst string, skip []string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if slices.Contains(skip, p) {
+			return nil
 		}
 
 		rel, err := filepath.Rel(src, p)

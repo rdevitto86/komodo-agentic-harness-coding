@@ -769,6 +769,16 @@ func (m *Manager) runner(role string) agent.CommandRunner {
 	)
 }
 
+// SecretFiles lists the absolute paths of the secret files the guard masks in the group's worktree.
+func (m *Manager) SecretFiles() ([]string, error) {
+	g, err := m.scopeGuard()
+	if err != nil {
+		return nil, fmt.Errorf("load the guard rows: %w", err)
+	}
+
+	return g.SecretFiles(), nil
+}
+
 // runnerOn returns a command runner bound to one instance the caller owns, outside the instances of the roles.
 func (m *Manager) runnerOn(name, id string) agent.CommandRunner {
 	return m.runnerOf(name, func() string { return id })
