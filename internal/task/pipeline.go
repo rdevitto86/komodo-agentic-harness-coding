@@ -62,8 +62,6 @@ func (m *Manager) runBuild(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
-	var crashes int
-
 	for {
 		if err := m.checkpoint(ctx); err != nil {
 			return err
@@ -117,20 +115,13 @@ func (m *Manager) runBuild(ctx context.Context) error {
 			}
 
 			return m.setStage(ctx, state.StageTestReview)
-		case state.ReasonTimeout, state.ReasonIdle:
-			if err := m.spend(ctx, string(out.reason)); err != nil {
-				return err
-			}
-		case state.ReasonCheckFail, state.ReasonSchemaFail, state.ReasonNoResult, state.ReasonRefusals:
+		case state.ReasonTimeout, state.ReasonIdle, state.ReasonCrash, state.ReasonCheckFail,
+			state.ReasonSchemaFail, state.ReasonNoResult, state.ReasonRefusals:
 			if err := m.spend(ctx, string(out.reason)); err != nil {
 				return err
 			}
 			if last := m.takeLastCheck(); last != "" {
 				findings = []string{last}
-			}
-		case state.ReasonCrash:
-			if crashes++; crashes > crashLimit {
-				return &blockErr{kind: EscFailed, reason: "crash"}
 			}
 		case state.ReasonBilling:
 			return block("paid_refused", map[string]string{"setting": "providers.paid"})
@@ -139,9 +130,6 @@ func (m *Manager) runBuild(ctx context.Context) error {
 		}
 	}
 }
-
-// crashLimit is the crashes of the builder one Task Manager survives before it ends the group; a crash costs no retry.
-const crashLimit = 2
 
 // pendingTasks lists the tasks whose completion command has not passed yet.
 func (m *Manager) pendingTasks() []TaskSpec {
@@ -373,31 +361,20 @@ func (m *Manager) spend(ctx context.Context, cause string) error {
 	return m.report(ctx)
 }
 
-// taskDone is the builder's task_done tool: it reruns the task's completion command and applies the inner cap on a try. The
-// session ends on the third identical failure in a row or the twentieth check run; the last output goes to the next brief.
-func (m *Manager) taskDone(ctx context.Context, sc *sessCtx, task string) (int, string, error) {
+// taskDone is the builder's task_done tool: it reruns the task's completion command. A failing run never ends the session;
+// its output is kept for the next try's brief and a pass clears it.
+func (m *Manager) taskDone(ctx context.Context, _ *sessCtx, task string) (int, string, error) {
 	exit, out, err := m.finishTask(ctx, task)
 	if err != nil {
 		return exit, out, err
 	}
 
-	v := sc.checks.record(task, exit, out)
-	if v.flaky {
-		out += "\nthis check alternates between pass and fail: it is flaky"
+	m.mu.Lock()
+	m.lastCheck = ""
+	if exit != 0 {
+		m.lastCheck = fmt.Sprintf("The last output of the check %s, exit code %d:\n%s", task, exit, out)
 	}
-
-	if v.end != "" {
-		m.mu.Lock()
-		m.lastCheck = fmt.Sprintf(
-			"%s; the session ended. The last output of the check %s, exit code %d:\n%s",
-			v.end, task, exit, out,
-		)
-		m.mu.Unlock()
-
-		if sc.watch != nil {
-			sc.watch.stop(state.ReasonCheckFail)
-		}
-	}
+	m.mu.Unlock()
 
 	return exit, out, nil
 }
