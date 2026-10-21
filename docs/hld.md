@@ -2,7 +2,7 @@
 
 ## 0. Front Matter
 
-This document is the high-level design of Komodo, a single Go program that runs model agents to plan, build, test, review and publish code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document. Its structure follows the owner's component diagram. An open decision is written as a TODO that names its [gap register](lld.md#appendix-b-gap-register) row, such as G-222.
+This document is the high-level design of Komodo, a single Go program that runs model agents to plan, build, test, review and publish code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document. Its structure follows the owner's component diagram. An open decision is written as a TODO that names its [gap register](lld.md#appendix-b-gap-register) row, such as G-306.
 
 ## 1. Introduction and Goals
 
@@ -90,14 +90,6 @@ flowchart LR
   K -->|"8 settings, state, leases"| MF
 ```
 
-| Neighbour | Direction | Description |
-|---|---|---|
-| Person | In | Installs, configures and updates Komodo; may run every command |
-| Orchestrator | In | Runs plan, run, stop and status commands for the person and reads structured replies |
-| Model providers | Out | Planner and agent sessions over subscription links first, paid programming interfaces when allowed |
-| Container runtime | Out | Hosts one test sandbox per task group, created and destroyed by its task manager |
-| GitHub | Out | Receives pushed branches and pull requests from the Commit Handler |
-
 ## 4. Solution Strategy
 
 Each quality goal has a mechanism that code enforces. No model is trusted to behave.
@@ -138,12 +130,12 @@ flowchart LR
   WA -->|"7 errors to the caller"| IF
 ```
 
-1. The CLI sends each command to the Runtime Manager, which broadcasts it as run-start, run-stop, run-continue or plan.
+1. The CLI sends each command to the Runtime Manager, which broadcasts it.
 2. A plan command reaches the Intake Handler, which plans with context from the Context Manager.
 3. The Intake Handler publishes run-start for the task lists it wrote.
 4. The Runtime Manager starts one Task Manager per task group, with its lease, state and cache.
 5. Each group's progress goes back onto the bus as run-status events.
-6. The watchers receive every event: errors, metrics and resource use.
+6. The watchers receive every event.
 7. The Error Handler prints errors to the caller through the CLI.
 
 Besides these hand-offs, a subsystem calls another directly when it needs an answer, such as asking the Configuration Manager for a setting. Every subsystem also publishes events to the Event Bus and listens for the types it needs; [5.5](#55-event-bus) lists them.
@@ -194,23 +186,23 @@ The Task Manager is the controller for one task group; the Runtime Manager start
 
 #### 5.13 Builder
 
-The Builder is the engineering agent that writes the code for one task group, task by task, inside the group's worktree. It works only through the actions its Task Manager allows; the Commit Handler saves each finished task as a local commit. It hands finished work to Quality Assurance and Reviewer together and fixes what they return. Detail: [chapter 12](lld.md#12-builder).
+The Builder is the engineering agent that writes the code for one task group, task by task, inside the group's worktree. It works only through the actions its Task Manager allows; the Commit Handler saves each finished task as a local commit. Its done result carries evidence: the commands it ran and their output. It hands finished work to Quality Assurance and Reviewer together and fixes what they return. Detail: [chapter 12](lld.md#12-builder).
 
 #### 5.14 Quality Assurance
 
-Quality Assurance checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. Quality Assurance approves every group before it lands: Go accepts its pass only with evidence Go replays. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-quality-assurance).
+Quality Assurance checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. Quality Assurance runs at every risk level and checks each item with its own run tool, scoring confidence from 0 to 100; Go never reruns it. A pass needs 80 or more, else the group returns to the Builder; a failed item blocks even without a command. A standing check enforces coverage: no change lowers whole-repository coverage below 90%, and each covers 90% of its added lines [TODO: how the planner brings a repository to 90% coverage ([G-321](lld.md#g-321))]. When the group is untestable, or it fails twice in a row, it fails open: the pull request carries a warning and no try is spent. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-quality-assurance).
 
 #### 5.15 Reviewer
 
-The Reviewer is the final code check of the group's own changes. It reads them while Quality Assurance runs, and a group of medium level or above moves to publishing only when both approve; otherwise the work returns to the Builder. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
+The Reviewer is the final code check of the group's own changes, skipped at `low` and `med_low`. It reads them while Quality Assurance runs, and a group moves to publishing only when every judge that ran approves; otherwise the work returns to the Builder. Only `critical`, `high` and `med_high` rules block, and only when the finding carries the Reviewer's own proof (the command it ran and what it saw) with confidence 80 or more; Go never runs it. The Reviewer never fails open: its failure costs one try. Detail: [chapter 14](lld.md#14-reviewer).
 
 #### 5.16 Commit Handler
 
-The Commit Handler publishes approved work: it squashes each approved group onto its epic's branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per epic. A high or critical group gets its own quarantined draft pull request; groups that depend on it wait. It is the only part that pushes. Detail: [chapter 15](lld.md#15-commit-handler).
+The Commit Handler publishes approved work: it squashes each approved group onto its epic's branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per epic. A high or critical group gets its own quarantined draft pull request; groups that depend on it wait [TODO: quarantine and epic pull request details ([G-306](lld.md#g-306), [G-307](lld.md#g-307), [G-308](lld.md#g-308))]. It is the only part that pushes. Detail: [chapter 15](lld.md#15-commit-handler).
 
 #### 5.17 Cleanup Handler
 
-The Cleanup Handler runs after work is pushed. It removes the group's redundant branches and worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. Detail: [chapter 16](lld.md#16-cleanup-handler).
+The Cleanup Handler runs after work is pushed. It removes the group's redundant branches, even an unchanged one, and worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. Detail: [chapter 16](lld.md#16-cleanup-handler).
 
 #### 5.18 Error Handler
 
@@ -247,11 +239,6 @@ sequenceDiagram
   S-->>P: reply only through a direct call, never through the bus
 ```
 
-1. A producer, such as the Runtime Manager, publishes an event with its type and subtype.
-2. The bus writes it to the run's event log, then delivers it to every subscriber of that type, in publish order.
-3. The Metrics Service receives a copy of every event.
-4. A part that needs an answer calls the owner directly instead of waiting for an event.
-
 #### 6.2 Task Group Lifecycle
 
 **📐 How one task group passes through the pipeline**
@@ -281,7 +268,7 @@ sequenceDiagram
 
 1. The Runtime Manager starts a Task Manager once the group's dependencies are met and its lease is granted.
 2. The Builder works through the tasks in the group's worktree.
-3. Quality Assurance and Reviewer judge the same work at the same time; any failure returns the group to the Builder, a bounded number of times.
+3. Quality Assurance and Reviewer judge the same work at the same time; a failure returns the group to the Builder within its 3 tries; Quality Assurance failing open does not.
 4. With the approvals its level requires, the Commit Handler lands the group on its epic's branch. The Cleanup Handler removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
 
 #### 6.3 Planning
@@ -296,7 +283,7 @@ sequenceDiagram
 
 1. Any part that fails publishes an error event; the Error Handler records it and prints it to the caller through the CLI.
 2. The Resource Manager raises a resource event before a plan window or spending limit is reached.
-3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has one try budget, three tries by default, that only true failures spend; Komodo's own errors, such as a crash or a restart, spend none. The failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant one final try. Without that approval the group fails for good and is run again only from a fresh plan. A breaker waits and then blocks on repeated blocker errors, and the engine's own failure stops new sessions until a person runs `komodo run` from a terminal. Detail: [chapter 7](lld.md#7-runtime-manager).
+3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has 3 tries in total, any mix of causes. A critical blocker (tooling failure, container crash, agent stalling mid-run) or a builder session timeout fails a try; a builder crash spends one unless a Komodo restart caused it. Failing checks never end a builder session; the builder works until it passes or its window ends. The failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant one final try and enter its working time. Without that approval the group fails for good and is run again only from a fresh plan. A breaker waits and then blocks after 4 blocker errors in a row from other faults or judge crashes, and the engine's own failure stops new sessions until a person runs `komodo run` from a terminal. Detail: [chapter 7](lld.md#7-runtime-manager).
 4. After a crash, `komodo run` continues each group from its saved state.
 
 ## 7. Deployment
@@ -341,7 +328,7 @@ Three fences hold every agent. The Task Manager checks every requested action ag
 
 #### 8.4 Quality Gates
 
-Go's free checks run first, so a failing build, lint or test costs no model call. Go then sets a risk level from the diff, which no agent can change. Every level needs Quality Assurance; low levels skip the Reviewer, and high levels are quarantined.
+Go's free checks run first, so a failing build, lint, test or coverage floor costs no model call. Go then sets a risk level from the diff, which no agent can change; a changed exported Go declaration raises it to `med_high`. Quality Assurance runs at every level; the Reviewer skips `low` and `med_low`. [TODO: critical files and comment-only detection ([G-314](lld.md#g-314), [G-318](lld.md#g-318))]
 
 ## 9. Architecture Decisions
 
@@ -364,19 +351,17 @@ Each row names a decision, the alternative rejected and the reason.
 
 ## 10. Quality Requirements
 
+The scenarios for the other goals are in [1.3](#13-quality-goals).
+
 | Attribute | Scenario | Measure |
 |---|---|---|
 | Performance | Help or a configuration read | Target under 50 milliseconds |
-| Safety | An agent command writes outside its worktree or reaches a public address | The sandbox refuses it |
-| Safety | An agent asks for an action outside its permissions | The Task Manager refuses it and records an error event |
-| Observability | Any finished run | Its time per stage, tokens and cost are reported from recorded events |
-| Durability | The runtime is killed mid-run | No finished task is lost; each group continues from saved state |
 
 ## 11. Risks, Debt and Roadmap
 
 #### 11.1 Risks
 
-- About 104,500 lines of Go cover every subsystem today. Their tests run against a fake model, so no reply from a real model has been checked yet ([G-71](lld.md#g-71)).
+- About 125,500 lines of Go, tests included, cover every subsystem today. Their tests run against a fake model, so no reply from a real model has been checked yet ([G-71](lld.md#g-71)).
 - One runtime hosts every run, so its crash stops them all until `komodo run` continues them.
 
 #### 11.2 Technical Debt
@@ -397,7 +382,7 @@ OpenAI's two links are built and tested against stand-ins; live calls wait for a
 
 #### 11.4 Open Decisions
 
-None are open. Build-time questions are [gap register](lld.md#appendix-b-gap-register) rows.
+Open decisions are the TODOs above, each linked to its row; the rest are build-time [gap register](lld.md#appendix-b-gap-register) rows.
 
 ## 12. Glossary
 
