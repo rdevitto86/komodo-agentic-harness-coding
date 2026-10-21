@@ -272,7 +272,7 @@ sequenceDiagram
     Q-->>B: findings, back to build
   else both approve
     Q->>C: approved
-    C->>C: commit, push, pull request
+    C->>C: commit, land on the epic branch
     C->>U: published
     U->>T: close group
     T-->>R: group complete
@@ -282,7 +282,7 @@ sequenceDiagram
 1. The Runtime Manager starts a Task Manager once the group's dependencies are met and its lease is granted.
 2. The Builder works through the tasks in the group's worktree.
 3. Quality Assurance and Reviewer judge the same work at the same time; any failure returns the group to the Builder, a bounded number of times.
-4. With the approvals its level requires, the Commit Handler commits and pushes, then hands over to the Cleanup Handler. It removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
+4. With the approvals its level requires, the Commit Handler lands the group on its epic's branch. The Cleanup Handler removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
 
 #### 6.3 Planning
 
