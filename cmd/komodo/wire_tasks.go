@@ -253,6 +253,14 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 		Worktree: tspec.Lease.Worktree,
 		Files:    func() []string { return m.Files() },
 		Runner:   func() agent.CommandRunner { return m.Runner("qa") },
+		Proof: agent.NewProofRunner(agent.ProofConfig{
+			Run: func(ctx context.Context, command string) (int, string, error) {
+				return m.Runner("reviewer")(ctx, command)
+			},
+			Source: tspec.Lease.Worktree,
+			Root:   c.Plan.Build,
+			Cmds:   agent.ProofCommands{Build: cmds["build"], Test: cmds["test"], Lint: cmds["lint"]},
+		}),
 	})
 	if err != nil {
 		return engine.Channels{}, err

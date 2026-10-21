@@ -8,6 +8,8 @@ type Finding struct {
 	File  string `json:"file"`  // path from the worktree root
 	Line  int    `json:"line"`  // line number from 1
 	Quote string `json:"quote"` // the quoted line of evidence
+
+	Proof *Proof `json:"proof,omitempty"` // required for a blocking level; see Proof
 }
 
 // LineSource returns line n of a file.

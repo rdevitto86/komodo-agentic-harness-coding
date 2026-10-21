@@ -8,7 +8,8 @@
   "rules": [
     {
       "id": "economy.1",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -21,7 +22,8 @@
     },
     {
       "id": "economy.2",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -34,7 +36,8 @@
     },
     {
       "id": "economy.3",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -47,7 +50,8 @@
     },
     {
       "id": "economy.4",
-      "severity": "minor",
+      "level": "medium",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -60,7 +64,8 @@
     },
     {
       "id": "economy.5",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -73,7 +78,8 @@
     },
     {
       "id": "economy.6",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -86,7 +92,8 @@
     },
     {
       "id": "economy.7",
-      "severity": "minor",
+      "level": "medium",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"

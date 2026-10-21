@@ -413,10 +413,15 @@ func builtinTools() []tool {
 		{
 			def(
 				"submit_finding",
-				"File one review finding with the rule, the file, the line and the quoted line.",
+				"File one review finding with the rule, the file, the line and the quoted line. A finding of a blocking "+
+					"rule also carries a proof: an allowed command or a new test file, and the line its failure prints.",
 				`{"type":"object","properties":{"rule":{"type":"string"},`+
 					`"file":{"type":"string"},"line":{"type":"integer"},`+
-					`"quote":{"type":"string"},"note":{"type":"string"}},`+
+					`"quote":{"type":"string"},"note":{"type":"string"},`+
+					`"proof":{"type":"object","properties":{"cmd":{"type":"string"},`+
+					`"test":{"type":"object","properties":{"file":{"type":"string"},"body":{"type":"string"},`+
+					`"run":{"type":"string"}},"required":["file","body","run"],"additionalProperties":false},`+
+					`"expect":{"type":"string"}},"required":["expect"],"additionalProperties":false}},`+
 					`"required":["rule","file","line","quote","note"],`+
 					`"additionalProperties":false}`,
 			),

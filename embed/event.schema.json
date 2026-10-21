@@ -435,10 +435,16 @@
         "in": {
           "type": "string"
         },
+        "level": {
+          "type": "string"
+        },
         "line": {
           "type": "integer"
         },
         "note": {
+          "type": "string"
+        },
+        "proof": {
           "type": "string"
         },
         "quote": {
@@ -453,9 +459,6 @@
         "session": {
           "type": "string"
         },
-        "severity": {
-          "type": "string"
-        },
         "stage": {
           "type": "string"
         }
@@ -465,8 +468,9 @@
         "file",
         "line",
         "quote",
-        "severity",
-        "in"
+        "level",
+        "in",
+        "proof"
       ],
       "type": "object"
     },

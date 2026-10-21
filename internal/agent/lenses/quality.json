@@ -8,7 +8,8 @@
   "rules": [
     {
       "id": "quality.1",
-      "severity": "minor",
+      "level": "medium",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -21,7 +22,8 @@
     },
     {
       "id": "quality.2",
-      "severity": "minor",
+      "level": "medium",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -34,7 +36,8 @@
     },
     {
       "id": "quality.3",
-      "severity": "minor",
+      "level": "medium",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"

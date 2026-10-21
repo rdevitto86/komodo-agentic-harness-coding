@@ -8,7 +8,8 @@
   "rules": [
     {
       "id": "performance.1",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -21,7 +22,8 @@
     },
     {
       "id": "performance.2",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -34,7 +36,8 @@
     },
     {
       "id": "performance.3",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -47,7 +50,8 @@
     },
     {
       "id": "performance.4",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"

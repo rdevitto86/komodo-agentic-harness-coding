@@ -59,7 +59,8 @@ func TestCatalogValidateRefusesBadCatalogs(t *testing.T) {
 		Rules: []Rule{
 			{
 				ID:       "x.1",
-				Severity: SeverityMajor,
+				Level:    LevelMedHigh,
+				Proof:    ProofKindCommand,
 				Applies:  Applies{Globs: []string{"**"}},
 				Check:    "c",
 				Evidence: "e",
@@ -74,7 +75,10 @@ func TestCatalogValidateRefusesBadCatalogs(t *testing.T) {
 	mut := map[string]func(c *Catalog){
 		"wrong id":        func(c *Catalog) { c.Rules[0].ID = "x.2" },
 		"foreign lens id": func(c *Catalog) { c.Rules[0].ID = "y.1" },
-		"bad severity":    func(c *Catalog) { c.Rules[0].Severity = "huge" },
+		"bad level":       func(c *Catalog) { c.Rules[0].Level = "huge" },
+		"old severity":    func(c *Catalog) { c.Rules[0].Level = "major" },
+		"bad proof kind":  func(c *Catalog) { c.Rules[0].Proof = "magic" },
+		"no proof kind":   func(c *Catalog) { c.Rules[0].Proof = "" },
 		"no check":        func(c *Catalog) { c.Rules[0].Check = "" },
 		"no text":         func(c *Catalog) { c.Text = map[string]string{} },
 		"extra text":      func(c *Catalog) { c.Text["x.9"] = "t" },
@@ -97,7 +101,7 @@ func TestCatalogValidateRefusesBadCatalogs(t *testing.T) {
 
 func newTestReviewer(t *testing.T) Reviewer {
 	t.Helper()
-	r, err := NewReviewer(func(id string) (Severity, bool) { return SeverityMajor, id == "std.comments.1" })
+	r, err := NewReviewer(func(id string) (FindingLevel, bool) { return LevelMedium, id == "std.comments.1" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,36 +222,59 @@ func TestVerifyFinding(t *testing.T) {
 func TestAcceptFinding(t *testing.T) {
 	r := newTestReviewer(t)
 	head := lines{"a.go": {"x := 1", "bad()"}}
-	ok := Finding{Rule: "correctness.1", File: "a.go", Line: 2, Quote: "bad()"}
-	if sev, verified, err := r.AcceptFinding(ok, head, lines{}); err != nil || !verified || sev != SeverityMajor {
-		t.Errorf("verified finding: %q %v %v", sev, verified, err)
+	d := Diff{Paths: []string{"a.go"}, Text: addDiff("a.go", 1, "x := 1", "bad()")}
+	run := proofStub(true, "--- FAIL: TestBad")
+	proof := &Proof{Cmd: "go test ./... -run TestBad", Expect: "--- FAIL: TestBad"}
+	ok := Finding{Rule: "correctness.1", File: "a.go", Line: 2, Quote: "bad()", Proof: proof}
+
+	got, err := r.AcceptFinding(ok, head, lines{}, d, run)
+	if err != nil || got.Dropped != "" || got.Level != LevelMedHigh || got.Bucket != BucketBlock ||
+		got.Proof != "failed_as_claimed" {
+		t.Errorf("verified finding: %+v %v", got, err)
 	}
+
 	minor := Finding{Rule: "quality.1", File: "a.go", Line: 2, Quote: "bad()"}
-	if sev, verified, err := r.AcceptFinding(minor, head, lines{}); err != nil || !verified || sev != SeverityMinor {
-		t.Errorf("minor finding: %q %v %v", sev, verified, err)
+	if got, err := r.AcceptFinding(minor, head, lines{}, d, run); err != nil || got.Level != LevelMedium ||
+		got.Bucket != BucketWarn {
+		t.Errorf("medium finding: %+v %v", got, err)
 	}
-	fake := Finding{Rule: "correctness.1", File: "a.go", Line: 2, Quote: "made up"}
-	if _, verified, err := r.AcceptFinding(fake, head, lines{}); err != nil || verified {
-		t.Errorf("fake quote: %v %v", verified, err)
+
+	fake := Finding{Rule: "correctness.1", File: "a.go", Line: 2, Quote: "made up", Proof: proof}
+	if got, err := r.AcceptFinding(fake, head, lines{}, d, run); err != nil || got.Dropped != DropQuote {
+		t.Errorf("fake quote: %+v %v", got, err)
 	}
+
 	unknown := Finding{Rule: "x.99", File: "a.go", Line: 1, Quote: "x := 1"}
-	if _, _, err := r.AcceptFinding(unknown, head, lines{}); err == nil {
+	if _, err := r.AcceptFinding(unknown, head, lines{}, d, run); err == nil {
 		t.Error("unknown rule accepted")
 	}
-	if _, verified, err := r.AcceptFinding(
-		Finding{Rule: "std.comments.1", File: "a.go", Line: 1, Quote: "x := 1"},
-		head,
-		lines{},
-	); err != nil || !verified {
-		t.Errorf("standards rule: %v %v", verified, err)
+
+	std := Finding{Rule: "std.comments.1", File: "a.go", Line: 1, Quote: "x := 1"}
+	if got, err := r.AcceptFinding(std, head, lines{}, d, run); err != nil || got.Dropped != "" || got.Bucket != BucketWarn {
+		t.Errorf("standards rule: %+v %v", got, err)
 	}
+
 	for _, shape := range []Finding{
 		{Rule: "correctness.1", Line: 1, Quote: "q"},
 		{Rule: "correctness.1", File: "a.go", Line: 0, Quote: "q"},
 	} {
-		if _, _, err := r.AcceptFinding(shape, head, lines{}); err == nil {
+		if _, err := r.AcceptFinding(shape, head, lines{}, d, run); err == nil {
 			t.Errorf("bad shape accepted: %+v", shape)
 		}
+	}
+}
+
+func TestAcceptFindingTakesAPerformanceRule(t *testing.T) {
+	r := newTestReviewer(t)
+	head := lines{"a.go": {"for _, id := range ids {", "\tb, _ := os.ReadFile(path)"}}
+	d := Diff{Paths: []string{"a.go"}, Text: addDiff("a.go", 1, "for _, id := range ids {", "\tb, _ := os.ReadFile(path)")}
+	f := Finding{
+		Rule: "performance.2", File: "a.go", Line: 2, Quote: "b, _ := os.ReadFile(path)",
+		Proof: &Proof{Cmd: "go test ./... -run TestWhole", Expect: "--- FAIL: TestWhole"},
+	}
+	got, err := r.AcceptFinding(f, head, lines{}, d, proofStub(true, "--- FAIL: TestWhole"))
+	if err != nil || got.Level != LevelMedHigh || got.Bucket != BucketBlock {
+		t.Errorf("performance finding: %+v %v", got, err)
 	}
 }
 
@@ -381,15 +408,6 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-func TestAcceptFindingTakesAPerformanceRule(t *testing.T) {
-	r := newTestReviewer(t)
-	head := lines{"a.go": {"for _, id := range ids {", "\tb, _ := os.ReadFile(path)"}}
-	f := Finding{Rule: "performance.2", File: "a.go", Line: 2, Quote: "b, _ := os.ReadFile(path)"}
-	if sev, verified, err := r.AcceptFinding(f, head, lines{}); err != nil || !verified || sev != SeverityMajor {
-		t.Errorf("performance finding: %q %v %v", sev, verified, err)
-	}
-}
-
 func TestSecurityAppliesToADiffInAnyPath(t *testing.T) {
 	r := newTestReviewer(t)
 	for _, p := range []string{"a.go", "src/main/App.java", "pkg/deep/er/x.py", "internal/lease/lock.go"} {
@@ -421,10 +439,10 @@ func TestCatalogsCarryTheNewRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := map[string]Severity{}
+	ids := map[string]FindingLevel{}
 	for _, c := range cats {
 		for _, r := range c.Rules {
-			ids[r.ID] = r.Severity
+			ids[r.ID] = r.Level
 		}
 		if c.Lens == "performance" && c.When != WhenAlways {
 			t.Errorf("performance applies %q, want always", c.When)

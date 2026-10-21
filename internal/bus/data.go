@@ -332,8 +332,9 @@ func (FindingSubmit) EventKey() Key { return Key{TypeRunStatus, "finding.submit"
 // FindingVerified is the data of run-status / finding.verified.
 type FindingVerified struct {
 	FindingSubmit
-	Severity string `json:"severity"` // blocker, major or minor, from the rule
-	In       string `json:"in"`       // "head" or "diff", where the quote was found
+	Level string `json:"level"` // critical, high, med_high, medium, med_low or low, from the rule
+	In    string `json:"in"`    // "head" or "diff", where the quote was found
+	Proof string `json:"proof"` // failed_as_claimed, passed or none
 }
 
 // EventKey binds FindingVerified to run-status / finding.verified.

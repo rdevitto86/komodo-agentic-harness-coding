@@ -72,7 +72,7 @@ func TestScorecardMatchesHandCount(t *testing.T) {
 	}
 	for range 3 {
 		ls = append(ls, at(10, bus.Event{Type: bus.TypeRunStatus, Subtype: "finding.verified", Group: "G1",
-			Data: &bus.FindingVerified{FindingSubmit: finding, Severity: "major", In: "head"}}))
+			Data: &bus.FindingVerified{FindingSubmit: finding, Level: "med_high", In: "head", Proof: "none"}}))
 	}
 	ls = append(ls,
 		at(11, end("G1", "tt1", "qa", nil, &bus.VerifyOutcome{Failed: []string{"a"}, Disputed: []string{"b"}})),

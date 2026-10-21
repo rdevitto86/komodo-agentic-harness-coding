@@ -19,7 +19,8 @@
   "rules": [
     {
       "id": "platform.1",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -32,7 +33,8 @@
     },
     {
       "id": "platform.2",
-      "severity": "minor",
+      "level": "medium",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -45,7 +47,8 @@
     },
     {
       "id": "platform.3",
-      "severity": "minor",
+      "level": "medium",
+      "proof": "none",
       "applies": {
         "globs": [
           "**"
@@ -58,7 +61,8 @@
     },
     {
       "id": "platform.4",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"

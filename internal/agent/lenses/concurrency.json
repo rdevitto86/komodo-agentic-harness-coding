@@ -16,7 +16,8 @@
   "rules": [
     {
       "id": "concurrency.1",
-      "severity": "blocker",
+      "level": "critical",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -29,7 +30,8 @@
     },
     {
       "id": "concurrency.2",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -42,7 +44,8 @@
     },
     {
       "id": "concurrency.3",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"
@@ -55,7 +58,8 @@
     },
     {
       "id": "concurrency.4",
-      "severity": "major",
+      "level": "med_high",
+      "proof": "command",
       "applies": {
         "globs": [
           "**"

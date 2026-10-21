@@ -735,6 +735,10 @@ func (m *Manager) round(ctx context.Context, owed []string) (roundResult, error)
 
 	in := RoleInput{Diff: diff, Trip: m.Progress().Returns, Uncovered: uncovered}
 	judges := []string{"qa", "reviewer"}
+	if m.c.SkipReview != nil && m.c.SkipReview(diff) {
+		judges = judges[:1] // a low or med_low change gets no Reviewer
+	}
+
 	res := map[string]*branch{}
 
 	tctx, tcancel := context.WithCancel(ctx)
@@ -872,6 +876,9 @@ func (m *Manager) judgeBranch(ctx context.Context, name string, in RoleInput) br
 
 		switch out.reason {
 		case state.ReasonDone:
+			for _, v := range out.outcome.Verified {
+				m.fact("finding.verified", v)
+			}
 			if out.outcome.Kind != OutcomeRestart {
 				return branch{out: out}
 			}
