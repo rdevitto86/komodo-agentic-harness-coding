@@ -192,7 +192,8 @@ func TestQAAcceptResultChecksItems(t *testing.T) {
 	mk := func(ids ...string) QAResult {
 		r := QAResult{Tasks: []TaskConfirmation{{Task: "t1", Confirmation: Confirmed}}}
 		for _, id := range ids {
-			r.Items = append(r.Items, ItemResult{Item: id, Pass: true, Evidence: "ok"})
+			ev := []EvidenceRun{{Cmd: "go test", Excerpt: "ok"}}
+			r.Items = append(r.Items, ItemResult{Item: id, Pass: true, Evidence: ev})
 		}
 		return r
 	}

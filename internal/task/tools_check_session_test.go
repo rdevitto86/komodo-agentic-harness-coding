@@ -38,8 +38,9 @@ func TestQASessionRunsAnItemsCommandInTheQAsSandbox(t *testing.T) {
 		}
 
 		return sayResult(
-			`{"items":[{"item":"acc-1","pass":true,"evidence":"ok"},` +
-				`{"item":"acc-2","pass":true,"evidence":"ok"}],` +
+			`{"items":[{"item":"acc-1","pass":true,"evidence":[{"cmd":"echo from-the-sandbox; pwd","exit":0,` +
+				`"excerpt":"from-the-sandbox"}]},` +
+				`{"item":"acc-2","pass":true,"evidence":[{"cmd":"echo nope; exit 4","exit":4,"excerpt":"nope"}]}],` +
 				`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 		)(s)
 	})

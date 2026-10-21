@@ -133,6 +133,8 @@ func init() {
 		func() Payload { return &PROpened{} },
 		func() Payload { return &TimerDue{} },
 		func() Payload { return &CheckDone{} },
+		func() Payload { return &RiskSet{} },
+		func() Payload { return &DeepDone{} },
 		func() Payload { return &ProviderSkip{} },
 		func() Payload { return &LockTaken{} },
 		func() Payload { return &LockReleased{} },

@@ -665,7 +665,8 @@ func (f *fakeModel) result(role, brief string) string {
 		items, tasks := []map[string]any{}, []map[string]string{}
 		for _, m := range itemLine.FindAllStringSubmatch(brief, -1) {
 			pass := f.testPass == nil || f.testPass(m[1])
-			items = append(items, map[string]any{"item": m[1], "pass": pass, "evidence": "ok"})
+			ev := []map[string]any{{"cmd": "go test ./...", "exit": 0, "excerpt": ""}}
+			items = append(items, map[string]any{"item": m[1], "pass": pass, "evidence": ev})
 		}
 		for _, m := range taskLine.FindAllStringSubmatch(brief, -1) {
 			tasks = append(tasks, map[string]string{"task": m[1], "confirmation": "confirmed"})

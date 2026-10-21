@@ -448,6 +448,34 @@ type CheckStep struct {
 	Detail []string `json:"detail,omitempty"` // the failing tests, files or secret locations
 }
 
+// RiskSet is the data of run-status / risk.set: the risk level Go set for a group from its diff, and the rule that set it.
+type RiskSet struct {
+	GroupFacts
+	Level  string `json:"level"`  // low, med_low, medium, med_high, high or critical
+	Reason string `json:"reason"` // the rule that set the level
+}
+
+// EventKey binds RiskSet to run-status / risk.set.
+func (RiskSet) EventKey() Key { return Key{TypeRunStatus, "risk.set"} }
+
+// DeepDone is the data of run-status / deep.done: the outcome of the deep checks of a group's risk level.
+type DeepDone struct {
+	GroupFacts
+	Pass    bool        `json:"pass"` // no check failed; a warning does not count
+	Results []DeepCheck `json:"results"`
+}
+
+// EventKey binds DeepDone to run-status / deep.done.
+func (DeepDone) EventKey() Key { return Key{TypeRunStatus, "deep.done"} }
+
+// DeepCheck is one deep check's result.
+type DeepCheck struct {
+	Kind    string `json:"kind"`              // race, fuzz, mutation or bench
+	Pass    bool   `json:"pass"`              // false when the check failed
+	Note    string `json:"note,omitempty"`    // a warning or a skip reason
+	Mutants int    `json:"mutants,omitempty"` // surviving mutants recorded
+}
+
 // ProviderSkip is the data of run-status / provider.skip.
 type ProviderSkip struct {
 	GroupFacts

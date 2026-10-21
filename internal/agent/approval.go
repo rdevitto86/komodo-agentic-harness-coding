@@ -45,7 +45,7 @@ func Decide(t QAVerdict, r ReviewerVerdict) Outcome {
 		return Outcome{Decision: DecisionBlock, Reason: BlockBrief}
 	case len(t.Split) > 0:
 		return Outcome{Decision: DecisionBlock, Reason: BlockFlaky}
-	case len(t.Disputed) > 0 && t.Restarts >= QARestarts:
+	case (len(t.Disputed) > 0 || len(t.Unreplayed) > 0) && t.Restarts >= QARestarts:
 		return Outcome{Decision: DecisionBlock, Reason: BlockQA}
 	case !r.Ended:
 		return Outcome{Decision: DecisionWait}
@@ -59,7 +59,7 @@ func Decide(t QAVerdict, r ReviewerVerdict) Outcome {
 	switch {
 	case len(r.NotMet) > 0 || len(r.Blocking) > 0:
 		out.Decision = DecisionReturn
-	case !t.Ended || len(t.Disputed) > 0:
+	case !t.Ended || len(t.Disputed) > 0 || len(t.Unreplayed) > 0:
 		return Outcome{Decision: DecisionWait}
 	case !t.Pass || len(t.NotMet) > 0 || len(t.Failed) > 0:
 		out.Decision = DecisionReturn

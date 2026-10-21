@@ -37,6 +37,8 @@ func typeSchema(t reflect.Type) map[string]any {
 			s["enum"] = words
 		}
 		return s
+	case reflect.Int:
+		return map[string]any{"type": "integer"}
 	case reflect.Bool:
 		return map[string]any{"type": "boolean"}
 	case reflect.Slice:

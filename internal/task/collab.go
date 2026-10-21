@@ -51,6 +51,12 @@ type FindingSink interface {
 	Submit(f Submitted)
 }
 
+// RunSink is implemented by a role that logs the commands its session ran with the run tool.
+type RunSink interface {
+	// Ran receives one command the session ran.
+	Ran(cmd string)
+}
+
 // ItemSource is implemented by a role that knows the group's acceptance items.
 type ItemSource interface {
 	// AcceptanceItems returns the acceptance items of the group's tasks.
@@ -153,6 +159,7 @@ type Collaborators struct {
 	Limits      LimitStore
 	Cache       cache.Handle        // the cache handle; only the Runtime Manager creates or closes the cache
 	Checks      agent.Checker       // the mechanical checks run before Quality Assurance and Reviewer start
+	Deep        agent.Deep          // the deep checks of the group's risk level; nil runs none
 	Commands    map[string][]string // command class to argv: setup, build, test, lint, format
 	Base        string              // the commit the group's checks diff against
 	Language    string              // decides the impact set of the checks

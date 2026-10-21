@@ -561,7 +561,15 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 		if err := m.saveDirty(ctx); err != nil {
 			return err
 		}
+
+		m.voidSignoff(ctx)
+
 		if fails, err := m.runChecks(ctx, m.runner("qa")); err != nil {
+			return err
+		} else if len(fails) > 0 {
+			return m.rework(ctx, fails)
+		}
+		if fails, err := m.runDeep(ctx, m.runner("qa")); err != nil {
 			return err
 		} else if len(fails) > 0 {
 			return m.rework(ctx, fails)
@@ -579,6 +587,9 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 		}
 		if len(round.findings) > 0 {
 			return m.rework(ctx, round.findings)
+		}
+		if err := m.stampSignoff(ctx); err != nil {
+			return err
 		}
 
 		return m.setStage(ctx, state.StageCommit)

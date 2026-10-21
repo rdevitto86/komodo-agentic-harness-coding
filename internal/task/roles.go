@@ -113,7 +113,16 @@ func (b *builderRole) Judge(_ context.Context, r llm.Result) (Outcome, error) {
 type qaRole struct {
 	cfg RoleConfig
 	mu  sync.Mutex
-	was string // Go's output after a disputed result; the restart's brief carries it
+	was string // Go's output after a disputed or unreplayed result; the restart's brief carries it
+	// commands the session ran with the run tool, which Go may replay as evidence
+	logged []string
+}
+
+// Ran records a command the session ran with the run tool.
+func (t *qaRole) Ran(cmd string) {
+	t.mu.Lock()
+	t.logged = append(t.logged, cmd)
+	t.mu.Unlock()
 }
 
 // AcceptanceItems returns the group's acceptance items, which Quality Assurance's run_check tool may run.
@@ -142,6 +151,8 @@ func (t *qaRole) Slots(_ context.Context, in RoleInput) (map[string]string, erro
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.logged = nil
+
 	if len(in.Findings) > 0 || t.was != "" {
 		s["checks"] = strings.TrimSpace(bullets(in.Findings) + "\n" + t.was)
 	}
@@ -168,9 +179,26 @@ func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 
 	var failed, disputed, split, goOut, notMet, listed []string
 
+	t.mu.Lock()
+	logged := slices.Clone(t.logged)
+	t.mu.Unlock()
+
 	for _, ir := range res.Items {
 		it := byID[ir.Item]
 		switch {
+		case ir.Pass && len(it.Needs) == 0 && t.cfg.Runner != nil:
+			bad, rerr := t.cfg.QA.Replay(ctx, t.cfg.Runner(), it, ir, logged)
+			switch {
+			case rerr != nil:
+				listed = append(
+					listed,
+					fmt.Sprintf("Quality Assurance: item %s skipped, its replay failed: %v", it.ID, rerr),
+				)
+			case len(bad) > 0:
+				disputed = append(disputed, it.ID)
+				goOut = append(goOut, unreplayedText(it, bad))
+			}
+			continue
 		case ir.Pass:
 			continue
 		case len(it.Needs) > 0:
@@ -197,7 +225,7 @@ func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 
 		switch out {
 		case agent.RerunConfirmed:
-			failed = append(failed, fmt.Sprintf("acceptance item %s failed: %s\n%s", it.ID, ir.Evidence, text))
+			failed = append(failed, fmt.Sprintf("acceptance item %s failed: %s\n%s", it.ID, evidenceText(ir.Evidence), text))
 		case agent.RerunDisputed:
 			disputed = append(disputed, it.ID)
 			goOut = append(
@@ -247,6 +275,34 @@ func (t *qaRole) Judge(ctx context.Context, r llm.Result) (Outcome, error) {
 			},
 			listed...),
 	}, nil
+}
+
+// unreplayedText words what Go saw when it replayed the evidence of a passed item and did not get the same result.
+func unreplayedText(it agent.Item, bad []agent.EvidenceRun) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "Go replayed the evidence of item %s and it did not reproduce:", it.ID)
+
+	for _, e := range bad {
+		if e.Exit == -1 && e.Excerpt == "" {
+			fmt.Fprintf(&b, "\n- %q was not run: it is neither the item's command nor one you ran with the run tool", e.Cmd)
+			continue
+		}
+
+		fmt.Fprintf(&b, "\n- %s gave exit %d:\n%s", e.Cmd, e.Exit, e.Excerpt)
+	}
+
+	return b.String()
+}
+
+// evidenceText renders the runs behind an answer, one per command.
+func evidenceText(runs []agent.EvidenceRun) string {
+	parts := make([]string, len(runs))
+	for i, e := range runs {
+		parts[i] = fmt.Sprintf("%s (exit %d): %s", e.Cmd, e.Exit, e.Excerpt)
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 // reviewerRole is the reviewer over agent.Reviewer.

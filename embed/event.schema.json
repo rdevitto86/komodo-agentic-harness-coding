@@ -241,6 +241,56 @@
       ],
       "type": "object"
     },
+    "DeepDone": {
+      "additionalProperties": false,
+      "properties": {
+        "pass": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "results": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "mutants": {
+                "type": "integer"
+              },
+              "note": {
+                "type": "string"
+              },
+              "pass": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "pass"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pass",
+        "results"
+      ],
+      "type": "object"
+    },
     "EngineFailed": {
       "additionalProperties": false,
       "properties": {
@@ -1271,6 +1321,28 @@
       },
       "required": [
         "left"
+      ],
+      "type": "object"
+    },
+    "RiskSet": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "reason"
       ],
       "type": "object"
     },
@@ -2741,6 +2813,19 @@
     {
       "properties": {
         "data": {
+          "$ref": "#/$defs/DeepDone"
+        },
+        "subtype": {
+          "const": "deep.done"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
           "$ref": "#/$defs/EpicPaused"
         },
         "subtype": {
@@ -3096,6 +3181,19 @@
         },
         "subtype": {
           "const": "retry.waived"
+        },
+        "type": {
+          "const": "run-status"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/RiskSet"
+        },
+        "subtype": {
+          "const": "risk.set"
         },
         "type": {
           "const": "run-status"

@@ -26,7 +26,8 @@ func TestBuilderJudgeRejectsABrokenResultAndTurnsNeedsScopeIntoAnOutcome(t *test
 
 func TestQAJudgeDecidesFromGosRerunsOfAFailedItem(t *testing.T) {
 	failed := result(
-		`{"items":[{"item":"a1","pass":false,"evidence":"no"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
+		`{"items":[{"item":"a1","pass":false,"evidence":[{"cmd":"test","exit":1,"excerpt":"no"}]}],` +
+			`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`,
 	)
 	for _, tc := range []struct {
 		name  string

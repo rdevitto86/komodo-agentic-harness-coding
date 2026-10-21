@@ -400,9 +400,11 @@ func TestCheckDoneFactMatchesTheEventSchemaAndResultFailFlagsARegression(t *test
 
 func TestDisputedQAResultRestartsTheQAOnceAndASecondEscalatesFlaky(t *testing.T) {
 	items := []agent.Item{{ID: "a1", Text: "it works", Cmd: "test"}}
-	failed := `{"items":[{"item":"a1","pass":false,"evidence":"it failed"}],"tasks":[{"task":"t1",` +
+	failed := `{"items":[{"item":"a1","pass":false,"evidence":[{"cmd":"test","exit":1,"excerpt":"it failed"}]}],` +
+		`"tasks":[{"task":"t1",` +
 		`"confirmation":"confirmed"}]}`
-	passed := `{"items":[{"item":"a1","pass":true,"evidence":"ok"}],"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
+	passed := `{"items":[{"item":"a1","pass":true,"evidence":[{"cmd":"test","exit":0,"excerpt":""}]}],` +
+		`"tasks":[{"task":"t1","confirmation":"confirmed"}]}`
 
 	r := newPipeRig(t, rigOpts{items: items})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
