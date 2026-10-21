@@ -54,7 +54,6 @@ var blockReasons = []string{
 	"merge_conflict",
 	"cleanup",
 	"wall",
-	"budget",
 	"dependency",
 	"crash",
 	"contract",

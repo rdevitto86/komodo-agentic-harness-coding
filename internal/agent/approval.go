@@ -31,7 +31,7 @@ type Outcome struct {
 	Decision Decision  `json:"decision"`
 	Reason   string    `json:"reason,omitempty"`   // the block reason when Decision is block
 	Findings []Finding `json:"findings,omitempty"` // every verified blocking finding, for the Builder
-	Items    []string  `json:"items,omitempty"`    // Quality Assurance items Go confirmed failed
+	Items    []string  `json:"items,omitempty"`    // Quality Assurance items marked failed
 	NotMet   []string  `json:"not_met,omitempty"`  // tasks marked not_met or not_confirmed
 }
 

@@ -158,7 +158,7 @@ type TestReview struct {
 	Reviewer RoundState `json:"reviewer"`
 	Findings []Finding  `json:"findings"` // blocking findings Go verified this round
 	NotMet   []string   `json:"not_met"`  // task ids Quality Assurance marked not met
-	Failed   []string   `json:"failed"`   // Quality Assurance items confirmed failed
+	Failed   []string   `json:"failed"`   // Quality Assurance items marked failed
 }
 
 // RoundState is one agent's progress in the current round.
