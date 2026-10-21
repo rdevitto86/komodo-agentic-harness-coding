@@ -15626,7 +15626,7 @@ flowchart LR
 7. For each pause order, `Observe` calls `PauseGroups` once the order's error was thrown, and marks the named groups as paused after the call succeeds.
 8. The Runtime Manager pauses each named group after its current step. For a full plan window it pauses a group only when no other link in that agent's chain can be used; when Claude's window runs out and paid use is off, the groups wait. A paused group keeps its lease, and the Runtime Manager keeps renewing it every 5 minutes.
 
-**Per-link watching.** The window state is keyed by link and window, so two links never share a flag. A link the Resource Manager has never heard from has no state and raises nothing. Beta 6 ships the two Claude links, `claude-cli` and `anthropic-api`; no other link is built.
+**Per-link watching.** The window state is keyed by link and window, so two links never share a flag. A link the Resource Manager has never heard from has no state and raises nothing. Two Claude links are built, `claude-cli` and `anthropic-api`; no other link is.
 
 **Details the rules fix.**
 - A reading at 100 percent raises `window_full` and not `window`; percent used is always between 0 and 100.
@@ -15846,7 +15846,7 @@ This chapter holds what no single subsystem owns: the end-to-end checks of the w
 
 Every subsystem can pass its own proof cases while the whole still fails on a real repository, so these checks run the built binary against a fixture. They are Go tests in `internal/integration`, beside the checks that already run there; the slow ones sit behind the `e2e` build tag, and a person or the orchestrator runs `go test -tags e2e ./internal/integration/` at the end of each delivery phase.
 
-All the owner decisions on review severity, judge confidence, build and lint, risk levels, quarantine, Quality Assurance gate, pull request shapes and the push budget are built before the beta 6 runs, so the runs test the whole review line.
+All the owner decisions on review severity, judge confidence, build and lint, risk levels, quarantine, Quality Assurance gate, pull request shapes and the push budget are built before the trial runs, so the runs test the whole review line.
 
 Three of these checks already run in `internal/integration`, without the build tag, against the built binary, a temporary Komodo home, a local bare remote, a fake `gh` and a fake Messages server that picks its reply by agent role: `TestPhase5OneGroupPassesBuildTestAndReview` (one group passes build, test and review and ends done), `TestPhase6PlannedGroupIsPublishedAndCleanedUp` (`komodo plan`, then the run, a `publish.done` fact, the epic branch on the remote, and no worktree, group branch or lease left) and `TestOneEngineRunsGroupsFromTwoRepositories` (one engine, two repositories). `TestBinaryEngineServesStatus` proves the hidden engine verb binds the socket.
 
