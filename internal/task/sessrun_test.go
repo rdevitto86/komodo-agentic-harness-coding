@@ -154,7 +154,8 @@ func TestBuilderThatFailsItsChecksIsResumedUntilItPasses(t *testing.T) {
 	resumed := 0
 	r.model.resume = func(llm.Session, llm.Input) (llm.Stream, error) {
 		resumed++
-		return sayResult(`{"status":"done","summary":"attempt ` + strings.Repeat("x", resumed) + `"}`)(llm.Session{})
+		return sayResult(`{"status":"done","summary":"attempt ` + strings.Repeat("x", resumed) + `",` +
+			`"evidence":[{"cmd":"go test ./a/...","exit":0,"excerpt":"ok  a 0.01s"}]}`)(llm.Session{})
 	}
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
 	r.reachCleanup()
