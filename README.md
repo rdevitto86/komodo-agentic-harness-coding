@@ -13,17 +13,17 @@ The design is the source for every fact about how Komodo works.
 | [docs/hld.md](docs/hld.md) | Purpose, ownership, interactions and decisions; a 20-minute read |
 | [docs/lld.md](docs/lld.md) | Types, interfaces, algorithms, limits, configuration keys and the gap register of open items |
 
-`make docsite` serves both as a rendered site at `http://127.0.0.1:8765/hld/` [Makefile:9-10].
+`make docsite` serves both as a rendered site at `http://127.0.0.1:8765/hld/`.
 
 ## Install
 
-Requires Go 1.27 [go.mod:3].
+Requires Go 1.27.
 
 ```sh
 make gate
 ```
 
-`make gate` builds, vets and tests the code, builds it for Linux, macOS and Windows, then places the binary at `~/.komodo/bin/komodo` [Makefile:20-33]. Set `KOMODO_BIN` to place it elsewhere [Makefile:2].
+`make gate` builds, vets and tests the code, builds it for Linux, macOS and Windows, then places the binary at `~/.komodo/bin/komodo`. Set `KOMODO_BIN` to place it elsewhere.
 
 Then install the harness into a repository from a terminal:
 
