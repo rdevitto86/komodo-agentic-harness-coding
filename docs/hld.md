@@ -150,7 +150,7 @@ Besides these hand-offs, a subsystem calls another directly when it needs an ans
 
 #### 5.2 CLI
 
-The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, config get and set, login, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it. Running a group that has no tries left with override gives it one final try once, with the working time the person types; only a person at a terminal may do that. Replay plays back recorded events at no cost, and status shows each run's time, tokens and cost. Clean removes everything no open run uses; ui is a read-only dashboard. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
+The CLI is the front door: every command a person or the orchestrator types enters here. It parses and validates the command, hands it to the Runtime Manager, the only part it talks to, and returns one structured reply. It owns 13 commands: install, config get and set, login, plan, run, stop, replay, update, clean, status, ui, abandon and doctor. Running a blocked group again with approve or deny answers it. There is no full-screen terminal mode. Detail: [chapter 1](lld.md#1-cli).
 
 #### 5.3 Output Formatter
 
@@ -162,7 +162,7 @@ The Configuration Manager guards the harness settings and the agent registry, th
 
 #### 5.5 Event Bus
 
-The Event Bus is the spine: every subsystem publishes facts to it, and every subsystem subscribes to the types it needs, so parts never need to know who listens. Every event has the same shape: a type, a subtype, the run and group it belongs to, a time and a small body. The main types are plan (intake), skill and mcp (context, published by the Configuration Manager), run-start, run-stop and run-continue (commands), run-status, run-complete and run-failure (runtime), resource, and error. The bus lives in memory inside the runtime and keeps the event store: it writes every event to the run's log before it delivers it, and replay reads that log. Detail: [chapter 4](lld.md#4-event-bus).
+The Event Bus is the spine: every subsystem publishes facts to it, and every subsystem subscribes to the types it needs, so parts never need to know who listens. Every event has the same shape: a type, a subtype, the run and group it belongs to, a time and a small body. The bus lives in memory inside the runtime and keeps the event store: it writes every event to the run's log before it delivers it, and replay reads that log. Detail: [chapter 4](lld.md#4-event-bus).
 
 #### 5.6 Intake Handler
 
@@ -174,7 +174,7 @@ The Context Manager guards everything an agent may see beyond the code: skills (
 
 #### 5.8 Runtime Manager
 
-The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, timeouts and blocks, and each group's retry budget. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand and stopped when no run is live or scheduled. Each Task Manager runs inside it with a direct command channel and a heartbeat; a silent part is restarted. Before any group starts it creates the epic's branch, and the Commit Handler commits the task lists onto it. Detail: [chapter 7](lld.md#7-runtime-manager).
+The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, timeouts and blocks, and each group's retry budget. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand ([7.1](#71-processes)). Before any group starts it creates the epic's branch, and the Commit Handler commits the task lists onto it. Detail: [chapter 7](lld.md#7-runtime-manager).
 
 #### 5.9 Cache Manager
 
@@ -222,7 +222,7 @@ The Metrics Service listens to every event on the bus and turns them into run me
 
 #### 5.20 Resource Manager
 
-The Resource Manager watches agent resources for overages, such as a subscription plan's usage window or paid token costs, so work is not lost to a limit. It raises warnings and errors through the Error Handler. It warns at 80% of a limit; a full plan window, a spending ceiling or a group's token cap pauses the affected groups, and agents near the token cap are nudged to finish first. Detail: [chapter 19](lld.md#19-resource-manager).
+The Resource Manager watches agent resources for overages, such as a subscription plan's usage window or paid token costs, so work is not lost to a limit. It raises warnings and errors through the Error Handler. Detail: [chapter 19](lld.md#19-resource-manager).
 
 ## 6. Runtime
 
@@ -296,7 +296,7 @@ sequenceDiagram
 
 1. Any part that fails publishes an error event; the Error Handler records it and prints it to the caller through the CLI.
 2. The Resource Manager raises a resource event before a plan window or spending limit is reached.
-3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has one try budget, three tries by default, that only true failures spend and only falls; the failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant it one final try once, and the person chooses that try's working time. A failed final try fails the group with no second wait. Without that approval the group fails for good: its history is kept, its worktree and caches are left to cleanup, and it is run again only from a fresh plan. Komodo's own errors, such as a crash or a restart, spend no retry. Only a true blocker, an error that stops an agent session from working, counts toward a breaker: a group waits 1, 2 and then 4 minutes after its first three blocker errors in a row and is blocked for a person on the fourth, and one error type on three groups pauses new sessions with the same waits. One error handler records every error by type, and a failure of the engine itself is severe and stops new sessions until a person runs `komodo run` from a terminal.
+3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has one try budget, three tries by default, that only true failures spend; Komodo's own errors, such as a crash or a restart, spend none. The failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant one final try. Without that approval the group fails for good and is run again only from a fresh plan. A breaker waits and then blocks on repeated blocker errors, and the engine's own failure stops new sessions until a person runs `komodo run` from a terminal. Detail: [chapter 7](lld.md#7-runtime-manager).
 4. After a crash, `komodo run` continues each group from its saved state.
 
 ## 7. Deployment
@@ -313,7 +313,7 @@ Komodo runs on macOS, Linux and Windows Subsystem for Linux 2. Test sandboxes us
 
 #### 7.3 Install and Update
 
-`komodo install` puts the binary on the machine and a short Komodo block into the repository's AGENTS.md, telling any host agent the harness is there; no agents or skills are copied into a host. `komodo update` downloads, verifies and swaps in a new signed binary, and a running process keeps the version it started with. A background routine checks for a new version every 1 to 8 hours and downloads it, but swaps it in only when no run is active. `komodo login --{provider}` sets up model access for one provider. Detail: [chapter 1](lld.md#1-cli).
+`komodo install` puts the binary on the machine and a short Komodo block into the repository's AGENTS.md, telling any host agent the harness is there; no agents or skills are copied into a host. `komodo update` downloads, verifies and swaps in a new signed binary, and a running process keeps the version it started with. `komodo login --{provider}` sets up model access for one provider. Detail: [chapter 1](lld.md#1-cli).
 
 ## 8. Crosscutting Concepts
 
@@ -337,7 +337,7 @@ Each agent role in the registry names its model and its chain of links, subscrip
 
 #### 8.3 Security
 
-Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default. Commands run in a sandbox with no network except what the task needs; a Go repository's setup command also uses the person's module download cache as a file proxy, so private modules need no credentials. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
+Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default. Commands run in a sandbox with no network except what the task needs. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
 
 #### 8.4 Quality Gates
 
