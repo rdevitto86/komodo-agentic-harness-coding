@@ -196,7 +196,8 @@ func changedPackages(ctx context.Context, run CommandRunner, files []string) ([]
 	return pkgs, nil
 }
 
-// race runs the affected tests under the race detector.
+// race runs the affected tests under the race detector; only a race report fails it, since a test that fails without
+// one is the baseline check's to judge.
 func (d deep) race(ctx context.Context, run CommandRunner, s *deepScope) (DeepResult, error) {
 	if len(s.impact) == 0 {
 		return DeepResult{Kind: DeepRace, Pass: true, Output: "no affected package"}, nil
@@ -206,7 +207,7 @@ func (d deep) race(ctx context.Context, run CommandRunner, s *deepScope) (DeepRe
 	if err != nil {
 		return DeepResult{}, err
 	}
-	if exit != 0 {
+	if exit != 0 && strings.Contains(out, "WARNING: DATA RACE") {
 		return DeepResult{Kind: DeepRace, Output: CapOutput(out, GateOutputCap)}, nil
 	}
 

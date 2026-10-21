@@ -23,7 +23,7 @@ func (m *Manager) runDeep(ctx context.Context, run agent.CommandRunner) ([]strin
 		return nil, err
 	}
 
-	d := agent.Classify(agent.RiskInput{Files: agent.DiffFiles(diff)})
+	d := m.classify(diff)
 
 	m.mu.Lock()
 	m.risk = d
@@ -66,6 +66,37 @@ func (m *Manager) runDeep(ctx context.Context, run agent.CommandRunner) ([]strin
 	m.fact("deep.done", done)
 
 	return fails, nil
+}
+
+// classify sets the Go-rule risk level of diff, raised when an earlier round proved a reviewer finding.
+func (m *Manager) classify(diff string) agent.RiskDecision {
+	m.mu.Lock()
+	proven := m.proven
+	m.mu.Unlock()
+
+	return agent.Classify(agent.RiskInput{Files: agent.DiffFiles(diff), Proven: proven})
+}
+
+// skipsReview reports whether the round takes no Reviewer: the skip rule says so and no finding was proven yet.
+func (m *Manager) skipsReview(diff string) bool {
+	m.mu.Lock()
+	proven := m.proven
+	m.mu.Unlock()
+
+	return !proven && m.c.SkipReview != nil && m.c.SkipReview(diff)
+}
+
+// noteProven marks the group once a blocking reviewer finding failed as its proof claimed.
+func (m *Manager) noteProven(vs []VerifiedFinding) {
+	for _, v := range vs {
+		if v.Bucket == agent.BucketBlock && v.Proof == "failed_as_claimed" {
+			m.mu.Lock()
+			m.proven = true
+			m.mu.Unlock()
+
+			return
+		}
+	}
 }
 
 // Risk returns the risk level and the rule Go set for the group in its last round.

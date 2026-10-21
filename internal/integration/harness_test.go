@@ -487,6 +487,7 @@ type fakeModel struct {
 	builder  func(brief string, turn int) (string, map[string]any) // when set, picks the builder's tool call; "" ends the turn
 	verdict  func(task string) string                              // when set, the reviewer's verdict per task
 	testPass func(item string) bool                                // when set, Quality Assurance's pass flag per free item
+	qaExit   int                                                   // Quality Assurance's reported exit for go test ./...
 	bodies   []string                                              // every request body, in arrival order
 
 	builderFinal func() string // when set and not empty, the builder's final result
@@ -665,7 +666,7 @@ func (f *fakeModel) result(role, brief string) string {
 		items, tasks := []map[string]any{}, []map[string]string{}
 		for _, m := range itemLine.FindAllStringSubmatch(brief, -1) {
 			pass := f.testPass == nil || f.testPass(m[1])
-			ev := []map[string]any{{"cmd": "go test ./...", "exit": 0, "excerpt": ""}}
+			ev := []map[string]any{{"cmd": "go test ./...", "exit": f.qaExit, "excerpt": ""}}
 			items = append(items, map[string]any{"item": m[1], "pass": pass, "evidence": ev})
 		}
 		for _, m := range taskLine.FindAllStringSubmatch(brief, -1) {

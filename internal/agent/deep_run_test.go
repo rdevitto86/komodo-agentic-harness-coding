@@ -49,6 +49,15 @@ func TestDeepRace(t *testing.T) {
 	}
 }
 
+// A test that fails with no race report is the baseline's to judge, so the race check passes.
+func TestDeepRaceIgnoresAFailureWithNoRace(t *testing.T) {
+	s := basics().on("-race", reply{1, "--- FAIL: TestAlreadyBroken (0.00s)\n    old_test.go:5: broken at base\nFAIL\n"})
+	res, err := newTestDeep(DeepConfig{}).Run(context.Background(), s.run, []DeepKind{DeepRace})
+	if err != nil || len(res) != 1 || !res[0].Pass {
+		t.Fatalf("a failure with no race = %+v %v", res, err)
+	}
+}
+
 // Fuzzing runs each existing target of a changed package for 30 seconds, and a crash fails the check.
 func TestDeepFuzz(t *testing.T) {
 	s := basics().
