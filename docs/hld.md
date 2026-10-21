@@ -16,7 +16,7 @@ flowchart LR
   G(["Goal or documents"]):::actor
   I["Intake<br><small>planner writes task lists</small>"]
   B["Build<br><small>one builder per group</small>"]:::core
-  T["Test<br><small>tester in a sandbox</small>"]:::core
+  T["Test<br><small>Quality Assurance in a sandbox</small>"]:::core
   R["Review<br><small>reviewer</small>"]:::core
   C["Commit<br><small>push branch, open pull request</small>"]
   CL["Cleanup<br><small>free branch, worktree, resources</small>"]
@@ -39,7 +39,7 @@ Goals:
 - One Go binary that uses only the standard library, with every part reachable through one command line.
 - One event bus that every part publishes to and listens on, using one event shape with a type and a subtype.
 - One task manager per task group, which guards its agents and runs the pipeline from build to cleanup.
-- A tester and a reviewer that judge the builder's work side by side, with tests run in a sandbox.
+- A Quality Assurance agent and a reviewer that judge the builder's work side by side, with tests run in a sandbox.
 - One owner per kind of data: settings, context, cache, leases and runtime state each have exactly one manager.
 
 Non-goals: per-repository agent definitions, third-party Go dependencies, a hosted service, and agents that push to git themselves.
@@ -104,7 +104,7 @@ Each quality goal has a mechanism that code enforces. No model is trusted to beh
 
 | Goal | Strategy |
 |---|---|
-| Safety | The Task Manager checks every agent action against its permissions, and the Tester validates inside a sandbox |
+| Safety | The Task Manager checks every agent action against its permissions, and Quality Assurance validates inside a sandbox |
 | Simplicity | 19 subsystems with one job each, joined by one event bus instead of point-to-point messages |
 | Durability | Leases name exactly one owner per branch and worktree; each finished task is saved as a local commit before approval |
 | Cost control | The Resource Manager watches plan windows and spending, and the Cache Manager reuses context instead of re-sending it |
@@ -127,7 +127,7 @@ flowchart LR
   SP["Spine<br><small>Event Bus</small>"]:::core
   PL["Planning and context<br><small>Intake Handler · Context Manager</small>"]
   RT["Runtime<br><small>Runtime Manager · Cache · Lease · State</small>"]:::core
-  WK["Work, one per group<br><small>Task Manager · Builder · Tester · Reviewer · Commit · Cleanup</small>"]
+  WK["Work, one per group<br><small>Task Manager · Builder · Quality Assurance · Reviewer · Commit · Cleanup</small>"]
   WA["Watchers<br><small>Error Handler · Metrics · Resource Manager</small>"]:::muted
   IF -->|"1 command events"| SP
   SP -->|"2 plan"| PL
@@ -194,15 +194,15 @@ The Task Manager is the controller for one task group; the Runtime Manager start
 
 #### 5.13 Builder
 
-The Builder is the engineering agent that writes the code for one task group, task by task, inside the group's worktree. It works only through the actions its Task Manager allows; the Commit Handler saves each finished task as a local commit. It hands finished work to the Tester and Reviewer together and fixes what they return. Detail: [chapter 12](lld.md#12-builder).
+The Builder is the engineering agent that writes the code for one task group, task by task, inside the group's worktree. It works only through the actions its Task Manager allows; the Commit Handler saves each finished task as a local commit. It hands finished work to Quality Assurance and Reviewer together and fixes what they return. Detail: [chapter 12](lld.md#12-builder).
 
-#### 5.14 Tester
+#### 5.14 Quality Assurance
 
-The Tester checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. The Tester approves every group before it lands: Go accepts its pass only with evidence Go replays. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-tester).
+Quality Assurance checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. Quality Assurance approves every group before it lands: Go accepts its pass only with evidence Go replays. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-quality-assurance).
 
 #### 5.15 Reviewer
 
-The Reviewer is the final code check of the group's own changes. It reads them while the Tester runs, and a group of medium level or above moves to publishing only when both approve; otherwise the work returns to the Builder. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
+The Reviewer is the final code check of the group's own changes. It reads them while Quality Assurance runs, and a group of medium level or above moves to publishing only when both approve; otherwise the work returns to the Builder. Rules have six levels; only the top three block, and only when Go runs the finding's proof and it fails as claimed. Detail: [chapter 14](lld.md#14-reviewer).
 
 #### 5.16 Commit Handler
 
@@ -261,14 +261,14 @@ sequenceDiagram
   participant R as Runtime Manager
   participant T as Task Manager
   participant B as Builder
-  participant Q as Tester and Reviewer
+  participant Q as Quality Assurance and Reviewer
   participant C as Commit Handler
   participant U as Cleanup Handler
   R->>T: start group, lease granted
   T->>B: build each task
   B-->>T: tasks done
   T->>Q: same work to both at once
-  alt tester fails or reviewer asks for changes
+  alt Quality Assurance fails or reviewer asks for changes
     Q-->>B: findings, back to build
   else both approve
     Q->>C: approved
@@ -281,7 +281,7 @@ sequenceDiagram
 
 1. The Runtime Manager starts a Task Manager once the group's dependencies are met and its lease is granted.
 2. The Builder works through the tasks in the group's worktree.
-3. The Tester and Reviewer judge the same work at the same time; any failure returns the group to the Builder, a bounded number of times.
+3. Quality Assurance and Reviewer judge the same work at the same time; any failure returns the group to the Builder, a bounded number of times.
 4. With the approvals its level requires, the Commit Handler commits and pushes, then hands over to the Cleanup Handler. It removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
 
 #### 6.3 Planning
@@ -341,7 +341,7 @@ Three fences hold every agent. The Task Manager checks every requested action ag
 
 #### 8.4 Quality Gates
 
-Go's free checks run first, so a failing build, lint or test costs no model call. Go then sets a risk level from the diff, which no agent can change. Every level needs the Tester; low levels skip the Reviewer, and high levels are quarantined.
+Go's free checks run first, so a failing build, lint or test costs no model call. Go then sets a risk level from the diff, which no agent can change. Every level needs Quality Assurance; low levels skip the Reviewer, and high levels are quarantined.
 
 ## 9. Architecture Decisions
 
@@ -352,7 +352,7 @@ Each row names a decision, the alternative rejected and the reason.
 | 19 subsystems with one job each | 13 subsystems that each held several jobs | Each part can be read, built and tested alone |
 | One event bus with a type and subtype per event | Point-to-point messages and per-group event files | Any part can listen without the producer knowing, and one schema serves every listener |
 | One Task Manager per task group | One engine loop owning every group's details | A group's guard, agents and sandbox live in one place, and a failure stays in its group |
-| Tester and Reviewer side by side, after free checks | Reviewer and tester one after the other | One step judges the work twice at once, which shortens each group |
+| Quality Assurance and Reviewer side by side, after free checks | Reviewer and Quality Assurance one after the other | One step judges the work twice at once, which shortens each group |
 | A separate Commit Handler and Cleanup Handler | Ship doing landing and cleanup together | Publishing and freeing resources fail and retry independently |
 | Error Handler, Metrics Service and Resource Manager as watchers | Error handling and metrics spread through every part | One place catches errors, one records, one watches limits |
 | Only the Configuration Manager touches settings | Each part reading settings files | Settings stay consistent and out of agent reach |
@@ -391,7 +391,7 @@ OpenAI's two links are built and tested against stand-ins; live calls wait for a
 | 2 | Spine and interface: Event Bus, CLI, Output Formatter, Configuration Manager, Error Handler, Metrics Service | `komodo config get` and an event round trip pass their tests |
 | 3 | Runtime stores: State Manager, Lease Manager, Cache Manager | A lease, a state record and a cache entry survive a restart |
 | 4 | Context and models: Context Manager, model client, model and tool checks | One agent session runs end to end |
-| 5 | Pipeline: Runtime Manager, Task Manager, Builder, Tester, Reviewer, sandbox | One task group passes build, test and review |
+| 5 | Pipeline: Runtime Manager, Task Manager, Builder, Quality Assurance, Reviewer, sandbox | One task group passes build, test and review |
 | 6 | Publishing: Commit Handler, Cleanup Handler, Resource Manager, Intake Handler | A planned group is published and cleaned up |
 | 7 | Install, update, dashboard and cutover | A clean machine installs and runs one plan |
 
@@ -406,7 +406,7 @@ None are open. Build-time questions are [gap register](lld.md#appendix-b-gap-reg
 | Harness | The whole Komodo program: the `komodo` binary and everything it runs |
 | Command | One `komodo` entry point, such as plan, run or stop |
 | Orchestrator | A model chat session in Claude Code that drives Komodo by commands and never edits code |
-| Agent | A model role with its own permissions: planner, builder, tester or reviewer |
+| Agent | A model role with its own permissions: planner, builder, Quality Assurance or reviewer |
 | Agent registry | The list of agent roles with their models, links and permissions |
 | Session | One model conversation for one agent's job |
 | Epic, task group, task | An epic holds task groups; a group holds a bounded set of tasks that ship together |
@@ -440,7 +440,7 @@ None are open. Build-time questions are [gap register](lld.md#appendix-b-gap-reg
 | Lease Manager | `internal/lease` | 3 |
 | State Manager | `internal/state` | 3 |
 | Task Manager, model client, sandbox | `internal/task`, `internal/llm`, `internal/sandbox` | 4, 5 |
-| Builder, Tester, Reviewer, Planner | `internal/agent` | 4, 5 |
+| Builder, Quality Assurance, Reviewer, Planner | `internal/agent` | 4, 5 |
 | Commit Handler | `internal/commit` | 6 |
 | Cleanup Handler | `internal/cleanup` | 6 |
 | Error Handler | `internal/fault` | 2 |
