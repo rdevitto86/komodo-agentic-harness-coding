@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0007. Sessions run sandboxed, offline for Go, and under process limits
 
 **Status:** Accepted, 2026-10-02.

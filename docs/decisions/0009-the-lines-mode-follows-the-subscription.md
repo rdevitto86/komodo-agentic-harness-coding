@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0009. The line's mode follows the subscription
 
 **Status:** Accepted, 2026-10-02.

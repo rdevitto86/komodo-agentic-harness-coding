@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0004. One builder session works one task group, in its own worktree
 
 **Status:** Accepted, 2026-10-02. Amended by 0012, 2026-10-02.

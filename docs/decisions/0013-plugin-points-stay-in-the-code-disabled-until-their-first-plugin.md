@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0013. Plugin points stay in the code, disabled, until their first plugin
 
 **Status:** Accepted, 2026-10-03.

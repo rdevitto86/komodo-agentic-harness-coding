@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0005. Review sends a group back to repair until it converges, or blocks it
 
 **Status:** Accepted, 2026-10-02.

@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0012. Agent worktrees are detached, and only a live builder holds a branch
 
 **Status:** Accepted, 2026-10-02.

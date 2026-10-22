@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: prd
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # Product requirements — komodo-agentic-factory-coding
 
 | Metadata | Specification |

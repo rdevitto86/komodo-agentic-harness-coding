@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0001. Work runs through an assembly line of fixed stages, in isolated, pinned sessions
 
 **Status:** Accepted, 2026-10-02.

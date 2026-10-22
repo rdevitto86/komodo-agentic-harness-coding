@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0010. Versions follow SemVer, with alpha, beta, optional rc and stable phases
 
 **Status:** Accepted, 2026-10-02.

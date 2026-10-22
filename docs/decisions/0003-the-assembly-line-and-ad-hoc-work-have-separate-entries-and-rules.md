@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0003. The assembly line and ad hoc work have separate entries and rules
 
 **Status:** Accepted, 2026-10-02.

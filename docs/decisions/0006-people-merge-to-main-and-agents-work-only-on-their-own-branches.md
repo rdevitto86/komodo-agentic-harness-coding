@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0006. People merge to `main`, and agents work only on their own branches
 
 **Status:** Accepted, 2026-10-02. Amended by 0012, 2026-10-02.

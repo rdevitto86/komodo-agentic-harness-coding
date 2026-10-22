@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: decision
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # 0002. The conductor is one Go binary, for determinism and zero setup
 
 **Status:** Accepted, 2026-10-02.

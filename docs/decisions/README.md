@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: index
+status: draft
+owner: R. DeVitto
+depends-on: []
+---
+
 # Decisions — komodo-agentic-factory-coding
 
 Why the line is this way and not another. One file per decision, named `NNNN-<slug>.md` from its title, numbered in order and never rewritten. A superseded entry keeps its text and gains a status line naming its successor. An open technical question is a Proposed entry; a product question belongs in `prd.md`.
