@@ -175,7 +175,6 @@ func (c *Claude) smallestWindow() int {
 	if least == 0 {
 		return DefaultWindow
 	}
-
 	return least
 }
 
@@ -227,6 +226,7 @@ func (c *Claude) initLine(ctx context.Context, path, version string) (json.RawMe
 
 	lines := make(chan []byte, 1)
 
+	//TODO - we should add a small comment here on what this does
 	go func() {
 		defer rec.Recover(llmSource, nil)
 		defer func() {
@@ -258,9 +258,7 @@ func (c *Claude) initLine(ctx context.Context, path, version string) (json.RawMe
 				ErrUnavailable,
 			)
 		}
-
 		line := json.RawMessage(append([]byte(nil), l...))
-
 		c.mu.Lock()
 		c.inits[version] = line
 		c.mu.Unlock()

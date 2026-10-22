@@ -220,7 +220,6 @@ func badPath(p string) string {
 	case slices.Contains(strings.Split(p, "/"), ".."):
 		return "path holds .."
 	}
-
 	return ""
 }
 

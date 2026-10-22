@@ -90,7 +90,6 @@ func CheckBaseURL(raw string) error {
 		if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()) {
 			return nil
 		}
-
 		return fmt.Errorf("anthropic address %q is plain http to a host that is not this machine; use https", raw)
 	}
 

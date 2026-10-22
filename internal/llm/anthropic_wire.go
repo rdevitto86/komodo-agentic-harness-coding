@@ -346,7 +346,6 @@ func toolDefs(host ToolHost) []ToolDef {
 	slices.Sort(names)
 
 	def, _ := host.(ToolDefiner)
-
 	var out []ToolDef
 
 	for _, n := range names {
@@ -360,7 +359,6 @@ func toolDefs(host ToolHost) []ToolDef {
 		if len(d.InputSchema) == 0 {
 			d.InputSchema = json.RawMessage(`{"type":"object"}`)
 		}
-
 		out = append(out, d)
 	}
 
