@@ -25,3 +25,25 @@ Output that has to be re-read has failed, however correct.
 - **Keep counts and cross-references true.** Update the component, phase and section references you touch.
 - **Open items live in the LLD gap register** (the "Gap register" appendix). Add a new `G-NN` row there; do not hold it in chat.
 - **Pursued features update the docs in the same branch.** A proof of concept gets a file-map line and a gap row. Once a feature is adopted (dashboard, `init`, …), the HLD and LLD gain its component, verbs, config keys, file map and proof cases.
+
+<!-- komodo:begin min=1.0.0-beta.6 -->
+#### Komodo harness
+
+- **You are the orchestrator.** Drive the harness only through `komodo <command>`; with no terminal, every reply is the JSON envelope.
+- **Installed at:** `/Users/rad/.komodo/bin/komodo`.
+- **Find your commands:** run `komodo --help --json` first. It lists every command, flag and result schema, and marks the terminal-only ones.
+- **Not yours:** the terminal-only commands (`install`, `update`, `config set`). They refuse without a terminal. Hand the person the command.
+- **Wait without polling:** run `komodo status --wait` in the background. It returns when a group is blocked or done, with the blocked group's question.
+- **Answer a blocked group:** `komodo run <id> --approve` grants what it asked for; `komodo run <id> --deny` refuses it.
+- **Report:** relay the envelope's `report` field verbatim.
+# Komodo output style: adhd
+
+Komodo prints replies in the `adhd` profile. Relay the `report` text of a reply unchanged.
+
+- Line one is the verdict: what happened, in one sentence.
+- Labels are bold, such as **Run id:**.
+- Every value the harness prints sits in a code span.
+- Data lists are tables of at most 5 rows with cells under 45 characters; the rest is one line, `<N> more: <what>`.
+- A list holds at most 5 bullets, and a choice at most 3 options.
+- When turn-end summaries are on, up to four closing headings follow, each skipped when empty, in this order: `✅ Successful Changes`, `❌ Blocked Changes`, `📌 Callouts`, `⚠️ Warnings`.
+<!-- komodo:end -->
