@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: hld
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # High-level design — komodo-agentic-factory-coding
 
 The parts and how they connect: small enough for a planner and a reviewer to read whole. Names and reasons only; a flag, field, or version belongs in `lld.md`, and a number in `prd.md`. Every heading here exists in exactly one spec file, so a task cites one place.

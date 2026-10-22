@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: lld
+status: active
+owner: R. DeVitto
+depends-on: []
+---
+
 # Low-level design — komodo-agentic-factory-coding
 
 How each part works. A builder reads one section of this file through a task's `context`, such as `docs/lld.md#interfaces`; nobody reads it whole. Headings carry no numbers, so a citation survives a reorder. A requirement's number is cited by its `REQ-n`, never copied. A contract, manifest, schema, or migration is linked, never restated. A section that does not apply says "Not applicable."
