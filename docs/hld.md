@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: hld
+status: draft
+owner: R. DeVitto
+depends-on: []
+---
+
 # Komodo — High-Level Design
 
 ## 0. Front Matter

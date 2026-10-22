@@ -26,6 +26,12 @@ Output that has to be re-read has failed, however correct.
 - **Open items live in the LLD gap register** (the "Gap register" appendix). Add a new `G-NN` row there; do not hold it in chat.
 - **Pursued features update the docs in the same branch.** A proof of concept gets a file-map line and a gap row. Once a feature is adopted (dashboard, `init`, …), the HLD and LLD gain its component, verbs, config keys, file map and proof cases.
 
+## Architecture context
+- Read this repo's `docs/README.md` first; it indexes the HLD, LLD and backlog.
+- For other services and cross-domain context, use the architecture portal (repo `komodo-architecture`; hosted URL pending).
+- This repo's portal ID is `tool:agentic-harness-coding`. Its dependencies are in each doc's `depends-on` front matter.
+- Names, ports and status come from `komodo-architecture/service-registry.md`.
+
 <!-- komodo:begin min=1.0.0-beta.6 -->
 #### Komodo harness
 

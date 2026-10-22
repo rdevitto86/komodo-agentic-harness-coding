@@ -1,3 +1,12 @@
+---
+service: tool:agentic-harness-coding
+domain: ai
+type: lld
+status: draft
+owner: R. DeVitto
+depends-on: []
+---
+
 ## 0. Front Matter and Code Structure
 
 This chapter holds what every reader needs first: how the document is organised, how names are spelled, which Go package holds which subsystem, which way imports may point and which files are compiled into the binary. The purpose, goals and decisions are in the [High-Level Design](hld.md).
