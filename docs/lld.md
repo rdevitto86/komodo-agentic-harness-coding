@@ -840,7 +840,7 @@ Anyone runs `run (plan id)`, usually the orchestrator. It sends the engine a `ru
 | `run <plan id> <group> --approve` | Grants what that one blocked group asked for; for a `high` or `critical` group that passed its checks, it lands the group on the feature branch |
 | `run <plan id> --deny` | Answers every blocked group of the plan by refusing what it asked for |
 | `run <plan id> <group> --deny` | Refuses what that one blocked group asked for; for a `high` or `critical` group it drops the group |
-| `run <plan id> <group>` with a prompt | The planner rewrites that one group's tasks from the prompt, the lint checks run again on the plan, and the group then runs, so the changes are made. The prompt is quoted text at the end: `komodo run plan-7f3a9c tg-2 "use the cache instead of the database"`. A long prompt uses `--input`. A group that has not started is rewritten in place; a running group is stopped, keeps its finished tasks, has its remaining tasks rewritten and continues; a done group gets new tasks that build on its landed work, runs, and lands again on the feature branch ([7.5](#75-behaviour)) |
+| `run <plan id> <group>` with a prompt | The planner rewrites that one group's tasks from the prompt, the lint checks run again on the plan, and the group then runs, so the changes are made. The prompt is quoted text at the end: `komodo run plan-7f3a9c tg-2 "use the cache instead of the database"`. A long prompt uses `--input`. A group that has not started is rewritten in place; a running group is stopped, keeps its finished tasks, has its remaining tasks rewritten and continues; a done group gets new tasks that build on its landed work, runs, and lands again on the feature branch ([7.5](#75-behaviour)). The CLI sends the rewrite as a `plan` event with `plan` and `group` set, waits for `plan` / `written`, then publishes `run-start` with that group in `data.groups` |
 
 - **Continuing.** A group that already has saved state continues from it, so `komodo run plan-7f3a9c` after a crash continues each group from its saved state. A group that needs another pass, such as after a hand fix in its worktree, also continues with `komodo run plan-7f3a9c`: it picks up at the group's current stage and runs test and review again before commit. `build`, `test` and `review` are not commands.
 - **Scheduling.** `--schedule` is a socket request, not an event. The engine mints the run id, writes the entry (`target`, `root`, `run_id`, `at`, `queued_at`, `start`) to the schedule queue, returns the run id in its reply, stays up while any run is live or queued, and starts the run at its time. The reply shows the run id and the queued time, and `status` lists the queued run. When the entry fires, the engine publishes the one `run-start` with that run id.
@@ -2813,8 +2813,9 @@ type RunStop struct {
 
 // RunContinue is the data of run-continue: a request for a blocked or paused group to go on.
 type RunContinue struct {
-	Target string `json:"target"`           // a plan id, a plan id then a group label, or a run id
-	Answer string `json:"answer,omitempty"` // "approve" or "deny" from --approve or --deny; empty for a plain continue
+	Target string   `json:"target"`           // a plan id or a run id
+	Groups []string `json:"groups"`           // empty: every blocked group of the plan; one label: that group only
+	Answer string   `json:"answer,omitempty"` // "approve" or "deny" from --approve or --deny; empty for a plain continue
 	Request ID    `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 ```
@@ -14231,7 +14232,7 @@ The Runtime Manager publishes `run-complete` only after every group of the run h
 
 A sweep runs once each time the engine starts, after the recovery pass has marked which groups can continue, and `komodo clean` calls it on demand. A group that a live lease holds is skipped.
 
-**Plan folders.** When every group in a plan is closed, `Complete` deletes the plan's folder under `~/.komodo/plans/<repo-id>/`. A sweep also deletes a plan folder whose groups are all closed, and any `.plan-failed-*` folder. `komodo clean` also deletes a plan folder that no running group uses and whose `plan.md` and `blueprint.json` have not changed for 7 days, and lists each folder it deletes in its reply.
+**Plan folders.** `Complete` reads the plan's group labels from its blueprint and each group's status from the group state. When every group in the plan is closed, it deletes the plan's folder under `~/.komodo/plans/<repo-id>/`. A sweep also deletes a plan folder whose groups are all closed, and any `.plan-failed-*` folder. `komodo clean` also deletes a plan folder that no running group uses and whose `plan.md` and `blueprint.json` have not changed for 7 days, and lists each folder it deletes in its reply.
 
 1. `Sweep` asks `Groups.Unfinished` and fetches the remote once, without pruning. It collects group ids from the folders in `Roots.Worktrees`, `Roots.QA` and `Roots.Temp` and from `Containers.List`. A group that is unfinished (stopped, blocked, paused or crashed, so `komodo run (id)` can continue it) is kept whole and listed under `kept`.
 2. For each remaining group it takes the Lease Manager's group lock when `Leases` offers one, then reads the lease through `Leases.Holder` and skips a group a live run holds (live when `Handler.Live` says so). Before every removal it reads the lease again and stops that group if a live run has taken it. It removes the group's Docker container, Quality Assurance checkout and session temporary folder.
