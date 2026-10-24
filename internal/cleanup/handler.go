@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
@@ -85,6 +86,7 @@ type Handler struct {
 	Groups Groups     // reads group records from the State Manager
 	Report Reporter   // relays a progress fact to the Runtime Manager
 	Errors Errors     // receives removal failures; nil drops them
+	Plans  Blueprints // reads a plan's group labels; nil keeps every plan folder
 
 	Repo    string                 // repo id the lease registry files the groups under
 	Clone   string                 // path of the clone every git call runs in
@@ -92,6 +94,7 @@ type Handler struct {
 	Current string                 // version of the running binary; UnusedVersions always keeps it
 	Roots   Roots                  // the only folders the handler deletes in
 	Live    func(lease.Lease) bool // reports whether a lease still has a working holder; nil counts every held lease as live
+	Now     func() time.Time       // the clock that ages plan folders; nil uses time.Now
 }
 
 // Complete cleans up one published group, then closes it; the Commit Handler calls it after the push.
@@ -132,6 +135,7 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 		return rep, fmt.Errorf("close task group %s: %w", p.Group, err)
 	}
 
+	h.closePlan(ctx, p, &rep)
 	h.say(ctx, p.Group, "cleanup.done", rep)
 	return rep, nil
 }

@@ -20,6 +20,8 @@ type Published struct {
 	// holds the group's work. The remote is not consulted and Into names the local epic branch that must hold that change.
 	Landed string `json:"landed,omitempty"`
 	Into   string `json:"into,omitempty"`
+	Plan   string `json:"plan,omitempty"`  // id of the plan the group belongs to; empty keeps every plan folder
+	Label  string `json:"label,omitempty"` // the group's label inside the plan, such as tg-2; it counts as closed
 }
 
 // PublishedEpic says that an epic's branch and pull request are on the remote, so its landing worktree and branch may go.
@@ -33,7 +35,7 @@ type PublishedEpic struct {
 
 // Item is one thing the Cleanup Handler removed or kept.
 type Item struct {
-	Kind   string `json:"kind"`   // worktree, qa_worktree, container, branch, temp, version
+	Kind   string `json:"kind"`   // worktree, qa_worktree, container, branch, temp, version, plan
 	Name   string `json:"name"`   // path, branch, reference or version
 	Reason string `json:"reason"` // why it was kept; empty for removed items
 }
@@ -58,6 +60,7 @@ type Roots struct {
 	QA        string // holds one Quality Assurance checkout per group; empty means none exist
 	Temp      string // holds one session temporary folder per group; empty means none exist
 	Versions  string // holds one folder per installed binary version
+	Plans     string // holds one folder per plan of the repository, such as ~/.komodo/plans/<repo-id>; empty means none
 }
 
 // The kinds of Item.
@@ -68,6 +71,7 @@ const (
 	KindBranch    = "branch"
 	KindTemp      = "temp"
 	KindVersion   = "version"
+	KindPlan      = "plan"
 )
 
 var (

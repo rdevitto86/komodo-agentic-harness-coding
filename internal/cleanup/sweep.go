@@ -57,6 +57,7 @@ func (h *Handler) sweep(ctx context.Context, dry bool) (Report, error) {
 	}
 
 	h.sweepLandings(ctx, &rep, used, dry, fetchErr)
+	h.sweepPlans(ctx, &rep, dry)
 	return rep, nil
 }
 
