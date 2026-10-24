@@ -15,7 +15,6 @@ type GrantRequest struct {
 	Repo      string // repo id
 	Group     string // task group id
 	Run       string // run asking
-	Branch    string // branch name the lease records for the group
 	Worktree  string // worktree path the lease records for the group
 	ClonePath string // clone the run started from
 }
@@ -72,9 +71,8 @@ func New(home string, lockTimeoutS any, reg Registry, alive ProcessCheck) (*Mana
 	}, nil
 }
 
-// Grant takes the group's lease, raises the fence and records the branch and worktree names.
-// The repository's grants run one at a time, so no two live leases can name one branch or
-// worktree.
+// Grant takes the group's lease, raises the fence and records the worktree path.
+// The repository's grants run one at a time, so no two live leases can name one worktree.
 func (m *Manager) Grant(ctx context.Context, req GrantRequest) (Lease, error) {
 	if err := checkRequest(req); err != nil {
 		return Lease{}, err
@@ -293,9 +291,9 @@ func (m *Manager) grantOnce(ctx context.Context, req GrantRequest) (Lease, bool,
 
 	for _, o := range all {
 		if o.Group != req.Group &&
-			(o.Branch == req.Branch || o.Worktree == req.Worktree) &&
+			o.Worktree == req.Worktree &&
 			o.Live(now, m.machine, m.alive) {
-			return Lease{}, false, ErrBranchTaken
+			return Lease{}, false, ErrWorktreeTaken
 		}
 	}
 
@@ -308,7 +306,6 @@ func (m *Manager) grantOnce(ctx context.Context, req GrantRequest) (Lease, bool,
 		Repo:      req.Repo,
 		Group:     req.Group,
 		Run:       req.Run,
-		Branch:    req.Branch,
 		Worktree:  req.Worktree,
 		PID:       m.pid,
 		ProcStart: m.procStart.UTC().Truncate(time.Second),
@@ -375,8 +372,6 @@ func checkRequest(req GrantRequest) error {
 	switch {
 	case req.Repo == "" || req.Group == "" || req.Run == "":
 		return errors.New("grant needs a repo, a group and a run")
-	case req.Branch == "":
-		return errors.New("grant needs a branch name")
 	case !filepath.IsAbs(req.Worktree):
 		return errors.New("grant needs an absolute worktree path")
 	case !validGroup(req.Group):

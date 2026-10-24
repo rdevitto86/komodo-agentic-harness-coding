@@ -81,7 +81,7 @@ func TestStorageHalfRecordNeverReadAndStaleLockExpires(t *testing.T) {
 	}
 	ctx := context.Background()
 	req := lease.GrantRequest{
-		Repo: repo, Group: group, Run: run, Branch: "komodo/ep-1-tg-1.2", Worktree: "/wt/tg-1.2", ClonePath: "/src/shop",
+		Repo: repo, Group: group, Run: run, Worktree: "/wt/tg-1.2", ClonePath: "/src/shop",
 	}
 	if _, err := ls.Grant(ctx, req); err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestStorageHalfRecordNeverReadAndStaleLockExpires(t *testing.T) {
 		locked = sc.Text() == "locked"
 	}
 	next := lease.GrantRequest{
-		Repo: repo, Group: second, Run: run, Branch: "komodo/ep-1-tg-1.3", Worktree: "/wt/tg-1.3", ClonePath: "/src/shop",
+		Repo: repo, Group: second, Run: run, Worktree: "/wt/tg-1.3", ClonePath: "/src/shop",
 	}
 	if !core.LockHeld(held[0]) || !core.LockHeld(held[1]) {
 		t.Fatal("the child does not hold the lock files")

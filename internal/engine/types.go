@@ -117,7 +117,6 @@ type (
 	// LeaseGrant is the data of lease.granted.
 	LeaseGrant struct {
 		Fence    uint64 `json:"fence"`
-		Branch   string `json:"branch"`
 		Worktree string `json:"worktree"`
 	}
 	// StageDoneData is the data of stage.done.

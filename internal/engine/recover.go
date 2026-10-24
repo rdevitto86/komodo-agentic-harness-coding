@@ -28,7 +28,6 @@ func (g *group) recoverInit(rec state.Record) bool {
 		Repo:      g.r.start.Repo,
 		Group:     g.spec.ID,
 		Run:       g.r.id,
-		Branch:    g.branchOf(),
 		Worktree:  g.worktreeOf(),
 		ClonePath: g.r.start.Root,
 	})

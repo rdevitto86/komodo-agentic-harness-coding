@@ -1,4 +1,4 @@
-// Package lease keeps the lease registry: which task group's run owns which branch and worktree.
+// Package lease keeps the lease registry: which task group's run owns which worktree.
 package lease
 
 import (
@@ -17,12 +17,11 @@ const (
 	StateRevoked LeaseState = "revoked" // ended on order; the holder is no longer the owner
 )
 
-// Lease is one registry record: the run that owns a group's branch and worktree.
+// Lease is one registry record: the run that owns a group's worktree.
 type Lease struct {
 	Repo      string     `json:"repo"`       // repo id
 	Group     string     `json:"group"`      // task group id
 	Run       string     `json:"run"`        // run that holds the group
-	Branch    string     `json:"branch"`     // the group's branch name, as the caller gave it
 	Worktree  string     `json:"worktree"`   // absolute path of the group's worktree
 	PID       int        `json:"pid"`        // process id of the holder
 	ProcStart time.Time  `json:"proc_start"` // start time of the holder's process
@@ -72,9 +71,9 @@ var (
 	// Grant: a live holder exists
 	ErrLeased = errors.New("group is leased by another run")
 
-	ErrLeaseLost   = errors.New("lease lost: another run took the group")
-	ErrBranchTaken = errors.New("branch or worktree is owned by another group")
-	ErrBadKey      = errors.New("repo or group id cannot name a file")
+	ErrLeaseLost     = errors.New("lease lost: another run took the group")
+	ErrWorktreeTaken = errors.New("worktree is owned by another group")
+	ErrBadKey        = errors.New("repo or group id cannot name a file")
 
 	// a lock stayed held for the whole wait
 	ErrLocked = errors.New("lease record stayed locked by another writer")

@@ -116,11 +116,10 @@ func lockFile(t *testing.T, r *FileRegistry, repo, group string) string {
 	return p
 }
 
-// req builds a grant request for a group on its own branch and worktree.
+// req builds a grant request for a group on its own worktree.
 func req(run, group string) GrantRequest {
 	return GrantRequest{
 		Repo: testRepo, Group: group, Run: run,
-		Branch:    "komodo/ep-1-" + group,
 		Worktree:  "/wt/" + group,
 		ClonePath: "/src/shop",
 	}

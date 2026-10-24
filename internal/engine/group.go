@@ -162,7 +162,6 @@ func (g *group) begin() bool {
 		Repo:      g.r.start.Repo,
 		Group:     g.spec.ID,
 		Run:       g.r.id,
-		Branch:    g.branchOf(),
 		Worktree:  g.worktreeOf(),
 		ClonePath: g.r.start.Root,
 	}
@@ -209,9 +208,6 @@ func (g *group) begin() bool {
 	g.perform(granted.Orders)
 	return true
 }
-
-// branchOf returns the group's branch name.
-func (g *group) branchOf() string { return "komodo/" + g.spec.Epic + "-" + g.spec.Label }
 
 // worktreeOf returns the group's worktree path.
 func (g *group) worktreeOf() string {

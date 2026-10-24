@@ -442,7 +442,6 @@ func (e *env) holdLease(g grp, state lease.LeaseState) {
 		Repo:     testRepo,
 		Group:    g.id,
 		Run:      "run-1",
-		Branch:   g.branch,
 		Worktree: g.wt,
 		State:    state,
 	}

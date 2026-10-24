@@ -31,7 +31,7 @@ func TestStoresSurviveARestart(t *testing.T) {
 	if root := os.Getenv("KOMODO_RESTART_WRITE"); root != "" {
 		st, ls, c := stores(t, root)
 		if _, err := ls.Grant(context.Background(), lease.GrantRequest{
-			Repo: repo, Group: group, Run: run, Branch: "komodo/ep-1-tg-1.2", Worktree: "/wt/tg-1.2", ClonePath: "/src/shop",
+			Repo: repo, Group: group, Run: run, Worktree: "/wt/tg-1.2", ClonePath: "/src/shop",
 		}); err != nil {
 			t.Fatalf("grant: %v", err)
 		}

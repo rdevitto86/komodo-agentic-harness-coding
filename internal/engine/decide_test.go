@@ -73,7 +73,7 @@ func TestHappyPathStageMoves(t *testing.T) {
 		t.Fatalf("row 1: stage %q epoch %d orders %v", r.State.Stage, r.State.Epoch, kinds(r))
 	}
 	s = r.State
-	r = apply(t, s, in(InLeaseGranted, LeaseGrant{Fence: 9, Branch: "komodo/ep-1-tg-1", Worktree: "/w"}))
+	r = apply(t, s, in(InLeaseGranted, LeaseGrant{Fence: 9, Worktree: "/w"}))
 	if r.State.Fence != 9 || !slices.Contains(kinds(r), OrderStartGroup) {
 		t.Fatalf("row 2: fence %d orders %v", r.State.Fence, kinds(r))
 	}

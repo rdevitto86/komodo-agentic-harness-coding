@@ -33,18 +33,18 @@ func TestConcurrentGrantSameGroupOneOwner(t *testing.T) {
 	}
 }
 
-func TestConcurrentGrantSameBranchOneOwner(t *testing.T) {
+func TestConcurrentGrantSameWorktreeOneOwner(t *testing.T) {
 	e := newEnv(t)
 	m := e.manager(100)
 	rs := contend(m, "g", 16, 1, func(i, _ int) (string, string) {
-		return fmt.Sprintf("g%d", i), "komodo/ep-1-shared"
+		return fmt.Sprintf("g%d", i), "/shared"
 	}, func() {})
 	if w := wins(rs); len(w) != 1 {
-		t.Fatalf("one branch must have one owner, got %d: %+v", len(w), rs)
+		t.Fatalf("one worktree must have one owner, got %d: %+v", len(w), rs)
 	}
 	for _, r := range rs {
 		if r.Err != "" && r.Err != "taken" {
-			t.Fatalf("a loser must get ErrBranchTaken: %+v", r)
+			t.Fatalf("a loser must get ErrWorktreeTaken: %+v", r)
 		}
 	}
 	left, _ := e.reg.List(bg, testRepo)
@@ -90,8 +90,8 @@ func TestGrantHelper(t *testing.T) {
 	switch mode {
 	case "same-group":
 		pick = func(int, int) (string, string) { return "g1", "komodo/ep-1-g1" }
-	case "same-branch":
-		pick = func(i, _ int) (string, string) { return fmt.Sprintf("g-%s-%d", id, i), "komodo/ep-1-shared" }
+	case "same-worktree":
+		pick = func(i, _ int) (string, string) { return fmt.Sprintf("g-%s-%d", id, i), "/shared" }
 	case "churn":
 		m.alive = func(int, time.Time) bool { return false }
 		pick = func(int, int) (string, string) { return "g1", "komodo/ep-1-g1" }
@@ -121,11 +121,11 @@ func TestGrantAcrossProcesses(t *testing.T) {
 			t.Fatalf("want one owner at fence 1: %+v", rs)
 		}
 	})
-	t.Run("one branch, two processes, one owner", func(t *testing.T) {
+	t.Run("one worktree, two processes, one owner", func(t *testing.T) {
 		root := filepath.Join(t.TempDir(), "leases")
-		rs := runChildren(t, root, "same-branch")
+		rs := runChildren(t, root, "same-worktree")
 		if w := wins(rs); len(w) != 1 {
-			t.Fatalf("one branch must have one owner, got %d: %+v", len(w), rs)
+			t.Fatalf("one worktree must have one owner, got %d: %+v", len(w), rs)
 		}
 		left, err := NewFileRegistry(root, DefaultLockTimeout).List(bg, testRepo)
 		if err != nil || len(left) != 1 {
@@ -170,8 +170,8 @@ func TestGrantAcrossProcesses(t *testing.T) {
 }
 
 // contend runs n goroutines that each call Grant k times and returns every outcome.
-// pick maps a goroutine index and call number to the group and branch it asks for.
-func contend(m *Manager, tag string, n, k int, pick func(i, j int) (group, branch string), gate func()) []grantResult {
+// pick maps a goroutine index and call number to the group and worktree it asks for.
+func contend(m *Manager, tag string, n, k int, pick func(i, j int) (group, tree string), gate func()) []grantResult {
 	var mu sync.Mutex
 	var out []grantResult
 	var wg sync.WaitGroup
@@ -181,11 +181,11 @@ func contend(m *Manager, tag string, n, k int, pick func(i, j int) (group, branc
 			defer wg.Done()
 			gate()
 			for j := 0; j < k; j++ {
-				group, branch := pick(i, j)
+				group, tree := pick(i, j)
 				run := fmt.Sprintf("%s-%d", tag, i)
 				l, err := m.Grant(bg, GrantRequest{
-					Repo: testRepo, Group: group, Run: run, Branch: branch,
-					Worktree: "/wt/" + branch, ClonePath: "/src/shop",
+					Repo: testRepo, Group: group, Run: run,
+					Worktree: "/wt/" + tree, ClonePath: "/src/shop",
 				})
 				mu.Lock()
 				out = append(out, grantResult{Run: run, Group: group, Fence: l.Fence, Err: classify(err)})
@@ -204,7 +204,7 @@ func classify(err error) string {
 		return ""
 	case errors.Is(err, ErrLeased):
 		return "held"
-	case errors.Is(err, ErrBranchTaken):
+	case errors.Is(err, ErrWorktreeTaken):
 		return "taken"
 	}
 	return err.Error()

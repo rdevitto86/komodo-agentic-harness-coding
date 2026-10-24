@@ -45,7 +45,7 @@ func TestGrantFirst(t *testing.T) {
 	if l.Fence != 1 || l.State != StateHeld || l.Rev != 1 || l.Run != "run-a" {
 		t.Fatalf("lease %+v", l)
 	}
-	if l.Branch != "komodo/ep-1-g1" || l.Worktree != "/wt/g1" || l.ClonePath != "/src/shop" {
+	if l.Worktree != "/wt/g1" || l.ClonePath != "/src/shop" {
 		t.Fatalf("names not recorded as given: %+v", l)
 	}
 	if l.PID != 100 || l.Host != "h1" || !l.ProcStart.Equal(testStart) {
@@ -68,7 +68,6 @@ func TestGrantFirst(t *testing.T) {
 func TestGrantRejectsBadRequests(t *testing.T) {
 	m := newEnv(t).manager(100)
 	for name, mod := range map[string]func(*GrantRequest){
-		"no branch":        func(r *GrantRequest) { r.Branch = "" },
 		"no worktree":      func(r *GrantRequest) { r.Worktree = "" },
 		"relative tree":    func(r *GrantRequest) { r.Worktree = "wt/g1" },
 		"no run":           func(r *GrantRequest) { r.Run = "" },
@@ -286,29 +285,24 @@ func TestIsOwner(t *testing.T) {
 	}
 }
 
-func TestBranchAndWorktreeTaken(t *testing.T) {
+func TestWorktreeTaken(t *testing.T) {
 	e := newEnv(t)
 	a, b := e.manager(100), e.manager(200)
 	if _, err := a.Grant(bg, req("run-a", "g1")); err != nil {
 		t.Fatal(err)
 	}
-	sameBranch := req("run-b", "g2")
-	sameBranch.Branch = "komodo/ep-1-g1"
-	if _, err := b.Grant(bg, sameBranch); !errors.Is(err, ErrBranchTaken) {
-		t.Fatalf("same branch: %v", err)
-	}
 	sameTree := req("run-b", "g2")
 	sameTree.Worktree = "/wt/g1"
-	if _, err := b.Grant(bg, sameTree); !errors.Is(err, ErrBranchTaken) {
+	if _, err := b.Grant(bg, sameTree); !errors.Is(err, ErrWorktreeTaken) {
 		t.Fatalf("same worktree: %v", err)
 	}
 	if _, err := e.reg.Get(bg, testRepo, "g2"); !errors.Is(err, ErrNotFound) {
 		t.Fatal("a refused grant must leave no record")
 	}
-	// A dead holder's branch is free again.
+	// A dead holder's worktree is free again.
 	e.procs.kill(100)
-	if _, err := b.Grant(bg, sameBranch); err != nil {
-		t.Fatalf("branch of a dead holder: %v", err)
+	if _, err := b.Grant(bg, sameTree); err != nil {
+		t.Fatalf("worktree of a dead holder: %v", err)
 	}
 	// So is a revoked one.
 	if err := b.Revoke(bg, testRepo, "g2", RevokeStop); err != nil {
@@ -319,9 +313,9 @@ func TestBranchAndWorktreeTaken(t *testing.T) {
 		t.Fatalf("unrelated group: %v", err)
 	}
 	reuse := req("run-c", "g4")
-	reuse.Branch = "komodo/ep-1-g1"
+	reuse.Worktree = "/wt/g1"
 	if _, err := c.Grant(bg, reuse); err != nil {
-		t.Fatalf("branch of a revoked lease: %v", err)
+		t.Fatalf("worktree of a revoked lease: %v", err)
 	}
 }
 

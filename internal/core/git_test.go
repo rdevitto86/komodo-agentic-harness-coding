@@ -187,7 +187,6 @@ func TestNoForceInAnyArgument(t *testing.T) {
 	_ = w.git.RemoveWorktree(w.ctx, w.clone, g.wt)
 	head := git(t, w.clone, "rev-parse", g.branch)
 	_ = w.git.DeleteBranch(w.ctx, w.clone, g.branch, head, "origin/main")
-	_ = w.git.DiscardBranch(w.ctx, w.clone, g.branch, head)
 	if len(w.traced) < 12 {
 		t.Fatalf("only %d command lines traced", len(w.traced))
 	}
@@ -328,8 +327,8 @@ func TestRemoveWorktree(t *testing.T) {
 	}
 }
 
-// DeleteBranch deletes only when the tip matches and the history holds it; DiscardBranch needs only the tip.
-func TestDeleteAndDiscardBranch(t *testing.T) {
+// DeleteBranch deletes only when the tip matches and the history holds it.
+func TestDeleteBranch(t *testing.T) {
 	w := newWorld(t)
 	git(t, w.clone, "branch", "komodo/x", "main")
 	tip := git(t, w.clone, "rev-parse", "komodo/x")
@@ -350,12 +349,6 @@ func TestDeleteAndDiscardBranch(t *testing.T) {
 	}
 	if err := w.git.DeleteBranch(w.ctx, w.clone, "komodo/x", tip, "main"); err != nil {
 		t.Fatal(err)
-	}
-	if err := w.git.DiscardBranch(w.ctx, w.clone, "komodo/y", ytip); err != nil {
-		t.Fatal(err)
-	}
-	if ok, _ := w.git.BranchExists(w.ctx, w.clone, "komodo/y"); ok {
-		t.Fatal("y still exists")
 	}
 }
 

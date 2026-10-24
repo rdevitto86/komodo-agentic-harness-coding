@@ -129,6 +129,19 @@ func TestRegistryList(t *testing.T) {
 	}
 }
 
+// A record written before the lease dropped its branch field still loads.
+func TestRegistryLoadsRecordWithBranch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.json")
+	old := `{"repo":"shop","group":"g1","run":"r","branch":"komodo/ep-1-g1","worktree":"/wt/g1","fence":3,"state":"held"}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := readRecord(path)
+	if err != nil || l == nil || l.Worktree != "/wt/g1" || l.Fence != 3 {
+		t.Fatalf("old record: %+v %v", l, err)
+	}
+}
+
 func TestRegistryCorruptRecord(t *testing.T) {
 	ctx := context.Background()
 	r := NewFileRegistry(filepath.Join(t.TempDir(), "leases"), DefaultLockTimeout)
@@ -300,7 +313,7 @@ func TestWriteCrash(t *testing.T) {
 // rec builds a held record for the registry tests.
 func rec(group string) Lease {
 	return Lease{
-		Repo: testRepo, Group: group, Run: "run-" + group, Branch: "komodo/ep-1-" + group, Worktree: "/wt/" + group,
+		Repo: testRepo, Group: group, Run: "run-" + group, Worktree: "/wt/" + group,
 		PID: 1, Host: "h1", Fence: 1, State: StateHeld, TakenAt: testStart, RenewedAt: testStart,
 	}
 }

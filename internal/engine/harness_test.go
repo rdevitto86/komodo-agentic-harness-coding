@@ -152,13 +152,12 @@ func (l *fakeLeases) Grant(_ context.Context, req lease.GrantRequest) (lease.Lea
 	}
 	l.fence++
 	if l.zeroFence {
-		return lease.Lease{Repo: req.Repo, Group: req.Group, Run: req.Run, Branch: req.Branch, Worktree: req.Worktree}, nil
+		return lease.Lease{Repo: req.Repo, Group: req.Group, Run: req.Run, Worktree: req.Worktree}, nil
 	}
 	return lease.Lease{
 		Repo:     req.Repo,
 		Group:    req.Group,
 		Run:      req.Run,
-		Branch:   req.Branch,
 		Worktree: req.Worktree,
 		Fence:    lease.Fence(l.fence),
 	}, nil

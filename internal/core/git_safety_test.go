@@ -62,9 +62,6 @@ func TestHooksNeverRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	tip := git(t, w.clone, "rev-parse", g.branch)
-	if err := w.git.DiscardBranch(w.ctx, w.clone, "komodo/ep-2", git(t, w.clone, "rev-parse", "komodo/ep-2")); err != nil {
-		t.Fatal(err)
-	}
 	if err := w.git.DeleteBranch(w.ctx, w.clone, g.branch, tip, "refs/heads/"+g.branch); err != nil {
 		t.Fatal(err)
 	}

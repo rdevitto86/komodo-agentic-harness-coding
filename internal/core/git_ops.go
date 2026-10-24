@@ -282,32 +282,6 @@ func (g *Git) DeleteBranch(ctx context.Context, clone, branch, expectTip, contai
 	return err
 }
 
-// DiscardBranch deletes a local komodo/ branch that still points at expectTip.
-func (g *Git) DiscardBranch(ctx context.Context, clone, branch, expectTip string) error {
-	if !ValidBranch(branch) {
-		return fmt.Errorf("discard %q: %w", branch, ErrCriticalRef)
-	}
-	if !safeRev(expectTip) {
-		return fmt.Errorf("commit %q is not usable", expectTip)
-	}
-
-	t, err := g.ofClone(clone)
-	if err != nil {
-		return err
-	}
-
-	tip, ok, err := g.branchTip(ctx, t, branch)
-	if err != nil || !ok {
-		return err
-	}
-	if tip != expectTip {
-		return fmt.Errorf("%s is at %s, expected %s: %w", branch, tip, expectTip, ErrTipMoved)
-	}
-
-	_, err = g.run(ctx, t, "", nil, "update-ref", "-d", "refs/heads/"+branch, expectTip)
-	return err
-}
-
 // Merge merges ref into the komodo/ branch checked out in dir; a conflict aborts the merge and is ErrConflict.
 func (g *Git) Merge(ctx context.Context, dir, ref, message string, noFF bool) (string, error) {
 	if !safeRev(ref) {
@@ -401,99 +375,6 @@ func (g *Git) Squash(ctx context.Context, dir, ref, message string) (string, err
 	}
 
 	return id, nil
-}
-
-// DeleteLanded deletes a local komodo/ branch at expectTip when containedIn holds it by ancestry or has a commit whose
-// change is identical to the branch's whole change since their merge base.
-func (g *Git) DeleteLanded(ctx context.Context, clone, branch, expectTip, containedIn string) error {
-	if !ValidBranch(branch) {
-		return fmt.Errorf("delete %q: %w", branch, ErrCriticalRef)
-	}
-	if !safeRev(expectTip) || !safeRev(containedIn) {
-		return fmt.Errorf("revision for %q is not usable", branch)
-	}
-
-	t, err := g.ofClone(clone)
-	if err != nil {
-		return err
-	}
-
-	tip, ok, err := g.branchTip(ctx, t, branch)
-	if err != nil || !ok {
-		return err
-	}
-	if tip != expectTip {
-		return fmt.Errorf("%s is at %s, expected %s: %w", branch, tip, expectTip, ErrTipMoved)
-	}
-
-	if _, err := g.run(ctx, t, "", nil, "merge-base", "--is-ancestor", expectTip, containedIn); err != nil {
-		if exitCode(err) != 1 {
-			return err
-		}
-
-		same, err := g.sameChange(ctx, t, expectTip, containedIn)
-		if err != nil {
-			return err
-		}
-		if !same {
-			return fmt.Errorf("no commit in %s has the change of %s: %w", containedIn, branch, ErrNotContained)
-		}
-	}
-
-	_, err = g.run(ctx, t, "", nil, "update-ref", "-d", "refs/heads/"+branch, expectTip)
-	return err
-}
-
-// sameChange reports whether a commit on into since its merge base with tip has the patch id of tip's whole change.
-func (g *Git) sameChange(ctx context.Context, t target, tip, into string) (bool, error) {
-	base, err := g.run(ctx, t, "", nil, "merge-base", tip, into)
-	if err != nil {
-		return false, err
-	}
-
-	base = strings.TrimSpace(base)
-	mine, err := g.patchIDs(ctx, t, "diff", base, tip)
-	if err != nil {
-		return false, err
-	}
-	if len(mine) == 0 {
-		return true, nil // the branch adds nothing beyond the merge base, which the epic branch holds
-	}
-
-	theirs, err := g.patchIDs(ctx, t, "log", "-p", "--no-merges", base+".."+into)
-	if err != nil {
-		return false, err
-	}
-
-	for id := range mine {
-		if _, ok := theirs[id]; ok {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
-// patchIDs pipes the patch text that the git command prints through git patch-id and returns the ids it finds.
-func (g *Git) patchIDs(ctx context.Context, t target, args ...string) (map[string]struct{}, error) {
-	text, err := g.run(ctx, t, "", nil, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	out, err := g.run(ctx, t, text, nil, "patch-id", "--stable")
-	if err != nil {
-		return nil, err
-	}
-
-	ids := map[string]struct{}{}
-	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Fields(line); len(f) > 0 {
-			ids[f[0]] = struct{}{}
-		}
-	}
-
-	return ids, nil
 }
 
 // IsAncestor reports whether commit anc is in the history of desc, or equal to it.
