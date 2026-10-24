@@ -2369,15 +2369,11 @@
     "cleanupStartEvt": {
       "additionalProperties": false,
       "properties": {
-        "branch": {
-          "type": "string"
-        },
         "tip": {
           "type": "string"
         }
       },
       "required": [
-        "branch",
         "tip"
       ],
       "type": "object"
