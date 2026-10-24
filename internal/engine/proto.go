@@ -18,7 +18,7 @@ type Request struct {
 	ID string `json:"id"`
 	// run, stop, status, abandon, replay, plan, clean, tool_list or tool_call
 	Verb string `json:"verb"`
-	// an epic label, a group label or a run id
+	// a plan id, a plan id then a group label, or a run id
 	Target string `json:"target,omitempty"`
 	// the repository root the command ran in; status covers this repository unless Flags.All is set
 	Root  string `json:"root,omitempty"`
@@ -48,7 +48,7 @@ type ToolAnswer struct {
 
 // Flags are the flags a verb may carry.
 type Flags struct {
-	All      bool      `json:"all,omitempty"`       // run --all, or status --all
+	All      bool      `json:"all,omitempty"`       // status --all
 	Approve  bool      `json:"approve,omitempty"`   // run (id) --approve
 	Deny     bool      `json:"deny,omitempty"`      // run (id) --deny
 	Override bool      `json:"override,omitempty"`  // run (id) --override

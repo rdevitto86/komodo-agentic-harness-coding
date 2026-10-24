@@ -78,7 +78,7 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 				e.fail(w, req.ID, err)
 				return
 			}
-			e.done(w, req.ID, map[string]string{"group": rc.Target, "answer": rc.Answer})
+			e.done(w, req.ID, map[string]any{"plan": rc.Target, "groups": rc.Groups, "answer": rc.Answer})
 			return
 		}
 
@@ -125,7 +125,7 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 	if ev.Run == "" {
 		ev.Run = bus.ID(newID(e.clk.Now()))
 	}
-	if rs.Source == "cli" && terminal() {
+	if terminal() {
 		e.m.Person(req.ID)
 	}
 	if err := e.await(ctx, req, *ev); err != nil {
@@ -325,12 +325,14 @@ func (e *Engine) statusData(ctx context.Context, req Request) StatusData {
 
 // verbAbandon drops a group for good.
 func (e *Engine) verbAbandon(ctx context.Context, w *connWriter, req Request) {
-	run, err := e.m.Abandon(ctx, req.Target)
+	plan, label := splitTarget(req.Target)
+
+	run, err := e.m.Abandon(ctx, plan, label)
 	if err != nil {
 		e.fail(w, req.ID, err)
 		return
 	}
-	e.done(w, req.ID, map[string]string{"group": req.Target, "run_id": run})
+	e.done(w, req.ID, map[string]string{"plan": plan, "group": label, "run_id": run})
 }
 
 // verbReplay streams the recorded events of a run or group, then the gap count; it calls no model and changes nothing.
@@ -370,15 +372,15 @@ func (e *Engine) verbReplay(ctx context.Context, w *connWriter, req Request) {
 	e.done(w, req.ID, map[string]int{"gaps": gaps})
 }
 
-// verbPlan publishes the plan event and streams the planning run's events until the Intake Handler reports an error, or the
-// run it started is accepted (run.start) or refused (run-refused).
+// verbPlan publishes the plan event and streams the planning run's events until the Intake Handler reports an error or
+// publishes plan / written. Planning starts no run.
 func (e *Engine) verbPlan(ctx context.Context, w *connWriter, req Request) {
 	if req.Event == nil || req.Event.Type != bus.TypePlan {
 		e.badFrame(w, req.ID, "plan needs a plan event")
 		return
 	}
 
-	sub, err := e.d.Bus.Subscribe("plan-"+req.ID, bus.TypeRunStart, bus.TypeRunStatus, bus.TypeError, bus.TypePlan)
+	sub, err := e.d.Bus.Subscribe("plan-"+req.ID, bus.TypeError, bus.TypePlan)
 	if err != nil {
 		e.fail(w, req.ID, err)
 		return
@@ -390,36 +392,19 @@ func (e *Engine) verbPlan(ctx context.Context, w *connWriter, req Request) {
 		return
 	}
 
-	started := bus.ID("") // the run the Intake Handler started, once it has
-
 	for {
 		select {
 		case ev, ok := <-sub.Events:
 			if !ok {
 				return
 			}
-
-			rs, isStart := ev.Data.(*bus.RunStart)
-			intake := isStart && rs.Source == "intake"
-			if started != "" {
-				if ev.Run == started && planRunOutcome(ev) {
-					if ev.Type == bus.TypeError {
-						_ = w.send(Reply{ID: req.ID, Status: StatusEvent, Event: &ev})
-					}
-					e.done(w, req.ID, nil)
-					return
-				}
-				continue
-			}
-			if ev.Type == bus.TypeRunStatus || (isStart && !intake) || (ev.Run != req.Event.Run && !intake) {
+			if ev.Run != req.Event.Run {
 				continue
 			}
 			if err := w.send(Reply{ID: req.ID, Status: StatusEvent, Event: &ev}); err != nil {
 				return
 			}
-			if intake {
-				started = ev.Run
-			} else if ev.Type == bus.TypeError {
+			if ev.Type == bus.TypeError || ev.Type == bus.TypePlan && ev.Subtype == "written" {
 				e.done(w, req.ID, nil)
 				return
 			}
@@ -427,12 +412,6 @@ func (e *Engine) verbPlan(ctx context.Context, w *connWriter, req Request) {
 			return
 		}
 	}
-}
-
-// planRunOutcome reports whether the event settles a started run: its first run.start or its run-refused.
-func planRunOutcome(ev Event) bool {
-	return ev.Type == bus.TypeRunStatus && ev.Subtype == "run.start" ||
-		ev.Type == bus.TypeError && ev.Subtype == "run-refused"
 }
 
 // verbClean removes what belongs to no open run, or lists it with DryRun.

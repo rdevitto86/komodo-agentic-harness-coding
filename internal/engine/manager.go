@@ -361,18 +361,19 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 	fail := func(format string, a ...any) error {
 		return m.refuse(id, rs.Target, req, fmt.Sprintf(format, a...))
 	}
-	if len(rs.Groups) == 0 {
-		return fail("the run names no groups")
-	}
-
 	l, err := LoadLimits(m.d.Config)
 	if err != nil {
 		return fail("read the limits: %v", err)
 	}
 
-	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Groups)
+	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Target, rs.Groups)
 	if err != nil {
-		return fail("read the task lists: %v", err)
+		return fail("read the plan %s: %v", rs.Target, err)
+	}
+	if len(specs) == 0 && len(rs.Groups) == 0 {
+		why := "no task groups in plan " + rs.Target
+		m.publishRefused(id, rs.Target, req, why)
+		return &codeError{CodeUnknownTarget, why}
 	}
 
 	byLabel := map[string]GroupSpec{}
@@ -382,7 +383,7 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 
 	for _, label := range rs.Groups {
 		if _, ok := byLabel[label]; !ok {
-			why := fmt.Sprintf("no task group %s in the plan", label)
+			why := fmt.Sprintf("no task group %s in plan %s", label, rs.Target)
 			m.publishRefused(id, rs.Target, req, why)
 			return &codeError{CodeUnknownTarget, why}
 		}
@@ -543,9 +544,9 @@ func (m *Manager) joinRun(ctx context.Context, r *run, rs *bus.RunStart) error {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
 
-	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Groups)
+	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Target, rs.Groups)
 	if err != nil {
-		return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("read the task lists: %v", err))
+		return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("read the plan %s: %v", rs.Target, err))
 	}
 
 	for _, s := range specs {
@@ -1047,14 +1048,15 @@ func (m *Manager) report(g *group, err error) {
 	}
 }
 
-// byTarget returns the live groups a label, group id or epic names.
-func (m *Manager) byTarget(target string) []*group {
+// byPlan returns the live groups of a plan, in label order; with labels it returns only the groups those labels name.
+// A label is looked up inside its plan, so two plans that both hold tg-1 never meet.
+func (m *Manager) byPlan(plan string, labels ...string) []*group {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var out []*group
 	for _, g := range m.groups {
-		if g.spec.ID == target || g.spec.Label == target || g.spec.Epic == target {
+		if g.r.start.Target == plan && (len(labels) == 0 || slices.Contains(labels, g.spec.Label)) {
 			out = append(out, g)
 		}
 	}

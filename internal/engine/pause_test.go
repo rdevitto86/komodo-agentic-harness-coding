@@ -148,7 +148,7 @@ func TestSpendCeilingHasNoTimerAndTheLeaseIsRenewedWhilePaused(t *testing.T) {
 		t.Fatalf("a spending pause ended on its own: %q", got)
 	}
 	ch := r.m.Expect("req-go")
-	rc := &bus.RunContinue{Target: "tg-1", Request: "req-go"}
+	rc := &bus.RunContinue{Target: "ep-1", Groups: []string{"tg-1"}, Request: "req-go"}
 	if err := r.bus.Publish(Event{Type: bus.TypeRunContinue, Run: "run-1", Data: rc}); err != nil {
 		t.Fatal(err)
 	}
@@ -197,10 +197,10 @@ func TestGroupTokenCapPausesWithNoTimerApproveRaisesTheCapDenyIsRefused(t *testi
 		t.Fatalf("pause %+v", st.Pause)
 	}
 	var ce *codeError
-	if err := r.m.Answer("tg-1", false, "d1"); !errors.As(err, &ce) || ce.code != CodeNotBlocked {
+	if err := r.m.Answer("ep-1", []string{"tg-1"}, false, "d1"); !errors.As(err, &ce) || ce.code != CodeNotBlocked {
 		t.Fatalf("deny gave %v", err)
 	}
-	if err := r.m.Answer("tg-1", true, "a1"); err != nil {
+	if err := r.m.Answer("ep-1", []string{"tg-1"}, true, "a1"); err != nil {
 		t.Fatal(err)
 	}
 	r.waitStage("tg-1", StageBuild)
@@ -367,7 +367,7 @@ func TestAnswerApproveOnNeedsScopeContinuesWithTheApprovedPaths(t *testing.T) {
 	if len(rows) != 1 || len(blocked) != 1 || blocked[0].Reason != "needs_scope" {
 		t.Fatalf("snapshot %+v %+v", rows, blocked)
 	}
-	if err := r.m.Answer("tg-1", true, "ans1"); err != nil {
+	if err := r.m.Answer("ep-1", []string{"tg-1"}, true, "ans1"); err != nil {
 		t.Fatal(err)
 	}
 	st = r.waitHeld("tg-1", StageBuild)
@@ -383,7 +383,7 @@ func TestAnswerApproveOnNeedsScopeContinuesWithTheApprovedPaths(t *testing.T) {
 		return false
 	})
 	var ce *codeError
-	if err := r.m.Answer("tg-1", true, "ans2"); !errors.As(err, &ce) || ce.code != CodeNotBlocked {
+	if err := r.m.Answer("ep-1", []string{"tg-1"}, true, "ans2"); !errors.As(err, &ce) || ce.code != CodeNotBlocked {
 		t.Fatalf("answer on a working group gave %v", err)
 	}
 }
@@ -395,7 +395,7 @@ func TestAbandonEndsTheGroupDiscardsItAndBlocksTheDependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.waitStage("tg-1", StageBuild)
-	if _, err := r.m.Abandon(context.Background(), "tg-1"); err != nil {
+	if _, err := r.m.Abandon(context.Background(), "ep-1", "tg-1"); err != nil {
 		t.Fatal(err)
 	}
 	st := r.waitHeld("tg-1", StageDone)

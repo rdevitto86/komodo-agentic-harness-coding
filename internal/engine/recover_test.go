@@ -207,7 +207,7 @@ func TestRefusedSaveOfARunContinueRefusesIt(t *testing.T) {
 	wantRefusedContinue(t, r, r.startRun("run-2", "tg-1"), 1)
 
 	ch := r.m.Expect("req-cont")
-	rc := &bus.RunContinue{Target: "tg-1", Request: "req-cont"}
+	rc := &bus.RunContinue{Target: "ep-1", Groups: []string{"tg-1"}, Request: "req-cont"}
 	if err := r.bus.Publish(Event{Type: bus.TypeRunContinue, Run: "run-2", Data: rc}); err != nil {
 		t.Fatal(err)
 	}

@@ -93,7 +93,7 @@ func TestRunLosingTheLeaseNeverReplacesTheLiveGroup(t *testing.T) {
 	}
 	t.Logf("running first: %v", first)
 	for _, l := range first {
-		if _, err := r.m.Abandon(context.Background(), l); err != nil {
+		if _, err := r.m.Abandon(context.Background(), "ep-1", l); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -138,7 +138,7 @@ func TestAbandonAndLandingPlanReadsDoNotRace(t *testing.T) {
 			}
 		}
 	}()
-	if _, err := r.m.Abandon(context.Background(), "tg-1"); err != nil {
+	if _, err := r.m.Abandon(context.Background(), "ep-1", "tg-1"); err != nil {
 		t.Fatal(err)
 	}
 	close(stop)

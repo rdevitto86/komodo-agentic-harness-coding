@@ -69,14 +69,30 @@ func (m *Manager) NudgeGroups(ctx context.Context, o resource.NudgeOrder) error 
 	return nil
 }
 
-// Answer answers a blocked or token-paused group for `run (id) --approve` or `--deny`.
-func (m *Manager) Answer(target string, approve bool, request string) error {
-	gs := m.byTarget(target)
+// Answer answers the blocked or token-paused groups of a plan for `run (id) --approve` or `--deny`: every blocked group
+// when labels is empty, otherwise the groups those labels name.
+func (m *Manager) Answer(plan string, labels []string, approve bool, request string) error {
+	gs := m.byPlan(plan, labels...)
 	if len(gs) == 0 {
-		return &codeError{CodeUnknownTarget, "no live group named " + target}
+		return &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, labels)}
 	}
 
-	g := gs[0]
+	var answered int
+
+	for _, g := range gs {
+		if m.answerGroup(g, approve, request) {
+			answered++
+		}
+	}
+	if answered == 0 {
+		return &codeError{CodeNotBlocked, groupsNamedIn(plan, labels) + " is not waiting for an answer"}
+	}
+
+	return nil
+}
+
+// answerGroup sends the answer to one group and reports whether the group was waiting for it.
+func (m *Manager) answerGroup(g *group, approve bool, request string) bool {
 	g.mu.Lock()
 	st, ask := g.snap, g.ask
 	g.mu.Unlock()
@@ -99,20 +115,24 @@ func (m *Manager) Answer(target string, approve bool, request string) error {
 		}
 		g.enqueue(Input{Kind: InContinue, Request: request, Data: mustJSON(ContinueData{Answer: answer})})
 	default:
-		return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an answer"}
+		return false
 	}
 
-	return nil
+	return true
 }
 
 // Override gives a group whose tries ran out one final try of the given minutes, for `run (id) --override`; it returns
 // once the group has applied or refused it.
-func (m *Manager) Override(ctx context.Context, target, request string, minutes int) error {
-	gs := m.byTarget(target)
+func (m *Manager) Override(ctx context.Context, plan, label, request string, minutes int) error {
+	if label == "" {
+		return &codeError{CodeRunRefused, "an override names one group: give its label after the plan id"}
+	}
+
+	gs := m.byPlan(plan, label)
 	loaded := len(gs) > 0
 	if !loaded {
 		var err error
-		if gs, err = m.wakeParked(ctx, target); err != nil {
+		if gs, err = m.wakeParked(ctx, plan, label); err != nil {
 			return err
 		}
 	}
@@ -153,11 +173,15 @@ func overridable(g *group) error {
 	return &codeError{CodeNotBlocked, g.spec.Label + " is not waiting for an override"}
 }
 
-// Abandon drops a group for good: it is stopped, Done with outcome abandoned, discarded, and each dependent blocks.
-func (m *Manager) Abandon(ctx context.Context, target string) (string, error) {
-	gs := m.byTarget(target)
+// Abandon drops the group a plan id and label name for good: it is stopped, Done with outcome abandoned, discarded, and
+// each dependent blocks.
+func (m *Manager) Abandon(ctx context.Context, plan, label string) (string, error) {
+	var gs []*group
+	if label != "" {
+		gs = m.byPlan(plan, label)
+	}
 	if len(gs) == 0 {
-		return "", &codeError{CodeUnknownTarget, "no live group named " + target}
+		return "", &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, []string{label})}
 	}
 
 	g := gs[0]
@@ -269,24 +293,26 @@ func (m *Manager) otherLinkUsable(g *group, limited string, now time.Time) bool 
 // continueTarget handles a run-continue event: an answer, or a plain continue of every held group the target names.
 func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run string) error {
 	if rc.Answer == "override" {
-		return m.Override(ctx, rc.Target, string(rc.Request), rc.Minutes)
+		return m.Override(ctx, rc.Target, firstOf(rc.Groups), string(rc.Request), rc.Minutes)
 	}
 	if rc.Answer != "" {
-		return m.Answer(rc.Target, rc.Answer == "approve", string(rc.Request))
+		return m.Answer(rc.Target, rc.Groups, rc.Answer == "approve", string(rc.Request))
 	}
 
-	gs := m.byTarget(rc.Target)
+	gs := m.byPlan(rc.Target, rc.Groups...)
 	if len(gs) == 0 {
 		m.mu.Lock()
 		if r := m.runs[rc.Target]; r != nil {
 			for _, g := range r.groups {
-				gs = append(gs, g)
+				if len(rc.Groups) == 0 || slices.Contains(rc.Groups, g.spec.Label) {
+					gs = append(gs, g)
+				}
 			}
 		}
 		m.mu.Unlock()
 	}
 	if len(gs) == 0 {
-		return &codeError{CodeUnknownTarget, "no live group or run named " + rc.Target}
+		return &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(rc.Target, rc.Groups) + " or run named " + rc.Target}
 	}
 
 	var pending []pendingContinue
@@ -309,6 +335,24 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 	}
 
 	return m.awaitContinues(ctx, pending)
+}
+
+// groupsNamedIn words the groups a plan id and labels name, for a refusal.
+func groupsNamedIn(plan string, labels []string) string {
+	if len(labels) == 0 || labels[0] == "" {
+		return "of plan " + plan
+	}
+
+	return strings.Join(labels, ", ") + " of plan " + plan
+}
+
+// firstOf returns the first element of a list, or an empty string.
+func firstOf(l []string) string {
+	if len(l) == 0 {
+		return ""
+	}
+
+	return l[0]
 }
 
 // undoneDep returns the label of a dependency of the group that is not Done.

@@ -2,14 +2,13 @@ package bus
 
 import "time"
 
-// RunStart is the data of run-start: a request to the Runtime Manager to run a target.
+// RunStart is the data of run-start: a request to the Runtime Manager to run a plan or some of its groups.
 type RunStart struct {
-	// the label the command named, such as ep-1 or tg-1.2; "all" for run --all; the epic label when the Intake Handler
-	// starts the run
+	// the plan id the command named, such as plan-7f3a9c
 	Target string `json:"target"`
-	// the group labels to run, such as tg-1.2
+	// the group labels to run, such as tg-2; empty means every group of the plan that is not Done
 	Groups []string `json:"groups"`
-	// "cli" or "intake": who published the request
+	// always "cli"
 	Source string `json:"source"`
 	// RFC 3339 start time of a scheduled run; absent otherwise
 	Schedule time.Time `json:"schedule,omitzero"`
@@ -28,7 +27,7 @@ func (RunStart) EventKey() Key { return Key{TypeRunStart, ""} }
 
 // RunStop is the data of run-stop: a request to stop a run, or to remove a queued scheduled run.
 type RunStop struct {
-	// an epic or group label, or a run id when one attempt is meant; a label means the latest attempt
+	// a plan id, a plan id then a group label, or a run id when one attempt is meant; a label means the latest attempt
 	Target string `json:"target"`
 	// the control socket Request.ID of the command
 	Request ID `json:"request,omitempty"`
@@ -39,10 +38,11 @@ func (RunStop) EventKey() Key { return Key{TypeRunStop, ""} }
 
 // RunContinue is the data of run-continue: a request for a blocked or paused group to go on.
 type RunContinue struct {
-	Target  string `json:"target"`            // an epic or group label
-	Answer  string `json:"answer,omitempty"`  // "approve", "deny" or "override"; empty for a plain continue
-	Minutes int    `json:"minutes,omitempty"` // override only: the final try's working time in minutes
-	Request ID     `json:"request,omitempty"` // the control socket Request.ID of the command
+	Target  string   `json:"target"`            // a plan id or a run id
+	Groups  []string `json:"groups"`            // empty: every blocked group of the plan; one label: that group only
+	Answer  string   `json:"answer,omitempty"`  // "approve", "deny" or "override"; empty for a plain continue
+	Minutes int      `json:"minutes,omitempty"` // override only: the final try's working time in minutes
+	Request ID       `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 
 // EventKey binds RunContinue to run-continue.

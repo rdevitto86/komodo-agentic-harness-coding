@@ -49,8 +49,8 @@ func (c ctxAdapter) GetContext(context.Context, string, string) (json.RawMessage
 // planSource reads the groups of a run from the task lists under the repository root.
 type planSource struct{}
 
-// Specs returns the group specs for the labels, in task-list order.
-func (p planSource) Specs(_ context.Context, root string, labels []string) ([]engine.GroupSpec, error) {
+// Specs returns the group specs of the plan for the labels, or every group of the plan when none, in task-list order.
+func (p planSource) Specs(_ context.Context, root, plan string, labels []string) ([]engine.GroupSpec, error) {
 	epics, _, err := intake.Load(root)
 	if err != nil {
 		return nil, fmt.Errorf("read the task lists: %w", err)
@@ -68,9 +68,14 @@ func (p planSource) Specs(_ context.Context, root string, labels []string) ([]en
 	order := 0
 
 	for _, e := range epics {
+		if plan != "" && plan != "ep-"+strconv.Itoa(e.Number) {
+			order += len(e.Groups)
+			continue
+		}
+
 		for _, g := range e.Groups {
 			order++
-			if !slices.Contains(labels, g.Name) {
+			if len(labels) > 0 && !slices.Contains(labels, g.Name) {
 				continue
 			}
 

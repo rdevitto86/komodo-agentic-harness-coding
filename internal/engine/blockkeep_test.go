@@ -72,7 +72,7 @@ func blockedScopeKeepsItsTaskManager(t *testing.T, endFirst bool) {
 		t.Fatal(err)
 	}
 	r.waitHeld("tg-1", StageBlocked)
-	if err := r.m.Answer("tg-1", true, "ans1"); err != nil {
+	if err := r.m.Answer("ep-1", []string{"tg-1"}, true, "ans1"); err != nil {
 		t.Fatal(err)
 	}
 	select {

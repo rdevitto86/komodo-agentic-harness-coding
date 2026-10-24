@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -13,8 +11,8 @@ import (
 // intakeEvents registers the plan event types once for the package.
 var intakeEvents sync.Once
 
-// fakeIntake answers the next plan event with an intake run-start for the labels, as the Intake Handler does on success.
-func (x *eng) fakeIntake(runID string, labels ...string) {
+// fakeIntake answers the next plan event with the events given, all on the plan request's run.
+func (x *eng) fakeIntake(events ...Event) {
 	x.t.Helper()
 	intakeEvents.Do(intake.RegisterEvents)
 	sub, err := x.bus.Subscribe("fake-intake", bus.TypePlan)
@@ -27,10 +25,10 @@ func (x *eng) fakeIntake(runID string, labels ...string) {
 			if _, ok := ev.Data.(*intake.PlanRequest); !ok {
 				continue
 			}
-			_ = x.bus.Publish(Event{Type: bus.TypeRunStart, Run: bus.ID(runID), Data: &bus.RunStart{
-				Target: "ep-1", Groups: labels, Source: "intake", Repo: "github.com/acme/shop",
-				Root: x.root, CommonDir: filepath.Join(x.root, ".git"),
-			}})
+			for _, out := range events {
+				out.Run = ev.Run
+				_ = x.bus.Publish(out)
+			}
 			return
 		}
 	}()
@@ -49,44 +47,37 @@ func (x *eng) planReq(id, planRun string) Request {
 	}
 }
 
-func TestPlanStreamsTheRefusalOfTheRunItStarted(t *testing.T) {
-	x := newEng(t, [][]string{{"tg-1", "tg-2"}, {"tg-2", "tg-1"}})
+func TestPlanEndsWithTheErrorOfThePlanningRun(t *testing.T) {
+	x := newEng(t, [][]string{{"tg-1"}})
 	x.serve()
-	x.fakeIntake("run-p", "tg-1", "tg-2")
+	x.fakeIntake(Event{Type: bus.TypeError, Subtype: "plan-blocked", Data: &intake.PlanBlocked{}})
 
 	reps := x.ask(x.planReq("p1", "plan-1"))
 
-	var start, refused *Event
+	var blocked bool
 	for _, rp := range reps {
-		switch {
-		case rp.Event == nil:
-		case rp.Event.Type == bus.TypeRunStart:
-			start = rp.Event
-		case rp.Event.Subtype == "run-refused":
-			refused = rp.Event
-		}
+		blocked = blocked || rp.Event != nil && rp.Event.Subtype == "plan-blocked"
 	}
-	if start == nil || refused == nil || refused.Run != "run-p" {
+	if last := reps[len(reps)-1]; last.Status != StatusOK || !last.Final || !blocked {
 		t.Fatalf("replies %+v", reps)
-	}
-	if rr, ok := refused.Data.(*RunRefused); !ok || !strings.Contains(rr.Why, "dependency cycle") {
-		t.Fatalf("refusal %+v", refused.Data)
 	}
 }
 
-func TestPlanEndsWhenTheRunItStartedIsAccepted(t *testing.T) {
-	x := newEng(t, [][]string{{"tg-1"}}, onlyIdle)
+func TestPlanStartsNoRunAndIgnoresAnotherRunsEvents(t *testing.T) {
+	x := newEng(t, [][]string{{"tg-1"}})
 	x.serve()
-	x.fakeIntake("run-p", "tg-1")
+	other := Event{Type: bus.TypeError, Subtype: "plan-blocked", Run: "other-run", Data: &intake.PlanBlocked{}}
+	_ = x.bus.Publish(other)
+	x.fakeIntake(Event{Type: bus.TypeError, Subtype: "plan-timeout", Data: &intake.PlanTimeout{}})
 
 	reps := x.ask(x.planReq("p1", "plan-1"))
 
-	if last := reps[len(reps)-1]; last.Status != StatusOK || !last.Final {
-		t.Fatalf("last reply %+v", last)
-	}
 	for _, rp := range reps {
-		if rp.Event != nil && rp.Event.Subtype == "run-refused" {
-			t.Fatalf("refused: %+v", rp.Event)
+		if rp.Event != nil && (rp.Event.Type == bus.TypeRunStart || rp.Event.Run == "other-run") {
+			t.Fatalf("stray event %+v", rp.Event)
 		}
+	}
+	if last := reps[len(reps)-1]; last.Status != StatusOK || x.m.Live() != 0 {
+		t.Fatalf("last reply %+v with %d live runs", last, x.m.Live())
 	}
 }

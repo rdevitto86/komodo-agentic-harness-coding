@@ -11,46 +11,55 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
-// replayTarget resolves what replay names: a live group's label, a group label to the run that last held the group, or a
-// run id.
+// replayTarget resolves what replay names: a live group of a plan, a group of a plan to the run that last held it, a plan
+// id alone, or a run id. A group label is looked up inside its plan.
 func (e *Engine) replayTarget(ctx context.Context, req Request) (run, group bus.ID, err error) {
-	if gs := e.m.byTarget(req.Target); len(gs) > 0 {
+	plan, label := splitTarget(req.Target)
+	if label == "" {
+		if live := e.m.RunOf(plan); live != "" {
+			return bus.ID(live), "", nil
+		}
+
+		return bus.ID(req.Target), "", nil
+	}
+
+	if gs := e.m.byPlan(plan, label); len(gs) > 0 {
 		return bus.ID(gs[0].r.id), bus.ID(gs[0].spec.ID), nil
 	}
 
-	run, group, ok, err := e.savedGroupRun(ctx, req.Root, req.Target)
-	if err != nil || ok {
-		return run, group, err
+	run, group, err = e.savedGroupRun(ctx, req, plan, label)
+	if err != nil {
+		return "", "", err
 	}
 
-	return bus.ID(req.Target), "", nil
+	return run, group, nil
 }
 
-// savedGroupRun reads the saved record of the group the label names; ok is false when the label names no group of the plan.
-func (e *Engine) savedGroupRun(ctx context.Context, root, label string) (run, group bus.ID, ok bool, err error) {
-	if root == "" || e.d.Plans == nil || e.d.States == nil {
-		return "", "", false, nil
+// savedGroupRun reads the saved record of the group a plan id and label name; the plan must hold the label.
+func (e *Engine) savedGroupRun(ctx context.Context, req Request, plan, label string) (run, group bus.ID, err error) {
+	if req.Root == "" || e.d.Plans == nil || e.d.States == nil {
+		return "", "", &codeError{CodeUnknownTarget, "no recorded run of " + label + " in plan " + plan}
 	}
 
-	specs, err := e.d.Plans.Specs(ctx, root, []string{label})
+	specs, err := e.d.Plans.Specs(ctx, req.Root, plan, []string{label})
 	if err != nil || len(specs) != 1 {
-		return "", "", false, nil
+		return "", "", &codeError{CodeUnknownTarget, "no group " + label + " in plan " + plan}
 	}
 
-	store, err := e.d.States(commonDirOf(root))
+	store, err := e.d.States(commonDirOf(req.Root))
 	if err != nil {
-		return "", "", false, err
+		return "", "", err
 	}
 
 	rec, err := store.Load(ctx, specs[0].ID)
 	if errors.Is(err, state.ErrNotFound) {
-		return "", "", false, &codeError{CodeUnknownTarget, "no recorded run of " + label}
+		return "", "", &codeError{CodeUnknownTarget, "no recorded run of " + label + " in plan " + plan}
 	}
 	if err != nil {
-		return "", "", false, err
+		return "", "", err
 	}
 
-	return bus.ID(rec.State.Run), bus.ID(specs[0].ID), true, nil
+	return bus.ID(rec.State.Run), bus.ID(specs[0].ID), nil
 }
 
 // commonDirOf returns the git common directory of the checkout at root; a worktree's .git file names its own git directory.

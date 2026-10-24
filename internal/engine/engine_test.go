@@ -499,11 +499,11 @@ func TestApproveOnAGroupThatIsNotBlockedIsRefusedNotBlocked(t *testing.T) {
 	x.serve()
 	x.ask(x.runReq("q1", "run-1", "tg-1"))
 	x.waitStage("tg-1", StageBuild)
-	req := Request{ID: "a1", Verb: VerbRun, Target: "tg-1", Flags: Flags{Approve: true},
+	req := Request{ID: "a1", Verb: VerbRun, Target: "ep-1 tg-1", Flags: Flags{Approve: true},
 		Event: &Event{
 			Type: bus.TypeRunContinue,
 			Time: t0,
-			Data: &bus.RunContinue{Target: "tg-1", Answer: "approve", Request: "a1"},
+			Data: &bus.RunContinue{Target: "ep-1", Groups: []string{"tg-1"}, Answer: "approve", Request: "a1"},
 		}}
 	reps := x.ask(req)
 	last := reps[len(reps)-1]
@@ -514,7 +514,7 @@ func TestApproveOnAGroupThatIsNotBlockedIsRefusedNotBlocked(t *testing.T) {
 		Event: &Event{
 			Type: bus.TypeRunContinue,
 			Time: t0,
-			Data: &bus.RunContinue{Target: "nope", Answer: "deny", Request: "a2"},
+			Data: &bus.RunContinue{Target: "nope", Groups: []string{"tg-9"}, Answer: "deny", Request: "a2"},
 		}})
 	if last := reps[len(reps)-1]; last.Code != CodeUnknownTarget {
 		t.Fatalf("reply %+v", last)
@@ -530,7 +530,7 @@ func TestRefusedRunGivesRunRefusedAndAbandonGivesTheRunId(t *testing.T) {
 	}
 	x.ask(x.runReq("q2", "run-2", "tg-3"))
 	x.waitStage("tg-3", StageBuild)
-	reps = x.ask(Request{ID: "ab", Verb: VerbAbandon, Target: "tg-3"})
+	reps = x.ask(Request{ID: "ab", Verb: VerbAbandon, Target: "ep-1 tg-3"})
 	var d struct {
 		RunID string `json:"run_id"`
 	}

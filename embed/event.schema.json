@@ -1441,6 +1441,15 @@
         "answer": {
           "type": "string"
         },
+        "groups": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "minutes": {
           "type": "integer"
         },
@@ -1452,7 +1461,8 @@
         }
       },
       "required": [
-        "target"
+        "target",
+        "groups"
       ],
       "type": "object"
     },

@@ -67,10 +67,11 @@ type ToolHub interface {
 	Call(ctx context.Context, session, name string, args json.RawMessage) (string, bool)
 }
 
-// PlanSource is the Intake Handler's task lists as the Runtime Manager reads them.
+// PlanSource is the Intake Handler's plans as the Runtime Manager reads them.
 type PlanSource interface {
-	// root is the repository the run names
-	Specs(ctx context.Context, root string, labels []string) ([]GroupSpec, error)
+	// Specs returns the specs of the plan's groups the labels name, read from the plan's blueprint; empty labels name every
+	// group. root is the repository root the run names and plan the plan id.
+	Specs(ctx context.Context, root, plan string, labels []string) ([]GroupSpec, error)
 }
 
 // EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's branch.

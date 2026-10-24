@@ -72,9 +72,9 @@ func TestThePlatformCheckAnswersForAPeerOnAUnixSocket(t *testing.T) {
 
 // overrideReq builds the request run (id) --override sends.
 func overrideReq(id string) Request {
-	data := &bus.RunContinue{Target: "tg-1", Answer: "override", Minutes: 60, Request: bus.ID(id)}
+	data := &bus.RunContinue{Target: "ep-1", Groups: []string{"tg-1"}, Answer: "override", Minutes: 60, Request: bus.ID(id)}
 
-	return Request{ID: id, Verb: VerbRun, Target: "tg-1", Flags: Flags{Override: true},
+	return Request{ID: id, Verb: VerbRun, Target: "ep-1 tg-1", Flags: Flags{Override: true},
 		Event: &Event{Type: bus.TypeRunContinue, Time: t0, Data: data}}
 }
 

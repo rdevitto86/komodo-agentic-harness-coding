@@ -255,21 +255,33 @@ func (c *fakeContexts) GetContext(_ context.Context, _, group string) (json.RawM
 	return json.RawMessage(`{}`), nil
 }
 
-// fakePlans serves specs by label and records the labels asked for.
+// fakePlans serves specs by plan id and label and records the labels asked for; a plan not in plans takes specs.
 type fakePlans struct {
 	mu    sync.Mutex
 	specs map[string]GroupSpec
+	plans map[string]map[string]GroupSpec
 	asked [][]string
 }
 
-// Specs returns the specs of the labels.
-func (p *fakePlans) Specs(_ context.Context, _ string, labels []string) ([]GroupSpec, error) {
+// Specs returns the specs of the plan's labels, or every group of the plan in order when labels is empty.
+func (p *fakePlans) Specs(_ context.Context, _, plan string, labels []string) ([]GroupSpec, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.asked = append(p.asked, slices.Clone(labels))
+	specs := p.specs
+	if own, ok := p.plans[plan]; ok {
+		specs = own
+	}
 	var out []GroupSpec
+	if len(labels) == 0 {
+		for _, s := range specs {
+			out = append(out, s)
+		}
+		slices.SortFunc(out, func(a, b GroupSpec) int { return a.Order - b.Order })
+		return out, nil
+	}
 	for _, l := range labels {
-		s, ok := p.specs[l]
+		s, ok := specs[l]
 		if !ok {
 			return nil, fmt.Errorf("no group %s", l)
 		}

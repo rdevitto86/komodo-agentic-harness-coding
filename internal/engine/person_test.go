@@ -11,7 +11,7 @@ import (
 
 // denyReq builds the request run (id) --deny sends for a group.
 func denyReq(id, target string) Request {
-	data := &bus.RunContinue{Target: target, Answer: "deny", Request: bus.ID(id)}
+	data := &bus.RunContinue{Target: "ep-1", Groups: []string{target}, Answer: "deny", Request: bus.ID(id)}
 
 	return Request{ID: id, Verb: VerbRun, Target: target, Flags: Flags{Deny: true},
 		Event: &Event{Type: bus.TypeRunContinue, Time: t0, Data: data}}

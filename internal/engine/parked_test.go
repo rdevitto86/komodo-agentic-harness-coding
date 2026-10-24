@@ -148,8 +148,10 @@ func TestTwoParkedGroupsOfOneRunCanEachBeOverriddenAfterARestart(t *testing.T) {
 
 	for _, label := range []string{"tg-1", "tg-2"} {
 		req := overrideReq("o-" + label)
-		req.Target = label
-		req.Event.Data = &bus.RunContinue{Target: label, Answer: "override", Minutes: 60, Request: bus.ID(req.ID)}
+		req.Target = "ep-1 " + label
+		req.Event.Data = &bus.RunContinue{
+			Target: "ep-1", Groups: []string{label}, Answer: "override", Minutes: 60, Request: bus.ID(req.ID),
+		}
 
 		reps := x.ask(req)
 		if last := reps[len(reps)-1]; last.Status != StatusOK {
@@ -168,7 +170,7 @@ func TestTwoOverridesAtOnceOnOneParkedGroupAcceptOneAndRefuseTheOtherAsUsed(t *t
 
 	for i := range 2 {
 		go func() {
-			errs <- x.e.m.Override(context.Background(), "tg-1", "ov-"+string(rune('a'+i)), 30)
+			errs <- x.e.m.Override(context.Background(), "ep-1", "tg-1", "ov-"+string(rune('a'+i)), 30)
 		}()
 	}
 

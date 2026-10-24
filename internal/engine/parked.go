@@ -163,24 +163,23 @@ func (m *Manager) stopParkedLocked(group string) {
 	delete(m.parkedBy, group)
 }
 
-// wakeParked loads the parked group a label or id names, by starting a run for it that does not ask it to continue, and
-// returns the group; it reports unknown_target when no parked group matches.
-func (m *Manager) wakeParked(ctx context.Context, target string) ([]*group, error) {
+// wakeParked loads the parked group a plan id and label name, by starting a run for it that does not ask it to continue,
+// and returns the group; it reports unknown_target when no parked group matches.
+func (m *Manager) wakeParked(ctx context.Context, plan, label string) ([]*group, error) {
 	m.wakeMu.Lock()
 	defer m.wakeMu.Unlock()
 
-	if gs := m.byTarget(target); len(gs) > 0 {
+	if gs := m.byPlan(plan, label); len(gs) > 0 {
 		return gs, nil
 	}
 
-	row, ok := m.findParked(ctx, target)
+	row, ok := m.findParked(ctx, plan, label)
 	if !ok {
-		return nil, &codeError{CodeUnknownTarget, "no live group named " + target}
+		return nil, &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, []string{label})}
 	}
 
-	label := cmp.Or(row.p.Label, target)
 	rs := &bus.RunStart{
-		Target: label, Groups: []string{label}, Source: "cli",
+		Target: plan, Groups: []string{label}, Source: "cli",
 		Repo: row.p.Repo, Root: row.p.Root, CommonDir: row.p.CommonDir,
 	}
 	e := bus.Event{Type: bus.TypeRunStart, Run: bus.ID(cmp.Or(row.st.Run, "run-"+row.p.Group)), Data: rs}
@@ -188,34 +187,29 @@ func (m *Manager) wakeParked(ctx context.Context, target string) ([]*group, erro
 		return nil, err
 	}
 
-	gs := m.byTarget(label)
+	gs := m.byPlan(plan, label)
 	if len(gs) == 0 {
-		return nil, &codeError{CodeUnknownTarget, "no live group named " + target}
+		return nil, &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, []string{label})}
 	}
 
 	return gs, nil
 }
 
-// findParked returns the parked group whose id or label is the target; a target the plan maps to a parked group's id
-// counts as its label.
-func (m *Manager) findParked(ctx context.Context, target string) (parkedRow, bool) {
+// findParked returns the parked group the plan maps the label to; a label of another plan never matches, even when it
+// is spelled the same.
+func (m *Manager) findParked(ctx context.Context, plan, label string) (parkedRow, bool) {
+	if m.d.Plans == nil {
+		return parkedRow{}, false
+	}
+
 	m.mu.Lock()
 	rows := slices.Collect(maps.Values(m.parkedBy))
 	m.mu.Unlock()
 
 	for _, r := range rows {
-		if r.p.Group == target || r.p.Label == target {
-			return r, true
-		}
-	}
-	if m.d.Plans == nil {
-		return parkedRow{}, false
-	}
-
-	for _, r := range rows {
-		specs, err := m.d.Plans.Specs(ctx, r.p.Root, []string{target})
+		specs, err := m.d.Plans.Specs(ctx, r.p.Root, plan, []string{label})
 		if err == nil && len(specs) == 1 && specs[0].ID == r.p.Group {
-			r.p.Label = target
+			r.p.Label = label
 			return r, true
 		}
 	}

@@ -3,25 +3,24 @@ package engine
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 )
 
-// RunOf returns the id of the live run a target names, or an empty string.
+// RunOf returns the id of the live run a target names, or an empty string. The target is a run id, a plan id, or a plan id
+// then a group label.
 func (m *Manager) RunOf(target string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for id, r := range m.runs {
-		if id == target || r.start.Target == target {
+		if runNamed(id, r, target) {
 			return id
-		}
-		for _, s := range r.specs {
-			if s.Label == target || s.Epic == target || s.ID == target {
-				return id
-			}
 		}
 	}
 
@@ -104,23 +103,15 @@ func (m *Manager) Stop(ctx context.Context, runID string) error {
 	return nil
 }
 
-// stopTarget stops every live run a run id, epic label or group label names.
+// stopTarget stops every live run a run id, a plan id or a plan id then a group label names.
 func (m *Manager) stopTarget(ctx context.Context, target string) error {
 	m.mu.Lock()
 
 	var ids []string
 
 	for id, r := range m.runs {
-		if id == target || r.start.Target == target {
+		if runNamed(id, r, target) {
 			ids = append(ids, id)
-			continue
-		}
-
-		for _, s := range r.specs {
-			if s.Label == target || s.Epic == target || s.ID == target {
-				ids = append(ids, id)
-				break
-			}
 		}
 	}
 	m.mu.Unlock()
@@ -135,6 +126,35 @@ func (m *Manager) stopTarget(ctx context.Context, target string) error {
 	}
 
 	return nil
+}
+
+// runNamed reports whether the target names the run: its id, its plan id, or its plan id then a label of one of its groups.
+func runNamed(id string, r *run, target string) bool {
+	if id == target {
+		return true
+	}
+
+	plan, label := splitTarget(target)
+	if r.start.Target != plan {
+		return false
+	}
+
+	return label == "" || slices.ContainsFunc(slices.Collect(maps.Values(r.specs)), func(s GroupSpec) bool {
+		return s.Label == label
+	})
+}
+
+// splitTarget splits "plan-7f3a9c tg-2" into the plan id and the group label; a lone word is a plan id.
+func splitTarget(target string) (plan, label string) {
+	f := strings.Fields(target)
+	switch len(f) {
+	case 0:
+		return "", ""
+	case 1:
+		return f[0], ""
+	}
+
+	return f[0], f[1]
 }
 
 // killRemaining ends every process of the groups whose Task Manager is still running at the deadline.
