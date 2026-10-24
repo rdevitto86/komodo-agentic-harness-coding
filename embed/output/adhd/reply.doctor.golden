@@ -1,0 +1,6 @@
+Doctor ran 2 checks.
+
+| `check` | `result` | `fix` |
+|---|---|---|
+| `git on path` | `ok` |  |
+| `claude on path` | `missing` | `install Claude Code` |

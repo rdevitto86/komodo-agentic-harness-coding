@@ -1,0 +1,7 @@
+{
+  "code": "risky_change",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "tg-1.3: land this risky change?",
+  "fix": "komodo run plan-7f3a9c tg-1.3 --approve or --deny"
+}

@@ -1,0 +1,5 @@
+Error: `the plan passed its deadline`.
+
+**Code:** `plan_timeout`
+
+**Fix:** `komodo plan`

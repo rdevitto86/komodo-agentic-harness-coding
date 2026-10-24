@@ -1,0 +1,6 @@
+Error:
+`an event could not be written to the event store, so replay will show a gap`.
+
+**Code:** `store_failed`
+
+**Fix:** `komodo doctor`

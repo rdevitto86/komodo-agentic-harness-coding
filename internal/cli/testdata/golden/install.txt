@@ -1,0 +1,35 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Install finished with 4 changes.",
+  "report": "Install finished with 4 changes.\n\nThese files changed:\n\n| `file` | `action` | `reason` |\n|---|---|---|\n| `AGENTS.md` | `write` | `missing` |\n| `CLAUDE.md` | `write` | `missing` |\n| `.claude/settings.json` | `write` | `missing` |\n| `.git/komodo/install.json` | `write` | `manifest changed` |\n",
+  "data": {
+    "dry_run": false,
+    "changes": [
+      {
+        "file": "AGENTS.md",
+        "action": "write",
+        "reason": "missing"
+      },
+      {
+        "file": "CLAUDE.md",
+        "action": "write",
+        "reason": "missing"
+      },
+      {
+        "file": ".claude/settings.json",
+        "action": "write",
+        "reason": "missing"
+      },
+      {
+        "file": ".git/komodo/install.json",
+        "action": "write",
+        "reason": "manifest changed"
+      }
+    ],
+    "edited": [],
+    "skipped": [],
+    "probe": []
+  }
+}

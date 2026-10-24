@@ -1,0 +1,7 @@
+{
+  "code": "needs_scope",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The builder needs a file outside its group's files. Widen the scope?",
+  "fix": "komodo run --approve tg-1.3"
+}

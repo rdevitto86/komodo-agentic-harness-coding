@@ -1,0 +1,253 @@
+package engine
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
+)
+
+// ParkedGroup names a saved group whose run is not live, so the engine can look at its record.
+type ParkedGroup struct {
+	Repo      string // the repository id
+	Root      string // the repository root on this machine
+	CommonDir string // the repository's git common directory
+	Group     string // the group id
+	Label     string // the group label, such as tg-1.2; empty when the source does not know it
+}
+
+// parkedRow is a parked group the engine waits on, with its record as read at start.
+type parkedRow struct {
+	p  ParkedGroup
+	st State
+}
+
+// ParkedSource lists the saved groups the engine could not have loaded through a run, such as those a lease still names.
+type ParkedSource func(ctx context.Context) []ParkedGroup
+
+// RearmOverrides loads every group saved blocked on retries with a deadline and arms its override timer from that deadline;
+// a deadline that passed while the engine was down lapses at once.
+func (m *Manager) RearmOverrides(ctx context.Context) {
+	if m.d.Parked == nil {
+		return
+	}
+
+	for _, p := range m.d.Parked(ctx) {
+		rec, err := m.parkedRecord(ctx, p)
+		if err != nil || !awaitsOverride(rec.State) {
+			continue
+		}
+
+		m.mu.Lock()
+		live := m.groups[p.Group] != nil || m.parked[p.Group] != nil
+		m.mu.Unlock()
+		if live {
+			continue
+		}
+
+		wait := rec.State.Block.Until.Sub(m.clk.Now())
+		if wait <= 0 {
+			m.lapseParked(ctx, p)
+			continue
+		}
+
+		m.mu.Lock()
+		m.parked[p.Group] = m.clk.AfterFunc(wait, func() { m.lapseParked(m.runCtx(), p) })
+		m.parkedBy[p.Group] = parkedRow{p: p, st: rec.State}
+		m.signalLocked()
+		m.mu.Unlock()
+	}
+}
+
+// sweepAtStart runs the start-up sweep once; a failure is reported and never stops the engine.
+func (m *Manager) sweepAtStart(ctx context.Context) {
+	if m.d.Sweeper == nil {
+		return
+	}
+	if err := m.d.Sweeper.Sweep(ctx); err != nil {
+		m.reportErr("", "", fmt.Errorf("sweep at start: %w", err))
+	}
+}
+
+// awaitsOverride reports whether a group waits for a person to override within a window.
+func awaitsOverride(s State) bool {
+	return s.Stage == StageBlocked && s.Block.Reason == state.ReasonRetries && !s.Block.Until.IsZero()
+}
+
+// parkedRecord loads the saved record of a parked group.
+func (m *Manager) parkedRecord(ctx context.Context, p ParkedGroup) (state.Record, error) {
+	store, err := m.d.States(p.CommonDir)
+	if err != nil {
+		return state.Record{}, fmt.Errorf("open the state of %s: %w", p.Repo, err)
+	}
+	return store.Load(ctx, p.Group)
+}
+
+// runCtx returns the context the manager runs under.
+func (m *Manager) runCtx() context.Context {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ctx
+}
+
+// lapseParked fails a parked group whose override window passed: the saved record is read again, the lapse is decided by
+// Next, and the result is saved, published and its lease released. A group a run has taken since is left to that run.
+func (m *Manager) lapseParked(ctx context.Context, p ParkedGroup) {
+	m.mu.Lock()
+	delete(m.parked, p.Group)
+	delete(m.parkedBy, p.Group)
+	live := m.groups[p.Group] != nil
+	m.signalLocked()
+	m.mu.Unlock()
+	if live || ctx.Err() != nil {
+		return
+	}
+
+	if err := m.failParked(ctx, p); err != nil {
+		m.reportErr("", p.Group, fmt.Errorf("lapse the override of %s: %w", p.Group, err))
+	}
+}
+
+// failParked applies the override_lapse timer to the saved record of a parked group.
+func (m *Manager) failParked(ctx context.Context, p ParkedGroup) error {
+	store, err := m.d.States(p.CommonDir)
+	if err != nil {
+		return err
+	}
+
+	rec, err := store.Load(ctx, p.Group)
+	if err != nil {
+		return err
+	}
+	if !awaitsOverride(rec.State) {
+		return nil
+	}
+
+	l, err := LoadLimits(m.d.Config)
+	if err != nil {
+		return err
+	}
+
+	now := m.clk.Now()
+	in := Input{Kind: InTimerDue, Group: p.Group, Time: now, Data: mustJSON(TimerDue{Reason: "override_lapse"})}
+
+	res := Next(rec.State, in, l)
+	if res.Refused || res.State.Stage != StageDone {
+		return errors.New("the override window has not passed")
+	}
+
+	res.State.ActionsOpen = []state.OpenAction{}
+	if _, err := store.Save(ctx, p.Group, res.State, rec.Header.Rev); err != nil {
+		return err
+	}
+
+	for _, e := range res.Emit {
+		if err := m.d.Bus.Publish(e); err != nil {
+			m.reportErr(rec.State.Run, p.Group, err)
+		}
+	}
+
+	if lease, ok, err := m.d.Leases.Holder(ctx, p.Repo, p.Group); err == nil && ok {
+		_ = m.d.Leases.Release(ctx, lease)
+	}
+	if m.d.Resource != nil {
+		m.d.Resource.EndGroup(p.Group)
+	}
+
+	return nil
+}
+
+// stopParkedLocked cancels the parked timer of a group that a run took over; the caller holds the lock.
+func (m *Manager) stopParkedLocked(group string) {
+	if t := m.parked[group]; t != nil {
+		t.Stop()
+		delete(m.parked, group)
+	}
+
+	delete(m.parkedBy, group)
+}
+
+// wakeParked loads the parked group a plan id and label name, by starting a run for it that does not ask it to continue,
+// and returns the group; it reports unknown_target when no parked group matches.
+func (m *Manager) wakeParked(ctx context.Context, plan, label string) ([]*group, error) {
+	m.wakeMu.Lock()
+	defer m.wakeMu.Unlock()
+
+	if gs := m.byPlan(plan, label); len(gs) > 0 {
+		return gs, nil
+	}
+
+	row, ok := m.findParked(ctx, plan, label)
+	if !ok {
+		return nil, &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, []string{label})}
+	}
+
+	rs := &bus.RunStart{
+		Target: plan, Groups: []string{label}, Source: "cli",
+		Repo: row.p.Repo, Root: row.p.Root, CommonDir: row.p.CommonDir,
+	}
+	e := bus.Event{Type: bus.TypeRunStart, Run: bus.ID(cmp.Or(row.st.Run, "run-"+row.p.Group)), Data: rs}
+	if err := m.launchRun(ctx, e, rs, false); err != nil {
+		return nil, err
+	}
+
+	gs := m.byPlan(plan, label)
+	if len(gs) == 0 {
+		return nil, &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, []string{label})}
+	}
+
+	return gs, nil
+}
+
+// findParked returns the parked group the plan maps the label to; a label of another plan never matches, even when it
+// is spelled the same.
+func (m *Manager) findParked(ctx context.Context, plan, label string) (parkedRow, bool) {
+	if m.d.Plans == nil {
+		return parkedRow{}, false
+	}
+
+	m.mu.Lock()
+	rows := slices.Collect(maps.Values(m.parkedBy))
+	m.mu.Unlock()
+
+	for _, r := range rows {
+		specs, err := m.d.Plans.Specs(ctx, r.p.Root, plan, []string{label})
+		if err == nil && len(specs) == 1 && specs[0].ID == r.p.Group {
+			r.p.Label = label
+			return r, true
+		}
+	}
+
+	return parkedRow{}, false
+}
+
+// parkedBlockedLocked lists the parked groups of a repository root (every root when it is empty) as groups blocked on
+// retries; the caller holds the lock.
+func (m *Manager) parkedBlockedLocked(root string) []BlockedRow {
+	var out []BlockedRow
+	for _, r := range m.parkedBy {
+		if root != "" && r.p.Root != root {
+			continue
+		}
+
+		name := cmp.Or(r.p.Label, r.p.Group)
+		out = append(out, BlockedRow{
+			Group:  name,
+			RunID:  r.st.Run,
+			Reason: string(state.ReasonRetries),
+			Question: fmt.Sprintf(
+				"%s has no tries left. A person may override in a terminal until %s to give it one final try.",
+				name,
+				r.st.Block.Until.Format(time.RFC3339),
+			),
+		})
+	}
+
+	return out
+}

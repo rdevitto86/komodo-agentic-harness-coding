@@ -1,0 +1,5 @@
+{
+  "code": "no_repo",
+  "reason": "this folder is not inside a repository",
+  "fix": "cd into the repository"
+}

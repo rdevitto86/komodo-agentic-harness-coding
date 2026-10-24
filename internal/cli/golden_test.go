@@ -1,0 +1,118 @@
+package cli
+
+import (
+	"encoding/json"
+	"flag"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
+)
+
+var update = flag.Bool("update", false, "rewrite the golden envelopes")
+
+// goldenReplies answers each verb with a fixed reply so the envelopes are stable.
+func goldenReplies(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
+	switch req.Verb {
+	case engine.VerbPlan:
+		send(okReply(map[string]any{"plan": samplePlan, "path": "/plans/shop/" + samplePlan + "/plan.md"}))
+	case engine.VerbReplay:
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event:  &bus.Event{Type: bus.TypeRunComplete, Subtype: "stopped", Run: sampleRun, Data: &bus.RunStopped{}},
+		})
+		send(okReply(map[string]any{"gaps": 0}))
+	case engine.VerbStatus:
+		send(okReply(statusFixture()))
+	case engine.VerbClean:
+		send(okReply(CleanData{Removed: []CleanItem{{Kind: "worktree", Name: "tg-1.2"}}}))
+	case engine.VerbAbandon:
+		send(okReply(map[string]any{"run_id": sampleRun}))
+	default:
+		answerRunID(nil, req, send)
+	}
+}
+
+var (
+	uiAddrLine = regexp.MustCompile(`^Dashboard at http://127\.0\.0\.1:[0-9]+ \(Ctrl-C to stop\)\n$`)
+	uiPort     = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
+)
+
+func TestGoldenEnvelopes(t *testing.T) {
+	cases := []struct {
+		name     string
+		terminal bool
+		args     []string
+	}{
+		{"install", true, []string{"install", "--repo-only", "--hosts", "claude"}},
+		{"config-get", false, []string{"config", "get", "limits.group_retries"}},
+		{"config-set", true, []string{"config", "set", "limits.group_retries=2"}},
+		{"plan", false, []string{"plan", "Add lease revocation"}},
+		{"run", false, []string{"run", samplePlan}},
+		{"stop", false, []string{"stop", samplePlan}},
+		{"replay", false, []string{"replay", samplePlan}},
+		{"status", false, []string{"status"}},
+		{"abandon", false, []string{"abandon", samplePlan, "tg-1"}},
+		{"ui", false, []string{"ui"}},
+		{"doctor", false, []string{"doctor"}},
+		{"update", true, []string{"update", "--check"}},
+		{"clean", false, []string{"clean"}},
+		{"refusal-no-terminal", false, []string{"config", "set", "limits.group_retries=4"}},
+		{"usage-unknown-command", false, []string{"rnu"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.terminal = c.terminal
+			h.fake(goldenReplies)
+			h.host.Release = newRelease(t, "1.0.1", "golden").config()
+			repo := repoDir(t, "")
+			planFixture(t, h, repo, samplePlan, "tg-1")
+			if c.name == "ui" {
+				withUIHooks(t, func(string) {})
+			}
+			code, out, errOut := h.run(append([]string{"--json", "-C", repo}, c.args...)...)
+			if c.name == "ui" {
+				// The dashboard prints its free port on stderr and in the reply; the port differs on every run.
+				if !uiAddrLine.MatchString(errOut) {
+					t.Fatalf("stderr = %q", errOut)
+				}
+				errOut, out = "", uiPort.ReplaceAllString(out, "127.0.0.1:<port>")
+			}
+			if errOut != "" {
+				t.Fatalf("stderr = %q", errOut)
+			}
+			got := uuidPattern.ReplaceAllString(out, "<uuid>")
+			got = strings.ReplaceAll(
+				strings.ReplaceAll(strings.ReplaceAll(got, repo, "<repo>"), h.home, "<home>"),
+				h.userHome,
+				"<user>",
+			)
+			got = "exit " + string(rune('0'+code)) + "\n" + got
+			path := filepath.Join("testdata", "golden", c.name+".txt")
+			if *update {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("no golden file (run go test -update): %v", err)
+			}
+			if string(want) != got {
+				t.Fatalf("envelope differs from %s\n--- want\n%s\n--- got\n%s", path, want, got)
+			}
+			var env Envelope
+			if err := json.Unmarshal([]byte(out), &env); err != nil || env.V != 1 {
+				t.Fatalf("not an envelope: %v", err)
+			}
+		})
+	}
+}

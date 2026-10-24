@@ -1,0 +1,22 @@
+{
+  "rows": {
+    "head": [
+      "key",
+      "value",
+      "source"
+    ],
+    "rows": [
+      [
+        "output.profile",
+        "adhd",
+        "built-in"
+      ],
+      [
+        "limits.group_retries",
+        "3",
+        "machine"
+      ]
+    ],
+    "what": "settings"
+  }
+}

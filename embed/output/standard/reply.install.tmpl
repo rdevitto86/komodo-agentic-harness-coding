@@ -1,0 +1,13 @@
+{{if .DryRun}}Dry run: install would make {{n .Writes}} {{plural .Writes "change" "changes"}} and applied none.{{else}}Install finished with {{n (len .Changes.Rows)}} {{plural (len .Changes.Rows) "change" "changes"}}.{{end}}
+{{if .Changes.Rows}}
+{{if .DryRun}}These files were checked:{{else}}These files changed:{{end}}
+
+{{table .Changes}}
+{{end}}{{if .Probe.Rows}}
+The model links checked were:
+
+{{table .Probe}}
+{{end}}
+{{- define "turnend"}}{{if and .Changes.Rows (not .DryRun)}}✅ Successful Changes
+{{n (len .Changes.Rows)}} {{plural (len .Changes.Rows) "file change was" "file changes were"}} applied.
+{{end}}{{end}}

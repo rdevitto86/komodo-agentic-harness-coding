@@ -1,0 +1,11 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Group tg-1 abandoned in run <uuid>.",
+  "report": "Group `tg-1` abandoned in run `<uuid>`.\n",
+  "data": {
+    "group": "tg-1",
+    "run_id": "<uuid>"
+  }
+}

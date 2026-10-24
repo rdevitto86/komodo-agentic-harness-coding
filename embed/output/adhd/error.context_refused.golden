@@ -1,0 +1,5 @@
+Error: `the brief was refused`.
+
+**Code:** `context_refused`
+
+**Fix:** `komodo doctor`

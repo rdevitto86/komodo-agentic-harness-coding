@@ -1,0 +1,6 @@
+Group `tg-1.3` needs a decision: `risky_change`. The task is
+`amend docs/lld.md`. It asks: `tg-1.3: land this risky change?` To resolve it,
+run `komodo run plan-7f3a9c tg-1.3 --approve or --deny`.
+
+❌ Blocked Changes
+Group `tg-1.3` waits for a person.

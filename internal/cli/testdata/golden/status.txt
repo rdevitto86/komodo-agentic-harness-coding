@@ -1,0 +1,31 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "There is 1 active run, 0 queued and 1 blocked.",
+  "report": "There is 1 active run, 0 queued and 1 blocked.\n\nThe active runs are:\n\n| `Run id` | `Label` | `Groups` |\n|---|---|---|\n| `<uuid>` | `ep-1` | `tg-1.2 (build)` |\n\nThe blocked groups are:\n\n| `Group` | `Reason` | `Question` |\n|---|---|---|\n| `tg-1.2` | `needs_scope` | see below |\n\n`Question`, row 1:\n`The builder needs internal/cache/store.go, outside its scope.`\n",
+  "data": {
+    "runs": [
+      {
+        "run_id": "<uuid>",
+        "target": "ep-1",
+        "groups": [
+          {
+            "group": "tg-1.2",
+            "stage": "build",
+            "state": "blocked"
+          }
+        ]
+      }
+    ],
+    "queued": [],
+    "blocked": [
+      {
+        "group": "tg-1.2",
+        "run_id": "<uuid>",
+        "reason": "needs_scope",
+        "question": "The builder needs internal/cache/store.go, outside its scope."
+      }
+    ]
+  }
+}

@@ -1,296 +1,134 @@
-// Command komodo is the conveyor and the devices of the code assembly line.
+// Command komodo is the harness binary.
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
-	"strings"
+	"syscall"
 
-	_ "komodo/internal/mount/ollama"
-
-	_ "komodo/internal/mount/claude"
-	_ "komodo/internal/mount/codex"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cli"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/format"
 )
 
-const usage = `komodo: the code assembly line.
+// main runs the command line and exits with the code the CLI returns.
+func main() { os.Exit(run(os.Args, os.Stdout, os.Stderr)) }
 
-  komodo init [--name n]      Write the starter files into a new repo, keeping any that exist
-  komodo migrate [--dry-run]  Convert a legacy backlog file, or TODO.md, into docs/backlog group files
-  komodo lint                 Check the backlog against the grammar
-  komodo list [--json]        List every task, or one group's tasks
-  komodo backlog             List the open groups under docs/backlog
-  komodo add <group> <title>  Add a group, or append a task to one
-  komodo next [--json]        The next ready group: tasks, waves, machines
-  komodo brief <task>         Fill the role template and write the brief
-  komodo ingest [group]       Compile each READY group into a card under .komodo/queue
-  komodo close <task>         Validate the result, rerun the checks, flip the status
-  komodo close --wave N [g]   QC: merge the group's wave, compile, verify
-  komodo close --group [g]    Ship: commit, push, the pull request
-  komodo check <kind> <id>    The checks hooks and agents call: task, scope, or a review's findings
-  komodo comments check       The mechanical comment lint
-  komodo diff                 The reviewer's whole input: tasks, standards, diff
-  komodo report               What the run did, in the accessibility contract
-  komodo tag                  Tag every changelog version no tag points at
-  komodo rephase <e> <v>      Move an open epic to a new version: branch, pull requests, backlog
-  komodo release check        Audit the drift between changelog, tags, and groups
-  komodo release build        Build the per-platform binaries as release assets
-  komodo release publish      Build, test, checksum and publish the newest version as a release
-  komodo install --host X     Mount this repo on a host, or on both
-  komodo detect [--json]      The cached repo profile: languages, cloud, data, CI, commands
-  komodo doctor [--prune]     References, roles, leaks, drift, budgets, leftovers; prune clears stale worktrees and runs
-  komodo guard [check]        The one agent hook; check runs its table
-  komodo hook <name>          Every other agent hook's entry point; a hook that fails allows
-  komodo run [group|task]     Drive the line headless on this host, under a budget
-  komodo resume <group>       The state a killed run left: continue its session or start from its WIP
-  komodo status [--watch]     The current run: groups by state, time used and blockers
-  komodo abandon <group>      Remove a group's worktree and branch on purpose, and mark its tasks BLOCKED
-  komodo worktree add <b>     Cut an ad hoc detached worktree at .komodo/wt tracking branch b
-  komodo ship <group>         Publish a group a missing credential stopped: push, draft PR, labels
-  komodo sync [--dry-run]     Fast-forward the root to origin, rebuild a stale binary, re-render drift
-  komodo step [group|task]    The one next action, as JSON
-  komodo pr create --title t  Open a pull request from this branch: title checked, labels applied
-  komodo pr label             Apply the labels this branch's open pull request earns
-  komodo threads [pr]         The unresolved review threads, as JSON
-  komodo threads --resolve id Mark one review thread resolved
-  komodo machine <task>       Post a brief to the local machine, write the result, stamp the ledger
-  komodo metrics              What the two ledger files hold
-  komodo recall [--model m]   Score the local reviewer against the seeded-bug corpus
-  komodo eval [--list|--cases|--runs N]  The golden suite: list it, run the eval cases, or drive each group N times
-  komodo version              The changelog version and commit this binary was built from
-  komodo gate [--install]     The local precheck: vet, race tests, doctor, guard, comments; --fuzz 10s adds fuzzing
-  komodo git-hook <name>      One git hook's checks; each installed hook is one exec into this
-  komodo help [--skill]       This list, or the komodo skill generated from it
-`
-
-// version and commit name this build; gate and release builds stamp them through -ldflags.
-var (
-	version = "dev"
-	commit  = "unknown"
-)
-
-// exit ends the process; tests swap it to catch an exit code without leaving.
-var exit = os.Exit
-
-// main dispatches one subcommand.
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		exit(2)
-	}
-	switch os.Args[1] {
-	case "-v", "--version", "version":
-		fmt.Printf("komodo %s (%s)\n", version, commit)
-		return
-	case "-h", "--help", "help":
-		runHelp(os.Args[2:])
-		return
-	}
-	root, err := repoRoot()
+// run builds the harness parts, runs one command and returns its exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	registerAllEvents.Do(registerEvents)
+	cli.EngineMain = func(c *cli.Call) error { return engineVerb(c, stderr) }
+	cli.ToolsMain = toolsVerb
+	deps, err := buildDeps(stdout, stderr)
 	if err != nil {
-		switch os.Args[1] {
-		case "install":
-			// Install also sets up a machine with no repo yet: it then installs only the user's global layer.
-		case "guard", "hook":
-			// The global settings run these in every session on the machine; outside a repo they do nothing.
-			exit(0)
-		default:
-			fail(err)
-		}
+		_, _ = fmt.Fprintln(stderr, "komodo:", err)
+		return cli.ExitInternal
 	}
-	switch os.Args[1] {
-	case "init":
-		runInit(root, os.Args[2:])
-	case "migrate":
-		runMigrate(root, os.Args[2:])
-	case "lint":
-		runLint(root)
-	case "list":
-		runList(root, os.Args[2:])
-	case "backlog":
-		runBacklog(root)
-	case "add":
-		runBacklogAdd(root, os.Args[2:])
-	case "next":
-		runNext(root, os.Args[2:])
-	case "brief":
-		runBrief(root, os.Args[2:])
-	case "ingest":
-		runIngest(root, os.Args[2:])
-	case "close":
-		runClose(root, os.Args[2:])
-	case "check":
-		runCheck(root, os.Args[2:])
-	case "comments":
-		runComments(root, os.Args[2:])
-	case "diff":
-		runDiff(root)
-	case "report":
-		runReport(root)
-	case "tag":
-		runTag(root)
-	case "rephase":
-		runRephase(root, os.Args[2:])
-	case "release":
-		runRelease(root, os.Args[2:])
-	case "detect":
-		runDetect(root, os.Args[2:])
-	case "doctor":
-		runDoctor(root, os.Args[2:])
-	case "install":
-		runInstall(root, os.Args[2:])
-	case "guard":
-		runGuard(root, os.Args[2:])
-	case "hook":
-		runHook(root, os.Args[2:])
-	case "run":
-		runRun(root, os.Args[2:])
-	case "resume":
-		runResume(root, os.Args[2:])
-	case "abandon":
-		runAbandon(root, os.Args[2:])
-	case "worktree":
-		runWorktree(root, os.Args[2:])
-	case "ship":
-		runFinishShip(root, os.Args[2:])
-	case "sync":
-		runSync(root, os.Args[2:])
-	case "status":
-		runStatus(root, os.Args[2:])
-	case "step":
-		runStep(root, os.Args[2:])
-	case "pr":
-		runPR(root, os.Args[2:])
-	case "threads":
-		runThreads(root, os.Args[2:])
-	case "machine":
-		runMachine(root, os.Args[2:])
-	case "metrics":
-		runMetrics(root)
-	case "recall":
-		runRecall(root, os.Args[2:])
-	case "gate":
-		runGate(root, os.Args[2:])
-	case "git-hook":
-		runGitHook(root, os.Args[2:])
-	case "eval":
-		runEval(root, os.Args[2:])
-	default:
-		fmt.Fprintf(os.Stderr, "komodo: unknown command %q\n\n%s", os.Args[1], usage)
-		exit(2)
-	}
+	return cli.New(deps).Run(args)
 }
 
-// fail prints one line to stderr and exits non-zero.
-func fail(err error) {
-	fmt.Fprintf(os.Stderr, "komodo: %v\n", err)
-	exit(1)
-}
-
-// repoRoot walks up from the working directory to the directory holding .git.
-func repoRoot() (string, error) {
-	dir, err := os.Getwd()
+// engineVerb runs the engine in the foreground until its exit rule holds or a signal arrives.
+func engineVerb(_ *cli.Call, stderr io.Writer) error {
+	home, err := config.DefaultHome()
 	if err != nil {
-		return "", err
+		return err
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir, nil
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0o700); err == nil {
+		if f, err := os.OpenFile(
+			filepath.Join(home, "state", "engine.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+			0o600,
+		); err == nil {
+			defer func() { _ = f.Close() }()
+			stderr = io.MultiWriter(stderr, f)
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("no git repository above %s", dir)
-		}
-		dir = parent
 	}
+	return runEngine(ctx, home, stderr)
 }
 
-// printJSON writes one value as indented JSON.
-func printJSON(value any) {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
-		fail(err)
-	}
-}
-
-// printCompactJSON writes one value as single-line JSON, for output a machine reads every loop.
-func printCompactJSON(w io.Writer, value any) {
-	data, err := json.Marshal(value)
+// buildDeps opens the settings and the formatter from the output keys and wires the engine client.
+func buildDeps(stdout, stderr io.Writer) (cli.Deps, error) {
+	home, err := config.DefaultHome()
 	if err != nil {
-		fail(err)
+		return cli.Deps{}, err
 	}
-	fmt.Fprintln(w, string(data))
+
+	cfg, err := config.New(home, config.Known{}, func(string) bool { return true })
+	if err != nil {
+		return cli.Deps{}, fmt.Errorf("open settings: %w", err)
+	}
+
+	opts := format.Options{Profile: format.ProfileAdhd, Color: format.ColorOff}
+	if it, err := cfg.GetConfigItem("output.profile"); err == nil && it.Value == string(format.ProfileStandard) {
+		opts.Profile = format.ProfileStandard
+	}
+	if it, err := cfg.GetConfigItem("output.turn_end_summary"); err == nil {
+		opts.TurnEnd, _ = it.Value.(bool)
+	}
+	if it, err := cfg.GetConfigItem("output.color"); err == nil && colorOn(it.Value, stdout) {
+		opts.Color = format.ColorOn
+	}
+
+	f, err := format.New(opts)
+	if err != nil {
+		return cli.Deps{}, fmt.Errorf("load output templates: %w", err)
+	}
+
+	var links cli.LinkProber
+	if cat, err := llm.LoadCatalog(); err == nil {
+		links = buildLinks(cfg, cat, nil)
+	}
+
+	return cli.Deps{
+		Format: f, Config: cfg, Engine: cli.NewSocketEngine(home),
+		Terminal: cli.HasControllingTerminal, Home: home, Stdout: stdout, Stderr: stderr,
+		Host: cli.Host{Links: links, InUse: versionsInUse},
+	}, nil
 }
 
-// splitTaskArg pulls the task id out of a machine invocation's args, wherever it falls among the flags.
-func splitTaskArg(args []string) (task string, rest []string) {
-	return splitPositional(args, "role")
-}
-
-// takesValue reports whether an argument is one of the named flags in a form that consumes the next one.
-func takesValue(arg string, names []string) bool {
-	for _, name := range names {
-		if arg == "--"+name || arg == "-"+name {
-			return true
+// colorOn resolves output.color: on, or auto with a terminal on standard output and NO_COLOR unset.
+func colorOn(setting any, stdout io.Writer) bool {
+	switch setting {
+	case "on":
+		return true
+	case "auto":
+		f, ok := stdout.(*os.File)
+		if !ok || os.Getenv("NO_COLOR") != "" {
+			return false
 		}
+		fi, err := f.Stat()
+		return err == nil && fi.Mode()&os.ModeCharDevice != 0
 	}
 	return false
 }
 
-// splitPositional pulls the first positional out of args wherever it falls, keeping every flag.
-func splitPositional(args []string, valueFlags ...string) (positional string, rest []string) {
-	rest = make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if takesValue(arg, valueFlags) {
-			rest = append(rest, arg)
-			if i+1 < len(args) {
-				i++
-				rest = append(rest, args[i])
-			}
-			continue
-		}
-		if positional == "" && !strings.HasPrefix(arg, "-") {
-			positional = arg
-			continue
-		}
-		rest = append(rest, arg)
+// versionsInUse names the binary versions that unfinished groups of the current repository pin; the records pin none, so it
+// is the running version.
+func versionsInUse() ([]string, error) {
+	common, err := gitOut("rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, nil
 	}
-	return positional, rest
-}
-
-// splitFlags pulls every flag and its value out of args, keeping every other token as a positional, in order.
-func splitFlags(args []string, valueFlags ...string) (positional, rest []string) {
-	positional = make([]string, 0, len(args))
-	rest = make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if takesValue(arg, valueFlags) {
-			rest = append(rest, arg)
-			if i+1 < len(args) {
-				i++
-				rest = append(rest, args[i])
-			}
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			rest = append(rest, arg)
-			continue
-		}
-		positional = append(positional, arg)
+	st, err := state.New(filepath.Join(common, "komodo"), "cli")
+	if err != nil {
+		return nil, err
 	}
-	return positional, rest
-}
-
-// verifyPaths fails on the first path that does not exist under root, so a stray flag cannot pass silently.
-func verifyPaths(root string, paths []string) error {
-	for _, path := range paths {
-		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+	recs, err := st.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range recs {
+		if r.State.Stage != state.StageDone {
+			return []string{version}, nil
 		}
 	}
-	return nil
+	return nil, nil
 }

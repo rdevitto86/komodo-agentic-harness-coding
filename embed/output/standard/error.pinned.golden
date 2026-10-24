@@ -1,0 +1,2 @@
+Refused: `the repository pin is above this binary`. The code is `pinned`. To fix
+it, run `komodo update`.

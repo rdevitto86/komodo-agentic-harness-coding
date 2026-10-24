@@ -1,0 +1,6 @@
+Doctor ran {{n (len .Checks.Rows)}} {{plural (len .Checks.Rows) "check" "checks"}}.
+{{if .Checks.Rows}}
+The results are:
+
+{{table .Checks}}
+{{end}}

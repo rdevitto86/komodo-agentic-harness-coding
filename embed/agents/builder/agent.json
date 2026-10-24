@@ -1,0 +1,127 @@
+{
+  "v": 1,
+  "weight": "standard",
+  "chain": [
+    "claude-cli",
+    "anthropic-api"
+  ],
+  "tools": [
+    "read",
+    "search",
+    "edit",
+    "write",
+    "run",
+    "skill",
+    "task_done"
+  ],
+  "run_classes": [
+    "build",
+    "test",
+    "lint",
+    "format"
+  ],
+  "guard": [
+    "R1",
+    "B1"
+  ],
+  "limits": {
+    "wall_min": 60,
+    "idle_min": 10
+  },
+  "skills": {
+    "allow": [
+      "standards-*"
+    ],
+    "always": [
+      "standards-comments"
+    ]
+  },
+  "slots": {
+    "required": [
+      "repo_profile",
+      "group",
+      "tasks",
+      "files",
+      "file_contents"
+    ],
+    "optional": [
+      "repo_context",
+      "standards",
+      "diff",
+      "checks",
+      "findings",
+      "scope_answer",
+      "unfinished",
+      "specs"
+    ]
+  },
+  "result": {
+    "$id": "komodo:agent/builder/result/1",
+    "additionalProperties": false,
+    "properties": {
+      "disputed": {
+        "description": "The file:line of each review finding you reject as wrong.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "evidence": {
+        "description": "Required with done: the commands you ran to prove the work.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "cmd": {
+              "description": "The command as run.",
+              "type": "string"
+            },
+            "excerpt": {
+              "description": "The output lines that show the result, up to 4 KB, head and tail.",
+              "type": "string"
+            },
+            "exit": {
+              "description": "The exit code you saw.",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cmd",
+            "exit",
+            "excerpt"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "paths": {
+        "description": "Only with needs_scope: the paths the work needs.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reason": {
+        "description": "Only with needs_scope: why those paths are needed.",
+        "type": "string"
+      },
+      "status": {
+        "description": "done when the work is finished, needs_scope when it needs more paths.",
+        "enum": [
+          "done",
+          "needs_scope"
+        ],
+        "type": "string"
+      },
+      "summary": {
+        "description": "What changed, in a few plain sentences.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "summary"
+    ],
+    "type": "object"
+  },
+  "pool_slot": true
+}

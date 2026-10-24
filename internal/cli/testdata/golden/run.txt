@@ -1,0 +1,10 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Run started for plan-7f3a9c. The run id is",
+  "report": "Run started for `plan-7f3a9c`. The run id is\n`<uuid>`.\n",
+  "data": {
+    "run_id": "<uuid>"
+  }
+}

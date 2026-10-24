@@ -1,0 +1,5 @@
+{
+  "code": "bus_overflow",
+  "reason": "a subscriber queue was full and events were dropped",
+  "fix": "komodo status"
+}

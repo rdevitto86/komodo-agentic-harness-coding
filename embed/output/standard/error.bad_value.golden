@@ -1,0 +1,2 @@
+Usage error: `output.color takes auto, on or off`. The code is `bad_value`. To
+fix it, run `komodo config get output.color`.

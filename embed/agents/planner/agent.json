@@ -1,0 +1,55 @@
+{
+  "v": 1,
+  "weight": "heavy",
+  "chain": [
+    "claude-cli",
+    "anthropic-api"
+  ],
+  "tools": [
+    "read",
+    "search",
+    "lint_plan"
+  ],
+  "run_classes": [],
+  "guard": [],
+  "limits": {
+    "wall_min": 60,
+    "idle_min": 10
+  },
+  "skills": {
+    "allow": [
+      "planning"
+    ],
+    "always": [
+      "planning"
+    ]
+  },
+  "slots": {
+    "required": [
+      "repo_profile",
+      "repo_map",
+      "layout",
+      "goal"
+    ],
+    "optional": [
+      "repo_context",
+      "specs",
+      "plan"
+    ]
+  },
+  "result": {
+    "$id": "komodo:agent/planner/result/1",
+    "additionalProperties": false,
+    "properties": {
+      "plan": {
+        "description": "The whole plan.md text, front matter included.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "plan"
+    ],
+    "type": "object"
+  },
+  "pool_slot": false
+}

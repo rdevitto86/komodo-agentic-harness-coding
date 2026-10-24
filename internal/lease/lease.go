@@ -1,117 +1,86 @@
-// Package lease holds the one lock on a branch: a live builder's lease, kept in the git common dir.
+// Package lease keeps the lease registry: which task group's run owns which worktree.
 package lease
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strconv"
+	"errors"
 	"time"
-
-	"komodo/internal/fsx"
-	"komodo/internal/git"
-	"komodo/internal/proc"
 )
 
-// TTL is how long a lease holds a branch before it lapses on its own.
-const TTL = 2 * time.Hour
+// Fence is the number that rises on every grant, takeover and revocation of a group's lease.
+type Fence uint64
 
-// RunEnv carries a run launcher's pid into its host; a holder with that pid is the lease's own run.
-const RunEnv = "KOMODO_RUN_PID"
+// LeaseState is where a lease stands in its life.
+type LeaseState string
 
-// Lease is one builder's claim on a branch: its group, holder process, and when it was taken.
+const (
+	StateHeld    LeaseState = "held"    // one run holds the group
+	StateRevoked LeaseState = "revoked" // ended on order; the holder is no longer the owner
+)
+
+// Lease is one registry record: the run that owns a group's worktree.
 type Lease struct {
-	Group  string       `json:"group"`
-	Branch string       `json:"branch"`
-	Holder proc.Process `json:"holder"`
-	Taken  time.Time    `json:"taken"`
+	Repo      string     `json:"repo"`       // repo id
+	Group     string     `json:"group"`      // task group id
+	Run       string     `json:"run"`        // run that holds the group
+	Worktree  string     `json:"worktree"`   // absolute path of the group's worktree
+	PID       int        `json:"pid"`        // process id of the holder
+	ProcStart time.Time  `json:"proc_start"` // start time of the holder's process
+	Host      string     `json:"host"`       // machine the holder runs on
+	ClonePath string     `json:"clone_path"` // clone the run started from
+	Fence     Fence      `json:"fence"`      // fence value this holder took
+	State     LeaseState `json:"state"`      // see LeaseState
+	Rev       int        `json:"rev"`        // rises by 1 on every registry write
+	TakenAt   time.Time  `json:"taken_at"`   // when the holder took the lease
+	RenewedAt time.Time  `json:"renewed_at"` // when the holder last renewed it
 }
 
-// Own reports whether this process runs under the lease's holder, so its push is the lease's own.
-func (l Lease) Own() bool { return os.Getenv(RunEnv) == strconv.Itoa(l.Holder.PID) }
-
-// Lapses is when the lease ends on its own.
-func (l Lease) Lapses() time.Time { return l.Taken.Add(TTL) }
-
-// Refusal is the sentence that tells a pusher who holds branch and when the hold ends.
-func (l Lease) Refusal() string {
-	return fmt.Sprintf("%s is leased by group %s (pid %d) until %s; the line's push drops it sooner",
-		l.Branch, l.Group, l.Holder.PID, l.Lapses().Format(time.RFC3339))
+// Live reports whether a lease still has a working holder as seen from host.
+// A holder on this host is live while its process lives; one elsewhere, or one whose start time
+// is unknown, while its last renewal is young.
+func (l Lease) Live(now time.Time, host string, alive ProcessCheck) bool {
+	if l.State != StateHeld {
+		return false
+	}
+	if l.Host == host && !l.ProcStart.IsZero() {
+		return alive != nil && alive(l.PID, l.ProcStart)
+	}
+	return now.Sub(l.RenewedAt) <= LeaseExpiry
 }
 
-// Dir is where every worktree of dir's repository finds its leases: under the git common dir.
-func Dir(dir string) (string, error) {
-	common, err := git.Run(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(common, "komodo", "leases"), nil
-}
+// ProcessCheck reports whether a process with this id exists and started at the given time.
+type ProcessCheck func(pid int, start time.Time) bool
 
-// path is the file one branch's lease lives in.
-func path(dir, branch string) (string, error) {
-	leases, err := Dir(dir)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(leases, url.PathEscape(branch)+".json"), nil
-}
+// HeldError carries the live holder so the caller can name it.
+type HeldError struct{ Holder Lease }
 
-// afterTake lets a test land a second writer between Take's write and its reread.
-var afterTake = func() {}
+const (
+	LeaseExpiry        = 2 * time.Hour    // age of the last renewal after which a lease on another host counts as dead
+	DefaultLockTimeout = 30 * time.Second // longest wait for a lock; the key lease.lock_timeout_s overrides it
+	LockSuffix         = ".lock"          // a lease's lock file is <group-id>.lock beside its record
+)
 
-// Take writes a lease on branch for holder atomically, replacing any earlier one; a second Take
-// that lands on the file before this one rereads it fails this call instead of a false success.
-func Take(dir, group, branch string, holder proc.Process, now time.Time) error {
-	file, err := path(dir, branch)
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(Lease{Group: group, Branch: branch, Holder: holder, Taken: now})
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	if err := fsx.WriteFile(file, data, 0o644); err != nil {
-		return err
-	}
-	afterTake()
-	after, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(after, data) {
-		return fmt.Errorf("%s: another holder took the lease while this one wrote it", branch)
-	}
-	return nil
-}
+var (
+	// Registry.Create lost the race
+	ErrExists = errors.New("lease record already exists")
 
-// Held returns branch's lease while it is under TTL old and its holder still runs.
-func Held(dir, branch string, now time.Time) (Lease, bool) {
-	file, err := path(dir, branch)
-	if err != nil {
-		return Lease{}, false
-	}
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return Lease{}, false
-	}
-	var held Lease
-	if json.Unmarshal(data, &held) != nil || held.Branch != branch || !now.Before(held.Lapses()) {
-		return Lease{}, false
-	}
-	if alive, known := proc.Alive(held.Holder); known && !alive {
-		return Lease{}, false
-	}
-	return held, true
-}
+	// Registry.Swap or Delete saw a newer rev
+	ErrStaleRev = errors.New("lease record changed since it was read")
 
-// Drop removes branch's lease; a branch with none is left as it is.
-func Drop(dir, branch string) {
-	if file, err := path(dir, branch); err == nil {
-		_ = os.Remove(file)
-	}
-}
+	ErrNotFound = errors.New("lease record does not exist")
+
+	// Grant: a live holder exists
+	ErrLeased = errors.New("group is leased by another run")
+
+	ErrLeaseLost     = errors.New("lease lost: another run took the group")
+	ErrWorktreeTaken = errors.New("worktree is owned by another group")
+	ErrBadKey        = errors.New("repo or group id cannot name a file")
+
+	// a lock stayed held for the whole wait
+	ErrLocked = errors.New("lease record stayed locked by another writer")
+)
+
+// Error names the run that holds the group.
+func (e HeldError) Error() string { return "group is leased by run " + e.Holder.Run }
+
+// Unwrap lets errors.Is match ErrLeased.
+func (e HeldError) Unwrap() error { return ErrLeased }

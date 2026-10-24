@@ -1,0 +1,10 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Dashboard is listening at 127.0.0.1:<port>.",
+  "report": "Dashboard is listening at `127.0.0.1:<port>`.\n",
+  "data": {
+    "address": "127.0.0.1:<port>"
+  }
+}

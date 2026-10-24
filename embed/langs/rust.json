@@ -1,0 +1,7 @@
+{
+  "extensions": [".rs"],
+  "symbols": [
+    {"kind": "function", "pattern": "^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:async\\s+)?fn (\\w+)"},
+    {"kind": "type", "pattern": "^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:struct|enum|trait|type) (\\w+)"}
+  ]
+}

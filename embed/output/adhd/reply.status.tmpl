@@ -1,0 +1,25 @@
+{{n (len .Runs.Rows)}} {{plural (len .Runs.Rows) "run" "runs"}} active, {{n (len .Queued.Rows)}} queued, {{n (len .Blocked.Rows)}} blocked.
+{{if .Alert}}
+**Alert:** {{.Alert}}
+{{end}}{{if .Waited}}
+**Wait ended:** {{.Waited}}
+{{end}}{{if .Runs.Rows}}
+**Runs:**
+
+{{table .Runs}}
+{{end}}{{if .Queued.Rows}}
+**Queued:**
+
+{{table .Queued}}
+{{end}}{{if .Blocked.Rows}}
+**Blocked:**
+
+{{table .Blocked}}
+{{end}}{{if .Errors.Rows}}
+**Errors by type:**
+
+{{table .Errors}}
+{{end}}
+{{- define "turnend"}}{{if .Blocked.Rows}}**❌ Blocked Changes**
+- {{n (len .Blocked.Rows)}} {{plural (len .Blocked.Rows) "group waits" "groups wait"}} for a person
+{{end}}{{end}}

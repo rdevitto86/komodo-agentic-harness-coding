@@ -1,0 +1,88 @@
+{
+  "lens": "correctness",
+  "when": "always",
+  "applies": {
+    "globs": [],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "correctness.1",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "the logic does what the task card says for every input the card names",
+      "evidence": "the line whose result differs from the card",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.2",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "an error return or failure is handled, not ignored",
+      "evidence": "the line that drops or swallows the error",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.3",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "nil, empty and out-of-range values cannot crash the changed code",
+      "evidence": "the line that dereferences or indexes without a check",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.4",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "files, connections, locks and processes opened by the changed code are released on every path",
+      "evidence": "the line that opens the resource with no matching release",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.5",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "limits and boundary values are exact: no off-by-one, and inclusive and exclusive checks are the intended ones",
+      "evidence": "the comparison line at the boundary",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "correctness.6",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "a retry or requeue after a partial write does not duplicate or lose data",
+      "evidence": "the retry or requeue line that repeats or skips a step",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+Replay of run {{.RunID}} has {{n (len .Steps)}} {{plural (len .Steps) "step" "steps"}}.
+{{if .Steps}}
+```text
+{{range .Steps}}{{fenced .}}
+{{end}}```
+{{end}}{{if .Gaps}}
+{{n .Gaps}} {{plural .Gaps "torn last line was" "torn last lines were"}} dropped.
+{{end}}
+{{- define "turnend"}}{{if .Gaps}}⚠️ Warnings
+{{n .Gaps}} {{plural .Gaps "torn last line was" "torn last lines were"}} dropped.
+{{end}}{{end}}

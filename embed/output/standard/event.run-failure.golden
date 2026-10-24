@@ -1,0 +1,5 @@
+Run failure event `session.end` arrived for run
+`0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57`. Its type is `run-failure`. It belongs to
+group `tg-1.2`. It happened at 2026-10-15T10:00:05Z.
+
+Its data is `ok`: true, `reason`: `done`, `turns`: 12.

@@ -1,0 +1,2 @@
+Error: `a task card changed since the plan read it`. The code is `card_changed`.
+To fix it, run `komodo plan`.

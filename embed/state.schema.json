@@ -1,0 +1,471 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "group": {
+      "type": "string"
+    },
+    "rev": {
+      "type": "integer"
+    },
+    "state": {
+      "additionalProperties": false,
+      "properties": {
+        "actions_open": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "args": {
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "started": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "args",
+              "started"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "block": {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "counter": {
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "no_provider",
+                "pause_timeout",
+                "paid_refused",
+                "flap",
+                "retries",
+                "needs_scope",
+                "risky_change",
+                "context",
+                "setup",
+                "publish",
+                "merge_conflict",
+                "cleanup",
+                "wall",
+                "dependency",
+                "crash",
+                "contract",
+                "state_invalid",
+                "done",
+                "check_fail",
+                "no_result",
+                "schema_fail",
+                "timeout",
+                "idle",
+                "refusals",
+                "provider",
+                "billing",
+                "paused",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "until": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "config_hash": {
+          "type": "string"
+        },
+        "counters": {
+          "additionalProperties": false,
+          "properties": {
+            "blocks": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "crashes": {
+              "type": "integer"
+            },
+            "fault_streak": {
+              "type": "integer"
+            },
+            "final_wall_min": {
+              "type": "integer"
+            },
+            "overrides": {
+              "type": "integer"
+            },
+            "retries_left": {
+              "type": "integer"
+            },
+            "tokens_used": {
+              "type": "integer"
+            },
+            "tries": {
+              "type": "integer"
+            },
+            "wall_base_s": {
+              "type": "integer"
+            },
+            "wall_ext_try": {
+              "type": "integer"
+            },
+            "wall_used_s": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "retries_left",
+            "overrides",
+            "crashes",
+            "blocks",
+            "wall_used_s",
+            "tokens_used",
+            "tries",
+            "wall_base_s",
+            "wall_ext_try",
+            "fault_streak"
+          ],
+          "type": "object"
+        },
+        "epoch": {
+          "type": "integer"
+        },
+        "failure_hash": {
+          "type": "string"
+        },
+        "fence": {
+          "type": "integer"
+        },
+        "group": {
+          "type": "string"
+        },
+        "last_event_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "last_findings": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "",
+            "complete",
+            "lost",
+            "abandoned",
+            "dropped",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "owed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pause": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "type": "boolean"
+            },
+            "cause": {
+              "enum": [
+                "provider",
+                "plan_window",
+                "spending",
+                "group_tokens"
+              ],
+              "type": "string"
+            },
+            "link": {
+              "type": "string"
+            },
+            "refused": {
+              "type": "integer"
+            },
+            "since": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "until": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "refused"
+          ],
+          "type": "object"
+        },
+        "prior": {
+          "enum": [
+            "",
+            "intake",
+            "build",
+            "test_review",
+            "commit",
+            "cleanup"
+          ],
+          "type": "string"
+        },
+        "requests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resume": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "handle": {
+                "type": "string"
+              },
+              "link": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "return_tree": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string"
+        },
+        "scope_added": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stage": {
+          "enum": [
+            "intake",
+            "build",
+            "test_review",
+            "commit",
+            "cleanup",
+            "done",
+            "paused",
+            "blocked"
+          ],
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "gate_failures": {
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "scope_asked": {
+                "type": "boolean"
+              },
+              "session": {
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "queued",
+                  "claimed",
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "scope_asked",
+              "gate_failures"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "test_review": {
+          "additionalProperties": false,
+          "properties": {
+            "failed": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "findings": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "rule": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "rule",
+                  "file"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "not_met": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "qa": {
+              "additionalProperties": false,
+              "properties": {
+                "result": {
+                  "enum": [
+                    "",
+                    "pass",
+                    "fail",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "result"
+              ],
+              "type": "object"
+            },
+            "reviewer": {
+              "additionalProperties": false,
+              "properties": {
+                "result": {
+                  "enum": [
+                    "",
+                    "pass",
+                    "fail",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "qa",
+            "reviewer",
+            "findings",
+            "not_met",
+            "failed"
+          ],
+          "type": "object"
+        },
+        "unfinished": {
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "task": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "files"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "run",
+        "group",
+        "stage",
+        "prior",
+        "epoch",
+        "outcome",
+        "fence",
+        "config_hash",
+        "counters",
+        "tasks",
+        "test_review",
+        "actions_open",
+        "resume",
+        "pause",
+        "block",
+        "failure_hash",
+        "return_tree",
+        "owed",
+        "requests",
+        "scope_added",
+        "last_event_at"
+      ],
+      "type": "object"
+    },
+    "ts": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "v": {
+      "type": "integer"
+    },
+    "writer": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "v",
+    "group",
+    "rev",
+    "ts",
+    "writer",
+    "state"
+  ],
+  "title": "Komodo group record",
+  "type": "object"
+}

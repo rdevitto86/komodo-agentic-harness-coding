@@ -1,0 +1,2 @@
+Error: `a subscriber queue was full and events were dropped`. The code is
+`bus_overflow`. To fix it, run `komodo status`.

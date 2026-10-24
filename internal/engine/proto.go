@@ -1,0 +1,111 @@
+// Package engine holds the engine process and its control socket; this file holds only the socket's wire types.
+package engine
+
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/llm"
+)
+
+// Event is the bus event a request or a reply carries.
+type Event = bus.Event
+
+// Request is one frame from the CLI to the engine.
+type Request struct {
+	// minted by the CLI; every reply repeats it
+	ID string `json:"id"`
+	// run, stop, status, abandon, replay, plan, clean, tool_list or tool_call
+	Verb string `json:"verb"`
+	// a plan id, a plan id then a group label, or a run id
+	Target string `json:"target,omitempty"`
+	// the repository root the command ran in; status covers this repository unless Flags.All is set
+	Root  string `json:"root,omitempty"`
+	Flags Flags  `json:"flags"`
+	// the run-start, run-stop, run-continue or plan event the CLI publishes
+	Event *Event `json:"event,omitempty"`
+	// the session and the call of a tool_list or tool_call request
+	Tool *ToolRequest `json:"tool,omitempty"`
+}
+
+// ToolRequest names the model session a tool request is for and, for a call, the tool and its arguments as JSON text.
+type ToolRequest struct {
+	Session string          `json:"session"`
+	Name    string          `json:"name,omitempty"`
+	Args    json.RawMessage `json:"args,omitempty"`
+}
+
+// ToolList is the data of a tool_list reply: the tools the session may see.
+type ToolList struct {
+	Tools []llm.ToolDef `json:"tools"`
+}
+
+// ToolAnswer is the data of a tool_call reply: the text the model receives, a refusal included.
+type ToolAnswer struct {
+	Text string `json:"text"`
+}
+
+// Flags are the flags a verb may carry.
+type Flags struct {
+	All      bool      `json:"all,omitempty"`       // status --all
+	Approve  bool      `json:"approve,omitempty"`   // run (id) --approve
+	Deny     bool      `json:"deny,omitempty"`      // run (id) --deny
+	Override bool      `json:"override,omitempty"`  // run (id) --override
+	Wait     bool      `json:"wait,omitempty"`      // status --wait
+	TimeoutS int       `json:"timeout_s,omitempty"` // status --wait: the longest wait, in seconds
+	Schedule time.Time `json:"schedule,omitzero"`   // run (id) --schedule, an RFC 3339 timestamp
+	DryRun   bool      `json:"dry_run,omitempty"`   // clean --dry-run
+}
+
+// Reply is one frame from the engine to the CLI.
+type Reply struct {
+	// the request's id
+	ID string `json:"id"`
+	// ok, refused, error or event
+	Status string `json:"status"`
+	// an error value from the code constants
+	Code string `json:"code,omitempty"`
+	// one sentence for a person
+	Detail string `json:"detail,omitempty"`
+	// the verb's answer, such as a status table or a blocked group's question
+	Data json.RawMessage `json:"data,omitempty"`
+	// set when Status is event
+	Event *Event `json:"event,omitempty"`
+	// the last frame for this request
+	Final bool `json:"final"`
+}
+
+// The verbs a Request may name.
+const (
+	VerbRun     = "run"
+	VerbStop    = "stop"
+	VerbStatus  = "status"
+	VerbAbandon = "abandon"
+	VerbReplay  = "replay"
+	VerbPlan    = "plan"
+	VerbClean   = "clean"
+	// the two verbs the per-session tool server sends; the CLI never does
+	VerbToolList = "tool_list"
+	VerbToolCall = "tool_call"
+)
+
+// The values of Reply.Status.
+const (
+	StatusOK      = "ok"      // the request was accepted or answered
+	StatusRefused = "refused" // the engine declined on purpose; Code says why
+	StatusError   = "error"   // the request failed
+	StatusEvent   = "event"   // a recorded event or a live fact; Event is set
+)
+
+// The values of Reply.Code.
+const (
+	CodeBadFrame       = "bad_frame"       // the line is not a valid Request; the connection stays open
+	CodeUnknownTarget  = "unknown_target"  // the label or run id names nothing in the plan or the saved state
+	CodeRunRefused     = "run_refused"     // the run was refused, such as a dependency cycle
+	CodeNotBlocked     = "not_blocked"     // --approve or --deny named a group that is not waiting for an answer
+	CodeGroupFailed    = "group_failed"    // the group failed for good; plan it again to run it
+	CodeNoTerminal     = "no_terminal"     // --override came from a process with no controlling terminal
+	CodeEngineStopping = "engine_stopping" // the engine is past its exit check; the CLI starts a new engine and resends
+	CodeUnknownSession = "unknown_session" // no running model session has this id, or it has ended
+)

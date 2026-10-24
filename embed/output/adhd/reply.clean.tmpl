@@ -1,0 +1,7 @@
+Clean removed {{n (len .Removed.Rows)}} {{plural (len .Removed.Rows) "item" "items"}}.
+{{if .Removed.Rows}}
+{{table .Removed}}
+{{end}}
+{{- define "turnend"}}{{if .Removed.Rows}}**✅ Successful Changes**
+- {{n (len .Removed.Rows)}} {{plural (len .Removed.Rows) "item" "items"}} removed
+{{end}}{{end}}

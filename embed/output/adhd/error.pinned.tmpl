@@ -1,0 +1,10 @@
+Refused: {{.Reason}}.
+
+**Code:** {{code .Code}}
+{{if .Fix}}
+**Fix:** {{.Fix}}
+{{end}}{{if .Run}}
+**Run:** {{.Run}}
+{{end}}{{if .Group}}
+**Group:** {{.Group}}
+{{end}}

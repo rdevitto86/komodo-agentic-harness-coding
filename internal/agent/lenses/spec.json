@@ -1,0 +1,23 @@
+{
+  "lens": "spec",
+  "when": "spec_cited",
+  "applies": {
+    "globs": [],
+    "markers": []
+  },
+  "rules": [
+    {
+      "id": "spec.1",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "the diff matches the spec section a task cites; a mismatch is answered not_met, not filed as a finding",
+      "evidence": "the line of the diff that differs from the cited section",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

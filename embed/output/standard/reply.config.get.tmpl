@@ -1,0 +1,6 @@
+{{n (len .Rows.Rows)}} {{plural (len .Rows.Rows) "setting was" "settings were"}} found.
+{{if .Rows.Rows}}
+They are:
+
+{{table .Rows}}
+{{end}}

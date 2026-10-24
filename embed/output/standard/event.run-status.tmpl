@@ -1,0 +1,4 @@
+Run status event {{.Subtype}} arrived for run {{.Run}}. Its type is {{.Type}}.{{if .Group}} It belongs to group {{.Group}}.{{end}} It happened at {{.Time.UTC.Format "2006-01-02T15:04:05Z07:00"}}.
+{{if .Data}}
+Its data is {{$sep := ""}}{{range $k, $v := .Data}}{{$sep}}{{$k}}: {{$v}}{{$sep = ", "}}{{end}}.
+{{end}}

@@ -1,0 +1,260 @@
+package cleanup
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+)
+
+// Sweep removes the remains of runs that ended without cleaning up; the engine runs it at each start. It leaves a plan
+// folder that is only stale.
+func (h *Handler) Sweep(ctx context.Context) (Report, error) { return h.run(ctx, false) }
+
+// Clean is Sweep for `komodo clean`: it also removes a plan folder that no running group uses and that has not changed
+// for 7 days.
+func (h *Handler) Clean(ctx context.Context) (Report, error) { return h.run(ctx, true) }
+
+// Preview lists what Clean would remove and removes nothing; a worktree that
+// holds unpublished files shows only when Clean runs.
+func (h *Handler) Preview(ctx context.Context) (Report, error) { return h.sweep(ctx, true, true) }
+
+// run sweeps for real and announces the result.
+func (h *Handler) run(ctx context.Context, stale bool) (Report, error) {
+	rep, err := h.sweep(ctx, false, stale)
+	if err == nil {
+		h.say(ctx, "", "cleanup.swept", rep)
+	}
+	return rep, err
+}
+
+// sweep visits every group that has a container, checkout or folder left and cleans the ones that no run can continue;
+// stale also lets it delete idle plan folders unchanged for 7 days.
+func (h *Handler) sweep(ctx context.Context, dry, stale bool) (Report, error) {
+	rep := Report{}
+
+	if h.Roots.Worktrees == "" {
+		return rep, errors.New("no worktree folder to sweep")
+	}
+	if h.Groups == nil {
+		return rep, errors.New("no group reader to name the groups still in use")
+	}
+
+	used, err := h.Groups.Unfinished(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("list unfinished groups: %w", err)
+	}
+
+	unfinished := map[string]bool{}
+	for _, g := range used {
+		unfinished[g.Group] = true
+	}
+
+	// One non-pruning fetch serves every branch decision; if it fails, branches are kept.
+	fetchErr := h.Git.Fetch(ctx, h.Clone, h.Remote)
+	names, err := h.leftovers(ctx, &rep)
+	if err != nil {
+		return rep, err
+	}
+	for _, g := range names {
+		if err := ctx.Err(); err != nil {
+			return rep, err
+		}
+		h.sweepGroup(ctx, &rep, g, unfinished, dry, fetchErr)
+	}
+
+	h.sweepLegacy(ctx, &rep, unfinished, dry, fetchErr)
+	h.sweepLandings(ctx, &rep, used, dry, fetchErr)
+	h.sweepPlans(ctx, &rep, dry, stale)
+	return rep, nil
+}
+
+// leftovers returns the sorted group ids found in the worktree, Quality Assurance and temporary roots and among the
+// containers.
+func (h *Handler) leftovers(ctx context.Context, rep *Report) ([]string, error) {
+	set := map[string]bool{}
+	for _, root := range []string{h.Roots.Worktrees, h.Roots.QA, h.Roots.Temp} {
+		names, err := folders(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			set[n] = true
+		}
+	}
+
+	if h.Boxes != nil {
+		groups, err := h.Boxes.List(ctx)
+		if err != nil {
+			rep.Kept = append(rep.Kept, Item{Kind: KindContainer, Reason: "list containers: " + err.Error()})
+		}
+		for _, g := range groups {
+			if validName(g) {
+				set[g] = true
+			}
+		}
+	}
+
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+
+	sort.Strings(out)
+	return out, nil
+}
+
+// folders returns the plain-named folders and links in root; stray files and odd names are
+// ignored, and an empty or missing root has none.
+func folders(root string) ([]string, error) {
+	if root == "" {
+		return nil, nil
+	}
+
+	ents, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", root, err)
+	}
+
+	var out []string
+	for _, e := range ents {
+		if (e.IsDir() || e.Type()&os.ModeSymlink != 0) && validName(e.Name()) {
+			out = append(out, e.Name())
+		}
+	}
+	return out, nil
+}
+
+// sweepGroup cleans one group's remains, or lists them when dry; a group a
+// run can continue or a live run holds is kept untouched.
+func (h *Handler) sweepGroup(
+	ctx context.Context,
+	rep *Report,
+	group string,
+	unfinished map[string]bool,
+	dry bool,
+	fetchErr error,
+) {
+	h.sweepGroupAt(ctx, rep, h.Roots.Worktrees, group, unfinished, dry, fetchErr)
+}
+
+// sweepLegacy removes the worktrees left in the old short-name folder, under the rules of sweepGroup; only the worktree
+// is touched, because the group's container and checkouts are swept by their own name.
+func (h *Handler) sweepLegacy(ctx context.Context, rep *Report, unfinished map[string]bool, dry bool, fetchErr error) {
+	groups, err := folders(h.Roots.Legacy)
+	if err != nil {
+		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: h.Roots.Legacy, Reason: err.Error()})
+		return
+	}
+
+	for _, g := range groups {
+		if ctx.Err() != nil {
+			return
+		}
+		h.sweepGroupAt(ctx, rep, h.Roots.Legacy, g, unfinished, dry, fetchErr)
+	}
+}
+
+// sweepGroupAt is sweepGroup for a group whose worktree sits in root; only the main folder's groups also lose their
+// container and checkouts.
+func (h *Handler) sweepGroupAt(
+	ctx context.Context,
+	rep *Report,
+	root string,
+	group string,
+	unfinished map[string]bool,
+	dry bool,
+	fetchErr error,
+) {
+	path := filepath.Join(root, group)
+	if unfinished[group] {
+		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: "a run can still continue the group"})
+		return
+	}
+	if !dry {
+		unlock, err := h.lockGroup(ctx, group)
+		if err != nil {
+			rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: err.Error()})
+			return
+		}
+		defer unlock()
+	}
+
+	_, _, live, err := h.holder(ctx, group)
+	if err != nil {
+		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: err.Error()})
+		return
+	}
+	if live {
+		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: ErrLeaseHeld.Error()})
+		return
+	}
+
+	r := &run{
+		h:        h,
+		ctx:      ctx,
+		group:    group,
+		rep:      rep,
+		dry:      dry,
+		guard:    true,
+		noRemote: fetchErr,
+	}
+	if root == h.Roots.Worktrees {
+		r.container()
+		r.checkouts()
+	}
+	r.worktree(root, path, false)
+}
+
+// sweepLandings removes the landing worktree and local branch of every epic that no unfinished group lands on.
+// If an unfinished group names no epic, every landing is kept.
+func (h *Handler) sweepLandings(ctx context.Context, rep *Report, used []GroupRef, dry bool, fetchErr error) {
+	epics, err := folders(h.Roots.Landings)
+	if err != nil || len(epics) == 0 {
+		if err != nil {
+			rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: h.Roots.Landings, Reason: err.Error()})
+		}
+		return
+	}
+
+	named := map[string]bool{}
+	unknown := false
+	for _, g := range used {
+		if g.Epic == "" {
+			unknown = true
+			continue
+		}
+		named[g.Epic] = true
+	}
+
+	for _, epic := range epics {
+		path := filepath.Join(h.Roots.Landings, epic)
+		if reason := landingInUse(epic, named, unknown); reason != "" {
+			rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: reason})
+			continue
+		}
+
+		r := &run{h: h, ctx: ctx, group: epic, rep: rep, dry: dry, noRemote: fetchErr}
+		if r.worktree(h.Roots.Landings, path, false) {
+			r.redundantBranch("komodo/" + epic)
+		} else {
+			r.keepBranch("komodo/" + epic)
+		}
+	}
+}
+
+// landingInUse says why an epic's landing worktree must stay, or returns empty when no unfinished group lands on the epic.
+func landingInUse(epic string, named map[string]bool, unknown bool) string {
+	if unknown {
+		return "an unfinished group's epic is unknown"
+	}
+	if named[epic] {
+		return "an unfinished group lands on this epic"
+	}
+	return ""
+}

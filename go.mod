@@ -1,5 +1,3 @@
-module komodo
+module github.com/rdevitto86/komodo-agentic-harness-coding
 
 go 1.27
-
-toolchain go1.27.1

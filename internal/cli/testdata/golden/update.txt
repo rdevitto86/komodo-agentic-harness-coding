@@ -1,0 +1,12 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Update checked: the version went from 1.0.0-beta.6 to 1.0.1.",
+  "report": "Update `checked`: the version went from `1.0.0-beta.6` to `1.0.1`.\n",
+  "data": {
+    "from": "1.0.0-beta.6",
+    "to": "1.0.1",
+    "action": "checked"
+  }
+}

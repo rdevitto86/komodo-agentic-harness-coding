@@ -1,0 +1,7 @@
+{
+  "code": "wall",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "This group stopped on the old working-time limit. Run it again for fresh time.",
+  "fix": "komodo run tg-1.3"
+}

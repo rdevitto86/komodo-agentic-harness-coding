@@ -1,0 +1,5 @@
+{
+  "code": "plan_input",
+  "reason": "the plan input could not be read",
+  "fix": "komodo plan"
+}

@@ -1,0 +1,23 @@
+{
+  "extensions": [".java"],
+  "symbols": [
+    {"kind": "class", "pattern": "^\\s*(?:public\\s+|protected\\s+|private\\s+)?(?:abstract\\s+|final\\s+|static\\s+|sealed\\s+)*(?:class|interface|enum|record)\\s+(\\w+)"},
+    {"kind": "method", "pattern": "^\\s+(?:public|protected|private)\\s+(?:static\\s+)?(?:final\\s+)?[\\w<>\\[\\],? ]+\\s+(\\w+)\\s*\\("}
+  ],
+  "tools": [
+    {
+      "name": "gradle",
+      "markers": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+      "test": "if [ -x ./gradlew ]; then ./gradlew test --continue; else gradle test --continue; fi",
+      "junit": "find . -path '*/build/test-results/test/*.xml' -print0 | xargs -0 cat",
+      "coverage": "d=$(mktemp -d) && printf '%s\\n' \"allprojects { tasks.matching { it.name == 'jacocoTestReport' }.configureEach { reports { xml.required = true } } }\" > \"$d/xml.init.gradle\" && if [ -x ./gradlew ]; then ./gradlew -I \"$d/xml.init.gradle\" test jacocoTestReport --continue; else gradle -I \"$d/xml.init.gradle\" test jacocoTestReport --continue; fi; find . -path '*/build/reports/jacoco/test/jacocoTestReport.xml' -print0 | xargs -0 cat"
+    },
+    {
+      "name": "maven",
+      "markers": ["pom.xml"],
+      "test": "if [ -x ./mvnw ]; then ./mvnw test -Dmaven.test.failure.ignore=true; else mvn test -Dmaven.test.failure.ignore=true; fi",
+      "junit": "find . -path '*/target/surefire-reports/TEST-*.xml' -print0 | xargs -0 cat",
+      "coverage": "if [ -x ./mvnw ]; then ./mvnw test jacoco:report -Dmaven.test.failure.ignore=true; else mvn test jacoco:report -Dmaven.test.failure.ignore=true; fi; find . -path '*/target/site/jacoco/jacoco.xml' -print0 | xargs -0 cat"
+    }
+  ]
+}

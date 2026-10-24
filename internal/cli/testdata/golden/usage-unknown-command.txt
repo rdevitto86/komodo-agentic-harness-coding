@@ -1,0 +1,13 @@
+exit 2
+{
+  "v": 1,
+  "ok": false,
+  "verdict": "Usage error: unknown command \"rnu\". The code is usage. To fix it, run",
+  "report": "Usage error: `unknown command \"rnu\"`. The code is `usage`. To fix it, run\n`did you mean komodo run? see komodo --help`.\n",
+  "data": {},
+  "error": {
+    "code": "usage",
+    "reason": "unknown command \"rnu\"",
+    "fix": "did you mean komodo run? see komodo --help"
+  }
+}

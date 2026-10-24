@@ -1,0 +1,7 @@
+{
+  "code": "merge_conflict",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The group's branch conflicts with its base. Resolve it?",
+  "fix": "komodo run tg-1.3"
+}

@@ -1,0 +1,5 @@
+{
+  "code": "engine_stopping",
+  "reason": "the engine is past its exit check",
+  "fix": "komodo status"
+}

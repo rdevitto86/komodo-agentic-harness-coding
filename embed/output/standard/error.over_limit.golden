@@ -1,0 +1,2 @@
+Refused: `limits.group_retries is over its hard limit of 5`. The code is
+`over_limit`. To fix it, run `komodo config set limits.group_retries=5`.

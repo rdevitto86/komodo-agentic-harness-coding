@@ -1,0 +1,25 @@
+There {{plural (len .Runs.Rows) "is" "are"}} {{n (len .Runs.Rows)}} active {{plural (len .Runs.Rows) "run" "runs"}}, {{n (len .Queued.Rows)}} queued and {{n (len .Blocked.Rows)}} blocked.
+{{if .Alert}}
+Alert: {{.Alert}}
+{{end}}{{if .Waited}}
+The wait ended with {{.Waited}}.
+{{end}}{{if .Runs.Rows}}
+The active runs are:
+
+{{table .Runs}}
+{{end}}{{if .Queued.Rows}}
+The queued runs are:
+
+{{table .Queued}}
+{{end}}{{if .Blocked.Rows}}
+The blocked groups are:
+
+{{table .Blocked}}
+{{end}}{{if .Errors.Rows}}
+The errors since the engine started, by type:
+
+{{table .Errors}}
+{{end}}
+{{- define "turnend"}}{{if .Blocked.Rows}}❌ Blocked Changes
+{{n (len .Blocked.Rows)}} {{plural (len .Blocked.Rows) "group waits" "groups wait"}} for a person.
+{{end}}{{end}}

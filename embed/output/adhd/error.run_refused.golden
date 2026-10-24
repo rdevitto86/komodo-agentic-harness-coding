@@ -1,0 +1,9 @@
+Error: `tg-1.2 depends on tg-1.1, which is not done`.
+
+**Code:** `run_refused`
+
+**Fix:** `komodo run tg-1.1`
+
+**Run:** `0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57`
+
+**Group:** `tg-1.2`

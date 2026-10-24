@@ -1,0 +1,6 @@
+Group `tg-1.3` needs a decision: `dependency`. The task is `amend docs/lld.md`.
+It asks: `A dependency was removed from the run. Continue?` To resolve it, run
+`komodo run tg-1.3`.
+
+❌ Blocked Changes
+Group `tg-1.3` waits for a person.

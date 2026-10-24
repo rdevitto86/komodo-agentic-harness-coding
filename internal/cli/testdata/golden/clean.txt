@@ -1,0 +1,15 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Clean removed 1 item.",
+  "report": "Clean removed 1 item.\n\nThe removed items were:\n\n| `Kind` | `Name` |\n|---|---|\n| `worktree` | `tg-1.2` |\n",
+  "data": {
+    "removed": [
+      {
+        "kind": "worktree",
+        "name": "tg-1.2"
+      }
+    ]
+  }
+}

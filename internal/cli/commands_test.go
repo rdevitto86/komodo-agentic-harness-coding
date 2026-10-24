@@ -1,0 +1,493 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
+)
+
+func init() {
+	engine.RegisterEvents()
+	bus.Register(bus.Key{Type: bus.TypePlan, Subtype: "request"}, func() bus.Payload { return &planRequest{} })
+	bus.Register(intake.PlanBlocked{}.EventKey(), func() bus.Payload { return &intake.PlanBlocked{} })
+	bus.Register(intake.PlanTimeout{}.EventKey(), func() bus.Payload { return &intake.PlanTimeout{} })
+	bus.Register(intake.PlanInput{}.EventKey(), func() bus.Payload { return &intake.PlanInput{} })
+	bus.Register(intake.PlanLocked{}.EventKey(), func() bus.Payload { return &intake.PlanLocked{} })
+	bus.Register(intake.PlanWrite{}.EventKey(), func() bus.Payload { return &intake.PlanWrite{} })
+}
+
+// fake starts a fake engine server on the harness home and points the CLI at it.
+func (h *harness) fake(handler func(*fakeServer, engine.Request, func(engine.Reply))) *fakeServer {
+	srv := startFake(h.t, h.home, handler)
+	e := quickEngine(h.home)
+	e.Start = func(context.Context) error { return errors.New("the test engine cannot be started") }
+	h.engine = e
+	return srv
+}
+
+// dataOf decodes an envelope's data into T.
+func dataOf[T any](t *testing.T, e Envelope) T {
+	t.Helper()
+	b, _ := json.Marshal(e.Data)
+	var v T
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("data %s: %v", b, err)
+	}
+	return v
+}
+
+// backlog writes TG.md files under docs/backlog/ of a repository.
+func backlog(t *testing.T, repo string, groups map[string]string) {
+	t.Helper()
+	for path, status := range groups {
+		dir := filepath.Join(repo, "docs", "backlog", path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "TG.md"), []byte("goal: x\nstatus: "+status+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+const sampleRun = "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"
+
+// answerRunID replies ok with the run id of the request's event.
+func answerRunID(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
+	id := sampleRun
+	if req.Event != nil && req.Event.Run != "" {
+		id = string(req.Event.Run)
+	}
+	send(okReply(map[string]any{"run_id": id}))
+}
+
+func TestRunSendsRunStartEvent(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	planFixture(t, h, repo, samplePlan, "tg-1", "tg-2")
+	srv := h.fake(answerRunID)
+	code, e := h.envelope("-C", repo, "run", samplePlan)
+	if code != 0 || !e.OK {
+		t.Fatalf("exit %d, %+v", code, e)
+	}
+	reqs := srv.Requests()
+	if len(reqs) != 1 || reqs[0].Verb != engine.VerbRun || reqs[0].Target != samplePlan || reqs[0].Root != repo {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	ev := reqs[0].Event
+	rs, ok := ev.Data.(*bus.RunStart)
+	if ev.Type != bus.TypeRunStart || !ok || !uuidPattern.MatchString(string(ev.Run)) {
+		t.Fatalf("event = %+v", ev)
+	}
+	if rs.Target != samplePlan || rs.Groups == nil || len(rs.Groups) != 0 || rs.Source != "cli" || rs.Root != repo ||
+		rs.CommonDir != filepath.Join(repo, ".git") || string(rs.Request) != reqs[0].ID || rs.Repo == "" {
+		t.Fatalf("run-start data = %+v", rs)
+	}
+	if got := dataOf[RunData](t, e); got.RunID != string(ev.Run) || !strings.Contains(e.Report, string(ev.Run)) {
+		t.Fatalf("data = %+v, report = %q", got, e.Report)
+	}
+}
+
+func TestRunNeedsRepository(t *testing.T) {
+	h := newHarness(t)
+	srv := h.fake(answerRunID)
+	code, e := h.envelope("-C", t.TempDir(), "run", samplePlan)
+	if code != 1 || e.Error.Code != "no_repo" || len(srv.Requests()) != 0 {
+		t.Fatalf("exit %d, %+v", code, e.Error)
+	}
+}
+
+func TestRunAnswerRefusalAndCombinations(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	planFixture(t, h, repo, samplePlan, "tg-1")
+	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+		send(engine.Reply{
+			Status: engine.StatusRefused,
+			Code:   engine.CodeNotBlocked,
+			Detail: "tg-1 is not blocked",
+			Final:  true,
+		})
+	})
+	code, e := h.envelope("-C", repo, "run", samplePlan, "tg-1", "--deny")
+	if code != 1 || e.Error.Code != "not_blocked" || e.OK {
+		t.Fatalf("not blocked: exit %d, %+v", code, e)
+	}
+	n := len(srv.Requests())
+	for _, args := range [][]string{
+		{"run", samplePlan, "--approve", "--all"}, {"run", "--all", samplePlan}, {"run"},
+		{"run", samplePlan, "--deny", "--schedule", "2026-10-16T02:00:00-07:00"}, {"run", "tg-1"},
+		{"run", samplePlan, "tg-1", "--schedule", "2026-10-16T02:00:00-07:00"},
+	} {
+		if code, e := h.envelope(append([]string{"-C", repo}, args...)...); code != 2 || e.Error.Code != "usage" {
+			t.Errorf("%v: exit %d, %+v", args, code, e.Error)
+		}
+	}
+	if len(srv.Requests()) != n {
+		t.Error("a usage error reached the engine")
+	}
+}
+
+func TestRunSchedule(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	planFixture(t, h, repo, samplePlan, "tg-1")
+	srv := h.fake(func(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
+		send(
+			okReply(map[string]any{
+				"run_id": sampleRun,
+				"queued": map[string]any{"target": req.Target, "at": req.Flags.Schedule},
+			}),
+		)
+	})
+	code, e := h.envelope("-C", repo, "run", samplePlan, "--schedule", "2026-10-16T02:00:00-07:00")
+	if code != 0 || !e.OK {
+		t.Fatalf("exit %d, %+v", code, e)
+	}
+	req := srv.Requests()[0]
+	want, _ := time.Parse(time.RFC3339, "2026-10-16T02:00:00-07:00")
+	if req.Event == nil || !req.Flags.Schedule.Equal(want) {
+		t.Fatalf("request = %+v", req)
+	}
+	d := dataOf[RunData](t, e)
+	if d.RunID != sampleRun || d.Queued == nil || !d.Queued.At.Equal(want) || !strings.Contains(e.Report, sampleRun) {
+		t.Fatalf("data = %+v, report %q", d, e.Report)
+	}
+	if code, e := h.envelope("-C", repo, "run", samplePlan, "--schedule", "tomorrow"); code != 2 || e.Error.Code != "usage" {
+		t.Fatalf("tomorrow: exit %d, %+v", code, e.Error)
+	}
+}
+
+func TestStopAndAbandon(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	refuse := false
+	srv := h.fake(func(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
+		if refuse {
+			send(engine.Reply{
+				Status: engine.StatusRefused,
+				Code:   engine.CodeUnknownTarget,
+				Detail: "nothing named " + req.Target,
+				Final:  true,
+			})
+			return
+		}
+		send(okReply(map[string]any{"run_id": sampleRun}))
+	})
+	code, e := h.envelope("-C", repo, "stop", samplePlan, "tg-1.2")
+	req := srv.Requests()[0]
+	if code != 0 || req.Verb != engine.VerbStop || req.Event.Type != bus.TypeRunStop ||
+		req.Event.Data.(*bus.RunStop).Target != samplePlan+" tg-1.2" ||
+		dataOf[StopData](t, e).RunID != sampleRun {
+		t.Fatalf("stop: exit %d, %+v, %+v", code, e, req)
+	}
+	code, e = h.envelope("-C", repo, "abandon", samplePlan, "tg-1.2")
+	if code != 0 || srv.Requests()[1].Verb != engine.VerbAbandon || srv.Requests()[1].Target != samplePlan+" tg-1.2" ||
+		srv.Requests()[1].Event != nil || dataOf[AbandonData](t, e).Group != "tg-1.2" {
+		t.Fatalf("abandon: exit %d, %+v", code, e)
+	}
+	if code, e = h.envelope("-C", repo, "abandon", "tg-1.2"); code != 2 || e.Error.Code != "usage" {
+		t.Fatalf("abandon bare label: exit %d, %+v", code, e.Error)
+	}
+	refuse = true
+	if code, e = h.envelope("-C", repo, "stop", samplePlan, "tg-8.8"); code != 1 || e.Error.Code != "unknown_target" {
+		t.Fatalf("unknown target: exit %d, %+v", code, e.Error)
+	}
+	if code, e = h.envelope("-C", repo, "abandon", samplePlan, "tg-8.8"); code != 1 || e.Error.Code != "unknown_target" {
+		t.Fatalf("abandon unknown: exit %d, %+v", code, e.Error)
+	}
+}
+
+func TestPlanReturnsTheIDAndPath(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	srv := h.fake(planThenRun)
+	code, e := h.envelope("-C", repo, "plan", "Add lease revocation", "--from", "docs/hld.md")
+	if code != 0 || !e.OK {
+		t.Fatalf("exit %d, %+v", code, e)
+	}
+	req := srv.Requests()[0]
+	pr, ok := req.Event.Data.(*planRequest)
+	if req.Verb != engine.VerbPlan || req.Event.Type != bus.TypePlan || req.Event.Subtype != "request" || !ok ||
+		pr.Goal != "Add lease revocation" || len(pr.Docs) != 1 || pr.Docs[0] != "docs/hld.md" ||
+		!uuidPattern.MatchString(string(req.Event.Run)) {
+		t.Fatalf("request = %+v", req)
+	}
+	if d := dataOf[PlanData](t, e); d.Plan != samplePlan || !strings.HasSuffix(d.Path, "plan.md") {
+		t.Fatalf("data = %+v", d)
+	}
+	if code, e := h.envelope("-C", repo, "plan"); code != 2 {
+		t.Fatalf("empty plan: exit %d, %+v", code, e.Error)
+	}
+	if code, e := h.envelope("-C", repo, "plan", "goal", "--from", "/elsewhere/doc.md"); code != 2 || e.Error.Code != "usage" {
+		t.Fatalf("--from outside the repository: exit %d, %+v", code, e.Error)
+	}
+}
+
+func TestPlanFailureIsTheErrorEvent(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event: &bus.Event{
+				Type:    bus.TypeError,
+				Subtype: "fault.error",
+				Data: &fault.ErrorFault{FaultData: fault.FaultData{
+					Component: "intake",
+					Code:      "plan_blocked",
+					Kind:      "blocked",
+					Severity:  "error",
+					Reason:    "The third planner draft failed lint",
+				}}}})
+		send(okReply(map[string]any{}))
+	})
+	code, e := h.envelope("-C", repo, "plan", "goal text")
+	if code != 3 || e.OK || e.Error == nil || e.Error.Code != "plan_blocked" {
+		t.Fatalf("exit %d, %+v", code, e)
+	}
+}
+
+// The Intake Handler publishes its own error payloads, not fault events; plan must fail with each one's code and reason.
+func TestPlanFailureIsTheIntakeErrorEvent(t *testing.T) {
+	cases := []struct {
+		name    string
+		data    bus.Payload
+		subtype bus.Subtype
+		exit    int
+		code    string
+		reason  string
+	}{
+		{
+			"planner session", &intake.PlanInput{Reason: "planner session: run the planner: read the brief"},
+			"plan-input", 2, "plan_input", "run the planner: read the brief",
+		},
+		{
+			"blocked", &intake.PlanBlocked{DraftPath: "docs/backlog/.plan-failed-1"},
+			"plan-blocked", 3, "plan_blocked", "docs/backlog/.plan-failed-1",
+		},
+		{"timeout", &intake.PlanTimeout{WallMin: 60}, "plan-timeout", 1, "plan_timeout", "60 minutes"},
+		{"locked", &intake.PlanLocked{Run: "run-9"}, "plan-locked", 1, "locked", "run-9"},
+		{"write", &intake.PlanWrite{Reason: "rename failed"}, "plan-write", 4, "plan_write", "rename failed"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			repo := repoDir(t, "")
+			h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+				send(engine.Reply{
+					Status: engine.StatusEvent,
+					Event:  &bus.Event{Type: bus.TypeError, Subtype: c.subtype, Data: c.data},
+				})
+				send(okReply(map[string]any{}))
+			})
+
+			code, e := h.envelope("-C", repo, "plan", "goal text")
+			if code != c.exit || e.OK || e.Error == nil || e.Error.Code != c.code ||
+				!strings.Contains(e.Error.Reason, c.reason) {
+				t.Fatalf("exit %d, ok %v, error %+v; want exit %d, code %s, reason with %q",
+					code, e.OK, e.Error, c.exit, c.code, c.reason)
+			}
+		})
+	}
+}
+
+func TestReplayCollectsEventsAndGaps(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event: &bus.Event{
+				Type:    bus.TypeRunStatus,
+				Subtype: "run.start",
+				Run:     sampleRun,
+				Data:    &bus.RunStartedFact{Groups: []bus.ID{"g1"}, ConfigHash: "h", Version: "v"},
+			},
+		})
+		send(engine.Reply{
+			Status: engine.StatusEvent,
+			Event:  &bus.Event{Type: bus.TypeRunComplete, Subtype: "stopped", Run: sampleRun, Data: &bus.RunStopped{}},
+		})
+		send(okReply(map[string]any{"gaps": 1}))
+	})
+	code, e := h.envelope("-C", repo, "replay", samplePlan, "tg-1.2")
+	d := dataOf[ReplayData](t, e)
+	if code != 0 || len(d.Steps) != 2 || d.Gaps != 1 || d.RunID != sampleRun || d.Steps[0].Type != bus.TypeRunStatus ||
+		d.Steps[1].Subtype != "stopped" {
+		t.Fatalf("exit %d, data %+v", code, d)
+	}
+	if req := srv.Requests()[0]; req.Verb != engine.VerbReplay || req.Target != samplePlan+" tg-1.2" || req.Event != nil {
+		t.Fatalf("request = %+v", req)
+	}
+	if !strings.Contains(e.Report, "2 steps") || !strings.Contains(e.Report, "run-status") {
+		t.Fatalf("report = %q", e.Report)
+	}
+}
+
+func TestCleanDryRun(t *testing.T) {
+	h := newHarness(t)
+	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+		send(okReply(CleanData{Removed: []CleanItem{{Kind: "worktree", Name: "tg-1.2"}}}))
+	})
+	code, e := h.envelope("clean", "--dry-run")
+	if code != 0 || len(dataOf[CleanData](t, e).Removed) != 1 || !srv.Requests()[0].Flags.DryRun ||
+		srv.Requests()[0].Verb != engine.VerbClean {
+		t.Fatalf("exit %d, %+v", code, e)
+	}
+	if !strings.Contains(e.Report, "tg-1.2") {
+		t.Fatalf("report = %q", e.Report)
+	}
+}
+
+func statusFixture() StatusData {
+	return StatusData{
+		Runs: []RunRow{
+			{RunID: sampleRun, Target: "ep-1", Groups: []GroupRow{{Group: "tg-1.2", Stage: "build", State: "blocked"}}},
+		},
+		Queued: []QueuedRow{},
+		Blocked: []BlockedRow{
+			{
+				Group:    "tg-1.2",
+				RunID:    sampleRun,
+				Reason:   "needs_scope",
+				Question: "The builder needs internal/cache/store.go, outside its scope.",
+			},
+		},
+	}
+}
+
+func TestStatusFiguresAndScorecard(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	srv := h.fake(func(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
+		d := statusFixture()
+		if req.Target != "" {
+			d.Figures = &Figures{WallS: 90, TokensIn: 1000, TokensOut: 200, USD: 0.5, USDEquiv: 1.25}
+			d.Explain = []bus.Event{{Type: bus.TypeRunComplete, Subtype: "stopped", Run: sampleRun, Data: &bus.RunStopped{}}}
+		}
+		if req.Flags.All {
+			d.Recent = nil
+		}
+		send(okReply(d))
+	})
+	code, e := h.envelope("-C", repo, "status", samplePlan, "tg-1.2")
+	d := dataOf[StatusData](t, e)
+	req := srv.Requests()[0]
+	if code != 0 || req.Verb != engine.VerbStatus || req.Target != samplePlan+" tg-1.2" || req.Root != repo || d.Figures == nil ||
+		d.Figures.TokensIn != 1000 || len(d.Explain) != 1 {
+		t.Fatalf("status (id): exit %d, req %+v, data %+v", code, req, d)
+	}
+	if !strings.Contains(e.Report, "1 active run") {
+		t.Fatalf("report = %q", e.Report)
+	}
+	code, e = h.envelope("status", "--all")
+	if code != 0 || !srv.Requests()[1].Flags.All || srv.Requests()[1].Root != "" {
+		t.Fatalf("status --all: exit %d, %+v", code, srv.Requests()[1])
+	}
+	code, e = h.envelope("-C", t.TempDir(), "status")
+	if code != 1 || e.Error.Code != "no_repo" {
+		t.Fatalf("status outside a repository: exit %d, %+v", code, e.Error)
+	}
+}
+
+func TestStatusWait(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	waited := "blocked"
+	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
+		if waited == "blocked" {
+			b, _ := json.Marshal(statusFixture())
+			send(engine.Reply{Status: engine.StatusOK, Data: b})
+		}
+		send(okReply(map[string]any{"waited": waited}))
+	})
+	code, e := h.envelope("-C", repo, "status", "--wait")
+	d := dataOf[StatusData](t, e)
+	if code != 3 || !e.OK || d.Waited != "blocked" || len(d.Blocked) != 1 ||
+		!strings.Contains(e.Report, "internal/cache/store.go") {
+		t.Fatalf("blocked: exit %d, %+v", code, e)
+	}
+	if f := srv.Requests()[0].Flags; !f.Wait || f.TimeoutS != 540 {
+		t.Fatalf("flags = %+v", f)
+	}
+	waited = "done"
+	code, e = h.envelope("-C", repo, "status", "--wait", "--timeout", "30s")
+	if d := dataOf[StatusData](t, e); code != 0 || d.Waited != "done" || srv.Requests()[1].Flags.TimeoutS != 30 {
+		t.Fatalf("done: exit %d, %+v", code, e)
+	}
+	waited = "timeout"
+	if code, e = h.envelope("-C", repo, "status", "--wait"); code != 0 || dataOf[StatusData](t, e).Waited != "timeout" {
+		t.Fatalf("timeout: exit %d, %+v", code, e)
+	}
+}
+
+func TestEngineFailuresMapToExitCodes(t *testing.T) {
+	h := newHarness(t)
+	repo := repoDir(t, "")
+	reply := engine.Reply{Status: engine.StatusRefused, Code: engine.CodeRunRefused, Detail: "dependency cycle", Final: true}
+	h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) { send(reply) })
+	if code, e := h.envelope("-C", repo, "clean"); code != 1 || e.Error.Code != "run_refused" ||
+		!strings.Contains(e.Error.Reason, "dependency cycle") {
+		t.Fatalf("refused: exit %d, %+v", code, e.Error)
+	}
+	reply = engine.Reply{Status: engine.StatusError, Detail: "disk full", Final: true}
+	if code, e := h.envelope("-C", repo, "clean"); code != 4 || e.Error.Code != "internal" ||
+		!strings.Contains(e.Error.Reason, "disk full") {
+		t.Fatalf("error: exit %d, %+v", code, e.Error)
+	}
+}
+
+func TestNoEngineExitsFourNamingSocket(t *testing.T) {
+	h := newHarness(t)
+	e := quickEngine(h.home)
+	e.StartWait = 50 * time.Millisecond
+	e.Start = func(context.Context) error { return nil }
+	h.engine = e
+	code, env := h.envelope("clean")
+	if code != 4 || env.Error.Code != "internal" ||
+		!strings.Contains(env.Error.Reason, filepath.Join(h.home, "state", "engine.sock")) {
+		t.Fatalf("exit %d, %+v", code, env.Error)
+	}
+}
+
+func TestListFormsOutsideConfigAreNotBuilt(t *testing.T) {
+	h := newHarness(t)
+	code, e := h.envelope("-C", repoDir(t, ""), "stop", "--list")
+	if code != 4 || !strings.Contains(e.Error.Reason, "not built yet") {
+		t.Fatalf("exit %d, %+v", code, e.Error)
+	}
+}
+
+func TestWritingCommandsHonourGuardOnStop(t *testing.T) {
+	h := newHarness(t)
+	h.fake(answerRunID)
+	repo := repoDir(t, "")
+	settings := filepath.Join(h.home, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"limits.group_retries": 2}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"stop", samplePlan}, {"status"}, {"abandon", samplePlan, "tg-1"}, {"replay", samplePlan}, {"clean"}} {
+		_, out, errOut := h.run(append([]string{"--json", "-C", repo}, args...)...)
+		if !strings.Contains(errOut, "Warning") || strings.Contains(out, "config_tampered") {
+			t.Errorf("%v: stdout %s stderr %s", args, out, errOut)
+		}
+	}
+	for _, args := range [][]string{{"plan", "x"}, {"run", samplePlan}} {
+		code, e := h.envelope(append([]string{"-C", repo}, args...)...)
+		if code != 1 || e.Error.Code != "config_tampered" {
+			t.Errorf("%v: exit %d, %+v", args, code, e.Error)
+		}
+	}
+}

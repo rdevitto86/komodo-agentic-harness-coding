@@ -1,0 +1,5 @@
+{
+  "code": "locked",
+  "reason": "an amended file names a group a live run holds",
+  "fix": "komodo stop tg-1.2"
+}

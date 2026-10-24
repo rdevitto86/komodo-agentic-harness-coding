@@ -1,120 +1,103 @@
-# komodo-agentic-factory-coding
+# komodo-agentic-harness-coding
 
-Komodo's code assembly line. Work enters as tasks in `docs/backlog/` and leaves as reviewed pull requests. The line is one static binary and a set of markdown files; the machines on it are whatever models you mount today. Swap a model and the line does not change. Swap the host and one mount changes.
+Komodo is one Go program that turns a goal into reviewed, published code. It plans the work into task groups, then runs each group through a fixed pipeline of agents (builder, Quality Assurance, reviewer) inside a private copy of the repository. It publishes only work that passed the checks its risk level requires, and a person merges the result.
 
-This README is the day-to-day guide; each Design bullet points into the specs that define V1: `docs/prd.md`, the requirements, with `docs/hld.md`, `docs/lld.md` and `docs/decisions/`. V1 restarts at `1.0.0-alpha.5` and moves through its betas to the `1.0.0` LTS release the human cuts (decision 0010); the Versions section below defines each stage. Everything before it was a prototype: the 0.x experiments and the Python orchestrator, now tagged `1.0.0-alpha.1` through `1.0.0-alpha.4`, preserved whole at the tag `prototype-final`. The repo was cleared to the markdown source on 2026-09-21, and the prototype's run state did not survive the clear. Tasks are in `docs/backlog/`.
+Two callers drive it: a person at a shell, and the orchestrator, a model chat session in Claude Code that turns the person's intent into commands. With no terminal, every reply is a JSON envelope.
 
 ## Design
 
-The full design lives in `docs/hld.md` and `docs/lld.md`; `docs/decisions/` holds why. This file keeps only what a developer needs to run the line day to day.
+The design is the source for every fact about how Komodo works.
 
-- **The line.** One binary conveys work through eight stages, with two machines and one mount per host; see `docs/hld.md#components` and the flow in `docs/diagrams/assembly-line.svg`.
-- **Stations.** Ingest, Coordinate, Build, Check, Review, Repair, Prepare and Ship; see `docs/hld.md#components`.
-- **Devices.** The brief in, the schema-checked result out, each slot capped; see `docs/lld.md#briefs`.
-- **Metrics.** Every stage writes to the run's local, gitignored ledger; see `docs/lld.md#run-state-and-metrics`.
-- **Machines and mounts.** A profile maps each role's tier to a model and effort, per plan and per host; see `docs/lld.md#profiles-and-economy-mode`.
-- **Ad hoc work.** The line is captive to `/run`; ad hoc work is the orchestrator spawning its own default agents outside it, with no skill of its own; see `docs/lld.md#orchestrator-commands`.
-- **The guard.** One hook holds five rules on every tool call, on every host; see `docs/lld.md#security`.
-- **The binary.** `komodo` is one static Go binary, rebuilt on pull in this repo; see `docs/lld.md#binaries-and-releases`.
-- **The gate.** Local build, lint and doctor checks run before every commit and push, no model, nothing on GitHub; see `docs/lld.md#binaries-and-releases`.
-- **The repo layer.** A repo may commit context, standards, skills and command overrides under `.komodo/`; see `docs/lld.md#the-repo-layer`.
-- **Detection and facets.** Cloud facet work beyond the shipped set is out of scope until after 1.0.0; see `docs/prd.md#product-scope`.
-- **Local machines.** A local model is out of scope until after 1.0.0; see `docs/prd.md#product-scope`.
-- **Hot swap.** A role's model swaps through its profile without touching the line; MCP is out of scope until after 1.0.0; see `docs/lld.md#profiles-and-economy-mode` and `docs/prd.md#product-scope`.
-- **The non-proprietary day.** 1.0.0 proves one host; a second host is out of scope until after 1.0.0; see `docs/prd.md#product-scope`.
-
-## Pull requests
-
-1.0 was built through PR #103 and six stacked group PRs, now merged. Each group ships as one PR from its own `<type>/<slug>` branch, cut from the group's base. `close --group` opens it with the report as the body. Merging is the human's button; nothing runs on GitHub.
-
-The repository ruleset must cover `main` only, which `komodo doctor --remote` audits; it also fails when no ruleset or branch protection covers `main` at all.
-
-## Versions
-
-Every version here is SemVer with a prerelease stage, and a group's `version:` matches its changelog heading exactly. `komodo/rules/backlog.md#choosing-a-version` is the rule a planner follows to pick a group's segment and phase; this section names only this repo's own history through each one.
-
-- **Alpha, `x.y.z-alpha.n`.** The shape still moves. V1 restarts the rebuild at `1.0.0-alpha.5` while phases 0 to 3 land; the prototype's four releases are renumbered `1.0.0-alpha.1`–`.4` (decision 0010).
-- **Beta, `x.y.z-beta.n`.** Feature-complete for `x.y.z`; only fixes land while `komodo eval` runs on every platform. V1's beta starts at `1.0.0-beta.2`, since the untagged `1.0.0-beta.1` heading is retitled as history and never reused (decision 0010).
-- **Rc, `x.y.z-rc.n`, optional.** Nothing requires, gates, or checks it; a release may go straight from beta to stable. V1 takes that path (decision 0010).
-- **Stable, `x.y.z`.** The LTS release, cut by the owner once `docs/prd.md#success-criteria` holds. `komodo tag` never promotes a beta on its own.
-
-## Names
-
-One vocabulary, used the same way in this file, the backlog, the code, the skills, and every command and flag. The prototype's words for these parts are retired, and TSK-03.6.2 greps them out of everything a model or a developer reads.
-
-| Name | Means |
+| Document | Holds |
 |---|---|
-| Station | One fixed step of the line, a `komodo` subcommand or a spawn |
-| Device | The brief going in, the result JSON coming out |
-| Machine | A model doing one station's work |
-| Mount | The code that carries a brief to a machine on one host, or to Ollama |
-| Profile | The table that maps tiers to machines for one host |
-| Tier | light, standard, or heavy; what a role asks for, never a model |
-| Role | One markdown file: what a machine is at a station or in a session |
-| Skill | A markdown procedure a session or a brief can load |
-| Facet | What detection selects for a platform: a skill, appendices, commands |
-| Guard | The one agent hook on shell, edit, write, and spawn |
-| Gate | The local precheck before a commit and a push |
-| Ledger | The two local metrics files |
+| [docs/hld.md](docs/hld.md) | Purpose, ownership, interactions and decisions; a 20-minute read |
+| [docs/lld.md](docs/lld.md) | Types, interfaces, algorithms, limits, configuration keys and the gap register of open items |
 
-## Setup
+`make docsite` serves both as a rendered site at `http://127.0.0.1:8765/hld/`.
 
-Requirements: git, `gh` authenticated, and the host CLI on PATH. Ollama is optional; set `"local": true` in `~/.komodo/config.json` and, once it answers, the light tier moves to it and the reviewer stays remote unless the overlay also says `"local_reviewer": true`.
+## Install
 
-```bash
-git clone <this repo> ~/komodo/ai/komodo-agentic-factory-coding
-cd ~/komodo/ai/komodo-agentic-factory-coding
-go run komodo/cmd/komodo install                  # the one step: binary, git hooks, this repo, and your machine
+Requires Go 1.27.
+
+```sh
+make gate
 ```
 
-That one command builds `bin/komodo`, publishes it to `~/.komodo/bin/komodo`, which every hook runs, links `komodo` onto PATH, writes the git hooks, and installs this repo's and your user's Claude layers. It is the same on macOS, Linux and Windows. After that nothing needs rerunning: each rebuild republishes the binary, and each session start re-renders a stale layer in the background. Without Go, `install.sh` or `install.ps1` downloads and verifies a release and runs the same `komodo install`.
+`make gate` builds, vets and tests the code, builds it for Linux, macOS and Windows, then places the binary at `~/.komodo/bin/komodo`. Set `KOMODO_BIN` to place it elsewhere.
 
-### Start a new repo
+Then install the harness into a repository from a terminal:
 
-From the root of the new repo, a git repository:
-
-```bash
-komodo init --name "Auth API"      # AGENTS.md, docs/backlog, CHANGELOG.md, docs/ specs, the PR template; keeps any file that exists
-komodo install --host claude       # mount the repo on a host
-$EDITOR docs/backlog/TG-01.1-example-group.md  # replace the example group with the first real one; komodo lint checks it
-komodo run                         # drive the line on the next ready group
+```sh
+komodo install
 ```
 
-## Usage
+It puts the binary on the machine and a Komodo block into the repository's `AGENTS.md`. Its flags include `--repo-only`, `--machine-only`, `--remove` and `--dry-run`.
 
-```bash
-komodo run                  # headless, credentials stripped: drains every ready group
-komodo run TG-03.5          # headless, one group
-/run                        # in a session: the next ready group down the line
-/run TG-03.5                # one group
-/run TSK-03.5.2             # one task
-/review                     # QC and the reviewer on the current diff
-komodo next --json          # what would run, and why
-komodo lint                 # after every backlog edit
-komodo doctor               # references, portability, drift, prune; --remote audits the forge's rulesets
-komodo gate                 # build checks, lint, doctor, guard table, comments; pre-commit skips tests, pre-push runs all
+## Commands
+
+Run `komodo --help --json` for every command, flag and result schema. Komodo has 13 commands.
+
+| Command | What it does |
+|---|---|
+| `install` | Install the harness for this machine and repository |
+| `config get` | Print settings and the layer that set each |
+| `config set` | Set, reset or accept settings |
+| `login` | Set up model access for one provider |
+| `update` | Update the binary to the newest signed release |
+| `plan` | Plan task lists from a goal or documents |
+| `run` | Start, schedule or continue a run, answer a blocked group, or override a spent one |
+| `stop` | Stop a run or remove a queued run |
+| `status` | Show live runs, blocked groups and queued runs |
+| `replay` | Play back the recorded events of a run or group |
+| `abandon` | Drop a task group for good |
+| `clean` | Remove everything that belongs to no open run |
+| `ui` | Serve the read-only web dashboard |
+| `doctor` | Check the install, sandbox, Docker, model links and Komodo block |
+
+`config get` and `config set` count as one command, so the table has 14 rows for 13 commands.
+
+**Terminal-only commands:** `install`, `update`, `login` and `config set`. They refuse to run without a terminal, so the orchestrator hands the person the command.
+
+A blocked group is answered with `komodo run <id> --approve` or `komodo run <id> --deny`. A group that spent its tries gets one final try with `komodo run <id> --override --minutes <n>`.
+
+## Configuration
+
+Settings are changed only through the Configuration Manager:
+
+```sh
+komodo config get
+komodo config set key=value
 ```
 
-With no target, `komodo run` drains every ready group in order: for each it builds
-the tasks, repairs review findings for up to `review_repairs` rounds, re-renders
-the host config when doctor reports drift, and opens one pull request per group.
-Merging is the only step a person does across a clean drain; `komodo sync`
-follows it automatically, fast-forwarding the root and rebuilding what drifted.
+`komodo config set --default <key>` resets one key, and `komodo config set --accept` accepts settings edited by hand. Built-in defaults live in `embed/defaults.json`; the LLD lists every key.
 
-A drain never stops at one group. A group that ends unshipped, such as a merge
-conflict QC cannot resolve or a plan the profile has paused, is parked with its
-reason, and the drain runs the next. It ends when nothing is ready or the budget
-is spent, listing what it shipped and what it parked.
+## Test
+
+```sh
+go test ./...
+```
+
+`make gate` runs the full set of checks, including the build and vet for the three operating systems. `make dashboard` serves the dashboard proof of concept on moving mock data.
 
 ## Layout
 
-| Path | What |
+| Path | Holds |
 |---|---|
-| `komodo/AGENTS.md`, `komodo/rules/` | Universal rules, the accessibility contract, the backlog grammar |
-| `komodo/roles/` | One file per role: tier, tools, session flag, schema, brief template |
-| `komodo/skills/` | `run`, `review`, `backlog`, `respond`, and one `standards-<x>` per language or domain |
-| `komodo/policy.json` | The critical refs, config paths, and trailer patterns the guard reads |
-| `komodo/facets/` | One directory per platform: Komodo's setup skill, appendices, commands, markers |
-| `cmd/komodo/`, `internal/` | The binary: line, guard, mounts including Ollama, gate, launcher |
-| `bin/` | Gitignored local build output, built by `komodo gate --install` |
-| `templates/project/` | Starters `komodo init` writes into a new repo |
+| `cmd/komodo` | The program's entry point |
+| `komodo.go`, `embed/` | Files compiled into the binary: defaults, agents, skills, templates, output text, schemas |
+| `internal/cli`, `internal/format`, `internal/config` | Commands, reply text, settings |
+| `internal/bus`, `internal/engine` | Event Bus and Runtime Manager |
+| `internal/cache`, `internal/lease`, `internal/state` | Cache, lease and runtime state managers |
+| `internal/intake`, `internal/contextmgr` | Planning and agent context |
+| `internal/task`, `internal/agent`, `internal/llm`, `internal/sandbox` | Task Manager, agents, model client, sandboxes |
+| `internal/commit`, `internal/cleanup` | Publishing and cleanup |
+| `internal/fault`, `internal/metrics`, `internal/resource` | Error Handler, Metrics Service, Resource Manager |
+| `internal/core`, `internal/integration` | Shared file and git helpers; integration tests |
+| `dashboard/` | The read-only web dashboard |
+| `docs/`, `docsite/` | The design and the tool that renders it |
+
+[AGENTS.md](AGENTS.md) holds the rules for working in this repository.
+
+## License
+
+See [LICENSE](LICENSE).

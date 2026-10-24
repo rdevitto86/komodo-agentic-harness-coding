@@ -1,0 +1,216 @@
+//go:build !windows
+
+package integration
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// waitUntil polls the event store until ok holds for its events; the timeout fails the test with the evidence.
+func (r *binRig) waitUntil(timeout time.Duration, what string, ok func([]event) bool) []event {
+	r.t.Helper()
+
+	for end := time.Now().Add(timeout); time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
+		if evs := r.events(); ok(evs) {
+			return evs
+		}
+	}
+
+	r.t.Fatalf("%s did not happen within %s\n%s", what, timeout, r.evidence(r.events()))
+
+	return nil
+}
+
+// groupHas reports whether the group has an event of the type and subtype.
+func groupHas(evs []event, group, typ, sub string) bool {
+	for _, e := range evs {
+		if e.Group == group && e.Type == typ && e.Subtype == sub {
+			return true
+		}
+	}
+
+	return false
+}
+
+// riskyBuilder scripts the fake builder for the risky plan: each task writes its one file, the add task also its test, and
+// the task ends with task_done.
+func riskyBuilder(brief string, turn int) (string, map[string]any) {
+	task := firstMatch(taskLine, brief)
+	files := map[string][][2]string{
+		"tsk-ci": {{".github/workflows/ci.yml", "name: ci\non: push\njobs: {}\n"}},
+		"tsk-add": {
+			{"tiny/add.go", "package tiny\n\n// Add returns the sum of a and b.\nfunc Add(a, b int) int { return a + b }\n"},
+			{"tiny/add_test.go", "package tiny\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n" +
+				"\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"add\")\n\t}\n}\n"},
+		},
+		"tsk-dep": {{"tiny/dep.go", "package tiny\n\n// Dep returns 2.\nfunc Dep() int { return 2 }\n"}},
+	}[task]
+
+	switch {
+	case turn < len(files):
+		return "write", map[string]any{"path": files[turn][0], "content": files[turn][1]}
+	case turn == len(files) && task != "":
+		return "task_done", map[string]any{"task": task}
+	}
+
+	return "", nil
+}
+
+// Plan approval: `komodo plan` prints the plan id and the path of plan.md and starts no run; nothing runs until
+// `komodo run <plan id>`, which refuses a plan id the repository has no plan for.
+func TestPlanApprovalPlanWritesAndStops(t *testing.T) {
+	r := newBinRig(t, nil)
+	id, path := r.planGoal("add an Add function to the tiny package")
+
+	if !strings.HasPrefix(id, "plan-") || len(id) != len("plan-0a1b2c") {
+		t.Fatalf("plan id %q is not plan- and 6 hexadecimal characters", id)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("plan.md is missing at the printed path: %v", err)
+	}
+
+	// The engine has had time to start a run if plan had queued one.
+	time.Sleep(3 * time.Second)
+
+	evs := r.events()
+	if has(evs, "run-status", "run.start", "") || has(evs, "run-start", "", "") {
+		t.Fatalf("plan started a run\n%s", r.evidence(evs))
+	}
+
+	if calls := r.model.callCounts(); calls["planner"] == 0 || calls["builder"] != 0 {
+		t.Fatalf("model calls %v, want planner calls and 0 builder calls", calls)
+	}
+
+	res := r.komodo(60*time.Second, "run", "plan-ffffff")
+	if res.code == 0 || !strings.Contains(res.stdout, "no plan plan-ffffff") {
+		t.Fatalf("run of an unknown plan id exited %d\nstdout: %s", res.code, res.stdout)
+	}
+
+	if res := r.komodo(60*time.Second, "run", id); res.code != 0 {
+		t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", id, res.code, res.stdout, res.stderr)
+	}
+
+	r.waitDone(120 * time.Second)
+}
+
+// A risky group blocks with "land this risky change?", an independent group lands, the dependent group waits, and
+// `komodo run <plan id> --approve` lands the risky group on the epic branch and starts the dependent group.
+func TestRiskyGroupBlocksThenLandsOnApprove(t *testing.T) {
+	const (
+		risky       = "0192e4c5-7a10-7d3e-9b2f-000000000401"
+		independent = "0192e4c5-7a10-7d3e-9b2f-000000000402"
+		dependent   = "0192e4c5-7a10-7d3e-9b2f-000000000403"
+	)
+
+	r := newBinRig(t, nil)
+	r.model.builder = riskyBuilder
+	r.writePlanFile("risky.md", nil)
+
+	if res := r.komodo(60*time.Second, "run", fixturePlan); res.code != 0 {
+		t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", fixturePlan, res.code, res.stdout, res.stderr)
+	}
+
+	evs := r.waitUntil(150*time.Second, "the risky group blocked and the independent group landed", func(evs []event) bool {
+		return has(evs, "run-failure", "group.blocked", "risky_change") && groupHas(evs, independent, "run-status", "group.done")
+	})
+
+	if groupHas(evs, dependent, "run-status", "session.start") {
+		t.Fatalf("the dependent group started before the risky group landed\n%s", r.evidence(evs))
+	}
+
+	if groupHas(evs, risky, "run-status", "group.done") {
+		t.Fatalf("the risky group ended without an approval\n%s", r.evidence(evs))
+	}
+
+	res := r.komodo(60*time.Second, "run", fixturePlan, "--approve")
+	if res.code != 0 || !strings.Contains(res.stdout, "Landed risky groups") || !strings.Contains(res.stdout, "tg-1") {
+		t.Fatalf("--approve exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+	}
+
+	// The approved group leaves the block and enters Commit.
+	r.waitUntil(60*time.Second, "the risky group resuming", func(evs []event) bool {
+		return groupHas(evs, risky, "run-status", "group.resumed")
+	})
+
+	// The risky group lands, the dependent group runs and lands, and the run completes.
+	evs = r.waitUntil(150*time.Second, "the risky group landed and the dependent group ran", func(evs []event) bool {
+		return groupHas(evs, risky, "run-status", "group.done") && groupHas(evs, dependent, "run-status", "group.done")
+	})
+
+	if !groupHas(evs, dependent, "run-status", "session.start") {
+		t.Fatalf("the dependent group never started\n%s", r.evidence(evs))
+	}
+
+	r.waitUntil(60*time.Second, "the run completing", func(evs []event) bool {
+		return has(evs, "run-complete", "done", "")
+	})
+}
+
+// Group rewrite: `komodo run <plan id> <group> "<prompt>"` on a group that has not started rewrites it in place, then
+// runs it to completion.
+func TestRewriteNotStartedGroupRunsAfterPlanning(t *testing.T) {
+	r := newBinRig(t, nil)
+	id, _ := r.planGoal("add an Add function to the tiny package")
+	before := r.model.callCounts()["planner"]
+
+	res := r.komodo(90*time.Second, "run", id, fixtureGroup, "add a doc comment to Add")
+	if res.code != 0 {
+		t.Fatalf("komodo run %s %s exited %d\nstdout: %s\nstderr: %s", id, fixtureGroup, res.code, res.stdout, res.stderr)
+	}
+
+	if got := r.model.callCounts()["planner"]; got <= before {
+		t.Fatalf("the rewrite made no planner call (%d before, %d after)", before, got)
+	}
+
+	r.waitDone(120 * time.Second)
+}
+
+// Plan approval: a hand edit of plan.md that breaks a lint rule refuses `komodo run <plan id>` with the findings and leaves
+// blueprint.json unchanged; no run starts.
+func TestRunRefusesHandEditThatBreaksARule(t *testing.T) {
+	r := newBinRig(t, nil)
+	id, path := r.planGoal("add an Add function to the tiny package")
+	blueprint := filepath.Join(filepath.Dir(path), "blueprint.json")
+
+	before, err := os.ReadFile(blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broken := strings.Replace(string(text), "points: 3", "points: 4", 1)
+	if broken == string(text) {
+		t.Fatalf("plan.md has no points: 3 line to break:\n%s", text)
+	}
+
+	if err := os.WriteFile(path, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := r.komodo(60*time.Second, "run", id)
+	if res.code == 0 || !strings.Contains(res.stdout, "points 4 is not on the scale") {
+		t.Fatalf("run of a broken plan.md exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+	}
+
+	after, err := os.ReadFile(blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(after) != string(before) {
+		t.Fatalf("blueprint.json changed on a refused run:\n%s", after)
+	}
+
+	if evs := r.events(); has(evs, "run-status", "group.start", "") {
+		t.Fatalf("a refused run started a group\n%s", r.evidence(evs))
+	}
+}

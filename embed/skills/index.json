@@ -1,0 +1,96 @@
+{
+  "v": 1,
+  "skills": [
+    {
+      "name": "planning",
+      "description": "Planning: ordering dependent task groups, waves, chain length and splitting a group",
+      "globs": [],
+      "markers": [],
+      "sections": [
+        "Dependencies",
+        "Waves",
+        "Chain",
+        "Splitting"
+      ],
+      "sha256": "ec85db7aa401b2bc0a98fdadcf17fcad367eec84ed4e707d22d04b3990d28048"
+    },
+    {
+      "name": "standards-aws",
+      "description": "AWS standards: identity, networking and data",
+      "globs": [
+        "*.tf"
+      ],
+      "markers": [
+        "*.tf:provider \"aws\""
+      ],
+      "sections": [
+        "Identity",
+        "Networking",
+        "Data"
+      ],
+      "sha256": "32da2f2a51beab79847ce8972513399a3c6d849e2809751c7bea5f0eeaace36d"
+    },
+    {
+      "name": "standards-comments",
+      "description": "Comments: where they go, how long they are and what they never say",
+      "globs": [],
+      "markers": [],
+      "sections": [
+        "Where",
+        "Shape",
+        "Banned"
+      ],
+      "sha256": "f465a96f28140002cb71475ddfab14776071b0f2b81d03226fde8ed48b37402e"
+    },
+    {
+      "name": "standards-go",
+      "description": "Go standards: errors, naming, tests, line width, wrapping, blank lines, declarations and file layout",
+      "globs": [
+        "*.go"
+      ],
+      "markers": [],
+      "sections": [
+        "Errors",
+        "Naming",
+        "Tests",
+        "Line width",
+        "Wrapping",
+        "Blank lines",
+        "Declarations",
+        "File layout"
+      ],
+      "sha256": "c3de3e10eac65f082ba09d4c3adc52296170e32411d8367f16dfbe137a132e44"
+    },
+    {
+      "name": "standards-kotlin",
+      "description": "Kotlin standards: null safety, immutability and coroutines",
+      "globs": [
+        "*.kt"
+      ],
+      "markers": [],
+      "sections": [
+        "Safety",
+        "Coroutines"
+      ],
+      "sha256": "b5c1424ec24c6ac453df3f41b09be0a921afa7736b7890861f94ca3c14f5c888"
+    },
+    {
+      "name": "standards-ui-mobile",
+      "description": "Mobile interface standards for Android and iOS",
+      "globs": [
+        "*.kt",
+        "*.swift"
+      ],
+      "markers": [
+        "AndroidManifest.xml",
+        "*.xcodeproj"
+      ],
+      "sections": [
+        "Layout",
+        "Accessibility",
+        "Lifecycle"
+      ],
+      "sha256": "cde8d84ff2058ad788df864d6e922b2a78dd03f7a6bacf230096c1a6815db09c"
+    }
+  ]
+}

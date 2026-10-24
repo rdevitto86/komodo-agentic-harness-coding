@@ -1,0 +1,35 @@
+{
+  "changes": {
+    "head": [
+      "file",
+      "action",
+      "reason"
+    ],
+    "rows": [
+      [
+        "AGENTS.md",
+        "updated",
+        "block changed"
+      ],
+      [
+        ".claude/settings.json",
+        "created",
+        "missing"
+      ]
+    ],
+    "what": "files"
+  },
+  "probe": {
+    "head": [
+      "link",
+      "result"
+    ],
+    "rows": [
+      [
+        "claude",
+        "ok"
+      ]
+    ],
+    "what": "links"
+  }
+}

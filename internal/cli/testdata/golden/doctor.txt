@@ -1,0 +1,53 @@
+exit 3
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Doctor ran 7 checks.",
+  "report": "Doctor ran 7 checks.\n\nThe results are:\n\n| `check` | `result` | `fix` |\n|---|---|---|\n| `install` | `fail` | `komodo install` |\n| `sandbox` | `pass` |  |\n| `docker` | `pass` |  |\n| `links` | `pass` |  |\n| `block` | `fail` | `komodo install --repo-only` |\n\n2 more: checks\n",
+  "data": {
+    "checks": [
+      {
+        "name": "install",
+        "result": "fail",
+        "detail": "this machine has no install record; this repository has no install manifest; komodo is not on PATH",
+        "fix": "komodo install"
+      },
+      {
+        "name": "sandbox",
+        "result": "pass",
+        "detail": "fake-sandbox ran a harmless command",
+        "fix": ""
+      },
+      {
+        "name": "docker",
+        "result": "pass",
+        "detail": "Docker is not installed; Quality Assurance uses the operating-system sandbox and the report says so",
+        "fix": ""
+      },
+      {
+        "name": "links",
+        "result": "pass",
+        "detail": "claude-cli: ok",
+        "fix": ""
+      },
+      {
+        "name": "block",
+        "result": "fail",
+        "detail": "AGENTS.md is missing",
+        "fix": "komodo install --repo-only"
+      },
+      {
+        "name": "home",
+        "result": "pass",
+        "detail": "<home> is on a local file system (apfs) and honours file locks",
+        "fix": ""
+      },
+      {
+        "name": "rules",
+        "result": "pass",
+        "detail": "no review data to check",
+        "fix": ""
+      }
+    ]
+  }
+}

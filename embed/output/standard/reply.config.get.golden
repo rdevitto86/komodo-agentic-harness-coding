@@ -1,0 +1,8 @@
+2 settings were found.
+
+They are:
+
+| `key` | `value` | `source` |
+|---|---|---|
+| `output.profile` | `adhd` | `built-in` |
+| `limits.group_retries` | `3` | `machine` |

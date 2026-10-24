@@ -1,0 +1,5 @@
+Error: `the plan input could not be read`.
+
+**Code:** `plan_input`
+
+**Fix:** `komodo plan`

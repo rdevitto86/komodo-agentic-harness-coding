@@ -1,0 +1,6 @@
+Group `tg-1.3` needs a decision: `context`. The task is `amend docs/lld.md`. It
+asks: `The brief exceeds half the context of every link. Shrink the group?` To
+resolve it, run `komodo run tg-1.3`.
+
+❌ Blocked Changes
+Group `tg-1.3` waits for a person.

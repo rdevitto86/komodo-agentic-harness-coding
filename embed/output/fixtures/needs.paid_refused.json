@@ -1,0 +1,7 @@
+{
+  "code": "paid_refused",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "A paid link was refused by the billing check. Allow paid use for this run?",
+  "fix": "komodo run tg-1.3"
+}

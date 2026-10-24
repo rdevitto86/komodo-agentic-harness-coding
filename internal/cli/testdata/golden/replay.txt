@@ -1,0 +1,23 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Replay of run <uuid> has 1 step.",
+  "report": "Replay of run `<uuid>` has 1 step.\n\n```text\n- run-complete/stopped run=<uuid> {\"saved\":null}\n```\n",
+  "data": {
+    "run_id": "<uuid>",
+    "steps": [
+      {
+        "type": "run-complete",
+        "subtype": "stopped",
+        "run": "<uuid>",
+        "group": "",
+        "time": "0001-01-01T00:00:00Z",
+        "data": {
+          "saved": null
+        }
+      }
+    ],
+    "gaps": 0
+  }
+}

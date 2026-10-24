@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Komodo</title>
+<link rel="stylesheet" href="/ui.css">
+</head>
+<body>
+<main id="app">
+<header class="top"><div class="brand"><span class="logo"></span>Komodo<small>runs</small></div><span id="conn" class="conn off">connecting</span></header>
+<div id="error"></div>
+<div id="kpis" class="kpis"></div>
+<section class="card"><h2>Pipeline</h2>
+<div class="scroll"><svg id="pipeline" viewBox="0 0 650 200" role="img" aria-label="Stage pipeline with a live count per stage"></svg></div></section>
+<div class="cols">
+<section><h2>Runs</h2><div id="runs" class="runs"></div>
+<section class="card queued-card"><h2>Queued runs</h2><div id="queued" class="queued"></div></section></section>
+<aside><section class="card"><h2>Events</h2><div id="events" class="feed"></div></section></aside>
+</div>
+</main>
+<div id="backdrop" class="backdrop" hidden></div>
+<aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1" hidden>
+<header class="drawer-head"><div><h2>Run</h2><h3 id="drawer-title"></h3></div><span id="drawer-close"></span></header>
+<div id="drawer-body" class="drawer-body"></div>
+</aside>
+<script src="/ui.js"></script>
+</body>
+</html>

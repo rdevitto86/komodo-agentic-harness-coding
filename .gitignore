@@ -13,3 +13,9 @@ CLAUDE.local.md
 # Local build output, built by `komodo gate --install` and `komodo release build`
 /bin/
 /dist/
+
+# Design docs site build output
+/.docs-build/
+
+# Python bytecode
+__pycache__/

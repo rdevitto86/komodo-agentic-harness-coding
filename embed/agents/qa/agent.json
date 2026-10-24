@@ -1,0 +1,153 @@
+{
+  "v": 1,
+  "weight": "light",
+  "chain": [
+    "claude-cli",
+    "anthropic-api"
+  ],
+  "tools": [
+    "read",
+    "search",
+    "run",
+    "run_check"
+  ],
+  "run_classes": [
+    "build",
+    "test"
+  ],
+  "guard": [
+    "R1"
+  ],
+  "limits": {
+    "wall_min": 60,
+    "idle_min": 10
+  },
+  "skills": {
+    "allow": [
+      "standards-*"
+    ],
+    "always": []
+  },
+  "slots": {
+    "required": [
+      "repo_profile",
+      "group",
+      "tasks",
+      "acceptance"
+    ],
+    "optional": [
+      "repo_context",
+      "standards",
+      "diff",
+      "checks",
+      "baseline",
+      "builder_evidence"
+    ]
+  },
+  "result": {
+    "$id": "komodo:agent/qa/result/1",
+    "additionalProperties": false,
+    "properties": {
+      "cause": {
+        "description": "Only with untestable: what was not ready and what you tried.",
+        "type": "string"
+      },
+      "items": {
+        "description": "Exactly one entry per acceptance item, as an array of objects.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "confidence": {
+              "description": "0 to 100: how sure you are of this answer; 0 not confident, 100 certain.",
+              "type": "integer"
+            },
+            "evidence": {
+              "description": "One entry per command you ran for the item; never empty.",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "cmd": {
+                    "description": "The command as run.",
+                    "type": "string"
+                  },
+                  "excerpt": {
+                    "description": "The output lines that show the result, up to 4 KB, head and tail.",
+                    "type": "string"
+                  },
+                  "exit": {
+                    "description": "The exit code you saw.",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "cmd",
+                  "exit",
+                  "excerpt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "item": {
+              "description": "The acceptance item identifier from the brief.",
+              "type": "string"
+            },
+            "pass": {
+              "description": "True when the item holds.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "item",
+            "pass",
+            "evidence",
+            "confidence"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "status": {
+        "description": "tested when you judged the items, else untestable.",
+        "enum": [
+          "tested",
+          "untestable"
+        ],
+        "type": "string"
+      },
+      "tasks": {
+        "description": "Exactly one entry per task identifier, as an array of objects.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "confirmation": {
+              "description": "confirmed when its acceptance holds, else not_confirmed.",
+              "enum": [
+                "confirmed",
+                "not_confirmed"
+              ],
+              "type": "string"
+            },
+            "task": {
+              "description": "The task identifier from the brief.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "confirmation"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "status",
+      "items",
+      "tasks"
+    ],
+    "type": "object"
+  },
+  "pool_slot": true
+}

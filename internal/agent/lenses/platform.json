@@ -1,0 +1,73 @@
+{
+  "lens": "platform",
+  "when": "filter",
+  "applies": {
+    "globs": [
+      "**/*_darwin.go",
+      "**/*_linux.go",
+      "**/*_windows.go"
+    ],
+    "markers": [
+      "path/filepath",
+      "filepath\\.",
+      "os/exec",
+      "syscall",
+      "os/signal",
+      "\\\\r\\\\n"
+    ]
+  },
+  "rules": [
+    {
+      "id": "platform.1",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "paths use the platform separator functions, not a typed slash",
+      "evidence": "the line that joins a path with a typed separator",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "platform.2",
+      "level": "medium",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "file names are not assumed to be case-sensitive or case-insensitive",
+      "evidence": "the line that compares or builds names by case",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "platform.3",
+      "level": "medium",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "text read from or written to files does not assume one line ending",
+      "evidence": "the line that splits or joins on a fixed line ending",
+      "source": "Komodo minimal catalog"
+    },
+    {
+      "id": "platform.4",
+      "level": "med_high",
+      "applies": {
+        "globs": [
+          "**"
+        ],
+        "markers": []
+      },
+      "check": "signals and process groups are used only where the platform supports them",
+      "evidence": "the line that uses a platform-only signal or call",
+      "source": "Komodo minimal catalog"
+    }
+  ]
+}

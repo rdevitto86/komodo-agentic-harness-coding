@@ -1,0 +1,214 @@
+/* --- Komodo docs theme: the decision page's palette and card layout on Material */
+
+:root, [data-md-color-scheme="default"] {
+  --k-bg: #f5f6f8; --k-panel: #ffffff; --k-fg: #0f172a; --k-mute: #64748b;
+  --k-line: #e2e8f0; --k-soft: #f1f5f9; --k-acc: #4f46e5; --k-acc-soft: #eef2ff;
+  --k-ok: #047857; --k-ok-soft: #ecfdf5;
+  --k-warn: #b45309; --k-warn-soft: #fffbeb; --k-bad: #b91c1c; --k-bad-soft: #fef2f2;
+  --k-sh: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px rgba(15, 23, 42, .06);
+}
+[data-md-color-scheme="slate"] {
+  --k-bg: #0b0f17; --k-panel: #111827; --k-fg: #e5e7eb; --k-mute: #94a3b8;
+  --k-line: #1f2937; --k-soft: #0f1623; --k-acc: #818cf8; --k-acc-soft: #1e1b4b;
+  --k-ok: #34d399; --k-ok-soft: #052e22; --k-sh: none;
+  --k-warn: #fbbf24; --k-warn-soft: #2a1c05; --k-bad: #f87171; --k-bad-soft: #2a0b0b;
+}
+[data-md-color-scheme] {
+  --md-default-bg-color: var(--k-bg);
+  --md-default-fg-color: var(--k-fg);
+  --md-default-fg-color--light: var(--k-mute);
+  --md-default-fg-color--lighter: var(--k-line);
+  --md-default-fg-color--lightest: var(--k-soft);
+  --md-primary-fg-color: var(--k-acc);
+  --md-primary-bg-color: var(--k-panel);
+  --md-accent-fg-color: var(--k-acc);
+  --md-typeset-color: var(--k-fg);
+  --md-typeset-a-color: var(--k-acc);
+  --md-code-bg-color: var(--k-soft);
+  --md-code-fg-color: var(--k-fg);
+  --md-footer-bg-color: var(--k-panel);
+  --md-footer-fg-color: var(--k-mute);
+  --md-text-font-family: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --md-code-font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+body { -webkit-font-smoothing: antialiased; }
+.md-grid { max-width: none; }
+.md-main { background: var(--k-bg); }
+.md-typeset { font-size: .78rem; line-height: 1.6; }
+
+/* --- Header: frosted bar instead of a solid colour band */
+.md-header {
+  background: color-mix(in srgb, var(--k-panel) 85%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  color: var(--k-fg); box-shadow: none; border-bottom: 1px solid var(--k-line);
+}
+.md-header__title { font-weight: 700; letter-spacing: -.01em; }
+.md-header__button.md-logo { color: var(--k-acc); }
+.md-search__form { background: var(--k-soft); border: 1px solid var(--k-line); border-radius: 10px; }
+.md-search__input { color: var(--k-fg); }
+.md-search__input::placeholder, .md-search__icon { color: var(--k-mute); }
+
+/* --- Content as a card */
+.md-content__inner {
+  background: var(--k-panel); border: 1px solid var(--k-line); border-radius: 16px;
+  box-shadow: var(--k-sh); padding: 26px 32px 32px; margin: 24px 12px 32px;
+}
+.md-content__inner::before { display: none; }
+.md-typeset h1 { font-size: 1.9em; font-weight: 700; letter-spacing: -.015em; color: var(--k-fg); margin-bottom: .6em; }
+.md-typeset h2 {
+  font-size: 1.45em; font-weight: 700; letter-spacing: -.01em; margin-top: 2.2em;
+  padding-top: 1.1em; border-top: 1px solid var(--k-line);
+}
+.md-typeset h3 { font-size: 1.15em; font-weight: 650; }
+.md-typeset h4, .md-typeset h5 {
+  font-size: .75em; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--k-mute);
+}
+.md-typeset a { text-decoration: none; }
+.md-typeset a:hover { text-decoration: underline; }
+.md-typeset code { border-radius: 5px; padding: 1px 5px; font-size: .86em; }
+
+/* --- Label lines ("What matters"), marked by build.py, read as section labels */
+.md-typeset p.k-label {
+  font-size: .72em; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--k-acc); margin: 1.8em 0 .5em;
+}
+.md-typeset p.k-label strong { font-weight: inherit; }
+
+/* --- Tables: borderless rows, uppercase headers */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--k-line); border-radius: 12px; box-shadow: none;
+  font-size: .9em; overflow: hidden; display: table; width: 100%;
+}
+.md-typeset table:not([class]) th {
+  background: var(--k-soft); color: var(--k-mute); font-size: .78em; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--k-line);
+}
+.md-typeset table:not([class]) td { border-top: 1px solid var(--k-line); vertical-align: top; }
+.md-typeset table:not([class]) tr:hover td { background: var(--k-soft); }
+.md-typeset__scrollwrap { margin: 1em 0; }
+.md-typeset__table { padding: 0; width: 100%; }
+
+/* --- Callouts and collapsed lists as soft cards */
+.md-typeset .admonition, .md-typeset details {
+  border: 1px solid var(--k-line); border-radius: 12px; box-shadow: none;
+  font-size: .95em; background: var(--k-panel);
+}
+.md-typeset .admonition.abstract {
+  background: var(--k-acc-soft); border-color: color-mix(in srgb, var(--k-acc) 25%, var(--k-line));
+  box-shadow: inset 3px 0 0 var(--k-acc);
+}
+.md-typeset .admonition.abstract > .admonition-title {
+  background: transparent; color: var(--k-acc); font-size: .78em; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em; padding-left: 1rem;
+}
+.md-typeset .admonition.abstract > .admonition-title::before { display: none; }
+.md-typeset details.info > summary {
+  background: var(--k-soft); color: var(--k-fg); font-weight: 600; border-radius: 12px;
+}
+.md-typeset details.info[open] > summary { border-radius: 12px 12px 0 0; border-bottom: 1px solid var(--k-line); }
+.md-typeset details.info > summary::before { background-color: var(--k-acc); }
+.md-typeset details.info > summary::after { color: var(--k-mute); }
+
+/* --- Glossary terms */
+.md-typeset abbr { text-decoration: none; border-bottom: 1px dotted var(--k-acc); cursor: help; }
+
+/* --- Sidebar navigation like the decision page's step list */
+.md-nav__link { border-radius: 10px; padding: 4px 10px; margin: 1px 0; }
+.md-nav__link:hover { background: var(--k-soft); color: var(--k-fg); }
+.md-nav__link--active, .md-nav__item--active > .md-nav__link {
+  background: var(--k-panel); color: var(--k-acc); font-weight: 600;
+  box-shadow: var(--k-sh); outline: 1px solid var(--k-line);
+}
+.md-nav__title { color: var(--k-mute); font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; }
+.md-sidebar--primary .md-nav__item--section > .md-nav__link { color: var(--k-acc); font-weight: 700; }
+
+/* --- Diagrams: real size, scroll sideways when wider than the column, expandable */
+.md-typeset .diagram-frame {
+  position: relative; margin: 1.2em 0; padding: 44px 20px 20px; border-radius: 14px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--k-mute) 22%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    var(--k-soft);
+  border: 1px solid var(--k-line); overflow: auto; max-height: 78vh; cursor: zoom-in;
+}
+.md-typeset .diagram-frame svg { display: block; margin: 0 auto; max-width: none; height: auto; }
+.md-typeset .diagram-frame .diagram-open {
+  position: sticky; float: right; top: 0; right: 0; margin: -32px -8px 0 0; z-index: 1;
+  font: 600 12px/1 var(--md-text-font-family); padding: 7px 11px; border-radius: 9px;
+  border: 1px solid var(--k-line); background: var(--k-panel); color: var(--k-fg); cursor: pointer; box-shadow: var(--k-sh);
+}
+.md-typeset .diagram-frame .diagram-open:hover { border-color: var(--k-acc); color: var(--k-acc); }
+.md-typeset div.diagram:not(.diagram-frame) { white-space: pre; font-family: var(--md-code-font-family); color: var(--k-mute); }
+
+/* --- Modern diagram styling: rounded cards, soft depth, pill labels, flowing edges */
+.diagram-frame svg, .diagram-viewer svg { font-family: var(--md-text-font-family) !important; }
+:is(.diagram-frame, .diagram-viewer) svg :is(.node rect, .node polygon, .node circle, .node path.basic) {
+  rx: 10px; ry: 10px; stroke-width: 1.4px !important;
+  filter: drop-shadow(0 1px 1px rgba(15, 23, 42, .06)) drop-shadow(0 6px 14px rgba(79, 70, 229, .10));
+}
+:is(.diagram-frame, .diagram-viewer) svg .cluster rect {
+  rx: 14px; ry: 14px; stroke-dasharray: none !important; stroke-width: 1px !important;
+  fill: color-mix(in srgb, var(--k-acc-soft) 55%, transparent) !important;
+}
+:is(.diagram-frame, .diagram-viewer) svg foreignObject { overflow: visible; }
+:is(.diagram-frame, .diagram-viewer) svg .cluster-label, :is(.diagram-frame, .diagram-viewer) svg .cluster text {
+  font-weight: 600; white-space: nowrap; fill: var(--k-acc); color: var(--k-acc);
+}
+:is(.diagram-frame, .diagram-viewer) svg :is(.edgeLabel, .labelBkg) { background: transparent !important; }
+:is(.diagram-frame, .diagram-viewer) svg .edgeLabel :is(span, p) {
+  border-radius: 99px; background: var(--k-panel) !important; color: var(--k-mute) !important;
+  box-shadow: 0 0 0 4px var(--k-panel), 0 0 0 5px var(--k-line);
+}
+:is(.diagram-frame, .diagram-viewer) svg :is(path.flowchart-link, .transition, .relation, .messageLine0) {
+  stroke: color-mix(in srgb, var(--k-acc) 55%, var(--k-mute)) !important; stroke-width: 1.6px !important;
+  stroke-dasharray: 10 6 !important; animation: k-flow 1.1s linear infinite;
+}
+:is(.diagram-frame, .diagram-viewer) svg :is(path.edge-pattern-dotted, .messageLine1) {
+  stroke-dasharray: 2 5 !important; animation-duration: 2.2s;
+}
+/* --- Diagram node roles: actor, core, external system, stored file, and outcome states */
+:is(.diagram-frame, .diagram-viewer) svg .nodeLabel small { color: var(--k-mute); opacity: 1 !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.actor :is(rect, path, polygon) { fill: var(--k-panel) !important; stroke: var(--k-fg) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.core :is(rect, path, polygon) { fill: var(--k-acc) !important; stroke: var(--k-acc) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.ext :is(rect, path, polygon) { fill: var(--k-panel) !important; stroke: color-mix(in srgb, var(--k-mute) 45%, var(--k-line)) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.store :is(rect, path, polygon) { fill: var(--k-soft) !important; stroke: var(--k-mute) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.ok :is(rect, path, polygon) { fill: var(--k-ok-soft) !important; stroke: var(--k-ok) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.warn :is(rect, path, polygon) { fill: var(--k-warn-soft) !important; stroke: var(--k-warn) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.bad :is(rect, path, polygon) { fill: var(--k-bad-soft) !important; stroke: var(--k-bad) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.muted :is(rect, path, polygon) { fill: var(--k-soft) !important; stroke: var(--k-mute) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.core :is(.nodeLabel, .nodeLabel small) { color: var(--k-panel) !important; }
+:is(.diagram-frame, .diagram-viewer) svg .node.muted :is(rect, path, polygon) { stroke-dasharray: 4 4 !important; }
+:is(.diagram-frame, .diagram-viewer) svg :is(.messageText, .loopText, .labelText) {
+  paint-order: stroke; stroke: var(--k-soft); stroke-width: 6px; stroke-linejoin: round;
+}
+@keyframes k-flow { from { stroke-dashoffset: 32; } to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  :is(.diagram-frame, .diagram-viewer) svg * { animation: none !important; }
+}
+
+/* --- Full-screen diagram viewer */
+.diagram-viewer {
+  position: fixed; inset: 0; z-index: 10; overflow: hidden;
+  background: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--k-mute) 22%, transparent) 1px, transparent 0) 0 0 / 22px 22px, var(--k-bg);
+  cursor: grab; touch-action: none;
+}
+.diagram-viewer.dragging { cursor: grabbing; }
+.diagram-viewer .stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.diagram-viewer .stage svg { display: block; max-width: none !important; }
+.diagram-viewer .bar {
+  position: fixed; top: 14px; right: 14px; display: flex; gap: 6px; padding: 6px;
+  background: var(--k-panel); border: 1px solid var(--k-line); border-radius: 12px; box-shadow: var(--k-sh);
+}
+.diagram-viewer .bar button {
+  all: unset; cursor: pointer; min-width: 30px; height: 30px; padding: 0 8px; text-align: center;
+  font: 600 14px/30px var(--md-text-font-family); color: var(--k-fg); border-radius: 8px;
+}
+.diagram-viewer .bar button:hover { background: var(--k-soft); color: var(--k-acc); }
+.diagram-viewer .hint {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); font: 13px var(--md-text-font-family);
+  color: var(--k-mute); background: var(--k-panel); border: 1px solid var(--k-line); border-radius: 99px; padding: 6px 14px;
+}
+
+@media (max-width: 76.25em) {
+  .md-content__inner { margin: 12px 0 24px; padding: 18px 16px 24px; border-radius: 12px; }
+}

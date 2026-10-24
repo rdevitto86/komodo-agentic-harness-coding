@@ -1,0 +1,93 @@
+{
+  "v": 1,
+  "weight": "heavy",
+  "chain": [
+    "claude-cli",
+    "anthropic-api"
+  ],
+  "tools": [
+    "read",
+    "search",
+    "skill",
+    "diff",
+    "git_read",
+    "run",
+    "submit_finding"
+  ],
+  "run_classes": [
+    "build",
+    "test",
+    "lint"
+  ],
+  "guard": [
+    "R1"
+  ],
+  "limits": {
+    "wall_min": 60,
+    "idle_min": 10
+  },
+  "skills": {
+    "allow": [
+      "standards-*"
+    ],
+    "always": []
+  },
+  "slots": {
+    "required": [
+      "repo_profile",
+      "group",
+      "tasks",
+      "files",
+      "diff",
+      "lens",
+      "lens_rules",
+      "checks"
+    ],
+    "optional": [
+      "repo_context",
+      "standards",
+      "findings",
+      "callers",
+      "specs",
+      "repo_map"
+    ]
+  },
+  "result": {
+    "$id": "komodo:agent/reviewer/result/1",
+    "additionalProperties": false,
+    "properties": {
+      "verdicts": {
+        "description": "Exactly one verdict per task identifier, as an array of objects.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "task": {
+              "description": "The task identifier from the brief.",
+              "type": "string"
+            },
+            "verdict": {
+              "description": "Use brief_incomplete when the brief lacks what you need.",
+              "enum": [
+                "met",
+                "not_met",
+                "brief_incomplete"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "verdict"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "verdicts"
+    ],
+    "type": "object"
+  },
+  "pool_slot": true
+}

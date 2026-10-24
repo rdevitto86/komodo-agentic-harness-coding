@@ -1,0 +1,6 @@
+Group `tg-1.3` needs a decision: `needs_scope`. The task is `amend docs/lld.md`.
+It asks: `The builder needs a file outside its group's files. Widen the scope?`
+To resolve it, run `komodo run --approve tg-1.3`.
+
+❌ Blocked Changes
+Group `tg-1.3` waits for a person.

@@ -1,0 +1,55 @@
+package engine
+
+import (
+	"encoding/json"
+	"slices"
+	"testing"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+)
+
+func TestBulkApproveReplyNamesTheRiskyGroups(t *testing.T) {
+	x := newEng(t, [][]string{{"tg-1"}, {"tg-2", "tg-1"}, {"tg-3"}}, func(r *rig) {
+		r.d.Cleaner = &fakeCleaner{}
+		r.tasks.script = riskyScript
+	})
+	x.serve()
+	x.ask(x.runReq("q1", "run-1", "tg-1", "tg-2", "tg-3"))
+	x.waitHeld("tg-1", StageBlocked)
+
+	reps := x.ask(Request{ID: "a1", Verb: VerbRun, Target: "ep-1", Flags: Flags{Approve: true},
+		Event: &Event{
+			Type: bus.TypeRunContinue,
+			Time: t0,
+			Data: &bus.RunContinue{Target: "ep-1", Answer: "approve", Request: "a1"},
+		}})
+
+	last := reps[len(reps)-1]
+	if last.Status != StatusOK {
+		t.Fatalf("reply %+v", last)
+	}
+
+	var d struct {
+		Risky []string `json:"risky"`
+	}
+	if err := json.Unmarshal(last.Data, &d); err != nil || !slices.Equal(d.Risky, []string{"tg-1"}) {
+		t.Fatalf("reply data %s names %v, %v", last.Data, d.Risky, err)
+	}
+
+	var got []string
+
+	// The event bus delivers to the log after the reply is sent.
+	waitUntil(t, "the request.accepted event", func() bool {
+		for _, e := range x.ev.list() {
+			if a, ok := e.Data.(*bus.RequestAccepted); ok && a.Request == "a1" {
+				got = a.Risky
+				return true
+			}
+		}
+
+		return false
+	})
+	if !slices.Equal(got, []string{"tg-1"}) {
+		t.Fatalf("request.accepted names %v, want [tg-1]", got)
+	}
+}

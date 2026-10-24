@@ -1,0 +1,2 @@
+Usage error: `no setting named output.profil; the closest is output.profile`.
+The code is `unknown_key`. To fix it, run `komodo config get output.profile`.

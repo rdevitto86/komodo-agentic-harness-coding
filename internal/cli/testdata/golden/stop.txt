@@ -1,0 +1,10 @@
+exit 0
+{
+  "v": 1,
+  "ok": true,
+  "verdict": "Run <uuid> stopped.",
+  "report": "Run `<uuid>` stopped.\n",
+  "data": {
+    "run_id": "<uuid>"
+  }
+}

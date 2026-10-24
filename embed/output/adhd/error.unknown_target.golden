@@ -1,0 +1,5 @@
+Error: `no group or run named tg-9.9`.
+
+**Code:** `unknown_target`
+
+**Fix:** `komodo status`

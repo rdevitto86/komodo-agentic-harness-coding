@@ -1,0 +1,7 @@
+{
+  "code": "crash",
+  "group": "tg-1.3",
+  "task": "amend docs/lld.md",
+  "question": "The group's worker crashed, or an action failed past its retry. Retry?",
+  "fix": "komodo run tg-1.3"
+}

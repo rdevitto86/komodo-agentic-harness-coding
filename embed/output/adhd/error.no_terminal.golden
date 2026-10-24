@@ -1,0 +1,5 @@
+Refused: `this command needs a controlling terminal`.
+
+**Code:** `no_terminal`
+
+**Fix:** `run it in a terminal`

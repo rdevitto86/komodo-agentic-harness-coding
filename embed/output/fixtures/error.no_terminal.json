@@ -1,0 +1,5 @@
+{
+  "code": "no_terminal",
+  "reason": "this command needs a controlling terminal",
+  "fix": "run it in a terminal"
+}

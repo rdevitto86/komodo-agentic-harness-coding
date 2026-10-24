@@ -1,0 +1,6 @@
+{
+  "goal": "add a retry limit to the planner",
+  "plan": "plan-7f3a9c",
+  "path": "/plans/shop/plan-7f3a9c/plan.md",
+  "start": "komodo run plan-7f3a9c"
+}

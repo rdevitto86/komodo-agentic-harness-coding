@@ -1,0 +1,5 @@
+{
+  "code": "bad_frame",
+  "reason": "a line on the control socket is not a valid request",
+  "fix": "komodo doctor"
+}

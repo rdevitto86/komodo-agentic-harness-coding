@@ -1,0 +1,2 @@
+Refused: `this command needs a controlling terminal`. The code is `no_terminal`.
+To fix it, run `run it in a terminal`.
