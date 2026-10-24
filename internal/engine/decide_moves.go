@@ -12,6 +12,11 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
+// riskDone is the risk level a Test and Review stage.done carries.
+type riskDone struct {
+	Risk string `json:"risk"`
+}
+
 // faultStages lists, for each reason a fault may carry, the stages where it blocks the group.
 var faultStages = map[state.Reason][]Stage{
 	state.ReasonNoProvider:    {StageBuild, StageTestReview},
@@ -150,10 +155,7 @@ func (c *calc) move() bool {
 		}
 	case InAbandon:
 		if g := decode[AbandonData](in.Data).Group; (g == "" || g == s.Group) && c.from != StageDone && c.from != NoStage {
-			c.order(OrderCancel, c.from, map[string]string{"cause": "abandon"})
-			c.order(OrderDiscard, StageDone, nil)
-			c.finish("abandoned")
-			c.order(OrderRelease, StageDone, nil)
+			c.dropGroup("abandoned")
 			return true
 		}
 	case InGroupClosed:
@@ -316,7 +318,9 @@ func (c *calc) block(r state.Reason, detail string) {
 	}
 	s.Pause.After = false
 	s.Counters.Blocks[string(r)]++
-	c.order(OrderCancel, s.Stage, map[string]string{"cause": "block"})
+	if r != state.ReasonRiskyChange { // the checks are over, so no session is live and the Task Manager stays up
+		c.order(OrderCancel, s.Stage, map[string]string{"cause": "block"})
+	}
 
 	b := &bus.GroupBlocked{
 		GroupFacts: bus.GroupFacts{Stage: string(s.Prior), Reason: string(r)},
@@ -367,6 +371,11 @@ func (c *calc) stageDone(in Input) bool {
 			return true
 		}
 	case StageTestReview:
+		if lvl := decode[riskDone](in.Data).Risk; lvl == "high" || lvl == "critical" {
+			c.block(state.ReasonRiskyChange, "land this risky change?")
+			return true
+		}
+
 		c.advance(StageCommit, stageData{})
 		return true
 	case StageCommit:
@@ -493,6 +502,9 @@ func (c *calc) continueGroup(in Input) bool {
 		c.leavePause("run-continue")
 		return true
 	case StageBlocked:
+		if s.Block.Reason == state.ReasonRiskyChange {
+			return c.riskyAnswer(in)
+		}
 		if why := c.resetFor(s.Block.Reason); why != "" {
 			c.refuseRequest(in, why)
 			return false
@@ -514,6 +526,31 @@ func (c *calc) continueGroup(in Input) bool {
 
 	c.refuseRequest(in, "the group is running")
 	return false
+}
+
+// riskyAnswer applies a person's answer to a group blocked on a risky change: approve lands it (row 24), deny drops it
+// (row 25).
+func (c *calc) riskyAnswer(in Input) bool {
+	switch decode[ContinueData](in.Data).Answer {
+	case "approve":
+		c.resumeWith(StageCommit, stageData{})
+		return true
+	case "deny":
+		c.dropGroup("dropped")
+		return true
+	}
+
+	c.refuseRequest(in, "the group waits for an answer: run it with --approve or --deny")
+	return false
+}
+
+// dropGroup ends the group for good: its Task Manager stops, its worktree and sandbox are freed, its lease is released
+// and its saved state is kept.
+func (c *calc) dropGroup(outcome string) {
+	c.order(OrderCancel, c.from, map[string]string{"cause": "abandon"})
+	c.order(OrderDiscard, StageDone, nil)
+	c.finish(outcome)
+	c.order(OrderRelease, StageDone, nil)
 }
 
 // resumeAt leaves Paused or Blocked into a working stage with the epoch raised (rows 13, 14 and 19).
@@ -563,7 +600,7 @@ func (c *calc) resetFor(r state.Reason) string {
 		s.Counters.FaultStreak = 0
 	case state.ReasonPauseTimeout:
 		s.Pause.Since, s.Pause.Refused = time.Time{}, 0
-	case state.ReasonNeedsScope:
+	case state.ReasonNeedsScope, state.ReasonRiskyChange:
 		return "the group waits for an answer: run it with --approve or --deny"
 	}
 
@@ -660,6 +697,10 @@ func (c *calc) finish(outcome string) {
 	s := &c.s
 	s.Stage, s.Outcome, s.Prior = StageDone, outcome, ""
 	s.Pause, s.Block = state.PauseState{}, state.BlockState{}
+	if outcome == "dropped" {
+		outcome = "abandoned" // a dropped group ends with the status of an abandoned one
+	}
+
 	c.emitStatus(&bus.GroupDone{Outcome: outcome})
 }
 

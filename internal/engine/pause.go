@@ -72,27 +72,42 @@ func (m *Manager) NudgeGroups(ctx context.Context, o resource.NudgeOrder) error 
 // Answer answers the blocked or token-paused groups of a plan for `run (id) --approve` or `--deny`: every blocked group
 // when labels is empty, otherwise the groups those labels name.
 func (m *Manager) Answer(plan string, labels []string, approve bool, request string) error {
+	_, err := m.AnswerNaming(plan, labels, approve, request)
+	return err
+}
+
+// AnswerNaming is Answer; it also returns the labels of the approved groups that were blocked on a risky change, which
+// are the ones of level high or critical.
+func (m *Manager) AnswerNaming(plan string, labels []string, approve bool, request string) ([]string, error) {
 	gs := m.byPlan(plan, labels...)
 	if len(gs) == 0 {
-		return &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, labels)}
+		return nil, &codeError{CodeUnknownTarget, "no live group " + groupsNamedIn(plan, labels)}
 	}
 
-	var answered int
+	var (
+		answered int
+		risky    []string
+	)
 
 	for _, g := range gs {
-		if m.answerGroup(g, approve, request) {
+		ok, wasRisky := m.answerGroup(g, approve, request)
+		if ok {
 			answered++
+		}
+		if ok && wasRisky && approve {
+			risky = append(risky, g.spec.Label)
 		}
 	}
 	if answered == 0 {
-		return &codeError{CodeNotBlocked, groupsNamedIn(plan, labels) + " is not waiting for an answer"}
+		return nil, &codeError{CodeNotBlocked, groupsNamedIn(plan, labels) + " is not waiting for an answer"}
 	}
 
-	return nil
+	return risky, nil
 }
 
-// answerGroup sends the answer to one group and reports whether the group was waiting for it.
-func (m *Manager) answerGroup(g *group, approve bool, request string) bool {
+// answerGroup sends the answer to one group and reports whether the group was waiting for it, and whether it was blocked
+// on a risky change.
+func (m *Manager) answerGroup(g *group, approve bool, request string) (answered, risky bool) {
 	g.mu.Lock()
 	st, ask := g.snap, g.ask
 	g.mu.Unlock()
@@ -109,16 +124,33 @@ func (m *Manager) answerGroup(g *group, approve bool, request string) bool {
 			sa.Paths, sa.Reason = ask.Paths, ask.Reason
 		}
 		g.enqueue(Input{Kind: InScopeAnswer, Request: request, Data: mustJSON(sa)})
+	case st.Stage == StageBlocked && st.Block.Reason == state.ReasonRiskyChange:
+		g.enqueue(Input{Kind: InContinue, Request: request, Data: mustJSON(ContinueData{Answer: answer})})
+		if !approve {
+			m.awaitDropped(g)
+		}
+
+		return true, true
 	case st.Stage == StagePaused && st.Pause.Cause == "group_tokens" && approve:
 		if m.d.Resource != nil {
 			m.d.Resource.GrantGroupTokens(g.spec.ID)
 		}
 		g.enqueue(Input{Kind: InContinue, Request: request, Data: mustJSON(ContinueData{Answer: answer})})
 	default:
-		return false
+		return false, false
 	}
 
-	return true
+	return true, false
+}
+
+// awaitDropped waits for a denied group to end, then blocks its dependents as abandon does.
+func (m *Manager) awaitDropped(g *group) {
+	select {
+	case <-g.done:
+		m.blockDependents(g)
+	case <-time.After(10 * time.Second):
+		m.report(g, fmt.Errorf("group %s did not stop in time", g.spec.Label))
+	}
 }
 
 // Override gives a group whose tries ran out one final try of the given minutes, for `run (id) --override`; it returns
@@ -195,6 +227,13 @@ func (m *Manager) Abandon(ctx context.Context, plan, label string) (string, erro
 		return g.r.id, fmt.Errorf("group %s did not stop in time", g.spec.Label)
 	}
 
+	m.blockDependents(g)
+	return g.r.id, nil
+}
+
+// blockDependents blocks each group that depends on a group that ended without landing, naming it, and takes it off its
+// epic's landing order.
+func (m *Manager) blockDependents(g *group) {
 	m.mu.Lock()
 	r := g.r
 
@@ -222,7 +261,6 @@ func (m *Manager) Abandon(ctx context.Context, plan, label string) (string, erro
 	}
 
 	m.groupChanged(g)
-	return r.id, nil
 }
 
 // LandingPlan returns the landing plan of the epic a group belongs to, for the Commit Handler.

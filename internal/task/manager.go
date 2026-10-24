@@ -76,6 +76,7 @@ type Manager struct {
 	regression bool               // the last failed checks found a test that passed at the base
 	uncovered  []string           // added lines the last mechanical checks found no test ran
 	risk       agent.RiskDecision // the level and rule Go set in the last round
+	riskHeld   bool               // the group passed its checks and waits for a person to land its risky change
 	proven     bool               // a reviewer finding was proven in an earlier round
 	signoff    *agent.Signoff     // Quality Assurance's accepted pass, until a test file changes
 	scopeWait  *scopeWait

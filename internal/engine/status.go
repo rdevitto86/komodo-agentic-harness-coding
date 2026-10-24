@@ -205,6 +205,8 @@ func (g *group) question(s State) string {
 			)
 		}
 		return label + " asks to change files outside its list. Approve or deny?"
+	case state.ReasonRiskyChange:
+		return label + ": land this risky change?"
 	}
 
 	return fmt.Sprintf("%s is blocked: %s. Fix the cause and run it again.", label, s.Block.Reason)

@@ -33,6 +33,7 @@ var (
 		ReasonFlap,
 		ReasonRetries,
 		ReasonNeedsScope,
+		ReasonRiskyChange,
 		ReasonContext,
 		ReasonSetup,
 		ReasonPublish,
@@ -60,7 +61,7 @@ var (
 	fieldEnums = map[string][]string{
 		"TaskState.State":    {"queued", "claimed", "done"},
 		"RoundState.Result":  {"", "pass", "fail", "cancelled"},
-		"GroupState.Outcome": {"", "complete", "lost", "abandoned", "failed"},
+		"GroupState.Outcome": {"", "complete", "lost", "abandoned", "dropped", "failed"},
 		"GroupState.Prior":   {"", "intake", "build", "test_review", "commit", "cleanup"},
 		"PauseState.Cause":   {"provider", "plan_window", "spending", "group_tokens"},
 		"LinkRecord.Cap":     {"", "window", "weekly", "model", "spend", "quota"},

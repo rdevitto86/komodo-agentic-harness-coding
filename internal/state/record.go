@@ -66,7 +66,7 @@ type GroupState struct {
 	// rises each time the group enters a stage; an input from an older epoch is stale
 	Epoch uint32 `json:"epoch"`
 
-	// set in done: complete, lost, abandoned or failed
+	// set in done: complete, lost, abandoned, dropped or failed
 	Outcome string `json:"outcome"`
 
 	// the Lease Manager's fence for this holder; never zero

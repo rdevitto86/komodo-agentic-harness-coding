@@ -23,6 +23,9 @@ const (
 	// the builder needs a file outside its group's files
 	ReasonNeedsScope Reason = "needs_scope"
 
+	// the group passed its checks at risk level high or critical and waits for a person to land it
+	ReasonRiskyChange Reason = "risky_change"
+
 	// the brief exceeds half the context of every link
 	ReasonContext Reason = "context"
 

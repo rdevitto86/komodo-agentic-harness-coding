@@ -9,6 +9,7 @@ import (
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
 // runDeep sets the group's risk level from its diff, logs the rule, and runs the deep checks of that level with no model
@@ -109,6 +110,53 @@ func (m *Manager) Risk() agent.RiskDecision {
 	defer m.mu.Unlock()
 
 	return m.risk
+}
+
+// riskLevel returns the group's risk level; a level lost with the Manager (a restart between the deep checks and the
+// judges) is classified again from the diff, so a risky group is never landed unasked.
+func (m *Manager) riskLevel(ctx context.Context) (agent.RiskLevel, error) {
+	if lvl := m.Risk().Level; lvl != "" || m.c.Git == nil {
+		return lvl, nil
+	}
+
+	diff, err := m.c.Git.Diff(ctx, m.spec.Lease, nil)
+	if err != nil {
+		return "", fmt.Errorf("classify the diff: %w", err)
+	}
+
+	d := m.classify(diff)
+
+	m.mu.Lock()
+	m.risk = d
+	m.mu.Unlock()
+
+	return d.Level, nil
+}
+
+// holdRisky reports that Test and Review is done and holds the group, still in Test and Review, until the Runtime Manager
+// starts it again with a person's approval.
+func (m *Manager) holdRisky(ctx context.Context, lvl agent.RiskLevel) error {
+	m.mu.Lock()
+	m.riskHeld = true
+	m.mu.Unlock()
+	m.fact("stage.done", map[string]any{"stage": state.StageTestReview, "risk": lvl})
+
+	if err := m.report(ctx); err != nil {
+		return err
+	}
+
+	return ErrHeld
+}
+
+// releaseRiskHold reports whether the group was held for a risky change, and clears the hold.
+func (m *Manager) releaseRiskHold() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	held := m.riskHeld
+	m.riskHeld = false
+
+	return held
 }
 
 // stampSignoff records Quality Assurance's accepted pass over the tree and the test files it judged.

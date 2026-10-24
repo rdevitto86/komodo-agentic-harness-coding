@@ -72,6 +72,13 @@ func TestRiskLevelPicksTheDeepPlanAndIsLogged(t *testing.T) {
 		r.model.on("builder", building(r.wt, c.file, "package a\n", builderDone))
 		r.model.on("qa", sayResult(qaPass))
 		r.model.on("reviewer", sayResult(reviewerMet))
+
+		if c.level == agent.RiskCritical {
+			if err := r.run(); err != ErrHeld {
+				t.Fatalf("%s: Run returned %v, want the risky hold", c.file, err)
+			}
+		}
+
 		r.reachCleanup()
 
 		if len(d.plans) != 1 || !slices.Equal(d.plans[0], agent.DeepPlan(c.level)) {

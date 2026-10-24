@@ -56,6 +56,7 @@
                 "flap",
                 "retries",
                 "needs_scope",
+                "risky_change",
                 "context",
                 "setup",
                 "publish",
@@ -170,6 +171,7 @@
             "complete",
             "lost",
             "abandoned",
+            "dropped",
             "failed"
           ],
           "type": "string"

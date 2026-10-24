@@ -539,6 +539,9 @@ func (m *Manager) resumeWait(try int) time.Duration {
 
 // runTestReview runs the free checks, then Quality Assurance and the reviewer side by side, and decides the round.
 func (m *Manager) runTestReview(ctx context.Context) error {
+	if m.releaseRiskHold() {
+		return m.setStage(ctx, state.StageCommit)
+	}
 	if err := m.setStage(ctx, state.StageTestReview); err != nil {
 		return err
 	}
@@ -590,6 +593,14 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 		}
 		if err := m.stampSignoff(ctx); err != nil {
 			return err
+		}
+
+		lvl, err := m.riskLevel(ctx)
+		if err != nil {
+			return err
+		}
+		if lvl == agent.RiskHigh || lvl == agent.RiskCritical {
+			return m.holdRisky(ctx, lvl)
 		}
 
 		return m.setStage(ctx, state.StageCommit)

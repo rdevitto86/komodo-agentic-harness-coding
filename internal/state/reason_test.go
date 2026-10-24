@@ -11,6 +11,7 @@ func TestEveryReasonHasOneSeverity(t *testing.T) {
 		ReasonFlap:          SeverityNone,
 		ReasonRetries:       SeverityNone,
 		ReasonNeedsScope:    SeverityNone,
+		ReasonRiskyChange:   SeverityNone,
 		ReasonContext:       SeverityNone,
 		ReasonSetup:         SeverityBlocker,
 		ReasonPublish:       SeverityFault,
