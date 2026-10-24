@@ -381,3 +381,14 @@ func TestPushEpicRefusesCriticalRefs(t *testing.T) {
 		t.Fatal("pushed")
 	}
 }
+
+// countLines counts the non-empty lines of s.
+func countLines(s string) int {
+	n := 0
+	for _, l := range strings.Split(s, "\n") {
+		if l != "" {
+			n++
+		}
+	}
+	return n
+}

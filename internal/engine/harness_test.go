@@ -360,14 +360,6 @@ func (c *fakeCommits) PushEpic(_ context.Context, r commit.EpicPush) (commit.Epi
 	return res, err
 }
 
-// SaveLists records the call.
-func (c *fakeCommits) SaveLists(_ context.Context, r commit.ListsRequest) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.log.add("lists " + r.Epic)
-	return nil
-}
-
 // pushes returns the recorded epic pushes.
 func (c *fakeCommits) pushes() []commit.EpicPush {
 	c.mu.Lock()

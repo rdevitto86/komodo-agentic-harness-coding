@@ -13,7 +13,6 @@ import (
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
@@ -605,7 +604,7 @@ func (m *Manager) publishRefused(run, target, request, why string) {
 	})
 }
 
-// prepareEpics makes sure each epic's branch exists and holds the task lists before any group branch is cut.
+// prepareEpics makes sure each epic's branch exists before any group branch is cut; it commits nothing of its own.
 func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, saved map[string]state.Record) error {
 	seen := map[string]bool{}
 
@@ -632,18 +631,6 @@ func (m *Manager) prepareEpics(ctx context.Context, rs *bus.RunStart, r *run, sa
 			}
 
 			return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("create branch %s: %v", branch, err))
-		}
-
-		if err := m.d.Commits.SaveLists(
-			ctx,
-			commit.ListsRequest{
-				Repo:      rs.Repo,
-				Root:      rs.Root,
-				CommonDir: rs.CommonDir,
-				Epic:      s.Epic,
-			},
-		); err != nil {
-			return m.refuse(r.id, rs.Target, string(rs.Request), fmt.Sprintf("commit the task lists of %s: %v", s.Epic, err))
 		}
 	}
 

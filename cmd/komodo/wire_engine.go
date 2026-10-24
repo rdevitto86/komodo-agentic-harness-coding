@@ -102,15 +102,6 @@ func (h *hub) Start(ctx context.Context, spec engine.GroupSpec, c cache.Handle) 
 	return k.start(ctx, spec, c)
 }
 
-// SaveLists commits an epic's task lists in the run's repository.
-func (h *hub) SaveLists(ctx context.Context, r commit.ListsRequest) error {
-	k, err := h.s.kitFor(r.Root, r.CommonDir, r.Repo)
-	if err != nil {
-		return err
-	}
-	return k.commit.SaveLists(ctx, r)
-}
-
 // PushEpic pushes an epic's landed groups and settles its pull request in the run's repository.
 func (h *hub) PushEpic(ctx context.Context, r commit.EpicPush) (commit.EpicResult, error) {
 	k, err := h.s.kitFor(r.Root, r.CommonDir, r.Repo)

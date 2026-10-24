@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // countCmd counts the recorded git command lines that hold the token as one argument.
@@ -135,65 +134,6 @@ func TestPublishRecheckSurvivesFailedReport(t *testing.T) {
 	}
 }
 
-// SaveLists works while the epic branch is checked out in the landing worktree, and edits that worktree.
-func TestSaveListsReusesLandingWorktree(t *testing.T) {
-	w := newWorld(t)
-	h := w.handler()
-	land := filepath.Join(w.root, "ep-1")
-	if err := w.git.AddWorktree(w.ctx, w.clone, land, "komodo/ep-1", "origin/komodo/ep-1"); err != nil {
-		t.Fatal(err)
-	}
-	write(t, w.clone, "docs/backlog/epic-1/tg-1.1/TG.md", "# group\n")
-	req := ListsRequest{Repo: "repo", Root: w.clone, CommonDir: filepath.Join(w.clone, ".git"), Epic: "ep-1"}
-	if err := h.SaveLists(w.ctx, req); err != nil {
-		t.Fatal(err)
-	}
-	tip := w.localTip()
-	if got := git(t, w.clone, "show", tip+":docs/backlog/epic-1/tg-1.1/TG.md"); got != "# group" {
-		t.Fatalf("file = %q", got)
-	}
-	if st := git(t, land, "status", "--porcelain"); st != "" {
-		t.Fatalf("landing worktree left dirty: %q", st)
-	}
-	if git(t, land, "rev-parse", "HEAD") != tip {
-		t.Fatal("landing worktree is not at the local tip")
-	}
-}
-
-// SaveLists waits for the epic's landing turn, so it never edits the landing worktree under a landing.
-func TestSaveListsWaitsForLandingTurn(t *testing.T) {
-	w := newWorld(t)
-	h := w.handler()
-	write(t, w.clone, "docs/backlog/epic-1/tg-1.1/TG.md", "# group\n")
-	hold, err := h.Epics.Enter(w.ctx, "repo/ep-1", "g")
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		done <- h.SaveLists(w.ctx, ListsRequest{
-			Repo:      "repo",
-			Root:      w.clone,
-			CommonDir: filepath.Join(w.clone, ".git"),
-			Epic:      "ep-1",
-		})
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("SaveLists ran during a landing: %v", err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	hold.Release()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("SaveLists never ran")
-	}
-}
-
 // A group or epic branch equal to the resolved base branch is refused before anything is written.
 func TestBaseBranchEqualRefused(t *testing.T) {
 	for _, base := range []string{"komodo/ep-1", "komodo/ep-1-tg-1.1"} {
@@ -210,18 +150,6 @@ func TestBaseBranchEqualRefused(t *testing.T) {
 		if w.remoteTip("komodo/ep-1") != tip || len(w.gh.calls()) != 0 {
 			t.Fatalf("base %s: something was written", base)
 		}
-	}
-	w := newWorld(t)
-	h := w.handler()
-	h.Config.BaseBranch = "komodo/ep-1"
-	err := h.SaveLists(w.ctx, ListsRequest{
-		Repo:      "repo",
-		Root:      w.clone,
-		CommonDir: filepath.Join(w.clone, ".git"),
-		Epic:      "ep-1",
-	})
-	if !errors.Is(err, ErrCriticalRef) {
-		t.Fatalf("SaveLists err = %v", err)
 	}
 }
 

@@ -99,14 +99,6 @@ type EpicResult struct {
 	CleanupError string `json:"cleanup_error,omitempty"`
 }
 
-// ListsRequest names the epic whose task lists SaveLists commits.
-type ListsRequest struct {
-	Repo      string `json:"repo"`       // repo id the lease is keyed by
-	Root      string `json:"root"`       // the repository root, where docs/backlog/ is read
-	CommonDir string `json:"common_dir"` // the repository's git common directory
-	Epic      string `json:"epic"`       // the epic label, such as ep-1
-}
-
 // Published says that a group's work is one commit on the local epic branch and the group may be cleaned up.
 type Published struct {
 	Run      bus.ID `json:"run"`

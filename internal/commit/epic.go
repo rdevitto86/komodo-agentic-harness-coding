@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -257,4 +259,38 @@ func (e *epicPush) pullRequest(ctx context.Context, ls []Landing, res *EpicResul
 	res.PRURL = pr.URL
 
 	return nil
+}
+
+// epicWorktree returns a worktree with the epic branch checked out and a function that releases
+// it: the landing worktree when it exists, which stays, otherwise a temporary one that is removed.
+func (h *Handler) epicWorktree(ctx context.Context, common, epic, remote string) (string, func(), error) {
+	if path, ok, err := h.Git.WorktreeOf(ctx, common, epic); err != nil {
+		return "", nil, gitFail(err)
+	} else if ok {
+		return path, func() {}, nil
+	}
+
+	tmp, err := os.MkdirTemp("", "komodo-epic-")
+	if err != nil {
+		return "", nil, fail(
+			KindGit,
+			true,
+			fmt.Errorf("create a temporary worktree folder: %w", err),
+		)
+	}
+
+	wt := filepath.Join(tmp, "wt")
+	if err := h.Git.AddWorktree(ctx, common, wt, epic, remote+"/"+epic); err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", nil, gitFail(err)
+	}
+
+	return wt, func() {
+		if h.Git.RemoveWorktree(ctx, common, wt) != nil {
+			_ = os.RemoveAll(wt)
+			_ = h.Git.RemoveWorktree(ctx, common, wt)
+		}
+
+		_ = os.RemoveAll(tmp)
+	}, nil
 }

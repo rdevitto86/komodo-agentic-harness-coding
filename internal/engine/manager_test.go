@@ -41,7 +41,8 @@ func TestFixtureGroupPassesEveryStageAndEndsDone(t *testing.T) {
 	}
 }
 
-func TestEpicBranchAndTaskListsComeBeforeTheFirstTaskManager(t *testing.T) {
+// A run with a missing epic branch creates it with 0 commits of its own, before the first Task Manager starts.
+func TestRunWithMissingEpicBranchCreatesItWithNoCommitsOfItsOwn(t *testing.T) {
 	r := newRig(t, [][]string{{"tg-1.1"}, {"tg-1.2", "tg-1.1"}})
 	r.tasks.script = func(g string) func(*tmEnv) {
 		return func(e *tmEnv) {
@@ -54,8 +55,8 @@ func TestEpicBranchAndTaskListsComeBeforeTheFirstTaskManager(t *testing.T) {
 	}
 	r.waitStage("tg-1.2", StageDone)
 	got := r.log.get()
-	want := []string{"fetch origin/main", "create komodo/ep-1 from refs/remotes/origin/main", "lists ep-1"}
-	if len(got) < 4 || !slices.Equal(got[:3], want) || got[3] != "start g-tg-1.1" {
+	want := []string{"fetch origin/main", "create komodo/ep-1 from refs/remotes/origin/main"}
+	if len(got) < 3 || !slices.Equal(got[:2], want) || got[2] != "start g-tg-1.1" {
 		t.Fatalf("order %v", got)
 	}
 	count := 0
@@ -81,9 +82,8 @@ func TestEpicBranchIsCutFromTheFetchedRemoteBase(t *testing.T) {
 	want := []string{
 		"fetch trial/komodo-first-run",
 		"create komodo/ep-1 from refs/remotes/trial/komodo-first-run",
-		"lists ep-1",
 	}
-	if got := r.log.get(); len(got) < 3 || !slices.Equal(got[:3], want) {
+	if got := r.log.get(); len(got) < 2 || !slices.Equal(got[:2], want) {
 		t.Fatalf("order %v, want it to begin %v", got, want)
 	}
 }
@@ -120,9 +120,8 @@ func TestEmptyBaseTakesTheRemoteDefaultBranch(t *testing.T) {
 		"default origin",
 		"fetch upstream/develop",
 		"create komodo/ep-1 from refs/remotes/upstream/develop",
-		"lists ep-1",
 	}
-	if got := r.log.get(); len(got) < 4 || !slices.Equal(got[:4], want) {
+	if got := r.log.get(); len(got) < 3 || !slices.Equal(got[:3], want) {
 		t.Fatalf("order %v, want it to begin %v", got, want)
 	}
 }
@@ -135,7 +134,7 @@ func TestRunIsRefusedWhenTheBaseCannotBeFetched(t *testing.T) {
 		t.Fatalf("run start returned %v, want a refusal that names the fetch failure", err)
 	}
 	for _, l := range r.log.get() {
-		if strings.HasPrefix(l, "create") || strings.HasPrefix(l, "lists") {
+		if strings.HasPrefix(l, "create") {
 			t.Fatalf("a branch was cut after a failed fetch: %v", r.log.get())
 		}
 	}
@@ -149,7 +148,7 @@ func TestExistingEpicBranchIsLeftAsItIs(t *testing.T) {
 	r.waitStage("tg-1.1", StageDone)
 	if got := r.log.get(); len(got) != 0 {
 		for _, l := range got {
-			if strings.HasPrefix(l, "create") || strings.HasPrefix(l, "lists") {
+			if strings.HasPrefix(l, "create") {
 				t.Fatalf("existing branch was touched: %v", got)
 			}
 		}
