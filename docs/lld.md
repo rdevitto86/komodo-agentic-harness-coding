@@ -468,7 +468,7 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 
 | Command | Request | Replies |
 |---|---|---|
-| `run (plan id) [group]` | `Verb` `run`; `Event` run-start | One final `ok` whose `data` holds the run id, or `refused` with a `Code` |
+| `run (plan id)` | `Verb` `run`; `Event` run-start | One final `ok` whose `data` holds the run id, or `refused` with a `Code` |
 | `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; `Event` run-start with no run id and `data.schedule` set | One final `ok` whose `data` holds the run id the engine minted and the queued time |
 | `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
 | `run (id) --override` | `Verb` `run`; `Event` run-continue with `answer` `override`; `Flags.Override`; terminal only, checked by the CLI and again by the engine from the socket peer | One final `ok`, or `refused` with `no_terminal` (the requesting process has no controlling terminal), `not_blocked` (no override is waiting) or `group_failed` (the group already failed) |
@@ -15829,7 +15829,7 @@ flowchart LR
 
 1. `komodo plan` reaches the Intake Handler as a `plan` event. The CLI sends the event to the engine over `engine.sock`, and the engine's bus delivers it. The Intake Handler reads the person's documents and writes the plan.
 2. After planning, the Intake Handler publishes `plan` / `written` to the CLI. It starts no run; `komodo run` does that. [TODO: whether an auto-approved plan starts a run itself ([G-322](#g-322))]
-3. `komodo run (id)`, `stop`, `status`, `ui`, `abandon` and `replay` reach the Runtime Manager as requests on `engine.sock`. `run (plan id) [group]` publishes `run-start` with the plan id in `data.target` and the named groups in `data.groups`; with no group named, every group of the plan that is not done runs. `run (id) --schedule <time>` is a request that publishes no event: the engine mints the run id, writes an entry with it to `schedule.json`, and publishes the one `run-start` at that time.
+3. `komodo run (id)`, `stop`, `status`, `ui`, `abandon` and `replay` reach the Runtime Manager as requests on `engine.sock`. `run (plan id)` publishes `run-start` with the plan id in `data.target` and an empty `data.groups`, so every group of the plan that is not done runs. `run (id) --schedule <time>` is a request that publishes no event: the engine mints the run id, writes an entry with it to `schedule.json`, and publishes the one `run-start` at that time.
 4. The Runtime Manager makes sure the epic branch exists ([7.5](#75-behaviour)), then starts one Task Manager goroutine per group whose dependencies are met, and passes it the cache handle the Runtime Manager opened. Commands go down each group's command channel, and replies come back on its reply channel.
 5. The Runtime Manager saves each group's state through the State Manager before it acts on a change, and reads and writes the lease and the schedule queue through their managers. Recovery reads only that saved state.
 6. The Task Manager creates the group's branch and worktree, runs build, then test and review, and asks the Commit Handler for a local commit after each finished task. It hands approved work to the Commit Handler.
