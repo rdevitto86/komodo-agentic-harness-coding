@@ -104,7 +104,7 @@ func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} 
 
 // GroupDone is the data of run-status / group.done: how a group ended.
 type GroupDone struct {
-	Outcome string `json:"outcome"` // complete, abandoned, lost or failed
+	Outcome string `json:"outcome"` // complete, abandoned, dropped, lost or failed
 }
 
 // EventKey binds GroupDone to run-status / group.done.

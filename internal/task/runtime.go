@@ -17,7 +17,7 @@ type GroupSpec struct {
 	Group      string                 // task group label, such as tg-1.2
 	Tasks      []TaskSpec             // tasks in order
 	Files      []string               // the group's file globs; the builder writes only here
-	Lease      LeaseRef               // branch, worktree and git folder the lease records
+	Lease      LeaseRef               // worktree and git folder the lease records
 	Agents     map[string]Permissions // permissions per agent role
 	Servers    []OutsideServer        // outside tool servers switched on for at least one agent
 	Limits     Limits                 // session clocks, returns, refusals, attempts
