@@ -14154,6 +14154,7 @@ type Groups interface {
 type GroupRef struct {
 	Group   string
 	Version string
+	Epic    string // the epic the group lands on, from its GroupSpec
 }
 
 // Reporter relays a progress fact to the Runtime Manager, which publishes it as a run-status event.
@@ -14227,7 +14228,7 @@ A sweep runs once each time the engine starts, after the recovery pass has marke
 3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed..
 4. It returns a `Report` and reports `cleanup.swept`.
 
-Last, `Sweep` removes the landing worktree `<Roots.Landings>/<epic>` and the local branch `komodo/<epic>` of every epic that no unfinished group lands on, [TODO: how `Sweep` tells which epic an unfinished group lands on now that a lease records no branch ([G-332](#g-332))]
+Last, `Sweep` removes the landing worktree `<Roots.Landings>/<epic>` and the local branch `komodo/<epic>` of every epic that no unfinished group lands on; `GroupRef.Epic` names each unfinished group's epic.
 
 `Preview` fetches once without pruning and walks the same groups and lists each container, checkout, worktree and branch that `Sweep` would try to remove, under `removed`; it calls no removal and reports no fact. A worktree that holds files the tip lacks shows as removable in a preview and is kept when `Sweep` runs.
 
@@ -14333,7 +14334,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-332](#g-332) | How `Sweep` tells which epic an unfinished group lands on | 16.5 |
 
 ## 17. Error Handler
 
@@ -16181,7 +16181,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-323"></a>G-323 | Changelog anchor | No lasting record of task groups is kept. Owner: "I dont think we should document the task groups at all. The PRD and HLD might have scoped versions we can use as an anchor for the changelog." Open: whether and how scoped versions of the PRD and HLD anchor the changelog | Owner decision | [15](#15-commit-handler) |
 | <a id="g-330"></a>G-330 | Quarantine without a group branch | A group has no branch of its own: its worktree is detached and its work lands on the plan's feature branch. Owner: "The plan opens a feature branch for all task groups + tasks. Everything funnels into this feature branch." Open: how the quarantine route (a high or critical group's own draft pull request) works when a group has no branch: where the approved work is committed, what is pushed, and what the pull request is made from | Owner decision | [15](#15-commit-handler) |
 | <a id="g-331"></a>G-331 | Group rewrite | Owner: "what it would do is replan/rewrite the taskgroup depending. SO for example a prompt + 'komodo run <plan id> <TG id>' makes the changes." Decided: the planner rewrites that one group from the prompt, the lint checks run again on the plan, and the group runs. Open: how the prompt is passed on the command line, and what the rewrite does for a group that is running or done | Owner decision | [1](#1-cli), [5](#5-intake-handler) |
-| <a id="g-332"></a>G-332 | Landing sweep | A lease no longer records a branch, so the sweep cannot read an unfinished group's epic from it. Open: how `Sweep` tells which epic an unfinished group lands on, so it keeps that epic's landing worktree and branch | Owner decision | [16](#16-cleanup-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
