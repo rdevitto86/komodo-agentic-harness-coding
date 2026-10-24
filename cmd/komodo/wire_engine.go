@@ -452,7 +452,7 @@ func (s *stack) leaseRepos() map[string]string {
 	return out
 }
 
-// parkedGroups lists the groups the lease registry still names, with the clone, repository folder and backlog label of
+// parkedGroups lists the groups the lease registry still names, with the clone, repository folder and group label of
 // each, so the engine can re-arm the override timers of those saved blocked.
 func (s *stack) parkedGroups(context.Context) []engine.ParkedGroup {
 	var out []engine.ParkedGroup
