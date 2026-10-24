@@ -20,7 +20,7 @@ func (h *Handler) loadStored(r PlanRequest) (storedPlan, error) {
 	if err != nil {
 		return storedPlan{}, err
 	}
-	if r.Group != "" && !slices.ContainsFunc(b.Groups, func(g PlanGroup) bool { return g.Name == r.Group }) {
+	if r.Group != "" && !slices.ContainsFunc(b.Groups, func(g Group) bool { return g.Name == r.Group }) {
 		return storedPlan{}, fmt.Errorf("plan %s has no group %s", r.Plan, r.Group)
 	}
 
@@ -38,7 +38,7 @@ func (h *Handler) finishedTasks(b Blueprint, group string) ([]string, error) {
 		return nil, nil
 	}
 
-	i := slices.IndexFunc(b.Groups, func(g PlanGroup) bool { return g.Name == group })
+	i := slices.IndexFunc(b.Groups, func(g Group) bool { return g.Name == group })
 	if i < 0 {
 		return nil, nil
 	}
@@ -113,8 +113,8 @@ func (pl *planState) scope(b Blueprint) Blueprint {
 
 // diffGroups compares a draft with the stored plan by group label. touched holds the stored groups the draft removes or
 // edits; changed holds the labels of the draft groups that are new or edited.
-func diffGroups(stored, draft Blueprint) (touched []PlanGroup, changed []string) {
-	have := map[string]PlanGroup{}
+func diffGroups(stored, draft Blueprint) (touched []Group, changed []string) {
+	have := map[string]Group{}
 	for _, g := range stored.Groups {
 		have[g.Name] = g
 	}
@@ -143,7 +143,7 @@ func diffGroups(stored, draft Blueprint) (touched []PlanGroup, changed []string)
 }
 
 // rewriteFindings fails every change a group rewrite makes outside its one group.
-func rewriteFindings(group string, touched []PlanGroup, changed []string) []Finding {
+func rewriteFindings(group string, touched []Group, changed []string) []Finding {
 	var found []Finding
 
 	for _, g := range touched {
@@ -156,7 +156,7 @@ func rewriteFindings(group string, touched []PlanGroup, changed []string) []Find
 	}
 
 	for _, name := range changed {
-		if name == group || slices.ContainsFunc(touched, func(g PlanGroup) bool { return g.Name == name }) {
+		if name == group || slices.ContainsFunc(touched, func(g Group) bool { return g.Name == name }) {
 			continue
 		}
 
@@ -196,8 +196,8 @@ func keptFindings(pl *planState, draft Blueprint) []Finding {
 }
 
 // tasksOf returns the tasks of one group of a blueprint by name.
-func tasksOf(b Blueprint, group string) map[string]PlanTask {
-	out := map[string]PlanTask{}
+func tasksOf(b Blueprint, group string) map[string]Task {
+	out := map[string]Task{}
 
 	for _, g := range b.Groups {
 		if g.Name != group {
@@ -213,15 +213,15 @@ func tasksOf(b Blueprint, group string) map[string]PlanTask {
 }
 
 // taskCard renders a task, so two tasks compare by what plan.md says.
-func taskCard(t PlanTask) string {
-	return Render(Blueprint{Groups: []PlanGroup{{Tasks: []PlanTask{t}}}})
+func taskCard(t Task) string {
+	return Render(Blueprint{Groups: []Group{{Tasks: []Task{t}}}})
 }
 
 // groupText renders a group without its id and hash, so two groups compare by what plan.md says.
-func groupText(g PlanGroup) string {
+func groupText(g Group) string {
 	g.ID, g.Hash = "", ""
 
-	return Render(Blueprint{Groups: []PlanGroup{g}})
+	return Render(Blueprint{Groups: []Group{g}})
 }
 
 // keepIDs gives each draft group that the stored plan holds the stored id.

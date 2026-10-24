@@ -10,13 +10,13 @@ import (
 )
 
 // bpGroup returns a valid group named name with one valid task and the given dependencies.
-func bpGroup(name string, deps ...string) PlanGroup {
+func bpGroup(name string, deps ...string) Group {
 	dir := "pkg-" + name
 	if deps == nil {
 		deps = []string{}
 	}
 
-	return PlanGroup{
+	return Group{
 		Name:         name,
 		Goal:         "Group goal",
 		Points:       3,
@@ -24,7 +24,7 @@ func bpGroup(name string, deps ...string) PlanGroup {
 		Priority:     PriorityNormal,
 		Files:        []string{dir + "/a.go"},
 		Dependencies: deps,
-		Tasks: []PlanTask{{
+		Tasks: []Task{{
 			Name:          "tsk-one",
 			Files:         []string{dir + "/a.go"},
 			DoneWhen:      "go test ./...",
@@ -35,7 +35,7 @@ func bpGroup(name string, deps ...string) PlanGroup {
 }
 
 // bpPlan returns a valid stored plan with the given groups; a group without an id gets one.
-func bpPlan(groups ...PlanGroup) Blueprint {
+func bpPlan(groups ...Group) Blueprint {
 	for i := range groups {
 		if groups[i].ID == "" {
 			groups[i].ID = uid(i + 1)
@@ -209,7 +209,7 @@ func TestLint(t *testing.T) {
 	t.Run("a chain of 5 warns and does not fail; a chain of 4 is quiet", func(t *testing.T) {
 		t.Parallel()
 
-		var groups []PlanGroup
+		var groups []Group
 		for n := 1; n <= 5; n++ {
 			if n == 1 {
 				groups = append(groups, bpGroup("tg-1"))
@@ -233,7 +233,7 @@ func TestLint(t *testing.T) {
 		t.Parallel()
 
 		var (
-			groups []PlanGroup
+			groups []Group
 			deps   []string
 		)
 		for n := 1; n <= 6; n++ {
@@ -267,18 +267,18 @@ func TestLint(t *testing.T) {
 	t.Run("sizing limits", func(t *testing.T) {
 		t.Parallel()
 
-		cases := map[string]func(g *PlanGroup){
-			"6 files": func(g *PlanGroup) {
+		cases := map[string]func(g *Group){
+			"6 files": func(g *Group) {
 				g.Tasks[0].Files = []string{"a", "b", "c", "d", "e", "f"}
 				g.Files = g.Tasks[0].Files
 			},
-			"301 lines":     func(g *PlanGroup) { g.Tasks[0].EstimateLines = 301 },
-			"9 tasks":       func(g *PlanGroup) { g.Tasks = append(g.Tasks, make([]PlanTask, 8)...) },
-			"4 points":      func(g *PlanGroup) { g.Points = 4 },
-			"9 points":      func(g *PlanGroup) { g.Points = 9 },
-			"zero points":   func(g *PlanGroup) { g.Points = 0 },
+			"301 lines":     func(g *Group) { g.Tasks[0].EstimateLines = 301 },
+			"9 tasks":       func(g *Group) { g.Tasks = append(g.Tasks, make([]Task, 8)...) },
+			"4 points":      func(g *Group) { g.Points = 4 },
+			"9 points":      func(g *Group) { g.Points = 9 },
+			"zero points":   func(g *Group) { g.Points = 0 },
 			"exactly 5 ok":  nil,
-			"exactly 300ok": func(g *PlanGroup) { g.Tasks[0].EstimateLines = 300 },
+			"exactly 300ok": func(g *Group) { g.Tasks[0].EstimateLines = 300 },
 		}
 		for name, mod := range cases {
 			t.Run(name, func(t *testing.T) {
@@ -324,7 +324,7 @@ func TestLint(t *testing.T) {
 			t.Fatalf("finding: %+v", got[0])
 		}
 
-		g.Tasks = append(g.Tasks, PlanTask{Name: "tsk-ONE", Files: g.Files[:1], DoneWhen: "x", EstimateLines: 1})
+		g.Tasks = append(g.Tasks, Task{Name: "tsk-ONE", Files: g.Files[:1], DoneWhen: "x", EstimateLines: 1})
 		got = only(t, Lint(bpPlan(g), nil, nil), RuleCaseCollision, SeverityFail, 1)
 
 		if got[0].Path != "plan.md#tg-1/tsk-ONE" {
@@ -632,7 +632,7 @@ func TestApprove(t *testing.T) {
 func TestOverEstimate(t *testing.T) {
 	t.Parallel()
 
-	tk := PlanTask{Name: "tsk-a", EstimateLines: 100}
+	tk := Task{Name: "tsk-a", EstimateLines: 100}
 
 	if f, ok := OverEstimate(tk, 210); !ok || f.Rule != RuleSizing || f.Severity != SeverityWarn {
 		t.Fatalf("2.1 times: %+v %v", f, ok)

@@ -260,6 +260,16 @@ type fakePlans struct {
 	specs map[string]GroupSpec
 	plans map[string]map[string]GroupSpec
 	asked [][]string
+	facts PlanFacts // returned by Facts
+	// returned by Facts when set
+	factsErr error
+}
+
+// Facts returns the planted plan facts.
+func (p *fakePlans) Facts(context.Context, string, string) (PlanFacts, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.facts, p.factsErr
 }
 
 // Specs returns the specs of the plan's labels, or every group of the plan in order when labels is empty.

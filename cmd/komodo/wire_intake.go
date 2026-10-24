@@ -197,7 +197,7 @@ func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 		Root:      k.root, Tree: func(context.Context) (contextmgr.Tree, error) {
 			return task.NewBaseTree(gitRunner{k.root}, "HEAD"), nil
 		},
-		Repo: k.id, CommonDir: k.common,
+		Repo: intake.RepoFolder(k.id), CommonDir: k.common,
 		OpenBase: k.openBase,
 	}
 

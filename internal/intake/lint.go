@@ -129,7 +129,7 @@ func Approve(home, repo, plan string, protected, tracked []string) (Blueprint, [
 }
 
 // OverEstimate warns when a task's real changed lines exceed twice its estimate.
-func OverEstimate(t PlanTask, actualLines int) (Finding, bool) {
+func OverEstimate(t Task, actualLines int) (Finding, bool) {
 	const overEstimateFold = 2
 	if actualLines <= overEstimateFold*t.EstimateLines {
 		return Finding{}, false
@@ -207,7 +207,7 @@ func lintPlan(b Blueprint, stored bool, protected, tracked []string) []Finding {
 }
 
 // lintGroup runs the checks that look at one group alone: required, sizing, ears and protected.
-func lintGroup(g PlanGroup, protected []string, add func(Finding, ...string)) {
+func lintGroup(g Group, protected []string, add func(Finding, ...string)) {
 	// The fixed sizing limits.
 	const (
 		maxTaskFiles  = 5

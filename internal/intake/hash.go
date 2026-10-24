@@ -10,7 +10,7 @@ import (
 
 // CardHash returns the card hash of one group: sha256 over its ## section of plan.md and every ### task section under it,
 // with line endings normalised and trailing blank lines dropped.
-func CardHash(planText string, g PlanGroup) (string, error) {
+func CardHash(planText string, g Group) (string, error) {
 	_, secs := splitSections(planText)
 
 	start := slices.IndexFunc(secs, func(s section) bool { return s.level == 2 && s.title == g.Name })

@@ -33,7 +33,7 @@ func seeded(t *testing.T, steps ...any) (*rig, Blueprint) {
 }
 
 // amendDraft renders the stored plan with edit applied to its groups, as the planner's draft of an amendment.
-func amendDraft(stored Blueprint, edit func([]PlanGroup) []PlanGroup) PlanDraft {
+func amendDraft(stored Blueprint, edit func([]Group) []Group) PlanDraft {
 	b := stored
 	b.Groups = edit(slices.Clone(stored.Groups))
 
@@ -41,10 +41,10 @@ func amendDraft(stored Blueprint, edit func([]PlanGroup) []PlanGroup) PlanDraft 
 }
 
 // withTask gives group name a second task.
-func withTask(groups []PlanGroup, name string) []PlanGroup {
+func withTask(groups []Group, name string) []Group {
 	for i, g := range groups {
 		if g.Name == name {
-			g.Tasks = append(slices.Clone(g.Tasks), PlanTask{
+			g.Tasks = append(slices.Clone(g.Tasks), Task{
 				Name: "tsk-two", Files: g.Files, DoneWhen: "go vet ./...", EstimateLines: 10,
 			})
 			groups[i] = g
@@ -61,7 +61,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-1") })}
 		r.lock.runs[stored.Groups[0].ID] = "run-7"
 		before, _ := os.ReadFile(filepath.Join(r.plans(), stored.Plan, "plan.md"))
 
@@ -82,7 +82,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return g[:1] })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return g[:1] })}
 		r.lock.runs[stored.Groups[1].ID] = "run-9"
 
 		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "drop", Plan: stored.Plan})
@@ -97,7 +97,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup {
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group {
 			return append(g, bpGroup("tg-3", "tg-2"))
 		})}
 		r.lock.runs[stored.Groups[0].ID] = "run-7"
@@ -125,7 +125,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-1") })}
 		r.lock.runs[stored.Groups[0].ID] = "run-7"
 
 		out, plan := runRig(t, r)
@@ -150,7 +150,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		bad := amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-2") })
+		bad := amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-2") })
 		r.sess.steps = []any{bad, bad, bad}
 
 		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"})
@@ -165,7 +165,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		add := amendDraft(stored, func(g []PlanGroup) []PlanGroup { return append(g, bpGroup("tg-3")) })
+		add := amendDraft(stored, func(g []Group) []Group { return append(g, bpGroup("tg-3")) })
 		r.sess.steps = []any{add, add, add}
 
 		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"})
@@ -180,7 +180,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		drop := amendDraft(stored, func(g []PlanGroup) []PlanGroup { return g[:1] })
+		drop := amendDraft(stored, func(g []Group) []Group { return g[:1] })
 		r.sess.steps = []any{drop, drop, drop}
 
 		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"})
@@ -195,8 +195,8 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		skip := amendDraft(stored, func(g []PlanGroup) []PlanGroup { return append(g, bpGroup("tg-5")) })
-		good := amendDraft(stored, func(g []PlanGroup) []PlanGroup { return append(g, bpGroup("tg-3")) })
+		skip := amendDraft(stored, func(g []Group) []Group { return append(g, bpGroup("tg-5")) })
+		good := amendDraft(stored, func(g []Group) []Group { return append(g, bpGroup("tg-3")) })
 		r.sess.steps = []any{skip, good}
 
 		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "add", Plan: stored.Plan}); err != nil {
@@ -211,7 +211,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-1") })}
 		r.h.d.Locks = fakeLocks{err: errors.New("state gone")}
 
 		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "split", Plan: stored.Plan})
@@ -226,7 +226,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-1") })}
 		r.h.d.Locks = nil
 
 		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "split", Plan: stored.Plan}); err == nil {
@@ -238,7 +238,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-1") })}
 		r.lock.finished[stored.Groups[0].ID] = []string{"tsk-one"}
 
 		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "more", Plan: stored.Plan, Group: "tg-1"}); err != nil {
@@ -253,13 +253,13 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		bad := amendDraft(stored, func(g []PlanGroup) []PlanGroup {
+		bad := amendDraft(stored, func(g []Group) []Group {
 			g[0].Tasks = slices.Clone(g[0].Tasks)
 			g[0].Tasks[0].DoneWhen = "go vet ./..."
 
 			return g
 		})
-		good := amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })
+		good := amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-1") })
 		r.sess.steps = []any{bad, good}
 		r.lock.finished[stored.Groups[0].ID] = []string{"tsk-one"}
 
@@ -275,8 +275,8 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		drop := amendDraft(stored, func(g []PlanGroup) []PlanGroup {
-			g[0].Tasks = []PlanTask{{
+		drop := amendDraft(stored, func(g []Group) []Group {
+			g[0].Tasks = []Task{{
 				Name: "tsk-new", Files: g[0].Files, DoneWhen: "go vet ./...", EstimateLines: 10,
 				Acceptance: g[0].Tasks[0].Acceptance,
 			}}
@@ -310,7 +310,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return withTask(g, "tg-1") })}
 		r.h.d.Locks = nil
 
 		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"}); err != nil {
@@ -342,7 +342,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return append(g, bpGroup("tg-3")) })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return append(g, bpGroup("tg-3")) })}
 
 		calls := 0
 		r.h.rename = func(from, to string) error {
@@ -371,7 +371,7 @@ func TestAmend(t *testing.T) {
 		t.Parallel()
 
 		r, stored := seeded(t)
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return append(g, bpGroup("tg-3")) })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return append(g, bpGroup("tg-3")) })}
 		r.h.rename = func(string, string) error { return errors.New("disk gone") }
 
 		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "add", Plan: stored.Plan})
@@ -388,7 +388,7 @@ func TestAmend(t *testing.T) {
 		r, stored := seeded(t)
 		added := bpGroup("tg-3", "tg-2")
 		added.Tasks[0].DoneWhen = "make t3"
-		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return append(g, added) })}
+		r.sess.steps = []any{amendDraft(stored, func(g []Group) []Group { return append(g, added) })}
 
 		base := r.withBase(nil)
 

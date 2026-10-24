@@ -41,6 +41,41 @@ func TestEpicIsPushedOnceAfterItsLastGroup(t *testing.T) {
 	}
 }
 
+// The push names the plan's goal, release and every group of the plan, even when the run holds one group.
+func TestEpicPushCarriesThePlanFacts(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1.1"}})
+	r.plans.facts = PlanFacts{Goal: "Ship it", Release: "V1", GroupGoals: []string{"tg-1.1: First", "tg-1.2: Second"}}
+
+	if err := r.startRun("run-1", "tg-1.1"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "run-complete done", func() bool { return r.ev.count(bus.TypeRunComplete, "done") == 1 })
+
+	got := r.commits.pushes()
+	if len(got) != 1 || got[0].Goal != "Ship it" || got[0].Release != "V1" ||
+		!slices.Equal(got[0].GroupGoals, r.plans.facts.GroupGoals) {
+		t.Fatalf("pushes = %+v", got)
+	}
+}
+
+// A plan whose facts cannot be read is not pushed and ends the run with the epic stalled.
+func TestEpicPushStallsWhenThePlanFactsCannotBeRead(t *testing.T) {
+	r := newRig(t, [][]string{{"tg-1.1"}})
+	r.plans.factsErr = errors.New("blueprint is gone")
+
+	if err := r.startRun("run-1", "tg-1.1"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "run-complete done", func() bool { return r.ev.count(bus.TypeRunComplete, "done") == 1 })
+
+	if n := len(r.commits.pushes()); n != 0 {
+		t.Fatalf("%d pushes, want 0", n)
+	}
+	if r.ev.count(bus.TypeRunFailure, "stalled") != 1 {
+		t.Fatal("no stalled fact named the epic")
+	}
+}
+
 // advanceUntilRunEnds moves the fake clock past each retry wait until the run publishes run-complete.
 func advanceUntilRunEnds(t *testing.T, r *rig) {
 	t.Helper()

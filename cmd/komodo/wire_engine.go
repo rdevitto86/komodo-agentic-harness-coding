@@ -93,6 +93,9 @@ func (l lazyCache) Put(ns cache.Namespace, key cache.Key, data []byte) error {
 // hub routes the Runtime Manager's calls to the kit of the repository they name.
 type hub struct{ s *stack }
 
+// Compile-time proof that the hub tells the Runtime Manager whether an epic's pull request merged.
+var _ engine.EpicMerger = (*hub)(nil)
+
 // Start starts the Task Manager of a group in its repository's kit.
 func (h *hub) Start(ctx context.Context, spec engine.GroupSpec, c cache.Handle) (engine.Channels, error) {
 	k, err := h.s.kitFor(spec.Root, "", spec.Repo)
@@ -109,6 +112,15 @@ func (h *hub) PushEpic(ctx context.Context, r commit.EpicPush) (commit.EpicResul
 		return commit.EpicResult{}, err
 	}
 	return k.commit.PushEpic(ctx, r)
+}
+
+// EpicMerged reports whether the pull request of the epic's branch has merged, in the run's repository.
+func (h *hub) EpicMerged(ctx context.Context, r commit.EpicPush) (bool, error) {
+	k, err := h.s.kitFor(r.Root, r.CommonDir, r.Repo)
+	if err != nil {
+		return false, err
+	}
+	return k.commit.EpicMerged(ctx, r)
 }
 
 // Discard frees a group's resources in the repository that holds it; the engine's own lease on the group does not stop it.
@@ -227,7 +239,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		Leases:   s.leases,
 		Caches:   s.caches,
 		Contexts: ctxAdapter{},
-		Tasks:    h, Tools: s.tools, Plans: planSource{}, Git: epicGit{s.git}, Commits: h, Resource: res,
+		Tasks:    h, Tools: s.tools, Plans: newPlanSource(s.home, s.repoIDOf), Git: epicGit{s.git}, Commits: h, Resource: res,
 		Version: version, Home: s.home, BaseBranch: s.baseBranch, Remote: s.remote, Faults: s.faults,
 		Cleaner: h, Janitor: h, Parked: s.parkedGroups,
 		Errors: func(run, group string, err error) { s.logln("komodo engine:", run, group, err) },
@@ -361,20 +373,22 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 		Git:    s.git,
 		Boxes:  s.containers(),
 		Task:   &groupRef{},
-		Groups: unfinished{k.st},
+		Groups: unfinished{st: k.st, home: s.home, folder: intake.RepoFolder(id)},
+		Plans:  blueprintLabels{home: s.home, folder: intake.RepoFolder(id)},
 		Live:   s.leases.Live,
 		Report: reporter{s}, Repo: id, Clone: root, Remote: "origin", Current: version,
 		Roots: cleanup.Roots{
 			Worktrees: filepath.Join(s.home, "wt", path.Base(id)),
 			Landings:  k.landings,
 			Versions:  filepath.Join(s.home, "versions"),
+			Plans:     filepath.Join(s.home, "plans", intake.RepoFolder(id)),
 		},
 	}
 	k.commit = &commit.Handler{
 		Git: s.git, Forge: commit.NewGH(root), Leases: s.leases, Epics: &commit.EpicGates{},
 		Check:   groupChecker{ref: &groupRef{}},
 		Report:  commitReporter{s},
-		Cleanup: publishedAdapter{h: k.cleanup, landing: k.landingPath},
+		Cleanup: k.published(k.cleanup),
 		Live:    k.commitSettings,
 	}
 	k.intake = intake.New(k.intakeDeps(k.cm))
@@ -443,7 +457,7 @@ func (s *stack) leaseRepos() map[string]string {
 func (s *stack) parkedGroups(context.Context) []engine.ParkedGroup {
 	var out []engine.ParkedGroup
 
-	labels := map[string]map[string]string{} // group labels by id, per clone
+	labels := map[string]map[string]groupPlace{} // group places by id, per repository id
 
 	files, _ := filepath.Glob(filepath.Join(s.home, "leases", "*", "*.json"))
 	for _, f := range files {
@@ -462,8 +476,8 @@ func (s *stack) parkedGroups(context.Context) []engine.ParkedGroup {
 			continue
 		}
 
-		if labels[l.ClonePath] == nil {
-			labels[l.ClonePath] = backlogLabels(l.ClonePath)
+		if labels[l.Repo] == nil {
+			labels[l.Repo] = plannedGroups(s.home, intake.RepoFolder(l.Repo))
 		}
 
 		out = append(out, engine.ParkedGroup{
@@ -471,28 +485,30 @@ func (s *stack) parkedGroups(context.Context) []engine.ParkedGroup {
 			Root:      l.ClonePath,
 			CommonDir: common,
 			Group:     l.Group,
-			Label:     labels[l.ClonePath][l.Group],
+			Label:     labels[l.Repo][l.Group].label,
 		})
 	}
 
 	return out
 }
 
-// backlogLabels maps each group id in root's backlog to its folder name, such as tg-1.2; a backlog that fails to load
-// gives an empty map.
-func backlogLabels(root string) map[string]string {
-	out := map[string]string{}
-	epics, _, err := intake.Load(root)
+// repoIDOf returns the repository id of the kit that serves root.
+func (s *stack) repoIDOf(root string) (string, error) {
+	k, err := s.kitFor(root, "", "")
 	if err != nil {
-		return out
+		return "", err
 	}
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			out[g.ID] = g.Name
-		}
-	}
+	return k.id, nil
+}
 
-	return out
+// published returns the Commit Handler's view of a Cleanup Handler, with the repository's plan folder.
+func (k *repoKit) published(h *cleanup.Handler) publishedAdapter {
+	return publishedAdapter{h: h, landing: k.landingPath, home: k.s.home, folder: intake.RepoFolder(k.id)}
+}
+
+// blueprint reads the blueprint of a plan of this repository.
+func (k *repoKit) blueprint(plan string) (intake.Blueprint, error) {
+	return intake.LoadBlueprint(k.s.home, intake.RepoFolder(k.id), plan)
 }
 
 // refFor returns the Task Manager reference of a group, creating an empty one for a group never started.

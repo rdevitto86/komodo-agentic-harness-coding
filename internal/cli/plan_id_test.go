@@ -19,7 +19,7 @@ func planFixture(t *testing.T, h *harness, repo, plan string, labels ...string) 
 	t.Helper()
 	b := intake.Blueprint{Plan: plan, Repo: intake.RepoFolder(RepoID(repo)), Goal: "g"}
 	for _, l := range labels {
-		b.Groups = append(b.Groups, intake.PlanGroup{ID: "id-" + l, Name: l})
+		b.Groups = append(b.Groups, intake.Group{ID: "id-" + l, Name: l})
 	}
 	if err := intake.WriteBlueprint(h.home, b); err != nil {
 		t.Fatal(err)

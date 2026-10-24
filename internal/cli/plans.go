@@ -41,7 +41,7 @@ func resolveRun(c *Call) *Result {
 		return nil
 	}
 
-	if !slices.ContainsFunc(bp.Groups, func(g intake.PlanGroup) bool { return g.Name == c.Args[1] }) {
+	if !slices.ContainsFunc(bp.Groups, func(g intake.Group) bool { return g.Name == c.Args[1] }) {
 		r := usageErr("plan "+c.Args[0]+" has no group "+c.Args[1], "komodo run --list")
 		return &r
 	}

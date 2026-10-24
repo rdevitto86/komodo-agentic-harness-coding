@@ -134,14 +134,14 @@ func (l limits) ReleaseSlot(k llm.Link) error { return l.m.ReleaseSlot(string(k)
 func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Handle) (engine.Channels, error) {
 	s := k.s
 
-	epics, _, err := intake.Load(k.root)
+	bp, err := k.blueprint(spec.Epic)
 	if err != nil {
-		return engine.Channels{}, fmt.Errorf("read the task lists: %w", err)
+		return engine.Channels{}, fmt.Errorf("read the plan %s: %w", spec.Epic, err)
 	}
 
-	grp, ok := findGroup(epics, spec.ID)
+	grp, ok := findGroup(bp, spec.ID)
 	if !ok {
-		return engine.Channels{}, fmt.Errorf("group %s is not in the task lists", spec.Label)
+		return engine.Channels{}, fmt.Errorf("group %s is not in the plan %s", spec.Label, spec.Epic)
 	}
 
 	epicBranch := "komodo/" + spec.Epic
@@ -287,16 +287,24 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 // taskSpec converts the engine's group spec and the task list into the Task Manager's spec, its acceptance items and its
 // command table.
 func (k *repoKit) taskSpec(spec engine.GroupSpec, g intake.Group, cmds map[string][]string) (task.GroupSpec, []agent.Item) {
-	var tasks []task.TaskSpec
-	for _, t := range g.Tasks {
-		class := "task:" + t.Name
-		cmds[class] = []string{"sh", "-c", t.DoneWhen}
-		tasks = append(tasks, task.TaskSpec{ID: t.Name, Title: t.Name, DoneWhen: class})
-	}
+	var (
+		tasks []task.TaskSpec
+		items []agent.Item
+	)
 
-	var items []agent.Item
-	for i, a := range g.Acceptance {
-		items = append(items, agent.Item{ID: fmt.Sprintf("acc-%d", i+1), Text: a.Text, Cmd: a.Cmd, Needs: a.Needs})
+	for _, t := range g.Tasks {
+		ts := task.TaskSpec{ID: t.Name, Title: t.Name}
+		if t.DoneWhen != "" {
+			ts.DoneWhen = "task:" + t.Name
+			cmds[ts.DoneWhen] = []string{"sh", "-c", t.DoneWhen}
+		}
+
+		for _, a := range t.Acceptance {
+			ts.Criteria = append(ts.Criteria, task.Criterion{Text: a.Keyword + " " + a.Text, Cmd: a.Cmd})
+			items = append(items, agent.Item{ID: fmt.Sprintf("acc-%d", len(items)+1), Text: a.Text, Cmd: a.Cmd, Needs: a.Needs})
+		}
+
+		tasks = append(tasks, ts)
 	}
 
 	perms := map[string]task.Permissions{}
@@ -338,7 +346,7 @@ func (k *repoKit) committer(ref *groupRef, spec engine.GroupSpec) task.Committer
 	h := *k.commit
 	cl := *k.cleanup
 	cl.Task = ref
-	h.Cleanup = publishedAdapter{h: &cl, landing: k.landingPath}
+	h.Cleanup = k.published(&cl)
 	h.Check = groupChecker{ref: ref, worktree: spec.Lease.Worktree}
 	return landingCommitter{h: &h, k: k, spec: spec}
 }
@@ -444,13 +452,11 @@ func (s *stack) relay(label string, in <-chan task.Message, out chan<- task.Mess
 	}
 }
 
-// findGroup returns the group with an identifier from the task lists.
-func findGroup(epics []intake.Epic, id string) (intake.Group, bool) {
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			if g.ID == id {
-				return g, true
-			}
+// findGroup returns the group of the blueprint with an identifier.
+func findGroup(bp intake.Blueprint, id string) (intake.Group, bool) {
+	for _, g := range bp.Groups {
+		if g.ID == id {
+			return g, true
 		}
 	}
 	return intake.Group{}, false

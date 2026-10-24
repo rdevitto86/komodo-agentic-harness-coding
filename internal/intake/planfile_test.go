@@ -169,9 +169,9 @@ func TestRenderPlanFile(t *testing.T) {
 
 		out := Render(Blueprint{
 			Goal: "g",
-			Groups: []PlanGroup{{
+			Groups: []Group{{
 				Name: "tg-1", Goal: "x", Points: 1, Files: []string{"a"},
-				Tasks: []PlanTask{{Name: "tsk-a", Files: []string{"a"}, DoneWhen: "true", EstimateLines: 5}},
+				Tasks: []Task{{Name: "tsk-a", Files: []string{"a"}, DoneWhen: "true", EstimateLines: 5}},
 			}},
 		})
 		for _, bad := range []string{"id:", "release:", "sources:", "subsystem:", "touches:", "priority:"} {

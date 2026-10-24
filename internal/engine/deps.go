@@ -72,6 +72,15 @@ type PlanSource interface {
 	// Specs returns the specs of the plan's groups the labels name, read from the plan's blueprint; empty labels name every
 	// group. root is the repository root the run names and plan the plan id.
 	Specs(ctx context.Context, root, plan string, labels []string) ([]GroupSpec, error)
+	// Facts returns what the plan's pull request describes: the goal, the release and every group of the plan.
+	Facts(ctx context.Context, root, plan string) (PlanFacts, error)
+}
+
+// PlanFacts is what a plan's pull request says about the plan, whatever groups the current run holds.
+type PlanFacts struct {
+	Goal       string   // the plan's goal
+	Release    string   // the release the plan delivers, such as V1
+	GroupGoals []string // one line per group of the plan, as "<label>: <goal>"
 }
 
 // EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's branch.

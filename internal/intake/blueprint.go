@@ -1,3 +1,5 @@
+// Package intake turns a request to plan into a plan folder: it runs the planner session, lints its plan.md draft and writes
+// plan.md and blueprint.json under the Komodo home.
 package intake
 
 import (
@@ -13,37 +15,54 @@ import (
 
 // Blueprint is the parsed plan.md, cached as blueprint.json in the plan folder.
 type Blueprint struct {
-	Plan    string      `json:"plan"`    // the plan id
-	Repo    string      `json:"repo"`    // the repository id the plan belongs to
-	Goal    string      `json:"goal"`    // one-line goal of the plan
-	Release string      `json:"release"` // the release the plan delivers, such as V1
-	Sources []string    `json:"sources"` // repository paths of the source documents
-	Groups  []PlanGroup `json:"groups"`  // in plan order
+	Plan    string   `json:"plan"`    // the plan id
+	Repo    string   `json:"repo"`    // the repository id the plan belongs to
+	Goal    string   `json:"goal"`    // one-line goal of the plan
+	Release string   `json:"release"` // the release the plan delivers, such as V1
+	Sources []string `json:"sources"` // repository paths of the source documents
+	Groups  []Group  `json:"groups"`  // in plan order
 }
 
-// PlanGroup is one ## tg-N section of plan.md.
-type PlanGroup struct {
-	ID           string     `json:"id"`           // identifier from id:
-	Name         string     `json:"name"`         // label inside the plan, such as tg-2
-	Goal         string     `json:"goal"`         // one-line goal
-	Points       int        `json:"points"`       // story points
-	Subsystem    string     `json:"subsystem"`    // component name, or none
-	Touches      []string   `json:"touches"`      // globs the group expects to change
-	Priority     Priority   `json:"priority"`     // high or normal
-	Files        []string   `json:"files"`        // files the builder may write
-	Dependencies []string   `json:"dependencies"` // labels of groups that must finish first
-	Tasks        []PlanTask `json:"tasks"`        // at most 8
-	Hash         string     `json:"hash"`         // card hash of the group's section
+// Group is one ## tg-N section of plan.md.
+type Group struct {
+	ID           string   `json:"id"`           // identifier from id:
+	Name         string   `json:"name"`         // label inside the plan, such as tg-2
+	Goal         string   `json:"goal"`         // one-line goal
+	Points       int      `json:"points"`       // story points
+	Subsystem    string   `json:"subsystem"`    // component name, or none
+	Touches      []string `json:"touches"`      // globs the group expects to change
+	Priority     Priority `json:"priority"`     // high or normal
+	Files        []string `json:"files"`        // files the builder may write
+	Dependencies []string `json:"dependencies"` // labels of groups that must finish first
+	Tasks        []Task   `json:"tasks"`        // at most 8
+	Hash         string   `json:"hash"`         // card hash of the group's section
 }
 
-// PlanTask is one ### tsk-* section of plan.md.
-type PlanTask struct {
+// Task is one ### tsk-* section of plan.md.
+type Task struct {
 	Name          string       `json:"name"`           // heading text, such as tsk-fence-stale
 	Card          string       `json:"card"`           // the task's write-up
 	Files         []string     `json:"files"`          // files the task names, at most 5
 	DoneWhen      string       `json:"done_when"`      // command that proves the task done; may be empty
 	Acceptance    []Acceptance `json:"acceptance"`     // acceptance criteria; may be empty
 	EstimateLines int          `json:"estimate_lines"` // planner's estimate of changed lines, at most 300
+}
+
+// Priority is a group's ordering hint.
+type Priority string
+
+// The two priorities a group may name.
+const (
+	PriorityHigh   Priority = "high"
+	PriorityNormal Priority = "normal"
+)
+
+// Acceptance is one acceptance item.
+type Acceptance struct {
+	Keyword string   `json:"keyword"` // WHEN, IF or WHILE
+	Text    string   `json:"text"`    // the item after the keyword, through its SHALL clause
+	Cmd     string   `json:"cmd"`     // optional command Quality Assurance runs
+	Needs   []string `json:"needs"`   // optional: network, docker or service:<name>
 }
 
 // ErrPlanIDTaken means every plan id drawn already exists in the repository.

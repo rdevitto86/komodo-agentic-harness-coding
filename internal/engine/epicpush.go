@@ -104,7 +104,15 @@ func (m *Manager) pushEpic(r *run, epic string, n int) {
 	}
 	m.mu.Unlock()
 
-	res, err := m.tryPush(r, req)
+	var res commit.EpicResult
+
+	facts, err := m.d.Plans.Facts(r.ctx, r.start.Root, epic)
+	if err != nil {
+		err = fmt.Errorf("read the plan %s: %w", epic, err)
+	} else {
+		req.Goal, req.GroupGoals, req.Release = facts.Goal, facts.GroupGoals, facts.Release
+		res, err = m.tryPush(r, req)
+	}
 
 	m.mu.Lock()
 	st := r.pushes[epic]

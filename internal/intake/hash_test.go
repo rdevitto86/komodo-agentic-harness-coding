@@ -11,7 +11,7 @@ func TestCardHash(t *testing.T) {
 	hash := func(t *testing.T, text, group string) string {
 		t.Helper()
 
-		h, err := CardHash(text, PlanGroup{Name: group})
+		h, err := CardHash(text, Group{Name: group})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,7 +82,7 @@ func TestCardHash(t *testing.T) {
 	t.Run("a group with no section is an error", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := CardHash(readPlanFixture(t), PlanGroup{Name: "tg-9"}); err == nil {
+		if _, err := CardHash(readPlanFixture(t), Group{Name: "tg-9"}); err == nil {
 			t.Fatal("want an error")
 		}
 	})

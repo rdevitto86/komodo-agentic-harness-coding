@@ -3,7 +3,6 @@ package intake
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -41,12 +40,8 @@ var uuid7 = regexp.MustCompile(
 // fieldLine matches a bare key: value line of a field block.
 var fieldLine = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*):[ \t]*(.*)$`)
 
-// The keys of the two file kinds; the value says whether the key holds a list.
+// The keys of the field blocks; the value says whether the key holds a list.
 var (
-	tgKeys = map[string]bool{
-		"id": false, "goal": false, "subsystem": false, "touches": true, "priority": false,
-		"points": false, "status": false, "files": true, "dependencies": true,
-	}
 	taskKeys = map[string]bool{"files": true, "done_when": false, "estimate_lines": false}
 
 	// planKeys are the header keys of plan.md.
@@ -58,79 +53,6 @@ var (
 		"points": false, "files": true, "dependencies": true,
 	}
 )
-
-// validStatus holds the five group statuses.
-var validStatus = map[string]bool{
-	"todo":             true,
-	"in_progress":      true,
-	"blocked":          true,
-	"needs_refinement": true,
-	"done":             true,
-}
-
-// parseTG reads a TG.md into g; every problem is a finding and the fields that read well still fill g. A draft may leave
-// id out, because Komodo assigns it when the plan is saved.
-func parseTG(path, text string, g *Group, idOptional bool) []Finding {
-	b, found := parseBlock(path, text, tgKeys)
-	fail := func(msg string, a ...any) {
-		found = append(found, grammar(path, fmt.Sprintf(msg, a...)))
-	}
-	if id := b.one("id"); id == "" {
-		if !idOptional {
-			fail("id is missing")
-		}
-	} else if !uuid7.MatchString(id) {
-		fail("id %q is not a version 7 identifier", id)
-	} else {
-		g.ID = id
-	}
-	if g.Goal = b.one("goal"); g.Goal == "" {
-		fail("goal is missing")
-	}
-	if v := b.one("subsystem"); v != "" {
-		g.Subsystem = v
-	}
-
-	g.Touches = b.vals["touches"]
-	if v := b.one("priority"); v != "" {
-		if p := Priority(v); p == PriorityHigh || p == PriorityNormal {
-			g.Priority = p
-		} else {
-			fail("priority %q is not high or normal", v)
-		}
-	}
-	if v := b.one("points"); v == "" {
-		fail("points is missing")
-	} else if n, err := strconv.Atoi(v); err != nil {
-		fail("points %q is not a number", v)
-	} else {
-		g.Points = n
-	}
-	if v := b.one("status"); v != "" {
-		if validStatus[v] {
-			g.Status = v
-		} else {
-			fail("status %q is not todo, in_progress, blocked, needs_refinement or done", v)
-		}
-	}
-
-	g.Files = b.vals["files"]
-
-	g.Dependencies = b.vals["dependencies"]
-	if !b.has("files") || len(g.Files) == 0 {
-		found = append(found, required(path, "files is missing or empty"))
-	}
-	if !b.has("dependencies") {
-		found = append(found, required(
-			path,
-			"dependencies is missing; write the key with no value when the group waits on none",
-		))
-	}
-
-	items, fs := parseAcceptance(path, b.body)
-	g.Acceptance = items
-	return append(found, fs...)
-}
 
 // parseBlock reads the bare key: value lines at the top of a file, ending at the first blank line. A key outside keys, a
 // repeated key, an upper-case key, a stray line or a list under a one-value
@@ -193,12 +115,17 @@ func parseBlock(path, text string, keys map[string]bool) (block, []Finding) {
 	return b, found
 }
 
+// grammar returns a failing grammar finding.
+func grammar(path, msg string) Finding {
+	return Finding{Rule: RuleGrammar, Severity: SeverityFail, Path: path, Message: msg}
+}
+
 // required returns a failing required finding.
 func required(path, msg string) Finding {
 	return Finding{Rule: RuleRequired, Severity: SeverityFail, Path: path, Message: msg}
 }
 
-// parseAcceptance reads the "- " items after a TG.md field block, with their indented cmd: and needs: lines.
+// parseAcceptance reads the "- " items after a group's field block, with their indented cmd: and needs: lines.
 func parseAcceptance(path string, body []numbered) ([]Acceptance, []Finding) {
 	var (
 		items []Acceptance
@@ -251,34 +178,4 @@ func parseItemLine(path string, l numbered, a *Acceptance) []Finding {
 	}
 
 	return nil
-}
-
-// parseTask reads a tsk-*.md file; its name is the file name without .md.
-func parseTask(path, text string) (Task, []Finding) {
-	t := Task{Name: strings.TrimSuffix(path[strings.LastIndex(path, "/")+1:], ".md")}
-	b, found := parseBlock(path, text, taskKeys)
-	t.Files = b.vals["files"]
-
-	t.DoneWhen = b.one("done_when")
-	if len(t.Files) == 0 {
-		found = append(found, required(path, "files is missing or empty"))
-	}
-	if t.DoneWhen == "" {
-		found = append(found, required(path, "done_when is missing"))
-	}
-	if v := b.one("estimate_lines"); v == "" {
-		found = append(found, grammar(path, "estimate_lines is missing"))
-	} else if n, err := strconv.Atoi(v); err != nil {
-		found = append(found, grammar(path, fmt.Sprintf("estimate_lines %q is not a number", v)))
-	} else {
-		t.EstimateLines = n
-	}
-
-	var card []string
-	for _, l := range b.body {
-		card = append(card, l.text)
-	}
-
-	t.Card = strings.TrimSpace(strings.Join(card, "\n"))
-	return t, found
 }

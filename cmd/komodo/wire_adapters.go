@@ -4,18 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/sandbox"
 	"os/exec"
-	"slices"
-	"strconv"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cleanup"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
-	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 )
 
@@ -44,68 +40,6 @@ func (c ctxAdapter) UseCache(string, cache.Handle) {}
 // GetContext returns the stage context of an agent; the Task Manager assembles its own briefs.
 func (c ctxAdapter) GetContext(context.Context, string, string) (json.RawMessage, error) {
 	return json.RawMessage("{}"), nil
-}
-
-// planSource reads the groups of a run from the task lists under the repository root.
-type planSource struct{}
-
-// Specs returns the group specs of the plan for the labels, or every group of the plan when none, in task-list order.
-func (p planSource) Specs(_ context.Context, root, plan string, labels []string) ([]engine.GroupSpec, error) {
-	epics, _, err := intake.Load(root)
-	if err != nil {
-		return nil, fmt.Errorf("read the task lists: %w", err)
-	}
-
-	ids := map[string]string{}
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			ids[g.Name] = g.ID
-		}
-	}
-
-	var out []engine.GroupSpec
-
-	order := 0
-
-	for _, e := range epics {
-		if plan != "" && plan != "ep-"+strconv.Itoa(e.Number) {
-			order += len(e.Groups)
-			continue
-		}
-
-		for _, g := range e.Groups {
-			order++
-			if len(labels) > 0 && !slices.Contains(labels, g.Name) {
-				continue
-			}
-
-			sp := engine.GroupSpec{
-				ID:       g.ID,
-				Label:    g.Name,
-				Epic:     "ep-" + strconv.Itoa(e.Number),
-				Files:    g.Files,
-				Priority: string(g.Priority),
-				Order:    order,
-			}
-			for _, d := range g.Dependencies {
-				sp.Depends = append(sp.Depends, ids[d])
-			}
-
-			for _, t := range g.Tasks {
-				sp.Tasks = append(sp.Tasks, t.Name)
-			}
-
-			out = append(out, sp)
-		}
-	}
-
-	for _, l := range labels {
-		if !slices.ContainsFunc(out, func(s engine.GroupSpec) bool { return s.Label == l }) {
-			return nil, fmt.Errorf("unknown group %s", l)
-		}
-	}
-
-	return out, nil
 }
 
 // epicGit adopts a clone before the branch calls the Runtime Manager makes in it.
@@ -164,13 +98,16 @@ func (j janitor) Clean(ctx context.Context, dryRun bool, _ map[string]bool) ([]e
 
 // publishedAdapter drops the report the Cleanup Handler returns, which the Commit Handler does not read.
 type publishedAdapter struct {
-	h       *cleanup.Handler
-	landing func(epic string) string
+	h            *cleanup.Handler
+	landing      func(epic string) string
+	home, folder string // the Komodo home and the repository's plan folder name
 }
 
 // Complete cleans up one group that landed on the local epic branch.
 func (p publishedAdapter) Complete(ctx context.Context, pub commit.Published) error {
 	_, err := p.h.Complete(ctx, cleanup.Published{
+		Plan:     pub.Epic,
+		Label:    plannedGroups(p.home, p.folder)[string(pub.Group)].label,
 		Run:      string(pub.Run),
 		Group:    string(pub.Group),
 		Epic:     pub.Epic,
@@ -207,7 +144,10 @@ func (noContainers) List(context.Context) ([]string, error) { return nil, nil }
 
 // unfinished lists the groups whose records are not done, for the cleanup sweep; the records pin no binary version, so each
 // names the running one.
-type unfinished struct{ st *state.Manager }
+type unfinished struct {
+	st           *state.Manager
+	home, folder string // the Komodo home and the repository's plan folder name
+}
 
 // Unfinished returns the groups a `run` could still continue.
 func (u unfinished) Unfinished(context.Context) ([]cleanup.GroupRef, error) {
@@ -216,10 +156,17 @@ func (u unfinished) Unfinished(context.Context) ([]cleanup.GroupRef, error) {
 		return nil, err
 	}
 
+	places := plannedGroups(u.home, u.folder)
+
 	var out []cleanup.GroupRef
+
 	for _, r := range recs {
 		if r.State.Stage != state.StageDone {
-			out = append(out, cleanup.GroupRef{Group: r.Header.Group, Version: version})
+			out = append(out, cleanup.GroupRef{
+				Group:   r.Header.Group,
+				Version: version,
+				Epic:    places[r.Header.Group].plan,
+			})
 		}
 	}
 
@@ -235,7 +182,7 @@ var (
 	_ commit.Git  = (*core.Git)(nil)
 )
 
-// InRun reports the run that holds a group whose record is not done.
+// InRun reports the run of a group that has a record, running or done.
 func (g groupLocks) InRun(group string) (string, bool, error) {
 	rec, err := g.st.Peek(group)
 	if errors.Is(err, state.ErrNotFound) {
@@ -244,7 +191,7 @@ func (g groupLocks) InRun(group string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	return rec.State.Run, rec.State.Stage != state.StageDone, nil
+	return rec.State.Run, true, nil
 }
 
 // Finished returns the names of the group's tasks that are done in its saved state.

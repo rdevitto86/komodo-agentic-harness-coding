@@ -110,7 +110,7 @@ func Render(b Blueprint) string {
 }
 
 // renderTask writes one ### tsk-* section.
-func renderTask(w *strings.Builder, t PlanTask) {
+func renderTask(w *strings.Builder, t Task) {
 	w.WriteString("\n### " + t.Name + "\n")
 	writeList(w, "files", t.Files)
 	writeField(w, "done_when", t.DoneWhen)
@@ -220,9 +220,9 @@ func bodyLines(body []numbered) []string {
 }
 
 // parseGroupSection reads the field block of a ## tg-N section.
-func parseGroupSection(s section) (PlanGroup, []Finding) {
+func parseGroupSection(s section) (Group, []Finding) {
 	path := "plan.md#" + s.title
-	g := PlanGroup{Name: s.title, Subsystem: "none", Priority: PriorityNormal}
+	g := Group{Name: s.title, Subsystem: "none", Priority: PriorityNormal}
 	v, found := parseBlock(path, strings.Join(s.lines, "\n"), groupKeys)
 
 	fail := func(msg string, a ...any) { found = append(found, grammar(path, fmt.Sprintf(msg, a...))) }
@@ -274,7 +274,7 @@ func parseGroupSection(s section) (PlanGroup, []Finding) {
 }
 
 // addTask parses a ### section and appends it to g.
-func addTask(g *PlanGroup, s section) []Finding {
+func addTask(g *Group, s section) []Finding {
 	path := "plan.md#" + g.Name
 
 	if !strings.HasPrefix(s.title, "tsk-") || s.title == "tsk-" {
@@ -294,8 +294,8 @@ func addTask(g *PlanGroup, s section) []Finding {
 }
 
 // parseTaskSection reads a ### tsk-* section: its field block, its card and its acceptance criteria.
-func parseTaskSection(path string, s section) (PlanTask, []Finding) {
-	t := PlanTask{Name: s.title}
+func parseTaskSection(path string, s section) (Task, []Finding) {
+	t := Task{Name: s.title}
 	v, found := parseBlock(path, strings.Join(s.lines, "\n"), taskKeys)
 	t.Files = v.vals["files"]
 	t.DoneWhen = v.one("done_when")

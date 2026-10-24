@@ -242,7 +242,7 @@ func TestPlan(t *testing.T) {
 		t.Parallel()
 		g := bpGroup("tg-1")
 		g.ID = uid(1)
-		r := newRig(t, draftOfPlan(Blueprint{Goal: "Plan goal", Release: "V1", Groups: []PlanGroup{g}}))
+		r := newRig(t, draftOfPlan(Blueprint{Goal: "Plan goal", Release: "V1", Groups: []Group{g}}))
 		res, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
 		if err != nil {
 			t.Fatal(err)
@@ -590,7 +590,7 @@ func TestDraftFromResult(t *testing.T) {
 
 	t.Run("the plan text becomes plan.md and its parsed blueprint", func(t *testing.T) {
 		t.Parallel()
-		text := Render(Blueprint{Goal: "Plan goal", Release: "V1", Groups: []PlanGroup{bpGroup("tg-1")}})
+		text := Render(Blueprint{Goal: "Plan goal", Release: "V1", Groups: []Group{bpGroup("tg-1")}})
 		d := DraftFromResult(agent.PlannerResult{Plan: text})
 		if len(d.Files) != 1 || d.Files[0] != (DraftFile{Path: "plan.md", Content: text}) {
 			t.Fatalf("files: %+v", d.Files)
@@ -628,7 +628,7 @@ func TestDraftBlueprint(t *testing.T) {
 }
 
 // newDraft renders groups as the draft of a new plan: no plan id and no group ids.
-func newDraft(groups ...PlanGroup) PlanDraft {
+func newDraft(groups ...Group) PlanDraft {
 	return draftOfPlan(Blueprint{Goal: "Plan goal", Release: "V1", Groups: groups})
 }
 
