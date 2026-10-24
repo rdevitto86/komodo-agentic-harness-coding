@@ -69,8 +69,8 @@ func (h *Handler) closePlan(ctx context.Context, p Published, rep *Report) {
 }
 
 // sweepPlans deletes failed drafts, plan folders whose groups are all closed, and plan folders nothing runs in that
-// have not changed for 7 days; a folder with a running group is kept.
-func (h *Handler) sweepPlans(ctx context.Context, rep *Report, dry bool) {
+// have not changed for 7 days when stale is set; a folder with a running group is kept.
+func (h *Handler) sweepPlans(ctx context.Context, rep *Report, dry, stale bool) {
 	if h.Roots.Plans == "" {
 		return
 	}
@@ -100,13 +100,13 @@ func (h *Handler) sweepPlans(ctx context.Context, rep *Report, dry bool) {
 		case strings.HasPrefix(name, "."):
 			continue // a staging folder belongs to the Intake Handler
 		default:
-			h.sweepPlan(ctx, rep, name, dir, dry)
+			h.sweepPlan(ctx, rep, name, dir, dry, stale)
 		}
 	}
 }
 
-// sweepPlan decides one plan folder: closed plans and stale idle plans go, the rest stay.
-func (h *Handler) sweepPlan(ctx context.Context, rep *Report, plan, dir string, dry bool) {
+// sweepPlan decides one plan folder: closed plans go, idle plans go when stale is set and they are old, the rest stay.
+func (h *Handler) sweepPlan(ctx context.Context, rep *Report, plan, dir string, dry, stale bool) {
 	var st planState
 	if h.Plans != nil {
 		var err error
@@ -119,7 +119,7 @@ func (h *Handler) sweepPlan(ctx context.Context, rep *Report, plan, dir string, 
 	switch {
 	case st.running:
 		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: "a group of the plan is running"})
-	case st.closed || h.now().Sub(planChanged(dir)) >= planStale:
+	case st.closed || stale && h.now().Sub(planChanged(dir)) >= planStale:
 		h.deletePlan(dir, rep, dry)
 	default:
 		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: "the plan changed in the last 7 days"})

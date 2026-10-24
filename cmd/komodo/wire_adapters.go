@@ -87,7 +87,7 @@ func (j janitor) Clean(ctx context.Context, dryRun bool, _ map[string]bool) ([]e
 	if dryRun {
 		rep, err = j.h.Preview(ctx)
 	} else {
-		rep, err = j.h.Sweep(ctx)
+		rep, err = j.h.Clean(ctx)
 	}
 	if err != nil {
 		return nil, err

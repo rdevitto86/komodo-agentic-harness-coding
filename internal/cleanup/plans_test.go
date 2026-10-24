@@ -97,7 +97,7 @@ func TestPlanFolders(t *testing.T) {
 		t.Parallel()
 		p := newPlanEnv(t)
 		dir := p.plan("plan-aaaaaa", 8*day, "tg-1")
-		rep, err := p.h.Sweep(ctx)
+		rep, err := p.h.Clean(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestPlanFolders(t *testing.T) {
 		t.Parallel()
 		p := newPlanEnv(t)
 		dir := p.plan("plan-bbbbbb", 6*day, "tg-1")
-		rep, err := p.h.Sweep(ctx)
+		rep, err := p.h.Clean(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -125,7 +125,7 @@ func TestPlanFolders(t *testing.T) {
 		dir := p.plan("plan-cccccc", 30*day, "tg-1", "tg-2")
 		p.pg.status["plan-cccccc/tg-1"] = StatusClosed
 		p.pg.status["plan-cccccc/tg-2"] = StatusRunning
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if !exists(dir) {
@@ -139,7 +139,7 @@ func TestPlanFolders(t *testing.T) {
 		dir := p.plan("plan-dddddd", 0, "tg-1", "tg-2")
 		p.pg.status["plan-dddddd/tg-1"] = StatusClosed
 		p.pg.status["plan-dddddd/tg-2"] = StatusClosed
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if exists(dir) {
@@ -155,7 +155,7 @@ func TestPlanFolders(t *testing.T) {
 		p.write(filepath.Join(failed, "plan.md"), "x")
 		p.write(filepath.Join(staging, "plan.md"), "x")
 		p.write(filepath.Join(p.roots.Plans, "note.txt"), "x")
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if exists(failed) || !exists(staging) {
@@ -168,7 +168,7 @@ func TestPlanFolders(t *testing.T) {
 		p := newPlanEnv(t)
 		dir := p.plan("plan-eeeeee", 9*day)
 		delete(p.bp.labels, "plan-eeeeee")
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if exists(dir) {
@@ -187,7 +187,7 @@ func TestPlanFolders(t *testing.T) {
 		if err := os.Chtimes(dir, old, old); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if exists(dir) {
@@ -200,7 +200,7 @@ func TestPlanFolders(t *testing.T) {
 		p := newPlanEnv(t)
 		p.h.Now = nil
 		dir := p.plan("plan-gggggg", 0, "tg-1")
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if !exists(dir) {
@@ -234,7 +234,7 @@ func TestPlanFoldersKept(t *testing.T) {
 		p := newPlanEnv(t)
 		dir := p.plan("plan-aaaaaa", 30*day, "tg-1")
 		p.pg.err = errors.New("state down")
-		rep, err := p.h.Sweep(ctx)
+		rep, err := p.h.Clean(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +248,7 @@ func TestPlanFoldersKept(t *testing.T) {
 		p := newPlanEnv(t)
 		dir := p.plan("plan-aaaaaa", 30*day, "tg-1")
 		p.bp.err = errors.New("bad json")
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if !exists(dir) {
@@ -261,7 +261,7 @@ func TestPlanFoldersKept(t *testing.T) {
 		p := newPlanEnv(t)
 		dir := p.plan("plan-aaaaaa", 30*day, "tg-1")
 		p.h.Groups = &fakeGroups{}
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if !exists(dir) {
@@ -275,7 +275,7 @@ func TestPlanFoldersKept(t *testing.T) {
 		p.h.Plans = nil
 		stale := p.plan("plan-aaaaaa", 30*day, "tg-1")
 		fresh := p.plan("plan-bbbbbb", day, "tg-1")
-		if _, err := p.h.Sweep(ctx); err != nil {
+		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if exists(stale) || !exists(fresh) {
@@ -287,7 +287,7 @@ func TestPlanFoldersKept(t *testing.T) {
 		t.Parallel()
 		p := newPlanEnv(t)
 		p.h.Roots.Plans = filepath.Join(p.base, "missing")
-		if rep, err := p.h.Sweep(ctx); err != nil || len(rep.Removed) != 0 {
+		if rep, err := p.h.Clean(ctx); err != nil || len(rep.Removed) != 0 {
 			t.Fatalf("rep=%+v err=%v", rep, err)
 		}
 	})
@@ -298,9 +298,47 @@ func TestPlanFoldersKept(t *testing.T) {
 		file := filepath.Join(p.base, "plans-file")
 		p.write(file, "x")
 		p.h.Roots.Plans = file
-		rep, err := p.h.Sweep(ctx)
+		rep, err := p.h.Clean(ctx)
 		if err != nil || len(rep.Kept) != 1 || rep.Kept[0].Kind != KindPlan {
 			t.Fatalf("rep=%+v err=%v", rep, err)
+		}
+	})
+}
+
+func TestPlanFoldersEngineStart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("the engine-start sweep keeps an 8-day-old unused plan, clean removes it", func(t *testing.T) {
+		t.Parallel()
+		p := newPlanEnv(t)
+		dir := p.plan("plan-aaaaaa", 8*day, "tg-1")
+		if _, err := p.h.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !exists(dir) {
+			t.Fatal("the engine-start sweep deleted a stale plan")
+		}
+		if _, err := p.h.Clean(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if exists(dir) {
+			t.Fatal("clean kept a stale plan")
+		}
+	})
+
+	t.Run("the engine-start sweep removes a finished plan and a failed draft", func(t *testing.T) {
+		t.Parallel()
+		p := newPlanEnv(t)
+		done := p.plan("plan-bbbbbb", 0, "tg-1")
+		p.pg.status["plan-bbbbbb/tg-1"] = StatusClosed
+		failed := filepath.Join(p.roots.Plans, ".plan-failed-ab12")
+		p.write(filepath.Join(failed, "plan.md"), "x")
+		if _, err := p.h.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if exists(done) || exists(failed) {
+			t.Fatalf("done=%v failed=%v", exists(done), exists(failed))
 		}
 	})
 }

@@ -9,21 +9,30 @@ import (
 	"sort"
 )
 
-// Sweep removes the remains of runs that ended without cleaning up.
-func (h *Handler) Sweep(ctx context.Context) (Report, error) {
-	rep, err := h.sweep(ctx, false)
+// Sweep removes the remains of runs that ended without cleaning up; the engine runs it at each start. It leaves a plan
+// folder that is only stale.
+func (h *Handler) Sweep(ctx context.Context) (Report, error) { return h.run(ctx, false) }
+
+// Clean is Sweep for `komodo clean`: it also removes a plan folder that no running group uses and that has not changed
+// for 7 days.
+func (h *Handler) Clean(ctx context.Context) (Report, error) { return h.run(ctx, true) }
+
+// Preview lists what Clean would remove and removes nothing; a worktree that
+// holds unpublished files shows only when Clean runs.
+func (h *Handler) Preview(ctx context.Context) (Report, error) { return h.sweep(ctx, true, true) }
+
+// run sweeps for real and announces the result.
+func (h *Handler) run(ctx context.Context, stale bool) (Report, error) {
+	rep, err := h.sweep(ctx, false, stale)
 	if err == nil {
 		h.say(ctx, "", "cleanup.swept", rep)
 	}
 	return rep, err
 }
 
-// Preview lists what Sweep would remove and removes nothing; a worktree that
-// holds unpublished files shows only when Sweep runs.
-func (h *Handler) Preview(ctx context.Context) (Report, error) { return h.sweep(ctx, true) }
-
-// sweep visits every group that has a container, checkout or folder left and cleans the ones that no run can continue.
-func (h *Handler) sweep(ctx context.Context, dry bool) (Report, error) {
+// sweep visits every group that has a container, checkout or folder left and cleans the ones that no run can continue;
+// stale also lets it delete idle plan folders unchanged for 7 days.
+func (h *Handler) sweep(ctx context.Context, dry, stale bool) (Report, error) {
 	rep := Report{}
 
 	if h.Roots.Worktrees == "" {
@@ -57,7 +66,7 @@ func (h *Handler) sweep(ctx context.Context, dry bool) (Report, error) {
 	}
 
 	h.sweepLandings(ctx, &rep, used, dry, fetchErr)
-	h.sweepPlans(ctx, &rep, dry)
+	h.sweepPlans(ctx, &rep, dry, stale)
 	return rep, nil
 }
 
