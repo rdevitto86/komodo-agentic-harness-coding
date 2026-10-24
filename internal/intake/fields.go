@@ -48,6 +48,15 @@ var (
 		"points": false, "status": false, "files": true, "dependencies": true,
 	}
 	taskKeys = map[string]bool{"files": true, "done_when": false, "estimate_lines": false}
+
+	// planKeys are the header keys of plan.md.
+	planKeys = map[string]bool{"id": false, "goal": false, "release": false, "sources": true}
+
+	// groupKeys are the keys of a ## tg-N section of plan.md; a group's status is not a field there.
+	groupKeys = map[string]bool{
+		"id": false, "goal": false, "subsystem": false, "touches": true, "priority": false,
+		"points": false, "files": true, "dependencies": true,
+	}
 )
 
 // validStatus holds the five group statuses.

@@ -48,10 +48,10 @@ type Group struct {
 
 // Acceptance is one acceptance item.
 type Acceptance struct {
-	Keyword string   // WHEN, IF or WHILE
-	Text    string   // the item after the keyword, through its SHALL clause
-	Cmd     string   // optional command Quality Assurance runs
-	Needs   []string // optional: network, docker or service:<name>
+	Keyword string   `json:"keyword"` // WHEN, IF or WHILE
+	Text    string   `json:"text"`    // the item after the keyword, through its SHALL clause
+	Cmd     string   `json:"cmd"`     // optional command Quality Assurance runs
+	Needs   []string `json:"needs"`   // optional: network, docker or service:<name>
 }
 
 // Task is one tsk-*.md file.
