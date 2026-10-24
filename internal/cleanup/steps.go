@@ -15,8 +15,7 @@ import (
 
 // StartedFact is the data of the cleanup.start fact.
 type StartedFact struct {
-	Branch string `json:"branch"`
-	Tip    string `json:"tip"`
+	Tip string `json:"tip"`
 }
 
 // DiscardedFact is the data of the group.discarded fact.
@@ -256,37 +255,6 @@ func (r *run) branch(name, tip, in string) {
 		return
 	}
 	if err := r.h.Git.DeleteBranch(r.ctx, r.h.Clone, name, tip, in); err != nil {
-		r.fail(KindBranch, name, err)
-		return
-	}
-
-	r.removed(KindBranch, name)
-}
-
-// landedBranch deletes a local group branch that still points at tip once into holds it or a commit with its identical
-// change; a branch already gone counts as done.
-func (r *run) landedBranch(name, tip, into string) {
-	if !r.allowed(name) || !r.proceed() {
-		return
-	}
-
-	cur, ok, err := r.h.Git.BranchTip(r.ctx, r.h.Clone, name)
-	if err != nil {
-		r.fail(KindBranch, name, err)
-		return
-	}
-	if !ok {
-		return
-	}
-	if r.dry {
-		if cur == tip {
-			r.removed(KindBranch, name)
-		} else {
-			r.kept(KindBranch, name, "branch moved since the tip was read")
-		}
-		return
-	}
-	if err := r.h.Git.DeleteLanded(r.ctx, r.h.Clone, name, tip, into); err != nil {
 		r.fail(KindBranch, name, err)
 		return
 	}

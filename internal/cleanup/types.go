@@ -9,7 +9,6 @@ type Published struct {
 	Run      string `json:"run"`
 	Group    string `json:"group"`
 	Epic     string `json:"epic"`              // epic folder name, such as ep-1
-	Branch   string `json:"branch"`            // group branch that was landed
 	Tip      string `json:"tip"`               // commit id the remote must hold
 	Remote   string `json:"remote"`            // remote that received the push
 	Contains string `json:"contains"`          // remote reference whose history must hold Tip

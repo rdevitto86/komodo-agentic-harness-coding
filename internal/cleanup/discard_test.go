@@ -37,14 +37,14 @@ func TestDiscardDropsUnpublishedWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exists(g.wt) || e.hasBranch(testBranch) {
-		t.Fatalf("worktree or branch survived: %+v", rep)
+	if exists(g.wt) {
+		t.Fatalf("worktree survived: %+v", rep)
 	}
 	if !exists(state) {
 		t.Fatal("the group's state record was removed")
 	}
-	if got := e.log.names("container.", "git.Discard", "task."); len(got) != 4 || got[0] != "container.Remove g1" ||
-		got[3] != "task.Close" {
+	if got := e.log.names("container.", "git.Discard", "task."); len(got) != 3 || got[0] != "container.Remove g1" ||
+		got[2] != "task.Close" {
 		t.Fatalf("calls = %v", got)
 	}
 	if got := e.rep.subtypes(); len(got) != 1 || got[0] != "group.discarded" {

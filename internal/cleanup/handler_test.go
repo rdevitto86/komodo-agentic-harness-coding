@@ -42,7 +42,7 @@ func TestCompleteRemovesInOrderAndClosesLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"container.Remove g1", "git.RemoveWorktree " + g.wt, "git.DeleteBranch " + testBranch, "task.Close"}
+	want := []string{"container.Remove g1", "git.RemoveWorktree " + g.wt, "task.Close"}
 	if got := e.log.names(
 		"container.",
 		"git.RemoveWorktree",
@@ -57,14 +57,14 @@ func TestCompleteRemovesInOrderAndClosesLast(t *testing.T) {
 			t.Fatalf("%s still exists", p)
 		}
 	}
-	if e.hasBranch(testBranch) {
-		t.Fatal("branch survived")
+	if !e.hasBranch(testBranch) {
+		t.Fatal("branch was deleted")
 	}
 	var kinds []string
 	for _, it := range rep.Removed {
 		kinds = append(kinds, it.Kind)
 	}
-	if wantK := []string{KindContainer, KindQA, KindTemp, KindWorktree, KindBranch}; !reflect.DeepEqual(kinds, wantK) {
+	if wantK := []string{KindContainer, KindQA, KindTemp, KindWorktree}; !reflect.DeepEqual(kinds, wantK) {
 		t.Fatalf("removed kinds = %v, want %v", kinds, wantK)
 	}
 	if len(rep.Kept) != 0 {
@@ -83,8 +83,8 @@ func TestCompleteWithoutDocker(t *testing.T) {
 	if _, err := e.h.Complete(context.Background(), e.published(g)); err != nil {
 		t.Fatal(err)
 	}
-	if exists(g.wt) || e.hasBranch(testBranch) {
-		t.Fatal("worktree or branch survived")
+	if exists(g.wt) {
+		t.Fatal("worktree survived")
 	}
 }
 
@@ -118,13 +118,13 @@ func TestCompleteRepeatAfterFailureFinishesTheRest(t *testing.T) {
 	e := newEnv(t)
 	g := e.addGroup("g1", testBranch)
 	e.land(g)
-	e.git.failOn["git.DeleteBranch"] = errors.New("disk hiccup")
+	e.git.failOn["git.RemoveWorktree"] = errors.New("disk hiccup")
 	rep, err := e.h.Complete(context.Background(), e.published(g))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindBranch || !e.hasBranch(testBranch) || exists(g.wt) {
-		t.Fatalf("first pass: kept %+v, branch %v", rep.Kept, e.hasBranch(testBranch))
+	if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindWorktree || !exists(g.wt) {
+		t.Fatalf("first pass: kept %+v, worktree %v", rep.Kept, exists(g.wt))
 	}
 	if e.errs.count() != 1 {
 		t.Fatalf("Error Handler got %d errors, want 1", e.errs.count())
@@ -133,8 +133,8 @@ func TestCompleteRepeatAfterFailureFinishesTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repeat: %v", err)
 	}
-	if e.hasBranch(testBranch) || len(rep.Kept) != 0 {
-		t.Fatalf("repeat left branch %v, kept %+v", e.hasBranch(testBranch), rep.Kept)
+	if exists(g.wt) || len(rep.Kept) != 0 {
+		t.Fatalf("repeat left worktree %v, kept %+v", exists(g.wt), rep.Kept)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestCompleteKeepsWorktreeWithUntrackedFile(t *testing.T) {
 	if !exists(filepath.Join(g.wt, "notes.txt")) {
 		t.Fatal("untracked file was deleted")
 	}
-	if len(rep.Kept) != 2 || rep.Kept[0].Kind != KindWorktree || rep.Kept[0].Name != g.wt {
+	if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindWorktree || rep.Kept[0].Name != g.wt {
 		t.Fatalf("kept = %+v", rep.Kept)
 	}
 	if e.errs.count() != 0 {
@@ -183,25 +183,6 @@ func TestCompleteKeepsWorktreeWithUntrackedFile(t *testing.T) {
 	}
 	if got := e.log.names("task."); len(got) != 1 {
 		t.Fatal("group was not closed")
-	}
-}
-
-func TestCompleteKeepsBranchMovedAfterPublish(t *testing.T) {
-	e := newEnv(t)
-	g := e.addGroup("g1", testBranch)
-	e.land(g)
-	e.write(filepath.Join(g.wt, "later.txt"), "more")
-	e.must(g.wt, "add", "-A")
-	e.must(g.wt, "commit", "-m", "later")
-	rep, err := e.h.Complete(context.Background(), e.published(g))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !e.hasBranch(testBranch) {
-		t.Fatal("moved branch was deleted")
-	}
-	if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindBranch {
-		t.Fatalf("kept = %+v", rep.Kept)
 	}
 }
 

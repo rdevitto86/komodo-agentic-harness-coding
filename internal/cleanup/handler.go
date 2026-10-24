@@ -29,12 +29,6 @@ type Git interface {
 	// DeleteBranch deletes a local branch only when it still points at expectTip and
 	// that commit is in the history of containedIn.
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
-	// DeleteLanded deletes a local branch only when it still points at expectTip and containedIn holds it by ancestry
-	// or has a commit whose change is identical to the branch's whole change.
-	DeleteLanded(ctx context.Context, clone, branch, expectTip, containedIn string) error
-	// DiscardBranch deletes a local branch that still points at expectTip, whether or not
-	// the remote holds that commit; only Discard calls it.
-	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
 	// DiscardWorktree removes a worktree and its files even when they hold work the tip lacks; only Discard calls it.
 	DiscardWorktree(ctx context.Context, clone, path string) error
 	// BranchTip returns the commit a local branch points at; the bool is false when the branch does not exist.
@@ -64,10 +58,11 @@ type Groups interface {
 	Unfinished(ctx context.Context) ([]GroupRef, error)
 }
 
-// GroupRef names an unfinished group and the binary version its run pinned.
+// GroupRef names an unfinished group, the binary version its run pinned and the epic it lands on.
 type GroupRef struct {
 	Group   string
 	Version string
+	Epic    string // epic folder name; empty when unknown, which keeps every landing
 }
 
 // Reporter relays a progress fact to the Runtime Manager, which publishes it as a run-status event.
@@ -109,7 +104,7 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 		return rep, err
 	}
 
-	h.say(ctx, p.Group, "cleanup.start", StartedFact{Branch: p.Branch, Tip: p.Tip})
+	h.say(ctx, p.Group, "cleanup.start", StartedFact{Tip: p.Tip})
 	if p.Landed == "" {
 		if err := h.Git.Fetch(ctx, h.Clone, p.Remote); err != nil {
 			return rep, fmt.Errorf("fetch %s: %w", p.Remote, err)
@@ -128,15 +123,7 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 	r.container()
 	r.checkouts()
 
-	if r.worktree(h.Roots.Worktrees, p.Worktree, false) {
-		if p.Landed != "" {
-			r.landedBranch(p.Branch, p.Tip, p.Into)
-		} else {
-			r.branch(p.Branch, p.Tip, p.Contains)
-		}
-	} else {
-		r.keepBranch(p.Branch)
-	}
+	r.worktree(h.Roots.Worktrees, p.Worktree, false)
 	if p.EpicDone {
 		h.cleanEpic(r, p)
 	}

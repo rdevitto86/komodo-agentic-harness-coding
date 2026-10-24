@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // Sweep removes the remains of runs that ended without cleaning up.
@@ -144,7 +143,7 @@ func (h *Handler) sweepGroup(
 		defer unlock()
 	}
 
-	l, have, live, err := h.holder(ctx, group)
+	_, _, live, err := h.holder(ctx, group)
 	if err != nil {
 		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: err.Error()})
 		return
@@ -165,20 +164,11 @@ func (h *Handler) sweepGroup(
 	}
 	r.container()
 	r.checkouts()
-	gone := r.worktree(h.Roots.Worktrees, path, false)
-
-	switch {
-	case !have || l.Branch == "":
-		r.kept(KindBranch, "", "no lease record names the group's branch")
-	case gone && r.proceed():
-		r.redundantBranch(l.Branch)
-	default:
-		r.keepBranch(l.Branch)
-	}
+	r.worktree(h.Roots.Worktrees, path, false)
 }
 
 // sweepLandings removes the landing worktree and local branch of every epic that no unfinished group lands on.
-// If an unfinished group's branch cannot be read, every landing is kept.
+// If an unfinished group names no epic, every landing is kept.
 func (h *Handler) sweepLandings(ctx context.Context, rep *Report, used []GroupRef, dry bool, fetchErr error) {
 	epics, err := folders(h.Roots.Landings)
 	if err != nil || len(epics) == 0 {
@@ -188,20 +178,19 @@ func (h *Handler) sweepLandings(ctx context.Context, rep *Report, used []GroupRe
 		return
 	}
 
-	var branches []string
+	named := map[string]bool{}
 	unknown := false
 	for _, g := range used {
-		l, have, _, err := h.holder(ctx, g.Group)
-		if err != nil || !have || l.Branch == "" {
+		if g.Epic == "" {
 			unknown = true
 			continue
 		}
-		branches = append(branches, l.Branch)
+		named[g.Epic] = true
 	}
 
 	for _, epic := range epics {
 		path := filepath.Join(h.Roots.Landings, epic)
-		if reason := landingInUse(epic, branches, unknown); reason != "" {
+		if reason := landingInUse(epic, named, unknown); reason != "" {
 			rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: reason})
 			continue
 		}
@@ -216,14 +205,12 @@ func (h *Handler) sweepLandings(ctx context.Context, rep *Report, used []GroupRe
 }
 
 // landingInUse says why an epic's landing worktree must stay, or returns empty when no unfinished group lands on the epic.
-func landingInUse(epic string, branches []string, unknown bool) string {
+func landingInUse(epic string, named map[string]bool, unknown bool) string {
 	if unknown {
-		return "an unfinished group's branch is unknown"
+		return "an unfinished group's epic is unknown"
 	}
-	for _, b := range branches {
-		if strings.HasPrefix(b, "komodo/"+epic+"-") {
-			return "an unfinished group lands on this epic"
-		}
+	if named[epic] {
+		return "an unfinished group lands on this epic"
 	}
 	return ""
 }

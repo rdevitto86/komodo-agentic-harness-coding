@@ -32,10 +32,10 @@ func TestSweepSkipsGroupAliveRunHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists(live.wt) || !e.hasBranch("komodo/ep-1-live") {
+	if !exists(live.wt) {
 		t.Fatal("a live group was touched")
 	}
-	if exists(dead.wt) || e.hasBranch("komodo/ep-1-dead") {
+	if exists(dead.wt) || !e.hasBranch("komodo/ep-1-dead") {
 		t.Fatalf("the dead group's remains survive: %+v", rep)
 	}
 	var keptLive bool
@@ -58,25 +58,6 @@ func TestSweepSkipsGroupAliveRunHolds(t *testing.T) {
 	}
 }
 
-func TestSweepKeepsUnpublishedBranchOfClosedGroup(t *testing.T) {
-	e := newEnv(t)
-	g := e.addGroup("g1", testBranch)
-	e.holdLease(g, lease.StateRevoked)
-	rep, err := e.h.Sweep(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exists(g.wt) {
-		t.Fatal("clean worktree survived")
-	}
-	if !e.hasBranch(testBranch) {
-		t.Fatal("unpublished branch was deleted")
-	}
-	if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindBranch {
-		t.Fatalf("kept = %+v", rep.Kept)
-	}
-}
-
 func TestSweepKeepsDirtyWorktree(t *testing.T) {
 	e := newEnv(t)
 	g := e.addGroup("g1", testBranch)
@@ -95,7 +76,7 @@ func TestSweepKeepsDirtyWorktree(t *testing.T) {
 	}
 }
 
-func TestSweepWithoutLeaseRecordRemovesWorktreeAndNamesUnknownBranch(t *testing.T) {
+func TestSweepWithoutLeaseRecordRemovesWorktree(t *testing.T) {
 	e := newEnv(t)
 	g := e.addGroup("g1", testBranch)
 	e.land(g)
@@ -103,11 +84,8 @@ func TestSweepWithoutLeaseRecordRemovesWorktreeAndNamesUnknownBranch(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exists(g.wt) {
-		t.Fatal("worktree survived")
-	}
-	if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindBranch {
-		t.Fatalf("kept = %+v", rep.Kept)
+	if exists(g.wt) || len(rep.Kept) != 0 {
+		t.Fatalf("worktree exists %v, kept %+v", exists(g.wt), rep.Kept)
 	}
 }
 
@@ -145,7 +123,7 @@ func TestPreviewListsWithoutRemoving(t *testing.T) {
 	for _, it := range rep.Removed {
 		kinds[it.Kind] = true
 	}
-	for _, k := range []string{KindContainer, KindQA, KindTemp, KindWorktree, KindBranch} {
+	for _, k := range []string{KindContainer, KindQA, KindTemp, KindWorktree} {
 		if !kinds[k] {
 			t.Errorf("preview lacks kind %s: %+v", k, rep.Removed)
 		}

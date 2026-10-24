@@ -14,7 +14,7 @@ func (e *env) landLocally(g grp) string {
 	return id
 }
 
-// A group squashed into the local epic branch is cleaned up with no remote involved: its worktree and branch go.
+// A group squashed into the local epic branch is cleaned up with no remote involved: its worktree goes, no branch does.
 func TestCompleteLandedLocallyNeedsNoRemote(t *testing.T) {
 	e := newEnv(t)
 	g := e.addGroup("g1", testBranch)
@@ -26,33 +26,14 @@ func TestCompleteLandedLocallyNeedsNoRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exists(g.wt) || e.hasBranch(testBranch) {
+	if exists(g.wt) || !e.hasBranch(testBranch) {
 		t.Fatalf("worktree exists %v, branch exists %v; report %+v", exists(g.wt), e.hasBranch(testBranch), rep)
 	}
-	if got := e.log.names("git.DeleteLanded"); len(got) != 1 {
-		t.Fatalf("DeleteLanded calls = %v", got)
-	}
-	if got := e.log.names("git.Fetch", "git.Holds", "git.DeleteBranch"); len(got) != 0 {
-		t.Fatalf("the remote was consulted: %v", got)
+	if got := e.log.names("git.Fetch", "git.Holds", "git.Delete"); len(got) != 0 {
+		t.Fatalf("the remote was consulted or a branch deleted: %v", got)
 	}
 	if got := e.log.names("task."); len(got) != 1 || !e.hasBranch(testEpic) {
 		t.Fatalf("task calls = %v, epic branch kept = %v", got, e.hasBranch(testEpic))
-	}
-}
-
-// A landed commit that holds another tree keeps the group's branch, and the group still closes.
-func TestCompleteLandedKeepsABranchTheLandingDoesNotHold(t *testing.T) {
-	e := newEnv(t)
-	g := e.addGroup("g1", testBranch)
-	p := e.published(g)
-	p.Landed, p.Into = e.must(e.clone, "rev-parse", "main"), "main"
-
-	rep, err := e.h.Complete(context.Background(), p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !e.hasBranch(testBranch) || len(rep.Kept) == 0 {
-		t.Fatalf("branch kept = %v; report %+v", e.hasBranch(testBranch), rep)
 	}
 }
 

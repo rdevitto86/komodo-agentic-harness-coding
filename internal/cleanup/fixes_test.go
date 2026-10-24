@@ -260,13 +260,6 @@ func TestCompleteNeverDeletesBranchOutsideKomodo(t *testing.T) {
 	if !e.hasBranch("main") {
 		t.Fatal("local main was deleted")
 	}
-	p.Branch = "main"
-	if _, err := e.h.Complete(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	if !e.hasBranch("main") {
-		t.Fatal("a group branch named main was deleted")
-	}
 }
 
 func TestSweepClearsLeaksOfGroupsWithoutWorktree(t *testing.T) {
@@ -301,7 +294,7 @@ func TestSweepClearsLandingNoUnfinishedGroupNeeds(t *testing.T) {
 	l1, l2 := e.twoLandings()
 	live := e.addGroup("g9", "komodo/ep-2-tg-1.1")
 	e.holdLease(live, lease.StateRevoked)
-	e.groups.refs = []GroupRef{{Group: "g9", Version: "1.0.0"}}
+	e.groups.refs = []GroupRef{{Group: "g9", Version: "1.0.0", Epic: "ep-2"}}
 	if _, err := e.h.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
