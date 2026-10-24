@@ -70,7 +70,7 @@ Every subsystem chapter has the same child pages, numbered `N.1` to `N.10`. A pa
 | Event types and subtypes | Type in kebab case from the diagram (`run-status`); subtype in `family.name` form (`session.end`) | [4. Event Bus](#4-event-bus) holds the full list |
 | Result and reason codes | Snake case from one enum (a fixed list of allowed values): `needs_scope`, `time_out` | A result, an event subtype's reason and a status line share the one list |
 | Runs, groups, sessions | A version 7 universally unique identifier (UUID) made by the binary; it starts with its creation time, so ids sort by age | A group keeps its readable label, numbered inside its plan, such as `tg-2`; a plan has an id, `plan-` and 6 random lowercase hexadecimal characters; commands take the plan id and a group label |
-| Branches | `komodo/<epic>` for an epic's shared branch and `komodo/<epic>-<group>` for a group's branch | Never the main branch |
+| Branches | `komodo/<epic>` for an epic's shared branch; a group's branch name is open [TODO: the group branch name ([G-330](#g-330))] | Never the main branch |
 | Gaps | `G-NN` or `G-NNN`, one row each in the gap register | A gap is a fact not yet verified or a decision not yet made |
 
 ### 0.3 Package Map
@@ -183,7 +183,7 @@ The CLI is the front door of the harness: every command a person or the orchestr
 | Reply | The one JSON object a command prints when no terminal is attached, called the envelope |
 | Repository pin | The `min=` version in the Komodo block of the repository's `AGENTS.md`. A binary older than the pin refuses most commands |
 | Run id | A UUID version 7 (a unique id that sorts by creation time) the CLI generates for each `run`. One group's attempt is named by its run id plus its group label |
-| Label | The readable name of a task group, numbered inside its plan (`tg-2`). `komodo run <plan id> tg-2` takes it |
+| Label | The readable name of a task group, numbered inside its plan (`tg-2`). `stop`, `status`, `replay` and `abandon` take it after the plan id; `run` takes the plan id alone |
 | Engine | The Runtime Manager's process: one per user per machine, started on demand. It hosts every live run on the machine and the Event Bus in memory, and exits when no run is live and none is queued |
 | Control socket | The private local channel `~/.komodo/state/engine.sock` that only this user can open. A command sends its request on it and reads replies and live events back on the same connection |
 | Schedule queue | The machine-wide record `~/.komodo/state/schedule.json` of runs waiting for their `--schedule` time |
@@ -335,14 +335,14 @@ A refusal as printed under `--json` (exit 1):
 }
 ```
 
-A success, `komodo run plan-7f3a9c tg-2 --json` (exit 0):
+A success, `komodo run plan-7f3a9c --json` (exit 0):
 
 ```json
 {
   "v": 1,
   "ok": true,
-  "verdict": "Run started for tg-2",
-  "report": "Run started for `tg-2`.\n\n**Run id:** `0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57`",
+  "verdict": "Run started for plan-7f3a9c",
+  "report": "Run started for `plan-7f3a9c`.\n\n**Run id:** `0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57`",
   "data": {
     "run_id": "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"
   }
@@ -480,10 +480,10 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 | `ui` | `Verb` `status`, repeated by the page | The CLI process serves the page on `127.0.0.1` and reads from the engine over the socket; the page only reads, and the engine never serves HTTP |
 | `clean` | `Verb` `clean`; `Flags.DryRun` | One final `ok` listing what was removed or, with `--dry-run`, would be removed |
 
-`komodo run plan-7f3a9c tg-2` writes, and the engine answers:
+`komodo run plan-7f3a9c` writes, and the engine answers:
 
 ```json
-{"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","verb":"run","target":"tg-2","root":"/Users/rad/code/komodo","flags":{},"event":{"type":"run-start","subtype":"","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T09:12:04Z","data":{"target":"tg-2","groups":["tg-2"],"source":"cli","repo":"github.com/rdevitto86/komodo-agentic-harness-coding","root":"/Users/rad/code/komodo","common_dir":"/Users/rad/code/komodo/.git"}}}
+{"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","verb":"run","target":"plan-7f3a9c","root":"/Users/rad/code/komodo","flags":{},"event":{"type":"run-start","subtype":"","run":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57","group":"","time":"2026-10-14T09:12:04Z","data":{"target":"tg-2","groups":["tg-2"],"source":"cli","repo":"github.com/rdevitto86/komodo-agentic-harness-coding","root":"/Users/rad/code/komodo","common_dir":"/Users/rad/code/komodo/.git"}}}
 {"id":"0192e4c5-8b10-7c3a-9d52-4e6f1a7b2c80","status":"ok","data":{"run_id":"0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57"},"final":true}
 ```
 
@@ -829,19 +829,18 @@ Anyone runs `plan`, usually the orchestrator. It starts planning with the goal t
 
 ##### `run`
 
-Anyone runs `run (plan id) [group]`, usually the orchestrator. It sends the engine a `run-start` event with a unique run id and prints the id at once; it does not wait for the run. At run start Komodo runs the lint checks again on `plan.md` and refuses a broken edit.
+Anyone runs `run (plan id)`, usually the orchestrator. It sends the engine a `run-start` event with a unique run id and prints the id at once; it does not wait for the run. At run start Komodo runs the lint checks again on `plan.md` and refuses a broken edit.
 
 | Form | Effect |
 |---|---|
-| `run <plan id>` | Runs every group of the plan that is not done. Done, blocked and running status comes from the group state, never from a file |
-| `run <plan id> <group>` | Runs one group. `komodo run <plan id> tg-2` runs group `tg-2` of that plan |
+| `run <plan id>` | Looks up the existing plan and finishes it: runs every group that is not done, each from its saved state. Done, blocked and running status comes from the group state, never from a file |
 | `run <id> --schedule <time>` | Queues the run for `<time>`, an RFC 3339 timestamp (an internet date-time format) such as `2026-10-16T02:00:00-07:00` |
 | `run <id> --approve` | Answers a blocked group by granting what it asked for, such as more files or more time |
 | `run <id> --deny` | Answers a blocked group by refusing what it asked for |
 
-- **Continuing.** A group that already has saved state continues from it, so `komodo run plan-7f3a9c tg-2` after a crash continues each group from its saved state. A group that needs another pass, such as after a hand fix in its worktree, also continues with `komodo run plan-7f3a9c tg-2`: it picks up at the group's current stage and runs test and review again before commit. `build`, `test` and `review` are not commands.
+- **Continuing.** A group that already has saved state continues from it, so `komodo run plan-7f3a9c` after a crash continues each group from its saved state. A group that needs another pass, such as after a hand fix in its worktree, also continues with `komodo run plan-7f3a9c`: it picks up at the group's current stage and runs test and review again before commit. `build`, `test` and `review` are not commands.
 - **Scheduling.** `--schedule` is a socket request, not an event. The engine mints the run id, writes the entry (`target`, `root`, `run_id`, `at`, `queued_at`, `start`) to the schedule queue, returns the run id in its reply, stays up while any run is live or queued, and starts the run at its time. The reply shows the run id and the queued time, and `status` lists the queued run. When the entry fires, the engine publishes the one `run-start` with that run id.
-- **Answering.** `--approve` and `--deny` send a `run-continue` event with `answer` set. The Runtime Manager passes the answer to the group's Task Manager over its command channel. A group that is not blocked refuses the answer with `not_blocked`.
+- **Answering.** `--approve` and `--deny` send a `run-continue` event with `answer` set. The Runtime Manager passes the answer to the group's Task Manager over its command channel. A group that is not blocked refuses the answer with `not_blocked`. [TODO: which blocked group an answer reaches when a plan has more than one ([G-329](#g-329))]
 - **Combinations.** `--approve` and `--deny` take an id and cannot combine with each other or `--schedule`. A combination is a usage error.
 
 ##### `stop`
@@ -1230,7 +1229,7 @@ The `run-start` the engine publishes when the entry for `komodo run plan-7f3a9c 
 }
 ```
 
-A `run-continue` for `komodo run plan-7f3a9c tg-2 --approve`:
+A `run-continue` for `komodo run plan-7f3a9c --approve`:
 
 ```json
 {
@@ -1386,6 +1385,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-21](#g-21) | Enterprise signing: key management service and refusal of an older manifest |
 | [G-121](#g-121) | Whether native Windows needs its own console check in `validate`; applies only if native Windows returns |
 | [G-322](#g-322) | Whether an auto-approved plan also starts a run |
+| [G-329](#g-329) | Which blocked group an answer reaches when a plan has more than one |
 
 ## 2. Output Formatter
 
@@ -2746,7 +2746,7 @@ func (e *Event) UnmarshalJSON(b []byte) error
 }
 ```
 
-A run-level event, the CLI's request to run one task group at a scheduled time (`komodo run plan-7f3a9c tg-2 --schedule 2026-10-16T02:00:00-07:00`):
+A run-level event, the CLI's request to finish a plan at a scheduled time (`komodo run plan-7f3a9c --schedule 2026-10-16T02:00:00-07:00`):
 
 ```json
 {
@@ -6308,7 +6308,7 @@ flowchart LR
 3. A group with a saved record that is not Done goes to the recovery pass instead ([Crash recovery](#crash-recovery-and-restarting-groups)); a Done group is skipped. Done is read from the group state, never from a file.
 4. A group is ready when `Startable` is true and its record does not exist yet. A group whose dependency is Blocked or Paused is not ready and is shown as waiting on that group in the run's view; its own record is untouched.
 5. When fewer than the pool size of groups are active, `Pick` chooses a ready group. An active group is one in any stage; Paused and Blocked groups are not active.
-6. The group's first input is `group.start`; its first order is to take the lease, which records the branch and worktree names. The Task Manager creates the branch `komodo/<epic>-<group>`, such as `komodo/plan-7f3a9c-tg-2`, and the worktree when it handles `start`.
+6. The group's first input is `group.start`; its first order is to take the lease, which records the branch and worktree names. The Task Manager creates the group's branch [TODO: the group branch name ([G-330](#g-330))] and the worktree when it handles `start`.
 7. When `lease.granted` is saved, the Runtime Manager calls `TaskGroups.Start` with the repository's cache handle. It then sends `start` for `OrderStartGroup` down the new command channel, and the Task Manager reports `ready`.
 
 `run-start` naming one group runs that group alone; it is refused with `error` / `run-refused`, naming the dependency, when a dependency outside the run is not Done. A cycle in the plan is refused the same way.
@@ -6587,7 +6587,7 @@ A Task Manager sends `timer.extend` when a session nears its wall limit and its 
 
 #### Landing on an epic's branch
 
-Each epic has one shared branch, `komodo/<epic>`. Each group works on its own branch, `komodo/<epic>-<group>`. The Runtime Manager hands the Commit Handler the epic's `LandingPlan` and the Commit Handler does the rest:
+Each epic has one shared branch, `komodo/<epic>`. Each group works on its own branch [TODO: the group branch name ([G-330](#g-330))]. The Runtime Manager hands the Commit Handler the epic's `LandingPlan` and the Commit Handler does the rest:
 - It squashes each approved group onto the epic's branch as one local commit, one group at a time per epic. A group of level `high` or `critical` is quarantined instead.
 - It rechecks the epic's branch after each landing; a failed recheck pauses landings on that epic until the recheck passes.
 - The Runtime Manager asks it to push the epic once the epic goes quiet (`settleEpicsLocked`, `internal/engine/epicpush.go`): none of the epic's groups works, waits for a start or can still start, and more groups are Done than the last push covered. `PushEpic` pushes the branch and opens or refreshes the epic's pull request only when `EpicPush.Done` names every group of the epic ([15.4](#154-interfaces)).
@@ -7523,7 +7523,7 @@ type Lease struct {
   "repo": "github.com/acme/shop",
   "group": "0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
-  "branch": "komodo/plan-7f3a9c-tg-2",
+  "branch": "<group branch>",
   "worktree": "/Users/dev/.komodo/wt/github.com-acme-shop/0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "pid": 48213,
   "proc_start": "2026-10-14T09:12:40Z",
@@ -7548,7 +7548,7 @@ type Lease struct {
 | `rev` | Every registry write names the `rev` it read; a stale `rev` is refused |
 | `taken_at`, `renewed_at` | RFC 3339 in UTC to the second; renewal rewrites `renewed_at` only |
 
-The branch name follows `komodo/<epic>-<group>`, and the caller of `Grant` passes it in. The record names the group's own branch only; the epic's shared branch, `komodo/<epic>`, has no lease.
+The branch name is open [TODO: the group branch name ([G-330](#g-330))], and the caller of `Grant` passes it in. The record names the group's own branch only; the epic's shared branch, `komodo/<epic>`, has no lease.
 
 #### Liveness
 
@@ -8948,7 +8948,7 @@ A group that needs another pass, such as one fixed by hand in its worktree, cont
   "run": "0192e5a1-7c3e-7b1a-9d4e-5f2a8c1b3d60",
   "group": "tg-2",
   "files": ["internal/lease/**"],
-  "lease": {"branch": "komodo/plan-7f3a9c-tg-2", "worktree": "/home/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22",
+  "lease": {"branch": "<group branch>", "worktree": "/home/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22",
             "git_dir": "/home/dev/src/shop/.git/worktrees/tg-2", "fence": 7},
   "agents": {"builder": {"tools": ["read", "search", "edit", "write", "run", "skill", "task_done"],
                          "run_classes": ["build", "test", "lint", "format"], "guard": ["R1", "B1"], "servers": [],
@@ -10969,6 +10969,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Touches |
 |---|---|---|
 | [G-264](#g-264) | An egress proxy that limits an outside server to its listed hosts | Outside tool servers |
+| [G-330](#g-330) | The group branch name | Branch and worktree |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | Billing check |
 | [G-08](#g-08) | A private loopback per instance | Sandbox |
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Quality Assurance copy mechanisms and costs | Sandbox |
@@ -13126,7 +13127,7 @@ The Commit Handler owns four things: the local save of a finished task, the publ
 |---|---|
 | Approval | The hand-over from the Task Manager: the work, named by its tree hash, that Quality Assurance and, at level medium or above, the Reviewer approved |
 | Tree hash | A short fingerprint of every file's content in a commit or worktree; equal hashes mean equal content |
-| Group branch | The branch for the group, named `komodo/<epic>-<group>`, such as `komodo/plan-7f3a9c-tg-2`; the Task Manager creates it together with the group's worktree |
+| Group branch | The branch for the group, named as [TODO: the group branch name ([G-330](#g-330))]; the Task Manager creates it together with the group's worktree |
 | Epic branch | The one shared branch of an epic, named `komodo/<epic>`, such as `komodo/plan-7f3a9c`; every group of the epic lands on it, and it is the head of the epic's pull request |
 | Save | A local commit of a finished task's work on the group branch; it is never pushed |
 | Landing | Squashing one approved group into the epic branch as one local commit; one group at a time per epic. Nothing is pushed by a landing |
@@ -13213,7 +13214,7 @@ type SaveResult struct {
   "label": "tg-2",
   "task": "tsk-fence-stale",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
-  "branch": "komodo/plan-7f3a9c-tg-2",
+  "branch": "<group branch>",
   "fence": 3
 }
 ```
@@ -13272,7 +13273,7 @@ type Approval struct {
   "epic_groups": ["tg-1", "tg-2"],
   "goal": "Add the lease registry",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
-  "branch": "komodo/plan-7f3a9c-tg-2",
+  "branch": "<group branch>",
   "fence": 3,
   "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4",
   "qa": { "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4", "summary": ["14 tests pass", "0 regressions"] },
@@ -13753,7 +13754,7 @@ func (h *Handler) Quarantine(ctx context.Context, a Approval) (QuarantineResult,
 | Case | Branch pushed | Pull request | Opened |
 |---|---|---|---|
 | Epic | `komodo/<epic>`, once | Ready, into the base branch; lists every quarantine; a person merges | After the epic's last landing |
-| Quarantine | `komodo/<epic>-<group>`, once | Draft, into the epic branch; holds only that group; a person merges | When the group is approved |
+| Quarantine | The group branch, once | Draft, into the epic branch; holds only that group; a person merges | When the group is approved |
 
 #### Push budget
 
@@ -13984,7 +13985,7 @@ type PublishedEpic struct {
   "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
   "group": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
   "epic": "plan-7f3a9c",
-  "branch": "komodo/plan-7f3a9c-tg-2",
+  "branch": "<group branch>",
   "tip": "9f2c1ab04e6d7c33b1a8e5d0f4c7a92e1b6d3f80",
   "remote": "origin",
   "contains": "origin/komodo/plan-7f3a9c",
@@ -14038,7 +14039,7 @@ Every group-named path is `<root>/<group>`. A group id that is not one plain pat
   "removed": [
     { "kind": "container", "name": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22", "reason": "" },
     { "kind": "worktree", "name": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22", "reason": "" },
-    { "kind": "branch", "name": "komodo/plan-7f3a9c-tg-2", "reason": "" }
+    { "kind": "branch", "name": "<group branch>", "reason": "" }
   ],
   "kept": []
 }
@@ -15861,9 +15862,9 @@ Three of these checks already run in `internal/integration`, without the build t
 | Full run | `komodo install`, `komodo plan` on the fixture's goal, then `komodo run plan-7f3a9c` | The group passes build, test and review, the Commit Handler lands it on `komodo/plan-7f3a9c` of a local bare remote and opens 1 pull request for the epic, the Cleanup Handler leaves 0 worktrees and 0 containers, and the Runtime Manager releases the lease through the Lease Manager when the group closes |
 | Rework | Fixture B | Quality Assurance or Reviewer returns the group to the Builder; after 3 tries in all, any mix of causes, the group is held for the 60-minute final-try window and then fails; a builder session timeout counts as a failed try and a failing check never ends a builder session |
 | Old failure | Fixture A | The group passes with a warning naming the test that already failed at the base |
-| Race | Two `komodo run plan-7f3a9c tg-1` commands target the same group | The Lease Manager grants 1 lease; the other command is refused, and only 1 push reaches the remote |
+| Race | Two `komodo run plan-7f3a9c` commands target the same group | The Lease Manager grants 1 lease; the other command is refused, and only 1 push reaches the remote |
 | Stop | `komodo stop plan-7f3a9c tg-1` during Build, after the first task is finished | The finished task is a local commit on the group branch, nothing is pushed, the lease is revoked, and a later `komodo run plan-7f3a9c tg-1` continues the group |
-| Crash | `kill -9` the engine during Build, then `komodo run plan-7f3a9c tg-1` | The group continues from its saved state; the event log holds every line handed to the operating system before the kill, and recovery does not read it |
+| Crash | `kill -9` the engine during Build, then `komodo run plan-7f3a9c` | The group continues from its saved state; the event log holds every line handed to the operating system before the kill, and recovery does not read it |
 | Fresh machine | On a clean macOS machine, follow only `README.md` | The fixture group is published |
 
 #### Checks of the design
@@ -15876,7 +15877,7 @@ Each row proves one fact of the design that the full run does not reach. They us
 | Event log | Finish a run, append half a line to its log, run `komodo replay plan-7f3a9c tg-1` | Replay lists every event, drops the torn last line, marks the gap, and makes 0 model calls |
 | Final error event | Seed an error the Error Handler catches | The process's last event is an `error` with `final: true`, and the exit code matches the fault's kind |
 | Command list | `komodo --list`, then `komodo build`, `komodo test`, `komodo review` | The list names the 13 commands; the other three exit 2 as unknown commands |
-| Answering a block | A builder asks for a file outside its group; `komodo status --wait`, then `komodo run plan-7f3a9c tg-1 --approve`; repeat with `--deny` | `status --wait` returns the question; `--approve` continues the group with the file, and `--deny` refuses it |
+| Answering a block | A builder asks for a file outside its group; `komodo status --wait`, then `komodo run plan-7f3a9c --approve`; repeat with `--deny` | `status --wait` returns the question; `--approve` continues the group with the file, and `--deny` refuses it |
 | Scheduled run | `komodo run plan-7f3a9c --schedule <time>` | `schedule.json` holds `target`, `at`, `queued_at` and `start`; `status` lists the run; `stop plan-7f3a9c` removes it |
 | Overdue run | Queue a run, kill the engine, pass the time, run `komodo status` | The next command starts the engine, which starts the overdue run at once |
 | Labels and run ids | `komodo run plan-7f3a9c` twice, then `komodo replay plan-7f3a9c tg-1` | Each run has its own version 7 UUID (a time-ordered unique identifier), replies show label and run id, and replay uses the latest attempt |
@@ -16192,6 +16193,8 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-321"></a>G-321 | Coverage | How the planner brings a whole repository to the 90 percent line coverage floor. Owner: "The entire repo has to meet 90%, but that's the job of the planner. Each builder focuses on getting its assigned tasks over 90% and not regression below 90% for the whole repo." | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-322"></a>G-322 | Plan auto-approval | Manual approval is the default: `komodo plan` writes the plan and stops. Auto-approval options sit on top of it, modelled on how Claude Code's plan mode offers approval choices. Owner: "A, but options for auto-approvals on top of manual. Consider this similar to how Claude Code does it." Open: the option names, what each does, and whether an auto-approved plan publishes `run-start` itself | Owner decision | [5](#5-intake-handler), [1](#1-cli) |
 | <a id="g-323"></a>G-323 | Changelog anchor | No lasting record of task groups is kept. Owner: "I dont think we should document the task groups at all. The PRD and HLD might have scoped versions we can use as an anchor for the changelog." Open: whether and how scoped versions of the PRD and HLD anchor the changelog | Owner decision | [15](#15-commit-handler) |
+| <a id="g-329"></a>G-329 | Answering a plan | `komodo run` takes only a plan id and finishes the plan. Open: which blocked group `--approve` or `--deny` reaches when more than one group of the plan is blocked | Owner decision | [1](#1-cli), [7](#7-runtime-manager) |
+| <a id="g-330"></a>G-330 | Group branch name | The `komodo/<epic>-<group>` convention is dropped. Owner: "Lets drop that convention since we wont have preplanned tasks in the backlog anymore." Open: what a group's own branch is named | Owner decision | [9](#9-lease-manager), [11](#11-task-manager), [15](#15-commit-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
