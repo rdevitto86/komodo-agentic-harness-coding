@@ -254,8 +254,12 @@ def chapters(doc):
     out = [("index.md", title.group(1) if title else TITLES[doc], re.sub(r"^# .*$", "", parts[0], flags=re.M) + parts[1] + parts[2], None)]
     for head, content in zip(parts[3::2], parts[4::2]):
         out += children(re.match(r"## (\d+|T)\.", head).group(1).lower(), head[3:], content)
-    parts = re.split(r"^(## Appendix [A-Z]\..*)$", apps, flags=re.M)
+    parts = re.split(r"^(## (?:Appendix [A-Z]|\d+)\..*)$", apps, flags=re.M)
     for head, content in zip(parts[1::2], parts[2::2]):
+        # A numbered chapter after the marker, such as the glossary, keeps its own chapter page.
+        if number := re.match(r"## (\d+)\.", head):
+            out += children(number.group(1), head[3:], content.rstrip().rstrip("-"))
+            continue
         letter = re.match(r"## Appendix ([A-Z])", head).group(1).lower()
         out.append((f"appendix-{letter}.md", head[3:], content.rstrip().rstrip("-"), None))
     ANCHORS[doc] = {}
