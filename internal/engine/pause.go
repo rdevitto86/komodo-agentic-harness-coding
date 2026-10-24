@@ -190,6 +190,8 @@ func overridable(g *group) error {
 	g.mu.Unlock()
 
 	switch {
+	case st.Stage == NoStage:
+		return nil // the loop has not loaded its saved state yet, so the loop decides
 	case st.Stage == StageDone && st.Outcome == "failed":
 		return &codeError{CodeGroupFailed, g.spec.Label + " failed for good: plan it again to run it fresh"}
 	case st.Counters.Overrides >= 1:

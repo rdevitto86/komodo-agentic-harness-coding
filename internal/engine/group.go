@@ -58,6 +58,17 @@ type group struct {
 
 // main is the group's goroutine: it starts or recovers the group, then takes one input at a time.
 func (g *group) main(rec *state.Record) {
+	g.m.mu.Lock()
+	g.m.loops[g.spec.ID] = g
+	g.m.mu.Unlock()
+
+	defer func() {
+		g.m.mu.Lock()
+		if g.m.loops[g.spec.ID] == g {
+			delete(g.m.loops, g.spec.ID)
+		}
+		g.m.mu.Unlock()
+	}()
 	defer close(g.done)
 	defer g.stopTimers()
 	defer g.giveBackSlot()

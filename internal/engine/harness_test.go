@@ -122,15 +122,17 @@ func (s *fakeStore) put(g string, st State, rev int) {
 
 // fakeLeases is an in-memory Lease Manager.
 type fakeLeases struct {
-	mu        sync.Mutex
-	fence     int
-	held      map[string]string // groups another run holds
-	released  map[string]int
-	revoked   []string
-	renewErr  map[string]error
-	renews    map[string]int
-	zeroFence bool    // grants a lease with fence 0, which Next refuses
-	order     *seqLog // shared log of lease and event order
+	mu          sync.Mutex
+	fence       int
+	held        map[string]string // groups another run holds
+	released    map[string]int
+	revoked     []string
+	renewErr    map[string]error
+	renews      map[string]int
+	releaseGate chan struct{} // when set, Release waits until it is closed
+	grantGate   chan struct{} // when set, a Grant for run-2 waits until it is closed
+	zeroFence   bool          // grants a lease with fence 0, which Next refuses
+	order       *seqLog       // shared log of lease and event order
 }
 
 // newLeases returns a lease fake.
@@ -145,6 +147,10 @@ func newLeases() *fakeLeases {
 
 // Grant takes a lease unless another run holds the group.
 func (l *fakeLeases) Grant(_ context.Context, req lease.GrantRequest) (lease.Lease, error) {
+	if l.grantGate != nil && req.Run == "run-2" {
+		<-l.grantGate
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if h, ok := l.held[req.Group]; ok {
@@ -190,6 +196,10 @@ func (l *fakeLeases) IsOwner(context.Context, lease.Lease) (bool, error) { retur
 
 // Release counts a release.
 func (l *fakeLeases) Release(_ context.Context, x lease.Lease) error {
+	if l.releaseGate != nil {
+		<-l.releaseGate
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.released[x.Group]++

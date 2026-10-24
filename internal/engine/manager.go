@@ -89,6 +89,7 @@ type Manager struct {
 	ctx      context.Context
 	runs     map[string]*run
 	groups   map[string]*group
+	loops    map[string]*group // groups whose loop has not ended, even after the run dropped them from groups
 	starting map[string]bool
 	repos    map[string]*repoCache
 	errs     *errorHandler        // the catch-all for errors: counts them and holds session starts back
@@ -135,6 +136,7 @@ func New(d Deps) *Manager {
 		d: d, clk: clockOf(d.Clock), t: d.Timing.filled(), ctx: context.Background(),
 		runs:     map[string]*run{},
 		groups:   map[string]*group{},
+		loops:    map[string]*group{},
 		starting: map[string]bool{},
 		repos:    map[string]*repoCache{},
 		parked:   map[string]Timer{},
@@ -468,6 +470,11 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 		case err != nil:
 			return fail("read the saved state of %s: %v", s.Label, err)
 		case reopens(rs, s, rec.State):
+			// The old loop may still save after its Done record, so the record is read once that loop has ended.
+			if rec, err = m.afterLoop(ctx, store, s.ID); err != nil {
+				return fail("read the saved state of %s: %v", s.Label, err)
+			}
+
 			rewrites[s.ID] = s
 			r.reopen[s.ID] = rec
 		case rec.State.Stage == StageDone:
@@ -597,6 +604,23 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 // has it makes the Runtime Manager refuse a rewrite of a group of a merged plan.
 type EpicMerger interface {
 	EpicMerged(ctx context.Context, r commit.EpicPush) (bool, error)
+}
+
+// afterLoop waits for the loop of a group to end, if one still runs, and then reads the group's saved record.
+func (m *Manager) afterLoop(ctx context.Context, store StateStore, id string) (state.Record, error) {
+	m.mu.Lock()
+	old := m.loops[id]
+	m.mu.Unlock()
+
+	if old != nil {
+		select {
+		case <-old.done:
+		case <-ctx.Done():
+			return state.Record{}, ctx.Err()
+		}
+	}
+
+	return store.Load(ctx, id)
 }
 
 // rewritten reports whether a run-start rewrites a group: it names the group and the plan's task list differs from the tasks
