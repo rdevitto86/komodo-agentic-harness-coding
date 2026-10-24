@@ -20,6 +20,8 @@ type PR struct {
 type Forge interface {
 	// FindPR returns the open pull request whose head is the branch.
 	FindPR(ctx context.Context, head string) (PR, bool, error)
+	// MergedPR reports whether a pull request from the branch has merged.
+	MergedPR(ctx context.Context, head string) (bool, error)
 	// OpenPR opens a ready pull request from head into base, with the label.
 	OpenPR(ctx context.Context, base, head, title, body, label string) (PR, error)
 	// UpdatePR replaces the title and body of an open pull request.
@@ -58,6 +60,23 @@ func (f *GH) FindPR(ctx context.Context, head string) (PR, bool, error) {
 	}
 
 	return PR{URL: list[0].URL, HeadSHA: list[0].HeadSHA}, true, nil
+}
+
+// MergedPR reports whether the forge lists a merged pull request whose head is the branch.
+func (f *GH) MergedPR(ctx context.Context, head string) (bool, error) {
+	out, err := f.run(ctx, "", "pr", "list", "--head", head, "--state", "merged", "--json", "url", "--limit", "1")
+	if err != nil {
+		return false, err
+	}
+
+	var list []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(out), &list); err != nil {
+		return false, fmt.Errorf("read gh pr list output: %w", err)
+	}
+
+	return len(list) > 0, nil
 }
 
 // OpenPR makes the label when the repository lacks it, then opens a ready pull request.

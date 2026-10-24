@@ -54,6 +54,7 @@ const (
 	InLoopRestart  InputKind = "loop.restart" // a silent Task Manager was restarted; costs no retry
 	InOverride     InputKind = "override"     // data: OverrideData; a person gave an empty group a final try
 	InHoldDue      InputKind = "hold.due"     // a hold on the group's session starts ended; it performs the ones held back
+	InRewrite      InputKind = "rewrite"      // data: RewriteData; a prompt rewrote the group's tasks
 )
 
 // Input is one fact for one group; the Runtime Manager makes it from a task.Message, a command, a timer, a lease call or a
@@ -164,6 +165,10 @@ type (
 	// OverrideData is the data of override.
 	OverrideData struct {
 		Minutes int `json:"minutes,omitempty"` // the final try's working time, 1 to 480 minutes
+	}
+	// RewriteData is the data of rewrite.
+	RewriteData struct {
+		Tasks []string `json:"tasks"` // task ids of the rewritten group, in order
 	}
 	// ContinueData is the data of continue.
 	ContinueData struct {

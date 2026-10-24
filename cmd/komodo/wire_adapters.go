@@ -247,6 +247,27 @@ func (g groupLocks) InRun(group string) (string, bool, error) {
 	return rec.State.Run, rec.State.Stage != state.StageDone, nil
 }
 
+// Finished returns the names of the group's tasks that are done in its saved state.
+func (g groupLocks) Finished(group string) ([]string, error) {
+	rec, err := g.st.Peek(group)
+	if errors.Is(err, state.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var out []string
+
+	for _, t := range rec.State.Tasks {
+		if t.State == "done" {
+			out = append(out, t.ID)
+		}
+	}
+
+	return out, nil
+}
+
 // containers returns the Docker container list when docker is installed, else an empty one.
 func (s *stack) containers() cleanup.Containers {
 	if _, err := exec.LookPath("docker"); err != nil {

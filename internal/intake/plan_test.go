@@ -66,9 +66,13 @@ func (f *fakeContext) GetContext(_ context.Context, req contextmgr.Request) (con
 
 // fakeLocks answers InRun from a map of group id to run.
 type fakeLocks struct {
-	runs map[string]string
-	err  error
+	runs     map[string]string
+	finished map[string][]string
+	err      error
 }
+
+// Finished answers the finished task names of a group id from the map.
+func (f fakeLocks) Finished(id string) ([]string, error) { return f.finished[id], f.err }
 
 func (f fakeLocks) InRun(id string) (string, bool, error) {
 	r, ok := f.runs[id]
@@ -135,7 +139,7 @@ func newRig(t *testing.T, steps ...any) *rig {
 		t: t, home: t.TempDir(), root: t.TempDir(), bus: bus.New(bus.Options{}), ctx: &fakeContext{},
 		sess: &scripted{steps: steps},
 		tree: fakeTree{"README.md": "readme", "docs/hld.md": "the design"},
-		lock: fakeLocks{runs: map[string]string{}},
+		lock: fakeLocks{runs: map[string]string{}, finished: map[string][]string{}},
 	}
 	t.Cleanup(func() { _ = r.bus.Close() })
 	r.h = New(Deps{

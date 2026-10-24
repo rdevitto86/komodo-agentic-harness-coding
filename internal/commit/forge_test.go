@@ -62,3 +62,48 @@ func TestForgeError(t *testing.T) {
 		t.Fatal("want an error")
 	}
 }
+
+// MergedPR reports a merged pull request of the branch and asks gh for the merged state.
+func TestForgeMerged(t *testing.T) {
+	isolate(t)
+	fg := newFakeGH(t)
+	f := NewGH(t.TempDir())
+	ctx := t.Context()
+
+	if merged, err := f.MergedPR(ctx, "komodo/ep-1"); err != nil || merged {
+		t.Fatalf("merged before any pull request = %v, %v", merged, err)
+	}
+	if _, err := f.OpenPR(ctx, "main", "komodo/ep-1", "t", "b", "komodo"); err != nil {
+		t.Fatal(err)
+	}
+	if merged, err := f.MergedPR(ctx, "komodo/ep-1"); err != nil || !merged {
+		t.Fatalf("merged = %v, %v", merged, err)
+	}
+	if !strings.Contains(strings.Join(fg.calls(), "\n"), "--state merged") {
+		t.Fatalf("calls = %v", fg.calls())
+	}
+
+	f.Bin = "gh-missing-program"
+	if _, err := f.MergedPR(ctx, "komodo/ep-1"); err == nil {
+		t.Fatal("want an error")
+	}
+}
+
+// EpicMerged asks the forge about the epic's branch and refuses an unsafe epic name.
+func TestEpicMerged(t *testing.T) {
+	isolate(t)
+	newFakeGH(t)
+	h := &Handler{Forge: NewGH(t.TempDir())}
+
+	if merged, err := h.EpicMerged(t.Context(), EpicPush{Epic: "ep-1"}); err != nil || merged {
+		t.Fatalf("merged = %v, %v", merged, err)
+	}
+	if _, err := h.EpicMerged(t.Context(), EpicPush{Epic: "a/b"}); err == nil {
+		t.Fatal("want a refusal for an unsafe epic name")
+	}
+
+	h.Forge = &GH{Dir: t.TempDir(), Bin: "gh-missing-program"}
+	if _, err := h.EpicMerged(t.Context(), EpicPush{Epic: "ep-1"}); err == nil {
+		t.Fatal("want a forge error")
+	}
+}

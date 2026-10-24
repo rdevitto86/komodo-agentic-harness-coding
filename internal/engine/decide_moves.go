@@ -69,7 +69,7 @@ func (c *calc) move() bool {
 	switch in.Kind {
 	case InGroupStart:
 		if c.from == NoStage {
-			s.Epoch = 1
+			s.Epoch++
 			s.Counters.Tries = 1
 			s.Counters.RetriesLeft = c.l.GroupRetries
 			s.Stage = StageIntake
@@ -134,6 +134,8 @@ func (c *calc) move() bool {
 		}
 	case InContinue:
 		return c.continueGroup(in)
+	case InRewrite:
+		return c.rewrite(in)
 	case InScopeAnswer:
 		return c.scopeAnswer(in)
 	case InLeaseLost:
@@ -526,6 +528,85 @@ func (c *calc) continueGroup(in Input) bool {
 
 	c.refuseRequest(in, "the group is running")
 	return false
+}
+
+// rewrite applies a prompt rewrite to a group that has not ended (row 26): its sessions stop, its finished tasks stay, the
+// rewritten tasks queue, and the group goes on in Build.
+func (c *calc) rewrite(in Input) bool {
+	s := &c.s
+	if c.from == NoStage || c.from == StageDone {
+		c.refuseRequest(in, "the group is not running: a done group is reopened by the Runtime Manager")
+		return false
+	}
+
+	tasks := rewrittenTasks(s.Tasks, decode[RewriteData](in.Data).Tasks)
+	if sameTasks(tasks, s.Tasks) {
+		c.refuseRequest(in, "the rewrite changes no task of the group")
+		return false
+	}
+
+	held := string(c.from)
+
+	c.order(OrderCancel, c.from, map[string]string{"cause": "rewrite"})
+	c.dropCommitOrders()
+	s.ActionsOpen = slices.DeleteFunc(s.ActionsOpen, func(a state.OpenAction) bool {
+		return a.Kind == string(OrderEnterStage)
+	})
+
+	s.Tasks, s.Resume, s.Unfinished = tasks, []state.ResumeRef{}, nil
+	s.Stage, s.Prior = StageBuild, ""
+	s.Block, s.Pause = state.BlockState{}, state.PauseState{}
+	s.FailureHash, s.ReturnTree, s.LastFindings = "", "", ""
+	s.TestReview = state.TestReview{Findings: []state.Finding{}, NotMet: []string{}, Failed: []string{}}
+	s.Epoch++
+
+	c.emitStatus(&bus.GroupResumed{From: held, To: string(StageBuild)})
+	c.emitStatus(&bus.StageEnter{From: held, To: string(StageBuild)})
+	c.enterStage(StageBuild, stageData{Task: c.firstOpenTask()})
+
+	return true
+}
+
+// rewrittenTasks returns the task list a rewrite leaves: every finished task of old stays, then each task of names that is
+// not finished is queued, in the order names gives.
+func rewrittenTasks(old []state.TaskState, names []string) []state.TaskState {
+	var out []state.TaskState
+
+	for _, t := range old {
+		if t.State == "done" {
+			out = append(out, t)
+		}
+	}
+
+	for _, n := range names {
+		if !slices.ContainsFunc(out, func(t state.TaskState) bool { return t.ID == n }) {
+			out = append(out, state.TaskState{ID: n, State: "queued"})
+		}
+	}
+
+	return out
+}
+
+// ReopenState returns the state a Done group starts from when a rewrite gives it new tasks: its finished tasks stay done, the
+// new tasks queue, the tries start over, and the group has no stage until it starts again.
+func ReopenState(done State, tasks []string) State {
+	s := cloneState(done)
+	s.Tasks = rewrittenTasks(done.Tasks, tasks)
+	s.Stage, s.Prior, s.Outcome, s.Fence = NoStage, "", "", 0
+	s.Block, s.Pause, s.Unfinished = state.BlockState{}, state.PauseState{}, nil
+	s.FailureHash, s.ReturnTree, s.LastFindings = "", "", ""
+	s.TestReview = state.TestReview{Findings: []state.Finding{}, NotMet: []string{}, Failed: []string{}}
+	s.ActionsOpen, s.Resume, s.Owed = []state.OpenAction{}, []state.ResumeRef{}, []string{}
+	s.Counters = state.Counters{
+		Blocks:     map[string]int{},
+		WallUsedS:  done.Counters.WallUsedS,
+		WallBaseS:  done.Counters.WallUsedS,
+		TokensUsed: done.Counters.TokensUsed,
+		Overrides:  done.Counters.Overrides,
+		Crashes:    done.Counters.Crashes,
+	}
+
+	return s
 }
 
 // riskyAnswer applies a person's answer to a group blocked on a risky change: approve lands it (row 24), deny drops it

@@ -129,6 +129,12 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 		}
 
 		pl.stored, slots[contextmgr.Plan] = &stored.blueprint, stored.text
+
+		if r.Group != "" {
+			if pl.finished, err = h.finishedTasks(stored.blueprint, r.Group); err != nil {
+				return PlanResult{}, err
+			}
+		}
 	}
 
 	h.stateMu.Lock()
@@ -149,6 +155,10 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 	}
 	if r.Group != "" {
 		slots[contextmgr.Goal] = fmt.Sprintf("Rewrite only the tasks of group %s: %s", r.Group, slots[contextmgr.Goal])
+	}
+	if len(pl.finished) > 0 {
+		slots[contextmgr.Goal] += "\nThese tasks of the group are finished and fixed; keep each exactly as written: " +
+			strings.Join(pl.finished, ", ")
 	}
 
 	c, err := h.d.Context.GetContext(ctx, contextmgr.Request{Agent: "planner", Tree: tree, Chain: h.d.Chain, Slots: slots})

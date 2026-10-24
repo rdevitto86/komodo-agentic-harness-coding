@@ -98,9 +98,11 @@ type ContextSource interface {
 	GetContext(ctx context.Context, req contextmgr.Request) (contextmgr.Context, error)
 }
 
-// LockReader answers whether a group is in a run; the State Manager backs it.
+// LockReader answers whether a group is in a run and which of its tasks are finished; the State Manager backs it.
 type LockReader interface {
 	InRun(groupID string) (run string, locked bool, err error)
+	// Finished returns the names of the group's finished tasks; a group with no saved state has none.
+	Finished(groupID string) ([]string, error)
 }
 
 // PlannerLimits are the planner's clocks from the Agent Registry.
@@ -210,6 +212,8 @@ type planState struct {
 	tracked []string   // every tracked file of the base commit
 	stored  *Blueprint // the plan being changed; nil for a new plan
 	group   string     // the one group a rewrite may change; empty for a new plan or a shape change
+	// names of the group's tasks that finished; a rewrite keeps each exactly as stored
+	finished []string
 }
 
 // RegisterEvents binds the plan request, plan written and the five plan error subtypes to their data structs.

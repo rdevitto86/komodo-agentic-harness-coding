@@ -234,6 +234,90 @@ func TestAmend(t *testing.T) {
 		}
 	})
 
+	t.Run("a rewrite sends the finished tasks to the planner as fixed", func(t *testing.T) {
+		t.Parallel()
+
+		r, stored := seeded(t)
+		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.lock.finished[stored.Groups[0].ID] = []string{"tsk-one"}
+
+		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "more", Plan: stored.Plan, Group: "tg-1"}); err != nil {
+			t.Fatal(err)
+		}
+		if goal := r.ctx.req.Slots[contextmgr.Goal]; !strings.Contains(goal, "tsk-one") || !strings.Contains(goal, "finished") {
+			t.Fatalf("goal slot: %q", goal)
+		}
+	})
+
+	t.Run("a rewrite draft that changes a finished task is a failed draft sent back", func(t *testing.T) {
+		t.Parallel()
+
+		r, stored := seeded(t)
+		bad := amendDraft(stored, func(g []PlanGroup) []PlanGroup {
+			g[0].Tasks = slices.Clone(g[0].Tasks)
+			g[0].Tasks[0].DoneWhen = "go vet ./..."
+
+			return g
+		})
+		good := amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })
+		r.sess.steps = []any{bad, good}
+		r.lock.finished[stored.Groups[0].ID] = []string{"tsk-one"}
+
+		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(r.sess.texts) != 3 || !strings.Contains(r.sess.texts[2], "grammar") || !strings.Contains(r.sess.texts[2], "tsk-one") {
+			t.Fatalf("texts: %q", r.sess.texts)
+		}
+	})
+
+	t.Run("a rewrite draft that drops a finished task is refused after three drafts", func(t *testing.T) {
+		t.Parallel()
+
+		r, stored := seeded(t)
+		drop := amendDraft(stored, func(g []PlanGroup) []PlanGroup {
+			g[0].Tasks = []PlanTask{{
+				Name: "tsk-new", Files: g[0].Files, DoneWhen: "go vet ./...", EstimateLines: 10,
+				Acceptance: g[0].Tasks[0].Acceptance,
+			}}
+
+			return g
+		})
+		r.sess.steps = []any{drop, drop, drop}
+		r.lock.finished[stored.Groups[0].ID] = []string{"tsk-one"}
+
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"})
+
+		var blocked PlanBlockedError
+		if !errors.As(err, &blocked) || !strings.Contains(findingText(blocked.Findings), "tsk-one") {
+			t.Fatalf("err: %v", err)
+		}
+	})
+
+	t.Run("a rewrite fails when the lock reader cannot read the finished tasks", func(t *testing.T) {
+		t.Parallel()
+
+		r, stored := seeded(t)
+		r.h.d.Locks = fakeLocks{err: errors.New("state gone")}
+
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"})
+		if err == nil || !strings.Contains(err.Error(), "state gone") {
+			t.Fatalf("err: %v", err)
+		}
+	})
+
+	t.Run("a rewrite with no lock reader keeps no task fixed", func(t *testing.T) {
+		t.Parallel()
+
+		r, stored := seeded(t)
+		r.sess.steps = []any{amendDraft(stored, func(g []PlanGroup) []PlanGroup { return withTask(g, "tg-1") })}
+		r.h.d.Locks = nil
+
+		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "x", Plan: stored.Plan, Group: "tg-1"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("a request names a stored plan and a stored group", func(t *testing.T) {
 		t.Parallel()
 

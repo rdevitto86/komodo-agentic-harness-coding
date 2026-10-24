@@ -53,6 +53,7 @@ type group struct {
 	holdT     Timer
 	blockWait bool // the wait was armed by a blocking error, so a move out of Blocked ends it
 	stopping  atomic.Bool
+	reopen    *state.Record // the Done record a rewrite starts the group over from; nil for a new group
 }
 
 // main is the group's goroutine: it starts or recovers the group, then takes one input at a time.
@@ -151,6 +152,12 @@ func (g *group) now() time.Time { return g.m.clk.Now() }
 // begin takes the lease, writes the group's first record and performs its first order.
 func (g *group) begin() bool {
 	s := NewState(g.r.id, g.spec, g.r.configHash)
+	if g.reopen != nil {
+		s = ReopenState(g.reopen.State, g.spec.Tasks)
+		s.Run, s.ConfigHash = g.r.id, g.r.configHash
+		g.created, g.rev = true, g.reopen.Header.Rev
+	}
+
 	s.LastEventAt = g.now()
 
 	first := Next(s, Input{Kind: InGroupStart, Group: g.spec.ID, Time: g.now()}, g.r.limits)
@@ -389,6 +396,10 @@ func (g *group) do(o Order) {
 	case OrderGrantLease:
 		return
 	case OrderCancel:
+		if decode[map[string]string](o.Data)["cause"] == "rewrite" {
+			g.recycleTM()
+			return
+		}
 		if !g.tmUp() || g.holdsScopeRequest(o) {
 			return
 		}
@@ -423,6 +434,32 @@ func (g *group) do(o Order) {
 
 	cmd.Wake = wakeAt(cmd.Wake, g.now())
 	g.send(cmd)
+}
+
+// recycleTM stops the group's Task Manager and waits for it to end, so the stage order that follows starts a new one that
+// reads the rewritten task list.
+func (g *group) recycleTM() {
+	g.mu.Lock()
+	old, done := g.cmds, g.tmDone
+	g.mu.Unlock()
+
+	if old == nil {
+		return
+	}
+
+	select {
+	case old <- stopCommand("rewrite"):
+	default:
+	}
+
+	g.m.waitEnded(g, done)
+	g.mu.Lock()
+
+	if g.tmDone == done {
+		g.cmds, g.tmDone = nil, nil
+	}
+
+	g.mu.Unlock()
 }
 
 // releaseLease releases the group's lease and tells the Resource Manager the group ended.
@@ -595,7 +632,7 @@ func (g *group) armRenew() {
 // handle takes one input: decide, save, publish, then perform the orders; a waiting continue is told the outcome.
 func (g *group) handle(in Input) {
 	var told error
-	if (in.Kind == InContinue || in.Kind == InOverride) && in.Request != "" {
+	if (in.Kind == InContinue || in.Kind == InOverride || in.Kind == InRewrite) && in.Request != "" {
 		defer func() { g.m.continued(in.Request, told) }()
 	}
 	if g.stopping.Load() {
@@ -648,6 +685,10 @@ func (g *group) handle(in Input) {
 		told = err
 		g.saveFailed(err)
 		return
+	}
+
+	if in.Kind == InRewrite {
+		g.spec.Tasks = decode[RewriteData](in.Data).Tasks
 	}
 
 	g.publish(res.Emit)

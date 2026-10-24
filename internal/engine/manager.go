@@ -13,6 +13,7 @@ import (
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cache"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/commit"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/fault"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
@@ -43,7 +44,8 @@ type run struct {
 	failed     map[string]bool   // groups that failed for good, which no run continues
 	depBlocked map[string]string // groups that wait on an abandoned dependency
 	landing    map[string]LandingPlan
-	pushes     map[string]*epicPush // each epic's push state
+	pushes     map[string]*epicPush    // each epic's push state
+	reopen     map[string]state.Record // Done records of groups a rewrite starts over, until their loop starts
 	first      sync.Once
 	firstCh    chan struct{}
 	ended      bool
@@ -412,19 +414,42 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 		depBlocked: map[string]string{},
 		landing:    map[string]LandingPlan{},
 		pushes:     map[string]*epicPush{},
+		reopen:     map[string]state.Record{},
 		firstCh:    make(chan struct{}),
 	}
 	saved := map[string]state.Record{}
 
-	var forward []*group
+	var (
+		forward  []*group
+		rewrites = map[string]GroupSpec{} // groups this run-start rewrites, by id
+	)
 
 	for _, s := range specs {
 		m.mu.Lock()
 		live := m.groups[s.ID]
 		m.mu.Unlock()
+
 		if live != nil {
-			forward = append(forward, live)
-			continue
+			live.mu.Lock()
+			snap := live.snap
+			live.mu.Unlock()
+
+			if snap.Stage != StageDone || !rewritten(rs, s, snap) {
+				forward = append(forward, live)
+				if rewritten(rs, s, snap) {
+					rewrites[s.ID] = s
+				}
+
+				continue
+			}
+
+			// A finished group a rewrite reopens leaves the table, so the new run owns it.
+			m.mu.Lock()
+			if m.groups[s.ID] == live {
+				delete(m.groups, s.ID)
+			}
+
+			m.mu.Unlock()
 		}
 
 		r.specs[s.ID] = s
@@ -435,6 +460,9 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 		case errors.Is(err, state.ErrNotFound):
 		case err != nil:
 			return fail("read the saved state of %s: %v", s.Label, err)
+		case rec.State.Stage == StageDone && rewritten(rs, s, rec.State):
+			rewrites[s.ID] = s
+			r.reopen[s.ID] = rec
 		case rec.State.Stage == StageDone:
 			r.finished[s.ID] = true
 			r.done[s.ID] = rec.State.Outcome == "complete"
@@ -448,12 +476,24 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 			}
 		default:
 			saved[s.ID] = rec
+			if rewritten(rs, s, rec.State) {
+				rewrites[s.ID] = s
+			}
 		}
+	}
+
+	if err := m.refuseMerged(ctx, id, rs, rewrites); err != nil {
+		return err
 	}
 
 	var pending []pendingContinue
 
 	for _, g := range forward {
+		if s, ok := rewrites[g.spec.ID]; ok {
+			pending = append(pending, m.queueInput(g, rewriteInput(id, s)))
+			continue
+		}
+
 		pending = append(pending, m.queueContinue(g, "run-"+id+"-"+g.spec.ID))
 	}
 	if len(r.specs) == 0 {
@@ -519,7 +559,13 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 		m.groups[gid] = g
 		m.stopParkedLocked(gid)
 		m.spawn(func() { g.main(&rec) })
-		if resume && (rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked) {
+		if s, ok := rewrites[gid]; ok {
+			in := rewriteInput(id, s)
+			ch := make(chan error, 1)
+			m.conts[in.Request] = ch
+			pending = append(pending, pendingContinue{g: g, ch: ch, req: in.Request})
+			g.enqueue(in)
+		} else if resume && (rec.State.Stage == StagePaused || rec.State.Stage == StageBlocked) {
 			req := "run-" + id + "-" + gid
 			ch := make(chan error, 1)
 			m.conts[req] = ch
@@ -536,6 +582,80 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 	m.checkLocked(r)
 	m.mu.Unlock()
 	return m.awaitContinues(ctx, pending)
+}
+
+// EpicMerger is the part of the Commit Handler that tells whether an epic's pull request has merged. A Commit Handler that
+// has it makes the Runtime Manager refuse a rewrite of a group of a merged plan.
+type EpicMerger interface {
+	EpicMerged(ctx context.Context, r commit.EpicPush) (bool, error)
+}
+
+// rewritten reports whether a run-start rewrites a group: it names the group and the plan's task list differs from the tasks
+// the saved state holds.
+func rewritten(rs *bus.RunStart, s GroupSpec, saved State) bool {
+	return slices.Contains(rs.Groups, s.Label) && saved.Stage != NoStage && !sameTasks(saved.Tasks, rewrittenTasks(saved.Tasks, s.Tasks))
+}
+
+// sameTasks reports whether two task lists hold the same tasks, each finished or not; a claimed task counts as not finished.
+func sameTasks(a, b []state.TaskState) bool {
+	return slices.EqualFunc(a, b, func(x, y state.TaskState) bool {
+		return x.ID == y.ID && (x.State == "done") == (y.State == "done")
+	})
+}
+
+// rewriteInput is the rewrite input a run-start sends a group whose plan tasks changed.
+func rewriteInput(run string, s GroupSpec) Input {
+	return Input{
+		Kind:    InRewrite,
+		Group:   s.ID,
+		Request: "run-" + run + "-" + s.ID,
+		Data:    mustJSON(RewriteData{Tasks: s.Tasks}),
+	}
+}
+
+// refuseMerged refuses a rewrite of a group whose plan's pull request has merged; a Commit Handler that cannot tell leaves
+// the rewrite allowed.
+func (m *Manager) refuseMerged(
+	ctx context.Context,
+	run string,
+	rs *bus.RunStart,
+	rewrites map[string]GroupSpec,
+) error {
+	checker, ok := m.d.Commits.(EpicMerger)
+	if !ok {
+		return nil
+	}
+
+	checked := map[string]bool{}
+
+	for _, s := range rewrites {
+		if checked[s.Epic] {
+			continue
+		}
+
+		checked[s.Epic] = true
+
+		merged, err := checker.EpicMerged(ctx, commit.EpicPush{
+			Repo:      rs.Repo,
+			Root:      rs.Root,
+			CommonDir: rs.CommonDir,
+			Epic:      s.Epic,
+		})
+		if err != nil {
+			return m.refuse(
+				run, rs.Target, string(rs.Request),
+				fmt.Sprintf("read whether the pull request of %s merged: %v", s.Epic, err),
+			)
+		}
+		if merged {
+			return m.refuse(
+				run, rs.Target, string(rs.Request),
+				fmt.Sprintf("the pull request of %s has merged: write a new plan to change %s", s.Epic, s.Label),
+			)
+		}
+	}
+
+	return nil
 }
 
 // joinRun loads the saved groups a wake names into a run that is already live, so a second parked group of the same saved
@@ -793,6 +913,12 @@ func (m *Manager) schedule() {
 		r := owner[c.Spec.ID]
 		g := m.newGroup(r, c.Spec)
 		g.hasSlot = true
+
+		if rec, ok := r.reopen[c.Spec.ID]; ok {
+			g.reopen = &rec
+			delete(r.reopen, c.Spec.ID)
+		}
+
 		r.groups[c.Spec.ID] = g
 		m.groups[c.Spec.ID] = g
 		m.spawn(func() { g.main(nil) })

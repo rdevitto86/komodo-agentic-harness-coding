@@ -32,6 +32,25 @@ func (h *Handler) loadStored(r PlanRequest) (storedPlan, error) {
 	return storedPlan{blueprint: b, text: string(data)}, nil
 }
 
+// finishedTasks returns the names of a stored group's finished tasks, or none when no lock reader is wired.
+func (h *Handler) finishedTasks(b Blueprint, group string) ([]string, error) {
+	if h.d.Locks == nil {
+		return nil, nil
+	}
+
+	i := slices.IndexFunc(b.Groups, func(g PlanGroup) bool { return g.Name == group })
+	if i < 0 {
+		return nil, nil
+	}
+
+	names, err := h.d.Locks.Finished(b.Groups[i].ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the finished tasks of group %s: %w", group, err)
+	}
+
+	return names, nil
+}
+
 // existing returns the blueprint lint amends, or an empty one for a new plan.
 func (pl *planState) existing() Blueprint {
 	if pl.stored == nil {
@@ -50,7 +69,9 @@ func (h *Handler) amendCheck(d PlanDraft, pl *planState) ([]Finding, error) {
 
 	touched, changed := diffGroups(*pl.stored, d.blueprint())
 	if pl.group != "" {
-		return rewriteFindings(pl.group, touched, changed), nil
+		found := rewriteFindings(pl.group, touched, changed)
+
+		return append(found, keptFindings(pl, d.blueprint())...), nil
 	}
 
 	for _, g := range touched {
@@ -146,6 +167,54 @@ func rewriteFindings(group string, touched []PlanGroup, changed []string) []Find
 	}
 
 	return found
+}
+
+// keptFindings fails every finished task of the rewritten group that the draft changes or drops.
+func keptFindings(pl *planState, draft Blueprint) []Finding {
+	have, now := tasksOf(*pl.stored, pl.group), tasksOf(draft, pl.group)
+
+	var found []Finding
+
+	for _, name := range pl.finished {
+		got, ok := now[name]
+
+		switch {
+		case !ok:
+			found = append(found, grammar(
+				"plan.md#"+pl.group,
+				fmt.Sprintf("task %s is finished and must stay in %s", name, pl.group),
+			))
+		case taskCard(got) != taskCard(have[name]):
+			found = append(found, grammar(
+				"plan.md#"+pl.group,
+				fmt.Sprintf("task %s is finished and must stay as it is", name),
+			))
+		}
+	}
+
+	return found
+}
+
+// tasksOf returns the tasks of one group of a blueprint by name.
+func tasksOf(b Blueprint, group string) map[string]PlanTask {
+	out := map[string]PlanTask{}
+
+	for _, g := range b.Groups {
+		if g.Name != group {
+			continue
+		}
+
+		for _, t := range g.Tasks {
+			out[t.Name] = t
+		}
+	}
+
+	return out
+}
+
+// taskCard renders a task, so two tasks compare by what plan.md says.
+func taskCard(t PlanTask) string {
+	return Render(Blueprint{Groups: []PlanGroup{{Tasks: []PlanTask{t}}}})
 }
 
 // groupText renders a group without its id and hash, so two groups compare by what plan.md says.

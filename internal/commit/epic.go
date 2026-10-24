@@ -67,6 +67,21 @@ func (h *Handler) PushEpic(ctx context.Context, r EpicPush) (EpicResult, error) 
 	return res, nil
 }
 
+// EpicMerged reports whether the pull request of the epic's branch has merged.
+func (h *Handler) EpicMerged(ctx context.Context, r EpicPush) (bool, error) {
+	branch := "komodo/" + r.Epic
+	if !validBranch(branch) || strings.ContainsAny(r.Epic, "/\\") {
+		return false, fail(KindCriticalRef, false, fmt.Errorf("epic branch %q: %w", branch, ErrCriticalRef))
+	}
+
+	merged, err := h.Forge.MergedPR(ctx, branch)
+	if err != nil {
+		return false, fail(KindForge, true, err)
+	}
+
+	return merged, nil
+}
+
 // run holds the epic's turn while it brings the remote's commits in, pushes and settles the pull request.
 func (e *epicPush) run(ctx context.Context) (EpicResult, error) {
 	h, r := e.h, e.r
