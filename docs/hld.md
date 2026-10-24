@@ -396,6 +396,7 @@ Open decisions are the TODOs above, each linked to its row; the rest are build-t
 | Agent registry | The list of agent roles with their models, links and permissions |
 | Session | One model conversation for one agent's job |
 | Epic, task group, task | An epic holds task groups; a group holds a bounded set of tasks that ship together |
+| Plan | The temporary `plan.md` [TODO: relation to an epic ([G-324](lld.md#g-324))] |
 | Run | One execution of a plan's task groups, started by `komodo run` |
 | Event | A fact with a type and a subtype, published on the Event Bus |
 | Subscriber | A part that listens for one or more event types |
