@@ -22,6 +22,7 @@ func TestBinaryEngineServesStatus(t *testing.T) {
 // Phase 5 exit: one task group passes build, test and review, driven through the real binary and engine with a fake model.
 func TestPhase5OneGroupPassesBuildTestAndReview(t *testing.T) {
 	r := newBinRig(t, planFiles())
+	r.writePlan()
 	res := r.komodo(60*time.Second, "run", "ep-1")
 	if res.code != 0 {
 		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)

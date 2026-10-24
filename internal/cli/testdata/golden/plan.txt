@@ -5,11 +5,7 @@ exit 0
   "verdict": "Plan started for the goal Add lease revocation.",
   "report": "Plan started for the goal `Add lease revocation`.\n",
   "data": {
-    "run_id": "<uuid>",
-    "target": "ep-2",
-    "groups": [
-      "tg-2.1",
-      "tg-2.2"
-    ]
+    "plan": "plan-7f3a9c",
+    "path": "/plans/shop/plan-7f3a9c/plan.md"
   }
 }

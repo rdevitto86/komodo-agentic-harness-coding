@@ -404,8 +404,12 @@ func (e *Engine) verbPlan(ctx context.Context, w *connWriter, req Request) {
 			if err := w.send(Reply{ID: req.ID, Status: StatusEvent, Event: &ev}); err != nil {
 				return
 			}
-			if ev.Type == bus.TypeError || ev.Type == bus.TypePlan && ev.Subtype == "written" {
+			if ev.Type == bus.TypeError {
 				e.done(w, req.ID, nil)
+				return
+			}
+			if ev.Type == bus.TypePlan && ev.Subtype == "written" {
+				e.done(w, req.ID, writtenData(ev))
 				return
 			}
 		case <-ctx.Done():
@@ -436,6 +440,21 @@ func (e *Engine) verbClean(ctx context.Context, w *connWriter, req Request) {
 	}
 
 	e.done(w, req.ID, map[string]any{"removed": items})
+}
+
+// writtenData returns the plan id and the path of plan.md that a plan / written event carries.
+func writtenData(ev bus.Event) map[string]string {
+	var w struct {
+		Plan string `json:"plan"`
+		Path string `json:"path"`
+	}
+
+	b, err := json.Marshal(ev.Data)
+	if err == nil {
+		_ = json.Unmarshal(b, &w)
+	}
+
+	return map[string]string{"plan": w.Plan, "path": w.Path}
 }
 
 // dataOf returns the event's data as T.

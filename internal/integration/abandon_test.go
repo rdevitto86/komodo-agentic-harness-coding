@@ -11,7 +11,6 @@ import (
 
 // Abandoning a running group frees its worktree, branch, lease and container.
 func TestAbandonFreesARunningGroupsResources(t *testing.T) {
-	t.Skip("the engine now refuses a bare group label; this flow passes again once the CLI sends a plan id with the label")
 	r := newBinRig(t, planFiles())
 	boxes := r.writeDocker()
 	const group = "0192e4c5-7a10-7d3e-9b2f-000000000101"
@@ -26,6 +25,7 @@ func TestAbandonFreesARunningGroupsResources(t *testing.T) {
 	}
 	started, release := r.model.arm()
 	t.Cleanup(release)
+	r.writePlan()
 	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
 		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}
@@ -34,7 +34,7 @@ func TestAbandonFreesARunningGroupsResources(t *testing.T) {
 	case <-time.After(40 * time.Second):
 		t.Fatalf("the builder never started\n%s", r.evidence(r.events()))
 	}
-	if res := r.komodo(60*time.Second, "abandon", "tg-1.1"); res.code != 0 {
+	if res := r.komodo(60*time.Second, "abandon", fixturePlan, "tg-1.1"); res.code != 0 {
 		t.Fatalf("komodo abandon exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}
 	var left []string

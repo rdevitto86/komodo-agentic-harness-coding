@@ -36,6 +36,7 @@ func TestRecheckFailureStopsTheLanding(t *testing.T) {
 		1,
 	)
 	r := newBinRig(t, files)
+	r.writePlan()
 	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
 		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}
@@ -51,6 +52,7 @@ func TestRecheckFailureStopsTheLanding(t *testing.T) {
 // A landing whose free checks pass runs them on the epic tip, then opens the pull request.
 func TestRecheckPassLetsTheLandingFinish(t *testing.T) {
 	r := newBinRig(t, planFiles())
+	r.writePlan()
 	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
 		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}

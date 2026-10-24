@@ -152,9 +152,9 @@ func findCommand(name string) *Command {
 }
 
 var (
-	epicLabel  = regexp.MustCompile(`^ep-[0-9]+$`)
-	groupLabel = regexp.MustCompile(`^tg-[0-9]+\.[0-9]+$`)
-	runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	groupLabel  = regexp.MustCompile(`^tg-[0-9]+(\.[0-9]+)?$`)
+	planIDShape = regexp.MustCompile(`^plan-[0-9a-f]{6}$`)
+	runIDShape  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
 // checkArgs checks flag values, flag combinations and the arguments each command takes.
@@ -167,11 +167,9 @@ func checkArgs(c *Call) *Result {
 	case "run":
 		msg = checkRunArgs(c)
 	case "stop", "replay":
-		msg = oneTarget(c, "a label or a run id", func(s string) bool {
-			return isLabel(s) || runIDShape.MatchString(s)
-		})
+		msg = checkTargetArgs(c, false, false)
 	case "abandon":
-		msg = oneTarget(c, "a group label such as tg-1.2", groupLabel.MatchString)
+		msg = checkTargetArgs(c, false, true)
 	case "status":
 		msg = checkStatusArgs(c)
 	case "config set":
@@ -192,17 +190,26 @@ func checkArgs(c *Call) *Result {
 	return &r
 }
 
-// isLabel reports whether s is an epic or group label.
-func isLabel(s string) bool { return epicLabel.MatchString(s) || groupLabel.MatchString(s) }
+// checkTargetArgs checks a target of a plan id, a plan id then a group label, or a run id; a bare group label is refused.
+// optional allows no target at all, and needLabel makes the group label required.
+func checkTargetArgs(c *Call, optional, needLabel bool) string {
+	n, name := len(c.Args), c.Command.Name
 
-// oneTarget checks that exactly one id of the wanted shape was given.
-func oneTarget(c *Call, want string, ok func(string) bool) string {
-	if len(c.Args) != 1 {
-		return fmt.Sprintf("%s needs one id: %s", c.Command.Name, want)
+	switch {
+	case n == 0 && optional:
+		return ""
+	case n == 0 || n > 2:
+		return name + " takes a plan id, then a group label, or a run id"
+	case groupLabel.MatchString(c.Args[0]):
+		return fmt.Sprintf(
+			"%q is a group label: name its plan first, as in komodo %s plan-7f3a9c %s", c.Args[0], name, c.Args[0],
+		)
+	case n == 2 && runIDShape.MatchString(c.Args[0]):
+		return "a run id takes no group label"
+	case needLabel && n != 2:
+		return name + " needs a plan id then a group label"
 	}
-	if !ok(c.Args[0]) {
-		return fmt.Sprintf("%q is not %s", c.Args[0], want)
-	}
+
 	return ""
 }
 
@@ -219,15 +226,23 @@ func checkRunArgs(c *Call) string {
 		return fmt.Sprintf("--minutes must be 1 to %d", engine.FinalWallMaxMin)
 	case approve && deny, override && (approve || deny):
 		return "--approve, --deny and --override cannot combine"
-	case (approve || deny || override) && (c.Global.All || scheduled):
-		return "--approve, --deny and --override take an id and cannot combine with --all or --schedule"
-	case c.Global.All && len(c.Args) > 0:
-		return "--all takes no id"
 	case c.Global.All:
-		return ""
+		return "run takes a plan id and no --all"
+	case (approve || deny || override) && scheduled:
+		return "--approve, --deny and --override cannot combine with --schedule"
+	case len(c.Args) == 0:
+		return "run needs a plan id"
+	case groupLabel.MatchString(c.Args[0]):
+		return fmt.Sprintf("%q is a group label: name its plan first, as in komodo run plan-7f3a9c %s", c.Args[0], c.Args[0])
+	case (approve || deny || override) && len(c.Args) > 2:
+		return "--approve, --deny and --override take a plan id and an optional group label, not a prompt"
+	case scheduled && len(c.Args) > 1:
+		return "--schedule takes a plan id alone"
+	case !(approve || deny || override) && len(c.Args) == 2:
+		return "a group label needs a prompt, --approve or --deny after it"
 	}
 
-	return oneTarget(c, "an epic label such as ep-1 or a group label such as tg-1.2", isLabel)
+	return ""
 }
 
 // checkStatusArgs checks the optional id and the wait limit of status.
@@ -235,13 +250,7 @@ func checkStatusArgs(c *Call) string {
 	if flagDuration(c, "timeout") < time.Second {
 		return "--timeout must be at least 1s, such as 9m"
 	}
-	if len(c.Args) > 1 {
-		return "status takes at most one id"
-	}
-	if len(c.Args) == 1 && !isLabel(c.Args[0]) && !runIDShape.MatchString(c.Args[0]) {
-		return fmt.Sprintf("%q is not a label or a run id", c.Args[0])
-	}
-	return ""
+	return checkTargetArgs(c, true, false)
 }
 
 // checkSetArgs checks the key=value pairs, --default keys and --accept of config set.

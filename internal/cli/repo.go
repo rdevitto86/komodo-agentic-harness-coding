@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
@@ -156,104 +154,4 @@ func normalizeRemote(url string) string {
 		url = url[i+1:]
 	}
 	return strings.TrimSuffix(strings.TrimSuffix(url, "/"), ".git")
-}
-
-// resolveRun validates the label of run and expands it to the group labels under docs/backlog/.
-func resolveRun(c *Call) *Result {
-	if c.Global.List || flagBool(c, "approve") || flagBool(c, "deny") || flagBool(c, "override") {
-		return nil
-	}
-
-	backlog := filepath.Join(c.Repo.Root, "docs", "backlog")
-	if c.Global.All {
-		c.Groups = openGroups(backlog)
-		return nil
-	}
-
-	label := c.Args[0]
-	groups, ok := groupsOf(backlog, label)
-
-	if !ok {
-		r := usageErr("no "+label+" under docs/backlog/", "check the label in docs/backlog/, or plan it with komodo plan")
-		return &r
-	}
-
-	c.Groups = groups
-	return nil
-}
-
-// groupsOf expands an epic label to its group labels, or confirms a group label exists.
-func groupsOf(backlog, label string) ([]string, bool) {
-	if epicLabel.MatchString(label) {
-		dir := filepath.Join(backlog, "epic-"+strings.TrimPrefix(label, "ep-"))
-		g := groupDirs(dir)
-		if _, err := os.Stat(dir); err != nil {
-			return nil, false
-		}
-		return g, true
-	}
-
-	epic, _, _ := strings.Cut(strings.TrimPrefix(label, "tg-"), ".")
-	if _, err := os.Stat(filepath.Join(backlog, "epic-"+epic, label)); err != nil {
-		return nil, false
-	}
-	return []string{label}, true
-}
-
-// groupDirs lists the tg-N.M folders of an epic folder in numeric order.
-func groupDirs(epicDir string) []string {
-	ents, _ := os.ReadDir(epicDir)
-	var out []string
-
-	for _, e := range ents {
-		if e.IsDir() && groupLabel.MatchString(e.Name()) {
-			out = append(out, e.Name())
-		}
-	}
-
-	sort.Slice(out, func(i, j int) bool { return groupKey(out[i]) < groupKey(out[j]) })
-	return out
-}
-
-// groupKey turns tg-N.M into a number that sorts groups by epic, then by position.
-func groupKey(label string) int {
-	a, b, _ := strings.Cut(strings.TrimPrefix(label, "tg-"), ".")
-	n, _ := strconv.Atoi(a)
-	m, _ := strconv.Atoi(b)
-	return n*100000 + m
-}
-
-// openGroups lists every group under the backlog whose TG.md does not say status: done.
-func openGroups(backlog string) []string {
-	epics, _ := filepath.Glob(filepath.Join(backlog, "epic-*"))
-	var out []string
-
-	for _, e := range epics {
-		for _, g := range groupDirs(e) {
-			if !groupDone(filepath.Join(e, g, "TG.md")) {
-				out = append(out, g)
-			}
-		}
-	}
-
-	sort.Slice(out, func(i, j int) bool { return groupKey(out[i]) < groupKey(out[j]) })
-	return out
-}
-
-// groupDone reports whether a TG.md holds the line status: done.
-func groupDone(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "status:"); ok {
-			return strings.TrimSpace(v) == "done"
-		}
-	}
-	return false
 }

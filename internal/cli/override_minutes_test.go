@@ -14,9 +14,10 @@ func overrideMinutes(t *testing.T, stdin string, args ...string) (int, int, stri
 	h := newHarness(t)
 	h.terminal, h.stdin = true, stdin
 	repo := repoDir(t, "")
+	planFixture(t, h, repo, samplePlan, "tg-1")
 	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) { send(okReply(map[string]any{})) })
 
-	code, _, errOut := h.run(append([]string{"--json", "-C", repo, "run", "tg-1.2", "--override"}, args...)...)
+	code, _, errOut := h.run(append([]string{"--json", "-C", repo, "run", samplePlan, "--override"}, args...)...)
 	reqs := srv.Requests()
 	if len(reqs) == 0 {
 		return code, -1, errOut, ""
@@ -62,10 +63,10 @@ func TestOverrideMinutesOutOfRangeSendNothing(t *testing.T) {
 
 func TestOverrideMinutesNeedsOverrideAndATerminal(t *testing.T) {
 	h := newHarness(t)
-	if _, e := h.envelope("run", "tg-1.2", "--minutes", "30"); e.Error == nil || e.Error.Code != "usage" {
+	if _, e := h.envelope("run", samplePlan, "--minutes", "30"); e.Error == nil || e.Error.Code != "usage" {
 		t.Fatalf("--minutes without --override: %+v", e.Error)
 	}
-	if code, e := h.envelope("run", "tg-1.2", "--override", "--minutes", "30"); code != 1 || e.Error == nil ||
+	if code, e := h.envelope("run", samplePlan, "--override", "--minutes", "30"); code != 1 || e.Error == nil ||
 		e.Error.Code != "no_terminal" {
 		t.Fatalf("no terminal: exit %d %+v", code, e.Error)
 	}

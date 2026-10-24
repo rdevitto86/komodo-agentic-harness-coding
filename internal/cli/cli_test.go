@@ -36,7 +36,7 @@ func TestClosestMatch(t *testing.T) {
 
 func TestUnknownFlagNamesClosest(t *testing.T) {
 	h := newHarness(t)
-	code, e := h.envelope("run", "tg-1.2", "--schedul", "x")
+	code, e := h.envelope("run", samplePlan, "--schedul", "x")
 	if code != 2 || !strings.Contains(e.Error.Fix, "--schedule") {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}
@@ -87,11 +87,11 @@ func TestNoTerminalRefusesTerminalOnly(t *testing.T) {
 // The orchestrator has no terminal, so it cannot give a spent group an override; approve and deny stay open to it.
 func TestOverrideNeedsATerminal(t *testing.T) {
 	h := newHarness(t)
-	code, e := h.envelope("run", "tg-1.2", "--override")
+	code, e := h.envelope("run", samplePlan, "--override")
 	if code != 1 || e.Error == nil || e.Error.Code != "no_terminal" {
 		t.Fatalf("exit %d, %+v", code, e.Error)
 	}
-	if _, e := h.envelope("run", "tg-1.2", "--override", "--approve"); e.Error == nil || e.Error.Code != "usage" {
+	if _, e := h.envelope("run", samplePlan, "--override", "--approve"); e.Error == nil || e.Error.Code != "usage" {
 		t.Fatalf("--override with --approve: %+v", e.Error)
 	}
 }
@@ -99,7 +99,7 @@ func TestOverrideNeedsATerminal(t *testing.T) {
 func TestPinnedRepository(t *testing.T) {
 	h := newHarness(t)
 	repo := repoDir(t, "99.0.0")
-	code, e := h.envelope("-C", repo, "run", "tg-1.2")
+	code, e := h.envelope("-C", repo, "run", samplePlan)
 	if code != 1 || e.Error.Code != "pinned" || !strings.Contains(e.Error.Fix, "komodo update") {
 		t.Fatalf("run: exit %d, %+v", code, e.Error)
 	}
@@ -133,11 +133,11 @@ func TestTamperPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := repoDir(t, "")
-	code, out, errOut := h.run("--json", "-C", repo, "stop", "tg-1.2")
+	code, out, errOut := h.run("--json", "-C", repo, "stop", samplePlan)
 	if code != 0 || !strings.Contains(errOut, "komodo config set --accept") || strings.Count(out, `"v"`) != 1 {
 		t.Fatalf("stop: exit %d\nstdout=%s\nstderr=%s", code, out, errOut)
 	}
-	code, e := h.envelope("-C", repo, "run", "tg-1.2")
+	code, e := h.envelope("-C", repo, "run", samplePlan)
 	if code != 1 || e.Error.Code != "config_tampered" || e.Error.Fix != "komodo config set --accept" {
 		t.Fatalf("run: exit %d, %+v", code, e.Error)
 	}

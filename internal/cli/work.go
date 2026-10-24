@@ -39,9 +39,8 @@ type AbandonData struct {
 
 // PlanData is the data of reply.plan.
 type PlanData struct {
-	RunID  string   `json:"run_id,omitempty"` // the run the planner started
-	Target string   `json:"target,omitempty"` // the epic label the plan wrote
-	Groups []string `json:"groups,omitempty"` // the group labels the plan wrote
+	Plan string `json:"plan,omitempty"` // the plan id the planner wrote
+	Path string `json:"path,omitempty"` // the absolute path of plan.md
 }
 
 // ReplayData is the data of reply.replay.
@@ -56,6 +55,9 @@ type planRequest struct {
 	Goal string   `json:"goal"` // the one-line goal; may be empty when Docs is set
 	Docs []string `json:"docs"` // source documents to plan from, as repository paths
 	Epic int      `json:"epic"` // an existing epic to amend as a delta; 0 for a new epic
+
+	Plan  string `json:"plan"`  // an existing plan id whose shape changes, or whose group is rewritten; empty for a new plan
+	Group string `json:"group"` // with Plan: the one group rewritten from Goal; empty for a shape change
 
 	Repo      string `json:"repo"`       // the repository id the plan belongs to
 	Root      string `json:"root"`       // the repository root on this machine
@@ -165,22 +167,24 @@ func typedRunID(s string) bus.ID {
 	return ""
 }
 
-// handleRun starts, schedules or answers a run.
+// handleRun starts, schedules or answers a run, or rewrites one group from a prompt and then runs it.
 func handleRun(c *Call) Result {
 	if flagBool(c, "approve") || flagBool(c, "deny") || flagBool(c, "override") {
 		return runAnswer(c)
 	}
 
-	target, label := "all", ""
-	if !c.Global.All {
-		target, label = c.Args[0], c.Args[0]
+	plan, label := c.Args[0], ""
+	if len(c.Args) > 1 {
+		label = c.Args[1]
+		if res := rewriteGroup(c, plan, label); res != nil {
+			return *res
+		}
 	}
 
-	req := c.request(engine.VerbRun, label)
-	req.Flags = engine.Flags{All: c.Global.All}
+	req := c.request(engine.VerbRun, plan)
 	start := &bus.RunStart{
-		Target:    target,
-		Groups:    c.Groups,
+		Target:    plan,
+		Groups:    append([]string{}, c.Groups...),
 		Source:    "cli",
 		Repo:      c.Repo.ID,
 		Root:      c.Repo.Root,
@@ -196,7 +200,7 @@ func handleRun(c *Call) Result {
 			Time: now(),
 			Data: start,
 		}
-		return runSchedule(c, req, target)
+		return runSchedule(c, req, plan)
 	}
 
 	runID := newID()
@@ -223,9 +227,27 @@ func handleRun(c *Call) Result {
 
 	return Result{
 		Shape: "reply.run",
-		Facts: format.RunFacts{Group: label, RunID: runID},
+		Facts: format.RunFacts{Group: plan, RunID: runID},
 		Data:  RunData{RunID: runID},
 	}
+}
+
+// rewriteGroup sends the prompt after a group label as a plan event for that group and waits until planning ends; a nil
+// result means the plan was written and the group can run.
+func rewriteGroup(c *Call, plan, label string) *Result {
+	pr := c.planRequest(strings.Join(c.Args[2:], " "))
+	pr.Plan, pr.Group = plan, label
+
+	d, res := c.plan(pr)
+	if res != nil {
+		return res
+	}
+	if d.Plan == "" {
+		r := internalErr("planning ended with no plan")
+		return &r
+	}
+
+	return nil
 }
 
 // runSchedule queues a run; the engine mints the run id and answers with it and the queued time.
@@ -291,12 +313,17 @@ func runAnswer(c *Call) Result {
 		}
 	}
 
-	target := c.Args[0]
+	target, groups := c.Args[0], []string{}
+	named := target
+	if len(c.Args) > 1 {
+		groups, named = []string{c.Args[1]}, c.Args[1]
+	}
+
 	req := c.request(engine.VerbRun, target)
 	req.Flags = engine.Flags{Approve: answer == "approve", Deny: answer == "deny", Override: answer == "override"}
 	req.Event = &engine.Event{
 		Type: bus.TypeRunContinue, Run: typedRunID(target), Time: now(),
-		Data: &bus.RunContinue{Target: target, Answer: answer, Minutes: minutes, Request: bus.ID(req.ID)},
+		Data: &bus.RunContinue{Target: target, Groups: groups, Answer: answer, Minutes: minutes, Request: bus.ID(req.ID)},
 	}
 
 	if _, res := c.ask(req); res != nil {
@@ -304,8 +331,8 @@ func runAnswer(c *Call) Result {
 	}
 	return Result{
 		Shape: "reply.answer",
-		Facts: format.AnswerFacts{Group: target, Answer: answer},
-		Data:  RunData{Group: target, Answer: answer},
+		Facts: format.AnswerFacts{Group: named, Answer: answer},
+		Data:  RunData{Group: named, Answer: answer},
 	}
 }
 
@@ -345,12 +372,15 @@ func finalTryMinutes(c *Call) (int, *Result) {
 	return n, nil
 }
 
-// handleStop sends a run-stop event for a label or a run id.
+// target returns the plan id and optional group label, or the run id, that the command named.
+func (c *Call) target() string { return strings.Join(c.Args, " ") }
+
+// handleStop sends a run-stop event for a plan id, a plan id and label, or a run id.
 func handleStop(c *Call) Result {
-	target := c.Args[0]
+	target := c.target()
 	req := c.request(engine.VerbStop, target)
 	req.Event = &engine.Event{
-		Type: bus.TypeRunStop, Run: typedRunID(target), Time: now(),
+		Type: bus.TypeRunStop, Run: typedRunID(c.Args[0]), Time: now(),
 		Data: &bus.RunStop{Target: target, Request: bus.ID(req.ID)},
 	}
 
@@ -359,16 +389,16 @@ func handleStop(c *Call) Result {
 		return *res
 	}
 
-	d := StopData{RunID: string(typedRunID(target))}
+	d := StopData{RunID: string(typedRunID(c.Args[0]))}
 	decodeFinal(frames, &d)
 
 	return Result{Shape: "reply.stop", Facts: format.StopFacts{RunID: d.RunID}, Data: d}
 }
 
-// handleAbandon sends an abandon control request for one group.
+// handleAbandon sends an abandon control request for one group of a plan.
 func handleAbandon(c *Call) Result {
-	group := c.Args[0]
-	frames, res := c.ask(c.request(engine.VerbAbandon, group))
+	group := c.Args[1]
+	frames, res := c.ask(c.request(engine.VerbAbandon, c.target()))
 	if res != nil {
 		return *res
 	}
@@ -385,7 +415,7 @@ func handleAbandon(c *Call) Result {
 
 // handleReplay collects the recorded events of a run or group and the gap count.
 func handleReplay(c *Call) Result {
-	frames, res := c.ask(c.request(engine.VerbReplay, c.Args[0]))
+	frames, res := c.ask(c.request(engine.VerbReplay, c.target()))
 	if res != nil {
 		return *res
 	}
@@ -416,14 +446,25 @@ func handleReplay(c *Call) Result {
 	}
 }
 
-// handlePlan sends a plan event and waits until the run it started is accepted or refused, or for an error event.
+// handlePlan sends a plan event and waits until planning ends; the reply carries the plan id and the path of plan.md.
 func handlePlan(c *Call) Result {
-	pr := &planRequest{
-		Goal:      strings.Join(c.Args, " "),
-		Docs:      []string{},
-		Repo:      c.Repo.ID,
-		Root:      c.Repo.Root,
-		CommonDir: c.CommonDir,
+	goal := strings.Join(c.Args, " ")
+	pr := c.planRequest(goal)
+
+	// A first word that names a plan, or looks like a plan id, makes the rest a prompt that changes that plan.
+	if len(c.Args) > 0 {
+		_, err := c.blueprint(c.Args[0])
+
+		switch {
+		case err != nil && !planIDShape.MatchString(c.Args[0]):
+			// the words are a goal
+		case err != nil:
+			return unknownPlan(c.Args[0])
+		case len(c.Args) < 2:
+			return usageErr("plan "+c.Args[0]+" needs a prompt that changes the plan", "komodo plan --help")
+		default:
+			pr.Plan, pr.Goal = c.Args[0], strings.Join(c.Args[1:], " ")
+		}
 	}
 
 	if from := flagString(c, "from"); from != "" {
@@ -437,6 +478,31 @@ func handlePlan(c *Call) Result {
 		pr.Docs = append(pr.Docs, filepath.ToSlash(rel))
 	}
 
+	d, res := c.plan(pr)
+	if res != nil {
+		return *res
+	}
+
+	return Result{
+		Shape: "reply.plan",
+		Facts: format.PlanFacts{Goal: pr.Goal},
+		Data:  d,
+	}
+}
+
+// planRequest builds the plan request of a call with the prompt or goal as its text.
+func (c *Call) planRequest(goal string) *planRequest {
+	return &planRequest{
+		Goal:      goal,
+		Docs:      []string{},
+		Repo:      c.Repo.ID,
+		Root:      c.Repo.Root,
+		CommonDir: c.CommonDir,
+	}
+}
+
+// plan sends a plan event and returns the plan id and path its final reply carries; a non-nil result ends the command.
+func (c *Call) plan(pr *planRequest) (PlanData, *Result) {
 	req := c.request(engine.VerbPlan, "")
 	req.Event = &engine.Event{
 		Type:    bus.TypePlan,
@@ -445,20 +511,15 @@ func handlePlan(c *Call) Result {
 		Time:    now(),
 		Data:    pr,
 	}
+
 	frames, res := c.ask(req)
-
 	if res != nil {
-		return *res
+		return PlanData{}, res
 	}
-
-	d := PlanData{}
 
 	for _, f := range frames {
 		if f.Status != engine.StatusEvent || f.Event == nil {
 			continue
-		}
-		if rs, ok := f.Event.Data.(*bus.RunStart); ok && rs.Source == "intake" {
-			d = PlanData{RunID: string(f.Event.Run), Target: rs.Target, Groups: rs.Groups}
 		}
 		fl, ok := faultOfEvent(*f.Event)
 		if !ok {
@@ -466,17 +527,15 @@ func handlePlan(c *Call) Result {
 		}
 		if ok {
 			if r, failed := c.cli.faultResult(fl); failed {
-				r.Data = d
-				return r
+				return PlanData{}, &r
 			}
 		}
 	}
 
-	return Result{
-		Shape: "reply.plan",
-		Facts: format.PlanFacts{Goal: pr.Goal},
-		Data:  d,
-	}
+	var d PlanData
+	decodeFinal(frames, &d)
+
+	return d, nil
 }
 
 // planFault turns an error event of the plan, or the refusal of the run it started, into a fault carrying its own reason;
@@ -498,10 +557,6 @@ func planFault(e bus.Event) (fault.Fault, bool) {
 	case *intake.PlanLocked:
 		f.Code, f.Kind = string(format.Locked), fault.KindRefused
 		f.Reason = "The plan tried to rewrite a group that run " + d.Run + " holds"
-	case *engine.RunRefused:
-		f.Code, f.Kind, f.Reason = string(format.RunRefused), fault.KindRefused, d.Why
-		f.Source.Component = "engine"
-		f.Fix = "Fix the cause, then run `komodo run " + d.Target + "`"
 	case *intake.PlanBlocked:
 		f.Code, f.Kind = string(format.PlanBlocked), fault.KindBlocked
 		f.Reason = fmt.Sprintf("The third planner draft failed lint with %d findings", len(d.Findings))

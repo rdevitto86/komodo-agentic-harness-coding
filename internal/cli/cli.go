@@ -61,6 +61,8 @@ type Result struct {
 	Reason  string // set when Outcome is not OutcomeOK
 	Fix     string // the command or change that resolves it
 	Raw     string // text printed as is, for help; the formatter is skipped
+	Listing bool   // Raw is a list of ids, which may be empty; under --json it is the report of the envelope
+	Verdict string // the envelope's verdict for a listing
 	Silent  bool   // nothing is printed on standard output: the verb owns the stream or the caller reads the exit code
 	Stderr  string // a line for standard error, printed instead of the envelope when Silent
 }
@@ -256,9 +258,7 @@ func (c *CLI) run(args []string, hasTerm bool) int {
 		res = c.resolve(call)
 	}
 	if res == nil && call.Global.List && call.Command.Name != "config get" {
-		r := notBuilt(
-			"--list for komodo " + call.Command.Name + ", which has no list reply shape in the Output Formatter,",
-		)
+		r := c.list(call)
 		res = &r
 	}
 	if res == nil {
@@ -267,6 +267,16 @@ func (c *CLI) run(args []string, hasTerm bool) int {
 	}
 
 	return c.render(*res)
+}
+
+// list answers --list: the plan ids for run and plan; no other command has a list reply shape in the Output Formatter yet.
+func (c *CLI) list(call *Call) Result {
+	switch call.Command.Name {
+	case "run", "plan":
+		return listPlans(call)
+	}
+
+	return notBuilt("--list for komodo " + call.Command.Name + ", which has no list reply shape in the Output Formatter,")
 }
 
 // validate runs the pin check, the value checks, the terminal check and the settings guard in order.
@@ -364,6 +374,13 @@ func (c *CLI) print(res Result) (int, error) {
 		_, err := fmt.Fprintln(c.errOut, strings.TrimRight(res.Stderr, "\n"))
 		return int(res.Outcome), err
 	}
+	if res.Listing && c.json {
+		env := Envelope{V: 1, OK: true, Verdict: res.Verdict, Report: res.Raw, Data: res.Data}
+		return int(res.Outcome), c.encode(env)
+	}
+	if res.Listing && res.Raw == "" {
+		return int(res.Outcome), nil
+	}
 	if res.Raw != "" {
 		_, err := fmt.Fprintln(c.out, strings.TrimRight(res.Raw, "\n"))
 		return int(res.Outcome), err
@@ -392,10 +409,15 @@ func (c *CLI) print(res Result) (int, error) {
 		env.Error = &ErrorBody{Code: res.Code, Reason: res.Reason, Fix: res.Fix}
 	}
 
+	return int(res.Outcome), c.encode(env)
+}
+
+// encode writes env as indented JSON.
+func (c *CLI) encode(env Envelope) error {
 	enc := json.NewEncoder(c.out)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	return int(res.Outcome), enc.Encode(env)
+	return enc.Encode(env)
 }
 
 // format renders res through the Output Formatter.

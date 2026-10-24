@@ -83,10 +83,7 @@ type BlockedRow struct {
 
 // handleStatus asks the engine for live progress; with --wait it holds until a group is blocked or done.
 func handleStatus(c *Call) Result {
-	target := ""
-	if len(c.Args) == 1 {
-		target = c.Args[0]
-	}
+	target := c.target()
 
 	wait := flagBool(c, "wait")
 	req := c.request(engine.VerbStatus, target)

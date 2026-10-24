@@ -19,11 +19,7 @@ var update = flag.Bool("update", false, "rewrite the golden envelopes")
 func goldenReplies(_ *fakeServer, req engine.Request, send func(engine.Reply)) {
 	switch req.Verb {
 	case engine.VerbPlan:
-		send(engine.Reply{Status: engine.StatusEvent, Event: &bus.Event{
-			Type: bus.TypeRunStart, Run: "0192e5a0-3b44-7d10-8c62-9a1f4e7b0d25",
-			Data: &bus.RunStart{Target: "ep-2", Groups: []string{"tg-2.1", "tg-2.2"}, Source: "intake"},
-		}})
-		send(okReply(map[string]any{}))
+		send(okReply(map[string]any{"plan": samplePlan, "path": "/plans/shop/" + samplePlan + "/plan.md"}))
 	case engine.VerbReplay:
 		send(engine.Reply{
 			Status: engine.StatusEvent,
@@ -56,11 +52,11 @@ func TestGoldenEnvelopes(t *testing.T) {
 		{"config-get", false, []string{"config", "get", "limits.group_retries"}},
 		{"config-set", true, []string{"config", "set", "limits.group_retries=2"}},
 		{"plan", false, []string{"plan", "Add lease revocation"}},
-		{"run", false, []string{"run", "tg-1.2"}},
-		{"stop", false, []string{"stop", "tg-1.2"}},
-		{"replay", false, []string{"replay", "tg-1.2"}},
+		{"run", false, []string{"run", samplePlan}},
+		{"stop", false, []string{"stop", samplePlan}},
+		{"replay", false, []string{"replay", samplePlan}},
 		{"status", false, []string{"status"}},
-		{"abandon", false, []string{"abandon", "tg-1.2"}},
+		{"abandon", false, []string{"abandon", samplePlan, "tg-1"}},
 		{"ui", false, []string{"ui"}},
 		{"doctor", false, []string{"doctor"}},
 		{"update", true, []string{"update", "--check"}},
@@ -75,7 +71,7 @@ func TestGoldenEnvelopes(t *testing.T) {
 			h.fake(goldenReplies)
 			h.host.Release = newRelease(t, "1.0.1", "golden").config()
 			repo := repoDir(t, "")
-			backlog(t, repo, map[string]string{"epic-1/tg-1.2": "todo"})
+			planFixture(t, h, repo, samplePlan, "tg-1")
 			if c.name == "ui" {
 				withUIHooks(t, func(string) {})
 			}

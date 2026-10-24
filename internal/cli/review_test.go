@@ -46,11 +46,11 @@ func TestUnreadableSettingsAreNotATamper(t *testing.T) {
 		t.Fatalf("accept: exit %d, %+v", code, e.Error)
 	}
 	repo := repoDir(t, "")
-	backlog(t, repo, map[string]string{"epic-1/tg-1.2": "todo"})
+	planFixture(t, h, repo, samplePlan, "tg-1")
 	h.fake(answerRunID)
 	const warn = "settings file settings.json is unreadable; built-in values are served. Fix: komodo config set --default " +
 		"settings.json"
-	for _, args := range [][]string{{"config", "get", "limits.group_retries"}, {"stop", "tg-1.2"}, {"run", "tg-1.2"}} {
+	for _, args := range [][]string{{"config", "get", "limits.group_retries"}, {"stop", samplePlan}, {"run", samplePlan}} {
 		code, out, errOut := h.run(append([]string{"--json", "-C", repo}, args...)...)
 		if code != 0 || strings.Count(errOut, warn) != 1 || strings.Count(out, `"v"`) != 1 {
 			t.Errorf("%v: exit %d\nstdout=%s\nstderr=%s", args, code, out, errOut)
@@ -171,17 +171,17 @@ func TestInternalEngineVerbIsHiddenAndFailsFast(t *testing.T) {
 func TestScheduleCarriesTheRunStart(t *testing.T) {
 	h := newHarness(t)
 	repo := repoDir(t, "")
-	backlog(t, repo, map[string]string{"epic-1/tg-1.1": "todo", "epic-1/tg-1.2": "todo"})
+	planFixture(t, h, repo, samplePlan, "tg-1", "tg-2")
 	srv := h.fake(func(_ *fakeServer, _ engine.Request, send func(engine.Reply)) {
 		send(okReply(map[string]any{"run_id": sampleRun}))
 	})
-	h.envelope("-C", repo, "run", "ep-1", "--schedule", "2026-10-16T02:00:00-07:00")
+	h.envelope("-C", repo, "run", samplePlan, "--schedule", "2026-10-16T02:00:00-07:00")
 	ev := srv.Requests()[0].Event
 	if ev == nil || ev.Type != bus.TypeRunStart {
 		t.Fatalf("event = %+v", ev)
 	}
 	rs := ev.Data.(*bus.RunStart)
-	if rs.Target != "ep-1" || len(rs.Groups) != 2 || rs.Source != "cli" || rs.Schedule.IsZero() || rs.Root != repo ||
+	if rs.Target != samplePlan || rs.Groups == nil || rs.Source != "cli" || rs.Schedule.IsZero() || rs.Root != repo ||
 		rs.CommonDir == "" || rs.Repo == "" {
 		t.Fatalf("run-start = %+v", rs)
 	}

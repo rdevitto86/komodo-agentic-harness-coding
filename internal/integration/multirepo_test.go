@@ -30,6 +30,7 @@ func TestOneEngineRunsGroupsFromTwoRepositories(t *testing.T) {
 		}
 	}
 	for _, r := range []*binRig{a, b} {
+		r.writePlan()
 		if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
 			t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 		}
@@ -75,6 +76,7 @@ func TestMetricsEachRunWritesItsOwnRepositoryFolder(t *testing.T) {
 		}
 	}
 	for _, r := range []*binRig{a, b} {
+		r.writePlan()
 		if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
 			t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 		}
